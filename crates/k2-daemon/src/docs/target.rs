@@ -12,11 +12,19 @@
 //! inside the workspace root (`fs_routes::jail_rel_path`). The kit re-checks
 //! nothing about paths (it never touches disk in this slice).
 //!
-//! **Which tier.** `.md` / `.markdown` is a Markdown doc (tier 1, the
-//! Markdown pack); every other file is a tier-0 doc (the kit's blob docs:
+//! **Which tier, by file name** (the text pack's HOST-INTEGRATION §1): the
+//! more specific pack first, `.md` / `.markdown` → the Markdown pack;
+//! then any text, by the text pack's table (`TextPack::for_path`: code,
+//! config, markup, diagram sources, `.txt`, unknown names, and `.csv` /
+//! `.tsv` as `csv-as-text` until a grid pack exists) → the text pack (tier
+//! 1, live editing); everything else (images, media, office files,
+//! archives, binaries) → a tier-0 doc (the kit's blob docs:
 //! presence, a lease, versions and restore), up to
 //! [`super::blob_max_bytes`] (`too_large` past it). `.mdx` is JSX, so it is
-//! tier 0. A path keeps its tier for life (`mv` can't change it).
+//! tier 0. A text file a pack refuses at open (`too_large`, `not_utf8`,
+//! `binary`, `mixed_line_endings`) falls back to tier 0 with the reason
+//! shown (`routes`), never to a plain editor. A path keeps its kind for
+//! life (`mv` can't change Markdown, text or any-file).
 //!
 //! **Never live docs** (MI12), refused before any open, on every tier:
 //! - secret files by path or content (`secret_paths::classify`), `secret`;
@@ -34,6 +42,9 @@ use k2_mpc_base::store::DocKey;
 pub enum Tier {
     /// Markdown (tier 1): live co-editing, text tools, undo.
     Markdown,
+    /// Any other text (tier 1, the text pack): live co-editing, text tools,
+    /// undo; `family` picks the editor mode.
+    Text(k2_mpc_text::Family),
     /// Any other file (tier 0): presence, a lease, versions and restore.
     Blob,
 }
@@ -43,17 +54,45 @@ impl Tier {
     pub fn of(rel: &str) -> Tier {
         if k2_mpc_markdown::is_markdown_path(rel) {
             Tier::Markdown
+        } else if let Some(pack) = k2_mpc_text::TextPack::for_path(rel) {
+            Tier::Text(pack.family())
         } else {
             Tier::Blob
         }
     }
 
-    /// On the wire: `1` (Markdown) or `0` (any file).
+    /// On the wire: `1` (live text: Markdown or the text pack) or `0` (any
+    /// file).
     pub fn number(self) -> u8 {
         match self {
-            Tier::Markdown => 1,
+            Tier::Markdown | Tier::Text(_) => 1,
             Tier::Blob => 0,
         }
+    }
+
+    /// The pack's name on the wire: `markdown`, `text`, or `blob`.
+    pub fn pack(self) -> &'static str {
+        match self {
+            Tier::Markdown => "markdown",
+            Tier::Text(_) => "text",
+            Tier::Blob => "blob",
+        }
+    }
+
+    /// The editor family (`markdown`, the text pack's `text` / `code` /
+    /// `config` / `markup` / `diagram` / `csv-as-text`, or `none`).
+    pub fn family(self) -> &'static str {
+        match self {
+            Tier::Markdown => "markdown",
+            Tier::Text(f) => f.name(),
+            Tier::Blob => "none",
+        }
+    }
+
+    /// The same kind of doc (`mv` keeps it): Markdown, text (any family:
+    /// one schema), or any-file.
+    pub fn same_kind(self, other: Tier) -> bool {
+        matches!((self, other), (Tier::Markdown, Tier::Markdown) | (Tier::Text(_), Tier::Text(_)) | (Tier::Blob, Tier::Blob))
     }
 }
 
@@ -168,9 +207,11 @@ pub fn human_bytes(n: u64) -> String {
     }
 }
 
-/// A tier-0 file over the cap is declined (exit 4), saying both sizes.
-pub fn size_cap(rel: &str, tier: Tier, len: u64, cap: u64) -> Result<(), Refusal> {
-    if tier == Tier::Blob && len > cap {
+/// A file over the any-file cap is declined (exit 4), saying both sizes:
+/// it can't be a tier-0 doc, nor the tier-0 fallback of a text doc whose
+/// pack (with its own, smaller cap) refuses it.
+pub fn size_cap(rel: &str, len: u64, cap: u64) -> Result<(), Refusal> {
+    if len > cap {
         return Err(Refusal::declined(
             "too_large",
             format!(
@@ -193,7 +234,7 @@ pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
     if is_git_internal(rel) {
         return Err(Refusal::declined("protected", format!("{rel} is inside git's own folder; it is never a live doc")));
     }
-    if Tier::of(rel) == Tier::Blob && is_k2_config(rel) {
+    if Tier::of(rel) != Tier::Markdown && is_k2_config(rel) {
         return Err(Refusal::declined(
             "protected",
             format!("{rel} is K2's own configuration; only Markdown and files under .k2/wiki, .k2/prds or .k2/docs are live docs there"),
@@ -269,8 +310,8 @@ fn rel_string(root: &Path, abs: &Path) -> Result<String, Refusal> {
 
 /// Where `mv` puts a doc: `to` relative to the doc's workspace (or absolute
 /// inside it). The new name must not exist yet, its folder must, it stays
-/// in the jail, it keeps the doc's tier (a Markdown doc stays Markdown, any
-/// other file stays tier 0), and it passes the deny list by path (not the
+/// in the jail, it keeps the doc's kind (Markdown stays Markdown, text stays
+/// text, any other file stays any-file), and it passes the deny list by path (not the
 /// vault, not generated, not a secret's name). Returns `(rel, abs)`.
 pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     let to = to.trim();
@@ -299,12 +340,13 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     let parent = abs.parent().and_then(|p| p.canonicalize().ok()).ok_or_else(|| Refusal::bad("path_escapes", "bad folder"))?;
     let abs = parent.join(abs.file_name().unwrap_or_default());
     let rel = rel_string(&t.root, &abs)?;
-    if Tier::of(&rel) != t.tier {
+    if !Tier::of(&rel).same_kind(t.tier) {
         return Err(Refusal::bad(
             "tier_change",
             match t.tier {
                 Tier::Markdown => format!("{} is a Markdown doc; mv keeps it one (name it .md or .markdown)", t.rel),
-                Tier::Blob => format!("{} is an any-file doc; mv can't make it a Markdown doc ({rel})", t.rel),
+                Tier::Text(_) => format!("{} is a text doc; mv keeps it text ({rel} isn't: Markdown, or not text)", t.rel),
+                Tier::Blob => format!("{} is an any-file doc; mv keeps it one ({rel} would be a text doc)", t.rel),
             },
         ));
     }
@@ -314,7 +356,7 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     if is_generated(&rel) {
         return Err(Refusal::declined("generated", format!("K2 writes {rel} itself")));
     }
-    if is_git_internal(&rel) || (t.tier == Tier::Blob && is_k2_config(&rel)) {
+    if is_git_internal(&rel) || (t.tier != Tier::Markdown && is_k2_config(&rel)) {
         return Err(Refusal::declined("protected", format!("{rel} is protected (git's folder or K2's configuration)")));
     }
     if k2_core::secret_paths::is_secret_rel(&rel) {
@@ -430,7 +472,7 @@ pub fn resolve(workspace: Option<&str>, path: &str, default_workspace: Option<&s
     let rel = rel_string(&root, &abs)?;
     deny(&rel, &link, &abs)?;
     let tier = Tier::of(&rel);
-    size_cap(&rel, tier, meta.len(), super::blob_max_bytes())?;
+    size_cap(&rel, meta.len(), super::blob_max_bytes())?;
     Ok(Target { project_id, root, rel, abs, tier })
 }
 
@@ -512,24 +554,45 @@ mod tests {
     }
 
     #[test]
-    fn markdown_is_tier_1_and_every_other_file_is_tier_0() {
+    fn markdown_first_then_text_by_family_then_any_file() {
         for p in ["a.md", "notes/b.markdown", "C.MD"] {
             assert_eq!(Tier::of(p), Tier::Markdown, "{p}");
         }
-        for p in ["a.txt", "a.mdx", "logo.png", "report.pdf", "Makefile", ".bashrc", "x.md.bak"] {
+        use k2_mpc_text::Family as F;
+        for (p, f) in [
+            ("a.txt", F::Text),
+            ("server.log", F::Text),
+            ("README", F::Text),
+            ("main.rs", F::Code),
+            ("Makefile", F::Code),
+            ("app.tsx", F::Code),
+            ("config.yaml", F::Config),
+            ("Cargo.toml", F::Config),
+            ("page.html", F::Markup),
+            ("flow.mmd", F::Diagram),
+            ("data.csv", F::CsvAsText),
+            ("data.tsv", F::CsvAsText),
+        ] {
+            assert_eq!(Tier::of(p), Tier::Text(f), "{p}");
+            assert_eq!(Tier::of(p).number(), 1, "{p}");
+        }
+        for p in ["logo.png", "report.pdf", "deck.pptx", "song.mp3", "a.zip", "font.woff2"] {
             assert_eq!(Tier::of(p), Tier::Blob, "{p}");
         }
-        assert_eq!(Tier::Markdown.number(), 1);
         assert_eq!(Tier::Blob.number(), 0);
+        assert_eq!(Tier::of("data.csv").family(), "csv-as-text");
+        assert!(Tier::of("a.txt").same_kind(Tier::of("b.toml")), "text stays text across families");
+        assert!(!Tier::of("a.txt").same_kind(Tier::Markdown));
+        assert!(!Tier::of("a.txt").same_kind(Tier::Blob));
     }
 
     #[test]
     fn a_tier_0_file_over_the_cap_is_declined_with_both_sizes() {
-        let r = size_cap("big.bin", Tier::Blob, 40 << 20, 32 << 20).expect_err("over the cap");
+        let r = size_cap("big.bin", 40 << 20, 32 << 20).expect_err("over the cap");
         assert_eq!((r.status, r.code), ("422 Unprocessable Entity", "too_large"));
         assert!(r.message.contains("40.0 MiB") && r.message.contains("32.0 MiB"), "{}", r.message);
-        assert_eq!(size_cap("big.bin", Tier::Blob, 32 << 20, 32 << 20), Ok(()), "the cap itself is allowed");
-        assert_eq!(size_cap("big.md", Tier::Markdown, 40 << 20, 32 << 20), Ok(()), "Markdown has its own limit (the pack's)");
+        assert_eq!(size_cap("big.bin", 32 << 20, 32 << 20), Ok(()), "the cap itself is allowed");
+        assert!(size_cap("big.md", 40 << 20, 32 << 20).is_err(), "too big for its tier-0 fallback too");
         assert_eq!(human_bytes(512), "512 B");
         assert_eq!(human_bytes(3 << 10), "3.0 KiB");
     }

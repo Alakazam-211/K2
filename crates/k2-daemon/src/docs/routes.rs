@@ -325,25 +325,39 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     }
     let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights };
     if target.tier == target::Tier::Blob {
-        return super::tier0::handle(path, &rt, &call);
+        return super::tier0::handle(path, &rt, &call, None);
     }
+    // A text file a pack refuses (too_large, not_utf8, binary,
+    // mixed_line_endings) is a tier-0 doc instead, with the reason on every
+    // answer; so is one already stored as a tier-0 doc (it stays one).
+    let session = match open(&rt, &target) {
+        Ok(s) => s,
+        Err(SessionError::Declined(d)) => {
+            let why = super::tier0::Fallback { code: d.code.to_string(), message: d.message.clone() };
+            return super::tier0::handle(path, &rt, &call, Some(&why));
+        }
+        Err(SessionError::PackMismatch { stored, .. }) if stored == k2_mpc_base::store::BLOB_DOC_PACK => {
+            let why = super::tier0::Fallback {
+                code: "stored_as_any_file".into(),
+                message: "it was opened as an any-file doc earlier (its text was refused then), and stays one".into(),
+            };
+            return super::tier0::handle(path, &rt, &call, Some(&why));
+        }
+        Err(e) => return session_error(&e),
+    };
     if path == LEASE {
         return with_exit(
             refusal(
                 "400 Bad Request",
                 "no_lease_on_text",
                 format!(
-                    "{} is a Markdown doc: everyone's edits merge live, so it has no lease. Leases are for any other file (k2 doc lease photo.png)",
+                    "{} is a live text doc: everyone's edits merge live, so it has no lease. Leases are for files that aren't text (k2 doc lease photo.png)",
                     target.rel
                 ),
             ),
             k2_mpc_base::tools::exit::USAGE,
         );
     }
-    let session = match open(&rt, &target) {
-        Ok(s) => s,
-        Err(resp) => return resp,
-    };
     if path == MV {
         let s = &session;
         return mv(
@@ -362,7 +376,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         // idle and nobody held it): open again, once.
         Err(VerbError::Session(SessionError::Unloaded)) => match open(&rt, &target) {
             Ok(s) => (verb(path, &s, &call), s),
-            Err(resp) => return resp,
+            Err(e) => return session_error(&e),
         },
         r => (r, session),
     };
@@ -537,12 +551,22 @@ fn rights_or_refusal(
 /// reconcile a stored one with edits made while it was closed. A loaded
 /// session is returned as is (its file is kept true by the watcher and the
 /// kit's stat backup, which also checks on every join).
-fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, CliResponse> {
+fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, SessionError> {
     let key = t.key();
     if let Some(s) = rt.get(&key) {
         return Ok(s);
     }
-    rt.open(&key, &t.abs, &t.root).map_err(|e| VerbError::Session(e).into_response())
+    if rt.get_blob(&key).is_some() {
+        return Err(SessionError::PackMismatch {
+            stored: k2_mpc_base::store::BLOB_DOC_PACK.to_string(),
+            pack: t.tier.pack().to_string(),
+        });
+    }
+    let pack: Arc<dyn k2_mpc_base::session::Pack> = match t.tier {
+        target::Tier::Text(_) => Arc::new(k2_mpc_text::TextPack::for_path(&t.rel).unwrap_or(k2_mpc_text::PACK)),
+        _ => Arc::new(k2_mpc_markdown::PACK),
+    };
+    rt.open(&key, &t.abs, &t.root, pack)
 }
 
 pub(super) enum VerbError {
@@ -774,6 +798,8 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             Ok(ok(json!({
                 "doc": doc_json(t),
                 "tier": 1,
+                "pack": t.tier.pack(),
+                "family": t.tier.family(),
                 "version": st.version,
                 "participants": st.participants,
                 "connections": st.connections,
@@ -891,7 +917,15 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
         }
         OPEN => {
             let j = join(s, c, Stay::Held)?;
-            Ok(ok(json!({ "doc": doc_json(t), "tier": 1, "version": j.version, "client": j.client, "rights": rights.json() })))
+            Ok(ok(json!({
+                "doc": doc_json(t),
+                "tier": 1,
+                "pack": t.tier.pack(),
+                "family": t.tier.family(),
+                "version": j.version,
+                "client": j.client,
+                "rights": rights.json(),
+            })))
         }
         LEAVE => {
             let j = join(s, c, Stay::UntilIdle)?;
@@ -1141,6 +1175,13 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
             String::from_utf8(bytes).map_err(|_| VerbError::Response(bad("a Markdown doc's new text must be UTF-8")))?
         }
         _ => return Err(VerbError::Response(bad("text is required (a string in the JSON body)"))),
+    };
+    // A text file's `cat` gives its exact bytes, BOM included; edit verbs
+    // never see the BOM, so a body made from `cat` drops its own (else it
+    // would be written as a second one). The text pack's HOST-INTEGRATION §6.
+    let text = match c.target.tier {
+        target::Tier::Text(_) => text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text),
+        _ => text,
     };
     let base = c
         .input
@@ -2058,9 +2099,11 @@ mod tests {
         }
         let usage_start = cli.find("\n_doc_usage() {").expect("_doc_usage");
         let usage = &cli[usage_start..cli[usage_start..].find("\nEOF\n").expect("usage end") + usage_start];
-        let reg = k2_mpc_base::parity::Registry::for_pack(&k2_mpc_markdown::PACK).expect("registry");
+        let md = k2_mpc_base::parity::Registry::for_pack(&k2_mpc_markdown::PACK).expect("registry");
+        // The text pack (any other text): the same kit verbs, none of its own.
+        let text = k2_mpc_base::parity::Registry::for_pack(&k2_mpc_text::PACK).expect("text registry");
         let mut missing = Vec::new();
-        for v in reg.verbs() {
+        for v in md.verbs().iter().chain(text.verbs()) {
             let word = v.name.split_whitespace().next().unwrap_or(v.name);
             let routed = labels.iter().any(|l| l == word)
                 || k2_mpc_base::tools::is_kit_verb(word)

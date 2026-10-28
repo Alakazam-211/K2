@@ -1,4 +1,4 @@
-//! Tier 0 on `/cli/docs/*`: any file that isn't Markdown is a blob doc
+//! Tier 0 on `/cli/docs/*`: a file that isn't text (or text its pack refused) is a blob doc
 //! (kit amendments 3, 10, 11: `BlobSession`), with the same caller, target,
 //! rights and shares as Markdown (PRD K-T0-1…9).
 //!
@@ -118,8 +118,28 @@ fn route_verb(path: &str, c: &Call) -> Option<String> {
     Some(v.to_string())
 }
 
+/// Why a text file is a tier-0 doc instead: its pack's refusal (`too_large`,
+/// `not_utf8`, `binary`, `mixed_line_endings`, with the pack's message), or
+/// `stored_as_any_file`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fallback {
+    pub code: String,
+    pub message: String,
+}
+
 /// The tier-0 entry, after the caller, target and rights checks.
-pub(super) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
+/// `fallback`: a text file served at tier 0, and why; every answer then
+/// carries it (`fallback: {code, message}`), and a text verb's refusal says
+/// it.
+pub(super) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call, fallback: Option<&Fallback>) -> CliResponse {
+    let r = handle_inner(path, rt, c);
+    match fallback {
+        Some(f) => with_fallback(r, f),
+        None => r,
+    }
+}
+
+fn handle_inner(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
     if let Some(verb) = route_verb(path, c) {
         if registry().get(&verb).is_none() {
             return not_a_text_doc(c.target, &verb);
@@ -140,6 +160,24 @@ pub(super) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliRespo
     }
 }
 
+/// `r` with the fallback named: at the top of an answer, and in an error
+/// (whose hint then says the file isn't live text, and why).
+pub fn with_fallback(mut r: CliResponse, f: &Fallback) -> CliResponse {
+    let Ok(mut v) = serde_json::from_str::<Value>(&r.body) else { return r };
+    let fb = json!({ "code": f.code, "message": f.message });
+    if let Some(e) = v.get_mut("error").and_then(Value::as_object_mut) {
+        if let Some(Value::String(h)) = e.get_mut("hint") {
+            h.push_str(&format!(" (It isn't live text: {} ({}); it opened as an any-file doc.)", f.message, f.code));
+        }
+        e.insert("fallback".into(), fb.clone());
+    }
+    if let Some(o) = v.as_object_mut() {
+        o.insert("fallback".into(), fb);
+    }
+    r.body = v.to_string();
+    r
+}
+
 /// Load the blob doc synced with its file (`open_blob_file`).
 fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<BlobSession>, CliResponse> {
     let key = t.key();
@@ -153,9 +191,11 @@ fn join(s: &BlobSession, c: &Call, stay: Stay) -> Result<Joined, SessionError> {
     s.join_shared(c.caller.participant(c.on_behalf), stay)
 }
 
-/// `{ok, tier: 0, doc, ...}`.
+/// `{ok, tier: 0, pack: blob, family: none, doc, ...}`.
 fn ok0(t: &Target, mut v: Value) -> CliResponse {
     v["tier"] = json!(0);
+    v["pack"] = json!("blob");
+    v["family"] = json!("none");
     v["doc"] = routes::doc_json(t);
     routes::ok(v)
 }
@@ -748,7 +788,7 @@ mod tests {
             }
         }
         assert!(missing.is_empty(), "tier-0 verbs k2 doc lacks: {missing:?}");
-        assert!(usage.contains("Any other file"), "help lacks the tier-0 section");
+        assert!(usage.contains("Any-file docs (tier 0"), "help lacks the tier-0 section");
     }
 
     #[test]

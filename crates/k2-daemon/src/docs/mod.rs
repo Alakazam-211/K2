@@ -326,9 +326,16 @@ const SPACES_NS: &str = "k2.docs.spaces";
 
 impl Runtime {
     /// The session for `key`, syncing with the file at `abs` inside `root`
-    /// (`open_file`: import, or reconcile a stored doc with the file).
-    pub fn open(&self, key: &DocKey, abs: &Path, root: &Path) -> Result<Arc<Session>, SessionError> {
-        let s = self.manager.open_file(Arc::new(k2_mpc_markdown::PACK), key, abs, root)?;
+    /// (`open_file` with `pack`, Markdown's or the text pack's: import, or
+    /// reconcile a stored doc with the file).
+    pub fn open(
+        &self,
+        key: &DocKey,
+        abs: &Path,
+        root: &Path,
+        pack: Arc<dyn k2_mpc_base::session::Pack>,
+    ) -> Result<Arc<Session>, SessionError> {
+        let s = self.manager.open_file(pack, key, abs, root)?;
         self.note_opened(key, abs);
         Ok(s)
     }

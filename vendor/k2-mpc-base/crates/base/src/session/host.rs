@@ -113,6 +113,11 @@ pub enum Need {
     Approver,
     /// [`Rights::owner`]: breaking someone else's lease.
     Owner,
+    /// `revert <change>`: only the change's author, the person it was made for
+    /// ([`super::Participant::on_behalf_of`]), or an owner ([`Rights::owner`]) may revert it.
+    /// The host can say so: "only the author, the person it was made for, or an owner can
+    /// revert this".
+    AuthorOrOwner,
 }
 
 /// The call that was refused.
@@ -268,5 +273,17 @@ pub enum AuditEvent {
     BlobMerged {
         key: DocKey,
         version: crate::store::VersionId,
+    },
+    /// [`crate::session::SessionManager::recheck_rights`]: re-checking this loaded doc
+    /// failed (it was skipped; the others were re-checked). `error` is the session error's
+    /// message.
+    RecheckFailed { key: DocKey, error: String },
+    /// [`crate::session::SessionManager::delete_doc`] / `delete_space`: the doc was deleted
+    /// while loaded. Its session closed: `connections` (each with its pid) were in it and are
+    /// gone, with their subscriptions and any lease; later calls on the session fail with
+    /// [`crate::session::SessionError::Deleted`]. Tell those participants.
+    DocDeleted {
+        key: DocKey,
+        connections: Vec<(ConnId, String)>,
     },
 }

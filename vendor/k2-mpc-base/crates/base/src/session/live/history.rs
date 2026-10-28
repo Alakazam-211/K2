@@ -355,36 +355,20 @@ impl Session {
                 key: st.key.clone(),
                 pid,
                 action: Action::Revert,
-                need: Need::Owner,
+                need: Need::AuthorOrOwner,
             });
-            return Err(SessionError::Forbidden { need: Need::Owner });
+            return Err(SessionError::Forbidden {
+                need: Need::AuthorOrOwner,
+            });
         }
-        let bounds = self
+        let edges = self
             .revert_index(st)?
-            .bounds(change)
+            .edges(change)
             .ok_or(SessionError::RevertTooOld { seq: change })?;
-        let mut regions = Vec::with_capacity(bounds.len());
-        let hunks = rec
-            .roots
-            .iter()
-            .flat_map(|r| r.hunks.iter().map(move |h| (r, h)));
-        for ((root, h), (_, s, e, tainted)) in hunks.zip(bounds) {
-            regions.push(Region {
-                root: root.root.clone(),
-                start: s,
-                end: e,
-                before: h.deleted.clone(),
-                after: h.insert.clone(),
-                tainted,
-                base_doc_empty: root.empty_after,
-                erased: h.redacted,
-            });
-        }
-        undo::clamp_shared_edges(&mut regions);
         let batch = Batch {
             seq: change,
             on_behalf_of: None,
-            regions,
+            regions: undo::revert_regions(&rec, edges),
         };
         let mode = if partial { Mode::Partial } else { Mode::All };
         let step = match undo::plan(&st.texts, vec![batch], mode) {

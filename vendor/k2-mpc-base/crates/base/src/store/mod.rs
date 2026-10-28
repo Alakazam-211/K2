@@ -15,6 +15,7 @@
 //! process hand-offs (redb holds an exclusive lock while open).
 
 mod blob;
+mod delete;
 mod enc;
 mod history;
 

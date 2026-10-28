@@ -2244,6 +2244,31 @@ impl Session {
         Ok(())
     }
 
+    /// Close this handle because its doc is being deleted: no write-back, no compaction (the
+    /// rows are about to go). Emits [`AuditEvent::DocDeleted`] with the connections that
+    /// were in it; later calls fail with [`SessionError::Deleted`].
+    pub(crate) fn close_deleted(&self) {
+        let Ok(mut st) = self.lock_any() else {
+            return; // poisoned: it is dropped with the pool entry
+        };
+        if st.closed.is_some() {
+            return;
+        }
+        let connections = st
+            .members
+            .iter()
+            .map(|m| (m.conn, m.p.pid.clone()))
+            .collect();
+        self.emit(AuditEvent::DocDeleted {
+            key: st.key.clone(),
+            connections,
+        });
+        st.closed = Some(SessionError::Deleted);
+        st.store = None;
+        st.subs.clear();
+        st.members.clear();
+    }
+
     /// Close this handle: optionally compact a long log first, then drop the store handle
     /// and subscribers. Later calls fail with `reason`.
     pub(crate) fn close(&self, reason: SessionError, compact_long_log: bool) {

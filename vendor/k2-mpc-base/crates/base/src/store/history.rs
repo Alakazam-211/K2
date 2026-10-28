@@ -496,6 +496,16 @@ pub(super) fn put_changes(
     Ok(())
 }
 
+/// Erase every history row of doc `id` in `w` (deleting the doc).
+pub(super) fn delete_rows(w: &redb::WriteTransaction, id: DocId) -> Result<(), StoreError> {
+    for t in [CHANGES, REVERTS, REVERT_INDEX, REVERT_CARRY] {
+        w.open_table(t)?
+            .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
+    }
+    w.open_table(REVERT_STATS)?.remove(id)?;
+    Ok(())
+}
+
 /// An on-behalf change was settled (approved or declined): it no longer counts as pending.
 pub(super) fn settle_pending(
     w: &redb::WriteTransaction,

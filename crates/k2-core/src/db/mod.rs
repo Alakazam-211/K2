@@ -262,20 +262,30 @@ pub fn init_for_tests() -> Arc<ReentrantMutex<Connection>> {
 ///
 /// `cli/k2` `_k2_home_db` applies the same rule.
 pub fn resolve_home_db_path(db_dir: &std::path::Path) -> std::path::PathBuf {
+    resolve_home_db_path_with(db_dir, true)
+}
+
+/// [`resolve_home_db_path`] without the "BOTH … exist" stderr line (the
+/// Stage B switch logs its own outcome).
+pub(crate) fn resolve_home_db_path_quiet(db_dir: &std::path::Path) -> std::path::PathBuf {
+    resolve_home_db_path_with(db_dir, false)
+}
+
+fn resolve_home_db_path_with(db_dir: &std::path::Path, log: bool) -> std::path::PathBuf {
     let new = db_dir.join("k2.db");
     let old = db_dir.join("k2so.db");
     if is_real_db_file(&new) && is_real_db_file(&old) {
         let pick = pick_dual_real_db(&new, &old);
-        if pick == old {
+        if log {
+            let why = if pick == old {
+                "k2.db looks like a stub — a Stage A prefer-k2.db pick would hide workspaces"
+            } else {
+                "it has the live project rows"
+            };
             eprintln!(
-                "[db] BOTH k2.db and k2so.db exist as real files; using k2so.db \
-                 (k2.db looks like a stub — a Stage A prefer-k2.db pick would \
-                 hide workspaces). Not deleting either file."
-            );
-        } else {
-            eprintln!(
-                "[db] BOTH k2.db and k2so.db exist as real files; using k2.db \
-                 (it has the live project rows). Not deleting either file."
+                "[db] BOTH k2.db and k2so.db exist as real files; using {} ({why}). \
+                 Not deleting either file.",
+                if pick == old { "k2so.db" } else { "k2.db" }
             );
         }
         return pick;

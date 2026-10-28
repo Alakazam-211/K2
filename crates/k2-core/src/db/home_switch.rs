@@ -439,7 +439,7 @@ pub fn switch_home_db(dir: &Path, opts: &SwitchOpts) -> SwitchReport {
     let new = dir.join(NEW_NAME);
     let old = dir.join(OLD_NAME);
     let mut rep = SwitchReport {
-        path: super::resolve_home_db_path(dir),
+        path: super::resolve_home_db_path_quiet(dir),
         outcome: Outcome::AlreadyDone,
         quarantined: Vec::new(),
         notes: Vec::new(),

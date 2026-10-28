@@ -54,6 +54,13 @@ THE WIDGET SDK
   Light/dark follow the Garden, never the OS (--zen-*, [data-zen-scheme];
   manifest "colorScheme": "own" opts out). Charts: requires.libs uplot@1 (k2 zen guide libs).
 
+ON A PHONE (K2 Companion, 0.46.6)
+  The person's paired phone runs the same widget in the same sealed frame.
+  Detect it with matchMedia('(pointer: coarse)') and handle your own touch
+  gestures; drop never fires there, so always offer a pick button. Never rely
+  on canvas.toDataURL / toBlob (empty on WebKit): use getImageData, or
+  requires.libs k2-png@1 (K2Png.toBlob(canvas)).
+
 THE WIDGET KIT (0.46.3): don't hand-build these, require them
   "k2-thread@1"  K2Thread.mount(el, {look: 'chamfer' | 'glass', address})
                  a Thread panel: bubbles, Enter sends, the working tab, the

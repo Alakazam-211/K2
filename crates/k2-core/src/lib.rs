@@ -59,6 +59,9 @@ pub mod agent_hooks;
 pub mod app_grace;
 /// The per-call App audit (`~/.k2/apps/app-audit.db`, runtime S19).
 pub mod app_audit;
+/// `k2 app sdk add` (0.46.6): @k2/server at this K2's version and Sew's App
+/// kit, vendored into an App folder.
+pub mod app_sdk;
 pub mod app_settings;
 /// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).
 pub mod runtime_dir;

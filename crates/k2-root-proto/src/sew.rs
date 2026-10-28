@@ -857,6 +857,45 @@ pub fn pinned() -> &'static SewRelease {
     releases().last().expect("the Sew pin table is never empty")
 }
 
+// ── App kit (0.46.6, Sew REL-050) ─────────────────────────────────────
+
+/// Sew's App kit for one release (`sew-app-kit-<v>.tar.gz`: the npm-pack
+/// tarballs of @sew/client, voice, channel, e2ee and bff, with SHA256SUMS,
+/// NOTICES and kit.json), pinned by its sha256 like the release tarballs.
+/// Not root's business: the daemon verifies it and keeps a read-only copy
+/// for `k2 app sdk add --sew` (`k2_core::app_sdk`).
+#[derive(Debug)]
+pub struct SewAppKit {
+    pub version: &'static str,
+    pub sha256: &'static str,
+}
+
+/// Every pinned kit, by Sew version. Kits start with Sew 0.5.0: a release
+/// before it has none. The Sew 0.5.0 pin appends its row here (from its
+/// SHA256SUMS / release.json, in the same change).
+pub const SEW_APP_KITS: &[SewAppKit] = &[];
+
+/// The fixture kit for `test-signer` builds
+/// (`testdata/sew/sew-app-kit-0.0.2.tar.gz`, made by
+/// `testdata/sew/make-app-kit.py`; never Sew code), for [`TEST_RELEASES`]'
+/// pin 0.0.2.
+pub const TEST_APP_KITS: &[SewAppKit] =
+    &[SewAppKit { version: "0.0.2", sha256: "ebbd6b86f6cad5deef69eaaecc298c76e9a7f448953ba485b9623bebb6734975" }];
+
+/// The kit table this build uses.
+pub fn app_kits() -> &'static [SewAppKit] {
+    if cfg!(feature = "test-signer") {
+        TEST_APP_KITS
+    } else {
+        SEW_APP_KITS
+    }
+}
+
+/// The pinned App kit of Sew `version`, if that release has one.
+pub fn app_kit(version: &str) -> Option<&'static SewAppKit> {
+    app_kits().iter().find(|k| k.version == version && hex64(k.sha256))
+}
+
 /// front443: the first Sew release whose `sew media install` knows the
 /// `passthrough` TURN tier (Sew TURN-PT, rev 168; 0.2.0 does not).
 pub const PASSTHROUGH_MIN_VERSION: crate::version::Semver = crate::version::Semver(0, 2, 1);
@@ -1507,6 +1546,27 @@ mod tests {
     fn sha256_hex(bytes: &[u8]) -> String {
         use sha2::Digest;
         sha2::Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    /// The fixture kit's pin is the committed file; real kits are 64 hex,
+    /// one per version, and only from Sew 0.5.0 (the first with a kit).
+    #[test]
+    fn app_kit_pins_hold() {
+        let fixture = include_bytes!("../testdata/sew/sew-app-kit-0.0.2.tar.gz");
+        assert_eq!(sha256_hex(fixture), TEST_APP_KITS[0].sha256, "re-run testdata/sew/make-app-kit.py and update TEST_APP_KITS");
+        assert_eq!(TEST_APP_KITS[0].version, TEST_RELEASES.last().unwrap().version, "the fixture kit is the fixture pin's");
+        let mut seen = std::collections::BTreeSet::new();
+        for k in SEW_APP_KITS {
+            assert!(hex64(k.sha256), "{}: {}", k.version, k.sha256);
+            assert!(seen.insert(k.version), "{} twice", k.version);
+            assert!(version_cmp(k.version, "0.5.0") != Some(std::cmp::Ordering::Less), "{}: kits start at 0.5.0", k.version);
+            assert!(SEW_RELEASES.iter().any(|r| r.version == k.version), "{}: a kit for a release K2 never pinned", k.version);
+        }
+        if cfg!(feature = "test-signer") {
+            assert!(app_kit("0.0.2").is_some());
+        } else {
+            assert!(app_kit("0.3.1").is_none(), "0.3.1 has no App kit");
+        }
     }
 
     /// Every artifact of a release, sidecars included.

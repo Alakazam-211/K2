@@ -1,6 +1,8 @@
 node_modules/
 out/
 dist/
+# @k2/server's built JS + .d.ts: committed (the daemon embeds it; k2 app sdk add).
+!/sdk/server/dist/
 # Cargo workspace output — the workspace root moved in 0.33.x, so target/
 # lives at the repo root now. Keep src-tauri/target/ ignored too for any
 # stale per-package builds from older checkouts.

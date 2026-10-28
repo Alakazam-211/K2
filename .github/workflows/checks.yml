@@ -100,6 +100,11 @@ jobs:
       - name: Typecheck the App server SDK
         run: bunx tsc -p sdk/server/tsconfig.json
 
+      # 0.46.6: the daemon embeds sdk/server/dist (the @k2/server tarball
+      # `k2 app sdk add` vendors); it must be built from today's sources.
+      - name: App server SDK dist is fresh
+        run: node scripts/sdk-server-dist.mjs --check
+
       # prd-zen-user-widgets-v2 UW41, TUWA11: the widget CLI's offline
       # half (no grant verb, usage errors, the generated guide api page).
       - name: k2 zen widget CLI (no daemon)

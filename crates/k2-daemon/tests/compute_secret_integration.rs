@@ -650,8 +650,17 @@ async fn any_places_only_on_covered_nodes() {
     assert!(k2_daemon::compute_secrets::covering_grant(&ws.id, &row_now, &secret_id).is_none(), "`*` never covers a tenant node");
     let r = run(d.port, &agent, json!({"node": "tenant-node", "secrets": [{"name": "GMAIL_CLIENT_SECRET"}]})).await;
     assert_eq!((r.status, code(&r).as_str()), (403, scodes::NOT_GRANTED), "{}", r.body);
-    // A grant naming the tenant node answers with the warning.
-    let r = post(d.port, "/cli/vault/grant", OWNER, json!({"id": secret_id, "to": format!("compute:anyw/tenant-node"), "as": "env"})).await;
+    // A grant naming the tenant node answers with the warning. It is a
+    // readable share from the owner token, so a person confirms it first
+    // (VC-B2: a `grant-read` confirm bound to the secret).
+    let confirm = k2_daemon::vault::get().expect("vault open").confirm.mint("grant-read", Some(&secret_id), "owner", "local-auth");
+    let r = post(
+        d.port,
+        "/cli/vault/grant",
+        OWNER,
+        json!({"id": secret_id, "to": format!("compute:anyw/tenant-node"), "as": "env", "confirmToken": confirm}),
+    )
+    .await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert!(j(&r)["warning"].as_str().is_some_and(|w| w.contains("can read the value")), "{}", r.body);
     compute_ws::test_detach("own-1");

@@ -200,6 +200,16 @@ check "says which SDK it uses" 'printf "%s" "$out" | grep -q "build env: SDKROOT
     bash -c 'set -euo pipefail; source "$1/scripts/lib/build-binaries.sh"; source "$2"' _ "$ROOT" "$tmp/step05.sh" >/dev/null 2>&1)
 check "a caller's SDKROOT wins" 'grep -qx "SDKROOT=/caller/sdk" "$tmp/step05.log"'
 
+# (c) The updater key and its password never ride on argv (0.46.6): the
+# tauri signer reads TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) from the env, and
+# argv is visible to every process on the build Mac (ps).
+for f in scripts/release.sh scripts/windows-patch-latest-json.sh; do
+    check "$f: no --private-key / --password on argv" \
+        '! grep -nE -- "--private-key|--password[ =]" "$ROOT/$f"'
+    check "$f: still signs with the tauri signer" \
+        'grep -q "signer sign" "$ROOT/$f"'
+done
+
 echo ""
 echo "release-wait-and-preflight: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

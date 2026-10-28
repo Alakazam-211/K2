@@ -736,10 +736,9 @@ COPYFILE_DISABLE=1 tar -czf "target/release/bundle/macos/K2.app.tar.gz" \
 k2_daemon_helper_verify_tarball_ptyd "target/release/bundle/macos/K2.app.tar.gz"
 
 # Sign the update bundle with Tauri updater key
-bunx @tauri-apps/cli@2 signer sign \
-    "target/release/bundle/macos/K2.app.tar.gz" \
-    --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
-    --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+# Key + password come from the exported TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)
+# env, never argv (ps would show them).
+bunx @tauri-apps/cli@2 signer sign "target/release/bundle/macos/K2.app.tar.gz"
 echo "  Update bundle signed."
 
 # ── Step 6: Create DMG from notarized app ──
@@ -900,10 +899,9 @@ k2_build_standalone_macos_daemon "$PROJECT_DIR/target/release/bundle/macos/K2.ap
 
 # Sign with the Tauri updater key (minisign-format .sig, identical
 # mechanism to Step 5's K2.app.tar.gz.sig).
-bunx @tauri-apps/cli@2 signer sign \
-    "$DIST_DIR/$MAC_ASSET" \
-    --private-key "$TAURI_SIGNING_PRIVATE_KEY" \
-    --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+# Key + password come from the exported TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)
+# env, never argv (ps would show them).
+bunx @tauri-apps/cli@2 signer sign "$DIST_DIR/$MAC_ASSET"
 # tauri signer writes the .sig as BASE64 of the minisig text; the daemon
 # self-updater and plain minisign need the RAW text — publish that.
 # (Shape B e2e finding, 2026-07-06. NOTE: K2.app.tar.gz.sig stays wrapped —

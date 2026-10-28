@@ -195,11 +195,25 @@ fn audit(event: &str, user: &str, outcome: &str, ingress: &str) {
 /// another account's numbers. `usage.checkedAt` / `usageCheckedAt` say
 /// when it was last read successfully; `usage.error` says the last check
 /// failed.
+///
+/// Served decorated, like every other usage route (`/for`,
+/// `/cli/usage/subscriptions`, `k2 usage`): the stored row is the probe's
+/// raw reading, so `usedPercent`, `resetPassed`, `windowStart`, `state`,
+/// `source` and `nextProbeAt` are filled here
+/// ([`crate::subscription_usage::decorate_row`]), plus `maxPercent` and
+/// each window's `chip`. A stored row that doesn't parse is served as
+/// `null`.
 fn usage_for(e: &Entry) -> Value {
-    e.usage_json
-        .as_deref()
-        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-        .unwrap_or(Value::Null)
+    usage_for_at(e, chrono::Utc::now())
+}
+
+fn usage_for_at(e: &Entry, now: chrono::DateTime<chrono::Utc>) -> Value {
+    use crate::subscription_usage as su;
+    let Some(row) = e.usage_json.as_deref().and_then(|s| serde_json::from_str::<su::HarnessUsage>(s).ok()) else {
+        return Value::Null;
+    };
+    let row = su::decorate_row(row, now, &format!("acct:{}", e.id));
+    su::served_row_json(&row, now)
 }
 
 /// Windows of `e`'s last reading that are used up and not reset yet:
@@ -1412,6 +1426,130 @@ mod tests {
         assert_eq!(slots::storage(), slots::Storage::Files);
         let removed = std::fs::read_dir(store::removed_root()).unwrap().flatten().find(|d| d.file_name().to_string_lossy().contains(&a)).expect("A in Trash");
         assert_eq!(std::fs::read_to_string(removed.path().join(".credentials.json")).unwrap(), cred("a"), "A's file kept in Trash");
+        clear_claude_rows();
+    }
+
+    // ── A token's usage is served decorated (sewlab 10-28) ───────────
+
+    /// A stored reading as the probe saves it: `used` only; the served
+    /// fields (`usedPercent`, `resetPassed`, …) are left at their defaults.
+    fn stored_reading(session_resets: &str, weekly_resets: &str) -> String {
+        use crate::subscription_usage::{window, HarnessUsage};
+        let row = HarnessUsage {
+            harness: "claude".into(),
+            plan: "max".into(),
+            windows: vec![
+                window("five_hour", "Session", "session", 0.42, session_resets.into(), Some(5 * 3600)),
+                window("seven_day", "Weekly", "weekly", 0.84, weekly_resets.into(), Some(7 * 86_400)),
+            ],
+            checked_at: "2026-10-28T08:00:00Z".into(),
+            status: "ok".into(),
+            ..Default::default()
+        };
+        let text = serde_json::to_string(&row).expect("serialise the stored row");
+        let stored: Value = serde_json::from_str(&text).expect("stored row is json");
+        assert_eq!(stored["windows"][1]["usedPercent"], json!(0.0), "precondition: the stored row is undecorated");
+        assert_eq!(stored["windows"][0]["resetPassed"], json!(false), "precondition: the stored row is undecorated");
+        text
+    }
+
+    fn call_with(path: &str, params: &[(&str, &str)]) -> Value {
+        let params: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let r = handle(path, Caller::Owner, b"", &params, "test");
+        assert_eq!(r.status, "200 OK", "{path}: {}", r.body);
+        serde_json::from_str(&r.body).expect("json body")
+    }
+
+    fn window_named<'a>(usage: &'a Value, label: &str) -> &'a Value {
+        usage["windows"]
+            .as_array()
+            .expect("usage.windows is an array")
+            .iter()
+            .find(|w| w["label"] == json!(label))
+            .expect("the window is served")
+    }
+
+    fn pct(w: &Value) -> f64 {
+        w["usedPercent"].as_f64().expect("usedPercent is a number")
+    }
+
+    #[test]
+    fn status_list_and_usage_serve_used_percent_and_reset_passed_from_the_stored_row() {
+        let _home = crate::test_support::TempHome::new();
+        clear_claude_rows();
+        // Session's reset is past; Weekly's is still ahead.
+        let past = "2020-01-01T00:00:00Z";
+        let future = "2099-01-07T00:00:00Z";
+        let id = with_conn(|conn| {
+            let e = wallet_core::create(conn, Tool::Claude, "afsrow", None).expect("create");
+            wallet_core::update_meta(
+                conn,
+                &e.id,
+                &wallet_core::MetaUpdate {
+                    state: Some(state::SIGNED_IN.into()),
+                    usage_json: Some(stored_reading(past, future)),
+                    usage_checked_at: Some(1_800_000_000),
+                    ..Default::default()
+                },
+            )
+            .expect("store the reading");
+            e.id
+        });
+
+        let check = |usage: &Value, from: &str| {
+            let weekly = window_named(usage, "Weekly");
+            assert_eq!(pct(weekly), 84.0, "{from}: weekly usedPercent: {usage}");
+            assert_eq!(weekly["used"].as_f64().expect("used"), 0.84, "{from}: {usage}");
+            assert_eq!(weekly["resetPassed"], json!(false), "{from}: a future resetsAt is not passed: {usage}");
+            assert_eq!(weekly["windowStart"], json!("2098-12-31T00:00:00+00:00"), "{from}: {usage}");
+            assert_eq!(weekly["chip"], json!(true), "{from}: {usage}");
+            let session = window_named(usage, "Session");
+            assert_eq!(pct(session), 42.0, "{from}: session usedPercent: {usage}");
+            assert_eq!(session["resetPassed"], json!(true), "{from}: a past resetsAt is passed: {usage}");
+            assert_eq!(usage["state"], json!("ok"), "{from}: {usage}");
+            assert_eq!(usage["source"], json!("probe"), "{from}: {usage}");
+            // The chip skips the reset Session window: Weekly's 84.
+            assert_eq!(usage["maxPercent"], json!(84), "{from}: {usage}");
+        };
+
+        let v = call_with(STATUS, &[("id", id.as_str())]);
+        check(&v["account"]["usage"], "status");
+
+        let v = call_with(LIST, &[]);
+        let claude = v["tools"].as_array().expect("tools").iter().find(|t| t["tool"] == "claude").expect("claude").clone();
+        let acct = claude["accounts"].as_array().expect("accounts").iter().find(|a| a["id"] == json!(id)).expect("listed").clone();
+        check(&acct["usage"], "list");
+
+        let v = call_with(USAGE, &[]);
+        let row = v["rows"].as_array().expect("rows").iter().find(|r| r["accountId"] == json!(id)).expect("usage row").clone();
+        check(&row["usage"], "usage");
+
+        // Both resets ahead: neither window is passed; both reset: both are.
+        for (session_at, weekly_at, passed) in [(future, future, false), (past, past, true)] {
+            with_conn(|conn| {
+                wallet_core::update_meta(
+                    conn,
+                    &id,
+                    &wallet_core::MetaUpdate { usage_json: Some(stored_reading(session_at, weekly_at)), ..Default::default() },
+                )
+            })
+            .expect("store the reading");
+            let v = call_with(STATUS, &[("id", id.as_str())]);
+            let usage = &v["account"]["usage"];
+            for label in ["Session", "Weekly"] {
+                assert_eq!(window_named(usage, label)["resetPassed"], json!(passed), "{label}: {usage}");
+            }
+            assert_eq!(pct(window_named(usage, "Weekly")), 84.0, "{usage}");
+            assert_eq!(usage["maxPercent"], json!(if passed { 0 } else { 84 }), "{usage}");
+        }
+
+        // A stored row that doesn't parse is served as null, no panic.
+        with_conn(|conn| {
+            wallet_core::update_meta(conn, &id, &wallet_core::MetaUpdate { usage_json: Some("{not json".into()), ..Default::default() })
+        })
+        .expect("store a broken reading");
+        let v = call_with(STATUS, &[("id", id.as_str())]);
+        assert!(v["account"]["usage"].is_null(), "{v}");
         clear_claude_rows();
     }
 

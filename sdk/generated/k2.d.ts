@@ -823,6 +823,29 @@ export interface DownloadSaved {
   readonly saved: boolean
 }
 
+export interface UploadedFile {
+  /** Sniffed from the bytes by K2. */
+  readonly mime: string
+  /** The file's name (plain text, never a path). */
+  readonly name: string
+  /** Put it in a value (k2.store.put) to keep the file; read it with k2.blobs.get. */
+  readonly ref: string
+  /** Bytes. */
+  readonly size: number
+}
+
+export interface UploadPicked {
+  /** Empty when the person cancelled. */
+  readonly files: UploadedFile[]
+}
+
+export interface UploadDropped {
+  readonly files: UploadedFile[]
+  /** Where they were dropped, in the frame's CSS pixels. */
+  readonly x: number
+  readonly y: number
+}
+
 export interface AppFileEntry {
   /** A symlinked folder reads false. */
   readonly isDirectory: boolean
@@ -1046,6 +1069,8 @@ export interface StoreChange {
   readonly by: string
   readonly deleted: boolean
   readonly key: string
+  /** Set when a restore wrote this change: the restore's id (by is who restored). */
+  readonly restore?: string
   readonly rev: number
   readonly value: unknown
 }
@@ -1062,6 +1087,37 @@ export interface StoreChanges {
   readonly next: StoreCursor | null
   /** The page ends inside a rev: fetch next before applying. */
   readonly partial: boolean
+}
+
+export interface StoreHistoryItem {
+  /** Seconds since the Unix epoch. */
+  readonly at: number
+  readonly by: string
+  readonly deleted: boolean
+  readonly key: string
+  /** The value just before it (null when the key didn't exist or K2 no longer keeps it; see prevKind). */
+  readonly prev: unknown
+  /** value: prev holds it; none: the key didn't exist; unknown: not kept (trimmed, or written by an older K2). */
+  readonly prevKind: 'value' | 'none' | 'unknown'
+  /** Set when a restore wrote this change: the restore's id. */
+  readonly restore?: string
+  readonly rev: number
+  /** What this change wrote (null for a delete). */
+  readonly value: unknown
+}
+
+export interface StoreHistoryCursor {
+  /** The page ended inside the rev before: pass it back too. */
+  readonly after?: string
+  readonly before: number
+}
+
+export interface StoreHistory {
+  readonly head: number
+  readonly items: StoreHistoryItem[]
+  readonly next: StoreHistoryCursor | null
+  /** The oldest rev store.restore can go back to (K2 keeps 7 days of changes). */
+  readonly oldest: number
 }
 
 export interface BlobData {
@@ -1143,6 +1199,27 @@ export interface StoreTxStatus {
 
 export interface StoreTxAborted {
   readonly aborted: boolean
+}
+
+export interface StoreRestored {
+  readonly deleted: number
+  /** The top-level key families it rewrites. */
+  readonly families: string[]
+  /** The restore's id (null on a dry run); its changes carry it as restore. */
+  readonly id: string | null
+  /** The first 50 keys it rewrites. */
+  readonly keys: string[]
+  /** The new rev (null on a dry run, or when nothing changed). */
+  readonly rev: number | null
+  readonly written: number
+}
+
+export interface StoreSnapshot {
+  readonly bytes: number
+  readonly keys: number
+  /** A file in this widget's data; keep it under a key to keep the version. */
+  readonly ref: string
+  readonly rev: number
 }
 
 export interface BlobInfo {
@@ -1328,7 +1405,7 @@ export interface RoomMembers {
 }
 
 /** A cap a widget may ask for. */
-export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
+export type K2Cap = 'agents:read' | 'presence:read' | 'thread:read' | 'thread:post' | 'sources:read' | 'links:open' | 'downloads:save' | 'uploads:pick' | 'files:read' | 'tickets:read' | 'tickets:post' | 'store:read' | 'store:write' | 'guests:rooms' | 'activity:read' | 'room:members'
 
 /** What k2.store.subscribe delivers: the changed keys (value null = deleted), or after a gap the whole list again. `by` names the writer: you (by your name), `<you> via <widget>`, or `agent:<handle>`. */
 export type StoreDelivery = Array<{ key: string; rev: number; value: unknown; by: string }> | { resync: true; items: StoreEntry[] }
@@ -1466,6 +1543,8 @@ export interface K2Verbs {
   'links.open': { args: [url: string]; value: LinkOpened }
   'downloads.begin': { args: [name: string, opts?: { mime?: string }]; value: DownloadTicket }
   'downloads.save': { args: [name: string, data: unknown, opts?: { mime?: string; ticket?: string }]; value: DownloadSaved }
+  'uploads.pick': { args: [opts?: { accept?: string[]; max?: number; multiple?: boolean }]; value: UploadPicked }
+  'uploads.dropped': { args: []; value: UploadDropped }
   'files.list': { args: [args: { relPath: string; showHidden?: boolean; workspace: string }]; value: AppFileEntry[] }
   'files.read': { args: [args: { relPath: string; workspace: string }]; value: AppFileText }
   'files.readBinary': { args: [args: { relPath: string; workspace: string }]; value: AppFileBase64 }
@@ -1478,6 +1557,7 @@ export interface K2Verbs {
   'store.get': { args: [key: string, opts?: { from?: string }]; value: StoreEntry | null }
   'store.list': { args: [opts?: { after?: string; from?: string; limit?: number; prefix?: string }]; value: StorePage }
   'store.changes': { args: [opts: { after?: string; from?: string; prefix?: string; since: number }]; value: StoreChanges }
+  'store.history': { args: [opts?: { after?: string; before?: number; from?: string; key?: string; limit?: number; prefix?: string }]; value: StoreHistory }
   'blobs.get': { args: [ref: string, opts?: { from?: string; px?: number }]; value: BlobData }
   'blobs.info': { args: [ref: string]; value: BlobDetail }
   'blobs.list': { args: [opts?: { after?: string; limit?: number }]; value: BlobList }
@@ -1489,6 +1569,8 @@ export interface K2Verbs {
   'store.txAdd': { args: [txId: string, ops: StoreOp[]]; value: StoreTxStatus }
   'store.txCommit': { args: [txId: string]; value: StoreCommit }
   'store.txAbort': { args: [txId: string]; value: StoreTxAborted }
+  'store.restore': { args: [opts: { at?: number; dryRun?: boolean; except?: string[]; prefixes?: string[]; snapshot?: string; toRev?: number }]; value: StoreRestored }
+  'store.snapshot': { args: [opts?: { except?: string[]; label?: string; prefixes?: string[] }]; value: StoreSnapshot }
   'blobs.put': { args: [data: unknown, opts?: { mime?: string; name?: string }]; value: BlobInfo }
   'guests.rooms': { args: [args: { app?: string; username: string }]; value: AppGuestRooms }
   'guests.setRooms': { args: [args: { app?: string; rooms: string[]; username: string }]; value: AppGuestRooms }
@@ -1499,8 +1581,8 @@ export interface K2Verbs {
 }
 
 export type K2Verb = keyof K2Verbs
-export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
-export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'thread.onActivity'
+export type K2CallVerb = 'gardens.list' | 'gardens.current' | 'gardens.switch' | 'theme.get' | 'canvas.setHitRegions' | 'window.startDrag' | 'layout.get' | 'layout.set' | 'layout.toggle' | 'save.get' | 'save.set' | 'save.remove' | 'save.keys' | 'viewer.get' | 'app.rooms' | 'app.self' | 'app.usage' | 'widget.self' | 'app.resources' | 'agents.list' | 'conversation.open' | 'conversation.close' | 'agents.show' | 'presence.get' | 'thread.read' | 'thread.markRead' | 'thread.attachment' | 'thread.open' | 'thread.links' | 'thread.catchup' | 'thread.unread' | 'thread.mute' | 'thread.pickFiles' | 'thread.post' | 'thread.answer' | 'compose.draft' | 'conversation.setContext' | 'sources.list' | 'sources.read' | 'sources.history' | 'sources.refresh' | 'sources.ask' | 'links.open' | 'downloads.begin' | 'downloads.save' | 'uploads.pick' | 'files.list' | 'files.read' | 'files.readBinary' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.resolve' | 'store.get' | 'store.list' | 'store.changes' | 'store.history' | 'blobs.get' | 'blobs.info' | 'blobs.list' | 'store.put' | 'store.patch' | 'store.delete' | 'store.batch' | 'store.txBegin' | 'store.txAdd' | 'store.txCommit' | 'store.txAbort' | 'store.restore' | 'store.snapshot' | 'blobs.put' | 'guests.rooms' | 'guests.setRooms' | 'guests.list' | 'activity.snapshot' | 'room.members'
+export type K2SubscribeVerb = 'theme.changed' | 'layout.subscribe' | 'agents.subscribe' | 'presence.subscribe' | 'thread.subscribe' | 'thread.inbox' | 'sources.subscribe' | 'uploads.dropped' | 'thread.onActivity'
 
 export interface K2 {
   readonly gardens: {
@@ -1665,6 +1747,14 @@ export interface K2 {
     /** Save a file the widget made to the person's Downloads, just after a click in it (or with a downloads.begin ticket); K2's toast names it. cap downloads:save · local · zen-files-v1. e.g. `const {saved, name} = await k2.download('board.json', JSON.stringify(doc))` */
     save(name: string, data: unknown, opts?: { mime?: string; ticket?: string }): Promise<DownloadSaved>
   }
+  readonly uploads: {
+    /** Open K2's file picker from a click; the files the person picks become files in this widget's data (refs, never paths). cap uploads:pick · local · zen-files-v1. e.g. `const {files} = await k2.pick({accept: ['image/*'], multiple: true})` */
+    pick(opts?: { accept?: string[]; max?: number; multiple?: boolean }): Promise<UploadPicked>
+    /** Files the person drops on the widget, already in its data (a phone never drops: offer k2.pick too). cap uploads:pick · local · zen-files-v1. e.g. `k2.onDrop(({files, x, y}) => place(files, x, y))` */
+    dropped(cb: (value: UploadDropped) => void, onError?: (error: K2Error) => void): () => void
+    /** Handler object: re-subscribes on its own after a retryable refusal (capped backoff). */
+    dropped(handlers: K2Handlers<UploadDropped>): () => void
+  }
   readonly files: {
     /** A folder's entries, folders first. This computer only. cap files:read · portable · app-api-v1. e.g. `const entries = await k2.files.list({workspace, relPath: '.'})` */
     list(args: { relPath: string; showHidden?: boolean; workspace: string }): Promise<AppFileEntry[]>
@@ -1694,6 +1784,8 @@ export interface K2 {
     list(opts?: { after?: string; from?: string; limit?: number; prefix?: string }): Promise<StorePage>
     /** Changes after a cursor, whole revs at a time (subscribe uses this). This computer only. cap store:read · local · garden-data-v1. e.g. `const page = await k2.store.changes({since: 41})` */
     changes(opts: { after?: string; from?: string; prefix?: string; since: number }): Promise<StoreChanges>
+    /** Every change in the last 7 days, newest first, each with its value before and after (store.changes keeps only the latest per key). This computer only. cap store:read · local · garden-history-v1. e.g. `const {items, next} = await k2.store.history({prefix: 'board/b1/', limit: 200})` */
+    history(opts?: { after?: string; before?: number; from?: string; key?: string; limit?: number; prefix?: string }): Promise<StoreHistory>
     /** Save one key; with ifRev, only if nobody changed it since. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.put('obj/7', note, {ifRev: e.rev})` */
     put(key: string, value: unknown, opts?: { ifRev?: number }): Promise<StoreRev>
     /** Change some fields of one key and keep the rest (null removes a field); with ifRev, only if nobody changed it since. A missing key starts from {}. This computer only. cap store:write · local · garden-data-v1. e.g. `const {rev} = await k2.store.patch('obj/7', {done: true}, {ifRev: e.rev})` */
@@ -1710,6 +1802,10 @@ export interface K2 {
     txCommit(txId: string): Promise<StoreCommit>
     /** Drop a transaction's staged writes. This computer only. cap store:write · local · garden-data-v1. e.g. `await tx.abort()` */
     txAbort(txId: string): Promise<StoreTxAborted>
+    /** Put keys back as they were at a rev, a time (last 7 days) or a snapshot, as one new change you can undo. This computer only. cap store:write · local · garden-history-v1. e.g. `await k2.store.restore({at: yesterday, prefixes: ['board/b1/'], except: ['board/b1/versions/']})` */
+    restore(opts: { at?: number; dryRun?: boolean; except?: string[]; prefixes?: string[]; snapshot?: string; toRev?: number }): Promise<StoreRestored>
+    /** Save keys as they are now as a file in this widget's data (a named version); store.restore({snapshot}) puts them back. This computer only. cap store:write · local · garden-history-v1. e.g. `const {ref, rev} = await k2.store.snapshot({prefixes: ['board/b1/'], except: ['board/b1/versions/'], label})` */
+    snapshot(opts?: { except?: string[]; label?: string; prefixes?: string[] }): Promise<StoreSnapshot>
     /** Live changes under a prefix, from any writer (you, this widget, agents). The first delivery is the whole current state, then one per rev (never half of one). `since` resumes after a rev you have. Counts toward the 16 live subscriptions. This computer only. */
     subscribe(prefix: string | { prefix?: string; since?: number; from?: string }, cb: (delivery: StoreDelivery) => void, onError?: (error: K2Error) => void): () => void
     /** Handler object: re-subscribes on its own after a retryable refusal; a delivery that isn't a StoreDelivery reaches `error` as bad_shape. */
@@ -1776,6 +1872,10 @@ export interface K2 {
   open(url: string): Promise<LinkOpened>
   /** Same as `k2.downloads.save`: save a file to the person's Downloads from a click in this widget. `data` is bytes, a string, a Blob, {blob: ref}, or an async function that makes them (K2 checks the click when it starts; the bytes have 60 s). Needs downloads:save. */
   download(name: string, data: unknown, opts?: { mime?: string }): Promise<DownloadSaved>
+  /** Same as `k2.uploads.pick`: open K2's file picker from a click in this widget; the files become this widget's (refs, never paths). Needs uploads:pick. */
+  pick(opts?: { accept?: string[]; multiple?: boolean; max?: number }): Promise<UploadPicked>
+  /** Files the person drops on this widget, already in its data, at frame coordinates; returns the unsubscribe. A phone never drops: offer pick too. Needs uploads:pick. */
+  onDrop(cb: (drop: UploadDropped) => void): () => void
   readonly motion: { readonly reduced: boolean }
   /** Guards for data you didn't make. */
   readonly shape: K2Shape

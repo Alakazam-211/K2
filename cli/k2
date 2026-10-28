@@ -38854,7 +38854,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 31.
+From K2's verb catalog, version 32.
 
 THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
   import { fromEnv } from '@k2/server'
@@ -67569,7 +67569,7 @@ k2 zen guide api — the k2 object in a custom widget
 A custom widget is a sealed page in a Garden: no network, no storage, no
 files. It reaches K2 only through window.k2. Each call needs a cap its
 manifest.json asks for; a widget in your own Garden gets every one it asks
-for at once (no review). From K2's verb catalog, version 31.
+for at once (no review). From K2's verb catalog, version 32.
 
 TEN EXAMPLES
   const off = k2.agents.subscribe((rows) => draw(rows))   // live, in scope
@@ -67645,6 +67645,9 @@ links:open (Open links in your browser)
 downloads:save (Save files to your Downloads)
   k2.downloads.begin(name, {mime})                                                                                 local    zen-files-v1           k2.download('Board.png', async () => await drawPng())  [bad_args rate_limited]
   k2.downloads.save(name, data, {mime, ticket})                                                                    local    zen-files-v1           const {saved, name} = await k2.download('board.json', JSON.stringify(doc))  [not_granted bad_args too_large rate_limited blob_missing]
+uploads:pick (Take files you pick or drop)
+  k2.uploads.pick({accept, max, multiple})                                                                         local    zen-files-v1           const {files} = await k2.pick({accept: ['image/*'], multiple: true})  [not_granted author_unknown stale_widget rate_limited bad_args too_large space_full store_full paused busy]
+  k2.uploads.dropped(cb)                                                                                           local    zen-files-v1           k2.onDrop(({files, x, y}) => place(files, x, y))
 files:read (Read files (also shows heartbeat instructions))
   k2.files.list({relPath, showHidden, workspace})                                                                  portable app-api-v1             const entries = await k2.files.list({workspace, relPath: '.'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
   k2.files.read({relPath, workspace})                                                                              portable app-api-v1             const {content} = await k2.files.read({workspace, relPath: 'notes.md'})  [pass_required pass_invalid pass_wrong_link skin_room usage not_bound author_unknown]
@@ -67661,6 +67664,7 @@ store:read (Read the workspace store)
   k2.store.get(key, {from})                                                                                        local    garden-data-v1         const e = await k2.store.get('obj/7')  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
   k2.store.list({after, from, limit, prefix})                                                                      local    garden-data-v1         const {items, next} = await k2.store.list({prefix: 'obj/'})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key]
   k2.store.changes({after, from, prefix, since})                                                                   local    garden-data-v1         const page = await k2.store.changes({since: 41})  [not_bound not_granted author_unknown stale_widget rate_limited resync bad_key]
+  k2.store.history({after, before, from, key, limit, prefix})                                                      local    garden-history-v1      const {items, next} = await k2.store.history({prefix: 'board/b1/', limit: 200})  [not_bound not_granted author_unknown stale_widget rate_limited bad_key bad_args]
   k2.blobs.get(ref, {from, px})                                                                                    local    garden-blobs-v1        img.src = await k2.blobs.url(obj.src, {px: 256})  [not_granted author_unknown stale_widget rate_limited bad_args not_bound blob_missing]
   k2.blobs.info(ref)                                                                                               local    garden-blobs-v1        const {size, refs} = await k2.blobs.info(ref)  [not_granted author_unknown stale_widget rate_limited blob_missing]
   k2.blobs.list({after, limit})                                                                                    local    garden-blobs-v1        const {items, bytes, quota} = await k2.blobs.list()  [not_granted author_unknown stale_widget rate_limited]
@@ -67673,6 +67677,8 @@ store:write (Change dump-table rows)
   k2.store.txAdd(txId, ops)                                                                                        local    garden-data-v1         await tx.add(ops)  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired bad_key value_too_large too_large]
   k2.store.txCommit(txId)                                                                                          local    garden-data-v1         const {rev} = await tx.commit()  [not_granted author_unknown stale_widget rate_limited bad_tx tx_expired conflict value_too_large space_full store_full paused]
   k2.store.txAbort(txId)                                                                                           local    garden-data-v1         await tx.abort()
+  k2.store.restore({at, dryRun, except, prefixes, snapshot, toRev})                                                local    garden-history-v1      await k2.store.restore({at: yesterday, prefixes: ['board/b1/'], except: ['board/b1/versions/']})  [not_granted author_unknown stale_widget rate_limited bad_args bad_key no_history blob_missing space_full store_full paused]
+  k2.store.snapshot({except, label, prefixes})                                                                     local    garden-history-v1      const {ref, rev} = await k2.store.snapshot({prefixes: ['board/b1/'], except: ['board/b1/versions/'], label})  [not_granted author_unknown stale_widget rate_limited bad_args bad_key too_large space_full store_full paused]
   k2.blobs.put(data, {mime, name})                                                                                 local    garden-blobs-v1        const {ref} = await k2.blobs.put(file); await k2.store.patch('obj/7', {src: ref})  [not_granted author_unknown stale_widget rate_limited bad_args too_large space_full store_full paused busy]
 guests:rooms (Set its own guests' rooms (an owner grant per App, never a guest's))
   k2.guests.rooms({app, username})                                                                                 portable guests-rooms-v1        const g = await k2.asApp().guests.rooms({username: 'dana'})  [app_pass_required pass_required pass_invalid pass_wrong_link grant_required usage not_found rate_limited stale_widget author_unknown]

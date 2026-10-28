@@ -914,7 +914,7 @@ notice on the widget, in every window, until the person clicks Resume.
 ### Files, pick and drop, history (garden-blobs-v1, zen-files-v1, garden-history-v1)
 
 prd-garden-board-needs-v1: blobs and `k2.download` (0.46.5, catalog v30);
-`k2.pick`, `k2.onDrop` and full history (0.46.6, catalog v31).
+`k2.pick`, `k2.onDrop` and full history (0.46.6, catalog v32).
 
 **Bytes on the port.** A frame message may carry one transferred
 `ArrayBuffer` as `bytes`, only on `blobs.put` (16 MiB) and `downloads.save`

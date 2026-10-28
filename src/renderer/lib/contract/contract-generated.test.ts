@@ -177,7 +177,7 @@ describe('TUWA5: the generated tables', () => {
       'blobs.list': { cap: 'store:read', reach: 'local', kind: 'call' },
       'downloads.begin': { cap: 'downloads:save', reach: 'local', kind: 'call' },
       'downloads.save': { cap: 'downloads:save', reach: 'local', kind: 'call' },
-      // Catalog v31 (0.46.6): K2's picker and drops (frame rows), and full
+      // Catalog v32 (0.46.6): K2's picker and drops (frame rows), and full
       // history (garden-local).
       'uploads.pick': { cap: 'uploads:pick', reach: 'local', kind: 'call' },
       'uploads.dropped': { cap: 'uploads:pick', reach: 'local', kind: 'event' },

@@ -393,11 +393,19 @@ pub fn init_home_database(
 
     let report = home_switch::switch_home_db(&db_dir, opts);
     crate::log_debug!("{}", report.log_line());
-    if let home_switch::Outcome::Blocked { k2_projects, k2so_projects } = &report.outcome {
-        eprintln!(
+    home_switch::remember(&db_dir, &report);
+    match &report.outcome {
+        home_switch::Outcome::Blocked { k2_projects, k2so_projects } => eprintln!(
             "[db] {}",
             home_switch::blocked_message(&db_dir, &report.path, *k2_projects, *k2so_projects)
-        );
+        ),
+        // DB-A15: never open over an unfinished write under the old name.
+        home_switch::Outcome::HotJournal { journal, bytes } => {
+            let msg = home_switch::hot_journal_message(&db_dir, journal, *bytes);
+            eprintln!("[db] {msg}");
+            return Err(rusqlite::Error::InvalidParameterName(msg));
+        }
+        _ => {}
     }
     let db_path = report.path.clone();
     let conn = open_private_with_resilience(&db_path)?;

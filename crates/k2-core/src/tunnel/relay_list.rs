@@ -41,9 +41,11 @@
 //!
 //! **Persist** — `relays` (plus `server_addr`/`server_port` = the primary,
 //! so the legacy pair stays coherent) are written only when they changed,
-//! atomically and 0600 ([`config::update_if`]). A running tunnel picks the
-//! new list up at its next reconnect, never as a live restart (see the
-//! connector's supervisor).
+//! atomically and 0600 ([`config::update_if`]). 0.46.6: a running tunnel
+//! follows the new list within a minute without a restart — adopted in
+//! place while the relay in use is still listed (the probe-driven
+//! fail-back then moves it to the new primary), one jittered move when it
+//! is not (see the connector's `LiveList`).
 //!
 //! **Validation** — `v == 1`, 1..=[`MAX_RELAYS`] relays, each host a valid
 //! IP or hostname, port 1–65535, no duplicates; `refresh_s` clamped to
@@ -380,7 +382,7 @@ pub enum RefreshOutcome {
     Skipped(String),
     /// Fetched; the list on disk already matched.
     Unchanged,
-    /// Fetched and written (applies at the next reconnect).
+    /// Fetched and written (a running tunnel follows it within a minute).
     Updated(Vec<RelayEndpoint>),
     /// No usable list; the old one stays.
     Failed(FetchError),
@@ -514,7 +516,7 @@ pub fn refresh_once() -> RefreshOutcome {
             st.logged_error = None;
             if wrote {
                 crate::log_debug!(
-                    "[tunnel/relays] relay list updated from k2.dev: {} (applies at the next reconnect)",
+                    "[tunnel/relays] relay list updated from k2.dev: {} (the running tunnel follows it within a minute)",
                     list.relays
                         .iter()
                         .map(|r| r.to_string())

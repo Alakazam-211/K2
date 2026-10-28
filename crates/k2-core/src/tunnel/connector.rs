@@ -636,6 +636,131 @@ const SOLO_LIST_CHECK_EVERY: Duration = Duration::from_millis(250);
 /// instead of sleeping.
 static SOLO_LIST_UNCHANGED_CHECKS: AtomicU64 = AtomicU64::new(0);
 
+/// 0.46.6 (D7): how often a RUNNING tunnel compares the list it should dial
+/// ([`super::relay_list::effective`] over `tunnel.json`) with the one its
+/// selector runs, dead session or not. Short in tests.
+#[cfg(not(test))]
+const LIVE_LIST_CHECK_EVERY: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const LIVE_LIST_CHECK_EVERY: Duration = Duration::from_millis(300);
+
+/// 0.46.6 (D7): a running tunnel whose relay is no longer listed moves to
+/// the new primary after a random 0..=this (fleet jitter, like a
+/// fail-back). Short in tests.
+#[cfg(not(test))]
+const LIST_MOVE_JITTER_MAX: Duration = Duration::from_secs(60);
+#[cfg(test)]
+const LIST_MOVE_JITTER_MAX: Duration = Duration::from_millis(300);
+
+/// Random duration in `0..=max` (millisecond grain) from the OS RNG.
+fn random_upto(max: Duration) -> Duration {
+    let ms = max.as_millis() as u64;
+    if ms == 0 {
+        return Duration::ZERO;
+    }
+    let mut b = [0u8; 8];
+    let r = match getrandom::getrandom(&mut b) {
+        Ok(()) => u64::from_le_bytes(b),
+        Err(_) => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x9E37_79B9_7F4A_7C15),
+    };
+    Duration::from_millis(r % (ms + 1))
+}
+
+/// 0.46.6 (D7, RD-A5): a running tunnel follows a changed dial list without
+/// a restart. Every [`LIVE_LIST_CHECK_EVERY`] the supervise loop compares
+/// the list it should dial with the selector's:
+///
+/// * the relay in use is still listed → [`RelaySelector::adopt`] in place,
+///   frpc untouched. When it is no longer index 0 the selector is now on a
+///   fallback, and the usual probe-driven fail-back (with its fleet jitter,
+///   and unless k2.dev says `*.k2.dev` points at the relay in use) moves it
+///   to the new primary. A solo selector that gains relays becomes a
+///   multi-relay one in the same loop.
+/// * the relay in use is no longer listed → ONE controlled move to the new
+///   primary after a random 0..=[`LIST_MOVE_JITTER_MAX`]: kill, re-render,
+///   respawn, no failure counted and no backoff
+///   ([`ChildOutcome::ListMove`]).
+///
+/// After every adopt the live relay and "primary relay" flag are
+/// republished, so status never calls a fallback the primary (RD-A6).
+#[derive(Default)]
+struct LiveList {
+    last_check: Option<Instant>,
+    /// The scheduled controlled move: when, and the list to adopt then.
+    pending: Option<(Instant, Vec<RelayEndpoint>)>,
+}
+
+impl LiveList {
+    fn poll(
+        &mut self,
+        selector: &mut RelaySelector,
+        publish: &dyn Fn(&RelaySelector),
+        now: Instant,
+    ) -> Option<RelaySwitch> {
+        if self.pending.as_ref().is_some_and(|(at, _)| now >= *at) {
+            let (_, list) = self.pending.take().expect("checked above");
+            let from = selector.current().clone();
+            selector.adopt(list);
+            publish(selector);
+            return Some(RelaySwitch {
+                from,
+                to: selector.current().clone(),
+                after_failures: 0,
+            });
+        }
+        if self
+            .last_check
+            .is_some_and(|t| now.saturating_duration_since(t) < LIVE_LIST_CHECK_EVERY)
+        {
+            return None;
+        }
+        self.last_check = Some(now);
+        let list = disk_effective_relays()?;
+        if list.as_slice() == selector.relays() {
+            if self.pending.take().is_some() {
+                crate::log_debug!(
+                    "[tunnel] relay list is back to the one in use; the scheduled move is cancelled"
+                );
+            }
+            return None;
+        }
+        if list.contains(selector.current()) {
+            self.pending = None;
+            selector.adopt(list);
+            publish(selector);
+            crate::log_debug!(
+                "[tunnel] relay list changed — adopted live, frpc untouched ({} relay(s); still on {}{})",
+                selector.relays().len(),
+                selector.current(),
+                if selector.on_primary() {
+                    String::new()
+                } else {
+                    format!(
+                        ", now a fallback: returns to {} once it passes its health probes",
+                        selector.primary()
+                    )
+                }
+            );
+            return None;
+        }
+        if self.pending.as_ref().is_some_and(|(_, l)| *l == list) {
+            return None;
+        }
+        let delay = random_upto(LIST_MOVE_JITTER_MAX);
+        crate::log_debug!(
+            "[tunnel] relay list changed and no longer lists {} — moving to {} in {:.0} s",
+            selector.current(),
+            list[0],
+            delay.as_secs_f64()
+        );
+        self.pending = Some((now + delay, list));
+        None
+    }
+}
+
 #[cfg(test)]
 static TEST_FAILBACK_POLICY: Mutex<Option<super::failover::FailbackPolicy>> = Mutex::new(None);
 
@@ -1204,6 +1329,7 @@ pub fn start(
     // running (hand-off, crash, `KillMode=process` restart) when it still
     // runs exactly this config — no relay re-dial, no tunnel blip. Any
     // mismatch falls through to the reap + fresh spawn below.
+    let mut first_relay = dial.relays[0].clone();
     let adopted = match frpc_proc::try_adopt(&frpc_config_path(), &rendered) {
         Ok(rec) => {
             crate::log_debug!(
@@ -1213,6 +1339,42 @@ pub fn start(
             Some(rec)
         }
         Err(frpc_proc::NoAdopt::NoRecord) => None,
+        // 0.46.6 (D7): the recorded frpc may dial another relay this box
+        // knows — the old baked list now dialed as relay.k2.dev, a
+        // fallback, a list k2.dev changed since. Adopt it as it is; the
+        // supervisor's live list check then moves it with fleet jitter,
+        // instead of every updated box reconnecting the moment it updates.
+        Err(frpc_proc::NoAdopt::ConfigChanged) => {
+            let other = dial
+                .replaced
+                .iter()
+                .flatten()
+                .chain(dial.relays.iter().skip(1))
+                .find_map(|r| {
+                    let toml = render_frpc_toml_for_relay(&cfg, r, resolved_local_port, e2e);
+                    frpc_proc::try_adopt(&frpc_config_path(), &toml)
+                        .ok()
+                        .map(|rec| (rec, r.clone()))
+                });
+            match other {
+                Some((rec, r)) => {
+                    crate::log_debug!(
+                        "[tunnel] adopting running frpc pid {} on {r} (the relay list now starts \
+                         with {}; the live list check moves it)",
+                        rec.pid,
+                        dial.relays[0]
+                    );
+                    first_relay = r;
+                    Some(rec)
+                }
+                None => {
+                    crate::log_debug!(
+                        "[tunnel] not adopting the recorded frpc (ConfigChanged) — fresh spawn"
+                    );
+                    None
+                }
+            }
+        }
         Err(why) => {
             crate::log_debug!("[tunnel] not adopting the recorded frpc ({why:?}) — fresh spawn");
             None
@@ -1270,8 +1432,16 @@ pub fn start(
     // The live-relay slot starts at the preferred relay (index 0 — what
     // was just rendered above); the supervise loop republishes it on every
     // rotation so status() always names the relay actually being dialed.
-    let current_relay = Arc::new(Mutex::new(dial.relays[0].clone()));
-    let relay_primary = Arc::new(AtomicBool::new(true));
+    // An adopted frpc on another relay starts as a one-relay selector on
+    // that relay; the first live list check (at once) adopts the dial list.
+    let on_first = first_relay == dial.relays[0];
+    let initial_relays = if on_first {
+        dial.relays.clone()
+    } else {
+        vec![first_relay.clone()]
+    };
+    let current_relay = Arc::new(Mutex::new(first_relay));
+    let relay_primary = Arc::new(AtomicBool::new(on_first));
     let proxy = Arc::new(ProxyRegistration::new(&cfg));
     let health = Arc::new(FrpcHealth::new());
     // 0.46.3: the failover rules, read once per start (tunnel.json
@@ -1289,11 +1459,11 @@ pub fn start(
         crate::log_debug!("[tunnel] relay failover rules: {}", failover_mode.as_str());
     }
     let failover = Arc::new(Mutex::new(
-        new_selector(dial.relays.clone(), failover_mode).failover_status(),
+        new_selector(initial_relays.clone(), failover_mode).failover_status(),
     ));
     spawn_supervised(
         frpc,
-        dial.relays,
+        initial_relays,
         child.clone(),
         running.clone(),
         current_relay.clone(),
@@ -1799,6 +1969,11 @@ enum ChildOutcome {
     /// Runtime stage H: the daemon handed off; the child keeps running for
     /// the successor to adopt. The supervisor exits without a kill.
     Detached,
+    /// 0.46.6 (D7): the dial list changed while frpc ran and no longer
+    /// lists the relay in use; after its jitter WE killed the child for one
+    /// controlled move to the new primary ([`LiveList`]) — respawn at once,
+    /// no failure counted, no backoff.
+    ListMove(RelaySwitch),
 }
 
 /// Shared per-child-run state for the MID-SESSION relay-death watchdog.
@@ -1884,28 +2059,32 @@ impl RunHealth<'_> {
 
 /// Wait for the current child to end.
 ///
-/// * Single relay ([`RelaySelector::is_solo`]) — poll `try_wait` so we can
-///   (0.45.7: a dead session is cycled ONLY when `tunnel.json` now lists
-///   other relays, so a refreshed list reaches it; see the solo loop.)
-///   observe `stop()` and kill the child we're holding. The Child was
-///   TAKEN from the slot, so `stop()` can't reach the handle; without
-///   this poll a solo frpc is orphaned on SIGTERM/Stop until the next
-///   `start()` reaps it. **No** mid-session watchdog and **no** fail-back
-///   on solo — with a single relay there is nowhere to rotate, and a
-///   reconnect-looping frpc is left to frp's own retry (stop still kills
-///   via the poll + `reap_stray_frpc` on the stop path). The pre-failover
-///   "byte-identical solo wait" tradeoff is intentionally broken here
-///   for stop correctness: a bare `child.wait()` never saw `running=false`.
-/// * Multi-relay — same poll loop plus (a) healthy-uptime feed into the
-///   selector (fail-back streak), (b) stop observability, and (c) the
-///   mid-session watchdog ([`SessionWatch`]) for live-but-stuck children
-///   whose relay died AFTER login (frpc never exits on its own then).
+/// One poll loop; what it does each tick depends on whether the selector
+/// is solo right now (0.46.6: a live list adopt can turn a solo selector
+/// into a multi-relay one mid-run, see [`LiveList`]):
+///
+/// * Always — observe `stop()` and kill the child we hold (the Child was
+///   TAKEN from the slot, so `stop()` can't reach the handle; without this
+///   poll a solo frpc is orphaned on SIGTERM/Stop until the next `start()`
+///   reaps it), the localPort self-heal, and (0.46.6) the live relay-list
+///   check ([`LiveList`]).
+/// * Single relay ([`RelaySelector::is_solo`]) — **no** fail-back and no
+///   rotation: a reconnect-looping frpc is left to frp's own retry. The
+///   watchdog only acts when the session is dead AND the list to dial
+///   changed (0.45.7: a refreshed list must reach a box whose only relay
+///   died mid-session — frpc would retry it forever).
+/// * Multi-relay — also (a) healthy-uptime feed into the selector
+///   (fail-back streak), and (b) the mid-session watchdog
+///   ([`SessionWatch`]) for live-but-stuck children whose relay died AFTER
+///   login (frpc never exits on its own then).
+#[allow(clippy::too_many_arguments)]
 fn wait_for_exit(
     child: &mut FrpcProc,
     running: &AtomicBool,
     selector: &mut RelaySelector,
     hints: &mut HintSource,
     failover_slot: &Mutex<Option<FailoverStatus>>,
+    publish: &dyn Fn(&RelaySelector),
     spawned_at: Instant,
     watch: Option<&SessionWatch>,
     local_port: &AtomicU16,
@@ -1915,58 +2094,8 @@ fn wait_for_exit(
 ) -> ChildOutcome {
     let mut ticks_since_probe = 0u32;
     let mut published_up = false;
-    // Solo: stop-observability + localPort self-heal — no fail-back. The
-    // watchdog only acts when the session is dead AND `tunnel.json` now
-    // lists other relays (0.45.7: a refreshed list must reach a box whose
-    // only relay died mid-session — frpc would retry it forever).
-    if selector.is_solo() {
-        let mut last_list_check: Option<Instant> = None;
-        loop {
-            run.tick(spawned_at);
-            match child.try_wait() {
-                Ok(Some(code)) => return ChildOutcome::Exited(code),
-                Ok(None) => {}
-                Err(e) => {
-                    crate::log_debug!("[tunnel] wait on frpc child failed: {e}");
-                    return ChildOutcome::Exited(None);
-                }
-            }
-            if !running.load(Ordering::SeqCst) {
-                if detached() {
-                    return ChildOutcome::Detached;
-                }
-                child.kill_and_wait();
-                return ChildOutcome::Exited(None);
-            }
-            if let Some(w) = watch {
-                let check_due =
-                    last_list_check.map_or(true, |t| t.elapsed() >= SOLO_LIST_CHECK_EVERY);
-                if w.is_dead() && check_due {
-                    last_list_check = Some(Instant::now());
-                    if disk_relays_differ(selector) {
-                        crate::log_debug!(
-                            "[tunnel] relay {} session is dead and tunnel.json lists other \
-                             relays — reconnecting to apply the new list",
-                            selector.current()
-                        );
-                        child.kill_and_wait();
-                        return ChildOutcome::WatchdogKill;
-                    }
-                    SOLO_LIST_UNCHANGED_CHECKS.fetch_add(1, Ordering::SeqCst);
-                }
-            }
-            if probe_local_desync(
-                &mut ticks_since_probe,
-                local_port,
-                e2e,
-                daemon_http_port,
-            ) {
-                child.kill_and_wait();
-                return ChildOutcome::LocalPortUnreachable;
-            }
-            std::thread::sleep(SUPERVISE_POLL);
-        }
-    }
+    let mut last_list_check: Option<Instant> = None;
+    let mut live = LiveList::default();
     loop {
         run.tick(spawned_at);
         match child.try_wait() {
@@ -1987,11 +2116,31 @@ fn wait_for_exit(
             child.kill_and_wait();
             return ChildOutcome::Exited(None);
         }
-        // Mid-session relay death: the watchdog (fed by the pump threads)
-        // declared the session dead — kill the stuck child so the normal
-        // exit path runs. Checked BEFORE the healthy-uptime feed below so
-        // a just-declared death can't credit one more success tick.
-        if let Some(w) = watch {
+        if selector.is_solo() {
+            // Solo dead session: reconnect only when the list changed.
+            if let Some(w) = watch {
+                let check_due =
+                    last_list_check.map_or(true, |t| t.elapsed() >= SOLO_LIST_CHECK_EVERY);
+                if w.is_dead() && check_due {
+                    last_list_check = Some(Instant::now());
+                    if disk_relays_differ(selector) {
+                        crate::log_debug!(
+                            "[tunnel] relay {} session is dead and the relay list changed \
+                             — reconnecting to apply the new list",
+                            selector.current()
+                        );
+                        child.kill_and_wait();
+                        return ChildOutcome::WatchdogKill;
+                    }
+                    SOLO_LIST_UNCHANGED_CHECKS.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        } else if let Some(w) = watch {
+            // Mid-session relay death: the watchdog (fed by the pump
+            // threads) declared the session dead — kill the stuck child so
+            // the normal exit path runs. Checked BEFORE the healthy-uptime
+            // feed below so a just-declared death can't credit one more
+            // success tick.
             if w.is_dead() {
                 let (n, window) = w.policy();
                 crate::log_debug!(
@@ -2001,6 +2150,11 @@ fn wait_for_exit(
                 child.kill_and_wait();
                 return ChildOutcome::WatchdogKill;
             }
+        }
+        // 0.46.6 (D7): follow a changed dial list without a restart.
+        if let Some(sw) = live.poll(selector, publish, Instant::now()) {
+            child.kill_and_wait();
+            return ChildOutcome::ListMove(sw);
         }
         // Bug B self-heal: only when frozen localPort is dead AND a
         // different live E2E port is available (true desync). Same-port
@@ -2014,46 +2168,48 @@ fn wait_for_exit(
             child.kill_and_wait();
             return ChildOutcome::LocalPortUnreachable;
         }
-        // A child alive past HEALTHY_UPTIME is a working relay: reset the
-        // failure counter.
-        if spawned_at.elapsed() >= HEALTHY_UPTIME {
-            selector.on_success();
-            // 0.46.3: a hold ("waiting for DNS") ends with a working run.
-            if !published_up {
-                published_up = true;
+        if !selector.is_solo() {
+            // A child alive past HEALTHY_UPTIME is a working relay: reset
+            // the failure counter.
+            if spawned_at.elapsed() >= HEALTHY_UPTIME {
+                selector.on_success();
+                // 0.46.3: a hold ("waiting for DNS") ends with a working run.
+                if !published_up {
+                    published_up = true;
+                    publish_failover(failover_slot, selector);
+                }
+            }
+            // Fail-back (0.45.7): on a fallback, TCP-probe the primary on
+            // the selector's schedule; after enough healthy probes in a
+            // row (and its random delay) return to it with one controlled
+            // reconnect. Never fires while the primary is in use.
+            // 0.46.3 DNS mode: not while k2.dev says the name points at the
+            // fallback in use (legacy: the hint is always Unknown and the
+            // selector runs the 0.46.2 rules).
+            if selector.primary_probe_due(Instant::now()) {
+                let primary = selector.primary().clone();
+                let healthy = probe_relay(&primary);
+                let hint = hints.decide();
+                selector.on_primary_probe_at(healthy, Instant::now(), &hint);
+                crate::log_debug!(
+                    "[tunnel] primary relay {primary} probe: {} ({} healthy in a row)",
+                    if healthy { "healthy" } else { "unreachable" },
+                    selector.probe_streak()
+                );
+                if selector.mode() == FailoverMode::Dns
+                    && matches!(&hint, DnsHint::Active(r) if r == selector.current())
+                {
+                    crate::log_debug!(
+                        "[tunnel] failover: staying on {}, k2.dev says the name points here",
+                        selector.current()
+                    );
+                }
                 publish_failover(failover_slot, selector);
             }
-        }
-        // Fail-back (0.45.7): on a fallback, TCP-probe the primary on the
-        // selector's schedule; after enough healthy probes in a row (and
-        // its random delay) return to it with one controlled reconnect.
-        // Never fires while the primary is in use.
-        // 0.46.3 DNS mode: not while k2.dev says the name points at the
-        // fallback in use (legacy: the hint is always Unknown and the
-        // selector runs the 0.46.2 rules).
-        if selector.primary_probe_due(Instant::now()) {
-            let primary = selector.primary().clone();
-            let healthy = probe_relay(&primary);
-            let hint = hints.decide();
-            selector.on_primary_probe_at(healthy, Instant::now(), &hint);
-            crate::log_debug!(
-                "[tunnel] primary relay {primary} probe: {} ({} healthy in a row)",
-                if healthy { "healthy" } else { "unreachable" },
-                selector.probe_streak()
-            );
-            if selector.mode() == FailoverMode::Dns
-                && matches!(&hint, DnsHint::Active(r) if r == selector.current())
-            {
-                crate::log_debug!(
-                    "[tunnel] failover: staying on {}, k2.dev says the name points here",
-                    selector.current()
-                );
+            if let Some(sw) = selector.poll_failback_at(Instant::now(), &hints.cached()) {
+                child.kill_and_wait();
+                return ChildOutcome::FailBack(sw);
             }
-            publish_failover(failover_slot, selector);
-        }
-        if let Some(sw) = selector.poll_failback_at(Instant::now(), &hints.cached()) {
-            child.kill_and_wait();
-            return ChildOutcome::FailBack(sw);
         }
         std::thread::sleep(SUPERVISE_POLL);
     }
@@ -2236,9 +2392,9 @@ fn spawn_supervised(
                 publish_failover(&failover_slot, sel);
             };
             // 0.45.7: a relay list that changed on disk (k2.dev refresh,
-            // pairing, a manual edit) is applied HERE, at a reconnect —
-            // never as a live restart. The relay in use stays in use when
-            // the new list still has it.
+            // pairing, a manual edit) is applied at every reconnect too
+            // (0.46.6: a RUNNING frpc follows it through `LiveList`). The
+            // relay in use stays in use when the new list still has it.
             let adopt_disk_list = |sel: &mut RelaySelector, disk: &TunnelConfig| {
                 let list = super::relay_list::effective(disk).relays;
                 if list.as_slice() == sel.relays() {
@@ -2359,6 +2515,7 @@ fn spawn_supervised(
                     &mut selector,
                     &mut hints,
                     &failover_slot,
+                    &publish_relay,
                     spawned_at,
                     watch.as_deref(),
                     &port_slot,
@@ -2420,6 +2577,29 @@ fn spawn_supervised(
                         }
                         publish_relay(&selector);
                         super::relay_list::request_refresh("relay switch");
+                        backoff = initial_backoff;
+                    }
+                    ChildOutcome::ListMove(sw) => {
+                        // 0.46.6 (D7): the controlled move off a relay the
+                        // list no longer has — like a fail-back: re-render,
+                        // respawn at once, no failure and no backoff.
+                        crate::log_debug!(
+                            "[tunnel] relay list move: {} -> {} (the relay in use is no longer listed)",
+                            sw.from,
+                            sw.to
+                        );
+                        if let Err(e) = write_relay_config(
+                            &cfg_thread,
+                            selector.current(),
+                            frozen_port(),
+                            e2e,
+                        ) {
+                            crate::log_debug!(
+                                "[tunnel] WARN: rewrite frpc.toml for {} failed: {e}",
+                                selector.current()
+                            );
+                        }
+                        publish_relay(&selector);
                         backoff = initial_backoff;
                     }
                     ChildOutcome::Exited(code) => {
@@ -3796,14 +3976,23 @@ mod tests {
             .count()
     }
 
-    /// Setting `relays` through the UPDATE path (`set_config`) must not
-    /// disturb a currently-connected tunnel — exactly like server_addr,
-    /// it's persist-only. Guards the "no live restart" contract end to end:
-    /// a healthy running tunnel keeps its child, endpoint and rendered
-    /// frpc.toml; a stop/start dials the new primary. (0.45.7: a RECONNECT
-    /// also picks the list up — see the next test.)
+    fn ep(host: &str, port: u16) -> RelayEndpoint {
+        RelayEndpoint { host: host.to_string(), port }
+    }
+
+    fn running_pid() -> i32 {
+        frpc_proc::read_pid_record(&frpc_config_path())
+            .expect("the running frpc's pid record")
+            .pid
+    }
+
+    /// 0.46.6 (PRD test 14, D7): a new list that no longer has the relay in
+    /// use (here written through `set_config`, the route's surface) moves a
+    /// RUNNING tunnel exactly once to the new primary, after its jitter,
+    /// with no failure counted and no backoff. (Before 0.46.6 the running
+    /// tunnel ignored it until a reconnect.)
     #[test]
-    fn set_relays_while_running_applies_only_on_next_start() {
+    fn a_dropped_relay_moves_a_running_tunnel_once_without_a_penalty() {
         with_temp_home(|| {
             config::save(&TunnelConfig {
                 server_addr: "9.9.9.9".to_string(),
@@ -3821,51 +4010,183 @@ mod tests {
                 .expect("start on legacy endpoint");
             assert!(st.running);
             wait_until("the first frpc launch", 10, || dir.join("spawns").exists());
+            let pid0 = running_pid();
 
-            // Mutate the relay list through the same surface the daemon's
-            // POST /cli/tunnel/config uses, while the tunnel is up.
             super::super::set_config(super::super::TunnelConfigUpdate {
-                relays: Some(vec![
-                    RelayEndpoint { host: "10.0.0.1".to_string(), port: 7000 },
-                    RelayEndpoint { host: "10.0.0.2".to_string(), port: 7000 },
-                ]),
+                relays: Some(vec![ep("10.0.0.1", 7000), ep("10.0.0.2", 7000)]),
                 ..Default::default()
             })
             .expect("set relays while running");
-
-            // The RUNNING tunnel is undisturbed: still up, still homed to
-            // the endpoint it started on, rendered config untouched.
-            let now = status();
-            assert!(now.running, "set_config must not stop a running tunnel");
-            assert_eq!(
-                now.server_addr.as_deref(),
-                Some("9.9.9.9"),
-                "live tunnel must keep its endpoint until the next start"
-            );
-            let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
+            let written = Instant::now();
+            wait_until("the controlled move to the new primary", 10, || {
+                status().server_addr.as_deref() == Some("10.0.0.1")
+                    && std::fs::read_to_string(frpc_config_path())
+                        .map(|t| t.contains("serverAddr = \"10.0.0.1\""))
+                        .unwrap_or(false)
+                    && spawn_count(&dir) == 2
+            });
             assert!(
-                toml.contains("serverAddr = \"9.9.9.9\""),
-                "set_config must not re-render the live frpc.toml\n{toml}"
+                written.elapsed() < Duration::from_secs(5),
+                "check (≤300 ms) + jitter (≤300 ms) + an immediate respawn, no backoff: {:?}",
+                written.elapsed()
             );
-            // Give a (wrong) live restart time to happen, then prove none did.
-            std::thread::sleep(Duration::from_secs(3));
-            assert_eq!(spawn_count(&dir), 1, "a list change alone must not restart frpc");
-            assert_eq!(status().server_addr.as_deref(), Some("9.9.9.9"));
-
-            // The NEXT start picks the new list up: dials the new primary.
+            assert_ne!(running_pid(), pid0, "the old frpc was replaced");
+            let st = status();
+            assert_eq!(st.relay_primary, Some(true));
+            assert_eq!(st.server_port, Some(7000));
+            assert_eq!(st.frpc_consecutive_failures, Some(0), "a move is not a failure");
+            // Exactly one move: the new list is now the one in use.
+            std::thread::sleep(Duration::from_secs(2));
+            assert_eq!(spawn_count(&dir), 2, "one controlled move, never a loop");
             stop("test").expect("stop");
-            let st = start(None, 57839, &FrpcBinary::Explicit(frpc))
-                .expect("restart with relays");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// 0.46.6 (PRD test 13, D7, RD-A6): a running multi-relay tunnel on X
+    /// whose list becomes [Y, X] adopts it live — same frpc, "primary
+    /// relay" turns false at once — then the probe-driven fail-back moves
+    /// it to Y.
+    #[test]
+    fn a_running_tunnel_adopts_a_reordered_list_live_then_fails_back() {
+        with_temp_home(|| {
+            let _policy = fast_failback();
+            let x = std::net::TcpListener::bind("127.0.0.1:0").expect("bind X");
+            let x_port = x.local_addr().expect("addr").port();
+            let y = std::net::TcpListener::bind("127.0.0.1:0").expect("bind Y");
+            let y_port = y.local_addr().expect("addr").port();
+            let z = crate::test_env::ClosedPort::new();
+            let dir = crate::test_env::unique_temp_path("fake-frpc-reorder");
+            let frpc = long_lived_frpc(&dir);
+            config::save(&TunnelConfig {
+                relays: vec![ep("127.0.0.1", x_port), ep("127.0.0.1", z.port())],
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed [X, Z]");
+            start(None, 57839, &FrpcBinary::Explicit(frpc)).expect("start");
+            wait_until("the first frpc launch", 10, || dir.join("spawns").exists());
+            let pid0 = running_pid();
+            assert_eq!(status().relay_primary, Some(true));
+
+            config::update(|c| c.relays = vec![ep("127.0.0.1", y_port), ep("127.0.0.1", x_port)])
+                .expect("the list changes to [Y, X]");
+            wait_until("the live adopt", 5, || status().relay_primary == Some(false));
+            let st = status();
+            assert_eq!(st.server_port, Some(x_port), "still on X, frpc untouched");
+            assert_eq!(running_pid(), pid0, "same frpc");
+            assert_eq!(spawn_count(&dir), 1, "an adopt never restarts frpc");
             assert_eq!(
-                st.server_addr.as_deref(),
-                Some("10.0.0.1"),
-                "restart must home to the new preferred relay"
+                st.failover.as_ref().map(|f| f.state.as_str()),
+                Some("on_fallback"),
+                "{:?}",
+                st.failover
             );
+
+            wait_until("the fail-back to Y", 30, || status().server_port == Some(y_port));
+            assert_eq!(status().relay_primary, Some(true));
+            // Status flips before the new frpc writes its launch line.
+            wait_until("the fail-back's one reconnect", 10, || spawn_count(&dir) == 2);
+            std::thread::sleep(Duration::from_secs(1));
+            assert_eq!(spawn_count(&dir), 2, "one reconnect, the fail-back");
+            stop("test").expect("stop");
+            drop((x, y));
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// 0.46.6 (PRD test 15): a SOLO tunnel whose relay is still listed in
+    /// a new 2-relay list becomes a multi-relay tunnel without an frpc
+    /// restart; status shows the failover rules from then on.
+    #[test]
+    fn a_solo_tunnel_becomes_multi_relay_without_a_restart() {
+        with_temp_home(|| {
+            let dir = crate::test_env::unique_temp_path("fake-frpc-solo-multi");
+            let frpc = long_lived_frpc(&dir);
+            config::save(&TunnelConfig {
+                server_addr: "10.0.0.1".to_string(),
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed solo");
+            let st = start(None, 57839, &FrpcBinary::Explicit(frpc)).expect("start");
+            assert_eq!(st.failover, None, "solo: no failover");
+            wait_until("the first frpc launch", 10, || dir.join("spawns").exists());
+            let pid0 = running_pid();
+
+            config::update(|c| c.relays = vec![ep("10.0.0.1", 7000), ep("10.0.0.2", 7000)])
+                .expect("k2.dev hands out a second relay");
+            wait_until("the solo selector to adopt the 2-relay list", 5, || {
+                status().failover.is_some()
+            });
+            let st = status();
+            assert_eq!(st.server_addr.as_deref(), Some("10.0.0.1"));
+            assert_eq!(st.relay_primary, Some(true));
+            assert_eq!(st.failover.as_ref().map(|f| f.mode.as_str()), Some("dns"));
+            std::thread::sleep(Duration::from_secs(1));
+            assert_eq!(running_pid(), pid0, "same frpc");
+            assert_eq!(spawn_count(&dir), 1, "no restart");
+            stop("test").expect("stop");
+            let _ = std::fs::remove_dir_all(&dir);
+        });
+    }
+
+    /// 0.46.6 (D7 at an update): the new daemon finds the handed-off frpc
+    /// still dialing the old baked IP while the dial list is now
+    /// relay.k2.dev. It adopts that frpc (no reconnect at the update) and
+    /// the live list check moves it once, with jitter.
+    #[test]
+    fn an_adopted_frpc_on_the_old_ip_moves_to_the_name_with_jitter() {
+        with_temp_home(|| {
+            let _e = crate::test_env::EnvVar::remove(config::RELAY_DEFAULT_ENV);
+            let dir = crate::test_env::unique_temp_path("adopt-frpc-old-ip");
+            std::fs::create_dir_all(&dir).expect("mk dir");
+            let script = registering_frpc(&dir);
+            config::save(&TunnelConfig {
+                server_addr: "178.156.232.105".to_string(),
+                token: "tok".to_string(),
+                subdomain: "rosson".to_string(),
+                e2e: false,
+                ..Default::default()
+            })
+            .expect("seed a 0.46.5 tunnel.json");
+            super::super::ingress::register_ensure_tunnel_ingress(Box::new(|| Ok(46124)));
+            let _lease = crate::test_env::EnvVar::set(super::super::lease::LEASE_ENV_VAR, "off");
+
+            // The 0.46.5 daemon: the name never resolved, frpc dials the IP.
+            start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("start");
             let toml = std::fs::read_to_string(frpc_config_path()).expect("frpc.toml");
-            assert!(
-                toml.contains("serverAddr = \"10.0.0.1\""),
-                "restart must render the new preferred relay\n{toml}"
+            assert!(toml.contains("serverAddr = \"178.156.232.105\""), "{toml}");
+            let old = hand_off_and_forget();
+
+            // The updated daemon: the name resolves.
+            super::super::relay_list::set_name_ok_for_test(Some(vec![
+                "147.135.65.8".parse().expect("ip"),
+            ]));
+            let st = start(None, 57839, &FrpcBinary::Explicit(script.clone())).expect("adopting start");
+            assert_eq!(st.server_addr.as_deref(), Some("178.156.232.105"), "adopted as it is");
+            assert_eq!(st.relay_primary, Some(false), "not on the list's primary");
+            assert_eq!(
+                frpc_proc::read_pid_record(&frpc_config_path()).expect("record").pid,
+                old,
+                "adopted, not respawned"
             );
+            wait_until("the jittered move to relay.k2.dev", 10, || {
+                status().server_addr.as_deref() == Some("relay.k2.dev")
+                    && std::fs::read_to_string(frpc_config_path())
+                        .map(|t| t.contains("serverAddr = \"relay.k2.dev\""))
+                        .unwrap_or(false)
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while frpc_proc::pid_alive(old) {
+                assert!(Instant::now() < deadline, "the old frpc must be stopped by the move");
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            assert_eq!(status().relay_primary, Some(true));
             stop("test").expect("stop");
             let _ = std::fs::remove_dir_all(&dir);
         });

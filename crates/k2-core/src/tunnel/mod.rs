@@ -150,10 +150,10 @@ pub struct TunnelConfigUpdate {
     /// the stored list is untouched, so a legacy client that never sends
     /// the field changes NOTHING. Present replaces the list wholesale; an
     /// explicit empty list is the "clear" verb — back to the legacy single
-    /// `server_addr`/`server_port` endpoint (via `relay_list()`). Like
-    /// every other field here this only PERSISTS config: a currently-
-    /// connected tunnel is not disturbed, the new list applies when the
-    /// tunnel next (re)starts.
+    /// `server_addr`/`server_port` endpoint (via `relay_list()`). 0.46.6:
+    /// a running tunnel follows a new list live (the connector's
+    /// `LiveList`: adopted in place while the relay in use is listed, one
+    /// jittered move when it is not).
     pub relays: Option<Vec<RelayEndpoint>>,
     pub subdomain: Option<String>,
     pub token: Option<String>,
@@ -193,9 +193,8 @@ pub fn set_config(upd: TunnelConfigUpdate) -> Result<TunnelConfigView, String> {
         }
         // Relay fallback list. Absent → untouched (legacy clients never
         // send it). Present replaces wholesale; an explicit `[]` clears the
-        // list, reverting to the legacy single-endpoint pair. Persist-only:
-        // a running tunnel keeps the relays it started with until the next
-        // (re)start reads the config — exactly like server_addr above.
+        // list, reverting to the legacy single-endpoint pair. A running
+        // tunnel follows it live (0.46.6, D7).
         // An explicit list is provisioned, not fetched (0.45.7 status source).
         if let Some(r) = upd.relays {
             c.relays = r;

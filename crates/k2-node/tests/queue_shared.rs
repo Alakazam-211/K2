@@ -126,9 +126,11 @@ async fn jobs_wait_in_the_queue_and_start_in_fair_order() {
     let Some(Frame::State(s)) = fr.last() else { unreachable!() };
     assert_eq!((s.state, s.reason.as_deref()), (JobState::Queued, Some(codes::NODE_QUEUED)));
     // First or second, depending on whether a1's CPU was counted yet; never
-    // blocked, and an ETA (a1 has no estimate yet, so maybe unknown).
+    // blocked by the node or the share, and an ETA (a1 has no estimate yet,
+    // so maybe unknown). 0.46.6 (L6): it says why it waits, "N of M".
     let qp = s.queue.as_ref().unwrap();
-    assert!(matches!(qp.pos, 1 | 2) && qp.blocked_by.is_none(), "{qp:?}");
+    assert!(matches!(qp.pos, 1 | 2) && matches!(qp.blocked_by.as_deref(), Some("waiting_for_room" | "turn")), "{qp:?}");
+    assert_eq!(qp.of, Some(2), "{qp:?}");
     // a1 ends: A has used the node, B hasn't, so b1 goes before the older a2.
     let b1 = wait_row(&w.tb, "b1", 1, "ended", ended).await;
     let a2 = wait_row(&w.owner, "a2", 1, "ended", ended).await;

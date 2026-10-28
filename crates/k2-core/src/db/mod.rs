@@ -3597,7 +3597,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0234 (Sew chat, 0.46.6) is the newest: its record goes (its
+            // 0240 (compute queue N of M, 0.46.6) is the newest: its record
+            // goes (its column stays; re-adding is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0240_compute_queue_of'", []).unwrap();
+            // 0234 (Sew chat, 0.46.6) came before it: its record goes (its
             // tables are IF NOT EXISTS, so the re-run is a no-op).
             conn.execute("DELETE FROM _migrations WHERE name = '0234_sew_chat'", []).unwrap();
             // 0232 (ticket attachments, 0.46.6) came before it: its record

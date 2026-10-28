@@ -21604,7 +21604,11 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    --ci: this workspace may send --tier ci (it jumps every queue;
                    owner or an Admin login only; absent keeps what it was)
   k2 compute revoke <node> --workspace WS
-  k2 compute grants [--node N] [--workspace WS]
+  k2 compute grants [--node N] [--workspace WS] [--json]
+                   the owner, an Admin or a person in a K2 shell tab: any
+                   workspace's grants (none named: every workspace's; in a
+                   shell tab, that tab's). An agent: its own workspace's
+                   only; naming another is refused (forbidden, exit 3)
   k2 compute access on|off --workspace WS
                    the Agent tab's "Allow compute nodes" (Settings → Workspaces →
                    <agent> → Agent): on = a grant on every machine switched on,

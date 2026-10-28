@@ -1228,18 +1228,40 @@ fn node_routes(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::V
 
 fn grants_list(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     need_credential(who)?;
-    // A manager grants any workspace, so it lists them all.
-    let gate = if mgr.is_some() { None } else { passport_gate(who)? };
+    let requested = params.get("workspace").map(|s| s.trim()).filter(|s| !s.is_empty());
+    // An agent (no manager switch) sees its own workspace's grants only:
+    // naming another is refused, never silently swapped for its own.
+    if let (Who::Agent { .. }, None) = (who, mgr) {
+        let own = passport_gate(who)?.ok_or_else(|| no("forbidden", 403, "an agent's passport names its workspace"))?;
+        if let Some(t) = requested {
+            if ws_by_token_or_worktree(t).is_none_or(|w| w.id != own) {
+                return Err(no(
+                    "forbidden",
+                    403,
+                    format!(
+                        "an agent sees only its own workspace's grants, not '{t}' (k2 compute grants with no --workspace); \
+                         the owner, an Admin or a person in a K2 shell tab sees any workspace's"
+                    ),
+                ));
+            }
+        }
+        return grants_json(params, Some(own));
+    }
+    // The owner, a login, a manager (it grants any workspace) or a person
+    // in a K2 shell tab: any workspace, or all of them. A shell tab with no
+    // --workspace lists its own, as before.
+    let ws = match (requested, who, mgr) {
+        (Some(t), _, _) => Some(ws_by_token_or_worktree(t).ok_or_else(|| no_workspace(t))?.id),
+        (None, Who::Shell { project_id, .. }, None) => Some(project_id.clone()),
+        (None, _, _) => None,
+    };
+    grants_json(params, ws)
+}
+
+fn grants_json(params: &HashMap<String, String>, ws: Option<String>) -> R<serde_json::Value> {
     let node = match params.get("node").map(String::as_str).filter(|s| !s.is_empty()) {
         Some(t) => Some(node_or_404(Some(t))?.id),
         None => None,
-    };
-    let ws = match gate {
-        Some(own) => Some(own),
-        None => match params.get("workspace").map(String::as_str).filter(|s| !s.is_empty()) {
-            Some(t) => Some(ws_by_token_or_worktree(t).ok_or_else(|| no_workspace(t))?.id),
-            None => None,
-        },
     };
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -4601,5 +4623,62 @@ mod tests {
             let e = cache_from(&bad).unwrap_err();
             assert_eq!((e.code, e.status), (pcache::codes::CACHE_INVALID, 400), "{bad}");
         }
+    }
+
+    /// `k2 compute grants --workspace WS` (0.46.6 papercut): the filter is
+    /// honoured for the owner, an Admin and a person in a K2 shell tab; an
+    /// agent sees its own grants, and naming another workspace is a loud
+    /// 403, never its own list in disguise.
+    #[test]
+    fn grants_workspace_filter_is_honoured_and_agents_see_only_their_own() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            for (id, h) in [("w-ga", "ga"), ("w-gb", "gb")] {
+                conn.execute(
+                    "INSERT INTO projects (id, name, path, handle, agents_can_use_compute) VALUES (?1, ?2, ?3, ?2, 1)",
+                    rusqlite::params![id, h, format!("/tmp/{id}")],
+                )
+                .expect("project");
+            }
+            store::insert_pending_node(&conn, "n-1", "mini-1", &format!("{:0>64}", "n1"), "pem", &Default::default(), "owner", "123456", 1)
+                .expect("node");
+            for ws in ["w-ga", "w-gb"] {
+                store::set_grant(&conn, "n-1", ws, &store::GrantLimits::default(), "owner", 2).expect("grant");
+            }
+        }
+        let ws_of = |v: &serde_json::Value| -> Vec<String> {
+            let rows = v["grants"].as_array().unwrap_or_else(|| panic!("no grants list: {v}"));
+            rows.iter().map(|g| g["workspaceId"].as_str().unwrap_or_else(|| panic!("row: {g}")).to_string()).collect()
+        };
+        let q = |ws: Option<&str>| -> HashMap<String, String> {
+            ws.map(|w| HashMap::from([("workspace".to_string(), w.to_string())])).unwrap_or_default()
+        };
+        let list = |who: &Who, ws: Option<&str>| grants_list(who, &q(ws), None);
+
+        // The owner and an Admin: the named workspace, or all of them.
+        let admin = Who::Login { username: "a".into(), role: Role::Admin };
+        for who in [Who::Owner, admin] {
+            assert_eq!(ws_of(&list(&who, Some("w-gb")).expect("named")), vec!["w-gb"], "{who:?}");
+            assert_eq!(ws_of(&list(&who, None).expect("all")), vec!["w-ga", "w-gb"], "{who:?}");
+        }
+        // A person in a K2 shell tab: any named workspace; none = its own.
+        let shell = Who::Shell { project_id: "w-ga".into(), session_id: "s-sh".into() };
+        assert_eq!(ws_of(&list(&shell, Some("w-gb")).expect("shell names another")), vec!["w-gb"]);
+        assert_eq!(ws_of(&list(&shell, None).expect("shell default")), vec!["w-ga"]);
+        // An agent: its own, named or not; another workspace is refused.
+        let agent = Who::Agent { project_id: "w-ga".into(), session_id: "s-ag".into() };
+        assert_eq!(ws_of(&list(&agent, None).expect("own")), vec!["w-ga"]);
+        assert_eq!(ws_of(&list(&agent, Some("w-ga")).expect("own, named")), vec!["w-ga"]);
+        for other in ["w-gb", "no-such-ws"] {
+            let e = list(&agent, Some(other)).expect_err("another workspace is refused");
+            assert_eq!((e.code, e.status), ("forbidden", 403), "{other}: {}", e.hint);
+            assert!(e.hint.contains("only its own workspace's grants"), "{}", e.hint);
+        }
+        // An unknown name for a person is a 404, not an empty list.
+        let e = list(&Who::Owner, Some("no-such-ws")).expect_err("unknown");
+        assert_eq!((e.code, e.status), ("workspace_not_found", 404));
     }
 }

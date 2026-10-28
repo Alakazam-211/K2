@@ -43,6 +43,7 @@ import {
 } from './notify-api'
 import { threadPushAvailable, useNotifyPrefs } from './useNotifyPrefs'
 import { PushPreviewsRow } from './PushPreviewsRow'
+import { EmailNoticePrefs } from './EmailNoticePrefs'
 
 export const NOTIFICATIONS_MANIFEST: SettingEntry[] = [
   {
@@ -60,6 +61,14 @@ export const NOTIFICATIONS_MANIFEST: SettingEntry[] = [
     description: 'Which agents may push your phone when they post in a Thread',
     keywords: ['notification', 'push', 'phone', 'thread', 'workspace', 'agent', 'mute'],
     group: 'Your notifications',
+  },
+  {
+    id: 'notifications.email-notices',
+    section: 'notifications',
+    label: 'Email Notices From Agents',
+    description: 'Your address for agent email notices, and which workspaces may email you',
+    keywords: ['email', 'notice', 'notices', 'address', 'confirm', 'agent', 'mute', 'mail'],
+    group: 'Email notices',
   },
   {
     id: 'notifications.defaults',
@@ -360,6 +369,16 @@ export function NotificationsSection(): React.JSX.Element {
               </div>
             </>
           )}
+        </SettingsGroup>
+
+        {/* Agent email notices (Email Notifications part 2, N10): this
+            person's own address and per-workspace switches. Hides itself on
+            a server without them. */}
+        <SettingsGroup title="Email notices">
+          <EmailNoticePrefs
+            scope={primaryScope()}
+            workspaces={(prefs?.workspaces ?? []).map((w) => ({ projectId: w.projectId, name: w.name }))}
+          />
         </SettingsGroup>
 
         {/* Hides itself (title too) on a server without the key. */}

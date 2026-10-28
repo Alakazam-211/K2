@@ -59,6 +59,7 @@ import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessio
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
 import { DesignModeSettingRow } from '@/components/Design/DesignModeSettingRow'
 import { FolderTrustRow } from './FolderTrustRow'
+import { AgentEmailNoticesRow } from './AgentEmailNoticesRow'
 import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
 import { workspaceGrantSlug } from './api-keys-api'
 import { setSqlDbAgentAccess, setWorkspaceDbUpgrade } from './data-api'
@@ -1452,6 +1453,9 @@ function ProjectDetail({
             </SettingsGroup>
             <SettingsGroup title="Email sending">
               <MailAgentSendControl project={project} />
+              {/* Agent email notices (N10): hides itself for a Member and on a
+                  server without them. */}
+              <AgentEmailNoticesRow scope={primaryScope()} projectId={project.id} />
             </SettingsGroup>
             <SettingsGroup title="Hosted mail">
               <MailManageToggle project={project} />

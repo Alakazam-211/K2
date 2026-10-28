@@ -622,3 +622,64 @@ fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
         assert!(!surfaces(&v, &[&ops]).contains(&enroll));
     });
 }
+
+/// Accept cards from Home (prd-accept-cards-from-home-v1 §3.3, tests 7–11):
+/// a person's login decides from Home or K2's conversation widget (the same
+/// request on the wire), but a request that carries a Garden widget's
+/// `origin` marker (query or JSON body) never answers a person's card, on
+/// decide, accept-from or the vault confirm. Nothing lands; the refusal is
+/// audited as `widget_origin`.
+#[test]
+fn a_widget_origin_never_answers_a_persons_card() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let v = crate::vault::ensure_test_vault();
+        let (sales, ops) = (workspace("sales"), workspace("ops"));
+        link(&sales, &ops);
+        let secret = sentinel();
+        put(&v, &sales, "HOME_KEY", &secret, &Actor::Agent(AgentActor { workspace_id: sales.id.clone(), session_id: None, shell: false, vault_manage: false }));
+        let (_, j, raw) = call(&v, SEND, &agent(&sales), json!({ "name": "HOME_KEY", "to": ops.name }));
+        assert_eq!(j["status"], "pending", "{raw}");
+        let id = j["deliveryId"].as_str().expect("id").to_string();
+        let mia = || VaultCaller { actor: Actor::Login { username: "mia".into(), role: Role::Member }, channel: Channel::Login, session_id: None };
+        let routed = |path: &str, body: Value, params: HashMap<String, String>| -> (u16, Value) {
+            let b = if body.is_null() { vec![] } else { body.to_string().into_bytes() };
+            let r = crate::vault_routes::handle_on(&v, path, Ok(mia()), &b, &params, "tunnel", None);
+            (r.status[..3].parse().expect("status"), serde_json::from_str(&r.body).expect("json"))
+        };
+        let origin_q = HashMap::from([("origin".to_string(), r#"{"widget":"w","garden":"g"}"#.to_string())]);
+        // `origin` in the query, then only in the JSON body (AH-A6).
+        for (body, params) in [
+            (json!({ "id": id, "action": "accept" }), origin_q.clone()),
+            (json!({ "id": id, "action": "accept", "origin": { "widget": "w", "garden": "g" } }), HashMap::new()),
+        ] {
+            let (st, j) = routed(DECIDE, body, params);
+            assert_eq!((st, code(&j)), (403, "handoff_person_only"), "{j}");
+            assert!(j["error"]["hint"].as_str().expect("hint").contains("answer it in the agent's Thread"), "{j}");
+        }
+        assert!(v.meta(&Selector::user(Scope::workspace(&ops.id), "HOME_KEY"), &Actor::Owner).is_err(), "nothing landed");
+        assert_eq!(v.handoff_get(&id, "in").expect("row").status, "pending");
+        // The same belt on accept-from and the vault confirm.
+        for path in [ACCEPT_FROM, crate::vault_routes::CONFIRM_START, crate::vault_routes::CONFIRM_FINISH] {
+            let (st, j) = routed(path, json!({ "workspace": ops.id, "sender": "sales", "action": "add", "origin": { "widget": "w" } }), HashMap::new());
+            assert_eq!((st, code(&j)), (403, "handoff_person_only"), "{path}: {j}");
+        }
+        let lines: Vec<String> = k2_core::auth_audit::tail(1000)
+            .expect("tail")
+            .into_iter()
+            .filter(|e| e["event"] == AUDIT_EVENT)
+            .map(|e| e["outcome"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert!(lines.iter().any(|l| l == &format!("deny {DECIDE}: widget_origin")), "{lines:?}");
+        // From Home or K2's conversation widget: the person's login, no
+        // origin (the two are the same request on the wire). It lands.
+        let (st, j) = routed(DECIDE, json!({ "id": id, "action": "accept" }), HashMap::new());
+        assert_eq!(st, 200, "{j}");
+        assert_eq!(j["delivery"]["status"], "landed");
+        assert_eq!(j["delivery"]["decidedBy"], "connect:mia");
+        assert_eq!(value_of(&v, &ops, "HOME_KEY"), secret.as_bytes());
+        // Replay: a second decide is refused.
+        let (st, j) = routed(DECIDE, json!({ "id": id, "action": "accept" }), HashMap::new());
+        assert_eq!((st, code(&j)), (409, "not_pending"), "{j}");
+    });
+}

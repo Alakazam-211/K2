@@ -185,6 +185,11 @@ export interface ZenCustomLayerDeps {
    *  opens K2's sheet outside the frame instead of answering (a widget
    *  never answers one). Without it the daemon's own check refuses. */
   permissions?: ZenPermissionSheet
+  /** The kind of card `cardId` on `address` is now (`handoff`, `choice`,
+   *  …), or null when the conversation doesn't hold it. A widget never
+   *  answers a person's card (accept cards from Home §3.3): `thread.answer`
+   *  on a handoff card is refused here, before any request. */
+  cardKind?(address: string, cardId: string): string | null
   /** Stop this widget (its frame goes; K2 draws the card). */
   stop(reason: ZenWidgetStopReason): void
   /** Did the person just press in this frame (or does it have the focus)?
@@ -1063,6 +1068,12 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       // UW50: a choice only, never a secret.
       if (typeof args[2] !== 'string') refuse('failed', 'Widgets answer with a choice only, never a secret.')
       needText('thread.answer', args[2])
+      // A secret another agent sent is a person's card: Home, K2's own
+      // conversation widget or the agent's server answers it, never a
+      // widget's code (prd-accept-cards-from-home-v1 §3.3).
+      if (deps.cardKind?.(address, cardId as string) === 'handoff') {
+        refuse('failed', 'A widget never accepts a secret. Answer it in the agent’s Thread: on Home, in K2’s conversation widget, or on its server.')
+      }
       needSending()
       // Permission cards: only a person answers, on K2's sheet outside the
       // frame. The widget hears `null` once the person closed it.

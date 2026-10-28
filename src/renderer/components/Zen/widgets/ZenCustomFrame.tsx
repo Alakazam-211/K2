@@ -431,6 +431,8 @@ export function ZenCustomFrame({
             show: (ask) => new Promise<void>((resolve) => setPermissionAsk({ ask, resolve })),
             gesture: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS) || zenFrameHasFocus(frameRef.current),
           }),
+          // A handoff card is a person's: the bridge refuses a widget's answer.
+          cardKind: (address, cardId) => zenThreadItemTarget(address, cardId)?.item.doc.kind ?? null,
           stop: (reason) => stopZenWidget(key, reason),
           // `thread.pickFiles` opens K2's picker only after the person
           // pressed in this widget a moment ago, or while it has the focus.

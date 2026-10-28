@@ -234,6 +234,25 @@ describe('TUW3.3: caps, binding and refusals', () => {
     expect(code(await call(createZenCustomLayer(h2.deps), 'thread.post', 'alice::local', 'hi'))).toBe('failed')
   })
 
+  // Accept cards from Home (prd-accept-cards-from-home-v1 §3.3, test 4): a
+  // widget's code never accepts a secret another agent sent. No verb reaches
+  // vault/incoming/decide (no row binds it), and thread.answer on a handoff
+  // card is refused here, before any request, with the Thread hint.
+  it('a widget never answers a handoff card, and no verb reaches the decide', async () => {
+    const h = harness({ cardKind: (_address, cardId) => (cardId === 'hand1' ? 'handoff' : 'choice') })
+    const layer = createZenCustomLayer(h.deps)
+    const r = await call(layer, 'thread.answer', 'alice::local', 'hand1', 'Accept')
+    expect(code(r)).toBe('failed')
+    expect(JSON.stringify(r)).toContain('Answer it in the agent’s Thread')
+    expect(h.calls).toEqual([])
+    // A choice card still answers (with the widget's origin).
+    expect(await call(layer, 'thread.answer', 'alice::local', 'c1', 'Yes')).toMatchObject({ ok: true })
+    for (const verb of ['vault.decide', 'vault.incoming.decide', 'handoff.decide', 'vault.acceptFrom']) {
+      expect(code(await call(layer, verb, 'hd_1', 'accept'))).not.toBe('ok')
+    }
+    expect(h.calls.map((c) => c.verb)).toEqual(['thread.answer'])
+  })
+
   it('thread.post with paths or files is refused before any upload; a secret answer is refused', async () => {
     const h = harness()
     const layer = createZenCustomLayer(h.deps)

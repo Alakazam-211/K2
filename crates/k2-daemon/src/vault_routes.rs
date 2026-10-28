@@ -410,6 +410,39 @@ fn agents_can_read(key_home: &str) -> &'static str {
 
 // ── entry points ────────────────────────────────────────────────────
 
+/// Routes only a person answers (accept cards from Home, prd-accept-cards-
+/// from-home-v1 §3.3): a secret handoff's decide, the accept-from list and a
+/// vault confirm. Matches `k2_core::contract::lint::PERSON_CARD_ROUTES` (Sew's
+/// owner handoff is served elsewhere and refuses tunnel ingress already).
+pub const PERSON_CARD_ROUTES: &[&str] = &[
+    crate::vault_handoff_routes::DECIDE,
+    crate::vault_handoff_routes::ACCEPT_FROM,
+    CONFIRM_START,
+    CONFIRM_FINISH,
+];
+
+/// The belt (§3.3 item 2): a request that carries a Garden widget's
+/// `origin` marker (a query param, or a key in the JSON body: the decide
+/// body ignores unknown fields, AH-A6) never answers a person's card. The
+/// wall is structural (a widget frame has no token and no catalog row
+/// reaches these routes, locked by the contract lint); this catches a
+/// renderer mistake that forwarded widget code's request.
+fn refuse_widget_origin(path: &str, c: &VaultCaller, body: &[u8], params: &HashMap<String, String>, ingress: &str) -> Option<CliResponse> {
+    if !PERSON_CARD_ROUTES.contains(&path) {
+        return None;
+    }
+    let in_body = serde_json::from_slice::<Value>(body).ok().is_some_and(|v| v.get("origin").is_some());
+    if !params.contains_key("origin") && !in_body {
+        return None;
+    }
+    crate::vault_handoff_routes::audit(&c.actor.stamp(), &format!("deny {path}: widget_origin"), ingress);
+    Some(refuse(&err(
+        "handoff_person_only",
+        403,
+        "a Garden widget's own code never answers this card; answer it in the agent's Thread (on Home, in K2's conversation widget, or on its server)",
+    )))
+}
+
 /// Dispatcher entry (TCP and cell socket).
 pub fn handle(path: &str, caller: Result<VaultCaller, VaultError>, body: &[u8], params: &HashMap<String, String>, ingress: &str) -> CliResponse {
     handle_with_peer(path, caller, body, params, ingress, None)
@@ -493,6 +526,9 @@ pub fn handle_on(
             403,
             "a job uses its granted secrets (k2 vault fetch, env-file, get); managing them is for its workspace's agent or a person",
         ));
+    }
+    if let Some(r) = refuse_widget_origin(path, &c, body, params, ingress) {
+        return r;
     }
     if crate::vault_use_routes::is_route(path) {
         return crate::vault_use_routes::handle(vault, path, &c, body, params, ingress, not_person);

@@ -53,6 +53,19 @@ pub const SCHEMA_TYPES: &[&str] = &["string", "number", "integer", "boolean", "n
 /// The widget door every `garden-local` row binds (contract-garden-data-v1 §7.1).
 pub const GARDEN_LOCAL_ROUTE: &str = "/cli/zen/call";
 
+/// Routes only a person answers, never code a Garden runs (accept cards from
+/// Home, prd-accept-cards-from-home-v1 §3.3): a secret handoff's decide, the
+/// accept-from list, a vault confirm and Sew's owner handoff. No row a
+/// custom widget (`widget`), the Garden data door (`garden-local`) or the
+/// phone's remote door (`phone: door`) can call may bind one.
+pub const PERSON_CARD_ROUTES: &[&str] = &[
+    "/cli/vault/incoming/decide",
+    "/cli/vault/accept-from",
+    "/cli/vault/confirm/start",
+    "/cli/vault/confirm/finish",
+    "/cli/sew/owner-handoff",
+];
+
 /// Every problem in `c`, in file order. Empty = clean.
 pub fn lint(c: &Catalog) -> Vec<String> {
     let mut out = Vec::new();
@@ -77,7 +90,27 @@ pub fn lint(c: &Catalog) -> Vec<String> {
     super::app::lint_catalog(c, &mut out);
     super::live::lint_live(c, &mut out);
     super::phone::lint_phone(c, &mut out);
+    lint_person_card_routes(c, &mut out);
     out
+}
+
+/// No widget, Garden-door or phone-door row reaches a person-only card
+/// answer ([`PERSON_CARD_ROUTES`]).
+fn lint_person_card_routes(c: &Catalog, out: &mut Vec<String>) {
+    for v in &c.verbs {
+        let Some(h) = &v.bindings.http else { continue };
+        if !PERSON_CARD_ROUTES.contains(&h.route.as_str()) {
+            continue;
+        }
+        let garden_code = v.exposed_to(Exposure::Widget) || v.exposed_to(Exposure::GardenLocal);
+        let phone_door = v.phone == Some(super::Phone::Door);
+        if garden_code || phone_door {
+            out.push(format!(
+                "{}: binds {} (a person's card answer); no widget, garden-local or phone door row may reach it",
+                v.verb, h.route
+            ));
+        }
+    }
 }
 
 fn lint_caps(c: &Catalog, out: &mut Vec<String>) {
@@ -605,6 +638,29 @@ mod tests {
         // files:read joined the Garden door in 0.46.3; wiki:read stays App-only.
         let bad = LOCAL.replace(r#""cap":"store:read""#, r#""cap":"wiki:read""#);
         assert_one(&with_rows(&format!("[{bad}]")), "its cap 'wiki:read' isn't");
+    }
+
+    #[test]
+    fn no_garden_or_phone_row_reaches_a_person_card_answer() {
+        // A widget row wrapping the handoff decide.
+        let w = GOOD.replace("seed.good", "seed.decide").replace(
+            r#""bindings":{"renderer":{"impl":"registered"}}"#,
+            r#""bindings":{"renderer":{"impl":"registered"},"http":{"method":"POST","route":"/cli/vault/incoming/decide"}}"#,
+        );
+        let probs = lint(&with_rows(&format!("[{w}]")));
+        assert!(probs.iter().any(|p| p.contains("seed.decide: binds /cli/vault/incoming/decide")), "{probs:#?}");
+        // A Garden-door row on the confirm, and a phone-door row on accept-from.
+        for route in ["/cli/vault/confirm/start", "/cli/vault/accept-from"] {
+            let g = LOCAL.replace("seed.local", "seed.person").replace(r#""route":"/cli/zen/call""#, &format!(r#""route":"{route}""#));
+            let probs = lint(&with_rows(&format!("[{g}]")));
+            assert!(probs.iter().any(|p| p.contains(&format!("seed.person: binds {route}"))), "{route}: {probs:#?}");
+        }
+        // The shipped catalog binds none of them.
+        for v in &catalog().verbs {
+            if let Some(h) = &v.bindings.http {
+                assert!(!PERSON_CARD_ROUTES.contains(&h.route.as_str()), "{} binds {}", v.verb, h.route);
+            }
+        }
     }
 
     #[test]

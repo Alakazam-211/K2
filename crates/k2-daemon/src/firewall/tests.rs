@@ -311,3 +311,32 @@ fn a_foreign_443_holder_is_named_never_fought() {
     let m = crate::front443::foreign_443_message(&["caddy".into()]);
     assert!(m.contains("(caddy)") && m.contains("127.0.0.1:9443") && m.contains("k2 front passthrough add"), "{m}");
 }
+
+/// `k2 front status|enable|disable` (0.46.6 papercut): a shell tab is a
+/// person at the box, as for the firewall; an agent is `403 owner_only`
+/// with the owner's command (the CLI exits 3), never "invalid or missing
+/// token"; a Member login and an App pass are refused.
+#[test]
+fn front_takes_the_firewalls_people() {
+    let _e = env();
+    let shell = Who::Shell { project_id: "ws-1".into(), session_id: "s-1".into() };
+    for path in ["/cli/front/status", "/cli/front/enable", "/cli/front/disable"] {
+        assert_eq!(routes::front_caller(&Who::Owner, path).expect("owner"), "owner");
+        let actor = routes::front_caller(&shell, path).unwrap_or_else(|r| panic!("{path}: shell refused: {}", r.body));
+        assert!(actor.starts_with("shell:"), "{path}: {actor}");
+        let admin = Who::Login { username: "a".into(), role: k2_core::connect_users::Role::Admin };
+        assert_eq!(routes::front_caller(&admin, path).expect("admin"), "user:a");
+
+        let r = routes::front_caller(&agent(), path).expect_err("an agent is refused");
+        assert_eq!(r.status, "403 Forbidden", "{path}");
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["error"]["code"], "owner_only", "{path}: {v}");
+        let verb = path.rsplit('/').next().unwrap();
+        assert!(v["error"]["hint"].as_str().unwrap().contains(&format!("The owner runs: k2 front {verb}")), "{path}: {v}");
+
+        let member = Who::Login { username: "m".into(), role: k2_core::connect_users::Role::Member };
+        assert_eq!(routes::front_caller(&member, path).expect_err("member").status, "403 Forbidden");
+        assert_eq!(routes::front_caller(&Who::Wrong, path).expect_err("app pass").status, "403 Forbidden");
+        assert_eq!(routes::front_caller(&Who::Invalid, path).expect_err("no token").status, "403 Forbidden");
+    }
+}

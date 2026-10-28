@@ -131,6 +131,34 @@ fn owner_only(cmd: &str) -> CliResponse {
     )
 }
 
+/// `k2 front status|enable|disable` (`/cli/front/status|enable|disable`,
+/// served by the dispatcher): the same people as the firewall (the owner,
+/// an Admin login, a shell tab: a person at the box). An agent is `403
+/// owner_only` with the owner's command (box-level, so the permission-card
+/// wrapper ends it with "It can't be requested."). `Ok` is the audit actor.
+pub fn front_caller(who: &Who, path: &str) -> Result<String, CliResponse> {
+    match caller(who)? {
+        Caller::Person { actor, .. } => Ok(actor),
+        Caller::Agent => {
+            let verb = path.rsplit('/').next().unwrap_or("status");
+            let cmd = if verb == "enable" { "k2 front enable [--mail]".to_string() } else { format!("k2 front {verb}") };
+            Err(refuse(
+                403,
+                "owner_only",
+                format!(
+                    "K2's front on the box's :443 is the owner's: no agent reads or changes it (box-level). The owner runs: {cmd} \
+                     (over SSH, or in a K2 shell tab)"
+                ),
+            ))
+        }
+    }
+}
+
+/// Audit one front change (`firewall-front-<act>`).
+pub fn audit_front(act: &str, actor: &str, detail: &str) {
+    audit(&format!("front-{act}"), actor, detail);
+}
+
 fn audit(act: &str, actor: &str, detail: &str) {
     k2_core::auth_audit::record(
         &k2_core::auth_audit::AuditEvent::new(&format!("firewall-{act}"), actor, detail.to_string(), "loopback", "-", "cli")

@@ -20614,9 +20614,9 @@ closed.
                                     Give every name on one port the same choice.
   k2 front passthrough rm <host>|'*'
 
-Who: the owner (the box's daemon user, e.g. over SSH) or an Admin
-login. An agent is refused (exit 1, "invalid or missing token"): ask
-the owner to run it.
+Who: the owner (the box's daemon user, e.g. over SSH), an Admin login,
+or a person in a K2 shell tab (as for k2 firewall). An agent is refused
+(exit 3, owner_only, with the owner's command): ask the owner to run it.
 
 KEEP A WEB SERVER THAT ISN'T K2'S (a system nginx or Caddy on :443)
 status names it, and enable refuses while it holds :443: K2 never takes
@@ -20654,7 +20654,8 @@ _front_render() {
     fi
     if [ "$as_json" = "1" ]; then
         printf '%s\n' "$body"
-        [ "$code" = "200" ] || exit 1
+        # 403 (not allowed: an agent's owner_only) is exit 3, as for firewall.
+        [ "$code" = "200" ] || { [ "$code" = "403" ] && exit 3; exit 1; }
         return 0
     fi
     K2_FR_BODY="$body" K2_FR_CODE="$code" python3 -c '
@@ -20663,12 +20664,18 @@ raw, code = os.environ["K2_FR_BODY"], os.environ["K2_FR_CODE"]
 try:
     d = json.loads(raw)
 except Exception:
-    print("k2 front: error: HTTP " + code + ": " + raw.strip()[:200], file=sys.stderr); sys.exit(1)
+    print("k2 front: error: HTTP " + code + ": " + raw.strip()[:200], file=sys.stderr); sys.exit(3 if code == "403" else 1)
 if code != "200" or d.get("ok") is False or (isinstance(d.get("error"), str) and "serving" not in d):
     e = d.get("error")
     msg = d.get("message") or (e.get("hint") if isinstance(e, dict) else None) or ""
     print("k2 front: error: " + str(e if not isinstance(e, dict) else e.get("code")) + (": " + msg if msg else ""), file=sys.stderr)
-    sys.exit(1)
+    p = d.get("permission")
+    if isinstance(p, dict):
+        if p.get("command"):
+            print("Ask with: " + p["command"], file=sys.stderr)
+        elif p.get("requestable") is False:
+            print("It can\x27t be requested.", file=sys.stderr)
+    sys.exit(3 if code == "403" else 1)
 if "serving" in d:
     print("front      :", "on" if d.get("enabled") else "off", "· serving" if d.get("serving") else "· not serving",
           "(socket from " + str((d.get("socket") or {}).get("source")) + ")" if d.get("serving") else "")

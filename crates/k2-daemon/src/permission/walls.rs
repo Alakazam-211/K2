@@ -99,6 +99,9 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 const FIREWALL_WHERE: &str =
     "the owner or an admin does this, in Settings → Network → Custom Domains → Firewall or with k2 firewall from a terminal outside K2";
 
+/// K2's front on :443 (`k2 front`): the owner, an Admin or a shell tab.
+const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over SSH or in a K2 shell tab";
+
 /// The v1 card-able actions (PRD §5.2): the 17 Agent-tab switches, the 5
 /// held-request actions, `garden.keep-mine` (K2-presented, no wall) and
 /// the `to=off` twins (asked only, no wall), plus Garden access's three
@@ -303,6 +306,8 @@ pub(crate) const ROWS: &[Row] = &[
     // agent opens, narrows or passes through anything, so not requestable.
     row(Target::Cannot { r#where: FIREWALL_WHERE }, code(403, "owner_only"), "/cli/firewall/", POST),
     row(Target::Cannot { r#where: FIREWALL_WHERE }, code(403, "owner_only"), "/cli/front/passthrough", POST),
+    // `k2 front status|enable|disable`: the same people, reads included.
+    row(Target::Cannot { r#where: FRONT_WHERE }, code(403, "owner_only"), "/cli/front/", ANY),
     // ── connections ────────────────────────────────────────────────────
     row(ask("connections.create", Floor::Admin), code(403, "agents_create_connections_disabled"), "/cli/", ANY),
     Row {
@@ -895,11 +900,23 @@ mod tests {
             ("/cli/mail/server/uninstall", json!({"error":{"code":"owner_only"},"ok":false})),
             ("/cli/tunnel/start", json!({"error":"invalid or missing token"})),
             ("/cli/zen/widget/claim", json!({"error":"owner_only","ok":false})),
+            ("/cli/front/enable", json!({"error":{"code":"owner_only"},"ok":false})),
         ] {
             let p = teach_of(403, "POST", path, &[], None, resp).unwrap();
             assert_eq!(p["requestable"], false, "{path}: {p}");
             assert!(p.get("action").is_none() && p.get("command").is_none(), "{path}: {p}");
             assert!(p["where"].as_str().is_some_and(|w| !w.is_empty()), "{path}: {p}");
+        }
+        // `k2 front status|disable` name the front's people (reads too); a
+        // passthrough change keeps the firewall's.
+        for (method, path, want) in [
+            ("GET", "/cli/front/status", FRONT_WHERE),
+            ("POST", "/cli/front/disable", FRONT_WHERE),
+            ("POST", "/cli/front/passthrough/add", FIREWALL_WHERE),
+        ] {
+            let p = teach_of(403, method, path, &[], None, json!({"error":{"code":"owner_only"},"ok":false})).unwrap();
+            assert_eq!(p["requestable"], false, "{path}: {p}");
+            assert_eq!(p["where"], want, "{path}: {p}");
         }
     }
 

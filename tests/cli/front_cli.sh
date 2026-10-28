@@ -72,6 +72,9 @@ class H(BaseHTTPRequestHandler):
         mode = open(MODE_FILE).read().strip()
         if mode == "refused":
             return self._send(409, {"ok": False, "error": "helper_needed", "message": "needs k2-root-helper protocol 8"})
+        if mode == "agent":
+            return self._send(403, {"ok": False, "error": {"code": "owner_only", "hint": "The owner runs: k2 front enable [--mail]"},
+                                    "permission": {"requestable": False, "where": "the owner or an admin does this"}})
         if path == "/cli/front/status":
             return self._send(200, STATUS)
         if path == "/cli/front/enable":
@@ -151,6 +154,18 @@ done
 run front enable --json
 assert_eq "--json refused: exit 1" "$rc" "1"
 assert_contains "--json refused: body verbatim" "$out" '"error": "helper_needed"'
+echo "== an agent: owner_only is exit 3 with the closing line =="
+echo agent >"$MODE_FILE"
+for sub in status enable disable; do
+    run front "$sub"
+    assert_eq "$sub agent: exit 3" "$rc" "3"
+    assert_contains "$sub agent: owner_only + command" "$err" "k2 front: error: owner_only: The owner runs: k2 front enable"
+    assert_contains "$sub agent: closing line" "$err" "It can't be requested."
+    assert_absent "$sub agent: not a token error" "$err" "invalid or missing token"
+done
+run front enable --json
+assert_eq "--json agent: exit 3" "$rc" "3"
+echo refused >"$MODE_FILE"
 run front disable --mail
 assert_eq "disable --mail: usage exit 2" "$rc" "2"
 run front enable --force

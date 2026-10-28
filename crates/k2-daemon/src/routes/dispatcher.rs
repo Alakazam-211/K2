@@ -3998,8 +3998,13 @@ async fn handle_one_request(
         }
         // front443 — GET /cli/front/status: the box :443 SNI router (socket,
         // routes, cap, per-outcome counters).
+        // Who (0.46.6): the firewall's people (the owner, an Admin login, a
+        // shell tab); an agent is `403 owner_only` (`front_caller`).
         "/cli/front/status" => {
-            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            if let Err(r) = crate::firewall::routes::front_caller(&who, &path) {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
                 return DispatchOutcome::Done;
             }
             let _ = super::http::read_request_params(&mut *stream, &mut buf, is_post, &path, &query).await;
@@ -4017,9 +4022,15 @@ async fn handle_one_request(
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
-            if !super::http::require_owner_or_admin(&mut *stream, &mut buf, &query, state.token.as_str()).await {
-                return DispatchOutcome::Done;
-            }
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let actor = match crate::firewall::routes::front_caller(&who, &path) {
+                Ok(a) => a,
+                Err(r) => {
+                    let _ = stream.read(&mut buf).await;
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                    return DispatchOutcome::Done;
+                }
+            };
             let raw = super::http::read_post_body(&mut *stream, &mut buf).await;
             let enable = path == "/cli/front/enable";
             let mail = serde_json::from_slice::<serde_json::Value>(&raw)
@@ -4028,11 +4039,12 @@ async fn handle_one_request(
                 .unwrap_or(false);
             let port = state.port;
             let r = tokio::task::spawn_blocking(move || {
-                if enable {
-                    crate::front443::enable(mail, port)
-                } else {
-                    crate::front443::disable(port)
+                let r = if enable { crate::front443::enable(mail, port) } else { crate::front443::disable(port) };
+                if r.is_ok() {
+                    let act = if enable { "enable" } else { "disable" };
+                    crate::firewall::routes::audit_front(act, &actor, if enable && mail { "mail" } else { "" });
                 }
+                r
             })
             .await
             .unwrap_or_else(|e| Err((500, "worker_join", e.to_string())));

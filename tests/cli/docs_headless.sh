@@ -265,17 +265,6 @@ printf '# Wiki\n\nedited outside\n' >"$A/.k2/wiki/Home.md"
 doc_is "$A" .k2/wiki/Home.md '"# Wiki\n\nedited outside\n"' "wiki outside edit"
 ok "an outside edit under .k2/ merges too"
 
-echo "== restart (docs written back and released on stop, reconciled on open) =="
-owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":".k2/wiki/Home.md","edits":[{"after":3,"text":"last words"}]}))')" "workspace=$A"
-want 200 "edit just before stop"
-stop_daemon
-file_is "$A/.k2/wiki/Home.md" '"# Wiki\n\nedited outside\nlast words\n"' "release flushes"
-ok "a normal stop writes back what was unwritten"
-printf '# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n' >"$A/.k2/wiki/Home.md"
-start_daemon daemon2.log
-get_passport
-doc_is "$A" .k2/wiki/Home.md '"# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n"' "reconcile"
-ok "the store reopens and reconciles edits made while K2 was down"
 
 echo "== agent: own workspace =="
 agent GET /cli/docs/read "" "path=home.md"
@@ -503,4 +492,14 @@ want_rc 0 "pool status"
 has "$OUT" "disk sync on" "pool status"
 ok "k2 doc status (no path): the pool"
 
+echo "== restart (docs written back and released on stop, reconciled on open) =="
+owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":".k2/wiki/Home.md","edits":[{"after":3,"text":"last words"}]}))')" "workspace=$A"
+want 200 "edit just before stop"
+stop_daemon
+file_is "$A/.k2/wiki/Home.md" '"# Wiki\n\nedited outside\nlast words\n"' "release flushes"
+ok "a normal stop writes back what was unwritten"
+printf '# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n' >"$A/.k2/wiki/Home.md"
+start_daemon daemon2.log
+doc_is "$A" .k2/wiki/Home.md '"# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n"' "reconcile"
+ok "the store reopens and reconciles edits made while K2 was down"
 echo "PASS ($pass checks)"

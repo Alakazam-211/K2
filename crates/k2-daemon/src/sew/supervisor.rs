@@ -715,7 +715,33 @@ fn stage_tarball(env: &Env, path: Option<&std::path::Path>) -> Result<(), String
     if !crate::update_routes::verify_sha256(&bytes, art.tarball_sha256) {
         return Err(format!("sha256 mismatch: {} is not Sew {} for {} — NOT installing", p.display(), pinned().version, art.triple));
     }
+    keep_app_kit_beside(env, p)?;
     helper(env, &["stage"], Some(&bytes)).map(|_| ())
+}
+
+/// 0.46.6: Sew's App kit (`sew-app-kit-<pin>.tar.gz`, Sew 0.5.0 on) beside
+/// the release tarball: verified against its pinned sha256 and kept,
+/// read-only, for `k2 app sdk add --sew` (`k2_core::app_sdk::store_kit`).
+/// No kit pinned for this release, or none beside the tarball: nothing to
+/// do (`--sew` says how to add it later). A kit that doesn't match its pin
+/// stops the install or upgrade before any change.
+pub(crate) fn keep_app_kit_beside(env: &Env, tarball: &std::path::Path) -> Result<(), String> {
+    let pin = pinned().version;
+    let Some(kit) = pin::app_kit(pin) else { return Ok(()) };
+    let Some(path) = tarball.parent().map(|d| d.join(k2_core::app_sdk::sew_kit::file_name(kit.version))) else {
+        return Ok(());
+    };
+    let bytes = match env.ops.read_file(&path, k2_core::app_sdk::sew_kit::MAX_KIT) {
+        Ok(b) => b,
+        Err(e) if e.contains("No such file") => {
+            k2_core::log_debug!("[sew] no App kit beside the tarball ({}): k2 app sdk add --sew waits for k2 app sdk kit", path.display());
+            return Ok(());
+        }
+        Err(e) => return Err(format!("Sew's App kit: {e}")),
+    };
+    k2_core::app_sdk::store_kit(&bytes, kit.version, kit.sha256)
+        .map(|_| ())
+        .map_err(|e| format!("{} is not Sew's App kit {} ({e}) — NOT installing", path.display(), kit.version))
 }
 
 fn enable_steps(env: &Env, req: &EnableRequest) -> Result<(), StepErr> {

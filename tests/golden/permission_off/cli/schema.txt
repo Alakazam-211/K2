@@ -2381,6 +2381,30 @@ exit: 0
       ]
     },
     {
+      "name": "app sdk add",
+      "usage": "k2 app sdk add <app-folder> [--sew] [--json]",
+      "description": "Copy @k2/server (this K2's version) into <app-folder>/vendor/ and add \"@k2/server\": \"file:vendor/k2-server-<version>.tgz\" to its package.json (made when missing); then npm install and import { fromEnv } from '@k2/server'. --sew also copies @sew/client, voice, channel, e2ee and bff (Sew 0.5.0+ on this box), pins their links in npm overrides and prints the npm i line for their registry deps and peers. Idempotent; never runs npm or uses the network; writes only vendor/ and package.json. POST /cli/app/sdk/add {folder, sew}. Owner, Admin, a K2 terminal, or the App's agent with Build and run Apps (its own workspace's folders).",
+      "args": [{"name": "app-folder", "required": true, "description": "The App's folder (the one you deploy)."}],
+      "flags": [
+        {"name": "--sew", "arg": null, "description": "Also Sew's client packages (chat, voice, video)."},
+        {"name": "--json", "arg": null, "description": "{folder, vendored[], removed[], packageJson, overrides[], peers, external, install, sew}."}
+      ]
+    },
+    {
+      "name": "app sdk status",
+      "usage": "k2 app sdk status <app-folder> [--json]",
+      "description": "What <app-folder>/vendor/ holds against what this box carries: current, older, newer, missing. GET /cli/app/sdk/status?folder=.",
+      "args": [{"name": "app-folder", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{folder, box, packages[]}."}]
+    },
+    {
+      "name": "app sdk kit",
+      "usage": "k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]",
+      "description": "Keep Sew's App kit on this box for k2 app sdk add --sew (only the Sew version this K2 pins, checked against its pinned sha256). POST /cli/app/sdk/kit {path}.",
+      "args": [{"name": "path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{version, sha256, packages[]}."}]
+    },
+    {
       "name": "app user add",
       "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
       "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",

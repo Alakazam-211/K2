@@ -987,6 +987,11 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // (the handler refuses an agent without it).
         "/cli/app/seal",
         "/cli/app/seal/rotate",
+        // 0.46.6: k2 app sdk add|status|kit (switch 1, own workspace's
+        // folders; the handler).
+        "/cli/app/sdk/add",
+        "/cli/app/sdk/kit",
+        "/cli/app/sdk/status",
         // Held requests: list own, withdraw own through deny.
         // `/cli/app/approve` is NOT here: the owner's, in person, with a
         // vault confirm.

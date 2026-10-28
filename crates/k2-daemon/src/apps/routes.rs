@@ -108,6 +108,7 @@ pub fn is_route(p: &str) -> bool {
         || super::move_plan::ROUTES.contains(&p)
         || super::test_guests::ROUTES.contains(&p)
         || super::handover::ROUTES.contains(&p)
+        || super::sdk::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -129,6 +130,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::test_guests::POST_ROUTES.contains(&p)
         // 0.46.5: App handover (handover.rs).
         || super::handover::POST_ROUTES.contains(&p)
+        // 0.46.6: k2 app sdk add|kit (sdk.rs).
+        || super::sdk::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -460,6 +463,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         // 0.46.5: App handover, one App from one agent to another (handover.rs).
         p if super::handover::ROUTES.contains(&p) => super::handover::handle(p, &who, body, params),
         p if super::labels::ROUTES.contains(&p) => super::labels::handle(p, &who, body),
+        // 0.46.6: @k2/server and Sew's App kit into an App folder (sdk.rs).
+        p if super::sdk::ROUTES.contains(&p) => super::sdk::handle(p, &who, body, params),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),
         "/cli/app/deploy" => deploy_route(&who, body),

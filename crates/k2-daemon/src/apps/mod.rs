@@ -110,6 +110,10 @@ pub mod router;
 pub mod routes;
 /// The per-App seal key in the vault (K-M3, 0.46.3).
 pub mod seal;
+/// 0.46.6: `k2 app sdk add|status|kit`.
+pub mod sdk;
+#[cfg(test)]
+mod sdk_tests;
 pub mod supervisor;
 pub mod surfaces;
 pub mod suspend;

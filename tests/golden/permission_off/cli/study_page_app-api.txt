@@ -15,7 +15,14 @@ that guest's login returned. A login sent without the App pass is
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
 From K2's verb catalog, version 34.
 
-THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
+THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
+  Once per App (again after a K2 update), in the folder you deploy:
+    k2 app sdk add <app-folder>        @k2/server into vendor/ + package.json
+    k2 app sdk add <app-folder> --sew  plus Sew's chat, voice and video
+                                       packages (@sew/*; Sew 0.5.0+)
+    npm install                        (--sew: the npm i line it prints)
+  The Seed carries vendor/ (never in .k2appignore): it installs offline
+  and a rollback keeps its SDK. k2 app sdk --help.
   import { fromEnv } from '@k2/server'
   const k2 = fromEnv()          // K2_GATEWAY_URL, K2_PASS_FILE, K2_APP_ID
   const s = await k2.login({ username, password })   // App pass on; a guest: s.pass
@@ -197,7 +204,7 @@ RULES: one guest's pass per guest request; send it as Authorization:
   Bearer (a pass in ?token= still works but lands in your own logs, and
   k2 app warnings names it); never log a pass; files are
   room-relative (relPath, never a host path); Apps never send Thread
-  cards to people. Types: sdk/server/src/generated/verbs.ts. Deploying
+  cards to people. Types: in @k2/server (from K2's verb catalog). Deploying
   and walls: k2 study app-deploys. Guests and roles: k2 study apps.
 --- stderr
 --- requests

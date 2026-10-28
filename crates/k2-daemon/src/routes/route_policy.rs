@@ -403,6 +403,12 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/rollback", Admin),
     // Room-scope R9: the owner hides guests' names in one room.
     post("/cli/app/room-names", Owner),
+    // 0.46.6: @k2/server (and Sew's App kit) into an App folder, its
+    // status, and keeping Sew's kit: as build (handler: switch 1 for
+    // passports, inside their own workspace).
+    post("/cli/app/sdk/add", Admin),
+    post("/cli/app/sdk/kit", Admin),
+    get("/cli/app/sdk/status", Admin),
     // K-M3 (0.46.3): whether an App has its seal key (never the value);
     // rotating signs everyone out: the owner, or a passport with switch 2
     // for its own App (handler).

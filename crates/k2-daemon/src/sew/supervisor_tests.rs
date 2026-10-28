@@ -130,6 +130,42 @@ fn enable_sequence_is_recorded_exactly_and_the_key_rides_only_install_stdin() {
     assert_eq!(stage.stdin.as_deref(), Some(&fixture("sew-0.0.2-x86_64-unknown-linux-gnu.tar.gz")[..]));
 }
 
+/// 0.46.6: Sew's App kit beside the release tarball is verified against
+/// its pin and kept for `k2 app sdk add --sew`; none beside it is fine.
+#[test]
+fn enable_keeps_the_app_kit_beside_the_tarball() {
+    let _home = crate::test_support::TempHome::new();
+    let t = t();
+    t.ops.files.lock().unwrap().insert("/home/k2/sew-app-kit-0.0.2.tar.gz".into(), fixture("sew-app-kit-0.0.2.tar.gz"));
+    t.enable().unwrap();
+    let kit = pin::app_kit(pinned().version).expect("the test pin has a kit");
+    let kept = k2_core::app_sdk::load_kit(kit.version, kit.sha256).unwrap().expect("the kit is kept");
+    assert_eq!(kept.packages.len(), 5);
+}
+
+#[test]
+fn enable_without_an_app_kit_still_installs() {
+    let _home = crate::test_support::TempHome::new();
+    let t = t();
+    t.enable().unwrap();
+    let kit = pin::app_kit(pinned().version).unwrap();
+    assert!(k2_core::app_sdk::load_kit(kit.version, kit.sha256).unwrap().is_none());
+}
+
+#[test]
+fn a_tampered_app_kit_stops_the_install_before_any_change() {
+    let _home = crate::test_support::TempHome::new();
+    let t = t();
+    let mut bad = fixture("sew-app-kit-0.0.2.tar.gz");
+    bad[100] ^= 0xff;
+    t.ops.files.lock().unwrap().insert("/home/k2/sew-app-kit-0.0.2.tar.gz".into(), bad);
+    let e = t.enable().unwrap_err();
+    assert!(e.contains("is not Sew's App kit") || t.row().last_error.as_deref().unwrap_or("").contains("is not Sew's App kit"), "{e}");
+    assert!(!t.ops.effects().iter().any(|c| c == "engine sew stage"), "nothing staged: {:?}", t.ops.effects());
+    let kit = pin::app_kit(pinned().version).unwrap();
+    assert!(k2_core::app_sdk::load_kit(kit.version, kit.sha256).unwrap().is_none());
+}
+
 #[test]
 fn enable_resumes_after_a_mid_flow_failure_without_redoing_marked_steps() {
     let t = t();

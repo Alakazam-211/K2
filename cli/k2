@@ -8245,6 +8245,12 @@ _app_rt_usage() {
 k2 app — host Apps on this box (Apps (beta): Settings → Apps → This server)
 
 Make and ship:
+  k2 app sdk add <folder> [--sew]      Once per App (again after a K2 update):
+                                       puts @k2/server in <folder>/vendor/ and
+                                       in its package.json; then npm install
+                                       and import { fromEnv } from '@k2/server'.
+                                       --sew adds Sew's client packages (chat,
+                                       voice, video). k2 app sdk --help.
   k2 app validate <folder|seed> [--types] [--json]
                                        Check manifest.json, the K2 contract and
                                        the code (parse + leak lints). --types
@@ -8281,6 +8287,11 @@ Make and ship:
                                        --engine guarded runs it walled: rootless
                                        container as k2app (Linux, engine installed);
                                        the choice sticks for later deploys.
+                                       Code that imports @k2/server: run
+                                       k2 app sdk add <folder> first; the Seed
+                                       carries vendor/ (keep it out of
+                                       .k2appignore), so it rolls back with
+                                       its SDK.
   k2 app rollback <app-id> [--to SEED] Instant while the previous one is warm.
 
 See and run it:
@@ -10654,7 +10665,10 @@ WHAT A DEPLOY DOES
        .env*
        node_modules/.cache
        .next/cache
-     .git, .k2 and .DS_Store are always left out.
+     .git, .k2 and .DS_Store are always left out. Never list vendor/:
+     k2 app sdk add put @k2/server (and Sew's packages) there, and the
+     Seed carries them, so the App installs offline and rolls back with
+     its SDK.
   2. The Seed starts on a fresh port with $PORT set. GET host.health.path
      (default /) must answer 2xx within the gate (default 120s).
   3. New connections switch to it. Old ones finish (drain).
@@ -11799,6 +11813,153 @@ Exit codes: 0 done, 2 usage error or held for your owner, 3 refused (JSON on
 stderr: data_not_found, data_symlink, data_is_folder, data_exists,
 data_too_large, app_not_running, …).
 EOF
+}
+
+# ── k2 app sdk (0.46.6): @k2/server (and Sew's App kit) into an App ──
+_app_sdk_usage() {
+    cat <<'EOF'
+k2 app sdk — K2's server SDK (and Sew's) inside your App folder
+
+  k2 app sdk add <app-folder> [--sew] [--json]
+        Copies @k2/server (this K2's version) into <app-folder>/vendor/ and
+        adds "@k2/server": "file:vendor/k2-server-<version>.tgz" to the
+        App's package.json (made when there is none: private, "type":
+        "module"). Then, in <app-folder>: npm install. Your server code:
+          import { fromEnv } from '@k2/server'
+        --sew also copies Sew's client packages for chat, voice and video
+        (@sew/client, @sew/voice, @sew/channel, @sew/e2ee, @sew/bff; this
+        box needs Sew 0.5.0+), pins their links to each other in npm
+        "overrides", and prints the npm i line that adds what comes from
+        the npm registry (React, LiveKit, …): run that line instead of
+        npm install. Run add again after a K2 or Sew update: it replaces
+        the older files and never duplicates.
+  k2 app sdk status <app-folder> [--json]
+        What the folder has in vendor/ against what this box carries:
+        current, older (run add again), newer, missing.
+  k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]
+        Keep Sew's App kit on this box for --sew when it wasn't beside
+        Sew's release tarball at k2 hostchat enable|upgrade. Only the Sew
+        version this K2 pins, checked against its pinned sha256.
+
+Keep vendor/ with your App (commit it; never list it in .k2appignore): the
+Seed carries it, so the App installs offline and a rollback keeps its SDK.
+K2 never runs npm and never uses the network here; it writes only
+vendor/ and package.json inside <app-folder>.
+
+Who: the owner, an Admin, a K2 terminal, the App's agent with "Build and
+run Apps" (folders inside its own workspace).
+
+Exit codes: 0 done, 2 usage, 3 refused (JSON on stderr: apps_manage_off,
+folder_outside_workspace, sew_kit_unavailable, sew_kit_missing,
+sew_kit_tampered, sdk_package_json_invalid, sdk_folder_invalid).
+EOF
+}
+
+cmd_app_sdk() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        add) _app_sdk_add "$@" ;;
+        status) _app_sdk_status "$@" ;;
+        kit) _app_sdk_kit "$@" ;;
+        ""|-h|--help|help) _app_sdk_usage ;;
+        *) echo "usage: k2 app sdk add|status|kit … (k2 app sdk --help)" >&2; exit 2 ;;
+    esac
+}
+
+# k2 app sdk add <app-folder> [--sew] [--json]
+_app_sdk_add() {
+    local folder="" sew=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --sew) sew=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_sdk_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app sdk --help)" >&2; exit 2 ;;
+            *) [ -z "$folder" ] || { echo "usage: k2 app sdk add <app-folder> [--sew] [--json]" >&2; exit 2; }; folder="$1"; shift ;;
+        esac
+    done
+    [ -n "$folder" ] || { echo "usage: k2 app sdk add <app-folder> [--sew] [--json]" >&2; exit 2; }
+    [ -d "$folder" ] || { echo "k2 app sdk add: $folder is not a folder" >&2; exit 2; }
+    _app_rt_post /cli/app/sdk/add "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_sew_b="$sew")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, shlex, sys
+v = json.load(sys.stdin)
+print("Vendored into %s/vendor:" % v["folder"])
+w = max(len(x["name"]) + len(x["version"]) for x in v["vendored"]) + 2
+for x in v["vendored"]:
+    print("  %-*s %s%s" % (w, x["name"] + " " + x["version"], x["file"], "" if x["written"] else "  (already there)"))
+for r in v.get("removed") or []:
+    print("  removed the older %s" % r)
+deps = ", ".join(x["name"] for x in v["vendored"])
+line = "package.json: %s (dependencies: %s" % (v["packageJson"], deps)
+if v.get("overrides"):
+    line += "; overrides: " + ", ".join(v["overrides"])
+print(line + ")")
+print("Next, in %s:" % v["folder"])
+if v.get("install"):
+    print("  " + v["install"])
+    print("  (the peers and npm-registry dependencies of the Sew packages; it also installs the vendored ones)")
+else:
+    print("  npm install")
+print("  import { fromEnv } from '@k2/server'")
+print("Keep vendor/ with the App (not in .k2appignore): its Seed carries it.")
+'
+}
+
+# k2 app sdk status <app-folder> [--json]
+_app_sdk_status() {
+    local folder="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_sdk_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app sdk --help)" >&2; exit 2 ;;
+            *) [ -z "$folder" ] || { echo "usage: k2 app sdk status <app-folder> [--json]" >&2; exit 2; }; folder="$1"; shift ;;
+        esac
+    done
+    [ -n "$folder" ] || { echo "usage: k2 app sdk status <app-folder> [--json]" >&2; exit 2; }
+    [ -d "$folder" ] || { echo "k2 app sdk status: $folder is not a folder" >&2; exit 2; }
+    _compute_call GET /cli/app/sdk/status "folder=$(urlencode "$(_app_rt_abs "$folder")")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+b = v["box"]
+print("This box: @k2/server %s; Sew App kit %s" % (b["k2Server"], b.get("sewKit") or ("none (k2 app sdk kit)" if b.get("sewKitPinned") else "none (Sew %s has no App kit; 0.5.0+)" % b.get("sewPin"))))
+for r in v["packages"]:
+    print("  %-14s vendored %-10s box %-10s %s" % (r["name"], r.get("vendored") or "-", r.get("onBox") or "-", r["state"]))
+if any(r["state"] in ("older", "missing") for r in v["packages"]):
+    print("Update: k2 app sdk add %s%s" % (v["folder"], " --sew" if any(r["name"].startswith("@sew/") for r in v["packages"]) else ""))
+'
+}
+
+# k2 app sdk kit <sew-app-kit-<v>.tar.gz> [--json]
+_app_sdk_kit() {
+    local path="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_sdk_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app sdk --help)" >&2; exit 2 ;;
+            *) [ -z "$path" ] || { echo "usage: k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]" >&2; exit 2; }; path="$1"; shift ;;
+        esac
+    done
+    [ -n "$path" ] || { echo "usage: k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]" >&2; exit 2; }
+    [ -f "$path" ] || { echo "k2 app sdk kit: $path is not a file" >&2; exit 2; }
+    local abs
+    abs="$(cd "$(dirname "$path")" && pwd -P)/$(basename "$path")"
+    _app_rt_post /cli/app/sdk/kit "$(_compute_json K2_CJ_path="$abs")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Kept Sew App kit %s (sha256 %s): %s" % (v["version"], v["sha256"][:12], ", ".join(p["name"] for p in v["packages"])))
+print("Now: k2 app sdk add <app-folder> --sew")
+'
 }
 
 # k2 app data put|ls|get|rm|mv (put 0.46.3; the rest 0.46.4).
@@ -15308,6 +15469,7 @@ cmd_app() {
         engine) shift; cmd_app_engine "$@" ;;
         rehost) shift; cmd_app_rehost "$@" ;;
         data) shift; cmd_app_data "$@" ;;
+        sdk) shift; cmd_app_sdk "$@" ;;
         resources) shift; cmd_app_resources "$@" ;;
         label) shift; cmd_app_label "$@" ;;
         domain) shift; cmd_app_domain "$@" ;;
@@ -38866,6 +39028,30 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app sdk add",
+      "usage": "k2 app sdk add <app-folder> [--sew] [--json]",
+      "description": "Copy @k2/server (this K2's version) into <app-folder>/vendor/ and add \"@k2/server\": \"file:vendor/k2-server-<version>.tgz\" to its package.json (made when missing); then npm install and import { fromEnv } from '@k2/server'. --sew also copies @sew/client, voice, channel, e2ee and bff (Sew 0.5.0+ on this box), pins their links in npm overrides and prints the npm i line for their registry deps and peers. Idempotent; never runs npm or uses the network; writes only vendor/ and package.json. POST /cli/app/sdk/add {folder, sew}. Owner, Admin, a K2 terminal, or the App's agent with Build and run Apps (its own workspace's folders).",
+      "args": [{"name": "app-folder", "required": true, "description": "The App's folder (the one you deploy)."}],
+      "flags": [
+        {"name": "--sew", "arg": null, "description": "Also Sew's client packages (chat, voice, video)."},
+        {"name": "--json", "arg": null, "description": "{folder, vendored[], removed[], packageJson, overrides[], peers, external, install, sew}."}
+      ]
+    },
+    {
+      "name": "app sdk status",
+      "usage": "k2 app sdk status <app-folder> [--json]",
+      "description": "What <app-folder>/vendor/ holds against what this box carries: current, older, newer, missing. GET /cli/app/sdk/status?folder=.",
+      "args": [{"name": "app-folder", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{folder, box, packages[]}."}]
+    },
+    {
+      "name": "app sdk kit",
+      "usage": "k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]",
+      "description": "Keep Sew's App kit on this box for k2 app sdk add --sew (only the Sew version this K2 pins, checked against its pinned sha256). POST /cli/app/sdk/kit {path}.",
+      "args": [{"name": "path", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "{version, sha256, packages[]}."}]
+    },
+    {
       "name": "app user add",
       "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
       "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",
@@ -40590,7 +40776,14 @@ that guest's login returned. A login sent without the App pass is
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
 From K2's verb catalog, version 34.
 
-THE SERVER SDK (sdk/server, TypeScript, Node 22+, no dependencies)
+THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
+  Once per App (again after a K2 update), in the folder you deploy:
+    k2 app sdk add <app-folder>        @k2/server into vendor/ + package.json
+    k2 app sdk add <app-folder> --sew  plus Sew's chat, voice and video
+                                       packages (@sew/*; Sew 0.5.0+)
+    npm install                        (--sew: the npm i line it prints)
+  The Seed carries vendor/ (never in .k2appignore): it installs offline
+  and a rollback keeps its SDK. k2 app sdk --help.
   import { fromEnv } from '@k2/server'
   const k2 = fromEnv()          // K2_GATEWAY_URL, K2_PASS_FILE, K2_APP_ID
   const s = await k2.login({ username, password })   // App pass on; a guest: s.pass
@@ -40772,7 +40965,7 @@ RULES: one guest's pass per guest request; send it as Authorization:
   Bearer (a pass in ?token= still works but lands in your own logs, and
   k2 app warnings names it); never log a pass; files are
   room-relative (relPath, never a host path); Apps never send Thread
-  cards to people. Types: sdk/server/src/generated/verbs.ts. Deploying
+  cards to people. Types: in @k2/server (from K2's verb catalog). Deploying
   and walls: k2 study app-deploys. Guests and roles: k2 study apps.
 EOF
 }
@@ -58440,6 +58633,9 @@ Server:
          --identity picks how people sign in. It is fixed for the life of an
          install: changing it later means a fresh install (k2 hostchat purge,
          then enable). Default k2; standalone = Sew's own password logins.
+         Sew 0.5.0+: put sew-app-kit-<version>.tar.gz beside --tarball (enable
+         and upgrade): K2 checks it against its pin and keeps it for
+         k2 app sdk add --sew (or later: k2 app sdk kit FILE).
   k2 hostchat disable | doctor | backup | backups [--json]
   k2 hostchat restart [--json]              (bring Sew back in order: sew-db, sew, then voice; waits for
                                              it to be ready; K2 never restarts Sew on its own)
@@ -77586,8 +77782,9 @@ EOF
         case "${2:-}" in
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
             # 0.46.4: `k2 app data` too (put|ls|get|rm|mv). 0.46.6: `k2 app
-            # domain` (its custom-domain help, not the App family's).
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest|data|domain)
+            # domain` (its custom-domain help, not the App family's) and
+            # `k2 app sdk` (add|status|kit).
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest|data|domain|sdk)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

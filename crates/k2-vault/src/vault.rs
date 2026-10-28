@@ -390,6 +390,29 @@ fn grant_mac_input(g: &Grant) -> Vec<u8> {
     e.finish().to_vec()
 }
 
+/// A secret card's terms for an existing name (SC-A1), checked as the
+/// answering person's policy change and written with the new version.
+struct CardTerms {
+    meta: SecretMeta,
+    loosens: bool,
+}
+
+/// Sites as people read them: `https://robot-ws.your-server.de:443` →
+/// `robot-ws.your-server.de`.
+pub fn sites_words(hosts: &[String]) -> String {
+    hosts
+        .iter()
+        .map(|h| {
+            let rest = h.split("://").nth(1).unwrap_or(h);
+            match rest.rsplit_once(':') {
+                Some((host, "443")) if h.starts_with("https://") => host.to_string(),
+                _ => rest.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// A Thread secret card request (§10.1, `secret_request`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -413,6 +436,18 @@ pub struct SecretRequest {
     pub secret_id: Option<String>,
     pub created_at: String,
     pub answered_at: Option<String>,
+    /// How the card says the secret is sent (prd-secret-card-injection-v1
+    /// §1). Sealed in `secret_request_inject` with its own MAC (SC-A2), so
+    /// it is not part of [`request_mac_input`]. None: the card names none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<Inject>,
+}
+
+/// The MAC over a card's sealed injection: (card id, inject JSON) (SC-A2).
+fn request_inject_mac_input(card_id: &str, inject_json: &str) -> Vec<u8> {
+    let mut e = Enc::new("request_inject");
+    e.str(card_id).str(inject_json);
+    e.finish().to_vec()
 }
 
 fn request_mac_input(r: &SecretRequest) -> Vec<u8> {
@@ -456,6 +491,13 @@ pub struct CardAnswer {
     /// (older cards, the CLI) never send it and keep the second click.
     #[serde(default)]
     pub readable_disclosed: bool,
+    /// How the card showed the secret is sent, echoed back on Save
+    /// (prd-secret-card-injection-v1 §2): the approval of the injection,
+    /// as `readable_disclosed` is of a readable delivery. On a card that
+    /// names one, a missing echo is `card_inject_unseen` (an older client
+    /// that can't show it, §5); a different one is the person's own edit.
+    #[serde(default)]
+    pub inject: Option<Inject>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -464,6 +506,11 @@ pub struct CardResult {
     pub meta: SecretMeta,
     pub reference: String,
     pub trimmed: bool,
+    /// The card replaced a secret that already had this name (SC-A1).
+    pub replaced: bool,
+    /// How the replaced secret was sent before, in words, when the card
+    /// changed it ("as Authorization: Bearer ‹secret›").
+    pub inject_was: Option<String>,
 }
 
 /// Pending recovery-key setup (phrase shown once, not yet confirmed).
@@ -1136,7 +1183,7 @@ impl LocalVault {
                 if row.meta.kind == Kind::SshKey && !req.landed_copy {
                     crate::ssh_agent::check_ssh_key_value(value.expose())?;
                 }
-                self.rotate_row(row, value, actor, req.idempotent, trimmed, None)
+                self.rotate_row(row, value, actor, req.idempotent, trimmed, None, None)
             }
             None => {
                 if req.mode == PutMode::Rotate {
@@ -1224,10 +1271,17 @@ impl LocalVault {
     /// `version_by`: the new version's `created_by` when it isn't simply the
     /// actor's stamp (a rollback of a version no person wrote keeps that
     /// author, review A3-P3).
-    fn rotate_row(&self, row: SecretRow, value: SecretBytes, actor: &Actor, idempotent: bool, trimmed: bool, version_by: Option<String>) -> Result<PutOutcome> {
+    ///
+    /// `terms`: a secret card's terms for an existing name (SC-A1), already
+    /// checked by [`Self::plan_policy`] as the answering person's own
+    /// policy change. They are written with the new version, in one
+    /// transaction, so a refusal below writes neither.
+    #[allow(clippy::too_many_arguments)]
+    fn rotate_row(&self, row: SecretRow, value: SecretBytes, actor: &Actor, idempotent: bool, trimmed: bool, version_by: Option<String>, terms: Option<CardTerms>) -> Result<PutOutcome> {
         let stamp = actor.stamp();
         let version_stamp = version_by.unwrap_or_else(|| stamp.clone());
-        let mut m = row.meta.clone();
+        let policy_outcome = terms.as_ref().filter(|t| t.meta != row.meta).map(|t| if t.loosens { "ok:widened:card" } else { "ok:card" });
+        let mut m = terms.map(|t| t.meta).unwrap_or_else(|| row.meta.clone());
         if m.status == SecretStatus::Destroyed {
             // K2's own refs are reused by name (a deleted mailbox's id can
             // come back); a person's or agent's name stays retired.
@@ -1282,7 +1336,12 @@ impl LocalVault {
             self.revoke_older(tx, keys, &m2.id, new_v)?;
             self.write_secret(tx, keys, &m2, &ext, false)?;
             let outcome = if owner_notice { "ok:owner-notice" } else { "ok" };
-            Ok(((), vec![Entry::new("rotate", &stamp, outcome).secret(&m2.id, Some(new_v))]))
+            let mut entries = Vec::with_capacity(2);
+            if let Some(p) = policy_outcome {
+                entries.push(Entry::new("policy", &stamp, p).secret(&m2.id, None));
+            }
+            entries.push(Entry::new("rotate", &stamp, outcome).secret(&m2.id, Some(new_v)));
+            Ok(((), entries))
         })?;
         Ok(PutOutcome { meta: m, created: false, new_version: true, trimmed, owner_notice })
     }
@@ -1307,12 +1366,35 @@ impl LocalVault {
         let (orig, _) = self.version_author(&row.meta.id, version)?;
         let person = orig == "owner" || (orig.starts_with("connect:") && !orig.contains(' '));
         let by = (!person).then(|| format!("{} (rollback of v{version} by {orig})", actor.stamp()));
-        Ok(self.rotate_row(row, value, actor, false, false, by)?.meta)
+        Ok(self.rotate_row(row, value, actor, false, false, by, None)?.meta)
     }
 
     // ── policy ──────────────────────────────────────────────────────
 
     fn set_policy_inner(&self, sel: &Selector, p: PolicyPatch, actor: &Actor) -> Result<SecretMeta> {
+        let stamp = actor.stamp();
+        let (row, mut m, loosens) = self.plan_policy(sel, p, actor)?;
+        if m == row.meta {
+            return Ok(m);
+        }
+        // A person's changes to hosts count as human-given (card rule).
+        m.updated_at = ts(now());
+        let m2 = m.clone();
+        let ext = row.external_ref.clone();
+        let outcome = if loosens { "ok:widened" } else { "ok" };
+        self.mutate(true, |tx, keys| {
+            self.write_secret(tx, keys, &m2, &ext, false)?;
+            Ok(((), vec![Entry::new("policy", &stamp, outcome).secret(&m2.id, None)]))
+        })?;
+        Ok(m)
+    }
+
+    /// A policy change, checked but not written: the row, the new meta
+    /// (`updated_at` untouched) and whether it loosens. A refusal is
+    /// audited here. Shared by `set_policy` and a secret card for an
+    /// existing name (SC-A1), so a card's terms pass exactly the rules
+    /// `k2 vault policy` by that person would.
+    fn plan_policy(&self, sel: &Selector, p: PolicyPatch, actor: &Actor) -> Result<(SecretRow, SecretMeta, bool)> {
         let stamp = actor.stamp();
         let new_sign = p.inject.as_ref().and_then(|i| i.sign.clone());
         let (row, f_own_grant) = {
@@ -1394,19 +1476,7 @@ impl LocalVault {
         if m.default_delivery.level() > m.delivery_ceiling.level() {
             return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
         }
-        if m == old {
-            return Ok(m);
-        }
-        // A person's changes to hosts count as human-given (card rule).
-        m.updated_at = ts(now());
-        let m2 = m.clone();
-        let ext = row.external_ref.clone();
-        let outcome = if loosens { "ok:widened" } else { "ok" };
-        self.mutate(true, |tx, keys| {
-            self.write_secret(tx, keys, &m2, &ext, false)?;
-            Ok(((), vec![Entry::new("policy", &stamp, outcome).secret(&m2.id, None)]))
-        })?;
-        Ok(m)
+        Ok((row, m, loosens))
     }
 
     fn set_status(&self, sel: &Selector, actor: &Actor, to: SecretStatus) -> Result<()> {
@@ -2896,6 +2966,7 @@ impl LocalVault {
         // Every other MAC'd table, the same way (verify old, re-MAC new);
         // pending handoff values are re-sealed under the new data key.
         self.rekey_placements(&tx, &keys, &new_keys)?;
+        self.rekey_request_inject(&tx, &keys, &new_keys)?;
         self.rekey_handoff_tables(&tx, &keys, &new_keys)?;
         self.rekey_agent_tables(&tx, &keys, &new_keys)?;
         // Placeholders hash under the old key: drop them (sessions re-mint).
@@ -3078,6 +3149,13 @@ impl LocalVault {
         }
         // Agents propose exact hosts only.
         let hosts = hosts::normalise_list(&r.proposed_hosts, false)?;
+        if let Some(i) = &r.inject {
+            i.card_ok()?;
+            // A sealed injection is sent by K2 (SC-A5).
+            if r.proposed_delivery != Delivery::Fetch {
+                return Err(VaultError::bad_request("inject_needs_fetch", "how a secret is sent applies when K2 makes the call (delivery fetch)"));
+            }
+        }
         let mut r = r;
         r.proposed_hosts = hosts;
         r.status = "pending".into();
@@ -3095,6 +3173,14 @@ impl LocalVault {
                     r2.prompt, r2.ttl_secs, r2.status, r2.created_at, mac.to_vec()
                 ],
             )?;
+            if let Some(i) = &r2.inject {
+                let j = serde_json::to_string(i).expect("inject");
+                let imac = hmac(&keys.row, &request_inject_mac_input(&r2.card_id, &j));
+                tx.execute(
+                    "INSERT INTO secret_request_inject (card_id, inject, row_mac) VALUES (?1, ?2, ?3)",
+                    params![r2.card_id, j, imac.to_vec()],
+                )?;
+            }
             Ok(((), vec![Entry::new("request", &r2.requested_by, "ok").consumer(format!("card:{}", r2.card_id))]))
         })?;
         Ok(r)
@@ -3106,11 +3192,60 @@ impl LocalVault {
         let r = conn
             .query_row("SELECT * FROM secret_request WHERE card_id = ?1", params![card_id], |r| Ok(read_request_raw(r)))
             .optional()?;
-        let (req, mac) = r.ok_or_else(|| VaultError::not_found("no such card"))??;
+        let (mut req, mac) = r.ok_or_else(|| VaultError::not_found("no such card"))??;
         if !hmac_verify(&keys.row, &request_mac_input(&req), &mac) {
             return Err(VaultError::tamper("card record failed its integrity check"));
         }
+        req.inject = Self::request_inject(&conn, &keys, card_id)?;
         Ok(req)
+    }
+
+    /// Is there a live user secret by this name in this scope? A secret
+    /// card's `replaces` (SC-A16). Names only; a record that fails its
+    /// integrity check reads as present (the answer refuses it anyway).
+    pub fn user_secret_exists(&self, scope: &Scope, name: &str) -> bool {
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        match self.find_row(&conn, &keys, &Selector::Name { namespace: Namespace::User, scope: scope.clone(), name: name.to_string() }) {
+            Ok(r) => r.meta.status != SecretStatus::Destroyed,
+            Err(e) => e.status != 404,
+        }
+    }
+
+    /// A card's sealed injection (SC-A2): None when the card names none. A
+    /// row that fails its MAC (tamper, or a row an older daemon's rekey
+    /// left under the old key) is a tamper error, so that card can't be
+    /// answered (fail closed, §5).
+    fn request_inject(conn: &Connection, keys: &Keys, card_id: &str) -> Result<Option<Inject>> {
+        let row = conn
+            .query_row("SELECT inject, row_mac FROM secret_request_inject WHERE card_id = ?1", params![card_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?))
+            })
+            .optional()?;
+        let Some((j, mac)) = row else { return Ok(None) };
+        if !hmac_verify(&keys.row, &request_inject_mac_input(card_id, &j), &mac) {
+            return Err(VaultError::tamper("the card's 'how it is sent' record failed its integrity check"));
+        }
+        let i: Inject = serde_json::from_str(&j).map_err(|_| VaultError::tamper("the card's 'how it is sent' record doesn't read"))?;
+        Ok(Some(i))
+    }
+
+    /// Rekey (SC-A18): verify every sealed card injection under the old row
+    /// key, then re-MAC it under the new one, in the rekey's transaction.
+    fn rekey_request_inject(&self, tx: &Transaction<'_>, old: &Keys, new: &Keys) -> Result<()> {
+        let rows: Vec<(String, String, Vec<u8>)> = {
+            let mut st = tx.prepare("SELECT card_id, inject, row_mac FROM secret_request_inject")?;
+            let it = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            it.collect::<std::result::Result<_, _>>()?
+        };
+        for (card, j, mac) in rows {
+            if !hmac_verify(&old.row, &request_inject_mac_input(&card, &j), &mac) {
+                return Err(VaultError::tamper(format!("secret card {card}'s injection failed its integrity check; rekey stopped")));
+            }
+            let m2 = hmac(&new.row, &request_inject_mac_input(&card, &j));
+            tx.execute("UPDATE secret_request_inject SET row_mac = ?2 WHERE card_id = ?1", params![card, m2.to_vec()])?;
+        }
+        Ok(())
     }
 
     pub fn requests(&self, workspace_id: Option<&str>) -> Result<Vec<SecretRequest>> {
@@ -3120,12 +3255,17 @@ impl LocalVault {
         let it = st.query_map([], |r| Ok(read_request_raw(r)))?;
         let mut out = vec![];
         for r in it {
-            let Some((req, mac)) = tolerate(r)? else { continue };
+            let Some((mut req, mac)) = tolerate(r)? else { continue };
             if !hmac_verify(&keys.row, &request_mac_input(&req), &mac) {
                 continue;
             }
             if workspace_id.is_some_and(|w| w != req.workspace_id) {
                 continue;
+            }
+            // A card whose injection fails its MAC is left out, like a bad row.
+            match Self::request_inject(&conn, &keys, &req.card_id) {
+                Ok(i) => req.inject = i,
+                Err(_) => continue,
             }
             out.push(req);
         }
@@ -3225,6 +3365,32 @@ impl LocalVault {
         if delivery == Delivery::Fetch && hosts.is_empty() {
             return Err(VaultError::bad_request("hosts_required", "add a site, or let the agent read it"));
         }
+        // How it is sent (prd-secret-card-injection-v1 §2, §3.1). The
+        // proposal is the sealed row, never the Thread doc. Save echoes
+        // what the card showed: no echo is an older client that can't
+        // show it (fail closed, §5); a different one is the person's own
+        // edit, checked like the agent's and never a guest's (SC-A14).
+        let inject = match (&req.inject, &ans.inject) {
+            (Some(sealed), None) => {
+                let to = if req.proposed_hosts.is_empty() { String::new() } else { format!(" to {}", sites_words(&req.proposed_hosts)) };
+                return Err(VaultError::conflict(
+                    "card_inject_unseen",
+                    format!("Update K2 to answer this card. It sends {} {}{to}, and this app can't show that. You can also answer it in the server's own K2 app.", req.name, sealed.words()),
+                ));
+            }
+            (Some(sealed), Some(shown)) if shown == sealed => Some(sealed.clone()),
+            (_, Some(shown)) => {
+                if guest {
+                    return Err(VaultError::forbidden("inject_not_editable", "a guest can't change how this secret is sent"));
+                }
+                shown.card_ok()?;
+                Some(shown.clone())
+            }
+            (None, None) => None,
+        };
+        if let Some(i) = &inject {
+            i.check_card_value(value.expose())?;
+        }
         // VS12: a key that looks like another provider's, or a readable
         // delivery, needs the second click. A card that already showed the
         // readable delivery in plain words (`readable_disclosed`) skips
@@ -3248,15 +3414,39 @@ impl LocalVault {
         } else {
             None
         };
-        let mut put = PutRequest::new(Namespace::User, scope.clone(), req.name.clone(), req.kind);
-        put.hosts = hosts;
-        put.default_delivery = Some(delivery);
-        put.delivery_ceiling = Some(if guest { Delivery::Fetch } else if delivery.level() > Delivery::Env.level() { delivery } else { Delivery::Env });
-        put.origin = format!("thread:{card_id}");
-        put.expires_at = expires_at;
-        put.mode = PutMode::Upsert;
-        put.human_given_override = Some(true);
-        let out = self.put_inner(put, value, actor)?;
+        // SC-A1: a card for a name that already exists. Its terms (sites,
+        // delivery, how it is sent) are applied as the answering person's
+        // own policy change, then the value is replaced. Before 0.46.6 only
+        // the value was replaced and the card's terms were silently dropped.
+        let existing = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            match self.find_row(&conn, &keys, &Selector::Name { namespace: Namespace::User, scope: scope.clone(), name: req.name.clone() }) {
+                Ok(r) => Some(r),
+                Err(e) if e.status == 404 => None,
+                Err(e) => return Err(e),
+            }
+        };
+        let (out, replaced, inject_was) = match existing {
+            Some(row) => {
+                let (out, was) = self.card_replace(row, value, hosts, delivery, inject, guest, actor)?;
+                (out, true, was)
+            }
+            None => {
+                let mut put = PutRequest::new(Namespace::User, scope.clone(), req.name.clone(), req.kind);
+                put.hosts = hosts;
+                put.inject = inject;
+                put.default_delivery = Some(delivery);
+                put.delivery_ceiling = Some(if guest { Delivery::Fetch } else if delivery.level() > Delivery::Env.level() { delivery } else { Delivery::Env });
+                put.origin = format!("thread:{card_id}");
+                put.expires_at = expires_at;
+                // Create, not upsert: a secret that appeared since the look
+                // above is refused, never rotated without the card's terms.
+                put.mode = PutMode::Create;
+                put.human_given_override = Some(true);
+                (self.put_inner(put, value, actor)?, false, None)
+            }
+        };
         self.request_set_status(card_id, "set", Some(&actor.stamp()), Some(&out.meta.id), &actor.stamp())?;
         let reference = crate::refs::VaultRef {
             scope_kind: scope.kind,
@@ -3265,7 +3455,80 @@ impl LocalVault {
             version: None,
         }
         .render();
-        Ok(CardResult { meta: out.meta, reference, trimmed: out.trimmed })
+        Ok(CardResult { meta: out.meta, reference, trimmed: out.trimmed, replaced, inject_was })
+    }
+
+    /// A secret card answered for a name that already exists (SC-A1). The
+    /// card's terms are the sites, the delivery (the ceiling rises only as
+    /// far as that delivery needs) and how it is sent (kept as stored when
+    /// the card names none). When they differ from what is stored they go
+    /// through [`Self::plan_policy`] for this person: Owner or Admin may
+    /// widen; a Member who would widen gets `vault_admin_required`; a guest
+    /// only ever replaces the value of matching terms. Nothing is written
+    /// on a refusal. The value is then a person's (`human_given`), so an
+    /// agent can't change how it is sent afterwards without the owner.
+    /// Returns how it was sent before, in words, when that changed.
+    #[allow(clippy::too_many_arguments)]
+    fn card_replace(
+        &self,
+        row: SecretRow,
+        value: SecretBytes,
+        hosts: Vec<String>,
+        delivery: Delivery,
+        inject: Option<Inject>,
+        guest: bool,
+        actor: &Actor,
+    ) -> Result<(PutOutcome, Option<String>)> {
+        if *self.rollback.lock() {
+            return Err(VaultError::new("vault_rollback", 409, "the vault looks rolled back; the owner must confirm in Settings → Vault"));
+        }
+        let (value, trimmed) = Self::prepare_value(row.meta.kind, value)?;
+        if row.meta.kind == Kind::SshKey {
+            crate::ssh_agent::check_ssh_key_value(value.expose())?;
+        }
+        let old = row.meta.clone();
+        let ceiling = if delivery.level() > old.delivery_ceiling.level() { delivery } else { old.delivery_ceiling };
+        let new_inject = inject.clone().or_else(|| old.inject.clone());
+        let differs = old.hosts != hosts || old.default_delivery != delivery || old.delivery_ceiling != ceiling || old.inject != new_inject;
+        let mut meta = if differs {
+            if guest {
+                return Err(VaultError::forbidden(
+                    "vault_admin_required",
+                    format!("{} already exists and this card changes where it goes or how it is sent; an Owner or Admin must save this card", old.name),
+                ));
+            }
+            let patch = PolicyPatch {
+                hosts: Some(hosts),
+                default_delivery: Some(delivery),
+                delivery_ceiling: Some(ceiling),
+                inject: inject.clone(),
+                ..Default::default()
+            };
+            match self.plan_policy(&Selector::Id(old.id.clone()), patch, actor) {
+                Ok((_, m, loosens)) => Some((m, loosens)),
+                Err(e) if e.code == "vault_admin_required" => {
+                    return Err(VaultError::forbidden(
+                        "vault_admin_required",
+                        format!("this card widens where {} goes or how it is sent; an Owner or Admin must save this card", old.name),
+                    ))
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            None
+        };
+        // The value is now a person's (§3.3): the stricter rule for agents.
+        if !old.human_given {
+            let (m, l) = meta.take().unwrap_or_else(|| (old.clone(), false));
+            meta = Some((SecretMeta { human_given: true, ..m }, l));
+        }
+        let inject_was = meta
+            .as_ref()
+            .filter(|(m, _)| m.inject != old.inject)
+            .map(|_| old.inject.as_ref().map(Inject::words).unwrap_or_else(|| "not added to calls".into()));
+        let terms = meta.map(|(meta, loosens)| CardTerms { meta, loosens });
+        let out = self.rotate_row(row, value, actor, false, trimmed, None, terms)?;
+        Ok((out, inject_was))
     }
 
     // ── proxy placeholders (§6.4, §9.3) ────────────────────────────
@@ -3720,6 +3983,7 @@ fn read_request_raw(r: &Row<'_>) -> Result<(SecretRequest, Vec<u8>)> {
         secret_id: r.get("secret_id")?,
         created_at: r.get("created_at")?,
         answered_at: r.get("answered_at")?,
+        inject: None,
     };
     Ok((req, r.get("row_mac")?))
 }
@@ -3888,7 +4152,7 @@ impl SecretStore for LocalVault {
         if row.meta.kind == Kind::SshKey {
             crate::ssh_agent::check_ssh_key_value(value.expose())?;
         }
-        self.rotate_row(row, value, actor, false, trimmed, None)
+        self.rotate_row(row, value, actor, false, trimmed, None, None)
     }
     fn meta(&self, sel: &Selector, actor: &Actor) -> Result<SecretMeta> {
         self.meta_inner(sel, actor)

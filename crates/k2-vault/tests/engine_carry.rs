@@ -91,6 +91,7 @@ fn clone_carries_are_bound_to_one_clone_and_expire() {
         delivery: "fetch".into(),
         env_names: vec!["OPENAI_API_KEY".into()],
         source_scope: "server".into(),
+        inject: None,
     }];
     let file = src
         .carry_seal_clone(&r, dst.vault_id(), false, binding("clone-1", k2_vault::carry::CLONE_CARRY_TTL_SECS), vec![item("STRIPE_KEY", "k2test_V2_1")], blank)

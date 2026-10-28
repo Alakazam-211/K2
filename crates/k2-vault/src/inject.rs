@@ -328,6 +328,87 @@ impl Inject {
     }
 }
 
+/// How a secret card says the secret is sent (prd-secret-card-injection-v1
+/// §1): a header, a Basic login or a query parameter, written with `fmt`.
+/// The same flags and checks as `k2 vault set` (`dst` defaults to
+/// `header:Authorization` when only a format is given, `fmt` to `{}`).
+/// Nothing given → `None` (today's default on save). `body` is refused: the
+/// agent writes the request body, so it could echo the value back to itself
+/// (SC-A13). A card never carries a signer or the agent-pickable lists.
+pub fn card_inject(dst: Option<&str>, fmt: Option<&str>) -> Result<Option<Inject>> {
+    let dst = dst.map(str::trim).filter(|s| !s.is_empty());
+    let fmt = fmt.filter(|s| !s.is_empty());
+    if dst.is_none() && fmt.is_none() {
+        return Ok(None);
+    }
+    let d = Dst::parse(dst.unwrap_or("header:Authorization"))?;
+    if d == Dst::Body {
+        return Err(VaultError::bad_request(
+            "inject_body_not_on_cards",
+            "a card can't send a secret in the request body; use a header, basic or a query parameter",
+        ));
+    }
+    let i = Inject { dst: d, fmt: fmt.unwrap_or("{}").to_string(), allowed_dst: vec![], allowed_fmt: vec![], sign: None };
+    i.validate()?;
+    Ok(Some(i))
+}
+
+impl Inject {
+    /// Is this something a card may carry (no body, no signer, no lists)?
+    pub fn card_ok(&self) -> Result<()> {
+        if self.uses_body() {
+            return Err(VaultError::bad_request(
+                "inject_body_not_on_cards",
+                "a card can't send a secret in the request body; use a header, basic or a query parameter",
+            ));
+        }
+        if self.sign.is_some() || !self.allowed_dst.is_empty() || !self.allowed_fmt.is_empty() {
+            return Err(VaultError::bad_request("bad_inject", "a card names one way to send the secret: a header, basic or a query parameter"));
+        }
+        self.validate()
+    }
+
+    /// Basic with the whole value as `user:password` (format `{}`): the
+    /// value must hold the `:` (SC-A15). Card answers only. The error never
+    /// quotes the value.
+    pub fn check_card_value(&self, value: &[u8]) -> Result<()> {
+        if self.dst == Dst::Basic && self.fmt == "{}" && !value.contains(&b':') {
+            return Err(VaultError::bad_request("basic_needs_user", "this is sent as a Basic login: paste it as user:password"));
+        }
+        Ok(())
+    }
+
+    /// The Basic login's user name, when the format fixes one (`ws123:{}`).
+    pub fn basic_user(&self) -> Option<&str> {
+        if self.dst != Dst::Basic {
+            return None;
+        }
+        self.fmt.strip_suffix(":{}").filter(|u| !u.is_empty() && !u.contains("{}"))
+    }
+
+    /// How it is sent, in plain words (cards, the agent's set line, the CLI):
+    /// "as a Basic login (user:password)", "as a Basic login for user ws123",
+    /// "in the X-Api-Key header", "as Authorization: Bearer ‹secret›",
+    /// "in the URL as ?appid=‹secret›".
+    pub fn words(&self) -> String {
+        if let Some(s) = &self.sign {
+            return format!("signed ({})", s.scheme());
+        }
+        let shown = self.fmt.replace("{}", "‹secret›");
+        match &self.dst {
+            Dst::Basic => match self.basic_user() {
+                Some(u) => format!("as a Basic login for user {u}"),
+                None if self.fmt == "{}" => "as a Basic login (user:password)".into(),
+                None => format!("as a Basic login of {shown}"),
+            },
+            Dst::Header(h) if self.fmt == "{}" => format!("in the {h} header"),
+            Dst::Header(h) => format!("as {h}: {shown}"),
+            Dst::Query(q) => format!("in the URL as ?{q}={shown}"),
+            Dst::Body => "in the request body".into(),
+        }
+    }
+}
+
 /// RFC 9110 token characters.
 pub fn validate_header_name(h: &str) -> Result<()> {
     let ok = !h.is_empty()
@@ -573,6 +654,52 @@ mod tests {
         // A stored inject with a non-canonical header is refused by validate.
         let raw = Inject { sign: Some(Sign::HmacSha256 { header: "x-sig".into(), encoding: Enc::Hex, prefix: String::new() }), ..Inject::bearer() };
         assert_eq!(raw.validate().expect_err("canonical").code, "bad_inject");
+    }
+
+    #[test]
+    fn card_inject_parses_like_vault_set_and_refuses_body() {
+        assert_eq!(card_inject(None, None).expect("none"), None);
+        assert_eq!(card_inject(Some(" "), Some("")).expect("blank"), None);
+        let b = card_inject(Some("basic"), None).expect("ok").expect("some");
+        assert_eq!((b.dst.clone(), b.fmt.as_str()), (Dst::Basic, "{}"));
+        assert_eq!(b.words(), "as a Basic login (user:password)");
+        let u = card_inject(Some("basic"), Some("ws123:{}")).expect("ok").expect("some");
+        assert_eq!(u.basic_user(), Some("ws123"));
+        assert_eq!(u.words(), "as a Basic login for user ws123");
+        let only_fmt = card_inject(None, Some("Token {}")).expect("ok").expect("some");
+        assert_eq!(only_fmt.dst, Dst::Header("Authorization".into()));
+        assert_eq!(only_fmt.words(), "as Authorization: Token ‹secret›");
+        assert_eq!(card_inject(Some("header:x-api-key"), None).expect("ok").expect("some").words(), "in the X-Api-Key header");
+        assert_eq!(card_inject(Some("query:appid"), None).expect("ok").expect("some").words(), "in the URL as ?appid=‹secret›");
+        assert_eq!(card_inject(Some("body"), None).expect_err("body").code, "inject_body_not_on_cards");
+        assert_eq!(card_inject(Some("header:Host"), None).expect_err("host").code, "bad_inject");
+        assert_eq!(card_inject(Some("basic"), Some("no slot")).expect_err("fmt").code, "bad_inject");
+        assert_eq!(card_inject(Some("basic"), Some("{}{}")).expect_err("fmt").code, "bad_inject");
+    }
+
+    #[test]
+    fn basic_with_a_bare_slot_needs_user_colon_password_and_never_quotes_it() {
+        let b = card_inject(Some("basic"), None).expect("ok").expect("some");
+        let e = b.check_card_value(b"hunter2-no-colon").expect_err("no colon");
+        assert_eq!(e.code, "basic_needs_user");
+        assert!(!e.hint.contains("hunter2"), "{}", e.hint);
+        b.check_card_value(b"user:pw").expect("ok");
+        // With the user in the format, only the password is pasted.
+        card_inject(Some("basic"), Some("ws123:{}")).expect("ok").expect("some").check_card_value(b"pw").expect("ok");
+        // Other destinations never check.
+        Inject::bearer().check_card_value(b"x").expect("ok");
+    }
+
+    #[test]
+    fn a_card_inject_carries_no_signer_lists_or_body() {
+        Inject::bearer().card_ok().expect("bearer");
+        let mut l = Inject::bearer();
+        l.allowed_dst = vec![Dst::Query("k".into())];
+        assert_eq!(l.card_ok().expect_err("lists").code, "bad_inject");
+        let s = Inject { sign: Some(Sign::Ovh), ..Inject::bearer() };
+        assert_eq!(s.card_ok().expect_err("sign").code, "bad_inject");
+        let body = Inject { dst: Dst::Body, ..Inject::bearer() };
+        assert_eq!(body.card_ok().expect_err("body").code, "inject_body_not_on_cards");
     }
 
     #[test]

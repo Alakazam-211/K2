@@ -625,6 +625,7 @@ pub fn export(
             delivery: r.meta.default_delivery.as_str().into(),
             env_names: r.env_names.clone(),
             source_scope: r.meta.scope.kind.as_str().into(),
+            inject: r.meta.inject.clone(),
         })
         .collect();
     let n = items.len();
@@ -1024,6 +1025,7 @@ fn post_blank_cards(project_id: &str, blank: &[CarryBlank], source: &str) -> Car
             &b.hosts,
             &b.delivery,
             &prompt.chars().take(200).collect::<String>(),
+            b.inject.as_ref(),
         );
         match r {
             Ok(_) => cards.posted.push(b.name.clone()),
@@ -1155,6 +1157,7 @@ pub fn copy_same_box(vault: &LocalVault, caller: &VaultCaller, ask: &CarryAsk, n
             delivery: r.meta.default_delivery.as_str().into(),
             env_names: r.env_names.clone(),
             source_scope: r.meta.scope.kind.as_str().into(),
+            inject: r.meta.inject.clone(),
         })
         .collect();
     // In process: no seal. The payload shape is shared with `apply`.

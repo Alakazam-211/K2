@@ -99,6 +99,33 @@ pub struct SecretBody {
     /// None: open until answered or voided (`--no-expiry`, older cards).
     #[serde(default, rename = "expiresAt", skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<i64>,
+    /// How K2 will send it (prd-secret-card-injection-v1 §1, SC-A10): a
+    /// header, a Basic login or a query parameter, and the format. Display
+    /// only: the answer is checked against the sealed vault request, never
+    /// this. Save echoes it back (`inject`); a client that can't show it
+    /// gets `card_inject_unseen` ("Update K2 to answer this card").
+    /// None: the card names none (K2's default for the key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<SecretInject>,
+    /// The environment variable the agent gets if this is delivered by env
+    /// (`hetzner-robot` → `HETZNER_ROBOT`). The card shows it for env.
+    #[serde(default, rename = "envName", skip_serializing_if = "Option::is_none")]
+    pub env_name: Option<String>,
+    /// A secret by this name already exists where the card proposes to keep
+    /// it, so Save replaces it (SC-A16; best-effort: the person may pick
+    /// another scope, and the answer checks again).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replaces: bool,
+}
+
+/// How a secret card says K2 sends the secret: the vault's injection
+/// destination and format, as text.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct SecretInject {
+    /// `header:<Name>` | `basic` | `query:<param>`
+    pub dst: String,
+    /// Exactly one `{}` where the value goes (`{}`, `Bearer {}`, `ws123:{}`).
+    pub fmt: String,
 }
 
 /// The vault-side proposal on a secret card (KV9).
@@ -108,6 +135,12 @@ pub struct SecretProposal {
     pub hosts: Vec<String>,
     pub delivery: Option<String>,
     pub kind: Option<String>,
+    /// How it is sent (prd-secret-card-injection-v1 §1).
+    pub inject: Option<SecretInject>,
+    /// The env name an env delivery uses (shown on the card).
+    pub env_name: Option<String>,
+    /// Save replaces an existing secret of this name (SC-A16).
+    pub replaces: bool,
 }
 
 /// A Thread post a Garden widget sent for the person (prd-zen-user-widgets-v2
@@ -691,6 +724,9 @@ impl OverlayDoc {
                 answered_by: None,
                 answered_at: None,
                 expires_at: None,
+                inject: proposal.inject,
+                env_name: proposal.env_name,
+                replaces: proposal.replaces,
             }),
             widget: None,
             design: None,

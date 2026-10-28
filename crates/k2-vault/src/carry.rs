@@ -66,6 +66,10 @@ pub struct CarryBlank {
     pub env_names: Vec<String>,
     /// `workspace` | `server` | … on the source.
     pub source_scope: String,
+    /// How the source sends it (SC-A8), so the clone's card shows and keeps
+    /// it. Optional: an older bundle has none and still parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject: Option<crate::inject::Inject>,
 }
 
 /// What binds a clone carry to one clone (CL26).

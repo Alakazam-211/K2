@@ -1345,7 +1345,8 @@ pub fn use_hint(m: &SecretMeta) -> String {
             "$K2_SECRETS_DIR/{} (read the file; a running session gets it within a minute, or now with k2 vault sync), or k2 vault file --secret {} for a 0600 copy now",
             m.name, m.name
         ),
-        Delivery::Env => format!("${} in new sessions ({})", m.name, crate::vault::spawn::RESTART_TO_RECEIVE),
+        // The name the spawn really uses (SC-A7): `hetzner-robot` → `$HETZNER_ROBOT`.
+        Delivery::Env => format!("${} in new sessions ({})", k2_vault::delivery::default_env_name(&m.name), crate::vault::spawn::RESTART_TO_RECEIVE),
         Delivery::Api => format!("k2 vault get {}", m.name),
         Delivery::None => "not delivered".into(),
     }

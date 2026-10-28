@@ -265,6 +265,20 @@ CREATE TABLE IF NOT EXISTS agent_meta (
 );
 "#;
 
+/// How a secret card says the secret is sent (prd-secret-card-injection-v1
+/// §1, SC-A2, SC-A3): the card's sealed `Inject` JSON, one row per card that
+/// names one (a card without one has no row). Its MAC is under the row key,
+/// over (card id, inject); the `secret_request` row and its MAC don't
+/// change, so an older daemon still verifies and rekeys every request.
+/// Additive (H22): `user_version` stays 1.
+pub const CARD_INJECT_TABLES: &str = r#"
+CREATE TABLE IF NOT EXISTS secret_request_inject (
+    card_id TEXT PRIMARY KEY,
+    inject TEXT NOT NULL,
+    row_mac BLOB NOT NULL
+);
+"#;
+
 /// The columns a table has (empty when it doesn't exist).
 fn columns(conn: &Connection, table: &str) -> Result<Vec<String>> {
     let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
@@ -322,5 +336,6 @@ pub fn migrate(conn: &Connection) -> Result<()> {
     conn.execute_batch(PLACEMENT_TABLES)?;
     rebuild_old_agent_tables(conn)?;
     conn.execute_batch(AGENT_TABLES)?;
+    conn.execute_batch(CARD_INJECT_TABLES)?;
     Ok(())
 }

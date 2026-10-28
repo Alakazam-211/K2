@@ -813,6 +813,7 @@ fn rekey_keeps_every_table_and_stops_on_a_tampered_row() {
         secret_id: None,
         created_at: String::new(),
         answered_at: None,
+        inject: None,
     })
     .expect("card");
     v.placement_add(
@@ -922,6 +923,7 @@ fn fill_every_table(v: &LocalVault, other: &LocalVault) {
         secret_id: None,
         created_at: String::new(),
         answered_at: None,
+        inject: None,
     })
     .expect("card");
     v.placement_add(

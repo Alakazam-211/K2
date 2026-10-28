@@ -1909,7 +1909,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Ok(v) => v,
         Err(e) => return error_json("503 Service Unavailable", e.code, e.hint),
     };
-    let proposal = match secret_proposal(params) {
+    let mut proposal = match secret_proposal(params) {
         Ok(p) => p,
         Err(e) => return error_json("400 Bad Request", e.code, e.hint),
     };
@@ -1917,6 +1917,7 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
         Ok(r) => r,
         Err(e) => return e,
     };
+    card_names(&vault, &resolved, name.trim(), &mut proposal);
     if let Some(r) = refuse_if_imported(&resolved, None) {
         return r;
     }
@@ -1959,6 +1960,10 @@ fn handle_secret(params: &HashMap<String, String>) -> CliResponse {
                     "seq": item.seq,
                     "conversation_id": resolved.conversation_id,
                     "addr": resolved.addr,
+                    "inject": secret.and_then(|s| s.inject.clone()),
+                    "envName": secret.and_then(|s| s.env_name.clone()),
+                    "replaces": secret.is_some_and(|s| s.replaces),
+                    "sends": secret.map(card_summary),
                 }),
                 &resolved,
             ))
@@ -2020,6 +2025,11 @@ fn create_secret_card(
         secret_id: None,
         created_at: String::new(),
         answered_at: None,
+        inject: match proposal.inject.as_ref().map(|i| k2_vault::inject::card_inject(Some(&i.dst), Some(&i.fmt))) {
+            None => None,
+            Some(Ok(i)) => i,
+            Some(Err(e)) => return Err(error_json("400 Bad Request", e.code, e.hint)),
+        },
     };
     if let Err(e) = vault.request_create(req) {
         // The card was committed, so its withdrawn state is a Thread change
@@ -2091,6 +2101,7 @@ pub(crate) fn post_clone_secret_card(
     hosts: &[String],
     delivery: &str,
     prompt: &str,
+    inject: Option<&k2_vault::inject::Inject>,
 ) -> Result<String, String> {
     let vault = crate::vault::get().map_err(|e| e.code.to_string())?;
     let resolved = ResolvedOverlay {
@@ -2100,12 +2111,22 @@ pub(crate) fn post_clone_secret_card(
         requested_addr: addr.to_string(),
         canonical_alias: true,
     };
-    let proposal = overlay::SecretProposal {
+    let delivery = Some(delivery.to_string()).filter(|d| !d.is_empty() && d != "none");
+    // SC-A8: the source's injection rides when a card can carry it (sent
+    // by K2, a header, Basic or a query parameter); otherwise the card names
+    // none and the save picks K2's default, as before.
+    let inject = inject
+        .filter(|i| i.card_ok().is_ok() && delivery.as_deref().is_none_or(|d| d == "fetch"))
+        .map(|i| overlay::SecretInject { dst: i.dst.render(), fmt: i.fmt.clone() });
+    let mut proposal = overlay::SecretProposal {
         scope: Some("workspace".into()),
         hosts: hosts.to_vec(),
-        delivery: Some(delivery.to_string()).filter(|d| !d.is_empty() && d != "none"),
+        delivery: if inject.is_some() { Some("fetch".into()) } else { delivery },
         kind: Some(kind.to_string()),
+        inject,
+        ..Default::default()
     };
+    card_names(&vault, &resolved, name, &mut proposal);
     create_secret_card(&vault, &resolved, addr, name, Some(prompt), proposal, None, None, true)
         .map(|item| item.id)
         .map_err(|r| r.body)
@@ -2165,7 +2186,66 @@ fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretPr
     if let Some(k) = &kind {
         k2_vault::Kind::parse(k)?;
     }
-    Ok(overlay::SecretProposal { scope, hosts, delivery, kind })
+    // How K2 sends it (prd-secret-card-injection-v1 §1): `inject: {dst, fmt}`,
+    // the same names and checks as `k2 vault set`. Fetch only (SC-A5).
+    let inject = card_inject_param(params)?;
+    let delivery = match (&inject, delivery) {
+        (Some(_), None) => Some("fetch".to_string()),
+        (Some(_), Some(d)) if d != "fetch" => {
+            return Err(k2_vault::VaultError::bad_request(
+                "inject_needs_fetch",
+                "--inject-* says how K2 sends the secret in its own calls, so it needs --delivery fetch (the default)",
+            ))
+        }
+        (_, d) => d,
+    };
+    let inject = inject.map(|i| overlay::SecretInject { dst: i.dst.render(), fmt: i.fmt });
+    Ok(overlay::SecretProposal { scope, hosts, delivery, kind, inject, ..Default::default() })
+}
+
+/// `inject` (`{dst, fmt}`, JSON text) on a secret card post or answer, as
+/// the vault's card injection: `body` is refused (SC-A13).
+fn card_inject_param(params: &HashMap<String, String>) -> Result<Option<k2_vault::inject::Inject>, k2_vault::VaultError> {
+    let Some(raw) = opt_param(params, "inject").filter(|s| !s.trim().is_empty()) else { return Ok(None) };
+    let v: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|_| k2_vault::VaultError::bad_request("bad_inject", "inject is {\"dst\": \"basic\" | \"header:Name\" | \"query:param\", \"fmt\": \"{}\"}"))?;
+    let field = |k: &str| v.get(k).and_then(|x| x.as_str());
+    if !v.is_object() || v.as_object().is_some_and(|o| o.keys().any(|k| k != "dst" && k != "fmt")) {
+        return Err(k2_vault::VaultError::bad_request("bad_inject", "inject has dst and fmt only"));
+    }
+    k2_vault::inject::card_inject(field("dst"), field("fmt"))
+}
+
+/// What the card shows by name: the env name an env delivery uses, and
+/// whether Save replaces a secret that already exists where the card
+/// proposes to keep it (SC-A16). Names only.
+fn card_names(vault: &k2_vault::LocalVault, resolved: &ResolvedOverlay, name: &str, proposal: &mut overlay::SecretProposal) {
+    proposal.env_name = Some(k2_vault::delivery::default_env_name(name));
+    let scope = match proposal.scope.as_deref().unwrap_or("workspace") {
+        "server" => k2_vault::Scope::server(),
+        "session" => k2_vault::Scope::session(resolved.conversation_id.clone()),
+        _ => k2_vault::Scope::workspace(resolved.project_id.clone()),
+    };
+    proposal.replaces = vault.user_secret_exists(&scope, name);
+}
+
+/// A secret card in one line, for the agent that posted it: "K2 will send
+/// HETZNER_ROBOT as a Basic login (user:password) to robot-ws.your-server.de".
+fn card_summary(s: &overlay::SecretBody) -> String {
+    let sites = k2_vault::vault::sites_words(&s.hosts);
+    let to = if sites.is_empty() { " (no site yet: the person must add one)".to_string() } else { format!(" to {sites}") };
+    let mut line = match s.delivery.as_deref().unwrap_or("fetch") {
+        "env" => format!("{} goes to you as ${} (you can read it)", s.name, s.env_name.as_deref().unwrap_or(&s.name)),
+        "file" => format!("{} goes to you as the file $K2_SECRETS_DIR/{} (you can read it)", s.name, s.name),
+        _ => match s.inject.as_ref().and_then(|i| k2_vault::inject::card_inject(Some(&i.dst), Some(&i.fmt)).ok().flatten()) {
+            Some(i) => format!("K2 will send {} {}{to}", s.name, i.words()),
+            None => format!("K2 will send {}{to} in the format it knows for that key, else as a Bearer token", s.name),
+        },
+    };
+    if s.replaces {
+        line.push_str(&format!("; this replaces the {} already saved", s.name));
+    }
+    line
 }
 
 /// `--ttl 24h` / `90m` / `3600` → seconds (chat secrets).
@@ -2275,6 +2355,12 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         Some(Err(e)) => return vault_error(&e),
         None => None,
     };
+    // How the card showed it is sent, echoed on Save (prd-secret-card-
+    // injection-v1 §2). A card that names one refuses an answer without it.
+    let inject = match card_inject_param(params) {
+        Ok(i) => i,
+        Err(e) => return vault_error(&e),
+    };
     let ans = k2_vault::vault::CardAnswer {
         scope: opt_param(params, "scope"),
         hosts,
@@ -2283,6 +2369,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         // 0.46.3: the simple card drew "Sales will get this as a file it
         // can read" before Save; that is the readable-delivery disclosure.
         readable_disclosed: opt_param(params, "disclosed").is_some_and(|c| c == "1" || c == "true"),
+        inject,
     };
     let result = match vault.request_answer(card_id, k2_vault::SecretBytes::from_string(value), &ans, &actor) {
         Ok(r) => r,
@@ -2301,13 +2388,26 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         .iter()
         .map(|h| h.split("://").nth(1).and_then(|x| x.rsplit_once(':')).map(|x| x.0.to_string()).unwrap_or_else(|| h.clone()))
         .collect();
+    // SC-A17: how K2 sends it, in words, when K2 makes the call.
+    let sends = match (&m.inject, m.default_delivery) {
+        (Some(i), k2_vault::Delivery::Fetch) => format!(", sent {}", i.words()),
+        _ => String::new(),
+    };
+    // SC-A1: the card replaced a secret of that name, terms and all.
+    let replaced = match (result.replaced, &result.inject_was) {
+        (false, _) => String::new(),
+        (true, Some(was)) => format!(" It replaced the earlier {} (that one was sent {was}).", m.name),
+        (true, None) => format!(" It replaced the earlier {}.", m.name),
+    };
     let inject_line = format!(
-        "secret {} set → {} ({}{}). Use: {}",
+        "secret {} set → {} ({}{}{}). Use: {}{}",
         m.name,
         reference,
         m.default_delivery,
+        sends,
         if sites.is_empty() { String::new() } else { format!("; {}", sites.join(", ")) },
         crate::vault_routes::use_hint(m),
+        replaced,
     );
     let cb = match overlay::mark_secret(&resolved.conversation_id, card_id, "set", Some(reference.clone()), inject_line, card_actor_author(params, session_author)) {
         Ok(cb) => cb,
@@ -2326,6 +2426,7 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
             "name": m.name,
             "ref": reference,
             "trimmed": result.trimmed,
+            "replaced": result.replaced,
             "agentCanSee": m.agent_can_see(),
             "conversation_id": resolved.conversation_id,
             "addr": resolved.addr,
@@ -3977,10 +4078,12 @@ fn merge_body(params: &mut HashMap<String, String>, body: &[u8]) {
                     params.insert(k.clone(), s.to_string());
                 } else if val.is_number() || val.is_boolean() {
                     params.insert(k.clone(), val.to_string());
-                } else if val.is_array() || (val.is_object() && (k == "origin" || k == "context")) {
+                } else if val.is_array() || (val.is_object() && (k == "origin" || k == "context" || k == "inject")) {
                     // `origin` (UWB12a) and `context` (thread-context-v1)
-                    // are the object fields a Thread post takes; each
-                    // rides as its JSON text.
+                    // are the object fields a Thread post takes; `inject`
+                    // (`{dst, fmt}`) is how a secret card sends its value
+                    // (prd-secret-card-injection-v1). Each rides as its
+                    // JSON text.
                     params.insert(k.clone(), val.to_string());
                 }
             }
@@ -8034,4 +8137,8 @@ mod tests {
     // N1: the activity catch-up GET's per-caller limit (0.46.4).
     #[path = "activity_limit_tests.rs"]
     mod activity_limit;
+
+    // Secret cards that say how a secret is sent (0.46.6).
+    #[path = "secret_card_inject_tests.rs"]
+    mod secret_card_inject;
 }

@@ -18,7 +18,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretProposal, ThreadContext, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadContext, WidgetOrigin, WidgetPlacementClaim};
 pub use attachments::ThreadAttachment;
 pub use options::{check_ask_caps, parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
@@ -1439,6 +1439,7 @@ mod tests {
                 hosts: vec!["https://api.x.ai:443".into()],
                 delivery: Some("fetch".into()),
                 kind: Some("api_key".into()),
+                ..Default::default()
             },
             None,
         )

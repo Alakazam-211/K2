@@ -14,7 +14,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)` |
 | `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)` |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
-| `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob` |
+| `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob` |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
 | `ConnId` | kit | one connection (a tab, a `watch`, a CLI caller); `Copy`, passed to every call |
 | `Config` | host | every limit below; `Config::default()` then set fields |
@@ -66,6 +66,8 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
 7. `release()` is for process hand-off. Every file is written back, every session closes,
    and later calls on them fail with `Released`. The kit drops its store handles. Once the host drops its own, the redb file
    is free for the next process (`DocStore::open_with_retry`).
+8. Deleting: `delete_doc(&key)` / `delete_space(space)` close the loaded sessions of those
+   docs, then erase them from the store ([Deleting docs](#deleting-docs)).
 
 The host drives time: call `tick()` on a timer (about once a second). It closes idle
 connections, cuts idle versions, runs version retention and the revert window (every
@@ -73,8 +75,10 @@ connections, cuts idle versions, runs version retention and the revert window (e
 all on `Host::now_ms`, and returns a `TickReport { left, written, ingested, unloaded, errors,
 versions_cut, versions_thinned, reverts_dropped, .. }`.
 (`expire_idle()` and `unload_idle()` remain for hosts without files.) The kit starts no
-threads of its own. `recheck_rights()` per session is the host's periodic rights re-check
-(PRD §11.2).
+threads of its own. `recheck_rights()` per session, or `SessionManager::recheck_rights()` over
+every loaded doc, is the host's periodic rights re-check (PRD §11.2).
+`SessionManager::loaded_keys()` lists the loaded docs (text and tier 0), sorted by space then
+path; it never loads anything.
 
 ## Identity, connections and attribution
 
@@ -129,7 +133,9 @@ threads of its own. `recheck_rights()` per session is the host's periodic rights
 and editors by default, not App guests or read-only shares). It gates the history reads
 (`versions`, `log`, `diff_version`, `show`; blame later), `restore` (with edit), and other
 people's approval records. `revert` needs edit and is allowed for the change's author, the
-person it was made for, or an owner (`Rights::owner`; refused as `Forbidden { need: Owner }`).
+person it was made for, or an owner (`Rights::owner`; refused as
+`Forbidden { need: AuthorOrOwner }`: "only the author, the person it was made for, or an owner
+can revert this").
 
 - The host is asked on **every** call, for the connection's pid: read for every call, and
   edit on every edit call (`edit`, `edit_with`, `replace_text`, `write_base`, `undo`, `redo`,
@@ -139,6 +145,10 @@ person it was made for, or an owner (`Rights::owner`; refused as `Forbidden { ne
   (`Left { reason: RightsLost }` for each), and their subscriptions close.
 - `recheck_rights()` asks once per pid and returns `RightsChange { pid, rights }` for each pid
   whose rights changed, so the host can tell its tabs they went read-only.
+- `SessionManager::recheck_rights() -> Vec<(DocKey, RightsChange)>` does that for every loaded
+  doc, text and tier 0, sorted by doc. A session whose re-check fails is skipped and reported
+  as `AuditEvent::RecheckFailed { key, error }` (the others are still re-checked); one that
+  closed meanwhile (unloaded, released, deleted) is skipped silently.
 
 ## Reading
 
@@ -305,8 +315,15 @@ position, the stable change id) days later and after restarts, independent of un
   region (a fully conflicting revert applies nothing: `Blocked`, exit 1). A region over redacted
   text is `ConflictKind::Erased` (after a purge). The revert is a new change by the caller
   (`ChangeKind::Revert`, `of` = the change), on their undo stack.
+- **Never more lenient than undo.** For the same change and live text, revert's conflicting
+  regions include undo's. Undo applies the shared-edge rule (m-d) after every change, so once
+  two regions of a change touch, a deletion across their shared edge taints both; the carry
+  tree moves each position on its own, so at revert time a region whose carried start touches
+  the previous region's end takes that end's taint (`undo::revert_regions`). It can be
+  stricter than undo (a deletion across the left region's end from before they touched also
+  counts); it is never laxer (a property test over random histories holds it).
 - **Rights:** edit, and the caller is the change's author, its `on_behalf_of` person, or an
-  owner. Otherwise `Forbidden { need: Owner }`.
+  owner. Otherwise `Forbidden { need: AuthorOrOwner }` (and `AuditEvent::Refused` with it).
 - **The window** (K-HIST-23, a `tick` duty): records of changes newer than `revert_keep_ms` (30
   days) **or** among the last `revert_keep_changes` (10,000), whichever reaches further, plus
   every **pending** on-behalf change's; at most `revert_max_bytes` (64 MiB) per doc, oldest
@@ -546,6 +563,31 @@ runs the verb per doc, passes `-H` when there are several, and combines the exit
   a file) × `memory_factor` (20). The host exposes `memory_budget_bytes` (256 MiB) as its
   knob.
 
+## Deleting docs
+
+`SessionManager::delete_doc(&key)` and `delete_space(space)` delete docs (text and tier 0)
+for good:
+
+1. Every **loaded** session of those docs closes first, under the pool lock (no open can
+   race it), with no write-back and no compaction. Its participants are told with
+   `AuditEvent::DocDeleted { key, connections: Vec<(ConnId, pid)> }`; their subscriptions end
+   (the receivers disconnect), a lease ends with it, and every later call on a handle the host
+   still holds fails with `SessionError::Deleted` (exit 4).
+2. Then **one store transaction** per call erases every kit row of those docs
+   (`DocStore::delete_doc(id, now_ms)` / `delete_space(space, now_ms)`, also callable
+   directly): `paths`, `docs`, `snapshots`, `updates`, `clients`, `versions`, `approvals`,
+   `sync` (the disk replica), `changes`, `reverts`, `revert_index`, `revert_carry`,
+   `revert_stats`, `blob_versions`, `blob_sync`. A blob doc's versions **release** their blob
+   references (the blob's grace starts then), so `BlobStore::gc` removes a blob nothing else
+   references once `gc_grace_ms` has passed; a blob another doc still uses stays.
+
+Left alone: the file on disk (the host's: the kit neither writes it back nor removes it), the
+host's table (`host`: the kit never erases it), the store's `meta` (doc ids are never reused)
+and the space's blob key (`BlobStore::purge_space_key` destroys it and every blob of the space
+at once). `delete_doc` on a key with no doc is `NotFound`; `delete_space` returns the keys it
+deleted (empty when none). On a store error nothing is erased (a closed session reopens on
+the next `open`). A key can hold a new doc right after.
+
 ## Limits (`Config`)
 
 | Field | Default | Effect |
@@ -575,7 +617,7 @@ runs the verb per doc, passes `-H` when there are several, and combines the exit
 
 | Error | Meaning | Exit (`session_exit`) |
 |---|---|---|
-| `Forbidden { need }` | No right (`Read`, `Edit`, `History`, `Approver`: not the person the change was for; `Owner`: a revert by someone not its author or person). For read, the pid is also removed. | 3 |
+| `Forbidden { need }` | No right (`Read`, `Edit`, `History`, `Approver`: not the person the change was for; `AuthorOrOwner`: a revert by someone not its author, its person or an owner; `Owner`: breaking a lease). For read, the pid is also removed. | 3 |
 | `Held { reason }` | `approvals_backlog`: too many pending on-behalf changes; nothing applied | 2 |
 | `RevertTooOld { seq }` | the change is outside the revert window; use `restore --version` | 8 (never retry) |
 | `NoSuchChange(n)` | no change (revert) or version (restore, show, diff, name) `n` | 4 |
@@ -591,6 +633,7 @@ runs the verb per doc, passes `-H` when there are several, and combines the exit
 | `Disk(_)` | reading or writing the file failed; nothing lost, write-back retries | 1 |
 | `Store(_)` | store failure; nothing acked | 6 |
 | `Pack(_)` | pack bug or damaged codec settings | 1 |
+| `Deleted` | the doc was deleted while this session was loaded | 4 |
 | `Unloaded` / `Released` / `Broken` | stale handle: open again | retry |
 | `Leased` / `NoLease` / `Blob(_)` / `NoBlobStore` | tier 0: see [Tier 0](#tier-0-any-file) | 5 / 2 / 1 (`TooLarge` 4) / 4 |
 
@@ -836,6 +879,7 @@ hunk shape per change; `DocStore::change`, `scan_changes`), `reverts` (revert re
 `revert_index`, `revert_carry`, `revert_stats`; plus `DocStore::version_infos` (version headers
 without content). Content lives only in `reverts` (and versions); purge's byte scan must cover
 both. Changes made before this slice have no summary or record (`revert` says too old).
+Deleting a doc erases its rows here too ([Deleting docs](#deleting-docs)).
 
 ## Store: the host's table
 
@@ -847,6 +891,23 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Amendment 5 (additive): manager listing, delete, revert (C7b)
+
+**Additive:** `SessionManager::loaded_keys`, `recheck_rights`, `delete_doc`, `delete_space`;
+`DocStore::delete_doc(id, now_ms)`, `delete_space(space, now_ms)`. Variants (on
+`#[non_exhaustive]` enums): `Need::AuthorOrOwner`; `AuditEvent::RecheckFailed`, `DocDeleted`;
+`SessionError::Deleted` (exit 4). No store format change (format stays 2).
+
+**Behaviour:**
+1. A refused `revert` is `Forbidden { need: AuthorOrOwner }` (was `Need::Owner`), in the
+   error and in `AuditEvent::Refused`. A host matching `Owner` for revert refusals switches
+   to `AuthorOrOwner`; `Owner` now only means breaking a lease.
+2. `revert` is never more lenient than undo: in C7a's edge case (two regions of one change came
+   to touch, someone inserted at the shared edge, a deletion then crossed it) the right region
+   now conflicts as `Taint`, as undo reports it, instead of merging (and, with `partial`,
+   applying). Persisted carried bounds of pending records (one taint flag per region) now
+   taint both edges when the index is rebuilt (conservative).
 
 ### Amendment 4: history (C7a)
 

@@ -1089,6 +1089,31 @@ impl BlobSession {
         Ok(())
     }
 
+    /// Close this handle because its doc is being deleted: no write-back. Emits
+    /// [`AuditEvent::DocDeleted`] with the connections that were in it (any lease ends with
+    /// it); later calls fail with [`SessionError::Deleted`].
+    pub(crate) fn close_deleted(&self) {
+        let Ok(mut st) = self.lock_any() else {
+            return;
+        };
+        if st.closed.is_some() {
+            return;
+        }
+        let connections = st
+            .members
+            .iter()
+            .map(|m| (m.conn, m.p.pid.clone()))
+            .collect();
+        self.emit(AuditEvent::DocDeleted {
+            key: st.key.clone(),
+            connections,
+        });
+        st.closed = Some(SessionError::Deleted);
+        st.store = None;
+        st.members.clear();
+        st.lease = None;
+    }
+
     pub(crate) fn close(&self, reason: SessionError) {
         let Ok(mut st) = self.lock_any() else {
             return;

@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::session::{
-    ApprovalState, AuditEvent, ChangeKind, Config, ConflictKind, ConnId, Host, LogItem, LogQuery,
-    Need, Pack, Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
-    TextFilePack, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
+    Action, ApprovalState, AuditEvent, ChangeKind, Config, ConflictKind, ConnId, Host, LogItem,
+    LogQuery, Need, Pack, Participant, ParticipantKind, Rights, Session, SessionError,
+    SessionManager, Stay, TextFilePack, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
 };
 use k2_mpc_base::store::{DocKey, DocStore, VersionReason};
 use k2_mpc_base::tools::{exit, session_exit};
@@ -582,6 +582,68 @@ fn revert_record_taint_on_crossing_delete() {
     assert_eq!(text(&s, a), "aaaB ccc\n");
 }
 
+/// C7b: revert is as conservative as undo where two regions of a change came to touch,
+/// someone inserted at the shared edge and a deletion then crossed it. Undo reports both
+/// regions (Taint); C7a's revert missed the right one and, with `--partial`, applied it.
+#[test]
+fn revert_as_conservative_as_undo_at_a_crossed_shared_edge() {
+    use k2_mpc_base::text::Hunk;
+    use k2_mpc_base::Edit;
+    let at = |s: usize, e: usize, t: &str| {
+        vec![Edit::Text {
+            root: ROOT.into(),
+            hunks: vec![Hunk {
+                start: s,
+                end: e,
+                insert: t.into(),
+            }],
+        }]
+    };
+    let f = fx("revertedge");
+    let s = f.open("e.md", b"x--2abQ\n");
+    let a = f.join(&s, person("a"), Rights::editor());
+    let b = f.join(&s, agent("b"), Rights::editor());
+    // a's change: two regions, the right one wider than what changed ("2abQ" -> "2abc")
+    let change = s
+        .edit(
+            a,
+            vec![Edit::Text {
+                root: ROOT.into(),
+                hunks: vec![
+                    Hunk {
+                        start: 0,
+                        end: 1,
+                        insert: "L".into(),
+                    },
+                    Hunk {
+                        start: 3,
+                        end: 7,
+                        insert: "2abc".into(),
+                    },
+                ],
+            }],
+            None,
+        )
+        .unwrap()
+        .version;
+    s.edit(b, at(1, 3, ""), None).unwrap(); // "L2abc": the regions touch
+    s.edit(b, at(1, 1, "Z"), None).unwrap(); // "LZ2abc": an insertion at the shared edge
+    s.edit(b, at(1, 3, ""), None).unwrap(); // "Labc": a deletion across it
+    assert_eq!(text(&s, a), "Labc\n");
+    let kinds = |o: UndoOutcome| match o {
+        UndoOutcome::Conflicts { conflicts, .. } | UndoOutcome::Blocked { conflicts } => conflicts
+            .into_iter()
+            .map(|c| (c.range, c.kind))
+            .collect::<Vec<_>>(),
+        o => panic!("{o:?}"),
+    };
+    let want = vec![(0..1, ConflictKind::Taint), (1..4, ConflictKind::Taint)];
+    assert_eq!(kinds(s.revert(a, change, false).unwrap()), want);
+    assert_eq!(kinds(s.revert(a, change, true).unwrap()), want); // --partial: Blocked
+    assert_eq!(kinds(s.undo_with(a, &partial()).unwrap()), want);
+    assert_eq!(text(&s, a), "Labc\n");
+}
+
 #[test]
 fn hist_revert_declined_after_restart() {
     let mut f = fx("revertrestart");
@@ -618,8 +680,18 @@ fn revert_rights() {
     let o = f.join(&s, person("o"), Rights::editor().with_owner(true));
     let change = replace(&s, a, "x", "y");
     let e = s.revert(c, change, false).unwrap_err();
-    assert_eq!(e, SessionError::Forbidden { need: Need::Owner });
+    assert_eq!(
+        e,
+        SessionError::Forbidden {
+            need: Need::AuthorOrOwner
+        }
+    );
     assert_eq!(session_exit(&e), exit::REFUSED);
+    assert!(f.host.events.lock().unwrap().iter().any(|ev| matches!(
+        ev,
+        AuditEvent::Refused { pid, action: Action::Revert, need: Need::AuthorOrOwner, .. }
+            if pid == "c"
+    )));
     assert!(matches!(
         s.revert(o, change, false).unwrap(),
         UndoOutcome::Applied { .. }

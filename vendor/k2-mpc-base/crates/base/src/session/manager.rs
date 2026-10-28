@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::config::Config;
 use super::disk::{self, DiskCheck, Probe, ReadFile};
 use super::error::{Result, SessionError};
-use super::host::Host;
-use super::live::{probe_error, Session};
+use super::host::{AuditEvent, Host};
+use super::live::{probe_error, RightsChange, Session};
 use super::pack::{Declined, Pack};
 use super::participant::ConnId;
 use super::tier0::{BlobPack, BlobSession};
@@ -491,6 +491,111 @@ impl SessionManager {
             .ok_or_else(|| SessionError::NotFound(old.clone()))?;
         store.rekey(id, new)?;
         Ok(())
+    }
+
+    /// The keys of every loaded doc, text and tier 0, sorted by space then path. Never
+    /// loads anything. (Empty if the pool is broken, as after a panic inside it.)
+    pub fn loaded_keys(&self) -> Vec<DocKey> {
+        let Ok(pool) = self.pool() else {
+            return Vec::new();
+        };
+        let mut keys: Vec<DocKey> = pool
+            .sessions
+            .keys()
+            .chain(pool.blob_sessions.keys())
+            .cloned()
+            .collect();
+        keys.sort_by(|a, b| (&a.space, &a.path).cmp(&(&b.space, &b.path)));
+        keys
+    }
+
+    /// The host's periodic rights re-check (PRD §11.2) over every loaded doc, text and tier
+    /// 0: each session's `recheck_rights` ([`Session::recheck_rights`],
+    /// [`BlobSession::recheck_rights`]), so participants who lost read leave. Returns each
+    /// pid whose rights changed, with its doc, sorted by doc. A session that fails is
+    /// skipped and reported as [`AuditEvent::RecheckFailed`]; one that closed meanwhile
+    /// (unloaded, released, deleted) is simply skipped. Never loads anything.
+    pub fn recheck_rights(&self) -> Vec<(DocKey, RightsChange)> {
+        let (text, blobs) = match (self.loaded(), self.loaded_blobs()) {
+            (Ok(t), Ok(b)) => (t, b),
+            _ => return Vec::new(),
+        };
+        let mut done: Vec<(DocKey, Result<Vec<RightsChange>>)> = text
+            .into_iter()
+            .map(|(k, s)| (k, s.recheck_rights()))
+            .chain(blobs.into_iter().map(|(k, s)| (k, s.recheck_rights())))
+            .collect();
+        done.sort_by(|a, b| (&a.0.space, &a.0.path).cmp(&(&b.0.space, &b.0.path)));
+        let mut out = Vec::new();
+        for (key, r) in done {
+            match r {
+                Ok(changes) => out.extend(changes.into_iter().map(|c| (key.clone(), c))),
+                Err(SessionError::Unloaded | SessionError::Released | SessionError::Deleted) => {}
+                Err(e) => self.host.on_event(&AuditEvent::RecheckFailed {
+                    key,
+                    error: e.to_string(),
+                }),
+            }
+        }
+        out
+    }
+
+    /// Delete the doc at `key` (text or tier 0) for good: a loaded session is closed first
+    /// (its participants get [`AuditEvent::DocDeleted`]; later calls on it fail with
+    /// [`SessionError::Deleted`]), then every kit row of the doc is erased in one store
+    /// transaction ([`DocStore::delete_doc`]: a blob doc's blob references are released,
+    /// so blob GC removes unreferenced blobs after its grace). The file on disk, if any,
+    /// and the host's table are the host's: the kit neither writes nor removes them.
+    /// [`SessionError::NotFound`] when there is no doc at `key`. On a store error nothing is
+    /// erased (the closed session reopens on the next `open`).
+    pub fn delete_doc(&self, key: &DocKey) -> Result<()> {
+        let mut pool = self.pool()?;
+        let store = pool.store.clone().ok_or(SessionError::Released)?;
+        let id = store
+            .find(key)?
+            .ok_or_else(|| SessionError::NotFound(key.clone()))?;
+        if let Some(s) = pool.sessions.remove(key) {
+            s.close_deleted();
+        }
+        if let Some(s) = pool.blob_sessions.remove(key) {
+            s.close_deleted();
+        }
+        store.delete_doc(id, self.host.now_ms())?;
+        Ok(())
+    }
+
+    /// Delete every doc in `space`, as [`SessionManager::delete_doc`] does: loaded sessions
+    /// close first, then one store transaction erases them all
+    /// ([`DocStore::delete_space`]). The space's blob key stays
+    /// ([`BlobStore::purge_space_key`] destroys it and every blob in the space at once).
+    /// Returns the keys deleted.
+    pub fn delete_space(&self, space: &str) -> Result<Vec<DocKey>> {
+        let mut pool = self.pool()?;
+        let store = pool.store.clone().ok_or(SessionError::Released)?;
+        let in_space = |k: &DocKey| k.space == space;
+        let text: Vec<DocKey> = pool
+            .sessions
+            .keys()
+            .filter(|k| in_space(k))
+            .cloned()
+            .collect();
+        for k in text {
+            if let Some(s) = pool.sessions.remove(&k) {
+                s.close_deleted();
+            }
+        }
+        let blobs: Vec<DocKey> = pool
+            .blob_sessions
+            .keys()
+            .filter(|k| in_space(k))
+            .cloned()
+            .collect();
+        for k in blobs {
+            if let Some(s) = pool.blob_sessions.remove(&k) {
+                s.close_deleted();
+            }
+        }
+        Ok(store.delete_space(space, self.host.now_ms())?)
     }
 
     /// Close idle connections in every loaded session ([`Session::expire_idle`]).

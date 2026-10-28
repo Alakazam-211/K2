@@ -105,6 +105,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::PackMismatch { .. }
         | SessionError::NoSuchChange(_)
         | SessionError::NoBlobStore
+        | SessionError::Deleted
         | SessionError::Blob(BlobError::TooLarge { .. }) => exit::NOT_FOUND,
         SessionError::NotJoined { .. }
         | SessionError::RateLimited { .. }
@@ -147,6 +148,7 @@ mod tests {
                 3,
             ),
             (SessionError::NoSuchChange(9), 4),
+            (SessionError::Deleted, 4),
             (SessionError::NoBlobStore, 4),
             (SessionError::RateLimited { retry_after_ms: 1 }, 2),
             (

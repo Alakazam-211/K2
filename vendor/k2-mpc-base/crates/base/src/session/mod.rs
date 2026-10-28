@@ -60,6 +60,8 @@ pub use undo::{ConflictKind, ConflictRegion};
 #[cfg(test)]
 mod disk_crash_tests;
 #[cfg(test)]
+mod manager_tests;
+#[cfg(test)]
 mod tier0_crash_tests;
 
 // Compile-time check: sessions and the manager are shared across threads.

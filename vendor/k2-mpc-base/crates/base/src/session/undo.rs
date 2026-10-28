@@ -190,6 +190,51 @@ pub(crate) fn clamp_shared_edges(regions: &mut [Region]) {
     }
 }
 
+/// A revert's regions (U22): the record's hunks at their carried bounds
+/// ([`super::carry::RevertIndex::edges`], in record order), with the shared-edge rule (m-d)
+/// applied, and at least as conservative as undo on the same change and live text.
+///
+/// Undo clamps after **every** change, so once two regions of a change touch, the right
+/// region's start *is* the left region's end, and a later deletion across that point taints
+/// both. The carry tree moves each position on its own and the clamp runs only here, so the
+/// right start it carries can sit behind the left end (a foreign insertion at the shared
+/// edge pulls the left end forward and leaves the Before-biased start where it was), and
+/// a deletion across the left end then misses it. Positions agree after the clamp (ends are
+/// never moved by it, and carrying commutes with it); only that taint differs. So here: a
+/// region whose carried start is at or before the previous region's end (they touch) takes
+/// that end's taint. That is a superset of undo's taint (it also counts a deletion across
+/// the left end from before the regions came to touch), never a subset: revert's
+/// conflicts ⊇ undo's for the same change and live text.
+pub(crate) fn revert_regions(
+    rec: &crate::store::RevertRecord,
+    edges: Vec<super::carry::Edges>,
+) -> Vec<Region> {
+    let hunks = rec
+        .roots
+        .iter()
+        .flat_map(|r| r.hunks.iter().map(move |h| (r, h)));
+    let mut regions: Vec<Region> = Vec::with_capacity(edges.len());
+    let mut prev: Option<(String, usize, bool)> = None; // root, end, end tainted
+    for ((root, h), (_, s, e, ts, te)) in hunks.zip(edges) {
+        let touches_tainted = prev
+            .as_ref()
+            .is_some_and(|(r, pe, pt)| *r == root.root && s <= *pe && *pt);
+        prev = Some((root.root.clone(), e, te));
+        regions.push(Region {
+            root: root.root.clone(),
+            start: s,
+            end: e,
+            before: h.deleted.clone(),
+            after: h.insert.clone(),
+            tainted: ts || te || touches_tainted,
+            base_doc_empty: root.empty_after,
+            erased: h.redacted,
+        });
+    }
+    clamp_shared_edges(&mut regions);
+    regions
+}
+
 /// One change by one participant, as it can be undone (U1): its regions, in order.
 #[derive(Debug, Clone)]
 pub(crate) struct Batch {
@@ -507,5 +552,207 @@ mod tests {
         };
         let Edit::Text { hunks, .. } = &steps[0].edits[0];
         assert_eq!(diff::apply(&undone, hunks), live);
+    }
+
+    // ----- revert is at least as conservative as undo (C7b) -----
+
+    use crate::session::carry::RevertIndex;
+    use crate::store::{RecordHunk, RecordRoot, RevertRecord};
+    use proptest::prelude::*;
+
+    /// The change `before -> hunks`, as an undo batch, a revert record, and staged in a
+    /// fresh revert index as change 1 (as a session does).
+    fn change(before: &str, hunks: &[Hunk]) -> (Batch, RevertRecord, RevertIndex) {
+        let hunks = diff::coalesce(hunks.to_vec());
+        let regions = Region::of_change(R, before, &hunks);
+        let after = diff::apply(before, &hunks);
+        let rec = RevertRecord {
+            author: "a".into(),
+            on_behalf_of: None,
+            at_ms: 0,
+            roots: vec![RecordRoot {
+                root: R.into(),
+                empty_after: after.is_empty(),
+                hunks: hunks
+                    .iter()
+                    .map(|h| RecordHunk {
+                        start: h.start as u64,
+                        end: h.end as u64,
+                        insert: h.insert.clone(),
+                        deleted: before[h.start..h.end].to_owned(),
+                        redacted: false,
+                    })
+                    .collect(),
+            }],
+        };
+        let mut ix = RevertIndex::empty_for_tests();
+        ix.stage(
+            &regions
+                .iter()
+                .map(|g| (g.root.clone(), g.start, g.end))
+                .collect::<Vec<_>>(),
+        );
+        ix.bind(&[1]);
+        let b = Batch {
+            seq: 1,
+            on_behalf_of: None,
+            regions,
+        };
+        (b, rec, ix)
+    }
+
+    /// Carry both through a later change to `live` (canonical hunks).
+    fn later(b: &mut Batch, ix: &mut RevertIndex, live: &mut String, hunks: &[Hunk]) {
+        b.transform(R, hunks);
+        ix.carry(R, hunks);
+        *live = diff::apply(live, hunks);
+    }
+
+    /// Conflicting regions of undoing `b` / reverting `rec` on `live` (all or nothing), as
+    /// `(range, kind)`, or the edits when clean.
+    fn outcome(live: &str, b: Batch) -> Result<Vec<Edit>, Vec<(Range<usize>, ConflictKind)>> {
+        match plan(&texts(live), vec![b], Mode::All) {
+            Plan::Steps { mut steps, .. } => Ok(steps.pop().map(|s| s.edits).unwrap_or_default()),
+            Plan::Conflict { conflicts, .. } => {
+                Err(conflicts.into_iter().map(|c| (c.range, c.kind)).collect())
+            }
+        }
+    }
+
+    fn reverted(rec: &RevertRecord, ix: &mut RevertIndex) -> Batch {
+        Batch {
+            seq: 1,
+            on_behalf_of: None,
+            regions: revert_regions(rec, ix.edges(1).expect("record 1")),
+        }
+    }
+
+    /// C7a's edge case: two regions of a change come to touch, someone inserts at the
+    /// shared edge, then a deletion crosses the right region's (corrected) start without
+    /// touching the rest of it. Undo taints both regions; revert must too.
+    #[test]
+    fn revert_taints_the_right_region_at_a_crossed_shared_edge() {
+        // the right hunk is wider than the change (an explicit `edit`): "2abQ" -> "2abc"
+        let before = "x--2abQ\n";
+        let h = |s: usize, e: usize, t: &str| Hunk {
+            start: s,
+            end: e,
+            insert: t.into(),
+        };
+        let (mut b, rec, mut ix) = change(before, &[h(0, 1, "L"), h(3, 7, "2abc")]);
+        let mut live = "L--2abc\n".to_owned();
+        later(&mut b, &mut ix, &mut live, &[h(1, 3, "")]); // "L2abc": they touch
+        later(&mut b, &mut ix, &mut live, &[h(1, 1, "Z")]); // "LZ2abc": at the shared edge
+        later(&mut b, &mut ix, &mut live, &[h(1, 3, "")]); // "Labc": across it
+        assert_eq!(live, "Labc\n");
+        let undo = outcome(&live, b.clone()).unwrap_err();
+        assert_eq!(
+            undo,
+            vec![(0..1, ConflictKind::Taint), (1..4, ConflictKind::Taint)]
+        );
+        let rv = outcome(&live, reverted(&rec, &mut ix)).unwrap_err();
+        assert_eq!(rv, undo);
+        // --partial: nothing is clean, so nothing applies (C7a applied the right region)
+        let p = plan(&texts(&live), vec![reverted(&rec, &mut ix)], Mode::Partial);
+        assert!(
+            matches!(&p, Plan::Steps { steps, blocked: Some(c) } if steps.is_empty() && c.len() == 2),
+            "{p:?}"
+        );
+    }
+
+    /// One drawn later change: `(how, which, position, deleted, inserted)`. `how` 0: at a
+    /// random position; 1: at an edge of one of the change's regions (± 1); 2: delete
+    /// exactly what separates two regions (so they come to touch). The edges come from the
+    /// undo batch's bounds, so histories reach touching regions, insertions at shared edges
+    /// and deletions across them often.
+    type Draw = (u8, u8, u16, u8, String);
+
+    fn draws() -> impl Strategy<Value = Vec<Draw>> {
+        prop::collection::vec(
+            (0u8..3, any::<u8>(), any::<u16>(), 0u8..4, "[xyz\n]{0,2}"),
+            1..3,
+        )
+    }
+
+    /// Canonical hunks for `text` from draws, anchored on `regions` (none: all random).
+    fn canonical(text: &str, regions: &[Region], raw: &[Draw]) -> Vec<Hunk> {
+        let len = text.len();
+        let n = regions.len().max(1);
+        let mut pts: Vec<(usize, usize, String)> = Vec::new();
+        for (how, which, pos, del, ins) in raw {
+            let g = regions.get(*which as usize % n);
+            let (s, e, ins) = match (how, g) {
+                (1, Some(g)) => {
+                    let edge = if pos % 2 == 0 { g.start } else { g.end };
+                    let s = match pos % 3 {
+                        0 => edge,
+                        1 => edge.saturating_sub(1),
+                        _ => edge + 1,
+                    }
+                    .min(len);
+                    (s, (s + *del as usize).min(len), ins.clone())
+                }
+                (2, Some(g)) => match regions.get(*which as usize % n + 1) {
+                    Some(next) if next.start > g.end => (g.end, next.start, String::new()),
+                    _ => continue,
+                },
+                _ => {
+                    let s = *pos as usize % (len + 1);
+                    (s, (s + *del as usize).min(len), ins.clone())
+                }
+            };
+            pts.push((s, e, ins));
+        }
+        pts.sort_by_key(|x| (x.0, x.1));
+        let mut out: Vec<Hunk> = Vec::new();
+        for (s, e, ins) in pts {
+            if out.last().is_some_and(|l| s <= l.end) || (s == e && ins.is_empty()) {
+                continue;
+            }
+            out.push(Hunk {
+                start: s,
+                end: e,
+                insert: ins,
+            });
+        }
+        out
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(2048))]
+        /// For random histories, reverting a change conflicts on every region undoing it
+        /// conflicts on (same change, same live text), and when neither conflicts they
+        /// make the same edit.
+        #[test]
+        fn revert_conflicts_are_a_superset_of_undos(
+            before in "[ab\n]{0,10}",
+            first in prop::collection::vec((any::<u16>(), 0u8..4, "[ab\n]{0,3}"), 1..4),
+            rest in prop::collection::vec(draws(), 0..10),
+        ) {
+            let first: Vec<Draw> = first.into_iter().map(|(p, d, i)| (0, 0, p, d, i)).collect();
+            let hunks = canonical(&before, &[], &first);
+            prop_assume!(!hunks.is_empty());
+            let (mut b, rec, mut ix) = change(&before, &hunks);
+            let mut live = diff::apply(&before, &diff::coalesce(hunks));
+            for raw in &rest {
+                let hs = canonical(&live, &b.regions, raw);
+                later(&mut b, &mut ix, &mut live, &hs);
+            }
+            let undo = outcome(&live, b);
+            let rv = outcome(&live, reverted(&rec, &mut ix));
+            match (&undo, &rv) {
+                (Ok(u), Ok(r)) => prop_assert_eq!(u, r),
+                (Ok(_), Err(_)) => {}
+                (Err(u), Ok(_)) => prop_assert!(false, "undo conflicts {:?}, revert is clean", u),
+                (Err(u), Err(r)) => {
+                    for (range, kind) in u {
+                        prop_assert!(
+                            r.iter().any(|(rr, rk)| rr == range && (rk == kind || *rk == ConflictKind::Taint)),
+                            "undo conflict {:?} {:?} missing from revert's {:?}", range, kind, r
+                        );
+                    }
+                }
+            }
+        }
     }
 }

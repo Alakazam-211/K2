@@ -323,6 +323,43 @@ fn adjust_ref(
     Ok(())
 }
 
+/// Erase a blob doc's rows in `w` (deleting the doc), releasing the reference each of its
+/// versions held on its blob at `now`. A space whose key was purged has no blob rows left to
+/// release, and a missing row has nothing to release either: neither stops the delete.
+pub(super) fn delete_rows(
+    w: &WriteTransaction,
+    id: DocId,
+    space: &str,
+    now: u64,
+) -> Result<(), StoreError> {
+    let mut blobs = Vec::new();
+    for kv in w
+        .open_table(BLOB_VERSIONS)?
+        .range((id, 0)..=(id, u64::MAX))?
+    {
+        blobs.push(dec_version(kv?.1.value())?.blob);
+    }
+    if !blobs.is_empty() {
+        match space_in(w, space) {
+            Ok(k) => {
+                for b in &blobs {
+                    match adjust_ref(w, k.no, b, -1, now) {
+                        Ok(()) | Err(StoreError::NoBlob(_)) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+            Err(StoreError::NoBlobSpace) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    w.open_table(BLOB_VERSIONS)?
+        .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
+    w.open_table(BLOB_SYNC)?
+        .retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?;
+    Ok(())
+}
+
 fn last_vid(w: &WriteTransaction, id: DocId) -> Result<VersionId, StoreError> {
     let t = w.open_table(BLOB_VERSIONS)?;
     let last = t.range((id, 0)..=(id, u64::MAX))?.next_back().transpose()?;

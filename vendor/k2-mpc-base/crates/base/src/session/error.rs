@@ -90,6 +90,10 @@ pub enum SessionError {
     /// The manager was released (process hand-off).
     #[error("sessions released")]
     Released,
+    /// The doc was deleted ([`super::SessionManager::delete_doc`] / `delete_space`) while
+    /// this session was loaded. Exit 4.
+    #[error("the doc was deleted")]
+    Deleted,
     /// A store write failed and reloading from the store failed too. The session is closed;
     /// open the doc again once the store is healthy.
     #[error("session failed: {0}")]

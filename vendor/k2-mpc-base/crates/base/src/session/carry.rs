@@ -365,6 +365,9 @@ pub(crate) fn regions_of_shape(hunks: &[(u64, u64, u64)]) -> Vec<(usize, usize)>
 /// One record's regions in the index: `(root, start node, end node)`.
 type Nodes = Vec<(usize, Handle, Handle)>;
 
+/// A region's carried bounds: `(root, start, end, start tainted, end tainted)`.
+pub(crate) type Edges = (String, usize, usize, bool, bool);
+
 /// The carried bounds of every revert record of one doc: per root, an [`OffsetTree`] of
 /// region starts ([`Bias::Before`]) and one of region ends ([`Bias::After`]); per record, its
 /// nodes. Built from the store on first use ([`RevertIndex::build`]) and then kept up to
@@ -403,6 +406,12 @@ impl RevertIndex {
         }
     }
 
+    /// An empty index (tests that stage records by hand).
+    #[cfg(test)]
+    pub fn empty_for_tests() -> Self {
+        Self::new()
+    }
+
     /// Records held.
     #[cfg(test)]
     pub fn len(&self) -> usize {
@@ -432,14 +441,18 @@ impl RevertIndex {
         }
     }
 
-    fn add(&mut self, regions: &[(String, usize, usize, bool)]) -> Nodes {
+    /// Add one record's regions `(root, start, end, start tainted, end tainted)`.
+    fn add(&mut self, regions: &[Edges]) -> Nodes {
         let mut nodes = Vec::with_capacity(regions.len());
-        for (root, s, e, tainted) in regions {
+        for (root, s, e, ts, te) in regions {
             let i = self.root(root);
             let (_, a, b) = &mut self.roots[i];
             let (hs, he) = (a.insert(*s), b.insert(*e));
-            if *tainted {
+            if *ts {
                 a.set_tainted(hs);
+            }
+            if *te {
+                b.set_tainted(he);
             }
             nodes.push((i, hs, he));
         }
@@ -448,9 +461,9 @@ impl RevertIndex {
 
     /// The regions of a change just applied (positions after it), until it is logged.
     pub fn stage(&mut self, regions: &[(String, usize, usize)]) {
-        let r: Vec<(String, usize, usize, bool)> = regions
+        let r: Vec<Edges> = regions
             .iter()
-            .map(|(root, s, e)| (root.clone(), *s, *e, false))
+            .map(|(root, s, e)| (root.clone(), *s, *e, false, false))
             .collect();
         let nodes = self.add(&r);
         self.staged.push(nodes);
@@ -466,6 +479,18 @@ impl RevertIndex {
 
     /// Record `seq`'s regions as carried now: `(root, start, end, tainted)`.
     pub fn bounds(&mut self, seq: Seq) -> Option<Vec<(String, usize, usize, bool)>> {
+        Some(
+            self.edges(seq)?
+                .into_iter()
+                .map(|(root, s, e, ts, te)| (root, s, e, ts || te))
+                .collect(),
+        )
+    }
+
+    /// Record `seq`'s regions as carried now, with the taint of each edge apart:
+    /// `(root, start, end, start tainted, end tainted)`. Revert needs the end's taint on
+    /// its own for the shared-edge rule ([`super::undo::revert_regions`]).
+    pub fn edges(&mut self, seq: Seq) -> Option<Vec<Edges>> {
         let nodes = self.records.get(&seq)?.clone();
         Some(
             nodes
@@ -474,7 +499,7 @@ impl RevertIndex {
                     let (root, a, b) = &mut self.roots[i];
                     let (s, ts) = a.get(hs);
                     let (e, te) = b.get(he);
-                    (root.clone(), s, e.max(s), ts || te)
+                    (root.clone(), s, e.max(s), ts, te)
                 })
                 .collect(),
         )
@@ -498,7 +523,7 @@ impl RevertIndex {
         let seqs: Vec<Seq> = self.records.keys().copied().collect();
         let mut now = Vec::with_capacity(seqs.len());
         for s in seqs {
-            now.push((s, self.bounds(s).expect("live record")));
+            now.push((s, self.edges(s).expect("live record")));
         }
         let mut fresh = Self::new();
         for (s, regions) in now {
@@ -538,10 +563,11 @@ impl RevertIndex {
                 if c.carried_to > upto {
                     break;
                 }
-                let r: Vec<(String, usize, usize, bool)> = c
+                // one persisted flag per region: taint both edges (conservative)
+                let r: Vec<Edges> = c
                     .regions
                     .iter()
-                    .map(|(root, a, b, t)| (root.clone(), *a as usize, *b as usize, *t))
+                    .map(|(root, a, b, t)| (root.clone(), *a as usize, *b as usize, *t, *t))
                     .collect();
                 let nodes = ix.add(&r);
                 ix.records.insert(*s, nodes);
@@ -555,7 +581,7 @@ impl RevertIndex {
                 let mut r = Vec::new();
                 for rs in &shape {
                     for (s, e) in regions_of_shape(&rs.hunks) {
-                        r.push((rs.root.clone(), s, e, false));
+                        r.push((rs.root.clone(), s, e, false, false));
                     }
                 }
                 let nodes = ix.add(&r);

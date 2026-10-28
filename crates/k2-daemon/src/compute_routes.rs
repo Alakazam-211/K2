@@ -2925,7 +2925,10 @@ fn source_for(ws: &Ws, v: &serde_json::Value, blob_out: &Path, warnings: &mut Ve
     let rel = {
         let base = dunce::canonicalize(&Path::new(&ws.path)).ok();
         let r = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
-        base.and_then(|b| r.strip_prefix(&b).ok().map(|p| p.to_string_lossy().into_owned())).unwrap_or_else(|| r.to_string_lossy().into_owned())
+        // A relative path reads with '/' on every OS (Windows: '\' → '/';
+        // on Unix a '\' is part of a file name and stays).
+        let slash = |s: String| if cfg!(windows) { s.replace('\\', "/") } else { s };
+        base.and_then(|b| r.strip_prefix(&b).ok().map(|p| slash(p.to_string_lossy().into_owned()))).unwrap_or_else(|| r.to_string_lossy().into_owned())
     };
     if dirty && sha.is_some() {
         // --dirty is a diff against the checkout's HEAD: --sha may only

@@ -12268,7 +12268,9 @@ CUSTOM DOMAINS (a dotted name outside k2.dev)
   front on this box (the owner runs k2 front enable; Linux). The zone must
   be attached first (k2 domain add <apex>, owner). K2 re-checks daily; DNS
   pointing elsewhere for 7 days stops serving the name. A bound name is in
-  K2_APP_ORIGINS only once it is live; the App's k2.dev names stay.
+  K2_APP_ORIGINS only once it is live, from the App's next start: run
+  k2 app restart <app-id> after it goes live (and after primary). The
+  App's k2.dev names stay.
 
   Which path: this box's own IP (path a, above) is for a server with a
   public IP on its own interface (a datacentre box). A server on a home or
@@ -20270,7 +20272,9 @@ k2 firewall — the ports this server serves publicly, and your options
   k2 firewall ssh allow <cidr>...         SSH only from these (never an empty list)
   k2 firewall ssh port <n>                record where sshd listens (K2 doesn't move sshd)
   k2 firewall open <port>/<tcp|udp> --label "<why>" [--from <cidr>]...
-                                          publish a port for something you run
+                                          add a port for something you run to the public
+                                          list (it opens where the list is applied:
+                                          k2 firewall says who; nobody = k2 firewall rules)
   k2 firewall close <port>/<tcp|udp>      your ports only (never SSH, never K2's)
   k2 firewall guard [on|off] [--conns-per-ip N] [--writes-per-min N] [--reset]
                                           the App guard's box defaults (on, 64, 120)
@@ -20278,7 +20282,8 @@ k2 firewall — the ports this server serves publicly, and your options
                                           one App's write limit (its own agent may tighten it)
   k2 firewall upstream --hash <sha256:…> --provider <name> [--applied-at <unix>]
                        [--managed-by k2|owner|auto]
-                                          record that the list was applied at the provider (owner)
+                                          record that the list was applied at the provider (owner;
+                                          the hash is k2 firewall ports --json's)
 
 SSH is always public (narrow it, never close it). A port K2 opened for a
 feature (the :443 front, hosted mail, Sew voice) is read-only here: turn
@@ -77425,8 +77430,9 @@ EOF
         # Exact match only. Does not steal app-update or update --app.
         case "${2:-}" in
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
-            # 0.46.4: `k2 app data` too (put|ls|get|rm|mv).
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest|data)
+            # 0.46.4: `k2 app data` too (put|ls|get|rm|mv). 0.46.6: `k2 app
+            # domain` (its custom-domain help, not the App family's).
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest|data|domain)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

@@ -469,10 +469,12 @@ pub fn recipients_json(row: &store::LogRow) -> J {
         oc::K_DELAYED => 2,
         _ => 0,
     };
-    let word = |k: &str| match k {
-        oc::K_HARD | oc::K_SOFT => "bounced",
-        k => k,
-    };
+    fn word(k: &str) -> &str {
+        match k {
+            oc::K_HARD | oc::K_SOFT => "bounced",
+            k => k,
+        }
+    }
     let outcomes = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -481,7 +483,7 @@ pub fn recipients_json(row: &store::LogRow) -> J {
     let mut best: HashMap<String, String> = HashMap::new();
     for (h, k) in outcomes {
         let e = best.entry(h).or_default();
-        if rank(&k) > rank(e) {
+        if rank(&k) > rank(e.as_str()) {
             *e = k;
         }
     }

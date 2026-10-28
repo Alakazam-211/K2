@@ -22,6 +22,10 @@ _K2_WINDOWS=""
 case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*)
         _K2_WINDOWS=1
+        # Python on Windows writes pipes and opens files in the ANSI code
+        # page (cp1252): "✓" crashed it and "—" came out as a non-UTF-8
+        # byte. UTF-8 mode makes it read and write UTF-8, as on macOS/Linux.
+        export PYTHONUTF8=1
         _k2_py=""
         for _k2_c in "command python3" "py -3" "python"; do
             if $_k2_c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then

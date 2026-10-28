@@ -66705,7 +66705,7 @@ def app_suffix(row):
     if a.get("error") == "unknown_app":
         return "  (not served: no App %s here)" % (a.get("app") or "?")
     if a.get("external"):
-        return "  (served by your own proxy, not by K2%s)" % ("; primary" if a.get("primary") else "")
+        return "  (served by your own web server, not by K2%s)" % ("; primary" if a.get("primary") else "")
     if a.get("notServedYet"):
         s = "  (not served yet: %s)" % (a.get("state") or "waiting_dns")
     else:

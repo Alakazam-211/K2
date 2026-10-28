@@ -1304,17 +1304,18 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/admin/people/grant", Admin),
     post("/cli/sew/admin/people/revoke", Admin),
     post("/cli/sew/admin/people/update", Admin),
+    // - S32 K31: App ↔ Space bindings (read: any login; bind/unbind: the
+    //   Manage Sew gate in the handler, Admin floor for logins).
+    // ("app-spaces" sorts before "approvals": '-' < 'r'.)
+    get("/cli/sew/app-spaces", Member),
+    post("/cli/sew/app-spaces/bind", Admin),
+    post("/cli/sew/app-spaces/unbind", Admin),
     get("/cli/sew/approvals", Admin),
     post("/cli/sew/approvals/approve", Admin),
     post("/cli/sew/approvals/approve-batch", Admin),
     post("/cli/sew/approvals/deny", Admin),
     get("/cli/sew/approvals/policy", Admin),
     post("/cli/sew/approvals/policy/set", Admin),
-    // - S32 K31: App ↔ Space bindings (read: any login; bind/unbind: the
-    //   Manage Sew gate in the handler, Admin floor for logins).
-    get("/cli/sew/app-spaces", Member),
-    post("/cli/sew/app-spaces/bind", Admin),
-    post("/cli/sew/app-spaces/unbind", Admin),
     get("/cli/sew/backups", Member),
     get("/cli/sew/chat/access", NoLogin),
     get("/cli/sew/chat/channels", NoLogin),

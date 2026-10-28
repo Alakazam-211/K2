@@ -46,7 +46,8 @@ use k2_mpc_base::session::{
     Approval, ApprovalState, ConflictRegion, DiskState, EditResult, EditWithError, LogItem, LogQuery, Need, RosterEntry,
     Role, Session, SessionError, Stay, UndoMode, UndoOutcome, UndoRequest, VersionInfo, WriteOutcome,
 };
-use k2_mpc_base::store::DocStore;
+use k2_mpc_base::store::{DocKey, DocStore};
+use k2_core::log_debug;
 use k2_mpc_base::text::merge::Conflict;
 use k2_mpc_base::text::Hunk;
 use k2_mpc_base::{Edit, ParticipantKind};
@@ -91,7 +92,7 @@ const ROOT: &str = k2_mpc_markdown::ROOT;
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
-    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT,
+    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV,
 ];
 
 pub const VERSIONS: &str = "/cli/docs/versions";
@@ -100,6 +101,7 @@ pub const DIFF: &str = "/cli/docs/diff";
 pub const RESTORE: &str = "/cli/docs/restore";
 pub const NAME: &str = "/cli/docs/name";
 pub const REVERT: &str = "/cli/docs/revert";
+pub const MV: &str = "/cli/docs/mv";
 
 fn is_post_route(path: &str) -> bool {
     matches!(
@@ -114,6 +116,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/flush"
             | "/cli/docs/tool"
             | "/cli/docs/name"
+            | "/cli/docs/mv"
     ) || is_edit_route(path)
 }
 
@@ -278,6 +281,9 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         Err(resp) => return resp,
     };
     let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights };
+    if path == MV {
+        return mv(&rt, &session, &call);
+    }
     let r = verb(path, &session, &call);
     match r {
         // The pool unloaded the session between open and the call (it was
@@ -774,6 +780,72 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
             exit,
         )),
     }
+}
+
+/// `mv` (P21): rename the doc's file within its workspace, keeping the doc
+/// (history, presence, undo). Needs edit on the doc and at the new name.
+/// Unwritten edits are flushed to the old name first; the file is renamed;
+/// the store record and session move (`rekey`, `file_moved`). A failed
+/// rekey renames the file back. File shares of the old name follow it
+/// (K-PERM-11); a folder share covers the new name only if it is inside.
+fn mv(rt: &Arc<super::Runtime>, s: &Arc<Session>, c: &Call) -> CliResponse {
+    let t = c.target;
+    if !c.rights.edit {
+        return session_error(&SessionError::Forbidden { need: Need::Edit });
+    }
+    let Some(to) = c.input.str("to") else {
+        return bad("to is required: the new name (relative to the workspace)");
+    };
+    let (new_rel, new_abs) = match target::resolve_new(t, &to) {
+        Ok(x) => x,
+        Err(r) => return target_refusal(r),
+    };
+    let new_key = DocKey { space: t.project_id.clone(), path: new_rel.clone() };
+    let store = rt.store();
+    if !host::rights_for(&c.caller.pid(), &new_key, store.as_deref()).edit {
+        return with_exit(
+            refusal("403 Forbidden", "doc_forbidden", format!("you can't create {new_rel} there")),
+            k2_mpc_base::tools::exit::REFUSED,
+        );
+    }
+    let j = match join(s, c, Stay::UntilIdle) {
+        Ok(j) => j,
+        Err(e) => return session_error(&e),
+    };
+    if let Err(e) = s.flush(j.conn) {
+        return session_error(&e);
+    }
+    if let Err(e) = std::fs::rename(&t.abs, &new_abs) {
+        return with_exit(
+            refusal("500 Internal Server Error", "disk_error", format!("rename failed: {e}")),
+            k2_mpc_base::tools::exit::NO,
+        );
+    }
+    if let Err(e) = rt.rekey(&t.key(), &new_key, &new_abs) {
+        let _ = std::fs::rename(&new_abs, &t.abs);
+        return session_error(&e);
+    }
+    if let Err(e) = s.file_moved(&new_abs) {
+        log_debug!("[docs] WARN: file_moved after mv to {new_rel}: {e}");
+    }
+    let mut moved_shares = 0usize;
+    if let Some(store) = store.as_deref() {
+        if let Ok(list) = shares::list(store, Some(&t.project_id), None) {
+            for sh in list.into_iter().filter(|sh| !sh.folder && sh.path == t.rel) {
+                if shares::remove(store, &sh.owner, &sh.sharee, &sh.path).is_ok() {
+                    let moved = Share { path: new_rel.clone(), ..sh };
+                    if shares::put(store, &moved).is_ok() {
+                        moved_shares += 1;
+                    }
+                }
+            }
+        }
+    }
+    ok(json!({
+        "doc": { "workspace": t.project_id, "path": new_rel },
+        "from": t.rel,
+        "sharesMoved": moved_shares,
+    }))
 }
 
 /// Most argv words a tool call may carry.
@@ -1462,5 +1534,41 @@ mod tests {
         let person = super::super::caller::owner();
         let resp = handle("GET", READ, &params, br#"{"path":"a.md","onBehalfOf":"owner"}"#, &person);
         assert!(resp.status.starts_with("400"), "{}", resp.status);
+    }
+
+    /// K-PAR-5: every verb of the kit's registry for the Markdown pack is a
+    /// `k2 doc` verb. The CLI either names it in `cmd_doc` or forwards it to
+    /// the daemon's tools (kit tools and the pack's own verbs), and its help
+    /// shows it. A new kit or pack verb fails here until the CLI has it.
+    #[test]
+    fn every_registry_verb_is_a_k2_doc_verb() {
+        let cli = include_str!("../../../../cli/k2");
+        let start = cli.find("\ncmd_doc() {").expect("cmd_doc in cli/k2");
+        let end = cli[start..].find("# END_CLI_DOC").expect("END_CLI_DOC") + start;
+        let body = &cli[start..end];
+        let mut labels: Vec<String> = Vec::new();
+        for line in body.lines() {
+            let l = line.trim_start();
+            if let Some((pat, _)) = l.split_once(')') {
+                if !pat.is_empty() && pat.chars().all(|c| c.is_ascii_lowercase() || c == '|' || c == '-') {
+                    labels.extend(pat.split('|').map(str::to_string));
+                }
+            }
+        }
+        let usage_start = cli.find("\n_doc_usage() {").expect("_doc_usage");
+        let usage = &cli[usage_start..cli[usage_start..].find("\nEOF\n").expect("usage end") + usage_start];
+        let reg = k2_mpc_base::parity::Registry::for_pack(&k2_mpc_markdown::PACK).expect("registry");
+        let mut missing = Vec::new();
+        for v in reg.verbs() {
+            let word = v.name.split_whitespace().next().unwrap_or(v.name);
+            let routed = labels.iter().any(|l| l == word)
+                || k2_mpc_base::tools::is_kit_verb(word)
+                || k2_mpc_base::session::Pack::verbs(&k2_mpc_markdown::PACK).iter().any(|p| p.name() == word);
+            let documented = usage.contains(&format!("k2 doc {word}")) || usage.contains(&format!(" {word} ")) || usage.contains(&format!("|{word}")) || usage.contains(&format!("{word}|"));
+            if !routed || !documented {
+                missing.push(format!("{} (routed {routed}, in help {documented})", v.name));
+            }
+        }
+        assert!(missing.is_empty(), "registry verbs k2 doc lacks: {missing:?}");
     }
 }

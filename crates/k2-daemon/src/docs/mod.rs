@@ -276,6 +276,24 @@ impl Runtime {
         }
     }
 
+    /// `mv`: the doc at `old` now lives at `new` (`new_abs`, already renamed
+    /// on disk by the caller). Moves the store record and the loaded
+    /// session's key; the watcher index and `.k2/` watches follow.
+    pub fn rekey(&self, old: &DocKey, new: &DocKey, new_abs: &Path) -> Result<(), SessionError> {
+        self.manager.rekey(old, new.clone())?;
+        let mut set = self.opened.lock().expect("docs opened set");
+        if let Some(p) = set.remove(old) {
+            if old.path.starts_with(".k2/") {
+                self.watch.unwatch_k2_file(&p);
+            }
+        }
+        set.insert(new.clone(), new_abs.to_path_buf());
+        if new.path.starts_with(".k2/") {
+            self.watch.watch_k2_file(new_abs);
+        }
+        Ok(())
+    }
+
     /// Loaded session for `key`, if any (never loads).
     pub fn get(&self, key: &DocKey) -> Option<Arc<Session>> {
         self.manager.get(key)

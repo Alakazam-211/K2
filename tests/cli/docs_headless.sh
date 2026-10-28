@@ -459,6 +459,29 @@ cli agent "$B" doc revert 999999 home.md
 want_rc 4 "no such change"
 ok "revert of an unknown change: exit 4"
 
+echo "== k2 doc: the pack's own verb, and mv =="
+printf '# T\n\n## A\nold a\n\n## B\nb\n' >"$B/sec.md"
+CLI_IN=$'new a\n'
+cli agent "$B" doc replace-section --heading "## A" sec.md
+want_rc 0 "replace-section"
+for _ in $(seq 1 80); do grep -q 'new a' "$B/sec.md" && break; sleep 0.1; done
+grep -q 'new a' "$B/sec.md" && ! grep -q 'old a' "$B/sec.md" || fail "replace-section never reached the file: $(cat "$B/sec.md")"
+ok "replace-section (the Markdown pack's verb) is one atomic change"
+CLI_IN=$'x\n'
+cli agent "$B" doc replace-section --heading "## Nope" sec.md
+want_rc 1 "replace-section not found"
+ok "replace-section of a missing heading: exit 1, nothing applied"
+cli agent "$B" doc mv sec.md moved.md
+want_rc 0 "mv"
+[ -f "$B/moved.md" ] && [ ! -e "$B/sec.md" ] || fail "mv: files are $(ls "$B")"
+cli agent "$B" doc log moved.md
+want_rc 0 "log after mv"
+has "$OUT" "edit" "the moved doc keeps its history"
+ok "mv renames the file; the doc keeps its history"
+cli agent "$B" doc mv moved.md ../escape.md
+want_rc 2 "mv out of the workspace"
+ok "mv can't leave the workspace"
+
 cli agent "$B" doc cat -w "$A" notes/plan.md
 want_rc 3 "cross-workspace refused"
 has "$ERR" "doc_not_shared" "cross-workspace refused"

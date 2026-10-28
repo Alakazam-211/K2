@@ -71767,6 +71767,8 @@ Edit (each is one change; your own `undo` reverts it):
   k2 doc insert --line N|--after N|--at L:C <f> < text   (or --text "...")
   k2 doc replace --lines a,b|--range L:C-L:C <f> < text  (or --text "...")
   k2 doc delete --lines a,b|--range L:C-L:C <f>
+  k2 doc replace-section --heading "## X" [--include-heading] [--nth K] <f> < text
+  k2 doc mv <f> <new-name.md>         rename; the doc keeps its history and presence
   k2 doc write --base V|live <f> < whole-file   three-way merge from version V
   k2 doc undo [--steps N] [--partial|--drop] [--for <person>] <f> · redo [--steps N] <f>
   k2 doc revert <change> [--partial] <f>   reverse one change from the log, days later
@@ -71885,9 +71887,9 @@ _doc_call() {
 # _doc_body PATH [key value]... → JSON body with workspace/path/onBehalfOf.
 # A value "@stdin" is replaced by stdin's text, "@text" by --text,
 # "@file" by --file's content (all byte-exact).
-_doc_body() {
-    python3 - "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$_DOC_FILE" "$@" <<'PY'
-import json, sys
+# The script rides `-c`, not a heredoc: a heredoc would BE python's stdin,
+# and the doc's text comes from stdin.
+_DOC_BODY_PY='import json, sys
 ws, ob, text_set, text, file_, path, rest = sys.argv[1], sys.argv[2], sys.argv[3] == "1", sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7:]
 d = {}
 if ws:
@@ -71914,8 +71916,9 @@ for i in range(0, len(rest), 2):
     elif v.startswith("@int:"):
         v = int(v[5:])
     d[k] = v
-print(json.dumps(d))
-PY
+print(json.dumps(d))'
+_doc_body() {
+    python3 -c "$_DOC_BODY_PY" "$_DOC_WS" "$_DOC_OB" "$_DOC_TEXT_SET" "$_DOC_TEXT" "$_DOC_FILE" "$@"
 }
 
 # _doc_query PATH [key value]... → urlencoded query for the GET routes.
@@ -72023,7 +72026,7 @@ _doc_tool() {
     path="$(_doc_path "$path")"
     local needs_stdin=0
     case "$verb" in
-        diff|patch|apply|append|insert|replace) needs_stdin=1 ;;
+        diff|patch|apply|append|insert|replace|replace-section) needs_stdin=1 ;;
     esac
     local body
     if [ "$needs_stdin" = 1 ]; then
@@ -72550,11 +72553,28 @@ for s in rows:
     grants = ["read"] + [g for g in ("write", "history") if s.get(g)]
     print("%s:%s%s -> %s  (%s)" % (s.get("owner"), s.get("path") or ".", "/" if s.get("folder") else "", s.get("sharee"), ", ".join(grants)))
 ' ;;
+        mv)
+            _doc_parse "$@"
+            [ ${#_DOC_ARGS[@]} -eq 2 ] || _doc_die usage "k2 doc mv <file.md> <new-name.md>"
+            local path to
+            path="$(_doc_path "${_DOC_ARGS[0]}")"
+            to="${_DOC_ARGS[1]}"
+            # A new name from where you stand (its folder exists here) goes
+            # absolute; with -w it stays relative to that workspace.
+            if [ -z "$_DOC_WS" ] && [ "${_K2_FORCE_TCP:-0}" != "1" ] && [ -d "$(dirname "$to")" ]; then
+                to="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$to")"
+            fi
+            _doc_call POST /cli/docs/mv "$(_doc_body "$path" to "$to")"
+            _doc_print_json_or 'import json,sys; v=json.load(sys.stdin); print("moved %s -> %s" % (v.get("from"), v["doc"]["path"]))' ;;
         help) _doc_usage ;;
         *)
-            echo "Error: unknown k2 doc verb: $verb" >&2
-            _doc_usage >&2
-            exit 2 ;;
+            # A verb of the doc's own pack (Markdown: replace-section), or a
+            # kit tool this CLI doesn't list: the daemon's tools decide
+            # (an unknown verb exits 2, unsupported).
+            case "$verb" in
+                -*|*[!a-z-]*) _doc_die usage "unknown k2 doc verb: $verb (k2 doc --help)" ;;
+            esac
+            _doc_tool "$verb" "$@" ;;
     esac
 }
 # END_CLI_DOC

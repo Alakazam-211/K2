@@ -21,6 +21,18 @@ set -euo pipefail
 : "${K2_APP:?set K2_APP (the service id of the App)}"
 : "${K2_PASS:?set K2_PASS (a guest web session pass)}"
 command -v curl >/dev/null || { echo "FAIL: curl is required" >&2; exit 2; }
+# Windows (Git Bash): `python3` is usually the Microsoft Store stub. Use the
+# first real Python 3 (as cli/k2 does) and drop the CRs it writes to pipes.
+case "$(uname -s 2>/dev/null)" in
+	MINGW*|MSYS*|CYGWIN*)
+		for c in "command python3" "py -3" "python"; do
+			if $c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+				eval "python3() { $c \"\$@\" | tr -d '\\r'; }"
+				break
+			fi
+		done
+		;;
+esac
 command -v python3 >/dev/null || { echo "FAIL: python3 is required" >&2; exit 2; }
 
 tmp="$(mktemp -d)"

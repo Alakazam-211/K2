@@ -2541,13 +2541,10 @@ fn background_image_is_capped_typed_and_keeps_its_last_good_copy() {
     std::fs::remove_file(dir.join("wall.png")).expect("rm");
     let outside = f.root().join("outside.png");
     std::fs::write(&outside, &ok).expect("outside");
-    #[cfg(unix)]
-    {
-        k2_core::test_env::symlink(&outside, dir.join("wall.png")).expect("symlink");
-        let g = f.resolve(None).expect("link");
-        assert!(g["errors"][0]["message"].as_str().is_some_and(|m| m.contains("is a link")), "{g}");
-        assert_eq!(g["theme"]["background"]["lastGood"], true, "a link never replaces the last good image");
-    }
+    k2_core::test_env::symlink(&outside, dir.join("wall.png")).expect("symlink");
+    let g = f.resolve(None).expect("link");
+    assert!(g["errors"][0]["message"].as_str().is_some_and(|m| m.contains("is a link")), "{g}");
+    assert_eq!(g["theme"]["background"]["lastGood"], true, "a link never replaces the last good image");
 
     // theme new --from a user theme copies its image.
     std::fs::remove_file(dir.join("wall.png")).expect("rm link");

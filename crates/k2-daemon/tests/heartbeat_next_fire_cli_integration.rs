@@ -137,7 +137,8 @@ async fn headless_list_route_and_cli_show_next_fire_and_wait_reason() {
         "-H",
         "Content-Type: application/json",
         "--data",
-        &format!(r#"{{"path":"{ws}","seedWiki":false,"seedAgentsMd":false}}"#),
+        // serde_json: a Windows path's backslashes must be escaped.
+        &serde_json::json!({ "path": ws, "seedWiki": false, "seedAgentsMd": false }).to_string(),
         &format!("{base}/cli/projects/add-without-git?token={token}"),
     ]);
     assert!(!add_ws.contains("\"error\""), "workspace add failed: {add_ws}");

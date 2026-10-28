@@ -69,6 +69,23 @@ HISTORY (needs the history right)
   k2 doc versions · show --version V · diff --version V [--to W]
   k2 doc restore --version V notes.md a NEW change by you; undo reverses it
   k2 doc undo --partial               undo what still can be, report the rest (exit 1)
+  k2 doc blame notes.md               restored text shows "(restored by <who> in <change>)"
+
+UNDO, REDO AND REVERT
+  Undo, redo and revert only ever remove text that the change they reverse put
+  there. Your undo never removes text someone else wrote, even if it is
+  identical to yours, and someone else's undo never stands in the way of
+  yours. Text put back by an undo or redo keeps its original author: blame
+  shows who wrote it and who restored it, and later undos and reverts treat it
+  as the original author's. If someone else has since changed the same lines,
+  the undo applies what it cleanly can and reports the rest as a conflict; it
+  never overwrites their change. Nothing is lost: undone text stays in history
+  and can be restored. This holds across restarts.
+  In k2 doc: an undo, redo or revert that conflicts applies nothing and exits 1
+  (it lists the conflicts); --partial applies the clean parts and reports the
+  rest (exit 1). They aren't checked against your last read.
+  k2 doc blame --json: restoredBy / restoredIn on each line; --porcelain: the
+  restored-by / restored-in lines.
 
 ANY OTHER FILE (tier 0: images, PDFs, office files; for now .txt and code too)
   Not Markdown: presence, a lease, versions and restore, no live merging.

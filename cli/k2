@@ -45730,6 +45730,23 @@ HISTORY (needs the history right)
   k2 doc versions · show --version V · diff --version V [--to W]
   k2 doc restore --version V notes.md a NEW change by you; undo reverses it
   k2 doc undo --partial               undo what still can be, report the rest (exit 1)
+  k2 doc blame notes.md               restored text shows "(restored by <who> in <change>)"
+
+UNDO, REDO AND REVERT
+  Undo, redo and revert only ever remove text that the change they reverse put
+  there. Your undo never removes text someone else wrote, even if it is
+  identical to yours, and someone else's undo never stands in the way of
+  yours. Text put back by an undo or redo keeps its original author: blame
+  shows who wrote it and who restored it, and later undos and reverts treat it
+  as the original author's. If someone else has since changed the same lines,
+  the undo applies what it cleanly can and reports the rest as a conflict; it
+  never overwrites their change. Nothing is lost: undone text stays in history
+  and can be restored. This holds across restarts.
+  In k2 doc: an undo, redo or revert that conflicts applies nothing and exits 1
+  (it lists the conflicts); --partial applies the clean parts and reports the
+  rest (exit 1). They aren't checked against your last read.
+  k2 doc blame --json: restoredBy / restoredIn on each line; --porcelain: the
+  restored-by / restored-in lines.
 
 ANY OTHER FILE (tier 0: images, PDFs, office files; for now .txt and code too)
   Not Markdown: presence, a lease, versions and restore, no live merging.
@@ -83747,6 +83764,19 @@ names the version yourself.
   k2 doc write --base V|live <f> < whole-file   three-way merge from version V
   k2 doc undo [--steps N] [--partial|--drop] [--for <person>] <f> · redo [--steps N] <f>
   k2 doc revert <change> [--partial] <f>   reverse one change from the log, days later
+  Undo, redo and revert only ever remove text that the change they reverse put
+  there. Your undo never removes text someone else wrote, even if it is
+  identical to yours, and someone else's undo never stands in the way of
+  yours. Text put back by an undo or redo keeps its original author: blame
+  shows who wrote it and who restored it, and later undos and reverts treat it
+  as the original author's. If someone else has since changed the same lines,
+  the undo applies what it cleanly can and reports the rest as a conflict; it
+  never overwrites their change. Nothing is lost: undone text stays in history
+  and can be restored. This holds across restarts.
+  In k2 doc: an undo, redo or revert that conflicts applies nothing and exits 1
+  (it lists the conflicts); --partial applies the clean parts and reports the
+  rest (exit 1). They aren't checked against your last read. --drop removes
+  your top step without applying it; --for <person> undoes what you did for them.
 Presence:
   k2 doc who <f> · follow <name> <f> · cursor --at L:C [--to L:C] <f>
   k2 doc claim --lines a,b [--ttl 2m] [--note "why"] [--hold] <f>   "I'm working
@@ -83766,7 +83796,9 @@ State and history:
 History (needs the history right):
   k2 doc log [--by P] [--since 2h] [-n N] [--pending] [--for P|me] <f>   changes + versions
   k2 doc versions <f> · show --version V [--out FILE] <f> · diff --version V [--to W] [-U N] <f>
-  k2 doc blame [-L a,b] <f>           who last changed each line (change, author, time)
+  k2 doc blame [-L a,b] [--porcelain] <f>   who wrote each line (change, author, time;
+                                      restored text: who restored it, in which change;
+                                      --json: restoredBy, restoredIn)
   k2 doc restore --version V <f>      forward: a new change you can undo
   k2 doc version --name "before launch" [--version V] <f>
   k2 doc approvals [--pending] [--mine] <f> · approve|decline <change> <f>
@@ -84978,12 +85010,13 @@ for s in rows:
     print("%s:%s%s -> %s  (%s)" % (s.get("owner"), s.get("path") or ".", "/" if s.get("folder") else "", s.get("sharee"), ", ".join(grants)))
 ' ;;
         blame)
-            local range=""
+            local range="" form="rendered"
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
                     -L) range="${2:-}"; shift 2 ;;
                     -L*) range="${1#-L}"; shift ;;
+                    --porcelain|--line-porcelain) form="porcelain"; shift ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
@@ -84993,7 +85026,7 @@ for s in rows:
             _doc_one_path blame; local path="$_DOC_PATH"
             _doc_call GET /cli/docs/blame "$(_doc_query "$path" lines "$range")"
             if [ "${_DOC_JSON:-0}" = "1" ]; then printf '%s\n' "$_DOC_BODY"; return 0; fi
-            printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("rendered", ""))' ;;
+            printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; v = json.load(sys.stdin); sys.stdout.write(v.get(sys.argv[1]) or v.get("rendered") or "")' "$form" ;;
         mv)
             _doc_parse "$@"
             [ ${#_DOC_ARGS[@]} -eq 2 ] || _doc_die usage "k2 doc mv <file.md> <new-name.md>"

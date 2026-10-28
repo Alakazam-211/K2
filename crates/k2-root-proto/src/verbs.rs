@@ -2473,6 +2473,7 @@ mod tests {
                 Verb::Sew(SewVerb::Stage | SewVerb::StageMedia) => assert_eq!(cap, Some(CAP_INSTALL_BIN)),
                 Verb::Sew(
                     SewVerb::Install
+                    | SewVerb::InstallReconfigure
                     | SewVerb::Config
                     | SewVerb::MediaInstall
                     | SewVerb::MediaReconfigure { .. }
@@ -2761,6 +2762,7 @@ mod tests {
             &["engine", "sew", "systemctl", "start-db"],
             &["engine", "sew", "systemctl", "start"],
             &["engine", "sew", "systemctl", "restart"],
+            &["engine", "sew", "systemctl", "reset-failed"],
             &["engine", "sew", "media", "status"],
         ];
         let daemon: &[&[&str]] = &[
@@ -2779,6 +2781,7 @@ mod tests {
             &["engine", "sew", "drop-prev"],
             &["engine", "sew", "restore", "20260927T031512Z"],
             &["engine", "sew", "token"],
+            &["engine", "sew", "install", "reconfigure"],
             &["engine", "sew", "media", "install"],
             &["engine", "sew", "media", "uninstall"],
             &["engine", "sew", "media", "upgrade"],

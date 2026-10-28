@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>K2SO — Final 0.39.X Creature Comforts · Design Review</title>
+<title>K2 — Final 0.39.X Creature Comforts · Design Review</title>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #2d333b;
@@ -53,7 +53,7 @@
 
 <h1>Final 0.39.X Creature Comforts</h1>
 <p class="sub">Design review — presence, viewer role, follow mode, message composer, finish notifications.<br>
-<span class="meta">DRAFT 2026-06-10 · PRD: .k2so/prds/0.39.x-final-creature-comforts.md · builds on 0.39.45 verified injection</span></p>
+<span class="meta">DRAFT 2026-06-10 · PRD: .k2/prds/0.39.x-final-creature-comforts.md · builds on 0.39.45 verified injection</span></p>
 
 <div class="toc">
   <b>Contents</b>
@@ -222,7 +222,7 @@ and submit-verified (the UI can truthfully say "delivered ✓").</p>
 textarea (Enter = send, Shift+Enter = newline) with a per-message status lane.<br>
 ② <b>No new top-level UI</b> — it's part of the terminal pane. Hidden for Viewer role.<br>
 ③ Daemon: new session-scoped <code>terminal/send-message</code> route (the workspace-scoped
-<code>k2so msg</code> path is unchanged and gains the same per-session serialization).</div>
+<code>k2 msg</code> path is unchanged and gains the same per-session serialization).</div>
 
 <div class="mock"><span class="dimm">│</span> <span class="hl">╭─ claude ────────────────────────────────────────────╮</span>
 <span class="dimm">│</span> <span class="hl">│ > [from scout_v3] PR #41 is ready for review        │</span>
@@ -242,8 +242,8 @@ never sends a name, so it can't be spoofed and it works identically over K2 Conn
 we revisit local naming later if/when local multi-user matters.</div>
 
 <div class="nuance"><b class="h">NUANCE — the serialization is the real anti-splice fix</b>
-A per-session injection lock means a human send, a <code>k2so msg</code> from another agent, and a
-second human all deliver strictly one-at-a-time. Today even two concurrent <code>k2so msg</code> calls
+A per-session injection lock means a human send, a <code>k2 msg</code> from another agent, and a
+second human all deliver strictly one-at-a-time. Today even two concurrent <code>k2 msg</code> calls
 to one session could theoretically interleave — this closes that too.</div>
 
 <div class="decision"><b class="h">DECISION D3 — composer ≠ terminal input</b>

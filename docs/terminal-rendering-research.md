@@ -1,6 +1,6 @@
 # Terminal Rendering Research: Alacritty + Tauri WebView
 
-> **Context**: K2SO is building the first open-source terminal that combines alacritty_terminal (Rust VT100 emulator) with a Tauri WebView frontend. No one has done this before — every prior alacritty integration uses native GPU rendering (Metal/OpenGL). This document compiles everything we've learned about the pieces we're working with.
+> **Context**: K2 is building the first open-source terminal that combines alacritty_terminal (Rust VT100 emulator) with a Tauri WebView frontend. No one has done this before — every prior alacritty integration uses native GPU rendering (Metal/OpenGL). This document compiles everything we've learned about the pieces we're working with.
 
 ---
 
@@ -11,7 +11,7 @@
 3. [How Zed Does It](#3-how-zed-does-it)
 4. [Tauri + WKWebView Rendering](#4-tauri--wkwebview-rendering)
 5. [Web Terminal Rendering Approaches](#5-web-terminal-rendering-approaches)
-6. [K2SO Current Implementation](#6-k2so-current-implementation)
+6. [K2 Current Implementation](#6-k2so-current-implementation)
 7. [What We've Tried and Why It Failed](#7-what-weve-tried-and-why-it-failed)
 8. [Key Constraints and Trade-offs](#8-key-constraints-and-trade-offs)
 9. [Implementation Plans](#9-implementation-plans)
@@ -162,7 +162,7 @@ term.reset_damage();
 
 ### FairMutex
 
-Alacritty uses `FairMutex<Term>` to ensure the rendering thread gets fair access even when the PTY reader is flooding updates. Both Zed and K2SO use this pattern.
+Alacritty uses `FairMutex<Term>` to ensure the rendering thread gets fair access even when the PTY reader is flooding updates. Both Zed and K2 use this pattern.
 
 ---
 
@@ -303,7 +303,7 @@ This explains why **typing works but scroll doesn't**: keyboard events are real 
 
 ### Alternative: Native Metal View Overlay
 
-Tauri supports `macOSPrivateApi: true` (already enabled in K2SO). It's possible to:
+Tauri supports `macOSPrivateApi: true` (already enabled in K2). It's possible to:
 - Create a native `MTKView` (Metal) as a child NSView alongside the WebView
 - Render terminal content directly via Metal
 - Coordinate with WebView via Tauri IPC for layout
@@ -367,7 +367,7 @@ Used by xterm.js canvas/WebGL renderers:
 
 ---
 
-## 6. K2SO Current Implementation
+## 6. K2 Current Implementation
 
 ### Rust Side
 
@@ -580,7 +580,7 @@ Plan C (Native Metal) is the nuclear option — only pursue if Plans A and B bot
 
 ## Appendix: Key File Locations
 
-### K2SO
+### K2
 | File | Purpose |
 |------|---------|
 | `src-tauri/src/terminal/alacritty_backend.rs` | Main backend — PTY, event loop, emission loop |

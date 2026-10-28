@@ -15,7 +15,7 @@ Cursor stores conversations in two separate systems that don't share data:
 
 The IDE stores conversations as JSON in a SQLite key-value store (`cursorDiskKV` table). The CLI stores them as content-addressed protobuf blobs in per-session SQLite databases.
 
-When you create a conversation in the Cursor IDE, it is **not** available to `cursor-agent --resume`. K2SO bridges this gap.
+When you create a conversation in the Cursor IDE, it is **not** available to `cursor-agent --resume`. K2 bridges this gap.
 
 ### Storage Format Details
 
@@ -90,7 +90,7 @@ Individual message blobs are stored globally:
 
 - **Non-migratable sessions**: Sessions created in Cursor's "chat" mode (not "agent" mode) store conversations differently and don't have a `conversationState` field. These cannot be migrated.
 
-## User-Facing Flow in K2SO
+## User-Facing Flow in K2
 
 1. When a workspace is opened, K2SO checks for unmigrated Cursor IDE sessions
 2. If migratable sessions are found, a toast notification appears: "X Cursor conversations found — Migrate"

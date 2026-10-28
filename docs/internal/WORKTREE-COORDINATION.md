@@ -43,7 +43,7 @@ claim or finish a file.** Resolve collisions in favor of whoever claimed first.
   a manual/release-time step.
 
 ## Ground rules
-- `cargo check -p k2so-daemon` before any commit; commit small and often with
+- `cargo check -p k2-daemon` before any commit; commit small and often with
   clear messages so cherry-pick order is reconstructible.
 - No version bumps, no WHATS_NEW edits (release.sh owns those; Rosson's go).
 - Integration = cherry-pick onto main; never merge the branch.

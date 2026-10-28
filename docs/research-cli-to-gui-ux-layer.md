@@ -12,7 +12,7 @@
 4. [Terminal-Native Approaches](#terminal-native-approaches)
 5. [ANSI-to-GUI Conversion](#ansi-to-gui-conversion)
 6. [Rich Terminal Protocols](#rich-terminal-protocols)
-7. [What K2SO Could Do](#what-k2so-could-do)
+7. [What K2 Could Do](#what-k2-could-do)
 
 ---
 
@@ -269,15 +269,15 @@ Supported by iTerm2, WezTerm, Rio Terminal.
 
 ---
 
-## What K2SO Could Do
+## What K2 Could Do
 
-Given K2SO's architecture (Tauri + React + xterm.js + PTY manager), here are the viable approaches for layering a polished AI UX on top of CLI tools:
+Given K2's architecture (Tauri + React + xterm.js + PTY manager), here are the viable approaches for layering a polished AI UX on top of CLI tools:
 
 ### Option 1: Direct API Integration (Cursor's Approach)
 
 **What**: Call LLM APIs directly from the Rust backend, stream responses to a custom React panel.
 
-**How it would work in K2SO**:
+**How it would work in K2**:
 - Rust backend makes HTTP requests to Claude/OpenAI APIs with SSE streaming
 - Streams tokens to the frontend via Tauri events
 - React chat panel renders markdown, code diffs, and tool calls as structured UI components
@@ -286,13 +286,13 @@ Given K2SO's architecture (Tauri + React + xterm.js + PTY manager), here are the
 **Pros**: Best UX, full control, fastest rendering, no terminal artifacts
 **Cons**: Must reimplement everything the CLI tools do (tool use, file editing, context management); expensive API costs; loses the ecosystem of CLI tool features
 
-**Why NOT for K2SO**: This bypasses the user's personal account and the provider's CLI harness entirely. K2SO would have to reimplement every provider's agentic tool-use system, auth flows, and unique features. It also forces users onto API billing instead of their existing subscriptions (Claude Max, Gemini, etc.). This is what IDEs do — K2SO is not an IDE.
+**Why NOT for K2**: This bypasses the user's personal account and the provider's CLI harness entirely. K2 would have to reimplement every provider's agentic tool-use system, auth flows, and unique features. It also forces users onto API billing instead of their existing subscriptions (Claude Max, Gemini, etc.). This is what IDEs do — K2 is not an IDE.
 
 ### Option 2: Hybrid Panel + Terminal (Cline's Approach)
 
 **What**: Run CLI tools in PTYs for execution, but render a structured chat UI alongside.
 
-**How it would work in K2SO**:
+**How it would work in K2**:
 - AI chat panel is a React component (not a terminal) that shows the conversation
 - When the AI needs to run a command, it executes in a real PTY terminal tab
 - Chat panel shows structured blocks: user message, AI response (markdown), tool calls (expandable accordions), command output (captured and syntax-highlighted)
@@ -301,13 +301,13 @@ Given K2SO's architecture (Tauri + React + xterm.js + PTY manager), here are the
 **Pros**: Leverages existing PTY infrastructure; terminal stays for power users; chat panel provides the "polished" layer
 **Cons**: Dual interface (chat panel + terminal tabs) can be confusing; need to capture and relay terminal output to the chat panel
 
-**Why NOT for K2SO**: Same fundamental problem as Option 1 — it replaces the CLI tool's native interface with a custom one. Users lose the provider's own UX, which each company actively develops and ships features for. Cline works this way because it IS the AI harness. K2SO is the workspace that hosts AI harnesses.
+**Why NOT for K2**: Same fundamental problem as Option 1 — it replaces the CLI tool's native interface with a custom one. Users lose the provider's own UX, which each company actively develops and ships features for. Cline works this way because it IS the AI harness. K2 is the workspace that hosts AI harnesses.
 
 ### Option 3: Shell Integration + Block Rendering (Warp's Approach) -- CHOSEN
 
 **What**: Keep the terminal as the primary interface but inject structure via shell hooks.
 
-**How it would work in K2SO**:
+**How it would work in K2**:
 - Install shell integration hooks (`precmd`/`preexec`) that emit custom OSC/DCS escape sequences
 - Parse these in the xterm.js layer to identify block boundaries (prompt, command, output)
 - Render each block as a styled, interactive unit (copy button, collapse/expand, re-run)
@@ -320,8 +320,8 @@ Given K2SO's architecture (Tauri + React + xterm.js + PTY manager), here are the
 
 **What**: Float a webview window over the terminal for contextual UI (autocomplete, suggestions, previews).
 
-**How it would work in K2SO**:
-- Detect when an AI CLI tool is running in a terminal (K2SO already does this via `get_foreground_command`)
+**How it would work in K2**:
+- Detect when an AI CLI tool is running in a terminal (K2 already does this via `get_foreground_command`)
 - Float a companion panel/popover next to the terminal showing structured output
 - Parse the AI tool's streaming output and render it as markdown/diffs in the overlay
 - The terminal continues showing raw output; the overlay provides the "clean" view
@@ -338,7 +338,7 @@ Given K2SO's architecture (Tauri + React + xterm.js + PTY manager), here are the
 
 ### Why This Approach
 
-K2SO's core philosophy is that it is a **workspace orchestrator, not an IDE or AI harness**. Users bring their own AI tools (Claude Code, Gemini CLI, Cursor Agent, Aider, etc.) and log in with their own personal accounts. Each provider's CLI contains a unique, purpose-built AI harness with its own:
+K2's core philosophy is that it is a **workspace orchestrator, not an IDE or AI harness**. Users bring their own AI tools (Claude Code, Gemini CLI, Cursor Agent, Aider, etc.) and log in with their own personal accounts. Each provider's CLI contains a unique, purpose-built AI harness with its own:
 
 - Authentication and billing (personal subscriptions, not API keys)
 - Agentic tool-use system (file editing, terminal commands, web search, etc.)
@@ -348,17 +348,17 @@ K2SO's core philosophy is that it is a **workspace orchestrator, not an IDE or A
 **We must preserve these harnesses intact.** Options 1 and 2 replace them with our own implementation, which:
 - Forces users onto API billing instead of their existing subscriptions
 - Loses provider-specific features that each company actively develops
-- Makes K2SO responsible for reimplementing and maintaining parity with every provider
-- Turns K2SO into an IDE competitor (Cursor, Windsurf) instead of a workspace tool
+- Makes K2 responsible for reimplementing and maintaining parity with every provider
+- Turns K2 into an IDE competitor (Cursor, Windsurf) instead of a workspace tool
 
-**Option 3 keeps the CLI as the source of truth.** The real CLI tool runs in a real terminal with the user's real account. K2SO just makes the terminal output look better by understanding its structure. Elements of Option 4 (overlay/companion panel) can be added later for specific enhancements like a "clean view" sidebar.
+**Option 3 keeps the CLI as the source of truth.** The real CLI tool runs in a real terminal with the user's real account. K2 just makes the terminal output look better by understanding its structure. Elements of Option 4 (overlay/companion panel) can be added later for specific enhancements like a "clean view" sidebar.
 
 ### How It Would Work
 
 1. **Shell integration hooks** — Install `precmd`/`preexec` hooks that emit custom OSC/DCS escape sequences to mark block boundaries (prompt start, command start, output start, exit code)
 2. **xterm.js parsing** — Intercept these escape sequences in the xterm.js layer to segment terminal output into structured blocks
 3. **Block rendering** — Render each block as an interactive unit with copy buttons, collapse/expand, re-run, and status indicators
-4. **AI-aware rendering** — When K2SO detects a known AI CLI tool is running (already possible via `get_foreground_command`), apply additional parsing: render markdown blocks properly, show code diffs with syntax highlighting, display tool-use steps as expandable accordions
+4. **AI-aware rendering** — When K2 detects a known AI CLI tool is running (already possible via `get_foreground_command`), apply additional parsing: render markdown blocks properly, show code diffs with syntax highlighting, display tool-use steps as expandable accordions
 5. **Optional companion panel** — A sidebar "clean view" that extracts and re-renders the conversation from the terminal output, for users who prefer a chat-style view without replacing the terminal
 
 ### Key Technical Considerations
@@ -371,7 +371,7 @@ K2SO's core philosophy is that it is a **workspace orchestrator, not an IDE or A
 
 ### What We Already Have
 
-K2SO already has foundational pieces for this:
+K2 already has foundational pieces for this:
 - PTY manager with scrollback buffer (`src-tauri/src/terminal/mod.rs`)
 - Foreground process detection (`get_foreground_command`) — knows when an AI tool is running
 - xterm.js with Unicode 11, WebGL rendering, and shell integration hooks for natural text editing

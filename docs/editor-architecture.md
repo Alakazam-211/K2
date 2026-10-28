@@ -1,4 +1,4 @@
-# K2SO Code Editor Architecture
+# K2 Code Editor Architecture
 
 ## Lessons from Zed's Editor
 
@@ -22,7 +22,7 @@ Zed implements a full text editor in Rust with a sophisticated architecture:
 
 ### What We Take From Zed
 
-| Concept | Zed's Approach | K2SO's Approach |
+| Concept | Zed's Approach | K2's Approach |
 |---------|---------------|-----------------|
 | Text storage | Custom Rope | CodeMirror's Text (immutable tree) |
 | Syntax highlighting | Tree-sitter (incremental) | CodeMirror language packages |
@@ -33,14 +33,14 @@ Zed implements a full text editor in Rust with a sophisticated architecture:
 
 ### Why CodeMirror 6
 
-Zed's approach is purpose-built for a native, GPU-rendered editor. K2SO runs its UI in a web view (Tauri), so we need a web-native solution. CodeMirror 6 implements the same architectural patterns adapted for the DOM:
+Zed's approach is purpose-built for a native, GPU-rendered editor. K2 runs its UI in a web view (Tauri), so we need a web-native solution. CodeMirror 6 implements the same architectural patterns adapted for the DOM:
 
 - **Immutable state** — `EditorState` is immutable; changes create new states via transactions
 - **Transaction grouping** — `history()` extension groups edits within a configurable interval
 - **Extension system** — Language support, themes, keymaps are all composable extensions
 - **Efficient updates** — Uses a persistent data structure for text, similar to Zed's rope
 
-## K2SO Editor Implementation
+## K2 Editor Implementation
 
 ### Component: `CodeEditor`
 
@@ -51,7 +51,7 @@ Replaces both `CodeViewer` (read-only Shiki) and the textarea fallback.
 - `@codemirror/history` — Undo/redo with Cmd+Z / Cmd+Shift+Z
 - `@codemirror/commands` — Standard editing commands
 - `@codemirror/view` — Editor view + keymap for Cmd+S
-- `@codemirror/theme-one-dark` — Dark theme matching K2SO's aesthetic
+- `@codemirror/theme-one-dark` — Dark theme matching K2's aesthetic
 
 **Data flow:**
 ```

@@ -1,4 +1,4 @@
-# Terminal Scrolling Research: Making K2SO's Terminal Buttery Smooth
+# Terminal Scrolling Research: Making K2's Terminal Buttery Smooth
 
 > **Provenance**: Captured from a dedicated research session (transcript
 > `15e5659a-5c01-45e3-973b-273c8a942e44`). The driving question:
@@ -6,7 +6,7 @@
 > smooth? Zed is buttery smooth and uses Alacritty, but we also have to
 > push ours across a WS. Video games do this too and they're buttery
 > smooth."* Three subagents ran in parallel: (1) analyze Zed's terminal,
-> (2) analyze K2SO's current terminal pipeline, (3) research smooth-scroll
+> (2) analyze K2's current terminal pipeline, (3) research smooth-scroll
 > techniques + reference repos across the industry. This doc is the
 > consolidated output.
 >
@@ -21,8 +21,8 @@
 **Our backend is already doing the right thing, and our frontend is
 throwing the advantage away.**
 
-- **Daemon side** (`crates/k2so-daemon/src/sessions_grid_ws.rs`,
-  `k2so-core/.../daemon_pty.rs`): we already run `alacritty_terminal` —
+- **Daemon side** (`crates/k2-daemon/src/sessions_grid_ws.rs`,
+  `k2-core/.../daemon_pty.rs`): we already run `alacritty_terminal` —
   the *same* core Zed uses. We get its ring-buffer grid, O(1) display
   offset, and damage tracking for free. We even send damage-based JSON
   **deltas** (only changed rows + appended scrollback), which is good.
@@ -96,7 +96,7 @@ C (native wgpu).** B (xterm.js) is out.
 
 ---
 
-## How K2SO holds up today — honest assessment
+## How K2 holds up today — honest assessment
 
 Fine for normal terminal work (bash, vim, watching Claude type). **Not**
 "buttery smooth" by Zed/Figma/iPad standards. Specific failure modes

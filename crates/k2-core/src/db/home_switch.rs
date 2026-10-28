@@ -871,9 +871,9 @@ fn dual(dir: &Path, opts: &SwitchOpts, mut rep: SwitchReport) -> SwitchReport {
         }
         (None, p) if p.live() => {
             let (k2, k2so) = if pick == new { (pick_probe.count(), p.count()) } else { (p.count(), pick_probe.count()) };
-            rep.path = today;
+            rep.path = today.clone();
             rep.outcome = Outcome::Blocked { k2_projects: k2, k2so_projects: k2so };
-            write_blocked(dir, &rep.path, k2, k2so, &mut rep);
+            write_blocked(dir, &today, k2, k2so, &mut rep);
             return rep;
         }
         (None, Probe::Unknown(why)) => {

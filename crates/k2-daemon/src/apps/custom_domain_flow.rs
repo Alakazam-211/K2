@@ -25,7 +25,7 @@
 //!   serving and says so; after 7 days in a row it goes `failing`: its
 //!   route is removed (front443 / door) and it is not renewed.
 //! - **External** (`external`): served by the box's own web server, not by
-//!   K2's front. Grandfathered at the upgrade (migration 0236, a name bound
+//!   K2's front. Grandfathered at the upgrade (migration 0242, a name bound
 //!   before 0.46.6) or opted in by name (`k2 app domain add … --external`,
 //!   `k2 app domain external … on`). It is an origin and is never checked
 //!   by the loop, ordered or routed; `k2 app domain external … off` hands

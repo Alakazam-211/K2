@@ -70,7 +70,7 @@ pub const STATE_LIVE: &str = "live";
 pub const STATE_FAILING: &str = "failing";
 /// Served by the box's own web server (to the App's front port), not by
 /// K2's front. Either grandfathered at the 0.46.6 upgrade (a name bound
-/// before the App TLS door existed, 0236) or opted in by name
+/// before the App TLS door existed, 0242) or opted in by name
 /// (`k2 app domain add … --external`, `k2 app domain external … on`). It is
 /// an origin; K2 never routes, checks or issues for it until it is moved
 /// into the door flow (`k2 app domain external … off`, or
@@ -107,7 +107,7 @@ pub fn new_verify_token() -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// One `app:` hostname with its serving state (0236).
+/// One `app:` hostname with its serving state (0242).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AppDomain {
@@ -132,7 +132,7 @@ impl AppDomain {
     pub fn is_live(&self) -> bool {
         self.state == STATE_LIVE && self.apex_attached
     }
-    /// Served by the box's own proxy, not by K2 (grandfathered, 0236).
+    /// Served by the box's own proxy, not by K2 (grandfathered, 0242).
     pub fn is_external(&self) -> bool {
         self.state == STATE_EXTERNAL && self.apex_attached
     }
@@ -822,7 +822,7 @@ mod tests {
         assert_eq!(hostnames_for_app(&conn, "nobody").unwrap(), Vec::<String>::new());
     }
 
-    /// 0236: an `app:` name starts at `waiting_dns` with its own random
+    /// 0242: an `app:` name starts at `waiting_dns` with its own random
     /// token; re-adding keeps it; a re-role or a move to another App starts
     /// over (new token, not primary); another role clears the App columns.
     #[test]
@@ -929,14 +929,14 @@ mod tests {
         assert!(!record_app_check(&conn, "nope.example.com", &CheckRecord::default()).unwrap());
     }
 
-    /// 0236 on a database that already has `app:` rows (bound before
+    /// 0242 on a database that already has `app:` rows (bound before
     /// 0.46.6; a box may serve them through its own proxy, PRD path 4):
     /// they are GRANDFATHERED `external`, stay the App's origins, and the
     /// name that was K2_APP_ORIGIN before (the first by name on an attached
     /// apex) stays primary. Names bound after the upgrade start
     /// `waiting_dns`. Other roles stay NULL.
     #[test]
-    fn migration_0236_grandfathers_existing_app_rows_as_external_origins() {
+    fn migration_0242_grandfathers_existing_app_rows_as_external_origins() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::db::run_migrations_through(&conn, Some("0231_zen_version_carry")).unwrap();
         conn.execute_batch(

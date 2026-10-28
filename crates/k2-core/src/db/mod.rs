@@ -1641,7 +1641,7 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // array of Thread attachments (NULL = none). ADD COLUMN only;
         // `feedback` is never rebuilt. It landed after 0233 (mobile), so it
         // runs after it, in landing order (like 0217 after 0220/0221); 0234
-        // (Sew S30) and 0236 (App custom domains) follow. The store is
+        // (Sew S30) and 0242 (App custom domains) follow. The store is
         // `crate::feedback`.
         ("0232_ticket_attachments", include_str!("../../drizzle_sql/0232_ticket_attachments.sql")),
         // 0234 — Sew chat for agents, S30 core (plan-sew-s30-s32-on-k2-v1
@@ -1664,13 +1664,15 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // off). ADD COLUMN only. Provisional number: renumber at
         // integration (Ops - Migration numbers).
         ("0241_compute_submitter_cap", include_str!("../../drizzle_sql/0241_compute_submitter_cap.sql")),
-        // 0236 — custom domains that serve an App (prd-app-custom-domains-v1
+        // 0242 — custom domains that serve an App (prd-app-custom-domains-v1
         // §5, vs-live CD-A4; 0.46.6): additive columns on `domain_names`
         // (state, TXT proof token, last check, path, primary, last error,
-        // failing-since). Existing `app:` rows start at `waiting_dns`. It lands after
-        // 0233, 0232 and 0234 and runs after them, in landing order. The
-        // store is `crate::domains` (`AppDomain`).
-        ("0236_app_custom_domains", include_str!("../../drizzle_sql/0236_app_custom_domains.sql")),
+        // failing-since). Existing `app:` rows are grandfathered `external`;
+        // names bound afterwards start at `waiting_dns`. Built as 0236,
+        // renumbered 0242 at landing: it runs after 0233, 0232, 0234, 0240
+        // and 0241, in landing order. The store is `crate::domains`
+        // (`AppDomain`).
+        ("0242_app_custom_domains", include_str!("../../drizzle_sql/0242_app_custom_domains.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2334,7 +2336,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0236_app_custom_domains",
+            last_name, "0242_app_custom_domains",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2423,7 +2425,7 @@ mod tests {
                 // 0.46.6: compute per-submitter cap (provisional number).
                 "0241_compute_submitter_cap",
                 // 0.46.6: App custom domains (state, TXT proof, primary).
-                "0236_app_custom_domains",
+                "0242_app_custom_domains",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2520,7 +2522,7 @@ mod tests {
                 // 0.46.6: compute per-submitter cap (provisional number).
                 "0241_compute_submitter_cap",
                 // 0.46.6: App custom domains (state, TXT proof, primary).
-                "0236_app_custom_domains",
+                "0242_app_custom_domains",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2748,7 +2750,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0236_app_custom_domains", "0236 (0.46.6) runs last");
+        assert_eq!(top, "0242_app_custom_domains", "0242 (0.46.6) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2779,9 +2781,9 @@ mod tests {
                 "0234_sew_chat",
                 "0240_compute_queue_of",
                 "0241_compute_submitter_cap",
-                "0236_app_custom_domains"
+                "0242_app_custom_domains"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241 then 0236)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241 then 0242)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3619,9 +3621,9 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0236 (App custom domains, 0.46.6) is the newest: its record
+            // 0242 (App custom domains, 0.46.6) is the newest: its record
             // goes (its columns stay; re-adding is skipped as duplicates).
-            conn.execute("DELETE FROM _migrations WHERE name = '0236_app_custom_domains'", []).unwrap();
+            conn.execute("DELETE FROM _migrations WHERE name = '0242_app_custom_domains'", []).unwrap();
             // 0241 and 0240 (compute job tiers v2, 0.46.6) came before it:
             // their records go (their columns stay; re-adding is skipped as
             // a duplicate).

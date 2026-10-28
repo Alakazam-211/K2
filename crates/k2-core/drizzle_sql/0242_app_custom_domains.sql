@@ -1,4 +1,4 @@
--- 0236_app_custom_domains — custom domains that actually serve an App
+-- 0242_app_custom_domains — custom domains that actually serve an App
 -- (prd-app-custom-domains-v1 §5; vs-live CD-A4/CD-A22; 0.46.6).
 -- Additive columns on `domain_names` (0120). Only `app:<id>` rows use them;
 -- every other role keeps them NULL / 0.

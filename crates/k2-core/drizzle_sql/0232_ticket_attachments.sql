@@ -8,5 +8,5 @@
 -- ADD COLUMN only: `feedback` itself is never rebuilt (0090 and 0098 rebuilt
 -- it with foreign keys on, which cascaded into its child tables; see
 -- 0126_feedback_briefs.sql). 0233 (mobile), 0234 (Sew S30), 0235 (Garden
--- Board) and 0236 (App custom domains) are other lanes'.
+-- Board) and 0242 (App custom domains) are other lanes'.
 ALTER TABLE feedback_comments ADD COLUMN attachments_json TEXT;

@@ -2725,12 +2725,11 @@ pub(crate) fn require_action_card_person(params: &HashMap<String, String>, sessi
 /// Another person's unlinked Owner-role login is refused.
 pub(crate) fn require_garden_owner_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
     refuse_action_card_non_person(params, verb)?;
-    // `owner` is the owner token's author unless a login of that name
-    // exists (made before 0.46.6): then it proves nothing (fail closed).
-    let owner_login_exists = k2_core::connect_users::role_for_user("owner").is_some();
-    let Some(caller) = crate::zen_routes::garden_card_caller(session_author, owner_login_exists) else {
+    // `owner` is the owner token's author alone (session_author); an old
+    // login with a reserved name answers as nobody.
+    let Some(caller) = crate::zen_routes::garden_card_caller(session_author) else {
         return Err(action_card_person_only(&format!(
-            "this server has a login named 'owner', so an answer as 'owner' can't be told from it; remove that login in Settings → Admin Access, then the owner {verb} this card"
+            "a login with a reserved name ('owner' or 'agent') can't answer this card; remove it in Settings → Admin Access, then the owner {verb} this card"
         )));
     };
     if !crate::zen_routes::garden_owner_may(&caller, None) {

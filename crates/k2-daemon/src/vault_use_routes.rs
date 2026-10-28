@@ -1379,6 +1379,102 @@ mod tests {
         });
     }
 
+    /// Secret cards that say how a secret is sent (0.46.6): each kind goes
+    /// card → vault → the wire of a real fetch, the echo comes back
+    /// redacted, and the agent can't pick another destination per call.
+    #[test]
+    fn a_card_sending_reaches_the_wire_as_shown() {
+        use std::io::{Read, Write};
+
+        use base64::Engine as _;
+        use k2_vault::confirm::KdfCost;
+        use k2_vault::keystore::fake::FakeKeyStore;
+        use k2_vault::vault::{CardAnswer, SecretRequest};
+        use k2_vault::{Actor, AgentActor, Delivery, KeyStore, Kind, OpenOptions, SecretBytes};
+
+        const PW: &str = "k2test_CARDWIRE_5d4c3b2a19";
+        crate::test_support::with_temp_home(|| {
+            let t = k2_vault::fsutil::TestDir::new("card-wire");
+            let ks: Arc<dyn KeyStore> = Arc::new(FakeKeyStore::new());
+            let v = Arc::new(LocalVault::open(t.path().join("vault"), ks, OpenOptions { kdf: KdfCost::Floor }).expect("open"));
+            let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+            let port = l.local_addr().expect("addr").port();
+            let heads = Arc::new(parking_lot::Mutex::new(Vec::<String>::new()));
+            let h2 = heads.clone();
+            std::thread::spawn(move || {
+                for s in l.incoming() {
+                    let Ok(mut s) = s else { return };
+                    let mut buf = vec![0u8; 8192];
+                    let mut got = Vec::new();
+                    while !got.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let n = s.read(&mut buf).unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        got.extend_from_slice(&buf[..n]);
+                    }
+                    let head = String::from_utf8_lossy(&got).to_string();
+                    h2.lock().push(head.clone());
+                    let resp = format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", head.len(), head);
+                    let _ = s.write_all(resp.as_bytes());
+                }
+            });
+            let ws = "ws-card-wire";
+            let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+            let cases = [
+                ("ROBOT", "basic", "{}", format!("robotuser:{PW}"), format!("authorization: Basic {}", b64(&format!("robotuser:{PW}")))),
+                ("ROBOT_USER", "basic", "ws123:{}", PW.to_string(), format!("authorization: Basic {}", b64(&format!("ws123:{PW}")))),
+                ("HEADER_KEY", "header:X-Api-Key", "{}", PW.to_string(), format!("x-api-key: {PW}")),
+                ("QUERY_KEY", "query:appid", "{}", PW.to_string(), format!("appid={PW}")),
+            ];
+            let agent = VaultCaller {
+                actor: Actor::Agent(AgentActor { workspace_id: ws.into(), session_id: Some("s1".into()), shell: false, vault_manage: false }),
+                channel: crate::vault::actor::Channel::Plain,
+                session_id: Some("s1".into()),
+            };
+            for (i, (name, dst, fmt, value, on_wire)) in cases.into_iter().enumerate() {
+                let inject = k2_vault::inject::card_inject(Some(dst), Some(fmt)).expect("inject").expect("some");
+                let card = format!("card-wire-{i:02}-0123456789");
+                v.request_create(SecretRequest {
+                    card_id: card.clone(),
+                    conversation: "conv-w".into(),
+                    session_id: Some("s1".into()),
+                    workspace_id: ws.into(),
+                    requested_by: format!("agent:{ws}/s1"),
+                    name: name.into(),
+                    kind: Kind::Password,
+                    proposed_scope: "workspace".into(),
+                    proposed_hosts: vec![format!("http://127.0.0.1:{port}")],
+                    proposed_delivery: Delivery::Fetch,
+                    prompt: String::new(),
+                    ttl_secs: None,
+                    status: String::new(),
+                    answered_by: None,
+                    secret_id: None,
+                    created_at: String::new(),
+                    answered_at: None,
+                    inject: Some(inject.clone()),
+                })
+                .expect("card");
+                let ans = CardAnswer { inject: Some(inject), ..Default::default() };
+                v.request_answer(&card, SecretBytes::from_string(value.clone()), &ans, &Actor::Owner).unwrap_or_else(|e| panic!("{name}: {e}"));
+                heads.lock().clear();
+                let body = json!({ "secret": name, "url": format!("http://127.0.0.1:{port}/v1/x") }).to_string();
+                let r = handle(&v, FETCH, &agent, body.as_bytes(), &HashMap::new(), "test", None);
+                assert_eq!(r.status, "200 OK", "{name}: {}", r.body);
+                let sent = heads.lock().join("\n").to_ascii_lowercase();
+                assert!(sent.contains(&on_wire.to_ascii_lowercase()), "{name}: the wire carries {on_wire:?}: {sent}");
+                assert!(!r.body.contains(PW), "{name}: the echo is redacted: {}", r.body);
+                assert!(r.body.contains(&format!("[k2v:{name}]")), "{name}: {}", r.body);
+                // The agent can't send it anywhere else per call (sealed, §3.2).
+                let other = json!({ "secrets": [{ "name": name, "dst": "header:X-Leak" }], "url": format!("http://127.0.0.1:{port}/v1/x") }).to_string();
+                let r = handle(&v, FETCH, &agent, other.as_bytes(), &HashMap::new(), "test", None);
+                assert!(r.status.starts_with("403"), "{name}: {}", r.body);
+                assert!(r.body.contains("inject_not_allowed"), "{name}: {}", r.body);
+            }
+        });
+    }
+
     #[test]
     fn jail_keeps_paths_inside_the_workspace() {
         let t = k2_vault::fsutil::TestDir::new("jail");

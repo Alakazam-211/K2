@@ -409,8 +409,14 @@ fn a_tampered_card_injection_is_refused_and_rekey_carries_a_pending_one() {
         v.request_answer("card-tamper-0123456789", SecretBytes::from_string(PW.into()), &shown(&leak), &Actor::Owner).expect_err("refused").code,
         "vault_tamper"
     );
-    // And it stops a rekey (verify under the old key first).
-    assert_eq!(v.rekey(&Actor::Owner, &HumanProof::Confirmed { method: "t".into() }).expect_err("rekey").code, "vault_tamper");
+    // And it stops a rekey (verify under the old key first), naming the way out.
+    let e = v.rekey(&Actor::Owner, &HumanProof::Confirmed { method: "t".into() }).expect_err("rekey");
+    assert_eq!(e.code, "vault_tamper");
+    assert!(e.hint.contains("void that card"), "{}", e.hint);
+    // The card can still be voided; its injection row goes with it, and the
+    // rekey then runs.
+    assert_eq!(v.request_void("card-tamper-0123456789", &Actor::Owner).expect("void").status, "void");
+    v.rekey(&Actor::Owner, &HumanProof::Confirmed { method: "t".into() }).expect("rekey after void");
 }
 
 #[test]
@@ -420,9 +426,14 @@ fn a_card_value_never_reaches_the_request_rows_or_audit() {
     let v = open(&t, &ks);
     let b = inj("basic", None);
     v.request_create(card("card-nv-0123456789abcd", "NV", Some(b.clone()))).expect("card");
+    v.request_create(card("card-nv2-0123456789abc", "NV2", Some(inj("query:k", None)))).expect("card");
     v.request_answer("card-nv-0123456789abcd", SecretBytes::from_string(format!("u:{PW}")), &shown(&b), &Actor::Owner).expect("saved");
-    let reqs = serde_json::to_string(&v.requests(None).expect("reqs")).expect("json");
-    assert!(reqs.contains(r#""inject":{"dst":"basic","fmt":"{}"}"#), "{reqs}");
+    let reqs = v.requests(None).expect("reqs");
+    // A pending card lists how it sends; a closed one's row is gone (the
+    // saved secret holds it).
+    assert_eq!(reqs.iter().find(|r| r.card_id == "card-nv2-0123456789abc").expect("pending").inject, Some(inj("query:k", None)));
+    assert_eq!(reqs.iter().find(|r| r.card_id == "card-nv-0123456789abcd").expect("set").inject, None);
+    let reqs = serde_json::to_string(&reqs).expect("json");
     assert!(!reqs.contains(PW));
     let audit = format!("{:?}", v.audit(&AuditQuery::default(), &Actor::Owner).expect("audit"));
     assert!(!audit.contains(PW));

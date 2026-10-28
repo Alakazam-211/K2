@@ -3189,14 +3189,24 @@ impl LocalVault {
     pub fn request_get(&self, card_id: &str) -> Result<SecretRequest> {
         let keys = self.keys.read();
         let conn = self.conn.lock();
+        let mut req = Self::request_row(&conn, &keys, card_id)?;
+        req.inject = Self::request_inject(&conn, &keys, card_id)?;
+        Ok(req)
+    }
+
+    /// The `secret_request` row alone (its own MAC checked), without the
+    /// sealed injection: status changes (void, expiry, set) never depend on
+    /// the injection row, so a card whose injection row fails its MAC can
+    /// still be voided or expire (and its row then goes, see
+    /// [`Self::request_set_status`]).
+    fn request_row(conn: &Connection, keys: &Keys, card_id: &str) -> Result<SecretRequest> {
         let r = conn
             .query_row("SELECT * FROM secret_request WHERE card_id = ?1", params![card_id], |r| Ok(read_request_raw(r)))
             .optional()?;
-        let (mut req, mac) = r.ok_or_else(|| VaultError::not_found("no such card"))??;
+        let (req, mac) = r.ok_or_else(|| VaultError::not_found("no such card"))??;
         if !hmac_verify(&keys.row, &request_mac_input(&req), &mac) {
             return Err(VaultError::tamper("card record failed its integrity check"));
         }
-        req.inject = Self::request_inject(&conn, &keys, card_id)?;
         Ok(req)
     }
 
@@ -3240,7 +3250,9 @@ impl LocalVault {
         };
         for (card, j, mac) in rows {
             if !hmac_verify(&old.row, &request_inject_mac_input(&card, &j), &mac) {
-                return Err(VaultError::tamper(format!("secret card {card}'s injection failed its integrity check; rekey stopped")));
+                return Err(VaultError::tamper(format!(
+                    "secret card {card}'s injection failed its integrity check; rekey stopped (void that card, or wait for it to expire, then rekey again)"
+                )));
             }
             let m2 = hmac(&new.row, &request_inject_mac_input(&card, &j));
             tx.execute("UPDATE secret_request_inject SET row_mac = ?2 WHERE card_id = ?1", params![card, m2.to_vec()])?;
@@ -3278,7 +3290,11 @@ impl LocalVault {
     }
 
     fn request_set_status(&self, card_id: &str, status: &str, answered_by: Option<&str>, secret_id: Option<&str>, stamp: &str) -> Result<SecretRequest> {
-        let mut r = self.request_get(card_id)?;
+        let mut r = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            Self::request_row(&conn, &keys, card_id)?
+        };
         r.status = status.into();
         r.answered_by = answered_by.map(str::to_string);
         r.secret_id = secret_id.map(str::to_string);
@@ -3291,6 +3307,13 @@ impl LocalVault {
                 "UPDATE secret_request SET status = ?2, answered_by = ?3, secret_id = ?4, answered_at = ?5, row_mac = ?6 WHERE card_id = ?1",
                 params![r2.card_id, r2.status, r2.answered_by, r2.secret_id, r2.answered_at, mac.to_vec()],
             )?;
+            // A closed card's sealed injection has done its job (the saved
+            // secret holds it): drop it, so a row a downgraded daemon's
+            // rekey left stale never blocks a later rekey for longer than
+            // the card stays open.
+            if r2.status != "pending" {
+                tx.execute("DELETE FROM secret_request_inject WHERE card_id = ?1", params![r2.card_id])?;
+            }
             Ok(((), vec![Entry::new("request", &st, &format!("ok:{}", r2.status)).consumer(format!("card:{}", r2.card_id))]))
         })?;
         Ok(r)
@@ -3314,7 +3337,11 @@ impl LocalVault {
     }
 
     pub fn request_void(&self, card_id: &str, actor: &Actor) -> Result<SecretRequest> {
-        let r = self.request_get(card_id)?;
+        let r = {
+            let keys = self.keys.read();
+            let conn = self.conn.lock();
+            Self::request_row(&conn, &keys, card_id)?
+        };
         if r.status != "pending" {
             return Err(VaultError::conflict("card_not_pending", "that card was already answered"));
         }

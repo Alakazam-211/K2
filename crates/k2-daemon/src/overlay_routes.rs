@@ -7912,7 +7912,7 @@ mod tests {
         // (voided) with a frame. A 250-character prompt passes the overlay
         // but the vault refuses it.
         let before = crate::overlay_ws::current_rev();
-        let err = post_clone_secret_card(&conv, &project_id, &handle, "REV_TOKEN", "api_key", &[], "none", &"p".repeat(250))
+        let err = post_clone_secret_card(&conv, &project_id, &handle, "REV_TOKEN", "api_key", &[], "none", &"p".repeat(250), None)
             .expect_err("the vault refuses a 250-character prompt");
         assert!(err.contains("prompt"), "{err}");
         let voided = crate::overlay_ws::current_rev();

@@ -269,3 +269,25 @@ fn after_the_card_an_agent_cannot_change_how_it_is_sent() {
     let e = vault.set_policy(&sel(&project_id, "SEALED_ROBOT"), p, &agent).expect_err("agent");
     assert_eq!(e.code, "vault_owner_confirm_required");
 }
+
+/// SC-A8: a clone's leave-blank card keeps how the source sent it; a sending
+/// a card can't carry (a signer) or a readable delivery falls back to none.
+#[test]
+fn clone_leave_blank_cards_carry_the_sending() {
+    let _home = crate::test_support::TempHome::new();
+    let vault = crate::vault::ensure_test_vault();
+    let (handle, project_id) = ws("ovlcic");
+    let conv = uuid::Uuid::new_v4().to_string();
+    let basic = k2_vault::inject::card_inject(Some("basic"), Some("ws123:{}")).expect("inject").expect("some");
+    let hosts = vec!["https://robot-ws.your-server.de:443".to_string()];
+    let id = post_clone_secret_card(&conv, &project_id, &handle, "CLONED_ROBOT", "password", &hosts, "fetch", "carried", Some(&basic))
+        .expect("card");
+    assert_eq!(vault.request_get(&id).expect("request").inject, Some(basic.clone()));
+    let env = post_clone_secret_card(&conv, &project_id, &handle, "CLONED_ENV", "password", &[], "env", "carried", Some(&basic))
+        .expect("card");
+    assert_eq!(vault.request_get(&env).expect("request").inject, None, "env: no sending on the card");
+    let signed = k2_vault::inject::Inject { sign: Some(k2_vault::inject::Sign::Ovh), ..k2_vault::inject::Inject::bearer() };
+    let ovh = post_clone_secret_card(&conv, &project_id, &handle, "CLONED_OVH", "generic", &hosts, "fetch", "carried", Some(&signed))
+        .expect("card");
+    assert_eq!(vault.request_get(&ovh).expect("request").inject, None, "a signer never rides a card");
+}

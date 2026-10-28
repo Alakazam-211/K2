@@ -555,7 +555,16 @@ cli agent "$B" doc undo img/logo.png
 want_rc 2 "undo on tier 0"
 cli agent "$B" doc diff --version "$V0" img/logo.png
 want_rc 2 "diff --version on tier 0"
-ok "agent: text verbs exit 2 on a tier-0 doc"
+cli agent "$B" doc claim --lines 1,2 img/logo.png
+want_rc 2 "claim on tier 0"
+ok "agent: text verbs (and claims) exit 2 on a tier-0 doc"
+owner POST /cli/docs/tool '{"path":"img/logo.png","argv":["cat"]}' "workspace=$B"
+want 200 "cat on tier 0"
+python3 -c 'import base64,json,sys; j=json.loads(sys.argv[1]); sys.exit(0 if j["exit"] == 0 and base64.b64decode(j["stdoutB64"]) == open(sys.argv[2],"rb").read() else 1)' "$BODY" "$B/img/logo.png" \
+    || fail "cat on tier 0: not the file's bytes: $BODY"
+owner POST /cli/docs/tool '{"path":"img/logo.png","argv":["cat","-n"]}' "workspace=$B"
+jok "$BODY" 'j["exit"] == 2' "cat on any file takes no flags (exit 2)"
+ok "cat on any file: its exact bytes"
 
 cli agent "$B" doc lease --ttl 10m img/logo.png
 want_rc 0 "agent lease"; has "$OUT" "leased img/logo.png" "agent lease"
@@ -631,8 +640,9 @@ cli agent "$B" doc lease img/logo.png; want_rc 0 "lease before the app's save"
 put "$WORK/app-save.png" "$B/img/logo.png"
 t0_wait "$B" img/logo.png 'len(j["conflictCopies"]) == 1 and j["current"]["reason"] == "external" and j["current"]["conflictCopy"]' "a save under the lease"
 cmp -s "$B/img/logo.png" "$WORK/app-save.png" || fail "the app's save didn't stay current"
-copy="$B/$(jq_ "$BODY" 'j["conflictCopies"][0]')"
-case "$copy" in *"logo (conflict "*").png") ;; *) fail "conflict copy name: $copy" ;; esac
+copy="$B/$(jq_ "$BODY" 'j["conflictCopies"][0]["path"]')"
+case "$copy" in *"/.k2/conflicts/logo (conflict "*").png") ;; *) fail "conflict copy name: $copy" ;; esac
+[ "$(cat "$B/.k2/conflicts/.gitignore")" = "*" ] || fail "no * .gitignore in .k2/conflicts"
 cmp -s "$copy" "$WORK/outside.png" || fail "the conflict copy doesn't hold the replaced content"
 ok "a save under someone's lease keeps both: the save is current, the replaced content a version and a conflict copy"
 note=""
@@ -643,7 +653,7 @@ for _ in $(seq 1 80); do
 done
 [ -n "$note" ] || fail "no inbox note for the conflicting save under $B/.k2/inbox"
 ok "the conflicting save leaves an inbox note"
-cli agent "$B" doc status img/logo.png; want_rc 0 "status lists the copy"; has "$OUT" "conflict copy: img/logo (conflict" "status lists the copy"
+cli agent "$B" doc status img/logo.png; want_rc 0 "status lists the copy"; has "$OUT" "conflict copy: .k2/conflicts/logo (conflict" "status lists the copy"
 cli agent "$B" doc unlock img/logo.png; want_rc 0 "unlock after the conflict"
 
 python3 -c 'import sys; open(sys.argv[1],"wb").write(b"\0" * (int(sys.argv[2]) * 1048576 + 1))' "$B/big.bin" "$T0_CAP"
@@ -670,10 +680,22 @@ cli agent "$B" doc versions --json img/brand.png; want_rc 0 "versions after mv"
 jok "$OUT" 'len(j["versions"]) >= 5' "the moved doc keeps its versions"
 cli agent "$B" doc mv img/brand.png img/brand.md; want_rc 2 "mv to Markdown"; has "$ERR" "tier_change" "mv to Markdown"
 ok "mv keeps an any-file doc's history (not under someone else's lease, never into Markdown)"
-agent POST /cli/docs/write "$(wbody "$B" img/brand.png 1 "$WORK/other.bin" owner)"
-want 400 "on-behalf blob write"; code_is on_behalf_not_built "on-behalf blob write"
+cli agent "$B" doc status --json img/brand.png; want_rc 0 "status before the on-behalf write"
+BV="$(jq_ "$OUT" 'j["version"]')"
+agent POST /cli/docs/write "$(wbody "$B" img/brand.png "$BV" "$WORK/other.bin" owner)"
+want 200 "on-behalf blob write"
+jok "$BODY" 'j["onBehalfOf"] == "person:owner" and j["approval"]["state"] == "pending"' "an agent's write for a person applies at once and waits for their approval"
+OBV="$(jq_ "$BODY" 'j["result"]["version"]')"
+same_bytes "$B/img/brand.png" "$WORK/other.bin" "the on-behalf write reaches the file"
+cli owner "$WORK" doc log --pending --json -w "$B" img/brand.png; want_rc 0 "log --pending"
+jok "$OUT" "[x['id'] for x in j['log']] == [$OBV] and j['log'][0]['approval'] == 'pending'" "log --pending lists it"
+cli agent "$B" doc approve "$OBV" img/brand.png; want_rc 3 "the agent approves its own"; has "$ERR" "not_the_approver" "the agent approves its own"
+cli owner "$WORK" doc decline "$OBV" -w "$B" img/brand.png; want_rc 0 "the person declines"
+has "$ERR" "restore --version $BV" "a decline names the version to restore"
+cmp -s "$B/img/brand.png" "$WORK/other.bin" || fail "a decline restored by itself"
+ok "on-behalf blob writes: pending, only the person settles them, a decline says how to undo it"
 cli agent "$B" doc lease home.md; want_rc 2 "lease on Markdown"; has "$ERR" "no_lease_on_text" "lease on Markdown"
-ok "on-behalf blob writes wait for the kit (exit 2); Markdown has no lease"
+ok "Markdown has no lease"
 cli agent "$B" doc status --json home.md; want_rc 0 "Markdown status"
 jok "$OUT" 'j["tier"] == 1' "a Markdown doc says tier 1"
 HV="$(jq_ "$OUT" 'j["version"]')"
@@ -682,6 +704,57 @@ cli agent "$B" doc write --base "$HV" home.md; want_rc 0 "Markdown write (bytesB
 for _ in $(seq 1 80); do grep -q 'rewritten through bytesB64' "$B/home.md" && break; sleep 0.1; done
 grep -q 'rewritten through bytesB64' "$B/home.md" || fail "the Markdown write never reached the file: $(cat "$B/home.md")"
 ok "k2 doc write on Markdown still merges from --base V (sent as bytes)"
+
+echo "== agent presence: claims, the bounce, free now, --if-version =="
+printf '# Shared\n\nalpha\nbeta\ngamma\ndelta\n' >"$B/shared.md"
+cli agent "$B" doc cat shared.md; want_rc 0 "agent reads shared.md"
+owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"shared.md","edits":[{"lines":"3,3","text":"ALPHA"}]}))')" "workspace=$B"
+want 200 "the owner edits after the agent's read"
+cli agent "$B" doc sed -i 's/beta/BETA/' shared.md
+want_rc 1 "an edit from a stale read"; has "$ERR" "doc changed since" "the stale edit names both versions"
+grep -q '^beta$' "$B/shared.md" || fail "the stale edit applied: $(cat "$B/shared.md")"
+cli agent "$B" doc cat shared.md; want_rc 0 "agent reads again"
+cli agent "$B" doc sed -i 's/beta/BETA/' shared.md; want_rc 0 "the edit after re-reading"
+has "$ERR" "checked against v" "the guard is shown"
+ok "an agent's edit is checked against the version it last read (exit 1 when the doc changed)"
+cli agent "$B" doc replace --old gamma --new GAMMA shared.md; want_rc 0 "replace --old/--new"
+printf 'GAMMA' >"$WORK/old.txt"; printf 'Gamma' >"$WORK/new.txt"
+cli agent "$B" doc replace --old-file "$WORK/old.txt" --new-file "$WORK/new.txt" shared.md; want_rc 0 "replace --old-file/--new-file"
+cli agent "$B" doc replace --old nowhere --new x shared.md; want_rc 1 "replace with no match"
+for _ in $(seq 1 80); do grep -q '^Gamma$' "$B/shared.md" && break; sleep 0.1; done
+grep -q '^Gamma$' "$B/shared.md" || fail "exact replace never reached the file: $(cat "$B/shared.md")"
+ok "replace --old/--new and --old-file/--new-file: exact text; no match is exit 1"
+owner POST /cli/docs/claim '{"path":"shared.md","lines":"5,6","note":"reworking the end","ttlMs":60000}' "workspace=$B"
+want 200 "the owner claims lines 5-6"
+CLAIM="$(jq_ "$BODY" 'j["claim"]["id"]')"
+sleep 5.2  # heads-up notes come at most one batch per 5 s per reader
+cli agent "$B" doc cat shared.md; want_rc 0 "agent reads under the claim"
+has "$ERR" "note:" "a heads-up note names the claim"
+cli agent "$B" doc sed -i 's/delta/DELTA/' shared.md
+want_rc 5 "an agent's edit into a claim bounces"; has "$ERR" "claimed by" "the bounce names who"; has "$ERR" "in line" "the bounce says it waits"
+grep -q '^delta$' "$B/shared.md" || fail "the bounced edit applied: $(cat "$B/shared.md")"
+cli agent "$B" doc sed -i 's/ALPHA/Alpha/' shared.md; want_rc 0 "an edit outside the claim applies"
+cli agent "$B" doc who shared.md; has "$OUT" "claimed 5-6" "who shows the claim"
+owner POST /cli/docs/claim "$(json path shared.md action release id "$CLAIM")" "workspace=$B"
+want 200 "the owner releases"
+free=""
+for _ in $(seq 1 80); do
+    owner GET /cli/chatterlog ""
+    case "$BODY" in *"are free now"*) free=1; break ;; esac
+    sleep 0.1
+done
+[ -n "$free" ] || fail "no free-now message in Chatter: $BODY"
+case "$BODY" in *"waited for a claim"*|*"claimed by"*) ;; *) fail "the bounce never reached Chatter: $BODY" ;; esac
+ok "the bounce and the free-now message land in Chatter"
+cli agent "$B" doc cat shared.md; want_rc 0 "re-read after free now"
+cli agent "$B" doc sed -i 's/delta/DELTA/' shared.md; want_rc 0 "the edit after free now"
+cli agent "$B" doc claim --lines 1,2 --note "title" shared.md; want_rc 0 "the agent claims"; has "$OUT" "claimed lines 1-2" "agent claim"
+owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"shared.md","edits":[{"lines":"1,1","text":"# Shared doc"}]}))')" "workspace=$B"
+want 200 "a person edits inside an agent's claim"
+cli agent "$B" doc claim --release shared.md; want_rc 0 "the agent releases"
+cli agent "$B" doc claim --release shared.md; want_rc 1 "release with no claim"
+cli agent "$B" doc activity shared.md; want_rc 0 "activity"; has "$OUT" "claim" "activity lists claims"
+ok "claims: take, release (exit 1 with none), activity; people are never bounced"
 
 mk "$A/notes/diagram.bin" 7 512
 cli agent "$B" doc status -w "$A" notes/diagram.bin; want_rc 3 "unshared tier-0"; has "$ERR" "doc_not_shared" "unshared tier-0"

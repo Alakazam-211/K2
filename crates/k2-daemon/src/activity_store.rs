@@ -532,8 +532,18 @@ fn read_capped(path: &std::path::Path, max: u64) -> Option<Vec<u8>> {
     opts.read(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::custom_flags(&mut opts, libc::O_NOFOLLOW);
+    // Windows: FILE_FLAG_OPEN_REPARSE_POINT opens a link itself, never its
+    // target; the handle must then be a regular file (Unix: O_NOFOLLOW
+    // fails on a link).
+    #[cfg(windows)]
+    std::os::windows::fs::OpenOptionsExt::custom_flags(&mut opts, 0x0020_0000);
+    let f = opts.open(path).ok()?;
+    #[cfg(windows)]
+    if !f.metadata().ok()?.file_type().is_file() {
+        return None;
+    }
     let mut buf = Vec::new();
-    opts.open(path).ok()?.take(max + 1).read_to_end(&mut buf).ok()?;
+    f.take(max + 1).read_to_end(&mut buf).ok()?;
     (buf.len() as u64 <= max).then_some(buf)
 }
 

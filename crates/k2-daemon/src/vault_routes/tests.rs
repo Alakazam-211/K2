@@ -750,6 +750,8 @@ fn restoring_a_backup_is_for_people_and_checks_before_replacing() {
     let (s, v) = call(&src, BACKUP, &agent("ws1", true), json!({ "destDir": out.path() }));
     assert_eq!(s, 403, "agents don't take backups over the routes: {v}");
     let (s, v) = call(&src, BACKUP, &owner(), json!({ "destDir": out.path() }));
+    assert_eq!((s, code(&v)), (403, "person_required"), "the owner token alone needs a confirm (VU-B1): {v}");
+    let (s, v) = call(&src, BACKUP, &owner_tty(), json!({ "destDir": out.path() }));
     assert_eq!(s, 200, "{v}");
     let snap = std::fs::read(out.path().join("vault.db")).expect("snapshot");
     assert!(!snap.windows(SENTINEL.len()).any(|w| w == SENTINEL.as_bytes()));

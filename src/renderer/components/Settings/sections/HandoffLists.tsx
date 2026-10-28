@@ -14,6 +14,7 @@ import {
   splitPeer,
   type HandoffView,
 } from './handoff-api'
+import { primaryScope } from '@/kessel/server-scope'
 
 const btn =
   'px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
@@ -44,7 +45,8 @@ function IncomingRow({ row, onChanged }: { row: HandoffView; onChanged: () => vo
     setBusy(true)
     setError(null)
     try {
-      await handoffApi.decide({ id: row.deliveryId, ...body })
+      // Settings → Vault lists this window's server's handoffs.
+      await handoffApi.decide({ id: row.deliveryId, ...body }, primaryScope())
       onChanged()
     } catch (e) {
       const info = daemonErrorOf(e)

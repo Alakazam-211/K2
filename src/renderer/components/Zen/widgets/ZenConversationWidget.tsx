@@ -50,6 +50,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
 import { zenThreadFeeds } from '@/lib/zen/zen-data'
+import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 import { ThreadAttachmentSourceProvider, type ThreadAttachmentSource } from '@/components/Thread/ThreadImageObjects'
 import { useStickToBottom } from '@/hooks/useStickToBottom'
 import { formatRelativeTime } from '@/lib/format-relative-time'
@@ -95,7 +96,7 @@ function Bubble({
   viewer,
   nowSec,
   server,
-  remoteServer = null,
+  onHandoffDecide,
   onAnswer,
   onVoid,
   onMoreOptions,
@@ -105,9 +106,10 @@ function Bubble({
   viewer: ThreadViewer | null
   nowSec: number
   server?: string
-  /** The agent's server when it isn't this computer: a handoff card there
-   *  says to open that server (this window decides only its own). */
-  remoteServer?: string | null
+  /** A handoff card's decision on the agent's own server (the feed's
+   *  scope), never the window's (accept cards from Home S2, AH-A1). Null
+   *  before the feed is mounted: the card then has no Accept. */
+  onHandoffDecide: ((body: HandoffDecideBody) => Promise<HandoffDecideResult | void>) | null
   /** Resolves when the daemon took the answer; throws its refusal. */
   onAnswer(payload: ThreadAnswerPayload): Promise<void>
   onVoid(): void
@@ -128,7 +130,7 @@ function Bubble({
       // prd-k2-vault-v1 KV9: the compact card (the proposal's defaults),
       // same answer body; More options opens the full one.
       secret={{ compact: true, server, onMoreOptions }}
-      handoffRemoteHost={remoteServer}
+      onHandoffDecide={onHandoffDecide ?? undefined}
     />
   )
 }
@@ -642,6 +644,12 @@ export function ZenConversation({
   // this conversation). No feed yet: images stay chips.
   const feed = useStore(zenThreadFeeds, (s) => s.feeds.find((f) => f.address === row.address) ?? null)
   const feedScope = feed?.scope ?? null
+  // A handoff card decides on the agent's own server (the feed's scope),
+  // with this person's login there: never the window's server (AH-A1).
+  const handoffDecide = useMemo(
+    () => (feedScope ? (body: HandoffDecideBody) => handoffApi.decide(body, feedScope) : null),
+    [feedScope],
+  )
   const feedAddr = feed?.threadAddr ?? ''
   const attachmentSource = useMemo<ThreadAttachmentSource | null>(
     () => (feedScope && feedAddr ? { scope: feedScope, addr: feedAddr } : null),
@@ -838,7 +846,7 @@ export function ZenConversation({
                 viewer={view?.viewer ?? null}
                 nowSec={nowSec}
                 server={row.server ?? 'this computer'}
-                remoteServer={row.server}
+                onHandoffDecide={handoffDecide}
                 onAnswer={(payload) => answer(it.id, payload)}
                 onVoid={() => dismiss(it.id)}
                 onMoreOptions={moreOptions}

@@ -116,7 +116,10 @@ export const handoffApi = {
     views(await daemonCliGet(scope, 'vault/incoming', workspace ? { workspace } : undefined)),
   sent: async (workspace?: string, scope: ServerScope = primaryScope()): Promise<HandoffView[]> =>
     views(await daemonCliGet(scope, 'vault/sent', workspace ? { workspace } : undefined)),
-  decide: (body: HandoffDecideBody, scope: ServerScope = primaryScope()): Promise<HandoffDecideResult> =>
+  /** The card's own server, named by the caller (accept cards from Home
+   *  S2): no default, so a card can't silently decide on the window's
+   *  server for an agent that lives elsewhere. */
+  decide: (body: HandoffDecideBody, scope: ServerScope): Promise<HandoffDecideResult> =>
     daemonCliPost<HandoffDecideResult>(scope, 'vault/incoming/decide', body),
   acceptFrom: async (workspace?: string, scope: ServerScope = primaryScope()): Promise<AcceptFromEntry[]> =>
     entries(await daemonCliGet(scope, 'vault/accept-from', workspace ? { workspace } : undefined)),

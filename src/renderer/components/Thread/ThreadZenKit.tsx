@@ -20,11 +20,7 @@ import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
 import { HandoffCard } from '@/components/SessionView/HandoffCard'
-import {
-  handoffApi,
-  type HandoffDecideBody,
-  type HandoffDecideResult,
-} from '@/components/Settings/sections/handoff-api'
+import type { HandoffDecideBody, HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
 import { coerceHandoff, sameThreadItem, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
@@ -336,8 +332,10 @@ export interface ThreadBubbleProps {
   onAnswer?: (payload: ThreadAnswerPayload) => unknown
   onVoid?: () => void
   secret?: ThreadBubbleSecret
-  /** A handoff card's decision (`/cli/vault/incoming/decide` on the room's
-   *  server). Absent: this window's own server. */
+  /** A handoff card's decision (`/cli/vault/incoming/decide` on the
+   *  card's own server: the room's, or a Garden row's feed). Absent: this
+   *  view can't decide, and the card says to open the agent's server (no
+   *  silent fallback to the window's server, accept cards from Home S2). */
   onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
   /** The room is on a server this window can't decide a handoff for (a
    *  view-only room): its name. The card then says "Open <host> directly
@@ -499,8 +497,8 @@ export const ThreadBubble = memo(function ThreadBubble({
               handoff={handoff}
               answeredBy={cardAnswererLabel(handoff.answeredBy, viewer)}
               nowSec={nowSec}
-              onDecide={onHandoffDecide ?? ((body) => handoffApi.decide(body))}
-              remoteHost={handoffRemoteHost}
+              onDecide={onHandoffDecide ?? (() => Promise.reject(new Error('no server to decide on')))}
+              remoteHost={onHandoffDecide ? handoffRemoteHost : (handoffRemoteHost ?? 'the agent’s server')}
             />
           </div>
         )}

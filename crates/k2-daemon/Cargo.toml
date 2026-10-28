@@ -94,8 +94,8 @@ k2-vault = { path = "../k2-vault" }
 # tag). Their own workspaces are excluded from ours; they resolve into our
 # Cargo.lock. Licences in NOTICE.md (yrs MIT, similar Apache-2.0, thiserror
 # MIT/Apache-2.0; redb is the copy k2-core already links).
-k2-multiplayer-base = { path = "../../vendor/k2-multiplayer-base/crates/base" }
-k2-multiplayer-markdown = { path = "../../vendor/k2-multiplayer-markdown/crates/markdown" }
+k2-mpc-base = { path = "../../vendor/k2-mpc-base/crates/base" }
+k2-mpc-markdown = { path = "../../vendor/k2-mpc-markdown/crates/markdown" }
 # URL hosts for the egress gate; the same `url` 2 k2-vault and reqwest use.
 url = "2"
 

@@ -1,5 +1,5 @@
 //! Live docs: Markdown multiplayer v1 on the vendored multiplayer kit
-//! (`vendor/k2-multiplayer-base`, `vendor/k2-multiplayer-markdown`).
+//! (`vendor/k2-mpc-base`, `vendor/k2-mpc-markdown`).
 //!
 //! The kit owns the docs, their history, presence, merge rules and the file
 //! I/O of disk sync; K2 owns identity, permission, time, transport and
@@ -34,8 +34,8 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use k2_core::log_debug;
-use k2_multiplayer_base::session::{Config, PoolStats, Session, SessionError, SessionManager, TextFilePack};
-use k2_multiplayer_base::store::{DocKey, DocStore};
+use k2_mpc_base::session::{Config, PoolStats, Session, SessionError, SessionManager, TextFilePack};
+use k2_mpc_base::store::{DocKey, DocStore};
 
 /// The vendored kit writes docs back to their files (its C4, base
 /// `e7c1fd6`). `docs-md-v1` is advertised while the runtime is up.
@@ -58,7 +58,7 @@ const RECHECK_EVERY_TICKS: u64 = 8;
 const SWEEP_EVERY_TICKS: u64 = 240;
 
 /// The Markdown pack: one text root over the file's source, 4 MiB.
-pub static MARKDOWN: TextFilePack = TextFilePack::new("markdown", k2_multiplayer_markdown::MAX_FILE_BYTES);
+pub static MARKDOWN: TextFilePack = TextFilePack::new("markdown", k2_mpc_markdown::MAX_FILE_BYTES);
 
 /// The loaded runtime.
 pub struct Runtime {

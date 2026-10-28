@@ -14,7 +14,7 @@
 //! Identity is never taken from the request: the pid, name, colour and
 //! kind come from K2's own records.
 
-use k2_multiplayer_base::session::{Participant, ParticipantKind};
+use k2_mpc_base::session::{Participant, ParticipantKind};
 
 use super::host::{Principal, AGENT_PREFIX, PERSON_PREFIX};
 use crate::cli_response::CliResponse;

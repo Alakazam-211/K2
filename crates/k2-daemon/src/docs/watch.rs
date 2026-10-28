@@ -24,7 +24,7 @@ use std::time::Duration;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 
 use k2_core::log_debug;
-use k2_multiplayer_base::session::is_write_temp;
+use k2_mpc_base::session::is_write_temp;
 
 use crate::notify_bound::{should_observe, DroppingHandler, NOTIFY_CHANNEL_BOUND};
 

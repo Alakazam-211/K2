@@ -7,6 +7,7 @@
 //! |---|---|---|---|---|
 //! | `/cli/docs/status` | GET | read (no path: pool stats) | `status` (with `disk`) | P17, P25 |
 //! | `/cli/docs/flush` | POST | read | `flush` (write back now) | P17 |
+//! | `/cli/docs/tool` | POST | read or edit (per verb) | `run_tool`: cat head tail wc grep sed diff view, sed -i patch append insert replace delete | P3–P5, P9–P13 |
 //! | `/cli/docs/read` | GET | read | `join_shared` + `read` (+ `set_view` with `lines`) | P3, P4, P24 |
 //! | `/cli/docs/who` | GET | read | `roster` | P6, P7 |
 //! | `/cli/docs/log` | GET | **history** | store versions (metadata) | P19 |
@@ -40,15 +41,15 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use k2_multiplayer_base::session::position::{self, At, LineCol, LineRange};
-use k2_multiplayer_base::session::{
+use k2_mpc_base::session::position::{self, At, LineCol, LineRange};
+use k2_mpc_base::session::{
     Approval, ApprovalState, DiskState, EditResult, EditWithError, Need, RosterEntry, Role, Session, SessionError, Stay,
     TextFilePack, UndoOutcome, WriteOutcome,
 };
-use k2_multiplayer_base::store::DocStore;
-use k2_multiplayer_base::text::merge::Conflict;
-use k2_multiplayer_base::text::Hunk;
-use k2_multiplayer_base::{Edit, ParticipantKind};
+use k2_mpc_base::store::DocStore;
+use k2_mpc_base::text::merge::Conflict;
+use k2_mpc_base::text::Hunk;
+use k2_mpc_base::{Edit, ParticipantKind};
 
 use super::caller::{refusal, DocCaller};
 use super::host::{self, CrossRefusal, DocRights, Principal};
@@ -74,6 +75,7 @@ pub const SHARES: &str = "/cli/docs/shares";
 pub const SHARE: &str = "/cli/docs/share";
 pub const UNSHARE: &str = "/cli/docs/unshare";
 pub const FLUSH: &str = "/cli/docs/flush";
+pub const TOOL: &str = "/cli/docs/tool";
 
 /// The family's prefix (passport allowlist, cell arm, dispatcher arm).
 pub const PREFIX: &str = "/cli/docs/";
@@ -89,7 +91,7 @@ const ROOT: &str = TextFilePack::ROOT;
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
-    UNSHARE, FLUSH,
+    UNSHARE, FLUSH, TOOL,
 ];
 
 fn is_post_route(path: &str) -> bool {
@@ -103,6 +105,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/share"
             | "/cli/docs/unshare"
             | "/cli/docs/flush"
+            | "/cli/docs/tool"
     ) || is_edit_route(path)
 }
 
@@ -364,7 +367,7 @@ pub fn session_error(e: &SessionError) -> CliResponse {
 /// A one-shot verb's connection: the pid's shared CLI connection (one
 /// client ID across verbs; the kit keeps one per pid, via and
 /// on-behalf-of), held when `stay` is `Held`.
-fn join(s: &Session, c: &Call, stay: Stay) -> Result<k2_multiplayer_base::session::Joined, SessionError> {
+fn join(s: &Session, c: &Call, stay: Stay) -> Result<k2_mpc_base::session::Joined, SessionError> {
     s.join_shared(c.caller.participant(c.on_behalf), stay)
 }
 
@@ -385,6 +388,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 "rights": rights.json(),
             })))
         }
+        TOOL => tool(s, c),
         FLUSH => {
             let j = join(s, c, Stay::UntilIdle)?;
             let f = s.flush(j.conn)?;
@@ -571,6 +575,113 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
             format!("version {base} is no longer kept as a base; read the doc again and retry"),
         )),
     }
+}
+
+/// Most argv words a tool call may carry.
+const MAX_ARGV: usize = 64;
+
+/// The prefix fence lines name (`┄┄ k2 doc <nonce> BEGIN …`).
+pub const FENCE_PREFIX: &str = "k2 doc";
+
+/// `tool`: one `k2 doc <verb>` on the kit's text tools (`Session::run_tool`).
+/// Body: `{argv: ["grep", "-n", "x"], stdin?: "<text>"}` (the doc path is
+/// `path`, never in argv). Answers 200 with the tool's own outcome
+/// (`exit` 0, 1 = the tool's "no", 2 = refused usage, nothing applied);
+/// K2 and session refusals keep their HTTP status, so the permission
+/// wrapper can teach them.
+fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
+    let argv: Vec<String> = match c.input.body.get("argv") {
+        Some(Value::Array(a)) if !a.is_empty() && a.len() <= MAX_ARGV => a
+            .iter()
+            .map(|v| v.as_str().map(str::to_string))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| VerbError::Response(bad("argv must be a list of strings")))?,
+        _ => return Err(VerbError::Response(bad(format!("argv is required: the verb and its flags (at most {MAX_ARGV} words)")))),
+    };
+    let stdin = match c.input.body.get("stdin") {
+        Some(Value::String(s)) => s.clone().into_bytes(),
+        None | Some(Value::Null) => Vec::new(),
+        Some(_) => return Err(VerbError::Response(bad("stdin must be a string"))),
+    };
+    let j = join(s, c, Stay::UntilIdle)?;
+    let out = match s.run_tool(j.conn, ROOT, &argv, &stdin) {
+        Ok(o) => o,
+        Err(k2_mpc_base::tools::ToolRunError::Tool(e)) => {
+            return Ok(ok(json!({
+                "doc": doc_json(c.target),
+                "exit": e.exit(),
+                "stdout": "",
+                "stderr": format!("k2 doc {}: {e}", argv[0]),
+            })))
+        }
+        Err(k2_mpc_base::tools::ToolRunError::Session(e)) => return Err(VerbError::Session(e)),
+    };
+    let me = c.caller.participant(c.on_behalf);
+    let stderr = if out.changed.is_some() {
+        format!("{} as {}", out.stderr_summary, me.name)
+    } else {
+        out.stderr_summary.clone()
+    };
+    let (stdout, stdout_b64) = match String::from_utf8(out.stdout) {
+        Ok(text) => (Value::String(text), Value::Null),
+        Err(e) => (Value::Null, Value::String(b64(e.as_bytes()))),
+    };
+    let fence = out.fence.as_ref().map(|f| {
+        json!({
+            "begin": f.begin(FENCE_PREFIX, pid_label),
+            "end": f.end(FENCE_PREFIX),
+            "nonce": f.nonce,
+        })
+    });
+    let mut v = json!({
+        "doc": doc_json(c.target),
+        "exit": out.exit,
+        "stdout": stdout,
+        "stderr": stderr,
+        "version": out.version,
+        "changed": out.changed.as_ref().map(edit_json),
+        "fence": fence,
+    });
+    if !stdout_b64.is_null() {
+        v["stdoutB64"] = stdout_b64;
+    }
+    if let (Some(person), Some(r)) = (c.on_behalf, out.changed.as_ref()) {
+        v["onBehalfOf"] = json!(person);
+        if let Some(a) = s.approval(j.conn, r.version)? {
+            v["approval"] = approval_json(&a);
+        }
+    }
+    Ok(ok(v))
+}
+
+/// How a pid reads in a fence's contributors line: `Sam (person)`,
+/// `Writer (agent)`, `an outside edit`.
+fn pid_label(pid: &str) -> String {
+    if pid == k2_mpc_base::session::EXTERNAL_PID {
+        return "an outside edit".to_string();
+    }
+    match Principal::parse(pid) {
+        Some(Principal::Person(k)) => {
+            let people = k2_core::notify_prefs::People::load().unwrap_or_default();
+            format!("{} (person)", k2_core::person_name::effective(&k, &people).display_name)
+        }
+        Some(p @ Principal::Agent(_)) => {
+            format!("{} (agent)", DocCaller::Agent { project_id: pid_project(&p) }.participant(None).name)
+        }
+        None => pid.to_string(),
+    }
+}
+
+fn pid_project(p: &Principal) -> String {
+    match p {
+        Principal::Agent(id) | Principal::Person(id) => id.clone(),
+    }
+}
+
+/// Standard base64 (non-UTF-8 tool output is rare: docs are UTF-8 text).
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// `{state: clean|dirty|missing|declined, sinceMs?, reason?}`, or null for

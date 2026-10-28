@@ -250,7 +250,7 @@ multiplayer kit and its Markdown type pack, vendored with `git subtree`.
 
 | | |
 |--|--|
-| **What** | `vendor/k2-multiplayer-base` (the kit) and `vendor/k2-multiplayer-markdown` (the Markdown pack), each with its own `NOTICE.md` |
+| **What** | `vendor/k2-mpc-base` (the kit) and `vendor/k2-mpc-markdown` (the Markdown pack), each with its own `NOTICE.md` |
 | **Upstream** | Alakazam Labs (K2 Cores); pinned shas in the `git-subtree-split:` lines of their vendor commits |
 | **License** | Alakazam Labs code, under K2's licence while vendored here (the repos' own licence is not chosen yet) |
 

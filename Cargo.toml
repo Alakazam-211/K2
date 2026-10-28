@@ -33,8 +33,8 @@ members = [
 exclude = [
     "third_party/sew-proto",
     "third_party/sew-client",
-    "vendor/k2-multiplayer-base",
-    "vendor/k2-multiplayer-markdown",
+    "vendor/k2-mpc-base",
+    "vendor/k2-mpc-markdown",
 ]
 
 # Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.

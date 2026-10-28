@@ -19,7 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use k2_multiplayer_base::store::{DocStore, HostOp, StoreError};
+use k2_mpc_base::store::{DocStore, HostOp, StoreError};
 
 /// Host-table namespace.
 pub const NS: &str = "k2.docs.shares";

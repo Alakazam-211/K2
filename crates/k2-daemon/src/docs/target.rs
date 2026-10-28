@@ -22,7 +22,7 @@
 
 use std::path::{Path, PathBuf};
 
-use k2_multiplayer_base::store::DocKey;
+use k2_mpc_base::store::DocKey;
 
 /// A resolved, jailed doc.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,7 +109,7 @@ pub fn is_vault(rel: &str) -> bool {
 /// The deny list for an existing, jailed file (`rel` workspace-relative,
 /// `link` the path before symlinks were resolved, `abs` after).
 pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
-    if !k2_multiplayer_markdown::is_markdown_path(rel) {
+    if !k2_mpc_markdown::is_markdown_path(rel) {
         return Err(Refusal::declined("not_markdown", format!("{rel} is not a Markdown file (.md, .markdown)")));
     }
     if is_vault(rel) {

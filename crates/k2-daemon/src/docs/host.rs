@@ -33,8 +33,8 @@ use std::sync::Weak;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use k2_core::log_debug;
-use k2_multiplayer_base::session::{AuditEvent, Host, LeaveReason, Participant, Rights};
-use k2_multiplayer_base::store::{DocKey, DocStore};
+use k2_mpc_base::session::{AuditEvent, Host, LeaveReason, Participant, Rights};
+use k2_mpc_base::store::{DocKey, DocStore};
 
 /// pid prefix for people.
 pub const PERSON_PREFIX: &str = "person:";
@@ -49,7 +49,7 @@ pub const AUDIT_APPROVAL: &str = "doc-approval";
 /// decoding, came back, or failed to read/write.
 pub const AUDIT_FILE: &str = "doc-file";
 /// The audit `user` for file events (the kit's outside-edit participant).
-const EXTERNAL: &str = k2_multiplayer_base::session::EXTERNAL_PID;
+const EXTERNAL: &str = k2_mpc_base::session::EXTERNAL_PID;
 
 /// What one principal may do with one doc (K2's copy of the kit's `Rights`,
 /// with a wire shape).

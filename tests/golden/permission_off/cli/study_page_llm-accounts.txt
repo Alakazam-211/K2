@@ -98,6 +98,28 @@ ISOLATION
   or key the server bills to; this is an organizing feature, not a
   security boundary.
 
+IN THE K2 VAULT (0.46.6, opt-in per server)
+  k2 llm tokens storage            where saved tokens are kept, and for
+                                   each: file yes/no, vault active /
+                                   disabled / none, in step yes/no
+  k2 llm tokens storage vault      seal every saved token into the K2
+                                   vault (Admin or Owner; audited)
+  k2 llm tokens storage files      back to files only (Admin or Owner)
+  With vault, each saved token (subscriptions and API tokens, removed
+  ones kept disabled) is also sealed in the vault's daemon-only system
+  area as llm-login.<tool>.<id>: nobody can reveal it and it is never
+  copied to another server. The plain files stay in place in 0.46.6, so
+  switching back is instant and loses nothing. If a tool's CLI renews a
+  saved token in its folder, the newer file is sealed within minutes.
+  The server default stays where each tool reads it.
+  If the vault isn't open (a locked keychain), the server default and
+  every file keep working; a token only the vault holds answers
+  vault_unavailable (503) until it opens. K2 tries again after 1, 2,
+  4 … up to 30 minutes; a cancelled Keychain prompt stops the retries
+  (a notice on your Thread) until `k2 vault open` or the next start.
+  K2_LLM_ACCOUNTS_STORAGE=files|vault in the daemon's env wins over the
+  setting.
+
 MOVING A BOX
   Clone and migration bundles never carry the tokens. Sign each
   subscription in again on the new box and add API tokens again.

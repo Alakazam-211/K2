@@ -43004,8 +43004,9 @@ IN THE K2 VAULT (0.46.6, opt-in per server)
   every file keep working; a token only the vault holds answers
   vault_unavailable (503) until it opens. K2 tries again after 1, 2,
   4 … up to 30 minutes; a cancelled Keychain prompt stops the retries
-  (a notice on your Thread) until `k2 vault open` or the next start. K2_LLM_ACCOUNTS_STORAGE=files|vault in the daemon's env wins
-  over the setting.
+  (a notice on your Thread) until `k2 vault open` or the next start.
+  K2_LLM_ACCOUNTS_STORAGE=files|vault in the daemon's env wins over the
+  setting.
 
 MOVING A BOX
   Clone and migration bundles never carry the tokens. Sign each

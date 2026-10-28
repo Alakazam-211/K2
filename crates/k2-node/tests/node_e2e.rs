@@ -596,6 +596,57 @@ async fn sync_by_bundle_runs_in_a_worktree_at_the_commit_in_a_warm_slot_next_tim
     assert_eq!(src.warmth.as_deref(), Some("warm"));
 }
 
+/// `--with` (protocol 6): sibling repos laid out as in the workspace, each
+/// at its own commit from its own mirror; the job starts in the main repo,
+/// so `../base` reaches the sibling. A layout that escapes never syncs.
+#[tokio::test(flavor = "multi_thread")]
+async fn with_repos_are_laid_out_beside_the_main_one() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-with", "", |_| {}).await;
+    let (md, _, md_head) = temp_repo();
+    let base = k2_node::util::temp_dir("e2e-with-base").join("base");
+    std::fs::create_dir_all(&base).unwrap();
+    git_out(&base, &["init", "-q", "-b", "main"]);
+    std::fs::write(base.join("b.txt"), "base\n").unwrap();
+    git_out(&base, &["add", "."]);
+    git_out(&base, &["commit", "-q", "-m", "base"]);
+    let base_head = git_out(&base, &["rev-parse", "HEAD"]);
+    let mut c = fake.next_conn().await;
+    let fr = c.until(|f| matches!(f, Frame::Offer(_))).await;
+    let Some(Frame::Offer(o)) = fr.last() else { unreachable!() };
+    assert!(o.features.iter().any(|f| f == frames::FEATURE_MULTI_REPO), "{:?}", o.features);
+    let mut p = plan("w1", &["/bin/sh", "-c", "cat a.txt ../k2-multiplayer-base/b.txt; pwd; git -C ../k2-multiplayer-base rev-parse HEAD"]);
+    p.src = Some(Src { project_key: "pk-md".into(), remote_url: None, commit: md_head.clone(), dirty: None, slots: 1 });
+    p.src_path = Some("k2-multiplayer-markdown".into());
+    p.with = vec![frames::SrcWith { path: "k2-multiplayer-base".into(), project_key: "pk-base".into(), remote_url: None, commit: base_head.clone() }];
+    c.send(Frame::Assign(assign(p, 1)));
+    for (repo, sha, name) in [(&md, &md_head, "m.bundle"), (&base, &base_head, "b.bundle")] {
+        let fr = c.until(|f| matches!(f, Frame::Need(_))).await;
+        let Frame::Need(need) = fr.last().unwrap() else { unreachable!() };
+        assert_eq!((need.kind, need.want.as_str()), (TransferKind::Bundle, sha.as_str()), "one bundle per repo, main first");
+        let b = bundle_for(repo, "w1", sha, &n.dir.join(name));
+        send_blob(&c, "w1", TransferKind::Bundle, &b, 1000);
+    }
+    let fr = run_to_receipt(&mut c, "w1").await;
+    let out = text(&logs_of(&fr, "w1"), LogStream::Out);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(states_of(&fr, "w1").last().unwrap().state, JobState::Done, "{out}\n{}", text(&logs_of(&fr, "w1"), LogStream::Sys));
+    assert_eq!(&lines[..2], &["two", "base"]);
+    assert_eq!(lines[2], n.layout.job_dir("w1", 1).join("src/k2-multiplayer-markdown").display().to_string());
+    assert_eq!(lines[3], base_head);
+    assert!(n.layout.mirror("pk-base").exists() && n.layout.mirror("pk-md").exists(), "each repo has its own mirror");
+    // Overlapping or escaping layouts fail before anything syncs.
+    let mut bad = plan("w2", &["/bin/true"]);
+    bad.src = Some(Src { project_key: "pk-md".into(), remote_url: None, commit: md_head.clone(), dirty: None, slots: 1 });
+    bad.src_path = Some("k2-multiplayer-markdown".into());
+    bad.with = vec![frames::SrcWith { path: "../escape".into(), project_key: "pk-base".into(), remote_url: None, commit: base_head.clone() }];
+    c.send(Frame::Assign(assign(bad, 1)));
+    let fr = run_to_receipt(&mut c, "w2").await;
+    let last = states_of(&fr, "w2").into_iter().last().unwrap();
+    assert_eq!((last.state, last.reason.as_deref()), (JobState::Failed, Some("sync_failed")));
+    assert!(!fr.iter().any(|f| matches!(f, Frame::Need(_))), "nothing asked for");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dirty_blob_is_applied_and_a_bad_digest_fails_the_job() {
     let mut fake = Fake::start().await;

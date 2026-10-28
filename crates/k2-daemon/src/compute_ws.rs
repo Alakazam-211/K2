@@ -1748,21 +1748,27 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
         let Some(job) = job.filter(|j| j.node_id == node && j.generation == n.generation as i64) else {
             return fail("job_not_found", "no such job attempt on this node".into());
         };
-        let Some(src) = job.plan().and_then(|p| p.src) else {
+        let Some(plan) = job.plan() else {
+            return fail("no_source", "this job has no source".into());
+        };
+        let Some(src) = plan.src.clone() else {
             return fail("no_source", "this job has no source".into());
         };
         let blob = match n.kind {
             TransferKind::Bundle => {
-                if n.want != src.commit {
+                // The main repo's commit, or (`--with`) one of its siblings'.
+                let sibling = plan.with.iter().find(|w| w.commit == n.want && n.want != src.commit);
+                if n.want != src.commit && sibling.is_none() {
                     return fail("bad_need", "the node asked for another commit".into());
                 }
                 let Some(ws) = ws_path else { return fail("workspace_gone", "the workspace is gone".into()) };
-                // `--repo`: the nested repo's main checkout, checked against
-                // the workspace jail again now (the folder may have changed
-                // since submit); else the workspace's own repo.
-                let root = match job.ctl.repo.as_deref() {
-                    Some(rel) => compute::sync::nested_repo(std::path::Path::new(&ws), rel).map(|n| n.home),
-                    None => compute::sync::repo_root(std::path::Path::new(&ws)),
+                // `--repo` / `--with`: the nested repo's main checkout, checked
+                // against the workspace jail again now (the folder may have
+                // changed since submit); else the workspace's own repo.
+                let root = match (sibling, job.ctl.repo.as_deref()) {
+                    (Some(w), _) => compute::sync::nested_repo(std::path::Path::new(&ws), &w.path).map(|n| n.home),
+                    (None, Some(rel)) => compute::sync::nested_repo(std::path::Path::new(&ws), rel).map(|n| n.home),
+                    (None, None) => compute::sync::repo_root(std::path::Path::new(&ws)),
                 };
                 let root = match root {
                     Ok(r) => r,
@@ -1971,7 +1977,9 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
         }
         // `--cache` (protocol 6): only to a node offering `job-cache` (an
         // older one, e.g. rolled back since submit, would refuse the digest).
-        if plan.cache.is_some() && !offer.features.iter().any(|f| f == pcache::FEATURE_JOB_CACHE) {
+        if (plan.cache.is_some() && !offer.features.iter().any(|f| f == pcache::FEATURE_JOB_CACHE))
+            || (!plan.with.is_empty() && !offer.features.iter().any(|f| f == frames::FEATURE_MULTI_REPO))
+        {
             wait(cache_feature_wait(), &mut pass);
             continue;
         }
@@ -2189,7 +2197,8 @@ pub fn kick(node_id: &str) {
         return;
     }
     // `--cache`: the same wait for a node without `job-cache` (protocol 6).
-    if plan.cache.is_some() && !offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == pcache::FEATURE_JOB_CACHE)) {
+    let has = |feat: &str| offer.as_ref().is_some_and(|o| o.features.iter().any(|f| f == feat));
+    if (plan.cache.is_some() && !has(pcache::FEATURE_JOB_CACHE)) || (!plan.with.is_empty() && !has(frames::FEATURE_MULTI_REPO)) {
         let w = cache_feature_wait();
         if job.reason.as_deref() != Some(w.code.as_str()) {
             store::set_job_reason(&conn, &job.id, Some(&w.code), Some(&w.message));
@@ -2254,7 +2263,7 @@ fn secret_feature_wait() -> frames::Refusal {
 fn cache_feature_wait() -> frames::Refusal {
     frames::Refusal::new(
         pcache::codes::NODE_TOO_OLD_FOR_CACHE,
-        "the node's k2-node has no job caches (--cache needs k2-node 0.46.6; k2 compute node update <node>)",
+        "the node's k2-node is older than 0.46.6 (--cache and --with need it; k2 compute node update <node>)",
     )
 }
 
@@ -2442,6 +2451,8 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
+            src_path: None,
+            with: Vec::new(),
         };
         store::insert_job(
             conn,

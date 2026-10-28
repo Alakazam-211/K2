@@ -19924,6 +19924,10 @@ Agents:
                                 workspace whose root isn't a repo. Found for you when
                                 you run from inside one. Same jail: inside the
                                 workspace, no '..', no link out, never .k2/
+                 [--with REPO[@SHA]]...  ship sibling repos too, each at its own HEAD
+                                (or SHA; commits only, never --dirty), laid out
+                                beside the main one as in the workspace, so
+                                ../k2-multiplayer-base path deps work (up to 8)
                  [--cache NAME] a folder on the node that outlives the job, per
                                 workspace and NAME: $K2_JOB_CACHE (fuzz corpora,
                                 installs, a cargo target). With --no-source too.
@@ -20688,7 +20692,7 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache=""
-    local -a labels=() envs=() needs=() artifacts=() secrets=()
+    local -a labels=() envs=() needs=() artifacts=() secrets=() withs=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
@@ -20696,6 +20700,10 @@ cmd_compute_run() {
             # workspace, shipped instead of the workspace's own (0.46.6).
             --repo) repo="${2:-}"; shift 2
                 [ -n "$repo" ] || { echo "usage: --repo <folder> (a git repo inside the workspace, e.g. k2-multiplayer-base)" >&2; exit 2; } ;;
+            # --with REPO[@SHA]: a sibling repo shipped beside the main one,
+            # laid out as in the workspace (0.46.6). Repeatable.
+            --with) withs+=("${2:-}"); shift 2
+                [ -n "${withs[${#withs[@]}-1]}" ] || { echo "usage: --with REPO[@SHA] (a git repo inside the workspace)" >&2; exit 2; } ;;
             # --cache NAME: a folder on the node that outlives the job
             # ($K2_JOB_CACHE), per workspace and name (0.46.6).
             --cache) cache="${2:-}"; shift 2
@@ -20852,6 +20860,22 @@ for a in sys.argv[1:]:
     out.append(o)
 print(json.dumps(out))' "${secrets[@]}")" || exit 2
     fi
+    local with_json=""
+    if [ "${#withs[@]}" -gt 0 ]; then
+        with_json="$(python3 -c '
+import json, sys
+out = []
+for a in sys.argv[1:]:
+    repo, at, sha = a.rpartition("@")
+    if not at:
+        repo, sha = a, ""
+    if not repo:
+        sys.stderr.write("usage: --with REPO[@SHA]\n"); sys.exit(2)
+    o = {"repo": repo}
+    if sha: o["sha"] = sha
+    out.append(o)
+print(json.dumps(out))' "${withs[@]}")" || exit 2
+    fi
     local ws_name
     ws_name="$(_compute_ws "$workspace")"
     local body
@@ -20863,7 +20887,7 @@ print(json.dumps(out))' "${secrets[@]}")" || exit 2
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
-        K2_CJ_repo="$repo" K2_CJ_cache="$cache")"
+        K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -21122,7 +21146,7 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--supersede|--submitter|--repo|--cache)
+            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--supersede|--submitter|--repo|--cache|--with)
                 pass+=("$1" "${2:-}"); shift 2 ;;
             --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
@@ -42197,7 +42221,9 @@ k2 study compute — run builds and tests on your owner's other machines
 
 WHEN
   Slow builds/tests, or another OS/arch:
-    k2 compute run <node> -- cargo nextest run -p k2-core
+    k2 compute run <node> --dirty -- cargo nextest run -p k2-core
+  --dirty sends your uncommitted changes too: no commit needed to check
+  work in progress. Iterate there, not on this machine.
   Not for work that needs your logins, keychain or this machine's files.
 
 FIRST
@@ -42224,12 +42250,41 @@ RUN
   run --wait sends no [compute] message while it waits (only if the
   waiting CLI dies); a --detach job always gets its message.
   Code: the node checks out a commit (HEAD, or --sha REV) in a fresh
-  worktree. Uncommitted work is NOT sent unless --dirty. A warm target
-  dir per project keeps cargo incremental.
+  worktree. Uncommitted work is NOT sent unless --dirty (the diff and
+  untracked files on top of HEAD; never .k2/). A warm target dir per repo
+  keeps cargo incremental, so a node's second build is quick.
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
   --env values are stored (the plan, the job row, the node's ledger):
   never put a key in --env. Use --secret (SECRETS below).
+
+REPOS (0.46.6)
+  The code is your workspace's repo, or the worktree you run from. A
+  workspace whose folder isn't a repo (several repos side by side):
+    k2 compute run <node> --repo k2-multiplayer-base --dirty -- cargo test
+  --repo DIR: a git repo inside the workspace, or a worktree of one (its
+  own HEAD). Run from inside one and K2 picks it for you. Never a folder
+  outside the workspace, through a link, or in .k2/ (repo_invalid, exit 2).
+  Path dependencies on a sibling repo: ship it too, laid out as in the
+  workspace, so ../k2-multiplayer-base works:
+    k2 compute run <node> --repo k2-multiplayer-markdown \
+        --with k2-multiplayer-base --dirty -- cargo test
+  --with REPO[@SHA] (repeatable, up to 8): each at its own HEAD or SHA.
+  Only commits travel for --with repos: commit there first (--dirty is for
+  the main repo). Needs k2-node 0.46.6 on the node.
+
+CACHES (0.46.6)
+  --cache NAME gives the job a folder that is still there next run on the
+  same node: $K2_JOB_CACHE. Per workspace and NAME; works with --no-source.
+    k2 compute run <node> --no-source --cache fuzz -- sh -c \
+      'cargo fuzz run parse -- -max_total_time=3600 "$K2_JOB_CACHE/corpus"'
+  For a cargo target dir you choose: CARGO_TARGET_DIR="$K2_JOB_CACHE/target"
+  inside your command (--env can't set it).
+  Caches stay on the node, count toward its disk limits and are evicted
+  when idle and the disk runs low (oldest first), so keep nothing there
+  you can't rebuild. Never with --secret. Needs k2-node 0.46.6.
+  k2 compute cache [--node N] lists them; owner/admin clear them with
+  k2 compute cache clear --workspace <ws> [--name NAME].
 
 TIERS (queue order, 0.46.5)
   --tier ci        highest: the next free slot, ahead of everything queued.

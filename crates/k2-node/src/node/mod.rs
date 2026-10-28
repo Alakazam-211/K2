@@ -1157,6 +1157,8 @@ mod wall_tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
+            src_path: None,
+            with: Vec::new(),
         };
         let fence = k2_node_proto::frames::Fence { job_id: job.into(), attempt: 1, generation: 1, plan_digest: plan.digest().unwrap() };
         k2_node_proto::frames::Assign { fence, plan }

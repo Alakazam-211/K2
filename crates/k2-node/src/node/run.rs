@@ -356,16 +356,20 @@ impl Node {
         let mut src_ran: Option<SrcRan> = None;
         let mut lease: Option<Lease> = None;
         let mut cwd = dirs.root.clone();
+        // The main checkout (`src/`, or `src/<src_path>` with `--with`).
+        let mut main_checkout = dirs.src.clone();
         if let Some(src) = &a.plan.src {
             match self.sync_src(&t, &a, &dirs, &mut journal, &mut stop).await {
-                Ok(ran) if secret_job => {
+                Ok((ran, main_dir)) if secret_job => {
                     // No warm slot: the build's outputs may hold the value.
-                    cwd = dirs.src.clone();
+                    main_checkout = main_dir.clone();
+                    cwd = main_dir;
                     sys(&mut journal, "target dir: job-private (a secret job never uses a warm slot)");
                     src_ran = Some(SrcRan { slot: None, warmth: Some("private".into()), ..ran });
                 }
-                Ok(ran) => {
-                    cwd = dirs.src.clone();
+                Ok((ran, main_dir)) => {
+                    main_checkout = main_dir.clone();
+                    cwd = main_dir;
                     let pc = t.paths.project_cache(&src.project_key);
                     let _ = std::fs::create_dir_all(&pc);
                     let l = self.slots.lock().unwrap().lease(&pc, &src.project_key, src.slots, &src.commit, dirs.private_target.clone());
@@ -484,10 +488,16 @@ impl Node {
             tool_paths: &resolved.path_prepend,
             tool_env: &resolved.env,
             sccache_socket: (secret_job || slot_tmp.is_dir()).then_some(sccache_socket.as_path()),
-            src_dir: a.plan.src.is_some().then_some(dirs.src.as_path()),
+            src_dir: a.plan.src.is_some().then_some(main_checkout.as_path()),
             job_cache: job_cache_dir.as_deref(),
         }) {
-            Ok(e) => e,
+            Ok(mut e) => {
+                // `--with` repos are the node's checkouts too: git may read them.
+                for w in &a.plan.with {
+                    runner::git_safe_directory(&mut e, &dirs.src.join(&w.path));
+                }
+                e
+            }
             Err((code, name)) => {
                 self.finish_job(&t, &a, Some(&dirs), JobState::Failed, Some("env_refused"), Some(&format!("{code}: {name}")), src_ran, None, Some(journal), lease, None).await;
                 return;

@@ -5,7 +5,9 @@ k2 study compute — run builds and tests on your owner's other machines
 
 WHEN
   Slow builds/tests, or another OS/arch:
-    k2 compute run <node> -- cargo nextest run -p k2-core
+    k2 compute run <node> --dirty -- cargo nextest run -p k2-core
+  --dirty sends your uncommitted changes too: no commit needed to check
+  work in progress. Iterate there, not on this machine.
   Not for work that needs your logins, keychain or this machine's files.
 
 FIRST
@@ -32,12 +34,41 @@ RUN
   run --wait sends no [compute] message while it waits (only if the
   waiting CLI dies); a --detach job always gets its message.
   Code: the node checks out a commit (HEAD, or --sha REV) in a fresh
-  worktree. Uncommitted work is NOT sent unless --dirty. A warm target
-  dir per project keeps cargo incremental.
+  worktree. Uncommitted work is NOT sent unless --dirty (the diff and
+  untracked files on top of HEAD; never .k2/). A warm target dir per repo
+  keeps cargo incremental, so a node's second build is quick.
   Env starts empty: PATH, HOME, CARGO_*, TMPDIR, CI=1 and your --env
   NAME=value. No K2 token, socket or port ever reaches a job.
   --env values are stored (the plan, the job row, the node's ledger):
   never put a key in --env. Use --secret (SECRETS below).
+
+REPOS (0.46.6)
+  The code is your workspace's repo, or the worktree you run from. A
+  workspace whose folder isn't a repo (several repos side by side):
+    k2 compute run <node> --repo k2-multiplayer-base --dirty -- cargo test
+  --repo DIR: a git repo inside the workspace, or a worktree of one (its
+  own HEAD). Run from inside one and K2 picks it for you. Never a folder
+  outside the workspace, through a link, or in .k2/ (repo_invalid, exit 2).
+  Path dependencies on a sibling repo: ship it too, laid out as in the
+  workspace, so ../k2-multiplayer-base works:
+    k2 compute run <node> --repo k2-multiplayer-markdown \
+        --with k2-multiplayer-base --dirty -- cargo test
+  --with REPO[@SHA] (repeatable, up to 8): each at its own HEAD or SHA.
+  Only commits travel for --with repos: commit there first (--dirty is for
+  the main repo). Needs k2-node 0.46.6 on the node.
+
+CACHES (0.46.6)
+  --cache NAME gives the job a folder that is still there next run on the
+  same node: $K2_JOB_CACHE. Per workspace and NAME; works with --no-source.
+    k2 compute run <node> --no-source --cache fuzz -- sh -c \
+      'cargo fuzz run parse -- -max_total_time=3600 "$K2_JOB_CACHE/corpus"'
+  For a cargo target dir you choose: CARGO_TARGET_DIR="$K2_JOB_CACHE/target"
+  inside your command (--env can't set it).
+  Caches stay on the node, count toward its disk limits and are evicted
+  when idle and the disk runs low (oldest first), so keep nothing there
+  you can't rebuild. Never with --secret. Needs k2-node 0.46.6.
+  k2 compute cache [--node N] lists them; owner/admin clear them with
+  k2 compute cache clear --workspace <ws> [--name NAME].
 
 TIERS (queue order, 0.46.5)
   --tier ci        highest: the next free slot, ahead of everything queued.

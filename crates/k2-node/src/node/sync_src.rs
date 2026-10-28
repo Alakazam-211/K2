@@ -7,7 +7,7 @@
 //! network is `no-lan` or `none`; otherwise its own bundle. Every git call
 //! is hardened (`crate::sync::HARDEN`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use k2_node_proto::crypto;
@@ -92,33 +92,38 @@ impl Node {
         }
     }
 
-    /// Mirror → (fetch | bundle) → worktree → dirty. `Err((code, detail))`.
-    pub(super) async fn sync_src(
+    /// One repo into `dest`: the tenant's mirror for `project_key`, fetched
+    /// from `remote_url` or the server's bundle of `commit`, then a
+    /// worktree at `commit`. Returns its tree. `Err((code, detail))`.
+    #[allow(clippy::too_many_arguments)]
+    async fn sync_repo(
         &self,
         t: &Tenant,
         a: &Assign,
-        dirs: &JobDirs,
+        git: &Git,
+        project_key: &str,
+        remote_url: Option<&str>,
+        commit: &str,
+        dest: &Path,
+        root: &Path,
         journal: &mut JournalWriter,
         stop: &mut watch::Receiver<Option<StopReason>>,
-    ) -> Result<SrcRan, (String, String)> {
-        let src = a.plan.src.as_ref().ok_or(("sync_failed".to_string(), "no src".to_string()))?;
+    ) -> Result<String, (String, String)> {
         let fail = |c: &str, d: String| (c.to_string(), d);
-        if !valid_sha(&src.commit) {
-            return Err(fail("sync_failed", format!("commit {:?} is not a full sha", src.commit)));
+        if !valid_sha(commit) {
+            return Err(fail("sync_failed", format!("commit {commit:?} is not a full sha")));
         }
-        if !k2_node_proto::frames::valid_project_key(&src.project_key) {
+        if !k2_node_proto::frames::valid_project_key(project_key) {
             return Err(fail("sync_failed", "project key is not a plain name".into()));
         }
-        let git = Git::find(&self.layout().git_home(), &crate::util::base_path(&self.layout().home))
-            .ok_or_else(|| fail(refusal::TOOL_MISSING, "git is not installed on the node".into()))?;
-        let mirror = t.paths.mirror(&src.project_key);
+        let mirror = t.paths.mirror(project_key);
         let mut sys = |msg: String| {
             let _ = journal.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {msg}\n").as_bytes());
             t.ship.notify_one();
         };
         git.ensure_mirror(&mirror).await.map_err(|e| fail("sync_failed", e))?;
-        if !git.has_commit(&mirror, &src.commit).await {
-            if let Some(url) = &src.remote_url {
+        if !git.has_commit(&mirror, commit).await {
+            if let Some(url) = remote_url {
                 if t.is_owner() {
                     match git.fetch_remote(&mirror, url).await {
                         Ok(()) => sys(format!("fetched history from {url}")),
@@ -140,21 +145,65 @@ impl Node {
                 }
             }
         }
-        if !git.has_commit(&mirror, &src.commit).await {
+        if !git.has_commit(&mirror, commit).await {
             let have = git.tips(&mirror).await.unwrap_or_default();
-            let blob = dirs.root.join("bundle");
-            let need = Need { job_id: a.fence.job_id.clone(), generation: a.fence.generation, kind: TransferKind::Bundle, want: src.commit.clone(), have };
+            let blob = root.join("bundle");
+            let need = Need { job_id: a.fence.job_id.clone(), generation: a.fence.generation, kind: TransferKind::Bundle, want: commit.to_string(), have };
             self.fetch_blob(t, need, &blob, stop).await.map_err(|e| fail(if e == "stopped" { "stopped" } else { "sync_failed" }, e))?;
             git.fetch_bundle(&mirror, &blob).await.map_err(|e| fail("sync_failed", e))?;
             let _ = std::fs::remove_file(&blob);
             sys("applied the controller's bundle".into());
-            if !git.has_commit(&mirror, &src.commit).await {
-                return Err(fail("sync_failed", format!("commit {} not found after the bundle", src.commit)));
+            if !git.has_commit(&mirror, commit).await {
+                return Err(fail("sync_failed", format!("commit {commit} not found after the bundle")));
             }
         }
-        let _ = std::fs::remove_dir_all(&dirs.src);
-        git.worktree_add(&mirror, &dirs.src, &src.commit).await.map_err(|e| fail("sync_failed", e))?;
-        let tree = git.tree_of(&mirror, &src.commit).await.map_err(|e| fail("sync_failed", e))?;
+        let _ = std::fs::remove_dir_all(dest);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| fail("sync_failed", format!("create {}: {e}", parent.display())))?;
+        }
+        git.worktree_add(&mirror, dest, commit).await.map_err(|e| fail("sync_failed", e))?;
+        git.tree_of(&mirror, commit).await.map_err(|e| fail("sync_failed", e))
+    }
+
+    /// Mirror → (fetch | bundle) → worktree → dirty, then (`--with`) each
+    /// sibling repo beside it, laid out as in the workspace. Returns what
+    /// ran and the main checkout (the job's start). `Err((code, detail))`.
+    pub(super) async fn sync_src(
+        &self,
+        t: &Tenant,
+        a: &Assign,
+        dirs: &JobDirs,
+        journal: &mut JournalWriter,
+        stop: &mut watch::Receiver<Option<StopReason>>,
+    ) -> Result<(SrcRan, PathBuf), (String, String)> {
+        let src = a.plan.src.as_ref().ok_or(("sync_failed".to_string(), "no src".to_string()))?;
+        let fail = |c: &str, d: String| (c.to_string(), d);
+        // `--with` (protocol 6): `src/` is the workspace's layout, the main
+        // checkout at `src/<src_path>`. Checked before anything is written.
+        let main_dir = match a.plan.src_path.as_deref() {
+            Some(sp) => {
+                k2_node_proto::frames::check_layout(sp, &a.plan.with).map_err(|e| fail("sync_failed", e))?;
+                let _ = std::fs::remove_dir_all(&dirs.src);
+                std::fs::create_dir_all(&dirs.src).map_err(|e| fail("sync_failed", format!("create {}: {e}", dirs.src.display())))?;
+                if sp.is_empty() { dirs.src.clone() } else { dirs.src.join(sp) }
+            }
+            None if !a.plan.with.is_empty() => return Err(fail("sync_failed", "--with repos without the main repo's folder".into())),
+            None => dirs.src.clone(),
+        };
+        let git = Git::find(&self.layout().git_home(), &crate::util::base_path(&self.layout().home))
+            .ok_or_else(|| fail(refusal::TOOL_MISSING, "git is not installed on the node".into()))?;
+        // The main repo into place (a `--with` job's `src/` already holds
+        // nothing but the layout's folders).
+        if a.plan.src_path.as_deref() == Some("") {
+            // The workspace's own repo is the layout root: git wants the
+            // folder absent.
+            let _ = std::fs::remove_dir_all(&dirs.src);
+        }
+        let tree = self.sync_repo(t, a, &git, &src.project_key, src.remote_url.as_deref(), &src.commit, &main_dir, &dirs.root, journal, stop).await?;
+        let mut sys = |msg: String| {
+            let _ = journal.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {msg}\n").as_bytes());
+            t.ship.notify_one();
+        };
         let mut dirty_sha = None;
         if let Some(d) = &src.dirty {
             let blob = dirs.root.join("dirty.tar");
@@ -164,10 +213,15 @@ impl Node {
             if !crypto::ct_eq(got.as_bytes(), d.sha256.as_bytes()) {
                 return Err(fail("sync_failed", "dirty blob doesn't match the plan's digest".into()));
             }
-            git.apply_dirty(&dirs.src, &blob, &dirs.dirty).await.map_err(|e| fail("sync_failed", e))?;
+            git.apply_dirty(&main_dir, &blob, &dirs.dirty).await.map_err(|e| fail("sync_failed", e))?;
             sys("applied the dirty patch and untracked files".into());
             dirty_sha = Some(d.sha256.clone());
         }
-        Ok(SrcRan { commit: src.commit.clone(), tree, dirty_sha256: dirty_sha, slot: None, warmth: None })
+        for w in &a.plan.with {
+            let dest = dirs.src.join(&w.path);
+            self.sync_repo(t, a, &git, &w.project_key, w.remote_url.as_deref(), &w.commit, &dest, &dirs.root, journal, stop).await?;
+            let _ = journal.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] --with {} @ {}\n", w.path, &w.commit[..w.commit.len().min(8)]).as_bytes());
+        }
+        Ok((SrcRan { commit: src.commit.clone(), tree, dirty_sha256: dirty_sha, slot: None, warmth: None }, main_dir))
     }
 }

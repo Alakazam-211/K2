@@ -164,6 +164,10 @@ impl Node {
         if t.speaks_cache() && !f.iter().any(|x| x == k2_node_proto::cache::FEATURE_JOB_CACHE) {
             f.push(k2_node_proto::cache::FEATURE_JOB_CACHE.to_string());
         }
+        // `--with` sibling repos (protocol 6, same release).
+        if t.speaks_cache() && !f.iter().any(|x| x == k2_node_proto::frames::FEATURE_MULTI_REPO) {
+            f.push(k2_node_proto::frames::FEATURE_MULTI_REPO.to_string());
+        }
         f
     }
 

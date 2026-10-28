@@ -52,7 +52,9 @@ use crate::crypto::{self, SigningKey};
 /// said protocol ≥ 6, and a server sends `Plan.cache` and `cache_get` only
 /// to a node offering it (an older node would refuse the digest, or drop
 /// the session on a frame it can't parse), so a job with `--cache` is never
-/// placed on an older node.
+/// placed on an older node. Also 6 (same release): `Plan.src_path` and
+/// `Plan.with`, sibling repos laid out side by side (`--with`), to nodes
+/// offering [`FEATURE_MULTI_REPO`].
 pub const PROTOCOL: u32 = 6;
 
 /// The first server protocol that gets the `job-cache` feature.
@@ -584,6 +586,18 @@ pub struct Plan {
     /// nodes offering [`crate::cache::FEATURE_JOB_CACHE`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<String>,
+    /// Protocol 6, `--with` only: the main repo's folder in the workspace
+    /// (`""` = the workspace's own repo). The job's code is laid out as in
+    /// the workspace: `src/<src_path>` is the main checkout (and the job's
+    /// start), `src/<w.path>` each [`Plan::with`] repo, so relative paths
+    /// between them (`../k2-multiplayer-base`) work. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub src_path: Option<String>,
+    /// Protocol 6: sibling repos shipped with the job, each at its own
+    /// commit (no `--dirty` for them). Absent when empty; sent only to
+    /// nodes offering [`FEATURE_MULTI_REPO`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub with: Vec<SrcWith>,
 }
 
 impl Plan {
@@ -669,6 +683,66 @@ pub struct Src {
     pub dirty: Option<Blob>,
     /// Warm slots the node keeps for this project (default 1 in dogfood A).
     pub slots: u32,
+}
+
+/// One sibling repo of a `--with` job (protocol 6).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SrcWith {
+    /// Its folder in the workspace (relative, plain names: [`valid_layout_path`]).
+    pub path: String,
+    /// Names its mirror on the node, like [`Src::project_key`].
+    pub project_key: String,
+    pub remote_url: Option<String>,
+    /// Full 40-hex commit.
+    pub commit: String,
+}
+
+/// Offer feature (protocol 6): this node lays out `Plan.with` repos beside
+/// the main one.
+pub const FEATURE_MULTI_REPO: &str = "multi-repo";
+
+/// Most `--with` repos per job.
+pub const MAX_WITH: usize = 8;
+
+/// A folder a repo is laid out at in a job: relative, 1–512 bytes, plain
+/// names only (no `.`, `..`, empty parts or `.k2`), no NUL or backslash.
+/// `""` is allowed only as `Plan.src_path` (the workspace's own repo).
+pub fn valid_layout_path(p: &str) -> bool {
+    !p.is_empty()
+        && p.len() <= 512
+        && !p.contains('\0')
+        && !p.contains('\\')
+        && p.split('/').all(|c| !c.is_empty() && c != "." && c != ".." && c != ".k2")
+}
+
+/// The `--with` layout is sound: every path valid, none equal to or inside
+/// another's (the main repo's `""` holds them all), the main's `src_path`
+/// set. `Err` names the problem.
+pub fn check_layout(src_path: &str, with: &[SrcWith]) -> Result<(), String> {
+    if with.len() > MAX_WITH {
+        return Err(format!("at most {MAX_WITH} --with repos"));
+    }
+    if !src_path.is_empty() && !valid_layout_path(src_path) {
+        return Err(format!("the main repo's folder {src_path:?} isn't a plain relative path"));
+    }
+    let mut all: Vec<&str> = with.iter().map(|w| w.path.as_str()).collect();
+    for w in with {
+        if !valid_layout_path(&w.path) {
+            return Err(format!("--with folder {:?} isn't a plain relative path", w.path));
+        }
+    }
+    if !src_path.is_empty() {
+        all.push(src_path);
+    }
+    for (i, a) in all.iter().enumerate() {
+        for b in all.iter().skip(i + 1) {
+            let inside = |x: &str, y: &str| x == y || x.starts_with(&format!("{y}/"));
+            if inside(a, b) || inside(b, a) {
+                return Err(format!("repos {a:?} and {b:?} would overlap in the job's folder"));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1265,6 +1339,8 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
+            src_path: None,
+            with: Vec::new(),
         }
     }
 
@@ -1593,6 +1669,33 @@ mod tests {
         let dropped: Plan = serde_json::from_value(v).unwrap();
         assert_ne!(dropped.digest().unwrap(), q.digest().unwrap());
         assert!(PROTOCOL >= PROTOCOL_CACHE && PROTOCOL_CACHE > PROTOCOL_TIERS);
+    }
+
+    /// `--with`: absent when unused (the 0.46.5 digest), bound when used.
+    #[test]
+    fn with_is_absent_when_unset_and_bound_by_the_digest() {
+        let p = plan();
+        let text = crate::canonical::to_string(&p).unwrap();
+        assert!(!text.contains("src_path") && !text.contains("\"with\""), "{text}");
+        assert_eq!(p.digest().unwrap(), "sha256:31d079662290d8b6e10bc3595162f277743d060a50046b1be2f020e99d948e14");
+        let mut q = p.clone();
+        q.src_path = Some("k2-multiplayer-markdown".into());
+        q.with = vec![SrcWith { path: "k2-multiplayer-base".into(), project_key: "pk2".into(), remote_url: None, commit: "b".repeat(40) }];
+        assert_ne!(q.digest().unwrap(), p.digest().unwrap());
+    }
+
+    #[test]
+    fn with_layouts_never_overlap_or_escape() {
+        let w = |p: &str| SrcWith { path: p.into(), project_key: "k".into(), remote_url: None, commit: "a".repeat(40) };
+        assert!(check_layout("k2-multiplayer-markdown", &[w("k2-multiplayer-base")]).is_ok());
+        assert!(check_layout("", &[w("vendor/dep")]).is_ok(), "inside the workspace's own repo");
+        assert!(check_layout("a/b", &[w("a/c"), w("d")]).is_ok());
+        for (main, bad) in [("m", "m"), ("m", "m/x"), ("m/x", "m"), ("m", "../x"), ("m", "/etc"), ("m", ".k2/x"), ("m", "a//b"), ("m", "./a"), ("m", "")] {
+            assert!(check_layout(main, &[w(bad)]).is_err(), "{main} + {bad}");
+        }
+        assert!(check_layout("../m", &[w("x")]).is_err());
+        assert!(check_layout("m", &[w("x"), w("x")]).is_err(), "twice");
+        assert!(check_layout("m", &(0..=MAX_WITH).map(|i| w(&format!("r{i}"))).collect::<Vec<_>>()).is_err());
     }
 
     #[test]

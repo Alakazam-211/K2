@@ -106,6 +106,8 @@ pub struct Want {
     pub tier: JobTier,
     /// `--cache NAME` (protocol 6): the node must offer `job-cache`.
     pub cache: bool,
+    /// `--with` (protocol 6): the node must offer `multi-repo`.
+    pub multi_repo: bool,
 }
 
 impl Want {
@@ -124,6 +126,7 @@ impl Want {
             secret_ids: j.ctl.secrets.iter().map(|p| p.secret_id.clone()).collect(),
             tier: j.tier(),
             cache: plan.cache.is_some(),
+            multi_repo: !plan.with.is_empty(),
         }
     }
 
@@ -232,6 +235,9 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     }
     if w.cache {
         f.push(k2_core::compute::proto::cache::FEATURE_JOB_CACHE);
+    }
+    if w.multi_repo {
+        f.push(frames::FEATURE_MULTI_REPO);
     }
     f
 }

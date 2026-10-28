@@ -1670,6 +1670,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         secret_ids: secrets_found.iter().map(|f| f.secret_id.clone()).collect(),
         tier: tier_ask,
         cache: cache.is_some(),
+        multi_repo: !with_asks(v)?.is_empty(),
     };
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
@@ -1704,6 +1705,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             409,
             format!(
                 "'{}' runs a k2-node older than 0.46.6, which has no job caches; update it (k2 compute node update {}), pick another node, or run without --cache",
+                node.name, node.name
+            ),
+        ));
+    }
+    if want.multi_repo && !node_features(&node).iter().any(|f| f == k2_core::compute::proto::frames::FEATURE_MULTI_REPO) {
+        return Err(no(
+            "node_upgrade_required",
+            409,
+            format!(
+                "'{}' runs a k2-node older than 0.46.6, which can't lay out --with repos; update it (k2 compute node update {}), or pick another node",
                 node.name, node.name
             ),
         ));
@@ -1898,15 +1909,17 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Source: the workspace's own repo only (never a path the client names
     // outside it, so a passport can't ship another repo off this machine).
     let job_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
-    let (src, source, repo) = if b(&v, "noSource") == Some(true) {
-        if s(&v, "repo").is_some_and(|r| !r.is_empty()) {
-            return Err(no(codes::BAD_REQUEST, 400, "--repo picks the code to ship; --no-source ships none (drop one)"));
+    let (src, source, repo, src_path, with) = if b(&v, "noSource") == Some(true) {
+        if s(&v, "repo").is_some_and(|r| !r.is_empty()) || !with_asks(&v)?.is_empty() {
+            return Err(no(codes::BAD_REQUEST, 400, "--repo/--with pick the code to ship; --no-source ships none (drop one)"));
         }
-        (None, None, None)
+        (None, None, None, None, Vec::new())
     } else {
         let (src, info) = source_for(&ws, &v, &compute_ws::dirty_blob_path(&job_id), &mut warnings)?;
         let repo = info.repo.clone();
-        (Some(src), Some(info), repo)
+        let with = with_for(&ws, &v, repo.as_deref().unwrap_or(""), &mut warnings)?;
+        let src_path = (!with.is_empty()).then(|| repo.clone().unwrap_or_default());
+        (Some(src), Some(info), repo, src_path, with)
     };
     let cwd = if source.as_ref().is_some_and(|i| i.caller_elsewhere) { None } else { cwd };
     let ctl = store::JobCtl {
@@ -1968,6 +1981,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         // Protocol 6: only ever placed on nodes offering `job-cache` (above,
         // and `required_features` for --any and moves).
         cache: cache.clone(),
+        // Protocol 6, `--with`: only on nodes offering `multi-repo`.
+        src_path,
+        with,
     };
     let job = {
         let db = k2_core::db::shared();
@@ -2135,6 +2151,60 @@ fn cache_clear(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::V
 }
 
 // ── job tiers (prd-compute-job-tiers-v1) ─────────────────────────────
+
+/// `with` from a run request (`--with REPO[@SHA]`): `[{repo, sha?}]`.
+fn with_asks(v: &serde_json::Value) -> R<Vec<(String, Option<String>)>> {
+    let bad = || no(REPO_INVALID, 400, "--with REPO[@SHA]: a git repo inside the workspace, optionally at a commit");
+    match v.get("with") {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::Array(a)) => {
+            if a.len() > k2_core::compute::proto::frames::MAX_WITH {
+                return Err(no(REPO_INVALID, 400, format!("at most {} --with repos", k2_core::compute::proto::frames::MAX_WITH)));
+            }
+            a.iter()
+                .map(|x| {
+                    let repo = x.get("repo").and_then(|r| r.as_str()).filter(|r| !r.is_empty()).ok_or_else(bad)?;
+                    let sha = match x.get("sha") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(serde_json::Value::String(s)) if !s.is_empty() => Some(s.clone()),
+                        _ => return Err(bad()),
+                    };
+                    Ok((repo.to_string(), sha))
+                })
+                .collect()
+        }
+        Some(_) => Err(bad()),
+    }
+}
+
+/// `--with` (protocol 6): the sibling repos a job ships beside its main one
+/// (`main_rel`, `""` = the workspace's own repo), each at its HEAD or
+/// `@SHA`, jailed like `--repo`, laid out by its folder in the workspace.
+/// Only their commits go (never `--dirty`; a note when one has changes).
+fn with_for(ws: &Ws, v: &serde_json::Value, main_rel: &str, warnings: &mut Vec<String>) -> R<Vec<k2_core::compute::proto::frames::SrcWith>> {
+    let mut out = Vec::new();
+    for (repo, sha) in with_asks(v)? {
+        let n = compute::sync::nested_repo(Path::new(&ws.path), &repo).map_err(|e| no(REPO_INVALID, 400, e.replace("--repo", "--with")))?;
+        if n.rel.is_empty() {
+            return Err(no(REPO_INVALID, 400, format!("--with {repo} is the workspace's own repo; ship it with --repo (or run from it) and name the others with --with")));
+        }
+        let commit = compute::sync::resolve_commit(&n.root, sha.as_deref().unwrap_or("HEAD")).map_err(|e| no(codes::BAD_REQUEST, 400, format!("--with {repo}: {e}")))?;
+        if sha.is_none() && compute::sync::is_dirty(&n.root).unwrap_or(false) {
+            warnings.push(format!("--with {repo} has uncommitted changes; only its commit {} is sent (commit them to send them)", &commit[..8]));
+        }
+        let remote = compute::sync::origin_url(&n.root);
+        out.push(k2_core::compute::proto::frames::SrcWith {
+            project_key: compute::sync::project_key_in(&ws.id, remote.as_deref(), Some(&n.rel)),
+            path: n.rel,
+            remote_url: remote,
+            commit,
+        });
+    }
+    if !out.is_empty() {
+        k2_core::compute::proto::frames::check_layout(main_rel, &out).map_err(|e| no(REPO_INVALID, 400, format!("--with: {e}")))?;
+    }
+    Ok(out)
+}
 
 /// `cache` from a run request: a cache name (`--cache NAME`), or none.
 fn cache_from(v: &serde_json::Value) -> R<Option<String>> {
@@ -3226,6 +3296,8 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
+        src_path: None,
+        with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let parent = {
@@ -4152,6 +4224,29 @@ mod tests {
             let (r, _) = go(serde_json::json!({"repo": bad}));
             assert_eq!(r.err().map(|e| e.code), Some(REPO_INVALID), "{bad}");
         }
+        // --with: the sibling at its HEAD (or @SHA), laid out by its folder,
+        // its own project key; overlaps, escapes and too many are refused.
+        let mut w = vec![];
+        let with = with_for(&ws, &serde_json::json!({"with": [{"repo": "k2-multiplayer-base"}]}), "k2-multiplayer-markdown", &mut w).expect("--with base");
+        assert_eq!(with.len(), 1);
+        assert_eq!((with[0].path.as_str(), with[0].commit.as_str(), with[0].project_key.as_str()), ("k2-multiplayer-base", base_head.as_str(), key.as_str()));
+        let with = with_for(&ws, &serde_json::json!({"with": [{"repo": "wt-base-x"}]}), "k2-multiplayer-markdown", &mut w).expect("--with a worktree");
+        assert_eq!((with[0].path.as_str(), with[0].commit.as_str()), ("k2-multiplayer-base", wt_head.as_str()), "laid out where its repo lives, at the worktree's HEAD");
+        assert!(w.iter().any(|x| x.contains("--with wt-base-x has uncommitted changes")), "{w:?}");
+        let with = with_for(&ws, &serde_json::json!({"with": [{"repo": "k2-multiplayer-base", "sha": base_head}]}), "k2-multiplayer-markdown", &mut w).expect("@sha");
+        assert_eq!(with[0].commit, base_head);
+        for bad in [
+            serde_json::json!({"with": [{"repo": "k2-multiplayer-markdown"}]}),
+            serde_json::json!({"with": [{"repo": "k2-multiplayer-base"}, {"repo": "wt-base-x"}]}),
+            serde_json::json!({"with": [{"repo": "../x"}]}),
+            serde_json::json!({"with": [{"repo": ".k2"}]}),
+            serde_json::json!({"with": "k2-multiplayer-base"}),
+            serde_json::json!({"with": [{"repo": "k2-multiplayer-base", "sha": "nope"}]}),
+        ] {
+            let e = with_for(&ws, &bad, "k2-multiplayer-markdown", &mut w).err().unwrap_or_else(|| panic!("{bad} must be refused"));
+            assert!(matches!(e.code, REPO_INVALID | codes::BAD_REQUEST), "{bad}: {}", e.code);
+        }
+        assert!(with_for(&ws, &serde_json::json!({}), "", &mut w).expect("none").is_empty());
         // The bundle comes from the stored rel, checked again.
         let n = compute::sync::nested_repo(&ws_dir, "k2-multiplayer-base").expect("again");
         assert_eq!(n.home, base.canonicalize().expect("canon"));

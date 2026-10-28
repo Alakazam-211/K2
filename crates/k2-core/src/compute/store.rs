@@ -1537,6 +1537,8 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
+            src_path: None,
+            with: Vec::new(),
         }
     }
 

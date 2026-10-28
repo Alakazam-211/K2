@@ -339,9 +339,10 @@ export interface ThreadBubbleProps {
   /** A handoff card's decision (`/cli/vault/incoming/decide` on the room's
    *  server). Absent: this window's own server. */
   onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
-  /** The room is on another server this window can't decide a handoff
-   *  for (a remote room, a Home row elsewhere): its name. The card then
-   *  says "Open <host> directly to accept this" instead of Accept. */
+  /** The room is on a server this window can't decide a handoff for (a
+   *  view-only room): its name. The card then says "Open <host> directly
+   *  to accept this" instead of Accept. A usable remote room decides on
+   *  its own server (accept cards from Home, 0.46.6). */
   handoffRemoteHost?: string | null
   /** A line under "author · time", on the same side (the project chat's
    *  "delivered to …"). Absent (the Thread): nothing is drawn. */

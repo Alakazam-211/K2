@@ -236,6 +236,34 @@ describe('the usable remote-room scope', () => {
     }
   })
 
+  // prd-accept-cards-from-home-v1 §3.1: a secret handoff card's Accept in a
+  // Home remote room goes to B with B's login (it was refused before any
+  // request); the Settings allow-list editor stays refused.
+  it('a remote room sends a handoff card’s decide to its own server; the accept-from editor stays refused', async () => {
+    const room = remoteRoomScope(scopeForHost(B))
+    const calls: { url: string; body: string }[] = []
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      calls.push({ url: String(input), body: String(init?.body ?? '') })
+      return new Response(JSON.stringify({ ok: true, delivery: { status: 'landed' } }), { status: 200 })
+    })
+    try {
+      expect(scopeMayWrite(room, 'vault/incoming/decide')).toBe(true)
+      await daemonCliPost(room, 'vault/incoming/decide', { id: 'hd_1', action: 'accept', always: true })
+      expect(calls.length).toBe(1)
+      const url = new URL(calls[0].url)
+      expect(url.port).toBe(String(B.port))
+      expect(url.pathname).toBe('/cli/vault/incoming/decide')
+      expect(url.searchParams.get('token')).toBe('tok-b')
+      expect(url.searchParams.has('origin')).toBe(false)
+      expect(JSON.parse(calls[0].body)).toEqual({ id: 'hd_1', action: 'accept', always: true })
+      expect(scopeMayWrite(room, 'vault/accept-from')).toBe(false)
+      await expect(daemonCliPost(room, 'vault/accept-from', { sender: 'sales' })).rejects.toBeInstanceOf(RoomWriteRefusedError)
+      expect(calls.length).toBe(1)
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   it('assertScopeMayWrite / scopeMayWrite: room list for a usable room, keep-alive only for view-only, open elsewhere', () => {
     const base = scopeForHost(B)
     const usable = remoteRoomScope(base)

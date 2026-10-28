@@ -185,7 +185,7 @@ describe('coerceHandoff', () => {
 })
 
 // Home / remote rooms (Rosson hit these live, 0.46.6): a handoff doc from
-// another server can come without `hosts`, and a remote room can't decide.
+// another server can come without `hosts`, and a view-only room can't decide.
 describe('HandoffCard from another server', () => {
   it('a doc without hosts renders (no crash, no "for …" sites)', () => {
     const raw = { ...BASE } as Partial<OverlayHandoff>
@@ -197,7 +197,7 @@ describe('HandoffCard from another server', () => {
     expect(screen.getByTestId('thread-handoff-accept')).toBeTruthy()
   })
 
-  it('in a remote room: no Accept or Decline, just "Open <host> directly to accept this"', () => {
+  it('where this window can’t decide (a view-only room): no Accept or Decline, just "Open <host> directly to accept this"', () => {
     const onDecide = vi.fn(async () => {})
     render(<HandoffCard handoff={BASE} onDecide={onDecide} remoteHost="rosson.k2.dev" />)
     expect(screen.getByTestId('thread-handoff-remote').textContent).toBe('Open rosson.k2.dev directly to accept this.')

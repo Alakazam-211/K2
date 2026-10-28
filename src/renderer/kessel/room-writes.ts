@@ -133,6 +133,13 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'vault/confirm/start': 'a permission card’s Allow asks B how this login confirms (Admin floor on B)',
   'vault/confirm/finish':
     'a permission card’s Allow confirms on B (password or the Mac’s sheet), bound to the card’s request; Admin floor on B',
+  // A secret another agent sent (prd-accept-cards-from-home-v1 §3.1): the
+  // handoff card's Accept / Accept as / Decline / Always accept from. B
+  // checks a person (a login, never a passport) and the card's workspace;
+  // no confirm. The Settings allow-list editor (`vault/accept-from`) stays
+  // off this list: that is server management.
+  'vault/incoming/decide':
+    'Accept / Decline on a secret handoff card waiting on B; B checks a person (a login, never a passport) and the card’s workspace',
   'thread/read':
     'reading the room’s Thread marks it read for your login on B (thread-read-v1), so B’s own clients and phone stop counting it',
   'thread/read-all':

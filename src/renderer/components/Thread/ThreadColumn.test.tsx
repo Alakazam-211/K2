@@ -232,7 +232,7 @@ describe('k2:kanban@2 Thread panel', () => {
 
 // A handoff doc as it arrives from another server (Home): coerced before it
 // draws, so a doc without `hosts` never crashes the bubble; a remote room's
-// card says to open that server instead of Accept.
+// card says to open that server instead of Accept (view-only rooms).
 describe('ThreadBubble: a handoff card from another server', () => {
   const doc = (handoff: Record<string, unknown>) =>
     ({
@@ -252,7 +252,7 @@ describe('ThreadBubble: a handoff card from another server', () => {
     expect(r.queryByTestId('thread-handoff-card')).toBeNull()
   })
 
-  it('a remote room says to open the server directly', () => {
+  it('a room this window can’t decide in (view-only) says to open the server directly', () => {
     const r = render(
       <ThreadBubble item={doc(raw)} mine={false} author="sales" timeLabel="now" viewer={null} handoffRemoteHost="rosson.k2.dev" />,
     )

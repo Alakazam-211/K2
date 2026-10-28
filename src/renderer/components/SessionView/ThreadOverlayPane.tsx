@@ -159,8 +159,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     [workspaceName, roomScope.label],
   )
   const handoffDecide = useCallback((body: HandoffDecideBody) => handoffApi.decide(body, roomScope), [roomScope])
-  // A remote (or view-only) room never sends `vault/incoming/decide`: its
-  // handoff cards say to open that server directly instead of Accept.
+  // A usable remote room decides on its own server (0.46.6, accept cards
+  // from Home); a view-only room can't, so its handoff cards say to open
+  // that server directly instead of Accept.
   const handoffRemoteHost = scopeMayWrite(roomScope, 'vault/incoming/decide') ? null : roomScope.label || roomScope.hostKey
   // The column's message box draws the drawer: hand it the live turn.
   const liveTurn = turn ?? null

@@ -749,6 +749,13 @@ pub fn switch_home_db(dir: &Path, opts: &SwitchOpts) -> SwitchReport {
         rep.outcome = Outcome::Deferred { reason };
         rep
     };
+    // DB-A15 first: no defer or hold may open k2.db over an unfinished
+    // write made under the old name.
+    if kind(&new) == Kind::Real {
+        if let Some((journal, bytes)) = hot_old_journal(dir) {
+            return hot(dir, rep, journal, bytes);
+        }
+    }
     if let Some(reason) = &opts.defer {
         return defer(rep, reason.clone());
     }

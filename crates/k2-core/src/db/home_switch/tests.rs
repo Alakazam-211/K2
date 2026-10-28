@@ -533,6 +533,21 @@ fn a_hot_old_name_journal_refuses_and_moves_nothing() {
     assert!(!blocked_notice_due(&dir), "the two-live-files notice is not this one");
 }
 
+/// DB-A15 beats a hold or a defer: neither may open k2.db over an
+/// unfinished write under the old name.
+#[cfg(unix)]
+#[test]
+fn a_hold_or_defer_never_masks_a_hot_old_name_journal() {
+    let dir = scratch();
+    make_db(&dir.join(NEW_NAME), 1);
+    std::os::unix::fs::symlink(NEW_NAME, dir.join(OLD_NAME)).expect("link");
+    std::fs::write(crate::private_home::sibling(&dir.join(OLD_NAME), "-journal"), b"x").expect("hot journal");
+    std::fs::write(dir.join(HOLD_FILE), b"").expect("hold");
+    assert!(matches!(switch_home_db(&dir, &opts()).outcome, Outcome::HotJournal { .. }), "hold");
+    let o = SwitchOpts { defer: Some("hand-off".into()), by: "test".into() };
+    assert!(matches!(switch_home_db(&dir, &o).outcome, Outcome::HotJournal { .. }), "defer");
+}
+
 /// DB-A5: the owner's hold file defers the switch: nothing moves.
 #[test]
 fn the_hold_file_defers_and_moves_nothing() {

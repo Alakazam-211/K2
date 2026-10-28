@@ -35,11 +35,12 @@ pub const IMPORT_ROUTE: &str = "/cli/zen/data/import";
 
 /// The widget door's byte routes (prd-garden-board-needs-v1 GB13): owner
 /// token and Origin gate, like `/cli/zen/call`; never on the cell socket.
-pub const WIDGET_DOOR: &[&str] = &[CALL_ROUTE, "/cli/zen/blob/get", "/cli/zen/blob/put"];
+pub const WIDGET_DOOR: &[&str] = &[CALL_ROUTE, "/cli/zen/blob/get", "/cli/zen/blob/ingest", "/cli/zen/blob/put"];
 
 /// Every Garden data route (contract §4.3).
 pub const ROUTES: &[&str] = &[
     "/cli/zen/blob/get",
+    "/cli/zen/blob/ingest",
     "/cli/zen/blob/put",
     "/cli/zen/call",
     "/cli/zen/data/admin",
@@ -54,12 +55,15 @@ pub const ROUTES: &[&str] = &[
     "/cli/zen/data/get",
     "/cli/zen/data/grant",
     "/cli/zen/data/grants",
+    "/cli/zen/data/history",
     "/cli/zen/data/import",
     "/cli/zen/data/list",
     "/cli/zen/data/patch",
     "/cli/zen/data/put",
+    "/cli/zen/data/restore",
     "/cli/zen/data/revoke",
     "/cli/zen/data/show",
+    "/cli/zen/data/snapshot",
     "/cli/zen/data/space/delete",
     "/cli/zen/data/space/move",
     "/cli/zen/data/spaces",
@@ -71,6 +75,7 @@ pub const ROUTES: &[&str] = &[
 
 /// POST-only rows (405 on GET).
 pub const POST_ROUTES: &[&str] = &[
+    "/cli/zen/blob/ingest",
     "/cli/zen/blob/put",
     "/cli/zen/call",
     "/cli/zen/data/admin",
@@ -82,7 +87,9 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/zen/data/import",
     "/cli/zen/data/patch",
     "/cli/zen/data/put",
+    "/cli/zen/data/restore",
     "/cli/zen/data/revoke",
+    "/cli/zen/data/snapshot",
     "/cli/zen/data/space/delete",
     "/cli/zen/data/space/move",
     "/cli/zen/data/tx/abort",
@@ -268,6 +275,8 @@ pub fn handle(path: &str, who: DataWho, body: &[u8], params: &HashMap<String, St
         }
         // prd-garden-board-needs-v1 GB15: blobs.
         p if gd::blob_routes::is_agent_route(p) => gd::blob_routes::agent(p, &who, body, params),
+        // prd-garden-board-needs-v1 §6: history, restore, snapshots.
+        p if gd::history_routes::is_agent_route(p) => gd::history_routes::agent(p, &who, body, params),
         // B3: export and import.
         "/cli/zen/data/export" | "/cli/zen/data/import" => gd::export_routes::handle(path, &who, body, params),
         _ => Err(DataError::NotFound("route_not_found")),

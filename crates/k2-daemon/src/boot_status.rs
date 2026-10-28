@@ -656,6 +656,10 @@ pub const FEATURE_GARDEN_BLOBS: &str = k2_core::garden_data::blobs::FEATURE;
 /// §5): frame rows the app answers; the daemon half is the blob routes.
 pub const FEATURE_ZEN_FILES: &str = "zen-files-v1";
 
+/// Full Garden data history, restore and snapshots (prd-garden-board-needs-v1
+/// §6): `store.history|restore|snapshot` and `/cli/zen/data/history|restore|snapshot`.
+pub const FEATURE_GARDEN_HISTORY: &str = k2_core::garden_data::history::FEATURE;
+
 /// The App API (runtime S23, room-scope R1/R5/R6, 0.46.1): the App-facing
 /// routes are catalogued (`contract/catalog.json` rows exposed to `app`;
 /// the gateway table is generated from them), `GET /cli/skin/me` answers,
@@ -975,6 +979,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GARDEN_DATA);
     out.push(FEATURE_GARDEN_BLOBS);
     out.push(FEATURE_ZEN_FILES);
+    out.push(FEATURE_GARDEN_HISTORY);
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);
     out.push(FEATURE_GUESTS_ROOMS);
@@ -1096,6 +1101,7 @@ mod tests {
                 "garden-data-v1",
                 "garden-blobs-v1",
                 "zen-files-v1",
+                "garden-history-v1",
                 "grokbots-v1",
                 "app-api-v1",
                 "guests-rooms-v1",

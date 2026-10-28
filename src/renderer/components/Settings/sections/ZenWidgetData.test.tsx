@@ -40,6 +40,9 @@ const h = vi.hoisted(() => ({
   zenHandlers: [] as Array<() => void>,
   exportPages: {} as Record<string, Array<{ items: unknown[]; next: string | null }>>,
   downloads: [] as Array<{ name: string; text: string }>,
+  blobs: {} as Record<string, Array<{ ref: string; size: number; mime: string; name: string | null; refs: number; pending: boolean; bytes: number[] }>>,
+  history: {} as Record<string, Array<Record<string, unknown>>>,
+  restoreFamilies: {} as Record<string, string[]>,
 }))
 
 vi.mock('@/lib/garden-data/garden-data-api', () => ({
@@ -98,6 +101,30 @@ vi.mock('@/lib/garden-data/garden-data-api', () => ({
     h.calls.push(['delete', { widget, confirm }])
     h.spaces = h.spaces.filter((x) => x.widget !== widget)
     return { deleted: `data:${widget}`, snapshot: 'gardens-x-delete.sqlite', grantsRemoved: 0 }
+  }),
+  // 0.46.6 (prd-garden-board-needs-v1 GB17, GH6): files, history, restore.
+  listGardenBlobs: vi.fn(async (widget: string) => {
+    h.calls.push(['blobs', widget])
+    const list = h.blobs[widget] ?? []
+    return { items: list.map(({ bytes: _b, ...i }) => i), next: null, bytes: list.reduce((n, b) => n + b.size, 0), quota: 256 * 1024 * 1024 }
+  }),
+  readGardenBlob: vi.fn(async (widget: string, ref: string, offset: number) => {
+    const b = (h.blobs[widget] ?? []).find((x) => x.ref === ref)
+    if (!b) throw new Error('blob_missing')
+    const part = b.bytes.slice(offset)
+    return { base64: btoa(String.fromCharCode(...part)), len: part.length, eof: true, size: b.size }
+  }),
+  gardenHistory: vi.fn(async (widget: string) => {
+    h.calls.push(['history', widget])
+    return { head: 9, oldest: 2, items: h.history[widget] ?? [], next: null }
+  }),
+  restoreGardenData: vi.fn(async (body: Record<string, unknown>) => {
+    h.calls.push(['restore', body])
+    const all = h.restoreFamilies[String(body.widget)] ?? []
+    const prefixes = (body.prefixes as string[] | undefined) ?? []
+    const families = prefixes.length ? all.filter((f) => prefixes.includes(f)) : all
+    const dry = body.dryRun === true
+    return { id: dry ? null : 'rs-0123456789ab', rev: dry ? null : 10, written: families.length, deleted: 0, families, keys: [] }
   }),
   exportGardenData: vi.fn(async (widget: string, opts: { after?: string } = {}) => {
     h.calls.push(['export', { widget, ...opts }])
@@ -180,6 +207,9 @@ beforeEach(() => {
   h.zenHandlers = []
   h.exportPages = {}
   h.downloads = []
+  h.blobs = {}
+  h.history = {}
+  h.restoreFamilies = {}
   Object.assign(URL, { createObjectURL: () => 'blob:x', revokeObjectURL: () => undefined })
   anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
     h.downloads.push({ name: this.download, text: '' })
@@ -411,5 +441,84 @@ describe('ZenWidgetData', () => {
       fireEvent.click(screen.getByText('Try again'))
     })
     await waitFor(() => expect(screen.queryByTestId('garden-data-load-error')).toBeNull())
+  })
+})
+
+describe('0.46.6: files, export with images, restore (prd-garden-board-needs-v1 GB17, GH6, R2b)', () => {
+  it('shows the files line, and zips data.jsonl with every file a key names', async () => {
+    h.spaces = [row('board')]
+    h.widgets = [{ name: 'board', builtin: false }]
+    const held = 'ab'.repeat(32)
+    h.blobs.board = [
+      { ref: `k2blob:sha256-${held}`, size: 3, mime: 'image/png', name: 'a.png', refs: 1, pending: false, bytes: [1, 2, 3] },
+      { ref: `k2blob:sha256-${'cd'.repeat(32)}`, size: 2, mime: 'image/png', name: 'gone.png', refs: 0, pending: true, bytes: [9, 9] },
+    ]
+    const zips: Uint8Array[] = []
+    const RealBlob = globalThis.Blob
+    class SpyBlob extends RealBlob {
+      constructor(parts?: BlobPart[], opts?: BlobPropertyBag) {
+        super(parts, opts)
+        if (opts?.type === 'application/zip' && parts) zips.push(parts[0] as Uint8Array)
+      }
+    }
+    globalThis.Blob = SpyBlob as typeof Blob
+    try {
+      await mount()
+      await waitFor(() => expect(line('board').querySelector('[data-garden-data-files]')?.textContent).toBe('Files: 1 KiB of 256.0 MiB'))
+      await act(async () => {
+        fireEvent.click(within(line('board')).getByText('Export with images'))
+      })
+      await waitFor(() => expect(h.downloads.map((d) => d.name)).toEqual(['board-data.zip']))
+    } finally {
+      globalThis.Blob = RealBlob
+    }
+    expect(zips).toHaveLength(1)
+    const text = new TextDecoder().decode(zips[0])
+    expect(text).toContain('data.jsonl')
+    expect(text).toContain(`blobs/${held}`)
+    expect(text).not.toContain('cd'.repeat(32))
+  })
+
+  it('Restore… lists the changes, offers each family, warns on a wide restore, and restores only what is chosen', async () => {
+    h.spaces = [row('board')]
+    h.widgets = [{ name: 'board', builtin: false }]
+    h.history.board = [
+      { key: 'board/b1/obj/1', rev: 9, deleted: false, value: 2, prev: 1, prevKind: 'value', by: 'you via board', at: 1_760_000_000 },
+      { key: 'settings/zoom', rev: 2, deleted: false, value: 1, prev: null, prevKind: 'none', by: 'you', at: 1_759_000_000 },
+    ]
+    h.restoreFamilies.board = ['board/', 'settings/']
+    await mount()
+    await act(async () => {
+      fireEvent.click(within(line('board')).getByText('Restore…'))
+    })
+    const panel = await waitFor(() => {
+      const p = line('board').querySelector<HTMLElement>('[data-garden-data-restore]')
+      if (!p) throw new Error('no restore panel')
+      return p
+    })
+    await waitFor(() => expect(panel.querySelectorAll('input[type=radio]')).toHaveLength(2))
+    const radios = panel.querySelectorAll<HTMLInputElement>('input[type=radio]')
+    expect(radios[1].disabled).toBe(true)
+    await act(async () => {
+      fireEvent.click(radios[0])
+    })
+    await waitFor(() =>
+      expect(panel.querySelector('[data-garden-data-restore-warning]')?.textContent).toContain('access you removed may come back'),
+    )
+    const select = panel.querySelector<HTMLSelectElement>('[data-garden-data-family]')
+    if (!select) throw new Error('no family picker')
+    await waitFor(() => expect([...select.options].map((o) => o.textContent)).toEqual(['Everything', 'board/', 'settings/']))
+    await act(async () => {
+      fireEvent.change(select, { target: { value: 'board/' } })
+    })
+    await waitFor(() => expect(panel.querySelector('[data-garden-data-restore-warning]')).toBeNull())
+    await act(async () => {
+      fireEvent.click(within(panel).getByRole('button', { name: 'Restore' }))
+    })
+    await waitFor(() =>
+      expect(h.calls.filter(([k, b]) => k === 'restore' && !(b as { dryRun?: boolean }).dryRun)).toEqual([
+        ['restore', { widget: 'board', toRev: 8, prefixes: ['board/'] }],
+      ]),
+    )
   })
 })

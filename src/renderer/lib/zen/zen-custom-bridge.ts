@@ -221,8 +221,38 @@ export interface ZenCustomLayerDeps {
   /** GS1–GS7: K2's own download path. Without it `downloads.*` answer
    *  `verb_unavailable` (the widget preview, a headless daemon). */
   downloads?: ZenCustomDownloads
+  /** GP1–GP4 (0.46.6): K2's own picker and the drops K2 routes to this
+   *  frame. Without it `uploads.*` answer `verb_unavailable` (the preview,
+   *  a headless daemon). */
+  uploads?: ZenCustomUploads
   now(): number
 }
+
+/** One file a pick or a drop kept in the widget's data (`UploadedFile`). */
+export interface ZenUploadedFile {
+  ref: string
+  name: string
+  size: number
+  mime: string
+}
+
+/** What the layer needs for `uploads.*` (`k2.pick`, `k2.onDrop`). */
+export interface ZenCustomUploads {
+  /** Did the person press in this frame within the last 5 s, as K2's page
+   *  saw it (never only the frame's word)? */
+  pressed(): boolean
+  /** K2's picker (the OS dialog, or the web client's file input), then the
+   *  files into this widget's data; `[]` when the person cancelled. */
+  pick(opts: { accept: string[]; multiple: boolean; max: number }): Promise<ZenUploadedFile[]>
+  /** Drops K2 routes to this frame (the desktop's router; the web client's
+   *  frame sees its own and uploads them through `blobs.put`). */
+  onDrop(fn: (drop: { files: ZenUploadedFile[]; x: number; y: number }) => void): () => void
+}
+
+/** GP2: `accept` entries: `.ext`, `type/*` or `type/subtype`. */
+export const ZEN_PICK_ACCEPT = /^(\.[A-Za-z0-9]{1,16}|[A-Za-z0-9.+-]{1,64}\/(\*|[A-Za-z0-9.+-]{1,64}))$/
+/** GP2/GP4: at most this many files a pick or a drop. */
+export const ZEN_PICK_MAX = 20
 
 /** What the layer needs for `downloads.*` (`k2.download`). */
 export interface ZenCustomDownloads {
@@ -751,9 +781,72 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
   }
 
+  // ── K2's picker and drops (prd-garden-board-needs-v1 §5) ─────────────────
+
+  const pickCalls: number[] = []
+  let uploadPicking = false
+
+  const needUploads = (verb: string): ZenCustomUploads => {
+    if (!deps.uploads) refuse('verb_unavailable', `${verb} isn’t available here.`)
+    return deps.uploads!
+  }
+
+  /** GP2: `{accept?, multiple?, max?}`, checked closed. */
+  const pickOpts = (v: unknown): { accept: string[]; multiple: boolean; max: number } => {
+    if (v === undefined || v === null) return { accept: [], multiple: false, max: 1 }
+    if (!isObj(v)) refuse('bad_args', 'uploads.pick: options are an object')
+    const o = v as Record<string, unknown>
+    for (const k of Object.keys(o)) {
+      if (k !== 'accept' && k !== 'multiple' && k !== 'max') refuse('bad_args', `uploads.pick: unknown option '${k}'`)
+    }
+    let accept: string[] = []
+    if (o.accept !== undefined && o.accept !== null) {
+      if (!Array.isArray(o.accept) || o.accept.length > ZEN_PICK_MAX) refuse('bad_args', 'uploads.pick: accept is a list of up to 20')
+      accept = (o.accept as unknown[]).map((a) => {
+        if (typeof a !== 'string' || !ZEN_PICK_ACCEPT.test(a.trim())) {
+          refuse('bad_args', 'uploads.pick: each accept is .ext, type/* or type/subtype (like ".pdf" or "image/*")')
+        }
+        return (a as string).trim().toLowerCase()
+      })
+    }
+    if (o.multiple !== undefined && o.multiple !== null && typeof o.multiple !== 'boolean') refuse('bad_args', 'uploads.pick: multiple is true or false')
+    const multiple = o.multiple === true
+    let max = multiple ? ZEN_PICK_MAX : 1
+    if (o.max !== undefined && o.max !== null) {
+      if (typeof o.max !== 'number' || !Number.isInteger(o.max) || o.max < 1 || o.max > ZEN_PICK_MAX) refuse('bad_args', 'uploads.pick: max is 1 to 20')
+      max = multiple ? (o.max as number) : 1
+    }
+    return { accept, multiple, max }
+  }
+
+  /** GS2's rule for an OS surface: a press in this frame within 5 s (as
+   *  K2's page saw it), once every 2 s, 10 a minute, one at a time. */
+  const pickFiles = async (args: unknown[]): Promise<{ files: ZenUploadedFile[] }> => {
+    const u = needUploads('uploads.pick')
+    const opts = pickOpts(args[0])
+    const now = deps.now()
+    while (pickCalls.length > 0 && now - pickCalls[0] >= 60_000) pickCalls.shift()
+    const last = pickCalls[pickCalls.length - 1]
+    if ((last !== undefined && now - last < ZEN_DOWNLOADS.everyMs) || pickCalls.length >= ZEN_DOWNLOADS.perMinute) {
+      refuse('rate_limited', `uploads.pick: at most one pick every 2 seconds and ${ZEN_DOWNLOADS.perMinute} a minute.`)
+    }
+    if (!u.pressed()) refuse('failed', 'uploads.pick opens K2’s picker only just after the person presses in the widget.')
+    if (uploadPicking) refuse('rate_limited', 'uploads.pick: the picker is already open.')
+    pickCalls.push(now)
+    uploadPicking = true
+    try {
+      const files = await blobCall(() => u.pick(opts))
+      return { files: files.slice(0, opts.max) }
+    } finally {
+      uploadPicking = false
+    }
+  }
+
   // ── calls ────────────────────────────────────────────────────────────────
 
   const calls: Record<string, (args: unknown[], bytes?: ArrayBuffer) => unknown> = {
+    // prd-garden-board-needs-v1 §5 (0.46.6): K2's picker.
+    'uploads.pick': (args) => pickFiles(args),
     // prd-garden-board-needs-v1: files in this widget's data, and downloads.
     'blobs.put': (args, bytes) => putBlob(args, bytes),
     'blobs.get': (args) => getBlob(args),
@@ -1119,6 +1212,12 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     (args: unknown[], push: (v: unknown) => void, fail: (error: CatalogWireError) => void) => () => void
   > = {
     'theme.changed': (_args, push) => deps.onThemeChange(() => push(deps.theme())),
+    // GP4 (0.46.6): files dropped on this frame, already in its data (the
+    // drop is the gesture). Only a frame that listens takes drops.
+    'uploads.dropped': (_args, push) => {
+      const u = needUploads('uploads.dropped')
+      return u.onDrop((drop) => push({ files: drop.files.slice(0, ZEN_PICK_MAX), x: drop.x, y: drop.y }))
+    },
     // A1: the columns now, then again whenever one folds or opens (any
     // cause). Counts toward the 16 live subscriptions; NOT toward the 4 a
     // second (0.46.5): it only listens, and a canvas whose tiles each

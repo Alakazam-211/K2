@@ -68,6 +68,9 @@ pub const FRAME_FEATURES: &[&str] = &[
     // downloads.* / uploads.* with verb_unavailable (GB18, GS6, GP6).
     "garden-blobs-v1",
     "zen-files-v1",
+    // 0.46.6: store.history / restore / snapshot (the preview answers them
+    // from nothing: verb_unavailable).
+    "garden-history-v1",
 ];
 
 /// The shot's size limits (CSS pixels).
@@ -78,6 +81,32 @@ pub const DEFAULT_WIDTH: u32 = 420;
 pub const DEFAULT_HEIGHT: u32 = 360;
 /// At most this many bytes of `--data` fixtures.
 pub const MAX_DATA_BYTES: usize = 512 * 1024;
+/// The fixture files (`blobs/` beside `--data`), as base64, at most this
+/// much in all (the preview's body is a staged folder, under 6 MB).
+pub const MAX_SHOT_BLOBS_BASE64: usize = 2 * 1024 * 1024;
+
+/// `--data`'s `blobs`: ref → `{name, mime, base64}`, refs well formed,
+/// within [`MAX_SHOT_BLOBS_BASE64`].
+fn check_shot_blobs(b: &J) -> Result<(), ZenError> {
+    let bad = |m: &str| ZenError::BadRequest(format!("--data blobs: {m}"));
+    let o = b.as_object().ok_or_else(|| bad("an object of ref → {name, mime, base64}"))?;
+    let mut total = 0usize;
+    for (r, v) in o {
+        if crate::garden_data::blobs::hash_of_ref(r).is_none() {
+            return Err(bad(&format!("'{r}' isn't a k2blob:sha256-<64 hex> ref")));
+        }
+        let b64 = v.get("base64").and_then(J::as_str).ok_or_else(|| bad("each file has base64"))?;
+        if v.get("mime").and_then(J::as_str).is_none() {
+            return Err(bad("each file has a mime"));
+        }
+        total += b64.len();
+    }
+    if total > MAX_SHOT_BLOBS_BASE64 {
+        return Err(bad(&format!("the files are at most {} MiB of base64", MAX_SHOT_BLOBS_BASE64 / (1024 * 1024))));
+    }
+    Ok(())
+}
+
 /// At most this many config keys.
 const MAX_CONFIG: usize = 16;
 
@@ -317,8 +346,15 @@ pub fn shot_page(name: &str, files: &BTreeMap<String, Vec<u8>>, o: &ShotOptions)
         if !d.is_object() {
             return Err(ZenError::BadRequest("--data is one JSON object (keys: \"<verb>\" or \"<verb> <address>\", and \"store\")".into()));
         }
-        if d.to_string().len() > MAX_DATA_BYTES {
+        // GB18: `blobs` (ref → {name, mime, base64}, the CLI's blobs/
+        // folder) answers blobs.get; it has its own cap.
+        let mut rest = d.clone();
+        let blobs = rest.as_object_mut().and_then(|o| o.remove("blobs"));
+        if rest.to_string().len() > MAX_DATA_BYTES {
             return Err(ZenError::BadRequest(format!("--data is at most {} KB", MAX_DATA_BYTES / 1024)));
+        }
+        if let Some(b) = blobs {
+            check_shot_blobs(&b)?;
         }
     }
     let (vars, scheme) = theme_vars(&o.theme, o.scheme)?;

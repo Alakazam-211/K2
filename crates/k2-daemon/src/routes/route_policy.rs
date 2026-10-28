@@ -1771,6 +1771,7 @@ pub const ROUTES: &[Route] = &[
     // owner token and agent passports reach the handlers, which apply
     // grants on every call; `/cli/zen/call` takes the owner token only.
     get("/cli/zen/blob/get", NoLogin),
+    post("/cli/zen/blob/ingest", NoLogin),
     post("/cli/zen/blob/put", NoLogin),
     post("/cli/zen/call", NoLogin),
     post("/cli/zen/data/admin", NoLogin),
@@ -1785,12 +1786,16 @@ pub const ROUTES: &[Route] = &[
     get("/cli/zen/data/get", NoLogin),
     post("/cli/zen/data/grant", NoLogin),
     get("/cli/zen/data/grants", NoLogin),
+    // prd-garden-board-needs-v1 §6 (garden-history-v1).
+    get("/cli/zen/data/history", NoLogin),
     post("/cli/zen/data/import", NoLogin),
     get("/cli/zen/data/list", NoLogin),
     post("/cli/zen/data/patch", NoLogin),
     post("/cli/zen/data/put", NoLogin),
+    post("/cli/zen/data/restore", NoLogin),
     post("/cli/zen/data/revoke", NoLogin),
     get("/cli/zen/data/show", NoLogin),
+    post("/cli/zen/data/snapshot", NoLogin),
     post("/cli/zen/data/space/delete", NoLogin),
     post("/cli/zen/data/space/move", NoLogin),
     get("/cli/zen/data/spaces", NoLogin),

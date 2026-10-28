@@ -122,6 +122,31 @@ fn a_broken_folder_answers_its_errors_and_limits_are_checked() {
     assert!(matches!(shot_page("fleet-grid", &good, &o), Err(ZenError::BadRequest(m)) if m.contains("--data")));
 }
 
+/// GB18 (0.46.6): the blobs/ folder beside --data answers blobs.get; the
+/// files have their own cap and well-formed refs; the stand-in answers the
+/// rows a preview can't do with verb_unavailable.
+#[test]
+fn fixture_files_answer_blobs_get_within_their_own_cap() {
+    let good = staged_builtin("fleet-grid", 2);
+    let r = format!("k2blob:sha256-{}", "ab".repeat(32));
+    let png = json!({ "name": "a.png", "mime": "image/png", "base64": "iVBORw0KGgo=" });
+    let o = ShotOptions { data: Some(json!({ "blobs": { r.clone(): png.clone() } })), ..ShotOptions::default() };
+    let v = shot_page("fleet-grid", &good, &o).expect("shot page");
+    let host = v["host"].as_str().expect("host");
+    assert!(host.contains(&r) && host.contains("case 'blobs.get':"), "the fixture file and the stand-in's answer");
+    for verb in ["downloads.save", "uploads.pick", "store.history", "store.restore", "store.snapshot"] {
+        assert!(host.contains(&format!("case '{verb}':")), "{verb} answers verb_unavailable");
+    }
+    let bad = ShotOptions { data: Some(json!({ "blobs": { "photo.png": png.clone() } })), ..ShotOptions::default() };
+    assert!(matches!(shot_page("fleet-grid", &good, &bad), Err(ZenError::BadRequest(m)) if m.contains("isn't a k2blob")));
+    let big = "A".repeat(MAX_SHOT_BLOBS_BASE64 + 4);
+    let over = ShotOptions {
+        data: Some(json!({ "blobs": { r: { "name": "x.png", "mime": "image/png", "base64": big } } })),
+        ..ShotOptions::default()
+    };
+    assert!(matches!(shot_page("fleet-grid", &good, &over), Err(ZenError::BadRequest(m)) if m.contains("MiB of base64")));
+}
+
 #[test]
 fn fixtures_cant_break_out_of_the_host_script() {
     let good = staged_builtin("fleet-grid", 2);

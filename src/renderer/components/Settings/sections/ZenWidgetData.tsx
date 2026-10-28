@@ -47,6 +47,7 @@ import { onGardenDataChanged } from '@/stores/session-events'
 import { useGardenAccessSwitchStore } from '@/lib/zen/garden-access-api'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useToastStore } from '@/stores/toast'
+import { ZenWidgetFilesLine, ZenWidgetRestorePanel, saveBytes, zenDataZip } from './ZenWidgetDataRestore'
 
 const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
@@ -226,6 +227,12 @@ async function exportAndSave(widget: string): Promise<void> {
   download(`${widget.replace(/[^A-Za-z0-9._-]/g, '_')}-data.jsonl`, text)
 }
 
+/** GB17 / Q12: a zip of data.jsonl plus the files its keys name. */
+async function exportZipAndSave(widget: string): Promise<void> {
+  const zip = await zenDataZip(widget, () => exportJsonl(widget))
+  saveBytes(`${widget.replace(/[^A-Za-z0-9._-]/g, '_')}-data.zip`, zip, 'application/zip')
+}
+
 async function confirmDelete(widget: string, bytes: number): Promise<boolean> {
   return useConfirmDialogStore.getState().confirm({
     title: `Delete ${widget}'s data?`,
@@ -327,6 +334,7 @@ function DataLine({
 }): React.JSX.Element {
   const { widget, space, madeBy } = line
   const [open, setOpen] = useState(false)
+  const [restoring, setRestoring] = useState(false)
   const [detail, setDetail] = useState<GardenShowResponse | null>(null)
   const act = useAction()
   const rev = space?.rev ?? 0
@@ -369,6 +377,7 @@ function DataLine({
             {space && space.admins.length > 0 ? ` · grant admin: ${space.admins.join(', ')}` : ''}
             {maker ? ` · ${maker}` : ''}
           </div>
+          {space ? <ZenWidgetFilesLine widget={widget} rev={rev} /> : null}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
           {offerLet && madeBy?.kind === 'agent' ? (
@@ -406,6 +415,18 @@ function DataLine({
               </button>
               <button
                 type="button"
+                className={BTN}
+                disabled={act.busy}
+                title="A zip of the data and the files (images, PDFs) its keys name"
+                onClick={() => void act.run(() => exportZipAndSave(widget))}
+              >
+                Export with images
+              </button>
+              <button type="button" className={BTN} onClick={() => setRestoring((r) => !r)} aria-expanded={restoring}>
+                Restore…
+              </button>
+              <button
+                type="button"
                 className={DANGER_BTN}
                 disabled={act.busy}
                 onClick={async () => {
@@ -419,6 +440,7 @@ function DataLine({
           ) : null}
         </div>
       </div>
+      {restoring && space ? <ZenWidgetRestorePanel widget={widget} onDone={reload} /> : null}
       {open && detail && accessOn ? (
         <div className="mt-2" data-garden-data-advanced={widget}>
           <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">

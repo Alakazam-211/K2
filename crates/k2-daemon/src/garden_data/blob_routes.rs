@@ -40,6 +40,9 @@ use crate::zen_data_routes::DataWho;
 
 pub const WIDGET_PUT: &str = "/cli/zen/blob/put";
 pub const WIDGET_GET: &str = "/cli/zen/blob/get";
+/// 0.46.6 (prd-garden-board-needs-v1 GP3, GP4): files the person picked in
+/// K2's own dialog or dropped on the widget, by path, into its data.
+pub const WIDGET_INGEST: &str = "/cli/zen/blob/ingest";
 pub const AGENT_PUT: &str = "/cli/zen/data/blob/put";
 pub const AGENT_GET: &str = "/cli/zen/data/blob/get";
 pub const AGENT_LIST: &str = "/cli/zen/data/blob/list";
@@ -49,7 +52,114 @@ pub const MAX_OPEN_UPLOADS: usize = 8;
 pub const MAX_OPEN_UPLOADS_PER_OWNER: usize = 2;
 
 pub fn is_widget_route(p: &str) -> bool {
-    matches!(p, WIDGET_PUT | WIDGET_GET)
+    matches!(p, WIDGET_PUT | WIDGET_GET | WIDGET_INGEST)
+}
+
+/// One pick or drop (GP3): at most this many files, each at most a blob
+/// (16 MiB), and this many bytes in all.
+pub const MAX_INGEST_FILES: usize = 20;
+pub const MAX_INGEST_BYTES: u64 = 64 * 1024 * 1024;
+/// `accept` entries.
+pub const MAX_ACCEPT: usize = 20;
+
+/// Does a picked file match one `accept` entry (`.ext`, `type/*` or
+/// `type/subtype`)? The mime is K2's sniff, the name the file's own.
+pub(crate) fn accepts(accept: &[String], name: &str, mime: &str) -> bool {
+    if accept.is_empty() {
+        return true;
+    }
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
+    accept.iter().any(|a| {
+        let a = a.trim().to_ascii_lowercase();
+        if let Some(want) = a.strip_prefix('.') {
+            ext.as_deref() == Some(want)
+        } else if let Some(top) = a.strip_suffix("/*") {
+            mime.split('/').next() == Some(top)
+        } else {
+            mime == a
+        }
+    })
+}
+
+/// A valid `accept` entry: `.ext` (letters and digits) or a mime pattern.
+pub(crate) fn valid_accept(a: &str) -> bool {
+    let ok = |s: &str| !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c));
+    match a.strip_prefix('.') {
+        Some(ext) => !ext.is_empty() && ext.len() <= 16 && ext.chars().all(|c| c.is_ascii_alphanumeric()),
+        None => match a.split_once('/') {
+            Some((t, s)) => ok(t) && (s == "*" || ok(s)),
+            None => false,
+        },
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IngestBody {
+    garden: String,
+    placement: String,
+    hash: String,
+    paths: Vec<String>,
+    #[serde(default)]
+    accept: Vec<String>,
+}
+
+/// GP3/GP4: read each path K2's own dialog (or a drop) gave the app, check
+/// it, and keep it in the widget's data with its basename as its name.
+/// Answers `{files: [{ref, name, size, mime}]}` (never a path). Paths come
+/// from K2's renderer only: this is the widget door (owner token, Origin
+/// gate), and the owner token can read local files already.
+fn ingest(who_label: &str, w: &Placed, space: &Space, b: &IngestBody) -> Result<J, DataError> {
+    if b.paths.is_empty() {
+        return Ok(json!({ "files": [] }));
+    }
+    if b.paths.len() > MAX_INGEST_FILES {
+        return Err(DataError::BadRequest(format!("at most {MAX_INGEST_FILES} files at a time")));
+    }
+    if b.accept.len() > MAX_ACCEPT || b.accept.iter().any(|a| !valid_accept(a.trim())) {
+        return Err(DataError::BadRequest("accept is up to 20 of .ext, type/* or type/subtype".into()));
+    }
+    // Check every file before keeping any: all or nothing.
+    let mut total = 0u64;
+    let mut picked: Vec<(String, Vec<u8>)> = Vec::new();
+    for p in &b.paths {
+        let path = std::path::Path::new(p);
+        if !path.is_absolute() {
+            return Err(DataError::BadRequest("a picked file is an absolute path".into()));
+        }
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let meta = std::fs::metadata(path).map_err(|_| DataError::BadRequest(format!("can't read '{name}'")))?;
+        if !meta.is_file() {
+            return Err(DataError::BadRequest(format!("'{name}' isn't a file (folders aren't taken)")));
+        }
+        if meta.len() > MAX_BLOB_BYTES as u64 {
+            return Err(DataError::TooLarge(format!("'{name}' is over {} MiB", MAX_BLOB_BYTES / (1024 * 1024))));
+        }
+        total += meta.len();
+        if total > MAX_INGEST_BYTES {
+            return Err(DataError::TooLarge(format!("one pick is at most {} MiB in all", MAX_INGEST_BYTES / (1024 * 1024))));
+        }
+        let bytes = std::fs::read(path).map_err(|_| DataError::BadRequest(format!("can't read '{name}'")))?;
+        if bytes.len() > MAX_BLOB_BYTES {
+            return Err(DataError::TooLarge(format!("'{name}' is over {} MiB", MAX_BLOB_BYTES / (1024 * 1024))));
+        }
+        if !accepts(&b.accept, &name, &blobs::sniff(&bytes)) {
+            return Err(DataError::BadRequest(format!("'{name}' isn't one of the kinds this widget takes ({})", b.accept.join(" "))));
+        }
+        picked.push((name, bytes));
+    }
+    let key = placement_key(w);
+    let mut files = Vec::with_capacity(picked.len());
+    for (name, bytes) in picked {
+        budget::spend(&key, Spend::UploadStart)?;
+        budget::spend(&key, Spend::UploadBytes { bytes: bytes.len() })?;
+        let info = store().blob_put(space, &bytes, Some(&name), &w.actor())?;
+        audit::count(space.as_str(), who_label, None, Counted::Write { ops: 1, bytes: bytes.len() });
+        // The name the widget sees is the file's own, cleaned like a stored one.
+        let shown = blobs::clean_name(&name).unwrap_or_else(|| "file".to_string());
+        files.push(json!({ "ref": info.reference, "name": shown, "size": info.size, "mime": info.mime }));
+    }
+    Ok(json!({ "files": files }))
 }
 
 pub fn is_agent_route(p: &str) -> bool {
@@ -465,6 +575,22 @@ pub fn widget(path: &str, who: &DataWho, headers: &str, body: &[u8], params: &Ha
             let out = read_json(&space, &row, offset, len, param(params, "px"))?;
             audit::count(space.as_str(), &w.label(), Some(&made), Counted::Read);
             Ok(out)
+        }
+        WIDGET_INGEST => {
+            let b: IngestBody = parse(body)?;
+            let w = placed(&b.garden, &b.placement, &b.hash, "uploads.pick")?;
+            call::check_cap(&w, "uploads.pick", "uploads:pick")?;
+            // GP1: what's picked is kept as the widget's own data.
+            if !w.signed {
+                return Err(call::needs_editor(&w));
+            }
+            not_paused(&w)?;
+            let (space, acc, _made) = call::data_access(&w, "uploads.pick", None)?;
+            if !acc.can_write_somewhere() {
+                return Err(DataError::NotGranted { key: None });
+            }
+            audit::line("zen.data.ingest", &w.label(), &format!("space={space} files={}", b.paths.len()));
+            ingest(&w.label(), &w, &space, &b)
         }
         _ => Err(DataError::NotFound("route_not_found")),
     }

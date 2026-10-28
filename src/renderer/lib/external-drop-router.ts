@@ -49,6 +49,7 @@ import { useToastStore } from '@/stores/toast'
 import { useFileUndoStore } from '@/stores/file-undo'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { roomForElement } from '@/stores/window-room'
+import { markZenDropOver, zenDropTargetAt, zenFramePoint, type ZenDropHandler } from './zen/zen-drop-targets'
 
 // ── Public event names ────────────────────────────────────────────────
 
@@ -74,6 +75,9 @@ export type ExternalDropTarget =
       element: HTMLElement
     }
   | { kind: 'folder'; path: string }
+  /** A Garden widget frame whose widget listens for drops (`k2.onDrop`,
+   *  prd-garden-board-needs-v1 GP4): its files go into the widget's data. */
+  | { kind: 'zen-widget'; frame: HTMLIFrameElement; handler: ZenDropHandler }
   | { kind: 'miss' }
 
 /** Parent directory of a POSIX-style path. */
@@ -215,6 +219,11 @@ export function hitTestExternalDrop(
   },
 ): ExternalDropTarget {
   const el = doc.elementFromPoint(position.x, position.y) as HTMLElement | null
+
+  // GP4: a listening Garden widget frame (the point is over the frame
+  // itself; K2's own DOM over it wins, as it is the element there).
+  const zen = zenDropTargetAt(el)
+  if (zen) return { kind: 'zen-widget', frame: zen.frame, handler: zen.handler }
 
   // 0. Agent compose bar — insert host path into the draft (remote: upload
   //    first, same `.k2/downloads` as terminal drops). Any file type.
@@ -465,6 +474,13 @@ export async function routeExternalDrop(
   const isRemote = scope.isRemote
 
   switch (target.kind) {
+    case 'zen-widget': {
+      // Gardens are this computer's: the paths go to this computer's
+      // daemon, whatever server the window shows.
+      markZenDropOver(null)
+      target.handler(paths, zenFramePoint(target.frame, position))
+      return
+    }
     case 'terminal': {
       if (isRemote) {
         const payload = await executeRemoteDrop(
@@ -567,6 +583,10 @@ export async function routeBrowserFileDrop(
   })
 
   switch (target.kind) {
+    case 'zen-widget':
+      // The web client's frame takes its own HTML5 drops (the SDK uploads
+      // them); one that reaches the page isn't the widget's.
+      return
     case 'terminal': {
       const payload = await executeBrowserFileDrop(
         scope,
@@ -670,11 +690,23 @@ export function mountExternalDropRouter(): () => void {
           'tauri://drag-drop',
           (event) => {
             const { paths, position } = event.payload
+            markZenDropOver(null)
             if (!paths || paths.length === 0 || !position) return
             void routeExternalDrop(primaryScope(), paths, position)
           },
         )
         .then(track)
+        .then(() =>
+          // GP4: K2 draws the drop ring on a listening widget frame (it
+          // can't see a Tauri drag itself).
+          getCurrentWebview().listen<{ position?: { x: number; y: number } }>('tauri://drag-over', (event) => {
+            const p = event.payload?.position
+            markZenDropOver(p ? (zenDropTargetAt(document.elementFromPoint(p.x, p.y))?.frame ?? null) : null)
+          }),
+        )
+        .then((off) => off && track(off))
+        .then(() => getCurrentWebview().listen('tauri://drag-leave', () => markZenDropOver(null)))
+        .then((off) => off && track(off))
     })
     .catch((err) => {
       if (import.meta.env.DEV) {

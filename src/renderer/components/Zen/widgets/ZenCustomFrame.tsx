@@ -27,7 +27,20 @@ import {
 } from '@/lib/zen/zen-widget-routes'
 import { zenLib, ZenLibError } from '@/lib/zen/zen-lib-loader'
 import { zenFramePrelude, type ZenFrameTheme } from '@/lib/zen/zen-custom-prelude'
-import { ZEN_PICK_GESTURE_MS, createZenCustomLayer, type ZenCustomLayer } from '@/lib/zen/zen-custom-bridge'
+import {
+  ZEN_PICK_GESTURE_MS,
+  ZenCustomRefusal,
+  createZenCustomLayer,
+  type ZenCustomLayer,
+  type ZenCustomUploads,
+  type ZenUploadedFile,
+} from '@/lib/zen/zen-custom-bridge'
+import { ZenUploadsError, zenPick } from '@/lib/zen/zen-custom-uploads'
+import { registerZenDropTarget } from '@/lib/zen/zen-drop-targets'
+import { pickLocalComposeFiles } from '@/lib/pick-compose-files'
+import { pickBrowserFiles } from '@/lib/zen/zen-thread-files'
+import { isWebClient } from '@/lib/is-web'
+import { useToastStore } from '@/stores/toast'
 import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { createZenCustomStore, zenDataSpace } from '@/lib/zen/zen-custom-store'
 import { createZenCustomGuests, type ZenGuestRoomsAsk } from '@/lib/zen/zen-custom-guests'
@@ -39,7 +52,7 @@ import { ZenLinkSheet } from './ZenLinkSheet'
 import { ZenDownloadSheet } from './ZenDownloadSheet'
 import { daemonZenDownloadConsent, spendZenDownload, zenDownloadConsent, type ZenDownloadAnswer, type ZenDownloadAsk } from '@/lib/zen/zen-download-consent'
 import { openUrl } from '@tauri-apps/plugin-opener'
-import { gardenBlobGet, gardenBlobPut, gardenCall, type GardenBlobPlace } from '@/lib/garden-data/garden-data-api'
+import { gardenBlobGet, gardenBlobIngest, gardenBlobPut, gardenCall, type GardenBlobPlace } from '@/lib/garden-data/garden-data-api'
 import { createZenCustomBlobs } from '@/lib/zen/zen-custom-blobs'
 import { downloadChunks } from '@/lib/fs-transfer'
 import type { GardenCallBody } from '@/lib/garden-data/garden-data-types'
@@ -111,6 +124,8 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   // k2.onDrop.
   'garden-blobs-v1',
   'zen-files-v1',
+  // 0.46.6: store.history, store.restore and store.snapshot (the daemon answers them).
+  'garden-history-v1',
 ]
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
@@ -283,6 +298,60 @@ export function ZenCustomFrame({
           placement: widgetRef.current.id,
           hash: loadedRef.current?.hash ?? widgetRef.current.hash,
         })
+        // prd-garden-board-needs-v1 GB12/GB13: this widget's files, over
+        // the daemon's widget door for the placement and the hash this
+        // frame runs (8 MiB chunks; the daemon runs the call gates).
+        const blobs = createZenCustomBlobs({
+          put: (chunk) => gardenBlobPut(blobPlace(), chunk),
+          get: (params) => gardenBlobGet(blobPlace(), params),
+        })
+        // GP1–GP4 (0.46.6): K2's picker, and drops the router hands this
+        // frame while its widget listens (k2.onDrop).
+        const dropListeners = new Set<(d: { files: ZenUploadedFile[]; x: number; y: number }) => void>()
+        let dropOff: (() => void) | null = null
+        const uploads: ZenCustomUploads = {
+          pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
+          pick: async (opts) => {
+            try {
+              return await zenPick(
+                {
+                  web: () => isWebClient(),
+                  native: (o) => pickLocalComposeFiles(o),
+                  browser: (o) => pickBrowserFiles(o),
+                  ingest: (paths, accept) => gardenBlobIngest(blobPlace(), paths, accept).then((r) => r.files),
+                  put: (bytes, o) => blobs.put(bytes, o),
+                },
+                opts,
+              )
+            } catch (err) {
+              if (err instanceof ZenUploadsError) throw new ZenCustomRefusal(err.code, err.message)
+              throw err
+            }
+          },
+          onDrop: (fn) => {
+            dropListeners.add(fn)
+            const frame = frameRef.current
+            if (!dropOff && frame) {
+              dropOff = registerZenDropTarget(frame, (paths, at) => {
+                void gardenBlobIngest(blobPlace(), paths.slice(0, 20), [])
+                  .then((r) => {
+                    for (const l of dropListeners) l({ files: r.files, x: at.x, y: at.y })
+                  })
+                  .catch((err: unknown) => {
+                    console.warn('[zen] a drop on the widget failed:', err)
+                    useToastStore.getState().addToast(`${label} didn’t take the dropped files: ${err instanceof Error ? err.message : String(err)}`, 'error')
+                  })
+              })
+            }
+            return () => {
+              dropListeners.delete(fn)
+              if (dropListeners.size === 0 && dropOff) {
+                dropOff()
+                dropOff = null
+              }
+            }
+          },
+        }
         const layer = createZenCustomLayer({
           widget: () => widgetRef.current,
           gardenId: () => gardenId,
@@ -313,13 +382,8 @@ export function ZenCustomFrame({
             clearTimer: (t) => window.clearTimeout(t as number),
             now: () => Date.now(),
           }),
-          // prd-garden-board-needs-v1 GB12/GB13: this widget's files, over
-          // the daemon's widget door for the placement and the hash this
-          // frame runs (8 MiB chunks; the daemon runs the call gates).
-          blobs: createZenCustomBlobs({
-            put: (chunk) => gardenBlobPut(blobPlace(), chunk),
-            get: (params) => gardenBlobGet(blobPlace(), params),
-          }),
+          blobs,
+          uploads,
           // GS1–GS7: `k2.download` lands through K2's own download path
           // (transfer card, Cancel, toast; Downloads, never a folder the
           // widget names), only after a press in this frame within 5 s.

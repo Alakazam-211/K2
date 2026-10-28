@@ -110,8 +110,8 @@ CREATE INDEX IF NOT EXISTS blob_refs_by_hash ON blob_refs(space, hash);
 "#;
 
 /// Every table keyed by space: a space delete or move carries all of them
-/// (GB8, V8).
-pub const SPACE_TABLES: [&str; 5] = ["entries", "changes", "blob_refs", "space_blobs", "spaces"];
+/// (GB8, V8; `restores` since history, GH9).
+pub const SPACE_TABLES: [&str; 6] = ["entries", "changes", "blob_refs", "space_blobs", "restores", "spaces"];
 
 /// Seconds since the Unix epoch (injectable for tests).
 pub type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
@@ -306,6 +306,7 @@ impl SqliteStore {
         conn.execute_batch(GARDENS_SCHEMA_V1)?;
         conn.execute_batch(GARDENS_AUX_V1)?;
         super::blob_store::upgrade_aux(&conn)?;
+        super::history::upgrade(&conn)?;
         super::blob_store::reconcile_aux(&mut conn, self.now())?;
         Ok(conn)
     }
@@ -332,6 +333,35 @@ impl SqliteStore {
     /// rev bump). `indexed` (a batch, transaction or import) names the
     /// failing op's index in a conflict or a refused patch.
     fn write(&self, space: &Space, ops: &[Op], by: &Actor, indexed: bool) -> Result<(i64, bool), DataError> {
+        self.write_with(space, ops, by, indexed, None)
+    }
+
+    /// A restore's write (prd-garden-board-needs-v1 GH5, GH9): every change
+    /// carries the restore's id, and its `restores` row lands in the same
+    /// transaction. Indexed like a batch; nothing changed is `bad_request`
+    /// (the plan only holds ops that change something).
+    pub(super) fn write_marked(
+        &self,
+        space: &Space,
+        ops: &[Op],
+        by: &Actor,
+        mark: &super::history::RestoreMark,
+    ) -> Result<i64, DataError> {
+        let (rev, changed) = self.write_with(space, ops, by, true, Some(mark))?;
+        if !changed {
+            return Err(DataError::BadRequest("a restore with nothing to change".into()));
+        }
+        Ok(rev)
+    }
+
+    fn write_with(
+        &self,
+        space: &Space,
+        ops: &[Op],
+        by: &Actor,
+        indexed: bool,
+        mark: Option<&super::history::RestoreMark>,
+    ) -> Result<(i64, bool), DataError> {
         let at = |i: usize, op: &Op, e: DataError| -> DataError {
             if !indexed {
                 return e;
@@ -381,18 +411,24 @@ impl SqliteStore {
             let (rev, mut bytes, mut nkeys) = head.unwrap_or((0, 0, 0));
             // Current state of each key: (live rev or 0, live size). A patch
             // reads the live value and merges it here, inside this write, so
-            // the whole set still lands at one rev or not at all.
+            // the whole set still lands at one rev or not at all. The live
+            // value is also the change's before-value (GH1).
             let mut plan: Vec<(usize, i64, i64)> = Vec::with_capacity(ops.len());
+            let mut prevs: Vec<Option<String>> = vec![None; ops.len()];
             {
-                let mut q = tx.prepare_cached("SELECT rev, deleted, size FROM entries WHERE space = ?1 AND key = ?2")?;
-                let mut qv =
-                    tx.prepare_cached("SELECT value FROM entries WHERE space = ?1 AND key = ?2 AND deleted = 0")?;
+                let mut q =
+                    tx.prepare_cached("SELECT rev, deleted, size, value FROM entries WHERE space = ?1 AND key = ?2")?;
                 for (i, op) in ops.iter().enumerate() {
-                    let cur: Option<(i64, bool, i64)> = q
-                        .query_row(params![space.as_str(), op.key()], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1, r.get(2)?)))
+                    let cur: Option<(i64, bool, i64, Option<String>)> = q
+                        .query_row(params![space.as_str(), op.key()], |r| {
+                            Ok((r.get(0)?, r.get::<_, i64>(1)? == 1, r.get(2)?, r.get(3)?))
+                        })
                         .optional()?;
                     let (live_rev, live_size) = match cur {
-                        Some((r, false, s)) => (r, s),
+                        Some((r, false, s, v)) => {
+                            prevs[i] = v;
+                            (r, s)
+                        }
                         _ => (0, 0),
                     };
                     if let Some(want) = op.if_rev() {
@@ -405,11 +441,7 @@ impl SqliteStore {
                         }
                     }
                     if let Op::Patch { value: partial, .. } = op {
-                        let live = if live_rev == 0 {
-                            None
-                        } else {
-                            Some(parse_value(qv.query_row(params![space.as_str(), op.key()], |r| r.get(0)).optional()?)?)
-                        };
+                        let live = if live_rev == 0 { None } else { Some(parse_value(prevs[i].clone())?) };
                         texts[i] = match super::patch::merged(op.key(), live.as_ref(), partial).map_err(|e| at(i, op, e))? {
                             Some(doc) => {
                                 if blobs_on {
@@ -471,23 +503,28 @@ impl SqliteStore {
                        value = excluded.value, size = excluded.size, updated_at = excluded.updated_at,
                        updated_by = excluded.updated_by",
                 )?;
+                // GH1/GH9: the before-value (kind 0: the key didn't exist) and
+                // the restore that wrote it, beside the six version-1 columns.
                 let mut log = tx.prepare_cached(
-                    "INSERT INTO changes (space, rev, key, deleted, by, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    "INSERT INTO changes (space, rev, key, deleted, by, at, prev, prev_kind, restore_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 )?;
+                let restore_id = mark.map(|m| m.id.as_str());
                 let empty = BTreeSet::new();
                 for &(i, live_rev, _) in &plan {
                     let key = ops[i].key();
                     match &texts[i] {
                         Act::Write(t) => {
                             up.execute(params![space.as_str(), key, new_rev, 0, t, t.len() as i64, now, who])?;
-                            log.execute(params![space.as_str(), new_rev, key, 0, who, now])?;
+                            let kind = i64::from(live_rev != 0);
+                            log.execute(params![space.as_str(), new_rev, key, 0, who, now, prevs[i], kind, restore_id])?;
                             if blobs_on {
                                 super::blob_store::set_key_refs(&tx, space, key, refs[i].as_ref().unwrap_or(&empty), now)?;
                             }
                         }
                         Act::Delete if live_rev != 0 => {
                             up.execute(params![space.as_str(), key, new_rev, 1, Option::<String>::None, 0, now, who])?;
-                            log.execute(params![space.as_str(), new_rev, key, 1, who, now])?;
+                            log.execute(params![space.as_str(), new_rev, key, 1, who, now, prevs[i], 1i64, restore_id])?;
                             if blobs_on {
                                 super::blob_store::set_key_refs(&tx, space, key, &empty, now)?;
                             }
@@ -498,6 +535,9 @@ impl SqliteStore {
             }
             if blobs_on {
                 super::blob_store::set_aux_rev(&tx, space, new_rev)?;
+            }
+            if let Some(m) = mark {
+                super::history::record_restore(&tx, space, &who, now, new_rev, m)?;
             }
             tx.execute(
                 "INSERT INTO spaces (space, rev, bytes, keys, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
@@ -609,10 +649,13 @@ impl StoreBackend for SqliteStore {
                 return Err(DataError::Resync { reaped_rev: reaped });
             }
             let after = from.after.clone();
+            // GH9: the change row of the same (rev, key) names the restore
+            // that wrote it, if any.
             let mut q = conn.prepare_cached(
-                "SELECT key, rev, deleted, value, updated_at, updated_by FROM entries
-                 WHERE space = ?1 AND (rev > ?2 OR (?3 IS NOT NULL AND rev = ?2 AND key > ?3))
-                 ORDER BY rev, key",
+                "SELECT e.key, e.rev, e.deleted, e.value, e.updated_at, e.updated_by, c.restore_id FROM entries e
+                 LEFT JOIN changes c ON c.space = e.space AND c.rev = e.rev AND c.key = e.key
+                 WHERE e.space = ?1 AND (e.rev > ?2 OR (?3 IS NOT NULL AND e.rev = ?2 AND e.key > ?3))
+                 ORDER BY e.rev, e.key",
             )?;
             let mut rows = q.query(params![space.as_str(), from.since, after])?;
             let mut items: Vec<Change> = Vec::new();
@@ -657,6 +700,7 @@ impl StoreBackend for SqliteStore {
                     value: parse_value(value)?,
                     by: r.get(5)?,
                     at: r.get(4)?,
+                    restore: r.get(6)?,
                 });
             }
             Ok(ChangesPage { head, items, next, partial })

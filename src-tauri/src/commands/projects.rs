@@ -64,16 +64,38 @@ pub async fn projects_pick_folder(app: tauri::AppHandle) -> Result<Option<String
 /// `File.path` and ignores `.click()` on `display:none` — compose attach
 /// uses this so the draft gets real filesystem paths.
 #[tauri::command]
-pub async fn pick_local_files(app: tauri::AppHandle) -> Result<Option<Vec<String>>, String> {
+pub async fn pick_local_files(
+    app: tauri::AppHandle,
+    filters: Option<Vec<String>>,
+    multiple: Option<bool>,
+) -> Result<Option<Vec<String>>, String> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = std::sync::mpsc::channel();
-    app.dialog()
-        .file()
-        .set_title("Attach a file or image")
-        .pick_files(move |paths| {
+    // 0.46.6 (prd-garden-board-needs-v1 GP3, V4): a widget's `k2.pick` may
+    // narrow the dialog to extensions (letters and digits only, at most 20)
+    // and to one file. The compose "+" passes neither, as before.
+    let exts: Vec<String> = filters
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.trim_start_matches('.').to_ascii_lowercase())
+        .filter(|e| !e.is_empty() && e.len() <= 16 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .take(20)
+        .collect();
+    let mut dialog = app.dialog().file().set_title(if exts.is_empty() { "Attach a file or image" } else { "Choose files" });
+    if !exts.is_empty() {
+        let refs: Vec<&str> = exts.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter("Files", &refs);
+    }
+    if multiple == Some(false) {
+        dialog.pick_file(move |path| {
+            let _ = tx.send(path.map(|p| vec![p.to_string()]));
+        });
+    } else {
+        dialog.pick_files(move |paths| {
             let mapped = paths.map(|ps| ps.into_iter().map(|p| p.to_string()).collect::<Vec<_>>());
             let _ = tx.send(mapped);
         });
+    }
     rx.recv().map_err(|e| e.to_string())
 }
 

@@ -24,9 +24,13 @@ export function composeAttachPlan(input?: {
   return { kind: 'native' }
 }
 
-/** Native OS multi-file picker. Cancel → null. Empty selection → []. */
-export async function pickLocalComposeFiles(): Promise<string[] | null> {
-  return invoke<string[] | null>('pick_local_files')
+/** Native OS multi-file picker. Cancel → null. Empty selection → [].
+ *  0.46.6 (prd-garden-board-needs-v1 GP3, V4): optional extension
+ *  `filters` (no dots) and `multiple` for a widget's `k2.pick`; the compose
+ *  "+" calls it with neither, exactly as before. */
+export async function pickLocalComposeFiles(opts?: { filters?: string[]; multiple?: boolean }): Promise<string[] | null> {
+  if (!opts) return invoke<string[] | null>('pick_local_files')
+  return invoke<string[] | null>('pick_local_files', { filters: opts.filters ?? null, multiple: opts.multiple ?? null })
 }
 
 export async function pickRemoteComposeFile(): Promise<string | null> {

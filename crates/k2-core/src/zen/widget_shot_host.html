@@ -136,8 +136,31 @@
         delete store[a0]
         rev += 1
         return { rev: rev, deleted: had }
+      // 0.46.6 (prd-garden-board-needs-v1 GB18): files from the blobs/
+      // folder beside --data, as transferred bytes like K2's own reply.
+      case 'blobs.get':
+        var b = DATA && DATA.blobs && Object.prototype.hasOwnProperty.call(DATA.blobs, a0) ? DATA.blobs[a0] : null
+        if (!b) throw refusal('blob_missing', 'no file in the fixtures for ' + a0)
+        var bin = atob(b.base64)
+        var u8 = new Uint8Array(bin.length)
+        for (var i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i)
+        return { __bytes: u8.buffer, value: { ref: a0, size: u8.length, mime: b.mime, name: b.name || null } }
+      // GS6, GP6 and §6: no person, no download, pick or restore here.
+      case 'downloads.begin':
+      case 'downloads.save':
+      case 'uploads.pick':
+      case 'store.history':
+      case 'store.restore':
+      case 'store.snapshot':
+        throw refusal('verb_unavailable', verb + ' isn’t available in a widget preview')
       default: return null
     }
+  }
+
+  function refusal(code, message) {
+    var e = new Error(message)
+    e.code = code
+    return e
   }
 
   function subscribeValue(verb, args) {
@@ -180,7 +203,11 @@
           value = call(m.verb, m.args || [])
         } catch (err) {
           shot.refusals.push(m.verb)
-          port.postMessage({ id: m.id, ok: false, error: { code: 'failed', message: String(err && err.message || err) } })
+          port.postMessage({ id: m.id, ok: false, error: { code: (err && err.code) || 'failed', message: String(err && err.message || err) } })
+          return
+        }
+        if (value && value.__bytes) {
+          port.postMessage({ id: m.id, ok: true, value: value.value, bytes: value.__bytes }, [value.__bytes])
           return
         }
         port.postMessage({ id: m.id, ok: true, value: value === undefined ? null : value })

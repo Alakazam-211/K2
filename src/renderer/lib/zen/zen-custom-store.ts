@@ -72,6 +72,11 @@ export const ZEN_STORE_VERBS: ReadonlySet<string> = new Set([
   // 0.46.5 (prd-garden-board-needs-v1 GB13): a file's details and the list.
   'blobs.info',
   'blobs.list',
+  // 0.46.6 (prd-garden-board-needs-v1 §6): every change kept, restore and
+  // snapshots (the daemon's).
+  'store.history',
+  'store.restore',
+  'store.snapshot',
 ])
 
 /** How long the person's name is reused before `viewer.get` again. */
@@ -196,7 +201,7 @@ export function createZenCustomStore(deps: ZenCustomStoreDeps): ZenCustomStore {
   /** `by` fields in an answer, in the person's words. */
   const named = async (verb: string, v: unknown): Promise<unknown> => {
     if (verb === 'store.get' && isObj(v)) return { ...v, by: zenStoreBy(v.by, await viewerName()) }
-    if ((verb === 'store.list' || verb === 'store.changes') && isObj(v) && Array.isArray(v.items)) {
+    if ((verb === 'store.list' || verb === 'store.changes' || verb === 'store.history') && isObj(v) && Array.isArray(v.items)) {
       const n = await viewerName()
       return { ...v, items: v.items.map((i: unknown) => (isObj(i) ? { ...i, by: zenStoreBy(i.by, n) } : i)) }
     }

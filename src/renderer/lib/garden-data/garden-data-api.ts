@@ -53,6 +53,63 @@ export function exportGardenData(widget: string, opts: { at?: string; after?: st
   })
 }
 
+/** One page of a widget's files with what they count for (GB17). */
+export function listGardenBlobs(
+  widget: string,
+  opts: { after?: string; limit?: number } = {},
+): Promise<{ items: Array<{ ref: string; size: number; mime: string; name: string | null; refs: number; pending: boolean }>; next: string | null; bytes: number; quota: number }> {
+  return daemonCliGet(zenLocalScope(), 'zen/data/blob/list', { widget, after: opts.after, limit: opts.limit })
+}
+
+/** One ranged read of a widget's file (`len` ≤ 8 MiB), as the person. */
+export function readGardenBlob(widget: string, ref: string, offset: number, len: number): Promise<{ base64: string; len: number; eof: boolean; size: number }> {
+  return daemonCliGet(zenLocalScope(), 'zen/data/blob/get', { widget, ref, offset, len })
+}
+
+/** One history item (`store.history`, prd-garden-board-needs-v1 §6.2). */
+export interface GardenHistoryItem {
+  key: string
+  rev: number
+  deleted: boolean
+  value: unknown
+  prev: unknown
+  prevKind: 'value' | 'none' | 'unknown'
+  by: string
+  at: number
+  restore?: string
+}
+
+/** One page of every change kept (7 days), newest first. */
+export function gardenHistory(
+  widget: string,
+  opts: { prefix?: string; key?: string; before?: number; after?: string; limit?: number } = {},
+): Promise<{ head: number; oldest: number; items: GardenHistoryItem[]; next: { before: number; after?: string } | null }> {
+  return daemonCliGet(zenLocalScope(), 'zen/data/history', { widget, ...opts })
+}
+
+/** What a restore wrote (or, with `dryRun`, would write). */
+export interface GardenRestored {
+  id: string | null
+  rev: number | null
+  written: number
+  deleted: number
+  families: string[]
+  keys: string[]
+}
+
+/** The person's restore (any key set; the whole widget too). */
+export function restoreGardenData(body: {
+  widget: string
+  toRev?: number
+  at?: number
+  snapshot?: string
+  prefixes?: string[]
+  except?: string[]
+  dryRun?: boolean
+}): Promise<GardenRestored> {
+  return daemonCliPost<GardenRestored>(zenLocalScope(), 'zen/data/restore', body)
+}
+
 // ── the person's changes ─────────────────────────────────────────────
 
 export function grantGardenData(body: GardenGrantBody): Promise<GardenGrantResponse> {
@@ -110,6 +167,16 @@ export interface GardenBlobPlace {
 /** One chunk of a blob upload (`/cli/zen/blob/put`, ≤ 8 MiB raw). */
 export function gardenBlobPut(place: GardenBlobPlace, chunk: Record<string, unknown>): Promise<unknown> {
   return daemonCliPost<unknown>(zenLocalScope(), 'zen/blob/put', { ...place, ...chunk })
+}
+
+/** Files K2's own dialog picked, or a drop, by path, into the widget's
+ *  data (`/cli/zen/blob/ingest`, 0.46.6 GP3/GP4). Never a path back. */
+export function gardenBlobIngest(
+  place: GardenBlobPlace,
+  paths: string[],
+  accept: string[],
+): Promise<{ files: { ref: string; name: string; size: number; mime: string }[] }> {
+  return daemonCliPost(zenLocalScope(), 'zen/blob/ingest', { ...place, paths, accept })
 }
 
 /** One ranged read of a blob (`/cli/zen/blob/get`). */

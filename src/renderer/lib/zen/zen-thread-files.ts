@@ -531,12 +531,14 @@ export async function zenAttachRelPaths(
   })
 }
 
-/** The browser's own picker (a file input): the files, or [] on cancel. */
-function pickBrowserFiles(): Promise<File[]> {
+/** The browser's own picker (a file input): the files, or [] on cancel.
+ *  `accept` / `multiple` (0.46.6, `uploads.pick` on the web client). */
+export function pickBrowserFiles(opts: { accept?: string; multiple?: boolean } = {}): Promise<File[]> {
   return new Promise((resolve) => {
     const input = document.createElement('input')
     input.type = 'file'
-    input.multiple = true
+    input.multiple = opts.multiple ?? true
+    if (opts.accept) input.accept = opts.accept
     input.style.position = 'fixed'
     input.style.left = '-9999px'
     let done = false

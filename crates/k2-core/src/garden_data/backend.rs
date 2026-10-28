@@ -91,6 +91,10 @@ pub struct Change {
     pub value: Json,
     pub by: String,
     pub at: i64,
+    /// The restore that wrote this change (prd-garden-board-needs-v1 GH9);
+    /// `None` for an ordinary write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restore: Option<String>,
 }
 
 /// A position in the feed: rows strictly after `(since, after)` in

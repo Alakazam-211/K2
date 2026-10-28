@@ -157,6 +157,8 @@ pub(crate) struct Placed {
     /// Did the live version pass the signer gate (`garden_data::signer_gate`)?
     /// Always `true` with the switch off.
     pub(crate) signed: bool,
+    /// The live manifest's `restoreSkips` (prd-garden-board-needs-v1 GH11).
+    pub(crate) restore_skips: Vec<String>,
 }
 
 impl Placed {
@@ -204,6 +206,7 @@ pub(crate) fn resolve(b: &CallBody) -> Result<Placed, DataError> {
     // Garden access (switch on, G15/G22): the signer gate. Off: unchanged.
     let (caps, signed) = signer_gate::gate_caps(&g.id, &p.widget, live, full_caps.clone());
     let reads = st.manifest.as_ref().map(|m| m.reads.clone()).unwrap_or_default();
+    let restore_skips = st.manifest.as_ref().map(|m| m.restore_skips.clone()).unwrap_or_default();
     Ok(Placed {
         garden: g.id,
         placement: b.placement.clone(),
@@ -214,6 +217,7 @@ pub(crate) fn resolve(b: &CallBody) -> Result<Placed, DataError> {
         neighbours,
         full_caps,
         signed,
+        restore_skips,
     })
 }
 
@@ -407,7 +411,7 @@ fn author_unknown(w: &Placed) -> DataError {
 fn read_opts<'a>(verb: &str, args: &'a [J]) -> Option<&'a serde_json::Map<String, J>> {
     let i = match verb {
         "store.get" => 1,
-        "store.list" | "store.changes" => 0,
+        "store.list" | "store.changes" | "store.history" => 0,
         _ => return None,
     };
     args.get(i).and_then(J::as_object)
@@ -695,6 +699,30 @@ fn store_verb(
         "store.txAbort" => {
             let tx_id = arg_str(args, 0, verb, "a txId")?;
             Ok(json!({ "aborted": tx_routes::table().abort(tx_id, &tx_owner(w)) }))
+        }
+        // prd-garden-board-needs-v1 §6 (garden-history-v1): every change
+        // kept, restore and snapshots, with the maker's rights and the
+        // manifest's restoreSkips.
+        "store.history" | "store.restore" | "store.snapshot" => {
+            let caller = crate::garden_data::history_routes::Caller {
+                label: label.clone(),
+                actor: w.actor(),
+                acc: acc.clone(),
+                budget: Some(key.clone()),
+                agent: false,
+                skips: w.restore_skips.clone(),
+                made: Some(made.to_string()),
+            };
+            let empty = serde_json::Map::new();
+            let o = arg_obj(args, 0, verb)?.unwrap_or(&empty);
+            match verb {
+                "store.history" => {
+                    let q = crate::garden_data::history_routes::history_query(o, verb)?;
+                    crate::garden_data::history_routes::history(space, &caller, &q)
+                }
+                "store.restore" => crate::garden_data::history_routes::restore(space, &caller, o, verb),
+                _ => crate::garden_data::history_routes::snapshot(space, &caller, o, verb),
+            }
         }
         // prd-garden-board-needs-v1 GB13 (garden-blobs-v1).
         "blobs.info" => {

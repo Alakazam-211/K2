@@ -296,3 +296,78 @@ fn the_agent_door_round_trips_bytes_under_grants() {
     let (code, c) = err(&o, "GET", "/cli/zen/data/blob/get", json!({}), &[("widget", "board"), ("ref", &ghost)]);
     assert_eq!((code, c.as_str()), (409, "blob_missing"));
 }
+
+// ── ingest (0.46.6, prd-garden-board-needs-v1 GP3/GP4) ─────────────────
+
+impl Door {
+    fn ingest(&self, paths: &[String], accept: &[&str], head: &str) -> (u16, Value) {
+        let body = json!({ "garden": self.garden, "placement": "b1", "hash": self.hash(), "paths": paths, "accept": accept });
+        let r = handle("/cli/zen/blob/ingest", DataWho::Owner, body.to_string().as_bytes(), &HashMap::new(), head);
+        (status(&r), serde_json::from_str(&r.body).expect("json"))
+    }
+}
+
+#[test]
+fn picked_and_dropped_files_become_the_widgets_blobs() {
+    let d = door(&["store:read", "store:write", "uploads:pick"]);
+    d.stamp(MadeBy::Owner);
+    let dir = k2_core::paths::k2_home().join("picked");
+    std::fs::create_dir_all(&dir).unwrap();
+    let pic = dir.join("Photo One.png");
+    let png = png(8, 8);
+    std::fs::write(&pic, &png).unwrap();
+    let doc = dir.join("notes.json");
+    std::fs::write(&doc, b"{\"a\":1}").unwrap();
+    let paths = |ps: &[&std::path::Path]| -> Vec<String> { ps.iter().map(|p| p.to_string_lossy().to_string()).collect() };
+    // Images only: a JSON file in the pick refuses the whole pick.
+    let (code, v) = d.ingest(&paths(&[&pic, &doc]), &["image/*"], APP);
+    assert_eq!((code, v["error"]["code"].as_str()), (400, Some("bad_request")), "{v}");
+    assert_eq!(d.call("blobs.list", json!([{}]))["items"].as_array().map(Vec::len), Some(0), "nothing kept");
+    // Each file by its .ext or its sniffed type; the answer names no path.
+    let (code, v) = d.ingest(&paths(&[&pic, &doc]), &["image/*", ".json"], APP);
+    assert_eq!(code, 200, "{v}");
+    let files = v["files"].as_array().expect("files");
+    assert_eq!(files[0], json!({ "ref": ref_of(&sha256_hex(&png)), "name": "Photo One.png", "size": png.len(), "mime": "image/png" }));
+    assert_eq!((files[1]["name"].as_str(), files[1]["mime"].as_str()), (Some("notes.json"), Some("application/json")));
+    assert!(!v.to_string().contains(dir.to_string_lossy().as_ref()), "never a path back: {v}");
+    // Pending until a key names them (GB10).
+    let i = d.call("blobs.info", json!([files[0]["ref"]]));
+    assert_eq!(i["pending"], true);
+    // A drop takes any kind (no accept).
+    let (code, _) = d.ingest(&paths(&[&doc]), &[], APP);
+    assert_eq!(code, 200);
+    // Gates: a web page's Origin, a folder, a relative path, a bad accept.
+    let evil = "POST /cli/zen/blob/ingest HTTP/1.1\r\nOrigin: https://evil.example\r\n\r\n";
+    let (code, v) = d.ingest(&paths(&[&pic]), &[], evil);
+    assert_eq!((code, v["error"]["code"].as_str()), (403, Some("origin_refused")));
+    let (code, _) = d.ingest(&paths(&[&dir]), &[], APP);
+    assert_eq!(code, 400, "a folder isn't a file");
+    let (code, _) = d.ingest(&["notes.json".to_string()], &[], APP);
+    assert_eq!(code, 400, "only absolute paths");
+    let (code, _) = d.ingest(&paths(&[&pic]), &["image"], APP);
+    assert_eq!(code, 400, "accept is .ext or a mime pattern");
+    let many: Vec<String> = (0..21).map(|_| pic.to_string_lossy().to_string()).collect();
+    let (code, _) = d.ingest(&many, &[], APP);
+    assert_eq!(code, 400, "at most 20 files");
+    // Without uploads:pick in the manifest.
+    crate::garden_data::call::door_tests::set_caps(&d.f, &["store:read", "store:write"]);
+    d.stamp(MadeBy::Owner);
+    let (code, v) = d.ingest(&paths(&[&pic]), &[], APP);
+    assert_eq!((code, v["error"]["code"].as_str()), (403, Some("cap_not_granted")), "{v}");
+}
+
+#[test]
+fn accept_entries_match_by_extension_or_sniffed_type() {
+    let a = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
+    assert!(super::accepts(&a(&[]), "x.bin", "application/octet-stream"));
+    assert!(super::accepts(&a(&["image/*"]), "x", "image/webp"));
+    assert!(super::accepts(&a(&[".PDF"]), "Report.pdf", "application/pdf"));
+    assert!(super::accepts(&a(&["application/json"]), "a.txt", "application/json"));
+    assert!(!super::accepts(&a(&["image/*"]), "evil.png", "text/plain"), "the sniffed type decides for a mime pattern");
+    for ok in [".png", "image/*", "image/svg+xml", "text/plain"] {
+        assert!(super::valid_accept(ok), "{ok}");
+    }
+    for bad in ["png", ".", "image", "*/*x", ".p-g", "image/<script>"] {
+        assert!(!super::valid_accept(bad), "{bad}");
+    }
+}

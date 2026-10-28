@@ -30,6 +30,7 @@ pub mod call;
 pub mod export_routes;
 pub mod grant_routes;
 pub mod guest_rooms;
+pub mod history_routes;
 pub mod person_rows;
 pub mod tx_routes;
 
@@ -93,6 +94,12 @@ pub fn hourly() {
     mark_orphans();
     // prd-garden-board-needs-v1 GB10: blob GC after the reaper.
     blob_routes::gc_tick();
+    // GH2: before-values past 32 MiB per space are trimmed, oldest first.
+    match store().trim_history(k2_core::garden_data::history::MAX_HISTORY_BYTES) {
+        Ok(0) => {}
+        Ok(n) => audit::line("zen.data.history_trim", "k2", &format!("rows={n}")),
+        Err(e) => k2_core::log_debug!("[garden-data] history trim: {e}"),
+    }
     // B3: today's dated snapshot unless one exists or nothing changed.
     if let Err(e) = export_routes::snapshot_tick() {
         k2_core::log_debug!("[garden-data] daily snapshot: {e}");

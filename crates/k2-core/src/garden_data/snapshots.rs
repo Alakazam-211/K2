@@ -41,6 +41,8 @@ pub enum PreOp {
     Delete,
     Import,
     Move,
+    /// Before a `store.restore` write (prd-garden-board-needs-v1 GH5).
+    Restore,
 }
 
 impl PreOp {
@@ -49,6 +51,7 @@ impl PreOp {
             PreOp::Delete => "delete",
             PreOp::Import => "import",
             PreOp::Move => "move",
+            PreOp::Restore => "restore",
         }
     }
 }
@@ -120,7 +123,8 @@ fn pre_op_stamp_of(name: &str) -> Option<String> {
     let tail = rest.get(17..)?;
     let tail = tail.strip_prefix('-')?;
     let op = tail.split('-').next().unwrap_or("");
-    if ["delete", "import", "move"].contains(&op) {
+    // V16: every PreOp's name, or its files are never listed or pruned.
+    if ["delete", "import", "move", "restore"].contains(&op) {
         Some(stamp.to_string())
     } else {
         None
@@ -542,6 +546,22 @@ mod tests {
             take_pre_op(&d.join("missing.sqlite"), &snaps, PreOp::Import, "2026-10-13T091500"),
             Err(DataError::Unavailable(_))
         ));
+        fs::remove_dir_all(&d).expect("cleanup");
+    }
+
+    /// V16: a restore's pre-op file is listed and pruned like the others.
+    #[test]
+    fn restore_pre_op_files_are_listed_and_pruned() {
+        let d = tmp();
+        let snaps = d.join(DIR_NAME);
+        let store = store_with(&d, 1, 1);
+        let a = take_pre_op(&store, &snaps, PreOp::Restore, "2026-10-01T091500").expect("pre-op");
+        assert_eq!(a, "gardens-2026-10-01T091500-restore.sqlite");
+        assert_eq!(list_pre_op(&snaps).expect("pre-ops"), vec![a.clone()]);
+        let today = NaiveDate::from_ymd_opt(2026, 10, 27).expect("date");
+        assert_eq!(pre_op_drop_set(std::slice::from_ref(&a), today), vec![a.clone()], "older than 14 days goes");
+        assert_eq!(prune_pre_op(&snaps, today).expect("prune"), vec![a]);
+        assert!(list_pre_op(&snaps).expect("pre-ops").is_empty());
         fs::remove_dir_all(&d).expect("cleanup");
     }
 

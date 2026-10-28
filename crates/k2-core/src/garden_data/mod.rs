@@ -27,6 +27,7 @@ pub mod blob_store;
 pub mod blobs;
 pub mod export;
 pub mod grants;
+pub mod history;
 pub mod keys;
 pub mod patch;
 pub mod rights;

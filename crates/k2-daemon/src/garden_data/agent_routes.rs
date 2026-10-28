@@ -158,7 +158,12 @@ pub(crate) fn entry_json(e: Entry, names: &mut ByNames) -> Value {
 }
 
 pub(crate) fn change_json(c: Change, names: &mut ByNames) -> Value {
-    json!({ "key": c.key, "rev": c.rev, "deleted": c.deleted, "value": c.value, "by": names.wire(&c.by), "at": c.at })
+    let mut v = json!({ "key": c.key, "rev": c.rev, "deleted": c.deleted, "value": c.value, "by": names.wire(&c.by), "at": c.at });
+    // GH9: a change a restore wrote names the restore (`by` is who restored).
+    if let (Some(id), Some(o)) = (c.restore, v.as_object_mut()) {
+        o.insert("restore".into(), Value::String(id));
+    }
+    v
 }
 
 fn need_write(acc: &Access, key: &str) -> Result<(), DataError> {

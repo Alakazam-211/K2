@@ -111,6 +111,13 @@ pub struct Manifest {
     /// default, `"garden"`): the frame follows the Garden, never the OS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub color_scheme: Option<String>,
+    /// 0.46.6 (prd-garden-board-needs-v1 GH11): key prefixes a
+    /// `store.restore` leaves alone unless the call names them in
+    /// `prefixes` (keys that mirror who-can-see-what), at most
+    /// [`crate::garden_data::history::MAX_RESTORE_SKIPS`]. It narrows
+    /// restores only, so it isn't part of the version digest.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub restore_skips: Vec<String>,
 }
 
 /// The manifest's `colorScheme` that lets the widget's own CSS decide.
@@ -185,6 +192,11 @@ impl Manifest {
                 .map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect())
                 .unwrap_or_default(),
             color_scheme: v.get("colorScheme").and_then(J::as_str).filter(|s| *s == OWN_COLOR_SCHEME).map(str::to_string),
+            restore_skips: v
+                .get("restoreSkips")
+                .and_then(J::as_array)
+                .map(|a| a.iter().filter_map(J::as_str).map(str::to_string).collect())
+                .unwrap_or_default(),
         })
     }
 }
@@ -343,6 +355,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
     let mut sources: Option<J> = None;
     let mut reads: Vec<String> = Vec::new();
     let mut color_scheme: Option<String> = None;
+    let mut restore_skips: Vec<String> = Vec::new();
     let mut saw_schema = false;
 
     for (k, val) in obj {
@@ -527,6 +540,26 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
                     "colorScheme is \"garden\" (the default: the frame follows the Garden's light/dark, never the computer's) or \"own\" (your CSS decides)".into(),
                 ),
             },
+            // 0.46.6 (GH11): prefixes a restore leaves alone unless named.
+            "restoreSkips" => match val.as_array() {
+                Some(list) if list.len() <= crate::garden_data::history::MAX_RESTORE_SKIPS => {
+                    for (i, r) in list.iter().enumerate() {
+                        let p = format!("restoreSkips.{i}");
+                        match r.as_str() {
+                            Some(s) if !s.is_empty() && crate::garden_data::keys::validate_prefix(s).is_ok() => {
+                                if restore_skips.iter().any(|x| x == s) {
+                                    err(&p, format!("'{s}' is listed twice"));
+                                } else {
+                                    restore_skips.push(s.to_string());
+                                }
+                            }
+                            _ => err(&p, "each entry in restoreSkips is a key prefix of this widget's data, like \"access/\"".into()),
+                        }
+                    }
+                }
+                Some(_) => err(k, format!("restoreSkips lists at most {} prefixes", crate::garden_data::history::MAX_RESTORE_SKIPS)),
+                None => err(k, "restoreSkips is a list of key prefixes a restore leaves alone: [\"access/\"]".into()),
+            },
             "net" | "secrets" => {
                 err(k, format!("'{k}' isn't part of manifest schema 1; outside data comes from data sources: ask for sources:read and name them in \"sources\" (k2 study data-sources)"))
             }
@@ -636,6 +669,7 @@ pub fn parse_manifest(file: &str, src: &str, folder: &str) -> (Option<Manifest>,
         sources,
         reads,
         color_scheme,
+        restore_skips,
     };
     (Some(m), errors, warnings)
 }
@@ -1087,6 +1121,16 @@ mod tests {
         let saved = serde_json::to_value(&own).expect("json");
         assert_eq!(saved["colorScheme"], "own");
         assert_eq!(Manifest::from_saved(&saved).expect("saved").color_scheme.as_deref(), Some("own"));
+        // 0.46.6 (GH11): restoreSkips are key prefixes and round-trip too.
+        let skips = manifest(&with("\"restoreSkips\": [\"access/\", \"settings/access\"]")).0.expect("skips");
+        assert_eq!(skips.restore_skips, vec!["access/".to_string(), "settings/access".to_string()]);
+        let saved = serde_json::to_value(&skips).expect("json");
+        assert_eq!(Manifest::from_saved(&saved).expect("saved").restore_skips, skips.restore_skips);
+        assert_eq!(version_digest(&skips), version_digest(&plain), "restoreSkips only narrows restores");
+        for bad in ["\"restoreSkips\": \"access/\"", "\"restoreSkips\": [\"\"]", "\"restoreSkips\": [\"a/\", \"a/\"]", "\"restoreSkips\": [\"../x\"]"] {
+            let (m, e, _) = manifest(&with(bad));
+            assert!(m.is_none() && !e.is_empty(), "{bad}: {e:?}");
+        }
         for bad in ["\"colorScheme\": \"dark\"", "\"colorScheme\": \"light dark\"", "\"colorScheme\": true"] {
             let (m, e, _) = manifest(&with(bad));
             assert!(m.is_none(), "{bad}");

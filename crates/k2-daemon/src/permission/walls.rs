@@ -207,6 +207,10 @@ pub(crate) const ROWS: &[Row] = &[
     // ── Gardens and sources ────────────────────────────────────────────
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/sources/", ANY),
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/zen/", ANY),
+    // prd-garden-board-needs-v1 GH6 (R2): an agent's whole-space restore is
+    // the person's own (`k2 zen data restore`, Settings → Local Data); the
+    // switch wouldn't lift it, so nothing to ask for.
+    row(Target::Cannot { r#where: WHERE_AT_MACHINE }, code(403, "person_only"), "/cli/zen/data/restore", POST),
     // The approve body is `{name, specHash}`: the card is bound to the spec
     // the agent saw (`spec=`, lane E2).
     Row {

@@ -37,6 +37,10 @@ pub enum Spend {
     GrantChange,
     /// A read that costs more than one (a blob thumbnail: security review #3).
     Reads(u32),
+    /// A restore (prd-garden-board-needs-v1 GH5): `ceil(ops / 20)` write
+    /// tokens, at most the whole burst (a big restore drains the bucket;
+    /// it is still one write, once per 10 s).
+    Restore { ops: usize },
     /// A new blob upload (prd-garden-board-needs-v1 §3.3): 30 a minute.
     UploadStart,
     /// Uploaded bytes: 128 MiB per 10 minutes.
@@ -104,6 +108,10 @@ impl Buckets {
         match what {
             Spend::Read => self.take(key, Kind::Read, 1.0, now),
             Spend::Reads(n) => self.take(key, Kind::Read, f64::from(n.max(1)), now),
+            Spend::Restore { ops } => {
+                let tokens = ops.div_ceil(TX_OPS_PER_TOKEN).clamp(1, WRITE_BURST as usize) as f64;
+                self.take(key, Kind::Write, tokens, now)
+            }
             Spend::Write => self.take(key, Kind::Write, 1.0, now),
             Spend::Save => self.take(key, Kind::Save, 1.0, now),
             Spend::GrantChange => self.take(key, Kind::Grant, 1.0, now),

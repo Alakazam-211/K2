@@ -785,6 +785,14 @@ mod unix_impl {
                     crate::permission::routes::Transport::Cell,
                 ))
             }
+            // 0.46.6: the firewall view (any passport reads it) and the
+            // owner's options (a passport's change is `owner_only`, except
+            // tightening its own App's guard).
+            p if crate::firewall::routes::is_route(p) => {
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                let port = crate::apps::box_service_routes::daemon_ports().first().copied().unwrap_or(0);
+                from_cli(crate::firewall::routes::handle(p, &who, is_post, body, params, port))
+            }
             p if crate::hire_routes::is_route(p) => {
                 if body.len() > crate::hire_routes::MAX_BODY {
                     return from_cli(crate::hire_routes::too_large());

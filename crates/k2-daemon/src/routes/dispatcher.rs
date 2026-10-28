@@ -3958,6 +3958,37 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| serde_json::json!({"error": format!("worker join: {e}")}));
             super::http::send_response(&mut *stream, "200 OK", "application/json", &body.to_string()).await;
         }
+        // 0.46.6 — the public-ports view and the owner's firewall options
+        // (`/cli/firewall/*`), and front443's owner passthrough names
+        // (`/cli/front/passthrough*`). Floors in route_policy; the handler
+        // classifies the caller (reads: people and passports; changes:
+        // people only, an agent is `owner_only`).
+        p if crate::firewall::routes::is_route(p) => {
+            if crate::firewall::routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::firewall::routes::MAX_BODY).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::firewall::routes::too_large();
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let port = state.port;
+            let r = tokio::task::spawn_blocking(move || crate::firewall::routes::handle(&p_owned, &who, is_post, &body_bytes, &params, port))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // front443 — GET /cli/front/status: the box :443 SNI router (socket,
         // routes, cap, per-outcome counters).
         "/cli/front/status" => {

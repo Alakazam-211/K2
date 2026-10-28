@@ -95,6 +95,10 @@ const fn row(target: Target, matches: WallMatch, prefix: &'static str, method: W
 /// would otherwise claim.
 const IN_SETTINGS: &str = "a person with the owner role does this, in Settings or from a terminal outside K2";
 
+/// The box's firewall (0.46.6): the owner or an Admin, never an agent.
+const FIREWALL_WHERE: &str =
+    "the owner or an admin does this, in Settings → Network → Custom Domains → Firewall or with k2 firewall from a terminal outside K2";
+
 /// The v1 card-able actions (PRD §5.2): the 17 Agent-tab switches, the 5
 /// held-request actions, `garden.keep-mine` (K2-presented, no wall) and
 /// the `to=off` twins (asked only, no wall), plus Garden access's three
@@ -294,6 +298,11 @@ pub(crate) const ROWS: &[Row] = &[
     // An apex attach/remove is owner/admin only for every agent, switch or
     // not (`dispatcher.rs` passport arm): not requestable.
     row(Target::Cannot { r#where: IN_SETTINGS }, code(403, "owner_only"), "/cli/domains", ANY),
+    // ── the box's firewall (0.46.6) ────────────────────────────────────
+    // Who can reach the box is box-level (`NeverReason::BoxLevel`): no
+    // agent opens, narrows or passes through anything, so not requestable.
+    row(Target::Cannot { r#where: FIREWALL_WHERE }, code(403, "owner_only"), "/cli/firewall/", POST),
+    row(Target::Cannot { r#where: FIREWALL_WHERE }, code(403, "owner_only"), "/cli/front/passthrough", POST),
     // ── connections ────────────────────────────────────────────────────
     row(ask("connections.create", Floor::Admin), code(403, "agents_create_connections_disabled"), "/cli/", ANY),
     Row {

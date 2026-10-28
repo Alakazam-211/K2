@@ -191,6 +191,13 @@ export const ZONE_MISSING_COPY =
 
 export const DOMAINS_MANIFEST: SettingEntry[] = [
   {
+    id: 'domains.firewall',
+    section: 'domains',
+    label: 'Firewall',
+    description: 'Public ports on this server, who may reach SSH, ports you open, the App guard',
+    keywords: ['firewall', 'ports', 'ssh', 'open port', 'guard', 'rate limit', 'nft', 'ufw'],
+  },
+  {
     id: 'domains.inventory',
     section: 'domains',
     label: 'Custom domains',
@@ -696,6 +703,209 @@ export function DomainsSection(): React.JSX.Element {
           Upload
         </button>
       </div>
+      <FirewallPanel />
+    </div>
+  )
+}
+
+// ── Settings → Network → Custom Domains → Firewall (0.46.6, prd-custom-domains-path-a-0466-v1 §4.5) ──
+// Thin client on GET /cli/firewall (the daemon computes the view; never a
+// scan). K2-owned rows are read-only and say which feature opened them.
+
+export type FirewallPort = {
+  port: number
+  proto: 'tcp' | 'udp'
+  source: string
+  allowFrom?: string[]
+  why: string
+}
+
+export type FirewallStatus = {
+  view: {
+    hash: string
+    public: FirewallPort[]
+    knownNotPublic: FirewallPort[]
+    box: { label?: string | null; behindNat?: boolean | null }
+    upstream: { managedBy: string; applied?: { provider: string; appliedAt: number; current: boolean } | null }
+  }
+  ssh: { port: number; allowFrom: string[] }
+  applies: string
+  guard: {
+    settings: { enabled: boolean; connsPerIp: number; writesPerMin: number }
+    counters: { perIpRefused: number; guardLimited: number }
+  }
+}
+
+/** Plain words for a row's source (K2-owned rows say which feature). */
+export function firewallSourceLabel(source: string): string {
+  switch (source) {
+    case 'ssh':
+      return 'SSH'
+    case 'front443':
+      return 'K2: the :443 front'
+    case 'skin-direct':
+      return 'K2: Skin Direct'
+    case 'hostmail':
+      return 'K2: hosted mail'
+    case 'sew-voice':
+      return 'K2: Sew voice'
+    case 'daemon':
+      return 'K2: API (LAN)'
+    case 'owner':
+      return 'You'
+    default:
+      return source
+  }
+}
+
+async function cliPostJson(path: string, payload: unknown): Promise<unknown> {
+  const creds = await getDaemonWs(primaryScope())
+  const res = await fetch(`${daemonHttpBase(creds)}${path}?token=${creds.token}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok) throw toApiError(res.status, body)
+  return body
+}
+
+export function FirewallPanel(): React.JSX.Element {
+  const [st, setSt] = useState<FirewallStatus | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [port, setPort] = useState('')
+  const [label, setLabel] = useState('')
+  const [sshFrom, setSshFrom] = useState('')
+
+  const load = useCallback(async () => {
+    try {
+      setSt((await cliGet('/cli/firewall')) as FirewallStatus)
+      setError(null)
+    } catch (e) {
+      setError(domainErrorText(e))
+    }
+  }, [])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  const act = async (path: string, payload: unknown) => {
+    setBusy(true)
+    try {
+      await cliPostJson(path, payload)
+      await load()
+    } catch (e) {
+      setError(domainErrorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const rows = st?.view.public ?? []
+  const sshOnly = (st?.ssh.allowFrom ?? []).length > 0
+  return (
+    <div className="mt-6" data-testid="firewall-panel">
+      <h3 className="text-xs font-semibold text-[var(--color-text-primary)] mb-1">Firewall</h3>
+      <p className="text-[10px] text-[var(--color-text-muted)] mb-2 leading-relaxed">
+        Public ports on this server, worked out from what K2 runs. {st?.applies ?? ''}
+      </p>
+      {error && <p className="text-[10px] text-red-400 mb-2">{error}</p>}
+      {st?.view.box.behindNat && (
+        <p className="text-[10px] text-[var(--color-text-muted)] mb-2">
+          This server is on a home or office connection: your own domains use K2 Connect (Pro, coming in 0.46.7).
+        </p>
+      )}
+      <div className="border border-[var(--color-border)]">
+        {rows.map((r) => (
+          <div
+            key={`${r.port}/${r.proto}`}
+            className="flex items-center justify-between gap-2 px-2 py-1 border-b border-[var(--color-border)] last:border-b-0"
+            data-testid={`fw-row-${r.port}-${r.proto}`}
+          >
+            <span className="text-[11px] font-mono w-20">
+              {r.port}/{r.proto}
+            </span>
+            <span className="text-[10px] w-32 text-[var(--color-text-muted)]">{firewallSourceLabel(r.source)}</span>
+            <span className="text-[10px] flex-1 truncate" title={r.why}>
+              {r.why}
+              {r.allowFrom && r.allowFrom[0] !== 'any' ? ` · only ${r.allowFrom.join(', ')}` : ''}
+            </span>
+            {r.source === 'owner' ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void act('/cli/firewall/close', { port: `${r.port}/${r.proto}` })}
+                className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+              >
+                Remove
+              </button>
+            ) : (
+              <span className="text-[10px] text-[var(--color-text-muted)] w-14 text-right">read-only</span>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-[10px] w-20">SSH from</span>
+        <button
+          type="button"
+          disabled={busy || !sshOnly}
+          onClick={() => void act('/cli/firewall/ssh', { any: true })}
+          className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+        >
+          Anyone
+        </button>
+        <input
+          value={sshFrom}
+          onChange={(e) => setSshFrom(e.target.value)}
+          placeholder={sshOnly ? (st?.ssh.allowFrom ?? []).join(', ') : '198.51.100.0/24'}
+          className="flex-1 px-2 py-0.5 text-[10px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
+        />
+        <button
+          type="button"
+          disabled={busy || !sshFrom.trim()}
+          onClick={() => void act('/cli/firewall/ssh', { allow: sshFrom.split(',').map((s) => s.trim()).filter(Boolean) })}
+          className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+        >
+          Only these
+        </button>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="text-[10px] w-20">Add a port</span>
+        <input
+          value={port}
+          onChange={(e) => setPort(e.target.value)}
+          placeholder="6000/udp"
+          className="w-24 px-2 py-0.5 text-[10px] font-mono bg-[var(--color-bg)] border border-[var(--color-border)]"
+        />
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="what it's for"
+          className="flex-1 px-2 py-0.5 text-[10px] bg-[var(--color-bg)] border border-[var(--color-border)]"
+        />
+        <button
+          type="button"
+          disabled={busy || !port.trim() || !label.trim()}
+          onClick={() => {
+            void act('/cli/firewall/open', { port: port.trim(), label: label.trim() })
+            setPort('')
+            setLabel('')
+          }}
+          className="px-2 py-0.5 text-[10px] border border-[var(--color-border)] no-drag cursor-pointer disabled:opacity-40"
+        >
+          Add
+        </button>
+      </div>
+      {st && (
+        <p className="mt-2 text-[10px] text-[var(--color-text-muted)]" data-testid="fw-guard">
+          App guard {st.guard.settings.enabled ? 'on' : 'off'}: {st.guard.settings.connsPerIp} connections and{' '}
+          {st.guard.settings.writesPerMin} writes a minute per visitor · refused {st.guard.counters.perIpRefused} ·
+          limited {st.guard.counters.guardLimited}
+        </p>
+      )}
     </div>
   )
 }

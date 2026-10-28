@@ -242,9 +242,10 @@ pub const ROUTES: &[Route] = &[
     // 0.46.4: any subdomain of the App's workspace onto the App (handler:
     // as label take; passports their own workspace's Apps and labels).
     post("/cli/app/domain/add", Admin),
-    post("/cli/app/domain/rm", Admin),
+    // 0.46.6: custom domains (re-check now; the App's primary origin).
     post("/cli/app/domain/check", Admin),
     post("/cli/app/domain/primary", Admin),
+    post("/cli/app/domain/rm", Admin),
     get("/cli/app/domains", Member),
     // Egress (S15): read and propose are Member (a passport sees its own
     // workspace's Apps); every new host is a held request; narrowing is
@@ -705,6 +706,18 @@ pub const ROUTES: &[Route] = &[
     both("/cli/feedback/resolve", Member),
     get("/cli/feedback/show", Member),
     get("/cli/feedback/waiting-count", Member),
+    // 0.46.6 (prd-custom-domains-path-a-0466-v1 §4.3): the public-ports
+    // view and the owner's firewall options. Logins: Admin (reads and
+    // changes); the applied-ack is the owner's. Passports reach the handler
+    // (reads; a change is `owner_only`).
+    get("/cli/firewall", Admin),
+    post("/cli/firewall/close", Admin),
+    post("/cli/firewall/guard", Admin),
+    post("/cli/firewall/open", Admin),
+    get("/cli/firewall/ports", Admin),
+    get("/cli/firewall/rules", Admin),
+    post("/cli/firewall/ssh", Admin),
+    post("/cli/firewall/upstream", Owner),
     post("/cli/focus-groups/assign", Member),
     post("/cli/focus-groups/create", Member),
     post("/cli/focus-groups/delete", Member),
@@ -724,6 +737,10 @@ pub const ROUTES: &[Route] = &[
     // owns the box's :443 (a root-helper socket) and restart the daemon.
     post("/cli/front/disable", Admin),
     post("/cli/front/enable", Admin),
+    // 0.46.6: the owner's passthrough names on :443.
+    get("/cli/front/passthrough", Admin),
+    post("/cli/front/passthrough/add", Admin),
+    post("/cli/front/passthrough/rm", Admin),
     get("/cli/front/status", Admin),
     get("/cli/fs/clipboard-paths", Member),
     post("/cli/fs/compress", Member),

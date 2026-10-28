@@ -54,6 +54,9 @@ type Call = { method: string; path: string; body: unknown }
 let calls: Call[] = []
 let listRows: DomainRow[] = []
 let postHandler: (path: string, body: Record<string, string>) => { status: number; body: unknown }
+// 0.46.6: the Firewall panel's GET /cli/firewall (its own answer, so the
+// Domains tests' error hints never show twice).
+let firewallGet: { status: number; body: unknown } = { status: 404, body: { ok: false, error: { code: 'off', hint: 'no firewall in this test' } } }
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -66,6 +69,7 @@ beforeEach(() => {
   cleanup()
   calls = []
   listRows = []
+  firewallGet = { status: 404, body: { ok: false, error: { code: 'off', hint: 'no firewall in this test' } } }
   postHandler = () => ({ status: 404, body: { ok: false, error: { code: 'not_found', hint: 'nope' } } })
   vi.stubGlobal(
     'fetch',
@@ -76,6 +80,9 @@ beforeEach(() => {
       calls.push({ method, path, body })
       if (method === 'GET' && path === '/cli/domains') {
         return jsonResponse(200, { ok: true, domains: listRows })
+      }
+      if (method === 'GET' && path === '/cli/firewall') {
+        return jsonResponse(firewallGet.status, firewallGet.body)
       }
       const r = postHandler(path, (body ?? {}) as Record<string, string>)
       return jsonResponse(r.status, r.body)
@@ -304,5 +311,43 @@ describe('DomainsSection — custom App names', () => {
     render(<DomainsSection />)
     const chip = await screen.findByTestId('app-state-nsi.agentnsi.com')
     expect(chip.textContent).toBe('live · primary')
+  })
+})
+
+describe('Firewall panel (0.46.6)', () => {
+  const STATUS = {
+    ok: true,
+    view: {
+      hash: 'sha256:' + 'a'.repeat(64),
+      public: [
+        { port: 22, proto: 'tcp', source: 'ssh', allowFrom: ['any'], why: 'SSH (owner setting)' },
+        { port: 443, proto: 'tcp', source: 'front443', allowFrom: ['any'], why: 'the :443 front' },
+        { port: 6000, proto: 'udp', source: 'owner', allowFrom: ['any'], why: 'owner: game' },
+      ],
+      knownNotPublic: [],
+      box: { label: 'box', behindNat: false },
+      upstream: { managedBy: 'owner', applied: null },
+    },
+    ssh: { port: 22, allowFrom: [] },
+    applies: 'Nobody applies this list for you: copy the rules (k2 firewall rules --format nft|ufw).',
+    guard: { settings: { enabled: true, connsPerIp: 64, writesPerMin: 120 }, counters: { perIpRefused: 0, guardLimited: 0 } },
+  }
+
+  it('lists the public ports, K2 rows read-only, owner rows removable', async () => {
+    firewallGet = { status: 200, body: STATUS }
+    postHandler = () => ({ status: 200, body: { ok: true } })
+    render(<DomainsSection />)
+    const owner = await screen.findByTestId('fw-row-6000-udp')
+    expect(within(owner).getByRole('button', { name: 'Remove' })).toBeTruthy()
+    const front = screen.getByTestId('fw-row-443-tcp')
+    expect(within(front).getByText('K2: the :443 front')).toBeTruthy()
+    expect(within(front).getByText('read-only')).toBeTruthy()
+    expect(within(screen.getByTestId('fw-row-22-tcp')).queryByRole('button', { name: 'Remove' })).toBeNull()
+    expect(screen.getByText(/Nobody applies this list for you/)).toBeTruthy()
+    expect(screen.getByTestId('fw-guard').textContent).toContain('64 connections')
+    fireEvent.click(within(owner).getByRole('button', { name: 'Remove' }))
+    await waitFor(() =>
+      expect(calls.find((c) => c.method === 'POST' && c.path === '/cli/firewall/close')?.body).toEqual({ port: '6000/udp' }),
+    )
   })
 })

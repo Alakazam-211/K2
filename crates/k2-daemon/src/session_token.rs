@@ -897,6 +897,20 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/data/mv",
         "/cli/app/label/take",
         "/cli/app/label/return",
+        // 0.46.6: the firewall. Reads for any passport (ports, not
+        // secrets); every change answers a passport `owner_only` with the
+        // owner's command, except tightening its own App's guard.
+        "/cli/firewall",
+        "/cli/firewall/ports",
+        "/cli/firewall/rules",
+        "/cli/firewall/ssh",
+        "/cli/firewall/open",
+        "/cli/firewall/close",
+        "/cli/firewall/guard",
+        "/cli/firewall/upstream",
+        "/cli/front/passthrough",
+        "/cli/front/passthrough/add",
+        "/cli/front/passthrough/rm",
         // 0.46.4: extra subdomains of its own workspace on its App.
         "/cli/app/domains",
         "/cli/app/domain/add",

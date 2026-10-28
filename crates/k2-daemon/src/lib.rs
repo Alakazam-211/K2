@@ -331,6 +331,8 @@ pub mod tunnel_autostart;
 pub mod tunnel_ingress_listener;
 // Runtime stage H: front-door hand-off (no-downtime upgrades).
 pub mod front443;
+// 0.46.6: the public-ports view and the owner's firewall options.
+pub mod firewall;
 pub mod handoff;
 pub mod handoff_setup;
 pub mod tunnel_identity_routes;

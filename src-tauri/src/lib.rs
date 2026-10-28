@@ -229,7 +229,7 @@ fn ensure_local_daemon_process() {
     use std::time::Duration;
 
     if local_daemon_boot_ready() {
-        log_debug!("[k2so] local daemon already ready (boot-status)");
+        log_debug!("[k2] local daemon already ready (boot-status)");
         return;
     }
 
@@ -239,13 +239,13 @@ fn ensure_local_daemon_process() {
         .filter(|p| p.exists())
     else {
         log_debug!(
-            "[k2so] no bundled k2-daemon next to thin client — cannot auto-start (install Program Files layout or run k2-daemon manually)"
+            "[k2] no bundled k2-daemon next to thin client — cannot auto-start (install Program Files layout or run k2-daemon manually)"
         );
         return;
     };
 
     log_debug!(
-        "[k2so] local daemon not ready; spawning {}",
+        "[k2] local daemon not ready; spawning {}",
         daemon_bin.display()
     );
 
@@ -272,9 +272,9 @@ fn ensure_local_daemon_process() {
         .stderr(std::process::Stdio::null());
 
     match cmd.spawn() {
-        Ok(child) => log_debug!("[k2so] spawned k2-daemon pid={}", child.id()),
+        Ok(child) => log_debug!("[k2] spawned k2-daemon pid={}", child.id()),
         Err(e) => {
-            log_debug!("[k2so] failed to spawn k2-daemon: {e}");
+            log_debug!("[k2] failed to spawn k2-daemon: {e}");
             return;
         }
     }
@@ -284,11 +284,11 @@ fn ensure_local_daemon_process() {
     for _ in 0..40 {
         std::thread::sleep(Duration::from_millis(200));
         if local_daemon_boot_ready() {
-            log_debug!("[k2so] local daemon became ready after spawn");
+            log_debug!("[k2] local daemon became ready after spawn");
             return;
         }
     }
-    log_debug!("[k2so] local daemon spawn timed out waiting for boot-status ready");
+    log_debug!("[k2] local daemon spawn timed out waiting for boot-status ready");
 }
 
 /// After an app update that did NOT install: start again the daemon that
@@ -314,7 +314,7 @@ pub fn stop_bundled_daemon_processes() {
         }
         // Brief pause so the file lock drops before NSIS/overwrite/spawn.
         std::thread::sleep(std::time::Duration::from_millis(400));
-        log_debug!("[k2so] stop_bundled_daemon_processes: taskkill k2-daemon.exe frpc.exe");
+        log_debug!("[k2] stop_bundled_daemon_processes: taskkill k2-daemon.exe frpc.exe");
     }
 }
 
@@ -696,7 +696,7 @@ fn stage_bundled_frpc() {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
     else {
-        log_debug!("[k2so] could not resolve current_exe to find frpc sidecar");
+        log_debug!("[k2] could not resolve current_exe to find frpc sidecar");
         return;
     };
 
@@ -710,7 +710,7 @@ fn stage_bundled_frpc() {
     }
     let Some(sidecar) = sidecar else {
         log_debug!(
-            "[k2so] bundled frpc sidecar not found next to {} — skipping stage \
+            "[k2] bundled frpc sidecar not found next to {} — skipping stage \
              (dev build without externalBin, or older bundle)",
             exe_dir.display()
         );
@@ -725,11 +725,11 @@ fn stage_bundled_frpc() {
     if dest.exists() {
         match (std::fs::read(&sidecar), std::fs::read(&dest)) {
             (Ok(a), Ok(b)) if a == b => {
-                log_debug!("[k2so] frpc already staged at {} (up to date)", dest.display());
+                log_debug!("[k2] frpc already staged at {} (up to date)", dest.display());
                 return;
             }
             (Ok(_), Ok(_)) => {
-                log_debug!("[k2so] staged frpc differs from bundle; re-staging");
+                log_debug!("[k2] staged frpc differs from bundle; re-staging");
             }
             // If we can't read one side, fall through and try to overwrite.
             _ => {}
@@ -738,14 +738,14 @@ fn stage_bundled_frpc() {
 
     if let Some(parent) = dest.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
-            log_debug!("[k2so] failed to create {}: {e}", parent.display());
+            log_debug!("[k2] failed to create {}: {e}", parent.display());
             return;
         }
     }
 
     if let Err(e) = std::fs::copy(&sidecar, &dest) {
         log_debug!(
-            "[k2so] failed to stage frpc {} -> {}: {e}",
+            "[k2] failed to stage frpc {} -> {}: {e}",
             sidecar.display(),
             dest.display()
         );
@@ -759,7 +759,7 @@ fn stage_bundled_frpc() {
         if let Err(e) =
             std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755))
         {
-            log_debug!("[k2so] failed to chmod 0755 {}: {e}", dest.display());
+            log_debug!("[k2] failed to chmod 0755 {}: {e}", dest.display());
             return;
         }
     }
@@ -774,7 +774,7 @@ fn stage_bundled_frpc() {
         }
     }
 
-    log_debug!("[k2so] staged bundled frpc -> {}", dest.display());
+    log_debug!("[k2] staged bundled frpc -> {}", dest.display());
 }
 
 /// Staged helper binary, and whether this call replaced the bytes.
@@ -1118,7 +1118,7 @@ pub fn run() {
             #[cfg(not(target_os = "macos"))]
             {
                 log_debug!(
-                    "[k2so] daemon self-heal: launchd unavailable — ensure local k2-daemon process"
+                    "[k2] daemon self-heal: launchd unavailable — ensure local k2-daemon process"
                 );
                 if !zen_spike_build() {
                     ensure_local_daemon_process();
@@ -1147,7 +1147,7 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             perf_timer!("startup_heal_daemon_plist", {
                 if !zen_spike_build() && heal_daemon_plist_program() {
-                    log_debug!("[k2so] daemon plist self-healed at startup (#14)");
+                    log_debug!("[k2] daemon plist self-healed at startup (#14)");
                 }
             });
 
@@ -1190,10 +1190,10 @@ pub fn run() {
                 );
                 match k2_client::wake::ensure_loaded(&plist) {
                     Ok(k2_client::wake::LoadOutcome::AlreadyLoaded) => {
-                        log_debug!("[k2so] daemon already loaded in launchctl");
+                        log_debug!("[k2] daemon already loaded in launchctl");
                     }
                     Ok(k2_client::wake::LoadOutcome::Loaded) => {
-                        log_debug!("[k2so] daemon plist loaded (was unloaded)");
+                        log_debug!("[k2] daemon plist loaded (was unloaded)");
                     }
                     Ok(k2_client::wake::LoadOutcome::NotInstalled) => {
                         // Self-heal EVERY boot, not just first install: the
@@ -1218,21 +1218,21 @@ pub fn run() {
                                     .and_then(|_| k2_client::wake::ensure_loaded(&plist))
                                 {
                                     Ok(_) => log_debug!(
-                                        "[k2so] daemon plist healed + loaded (was missing) → {}",
+                                        "[k2] daemon plist healed + loaded (was missing) → {}",
                                         daemon_bin.display()
                                     ),
                                     Err(e) => log_debug!(
-                                        "[k2so] daemon plist heal failed: {e}"
+                                        "[k2] daemon plist heal failed: {e}"
                                     ),
                                 }
                             }
                             None => log_debug!(
-                                "[k2so] daemon plist missing and no bundled daemon to heal from                                  (dev build or transient location) — daemon stays down"
+                                "[k2] daemon plist missing and no bundled daemon to heal from                                  (dev build or transient location) — daemon stays down"
                             ),
                         }
                     }
                     Err(e) => {
-                        log_debug!("[k2so] daemon autostart failed: {e}");
+                        log_debug!("[k2] daemon autostart failed: {e}");
                     }
                 }
               }

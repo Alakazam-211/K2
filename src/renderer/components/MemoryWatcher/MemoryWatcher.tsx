@@ -13,7 +13,7 @@ interface RendererMemoryStatus {
  *
  * Polls the daemon-side `renderer_memory_status` Tauri command every
  * 5 minutes and logs the Tauri process's resident memory to the
- * renderer console (`[k2so/memory]`). The toast warning is gated on
+ * renderer console (`[k2/memory]`). The toast warning is gated on
  * *growth above baseline* rather than an absolute threshold, so the
  * resident weight of the local LLM (loaded at app start, ~1+ GB
  * steady-state) doesn't trip a false alarm.
@@ -72,7 +72,7 @@ export default function MemoryWatcher(): React.JSX.Element | null {
             : `baseline=${Math.round(baseline / 1024 / 1024)}MB growth=${growthMB}MB`
         // eslint-disable-next-line no-console
         console.info(
-          `[k2so/memory] pid=${status.pid} rss=${mb}MB vsize=${vmb}MB ${baselineLabel}`
+          `[k2/memory] pid=${status.pid} rss=${mb}MB vsize=${vmb}MB ${baselineLabel}`
         )
 
         // Warn iff (growth above baseline > 800 MB) OR (absolute >
@@ -99,7 +99,7 @@ export default function MemoryWatcher(): React.JSX.Element | null {
         // Silent fail — the watcher is non-critical and shouldn't
         // spam the console if the daemon is briefly unreachable.
         // eslint-disable-next-line no-console
-        console.debug('[k2so/memory] sample failed:', e)
+        console.debug('[k2/memory] sample failed:', e)
       }
     }
 

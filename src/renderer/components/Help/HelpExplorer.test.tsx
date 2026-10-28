@@ -24,14 +24,14 @@ import type { ServerScope } from '@/kessel/server-scope'
 const SCOPE = { id: 'help-test-scope' } as unknown as ServerScope
 
 const GLOSSARY = [
-  { term: 'workspace', summary: 'A folder K2SO manages (has exactly one primary agent)' },
+  { term: 'workspace', summary: 'A folder K2 manages (has exactly one primary agent)' },
   { term: 'heartbeat', summary: 'Workspace-scoped scheduled wake (cron-like)' },
 ]
 
 function daemonUp(): void {
   h.daemonCliGet.mockImplementation(async (_s, route, params) => {
     if (route === 'glossary') return GLOSSARY
-    if (route === 'glossary/get') return { term: params?.term, summary: 's', definition: `Full text for ${params?.term} in K2SO.` }
+    if (route === 'glossary/get') return { term: params?.term, summary: 's', definition: `Full text for ${params?.term} in K2.` }
     throw new Error(`unexpected route ${route}`)
   })
 }

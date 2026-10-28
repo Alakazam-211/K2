@@ -865,7 +865,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     serde_json::json!({
                         "success": true,
                         "action": if include_merge { "commit-merge" } else { "commit" },
-                        "note": "AI commit terminal session will be launched by K2SO"
+                        "note": "AI commit terminal session will be launched by K2"
                     })
                     .to_string(),
                 )

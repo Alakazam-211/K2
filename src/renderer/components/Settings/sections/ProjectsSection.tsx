@@ -4263,7 +4263,7 @@ function K2SOAgentPersonaButton({ projectPath, projectName, onOpenEditor }: { pr
         }
         setReady(true)
       } catch (e) {
-        console.error('[k2so-agent] Init failed:', e)
+        console.error('[k2-agent] Init failed:', e)
         setReady(true)
       }
     }

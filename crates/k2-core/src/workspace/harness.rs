@@ -304,7 +304,7 @@ pub fn k2_agents_preview_workspace_ingest(
                     path: rel.to_string(),
                     action: "refresh".to_string(),
                     size_bytes: None,
-                    note: format!("{} — already symlinked to K2SO canonical (will refresh)", label),
+                    note: format!("{} — already symlinked to K2 canonical (will refresh)", label),
                 });
             }
             Ok(meta) if meta.file_type().is_file() => {
@@ -316,7 +316,7 @@ pub fn k2_agents_preview_workspace_ingest(
                         path: rel.to_string(),
                         action: "refresh".to_string(),
                         size_bytes: Some(meta.len()),
-                        note: format!("{} — K2SO-generated, will refresh in place", label),
+                        note: format!("{} — K2-generated, will refresh in place", label),
                     });
                 } else {
                     entries.push(WorkspacePreviewEntry {
@@ -378,11 +378,11 @@ pub fn k2_agents_preview_workspace_ingest(
         let action = if path.exists() { "marker_injected" } else { "create" };
         let note = if path.exists() {
             format!(
-                "{} — K2SO block inserted between markers, your content preserved",
+                "{} — K2 block inserted between markers, your content preserved",
                 label
             )
         } else {
-            format!("{} — will create with K2SO block only", label)
+            format!("{} — will create with K2 block only", label)
         };
         entries.push(WorkspacePreviewEntry {
             path: rel.to_string(),

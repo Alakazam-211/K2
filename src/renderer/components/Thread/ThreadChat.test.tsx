@@ -317,11 +317,18 @@ describe('the activity drawer of the chat’s target session', () => {
   })
 
   it('one turn while the lead works: a newer row of the same turn keeps its id', () => {
-    const a = must(sessionTurnFromRow(row({ rev: 3 }), 0), 'a')
-    const b = must(sessionTurnFromRow(row({ rev: 9, counts: { subagents: 1, tools: 9, commands: 4 } }), 0), 'b')
-    expect(b.turnId).toBe(a.turnId)
-    const next = must(sessionTurnFromRow(row({ turnStartedAt: 999 }), 0), 'next')
-    expect(next.turnId).not.toBe(a.turnId)
+    // row() stamps its times from Date.now(): freeze the clock so both rows
+    // carry the same turn start (under load the two calls straddle a ms).
+    vi.useFakeTimers({ toFake: ['Date'], now: 1_793_145_600_000 })
+    try {
+      const a = must(sessionTurnFromRow(row({ rev: 3 }), 0), 'a')
+      const b = must(sessionTurnFromRow(row({ rev: 9, counts: { subagents: 1, tools: 9, commands: 4 } }), 0), 'b')
+      expect(b.turnId).toBe(a.turnId)
+      const next = must(sessionTurnFromRow(row({ turnStartedAt: 999 }), 0), 'next')
+      expect(next.turnId).not.toBe(a.turnId)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('finds the row by session id, else by the agent name (a pinned Chat: the project id)', () => {

@@ -18,13 +18,15 @@
 //!   copies).
 //! - [`conformance`]: K2's primitive semantics as tests any engine must pass.
 //! - [`tools`]: the text verbs agents run on a live doc (`cat`, `grep`, `sed`, `patch`...),
-//!   as pure functions and through [`Session::run_tool`].
+//!   as pure functions and through [`Session::run_tool`]; packs add their own
+//!   ([`session::Pack::verbs`]).
+//! - [`parity`]: the agent-parity framework: person actions, the verb registry, and the
+//!   harness that runs each action the person's way and the agent's way and compares.
 //!
 //! Disk sync (sessions opened with a file): atomic write-back, outside edits merged in as a
 //! CRDT change, echo suppression; the host watches and drives the clock.
 //!
-//! Planned here (see `docs/ARCHITECTURE.md`): sync transport, versions/history/blame, the
-//! parity framework.
+//! Planned here (see `docs/ARCHITECTURE.md`): sync transport, blame.
 
 pub mod blob;
 pub mod codec;
@@ -32,6 +34,7 @@ pub mod conformance;
 pub mod doc;
 mod engine;
 mod hash;
+pub mod parity;
 pub mod schema;
 pub mod session;
 pub mod store;

@@ -12,13 +12,14 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | Type | Who provides it | What it is |
 |---|---|---|
 | `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)` |
-| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)` |
+| `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none) |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
 | `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob` |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
 | `ConnId` | kit | one connection (a tab, a `watch`, a CLI caller); `Copy`, passed to every call |
 | `Config` | host | every limit below; `Config::default()` then set fields |
 | `tools` | kit | the text verbs (`cat`, `grep`, `sed`, `patch`...) and `Session::run_tool` ([Tools](#tools)) |
+| `parity` | kit | `PersonAction` (P1–P31), the verb `Registry`, the harness `parity::check` ([Parity](#parity)) |
 | history | kit | `Session::undo_with`, `redo_with`, `revert`, `restore`, `name_version`, `versions`, `log`, `diff_version`, `show` ([Undo and redo](#undo-and-redo), [Versions and history](#versions-and-history), [Revert](#revert)) |
 
 **Host rules.** `Host` methods are called **with a session locked**. They must be quick and
@@ -550,6 +551,16 @@ the pure text verbs.
 **One doc per call.** A second file operand is unsupported; a host grepping several docs
 runs the verb per doc, passes `-H` when there are several, and combines the exits.
 
+**A pack's own verbs** (amendment 6). `Pack::verbs()` returns `&'static [tools::PackVerb]`:
+edit verbs only the pack has (Markdown's `replace-section`). `PackVerb::edit(name, usage,
+serves, exits, parse)`: `parse(args)` checks `argv[1..]` before the doc is touched (a
+`ToolError`, exit 2) and returns a `PackEdit`, `(doc name, live text, stdin) -> EditOutput`
+(`EditOutput::new(text, stdout, exit)`; `text: None` applies nothing, exit 1 for the
+tool's "no"). `run_tool` looks a verb up there **only when no kit tool has that name**
+(`tools::is_kit_verb`), and runs it exactly like a kit edit verb: needs edit, inside
+`edit_with`, one change, caret at its last hunk, one `undo` reverts it, the same
+`stderr_summary`. The host routes `<host> doc <verb>` to `run_tool` for these as for any tool.
+
 ## Status and the pool
 
 - `status()` is metadata only and needs no connection. It returns
@@ -643,6 +654,56 @@ tool's own error, e.g. "pattern not found": exit 1).
 A conflict is not an error. It is a value (`WriteOutcome::Conflicts`, `UndoOutcome::Conflicts`
 / `Blocked`): exit 1, and nothing is applied. `WriteOutcome::BaseExpired` is exit 8.
 
+## Parity
+
+`k2_mpc_base::parity` (K-PAR-1…3) proves the parity rule: everything a person can do in an
+editor, an agent can do through a verb, with the same effect.
+
+- **`PersonAction`**: one variant per row, P1–P31 (`ALL`, `number()`, `describe()`,
+  `Display` = `P13`). **Not** `#[non_exhaustive]`, on purpose: packs map it with an
+  exhaustive `match`, so adding a row breaks every pack's build until it is mapped
+  (a `compile_fail` doctest holds that).
+- **The verb registry** (K-PAR-2). `VerbSpec { name, kind: Read | Edit | History, needs:
+  [Need], api: [Api], serves: [PersonAction], usage, exits, source: Kit | Pack }`.
+  `KIT_VERBS` are the kit's (the tools, the session verbs: `open`, `leave`, `who`,
+  `follow`, `cursor`, `write`, `undo` / `redo` / `undo --drop` / `undo --partial`,
+  `status`, `flush`, `watch`, `tail -f`, `log`, `diff --version`, `show --version`,
+  `restore`, `version --name`, `mv`, `approve`, `decline`, `log --pending`, `revert`).
+  `Registry::for_pack(&pack)` adds the pack's `verbs()` (refusing a name the kit has).
+  A verb's **name is its CLI form**: `verb_form(argv)` gives it (`sed -i`, `undo --partial`,
+  `log --pending`...), so a host's command table can be checked against the registry.
+- **A pack's list as data**: `ParityRow::live(action, verbs)`, `live_but(action, verbs,
+  later)`, `deferred(action, later, until, why)`, `not_applicable(action, shown_by, absent,
+  reason)`.
+- **The harness**, `parity::check(pack, rows, &registry, extra_cases) -> Result<Report,
+  Vec<Failure>>`, collects every failure:
+  1. exactly one row per action;
+  2. the list and the registry agree both ways: a live row's verbs are registered and
+     serve it; every registered verb is listed under each action it serves; a deferred or
+     N/A row's verbs are **not** registered (when one lands, the row must go live), and a
+     deferred row the kit has cases for is stale;
+  3. every listed verb has a case, and every case agrees. A `Case` runs twice, on two
+     fresh docs (a store, a manager, a file in a temp folder, an observer): the **person
+     path** (`Person`: a tab, `via: "tab"`, the session API directly, byte positions,
+     Ctrl+Z as `undo_with(Partial)`) and the **agent path** (`Agent`: registered verbs
+     only, `Agent::verb(argv, stdin)`; a form missing from the registry fails as
+     `MissingVerb`; the reference binding may call only the declared `api` (any verb may
+     `join_shared`, P1); an exit not in `exits` fails, unless it is a session refusal).
+     Then it compares the **text, file bytes, key, disk state, changes** (kind, author,
+     on behalf of, ± lines, approval), **versions** (reason, name, authors; a
+     `BeforeAgent` cut is an agent-only safety net and left out), **approvals**, the
+     **actor's roster entry** (name, colour, role, caret line:col, viewing range,
+     connections, away), the **exit code** and the **output**.
+  The actor has the same pid, name and colour in both worlds; a change by the actor that
+  came through another surface than its path's handle fails the case.
+- **The kit's cases** are one exhaustive `match` over `PersonAction` (`kit_cases`): 51 cases
+  over the 26 rows the kit binds; empty for blame (P22), annotations (P23, P27) and purge
+  (P28), which a pack lists as deferred. A pack adds `Case`s for its own verbs.
+  `check_list` runs steps 1–2 and case coverage without opening docs; `run_case` runs one.
+- Hunk shapes may differ between the paths (a typed hunk against a verb's minimal diff);
+  the observable result may not. Edits are compared as `edit_summary` (version, ± lines,
+  the lines touched), undo outcomes as `undo_summary`.
+
 ## Parity rows served (`k2-mpc-markdown/docs/PARITY.md`)
 
 | # | Verb | Session API |
@@ -654,10 +715,10 @@ A conflict is not an error. It is a value (`WriteOutcome::Conflicts`, `UndoOutco
 | P5 | `grep` | `run_tool` (`grep`) |
 | P6 | `who` | `roster` (one entry per pid, with a connection count) |
 | P7 | `follow` | `roster` (`CursorAt` line:col; an agent's caret is at its last edit) |
-| P8 | `cursor --at L:C` / `--select` | `set_cursor(At::Line(..))`; readers: `set_view` |
+| P8 | `cursor --at L:C` / `--select` (`intent`: later, K-PRES-12) | `set_cursor(At::Line(..))`; readers: `set_view` |
 | P9–P11 | `insert`, `replace`, `delete` | `run_tool` (inside `edit_with`) |
 | P12 | `sed -i` | `run_tool` (inside `edit_with`) |
-| P13 | `patch`, `append`, `replace-section` | `run_tool` (inside `edit_with`); `replace-section` is the Markdown pack's |
+| P13 | `patch`, `apply`, `append`, `replace-section` | `run_tool` (inside `edit_with`); `replace-section` is the Markdown pack's (`Pack::verbs`) |
 | P14 | `write --base V` / `--base live` | `write_base(V)` / `replace_text` |
 | P15 | formatting | as P9–P13 (Markdown formatting is text) |
 | P16 | `undo`, `redo`, `undo --drop` | `undo` / `redo`, `undo_with` / `redo_with` (`UndoMode::All`, `Partial`, `Drop`; `for_person`) |
@@ -667,9 +728,13 @@ A conflict is not an error. It is a value (`WriteOutcome::Conflicts`, `UndoOutco
 | P20 | `restore`, `version --name` | `restore` (a forward change by the restorer, after a version), `name_version` |
 | P21 | `mv` | `SessionManager::rekey` + `Session::file_moved` |
 | P22 | `blame` | later (client→pid mapping is recorded now) |
+| P23, P27 | `comment`, `suggest`... | later (M5, the annotation layer) |
 | P24 | export | `read` (`bytes`) |
 | P25 | why live editing is off | `open` → `Declined { code, message }`; `status().declined` |
 | P26 | Ctrl+Z (`undo --partial`) | `undo_with(UndoMode::Partial)` (the native tab's grouping is G3) |
+| P28 | `purge` | later (redaction) |
+| P29 | `approve`, `decline` | `set_approval(conn, seq, Approved \| Declined)` (only the person it was made for) |
+| P30 | `log --pending --on-behalf-of me` | `log(LogQuery::pending().on_behalf_of(pid))`; a tab may use `approvals` |
 | P31 | `revert <change>` | `revert(conn, change, partial)` (author, the person, or owner; too old: exit 8) |
 
 ## Not in this slice
@@ -681,8 +746,8 @@ A conflict is not an error. It is a value (`WriteOutcome::Conflicts`, `UndoOutco
   (K-DISK-13).
 - **C5, wire:** the socket, Yjs sync and awareness, each socket being a `join` connection.
   This needs the strict decoder.
-- **C6, rest:** `write --base --partial` (K-BR-9), intent ranges; `replace-section` (the
-  Markdown pack's, on `edit_with`); the `spec_undo::model` oracle and trace test (K-HIST-14/15).
+- **C6, rest:** `write --base --partial` (K-BR-9), intent ranges; the `spec_undo::model`
+  oracle and trace test (K-HIST-14/15).
 - **After C7a:** blame (C7b); purge (redacting revert records, versions, the byte scan:
   `DocStore::revert_records` is the hook, `clear_undo_history` clears the stacks); `diff
   --version` from the **disk** (the host reads the file and uses the `diff` tool); thinning
@@ -891,6 +956,26 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Amendment 6 (additive): the parity framework and packs' own verbs (C-P)
+
+**Additive:** `Pack::verbs()` (default `&[]`); `tools::PackVerb` (`PackVerb::edit`, `name`,
+`usage`, `serves`, `exits`, `parse`), `tools::PackEdit`, `tools::is_kit_verb`,
+`EditOutput::new`; `ToolError::unsupported`, `refused`, `usage` are now public. The
+`parity` module: `PersonAction`; `Registry`, `RegistryError`, `VerbSpec`, `VerbKind`, `Api`,
+`Source`, `KIT_VERBS`, `verb_form`; `ParityRow`, `RowStatus`; the harness `check`,
+`check_list`, `run_case`, `render`, `kit_cases`, `Case`, `Stage`, `Person`, `Agent`,
+`VerbOut`, `VerbValue`, `Step`, `Output`, `Observation` and its parts, `Failure`, `Side`,
+`Report`, `edit_summary`, `undo_summary`, `rename_target`, `ACTOR`, `OBSERVER`, `DOC`,
+`DOC_PATH`. No store change (format stays 2), no new dependency.
+
+**Behaviour:** `run_tool` with a verb no kit tool has asks the pack before refusing it
+(`Unsupported`, exit 2, as before when the pack has no such verb). A kit verb's name
+always runs the kit's verb.
+
+**Hosts:** route `<host> doc <verb>` for a pack's verbs to `run_tool` as for any tool; check
+the host's command table against `Registry::for_pack` with `verb_form` (K-PAR-5); run the same
+rows through the CLI against a headless daemon (K-PAR-4).
 
 ### Amendment 5 (additive): manager listing, delete, revert (C7b)
 

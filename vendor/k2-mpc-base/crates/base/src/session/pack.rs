@@ -57,6 +57,15 @@ pub trait Pack: Send + Sync {
         let _ = root;
         Cow::Borrowed(text)
     }
+
+    /// The pack's own edit verbs (Markdown's `replace-section`), beside the kit's text
+    /// tools. [`super::Session::run_tool`] routes a verb no kit tool has by this name, and
+    /// [`crate::parity::Registry::for_pack`] registers them for the parity harness. A name
+    /// the kit already uses is never routed (the kit's verb wins) and the registry refuses
+    /// it. Default: none.
+    fn verbs(&self) -> &'static [crate::tools::PackVerb] {
+        &[]
+    }
 }
 
 /// A pack for a plain-text file type in a few lines: one text root named

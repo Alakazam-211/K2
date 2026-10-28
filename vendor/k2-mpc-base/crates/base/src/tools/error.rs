@@ -55,21 +55,24 @@ impl ToolError {
         exit::USAGE
     }
 
-    pub(crate) fn unsupported(flag: impl Into<String>, hint: impl Into<String>) -> Self {
+    /// [`ToolError::Unsupported`] (for packs' own verbs too).
+    pub fn unsupported(flag: impl Into<String>, hint: impl Into<String>) -> Self {
         ToolError::Unsupported {
             flag: flag.into(),
             hint: hint.into(),
         }
     }
 
-    pub(crate) fn refused(what: impl Into<String>, reason: impl Into<String>) -> Self {
+    /// [`ToolError::Refused`].
+    pub fn refused(what: impl Into<String>, reason: impl Into<String>) -> Self {
         ToolError::Refused {
             what: what.into(),
             reason: reason.into(),
         }
     }
 
-    pub(crate) fn usage(msg: impl Into<String>) -> Self {
+    /// [`ToolError::Usage`].
+    pub fn usage(msg: impl Into<String>) -> Self {
         ToolError::Usage(msg.into())
     }
 }

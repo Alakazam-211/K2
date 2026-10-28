@@ -327,6 +327,17 @@ mod tests {
         p
     }
 
+    /// What the guard hands the spawner for a shim `write_exec` made: the
+    /// script itself on Unix, its `.exe` runner on Windows (an extensionless
+    /// file is never a Windows program).
+    fn runnable(p: &Path) -> String {
+        if cfg!(windows) {
+            format!("{}.exe", p.display())
+        } else {
+            p.to_string_lossy().into_owned()
+        }
+    }
+
     fn real_home_env() -> GuardEnv {
         GuardEnv {
             shim_dirs: None,
@@ -368,11 +379,11 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         let got = resolve_program("claude", &search, &env).expect("shim resolves");
-        assert_eq!(got, shim.to_string_lossy());
+        assert_eq!(got, runnable(&shim));
         assert_ne!(got, real.to_string_lossy());
         // An absolute path to the REAL binary is redirected by basename too.
         let got_abs = resolve_program(&real.to_string_lossy(), &search, &env).expect("abs → shim");
-        assert_eq!(got_abs, shim.to_string_lossy());
+        assert_eq!(got_abs, runnable(&shim));
         let _ = std::fs::remove_dir_all(&real_dir);
         let _ = std::fs::remove_dir_all(&shim_dir);
     }
@@ -390,7 +401,7 @@ mod tests {
             test_build: false,
         };
         let got = resolve_program("grok", "/usr/bin:/bin", &env).expect("second dir");
-        assert_eq!(got, in_b.to_string_lossy());
+        assert_eq!(got, runnable(&in_b));
         let _ = std::fs::remove_dir_all(&a);
         let _ = std::fs::remove_dir_all(&b);
     }
@@ -569,10 +580,7 @@ mod tests {
         let shims = scratch("belt-shim");
         let shim = write_exec(&shims, "claude");
         let env = GuardEnv { shim_dirs: Some(vec![shims.clone()]), ..test_build_env("/Users/someone") };
-        assert_eq!(
-            resolve_program("claude", "/usr/bin", &env).unwrap(),
-            shim.to_string_lossy()
-        );
+        assert_eq!(resolve_program("claude", "/usr/bin", &env).unwrap(), runnable(&shim));
         let env = GuardEnv { allow_real: true, ..test_build_env("/Users/someone") };
         assert_eq!(resolve_program("claude", "/usr/bin", &env).unwrap(), "claude");
         std::fs::remove_dir_all(&shims).unwrap();

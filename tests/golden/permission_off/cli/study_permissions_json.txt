@@ -20,6 +20,6 @@ Topics:
   skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute
   compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
-  garden-data  garden-access  garden-changes  changes  db-upgrade  jobs
+  garden-data  garden-access  garden-changes  changes  docs  db-upgrade  jobs
   folder-trust  email-notifications
 --- requests

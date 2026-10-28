@@ -1,0 +1,23 @@
+{
+  "body": {
+    "error": {
+      "code": "stale_widget",
+      "hint": "the widget changed since this frame loaded; K2 reloads the widget"
+    },
+    "ok": false
+  },
+  "request": {
+    "body": {
+      "args": [
+        "obj/1"
+      ],
+      "garden": "g-00000001",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "placement": "b1",
+      "verb": "store.get"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 409
+}

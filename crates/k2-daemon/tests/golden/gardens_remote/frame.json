@@ -1,0 +1,48 @@
+{
+  "body": {
+    "garden": "g-00000001",
+    "hash": "<hash>",
+    "hello": {
+      "caps": [
+        "store:read",
+        "store:write"
+      ],
+      "config": {},
+      "features": [
+        "zen-v1",
+        "zen-gardens-v1",
+        "zen-widgets-v1",
+        "garden-data-v1",
+        "guests-rooms-v1",
+        "garden-blobs-v1"
+      ],
+      "k2": "hello",
+      "motion": {
+        "reduced": false
+      },
+      "v": 1,
+      "widget": {
+        "garden": "g-00000001",
+        "id": "b1",
+        "name": "Board"
+      }
+    },
+    "libs": [],
+    "nonce": "<nonce>",
+    "ok": true,
+    "placement": "b1",
+    "scheme": "dark",
+    "srcdoc": "<!DOCTYPE html><meta http-equiv=\"x-dns-prefetch-control\" content=\"off\"><meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'nonce-<nonce>' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; connect-src data: blob:; frame-src 'none'; child-src 'none'; worker-src blob:; object-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'\"><script nonce=\"<nonce>\">{{GUARD}}</script><style data-k2-theme=\"\">:root{--zen-accent:#0a84ff;--zen-accent-text:#ffffff;--zen-border:rgba(255, 255, 255, 0.16);--zen-bubble-agent:#3a3a3c;--zen-bubble-agent-text:#ffffff;--zen-bubble-me:#0a84ff;--zen-bubble-me-text:#ffffff;--zen-bubble-radius:18px;--zen-canvas:#000000;--zen-danger:#ff453a;--zen-font-family:-apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, sans-serif;--zen-font-size:14px;--zen-gap:12px;--zen-idle:#8e8e93;--zen-line-height:1.45;--zen-list-width:300px;--zen-needs-you:#ff9f0a;--zen-ok:#30d158;--zen-radius:22px;--zen-surface:rgba(255, 255, 255, 0.09);--zen-surface-raised:#1c1c1e;--zen-text:#ffffff;--zen-text-muted:#8e8e93;--zen-working:#0a84ff;color-scheme:dark!important;background:transparent;}html,body{background:transparent;}</style><script nonce=\"<nonce>\">document.documentElement.setAttribute('data-zen-scheme', \"dark\");</script><script nonce=\"<nonce>\">{{K2FRAME}}</script>\n<html>\n  <head>\n    <meta charset=\"utf-8\">\n    <style>/* K2 writes the Garden's --zen-* colours onto :root; the frame is\n   transparent, so the column shows through. */\nhtml, body {\n  margin: 0;\n  height: 100%;\n  background: transparent;\n  color: var(--zen-text, #222);\n  font-family: var(--zen-font, system-ui, sans-serif);\n}\n\n.hello {\n  height: 100%;\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n}\n\n.clock {\n  font-size: 48px;\n  font-variant-numeric: tabular-nums;\n}\n\n.greeting {\n  font-size: 16px;\n  opacity: 0.8;\n}\n</style>\n  </head>\n  <body>\n    <main class=\"hello\">\n      <div id=\"clock\" class=\"clock\">--:--</div>\n      <div id=\"greeting\" class=\"greeting\">Hello.</div>\n    </main>\n    <script nonce=\"<nonce>\">window.K2_ASSETS=Object.freeze({});</script><script nonce=\"<nonce>\">// Hello: a clock and a hello to the first agent this widget can see.\n// Uses K2's `k2` object (k2 zen guide api). Agent text always goes in\n// with textContent, never innerHTML.\n(function () {\n  const clock = document.getElementById('clock')\n  const greeting = document.getElementById('greeting')\n\n  function tick() {\n    const now = new Date()\n    const hh = String(now.getHours()).padStart(2, '0')\n    const mm = String(now.getMinutes()).padStart(2, '0')\n    clock.textContent = hh + ':' + mm\n  }\n  tick()\n  setInterval(tick, 1000)\n\n  function greet(rows) {\n    const first = rows && rows[0]\n    greeting.textContent = first ? 'Hello, ' + first.label + '.' : 'Hello.'\n  }\n\n  // K2 connects the frame after this script runs: wait for it before\n  // k2.can (false until then), k2.config or k2.motion.\n  k2.connected.then(() => {\n    if (k2.can('agents.subscribe')) k2.agents.subscribe(greet)\n    k2.ready()\n  })\n})()\n</script>\n  </body>\n</html>\n",
+    "widget": "board"
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/frame",
+    "query": {
+      "garden": "g-00000001",
+      "placement": "b1",
+      "scheme": "dark"
+    }
+  },
+  "status": 200
+}

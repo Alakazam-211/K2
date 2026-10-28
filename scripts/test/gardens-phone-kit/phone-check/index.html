@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <style>
+      body { font: 13px/1.4 var(--zen-font-family, system-ui); color: var(--zen-text, #222); margin: 8px; }
+      h2 { font-size: 13px; margin: 12px 0 4px; }
+      table { border-collapse: collapse; width: 100%; }
+      td { padding: 2px 6px; border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent); vertical-align: top; }
+      .pass { color: #1a7f37; font-weight: 600; }
+      .fail { color: #cf222e; font-weight: 600; }
+      #summary { font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="summary">Running…</div>
+    <h2>Phone verbs</h2>
+    <table id="verbs"></table>
+    <h2>Ways out of the frame (each must be blocked)</h2>
+    <table id="escapes"></table>
+    <script src="phone-check.js"></script>
+  </body>
+</html>

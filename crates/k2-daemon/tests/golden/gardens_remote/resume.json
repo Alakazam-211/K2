@@ -1,0 +1,17 @@
+{
+  "body": {
+    "changed": false,
+    "ok": true,
+    "paused": null,
+    "resumed": false
+  },
+  "request": {
+    "body": {
+      "garden": "g-00000001",
+      "placement": "b1"
+    },
+    "path": "/cli/zen/remote/resume",
+    "query": {}
+  },
+  "status": 200
+}

@@ -1,0 +1,23 @@
+{
+  "body": {
+    "mime": "text/plain",
+    "name": "hi.txt",
+    "new": true,
+    "ref": "k2blob:sha256-8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4",
+    "size": 2
+  },
+  "request": {
+    "body": {
+      "base64": "aGk=",
+      "garden": "g-00000001",
+      "hash": "<hash>",
+      "last": true,
+      "name": "hi.txt",
+      "offset": 0,
+      "placement": "b1"
+    },
+    "path": "/cli/zen/remote/blob/put",
+    "query": {}
+  },
+  "status": 200
+}

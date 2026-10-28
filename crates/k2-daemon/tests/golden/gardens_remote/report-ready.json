@@ -1,0 +1,18 @@
+{
+  "body": {
+    "logged": true,
+    "ok": true,
+    "seq": 0
+  },
+  "request": {
+    "body": {
+      "event": "ready",
+      "garden": "g-00000001",
+      "hash": "<hash>",
+      "placement": "b1"
+    },
+    "path": "/cli/zen/remote/report",
+    "query": {}
+  },
+  "status": 200
+}

@@ -138,7 +138,8 @@ mod tests {
         for v in ["guests.setRooms", "links.open", "downloads.save", "agents.list", "thread.post", "sources.read"] {
             assert_eq!(p(v), Phone::Later, "{v}");
         }
-        for v in ["window.startDrag", "sources.ask"] {
+        // Presence is dropped on phones (Rosson Q7).
+        for v in ["window.startDrag", "sources.ask", "presence.get", "presence.subscribe"] {
             assert_eq!(p(v), Phone::Never, "{v}");
         }
         assert_eq!(phone_of(c, "homes.list"), None, "not a widget row");

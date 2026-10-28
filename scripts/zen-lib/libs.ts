@@ -644,4 +644,21 @@ export const LIBS: LibSpec[] = [
     files: [{ name: 'k2-markdown.js', own: true }],
     notes: K2_MARKDOWN_NOTES,
   },
+  {
+    // 0.46.6 (prd-gardens-on-phone-v1 Q11): canvas pixels to PNG without
+    // toDataURL / toBlob, empty in a sealed frame on WebKit (Board U0).
+    id: 'k2-png',
+    version: '1.0.0',
+    fingerprints: ['/*! k2-png '],
+    title: 'K2 PNG encoder (widget kit)',
+    global: 'K2Png',
+    license: 'FSL-1.1-Apache-2.0',
+    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    source: 'bundled',
+    own: true,
+    licenses: ['k2:LICENSE.md'],
+    files: [{ name: 'k2-png.js', own: true }],
+    notes:
+      "K2's own: canvas pixels to a PNG without toDataURL or toBlob, which come back empty in a sealed frame on WebKit (the Mac app, iPhone, iPad). K2Png.toBlob(canvas), K2Png.toDataURL(canvas) and K2Png.encode(canvas or ImageData) read the pixels with getImageData and write an 8-bit RGBA PNG with the browser's CompressionStream; each answers a Promise. Hand the Blob to k2.blobs.put or k2.download.",
+  },
 ]

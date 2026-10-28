@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "name": "Phone check",
+  "description": "K2's test kit for Gardens on the phone: one PASS/FAIL row per phone verb, then every way out of the sealed frame, which must all read blocked.",
+  "entry": "index.html",
+  "caps": ["store:read", "store:write", "agents:read", "thread:read"],
+  "reasons": {
+    "store:read": "to read back what it saved",
+    "store:write": "to save one test value in its own data",
+    "agents:read": "to check that agent rows answer verb_unavailable on a phone in this release",
+    "thread:read": "to check that Thread rows answer verb_unavailable on a phone in this release"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "body": {
+    "error": {
+      "code": "not_exposed",
+      "hint": "window.startDrag isn't available to a widget on a phone"
+    },
+    "ok": false
+  },
+  "request": {
+    "body": {
+      "args": [],
+      "garden": "g-00000001",
+      "hash": "<hash>",
+      "placement": "b1",
+      "verb": "window.startDrag"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 403
+}

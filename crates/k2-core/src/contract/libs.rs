@@ -33,6 +33,7 @@ pub const PICKS: &[(&str, &str)] = &[
     ("UI components", "preact"),
     ("a help button", "k2-help"),
     ("a Thread panel", "k2-thread"),
+    ("PNG from a canvas", "k2-png"),
 ];
 
 /// The request a widget writes for a row: `<id>@<line>`.
@@ -82,6 +83,11 @@ runs inside the widget's sealed frame, with the widget's caps and no more.\n\n",
         "  {:<w_job$}  no library: the browser's Intl.DateTimeFormat,\n  {:<w_job$}  Intl.RelativeTimeFormat and Intl.NumberFormat\n\n",
         "dates, numbers", ""
     ));
+    s.push_str(
+        "Never rely on canvas.toDataURL or canvas.toBlob in a Garden: on WebKit (the\n\
+Mac app, iPhone, iPad) they come back empty in the sealed frame. Read pixels\n\
+with getImageData, or require k2-png@1 (K2Png.toBlob(canvas)).\n\n",
+    );
     s.push_str("EVERY LIBRARY: request, global, licence, size\n");
     let w_r = m.libs.iter().map(|e| line_request(e).len()).max().unwrap_or(0);
     let w_g = m.libs.iter().map(|e| e.global.len()).max().unwrap_or(0);

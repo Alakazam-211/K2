@@ -1,0 +1,28 @@
+{
+  "body": {
+    "ok": true,
+    "result": {
+      "by": "you via board",
+      "key": "obj/1",
+      "rev": 0,
+      "updatedAt": 0,
+      "value": {
+        "t": "hi"
+      }
+    }
+  },
+  "request": {
+    "body": {
+      "args": [
+        "obj/1"
+      ],
+      "garden": "g-00000001",
+      "hash": "<hash>",
+      "placement": "b1",
+      "verb": "store.get"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 200
+}

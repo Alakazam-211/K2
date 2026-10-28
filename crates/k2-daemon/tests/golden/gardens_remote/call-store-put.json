@@ -1,0 +1,25 @@
+{
+  "body": {
+    "ok": true,
+    "result": {
+      "rev": 0
+    }
+  },
+  "request": {
+    "body": {
+      "args": [
+        "obj/1",
+        {
+          "t": "hi"
+        }
+      ],
+      "garden": "g-00000001",
+      "hash": "<hash>",
+      "placement": "b1",
+      "verb": "store.put"
+    },
+    "path": "/cli/zen/remote/call",
+    "query": {}
+  },
+  "status": 200
+}

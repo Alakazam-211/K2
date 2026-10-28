@@ -1,0 +1,15 @@
+{
+  "body": {
+    "error": {
+      "code": "garden_device_only",
+      "hint": "Gardens open on a phone you paired with this server (Settings → Admin Access → Pair a phone), not on a password sign-in."
+    },
+    "ok": false
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/gardens",
+    "query": {}
+  },
+  "status": 403
+}

@@ -1,0 +1,15 @@
+{
+  "body": {
+    "error": {
+      "code": "garden_person_only",
+      "hint": "Gardens on a phone are only for this server's owner, on a phone they paired."
+    },
+    "ok": false
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/gardens",
+    "query": {}
+  },
+  "status": 403
+}

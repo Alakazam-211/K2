@@ -563,9 +563,12 @@ fn frame(p: &Person, params: &HashMap<String, String>) -> CliResponse {
 
 /// `GET /cli/zen/remote/lib?id=&version=&file=` (or `?integrity=` for a
 /// CDN file) and `POST /cli/zen/remote/lib/fetch {id, version} | {url,
-/// integrity}` (GP-A6): the daemon's checked download/CDN cache, the same
-/// as `/cli/zen/lib/*`. A bundled library is the phone's own copy: 404
-/// `bundled_on_phone`.
+/// integrity}` (GP-A6, Rosson Q5): every library a widget can load. Bundled
+/// ones come from the bytes K2's own release carries
+/// (`zen_lib_bundled`, checked against `src/shared/zen-lib.json` before they
+/// are served); download and CDN ones from the daemon's checked cache, the
+/// same as `/cli/zen/lib/*`. K2 Companion carries no copy and checks each
+/// file's sha256 again.
 fn lib(p: &Person, path: &str, params: &HashMap<String, String>, body: &[u8]) -> CliResponse {
     let named = if path == LIB {
         param(params, "id").zip(param(params, "version")).map(|(i, v)| (i.to_string(), v.to_string()))
@@ -576,14 +579,47 @@ fn lib(p: &Person, path: &str, params: &HashMap<String, String>, body: &[u8]) ->
     };
     if let Some((id, version)) = &named {
         let r = LibRef::Named { id: id.clone(), version: version.clone() };
-        if stdlib::find(stdlib::zen_lib_manifest(), &r).is_some_and(|e| e.source == LibSource::Bundled) {
-            return refuse("404 Not Found", "bundled_on_phone", format!("{id}@{version} ships with K2 Companion; use the phone's own pinned copy"));
+        if let Some(e) = stdlib::find(stdlib::zen_lib_manifest(), &r).filter(|e| e.source == LibSource::Bundled) {
+            audit("zen.remote.lib", p, format!("{} {} (bundled)", if path == LIB { "file" } else { "fetch" }, e.key()));
+            if path == LIB_FETCH {
+                let files: Vec<J> = e.files.iter().map(|f| json!({ "name": f.name, "bytes": f.bytes, "sha256": f.sha256 })).collect();
+                return ok(json!({ "ok": true, "key": e.key(), "files": files, "cached": true }));
+            }
+            return bundled_file(e, param(params, "file"));
         }
     }
     let inner = if path == LIB { "/cli/zen/lib/file" } else { "/cli/zen/lib/fetch" };
     audit("zen.remote.lib", p, format!("{} {}", if path == LIB { "file" } else { "fetch" }, named.map(|(i, v)| format!("{i}@{v}")).unwrap_or_else(|| "cdn".into())));
     let env = crate::zen_lib_routes::Env::live();
     envelope(crate::zen_lib_routes::route(&env, inner, params, body))
+}
+
+/// One file of a bundled library, checked against its pin (once per file
+/// per daemon run).
+fn bundled_file(e: &stdlib::ZenLibEntry, name: Option<&str>) -> CliResponse {
+    use sha2::{Digest, Sha256};
+    static CHECKED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+    let Some(name) = name else { return refuse("400 Bad Request", "usage", "file is required") };
+    let Some(f) = e.files.iter().find(|f| f.name == name) else {
+        return refuse("404 Not Found", "not_found", format!("{} has no file {name}", e.key()));
+    };
+    let key = e.key();
+    let Some(bytes) = crate::zen_lib_bundled::file(&key, name) else {
+        return refuse("404 Not Found", "not_found", format!("this K2 doesn't carry {key}/{name}; update K2"));
+    };
+    let id = format!("{key}/{name}");
+    let seen = CHECKED.lock().unwrap_or_else(|p| p.into_inner()).contains(&id);
+    if !seen {
+        let sum: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        if sum != f.sha256 || bytes.len() as u64 != f.bytes {
+            return refuse("409 Conflict", "hash_mismatch", format!("{id} doesn't match its pin"));
+        }
+        CHECKED.lock().unwrap_or_else(|p| p.into_inner()).push(id);
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => CliResponse { status: "200 OK", content_type: "text/javascript; charset=utf-8", body: text.to_string() },
+        Err(_) => refuse("409 Conflict", "hash_mismatch", format!("{key}/{name} isn't UTF-8 text")),
+    }
 }
 
 // ── POST call ───────────────────────────────────────────────────────

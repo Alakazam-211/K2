@@ -724,6 +724,28 @@
         }
       ],
       "notes": "K2's own: markdown, safe by default. K2Markdown.into(el, text, opts) fills el; K2Markdown.render(text, opts) returns a DocumentFragment (never a string, so no innerHTML). Raw HTML is escaped; links show as text with the URL visible, or with opts.links = 'open' and the links:open cap as buttons that call k2.open; images show as text, or with opts.images = 'data' as data: PNG, JPEG, GIF and WebP only. It loads marked and DOMPurify for you (its own DOMPurify instance: your settings never change its rules). Colours follow the Garden (--zen-*)."
+    },
+    {
+      "id": "k2-png",
+      "version": "1.0.0",
+      "line": "1",
+      "fingerprints": [
+        "/*! k2-png "
+      ],
+      "title": "K2 PNG encoder (widget kit)",
+      "global": "K2Png",
+      "license": "FSL-1.1-Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "k2-png.js",
+          "bytes": 4385,
+          "sha256": "0ba54bc61b35106208d13664c18031686e6422f84fab10805e052b41030ca4c1"
+        }
+      ],
+      "notes": "K2's own: canvas pixels to a PNG without toDataURL or toBlob, which come back empty in a sealed frame on WebKit (the Mac app, iPhone, iPad). K2Png.toBlob(canvas), K2Png.toDataURL(canvas) and K2Png.encode(canvas or ImageData) read the pixels with getImageData and write an 8-bit RGBA PNG with the browser's CompressionStream; each answers a Promise. Hand the Blob to k2.blobs.put or k2.download."
     }
   ]
 }

@@ -1,0 +1,19 @@
+{
+  "body": {
+    "cursor": "<cursor>",
+    "full": false,
+    "gardens": [],
+    "ok": true,
+    "person": "owner",
+    "serverId": "<serverId>",
+    "setUp": true
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/gardens",
+    "query": {
+      "since": "<since>"
+    }
+  },
+  "status": 200
+}

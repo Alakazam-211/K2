@@ -1,0 +1,28 @@
+{
+  "body": {
+    "cached": true,
+    "files": [
+      {
+        "bytes": 51081,
+        "name": "uPlot.iife.min.js",
+        "sha256": "19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
+      },
+      {
+        "bytes": 2102,
+        "name": "uplot-style.js",
+        "sha256": "fa2184990360f8b3c3ea6b964e268c36ee46851e6dad62dbc55edc96dd0828d9"
+      }
+    ],
+    "key": "uplot@1.6.32",
+    "ok": true
+  },
+  "request": {
+    "body": {
+      "id": "uplot",
+      "version": "<version>"
+    },
+    "path": "/cli/zen/remote/lib/fetch",
+    "query": {}
+  },
+  "status": 200
+}

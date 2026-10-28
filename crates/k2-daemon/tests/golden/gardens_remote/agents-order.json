@@ -1,0 +1,22 @@
+{
+  "body": {
+    "gardens": [
+      {
+        "id": "g-00000001",
+        "name": "Garden 1",
+        "order": null,
+        "pins": null,
+        "updatedAt": null
+      }
+    ],
+    "ok": true
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/agents-order",
+    "query": {
+      "garden": "g-00000001"
+    }
+  },
+  "status": 200
+}

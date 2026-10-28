@@ -1,0 +1,45 @@
+{
+  "body": {
+    "cursor": "<cursor>",
+    "full": true,
+    "gardens": [
+      {
+        "id": "g-00000001",
+        "index": 1,
+        "locked": false,
+        "name": "Garden 1",
+        "template": "k2.texting@1",
+        "theme": null,
+        "version": "<version>"
+      },
+      {
+        "id": "g-00000002",
+        "index": 2,
+        "locked": false,
+        "name": "Garden 2",
+        "template": "k2.blank@1",
+        "theme": null,
+        "version": "<version>"
+      },
+      {
+        "id": "g-00000003",
+        "index": 3,
+        "locked": false,
+        "name": "Diary",
+        "template": "k2.diary@2",
+        "theme": null,
+        "version": "<version>"
+      }
+    ],
+    "ok": true,
+    "person": "owner",
+    "serverId": "<serverId>",
+    "setUp": true
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/gardens",
+    "query": {}
+  },
+  "status": 200
+}

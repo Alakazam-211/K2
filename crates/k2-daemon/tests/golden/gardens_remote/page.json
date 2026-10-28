@@ -1,0 +1,640 @@
+{
+  "body": {
+    "chrome": {
+      "corners": "system",
+      "stoplight-offset": [
+        0,
+        0
+      ],
+      "stoplights": "round"
+    },
+    "errors": [],
+    "frame": {
+      "bands": {
+        "bar-height-px": 44,
+        "group-gap-px": 12,
+        "inset-px": 14
+      },
+      "columns": {
+        "gap-token": "gap",
+        "radius-token": "radius",
+        "stack": "tiles"
+      },
+      "controls": {
+        "drag-min-height-px": 12,
+        "drag-min-width-px": 120,
+        "min-opacity": 0.3,
+        "target-px": 24
+      },
+      "format": 1,
+      "glass": {
+        "blur": "none",
+        "edge-border-mix": 55,
+        "edge-text-mix": 14,
+        "shadow": "0 10px 30px",
+        "shadow-black-mix": 8,
+        "sheen-white-mix": 22
+      },
+      "motion": {
+        "popin-from": 0.92,
+        "pulse-opacity": 0.35,
+        "slide-px": 8
+      },
+      "overflow": {
+        "column-min-width-share": true,
+        "order": [
+          "usage",
+          "theme-picker"
+        ],
+        "switcher-compact": "6rem"
+      },
+      "shield": {
+        "agent-selection-accent-mix": 30,
+        "box-radius-factor": 0.5,
+        "me-selection-text-mix": 35,
+        "scrim": 0.32
+      },
+      "widgets": {
+        "agents-avatar-px": 40,
+        "agents-focus-group-width-px": 240,
+        "nav-rail-row-px": 36,
+        "nav-rail-width-px": 44,
+        "rail-views": [
+          "home",
+          "agents",
+          "projects",
+          "tickets"
+        ]
+      }
+    },
+    "garden": {
+      "id": "g-00000001",
+      "index": 1,
+      "name": "Garden 1"
+    },
+    "lastGoodAt": "<lastGoodAt>",
+    "motion": {
+      "animations": {
+        "conversation": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "global",
+          "on": true,
+          "speed": 3,
+          "style": null
+        },
+        "conversationSwitch": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 200,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "conversationSwitch",
+          "on": true,
+          "speed": 2,
+          "style": "fade"
+        },
+        "global": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "global",
+          "on": true,
+          "speed": 3,
+          "style": null
+        },
+        "messageIn": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "messageIn",
+          "on": true,
+          "speed": 3,
+          "style": "popin 92%"
+        },
+        "messages": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "global",
+          "on": true,
+          "speed": 3,
+          "style": null
+        },
+        "rowIn": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "rowIn",
+          "on": true,
+          "speed": 3,
+          "style": "slidefade"
+        },
+        "rowMove": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "rowMove",
+          "on": true,
+          "speed": 3,
+          "style": null
+        },
+        "rows": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "global",
+          "on": true,
+          "speed": 3,
+          "style": null
+        },
+        "working": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "global",
+          "on": true,
+          "speed": 3,
+          "style": null
+        },
+        "workingPulse": {
+          "bezier": [
+            0.45,
+            0,
+            0.55,
+            1
+          ],
+          "curve": "soft",
+          "durationMs": 1200,
+          "ease": "cubic-bezier(0.45, 0, 0.55, 1)",
+          "from": "workingPulse",
+          "on": true,
+          "speed": 12,
+          "style": null
+        },
+        "zen": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "global",
+          "on": true,
+          "speed": 3,
+          "style": null
+        },
+        "zenIn": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 400,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "zenIn",
+          "on": true,
+          "speed": 4,
+          "style": "fade"
+        },
+        "zenOut": {
+          "bezier": [
+            0.22,
+            1,
+            0.36,
+            1
+          ],
+          "curve": "glide",
+          "durationMs": 300,
+          "ease": "cubic-bezier(0.22, 1, 0.36, 1)",
+          "from": "zenOut",
+          "on": true,
+          "speed": 3,
+          "style": "fade"
+        }
+      },
+      "beziers": {
+        "ease": [
+          0.25,
+          0.1,
+          0.25,
+          1
+        ],
+        "glide": [
+          0.22,
+          1,
+          0.36,
+          1
+        ],
+        "linear": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "overshot": [
+          0.34,
+          1.56,
+          0.64,
+          1
+        ],
+        "soft": [
+          0.45,
+          0,
+          0.55,
+          1
+        ]
+      },
+      "reducedMotion": "instant"
+    },
+    "ok": true,
+    "page": {
+      "bands": {
+        "bottom": null,
+        "top": {
+          "center": [],
+          "end": [
+            "usage",
+            "theme-picker",
+            "zen-toggle"
+          ],
+          "start": [
+            "garden-switcher"
+          ]
+        }
+      },
+      "chrome": {
+        "from": "template",
+        "items": [
+          {
+            "align": "start",
+            "caps": [
+              "gardens:manage"
+            ],
+            "id": "garden-switcher",
+            "kind": "garden-switcher",
+            "props": {},
+            "slot": "top"
+          },
+          {
+            "align": "end",
+            "caps": [],
+            "id": "usage",
+            "kind": "usage",
+            "props": {},
+            "slot": "top"
+          },
+          {
+            "align": "end",
+            "caps": [],
+            "id": "theme-picker",
+            "kind": "theme-picker",
+            "props": {},
+            "slot": "top"
+          },
+          {
+            "align": "end",
+            "caps": [],
+            "id": "zen-toggle",
+            "kind": "zen-toggle",
+            "props": {},
+            "slot": "top"
+          }
+        ]
+      },
+      "controls": [
+        {
+          "kind": "garden-switcher",
+          "placement": "top-left"
+        },
+        {
+          "kind": "drag-region",
+          "placement": "top"
+        },
+        {
+          "kind": "zen-toggle",
+          "placement": "top-right"
+        },
+        {
+          "kind": "add-agent",
+          "placement": "widget-bottom-left",
+          "widget": "agents"
+        }
+      ],
+      "edges": [],
+      "layout": {
+        "canvas": "framed",
+        "columns": [
+          {
+            "min-width": 200,
+            "size": 100,
+            "widget": "b1"
+          }
+        ],
+        "kind": "columns",
+        "minWidths": [
+          200
+        ],
+        "split": [
+          100
+        ]
+      },
+      "menus": {},
+      "template": "k2.texting@1",
+      "widgets": [
+        {
+          "caps": [
+            "store:read",
+            "store:write"
+          ],
+          "colorScheme": "garden",
+          "column": 0,
+          "description": null,
+          "errors": [],
+          "hash": "<hash>",
+          "id": "b1",
+          "kind": "custom",
+          "libKeys": [],
+          "libs": [],
+          "name": "Board",
+          "origin": "local",
+          "paused": null,
+          "props": {
+            "config": {}
+          },
+          "reasons": {},
+          "requested": [
+            "store:read",
+            "store:write"
+          ],
+          "size": {
+            "code": 1761,
+            "codeMax": 1048576,
+            "codeWarnAt": 524288
+          },
+          "source": "user",
+          "sourceAddresses": [],
+          "sources": null,
+          "state": "ok",
+          "warnings": [],
+          "widget": "board"
+        }
+      ]
+    },
+    "remote": {
+      "features": [
+        "zen-v1",
+        "zen-gardens-v1",
+        "zen-widgets-v1",
+        "garden-data-v1",
+        "guests-rooms-v1",
+        "garden-blobs-v1"
+      ],
+      "widgets": [
+        {
+          "id": "b1",
+          "run": "frame"
+        }
+      ]
+    },
+    "schema": 1,
+    "sync": {
+      "page": {
+        "mode": "synced",
+        "newerDefault": false
+      },
+      "theme": {
+        "mode": "synced",
+        "newerDefault": false
+      }
+    },
+    "theme": {
+      "builtin": true,
+      "font": {
+        "family": "system",
+        "lineHeight": 1.45,
+        "monospace": false,
+        "size": 14,
+        "stack": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", system-ui, sans-serif",
+        "terminal": {
+          "family": "meslo",
+          "monospace": true,
+          "stack": "\"MesloLGM Nerd Font\", \"MesloLGM Nerd Font Mono\", Menlo, Monaco, \"Courier New\", monospace"
+        }
+      },
+      "label": "Glass",
+      "name": "glass",
+      "scope": "garden",
+      "terminal": {
+        "palette": {
+          "dark": {
+            "background": "#000000",
+            "black": "#262422",
+            "blue": "#0a84ff",
+            "bright-black": "#7d766d",
+            "bright-blue": "#64b5ff",
+            "bright-cyan": "#8fd6d2",
+            "bright-green": "#9ad694",
+            "bright-magenta": "#dcaadc",
+            "bright-red": "#ff8a80",
+            "bright-white": "#ffffff",
+            "bright-yellow": "#f2cc7a",
+            "cursor": "<cursor>",
+            "cursor-text": "#ffffff",
+            "cyan": "#6fc1bd",
+            "foreground": "#ffffff",
+            "green": "#30d158",
+            "magenta": "#c792c7",
+            "red": "#ff453a",
+            "selection": "#1c3f66",
+            "white": "#d8d0c4",
+            "yellow": "#ffd60a"
+          },
+          "light": {
+            "background": "#f7f8fa",
+            "black": "#2a2622",
+            "blue": "#2f5f9a",
+            "bright-black": "#6f675d",
+            "bright-blue": "#3f76b8",
+            "bright-cyan": "#3a9494",
+            "bright-green": "#4f944b",
+            "bright-magenta": "#a3549f",
+            "bright-red": "#d0473e",
+            "bright-white": "#ffffff",
+            "bright-yellow": "#b8841f",
+            "cursor": "<cursor>",
+            "cursor-text": "#ffffff",
+            "cyan": "#2a7a7a",
+            "foreground": "#1a1d23",
+            "green": "#3d7a3a",
+            "magenta": "#8a3f86",
+            "red": "#b8322a",
+            "selection": "#dbe6fb",
+            "white": "#d8d0c4",
+            "yellow": "#9a6a12"
+          }
+        }
+      },
+      "tokens": {
+        "colors": {
+          "dark": {
+            "accent": "#0a84ff",
+            "accent-text": "#ffffff",
+            "border": "rgba(255, 255, 255, 0.16)",
+            "bubble-agent": "#3a3a3c",
+            "bubble-agent-text": "#ffffff",
+            "bubble-me": "#0a84ff",
+            "bubble-me-text": "#ffffff",
+            "canvas": "#000000",
+            "danger": "#ff453a",
+            "idle": "#8e8e93",
+            "needs-you": "#ff9f0a",
+            "ok": "#30d158",
+            "surface": "rgba(255, 255, 255, 0.09)",
+            "surface-raised": "#1c1c1e",
+            "text": "#ffffff",
+            "text-muted": "#8e8e93",
+            "working": "#0a84ff"
+          },
+          "light": {
+            "accent": "#2563eb",
+            "accent-text": "#ffffff",
+            "border": "#e3e6ec",
+            "bubble-agent": "#eef1f5",
+            "bubble-agent-text": "#1a1d23",
+            "bubble-me": "#2563eb",
+            "bubble-me-text": "#ffffff",
+            "canvas": "#f7f8fa",
+            "danger": "#c53030",
+            "idle": "#a39b90",
+            "needs-you": "#c27c0e",
+            "ok": "#2f855a",
+            "surface": "#ffffff",
+            "surface-raised": "#ffffff",
+            "text": "#1a1d23",
+            "text-muted": "#5f6672",
+            "working": "#2563eb"
+          }
+        },
+        "scheme": "dark",
+        "shape": {
+          "bubble-radius": 18,
+          "gap": 12,
+          "list-width": 300,
+          "radius": 22
+        }
+      },
+      "user": false
+    },
+    "themes": [
+      {
+        "active": false,
+        "builtin": true,
+        "label": "Basic",
+        "name": "basic",
+        "summary": "clean, smooth, simple: warm light, soft dark, follows the computer",
+        "user": false
+      },
+      {
+        "active": false,
+        "builtin": true,
+        "label": "Paper",
+        "name": "paper",
+        "summary": "always light, serif type, ink-blue accent",
+        "user": false
+      },
+      {
+        "active": false,
+        "builtin": true,
+        "label": "Midnight",
+        "name": "midnight",
+        "summary": "always dark, cool blue, JetBrains Mono everywhere",
+        "user": false
+      },
+      {
+        "active": false,
+        "builtin": true,
+        "label": "Haunted",
+        "name": "haunted",
+        "summary": "always dark: a candlelit desk in a misty study, behind the whole Garden",
+        "user": false
+      },
+      {
+        "active": true,
+        "builtin": true,
+        "label": "Glass",
+        "name": "glass",
+        "summary": "always dark: K2 Companion's black canvas, glassy dark cards, iMessage blue, round corners",
+        "user": false
+      }
+    ],
+    "version": "<version>",
+    "warnings": []
+  },
+  "request": {
+    "body": null,
+    "path": "/cli/zen/remote/page",
+    "query": {
+      "garden": "g-00000001"
+    }
+  },
+  "status": 200
+}

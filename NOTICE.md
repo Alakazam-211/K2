@@ -264,6 +264,7 @@ text in `LICENSE.txt` (Apache-2.0 libraries include their upstream NOTICE).
 | K2 activity bar (widget kit) (`k2-activity`) | 1.0.0 | FSL-1.1-Apache-2.0 | Copyright 2025-2026 Alakazam Labs | shipped in the app, `src/renderer/zen-lib/k2-activity@1.0.0/` |
 | K2 Thread panel (widget kit) (`k2-thread`) | 1.1.0 | FSL-1.1-Apache-2.0 | Copyright 2025-2026 Alakazam Labs | shipped in the app, `src/renderer/zen-lib/k2-thread@1.1.0/` |
 | K2 markdown (widget kit) (`k2-markdown`) | 1.0.0 | FSL-1.1-Apache-2.0 | Copyright 2025-2026 Alakazam Labs | shipped in the app, `src/renderer/zen-lib/k2-markdown@1.0.0/` |
+| K2 PNG encoder (widget kit) (`k2-png`) | 1.0.0 | FSL-1.1-Apache-2.0 | Copyright 2025-2026 Alakazam Labs | shipped in the app, `src/renderer/zen-lib/k2-png@1.0.0/` |
 
 K2 code remains **FSL-1.1-Apache-2.0**. These libraries keep their own
 licences and do **not** relicense K2.

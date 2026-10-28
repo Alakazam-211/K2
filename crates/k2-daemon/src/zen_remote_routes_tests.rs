@@ -98,6 +98,10 @@ fn req(path: &str, token: &str, params: &[(&str, &str)], body: J) -> (u16, J) {
     let params: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let bytes = if body.is_null() { Vec::new() } else { body.to_string().into_bytes() };
     let r = handle(path, &who, &params, &bytes);
+    if r.status.starts_with('2') && r.content_type.starts_with("text/javascript") {
+        // A library file: its text, not JSON.
+        return (status_code(&r), json!({ "text": r.body }));
+    }
     (status_code(&r), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{path}: {e}: {}", r.body)))
 }
 
@@ -353,8 +357,27 @@ fn the_frame_is_the_desktop_wrapper_with_library_slots_and_the_hello() {
         assert_eq!(v["srcdoc"].as_str().expect("srcdoc").matches(slot).count(), 1, "{slot}");
         assert!(l["files"].as_array().is_some_and(|f| !f.is_empty() && f.iter().all(|f| f["sha256"].as_str().is_some_and(|s| s.len() == 64))), "{l}");
     }
-    let (s, c) = refused(LIB, &fx.phone, &[("id", "uplot"), ("version", libs[0]["version"].as_str().expect("v")), ("file", "uPlot.iife.min.js")], J::Null);
-    assert_eq!((s, c.as_str()), (404, "bundled_on_phone"));
+    // Q5: the daemon serves bundled libraries too (the phone carries none),
+    // each file exactly its pin.
+    for f in libs[0]["files"].as_array().expect("files") {
+        let name = f["name"].as_str().expect("name");
+        let v = ok_of(LIB, &fx.phone, &[("id", "uplot"), ("version", libs[0]["version"].as_str().expect("v")), ("file", name)], J::Null);
+        let text = v["text"].as_str().unwrap_or_else(|| panic!("{name}: {v}"));
+        use sha2::{Digest, Sha256};
+        let sum: String = Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!((text.len() as u64, sum.as_str()), (f["bytes"].as_u64().expect("bytes"), f["sha256"].as_str().expect("sha")), "{name}");
+    }
+    let fetched = ok_of(LIB_FETCH, &fx.phone, &[], json!({ "id": "uplot", "version": libs[0]["version"] }));
+    assert_eq!((fetched["cached"].as_bool(), fetched["files"].clone()), (Some(true), libs[0]["files"].clone()), "{fetched}");
+    assert_eq!(refused(LIB, &fx.phone, &[("id", "uplot"), ("version", libs[0]["version"].as_str().expect("v")), ("file", "nope.js")], J::Null), (404, "not_found".into()));
+    // Every bundled library of K2's manifest is servable, bytes = pin.
+    for e in k2_core::zen::stdlib::zen_lib_manifest().libs.iter().filter(|e| e.source == k2_core::zen::stdlib::LibSource::Bundled) {
+        for f in &e.files {
+            let (s, v) = req(LIB, &fx.phone, &[("id", &e.id), ("version", &e.version), ("file", &f.name)], J::Null);
+            assert_eq!(s, 200, "{}/{}: {v}", e.key(), f.name);
+            assert_eq!(v["text"].as_str().map(str::len), Some(f.bytes as usize), "{}/{}", e.key(), f.name);
+        }
+    }
     let file = libs[1]["files"][0]["name"].as_str().expect("file");
     let (s, c) = refused(LIB, &fx.phone, &[("id", "plotly.js-dist-min"), ("version", libs[1]["version"].as_str().expect("v")), ("file", file)], J::Null);
     assert_eq!((s, c.as_str()), (404, "not_cached"), "the phone fetches once, then reads");
@@ -553,7 +576,7 @@ impl Norm {
             J::Object(o) => J::Object(o.iter().map(|(k, x)| (k.clone(), self.value(x, Some(k)))).collect()),
             J::Array(a) => J::Array(a.iter().map(|x| self.value(x, key)).collect()),
             J::String(s) => match key {
-                Some("version" | "cursor" | "serverId" | "lastGoodAt" | "at" | "addedAt" | "updatedAt" | "upload") => json!(format!("<{}>", key.unwrap_or_default())),
+                Some("version" | "cursor" | "since" | "serverId" | "lastGoodAt" | "at" | "addedAt" | "updatedAt" | "upload") => json!(format!("<{}>", key.unwrap_or_default())),
                 Some("nonce") => json!("<nonce>"),
                 _ => json!(self.text(s)),
             },
@@ -588,7 +611,7 @@ fn samples() -> BTreeMap<String, String> {
     put("report-ready", REPORT, &fx.phone, &[], json!({ "garden": g, "placement": "b1", "hash": h, "event": "ready" }));
     put("resume", RESUME, &fx.phone, &[], json!({ "garden": g, "placement": "b1" }));
     put("agents-order", AGENTS_ORDER, &fx.phone, &[("garden", &g)], J::Null);
-    put("lib-bundled-on-phone", LIB, &fx.phone, &[("id", "uplot"), ("version", "1.6.32"), ("file", "uPlot.iife.min.js")], J::Null);
+    put("lib-fetch-bundled", LIB_FETCH, &fx.phone, &[], json!({ "id": "uplot", "version": "1.6.32" }));
     put("refused-garden-person-only", GARDENS, &fx.other_owner_phone, &[], J::Null);
     put("refused-garden-device-only", GARDENS, &fx.password, &[], J::Null);
     // Every Garden id K2 minted (random), in list order.

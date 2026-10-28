@@ -1,6 +1,6 @@
 //! Where the live-docs store lives (Markdown multiplayer v1, K1).
 //!
-//! The store itself is the multiplayer kit's (`k2_multiplayer_base::store`,
+//! The store itself is the multiplayer kit's (`k2_mpc_base::store`,
 //! one redb file, linked by the daemon). K2 only chooses the path:
 //! `~/.k2/docs.redb`, or `K2_DOCS_REDB` when set. Under test the default is
 //! a per-process temp file, and a test that points `K2_DOCS_REDB` at the

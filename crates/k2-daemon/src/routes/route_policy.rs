@@ -664,6 +664,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/docs/share", Admin),
     get("/cli/docs/shares", Admin),
     get("/cli/docs/status", Member),
+    post("/cli/docs/tool", Member),
     post("/cli/docs/undo", Member),
     post("/cli/docs/unshare", Admin),
     post("/cli/docs/view", Member),

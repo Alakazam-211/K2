@@ -21,8 +21,8 @@ members = [
 # Vendored repos with their own [workspace] (git subtree; Markdown
 # multiplayer K1). Built as path dependencies of k2-daemon, never as members.
 exclude = [
-    "vendor/k2-multiplayer-base",
-    "vendor/k2-multiplayer-markdown",
+    "vendor/k2-mpc-base",
+    "vendor/k2-mpc-markdown",
 ]
 
 # Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.

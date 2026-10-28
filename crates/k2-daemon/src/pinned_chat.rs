@@ -797,6 +797,52 @@ pub fn handle_swap_canonical(
     }
 }
 
+/// Refusal code when the target harness's CLI can't be launched.
+pub const HARNESS_NOT_INSTALLED: &str = "harness_not_installed";
+
+/// Can a never-chatted pinned chat of `harness` start for this workspace?
+/// (0.46.6: checked BEFORE a move ends the old chat, so a missing CLI never
+/// leaves the pinned chat empty.) The program is the one the swap would
+/// spawn ([`k2_core::workspace::resume_chat::never_chatted_program`]),
+/// resolved exactly as the spawn resolves it (same child PATH and preset
+/// env, same test guard, Windows PATHEXT;
+/// [`k2_core::terminal::daemon_pty::preflight_program`]).
+///
+/// `Ok` is the file that would run. `Err` is `409 harness_not_installed`
+/// with the install-on-click hint ([`k2_core::sidecar::install_hint`]), or a
+/// 400 for a harness that can't be picked at all.
+pub(crate) fn preflight_harness(
+    project_path: &str,
+    harness: &str,
+) -> Result<String, crate::cli_response::CliResponse> {
+    let (program, env) = k2_core::workspace::resume_chat::never_chatted_program(project_path, harness)
+        .map_err(crate::cli_response::CliResponse::bad_request)?;
+    let env: std::collections::HashMap<String, String> =
+        env.map(|m| m.into_iter().collect()).unwrap_or_default();
+    match k2_core::terminal::daemon_pty::preflight_program(&program, &env) {
+        Ok(found) => Ok(found.to_string_lossy().into_owned()),
+        Err(detail) => Err(crate::cli_response::CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "error": {
+                    "code": HARNESS_NOT_INSTALLED,
+                    "hint": format!(
+                        "{}. The pinned chat was not touched: it keeps running on its current harness.",
+                        k2_core::sidecar::install_hint(&program)
+                    ),
+                    "harness": harness,
+                    "program": program,
+                    "detail": detail,
+                },
+                "switched": false,
+                "swapped": false,
+            })
+            .to_string(),
+        }),
+    }
+}
+
 /// The swap itself, shared by `swap-canonical` and `k2 agent harness`
 /// (callers check who may run it first): write the handoff, start a
 /// never-chatted pinned session of `provider` (which repoints
@@ -814,6 +860,16 @@ pub(crate) fn run_swap(
     notes: &str,
     from: &str,
 ) -> Result<serde_json::Value, crate::cli_response::CliResponse> {
+    // Nothing is touched (no handoff, no kill) until the target is known,
+    // the workspace is registered and the target CLI can be launched.
+    let target = k2_core::workspace::canonical_swap::normalize_harness(provider)
+        .map_err(crate::cli_response::CliResponse::bad_request)?;
+    if lookup_project_id(project_path).is_none() {
+        return Err(crate::cli_response::CliResponse::bad_request(format!(
+            "project not registered: {project_path}"
+        )));
+    }
+    preflight_harness(project_path, target)?;
     let prep = k2_core::workspace::canonical_swap::prepare_canonical_swap(project_path, provider, mode, notes)
         .map_err(crate::cli_response::CliResponse::bad_request)?;
 

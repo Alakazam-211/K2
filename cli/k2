@@ -45910,7 +45910,10 @@ changes NEW chats. This command moves the pinned chat itself:
   2. Heartbeats on the pinned chat, Threads and messages go to the new chat.
   3. The old chat stays in Chat history.
 
-Already on <harness>: nothing changes (exit 0).
+Already on <harness>: nothing changes (exit 0). <harness> not installed
+on this computer: nothing changes either (exit 1, harness_not_installed);
+the old chat keeps running and the error says how to install it.
+--dry-run runs the same check and shows the program it would launch.
 
 USAGE
   k2 agent harness <workspace> <harness> [flags]
@@ -46047,6 +46050,8 @@ def own_note():
         print("  Move one with: k2 heartbeat use-pinned-session on <name>")
 if d.get("dryRun"):
     print("DRY RUN: would move %s'"'"'s pinned chat from %s to %s." % (ws, d.get("fromHarness") or "?", h))
+    if d.get("launches"):
+        print("%s is installed: %s" % (h, d["launches"]))
     print("The old chat would stay in Chat history; heartbeats, Threads and messages would go to the new chat.")
     own_note()
     sys.exit(0)

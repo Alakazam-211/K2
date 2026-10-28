@@ -879,16 +879,9 @@ impl DaemonPtySession {
         // enriched value when the caller passed none (which is the
         // common case: spawn.rs hands an empty env, so agents get the
         // enriched PATH). On Windows, `PATH` and `Path` are equivalent.
-        if !login_path::env_has_path(&child_env) {
-            let inherited = login_path::process_path();
-            let enriched = login_path::augmented_path(&inherited);
-            child_env.insert("PATH".to_string(), enriched);
-        }
-        // Whatever the PATH's source (enrichment or caller), never hand a
-        // child an entry that is multi-line, has control characters, or is
-        // longer than any real directory: macOS execvp writes such an entry
-        // to the PTY before exec and blocks there forever (0.45.0 smoke).
-        let dropped = drop_unsafe_path_entries(&mut child_env);
+        // Shared with [`preflight_program`], so a preflight finds exactly
+        // what this spawn will exec.
+        let dropped = prepare_child_path(&mut child_env);
         if dropped > 0 {
             log_debug!(
                 "[daemon_pty] dropped {} unusable PATH entr{} for session={}",
@@ -2702,6 +2695,66 @@ impl Drop for ViewerRegistration {
 /// Remove PATH entries that fail [`crate::terminal::path_env::is_safe_entry`] from a
 /// child env (whichever key carries PATH). PURE. Returns how many were
 /// dropped; a clean PATH is left byte-identical.
+/// The child PATH every agent spawn gets (issue #15): the caller's own
+/// PATH/`Path` if it set one, else the enriched login-shell + known
+/// install dirs + inherited PATH; then any unusable entry dropped (a
+/// multi-line or control-character entry blocks macOS execvp forever,
+/// 0.45.0 smoke). Returns how many entries were dropped.
+fn prepare_child_path(child_env: &mut HashMap<String, String>) -> usize {
+    if !login_path::env_has_path(child_env) {
+        let inherited = login_path::process_path();
+        let enriched = login_path::augmented_path(&inherited);
+        child_env.insert("PATH".to_string(), enriched);
+    }
+    drop_unsafe_path_entries(child_env)
+}
+
+/// Can an agent spawn exec `program` right now? (0.46.6: a pinned-chat
+/// harness move checks this BEFORE it ends the old chat, so a missing CLI
+/// never leaves the pinned chat empty.)
+///
+/// Resolves exactly as [`DaemonPtySession::spawn`] does: the same child
+/// PATH ([`prepare_child_path`] over `env`, the preset's env), the same
+/// test guard (`K2_TEST_AGENT_SHIM_DIR`: shim dirs only), then where exec
+/// will find it — on Windows by cmd.exe's PATHEXT rule
+/// ([`crate::terminal::win_cmd::which`]), elsewhere the first regular,
+/// executable file on PATH. `Ok` is the file it would run.
+pub fn preflight_program(program: &str, env: &HashMap<String, String>) -> Result<std::path::PathBuf, String> {
+    let program = program.trim();
+    if program.is_empty() {
+        return Err("no program to run".to_string());
+    }
+    let mut child_env = env.clone();
+    prepare_child_path(&mut child_env);
+    let path = login_path::env_path_entry(&child_env).map(|(_, v)| v.to_string()).unwrap_or_default();
+    let guard = crate::terminal::agent_spawn_guard::GuardEnv::from_process();
+    let resolved = crate::terminal::agent_spawn_guard::resolve_program(program, &path, &guard)?;
+    let has_dir = resolved.contains(['/', '\\']);
+    #[cfg(windows)]
+    let found = if has_dir {
+        Some(std::path::PathBuf::from(&resolved)).filter(|p| p.is_file())
+    } else {
+        crate::terminal::win_cmd::which(&resolved, &path)
+    };
+    #[cfg(not(windows))]
+    let found = {
+        let _ = has_dir;
+        crate::terminal::agent_spawn_guard::locate_on_path(&resolved, &path).filter(|p| is_runnable(p))
+    };
+    found.ok_or_else(|| format!("`{program}` is not installed: it is not on the PATH agents run with"))
+}
+
+#[cfg(unix)]
+fn is_runnable(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn is_runnable(p: &std::path::Path) -> bool {
+    p.is_file()
+}
+
 fn drop_unsafe_path_entries(child_env: &mut HashMap<String, String>) -> usize {
     let Some((key, value)) = login_path::env_path_entry(child_env)
         .map(|(k, v)| (k.to_string(), v.to_string()))

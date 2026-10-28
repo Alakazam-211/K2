@@ -751,6 +751,40 @@ fn strip_session_argv(args: &[String]) -> Vec<String> {
     out
 }
 
+/// The program (and its preset env) a never-chatted spawn of
+/// `target_provider` would exec, picked exactly as
+/// [`resolve_never_chatted_chat_args`] picks it but with NO identity
+/// writes. A pinned-chat harness move preflights this program before it
+/// ends the old chat (0.46.6).
+pub fn never_chatted_program(
+    project_path: &str,
+    target_provider: &str,
+) -> Result<(String, Option<std::collections::BTreeMap<String, String>>), String> {
+    let provider = target_provider.trim();
+    if provider.is_empty() {
+        return Err("target provider required".to_string());
+    }
+    let default_cmd = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        resolve_agent_command(&conn, project_path)
+    };
+    match provider_resume_for_provider(provider) {
+        Some(adapter) => {
+            let (command, _, env, _) = spawn_command_for(adapter, &default_cmd);
+            Ok((command, env))
+        }
+        None => {
+            if provider_resume_for_command(&default_cmd.command).is_some()
+                || custom_provider_key(&default_cmd.command) != provider
+            {
+                return Err(format!("unknown harness: {provider}"));
+            }
+            Ok((default_cmd.command.clone(), default_cmd.env.clone()))
+        }
+    }
+}
+
 /// Never-chatted argv for `target_provider`. Does not resume a saved id
 /// and does not converge to the newest file on disk.
 ///

@@ -272,6 +272,15 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
             .to_string(),
         );
     }
+    // The target CLI must launch before anything is touched; a dry run
+    // answers the same refusal a real run would.
+    let launches = match crate::pinned_chat::preflight_harness(&target.path, harness) {
+        Ok(found) => found,
+        Err(r) => {
+            audit(caller, &format!("refused:{}:{harness}", crate::pinned_chat::HARNESS_NOT_INSTALLED), ingress);
+            return r;
+        }
+    };
     let own_session = own_session_heartbeats(&target.id);
     if req.dry_run {
         return CliResponse::ok_json(
@@ -282,6 +291,7 @@ pub fn handle(body: &[u8], caller: &Caller, ingress: &str) -> CliResponse {
                 "path": target.path,
                 "fromHarness": current,
                 "harness": harness,
+                "launches": launches,
                 "ownSessionHeartbeats": own_session,
             })
             .to_string(),

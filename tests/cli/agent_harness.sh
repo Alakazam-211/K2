@@ -197,6 +197,24 @@ has "$out" "already on claude"
 [ "$(starts claude)" = $((claude_before + 1)) ] || fail "already-on spawned claude"
 ok "grok -> claude; second run changes nothing"
 
+echo "== a harness that isn't installed: refused, the old chat keeps running =="
+claude_now="$(starts claude)"
+run k2 agent harness "$A" gemini --dry-run
+[ "$rc" = 1 ] || fail "dry run to a missing harness exit $rc: $out"
+has "$out" "harness_not_installed"
+has "$out" "'gemini' is not installed"
+run k2 agent harness "$A" gemini
+[ "$rc" = 1 ] || fail "move to a missing harness exit $rc: $out"
+has "$out" "harness_not_installed"
+has "$out" "not touched"
+run k2 workspace swap-canonical "$A" --agent gemini
+[ "$rc" = 1 ] || fail "swap-canonical to a missing harness exit $rc: $out"
+has "$out" "is not installed"
+[ "$(pinned_provider "$A")" = claude ] || fail "still on claude"
+[ "$(starts claude)" = "$claude_now" ] || fail "the claude chat was restarted"
+[ "$(k2 agent list --json | jq -r --arg p "$A" '.agents[] | select(.path == $p) | .live')" = true ] || fail "the old chat is no longer live"
+ok "missing gemini refused (exit 1) by both doors and the dry run; claude chat untouched"
+
 AUDIT="$(cat "$SANDBOX_HOME/.k2/auth-audit.jsonl" 2>/dev/null || cat "$SANDBOX_HOME/.k2so/auth-audit.jsonl")"
 has "$AUDIT" '"harness-switch"'
 has "$AUDIT" "refused:needs_person"

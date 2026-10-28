@@ -57,12 +57,66 @@ fn live(project_id: &str) -> Option<std::sync::Arc<k2_core::terminal::DaemonPtyS
 /// `exec cat` shims for the harness CLIs; the daemon resolves agent
 /// programs only inside this dir while it is set.
 fn shims(home: &crate::test_support::TempHome) -> k2_core::test_env::EnvVar {
+    shims_for(home, &["claude", "grok", "codex", "cat"])
+}
+
+/// Only `bins` are "installed": every other agent CLI is missing.
+fn shims_for(home: &crate::test_support::TempHome, bins: &[&str]) -> k2_core::test_env::EnvVar {
     let dir = home.path().join("agent-shims");
     std::fs::create_dir_all(&dir).expect("shim dir");
-    for bin in ["claude", "grok", "codex", "cat"] {
+    for bin in bins {
         k2_core::test_env::write_executable(&dir.join(bin), "#!/bin/sh\nexec cat\n");
     }
     k2_core::test_env::EnvVar::set("K2_TEST_AGENT_SHIM_DIR", &dir)
+}
+
+/// 0.46.6: a move never leaves the pinned chat empty. The target CLI is
+/// checked before anything is touched; missing → 409
+/// harness_not_installed with the install hint, and the old chat keeps
+/// running on the same session. Dry run and the older swap-canonical
+/// door answer the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_missing_target_harness_is_refused_and_the_old_chat_keeps_running() {
+    let home = crate::test_support::TempHome::new();
+    k2_core::db::init_for_tests();
+    let _shims = shims_for(&home, &["grok"]); // claude is not installed
+    let (id, path, handle) = workspace(&home, "nocli");
+    pin(&id, "grok", &uuid::Uuid::new_v4().to_string());
+    let started = crate::pinned_chat::ensure_pinned_chat(&path, false, false).expect("grok pinned chat starts");
+    let before = live(&id).expect("live grok chat");
+    assert!(before.is_child_alive());
+    let row_before = pinned(&id);
+
+    for body in [
+        json!({ "workspace": handle, "harness": "claude" }),
+        json!({ "workspace": handle, "harness": "claude", "dryRun": true }),
+    ] {
+        let (s, v) = call(&Caller::Owner, body.clone());
+        assert_eq!(s, "409 Conflict", "{body}: {v}");
+        assert_eq!(v["error"]["code"], crate::pinned_chat::HARNESS_NOT_INSTALLED, "{v}");
+        assert_eq!(v["error"]["harness"], "claude", "{v}");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.contains("'claude' is not installed"), "the install hint: {hint}");
+        assert!(hint.contains("not touched"), "{hint}");
+        assert_eq!(v["switched"], false, "{v}");
+    }
+    let swap = crate::pinned_chat::handle_swap_canonical(
+        json!({ "project": path, "provider": "claude" }).to_string().as_bytes(),
+        &Caller::Owner,
+        "test",
+    );
+    assert_eq!(swap.status, "409 Conflict", "{}", swap.body);
+    assert!(swap.body.contains(crate::pinned_chat::HARNESS_NOT_INSTALLED), "{}", swap.body);
+
+    // The old chat is untouched: same live session, same row, no handoff.
+    let after = live(&id).expect("the grok chat is still live");
+    assert_eq!(after.session_id, before.session_id, "never respawned");
+    assert!(after.is_child_alive(), "never killed");
+    assert_eq!(after.session_id.to_string(), started.session_id);
+    assert_eq!(pinned(&id), row_before, "the pinned row did not move");
+    assert!(!std::path::Path::new(&path).join(".k2").join("handoffs").exists(), "no handoff written");
+
+    crate::v2_session_map::unregister(&crate::canonical_session::canonical_key_for(&id));
 }
 
 #[test]
@@ -110,6 +164,8 @@ fn an_agent_cannot_move_another_workspace() {
 fn bad_requests_credentials_and_member_logins_are_refused_before_anything_moves() {
     let home = crate::test_support::TempHome::new();
     k2_core::db::init_for_tests();
+    // The Admin dry run below preflights claude: it must be installed.
+    let _shims = shims(&home);
     let (id, path, _) = workspace(&home, "bad");
     pin(&id, "grok", &uuid::Uuid::new_v4().to_string());
 

@@ -15,6 +15,7 @@ import {
   type GardenRestored,
 } from '@/lib/garden-data/garden-data-api'
 import { zipStore, type ZipEntry } from '@/lib/zip-store'
+import { SquareRadio } from '@/components/ui'
 
 const BTN =
   'px-2 py-1 text-xs border border-[var(--color-border)] text-[var(--color-text-primary)] hover:bg-[var(--color-bg-elevated)] transition-colors no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default'
@@ -89,7 +90,7 @@ export async function zenDataZip(widget: string, jsonl: () => Promise<string>): 
 
 /** Save bytes with the renderer's anchor download (as the JSONL export). */
 export function saveBytes(name: string, bytes: Uint8Array, type: string): void {
-  const url = URL.createObjectURL(new Blob([bytes], { type }))
+  const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }))
   const a = document.createElement('a')
   a.href = url
   a.download = name
@@ -172,8 +173,7 @@ export function ZenWidgetRestorePanel({ widget, onDone }: { widget: string; onDo
             const can = i.rev - 1 >= oldest
             return (
               <label key={`${i.rev}/${i.key}`} className={`flex items-center gap-2 text-[11px] ${can ? '' : 'opacity-40'}`}>
-                <input
-                  type="radio"
+                <SquareRadio
                   name={`restore-${widget}`}
                   disabled={!can || busy}
                   checked={toRev === i.rev - 1}

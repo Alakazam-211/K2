@@ -13900,19 +13900,28 @@ ID / login / vault password), from a terminal outside K2.
   k2 notifications email settings [--retention-days 7-90] [--owner-email <you@…>]
                                     Test emails only ever go to --owner-email.
 
-Your notice address (any person on this server, for yourself; never an agent):
+Your notice address: where emails FROM this server's AI agents reach you.
+Run these yourself from a terminal outside K2 (any person with a login on this
+server, or the server's owner). An agent can't run them (refused, 403).
   k2 notifications email address [show] [--person <login>] [--json]
-                                    Your confirmed address and any waiting for
-                                    a confirm. --person: someone else's (Admins).
+                                    Your confirmed address ("address") and any
+                                    still waiting for a confirm ("pending", up
+                                    to 3). --person: another person's (the
+                                    server's owner or an Admin only).
   k2 notifications email address set <you@example.com>
-                                    Emails that address a confirm link (from the
-                                    system sender; works 24 hours). Agents'
-                                    notices go there only after you press
-                                    Confirm on the page it opens. A new address
-                                    replaces the old one once confirmed.
+                                    Emails that address a confirm link from the
+                                    system sender. The link expires after 24
+                                    hours. Notices go there only after you press
+                                    Confirm on the page it opens. Your current
+                                    address keeps working until the new one is
+                                    confirmed, then it is replaced; if the link
+                                    expires, nothing changes. Setting the same
+                                    address again sends a fresh link.
   k2 notifications email address remove [<address>] [--person <login>]
-                                    Stops notices to it now (the owner or an
-                                    Admin can remove anyone's with --person).
+                                    Stops notices to <address> now, confirmed or
+                                    still waiting. With no address: all of them
+                                    (confirmed and waiting). --person: another
+                                    person's (the server's owner or an Admin).
 
 A hosted sender needs its domain Verified (k2 hostmail domain check) and a
 DMARC record (any policy). On a Mac (no hosted mail), add a relay first.

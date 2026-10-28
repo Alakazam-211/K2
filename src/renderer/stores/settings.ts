@@ -133,6 +133,8 @@ export type SettingsSection =
   | 'bots-muse'
   | 'bots-dots'
   | 'email-hosting'
+  /** Settings → Cores → Email Notifications (part 2, N8). */
+  | 'email-notifications'
   | 'email-link'
   | 'data'
   /** Settings → Cores → Apps (route id skin-access; per-app roles and users). */

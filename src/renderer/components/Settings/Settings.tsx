@@ -42,6 +42,7 @@ import type { ReportedFeatureKey } from '@/lib/reported-features'
 import { ProjectsSection, PROJECTS_MANIFEST } from './sections/ProjectsSection'
 import { PROJECT_GROUPS_MANIFEST } from '@/components/Projects/project-settings'
 import { EmailHostingSection, EMAIL_HOSTING_MANIFEST } from './sections/EmailHostingSection'
+import { EmailNotificationsSection, EMAIL_NOTIFICATIONS_MANIFEST } from './sections/EmailNotificationsSection'
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
@@ -249,6 +250,8 @@ export function settingsNav({
       title: 'Cores',
       items: [
         { id: 'email-hosting', label: 'Email Hosting' },
+        // Email Notifications part 2, N8: senders, pauses, agent notices, suppressions.
+        { id: 'email-notifications', label: 'Email Notifications' },
         // Sew, run on this box (Rosson 2026-10-15): the S32 K27 page (`k2 hostchat` headless).
         { id: 'sew', label: 'Chat Hosting' },
         // Rosson 2026-10-15: Compute is a core (it sits on the runtime), between Chat Hosting and Database.
@@ -334,6 +337,7 @@ export default function Settings(): React.JSX.Element {
       ...DATA_SOURCES_MANIFEST,
       ...LOCAL_GROKBOTS_MANIFEST,
       ...EMAIL_HOSTING_MANIFEST,
+      ...EMAIL_NOTIFICATIONS_MANIFEST,
       ...SEW_MANIFEST,
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
@@ -725,6 +729,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'email-hosting' && (
           <SectionErrorBoundary>
             <EmailHostingSection />
+          </SectionErrorBoundary>
+        )}
+        {activeSection === 'email-notifications' && (
+          <SectionErrorBoundary>
+            <EmailNotificationsSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'sew' && (

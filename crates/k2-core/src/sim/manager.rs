@@ -522,7 +522,7 @@ impl Manager {
     /// [`Self::boot`], with the daemon's check for leasing a Mac node
     /// (`node_gate`, run only when the picked lane is `ios-node`): people
     /// need control (owner, admins), agents `sim.use` and `compute.use`
-    /// (Rosson D2, prd-ios-on-mac-node-0467-v1 §3.5).
+    /// (decision D2, prd-ios-on-mac-node-0467-v1 §3.5).
     pub fn boot_gated(&self, ws: &Ws, actor: &Actor, req: &BootReq, node_gate: &dyn Fn() -> R<()>) -> R<SimView> {
         let lock = self.op_lock(&ws.id);
         let _g = lock.lock();

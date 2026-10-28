@@ -218,6 +218,45 @@ fn agent_switch(c: &Caller, ws: &Ws) -> Result<(), SimError> {
     Ok(())
 }
 
+/// Booting an iPhone on a Mac compute node leases a shared Mac, so it is
+/// stricter than a device on this box (decision D2): the owner
+/// and admins (the people who may control a device), and agents with both
+/// "Allow mobile devices" ([`agent_switch`]) and "Allow compute nodes"
+/// (`compute.use`; 403 `compute_off`, which the permission-card wall
+/// already turns into `Ask with:`). Run only when the picked lane is
+/// `ios-node`.
+fn node_lease_gate(c: &Caller, ws: &Ws) -> Result<(), SimError> {
+    match c {
+        Caller::Agent(a) => {
+            let on = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::compute::store::agents_can_use_compute(&conn, &a.project_id)
+            };
+            if on {
+                Ok(())
+            } else {
+                Err(SimError::new(
+                    403,
+                    "compute_off",
+                    format!(
+                        "an iPhone on a Mac compute node uses compute nodes, which are off for {}: ask your owner to turn on \"Allow compute nodes\" in Settings → Workspaces → {} → Agent",
+                        ws.handle, ws.handle
+                    ),
+                )
+                .exit(3))
+            }
+        }
+        _ if can_control(c) => Ok(()),
+        _ => Err(SimError::new(
+            403,
+            "sim_node_needs_admin",
+            "An iPhone on a Mac compute node leases a shared Mac, so the owner or an admin starts it. Once it runs, Members can watch it in the Mobile tab.",
+        )
+        .exit(3)),
+    }
+}
+
 fn people_only(c: &Caller) -> Result<(), SimError> {
     match c {
         Caller::Agent(_) => Err(forbidden("this is for people at the Mobile tab or in Settings, not agents")),
@@ -321,7 +360,8 @@ fn route(path: &str, c: &Caller, is_post: bool, body: &[u8], params: &HashMap<St
             let req: BootReq = parse(body)?;
             let ws = resolve_ws(c, req.workspace.as_deref())?;
             agent_switch(c, &ws)?;
-            match m.boot(&ws, &actor, &req) {
+            let gate = || node_lease_gate(c, &ws);
+            match m.boot_gated(&ws, &actor, &req, &gate) {
                 Ok(v) => Ok(ok(&v)),
                 Err(e) => {
                     if e.code == "sim_needs_setup" {
@@ -641,6 +681,8 @@ pub fn run_card(params: &Value, answer: &str, by: &str) -> Result<Value, String>
 /// boot, so a client that read the features the moment the daemon turned
 /// ready was told Mobile isn't there. Cheap: no probe runs here.
 pub fn register_lanes() {
+    // The `ios-node` lane reads the compute registry (0.46.7).
+    crate::compute_sim::install();
     k2_core::sim::register_builtin_lanes();
 }
 

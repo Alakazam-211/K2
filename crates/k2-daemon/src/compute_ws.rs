@@ -633,6 +633,12 @@ async fn run_session(
     for c in pending_cancels {
         let _ = tx.send(Out::Frame(Box::new(c)));
     }
+    // iPhone sessions (protocol 11, IR-7): the ones this server still holds
+    // on the node, so it closes any other at once instead of keeping the
+    // Mac busy for the grace after a server restart.
+    if let Some(sync) = crate::compute_sim::sync_frame(&node_id, hello.protocol) {
+        let _ = tx.send(Out::Frame(Box::new(sync)));
+    }
     // Node admin: a back-online alert if an offline one went out.
     {
         let (n, b) = (node_id.clone(), hello.boot_id.clone());
@@ -834,6 +840,8 @@ fn handle_frame(node_id: &str, route: &'static str, conn_id: u64, f: Frame, tall
         Frame::PkgRequestDone(r) => crate::compute_pkg::on_done(&node_id, r),
         // Protocol 10 (B2): the node's lineages for this server.
         Frame::LineageStatus(l) => on_lineage_status(&node_id, l),
+        // Protocol 11: an iPhone session on a Mac node changed state.
+        Frame::SimState(s) => crate::compute_sim::on_sim_state(&node_id, &s),
         other => log_debug!("[compute] node {node_id} sent {}", other.kind()),
     }
 }
@@ -1043,11 +1051,15 @@ fn on_offer(node_id: &str, o: Offer) {
     let admin = !tenant && o.features.iter().any(|f| f == k2_core::compute::proto::admin::FEATURE_ADMIN);
     let offer_copy = admin.then(|| o.clone());
     let share_now = o.share.clone();
+    let sim_now = o.sim.clone();
     with_engine(|e| {
         if let Some(c) = e.conns.get_mut(node_id) {
             c.offer = Some(o);
         }
     });
+    // iPhone sessions the node no longer lists are gone (IR-7); the lane
+    // re-probes from the offer just stored.
+    crate::compute_sim::on_offer(node_id, sim_now.as_ref());
     // Node admin: pin the approval key, send approved commands.
     if let Some(o) = offer_copy {
         crate::compute_admin::on_offer(node_id, &o);

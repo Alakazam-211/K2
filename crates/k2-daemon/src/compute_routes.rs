@@ -143,6 +143,8 @@ pub const ROUTES: &[&str] = &[
     // prd-compute-blacksmith-class-v1 R1: `k2 compute rightsize` (a reader).
     crate::compute_rightsize::PATH,
     "/cli/compute/run",
+    // One per iPhone session on a Mac node (0.46.7): dialed by k2-node.
+    "/cli/compute/sim-stream",
     // prd-compute-blacksmith-class-v1 O2: `k2 compute stats` (a reader).
     crate::compute_jobstats::PATH,
     "/cli/compute/usage",
@@ -219,7 +221,20 @@ pub fn is_post_route(p: &str) -> bool {
 }
 
 pub fn is_socket(p: &str) -> bool {
-    p == compute_ws::ATTACH_PATH || p == compute_ws::ENROLL_PATH
+    p == compute_ws::ATTACH_PATH || p == compute_ws::ENROLL_PATH || p == crate::compute_sim::SIM_STREAM_PATH
+}
+
+/// Serve one of the [`is_socket`] paths: a node's attach, an enrollment,
+/// or an iPhone session's stream (the node proves its key in its own
+/// handshake there, so the ingress doesn't matter).
+pub async fn serve_socket(p: &str, stream: &mut tokio::net::TcpStream, ingress: crate::routes::dispatcher::Ingress) {
+    if p == compute_ws::ATTACH_PATH {
+        compute_ws::serve_attach(stream, ingress).await;
+    } else if p == crate::compute_sim::SIM_STREAM_PATH {
+        crate::compute_sim::serve_sim_stream(stream).await;
+    } else {
+        compute_ws::serve_enroll(stream, ingress).await;
+    }
 }
 
 // ── who is calling ───────────────────────────────────────────────────

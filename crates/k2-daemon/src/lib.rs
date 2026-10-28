@@ -395,6 +395,21 @@ pub mod compute_views;
 /// App runtime stage 1 (prd-k2-app-runtime-v1): `/cli/app/*` routes.
 pub mod apps;
 pub mod compute_shards;
+// iPhone on a Mac compute node (0.46.7): the `ios-node` lane's daemon half.
+// Unix only, like the lane (IR-12); other OSes get no-op hooks.
+#[cfg(unix)]
+pub mod compute_sim;
+#[cfg(not(unix))]
+pub mod compute_sim {
+    pub const SIM_STREAM_PATH: &str = k2_core::compute::proto::sim::STREAM_PATH;
+    pub fn install() {}
+    pub fn on_sim_state(_: &str, _: &k2_core::compute::proto::sim::SimStateFrame) {}
+    pub fn on_offer(_: &str, _: Option<&k2_core::compute::proto::sim::SimFacts>) {}
+    pub fn sync_frame(_: &str, _: u32) -> Option<k2_core::compute::proto::frames::Frame> {
+        None
+    }
+    pub async fn serve_sim_stream(_: &mut tokio::net::TcpStream) {}
+}
 pub mod compute_tenant_guard;
 pub mod compute_ws;
 // K2 vault (prd-k2-vault-v1): daemon glue + `/cli/vault/*`.

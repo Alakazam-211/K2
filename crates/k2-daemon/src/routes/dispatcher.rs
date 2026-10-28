@@ -8937,11 +8937,7 @@ async fn handle_one_request(
                 return DispatchOutcome::Done;
             }
             if crate::compute_routes::is_socket(p) {
-                if p == crate::compute_ws::ATTACH_PATH {
-                    crate::compute_ws::serve_attach(stream, ingress).await;
-                } else {
-                    crate::compute_ws::serve_enroll(stream, ingress).await;
-                }
+                crate::compute_routes::serve_socket(p, stream, ingress).await;
                 return DispatchOutcome::Done;
             }
             if crate::compute_routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {

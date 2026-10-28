@@ -346,7 +346,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
                 remote: n.path.remote(),
                 path: Some(n.path),
                 hold: hello_hold,
-                isolation: k2_core::sim::ISOLATION_NOTE.to_string(),
+                isolation: k2_core::sim::isolation_note(view.as_ref().map(|v| v.lane).unwrap_or(k2_core::sim::LaneKind::Android)).to_string(),
                 input: input_caps,
                 codec: n.codec,
                 window: n.window,

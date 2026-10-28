@@ -141,6 +141,9 @@ pub(super) const ROWS: &[Route] = &[
     post("/cli/compute/seats/request", Admin),
     post("/cli/compute/seats/resume", Admin),
     post("/cli/compute/seats/suspend", Admin),
+    // iPhone on a Mac node: the node proves its key in a handshake bound
+    // to a session this server opened on it; fails closed.
+    get("/cli/compute/sim-stream", Public),
     // prd-compute-blacksmith-class-v1 O2: a reader of one of the caller's jobs.
     get("/cli/compute/stats", Member),
     post("/cli/compute/trust/approve", Admin),

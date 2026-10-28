@@ -586,3 +586,73 @@ fn only_the_box_owner_accepts_licences_and_status_says_who_can() {
     crate::sim_routes::clear_lanes_for_tests();
     let _ = std::fs::remove_dir_all(&tmp);
 }
+
+/// An iPhone on a Mac compute node (decision D2): it leases a shared
+/// Mac, so the owner and admins boot one, and agents need both "Allow
+/// mobile devices" and "Allow compute nodes" (`compute_off`, exit 3, which
+/// the permission-card wall turns into `Ask with:`). A Member can't.
+#[cfg(unix)]
+#[test]
+fn an_iphone_on_a_mac_node_needs_control_or_an_agent_with_compute() {
+    use k2_core::sim::ios_node::{fake_node::FakeDirectory, IosNodeLane};
+    let _serial = sim_test_lock();
+    let tmp = std::env::temp_dir().join(format!("k2-sim-node-routes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("ws")).expect("ws");
+    k2_core::sim::set_base_for_tests(tmp.join("home"));
+    crate::sim_routes::clear_lanes_for_tests();
+    let dir = FakeDirectory::new();
+    let lane = Arc::new(IosNodeLane::new(dir.clone()));
+    dir.node.attach_lane(&lane);
+    k2_core::sim::register_lane(lane.clone());
+    manager::manager().refresh_probes();
+    let ws = insert_project("sim-node", &tmp.join("ws"));
+    dir.grant(&ws);
+
+    // The chooser lists the node's iPhones by name.
+    let r = get(DEVICES, Caller::Owner, &[("workspace", &ws), ("platform", "ios")]);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(body(&r)["lane"], json!("ios-node"));
+    assert_eq!(body(&r)["devices"][0]["name"], json!("iPhone 17 (on k2n1-m4)"));
+
+    // A Member login (no control): refused before anything is leased.
+    let r = post(BOOT, Caller::Login { username: "member-without-control".into() }, json!({ "workspace": ws, "platform": "ios" }));
+    assert_eq!((r.status, code(&r).as_str()), ("403 Forbidden", "sim_node_needs_admin"), "{}", r.body);
+    assert_eq!(body(&r)["exit"], json!(3));
+    assert!(dir.node.sessions().is_empty());
+
+    // An agent with mobile devices on but compute off.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::sim::store::set_agents_can_use_sim(&conn, &ws, true).expect("sim on");
+    }
+    let r = post(BOOT, agent(&ws), json!({ "platform": "ios", "noTab": true }));
+    assert_eq!((r.status, code(&r).as_str()), ("403 Forbidden", "compute_off"), "{}", r.body);
+    assert_eq!(body(&r)["exit"], json!(3));
+    assert!(body(&r)["message"].as_str().expect("message").contains("Allow compute nodes"), "{}", r.body);
+    assert!(dir.node.sessions().is_empty());
+
+    // Both on: it boots on the node.
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::store::set_agents_can_use_compute(&conn, &ws, true).expect("compute on");
+    }
+    let r = post(BOOT, agent(&ws), json!({ "platform": "ios", "noTab": true }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert_eq!(body(&r)["lane"], json!("ios-node"));
+    assert_eq!(dir.node.sessions().len(), 1);
+    let r = post(STOP, Caller::Owner, json!({ "workspace": ws }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(dir.node.sessions().is_empty(), "stop frees the Mac");
+
+    // The owner boots it too.
+    let r = post(BOOT, Caller::Owner, json!({ "workspace": ws, "platform": "ios", "noTab": true }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let r = post(STOP, Caller::Owner, json!({ "workspace": ws }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+
+    crate::sim_routes::clear_lanes_for_tests();
+    let _ = std::fs::remove_dir_all(&tmp);
+}

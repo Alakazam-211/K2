@@ -13,7 +13,7 @@ const USAGE: &str = r#"k2-node — K2 compute node runtime
 Install (root, once; the installers are inside this binary):
   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
                      [--allow-packages "libssl-dev pkg-config"]
-                     [--controller URL --enroll CODE.FP --name NAME]
+                     [--controller URL --enroll - --name NAME < code-file]
                      [--remote-admin off|policy|full] [--no-job-wall]
   Remote admin defaults to policy (asked, policy preselected; a first install
   without a terminal takes policy): K2 keeps the node updated and healthy.
@@ -26,12 +26,16 @@ Install (root, once; the installers are inside this binary):
     (the password comes from stdin, e.g. a secret file you delete after)
 
   k2-node run [--home DIR] [--config-dir DIR] [--dev [--allow-fake-clock]]   (tests: K2_NODE_FAKE_CLOCK_OFFSET=+600 moves a --dev node's clock)
-  k2-node enroll --controller <https://you.k2.dev> (--enroll <ABCDE-FGHJK.0123456789abcdef> | --ticket T) --name <name>
+  k2-node enroll --controller <https://you.k2.dev> (--enroll - < code-file | --ticket T) --name <name>
                  [--label k=v]... [--home DIR] [--force [--drop-servers]]
                  (on a shared node --force would drop the other servers: to change the
                   owner and keep them, sudo k2-node servers owner <server>)
-  k2-node request --controller URL (--enroll CODE.FP | --ticket T) --name NAME [--config-dir DIR]
+  k2-node request --controller URL (--enroll - < code-file | --ticket T) --name NAME [--config-dir DIR]
                  (the machine owner: ask the running node to enroll itself)
+  Enroll codes (CODE.FP, e.g. ABCDE-FGHJK.0123456789abcdef) stay out of argv, where ps
+  shows them to every user: --enroll - / --code - reads one line from stdin, or leave
+  the flag out and set K2_NODE_ENROLL_CODE (sudo --preserve-env=K2_NODE_ENROLL_CODE …).
+  --enroll CODE.FP / --code CODE.FP still work but are visible in ps while they run.
   k2-node tools install <need>... [--home DIR]   (as the node user: node@22 python@3.12 rust@stable cargo-nextest sys:pkg-config)
   k2-node tools list [--home DIR] [--json]
   k2-node packages list | allow <pkg>... | disallow <pkg>...   (allow/disallow: root)
@@ -48,9 +52,10 @@ Install (root, once; the installers are inside this binary):
 
 More than one K2 server (0.46.3; the machine owner, at this machine):
   k2-node servers [list] [--json]                        every server this node serves
-  sudo k2-node servers add --url URL --code CODE.FP [--trust own|team] [--for 7d|none]
+  sudo k2-node servers add --url URL --code - [--trust own|team] [--for 7d|none]
                  [--weight N] [--max-running N] [--max-queued N] [--cpu-hours N] [--max-time 2h]
                  [--cpus N] [--mem 8G] [--disk 40G] [--network on|no-lan|none] [--gate] [--exclusive]
+                 < code-file   (the code on stdin; or K2_NODE_ENROLL_CODE, see Enroll codes above)
   k2-node servers limits <server> [--cpus N] [--mem 8G] [--disk 40G] [--cpu-hours N] [--max-time 2h]
                  [--weight N] [--max-running N] [--max-queued N] [--network on|no-lan|none]
                  [--gate] [--exclusive] [--for 7d|none]
@@ -168,6 +173,41 @@ impl Args {
 
 fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
+}
+
+/// The enroll code without argv (2026-10-28): `ps` shows a process's
+/// arguments to every user on the machine, so a code typed as `--code
+/// CODE.FP` was readable by anyone there for as long as the command ran.
+pub const ENROLL_CODE_ENV: &str = "K2_NODE_ENROLL_CODE";
+
+/// The enroll code for `--<flag>`: `--<flag> -` reads one line from stdin;
+/// with no `--<flag>` at all, `$K2_NODE_ENROLL_CODE`; `--<flag> CODE.FP`
+/// still works (it shows in `ps`). `None`: none given.
+fn enroll_code_arg(a: &Args, flag: &str) -> Result<Option<String>, String> {
+    enroll_code_from(a.get(flag), std::env::var(ENROLL_CODE_ENV).ok(), &mut std::io::stdin().lock(), flag)
+}
+
+fn enroll_code_from(flag_value: Option<&str>, env: Option<String>, stdin: &mut impl std::io::BufRead, flag: &str) -> Result<Option<String>, String> {
+    use std::io::{BufRead as _, Read as _};
+    let raw = match flag_value {
+        Some("-") => {
+            let mut line = String::new();
+            stdin
+                .take(1024)
+                .read_line(&mut line)
+                .map_err(|e| format!("--{flag} -: couldn't read the code from stdin ({})", e.kind()))?;
+            if line.trim().is_empty() {
+                return Err(format!("--{flag} -: stdin was empty; pipe the code in: --{flag} - < code-file"));
+            }
+            line
+        }
+        Some(v) => v.to_string(),
+        None => match env {
+            Some(v) if !v.trim().is_empty() => v,
+            _ => return Ok(None),
+        },
+    };
+    Ok(Some(raw.trim().to_string()))
 }
 
 fn passwd_home() -> Option<PathBuf> {
@@ -298,7 +338,8 @@ async fn cmd_enroll(a: &Args) -> Result<(), String> {
         return Err("enroll as the node user (sudo -u k2node k2-node enroll …), not root".into());
     }
     let controller = a.need("controller")?;
-    let cred = match (a.get("enroll"), a.get("ticket")) {
+    let code = if a.get("ticket").is_some() { a.get("enroll").map(str::to_string) } else { enroll_code_arg(a, "enroll")? };
+    let cred = match (code.as_deref(), a.get("ticket")) {
         (Some(e), None) => k2_node::enroll::Credential::Code(EnrollString::parse(e).ok_or(
             "--enroll must look like ABCDE-FGHJK.0123456789abcdef (code . first 16 hex of the controller fingerprint)",
         )?),
@@ -580,9 +621,13 @@ fn cmd_servers(a: &Args) -> Result<(), String> {
             return Ok(());
         }
         Some("add") => {
-            need_root("add")?;
-            let code = k2_node_proto::pairing::EnrollString::parse(a.need("code")?)
+            // The code first (it may come on stdin), so a bad one is named
+            // before sudo is; it is never echoed back.
+            let raw = enroll_code_arg(a, "code")?
+                .ok_or("--code is required: --code - < code-file (one line on stdin), or K2_NODE_ENROLL_CODE in the environment; --code CODE.FP also works but shows in ps")?;
+            let code = k2_node_proto::pairing::EnrollString::parse(&raw)
                 .ok_or("--code must look like ABCDE-FGHJK.0123456789abcdef (from `k2 compute node add` on the new server)")?;
+            need_root("add")?;
             let trust = share::Trust::parse(a.get("trust").unwrap_or("own")).ok_or("--trust own|team")?;
             let mut pairs = Vec::new();
             for k in LIMIT_FLAGS {
@@ -890,7 +935,7 @@ fn cmd_request(a: &Args) -> Result<(), String> {
     let r = k2_node::request::Request {
         id: format!("cli-{}", k2_node_proto::crypto::random_id()?),
         controller: a.need("controller")?.to_string(),
-        enroll: a.get("enroll").map(str::to_string),
+        enroll: if a.get("ticket").is_some() { a.get("enroll").map(str::to_string) } else { enroll_code_arg(a, "enroll")? },
         ticket: a.get("ticket").map(str::to_string),
         name: a.need("name")?.to_string(),
         labels,
@@ -1202,6 +1247,21 @@ pub async fn main() -> ExitCode {
 mod tests {
     use super::*;
     use k2_node::ledger::Clock;
+
+    /// 2026-10-28: the enroll code from stdin (`-`), the flag, or the env.
+    #[test]
+    fn enroll_codes_come_from_stdin_the_flag_or_the_env() {
+        let mut empty = std::io::Cursor::new(Vec::<u8>::new());
+        let mut line = std::io::Cursor::new(b"  ABCDE-FGHJK.0123456789abcdef \nrest\n".to_vec());
+        assert_eq!(enroll_code_from(Some("-"), None, &mut line, "code"), Ok(Some("ABCDE-FGHJK.0123456789abcdef".into())), "one line, trimmed");
+        assert!(enroll_code_from(Some("-"), Some("ignored".into()), &mut empty, "code").unwrap_err().contains("stdin was empty"));
+        assert_eq!(enroll_code_from(Some("X.Y"), Some("Z".into()), &mut empty, "code"), Ok(Some("X.Y".into())), "the flag wins");
+        assert_eq!(enroll_code_from(None, Some(" E.F ".into()), &mut empty, "code"), Ok(Some("E.F".into())), "the env when no flag");
+        assert_eq!(enroll_code_from(None, Some("  ".into()), &mut empty, "code"), Ok(None));
+        assert_eq!(enroll_code_from(None, None, &mut empty, "code"), Ok(None));
+        let mut huge = std::io::Cursor::new(vec![b'A'; 4096]);
+        assert_eq!(enroll_code_from(Some("-"), None, &mut huge, "code").unwrap().unwrap().len(), 1024, "stdin is read up to 1 KiB");
+    }
 
     /// A-L6: setup's switches parse anywhere on the line, last included.
     #[test]

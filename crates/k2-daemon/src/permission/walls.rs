@@ -109,7 +109,7 @@ const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over S
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 34] = [
+pub(crate) const V1_ACTIONS: [&str; 35] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -152,6 +152,10 @@ pub(crate) const V1_ACTIONS: [&str; 34] = [
     "sew.owner-handoff",
     // 0.46.6 (Rosson): move the agent's own pinned chat to another harness.
     "agent.harness-switch",
+    // 0.46.6 (Rosson 2026-10-28): let the agent read one of its own
+    // workspace's secrets as a file or env (a handed-over or person-given
+    // secret it may not widen itself).
+    "vault.delivery",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -242,6 +246,13 @@ pub(crate) const ROWS: &[Row] = &[
     },
     row(ask("chat.manage", Floor::Admin), code(403, "chat_manage_off"), "/cli/", ANY),
     row(ask("vault.manage", Floor::Admin), code(403, "vault_manage_required"), "/cli/", ANY),
+    // `k2 vault delivery NAME file|env` on a secret the agent may not widen
+    // (2026-10-28): the refusal names the secret and the delivery.
+    Row {
+        needs: Some("/error/delivery"),
+        params: &[("secret", &[ParamFrom::Response("/error/secret")]), ("delivery", &[ParamFrom::Response("/error/delivery")])],
+        ..row(ask("vault.delivery", Floor::Admin), code(403, "vault_owner_confirm_required"), "/cli/vault/policy", POST)
+    },
     // ── Gardens and sources ────────────────────────────────────────────
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/sources/", ANY),
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/zen/", ANY),
@@ -757,6 +768,8 @@ mod tests {
             // 0.46.6: an agent moving its own pinned chat (both doors).
             (403, "POST", "/cli/agent/harness", vec![], Some(json!({"workspace":"sales","harness":"Claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"switched":false}), "agent.harness-switch"),
             (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"swapped":false}), "agent.harness-switch"),
+            // 0.46.6: `k2 vault delivery NAME env` on a secret the agent can't widen.
+            (403, "POST", "/cli/vault/policy", vec![], Some(json!({"name":"K2N12_ENROLL_CODE","delivery":"env"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"K2N12_ENROLL_CODE","delivery":"env"}}), "vault.delivery"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -975,7 +988,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 34);
+        assert_eq!(V1_ACTIONS.len(), 35);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

@@ -188,6 +188,9 @@ export interface OverlayHandoff {
   expiresAt?: number | null
   /** The receiving workspace (label). */
   workspace?: string | null
+  /** The sender's `--ttl` in seconds: the copy is kept that long after it
+   *  was sent (2026-10-28). Absent: no expiry. */
+  ttlSecs?: number | null
 }
 
 /** Where a secret card's answer is kept (the vault's scope). */
@@ -1175,8 +1178,15 @@ export function coerceHandoff(raw: unknown): OverlayHandoff | null {
   if (typeof h.reason === 'string') out.reason = h.reason
   if (typeof h.reference === 'string') out.reference = h.reference
   if (typeof h.workspace === 'string') out.workspace = h.workspace
+  if (typeof h.ttlSecs === 'number' && h.ttlSecs > 0) out.ttlSecs = h.ttlSecs
   Object.assign(out, closedExtras(h))
   return out
+}
+
+/** "1 hour" / "7 days" for a handoff's `--ttl`. */
+export function ttlWords(secs: number): string {
+  if (secs < 2 * 86400) return plural(Math.max(1, Math.round(secs / 3600)), 'hour')
+  return plural(Math.round(secs / 86400), 'day')
 }
 
 function coerceSecret(raw: unknown): OverlaySecret | null {

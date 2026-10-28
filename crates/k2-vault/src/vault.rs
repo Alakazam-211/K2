@@ -1373,9 +1373,6 @@ impl LocalVault {
         if let Some(r) = p.rotate_every_days {
             m.rotate_every_days = if r == 0 { None } else { Some(r) };
         }
-        if m.default_delivery.level() > m.delivery_ceiling.level() {
-            return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
-        }
         let loosens = hosts::widens(&old.hosts, &m.hosts)
             || m.default_delivery.level() > old.default_delivery.level()
             || m.delivery_ceiling.level() > old.delivery_ceiling.level()
@@ -1390,6 +1387,12 @@ impl LocalVault {
         let check = if loosens { policy::can_loosen(actor, &facts) } else { policy::can_manage(actor, &facts) };
         if let Err(e) = check {
             return Err(self.deny(Entry::new("policy", &stamp, "deny").secret(&old.id, None), e));
+        }
+        // After the permission check (2026-10-28): an agent that may not
+        // widen this secret at all hears that (and can ask with a card),
+        // not that it also has to raise the ceiling.
+        if m.default_delivery.level() > m.delivery_ceiling.level() {
+            return Err(VaultError::bad_request("delivery_above_ceiling", "the delivery is looser than the ceiling"));
         }
         if m == old {
             return Ok(m);

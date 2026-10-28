@@ -4,7 +4,8 @@
 #   sudo k2-node setup [--private-home | --no-private-home] [--human USER]
 #        [--allow-packages "libssl-dev pkg-config"] [--tools "node@22 rust@stable"]
 #        [--remote-admin off|policy|full] [--no-job-wall]
-#        [--controller https://you.k2.dev --enroll ABCDE-FGHJK.0123456789abcdef --name NAME]
+#        [--controller https://you.k2.dev --enroll - --name NAME < code-file]
+#        (--enroll - reads the code from stdin; K2_NODE_ENROLL_CODE works too)
 #   (or: sudo scripts/node/install-node-linux.sh --binary ./k2-node …)
 #
 # Root is needed once: it creates the system user `k2node` (no login, no
@@ -55,7 +56,7 @@ ADMIN_SERVICE_UNIT="/etc/systemd/system/k2-node-admin.service"
 LABELS=()
 
 die() { echo "install-node-linux: $*" >&2; exit 1; }
-usage() { sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -78,6 +79,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# The enroll code off argv (2026-10-28; ps shows argv to every user):
+# --enroll - reads one line from stdin; with no --enroll, a --controller
+# install takes $K2_NODE_ENROLL_CODE. After reading it, stdin goes back to
+# the terminal when there is one, so the questions below still get asked.
+if [ "$ENROLL" = "-" ]; then
+    IFS= read -r ENROLL || true
+    ENROLL="${ENROLL%$'\r'}"
+    [ -n "$ENROLL" ] || die "--enroll -: stdin was empty (pipe the code in: --enroll - < code-file)"
+    if (exec </dev/tty) 2>/dev/null; then exec </dev/tty; fi
+elif [ -z "$ENROLL" ] && [ -n "$CONTROLLER" ] && [ -n "${K2_NODE_ENROLL_CODE:-}" ]; then
+    ENROLL="$K2_NODE_ENROLL_CODE"
+fi
 [ "$(uname -s)" = "Linux" ] || die "this is the Linux installer; on a Mac use install-node-macos.sh"
 [ "$(id -u)" = "0" ] || die "run as root (sudo); root is needed once to create the node user and service.
   Over SSH: ssh host 'sudo -S -p \"\" $0 …' < password-file (the password never goes in argv)"
@@ -366,8 +379,9 @@ if [ -n "$ENROLL" ]; then
     echo "== enroll"
     force=()
     [ "$REENROLL" = "1" ] && force=(--force)
-    run_as_node "$BIN" enroll --controller "$CONTROLLER" --enroll "$ENROLL" --name "$NAME" \
-        --home "$HOME_DIR" ${LABELS[@]+"${LABELS[@]}"} ${force[@]+"${force[@]}"}
+    # The code goes to k2-node on stdin, never in its argv.
+    run_as_node "$BIN" enroll --controller "$CONTROLLER" --enroll - --name "$NAME" \
+        --home "$HOME_DIR" ${LABELS[@]+"${LABELS[@]}"} ${force[@]+"${force[@]}"} <<<"$ENROLL"
 fi
 # Enrolled now: let root pin the controller key it will check commands against.
 if [ -f "$HOME_DIR/state/controller.json" ]; then

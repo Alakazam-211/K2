@@ -15,6 +15,7 @@
 //! | `compute.rs` | E2 | `compute.admin-approve` (cut if late) |
 //! | `sew.rs` | Sew (Rosson 2026-10-28) | `sew.owner-handoff` |
 //! | `harness.rs` | 0.46.6 | `agent.harness-switch` (move the pinned chat to another harness) |
+//! | `vault.rs` | 0.46.6 | `vault.delivery` (let the agent read one of its secrets as file or env) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -31,6 +32,7 @@ pub(crate) mod harness;
 pub(crate) mod held;
 pub(crate) mod sew;
 pub(crate) mod switches;
+pub(crate) mod vault;
 
 /// The asking side, fixed at request time.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +110,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(compute::actions());
     out.extend(sew::actions());
     out.extend(harness::actions());
+    out.extend(vault::actions());
     out
 }
 
@@ -121,6 +124,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(compute::not_cardable());
     out.extend(sew::not_cardable());
     out.extend(harness::not_cardable());
+    out.extend(vault::not_cardable());
     out
 }
 

@@ -21545,7 +21545,8 @@ Agents:
 Owner / admin (refused for agents and inside K2 terminals, except where
 "Allow managing compute nodes" is on for that agent: see k2 compute manage):
   k2 compute preview on|off|status             turn the preview on for this server (owner)
-  k2 compute node add <name> [--url URL]       mint a 10-minute enroll code
+  k2 compute node add <name> [--url URL] [--json]   mint a 10-minute enroll code (CODE.FP);
+                   --json: {code, expiresAt, name, controller} for scripts
   k2 compute node confirm <name> <code>        the 6 digits the node shows
   k2 compute node remove <name>                k2 compute node rename <old> <new>
   k2 compute node retire <name>                drain, then remove once its jobs end
@@ -21563,7 +21564,8 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    password); the new server's owner then confirms the SAS.
                    Needs the node's remote-admin level `full`; on a node set
                    to `policy`, add servers at the machine instead:
-                   sudo k2-node servers add --url URL --code CODE.FP
+                   sudo k2-node servers add --url URL --code - < code-file
+                   (--code - here too: the code on stdin, never in argv)
   k2 compute node servers <node> approve|deny <request>   (= node admin approve/deny)
   k2 compute node servers <node> limits <server> [--weight N] key=value…
                    narrowing at once, widening (a higher weight too) waits
@@ -22140,11 +22142,16 @@ elif verb == "servers":
 elif verb == "enroll":
     print("Enroll code for %s (expires in 10 minutes):" % v["name"])
     print("  %s" % v["enroll"])
-    print("On the node machine, as an admin:")
+    print("Keep it off command lines (ps shows them to every user): put it in a file only you")
+    print("can read, or in the vault (k2 vault set NAME --kind generic --delivery file), and pipe it in.")
+    print("On the node machine, as an admin (code-file holds the code):")
     print("  Linux: %s" % v["install"]["linux"])
     print("  macOS: %s" % v["install"]["macos"])
+    if v["install"].get("servers"):
+        print("  Already a node for another K2 server: %s" % v["install"]["servers"])
     print("The node prints a 6-digit code. Check it, then here:")
     print("  %s" % v["confirm"])
+    print("Scripts: k2 compute node add %s --json prints {code, expiresAt, name, controller}." % v["name"])
 else:
     print(json.dumps(v, indent=2))
 '
@@ -23237,17 +23244,26 @@ cmd_compute_node() {
     local body
     case "$sub" in
         add)
-            local name="" url=""
+            local name="" url="" add_json=0
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --url) url="${2:-}"; shift 2 ;;
+                    --json) add_json=1; shift ;;
                     *) name="$1"; shift ;;
                 esac
             done
-            [ -n "$name" ] || { echo "usage: k2 compute node add <name> [--url URL]" >&2; exit 2; }
+            [ -n "$name" ] || { echo "usage: k2 compute node add <name> [--url URL] [--json]" >&2; exit 2; }
             body="$(_compute_json K2_CJ_name="$name" K2_CJ_url="$url")"
             _compute_call POST /cli/compute/nodes/enroll-code "$body" tcp
-            _compute_render enroll
+            if [ "$add_json" = "1" ]; then
+                # One stable object for scripts (2026-10-28): the CODE.FP
+                # string k2-node takes, its expiry, the node and controller.
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys
+v=json.load(sys.stdin)
+print(json.dumps({"code": v["enroll"], "expiresAt": v["expiresAt"], "name": v["name"], "controller": v["controllerUrl"]}))'
+            else
+                _compute_render enroll
+            fi
             ;;
         confirm)
             [ $# -ge 2 ] || { echo "usage: k2 compute node confirm <name> <6-digit code>" >&2; exit 2; }
@@ -23487,10 +23503,18 @@ cmd_compute_node_servers() {
                     --gate) pairs+=("gate=true" "top_class=\"gate\""); shift ;;
                     --exclusive) pairs+=("exclusive=true"); shift ;;
                     --json) shift ;;
-                    *) echo "usage: k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team] [--for 7d|none] [limits…] (unknown '$1')" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute node servers <node> add --url URL --code -|CODE.FP [--trust own|team] [--for 7d|none] [limits…] (unknown '$1')" >&2; exit 2 ;;
                 esac
             done
-            [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code CODE.FP [--trust own|team] [--for 7d|none]" >&2; exit 2; }
+            # The code off argv (2026-10-28): --code - reads one line from
+            # stdin; no --code at all takes $K2_NODE_ENROLL_CODE.
+            if [ "$code" = "-" ]; then
+                IFS= read -r code || true
+                code="${code%$'\r'}"
+            elif [ -z "$code" ] && [ -n "${K2_NODE_ENROLL_CODE:-}" ]; then
+                code="$K2_NODE_ENROLL_CODE"
+            fi
+            [ -n "$url" ] && [ -n "$code" ] || { echo "usage: k2 compute node servers <node> add --url URL --code - < code-file (or K2_NODE_ENROLL_CODE) [--trust own|team] [--for 7d|none]" >&2; exit 2; }
             local for_n=""
             case "$forv" in
                 "") for_n="" ;;
@@ -26797,6 +26821,9 @@ k2 vault — secrets for agents, without showing them the value
   k2 vault requests                        Thread secret cards (pending / set / declined)
   k2 vault presets                         known key formats (Stripe, OpenAI, Anthropic, …)
   k2 vault env-file --secret NAME [--ttl 60]   a short-lived 0600 file for docker/podman --env-file
+  k2 vault file --secret NAME [--ttl 60]   a short-lived 0600 file holding one secret delivered to you
+                                           as file (or env): pass the file, never the value
+                                           (tool --code - < "$(k2 vault file --secret NAME)")
   k2 vault sync                            files granted since this session started, into $K2_SECRETS_DIR now
   k2 vault import .env [--scope <s>] [--remove-original]   move a .env in; writes .env.k2 (references)
   k2 vault service <service> [clean|legacy] [--env-file .env.k2]   a published service's environment
@@ -27278,6 +27305,15 @@ same secret makes a new version. A secret a person gave needs a person
 to send it to another server. Server-wide secrets aren't sent (the owner
 shares them with k2 vault grant).
 
+The copy keeps the sender's delivery, at most env and never api: fetch
+with sites stays fetch (k2 vault fetch), fetch with no sites lands as file,
+file stays file, env stays env. A file copy: k2 vault file --secret NAME
+prints a 0600 path to hand a tool on stdin, never the value on a command
+line. k2 vault incoming shows how each one reached you. --replace takes
+the incoming delivery (a wider one needs an Owner or Admin). --ttl is kept
+on the other side: the copy (and a pending card) ends that long after it
+was sent.
+
 Exit codes: 0 landed · 3 a person must act (pending, held, declined, not
 connected, not allowed) · 2 bad request or the peer can't (peer_too_old,
 federation_off, never_sendable, send_by_name_only) · 4 no such secret or
@@ -27456,6 +27492,10 @@ print(json.dumps(o))' "$id" "$verb" "$as_n" "$replace" "$always")"
 import json, sys
 v = json.load(sys.stdin); d = v.get("delivery") or {}
 print("%s %s from %s (%s)%s" % (d.get("status"), d.get("landedName") or d.get("name"), d.get("peer"), d.get("deliveryId"), (" → " + v["ref"]) if v.get("ref") else ""))
+m = v.get("secret") or {}
+if m:
+    print("delivered to the agent as %s (at most %s)%s" % (m.get("delivery"), m.get("ceiling"), (", until " + m["expiresAt"]) if m.get("expiresAt") else ""))
+    print("it uses it with: %s" % m.get("use"))
 if v.get("alwaysAdded"): print("always accepting from " + v["alwaysAdded"] + " now")'
                 exit 0
             fi
@@ -27477,7 +27517,14 @@ for d in items:
         extra = "  (k2 vault incoming accept %s — a person, from their own terminal)" % d.get("deliveryId")
     if d.get("ref"): extra = "  " + d["ref"]
     print("%-22s %-10s %-28s %-24s %s%s" % (d.get("landedName") or d.get("name"), d.get("status"), who, d.get("createdAt") or "", d.get("deliveryId"), extra))
-    if d.get("note"): print("    note: %s" % d["note"])' "$sub"
+    if d.get("note"): print("    note: %s" % d["note"])
+    if sub == "incoming":
+        m = d.get("secret")
+        if m:
+            print("    yours as %s%s; use: %s" % (m.get("delivery"), (" until " + m["expiresAt"]) if m.get("expiresAt") else "", m.get("use")))
+        elif d.get("status") == "pending" and d.get("landsAs"):
+            la = d["landsAs"]
+            print("    lands as %s (at most %s)%s" % (la.get("delivery"), la.get("ceiling"), (", kept until " + la["expiresAt"]) if la.get("expiresAt") else ""))' "$sub"
             ;;
         ask)
             local to_a="${pos[0]:-}" aname="${pos[1]:-}"
@@ -27705,6 +27752,10 @@ agent (ssh keys): $SSH_AUTH_SOCK, ssh and git sign, nobody sees the key;
 file: $K2_SECRETS_DIR/NAME; env: $NAME; api: k2 vault get NAME. Agent,
 file, env and api arrive in new sessions. No --env-name or --file-name
 here: names live on grants (k2 vault grant --help).
+An agent widens only secrets its own workspace created; for one a person
+gave it or another agent handed it: vault_owner_confirm_required (exit 3).
+With permission cards on, that refusal ends with the line to ask with:
+k2 permission request vault.delivery secret=NAME delivery=file|env.
 
 Example: k2 vault delivery DEPLOY_KEY agent
 EOF
@@ -27841,8 +27892,27 @@ From a K2 terminal: a short-lived 0600 file of NAME=value lines for
 docker/podman --env-file, in a memory-backed folder. Removed after --ttl
 seconds (default 60, 5 to 3600) or with --done. Each secret needs env
 delivery for you; a value with a line break is refused (use file delivery).
+One value for a tool's stdin or a file flag: k2 vault file --secret NAME.
 
 Example: docker run --env-file "$(k2 vault env-file --secret DATABASE_URL)" myapp
+EOF
+            ;;
+        file) cat <<'EOF'
+k2 vault file --secret NAME [--ttl <secs>] [--json]
+k2 vault file --done <path>
+
+From a K2 terminal: the value of NAME, as is, in a short-lived 0600 file
+in a memory-backed folder; prints the path. For a secret delivered to you
+as a file (or env), e.g. one another agent handed you: a tool reads it
+from the file or its stdin, so the value never goes on a command line
+(ps shows command lines to every user) or into your transcript.
+Removed after --ttl seconds (default 60, 5 to 3600) or with --done; a
+`< file` redirect opens it at once, so a sudo prompt after that is fine.
+Fetch-only secrets are refused (use k2 vault fetch); the refusal says who
+can widen it.
+
+Example: sudo k2-node servers add --url URL --code - < "$(k2 vault file --secret ENROLL_CODE)"
+Example: some-cli login --token-stdin < "$(k2 vault file --secret API_TOKEN)"
 EOF
             ;;
         sync) cat <<'EOF'
@@ -29313,6 +29383,23 @@ if sys.argv[2]: o["ttlSecs"]=int(sys.argv[2])
 o["secrets"]=[x for x in sys.argv[3:] if x]
 print(json.dumps(o))' "$done_path" "$ttl" "${use_secrets[@]+"${use_secrets[@]}"}")"
             _vault_call POST env-file "$ej"
+            if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
+            ;;
+        file)
+            # 2026-10-28: one secret delivered as file (or env), as a 0600 file.
+            local fsecret="${use_secrets[0]:-$name}"
+            [ "${#use_secrets[@]}" -le 1 ] || { echo "usage: k2 vault file --secret NAME [--ttl <secs>]  (one secret per file)" >&2; exit 2; }
+            [ -n "$fsecret" ] || [ -n "$done_path" ] || { echo "usage: k2 vault file --secret NAME [--ttl <secs>] | --done <path>" >&2; exit 2; }
+            case "$ttl" in ""|*[!0-9]*) [ -z "$ttl" ] || { echo "usage: --ttl <seconds>" >&2; exit 2; } ;; esac
+            local fj
+            fj="$(python3 -c 'import json,sys
+o={}
+if sys.argv[1]: o["done"]=sys.argv[1]
+if sys.argv[2]: o["ttlSecs"]=int(sys.argv[2])
+if sys.argv[3] and not sys.argv[1]: o["secret"]=sys.argv[3]
+print(json.dumps(o))' "$done_path" "$ttl" "$fsecret")"
+            _vault_call POST file "$fj"
             if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit 0; fi
             printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("path") or ("removed " + str(v.get("removed"))))'
             ;;
@@ -41888,8 +41975,9 @@ HOW YOU GET A SECRET (delivery)
           Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC
           with a timestamp). Same command.
   file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
-          You CAN read it — so can anything you run. Opt-in. Granted
-          while you run: it arrives within a minute (k2 vault sync: now).
+          You (and anything you run) CAN read it; opt-in. Granted while
+          you run: it arrives within a minute (k2 vault sync: now). A copy
+          now: k2 vault file --secret NAME (a 0600 path; give tools that).
   env     $NAME in new sessions. You can read it. Needs a respawn.
   api     k2 vault get NAME prints it into your transcript. Rare.
   agent   ssh keys: $SSH_AUTH_SOCK in new sessions; ssh and git sign with
@@ -41964,8 +42052,8 @@ GIVING A SECRET TO ANOTHER AGENT
   same-named secret is never overwritten; re-sending yours makes a new
   version. A secret a person gave you needs a person to send it to
   another server. Server-wide secrets aren't sent (the owner shares them
-  with k2 vault grant). The copy you get is fetch, agent or file, never api,
-  and you can't widen it: use it with k2 vault fetch --secret NAME.
+  with k2 vault grant). Your copy keeps the sender's delivery and --ttl (at
+  most env; no sites: file, read with k2 vault file); only a person widens it.
   Exit 3 = a person must act (don't retry); 2 = the other server can't
   (peer_too_old); 4 = no such secret or agent. Every step is logged.
 

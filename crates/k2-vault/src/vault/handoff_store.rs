@@ -477,7 +477,8 @@ impl LocalVault {
 
     // ── receive (land or pend) ──────────────────────────────────────
 
-    fn landing_request(&self, inc_item: &HandoffItem, ws: &str, name: &str, delivery_id: &str, label: &str) -> Result<PutRequest> {
+    /// `sent`: when the delivery arrived here (`--ttl` counts from then).
+    fn landing_request(&self, inc_item: &HandoffItem, ws: &str, name: &str, delivery_id: &str, label: &str, sent: DateTime<Utc>) -> Result<PutRequest> {
         let kind = inc_item.kind()?;
         let (d, c) = inc_item.landing_delivery();
         let mut req = PutRequest::new(Namespace::User, Scope::workspace(ws), name, kind);
@@ -494,7 +495,7 @@ impl LocalVault {
             format!("From {label}: {}", inc_item.description.trim())
         };
         req.description = desc.chars().take(500).collect();
-        req.expires_at = inc_item.ttl_secs.map(|t| ts(now() + chrono::Duration::seconds(t)));
+        req.expires_at = inc_item.copy_expires_at(sent).map(ts);
         req.mode = PutMode::Create;
         req.human_given_override = Some(false);
         Ok(req)
@@ -572,6 +573,7 @@ impl LocalVault {
         };
         let consumer = format!("ws:{}", inc.workspace_id);
         let actor_label = format!("handoff:{}", inc.peer_addr);
+        let sent = now();
         let mut rec = HandoffRecord {
             delivery_id: inc.delivery_id.clone(),
             direction: "in".into(),
@@ -591,7 +593,7 @@ impl LocalVault {
             version: None,
             reason: None,
             card: None,
-            created_at: ts(now()),
+            created_at: ts(sent),
             decided_at: None,
             decided_by: None,
             expires_at: None,
@@ -616,7 +618,9 @@ impl LocalVault {
                 }
                 rec.status = "pending".into();
                 rec.reason = Some(reason.into());
-                rec.expires_at = Some(ts(now() + chrono::Duration::days(h::PENDING_DAYS)));
+                // Bug 3 (2026-10-28): a pending copy never outlives the
+                // sender's --ttl (the card showed "expires in 7 days").
+                rec.expires_at = Some(ts(inc.item.pending_expires_at(sent)));
                 let r2 = rec.clone();
                 self.mutate(false, |tx, keys| {
                     self.handoff_insert(tx, keys, &r2)?;
@@ -627,11 +631,16 @@ impl LocalVault {
             }
             Plan::Create | Plan::Rotate => {
                 let rotate = matches!(plan, Plan::Rotate);
-                let mut req = self.landing_request(&inc.item, &inc.workspace_id, &landed_name, &inc.delivery_id, &inc.sender_label)?;
+                let mut req = self.landing_request(&inc.item, &inc.workspace_id, &landed_name, &inc.delivery_id, &inc.sender_label, sent)?;
                 if rotate {
                     req.mode = PutMode::Rotate;
                 }
-                let out = self.put_inner(req, value, &Actor::System(h::SYSTEM_ACTOR.into()))?;
+                let mut out = self.put_inner(req, value, &Actor::System(h::SYSTEM_ACTOR.into()))?;
+                if rotate {
+                    // A same-sender re-send: its --ttl applies; the copy
+                    // keeps the delivery it has (a person may have set it).
+                    out.meta = self.apply_landing_policy(&out.meta, &inc.item, sent, None)?;
+                }
                 rec.status = "landed".into();
                 rec.secret_id = Some(out.meta.id.clone());
                 rec.version = Some(out.meta.latest_version);
@@ -705,24 +714,31 @@ impl LocalVault {
                     self.handoff_value_read(&conn, &keys, &r.delivery_id)?
                 };
                 let scope = Scope::workspace(r.local_workspace_id.clone());
-                let exists = {
+                let existing = {
                     let keys = self.keys.read();
                     let conn = self.conn.lock();
                     match self.find_row(&conn, &keys, &Selector::user(scope.clone(), name.clone())) {
-                        Ok(_) => true,
-                        Err(e) if e.status == 404 => false,
+                        Ok(row) => Some(row.meta),
+                        Err(e) if e.status == 404 => None,
                         Err(e) => return Err(e),
                     }
                 };
                 let label = r.peer_addr.clone();
-                let mut req = self.landing_request(&r.item, &r.local_workspace_id, &name, &r.delivery_id, &label)?;
-                let put_actor = if exists {
+                // `--ttl` counts from when the delivery arrived, not from
+                // the click.
+                let sent = parse_ts(&r.created_at).unwrap_or_else(now);
+                let mut req = self.landing_request(&r.item, &r.local_workspace_id, &name, &r.delivery_id, &label, sent)?;
+                let put_actor = if let Some(old) = &existing {
                     if !d.replace {
                         return Err(VaultError::conflict(
                             "name_taken",
                             format!("this workspace already has {name}; accept it as another name, or replace the current one"),
                         ));
                     }
+                    // Bug 2 (2026-10-28): Replace takes the incoming delivery,
+                    // so check now, before the value changes, that this
+                    // person may widen the current one where it would.
+                    self.check_landing_widen(old, &r.item, actor)?;
                     req.mode = PutMode::Rotate;
                     Actor::System(h::SYSTEM_ACTOR.into())
                 } else if r.item.needs_person() {
@@ -732,7 +748,10 @@ impl LocalVault {
                 } else {
                     Actor::System(h::SYSTEM_ACTOR.into())
                 };
-                let out = self.put_inner(req, value, &put_actor)?;
+                let mut out = self.put_inner(req, value, &put_actor)?;
+                if existing.is_some() {
+                    out.meta = self.apply_landing_policy(&out.meta, &r.item, sent, Some(actor))?;
+                }
                 r.status = "landed".into();
                 r.landed_name = Some(name);
                 r.secret_id = Some(out.meta.id.clone());
@@ -752,6 +771,102 @@ impl LocalVault {
             }
             _ => Err(VaultError::bad_request("bad_action", "accept or decline")),
         }
+    }
+
+    // ── a new version over an existing secret (bugs 2 and 3) ────────
+
+    /// The incoming copy's policy as a patch on `old`: its delivery and
+    /// ceiling ([`HandoffItem::landing_delivery`]), its sites, and its
+    /// injection when it brings one. `true` when it loosens `old` (wider
+    /// sites, a higher delivery or ceiling, another injection).
+    fn landing_patch(&self, old: &SecretMeta, item: &HandoffItem) -> Result<(PolicyPatch, bool)> {
+        let (d, c) = item.landing_delivery();
+        let new_hosts = hosts::normalise_list(&item.hosts, true)?;
+        let inject = item.inject.clone().filter(|i| old.inject.as_ref() != Some(i));
+        let loosens = hosts::widens(&old.hosts, &new_hosts)
+            || d.level() > old.default_delivery.level()
+            || c.level() > old.delivery_ceiling.level()
+            || inject.is_some();
+        // Sites only when they change (a system write can't restate a
+        // wildcard a person set; an unchanged list needs no write).
+        let hosts = (new_hosts != old.hosts).then(|| item.hosts.clone());
+        let patch = PolicyPatch {
+            hosts,
+            default_delivery: Some(d),
+            delivery_ceiling: Some(c),
+            inject,
+            ..Default::default()
+        };
+        Ok((patch, loosens))
+    }
+
+    /// Replace (a person's accept over an existing secret): where the
+    /// incoming delivery is wider than the current one, the person must be
+    /// allowed to widen it, exactly as `k2 vault delivery` asks (an Owner
+    /// or Admin; a Member gets `vault_admin_required`). Checked before the
+    /// value changes, so a refusal leaves everything as it was.
+    fn check_landing_widen(&self, old: &SecretMeta, item: &HandoffItem, actor: &Actor) -> Result<()> {
+        let (_, loosens) = self.landing_patch(old, item)?;
+        if !loosens {
+            return Ok(());
+        }
+        let keys = self.keys.read();
+        let conn = self.conn.lock();
+        let f = self.facts_for(&conn, &keys, old, actor)?;
+        policy::can_loosen(actor, &f).map_err(|e| {
+            let (d, c) = item.landing_delivery();
+            VaultError::new(
+                e.code,
+                e.status,
+                format!(
+                    "{} (replacing {} would change its delivery from {} (at most {}) to {} (at most {})); accept it as another name instead, or ask an Owner or Admin",
+                    e.hint, old.name, old.default_delivery, old.delivery_ceiling, d, c
+                ),
+            )
+        })
+    }
+
+    /// After a new version landed over `m`: the incoming delivery, sites
+    /// and injection apply, capped by the landing ceiling (never `api`),
+    /// and the sender's `--ttl` sets the expiry (counted from `sent`).
+    /// `person`: who chose Replace (a widening was checked already by
+    /// [`Self::check_landing_widen`]). `None` for an automatic same-sender
+    /// re-send: only its `--ttl` applies, and the copy keeps the delivery
+    /// and sites it has (its owner may have changed them since; a re-send
+    /// never reverts a person's choice, nor widens anything).
+    fn apply_landing_policy(&self, m: &SecretMeta, item: &HandoffItem, sent: DateTime<Utc>, person: Option<&Actor>) -> Result<SecretMeta> {
+        let (mut patch, loosens) = self.landing_patch(m, item)?;
+        let sel = Selector::Id(m.id.clone());
+        let mut meta = match (person, loosens) {
+            (None, _) => m.clone(),
+            (Some(_), false) => {
+                // A narrowing written by the system: a narrowed list that
+                // still holds a wildcard stays a person's to write.
+                if patch.hosts.as_ref().is_some_and(|hs| hs.iter().any(|x| x.contains('*'))) {
+                    patch.hosts = None;
+                }
+                self.set_policy_inner(&sel, patch, &Actor::System(h::SYSTEM_ACTOR.into()))?
+            }
+            (Some(person), true) => self.set_policy_inner(&sel, patch, person)?,
+        };
+        if let Some(x) = item.copy_expires_at(sent).map(ts) {
+            if meta.expires_at.as_deref() != Some(x.as_str()) {
+                let row = {
+                    let keys = self.keys.read();
+                    let conn = self.conn.lock();
+                    self.find_row(&conn, &keys, &sel)?
+                };
+                meta = row.meta.clone();
+                meta.expires_at = Some(x);
+                meta.updated_at = ts(now());
+                let (m2, ext) = (meta.clone(), row.external_ref.clone());
+                self.mutate(true, |tx, keys| {
+                    self.write_secret(tx, keys, &m2, &ext, false)?;
+                    Ok(((), vec![Entry::new("policy", &format!("system:{}", h::SYSTEM_ACTOR), "ok:ttl").secret(&m2.id, None)]))
+                })?;
+            }
+        }
+        Ok(meta)
     }
 
     fn handoff_expire(&self, mut r: HandoffRecord) -> Result<HandoffRecord> {

@@ -944,7 +944,10 @@ fn enroll_code(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::V
         crate::compute_manage::audit(m, "node-add", name, &[]);
         crate::compute_manage::owner_notice(m, "added", name);
     }
-    let args = format!("--controller {url} --enroll {enroll} --name {name}");
+    // The printed commands take the code on stdin (`--enroll -`, `--code
+    // -` from a file only the admin can read): in argv, `ps` shows it to
+    // every user on the node machine (2026-10-28).
+    let args = format!("--controller {url} --enroll - --name {name}");
     Ok(serde_json::json!({
         "name": name,
         "code": code,
@@ -953,9 +956,11 @@ fn enroll_code(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::V
         "expiresAt": entry.expires_at,
         "controllerUrl": url,
         "install": {
-            "linux": format!("sudo scripts/node/install-node-linux.sh --binary ./k2-node {args} --human \"$USER\""),
-            "macos": format!("sudo scripts/node/install-node-macos.sh --binary ./k2-node {args} --human \"$USER\""),
-            "enrollOnly": format!("k2-node enroll {args}"),
+            "linux": format!("sudo scripts/node/install-node-linux.sh --binary ./k2-node {args} --human \"$USER\" < code-file"),
+            "macos": format!("sudo scripts/node/install-node-macos.sh --binary ./k2-node {args} --human \"$USER\" < code-file"),
+            "enrollOnly": format!("k2-node enroll {args} < code-file"),
+            // A machine that is already a node for another K2 server.
+            "servers": format!("sudo k2-node servers add --url {url} --code - < code-file"),
         },
         "confirm": format!("k2 compute node confirm {name} <code shown on the node>"),
     }))

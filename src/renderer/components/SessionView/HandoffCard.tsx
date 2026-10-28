@@ -11,7 +11,7 @@
 import { useState, type JSX } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
-import { cardExpiryLabel, type OverlayHandoff } from './overlayThread'
+import { cardExpiryLabel, ttlWords, type OverlayHandoff } from './overlayThread'
 import { siteLabel } from './SecretCard'
 import {
   handoffKindWords,
@@ -121,6 +121,11 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide }: HandoffCa
         {expiry && (
           <div className={`text-[10px] ${muted}`} data-testid="thread-handoff-expiry">
             {expiry}
+          </div>
+        )}
+        {typeof handoff.ttlSecs === 'number' && handoff.ttlSecs > 0 && (
+          <div className={`text-[10px] ${muted}`} data-testid="thread-handoff-ttl">
+            the copy is kept {ttlWords(handoff.ttlSecs)} after it was sent, then destroyed
           </div>
         )}
       </div>

@@ -150,6 +150,9 @@ pub enum ParamKind {
     /// A compute node, by name: `compute.ci node=` (prd-compute-job-tiers-v1
     /// T13).
     Node,
+    /// A vault secret of the asking workspace, by name (never a value):
+    /// `vault.delivery secret=` (2026-10-28).
+    Secret,
 }
 
 /// One value an action takes (`key=value` on the CLI).

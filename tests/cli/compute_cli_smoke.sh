@@ -111,11 +111,15 @@ expect_has "preview status reads it back" "$(k2 compute preview status)" ": on"
 echo "== enroll =="
 out="$(k2 compute nodes)"
 expect_has "no nodes yet" "$out" "(no compute nodes"
-out="$(k2 compute node add mini --url "http://127.0.0.1:$PORT")"
-expect_has "enroll code printed" "$out" "Enroll code for mini"
-ENROLL="$(printf '%s\n' "$out" | sed -n '2p' | tr -d ' ')"
-[ -n "$ENROLL" ] || { bad "enroll string parsed"; exit 1; }
-enrolled="$("$NODE" enroll --controller "http://127.0.0.1:$PORT" --enroll "$ENROLL" --name mini --home "$NODE_HOME" --config-dir "$NODE_CFG")"
+# --json (2026-10-28): {code, expiresAt, name, controller}; the code goes to
+# k2-node on stdin from a 0600 file, never in its argv.
+out="$(k2 compute node add mini --url "http://127.0.0.1:$PORT" --json)"
+expect_eq "node add --json keys" "$(printf '%s' "$out" | python3 -c 'import json,sys; print(",".join(sorted(json.load(sys.stdin))))')" "code,controller,expiresAt,name"
+expect_eq "node add --json name" "$(printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["name"])')" "mini"
+ENROLL_FILE="$SANDBOX/enroll-code"
+(umask 077; printf '%s' "$out" | python3 -c 'import json,sys; print(json.load(sys.stdin)["code"])' > "$ENROLL_FILE")
+[ -s "$ENROLL_FILE" ] || { bad "enroll code from --json"; exit 1; }
+enrolled="$("$NODE" enroll --controller "http://127.0.0.1:$PORT" --enroll - --name mini --home "$NODE_HOME" --config-dir "$NODE_CFG" < "$ENROLL_FILE")"
 expect_has "node enrolled" "$enrolled" "Enrolled as mini (pending)"
 SAS="$(printf '%s\n' "$enrolled" | sed -n 's/.*Code: \([0-9]\{3\} [0-9]\{3\}\).*/\1/p')"
 out="$(k2 compute nodes)"

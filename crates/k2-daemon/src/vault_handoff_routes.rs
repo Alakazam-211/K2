@@ -482,16 +482,50 @@ pub(crate) fn send_answer(rec: &HandoffRecord, to: &str, cross: bool, reference:
 /// The stamp message the receiving agent gets (§6.5): built by the daemon
 /// from names, the reference and the (checked, redacted) note. This is the
 /// only text a handoff ever injects into a PTY.
-pub(crate) fn stamp_text(rec: &HandoffRecord, from_label: &str, reference: Option<&str>) -> String {
+///
+/// `landed`: the copy's delivery as stored (`None`: what the item lands
+/// as). The "Use:" line follows it (bug 1, 2026-10-28: a file copy was
+/// told to use `k2 vault fetch`).
+pub(crate) fn stamp_text(rec: &HandoffRecord, from_label: &str, reference: Option<&str>, landed: Option<k2_vault::Delivery>) -> String {
     let name = rec.landed_name.clone().unwrap_or_else(|| rec.name.clone());
     let note = if rec.note.is_empty() { String::new() } else { format!(" Note: \"{}\"", rec.note) };
     match rec.status.as_str() {
-        "landed" => format!(
-            "[k2 vault] {from_label} sent {name} → your vault ({}). Use: k2 vault fetch --secret {name} <url>.{note}",
-            reference.unwrap_or("k2 vault list")
-        ),
+        "landed" => {
+            let d = landed.unwrap_or_else(|| rec.item.landing_delivery().0);
+            format!(
+                "[k2 vault] {from_label} sent {name} → your vault ({}, delivered to you as {d}{}). Use: {}.{note}",
+                reference.unwrap_or("k2 vault list"),
+                expiry_words(rec.expires_at.as_deref()),
+                handoff::use_hint(d, &name)
+            )
+        }
         _ => format!("[k2 vault] {from_label} sent {name}. It waits for your owner to accept (k2 vault incoming).{note}"),
     }
+}
+
+/// `, until 2026-10-28T13:00:00Z` for a copy with an expiry (`--ttl`).
+fn expiry_words(expires_at: Option<&str>) -> String {
+    expires_at.map(|x| format!(", until {x}")).unwrap_or_default()
+}
+
+/// The landed copy's own meta (delivery, ceiling, expiry), when there is one.
+pub(crate) fn landed_meta(vault: &LocalVault, r: &HandoffRecord) -> Option<k2_vault::SecretMeta> {
+    r.secret_id
+        .as_ref()
+        .filter(|_| r.direction == "in" && r.status == "landed")
+        .and_then(|id| vault.meta(&Selector::Id(id.clone()), &Actor::System(handoff::SYSTEM_ACTOR.into())).ok())
+}
+
+/// What the receiving agent has: delivery, ceiling, expiry and how to use
+/// it (the accept answer, `k2 vault incoming`). Names only.
+pub(crate) fn landed_json(m: &k2_vault::SecretMeta) -> Value {
+    json!({
+        "name": m.name,
+        "delivery": m.default_delivery.as_str(),
+        "ceiling": m.delivery_ceiling.as_str(),
+        "expiresAt": m.expires_at,
+        "use": handoff::use_hint(m.default_delivery, &m.name),
+    })
 }
 
 /// After the receiving vault answered: the Thread card (pending) and the
@@ -535,6 +569,8 @@ pub(crate) fn after_receive(
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| d.timestamp()),
             workspace: target_id.to_string(),
+            // Bug 3: the card says how long the copy is kept (`--ttl`).
+            ttl_secs: rec.item.ttl(),
         };
         let body = format!("{from_label} sent {name}. Accept it in Settings → Vault → Incoming.");
         match crate::overlay_routes::post_handoff_card(target_path, from_label, &body, card) {
@@ -549,7 +585,8 @@ pub(crate) fn after_receive(
     if !knock {
         return;
     }
-    let text = stamp_text(rec, from_label, reference);
+    let landed = landed_meta(vault, rec).map(|m| m.default_delivery);
+    let text = stamp_text(rec, from_label, reference, landed);
     let wake = rec.status == "landed";
     let (resp, _) = crate::hire_routes::deliver_recorded(
         target_path,
@@ -587,12 +624,16 @@ fn workspace_param(c: &VaultCaller, params: &HashMap<String, String>) -> Result<
 }
 
 pub(crate) fn view(vault: &LocalVault, r: &HandoffRecord) -> Value {
-    let reference = r
-        .secret_id
-        .as_ref()
-        .filter(|_| r.direction == "in" && r.status == "landed")
-        .and_then(|id| vault.meta(&Selector::Id(id.clone()), &Actor::System(handoff::SYSTEM_ACTOR.into())).ok())
-        .and_then(|m| crate::vault::display_ref(&m));
+    let landed = landed_meta(vault, r);
+    let reference = landed.as_ref().and_then(crate::vault::display_ref);
+    // A pending copy says how it would land: its delivery (and ceiling)
+    // and when it would expire (`--ttl`, counted from when it arrived).
+    let (d, c) = r.item.landing_delivery();
+    let copy_expires = chrono::DateTime::parse_from_rfc3339(&r.created_at)
+        .ok()
+        .and_then(|t| r.item.copy_expires_at(t.with_timezone(&chrono::Utc)))
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let lands_as = json!({ "delivery": d.as_str(), "ceiling": c.as_str(), "expiresAt": copy_expires });
     json!({
         "deliveryId": r.delivery_id,
         "direction": r.direction,
@@ -612,6 +653,9 @@ pub(crate) fn view(vault: &LocalVault, r: &HandoffRecord) -> Value {
         "decidedBy": r.decided_by,
         "expiresAt": r.expires_at,
         "ref": reference,
+        "ttlSecs": r.item.ttl(),
+        "landsAs": lands_as,
+        "secret": landed.as_ref().map(landed_json),
     })
 }
 
@@ -708,18 +752,30 @@ fn decide(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &str) -> Re
         }
     }
     if r.status == "landed" {
-        // Knock the receiving agent: its owner said yes.
+        // Knock the receiving agent: its owner said yes. The "Use:" line
+        // follows the copy's real delivery (bug 1).
         if let Some(path) = crate::vault::workspace_path(&r.local_workspace_id) {
+            let d = got.meta.as_ref().map(|m| m.default_delivery).unwrap_or_else(|| r.item.landing_delivery().0);
             let text = format!(
-                "[k2 vault] your owner accepted {landed} from {} → your vault ({}). Use: k2 vault fetch --secret {landed} <url>.",
+                "[k2 vault] your owner accepted {landed} from {} → your vault ({}, delivered to you as {d}{}). Use: {}.",
                 r.peer_addr,
-                reference.as_deref().unwrap_or("k2 vault list")
+                reference.as_deref().unwrap_or("k2 vault list"),
+                expiry_words(got.meta.as_ref().and_then(|m| m.expires_at.as_deref())),
+                handoff::use_hint(d, &landed)
             );
             let sender = crate::hire_routes::Sender { workspace_id: None, via: "owner", actor: stamp.clone(), on_behalf_of: None };
             let _ = crate::hire_routes::deliver_recorded(&path, &text, "k2 vault", "", true, crate::workspace_msg::DEFAULT_WAKE_TIMEOUT, "msg", &sender);
         }
     }
-    Ok(json!({ "ok": true, "delivery": view(vault, r), "ref": reference, "alwaysAdded": always_added }))
+    // Bug 2: the accept answer shows the copy's effective delivery,
+    // ceiling and expiry (after a Replace too).
+    Ok(json!({
+        "ok": true,
+        "delivery": view(vault, r),
+        "ref": reference,
+        "alwaysAdded": always_added,
+        "secret": got.meta.as_ref().map(landed_json),
+    }))
 }
 
 // ── accept-from ─────────────────────────────────────────────────────

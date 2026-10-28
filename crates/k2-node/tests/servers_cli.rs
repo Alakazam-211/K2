@@ -111,3 +111,71 @@ fn servers_list_pause_resume_and_root_only_verbs() {
     assert!(!ok && err.contains("sudo"), "prune writes root's records too: {err}");
     assert_eq!(servers::read_file(&cfg).unwrap().unwrap().entry(1).unwrap().state, ShareState::Active);
 }
+
+/// `k2-node servers add` with `--code -` / `$K2_NODE_ENROLL_CODE`
+/// (2026-10-28): the enroll code never rides in argv, where `ps` shows it to
+/// every user. The child blocks reading stdin while this test reads its
+/// argv the way any other user could (`ps -o args=`).
+#[test]
+fn servers_add_takes_the_code_on_stdin_or_env_and_never_in_argv() {
+    use std::io::Write as _;
+    use std::process::Stdio;
+
+    const CODE: &str = "ABCDE-FGHJK.0123456789abcdef";
+    let d = k2_node::util::temp_dir("servers-code");
+    let (home, cfg) = (d.join("home"), d.join("cfg"));
+    std::fs::create_dir_all(&cfg).unwrap();
+    let (h, c) = (home.to_str().unwrap(), cfg.to_str().unwrap());
+    let args = ["servers", "add", "--url", "https://b.k2.dev", "--code", "-", "--home", h, "--config-dir", c];
+    assert!(!args.iter().any(|a| a.contains("ABCDE")), "the argv this test spawns has no code");
+
+    let spawn = |args: &[&str], env: Option<&str>| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_k2-node"));
+        cmd.args(args).env_clear().env("PATH", "/usr/bin:/bin").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        if let Some(v) = env {
+            cmd.env("K2_NODE_ENROLL_CODE", v);
+        }
+        cmd.spawn().expect("spawn k2-node")
+    };
+    let finish = |mut child: std::process::Child, stdin: &str| {
+        {
+            let mut i = child.stdin.take().expect("stdin");
+            i.write_all(stdin.as_bytes()).expect("write stdin");
+        }
+        let o = child.wait_with_output().expect("wait");
+        (o.status.success(), String::from_utf8_lossy(&o.stdout).into_owned(), String::from_utf8_lossy(&o.stderr).into_owned())
+    };
+    let argv_of = |pid: u32| -> String {
+        let ps = Command::new("ps").args(["-ww", "-o", "args=", "-p", &pid.to_string()]).output().expect("ps");
+        String::from_utf8_lossy(&ps.stdout).into_owned()
+    };
+
+    // stdin: while it waits for the code, its argv shows no code; then the
+    // code is accepted (the next refusal is sudo's) and never echoed.
+    let child = spawn(&args, None);
+    let shown = argv_of(child.id());
+    assert!(shown.contains("servers add") && shown.contains("--code -"), "ps sees the waiting process: {shown:?}");
+    assert!(!shown.contains("ABCDE") && !shown.contains("0123456789abcdef"), "the code is not in argv: {shown:?}");
+    let (ok, out, err) = finish(child, &format!("{CODE}\n"));
+    assert!(!ok && err.contains("sudo"), "the code from stdin parsed; sudo is the next step: {err}");
+    assert!(!err.contains(CODE) && !out.contains(CODE), "never echoed: {out} {err}");
+
+    // A malformed code on stdin is named as malformed, not echoed.
+    let (ok, _, err) = finish(spawn(&args, None), "not-a-code-77\n");
+    assert!(!ok && err.contains("--code must look like"), "{err}");
+    assert!(!err.contains("not-a-code-77"), "{err}");
+    // Empty stdin says how to pipe it.
+    let (ok, _, err) = finish(spawn(&args, None), "");
+    assert!(!ok && err.contains("stdin was empty"), "{err}");
+
+    // The environment form: no --code at all.
+    let no_flag = ["servers", "add", "--url", "https://b.k2.dev", "--home", h, "--config-dir", c];
+    let child = spawn(&no_flag, Some(CODE));
+    assert!(!argv_of(child.id()).contains("ABCDE"), "the env form isn't in argv either");
+    let (ok, _, err) = finish(child, "");
+    assert!(!ok && err.contains("sudo"), "the code from K2_NODE_ENROLL_CODE parsed: {err}");
+    assert!(!err.contains(CODE), "{err}");
+    // Neither: the error names both safe forms.
+    let (ok, _, err) = finish(spawn(&no_flag, None), "");
+    assert!(!ok && err.contains("--code - < code-file") && err.contains("K2_NODE_ENROLL_CODE"), "{err}");
+}

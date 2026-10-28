@@ -489,6 +489,10 @@ pub struct HandoffCardBody {
     /// The receiving workspace's id.
     #[serde(default)]
     pub workspace: String,
+    /// The sender's `--ttl` (seconds): the copy is kept that long after it
+    /// was sent, then destroyed. Absent: no expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_secs: Option<i64>,
 }
 
 /// Provenance of an imported Thread line (prd-clone-carries-threads-and-

@@ -43,6 +43,19 @@ function view(status: string, ref: string | null = null) {
 afterEach(() => cleanup())
 
 describe('HandoffCard', () => {
+  it("shows the sender's --ttl (2026-10-28: a 1-hour send read 'expires in 7 days')", () => {
+    const now = 1_800_000_000
+    const h = coerceHandoff({ ...BASE, expiresAt: now + 3600, ttlSecs: 3600 })
+    expect(h?.ttlSecs).toBe(3600)
+    render(<HandoffCard handoff={h as OverlayHandoff} nowSec={now} onDecide={async () => {}} />)
+    expect(screen.getByTestId('thread-handoff-expiry').textContent).toBe('expires in 1 hour')
+    expect(screen.getByTestId('thread-handoff-ttl').textContent).toContain('kept 1 hour after it was sent')
+    cleanup()
+    render(<HandoffCard handoff={BASE} onDecide={async () => {}} />)
+    expect(screen.queryByTestId('thread-handoff-ttl')).toBeNull()
+    expect(coerceHandoff({ ...BASE, ttlSecs: 'x' })?.ttlSecs).toBeUndefined()
+  })
+
   it('names the sender, host, secret, kind, site and note, and has no value field', () => {
     const { container } = render(<HandoffCard handoff={BASE} onDecide={async () => {}} />)
     const header = screen.getByTestId('thread-handoff-header').textContent ?? ''

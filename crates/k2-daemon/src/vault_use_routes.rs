@@ -27,6 +27,9 @@ use crate::vault_routes::{refuse, selector, Sel};
 
 pub const FETCH: &str = "/cli/vault/fetch";
 pub const ENV_FILE: &str = "/cli/vault/env-file";
+/// `k2 vault file --secret NAME` (2026-10-28): a short-lived 0600 file
+/// holding one secret the caller is delivered as file (or env).
+pub const FILE: &str = "/cli/vault/file";
 pub const IMPORT: &str = "/cli/vault/import";
 /// GET: a published service's env mode and bindings; POST: change them.
 pub const SERVICE: &str = "/cli/vault/service";
@@ -43,9 +46,9 @@ pub const BACKUP: &str = "/cli/vault/backup";
 pub const BACKUP_RECIPIENT: &str = "/cli/vault/backup/recipient";
 
 /// Routes this module serves.
-pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, SERVICE, RECIPIENT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
+pub const ROUTES: &[&str] = &[FETCH, ENV_FILE, FILE, IMPORT, SERVICE, RECIPIENT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
 /// POST-only routes among them (`service` serves both).
-pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, IMPORT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
+pub const POST_ROUTES: &[&str] = &[FETCH, ENV_FILE, FILE, IMPORT, CARRY_EXPORT, CARRY_IMPORT, BACKUP, BACKUP_RECIPIENT, SYNC];
 
 pub fn is_route(path: &str) -> bool {
     ROUTES.contains(&path)
@@ -67,6 +70,7 @@ pub fn handle(
     let r = match path {
         FETCH => fetch(vault, c, body),
         ENV_FILE => env_file(vault, c, body),
+        FILE => use_file(vault, c, body),
         SYNC => sync(vault, c),
         IMPORT => import(vault, c, body),
         SERVICE if body.is_empty() => service_get(vault, c, params),
@@ -309,7 +313,7 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     let mut lines = String::new();
     for n in &b.secrets {
         let sel = selector(c, &Sel { name: Some(n.clone()), ..Default::default() })?;
-        let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| env_file_refusal(vault, &who, n, e))?;
+        let r = vault.resolve(&sel, Use::Env, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::Env))?;
         k2_vault::delivery::validate_env_file_value(r.value.expose())?;
         let name = r.env_name.clone().unwrap_or_else(|| k2_vault::delivery::default_env_name(&r.meta.name));
         k2_vault::delivery::validate_env_name(&name)?;
@@ -330,32 +334,102 @@ fn env_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Val
     Ok(json!({ "ok": true, "path": p.display().to_string(), "ttlSecs": ttl }))
 }
 
-/// Papercut 8: an env-file refused because the secret reaches this session
-/// as a FILE (or an ssh key) says where it is instead of a bare
-/// `delivery_not_granted`.
-fn env_file_refusal(vault: &LocalVault, who: &Requester, name: &str, e: VaultError) -> VaultError {
+/// Papercut 8 and the 2026-10-28 handoff fixes: a `delivery_not_granted`
+/// from env-file or file says how the secret DOES reach this session and
+/// what to run, instead of a bare refusal.
+///
+/// - a file secret asked for as env: `k2 vault file --secret NAME` (and
+///   where the spawn copy is);
+/// - an ssh key served by the agent: ssh/git sign with it;
+/// - a fetch-only secret: `k2 vault fetch`, or the owner widens it (`k2
+///   vault delivery NAME file|env`, or a card: `k2 permission request
+///   vault.delivery …`).
+fn use_refusal(vault: &LocalVault, c: &VaultCaller, sel: &k2_vault::Selector, who: &Requester, name: &str, e: VaultError, want: k2_vault::Delivery) -> VaultError {
+    use k2_vault::Delivery;
     if e.code != "delivery_not_granted" {
         return e;
     }
-    let Ok(items) = vault.spawn_items(who) else { return e };
-    let Some(it) = items.into_iter().find(|i| i.name == name) else { return e };
-    match it.delivery {
-        k2_vault::Delivery::File => {
-            let f = it.file_name.unwrap_or(it.name);
-            VaultError::forbidden(
-                "delivery_not_granted",
-                format!(
-                    "{name} is delivered to you as a file, not env: read $K2_SECRETS_DIR/{f}. Not there yet? k2 vault sync (a session with no $K2_SECRETS_DIR: {})",
-                    crate::vault::spawn::RESTART_TO_RECEIVE
-                ),
-            )
+    let item = vault.spawn_items(who).ok().and_then(|items| items.into_iter().find(|i| i.name == name));
+    let refuse = |hint: String| VaultError::forbidden("delivery_not_granted", hint);
+    match item.as_ref().map(|i| i.delivery) {
+        Some(Delivery::File) => {
+            let f = item.as_ref().and_then(|i| i.file_name.clone()).unwrap_or_else(|| name.to_string());
+            return refuse(format!(
+                "{name} is delivered to you as a file, not {want}: run k2 vault file --secret {name} (it prints the path of a short-lived 0600 copy; pass the file, e.g. tool --code - < \"$(k2 vault file --secret {name})\"), or read $K2_SECRETS_DIR/{f}. Not there yet? k2 vault sync (a session with no $K2_SECRETS_DIR: {})",
+                crate::vault::spawn::RESTART_TO_RECEIVE
+            ));
         }
-        k2_vault::Delivery::Agent => VaultError::forbidden(
-            "delivery_not_granted",
-            format!("{name} is an ssh key served on $SSH_AUTH_SOCK (ssh and git sign with it), never as env"),
-        ),
-        _ => e,
+        Some(Delivery::Agent) => {
+            return refuse(format!("{name} is an ssh key served on $SSH_AUTH_SOCK (ssh and git sign with it), never as {want}"));
+        }
+        _ => {}
     }
+    // Not readable at all here: fetch only (or a delivery below what was
+    // asked). Say how to use it, and who can widen it.
+    let Ok(m) = vault.meta(sel, &c.actor) else { return e };
+    let how = if matches!(m.default_delivery, Delivery::Fetch | Delivery::Proxy) && !m.hosts.is_empty() {
+        format!("it is delivered to you for fetch only: k2 vault fetch --secret {name} <url> (K2 adds it; you never see it). ")
+    } else {
+        format!("it is delivered to you as {} only. ", m.default_delivery)
+    };
+    refuse(format!(
+        "{name}: {how}To read it as {want}, its delivery must be widened by a person: k2 vault delivery {name} {want} (Settings → Vault); an agent may only widen secrets its own workspace created"
+    ))
+}
+
+// ── file (2026-10-28) ──────────────────────────────────────────────
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileBody {
+    secret: Option<String>,
+    ttl_secs: Option<u64>,
+    /// Remove a file made earlier.
+    done: Option<String>,
+}
+
+fn use_files_dir() -> Result<PathBuf, VaultError> {
+    let root = crate::vault::spawn::secrets_root()
+        .ok_or_else(|| VaultError::new("no_memory_fs", 409, "this machine has no memory-backed folder for secret files"))?;
+    let d = root.join("use-files");
+    k2_vault::fsutil::ensure_private_dir(&root)?;
+    k2_vault::fsutil::ensure_private_dir(&d)?;
+    Ok(d)
+}
+
+/// `k2 vault file --secret NAME`: the value, as is, in a short-lived 0600
+/// file in a memory-backed folder, for a tool that reads a secret from a
+/// file or stdin (`tool --code - < "$(k2 vault file --secret NAME)"`).
+/// Needs file (or env) delivery for the caller, the same check and audit
+/// as the session's spawn copy. Removed after `ttlSecs` (default 60, 5 to
+/// 3600) or on `done`. The answer names the path, never the value.
+fn use_file(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
+    c.actor.agent().ok_or_else(|| VaultError::forbidden("use_file_as_agent", "k2 vault file runs for an agent session; people use k2 vault reveal"))?;
+    let b: FileBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
+    let dir = use_files_dir()?;
+    if let Some(done) = b.done.as_deref() {
+        let p = Path::new(done);
+        if p.parent() != Some(dir.as_path()) {
+            return Err(VaultError::bad_request("not_a_secret_file", "that isn't a secret file K2 made"));
+        }
+        let _ = crate::vault::adopt::remove_old_copy(p);
+        return Ok(json!({ "ok": true, "removed": done }));
+    }
+    let n = b.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| VaultError::bad_request("secret_required", "name the secret: --secret NAME"))?;
+    let who = c.requester()?;
+    let sel = selector(c, &Sel { name: Some(n.to_string()), ..Default::default() })?;
+    let r = vault.resolve(&sel, Use::File, &who).map_err(|e| use_refusal(vault, c, &sel, &who, n, e, k2_vault::Delivery::File))?;
+    let tag: String = r.meta.name.chars().filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-')).take(40).collect();
+    let file = format!("{}-{tag}", k2_vault::crypto::base62(16));
+    crate::vault::spawn::write_secret_file(&dir, &file, r.value.expose()).map_err(|e| VaultError::internal(format!("secret file: {}", e.kind())))?;
+    let p = dir.join(&file);
+    let ttl = b.ttl_secs.unwrap_or(60).clamp(5, 3600);
+    let p2 = p.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(ttl));
+        let _ = crate::vault::adopt::remove_old_copy(&p2);
+    });
+    Ok(json!({ "ok": true, "path": p.display().to_string(), "name": r.meta.name, "ttlSecs": ttl }))
 }
 
 /// `POST /cli/vault/sync` (`k2 vault sync`, papercut 8): the caller's own

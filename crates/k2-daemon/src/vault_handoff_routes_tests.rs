@@ -417,13 +417,19 @@ fn the_stamp_message_is_names_only() {
         decided_by: None,
         expires_at: None,
     };
-    let t = stamp_text(&rec, "sales", Some("k2v://ws/ops/STRIPE_KEY"));
+    let t = stamp_text(&rec, "sales", Some("k2v://ws/ops/STRIPE_KEY"), Some(k2_vault::Delivery::Fetch));
     assert_eq!(
         t,
-        "[k2 vault] sales sent STRIPE_KEY → your vault (k2v://ws/ops/STRIPE_KEY). Use: k2 vault fetch --secret STRIPE_KEY <url>. Note: \"for the refund job\""
+        "[k2 vault] sales sent STRIPE_KEY → your vault (k2v://ws/ops/STRIPE_KEY, delivered to you as fetch). Use: k2 vault fetch --secret STRIPE_KEY <url> (K2 adds it to the request). Note: \"for the refund job\""
     );
+    // 2026-10-28: the "Use:" line follows the copy's real delivery (a file
+    // copy was told to use k2 vault fetch), and names its --ttl end.
+    rec.expires_at = Some("2026-10-28T13:00:00Z".into());
+    let t = stamp_text(&rec, "sales", None, None);
+    assert!(t.contains("delivered to you as file, until 2026-10-28T13:00:00Z). Use: k2 vault file --secret STRIPE_KEY"), "{t}");
+    assert!(!t.contains("k2 vault fetch"), "{t}");
     rec.status = "pending".into();
-    assert!(stamp_text(&rec, "sales", None).contains("It waits for your owner to accept (k2 vault incoming)"));
+    assert!(stamp_text(&rec, "sales", None, None).contains("It waits for your owner to accept (k2 vault incoming)"));
 }
 
 #[test]
@@ -506,5 +512,113 @@ fn a_reply_to_your_own_ask_lands_straight_in_and_unsend_takes_it_back() {
         assert!(lines.iter().any(|l| l.starts_with("ok unsend STRIPE_KEY") && l.contains(&id)), "{lines:?}");
         assert!(lines.iter().any(|l| l.starts_with("deny unsend STRIPE_KEY") && l.ends_with("not_yours")), "{lines:?}");
         assert!(!surfaces(&v, &[&sales, &ops]).contains(&secret));
+    });
+}
+
+/// The 2026-10-28 incident, daemon side: another server's agent sends its
+/// own api_key (fetch delivery, no sites) with --ttl 1h. The receiving
+/// list says it lands as a file and keeps 1 hour; the accept answer says
+/// file and how to use it; env-file points at `k2 vault file`; `k2 vault
+/// file` gives the agent a 0600 file holding exactly the value; a
+/// fetch-only secret is refused with fetch and who can widen it. The
+/// value is never in an answer.
+#[test]
+fn a_cross_server_key_without_sites_lands_as_a_file_the_agent_reads() {
+    with_temp_home(|| {
+        k2_core::db::init_for_tests();
+        let run = k2_vault::fsutil::TestDir::new("ho-file-run");
+        let _rt = k2_core::test_env::EnvVar::set(k2_core::runtime_dir::RUNTIME_DIR_ENV, run.path().join("run"));
+        let v = crate::vault::ensure_test_vault();
+        let ops = workspace("ops");
+        let name = format!("K2N12_ENROLL_{}", &uuid::Uuid::new_v4().simple().to_string()[..6].to_uppercase());
+        let enroll = format!("ABCDE-FGHJK.{}", &uuid::Uuid::new_v4().simple().to_string()[..16]);
+        let item = k2_vault::handoff::HandoffItem {
+            name: name.clone(),
+            as_name: None,
+            kind: "api_key".into(),
+            hosts: vec![],
+            inject: None,
+            description: String::new(),
+            delivery: "fetch".into(),
+            ceiling: "env".into(),
+            human_given: false,
+            ttl_secs: Some(3600),
+        };
+        let id = k2_vault::handoff::new_delivery_id();
+        let inc = Incoming {
+            delivery_id: id.clone(),
+            workspace_id: ops.id.clone(),
+            peer_addr: "k2-dev-web::z3thon.k2.dev".into(),
+            peer_fp: Some("fp-peer".into()),
+            sender_actor: "agent:x@z3thon.k2.dev".into(),
+            source_vault_id: Some("vault-peer".into()),
+            item,
+            note: "run k2-node servers add with it".into(),
+            reply_to: None,
+            auto_land: false,
+            remote_off: false,
+            sender_label: "k2-dev-web on z3thon.k2.dev".into(),
+        };
+        v.handoff_receive(inc, SecretBytes::from_slice(enroll.as_bytes())).expect("pending");
+
+        // The person's list: how it would land, and its --ttl (bug 3).
+        let (st, list, raw) = call_p(&v, INCOMING, &owner(), Value::Null, ws_param(&ops));
+        assert_eq!(st, 200, "{raw}");
+        let it = &list["items"][0];
+        assert_eq!((it["landsAs"]["delivery"].as_str(), it["landsAs"]["ceiling"].as_str()), (Some("file"), Some("env")), "{it}");
+        assert_eq!(it["ttlSecs"], 3600, "{it}");
+        let t = |k: &str| chrono::DateTime::parse_from_rfc3339(it[k].as_str().unwrap_or_else(|| panic!("{k}: {it}"))).expect("rfc3339").timestamp();
+        assert_eq!(t("expiresAt") - t("createdAt"), 3600, "the card ends with the --ttl, not in 7 days: {it}");
+        assert!(!raw.contains(&enroll));
+
+        // The owner accepts: the answer says file, until when, and how (bug 2's "show it").
+        let (st, j, raw) = call(&v, DECIDE, &owner(), json!({ "id": id, "action": "accept" }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!((j["secret"]["delivery"].as_str(), j["secret"]["ceiling"].as_str()), (Some("file"), Some("env")), "{j}");
+        assert!(j["secret"]["expiresAt"].is_string(), "{j}");
+        assert!(j["secret"]["use"].as_str().unwrap_or("").contains(&format!("k2 vault file --secret {name}")), "{j}");
+        assert!(!raw.contains(&enroll));
+
+        let me = agent(&ops);
+        let use_call = |path: &str, body: Value| -> (u16, Value, String) {
+            let r = crate::vault_routes::handle_on(&v, path, Ok(me.clone()), body.to_string().as_bytes(), &HashMap::new(), "test", None);
+            let st: u16 = r.status[..3].parse().expect("status");
+            (st, serde_json::from_str(&r.body).unwrap_or_else(|_| panic!("json from {path}: {}", r.body)), r.body)
+        };
+        // env-file: refused, and it says what works (bug 1c).
+        let (st, e, raw) = use_call(crate::vault_use_routes::ENV_FILE, json!({ "secrets": [name] }));
+        assert_eq!((st, code(&e)), (403, "delivery_not_granted"), "{raw}");
+        assert!(e["error"]["hint"].as_str().unwrap_or("").contains(&format!("run k2 vault file --secret {name}")), "{raw}");
+        // k2 vault file: a 0600 file holding exactly the value (bug 1b).
+        let (st, f, raw) = use_call(crate::vault_use_routes::FILE, json!({ "secret": name, "ttlSecs": 30 }));
+        assert_eq!(st, 200, "{raw}");
+        assert!(!raw.contains(&enroll), "the answer names the path, never the value");
+        let path = std::path::PathBuf::from(f["path"].as_str().expect("path"));
+        assert_eq!(std::fs::read(&path).expect("read the file"), enroll.as_bytes());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).expect("meta").permissions().mode() & 0o777, 0o600);
+        }
+        let (st, d, raw) = use_call(crate::vault_use_routes::FILE, json!({ "done": path.display().to_string() }));
+        assert_eq!(st, 200, "{raw}");
+        assert_eq!(d["removed"].as_str(), Some(path.display().to_string().as_str()));
+        assert!(!path.exists(), "--done removes it");
+        let (st, e, _) = use_call(crate::vault_use_routes::FILE, json!({ "done": "/etc/passwd" }));
+        assert_eq!((st, code(&e)), (400, "not_a_secret_file"));
+        let (st, e, _) = use_call(crate::vault_use_routes::FILE, json!({}));
+        assert_eq!((st, code(&e)), (400, "secret_required"));
+
+        // A fetch-only secret (sites, no readable delivery): refused with
+        // fetch and who can widen it.
+        put(&v, &ops, "STRIPE_KEY", "sk_test_k2test_fetch_only", &Actor::Owner);
+        let (st, e, raw) = use_call(crate::vault_use_routes::FILE, json!({ "secret": "STRIPE_KEY" }));
+        assert_eq!((st, code(&e)), (403, "delivery_not_granted"), "{raw}");
+        let hint = e["error"]["hint"].as_str().unwrap_or("");
+        assert!(hint.contains("k2 vault fetch --secret STRIPE_KEY") && hint.contains("k2 vault delivery STRIPE_KEY file"), "{hint}");
+        // People use reveal, never this.
+        let r = crate::vault_routes::handle_on(&v, crate::vault_use_routes::FILE, Ok(owner()), json!({ "secret": name }).to_string().as_bytes(), &HashMap::new(), "test", None);
+        assert!(r.status.starts_with("403"), "{}", r.body);
+        assert!(!surfaces(&v, &[&ops]).contains(&enroll));
     });
 }

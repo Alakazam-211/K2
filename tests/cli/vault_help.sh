@@ -185,6 +185,11 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode()
         with open(LOG, "a") as f:
             f.write(self.path.split("?")[0] + " " + body + "\n")
+        if self.path.startswith("/cli/vault/file"):
+            b = json.loads(body or "{}")
+            if b.get("done"):
+                return self.reply({"ok": True, "removed": b["done"]})
+            return self.reply({"ok": True, "path": "/run/k2-secrets/use-files/abc-" + b["secret"], "name": b["secret"], "ttlSecs": b.get("ttlSecs", 60)})
         self.reply({"ok": True, "created": True, "ref": "k2v://ws/w/X", "secret": {"name": "X", "latestVersion": 1}, "use": "k2 vault fetch --secret X https://h/…"})
     def log_message(self, *a):
         pass
@@ -278,5 +283,30 @@ q = urllib.parse.parse_qs(gets[0].query)
 assert q.get("name") == ["DEPLOY_KEY"], q
 PY2
 ok "agent-limit posts burst/perMinute/allowForwarded; set --delivery agent; public-key prints the line"
+
+# 2026-10-28: k2 vault file posts one secret (name only) and prints the path.
+: >"$WORK/posts.log"
+out="$(k2s vault file --secret ENROLL_CODE --ttl 120)" || fail "file: $out"
+[ "$out" = "/run/k2-secrets/use-files/abc-ENROLL_CODE" ] || fail "file printed: $out"
+out="$(k2s vault file ENROLL_CODE)" || fail "file NAME: $out"
+out="$(k2s vault file --done /run/k2-secrets/use-files/abc-ENROLL_CODE)" || fail "file --done: $out"
+[ "$out" = "removed /run/k2-secrets/use-files/abc-ENROLL_CODE" ] || fail "file --done printed: $out"
+python3 - "$WORK/posts.log" <<'PY2' || fail "file bodies: $(cat "$WORK/posts.log")"
+import json, sys
+rows = [(p, json.loads(b)) for p, b in (l.split(" ", 1) for l in open(sys.argv[1]).read().splitlines())]
+assert [p for p, _ in rows] == ["/cli/vault/file"] * 3, rows
+assert rows[0][1] == {"secret": "ENROLL_CODE", "ttlSecs": 120}, rows
+assert rows[1][1] == {"secret": "ENROLL_CODE"}, rows
+assert rows[2][1] == {"done": "/run/k2-secrets/use-files/abc-ENROLL_CODE"}, rows
+PY2
+set +e
+err="$(k2s vault file --secret A --secret B 2>&1)"; rc1=$?
+err2="$(k2s vault file --secret A --ttl soon 2>&1)"; rc2=$?
+err3="$(k2s vault file 2>&1)"; rc3=$?
+set -e
+[ "$rc1" = 2 ] && printf '%s' "$err" | grep -Fq "one secret per file" || fail "two secrets: exit $rc1 ($err)"
+[ "$rc2" = 2 ] || fail "--ttl soon: exit $rc2 ($err2)"
+[ "$rc3" = 2 ] || fail "no secret: exit $rc3 ($err3)"
+ok "file posts one secret by name (--ttl, --done) and prints only the path"
 
 echo "PASS: vault help ($pass checks)"

@@ -745,6 +745,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/vault/doctor",
         "/cli/vault/fetch",
         "/cli/vault/env-file",
+        // 2026-10-28: one secret delivered as file (or env), in a 0600 file.
+        "/cli/vault/file",
         // Papercut 8: the caller's own session's granted files, now.
         "/cli/vault/sync",
         "/cli/vault/import",

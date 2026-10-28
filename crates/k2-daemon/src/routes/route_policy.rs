@@ -1826,6 +1826,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/vault/enable", Member),
     post("/cli/vault/env-file", Member),
     post("/cli/vault/fetch", Member),
+    post("/cli/vault/file", Member),
     post("/cli/vault/get", Member),
     post("/cli/vault/grant", Member),
     post("/cli/vault/import", Member),

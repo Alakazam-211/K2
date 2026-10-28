@@ -121,7 +121,7 @@ pub const PASSPORT_DENIED: &[&str] = &[
 
 /// The only vault routes a `k2 job` run's passport may use (item 5).
 pub const JOB_ROUTES: &[&str] =
-    &[STATUS, GET, crate::vault_use_routes::FETCH, crate::vault_use_routes::ENV_FILE];
+    &[STATUS, GET, crate::vault_use_routes::FETCH, crate::vault_use_routes::ENV_FILE, crate::vault_use_routes::FILE];
 
 /// Request bodies are small JSON (fetch bodies above 64 KiB go by file).
 pub const MAX_BODY: usize = 96 * 1024;
@@ -172,6 +172,28 @@ pub fn refuse(e: &VaultError) -> CliResponse {
         status: status_line(e.status),
         content_type: "application/json",
         body: json!({ "error": { "code": e.code, "hint": e.hint } }).to_string(),
+    }
+}
+
+/// `k2 vault delivery NAME file|env` refused to an agent that may not widen
+/// that secret: the refusal also names the secret and the delivery, so the
+/// permission-card wrapper can teach `k2 permission request vault.delivery
+/// secret=NAME delivery=…` (2026-10-28). Same code and hint as before; the
+/// two extra fields appear only on that refusal.
+fn refuse_policy(e: &VaultError, c: &VaultCaller, body: &[u8]) -> CliResponse {
+    if e.code != "vault_owner_confirm_required" || !c.is_passport() {
+        return refuse(e);
+    }
+    let b: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let name = b.get("name").and_then(Value::as_str).filter(|s| !s.trim().is_empty());
+    let d = b.get("delivery").and_then(Value::as_str).filter(|d| crate::permission::actions::vault::CHOICES.contains(d));
+    match (name, d) {
+        (Some(n), Some(d)) => CliResponse {
+            status: status_line(e.status),
+            content_type: "application/json",
+            body: json!({ "error": { "code": e.code, "hint": e.hint, "secret": n, "delivery": d } }).to_string(),
+        },
+        _ => refuse(e),
     }
 }
 
@@ -480,6 +502,12 @@ pub fn handle_on(
     }
     if crate::vault_systemd_routes::is_route(path) {
         return crate::vault_systemd_routes::handle(vault, path, &c, body, params, ingress);
+    }
+    if path == POLICY {
+        return match policy(vault, &c, body) {
+            Ok(v) => ok(v),
+            Err(e) => refuse_policy(&e, &c, body),
+        };
     }
     let r = match path {
         STATUS => {
@@ -1257,7 +1285,10 @@ pub fn use_hint(m: &SecretMeta) -> String {
         }
         Delivery::Fetch | Delivery::Proxy => "add a site first: ask the owner, or k2 vault hosts".into(),
         Delivery::Agent => format!("$SSH_AUTH_SOCK in new sessions: ssh and git sign with {}; nobody sees the key", m.name),
-        Delivery::File => format!("$K2_SECRETS_DIR/{} (read the file; a running session gets it within a minute, or now with k2 vault sync)", m.name),
+        Delivery::File => format!(
+            "$K2_SECRETS_DIR/{} (read the file; a running session gets it within a minute, or now with k2 vault sync), or k2 vault file --secret {} for a 0600 copy now",
+            m.name, m.name
+        ),
         Delivery::Env => format!("${} in new sessions ({})", m.name, crate::vault::spawn::RESTART_TO_RECEIVE),
         Delivery::Api => format!("k2 vault get {}", m.name),
         Delivery::None => "not delivered".into(),

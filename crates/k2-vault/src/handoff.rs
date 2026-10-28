@@ -281,25 +281,84 @@ impl HandoffItem {
             || self.inject.as_ref().is_some_and(|i| i.uses_body())
     }
 
-    /// The landed copy's delivery and ceiling (H12): `fetch` with sites,
-    /// else `file`; the ceiling is the lower of the sender's and `env`,
-    /// never `api`; and the delivery never exceeds the ceiling. An ssh key
-    /// the sender served only through the agent (item 3) lands as `agent`,
-    /// so a handoff never makes it readable.
+    /// The landed copy's delivery and ceiling (H12, as fixed 2026-10-28:
+    /// a copy lands in a form the receiving agent can actually use).
+    ///
+    /// - The ceiling is the lower of the sender's and `env`, never `api`.
+    /// - The delivery is **the sender's own delivery**, capped at that
+    ///   ceiling: `env` stays `env`, `file` stays `file`, `api` becomes
+    ///   `env`. Exceptions: `fetch` (or `agent` on anything but an ssh key)
+    ///   with no sites has nowhere to send the key, so it lands as `file`
+    ///   (`k2 vault file --secret NAME`); ssh and TLS keys land as `file`,
+    ///   unless the sender served an ssh key only through the agent (item
+    ///   3), which stays `agent` so a handoff never makes it readable.
+    /// - A sender whose ceiling is below `file` keeps it: the copy is then
+    ///   at most what the sender allowed.
     pub fn landing_delivery(&self) -> (Delivery, Delivery) {
         let sender_ceiling = Delivery::parse(&self.ceiling).unwrap_or(Delivery::Fetch);
         let mut ceiling = if sender_ceiling.level() > Delivery::Env.level() { Delivery::Env } else { sender_ceiling };
         if ceiling == Delivery::None || ceiling == Delivery::Proxy {
             ceiling = Delivery::Fetch;
         }
-        let mut delivery = if self.hosts.is_empty() { Delivery::File } else { Delivery::Fetch };
-        if self.kind == Kind::SshKey.as_str() && Delivery::parse(&self.delivery).ok() == Some(Delivery::Agent) {
-            delivery = Delivery::Agent;
-        }
+        let sender = Delivery::parse(&self.delivery).unwrap_or(Delivery::Fetch);
+        let ssh = self.kind == Kind::SshKey.as_str();
+        let key_file = ssh || self.kind == Kind::TlsKey.as_str();
+        let mut delivery = match sender {
+            Delivery::Agent if ssh => Delivery::Agent,
+            _ if key_file => Delivery::File,
+            Delivery::Fetch | Delivery::Proxy | Delivery::None | Delivery::Agent => {
+                if self.hosts.is_empty() {
+                    Delivery::File
+                } else {
+                    Delivery::Fetch
+                }
+            }
+            Delivery::File => Delivery::File,
+            Delivery::Env | Delivery::Api => Delivery::Env,
+        };
         if delivery.level() > ceiling.level() {
             delivery = ceiling;
         }
         (delivery, ceiling)
+    }
+
+    /// `--ttl`, within this server's own bounds (1 hour to 90 days).
+    pub fn ttl(&self) -> Option<i64> {
+        self.ttl_secs.map(|t| t.clamp(TTL_MIN_SECS, TTL_MAX_SECS))
+    }
+
+    /// The landed copy's expiry: `--ttl` after it was **sent** (not after
+    /// a person accepted it), so the receiver keeps it as long as the
+    /// sender said and no longer.
+    pub fn copy_expires_at(&self, sent: chrono::DateTime<chrono::Utc>) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.ttl().map(|t| sent + chrono::Duration::seconds(t))
+    }
+
+    /// A pending copy waits [`PENDING_DAYS`], or less when `--ttl` ends
+    /// sooner: a copy that would land already expired is never offered.
+    pub fn pending_expires_at(&self, sent: chrono::DateTime<chrono::Utc>) -> chrono::DateTime<chrono::Utc> {
+        let wait = sent + chrono::Duration::days(PENDING_DAYS);
+        match self.copy_expires_at(sent) {
+            Some(x) if x < wait => x,
+            _ => wait,
+        }
+    }
+}
+
+/// How an agent uses a secret delivered to it as `d` (the stamp message,
+/// `k2 vault incoming accept`, refusals). Names only, never a value.
+pub fn use_hint(d: Delivery, name: &str) -> String {
+    match d {
+        Delivery::Fetch | Delivery::Proxy => format!("k2 vault fetch --secret {name} <url> (K2 adds it to the request)"),
+        Delivery::Agent => "ssh and git sign with it on $SSH_AUTH_SOCK (it is never shown)".to_string(),
+        Delivery::File => format!(
+            "k2 vault file --secret {name} prints the path of a short-lived 0600 file holding it; pass the file, never the value (e.g. some-tool --code - < \"$(k2 vault file --secret {name})\")"
+        ),
+        Delivery::Env => format!(
+            "k2 vault file --secret {name} (a short-lived 0600 file holding it), or k2 vault env-file --secret {name} for docker/podman --env-file"
+        ),
+        Delivery::Api => format!("k2 vault get {name}"),
+        Delivery::None => "it isn't delivered to agents; ask your owner".to_string(),
     }
 }
 

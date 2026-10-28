@@ -221,7 +221,7 @@ fn pending_by_default_and_allow_listed_lands_never_api() {
     assert_eq!(r.record.status, "landed");
     let m = r.meta.expect("meta");
     assert_eq!(m.scope, Scope::workspace("ws-ops"));
-    assert_eq!(m.default_delivery, Delivery::Fetch, "fetch when there are sites");
+    assert_eq!(m.default_delivery, Delivery::Env, "the sender's own delivery (api), capped at env");
     assert_eq!(m.delivery_ceiling, Delivery::Env, "the ceiling is at most env, never api");
     assert!(!m.human_given, "H10");
     assert_eq!(m.created_by, "system:handoff");
@@ -264,6 +264,233 @@ fn pending_by_default_and_allow_listed_lands_never_api() {
     it.hosts.clear();
     it.delivery = "agent".into();
     assert_eq!(it.landing_delivery().0, Delivery::File);
+}
+
+fn ops_session() -> Requester {
+    Requester::Session { workspace_id: "ws-ops".into(), session_id: Some("s-ops".into()) }
+}
+
+/// Bug 1 (2026-10-28): a cross-server send of each kind lands in a form
+/// the receiving agent can use. Each item is sealed on A and opened on B
+/// (the real `k2-vault-handoff/1` seal), landed, and then used the way
+/// the agent would: fetch to its site, a file (`k2 vault file`), env
+/// (`k2 vault env-file`), or the ssh agent. The incident: an agent-made
+/// api_key with fetch delivery and no sites landed `file (at most env)`
+/// and nothing could read it; it now lands `file`, readable as a file.
+#[test]
+fn a_cross_server_send_of_each_kind_lands_with_a_usable_delivery() {
+    let (a, b) = (open("ho-x-a"), open("ho-x-b"));
+    let ssh = crate::ssh_agent::testkeys::ed25519();
+    let stripe = vec!["https://api.stripe.com".to_string()];
+    // (name, kind, sender delivery, sender ceiling, sites, value, lands as)
+    let cases: Vec<(&str, &str, &str, &str, Vec<String>, String, Delivery)> = vec![
+        ("ENROLL_CODE", "api_key", "fetch", "env", vec![], "ABCDE-FGHJK.0123456789abcdef".into(), Delivery::File),
+        ("STRIPE_KEY", "api_key", "fetch", "env", stripe.clone(), "sk_test_k2test_handoff_1".into(), Delivery::Fetch),
+        ("GH_TOKEN", "oauth_token", "fetch", "env", vec![], "gho_k2test_handoff_2".into(), Delivery::File),
+        ("BLOB", "generic", "file", "env", vec![], "k2test-generic-3".into(), Delivery::File),
+        ("SIGNER", "signing_key", "fetch", "env", vec![], "k2test-signing-4".into(), Delivery::File),
+        ("HMAC", "hmac_key", "fetch", "env", stripe.clone(), "k2test-hmac-5".into(), Delivery::Fetch),
+        ("DB_PASSWORD", "password", "env", "env", vec![], "k2test-password-6".into(), Delivery::Env),
+        ("DATABASE_URL", "dsn", "env", "env", vec![], "postgres://u:k2test7@db.example.com/x".into(), Delivery::Env),
+        ("HOOK_URL", "url", "env", "env", vec![], "https://hooks.example.com/k2test8".into(), Delivery::Env),
+        ("API_RAW", "api_key", "api", "api", vec![], "k2test-api-raw-9".into(), Delivery::Env),
+        ("DEPLOY_KEY", "ssh_key", "file", "env", vec![], ssh.clone(), Delivery::File),
+        ("TLS_KEY", "tls_key", "file", "env", vec![], "-----BEGIN PRIVATE KEY-----\nk2test10\n-----END PRIVATE KEY-----\n".into(), Delivery::File),
+        ("SIGN_ONLY", "ssh_key", "agent", "agent", vec![], ssh.clone(), Delivery::Agent),
+    ];
+    for (name, kind, d, c, hosts, val, want) in cases {
+        let it = HandoffItem {
+            name: name.into(),
+            as_name: None,
+            kind: kind.into(),
+            hosts: hosts.clone(),
+            inject: None,
+            description: String::new(),
+            delivery: d.into(),
+            ceiling: c.into(),
+            human_given: false,
+            ttl_secs: None,
+        };
+        let (file, id) = sealed_between(&a.v, &b.v, |p| {
+            p.item = it.clone();
+            p.value_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, val.as_bytes());
+        });
+        let p = b.v.handoff_open(&file, expect(&id)).unwrap_or_else(|e| panic!("{name}: opens: {e}"));
+        let mut inc = incoming("ws-ops", p.item.clone(), "sales::rosson.k2.dev", true);
+        inc.delivery_id = id.clone();
+        let r = b.v.handoff_receive(inc, p.value().expect("value")).unwrap_or_else(|e| panic!("{name}: lands: {e}"));
+        let m = r.meta.unwrap_or_else(|| panic!("{name}: landed {:?}", r.record.status));
+        assert_eq!(m.default_delivery, want, "{name} ({kind}, sent as {d}) lands as {want}");
+        assert_ne!(m.delivery_ceiling, Delivery::Api, "{name}: never api");
+        assert!(m.default_delivery.level() <= m.delivery_ceiling.level(), "{name}: delivery within its ceiling");
+        let sel = Selector::user(Scope::workspace("ws-ops"), name);
+        // Used the way the agent would.
+        match want {
+            Delivery::Fetch => {
+                let o = crate::hosts::Origin::parse_url("https://api.stripe.com/v1/x").expect("origin").1;
+                let got = b.v.resolve(&sel, Use::Fetch(&o), &ops_session()).unwrap_or_else(|e| panic!("{name}: fetch: {e}"));
+                assert_eq!(got.value.expose(), val.as_bytes());
+            }
+            Delivery::File | Delivery::Env => {
+                let got = b.v.resolve(&sel, Use::File, &ops_session()).unwrap_or_else(|e| panic!("{name}: file (k2 vault file): {e}"));
+                assert_eq!(got.value.expose().trim_ascii(), val.trim().as_bytes(), "{name}");
+                if want == Delivery::Env {
+                    b.v.resolve(&sel, Use::Env, &ops_session()).unwrap_or_else(|e| panic!("{name}: env (k2 vault env-file): {e}"));
+                }
+            }
+            Delivery::Agent => {
+                assert!(!m.agent_can_see(), "{name}: an agent-only key stays unreadable");
+                let e = b.v.resolve(&sel, Use::File, &ops_session()).err().expect("not as a file");
+                assert_eq!(e.code, "delivery_not_granted", "{name}");
+            }
+            other => panic!("{name}: unexpected {other}"),
+        }
+        // Never api, whatever the sender had.
+        assert_eq!(b.v.resolve(&sel, Use::Api, &ops_session()).err().expect("never api").code, "delivery_not_granted", "{name}");
+    }
+}
+
+/// Bug 2: `k2 vault incoming accept <id> --replace` takes the INCOMING
+/// delivery (capped as any landing is), not the existing record's.
+/// Widening the current one needs what `k2 vault delivery` needs: an
+/// Owner or Admin. A refused replace changes nothing.
+#[test]
+fn replace_takes_the_incoming_delivery_and_widening_needs_an_owner_or_admin() {
+    let t = open("ho-replace");
+    let v = &t.v;
+    // ops already has ENROLL_CODE: fetch only, no sites (unusable).
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws-ops"), "ENROLL_CODE", Kind::ApiKey);
+    r.default_delivery = Some(Delivery::Fetch);
+    r.delivery_ceiling = Some(Delivery::Fetch);
+    v.put(r, SecretBytes::from_slice(b"k2test-old-code-1"), &agent("ws-ops")).expect("put");
+    let sel = Selector::user(Scope::workspace("ws-ops"), "ENROLL_CODE");
+    // sales sends ENROLL_CODE as env: a clash, pending.
+    let mut it = item("ENROLL_CODE");
+    it.hosts.clear();
+    it.delivery = "env".into();
+    it.ceiling = "env".into();
+    let p = v.handoff_receive(incoming("ws-ops", it, "sales::rosson.k2.dev", true), SecretBytes::from_slice(b"k2test-new-code-2")).expect("pend");
+    assert_eq!(p.record.reason.as_deref(), Some("clash"));
+    let id = p.record.delivery_id.clone();
+    let replace = Decision { action: "accept".into(), as_name: None, replace: true };
+
+    // A Member: replacing would widen fetch → env. Refused; nothing moved.
+    let member = Actor::Login { username: "mo".into(), role: Role::Member };
+    let e = v.handoff_decide(&id, &replace, &member).expect_err("a Member can't widen");
+    assert!(matches!(e.code, "vault_admin_required" | "vault_not_yours"), "{}", e.code);
+    assert!(e.hint.contains("would change its delivery from fetch (at most fetch) to env (at most env)"), "{}", e.hint);
+    let m = v.meta(&sel, &Actor::Owner).expect("meta");
+    assert_eq!((m.default_delivery, m.delivery_ceiling, m.latest_version), (Delivery::Fetch, Delivery::Fetch, 1), "unchanged");
+    assert_eq!(value(v, "ws-ops", "ENROLL_CODE"), b"k2test-old-code-1");
+    assert_eq!(v.handoff_get(&id, "in").expect("row").status, "pending", "still waiting");
+
+    // The owner replaces: the new value AND the incoming delivery.
+    let d = v.handoff_decide(&id, &replace, &Actor::Owner).expect("owner replaces");
+    let m = d.meta.expect("meta");
+    assert_eq!((m.default_delivery, m.delivery_ceiling, m.latest_version), (Delivery::Env, Delivery::Env, 2));
+    assert_eq!(value(v, "ws-ops", "ENROLL_CODE"), b"k2test-new-code-2");
+    v.resolve(&sel, Use::Env, &ops_session()).expect("the agent can use it as env now");
+
+    // A narrowing replace needs no widen right: a Member may do it.
+    let mut r = PutRequest::new(Namespace::User, Scope::workspace("ws-ops"), "WIDE_ONE", Kind::Password);
+    r.default_delivery = Some(Delivery::Env);
+    v.put(r, SecretBytes::from_slice(b"k2test-wide-3"), &Actor::Owner).expect("put");
+    let mut it = item("WIDE_ONE");
+    it.kind = "password".into();
+    it.hosts.clear();
+    it.delivery = "file".into();
+    it.ceiling = "file".into();
+    let p = v.handoff_receive(incoming("ws-ops", it, "billing", true), SecretBytes::from_slice(b"k2test-narrow-4")).expect("pend");
+    let d = v.handoff_decide(&p.record.delivery_id, &replace, &member).expect("a narrowing replace");
+    let m = d.meta.expect("meta");
+    assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::File, Delivery::File), "the incoming (narrower) delivery applies");
+}
+
+/// Bug 3: the sender's `--ttl` reaches the receiver: a pending copy (and
+/// its card) never outlives it, the landed copy expires `--ttl` after it
+/// was sent (not after the click), and a same-sender re-send carries its
+/// own `--ttl` but leaves the copy's delivery alone (only Replace, by a
+/// person, takes the incoming delivery).
+#[test]
+fn the_senders_ttl_is_carried_to_the_pending_card_and_the_copy() {
+    let t = open("ho-ttl");
+    let v = &t.v;
+    let at = |s: &Option<String>| chrono::DateTime::parse_from_rfc3339(s.as_deref().expect("a time")).expect("rfc3339").timestamp();
+    let mut it = item("SHORT_LIVED");
+    it.ttl_secs = Some(3600);
+    let p = v.handoff_receive(incoming("ws-ops", it, "sales::rosson.k2.dev", false), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("pend");
+    let created = at(&Some(p.record.created_at.clone()));
+    assert_eq!(at(&p.record.expires_at) - created, 3600, "the card says 1 hour, not 7 days");
+    let d = v.handoff_decide(&p.record.delivery_id, &Decision { action: "accept".into(), ..Default::default() }, &Actor::Owner).expect("accept");
+    let m = d.meta.expect("meta");
+    assert!((at(&m.expires_at) - (created + 3600)).abs() <= 1, "the copy ends 1 h after it was sent: {:?} vs {created}", m.expires_at);
+    assert_eq!(d.record.expires_at, m.expires_at);
+
+    // No --ttl: pending waits 7 days, the copy never expires.
+    let p = v.handoff_receive(incoming("ws-ops", item("FOREVER"), "sales::rosson.k2.dev", false), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("pend");
+    assert_eq!(at(&p.record.expires_at) - at(&Some(p.record.created_at.clone())), PENDING_DAYS * 86400);
+    let d = v.handoff_decide(&p.record.delivery_id, &Decision { action: "accept".into(), ..Default::default() }, &Actor::Owner).expect("accept");
+    assert_eq!(d.meta.expect("meta").expires_at, None);
+    // A --ttl longer than the wait: pending 7 days, the copy keeps 30.
+    let mut it = item("LONG_LIVED");
+    it.ttl_secs = Some(30 * 86400);
+    let p = v.handoff_receive(incoming("ws-ops", it, "sales::rosson.k2.dev", false), SecretBytes::from_slice(SENTINEL.as_bytes())).expect("pend");
+    assert_eq!(at(&p.record.expires_at) - at(&Some(p.record.created_at.clone())), PENDING_DAYS * 86400);
+
+    // Same sender, allow-listed: v1 lands (env); the owner narrows it to
+    // fetch; a re-send with --ttl takes the --ttl but keeps the owner's
+    // fetch (a re-send never reverts a person's choice, nor widens).
+    let l1 = v.handoff_receive(incoming("ws-ops", item("ROT_KEY"), "sales", true), SecretBytes::from_slice(b"k2test-rot-1")).expect("v1");
+    let m1 = l1.meta.expect("meta");
+    assert_eq!((m1.default_delivery, m1.expires_at.clone()), (Delivery::Env, None));
+    v.set_policy(
+        &Selector::Id(m1.id.clone()),
+        PolicyPatch { default_delivery: Some(Delivery::Fetch), delivery_ceiling: Some(Delivery::Fetch), ..Default::default() },
+        &Actor::Owner,
+    )
+    .expect("the owner narrows it");
+    let mut again = item("ROT_KEY");
+    again.ttl_secs = Some(7200);
+    let l2 = v.handoff_receive(incoming("ws-ops", again, "sales", true), SecretBytes::from_slice(b"k2test-rot-2")).expect("v2");
+    let m2 = l2.meta.expect("meta");
+    assert_eq!((m2.latest_version, m2.default_delivery, m2.delivery_ceiling), (2, Delivery::Fetch, Delivery::Fetch), "the owner's choice stays");
+    assert!((at(&m2.expires_at) - at(&Some(l2.record.created_at.clone())) - 7200).abs() <= 1, "{:?}", m2.expires_at);
+    assert_eq!(l2.record.expires_at, m2.expires_at, "the row shows the copy's expiry");
+    assert_eq!(value(v, "ws-ops", "ROT_KEY"), b"k2test-rot-2");
+}
+
+#[test]
+fn landing_delivery_rule_table() {
+    let mk = |kind: &str, d: &str, c: &str, sites: bool| HandoffItem {
+        name: "X".into(),
+        as_name: None,
+        kind: kind.into(),
+        hosts: if sites { vec!["https://api.stripe.com".into()] } else { vec![] },
+        inject: None,
+        description: String::new(),
+        delivery: d.into(),
+        ceiling: c.into(),
+        human_given: false,
+        ttl_secs: None,
+    };
+    use Delivery as D;
+    for (kind, d, c, sites, want) in [
+        ("api_key", "fetch", "env", true, (D::Fetch, D::Env)),
+        ("api_key", "fetch", "env", false, (D::File, D::Env)),
+        ("api_key", "fetch", "fetch", false, (D::Fetch, D::Fetch)),
+        ("generic", "file", "env", false, (D::File, D::Env)),
+        ("password", "env", "env", false, (D::Env, D::Env)),
+        ("password", "env", "file", false, (D::File, D::File)),
+        ("api_key", "api", "api", true, (D::Env, D::Env)),
+        ("ssh_key", "agent", "env", false, (D::Agent, D::Env)),
+        ("ssh_key", "env", "env", false, (D::File, D::Env)),
+        ("tls_key", "fetch", "env", true, (D::File, D::Env)),
+    ] {
+        assert_eq!(mk(kind, d, c, sites).landing_delivery(), want, "{kind} {d}/{c} sites={sites}");
+    }
+    assert!(use_hint(D::File, "X").contains("k2 vault file --secret X"));
+    assert!(use_hint(D::Fetch, "X").contains("k2 vault fetch --secret X"));
+    assert!(use_hint(D::Env, "X").contains("k2 vault env-file --secret X"));
 }
 
 #[test]

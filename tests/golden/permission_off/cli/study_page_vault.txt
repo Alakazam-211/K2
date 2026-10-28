@@ -38,8 +38,9 @@ HOW YOU GET A SECRET (delivery)
           Some secrets are signers: K2 signs the request (OVH, HMAC, HMAC
           with a timestamp). Same command.
   file    $K2_SECRETS_DIR/<NAME>, memory-backed, removed at session end.
-          You CAN read it — so can anything you run. Opt-in. Granted
-          while you run: it arrives within a minute (k2 vault sync: now).
+          You (and anything you run) CAN read it; opt-in. Granted while
+          you run: it arrives within a minute (k2 vault sync: now). A copy
+          now: k2 vault file --secret NAME (a 0600 path; give tools that).
   env     $NAME in new sessions. You can read it. Needs a respawn.
   api     k2 vault get NAME prints it into your transcript. Rare.
   agent   ssh keys: $SSH_AUTH_SOCK in new sessions; ssh and git sign with
@@ -114,8 +115,8 @@ GIVING A SECRET TO ANOTHER AGENT
   same-named secret is never overwritten; re-sending yours makes a new
   version. A secret a person gave you needs a person to send it to
   another server. Server-wide secrets aren't sent (the owner shares them
-  with k2 vault grant). The copy you get is fetch, agent or file, never api,
-  and you can't widen it: use it with k2 vault fetch --secret NAME.
+  with k2 vault grant). Your copy keeps the sender's delivery and --ttl (at
+  most env; no sites: file, read with k2 vault file); only a person widens it.
   Exit 3 = a person must act (don't retry); 2 = the other server can't
   (peer_too_old); 4 = no such secret or agent. Every step is logged.
 

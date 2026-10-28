@@ -2,7 +2,8 @@
 # Turn this Mac into a K2 compute node (prd-k2-compute-nodes-v1 §8.3, CN27).
 #
 #   sudo k2-node setup (--private-home | --no-private-home) [--human rosson] [--tools "rust@stable cargo-nextest"]
-#        [--controller https://rosson.k2.dev --enroll ABCDE-FGHJK.0123456789abcdef --name mini-1]
+#        [--controller https://rosson.k2.dev --enroll - --name mini-1 < code-file]
+#        (--enroll - reads the code from stdin; K2_NODE_ENROLL_CODE works too)
 #   (or: sudo scripts/node/install-node-macos.sh --binary ./k2-node …)
 #
 # Root is needed once. It creates the hidden service account `_k2node`
@@ -99,6 +100,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# The enroll code off argv (2026-10-28; ps shows argv to every user):
+# --enroll - reads one line from stdin; with no --enroll, a --controller
+# install takes $K2_NODE_ENROLL_CODE. After reading it, stdin goes back to
+# the terminal when there is one, so the questions below still get asked.
+if [ "$ENROLL" = "-" ]; then
+    IFS= read -r ENROLL || true
+    ENROLL="${ENROLL%$'\r'}"
+    [ -n "$ENROLL" ] || die "--enroll -: stdin was empty (pipe the code in: --enroll - < code-file)"
+    if (exec </dev/tty) 2>/dev/null; then exec </dev/tty; fi
+elif [ -z "$ENROLL" ] && [ -n "$CONTROLLER" ] && [ -n "${K2_NODE_ENROLL_CODE:-}" ]; then
+    ENROLL="$K2_NODE_ENROLL_CODE"
+fi
 [ "$(uname -s)" = "Darwin" ] || die "this is the macOS installer; on Linux use install-node-linux.sh"
 [ "$(id -u)" = "0" ] || die "run as root (sudo); root is needed once to create the node user and service.
   Over SSH: ssh mini 'sudo -S -p \"\" $0 …' < password-file (the password never goes in argv)"
@@ -267,8 +280,9 @@ if [ -n "$ENROLL" ]; then
     echo "== enroll"
     force=()
     [ "$REENROLL" = "1" ] && force=(--force)
-    run_as_node "$BIN" enroll --controller "$CONTROLLER" --enroll "$ENROLL" --name "$NAME" \
-        --home "$HOME_DIR" ${LABELS[@]+"${LABELS[@]}"} ${force[@]+"${force[@]}"}
+    # The code goes to k2-node on stdin, never in its argv.
+    run_as_node "$BIN" enroll --controller "$CONTROLLER" --enroll - --name "$NAME" \
+        --home "$HOME_DIR" ${LABELS[@]+"${LABELS[@]}"} ${force[@]+"${force[@]}"} <<<"$ENROLL"
 fi
 
 # ── remote admin: the root executor (prd-k2-node-admin-v1 §5.2 option A) ──

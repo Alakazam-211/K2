@@ -124,6 +124,12 @@ expect_has "node add renders the enroll code" "$out" "Enroll code for mini-9"
 expect_eq "node add path" "$(last path)" "/cli/compute/nodes/enroll-code"
 expect_eq "node add body" "$(last body)" '{"name": "mini-9"}'
 expect_eq "node add carries the passport" "$(last token)" "passport-ops"
+expect_has "node add says to keep the code off argv" "$out" "ps shows them to every user"
+expect_has "node add points scripts at --json" "$out" "--json prints {code, expiresAt, name, controller}"
+# --json (2026-10-28): one object a script can hand to k2 vault set as is.
+out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops "$K2" compute node add mini-9 --json </dev/null)"
+expect_eq "node add --json shape" "$out" '{"code": "ABCDE-FGHJK.0123", "expiresAt": 1, "name": "mini-9", "controller": "https://ctl.example.test"}'
+expect_eq "node add --json body is the same" "$(last body)" '{"name": "mini-9"}'
 out="$(K2_PORT="$PORT" K2_HOOK_TOKEN=passport-ops "$K2" compute grant mini-9 --workspace web </dev/null)"
 expect_has "grant renders" "$out" "granted mini-9 to web"
 expect_eq "grant body names the other workspace" "$(last body)" '{"node": "mini-9", "workspace": "web"}'

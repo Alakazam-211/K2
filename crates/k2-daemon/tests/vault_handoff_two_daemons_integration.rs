@@ -208,6 +208,22 @@ fn set_secret(d: &Daemon, ws: &str, name: &str, value: &str, scope: &str) {
     assert_eq!(st, 200, "vault/set {name}: {v}");
 }
 
+/// A person-given secret to another server: refused without a confirm,
+/// then sent with this login's Connect-password confirm.
+fn confirmed_send(d: &Daemon, login: &str, password: &str, body: serde_json::Value) -> serde_json::Value {
+    let (st, v) = http_as(d, login, "POST", "/cli/vault/send", Some(body.clone()));
+    assert_eq!((st, v["error"]["code"].as_str().unwrap_or("")), (403, "confirm_required"), "{v}");
+    let secret_id = v["secretId"].as_str().expect("secretId").to_string();
+    let (st, c) = http_as(d, login, "POST", "/cli/vault/confirm/finish", Some(serde_json::json!({
+        "action": "handoff-send", "secretId": secret_id, "method": "connect-password", "password": password })));
+    assert_eq!(st, 200, "confirm: {c}");
+    let mut b = body;
+    b["confirmToken"] = c["token"].clone();
+    let (st, v) = http_as(d, login, "POST", "/cli/vault/send", Some(b));
+    assert_eq!(st, 200, "send: {v}");
+    v
+}
+
 fn handoff_audit(d: &Daemon) -> Vec<String> {
     let (st, v) = http(d, "GET", "/cli/users/audit?tail=1000", None);
     assert_eq!(st, 200, "users/audit: {v}");
@@ -336,12 +352,61 @@ fn two_daemons_hand_a_secret_over_sealed_and_old_peers_get_peer_too_old() {
     assert_eq!(m["humanGiven"], false, "H10");
     assert_eq!(m["handoff"]["deliveryId"], id.as_str());
 
+    // ── 2026-10-28: a key with no sites, sent with --ttl 1h, then replaced ──
+    // Bug 1: it lands as a file the agent can read (it landed "file (at most
+    // env)" with nothing to read it, and told the agent to use fetch);
+    // bug 3: the --ttl is kept; bug 2: --replace takes the incoming delivery.
+    let enroll = format!("k2test_ENROLL_{}", uuid::Uuid::new_v4().simple());
+    {
+        use base64::Engine as _;
+        let (st, v) = http(&a, "POST", "/cli/vault/set", Some(serde_json::json!({ "name": "ENROLL_CODE", "kind": "api_key",
+            "scope": "workspace", "workspace": "sales", "valueB64": base64::engine::general_purpose::STANDARD.encode(&enroll) })));
+        assert_eq!(st, 200, "vault/set ENROLL_CODE: {v}");
+    }
+    let enroll_send = serde_json::json!({ "name": "ENROLL_CODE", "scope": "workspace", "workspace": "sales", "to": "ops::bravo", "ttlSecs": 3600 });
+    let v = confirmed_send(&a, &login, password, enroll_send.clone());
+    assert_eq!(v["status"], "pending", "{v}");
+    let id2 = v["deliveryId"].as_str().expect("id").to_string();
+    let (st, inc) = http(&b, "GET", "/cli/vault/incoming?workspace=ops", None);
+    assert_eq!(st, 200, "{inc}");
+    let row = inc["items"].as_array().expect("items").iter().find(|r| r["deliveryId"] == id2.as_str()).cloned().expect("the new delivery");
+    assert_eq!((row["landsAs"]["delivery"].as_str(), row["ttlSecs"].as_i64()), (Some("file"), Some(3600)), "{row}");
+    let ts = |s: &serde_json::Value| chrono::DateTime::parse_from_rfc3339(s.as_str().expect("time")).expect("rfc3339").timestamp();
+    assert_eq!(ts(&row["expiresAt"]) - ts(&row["createdAt"]), 3600, "the card ends with the sender's --ttl, not in 7 days: {row}");
+    let (st, d) = http(&b, "POST", "/cli/vault/incoming/decide", Some(serde_json::json!({ "id": id2, "action": "accept" })));
+    assert_eq!(st, 200, "decide: {d}");
+    assert_eq!(d["secret"]["delivery"], "file", "{d}");
+    assert!(d["secret"]["use"].as_str().unwrap_or("").contains("k2 vault file --secret ENROLL_CODE"), "{d}");
+    let left = ts(&d["secret"]["expiresAt"]) - chrono::Utc::now().timestamp();
+    assert!((3000..=3600).contains(&left), "the copy keeps 1 h from the send: {left}s left");
+    let (_, show) = http(&b, "GET", "/cli/vault/show?name=ENROLL_CODE&scope=workspace&workspace=ops", None);
+    assert_eq!(show["secret"]["defaultDelivery"], "file", "{show}");
+    assert_eq!(show["secret"]["deliveryCeiling"], "env", "{show}");
+    // A's owner makes its copy env and sends it again: on B a re-send that
+    // isn't allow-listed waits; Replace takes the incoming env delivery.
+    let (st, v) = http(&a, "POST", "/cli/vault/policy", Some(serde_json::json!({ "name": "ENROLL_CODE", "scope": "workspace", "workspace": "sales", "delivery": "env" })));
+    assert_eq!(st, 200, "policy: {v}");
+    let mut again = enroll_send.clone();
+    again.as_object_mut().expect("obj").remove("ttlSecs");
+    let v = confirmed_send(&a, &login, password, again);
+    assert_eq!((v["status"].as_str(), v["reason"].as_str()), (Some("pending"), Some("person_given")), "{v}");
+    let id3 = v["deliveryId"].as_str().expect("id").to_string();
+    let (st, d) = http(&b, "POST", "/cli/vault/incoming/decide", Some(serde_json::json!({ "id": id3, "action": "accept" })));
+    assert_eq!((st, d["error"]["code"].as_str().unwrap_or("")), (409, "name_taken"), "{d}");
+    let (st, d) = http(&b, "POST", "/cli/vault/incoming/decide", Some(serde_json::json!({ "id": id3, "action": "accept", "replace": true })));
+    assert_eq!(st, 200, "replace: {d}");
+    assert_eq!((d["secret"]["delivery"].as_str(), d["secret"]["ceiling"].as_str()), (Some("env"), Some("env")), "the incoming delivery applies: {d}");
+    let (_, show) = http(&b, "GET", "/cli/vault/show?name=ENROLL_CODE&scope=workspace&workspace=ops", None);
+    assert_eq!(show["secret"]["defaultDelivery"], "env", "{show}");
+
     // C is federation-off / old: peer_too_old, nothing sent, no row, no
     // confirm asked of anyone.
+    let (_, sent) = http(&a, "GET", "/cli/vault/sent?workspace=sales", None);
+    let sent_before = sent["items"].as_array().expect("items").len();
     let (st, v) = http(&a, "POST", "/cli/vault/send", Some(serde_json::json!({ "name": "STRIPE_KEY", "scope": "workspace", "workspace": "sales", "to": "ops::charlie" })));
     assert_eq!((st, v["error"]["code"].as_str().unwrap_or("")), (422, "peer_too_old"), "{v}");
     let (_, sent) = http(&a, "GET", "/cli/vault/sent?workspace=sales", None);
-    assert_eq!(sent["items"].as_array().expect("items").len(), 1, "no row for the refused send: {sent}");
+    assert_eq!(sent["items"].as_array().expect("items").len(), sent_before, "no row for the refused send: {sent}");
 
     // The public route reads at most 160 KiB.
     let big = vec![b'x'; 200 * 1024];
@@ -390,5 +455,6 @@ fn two_daemons_hand_a_secret_over_sealed_and_old_peers_get_peer_too_old() {
     // The value is nowhere in plaintext on either server.
     for d in [&a, &b, &c] {
         assert_not_on_disk(&d.home, &secret);
+        assert_not_on_disk(&d.home, &enroll);
     }
 }

@@ -18960,7 +18960,7 @@ cmd_thread() {
     for arg in "$@"; do
         case "$arg" in
             --help|-h)
-                cmd_help_thread
+                if [[ "${1:-}" == "secret" ]]; then cmd_help_thread_secret; else cmd_help_thread; fi
                 return 0
                 ;;
         esac
@@ -18970,7 +18970,7 @@ cmd_thread() {
     for arg in "$@"; do
         if [[ $skip_next -eq 1 ]]; then skip_next=0; continue; fi
         case "$arg" in
-            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--file)
+            --from|--options|--option|--name|--prompt|--dest|--timeout|--style|--limit|--before-seq|--file|--scope|--for|--delivery|--kind|--ttl|--inject-dst|--inject-header|--inject-format)
                 skip_next=1
                 continue
                 ;;
@@ -19319,9 +19319,19 @@ print("%s  %s" % (d.get("id",""), d.get("status","")))
 cmd_thread_secret() {
     local target="" json="false" explicit_from="" name="" prompt="" dest=""
     local v_scope="" v_for="" v_delivery="" v_kind="" v_ttl=""
+    local v_inject_dst="" v_inject_header="" v_inject_format=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             secret) shift ;;
+            # prd-secret-card-injection-v1: how K2 sends it (fetch only).
+            # The same flags and checks as `k2 vault set`.
+            --inject-dst|--inject-header|--inject-format)
+                [[ $# -ge 2 ]] || { echo "Error: $1 requires a value" >&2; exit 1; }
+                case "$1" in
+                    --inject-dst) v_inject_dst="$2" ;; --inject-header) v_inject_header="$2" ;;
+                    --inject-format) v_inject_format="$2" ;;
+                esac
+                shift 2 ;;
             --json) json="true"; shift ;;
             --from)
                 [[ $# -ge 2 ]] || { echo "Error: --from requires a value" >&2; exit 1; }
@@ -19365,10 +19375,15 @@ cmd_thread_secret() {
         echo "Error: --dest vault only" >&2
         exit 1
     fi
+    if [[ -n "$v_inject_dst" && -n "$v_inject_header" ]]; then
+        echo "Error: give --inject-dst or --inject-header, not both" >&2
+        exit 1
+    fi
+    [[ -n "$v_inject_header" ]] && v_inject_dst="header:$v_inject_header"
     local from
     from="$(_thread_sender_from "$explicit_from")"
     local body
-    body=$(ADDR="$target" NAME="$name" FROM="$from" PROMPT="$prompt" V_SCOPE="$v_scope" V_FOR="$v_for" V_DELIVERY="$v_delivery" V_KIND="$v_kind" V_TTL="$v_ttl" python3 -c 'import json,os
+    body=$(ADDR="$target" NAME="$name" FROM="$from" PROMPT="$prompt" V_SCOPE="$v_scope" V_FOR="$v_for" V_DELIVERY="$v_delivery" V_KIND="$v_kind" V_TTL="$v_ttl" V_IDST="$v_inject_dst" V_IFMT="$v_inject_format" python3 -c 'import json,os
 obj={"addr":os.environ["ADDR"],"name":os.environ["NAME"],"from":os.environ.get("FROM","k2"),"dest":"vault"}
 p=os.environ.get("PROMPT") or ""
 if p:
@@ -19377,6 +19392,13 @@ for k, env in (("scope","V_SCOPE"),("for","V_FOR"),("delivery","V_DELIVERY"),("k
     v=os.environ.get(env) or ""
     if v:
         obj[k]=v
+inj={}
+if os.environ.get("V_IDST"):
+    inj["dst"]=os.environ["V_IDST"]
+if os.environ.get("V_IFMT"):
+    inj["fmt"]=os.environ["V_IFMT"]
+if inj:
+    obj["inject"]=inj
 print(json.dumps(obj))
 ')
     local response
@@ -19413,6 +19435,9 @@ if d.get("ok") is not True:
         sys.stderr.write(str(err)+"\n")
     sys.exit(2)
 print(d.get("id",""))
+# What the card says, in one line (stderr: stdout stays the card id).
+if d.get("sends"):
+    sys.stderr.write("card: %s\n" % d["sends"])
 '
 }
 
@@ -19536,10 +19561,12 @@ k2 thread — user-agent overlay (not PTY inject; that is k2 msg)
   k2 thread secret <addr> --name NAME             # secret field; you never see the value
       [--prompt "…"] (≤ 200 chars) [--for api.stripe.com[,…]] [--delivery fetch|file|env]
       [--scope workspace|server|session] [--kind api_key|password|…] [--ttl 24h]
+      [--inject-dst basic|header:Name|query:param] [--inject-format 'user:{}']
       The value goes into the K2 vault; you get a k2v:// reference and use it with
-      `k2 vault fetch --secret NAME …`. YOU choose the sites, scope and delivery: the
-      card shows your choice in one sentence and the person just clicks Save. If they
-      say it's wrong, `k2 thread void` it and ask again. Exact hosts only. More: k2 study vault
+      `k2 vault fetch --secret NAME …`. YOU choose the sites, scope, delivery and how
+      K2 sends it: the card shows your choice in one sentence and the person just
+      clicks Save. If they say it's wrong, `k2 thread void` it and ask again. Exact
+      hosts only. All flags: k2 thread secret --help. More: k2 study vault
   k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
   k2 thread unread [--kind thread|project] [--json]  # a PERSON's unread + waiting counts
   k2 thread read-all <agent> [--json]             # mark all of an agent's Thread messages read
@@ -19575,6 +19602,63 @@ tokens, credentials in the text) are refused: secrets go through k2 vault.
 path:12 or path:12-40 opens at that line.
 
 --json on any verb. Ask --option repeatable; --allow-custom; mix with --options is 400.
+EOF
+}
+
+cmd_help_thread_secret() {
+    cat <<'EOF'
+k2 thread secret — ask a person for a secret on a card; you never see the value
+
+  k2 thread secret <addr> --name NAME [flags]
+
+<addr> is the Thread the card goes to, as in k2 thread <addr>: your own
+workspace's name (ops) or a sidecar (ops/reviewer). NAME is how the secret is
+saved: letters, digits, _ . - (HETZNER_KEY).
+
+The person pastes the value into the card and clicks Save. It goes into the
+K2 vault and you get a k2v:// reference. You choose the flags below; the card
+says them in one plain sentence, and the person can change them under Advanced.
+
+WHERE IT GOES
+  --for HOST[,HOST]          the exact sites K2 may send it to: host names only,
+                             no https:// or path (api.example.com)
+  --delivery fetch|file|env  fetch (default): K2 makes the HTTPS call and adds the
+                             secret; you never see it. Use it with
+                             k2 vault fetch --secret NAME https://HOST/path
+                             (GET by default; k2 vault fetch --help)
+                             file: $K2_SECRETS_DIR/NAME. env: $NAME (upper case,
+                             - and . become _) in new sessions. You can read both.
+  --scope workspace|server|session  who keeps it (default workspace)
+  --kind api_key|password|generic|…  what it is, so the card names it (default
+                             api_key; password for a password)
+  --ttl 24h                  session scope: how long it lasts
+  --prompt "…"               your note, shown on the card beside its sentence
+                             (at most 200 characters)
+
+HOW K2 SENDS IT (fetch only)
+  Leave these out and K2 uses the format it knows for the key, else
+  Authorization: Bearer <secret>.
+  --inject-dst basic         a Basic login. The person pastes user:password (the
+                             user ends at the first :, the password may hold more).
+                             K2 builds the Authorization: Basic header.
+  --inject-dst basic --inject-format 'USER:{}'
+                             a Basic login as USER; the person pastes only the password
+  --inject-header NAME       the secret is the value of header NAME (X-Api-Key)
+  --inject-dst query:PARAM   the secret is the URL parameter PARAM (sites can log URLs)
+  --inject-format 'FORMAT'   how the value is written; {} is the secret, once
+                             ('Token {}'). With only a format, it goes in Authorization.
+  Once saved, only a person can change how it is sent.
+
+EXAMPLES
+  k2 thread secret ops --name STRIPE_KEY --for api.stripe.com
+  k2 thread secret ops --name JIRA_LOGIN --kind password --for acme.atlassian.net \
+      --inject-dst basic --prompt "Your Jira email and API token, as email:token"
+  k2 thread secret ops --name WEATHER_KEY --for api.weather.example --inject-dst query:appid
+  k2 thread secret ops --name GITHUB_CLI --delivery env
+
+It prints the card id, and on stderr what the card says. Don't wait: you get a
+Thread turn when it is saved. Wrong? k2 thread void <addr> <card-id> and ask
+again. --json prints the whole answer. More: k2 study vault
 EOF
 }
 
@@ -29429,7 +29513,9 @@ import json, sys
 r = json.load(sys.stdin).get("requests") or []
 if not r: print("no secret cards yet")
 for x in r:
-    print("%s %-8s %-24s asked by %s" % (x.get("createdAt"), x.get("status"), x.get("name"), x.get("requestedBy")))'
+    i = x.get("inject") or {}
+    how = ("  sends %s %s" % (i.get("dst"), i.get("fmt"))) if i else ""
+    print("%s %-8s %-24s asked by %s%s" % (x.get("createdAt"), x.get("status"), x.get("name"), x.get("requestedBy"), how))'
             ;;
         presets)
             _vault_call GET presets
@@ -42105,10 +42191,13 @@ START HERE
 
 ASKING: YOU MAKE THE CHOICES
   Pick them on the card yourself: --for (sites), --delivery fetch|file|env,
-  --scope workspace|server|session, --kind. The card tells the person what
-  happens in one sentence; they paste and Save. Prefer fetch with exact
-  sites; file/env only when a tool must read the value. If the setup is
-  wrong, void the card (k2 thread void <addr> <card-id>) and ask again.
+  --scope workspace|server|session, --kind, and for fetch how K2 sends it:
+  --inject-dst basic|header:<Name>|query:<param>, --inject-format 'user:{}'
+  (k2 thread secret --help). The card tells the person what happens in one
+  sentence; they paste and Save. Prefer fetch with exact sites; file/env
+  only when a tool must read the value. If the setup is wrong, void the
+  card (k2 thread void <addr> <card-id>) and ask again. A card for a name
+  that already exists replaces it, with the card's sites and sending.
 
 HOW YOU GET A SECRET (delivery)
   fetch   K2 makes the HTTPS call and adds the key. You never see it.

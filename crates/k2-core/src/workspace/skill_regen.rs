@@ -479,7 +479,7 @@ for this conversation. Same first-arg grammar as `k2 msg`.
 k2 thread <addr> "text"                         # overlay text (not PTY; that's k2 msg)
 k2 thread <addr>                                # read / tail
 k2 thread ask <addr> "prompt" --options "a,b,c" # choice card; do not wait (open 7 days; --expires 2h|3d, --no-expiry)
-k2 thread secret <addr> --name NAME             # secret field; you never see the value
+k2 thread secret <addr> --name NAME             # secret field; you never see the value (sites, how K2 sends it: --help)
 k2 thread void <addr> <card-id>                 # close your own card when it is obsolete
 k2 thread <addr> "text" --file path[:line[-end]]  # attach workspace files (repeatable, ≤10; text optional)
 ```

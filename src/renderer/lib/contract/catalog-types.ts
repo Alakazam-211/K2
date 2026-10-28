@@ -225,6 +225,9 @@ export const CATALOG_ERROR_CODES = [
   'relay_not_ready',
   'idempotency_conflict',
   'no_mail_path',
+  // Catalog v35 (email notifications part 2, N6).
+  'email_paused',
+  'all_suppressed',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

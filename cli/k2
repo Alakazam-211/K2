@@ -25053,6 +25053,8 @@ _vault_usage() {
 k2 vault — secrets for agents, without showing them the value
 
   k2 vault status                          where the key lives, recovery, honest line
+  k2 vault open                            open a vault that didn't open at start (a locked
+                                           or cancelled Keychain prompt); may ask once
   k2 vault list [--scope <s>] [--system]   names, scope, sites, delivery (never values)
   k2 vault show NAME [--scope <s>]         one secret: sites, delivery, shares, recent use
   k2 vault set NAME [options] < value      create, or a new version (value on stdin)
@@ -27159,6 +27161,11 @@ import json, sys
 v = json.load(sys.stdin)
 for j in v.get("stillRunning") or []:
     print("still running with it: job %s on %s (%s, %s); revoking stops its next attempt, not this one (k2 compute cancel %s)" % (j["short"], j["node"], j["env"], j["state"], j["short"]))'
+            ;;
+        open)
+            _vault_call POST open '{}'
+            [ "$as_json" = "1" ] && { printf '%s\n' "$_SC_BODY"; exit 0; }
+            echo "the vault is open"
             ;;
         disable|enable)
             [ -n "$name" ] || { echo "usage: k2 vault $sub NAME" >&2; exit 2; }
@@ -42995,8 +43002,9 @@ IN THE K2 VAULT (0.46.6, opt-in per server)
   The server default stays where each tool reads it.
   If the vault isn't open (a locked keychain), the server default and
   every file keep working; a token only the vault holds answers
-  vault_unavailable (503) until it opens. K2 tries to open it every
-  minute. K2_LLM_ACCOUNTS_STORAGE=files|vault in the daemon's env wins
+  vault_unavailable (503) until it opens. K2 tries again after 1, 2,
+  4 … up to 30 minutes; a cancelled Keychain prompt stops the retries
+  (a notice on your Thread) until `k2 vault open` or the next start. K2_LLM_ACCOUNTS_STORAGE=files|vault in the daemon's env wins
   over the setting.
 
 MOVING A BOX

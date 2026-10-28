@@ -59,6 +59,9 @@ pub const KEK_ROTATE: &str = "/cli/vault/kek/rotate";
 pub const REKEY: &str = "/cli/vault/rekey";
 pub const ROLLBACK: &str = "/cli/vault/rollback";
 pub const RESTORE: &str = "/cli/vault/restore";
+/// Open a vault that failed to open at boot, now (people only; it may
+/// show the Keychain prompt once). The way back after a cancelled prompt.
+pub const OPEN: &str = "/cli/vault/open";
 /// prd-vault-gaps-v1 item 3: an ssh key's `.pub` line, and its agent
 /// settings (rate limits, forwarded signing).
 pub const PUBLIC_KEY: &str = "/cli/vault/public-key";
@@ -90,6 +93,7 @@ pub const POST_ROUTES: &[&str] = &[
     ROLLBACK,
     RESTORE,
     AGENT_POLICY,
+    OPEN,
 ];
 
 /// Routes no passport (agent or K2 shell tab) may reach (KV14 DENY).
@@ -105,6 +109,7 @@ pub const PASSPORT_DENIED: &[&str] = &[
     REKEY,
     ROLLBACK,
     RESTORE,
+    OPEN,
     // prd-vault-gaps-v1 item 4: a root unit's credential is a person's call
     // (Q8: no permission card in v1).
     crate::vault_systemd_routes::SYSTEMD_CRED,
@@ -389,11 +394,30 @@ pub fn handle_with_peer(
     ingress: &str,
     not_person: Option<&'static str>,
 ) -> CliResponse {
+    if path == OPEN {
+        match &caller {
+            Ok(c) if !c.is_passport() && !c.is_job() => {}
+            Ok(_) => {
+                return refuse(&err("owner_only", 403, "opening the vault is for a person, in a terminal on this machine or Settings → Vault"));
+            }
+            Err(e) => return refuse(e),
+        }
+        return match crate::vault::open_now() {
+            Ok(_) => {
+                crate::vault::auth_audit("vault-open", "person", "opened", ingress);
+                ok(json!({ "open": true }))
+            }
+            Err(e) => {
+                crate::vault::auth_audit("vault-open", "person", &e.code, ingress);
+                refuse(&e)
+            }
+        };
+    }
     let vault = match crate::vault::get() {
         Ok(v) => v,
         Err(e) => {
             if path == STATUS {
-                return ok(json!({ "open": false, "error": { "code": e.code, "hint": e.hint } }));
+                return ok(json!({ "open": false, "error": { "code": e.code, "hint": e.hint }, "retry": crate::vault::retry_state() }));
             }
             return refuse(&e);
         }

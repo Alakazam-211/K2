@@ -189,64 +189,231 @@ pub fn boot(home: &Path) {
         }
         Err(e) => {
             k2_core::log_debug!("[vault] NOT open: {e}");
-            if retryable(&e.code) {
-                spawn_open_retry(home.to_path_buf());
+            let _ = HOME.set(home.to_path_buf());
+            match after_failure(&e.code, 0) {
+                RetryNext::Wait(_) => spawn_open_retry(home.to_path_buf()),
+                RetryNext::StopCancelled => stopped_cancelled(),
+                RetryNext::StopFatal => set_retry(RetryState::stopped("fatal", &e.code)),
             }
         }
     }
 }
 
+/// The daemon's K2 home, for an open asked for later (`POST /cli/vault/open`).
+static HOME: OnceLock<PathBuf> = OnceLock::new();
+
 /// Key-store failures that can clear on their own: a locked login
-/// Keychain (a Mac mini reached only by SSH, a dismissed dialog), a root
-/// helper that didn't answer. A missing key or a substituted vault never
-/// clears by waiting, so those are not retried.
+/// Keychain (a Mac mini reached only by SSH), a root helper that didn't
+/// answer. A missing key or a substituted vault never clears by waiting,
+/// so those are not retried.
 pub fn retryable(code: &str) -> bool {
     matches!(code, "keychain_error" | "keeper_error")
 }
 
-/// How often a vault that failed to open at boot is tried again
-/// (prd-llm-logins-in-vault-v1 Q4, Rosson: every minute).
-pub const OPEN_RETRY_EVERY: std::time::Duration = std::time::Duration::from_secs(60);
+/// A person said no to the prompt for the vault key (macOS
+/// `errSecUserCanceled`). Asking again on a timer would put the same
+/// dialog up over and over, so K2 stops asking.
+pub fn user_cancelled(code: &str) -> bool {
+    code == "user_cancelled"
+}
 
-/// Try to open the vault again every minute until it opens or fails for
-/// a reason waiting can't fix. On success the vault is served at once
-/// ([`get`]) with its runtime steps; the boot-only steps (moving old
-/// stores in, the R8 upgrade, the secrets-dir sweep) wait for the next
-/// daemon start, because services are already running.
-fn spawn_open_retry(home: PathBuf) {
-    let rt = tokio::runtime::Handle::try_current().ok();
-    let _ = std::thread::Builder::new().name("vault-open-retry".into()).spawn(move || {
-        let _enter = rt.as_ref().map(|h| h.enter());
-        let mut tries: u64 = 0;
-        loop {
-            std::thread::sleep(OPEN_RETRY_EVERY);
-            if get().is_ok() {
-                return; // opened another way (a restore)
+/// The wait before retry number `tries` (1-based): 1, 2, 4, 8, 16 minutes,
+/// then every 30 (prd-llm-logins-in-vault-v1 Q4, with a back-off so a
+/// prompt can't come back every minute).
+pub fn backoff(tries: u32) -> std::time::Duration {
+    let mins = 1u64.checked_shl(tries.saturating_sub(1)).unwrap_or(u64::MAX).min(30);
+    std::time::Duration::from_secs(mins * 60)
+}
+
+/// What the retry does after a failed open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetryNext {
+    /// Wait this long, then try again.
+    Wait(std::time::Duration),
+    /// The person cancelled the prompt: stop, tell the owner once, and
+    /// open only on an explicit action or the next daemon start.
+    StopCancelled,
+    /// Waiting can't fix it.
+    StopFatal,
+}
+
+/// After the `tries`-th failed open (0 = the boot open).
+pub fn after_failure(code: &str, tries: u32) -> RetryNext {
+    if user_cancelled(code) {
+        RetryNext::StopCancelled
+    } else if retryable(code) {
+        RetryNext::Wait(backoff(tries + 1))
+    } else {
+        RetryNext::StopFatal
+    }
+}
+
+/// The retry's state, for `/cli/vault/status` while the vault is closed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryState {
+    /// `waiting`, `stopped`, or empty (no retry).
+    pub state: String,
+    /// `cancelled` or `fatal` when stopped.
+    pub reason: Option<String>,
+    pub tries: u32,
+    pub next_in_secs: Option<u64>,
+    pub last_code: Option<String>,
+}
+
+impl RetryState {
+    fn stopped(reason: &str, code: &str) -> RetryState {
+        RetryState { state: "stopped".into(), reason: Some(reason.into()), last_code: Some(code.into()), ..Default::default() }
+    }
+}
+
+static RETRY: parking_lot::Mutex<Option<RetryState>> = parking_lot::Mutex::new(None);
+
+fn set_retry(s: RetryState) {
+    *RETRY.lock() = Some(s);
+}
+
+pub fn retry_state() -> Option<RetryState> {
+    RETRY.lock().clone()
+}
+
+/// The one notice when a person cancelled the vault-key prompt.
+pub const CANCELLED_TITLE: &str = "K2 couldn't open the vault; unlock it";
+pub const CANCELLED_BODY: &str = "macOS asked for permission to read the K2 vault's key and the request was cancelled, so K2 stopped asking. \
+Until the vault opens, vault secrets and saved LLM logins that only the vault holds can't be used (the server default login keeps working). \
+To open it, run `k2 vault open` in a terminal on this Mac (allow the prompt), or restart K2.";
+
+fn stopped_cancelled() {
+    set_retry(RetryState::stopped("cancelled", "user_cancelled"));
+    k2_core::log_debug!("[vault] the vault-key prompt was cancelled; K2 won't ask again until `k2 vault open` or the next start");
+    file_owner_notice(CANCELLED_TITLE, CANCELLED_BODY);
+}
+
+fn file_owner_notice(title: &str, body: &str) {
+    #[cfg(not(test))]
+    if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-vault", title, body) {
+        k2_core::log_debug!("WARN [vault] owner notice '{title}': {e}");
+    }
+    #[cfg(test)]
+    OWNER_NOTICES.lock().push(format!("{title}\n{body}"));
+}
+
+#[cfg(test)]
+pub static OWNER_NOTICES: parking_lot::Mutex<Vec<String>> = parking_lot::Mutex::new(Vec::new());
+
+/// The retry loop, with the open and the wait passed in (tests drive it
+/// with a fake key store and no real sleep). Returns the open vault, or
+/// `None` when it stopped.
+pub fn run_open_retry(
+    mut open: impl FnMut() -> Result<Arc<LocalVault>, VaultError>,
+    mut wait: impl FnMut(std::time::Duration),
+    already_open: impl Fn() -> bool,
+    record: impl Fn(&VaultError),
+) -> Option<Arc<LocalVault>> {
+    let mut tries: u32 = 0;
+    let mut next = backoff(1);
+    loop {
+        set_retry(RetryState { state: "waiting".into(), tries, next_in_secs: Some(next.as_secs()), ..Default::default() });
+        wait(next);
+        if already_open() {
+            *RETRY.lock() = None;
+            return None; // opened another way (`k2 vault open`, a restore)
+        }
+        tries += 1;
+        match open() {
+            Ok(v) => {
+                *RETRY.lock() = None;
+                k2_core::log_debug!("[vault] open after {tries} retr{}", if tries == 1 { "y" } else { "ies" });
+                return Some(v);
             }
-            tries += 1;
-            let ks = select_key_store(&home);
-            match open_with_upgrade(&vault_dir(&home), &home, ks) {
-                Ok(v) => {
-                    *cell().write() = Ok(v.clone());
-                    k2_core::log_debug!("[vault] open after {tries} retr{}", if tries == 1 { "y" } else { "ies" });
-                    on_late_open(&v);
-                    return;
-                }
-                Err(e) => {
-                    let again = retryable(&e.code);
-                    // Keep the newest reason for /cli/vault/status.
-                    *cell().write() = Err(e.clone());
-                    if !again {
-                        k2_core::log_debug!("[vault] retry stopped: {e}");
-                        return;
+            Err(e) => {
+                // Keep the newest reason for /cli/vault/status.
+                record(&e);
+                match after_failure(&e.code, tries) {
+                    RetryNext::Wait(d) => {
+                        if tries <= 5 || tries % 10 == 0 {
+                            k2_core::log_debug!("[vault] still not open ({}), next try in {} min", e.code, d.as_secs() / 60);
+                        }
+                        next = d;
                     }
-                    if tries == 1 || tries % 60 == 0 {
-                        k2_core::log_debug!("[vault] still not open ({}), retrying every minute", e.code);
+                    RetryNext::StopCancelled => {
+                        stopped_cancelled();
+                        return None;
+                    }
+                    RetryNext::StopFatal => {
+                        k2_core::log_debug!("[vault] retry stopped: {e}");
+                        set_retry(RetryState::stopped("fatal", &e.code));
+                        return None;
                     }
                 }
             }
         }
+    }
+}
+
+/// Try to open the vault again with a back-off (1, 2, 4, 8, 16, then
+/// every 30 minutes) until it opens, a person cancels the key prompt, or
+/// it fails for a reason waiting can't fix. On success the vault is
+/// served at once ([`get`]) with its runtime steps; the boot-only steps
+/// (moving old stores in, the R8 upgrade, the secrets-dir sweep) wait for
+/// the next daemon start, because services are already running.
+fn spawn_open_retry(home: PathBuf) {
+    let rt = tokio::runtime::Handle::try_current().ok();
+    let _ = std::thread::Builder::new().name("vault-open-retry".into()).spawn(move || {
+        let _enter = rt.as_ref().map(|h| h.enter());
+        let opened = run_open_retry(
+            || open_with_upgrade(&vault_dir(&home), &home, select_key_store(&home)),
+            std::thread::sleep,
+            || get().is_ok(),
+            |e| {
+                let mut c = cell().write();
+                if c.is_err() {
+                    *c = Err(e.clone());
+                }
+            },
+        );
+        if let Some(v) = opened {
+            publish_late(v);
+        }
     });
+}
+
+/// `POST /cli/vault/open`: a person asked K2 to open the vault now (it may
+/// show the key prompt once). Also the way back after a cancelled prompt.
+pub fn open_now() -> Result<Arc<LocalVault>, VaultError> {
+    if let Ok(v) = get() {
+        return Ok(v);
+    }
+    let home = HOME.get().cloned().ok_or_else(|| VaultError::new("vault_not_open", 503, "the vault isn't open yet"))?;
+    match open_with_upgrade(&vault_dir(&home), &home, select_key_store(&home)) {
+        Ok(v) => {
+            *RETRY.lock() = None;
+            publish_late(v.clone());
+            Ok(v)
+        }
+        Err(e) => {
+            *cell().write() = Err(e.clone());
+            if user_cancelled(&e.code) {
+                set_retry(RetryState::stopped("cancelled", &e.code));
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Serve a vault that opened after boot and start its runtime steps,
+/// once (the retry and `k2 vault open` can race).
+fn publish_late(v: Arc<LocalVault>) {
+    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let mut c = cell().write();
+    if c.is_ok() {
+        return;
+    }
+    *c = Ok(v.clone());
+    drop(c);
+    if !DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        on_late_open(&v);
+    }
 }
 
 /// The runtime half of a boot open, for a vault that opened late.
@@ -535,6 +702,81 @@ mod upgrade_tests {
 
 #[cfg(test)]
 mod tests {
+    // ── The boot open retry: back-off, and a cancelled prompt stops it ──
+
+    /// The retry state is process-wide: these tests take turns.
+    static RETRY_TESTS: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    /// A root helper whose every call fails with `code`.
+    struct FakeKeeper(&'static str);
+    impl k2_vault::keystore::keeper::KeeperTransport for FakeKeeper {
+        fn call(&self, _args: &[&str]) -> Result<Vec<u8>, k2_vault::VaultError> {
+            Err(k2_vault::VaultError::new(self.0, 500, "fake keeper"))
+        }
+    }
+
+    #[test]
+    fn the_open_retry_backs_off_to_thirty_minutes() {
+        let mins: Vec<u64> = (1..=8).map(|t| super::backoff(t).as_secs() / 60).collect();
+        assert_eq!(mins, vec![1, 2, 4, 8, 16, 30, 30, 30]);
+        assert_eq!(super::backoff(200).as_secs(), 30 * 60, "no overflow");
+        assert_eq!(super::after_failure("keychain_error", 0), super::RetryNext::Wait(std::time::Duration::from_secs(60)));
+        assert_eq!(super::after_failure("keeper_error", 3), super::RetryNext::Wait(std::time::Duration::from_secs(8 * 60)));
+        assert_eq!(super::after_failure("user_cancelled", 0), super::RetryNext::StopCancelled);
+        assert_eq!(super::after_failure("vault_key_missing", 2), super::RetryNext::StopFatal);
+        assert_eq!(super::after_failure("vault_substituted", 0), super::RetryNext::StopFatal);
+    }
+
+    #[test]
+    fn a_cancelled_key_prompt_stops_the_retry_and_tells_the_owner_once() {
+        let _turn = RETRY_TESTS.lock();
+        let dir = k2_vault::fsutil::TestDir::new("vault-open-retry");
+        let codes = ["keeper_error", "keeper_error", "user_cancelled", "keeper_error", "keeper_error"];
+        let opened = std::sync::atomic::AtomicUsize::new(0);
+        let waits = std::cell::RefCell::new(Vec::new());
+        let recorded = std::cell::RefCell::new(Vec::new());
+        let before = super::OWNER_NOTICES.lock().iter().filter(|n| n.starts_with(super::CANCELLED_TITLE)).count();
+        let out = super::run_open_retry(
+            || {
+                let code = codes[opened.fetch_add(1, std::sync::atomic::Ordering::SeqCst)];
+                let ks: std::sync::Arc<dyn k2_vault::KeyStore> =
+                    std::sync::Arc::new(k2_vault::keystore::keeper::KeeperKeyStore::new(FakeKeeper(code)));
+                k2_vault::LocalVault::open(dir.path().join("vault"), ks, k2_vault::OpenOptions { kdf: k2_vault::confirm::KdfCost::Floor })
+                    .map(std::sync::Arc::new)
+            },
+            |d| waits.borrow_mut().push(d.as_secs() / 60),
+            || false,
+            |e| recorded.borrow_mut().push(e.code.to_string()),
+        );
+        assert!(out.is_none(), "never opened");
+        assert_eq!(opened.load(std::sync::atomic::Ordering::SeqCst), 3, "no try after the person cancelled the prompt");
+        assert_eq!(*waits.borrow(), vec![1, 2, 4], "1, 2, 4 minutes: backing off, never every minute");
+        assert_eq!(*recorded.borrow(), vec!["keeper_error", "keeper_error", "user_cancelled"]);
+        let notices: Vec<String> =
+            super::OWNER_NOTICES.lock().iter().filter(|n| n.starts_with(super::CANCELLED_TITLE)).cloned().collect();
+        assert_eq!(notices.len(), before + 1, "one notice on the owner's Thread");
+        assert!(notices.last().unwrap().contains("k2 vault open"), "it says how to open it");
+        let st = super::retry_state().expect("a retry state");
+        assert_eq!((st.state.as_str(), st.reason.as_deref()), ("stopped", Some("cancelled")));
+    }
+
+    #[test]
+    fn the_retry_ends_quietly_when_the_vault_opened_another_way() {
+        let _turn = RETRY_TESTS.lock();
+        let tries = std::sync::atomic::AtomicUsize::new(0);
+        let out = super::run_open_retry(
+            || {
+                tries.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(k2_vault::VaultError::new("keychain_error", 500, "locked"))
+            },
+            |_| {},
+            || true,
+            |_| panic!("nothing to record"),
+        );
+        assert!(out.is_none());
+        assert_eq!(tries.load(std::sync::atomic::Ordering::SeqCst), 0, "no open after `k2 vault open` won");
+    }
+
     /// A daemon on another HOME (tests, temp homes) never uses the
     /// account's login Keychain; the account's own ~/.k2 does (outside a
     /// test harness).

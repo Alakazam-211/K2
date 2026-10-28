@@ -21,6 +21,9 @@ const ANCHOR: &str = "anchor";
 
 /// errSecItemNotFound
 const NOT_FOUND: i32 = -25300;
+/// errSecUserCanceled (Cancel on the unlock or access dialog) and
+/// errSecAuthFailed (Deny, or a wrong password at the prompt).
+const USER_SAID_NO: [i32; 2] = [-128, -25293];
 
 pub struct KeychainKeyStore;
 
@@ -33,6 +36,13 @@ impl KeychainKeyStore {
         match get_generic_password(SERVICE, account) {
             Ok(v) => Ok(Some(v)),
             Err(e) if e.code() == NOT_FOUND => Ok(None),
+            // The person cancelled or denied the prompt: a code of its own,
+            // so the boot retry stops asking (it would prompt again).
+            Err(e) if USER_SAID_NO.contains(&e.code()) => Err(VaultError::new(
+                "user_cancelled",
+                500,
+                format!("the Keychain prompt for the vault key was cancelled ({}); the vault stays closed until `k2 vault open`", e.code()),
+            )),
             Err(e) => Err(VaultError::new(
                 "keychain_error",
                 500,

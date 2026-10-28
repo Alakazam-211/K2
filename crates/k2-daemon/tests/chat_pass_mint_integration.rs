@@ -19,6 +19,9 @@ use k2_daemon::chat_pass::{self, verify_with_jwks};
 use k2_daemon::test_harness;
 use serde_json::{json, Value};
 
+#[path = "support/sew_ready.rs"]
+mod sew_ready;
+
 static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 const OWNER_TOKEN: &str = "owner-token-chat-pass-k7";
 const INSTALL: &str = "123456789";
@@ -137,6 +140,8 @@ async fn boot() -> (Env, test_harness::TestDaemon) {
     row.status = "running".into();
     row.install_id = Some(INSTALL.into());
     k2_daemon::sew::store::save(&row).expect("sew row");
+    // ...and a Sew that answers its health probe ready (the 0.3.1 mint gate).
+    sew_ready::serve();
     chat_pass::ratelimit::MINTS.reset();
     chat_pass::ratelimit::HANDOFFS.reset();
     chat_pass::handoff::CODES.clear();

@@ -16,6 +16,8 @@
 
 #[path = "support/app_fixture.rs"]
 mod app_fixture;
+#[path = "support/sew_ready.rs"]
+mod sew_ready;
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -189,6 +191,8 @@ async fn t1_1_no_agent_credential_reaches_any_users_arm() {
     row.status = "running".into();
     row.install_id = Some("123456789".into());
     k2_daemon::sew::store::save(&row).expect("sew row");
+    // Sew answers its health probe ready (the 0.3.1 mint gate).
+    sew_ready::serve();
     let chat_guest = format!("cg{tag}");
     let cg = k2_core::skin::add_principal(&chat_guest).expect("chat guest");
     k2_core::skin::insert_chat_grant_for_tests(&cg.id).expect("chat grant");

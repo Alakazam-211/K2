@@ -105,6 +105,20 @@ pub struct ChatPassClaims {
 /// Longest `app` claim Sew accepts (Sew 0.5.0; it was 128 before).
 pub const MAX_APP_CLAIM: usize = k2_core::tool_hook::sew_wire::APP_ID_MAX_BYTES;
 
+/// The caps an App pass carries (Sew 2026-10-28): a pass with an `app`
+/// claim ALWAYS carries a `caps` claim, because Sew reads no claim as no
+/// ceiling at all (kept for old non-App passes). An App role with no chat
+/// cap gets the floor, `["chat:read"]`, so `voice:join` and `voice:video`
+/// are real ceilings there too. A pass without an `app` claim keeps its
+/// caps as given (empty → no claim, as before).
+pub fn app_pass_caps(caps: Vec<String>, app: Option<&str>) -> Vec<String> {
+    if app.is_some() && caps.is_empty() {
+        vec![CAP_CHAT_READ.to_string()]
+    } else {
+        caps
+    }
+}
+
 /// Sew 0.5.0's `app` grammar ([`k2_core::tool_hook::sew_wire::is_app_id`]):
 /// 1–64 of `[a-z0-9][a-z0-9._-]*`; Sew answers anything else 401
 /// `bad_app`. K2's service ids are `uuid::Uuid::new_v4().to_string()` (36
@@ -208,11 +222,17 @@ impl ChatPassClaims {
             if !app_claim_ok(app) {
                 return Err(format!("app must be 1-{MAX_APP_CLAIM} of [a-z0-9][a-z0-9._-]*"));
             }
+            // Sew 0.5.0: no `caps` claim = no ceiling (kept for old non-App
+            // passes), so an App pass always carries one ([`app_pass_caps`]).
+            if self.caps.is_none() {
+                return Err("an App pass (app claim) always carries caps: without one Sew applies no ceiling".into());
+            }
         }
         Ok(())
     }
 
-    /// Attach the App this pass is for (`None` → no claim).
+    /// Attach the App this pass is for (`None` → no claim). Attach caps
+    /// first ([`app_pass_caps`]): an App pass without them is refused.
     pub fn with_app(mut self, app: Option<&str>) -> Result<ChatPassClaims, String> {
         self.app = app.map(str::to_string);
         self.validate()?;

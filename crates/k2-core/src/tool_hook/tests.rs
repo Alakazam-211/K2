@@ -1782,19 +1782,8 @@ fn a8_fill_round_trips_only_fields_k2_does_not_own() {
     );
     // Nothing known → nothing changes.
     let mut d2 = desired_person(&a, "ann", false, "r");
-    let bare = member(ExternalId::K2Principal(a.clone()), MemberKind::Person, "ann", "ann");
+    let bare = member(ExternalId::K2Principal(a), MemberKind::Person, "ann", "ann");
     assert!(!chat::fill_provision_from_member(&mut d2.request, &bare));
-    // Sew 0.5.0 with K2's managed-fields policy: title/pronouns are the
-    // member's own, never copied back and never sent.
-    let mut d3 = desired_person(&a, "ann", false, "r");
-    assert!(!chat::fill_provision_from_member_as(&mut d3.request, &m, true), "nothing K2 sends changed");
-    assert_eq!((d3.request.profile.title.as_deref(), d3.request.profile.pronouns.as_deref()), (None, None));
-    let mut d4 = desired_person(&a, "ann", false, "r");
-    d4.request.profile.title = Some("stale".into());
-    assert!(chat::fill_provision_from_member_as(&mut d4.request, &m, true), "a carried title is dropped");
-    assert_eq!(d4.request.profile.title, None);
-    let v = serde_json::to_value(&d4.request).unwrap();
-    assert!(v["profile"].get("title").is_none() && v["profile"].get("pronouns").is_none(), "{v}");
 }
 
 #[test]

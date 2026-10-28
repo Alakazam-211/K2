@@ -776,9 +776,10 @@ fn two_apps_on_one_box_each_mint_for_their_own_guests_k_m4() {
 }
 
 /// Sew for Apps A1: an App role's chat caps (on any of its room lines)
-/// ride the person's pass as its `caps` ceiling, with `chat:read` added;
-/// a role without chat caps on an App with no manifest keeps the old
-/// no-claim pass.
+/// ride the person's pass as its `caps` ceiling, with `chat:read` added.
+/// Sew 0.5.0: no App pass mints without a `caps` claim (no claim = no
+/// ceiling): a role without chat caps gets `["chat:read"]`, so a role
+/// without `voice:video` mints a pass whose caps lack it.
 #[test]
 fn app_role_chat_caps_ride_the_pass_a1() {
     let _home = TempHome::new();
@@ -812,12 +813,44 @@ fn app_role_chat_caps_ride_the_pass_a1() {
         let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("verifies");
         assert_eq!(serde_json::to_value(&c.caps).unwrap(), want, "the JWS carries the same ceiling");
         assert_eq!(c.app.as_deref(), Some(HEARTH_SVC));
-        // No chat cap on the role, no manifest: no claim (as before A1).
+        // No chat cap on the role, no manifest: the floor, never no claim.
         let x = mint::handle_pass_with(&req(Some(&dee_h.raw), b"{}"), d);
         assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
-        assert!(body(&x).get("caps").is_none(), "{}", x.response.body);
+        let b = body(&x);
+        assert_eq!(b["caps"], json!(["chat:read"]), "an App pass always carries caps: {b}");
+        let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("verifies");
+        assert_eq!((c.caps.as_deref(), c.app.as_deref()), (Some(&["chat:read".to_string()][..]), Some(HEARTH_SVC)));
+        assert!(!c.caps.unwrap().iter().any(|x| x == "voice:video" || x == "voice:join"), "no voice: a real ceiling");
     });
     assert!(!plain.is_empty());
+}
+
+/// Sew 0.5.0: an App role without `voice:video` mints a pass whose caps
+/// lack it, and no App pass can be built or signed without a caps claim.
+#[test]
+fn app_passes_always_carry_caps_and_video_is_a_ceiling() {
+    let r = ring("sew050-caps");
+    let svc = "0f8fad5b-d9cb-469f-a165-70867728950e";
+    let base = || ChatPassClaims::new(INSTALL, "k2:principal:p", "skn_1", T0).unwrap();
+    // The floor for an App pass, untouched for a non-App one.
+    assert_eq!(super::app_pass_caps(vec![], Some(svc)), vec!["chat:read".to_string()]);
+    assert_eq!(super::app_pass_caps(vec![], None), Vec::<String>::new(), "old non-App passes keep no claim");
+    let voice = vec!["voice:join".to_string()];
+    assert_eq!(super::app_pass_caps(voice.clone(), Some(svc)), voice);
+    // A voice role without video: its pass names voice:join, never voice:video.
+    let c = base().with_caps(super::app_pass_caps(voice, Some(svc))).unwrap().with_app(Some(svc)).unwrap();
+    assert_eq!(c.caps.as_deref(), Some(&["chat:read".to_string(), "voice:join".to_string()][..]));
+    let jwks = r.ring.public_jwks(T0).expect("jwks");
+    let got = verify_with_jwks(&r.ring.sign(&c, T0).expect("sign"), &jwks, AUD, T0).expect("verifies");
+    assert!(!got.caps.expect("caps").iter().any(|x| x == "voice:video"));
+    // No caps claim on an App pass: refused when built, and never signed.
+    let e = base().with_app(Some(svc)).expect_err("an App pass without caps");
+    assert!(e.contains("always carries caps"), "{e}");
+    let mut bad = base();
+    bad.app = Some(svc.to_string());
+    assert!(r.ring.sign(&bad, T0).is_err(), "signing re-validates");
+    // A non-App pass may still omit caps.
+    assert!(base().with_app(None).is_ok());
 }
 
 /// Spec v1.3's `app` claim: App sessions only, in Sew's grammar; K2's
@@ -856,7 +889,12 @@ fn app_claim_is_for_app_sessions_only_and_fits_sews_grammar() {
     assert!(super::app_claim_ok("0a._-z"));
     // Signed and verified, and refused by validate when malformed.
     let r = ring("k7-app");
-    let c = ChatPassClaims::new(INSTALL, "k2:principal:p", "skn_1", T0).unwrap().with_app(Some(&uuid)).unwrap();
+    let c = ChatPassClaims::new(INSTALL, "k2:principal:p", "skn_1", T0)
+        .unwrap()
+        .with_caps(super::app_pass_caps(vec![], Some(&uuid)))
+        .unwrap()
+        .with_app(Some(&uuid))
+        .unwrap();
     let got = verify_with_jwks(&r.ring.sign(&c, T0).unwrap(), &r.ring.public_jwks(T0).unwrap(), AUD, T0).unwrap();
     assert_eq!(got.app.as_deref(), Some(uuid.as_str()));
     assert!(ChatPassClaims::new(INSTALL, "k2:principal:p", "skn_1", T0).unwrap().with_app(Some("UPPER")).is_err());

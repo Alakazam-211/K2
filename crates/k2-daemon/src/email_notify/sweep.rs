@@ -11,7 +11,8 @@
 //!   - E22: log rows past the owner's retention (30 days by default);
 //!   - E19: idempotency keys past 24 h;
 //!   - E26: retired senders whose 30-day reservation ended;
-//!   - E15: held rows whose approval was denied, expired or failed become `refused`.
+//!   - E15: held rows whose approval was denied, expired or failed become `refused`;
+//!   - V: confirm links past 24 h expire; dead verified-address rows go after 90 days.
 
 use k2_core::email_notify as store;
 
@@ -89,6 +90,9 @@ pub fn hourly(now: i64) -> (u64, usize) {
             }
         }
     }
+    drop(conn);
+    // Verified addresses (slice V): expire due links, forget long-dead rows.
+    super::verify::hourly(now);
     if destroyed > 0 || purged > 0 {
         k2_core::log_debug!("[email-notify] hourly: {destroyed} sender-mailbox message(s) destroyed, {purged} log row(s) past retention");
     }

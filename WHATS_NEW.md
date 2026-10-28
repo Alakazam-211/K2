@@ -26,6 +26,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 - **`k2 app email send` from a plain K2 terminal tab counts as that workspace's agent.** It follows the agent's email sending setting, like the agent's own sends. Your own terminal outside K2, and Owner or Admin logins, still send as themselves.
 - **Confirms for email name exactly what you approve.** Turning an App's email on now confirms that App and that sender together, and adding an SMTP relay confirms its host, From domain and login. A confirm for one can't be used for another.
+- **Set your own notice address, confirmed by you.** `k2 notifications email address set you@example.com`, run from your own terminal, emails that address a confirm link from your server's system sender. Nothing else is sent there until you press Confirm on the page the link opens, and a link scanner opening it can't confirm for you. Every email to the address has a link to stop them. Agents' email notices will go to this address.
 - **An agent that adds a mail domain under one of your domains no longer gets its records written into your main domain's DNS.** K2 writes them there only when you add the domain yourself, or when the domain carries an email sender.
 
 ### Vault

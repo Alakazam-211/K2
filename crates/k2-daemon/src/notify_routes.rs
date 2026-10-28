@@ -7,6 +7,9 @@
 //! | POST | `/cli/notify/prefs`     | Member | the caller's person key |
 //! | GET  | `/cli/notify/admin`     | Admin  | everyone + the workspace defaults |
 //! | POST | `/cli/notify/admin/set` | Admin  | a workspace default (Admin+), or another person's row (Owner only) |
+//! | GET  | `/cli/notify/email/address` | Member | the caller's notice address (`?person=`: Admin+), `email_notify::verify` |
+//! | POST | `/cli/notify/email/address/set` | Member | the caller's own: sends a confirm link |
+//! | POST | `/cli/notify/email/address/remove` | Member | the caller's own; `person` = someone else's (Admin+) |
 //! | GET  | `/cli/people/color`     | Member | the palette, the caller's colour, everyone's effective colour |
 //! | POST | `/cli/people/color`     | Member | the caller's own colour; `user` = someone else's (Admin+, see below) |
 //! | GET  | `/cli/people/name`      | Member | the caller's (or `?person=`'s) names + everyone's |
@@ -88,6 +91,14 @@ fn reserved_login_refusal() -> CliResponse {
 pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResponse> {
     match path {
         ADMIN_SET_PATH | OWNER_ACCOUNT_PROMPT_DISMISS_PATH => Some(CliResponse::method_not_allowed()),
+        crate::email_notify::verify::ADDRESS_SET_PATH | crate::email_notify::verify::ADDRESS_REMOVE_PATH => {
+            Some(CliResponse::method_not_allowed())
+        }
+        crate::email_notify::verify::ADDRESS_PATH => Some(error(
+            "403 Forbidden",
+            "forbidden",
+            "a notice address belongs to a person: sign in (an agent cannot read or set it)",
+        )),
         PREFS_PATH | ADMIN_PATH | OWNER_ACCOUNTS_PATH | PEOPLE_COLOR_PATH | PEOPLE_NAME_PATH
         | OWNER_ACCOUNT_PROMPT_PATH => Some(error(
             "403 Forbidden",
@@ -159,6 +170,11 @@ pub fn handle_with_params(
             };
             people_name_view(&people, &login)
         };
+    }
+    if crate::email_notify::verify::is_person_route(path) {
+        // Email Notifications part 2, slice V: a person's notice address
+        // (it sends mail, so it runs without this handler's db lock).
+        return crate::email_notify::verify::person_route(is_post, path, body, &person, role, params);
     }
     let db = k2_core::db::shared();
     let conn = db.lock();

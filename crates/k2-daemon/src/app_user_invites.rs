@@ -259,6 +259,16 @@ pub fn k2_set_password_page() -> Result<Option<String>, String> {
     front_door_page(&door, &app_hosts()).map(Some)
 }
 
+/// Another of K2's own pages on the box front door (`<door><path>`), with
+/// the same rules as [`k2_set_password_page`]: https (or exact localhost),
+/// never an App's host. Email Notifications' confirm and stop pages
+/// (`/cli/email/verify`, `/cli/email/stop`).
+pub fn k2_front_door_url(path: &str) -> Result<Option<String>, String> {
+    let Some(page) = k2_set_password_page()? else { return Ok(None) };
+    let base = page.strip_suffix(crate::skin_gateway::SET_PASSWORD_PATH).unwrap_or(&page);
+    Ok(Some(format!("{base}{path}")))
+}
+
 /// [`k2_set_password_page`] for front door `door` given every App host.
 fn front_door_page(door: &str, app_hosts: &[String]) -> Result<String, String> {
     let door = door.trim().trim_end_matches('/').to_string();
@@ -380,7 +390,7 @@ pub fn owner_reset_sender(app: &str, from: Option<&str>) -> Result<Option<Sender
 
 /// How the owner is named in a mail: the box's front door host, else
 /// "this K2 server".
-fn box_label() -> String {
+pub(crate) fn box_label() -> String {
     skin::effective_front_door()
         .ok()
         .and_then(|d| d.url)

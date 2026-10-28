@@ -1650,3 +1650,120 @@ fn l13_reply_to_uses_the_public_suffix_list() {
     assert_eq!(send::registrable("notify.brand.test").as_deref(), Some("brand.test"));
     assert_eq!(send::registrable("github.io"), None, "a public suffix has no registrable part");
 }
+
+// ── part 2, slice V: verified addresses ──────────────────────────────
+
+fn person_call(path: &str, person: &str, role: Role, is_post: bool, body: J, q: &[(&str, &str)]) -> (u16, J) {
+    let params: HashMap<String, String> = q.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let r = verify::person_route(is_post, path, body.to_string().as_bytes(), person, role, &params);
+    (status_of(&r), body_of(&r))
+}
+
+/// The `k2ev_…` / `k2es_…` token in the last mail sent.
+fn token_in_last_mail(f: &Fx, prefix: &str) -> String {
+    let sent = f.engine.sent.lock().unwrap().clone();
+    let text = sent.last().expect("a mail").email.to_string();
+    let at = text.find(prefix).unwrap_or_else(|| panic!("no {prefix} token in {text}"));
+    text[at..].chars().take(prefix.len() + 43).collect()
+}
+
+fn system_sender_on() -> store::Sender {
+    let sys = add_hosted("system@notify.brand.test");
+    senders::set_system(&sys.id, "owner", now()).expect("system");
+    senders::find_live(&sys.id).expect("live")
+}
+
+#[test]
+fn v_a_notice_address_is_confirmed_by_post_only_and_any_stop_link_ends_it() {
+    let f = fx("vaddr");
+    use verify::{ADDRESS_PATH as SHOW, ADDRESS_SET_PATH as SET, STOP_PATH, VERIFY_PATH};
+    k2_core::skin::set_front_door("direct", Some("https://box.brand.test"), None, None).expect("door");
+    // No system sender: nothing is sent and no row is left.
+    let (st, v) = person_call(SET, "owner", Role::Owner, true, json!({"address": "me@x.test"}), &[]);
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("no_mail_path")), "{v}");
+    let sys = system_sender_on();
+    // A GET on a POST route is 405.
+    let (st, _) = person_call(SET, "owner", Role::Owner, false, json!({}), &[]);
+    assert_eq!(st, 405);
+    let (st, v) = person_call(SET, "owner", Role::Owner, true, json!({"address": "Me@X.test"}), &[]);
+    assert_eq!((st, v["address"]["state"].clone(), v["address"]["address"].clone()), (200, json!("pending"), json!("me@x.test")), "{v}");
+    let mail = f.engine.sent.lock().unwrap().last().cloned().expect("sent");
+    assert_eq!((mail.from.as_str(), mail.rcpt.clone()), (sys.address.as_str(), vec!["me@x.test".to_string()]));
+    let text = mail.email.to_string();
+    assert!(text.contains("https://box.brand.test/cli/email/verify?t=k2ev_"), "{text}");
+    assert!(text.contains("https://box.brand.test/cli/email/stop?t=k2es_"), "{text}");
+    assert!(text.contains("The owner of box.brand.test"), "who asked: {text}");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let purpose: String = conn.query_row("SELECT purpose FROM email_notify_log ORDER BY created_at DESC LIMIT 1", [], |r| r.get(0)).expect("log");
+        assert_eq!(purpose, verify::PURPOSE_MAIL);
+    }
+    let tok = token_in_last_mail(&f, "k2ev_");
+    let stop = token_in_last_mail(&f, "k2es_");
+    // A GET (a link scanner) renders the page and never confirms.
+    let p = verify::page_get(VERIFY_PATH, &format!("t={tok}"));
+    assert!(p.status.starts_with("200") && p.html.contains("me@x.test") && p.html.contains("method=\"post\""), "{p:?}");
+    assert!(!p.html.contains("<script"), "no script on the page");
+    let raw = verify::page_response(&p);
+    for h in ["Content-Security-Policy: default-src 'none';", "Cache-Control: no-store", "X-Frame-Options: DENY", "Referrer-Policy: no-referrer"] {
+        assert!(raw.contains(h), "{h} in {raw}");
+    }
+    let (_, v) = person_call(SHOW, "owner", Role::Owner, false, json!({}), &[]);
+    assert_eq!((v["address"].clone(), v["pending"][0]["address"].clone()), (J::Null, json!("me@x.test")), "still pending after a GET: {v}");
+    // The POST confirms, once.
+    let p = verify::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes());
+    assert!(p.status.starts_with("200") && p.html.contains("Confirmed"), "{p:?}");
+    let (_, v) = person_call(SHOW, "owner", Role::Owner, false, json!({}), &[]);
+    assert_eq!(v["address"]["state"], "verified", "{v}");
+    assert!(verify::page_post(VERIFY_PATH, "", format!("t={tok}").as_bytes()).status.starts_with("404"), "a used link");
+    assert!(verify::page_get(VERIFY_PATH, "t=k2ev_<script>alert(1)</script>").status.starts_with("404"));
+    // Asking again for a confirmed address sends nothing.
+    let n = f.engine.sent.lock().unwrap().len();
+    let (st, v) = person_call(SET, "owner", Role::Owner, true, json!({"address": "me@x.test"}), &[]);
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("already_verified")), "{v}");
+    assert_eq!(f.engine.sent.lock().unwrap().len(), n);
+    // The stop page renders on GET; an RFC 8058 one-click POST stops.
+    assert!(verify::page_get(STOP_PATH, &format!("t={stop}")).html.contains("Stop these emails"));
+    let (_, v) = person_call(SHOW, "owner", Role::Owner, false, json!({}), &[]);
+    assert_eq!(v["address"]["state"], "verified", "a GET never stops");
+    let p = verify::page_post(STOP_PATH, &format!("t={stop}"), b"List-Unsubscribe=One-Click");
+    assert!(p.status.starts_with("200") && p.html.contains("Stopped"), "{p:?}");
+    let (_, v) = person_call(SHOW, "owner", Role::Owner, false, json!({}), &[]);
+    assert_eq!(v["address"], J::Null, "{v}");
+}
+
+#[test]
+fn v_people_read_and_remove_their_own_admins_anyones_and_senders_are_refused() {
+    let f = fx("vwho");
+    use verify::{ADDRESS_PATH as SHOW, ADDRESS_REMOVE_PATH as REMOVE, ADDRESS_SET_PATH as SET};
+    k2_core::skin::set_front_door("direct", Some("https://box.brand.test"), None, None).expect("door");
+    let sys = system_sender_on();
+    let (st, v) = person_call(SET, "ann", Role::Member, true, json!({"address": sys.address}), &[]);
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("sender_address")), "{v}");
+    let (st, v) = person_call(SET, "ann", Role::Member, true, json!({"address": "ann@x.test"}), &[]);
+    assert_eq!(st, 200, "{v}");
+    assert!(f.engine.sent.lock().unwrap().last().expect("sent").email.to_string().contains("ann, a person on box.brand.test"));
+    // A Member reads and removes only their own.
+    let (st, _) = person_call(SHOW, "bob", Role::Member, false, json!({}), &[("person", "ann")]);
+    assert_eq!(st, 403);
+    let (st, _) = person_call(REMOVE, "bob", Role::Member, true, json!({"person": "ann"}), &[]);
+    assert_eq!(st, 403);
+    let (st, v) = person_call(SHOW, "ada", Role::Admin, false, json!({}), &[("person", "ann")]);
+    assert_eq!((st, v["pending"][0]["address"].clone()), (200, json!("ann@x.test")), "{v}");
+    let (st, v) = person_call(REMOVE, "ada", Role::Admin, true, json!({"person": "ann"}), &[]);
+    assert_eq!((st, v["removed"].clone()), (200, json!(1)), "{v}");
+    let (st, v) = person_call(REMOVE, "ann", Role::Member, true, json!({}), &[]);
+    assert_eq!((st, v["error"]["code"].clone()), (404, json!("not_found")), "{v}");
+    // A failed send leaves no pending row behind.
+    *f.engine.fail_submit.lock().unwrap() = Some("boom".into());
+    let (st, _) = person_call(SET, "ann", Role::Member, true, json!({"address": "ann2@x.test"}), &[]);
+    assert_ne!(st, 200);
+    *f.engine.fail_submit.lock().unwrap() = None;
+    let (_, v) = person_call(SHOW, "ann", Role::Member, false, json!({}), &[]);
+    assert_eq!(v["pending"], json!([]), "{v}");
+    // With no front door, nothing goes out.
+    k2_core::skin::set_front_door("direct", None, None, None).expect("no door");
+    let (st, v) = person_call(SET, "ann", Role::Member, true, json!({"address": "ann3@x.test"}), &[]);
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("no_front_door")), "{v}");
+}

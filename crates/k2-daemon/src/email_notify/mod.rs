@@ -51,6 +51,7 @@ pub mod relay;
 pub mod send;
 pub mod senders;
 pub mod sweep;
+pub mod verify;
 
 #[cfg(test)]
 mod tests;

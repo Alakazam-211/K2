@@ -582,6 +582,12 @@ async fn handle_conn(gw: Arc<Gateway>, mut stream: TcpStream) -> Result<(), ()> 
         ("POST", "/cli/skin/password/change") => {
             handle_password_change(&gw, &mut stream, cookie.as_deref(), &body, secure).await;
         }
+        // Email Notifications' confirm and stop links (part 2, slice V):
+        // public, no cookie; the link's token is the credential. The daemon
+        // renders the page; the helper adds nothing but the page headers.
+        (m, p) if (m == "GET" || m == "POST") && crate::email_notify::verify::is_public_page(p) => {
+            handle_email_page(&gw, &mut stream, m, &target, &body).await;
+        }
         (m, p) if (m == "GET" || m == "HEAD") && is_static_path(p) => {
             serve_static(&gw, &mut stream, p, m == "HEAD").await;
         }
@@ -1030,6 +1036,30 @@ async fn handle_logout(gw: &Gateway, stream: &mut TcpStream, cookie: Option<&str
         &clear_cookie_value(secure),
     )
     .await;
+}
+
+/// `GET|POST /cli/email/verify|stop`: the daemon's page, sent on with the
+/// page's own headers (strict CSP, no-store, DENY). Only `?t=` and the
+/// form body go upstream; no cookie, no session.
+async fn handle_email_page(gw: &Gateway, stream: &mut TcpStream, method: &str, target: &str, body: &[u8]) {
+    let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    let query = strip_token_query(query);
+    let up = if query.is_empty() { path.to_string() } else { format!("{path}?{query}") };
+    let payload = (method == "POST" && !body.is_empty()).then_some(body);
+    let page = match upstream_json(gw, method, &up, payload, None).await {
+        Ok((status, html)) => crate::email_notify::verify::Page {
+            status: match status {
+                200 => "200 OK",
+                404 => "404 Not Found",
+                405 => "405 Method Not Allowed",
+                _ => "500 Internal Server Error",
+            },
+            html,
+        },
+        Err(_) => crate::email_notify::verify::Page { status: "502 Bad Gateway", html: String::new() },
+    };
+    let _ = stream.write_all(crate::email_notify::verify::page_response(&page).as_bytes()).await;
+    let _ = stream.flush().await;
 }
 
 async fn handle_password_reset(gw: &Gateway, stream: &mut TcpStream, body: &[u8]) {

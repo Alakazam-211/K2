@@ -682,6 +682,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/domains/refresh", Admin),
     post("/cli/domains/remove", Admin),
     post("/cli/done", Member),
+    // Email Notifications part 2, slice V: the confirm and stop links
+    // (the token is the credential; a GET only renders, a POST acts).
+    both("/cli/email/stop", Public),
+    both("/cli/email/verify", Public),
     post("/cli/events", Member),
     post("/cli/federation/address", Public),
     post("/cli/federation/inbound", Public),
@@ -1125,6 +1129,11 @@ pub const ROUTES: &[Route] = &[
     // the handler (Admins are read-only on people).
     get("/cli/notify/admin", Admin),
     post("/cli/notify/admin/set", Admin),
+    // Email Notifications part 2, slice V: a person's own notice address
+    // (the handler resolves the person; agents never reach it).
+    get("/cli/notify/email/address", Member),
+    post("/cli/notify/email/address/remove", Member),
+    post("/cli/notify/email/address/set", Member),
     both("/cli/notify/prefs", Member),
     post("/cli/onboarding/adopt", Member),
     post("/cli/onboarding/agents-md-generate-enabled", Member),
@@ -2917,6 +2926,7 @@ mod tests {
         ("/cli/publish/validate", "parses an App folder's code; writes nothing"),
         ("/cli/skin/password/set", "serves K2's own fixed set-password page; the password is set by POST /cli/skin/password/reset"),
         ("/cli/skin/pair/status", "reads a pairing's state for its own person; start, cancel and redeem are POST routes"),
+        ("/cli/email/stop", "renders the stop page (link scanners follow GETs); only POST /cli/email/stop stops"),
     ];
 
     fn path_words(path: &str) -> Vec<String> {

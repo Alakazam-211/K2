@@ -13900,6 +13900,20 @@ ID / login / vault password), from a terminal outside K2.
   k2 notifications email settings [--retention-days 7-90] [--owner-email <you@…>]
                                     Test emails only ever go to --owner-email.
 
+Your notice address (any person on this server, for yourself; never an agent):
+  k2 notifications email address [show] [--person <login>] [--json]
+                                    Your confirmed address and any waiting for
+                                    a confirm. --person: someone else's (Admins).
+  k2 notifications email address set <you@example.com>
+                                    Emails that address a confirm link (from the
+                                    system sender; works 24 hours). Agents'
+                                    notices go there only after you press
+                                    Confirm on the page it opens. A new address
+                                    replaces the old one once confirmed.
+  k2 notifications email address remove [<address>] [--person <login>]
+                                    Stops notices to it now (the owner or an
+                                    Admin can remove anyone's with --person).
+
 A hosted sender needs its domain Verified (k2 hostmail domain check) and a
 DMARC record (any policy). On a Mac (no hosted mail), add a relay first.
 Grant a sender to an App: k2 app email on. The guide: k2 study email-notifications.
@@ -13957,6 +13971,7 @@ print("log kept %s days; owner address %s" % (st.get("logRetentionDays"), st.get
         sender) cmd_notifications_sender "$@" ;;
         system-sender) cmd_notifications_system "$@" ;;
         relay|relays) cmd_notifications_relay "$@" ;;
+        address) cmd_notifications_address "$@" ;;
         log)
             local app="" limit="" json_out=0
             while [ $# -gt 0 ]; do
@@ -13996,7 +14011,75 @@ print(json.dumps(b))')" || { echo "--retention-days is a number" >&2; exit 2; }
             _email_post /cli/notifications/email/settings "$body"
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; s=json.load(sys.stdin).get("settings") or {}; print("log kept %s days; owner address %s" % (s.get("logRetentionDays"), s.get("ownerEmail") or "not set"))'
             ;;
-        *) echo "usage: k2 notifications email status|sender|system-sender|relay|log|settings (--help)" >&2; exit 2 ;;
+        *) echo "usage: k2 notifications email status|sender|system-sender|relay|address|log|settings (--help)" >&2; exit 2 ;;
+    esac
+}
+
+# Email Notifications part 2, slice V: a person's own notice address
+# (GET /cli/notify/email/address, POST …/set, POST …/remove). The daemon
+# resolves the person from the token; an agent's passport is refused.
+cmd_notifications_address() {
+    local verb="${1:-show}"
+    [ $# -gt 0 ] && shift
+    local person="" json_out=0 addr=""
+    case "$verb" in
+        -h|--help|help) _notifications_usage; return 0 ;;
+        --json) verb=show; json_out=1 ;;
+        --person) verb=show; person="${1:-}"; [ $# -gt 0 ] && shift ;;
+    esac
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --person) person="${2:-}"; [ -n "$person" ] || { echo "--person needs a login" >&2; exit 2; }; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) [ -z "$addr" ] || { echo "one address at a time" >&2; exit 2; }; addr="$1"; shift ;;
+        esac
+    done
+    case "$verb" in
+        show)
+            [ -z "$addr" ] || { echo "usage: k2 notifications email address [show] [--person <login>] [--json]" >&2; exit 2; }
+            local q=""
+            [ -n "$person" ] && q="person=$(urlencode "$person")"
+            _compute_call GET /cli/notify/email/address "$q" tcp
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+a = v.get("address")
+print("notice address: %s" % ((a.get("address") + " (confirmed)") if a else "none (k2 notifications email address set <you@example.com>)"))
+for p in v.get("pending") or []:
+    import time
+    until = time.strftime("%Y-%m-%d %H:%M", time.localtime(p.get("expiresAt") or 0))
+    print("  waiting for a confirm: %s (link sent; works until %s)" % (p.get("address"), until))'
+            ;;
+        set)
+            { [ -n "$addr" ] && [ -z "$person" ]; } || { echo "usage: k2 notifications email address set <you@example.com> (your own only)" >&2; exit 2; }
+            local body
+            body="$(K2_EA_ADDR="$addr" python3 -c 'import json,os; print(json.dumps({"address": os.environ["K2_EA_ADDR"]}))')"
+            _app_rt_post /cli/notify/email/address/set "$body"
+            case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+a = (json.load(sys.stdin).get("address") or {}).get("address")
+print("Sent a confirm link to %s. It works for 24 hours; nothing else goes there until it is confirmed." % a)'
+            ;;
+        remove|rm)
+            local body
+            body="$(K2_EA_ADDR="$addr" K2_EA_PERSON="$person" python3 -c '
+import json, os
+b = {}
+if os.environ.get("K2_EA_ADDR"):
+    b["address"] = os.environ["K2_EA_ADDR"]
+if os.environ.get("K2_EA_PERSON"):
+    b["person"] = os.environ["K2_EA_PERSON"]
+print(json.dumps(b))')"
+            _app_rt_post /cli/notify/email/address/remove "$body"
+            case "$_CP_STATUS" in 200) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print("Removed %s notice address(es)." % json.load(sys.stdin).get("removed"))'
+            ;;
+        *) echo "usage: k2 notifications email address [show] | set <address> | remove [<address>] [--person <login>]" >&2; exit 2 ;;
     esac
 }
 

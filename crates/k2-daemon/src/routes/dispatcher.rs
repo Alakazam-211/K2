@@ -1624,6 +1624,9 @@ async fn handle_one_request(
         && path != "/cli/skin/logout"
         && path != crate::app_mobile_routes::REFRESH
         && path != "/cli/skin/password/reset"
+        // Email Notifications' confirm and stop links (slice V): opened
+        // from an email in any browser; the token is the credential.
+        && !crate::email_notify::verify::is_public_page(&path)
         && path != crate::connect_device_routes::PAIR
         && path != crate::connect_device_routes::PAIR_CHECK
         // App phone pairing (V20): belt and braces. A phone app's native
@@ -1644,8 +1647,12 @@ async fn handle_one_request(
     // method (any path) requires X-K2-Client: web (or X-K2-CSRF: web).
     // Query-token / Bearer callers (CLI, desktop, agents, app passes, API
     // keys) are unaffected. See `super::http::cookie_csrf_gate`.
+    // Email Notifications' confirm and stop pages never read a cookie (the
+    // link's token is the only credential), so a K2 cookie the browser
+    // happens to hold doesn't put them behind either cookie gate.
+    let cookie_gated = cookie_only && !crate::email_notify::verify::is_public_page(&path);
     if let Some(r) =
-        super::http::cookie_csrf_gate(&method, &path, cookie_only, &headers_blob)
+        super::http::cookie_csrf_gate(&method, &path, cookie_gated, &headers_blob)
     {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
@@ -1662,7 +1669,7 @@ async fn handle_one_request(
     // not a public suffix, so SameSite does not stop a sibling `*.k2.dev`
     // page, and `X-K2-Client` is forged by the edge Worker. Refused BEFORE
     // any upgrade or handler.
-    if let Some(r) = super::http::cookie_origin_gate(cookie_only, &headers_blob) {
+    if let Some(r) = super::http::cookie_origin_gate(cookie_gated, &headers_blob) {
         let _ = stream.read(&mut buf).await;
         super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         return DispatchOutcome::Done;
@@ -4937,6 +4944,35 @@ async fn handle_one_request(
             .await
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
+        // /cli/email/verify and /cli/email/stop — PUBLIC: Email
+        // Notifications' confirm and stop pages (part 2, slice V). The token
+        // is the credential. A GET only renders (link scanners follow GETs);
+        // only a POST confirms or stops (RFC 8058 one-click for stop). Pages
+        // load nothing and run no script. See `email_notify::verify`.
+        p if crate::email_notify::verify::is_public_page(p) => {
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let p_owned = p.to_string();
+            let q = query.to_string();
+            let page = tokio::task::spawn_blocking(move || {
+                if is_post {
+                    crate::email_notify::verify::page_post(&p_owned, &q, &body_bytes)
+                } else {
+                    crate::email_notify::verify::page_get(&p_owned, &q)
+                }
+            })
+            .await
+            .unwrap_or_else(|_| crate::email_notify::verify::Page { status: "500 Internal Server Error", html: String::new() });
+            if page.status.starts_with("404") {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            let _ = stream.write_all(crate::email_notify::verify::page_response(&page).as_bytes()).await;
+            let _ = stream.flush().await;
         }
         // GET /cli/skin/password/set — PUBLIC: K2's own set-password page
         // (agent-app-users). Fixed bundled bytes; the token rides the

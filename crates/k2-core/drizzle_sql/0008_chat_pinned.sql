@@ -1,1 +1,0 @@
-ALTER TABLE chat_session_names ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;

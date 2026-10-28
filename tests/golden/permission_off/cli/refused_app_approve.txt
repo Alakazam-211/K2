@@ -1,6 +1,0 @@
-$ k2 app approve ar_22
-exit: 3
---- stdout
---- stderr
-{"error":"owner_only","hint":"the owner approves in person: Settings → App Approvals, or k2 app approve <id> from a terminal outside K2. An agent can never approve."}
---- requests

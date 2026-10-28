@@ -1,7 +1,0 @@
-$ k2 vault reveal STRIPE_KEY
-exit: 3
---- stdout
---- stderr
-owner_only: this is for a person, from your own terminal or SSH login, not a K2 terminal.
-Agents: don't run it; tell your owner.
---- requests

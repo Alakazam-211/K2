@@ -1,9 +1,0 @@
-{
-  "body": "billing asked for 3 permissions:\n- Allowed by rosson: Let billing build and run Apps.\n- Allowed by rosson: Let billing's Apps use the db core.\n- Allowed by rosson: Approve billing's held App request ar_23.",
-  "created_at": 1761060000,
-  "from": "billing",
-  "id": "b4a1c0de-5e6f-4a7b-9c8d-0e1f2a3b4c5d",
-  "kind": "text",
-  "to": "billing",
-  "via": "permission"
-}

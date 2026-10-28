@@ -1,4 +1,0 @@
-{
-  "doc": null,
-  "rule": "App guests never receive a permission card on any path: not on GET /cli/thread (page, delta), POST /cli/thread/catchup, WS /cli/overlay/events, WS /cli/thread/stream or GET /cli/thread/latest, whatever `cards` they send. The item is left out (a seq gap), never drawn as text."
-}

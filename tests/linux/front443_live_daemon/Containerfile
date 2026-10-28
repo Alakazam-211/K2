@@ -1,9 +1,0 @@
-# A throwaway Ubuntu 24.04 box with systemd 255 as PID 1, for front443's
-# live-daemon test (tests/linux/front443_live_daemon/run.sh).
-FROM docker.io/library/ubuntu:24.04
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      systemd systemd-sysv sudo python3 openssl curl iproute2 procps ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && systemctl mask systemd-logind.service getty.target console-getty.service
-STOPSIGNAL SIGRTMIN+3
-CMD ["/sbin/init"]

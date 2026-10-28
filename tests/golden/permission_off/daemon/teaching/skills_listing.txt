@@ -1,2 +1,0 @@
-skills/k2-canonical-agents/SKILL.md
-skills/k2-cli/SKILL.md

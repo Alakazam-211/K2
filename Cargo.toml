@@ -1,66 +1,8 @@
 [workspace]
 resolver = "2"
-members = [
-    "src-tauri",
-    "crates/k2-client",
-    "crates/k2-core",
-    "crates/k2-daemon",
-    "crates/k2-menubar",
-    "crates/k2-node-proto",
-    "crates/k2-node",
-    "crates/k2-root-proto",
-    "crates/k2-root-helper",
-    "crates/k2-app-engine",
-    "crates/k2-vault",
-    "crates/k2-redact",
-    # TEST ONLY: Google / Microsoft OAuth + Graph fakes for the headless
-    # mail smokes (prd-app-mail-calendar-surfaces-v1 §8.2). Never shipped.
-    "tests/fakes/oauth-providers",
-    "crates/k2-ptyd",
-]
-# Vendored repos with their own [workspace] (git subtree; Markdown
-# multiplayer K1). Built as path dependencies of k2-daemon, never as members.
-exclude = [
-    "vendor/k2-mpc-base",
-    "vendor/k2-mpc-markdown",
-]
+members = ["crates/markdown"]
 
-# Dev profile: lightly optimized so PTY reads + LLM inference don't crawl.
-# Hot-path crates below escalate to opt-level=3 in dev too.
-[profile.dev]
-opt-level = 1
-
-[profile.dev.package.qoi]
-opt-level = 3
-
-[profile.dev.package.fontdue]
-opt-level = 3
-
-[profile.release]
-strip = true
-lto = true
-codegen-units = 1
-
-# wry 0.57 still unwraps a nil NSURL (URLWithString / IPC / nav). The
-# path patch skips those instead of aborting the macOS main thread.
-# objc2 0.6.4 expects a null selector (aborts sendEvent). tao 0.37.1 then
-# dereferences the null superclass pointer. Path-patched the same way.
-#
-# tauri-runtime-wry 2.12.0: on Linux, child webviews (the Browser tab) go
-# into a per-window gtk::Fixed instead of the window's gtk::Box, so their
-# position and size hold (tauri#10420); see its src/child_container.rs.
-# Paired with the vendored wry's gtk::Fixed set_bounds/bounds/reparent.
-#
-# vte 0.15.0 (alacritty_terminal's parser, so every K2 terminal) drops one
-# ASCII byte when a 2-byte UTF-8 char is split across PTY reads after its
-# lead byte and the next read continues with that ASCII byte plus another
-# non-ASCII char ("ïcø" → "ïø"). advance_partial_utf8 returned valid_up_to
-# instead of the printed char's length. One-line fix + regression test;
-# same bug on upstream master as of 2026-10-18, nothing filed yet. Diff and
-# PR text: third_party/upstream/vte-0001-*. Drop when a fixed vte ships.
-[patch.crates-io]
-wry = { path = "third_party/wry" }
-objc2 = { path = "third_party/objc2" }
-tao = { path = "third_party/tao" }
-tauri-runtime-wry = { path = "third_party/tauri-runtime-wry" }
-vte = { path = "third_party/vte" }
+[workspace.package]
+edition = "2021"
+rust-version = "1.80"
+publish = false

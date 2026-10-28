@@ -1,4 +1,0 @@
-untrusted comment: signature from tauri secret key
-RUQFu172RhQR6X04pFR7zNPs3/frsEwGKIyEn1BkAn++QDuvpXCNu8ApiU3M6qxlMdJsGhd4sGPOEdaTDeNHIVM/OWqPEjhzqAo=
-trusted comment: timestamp:1791420765	file:k2-mail-helper-linux-x86_64
-NGepcR6MoeOSXZuSSC22VfLTrqp+9CSclUjdLvMq/rNF3SHgO7BhhTP3qf/F9k4GpTJ9xKC858NdVtmTTeD2BQ==

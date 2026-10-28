@@ -1,1 +1,0 @@
-ALTER TABLE workspaces ADD COLUMN nav_visible INTEGER NOT NULL DEFAULT 0;

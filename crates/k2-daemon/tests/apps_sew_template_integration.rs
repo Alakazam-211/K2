@@ -201,6 +201,8 @@ async fn identity_origin_and_seal_key_reach_the_app_and_stay_stable() {
         let conn = db.lock();
         k2_core::domains::upsert_binding(&conn, "example.com", None, false).unwrap();
         k2_core::domains::upsert_name(&conn, "hearth.example.com", "example.com", "app:hearth").unwrap();
+        // Served (0.46.6: a bound name is an origin only once it is live).
+        k2_core::domains::set_app_state(&conn, "hearth.example.com", k2_core::domains::STATE_LIVE, None).unwrap();
     }
     assert_eq!(env_val(front, "K2_APP_ORIGIN"), None, "a running process keeps its start values");
     restart(d.port, "hearth").await;
@@ -223,6 +225,7 @@ async fn identity_origin_and_seal_key_reach_the_app_and_stay_stable() {
         let conn = db.lock();
         k2_core::domains::remove_name(&conn, "hearth.example.com").unwrap();
         k2_core::domains::upsert_name(&conn, "chat.example.com", "example.com", "app:hearth").unwrap();
+        k2_core::domains::set_app_state(&conn, "chat.example.com", k2_core::domains::STATE_LIVE, None).unwrap();
     }
     restart(d.port, "hearth").await;
     assert_eq!(env_val(front, "K2_APP_ORIGIN").as_deref(), Some("https://chat.example.com"));

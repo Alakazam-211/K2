@@ -137,13 +137,15 @@ async fn form_bodies_reach_the_handlers_that_read_them_and_query_passes_are_the_
     pin_chat(&ws);
     let svc = published(&ws, "formapp");
     install_row("formapp", &svc, &ws, &["thread:read", "thread:post"]);
-    // The App's own public origin (a custom hostname bound to it): what its
-    // K2_APP_ORIGINS carries.
+    // The App's own public origin (a custom hostname bound to it and
+    // served: since 0.46.6 a bound name is an origin only once it is live):
+    // what its K2_APP_ORIGINS carries.
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         k2_core::domains::upsert_binding(&conn, "example.com", None, false).expect("apex");
         k2_core::domains::upsert_name(&conn, "formapp.example.com", "example.com", "app:formapp").expect("name");
+        k2_core::domains::set_app_state(&conn, "formapp.example.com", k2_core::domains::STATE_LIVE, None).expect("live");
     }
     k2_core::skin::add_principal_for_app("gina", None, &svc, None, "owner").unwrap();
     let guest = k2_core::skin::create_app_session_token("gina", &svc).unwrap();

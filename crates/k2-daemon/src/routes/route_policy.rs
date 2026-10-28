@@ -1017,6 +1017,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/mail/server/rotate-admin", Admin),
     post("/cli/mail/server/uninstall", Admin),
     post("/cli/mail/server/upgrade", Admin),
+    // 0.46.6: read-only Sieve audit (owner/admin, never mail_manage).
+    get("/cli/mail/sieve-audit", Admin),
     post("/cli/mail/spam/allow", Admin),
     post("/cli/mail/spam/block", Admin),
     get("/cli/mail/spam/quarantine", Admin),

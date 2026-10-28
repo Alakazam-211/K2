@@ -675,6 +675,10 @@ pub fn mint_address(
     // files) applies from the first login. Unreadable policy = refuse,
     // never mint with Stalwart's everything-on default by accident.
     let dav_permissions = super::dav::mint_permissions().map_err(AddrError::Engine)?;
+    // 0.46.6: and never lets the mailbox's own logins write Sieve (a
+    // user redirect/notify script would forward its mail anywhere).
+    let permissions =
+        super::sieve_lockdown::mint_permissions(dav_permissions).map_err(AddrError::Engine)?;
     let account_id = engine
         .create_account(
             &local,
@@ -682,7 +686,7 @@ pub fn mint_address(
             &password,
             quota_bytes,
             quota_messages,
-            dav_permissions.as_ref(),
+            Some(&permissions),
         )
         .map_err(AddrError::Engine)?;
     // The vault key is the exact `account-<row id>` that every reader
@@ -1405,7 +1409,8 @@ pub(crate) mod tests {
     }
 
     /// Calendars S2: a stored DAV policy rides the create call; no
-    /// policy → no `permissions` (Stalwart's Inherit default).
+    /// policy → only the Sieve lock (0.46.6). Either way the mailbox can
+    /// never write its own Sieve scripts.
     #[test]
     fn mint_applies_the_stored_dav_policy_at_create() {
         let _g = crate::mail::mail_server_test_lock();
@@ -1423,7 +1428,15 @@ pub(crate) mod tests {
 
         let engine = FakeAddrEngine::ok();
         mint_address(&engine, &vault, &project, 0, "plain", Some(&domain), None).expect("mint");
-        assert_eq!(engine.created_permissions.lock().unwrap().as_slice(), [None]);
+        {
+            let perms = engine.created_permissions.lock().unwrap();
+            let p = perms[0].as_ref().expect("the Sieve lock rides every create");
+            assert_eq!(p["@type"], "Merge");
+            for name in super::super::sieve_lockdown::SIEVE_WRITE_PERMISSIONS {
+                assert_eq!(p["disabledPermissions"][name], true, "{p}");
+            }
+            assert!(p["disabledPermissions"].get("davFileGet").is_none(), "no DAV policy: {p}");
+        }
 
         {
             let db = k2_core::db::shared();
@@ -1444,6 +1457,9 @@ pub(crate) mod tests {
         assert_eq!(p["disabledPermissions"]["davFileGet"], true);
         assert_eq!(p["disabledPermissions"]["jmapFileNodeGet"], true);
         assert!(p["disabledPermissions"].get("davCalGet").is_none(), "calendars stay on: {p}");
+        assert_eq!(p["disabledPermissions"]["jmapSieveScriptCreate"], true, "{p}");
+        assert_eq!(p["disabledPermissions"]["jmapSieveScriptUpdate"], true, "{p}");
+        assert_eq!(p["disabledPermissions"]["jmapSieveScriptDestroy"], true, "{p}");
         drop(perms);
         reset();
         cleanup_domain(&domain);

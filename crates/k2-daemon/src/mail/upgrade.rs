@@ -1518,6 +1518,7 @@ pub fn start_live(req: UpgradeRequest) -> UpgradeStart {
                     // 0.16.20). It waits for this thread's latch.
                     if v["state"] == "succeeded" {
                         super::defaults::spawn_after("upgrade");
+                        super::sieve_lockdown::spawn_after("upgrade");
                     }
                 }
                 // The record stays `running` → reported `interrupted`, and
@@ -1594,6 +1595,7 @@ pub fn spawn_boot_recovery() {
                     );
                     if v["state"] == "succeeded" {
                         super::defaults::spawn_after("upgrade");
+                        super::sieve_lockdown::spawn_after("upgrade");
                     }
                 }
                 Ok(None) => {}

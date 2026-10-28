@@ -180,6 +180,9 @@ pub mod secrets;
 pub mod send;
 pub mod submit;
 pub mod sieve_user;
+// 0.46.6: mailboxes can't write their own Sieve; enotify off; leftover
+// user scripts recorded then removed (boot / enable / upgrade); audit.
+pub mod sieve_lockdown;
 pub mod spam;
 pub mod helper;
 pub mod supervisor;

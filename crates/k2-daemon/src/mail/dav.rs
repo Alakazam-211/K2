@@ -391,7 +391,7 @@ impl ApplyReport {
 
 /// Why `row` must not be touched, if so: not a User, an Admin role,
 /// or the service/recovery principal by name.
-fn protected_reason(row: &serde_json::Value) -> Option<String> {
+pub(crate) fn protected_reason(row: &serde_json::Value) -> Option<String> {
     if let Some(t) = row.get("@type").and_then(|v| v.as_str()) {
         if t != "User" {
             return Some(format!("account type {t}"));

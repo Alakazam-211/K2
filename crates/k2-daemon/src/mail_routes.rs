@@ -242,6 +242,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // Calendars S2: owner DAV policy status (GET) — enable/disable
         // are the POST on the same path. Owner-only (is_owner_level_mutation).
         "/cli/mail/dav" => crate::mail::dav::handle_dav_get(params),
+        // 0.46.6: read-only Sieve audit across every account (owner/admin,
+        // is_owner_level_mutation; never the mail-manage toggle).
+        "/cli/mail/sieve-audit" => crate::mail::sieve_lockdown::handle_audit_get(params),
         // MCS3: the owner's switch for calendars on LINKED inboxes (GET =
         // state; POST {enabled} sets it). Owner-only (is_owner_level_mutation).
         "/cli/mail/link/calendars" => {
@@ -550,6 +553,9 @@ pub fn is_owner_level_mutation(path: &str) -> bool {
         // Calendars S6 (CAL6): an Apple setup profile mints a credential
         // for a person's mailbox — owner/admin only, never the M5 toggle.
         || path == "/cli/mail/profile"
+        // 0.46.6: the Sieve audit reads every mailbox's filter scripts —
+        // owner/admin only (GET-only), never the M5 toggle.
+        || path == "/cli/mail/sieve-audit"
 }
 
 /// Owner/admin hostmail surfaces (POST + GET) that a valid scoped agent
@@ -731,6 +737,8 @@ fn leftover_m6_hint(path: &str) -> String {
         "k2 hostmail calendar"
     } else if path == "/cli/mail/profile" {
         "k2 hostmail profile"
+    } else if path == "/cli/mail/sieve-audit" {
+        "k2 hostmail audit-sieve"
     } else {
         path
     };
@@ -1143,6 +1151,33 @@ mod tests {
         assert_ne!(get.status, "405 Method Not Allowed");
         let post = dispatch_post(p, br#"{"action":"bogus"}"#);
         assert_eq!(post.status, "400 Bad Request", "{}", post.body);
+    }
+
+    /// 0.46.6: the read-only Sieve audit is owner/admin only, never the
+    /// M5 toggle, never a scoped agent verb, and GET-only.
+    #[test]
+    fn sieve_audit_route_is_owner_only_get_only() {
+        let _g = crate::mail::mail_server_test_lock();
+        let p = "/cli/mail/sieve-audit";
+        assert!(!is_mail_manage_surface(p), "the M5 toggle must not open {p}");
+        assert!(is_owner_level_mutation(p));
+        assert!(is_mail_owner_surface(p));
+        assert!(!crate::session_token::is_agent_verb(p), "scoped token must NOT reach {p}");
+        assert!(mail_manage_authorized(p, true, None).is_ok(), "owner/admin");
+        let principal = crate::session_token::HookPrincipal {
+            workspace_uuid: "no-such-ws".to_string(),
+            agent_address: "agent".to_string(),
+        };
+        let body = mail_manage_authorized(p, false, Some(&principal))
+            .err()
+            .expect("scoped agent must be refused")
+            .body;
+        assert!(body.contains("owner_only") && body.contains("k2 hostmail audit-sieve"), "{body}");
+        assert!(mail_manage_authorized(p, false, None).is_err(), "Member is refused");
+        let get = dispatch(p, &HashMap::new()).expect("mail route");
+        assert_ne!(get.status, "404 Not Found", "{}", get.body);
+        // Read-only: no POST form.
+        assert_eq!(dispatch_post(p, b"{}").status, "404 Not Found");
     }
 
     /// MCS3: the linked-calendars switch is owner/admin only on BOTH

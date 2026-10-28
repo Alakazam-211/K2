@@ -2885,6 +2885,75 @@ impl StalwartClient {
         expect_set_clean("SieveScript/set", &resp)
     }
 
+    /// Sieve lockdown: deactivate the mailbox's active script, alone in
+    /// its own `SieveScript/set` (RFC 9661 `onSuccessDeactivateScript`).
+    /// Stalwart refuses to destroy an active script (`scriptIsActive`),
+    /// and a deactivate riding the same call as the destroy does not
+    /// help (live probe 2026-10-27) — so it is always a separate call.
+    pub fn sieve_deactivate(&self, account_id: &str) -> Result<(), String> {
+        let resp = self.sieve_call(
+            account_id,
+            "SieveScript/set",
+            serde_json::json!({ "onSuccessDeactivateScript": true }),
+        )?;
+        expect_set_clean("SieveScript/set", &resp)
+    }
+
+    /// Sieve lockdown: activate one existing script by id (puts K2's own
+    /// `k2` script back after a user script had displaced it).
+    pub fn sieve_activate(&self, account_id: &str, script_id: &str) -> Result<(), String> {
+        let resp = self.sieve_call(
+            account_id,
+            "SieveScript/set",
+            serde_json::json!({ "onSuccessActivateScript": script_id }),
+        )?;
+        expect_set_clean("SieveScript/set", &resp)
+    }
+
+    /// Sieve lockdown: the user-script interpreter's
+    /// `disableCapabilities` (`x:SieveUserInterpreter` singleton). Absent
+    /// = nothing disabled.
+    pub fn sieve_user_interpreter_disabled(&self) -> Result<serde_json::Value, String> {
+        let resp = self.registry_call(
+            "x:SieveUserInterpreter/get",
+            serde_json::json!({
+                "ids": [SIEVE_USER_INTERPRETER_SINGLETON_ID],
+                "properties": ["disableCapabilities"],
+            }),
+        )?;
+        let row = resp
+            .get("list")
+            .and_then(|v| v.as_array())
+            .and_then(|l| l.first())
+            .ok_or_else(|| "x:SieveUserInterpreter/get: reply has no singleton".to_string())?;
+        Ok(row
+            .get("disableCapabilities")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Sieve lockdown: write the interpreter's full `disableCapabilities`
+    /// map (the caller merged it with what was there). Applies on the
+    /// next `ReloadSettings`.
+    pub fn sieve_user_interpreter_set_disabled(
+        &self,
+        disabled: &serde_json::Value,
+    ) -> Result<(), String> {
+        let resp = self.registry_call(
+            "x:SieveUserInterpreter/set",
+            serde_json::json!({
+                "update": {
+                    SIEVE_USER_INTERPRETER_SINGLETON_ID: { "disableCapabilities": disabled }
+                }
+            }),
+        )?;
+        parse_set_updated(
+            "x:SieveUserInterpreter/set",
+            SIEVE_USER_INTERPRETER_SINGLETON_ID,
+            &resp,
+        )
+    }
+
     /// Trusted DATA-stage system scripts (`x:SieveSystemScript`).
     pub fn system_scripts_list(&self) -> Result<Vec<SystemScriptInfo>, String> {
         let resp = self.registry_call("x:SieveSystemScript/get", serde_json::json!({}))?;
@@ -2966,6 +3035,7 @@ pub struct SystemScriptInfo {
 }
 
 const MTA_STAGE_DATA_SINGLETON_ID: &str = "singleton";
+const SIEVE_USER_INTERPRETER_SINGLETON_ID: &str = "singleton";
 
 const JMAP_SIEVE_USING: [&str; 2] = [
     "urn:ietf:params:jmap:core",

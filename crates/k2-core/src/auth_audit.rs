@@ -140,6 +140,21 @@ pub fn record(ev: &AuditEvent) {
 
 /// [`record`] with the error surfaced (tests assert on it).
 pub fn try_record(ev: &AuditEvent) -> Result<(), String> {
+    append_line(render_line(ev))
+}
+
+/// [`try_record`] plus a structured `detail` object on the same line
+/// (for events whose facts do not fit the login-shaped fields, such as
+/// a hosted-mail filter script K2 removed). `detail` must never carry a
+/// secret.
+pub fn try_record_detail(ev: &AuditEvent, detail: serde_json::Value) -> Result<(), String> {
+    let mut v: serde_json::Value =
+        serde_json::from_str(&render_line(ev)).map_err(|e| format!("render audit line: {e}"))?;
+    v["detail"] = detail;
+    append_line(v.to_string())
+}
+
+fn append_line(mut line: String) -> Result<(), String> {
     let _g = write_lock().lock().unwrap_or_else(|p| p.into_inner());
     let dir = config_dir();
     std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
@@ -162,7 +177,6 @@ pub fn try_record(ev: &AuditEvent) -> Result<(), String> {
     if created {
         restrict_mode(&file);
     }
-    let mut line = render_line(ev);
     line.push('\n');
     f.write_all(line.as_bytes())
         .map_err(|e| format!("append {}: {e}", file.display()))?;
@@ -260,6 +274,25 @@ mod tests {
                 let mode = std::fs::metadata(path()).unwrap().permissions().mode() & 0o777;
                 assert_eq!(mode, 0o600, "audit log must be 0600");
             }
+        });
+    }
+
+    #[test]
+    fn record_detail_keeps_the_login_fields_and_adds_detail() {
+        with_temp_home(|| {
+            try_record_detail(
+                &AuditEvent::new("mail-sieve-removed", "a@b.test", "removed", "daemon", "-", "daemon"),
+                serde_json::json!({ "script": "mine", "targets": [{"action": "redirect", "domain": "outside.test"}] }),
+            )
+            .expect("append");
+            let all = tail(5).expect("tail");
+            assert_eq!(all.len(), 1);
+            assert_eq!(all[0]["event"], "mail-sieve-removed");
+            assert_eq!(all[0]["user"], "a@b.test");
+            assert_eq!(all[0]["outcome"], "removed");
+            assert_eq!(all[0]["detail"]["script"], "mine");
+            assert_eq!(all[0]["detail"]["targets"][0]["domain"], "outside.test");
+            assert!(all[0]["ts"].as_str().expect("ts").ends_with('Z'));
         });
     }
 

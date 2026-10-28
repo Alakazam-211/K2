@@ -1342,6 +1342,10 @@ async fn async_main() {
     // them once. Linux-only detached thread; per-account permissions only
     // — never a Stalwart restart or hostmail disable/enable (CAL39).
     mail::dav::spawn_startup_backfill();
+    // 0.46.6: lock Sieve writes on every K2 mailbox, turn enotify off,
+    // record then remove leftover user Sieve scripts (kept: exactly `k2`
+    // and `k2-forward`). Linux-only detached thread; idempotent.
+    mail::sieve_lockdown::spawn_startup_reconcile();
     // K2-issuer boxes (mail host attached + a K2-planted mail cert): make
     // sure Stalwart's own ACME is Manual for the mail host's Domain. One
     // registry write, no restart; never flips back. Linux-only thread.

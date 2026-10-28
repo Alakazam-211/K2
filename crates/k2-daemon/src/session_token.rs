@@ -515,6 +515,9 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/mail/dav",
         // Calendars S6: Apple profile mints a mailbox credential (owner/admin).
         "/cli/mail/profile",
+        // 0.46.6: the read-only Sieve audit lists every mailbox's scripts
+        // (owner/admin only).
+        "/cli/mail/sieve-audit",
         "/cli/mail/external/",
         "/cli/mail/link/",
         "/cli/mail/oauth-config",
@@ -2265,6 +2268,7 @@ mod tests {
             "/cli/mail/domain/remove",
             "/cli/mail/dav",
             "/cli/mail/profile",
+            "/cli/mail/sieve-audit",
             "/cli/mail/external/add",
             "/cli/mail/link/oauth/start",
             "/cli/mail/oauth-config",

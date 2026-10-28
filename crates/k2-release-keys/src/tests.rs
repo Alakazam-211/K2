@@ -346,3 +346,34 @@ fn real_minisign_app_signatures_satisfy_old_and_new_apps() {
     assert!(verify_app_update_with(&keys, &raw, url, "9.9.10", &bundle).is_err(), "version is bound");
     assert!(verify_app_update_with(&keys, &raw, url, "9.9.9", b"other bytes").is_err());
 }
+
+/// One primary per signing Mac (U2 on z3mbpZ, U2b on z3mbp) plus the backup
+/// U3 (prd-signing-user-v1, Rosson 2026-10-28): either Mac's release
+/// verifies, daemon (`sig2`) and app (`k2_signatures` under that Mac's key
+/// id); dropping one Mac's key revokes only that Mac.
+#[test]
+fn two_primaries_one_per_mac_and_the_backup() {
+    let (u1, u2, u2b, u3) = (new_key(), new_key(), new_key(), new_key());
+    let keys = [u2.trusted("primary"), u2b.trusted("primary"), u3.trusted("backup")];
+    let data = b"daemon bytes";
+    let a = "k2-daemon-linux-x86_64";
+    for (k, who) in [(&u2, "U2"), (&u2b, "U2b")] {
+        let v = verify_updater_sig_with(&keys, data, &k.sign(data, &tc(a, "0.46.6")), a, "0.46.6").expect(who);
+        assert_eq!(v.role, "primary", "{who}");
+        assert_eq!(v.key_id, key_id_of(&k.line).expect("id"), "{who}");
+    }
+    assert_eq!(verify_updater_sig_with(&keys, data, &u3.sign(data, &tc(a, "0.46.6")), a, "0.46.6").expect("U3").role, "backup");
+    assert!(verify_updater_sig_with(&keys, data, &u1.sign(data, &tc(a, "0.46.6")), a, "0.46.6").is_err(), "U1 is never trusted");
+    // The app: a release made on z3mbp files its signature under U2b's id.
+    let url = "https://github.com/Alakazam-211/K2/releases/download/v0.46.6/K2.app.tar.gz";
+    let app = b"app bundle";
+    let id2b = key_id_of(&u2b.line).expect("id");
+    let u2b_sig = u2b.sign(app, &tc("K2.app.tar.gz", "0.46.6"));
+    let raw = latest_json("0.46.6", url, &u1.sign(app, "timestamp:1\tfile:K2.app.tar.gz"), Some((&id2b, &u2b_sig)));
+    assert_eq!(verify_app_update_with(&keys, &raw, url, "0.46.6", app).expect("U2b app").key_id, id2b);
+    // A lost z3mbp: U2b dropped from the list, its releases are refused; U2's still verify.
+    let revoked = [u2.trusted("primary"), u3.trusted("backup")];
+    assert!(verify_app_update_with(&revoked, &raw, url, "0.46.6", app).is_err(), "a dropped key signs nothing");
+    assert!(verify_updater_sig_with(&revoked, data, &u2b.sign(data, &tc(a, "0.46.6")), a, "0.46.6").is_err());
+    assert!(verify_updater_sig_with(&revoked, data, &u2.sign(data, &tc(a, "0.46.6")), a, "0.46.6").is_ok());
+}

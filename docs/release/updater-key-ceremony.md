@@ -8,8 +8,9 @@ Terminal, not SSH). With the signing user it is four short sittings (about
 0.46.6 can be released: `release.sh` refuses to start while the new key is
 missing.
 
-> **Rosson chose the signing user (2026-10-28):** U2 is born inside the
-> `_k2sign` macOS user and never sits in `~/.k2-updater` or the keychain.
+> **Rosson chose the signing user (2026-10-28):** each signing Mac's primary
+> key (U2 on z3mbpZ, U2b on z3mbp) is born inside that Mac's `_k2sign` macOS
+> user and never sits in `~/.k2-updater` or the keychain.
 > Follow **"The signing user"** right below. The keychain steps further down
 > (sections 1–2, "the stopgap") stay only as the rollback path
 > (`K2_SIGNER=keychain`) until two releases have signed green through
@@ -17,90 +18,151 @@ missing.
 
 ## The signing user (prd-signing-user-v1; the default backend)
 
-**What it is.** A hidden macOS role user `_k2sign` on z3mbpZ (own group,
-UID/GID 400–499, shell `/usr/bin/false`, no password, home `/var/k2sign`
-0700) holds U1 and U2 and their passwords (U2's is 32 random bytes nobody has
-seen). Rosson's user can run exactly one thing as it, with no password:
+**What it is.** On each Mac that releases, a hidden macOS role user `_k2sign`
+(own group, UID/GID 400–499, shell `/usr/bin/false`, no password, home
+`/var/k2sign` 0700) holds that Mac's update keys and their passwords. Rosson's
+user can run exactly one thing as it, with no password:
 
     sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign <verb>
 
 File bytes go in on stdin and the signature comes out on stdout. The signer
-runs only root-owned tools by absolute path (a pinned minisign 0.12,
-`/usr/bin/openssl`, the Command Line Tools python3; never `/opt/homebrew`,
-and never Xcode.app's python, because `/Applications` is admin-writable). It
-signs only inside a **session** that Rosson opened with **one Touch ID** at
-`release.sh` Step 0.46 (before any build), bound to the version, the base
-commit and the asset list, for 12 hours. Every signature is in
+runs only root-owned tools by absolute path (a pinned minisign 0.12, a pinned
+gh 2.83.1, `/usr/bin/openssl`, the Command Line Tools python3; never
+`/opt/homebrew`, and never Xcode.app's python, because `/Applications` is
+admin-writable). It signs only inside a **session** Rosson opened with
+**one approval** at `release.sh` Step 0.46 (before any build), bound to the
+version, the base commit and the asset list, for 12 hours, and only files
+that pass its own checks (below). Every signature is in
 `/var/k2sign/audit/<version>/signatures.tsv` (`~/k2-release-audit` gets a
 marked copy).
+
+**Two signing Macs, one key each (Rosson 2026-10-28).** Releases can run on
+z3mbpZ or on z3mbp (the M5). Each Mac makes its **own** primary key inside its
+own `_k2sign`; no key is ever copied between them:
+
+| Key | Mac | Made by | Trusted by 0.46.6+ |
+|---|---|---|---|
+| **U2** | z3mbpZ | `k2sign-admin generate-u2` on z3mbpZ (sitting 2) | yes (primary) |
+| **U2b** | z3mbp | `k2sign-admin generate-u2` on z3mbp (sitting 2 with `--key U2b`) | yes (primary) |
+| **U3** | none: the password manager | the ceremony, once, during z3mbpZ's sitting 2 | yes (backup) |
+| **U1** | both Macs (imported into each `_k2sign`) | the old key, retired | installs older than 0.46.6 only (the bridge) |
+
+- Installs trust **any** of U2, U2b and U3 (`UPDATER_KEYS`: two primaries,
+  then the backup). A release is signed with the key of the Mac it runs on:
+  `sign-updater.sh` asks that Mac's signer which primary it holds
+  (`k2sign keys`) and checks it is one of the source tree's primaries;
+  `latest.json` files the signature under that key's id.
+- A lost or stolen Mac is revoked by dropping **its** key alone from
+  `UPDATER_KEYS` in the next release (installs that update past it stop
+  trusting it); the other Mac keeps releasing. U3 is the backup if both are
+  lost.
+- Releasing from z3mbp is Rosson's choice when he uses it. A release build is
+  heavy on the M5 (cargo, notarization, the DMG): pause the other builders
+  first. z3mbp also needs what any release Mac needs: the Developer ID
+  identity in its login keychain, the notarization key, a GUI iTerm.
+- Each Mac's signer state is its own: a version approved on one Mac is not
+  approved on the other.
+
+**Approving: Touch ID or the Mac login password (Rosson 2026-10-28).** The
+approver key is a Secure Enclave key whose access control is
+`[.privateKeyUsage, .biometryAny, .or, .devicePasscode]`: the system sheet on
+that Mac's screen asks for a fingerprint, or "Use Password…" takes the login
+password. A fresh sheet every time (nothing is cached or pre-evaluated). A
+process in a bare SSH session can't show the sheet, so it gets no approval
+(`sitting.sh reenrol` proves this). Adding or removing a fingerprint no longer
+kills the key (`.biometryAny`). What the password adds, written down: anyone
+who has the login password and the screen (in person, or Screen Sharing /
+RemotePC) can approve. The login password is also the admin password, which
+already opens the break-glass `k2sign-admin approve`, so it gives no new
+power; keep remote-GUI tools off on both Macs (cleanup items 8–9).
 
 **Sittings** (all in `scripts/k2sign/sitting.sh`). Each prints its exact
 commands and changes nothing until you add `--run`; then it stops before
 every step (Enter runs it, `s` skips a step already done on an earlier try).
-Sittings 1–3 take `--commit <sha>`, the commit K2 names, and refuse another.
+Sittings 1–3 and `reenrol` take `--key U2` (on z3mbpZ) or `--key U2b` (on
+z3mbp), refuse to run on the other Mac, and take `--commit <sha>`, the
+commit K2 names.
 
-**Before the first sitting**
-- The release checkout on z3mbpZ is on that commit. K2 tells you the branch
-  and the commit; then, in iTerm:
+**Before the first sitting on a Mac**
+- The release checkout on that Mac is on the commit K2 names:
   `cd ~/DevProjects/Alakazam\ Labs/K2 && git fetch origin && git checkout --detach <sha>`.
   (Back to main afterwards: `git checkout main`.)
-- Add any extra fingerprint now. Adding or removing a fingerprint later
-  kills the approver key (fix: enrol again, then `k2sign-admin set-approver`).
 - At least 60 GiB free; the Command Line Tools installed (`xcode-select --install`).
-- `bash scripts/k2sign/sitting.sh check` says `ready.`
+- `bash scripts/k2sign/sitting.sh check --key U2` (or `U2b`) says `ready.`
 
-| Sitting | When | Time | You type | You tap |
-|---|---|---|---|---|
-| `check` | any time | 1 min | nothing | nothing |
-| `0` (S0 spike) | first; wait for K2's go after it | ~10 min | nothing (the Developer ID build may ask for the login keychain password); one `ssh` line from another Mac | Touch ID ×4 |
-| `1` | after K2's go on sitting 0 | ~25 min | Mac admin password ×2–3, the new GitHub token (pasted at a hidden prompt); send K2 the hashes | Touch ID ×1 (enrol) |
-| `2` (agents stopped) | after K2 says sitting 1's hashes match | ~30 min | Mac admin password ×1–2, U3's new password ×2, `saved`, U1's password ×1; send K2 `~/k2-update-pubkeys.txt` | nothing |
-| `3` | after K2 lands the public keys | ~15 min | Mac admin password ×1; send K2 the hashes again | Touch ID ×1 |
+| Sitting | Where | When | Time | You type | You approve |
+|---|---|---|---|---|---|
+| `check` | each Mac | any time | 1 min | nothing | nothing |
+| `0` (S0 spike) | z3mbpZ (z3mbp optional) | first; wait for K2's go | ~10 min | one `ssh` line from another Mac | Touch ID ×4 |
+| `1 --key U2` / `--key U2b` | that Mac | after K2's go on sitting 0 | ~25 min | Mac admin password ×2–3, that Mac's new GitHub token; send K2 the hashes | ×1 (enrol) |
+| `reenrol` | z3mbpZ only | z3mbpZ's sitting 1 ran before the password change (87b27c2dc) | ~10 min | admin password ×1, the login password once (proof 2), one `ssh` line | Touch ID ×1–2 |
+| `2 --key U2` (agents stopped) | z3mbpZ | after its hashes match | ~30 min | admin password ×1–2, U3's new password ×2, `saved`, U1's password ×1; send K2 `~/k2-update-pubkeys-U2.txt` | nothing |
+| `2 --key U2b` (agents stopped) | z3mbp | after its hashes match | ~15 min | admin password ×1–2, U1's password ×1; send K2 `~/k2-update-pubkeys-U2b.txt` | nothing |
+| `3 --key U2` / `--key U2b` | each Mac | after K2 lands the public keys | ~15 min | admin password ×1; send K2 the hashes again | ×1 |
 
 U1's password must be in your password manager before sitting 2 (today it
-is the `TAURI_SIGNING_PRIVATE_KEY_PASSWORD=` value in the K2 checkout's
-`.env`: open the file in an editor, don't `cat` it). After pasting any
-password or the token, copy other text so it isn't left on the clipboard.
+is the value on the `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` line in the K2
+checkout's `.env`: open the file in an editor, don't `cat` it). After pasting
+any password or a token, copy other text so it isn't left on the clipboard.
+Sitting 2 on z3mbp stops every agent on z3mbp too, including the K2 workspace
+agents that build this code.
 
-**Order against landing.** The lane (this code) stays held until the
-public keys exist, because it changes what installs trust and `release.sh`
-refuses to start without them:
-1. Sittings `check`, `0`, `1` and `2` run from the **lane's commit** (not
-   main; K2 pushes it as a branch and names the commit). Sitting 2 saves
-   the U2 and U3 public lines to `~/k2-update-pubkeys.txt`.
-2. K2 runs `bash scripts/updater-key-ceremony.sh pubkeys <U2> <U3>` on the
-   lane, runs the gates, and lands lane + pubkeys **together** on main.
-3. Sitting `3` from that main commit: re-pin, preflight, the S2-6 proof.
-4. Release: one Touch ID at Step 0.46. The signer then checks every file
-   itself before signing it (slice S3): Linux daemons against GitHub (the
-   tag, base + bump only, base on main, the build attestation from
-   daemon-binaries.yml at the tag, the bytes); K2.app.tar.gz (Developer ID
-   team 36B8R93HXV, stapled and notarized, the version, the signed daemon
-   helper and k2-ptyd); the macOS daemon (arm64, one build marker for the
-   version, the embedded k2-ptyd signed by the team); the Windows setup only
-   when the approval named it (a PE for x64; no independent evidence).
+**Order against landing.** The lane stays held until the public keys exist,
+because it changes what installs trust and `release.sh` refuses to start
+without them. **Both Macs' sittings 1 and 2 come before the public keys
+land**, so one pubkeys commit carries U2, U2b and U3 and there is only one
+updater-key rollout:
+1. From the **lane's commit** (K2 pushes it as a branch and names the commit):
+   z3mbpZ `0`, `1 --key U2` (done 2026-10-28 at 87b27c2dc), `reenrol --key U2`,
+   `2 --key U2`; z3mbp `1 --key U2b`, `2 --key U2b`. The two Macs' sittings
+   can interleave; sitting 2 needs agents stopped on that Mac only.
+2. K2 runs `bash scripts/updater-key-ceremony.sh pubkeys <U2> <U2b> <U3>`
+   (the backup last) on the lane, runs the gates, and lands lane + pubkeys
+   **together** on main.
+3. Sitting `3` on each Mac from that main commit: re-pin, preflight, the
+   S2-6 proof, the real-app proof.
+4. Release from either Mac: one approval at Step 0.46. The signer then
+   checks every file itself before signing it (slice S3): Linux daemons
+   against GitHub (the tag, base + bump only, base on main, the build
+   attestation from daemon-binaries.yml at the tag, the bytes);
+   K2.app.tar.gz (Developer ID team 36B8R93HXV, stapled and notarized, the
+   version, the signed daemon helper and k2-ptyd); the macOS daemon (arm64,
+   one build marker for the version, the embedded k2-ptyd signed by the
+   team); the Windows setup only when the approval named it (a PE for x64;
+   no independent evidence).
+
+If z3mbp's sitting 2 slips past the landing, U2b needs a second pubkeys
+commit and only releases after the one that ships it can be signed on z3mbp.
+
+**Re-enrolling the approver** (e.g. after this change, or a new Mac login
+password policy): `bash scripts/k2sign/sitting.sh reenrol --key U2 --commit <sha> --run`
+rebuilds K2 Release Approve, runs `--enrol --replace` (the old key files are
+renamed `*.old-<time>`), installs the new public key with
+`sudo /usr/local/libexec/k2sign/k2sign-admin set-approver ~/.k2-release-approve/approver.pem`,
+then proves Touch ID, the password, and that a bare SSH session can't approve.
 
 **Rollback.**
 - Soft: root sets `approval = off` in `/usr/local/etc/k2sign/policy` and
-  runs `sudo /usr/local/libexec/k2sign/k2sign-admin repin`: no Touch ID
+  runs `sudo /usr/local/libexec/k2sign/k2sign-admin repin`: no approval
   session; every other check still runs. Re-running `install.sh` restores
   the reviewed policy.
-- Break-glass approval when Rosson can't touch z3mbpZ:
+- Break-glass approval when Rosson can't reach the Mac's screen:
   `sudo /usr/local/libexec/k2sign/k2sign-admin approve <version> <base> <asset>…`
   (admin password; logged `APPROVED-BY-ADMIN`).
 - Full: `K2_SIGNER=keychain` after the keys are exported back to
   `~/.k2-updater` (that export verb, `export-to-keychain`, is slice S4, not
   built yet; until then the keys can only be copied out by root by hand).
+  With two primaries in the tree, set `K2_UPDATER_U2_PUB` to that Mac's key.
 
 **S0 spike results** (the PRD's acceptance needs a written result for each):
 
 | | What | Result |
 |---|---|---|
-| (a) | CryptoKit SE key, `.biometryCurrentSet`, no keychain entitlement, ad hoc **and** Developer ID | **open:** needs z3mbpZ + Touch ID (`sitting.sh 0`) |
-| (b) | `open -W -n -a` shows the Touch ID sheet from iTerm and from SSH | **open:** `sitting.sh 0` |
+| (a) | CryptoKit SE key, access control `[.privateKeyUsage, .biometryAny, .or, .devicePasscode]` (Touch ID or the login password; was `.biometryCurrentSet` until 2026-10-28), no keychain entitlement, ad hoc **and** Developer ID | **open:** needs the Mac + a person (`sitting.sh 0`); the password path is proven by `sitting.sh reenrol` (proof 2) |
+| (b) | `open -W -n -a` shows the approval sheet from iTerm and from SSH; a bare SSH run of the helper can't approve | **open:** `sitting.sh 0`, `sitting.sh reenrol` (proof 3) |
 | (c) | LibreSSL 3.3.6 `openssl dgst -sha256 -verify` accepts CryptoKit's DER ECDSA | **pass** (2026-10-28, z3mbp, LibreSSL 3.3.6): a CryptoKit P-256 signature (software key: the SE key's DER and PEM formats are the same) verifies, a one-byte change is refused; the test suite then uses openssl-made P-256 signatures in the same format |
-| (d) | gh attestation verify with only a read-only token in a scratch HOME | **partly answered (2026-10-28):** gh needs a token even for a public repo's attestations (exit 4 without one), and GitHub serves cli/cli's bundle by URL, not inline, so the signer lets the pinned gh fetch it. The rest is proven at sitting 1 by `k2sign gh-selfcheck` (as `_k2sign`, with its own token, on cli/cli's attestation of the pinned gh zip). The token needs Contents + Attestations read-only on K2 |
-| (e) | a 300 MB stdin stream through `sudo -n -u` | **open:** needs sudo in a VM (the Tart `k2-newuser-base` VM), never on z3mbpZ itself |
+| (d) | gh attestation verify with only a read-only token in a scratch HOME | **pass on z3mbpZ (sitting 1, 2026-10-28):** `k2sign gh-selfcheck` ok as `_k2sign` with its own token. gh needs a token even for a public repo's attestations, and GitHub serves cli/cli's bundle by URL, so the signer lets the pinned gh fetch it. The token needs Contents + Attestations read-only on K2 |
+| (e) | a 300 MB stdin stream through `sudo -n -u` | **open:** needs sudo in a VM (the Tart `k2-newuser-base` VM), never on a signing Mac |
 
 A failure in (a) or (b) switches the approval to the passphrase fallback
 (prd §11 Q1) before release use.
@@ -326,7 +388,7 @@ SS1 threat notes.
 - **Same-user read on z3mbpZ:** stopped by the signing user (above): no
   process running as Rosson's user can read U1/U2 or their passwords (only
   root can), and it can't use the signer as an oracle outside an approved
-  session (one Touch ID per release, bound to version, base commit and
+  session (one approval per release, Touch ID or the Mac login password, bound to version, base commit and
   assets; one sha256 per asset per version). Still open until slice S3: the
   signer doesn't yet check each file's origin itself, which is why it
   refuses every real file for now. Under the `K2_SIGNER=keychain` rollback,

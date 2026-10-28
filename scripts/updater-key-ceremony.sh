@@ -11,7 +11,7 @@
 #       part-way removes everything the run made. Prints the two PUBLIC key
 #       lines.
 #
-#   bash scripts/updater-key-ceremony.sh generate --signer k2sign
+#   bash scripts/updater-key-ceremony.sh generate --signer k2sign [--key-name U2|U2b] [--skip-u3]
 #       The signing-user path (prd-signing-user-v1; Rosson chose it
 #       2026-10-28): U2 is made INSIDE the `_k2sign` user first
 #       (`sudo /usr/local/libexec/k2sign/k2sign-admin generate-u2`: random
@@ -53,10 +53,12 @@ say() { printf '%s\n' "$*"; }
 pubkeys() {
     local root="$ROOT"
     if [ "${1:-}" = "--root" ]; then root="${2:?--root DIR}"; shift 2; fi
-    [ $# -eq 2 ] || die "usage: updater-key-ceremony.sh pubkeys [--root DIR] <U2 public key line> <U3 public key line>"
-    python3 -I - "$root" "$1" "$2" "$U1_LINE" <<'PY'
+    [ $# -eq 2 ] || [ $# -eq 3 ] || die "usage: updater-key-ceremony.sh pubkeys [--root DIR] <U2 line> [<U2b line>] <U3 line>   (one primary per signing Mac, the backup last)"
+    python3 -I - "$root" "$U1_LINE" "$@" <<'PY'
 import base64, json, re, sys
-root, primary, backup, u1 = sys.argv[1:5]
+root, u1 = sys.argv[1:3]
+primaries, backup = sys.argv[3:-1], sys.argv[-1]
+primary = primaries[0]
 
 def key_id(line):
     try:
@@ -67,10 +69,11 @@ def key_id(line):
         sys.exit("not a minisign public key line: %r" % line)
     return raw[2:10][::-1].hex().upper()
 
-ids = [key_id(primary), key_id(backup)]
-if primary == backup or ids[0] == ids[1]:
-    sys.exit("U2 and U3 must be two different keys")
-if u1 in (primary, backup):
+lines = primaries + [backup]
+ids = [key_id(l) for l in lines]
+if len(set(ids)) != len(ids):
+    sys.exit("every key must be a different key (U2, U2b, U3)")
+if u1 in lines:
     sys.exit("that is U1, the retired key; it must never be a trusted update key")
 
 def edit(rel, fn):
@@ -84,21 +87,18 @@ def edit(rel, fn):
 def rust(s):
     a, b = s.index("// BEGIN UPDATER_KEYS"), s.index("// END UPDATER_KEYS")
     body = '''// BEGIN UPDATER_KEYS (written by scripts/updater-key-ceremony.sh pubkeys)
-/// The update keys: U2 (primary, secret on z3mbpZ) then U3 (offline backup,
-/// in Rosson's password manager), from the SS5 key ceremony.
+/// The update keys: one primary per signing Mac, each made inside that Mac's
+/// `_k2sign` user (U2 on z3mbpZ, U2b on z3mbp; a lost Mac is revoked by
+/// dropping its key alone), then U3 (offline backup, in Rosson's password
+/// manager), from the update-key ceremony.
 pub const UPDATER_KEYS: &[TrustedKey] = &[
-    TrustedKey {
-        role: "primary",
+%s];
+''' % "".join('''    TrustedKey {
+        role: "%s",
         key_id: "%s",
         public_key_b64: "%s",
     },
-    TrustedKey {
-        role: "backup",
-        key_id: "%s",
-        public_key_b64: "%s",
-    },
-];
-''' % (ids[0], primary, ids[1], backup)
+''' % ("backup" if i == len(lines) - 1 else "primary", ids[i], lines[i]) for i in range(len(lines)))
     return s[:a] + body + s[b:]
 
 def shell(var):
@@ -106,7 +106,7 @@ def shell(var):
         pat = re.compile(r'^%s="[^"]*"$' % re.escape(var), re.M)
         if len(pat.findall(s)) != 1:
             sys.exit("%s must be assigned exactly once" % var)
-        return pat.sub('%s="%s %s"' % (var, primary, backup), s)
+        return pat.sub('%s="%s"' % (var, " ".join(lines)), s)
     return f
 
 def conf(s):
@@ -122,7 +122,8 @@ edit("crates/k2-release-keys/src/lib.rs", rust)
 edit("cli/k2", shell("_DAEMON_UPDATE_PUBKEYS"))
 edit("scripts/install-daemon.sh", shell("K2_DAEMON_PUBKEYS"))
 edit("src-tauri/tauri.conf.json", conf)
-print("wrote U2 %s (primary) and U3 %s (backup) into the four verifier copies under %s" % (ids[0], ids[1], root))
+print("wrote %s (primary) and %s (backup) into the four verifier copies under %s"
+      % (" and ".join(ids[:-1]), ids[-1], root))
 PY
 }
 
@@ -163,7 +164,17 @@ ceremony_cleanup() {
 generate() {
     if [ "${1:-}" = "--signer" ]; then
         [ "${2:-}" = k2sign ] || die "generate --signer k2sign (the only other path is plain generate)"
-        generate_k2sign
+        shift 2
+        local kname=U2 skip3=0
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --key-name) kname="${2:-}"; shift 2 ;;
+                --skip-u3) skip3=1; shift ;;
+                *) die "unknown argument $1" ;;
+            esac
+        done
+        case "$kname" in U2|U2b) ;; *) die "--key-name is U2 (z3mbpZ) or U2b (z3mbp)" ;; esac
+        generate_k2sign "$kname" "$skip3"
         return
     fi
     [ "$(uname -s)" = Darwin ] || die "run this on z3mbpZ (macOS), in its GUI session"
@@ -235,12 +246,20 @@ generate() {
 # The signing-user ceremony: U2 already exists inside _k2sign; make U3
 # (password manager only) and print both public lines.
 generate_k2sign() {
-    [ "$(uname -s)" = Darwin ] || die "run this on z3mbpZ (macOS), in its GUI session"
+    local kname="${1:-U2}" skip3="${2:-0}" out
+    out="$HOME/k2-update-pubkeys-$kname.txt"
+    [ "$(uname -s)" = Darwin ] || die "run this on the signing Mac (macOS), in its GUI session"
     [ -t 0 ] && [ -t 1 ] || die "run this in a terminal (passwords are typed at prompts, never passed in)"
     command -v minisign >/dev/null 2>&1 || die "minisign is not installed (brew install minisign)"
     local gen="${K2SIGN_ETC:-/usr/local/etc/k2sign}/u2-generated.pub" u2 ans
     [ -f "$gen" ] || die "no $gen: run 'sudo /usr/local/libexec/k2sign/k2sign-admin generate-u2' first (sitting 2)"
     u2="$(tr -d '[:space:]' < "$gen")"
+    if [ "$skip3" = 1 ]; then
+        printf '%s %s\n' "$kname" "$u2" > "$out"
+        say "$kname (this Mac's primary, inside _k2sign): $u2"
+        say "(Saved to $out: a public key, safe to send. U3 is made once, on z3mbpZ.)"
+        return 0
+    fi
     trap ceremony_cleanup EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -268,12 +287,12 @@ generate_k2sign() {
     say "U3's secret key is overwritten and deleted from this Mac."
     say ""
     say "── 2/2  Send K2 these two PUBLIC key lines (safe to share) ──"
-    say "U2 (primary, inside _k2sign): $u2"
+    say "$kname (primary, inside _k2sign): $u2"
     say "U3 (backup):                  $u3"
-    printf 'U2 %s\nU3 %s\n' "$u2" "$u3" > "$HOME/k2-update-pubkeys.txt"
-    say "(Saved to ~/k2-update-pubkeys.txt: public keys only, safe to send.)"
+    printf '%s %s\nU3 %s\n' "$kname" "$u2" "$u3" > "$out"
+    say "(Saved to $out: public keys only, safe to send.)"
     say ""
-    say "K2 runs: bash scripts/updater-key-ceremony.sh pubkeys <U2 line> <U3 line>, lands it with the"
+    say "K2 runs: bash scripts/updater-key-ceremony.sh pubkeys <U2> [<U2b>] <U3>, lands it with the"
     say "signing lane, and you re-run 'sudo bash scripts/k2sign/install.sh' from that commit (it pins them)."
 }
 

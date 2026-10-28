@@ -1,5 +1,5 @@
 #!/bin/bash
-# K2 Release Script
+# K2 Release Script (runs on z3mbpZ or, at Rosson's choice, z3mbp: it signs with that Mac's own key; a release build is heavy on the M5, so pause other builders)
 # Builds, signs, notarizes, and releases K2 with both DMG and update bundle.
 # Also publishes the hosted-web SPA bundle to Cloudflare R2 (phase 3).
 #
@@ -18,11 +18,14 @@
 #
 # Prerequisites:
 #   - The update keys U1 (the retired key, bridge signatures for installs
-#     older than 0.46.6) and U2 (the new key; docs/release/updater-key-ceremony.md)
-#     live with the `_k2sign` macOS user (prd-signing-user-v1; set up by
+#     older than 0.46.6) and this Mac's primary key (U2 on z3mbpZ, U2b on
+#     z3mbp: one key per signing Mac, never copied; installs trust both, and
+#     U3, the offline backup; docs/release/updater-key-ceremony.md)
+#     live with this Mac's `_k2sign` macOS user (prd-signing-user-v1; set up by
 #     scripts/k2sign/install.sh). This user can't read them: each update
 #     file goes to `sudo -n -u _k2sign …/k2sign sign` on stdin, and the
-#     signer signs only inside a session Rosson approved with ONE Touch ID
+#     signer signs only inside a session Rosson approved ONCE (Touch ID or his
+#     Mac login password)
 #     at Step 0.46 (before any build), bound to the version, the base commit
 #     and the asset list. Every update file is signed with BOTH keys.
 #     K2_SIGNER=keychain is the rollback to the stopgap (key files in
@@ -499,14 +502,14 @@ else
     export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"
 fi
 
-# ── Step 0.46: Signing approval, one Touch ID (prd-signing-user-v1 S2) ──
+# ── Step 0.46: Signing approval, once: Touch ID or the login password (prd-signing-user-v1 S2) ──
 # Before any build: a missed prompt times out (K2_SIGN_APPROVE_TIMEOUT_MIN,
 # default 30) and costs nothing. The session binds this version, the base
 # commit (HEAD now; the bump is committed at Step 8.9) and the asset list,
 # for 12 h, which covers K2_RELEASE_RESUME and by-hand sign-daemon.sh
 # re-runs; after that it asks to RE-APPROVE. K2_SIGNER=keychain skips it.
 echo ""
-echo "Step 0.46: Signing approval (Touch ID)..."
+echo "Step 0.46: Signing approval (Touch ID or your Mac login password)..."
 if [ "$K2_SIGNER" = k2sign ]; then
     K2_SIGN_BASE="$(git rev-parse HEAD)"
     # A resumed run after Step 8.9 sits on the release commit: its parent

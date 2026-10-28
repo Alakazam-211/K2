@@ -5617,7 +5617,7 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
         autoCapitalize="off"
         spellCheck={false}
         data-1p-ignore="true"
-        data-k2so-shadow-input=""
+        data-k2-shadow-input=""
         aria-label="Terminal input"
         aria-multiline="false"
         style={shadowInputStyle}

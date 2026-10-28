@@ -82,8 +82,8 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 /// Using `&'static str` constants rather than match-arms on dynamic
 /// IDs so typos are caught at compile time.
 mod ids {
-    pub const SHOW: &str = "k2so.tray.show";
-    pub const QUIT: &str = "k2so.tray.quit";
+    pub const SHOW: &str = "k2.tray.show";
+    pub const QUIT: &str = "k2.tray.quit";
 }
 
 /// Cached handle to the status row, whose label we change over time.
@@ -220,7 +220,7 @@ fn build_menu(app: &AppHandle<Wry>) -> Result<Menu<Wry>, String> {
     let (status_label, status_state) = compose_status_label();
     let status = IconMenuItem::with_id(
         app,
-        "k2so.tray.server-status",
+        "k2.tray.server-status",
         status_label,
         true,
         status_state.icon(),

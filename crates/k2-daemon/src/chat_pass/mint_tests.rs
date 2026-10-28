@@ -848,7 +848,12 @@ fn app_claim_is_for_app_sessions_only_and_fits_sews_grammar() {
         let i = identity::PassIdentity { provenance: p, ..app_session.clone() };
         assert_eq!(mint::app_claim(&i), None, "{p:?}");
     }
-    assert!(!super::app_claim_ok("") && !super::app_claim_ok(&"a".repeat(129)) && super::app_claim_ok(&"a".repeat(128)));
+    // Sew 0.5.0's grammar: 1–64 of [a-z0-9][a-z0-9._-]* (else 401 bad_app).
+    assert!(!super::app_claim_ok("") && !super::app_claim_ok(&"a".repeat(65)) && super::app_claim_ok(&"a".repeat(64)));
+    for bad in ["a:b", "_ab", ".ab", "-ab", "Ab"] {
+        assert!(!super::app_claim_ok(bad), "{bad}");
+    }
+    assert!(super::app_claim_ok("0a._-z"));
     // Signed and verified, and refused by validate when malformed.
     let r = ring("k7-app");
     let c = ChatPassClaims::new(INSTALL, "k2:principal:p", "skn_1", T0).unwrap().with_app(Some(&uuid)).unwrap();

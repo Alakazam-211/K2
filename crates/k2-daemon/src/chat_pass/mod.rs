@@ -96,20 +96,21 @@ pub struct ChatPassClaims {
     /// UUID), the same string as `app` in the mint answer. Only App
     /// sessions carry it (never the owner, a handoff, a Connect login or a
     /// box login), so Sew can tell Hearth's pass from Meet's for the same
-    /// person (Sew, 2026-10-17: at most 128 of `[a-z0-9_.:-]`).
+    /// person (Sew 0.5.0: 1–64 of `[a-z0-9][a-z0-9._-]*`; anything else
+    /// is 401 `bad_app`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
 }
 
-/// Longest `app` claim Sew accepts.
-pub const MAX_APP_CLAIM: usize = 128;
+/// Longest `app` claim Sew accepts (Sew 0.5.0; it was 128 before).
+pub const MAX_APP_CLAIM: usize = k2_core::tool_hook::sew_wire::APP_ID_MAX_BYTES;
 
-/// Sew's `app` grammar: 1–128 of `[a-z0-9_.:-]`. K2's service ids are
-/// `uuid::Uuid::new_v4().to_string()` (36 of `[0-9a-f-]`), so they fit.
+/// Sew 0.5.0's `app` grammar ([`k2_core::tool_hook::sew_wire::is_app_id`]):
+/// 1–64 of `[a-z0-9][a-z0-9._-]*`; Sew answers anything else 401
+/// `bad_app`. K2's service ids are `uuid::Uuid::new_v4().to_string()` (36
+/// of `[0-9a-f-]`, starting with a hex digit), so they fit.
 pub fn app_claim_ok(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= MAX_APP_CLAIM
-        && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'.' | b':' | b'-'))
+    k2_core::tool_hook::sew_wire::is_app_id(s)
 }
 
 fn is_install_id(s: &str) -> bool {
@@ -205,7 +206,7 @@ impl ChatPassClaims {
         }
         if let Some(app) = &self.app {
             if !app_claim_ok(app) {
-                return Err(format!("app must be 1-{MAX_APP_CLAIM} of [a-z0-9_.:-]"));
+                return Err(format!("app must be 1-{MAX_APP_CLAIM} of [a-z0-9][a-z0-9._-]*"));
             }
         }
         Ok(())

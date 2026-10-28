@@ -105,6 +105,8 @@ bash "$ROOT/scripts/updater-key-ceremony.sh" pubkeys --root "$SRC" "$U2_LINE" "$
     && pass "ceremony pubkeys wrote U2/U3 into the fixture tree" || fail "pubkeys" ""
 
 LIB="$ROOT/scripts/lib/sign-updater.sh"
+# The keychain (stopgap) backend; tests/release/k2sign-*.sh cover k2sign.
+export K2_SIGNER=keychain
 lib() { bash -c 'source "$1"; shift; "$@"' _ "$LIB" "$@"; }
 
 echo "== preflight: both slots sign a self-test with real minisign =="

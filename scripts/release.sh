@@ -17,20 +17,19 @@
 # K2_RELEASE_REPO=Alakazam-211/K2SO for an old-repo (bridge) release.
 #
 # Prerequisites:
-#   - The update-signing keys in ~/.k2-updater/ and their passwords in the
-#     login keychain: U1 (the retired key, bridge signatures for installs
-#     older than 0.46.6) and U2 (the new key; docs/release/updater-key-ceremony.md).
-#     Every update file is signed with BOTH. The keys are read only inside
-#     scripts/lib/sign-updater.sh, at each signing step. That keeps them out
-#     of the environment and the argv of every build, test and package this
-#     run starts, so nothing inherits them by accident.
-#     It does NOT stop code running as this macOS user (a build script, an
-#     npm or cargo package, an agent) from reading ~/.k2-updater/*.key and
-#     asking the unlocked login keychain for the password itself. That is
-#     an accepted risk for 0.46.6, the same model as the root-helper key,
-#     pending Rosson's OK; the real fix is SS2b (a separate `k2sign` macOS
-#     user that only signs, 0.46.6).
+#   - The update keys U1 (the retired key, bridge signatures for installs
+#     older than 0.46.6) and U2 (the new key; docs/release/updater-key-ceremony.md)
+#     live with the `_k2sign` macOS user (prd-signing-user-v1; set up by
+#     scripts/k2sign/install.sh). This user can't read them: each update
+#     file goes to `sudo -n -u _k2sign …/k2sign sign` on stdin, and the
+#     signer signs only inside a session Rosson approved with ONE Touch ID
+#     at Step 0.46 (before any build), bound to the version, the base commit
+#     and the asset list. Every update file is signed with BOTH keys.
+#     K2_SIGNER=keychain is the rollback to the stopgap (key files in
+#     ~/.k2-updater, passwords in the login keychain, readable by every
+#     process of this user); it is removed after two green k2sign releases.
 #     TAURI_SIGNING_PRIVATE_KEY(_PASSWORD) must NOT be set (refused).
+#   - ~/Applications/K2 Release Approve.app, enrolled (scripts/k2sign/approve/).
 #   - Apple signing identity in keychain (GUI login session — see above)
 #   - gh CLI authenticated (or GH_TOKEN / GITHUB_TOKEN)
 #
@@ -231,13 +230,20 @@ k2u_env_guard
 # checkout's public keys and takes the Linux release commit from THIS
 # checkout's tag; a leftover override (a test shell, .env) would move either
 # somewhere else without a word.
-for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR; do
+for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD; do
     if [ -n "${!_k2_seam:-}" ]; then
         echo "ERROR: $_k2_seam is set (${!_k2_seam}). It is a test seam: a release checks signatures and the release tag against this checkout only. Unset it and run again." >&2
         exit 1
     fi
 done
 unset _k2_seam
+K2_SIGNER="${K2_SIGNER:-k2sign}"
+case "$K2_SIGNER" in
+    k2sign|keychain) export K2_SIGNER ;;
+    *) echo "ERROR: K2_SIGNER must be k2sign or keychain (got $K2_SIGNER)" >&2; exit 1 ;;
+esac
+# shellcheck source=scripts/lib/sign-approve.sh
+source "$PROJECT_DIR/scripts/lib/sign-approve.sh"
 
 cd "$PROJECT_DIR"
 
@@ -483,6 +489,39 @@ echo "Step 0.45: Update-signing preflight..."
 # dropped copy would ship installs that can't verify this release.
 cargo test -p k2-release-keys
 bash "$PROJECT_DIR/scripts/sign-daemon.sh" --preflight "$VERSION"
+
+# Windows is decided here (not at Step 9.5) because the approval names it.
+# Same rule as before: off unless K2_SKIP_WINDOWS_NSIS=0 or
+# K2_REQUIRE_WINDOWS_NSIS=1.
+if [ "${K2_REQUIRE_WINDOWS_NSIS:-0}" = "1" ]; then
+    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-0}"
+else
+    export K2_SKIP_WINDOWS_NSIS="${K2_SKIP_WINDOWS_NSIS:-1}"
+fi
+
+# ── Step 0.46: Signing approval, one Touch ID (prd-signing-user-v1 S2) ──
+# Before any build: a missed prompt times out (K2_SIGN_APPROVE_TIMEOUT_MIN,
+# default 30) and costs nothing. The session binds this version, the base
+# commit (HEAD now; the bump is committed at Step 8.9) and the asset list,
+# for 12 h, which covers K2_RELEASE_RESUME and by-hand sign-daemon.sh
+# re-runs; after that it asks to RE-APPROVE. K2_SIGNER=keychain skips it.
+echo ""
+echo "Step 0.46: Signing approval (Touch ID)..."
+if [ "$K2_SIGNER" = k2sign ]; then
+    K2_SIGN_BASE="$(git rev-parse HEAD)"
+    # A resumed run after Step 8.9 sits on the release commit: its parent
+    # is the base the session was approved for.
+    if [ "$(git log -1 --format=%s HEAD)" = "chore(release): ${TAG}" ]; then
+        K2_SIGN_BASE="$(git rev-parse HEAD^)"
+    fi
+    K2_SIGN_ASSETS=(K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64)
+    if [ "${K2_SKIP_WINDOWS_NSIS}" != "1" ]; then
+        K2_SIGN_ASSETS+=(--windows setup.exe "K2_${VERSION}_x64-setup.exe")
+    fi
+    k2sa_open_session "$VERSION" "$K2_SIGN_BASE" "${K2_SIGN_ASSETS[@]}" || exit 1
+else
+    echo "  K2_SIGNER=keychain (rollback): no approval session; the stopgap signs as this user."
+fi
 
 # ── Step 0.5: Pre-flight quality gates ──
 # Added at 0.40.31 when the tree first reached warning-zero / typecheck-zero.

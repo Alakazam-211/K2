@@ -127,6 +127,7 @@ pub fn select_key_store(home: &Path) -> Arc<dyn KeyStore> {
 /// single-instance lock. Failures leave the vault closed with a reason
 /// that `/cli/vault/status` shows; the daemon keeps running.
 pub fn boot(home: &Path) {
+    let _ = BOOT_HOME.set(home.to_path_buf());
     let dir = vault_dir(home);
     let ks = select_key_store(home);
     let r = open_with_upgrade(&dir, home, ks);
@@ -191,6 +192,8 @@ pub fn boot(home: &Path) {
             );
         }
         Err(e) => {
+            // BM-A12: the tunnel token is in here; say so, not "not paired".
+            k2_core::tunnel::config::set_vault_closed(Some(e.code));
             k2_core::log_debug!("[vault] NOT open: {e}");
             let _ = HOME.set(home.to_path_buf());
             match after_failure(&e.code, 0) {
@@ -407,20 +410,27 @@ pub fn open_now() -> Result<Arc<LocalVault>, VaultError> {
 /// Serve a vault that opened after boot and start its runtime steps,
 /// once (the retry and `k2 vault open` can race).
 fn publish_late(v: Arc<LocalVault>) {
-    static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     let mut c = cell().write();
     if c.is_ok() {
         return;
     }
     *c = Ok(v.clone());
     drop(c);
-    if !DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    if !LATE_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
         on_late_open(&v);
     }
 }
 
+/// The late-open runtime steps ran once (a retry, `k2 vault open` and a
+/// box-move import into a closed vault can race).
+static LATE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// The runtime half of a boot open, for a vault that opened late.
 fn on_late_open(v: &Arc<LocalVault>) {
+    // The tunnel token lives in the vault (BM-A12): its holder comes with it.
+    if let Err(e) = tunnel::adopt(v) {
+        k2_core::log_debug!("[vault] tunnel token after a late open: {}", e.code);
+    }
     let _ = k2_core::secret_refs::install(Box::new(mainrefs::Holder));
     let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
     #[cfg(unix)]
@@ -440,6 +450,91 @@ fn on_late_open(v: &Arc<LocalVault>) {
         v.key_store().kind().as_str(),
         v.recovery_state().0
     );
+}
+
+/// The K2 home `boot` opened the vault from (`~/.k2`).
+static BOOT_HOME: OnceLock<PathBuf> = OnceLock::new();
+
+/// The K2 home of this daemon's vault (`None` before boot, and in tests
+/// that never boot).
+pub fn boot_home() -> Option<PathBuf> {
+    BOOT_HOME.get().cloned()
+}
+
+// ── box moves (prd-box-move-carry-v1) ───────────────────────────────
+//
+// The routes live in `migrate_secrets_routes`; the key store is opened
+// here only (VS14), whether the vault is open or not (BM-A5).
+
+/// The import with `--apply`: adopt `mf` into this box's vault folder with
+/// this box's key store, then serve it (ticker, tunnel token holder).
+/// Works while the vault is closed. On a failure the old files are back
+/// and the old vault (if one was open) keeps serving.
+pub fn move_import_apply(
+    home: &Path,
+    identity: &k2_vault::agefmt::Identity,
+    mf: &k2_vault::boxmove::MoveFile,
+) -> Result<(Arc<LocalVault>, k2_vault::boxmove::ImportRecord), VaultError> {
+    let dir = vault_dir(home);
+    let ks = select_key_store(home);
+    let imported = k2_vault::boxmove::apply_move(&dir, ks, identity, mf, k2_vault::OpenOptions::default())?;
+    let v = Arc::new(imported.vault);
+    serve_replaced(&v);
+    Ok((v, imported.record))
+}
+
+/// `--undo` on the new box: put the replaced vault back and open it again
+/// (closed, as before, when it didn't open then). A store that only
+/// counts up keeps the import's higher `gen`; that rollback is
+/// acknowledged with the undo's own confirm (`proof`).
+pub fn move_import_undo(home: &Path, actor: &k2_vault::Actor, proof: Option<&k2_vault::HumanProof>) -> Result<k2_vault::boxmove::ImportRecord, VaultError> {
+    let dir = vault_dir(home);
+    let ks = select_key_store(home);
+    let rec = k2_vault::boxmove::undo_import(&dir, &ks)?;
+    match LocalVault::open(&dir, ks, k2_vault::OpenOptions::default()) {
+        Ok(v) => {
+            if v.in_rollback() {
+                if let Some(p) = proof {
+                    v.acknowledge_rollback(actor, p)?;
+                }
+            }
+            serve_replaced(&Arc::new(v));
+        }
+        Err(e) => {
+            k2_core::tunnel::config::set_vault_closed(Some(e.code));
+            *cell().write() = Err(e);
+        }
+    }
+    Ok(rec)
+}
+
+/// A vault replaced the served one (restore, a box-move import or undo):
+/// serve it, install the tunnel token holder if the box booted closed,
+/// and give it its own ticker (the old one stops at its next tick).
+fn serve_replaced(v: &Arc<LocalVault>) {
+    let was_closed = {
+        let mut c = cell().write();
+        let was = c.is_err();
+        *c = Ok(v.clone());
+        was
+    };
+    // Only a daemon that booted its vault: tests swap vaults in a temp
+    // dir and must never touch a tunnel.json.
+    if boot_home().is_none() {
+        return;
+    }
+    // A box that booted closed (an import onto vault_key_missing) gets the
+    // runtime steps a late open gets; an open one just its new ticker.
+    if was_closed && !LATE_DONE.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        on_late_open(v);
+        return;
+    }
+    if let Err(e) = tunnel::adopt(v) {
+        k2_core::log_debug!("[vault] tunnel token after replace: {}", e.code);
+    }
+    let _ = k2_core::secret_refs::install(Box::new(mainrefs::Holder));
+    let _ = k2_core::redaction::install(Box::new(|s: &str| redact_str(s)));
+    start_ticker(v.clone());
 }
 
 fn rotate_generated_after_move(subsystem: &'static str) {
@@ -463,7 +558,7 @@ fn rotate_generated_after_move(subsystem: &'static str) {
 
 /// A restore swapped the vault file: serve the new one.
 pub fn replace(v: Arc<LocalVault>) {
-    *cell().write() = Ok(v);
+    serve_replaced(&v);
 }
 
 /// Every minute: flush audit roll-ups, expire chat secrets and old card
@@ -476,6 +571,11 @@ fn start_ticker(v: Arc<LocalVault>) {
         t.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             t.tick().await;
+            // A restore or box-move import replaced this vault: its own
+            // ticker serves the new one.
+            if !matches!(get(), Ok(cur) if Arc::ptr_eq(&cur, &v)) {
+                break;
+            }
             let v2 = v.clone();
             let _ = tokio::task::spawn_blocking(move || {
                 match v2.tick() {

@@ -535,12 +535,108 @@ fn apply_proposal(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
 
 // ── the registry ────────────────────────────────────────────────────
 
+// ── vault.move-approve (prd-box-move-carry-v1 Q3) ───────────────────
+
+/// A box-move step an agent ran is held as `mv_…`; the box owner approves
+/// it on the card with the `vault-move` confirm, bound to that id. `apply`
+/// runs `/cli/migrate/secrets/approve` as the answerer, so the route's own
+/// person and confirm checks run again at the click.
+pub(crate) static VAULT_MOVE_APPROVE: ActionSpec = ActionSpec {
+    id: "vault.move-approve",
+    area: Area::Held,
+    params: &[one("request", ParamKind::HeldRequest)],
+    floor: Floor::Owner,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::SettingsConfirm { action: ConfirmAction::VaultMove },
+    // The held step itself waits a day.
+    expiry: Expiry { default_secs: crate::migrate_secrets_routes::HELD_TTL_SECS, max_secs: k2_core::permission::catalog::MAX_EXPIRY_SECS },
+    words: Words {
+        setting: "Box moves",
+        what_changes: "Run {ws}'s held box-move step {request} on this server's vault",
+        consequences: "A box move exports this server's whole vault (and freezes it) or replaces it with a moved one, depending on the step. k2 migrate status shows which; nothing is deleted, and k2 migrate --help says how to undo it.",
+        scope: "held step {request}",
+        duration: ONE_TIME,
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "vault", path: "k2 migrate status (from your own terminal)" },
+    walls: &[Wall {
+        matches: WallMatch::Held { status: 202, field: "status", value: "held" },
+        route_prefix: "/cli/migrate/secrets/",
+        method: WallMethod::Post,
+        params: &[("request", ParamFrom::Response("/request/id"))],
+    }],
+    coverage: WallCoverage::Held,
+    machine_hints: &[],
+};
+
+fn check_vault_move(ctx: &Ctx) -> Check {
+    let Some(id) = text_param(ctx, "request") else {
+        return Check::Moved("name the held step: request=<its mv_… id> (k2 migrate status)".into());
+    };
+    let Some(home) = crate::vault::boot_home() else {
+        return Check::Unavailable { code: "vault_not_open", why: "the vault hasn't booted on this server".into() };
+    };
+    match crate::migrate_secrets_routes::held_get(&home, id) {
+        Some(h) if h.workspace_id.as_deref() != Some(ctx.workspace_id.as_str()) => {
+            Check::Moved(format!("no held box-move step {id} of {}'s (k2 migrate status)", ctx.workspace_handle))
+        }
+        Some(h) if h.status == "done" => Check::AlreadyDone,
+        Some(h) if h.status == "pending" && h.expires_at > k2_core::overlay::now_secs() => Check::Needed,
+        Some(h) if h.status == "pending" => Check::Moved(format!("held step {id} expired unanswered; run the step again")),
+        Some(h) => Check::Moved(format!("held step {id} is {}", h.status)),
+        None => Check::Moved(format!("no held box-move step {id} (k2 migrate status)")),
+    }
+}
+
+fn apply_vault_move(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
+    let Some(id) = text_param(ctx, "request") else {
+        return Applied::Refused { code: "bad_params".into(), message: "the request names no held step".into() };
+    };
+    use crate::vault::actor::{Channel, VaultCaller};
+    let caller = match who {
+        Answerer::OwnerToken => VaultCaller { actor: k2_vault::Actor::Owner, channel: Channel::Plain, session_id: None },
+        Answerer::Login { user, role } => VaultCaller {
+            actor: k2_vault::Actor::Login {
+                username: user.clone(),
+                role: match role.as_str() {
+                    "owner" => k2_vault::Role::Owner,
+                    "admin" => k2_vault::Role::Admin,
+                    _ => k2_vault::Role::Member,
+                },
+            },
+            channel: Channel::Login,
+            session_id: None,
+        },
+    };
+    let mut body = json!({ "request": id });
+    if let Some(t) = token {
+        body["confirmToken"] = json!(t);
+    }
+    let r = crate::migrate_secrets_routes::handle(
+        crate::migrate_secrets_routes::APPROVE,
+        Ok(caller),
+        body.to_string().as_bytes(),
+        &HashMap::new(),
+        "permission-card",
+        None,
+    );
+    let v: Value = serde_json::from_str(&r.body).unwrap_or(Value::Null);
+    if r.status == "200 OK" {
+        return Applied::Done { message: "Done. k2 migrate status shows the result.".into() };
+    }
+    let (code, message) = error_of(&v, "refused");
+    Applied::Refused { code, message }
+}
+
 pub(crate) fn actions() -> Vec<Registered> {
     vec![
         Registered { spec: &APPS_APPROVE, check: check_app, apply: apply_app },
         Registered { spec: &MAIL_APPROVE, check: check_mail, apply: apply_mail },
         Registered { spec: &SOURCES_APPROVE, check: check_sources, apply: apply_sources },
         Registered { spec: &GARDEN_PROPOSAL_APPROVE, check: check_proposal, apply: apply_proposal },
+        Registered { spec: &VAULT_MOVE_APPROVE, check: check_vault_move, apply: apply_vault_move },
     ]
 }
 

@@ -102,7 +102,7 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 31] = [
+pub(crate) const V1_ACTIONS: [&str; 32] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -139,6 +139,8 @@ pub(crate) const V1_ACTIONS: [&str; 31] = [
     "compute.ci",
     // 0.46.6 (prd-mobile-dev-v1 M-A12): "Allow mobile devices".
     "sim.use",
+    // 0.46.6 (prd-box-move-carry-v1 Q3): run a held box-move step.
+    "vault.move-approve",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -202,6 +204,17 @@ pub(crate) const ROWS: &[Row] = &[
         ..row(ask("apps.approve", Floor::Owner), code(403, "owner_only"), "/cli/app/approve", POST)
     },
     // ── Sew, vault ─────────────────────────────────────────────────────
+    // A box-move step an agent ran is held for the owner (`mv_…`,
+    // prd-box-move-carry-v1 Q3).
+    Row {
+        params: &[("request", &[ParamFrom::Response("/request/id")])],
+        ..row(
+            ask("vault.move-approve", Floor::Owner),
+            WallMatch::Held { status: 202, field: "status", value: "held" },
+            "/cli/migrate/secrets/",
+            POST,
+        )
+    },
     row(ask("chat.manage", Floor::Admin), code(403, "chat_manage_off"), "/cli/", ANY),
     row(ask("vault.manage", Floor::Admin), code(403, "vault_manage_required"), "/cli/", ANY),
     // ── Gardens and sources ────────────────────────────────────────────
@@ -694,6 +707,8 @@ mod tests {
             (403, "POST", "/cli/db/create", vec![], None, json!({"error":{"code":"forbidden"},"ok":false}), "db.agent-access"),
             (403, "POST", "/cli/app/approve", vec![], Some(json!({"request":"ar_22"})), json!({"error":{"code":"owner_only"}}), "apps.approve"),
             (403, "POST", "/cli/compute/admin/approve", vec![], Some(json!({"request":"nar_1"})), json!({"error":{"code":"owner_only"}}), "compute.admin-approve"),
+            // A box-move step an agent ran, held for the owner (0.46.6).
+            (202, "POST", "/cli/migrate/secrets/export", vec![], None, json!({"ok":false,"status":"held","request":{"id":"mv_0123456789ab","step":"export"}}), "vault.move-approve"),
             // App users (0225): the skin-manage door's refusal on a user route.
             (403, "POST", "/cli/skin/users/password", vec![], None, json!({"ok":false,"error":{"code":"app_users_off"}}), "apps.manage-users"),
             // Garden access (A2's refusals, prd-garden-access-v1 G11–G12).
@@ -898,7 +913,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 31);
+        assert_eq!(V1_ACTIONS.len(), 32);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

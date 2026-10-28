@@ -81,7 +81,7 @@ export interface PermissionViewer {
 
 export interface PermissionProof {
   kind: 'click' | 'confirm'
-  /** Confirm only: the vault confirm action (`app-approve`, `node-admin`). */
+  /** Confirm only: the vault confirm action (`app-approve`, `node-admin`, `vault-move`). */
   action?: string
   secretId?: string
 }

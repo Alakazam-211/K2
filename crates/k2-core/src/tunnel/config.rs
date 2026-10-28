@@ -199,6 +199,13 @@ pub struct TunnelConfig {
     /// callers that need the token (start, relay-list fetch, release)
     /// treat it as a soft failure and retry later. In memory only — never
     /// serialized, never read from `tunnel.json`.
+    /// prd-box-move-carry-v1 BM-A12: `"vault"` once the token lives in the
+    /// K2 vault (written whenever the vault holder saves the config). While
+    /// the vault is closed, [`load`] then says the token is locked in it
+    /// (`token_read_error`) instead of looking unpaired.
+    #[serde(default, rename = "tokenHome", skip_serializing_if = "Option::is_none")]
+    pub token_home: Option<String>,
+
     #[serde(skip)]
     pub token_read_error: Option<String>,
 }
@@ -296,6 +303,7 @@ impl Default for TunnelConfig {
             enabled: default_enabled(),
             relays_fetched_at: None,
             failover: None,
+            token_home: None,
             token_read_error: None,
         }
     }
@@ -410,6 +418,28 @@ pub trait TokenVault: Send + Sync {
 }
 
 static TOKEN_VAULT: std::sync::OnceLock<Box<dyn TokenVault>> = std::sync::OnceLock::new();
+
+/// [`TunnelConfig::token_home`] when the token is a vault secret.
+pub const TOKEN_HOME_VAULT: &str = "vault";
+
+/// Why the vault didn't open (its error code), set by the daemon at boot
+/// and cleared when a vault opens (BM-A12).
+static VAULT_CLOSED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// The daemon's vault didn't open (`Some(code)`, e.g. `vault_key_missing`)
+/// or did (`None`).
+pub fn set_vault_closed(code: Option<&str>) {
+    *VAULT_CLOSED.lock().unwrap_or_else(|p| p.into_inner()) = code.map(str::to_string);
+}
+
+/// "the tunnel token is in the vault, which isn't open (vault_key_missing)".
+pub fn vault_closed_line() -> String {
+    let code = VAULT_CLOSED.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    format!(
+        "the tunnel token is in the vault, which isn't open ({}); this device is still paired. k2 vault status says why (after a box move: k2 migrate import-secrets)",
+        code.as_deref().unwrap_or("vault_not_open")
+    )
+}
 
 /// Install the vault-backed token holder (once, at daemon boot).
 pub fn install_token_vault(v: Box<dyn TokenVault>) -> bool {
@@ -542,6 +572,13 @@ pub fn load() -> Result<TunnelConfig, String> {
     let mut cfg = load_file()?;
     if cfg.token.trim().is_empty() {
         match with_vault(|v| v.map(|v| v.get())) {
+            // BM-A12: no holder because the vault didn't open, and the
+            // token lives there: locked, not "not paired".
+            None if cfg.token_home.as_deref() == Some(TOKEN_HOME_VAULT) => {
+                let e = vault_closed_line();
+                note_vault_read(Some(&e));
+                cfg.token_read_error = Some(e);
+            }
             None | Some(Ok(None)) => note_vault_read(None),
             Some(Ok(Some(t))) => {
                 note_vault_read(None);
@@ -626,6 +663,7 @@ pub fn save(cfg: &TunnelConfig) -> Result<(), String> {
     let cfg = if vaulted {
         let mut c = cfg.clone();
         c.token = String::new();
+        c.token_home = Some(TOKEN_HOME_VAULT.to_string());
         stripped = c;
         &stripped
     } else {
@@ -751,6 +789,7 @@ mod tests {
                 enabled: true,
                 relays_fetched_at: Some(1_792_060_000),
                 failover: Some("legacy".to_string()),
+                token_home: None,
                 token_read_error: None,
             };
             save(&cfg).expect("save");
@@ -1076,6 +1115,40 @@ mod tests {
         .expect("seed");
         assert_eq!(vault.stored().as_deref(), Some(token), "setup: token in the vault");
         assert_eq!(on_disk().token, "", "setup: tunnel.json keeps no token");
+    }
+
+    /// prd-box-move-carry-v1 BM-A12: a box whose vault didn't open (a /home
+    /// copy without its key) says the token is locked in the vault, not
+    /// "not paired"; a box whose token was never vaulted stays as before.
+    #[test]
+    fn a_closed_vault_holding_the_token_reads_as_locked_not_unpaired() {
+        with_temp_home(|| {
+            {
+                let vault = MemTokenVault::holding(None);
+                let _v = TestTokenVault::install(vault.clone());
+                seed_vaulted(&vault, "tok_in_the_vault");
+                assert_eq!(on_disk().token_home.as_deref(), Some(TOKEN_HOME_VAULT), "the marker is written with the vaulted save");
+            }
+            // The daemon booted with its vault closed: no holder installed.
+            set_vault_closed(Some("vault_key_missing"));
+            let cfg = load().expect("load");
+            // The stopped status says so too.
+            let st = super::super::connector::status();
+            set_vault_closed(None);
+            assert_eq!(cfg.token, "");
+            let e = cfg.token_read_error.as_deref().expect("locked, not empty");
+            assert!(e.contains("in the vault, which isn't open (vault_key_missing)") && e.contains("still paired"), "{e}");
+            assert!(!cfg.is_connectable());
+            assert!(!st.running);
+            assert_eq!(st.token_locked.as_deref(), Some(e));
+        });
+        with_temp_home(|| {
+            // A plaintext-token box (never vaulted) never says "locked".
+            save(&TunnelConfig { token: String::new(), subdomain: "rosson".to_string(), ..Default::default() }).expect("save");
+            let cfg = load().expect("load");
+            assert!(cfg.token_read_error.is_none());
+            assert!(on_disk().token_home.is_none());
+        });
     }
 
     #[test]

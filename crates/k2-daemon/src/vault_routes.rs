@@ -128,6 +128,7 @@ pub const MAX_BODY: usize = 96 * 1024;
 
 pub fn is_route(path: &str) -> bool {
     READ_ROUTES.contains(&path)
+        || crate::migrate_secrets_routes::is_route(path)
         || POST_ROUTES.contains(&path)
         || crate::vault_use_routes::is_route(path)
         || crate::vault_handoff_routes::is_route(path)
@@ -136,6 +137,7 @@ pub fn is_route(path: &str) -> bool {
 
 pub fn is_post_route(path: &str) -> bool {
     POST_ROUTES.contains(&path)
+        || crate::migrate_secrets_routes::is_post_route(path)
         || crate::vault_use_routes::is_post_route(path)
         || crate::vault_handoff_routes::is_post_route(path)
         || crate::vault_systemd_routes::is_post_route(path)
@@ -146,14 +148,17 @@ pub fn is_post_route(path: &str) -> bool {
 fn status_line(code: u16) -> &'static str {
     match code {
         200 => "200 OK",
+        202 => "202 Accepted",
         400 => "400 Bad Request",
         401 => "401 Unauthorized",
         403 => "403 Forbidden",
         404 => "404 Not Found",
         405 => "405 Method Not Allowed",
         409 => "409 Conflict",
+        410 => "410 Gone",
         413 => "413 Payload Too Large",
         422 => "422 Unprocessable Entity",
+        423 => "423 Locked",
         429 => "429 Too Many Requests",
         501 => "501 Not Implemented",
         502 => "502 Bad Gateway",
@@ -416,6 +421,11 @@ pub fn handle_with_peer(
             }
         };
     }
+    // Box moves (prd-box-move-carry-v1): an import must work while the
+    // vault is closed (BM-A5), so these never wait for an open vault.
+    if crate::migrate_secrets_routes::is_route(path) {
+        return crate::migrate_secrets_routes::handle(path, caller, body, params, ingress, not_person);
+    }
     let vault = match crate::vault::get() {
         Ok(v) => v,
         Err(e) => {
@@ -472,7 +482,14 @@ pub fn handle_on(
         return crate::vault_systemd_routes::handle(vault, path, &c, body, params, ingress);
     }
     let r = match path {
-        STATUS => Ok(status_json(&vault.status())),
+        STATUS => {
+            let mut s = status_json(&vault.status());
+            // prd-box-move-carry-v1: exported for a box move (reads only).
+            if let Some(m) = vault.frozen_marker() {
+                s["movedOut"] = json!(m);
+            }
+            Ok(s)
+        }
         LIST => list(vault, &c, params),
         SHOW => show(vault, &c, params),
         REQUESTS => requests(vault, &c),
@@ -1689,6 +1706,9 @@ pub const HANDOFF_CONFIRM_ACTION: &str = "handoff-send";
 
 const CONFIRM_ACTIONS: &[&str] = &[
     HANDOFF_CONFIRM_ACTION,
+    // Box moves (prd-box-move-carry-v1 §3.3): export, import, undo,
+    // unfreeze and a held step's approval; bound to the step (or `mv_…`).
+    crate::migrate_secrets_routes::CONFIRM_ACTION,
     "reveal",
     // VC-B2: a grant that lets the grantee read the value, from the owner
     // token (`secretId` = the secret's id).

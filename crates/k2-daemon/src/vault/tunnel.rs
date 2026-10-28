@@ -49,5 +49,13 @@ pub fn adopt(vault: &Arc<LocalVault>) -> Result<bool, VaultError> {
     if moved && installed {
         k2_core::tunnel::config::update(|_| {}).map_err(|e| VaultError::internal(format!("tunnel.json rewrite: {e}")))?;
     }
+    // BM-A12: say in tunnel.json that the token lives in the vault, so a
+    // box whose vault doesn't open (a /home copy without its key) reads
+    // "locked in the vault", not "not paired". The holder's save writes
+    // the marker; an unchanged file isn't rewritten.
+    if store.resolve(NAME).map_err(VaultError::internal)?.is_some() {
+        k2_core::tunnel::config::update(|_| {}).map_err(|e| VaultError::internal(format!("tunnel.json marker: {e}")))?;
+    }
+    k2_core::tunnel::config::set_vault_closed(None);
     Ok(moved)
 }

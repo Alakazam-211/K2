@@ -220,7 +220,8 @@ pub enum Grant {
 
 /// The existing `CONFIRM_ACTIONS` entries (`k2-daemon/src/vault_routes.rs`)
 /// a v1 card takes — exactly the ones Settings takes for the same act
-/// (§5.3). Only two in v1: no v1 card binds a secret.
+/// (§5.3). No card binds a secret; `vault-move` (0.46.6) binds a held
+/// box-move step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ConfirmAction {
     /// Approving a held App request; bound to the request id.
@@ -229,16 +230,21 @@ pub enum ConfirmAction {
     /// A node root step; bound to the request id.
     #[serde(rename = "node-admin")]
     NodeAdmin,
+    /// A held box-move step (`mv_…`, prd-box-move-carry-v1 Q3); bound to
+    /// the held id.
+    #[serde(rename = "vault-move")]
+    VaultMove,
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 2] = [ConfirmAction::AppApprove, ConfirmAction::NodeAdmin];
+    pub const ALL: [ConfirmAction; 3] = [ConfirmAction::AppApprove, ConfirmAction::NodeAdmin, ConfirmAction::VaultMove];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
     pub fn as_str(self) -> &'static str {
         match self {
             ConfirmAction::AppApprove => "app-approve",
             ConfirmAction::NodeAdmin => "node-admin",
+            ConfirmAction::VaultMove => "vault-move",
         }
     }
 }
@@ -608,9 +614,9 @@ mod tests {
     }
 
     #[test]
-    fn v1_confirms_are_app_approve_and_node_admin_only() {
+    fn the_card_confirms_are_app_approve_node_admin_and_vault_move() {
         let names: Vec<&str> = ConfirmAction::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names, ["app-approve", "node-admin"]);
+        assert_eq!(names, ["app-approve", "node-admin", "vault-move"]);
         for c in ConfirmAction::ALL {
             assert_eq!(serde_json::to_value(c).unwrap(), serde_json::Value::String(c.as_str().to_string()));
         }

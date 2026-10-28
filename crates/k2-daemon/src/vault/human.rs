@@ -354,7 +354,7 @@ async fn handle_conn(mut s: UnixStream) {
         None => (target.clone(), String::new()),
     };
     if !crate::vault_routes::is_route(&path) {
-        write(&mut s, "404 Not Found", "application/json", r#"{"error":{"code":"not_found","hint":"vault.sock serves /cli/vault/* only"}}"#).await;
+        write(&mut s, "404 Not Found", "application/json", r#"{"error":{"code":"not_found","hint":"vault.sock serves /cli/vault/* and /cli/migrate/secrets/* only"}}"#).await;
         return;
     }
     let is_post = method.eq_ignore_ascii_case("POST");

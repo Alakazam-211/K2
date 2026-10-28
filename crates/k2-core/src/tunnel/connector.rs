@@ -917,6 +917,11 @@ pub struct TunnelStatus {
     /// (`dns` / `legacy`) and what they are doing (e.g. waiting for DNS).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failover: Option<FailoverStatus>,
+    /// Stopped only (BM-A12): the token can't be read right now (the vault
+    /// holding it is closed or failed a read). The device is still paired;
+    /// this says why it can't start.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_locked: Option<String>,
     /// The relay list on disk: where it came from (`fetched` /
     /// `provisioned` / `default`), its order, and the last k2.dev refresh.
     /// Always emitted.
@@ -947,6 +952,7 @@ impl TunnelStatus {
             server_port: None,
             relay_primary: None,
             failover: None,
+            token_locked: cfg.token_read_error.clone(),
             relay_list,
         }
     }
@@ -1532,6 +1538,7 @@ fn status_from(st: &ConnectorState) -> TunnelStatus {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .clone(),
+        token_locked: None,
         relay_list,
     }
 }

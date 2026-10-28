@@ -2271,7 +2271,7 @@ fn n6_the_webhook_links_a_queued_send_once_and_records_delivered_and_delayed() {
     assert_eq!((v["linked"].clone(), v["recorded"].clone()), (json!(0), json!(0)));
     assert_eq!(send::status(&f.app, &fast).expect("status")["recipientStatus"], json!([{"to": "d@x.test", "status": "submitted"}]));
     // The queued event can come just before the message is in the queue
-    // (live on Stalwart 0.16.25): a first miss is asked again.
+    // (Stalwart writes it after the event): a first miss is asked again.
     let out = send::send(&app_caller(&f.app), &json!({"to": "g@x.test", "subject": "Slow", "text": "t"}), now()).expect("sent");
     let slow = out["id"].as_str().expect("id").to_string();
     f.engine.queued.lock().unwrap().insert(webhook::registry_id(8), slow);

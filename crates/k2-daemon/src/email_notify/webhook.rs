@@ -228,8 +228,10 @@ pub fn outcome_for(e: &HookEvent) -> Option<&'static str> {
 
 /// Waits before asking the queue again for a message it doesn't show yet.
 /// Stalwart emits the queued event just before it writes the message to
-/// the queue (live on 0.16.25: an immediate lookup can miss it), so a
-/// first miss is retried briefly. Tests don't wait.
+/// the queue (`smtp/src/queue/spool.rs`, 0.16.25), so a first miss is
+/// retried briefly. (In the live probes every miss was a message that had
+/// already left the queue, which stays `submitted`; the retry costs about
+/// 1.7 s on those.) Tests don't wait.
 const QUEUE_RETRY_MS: &[u64] = if cfg!(test) { &[0, 0, 0] } else { &[200, 500, 1_000] };
 
 /// The envelope id of a queued message, asked again after short waits

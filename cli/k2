@@ -10687,13 +10687,16 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   Every App process gets the https origins people reach it on:
     K2_APP_ORIGIN    the primary one: the custom domain you picked with
                      k2 app domain primary <app-id> <host> (once it is
-                     live), else https://<app-id>.<sub>.k2.dev
+                     live), else https://<app-id>.<box>.k2.dev
+                     (<box>: this box's K2 Connect name)
     K2_APP_ORIGINS   all of them, comma-separated, primary first; the
                      App's k2.dev labels always stay listed
   A custom domain counts once this box actually serves it (state live,
   see k2 app domains <app-id>); a bound name that is not served yet is
   not an origin:
     k2 app domain add <app-id> app.example.com
+  First the owner or an Admin runs k2 front enable and k2 domain add
+  <apex>; then DNS records at your DNS host. Steps: k2 app domain --help.
   K2 reads them at every start, so a changed binding reaches the App on
   its next deploy or restart (k2 app restart <app-id>). No public URL
   (a local-only App, no K2 Connect subdomain, no custom domain): neither
@@ -12247,41 +12250,76 @@ k2 app domain — more hostnames for an App (0.46.4; custom domains 0.46.6)
   k2 app domain rm <app-id> <subdomain>    back to what it served before (or removed)
   k2 app domains <app-id>                  its own label, taken labels, attached ones,
                                            custom domains (state + the DNS to set)
+  <box> is this box's K2 Connect name (<box>.k2.dev).
 
-CUSTOM DOMAINS (a dotted name outside k2.dev)
-  k2 app domain add <app-id> app.customer.com
-                                           bind it; K2 shows the DNS records to set
-  k2 app domain check <app-id> app.customer.com
-                                           re-run the DNS + TXT checks now
-  k2 app domain primary <app-id> app.customer.com
-                                           K2_APP_ORIGIN once it is live
-  k2 app domain rm <app-id> app.customer.com
+CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
+  k2 app domain add <app-id> shop.example.com
+                                           bind it; K2 prints the DNS records to set
+  k2 app domain check <app-id> shop.example.com
+                                           check its DNS now (K2 also re-checks by itself)
+  k2 app domain primary <app-id> shop.example.com
+                                           make it K2_APP_ORIGIN (fine to run early:
+                                           it applies once the name is live, at the
+                                           App's next start after that)
+  k2 app domain rm <app-id> shop.example.com
                                            no longer served (cert files stay)
 
-  States: waiting_dns -> verifying -> issuing -> live (+ failing). Set, at
-  your DNS host, DNS-only (no proxy / Cloudflare grey cloud):
-    A      app.customer.com              <this box's public IP>
-    TXT    _k2-domain.app.customer.com   "k2-verify=<token>"
-  (K2 sets the TXT itself when k2.dev hosts the zone.) Once both show,
-  K2 gets the certificate itself (TLS-ALPN-01 through the box's :443
-  front, or DNS-01 on a k2.dev zone) and the name is live. Needs the :443
-  front on this box (the owner runs k2 front enable; Linux). The zone must
-  be attached first (k2 domain add <apex>, owner). K2 re-checks daily; DNS
-  pointing elsewhere for 7 days stops serving the name. A bound name is in
-  K2_APP_ORIGINS only once it is live, from the App's next start: run
-  k2 app restart <app-id> after it goes live (and after primary). The
-  App's k2.dev names stay.
+  Who: the owner, an Admin login, or the App's own agent with "Build and
+  run Apps" on (an agent binds only its own workspace's Apps).
 
-  Which path: this box's own IP (path a, above) is for a server with a
-  public IP on its own interface (a datacentre box). A server on a home or
-  office connection (behind a router) is pointed at K2 Connect instead
-  (Pro, coming in 0.46.7): your domain points at K2's relays and your
-  address stays hidden; the records still show under "Advanced: I've
-  forwarded port 443". On a Mac or Windows computer, your own domain comes
-  with K2 Connect in 0.46.7 (no records here). If another web server holds
-  :443 on this box, K2 says so with the fixes (k2 front status) and never
-  takes the port from it.
+  A dotted name outside k2.dev is a custom domain; anything else is a
+  subdomain (below).
 
+  First, once per box and domain (the owner or an Admin):
+    k2 front enable           K2's :443 front (k2 front --help). It puts
+                              443/tcp on the public list itself; k2 firewall
+                              says whether that list is applied.
+    k2 domain add example.com attach the domain: this box may serve names
+                              under it. It doesn't move your nameservers:
+                              keep your DNS where it is. (If k2 domain list
+                              shows it pending with k2.dev nameservers, that
+                              only lets K2 write your records; ignore it.)
+
+  Then:
+    1. k2 app domain add <app-id> shop.example.com. It prints the records,
+       with this box's real addresses (k2 app domains <app-id> shows them
+       again):
+         A      shop.example.com              <this box's public IPv4>
+         AAAA   shop.example.com              <its public IPv6, if it has one>
+         TXT    _k2-domain.shop.example.com   "k2-verify=<token>"
+    2. Set exactly those at your DNS host, DNS-only (no proxy; Cloudflare:
+       grey cloud). Remove any other A or AAAA at that name, and any CNAME
+       there (a name can't have both). Keep the TXT: K2 re-checks it.
+       Only if your nameservers already point at k2.dev does K2 set the
+       TXT itself (an agent needs DNS write, dns_manage, for that); you
+       still set the A/AAAA.
+    3. Wait for state live (k2 app domains <app-id>). Until then K2
+       checks every 10 minutes; k2 app domain check <app-id>
+       shop.example.com checks now. Once DNS passes, K2 gets the
+       certificate itself through :443 (no :80 needed).
+    4. Once it is live: k2 app domain primary <app-id> shop.example.com,
+       then k2 app restart <app-id>. The App reads its origins only at
+       start, so restart after the name is live even if you ran primary
+       earlier. The App's k2.dev names stay.
+
+  States: waiting_dns -> verifying -> issuing -> live. failing: a live
+  name whose daily DNS check failed 7 days in a row (DNS points elsewhere,
+  the TXT is gone, or a proxy is on). K2 then stops serving and renewing
+  it; until day 7 it keeps serving and k2 app domains says what's wrong.
+  To recover: fix the records, then k2 app domain check <app-id> <name>.
+
+  Where this works: a Linux server with its own public IP (a datacentre
+  box). On a Mac or Windows computer there is no custom domain yet, even
+  with port 443 forwarded: add prints no records and says so. A CNAME to
+  the App's k2.dev name doesn't work yet either. Both come with Path B in
+  0.46.7: your domain points at K2's relays (K2 Connect, Pro). Until then
+  use the App's k2.dev address. A Linux server behind a home or office
+  router: Path B in 0.46.7 is the way (your address stays hidden); if you
+  forward the router's port 443 to it, the records still work (shown
+  under "Advanced: I've forwarded port 443"). Another web server already
+  on :443: k2 front --help.
+
+SUBDOMAINS (k2 app domain add <app-id> <subdomain>)
   Any nested label your workspace holds, or one nobody holds yet (a label
   you pointed at a port with k2 publish subdomain create, say). K2 points
   it at the App's front port, so deploys and rollbacks never touch it. The
@@ -19941,27 +19979,62 @@ print(json.dumps(b))')"
 # without the front ending TLS. Owner/admin verbs: run them outside K2.
 _front_usage() {
     cat <<'EOF'
-k2 front — the box's :443 as an SNI router (TURN on 443, Skin Direct, mail)
+k2 front — K2's front on this box's port 443 (Linux)
 
-  k2 front status [--json]          socket, routes, cap, per-outcome counters
-  k2 front enable [--mail] [--json] take :443 (root helper socket; the daemon restarts once)
-                                    voice moves to TURN on :443 (calls in progress drop once);
-                                    Skin Direct's Caddy moves to 127.0.0.1:38473 behind it
-                    --mail          also put Stalwart behind the front (tls-alpn boxes):
-                                    HTTPS moves to 127.0.0.1:8443 with PROXY v2, ACME
-                                    TLS-ALPN-01 keeps working; Stalwart restarts once
-  k2 front disable [--json]         give :443 back (voice to TCP 5349, Stalwart to :443)
-  k2 front passthrough [--json]     names passed through to your own web server (0.46.6)
+The front holds the box's public :443 (IPv4 and IPv6). For each visitor
+it reads the name they asked for (the TLS server name) and passes the
+connection, still encrypted, to the server for that name: custom App
+names (k2 app domain), K2's own Caddy (the App front door in direct
+mode), hosted mail's web pages, Sew voice calls (their TURN relay), and
+names you pass through to your own web server. A name nothing serves is
+closed.
+
+  k2 front status [--json]          who holds :443, the routes, counters
+  k2 front enable [--mail] [--json] take :443 (the daemon restarts once: a few seconds)
+                                    voice calls move onto :443 (calls in progress drop once);
+                                    K2's Caddy moves to 127.0.0.1:38473 behind it
+                    --mail          also put hosted mail's web pages behind the front:
+                                    they move to 127.0.0.1:8443 (PROXY v2); mail's own
+                                    certificate renewal (TLS-ALPN-01) keeps working;
+                                    the mail server restarts once
+  k2 front disable [--json]         give :443 back (voice to TCP 5349, mail to :443)
+  k2 front passthrough [--json]     names passed through to your own web server
   k2 front passthrough add <host>|'*' --to 127.0.0.1:<port> [--proxy-v2] [--label <why>]
-                                    the front passes <host> (or '*': every name K2 doesn't
-                                    serve) untouched to a web server you run on this box
+                                    pass <host> (or '*': every name K2 doesn't serve),
+                                    still encrypted, to a web server you run on this
+                                    box; K2's own names always win. Works before
+                                    enable: saved now, routed once the front is on.
+                    --proxy-v2      only if that server reads the PROXY protocol
+                                    (nginx: listen ... proxy_protocol): it then sees
+                                    visitors' real IPs (without it, every visitor is
+                                    127.0.0.1). A server that doesn't read it breaks.
+                                    Give every name on one port the same choice.
   k2 front passthrough rm <host>|'*'
 
-A web server that isn't K2's on :443 (a system Caddy or nginx): status names
-it and enable refuses with the fixes; K2 never takes the port from it. To
-keep its sites: move it to a loopback port (e.g. 127.0.0.1:9443, its own
-certificates stay), k2 front enable, then k2 front passthrough add <its host>
---to 127.0.0.1:9443 (or '*').
+Who: the owner (the box's daemon user, e.g. over SSH) or an Admin
+login. An agent is refused (exit 1, "invalid or missing token"): ask
+the owner to run it.
+
+KEEP A WEB SERVER THAT ISN'T K2'S (a system nginx or Caddy on :443)
+status names it, and enable refuses while it holds :443: K2 never takes
+the port from it. To keep its sites:
+  0. k2 front status: a "helper" line means the root helper is too old
+     for the front; run k2 root-helper update before going on
+  1. k2 front passthrough add <its host> --to 127.0.0.1:9443
+     once per site; all its sites can share the one port (it picks the
+     site by name). Or '*' once: every name K2 doesn't serve.
+  2. in each site, replace its :443 listen lines (IPv4 and IPv6) with
+     one TLS listen on 127.0.0.1:9443 (nginx: listen 127.0.0.1:9443 ssl;)
+     and reload it (its certificates stay; leave its :80 as it is)
+  3. k2 front enable (a refusal names its cause: port_443_taken names
+     what still holds :443; also helper_needed, not_systemd, user_scope,
+     unsupported)
+Its sites are down from step 2 until the front holds :443 (a few
+seconds). If enable refuses, put the server back on :443. Its own
+certificate renewal keeps working: TLS-ALPN-01 passes through the front
+untouched, and HTTP-01 still reaches its :80, as long as :80 stays
+public: k2 firewall open 80/tcp --label "nginx" unless k2 firewall
+already lists it.
 
 Linux boxes under systemd with k2-root-helper protocol 8 (k2 root-helper update).
 EOF
@@ -20266,8 +20339,9 @@ k2 firewall — the ports this server serves publicly, and your options
   k2 firewall [--json]                    the public list, who applies it, the App guard
   k2 firewall ports [--json]              the view (K2 Web's collector reads --json):
                                           public + knownNotPublic, hash, box, upstream
-  k2 firewall rules [--format nft|ufw]    ready-made default-deny rules (SSH first) for a
-                                          server nobody applies the list for; K2 doesn't apply them
+  k2 firewall rules [--format nft|ufw]    a complete default-deny rule set (SSH first) for
+                                          the whole list, for a server nobody applies it
+                                          for; review it and load it yourself (K2 doesn't)
   k2 firewall ssh any                     SSH from anywhere (the default)
   k2 firewall ssh allow <cidr>...         SSH only from these (never an empty list)
   k2 firewall ssh port <n>                record where sshd listens (K2 doesn't move sshd)
@@ -20282,13 +20356,25 @@ k2 firewall — the ports this server serves publicly, and your options
                                           one App's write limit (its own agent may tighten it)
   k2 firewall upstream --hash <sha256:…> --provider <name> [--applied-at <unix>]
                        [--managed-by k2|owner|auto]
-                                          record that the list was applied at the provider (owner;
-                                          the hash is k2 firewall ports --json's)
+                                          record that the list was applied at the provider
+                                          (owner; K2 Web runs it after each apply; the hash
+                                          is k2 firewall ports --json's)
+                       --managed-by       who applies the list:
+                                          k2     K2 applies it at your provider's firewall
+                                          owner  nobody does: apply k2 firewall rules yourself
+                                          auto   k2 once an apply was recorded, else owner
+                                                 (the default; a new box is owner)
 
+K2 never changes this box's own firewall (nft, ufw). The list takes
+effect where it is applied: at your provider when K2 applies it
+(k2 firewall says who, and shows "last applied ... (this list)" once
+your change is in), else only once you apply k2 firewall rules. A
+firewall already on this box (ufw, nft) needs the port opened there too.
 SSH is always public (narrow it, never close it). A port K2 opened for a
 feature (the :443 front, hosted mail, Sew voice) is read-only here: turn
-the feature off to close it. Changes are the owner's or an admin's;
-an agent gets owner_only (exit 3). Also: Settings → Network → Custom Domains → Firewall.
+the feature off to close it. Changes are the owner's, an Admin login's
+or a K2 shell tab's; an agent gets owner_only (exit 3) and can't request
+it. Also: Settings → Network → Custom Domains → Firewall.
 EOF
 }
 

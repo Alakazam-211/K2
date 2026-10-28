@@ -63,13 +63,16 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   Every App process gets the https origins people reach it on:
     K2_APP_ORIGIN    the primary one: the custom domain you picked with
                      k2 app domain primary <app-id> <host> (once it is
-                     live), else https://<app-id>.<sub>.k2.dev
+                     live), else https://<app-id>.<box>.k2.dev
+                     (<box>: this box's K2 Connect name)
     K2_APP_ORIGINS   all of them, comma-separated, primary first; the
                      App's k2.dev labels always stay listed
   A custom domain counts once this box actually serves it (state live,
   see k2 app domains <app-id>); a bound name that is not served yet is
   not an origin:
     k2 app domain add <app-id> app.example.com
+  First the owner or an Admin runs k2 front enable and k2 domain add
+  <apex>; then DNS records at your DNS host. Steps: k2 app domain --help.
   K2 reads them at every start, so a changed binding reaches the App on
   its next deploy or restart (k2 app restart <app-id>). No public URL
   (a local-only App, no K2 Connect subdomain, no custom domain): neither

@@ -1,5 +1,0 @@
-<<<<<<< HEAD
-ours
-=======
-theirs
->>>>>>> branch

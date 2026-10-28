@@ -1,2 +1,0 @@
-# The machine owner's pause switch. k2-node pause|drain|resume edits it.
-state = "active"

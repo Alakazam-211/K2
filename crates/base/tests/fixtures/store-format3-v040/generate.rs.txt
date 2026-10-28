@@ -1,0 +1,77 @@
+// How tests/fixtures/store-format3-v040 was made: this test, added (not committed) to
+// k2-mpc-base at tag v0.4.0 (c00e5bd), run with FIXTURE_OUT=<dir>; docs.redb was then
+// run-length encoded (docs.redb.rle, decoded by tests/tier0.rs::unrle). The second test
+// is the one-off check that v0.4.0 refuses a format-4 store (FORMAT4_STORE=<file>).
+
+//! NOT COMMITTED: v0.4.0 code builds a format-3 store fixture, and checks it refuses a
+//! format-4 store.
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use k2_mpc_base::blob::{BlobConfig, BlobStore};
+use k2_mpc_base::session::{
+    AnyFile, AuditEvent, Config, Host, Participant, ParticipantKind, Rights, SessionManager, Stay,
+    TextFilePack,
+};
+use k2_mpc_base::store::{DocKey, DocStore, StoreError, STORE_FORMAT};
+
+struct H(AtomicU64);
+impl Host for H {
+    fn rights(&self, _w: &Participant, _k: &DocKey) -> Rights {
+        Rights::full().with_owner(true)
+    }
+    fn now_ms(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+    fn on_event(&self, _e: &AuditEvent) {}
+}
+
+fn key(p: &str) -> DocKey {
+    DocKey { space: "ws".into(), path: p.into() }
+}
+
+#[test]
+fn gen_format3_fixture() {
+    let Ok(out) = std::env::var("FIXTURE_OUT") else { return };
+    let out = PathBuf::from(out);
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    assert_eq!(STORE_FORMAT, 3);
+    let host = Arc::new(H(AtomicU64::new(1_793_111_400_000)));
+    let store = Arc::new(DocStore::open(out.join("docs.redb")).unwrap());
+    let h = host.clone();
+    let blobs = Arc::new(
+        BlobStore::open(store.clone(), out.join("blobs"), BlobConfig::default(), Arc::new(move || h.now_ms())).unwrap(),
+    );
+    let mgr = SessionManager::new(store.clone(), host.clone(), Config::default()).with_blob_store(blobs);
+    // a blob doc: import (v1), aide for alice (v2), alice (v3), aide for alice (v4, current)
+    let s = mgr.open_blob(Arc::new(AnyFile), &key("report.pdf"), Some(&mut &b"%PDF v1 import\n"[..])).unwrap();
+    let r = s.join(Participant::new("alice", "Alice", "#111111", ParticipantKind::Person, "tab"), Stay::Held).unwrap().conn;
+    let a = s.join(Participant::new("aide", "Aide", "#222222", ParticipantKind::Agent, "cli").on_behalf_of("alice"), Stay::Held).unwrap().conn;
+    host.0.fetch_add(1000, Ordering::SeqCst);
+    assert_eq!(s.write_bytes(a, b"%PDF v2 by aide for alice\n", 1).unwrap().version, 2);
+    host.0.fetch_add(1000, Ordering::SeqCst);
+    assert_eq!(s.write_bytes(r, b"%PDF v3 by alice\n", 2).unwrap().version, 3);
+    host.0.fetch_add(1000, Ordering::SeqCst);
+    assert_eq!(s.write_bytes(a, b"%PDF v4 by aide for alice\n", 3).unwrap().version, 4);
+    // v0.4.0 purges v2 (its entry stays, redacted, with its on_behalf_of)
+    assert_eq!(s.purge(r, Some(2)).unwrap().counts.blob_versions, 1);
+    // a text doc with an on-behalf edit (a text approval, seq 2)
+    let t = mgr.open(Arc::new(TextFilePack::new("markdown", 4 << 20)), &key("notes.md"), Some(b"one\n")).unwrap();
+    let ta = t.join(Participant::new("aide", "Aide", "#222222", ParticipantKind::Agent, "cli").on_behalf_of("alice"), Stay::Held).unwrap().conn;
+    t.replace_text(ta, "source", "one\ntwo\n").unwrap();
+    mgr.release().unwrap();
+    drop(s);
+    drop(t);
+    drop(mgr);
+    drop(store);
+}
+
+#[test]
+fn old_code_refuses_format4() {
+    let Ok(p) = std::env::var("FORMAT4_STORE") else { return };
+    let e = DocStore::open(&p).err();
+    println!("v0.4.0 DocStore::open on the format-4 store: {e:?}");
+    assert_eq!(e, Some(StoreError::Newer { found: 4 }));
+}

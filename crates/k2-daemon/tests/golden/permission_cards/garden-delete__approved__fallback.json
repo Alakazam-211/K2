@@ -1,9 +1,0 @@
-{
-  "body": "Allowed by rosson: Delete Old board.",
-  "created_at": 1761060000,
-  "from": "billing",
-  "id": "4d1e7e7e-2b3c-4d4e-9f50-6b7c8d9e0f12",
-  "kind": "text",
-  "to": "billing",
-  "via": "permission"
-}

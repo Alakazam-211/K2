@@ -1,7 +1,0 @@
-{
-  "schema": 1,
-  "name": "Box disk",
-  "description": "This computer's disks: how full each one is against the disk guard's lines, the biggest users and the agents behind them, and what K2 clears on its own. Read only.",
-  "entry": "index.html",
-  "caps": []
-}

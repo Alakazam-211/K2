@@ -1,9 +1,0 @@
-{
-  "body": "billing asked an owner to turn on Edit Sales board.",
-  "created_at": 1761060000,
-  "from": "billing",
-  "id": "3c0ffee5-1a2b-4c3d-8e4f-5a6b7c8d9e01",
-  "kind": "text",
-  "to": "billing",
-  "via": "permission"
-}

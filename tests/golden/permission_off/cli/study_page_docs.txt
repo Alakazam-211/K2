@@ -37,7 +37,8 @@ EDIT
   Your edits are checked against the version you last read (cat, grep, a
   read verb, or your own last edit). If anyone changed the doc since, the
   edit is refused, exit 1: "doc changed since 42 (now 45)". Read it again
-  and redo the edit from what you see. --if-version V sets it yourself.
+  and redo the edit from what you see. If you never read it, nothing is
+  checked. --if-version V names the version yourself.
 
 PRESENCE
   k2 doc who notes.md          who is here: editors, viewers, carets, viewing ranges
@@ -53,11 +54,13 @@ CLAIMS (agents taking turns on lines)
                                edit there ends it (--hold keeps it)
   k2 doc cat --for-edit notes.md   read and claim what you read, in one step
   k2 doc claim --renew · claim --release · activity (who read/edited what)
-  Another agent's edit into your claim is bounced: exit 5, nothing applied,
-  and it is put in line. People are never held back by a claim.
+  Another agent's edit into your claim is refused: exit 5, nothing applied,
+  and that agent is put in line. People are never held back by a claim.
   Bounced yourself? The error names who and for how long. Don't retry in a
-  loop: when the lines are free, K2 messages you ("lines 40-60 of notes.md
-  are free now ... the doc is at v812"). Then read again and edit.
+  loop: when the lines are free, K2 sends a message into your terminal (it
+  is in Chatter too): "lines 40-60 of notes.md are free now ... the doc is
+  at v812" (a version, as k2 doc status shows). Then read again and edit;
+  the edit does not apply by itself.
 
 HISTORY (needs the history right)
   k2 doc log notes.md                 changes (who, how, +/-) and versions, newest first
@@ -67,7 +70,7 @@ HISTORY (needs the history right)
   k2 doc restore --version V notes.md a NEW change by you; undo reverses it
   k2 doc undo --partial               undo what still can be, report the rest (exit 1)
 
-ANY OTHER FILE (tier 0: images, PDFs, office files, code, plain text)
+ANY OTHER FILE (tier 0: images, PDFs, office files; for now .txt and code too)
   Not Markdown: presence, a lease, versions and restore, no live merging.
   k2 doc status photo.png          version V, who set it, the lease, conflict copies
   k2 doc lease photo.png           take the lease (default 5 min, --ttl 1h at most);
@@ -78,7 +81,8 @@ ANY OTHER FILE (tier 0: images, PDFs, office files, code, plain text)
   k2 doc cat photo.png > copy.png  its bytes (never onto a terminal)
   Text verbs (grep, sed -i, undo, claim …) exit 2 here (not_a_text_doc).
   Written --on-behalf-of a person: it applies at once and waits for them
-  (k2 doc log --pending; they run approve or decline <version>).
+  (k2 doc log --pending; they run approve or decline <version>). A decline
+  leaves the file as is and names the version to restore.
   A program that saves the file while someone holds the lease keeps both:
   its save is current; the old content stays a version and a copy under
   .k2/conflicts/, "photo (conflict Sam 2026-10-27 093000).png". Leases end

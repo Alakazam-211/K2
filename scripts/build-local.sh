@@ -99,7 +99,7 @@ echo "  Done."
 
 # ── Step 2: Build ──
 #
-# Nuke `target/release/` entirely before building. `cargo clean -p k2so`
+# Nuke `target/release/` entirely before building. `cargo clean -p k2`
 # targeted cleaning has repeatedly left stale env!("CARGO_PKG_VERSION")
 # strings baked into the Tauri binary even after a version bump —
 # cargo's incremental fingerprint surface does not include the package
@@ -111,11 +111,11 @@ echo ""
 echo "Step 2: Building release..."
 export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
 export APPLE_TEAM_ID="36B8R93HXV"
-rm -rf target/release/bundle target/release/deps/libk2so_lib* \
-       target/release/deps/k2so-* target/release/deps/k2so_core-* \
-       target/release/deps/k2so_daemon-* target/release/incremental \
+rm -rf target/release/bundle target/release/deps/libk2_lib* \
+       target/release/deps/k2-* target/release/deps/k2_core-* \
+       target/release/deps/k2_daemon-* target/release/incremental \
        src-tauri/target/release 2>/dev/null || true
-cargo clean -p k2so -p k2-daemon -p k2-core 2>&1 | tail -2 || true
+cargo clean -p k2 -p k2-daemon -p k2-core 2>&1 | tail -2 || true
 bun run tauri build
 
 # ── Step 2.1: Verify the bundled Tauri binary actually has the new version ──

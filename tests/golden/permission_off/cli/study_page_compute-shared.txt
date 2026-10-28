@@ -18,8 +18,15 @@ WHAT YOU SEE
   k2 compute queue <node>   the whole node queue. Other servers' jobs show
                       as "another server", tier, class, size and ETA only. No
                       command, workspace, session, job id or logs. Ever.
-  k2 compute get <job>      "queued on k2n2-m1, position 2, ETA ~6m (fair
-                      share: another server's jobs run first)"
+  k2 compute get <job>      "queued on k2n2-m1: 2 of 5, ETA ~6m — your
+                      workspace runs 3 of 3 here (its grant); jobs behind it
+                      may start first" (0.46.6: every waiting job says why)
+                      or "waits on this server for k2n2-m1 (1 of 2) — this
+                      server's queue on the node is full" (not sent yet)
+  A job waiting for its OWN limit (its workspace's grant, this server's
+  share, the per-submitter cap) lets jobs behind it start first; that is
+  why a newer job can start ahead of it. A job waiting for ROOM (slots,
+  CPU, memory) or behind a hold doesn't.
   ETAs are durations, never clock times, and rounded for other servers.
 
 THE QUEUE (the node decides, one queue for every server)

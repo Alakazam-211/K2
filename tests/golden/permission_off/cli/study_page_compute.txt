@@ -25,9 +25,12 @@ RUN
   --any: whichever granted node fits (warm slot first, then free CPU).
   Longer than your shell tool's timeout? Use --detach. (If an attached
   run gets killed, the job keeps going and you still get that line.)
-  WAIT without log text: k2 compute run <node> --wait -- cargo test
-  prints the job id, then blocks and exits with the job's exit code;
-  k2 compute wait <id>... does the same for jobs already submitted.
+  WAIT: k2 compute run <node> --wait -- cargo test prints the job id,
+  then where it waits ("queued on k2n9-vin: 2 of 5 — why"), then streams
+  the job's output and exits with the job's exit code (0.46.6).
+  --wait --quiet: no output, only the wait lines and the exit code.
+  k2 compute wait <id> --follow resumes the stream; k2 compute wait
+  <id>... (no --follow) blocks without log text for jobs already submitted.
   --max-wait 9m stops waiting first (exit 3, still_running, with the
   wait line to run next), so a shell tool capped at 10 minutes can loop.
   --failures prints the failure lines of a job that ended non-zero.
@@ -209,8 +212,9 @@ RESULTS (one object, artifacts, test lists)
   first, then the log lines that look like failures.
 
 NEVER STUCK
-  --queue-timeout 30m|off   not started in time → failed/queue_timeout (exit 3,
-                            with what it waited on). Default 30m, 24h --detach.
+  --queue-timeout 2h|off    not started in time → failed/queue_timeout (exit 3,
+                            with what it waited on). Default 2h attached or
+                            --wait, 24h --detach.
   --any jobs move: off a node that sleeps (60 s), is paused or set aside, and
   off a busy node onto one that can start them now.
   A node offline 10 min while running your job: that attempt ends

@@ -252,6 +252,16 @@ def main():
         # sandbox port the "inbound" one, as :25 is on a real box.
         n, a = svc.call("x:MtaStageAuth/set", {"update": {"singleton": {"require": {"else": f"local_port != {smtp}"}}}})
         info("c sandbox: inbound auth rule moved to the sandbox port", f"{n} {json.dumps(a)[:160]}")
+        # 0.16.10 refuses every reload while the downloaded spam rules call
+        # `bit_and` (K2's A4 repair rewrites them on a real box). The sandbox
+        # just drops those rules: they have nothing to do with this probe.
+        n, q = svc.call("x:SpamDnsblServer/query", {})
+        if q.get("ids"):
+            n, g = svc.call("x:SpamDnsblServer/get", {"ids": q["ids"]})
+            bad = [x["id"] for x in (g.get("list") or []) if "bit_and" in json.dumps(x)]
+            if bad:
+                n, a = svc.call("x:SpamDnsblServer/set", {"destroy": bad})
+                info("c sandbox: spam rules calling bit_and dropped", f"{len(bad)}: {n}")
         n, a = svc.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
         info("c sandbox: reload", f"{n} {json.dumps(a)[:120]}")
     if smtp is None:

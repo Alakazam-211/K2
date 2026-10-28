@@ -188,6 +188,7 @@ jobs:
           bash tests/cli/daemon_unit_oompolicy.sh
           bash tests/cli/daemon_unit_runtime_dir.sh
           bash tests/cli/daemon_install_systemd_unit.sh
+          bash tests/cli/daemon_status_ptyd.sh
 
       # Zen v2 (prd-zen-user-widgets-v2 UWB28): the verb catalog's lint,
       # the generated-file freshness check and the catalog-vs-ROUTES tests,

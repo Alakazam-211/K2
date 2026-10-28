@@ -112,6 +112,7 @@ part_rust_test() {
     bash tests/cli/daemon_unit_oompolicy.sh
     bash tests/cli/daemon_unit_runtime_dir.sh
     bash tests/cli/daemon_install_systemd_unit.sh
+    bash tests/cli/daemon_status_ptyd.sh
 
     step "cargo nextest verb catalog + Zen"
     cargo nextest run --profile ci -p k2-core --lib contract:: zen:: app_surface::

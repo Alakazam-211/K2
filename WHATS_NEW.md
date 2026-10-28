@@ -37,6 +37,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A stuck window recovers on macOS and Linux.** When a K2 window stopped responding, K2's recovery reloaded it at the Windows address, which goes nowhere on a Mac or Linux, so the window stayed blank. It now reloads the address each system really uses.
 - **A Linux server stops cleanly after a no-downtime reload.** On servers whose K2 unit the root helper manages, a stop or restart after `systemctl reload` used to kill the daemon at once, skipping its shutdown (a stop could leave agents running). The helper's unit settings now wait for the daemon to finish, as K2's own unit files already did.
 - **`sudo k2-node …` works on Linux compute nodes.** The node installer now links `/usr/local/bin/k2-node` to the node binary, so you no longer need its full path.
+- **`k2 daemon status` shows whether agents survive restarts** and how many came back at the last restart, like `k2 daemon survive status` (macOS and Linux; `--json` has `ptyd` and `adopted`).
 
 ## 0.46.5 — Agents stay up
 

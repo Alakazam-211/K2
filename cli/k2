@@ -20231,16 +20231,26 @@ Agents:
   k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
                  [--detach] [--sha REV] [--no-source]
                  [--dirty]      ship your uncommitted changes too (no commit needed;
-                                HEAD + the diff + untracked files, never .k2/)
+                                HEAD + the diff + untracked, not-ignored files;
+                                never .k2/), from the checkout the job ships
+                                (yours, --repo's, or the worktree you're in);
+                                never for --with repos
                  [--repo DIR]   ship a git repo nested in the workspace (or a worktree
                                 of one) instead of the workspace's own: a multi-repo
-                                workspace whose root isn't a repo. Found for you when
-                                you run from inside one. Same jail: inside the
-                                workspace, no '..', no link out, never .k2/
-                 [--with REPO[@SHA]]...  ship sibling repos too, each at its own HEAD
-                                (or SHA; commits only, never --dirty), laid out
-                                beside the main one as in the workspace, so
-                                ../k2-multiplayer-base path deps work (up to 8)
+                                workspace whose root isn't a repo. DIR is relative to
+                                the workspace folder. Run from inside one (or from
+                                a worktree of one) and it's found for you. Same jail:
+                                inside the workspace, no '..', no link out, never .k2/
+                 [--with DIR[@SHA]]...  ship sibling repos too (up to 8): DIR is a repo
+                                or a worktree of one, relative to the workspace
+                                folder, at its HEAD (a worktree's own, unpushed
+                                commits included) or SHA. Commits only: commit a
+                                sibling's changes first (--dirty is the main repo's).
+                                Every repo, the main one too, lands where its main
+                                checkout sits in the workspace, worktree or not:
+                                --with wt-base-y (a worktree of k2-multiplayer-base)
+                                lands at k2-multiplayer-base, so ../k2-multiplayer-base
+                                path deps work. The job starts in the main repo
                  [--cache NAME] a folder on the node that outlives the job, per
                                 workspace and NAME: $K2_JOB_CACHE (fuzz corpora,
                                 installs, a cargo target). With --no-source too.
@@ -21115,7 +21125,7 @@ cmd_compute_run() {
             # --with REPO[@SHA]: a sibling repo shipped beside the main one,
             # laid out as in the workspace (0.46.6). Repeatable.
             --with) withs+=("${2:-}"); shift 2
-                [ -n "${withs[${#withs[@]}-1]}" ] || { echo "usage: --with REPO[@SHA] (a git repo inside the workspace)" >&2; exit 2; } ;;
+                [ -n "${withs[${#withs[@]}-1]}" ] || { echo "usage: --with DIR[@SHA] (a git repo inside the workspace, or a worktree of one)" >&2; exit 2; } ;;
             # --cache NAME: a folder on the node that outlives the job
             # ($K2_JOB_CACHE), per workspace and name (0.46.6).
             --cache) cache="${2:-}"; shift 2
@@ -21299,7 +21309,7 @@ for a in sys.argv[1:]:
     if not at:
         repo, sha = a, ""
     if not repo:
-        sys.stderr.write("usage: --with REPO[@SHA]\n"); sys.exit(2)
+        sys.stderr.write("usage: --with DIR[@SHA]\n"); sys.exit(2)
     o = {"repo": repo}
     if sha: o["sha"] = sha
     out.append(o)

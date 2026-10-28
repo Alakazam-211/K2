@@ -22317,7 +22317,7 @@ cmd_compute_run() {
             # workspace, shipped instead of the workspace's own (0.46.6).
             --repo) repo="${2:-}"; shift 2
                 [ -n "$repo" ] || { echo "usage: --repo <folder> (a git repo inside the workspace, e.g. k2-multiplayer-base)" >&2; exit 2; } ;;
-            # --with REPO[@SHA]: a sibling repo shipped beside the main one,
+            # --with DIR[@SHA]: a sibling repo shipped beside the main one,
             # laid out as in the workspace (0.46.6). Repeatable.
             --with) withs+=("${2:-}"); shift 2
                 [ -n "${withs[${#withs[@]}-1]}" ] || { echo "usage: --with DIR[@SHA] (a git repo inside the workspace, or a worktree of one)" >&2; exit 2; } ;;
@@ -44712,7 +44712,8 @@ REPOS (0.46.6)
   workspace, so ../k2-multiplayer-base works:
     k2 compute run <node> --repo k2-multiplayer-markdown \
         --with k2-multiplayer-base --dirty -- cargo test
-  --with REPO[@SHA] (repeatable, up to 8): each at its own HEAD or SHA.
+  --with DIR[@SHA] (repeatable, up to 8): a repo or a worktree of one,
+  relative to the workspace folder, each at its own HEAD or SHA.
   Only commits travel for --with repos: commit there first (--dirty is for
   the main repo). Needs k2-node 0.46.6 on the node.
 

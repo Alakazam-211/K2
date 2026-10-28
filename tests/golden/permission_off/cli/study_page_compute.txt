@@ -62,7 +62,8 @@ REPOS (0.46.6)
   workspace, so ../k2-multiplayer-base works:
     k2 compute run <node> --repo k2-multiplayer-markdown \
         --with k2-multiplayer-base --dirty -- cargo test
-  --with REPO[@SHA] (repeatable, up to 8): each at its own HEAD or SHA.
+  --with DIR[@SHA] (repeatable, up to 8): a repo or a worktree of one,
+  relative to the workspace folder, each at its own HEAD or SHA.
   Only commits travel for --with repos: commit there first (--dirty is for
   the main repo). Needs k2-node 0.46.6 on the node.
 

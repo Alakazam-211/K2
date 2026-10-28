@@ -663,8 +663,10 @@ Run `k2 heartbeat --help` for the full surface.
 Builds and tests on your owner's other machines. Read `k2 study compute` first.
 ```
 k2 compute nodes                                       # what you may use, and who is on the critical path
-k2 compute run <node> --sha $(git rev-parse HEAD) -- cargo nextest run -p <crate>
+k2 compute run <node> --dirty -- cargo nextest run -p <crate>   # your uncommitted work too; no commit needed
 k2 compute run --any --detach -- <command>             # any granted node; prints a job id
+k2 compute run <node> --repo <dir> --with <sibling> --dirty -- <command>   # multi-repo workspace; siblings side by side
+k2 compute run <node> --cache <name> -- <command>      # $K2_JOB_CACHE survives between runs on that node
 k2 compute run <node> --tier priority -- <command>     # only when you are the critical path
 k2 compute wait <job> | logs <job> --failures | get <job>
 ```
@@ -2146,6 +2148,10 @@ mod tests {
         );
         assert!(body.contains("Priority is optional"), "k2-cli skill must say Priority is optional");
         assert!(body.contains("k2 study compute"), "k2-cli skill must point at k2 study compute");
+        // 0.46.6: remote runs lead with --dirty; --repo/--with/--cache are named.
+        for flag in ["--dirty -- cargo nextest run", "--repo <dir> --with <sibling>", "--cache <name>"] {
+            assert!(body.contains(flag), "k2-cli skill's Compute nodes block must show {flag}");
+        }
         // W6 (0.40.30): the agent-preset surface + custom-agent contract
         // pointer (SKILL_VERSION_WORKSPACE bumped 7→8 for this section).
         assert!(

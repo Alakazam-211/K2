@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 38
-skill_checksum: 5ffe1a26482638e9
+skill_version: 39
+skill_checksum: REBLESS-5ffe1a26482638e9
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -279,8 +279,10 @@ Run `k2 heartbeat --help` for the full surface.
 Builds and tests on your owner's other machines. Read `k2 study compute` first.
 ```
 k2 compute nodes                                       # what you may use, and who is on the critical path
-k2 compute run <node> --sha $(git rev-parse HEAD) -- cargo nextest run -p <crate>
+k2 compute run <node> --dirty -- cargo nextest run -p <crate>   # your uncommitted work too; no commit needed
 k2 compute run --any --detach -- <command>             # any granted node; prints a job id
+k2 compute run <node> --repo <dir> --with <sibling> --dirty -- <command>   # multi-repo workspace; siblings side by side
+k2 compute run <node> --cache <name> -- <command>      # $K2_JOB_CACHE survives between runs on that node
 k2 compute run <node> --tier priority -- <command>     # only when you are the critical path
 k2 compute wait <job> | logs <job> --failures | get <job>
 ```

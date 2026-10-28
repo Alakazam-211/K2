@@ -13885,12 +13885,17 @@ ID / login / vault password), from a terminal outside K2.
                                     is never a mailbox: no agent can read it.
                                     --via: send as noreply@brand.com when
                                     brand.com's mail lives elsewhere (Google,
-                                    Microsoft…). Host a subdomain here first
-                                    (k2 hostmail domain add bounce.brand.com,
-                                    then check it); bounces and the signature
-                                    use it, and K2 never changes brand.com's
-                                    DNS. brand.com needs a DMARC record whose
-                                    adkim and aspf aren't both s.
+                                    Microsoft…). Hosted mail only (Linux). Host
+                                    a subdomain here first: k2 hostmail domain
+                                    add bounce.brand.com prints the DNS records
+                                    to publish (MX, SPF, DKIM, DMARC); then
+                                    k2 hostmail domain check bounce.brand.com.
+                                    Bounces and the signature use it, and K2
+                                    never changes brand.com's DNS. brand.com
+                                    needs a DMARC record that isn't strict on
+                                    both checks: adkim=s with aspf=s is
+                                    refused; one relaxed (r, the default) is
+                                    enough.
   k2 notifications email sender list [--all] [--json]
   k2 notifications email sender check <sender>   re-check DMARC and the domain
   k2 notifications email sender set <sender> [--name N] [--lock-name|--unlock-name] [--reply-to <addr>]…
@@ -13898,21 +13903,27 @@ ID / login / vault password), from a terminal outside K2.
   k2 notifications email sender resume <sender>   the owner, with a confirm: an App's sender
                                     that K2 paused (over 5% hard bounces or 0.1%
                                     spam complaints of at least 50 recipients in
-                                    24 h) sends again; its count starts over.
-                                    `sender list` marks paused senders. The
+                                    24 h) sends again, and the 24-hour count
+                                    starts again from zero. `sender list` marks
+                                    paused senders (and shows each App's). The
                                     system sender is never paused (you get a
                                     warning notice instead).
+                                    <sender>, everywhere here: its address or
+                                    its id from `sender list`.
   k2 notifications email suppressions [list] [<address>] [--limit N] [--json]
                                     Addresses K2 won't send to: a hard bounce
                                     (every sender), a spam complaint (that sender
-                                    only), or added by hand. Kept hashed: list
-                                    shows the domain, reason and hash; give an
-                                    address to look it up.
+                                    only), or added by hand. Kept hashed: the
+                                    list shows the domain, reason and hash;
+                                    give an address to see only its entries.
   k2 notifications email suppressions add <address> [--sender <sender>]
                                     Owner or Admin. Without --sender: every sender.
   k2 notifications email suppressions rm <address> [--sender <sender> | --all]
-                                    The owner: mail may go to it again (from every
-                                    sender, that sender, or --all of its entries).
+                                    The owner: mail may go to it again. No flag:
+                                    removes its every-sender entry (a hard
+                                    bounce, or one added for every sender);
+                                    --sender: that sender's entry (a complaint);
+                                    --all: every entry for the address.
   k2 notifications email system-sender [show] | set <sender> | clear | test
                                     K2's own mail (owner password resets with
                                     no --from, codes) comes from it.
@@ -13955,7 +13966,9 @@ Agents' email notices (an agent emails a person on this server; off by default):
                                     The owner, with a confirm: the workspace's
                                     agent may email people here from <address>
                                     (a sender of its own: not the system
-                                    sender, not an App's). k2 notify --help.
+                                    sender, not an App's; add it first with
+                                    sender add). Agents then send with
+                                    k2 notify email (see k2 notify --help).
   k2 notifications email agent off <workspace>    the owner or an Admin
 
 A hosted sender needs its domain Verified (k2 hostmail domain check) and a
@@ -14021,18 +14034,23 @@ k2 notify email: an agent emails a person on this server (text only).
 
   k2 notify email <login|owner> --subject "…" --text "…"
   k2 notify email <login|owner> --subject "…" --text-file <file>
-                 One email to that person, from this workspace's own sender.
-                 <login> is their K2 login on this server (owner = the
-                 server's owner); never an email address. They must have
-                 confirmed a notice address (they run k2 notifications email
-                 address set themselves) and not muted this workspace.
+                 One email to that person, from the workspace you run it in
+                 (there is no --workspace) and its own sender. <login> is
+                 their K2 login on this server; type `owner` literally for
+                 the server's owner. Never an email address.
                  Text only: a subject up to 200 characters, a body up to
                  16 KB; no HTML, no attachments, no Reply-To. K2 adds a line
                  saying which agent sent it, and a link to stop them.
-                 At most 10 an hour and 50 a day per workspace.
-                 Off until the owner turns it on for the workspace
-                 (k2 notifications email agent on <workspace> --sender …).
-                 If it's off (agent_email_off), ask with a permission card.
+                 Refusals (the error code, then what to do):
+                   agent_email_off    off for this workspace: only the owner
+                                      turns it on. The error ends with the
+                                      k2 permission request … line to ask.
+                   no_notice_address  the person hasn't confirmed an address
+                                      (they run k2 notifications email
+                                      address set themselves); tell them.
+                   person_muted       they muted this workspace; don't retry.
+                   rate_limited       10 an hour, 50 a day per workspace;
+                                      retryAfterMs says when.
   k2 notify email off
                  Turn this workspace's notices off. Only the owner turns them
                  back on.

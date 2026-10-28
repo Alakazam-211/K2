@@ -180,6 +180,9 @@ pub fn boot(home: &Path) {
             let _ = NON_DUMPABLE.set(nd);
             // R8 (prd-env-to-vault-v1): once, before any service starts.
             server_refs::upgrade_once(v);
+            // VU-B1 (0.46.6): one owner notice for a backup key that was
+            // added without a person's confirm. Never removed automatically.
+            crate::vault_use_routes::notice_unconfirmed_holders(v);
             start_ticker(v.clone());
             k2_core::log_debug!(
                 "[vault] open: key={} recovery={} non_dumpable={nd}",

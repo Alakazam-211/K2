@@ -17,7 +17,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use k2_vault::fetch::MAX_INLINE_BODY;
 use k2_vault::hosts::{Origin, OriginPattern};
-use k2_vault::{LocalVault, Requester, SecretStore, Use, VaultError};
+use k2_vault::{Actor, LocalVault, Requester, Role, SecretStore, Use, VaultError};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -61,7 +61,8 @@ pub fn handle(
     c: &VaultCaller,
     body: &[u8],
     params: &HashMap<String, String>,
-    _ingress: &str,
+    ingress: &str,
+    not_person: Option<&'static str>,
 ) -> CliResponse {
     let r = match path {
         FETCH => fetch(vault, c, body),
@@ -73,8 +74,8 @@ pub fn handle(
         RECIPIENT => recipient(vault, c),
         CARRY_EXPORT => carry_export(vault, c, body),
         CARRY_IMPORT => carry_import(vault, c, body),
-        BACKUP => backup(vault, c, body),
-        BACKUP_RECIPIENT => backup_recipient(vault, c, body),
+        BACKUP => backup(vault, c, body, ingress, not_person),
+        BACKUP_RECIPIENT => backup_recipient(vault, c, body, ingress, not_person),
         _ => Err(VaultError::not_found("no such vault route")),
     };
     match r {
@@ -986,31 +987,229 @@ fn carry_import(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result
 struct BackupBody {
     dest_dir: Option<String>,
     recipient: Option<String>,
+    /// `backup/recipient`: take the backup key off instead of adding one.
+    #[serde(default)]
+    remove: bool,
+    confirm_token: Option<String>,
 }
 
-fn backup(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
-    if c.is_passport() || !c.actor.is_admin_human() {
-        return Err(VaultError::forbidden("owner_only", "backups are made by the owner or K2's backup job"));
+/// Confirm action (VU-B1, 0.46.6): changing who can open the vault (add,
+/// replace or remove the backup key). Every caller, the owner token
+/// included. `secretId` = `add:<age1…>` or `remove:<fingerprint>`.
+pub const BACKUP_KEY_CONFIRM: &str = "backup-key";
+/// Confirm action: the K2 app (owner token, no person channel) writing a
+/// vault snapshot. `secretId` = the destination folder.
+pub const BACKUP_EXPORT_CONFIRM: &str = "backup-export";
+
+/// The closing words of a refusal no permission card can lift.
+const NOT_REQUESTABLE: &str = "It can't be requested.";
+
+/// The vault's backup key right now: its fingerprint.
+fn backup_fingerprint(vault: &LocalVault) -> Option<String> {
+    vault.holders().into_iter().find(|h| h.kind == "backup").and_then(|h| h.fingerprint)
+}
+
+/// Backups and the backup key are the owner's, from a person: their own
+/// terminal (vault socket) or a Connect login, or the K2 app with a
+/// confirm (`Ok(false)`: the caller must then show a confirm token).
+/// Agents and a peer that failed the person check are refused.
+fn backup_caller(c: &VaultCaller, not_person: Option<&'static str>, what: &str) -> Result<bool, VaultError> {
+    if c.is_passport() {
+        return Err(VaultError::forbidden(
+            "owner_only",
+            format!("{what} is for a person with the owner role, from a terminal outside K2, with a confirm. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
+        ));
     }
+    if !matches!(c.actor, Actor::Owner | Actor::Login { role: Role::Owner, .. }) {
+        return Err(VaultError::forbidden("owner_only", format!("{what} is for the owner. {NOT_REQUESTABLE}")));
+    }
+    if c.channel.is_person() {
+        return Ok(true);
+    }
+    if crate::vault_routes::is_app_owner(c, not_person) {
+        return Ok(false);
+    }
+    let why = not_person.unwrap_or("it came from a K2 token, not from a person");
+    Err(VaultError::forbidden(
+        "person_required",
+        format!("only a person can do this ({why}). Run it from your own SSH login or a terminal outside K2. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
+    ))
+}
+
+/// The daemon's own binding and confirm-sheet words for a backup confirm
+/// (never the client's label). `None`: not a backup action.
+pub(crate) fn confirm_binding(vault: &LocalVault, action: &str, secret_id: Option<&str>) -> Option<Result<(String, String), VaultError>> {
+    let sid = secret_id.map(str::trim).unwrap_or("");
+    let bad = |m: &str| VaultError::bad_request("bad_secret_id", m.to_string());
+    match action {
+        BACKUP_KEY_CONFIRM => Some(if let Some(r) = sid.strip_prefix("add:") {
+            k2_vault::agefmt::Recipient::parse(r.trim())
+                .map(|r| (format!("add:{}", r.encode()), format!("let a new backup key ({}) open the whole vault", r.fingerprint())))
+        } else if let Some(fp) = sid.strip_prefix("remove:") {
+            match backup_fingerprint(vault) {
+                Some(cur) if cur == fp.trim() => Ok((format!("remove:{cur}"), format!("remove the backup key ({cur})"))),
+                _ => Err(bad("that isn't the vault's backup key (k2 vault status lists it)")),
+            }
+        } else {
+            Err(bad("secretId is add:<age1…> or remove:<fingerprint>"))
+        }),
+        BACKUP_EXPORT_CONFIRM => Some(match std::fs::canonicalize(sid) {
+            Ok(d) if !sid.is_empty() && d.is_dir() => {
+                let d = d.display().to_string();
+                let shown: String = d.chars().filter(|ch| !ch.is_control()).take(120).collect();
+                Ok((d, format!("write an encrypted copy of the vault to {shown}")))
+            }
+            _ => Err(bad("secretId is the backup's folder, and it must exist")),
+        }),
+        _ => None,
+    }
+}
+
+fn backup(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ingress: &str, not_person: Option<&'static str>) -> Result<Value, VaultError> {
+    let stamp = c.actor.stamp();
+    let deny = |e: VaultError| {
+        crate::vault::auth_audit("vault-backup", &stamp, &format!("deny: {}", e.code), ingress);
+        e
+    };
+    // A person's own process on the vault socket without a terminal (the
+    // owner's crontab) passed the peer check too: no confirm for it.
+    let person = backup_caller(c, not_person, "a vault backup").map_err(deny)? || (ingress == "vault.sock" && not_person.is_none());
     let b: BackupBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
-    let d = PathBuf::from(b.dest_dir.ok_or_else(|| VaultError::bad_request("dest_required", "where should the snapshot go?"))?);
-    if !d.is_dir() {
-        return Err(VaultError::not_found("that folder doesn't exist"));
+    let d = b.dest_dir.ok_or_else(|| VaultError::bad_request("dest_required", "where should the snapshot go?"))?;
+    let d = std::fs::canonicalize(&d).ok().filter(|p| p.is_dir()).ok_or_else(|| VaultError::not_found("that folder doesn't exist"))?;
+    if !person {
+        // The K2 app: a person's confirm for this folder.
+        let tok = b.confirm_token.as_deref().ok_or_else(|| {
+            deny(VaultError::forbidden(
+                "person_required",
+                format!("a vault backup from the K2 app needs a person's confirm; or run k2 vault backup from your own terminal. Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"),
+            ))
+        })?;
+        crate::vault_routes::take_proof(vault, c, BACKUP_EXPORT_CONFIRM, Some(&d.display().to_string()), Some(tok)).map_err(deny)?;
     }
     let dest = d.join("vault.db");
     vault.snapshot_to(&dest)?;
+    crate::vault::auth_audit("vault-backup", &stamp, &format!("ok {}", dest.display()), ingress);
     Ok(json!({ "ok": true, "path": dest.display().to_string(), "note": "ciphertext only; restoring it on a new box needs the recovery key or the backup key" }))
 }
 
-fn backup_recipient(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {
-    if c.is_passport() || !c.actor.is_admin_human() {
-        return Err(VaultError::forbidden("owner_only", "the backup key is set by the owner"));
-    }
+/// VU-B1: who can open the vault is a person's call, with a confirm, for
+/// every caller (the owner token included: agents can read it).
+fn backup_recipient(vault: &Arc<LocalVault>, c: &VaultCaller, body: &[u8], ingress: &str, not_person: Option<&'static str>) -> Result<Value, VaultError> {
+    let stamp = c.actor.stamp();
+    let deny = |e: VaultError| {
+        crate::vault::auth_audit("vault-backup-key", &stamp, &format!("deny: {}", e.code), ingress);
+        e
+    };
+    backup_caller(c, not_person, "changing who can open the vault").map_err(deny)?;
     let b: BackupBody = serde_json::from_slice(body).map_err(|_| VaultError::bad_request("bad_json", "bad request body"))?;
-    let r = k2_vault::agefmt::Recipient::parse(b.recipient.as_deref().unwrap_or(""))?;
-    vault.add_wrap("backup", &r, &c.actor)?;
-    crate::vault::auth_audit("vault-backup-key", &c.actor.stamp(), &format!("ok {}", r.fingerprint()), "-");
-    Ok(json!({ "ok": true, "fingerprint": r.fingerprint() }))
+    let (binding, add) = if b.remove {
+        let fp = backup_fingerprint(vault).ok_or_else(|| VaultError::not_found("this vault has no backup key"))?;
+        (format!("remove:{fp}"), None)
+    } else {
+        let r = k2_vault::agefmt::Recipient::parse(b.recipient.as_deref().unwrap_or("").trim())?;
+        (format!("add:{}", r.encode()), Some(r))
+    };
+    let tok = b.confirm_token.as_deref().ok_or_else(|| {
+        deny(VaultError::forbidden(
+            "vault_confirm_required",
+            format!(
+                "adding or removing a backup key needs a person's confirm: run k2 vault backup key from your own SSH login or a terminal outside K2 (it asks you to confirm). Agents: don't run it; tell your owner. {NOT_REQUESTABLE}"
+            ),
+        ))
+    })?;
+    let proof = crate::vault_routes::take_proof(vault, c, BACKUP_KEY_CONFIRM, Some(&binding), Some(tok)).map_err(deny)?;
+    let method = match &proof {
+        k2_vault::HumanProof::Confirmed { method } => method.clone(),
+        k2_vault::HumanProof::None => "-".into(),
+    };
+    match add {
+        Some(r) => {
+            let fp = r.fingerprint();
+            let replaced = vault.add_wrap("backup", &r, &c.actor, &proof).map_err(deny)?;
+            let was = replaced.as_deref().map(|o| format!(" (replaced {o})")).unwrap_or_default();
+            crate::vault::auth_audit("vault-backup-key", &stamp, &format!("ok add {fp}{was} via {method}"), ingress);
+            Ok(json!({ "ok": true, "fingerprint": fp, "replaced": replaced }))
+        }
+        None => {
+            let fp = vault.remove_wrap("backup", &c.actor, &proof).map_err(deny)?;
+            crate::vault::auth_audit("vault-backup-key", &stamp, &format!("ok remove {fp} via {method}"), ingress);
+            Ok(json!({
+                "ok": true,
+                "removed": fp,
+                "note": "new backups no longer open with that key; copies made before still do. Change the secrets that matter if it wasn't yours.",
+            }))
+        }
+    }
+}
+
+/// Audit action on the daemon's note that the owner was told about a
+/// holder added without a confirm (one notice per fingerprint).
+pub const HOLDER_NOTICE_ACTION: &str = "holder-notice";
+
+/// Doctor and boot (VU-B1): a backup key added before 0.46.6 without a
+/// person's confirm, in plain words. Never removed automatically.
+pub fn unconfirmed_holder_line(u: &k2_vault::vault::UnconfirmedHolder) -> String {
+    let fp = u.holder.fingerprint.as_deref().unwrap_or("?");
+    let when = u.holder.created_at.as_deref().unwrap_or("an unknown date");
+    let by = u.added_by.as_deref().unwrap_or("an unknown caller");
+    format!(
+        "A {} key ({fp}) can open the whole vault; it was added {when} by {by} without a person's confirm. If you didn't add it, remove it from your own terminal: k2 vault backup key remove (it asks you to confirm). Copies made while it was there still open with it, so change the secrets that matter.",
+        u.holder.kind
+    )
+}
+
+/// Boot (VU-B1): one owner notice for holders added without a confirm
+/// that the owner hasn't been told about yet. Returns how many it named.
+pub fn notice_unconfirmed_holders(vault: &LocalVault) -> usize {
+    let list = match vault.unconfirmed_holders() {
+        Ok(l) => l,
+        Err(e) => {
+            k2_core::log_debug!("WARN [vault] key holder check: {}", e.code);
+            return 0;
+        }
+    };
+    if list.is_empty() {
+        return 0;
+    }
+    let actor = Actor::System("vault-holders".into());
+    let told = match vault.audit_consumers(HOLDER_NOTICE_ACTION, &actor) {
+        Ok(t) => t,
+        Err(e) => {
+            // The chain doesn't verify: the doctor's tamper finding says so.
+            k2_core::log_debug!("WARN [vault] key holder notice skipped: {}", e.code);
+            return 0;
+        }
+    };
+    let new: Vec<_> = list.iter().filter(|u| !told.iter().any(|t| Some(t.as_str()) == u.holder.fingerprint.as_deref())).collect();
+    if new.is_empty() {
+        return 0;
+    }
+    let title = if new.len() == 1 { "Vault: a backup key was added without a confirm".to_string() } else { format!("Vault: {} backup keys were added without a confirm", new.len()) };
+    let body = new.iter().map(|u| format!("- {}", unconfirmed_holder_line(u))).collect::<Vec<_>>().join("\n");
+    file_holder_notice(&title, &body);
+    for u in &new {
+        if let Err(e) = vault.audit_note(HOLDER_NOTICE_ACTION, &actor, u.holder.fingerprint.as_deref().unwrap_or("?")) {
+            k2_core::log_debug!("WARN [vault] key holder notice note: {}", e.code);
+        }
+    }
+    crate::vault::auth_audit("vault-backup-key", "daemon", &format!("notice {} unconfirmed", new.len()), "-");
+    new.len()
+}
+
+fn file_holder_notice(title: &str, body: &str) {
+    #[cfg(not(test))]
+    if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-vault", title, body) {
+        k2_core::log_debug!("WARN [vault] key holder notice: {e}");
+    }
+    #[cfg(test)]
+    HOLDER_NOTICES.with(|n| n.borrow_mut().push(format!("{title}\n{body}")));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Notices filed on this test's thread.
+    pub static HOLDER_NOTICES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A published service's id from its label (`name`) or id. Agents see
@@ -1087,7 +1286,7 @@ mod tests {
                 session_id: Some("s1".into()),
             };
             let body = json!({ "secret": "STRIPE_KEY", "url": format!("http://127.0.0.1:{port}/v1/charges") }).to_string();
-            let r = handle(&v, FETCH, &c, body.as_bytes(), &HashMap::new(), "test");
+            let r = handle(&v, FETCH, &c, body.as_bytes(), &HashMap::new(), "test", None);
             assert_eq!(r.status, "200 OK", "{}", r.body);
             assert!(!r.body.contains(VAL), "the value never comes back: {}", r.body);
             let out: Value = serde_json::from_str(&r.body).expect("json");
@@ -1096,12 +1295,12 @@ mod tests {
             assert_eq!(conns.load(Ordering::SeqCst), 1);
             // Another host: refused before any connection.
             let body = json!({ "secret": "STRIPE_KEY", "url": "http://127.0.0.1:1/x" }).to_string();
-            let r = handle(&v, FETCH, &c, body.as_bytes(), &HashMap::new(), "test");
+            let r = handle(&v, FETCH, &c, body.as_bytes(), &HashMap::new(), "test", None);
             assert!(r.status.starts_with("403"), "{}", r.body);
             assert!(r.body.contains("host_not_allowed"), "{}", r.body);
             // A person can't use fetch.
             let owner = VaultCaller { actor: Actor::Owner, channel: crate::vault::actor::Channel::Plain, session_id: None };
-            let r = handle(&v, FETCH, &owner, body.as_bytes(), &HashMap::new(), "test");
+            let r = handle(&v, FETCH, &owner, body.as_bytes(), &HashMap::new(), "test", None);
             assert!(r.status.starts_with("403"), "{}", r.body);
         });
     }

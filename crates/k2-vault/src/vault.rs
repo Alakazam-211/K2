@@ -93,6 +93,65 @@ pub struct VaultStatus {
     pub counts: Counts,
     pub memory_lock: String,
     pub created_at: String,
+    /// Who can open the vault (VU-B1): this box's key, then every age
+    /// holder (recovery key, backup key). Public halves only.
+    pub holders: Vec<Holder>,
+}
+
+/// One key holder: something that can open the vault's data key. Never
+/// key material; the fingerprint is the first 8 bytes of the SHA-256 of
+/// the age public key.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Holder {
+    /// `box` (this machine's key store), `recovery`, `backup`, …
+    pub kind: String,
+    pub fingerprint: Option<String>,
+    pub created_at: Option<String>,
+}
+
+/// A holder added without a recorded person confirm (K2 before 0.46.6
+/// let a backup key be added with the owner token alone).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UnconfirmedHolder {
+    pub holder: Holder,
+    /// The actor stamp on the last `wrap` audit row for this holder kind.
+    pub added_by: Option<String>,
+}
+
+/// Audit `consumer` on a holder change a person confirmed (VU-B1).
+pub const HOLDER_CONFIRMED_PREFIX: &str = "confirmed:";
+
+/// An age holder's fingerprint (`?` when the stored recipient doesn't parse).
+fn wrap_fingerprint(recipient: &str) -> String {
+    Recipient::parse(recipient).map(|r| r.fingerprint()).unwrap_or_else(|_| "?".into())
+}
+
+/// The box key first, then each age holder.
+fn holders_of(wraps: &[Wrap]) -> Vec<Holder> {
+    let mut out = vec![Holder { kind: "box".into(), fingerprint: None, created_at: None }];
+    out.extend(wraps.iter().map(|w| Holder {
+        kind: w.holder.clone(),
+        fingerprint: Some(wrap_fingerprint(&w.recipient)),
+        created_at: Some(w.created_at.clone()),
+    }));
+    out
+}
+
+/// VU-B1: changing who can open the vault (an age holder other than the
+/// recovery key) is the owner's or an Admin's, with a person's confirm.
+fn holder_change_allowed(holder: &str, actor: &Actor, proof: &HumanProof) -> Result<()> {
+    if holder == "recovery" {
+        return Err(VaultError::forbidden("vault_admin_required", "the recovery key has its own steps (k2 vault recovery)"));
+    }
+    if !actor.is_admin_human() {
+        return Err(VaultError::forbidden("vault_admin_required", "only the owner changes who can open the vault"));
+    }
+    if !matches!(proof, HumanProof::Confirmed { .. }) {
+        return Err(VaultError::forbidden("vault_confirm_required", "changing who can open the vault needs a person's confirm"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -2460,11 +2519,108 @@ impl LocalVault {
         Ok(r_str)
     }
 
-    /// Add or replace an age holder (backup recipient, clone target).
-    pub fn add_wrap(&self, holder: &str, recipient: &Recipient, actor: &Actor) -> Result<()> {
-        if !(actor.is_admin_human() || actor.is_system()) || holder == "recovery" {
-            return Err(VaultError::forbidden("vault_admin_required", "only the owner adds key holders"));
+    /// Add or replace an age holder (a backup key). It changes who can open
+    /// the vault, so it needs a person's confirm (VU-B1, 0.46.6); the
+    /// recovery key has its own steps. The audit rows name the actor and
+    /// the fingerprints, never key material. Returns the replaced key's
+    /// fingerprint.
+    pub fn add_wrap(&self, holder: &str, recipient: &Recipient, actor: &Actor, proof: &HumanProof) -> Result<Option<String>> {
+        holder_change_allowed(holder, actor, proof)?;
+        let stamp = actor.stamp();
+        let r = *recipient;
+        let fp = r.fingerprint();
+        let holder = holder.to_string();
+        self.mutate(true, |tx, keys| {
+            let mut h = load_header(tx)?.ok_or_else(|| VaultError::internal("header"))?.0;
+            let old = h.wraps.iter().find(|w| w.holder == holder).map(|w| wrap_fingerprint(&w.recipient));
+            let wrapped = agefmt::encrypt(&[r], keys.vdk.as_bytes());
+            h.wraps.retain(|w| w.holder != holder);
+            h.wraps.push(Wrap { holder: holder.clone(), recipient: r.encode(), wrapped: base64_encode(&wrapped), created_at: ts(now()) });
+            write_header(tx, &h, &keys.header)?;
+            let mut rows = vec![];
+            if let Some(o) = &old {
+                rows.push(Entry::new("unwrap", &stamp, &format!("ok:{holder}")).consumer(format!("{HOLDER_CONFIRMED_PREFIX}{o}")));
+            }
+            rows.push(Entry::new("wrap", &stamp, &format!("ok:{holder}")).consumer(format!("{HOLDER_CONFIRMED_PREFIX}{fp}")));
+            Ok((old, rows))
+        })
+    }
+
+    /// Remove an age holder (a backup key): a person's confirm, as for
+    /// adding one. Returns the removed key's fingerprint.
+    pub fn remove_wrap(&self, holder: &str, actor: &Actor, proof: &HumanProof) -> Result<String> {
+        holder_change_allowed(holder, actor, proof)?;
+        let stamp = actor.stamp();
+        let holder = holder.to_string();
+        self.mutate(true, |tx, keys| {
+            let mut h = load_header(tx)?.ok_or_else(|| VaultError::internal("header"))?.0;
+            let old = h
+                .wraps
+                .iter()
+                .find(|w| w.holder == holder)
+                .map(|w| wrap_fingerprint(&w.recipient))
+                .ok_or_else(|| VaultError::not_found(format!("there's no {holder} key")))?;
+            h.wraps.retain(|w| w.holder != holder);
+            write_header(tx, &h, &keys.header)?;
+            let row = Entry::new("unwrap", &stamp, &format!("ok:{holder}")).consumer(format!("{HOLDER_CONFIRMED_PREFIX}{old}"));
+            Ok((old, vec![row]))
+        })
+    }
+
+    /// Who can open the vault now (the same list status shows).
+    pub fn holders(&self) -> Vec<Holder> {
+        let conn = self.conn.lock();
+        match load_header(&conn) {
+            Ok(Some((h, _))) => holders_of(&h.wraps),
+            _ => holders_of(&[]),
         }
+    }
+
+    /// Age holders other than the recovery key with no person-confirmed
+    /// `wrap` row in the audit chain for their fingerprint: added before
+    /// 0.46.6 with the owner token alone, or the chain doesn't verify (then
+    /// every one is listed: fail closed). Never removes anything.
+    pub fn unconfirmed_holders(&self) -> Result<Vec<UnconfirmedHolder>> {
+        let wraps = {
+            let conn = self.conn.lock();
+            load_header(&conn)?.map(|(h, _)| h.wraps).unwrap_or_default()
+        };
+        let trusted = self.verify_audit_chain().is_ok();
+        let conn = self.conn.lock();
+        let mut out = vec![];
+        for w in wraps.iter().filter(|w| w.holder != "recovery") {
+            let fp = wrap_fingerprint(&w.recipient);
+            let outcome = format!("ok:{}", w.holder);
+            let confirmed = trusted && {
+                let n: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM audit WHERE action = 'wrap' AND outcome = ?1 AND consumer = ?2",
+                    params![outcome, format!("{HOLDER_CONFIRMED_PREFIX}{fp}")],
+                    |r| r.get(0),
+                )?;
+                n > 0
+            };
+            if confirmed {
+                continue;
+            }
+            let added_by: Option<String> = conn
+                .query_row(
+                    "SELECT actor FROM audit WHERE action = 'wrap' AND outcome = ?1 ORDER BY seq DESC LIMIT 1",
+                    params![outcome],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            out.push(UnconfirmedHolder {
+                holder: Holder { kind: w.holder.clone(), fingerprint: Some(fp), created_at: Some(w.created_at.clone()) },
+                added_by,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Test seam: a holder written the way K2 before 0.46.6 did (no person
+    /// confirm on its audit row), for the unconfirmed-holder check.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn add_wrap_unconfirmed_for_test(&self, holder: &str, recipient: &Recipient, actor: &Actor) -> Result<()> {
         let stamp = actor.stamp();
         let r = *recipient;
         let holder = holder.to_string();
@@ -3161,6 +3317,7 @@ impl LocalVault {
             counts: Counts { rotate_due: due, ..counts },
             memory_lock: if crate::secret::mlock_failed() { "failed".into() } else { "ok".into() },
             created_at: h.created_at,
+            holders: holders_of(&h.wraps),
         }
     }
 

@@ -110,6 +110,9 @@ pub const PASSPORT_DENIED: &[&str] = &[
     ROLLBACK,
     RESTORE,
     OPEN,
+    // VU-B1: backups and who can open the vault are a person's.
+    crate::vault_use_routes::BACKUP,
+    crate::vault_use_routes::BACKUP_RECIPIENT,
     // prd-vault-gaps-v1 item 4: a root unit's credential is a person's call
     // (Q8: no permission card in v1).
     crate::vault_systemd_routes::SYSTEMD_CRED,
@@ -460,7 +463,7 @@ pub fn handle_on(
         ));
     }
     if crate::vault_use_routes::is_route(path) {
-        return crate::vault_use_routes::handle(vault, path, &c, body, params, ingress);
+        return crate::vault_use_routes::handle(vault, path, &c, body, params, ingress, not_person);
     }
     if crate::vault_handoff_routes::is_route(path) {
         return crate::vault_handoff_routes::handle(vault, path, &c, body, params, ingress);
@@ -679,6 +682,24 @@ fn doctor(vault: &LocalVault, c: &VaultCaller) -> Result<Value, VaultError> {
     }
     if st.tamper != "ok" {
         findings.push(json!({ "level": "error", "code": "vault_tamper", "message": st.tamper }));
+    }
+    // VU-B1: a key that can open the vault, added without a person's
+    // confirm (K2 before 0.46.6). Reported, never removed here.
+    match vault.unconfirmed_holders() {
+        Ok(list) => {
+            for u in &list {
+                findings.push(json!({
+                    "level": "warning",
+                    "code": "vault_holder_unconfirmed",
+                    "holder": u.holder.kind,
+                    "fingerprint": u.holder.fingerprint,
+                    "addedAt": u.holder.created_at,
+                    "addedBy": u.added_by,
+                    "message": crate::vault_use_routes::unconfirmed_holder_line(u),
+                }));
+            }
+        }
+        Err(e) => findings.push(json!({ "level": "error", "code": "vault_holder_check", "message": format!("couldn't check who can open the vault: {}", e.hint) })),
     }
     if let Some(line) = newer_rows_line(&st.counts) {
         findings.push(json!({ "level": "warning", "code": "needs_newer_k2", "message": line }));
@@ -1636,6 +1657,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     "recovery-rotate",
     "confirm-password-change",
     "legacy-export",
+    // VU-B1 (0.46.6): adding, replacing or removing the backup key (who can
+    // open the vault), and the K2 app writing a vault snapshot. Every
+    // caller, the owner token included (agents can read it).
+    crate::vault_use_routes::BACKUP_KEY_CONFIRM,
+    crate::vault_use_routes::BACKUP_EXPORT_CONFIRM,
     // Node admin (prd-k2-node-admin-v1 §7.4): approving a held request;
     // the token is bound to the request id (`secretId`).
     "node-admin",
@@ -1761,6 +1787,11 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
     };
     let (secret_id, reason) = if let Some((digest, text)) = rollback_bound {
         (Some(digest), text)
+    } else if let Some(bound) = crate::vault_use_routes::confirm_binding(vault, action, b.secret_id.as_deref()) {
+        // Backup key / backup export (VU-B1): the daemon names the key's
+        // fingerprint or the folder, and binds the token to it.
+        let (sid, reason) = bound?;
+        (Some(sid), reason)
     } else if action == crate::vault_systemd_routes::CONFIRM_ACTION {
         let plan = b.systemd_cred.as_ref().ok_or_else(|| err("plan_required", 400, "a systemd-cred confirm needs its plan (systemdCred)"))?;
         let (digest, reason) = crate::vault_systemd_routes::confirm_binding(vault, c, plan)?;
@@ -1968,7 +1999,7 @@ struct RecoveryBody {
 /// The K2 app: the owner token on its own, no person channel (VS1 is
 /// deferred, so the app has no attested socket yet). Not the vault socket:
 /// a peer there that failed the person check stays refused.
-fn is_app_owner(c: &VaultCaller, not_person: Option<&'static str>) -> bool {
+pub(crate) fn is_app_owner(c: &VaultCaller, not_person: Option<&'static str>) -> bool {
     not_person.is_none() && !c.is_passport() && matches!(c.actor, Actor::Owner) && c.channel == Channel::Plain
 }
 

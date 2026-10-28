@@ -1120,3 +1120,174 @@ fn it_agents_cant_grant_server_secrets_to_any_own_workspace_session() {
     let r = session_self_grant(&it.actor, k2_vault::ScopeKind::Workspace, Some("it-ws".into()));
     assert!(r.is_ok(), "{r:?}");
 }
+
+/// VU-B1 (0.46.6): who can open the vault (the backup key) is a person's
+/// call with a confirm. Agents and the owner token alone are refused, the
+/// change is audited by fingerprint, and status lists every holder.
+#[test]
+fn backup_key_needs_a_person_and_a_confirm() {
+    use crate::vault_use_routes::{BACKUP_KEY_CONFIRM, BACKUP_RECIPIENT};
+    let t = vault();
+    let key = k2_vault::agefmt::Identity::generate().recipient();
+    let (age, fp) = (key.encode(), key.fingerprint());
+    let add = json!({ "recipient": age });
+    // Agents (with vault manage, too) and a K2 shell tab: refused.
+    for c in [agent("ws1", true), shell("ws1")] {
+        let (s, v) = call(&t, BACKUP_RECIPIENT, &c, add.clone());
+        assert_eq!((s, code(&v)), (403, "owner_only"), "{v}");
+    }
+    // The owner token alone (agents can read it): refused, not requestable.
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner(), add.clone());
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert!(v["error"]["hint"].as_str().expect("hint").ends_with("It can't be requested."), "{v}");
+    // A peer on the vault socket that failed the person check: refused.
+    let r = handle_on(
+        &t.v,
+        BACKUP_RECIPIENT,
+        Ok(owner()),
+        add.to_string().as_bytes(),
+        &HashMap::new(),
+        "vault.sock",
+        Some("runs inside K2 (a K2 terminal or agent)"),
+    );
+    assert!(r.status.starts_with("403") && r.body.contains("person_required") && r.body.contains("It can't be requested."), "{}", r.body);
+    // An Admin login is a person but not the owner.
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &login(Role::Admin), add.clone());
+    assert_eq!((s, code(&v)), (403, "owner_only"), "{v}");
+    // A person without a confirm: refused too.
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner_tty(), add.clone());
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    assert_eq!(t.v.status().holders.len(), 1, "nothing added");
+    // A confirm for another key doesn't count; a bad binding is refused.
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let other = k2_vault::agefmt::Identity::generate().recipient().encode();
+    let confirm = |sid: &str| {
+        let (s, v) = call(
+            &t,
+            CONFIRM_FINISH,
+            &owner_tty(),
+            json!({ "action": BACKUP_KEY_CONFIRM, "secretId": sid, "method": "vault-password", "password": "correct horse battery" }),
+        );
+        assert_eq!(s, 200, "{v}");
+        v["token"].as_str().expect("token").to_string()
+    };
+    let wrong = confirm(&format!("add:{other}"));
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner_tty(), json!({ "recipient": age, "confirmToken": wrong }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "bound to the key: {v}");
+    let (s, v) = call(
+        &t,
+        CONFIRM_FINISH,
+        &owner_tty(),
+        json!({ "action": BACKUP_KEY_CONFIRM, "secretId": "add:not-a-key", "method": "vault-password", "password": "correct horse battery" }),
+    );
+    assert_eq!(s, 400, "{v}");
+    // A person with a confirm: added.
+    let tok = confirm(&format!("add:{age}"));
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner_tty(), json!({ "recipient": age, "confirmToken": tok }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["fingerprint"], fp);
+    let (s, _) = call(&t, BACKUP_RECIPIENT, &owner_tty(), json!({ "recipient": age, "confirmToken": tok }));
+    assert_eq!(s, 403, "single use");
+    // Audited: who, and the fingerprint (never key material).
+    let rows = t.v.audit(&Default::default(), &Actor::Owner).expect("audit");
+    let row = rows.iter().find(|r| r.action == "wrap").expect("a wrap row");
+    assert_eq!((row.actor.as_str(), row.outcome.as_str()), ("owner", "ok:backup"));
+    assert_eq!(row.consumer.as_deref(), Some(format!("confirmed:{fp}").as_str()));
+    assert!(!serde_json::to_string(&rows).expect("json").contains(&age), "no recipient key in the audit");
+    // Status lists the holders by kind and fingerprint, to agents too.
+    let (s, v) = call(&t, STATUS, &agent("ws1", false), Value::Null);
+    assert_eq!(s, 200, "{v}");
+    let hs = v["holders"].as_array().expect("holders");
+    assert_eq!(hs.len(), 2, "{v}");
+    assert_eq!(hs[0]["kind"], "box");
+    assert_eq!((hs[1]["kind"].as_str(), hs[1]["fingerprint"].as_str()), (Some("backup"), Some(fp.as_str())));
+    // The K2 app (owner token) with a person's confirm: removes it.
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner(), json!({ "remove": true }));
+    assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+    let (s, v) = call(
+        &t,
+        CONFIRM_FINISH,
+        &owner(),
+        json!({ "action": BACKUP_KEY_CONFIRM, "secretId": format!("remove:{fp}"), "method": "vault-password", "password": "correct horse battery" }),
+    );
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, BACKUP_RECIPIENT, &owner(), json!({ "remove": true, "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "{v}");
+    assert_eq!(v["removed"], fp);
+    assert_eq!(t.v.status().holders.len(), 1);
+    let rows = t.v.audit(&Default::default(), &Actor::Owner).expect("audit");
+    assert!(rows.iter().any(|r| r.action == "unwrap" && r.consumer.as_deref() == Some(format!("confirmed:{fp}").as_str())), "{rows:?}");
+    assert!(t.v.unconfirmed_holders().expect("check").is_empty());
+}
+
+/// VU-B1: a backup key added before 0.46.6 without a confirm is named by
+/// the doctor and in one owner notice, and is never removed for you.
+#[test]
+fn doctor_and_boot_flag_a_backup_key_added_without_a_confirm() {
+    let t = vault();
+    let planted = k2_vault::agefmt::Identity::generate().recipient();
+    let fp = planted.fingerprint();
+    t.v.add_wrap_unconfirmed_for_test("backup", &planted, &Actor::Owner).expect("plant");
+    let (s, v) = call(&t, DOCTOR, &owner(), Value::Null);
+    assert_eq!(s, 200, "{v}");
+    let f = v["findings"]
+        .as_array()
+        .expect("findings")
+        .iter()
+        .find(|f| f["code"] == "vault_holder_unconfirmed")
+        .unwrap_or_else(|| panic!("no unconfirmed-holder finding: {v}"))
+        .clone();
+    assert_eq!((f["holder"].as_str(), f["fingerprint"].as_str(), f["addedBy"].as_str()), (Some("backup"), Some(fp.as_str()), Some("owner")));
+    assert!(f["message"].as_str().expect("message").contains("k2 vault backup key remove"), "{f}");
+    // One notice, once.
+    crate::vault_use_routes::HOLDER_NOTICES.with(|n| n.borrow_mut().clear());
+    assert_eq!(crate::vault_use_routes::notice_unconfirmed_holders(&t.v), 1);
+    assert_eq!(crate::vault_use_routes::notice_unconfirmed_holders(&t.v), 0, "told once");
+    let notices = crate::vault_use_routes::HOLDER_NOTICES.with(|n| n.borrow().clone());
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].contains(&fp), "{}", notices[0]);
+    // Still there: the owner decides.
+    assert_eq!(t.v.status().holders.len(), 2);
+    let (_, v) = call(&t, DOCTOR, &owner(), Value::Null);
+    assert!(v.to_string().contains("vault_holder_unconfirmed"), "still reported until removed: {v}");
+}
+
+/// VU-B1 item 5: a vault snapshot is the owner's, from a person; the owner
+/// token alone (the K2 app, or an agent that read it) needs a confirm bound
+/// to the folder.
+#[test]
+fn vault_backup_needs_a_person_or_a_confirm() {
+    use crate::vault_use_routes::{BACKUP, BACKUP_EXPORT_CONFIRM};
+    let t = vault();
+    let out = TestDir::new("backup-out");
+    let dir = std::fs::canonicalize(out.path()).expect("canon").display().to_string();
+    let body = json!({ "destDir": dir });
+    for c in [agent("ws1", true), shell("ws1")] {
+        let (s, v) = call(&t, BACKUP, &c, body.clone());
+        assert_eq!((s, code(&v)), (403, "owner_only"), "{v}");
+    }
+    let (s, v) = call(&t, BACKUP, &login(Role::Admin), body.clone());
+    assert_eq!((s, code(&v)), (403, "owner_only"), "{v}");
+    let (s, v) = call(&t, BACKUP, &owner(), body.clone());
+    assert_eq!((s, code(&v)), (403, "person_required"), "{v}");
+    assert!(v["error"]["hint"].as_str().expect("hint").ends_with("It can't be requested."), "{v}");
+    assert!(!out.path().join("vault.db").exists());
+    // The app with a person's confirm for this folder.
+    let (s, v) = call(&t, CONFIRM_PASSWORD_SET, &owner_tty(), json!({ "password": "correct horse battery" }));
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(
+        &t,
+        CONFIRM_FINISH,
+        &owner(),
+        json!({ "action": BACKUP_EXPORT_CONFIRM, "secretId": dir, "method": "vault-password", "password": "correct horse battery" }),
+    );
+    assert_eq!(s, 200, "{v}");
+    let (s, v) = call(&t, BACKUP, &owner(), json!({ "destDir": dir, "confirmToken": v["token"] }));
+    assert_eq!(s, 200, "{v}");
+    assert!(out.path().join("vault.db").is_file());
+    // A person from their own terminal needs no confirm.
+    let out2 = TestDir::new("backup-out2");
+    let (s, v) = call(&t, BACKUP, &owner_tty(), json!({ "destDir": out2.path().display().to_string() }));
+    assert_eq!(s, 200, "{v}");
+}

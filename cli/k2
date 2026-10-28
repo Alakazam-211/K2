@@ -25099,7 +25099,7 @@ k2 vault — secrets for agents, without showing them the value
                                            seal it as a root unit's systemd credential (Linux, confirm)
   k2 vault systemd-cred NAME --replace     re-place a new version into its root units (confirm)
   k2 vault backup <dir>                    a ciphertext snapshot of the vault (owner)
-  k2 vault backup key <age1…>              also let this backup key open the vault (owner)
+  k2 vault backup key <age1…> | remove     let this backup key open the vault, or take it off (owner, confirm)
   k2 vault restore --from <dir> [--holder recovery|backup] [--dry-run] [--replace]
                                            restore a backup on this box (recovery words or backup key on stdin)
 
@@ -25347,6 +25347,12 @@ print("key:            %s (%s)" % (v.get("keyHomeLabel"), v.get("keyHome")))
 print("rollback guard: %s" % v.get("rollbackGuard"))
 print("recovery key:   %s" % v.get("recovery"))
 print("vault password: %s" % ("set" if v.get("confirmPassword") else "not set"))
+names = {"box": "box key (this machine)", "recovery": "recovery key", "backup": "backup key"}
+hs = v.get("holders") or []
+if hs:
+    print("key holders:    (who can open the vault)")
+    for h in hs:
+        print("  %-22s %s%s" % (names.get(h.get("kind"), "%s key" % h.get("kind")), h.get("fingerprint") or "", ("  added %s" % h["createdAt"]) if h.get("createdAt") else ""))
 c = v.get("counts") or {}
 print("secrets:        %s yours, %s K2 system, %s shares, %s pending cards" % (c.get("user"), c.get("system"), c.get("grants"), c.get("pendingRequests")))
 if v.get("tamper") != "ok":
@@ -26202,10 +26208,13 @@ EOF
         backup) cat <<'EOF'
 k2 vault backup <dir>
 k2 vault backup key <age1…>
+k2 vault backup key remove
 
-Owner only. A ciphertext snapshot of the vault into <dir>; it opens with
-the recovery words or a backup key. `backup key` adds an age key that can
-open backups on a new box.
+Owner only, from your own terminal. A ciphertext snapshot of the vault
+into <dir>; it opens with the recovery words or a backup key. `backup key`
+adds (or replaces) an age key that can open backups on a new box;
+`backup key remove` takes it off. Both ask you to confirm, and
+k2 vault status lists every key holder by fingerprint.
 
 Example: k2 vault backup /Volumes/backup/k2
 EOF
@@ -27486,11 +27495,26 @@ else:
             ;;
         backup)
             if [ "${pos[0]:-}" = "key" ]; then
-                [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault backup key <age1…>" >&2; exit 2; }
+                [ -n "${pos[1]:-}" ] || { echo "usage: k2 vault backup key <age1…> | remove" >&2; exit 2; }
                 _vault_person_guard
-                _vault_sock_call POST backup/recipient "$(python3 -c 'import json,sys; print(json.dumps({"recipient": sys.argv[1]}))' "${pos[1]}")"
-                [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
-                echo "backup key added; a backup can now be opened with it on a new box"
+                local tok
+                if [ "${pos[1]}" = "remove" ]; then
+                    # Bind the confirm to the key that's there now.
+                    _vault_sock_call GET status
+                    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                    local bfp
+                    bfp="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print(next((h.get("fingerprint") or "" for h in json.load(sys.stdin).get("holders") or [] if h.get("kind") == "backup"), ""))')"
+                    [ -n "$bfp" ] || { echo "not_found: this vault has no backup key" >&2; exit 1; }
+                    tok="$(_vault_confirm_token backup-key "remove:$bfp" "")" || exit 3
+                    _vault_sock_call POST backup/recipient "$(python3 -c 'import json,sys; print(json.dumps({"remove": True, "confirmToken": sys.argv[1]}))' "$tok")"
+                    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("backup key %s removed; %s" % (v["removed"], v["note"]))'
+                else
+                    tok="$(_vault_confirm_token backup-key "add:${pos[1]}" "")" || exit 3
+                    _vault_sock_call POST backup/recipient "$(python3 -c 'import json,sys; print(json.dumps({"recipient": sys.argv[1], "confirmToken": sys.argv[2]}))' "${pos[1]}" "$tok")"
+                    [ "$_SC_STATUS" = "200" ] || _vault_fail "$_SC_STATUS" "$_SC_BODY"
+                    printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("backup key %s added%s; a backup can now be opened with it on a new box" % (v["fingerprint"], (" (replaced %s)" % v["replaced"]) if v.get("replaced") else ""))'
+                fi
             else
                 [ -n "${pos[0]:-}" ] || { echo "usage: k2 vault backup <dir>" >&2; exit 2; }
                 _vault_person_guard

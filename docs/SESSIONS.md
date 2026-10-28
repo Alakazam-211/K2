@@ -209,8 +209,8 @@ A poisoned doc is never encoded, compacted or written back from. Carets, views a
 
 ## Undo and redo
 
-Undo follows the kit's undo spec v1.5 (`docs/SPEC-UNDO.md`, U1–U22a, O1–O5), implemented
-once in `session/undo.rs` over the applied-hunk stream.
+Undo follows the kit's undo spec v1.8 (`docs/SPEC-UNDO.md`, U1–U23, O0–O5, O4a, I1),
+implemented once in `session/undo.rs` over the applied-hunk stream.
 
 - **Own batches only, per pid** (U2). One edit call (or verb, restore, revert) is one batch; a
   pid's tabs, devices and CLI calls share one stack. Undo never reverts another pid's change.
@@ -221,11 +221,33 @@ once in `session/undo.rs` over the applied-hunk stream.
   later change like a caret (an insertion exactly at an edge is pulled inside; a deletion
   across an edge **taints** it, U9). Two regions of one batch that come to touch keep an
   insertion at their shared edge in the left one only (m-d).
-- **Undoing a region** is `merge3_window(after, before, live[s'..e'], at_end)`, where `at_end`
-  holds only when the region ends at the root's end **and** the root was non-empty after the
-  change (the merge's base, U10, m11). Within a step, regions apply back to front, and a
-  clean region applies **the merge's own hunks**, never a re-diff of the window (U10, v1.5:
-  in repeated text a re-diff could remove another participant's identical characters).
+- **Undoing a region** merges two **exact hunk sets** on its `after` text (U10, v1.7): ours,
+  the inverse of the change's own hunk, and theirs, every later hunk that touched the
+  region's window, carried at element identity (`text::merge::merge3_hunks`). No string is
+  diffed: in repeated text a diff can't tell another participant's identical element from
+  the region's own (finding F3), so **undo, redo and revert never remove an element they
+  didn't write** (U10a). `at_end` holds only when the region ends at the root's end **and**
+  the root was non-empty after the change (the merge's base, U10, m11). Within a step,
+  regions apply back to front, and a clean region applies the merge's own hunks.
+- **Provenance, by root** (v1.8, U23; `session/prov.rs`). Undo, redo and revert put text back
+  as **new elements** (new IDs, the undoer's change, U18a) that record the **root** they
+  restore: the element they put back, or its own root if that was itself a restoration
+  (never a chain). Every other element (edits, `write --base`, `replace_text`, `restore`, the
+  import, outside edits) is its own root. A region keeps the roots of its texts, and theirs
+  is read off the live window **by root**: scanning it left to right, an element whose root
+  is base element *i*'s counts as base element *i* when *i* is past the last one counted;
+  every other element is foreign. So text someone removed and put back is the region's
+  again: when b edits inside a's region and then undoes it, **a's undo applies**; and an
+  undo removes only elements whose root the change it reverses inserted (U10a). O4 takes a
+  change once only when both sides make it with the same range **and the same roots** (a
+  fresh `X` typed where the undo would put `X` back is not that `X`); **O4a** refuses
+  (`Overlap`) to put back a root that is live, so at most one live element has any root
+  (I1, asserted in debug builds). The session keeps a map of every live element's ID and
+  root (chunked runs; a change costs O(chunks) to find its place and O(one chunk) to splice,
+  never O(doc)) and an index of the live restored elements by root; both are built from the
+  engine and the store's `provenance` rows on first need after a load (O(doc), once), then
+  kept exact by every change; an outside edit or a reload drops them for a rebuild. Only
+  the kit stamps provenance: no API takes a root, and nothing from a client ever does.
 - **Conflicts** are `ConflictRegion { root, range (live bytes), lines (1-based), kind: Overlap |
   Taint | Erased, base, ours, theirs }`: one per region, never a sub-range (U11).
 - **Redo** (U17) reapplies exactly the regions the undo applied (skipped ones are not redone).
@@ -304,7 +326,9 @@ position, the stable change id) days later and after restarts, independent of un
 
 - **The record.** Every change (edits, undo/redo, restore, revert, outside edits, the import)
   writes a revert record in its own transaction: canonical hunks with the deleted text, author,
-  `on_behalf_of`. It lives in the store, so purge and the byte scan reach it.
+  `on_behalf_of`, and (record version 2, store format 5) per hunk the **roots** of the
+  elements it inserted and deleted. It lives in the store, so purge and the byte scan reach
+  it (roots are element IDs and lengths, never content).
 - **The carry** (m9: no per-keystroke work over all records). Bounds live in an **offset tree**
   per root and bias (`session/carry.rs`): a treap over the positions in order, each node holding
   the gap to its predecessor; a hunk splits by value and shifts everything after it by changing
@@ -329,7 +353,16 @@ position, the stable change id) days later and after restarts, independent of un
   the spec's rule **U22a** (v1.6), exactly; the oracle implements it and the trace test
   compares it. A persisted carry keeps **each edge's** taint (v0.8.2; a carry written by
   v0.8.1 or earlier reads as both edges tainted, its conservative reading), so a restart
-  changes no revert's outcome (the trace test's restart twin checks it).
+  changes no revert's outcome (the trace test's restart twin checks it). **Theirs** for a
+  revert (v1.7) comes from replaying the record's regions through the stored shape of every
+  later change (positions and lengths, kept for the doc's life): O(L) in the changes since,
+  at revert time. **By root** (v1.8): the region is read by the record's roots, so a revert
+  acts on the live elements whose root its change inserted: a change undone and then redone
+  has its roots live again (the redo put them back), so **its revert applies** (v1.7
+  conflicted), and what a revert puts back records the roots it restores. A record written
+  before store format 5, or of an outside edit (its hunks are a diff of the texts, not
+  element positions), has no roots: it is reverted as in v1.7, and what it puts back is
+  fresh text.
 - **Rights:** edit, and the caller is the change's author, its `on_behalf_of` person, or an
   owner. Otherwise `Forbidden { need: AuthorOrOwner }` (and `AuditEvent::Refused` with it).
 - **The window** (K-HIST-23, a `tick` duty): records of changes newer than `revert_keep_ms` (30
@@ -355,22 +388,31 @@ only reads: nothing in the doc, the store or presence changes.
 
 - **Grain: the character.** The engine reports, for every live character, the client ID and
   clock that inserted it (Yrs `Text::diff_range(now, empty)`, D0's Q5, with GC on). That
-  call splits blocks, so it runs on a **throwaway replica** (a full copy of the doc): **O(doc)
-  per call**, never on the edit path; the live doc's state vector and encoded state are
-  byte-identical after (tested). The store maps a **client to its pid** (the client table:
-  `join`, the import, outside edits) and a **clock to its change** (`change_clocks`: the
-  clocks each change's inserted text occupies, written in the change's own transaction).
+  call splits blocks, so it runs on a **throwaway replica** (a full copy of the doc): O(doc),
+  once per load, when the session's provenance map is built (then kept exact by every
+  change); the live doc's state vector and encoded state are byte-identical after (tested).
+  The map adds each character's **provenance root** (U23: itself, or for text an undo, redo
+  or revert put back, the element it restores; from the store's `provenance` rows). The
+  store maps a **client to its pid** (the client table: `join`, the import, outside edits)
+  and a **clock to its change** (`change_clocks`: the clocks each change's inserted text
+  occupies, written in the change's own transaction).
 - **The rule.** A line's characters are its text **and its `\n`**: a line split by a typed
-  `\n` goes to its typist, as in `git blame`. Each character carries its change; the line
-  goes to the character with the **greatest change id** (change ids increase in the
+  `\n` goes to its typist, as in `git blame`. Each character carries its **root's** change
+  (U18a, v1.8): the change that first inserted the element it is or restores; the line
+  goes to the character with the **greatest root change id** (change ids increase in the
   daemon's apply order, so this is the true most recent, immune to host clock skew: a later
   change stamped with an earlier host time still wins; `at_ms` is shown, never ranked).
   Characters whose change isn't recorded (inserted before v0.3.0) rank below every recorded
   one; among only those, the line's first character decides.
-- **Undo, redo, restore, revert** insert text as new changes by the caller, so text they bring
-  back is **the caller's**, at that time (undo spec U18a): `kind` says which.
+- **Undo, redo, revert** insert new elements (by the caller, in a new change), and the line
+  blames to the **root**: the author, change, kind and time of the change that first inserted
+  the text, with **`restored_by`** (the caller) and **`restored_in`** (the undo, redo or
+  revert change) naming the restoration (undo spec U18a, v1.8). `restore` is a new edit: its
+  text is the restorer's, with no `restored_by`. Blame by root works the same after a reload
+  or a restart (the roots are in the store).
 - **`Blame { root, version, lines: Vec<BlameLine> }`**, `BlameLine { line (1-based), text
-  (without its \n), author, change, kind, via, at_ms, on_behalf_of, approval, erased }`.
+  (without its \n), author, change, kind, via, at_ms, on_behalf_of, approval, erased,
+  restored_by, restored_in }`.
   `author` is a pid, `kit:import` (the file's first content), `kit:external` (an outside
   edit), an erased participant's pseudonym, or **`kit:unknown`** (`UNKNOWN_PID`) when the
   store has no owner for the client: never a guess. `change`, `kind`, `via`, `at_ms` are
@@ -387,13 +429,16 @@ only reads: nothing in the doc, the store or presence changes.
   gone). Not known once the change's record has left the revert window.
 - **Rendering.** `Blame::render(label)` prints the `git blame`-like listing a host shows (the
   change id, the author's label from `label(pid)` or the pid, `for <person>` and `(pending)` /
-  `(declined)` for on-behalf changes, the UTC date, `[erased]`, the line number, the text):
+  `(declined)` for on-behalf changes, `(restored by <label> in <change>)` for text an undo,
+  redo or revert put back, the UTC date, `[erased]`, the line number, the text):
   `7 (Alice              2026-10-27 09:20:00 2) Intro, revised.`. `Blame::porcelain()` is
   `git blame --line-porcelain`-shaped: `<change> <line> <line> 1`, then `author`,
   `author-time` (s), `author-time-ms`, `kind`, `via`, `on-behalf-of`, `approval`, `erased`,
-  then `\t<text>`. **Labels are the host's**: the kit only knows pids.
-- **Cost.** One full copy and walk of the doc, then one store read per run of text in the
-  range (runs are per client and consecutive clocks, not per character). Budgeted on native
+  `restored-by <pid>`, `restored-in <change>`, then `\t<text>`. **Labels are the host's**: the
+  kit only knows pids.
+- **Cost.** The provenance map's range (one full copy and walk of the doc to build it, once
+  per load), then one store read for the runs of text in the range (runs are per client,
+  consecutive clocks and root, not per character). Budgeted on native
   (E-PERF-18: 50 ms for 1 MiB); a host computes it on demand (the gutter, the verb).
 
 **Tier 0** (whole-blob grain): `BlobSession::blame(conn) -> BlobBlame { version, current:
@@ -1540,11 +1585,16 @@ today). Purge is in [Erasure](#erasure).
 
 ## Store: history tables
 
-Six tables beside the log, created on open: `changes` (summary and hunk shape per change;
+Seven tables beside the log, created on open: `changes` (summary and hunk shape per change;
 `DocStore::change`, `scan_changes`), `change_clocks` (the engine clocks each change's
-inserted text occupies: blame's index, v0.3.0), `reverts` (revert records), `revert_index`,
-`revert_carry`, `revert_stats`; plus `DocStore::version_infos` (version headers without
-content). Content lives only in `reverts` (and versions, the log, snapshots and the sync
+inserted text occupies: blame's index, v0.3.0), `provenance` (store format 5: for each run of
+elements an undo, redo or revert put back, the root it restores; element IDs only, written
+in the change's own transaction, left alone by a purge), `reverts` (revert records; version
+2 adds each hunk's roots), `revert_index`, `revert_carry`, `revert_stats`; plus
+`DocStore::version_infos` (version headers without content). **Store format 5** (reads 4;
+**no downgrade**): a format-4 store is stamped 5 in place on open (the `provenance` table is
+created; nothing is backfilled, since every element made before is its own root); a
+format-4 build refuses a format-5 store with `StoreError::Newer { found: 5 }`. Content lives only in `reverts` (and versions, the log, snapshots and the sync
 replica); a purge redacts them all ([Erasure](#erasure)). Changes made before this slice have no summary or record (`revert` says too old).
 Deleting a doc erases its rows here too ([Deleting docs](#deleting-docs)).
 

@@ -804,7 +804,9 @@ fn undo_redo_is_per_participant() {
     // b's own undo works and leaves a's text alone
     s.undo(b, 1).unwrap();
     assert_eq!(text(&s, a), "ONE\ntwo\nTHREE\nFOUR\n");
-    // now a can undo both remaining batches in one atomic call
+    // the `E` it put back is a new element (U18a) whose root is a's `E` (U23): read by root,
+    // a's region is as a left it (U8, v1.8), so a can undo both remaining batches in one
+    // atomic call (regression (b): v1.7 conflicted here)
     match s.undo(a, 5).unwrap() {
         UndoOutcome::Applied {
             steps: 2, result, ..

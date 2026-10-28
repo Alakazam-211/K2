@@ -1,6 +1,18 @@
-//! Hunks over plain strings, the oracle's own: canonical form (D2), apply, carry (U8, U9).
+//! Hunks over plain strings, the oracle's own: canonical form (D2), apply, carry (U8, U9),
+//! and the provenance roots of what a hunk inserts (U23, v1.8).
 
 use k2_mpc_base::text::diff::Hunk;
+
+use super::ChangeId;
+
+/// A provenance root (U23, v1.8), the oracle's naming: the change that first inserted the
+/// element and the element's ordinal in that change. The import's elements are change 0
+/// (numbered across roots, in order); an element an edit, `write --base`, `replace_text`,
+/// `restore` or purge inserts is its own root; one an undo, redo or revert inserts records
+/// the root of the element it puts back (path-compressed: never a chain). Also an element's
+/// own id (the same naming: its change and ordinal), which the rules never read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Prov(pub ChangeId, pub u32);
 
 /// Replace `[start, end)` (UTF-8 byte offsets, on character boundaries) with `insert`. The
 /// oracle's own hunk, `Hash`-able for state enumeration; convertible from and to the kit's
@@ -61,6 +73,49 @@ pub fn canonical(edits: Vec<Edit>) -> Vec<Edit> {
         }
     }
     out
+}
+
+/// [`canonical`] for edits with the provenance roots of what each inserts (one per inserted
+/// character): joined edits join their roots.
+pub fn canonical_provs(edits: Vec<(Edit, Vec<Prov>)>) -> Vec<(Edit, Vec<Prov>)> {
+    let mut out: Vec<(Edit, Vec<Prov>)> = Vec::with_capacity(edits.len());
+    for (e, p) in edits {
+        if e.start == e.end && e.insert.is_empty() {
+            continue;
+        }
+        match out.last_mut() {
+            Some((last, lp)) if last.end == e.start => {
+                last.end = e.end;
+                last.insert.push_str(&e.insert);
+                lp.extend(p);
+            }
+            _ => out.push((e, p)),
+        }
+    }
+    out
+}
+
+/// The provenance roots of what each of `edits` (canonical, on `base`) inserts, read off
+/// `target`'s roots (one per character of `apply(base, edits)`): an inserted character's
+/// root is the target character's it becomes.
+pub fn provs_of(base: &str, edits: &[Edit], target: &[Prov]) -> Vec<Vec<Prov>> {
+    let text = apply(base, edits);
+    debug_assert_eq!(text.chars().count(), target.len(), "one root per character");
+    let mut out = Vec::with_capacity(edits.len());
+    let mut shift: isize = 0;
+    for e in edits {
+        let at = (e.start as isize + shift) as usize;
+        let i = text[..at].chars().count();
+        out.push(target[i..i + e.insert.chars().count()].to_vec());
+        shift += e.growth();
+    }
+    out
+}
+
+/// The characters of `text` in its byte range `[start, end)`, as character indices.
+pub fn chars_in(text: &str, start: usize, end: usize) -> std::ops::Range<usize> {
+    let i = text[..start].chars().count();
+    i..i + text[start..end].chars().count()
 }
 
 /// `old` with `edits` (sorted, non-overlapping, valid on `old`) applied.

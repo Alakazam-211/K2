@@ -69,7 +69,49 @@ pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
 pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merge {
     let a = diff::hunks(base, ours);
     let b = diff::hunks(base, theirs);
+    merge_sets(base, &a, &b, theirs, at_end, |i, j| a[i] == b[j])
+}
 
+/// Merge two **exact hunk sets** on `base` (undo spec v1.7, U10): `ours` and `theirs` are
+/// canonical hunks on `base` (sorted, non-overlapping, never empty, joined when touching),
+/// not found by diffing. Undo, redo and revert merge this way: ours is the inverse of the
+/// change's own hunks, theirs the later hunks that touched the region, both at element
+/// identity. A diff can't say which of two identical elements changed; these sets do, so
+/// the clean result's hunks name exactly the elements ours changes. `at_end` as in
+/// [`merge3_window`]. The pair rules (O1–O5) and the placement are the same.
+pub fn merge3_hunks(base: &str, ours: &[Hunk], theirs: &[Hunk], at_end: bool) -> Merge {
+    merge3_hunks_by(base, ours, theirs, at_end, |i, j| ours[i] == theirs[j])
+}
+
+/// [`merge3_hunks`] with O4's identity given by the caller: `same(i, j)` says whether ours'
+/// hunk `i` and theirs' hunk `j` are **the same change** (taken once). `merge3_hunks` is
+/// this with hunk equality. Undo, redo and revert (undo spec v1.8, O4) judge identity on
+/// **(position, root)**: the same range of the base and inserted elements with the same
+/// provenance roots in the same order, so a fresh `X` someone typed where an undo would
+/// put back `X` is not that `X`. `same` is asked only of hunks with the same range or a
+/// clash between them (it must imply equal ranges and equal inserted text).
+pub fn merge3_hunks_by(
+    base: &str,
+    ours: &[Hunk],
+    theirs: &[Hunk],
+    at_end: bool,
+    same: impl Fn(usize, usize) -> bool,
+) -> Merge {
+    debug_assert!(diff::validate(base, ours).is_ok() && diff::validate(base, theirs).is_ok());
+    let t = diff::apply(base, theirs);
+    merge_sets(base, ours, theirs, &t, at_end, same)
+}
+
+/// The merge proper: `a` (ours) and `b` (theirs) are canonical hunks on `base`, and
+/// `theirs` is `b` applied to `base`; `same(i, j)` is O4's identity of `a[i]` and `b[j]`.
+fn merge_sets(
+    base: &str,
+    a: &[Hunk],
+    b: &[Hunk],
+    theirs: &str,
+    at_end: bool,
+    same: impl Fn(usize, usize) -> bool,
+) -> Merge {
     // Pass 1: find conflicts and drop changes made identically on both sides.
     let mut keep = vec![true; a.len()];
     let mut clash: Vec<(usize, usize)> = Vec::new(); // (index in a, index in b)
@@ -83,7 +125,8 @@ pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merg
             let y = &b[j];
             let eof_appends =
                 at_end && x.is_insertion() && y.is_insertion() && x.start == base.len();
-            if x == y {
+            if x.start == y.start && x.end == y.end && same(i, j) {
+                debug_assert_eq!(x, y, "O4's identity implies equal hunks");
                 keep[i] = false;
             } else if !eof_appends && overlaps(x, y) {
                 clash.push((i, j));
@@ -92,7 +135,7 @@ pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merg
         }
     }
     if !clash.is_empty() {
-        return Merge::Conflicts(conflicts(base, &a, &b, &clash));
+        return Merge::Conflicts(conflicts(base, a, b, &clash));
     }
 
     // Pass 2: rebase our hunks into theirs' coordinates.
@@ -260,6 +303,53 @@ mod tests {
         // ... but not at the end of a window that isn't the end of the text
         assert!(matches!(
             merge3_window("ab", "abX", "abY", false),
+            Merge::Conflicts(_)
+        ));
+    }
+
+    /// O4 by a caller's identity (undo spec v1.8: position and root): equal text that isn't
+    /// the same change is not taken once; O1–O5 decide instead. `merge3_hunks` is the
+    /// variant with hunk equality.
+    #[test]
+    fn identity_predicate_decides_o4() {
+        let h = |s: usize, e: usize, t: &str| Hunk {
+            start: s,
+            end: e,
+            insert: t.into(),
+        };
+        let ours = [h(1, 1, "X")];
+        let theirs = [h(1, 1, "X")];
+        // the same change: taken once
+        let Merge::Clean(c) = merge3_hunks_by("ab", &ours, &theirs, false, |_, _| true) else {
+            panic!()
+        };
+        assert_eq!((c.text.as_str(), c.hunks.len()), ("aXb", 0));
+        assert_eq!(
+            merge3_hunks("ab", &ours, &theirs, false),
+            Merge::Clean(c.clone())
+        );
+        // the same text, another change: two insertions at one point conflict (O5) ...
+        assert!(matches!(
+            merge3_hunks_by("ab", &ours, &theirs, false, |_, _| false),
+            Merge::Conflicts(_)
+        ));
+        // ... except at the end of a non-empty doc, where both land, theirs first
+        let (o, t) = ([h(2, 2, "X")], [h(2, 2, "X")]);
+        let Merge::Clean(c) = merge3_hunks_by("ab", &o, &t, true, |_, _| false) else {
+            panic!()
+        };
+        assert_eq!(c.text, "abXX");
+        assert_eq!(c.hunks, vec![h(3, 3, "X")]);
+        // identical deletions are one change whatever the predicate says of insertions
+        let d = [h(0, 1, "")];
+        let Merge::Clean(c) = merge3_hunks_by("ab", &d, &d, false, |i, j| d[i] == d[j]) else {
+            panic!()
+        };
+        assert_eq!(c.text, "b");
+        // a replacement of the same range with the same text, but not the same change
+        let r = [h(0, 1, "Z")];
+        assert!(matches!(
+            merge3_hunks_by("ab", &r, &r, false, |_, _| false),
             Merge::Conflicts(_)
         ));
     }

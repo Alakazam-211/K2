@@ -32,6 +32,7 @@ use super::participant::{
 };
 use super::position::{self, At, Bias, Cursor, LineRange};
 use super::presence::{self, Presence};
+use super::prov::{coalesce_with, ElemId, Ids, Inserted, Prov};
 use super::ratelimit::Bucket;
 use super::summary;
 use super::undo::{self, Batch, ConflictRegion, Mode, Plan, Region};
@@ -41,8 +42,8 @@ use crate::hash::{file_hash, hex, hmac, legacy_matches};
 use crate::schema::{Kind, Schema};
 use crate::store::{
     Approval, ApprovalState, ChangeInfo, ChangeKind, ClockSpan, DocId, DocKey, DocMeta, DocStore,
-    LogEntry, NewChange, RecordHunk, RecordRoot, RevertRecord, Seq, SyncState, Version,
-    VersionReason,
+    HunkRoots, LogEntry, NewChange, ProvRow, RecordHunk, RecordRoot, RevertRecord, RootRuns, Seq,
+    SyncState, Version, VersionReason,
 };
 use crate::text::diff::{self, Hunk};
 use crate::text::lines;
@@ -354,12 +355,25 @@ impl std::ops::DerefMut for Member {
 struct History {
     undo: VecDeque<Batch>,
     redo: VecDeque<Batch>,
-    /// Bytes held by both stacks (bounded by [`Config::undo_max_bytes`]).
+    /// Bytes held by both stacks (bounded by [`Config::undo_max_bytes`]), as of the last
+    /// push or removal: regions grow as they carry later hunks (theirs), so it is counted
+    /// afresh each time.
     bytes: usize,
     /// A purge cleared the stacks; said once on the next undo or redo.
     cleared: bool,
     bucket: Option<Bucket>,
     last_read: Option<Seq>,
+}
+
+impl History {
+    /// Bytes both stacks hold now.
+    fn held_bytes(&self) -> usize {
+        self.undo
+            .iter()
+            .chain(self.redo.iter())
+            .map(Batch::bytes)
+            .sum()
+    }
 }
 
 struct ReadBase {
@@ -394,6 +408,10 @@ struct State {
     next_history_ms: u64,
     /// Carried bounds of the revert records; built on first use (`None`: not built).
     reverts: Option<RevertIndex>,
+    /// The provenance map (undo spec U23): every live element's ID and root, and the live
+    /// restored elements by root. Built from the engine and the store on first need (`None`:
+    /// not built, or dropped by a path that changed the text without keeping it exact).
+    prov: Option<Prov>,
     read_bases: VecDeque<ReadBase>,
     read_base_bytes: usize,
     /// Recent change authors, for "contributors since last read".
@@ -590,6 +608,7 @@ impl Session {
                 last_change_ms: now,
                 next_history_ms: now,
                 reverts: None,
+                prov: None,
                 read_bases: VecDeque::new(),
                 read_base_bytes: 0,
                 authors,
@@ -681,6 +700,8 @@ impl Session {
             })
             .collect();
         let update = doc.edit_as(client, &edits)?;
+        // each root's imported text: fresh elements from the import client's clocks
+        let firsts = crate::engine::insert_clocks(0, &edits);
         let now = host.now_ms();
         let meta = DocMeta {
             key,
@@ -731,7 +752,8 @@ impl Session {
                 roots: ordered
                     .iter()
                     .filter(|(_, Neutral::Text(t))| !t.is_empty())
-                    .map(|(root, Neutral::Text(t))| RecordRoot {
+                    .zip(&firsts)
+                    .map(|((root, Neutral::Text(t)), first)| RecordRoot {
                         root: root.clone(),
                         empty_after: false,
                         hunks: vec![RecordHunk {
@@ -740,6 +762,13 @@ impl Session {
                             insert: t.clone(),
                             deleted: String::new(),
                             redacted: false,
+                            roots: Some(HunkRoots {
+                                inserted: root_runs(&Ids::fresh(
+                                    t,
+                                    ElemId::new(client, first.first().copied().unwrap_or(0)),
+                                )),
+                                deleted: Vec::new(),
+                            }),
                         }],
                     })
                     .collect(),
@@ -749,6 +778,7 @@ impl Session {
                 start: 0,
                 end: doc.clock_of(client),
             }),
+            provenance: Vec::new(),
         };
         let (doc_id, seq, _) = store.create_imported_synced(
             &meta,
@@ -1730,7 +1760,11 @@ impl Session {
         } else {
             Mode::All
         };
-        let (steps, blocked) = match undo::plan(&st.texts, batches, mode) {
+        self.prov(st)?;
+        let client = st.members[i].client;
+        let next = ElemId::new(client, st.doc.clock_of(client));
+        let prov = st.prov.as_ref().expect("just built");
+        let (steps, blocked) = match undo::plan(&st.texts, prov, next, batches, mode) {
             Plan::Conflict { step, conflicts } => {
                 return Ok(UndoOutcome::Conflicts { step, conflicts })
             }
@@ -1758,6 +1792,7 @@ impl Session {
                     edits: p.edits,
                     kind,
                     of: None,
+                    restores: Some(p.restores),
                 }
             })
             .collect();
@@ -1793,10 +1828,10 @@ impl Session {
         let mut taken: Vec<(usize, Batch)> = Vec::with_capacity(idx.len());
         for k in sorted {
             if let Some(b) = stack.remove(k) {
-                h.bytes = h.bytes.saturating_sub(b.bytes());
                 taken.push((k, b));
             }
         }
+        h.bytes = h.held_bytes();
         idx.iter()
             .filter_map(|k| {
                 let at = taken.iter().position(|(j, _)| j == k)?;
@@ -1915,7 +1950,29 @@ impl Session {
         now: u64,
         versions: Vec<Version>,
     ) -> Result<EditResult> {
-        let step = Step { edits, kind, of };
+        self.commit_edit_restoring(st, i, edits, None, kind, of, now, versions)
+    }
+
+    /// [`Session::commit_edit`] of a step that puts elements back (a revert: per edit, per
+    /// hunk, the roots it restores, U23).
+    #[allow(clippy::too_many_arguments)]
+    fn commit_edit_restoring(
+        &self,
+        st: &mut State,
+        i: usize,
+        edits: Vec<Edit>,
+        restores: Option<Vec<Option<Vec<Ids>>>>,
+        kind: ChangeKind,
+        of: Option<u64>,
+        now: u64,
+        versions: Vec<Version>,
+    ) -> Result<EditResult> {
+        let step = Step {
+            edits,
+            kind,
+            of,
+            restores,
+        };
         let (res, mut done) = self.commit(st, i, vec![step], now, versions)?;
         if let Some((seq, regions)) = done.pop().flatten() {
             let pid = st.members[i].p.pid.clone();
@@ -1991,7 +2048,7 @@ impl Session {
         let mut applied: Vec<Applied> = Vec::new();
         let mut which: Vec<Option<usize>> = Vec::with_capacity(n_steps);
         for step in steps {
-            match self.apply_local(st, i, step.edits) {
+            match self.apply_local(st, i, step.edits, step.restores) {
                 Ok(Some(mut a)) => {
                     a.kind = step.kind;
                     a.of = step.of;
@@ -2062,6 +2119,7 @@ impl Session {
                     roots: std::mem::take(&mut a.record),
                 },
                 span: a.span.map(|(start, end)| ClockSpan { client, start, end }),
+                provenance: std::mem::take(&mut a.prov_rows),
             });
         }
         let appended = self
@@ -2174,9 +2232,8 @@ impl Session {
             undo, redo, bytes, ..
         } = h;
         if origin == Origin::Edit {
-            *bytes -= redo.drain(..).map(|b| b.bytes()).sum::<usize>();
+            redo.clear();
         }
-        *bytes += batch.bytes();
         let dst = if origin == Origin::Undo {
             &mut *redo
         } else {
@@ -2184,8 +2241,10 @@ impl Session {
         };
         dst.push_back(batch);
         while dst.len() > c.undo_depth {
-            *bytes -= dst.pop_front().map_or(0, |b| b.bytes());
+            dst.pop_front();
         }
+        // a region's size changes as it is carried (theirs, U10 v1.7): counted afresh
+        *bytes = undo.iter().chain(redo.iter()).map(Batch::bytes).sum();
         // over the byte bound: drop this pid's oldest batches, either stack
         while *bytes > c.undo_max_bytes {
             let from_undo = match (undo.front(), redo.front()) {
@@ -2203,29 +2262,57 @@ impl Session {
     /// Apply one change to the in-memory doc and carry every stored position through it.
     /// Hunks are validated and made canonical (touching hunks coalesced) first. Nothing is
     /// logged here. `Ok(None)` when it changes nothing; an error changes nothing.
-    fn apply_local(&self, st: &mut State, i: usize, edits: Vec<Edit>) -> Result<Option<Applied>> {
+    ///
+    /// `restores` (an undo, redo or revert): per edit, per hunk, the roots of the elements it
+    /// puts back (U23); every other insertion is fresh, its own root. The provenance map
+    /// follows exactly: the new elements' IDs are the member's next clocks in the engine
+    /// adapter's order ([`crate::engine::insert_clocks`]), and each restored run gets a
+    /// provenance row ([`Applied::prov_rows`]).
+    fn apply_local(
+        &self,
+        st: &mut State,
+        i: usize,
+        edits: Vec<Edit>,
+        restores: Option<Vec<Option<Vec<Ids>>>>,
+    ) -> Result<Option<Applied>> {
         let client = st.members[i].client;
         let pid = st.members[i].p.pid.clone();
         let mut canon = Vec::with_capacity(edits.len());
+        let mut roots_of: Vec<Option<Vec<Ids>>> = Vec::with_capacity(edits.len());
+        let mut restores = restores.map(Vec::into_iter);
         for e in edits {
             let Edit::Text { root, hunks } = e;
             let (_, text) = self.text_of(st, &root)?;
             diff::validate(text, &hunks).map_err(DocError::from)?;
-            canon.push(Edit::Text {
-                root,
-                hunks: diff::coalesce(hunks),
-            });
+            let r = restores.as_mut().and_then(Iterator::next).flatten();
+            let (hunks, r) = match r {
+                Some(r) if r.len() == hunks.len() => {
+                    let (h, r) = coalesce_with(hunks, r);
+                    (h, Some(r))
+                }
+                Some(_) => {
+                    debug_assert!(false, "restored roots don't fit the hunks");
+                    (diff::coalesce(hunks), None)
+                }
+                None => (diff::coalesce(hunks), None),
+            };
+            canon.push(Edit::Text { root, hunks });
+            roots_of.push(r);
         }
+        // the map is needed to name what the change deletes (built once per load)
+        self.prov(st)?;
         let clock_before = st.doc.clock_of(client);
         let Some(update) = st.doc.edit_as(client, &canon)? else {
             return Ok(None);
         };
+        let firsts = crate::engine::insert_clocks(clock_before, &canon);
         let mut a = Applied {
             span: Some((clock_before, st.doc.clock_of(client))),
             update,
             roots: Vec::new(),
             regions: Vec::new(),
             record: Vec::new(),
+            prov_rows: Vec::new(),
             kind: ChangeKind::Edit,
             of: None,
             changed: Vec::new(),
@@ -2233,7 +2320,8 @@ impl Session {
             removed: 0,
             last_end: None,
         };
-        for e in canon {
+        let mut prov = st.prov.take().expect("built above");
+        for ((e, restored), firsts) in canon.into_iter().zip(roots_of).zip(firsts) {
             let Edit::Text { root, hunks } = e;
             if hunks.is_empty() {
                 continue;
@@ -2242,9 +2330,49 @@ impl Session {
             let before = std::mem::take(&mut st.texts[ti].1);
             let after = diff::apply(&before, &hunks);
             debug_assert_eq!(Ok(after.as_str()), st.doc.text(&root).as_deref());
-            a.regions.extend(Region::of_change(&root, &before, &hunks));
-            a.record
-                .push(record_root(&root, &before, after.is_empty(), &hunks));
+            // per hunk: the roots it deletes, what it inserts (its IDs, the roots it puts
+            // back), and the provenance rows of what it puts back
+            let mut pairs = Vec::with_capacity(hunks.len());
+            let mut ins = Vec::with_capacity(hunks.len());
+            for (k, h) in hunks.iter().enumerate() {
+                let id = ElemId::new(client, firsts[k]);
+                let deleted = prov.roots(&root, &before, h.start, h.end);
+                let put_back = restored
+                    .as_ref()
+                    .map(|r| r[k].clone())
+                    .filter(|r| !h.insert.is_empty() && !r.is_empty());
+                let inserted = match &put_back {
+                    Some(r) => {
+                        let mut off = 0u32;
+                        for run in r.runs() {
+                            a.prov_rows.push(ProvRow {
+                                client,
+                                start: id.clock + off,
+                                end: id.clock + off + run.units,
+                                root: (run.start.client, run.start.clock),
+                            });
+                            off += run.units;
+                        }
+                        r.clone()
+                    }
+                    None => Ids::fresh(&h.insert, id),
+                };
+                pairs.push((deleted, inserted));
+                ins.push(Inserted {
+                    id,
+                    roots: put_back,
+                });
+            }
+            prov.apply(&root, &before, &hunks, &ins);
+            a.record.push(record_root(
+                &root,
+                &before,
+                after.is_empty(),
+                &hunks,
+                Some(&pairs),
+            ));
+            a.regions
+                .extend(Region::of_change(&root, &before, &hunks, Some(pairs)));
             // the owner's own edit touching a claim ends it once durable (unless held)
             for c in st.aware.claims.iter_mut() {
                 if c.pid == pid && !c.hold && c.touched_by(&root, &hunks) {
@@ -2272,6 +2400,7 @@ impl Session {
             st.texts[ti].1 = after;
             a.roots.push((root, hunks));
         }
+        st.prov = Some(prov);
         // the revert index has been carried past this change: add its own regions
         if let Some(ix) = st.reverts.as_mut() {
             let r: Vec<(String, usize, usize)> = a
@@ -2282,6 +2411,42 @@ impl Session {
             ix.stage(&r);
         }
         Ok(Some(a))
+    }
+
+    /// The provenance map, built on first need from the engine's blame runs (each live
+    /// element's ID) and the store's provenance rows (the roots of restored elements):
+    /// O(doc) once per load, then kept exact by every change the session applies.
+    fn prov<'a>(&self, st: &'a mut State) -> Result<&'a mut Prov> {
+        if st.prov.is_none() {
+            let store = self.store(st)?.clone();
+            let broken =
+                |why: &str| SessionError::Doc(DocError::Apply(format!("provenance: {why}")));
+            let mut built = Vec::with_capacity(st.texts.len());
+            for (root, text) in &st.texts {
+                let runs = st.doc.blame_runs(root)?;
+                let mut q = Vec::with_capacity(runs.len());
+                let mut at = 0usize;
+                for r in &runs {
+                    let e = at + r.bytes;
+                    let t = text
+                        .get(at..e)
+                        .ok_or_else(|| broken("the engine's runs don't fit the text"))?;
+                    q.push((r.client, r.clock, r.clock + t.encode_utf16().count() as u32));
+                    at = e;
+                }
+                if at != text.len() {
+                    return Err(broken("the engine's runs don't cover the text"));
+                }
+                let rows = store.provenance_rows(self.doc_id, &q)?;
+                built.push((
+                    *root,
+                    text.as_str(),
+                    super::prov::live_runs(text, &runs, &rows),
+                ));
+            }
+            st.prov = Some(Prov::build(built));
+        }
+        Ok(st.prov.as_mut().expect("just built"))
     }
 
     /// Carry every stored position (carets, views, undo regions, revert records) through a
@@ -2361,6 +2526,7 @@ impl Session {
                 }
                 st.loaded_seq = version;
                 st.reverts = None;
+                st.prov = None;
                 self.reload_disk(st);
                 self.emit(AuditEvent::Recovered {
                     key: st.key.clone(),
@@ -2506,6 +2672,7 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn apply_raw_for_tests(&self, update: &[u8]) -> Result<()> {
         let mut st = self.lock()?;
+        st.prov = None;
         Ok(st.doc.apply_trusted(update)?)
     }
 
@@ -3012,6 +3179,9 @@ impl Session {
             st.doc.apply_trusted(&u)?;
             Ok((u, replica_state))
         });
+        // the outside edit is merged, not applied at known positions: the provenance map is
+        // rebuilt on next need (its inserted elements are fresh, their own roots)
+        st.prov = None;
         let (update, replica_state) = match made {
             Ok(u) => u,
             Err(e) => {
@@ -3050,7 +3220,9 @@ impl Session {
             let (a, r) = summary::line_counts(old, new, hunks);
             info.lines_added += a as u64;
             info.lines_removed += r as u64;
-            record.push(record_root(root, old, new.is_empty(), hunks));
+            // its hunks are a diff of the texts, not element positions: no roots (reverted
+            // as before provenance, U22)
+            record.push(record_root(root, old, new.is_empty(), hunks, None));
         }
         let change = NewChange {
             info,
@@ -3065,6 +3237,7 @@ impl Session {
                 start: clock_before,
                 end: st.doc.clock_of(client),
             }),
+            provenance: Vec::new(),
         };
         versions.push(Version {
             seq,
@@ -3309,21 +3482,43 @@ struct Step {
     kind: ChangeKind,
     /// A restore's version, a revert's change.
     of: Option<u64>,
+    /// An undo, redo or revert: per edit, per hunk, the roots it puts back (U23).
+    restores: Option<Vec<Option<Vec<Ids>>>>,
 }
 
-/// One root of a change's revert record: its canonical hunks with the deleted text.
-fn record_root(root: &str, before: &str, empty_after: bool, hunks: &[Hunk]) -> RecordRoot {
+/// Ids as the store keeps roots.
+fn root_runs(ids: &Ids) -> RootRuns {
+    ids.runs()
+        .iter()
+        .map(|r| (r.bytes, r.units, r.start.client, r.start.clock))
+        .collect()
+}
+
+/// One root of a change's revert record: its canonical hunks with the deleted text and,
+/// when known, per hunk the roots of what it deleted and of what it inserted (record v2).
+fn record_root(
+    root: &str,
+    before: &str,
+    empty_after: bool,
+    hunks: &[Hunk],
+    roots: Option<&[(Ids, Ids)]>,
+) -> RecordRoot {
     RecordRoot {
         root: root.to_owned(),
         empty_after,
         hunks: hunks
             .iter()
-            .map(|h| RecordHunk {
+            .enumerate()
+            .map(|(k, h)| RecordHunk {
                 start: h.start as u64,
                 end: h.end as u64,
                 insert: h.insert.clone(),
                 deleted: before[h.start..h.end].to_owned(),
                 redacted: false,
+                roots: roots.map(|r| HunkRoots {
+                    deleted: root_runs(&r[k].0),
+                    inserted: root_runs(&r[k].1),
+                }),
             })
             .collect(),
     }
@@ -3336,6 +3531,8 @@ struct Applied {
     roots: Vec<(String, Vec<Hunk>)>,
     regions: Vec<Region>,
     record: Vec<RecordRoot>,
+    /// The provenance rows of the elements it put back (U23).
+    prov_rows: Vec<ProvRow>,
     kind: ChangeKind,
     of: Option<u64>,
     changed: Vec<LineRange>,

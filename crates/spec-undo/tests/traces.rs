@@ -25,6 +25,11 @@ fn run_many_with(
     let (mut rr, mut rx, mut tr, mut tx, mut reverts) = (0u64, 0u64, 0u64, 0u64, 0u64);
     let mut hunk_diffs = Vec::new();
     let (mut traces, mut steps) = (0u64, 0usize);
+    let mut restore_parts: BTreeMap<&'static str, u64> = BTreeMap::new();
+    let mut own_only: BTreeMap<&'static str, u64> = ["own_only_checked", "own_only_unresolved"]
+        .into_iter()
+        .map(|k| (k, 0))
+        .collect();
     let results: Vec<trace::TraceResult> = std::thread::scope(|sc| {
         let workers: Vec<_> = (0..THREADS)
             .map(|k| {
@@ -54,6 +59,12 @@ fn run_many_with(
         tx += r.touching_revert_extra;
         reverts += r.reverts_checked;
         hunk_diffs.extend(r.hunk_diff);
+        for (k, n) in r.restore_parts {
+            *restore_parts.entry(k).or_default() += n;
+        }
+        for (k, n) in r.own_only {
+            *own_only.entry(k).or_default() += n;
+        }
         mismatches.extend(r.mismatch);
     }
     mismatches.sort_by_key(|m: &trace::Mismatch| m.seed);
@@ -62,6 +73,8 @@ fn run_many_with(
     for (c, n) in &classes {
         println!("  {c:32} {n}");
     }
+    println!("concurrent restores of one root, by part (v1.8): {restore_parts:?}");
+    println!("U10a by root on the kit (v1.8): {own_only:?}");
     let pct = |x: u64, n: u64| {
         if n == 0 {
             0.0
@@ -77,7 +90,7 @@ fn run_many_with(
         pct(tx, tr)
     );
     println!(
-        "traces whose applied hunks differ (same text; diagnostic): {}",
+        "traces whose applied hunks differ (a mismatch since v1.7): {}",
         hunk_diffs.len()
     );
     for d in hunk_diffs.iter().take(3) {
@@ -115,6 +128,14 @@ fn run_many_with(
         missing.is_empty(),
         "case classes under {min_per_class} hits: {missing:?}"
     );
+}
+
+/// The trace count: `SPEC_UNDO_TRACES`, else `default`.
+fn traces_or(default: u64) -> u64 {
+    std::env::var("SPEC_UNDO_TRACES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 /// Regression for finding F1 (fixed in v0.8.1): two participants append the same line;
@@ -162,7 +183,7 @@ fn u22a_revert_inherits_a_tainted_neighbour() {
 #[test]
 fn restart_transparency() {
     run_many_with(
-        0..64,
+        0..traces_or(64),
         &[
             "revert_restart_transparent",
             "revert_after_restart",
@@ -174,9 +195,12 @@ fn restart_transparency() {
 }
 
 /// 256 traces, every case class hit at least once.
+///
+/// `SPEC_UNDO_TRACES=<n>` runs `n` traces instead (here and in [`restart_transparency`]):
+/// a quick local look; the class minimum still applies.
 #[test]
 fn trace_equivalence() {
-    run_many(0..256, 1);
+    run_many(0..traces_or(256), 1);
 }
 
 /// The nodes' run: traces until every class has 10^4 hits (spec §8 Volume). Not run here.

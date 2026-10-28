@@ -469,6 +469,8 @@ impl Session {
         st.doc = doc;
         st.hash_key = key;
         st.reverts = None;
+        // the re-encoded doc keeps every live element's ID; rebuilt on next need anyway
+        st.prov = None;
         st.log_entries = 0;
         st.log_bytes = 0;
         st.state_bytes = state.len() as u64;

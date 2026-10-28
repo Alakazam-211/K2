@@ -12,12 +12,19 @@
 //!   applied (not the skipped ones), as one batch by the redoer; `--steps 2` redoes in
 //!   order; another participant's batch leaves your redo stack alone; your own new batch
 //!   clears it.
-//! - `hist.undo_own_only` (undo spec U2, U10 element identity, U18a), per **element**: every
-//!   element an undo, redo or revert by an agent deletes is that agent's (blame), and every
-//!   element it inserts is new and attributed to it. Repeated text is where a re-diff of the
-//!   window would pick someone else's identical characters (two identical appended lines;
-//!   a run `aaaa` grown by two agents): the text would look right and the elements would be
-//!   wrong.
+//! - `hist.undo_own_only` (undo spec U2, U10, U10a by root (v1.8), U18a, U23), per
+//!   **element**: an undo, redo or revert by an agent removes only elements whose
+//!   **provenance root** its reversed change inserted: here, every element it deletes has a
+//!   root that agent inserted, or is one that agent itself put back (a redo removing what
+//!   its undo restored); every element it inserts is new and attributed to it. Repeated
+//!   text is where a re-diff of the window would pick someone else's identical characters
+//!   (two identical appended lines; a run `aaaa` grown by two agents): the text would look
+//!   right and the elements would be wrong. An insertion at a region's start repeating its
+//!   text (finding F3): undo, redo and revert merge exact hunk sets (undo spec v1.7, U10),
+//!   never diffs of strings. And text read **by root** (v1.8): a change undone and redone
+//!   has its roots live again, so its revert applies (regression (a)); when another agent
+//!   edits inside a region and undoes it, what it put back has the region's roots, so the
+//!   region's own undo applies (regression (b)).
 
 use std::collections::BTreeSet;
 
@@ -372,8 +379,9 @@ fn elements<U: Undo>(d: &U) -> Vec<(usize, ElemBlame)> {
         .collect()
 }
 
-/// Run `op` as `who`; every element it deleted must be `who`'s, every element it inserted
-/// new and `who`'s.
+/// Run `op` as `who`; every element it deleted must have a root `who` inserted, or be an
+/// element `who` put back itself (U10a by root, v1.8); every element it inserted new and
+/// `who`'s.
 fn own_only<U: Undo>(
     d: &mut U,
     who: u64,
@@ -390,10 +398,16 @@ fn own_only<U: Undo>(
     };
     let (was, now) = (ids(&before), ids(&after));
     for (r, b) in before.iter().filter(|(r, b)| !now.contains(&(*r, b.id))) {
-        assert_eq!(
-            b.agent, who,
-            "{e}: {what} by {who} deleted root {r}'s {:?} of agent {} (change {:?}), not its own",
-            b.ch, b.agent, b.change
+        assert!(
+            b.root_agent == who || b.agent == who,
+            "{e}: {what} by {who} deleted root {r}'s {:?} of agent {} (change {:?}) whose \
+             provenance root is agent {}'s (change {:?}): neither its own root nor its own \
+             restoration",
+            b.ch,
+            b.agent,
+            b.change,
+            b.root_agent,
+            b.root_change
         );
     }
     for (r, b) in after.iter().filter(|(r, b)| !was.contains(&(*r, b.id))) {
@@ -424,7 +438,26 @@ pub fn undo_own_only<U: Undo>() {
     assert_eq!(d.texts()[0], "x\na\na\n", "{e}");
     own_only(&mut d, B, "undo", |d| d.undo(B, 1));
     assert_eq!(d.texts()[0], "x\na\n", "{e}");
+    // regression (a): c1's own line was undone and redone; the line there is the redo's, new
+    // elements (U18a) whose root is c1's (U23), so reverting c1 removes it (v1.7 conflicted)
     own_only(&mut d, A, "revert", |d| d.revert(A, c1));
+    assert_eq!(d.texts()[0], "x\n", "{e}");
+    assert!(
+        d.blame(0).iter().all(|b| b.root_agent != A),
+        "{e}: a root of c1 is still live"
+    );
+    // revert: two agents append the same line again; A's revert removes A's
+    edit(&mut d, A, &[(0, vec![ins(2, "a\n")])]);
+    let c2 = d
+        .blame(0)
+        .iter()
+        .find(|b| b.agent == A)
+        .and_then(|b| b.change)
+        .unwrap_or_else(|| panic!("{e}: no change id for A's line"));
+    edit(&mut d, B, &[(0, vec![ins(2, "a\n")])]);
+    own_only(&mut d, A, "revert", |d| d.revert(A, c2));
+    assert_eq!(d.texts()[0], "x\na\n", "{e}");
+    own_only(&mut d, B, "undo", |d| d.undo(B, 1));
     assert_eq!(d.texts()[0], "x\n", "{e}");
 
     // a run grown by two agents: `baab` -> `baaab` (A at 2) -> `baaaab` (B at 3)
@@ -435,4 +468,35 @@ pub fn undo_own_only<U: Undo>() {
     assert_eq!(d.texts()[1], "baab\n", "{e}");
     own_only(&mut d, B, "redo", |d| d.redo(B, 1));
     own_only(&mut d, A, "redo", |d| d.redo(A, 1));
+
+    // F3 (undo spec v1.7, exact hunk sets): A replaces `x` with `b`; B inserts `b` right in
+    // front of it, at the region's start. A's undo turns back its own `b` and leaves B's
+    // (a merge on diffed sides put B's `b` after A's and deleted it), so B's undo applies.
+    edit(&mut d, A, &[(0, vec![rep(0, 1, "b")])]);
+    edit(&mut d, B, &[(0, vec![ins(0, "b")])]);
+    own_only(&mut d, A, "undo", |d| d.undo(A, 1));
+    assert_eq!(d.texts()[0], "bx\n", "{e}: B's b stays in front");
+    own_only(&mut d, B, "undo", |d| d.undo(B, 1));
+    assert_eq!(d.texts()[0], "x\n", "{e}");
+
+    // regression (b) (v1.8, by root): B edits inside A's region and undoes it. While B's
+    // edit stands, A's undo conflicts; once B undid it, what B put back is B's elements with
+    // A's roots, so A's undo applies and removes them (they are A's by root).
+    edit(&mut d, A, &[(0, vec![rep(0, 1, "AAA")])]);
+    edit(&mut d, B, &[(0, vec![rep(1, 2, "B")])]);
+    assert_eq!(d.texts()[0], "ABA\n", "{e}");
+    assert!(
+        matches!(d.undo(A, 1), Err(UndoRefusal::Conflicts { .. })),
+        "{e}: A's undo over B's live edit"
+    );
+    own_only(&mut d, B, "undo", |d| d.undo(B, 1));
+    assert_eq!(d.texts()[0], "AAA\n", "{e}");
+    let mid = d.blame(0)[1].clone();
+    assert_eq!(
+        (mid.agent, mid.root_agent),
+        (B, A),
+        "{e}: B's restoration is rooted at A's element"
+    );
+    own_only(&mut d, A, "undo", |d| d.undo(A, 1));
+    assert_eq!(d.texts()[0], "x\n", "{e}");
 }

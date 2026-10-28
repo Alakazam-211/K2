@@ -455,7 +455,7 @@ fn v1_log_records_load_from_a_store() {
 }
 
 #[test]
-fn older_formats_are_stamped_4_and_newer_refused() {
+fn older_formats_are_stamped_current_and_newer_refused() {
     let d = TmpDir::new("format");
     {
         let s = DocStore::open(d.db()).unwrap();
@@ -477,18 +477,18 @@ fn older_formats_are_stamped_4_and_newer_refused() {
             .unwrap()
             .value();
         assert_eq!(f, STORE_FORMAT);
-        assert_eq!(STORE_FORMAT, 4);
+        assert_eq!(STORE_FORMAT, 5);
         drop(r);
         let w = s.begin_write().unwrap();
         w.open_table(META)
             .unwrap()
-            .insert("store_format", 5u64)
+            .insert("store_format", 6u64)
             .unwrap();
         w.commit().unwrap();
     }
     assert!(matches!(
         DocStore::open(d.db()),
-        Err(StoreError::Newer { found: 5 })
+        Err(StoreError::Newer { found: 6 })
     ));
 }
 
@@ -605,7 +605,7 @@ fn a_format_3_store_is_upgraded_in_place_with_its_approvals() {
         .unwrap()
         .unwrap()
         .value();
-    assert_eq!(f, 4);
+    assert_eq!(f, STORE_FORMAT);
     drop(r);
     assert_eq!(
         s.blob_approvals(id).unwrap(),
@@ -623,6 +623,102 @@ fn a_format_3_store_is_upgraded_in_place_with_its_approvals() {
     // the rewrite copies the new table (it refuses tables it doesn't know)
     s.rewrite_file().unwrap();
     assert_eq!(s.blob_approvals(id).unwrap().len(), 2);
+}
+
+/// Format 4 → 5 in place (the store layer; `tests/history.rs` reopens a session on such a
+/// store): the provenance table is created in the open's transaction, nothing is backfilled
+/// (every existing element is its own root), version-1 revert records still decode (with
+/// unknown roots) and version-2 ones round-trip; the rewrite copies the new table, and a
+/// delete erases its rows.
+#[test]
+fn a_format_4_store_is_upgraded_in_place_with_provenance() {
+    use super::history::{dec_record, enc_record, PROVENANCE};
+    use super::{HunkRoots, NewChange, ProvRow, RecordHunk, RecordRoot, RevertRecord};
+    let d = TmpDir::new("format-4-5");
+    let rec = |roots: Option<HunkRoots>| RevertRecord {
+        author: "a".into(),
+        on_behalf_of: None,
+        at_ms: 5,
+        roots: vec![RecordRoot {
+            root: "source".into(),
+            empty_after: false,
+            hunks: vec![RecordHunk {
+                start: 0,
+                end: 1,
+                insert: "xy".into(),
+                deleted: "q".into(),
+                redacted: false,
+                roots,
+            }],
+        }],
+    };
+    // version 1, as a format-4 build wrote it: decodes with unknown roots
+    let v1: Vec<u8> = {
+        let mut b = enc_record(&rec(None));
+        b[0] = 1;
+        let n = b.len();
+        b.truncate(n - 1); // version 1 has no roots byte
+        b
+    };
+    assert_eq!(dec_record(&v1).unwrap(), rec(None));
+    let with = rec(Some(HunkRoots {
+        inserted: vec![(2, 2, 7, 0)],
+        deleted: vec![(1, 1, 3, 4)],
+    }));
+    assert_eq!(dec_record(&enc_record(&with)).unwrap(), with);
+    let id = {
+        let s = DocStore::open(d.db()).unwrap();
+        let id = s.create(&meta("p.md")).unwrap();
+        // what a format-4 store holds: no provenance table, stamped 4
+        let w = s.begin_write().unwrap();
+        assert!(w.delete_table(PROVENANCE).unwrap());
+        w.open_table(META)
+            .unwrap()
+            .insert("store_format", 4u64)
+            .unwrap();
+        w.commit().unwrap();
+        id
+    };
+    let s = DocStore::open(d.db()).unwrap();
+    {
+        let r = s.begin_read().unwrap();
+        let f = r.open_table(META).unwrap();
+        assert_eq!(f.get("store_format").unwrap().unwrap().value(), 5);
+        assert_eq!(r.open_table(PROVENANCE).unwrap().iter().unwrap().count(), 0);
+    }
+    assert!(s.provenance_rows(id, &[(7, 0, 9)]).unwrap()[0].is_empty());
+    // a change with provenance rows: written with it, read back by clock range
+    let entry = LogEntry {
+        author: "a".into(),
+        client: 7,
+        at_ms: 5,
+        via: "cli".into(),
+        update: vec![1],
+        on_behalf_of: None,
+    };
+    let change = NewChange {
+        info: ChangeInfo::new(ChangeKind::Undo, "a", "cli", 5),
+        record: with,
+        span: None,
+        provenance: vec![ProvRow {
+            client: 7,
+            start: 2,
+            end: 5,
+            root: (3, 10),
+        }],
+    };
+    s.commit_changes(id, &[entry], &[change], &[]).unwrap();
+    let got = s
+        .provenance_rows(id, &[(7, 4, 6), (7, 5, 9), (8, 0, 9)])
+        .unwrap();
+    assert_eq!(got[0].len(), 1);
+    assert_eq!(got[0][0].root, (3, 10));
+    assert!(got[1].is_empty() && got[2].is_empty());
+    s.rewrite_file().unwrap();
+    assert_eq!(s.provenance_rows(id, &[(7, 0, 3)]).unwrap()[0].len(), 1);
+    assert!(s.tables_holding(id).unwrap().contains(&"provenance"));
+    s.delete_doc(id, 100).unwrap();
+    assert!(s.tables_holding(id).unwrap().is_empty());
 }
 
 #[test]

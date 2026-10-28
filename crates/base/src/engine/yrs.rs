@@ -153,6 +153,33 @@ fn to_utf16(text: &str, hunks: &[Hunk]) -> Vec<(u32, u32)> {
     out
 }
 
+/// The first engine clock of each hunk's inserted text when `client`, whose clock is
+/// `clock_before`, applies `edits` (canonical hunks) through [`EngineDoc::edit_as`]: per
+/// edit, per hunk **in hunk order**, the clock its insertion starts at (for a hunk that
+/// inserts nothing, the clock it would have started at). Clocks count UTF-16 code units.
+///
+/// This is this adapter's own order, and only its: `edit_as` applies the roots in edit order
+/// and each root's hunks **back to front**, and every non-empty insertion takes the next
+/// consecutive clocks (deletions take none). The kit names the elements a change inserts by
+/// it (undo spec U23: provenance of restored text), so a test cross-checks it against
+/// [`EngineDoc::blame_runs`].
+pub(crate) fn insert_clocks(clock_before: u32, edits: &[Edit]) -> Vec<Vec<u32>> {
+    let mut next = clock_before;
+    edits
+        .iter()
+        .map(|e| match e {
+            Edit::Text { hunks, .. } => {
+                let mut out = vec![0u32; hunks.len()];
+                for (k, h) in hunks.iter().enumerate().rev() {
+                    out[k] = next;
+                    next += h.insert.encode_utf16().count() as u32;
+                }
+                out
+            }
+        })
+        .collect()
+}
+
 impl YrsDoc {
     fn has_pending(&self) -> bool {
         let txn = self.doc.transact();
@@ -913,6 +940,72 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(matches!(e.blame_runs("nope"), Err(DocError::NoRoot { .. })));
+    }
+
+    /// `insert_clocks` is the order `edit_as` really uses: every inserted character's
+    /// (client, clock), read back through `blame_runs`, is the one it predicts, across
+    /// roots, several hunks per root, deletions and multi-unit characters.
+    #[test]
+    fn insert_clocks_match_blame_runs() {
+        const TWO: Schema = Schema {
+            name: "t2",
+            roots: &[("a", Kind::Text), ("b", Kind::Text)],
+        };
+        let h = |start, end, insert: &str| Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        };
+        let mut d = Doc::new(TWO).unwrap();
+        d.replace_text_as(500, "a", "one two three\n").unwrap();
+        d.replace_text_as(500, "b", "αβγ\n").unwrap();
+        // client 600 already has clocks: its next change starts past them
+        d.replace_text_as(600, "b", "αβγ\nz").unwrap();
+        let edits = vec![
+            Edit::Text {
+                root: "b".into(),
+                hunks: vec![h(0, 2, "🎉"), h(4, 4, "xy"), h(7, 8, "")],
+            },
+            Edit::Text {
+                root: "a".into(),
+                hunks: vec![h(0, 0, "A"), h(4, 7, "TWO🎉"), h(14, 14, "end")],
+            },
+        ];
+        let before: Vec<String> = ["a", "b"].iter().map(|r| d.text(r).unwrap()).collect();
+        let clock = d.clock_of(600);
+        let want = insert_clocks(clock, &edits);
+        d.edit_as(600, &edits).unwrap();
+        let mut total = 0;
+        for (e, starts) in edits.iter().zip(&want) {
+            let Edit::Text { root, hunks } = e;
+            let text = d.text(root).unwrap();
+            let runs = d.blame_runs(root).unwrap();
+            // each live byte offset's (client, clock)
+            let mut at: Vec<(usize, u64, u32)> = Vec::new();
+            let mut b = 0;
+            for r in &runs {
+                let mut c = r.clock;
+                for (i, ch) in text[b..b + r.bytes].char_indices() {
+                    at.push((b + i, r.client, c));
+                    c += ch.len_utf16() as u32;
+                }
+                b += r.bytes;
+            }
+            let mut delta: isize = 0;
+            for (hk, &c0) in hunks.iter().zip(starts) {
+                let s = (hk.start as isize + delta) as usize;
+                let mut c = c0;
+                for (i, ch) in hk.insert.char_indices() {
+                    let got = at.iter().find(|x| x.0 == s + i).unwrap();
+                    assert_eq!((got.1, got.2), (600, c), "{root}: {hk:?} char {i}");
+                    c += ch.len_utf16() as u32;
+                }
+                total += hk.insert.encode_utf16().count() as u32;
+                delta += hk.insert.len() as isize - (hk.end - hk.start) as isize;
+            }
+        }
+        assert_eq!(d.clock_of(600), clock + total);
+        assert_ne!(before[0], d.text("a").unwrap());
     }
 
     #[test]

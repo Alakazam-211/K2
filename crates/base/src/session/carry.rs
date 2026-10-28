@@ -861,6 +861,7 @@ mod tests {
                             insert: h.insert.clone(),
                             deleted: "?".repeat(h.end - h.start),
                             redacted: false,
+                            roots: None,
                         })
                         .collect(),
                 }],
@@ -877,6 +878,7 @@ mod tests {
                 info: ChangeInfo::new(ChangeKind::Edit, "a", "t", 0),
                 record: rec,
                 span: None,
+                provenance: Vec::new(),
             };
             let seqs = store.commit_changes(id, &[entry], &[change], &[]).unwrap();
             live.bind(&seqs);

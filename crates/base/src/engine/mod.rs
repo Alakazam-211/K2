@@ -6,7 +6,7 @@
 
 mod yrs;
 
-pub(crate) use self::yrs::YrsDoc;
+pub(crate) use self::yrs::{insert_clocks, YrsDoc};
 
 /// A relative position in a text root (the conformance suite's anchors only).
 #[cfg(feature = "conformance")]

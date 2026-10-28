@@ -81,9 +81,10 @@ export PATH=$ROOT/q/node_modules/.bin:$PATH
 export NODE_OPTIONS=--max-old-space-size=${NODE_HEAP_MB:-4096}
 echo "quint $(quint --version)"
 q() { quint "$@"; }
-# inst NAME PIDS EVENTS UNDOS REVERTS MAXLEN "INIT" MULTI PURGE MUTANT: an instance of `undo`
-# (INIT like "0, 1, 1"; MULTI, PURGE true|false; MUTANT none or a mutant's name)
-params() { printf 'PIDS = %s, EVENTS = %s, UNDOS = %s, REVERTS = %s, MAXLEN = %s, INIT = [%s], MULTI = %s, PURGE = %s, REDUCE = true, MUTANT = "%s"' "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}"; }
+# inst NAME PIDS EVENTS UNDOS REVERTS MAXLEN "INIT" MULTI PURGE MUTANT [RESTARTS]: an instance
+# of `undo` (INIT like "0, 1, 1"; MULTI, PURGE true|false; MUTANT none or a mutant's name;
+# RESTARTS default 0)
+params() { printf 'PIDS = %s, EVENTS = %s, UNDOS = %s, REVERTS = %s, RESTARTS = %s, MAXLEN = %s, INIT = [%s], MULTI = %s, PURGE = %s, REDUCE = true, MUTANT = "%s"' "$2" "$3" "$4" "$5" "${11:-0}" "$6" "$7" "$8" "$9" "${10}"; }
 inst() { printf 'module %s {\n  import undo(%s).* from "./undo"\n}\n' "$1" "$(params "$@")" > "$1.qnt"; }
 # itfinst NAME ...same...: the instance plus `act` and `out` (the ITF wrapper; init winit, step wstep)
 itfinst() { sed -e "s|__NAME__|$1|" -e "s|__PARAMS__|$(params "$@")|" "$ROOT/tools/undo/itf.qnt.in" > "$1.qnt"; }

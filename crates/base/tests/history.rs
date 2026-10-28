@@ -773,6 +773,458 @@ fn revert_after_restart_keeps_each_edges_taint() {
     assert_eq!(run(true), want, "a restart changed the revert's outcome");
 }
 
+// ---------- exact hunk sets (undo spec v1.7, U10; finding F3) ----------
+
+/// One hunk on the root, as an explicit `edit`.
+fn hunk_at(s: &Session, c: ConnId, start: usize, end: usize, insert: &str) -> u64 {
+    use k2_mpc_base::text::Hunk;
+    use k2_mpc_base::Edit;
+    let e = Edit::Text {
+        root: ROOT.into(),
+        hunks: vec![Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        }],
+    };
+    s.edit(c, vec![e], None).unwrap().version
+}
+
+/// The live elements as `(pid, client, clock, root pid)`; with feature `conformance` only.
+#[cfg(feature = "conformance")]
+fn elements(s: &Session) -> Vec<(Option<String>, u64, u32, Option<String>)> {
+    s.char_blame(ROOT)
+        .unwrap()
+        .into_iter()
+        .map(|b| (b.pid, b.client, b.clock, b.root_pid))
+        .collect()
+}
+
+/// Run `op`; every element it removed must be one whose **root** is `who`'s, or one `who`
+/// put back itself (a redo removing what its undo restored): `hist.undo_own_only` by root
+/// (undo spec v1.8, U10a).
+fn own_only<T>(s: &Session, who: &str, op: impl FnOnce() -> T) -> T {
+    #[cfg(feature = "conformance")]
+    let before = elements(s);
+    let out = op();
+    #[cfg(feature = "conformance")]
+    {
+        let after = elements(s);
+        for e in before.iter().filter(|e| !after.contains(e)) {
+            assert!(
+                e.3.as_deref() == Some(who) || e.0.as_deref() == Some(who),
+                "{who} removed {e:?}, neither its root nor its own restoration"
+            );
+        }
+    }
+    let _ = (s, who);
+    out
+}
+
+/// I1 (undo spec v1.8): at most one live element per provenance root; with feature
+/// `conformance` only.
+fn assert_i1(s: &Session) {
+    #[cfg(feature = "conformance")]
+    {
+        let mut seen = std::collections::HashSet::new();
+        for b in s.char_blame(ROOT).unwrap() {
+            assert!(
+                seen.insert((b.root_client, b.root_clock)),
+                "I1: two live elements of root {:?}: {:?}",
+                (b.root_client, b.root_clock),
+                s.char_blame(ROOT).unwrap()
+            );
+        }
+    }
+    let _ = s;
+}
+
+/// The root pid of each live character; with feature `conformance` only (else empty).
+fn root_pids(s: &Session) -> Vec<(char, Option<String>)> {
+    #[cfg(feature = "conformance")]
+    return s
+        .char_blame(ROOT)
+        .unwrap()
+        .into_iter()
+        .map(|b| (b.ch, b.root_pid))
+        .collect();
+    #[cfg(not(feature = "conformance"))]
+    {
+        let _ = s;
+        Vec::new()
+    }
+}
+
+fn applied(o: UndoOutcome) {
+    assert!(
+        matches!(o, UndoOutcome::Applied { ref skipped, .. } if skipped.is_empty()),
+        "{o:?}"
+    );
+}
+
+/// F3 (v0.8.2's finding): p2's insertion at the start of p1's region repeats its text. p1's
+/// undo must turn back **its own** `b`, leaving p2's, so p2's undo then applies cleanly.
+/// A merge on diffed sides put p2's `b` after the region's own and deleted it.
+#[test]
+fn undo_exact_hunks_f3_insertion_at_a_region_start() {
+    let f = fx("f3");
+    let s = f.open("f3.md", b"ab");
+    let p1 = f.join(&s, agent("p1"), Rights::editor());
+    let p2 = f.join(&s, agent("p2"), Rights::editor());
+    hunk_at(&s, p1, 0, 1, "b"); // "bb"
+    hunk_at(&s, p2, 0, 0, "b"); // "bbb": p2's b first
+    applied(own_only(&s, "p1", || s.undo(p1, 1).unwrap()));
+    assert_eq!(text(&s, p1), "bab", "p2's b stays in front");
+    applied(own_only(&s, "p2", || s.undo(p2, 1).unwrap()));
+    assert_eq!(text(&s, p1), "ab");
+    applied(own_only(&s, "p2", || s.redo(p2, 1).unwrap()));
+    applied(own_only(&s, "p1", || s.redo(p1, 1).unwrap()));
+    assert_eq!(text(&s, p1), "bbb");
+}
+
+/// Two identical lines: p2 inserts `a\n` right at the start of p1's appended `a\n`. Each
+/// undo removes its own line, by undo and by revert.
+#[test]
+fn undo_exact_hunks_repeated_lines() {
+    for by_revert in [false, true] {
+        let f = fx(if by_revert {
+            "rep-lines-r"
+        } else {
+            "rep-lines"
+        });
+        let s = f.open("l.md", b"x\n");
+        let p1 = f.join(&s, agent("p1"), Rights::editor());
+        let p2 = f.join(&s, agent("p2"), Rights::editor());
+        let c1 = hunk_at(&s, p1, 2, 2, "a\n"); // "x\na\n"
+        hunk_at(&s, p2, 2, 2, "a\n"); // "x\na\na\n": p2's line first
+        if by_revert {
+            applied(own_only(&s, "p1", || s.revert(p1, c1, false).unwrap()));
+        } else {
+            applied(own_only(&s, "p1", || s.undo(p1, 1).unwrap()));
+        }
+        assert_eq!(text(&s, p1), "x\na\n");
+        applied(own_only(&s, "p2", || s.undo(p2, 1).unwrap()));
+        assert_eq!(
+            text(&s, p1),
+            "x\n",
+            "both lines gone (by revert: {by_revert})"
+        );
+    }
+}
+
+/// A run `aaaa` grown by two participants at the same spot, undone each by its own, and a
+/// replaced run: `aa` → p1 replaces the second `a` with `aa`, p2 types `a` in front of it.
+#[test]
+fn undo_exact_hunks_a_run() {
+    let f = fx("run");
+    let s = f.open("r.md", b"aa");
+    let p1 = f.join(&s, agent("p1"), Rights::editor());
+    let p2 = f.join(&s, agent("p2"), Rights::editor());
+    hunk_at(&s, p1, 1, 1, "a"); // "aaa": p1's at 1
+    hunk_at(&s, p2, 1, 1, "a"); // "aaaa": p2's at 1, p1's at 2
+    applied(own_only(&s, "p1", || s.undo(p1, 1).unwrap()));
+    applied(own_only(&s, "p2", || s.undo(p2, 1).unwrap()));
+    assert_eq!(text(&s, p1), "aa");
+    applied(own_only(&s, "p2", || s.redo(p2, 1).unwrap()));
+    applied(own_only(&s, "p1", || s.redo(p1, 1).unwrap()));
+    assert_eq!(text(&s, p1), "aaaa");
+    // a replacement: p1's undo puts the seed's `a` back and leaves p2's `a` in front
+    let c = hunk_at(&s, p1, 1, 2, "bb"); // "abbaa"
+    hunk_at(&s, p2, 1, 1, "b"); // "abbbaa": p2's b in front of p1's
+    applied(own_only(&s, "p1", || s.revert(p1, c, false).unwrap()));
+    assert_eq!(text(&s, p1), "abaaa");
+    applied(own_only(&s, "p2", || s.undo(p2, 1).unwrap()));
+    assert_eq!(text(&s, p1), "aaaa");
+}
+
+// ---------- provenance: restored text by root (undo spec v1.8, U23) ----------
+
+/// Regression (a): a change undone and redone has its roots live again (the redo put them
+/// back), so its revert applies (v1.7 conflicted: the redo's elements were new). With and
+/// without a restart between the redo and the revert (roots come from the store then).
+#[test]
+fn revert_of_a_change_undone_and_redone_applies() {
+    for restart in [false, true] {
+        let mut f = fx(if restart { "prov-a-r" } else { "prov-a" });
+        let s = f.open("a.md", b"one\ntwo\n");
+        let a = f.join(&s, agent("a"), Rights::editor());
+        let b = f.join(&s, agent("b"), Rights::editor());
+        let c = replace(&s, a, "two", "TWO");
+        hunk_at(&s, b, 0, 0, "zero\n"); // someone else's change elsewhere
+        applied(own_only(&s, "a", || s.undo(a, 1).unwrap()));
+        applied(own_only(&s, "a", || s.redo(a, 1).unwrap()));
+        assert_eq!(text(&s, a), "zero\none\nTWO\n");
+        let (s, a) = if restart {
+            f.restart();
+            let s = f.reopen("a.md");
+            let a = f.join(&s, agent("a"), Rights::editor());
+            (s, a)
+        } else {
+            (s, a)
+        };
+        applied(own_only(&s, "a", || s.revert(a, c, false).unwrap()));
+        assert_eq!(text(&s, a), "zero\none\ntwo\n", "restart: {restart}");
+        assert_i1(&s);
+    }
+}
+
+/// Regression (b): b edits inside a's region and undoes it; what b put back has a's roots,
+/// so a's undo applies (v1.7 conflicted: b's restoration was b's elements). And a's revert
+/// of the same change applies too, after a restart (the roots from the store).
+#[test]
+fn undo_after_a_foreign_edit_inside_and_its_undo_applies() {
+    let mut f = fx("prov-b");
+    let s = f.open("b.md", b"one\ntwo\nthree\n");
+    let a = f.join(&s, agent("a"), Rights::editor());
+    let b = f.join(&s, agent("b"), Rights::editor());
+    let c = replace(&s, a, "three", "THREE");
+    replace(&s, b, "THREE", "THR3E");
+    // while b's edit stands, a's undo conflicts and changes nothing
+    assert!(matches!(
+        s.undo(a, 1).unwrap(),
+        UndoOutcome::Conflicts { step: 1, .. }
+    ));
+    applied(own_only(&s, "b", || s.undo(b, 1).unwrap()));
+    assert_eq!(text(&s, a), "one\ntwo\nTHREE\n");
+    if cfg!(feature = "conformance") {
+        // the `E` b put back is a new element of b's change, rooted at a's `E`
+        let r = root_pids(&s);
+        assert!(r
+            .iter()
+            .filter(|x| x.0 != '\n')
+            .skip(8)
+            .all(|x| x.1.as_deref() == Some("a")));
+    }
+    // a's undo applies (by root: its region is as a left it)
+    applied(own_only(&s, "a", || s.undo(a, 1).unwrap()));
+    assert_eq!(text(&s, a), "one\ntwo\nthree\n");
+    applied(own_only(&s, "a", || s.redo(a, 1).unwrap()));
+    assert_eq!(text(&s, a), "one\ntwo\nTHREE\n");
+    // after a restart (stacks lost), the revert of a's change applies the same way
+    f.restart();
+    let s = f.reopen("b.md");
+    let a = f.join(&s, agent("a"), Rights::editor());
+    applied(own_only(&s, "a", || s.revert(a, c, false).unwrap()));
+    assert_eq!(text(&s, a), "one\ntwo\nthree\n");
+    assert_i1(&s);
+}
+
+/// The duplication trap (I1, O4, O4a): b deletes a's `X`; b undoes it (`X1`, root `X`); c
+/// deletes `X1`; then c's undo and a's revert of b's delete both want root `X` back, in
+/// either order, mid-text and at the doc's end. The second finds it identical (O4: taken
+/// once, nothing changes), never a second live `X` (by element identity, mutant (x), the
+/// two would be different insertions, and at the doc's end both would land).
+#[test]
+fn concurrent_restores_of_one_root_keep_i1() {
+    for (seed, at, tag) in [(&b"aXb"[..], 1, "mid"), (&b"aX"[..], 1, "end")] {
+        for revert_first in [false, true] {
+            let f = fx(&format!("i1-{tag}-{revert_first}"));
+            let s = f.open("i.md", seed);
+            // a reverts b's change: an owner may
+            let a = f.join(&s, agent("a"), Rights::editor().with_owner(true));
+            let b = f.join(&s, agent("b"), Rights::editor());
+            let c = f.join(&s, agent("c"), Rights::editor());
+            // a's own X (not the import's): a writes it, then the trap
+            hunk_at(&s, a, at, at + 1, "X");
+            let want = text(&s, a);
+            let cb = hunk_at(&s, b, at, at + 1, "");
+            applied(own_only(&s, "b", || s.undo(b, 1).unwrap()));
+            assert_eq!(text(&s, a), want);
+            hunk_at(&s, c, at, at + 1, "");
+            let one = |s: &Session| {
+                let out = if revert_first {
+                    own_only(s, "a", || s.revert(a, cb, false).unwrap())
+                } else {
+                    own_only(s, "c", || s.undo(c, 1).unwrap())
+                };
+                assert!(matches!(out, UndoOutcome::Applied { .. }), "{tag}: {out:?}");
+            };
+            one(&s);
+            assert_eq!(text(&s, a), want, "{tag}: the first restore puts X back");
+            assert_i1(&s);
+            let v = s.status().unwrap().version;
+            let second = if revert_first {
+                own_only(&s, "c", || s.undo(c, 1).unwrap())
+            } else {
+                own_only(&s, "a", || s.revert(a, cb, false).unwrap())
+            };
+            // the second restore's window holds the first one's `X` where it would put `X`
+            // back, with the same root: O4, identical, taken once (nothing to apply). (A
+            // live root elsewhere is O4a's: `o4a_refuses_a_live_root_at_the_doc_end`.)
+            match &second {
+                UndoOutcome::Applied { skipped, .. } => {
+                    assert!(skipped.is_empty());
+                    assert_eq!(s.status().unwrap().version, v, "{tag}: nothing applied");
+                }
+                o => panic!("{tag}: {o:?}"),
+            }
+            assert_eq!(text(&s, a), want, "{tag}: never two live X");
+            assert_i1(&s);
+        }
+    }
+}
+
+/// O4a at the doc's end: the second restore of a root lands where O5 would let both
+/// insertions land (theirs is the live restoration followed by another append), so only
+/// O4a stops a second live `X`.
+#[test]
+fn o4a_refuses_a_live_root_at_the_doc_end() {
+    let f = fx("o4a-end");
+    let s = f.open("o.md", b"a");
+    let a = f.join(&s, agent("a"), Rights::editor().with_owner(true));
+    let b = f.join(&s, agent("b"), Rights::editor());
+    let c = f.join(&s, agent("c"), Rights::editor());
+    let d = f.join(&s, agent("d"), Rights::editor());
+    hunk_at(&s, a, 1, 1, "X"); // "aX"
+    let cb = hunk_at(&s, b, 1, 2, ""); // "a"
+    applied(own_only(&s, "b", || s.undo(b, 1).unwrap())); // "aX1"
+    hunk_at(&s, d, 2, 2, "Z"); // "aX1Z": appended, inside b's delete's carried window
+    hunk_at(&s, c, 1, 2, ""); // "aZ"
+    applied(own_only(&s, "c", || s.undo(c, 1).unwrap())); // "aX2Z"
+    assert_eq!(text(&s, a), "aXZ");
+    assert_i1(&s);
+    // a's revert of b's delete: theirs is `X2 Z` (roots X, Z), ours `X`: not identical, both
+    // at the end (O5 would land both), but X is live: O4a
+    match s.revert(a, cb, false).unwrap() {
+        UndoOutcome::Conflicts { conflicts, .. } => {
+            assert_eq!(conflicts.len(), 1);
+            assert_eq!(conflicts[0].kind, ConflictKind::Overlap);
+        }
+        o => panic!("{o:?}"),
+    }
+    assert_eq!(text(&s, a), "aXZ");
+    assert_i1(&s);
+}
+
+/// O4 is judged on (position, root), not on text: a fresh `X` someone typed where an undo
+/// would put `X` back is not that `X`. Mid-text it is a same-point conflict (O5); at the
+/// doc's end both land, the fresh one first (theirs), each its own root.
+#[test]
+fn o4_a_fresh_identical_text_is_not_the_restored_root() {
+    for (seed, tag) in [(&b"aXb"[..], "mid"), (&b"aX"[..], "end")] {
+        let f = fx(&format!("o4-{tag}"));
+        let s = f.open("o.md", seed);
+        let b = f.join(&s, agent("b"), Rights::editor());
+        let c = f.join(&s, agent("c"), Rights::editor());
+        hunk_at(&s, b, 1, 2, ""); // b deletes the import's X
+        hunk_at(&s, c, 1, 1, "X"); // c types a fresh X there
+        let before = text(&s, b);
+        let out = s.undo(b, 1).unwrap();
+        if tag == "mid" {
+            assert!(
+                matches!(&out, UndoOutcome::Conflicts { conflicts, .. }
+                    if conflicts[0].kind == ConflictKind::Overlap),
+                "{out:?}"
+            );
+            assert_eq!(text(&s, b), before);
+        } else {
+            applied(out);
+            assert_eq!(text(&s, b), "aXX");
+            if cfg!(feature = "conformance") {
+                let r = root_pids(&s);
+                assert_eq!(
+                    r[1..],
+                    [('X', Some("c".into())), ('X', Some("kit:import".into()))]
+                );
+            }
+        }
+        assert_i1(&s);
+    }
+}
+
+/// Blame by root (U18a) after a restart: the root's author and change, and the restorer,
+/// read from the store's provenance rows.
+#[test]
+fn blame_by_root_survives_a_restart() {
+    let mut f = fx("prov-blame");
+    let s = f.open("p.md", b"keep\n");
+    let a = f.join(&s, agent("a"), Rights::full());
+    let b = f.join(&s, agent("b"), Rights::full());
+    let c1 = replace(&s, a, "keep\n", "keep\nmine\n");
+    replace(&s, b, "mine\n", "");
+    let u = match s.undo(b, 1).unwrap() {
+        UndoOutcome::Applied { result, .. } => result.version,
+        o => panic!("{o:?}"),
+    };
+    let check = |s: &Session, c: ConnId| {
+        let bl = s.blame(c, ROOT, None).unwrap();
+        let l = &bl.lines[1];
+        assert_eq!(l.text, "mine");
+        assert_eq!(
+            (l.author.as_str(), l.change, l.kind),
+            ("a", Some(c1), Some(ChangeKind::Edit))
+        );
+        assert_eq!(
+            (l.restored_by.as_deref(), l.restored_in),
+            (Some("b"), Some(u))
+        );
+        assert_eq!(bl.lines[0].restored_by, None);
+    };
+    check(&s, a);
+    f.restart();
+    let s = f.reopen("p.md");
+    let a = f.join(&s, agent("a"), Rights::full());
+    check(&s, a);
+    assert_i1(&s);
+}
+
+/// Store format 4 → 5 on a session's store: stamp a store back to 4 and drop its (empty)
+/// provenance table, as a format-4 build left it; it opens, is stamped 5, and undo, revert
+/// and blame keep working (every existing element its own root).
+#[test]
+fn a_format_4_store_opens_and_keeps_working() {
+    use redb::{Database, ReadableTable, TableDefinition};
+    const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
+    const PROV: TableDefinition<(u64, u64, u64), &[u8]> = TableDefinition::new("provenance");
+    let mut f = fx("fmt4");
+    let c = {
+        let s = f.open("f.md", b"one\ntwo\n");
+        let a = f.join(&s, agent("a"), Rights::full());
+        replace(&s, a, "two", "TWO")
+    };
+    f.mgr.release().unwrap();
+    f.store = None;
+    {
+        let db = Database::open(f.dir.0.join("docs.redb")).unwrap();
+        let w = db.begin_write().unwrap();
+        assert!(w.delete_table(PROV).unwrap());
+        w.open_table(META)
+            .unwrap()
+            .insert("store_format", 4u64)
+            .unwrap();
+        w.commit().unwrap();
+    }
+    f.restart(); // the open upgrades it in place
+    f.mgr.release().unwrap();
+    f.store = None;
+    {
+        let d = Database::open(f.dir.0.join("docs.redb")).unwrap();
+        let r = d.begin_read().unwrap();
+        let v = r
+            .open_table(META)
+            .unwrap()
+            .get("store_format")
+            .unwrap()
+            .unwrap()
+            .value();
+        assert_eq!(v, k2_mpc_base::store::STORE_FORMAT);
+        assert_eq!(v, 5);
+        assert_eq!(r.open_table(PROV).unwrap().iter().unwrap().count(), 0);
+    }
+    f.restart();
+    let s = f.reopen("f.md");
+    let a = f.join(&s, agent("a"), Rights::full());
+    let b = f.join(&s, agent("b"), Rights::full());
+    replace(&s, b, "one", "ONE");
+    applied(own_only(&s, "b", || s.undo(b, 1).unwrap()));
+    applied(own_only(&s, "a", || s.revert(a, c, false).unwrap()));
+    assert_eq!(text(&s, a), "one\ntwo\n");
+    let bl = s.blame(a, ROOT, None).unwrap();
+    assert_eq!(bl.lines[0].author, "kit:import");
+    assert_eq!(bl.lines[0].restored_by.as_deref(), Some("b"));
+    assert_i1(&s);
+}
+
 #[test]
 fn revert_rights() {
     let f = fx("revertrights");

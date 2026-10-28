@@ -6,8 +6,19 @@
 //! **Abstraction** (the same in `undo.qnt`, definition by definition):
 //! - One root; text over the alphabet `{a, b}` (no `\n`, so every report's lines are
 //!   `(1, 1)`); each character carries its **author** (0: the seed text, an import that is
-//!   no participant's batch; pid `k` is `p{k}` and author `k`). Element identity beyond the
-//!   author is not kept: what `hist.undo_own_only` checks is who owns what an undo deletes.
+//!   no participant's batch; pid `k` is `p{k}` and author `k`) and its **provenance root**
+//!   (U23, v1.8). Element identity beyond these is not kept.
+//! - **Roots as labels** (v1.8): the rules only compare roots for equality, and a fresh
+//!   root equals no other, so a state holds them as labels `0, 1, ...` numbered by first
+//!   appearance in a fixed walk of the state ([`View::relabel`]: the doc left to right; each
+//!   pid's undo then redo batches, oldest first, each region's `before` roots then `after`
+//!   roots; the records by id, the same per region). States equal up to renaming roots are
+//!   one state; `undo.qnt` renumbers its state the same way after every step, and gives a
+//!   fresh root the least label not in use.
+//! - A region holds its bounds, `before`, `after`, ours, the roots of `before` and `after`,
+//!   and its flags; theirs is read off the live window by root when it merges (U8, v1.8), so
+//!   the v1.7 carried theirs (the oracle's cross-check) is not state, nor is a record
+//!   edge's.
 //! - Pids `p1..pN`, every one acting for nobody, all with every right.
 //! - **Events** per pid (budget `events`): an edit or a purge. Edits are explicit canonical
 //!   hunks (no diff): insert one character, delete one, replace one (with the other
@@ -20,8 +31,13 @@
 //!   whatever it finds.
 //! - **Reverts** (budget `reverts`, shared): `revert <change>` of any recorded change by any
 //!   pid, all or nothing or `--partial`.
-//! - **No** restart, window move, `write --base`, `replace_text`, `restore`, `undo --for`
-//!   or on-behalf edits here: the trace test covers them (§8).
+//! - **Restarts** (budget `restarts`, shared; v1.7): a host restart. Every stack is lost
+//!   (U6); records stay (U22), each edge's taint included (U22a v1.6); a pid that made a
+//!   change before it gets "history lost" on an empty undo (U18). With a restart budget the
+//!   state also holds who made a change and who did before the last restart (the notice
+//!   reads them); without one those fields stay empty, as nothing reads them.
+//! - **No** window move, `write --base`, `replace_text`, `restore`, `undo --for` or
+//!   on-behalf edits here: the trace test covers them (§8).
 //!
 //! **Reductions** (each machine-checked by a test at small bounds):
 //! - **The cut:** no state whose text is longer than `maxlen` (an action that would make
@@ -31,13 +47,16 @@
 //! - **Records after the last revert:** once the revert budget is spent, no action reads
 //!   a revert record again, so they are dropped (and `head` with them).
 //! - **Fields no rule reads** are not state: a record's original hunks (diagnostics),
-//!   a batch's `after_partial` and `on_behalf_of`, the `authors` sets (no restart).
+//!   a batch's `after_partial` and `on_behalf_of`, the `authors` sets when the bound has no
+//!   restart.
 //! - **Pid symmetry** (enumerator only, `--sym`): pids are interchangeable (same budgets,
 //!   same rights), so states equal up to renaming pids are one.
 //!
 //! **Transition checks** (each a rule id; the Quint model checks the same, as invariants
-//! over its `viol` set): `own_only` (`hist.undo_own_only`: every character an undo or redo
-//! by `p` deletes is `p`'s; every one a revert of change `c` deletes is `c`'s author's),
+//! over its `viol` set): `own_only` (`hist.undo_own_only`, enforced since v1.7; by root
+//! since v1.8, U10a: every character an undo, redo or revert deletes has a root the change
+//! it reverses inserted), `I1` (v1.8: at most one live element per root), `RT` (restart transparency, U22a v1.6: a restart changes no
+//! revert's outcome or text, for every record, all or nothing and `--partial`),
 //! `U9` (a tainted region is never applied), `U13` (a refused all-or-nothing request or a
 //! blocked one changes nothing), `U15` (all or nothing's conflicts = `--partial`'s reports,
 //! first conflicting step), `U17` (a step pushes one region per region it applied),
@@ -47,7 +66,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::hunk::Edit;
+use crate::model::hunk::{Edit, Prov};
 use crate::model::{
     merge, ChangeId, Hits, Kind, Mode, Model, Outcome, Region, Report, Request, StepNote,
 };
@@ -63,6 +82,8 @@ pub struct Bound {
     pub undos: u8,
     /// Reverts, shared.
     pub reverts: u8,
+    /// Host restarts, shared (v1.7).
+    pub restarts: u8,
     /// The longest text explored (the cut).
     pub maxlen: usize,
     /// The seed text (author 0).
@@ -85,6 +106,7 @@ impl Bound {
             events: 2,
             undos: 1,
             reverts: 0,
+            restarts: 0,
             maxlen: 4,
             init: "ab".into(),
             multi: true,
@@ -110,11 +132,12 @@ impl Bound {
     /// One line for logs and checkpoints.
     pub fn describe(&self) -> String {
         format!(
-            "pids={} events={} undos={} reverts={} maxlen={} init={:?} multi={} purge={} reduce={} u12={}",
+            "pids={} events={} undos={} reverts={} restarts={} maxlen={} init={:?} multi={} purge={} reduce={} u12={}",
             self.pids,
             self.events,
             self.undos,
             self.reverts,
+            self.restarts,
             self.maxlen,
             self.init,
             self.multi,
@@ -151,6 +174,8 @@ pub enum Act {
         change: ChangeId,
         partial: bool,
     },
+    /// A host restart (no pid's; `p` is 0).
+    Restart,
 }
 
 impl Act {
@@ -161,12 +186,17 @@ impl Act {
             | Act::Undo { p, .. }
             | Act::Redo { p, .. }
             | Act::Revert { p, .. } => *p,
+            Act::Restart => 0,
         }
     }
 }
 
-/// The text with authors, the stacks and the records (U13's "nothing changed").
-type Core = (Vec<(char, u8)>, Vec<VStacks>, Vec<(ChangeId, VRecord)>);
+/// The text with authors and roots, the stacks and the records (U13's "nothing changed").
+type Core = (
+    Vec<(char, u8, usize)>,
+    Vec<VStacks>,
+    Vec<(ChangeId, VRecord)>,
+);
 
 /// A state of the bounded world.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,8 +209,15 @@ pub struct State {
     pub events: Vec<u8>,
     pub undos: u8,
     pub reverts: u8,
+    pub restarts: u8,
+    /// The bound has restarts: the authors sets are state.
+    pub track_authors: bool,
+    /// The records were dropped (the revert budget is spent): the view's head is 0.
+    pub reduced: bool,
     /// Rules violated so far (empty on the oracle of record).
     pub viol: BTreeSet<&'static str>,
+    /// The case classes the transition into this state hit (E-HIST-13; not state).
+    pub hit: Vec<&'static str>,
 }
 
 /// A region as state ([`View`]).
@@ -190,6 +227,11 @@ pub struct VRegion {
     pub end: usize,
     pub before: String,
     pub after: String,
+    /// Ours (U10 v1.7), as `(start, end, insert)`.
+    pub ours: Vec<(usize, usize, String)>,
+    /// The root labels of `before`'s and `after`'s characters (U23, v1.8).
+    pub before_roots: Vec<usize>,
+    pub after_roots: Vec<usize>,
     pub tainted: bool,
     pub base_doc_nonempty: bool,
     pub erased: bool,
@@ -203,21 +245,23 @@ pub struct VStacks {
     pub cleared: bool,
 }
 
-/// A revert record as state: author, regions (undo's carry) and edges (revert's carry:
-/// start, end, start tainted, end tainted).
+/// One revert-carried edge pair (U22a): start, end, start tainted, end tainted.
+pub type VEdges = (usize, usize, bool, bool);
+
+/// A revert record as state: author, regions (undo's carry) and edges (revert's carry).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct VRecord {
     pub author: u8,
     pub regions: Vec<VRegion>,
-    pub edges: Vec<(usize, usize, bool, bool)>,
+    pub edges: Vec<VEdges>,
 }
 
 /// A state as the model check sees it: exactly the Quint model's state (`undo.qnt`'s
 /// `st`), so distinct views are distinct Quint states and vice versa.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct View {
-    /// (letter, author) per character.
-    pub doc: Vec<(char, u8)>,
+    /// (letter, author, root label) per character.
+    pub doc: Vec<(char, u8, usize)>,
     /// Per pid, `p1` first.
     pub stacks: Vec<VStacks>,
     pub records: Vec<(ChangeId, VRecord)>,
@@ -225,15 +269,44 @@ pub struct View {
     pub events: Vec<u8>,
     pub undos: u8,
     pub reverts: u8,
+    pub restarts: u8,
+    /// Per pid: made a change; made one before the last restart (U18). Empty without a
+    /// restart budget.
+    pub authors: Vec<bool>,
+    pub lost: Vec<bool>,
     pub viol: Vec<String>,
 }
 
-fn vregion(r: &Region) -> VRegion {
+fn vedits(es: &[Edit]) -> Vec<(usize, usize, String)> {
+    es.iter()
+        .map(|e| (e.start, e.end, e.insert.clone()))
+        .collect()
+}
+
+/// Roots as provisional labels (any injective numbering; [`View::relabel`] makes them
+/// canonical).
+#[derive(Default)]
+struct Labels(std::collections::HashMap<Prov, usize>);
+
+impl Labels {
+    fn of(&mut self, p: &Prov) -> usize {
+        let n = self.0.len();
+        *self.0.entry(*p).or_insert(n)
+    }
+    fn all(&mut self, ps: &[Prov]) -> Vec<usize> {
+        ps.iter().map(|p| self.of(p)).collect()
+    }
+}
+
+fn vregion(r: &Region, l: &mut Labels) -> VRegion {
     VRegion {
         start: r.start,
         end: r.end,
         before: r.before.clone(),
         after: r.after.clone(),
+        ours: vedits(&r.ours),
+        before_roots: l.all(&r.before_roots),
+        after_roots: l.all(&r.after_roots),
         tainted: r.tainted,
         base_doc_nonempty: r.base_doc_nonempty,
         erased: r.erased,
@@ -295,7 +368,11 @@ impl State {
             events: vec![0; b.pids],
             undos: 0,
             reverts: 0,
+            restarts: 0,
+            track_authors: b.restarts > 0,
+            reduced: false,
             viol: BTreeSet::new(),
+            hit: Vec::new(),
         }
     }
 
@@ -343,6 +420,9 @@ impl State {
                 }
             }
         }
+        if self.restarts < b.restarts {
+            out.push(Act::Restart);
+        }
         out
     }
 
@@ -378,12 +458,16 @@ impl State {
                 s.reverts += 1;
                 s.m.revert(&p, None, *change, *partial)
             }
+            Act::Restart => {
+                s.restarts += 1;
+                s.m.restart();
+                (Outcome::Changed(None), Hits::default())
+            }
         };
         if s.text().len() > b.maxlen {
             return None;
         }
         // the authors: every new change's hunks, in order
-        let mut deleted: Vec<u8> = Vec::new();
         for id in self.m.head + 1..=s.m.head {
             let rec = &s.m.records[&id];
             let who = author_of(&rec.author);
@@ -392,8 +476,7 @@ impl State {
                 let mut delta: isize = 0;
                 for e in es {
                     let at = (e.start as isize + delta) as usize;
-                    let gone = at..at + (e.end - e.start);
-                    deleted.extend(s.authors.drain(gone));
+                    s.authors.drain(at..at + (e.end - e.start));
                     let new = std::iter::repeat(who).take(e.insert.len());
                     s.authors.splice(at..at, new);
                     delta += e.growth();
@@ -401,34 +484,62 @@ impl State {
             }
         }
         assert_eq!(s.authors.len(), s.text().len(), "authors track the text");
-        s.check(b, self, a, &out, &hits, &deleted);
+        debug_assert!(
+            s.m.elems[0]
+                .iter()
+                .zip(&s.authors)
+                .all(|(x, a)| s.m.who[x.owner as usize]
+                    == if *a == 0 {
+                        String::new()
+                    } else {
+                        pid(*a as usize - 1)
+                    }),
+            "the oracle's owners are the authors"
+        );
+        s.check(b, self, a, &out, &hits);
         if b.reduce && s.reverts == b.reverts {
+            // the oracle's head goes on (it names fresh roots); the view's is 0
             s.m.records.clear();
-            s.m.head = 0;
+            s.reduced = true;
         }
         Some((s, out))
     }
 
     /// The transition checks (module docs), against the pre-state `pre`.
-    fn check(
-        &mut self,
-        b: &Bound,
-        pre: &State,
-        a: &Act,
-        out: &Outcome,
-        hits: &Hits,
-        deleted: &[u8],
-    ) {
-        let me = a.pid() as u8 + 1;
-        // own_only (hist.undo_own_only, per element)
-        let owner = match a {
-            Act::Undo { .. } | Act::Redo { .. } => Some(me),
-            Act::Revert { change, .. } => pre.m.records.get(change).map(|r| author_of(&r.author)),
-            _ => None,
-        };
-        if let Some(o) = owner {
-            if deleted.iter().any(|x| *x != o) {
-                self.viol.insert("own_only");
+    fn check(&mut self, b: &Bound, pre: &State, a: &Act, out: &Outcome, hits: &Hits) {
+        let mut hit: Vec<&'static str> = Vec::new();
+        // own_only (hist.undo_own_only, enforced since v1.7; by root since v1.8, U10a: the
+        // oracle's Hits::foreign_deleted, from the roots it deleted)
+        if matches!(a, Act::Undo { .. } | Act::Redo { .. } | Act::Revert { .. })
+            && hits.foreign_deleted
+        {
+            self.viol.insert("own_only");
+        }
+        // I1 (v1.8): at most one live element per root, in every state
+        if !self.m.i1() {
+            self.viol.insert("I1");
+        }
+        // RT (U22a v1.6, restart transparency): a restart changes no revert's outcome or text
+        if matches!(a, Act::Restart) {
+            for (&c, rec) in &pre.m.records {
+                for partial in [false, true] {
+                    let run = |m: &Model| {
+                        let mut m = m.clone();
+                        let (o, _) = m.revert(&rec.author, None, c, partial);
+                        (o, m.texts)
+                    };
+                    if run(&pre.m) != run(&self.m) {
+                        self.viol.insert("RT");
+                    }
+                }
+            }
+            let held = pre
+                .m
+                .stacks
+                .values()
+                .any(|s| !s.undo.is_empty() || !s.redo.is_empty());
+            if held || !pre.m.records.is_empty() {
+                hit.push("restart");
             }
         }
         // U9: a tainted region is never applied
@@ -455,6 +566,47 @@ impl State {
             .any(|s| !s.applied.is_empty() && s.pushed != s.applied.len())
         {
             self.viol.insert("U17");
+        }
+        // the case classes (E-HIST-13) this transition hit
+        let applied = matches!(out, Outcome::Applied { .. });
+        for (on, class) in [
+            (hits.eof_append_undo, "eof_append"),
+            (hits.edge_insert, "edge_insert"),
+            (hits.taint, "taint"),
+            (
+                hits.multi_hunk_partial
+                    || hits.stays_on_top
+                    || matches!(out, Outcome::Applied { skipped, .. } if !skipped.is_empty()),
+                "partial",
+            ),
+            (hits.redo_after_partial && applied, "redo_after_partial"),
+            (hits.rediff_differs, "exact_vs_rediff"),
+            (hits.revert_extra_conflicts > 0, "revert_extra_conflict"),
+            (hits.touching_regions, "touching_regions"),
+            (hits.concurrent_restore, "concurrent_restore"),
+        ] {
+            if on {
+                hit.push(class);
+            }
+        }
+        // U4: an applied undo, redo or revert next to the import's text, which no stack holds
+        if applied
+            && hits.notes.iter().any(|n| {
+                n.clean
+                    && ((n.start > 0 && pre.authors.get(n.start - 1) == Some(&0))
+                        || pre.authors.get(n.end) == Some(&0))
+            })
+        {
+            hit.push("import_kept");
+        }
+        if matches!(a, Act::Purge { .. })
+            && pre
+                .m
+                .stacks
+                .values()
+                .any(|s| !s.undo.is_empty() || !s.redo.is_empty())
+        {
+            hit.push("purge_drops");
         }
         // U15: all or nothing's conflicts = --partial's reports (the first conflicting step)
         let other = |mode: Mode| -> Hits {
@@ -484,6 +636,9 @@ impl State {
             _ => None,
         };
         if let Some((all, part)) = pair {
+            if all.iter().any(|s| !s.reports.is_empty()) {
+                hit.push("identical_reports");
+            }
             if !u15(&all, &part) {
                 self.viol.insert("U15");
             }
@@ -502,15 +657,35 @@ impl State {
         if matches!(a, Act::Revert { .. }) && *out != Outcome::TooOld && !hits.revert_superset_ok {
             self.viol.insert("U22a");
         }
-        // U12 (diagnostic): outside taint, the window merge equals whole-text merge3
+        // U12 (v1.7, a diagnostic): outside taint, the window merge of the exact sets equals
+        // the whole-text merge of the same sets (offset into the doc); the old re-diff form
+        // is only informative (F4)
         if b.u12 {
             for n in hits.notes.iter().filter(|n| !n.tainted && !n.erased) {
                 let (l, r) = (&n.live[..n.start], &n.live[n.end..]);
                 let base = format!("{l}{}{r}", n.after);
-                let ours = format!("{l}{}{r}", n.before);
-                let (w, _) = merge::merge3(&base, &ours, &n.live);
-                let theirs = &n.live[n.start..n.end];
-                let (m, _) = merge::merge3_window(&n.after, &n.before, theirs, n.at_end);
+                let shift = |es: &[Edit]| -> Vec<Edit> {
+                    es.iter()
+                        .map(|e| Edit {
+                            start: e.start + l.len(),
+                            end: e.end + l.len(),
+                            insert: e.insert.clone(),
+                        })
+                        .collect()
+                };
+                let (op, tp) = (&n.ours_roots, &n.theirs_roots);
+                let same = merge::Same::Root;
+                let (w, _) = merge::merge_edits(
+                    &base,
+                    &shift(&n.ours),
+                    op,
+                    &shift(&n.theirs),
+                    tp,
+                    n.at_end,
+                    same,
+                );
+                let (m, _) =
+                    merge::merge_edits(&n.after, &n.ours, op, &n.theirs, tp, n.at_end, same);
                 let whole = match w {
                     merge::Merged::Clean { text, .. } => Some(text),
                     merge::Merged::Conflict => None,
@@ -524,6 +699,7 @@ impl State {
                 }
             }
         }
+        self.hit = hit;
     }
 
     /// The text, authors, stacks and records (U13's "nothing changed").
@@ -543,12 +719,20 @@ impl State {
                 perm[a as usize - 1] as u8 + 1
             }
         };
+        let mut l = Labels::default();
+        let doc = self
+            .text()
+            .chars()
+            .zip(self.authors.iter().map(|a| map(*a)))
+            .zip(&self.m.elems[0])
+            .map(|((c, a), x)| (c, a, l.of(&x.prov)))
+            .collect();
         let mut stacks = vec![VStacks::default(); n];
         for (name, st) in &self.m.stacks {
             let k = author_of(name) as usize - 1;
-            let batches = |v: &[crate::model::Batch]| -> Vec<Vec<VRegion>> {
+            let mut batches = |v: &[crate::model::Batch]| -> Vec<Vec<VRegion>> {
                 v.iter()
-                    .map(|b| b.regions.iter().map(vregion).collect())
+                    .map(|b| b.regions.iter().map(|r| vregion(r, &mut l)).collect())
                     .collect()
             };
             stacks[perm[k]] = VStacks {
@@ -561,38 +745,49 @@ impl State {
         for k in 0..n {
             events[perm[k]] = self.events[k];
         }
-        View {
-            doc: self
-                .text()
-                .chars()
-                .zip(self.authors.iter().map(|a| map(*a)))
-                .collect(),
+        let (mut authors, mut lost) = (Vec::new(), Vec::new());
+        if self.track_authors {
+            authors = vec![false; n];
+            lost = vec![false; n];
+            for k in 0..n {
+                authors[perm[k]] = self.m.authors.contains(&pid(k));
+                lost[perm[k]] = self.m.authors_before_restart.contains(&pid(k));
+            }
+        }
+        let records = self
+            .m
+            .records
+            .iter()
+            .map(|(id, r)| {
+                (
+                    *id,
+                    VRecord {
+                        author: map(author_of(&r.author)),
+                        regions: r.regions.iter().map(|g| vregion(g, &mut l)).collect(),
+                        edges: r
+                            .edges
+                            .iter()
+                            .map(|e| (e.start, e.end, e.start_taint, e.end_taint))
+                            .collect(),
+                    },
+                )
+            })
+            .collect();
+        let mut v = View {
+            doc,
             stacks,
-            records: self
-                .m
-                .records
-                .iter()
-                .map(|(id, r)| {
-                    (
-                        *id,
-                        VRecord {
-                            author: map(author_of(&r.author)),
-                            regions: r.regions.iter().map(vregion).collect(),
-                            edges: r
-                                .edges
-                                .iter()
-                                .map(|e| (e.start, e.end, e.start_taint, e.end_taint))
-                                .collect(),
-                        },
-                    )
-                })
-                .collect(),
-            head: self.m.head,
+            records,
+            head: if self.reduced { 0 } else { self.m.head },
             events,
             undos: self.undos,
             reverts: self.reverts,
+            restarts: self.restarts,
+            authors,
+            lost,
             viol: self.viol.iter().map(|v| v.to_string()).collect(),
-        }
+        };
+        v.relabel();
+        v
     }
 
     /// The canonical view: the least over every renaming of pids (`sym`), or the view.
@@ -626,18 +821,68 @@ pub fn identity(n: usize) -> Vec<usize> {
 }
 
 impl View {
+    /// Every root label, in the walk that numbers them (v1.8): the doc left to right; each
+    /// pid's undo then redo batches, oldest first, each region's `before` roots then `after`
+    /// roots; the records by id, the same per region.
+    fn walk(&mut self, f: &mut impl FnMut(&mut usize)) {
+        for (_, _, r) in &mut self.doc {
+            f(r);
+        }
+        let region = |g: &mut VRegion, f: &mut dyn FnMut(&mut usize)| {
+            for r in g.before_roots.iter_mut().chain(g.after_roots.iter_mut()) {
+                f(r);
+            }
+        };
+        for st in &mut self.stacks {
+            for g in st.undo.iter_mut().chain(st.redo.iter_mut()).flatten() {
+                region(g, f);
+            }
+        }
+        for (_, rec) in &mut self.records {
+            for g in &mut rec.regions {
+                region(g, f);
+            }
+        }
+    }
+
+    /// Number the roots by first appearance in [`View::walk`]: states equal up to renaming
+    /// roots get one view (`undo.qnt`'s `relabel`).
+    pub fn relabel(&mut self) {
+        let mut m: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        self.walk(&mut |r| {
+            let n = m.len();
+            *r = *m.entry(*r).or_insert(n);
+        });
+    }
+
     /// One line of canonical JSON (`tools/undo/statediff.py` writes TLC's states the same
     /// way, to compare the two state sets exactly).
     pub fn json(&self) -> String {
         let q = |s: &str| format!("\"{s}\"");
         let b = |x: bool| if x { "true" } else { "false" };
+        let edits = |es: &[(usize, usize, String)]| {
+            let v: Vec<String> = es
+                .iter()
+                .map(|(s, e, i)| format!("[{s},{e},{}]", q(i)))
+                .collect();
+            format!("[{}]", v.join(","))
+        };
+        let ints = |v: &[usize]| {
+            format!(
+                "[{}]",
+                v.iter().map(usize::to_string).collect::<Vec<_>>().join(",")
+            )
+        };
         let region = |r: &VRegion| {
             format!(
-                "[{},{},{},{},{},{},{}]",
+                "[{},{},{},{},{},{},{},{},{},{}]",
                 r.start,
                 r.end,
                 q(&r.before),
                 q(&r.after),
+                edits(&r.ours),
+                ints(&r.before_roots),
+                ints(&r.after_roots),
                 b(r.tainted),
                 b(r.base_doc_nonempty),
                 b(r.erased)
@@ -654,7 +899,7 @@ impl View {
         let doc: Vec<String> = self
             .doc
             .iter()
-            .map(|(c, a)| format!("[\"{c}\",{a}]"))
+            .map(|(c, a, r)| format!("[\"{c}\",{a},{r}]"))
             .collect();
         let stacks: Vec<String> = self
             .stacks
@@ -687,8 +932,9 @@ impl View {
             .collect();
         let ev: Vec<String> = self.events.iter().map(u8::to_string).collect();
         let viol: Vec<String> = self.viol.iter().map(|v| q(v)).collect();
+        let flags = |v: &[bool]| v.iter().map(|x| b(*x)).collect::<Vec<_>>().join(",");
         format!(
-            "[[{}],[{}],[{}],{},[{}],{},{},[{}]]",
+            "[[{}],[{}],[{}],{},[{}],{},{},{},[{}],[{}],[{}]]",
             doc.join(","),
             stacks.join(","),
             records.join(","),
@@ -696,6 +942,9 @@ impl View {
             ev.join(","),
             self.undos,
             self.reverts,
+            self.restarts,
+            flags(&self.authors),
+            flags(&self.lost),
             viol.join(",")
         )
     }
@@ -739,13 +988,33 @@ impl Counts {
 
 /// Every rule the transition checks can record.
 pub const RULES: &[&str] = &[
-    "own_only", "U9", "U13", "U15", "U17", "U19", "U22a", "O5", "U12",
+    "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5", "U12",
 ];
 
-/// The rules a run stops at by default: all but `own_only` and `U12`, which the oracle of
-/// record violates (findings F3 and F4, `docs/MODEL-CHECK.md`), so they are observed
-/// (with their least depth and a witness) and the states past them are explored.
-pub const STOP: &[&str] = &["U9", "U13", "U15", "U17", "U19", "U22a", "O5"];
+/// The rules a run stops at by default: every rule but the diagnostic `U12` (`--u12` only).
+/// `own_only` is enforced since v1.7 (F3 fixed: exact hunk sets), by root since v1.8; `I1`
+/// since v1.8.
+pub const STOP: &[&str] = &[
+    "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5",
+];
+
+/// The case classes the walks count (E-HIST-13, as far as the bounded world reaches; the
+/// trace test covers leave and rejoin, multi-byte text, `write --base` and the window).
+pub const CLASSES: &[&str] = &[
+    "eof_append",
+    "edge_insert",
+    "taint",
+    "partial",
+    "redo_after_partial",
+    "identical_reports",
+    "import_kept",
+    "purge_drops",
+    "restart",
+    "exact_vs_rediff",
+    "touching_regions",
+    "revert_extra_conflict",
+    "concurrent_restore",
+];
 
 /// Breadth-first, with an exact visited set of canonical views: TLC's "distinct states"
 /// (with `sym` off). A state that violates a rule in `stop` is counted and not expanded

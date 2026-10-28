@@ -108,7 +108,7 @@ impl DocStore {
     pub(crate) fn tables_holding(&self, id: DocId) -> Result<Vec<&'static str>, StoreError> {
         use super::blob::{BLOB_APPROVALS, BLOB_SYNC, BLOB_VERSIONS};
         use super::history::{
-            CHANGES, CHANGE_CLOCKS, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS,
+            CHANGES, CHANGE_CLOCKS, PROVENANCE, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS,
         };
         use redb::{MultimapTableHandle, TableDefinition, TableHandle};
 
@@ -177,6 +177,13 @@ impl DocStore {
                 "change_clocks" => (
                     "change_clocks",
                     r.open_table(CHANGE_CLOCKS)?
+                        .range((id, 0, 0)..=(id, u64::MAX, u64::MAX))?
+                        .next()
+                        .is_some(),
+                ),
+                "provenance" => (
+                    "provenance",
+                    r.open_table(PROVENANCE)?
                         .range((id, 0, 0)..=(id, u64::MAX, u64::MAX))?
                         .next()
                         .is_some(),

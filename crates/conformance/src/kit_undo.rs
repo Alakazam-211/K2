@@ -201,8 +201,13 @@ impl Undo for KitUndo {
     }
 
     /// The session's per-character blame (feature `conformance`): the element is the
-    /// engine's (client, clock); its agent is the owner of the client.
+    /// engine's (client, clock); its agent is the owner of the client; its root (undo spec
+    /// U23) is the session's provenance root, its root agent the owner of the root's client.
     fn blame(&self, root: usize) -> Vec<ElemBlame> {
+        let agent = |pid: Option<&str>| {
+            pid.and_then(|p| self.doc.agent_of(p))
+                .unwrap_or(crate::SEED_AGENT)
+        };
         self.doc
             .session
             .char_blame(ROOTS[root])
@@ -210,13 +215,12 @@ impl Undo for KitUndo {
             .into_iter()
             .map(|b| ElemBlame {
                 ch: b.ch,
-                agent: b
-                    .pid
-                    .as_deref()
-                    .and_then(|p| self.doc.agent_of(p))
-                    .unwrap_or(crate::SEED_AGENT),
+                agent: agent(b.pid.as_deref()),
                 id: (b.client, b.clock),
                 change: b.change,
+                root: (b.root_client, b.root_clock),
+                root_agent: agent(b.root_pid.as_deref()),
+                root_change: b.root_change,
             })
             .collect()
     }

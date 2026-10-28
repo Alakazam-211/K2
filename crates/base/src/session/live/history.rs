@@ -333,6 +333,12 @@ impl Session {
     /// change's author, the person it was made for, and an owner ([`Rights::owner`]); needs
     /// edit. The revert is a new change by the caller, on their undo stack. Works after a
     /// restart: records and their carried bounds live in the store.
+    ///
+    /// **By root** (undo spec v1.8, U22): the record keeps the roots of the elements its
+    /// change inserted and deleted, so the revert acts on the live elements whose root the
+    /// change inserted (a change undone and redone has its roots live again: its revert
+    /// applies), and what it puts back records the roots it restores. A record written
+    /// before store format 5, or of an outside edit, has no roots: it is reverted as in v1.7.
     pub fn revert(&self, conn: ConnId, change: Seq, partial: bool) -> Result<UndoOutcome> {
         let now = self.now();
         let mut st = self.lock()?;
@@ -365,13 +371,51 @@ impl Session {
             .revert_index(st)?
             .edges(change)
             .ok_or(SessionError::RevertTooOld { seq: change })?;
+        // theirs (U10, v1.7): the record's regions replayed through every later change's
+        // shape, which the store keeps for the doc's life (the change's own shape too: a
+        // purge blanks a redacted record's text, never its shape); the edges are the index's
+        let shapes = store.change_shapes(self.doc_id, change.saturating_sub(1))?;
+        let carried = match shapes.split_first() {
+            Some(((seq, own), later)) if *seq == change => undo::replay_record(own, later),
+            _ => Vec::new(),
+        };
+        debug_assert_eq!(
+            carried.iter().map(undo::Carried::edges).collect::<Vec<_>>(),
+            edges,
+            "the replayed edges are the revert index's"
+        );
+        let carried = if carried
+            .iter()
+            .map(undo::Carried::edges)
+            .eq(edges.iter().cloned())
+        {
+            carried
+        } else {
+            // never on a correct store: the index's bounds, and theirs unknown, so every
+            // region conflicts (as tainted) rather than guess which elements are whose
+            edges
+                .into_iter()
+                .map(|(root, start, end, _, _)| undo::Carried {
+                    root,
+                    start,
+                    end,
+                    start_taint: true,
+                    end_taint: true,
+                    theirs: Vec::new(),
+                })
+                .collect()
+        };
         let batch = Batch {
             seq: change,
             on_behalf_of: None,
-            regions: undo::revert_regions(&rec, edges),
+            regions: undo::revert_regions(&rec, carried),
         };
         let mode = if partial { Mode::Partial } else { Mode::All };
-        let step = match undo::plan(&st.texts, vec![batch], mode) {
+        self.prov(st)?;
+        let client = st.members[i].client;
+        let next = ElemId::new(client, st.doc.clock_of(client));
+        let prov = st.prov.as_ref().expect("just built");
+        let step = match undo::plan(&st.texts, prov, next, vec![batch], mode) {
             Plan::Conflict { step, conflicts } => {
                 return Ok(UndoOutcome::Conflicts { step, conflicts })
             }
@@ -384,10 +428,12 @@ impl Session {
                 }
             },
         };
-        let result = self.commit_edit(
+        // what it puts back records the roots it restores (U23)
+        let result = self.commit_edit_restoring(
             st,
             i,
             step.edits,
+            Some(step.restores),
             ChangeKind::Revert,
             Some(change),
             now,

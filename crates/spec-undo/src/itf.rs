@@ -230,12 +230,34 @@ fn letters(j: &J) -> R<String> {
         .collect()
 }
 
+/// A list of hunks `{ s, e, ins }` as `(start, end, insert)`.
+fn hunks(j: &J) -> R<Vec<(usize, usize, String)>> {
+    j.items()?
+        .iter()
+        .map(|h| {
+            Ok((
+                h.get("s")?.uint()?,
+                h.get("e")?.uint()?,
+                letters(h.get("ins")?)?,
+            ))
+        })
+        .collect()
+}
+
+/// A list of root labels (v1.8).
+fn labels(j: &J) -> R<Vec<usize>> {
+    j.items()?.iter().map(J::uint).collect()
+}
+
 fn region(j: &J) -> R<VRegion> {
     Ok(VRegion {
         start: j.get("start")?.uint()?,
         end: j.get("end")?.uint()?,
         before: letters(j.get("before")?)?,
         after: letters(j.get("after")?)?,
+        ours: hunks(j.get("ours")?)?,
+        before_roots: labels(j.get("br")?)?,
+        after_roots: labels(j.get("ar")?)?,
         tainted: j.get("tainted")?.boolean()?,
         base_doc_nonempty: j.get("bdn")?.boolean()?,
         erased: j.get("erased")?.boolean()?,
@@ -249,8 +271,9 @@ fn batches(j: &J) -> R<Vec<Vec<VRegion>>> {
         .collect()
 }
 
-/// One ITF state's `st` as a [`View`].
-pub fn view(st: &J, pids: usize) -> R<View> {
+/// One ITF state's `st` as a [`View`]. `track`: the bound has restarts, so the authors
+/// sets are state ([`crate::bounded::State::track_authors`]).
+pub fn view(st: &J, pids: usize, track: bool) -> R<View> {
     let doc = st
         .get("doc")?
         .items()?
@@ -261,7 +284,11 @@ pub fn view(st: &J, pids: usize) -> R<View> {
                 1 => 'b',
                 x => return Err(format!("letter {x}")),
             };
-            Ok((ch, u8::try_from(e.get("au")?.int()?).map_err(|_| "author")?))
+            Ok((
+                ch,
+                u8::try_from(e.get("au")?.int()?).map_err(|_| "author")?,
+                e.get("rt")?.uint()?,
+            ))
         })
         .collect::<R<Vec<_>>>()?;
     let mut stacks = vec![VStacks::default(); pids];
@@ -321,6 +348,21 @@ pub fn view(st: &J, pids: usize) -> R<View> {
         .map(|v| v.string().map(str::to_owned))
         .collect::<R<_>>()?;
     viol.sort();
+    let flags = |name: &str| -> R<Vec<bool>> {
+        let set: Vec<usize> = st
+            .get(name)?
+            .items()?
+            .iter()
+            .map(J::uint)
+            .collect::<R<_>>()?;
+        Ok(if track {
+            (1..=pids).map(|p| set.contains(&p)).collect()
+        } else if set.is_empty() {
+            Vec::new()
+        } else {
+            return Err(format!("{name} without a restart budget"));
+        })
+    };
     Ok(View {
         doc,
         stacks,
@@ -329,6 +371,9 @@ pub fn view(st: &J, pids: usize) -> R<View> {
         events,
         undos: u8::try_from(st.get("undos")?.int()?).map_err(|_| "undos")?,
         reverts: u8::try_from(st.get("reverts")?.int()?).map_err(|_| "reverts")?,
+        restarts: u8::try_from(st.get("restarts")?.int()?).map_err(|_| "restarts")?,
+        authors: flags("authors")?,
+        lost: flags("lost")?,
         viol,
     })
 }
@@ -344,6 +389,9 @@ fn mode(s: &str) -> R<Mode> {
 
 /// An ITF state's `act` as an [`Act`] (pids from 0).
 pub fn act(j: &J) -> R<Act> {
+    if j.get("kind")?.string()? == "restart" {
+        return Ok(Act::Restart);
+    }
     let p = j.get("p")?.uint()?.checked_sub(1).ok_or("pid 0")?;
     Ok(match j.get("kind")?.string()? {
         "edit" => Act::Edit {
@@ -434,6 +482,7 @@ pub fn outcome(j: &J) -> R<Outcome> {
         "nothing" => Outcome::Nothing(match j.get("notice")?.string()? {
             "plain" => Notice::Plain,
             "cleared" => Notice::ClearedByPurge,
+            "lost" => Notice::HistoryLost,
             n => return Err(format!("notice {n:?}")),
         }),
         k => return Err(format!("outcome kind {k:?}")),
@@ -507,19 +556,20 @@ mod tests {
     #[test]
     fn reads_an_itf_state() {
         let j = parse(
-            r##"{"states":[{"st":{"doc":[{"ch":{"#bigint":"0"},"au":{"#bigint":"0"}}],
+            r##"{"states":[{"st":{"doc":[{"ch":{"#bigint":"0"},"au":{"#bigint":"0"},"rt":{"#bigint":"0"}}],
             "stacks":{"#map":[[{"#bigint":"1"},{"undo":[],"redo":[],"cleared":false}]]},
             "records":{"#map":[]},"head":{"#bigint":"1"},
             "events":{"#map":[[{"#bigint":"1"},{"#bigint":"0"}]]},"undos":{"#bigint":"0"},
-            "reverts":{"#bigint":"0"},"viol":{"#set":["U9"]}},
+            "reverts":{"#bigint":"0"},"restarts":{"#bigint":"0"},"authors":{"#set":[]},
+            "lost":{"#set":[]},"viol":{"#set":["U9"]}},
             "act":{"kind":"undo","p":{"#bigint":"1"},"hunks":[],"secret":{"#bigint":"0"},
             "mode":"partial","steps":{"#bigint":"2"},"change":{"#bigint":"0"},"partial":false},
             "out":{"kind":"nothing","notice":"plain"}}]}"##,
         )
         .unwrap();
         let s = states(&j).unwrap();
-        let v = view(s[0].0, 1).unwrap();
-        assert_eq!(v.doc, vec![('a', 0)]);
+        let v = view(s[0].0, 1, false).unwrap();
+        assert_eq!(v.doc, vec![('a', 0, 0)]);
         assert_eq!(v.viol, vec!["U9".to_string()]);
         assert_eq!(
             act(s[0].1).unwrap(),

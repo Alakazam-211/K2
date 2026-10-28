@@ -2102,7 +2102,8 @@ fn a_v040_store_upgrades_to_format_4_in_place() {
     );
     let d = s.set_approval(a, 2, ApprovalState::Declined).unwrap();
     assert_eq!((d.restore_to, d.later), (Some(1), vec![3, 4]));
-    // stamped 4 on disk
+    // stamped with the current format on disk (4 then; 5 since provenance, a further
+    // in-place step)
     drop((s, t));
     let Fx {
         dir,
@@ -2113,7 +2114,10 @@ fn a_v040_store_upgrades_to_format_4_in_place() {
     } = f;
     mgr.release().unwrap();
     drop((mgr, blobs, store));
-    assert_eq!(raw_format(&dir.0.join("v040.redb")), 4);
+    assert_eq!(
+        raw_format(&dir.0.join("v040.redb")),
+        k2_mpc_base::store::STORE_FORMAT
+    );
 }
 
 /// The store's raw format stamp (`meta.store_format`), read with redb directly.

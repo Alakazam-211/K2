@@ -2094,6 +2094,14 @@ pub fn validate_device_session(token: &str) -> Option<(String, String)> {
     v.device.map(|_| (v.username, v.session_id))
 }
 
+/// [`validate_device_session`] with the phone's install id, for audit
+/// lines that name the device (Gardens on the phone, GP-A22):
+/// `(username, session id, device id)`.
+pub fn validate_device_session_device(token: &str) -> Option<(String, String, String)> {
+    let v = validate_session_record(token)?;
+    v.device.map(|d| (v.username, v.session_id, d.id))
+}
+
 /// The session id of a live session `token` (device or not).
 pub fn live_session_id(token: &str) -> Option<String> {
     validate_session_record(token).map(|v| v.session_id)

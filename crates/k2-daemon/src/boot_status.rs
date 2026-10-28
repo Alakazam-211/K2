@@ -983,6 +983,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GARDEN_BLOBS);
     out.push(FEATURE_ZEN_FILES);
     out.push(FEATURE_GARDEN_HISTORY);
+    out.push(crate::zen_remote_routes::FEATURE);
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);
     out.push(FEATURE_GUESTS_ROOMS);
@@ -1105,6 +1106,7 @@ mod tests {
                 "garden-blobs-v1",
                 "zen-files-v1",
                 "garden-history-v1",
+                "gardens-remote-v1",
                 "grokbots-v1",
                 "app-api-v1",
                 "guests-rooms-v1",

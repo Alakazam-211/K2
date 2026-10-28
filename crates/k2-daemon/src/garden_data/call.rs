@@ -123,17 +123,25 @@ pub fn handle(who: &DataWho, headers: &str, body: &[u8]) -> CliResponse {
     if ingress == Ingress::LocalProcess {
         audit::line("zen.data.call", "local-process", &format!("{}/{} verb={}", b.garden, b.placement, b.verb));
     }
+    run_call(&b)
+}
+
+/// The runner behind every widget data door (vs-live GP-A4): `/cli/zen/call`
+/// after its gate (owner token + Origin), and the remote Garden door
+/// (`zen_remote_routes`, a paired phone of the owner person) after its own.
+/// Neither door is reachable through the other's gate: each keeps its own.
+pub(crate) fn run_call(b: &CallBody) -> CliResponse {
     // RS-A15: `guests.*` run as the owner with a confirm sheet on every
     // write (its refusals carry the change the sheet shows).
     if crate::garden_data::guest_rooms::is_verb(&b.verb) {
-        return crate::garden_data::guest_rooms::handle(&b);
+        return crate::garden_data::guest_rooms::handle(b);
     }
     // garden-person-rows-v1 (0.46.3): the App rows the Garden shares, as
     // the person on this computer (`person_rows`).
     if crate::garden_data::person_rows::is_verb(&b.verb) {
-        return crate::garden_data::person_rows::handle(&b);
+        return crate::garden_data::person_rows::handle(b);
     }
-    match run(&b) {
+    match run(b) {
         Ok(v) => crate::garden_data::ok(json!({ "ok": true, "result": v })),
         Err(e) => response(&e),
     }

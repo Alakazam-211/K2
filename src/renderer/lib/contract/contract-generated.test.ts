@@ -77,6 +77,7 @@ describe('TUWA4 twin: generated files match the catalog', () => {
         'crates/k2-core/src/app_surface.rs',
         'sdk/generated/k2-frame.js',
         'sdk/generated/k2.d.ts',
+        'sdk/generated/phone-verbs.json',
         'sdk/server/src/generated/verbs.ts',
         'src/renderer/lib/k2-caps.generated.ts',
         'src/renderer/lib/zen/zen-verbs.generated.ts',

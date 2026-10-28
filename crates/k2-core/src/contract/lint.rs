@@ -76,6 +76,7 @@ pub fn lint(c: &Catalog) -> Vec<String> {
     }
     super::app::lint_catalog(c, &mut out);
     super::live::lint_live(c, &mut out);
+    super::phone::lint_phone(c, &mut out);
     out
 }
 
@@ -486,7 +487,7 @@ mod tests {
         assert!(probs[0].contains(want), "want {want:?} in {:?}", probs[0]);
     }
 
-    const GOOD: &str = r#"{"verb":"seed.good","cap":"thread:read","exposure":["widget"],"reach":"local","effect":"read",
+    const GOOD: &str = r#"{"verb":"seed.good","cap":"thread:read","exposure":["widget"],"phone":"later","reach":"local","effect":"read",
         "kind":"call","feature":"zen-v1","bindings":{"renderer":{"impl":"registered"}},
         "request":[{"title":"address","type":"string"}],
         "response":{"title":"SeedGood","type":"object","properties":{"a":{"type":"string"}},"required":["a"],"additionalProperties":false},
@@ -586,7 +587,7 @@ mod tests {
         assert_one(&with_rows(&format!("[{bad}]")), "argument 0 needs a lower camel case title");
     }
 
-    const LOCAL: &str = r#"{"verb":"seed.local","cap":"store:read","exposure":["garden-local"],"reach":"local","effect":"read",
+    const LOCAL: &str = r#"{"verb":"seed.local","cap":"store:read","exposure":["garden-local"],"phone":"door","reach":"local","effect":"read",
         "kind":"call","feature":"garden-data-v1","bindings":{"http":{"method":"POST","route":"/cli/zen/call"}},
         "request":[{"title":"key","type":"string"}],"response":{"type":"json"},
         "errors":["failed"],"doc":"d","example":"e"}"#;

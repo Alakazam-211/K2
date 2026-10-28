@@ -8154,6 +8154,40 @@ async fn handle_one_request(
             });
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Gardens on the phone (prd-gardens-on-phone-v1 §3): the remote
+        // Garden door, ahead of the generic Zen arm. Member policy rows let
+        // every credential through role_gate; the handler's one gate takes
+        // the owner token or a paired phone of the owner person. An ended
+        // device session got 403 device_session_ended before any arm.
+        p if crate::zen_remote_routes::is_route(p) => {
+            if crate::zen_remote_routes::is_post_route(p) && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::zen_remote_routes::max_body(p)).await {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::zen_remote_routes::refuse(
+                            "413 Payload Too Large",
+                            "too_large",
+                            format!("request bodies here are at most {} KiB", crate::zen_remote_routes::max_body(p) / 1024),
+                        );
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body).await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let who = crate::zen_remote_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let r = tokio::task::spawn_blocking(move || crate::zen_remote_routes::handle(&p_owned, &who, &params, &body_bytes))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // Garden data (contract-garden-data-v1 §4.1): the widget door
         // `/cli/zen/call` and the agent/person door `/cli/zen/data/*`, ahead
         // of the generic Zen arm. NoLogin rows already turned Connect logins

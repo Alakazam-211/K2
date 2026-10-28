@@ -64,6 +64,9 @@ export interface CatalogVerbRow {
   }
   /** Absent or empty = none (K2 built-ins only). */
   exposure?: CatalogExposure[]
+  /** Where the row runs for a Garden on a paired phone (0.46.6,
+   *  prd-gardens-on-phone-v1 §4.3): on every `widget` / `garden-local` row. */
+  phone?: 'host' | 'door' | 'later' | 'never'
   reach: CatalogReach
   effect: CatalogEffect
   kind: CatalogVerbKind

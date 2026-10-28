@@ -77,6 +77,7 @@ pub mod notify_bound;
 pub mod zen_lib_routes;
 pub mod zen_downloads_routes;
 pub mod zen_links_routes;
+pub mod zen_remote_routes;
 pub mod zen_routes;
 pub mod zen_sync_routes;
 pub mod zen_watch;

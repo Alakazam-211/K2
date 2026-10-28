@@ -549,6 +549,13 @@ pub fn widget(path: &str, who: &DataWho, headers: &str, body: &[u8], params: &Ha
     if ingress == Ingress::LocalProcess {
         audit::line("zen.data.call", "local-process", path);
     }
+    widget_routed(path, body, params)
+}
+
+/// The widget door after its gate (vs-live GP-A4), shared with the remote
+/// Garden door's `/cli/zen/remote/blob/*`, which runs its own gate first.
+/// `path` is [`WIDGET_PUT`] or [`WIDGET_GET`].
+pub(crate) fn widget_routed(path: &str, body: &[u8], params: &HashMap<String, String>) -> Result<J, DataError> {
     match path {
         WIDGET_PUT => {
             let b: WidgetPutBody = parse(body)?;

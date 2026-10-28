@@ -12,8 +12,11 @@ Every Zen request goes to **this computer's** daemon through
 `scopeForHost('local')` with its owner token. None goes through
 `primaryScope()`. Any other token (a Connect login of any role, an app pass,
 an agent passport) gets 403 `{error: "zen_local_only"}`, except the Garden
-writes a session passport may make (see "Garden Lock" below). Bodies over
-64 KB get 413. A GET on a POST route is 405.
+writes a session passport may make (see "Garden Lock" below), and the
+paired phone's own door (see "Remote Gardens" below). Bodies over 1,280 KiB
+(one 1 MiB widget code file in JSON, plus a quarter for escaping) get 413;
+the staged-folder routes take up to 6 MB and `agents/order/set` 160 KB. A
+GET on a POST route is 405.
 
 Feature key: `/boot-status` `features` carries **`zen-gardens-v1`** (G19).
 The renderer requires it from the local scope; without it, Zen shows safe
@@ -711,7 +714,8 @@ A custom placement is a content widget in `page.widgets`
 ### Routes
 
 All on the local daemon under `/cli/zen/*`, owner token only, Member policy
-rows, 64 KB request bodies, a GET on a POST route is 405.
+rows, request bodies up to 1,280 KiB (6 MB for the staged-folder routes), a GET
+on a POST route is 405.
 
 | Route | Body / query | Answer |
 |---|---|---|
@@ -1106,6 +1110,51 @@ still reach it while it keeps in sync.
   `zen_local_only`.
 - `GET /cli/zen/validate?garden=<locked>` adds `locked: {garden, name,
   message}`; `k2 zen validate --garden` exits 3.
+
+## Remote Gardens: the phone's door (gardens-remote-v1, 0.46.6)
+
+Source: `.k2/prds/prd-gardens-on-phone-v1.md` (+ `-vs-live.md`); the
+Companion's document is `contract-gardens-phone-v1.md`; samples the daemon
+writes are in `crates/k2-daemon/tests/golden/gardens_remote/` (where text
+and a sample disagree, the sample is right). Daemon side:
+`crates/k2-daemon/src/zen_remote_routes.rs`.
+
+Every other `/cli/zen/*` route stays this computer's owner token. A paired
+phone (K2 Companion) reaches the Gardens only through `/cli/zen/remote/*`:
+
+- **Who:** the owner token, or a live **device session** (from `POST
+  /cli/auth/device/pair`) whose login is the **owner person** (a login the
+  owner linked, `ownerAccounts`; the same rule as Homes and the
+  Garden-owner routes, GP-B1). The owner person on a password login gets
+  403 `garden_device_only`; anyone else (another login of any role, an
+  agent or K2 terminal passport, an App pass, an API key) gets 403
+  `garden_person_only`. An ended device session gets 403
+  `device_session_ended` before any route.
+- **One envelope:** every refusal is `{ok: false, error: {code, hint, …}}`.
+  On `remote/call` a refusal's `code` is always a catalog error code (the
+  runner's own code, when different, rides as `cause`).
+- **Audit:** one `zen.remote.*` line per request with `client=phone` (or
+  `owner-token`), the login and the device id; never args or values.
+
+| Route | Answer |
+|---|---|
+| `GET remote/gardens[?since=<cursor>]` | `{ok, serverId, person: "owner", setUp, cursor, full, gardens: [{id, name, index, template, theme, locked, version}]}`. `since` equal to the current cursor answers `full: false, gardens: []`; anything else the whole list |
+| `GET remote/page?garden=[&scheme=]` | `GET /cli/zen/get`'s answer without `sources`, plus `remote: {widgets: [{id, run: frame \| native \| placeholder, reason?}], features}` |
+| `GET remote/frame?garden=&placement=[&scheme=]` | `{ok, garden, placement, widget, hash, nonce, scheme, srcdoc, libs: [{slot, key, source, id?, version?, files?, url?, integrity?}], hello}`. `srcdoc` is the desktop wrapper (`frameSrcDoc` + `zenFramePrelude`, the shared golden) with one `__K2_LIB_<n>__` slot per library; 404 `unknown_placement`, 409 `not_a_frame` / `widget_broken` / `stale_widget` |
+| `GET remote/lib?id=&version=&file=` (or `?integrity=`), `POST remote/lib/fetch` | `/cli/zen/lib/*` for download and CDN libraries; a bundled one is 404 `bundled_on_phone` (the phone carries `src/renderer/zen-lib/`) |
+| `POST remote/call {garden, placement, hash, verb, args}` | The catalog's `phone` column first (`door` runs; `later` → 501 `verb_unavailable` + `feature`; `host` / `never` / non-widget → `not_exposed`; unknown → `unknown_verb`), then the same runner as `/cli/zen/call` (placement, live hash, caps, signer gate, pause, budgets): `{ok: true, result}` |
+| `POST remote/blob/put`, `GET remote/blob/get` | The widget door's blob routes (same bodies and answers) |
+| `POST remote/report {garden, placement, hash, event: ready \| error \| refusal, …}` | Logged like `widget/run` (`k2 zen widget errors`) |
+| `POST remote/pause`, `POST remote/resume {garden, placement}` | `widget/pause` (anyone the door takes) and the person's Resume |
+| `GET remote/agents-order?garden=` | The Agents widget's order and pins, read-only |
+
+The catalog's `phone` column (`host`, `door`, `later`, `never`) is on every
+`widget` / `garden-local` row and generated into
+`sdk/generated/phone-verbs.json`; the phone hello's `features` are the
+desktop frame's minus every feature whose rows are all `later`/`never`
+there. No new event: the phone re-reads on `zen_changed`,
+`zen_agents_order_changed` and `garden_data_changed`. The headless smoke is
+`scripts/test/gardens_remote_smoke.sh`.
 
 ## Contract changes from the PRD text (flagged for the renderer)
 

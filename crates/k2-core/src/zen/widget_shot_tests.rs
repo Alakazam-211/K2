@@ -29,6 +29,66 @@ fn the_daemon_frame_is_the_renderer_frame() {
     assert_eq!(features, FRAME_FEATURES, "FRAME_FEATURES must be ZEN_FRAME_FEATURES");
 }
 
+/// Gardens on the phone (prd-gardens-on-phone-v1 §9 "Frame document"): the
+/// phone's document is the same golden shape, with `__K2_LIB_<n>__` slots
+/// where the libraries go; filling them as the contract says (the text,
+/// `</script` escaped) gives the desktop frame byte for byte.
+#[test]
+fn the_phone_frame_is_the_renderer_frame_with_lib_slots() {
+    let nonce = "AAAAAAAAAAAAAAAAAAAAAA";
+    let vars: BTreeMap<String, String> =
+        [("--zen-canvas".to_string(), "#222222".to_string()), ("--zen-text".to_string(), "#111111".to_string())].into();
+    let html = "<!DOCTYPE html>\n<html><body><p>shape</p><script nonce=\"AAAAAAAAAAAAAAAAAAAAAA\">k2.ready()</script></body></html>";
+    let doc = remote_frame_doc(html, nonce, &vars, Scheme::Dark, 2, false);
+    for n in 0..2 {
+        let slot = remote_lib_slot(n);
+        assert_eq!(doc.matches(&slot).count(), 1, "one {slot}");
+        assert!(doc.contains(&format!("<script nonce=\"{nonce}\">{slot}</script>")), "{slot} alone in its own script");
+    }
+    let filled = doc
+        .replace(&remote_lib_slot(0), &script_text("LIB_ONE"))
+        .replace(&remote_lib_slot(1), &script_text("x</script>y"))
+        .replace(&script_text(SEALED_FRAME_GUARD), "{{GUARD}}")
+        .replace(&script_text(K2_FRAME_JS), "{{K2FRAME}}");
+    let golden = FRAME_SHAPE_GOLDEN.strip_suffix('\n').expect("the golden ends with a newline");
+    let (want, _) = golden.split_once("\n<!-- features: ").expect("the golden's features line");
+    assert_eq!(filled, want, "the phone frame drifted from the shared golden (src/shared/zen-frame-shape.golden.html)");
+}
+
+/// The phone frame's theme comes from the page answer's `theme`: a fixed
+/// scheme wins, `auto` takes the phone's, unsafe values never reach CSS.
+#[test]
+fn page_frame_vars_follow_the_pages_theme() {
+    let theme = json!({
+        "tokens": {
+            "scheme": "auto",
+            "colors": {
+                "light": {"canvas": "#ffffff", "text": "#111111", "accent": null},
+                "dark": {"canvas": "#000000", "text": "#eeeeee", "bad": "red;}</style>"}
+            },
+            "shape": {"radius": 12, "gap": 8.5, "other": 3}
+        },
+        "font": {"family": "system", "size": 14, "lineHeight": 1.4}
+    });
+    let (v, s) = page_frame_vars(&theme, Some(Scheme::Dark));
+    assert_eq!(s, Scheme::Dark);
+    assert_eq!(v.get("--zen-canvas").map(String::as_str), Some("#000000"));
+    assert_eq!(v.get("--zen-text").map(String::as_str), Some("#eeeeee"));
+    assert!(!v.contains_key("--zen-bad"), "an unsafe value is dropped: {v:?}");
+    assert_eq!(v.get("--zen-radius").map(String::as_str), Some("12px"));
+    assert_eq!(v.get("--zen-gap").map(String::as_str), Some("8.5px"));
+    assert!(!v.contains_key("--zen-other"));
+    assert_eq!(v.get("--zen-font-size").map(String::as_str), Some("14px"));
+    assert_eq!(v.get("--zen-line-height").map(String::as_str), Some("1.4"));
+    assert!(v.contains_key("--zen-font-family"));
+    let (v, s) = page_frame_vars(&theme, None);
+    assert_eq!((s, v.get("--zen-canvas").map(String::as_str)), (Scheme::Light, Some("#ffffff")));
+    assert!(!v.contains_key("--zen-accent"), "null is not a value");
+    let mut fixed = theme.clone();
+    fixed["tokens"]["scheme"] = json!("light");
+    assert_eq!(page_frame_vars(&fixed, Some(Scheme::Dark)).1, Scheme::Light, "a fixed scheme wins");
+}
+
 #[test]
 fn a_frame_without_a_doctype_gets_the_metas_first() {
     let d = frame_src_doc("<p>x</p>", "AAAAAAAAAAAAAAAAAAAAAA", "<i>pre</i>");

@@ -30,6 +30,7 @@ pub mod gen;
 pub mod libs;
 pub mod lint;
 pub mod live;
+pub mod phone;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as J;
@@ -82,6 +83,34 @@ pub enum Exposure {
     GardenLocal,
 }
 
+/// Where a widget verb runs when its Garden is on a paired phone
+/// (prd-gardens-on-phone-v1 §4.3, the catalog's `phone` column).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Phone {
+    /// The phone's frame host answers it (page verbs: switch, theme,
+    /// folds, the native Agents/Conversation on the same page).
+    Host,
+    /// The phone forwards it to the daemon's remote door
+    /// (`POST /cli/zen/remote/call`, or the remote blob routes).
+    Door,
+    /// Not on a phone in this release: the host answers `verb_unavailable`.
+    Later,
+    /// Never on a phone: the host answers `not_exposed`.
+    Never,
+}
+
+impl Phone {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phone::Host => "host",
+            Phone::Door => "door",
+            Phone::Later => "later",
+            Phone::Never => "never",
+        }
+    }
+}
+
 /// Whether the same call and shape will work in an App (UWA4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -128,6 +157,11 @@ pub struct VerbRow {
     /// Empty or absent = none (K2 built-ins only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exposure: Vec<Exposure>,
+    /// Where the row runs for a Garden on a paired phone
+    /// (prd-gardens-on-phone-v1 §4.3): set on every row exposed to
+    /// `widget` or `garden-local`, absent on every other row. See [`phone`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phone: Option<Phone>,
     pub reach: Reach,
     pub effect: Effect,
     pub kind: VerbKind,

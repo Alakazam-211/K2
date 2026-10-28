@@ -779,9 +779,9 @@ mod tests {
     /// widget, and never the widget door as its binding.
     #[test]
     fn an_app_row_may_also_be_garden_local() {
-        let both = GOOD.replace(r#""exposure":["app"]"#, r#""exposure":["app","garden-local"]"#).replace(r#""cap":"files:read""#, r#""cap":null"#);
+        let both = GOOD.replace(r#""exposure":["app"]"#, r#""exposure":["app","garden-local"],"phone":"door""#).replace(r#""cap":"files:read""#, r#""cap":null"#);
         assert!(problems(&both).is_empty(), "{:#?}", problems(&both));
-        let widget = GOOD.replace(r#""exposure":["app"]"#, r#""exposure":["app","widget"]"#).replace(r#""cap":"files:read""#, r#""cap":null"#);
+        let widget = GOOD.replace(r#""exposure":["app"]"#, r#""exposure":["app","widget"],"phone":"later""#).replace(r#""cap":"files:read""#, r#""cap":null"#);
         assert!(problems(&widget).iter().any(|x| x.contains("never widget")), "{:#?}", problems(&widget));
         let door = both.replace(r#""method":"GET","route":"/cli/seed/read","params":{"relPath":"path"},"responseNames":{"relPath":"path"}"#, r#""method":"POST","route":"/cli/zen/call""#);
         assert!(problems(&door).iter().any(|x| x.contains("binds its App route")), "{:#?}", problems(&door));

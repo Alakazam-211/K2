@@ -121,6 +121,8 @@ pub fn render(c: &Catalog, runtime: Option<&str>) -> Result<Vec<Output>, String>
         Output { path: super::libs::LIBS_KEY, text: super::libs::libs_block(crate::zen::stdlib::zen_lib_manifest()) },
         // 0.46.5 activity SDK: `k2 study live`, from the rows' `live` fields.
         Output { path: super::live::LIVE_KEY, text: super::live::live_block(c) },
+        // 0.46.6 Gardens on the phone: the Companion's verb table.
+        Output { path: super::phone::PHONE_VERBS_JSON, text: super::phone::phone_verbs_json(c) },
     ];
     let snapshot = snapshot_json(c, runtime, &out);
     out.push(Output { path: SNAPSHOT_JSON, text: snapshot });

@@ -190,7 +190,8 @@ fn exposure_counts_are_pinned() {
         let row = c.verb(verb).unwrap_or_else(|| panic!("{verb} row"));
         assert!(row.exposed_to(Exposure::App) && !row.exposed_to(Exposure::GardenLocal), "{verb}: App only");
     }
-    assert_eq!(c.catalog_version, 32);
+    // Catalog v33 (0.46.6, Gardens on the phone): the phone column, no new rows.
+    assert_eq!(c.catalog_version, 33);
     assert_eq!(
         c.verbs.len(),
         221,

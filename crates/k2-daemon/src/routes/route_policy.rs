@@ -1936,6 +1936,22 @@ pub const ROUTES: &[Route] = &[
     post("/cli/zen/proposals/reject", Member),
     get("/cli/zen/proposals/show", Member),
     post("/cli/zen/reload", Member),
+    // Gardens on the phone (prd-gardens-on-phone-v1 §3.2): the remote
+    // Garden door. Member so role_gate lets every credential through; the
+    // handler's gate takes only the owner token or a paired phone of the
+    // owner person (zen_remote_routes::gate).
+    get("/cli/zen/remote/agents-order", Member),
+    get("/cli/zen/remote/blob/get", Member),
+    post("/cli/zen/remote/blob/put", Member),
+    post("/cli/zen/remote/call", Member),
+    get("/cli/zen/remote/frame", Member),
+    get("/cli/zen/remote/gardens", Member),
+    get("/cli/zen/remote/lib", Member),
+    post("/cli/zen/remote/lib/fetch", Member),
+    get("/cli/zen/remote/page", Member),
+    post("/cli/zen/remote/pause", Member),
+    post("/cli/zen/remote/report", Member),
+    post("/cli/zen/remote/resume", Member),
     post("/cli/zen/reset", Member),
     post("/cli/zen/setup", Member),
     // Garden access (live only with the switch on): View this version.

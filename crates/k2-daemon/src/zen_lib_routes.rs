@@ -30,7 +30,8 @@
 //!
 //! Routing: `zen_routes::handle` calls [`handle`] first (one hook line) so
 //! the Zen rules hold: owner token only (`zen_local_only`), Member policy
-//! rows, POST rows in `zen_routes::POST_ROUTES` (405 on GET), 64 KB bodies.
+//! rows, POST rows in `zen_routes::POST_ROUTES` (405 on GET), Zen's body cap
+//! (`zen_routes::MAX_BODY`, 1,280 KiB).
 //! Feature key [`FEATURE`] in `/boot-status`.
 
 use std::collections::HashMap;

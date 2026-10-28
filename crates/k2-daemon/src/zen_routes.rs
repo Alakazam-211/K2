@@ -290,6 +290,11 @@ fn pauses() -> WidgetPauses {
     PAUSES.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// [`pauses`] for the remote Garden door (`zen_remote_routes`).
+pub(crate) fn current_pauses() -> WidgetPauses {
+    pauses()
+}
+
 /// Is this placement paused (any reason)? Garden data's widget door
 /// refuses data writes while it is (contract-garden-data-v1 §7.1 step 5).
 pub fn placement_pause(garden: &str, placement: &str) -> Option<Pause> {

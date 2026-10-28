@@ -213,6 +213,66 @@ pub fn theme_vars(name: &str, scheme: Option<Scheme>) -> Result<(BTreeMap<String
     Ok((vars, scheme))
 }
 
+/// The `--zen-*` variables and scheme a Garden's frame starts with on a
+/// phone (prd-gardens-on-phone-v1 §3.2 `remote/frame`), from the page
+/// answer's `theme` (`GET /cli/zen/get`: `tokens {scheme, colors {light,
+/// dark}, shape}`, `font {family, size, lineHeight}`). The same keys as
+/// [`theme_vars`] makes for a built-in theme. A theme fixed to light or
+/// dark keeps its scheme; one that follows the system (`auto`, or none)
+/// takes `want` (the phone's appearance), else light. Every value passes
+/// [`safe_css_value`]; the frame's runtime re-themes on `theme.changed`.
+pub fn page_frame_vars(theme: &J, want: Option<Scheme>) -> (BTreeMap<String, String>, Scheme) {
+    let tokens = &theme["tokens"];
+    let fixed = tokens["scheme"].as_str().and_then(Scheme::parse);
+    let scheme = fixed.or(want).unwrap_or(Scheme::Light);
+    let mut vars = BTreeMap::new();
+    if let Some(colors) = tokens["colors"][scheme.as_str()].as_object() {
+        for (k, v) in colors {
+            if let Some(s) = v.as_str() {
+                vars.insert(format!("--zen-{k}"), s.to_string());
+            }
+        }
+    }
+    for key in ["radius", "bubble-radius", "gap", "list-width"] {
+        if let Some(n) = tokens["shape"][key].as_f64() {
+            vars.insert(format!("--zen-{key}"), format!("{n}px"));
+        }
+    }
+    let font = &theme["font"];
+    if let Some((stack, _)) = font["family"].as_str().and_then(font_family) {
+        vars.insert("--zen-font-family".into(), stack.to_string());
+    }
+    if let Some(n) = font["size"].as_f64() {
+        vars.insert("--zen-font-size".into(), format!("{n}px"));
+    }
+    if let Some(n) = font["lineHeight"].as_f64() {
+        vars.insert("--zen-line-height".into(), format!("{n}"));
+    }
+    vars.retain(|k, v| k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') && safe_css_value(v));
+    (vars, scheme)
+}
+
+/// A phone frame's library slot (prd-gardens-on-phone-v1 §4.5): the exact
+/// text `__K2_LIB_<n>__`, alone in its own nonced `<script>`. The phone
+/// replaces it with the library's checked text (its files joined with
+/// [`LIB_FILE_SEPARATOR`], `</script` escaped). The headless shot keeps its
+/// own `__K2_SHOT_LIB_<n>__` form.
+pub fn remote_lib_slot(n: usize) -> String {
+    format!("__K2_LIB_{n}__")
+}
+
+/// How a library's files are joined into one script (`ZEN_LIB_FILE_SEPARATOR`).
+pub const LIB_FILE_SEPARATOR: &str = "\n;\n";
+
+/// The sealed document a phone loads for one placement: exactly the
+/// desktop wrapper ([`frame_src_doc`] over [`frame_prelude`]) around the
+/// widget's rendered bundle, with one [`remote_lib_slot`] per library.
+pub fn remote_frame_doc(html: &str, nonce: &str, vars: &BTreeMap<String, String>, scheme: Scheme, libs: usize, own_scheme: bool) -> String {
+    let slots: Vec<String> = (0..libs).map(remote_lib_slot).collect();
+    let prelude = frame_prelude(nonce, vars, scheme, &slots, own_scheme);
+    frame_src_doc(html, nonce, &prelude)
+}
+
 /// `zenScriptText`: `</script` → `<\/script`, the same in JS.
 pub fn script_text(text: &str) -> String {
     // ASCII lower-casing keeps byte offsets, so `lower`'s matches index `text`.

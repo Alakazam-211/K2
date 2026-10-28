@@ -40,7 +40,9 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use k2_core::deploy::engine::{
     AppSpec, CgroupStats, EngineCaps, EngineError, ExecStream, Isolation, Liveness, Prepared, Result, RunHandle, RuntimeEngine,
@@ -133,6 +135,32 @@ struct Live {
 fn children() -> &'static Mutex<HashMap<String, Live>> {
     static C: OnceLock<Mutex<HashMap<String, Live>>> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Windows: each App's Job Object (kill-on-close), by deployment. Stop
+/// ends the whole tree through it; the setsid process group's role.
+#[cfg(windows)]
+fn jobs() -> &'static Mutex<HashMap<String, crate::publish_runtime::win_job::Job>> {
+    static J: OnceLock<Mutex<HashMap<String, crate::publish_runtime::win_job::Job>>> = OnceLock::new();
+    J.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Windows programs need the system's own variables to start (without
+/// SystemRoot, node can't load its crypto), and look for their home and
+/// temp folder under these names.
+#[cfg(windows)]
+fn windows_base_env(spec: &AppSpec) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for k in ["SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"] {
+        if let Ok(v) = std::env::var(k) {
+            out.push((k.to_string(), v));
+        }
+    }
+    let tmp = spec.cache_dir.join("tmp").to_string_lossy().to_string();
+    out.push(("TEMP".into(), tmp.clone()));
+    out.push(("TMP".into(), tmp));
+    out.push(("USERPROFILE".into(), spec.home_dir.to_string_lossy().to_string()));
+    out
 }
 
 fn run_dir(app_id: &str) -> PathBuf {
@@ -283,7 +311,13 @@ impl ProcessEngine {
         {
             !owned && !h.pid.is_some_and(pid_alive)
         }
-        #[cfg(not(unix))]
+        // Windows never adopts: an instance this daemon didn't start (no
+        // child) is gone, whatever process now holds its old pid.
+        #[cfg(windows)]
+        {
+            !owned
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             !owned
         }
@@ -292,6 +326,9 @@ impl ProcessEngine {
     fn forget(&self, h: &RunHandle) {
         file_logs().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
         stale_sinks().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
+        // Windows: dropping the job (kill-on-close) ends anything left.
+        #[cfg(windows)]
+        jobs().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
         let removed = children().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
         if let Some(Live { secrets_dir: Some(d), .. }) = removed {
             let _ = fs::remove_dir_all(d);
@@ -393,9 +430,78 @@ impl RuntimeEngine for ProcessEngine {
         })
     }
 
-    #[cfg(not(unix))]
+    /// Windows: as on Unix, with a Job Object for the setsid group (stop
+    /// ends the tree; it also ends with the daemon, so Windows doesn't
+    /// adopt: the supervisor starts the App again at boot), npm-style
+    /// `.cmd` programs run through cmd.exe, and the system variables a
+    /// Windows program needs added to the clean environment.
+    #[cfg(windows)]
+    fn start(&self, spec: &AppSpec, p: &Prepared, port: u16) -> Result<RunHandle> {
+        let Some((prog, args)) = spec.argv.split_first() else {
+            return Err(EngineError::new(codes::MANIFEST_INVALID, "host.start is empty"));
+        };
+        let env = clean_env(spec, port);
+        let path = env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone()).unwrap_or_default();
+        let (prog, args) = k2_core::terminal::win_cmd::resolve_spawn(prog, args, &path);
+        let mut cmd = Command::new(&prog);
+        cmd.args(&args).current_dir(&p.workdir).env_clear();
+        for (k, v) in windows_base_env(spec).into_iter().chain(env) {
+            cmd.env(k, v);
+        }
+        let secrets_dir = crate::vault::publish_env::apply_granted(&mut cmd, &spec.service_id, &spec.workspace_id, &p.workdir);
+        cmd.stdin(Stdio::null());
+        let sink = if pipe_sink_wanted() {
+            cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+            SINK_PIPE
+        } else {
+            rotate_if_needed(&spec.log_path);
+            let open = || OpenOptions::new().create(true).append(true).open(&spec.log_path);
+            let (out, err) = match open().and_then(|f| f.try_clone().map(|g| (f, g))) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    return Err(EngineError::new(
+                        codes::ENGINE_UNAVAILABLE,
+                        format!("open the App's log {}: {e}", spec.log_path.display()),
+                    ))
+                }
+            };
+            cmd.stdout(Stdio::from(out)).stderr(Stdio::from(err));
+            SINK_FILE
+        };
+        let (mut child, job) = crate::publish_runtime::win_job::spawn_in_job(&mut cmd).map_err(|e| {
+            EngineError::new(codes::ENGINE_UNAVAILABLE, format!("start {:?} in {}: {e}", spec.argv, p.workdir.display()))
+        })?;
+        let pid = child.id() as i32;
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&spec.log_path) {
+            let _ = writeln!(f, "[k2] deployment {} starting on port {port} (pid {pid})", spec.deployment_id);
+        }
+        if let (Some(o), Some(e)) = (child.stdout.take(), child.stderr.take()) {
+            pump(o, spec.log_path.clone());
+            pump(e, spec.log_path.clone());
+        }
+        if sink == SINK_FILE {
+            watch_file_log(&spec.deployment_id, &spec.log_path);
+        }
+        let rf = RunFile { app_id: spec.app_id.clone(), deployment_id: spec.deployment_id.clone(), port, pid, log: sink.to_string() };
+        let _ = fs::create_dir_all(run_dir(&spec.app_id));
+        let _ = fs::write(run_file(&spec.app_id, &spec.deployment_id), serde_json::to_vec(&rf).unwrap_or_default());
+        jobs().lock().unwrap_or_else(|e| e.into_inner()).insert(spec.deployment_id.clone(), job);
+        children()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(spec.deployment_id.clone(), Live { child: Some(child), secrets_dir });
+        Ok(RunHandle {
+            app_id: spec.app_id.clone(),
+            deployment_id: spec.deployment_id.clone(),
+            port,
+            pid: Some(pid),
+            engine_ref: format!("process:{pid}"),
+        })
+    }
+
+    #[cfg(not(any(unix, windows)))]
     fn start(&self, _spec: &AppSpec, _p: &Prepared, _port: u16) -> Result<RunHandle> {
-        Err(EngineError::new(codes::ENGINE_UNAVAILABLE, "the process engine runs on Unix hosts only"))
+        Err(EngineError::new(codes::ENGINE_UNAVAILABLE, "the process engine runs on Unix and Windows hosts only"))
     }
 
     fn liveness(&self, h: &RunHandle) -> Liveness {
@@ -410,7 +516,18 @@ impl RuntimeEngine for ProcessEngine {
                 None => Liveness::Unknown,
             }
         }
-        #[cfg(not(unix))]
+        // Windows: only our own child counts (reap above answered for an
+        // exited one); a pid from before a restart may belong to anyone now.
+        #[cfg(windows)]
+        {
+            let ours = children().lock().unwrap_or_else(|e| e.into_inner()).get(&h.deployment_id).is_some_and(|l| l.child.is_some());
+            match h.pid {
+                Some(_) if ours => Liveness::Running,
+                Some(_) => Liveness::Exited(None),
+                None => Liveness::Unknown,
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             Liveness::Unknown
         }
@@ -440,6 +557,31 @@ impl RuntimeEngine for ProcessEngine {
                 }
             } else if pid_alive(pid) && own_group(pid) {
                 signal_group(pid, libc::SIGKILL);
+            }
+            let live = children().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
+            if let Some(mut l) = live {
+                if let Some(mut c) = l.child.take() {
+                    let _ = c.kill();
+                    let _ = c.wait();
+                }
+                if let Some(d) = l.secrets_dir.take() {
+                    let _ = fs::remove_dir_all(d);
+                }
+            }
+        }
+        // Windows has no SIGTERM for a windowless program: the job ends the
+        // whole tree at once, so there is no grace period to wait out.
+        #[cfg(windows)]
+        {
+            let _ = grace;
+            // Only through our own job: never a bare pid, which after a
+            // restart may be any process on the machine.
+            if let Some(job) = jobs().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id) {
+                job.terminate();
+            }
+            let end = std::time::Instant::now() + Duration::from_secs(2);
+            while !self.exited(h) && std::time::Instant::now() < end {
+                std::thread::sleep(Duration::from_millis(50));
             }
             let live = children().lock().unwrap_or_else(|e| e.into_inner()).remove(&h.deployment_id);
             if let Some(mut l) = live {
@@ -505,6 +647,88 @@ impl RuntimeEngine for ProcessEngine {
             }
         }
         Ok(out)
+    }
+}
+
+/// Windows: the process lane starts an App with its log as stdout and a
+/// clean environment that still lets a Windows program run, reports it
+/// running, and stop ends the whole tree (the job), not just the leader.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use k2_core::test_env::TempHome;
+    use std::collections::BTreeMap;
+    use std::time::Instant;
+
+    #[test]
+    fn a_windows_app_starts_logs_runs_and_stops_with_its_tree() {
+        let h = TempHome::new();
+        let seed_dir = h.path().join("seed");
+        fs::create_dir_all(&seed_dir).unwrap();
+        let app = deploy::app_dir("pe-win");
+        let s = AppSpec {
+            app_id: "pe-win".into(),
+            service_id: "svc-pe-win".into(),
+            workspace_id: "ws".into(),
+            deployment_id: "d-win1".into(),
+            isolation: Isolation::Process,
+            // cmd prints, shows a system variable survived env_clear, then
+            // waits in a grandchild (ping) the stop must end too.
+            argv: ["cmd", "/d", "/c", "echo started %SystemRoot% %GREETING%& ping -n 59 127.0.0.1 >nul"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+            env: BTreeMap::from([("GREETING".to_string(), "hi".to_string())]),
+            memory_limit_bytes: None,
+            drain_secs: 30,
+            io_max_json: None,
+            devices: vec![],
+            public_origins: vec![],
+            data_dir: app.join("data"),
+            cache_dir: app.join("cache"),
+            home_dir: app.join("home"),
+            log_path: deploy::deployment_log_path("pe-win", "d-win1"),
+            wall: Default::default(),
+        };
+        let e = ProcessEngine;
+        let p = e.prepare(&SeedRef { hash: "x".into(), path: seed_dir }, &s).unwrap();
+        let hdl = e.start(&s, &p, 1).unwrap();
+        let end = Instant::now() + Duration::from_secs(10);
+        let log = loop {
+            let log = fs::read_to_string(&s.log_path).unwrap_or_default();
+            if log.contains("started") {
+                break log;
+            }
+            assert!(Instant::now() < end, "the App's stdout never reached its log: {log:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let root = std::env::var("SystemRoot").expect("SystemRoot");
+        assert!(log.contains(&format!("started {root} hi")), "{log}");
+        assert_eq!(e.liveness(&hdl), Liveness::Running);
+        assert!(run_file("pe-win", "d-win1").is_file());
+        // This test's grandchild: the only ping counting to 59.
+        let ours = || -> Vec<u32> {
+            k2_core::win_proc::command_lines(&k2_core::win_proc::pids_named("PING"))
+                .into_iter()
+                .filter(|(_, c)| c.contains("-n 59 127.0.0.1"))
+                .map(|(p, _)| p)
+                .collect()
+        };
+        // cmd starts ping after it echoes: wait for it to appear.
+        let end = Instant::now() + Duration::from_secs(10);
+        while ours().len() != 1 {
+            assert!(Instant::now() < end, "the grandchild runs: {:?}", ours());
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        e.stop(&hdl, Duration::from_secs(2)).unwrap();
+        assert_ne!(e.liveness(&hdl), Liveness::Running);
+        assert!(!run_file("pe-win", "d-win1").exists());
+        let end = Instant::now() + Duration::from_secs(5);
+        while !ours().is_empty() {
+            assert!(Instant::now() < end, "stop must end the App's whole tree");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        assert!(e.adopt().unwrap().is_empty(), "Windows doesn't adopt: the App ends with its job");
     }
 }
 

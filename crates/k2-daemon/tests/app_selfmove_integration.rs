@@ -169,6 +169,15 @@ struct Legacy {
     folder: PathBuf,
 }
 
+/// The service's shell line: sh on Unix, cmd.exe on Windows (no `exec`).
+fn legacy_cmd(port: u16) -> String {
+    if cfg!(windows) {
+        format!("{} server.py {port}", k2_core::test_env::PYTHON)
+    } else {
+        format!("exec python3 server.py {port}")
+    }
+}
+
 /// A real legacy `--cmd` service (the owner's `k2 publish run`; this
 /// harness has no open path, so it is a plain process) on the inherited
 /// environment, like a pre-vault service.
@@ -178,7 +187,7 @@ async fn legacy(d: u16, ws: &Ws, name: &str, tag: &str) -> Legacy {
     std::fs::write(folder.join("server.py"), LEGACY_PY).unwrap();
     std::fs::write(folder.join("tag.txt"), tag).unwrap();
     let port = free_port();
-    let r = post(d, "/cli/publish/run", OWNER, json!({"name": name, "project": ws.id, "cmd": format!("exec python3 server.py {port}"), "cwd": folder, "port": port, "noTunnel": true})).await;
+    let r = post(d, "/cli/publish/run", OWNER, json!({"name": name, "project": ws.id, "cmd": legacy_cmd(port), "cwd": folder, "port": port, "noTunnel": true})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_ne!(r.json()["cmd"], "(app)", "a legacy service, not an App: {}", r.body);
     let id = r.json()["id"].as_str().unwrap().to_string();
@@ -212,7 +221,7 @@ fn app_folder_nocaps(dir: &std::path::Path, id: &str, tag: &str) -> PathBuf {
     app_folder(dir, id, "1.0.0", tag);
     std::fs::write(
         dir.join("manifest.json"),
-        format!(r#"{{"schema":1,"kind":"app","id":"{id}","name":"{id}","version":"1.0.0","caps":[],"host":{{"mode":"cmd","start":["python3","server.py"],"health":{{"path":"/healthz"}},"drainSecs":2}}}}"#),
+        format!(r#"{{"schema":1,"kind":"app","id":"{id}","name":"{id}","version":"1.0.0","caps":[],"host":{{"mode":"cmd","start":["{py}","server.py"],"health":{{"path":"/healthz"}},"drainSecs":2}}}}"#, py = k2_core::test_env::PYTHON),
     )
     .unwrap();
     dunce::canonicalize(&dir).unwrap()

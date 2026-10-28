@@ -224,7 +224,8 @@ pub fn manifest(id: &str, version: &str) -> String {
     format!(
         r#"{{"schema":1,"kind":"app","id":"{id}","name":"{id}","version":"{version}",
 "caps":["thread:read"],
-"host":{{"mode":"cmd","start":["python3","server.py"],"health":{{"path":"/healthz"}},"drainSecs":2}}}}"#
+"host":{{"mode":"cmd","start":["{py}","server.py"],"health":{{"path":"/healthz"}},"drainSecs":2}}}}"#,
+        py = k2_core::test_env::PYTHON
     )
 }
 
@@ -238,8 +239,8 @@ pub fn app_folder(dir: &Path, id: &str, version: &str, tag: &str) -> PathBuf {
 }
 
 pub fn require_python3() {
-    let ok = std::process::Command::new("python3").arg("-c").arg("print(1)").output().map(|o| o.status.success()).unwrap_or(false);
-    assert!(ok, "python3 is required for the App runtime tests");
+    let ok = std::process::Command::new(k2_core::test_env::PYTHON).arg("-c").arg("print(1)").output().map(|o| o.status.success()).unwrap_or(false);
+    assert!(ok, "{} is required for the App runtime tests", k2_core::test_env::PYTHON);
 }
 
 /// Plain HTTP GET to a loopback port; `None` when nothing answers.

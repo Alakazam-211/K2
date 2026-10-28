@@ -485,7 +485,13 @@ async fn s7_watch_window_auto_rollback_then_crash_restart_and_stall_alert() {
         app_folder(&never, "s7b", "9.0.0", "never");
         std::fs::write(
             never.join("manifest.json"),
-            manifest("s7b", "9.0.0").replace(r#"["python3","server.py"]"#, r#"["sleep","30"]"#),
+            {
+                // An App that runs but never answers: `sleep 30` (PING on Windows).
+                let (prog, args) = k2_core::test_env::sleep_command(30);
+                let argv = serde_json::to_string(&std::iter::once(prog).chain(args).collect::<Vec<_>>()).unwrap();
+                let py = serde_json::to_string(&[k2_core::test_env::PYTHON, "server.py"]).unwrap();
+                manifest("s7b", "9.0.0").replace(&py, &argv)
+            },
         )
         .unwrap();
         let r = post(d.port, "/cli/app/deploy", OWNER, json!({"app": "s7b", "folder": never})).await;

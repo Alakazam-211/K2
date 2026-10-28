@@ -119,7 +119,7 @@ fn ws_app_folder(dir: &std::path::Path) -> std::path::PathBuf {
         format!(
             r#"{{"schema":1,"kind":"app","id":"{APP}","name":"{APP}","version":"1.0.0",
 "caps":["thread:read"],
-"host":{{"mode":"cmd","start":["python3","server.py"],"health":{{"path":"/healthz"}},"drainSecs":2}}}}"#
+"host":{{"mode":"cmd","start":["{py}","server.py"],"health":{{"path":"/healthz"}},"drainSecs":2}}}}"#, py = k2_core::test_env::PYTHON
         ),
     )
     .unwrap();

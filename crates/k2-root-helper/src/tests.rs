@@ -2073,6 +2073,35 @@ fn handoff_dropin_install_upgrades_the_0_46_0_dropin() {
     assert_eq!(reloads(&t), 1);
 }
 
+/// A box on the 0.46.5 drop-in (no ExecStop): install and every helper
+/// upgrade rewrite it with the `k2-wait-mainpid` ExecStop and reload once,
+/// so a stop after a hand-off waits for the successor.
+#[test]
+fn handoff_dropin_install_adds_the_wait_mainpid_execstop() {
+    let t = box_root();
+    std::fs::create_dir_all(t.p("/etc/systemd/system/k2-daemon.service.d")).unwrap();
+    let v0_46_5 = "# K2 runtime stage H (front-door hand-off). Written by k2-root-helper\n\
+                   # `daemon handoff-dropin install`; remove with `... remove`.\n\
+                   [Service]\n\
+                   KillMode=process\n\
+                   NotifyAccess=main\n\
+                   ExecReload=/bin/kill -USR2 $MAINPID\n\
+                   OOMPolicy=continue\n\
+                   RuntimeDirectory=k2\n\
+                   RuntimeDirectoryMode=0700\n\
+                   RuntimeDirectoryPreserve=yes\n";
+    std::fs::write(t.p(HANDOFF_DROPIN), v0_46_5).unwrap();
+    let o = t.call(&["daemon", "handoff-dropin", "install"]);
+    ok(&o);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["changed"], true);
+    let body = std::fs::read_to_string(t.p(HANDOFF_DROPIN)).unwrap();
+    assert_eq!(body, k2_root_proto::templates::handoff_dropin());
+    assert!(body.contains("\nExecStop=\nExecStop=/bin/sh -c "), "{body}");
+    assert!(body.contains("' k2-wait-mainpid\n"), "{body}");
+    assert_eq!(reloads(&t), 1);
+}
+
 /// 0.46.5: the file is already this build's, but systemd never loaded it
 /// (an older helper's reload failed, or a hand edit): `install` reloads
 /// once, through the helper, so the daemon needs no separate

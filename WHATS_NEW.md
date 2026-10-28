@@ -35,6 +35,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Fixes
 - **A stuck window recovers on macOS and Linux.** When a K2 window stopped responding, K2's recovery reloaded it at the Windows address, which goes nowhere on a Mac or Linux, so the window stayed blank. It now reloads the address each system really uses.
+- **A Linux server stops cleanly after a no-downtime reload.** On servers whose K2 unit the root helper manages, a stop or restart after `systemctl reload` used to kill the daemon at once, skipping its shutdown (a stop could leave agents running). The helper's unit settings now wait for the daemon to finish, as K2's own unit files already did.
 
 ## 0.46.5 — Agents stay up
 

@@ -90,6 +90,15 @@ pub fn hardening_dropin() -> &'static str {
 ///   session ends (no linger, `RemoveIPC=yes`). `Preserve=yes`: frpc (and
 ///   k2-ptyd agents) outlive a daemon stop under `KillMode=process`, so
 ///   the dir must too. Takes effect at the unit's next start.
+/// - `ExecStop=` (reset) + the `k2-wait-mainpid` line (0.46.6, the design
+///   in commit 33f49e338): a hand-off successor is not systemd's child, so
+///   without it a `systemctl stop|restart` after a `reload` SIGKILLs the
+///   successor at once and its graceful shutdown (k2-ptyd stop vs restart)
+///   never runs. systemd waits for its own ExecStop process, which SIGTERMs
+///   the main pid and waits until it is gone. The daemon hands off only
+///   when the unit carries this line (`handoff::EXEC_STOP_WAIT_MAINPID`,
+///   same text); the empty `ExecStop=` first keeps exactly one even when
+///   the unit file has the line too. Applies on `daemon-reload`.
 ///
 /// Shared with the provisioning templates and the user-unit writer, so a
 /// new box, a migrated box and a user-scope daemon all carry the same lines.
@@ -105,7 +114,9 @@ pub fn handoff_dropin() -> &'static str {
      OOMPolicy=continue\n\
      RuntimeDirectory=k2\n\
      RuntimeDirectoryMode=0700\n\
-     RuntimeDirectoryPreserve=yes\n"
+     RuntimeDirectoryPreserve=yes\n\
+     ExecStop=\n\
+     ExecStop=/bin/sh -c 'kill -TERM \"$$MAINPID\" 2>/dev/null; while kill -0 \"$$MAINPID\" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid\n"
 }
 
 /// front443's socket unit (`/etc/systemd/system/k2-front-443.socket`,
@@ -259,6 +270,8 @@ mod tests {
                 "RuntimeDirectory=k2",
                 "RuntimeDirectoryMode=0700",
                 "RuntimeDirectoryPreserve=yes",
+                "ExecStop=",
+                "ExecStop=/bin/sh -c 'kill -TERM \"$$MAINPID\" 2>/dev/null; while kill -0 \"$$MAINPID\" 2>/dev/null; do sleep 0.2; done' k2-wait-mainpid",
             ]
         );
         assert!(d.ends_with('\n'));

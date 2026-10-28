@@ -52,3 +52,22 @@ fn every_daemon_unit_writer_waits_for_the_main_process_at_stop() {
     ));
     assert!(!k2_daemon::handoff::exec_stop_waits_for_main(""), "no ExecStop");
 }
+
+/// The root helper's hand-off drop-in (`<unit>.d/k2-handoff.conf`, written
+/// on install and on every helper upgrade / daemon boot) carries the same
+/// ExecStop as the unit writers, after a reset, so a system unit converged
+/// by the helper waits for a hand-off successor at stop too (0.46.6; before,
+/// only `KillMode=process` came from the drop-in).
+#[test]
+fn the_handoff_dropin_waits_for_the_main_process_at_stop() {
+    let d = k2_root_proto::templates::handoff_dropin();
+    let stops: Vec<&str> = d.lines().filter(|l| l.starts_with("ExecStop=")).collect();
+    assert_eq!(
+        stops,
+        vec!["ExecStop=", k2_daemon::handoff::EXEC_STOP_WAIT_MAINPID],
+        "the drop-in must reset ExecStop, then carry exactly the daemon's line:\n{d}"
+    );
+    let service = d.lines().position(|l| l == "[Service]").expect("[Service]");
+    let at = d.lines().position(|l| l == k2_daemon::handoff::EXEC_STOP_WAIT_MAINPID).expect("ExecStop line");
+    assert!(at > service, "ExecStop must sit in [Service]:\n{d}");
+}

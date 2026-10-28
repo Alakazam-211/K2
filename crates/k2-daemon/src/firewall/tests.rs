@@ -321,11 +321,11 @@ fn front_takes_the_firewalls_people() {
     let _e = env();
     let shell = Who::Shell { project_id: "ws-1".into(), session_id: "s-1".into() };
     for path in ["/cli/front/status", "/cli/front/enable", "/cli/front/disable"] {
-        assert_eq!(routes::front_caller(&Who::Owner, path).expect("owner"), "owner");
+        assert_eq!(routes::front_caller(&Who::Owner, path).unwrap_or_else(|r| panic!("{path}: owner refused: {}", r.body)), "owner");
         let actor = routes::front_caller(&shell, path).unwrap_or_else(|r| panic!("{path}: shell refused: {}", r.body));
         assert!(actor.starts_with("shell:"), "{path}: {actor}");
         let admin = Who::Login { username: "a".into(), role: k2_core::connect_users::Role::Admin };
-        assert_eq!(routes::front_caller(&admin, path).expect("admin"), "user:a");
+        assert_eq!(routes::front_caller(&admin, path).unwrap_or_else(|r| panic!("{path}: admin refused: {}", r.body)), "user:a");
 
         let r = routes::front_caller(&agent(), path).expect_err("an agent is refused");
         assert_eq!(r.status, "403 Forbidden", "{path}");

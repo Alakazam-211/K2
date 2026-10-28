@@ -195,7 +195,7 @@ cer_refuses() { # <label> <expect> <args…>
     fi
 }
 cer_refuses "the real U1" "retired key" "RWQFu172RhQR6QBqzmij2E9btDGhDWmpdH+ah1/M4PmuHPINUWvKLf6o" "$U3_PUB_LINE"
-cer_refuses "one key twice" "two different keys" "$U2_PUB_LINE" "$U2_PUB_LINE"
+cer_refuses "one key twice" "every key must be a different key" "$U2_PUB_LINE" "$U2_PUB_LINE"
 cer_refuses "garbage" "not a minisign public key" "not-a-key" "$U3_PUB_LINE"
 cer_refuses "a second identical run" "no change" "$U2_PUB_LINE" "$U3_PUB_LINE"
 

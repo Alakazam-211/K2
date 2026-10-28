@@ -45,7 +45,9 @@ U1_LINE="$(sed -n 2p "$tmp/keys/u1.pub")"
 printf 'u3pw\nu3pw\n' | "$MINISIGN" -G -p "$tmp/keys/u3.pub" -s "$tmp/keys/u3.key" >/dev/null 2>&1
 U3_LINE="$(sed -n 2p "$tmp/keys/u3.pub")"
 
-# fixture_keys <U1 line> [<U2 line> <U3 line>]: rewrite the fixture lib.rs.
+# fixture_keys <U1 line> [<U2 line> <U3 line> [<other Mac's primary>…]]: rewrite
+# the fixture lib.rs. Other Macs' primaries are listed BEFORE U2 (so "this
+# Mac's key" is never simply the first one).
 fixture_keys() {
     python3 -I - "$TREE/crates/k2-release-keys/src/lib.rs" "$@" <<'PY'
 import base64, re, sys
@@ -57,9 +59,9 @@ def kid(line):
     return base64.b64decode(line)[2:10][::-1].hex().upper()
 entries = ""
 if len(sys.argv) > 3:
-    u2, u3 = sys.argv[3], sys.argv[4]
+    u2, u3, others = sys.argv[3], sys.argv[4], sys.argv[5:]
     entries = "\n".join('    TrustedKey { role: "%s", key_id: "%s", public_key_b64: "%s" },' % (r, kid(k), k)
-                        for r, k in (("primary", u2), ("backup", u3)))
+                        for r, k in [("primary", o) for o in others] + [("primary", u2), ("backup", u3)])
     entries = "\n" + entries + "\n"
 block = '// BEGIN UPDATER_KEYS (fixture)\npub const UPDATER_KEYS: &[TrustedKey] = &[%s];\n' % entries
 s = re.sub(r'// BEGIN UPDATER_KEYS.*?(?=// END UPDATER_KEYS)', block, s, flags=re.S)

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# sign-approve.sh — open the release's signing session: one Touch ID per
+# sign-approve.sh — open the release's signing session: one approval (Touch ID
+# or the Mac login password, in the system sheet) per
 # release (prd-signing-user-v1 rev 2 §4.4, S2). Sourced by release.sh
 # (Step 0.46, before any build) after scripts/lib/sign-updater.sh. Sets no
 # shell options.
@@ -14,7 +15,7 @@
 #    RE-APPROVE).
 # 2. `k2sign challenge …` → the challenge JSON the signer made and keeps.
 # 3. K2 Release Approve (a small Swift app in ~/Applications, run as this
-#    user with `open -W`): Touch ID, then a Secure Enclave P-256 signature
+#    user with `open -W`): Touch ID or the login password, then a Secure Enclave P-256 signature
 #    over the challenge's exact bytes. The app is untrusted: without the
 #    finger on this Mac's sensor it can't make that signature, and the signer
 #    checks it against the enrolled public key.
@@ -106,7 +107,7 @@ k2sa_open_session() {
     st="$(k2u_k2sign status "$version")" || { k2sa_fail "k2sign status failed (above)"; return 1; }
     approval="$(printf '%s' "$st" | k2sa_status_field approval)"
     if [ "$approval" = off ]; then
-        k2sa_log "the signer's policy has approval off (soft rollback): no Touch ID session; its other checks still run"
+        k2sa_log "the signer's policy has approval off (soft rollback): no approval session; its other checks still run"
         return 0
     fi
     local reapprove=""
@@ -139,9 +140,9 @@ k2sa_open_session() {
     nonce="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["nonce"])' "$cf")" \
         || { rm -rf "$work"; k2sa_fail "the challenge is not JSON"; return 1; }
 
-    printf '\n\033[1;33m══ Touch ID needed on z3mbpZ: %sapprove K2 %s (base %s), %s update files%s ══\033[0m\n' \
-        "${reapprove:+RE-}" "$version" "${base:0:7}" "${#assets[@]}" "$([ "$windows" = 1 ] && echo ', INCLUDING the Windows setup (no independent check)')" >&2
-    /usr/bin/osascript -e "display notification \"Touch ID: ${reapprove:+RE-}approve K2 $version signing\" with title \"K2 release\"" >/dev/null 2>&1 || true
+    printf '\n\033[1;33m══ Approval needed on %s (Touch ID or your login password): %sapprove K2 %s (base %s), %s update files%s ══\033[0m\n' \
+        "$(scutil --get LocalHostName 2>/dev/null || hostname -s)" "${reapprove:+RE-}" "$version" "${base:0:7}" "${#assets[@]}" "$([ "$windows" = 1 ] && echo ', INCLUDING the Windows setup (no independent check)')" >&2
+    /usr/bin/osascript -e "display notification \"Touch ID or password: ${reapprove:+RE-}approve K2 $version signing\" with title \"K2 release\"" >/dev/null 2>&1 || true
 
     if ! k2sa_run_helper "$cf" "$of" "$version"; then
         rm -rf "$work"; return 1

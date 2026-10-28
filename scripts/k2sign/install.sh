@@ -164,7 +164,9 @@ fi
 
 # Pubkeys from THIS tree: U1 always; U2 (primary) and U3 (backup) once the
 # ceremony's pubkeys commit is in it.
-PUBKEYS_TEXT="$("$PY" -I - "$TREE/crates/k2-release-keys/src/lib.rs" <<'PY'
+GEN_U2=""
+[ -f "$ETC/u2-generated.pub" ] && GEN_U2="$(tr -d '[:space:]' < "$ETC/u2-generated.pub")"
+PUBKEYS_TEXT="$("$PY" -I - "$TREE/crates/k2-release-keys/src/lib.rs" "$GEN_U2" <<'PY'
 import re, sys
 src = open(sys.argv[1]).read()
 m = re.search(r'pub const LEGACY_UPDATER_KEY_B64: &str = "([^"]+)";', src)
@@ -173,23 +175,39 @@ if not m:
 print("u1 " + m.group(1))
 block = src[src.index("// BEGIN UPDATER_KEYS"):src.index("// END UPDATER_KEYS")]
 keys = re.findall(r'role: "([a-z]+)",\s*key_id: "([0-9A-F]{16})",\s*public_key_b64: "([^"]+)"', block)
-for role, slot in (("primary", "u2"), ("backup", "u3")):
-    k = [x[2] for x in keys if x[0] == role]
-    if len(k) > 1:
-        sys.exit("UPDATER_KEYS has more than one %s key" % role)
-    if k:
-        print(slot + " " + k[0])
+# One primary per signing Mac (U2 z3mbpZ, U2b z3mbp): this Mac pins only its
+# own, the one its generate-u2 made; the backup is shared.
+mine = sys.argv[2] if len(sys.argv) > 2 else ""
+prim = [x[2] for x in keys if x[0] == "primary"]
+back = [x[2] for x in keys if x[0] == "backup"]
+if len(back) > 1:
+    sys.exit("UPDATER_KEYS has more than one backup key")
+if prim and mine:
+    if mine not in prim:
+        print("TREE_PRIMARY_MISMATCH")
+        sys.exit(1)
+    print("u2 " + mine)
+if back:
+    print("u3 " + back[0])
+print("# tree primaries: %d" % len(prim))
 PY
-)" || die "could not read the public keys from $TREE"
+)" || {
+    case "$PUBKEYS_TEXT" in
+        *TREE_PRIMARY_MISMATCH*) die "this Mac's U2-class key (the one k2sign-admin generate-u2 made, $ETC/u2-generated.pub) is not one of this tree's primary keys. Install from the commit that landed it." ;;
+    esac
+    die "could not read the public keys from $TREE"
+}
 TREE_U2="$(printf '%s\n' "$PUBKEYS_TEXT" | /usr/bin/awk '$1=="u2"{print $2}')"
-if [ -f "$ETC/u2-generated.pub" ] && [ -n "$TREE_U2" ]; then
-    [ "$(tr -d '[:space:]' < "$ETC/u2-generated.pub")" = "$TREE_U2" ] \
-        || die "this tree's U2 public key is not the one k2sign-admin generate-u2 made ($ETC/u2-generated.pub). Install from the commit that landed THAT key."
-    say "  the tree's U2 matches the key generate-u2 made"
-fi
-if [ -z "$TREE_U2" ]; then
-    say "  NOTE: this tree has no U2/U3 yet (pre-ceremony). Only U1 is pinned; preflight refuses until you"
-    say "        re-run this installer from the commit that lands the ceremony's public keys."
+TREE_NPRIM="$(printf '%s\n' "$PUBKEYS_TEXT" | sed -n 's/^# tree primaries: //p')"
+PUBKEYS_TEXT="$(printf '%s\n' "$PUBKEYS_TEXT" | grep -v '^# tree primaries')"
+if [ -n "$TREE_U2" ]; then
+    say "  this Mac's primary key (generate-u2) is one of the tree's $TREE_NPRIM primaries: pinned as u2"
+elif [ "${TREE_NPRIM:-0}" = 0 ]; then
+    say "  NOTE: this tree has no primary keys yet (pre-ceremony). Preflight refuses until you re-run this"
+    say "        installer from the commit that lands the ceremony's public keys."
+else
+    say "  NOTE: no key from generate-u2 on this Mac yet; its primary gets pinned when you re-run this after"
+    say "        generate-u2 and the public-keys commit."
 fi
 
 # ── 2. the user ────────────────────────────────────────────────────────────

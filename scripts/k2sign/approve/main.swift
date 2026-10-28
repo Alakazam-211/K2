@@ -2,12 +2,15 @@
 //
 // Runs as the release user (z3thon), started by scripts/lib/sign-approve.sh with
 // `open -W -n -a "K2 Release Approve" --args --challenge <f> --out <f>`.
-// It is UNTRUSTED by design: the trust is in the Secure Enclave key (biometry
-// only, .biometryCurrentSet) and in the signer's own openssl check against
+// It is UNTRUSTED by design: the trust is in the Secure Enclave key (Touch ID
+// or the Mac login password, asked by the system sheet on every use: the access
+// control is [.privateKeyUsage, .biometryAny, .or, .devicePasscode], Rosson
+// 2026-10-28; never cached, reuse window 0) and in the signer's own openssl check against
 // /usr/local/etc/k2sign/approver.pem. Without a live finger on this Mac's
 // sensor it can't make the signature, whoever runs it.
 //
-//   --enrol                      make the SE key; write ~/.k2-release-approve/{key.blob,approver.pem}
+//   --enrol [--replace]          make the SE key; write ~/.k2-release-approve/{key.blob,approver.pem}
+//                                (--replace first renames an existing key.blob/approver.pem to *.old-<time>)
 //   --challenge <f> --out <f>    show the challenge in the Touch ID sheet, sign its exact bytes,
 //                                write the DER signature to <out> (or the reason to <out>.err)
 //   --key-dir <dir>              (with the above) use <dir> instead of ~/.k2-release-approve
@@ -57,19 +60,28 @@ func accessControl() -> SecAccessControl {
     var err: Unmanaged<CFError>?
     guard let ac = SecAccessControlCreateWithFlags(
         nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        [.privateKeyUsage, .biometryCurrentSet], &err) else {
+        // Touch ID (any enrolled finger, so adding a fingerprint doesn't kill
+        // the key) OR the Mac login password, typed into the system sheet.
+        // Spelled out rather than .userPresence, so nothing else (an Apple
+        // Watch, a future factor) can satisfy it.
+        [.privateKeyUsage, .biometryAny, .or, .devicePasscode], &err) else {
         fail("can't make the access control: \(String(describing: err?.takeRetainedValue()))")
     }
     return ac
 }
 
-func biometryContext(reason: String) -> LAContext {
+// A fresh context for every run: nothing is pre-evaluated or reused, so the
+// key operation itself puts up the system sheet (Touch ID, or "Use Password…").
+// The sheet needs the logged-in console session; a process in a bare SSH
+// session can't show it and gets no signature.
+func approvalContext(reason: String) -> LAContext {
     let ctx = LAContext()
     ctx.localizedReason = reason
     ctx.touchIDAuthenticationAllowableReuseDuration = 0
+    ctx.interactionNotAllowed = false
     var err: NSError?
-    guard ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &err) else {
-        fail("Touch ID is not available here (\(err?.localizedDescription ?? "unknown")); the approval is biometry only")
+    guard ctx.canEvaluatePolicy(.deviceOwnerAuthentication, error: &err) else {
+        fail("this session can't show the approval sheet (\(err?.localizedDescription ?? "unknown")); approve at z3mbpZ's screen")
     }
     return ctx
 }
@@ -78,11 +90,19 @@ func enrol() {
     guard SecureEnclave.isAvailable else { fail("this Mac has no Secure Enclave") }
     let fm = FileManager.default
     if fm.fileExists(atPath: blobURL.path) {
-        fail("already enrolled (\(blobURL.path)); move it aside first if you mean to re-enrol, then run k2sign-admin set-approver with the new approver.pem")
+        guard CommandLine.arguments.contains("--replace") else {
+            fail("already enrolled (\(blobURL.path)); to replace it run --enrol --replace, then sudo k2sign-admin set-approver with the new approver.pem")
+        }
+        let stamp = Int(Date().timeIntervalSince1970)
+        for u in [blobURL, pemURL] where fm.fileExists(atPath: u.path) {
+            let old = u.deletingLastPathComponent().appendingPathComponent(u.lastPathComponent + ".old-\(stamp)")
+            do { try fm.moveItem(at: u, to: old) } catch { fail("can't move \(u.path) aside: \(error.localizedDescription)") }
+            print("moved the old \(u.lastPathComponent) to \(old.path)")
+        }
     }
     do {
         try fm.createDirectory(at: keyDir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let ctx = biometryContext(reason: "enrol this Mac's Touch ID as the K2 release approver")
+        let ctx = approvalContext(reason: "enrol the K2 release approver key (Touch ID or your login password)")
         let key = try SecureEnclave.P256.Signing.PrivateKey(accessControl: accessControl(), authenticationContext: ctx)
         // Prove the key works with a finger before anyone trusts its public half.
         let probe = "k2-release-approve enrol \(Date().timeIntervalSince1970)".data(using: .utf8)!
@@ -120,7 +140,7 @@ func approve(challengePath: String, outPath: String) {
         fail("not enrolled (no \(blobURL.path)); open K2 Release Approve with --enrol first", errFile: errFile)
     }
     do {
-        let ctx = biometryContext(reason: reason)
+        let ctx = approvalContext(reason: reason)
         let key = try SecureEnclave.P256.Signing.PrivateKey(dataRepresentation: blob, authenticationContext: ctx)
         // Signs SHA-256(challenge bytes): what `openssl dgst -sha256 -verify` checks.
         let sig = try key.signature(for: data)
@@ -155,5 +175,5 @@ if args.contains("--enrol") {
 } else if let c = arg("--challenge"), let o = arg("--out") {
     approve(challengePath: c, outPath: o)
 } else {
-    fail("usage: --enrol | --challenge <file> --out <file> | --soft-selftest <dir>")
+    fail("usage: --enrol [--replace] | --challenge <file> --out <file> | --soft-selftest <dir>  [--key-dir <dir>]")
 }

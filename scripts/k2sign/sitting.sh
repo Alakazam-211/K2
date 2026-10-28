@@ -1,14 +1,17 @@
 #!/bin/bash
-# sitting.sh — Rosson's sittings on z3mbpZ for the signing user
+# sitting.sh — Rosson's sittings for the signing user, on each signing Mac
+# (z3mbpZ holds primary key U2, z3mbp holds U2b: one key per Mac, never a copy)
 # (prd-signing-user-v1 rev 2 §7; runbook docs/release/updater-key-ceremony.md,
 # "The signing user"). In a GUI iTerm on z3mbpZ (not SSH), in the release
 # checkout, on the commit K2 named:
 #
-#   bash scripts/k2sign/sitting.sh check                      read-only: is z3mbpZ ready?        1 min
-#   bash scripts/k2sign/sitting.sh 0 [--run]                  S0 spike, THROWAWAY key           ~10 min
-#   bash scripts/k2sign/sitting.sh 1 --commit <sha> [--run]   user, signer, approver, token      ~25 min
-#   bash scripts/k2sign/sitting.sh 2 --commit <sha> [--run]   the keys (agents paused)           ~30 min
-#   bash scripts/k2sign/sitting.sh 3 --commit <sha> [--run]   after the public keys land         ~15 min
+#   bash scripts/k2sign/sitting.sh check [--key U2|U2b]                      read-only: is this Mac ready?    1 min
+#   bash scripts/k2sign/sitting.sh 0 [--run]                                 S0 spike, THROWAWAY key         ~10 min
+#   bash scripts/k2sign/sitting.sh 1 --key U2|U2b --commit <sha> [--run]     user, signer, approver, token    ~25 min
+#   bash scripts/k2sign/sitting.sh 2 --key U2|U2b --commit <sha> [--run]     the keys (agents stopped)        ~30 min (U2b ~15)
+#   bash scripts/k2sign/sitting.sh 3 --key U2|U2b --commit <sha> [--run]     after the public keys land       ~15 min
+#   bash scripts/k2sign/sitting.sh reenrol --key U2|U2b --commit <sha> [--run]  replace the approver key        ~10 min
+# --key: U2 = z3mbpZ, U2b = z3mbp (the script refuses the wrong Mac).
 #
 # Without --run it only PRINTS the steps (read them first). With --run it
 # stops before each step: Enter runs it, s skips it (for a re-run after a
@@ -19,21 +22,30 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 TREE="$(cd "$HERE/../.." && pwd)"
+# Every path below is absolute; from / the _k2sign steps can read their cwd.
+cd /
 LIBEXEC=/usr/local/libexec/k2sign
 APP="$HOME/Applications/K2 Release Approve.app"
 APPBIN="$APP/Contents/MacOS/K2 Release Approve"
 U1_KEY="$HOME/.tauri/k2so-updater.key"
 WHICH="${1:-}"; shift || true
-RUN=0 COMMIT=""
+RUN=0 COMMIT="" KEY=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --run) RUN=1 ;;
         --commit) COMMIT="${2:-}"; shift ;;
+        --key) KEY="${2:-}"; shift ;;
         *) echo "sitting.sh: unknown argument $1" >&2; exit 2 ;;
     esac
     shift
 done
 
+case "$WHICH:$KEY" in
+    check:|0:) KEY="${KEY:-U2}" ;;
+    *:U2|*:U2b) ;;
+    1:*|2:*|3:*|reenrol:*) echo "sitting.sh $WHICH: add --key U2 (on z3mbpZ) or --key U2b (on z3mbp)" >&2; exit 2 ;;
+esac
+case "$KEY" in U2) HOST=z3mbpZ ;; U2b) HOST=z3mbp ;; *) HOST="" ;; esac
 ok() { printf '  \033[32mok\033[0m  %s\n' "$*"; }
 bad() { printf '  \033[1;31mNO\033[0m  %s\n' "$*"; BAD=$((BAD + 1)); }
 note() { printf '  --  %s\n' "$*"; }
@@ -72,6 +84,13 @@ must_say() {
     fi
 }
 agents_running() { /usr/bin/pgrep -u "$(id -un)" -f 'claude|grok|codex|k2-ptyd' 2>/dev/null | wc -l | tr -d ' '; }
+need_host() {
+    local h
+    h="$(scutil --get LocalHostName 2>/dev/null || true)"
+    if [ "$h" = "$HOST" ]; then ok "this is $HOST, the Mac that holds key $KEY"; return 0; fi
+    echo "Key $KEY belongs to $HOST; this is $h."
+    [ "$RUN" = 0 ] || exit 1
+}
 need_commit() {
     local head
     head="$(git -C "$TREE" rev-parse HEAD)"
@@ -88,13 +107,14 @@ need_commit() {
 }
 how_to_run() {
     printf '\n(That was a dry run. To do it: cd %s && bash scripts/k2sign/sitting.sh %s%s --run)\n' \
-        "$(show "$TREE")" "$WHICH" "${COMMIT:+ --commit $COMMIT}"
+        "$(show "$TREE")" "$WHICH --key $KEY" "${COMMIT:+ --commit $COMMIT}"
 }
 
 check() {
     echo "z3mbpZ readiness (read-only):"
     [ "$(uname -s)" = Darwin ] && ok "macOS $(sw_vers -productVersion)" || bad "not macOS"
-    [ "$(scutil --get LocalHostName 2>/dev/null)" = z3mbpZ ] && ok "this is z3mbpZ" || bad "this is $(scutil --get LocalHostName 2>/dev/null), not z3mbpZ"
+    [ "$(scutil --get LocalHostName 2>/dev/null)" = "$HOST" ] && ok "this is $HOST (key $KEY)" \
+        || bad "this is $(scutil --get LocalHostName 2>/dev/null), not $HOST: key $KEY belongs to $HOST (U2 = z3mbpZ, U2b = z3mbp)"
     if [ -n "${SSH_CONNECTION:-}" ]; then bad "this is an SSH session: run the sittings in a GUI iTerm"; else ok "a local (GUI) terminal"; fi
     free_gb="$(df -g /System/Volumes/Data | awk 'NR==2{print $4}')"
     [ "$free_gb" -ge 60 ] && ok "disk: ${free_gb} GiB free" || bad "disk: only ${free_gb} GiB free (a release needs ~60; runbook cleanup)"
@@ -106,8 +126,8 @@ check() {
     command -v swiftc >/dev/null && ok "swiftc (to build K2 Release Approve)" || bad "no swiftc"
     command -v minisign >/dev/null && ok "minisign (the release side's checks)" || bad "brew install minisign"
     n="$(bioutil -c 2>/dev/null | grep -Eo '[0-9]+ biometric template' | grep -Eo '^[0-9]+' | head -1 || true)"
-    [ "${n:-0}" -ge 1 ] && ok "Touch ID: ${n} fingerprint(s). Add any extra fingerprint NOW, before sitting 1: adding or removing one later kills the approver key (then: re-enrol + set-approver)" \
-        || bad "no Touch ID fingerprint enrolled"
+    [ "${n:-0}" -ge 1 ] && ok "Touch ID: ${n} fingerprint(s) (approvals also accept your Mac login password)" \
+        || note "no Touch ID fingerprint: approvals will ask for your Mac login password"
     who | grep -q "^$(id -un) *console" && ok "$(id -un) is logged in at the console" || bad "nobody is logged in at the console"
     a="$(agents_running)"
     [ "$a" = 0 ] && ok "no Claude/Grok/Codex/k2-ptyd process as $(id -un)" || note "$a Claude/Grok/Codex/k2-ptyd processes run as $(id -un): fine now, but sitting 2 needs them stopped"
@@ -147,8 +167,9 @@ check) check ;;
     [ "$RUN" = 1 ] || how_to_run
     ;;
 1)
-    echo "Sitting 1 — the signing user, the signer, the approver, the signer's GitHub token."
-    echo "You'll type: your Mac admin password (2-3 times) and paste one new GitHub token. Touch ID: once."
+    echo "Sitting 1 on $HOST (key $KEY) — the signing user, the signer, the approver, the signer's GitHub token."
+    echo "You'll type: your Mac admin password (2-3 times) and paste one new GitHub token. Touch ID (or your login password): once."
+    need_host
     need_commit
     if [ "$RUN" = 1 ]; then check || { echo "fix the above first"; exit 1; }; fi
     step "Dry run of the installer (no sudo; it lists every change it will make)" bash "$HERE/install.sh" --dry-run
@@ -159,11 +180,12 @@ check) check ;;
     must_fail "this user can't run anything else as _k2sign without a password" sudo -n -u _k2sign /usr/bin/true
     must_say "the signer answers, and refuses (no keys yet)" "no U2 public key pinned" sudo -n -u _k2sign "$LIBEXEC/k2sign" preflight 0.46.6
     step "Build K2 Release Approve into ~/Applications" bash "$HERE/approve/build.sh"
-    step "Enrol the approver: TOUCH the sensor when the sheet appears" "$APPBIN" --enrol
+    step "Enrol the approver: TOUCH the sensor (or click 'Use Password…' and type your Mac login password)" "$APPBIN" --enrol
     step "Give the signer the approver's public key (Password: = your Mac admin password)" sudo "$LIBEXEC/k2sign-admin" set-approver "$HOME/.k2-release-approve/approver.pem"
     printf '\n\033[1m▶ In a browser: make the signer'"'"'s own GitHub token (read-only, about 3 min)\033[0m\n'
     echo "    github.com → your picture → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token"
-    echo "    Token name: k2sign z3mbpZ    Resource owner: Alakazam-211    Expiration: 1 year (or the longest allowed)"
+    echo "    Token name: k2sign $HOST    Resource owner: Alakazam-211    Expiration: 1 year (or the longest allowed)"
+    echo "    (one token per Mac: revoking one Mac's token leaves the other working)"
     echo "    Repository access: Only select repositories → K2"
     echo "    Repository permissions: Contents → Read-only; Attestations → Read-only (Metadata read-only is added for you). Nothing else."
     echo "    Generate token and copy it (GitHub shows it once). If it says the token is pending, approve it:"
@@ -177,15 +199,21 @@ check) check ;;
     [ "$RUN" = 1 ] || how_to_run
     ;;
 2)
-    echo "Sitting 2 — the keys. U2 is made inside _k2sign (nobody sees its password); U3 goes to your password manager; U1 moves in."
+    if [ "$KEY" = U2 ]; then
+        echo "Sitting 2 on z3mbpZ — the keys. U2 is made inside _k2sign (nobody sees its password); U3 (made ONCE, here) goes to your password manager; U1 moves in."
+    else
+        echo "Sitting 2 on z3mbp — the keys. U2b, this Mac's own primary, is made inside its _k2sign (nobody sees its password); U1 moves in. U3 is not made here."
+    fi
     echo "BEFORE you start:"
     echo "  - U1's password must be in your password manager. Today it's the value on the TAURI_SIGNING_PRIVATE_KEY_PASSWORD line in the K2"
     echo "    checkout's .env: open .env in an editor (don't cat it), copy the value into a password-manager entry 'K2 update key U1'."
-    echo "  - Make a NEW long password for U3 in your password manager (entry 'K2 update key U3 - password')."
+    [ "$KEY" = U2 ] && echo "  - Make a NEW long password for U3 in your password manager (entry 'K2 update key U3 - password')."
     echo "  - Stop every agent: quit K2 from its menu-bar icon, then run 'k2 daemon stop' (it ends agent sessions), and close every"
     echo "    Claude/Grok/Codex terminal. The script checks none is left."
-    echo "You'll type: your Mac admin password (1-2 times), U3's new password (twice), 'saved', U1's password (once)."
+    if [ "$KEY" = U2 ]; then echo "You'll type: your Mac admin password (1-2 times), U3's new password (twice), 'saved', U1's password (once)."
+    else echo "You'll type: your Mac admin password (1-2 times) and U1's password (once)."; fi
     echo "After pasting a password, copy any other text so it isn't left on the clipboard."
+    need_host
     need_commit
     if [ "$RUN" = 1 ]; then
         a="$(agents_running)"
@@ -195,10 +223,15 @@ check) check ;;
             || { echo "  $U1_KEY.pub is not U1 (E9111446F65EBB05): tell K2."; exit 1; }
         ok "agents stopped; U1's key file is $U1_KEY (id E9111446F65EBB05)"
     fi
-    step "U2 inside _k2sign (random password, never shown); prints U2's PUBLIC line (Password: = Mac admin password)" sudo "$LIBEXEC/k2sign-admin" generate-u2
-    step "U3: type U3's new password twice at minisign's prompts; attach the key file to a password-manager entry; type 'saved'" \
-        bash "$TREE/scripts/updater-key-ceremony.sh" generate --signer k2sign
-    note "The two PUBLIC lines are saved in ~/k2-update-pubkeys.txt (safe to share). If the U3 step stopped, re-run with --run and press s for the U2 step."
+    step "$KEY inside _k2sign (random password, never shown); prints its PUBLIC line (Password: = Mac admin password)" sudo "$LIBEXEC/k2sign-admin" generate-u2
+    if [ "$KEY" = U2 ]; then
+        step "U3: type U3's new password twice at minisign's prompts; attach the key file to a password-manager entry; type 'saved'" \
+            bash "$TREE/scripts/updater-key-ceremony.sh" generate --signer k2sign --key-name U2
+        note "The PUBLIC lines (U2, U3) are saved in ~/k2-update-pubkeys-U2.txt (safe to share). If the U3 step stopped, re-run with --run and press s for the U2 step."
+    else
+        step "Save U2b's PUBLIC line to a file (no U3 here)" bash "$TREE/scripts/updater-key-ceremony.sh" generate --signer k2sign --key-name U2b --skip-u3
+        note "U2b's PUBLIC line is saved in ~/k2-update-pubkeys-U2b.txt (safe to share)."
+    fi
     step "U1 into _k2sign: 'Password:' = Mac admin password, then 'U1's password (not shown):' = U1's password" sudo "$LIBEXEC/k2sign-admin" import u1 "$U1_KEY"
     step "Forget the cached admin password" sudo -k
     echo
@@ -211,17 +244,18 @@ check) check ;;
     echo "  chmod 600 ~/.tauri/k2so-updater.key"
     echo "  # 3. Old stopgap leftovers, if they exist (each may say 'not found': fine):"
     echo "  rm -f ~/.k2-updater/*.key; security delete-generic-password -s k2-updater-signing-u1; security delete-generic-password -s k2-updater-signing-u2"
-    echo "  # 4. The old GitHub signing secrets (the release preflight refuses while they exist):"
+    echo "  # 4. The old GitHub signing secrets (once, on either Mac; the release preflight refuses while they exist):"
     echo "  gh secret delete TAURI_SIGNING_PRIVATE_KEY -R Alakazam-211/K2; gh secret delete TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R Alakazam-211/K2"
     echo "  # 5. App Store Connect key: keep one AuthKey_*.p8 in one folder, chmod 700 the folder and 600 the file,"
     echo "  #    and point ASC_API_KEY_P8= in the K2 checkout's .env at it"
-    echo "Then start K2 again (open it from Applications) and send K2 the file ~/k2-update-pubkeys.txt."
+    echo "Then start K2 again (open it from Applications) and send K2 the file ~/k2-update-pubkeys-$KEY.txt."
     echo "(On z3mbp, separately: once both entries are in the password manager, rm -P ~/k2-root-helper-keys-SAVE-THEN-DELETE.txt)"
     [ "$RUN" = 1 ] || how_to_run
     ;;
 3)
-    echo "Sitting 3 — after K2 says the public keys landed: pin them, prove the signer end to end, one Touch ID."
+    echo "Sitting 3 on $HOST (key $KEY) — after K2 says the public keys landed: pin them, prove the signer end to end, one approval."
     echo "First: cd $(show "$TREE") && git fetch origin && git checkout --detach <the commit K2 names>"
+    need_host
     need_commit
     step "Re-install from this commit: pins U2/U3; refuses if the tree's U2 isn't the one generate-u2 made (Password: = Mac admin password)" sudo bash "$HERE/install.sh"
     note "Send K2 the 'Hashes' lines again and wait for 'they match'."
@@ -229,7 +263,7 @@ check) check ;;
     step "Preflight as the release does it (must end 'preflight ok')" bash "$TREE/scripts/sign-daemon.sh" --preflight 0.46.6
     # Version 0.0.1 never uses up a real release's one session (versions only
     # go up; 0.0.1 is below every real one; this works before the first real approval).
-    step "One Touch ID opens a session (throwaway version 0.0.1): TOUCH the sensor" /bin/bash -c \
+    step "One approval opens a session (throwaway version 0.0.1): TOUCH the sensor or use your login password" /bin/bash -c \
         'source "$1/scripts/lib/sign-updater.sh"; source "$1/scripts/lib/sign-approve.sh"; k2sa_open_session 0.0.1 "$(git -C "$1" rev-parse HEAD)" K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64' sh "$TREE"
     step "Status shows the session, its 4 files and a 12 h expiry" sudo -n -u _k2sign "$LIBEXEC/k2sign" status 0.0.1
     must_fail "a file with no evidence is refused even inside the session" /bin/sh -c "echo x | sudo -n -u _k2sign $LIBEXEC/k2sign sign u2 K2.app.tar.gz 0.0.1 raw"
@@ -237,8 +271,31 @@ check) check ;;
     must_say "the signer checks a real app as _k2sign: team, notarization, then refuses only for the version" "K2.app is 0.46.5, session is 0.0.1" \
         /bin/sh -c 'sudo -n -u _k2sign "$1/k2sign" sign u2 K2.app.tar.gz 0.0.1 raw < "$2/K2.app.tar.gz"' sh "$LIBEXEC" "${TMPDIR:-/tmp}/k2-s3proof"
     step "Remove the downloaded app" /bin/rm -rf "${TMPDIR:-/tmp}/k2-s3proof"
-    note "Done. The 0.46.6 release asks for its own Touch ID at Step 0.46."
+    note "Done. A release run on this Mac asks for its own approval at Step 0.46 and signs with $KEY."
     [ "$RUN" = 1 ] || how_to_run
     ;;
-*) sed -n '2,19p' "$0"; exit 2 ;;
+reenrol)
+    echo "Re-enrol on $HOST (key $KEY): replace the approver key, e.g. to accept your Mac login password as well as"
+    echo "Touch ID. The old key is renamed, not deleted, until the new one is installed. Admin password: once."
+    need_host
+    need_commit
+    RE="${TMPDIR:-/tmp}/k2-reenrol"
+    CH="{\"assets\":[\"K2.app.tar.gz\"],\"base_commit\":\"0000000000000000000000000000000000000000\",\"expires\":\"2099-01-01T00:00:00Z\",\"kind\":\"k2-release-approval\",\"reapproval\":false,\"version\":\"9.9.9\",\"windows\":false}"
+    step "Rebuild K2 Release Approve from this commit into ~/Applications" bash "$HERE/approve/build.sh"
+    step "Enrol a new key (the old one is renamed *.old-<time>): TOUCH the sensor, or 'Use Password…'" "$APPBIN" --enrol --replace
+    step "Give the signer the new public key (Password: = Mac admin password)" sudo "$LIBEXEC/k2sign-admin" set-approver "$HOME/.k2-release-approve/approver.pem"
+    step "Forget the cached admin password" sudo -k
+    step "Write a test challenge (not a release; the signer would never accept it)" /bin/sh -c 'mkdir -p "$2" && printf "%s" "$1" > "$2/c.json"' sh "$CH" "$RE"
+    step "Proof 1 — Touch ID: TOUCH the sensor" /usr/bin/open -W -n -a "$APP" --args --challenge "$RE/c.json" --out "$RE/touch.der"
+    step "  'Verified OK' = pass" /usr/bin/openssl dgst -sha256 -verify /usr/local/etc/k2sign/approver.pem -signature "$RE/touch.der" "$RE/c.json"
+    step "Proof 2 — password: DON'T touch; click 'Use Password…' and type your Mac login password" /usr/bin/open -W -n -a "$APP" --args --challenge "$RE/c.json" --out "$RE/pw.der"
+    step "  'Verified OK' = pass" /usr/bin/openssl dgst -sha256 -verify /usr/local/etc/k2sign/approver.pem -signature "$RE/pw.der" "$RE/c.json"
+    printf '\n\033[1m▶ Proof 3 — a bare SSH session can'"'"'t approve. From another Mac run this one line; if a sheet appears on %s'"'"'s screen, press Cancel:\033[0m\n    ssh z3thon@%s %q\n' \
+        "$HOST" "$HOST" "$(show "$APPBIN" --challenge "$RE/c.json" --out "$RE/ssh.der")"
+    must_fail "  …it made no approval" /bin/test -s "$RE/ssh.der"
+    step "Remove the test files" /bin/rm -rf "$RE"
+    note "Done. Tell K2 the three results. The renamed old key files in ~/.k2-release-approve can be deleted."
+    [ "$RUN" = 1 ] || how_to_run
+    ;;
+*) sed -n '2,23p' "$0"; exit 2 ;;
 esac

@@ -152,7 +152,7 @@ grep -q "_k2sign (copy; the real log is /var/k2sign/audit/0.46.12)" "$tmp/home-a
 cp "$TREE/crates/k2-release-keys/src/lib.rs" "$tmp/lib.rs.bak"
 fixture_keys "$U1_LINE" "$(sed -n 2p "$tmp/keys/other.pub")" "$U3_LINE"
 check "k2u_preflight: the tree's U2 is not the signer's" 1 "the signer's pinned U2 is $U2_ID" lib k2u_preflight 0.46.12
-check "k2u_sign: a signature the tree's keys don't accept is not kept" 1 "does not verify with the source tree" lib k2u_sign u2 "$tmp/app.tgz" K2.app.tar.gz 0.46.12 "$tmp/x.sig2" raw
+check "k2u_sign: a tree without this Mac's key signs nothing" 1 "is not one of the source tree's primary keys" lib k2u_sign u2 "$tmp/app.tgz" K2.app.tar.gz 0.46.12 "$tmp/x.sig2" raw
 cp "$tmp/lib.rs.bak" "$TREE/crates/k2-release-keys/src/lib.rs"
 unset K2SIGN_TEST_EVIDENCE
 mkdir -p "$HOME/.k2-updater"; : > "$HOME/.k2-updater/k2-updater-u2.key"
@@ -168,6 +168,43 @@ K2_SIGNER=vault expect 1 "K2_SIGNER must be k2sign or keychain" lib k2u_prefligh
 mkdir -p "$tmp/cdir"
 check "S3-9 sign-daemon.sh --from-dir under k2sign" 1 "compute builds are not signable through k2sign yet (S3b)" \
     bash "$REPO/scripts/sign-daemon.sh" 0.46.12 --from-dir "$tmp/cdir" --compute-verdict "$tmp/cdir"
+
+echo "== two signing Macs: the tree lists U2b (the other Mac) first; this Mac signs with its own key =="
+printf 'y\ny\n' | "$MINISIGN" -G -p "$tmp/keys/u2b.pub" -s "$tmp/keys/u2b.key" >/dev/null 2>&1
+U2B_LINE="$(sed -n 2p "$tmp/keys/u2b.pub")"
+cp "$TREE/crates/k2-release-keys/src/lib.rs" "$tmp/lib.rs.one"
+fixture_keys "$U1_LINE" "$U2_LINE" "$U3_LINE" "$U2B_LINE"
+check "k2u_slot_key_id u2 = THIS Mac's key, not the tree's first primary" 0 "$U2_ID" lib k2u_slot_key_id u2
+export K2SIGN_TEST_EVIDENCE=accept
+# 0.46.12's session (above) is still open; same bytes may be signed again.
+check "k2u_preflight with two primaries" 0 "matching this tree" lib k2u_preflight 0.46.12
+check "k2u_sign u2 with two primaries in the tree" 0 "via k2sign" lib k2u_sign u2 "$tmp/app.tgz" K2.app.tar.gz 0.46.12 "$tmp/two.sig2" raw
+check "what installs check: either primary verifies" 0 "" lib k2u_verify_u2 "$tmp/app.tgz" "$tmp/two.sig2" K2.app.tar.gz 0.46.12
+unset K2SIGN_TEST_EVIDENCE
+fixture_keys "$U1_LINE" "$U2B_LINE" "$U3_LINE"
+check "a tree that dropped this Mac's key: preflight refuses" 1 "is not one of the source tree's primary keys" lib k2u_preflight 0.46.12
+cp "$tmp/lib.rs.one" "$TREE/crates/k2-release-keys/src/lib.rs"
+
+echo "== the ceremony writes 2 primaries + the backup into all four verifier copies =="
+pk="$tmp/pkroot"; mkdir -p "$pk/crates/k2-release-keys/src" "$pk/scripts" "$pk/src-tauri" "$pk/cli"
+cp "$REPO/crates/k2-release-keys/src/lib.rs" "$pk/crates/k2-release-keys/src/lib.rs"
+cp "$REPO/cli/k2" "$pk/cli/k2"; cp "$REPO/scripts/install-daemon.sh" "$pk/scripts/"; cp "$REPO/src-tauri/tauri.conf.json" "$pk/src-tauri/"
+check "pubkeys <U2> <U2b> <U3>" 0 "(primary) and" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$pk" "$U2_LINE" "$U2B_LINE" "$U3_LINE"
+python3 -I - "$pk" "$U2_LINE" "$U2B_LINE" "$U3_LINE" <<'PY' && pass "lib.rs: U2 primary, U2b primary, U3 backup; cli/k2 + install-daemon.sh list all three; tauri.conf.json carries U2" || fail "3-key pubkeys"
+import base64, json, re, sys
+root, u2, u2b, u3 = sys.argv[1:5]
+lib = open(root + "/crates/k2-release-keys/src/lib.rs").read()
+got = re.findall(r'role: "([a-z]+)",\s*key_id: "([0-9A-F]{16})",\s*public_key_b64: "([^"]+)"', lib)
+assert [(r, k) for r, _, k in got] == [("primary", u2), ("primary", u2b), ("backup", u3)], got
+for f, var in (("cli/k2", "_DAEMON_UPDATE_PUBKEYS"), ("scripts/install-daemon.sh", "K2_DAEMON_PUBKEYS")):
+    v = re.search(r'^%s="([^"]*)"$' % var, open(root + "/" + f).read(), re.M).group(1)
+    assert v.split() == [u2, u2b, u3], (f, v)
+pk = json.load(open(root + "/src-tauri/tauri.conf.json"))["plugins"]["updater"]["pubkey"]
+assert base64.b64decode(pk).decode().splitlines()[1] == u2
+PY
+check "pubkeys refuses a repeated key" 1 "every key must be a different key" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$tmp/pkroot" "$U2_LINE" "$U2_LINE" "$U3_LINE"
+REAL_U1="$(sed -n 's/^pub const LEGACY_UPDATER_KEY_B64: &str = "\(.*\)";/\1/p' "$REPO/crates/k2-release-keys/src/lib.rs")"
+check "pubkeys refuses U1 (the real retired key) as a key" 1 "retired key" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$tmp/pkroot" "$REAL_U1" "$U2B_LINE" "$U3_LINE"
 
 echo "== sign-approve.sh: Step 0.46 =="
 sa() { bash -c 'source "$1"; source "$2"; shift 2; "$@"' _ "$TREE/scripts/lib/sign-updater.sh" "$TREE/scripts/lib/sign-approve.sh" "$@"; }

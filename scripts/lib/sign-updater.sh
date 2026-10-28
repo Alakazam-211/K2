@@ -120,7 +120,8 @@ k2u_k2sign() {
     if [ -n "${K2SIGN_TEST_ROOT:-}" ]; then
         "$K2SIGN_TEST_ROOT/usr/local/libexec/k2sign/k2sign" "$@"
     else
-        /usr/bin/sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign "$@"
+        # From /: _k2sign can't read this user's working folder.
+        (cd / && /usr/bin/sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign "$@")
     fi
 }
 
@@ -168,20 +169,48 @@ block = src[src.index("// BEGIN UPDATER_KEYS"):src.index("// END UPDATER_KEYS")]
 keys = re.findall(r'role: "([a-z]+)",\s*key_id: "([0-9A-F]{16})",\s*public_key_b64: "([^"]+)"', block)
 if which == "all":
     print("\n".join(k[2] for k in keys))
+elif which == "primaries":
+    p = [k[2] for k in keys if k[0] == "primary"]
+    print("\n".join(p)) if p else sys.exit("UPDATER_KEYS has no primary key: the update-key ceremony (scripts/updater-key-ceremony.sh) has not landed")
 elif which == "primary":
     p = [k[2] for k in keys if k[0] == "primary"]
     print(p[0]) if p else sys.exit("UPDATER_KEYS has no primary key: the update-key ceremony (scripts/updater-key-ceremony.sh) has not landed")
 else:
-    sys.exit("which: legacy|primary|all")
+    sys.exit("which: legacy|primary|primaries|all")
 PY
 }
 
+# THIS Mac's primary key. One primary per signing Mac (U2 on z3mbpZ, U2b on
+# z3mbp; prd-signing-user-v1, Rosson 2026-10-28): the signing user says which
+# one it holds (`k2sign keys`), and it must be one of the source tree's
+# primaries. Keychain rollback: K2_UPDATER_U2_PUB names it when the tree has
+# more than one.
+k2u_device_primary() {
+    local mine="" all
+    all="$(k2u_source_keys primaries)" || return 1
+    if [ "$(k2u_backend)" = k2sign ]; then
+        mine="$(k2u_k2sign keys | python3 -I -c 'import json,sys; d=json.load(sys.stdin)["u2"]; print(d["line"] if d else "")')" \
+            || { k2u_fail "k2sign keys failed (above)"; return 1; }
+        [ -n "$mine" ] || { k2u_fail "this Mac's signing user has no primary key pinned (k2sign-admin generate-u2, then install.sh from the public-keys commit)"; return 1; }
+    else
+        mine="${K2_UPDATER_U2_PUB:-}"
+        if [ -z "$mine" ]; then
+            [ "$(printf '%s\n' "$all" | grep -c .)" = 1 ] \
+                || { k2u_fail "the source tree has several primary keys; set K2_UPDATER_U2_PUB to this Mac's public key line (keychain rollback)"; return 1; }
+            mine="$all"
+        fi
+    fi
+    printf '%s\n' "$all" | grep -qxF -- "$mine" \
+        || { k2u_fail "this Mac's primary key $(k2u_key_id "$mine") is not one of the source tree's primary keys"; return 1; }
+    printf '%s' "$mine"
+}
+
 # The public key (the minisign base64 line) a slot's signatures must verify
-# with.
+# with: U1 from the tree; u2 = this Mac's primary.
 k2u_pubkey() {
     case "$1" in
         u1) k2u_source_keys legacy ;;
-        u2) k2u_source_keys primary ;;
+        u2) k2u_device_primary ;;
         *) return 1 ;;
     esac
 }

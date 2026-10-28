@@ -21,7 +21,7 @@ sud="$TROOT/etc/sudoers.d/k2sign"
     && pass "sudoers: exactly one rule, only the signer, only as _k2sign" || fail "sudoers" "$(cat "$sud")"
 /usr/sbin/visudo -cf "$sud" >/dev/null && pass "sudoers drop-in parses (visudo -cf)" || fail "visudo"
 grep -q '^u1 ' "$E/pubkeys" && ! grep -q '^u2 ' "$E/pubkeys" && pass "pre-ceremony tree: only U1 pinned" || fail "pubkeys" "$(cat "$E/pubkeys")"
-grep -q 'no U2/U3 yet' "$tmp/install.out" && pass "the installer says the tree has no U2 yet" || fail "pre-ceremony note"
+grep -q 'no primary keys yet (pre-ceremony)' "$tmp/install.out" && pass "the installer says the tree has no U2 yet" || fail "pre-ceremony note"
 fresh="$tmp/fresh"; mkdir -p "$fresh"
 K2SIGN_TEST_ROOT="$fresh" bash "$TREE/scripts/k2sign/install.sh" --test --dry-run --minisign "$MINISIGN" --gh "$REPO/tests/release/fixtures/gh-stub.sh" > "$tmp/dry.out" 2>&1 \
     && [ -z "$(find "$fresh" -mindepth 1 -print -quit)" ] && grep -q 'would run' "$tmp/dry.out" \
@@ -55,10 +55,15 @@ echo "== the tree's U2 must be the one the signer made =="
 printf 'x\nx\n' | "$MINISIGN" -G -p "$tmp/keys/other.pub" -s "$tmp/keys/other.key" >/dev/null 2>&1
 fixture_keys "$U1_LINE" "$(sed -n 2p "$tmp/keys/other.pub")" "$U3_LINE"
 if install_signer; then fail "install with a foreign U2 in the tree" "installed"; else
-    grep -q "is not the one k2sign-admin generate-u2 made" "$tmp/install.out" && pass "install refuses a tree whose U2 is not the generated one" || fail "u2 mismatch" "$(tail -2 "$tmp/install.out")"
+    grep -q "is not one of this tree's primary keys" "$tmp/install.out" && pass "install refuses a tree without this Mac's generated key" || fail "u2 mismatch" "$(tail -2 "$tmp/install.out")"
 fi
 fixture_keys "$U1_LINE" "$U2_LINE" "$U3_LINE"
-install_signer && grep -q 'matches the key generate-u2 made' "$tmp/install.out" && pass "re-install from the pubkeys tree pins U2/U3" || fail "re-install" "$(tail -3 "$tmp/install.out")"
+install_signer && grep -q "this Mac's primary key (generate-u2) is one of the tree's 1 primaries" "$tmp/install.out" && pass "re-install from the pubkeys tree pins U2/U3" || fail "re-install" "$(tail -3 "$tmp/install.out")"
+# Two Macs: the tree lists the other Mac's primary (U2b) FIRST; this Mac pins its own.
+fixture_keys "$U1_LINE" "$U2_LINE" "$U3_LINE" "$(sed -n 2p "$tmp/keys/other.pub")"
+install_signer && grep -q "one of the tree's 2 primaries" "$tmp/install.out" && grep -q "^u2 $U2_LINE\$" "$E/pubkeys" \
+    && ! grep -qF "$(sed -n 2p "$tmp/keys/other.pub")" "$E/pubkeys" \
+    && pass "two primaries in the tree: this Mac pins only its own key (the one generate-u2 made)" || fail "two primaries" "$(tail -3 "$tmp/install.out"; cat "$E/pubkeys")"
 grep -q "^u2 $U2_LINE\$" "$E/pubkeys" && grep -q "^u3 $U3_LINE\$" "$E/pubkeys" && pass "pubkeys pins U2 and U3" || fail "pinned" "$(cat "$E/pubkeys")"
 
 echo "== preflight =="
@@ -156,15 +161,32 @@ check_in "a session alone never signs: the file needs its own evidence" "$tmp/f"
 grep -q $'\tSIGNED\t.*k2-daemon-linux-x86_64' "$AUDIT/0.46.6/signatures.tsv" && fail "a refused asset was logged as signed" || pass "nothing was signed or logged as signed"
 
 echo "== the sittings' dry runs print and change nothing =="
-for n in 0 1 2 3; do
-    if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" "$n" --commit 0123456 > "$tmp/sit.out" 2>&1 \
+for n in "0" "1 --key U2" "2 --key U2" "2 --key U2b" "3 --key U2b" "reenrol --key U2"; do
+    # shellcheck disable=SC2086
+    if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" $n --commit 0123456 > "$tmp/sit.out" 2>&1 \
         && grep -q -- "--run)" "$tmp/sit.out" && ! grep -q "Enter = run it" "$tmp/sit.out"; then
         pass "sitting.sh $n (dry run) prints its steps and how to run them"
     else fail "sitting.sh $n dry run" "$(tail -3 "$tmp/sit.out")"; fi
 done
 [ -z "$(find "$tmp/home" -mindepth 1 -print -quit 2>/dev/null)" ] && pass "the dry runs wrote nothing in HOME" || fail "dry runs wrote" "$(find "$tmp/home" | head -3)"
-if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 1 --run < /dev/null > "$tmp/sit.out" 2>&1; then fail "sitting 1 --run without --commit" "ran"; else
-    grep -q "Add --commit <sha>" "$tmp/sit.out" && pass "sitting 1 --run refuses without --commit" || fail "commit gate" "$(cat "$tmp/sit.out")"; fi
+HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 2 --key U2b --commit 0123456 > "$tmp/sit.out" 2>&1
+grep -q "U3 is not made here" "$tmp/sit.out" && grep -q "generate --signer k2sign --key-name U2b --skip-u3" "$tmp/sit.out" \
+    && ! grep -q "NEW password for U3" "$tmp/sit.out" && pass "sitting 2 on z3mbp (U2b) makes no U3" || fail "U2b sitting 2" "$(head -5 "$tmp/sit.out")"
+if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 1 --commit 0123456 > "$tmp/sit.out" 2>&1; then fail "sitting 1 without --key" "ran"; else
+    grep -q "add --key U2 (on z3mbpZ) or --key U2b (on z3mbp)" "$tmp/sit.out" && pass "sittings 1-3 and reenrol need --key" || fail "key gate" "$(cat "$tmp/sit.out")"; fi
+if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 1 --key U2 --commit 0123456 --run < /dev/null > "$tmp/sit.out" 2>&1; then fail "sitting 1 --run on the wrong Mac" "ran"; else
+    grep -q "Key U2 belongs to z3mbpZ" "$tmp/sit.out" && pass "a sitting refuses to run on the other Mac" || fail "host gate" "$(cat "$tmp/sit.out")"; fi
+if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 1 --key U2 --run < /dev/null > "$tmp/sit.out" 2>&1; then fail "sitting 1 --run without --commit" "ran"; else
+    grep -qE "Add --commit <sha>|belongs to" "$tmp/sit.out" && pass "sitting 1 --run refuses without --commit (or on another Mac)" || fail "commit gate" "$(cat "$tmp/sit.out")"; fi
+
+echo "== K2 Release Approve: Touch ID OR the login password, asked every time =="
+SW="$REPO/scripts/k2sign/approve/main.swift"
+code="$(grep -v '^[[:space:]]*//' "$SW")"
+grep -qF '[.privateKeyUsage, .biometryAny, .or, .devicePasscode]' <<<"$code" && pass "the key's access control is Touch ID (any finger) or the device password" || fail "access control flags"
+! grep -qE '\.biometryCurrentSet|\.userPresence|\.watch|\.applicationPassword' <<<"$code" && pass "no other factor (no .userPresence, Apple Watch or app password)" || fail "extra factors"
+grep -qF 'touchIDAuthenticationAllowableReuseDuration = 0' <<<"$code" && ! grep -q 'evaluatePolicy(' <<<"$code" \
+    && pass "nothing is pre-evaluated or reused: the key operation asks every time" || fail "reuse / pre-evaluation"
+grep -q 'interactionNotAllowed = false' <<<"$code" && grep -q -- '--replace' <<<"$code" && pass "the sheet is required; --enrol --replace renames the old key" || fail "sheet / replace"
 
 echo "== S1 7: every signature verifies with the pinned U2 and is in the audit log =="
 printf 'some daemon\n' > "$tmp/d1"

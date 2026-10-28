@@ -385,8 +385,9 @@ def pinned_pubkey(ctx, slot):
     keys = load_pubkeys(ctx)
     if slot not in keys:
         if slot == "u2":
-            raise Refused("no U2 public key pinned: the ceremony's public keys haven't been installed "
-                          "(after they land, re-run scripts/k2sign/install.sh from that commit)")
+            raise Refused("no U2 public key pinned: this Mac's primary key isn't in the installed tree yet "
+                          "(make it with k2sign-admin generate-u2; after the public keys land, re-run "
+                          "scripts/k2sign/install.sh from that commit)")
         raise Refused("no %s public key pinned" % slot.upper())
     return keys[slot]
 
@@ -1093,6 +1094,17 @@ def verb_approve(ctx, args):
     say("signing session for %s approved until %s" % (sess["version"], hhmm(sess["expires"])))
 
 
+def verb_keys(ctx, args):
+    """The pinned public keys (u1, this Mac's u2, u3): the release side picks
+    this Mac's primary from them. Signs nothing."""
+    if args:
+        raise Usage("keys")
+    check_pins(ctx)
+    k = load_pubkeys(ctx)
+    print(json.dumps({s: ({"line": k[s], "id": b64_key_id(k[s])} if s in k else None) for s in ("u1", "u2", "u3")},
+                     sort_keys=True))
+
+
 def verb_status(ctx, args):
     if len(args) != 1:
         raise Usage("status <version>")
@@ -1329,7 +1341,7 @@ def admin_import(ctx, args):
 
 
 SIGNER_VERBS = {"preflight": verb_preflight, "challenge": verb_challenge, "approve": verb_approve,
-                "sign": verb_sign, "status": verb_status, "gh-selfcheck": verb_gh_selfcheck}
+                "sign": verb_sign, "status": verb_status, "gh-selfcheck": verb_gh_selfcheck, "keys": verb_keys}
 def admin_set_gh_token(ctx, args):
     if args not in ([], ["--stdin"]):
         raise Usage("set-gh-token [--stdin]   (a fine-grained, read-only token for the repo)")

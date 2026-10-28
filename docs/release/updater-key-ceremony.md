@@ -109,6 +109,10 @@ checkout's `.env`: open the file in an editor, don't `cat` it). After pasting
 any password or a token, copy other text so it isn't left on the clipboard.
 Sitting 2 on z3mbp stops every agent on z3mbp too, including the K2 workspace
 agents that build this code.
+Sitting 2 (both Macs) first rebuilds K2 Release Approve from its commit and
+checks it lists `timeout` (`--capabilities`); sitting 3 checks again, and
+`release.sh` Step 0.46 refuses an app without it. Rebuilding keeps the
+approver key (it lives in `~/.k2-release-approve`, not in the app).
 
 **Order against landing.** The lane stays held until the public keys exist,
 because it changes what installs trust and `release.sh` refuses to start

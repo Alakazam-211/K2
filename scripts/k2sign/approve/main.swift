@@ -16,6 +16,8 @@
 //                                write the DER signature to <out> (or the reason to <out>.err);
 //                                --timeout cancels the sheet after <s> seconds with no answer
 //   --key-dir <dir>              (with the above) use <dir> instead of ~/.k2-release-approve
+//   --capabilities               print what this build supports (release.sh refuses a build
+//                                without "timeout"; no sheet, no key use)
 //   --soft-selftest <dir>        S0 (c): a SOFTWARE P-256 key (no Secure Enclave, no Touch ID)
 //                                signs <dir>/data; writes <dir>/pub.pem and <dir>/sig.der so
 //                                LibreSSL can be checked against CryptoKit's DER format
@@ -193,8 +195,14 @@ func softSelftest(dir: String) {
     }
 }
 
+// Bump when a release depends on a new behaviour (Step 0.46 checks "timeout").
+let capabilities = "k2-release-approve 2 timeout replace key-dir"
+
 let args = CommandLine.arguments
-if args.contains("--enrol") {
+if args.contains("--capabilities") {
+    print(capabilities)
+    exit(0)
+} else if args.contains("--enrol") {
     enrol()
 } else if let dir = arg("--soft-selftest") {
     softSelftest(dir: dir)

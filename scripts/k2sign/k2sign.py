@@ -50,6 +50,7 @@ import re
 import secrets
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -64,12 +65,18 @@ ASSET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 BASE_RE = re.compile(r"^[0-9a-f]{40}$")
 NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
 # The files whose hashes pins.sha256 must hold (approver.pem once enrolled).
-PINNED_LIBEXEC = ("k2sign", "k2sign-admin", "k2sign.py", "minisign")
+PINNED_LIBEXEC = ("k2sign", "k2sign-admin", "k2sign.py", "minisign", "gh", "gh-release.zip", "check-daemon-asset.py")
 PINNED_ETC = ("policy", "pubkeys")
 POLICY_KEYS = {
     "approval", "session_hours", "challenge_minutes", "max_stdin_mb",
     "assets.u1", "assets.u2", "windows_assets", "repo",
+    "github_api", "daemon_workflow", "release_commit_files", "apple_team",
 }
+LINUX_DAEMONS = {"k2-daemon-linux-x86_64": "x86_64", "k2-daemon-linux-aarch64": "aarch64"}
+MAC_DAEMON = "k2-daemon-macos-aarch64"
+APP_TARBALL = "K2.app.tar.gz"
+MARKER_RE = re.compile(rb"K2_DAEMON_BUILD v=([0-9.]+) os=([a-z]+) arch=([a-z0-9_]+);")
+TOKEN_RE = re.compile(r"^(github_pat_[A-Za-z0-9_]{20,255}|gh[pousr]_[A-Za-z0-9]{20,255})$")
 
 
 class Refused(Exception):
@@ -137,6 +144,32 @@ class Ctx:
 
     def test_evidence_accept(self):
         return self.test and os.environ.get("K2SIGN_TEST_EVIDENCE") == "accept"
+
+    def github_api(self, pol):
+        """Production: the policy's https API. Test mode may point at a local fake."""
+        api = pol["github_api"]
+        if self.test and os.environ.get("K2SIGN_TEST_GITHUB_API"):
+            api = os.environ["K2SIGN_TEST_GITHUB_API"]
+            if not re.match(r"^http://127\.0\.0\.1:[0-9]{2,5}$", api):
+                raise Refused("K2SIGN_TEST_GITHUB_API must be http://127.0.0.1:<port>")
+        elif not api.startswith("https://"):
+            raise Refused("policy: github_api must be https")
+        return api.rstrip("/")
+
+    def anchor(self, pol):
+        """The code-signing anchor every Mac file must meet: Apple-issued
+        Developer ID for our team. Test mode may swap it (ad hoc fixtures)."""
+        if self.test and os.environ.get("K2SIGN_TEST_ANCHOR"):
+            return os.environ["K2SIGN_TEST_ANCHOR"]
+        team = pol["apple_team"]
+        if not re.match(r"^[A-Z0-9]{10}$", team):
+            raise Refused("policy: apple_team must be a 10-character team id")
+        return ('anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists '
+                'and certificate leaf[field.1.2.840.113635.100.6.1.13] exists '
+                'and certificate leaf[subject.OU] = "%s"' % team)
+
+    def test_notarized(self):
+        return self.test and os.environ.get("K2SIGN_TEST_NOTARIZED") == "1"
 
     def own(self, path):
         """Admin writes under /var/k2sign belong to the signing user."""
@@ -510,12 +543,346 @@ def sign_and_check(ctx, slot, path, asset, version):
 
 # ── evidence (S3 is not built yet) ─────────────────────────────────────────
 
-def check_evidence(ctx, slot, asset, version, path, session):
-    """The per-file checks the signer runs itself (prd §4.5). Not built in
-    S1/S2: every real asset is refused, so a session alone never signs."""
+def run_env(argv, env, stdin=None):
+    """run() with a given (fixed) environment."""
+    if not os.path.isabs(argv[0]):
+        raise Refused("internal: refusing to run a tool by a relative name: %s" % argv[0])
+    p = subprocess.run(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd="/")
+    return p.returncode, p.stdout, p.stderr
+
+
+def first_line(b, n=200):
+    t = b.decode(errors="replace").strip() if isinstance(b, bytes) else str(b).strip()
+    return (t.splitlines() or [""])[0][:n]
+
+
+# ── evidence (S3): the per-file checks the signer runs itself (prd §4.5) ───
+#
+# The approval says "Rosson wants <version> signed now"; these say "these
+# bytes are <version>'s files". Every piece of evidence is gathered here,
+# as the signing user, from GitHub (its own read-only token, /usr/bin/curl
+# with the system trust store, the pinned gh) or from the bytes that came in
+# on stdin. Nothing from the caller's checkout, environment or tools counts.
+
+def gh_token(ctx):
+    p = os.path.join(ctx.var, "gh", "token")
+    if not os.path.isfile(p):
+        raise Refused("no GitHub token for the signer (sudo /usr/local/libexec/k2sign/k2sign-admin set-gh-token)")
+    if mode_of(p) != 0o600:
+        raise Refused("%s must be mode 600" % p)
+    t = open(p).read().strip()
+    if not TOKEN_RE.match(t):
+        raise Refused("the signer's saved GitHub token is malformed (set it again)")
+    return t
+
+
+def gh_api(ctx, pol, path, missing=None):
+    """GET <github_api><path> with the signer's token; JSON or a refusal."""
+    api = ctx.github_api(pol)
+    tok = gh_token(ctx)
+    with Scratch(ctx) as d:
+        hdr = os.path.join(d, "headers")
+        # Headers from a 0600 file, so the token is never on argv.
+        write_file(ctx, hdr, "Authorization: Bearer %s\nAccept: application/vnd.github+json\n"
+                             "X-GitHub-Api-Version: 2022-11-28\nUser-Agent: k2sign\n" % tok)
+        proto = "=http" if api.startswith("http://") else "=https"
+        rc, out, err = run(["/usr/bin/curl", "-sS", "--fail-with-body", "--proto", proto, "--max-time", "60",
+                            "--max-filesize", "20000000", "-H", "@" + hdr, api + path])
+    if rc != 0:
+        if missing and b'"Not Found"' in out:
+            raise Refused(missing)
+        raise Refused("GitHub API %s failed: %s" % (path, first_line(err or out)))
+    try:
+        return json.loads(out)
+    except ValueError:
+        raise Refused("GitHub API %s did not return JSON" % path)
+
+
+def gh_version(ctx):
+    rc, out, err = run([os.path.join(ctx.libexec, "gh"), "--version"])
+    m = re.match(rb"gh version ([0-9.]+)", out)
+    if rc != 0 or not m:
+        raise Refused("the pinned gh does not run")
+    return m.group(1).decode()
+
+
+def tag_commit(ctx, pol, version):
+    repo, tag = pol["repo"], "v" + version
+    ref = gh_api(ctx, pol, "/repos/%s/git/ref/tags/%s" % (repo, tag), missing="no tag %s on GitHub yet" % tag)
+    obj = ref.get("object") or {}
+    if obj.get("type") == "tag":  # annotated tag
+        obj = gh_api(ctx, pol, "/repos/%s/git/tags/%s" % (repo, obj.get("sha", ""))).get("object") or {}
+    if obj.get("type") != "commit" or not BASE_RE.match(obj.get("sha") or ""):
+        raise Refused("tag %s on GitHub does not point at a commit" % tag)
+    return obj["sha"]
+
+
+def check_release_commit(ctx, pol, version, base):
+    """GitHub's tag v<x> is the base commit B, or B plus the release bump
+    only; and B is on GitHub's main. Returns the tag commit T."""
+    repo = pol["repo"]
+    t = tag_commit(ctx, pol, version)
+    parents = [p.get("sha") for p in (gh_api(ctx, pol, "/repos/%s/commits/%s" % (repo, t)).get("parents") or [])]
+    if base is None:  # approval off (soft rollback): the bump's parent is the base
+        if len(parents) != 1:
+            raise Refused("release commit is not base+bump (%s has %d parents)" % (t[:12], len(parents)))
+        base = parents[0]
+    if t != base:
+        if parents != [base]:
+            raise Refused("release commit is not base+bump (v%s is %s, parents %s; the approved base is %s)"
+                          % (version, t[:12], ",".join(p[:12] for p in parents) or "none", base[:12]))
+        cmp = gh_api(ctx, pol, "/repos/%s/compare/%s...%s" % (repo, base, t))
+        files = [f.get("filename") for f in (cmp.get("files") or [])]
+        allowed = set(pol["release_commit_files"].split())
+        bad = sorted(f for f in files if f not in allowed)
+        if bad:
+            raise Refused("release commit changes non-release files: %s" % ", ".join(bad[:5]))
+        if cmp.get("status") != "ahead" or cmp.get("ahead_by") != 1 or len(files) >= 300:
+            raise Refused("release commit is not base+bump (compare says %s, ahead by %s)"
+                          % (cmp.get("status"), cmp.get("ahead_by")))
+    onmain = gh_api(ctx, pol, "/repos/%s/compare/%s...main" % (repo, base))
+    if onmain.get("status") not in ("ahead", "identical"):
+        raise Refused("base commit is not on GitHub main (%s; compare says %s)" % (base[:12], onmain.get("status")))
+    return t
+
+
+def gh_env(ctx, d):
+    """The pinned gh's environment: the signer's own token (a read-only,
+    low-value secret, visible only to this uid and root), a scratch config."""
+    cfg = os.path.join(d, "ghcfg")
+    mkdirs(ctx, cfg)
+    env = {"PATH": SYS_PATH, "HOME": ctx.var, "LANG": "C", "GH_CONFIG_DIR": cfg, "GH_TOKEN": gh_token(ctx),
+           "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1", "NO_COLOR": "1"}
+    if ctx.test:
+        env["K2SIGN_TEST_FIXTURES"] = os.path.join(ctx.test_root, "fixtures")
+    return env
+
+
+def attestation_certs(out, sha):
+    """[(certificate fields)] from `gh attestation verify --format json` for
+    the entries whose statement names this sha256."""
+    try:
+        results = json.loads(out)
+    except ValueError:
+        raise Refused("gh's attestation output is not JSON")
+    certs = []
+    for r in results if isinstance(results, list) else []:
+        vr = (r or {}).get("verificationResult") or {}
+        subj = ((vr.get("statement") or {}).get("subject")) or []
+        if any(((s or {}).get("digest") or {}).get("sha256") == sha for s in subj):
+            certs.append(((vr.get("signature") or {}).get("certificate")) or {})
+    return certs
+
+
+def verb_gh_selfcheck(ctx, args):
+    """Prove, as the signing user, what Linux signing relies on: the pinned
+    gh runs, the signer's token and network reach GitHub, and gh's JSON
+    carries the fields the evidence code reads. Uses cli/cli's attestation
+    of the pinned gh release zip itself (no K2 release is needed)."""
+    if args:
+        raise Usage("gh-selfcheck")
+    check_pins(ctx)
+    z = os.path.join(ctx.libexec, "gh-release.zip")
+    sha = sha256_file(z)
+    with Scratch(ctx) as d:
+        rc, out, err = run_env([os.path.join(ctx.libexec, "gh"), "attestation", "verify", z, "-R", "cli/cli",
+                                "--format", "json"], gh_env(ctx, d))
+    if rc != 0:
+        raise Refused("gh could not verify cli/cli's attestation of its own release (token, network or gh): %s"
+                      % first_line(err or out))
+    certs = attestation_certs(out, sha)
+    good = [c for c in certs if str(c.get("subjectAlternativeName", "")).startswith("https://github.com/cli/cli/.github/workflows/")
+            and c.get("sourceRepositoryRef") and BASE_RE.match(str(c.get("sourceRepositoryDigest", "")))]
+    if not good:
+        raise Refused("gh's JSON lacks the fields the signer reads (subject sha256, subjectAlternativeName, "
+                      "sourceRepositoryRef, sourceRepositoryDigest); tell K2: %s" % json.dumps(certs[:1])[:300])
+    c = good[0]
+    print(json.dumps({"ok": True, "subjectAlternativeName": c["subjectAlternativeName"],
+                      "sourceRepositoryRef": c["sourceRepositoryRef"],
+                      "sourceRepositoryDigest": c["sourceRepositoryDigest"]}, sort_keys=True))
+    say("gh-selfcheck ok: the pinned gh, the signer's token and gh's JSON fields all work")
+
+
+def check_attestation(ctx, pol, asset, version, path, sha, t, d):
+    """The build attestation for these bytes, from daemon-binaries.yml at the
+    tag, at commit T: fetched and verified by the pinned gh, then its
+    certificate fields and subject checked here as well."""
+    repo, tag = pol["repo"], "v" + version
+    ident = "https://github.com/%s/%s@refs/tags/%s" % (repo, pol["daemon_workflow"], tag)
+    env = gh_env(ctx, d)
+    gh = os.path.join(ctx.libexec, "gh")
+    base_argv = [gh, "attestation", "verify", path, "-R", repo, "--format", "json"]
+    rc, out, err = run_env(base_argv, env)
+    if rc != 0:
+        raise Refused("%s: no build attestation for %s (%s)" % (asset, sha, first_line(err or out)))
+    try:
+        results = json.loads(out)
+    except ValueError:
+        raise Refused("%s: gh's attestation output is not JSON" % asset)
+    mine, seen = [], []
+    for r in results if isinstance(results, list) else []:
+        vr = (r or {}).get("verificationResult") or {}
+        subj = ((vr.get("statement") or {}).get("subject")) or []
+        if not any(((s or {}).get("digest") or {}).get("sha256") == sha for s in subj):
+            continue
+        cert = ((vr.get("signature") or {}).get("certificate")) or {}
+        seen.append(cert.get("subjectAlternativeName") or "?")
+        if cert.get("subjectAlternativeName") == ident:
+            mine.append(cert)
+    if not seen:
+        raise Refused("%s: no build attestation for %s" % (asset, sha))
+    if not mine:
+        raise Refused("%s: attestation identity is %s, want %s" % (asset, seen[0], ident))
+    if not any(c.get("sourceRepositoryRef") == "refs/tags/" + tag and c.get("sourceRepositoryDigest") == t for c in mine):
+        c = mine[0]
+        raise Refused("%s: attestation source is %s@%s, want refs/tags/%s@%s"
+                      % (asset, c.get("sourceRepositoryRef"), c.get("sourceRepositoryDigest"), tag, t))
+    # Belt: gh's own policy check with the exact identity, ref and commit.
+    rc, out, err = run_env(base_argv + ["--cert-identity", ident, "--source-ref", "refs/tags/" + tag,
+                                        "--source-digest", t], env)
+    if rc != 0:
+        raise Refused("%s: gh refuses the attestation with the exact identity (%s)" % (asset, first_line(err or out)))
+
+
+def linux_evidence(ctx, pol, asset, version, path, session, d):
+    sha = sha256_file(path)
+    t = check_release_commit(ctx, pol, version, session["base_commit"] if session else None)
+    rc, out, err = run([sys.executable, "-I", os.path.join(ctx.libexec, "check-daemon-asset.py"),
+                        path, LINUX_DAEMONS[asset], version])
+    if rc != 0:
+        msg = "; ".join((out + err).decode(errors="replace").strip().splitlines()).replace(path + ": ", "").replace(path, "the file")
+        raise Refused("%s: %s" % (asset, msg[:300]))
+    check_attestation(ctx, pol, asset, version, path, sha, t, d)
+
+
+def codesign_ok(ctx, pol, target, identifier, deep=False):
+    req = '%s and identifier "%s"' % (ctx.anchor(pol), identifier)
+    argv = ["/usr/bin/codesign", "--verify", "--strict"] + (["--deep"] if deep else []) + ["-R=" + req, target]
+    rc, out, err = run(argv)
+    return rc == 0
+
+
+def app_evidence(ctx, pol, version, path, d):
+    """K2.app.tar.gz: Developer ID for our team, notarized and stapled, this
+    version, with the nested daemon helper and k2-ptyd signed."""
+    import plistlib
+    team = pol["apple_team"]
+    x = os.path.join(d, "app")
+    os.mkdir(x, 0o700)
+    rc, out, err = run(["/usr/bin/tar", "-xzf", path, "-C", x])
+    if rc != 0:
+        raise Refused("K2.app.tar.gz does not extract (%s)" % first_line(err))
+    if sorted(os.listdir(x)) != ["K2.app"]:
+        raise Refused("K2.app.tar.gz must hold exactly K2.app (it holds %s)" % ", ".join(sorted(os.listdir(x))[:5]))
+    app = os.path.join(x, "K2.app")
+    if not codesign_ok(ctx, pol, app, "dev.k2.app", deep=True):
+        raise Refused("K2.app is not signed by team %s" % team)
+    if not ctx.test_notarized():
+        rc1, o1, e1 = run(["/usr/bin/stapler", "validate", app])
+        rc2, o2, e2 = run(["/usr/sbin/spctl", "--assess", "-vv", "--type", "execute", app])
+        if rc1 != 0 or rc2 != 0 or b"source=Notarized Developer ID" not in o2 + e2:
+            raise Refused("K2.app is not notarized")
+    try:
+        info = plistlib.load(open(os.path.join(app, "Contents", "Info.plist"), "rb"))
+    except Exception:
+        raise Refused("K2.app has no readable Info.plist")
+    got = info.get("CFBundleShortVersionString")
+    if got != version:
+        raise Refused("K2.app is %s, session is %s" % (got, version))
+    helper = os.path.join(app, "Contents", "Helpers", "K2 Daemon.app")
+    if not os.path.isdir(helper) or not codesign_ok(ctx, pol, helper, "dev.k2.app.daemon"):
+        raise Refused("K2.app has no K2 Daemon.app signed by team %s" % team)
+    ptyd = os.path.join(helper, "Contents", "MacOS", "k2-ptyd")
+    if not os.path.isfile(ptyd) or not codesign_ok(ctx, pol, ptyd, "dev.k2.app.ptyd"):
+        raise Refused("K2.app has no k2-ptyd signed by team %s" % team)
+
+
+MH_MAGIC_64 = b"\xcf\xfa\xed\xfe"
+CPU_ARM64 = 0x0100000C
+
+
+def macho_arm64(b, at):
+    return b[at:at + 4] == MH_MAGIC_64 and len(b) >= at + 32 and struct.unpack_from("<I", b, at + 4)[0] == CPU_ARM64
+
+
+def embedded_signed_macho(b):
+    """The first arm64 executable inside b (after offset 0) whose length,
+    read from its LC_CODE_SIGNATURE, gives bytes whose sha256 hex b carries
+    (build.rs stores it next to the embedded k2-ptyd)."""
+    i = 1
+    while True:
+        i = b.find(MH_MAGIC_64, i)
+        if i < 0:
+            return None
+        if macho_arm64(b, i) and struct.unpack_from("<I", b, i + 12)[0] == 2:  # MH_EXECUTE
+            ncmds, sizeofcmds = struct.unpack_from("<II", b, i + 16)
+            off, end, sig_end = i + 32, i + 32 + sizeofcmds, None
+            for _ in range(min(ncmds, 1024)):
+                if off + 8 > min(end, len(b)):
+                    break
+                cmd, size = struct.unpack_from("<II", b, off)
+                if size < 8:
+                    break
+                if cmd == 0x1D and off + 16 <= len(b):  # LC_CODE_SIGNATURE
+                    dataoff, datasize = struct.unpack_from("<II", b, off + 8)
+                    sig_end = dataoff + datasize
+                off += size
+            if sig_end and 4096 < sig_end <= len(b) - i:
+                blob = b[i:i + sig_end]
+                if hashlib.sha256(blob).hexdigest().encode() in b:
+                    return blob
+        i += 1
+
+
+def mac_daemon_evidence(ctx, pol, version, path, d):
+    """The standalone macOS daemon: arm64 Mach-O, exactly one build marker
+    for this version, and the embedded k2-ptyd signed by our team. It has no
+    Developer ID signature of its own (A5): weak evidence, written down."""
+    b = open(path, "rb").read()
+    if not macho_arm64(b, 0):
+        raise Refused("%s is not an arm64 Mach-O" % MAC_DAEMON)
+    markers = MARKER_RE.findall(b)
+    want = (version.encode(), b"macos", b"aarch64")
+    if markers != [want]:
+        raise Refused("%s must carry exactly one build marker v=%s os=macos arch=aarch64 (found %s)"
+                      % (MAC_DAEMON, version, ", ".join("%s/%s/%s" % tuple(x.decode() for x in m) for m in markers) or "none"))
+    ptyd = embedded_signed_macho(b)
+    if ptyd is None:
+        raise Refused("%s embeds no k2-ptyd (with its sha256)" % MAC_DAEMON)
+    p = os.path.join(d, "k2-ptyd")
+    write_file(ctx, p, ptyd, 0o700)
+    if not codesign_ok(ctx, pol, p, "dev.k2.app.ptyd"):
+        raise Refused("the k2-ptyd inside %s is not signed by team %s" % (MAC_DAEMON, pol["apple_team"]))
+
+
+def pe_evidence(asset, path):
+    """The Windows setup: a PE32+ for x64. No independent evidence (A7);
+    signable only because the approval named it."""
+    with open(path, "rb") as f:
+        head = f.read(64)
+        if head[:2] != b"MZ" or len(head) < 64:
+            raise Refused("%s is not a Windows executable" % asset)
+        f.seek(struct.unpack_from("<I", head, 0x3C)[0])
+        pe = f.read(6)
+    if pe[:4] != b"PE\0\0" or struct.unpack_from("<H", pe, 4)[0] != 0x8664:
+        raise Refused("%s is not an x64 Windows executable" % asset)
+
+
+def check_evidence(ctx, pol, slot, asset, version, path, session, d):
+    """Every real file needs its own evidence; an approval alone never signs."""
     if ctx.test_evidence_accept():
         return
-    raise Refused("%s: the per-file checks are not built yet (S3); this k2sign signs only its preflight self-test" % asset)
+    if asset in LINUX_DAEMONS:
+        linux_evidence(ctx, pol, asset, version, path, session, d)
+    elif asset == APP_TARBALL:
+        app_evidence(ctx, pol, version, path, d)
+    elif asset == MAC_DAEMON:
+        mac_daemon_evidence(ctx, pol, version, path, d)
+    elif asset in windows_assets(pol, version):
+        pe_evidence(asset, path)
+    else:
+        raise Refused("%s: no evidence rule for this asset" % asset)
+
 
 
 # ── verbs ──────────────────────────────────────────────────────────────────
@@ -563,6 +930,9 @@ def verb_preflight(ctx, args):
     pinned_pubkey(ctx, "u2")
     if pol["approval"] == "on" and not os.path.isfile(os.path.join(ctx.etc, "approver.pem")):
         raise Refused("no approver key enrolled (open K2 Release Approve → Enrol, then k2sign-admin set-approver)")
+    gh_v = gh_version(ctx)
+    # The GitHub token reads the repository (the S3 evidence for Linux files).
+    gh_api(ctx, pol, "/repos/%s" % pol["repo"])
     ids = {}
     with Locked(ctx), Scratch(ctx) as d:
         p = os.path.join(d, SELF_TEST_ASSET)
@@ -572,7 +942,7 @@ def verb_preflight(ctx, args):
             ids[slot] = key_id
             audit(ctx, version, "SIGNED", slot, SELF_TEST_ASSET, sha256_file(p), key_id, tc, "preflight")
     out = {"ok": True, "version": version, "minisign": mv, "approval": pol["approval"],
-           "u1": ids["u1"], "u2": ids["u2"], "u3": b64_key_id(keys["u3"]) if "u3" in keys else None}
+           "u1": ids["u1"], "u2": ids["u2"], "u3": b64_key_id(keys["u3"]) if "u3" in keys else None, "gh": gh_v}
     print(json.dumps(out, sort_keys=True))
     say("preflight ok: U1 %s and U2 %s sign and verify with the pinned keys; approval %s"
         % (ids["u1"], ids["u2"], pol["approval"]))
@@ -789,7 +1159,11 @@ def verb_sign(ctx, args):
         again = sess is not None and key in sess["signed"]
         if sess is not None and not again and sess["count"] >= sess["max_signatures"]:
             raise Refused("the session for %s reached its %d signatures" % (version, sess["max_signatures"]))
-        check_evidence(ctx, slot, asset, version, path, sess)
+        try:
+            check_evidence(ctx, pol, slot, asset, version, path, sess, d)
+        except Refused as e:
+            audit(ctx, version, "REFUSED-EVIDENCE", slot, asset, sha, detail=str(e))
+            raise
         text, key_id, tc = sign_and_check(ctx, slot, path, asset, version)
         if asset not in first:
             with open(apath, "a") as f:
@@ -955,7 +1329,26 @@ def admin_import(ctx, args):
 
 
 SIGNER_VERBS = {"preflight": verb_preflight, "challenge": verb_challenge, "approve": verb_approve,
-                "sign": verb_sign, "status": verb_status}
+                "sign": verb_sign, "status": verb_status, "gh-selfcheck": verb_gh_selfcheck}
+def admin_set_gh_token(ctx, args):
+    if args not in ([], ["--stdin"]):
+        raise Usage("set-gh-token [--stdin]   (a fine-grained, read-only token for the repo)")
+    check_pins(ctx)
+    if args:
+        token = sys.stdin.readline().strip()
+    else:
+        import getpass
+        token = getpass.getpass("GitHub token (not shown): ").strip()
+    if not TOKEN_RE.match(token):
+        raise Refused("that doesn't look like a GitHub token")
+    d = os.path.join(ctx.var, "gh")
+    mkdirs(ctx, d)
+    write_file(ctx, os.path.join(d, "token"), token + "\n")
+    pol = load_policy(ctx)
+    gh_api(ctx, pol, "/repos/%s" % pol["repo"])
+    say("GitHub token saved for %s; it reads %s." % (SIGNER_USER, pol["repo"]))
+
+
 def admin_repin(ctx, args):
     if args:
         raise Usage("repin")
@@ -963,7 +1356,7 @@ def admin_repin(ctx, args):
 
 
 ADMIN_VERBS = {"set-approver": admin_set_approver, "repin": admin_repin, "approve": admin_approve,
-               "generate-u2": admin_generate_u2, "import": admin_import}
+               "generate-u2": admin_generate_u2, "import": admin_import, "set-gh-token": admin_set_gh_token}
 
 
 def main(argv):

@@ -54,10 +54,18 @@ static BUILD_MARKER: &str = concat!("K2_DAEMON_BUILD v=", env!("CARGO_PKG_VERSIO
 #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
 #[used]
 static BUILD_MARKER: &str = concat!("K2_DAEMON_BUILD v=", env!("CARGO_PKG_VERSION"), " os=linux arch=aarch64;");
+// The standalone macOS daemon too (prd-signing-user-v1 S3): the signing user
+// checks the release version in the bytes it is asked to sign.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[used]
+static BUILD_MARKER: &str = concat!("K2_DAEMON_BUILD v=", env!("CARGO_PKG_VERSION"), " os=macos arch=aarch64;");
 
 fn main() {
     // Referenced so no linker drops it.
-    #[cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(any(
+        all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
     std::hint::black_box(BUILD_MARKER);
     k2_daemon::daemon_main::run();
 }

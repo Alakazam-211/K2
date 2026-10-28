@@ -8,7 +8,7 @@ source "$(dirname "$0")/k2sign_fixture.sh"
 
 echo "== the installer =="
 L="$TROOT/usr/local/libexec/k2sign"; E="$TROOT/usr/local/etc/k2sign"
-for f in k2sign k2sign-admin k2sign.py minisign; do
+for f in k2sign k2sign-admin k2sign.py minisign gh check-daemon-asset.py; do
     [ -f "$L/$f" ] && pass "installed libexec/$f" || fail "libexec/$f missing"
 done
 grep -q '@PYTHON@' "$L/k2sign" && fail "python path not filled in" || pass "wrappers carry the resolved python path"
@@ -23,7 +23,7 @@ sud="$TROOT/etc/sudoers.d/k2sign"
 grep -q '^u1 ' "$E/pubkeys" && ! grep -q '^u2 ' "$E/pubkeys" && pass "pre-ceremony tree: only U1 pinned" || fail "pubkeys" "$(cat "$E/pubkeys")"
 grep -q 'no U2/U3 yet' "$tmp/install.out" && pass "the installer says the tree has no U2 yet" || fail "pre-ceremony note"
 fresh="$tmp/fresh"; mkdir -p "$fresh"
-K2SIGN_TEST_ROOT="$fresh" bash "$TREE/scripts/k2sign/install.sh" --test --dry-run --minisign "$MINISIGN" > "$tmp/dry.out" 2>&1 \
+K2SIGN_TEST_ROOT="$fresh" bash "$TREE/scripts/k2sign/install.sh" --test --dry-run --minisign "$MINISIGN" --gh "$REPO/tests/release/fixtures/gh-stub.sh" > "$tmp/dry.out" 2>&1 \
     && [ -z "$(find "$fresh" -mindepth 1 -print -quit)" ] && grep -q 'would run' "$tmp/dry.out" \
     && pass "--dry-run prints the plan and changes nothing" || fail "dry run" "$(tail -3 "$tmp/dry.out"; find "$fresh" | head -3)"
 if K2SIGN_TEST_ROOT="$fresh" bash "$TREE/scripts/k2sign/install.sh" --dry-run > "$tmp/x.out" 2>&1; then
@@ -70,6 +70,14 @@ check "preflight needs an enrolled approver (policy approval on)" 3 "no approver
 check "set-approver refuses a non-P-256 key" 3 "not a P-256 public key" "$ADM" set-approver "$tmp/keys/p384.pem"
 check "set-approver" 0 "approver key installed" "$ADM" set-approver "$tmp/keys/approver.pem"
 grep -q 'etc/approver.pem' "$E/pins.sha256" && pass "approver.pem is pinned" || fail "approver pin"
+check "preflight needs the signer's own GitHub token (S3)" 3 "no GitHub token for the signer" "$K" preflight 0.46.6
+printf 'not-a-token\n' > "$tmp/badtok"
+check_in "set-gh-token refuses a non-token" "$tmp/badtok" 3 "doesn't look like a GitHub token" "$ADM" set-gh-token --stdin
+printf 'ghp_%040d\n' 7 > "$tmp/wrongtok"
+check_in "set-gh-token refuses a token GitHub rejects" "$tmp/wrongtok" 3 "GitHub API /repos/Alakazam-211/K2 failed" "$ADM" set-gh-token --stdin
+if set_gh_token; then pass "set-gh-token (read-only token, probed against the repo)"; else fail "set-gh-token" "$(cat "$tmp/out")"; fi
+grep -qF "$GH_TOKEN_VALUE" "$tmp/out" && fail "the token was printed" || pass "the token is not printed"
+[ "$(stat -f %Lp "$TROOT/var/k2sign/gh/token")" = 600 ] && pass "gh/token is 0600" || fail "token mode"
 check "preflight ok" 0 "preflight ok" "$K" preflight 0.46.6
 U1_ID="$(python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1])[2:10][::-1].hex().upper())' "$U1_LINE")"
 U2_ID="$(python3 -I -c 'import base64,sys; print(base64.b64decode(sys.argv[1])[2:10][::-1].hex().upper())' "$U2_LINE")"
@@ -112,6 +120,9 @@ cp "$tmp/pk.bak" "$E/pubkeys"
 cp "$L/minisign" "$tmp/ms.bak"; printf 'x' >> "$L/minisign"
 check "a changed minisign" 3 "pins mismatch: minisign" "$K" preflight 0.46.6
 cp "$tmp/ms.bak" "$L/minisign"
+cp "$L/check-daemon-asset.py" "$tmp/cda.bak"; printf '\n# x\n' >> "$L/check-daemon-asset.py"
+check "a changed check-daemon-asset.py" 3 "pins mismatch: check-daemon-asset.py" "$K" preflight 0.46.6
+cp "$tmp/cda.bak" "$L/check-daemon-asset.py"
 check "pins restored: preflight ok" 0 "preflight ok" "$K" preflight 0.46.6
 
 echo "== key file modes =="
@@ -141,7 +152,7 @@ cp "$tmp/keys/approver.key" "$tmp/ak"
 "$K" challenge 0.46.6 "$B1" k2-daemon-linux-x86_64 > "$tmp/ch.json"
 approve_with "$tmp/ak" "$tmp/ch.json" "$tmp/ch.der"
 check_in "approve" "$tmp/ch.der" 0 "" "$K" approve "$(nonce_of "$tmp/ch.json")"
-check_in "S3 not built: a session alone never signs" "$tmp/f" 3 "the per-file checks are not built yet (S3)" "$K" sign u2 k2-daemon-linux-x86_64 0.46.6 raw
+check_in "a session alone never signs: the file needs its own evidence" "$tmp/f" 3 "no tag v0.46.6 on GitHub yet" "$K" sign u2 k2-daemon-linux-x86_64 0.46.6 raw
 grep -q $'\tSIGNED\t.*k2-daemon-linux-x86_64' "$AUDIT/0.46.6/signatures.tsv" && fail "a refused asset was logged as signed" || pass "nothing was signed or logged as signed"
 
 echo "== S1 7: every signature verifies with the pinned U2 and is in the audit log =="

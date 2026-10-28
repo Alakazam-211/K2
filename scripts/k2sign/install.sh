@@ -39,6 +39,10 @@ MINISIGN_ZIP_URL="https://github.com/jedisct1/minisign/releases/download/0.12/mi
 MINISIGN_ZIP_SHA256="89000b19535765f9cffc65a65d64a820f433ef6db8020667f7570e06bf6aac63"
 MINISIGN_BIN_SHA256="d41cde458303d45c95b00473e2455a7f45f95b550931f1f0cc98ef1f61b2a8ff"
 JEDISCT1_MINISIGN_PUB="RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3"
+# gh (S3: the signer verifies Linux build attestations with its own copy).
+GH_ZIP_URL="https://github.com/cli/cli/releases/download/v2.83.1/gh_2.83.1_macOS_arm64.zip"
+GH_ZIP_SHA256="4461a4f07cfdbeb83f96dce8d3789d5115b22185fb1a6fd3ec7f7befb755db0c"
+GH_BIN_SHA256="36a67e2862458ccb817544a8bfd22a399f370d5860b4ae4e7f9d99a980fb4375"
 # Only the Command Line Tools python qualifies: /Applications is root:admin
 # 0775, so any admin user (z3thon is one) can move Xcode.app aside and put
 # another python at Xcode's path. Every folder above the CLT python is
@@ -47,12 +51,13 @@ PYTHON_CANDIDATES=(
     /Library/Developer/CommandLineTools/usr/bin/python3
 )
 
-MODE=install DRY=0 RELEASE_USER="" LOCAL_MINISIGN=""
+MODE=install DRY=0 RELEASE_USER="" LOCAL_MINISIGN="" LOCAL_GH=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run) DRY=1; shift ;;
         --test) MODE=test; shift ;;
         --minisign) LOCAL_MINISIGN="${2:?--minisign <path>}"; shift 2 ;;
+        --gh) LOCAL_GH="${2:?--gh <path>}"; shift 2 ;;
         --release-user) RELEASE_USER="${2:?--release-user <name>}"; shift 2 ;;
         -h|--help) sed -n '2,32p' "$0"; exit 0 ;;
         *) echo "install.sh: unknown argument $1" >&2; exit 2 ;;
@@ -73,9 +78,10 @@ if [ "$MODE" = test ]; then
     [ -n "$ROOT" ] && [ -d "$ROOT" ] || die "--test needs K2SIGN_TEST_ROOT=<existing dir>"
     [ "$(id -u)" != 0 ] || die "--test is refused as root"
     [ -n "$LOCAL_MINISIGN" ] || die "--test needs --minisign <path>"
+    [ -n "$LOCAL_GH" ] || die "--test needs --gh <path> (a stub)"
 else
     [ -z "${K2SIGN_TEST_ROOT:-}" ] || die "K2SIGN_TEST_ROOT is set: that is for --test only"
-    [ -z "$LOCAL_MINISIGN" ] || die "--minisign is for --test only (production downloads and checks the pinned release)"
+    [ -z "$LOCAL_MINISIGN$LOCAL_GH" ] || die "--minisign and --gh are for --test only (production downloads and checks the pinned releases)"
     if [ "$DRY" = 0 ] && [ "$(id -u)" != 0 ]; then
         die "run with sudo (or --dry-run to see the plan first)"
     fi
@@ -237,7 +243,7 @@ if [ "$MODE" != test ] && [ ! -d /usr/local/libexec ]; then
 fi
 act /usr/bin/install -d ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$LIBEXEC"
 act /usr/bin/install -d ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$ETC"
-for d in "$VAR" "$VAR/keys" "$VAR/state" "$VAR/state/challenges" "$VAR/state/sessions" "$VAR/state/assets" "$VAR/audit" "$VAR/tmp"; do
+for d in "$VAR" "$VAR/keys" "$VAR/gh" "$VAR/state" "$VAR/state/challenges" "$VAR/state/sessions" "$VAR/state/assets" "$VAR/audit" "$VAR/tmp"; do
     act /usr/bin/install -d ${OWN_SIGNER[@]+"${OWN_SIGNER[@]}"} -m 0700 "$d"
 done
 if [ "$MODE" = test ]; then
@@ -263,6 +269,20 @@ else
     say "  zip and binary match the pinned sha256; jedisct1's signature verifies"
 fi
 "$WORK/minisign" -v 2>&1 | grep -q '^minisign 0\.1[1-9]' || die "minisign does not run or is older than 0.11"
+if [ "$MODE" = test ]; then
+    cp "$LOCAL_GH" "$WORK/gh"
+    cp "$LOCAL_GH" "$WORK/gh.zip"   # any bytes: the test attests them itself
+else
+    say "gh 2.83.1 from cli/cli's release..."
+    /usr/bin/curl -fsSL --proto '=https' --tlsv1.2 -o "$WORK/gh.zip" "$GH_ZIP_URL" || die "download failed: $GH_ZIP_URL"
+    [ "$(sha256 "$WORK/gh.zip")" = "$GH_ZIP_SHA256" ] || die "gh zip sha256 is not the pinned $GH_ZIP_SHA256"
+    /usr/bin/ditto -x -k "$WORK/gh.zip" "$WORK/ghx"
+    cp "$WORK/ghx/gh_2.83.1_macOS_arm64/bin/gh" "$WORK/gh"
+    [ "$(sha256 "$WORK/gh")" = "$GH_BIN_SHA256" ] || die "gh binary sha256 is not the pinned $GH_BIN_SHA256"
+    say "  zip and binary match the pinned sha256"
+fi
+chmod 0755 "$WORK/gh"
+"$WORK/gh" --version 2>&1 | grep -q '^gh version ' || die "gh does not run"
 
 # ── 5. signer, policy, pubkeys ─────────────────────────────────────────────
 say "signer files..."
@@ -276,6 +296,10 @@ act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$WORK/k2sign" "$LI
 act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$WORK/k2sign-admin" "$LIBEXEC/k2sign-admin"
 act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0644 "$HERE/k2sign.py" "$LIBEXEC/k2sign.py"
 act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$WORK/minisign" "$LIBEXEC/minisign"
+act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0755 "$WORK/gh" "$LIBEXEC/gh"
+# The release zip stays too: k2sign gh-selfcheck verifies cli/cli's attestation of it.
+act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0644 "$WORK/gh.zip" "$LIBEXEC/gh-release.zip"
+act /usr/bin/install ${OWN_ROOT[@]+"${OWN_ROOT[@]}"} -m 0644 "$TREE/scripts/lib/check-daemon-asset.py" "$LIBEXEC/check-daemon-asset.py"
 if [ -f "$ETC/policy" ] && ! cmp -s "$HERE/policy" "$ETC/policy"; then
     say "  NOTE: replacing a changed $ETC/policy with the reviewed copy (a soft rollback edit is undone)"
 fi
@@ -302,7 +326,7 @@ if [ "$DRY" = 1 ]; then
     exit 0
 fi
 {
-    for f in k2sign k2sign-admin k2sign.py minisign; do printf '%s  libexec/%s\n' "$(sha256 "$LIBEXEC/$f")" "$f"; done
+    for f in k2sign k2sign-admin k2sign.py minisign gh gh-release.zip check-daemon-asset.py; do printf '%s  libexec/%s\n' "$(sha256 "$LIBEXEC/$f")" "$f"; done
     for f in policy pubkeys approver.pem; do
         [ -f "$ETC/$f" ] && printf '%s  etc/%s\n' "$(sha256 "$ETC/$f")" "$f"
     done
@@ -312,4 +336,5 @@ say "installed. Hashes (K2 checks these against the branch):"
 sed 's/^/  /' "$ETC/pins.sha256"
 printf '  %s  etc/sudoers.d/k2sign\n' "$(sha256 "$SUDOERS_DIR/k2sign")"
 printf '  %s  python %s\n' "$(sha256 "$PY")" "$PY"
+say "GitHub token (S3 evidence): sudo $LIBEXEC/k2sign-admin set-gh-token  (fine-grained, read-only, this repo)"
 say "next: enrol the approver (K2 Release Approve → Enrol), then sudo $LIBEXEC/k2sign-admin set-approver ~/.k2-release-approve/approver.pem"

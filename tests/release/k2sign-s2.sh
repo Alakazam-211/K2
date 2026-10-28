@@ -139,7 +139,7 @@ approve_with "$tmp/keys/approver.key" "$tmp/c.json" "$tmp/r.der"
 "$K" approve "$(nonce_of "$tmp/c.json")" < "$tmp/r.der" >/dev/null 2>&1 || fail "release-side session"
 check "k2u_preflight (k2sign) ok" 0 "matching this tree" lib k2u_preflight 0.46.12
 printf 'app tarball\n' > "$tmp/app.tgz"
-check "k2u_sign without the S3 stub: the signer refuses, k2u_sign fails" 1 "the per-file checks are not built yet (S3)" lib k2u_sign u2 "$tmp/app.tgz" K2.app.tar.gz 0.46.12 "$tmp/app.sig2" raw
+check "k2u_sign without evidence: the signer refuses, k2u_sign fails" 1 "K2.app.tar.gz does not extract" lib k2u_sign u2 "$tmp/app.tgz" K2.app.tar.gz 0.46.12 "$tmp/app.sig2" raw
 [ ! -e "$tmp/app.sig2" ] && pass "no signature file was written" || fail "sig written on refusal"
 export K2SIGN_TEST_EVIDENCE=accept
 check "k2u_sign u2 via k2sign" 0 "via k2sign" lib k2u_sign u2 "$tmp/app.tgz" K2.app.tar.gz 0.46.12 "$tmp/app.sig2" raw

@@ -72,6 +72,7 @@ vi.mock('@/lib/daemon-cli', async () => {
 })
 
 import { EmailNotificationsSection } from './EmailNotificationsSection'
+import { primaryScope } from '@/kessel/server-scope'
 import { ownerText, pauseText, pickMethod, suppressionScopeText } from './email-notify-api'
 
 beforeEach(() => {
@@ -84,7 +85,7 @@ afterEach(() => cleanup())
 
 describe('EmailNotificationsSection', () => {
   it('shows a paused App sender with why, and resumes it after a confirm bound to its address', async () => {
-    render(<EmailNotificationsSection />)
+    render(<EmailNotificationsSection scope={primaryScope()} />)
     await screen.findByTestId('email-notifications')
     expect(screen.getByText(/7 of 80 recipients hard-bounced in 24 h/)).toBeTruthy()
     expect(screen.getByText(/never paused: it carries every password reset/)).toBeTruthy()
@@ -101,7 +102,7 @@ describe('EmailNotificationsSection', () => {
 
   it('asks for the vault password when the server offers no Touch ID', async () => {
     h.methods = ['vault-password']
-    render(<EmailNotificationsSection />)
+    render(<EmailNotificationsSection scope={primaryScope()} />)
     await screen.findByTestId('email-notifications')
     fireEvent.click(screen.getByText('Resume…'))
     const pw = await screen.findByLabelText('Vault password')
@@ -113,7 +114,7 @@ describe('EmailNotificationsSection', () => {
   })
 
   it('turns a workspace off and removes a suppression by address, never showing addresses it keeps hashed', async () => {
-    render(<EmailNotificationsSection />)
+    render(<EmailNotificationsSection scope={primaryScope()} />)
     await screen.findByTestId('email-notifications')
     expect(screen.getByText('@x.test')).toBeTruthy()
     fireEvent.click(screen.getByText('Turn off'))

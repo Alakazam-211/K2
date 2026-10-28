@@ -733,7 +733,7 @@ export default function Settings(): React.JSX.Element {
         )}
         {activeSection === 'email-notifications' && (
           <SectionErrorBoundary>
-            <EmailNotificationsSection />
+            <EmailNotificationsSection scope={settingsPrimaryScope()} />
           </SectionErrorBoundary>
         )}
         {activeSection === 'sew' && (

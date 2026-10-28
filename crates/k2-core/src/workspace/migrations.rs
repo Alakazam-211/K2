@@ -453,7 +453,7 @@ pub fn promote_legacy_heartbeat(project_path: &str) {
         if let Some(lf) = last_fire {
             if !lf.is_empty() {
                 let _ = conn.execute(
-                    "UPDATE agent_heartbeats SET last_fired = ?1 \
+                    "UPDATE workspace_heartbeats SET last_fired = ?1 \
                      WHERE project_id = ?2 AND name = 'default'",
                     rusqlite::params![lf, project_id],
                 );
@@ -598,6 +598,21 @@ fn case_rename(from: &std::path::Path, to: &std::path::Path) {
     }
 }
 
+/// Whether the workspace already has a `triage` heartbeat row (archived or
+/// not: the name is still taken). 0.46.6: this read the pre-0040 table
+/// name `agent_heartbeats`; the query failed, read as "no row", and every
+/// boot tried the add and logged "Failed to scaffold triage heartbeat …
+/// already exists".
+fn has_triage_row(conn: &rusqlite::Connection, project_id: &str) -> bool {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM workspace_heartbeats \
+         WHERE project_id = ?1 AND name = 'triage')",
+        rusqlite::params![project_id],
+        |row| row.get(0),
+    )
+    .unwrap_or(false)
+}
+
 /// Idempotent: bails immediately if the workspace's primary already
 /// has any heartbeat row, or if the project isn't in manager mode.
 pub fn migrate_or_scaffold_lead_heartbeat(project_path: &str) {
@@ -617,15 +632,7 @@ pub fn migrate_or_scaffold_lead_heartbeat(project_path: &str) {
         return;
     }
 
-    let has_triage: bool = conn
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM agent_heartbeats \
-             WHERE project_id = ?1 AND name = 'triage')",
-            rusqlite::params![&project_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(false);
-    if has_triage {
+    if has_triage_row(&conn, &project_id) {
         return;
     }
 
@@ -697,6 +704,9 @@ pub fn migrate_or_scaffold_lead_heartbeat(project_path: &str) {
                 );
             }
         }
+        // A triage row that appeared between the check and the add (two
+        // sweeps at once) is the outcome we wanted: nothing to report.
+        Err(e) if e.contains("already exists") => {}
         Err(e) => {
             log_debug!(
                 "[migrate] Failed to scaffold triage heartbeat for {}: {}",
@@ -2185,6 +2195,32 @@ mod heartbeat_canonical_repair_tests {
     fn write(path: &Path, body: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, body).unwrap();
+    }
+
+    /// 0.46.6 boot noise: the triage check reads the live table, so a
+    /// workspace that has its triage row is a no-op (no add, no
+    /// "already exists" line), and one without it still gets scaffolded.
+    #[test]
+    fn triage_check_sees_an_existing_row() {
+        let (dir, _path, project_id) = scratch_ws("triage-check");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            assert!(!has_triage_row(&conn, &project_id), "no row yet");
+        }
+        insert_hb(&project_id, "triage", ".k2/heartbeats/triage/WAKEUP.md");
+        {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            assert!(has_triage_row(&conn, &project_id), "the existing triage row must be seen");
+        }
+        insert_hb(&project_id, "other", ".k2/heartbeats/other/WAKEUP.md");
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let other_project = Uuid::new_v4().to_string();
+        assert!(!has_triage_row(&conn, &other_project), "another workspace's row doesn't count");
+        drop(conn);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Rule 2: ONLY the agent tree has the folder → the whole folder is

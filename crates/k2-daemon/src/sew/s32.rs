@@ -753,7 +753,7 @@ fn app_space_bind(env: &Env, who: &Who, v: &Value) -> R<Value> {
             return Err(no(
                 "space_bound_elsewhere",
                 409,
-                format!("Sew keeps that Space for the App it was unbound from (read-only); a person must release it in Sew before another App can bind it: {b}"),
+                format!("Sew keeps Space {space} read-only for the removed App it belonged to. Bind another Space, or have the Sew install owner release this one in Sew (spaces/release) first; K2 never releases it. Sew said: {b}"),
             ));
         }
         Err(super::ops::MgmtError::Status(409, b)) => {

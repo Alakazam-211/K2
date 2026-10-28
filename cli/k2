@@ -59726,9 +59726,10 @@ elif verb == "app-spaces":
         print("%-24s %-28s added %s, held %s, pending %s" % (r.get("appId"), r.get("spaceId"), m.get("added", 0), m.get("held", 0), m.get("pending", 0)))
     gone = v.get("unbound") or []
     if gone:
-        print("Spaces of removed Apps (read-only in Sew; history and export still work):")
+        print("Spaces of removed Apps (Sew keeps each one read-only for its old App; history and export still work;")
+        print("  to reuse one for another App, the Sew install owner releases it in Sew first):")
     for r in gone:
-        state = "unbound in Sew" if r.get("doneAt") else "waiting to unbind in Sew"
+        state = "read-only in Sew" if r.get("doneAt") else "waiting: sent once Sew can unbind (Sew 0.5.0+)"
         print("  %-24s %-28s %s" % (r.get("appId"), r.get("spaceId"), state))
     if v.get("note"):
         print(v["note"], file=sys.stderr)

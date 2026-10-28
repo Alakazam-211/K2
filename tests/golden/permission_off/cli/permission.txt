@@ -103,6 +103,12 @@ WORKSPACE
                                         Edit workspace agent profile
   workspace resources list|add|remove   Pin an existing file in the Files drawer
 
+DOCS (live Markdown: edit the same .md with people and agents; `k2 doc --help`)
+  doc cat|head|tail|grep|sed -n <f>     Read the live doc (GNU flags, a subset)
+  doc sed -i|patch|insert|replace|append|delete <f>   One atomic edit, yours to undo
+  doc write --base V <f> < text         Rewrite from what you read (three-way merge)
+  doc who|watch|status|log|undo <f>     Presence, live changes, disk state, history
+
 CHANGES (git: the Changes tab from the CLI; agents = their own workspace)
   changes [--json] [--base <ref>]       Staged / unstaged / untracked list
   changes diff [<path>...] [--staged]   Unified diff (default: all uncommitted vs HEAD)

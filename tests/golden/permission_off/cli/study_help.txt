@@ -19,7 +19,7 @@ Topics:
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
-  garden-data  garden-access  garden-changes  changes  sim  db-upgrade  jobs
+  garden-data  garden-access  garden-changes  changes  sim  docs  db-upgrade  jobs
   folder-trust  email-notifications  box-move
 --- stderr
 --- requests

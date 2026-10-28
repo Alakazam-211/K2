@@ -729,6 +729,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/docs/flush", Member),
     post("/cli/docs/leave", Member),
     get("/cli/docs/log", Member),
+    post("/cli/docs/mv", Member),
     post("/cli/docs/name", Member),
     post("/cli/docs/open", Member),
     get("/cli/docs/read", Member),

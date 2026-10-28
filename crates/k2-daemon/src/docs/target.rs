@@ -183,6 +183,52 @@ fn rel_string(root: &Path, abs: &Path) -> Result<String, Refusal> {
     Ok(parts.join("/"))
 }
 
+/// Where `mv` puts a doc: `to` relative to the doc's workspace (or absolute
+/// inside it). The new name must not exist yet, its folder must, it stays
+/// in the jail, and it passes the deny list by path (Markdown, not the
+/// vault, not generated, not a secret's name). Returns `(rel, abs)`.
+pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
+    let to = to.trim();
+    if to.is_empty() || to.contains('\0') {
+        return Err(Refusal::bad("bad_request", "to is required: the new name"));
+    }
+    let rel_in = if Path::new(to).is_absolute() {
+        let parent = Path::new(to)
+            .parent()
+            .and_then(|p| p.canonicalize().ok())
+            .ok_or_else(|| Refusal::not_found("folder_not_found", format!("no folder for {to}")))?;
+        let name = Path::new(to).file_name().ok_or_else(|| Refusal::bad("bad_request", "to names no file"))?;
+        let abs = parent.join(name);
+        rel_string(&t.root, &abs).map_err(|_| Refusal::bad("other_workspace", "mv stays inside the doc's workspace"))?
+    } else {
+        to.to_string()
+    };
+    let root = t.root.to_string_lossy().to_string();
+    let abs = crate::fs_routes::jail_rel_path(&root, &rel_in, true).map_err(|e| Refusal::bad("path_escapes", e))?;
+    if std::fs::symlink_metadata(&abs).is_ok() {
+        return Err(Refusal { status: "409 Conflict", code: "exists", message: format!("{rel_in} already exists") });
+    }
+    if !abs.parent().is_some_and(Path::is_dir) {
+        return Err(Refusal::not_found("folder_not_found", format!("no folder for {rel_in}")));
+    }
+    let parent = abs.parent().and_then(|p| p.canonicalize().ok()).ok_or_else(|| Refusal::bad("path_escapes", "bad folder"))?;
+    let abs = parent.join(abs.file_name().unwrap_or_default());
+    let rel = rel_string(&t.root, &abs)?;
+    if !k2_mpc_markdown::is_markdown_path(&rel) {
+        return Err(Refusal::declined("not_markdown", format!("{rel} is not a Markdown file (.md, .markdown)")));
+    }
+    if is_vault(&rel) {
+        return Err(Refusal::declined("protected", format!("{rel} is in the vault folder")));
+    }
+    if is_generated(&rel) {
+        return Err(Refusal::declined("generated", format!("K2 writes {rel} itself")));
+    }
+    if k2_core::secret_paths::is_secret_rel(&rel) {
+        return Err(Refusal::declined("secret", format!("{rel} is a secret's name; it is never a live doc")));
+    }
+    Ok((rel, abs))
+}
+
 /// A workspace by handle, name, id or root: `(project id, root path)`.
 pub fn workspace_root(token: &str) -> Result<(String, String), Refusal> {
     workspace_by_token(token)

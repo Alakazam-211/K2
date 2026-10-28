@@ -33,6 +33,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 ### LLM tokens
 - **Saved LLM tokens can live in the K2 vault (opt-in).** `k2 llm tokens storage vault` (Admin or Owner) seals every saved subscription and API token, removed ones too, into the vault's daemon-only area, where nobody can reveal them and nothing copies them to another server. The plain files stay for now, so `k2 llm tokens storage files` goes back instantly with nothing lost; `k2 llm tokens storage` shows where each token is. The server default stays where each tool reads it. If the vault can't open at start (a locked keychain), K2 tries again after 1, 2, 4 … up to 30 minutes; if you cancel the Keychain prompt it stops asking, tells you on your Thread, and `k2 vault open` opens it when you're ready.
 
+### Fixes
+- **A stuck window recovers on macOS and Linux.** When a K2 window stopped responding, K2's recovery reloaded it at the Windows address, which goes nowhere on a Mac or Linux, so the window stayed blank. It now reloads the address each system really uses.
+
 ## 0.46.5 — Agents stay up
 
 ### When you update

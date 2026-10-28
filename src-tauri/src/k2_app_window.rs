@@ -152,10 +152,23 @@ pub fn watchdog_capture_app_url(
             }
         }
     }
-    "http://tauri.localhost"
-        .parse()
-        .ok()
-        .or_else(|| "tauri://localhost".parse().ok())
+    Some(tauri_app_origin_url())
+}
+
+/// The origin Tauri serves `WebviewUrl::App` pages from in a production
+/// build: `tauri://localhost` on macOS / Linux, and wry's workaround
+/// `http://tauri.localhost` on Windows / Android. This mirrors Tauri's own
+/// (crate-private) `protocol::origin("tauri", false)`; K2 sets neither
+/// `useHttpsScheme` nor a URL `frontendDist`, so this is the app's own
+/// configured address. The watchdog's hard renavigate goes here, so it must
+/// be the address this platform really serves (on macOS/Linux
+/// `http://tauri.localhost/` serves nothing, and every recovery failed).
+pub fn tauri_app_origin_url() -> Url {
+    #[cfg(any(windows, target_os = "android"))]
+    const ORIGIN: &str = "http://tauri.localhost/";
+    #[cfg(not(any(windows, target_os = "android")))]
+    const ORIGIN: &str = "tauri://localhost/";
+    Url::parse(ORIGIN).expect("tauri app origin is a valid URL")
 }
 
 fn watchdog_app_url_allowed(url: &Url, dev_url: Option<&Url>, is_dev: bool) -> bool {
@@ -202,7 +215,7 @@ fn attach_k2_app_window_guards<'a, R: Runtime, M: Manager<R>>(
     let app_url = if is_dev {
         dev_url.clone()
     } else {
-        "http://tauri.localhost".parse().ok()
+        Some(tauri_app_origin_url())
     };
     let builder = builder
         .on_navigation(move |url| {
@@ -547,6 +560,25 @@ mod tests {
                 "{raw} must be vetoed in dev"
             );
         }
+    }
+
+    /// The prod fallback is the address this platform really serves:
+    /// `tauri://localhost/` on macOS / Linux, `http://tauri.localhost/` on
+    /// Windows. (It used to be the Windows address everywhere, so every
+    /// macOS / Linux hard renavigate went nowhere.)
+    #[test]
+    fn watchdog_prod_fallback_is_this_platforms_tauri_origin() {
+        let fallback = watchdog_capture_app_url(None, None, false).expect("prod fallback");
+        #[cfg(any(windows, target_os = "android"))]
+        assert_eq!(fallback.as_str(), "http://tauri.localhost/");
+        #[cfg(not(any(windows, target_os = "android")))]
+        assert_eq!(fallback.as_str(), "tauri://localhost/");
+        assert_eq!(fallback, tauri_app_origin_url());
+        assert!(is_tauri_prod_origin(&fallback));
+        assert!(
+            allow_k2_app_navigation(&fallback, Some(&tauri_app_origin_url()), None, false),
+            "the recovery target must pass the window's own navigation guard"
+        );
     }
 
     /// G21(g) / G16(a): the watchdog never stores `about:` or `blob:` as the

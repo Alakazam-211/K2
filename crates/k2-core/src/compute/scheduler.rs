@@ -4,21 +4,29 @@
 //! call) plus, for display, each queued job's position and reason. Solo
 //! nodes only: a shared node keeps its own queue (`k2_node_proto::queue`).
 //!
-//! Order (prd-compute-job-tiers-v1 §3.4 with vs-live T3, T5, T15):
-//! - **tiers first**: CI, then Priority, then Normal waiting an hour or
-//!   more (below Priority, T5), each strictly by `created_at`; then fresh
-//!   Normal ([`super::proto::tiers::band`]);
-//! - **Normal**: round-robin across workspaces (rotating after the
-//!   workspace that got the last placement), strict FIFO by `created_at`
-//!   within a workspace (only its oldest Normal job may start, aged ones
-//!   included), the node's `parallel_max` and each grant's `max_parallel`;
+//! Order (the airport: prd-compute-job-tiers-v2 + Rosson 10-28;
+//! [`super::proto::tiers`]):
+//! - **CI** first, strictly by `created_at`;
+//! - then **Priority** and **Standard** alternate (the one that didn't get
+//!   the last placement first, [`Turns::last_line`]), so Standard never
+//!   starves;
+//! - then **Batch**, only on an idle node (nothing running, nothing else
+//!   placed), one at a time;
+//! - inside each line but CI: jobs waiting an hour or more first by
+//!   `created_at` (they skip the turns, never the line); then round-robin
+//!   across workspaces (after the last placed), then across submitters in
+//!   each workspace (after the last placed there), strict FIFO by
+//!   `created_at` per (workspace, submitter) for Standard and Batch;
+//! - limits: the node's `parallel_max` and room, each grant's
+//!   `max_parallel`, and the grant's per-submitter cap when set (L3; CI
+//!   never counts);
 //! - **next free slot**: a CI or Priority job that waits only for room on
 //!   the node (`parallel_full`, `local_resource_limit`, `waiting_for_idle`,
 //!   `exclusive_running`) holds every start ordered after it. Any other
 //!   refusal (the grant's cap, a missing tool, a per-job disk ask) never
-//!   holds (T3). A Normal head never holds, except an exclusive job at the
-//!   head of the order waiting for an idle node, so a stream of small jobs
-//!   can't starve it.
+//!   holds (T3). A Standard head never holds, except an exclusive job at
+//!   the head of the order waiting for an idle node, so a stream of small
+//!   jobs can't starve it. Batch never holds.
 //!
 //! Tiers never stop a running job (R3): this only ever places queued ones.
 
@@ -26,7 +34,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use super::proto::frames::{Offer, Refusal};
 use super::proto::refusal::{self, JobAsk};
-use super::proto::tiers::{self, Band, Tier};
+use super::proto::tiers::{self, Line, Tier};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueuedJob {
@@ -41,6 +49,15 @@ pub struct QueuedJob {
     /// The job's tier as the server stored it (CI only with `allow_ci`,
     /// checked at submit).
     pub tier: Tier,
+    /// Who sent it (`compute_jobs.submitter`): the turns inside a
+    /// workspace and the per-submitter cap. `None` = an old row.
+    pub submitter: Option<String>,
+}
+
+impl QueuedJob {
+    fn sub(&self) -> &str {
+        self.submitter.as_deref().unwrap_or("")
+    }
 }
 
 /// What is on the node right now (from the controller registry).
@@ -48,6 +65,40 @@ pub struct QueuedJob {
 pub struct Load {
     pub running_by_workspace: HashMap<String, u32>,
     pub exclusive_running: bool,
+    /// Running non-CI jobs per (workspace, submitter) (L3).
+    pub running_by_submitter: HashMap<(String, String), u32>,
+}
+
+/// Who got the last placements on a node (the engine keeps one per node).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Turns {
+    pub last_ws: Option<String>,
+    /// Per workspace: the submitter placed last there.
+    pub last_submitter: HashMap<String, String>,
+    /// Priority or Standard: which got the last placement.
+    pub last_line: Option<Line>,
+}
+
+impl Turns {
+    /// Only the workspace rotation (0.46.5's state).
+    pub fn ws(last: Option<&str>) -> Self {
+        Self { last_ws: last.map(str::to_string), ..Default::default() }
+    }
+
+    /// `j` was placed.
+    pub fn served(&mut self, j: &QueuedJob) {
+        self.note(&j.workspace_id, j.submitter.as_deref(), j.tier);
+    }
+
+    /// A job of `workspace_id`, `submitter`, `tier` was placed (or sent).
+    pub fn note(&mut self, workspace_id: &str, submitter: Option<&str>, tier: Tier) {
+        self.last_ws = Some(workspace_id.to_string());
+        self.last_submitter.insert(workspace_id.to_string(), submitter.unwrap_or("").to_string());
+        let line = tier.line();
+        if matches!(line, Line::Priority | Line::Standard) {
+            self.last_line = Some(line);
+        }
+    }
 }
 
 impl Load {
@@ -142,39 +193,33 @@ fn ask(j: &QueuedJob) -> JobAsk<'_> {
     }
 }
 
-/// Where `j` ranks at `now` (server clock; aging from `created_at`).
-pub fn band_of(j: &QueuedJob, now: i64) -> Band {
-    tiers::band(j.tier, now - j.created_at, tiers::AGE_SECS)
+/// Has `j` waited long enough to skip its line's turns (server clock)?
+pub fn aged(j: &QueuedJob, now: i64) -> bool {
+    tiers::aged(now - j.created_at, tiers::AGE_SECS)
 }
 
-/// The start order at `now`: CI, Priority and aged Normal by
-/// `created_at`; then fresh Normal, round-robin across workspaces (after
-/// `last_workspace`), FIFO inside each. Positions follow this order.
-pub fn order<'a>(now: i64, queue: &'a [QueuedJob], last_workspace: Option<&str>) -> Vec<&'a QueuedJob> {
-    let fifo = |a: &&QueuedJob, b: &&QueuedJob| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id));
-    let mut urgent: Vec<&QueuedJob> = queue.iter().filter(|j| band_of(j, now).by_arrival()).collect();
-    urgent.sort_by(|a, b| band_of(b, now).cmp(&band_of(a, now)).then_with(|| fifo(a, b)));
-    let mut normal: Vec<&QueuedJob> = queue.iter().filter(|j| !band_of(j, now).by_arrival()).collect();
-    normal.sort_by(fifo);
-    // Workspace rotation over a STABLE cyclic order (sorted ids), starting
-    // just after the last-served workspace, so every workspace with work
-    // waits at most (workspaces − 1) placements.
-    let mut wss: Vec<&str> = normal.iter().map(|j| j.workspace_id.as_str()).collect();
-    wss.sort_unstable();
-    wss.dedup();
-    if let Some(last) = last_workspace {
-        let start = wss.iter().position(|w| *w > last).unwrap_or(0);
-        wss.rotate_left(start);
+fn fifo(a: &&QueuedJob, b: &&QueuedJob) -> std::cmp::Ordering {
+    a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id))
+}
+
+/// `keys` (sorted, unique) rotated to start just after `last`.
+fn rotated<'a>(mut keys: Vec<&'a str>, last: Option<&str>) -> Vec<&'a str> {
+    keys.sort_unstable();
+    keys.dedup();
+    if let Some(last) = last {
+        let start = keys.iter().position(|k| *k > last).unwrap_or(0);
+        keys.rotate_left(start);
     }
-    let mut by_ws: HashMap<&str, VecDeque<&QueuedJob>> = HashMap::new();
-    for j in normal {
-        by_ws.entry(j.workspace_id.as_str()).or_default().push_back(j);
-    }
-    let mut out = urgent;
+    keys
+}
+
+/// Round-robin over `groups` in `keys` order until all are empty.
+fn round_robin<'a, 'k>(keys: &[&'k str], mut groups: HashMap<&'k str, VecDeque<&'a QueuedJob>>) -> Vec<&'a QueuedJob> {
+    let mut out = Vec::new();
     loop {
         let mut any = false;
-        for w in &wss {
-            if let Some(j) = by_ws.get_mut(w).and_then(VecDeque::pop_front) {
+        for k in keys {
+            if let Some(j) = groups.get_mut(k).and_then(VecDeque::pop_front) {
                 out.push(j);
                 any = true;
             }
@@ -185,24 +230,68 @@ pub fn order<'a>(now: i64, queue: &'a [QueuedJob], last_workspace: Option<&str>)
     }
 }
 
+/// One line's order: aged jobs by `created_at` (they skip the turns); then
+/// workspaces round-robin (after the last placed), each workspace's own
+/// sequence round-robin over its submitters (after the last placed
+/// there), FIFO per submitter.
+fn line_order<'a>(now: i64, jobs: Vec<&'a QueuedJob>, turns: &Turns) -> Vec<&'a QueuedJob> {
+    let (mut old, mut fresh): (Vec<&QueuedJob>, Vec<&QueuedJob>) = jobs.into_iter().partition(|j| aged(j, now));
+    old.sort_by(fifo);
+    fresh.sort_by(fifo);
+    let wss = rotated(fresh.iter().map(|j| j.workspace_id.as_str()).collect(), turns.last_ws.as_deref());
+    let mut per_ws: HashMap<&str, VecDeque<&QueuedJob>> = HashMap::new();
+    for w in &wss {
+        let mine: Vec<&QueuedJob> = fresh.iter().copied().filter(|j| j.workspace_id == *w).collect();
+        let subs = rotated(mine.iter().map(|j| j.sub()).collect(), turns.last_submitter.get(*w).map(String::as_str));
+        let mut by_sub: HashMap<&str, VecDeque<&QueuedJob>> = HashMap::new();
+        for j in mine {
+            by_sub.entry(j.sub()).or_default().push_back(j);
+        }
+        per_ws.insert(w, round_robin(&subs, by_sub).into());
+    }
+    let mut out = old;
+    out.extend(round_robin(&wss, per_ws));
+    out
+}
+
+/// The start order at `now`: CI by `created_at`; then Priority and
+/// Standard alternating (after `turns.last_line`); then Batch. Each line
+/// but CI by [`line_order`]. Positions follow this order.
+pub fn order_with<'a>(now: i64, queue: &'a [QueuedJob], turns: &Turns) -> Vec<&'a QueuedJob> {
+    let of = |line: Line| queue.iter().filter(|j| j.tier.line() == line).collect::<Vec<&QueuedJob>>();
+    let mut out = of(Line::Ci);
+    out.sort_by(fifo);
+    let mut pri: VecDeque<&QueuedJob> = line_order(now, of(Line::Priority), turns).into();
+    let mut std: VecDeque<&QueuedJob> = line_order(now, of(Line::Standard), turns).into();
+    let mut next = tiers::alternate_after(turns.last_line);
+    while !pri.is_empty() || !std.is_empty() {
+        let (a, b) = if next == Line::Priority { (&mut pri, &mut std) } else { (&mut std, &mut pri) };
+        if let Some(j) = a.pop_front().or_else(|| b.pop_front()) {
+            out.push(j);
+        }
+        next = if next == Line::Priority { Line::Standard } else { Line::Priority };
+    }
+    out.extend(line_order(now, of(Line::Batch), turns));
+    out
+}
+
+/// [`order_with`] with only a workspace rotation (0.46.5's call).
+pub fn order<'a>(now: i64, queue: &'a [QueuedJob], last_workspace: Option<&str>) -> Vec<&'a QueuedJob> {
+    order_with(now, queue, &Turns::ws(last_workspace))
+}
+
 /// Why everything after a held head waits.
-fn hold_reason(j: &QueuedJob, band: Band) -> Refusal {
-    match band {
-        Band::Ci => Refusal::new(tiers::codes::TIER_HOLD, "a CI job ahead of it takes the next free slot"),
-        Band::Priority => Refusal::new(tiers::codes::TIER_HOLD, "a Priority job ahead of it takes the next free slot"),
+fn hold_reason(j: &QueuedJob, line: Line) -> Refusal {
+    match line {
+        Line::Ci => Refusal::new(tiers::codes::TIER_HOLD, "a CI job ahead of it takes the next free slot"),
+        Line::Priority => Refusal::new(tiers::codes::TIER_HOLD, "a Priority job ahead of it takes the next free slot"),
         _ if j.exclusive => Refusal::new(refusal::WAITING_FOR_IDLE, "an exclusive job ahead of it waits for an idle node"),
         _ => Refusal::new(tiers::codes::TIER_HOLD, "a job ahead of it takes the next free slot"),
     }
 }
 
-/// Decide one placement at `now` (server clock).
-///
-/// - `queue`: queued jobs on this node (any order).
-/// - `last_workspace`: who got the previous placement on this node.
-/// - `grant_max_parallel`: the grant cap per workspace.
-/// - `offer`: the node's last offer (`None` = offline).
-/// - `controller_pause`: `Some("paused"|"draining")` when the controller
-///   owner stopped new assignments.
+/// [`decide_with`] with only a workspace rotation and no per-submitter cap
+/// (0.46.5's call).
 pub fn decide(
     now: i64,
     queue: &[QueuedJob],
@@ -212,7 +301,28 @@ pub fn decide(
     offer: Option<&Offer>,
     controller_pause: Option<&str>,
 ) -> Decision {
-    let jobs = order(now, queue, last_workspace);
+    decide_with(now, queue, &Turns::ws(last_workspace), load, &Limits { grant_max_parallel, submitter_max_running: &|_| 0 }, offer, controller_pause)
+}
+
+/// The grant's caps, per workspace.
+pub struct Limits<'a> {
+    /// The grant's `max_parallel`.
+    pub grant_max_parallel: &'a dyn Fn(&str) -> u32,
+    /// The grant's `submitter_max_running` (0 = off; L3).
+    pub submitter_max_running: &'a dyn Fn(&str) -> u32,
+}
+
+/// Decide one placement at `now` (server clock).
+///
+/// - `queue`: queued jobs on this node (any order).
+/// - `turns`: who got the previous placements on this node.
+/// - `caps`: the grant caps per workspace.
+/// - `offer`: the node's last offer (`None` = offline).
+/// - `controller_pause`: `Some("paused"|"draining")` when the controller
+///   owner stopped new assignments.
+pub fn decide_with(now: i64, queue: &[QueuedJob], turns: &Turns, load: &Load, caps: &Limits<'_>, offer: Option<&Offer>, controller_pause: Option<&str>) -> Decision {
+    let grant_max_parallel = caps.grant_max_parallel;
+    let jobs = order_with(now, queue, turns);
     let position: HashMap<&str, usize> = jobs.iter().enumerate().map(|(i, j)| (j.id.as_str(), i + 1)).collect();
     let mut waiting: BTreeMap<String, (usize, Refusal)> = BTreeMap::new();
     let wait_all = |why: Refusal, waiting: &mut BTreeMap<String, (usize, Refusal)>| {
@@ -234,9 +344,9 @@ pub fn decide(
     let mut place: Option<String> = None;
     let mut hold: Option<Refusal> = None;
     let mut head_seen = false;
-    // Workspaces whose oldest Normal job was already looked at (strict
-    // FIFO inside a workspace).
-    let mut seen_ws: HashSet<&str> = HashSet::new();
+    // (workspace, submitter) pairs whose oldest Standard or Batch job was
+    // already looked at (strict FIFO per submitter inside a workspace).
+    let mut seen: HashSet<(&str, &str, Line)> = HashSet::new();
     for j in &jobs {
         let pos = position[j.id.as_str()];
         // A job over the node's caps can never start: report it (the
@@ -251,14 +361,21 @@ pub fn decide(
             waiting.insert(j.id.clone(), (pos, h.clone()));
             continue;
         }
-        if j.tier == Tier::Normal && !seen_ws.insert(j.workspace_id.as_str()) {
-            waiting.insert(j.id.clone(), (pos, Refusal::new("behind_older_job", "an older job from this workspace goes first")));
+        let line = j.tier.line();
+        if matches!(line, Line::Standard | Line::Batch) && !seen.insert((j.workspace_id.as_str(), j.sub(), line)) {
+            waiting.insert(j.id.clone(), (pos, Refusal::new("behind_older_job", "an older job from the same submitter goes first")));
             continue;
         }
-        let band = band_of(j, now);
         let verdict = match refusal::offer_refusal(offer, load.total(), load.exclusive_running, &ask(j)) {
             Some(r) => Err(with_numbers(r, offer, j, load.total())),
             None if !within_grant(j, load, grant_max_parallel) => Err(grant_full()),
+            None if !within_submitter_cap(j, load, caps.submitter_max_running) => Err(submitter_full(j, caps.submitter_max_running)),
+            // L1: Batch only on an idle node, and only when nothing else
+            // is placed now (one at a time).
+            None if line == Line::Batch && (load.total() > 0 || place.is_some()) => Err(Refusal::new(
+                super::proto::share::blocked::BATCH_WINDOW,
+                "Batch: it starts when the node is idle (nothing running, nothing else ready)",
+            )),
             None => Ok(()),
         };
         match verdict {
@@ -270,8 +387,8 @@ pub fn decide(
                 // Next free slot: only while it waits for room, never for a
                 // refusal that could last (T3); CI and Priority, and an
                 // exclusive job at the head of the order.
-                if tiers::waits_for_room(&r.code) && (band.holds() || (is_head && j.exclusive)) {
-                    hold = Some(hold_reason(j, band));
+                if tiers::waits_for_room(&r.code) && (line.holds() || (is_head && j.exclusive && line != Line::Batch)) {
+                    hold = Some(hold_reason(j, line));
                 }
                 waiting.insert(j.id.clone(), (pos, r));
             }
@@ -282,6 +399,19 @@ pub fn decide(
 
 fn within_grant(j: &QueuedJob, load: &Load, cap: &dyn Fn(&str) -> u32) -> bool {
     load.running_by_workspace.get(&j.workspace_id).copied().unwrap_or(0) < cap(&j.workspace_id).max(1)
+}
+
+/// L3: the per-submitter cap (0 = off); CI never counts or waits.
+fn within_submitter_cap(j: &QueuedJob, load: &Load, cap: &dyn Fn(&str) -> u32) -> bool {
+    let c = cap(&j.workspace_id);
+    c == 0 || j.tier == Tier::Ci || load.running_by_submitter.get(&(j.workspace_id.clone(), j.sub().to_string())).copied().unwrap_or(0) < c
+}
+
+fn submitter_full(j: &QueuedJob, cap: &dyn Fn(&str) -> u32) -> Refusal {
+    Refusal::new(
+        super::proto::share::blocked::SUBMITTER_RUNNING_FULL,
+        format!("this submitter already runs {} job(s) here (the grant's per-submitter cap); jobs behind it may start first", cap(&j.workspace_id)),
+    )
 }
 
 fn grant_full() -> Refusal {
@@ -381,7 +511,7 @@ mod tests {
     const T0: i64 = 0;
 
     fn job(id: &str, ws: &str, at: i64) -> QueuedJob {
-        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal }
+        QueuedJob { id: id.into(), workspace_id: ws.into(), created_at: at, exclusive: false, cpu_millis: None, mem_bytes: None, disk_bytes: 0, needs_git: true, tier: Tier::Normal, submitter: None }
     }
 
     fn tiered(id: &str, ws: &str, at: i64, tier: Tier) -> QueuedJob {
@@ -730,5 +860,87 @@ mod tests {
         assert_eq!(d.place.as_deref(), Some("ci"));
         assert_eq!(d.waiting["ex"].1.code, refusal::WAITING_FOR_IDLE);
         assert_eq!(d.waiting["ex"].0, 2);
+    }
+
+    fn by(id: &str, ws: &str, at: i64, sub: &str, tier: Tier) -> QueuedJob {
+        QueuedJob { submitter: Some(sub.into()), tier, ..job(id, ws, at) }
+    }
+
+    fn ids(v: &[&QueuedJob]) -> Vec<String> {
+        v.iter().map(|j| j.id.clone()).collect()
+    }
+
+    /// The airport (Rosson 10-28) on a solo node: CI, then Priority and
+    /// Standard alternating (after the line placed last), then Batch.
+    #[test]
+    fn priority_and_standard_alternate_on_a_solo_node() {
+        let q = vec![
+            by("p1", "A", 1, "a", Tier::Priority),
+            by("p2", "A", 2, "a", Tier::Priority),
+            by("s1", "A", 3, "a", Tier::Normal),
+            by("s2", "A", 4, "a", Tier::Normal),
+            by("b1", "A", 0, "a", Tier::Batch),
+            by("ci", "A", 9, "a", Tier::Ci),
+        ];
+        assert_eq!(ids(&order_with(T0, &q, &Turns::default())), vec!["ci", "p1", "s1", "p2", "s2", "b1"]);
+        let after_p = Turns { last_line: Some(Line::Priority), ..Default::default() };
+        assert_eq!(ids(&order_with(T0, &q, &after_p)), vec!["ci", "s1", "p1", "s2", "p2", "b1"]);
+        // Placing follows the turns: after a Priority placement, Standard.
+        let mut t = Turns::default();
+        let q2: Vec<QueuedJob> = q.iter().filter(|j| j.tier != Tier::Ci).cloned().collect();
+        let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+        let d = decide_with(T0, &q2, &t, &Load::default(), &caps, Some(&offer(4)), None);
+        assert_eq!(d.place.as_deref(), Some("p1"));
+        t.served(&q2[0]);
+        let rest: Vec<QueuedJob> = q2.iter().filter(|j| j.id != "p1").cloned().collect();
+        let mut load = Load::default();
+        load.running_by_workspace.insert("A".into(), 1);
+        let d = decide_with(T0, &rest, &t, &load, &caps, Some(&offer(4)), None);
+        assert_eq!(d.place.as_deref(), Some("s1"), "Standard never starves behind a Priority burst");
+        assert_eq!(d.waiting["b1"].1.code, "batch_window", "Batch waits for an idle node");
+    }
+
+    /// L1 on a solo node: Batch only when nothing runs and nothing else is
+    /// placed; it never holds anyone.
+    #[test]
+    fn batch_waits_for_an_idle_solo_node() {
+        let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+        let b = by("b", "A", 1, "a", Tier::Batch);
+        let d = decide_with(T0, std::slice::from_ref(&b), &Turns::default(), &Load::default(), &caps, Some(&offer(4)), None);
+        assert_eq!(d.place.as_deref(), Some("b"), "idle: it goes");
+        let mut busy = Load::default();
+        busy.running_by_workspace.insert("Z".into(), 1);
+        let d = decide_with(T0, &[b.clone(), by("s", "A", 2, "a", Tier::Normal)], &Turns::default(), &busy, &caps, Some(&offer(4)), None);
+        assert_eq!(d.place.as_deref(), Some("s"));
+        assert_eq!(d.waiting["b"].1.code, "batch_window");
+    }
+
+    /// L4 on a solo node: submitters take turns inside a workspace (one
+    /// builder's burst can't hold the others), FIFO per submitter; L3: the
+    /// per-submitter cap, CI exempt.
+    #[test]
+    fn submitters_take_turns_and_the_cap_holds_one_builder() {
+        let mut q: Vec<QueuedJob> = (0..4).map(|i| by(&format!("a{i}"), "W", i, "w/s/a", Tier::Normal)).collect();
+        q.push(by("b0", "W", 10, "w/s/b", Tier::Normal));
+        assert_eq!(ids(&order_with(T0, &q, &Turns::default()))[..3], ["a0", "b0", "a1"]);
+        let mut t = Turns::ws(Some("W"));
+        t.last_submitter.insert("W".into(), "w/s/a".into());
+        assert_eq!(order_with(T0, &q, &t)[0].id, "b0", "after A, B's turn");
+        // A runs 2; cap 2: A waits, B goes.
+        let mut load = Load::default();
+        load.running_by_workspace.insert("W".into(), 2);
+        load.running_by_submitter.insert(("W".into(), "w/s/a".into()), 2);
+        let caps = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 2 };
+        let d = decide_with(T0, &q, &Turns::default(), &load, &caps, Some(&offer(8)), None);
+        assert_eq!(d.place.as_deref(), Some("b0"));
+        assert_eq!(d.waiting["a0"].1.code, "submitter_running_full");
+        // CI is never capped.
+        let ci = by("ci", "W", 20, "w/s/a", Tier::Ci);
+        let d = decide_with(T0, std::slice::from_ref(&ci), &Turns::default(), &load, &caps, Some(&offer(8)), None);
+        assert_eq!(d.place.as_deref(), Some("ci"));
+        // Off (0) by default.
+        let off = Limits { grant_max_parallel: &|_| 9, submitter_max_running: &|_| 0 };
+        let d = decide_with(T0, &q, &Turns::default(), &load, &off, Some(&offer(8)), None);
+        assert_eq!(d.place.as_deref(), Some("a0"));
     }
 }

@@ -54,11 +54,19 @@ use crate::crypto::{self, SigningKey};
 /// the session on a frame it can't parse), so a job with `--cache` is never
 /// placed on an older node. Also 6 (same release): `Plan.src_path` and
 /// `Plan.with`, sibling repos laid out side by side (`--with`), to nodes
-/// offering [`FEATURE_MULTI_REPO`].
+/// offering [`FEATURE_MULTI_REPO`]. Also 6: job tiers v2 (`tiers2`,
+/// prd-compute-job-tiers-v2): `Tier::Batch`, `Plan.submitter`,
+/// `Plan.submitter_max_running`; a node offers `tiers2` only to a server
+/// that said protocol ≥ 6 and never shows an older one a Batch tier, and a
+/// server writes them only to a node offering it.
 pub const PROTOCOL: u32 = 6;
 
 /// The first server protocol that gets the `job-cache` feature.
 pub const PROTOCOL_CACHE: u32 = 6;
+
+/// The first server protocol that gets the `tiers2` feature (Batch, the
+/// submitter fields, alternating lines and submitter turns).
+pub const PROTOCOL_TIERS2: u32 = 6;
 
 /// The first server protocol that gets the tier fields and the `tiers`
 /// feature.
@@ -598,6 +606,17 @@ pub struct Plan {
     /// nodes offering [`FEATURE_MULTI_REPO`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub with: Vec<SrcWith>,
+    /// Protocol 6 (`tiers2`): who sent it (`<workspace>/<session>[/<name>]`),
+    /// the key of the submitter turns and the per-submitter cap. Absent
+    /// unless the node offers [`crate::tiers::FEATURE_TIERS2`], so every
+    /// older plan and digest is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitter: Option<String>,
+    /// Protocol 6 (`tiers2`): at most this many running jobs of this
+    /// (workspace, submitter) on the node (the grant's
+    /// `submitter_max_running`; absent = no cap). CI never counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitter_max_running: Option<u32>,
 }
 
 impl Plan {
@@ -605,6 +624,12 @@ impl Plan {
     /// server's plan), else Normal.
     pub fn tier_or_class(&self) -> crate::tiers::Tier {
         self.tier.unwrap_or_else(|| crate::tiers::Tier::from_class(self.class.unwrap_or_default()))
+    }
+
+    /// The submitter-turns key: the submitter, else the session (an older
+    /// server's plan), else nothing.
+    pub fn turn_key(&self) -> Option<String> {
+        self.submitter.clone().or_else(|| self.session_id.clone())
     }
 }
 
@@ -1339,7 +1364,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None,
+            src_path: None, submitter: None, submitter_max_running: None,
             with: Vec::new(),
         }
     }

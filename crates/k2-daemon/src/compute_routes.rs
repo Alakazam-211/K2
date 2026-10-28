@@ -65,6 +65,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/jobs/logs",
     "/cli/compute/jobs/receipt",
     "/cli/compute/jobs/retry",
+    "/cli/compute/jobs/tier",
     "/cli/compute/local/disable",
     "/cli/compute/local/drain",
     "/cli/compute/local/enable",
@@ -113,6 +114,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/grants/set",
     "/cli/compute/jobs/cancel",
     "/cli/compute/jobs/retry",
+    "/cli/compute/jobs/tier",
     "/cli/compute/local/disable",
     "/cli/compute/local/drain",
     "/cli/compute/local/enable",
@@ -554,6 +556,7 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/jobs/artifact" => job_artifact(&who, params),
         "/cli/compute/jobs/cancel" => job_cancel(&who, body),
         "/cli/compute/jobs/retry" => job_retry(&who, body),
+        "/cli/compute/jobs/tier" => job_retier(&who, body),
         "/cli/compute/usage" => usage(&who, params),
         "/cli/compute/events" => events(&who, params),
         "/cli/compute/local/status" => local_status(&who),
@@ -672,6 +675,7 @@ fn tier_counts(m: &BTreeMap<String, i64>) -> serde_json::Value {
         "ci": m.get("ci").copied().unwrap_or(0),
         "priority": m.get("priority").copied().unwrap_or(0),
         "normal": m.get("normal").copied().unwrap_or(0),
+        "batch": m.get("batch").copied().unwrap_or(0),
     })
 }
 
@@ -1286,6 +1290,8 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         max_parallel: n_pos(&v, "maxParallel", 1, 64)?,
         max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
         allow_ci,
+        // L3 (prd-compute-job-tiers-v2): 0 = off; absent keeps the grant's.
+        submitter_max_running: n_pos(&v, "submitterMaxRunning", 0, 64)?,
     };
     let (g, before) = {
         let db = k2_core::db::shared();
@@ -1303,7 +1309,13 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
     // cap re-sends this workspace's jobs waiting there (withdraw, then
     // send again with the grant's cap, oldest first). A solo node reads
     // the grant live and needs nothing.
-    let resent = if before.as_ref().is_none_or(|b| b.max_parallel != g.max_parallel) { compute_ws::resend_queued(&n.id, &ws.id, None) } else { 0 };
+    let resent = if before.as_ref().is_none_or(|b| b.max_parallel != g.max_parallel || b.submitter_max_running != g.submitter_max_running) {
+        compute_ws::resend_queued(&n.id, &ws.id, None)
+    } else {
+        0
+    };
+    // A solo node reads the grant live: place what the new caps allow.
+    compute_ws::kick(&n.id);
     let switch_on = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1445,8 +1457,10 @@ fn agents_set(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         max_disk_gb: n_pos(&v, "maxDiskGb", 1, 10_000)?,
         max_parallel: n_pos(&v, "maxParallel", 1, 64)?,
         max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
-        // The agents switch never touches CI (owner/Admin, per grant).
+        // The agents switch never touches CI (owner/Admin, per grant) or
+        // the per-submitter cap.
         allow_ci: None,
+        submitter_max_running: None,
     };
     set_agent_compute(&ws.id, &ws.handle, on, &limits, &who.label()).map_err(|e| no("internal", 500, e))
 }
@@ -1615,6 +1629,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Toolchains / system packages the job needs (compute polish v1).
     let needs = needs_from(&v)?;
     let (cpu_millis, mem_bytes) = job_resources(&v)?;
+    // `--mem` is required (Rosson 10-28): without it the job reserves the
+    // default (clamped to a smaller node below) and a notice says to set
+    // it. The node stops a job that goes over (`failed/mem_cap`), and only
+    // starts one when its slots and memory both fit.
+    let mem_defaulted = mem_bytes.is_none();
+    let mem_bytes = mem_bytes.or(Some(compute::DEFAULT_MEM_BYTES));
     // Files to keep after the command exits (results back, G1).
     let artifacts = artifacts_from(&v)?;
     // Vault secrets as env (secret-env SE1–SE4): names → ids now (no
@@ -1627,18 +1647,22 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     if cache.is_some() && !secret_asks.is_empty() {
         return Err(no(pcache::codes::CACHE_WITH_SECRET, 400, "--cache and --secret don't mix: a job with secret env keeps nothing between runs on the node"));
     }
-    let detach = b(&v, "detach") == Some(true);
-    // Job tiers (prd-compute-job-tiers-v1): `--tier` (`--gate` = ci), the
-    // supersede key and the submitter's own name. The node decides below.
+    // Job tiers (prd-compute-job-tiers-v1, v2): `--tier` (`--gate` = ci,
+    // `--priority` = priority with its `--why`), the supersede key and the
+    // submitter's own name. The node decides below.
     let tier_ask = tier_from(v)?;
+    let why = why_from(v, tier_ask)?;
+    // Batch is always detached (it waits for an idle node: hours, maybe).
+    let detach = b(&v, "detach") == Some(true) || tier_ask == Tier::Batch;
     let supersede_key = supersede_from(v)?;
     let submitter_name = submitter_name_from(v)?;
-    // Never stuck (G3/G4): queue timeout, infra retries.
+    // Never stuck (G3/G4): queue timeout, infra retries. Batch: 48 h.
     let tun = compute::retry::tuning();
     let queue_timeout = match n(&v, "queueTimeoutSecs") {
         Some(0) => None,
         Some(x) if (1..=7 * 86_400).contains(&x) => Some(x),
         Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--queue-timeout is between 1s and 7d, or off")),
+        None if tier_ask == Tier::Batch => Some(tiers::BATCH_QUEUE_TIMEOUT_SECS),
         None => Some(if detach { tun.queue_timeout_detached_secs } else { tun.queue_timeout_attached_secs }),
     };
     let retries = match n(&v, "retries") {
@@ -1682,6 +1706,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
     let node = pick_node(v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
+    // The default `--mem` never asks more than a small node has.
+    let mem_bytes = match (mem_defaulted, compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone())) {
+        (true, Some(o)) if o.caps.mem_bytes > 0 && o.caps.mem_bytes < compute::DEFAULT_MEM_BYTES => Some(o.caps.mem_bytes),
+        _ => mem_bytes,
+    };
     if !artifacts.is_empty() && !node_features(&node).iter().any(|f| f == results::FEATURE_ARTIFACTS) {
         return Err(no(
             "node_upgrade_required",
@@ -1847,19 +1876,46 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let live_offer = tier_offer;
     let queue_node = live_offer.as_ref().is_some_and(share::queue_on);
     let tiers_node = live_offer.as_ref().is_some_and(share::tiers_on);
+    let tiers2_node = live_offer.as_ref().is_some_and(|o| crate::compute_place::offers_tiers2(&o.features));
     let shared_view = live_offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.clone());
     // The tier the queue orders it by: a guest's Priority where the node's
     // owner didn't allow it runs as Normal, said once (T7).
     let mut notices: Vec<serde_json::Value> = Vec::new();
+    if mem_defaulted {
+        let gb = mem_bytes.unwrap_or(compute::DEFAULT_MEM_BYTES) as f64 / (1u64 << 30) as f64;
+        notices.push(notice(
+            tiers::codes::MEM_DEFAULTED,
+            format!(
+                "no --mem: this job reserves {gb:.0} GB and is stopped if it uses more. Set --mem to what it needs (e.g. --mem 24G for a cargo build of K2, --mem 2G for a small script)"
+            ),
+        ));
+    }
     let tier = if tier_ask == Tier::Priority && share::priority_counts(live_offer.as_ref()) == Some(false) {
         notices.push(notice(
             tiers::codes::PRIORITY_DOWNGRADED,
-            format!("'{}' doesn't count this server's Priority (a guest share; its owner can allow it): this job runs as Normal there", node.name),
+            format!("'{}' doesn't count this server's Priority (a guest share; its owner can allow it): this job runs as Standard there", node.name),
+        ));
+        Tier::Normal
+    } else if tier_ask == Tier::Priority && priority_open(&ws.id, None) >= tiers::PRIORITY_CAP {
+        // The per-workspace Priority cap (Rosson 10-28): more run Standard.
+        notices.push(notice(
+            tiers::codes::PRIORITY_CAP_REACHED,
+            format!(
+                "workspace {} already has {} Priority jobs queued or running (the cap): this one runs as Standard. When one ends: k2 compute retier <job> --priority --why \"…\"",
+                ws.handle,
+                tiers::PRIORITY_CAP
+            ),
         ));
         Tier::Normal
     } else {
         tier_ask
     };
+    if tier == Tier::Batch && shared_view.is_some() && !tiers2_node {
+        notices.push(notice(
+            tiers::codes::BATCH_IDLE_ONLY,
+            format!("'{}' runs a k2-node older than 0.46.6: this Batch job waits on this server until the node is idle, then runs there as Standard", node.name),
+        ));
+    }
     if tier == Tier::Priority && shared_view.is_some() && !tiers_node {
         notices.push(notice(
             tiers::codes::NODE_TOO_OLD_FOR_TIERS,
@@ -1940,6 +1996,8 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         shard: opts.shard.clone(),
         secrets: crate::compute_secrets::pins(&secret_envs).0,
         repo,
+        why: why.clone(),
+        mem_defaulted,
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
@@ -1956,8 +2014,13 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let plan = Plan {
         // Protocol 3 fields only to nodes offering `queue` (§10.2).
         class: queue_node.then_some(class),
-        // Protocol 5: the tier only to nodes offering `tiers` (T11).
-        tier: tiers_node.then_some(tier),
+        // Protocol 5: the tier only to nodes offering `tiers` (T11); Batch
+        // only to one offering `tiers2` (T27).
+        tier: tiers_node.then_some(tier.for_peer(tiers2_node)),
+        // Protocol 6 (`tiers2`): the submitter and the grant's per-submitter
+        // cap (refreshed before every send).
+        submitter: (tiers2_node && queue_node).then(|| submitter.clone()),
+        submitter_max_running: grant.as_ref().filter(|g| tiers2_node && queue_node && g.submitter_max_running > 0).map(|g| g.submitter_max_running as u32),
         session_id: opts.session.clone().filter(|_| queue_node),
         est_secs: est.filter(|_| queue_node).map(|(m, _)| m.max(0) as u64),
         est_p90_secs: est.filter(|_| queue_node).map(|(_, p)| p.max(0) as u64),
@@ -2230,14 +2293,49 @@ fn cache_from(v: &serde_json::Value) -> R<Option<String>> {
 fn tier_from(v: &serde_json::Value) -> R<Tier> {
     let asked = match s(v, "tier") {
         None => None,
-        Some("batch") => return Err(no(codes::BAD_REQUEST, 400, "--tier batch comes in 0.46.6; use normal (the default) for now")),
-        Some(t) => Some(Tier::parse(t).ok_or_else(|| no(codes::BAD_REQUEST, 400, "--tier is ci, priority or normal"))?),
+        Some(t) => Some(Tier::parse(t).ok_or_else(|| no(codes::BAD_REQUEST, 400, "--tier is ci, priority, standard (normal) or batch"))?),
+    };
+    // `priority: true` is `--priority` (0.46.6).
+    let asked = match (b(v, "priority") == Some(true), asked) {
+        (true, None | Some(Tier::Priority)) => Some(Tier::Priority),
+        (true, Some(_)) => return Err(no(codes::BAD_REQUEST, 400, "--priority is --tier priority: drop one of them")),
+        (false, t) => t,
     };
     match (b(v, "gate") == Some(true), asked) {
         (true, None | Some(Tier::Ci)) => Ok(Tier::Ci),
         (true, Some(_)) => Err(no(codes::BAD_REQUEST, 400, "--gate is --tier ci: drop one of them")),
         (false, t) => Ok(t.unwrap_or_default()),
     }
+}
+
+/// `--why "<reason>"`: required with Priority (Rosson 10-28), one line,
+/// shown in the queue and `k2 compute status`. Exit 2 without it.
+fn why_from(v: &serde_json::Value, tier: Tier) -> R<Option<String>> {
+    let why = s(v, "why").map(str::trim).filter(|w| !w.is_empty());
+    match (tier, why) {
+        (_, Some(w)) if !tiers::valid_why(w) => Err(no(codes::BAD_REQUEST, 400, format!("--why is one line of 3–{} characters", tiers::WHY_MAX))),
+        (Tier::Priority, None) => Err(no(
+            tiers::codes::PRIORITY_NEEDS_WHY,
+            400,
+            "--priority needs a one-line reason: --priority --why \"release gate for 0.46.6\" (it shows in the queue; Priority is for the critical path only)",
+        )),
+        (_, w) => Ok(w.map(str::to_string)),
+    }
+}
+
+/// Priority jobs this workspace has queued or running on this server (the
+/// per-workspace cap, [`tiers::PRIORITY_CAP`]), not counting `except`.
+fn priority_open(ws_id: &str, except: Option<&str>) -> usize {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT COUNT(*) FROM compute_jobs WHERE workspace_id = ?1 AND tier = 'priority' \
+         AND state IN ('queued','assigned','preparing','running','finishing') AND id != ?2",
+        rusqlite::params![ws_id, except.unwrap_or("")],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n.max(0) as usize)
+    .unwrap_or(0)
 }
 
 /// `--supersede KEY` (1–120 printable characters).
@@ -2539,9 +2637,10 @@ fn human_secs(s: i64) -> String {
 /// "grant: 2h/job, 1 parallel, 10 queued, 60 GB disk".
 fn grant_line(g: &store::GrantRow) -> String {
     format!(
-        "grant: {}/job, {} parallel, {} queued, {} GB disk",
+        "grant: {}/job, {} parallel{}, {} queued, {} GB disk",
         human_secs(g.max_job_secs),
         g.max_parallel,
+        if g.submitter_max_running > 0 { format!(" ({} per submitter)", g.submitter_max_running) } else { String::new() },
         g.max_queued,
         g.max_disk_gb
     )
@@ -2643,7 +2742,7 @@ fn probe_job(ws: &Ws, v: &serde_json::Value, cpu_millis: Option<u64>, mem_bytes:
         mem_bytes,
         disk_bytes: 0,
         needs_git: b(v, "noSource") != Some(true),
-        tier: Tier::Normal,
+        tier: Tier::Normal, submitter: None,
     }
 }
 
@@ -2956,7 +3055,22 @@ fn job_entry(viewer: Option<(&str, &str)>, r: &store::JobRow, decision: &schedul
         e["reason"] = w.code.clone().into();
         e["position"] = (*p).into();
     }
+    priority_who(r, &mut e);
     e
+}
+
+/// A Priority job's one-line `--why` and its submitter (Rosson 10-28):
+/// shown in the queue and `k2 compute status` to everyone on this server,
+/// so builders see who holds the critical path and why.
+fn priority_who(r: &store::JobRow, e: &mut serde_json::Value) {
+    if r.tier() == Tier::Priority {
+        if let Some(w) = &r.ctl.why {
+            e["tierWhy"] = w.clone().into();
+        }
+        if let Some(s) = &r.submitter {
+            e["submitter"] = s.clone().into();
+        }
+    }
 }
 
 /// The queue view of a queued job (prd-k2-compute-dx-v1 C21, without ETAs
@@ -3095,6 +3209,7 @@ fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
             // Another workspace on this server: state and size only.
             e["otherWorkspace"] = true.into();
         }
+        priority_who(r, e);
     };
     if online && live.as_ref().is_some_and(share::is_shared) {
         let view = compute_ws::queue_get(&n.id, QUEUE_WAIT).map_err(|(code, hint)| match code {
@@ -3238,7 +3353,11 @@ fn mem_cap_hint(j: &store::JobRow) -> Option<String> {
         Some(m) => {
             let g = m as f64 / (1u64 << 30) as f64;
             let shown = if (g - g.round()).abs() < 0.05 { format!("{}G", g.round() as u64) } else { format!("{g:.1}G") };
-            format!("killed at the memory cap (--mem {shown}): try a bigger --mem or CARGO_BUILD_JOBS=2")
+            if j.ctl.mem_defaulted {
+                format!("stopped: it used more than the default {shown} memory reservation (no --mem was given). Pass --mem with what it needs (e.g. --mem 24G for a cargo build), or CARGO_BUILD_JOBS=2")
+            } else {
+                format!("stopped: it used more than its --mem {shown}. Try a bigger --mem or CARGO_BUILD_JOBS=2")
+            }
         }
         None => "killed at the node's memory cap: pass a bigger --mem (k2 compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2".into(),
     })
@@ -3400,7 +3519,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None,
+        src_path: None, submitter: None, submitter_max_running: None,
         with: Vec::new(),
     };
     let session = who.passport().map(|(_, sid)| sid.to_string());
@@ -3860,6 +3979,114 @@ fn cancel_one(who: &Who, seen: &store::JobRow, queued_only: bool) -> R<serde_jso
                 "note": format!("it ends cancelled, or keeps running if it just started (job_started); k2 compute get {short}")}))
         }
     }
+}
+
+/// `POST /cli/compute/jobs/tier` (`k2 compute retier <job> --tier T`,
+/// prd-compute-job-tiers-v2 L2, T29): change a QUEUED job's tier. Same
+/// checks as submit (CI needs `allow_ci` and the share's gate, Priority
+/// needs `--why` and room under the workspace's Priority cap). A job
+/// waiting on this server is updated and placed again; one in a shared
+/// node's queue is re-sent to the same node with the new tier (it gets a
+/// new arrival there: moving down loses its place, moving up doesn't need
+/// it). A started job is left alone (409 `job_started`). Who: an agent for
+/// its own workspace's jobs; the owner and Admin logins for any job.
+fn job_retier(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+    let v = json_body(body)?;
+    if who.passport().is_none() && !who.is_admin() {
+        return Err(no(codes::OWNER_ONLY, 403, "only the job's own workspace, the owner or an Admin changes a job's tier"));
+    }
+    let j = job_for(who, s(&v, "job"))?;
+    if s(&v, "tier").is_none() && b(&v, "priority") != Some(true) && b(&v, "gate") != Some(true) {
+        return Err(no(codes::BAD_REQUEST, 400, "name a tier: k2 compute retier <job> --tier standard|priority|batch|ci (--priority needs --why \"…\")"));
+    }
+    let tier = tier_from(&v)?;
+    let why = why_from(&v, tier)?;
+    let short = compute::message::short(&j.id);
+    let on_node = j.node_queued && j.state == "assigned";
+    if j.state != "queued" && !on_node {
+        return Err(no(
+            pshare::codes::JOB_STARTED,
+            409,
+            format!("job {short} is {}: only a queued job changes tier (a running job is never stopped or reordered)", if j.node_queued { "being answered by its node" } else { j.state.as_str() }),
+        ));
+    }
+    if !j.ctl.shards.is_empty() {
+        return Err(no(codes::BAD_REQUEST, 400, format!("{short} is a split run: retier its shards (k2 compute get {short} lists them)")));
+    }
+    let node = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_by_id(&conn, &j.node_id)
+    }
+    .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, "the job's node is gone"))?;
+    let offer = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone());
+    let grant = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::grant(&conn, &node.id, &j.workspace_id)
+    };
+    let ws = ws_handle(&j.workspace_id);
+    if tier == Tier::Ci {
+        if !share::share_allows_ci(offer.as_ref()) {
+            return Err(no(pshare::codes::GATE_NOT_ALLOWED, 409, format!("'{}': this server's share on the node doesn't allow CI jobs (gate)", node.name)));
+        }
+        if !(who.is_admin() || grant.as_ref().is_some_and(|g| g.allow_ci)) {
+            return Err(ci_not_allowed(&node.name, &ws, "--tier ci"));
+        }
+    }
+    if tier == Tier::Priority && j.tier() != Tier::Priority && priority_open(&j.workspace_id, Some(&j.id)) >= tiers::PRIORITY_CAP {
+        return Err(no(
+            tiers::codes::PRIORITY_CAP_REACHED,
+            409,
+            format!("workspace {ws} already has {} Priority jobs queued or running (the cap); retier one of them down, or wait for one to end", tiers::PRIORITY_CAP),
+        ));
+    }
+    // A guest share where this server's Priority doesn't count runs it as
+    // Standard there, like at submit.
+    let tier_set = if tier == Tier::Priority && share::priority_counts(offer.as_ref()) == Some(false) { Tier::Normal } else { tier };
+    let class = match offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.as_ref()) {
+        Some(view) => share::clamp_class(&view.limits, tier_set.class()),
+        None => tier_set.class(),
+    };
+    let from = j.tier();
+    let changed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let n = conn
+            .execute(
+                "UPDATE compute_jobs SET tier = ?2, tier_asked = ?3, class = ?4 WHERE id = ?1 AND generation = ?5 AND state IN ('queued','assigned')",
+                rusqlite::params![j.id, tier_set.as_str(), (tier_set != tier).then(|| tier.as_str()), class.as_str(), j.generation],
+            )
+            .map_err(|e| no("internal", 500, e.to_string()))?;
+        if n == 1 {
+            let mut ctl = j.ctl.clone();
+            ctl.why = if tier == Tier::Priority { why.clone() } else { None };
+            store::set_job_ctl(&conn, &j.id, &ctl).map_err(|e| no("internal", 500, e))?;
+            store::record_event(
+                &conn,
+                &who.label(),
+                "job_retier",
+                Some(&node.id),
+                Some(&j.workspace_id),
+                Some(&j.id),
+                serde_json::json!({"from": from.as_str(), "to": tier_set.as_str(), "asked": tier.as_str(), "why": why, "onNode": on_node}),
+            );
+        }
+        n == 1
+    };
+    if !changed {
+        return Err(no(pshare::codes::JOB_STARTED, 409, format!("job {short} started (or ended) just now; its tier stays {}", from.word())));
+    }
+    // Waiting here: the next pass orders it by the new tier. In a node's
+    // queue: give it back and send it again (T24's marker; no move).
+    let resent = if on_node { compute_ws::resend_queued(&node.id, &j.workspace_id, Some(std::slice::from_ref(&j.id))) } else { 0 };
+    compute_ws::kick(&node.id);
+    compute_ws::notify_change();
+    Ok(serde_json::json!({
+        "ok": true, "job": short, "from": from.as_str(), "tier": tier_set.as_str(), "asked": tier.as_str(), "node": node.name,
+        "resent": resent > 0, "why": why,
+        "note": if on_node { "re-sent to the node with the new tier: it gets a new place in the node's queue" } else { "it waits on this server under the new tier" },
+    }))
 }
 
 fn job_retry(who: &Who, body: &[u8]) -> R<serde_json::Value> {

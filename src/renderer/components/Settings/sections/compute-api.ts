@@ -77,13 +77,15 @@ export interface ComputeNode {
 /** A compute job's tier (prd-compute-job-tiers-v1): CI, then Priority (the
  *  critical path), then Normal. The daemon sets and orders them; this page
  *  only shows them. */
-export type JobTier = 'ci' | 'priority' | 'normal'
+export type JobTier = 'ci' | 'priority' | 'normal' | 'batch'
 
-/** Queued jobs by tier, as the daemon counts them. */
+/** Queued jobs by tier, as the daemon counts them. `batch`: 0.46.6
+ *  daemons (absent on older ones). */
 export interface TierCounts {
   ci: number
   priority: number
   normal: number
+  batch?: number
 }
 
 /** A submitter with Priority work queued or running on this server
@@ -94,21 +96,25 @@ export interface CriticalPathEntry {
   jobs: number
 }
 
-/** The tier's short tag: `CI`, `P`, or nothing for Normal. */
+/** The tier's short tag: `CI`, `P`, `B` (Batch, 0.46.6), or nothing for
+ *  Standard (`normal`). */
 export function tierTag(tier: JobTier | string | null | undefined): string {
   if (tier === 'ci') return 'CI'
   if (tier === 'priority') return 'P'
+  if (tier === 'batch') return 'B'
   return ''
 }
 
-/** `CI 1 · P 0 · N 3`, or '' when nothing is queued. */
+/** `CI 1 · P 0 · N 3` (`· B 2` when Batch jobs wait), or '' when nothing
+ *  is queued. */
 export function tierCountsLine(c: TierCounts | null | undefined): string {
   if (!c) return ''
   const ci = c.ci ?? 0
   const p = c.priority ?? 0
   const n = c.normal ?? 0
-  if (ci + p + n === 0) return ''
-  return `CI ${ci} · P ${p} · N ${n}`
+  const b = c.batch ?? 0
+  if (ci + p + n + b === 0) return ''
+  return `CI ${ci} · P ${p} · N ${n}` + (b > 0 ? ` · B ${b}` : '')
 }
 
 /** One server's share (the wire's own snake_case names, `ShareLimits`). */
@@ -287,6 +293,9 @@ export interface ComputeGrant {
   /** Job tiers (0.46.5): this workspace may send CI jobs to the node (set
    *  by the owner or an Admin only). Absent on older daemons. */
   allowCi?: boolean
+  /** Job tiers v2 (0.46.6): at most this many running jobs per submitter
+   *  on the node; 0 = off. Absent on older daemons. */
+  submitterMaxRunning?: number
 }
 
 export interface GrantLimits {
@@ -299,7 +308,7 @@ export interface GrantLimits {
 /** A grant write: its limits (absent ones reset to the defaults) and,
  *  optionally, `allowCi` (absent keeps the stored value; only the owner or
  *  an Admin may set it). */
-export type GrantSet = GrantLimits & { allowCi?: boolean }
+export type GrantSet = GrantLimits & { allowCi?: boolean; submitterMaxRunning?: number }
 
 export interface ComputeJob {
   id: string

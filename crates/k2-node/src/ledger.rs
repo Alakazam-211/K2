@@ -600,7 +600,7 @@ pub mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None,
+            src_path: None, submitter: None, submitter_max_running: None,
             with: Vec::new(),
         };
         Assign { fence: Fence { job_id: job.into(), attempt: generation, generation, plan_digest: plan.digest().unwrap() }, plan }

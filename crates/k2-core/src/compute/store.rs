@@ -470,10 +470,14 @@ pub struct GrantRow {
     /// 0230: this workspace may send CI jobs to this node (owner or Admin
     /// only; prd-compute-job-tiers-v1 §5.1, T1).
     pub allow_ci: bool,
+    /// 0241 (prd-compute-job-tiers-v2 L3): at most this many running jobs
+    /// per submitter of this workspace on this node; 0 = off (the default).
+    /// CI never counts.
+    pub submitter_max_running: i64,
 }
 
 const GRANT_COLS: &str = "node_id, workspace_id, scopes, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-    warm_at, expires_at, granted_by, granted_at, allow_ci";
+    warm_at, expires_at, granted_by, granted_at, allow_ci, submitter_max_running";
 
 fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
     Ok(GrantRow {
@@ -489,6 +493,7 @@ fn grant_from_row(r: &Row<'_>) -> rusqlite::Result<GrantRow> {
         granted_by: r.get(9)?,
         granted_at: r.get(10)?,
         allow_ci: r.get::<_, i64>(11)? != 0,
+        submitter_max_running: r.get(12)?,
     })
 }
 
@@ -502,6 +507,9 @@ pub struct GrantLimits {
     /// `None` keeps what the grant has (a new grant: off). Re-granting
     /// limits never silently sets or drops CI (T1).
     pub allow_ci: Option<bool>,
+    /// `None` keeps what the grant has (a new grant: 0, off), like
+    /// `allow_ci`: re-granting limits never clears it (T30).
+    pub submitter_max_running: Option<i64>,
 }
 
 pub fn set_grant(
@@ -514,11 +522,12 @@ pub fn set_grant(
 ) -> Result<GrantRow, String> {
     conn.execute(
         "INSERT INTO compute_node_grants (node_id, workspace_id, max_job_secs, max_disk_gb, max_parallel, max_queued, \
-         granted_by, granted_at, allow_ci) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0)) \
+         granted_by, granted_at, allow_ci, submitter_max_running) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, COALESCE(?9, 0), COALESCE(?10, 0)) \
          ON CONFLICT(node_id, workspace_id) DO UPDATE SET max_job_secs = excluded.max_job_secs, \
          max_disk_gb = excluded.max_disk_gb, max_parallel = excluded.max_parallel, max_queued = excluded.max_queued, \
          granted_by = excluded.granted_by, granted_at = excluded.granted_at, \
-         allow_ci = COALESCE(?9, compute_node_grants.allow_ci)",
+         allow_ci = COALESCE(?9, compute_node_grants.allow_ci), \
+         submitter_max_running = COALESCE(?10, compute_node_grants.submitter_max_running)",
         params![
             node_id,
             workspace_id,
@@ -528,7 +537,8 @@ pub fn set_grant(
             limits.max_queued.unwrap_or(super::DEFAULT_MAX_QUEUED),
             by,
             at,
-            limits.allow_ci.map(i64::from)
+            limits.allow_ci.map(i64::from),
+            limits.submitter_max_running
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -637,6 +647,15 @@ pub struct JobCtl {
     /// ever sees the commit and the project key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// `--priority --why "<reason>"` (prd-compute-job-tiers-v2, Rosson
+    /// 10-28): one line, shown in the queue and `k2 compute status`.
+    /// Controller-only (never sent to a node).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// No `--mem` was given: the plan reserves the default (and the node
+    /// stops the job above it). Shown in the `mem_cap` hint.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mem_defaulted: bool,
 }
 
 /// One secret a compute job gets (SE4): what was asked, the vault id it
@@ -1542,7 +1561,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None,
+            src_path: None, submitter: None, submitter_max_running: None,
             with: Vec::new(),
         }
     }

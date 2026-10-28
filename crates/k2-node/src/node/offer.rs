@@ -168,6 +168,12 @@ impl Node {
         if t.speaks_cache() && !f.iter().any(|x| x == k2_node_proto::frames::FEATURE_MULTI_REPO) {
             f.push(k2_node_proto::frames::FEATURE_MULTI_REPO.to_string());
         }
+        // Job tiers v2 (protocol 6, same release): Batch, the submitter
+        // fields, alternating lines, submitter turns. Only to a server that
+        // speaks protocol 6 (a 0.46.5 parser rejects `batch`).
+        if t.speaks_tiers2() && !f.iter().any(|x| x == k2_node_proto::tiers::FEATURE_TIERS2) {
+            f.push(k2_node_proto::tiers::FEATURE_TIERS2.to_string());
+        }
         f
     }
 

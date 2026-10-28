@@ -1,0 +1,13 @@
+-- 0241: compute job tiers v2 (0.46.6, prd-compute-job-tiers-v2 L3, T30).
+-- Provisional number: the integrator takes the next free one from
+-- `Ops - Migration numbers`.
+--
+-- compute_node_grants:
+-- - `submitter_max_running`: at most this many running jobs per submitter
+--   of this workspace on this node; 0 = off (the default, also for every
+--   existing grant). CI never counts. Re-granting limits without it keeps
+--   the stored value (COALESCE, like `allow_ci`).
+--
+-- Nothing for Batch: 0230's CHECK already allows `batch` in
+-- `compute_jobs.tier` and `tier_asked`.
+ALTER TABLE compute_node_grants ADD COLUMN submitter_max_running INTEGER NOT NULL DEFAULT 0 CHECK (submitter_max_running >= 0);

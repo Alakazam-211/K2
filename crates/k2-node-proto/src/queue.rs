@@ -4,22 +4,29 @@
 //! answer. Solo nodes never use it (the server's `scheduler::decide`
 //! places their jobs, as today).
 //!
-//! **Order** (the first rule that separates two candidates wins;
-//! prd-compute-job-tiers-v1 §3.4 with vs-live T5, T22):
-//! 1. the tier band, highest first: CI (only where the share allows
-//!    `gate`), Priority (only where Priority counts for that server),
-//!    Normal waiting an hour or more, then fresh Normal
-//!    ([`crate::tiers::band`]);
-//! 2. tenants within today's soft CPU-hours before those over it (inside a
-//!    band: an over-quota server's CI still goes before anyone's Normal);
-//! 3. fair share: lowest `decayed usage / weight`;
-//! 4. tie: rotate after the tenant served last.
+//! **Order** (the airport, prd-compute-job-tiers-v2 + Rosson 10-28; the
+//! first rule that separates two candidates wins):
+//! 1. the line ([`crate::tiers::next_line`]): CI first (only where the
+//!    share allows `gate`); then Priority (only where Priority counts for
+//!    that server) and Standard **alternate**, starting with the one that
+//!    didn't get the last start ([`Rotation::last_line`]); then Batch;
+//! 2. inside the line, a job that waited an hour or more first, by node
+//!    arrival (it skips the turns, never the line);
+//! 3. tenants within today's soft CPU-hours before those over it (inside a
+//!    line: an over-quota server's CI still goes before anyone's Standard);
+//! 4. fair share: lowest `decayed usage / weight`;
+//! 5. tie: rotate after the tenant served last.
 //!
-//! Inside a tenant: the best band first. CI, Priority and aged Normal go
-//! strictly by the time *the node* received them; fresh Normal rotates
-//! across workspaces, then sessions, then FIFO by node arrival. While
+//! Inside a tenant and line: CI strictly by the time *the node* received
+//! it; every other line rotates across workspaces, then submitters
+//! (`Plan.submitter`, else the session), then FIFO by node arrival. While
 //! building the order each pick is charged its estimated CPU, so the order
 //! interleaves tenants by weight instead of draining the cheapest one.
+//!
+//! **Batch** starts only on an idle node (nothing running), so at most one
+//! runs at a time; it never holds. **Per-submitter cap** (L3): a job waits
+//! (`submitter_running_full`) while its submitter runs
+//! `Plan.submitter_max_running` jobs of its workspace here (CI exempt).
 //!
 //! **Tiers only order the queue**: no slot is reserved and nothing here
 //! ever stops a running job (R2, R3). The 0.46.4 `gate_reserved_slots` and
@@ -31,11 +38,11 @@
 //! (paused, foreign lock, low disk, an install), a tenant-wide block (share
 //! paused, disk full, wall missing).
 //!
-//! **Next free slot / backfill**: when the first job held up by capacity is
-//! CI or Priority, nothing ordered after it starts (hold 0): the node
-//! drains toward it, nothing is killed. For a Normal head, later jobs that
-//! fit may start until it has waited 20 min; then nothing else starts until
-//! it fits. A CI or Priority job held by the secret-env isolation rule
+//! **Next free slot / backfill**: when a CI or Priority job is held up by
+//! capacity, nothing ordered after it starts (hold 0): the node drains
+//! toward it, nothing is killed. For a Standard head, later jobs that fit
+//! may start until it has waited 20 min; then nothing else starts until it
+//! fits. A Batch head never holds. A CI or Priority job held by the secret-env isolation rule
 //! (SE26) counts as waiting for capacity (T4); a tenant's own limits never
 //! hold other tenants.
 //!
@@ -49,7 +56,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::frames::JobState;
 use crate::share::{self, blocked, codes, JobClass, Quote, QueueEntry, QueueView, ShareLimits, Slot, TenantTotals};
-use crate::tiers::{self, Band, Tier};
+use crate::tiers::{self, Line, Tier};
 
 /// Knobs (§7 "Defaults").
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +167,9 @@ pub struct Running {
     pub left_p90: Option<u64>,
     /// It got vault secrets (SE26).
     pub secret: bool,
+    /// The plan's turn key ([`crate::frames::Plan::turn_key`]): the
+    /// per-submitter cap counts by it (L3).
+    pub submitter: Option<String>,
 }
 
 /// A job waiting in the node queue.
@@ -193,6 +203,18 @@ pub struct Queued {
     pub eligible: bool,
     /// It gets vault secrets at spawn (`Plan.secret_env`, SE26).
     pub secret: bool,
+    /// The plan's turn key ([`crate::frames::Plan::turn_key`]: the
+    /// submitter, else the session): turns inside a line (L4).
+    pub submitter: Option<String>,
+    /// `Plan.submitter_max_running` (L3): at most this many running jobs
+    /// of this (server, workspace, submitter) here; CI never counts.
+    pub submitter_max_running: Option<u32>,
+}
+
+impl Queued {
+    fn turn_key(&self) -> &str {
+        self.submitter.as_deref().or(self.session_id.as_deref()).unwrap_or("")
+    }
 }
 
 /// Who was served last (the tie and the inside-tenant rotations).
@@ -200,15 +222,21 @@ pub struct Queued {
 pub struct Rotation {
     pub last_slot: Option<Slot>,
     pub last_ws: BTreeMap<Slot, String>,
-    pub last_session: BTreeMap<(Slot, String), String>,
+    /// The submitter served last per (server, workspace) (L4; the session
+    /// before 0.46.6).
+    pub last_submitter: BTreeMap<(Slot, String), String>,
+    /// Priority or Standard: which of the two got the last start (they
+    /// alternate when both wait).
+    pub last_line: Option<Line>,
 }
 
 impl Rotation {
-    fn served(&mut self, q: &Queued) {
+    fn served(&mut self, q: &Queued, line: Line) {
         self.last_slot = Some(q.slot);
         self.last_ws.insert(q.slot, q.workspace_id.clone());
-        if let Some(s) = &q.session_id {
-            self.last_session.insert((q.slot, q.workspace_id.clone()), s.clone());
+        self.last_submitter.insert((q.slot, q.workspace_id.clone()), q.turn_key().to_string());
+        if matches!(line, Line::Priority | Line::Standard) {
+            self.last_line = Some(line);
         }
     }
 }
@@ -261,11 +289,15 @@ fn tenant_of(tenants: &[Tenant], slot: Slot) -> Option<&Tenant> {
     tenants.iter().find(|t| t.slot == slot)
 }
 
-/// The band the order uses: the tier the tenant may use here (CI without
-/// the share's `gate`, or Priority where it doesn't count, is Normal), with
-/// an hour-old Normal job aged above fresh Normal (T5).
-fn band_of(q: &Queued, t: &Tenant, now: i64, cfg: &Config) -> Band {
-    tiers::band(t.effective_tier(q.tier), now - q.enqueued_at, cfg.aging_secs)
+/// The line the order uses: the tier the tenant may use here (CI without
+/// the share's `gate`, or Priority where it doesn't count, is Standard).
+fn line_of(q: &Queued, t: &Tenant) -> Line {
+    t.effective_tier(q.tier).line()
+}
+
+/// Has it waited long enough to skip its line's turns (by node arrival)?
+fn is_aged(q: &Queued, now: i64, cfg: &Config) -> bool {
+    tiers::aged(now - q.enqueued_at, cfg.aging_secs)
 }
 
 /// The next value after `last` in `keys`' order (wrapping), or the first.
@@ -282,30 +314,34 @@ fn arrival_key(q: &Queued) -> (i64, u64, &str) {
     (q.enqueued_at, q.arrival, q.job_id.as_str())
 }
 
-/// A tenant's next job: its best band; CI, Priority and aged Normal by
-/// node arrival; fresh Normal by the workspace after the last served, then
-/// the session after the last served there, then FIFO.
-fn tenant_head(pending: &[usize], input: &Input<'_>, t: &Tenant, rot: &Rotation) -> usize {
+/// A tenant's next job in `line` (it has one there): CI by node arrival;
+/// any other line: its aged jobs first by node arrival (they skip the
+/// turns), then the workspace after the last served, then the submitter
+/// after the last served there (L4), then FIFO.
+fn tenant_head(pending: &[usize], input: &Input<'_>, t: &Tenant, rot: &Rotation, line: Line) -> usize {
     let q = input.queued;
-    let best = pending.iter().map(|i| band_of(&q[*i], t, input.now, input.cfg)).max().expect("non-empty");
-    let mine: Vec<usize> = pending.iter().copied().filter(|i| band_of(&q[*i], t, input.now, input.cfg) == best).collect();
-    if best.by_arrival() {
-        return mine.into_iter().min_by(|a, b| arrival_key(&q[*a]).cmp(&arrival_key(&q[*b]))).expect("a job");
+    let by_arrival = |v: Vec<usize>| v.into_iter().min_by(|a, b| arrival_key(&q[*a]).cmp(&arrival_key(&q[*b]))).expect("a job");
+    let mine: Vec<usize> = pending.iter().copied().filter(|i| line_of(&q[*i], t) == line).collect();
+    if line == Line::Ci {
+        return by_arrival(mine);
+    }
+    let aged: Vec<usize> = mine.iter().copied().filter(|i| is_aged(&q[*i], input.now, input.cfg)).collect();
+    if !aged.is_empty() {
+        return by_arrival(aged);
     }
     let wss: BTreeSet<&str> = mine.iter().map(|i| q[*i].workspace_id.as_str()).collect();
     let ws = rotate_after(&wss, rot.last_ws.get(&t.slot).map(String::as_str)).expect("a workspace");
     let in_ws: Vec<usize> = mine.iter().copied().filter(|i| q[*i].workspace_id == ws).collect();
-    let sessions: BTreeSet<&str> = in_ws.iter().map(|i| q[*i].session_id.as_deref().unwrap_or("")).collect();
-    let last_s = rot.last_session.get(&(t.slot, ws.to_string())).map(String::as_str);
-    let s = rotate_after(&sessions, last_s).expect("a session");
-    in_ws
-        .into_iter()
-        .filter(|i| q[*i].session_id.as_deref().unwrap_or("") == s)
-        .min_by(|a, b| arrival_key(&q[*a]).cmp(&arrival_key(&q[*b])))
-        .expect("a job")
+    let subs: BTreeSet<&str> = in_ws.iter().map(|i| q[*i].turn_key()).collect();
+    let last_s = rot.last_submitter.get(&(t.slot, ws.to_string())).map(String::as_str);
+    let s = rotate_after(&subs, last_s).expect("a submitter");
+    by_arrival(in_ws.into_iter().filter(|i| q[*i].turn_key() == s).collect())
 }
 
-/// The start order of the eligible jobs (then the rest, FIFO).
+/// The start order of the eligible jobs (then the rest, FIFO): CI; then
+/// Priority and Standard alternating (after the line of the last start);
+/// then Batch. Inside the chosen line, tenants by aged-first, quota, fair
+/// share and rotation (rules 2–4), each tenant's head by [`tenant_head`].
 pub fn order(input: &Input<'_>) -> Vec<usize> {
     let q = input.queued;
     let mut usage: BTreeMap<Slot, u128> = input.tenants.iter().map(|t| (t.slot, u128::from(t.usage))).collect();
@@ -322,11 +358,21 @@ pub fn order(input: &Input<'_>) -> Vec<usize> {
     }
     let mut out = Vec::with_capacity(q.len());
     while !pending.is_empty() {
-        // Each tenant's head, with its sort key.
+        let line_has = |l: Line| {
+            pending.iter().any(|(slot, list)| {
+                let t = tenant_of(input.tenants, *slot).expect("pending only for known tenants");
+                list.iter().any(|i| line_of(&q[*i], t) == l)
+            })
+        };
+        let line = tiers::next_line(line_has, rot.last_line).expect("some line has work");
+        // Each tenant's head in that line, with its sort key.
         let mut best: Option<(usize, Slot)> = None;
         for (slot, list) in &pending {
             let t = tenant_of(input.tenants, *slot).expect("pending only for known tenants");
-            let head = tenant_head(list, input, t, &rot);
+            if !list.iter().any(|i| line_of(&q[*i], t) == line) {
+                continue;
+            }
+            let head = tenant_head(list, input, t, &rot, line);
             best = Some(match best {
                 None => (head, *slot),
                 Some((b, bs)) => {
@@ -345,7 +391,7 @@ pub fn order(input: &Input<'_>) -> Vec<usize> {
         let est = e.est_p50.unwrap_or(input.cfg.default_est_secs);
         *usage.entry(slot).or_default() += u128::from(cpu) * u128::from(est);
         *today.entry(slot).or_default() += cpu.saturating_mul(est) / 1000;
-        rot.served(e);
+        rot.served(e, line);
         let list = pending.get_mut(&slot).expect("listed");
         list.retain(|i| *i != pick);
         if list.is_empty() {
@@ -361,12 +407,15 @@ pub fn order(input: &Input<'_>) -> Vec<usize> {
 fn before(input: &Input<'_>, a: (usize, Slot), b: (usize, Slot), usage: &BTreeMap<Slot, u128>, today: &BTreeMap<Slot, u64>, rot: &Rotation) -> bool {
     let (ta, tb) = (tenant_of(input.tenants, a.1).expect("known"), tenant_of(input.tenants, b.1).expect("known"));
     let (qa, qb) = (&input.queued[a.0], &input.queued[b.0]);
-    let (ba, bb) = (band_of(qa, ta, input.now, input.cfg), band_of(qb, tb, input.now, input.cfg));
-    // 1. the tier band, highest first.
-    if ba != bb {
-        return ba > bb;
+    // 1. (the line is already chosen) an aged head first, by arrival.
+    let (aa, ab) = (is_aged(qa, input.now, input.cfg), is_aged(qb, input.now, input.cfg));
+    if aa != ab {
+        return aa;
     }
-    // 2. within quota first (inside a band, T22).
+    if aa && ab {
+        return arrival_key(qa) < arrival_key(qb);
+    }
+    // 2. within quota first (inside a line, T22).
     let over = |t: &Tenant| today.get(&t.slot).copied().unwrap_or(0) >= u64::from(t.limits.cpu_hours_day) * 3600;
     if over(ta) != over(tb) {
         return !over(ta);
@@ -400,6 +449,10 @@ struct SimRun {
     end: Option<u64>,
     /// A lingering unit, not a job ([`LINGER_JOB_PREFIX`]).
     lingering: bool,
+    /// Its turn key, and whether it counts toward a per-submitter cap
+    /// (CI never does).
+    submitter: Option<String>,
+    counts_for_submitter: bool,
 }
 
 /// Why a job can't start in this state, with its wait code
@@ -433,6 +486,21 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
             return Fit::Wait(blocked::WORKSPACE_RUNNING_FULL);
         }
     }
+    let line = line_of(e, t);
+    // L3: the per-submitter cap (off unless the grant sets it); CI never
+    // counts and is never capped.
+    if let Some(m) = e.submitter_max_running.filter(|m| *m > 0 && line != Line::Ci) {
+        let key = e.turn_key();
+        if run.iter().filter(|r| r.counts_for_submitter && r.slot == e.slot && r.ws == e.workspace_id && r.submitter.as_deref().unwrap_or("") == key).count() as u32 >= m {
+            return Fit::Wait(blocked::SUBMITTER_RUNNING_FULL);
+        }
+    }
+    // L1: Batch starts only on an idle node (nothing running, leftovers
+    // included; the order puts every other line first, so a ready job of
+    // another line has already started this pass). At most one at a time.
+    if line == Line::Batch && !run.is_empty() {
+        return Fit::Wait(blocked::BATCH_WINDOW);
+    }
     // SE26: no secret job beside another workspace's job under one uid. A
     // CI or Priority job waits for the node to drain toward it (T4: as
     // `Wait` it could starve while other workspaces keep starting). A
@@ -443,7 +511,7 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
         .collect();
     if !blockers.is_empty() {
         let code = if blockers.iter().all(|r| r.lingering) { blocked::LINGERING } else { crate::secret::codes::ISOLATION_WAIT };
-        return if band_of(e, t, input.now, input.cfg).holds() { Fit::Capacity(code) } else { Fit::Wait(code) };
+        return if line.holds() { Fit::Capacity(code) } else { Fit::Wait(code) };
     }
     let used_cpu: u64 = run.iter().map(|r| r.cpu).sum();
     let used_mem: u64 = run.iter().map(|r| r.mem).sum();
@@ -488,8 +556,13 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
             exclusive: r.exclusive,
             end: if p90 { r.left_p90.or(r.left_p50) } else { r.left_p50 },
             lingering: r.job_id.starts_with(LINGER_JOB_PREFIX),
+            submitter: r.submitter.clone().or_else(|| r.session_id.clone()),
+            counts_for_submitter: r.tier != Tier::Ci,
         })
         .collect();
+    // Round 0: submitters already waiting ahead in each (server, workspace,
+    // line), for the `turn` reason (L4).
+    let mut ahead: BTreeMap<(Slot, String, Line), BTreeSet<String>> = BTreeMap::new();
     // Who can never start here (the whole run).
     let mut pending: Vec<usize> = Vec::new();
     for i in ord {
@@ -513,8 +586,8 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
         // Start pass at `now`, in order, with the hold: the first job that
         // waits for capacity holds every later start at once when it is
         // CI or Priority ("next free slot"), after 20 min when it is
-        // Normal. The order is band-first, so nothing of a higher band
-        // ever sits behind it. `held`: the hold's wait code once set.
+        // Standard, never when it is Batch. `held`: the hold's wait code
+        // once set.
         let mut held: Option<&'static str> = None;
         let mut capacity_head_seen = false;
         let mut started = Vec::new();
@@ -524,12 +597,21 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
             let f = fit(input, e, t, &run);
             if round == 0 {
                 // Why it doesn't start now (T25): a hold ahead outranks the
-                // room it waits for; its own limit stays its own reason.
+                // room it waits for; its own limit stays its own reason; a
+                // job waiting for room behind other submitters of its own
+                // workspace and line waits its turn (L4).
+                let key = (e.slot, e.workspace_id.clone(), line_of(e, t));
                 why_now[*i] = match (&f, held) {
                     (Fit::Now, None) | (Fit::Never, _) => None,
                     (Fit::Now, Some(h)) | (Fit::Capacity(_), Some(h)) => Some(h),
+                    (Fit::Capacity(c), None) if *c == blocked::WAITING_FOR_ROOM && ahead.get(&key).is_some_and(|s| s.iter().any(|x| x != e.turn_key())) => {
+                        Some(blocked::TURN)
+                    }
                     (Fit::Wait(c), _) | (Fit::Capacity(c), None) => Some(*c),
                 };
+                if !matches!(f, Fit::Now if held.is_none()) {
+                    ahead.entry(key).or_default().insert(e.turn_key().to_string());
+                }
             }
             match f {
                 Fit::Now if held.is_none() => {
@@ -545,18 +627,23 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
                         exclusive: e.exclusive,
                         end: est.map(|d| now + d.max(1)),
                         lingering: false,
+                        submitter: Some(e.turn_key().to_string()),
+                        counts_for_submitter: line_of(e, t) != Line::Ci,
                     });
                     start_at[*i] = Some(now);
                     started.push(*i);
                 }
-                Fit::Capacity(_) if !capacity_head_seen => {
-                    capacity_head_seen = true;
+                Fit::Capacity(_) if held.is_none() => {
+                    // Any CI or Priority job waiting for room holds every
+                    // later start (Priority and Standard alternate, so a
+                    // Standard job may sit ahead of it in the order); only
+                    // the first capacity head may take the backfill hold.
+                    let first = !std::mem::replace(&mut capacity_head_seen, true);
                     let waited = input.now - e.enqueued_at + now as i64;
-                    // Its band as of the real now (ETAs don't age a job
-                    // into a hold it doesn't have yet).
-                    if band_of(e, t, input.now, input.cfg).holds() {
+                    let line = line_of(e, t);
+                    if line.holds() {
                         held = Some(blocked::TIER_HOLD);
-                    } else if waited >= input.cfg.backfill_hold_secs {
+                    } else if first && line.backfill_holds() && waited >= input.cfg.backfill_hold_secs {
                         held = Some(blocked::BACKFILL_HOLD);
                     }
                 }
@@ -593,7 +680,8 @@ pub fn decide(input: &Input<'_>) -> Decision {
         let now = fast.start_at[*i] == Some(0);
         if now {
             start.push(*i);
-            rotation.served(e);
+            let line = tenant_of(input.tenants, e.slot).map(|t| line_of(e, t)).unwrap_or(Line::Standard);
+            rotation.served(e, line);
         }
         let mut blocked_by = fast.blocked[*i].clone();
         if blocked_by.is_none() && !now {
@@ -643,7 +731,7 @@ pub fn quote(input: &Input<'_>, slot: Slot, cpu_millis: u64, mem_bytes: u64) -> 
         est_p90: None,
         ws_max_running: None,
         eligible: true,
-        secret: false,
+        secret: false, submitter: None, submitter_max_running: None,
     });
     let probe = Input { queued: &queued, ..input.clone() };
     let d = decide(&probe);
@@ -669,6 +757,9 @@ pub struct Viewer<'a> {
     pub labels: &'a BTreeMap<Slot, String>,
     /// It said protocol ≥ 5: entries carry their tier.
     pub tiers: bool,
+    /// It said protocol ≥ 6 (`tiers2`): it may see a Batch tier; an older
+    /// server sees Batch as Normal (its parser rejects `batch`, T27).
+    pub tiers2: bool,
 }
 
 /// The queue as `viewer` may see it (§7): its own jobs in full; others'
@@ -704,7 +795,7 @@ pub fn view(input: &Input<'_>, d: &Decision, viewer: &Viewer<'_>, request_id: &s
             pos: 0,
             mine,
             class: r.class,
-            tier: viewer.tiers.then(|| tenant_of(input.tenants, r.slot).map(|t| t.effective_tier(r.tier)).unwrap_or(Tier::Normal)),
+            tier: viewer.tiers.then(|| tenant_of(input.tenants, r.slot).map(|t| t.effective_tier(r.tier)).unwrap_or(Tier::Normal).for_peer(viewer.tiers2)),
             state: JobState::Running,
             cpu_millis: r.cpu_millis,
             mem_bytes: r.mem_bytes,
@@ -727,7 +818,7 @@ pub fn view(input: &Input<'_>, d: &Decision, viewer: &Viewer<'_>, request_id: &s
             pos: 0,
             mine,
             class: q.class,
-            tier: viewer.tiers.then(|| tenant_of(input.tenants, q.slot).map(|t| t.effective_tier(q.tier)).unwrap_or(Tier::Normal)),
+            tier: viewer.tiers.then(|| tenant_of(input.tenants, q.slot).map(|t| t.effective_tier(q.tier)).unwrap_or(Tier::Normal).for_peer(viewer.tiers2)),
             state: JobState::Queued,
             cpu_millis: q.cpu_millis.unwrap_or_else(|| input.caps.default_cpu()),
             mem_bytes: q.mem_bytes.unwrap_or_else(|| input.caps.default_mem()),
@@ -816,7 +907,7 @@ mod tests {
             est_p90: Some(120),
             ws_max_running: None,
             eligible: true,
-            secret: false,
+            secret: false, submitter: None, submitter_max_running: None,
         }
     }
 
@@ -834,7 +925,7 @@ mod tests {
             exclusive: false,
             left_p50: left,
             left_p90: left.map(|l| l * 2),
-            secret: false,
+            secret: false, submitter: None,
         }
     }
 
@@ -987,11 +1078,11 @@ mod tests {
         assert_eq!(d.info.iter().map(|i| i.pos).collect::<Vec<_>>(), vec![2, 1, 3]);
     }
 
-    /// T5: an hour-old Normal job ranks above fresh Normal work but below
-    /// Priority, so Priority keeps "next free slot" under load. The old
-    /// `batch` class is just Normal (G4).
+    /// v2 L4: an hour-old Standard job skips its line's turns (it goes
+    /// ahead of fresh Standard work, by arrival) but never jumps the
+    /// Priority line. The old `batch` class is just Standard (G4).
     #[test]
-    fn aged_normal_ranks_between_priority_and_fresh_normal() {
+    fn aged_standard_skips_the_turns_but_not_the_line() {
         let mut w = World::new(1, vec![gate_tenant(0)]);
         w.now = 10_000;
         let aged = q(0, "aged", "w-a", w.now - 3600);
@@ -1025,20 +1116,20 @@ mod tests {
         assert_eq!(w.order(), vec!["guest-p", "owner-n"]);
         let labels = BTreeMap::new();
         let d = w.decide();
-        let v = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: true }, "r");
+        let v = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: true, tiers2: true }, "r");
         assert_eq!(v.entries.iter().map(|e| e.tier).collect::<Vec<_>>(), vec![Some(Tier::Priority), Some(Tier::Normal)]);
         w.tenants[1].priority = false;
         let d = w.decide();
-        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: true }, "r");
+        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: true, tiers2: true }, "r");
         assert!(v.entries.iter().all(|e| e.tier == Some(Tier::Normal)), "shown as it counts: {:?}", v.entries);
-        let old = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false }, "r");
+        let old = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false, tiers2: false }, "r");
         assert!(old.entries.iter().all(|e| e.tier.is_none()), "a protocol-4 server gets no tier field");
         let mut r = running(0, "r", 1000, Some(60));
         r.tier = Tier::Ci;
         w.tenants[0] = gate_tenant(0);
         w.running = vec![r];
         let d = w.decide();
-        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: true }, "r");
+        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: true, tiers2: true }, "r");
         assert_eq!((v.entries[0].state, v.entries[0].tier, v.entries[0].job_id.as_deref()), (JobState::Running, Some(Tier::Ci), None));
     }
 
@@ -1081,10 +1172,10 @@ mod tests {
         assert_eq!(d.info[0].eta_secs, Some(100));
     }
 
-    /// CI, Priority and aged Normal go strictly by node arrival inside a
-    /// server (no workspace or session turns); fresh Normal keeps them.
+    /// CI goes strictly by node arrival inside a server; every other line
+    /// takes turns: workspaces, then submitters (v2 L4).
     #[test]
-    fn urgent_tiers_go_by_arrival_inside_a_server() {
+    fn ci_goes_by_arrival_and_other_lines_take_turns() {
         let mut w = World::new(1, vec![gate_tenant(0)]);
         let mk = |job: &str, ws: &str, sess: &str, at: i64, tier: Tier| {
             let mut e = q(0, job, ws, at);
@@ -1092,13 +1183,130 @@ mod tests {
             e.tier = tier;
             e
         };
-        w.queued = vec![mk("p1", "a", "x", 1, Tier::Priority), mk("p2", "a", "x", 2, Tier::Priority), mk("p3", "b", "y", 3, Tier::Priority)];
+        w.queued = vec![mk("c1", "a", "x", 1, Tier::Ci), mk("c2", "a", "x", 2, Tier::Ci), mk("c3", "b", "y", 3, Tier::Ci)];
         w.rot.last_ws.insert(0, "a".into());
-        assert_eq!(w.order(), vec!["p1", "p2", "p3"], "no workspace turns for Priority");
-        for e in w.queued.iter_mut() {
-            e.tier = Tier::Normal;
+        assert_eq!(w.order(), vec!["c1", "c2", "c3"], "no turns for CI");
+        for tier in [Tier::Priority, Tier::Normal, Tier::Batch] {
+            for e in w.queued.iter_mut() {
+                e.tier = tier;
+            }
+            assert_eq!(w.order(), vec!["c3", "c1", "c2"], "{tier:?}: workspaces take turns (b after a)");
         }
-        assert_eq!(w.order(), vec!["p3", "p1", "p2"], "fresh Normal: workspaces take turns (b after a)");
+    }
+
+    /// The airport (Rosson 10-28): CI first; then Priority and Standard
+    /// alternate starts while both have work, so Standard never starves;
+    /// Batch only after both. Starts in one pass alternate too.
+    #[test]
+    fn priority_and_standard_alternate_and_batch_goes_last() {
+        let mut w = World::new(6, vec![gate_tenant(0)]);
+        let mk = |job: &str, at: i64, tier: Tier| {
+            let mut e = q(0, job, "w", at);
+            e.tier = tier;
+            e
+        };
+        w.queued = vec![
+            mk("p1", 1, Tier::Priority),
+            mk("p2", 2, Tier::Priority),
+            mk("p3", 3, Tier::Priority),
+            mk("s1", 4, Tier::Normal),
+            mk("s2", 5, Tier::Normal),
+            mk("b1", 0, Tier::Batch),
+            mk("ci", 9, Tier::Ci),
+        ];
+        assert_eq!(w.order(), vec!["ci", "p1", "s1", "p2", "s2", "p3", "b1"]);
+        w.rot.last_line = Some(Line::Priority);
+        assert_eq!(w.order(), vec!["ci", "s1", "p1", "s2", "p2", "p3", "b1"], "after a Priority start, Standard first");
+        // Room for 3: CI, then one of each line; Batch waits for an idle node.
+        w.caps = caps(3);
+        w.rot.last_line = None;
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["ci", "p1", "s1"]);
+        assert_eq!(d.rotation.last_line, Some(Line::Standard), "the next start goes to Priority");
+        let b = w.queued.iter().position(|e| e.job_id == "b1").unwrap();
+        assert_eq!(d.info[b].blocked_by.as_deref(), Some(blocked::BATCH_WINDOW));
+    }
+
+    /// L1: Batch starts only on an idle node, one at a time, and never
+    /// holds anyone.
+    #[test]
+    fn batch_starts_only_when_the_node_is_idle() {
+        let mut w = World::new(4, vec![tenant(0, 1)]);
+        let mut b1 = q(0, "b1", "w", 1);
+        b1.tier = Tier::Batch;
+        let mut b2 = q(0, "b2", "w", 2);
+        b2.tier = Tier::Batch;
+        w.queued = vec![b1, b2];
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["b1"], "idle: one Batch job");
+        assert_eq!(d.info[1].blocked_by.as_deref(), Some(blocked::BATCH_WINDOW));
+        w.running = vec![running(0, "r", 1000, Some(60))];
+        let d = w.decide();
+        assert!(d.start.is_empty(), "busy: no Batch");
+        assert_eq!(d.info[0].eta_secs, Some(60), "it starts once the node is idle");
+        // A Standard job that fits starts at once beside the waiting Batch.
+        w.queued.push(q(0, "s", "w", 3));
+        assert_eq!(w.ids(&w.decide().start), vec!["s"]);
+        assert!(blocked::lets_others_pass(blocked::BATCH_WINDOW));
+    }
+
+    /// L3: the per-submitter running cap (off unless the plan carries it);
+    /// CI never counts and is never capped.
+    #[test]
+    fn the_per_submitter_cap_counts_running_jobs_of_that_submitter() {
+        let mut w = World::new(4, vec![gate_tenant(0)]);
+        let mut r = running(0, "r", 1000, Some(60));
+        r.submitter = Some("w/s1/builder-a".into());
+        w.running = vec![r.clone()];
+        let mk = |job: &str, sub: &str, cap: Option<u32>, tier: Tier| {
+            let mut e = q(0, job, "w", 1);
+            e.submitter = Some(sub.into());
+            e.submitter_max_running = cap;
+            e.tier = tier;
+            e
+        };
+        w.queued = vec![mk("a2", "w/s1/builder-a", Some(1), Tier::Normal), mk("b1", "w/s1/builder-b", Some(1), Tier::Normal)];
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["b1"]);
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::SUBMITTER_RUNNING_FULL));
+        w.queued = vec![mk("a2", "w/s1/builder-a", None, Tier::Normal)];
+        assert_eq!(w.ids(&w.decide().start), vec!["a2"], "no cap: it starts");
+        w.queued = vec![mk("a-ci", "w/s1/builder-a", Some(1), Tier::Ci)];
+        assert_eq!(w.ids(&w.decide().start), vec!["a-ci"], "CI is never capped");
+        r.tier = Tier::Ci;
+        w.running = vec![r];
+        w.queued = vec![mk("a2", "w/s1/builder-a", Some(1), Tier::Normal)];
+        assert_eq!(w.ids(&w.decide().start), vec!["a2"], "a running CI job doesn't count");
+    }
+
+    /// L4: submitters take turns inside a workspace; a job waiting for room
+    /// behind another submitter's says `turn`; with K submitters nobody
+    /// waits more than K−1 starts of its line.
+    #[test]
+    fn submitters_take_turns_inside_a_workspace() {
+        let mut w = World::new(1, vec![tenant(0, 1)]);
+        let mk = |job: &str, sub: &str, at: i64| {
+            let mut e = q(0, job, "w", at);
+            e.submitter = Some(sub.into());
+            e
+        };
+        // Builder A bursts six jobs, then B and C send one each.
+        let mut jobs: Vec<Queued> = (0..6).map(|i| mk(&format!("a{i}"), "w/s/a", i)).collect();
+        jobs.push(mk("b0", "w/s/b", 10));
+        jobs.push(mk("c0", "w/s/c", 11));
+        w.queued = jobs;
+        assert_eq!(&w.order()[..4], &["a0", "b0", "c0", "a1"], "A, B, C, then A again");
+        w.running = vec![running(0, "r", 1000, Some(60))];
+        let d = w.decide();
+        let b = w.queued.iter().position(|e| e.job_id == "b0").unwrap();
+        assert_eq!(d.info[b].blocked_by.as_deref(), Some(blocked::TURN), "{:?}", d.info[b]);
+        // Persisted turn: after A was served, B goes first.
+        w.rot.last_submitter.insert((0, "w".into()), "w/s/a".into());
+        assert_eq!(w.order()[0], "b0");
+        // Aged jobs skip the turns (by arrival), inside the line only.
+        w.now = 10_000;
+        w.queued[3].enqueued_at = w.now - 3600;
+        assert_eq!(w.order()[0], "a3");
     }
 
     /// T22: CPU-hours sort inside a band, never across: an over-quota
@@ -1119,13 +1327,14 @@ mod tests {
         assert!(d.info[0].eta_secs.is_some(), "over quota still gets an ETA");
     }
 
-    /// Random queues (a fixed LCG, no extra crates): the order is always
-    /// band-first; whenever a CI or Priority job can't start (here only
-    /// for room: no tenant limits, secrets or exclusive jobs), nothing
-    /// ordered after it starts; and starts never overfill the node. A
-    /// decision only ever starts jobs: running ones are input (R3).
+    /// Random queues (a fixed LCG, no extra crates): CI always first and
+    /// Batch always last in the order; whenever a CI or Priority job can't
+    /// start (here only for room: no tenant limits, secrets or exclusive
+    /// jobs), nothing ordered after it starts; and starts never overfill
+    /// the node. A decision only ever starts jobs: running ones are input
+    /// (R3).
     #[test]
-    fn random_queues_keep_band_order_and_the_next_free_slot() {
+    fn random_queues_keep_the_lines_and_the_next_free_slot() {
         let mut seed: u64 = 0x2545_F491_4F6C_DD1D;
         let mut next = move |n: u64| {
             seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
@@ -1146,26 +1355,36 @@ mod tests {
             let mut queued = Vec::new();
             for i in 0..n {
                 let mut e = q(next(3) as u8, &format!("j{i}"), &format!("w{}", next(3)), now - next(7200) as i64);
-                e.tier = [Tier::Normal, Tier::Normal, Tier::Priority, Tier::Ci][next(4) as usize];
+                e.tier = [Tier::Normal, Tier::Normal, Tier::Priority, Tier::Ci, Tier::Batch][next(5) as usize];
                 e.cpu_millis = Some(500 + 500 * next(8));
                 e.arrival = i;
+                e.submitter = Some(format!("s{}", next(3)));
                 queued.push(e);
             }
             w.queued = queued;
+            if next(2) == 0 {
+                w.rot.last_line = Some(Line::Priority);
+            }
             let d = w.decide();
-            let bands: Vec<Band> = d
+            let lines: Vec<Line> = d
                 .order
                 .iter()
                 .map(|i| {
                     let e = &w.queued[*i];
-                    band_of(e, tenant_of(&w.tenants, e.slot).expect("tenant"), w.now, &w.cfg)
+                    line_of(e, tenant_of(&w.tenants, e.slot).expect("tenant"))
                 })
                 .collect();
-            assert!(bands.windows(2).all(|p| p[0] >= p[1]), "round {round}: not band-first: {bands:?}");
+            let ci_end = lines.iter().take_while(|l| **l == Line::Ci).count();
+            assert!(lines[ci_end..].iter().all(|l| *l != Line::Ci), "round {round}: CI not first: {lines:?}");
+            let batch_from = lines.iter().position(|l| *l == Line::Batch).unwrap_or(lines.len());
+            assert!(lines[batch_from..].iter().all(|l| *l == Line::Batch), "round {round}: Batch not last: {lines:?}");
             let started: BTreeSet<usize> = d.start.iter().copied().collect();
-            if let Some(k) = (0..d.order.len()).find(|k| !started.contains(&d.order[*k]) && bands[*k].holds()) {
+            if let Some(k) = (0..d.order.len()).find(|k| !started.contains(&d.order[*k]) && lines[*k].holds()) {
                 let after: Vec<String> = d.order[k + 1..].iter().filter(|i| started.contains(i)).map(|i| w.queued[*i].job_id.clone()).collect();
-                assert!(after.is_empty(), "round {round}: {after:?} started past a waiting {:?} head", bands[k]);
+                assert!(after.is_empty(), "round {round}: {after:?} started past a waiting {:?} job", lines[k]);
+            }
+            if d.start.iter().any(|i| w.queued[*i].tier == Tier::Batch) {
+                assert!(w.running.is_empty() && d.start.len() == 1, "round {round}: Batch starts only alone on an idle node");
             }
             assert!(w.running.len() + d.start.len() <= par as usize, "round {round}: overfilled");
             let cpu: u64 = w.running.iter().map(|r| r.cpu_millis).sum::<u64>() + d.start.iter().map(|i| w.queued[*i].cpu_millis.expect("sized")).sum::<u64>();
@@ -1479,7 +1698,7 @@ mod tests {
         w.queued = vec![mine];
         let d = w.decide();
         let labels = BTreeMap::from([(0, "rosson.k2.dev".to_string()), (1, "baden.k2.dev".to_string())]);
-        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false }, "r1");
+        let v = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false, tiers2: false }, "r1");
         assert_eq!(v.request_id, "r1");
         let other = &v.entries[0];
         assert!(!other.mine && other.job_id.is_none() && other.workspace_id.is_none() && other.session_id.is_none() && other.server_label.is_none());
@@ -1489,7 +1708,7 @@ mod tests {
         assert!(v.totals.is_empty());
         let text = crate::canonical::to_string(&v).unwrap();
         assert!(!text.contains("secret-job") && !text.contains("owner-ws") && !text.contains("rosson"), "{text}");
-        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: false }, "r2");
+        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: false, tiers2: false }, "r2");
         assert_eq!(o.entries[1].server_label.as_deref(), Some("baden.k2.dev"));
         assert!(o.entries[1].job_id.is_none(), "the owner sees labels, not other servers' jobs");
         assert_eq!(o.totals.len(), 2);
@@ -1498,12 +1717,12 @@ mod tests {
         // its own server and the owner see it.
         w.tenants[1].blocked = Some(codes::SHARE_PAUSED.into());
         let d = w.decide();
-        let peer = Viewer { slot: 2, owner: false, labels: &labels, tiers: false };
+        let peer = Viewer { slot: 2, owner: false, labels: &labels, tiers: false, tiers2: false };
         let v = view(&w.input(), &d, &peer, "r3");
         assert!(v.entries.iter().all(|e| e.blocked_by.is_none()), "{:?}", v.entries);
-        let own = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false }, "r4");
+        let own = view(&w.input(), &d, &Viewer { slot: 1, owner: false, labels: &labels, tiers: false, tiers2: false }, "r4");
         assert_eq!(own.entries[1].blocked_by.as_deref(), Some(codes::SHARE_PAUSED));
-        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: false }, "r5");
+        let o = view(&w.input(), &d, &Viewer { slot: 0, owner: true, labels: &labels, tiers: false, tiers2: false }, "r5");
         assert_eq!(o.entries[1].blocked_by.as_deref(), Some(codes::SHARE_PAUSED));
     }
 

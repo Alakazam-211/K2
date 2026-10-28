@@ -11,12 +11,14 @@
 //! - `asks(slot, cpu, mem, last_at)`: each server's recent job sizes (its
 //!   four quotes);
 //! - `meta(k, v)`: the rotation (`last_served`, `last_served_ws:<slot>`,
-//!   `last_served_session:<slot>:<ws>`).
+//!   `last_served_submitter:<slot>:<ws>`, `last_served_line`; 0.46.5's
+//!   `last_served_session:` keys are read once, then replaced).
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use k2_node_proto::queue::Rotation;
+use k2_node_proto::tiers::Line;
 use k2_node_proto::share::{Slot, MAX_QUOTES};
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -212,7 +214,7 @@ impl QueueStore {
         }
         let mut rot = self.rotation()?;
         rot.last_ws.remove(&slot);
-        rot.last_session.retain(|(s, _), _| *s != slot);
+        rot.last_submitter.retain(|(s, _), _| *s != slot);
         if rot.last_slot == Some(slot) {
             rot.last_slot = None;
         }
@@ -228,9 +230,16 @@ impl QueueStore {
                 rot.last_slot = v.parse().ok();
             } else if let Some(slot) = k.strip_prefix("last_served_ws:").and_then(|s| s.parse::<Slot>().ok()) {
                 rot.last_ws.insert(slot, v);
-            } else if let Some(rest) = k.strip_prefix("last_served_session:") {
+            } else if k == "last_served_line" {
+                rot.last_line = Line::parse(&v);
+            } else if let Some(rest) = k.strip_prefix("last_served_submitter:").or_else(|| k.strip_prefix("last_served_session:")) {
+                // A 0.46.5 node's session keys still seed the turns once
+                // (the session was the turn key then); the submitter key
+                // wins when both exist.
                 if let Some((slot, ws)) = rest.split_once(':').and_then(|(s, w)| s.parse::<Slot>().ok().map(|s| (s, w.to_string()))) {
-                    rot.last_session.insert((slot, ws), v);
+                    if k.starts_with("last_served_submitter:") || !rot.last_submitter.contains_key(&(slot, ws.clone())) {
+                        rot.last_submitter.insert((slot, ws), v);
+                    }
                 }
             }
         }
@@ -247,8 +256,11 @@ impl QueueStore {
         for (slot, ws) in &rot.last_ws {
             put(format!("last_served_ws:{slot}"), ws)?;
         }
-        for ((slot, ws), s) in &rot.last_session {
-            put(format!("last_served_session:{slot}:{ws}"), s)?;
+        for ((slot, ws), s) in &rot.last_submitter {
+            put(format!("last_served_submitter:{slot}:{ws}"), s)?;
+        }
+        if let Some(l) = rot.last_line {
+            put("last_served_line".into(), l.as_str())?;
         }
         tx.commit().map_err(sqlerr)
     }
@@ -312,7 +324,8 @@ mod tests {
             }
             let mut rot = Rotation { last_slot: Some(1), ..Default::default() };
             rot.last_ws.insert(1, "ws-a".into());
-            rot.last_session.insert((1, "ws:a".into()), "s1".into());
+            rot.last_submitter.insert((1, "ws:a".into()), "ws/s1/builder-a".into());
+            rot.last_line = Some(Line::Priority);
             s.set_rotation(&rot).unwrap();
         }
         let s = QueueStore::open(&p).unwrap();
@@ -325,7 +338,8 @@ mod tests {
         let rot = s.rotation().unwrap();
         assert_eq!(rot.last_slot, Some(1));
         assert_eq!(rot.last_ws.get(&1).map(String::as_str), Some("ws-a"));
-        assert_eq!(rot.last_session.get(&(1, "ws:a".to_string())).map(String::as_str), Some("s1"), "a ':' in a workspace id survives");
+        assert_eq!(rot.last_submitter.get(&(1, "ws:a".to_string())).map(String::as_str), Some("ws/s1/builder-a"), "a ':' in a workspace id survives");
+        assert_eq!(rot.last_line, Some(Line::Priority), "the alternation survives a restart");
         s.forget(1).unwrap();
         assert!(s.usage().unwrap().is_empty() && s.asks(1).unwrap().is_empty() && s.rotation().unwrap() == Rotation::default());
     }

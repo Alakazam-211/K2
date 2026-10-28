@@ -259,9 +259,10 @@ describe('job tiers (0.46.5)', () => {
   })
 
   it('tier tags and counts are display only', () => {
-    expect([tierTag('ci'), tierTag('priority'), tierTag('normal'), tierTag(undefined)]).toEqual(['CI', 'P', '', ''])
+    expect([tierTag('ci'), tierTag('priority'), tierTag('normal'), tierTag('batch'), tierTag(undefined)]).toEqual(['CI', 'P', '', 'B', ''])
     expect(tierCountsLine({ ci: 1, priority: 0, normal: 3 })).toBe('CI 1 · P 0 · N 3')
     expect(tierCountsLine({ ci: 0, priority: 0, normal: 0 })).toBe('')
+    expect(tierCountsLine({ ci: 0, priority: 1, normal: 0, batch: 2 })).toBe('CI 0 · P 1 · N 0 · B 2')
     expect(tierCountsLine(undefined)).toBe('')
   })
 })

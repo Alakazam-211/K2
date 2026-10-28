@@ -140,7 +140,7 @@ impl Want {
             mem_bytes: self.mem_bytes,
             disk_bytes: 0,
             needs_git: self.needs_git,
-            tier: self.tier,
+            tier: self.tier, submitter: None,
         }
     }
 }
@@ -387,14 +387,51 @@ pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&G
         strip_queue_fields(&mut p);
     }
     // The tier only to nodes offering `tiers` (T11), the same rule as the
-    // queue fields; `set_queue_fields` then sets the job's own tier.
-    p.tier = offers_tiers(features).then(|| base.tier_or_class());
+    // queue fields; `set_queue_fields` then sets the job's own tier. Batch
+    // only to a node offering `tiers2` (T27); else Normal.
+    let tiers2 = offers_tiers2(features);
+    p.tier = offers_tiers(features).then(|| base.tier_or_class().for_peer(tiers2));
+    set_submitter_fields(&mut p, features, grant.map(|g| g.submitter_max_running.max(0) as u32).unwrap_or(0));
     p
 }
 
 /// Does a node with these features take `Plan.tier` (protocol 5)?
 pub fn offers_tiers(features: &[String]) -> bool {
     features.iter().any(|f| f == FEATURE_TIERS)
+}
+
+/// Does a node with these features take Batch and the submitter fields
+/// (`tiers2`, protocol 6, prd-compute-job-tiers-v2)?
+pub fn offers_tiers2(features: &[String]) -> bool {
+    features.iter().any(|f| f == k2_core::compute::proto::tiers::FEATURE_TIERS2)
+}
+
+/// `Plan.submitter_max_running` only to a `tiers2` node with a queue (L3;
+/// 0 = no cap, so absent); `Plan.submitter` stays as the plan has it there
+/// and goes for any other node (an older one would refuse the digest).
+fn set_submitter_fields(p: &mut Plan, features: &[String], submitter_cap: u32) {
+    if offers_tiers2(features) && features.iter().any(|f| f == pshare::FEATURE_QUEUE) {
+        p.submitter_max_running = (submitter_cap > 0).then_some(submitter_cap);
+    } else {
+        p.submitter = None;
+        p.submitter_max_running = None;
+    }
+}
+
+/// The grant's caps a plan carries to a node's queue, read at every send
+/// (prd-compute-job-tiers-v2 L5, T23/T30).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrantCaps {
+    /// `max_parallel` → `Plan.ws_max_running`.
+    pub ws: u32,
+    /// `submitter_max_running` → `Plan.submitter_max_running` (0 = off).
+    pub submitter: u32,
+}
+
+impl GrantCaps {
+    pub fn of(g: &GrantRow) -> Self {
+        Self { ws: g.max_parallel.max(1) as u32, submitter: g.submitter_max_running.max(0) as u32 }
+    }
 }
 
 /// The stored plan fitted to what the node understands right now (T11):
@@ -406,19 +443,37 @@ pub fn offers_tiers(features: &[String]) -> bool {
 /// since gets the tier. `Some(plan)` when it changed; the caller rewrites
 /// the queued row (JSON and digest) before sending.
 ///
-/// `ws_cap`: the workspace's grant `max_parallel` on that node right now
-/// (prd-compute-job-tiers-v2 L5, T23). The plan carries it to a node
-/// offering `queue` (`Plan.ws_max_running`); it is refreshed before every
-/// send, so raising a grant reaches jobs submitted before it (10-27: jobs
-/// kept a cap of 1 from submit). `None` leaves the plan's value.
-pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String], ws_cap: Option<u32>) -> Option<Plan> {
+/// `caps`: the workspace's grant on that node right now
+/// (prd-compute-job-tiers-v2 L5, T23/T30). The plan carries its
+/// `max_parallel` to a node offering `queue` (`Plan.ws_max_running`) and
+/// its per-submitter cap to one offering `tiers2`; both are refreshed
+/// before every send, so raising a grant reaches jobs submitted before it
+/// (10-27: jobs kept a cap of 1 from submit). `None` leaves the plan's
+/// values. The tier is the job row's (a retier reaches the plan here);
+/// Batch only to a `tiers2` node (T27), and the submitter likewise.
+pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String], caps: Option<GrantCaps>) -> Option<Plan> {
     let has = |f: &str| features.iter().any(|x| x == f);
     let mut p = plan.clone();
-    p.tier = offers_tiers(features).then(|| j.tier());
+    let tiers2 = offers_tiers2(features);
+    p.tier = offers_tiers(features).then(|| j.tier().for_peer(tiers2));
     if !has(pshare::FEATURE_QUEUE) {
         strip_queue_fields(&mut p);
-    } else if let Some(c) = ws_cap {
-        p.ws_max_running = Some(c.max(1));
+    } else {
+        // The class old nodes order by is the row's (a retier rewrites it,
+        // clamped to the share's top class like at submit).
+        p.class = Some(pshare::JobClass::parse(&j.class).unwrap_or_else(|| j.tier().class()));
+        if let Some(c) = caps {
+            p.ws_max_running = Some(c.ws.max(1));
+        }
+    }
+    if tiers2 && has(pshare::FEATURE_QUEUE) {
+        p.submitter = j.submitter.clone();
+        if let Some(c) = caps {
+            p.submitter_max_running = (c.submitter > 0).then_some(c.submitter);
+        }
+    } else {
+        p.submitter = None;
+        p.submitter_max_running = None;
     }
     if !has(FEATURE_STALL) {
         p.stall_secs = None;
@@ -432,7 +487,10 @@ pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String], ws_cap: Option<u32
 pub fn set_queue_fields(p: &mut Plan, j: &JobRow) {
     p.class = Some(pshare::JobClass::parse(&j.class).unwrap_or_default());
     if p.tier.is_some() {
-        p.tier = Some(j.tier());
+        // A Batch tier stays only where the plan already carries one (a
+        // `tiers2` node: `plan_for_node` lowered it to Normal elsewhere).
+        let t = j.tier();
+        p.tier = Some(if p.tier == Some(JobTier::Normal) && t == JobTier::Batch { JobTier::Normal } else { t });
     }
     p.session_id = j.session_id.clone();
     p.est_secs = j.est_secs.filter(|e| *e > 0).map(|e| e as u64);
@@ -957,12 +1015,12 @@ mod tests {
         let mut full = tiered.clone();
         full.ws_max_running = Some(2);
         full.stall_secs = Some(600);
-        let bare = fit_plan(&full, &job, &[], Some(3)).expect("fitted");
+        let bare = fit_plan(&full, &job, &[], Some(GrantCaps { ws: 3, submitter: 0 })).expect("fitted");
         assert_eq!((bare.tier, bare.class, bare.ws_max_running, bare.stall_secs), (None, None, None, None));
         let mut want = plan.clone();
         want.class = None;
         assert_eq!(bare.digest().unwrap(), want.digest().unwrap(), "what a v0.46.2 node computes");
-        assert_eq!(fit_plan(&bare, &job, &[], Some(3)), None);
+        assert_eq!(fit_plan(&bare, &job, &[], Some(GrantCaps { ws: 3, submitter: 0 })), None);
     }
 
     /// prd-compute-job-tiers-v2 L5 (T23, 10-27): the workspace cap in a
@@ -981,13 +1039,44 @@ mod tests {
         plan.ws_max_running = Some(1);
         let job = JobRow { id: "j1".into(), tier: "normal".into(), ..Default::default() };
         let queue_node = vec![FEATURE_TIERS.to_string(), pshare::FEATURE_QUEUE.to_string()];
-        let fresh = fit_plan(&plan, &job, &queue_node, Some(3)).expect("the stale cap is rewritten");
+        let fresh = fit_plan(&plan, &job, &queue_node, Some(GrantCaps { ws: 3, submitter: 0 })).expect("the stale cap is rewritten");
         assert_eq!(fresh.ws_max_running, Some(3));
         assert_ne!(fresh.digest().unwrap(), plan.digest().unwrap(), "a new digest: the row is rewritten before the send");
-        assert_eq!(fit_plan(&fresh, &job, &queue_node, Some(3)), None, "already current");
-        let lowered = fit_plan(&fresh, &job, &queue_node, Some(1)).expect("a lowered grant reaches it too");
+        assert_eq!(fit_plan(&fresh, &job, &queue_node, Some(GrantCaps { ws: 3, submitter: 0 })), None, "already current");
+        let lowered = fit_plan(&fresh, &job, &queue_node, Some(GrantCaps { ws: 1, submitter: 0 })).expect("a lowered grant reaches it too");
         assert_eq!(lowered.ws_max_running, Some(1));
-        let solo = fit_plan(&plan, &job, &[FEATURE_TIERS.to_string()], Some(3)).expect("fitted");
+        let solo = fit_plan(&plan, &job, &[FEATURE_TIERS.to_string()], Some(GrantCaps { ws: 3, submitter: 0 })).expect("fitted");
         assert_eq!(solo.ws_max_running, None, "a node without a queue never gets the field");
+    }
+
+    /// prd-compute-job-tiers-v2 T27/T30: Batch and the submitter fields go
+    /// only to a `tiers2` node; a `tiers`-only (0.46.5) node gets Normal
+    /// and no submitter, so its parser and digest are unchanged; a 0.46.4
+    /// node orders it by class `batch`.
+    #[test]
+    fn batch_and_the_submitter_ride_only_to_tiers2_nodes() {
+        let plan: Plan = serde_json::from_value(serde_json::json!({
+            "job_id": "j1", "node_id": "n1", "workspace_id": "w1", "workspace_label": "k2", "requested_by": "owner",
+            "argv": ["true"], "env": {}, "cwd": null,
+            "limits": {"max_secs": 60, "cpu_millis": null, "mem_bytes": null, "disk_bytes": 1, "log_cap_bytes": 1},
+            "src": null, "exclusive": false, "created_at": 1, "class": "batch"
+        }))
+        .expect("a plan");
+        let job = JobRow { id: "j1".into(), tier: "batch".into(), class: "batch".into(), submitter: Some("k2/abcd1234/builder-a".into()), ..Default::default() };
+        let caps = Some(GrantCaps { ws: 3, submitter: 2 });
+        let v2 = vec![FEATURE_TIERS.to_string(), pshare::FEATURE_QUEUE.to_string(), k2_core::compute::proto::tiers::FEATURE_TIERS2.to_string()];
+        let p = fit_plan(&plan, &job, &v2, caps).expect("fitted");
+        assert_eq!((p.tier, p.submitter.as_deref(), p.submitter_max_running), (Some(JobTier::Batch), Some("k2/abcd1234/builder-a"), Some(2)));
+        let v1 = vec![FEATURE_TIERS.to_string(), pshare::FEATURE_QUEUE.to_string()];
+        let p = fit_plan(&plan, &job, &v1, caps).expect("fitted");
+        assert_eq!((p.tier, p.submitter.as_deref(), p.submitter_max_running), (Some(JobTier::Normal), None, None));
+        let wire = serde_json::to_value(&p).unwrap();
+        assert!(wire.get("submitter").is_none() && wire.get("submitter_max_running").is_none(), "{wire}");
+        assert_eq!(wire["tier"], "normal", "a 0.46.5 parser never sees `batch`");
+        let p = fit_plan(&plan, &job, &[pshare::FEATURE_QUEUE.to_string()], caps).unwrap_or(plan.clone());
+        assert_eq!((p.tier, p.class), (None, Some(pshare::JobClass::Batch)), "0.46.4: class batch");
+        // No cap on the grant: no field.
+        let p = fit_plan(&plan, &job, &v2, Some(GrantCaps { ws: 3, submitter: 0 })).expect("fitted");
+        assert_eq!(p.submitter_max_running, None);
     }
 }

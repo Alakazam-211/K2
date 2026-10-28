@@ -507,6 +507,19 @@ async fn raising_a_grant_resends_node_queued_jobs_with_the_new_cap() {
     assert_eq!((rj.node_id.as_str(), rj.generation, rj.attempt, rj.withdraws, rj.ctl.retries_used), ("cap-1", 2, 1, 0, 0), "no move, no V71 count, no retry: {rj:?}");
     assert!(!rj.is_terminal());
     assert_eq!((events("resend", &old), events("withdraw", &old)), (1, 0));
+
+    // Retier (L2, T29) of a job in the node's queue: the same re-send. To
+    // Batch on a node without `tiers2` (T28): it then waits on this server
+    // until the node is idle (`batch_idle_only`), never sent as `batch`.
+    compute_ws::test_frame("cap-1", state(&old, 2, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 1, of: Some(2), eta_secs: None, eta_p90_secs: None, blocked_by: None })));
+    let r = post(d.port, "/cli/compute/jobs/tier", OWNER, json!({"job": old, "tier": "batch"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["resent"], true, "{}", r.body);
+    assert_eq!(cancels(&node.frames()), vec![(old.clone(), 2, CANCEL_WITHDRAW.to_string())]);
+    compute_ws::test_frame("cap-1", state(&old, 2, JobState::Cancelled, Some("withdrawn"), None));
+    assert!(assigns(&node.frames()).is_empty(), "the node runs work: Batch waits on this server");
+    let rj = row(&old);
+    assert_eq!((rj.state.as_str(), rj.tier.as_str(), rj.class.as_str(), rj.reason.as_deref()), ("queued", "batch", "batch", Some("batch_idle_only")), "{rj:?}");
     compute_ws::test_detach("cap-1");
 }
 
@@ -973,7 +986,7 @@ async fn tiers_on_a_shared_node() {
     let mut node = compute_ws::test_attach("shr-t", offer(&feats, 0, Some(v.clone())));
 
     // A guest share where Priority doesn't count: Normal, with a note.
-    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority"})).await;
+    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority", "why": "the release gate"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let out = j(&r);
     assert_eq!((out["job"]["tier"].as_str(), out["job"]["tierAsked"].as_str()), (Some("normal"), Some("priority")), "{out}");
@@ -992,7 +1005,7 @@ async fn tiers_on_a_shared_node() {
     v.limits.gate = true;
     v.limits.top_class = JobClass::Gate;
     compute_ws::test_frame("shr-t", Frame::Offer(offer(&feats, 0, Some(v.clone()))));
-    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority"})).await;
+    let r = run(d.port, OWNER, json!({"node": "k2n3-m1", "workspace": ws.id, "tier": "priority", "why": "the release gate"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let out = j(&r);
     assert_eq!((out["job"]["tier"].as_str(), out["job"]["tierAsked"].as_str()), (Some("priority"), None), "{out}");

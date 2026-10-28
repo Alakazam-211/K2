@@ -344,6 +344,12 @@ impl Tenant {
         self.protocol() >= k2_node_proto::frames::PROTOCOL_CACHE
     }
 
+    /// May this session see a Batch tier, send the submitter fields and get
+    /// the `tiers2` feature (protocol 6, prd-compute-job-tiers-v2)?
+    pub fn speaks_tiers2(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_TIERS2
+    }
+
     pub fn share(&self) -> Option<ShareInfo> {
         self.share.lock().unwrap().clone()
     }

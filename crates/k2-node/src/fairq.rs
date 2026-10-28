@@ -56,6 +56,9 @@ struct RunMeta {
     tier: Tier,
     ws: String,
     session: Option<String>,
+    /// The plan's turn key (the submitter, else the session): the
+    /// per-submitter cap counts by it (L3).
+    submitter: Option<String>,
     cmd_hash: String,
     cpu: u64,
     mem: u64,
@@ -293,6 +296,7 @@ impl FairQ {
             tier: a.plan.tier_or_class(),
             ws: a.plan.workspace_id.clone(),
             session: a.plan.session_id.clone(),
+            submitter: a.plan.turn_key(),
             cmd_hash: hash,
             cpu: a.plan.limits.cpu_millis.unwrap_or_else(|| caps.default_cpu()),
             mem: a.plan.limits.mem_bytes.unwrap_or_else(|| caps.default_mem()),
@@ -422,6 +426,7 @@ impl FairQ {
                     left_p50: m.est.map(|e| left(e.0)),
                     left_p90: m.est.map(|e| left(e.1)),
                     secret: m.secret,
+                    submitter: m.submitter.clone(),
                 }
             })
             .chain(st.lingering.iter().map(|(slot, unit)| Running {
@@ -438,6 +443,7 @@ impl FairQ {
                 left_p50: None,
                 left_p90: None,
                 secret: true,
+                submitter: None,
             }))
             .collect();
         let mut queued = Vec::new();
@@ -466,6 +472,8 @@ impl FairQ {
                     ws_max_running: r.plan.ws_max_running,
                     eligible: epoch != 0 && gate == Some(epoch),
                     secret: !r.plan.secret_env.is_empty(),
+                    submitter: r.plan.turn_key(),
+                    submitter_max_running: r.plan.submitter_max_running,
                 });
                 rows.push((t.clone(), r));
             }
@@ -565,7 +573,7 @@ impl FairQ {
         let snap = self.snapshot(node, now);
         let input = snap.input(&self.cfg);
         let d = queue::decide(&input);
-        let mut v = queue::view(&input, &d, &Viewer { slot: t.slot, owner: t.is_owner(), labels: &snap.labels, tiers: t.speaks_tiers() }, request_id);
+        let mut v = queue::view(&input, &d, &Viewer { slot: t.slot, owner: t.is_owner(), labels: &snap.labels, tiers: t.speaks_tiers(), tiers2: t.speaks_tiers2() }, request_id);
         // A server whose share ended (revoked, expired, refused, or no
         // line) keeps its session only to hear its own jobs end: it sees
         // its own rows and nothing of anyone else's (review B8).

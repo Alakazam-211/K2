@@ -30,20 +30,24 @@ WHAT YOU SEE
   ETAs are durations, never clock times, and rounded for other servers.
 
 THE QUEUE (the node decides, one queue for every server)
-  1 the tier first (0.46.5; k2 study compute, TIERS): CI (only where the
-    share has gate), then Priority (only where the node's owner lets this
-    server's Priority count), then Normal waiting over an hour, then Normal.
-    A guest server's Priority counts only where the node's owner allows it
-    (priority=true); its CI only where its share has gate. No slot is
-    reserved and no tier ever stops a running job: while a CI or Priority
-    job waits for room, nothing behind it starts.
-  2 servers within today's CPU-hours before servers over them (inside a
-    tier: an over-quota server's CI still goes before anyone's Normal)
-  3 fair share by recent use and weight (every server starts at 1, the
+  1 the line first (0.46.6; k2 study compute, TIERS): CI (only where the
+    share has gate); then Priority (only where the node's owner lets this
+    server's Priority count) and Standard, taking turns when both wait;
+    then Batch, only when the node is idle. A guest server's Priority
+    counts only where the node's owner allows it (priority=true); its CI
+    only where its share has gate. No slot is reserved and no tier ever
+    stops a running job: while a CI or Priority job waits for room,
+    nothing behind it starts.
+  2 inside a line, a job waiting over an hour first (first come)
+  3 servers within today's CPU-hours before servers over them (inside a
+    line: an over-quota server's CI still goes before anyone's Standard)
+  4 fair share by recent use and weight (every server starts at 1, the
     owner too; the node's owner raises a weight with servers limits)
-  Inside one server: CI, Priority and hour-old Normal go first come; other
-  Normal work: workspaces take turns, then sessions, then first come.
+  Inside one server: CI goes first come; every other line: workspaces take
+  turns, then submitters (--submitter, else the session), then first come.
   --detach and shard counts don't change the order.
+  Every waiting job says why ("2 of 5 — your workspace runs 3 of 3 here
+  (its grant)"); a job waiting for its own limit lets jobs behind it start.
   Over your limits you WAIT, never fail. A job bigger than your share's
   per-job limits is refused at submit (exit 3).
 

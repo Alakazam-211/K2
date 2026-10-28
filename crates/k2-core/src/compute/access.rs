@@ -55,6 +55,8 @@ pub fn limits_for(n: &NodeRow, asked: &GrantLimits) -> GrantLimits {
         // CI is never a default: kept as asked (absent = the grant keeps
         // what it has, a new grant has none).
         allow_ci: asked.allow_ci,
+        // The per-submitter cap is never a default either (L3: off).
+        submitter_max_running: asked.submitter_max_running,
     }
 }
 

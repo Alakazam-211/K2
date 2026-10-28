@@ -441,7 +441,7 @@ pub fn plan(job: &str, argv: &[&str]) -> Plan {
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None,
+        src_path: None, submitter: None, submitter_max_running: None,
         with: Vec::new(),
     }
 }

@@ -545,6 +545,7 @@ pub const ROUTES: &[Route] = &[
     get("/cli/compute/jobs/logs", Member),
     get("/cli/compute/jobs/receipt", Member),
     post("/cli/compute/jobs/retry", Member),
+    post("/cli/compute/jobs/tier", Member),
     post("/cli/compute/local/disable", Owner),
     post("/cli/compute/local/drain", Owner),
     post("/cli/compute/local/enable", Owner),

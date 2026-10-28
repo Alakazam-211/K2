@@ -1659,6 +1659,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // queue a node-queued job waits in. ADD COLUMN only. Provisional
         // number: renumber at integration (Ops - Migration numbers).
         ("0240_compute_queue_of", include_str!("../../drizzle_sql/0240_compute_queue_of.sql")),
+        // 0241 — compute job tiers v2 (prd-compute-job-tiers-v2 L3,
+        // 0.46.6): `compute_node_grants.submitter_max_running` (DEFAULT 0 =
+        // off). ADD COLUMN only. Provisional number: renumber at
+        // integration (Ops - Migration numbers).
+        ("0241_compute_submitter_cap", include_str!("../../drizzle_sql/0241_compute_submitter_cap.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2322,7 +2327,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0240_compute_queue_of",
+            last_name, "0241_compute_submitter_cap",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2408,6 +2413,8 @@ mod tests {
                 "0234_sew_chat",
                 // 0.46.6: compute queue "N of M" (provisional number).
                 "0240_compute_queue_of",
+                // 0.46.6: compute per-submitter cap (provisional number).
+                "0241_compute_submitter_cap",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2501,6 +2508,8 @@ mod tests {
                 "0234_sew_chat",
                 // 0.46.6: compute queue "N of M" (provisional number).
                 "0240_compute_queue_of",
+                // 0.46.6: compute per-submitter cap (provisional number).
+                "0241_compute_submitter_cap",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2728,7 +2737,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0240_compute_queue_of", "0240 (0.46.6, compute queue N of M) runs last");
+        assert_eq!(top, "0241_compute_submitter_cap", "0241 (0.46.6, compute per-submitter cap) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2757,9 +2766,10 @@ mod tests {
                 "0233_sim_switch",
                 "0232_ticket_attachments",
                 "0234_sew_chat",
-                "0240_compute_queue_of"
+                "0240_compute_queue_of",
+                "0241_compute_submitter_cap"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234 then 0240)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240 then 0241)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3597,8 +3607,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0240 (compute queue N of M, 0.46.6) is the newest: its record
-            // goes (its column stays; re-adding is skipped as a duplicate).
+            // 0241 and 0240 (compute job tiers v2, 0.46.6) are the newest:
+            // their records go (their columns stay; re-adding is skipped as
+            // a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0241_compute_submitter_cap'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0240_compute_queue_of'", []).unwrap();
             // 0234 (Sew chat, 0.46.6) came before it: its record goes (its
             // tables are IF NOT EXISTS, so the re-run is a no-op).

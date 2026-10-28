@@ -68,7 +68,8 @@ struct Conn {
 struct Engine {
     next_conn: u64,
     conns: HashMap<String, Conn>,
-    last_ws: HashMap<String, String>,
+    /// Who got the last placements per node (workspace, submitter, line).
+    turns: HashMap<String, scheduler::Turns>,
 }
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
@@ -1923,27 +1924,45 @@ pub fn queued_view(conn: &rusqlite::Connection, node_id: &str) -> (Vec<scheduler
         .into_iter()
         // A retry waiting out its backoff isn't placeable yet.
         .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
-        .map(|j| {
-            let plan = j.plan();
-            scheduler::QueuedJob {
-                id: j.id.clone(),
-                workspace_id: j.workspace_id.clone(),
-                created_at: j.created_at,
-                exclusive: j.exclusive,
-                cpu_millis: plan.as_ref().and_then(|p| p.limits.cpu_millis),
-                mem_bytes: plan.as_ref().and_then(|p| p.limits.mem_bytes),
-                disk_bytes: 0,
-                needs_git: plan.as_ref().is_some_and(|p| p.src.is_some()),
-                tier: j.tier(),
-            }
-        })
+        .map(|j| qjob_of(&j))
         .collect();
     let mut load = scheduler::Load::default();
     for j in store::jobs_in_states(conn, node_id, store::ACTIVE_STATES) {
         *load.running_by_workspace.entry(j.workspace_id.clone()).or_insert(0) += 1;
         load.exclusive_running |= j.exclusive;
+        // L3: CI never counts toward a per-submitter cap.
+        if j.tier() != Tier::Ci {
+            *load.running_by_submitter.entry((j.workspace_id.clone(), j.submitter.clone().unwrap_or_default())).or_insert(0) += 1;
+        }
     }
     (queue, load)
+}
+
+/// A job row as the scheduler sees it.
+fn qjob_of(j: &store::JobRow) -> scheduler::QueuedJob {
+    let plan = j.plan();
+    scheduler::QueuedJob {
+        id: j.id.clone(),
+        workspace_id: j.workspace_id.clone(),
+        created_at: j.created_at,
+        exclusive: j.exclusive,
+        cpu_millis: plan.as_ref().and_then(|p| p.limits.cpu_millis),
+        mem_bytes: plan.as_ref().and_then(|p| p.limits.mem_bytes),
+        disk_bytes: 0,
+        needs_git: plan.as_ref().is_some_and(|p| p.src.is_some()),
+        tier: j.tier(),
+        submitter: j.submitter.clone(),
+    }
+}
+
+/// The node's turns (who got the last placements or sends).
+fn turns_of(node_id: &str) -> scheduler::Turns {
+    with_engine(|e| e.turns.get(node_id).cloned().unwrap_or_default())
+}
+
+/// A job of this server was placed on (or sent into) `node_id`.
+fn note_turn(node_id: &str, job: &store::JobRow) {
+    with_engine(|e| e.turns.entry(node_id.to_string()).or_default().note(&job.workspace_id, job.submitter.as_deref(), job.tier()));
 }
 
 /// One placement pass on a SHARED node (protocol 3, §6): every job this
@@ -1960,44 +1979,20 @@ struct SharedPass {
     waiting: BTreeMap<String, (usize, frames::Refusal)>,
 }
 
-/// The send order into a shared node (the third orderer, vs-live T2): CI,
-/// then Priority, each by `created_at`, then everything else in workspace
-/// rotation (after the last-served workspace), FIFO within one. Without
-/// the tier first a CI job would wait on this server behind a full share
-/// (`tenant_queue_full`) and never reach the node's queue to jump it.
-fn rotation_order(mut jobs: Vec<store::JobRow>, last_ws: Option<&str>) -> Vec<store::JobRow> {
-    jobs.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
-    let (urgent, jobs): (Vec<store::JobRow>, Vec<store::JobRow>) = jobs.into_iter().partition(|j| j.tier() != Tier::Normal);
-    let mut urgent = urgent;
-    // Stable: CI before Priority, each still oldest first.
-    urgent.sort_by_key(|j| std::cmp::Reverse(j.tier()));
-    let mut order: Vec<String> = jobs.iter().map(|j| j.workspace_id.clone()).collect();
-    order.sort_unstable();
-    order.dedup();
-    if let Some(last) = last_ws {
-        let start = order.iter().position(|w| w.as_str() > last).unwrap_or(0);
-        order.rotate_left(start);
-    }
-    let mut by_ws: HashMap<String, std::collections::VecDeque<store::JobRow>> = HashMap::new();
-    for j in jobs {
-        by_ws.entry(j.workspace_id.clone()).or_default().push_back(j);
-    }
-    let mut out = urgent;
-    loop {
-        let mut any = false;
-        for w in &order {
-            if let Some(j) = by_ws.get_mut(w).and_then(|q| q.pop_front()) {
-                out.push(j);
-                any = true;
-            }
-        }
-        if !any {
-            return out;
-        }
-    }
+/// The send order into a shared node (the third orderer, vs-live T2): the
+/// solo scheduler's order ([`scheduler::order_with`]): CI by `created_at`,
+/// then Priority and Standard alternating, then Batch, each line with its
+/// workspace and submitter turns. Without CI first a CI job would wait on
+/// this server behind a full share (`tenant_queue_full`) and never reach
+/// the node's queue to jump it.
+fn rotation_order(jobs: Vec<store::JobRow>, turns: &scheduler::Turns) -> Vec<store::JobRow> {
+    let probes: Vec<scheduler::QueuedJob> = jobs.iter().map(qjob_of).collect();
+    let ids: Vec<String> = scheduler::order_with(compute::now(), &probes, turns).into_iter().map(|q| q.id.clone()).collect();
+    let mut by_id: HashMap<String, store::JobRow> = jobs.into_iter().map(|j| (j.id.clone(), j)).collect();
+    ids.into_iter().filter_map(|id| by_id.remove(&id)).collect()
 }
 
-fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: &pshare::ShareView, last_ws: Option<&str>, pause: Option<&str>) -> SharedPass {
+fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: &pshare::ShareView, turns: &scheduler::Turns, pause: Option<&str>) -> SharedPass {
     let now = compute::now();
     let t = compute::retry::tuning();
     let queued: Vec<store::JobRow> = store::jobs_in_states(conn, node_id, &["queued"])
@@ -2005,7 +2000,11 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
         .filter(|j| j.ctl.not_before.is_none_or(|nb| nb <= now))
         .collect();
     let mut pass = SharedPass { send: Vec::new(), fail: Vec::new(), waiting: BTreeMap::new() };
-    let ordered = rotation_order(queued, last_ws);
+    let ordered = rotation_order(queued, turns);
+    // T28: a Batch job for a node without `tiers2` waits here until the
+    // node is idle, then goes as Standard; one per pass.
+    let tiers2 = crate::compute_place::offers_tiers2(&offer.features);
+    let mut batch_sent = store::jobs_in_states(conn, node_id, store::ACTIVE_STATES).iter().any(|j| j.tier() == Tier::Batch);
     let blocked = if let Some(p) = pause {
         Some(frames::Refusal::new(scheduler::CONTROLLER_PAUSED, format!("the server's owner {p} this node")))
     } else {
@@ -2034,7 +2033,7 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             mem_bytes: plan.limits.mem_bytes,
             disk_bytes: 0,
             needs_git: plan.src.is_some(),
-            tier: j.tier(),
+            tier: j.tier(), submitter: j.submitter.clone(),
         };
         if let Some(r) = scheduler::never_fits(offer, &probe) {
             pass.fail.push((j.id.clone(), r));
@@ -2074,6 +2073,21 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
             );
             continue;
         }
+        // T28: Batch to a node without `tiers2` (k2-node 0.46.5 or older)
+        // only when the node is idle, one at a time; it goes as Standard.
+        if j.tier() == Tier::Batch && !tiers2 {
+            if batch_sent || offer.running > 0 || !pass.send.is_empty() || !share::starts_now(view, plan.limits.cpu_millis, plan.limits.mem_bytes) {
+                wait(
+                    frames::Refusal::new(
+                        tiers::codes::BATCH_IDLE_ONLY,
+                        "Batch: this node runs a k2-node older than 0.46.6, so the job waits on this server until the node is idle, then runs as Standard",
+                    ),
+                    &mut pass,
+                );
+                continue;
+            }
+            batch_sent = true;
+        }
         if room == 0 {
             wait(
                 frames::Refusal::new(pshare::codes::TENANT_QUEUE_FULL, "this server's queue on the node is full; it goes in when a place opens"),
@@ -2091,12 +2105,12 @@ fn shared_pass(conn: &rusqlite::Connection, node_id: &str, offer: &Offer, view: 
 /// reason per queued job.
 pub fn decision_for(node_id: &str) -> scheduler::Decision {
     let offer = live_view(node_id).2;
-    let last = with_engine(|e| e.last_ws.get(node_id).cloned());
+    let turns = turns_of(node_id);
     let db = k2_core::db::shared();
     let conn = db.lock();
     let pause = store::node_by_id(&conn, node_id).and_then(|n| n.controller_pause);
     if let Some((o, v)) = offer.as_ref().filter(|o| share::is_shared(o)).and_then(|o| o.share.as_ref().map(|v| (o, v))) {
-        let pass = shared_pass(&conn, node_id, o, v, last.as_deref(), pause.as_deref());
+        let pass = shared_pass(&conn, node_id, o, v, &turns, pause.as_deref());
         let mut waiting = pass.waiting;
         for (id, r) in pass.fail {
             waiting.insert(id, (0, r));
@@ -2111,11 +2125,12 @@ pub fn decision_for(node_id: &str) -> scheduler::Decision {
         return scheduler::Decision { place: None, waiting };
     }
     let (queue, load) = queued_view(&conn, node_id);
-    let caps: HashMap<String, u32> = store::grants(&conn, Some(node_id), None)
-        .into_iter()
-        .map(|g| (g.workspace_id, g.max_parallel.max(1) as u32))
-        .collect();
-    let mut d = scheduler::decide(compute::now(), &queue, last.as_deref(), &load, &|ws| caps.get(ws).copied().unwrap_or(1), offer.as_ref(), pause.as_deref());
+    let grants: HashMap<String, crate::compute_place::GrantCaps> =
+        store::grants(&conn, Some(node_id), None).into_iter().map(|g| (g.workspace_id.clone(), crate::compute_place::GrantCaps::of(&g))).collect();
+    let par = |ws: &str| grants.get(ws).map(|c| c.ws).unwrap_or(1);
+    let sub = |ws: &str| grants.get(ws).map(|c| c.submitter).unwrap_or(0);
+    let caps = scheduler::Limits { grant_max_parallel: &par, submitter_max_running: &sub };
+    let mut d = scheduler::decide_with(compute::now(), &queue, &turns, &load, &caps, offer.as_ref(), pause.as_deref());
     let now = compute::now();
     for j in store::jobs_in_states(&conn, node_id, &["queued"]) {
         if let Some(nb) = j.ctl.not_before.filter(|nb| *nb > now) {
@@ -2139,13 +2154,13 @@ pub fn with_kick_lock<T>(f: impl FnOnce() -> T) -> T {
 /// Send this server's queued jobs into a shared node's queue (§6).
 fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
     let Some(view) = offer.share.as_ref() else { return };
-    let last = with_engine(|e| e.last_ws.get(node_id).cloned());
+    let turns = turns_of(node_id);
     let now = compute::now();
     let pass = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let pause = store::node_by_id(&conn, node_id).and_then(|n| n.controller_pause);
-        let pass = shared_pass(&conn, node_id, offer, view, last.as_deref(), pause.as_deref());
+        let pass = shared_pass(&conn, node_id, offer, view, &turns, pause.as_deref());
         for (id, (_, why)) in &pass.waiting {
             if let Some(j) = store::job_by_id(&conn, id).filter(|j| j.state == "queued" && j.reason.as_deref() != Some(why.code.as_str())) {
                 store::set_job_reason(&conn, &j.id, Some(&why.code), Some(&why.message));
@@ -2195,7 +2210,7 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
             serde_json::json!({"generation": job.generation, "shared": true, "class": job.class}),
         );
         drop(conn);
-        with_engine(|e| e.last_ws.insert(node_id.to_string(), job.workspace_id.clone()));
+        note_turn(node_id, &job);
         sent_any = true;
     }
     if sent_any || !failed.is_empty() {
@@ -2290,7 +2305,7 @@ pub fn kick(node_id: &str) {
     }
     store::record_event(&conn, "controller", "assign", Some(node_id), Some(&job.workspace_id), Some(&job.id), serde_json::json!({"generation": job.generation}));
     drop(conn);
-    with_engine(|e| e.last_ws.insert(node_id.to_string(), job.workspace_id.clone()));
+    note_turn(node_id, &job);
     notify_change();
 }
 
@@ -2302,8 +2317,8 @@ pub fn kick(node_id: &str) {
 /// queued; `None` when it no longer is (a cancel won): don't send.
 fn fit_plan_to(conn: &rusqlite::Connection, job: store::JobRow, plan: frames::Plan, features: &[String]) -> Option<(store::JobRow, frames::Plan)> {
     // L5 (T23): the workspace's cap as its grant says right now.
-    let ws_cap = store::grant(conn, &job.node_id, &job.workspace_id).map(|g| g.max_parallel.max(1) as u32);
-    match crate::compute_place::fit_plan(&plan, &job, features, ws_cap) {
+    let caps = store::grant(conn, &job.node_id, &job.workspace_id).map(|g| crate::compute_place::GrantCaps::of(&g));
+    match crate::compute_place::fit_plan(&plan, &job, features, caps) {
         None => Some((job, plan)),
         Some(p) => {
             if store::rewrite_queued_plan(conn, &job.id, &p, &job.ctl) != Ok(true) {
@@ -2524,7 +2539,7 @@ mod tests {
             secret_env: Vec::new(),
             tier: None,
             cache: None,
-            src_path: None,
+            src_path: None, submitter: None, submitter_max_running: None,
             with: Vec::new(),
         };
         store::insert_job(
@@ -2538,11 +2553,11 @@ mod tests {
     /// workspaces take turns (after the last served), FIFO inside each.
     #[test]
     fn shared_nodes_get_jobs_in_workspace_rotation() {
-        let mk = |id: &str, ws: &str, at: i64| store::JobRow { id: id.into(), workspace_id: ws.into(), created_at: at, ..Default::default() };
+        let mk = |id: &str, ws: &str, at: i64| store::JobRow { id: id.into(), workspace_id: ws.into(), created_at: compute::now() - 100 + at, ..Default::default() };
         let jobs = vec![mk("a1", "a", 1), mk("a2", "a", 2), mk("b1", "b", 3), mk("c1", "c", 4)];
         let ids = |v: Vec<store::JobRow>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
-        assert_eq!(ids(rotation_order(jobs.clone(), None)), ["a1", "b1", "c1", "a2"]);
-        assert_eq!(ids(rotation_order(jobs, Some("a"))), ["b1", "c1", "a1", "a2"]);
+        assert_eq!(ids(rotation_order(jobs.clone(), &scheduler::Turns::default())), ["a1", "b1", "c1", "a2"]);
+        assert_eq!(ids(rotation_order(jobs, &scheduler::Turns::ws(Some("a")))), ["b1", "c1", "a1", "a2"]);
     }
 
     /// Job tiers T2: the send order into a shared node is tier-first: CI,
@@ -2555,13 +2570,13 @@ mod tests {
         let mk = |id: &str, ws: &str, at: i64, tier: &str| store::JobRow {
             id: id.into(),
             workspace_id: ws.into(),
-            created_at: at,
+            created_at: compute::now() - 100 + at,
             tier: tier.into(),
             ..Default::default()
         };
         let ids = |v: Vec<store::JobRow>| v.into_iter().map(|j| j.id).collect::<Vec<_>>();
         let jobs = vec![mk("n1", "a", 1, "normal"), mk("n2", "b", 2, "normal"), mk("p1", "a", 3, "priority"), mk("c1", "b", 4, "ci"), mk("c0", "a", 5, "ci")];
-        let order = ids(rotation_order(jobs, Some("a")));
+        let order = ids(rotation_order(jobs, &scheduler::Turns::ws(Some("a"))));
         assert_eq!(order, ["c1", "c0", "p1", "n2", "n1"], "Normal still takes turns after the last-served workspace");
         assert_eq!(&order[..2], ["c1", "c0"], "room for two: both CI jobs go first");
     }

@@ -877,7 +877,7 @@ fn running_job(job: &str, node: &str, ws: &str) {
         secret_env: Vec::new(),
         tier: None,
         cache: None,
-        src_path: None,
+        src_path: None, submitter: None, submitter_max_running: None,
         with: Vec::new(),
     };
     let client = format!("client-{job:0>16}");
@@ -1555,7 +1555,7 @@ async fn limits_up_front_and_the_mem_cap_hint() {
         k2_core::compute::store::set_job_state(&conn, &held, k2_node_proto::frames::JobState::Failed, Some("mem_cap"), None, 100).expect("set state");
     }
     let v = job_json(port, &agent, &held).await;
-    assert_eq!(v["hint"], "killed at the memory cap (--mem 7G): try a bigger --mem or CARGO_BUILD_JOBS=2", "{v}");
+    assert_eq!(v["hint"], "stopped: it used more than its --mem 7G. Try a bigger --mem or CARGO_BUILD_JOBS=2", "{v}");
 
     stop_node(port, "dxa-limits", running).await;
     drop(env);
@@ -1587,6 +1587,10 @@ async fn job_tiers_on_a_solo_node() {
         b["noSource"] = json!(true);
         if let Some(t) = tier {
             b["tier"] = json!(t);
+            // 0.46.6: Priority needs a one-line --why.
+            if t == "priority" {
+                b["why"] = json!("the critical path in this test");
+            }
         }
         b
     };
@@ -1600,8 +1604,13 @@ async fn job_tiers_on_a_solo_node() {
     gate["gate"] = json!(true);
     let r = post(port, "/cli/compute/run", &agent, gate).await;
     assert_eq!((r.status, code(&r)), (403, "ci_not_allowed".to_string()), "{}", r.body);
-    let r = post(port, "/cli/compute/run", &agent, body("client-tiers-bad-0000001", &["true"], Some("batch"))).await;
-    assert_eq!(r.status, 400, "Batch is 0.46.6: {}", r.body);
+    let r = post(port, "/cli/compute/run", &agent, body("client-tiers-bad-0000001", &["true"], Some("bulk"))).await;
+    assert_eq!(r.status, 400, "no such tier: {}", r.body);
+    // Priority without --why: exit 2 (Rosson 10-28).
+    let mut nowhy = body("client-tiers-nowhy-00001", &["true"], None);
+    nowhy["tier"] = json!("priority");
+    let r = post(port, "/cli/compute/run", &agent, nowhy).await;
+    assert_eq!((r.status, code(&r)), (400, "priority_needs_why".to_string()), "{}", r.body);
     // Priority with --exclusive would drain the node: it needs CI's grant (T18).
     let mut ex = body("client-tiers-pex-0000001", &["true"], Some("priority"));
     ex["exclusive"] = json!(true);
@@ -1654,22 +1663,26 @@ async fn job_tiers_on_a_solo_node() {
     let qv = j(&q);
     let order: Vec<String> = qv["entries"].as_array().expect("entries").iter().map(|e| e["short"].as_str().expect("short").to_string()).collect();
     let short = |id: &str| id[..8].to_string();
-    // CI, then both Priority jobs (by created_at: the same second may tie),
-    // then Normal, though Normal came first.
-    assert_eq!((order.len(), order[0].clone(), order[3].clone()), (4, short(&c1), short(&n1)), "{qv}");
-    let mut middle = vec![order[1].clone(), order[2].clone()];
-    middle.sort();
+    // CI, then Priority and Standard alternate (0.46.6, the airport): a
+    // Priority job, the Standard one (though it came first), the other
+    // Priority job (they share a second: either may be first).
+    assert_eq!((order.len(), order[0].clone(), order[2].clone()), (4, short(&c1), short(&n1)), "{qv}");
+    let mut outer = vec![order[1].clone(), order[3].clone()];
+    outer.sort();
     let mut ps = vec![short(&p1), short(&p2)];
     ps.sort();
-    assert_eq!(middle, ps, "{qv}");
-    assert_eq!(qv["tiers"], json!({"ci": 1, "priority": 2, "normal": 1}));
+    assert_eq!(outer, ps, "{qv}");
+    // Each Priority job shows its --why to everyone on this server.
+    let pe = qv["entries"].as_array().expect("entries").iter().find(|e| e["short"] == short(&p1)).cloned().expect("p1");
+    assert_eq!(pe["tierWhy"], "the critical path in this test", "{pe}");
+    assert_eq!(qv["tiers"], json!({"ci": 1, "priority": 2, "normal": 1, "batch": 0}));
     let r = get(port, "/cli/compute/jobs", &agent, "tier=ci").await;
     assert_eq!(j(&r)["jobs"].as_array().expect("jobs").iter().map(|x| x["id"].as_str().unwrap().to_string()).collect::<Vec<_>>(), vec![c1.clone()]);
     let nodes = get(port, "/cli/compute/nodes", OWNER, "").await;
     let nv = j(&nodes);
     assert_eq!(nv["criticalPath"].as_array().expect("criticalPath").len(), 2, "{nv}");
     let row = nv["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "tiers").cloned().expect("node");
-    assert_eq!(row["queueTiers"], json!({"ci": 1, "priority": 2, "normal": 1}));
+    assert_eq!(row["queueTiers"], json!({"ci": 1, "priority": 2, "normal": 1, "batch": 0}));
 
     // (3) --supersede: a newer job with the key replaces the queued one.
     let mut s1 = body("client-tiers-s-00000001", &["true"], Some("ci"));
@@ -1703,5 +1716,108 @@ async fn job_tiers_on_a_solo_node() {
     assert_eq!(fin["state"], "done", "the running job ran to its end: {fin}");
 
     stop_node(port, "tiers", running).await;
+    drop(env);
+}
+
+/// Job tiers v2 (0.46.6, prd-compute-job-tiers-v2 + Rosson 10-28) on a solo
+/// node with the real k2-node:
+/// - no `--mem`: the 4 GB default (or the node's cap, if smaller) in the
+///   plan, a `mem_defaulted` note, `ctl.memDefaulted`;
+/// - Priority: at most 2 per workspace queued or running; the third runs
+///   Standard (`priority_cap_reached` note, `tierAsked: priority`);
+/// - retier: a queued job changes line (Priority needs room and `--why`),
+///   an agent only for its own workspace's jobs; a started job stays;
+/// - Batch: detached, a 48 h queue timeout, waits for an idle node.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn job_tiers_v2_on_a_solo_node() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "tiers2");
+    let other = seed_ws(&env, "tiers2-other");
+    let (agent, _) = passport(&ws);
+    let (outsider, _) = passport(&other);
+    let (running, node_id) = online_node_for(&env, port, "tiers2", &ws).await;
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "tiers2", "workspace": ws.id, "maxParallel": 4, "maxQueued": 20})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    node_pause(port, "tiers2", "pause").await;
+    let body = |client: &str, extra: Value| {
+        let mut b = run_body("tiers2", &["true"], client);
+        b["noSource"] = json!(true);
+        for (k, v) in extra.as_object().expect("an object") {
+            b[k] = v.clone();
+        }
+        b
+    };
+    let row = |id: &str| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::compute::store::job_by_id(&conn, id).expect("job row")
+    };
+    let codes_of = |v: &Value| v["notices"].as_array().expect("notices").iter().map(|n| n["code"].as_str().expect("code").to_string()).collect::<Vec<_>>();
+
+    // --mem missing: the default, a note, and the flag on the job.
+    let r = post(port, "/cli/compute/run", &agent, body("client-v2-mem-000000001", json!({}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert!(codes_of(&v).contains(&"mem_defaulted".to_string()), "{v}");
+    let m = v["job"]["id"].as_str().expect("id").to_string();
+    let cap = node_row(port, "tiers2").await["offer"]["caps"]["mem_bytes"].as_u64().expect("caps.mem_bytes");
+    let want = if cap > 0 { cap.min(4 << 30) } else { 4 << 30 };
+    assert_eq!((row(&m).plan().expect("plan").limits.mem_bytes, row(&m).ctl.mem_defaulted), (Some(want), true));
+    // With --mem: no note.
+    let r = post(port, "/cli/compute/run", &agent, body("client-v2-mem-000000002", json!({"memBytes": 1 << 30}))).await;
+    assert!(!codes_of(&j(&r)).contains(&"mem_defaulted".to_string()), "{}", r.body);
+
+    // Priority needs --why; two per workspace, the third runs Standard.
+    let r = post(port, "/cli/compute/run", &agent, body("client-v2-p-0000000000", json!({"priority": true}))).await;
+    assert_eq!((r.status, code(&r)), (400, "priority_needs_why".to_string()), "{}", r.body);
+    let mut ps = Vec::new();
+    for i in 1..=3 {
+        let r = post(port, "/cli/compute/run", &agent, body(&format!("client-v2-p-000000000{i}"), json!({"priority": true, "why": "unblocks the integrator", "memBytes": 1 << 30}))).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        ps.push(j(&r));
+    }
+    assert_eq!((ps[0]["job"]["tier"].as_str(), ps[1]["job"]["tier"].as_str()), (Some("priority"), Some("priority")));
+    assert_eq!((ps[2]["job"]["tier"].as_str(), ps[2]["job"]["tierAsked"].as_str()), (Some("normal"), Some("priority")), "{}", ps[2]);
+    assert!(codes_of(&ps[2]).contains(&"priority_cap_reached".to_string()), "{}", ps[2]);
+    assert_eq!(row(ps[0]["job"]["id"].as_str().unwrap()).ctl.why.as_deref(), Some("unblocks the integrator"));
+    let (p1, p3) = (ps[0]["job"]["id"].as_str().unwrap().to_string(), ps[2]["job"]["id"].as_str().unwrap().to_string());
+
+    // Retier: over the cap refused; another workspace's agent can't; the
+    // owner moves one down, then the third goes up.
+    let r = post(port, "/cli/compute/jobs/tier", &agent, json!({"job": p3, "tier": "priority", "why": "now it is"})).await;
+    assert_eq!((r.status, code(&r)), (409, "priority_cap_reached".to_string()), "{}", r.body);
+    let r = post(port, "/cli/compute/jobs/tier", &agent, json!({"job": p3, "tier": "priority"})).await;
+    assert_eq!((r.status, code(&r)), (400, "priority_needs_why".to_string()), "{}", r.body);
+    let r = post(port, "/cli/compute/jobs/tier", &outsider, json!({"job": p1, "tier": "standard"})).await;
+    assert_eq!(r.status, 404, "not its workspace's job: {}", r.body);
+    let r = get(port, "/cli/compute/jobs/tier", &agent, "").await;
+    assert_eq!(r.status, 405, "POST only: {}", r.body);
+    let r = post(port, "/cli/compute/jobs/tier", OWNER, json!({"job": p1, "tier": "standard"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((j(&r)["from"].as_str(), j(&r)["tier"].as_str()), (Some("priority"), Some("normal")));
+    assert_eq!((row(&p1).tier.as_str(), row(&p1).ctl.why.as_deref()), ("normal", None));
+    let r = post(port, "/cli/compute/jobs/tier", &agent, json!({"job": p3, "tier": "priority", "why": "now it is"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((row(&p3).tier.as_str(), row(&p3).tier_asked.as_deref(), row(&p3).ctl.why.as_deref()), ("priority", None, Some("now it is")));
+
+    // Batch: detached, 48 h queue timeout.
+    let r = post(port, "/cli/compute/run", &agent, body("client-v2-b-0000000001", json!({"tier": "batch", "memBytes": 1 << 30}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let b = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    assert_eq!((row(&b).tier.as_str(), row(&b).detach, row(&b).ctl.queue_timeout_secs), ("batch", true, Some(48 * 3600)));
+
+    // Resume: everything runs; Batch only once the node is idle. A started
+    // job can't change line.
+    node_pause(port, "tiers2", "resume").await;
+    for id in [&m, &p1, &p3, &b] {
+        wait_state(port, &agent, id, "done").await;
+    }
+    let r = post(port, "/cli/compute/jobs/tier", &agent, json!({"job": b, "tier": "standard"})).await;
+    assert_eq!((r.status, code(&r)), (409, "job_started".to_string()), "{}", r.body);
+    let _ = node_id;
+    stop_node(port, "tiers2", running).await;
     drop(env);
 }

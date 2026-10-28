@@ -22,6 +22,10 @@ RUN
   --detach prints a job id and returns. When it ends you get one line:
     [compute] job <id> on <node>: exit 100 after 6m12s; tests 412 passed, 3 failed.
       k2 compute logs <id> --failures · k2 compute get <id> --json
+  (it arrives as a message in your session). Coming back later, or in a
+  new session: k2 compute jobs --mine (or --state done), then get/logs.
+  Failing test names come back from JUnit: run cargo nextest (or
+  k2 compute test, which adds it); plain cargo test gives the log lines.
   --any: whichever granted node fits (warm slot first, then free CPU).
   Longer than your shell tool's timeout? Use --detach. (If an attached
   run gets killed, the job keeps going and you still get that line.)
@@ -73,38 +77,86 @@ CACHES (0.46.6)
   k2 compute cache [--node N] lists them; owner/admin clear them with
   k2 compute cache clear --workspace <ws> [--name NAME].
 
-TIERS (queue order, 0.46.5)
+TIERS (queue lines, like an airport; 0.46.6)
+  Which line?
+    a normal build or test            no flag (Standard)
+    the critical path (one result     --priority --why "<one line: what waits on it>"
+      blocks other work right now)
+    overnight / idle-time / soak      --tier batch (detached; starts when the node is idle)
+    a release or CI gate              --tier ci (needs a grant with --ci)
+  (no flag)        Standard: the default line.
+  --priority --why "<reason>"
+                   the critical path, like TSA Pre: its own line. When both
+                   Priority and Standard have jobs waiting, the node takes
+                   them in turns (one, then the other), so Standard never
+                   starves. A Priority job at the head takes the next free
+                   slot. --why is required (exit 2 without it): one line,
+                   shown in k2 compute queue and k2 compute status.
+                   = --tier priority = --critical. At most 2 Priority jobs
+                   queued or running per workspace; more run Standard
+                   (priority_cap_reached note). --exclusive needs --ci.
+  --tier batch     idle-time work (soaks, overnight sweeps): no clock window;
+                   it starts only when the node is idle (nothing running,
+                   nothing else ready), at any hour, one at a time. While it
+                   waits it holds nobody up; once started it runs to its end
+                   (it then uses its slot like any job). Always detached (no
+                   --wait); 48 h queue timeout. --timeout is still capped by
+                   the grant's max per job (k2 compute nodes shows it; ask
+                   the owner for --max-time). For a job that goes quiet, add
+                   --stall-timeout off.
   --tier ci        highest: the next free slot, ahead of everything queued.
                    Needs a grant with --ci, which only the owner or an Admin
                    sets (k2 compute grant <node> --workspace <ws> --ci).
                    Agents ask: k2 permission request compute.ci --why "…"
                    (refused: ci_not_allowed, exit 3). --gate = --tier ci.
-  --tier priority  the critical path: the next free slot, never before CI.
-                   (--critical is the same.) With --exclusive it needs --ci.
-  (no flag)        Normal: first come, first served in your workspace;
-                   workspaces take turns. A Normal job waiting an hour ranks
-                   above fresh Normal work, still below Priority and CI.
-  Priority = the critical path. Use --tier priority only when one result is
-  blocking others (the next builder, an integration pass, a release). One
-  submitter on this server at a time: if `k2 compute nodes` shows someone
-  else on the critical path, use Normal unless the coordinator named you.
-  Priority is optional: if work is independent, leave everything Normal. It
-  all still runs, in parallel, just more slowly.
-  K2 doesn't enforce that: a second submitter's Priority still submits,
+  TURNS: inside each line, submitters take turns (on a shared queue,
+  workspaces first, then submitters, then first come), so one builder's
+  burst of jobs can't hold the others. A job that has waited 1 h skips the
+  turns of its line (never into another line). Builders sharing one
+  session: pass --submitter <name> so each gets its own turn.
+  Priority = the critical path. Use it only when one result is blocking
+  others (the next builder, an integration pass, a release). If
+  `k2 compute status` shows someone else on Priority, use Standard unless
+  the coordinator named you; a second submitter's Priority still submits,
   with one note (critical_path_taken) on stderr.
   Tiers never stop a running job. They only order the queue: nothing is
-  reserved, nothing is killed or paused. While a CI or Priority job waits
-  for room, smaller jobs behind it don't start (the node drains toward it).
+  reserved, nothing is killed or paused. A node starts a job only when its
+  slots AND memory both fit, whatever the line or turn.
   On a node another server owns, your Priority counts only where its owner
-  allows it (else it runs as Normal: priority_downgraded), and your CI only
-  where your share has gate. A pre-0.46.5 node ignores Priority
-  (node_too_old_for_tiers); CI still runs first there.
+  allows it (else it runs as Standard: priority_downgraded), and your CI
+  only where your share has gate. On a node only this server uses, this
+  server orders the queue and every line works whatever the node's
+  version. On a shared node the node orders: a pre-0.46.5 node ignores
+  Priority (node_too_old_for_tiers), and on a pre-0.46.6 one Batch waits on
+  this server until the node is idle (batch_idle_only) and there are no
+  turns. k2 compute info <node> says which.
+  k2 compute retier <job> --tier standard|priority|batch|ci [--why "…"]
+                   moves a QUEUED job to another line (your workspace's
+                   jobs; the owner or an Admin: any job). In a node's queue
+                   it is re-sent and gets a new place there. A started job
+                   is left alone (job_started, exit 3).
+  PER-SUBMITTER CAP: a grant may cap how many jobs one submitter runs at
+  once on a node (k2 compute grant <node> --workspace <ws>
+  --submitter-max-running 2; off by default). Over it a job waits
+  (submitter_running_full) and jobs behind it may start first.
   --supersede KEY  cancels your workspace's older QUEUED jobs with the same
                    KEY (reason replaced); a job that started keeps running.
                    CI: --supersede ci/<branch>/<part>.
-  --submitter NAME names you in the critical-path note and the views
-                   (default: workspace/session/worktree). Display only.
-  k2 compute jobs shows a TIER column (CI, P); --tier T filters.
+  --submitter NAME names you: your own turn, the per-submitter cap, the
+                   critical-path note and the views (default:
+                   workspace/session/worktree). Not security.
+  k2 compute jobs shows a TIER column (CI, P, B); --tier T filters.
+
+MEMORY (--mem, required; 0.46.6)
+  Always pass --mem with what the job needs. Rough guide: a cargo build,
+  check or test of a big workspace like K2: 24G (with CARGO_BUILD_JOBS=8);
+  one smaller crate: 8G; a shell or Python script: 1-2G; anything else:
+  what it uses at its peak, plus a margin. Without --mem the job reserves
+  4 GB (a note says so) and is stopped above it: failed/mem_cap, "stopped:
+  the job used more than its memory limit of 4.0 GB". The node starts a
+  job only when its --mem fits beside what runs; an ask bigger than the
+  node's cap is refused at submit (exceeds_node_caps, exit 2).
+  k2 compute nodes shows each node's free memory and cap.
 
 SECRETS (vault values as env, 0.46.4, Linux nodes)
   k2 compute run <node> --secret GMAIL_CLIENT_SECRET -- make release
@@ -214,7 +266,7 @@ RESULTS (one object, artifacts, test lists)
 NEVER STUCK
   --queue-timeout 2h|off    not started in time → failed/queue_timeout (exit 3,
                             with what it waited on). Default 2h attached or
-                            --wait, 24h --detach.
+                            --wait, 24h --detach, 48h --tier batch.
   --any jobs move: off a node that sleeps (60 s), is paused or set aside, and
   off a busy node onto one that can start them now.
   A node offline 10 min while running your job: that attempt ends

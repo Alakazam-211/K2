@@ -814,6 +814,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/compute/jobs/artifact",
         "/cli/compute/jobs/cancel",
         "/cli/compute/jobs/retry",
+        // Job tiers v2 (0.46.6): retier a queued job of this workspace.
+        "/cli/compute/jobs/tier",
         "/cli/compute/grants",
         "/cli/compute/local/status",
         // Node sharing (0.46.3): a node's queue, redacted per §7.

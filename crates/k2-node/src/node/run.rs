@@ -74,7 +74,8 @@ impl Proc {
 
 /// The `mem_cap` detail: the cap and how to ask for more.
 pub fn mem_cap_detail(cap: u64) -> String {
-    format!("the job used more than its memory cap ({} MiB) and was killed; ask for more with --mem", cap >> 20)
+    let gb = cap as f64 / (1u64 << 30) as f64;
+    format!("stopped: the job used more than its memory limit of {gb:.1} GB ({} MiB, its --mem or the node's share); ask for more with --mem", cap >> 20)
 }
 
 /// Linux wall, before a job: the dirs it writes get the node's group

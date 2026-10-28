@@ -79,6 +79,11 @@ pub const DEFAULT_MAX_JOB_SECS: i64 = 7200;
 pub const DEFAULT_MAX_DISK_GB: i64 = 60;
 pub const DEFAULT_MAX_PARALLEL: i64 = 1;
 pub const DEFAULT_MAX_QUEUED: i64 = 10;
+/// A job without `--mem` reserves this much (Rosson 10-28: `--mem` is
+/// required; missing, the default plus a warning), clamped to a smaller
+/// node's cap. The node stops a job that goes over its reservation
+/// (`failed/mem_cap`).
+pub const DEFAULT_MEM_BYTES: u64 = 4 << 30;
 /// Per-job log cap (§11.3).
 pub const LOG_CAP_BYTES: u64 = 200 << 20;
 /// Relay-path caps (§12.4, CN17). LAN and tailnet aren't capped by us.

@@ -284,7 +284,9 @@ pub const SKILL_VERSION_ZEN: u32 = 45;
 /// Bumped to 39 (0.46.6, compute): the Compute nodes block leads with
 /// `--dirty` and shows `--repo`/`--with`/`--cache`.
 /// Bumped to 40 (0.46.6, box moves carry the vault): the Study topics gain `box-move`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 40;
+/// Bumped to 41 (0.46.6, compute job tiers v2): `--mem` always, `--priority
+/// --why`, `--tier batch`, `--wait` streams, submitter turns.
+pub const SKILL_VERSION_WORKSPACE: u32 = 41;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

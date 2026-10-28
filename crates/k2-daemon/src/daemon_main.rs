@@ -91,6 +91,12 @@ pub fn run() {
     if let Some(code) = early_cli_dispatch(&args) {
         std::process::exit(code);
     }
+    // Windows: launchd's KeepAlive (see keep_alive): supervise the daemon
+    // instead of being it.
+    #[cfg(windows)]
+    if args.iter().skip(1).any(|a| a == crate::keep_alive::ARG) {
+        std::process::exit(crate::keep_alive::run());
+    }
 
     // Phase 2 Unit 2 — LLM worker subprocess fork. Daemon spawns
     // itself as `k2so-daemon --llm-worker <payload_path>` to run one
@@ -123,6 +129,10 @@ pub fn run() {
         rt.shutdown_background();
         crate::handoff::drain_then_exit();
     }
+    // Windows: say why this daemon ended, for the keep-alive supervisor
+    // (quit: 0; anything else: start me again).
+    #[cfg(windows)]
+    std::process::exit(crate::daemon_stop::windows_exit_code());
 }
 
 /// Pure early-arg dispatch. Returns `Some(exit_code)` when the process
@@ -158,6 +168,7 @@ fn print_daemon_help() {
            k2-daemon                 Boot the daemon (normally via systemd/launchd)\n\
            k2-daemon --version | -V  Print version and exit (does NOT boot)\n\
            k2-daemon --help | -h     Show this help and exit\n\
+           k2-daemon --keep-alive    Windows: run the daemon and start it again after a crash or restart\n\
            k2-daemon --llm-worker <payload_path>\n\
                                      Internal: one-shot LLM worker child\n\
            k2-daemon --skin-gateway --listen 127.0.0.1:N --upstream http://127.0.0.1:DAEMON [--root DIR]\n\
@@ -200,6 +211,11 @@ pub(crate) fn release_singleton_lock() {
 ///
 /// Windows takes std's exclusive LockFileEx lock on the same file (there
 /// is no flock); a second daemon is refused the same way.
+/// How a refused second boot's error starts (the Windows keep-alive
+/// supervisor reads it as "wait", not "crashed").
+#[cfg_attr(not(windows), allow(dead_code))]
+const ALREADY_RUNNING: &str = "another k2-daemon is already running";
+
 fn acquire_daemon_singleton(
     k2_dir: &std::path::Path,
     inherited: Option<std::fs::File>,
@@ -297,7 +313,7 @@ fn acquire_daemon_singleton(
             Ok(()) => {}
             Err(std::fs::TryLockError::WouldBlock) => {
                 return Err(format!(
-                    "another k2-daemon is already running (lock {}). \
+                    "{ALREADY_RUNNING} (lock {}). \
                      Refusing to boot a second instance — dual daemons double-resume \
                      agent sessions and corrupt git trees. \
                      Quit K2 from the tray first. \
@@ -529,6 +545,12 @@ async fn async_main() {
     let handed_off = inherited_lock.is_some();
     if let Err(e) = acquire_daemon_singleton(&k2so_dir, inherited_lock) {
         eprintln!("[daemon] FATAL: {e}");
+        // Windows: the keep-alive supervisor waits on another daemon
+        // instead of starting this one again at once.
+        #[cfg(windows)]
+        if e.starts_with(ALREADY_RUNNING) {
+            std::process::exit(crate::keep_alive::EXIT_ALREADY_RUNNING);
+        }
         std::process::exit(1);
     }
 

@@ -155,6 +155,35 @@ pub fn pids_named(prefix: &str) -> Vec<u32> {
     out
 }
 
+/// Pids of the running processes whose parent is `parent` (Toolhelp's
+/// parent pid; a parent that exited can leave stale children listed by a
+/// recycled pid, so callers that care check start times).
+pub fn children_of(parent: u32) -> Vec<u32> {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    let mut out = Vec::new();
+    // SAFETY: as in pids_named.
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == INVALID_HANDLE_VALUE || snap.is_null() {
+            return out;
+        }
+        let mut e: PROCESSENTRY32W = std::mem::zeroed();
+        e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut ok = Process32FirstW(snap, &mut e) != 0;
+        while ok {
+            if e.th32ParentProcessID == parent && e.th32ProcessID != 0 {
+                out.push(e.th32ProcessID);
+            }
+            ok = Process32NextW(snap, &mut e) != 0;
+        }
+        CloseHandle(snap);
+    }
+    out
+}
+
 /// `cmdline` split into argv the way Windows programs parse their own
 /// (CommandLineToArgvW): quotes and backslashes as the C runtime reads them.
 pub fn split_command_line(cmdline: &str) -> Vec<String> {

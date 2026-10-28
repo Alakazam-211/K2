@@ -246,6 +246,10 @@ fn ensure_local_daemon_process() {
     if let Some(dir) = daemon_bin.parent() {
         cmd.current_dir(dir);
     }
+    // Windows: start it under its keep-alive supervisor (launchd's
+    // KeepAlive), as the logon Run value does.
+    #[cfg(windows)]
+    cmd.arg(k2_client::win_autostart::KEEP_ALIVE_ARG);
     // Windows: hide console (k2-daemon is CUI unless built with windows
     // subsystem) and start a new process group so closing the UI does not
     // tear the daemon down. Prefer CREATE_NO_WINDOW over DETACHED_PROCESS —

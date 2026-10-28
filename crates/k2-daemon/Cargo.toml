@@ -298,7 +298,7 @@ zeroize = "1"
 # Windows: the machine's own addresses for the egress / vault-fetch guard
 # (GetAdaptersAddresses). windows-sys 0.61 is already in Cargo.lock.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"

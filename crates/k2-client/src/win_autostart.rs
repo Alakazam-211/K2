@@ -5,8 +5,9 @@
 //! `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` names the installed
 //! `k2-daemon.exe` (a windows-subsystem binary in release builds, so no
 //! console window). No admin rights; the uninstaller removes the value.
-//! Windows has no launchd `KeepAlive`: a crashed daemon comes back when the
-//! app opens (it spawns a missing daemon) or at the next logon.
+//! The value runs `k2-daemon --keep-alive`, which supervises the daemon as
+//! launchd's `KeepAlive` does: a crash or a restart starts it again, a quit
+//! ends it.
 
 use std::ffi::OsStr;
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
@@ -26,9 +27,13 @@ fn wide(s: &OsStr) -> Vec<u16> {
     s.encode_wide().chain(std::iter::once(0)).collect()
 }
 
-/// The command a Run value holds for `program`: the quoted path.
+/// The supervisor argument (`k2-daemon --keep-alive`).
+pub const KEEP_ALIVE_ARG: &str = "--keep-alive";
+
+/// The command a Run value holds for `program`: the quoted path, run as
+/// the keep-alive supervisor.
 pub fn command_for(program: &Path) -> String {
-    format!("\"{}\"", program.display())
+    format!("\"{}\" {KEEP_ALIVE_ARG}", program.display())
 }
 
 /// The command K2's value holds, if any.
@@ -131,7 +136,7 @@ mod tests {
         let exe = Path::new(r"C:\Program Files\K2\k2-daemon.exe");
         assert_eq!(read_value(&key.0, RUN_VALUE).unwrap(), None);
         assert!(ensure_at(&key.0, RUN_VALUE, exe).unwrap(), "missing -> written");
-        assert_eq!(read_value(&key.0, RUN_VALUE).unwrap().as_deref(), Some(r#""C:\Program Files\K2\k2-daemon.exe""#));
+        assert_eq!(read_value(&key.0, RUN_VALUE).unwrap().as_deref(), Some(r#""C:\Program Files\K2\k2-daemon.exe" --keep-alive"#));
         assert!(!ensure_at(&key.0, RUN_VALUE, exe).unwrap(), "already right -> untouched");
         assert!(ensure_at(&key.0, RUN_VALUE, Path::new(r"D:\K2\k2-daemon.exe")).unwrap(), "moved -> rewritten");
         remove_at(&key.0, RUN_VALUE).unwrap();

@@ -36,6 +36,21 @@ pub const INTENT_MAX_AGE_SECS: u64 = 120;
 
 static STOP_FLAG: AtomicBool = AtomicBool::new(false);
 
+/// Windows: the shutdown decision said quit.
+#[cfg(windows)]
+static WINDOWS_QUIT: AtomicBool = AtomicBool::new(false);
+
+/// Windows: the daemon's exit code for the keep-alive supervisor: quit
+/// (a stop, or a stop intent) or start me again.
+#[cfg(windows)]
+pub fn windows_exit_code() -> i32 {
+    if WINDOWS_QUIT.load(Ordering::SeqCst) {
+        crate::keep_alive::EXIT_QUIT
+    } else {
+        crate::keep_alive::EXIT_RESTART
+    }
+}
+
 /// `POST /cli/daemon/stop` (and `restart?end_agents=1`): this shutdown
 /// ends agents.
 pub fn request_end_agents() {
@@ -143,6 +158,14 @@ pub fn decide() -> ExitPlan {
 /// stop): apply the §7.6 decision to ptyd sessions. Not after a hand-off
 /// (quiesce already detached them).
 pub fn on_shutdown() {
+    // Windows (no ptyd yet): the same decision picks the exit code the
+    // keep-alive supervisor reads: a stop quits, anything else restarts.
+    #[cfg(windows)]
+    {
+        let plan = decide();
+        log_debug!("[daemon] shutdown: {plan:?}");
+        WINDOWS_QUIT.store(matches!(plan, ExitPlan::EndAgents(_)), Ordering::SeqCst);
+    }
     #[cfg(unix)]
     {
         let Some(owner) = k2_core::terminal::ptyd::client::global().current_owner() else {

@@ -21,6 +21,7 @@ pub mod boot_status;
 pub mod ptyd_status;
 pub mod ptyd_adopt;
 pub mod daemon_stop;
+pub mod keep_alive;
 pub mod session_liveness;
 pub mod browser_routes;
 pub mod canonical_session;

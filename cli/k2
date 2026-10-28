@@ -11821,18 +11821,22 @@ _app_sdk_usage() {
 k2 app sdk — K2's server SDK (and Sew's) inside your App folder
 
   k2 app sdk add <app-folder> [--sew] [--json]
-        Copies @k2/server (this K2's version) into <app-folder>/vendor/ and
-        adds "@k2/server": "file:vendor/k2-server-<version>.tgz" to the
-        App's package.json (made when there is none: private, "type":
-        "module"). Then, in <app-folder>: npm install. Your server code:
+        <app-folder> is an existing folder (mkdir it first; a relative
+        path is fine). Copies @k2/server (this K2's version) into
+        <app-folder>/vendor/ and adds "@k2/server":
+        "file:vendor/k2-server-<version>.tgz" to the App's package.json
+        (made when there is none: private, "type": "module"). Then, in
+        <app-folder>: npm install. Your server code:
           import { fromEnv } from '@k2/server'
-        --sew also copies Sew's client packages for chat, voice and video
-        (@sew/client, @sew/voice, @sew/channel, @sew/e2ee, @sew/bff; this
-        box needs Sew 0.5.0+), pins their links to each other in npm
-        "overrides", and prints the npm i line that adds what comes from
-        the npm registry (React, LiveKit, …): run that line instead of
-        npm install. Run add again after a K2 or Sew update: it replaces
-        the older files and never duplicates.
+        --sew does all that AND copies Sew's packages (this box needs Sew
+        0.5.0+): @sew/client (Sew's API), @sew/channel (chat), @sew/voice
+        (voice and video calls), @sew/e2ee (call encryption), @sew/bff
+        (your server's side). It pins their links to each other in npm
+        "overrides" and prints an npm i line for what comes from the npm
+        registry (React, LiveKit, …): run that line instead of npm
+        install. Adding --sew later to an App that has @k2/server is
+        fine. Run add again after a K2 or Sew update: it replaces the
+        older files and never duplicates.
   k2 app sdk status <app-folder> [--json]
         What the folder has in vendor/ against what this box carries:
         current, older (run add again), newer, missing.
@@ -11849,9 +11853,16 @@ vendor/ and package.json inside <app-folder>.
 Who: the owner, an Admin, a K2 terminal, the App's agent with "Build and
 run Apps" (folders inside its own workspace).
 
-Exit codes: 0 done, 2 usage, 3 refused (JSON on stderr: apps_manage_off,
-folder_outside_workspace, sew_kit_unavailable, sew_kit_missing,
-sew_kit_tampered, sdk_package_json_invalid, sdk_folder_invalid).
+Exit codes: 0 done, 2 usage, 3 refused, with JSON on stderr:
+  apps_manage_off           ask your owner for "Build and run Apps"
+  folder_outside_workspace  an agent's folder must be in its workspace
+  sew_kit_unavailable       this K2 pins a Sew older than 0.5.0 (no kit
+                            until a K2 update); use add without --sew
+  sew_kit_missing           the kit isn't on this box: k2 app sdk kit
+                            <file>, or ask your owner for it
+  sew_kit_tampered          the kit doesn't match K2's pin: refused
+  sdk_package_json_invalid  fix package.json (not valid JSON) and rerun
+  sdk_folder_invalid        vendor/ or package.json is a symlink or odd
 EOF
 }
 

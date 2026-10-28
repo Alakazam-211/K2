@@ -6962,7 +6962,7 @@ except Exception as e:
 }
 
 # 0.37.4: read the friendly display name for a workspace's primary
-# agent. Reads .k2so/agent/AGENT.md frontmatter (display_name → name)
+# agent. Reads .k2/agent/AGENT.md frontmatter (display_name → name)
 # then falls back to projects.name. Total — always returns a string.
 cmd_workspace_get_agent_display_name() {
     local target="${1:-}"
@@ -24364,7 +24364,7 @@ cmd_signal() {
     }
 
     # Build the AgentSignal wire format. Matches
-    # k2so_core::awareness::AgentSignal serialization.
+    # k2_core::awareness::AgentSignal serialization.
     local now
     now=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat(timespec="microseconds"))' 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%S.000000+00:00")
     local signal_id
@@ -47256,10 +47256,10 @@ cmd_skills() {
     shift || true
     case "$subcmd" in
         list)
-            # Skills live at `.k2so/skills/<name>/SKILL.md` post-Phase-2.5b.
+            # Skills live at `.k2/skills/<name>/SKILL.md` post-Phase-2.5b.
             # The daemon's `/cli/agents/list` route enumerates the same
             # folder (the legacy `.k2so/agents/` tree is consolidated
-            # into `.k2so/skills/` at first boot — see
+            # into `.k2/skills/` at first boot — see
             # `consolidate_skills_v1`). Rename of the route to
             # `/cli/skills/list` is deferred until the daemon-side route
             # split lands; for now the renderer is one HTTP call away.
@@ -62754,7 +62754,7 @@ print(json.dumps({"id": sys.argv[1], "body": body}, separators=(",", ":")))
 
 # ── Self-Update ──────────────────────────────────────────────────────
 
-K2SO_CLI_RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2"
+K2_CLI_RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2"
 
 cmd_app_update() {
     local version="${1:-}"
@@ -62825,7 +62825,7 @@ cmd_update() {
 
     # Download the latest version string from GitHub
     local remote_script
-    remote_script=$(curl -sS --connect-timeout 5 --max-time 15 "$K2SO_CLI_RAW_URL" 2>/dev/null)
+    remote_script=$(curl -sS --connect-timeout 5 --max-time 15 "$K2_CLI_RAW_URL" 2>/dev/null)
     if [ -z "$remote_script" ]; then
         echo "Error: Could not reach GitHub to check for updates." >&2
         exit 1
@@ -62889,7 +62889,7 @@ cmd_update() {
 # ── Onboarding (workspace-add three-option flow) ─────────────────────
 #
 # Thin shell wrappers around `/cli/onboarding/*` daemon routes. Logic
-# lives in k2so-core::agents::onboarding so the Tauri modal and the
+# lives in k2-core::agents::onboarding so the Tauri modal and the
 # CLI share a single implementation. Project path defaults to $PWD.
 
 # k2 onboarding scan [project-path]
@@ -62904,7 +62904,7 @@ cmd_onboarding_scan() {
 }
 
 # k2 onboarding adopt <relative-or-absolute-path> [project-path]
-#   Adopt the named harness file as the seed for .k2so/PROJECT.md and
+#   Adopt the named harness file as the seed for .k2/PROJECT.md and
 #   trigger a workspace SKILL regen. The source file is archived to
 #   .k2so/migration/ and removed (so the regen's existing migration
 #   helpers don't double-import the same body).
@@ -62926,7 +62926,7 @@ cmd_onboarding_adopt() {
 }
 
 # k2 onboarding later [project-path]
-#   "Do it later" — drops .k2so/.skip-harness-management so K2 won't
+#   "Do it later" — drops .k2/.skip-harness-management so K2 won't
 #   touch CLAUDE.md / GEMINI.md / .cursor/rules / etc. on subsequent
 #   regens. K2's internal SKILL still gets written so heartbeats and
 #   agent launches keep working. Reversible by removing the flag.
@@ -63441,7 +63441,7 @@ CANONICAL CHAT
 EXAMPLES
   k2 workspace list
   k2 workspace launch
-  k2 workspace launch /Users/me/Projects/k2so
+  k2 workspace launch /Users/me/Projects/myapp
   k2 workspace profile
   k2 workspace update --field role --value "frontend lead"
   k2 workspace api-guest-policy get my-wiki

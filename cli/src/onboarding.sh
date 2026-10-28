@@ -1,7 +1,7 @@
 # ── Onboarding (workspace-add three-option flow) ─────────────────────
 #
 # Thin shell wrappers around `/cli/onboarding/*` daemon routes. Logic
-# lives in k2so-core::agents::onboarding so the Tauri modal and the
+# lives in k2-core::agents::onboarding so the Tauri modal and the
 # CLI share a single implementation. Project path defaults to $PWD.
 
 # k2 onboarding scan [project-path]
@@ -16,7 +16,7 @@ cmd_onboarding_scan() {
 }
 
 # k2 onboarding adopt <relative-or-absolute-path> [project-path]
-#   Adopt the named harness file as the seed for .k2so/PROJECT.md and
+#   Adopt the named harness file as the seed for .k2/PROJECT.md and
 #   trigger a workspace SKILL regen. The source file is archived to
 #   .k2so/migration/ and removed (so the regen's existing migration
 #   helpers don't double-import the same body).
@@ -38,7 +38,7 @@ cmd_onboarding_adopt() {
 }
 
 # k2 onboarding later [project-path]
-#   "Do it later" — drops .k2so/.skip-harness-management so K2 won't
+#   "Do it later" — drops .k2/.skip-harness-management so K2 won't
 #   touch CLAUDE.md / GEMINI.md / .cursor/rules / etc. on subsequent
 #   regens. K2's internal SKILL still gets written so heartbeats and
 #   agent launches keep working. Reversible by removing the flag.

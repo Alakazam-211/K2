@@ -873,10 +873,10 @@ cmd_skills() {
     shift || true
     case "$subcmd" in
         list)
-            # Skills live at `.k2so/skills/<name>/SKILL.md` post-Phase-2.5b.
+            # Skills live at `.k2/skills/<name>/SKILL.md` post-Phase-2.5b.
             # The daemon's `/cli/agents/list` route enumerates the same
             # folder (the legacy `.k2so/agents/` tree is consolidated
-            # into `.k2so/skills/` at first boot — see
+            # into `.k2/skills/` at first boot — see
             # `consolidate_skills_v1`). Rename of the route to
             # `/cli/skills/list` is deferred until the daemon-side route
             # split lands; for now the renderer is one HTTP call away.

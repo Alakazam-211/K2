@@ -136,7 +136,7 @@ CANONICAL CHAT
 EXAMPLES
   k2 workspace list
   k2 workspace launch
-  k2 workspace launch /Users/me/Projects/k2so
+  k2 workspace launch /Users/me/Projects/myapp
   k2 workspace profile
   k2 workspace update --field role --value "frontend lead"
   k2 workspace api-guest-policy get my-wiki

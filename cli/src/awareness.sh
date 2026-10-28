@@ -35,7 +35,7 @@ cmd_signal() {
     }
 
     # Build the AgentSignal wire format. Matches
-    # k2so_core::awareness::AgentSignal serialization.
+    # k2_core::awareness::AgentSignal serialization.
     local now
     now=$(python3 -c 'from datetime import datetime, timezone; print(datetime.now(timezone.utc).isoformat(timespec="microseconds"))' 2>/dev/null || date -u +"%Y-%m-%dT%H:%M:%S.000000+00:00")
     local signal_id

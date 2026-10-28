@@ -969,7 +969,7 @@ except Exception as e:
 }
 
 # 0.37.4: read the friendly display name for a workspace's primary
-# agent. Reads .k2so/agent/AGENT.md frontmatter (display_name → name)
+# agent. Reads .k2/agent/AGENT.md frontmatter (display_name → name)
 # then falls back to projects.name. Total — always returns a string.
 cmd_workspace_get_agent_display_name() {
     local target="${1:-}"

@@ -1,6 +1,6 @@
 # ── Self-Update ──────────────────────────────────────────────────────
 
-K2SO_CLI_RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2"
+K2_CLI_RAW_URL="https://raw.githubusercontent.com/Alakazam-211/K2/main/cli/k2"
 
 cmd_app_update() {
     local version="${1:-}"
@@ -71,7 +71,7 @@ cmd_update() {
 
     # Download the latest version string from GitHub
     local remote_script
-    remote_script=$(curl -sS --connect-timeout 5 --max-time 15 "$K2SO_CLI_RAW_URL" 2>/dev/null)
+    remote_script=$(curl -sS --connect-timeout 5 --max-time 15 "$K2_CLI_RAW_URL" 2>/dev/null)
     if [ -z "$remote_script" ]; then
         echo "Error: Could not reach GitHub to check for updates." >&2
         exit 1

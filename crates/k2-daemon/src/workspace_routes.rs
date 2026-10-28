@@ -504,29 +504,114 @@ struct WorkspaceSetBody {
 /// Shared 404 shape for agent/workspace addressing misses — a stable
 /// `not_found` code plus a did-you-mean hint so the CLI can exit 4 with
 /// the contract's `{error:{code, hint}}` stderr JSON.
+///
+/// 0.46.6 (hatlab-manager on 0.46.5: "no agent/workspace named
+/// 'hatlab-manager' — did you mean 'hatlab-manager'?"): callers collapse
+/// every unresolved token to this 404, but the resolver can fail for
+/// reasons a name-similarity guess can't see. The token is resolved again
+/// here to say which:
+/// - more than one workspace answers to it (two with that name or folder
+///   name): `409 ambiguous`, naming each one's handle and path;
+/// - it is a retired handle (0159: a removed workspace had it; handles are
+///   never reused, and that check runs before the display-name and folder
+///   fallbacks): `404 not_found`, naming the current workspace with that
+///   name or folder by handle and path;
+/// - otherwise the did-you-mean, which never suggests the token itself.
 pub(crate) fn workspace_not_found_response(q: &str) -> CliResponse {
-    let suggestion = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::connections::suggest_project_name(&conn, q)
-    };
-    let hint = match suggestion {
-        Some(s) => format!(
-            "no agent/workspace named '{q}' — did you mean '{s}'? Run `k2 workspace list` for registered names, or pass a full path."
-        ),
-        None => format!(
-            "no agent/workspace named '{q}'. Run `k2 workspace list` for registered names, or pass a full path."
-        ),
+    use k2_core::workspace::handle::WorkspaceTokenResolve;
+    let token = q.trim();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (status, code, hint) = match k2_core::workspace::handle::resolve_workspace_token(&conn, token) {
+        WorkspaceTokenResolve::Ambiguous { .. } => {
+            let named = workspaces_answering_to(&conn, token);
+            (
+                "409 Conflict",
+                "ambiguous",
+                format!(
+                    "more than one workspace answers to '{q}': {}. Name one by its handle or pass its full path.",
+                    describe_workspaces(&named)
+                ),
+            )
+        }
+        WorkspaceTokenResolve::Retired { handle } => {
+            let named = workspaces_answering_to(&conn, token);
+            let now = if named.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " The workspace now named '{q}' is {}: use its handle or its full path.",
+                    describe_workspaces(&named)
+                )
+            };
+            (
+                "404 Not Found",
+                "not_found",
+                format!(
+                    "'{handle}' is a retired handle: the workspace that had it was removed, and handles are never reused.{now}"
+                ),
+            )
+        }
+        WorkspaceTokenResolve::Found { .. } | WorkspaceTokenResolve::Miss => {
+            let suggestion = k2_core::connections::suggest_project_name(&conn, token)
+                .filter(|s| !s.trim().eq_ignore_ascii_case(token));
+            let hint = match suggestion {
+                Some(s) => format!(
+                    "no agent/workspace named '{q}' — did you mean '{s}'? Run `k2 workspace list` for registered names, or pass a full path."
+                ),
+                None => format!(
+                    "no agent/workspace named '{q}'. Run `k2 workspace list` for registered names, or pass a full path."
+                ),
+            };
+            ("404 Not Found", "not_found", hint)
+        }
     };
     CliResponse {
-        status: "404 Not Found",
+        status,
         content_type: "application/json",
         body: serde_json::json!({
             "ok": false,
-            "error": { "code": "not_found", "hint": hint },
+            "error": { "code": code, "hint": hint },
         })
         .to_string(),
     }
+}
+
+/// `(handle, path)` of every workspace whose display name or folder name
+/// is `token` (ASCII case-insensitive, like the resolver).
+fn workspaces_answering_to(conn: &rusqlite::Connection, token: &str) -> Vec<(String, String)> {
+    let Ok(mut stmt) = conn.prepare("SELECT COALESCE(handle, ''), path, COALESCE(name, '') FROM projects") else {
+        return Vec::new();
+    };
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
+        .map(|it| it.flatten().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let mut out: Vec<(String, String)> = rows
+        .into_iter()
+        .filter(|(_, path, name)| {
+            name.trim().eq_ignore_ascii_case(token)
+                || std::path::Path::new(path)
+                    .file_name()
+                    .is_some_and(|b| b.to_string_lossy().eq_ignore_ascii_case(token))
+        })
+        .map(|(handle, path, _)| (handle, path))
+        .collect();
+    out.sort();
+    out
+}
+
+fn describe_workspaces(list: &[(String, String)]) -> String {
+    list.iter()
+        .map(|(handle, path)| {
+            if handle.trim().is_empty() {
+                path.clone()
+            } else {
+                format!("'{handle}' ({path})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Per-workspace AGENT PERMISSION switches on `/cli/workspace/set`

@@ -545,14 +545,14 @@ pub fn resolve_workspace_token(conn: &Connection, token: &str) -> WorkspaceToken
     }
 
     if crate::paths::is_path_token(token) {
-        return match conn.query_row(
+        if let Ok(path) = conn.query_row(
             "SELECT path FROM projects WHERE path = ?1",
             params![token],
             |r| r.get::<_, String>(0),
         ) {
-            Ok(path) => WorkspaceTokenResolve::Found { path },
-            Err(_) => WorkspaceTokenResolve::Miss,
-        };
+            return WorkspaceTokenResolve::Found { path };
+        }
+        return resolve_path_spelling(conn, token);
     }
 
     if is_uuid_shape(token) {
@@ -656,6 +656,37 @@ pub fn resolve_workspace_token(conn: &Connection, token: &str) -> WorkspaceToken
             handles: handles_for_paths(conn, &base_matches),
         },
         _ => WorkspaceTokenResolve::Miss,
+    }
+}
+
+/// 0.46.6: a path token that isn't stored byte for byte may still name a
+/// registered folder spelled differently: a trailing slash, `..`, or a
+/// symlink (`/home/k2/x` vs its real path). Compare with trailing slashes
+/// dropped, then canonicalized when both exist. Two registered folders
+/// that are the same directory are `Ambiguous`.
+fn resolve_path_spelling(conn: &Connection, token: &str) -> WorkspaceTokenResolve {
+    fn trimmed(p: &str) -> &str {
+        let t = p.trim_end_matches(['/', '\\']);
+        if t.is_empty() { p } else { t }
+    }
+    let want_trim = trimmed(token).to_string();
+    let want_canon = dunce::canonicalize(token).ok();
+    let mut hits: Vec<String> = Vec::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT path FROM projects") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for path in rows.flatten() {
+                let same = trimmed(&path) == want_trim
+                    || want_canon.as_ref().is_some_and(|w| dunce::canonicalize(&path).ok().as_ref() == Some(w));
+                if same {
+                    hits.push(path);
+                }
+            }
+        }
+    }
+    match hits.len() {
+        1 => WorkspaceTokenResolve::Found { path: hits.into_iter().next().unwrap() },
+        0 => WorkspaceTokenResolve::Miss,
+        _ => WorkspaceTokenResolve::Ambiguous { handles: handles_for_paths(conn, &hits) },
     }
 }
 

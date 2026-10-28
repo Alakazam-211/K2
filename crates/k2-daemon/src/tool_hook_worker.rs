@@ -48,6 +48,14 @@
 //! | 2xx naming neither | `blocked` |
 //! | 404 on `space_member_remove` | `done` |
 //!
+//! Sew 0.5.0 rows: `policy_set` (`POST /mgmt/v1/policies`, the
+//! managed-fields policy the sweep found not K2's; `k2_core::tool_hook::policy`)
+//! and `space_unbind` (`POST /mgmt/v1/spaces/unbind` for a removed App's
+//! Space; a 404, no such Space, is `done`). Both follow the table above; a
+//! 400 `validation_failed` blocks loudly. Before the first send of a
+//! provision on a Sew whose policy is K2's, `title`/`pronouns` are dropped
+//! from the body (they are the member's own).
+//!
 //! K26: a pass that finished, blocked or held a row, or saw a row fail for
 //! the first time, emits ONE `sew:changed {reason: grant-hook}` (the
 //! app-level `sew_changed` event) so the People and Sew pages refetch.
@@ -253,8 +261,9 @@ pub fn classify(
             body: resp.body_text(),
             reconcile: false,
         },
-        // K31: no such member or Space: nothing left to remove.
-        404 if op == Op::SpaceMemberRemove => Outcome::Done {
+        // K31: no such member or Space: nothing left to remove. Sew 0.5.0:
+        // no such Space: nothing left to unbind.
+        404 if matches!(op, Op::SpaceMemberRemove | Op::SpaceUnbind) => Outcome::Done {
             status,
             body: resp.body_text(),
             reconcile: false,
@@ -350,6 +359,9 @@ fn path_for(op: Op) -> &'static str {
         // Decision 13: the App id is in the path ([`hook::home::path_for`]).
         Op::HomeClient => hook::home::MGMT_HOME_CLIENT,
         Op::AppSettings => "/mgmt/v1/apps/{app_id}/settings",
+        // Sew 0.5.0: the managed-fields policy; a removed App's Space.
+        Op::PolicySet => hook::policy::MGMT_POLICIES,
+        Op::SpaceUnbind => sew_wire::MGMT_SPACES_UNBIND,
     }
 }
 
@@ -399,10 +411,21 @@ async fn fill_provision(
     }
     let page: sew_wire::MgmtPrincipalPage = serde_json::from_slice(&resp.body)
         .map_err(|e| blocked(format!("unexpected body ({e})"), Some(resp.status)))?;
+    // Sew 0.5.0: with K2's managed-fields policy, title/pronouns are the
+    // member's own and no provision carries them.
+    let own = blocking(hook::members_own_title_and_pronouns)
+        .await
+        .map_err(|e| blocked(format!("policy state ({e})"), None))?;
     let Some(m) = page.items.iter().find(|m| m.external_id == req.external_id) else {
+        if own && (req.profile.title.is_some() || req.profile.pronouns.is_some()) {
+            req.profile.title = None;
+            req.profile.pronouns = None;
+            let v = serde_json::to_value(&req).map_err(|e| blocked(format!("encode ({e})"), None))?;
+            return Ok(Some(v));
+        }
         return Ok(None);
     };
-    if hook::chat::fill_provision_from_member(&mut req, m) {
+    if hook::chat::fill_provision_from_member_as(&mut req, m, own) {
         let v = serde_json::to_value(&req).map_err(|e| blocked(format!("encode ({e})"), None))?;
         Ok(Some(v))
     } else {
@@ -697,6 +720,20 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
             _ => return Err("principals paging did not advance".into()),
         }
     }
+    // Sew 0.5.0 (`k2_managed_avatar`): read the managed-fields policy so
+    // the settings step can make it K2's. A failed read is not the sweep's
+    // failure: K2 keeps what it last saw and reads again next sweep.
+    let policy_read = if status.features.iter().any(|f| f == hook::features::K2_MANAGED_AVATAR) {
+        match policy_read(client).await {
+            Ok(v) => hook::PolicyRead::Seen(v),
+            Err(e) => {
+                log_debug!("[grant-hook] {kind}: policy read failed: {e}");
+                hook::PolicyRead::NotRead
+            }
+        }
+    } else {
+        hook::PolicyRead::NotRead
+    };
     let k = kind.to_string();
     blocking(move || {
         hook::set_health(&k, true, None)?;
@@ -704,9 +741,19 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
         // Decision 13: each chat App's signalling origin, then the settings
         // Sew's feature flags say it takes (never by version).
         crate::sew::home::refresh_origins();
-        hook::apply_settings(&k, &status.features).map(|_| ())
+        hook::apply_settings(&k, &status.features, &policy_read).map(|_| ())
     })
     .await
+}
+
+/// `GET /mgmt/v1/policies` → the `identity.managed_fields` value (`None` =
+/// absent, Sew's default).
+async fn policy_read(client: &MgmtClient) -> Result<Option<Value>, String> {
+    let r = client.get(hook::policy::MGMT_POLICIES).await.map_err(|e| e.0)?;
+    if !r.is_success() {
+        return Err(r.error_line());
+    }
+    hook::policy::managed_fields_in(&r.body)
 }
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
@@ -1075,6 +1122,30 @@ mod tests {
         ));
         assert_eq!(path_for(Op::SpaceMemberAdd), "/mgmt/v1/spaces/members/add");
         assert_eq!(path_for(Op::SpaceMemberRemove), "/mgmt/v1/spaces/members/remove");
+    }
+
+    /// Sew 0.5.0 rows: where they go, and how Sew's answers land.
+    #[test]
+    fn policy_and_unbind_rows_go_to_their_routes_and_block_loudly() {
+        let c = cfg();
+        assert_eq!(path_for(Op::PolicySet), "/mgmt/v1/policies");
+        assert_eq!(path_for(Op::SpaceUnbind), "/mgmt/v1/spaces/unbind");
+        let un = space_row("space_unbind", 0);
+        assert!(matches!(
+            classify(&c, &un, Ok(&resp(404, &err("not_found", "", ""), "")), 0),
+            Outcome::Done { status: 404, reconcile: false, .. }
+        ), "no such Space: nothing to unbind");
+        assert!(matches!(
+            classify(&c, &un, Ok(&resp(409, &err("conflict", "app_mismatch", ""), "")), 0),
+            Outcome::Blocked { status: Some(409), .. }
+        ), "bound to another App: K2's record is wrong, say so");
+        let pol = row("policy_set", 0, "k2ob_pol");
+        assert!(matches!(
+            classify(&c, &pol, Ok(&resp(400, &err("validation_failed", "", ""), "")), 0),
+            Outcome::Blocked { status: Some(400), .. }
+        ));
+        assert!(matches!(classify(&c, &pol, Ok(&resp(200, r#"{"policies":{}}"#, "")), 0), Outcome::Done { status: 200, .. }));
+        assert!(Op::DELIVERED.contains(&Op::PolicySet) && Op::DELIVERED.contains(&Op::SpaceUnbind));
     }
 
     /// K26: which outcomes are worth one `sew_changed` per pass.

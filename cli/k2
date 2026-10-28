@@ -59724,6 +59724,12 @@ elif verb == "app-spaces":
     for r in rows:
         m = r.get("members") or {}
         print("%-24s %-28s added %s, held %s, pending %s" % (r.get("appId"), r.get("spaceId"), m.get("added", 0), m.get("held", 0), m.get("pending", 0)))
+    gone = v.get("unbound") or []
+    if gone:
+        print("Spaces of removed Apps (read-only in Sew; history and export still work):")
+    for r in gone:
+        state = "unbound in Sew" if r.get("doneAt") else "waiting to unbind in Sew"
+        print("  %-24s %-28s %s" % (r.get("appId"), r.get("spaceId"), state))
     if v.get("note"):
         print(v["note"], file=sys.stderr)
 elif verb == "recovery-key":

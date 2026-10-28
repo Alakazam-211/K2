@@ -81,6 +81,9 @@ pub struct Space {
     pub banned: std::collections::BTreeSet<String>,
     /// A9: channels by slug.
     pub channels: BTreeMap<String, Channel>,
+    /// Sew 0.5.0 (`space_unbind`): the App this Space was unbound from (an
+    /// orphan: writes answer 422 `space_orphaned`).
+    pub orphaned_from: Option<String>,
 }
 
 /// A9: a text channel made over mgmt.
@@ -168,6 +171,14 @@ struct State {
     home_client: Option<Option<String>>,
     /// The status `features` (default none).
     features: Vec<String>,
+    /// Sew 0.5.0: org policies K2 may read and set over mgmt (only
+    /// `identity.managed_fields`; absent = Sew's default).
+    policies: BTreeMap<String, Value>,
+    /// `GET /mgmt/v1/policies` shows the default managed fields explicitly
+    /// (instead of leaving the key out).
+    policy_default_shown: bool,
+    /// `GET /mgmt/v1/policies` answers 503.
+    policy_get_fails: bool,
 }
 
 pub struct FakeSew {
@@ -259,6 +270,28 @@ impl FakeSew {
     pub fn set_provider(&self, p: &str) {
         self.with(|s| s.provider = p.into())
     }
+    /// Sew 0.5.0: an admin sets (or, `None`, resets) a policy behind K2.
+    pub fn set_policy(&self, key: &str, v: Option<Value>) {
+        self.with(|s| match v {
+            Some(v) => {
+                s.policies.insert(key.into(), v);
+            }
+            None => {
+                s.policies.remove(key);
+            }
+        })
+    }
+    pub fn policy(&self, key: &str) -> Option<Value> {
+        self.with(|s| s.policies.get(key).cloned())
+    }
+    /// Show the default `identity.managed_fields` in `GET /mgmt/v1/policies`.
+    pub fn set_policy_default_shown(&self, on: bool) {
+        self.with(|s| s.policy_default_shown = on)
+    }
+    /// `GET /mgmt/v1/policies` answers 503 while `on`.
+    pub fn set_policy_get_fails(&self, on: bool) {
+        self.with(|s| s.policy_get_fails = on)
+    }
     pub fn set_token(&self, t: &str) {
         self.with(|s| s.token = t.into())
     }
@@ -289,6 +322,7 @@ impl FakeSew {
             s.avatars.clear();
             s.app_settings.clear();
             s.home_client = None;
+            s.policies.clear();
             s.owner = None;
             s.idem.clear();
         })
@@ -631,6 +665,7 @@ fn handle(
                 .to_string(),
             ),
             sew_wire::MGMT_PRINCIPALS => list(s, query),
+            "/mgmt/v1/policies" => policies_get(s),
             _ => {
                 s.bad_paths.push(format!("GET {path}"));
                 err(
@@ -708,6 +743,8 @@ fn handle(
         "/mgmt/v1/principals/avatar" => avatar_set(s, query, raw),
         "/mgmt/v1/principals/avatar/clear" => avatar_clear(s, body),
         "/mgmt/v1/home-client" => home_client(s, body),
+        "/mgmt/v1/policies" => policies_set(s, body),
+        sew_wire::MGMT_SPACES_UNBIND => space_unbind(s, body),
         p if p.starts_with("/mgmt/v1/apps/") && p.ends_with("/settings") => app_settings(s, p, body),
         p if acting.is_some() => chat_post(s, acting.expect("acting"), p, body),
         sew_client::proto::routes::MGMT_SPACES_CREATE => space_create(s, body),
@@ -799,6 +836,105 @@ fn app_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
         entry[k] = x;
     }
     (200, json!({"app_id": app, "applied": true}).to_string())
+}
+
+// ── Sew 0.5.0: the managed-fields policy and Space unbind ─────────────
+
+const MANAGED_FIELDS: &str = "identity.managed_fields";
+const DEFAULT_MANAGED: [&str; 3] = ["display_name", "title", "pronouns"];
+const MANAGEABLE: [&str; 6] = ["display_name", "username", "email", "title", "pronouns", "avatar"];
+
+/// Does the install's policy make `field` the provider's (K2's)?
+fn provider_owns(s: &State, field: &str) -> bool {
+    match s.policies.get(MANAGED_FIELDS) {
+        Some(Value::Array(a)) => a.iter().any(|v| v.as_str() == Some(field)),
+        _ => DEFAULT_MANAGED.contains(&field),
+    }
+}
+
+fn policies_json(s: &State) -> Value {
+    let mut p = serde_json::Map::new();
+    p.insert("gifs.enabled".into(), json!(true));
+    p.insert("messages.delete_own".into(), json!(true));
+    for (k, v) in &s.policies {
+        p.insert(k.clone(), v.clone());
+    }
+    if s.policy_default_shown && !p.contains_key(MANAGED_FIELDS) {
+        p.insert(MANAGED_FIELDS.into(), json!(DEFAULT_MANAGED));
+    }
+    json!({ "policies": p })
+}
+
+fn policies_get(s: &mut State) -> (u16, String) {
+    if s.policy_get_fails {
+        return err(503, "unavailable", "injected", json!({}));
+    }
+    (200, policies_json(s).to_string())
+}
+
+/// `POST /mgmt/v1/policies {"changes": {...}}`. K2 only ever sets
+/// `identity.managed_fields`, and only to a Sew that reports
+/// `k2_managed_avatar` (an older Sew refuses the key: 400).
+fn policies_set(s: &mut State, body: &str) -> (u16, String) {
+    let v: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return bad_body(s, "policies", e, body),
+    };
+    let Some(changes) = v.get("changes").and_then(Value::as_object).filter(|_| v.as_object().is_some_and(|o| o.len() == 1)) else {
+        return bad_body(s, "policies", "expected {changes: {...}}", body);
+    };
+    if changes.keys().any(|k| k != MANAGED_FIELDS) {
+        return bad_body(s, "policies", "K2 sets only identity.managed_fields", body);
+    }
+    if !s.features.iter().any(|f| f == "k2_managed_avatar") {
+        return bad_body(s, "policies", "identity.managed_fields on a Sew without k2_managed_avatar", body);
+    }
+    match changes.get(MANAGED_FIELDS) {
+        Some(Value::Null) => {
+            s.policies.remove(MANAGED_FIELDS);
+        }
+        Some(Value::Array(a)) => {
+            let names: Vec<&str> = a.iter().filter_map(Value::as_str).collect();
+            let mut uniq = names.clone();
+            uniq.sort_unstable();
+            uniq.dedup();
+            if names.len() != a.len() || uniq.len() != names.len() || names.iter().any(|n| !MANAGEABLE.contains(n)) {
+                s.bad_bodies.push(format!("policies: duplicate or unknown managed field: {body}"));
+                return err(400, "validation_failed", "managed fields: distinct known names", json!({"field": MANAGED_FIELDS}));
+            }
+            s.policies.insert(MANAGED_FIELDS.into(), Value::Array(a.clone()));
+        }
+        _ => return bad_body(s, "policies", "identity.managed_fields is a list or null", body),
+    }
+    (200, policies_json(s).to_string())
+}
+
+/// `POST /mgmt/v1/spaces/unbind {space_id, app_id}` (flag `space_unbind`).
+fn space_unbind(s: &mut State, body: &str) -> (u16, String) {
+    let req: sew_wire::SpaceUnbindRequest = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => return bad_body(s, "spaces/unbind", e, body),
+    };
+    if !s.features.iter().any(|f| f == "space_unbind") {
+        s.bad_paths.push("POST /mgmt/v1/spaces/unbind on a Sew without space_unbind".into());
+        return err(404, "not_found", "unknown route", json!({"reason": "unknown_route"}));
+    }
+    let Some(sp) = s.spaces.get_mut(&req.space_id) else {
+        return err(404, "not_found", "no such space", json!({}));
+    };
+    if sp.app_id.is_none() && sp.orphaned_from.as_deref() == Some(req.app_id.as_str()) {
+        return (200, json!({"space_id": req.space_id, "orphaned_from": req.app_id, "changed": false}).to_string());
+    }
+    if sp.app_id.as_deref() != Some(req.app_id.as_str()) {
+        return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
+    }
+    sp.app_id = None;
+    sp.orphaned_from = Some(req.app_id.clone());
+    (200, json!({"space_id": req.space_id, "orphaned_from": req.app_id, "changed": true}).to_string())
+}
+
+fn orphaned(space_id: &str) -> (u16, String) {
+    err(422, "invalid_state", &format!("Space {space_id} is unbound from its App"), json!({"reason": "space_orphaned"}))
 }
 
 // ── S30 K15: the act-as `/api/v1` slice and SW11 spaces/create ─────────
@@ -974,6 +1110,14 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
         return bad_body(s, "provision", "unknown external id form", body);
     }
     let ext = req.external_id.to_string();
+    // Sew 0.5.0: once the policy makes title/pronouns the member's own, a
+    // provider write of them is K2 overwriting the member (refused loudly
+    // here); their absence keeps the member's values.
+    let own_title = !provider_owns(s, "title");
+    let own_pronouns = !provider_owns(s, "pronouns");
+    if (own_title && req.profile.title.is_some()) || (own_pronouns && req.profile.pronouns.is_some()) {
+        s.bad_bodies.push(format!("provision sent member-owned title/pronouns: {body}"));
+    }
     if let Some(person) = &req.assistant_of {
         match s.members.get(&person.to_string()) {
             None => {
@@ -1016,8 +1160,12 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
             m.display_name = req.profile.display_name.clone();
             // Declarative: absent clears (live Sew, S9 §6.4 step 4).
             m.email = req.profile.email.clone();
-            m.title = req.profile.title.clone();
-            m.pronouns = req.profile.pronouns.clone();
+            if !own_title {
+                m.title = req.profile.title.clone();
+            }
+            if !own_pronouns {
+                m.pronouns = req.profile.pronouns.clone();
+            }
             m.member_id
         }
         None => {
@@ -1058,6 +1206,9 @@ fn update(s: &mut State, body: &str) -> (u16, String) {
         Err(e) => return bad_body(s, "update", e, body),
     };
     let ext = req.external_id.to_string();
+    if (!provider_owns(s, "title") && !req.profile.title.is_keep()) || (!provider_owns(s, "pronouns") && !req.profile.pronouns.is_keep()) {
+        s.bad_bodies.push(format!("update sent member-owned title/pronouns: {body}"));
+    }
     if let Some(u) = &req.profile.username {
         if active_username_holder(s, u, &ext).is_some() {
             return err(
@@ -1109,6 +1260,14 @@ fn space_bind(s: &mut State, body: &str) -> (u16, String) {
     let Some(sp) = s.spaces.get_mut(&req.space_id) else {
         return err(404, "not_found", "no such space", json!({}));
     };
+    // Sew 0.5.0: an orphan rebinds to the App it came from; another App
+    // waits for a person's `spaces/release`.
+    if let Some(from) = sp.orphaned_from.clone() {
+        if from != req.app_id {
+            return err(409, "conflict", "orphaned from another App", json!({"reason": "space_bound_elsewhere"}));
+        }
+        sp.orphaned_from = None;
+    }
     match &sp.app_id {
         Some(a) if *a != req.app_id => {
             return err(409, "conflict", "bound to another App", json!({"reason": "space_bound"}));
@@ -1130,6 +1289,9 @@ fn space_members_add(s: &mut State, body: &str) -> (u16, String) {
     let Some(sp) = s.spaces.get_mut(&req.space_id) else {
         return err(404, "not_found", "no such space", json!({}));
     };
+    if sp.orphaned_from.is_some() {
+        return orphaned(&req.space_id);
+    }
     if sp.app_id != req.app_id {
         return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
     }
@@ -1179,6 +1341,9 @@ fn channel_create(s: &mut State, body: &str) -> (u16, String) {
     let Some(sp) = s.spaces.get_mut(&req.space_id) else {
         return err(404, "not_found", "no such space", json!({}));
     };
+    if sp.orphaned_from.is_some() {
+        return orphaned(&req.space_id);
+    }
     match &sp.app_id {
         None => return err(409, "conflict", "the Space is bound to no App", json!({"reason": "space_unbound", "field": "space_id"})),
         Some(a) if *a != req.app_id => {
@@ -1235,6 +1400,9 @@ fn space_member_remove(s: &mut State, body: &str) -> (u16, String) {
     let Some(sp) = s.spaces.get_mut(&req.space_id) else {
         return err(404, "not_found", "no such space", json!({}));
     };
+    if sp.orphaned_from.is_some() {
+        return orphaned(&req.space_id);
+    }
     if sp.app_id != req.app_id {
         return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
     }

@@ -9,7 +9,8 @@
 //! | [`APP_SCOPED_SESSIONS`] | Sew scopes a session by its pass's `app` claim. Until it shows, an App may not give its users chat (`guests.setChat` is refused) and the owner is told the App sees all chat its person can |
 //! | [`HOME_CLIENT`] | the install's home client and an App's `hidden_from_home` ("App-only") are sent |
 //! | [`APP_ORIGIN`] | an App's `wss://` signalling origin is sent (voice for custom Apps needs it) |
-//! | [`K2_MANAGED_AVATAR`] | K2's picture is pushed with `force` (it replaces one the member set) |
+//! | [`K2_MANAGED_AVATAR`] | K2's picture is pushed with `force` (it replaces one the member set), and K2 sets the org policy `identity.managed_fields` to `[display_name, avatar]` ([`super::policy`]); once Sew shows it, K2 stops sending `title`/`pronouns` |
+//! | [`SPACE_UNBIND`] | an App removed from the box has its Spaces unbound in Sew too (`POST /mgmt/v1/spaces/unbind`; [`super::app_space`]) |
 //! | [`APP_CHANNEL_CREATE`] | `POST /mgmt/v1/channels/create` (Sew 0.5.0, A9): an App makes text channels in its own Space (`chat.createChannel`); without it the verb is refused `sew_feature_missing` |
 
 use rusqlite::{params, Connection, OptionalExtension};
@@ -19,6 +20,7 @@ pub const HOME_CLIENT: &str = "home_client";
 pub const APP_ORIGIN: &str = "app_origin";
 pub const K2_MANAGED_AVATAR: &str = "k2_managed_avatar";
 pub const APP_CHANNEL_CREATE: &str = "app_channel_create";
+pub const SPACE_UNBIND: &str = "space_unbind";
 
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {

@@ -1612,6 +1612,8 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     crate::tool_hook::home::ensure_schema(&conn)?;
     // Sew's feature flags as the sweep last saw them.
     crate::tool_hook::features::ensure_schema(&conn)?;
+    // Sew 0.5.0: the managed-fields policy as the sweep last saw it.
+    crate::tool_hook::policy::ensure_schema(&conn)?;
     // S24-1: numbered, additive steps on top of the idempotent block above.
     run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest

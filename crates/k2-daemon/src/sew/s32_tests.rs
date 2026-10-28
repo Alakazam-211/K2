@@ -377,6 +377,23 @@ fn app_space_bind_binds_sew_first_then_records_and_unbind_forgets() {
     let (st, v) = t.call(&Who::Owner, APP_SPACES_BIND, json!({"app": "hearth", "spaceId": "spc_1"}));
     assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "space_bound"), "{v}");
     assert!(k2_core::tool_hook::app_spaces().unwrap().is_empty());
+    // Sew 0.5.0: an orphan of another App (a person releases it first).
+    t.ops
+        .mgmt_answers
+        .lock()
+        .unwrap()
+        .entry("POST /mgmt/v1/spaces/bind".into())
+        .or_default()
+        .push_back(Err(crate::sew::ops::MgmtError::Status(
+            409,
+            "{\"error\":{\"code\":\"conflict\",\"details\":{\"reason\":\"space_bound_elsewhere\"}}}".into(),
+        )));
+    let (st, v) = t.call(&Who::Owner, APP_SPACES_BIND, json!({"app": "hearth", "spaceId": "spc_1"}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "space_bound_elsewhere"), "{v}");
+    assert!(v["error"]["hint"].as_str().is_some_and(|h| h.contains("release")), "{v}");
+    assert!(k2_core::tool_hook::app_spaces().unwrap().is_empty());
+    let (_, v) = t.get(&Who::Owner, APP_SPACES);
+    assert_eq!(v["unbound"], json!([]), "no removed App's Space yet: {v}");
     // Bound.
     t.ops
         .mgmt_answers

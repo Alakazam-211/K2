@@ -561,7 +561,20 @@ pub fn deprovision_op(grant: &SkinGrant, cause: Cause) -> Result<NewOp, String> 
 ///
 /// Returns whether the body changed. Pure.
 pub fn fill_provision_from_member(req: &mut ProvisionRequest, m: &MgmtPrincipal) -> bool {
+    fill_provision_from_member_as(req, m, false)
+}
+
+/// [`fill_provision_from_member`], knowing who owns `title`/`pronouns`.
+/// `members_own_title_and_pronouns` (Sew 0.5.0 with K2's
+/// `identity.managed_fields` policy, [`super::policy`]): they are the
+/// member's own fields, so K2 neither copies them back nor sends them —
+/// the body never carries them. Pure.
+pub fn fill_provision_from_member_as(req: &mut ProvisionRequest, m: &MgmtPrincipal, members_own_title_and_pronouns: bool) -> bool {
     let mut changed = false;
+    if members_own_title_and_pronouns {
+        changed |= req.profile.title.take().is_some();
+        changed |= req.profile.pronouns.take().is_some();
+    }
     if m.username != req.profile.username
         && username_matches(&req.profile.username, &m.username, &req.external_id)
     {
@@ -576,8 +589,10 @@ pub fn fill_provision_from_member(req: &mut ProvisionRequest, m: &MgmtPrincipal)
             }
         }
     };
-    take(&mut req.profile.title, &m.title);
-    take(&mut req.profile.pronouns, &m.pronouns);
+    if !members_own_title_and_pronouns {
+        take(&mut req.profile.title, &m.title);
+        take(&mut req.profile.pronouns, &m.pronouns);
+    }
     if !matches!(req.external_id, ExternalId::K2Principal(_)) {
         take(&mut req.profile.email, &m.email);
     }

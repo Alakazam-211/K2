@@ -111,6 +111,10 @@ class H(BaseHTTPRequestHandler):
         elif p == "/cli/sew/app-spaces":
             out = {"ok": True, "spaces": [{"appId": "hearth", "spaceId": "spc_1", "boundAt": 1, "boundBy": "owner",
                                            "members": {"added": 3, "held": 1, "pending": 0}}],
+                   "unbound": [{"appId": "oldapp", "spaceId": "spc_9", "wantedAt": 1, "wantedBy": "system:app-removed",
+                                "doneAt": 2, "orphanedFrom": "oldapp"},
+                               {"appId": "gone2", "spaceId": "spc_8", "wantedAt": 1, "wantedBy": "system:app-removed",
+                                "doneAt": None, "orphanedFrom": None}],
                    "note": "members come only from each App's user grants (k2 app grant); Admin Access never adds anyone"}
         elif p.startswith("/cli/sew/app-spaces/"):
             out = {"ok": True, "app": b.get("app"), "spaceId": b.get("spaceId")}
@@ -215,6 +219,10 @@ assert_eq "list exit 0" "$rc" "0"
 assert_eq "list is a GET" "$(req_where /cli/sew/app-spaces method)" "GET"
 assert_contains "list row" "$out" "hearth"
 assert_contains "list counts" "$out" "added 3, held 1, pending 0"
+assert_contains "removed Apps' Spaces (Sew 0.5.0)" "$out" "Spaces of removed Apps (read-only in Sew"
+assert_contains "an unbound Space" "$out" "spc_9"
+assert_contains "unbound in Sew" "$out" "unbound in Sew"
+assert_contains "not sent yet" "$out" "waiting to unbind in Sew"
 assert_contains "list note (stderr)" "$err" "Admin Access never adds anyone"
 run owner hostchat app-space bind hearth spc_1
 assert_eq "bind exit 0" "$rc" "0"

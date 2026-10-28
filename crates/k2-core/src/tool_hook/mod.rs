@@ -45,6 +45,7 @@ pub mod features;
 pub mod home;
 pub mod members;
 pub mod outbox;
+pub mod policy;
 pub mod reconcile;
 pub mod sew_wire;
 
@@ -104,6 +105,13 @@ pub enum Op {
     /// Decision 13: one App's `hidden_from_home` and label
     /// (`POST /mgmt/v1/apps/{app_id}/settings`).
     AppSettings,
+    /// Sew 0.5.0 (`k2_managed_avatar`): the org policy
+    /// `identity.managed_fields` = `[display_name, avatar]`
+    /// (`POST /mgmt/v1/policies`; [`policy`]).
+    PolicySet,
+    /// Sew 0.5.0 (`space_unbind`): unbind a removed App's Space in Sew
+    /// (`POST /mgmt/v1/spaces/unbind`; [`app_space`]).
+    SpaceUnbind,
 }
 
 impl Op {
@@ -120,6 +128,8 @@ impl Op {
             Op::AvatarClear => "avatar_clear",
             Op::HomeClient => "home_client",
             Op::AppSettings => "app_settings",
+            Op::PolicySet => "policy_set",
+            Op::SpaceUnbind => "space_unbind",
         }
     }
 
@@ -136,6 +146,8 @@ impl Op {
             "avatar_clear" => Op::AvatarClear,
             "home_client" => Op::HomeClient,
             "app_settings" => Op::AppSettings,
+            "policy_set" => Op::PolicySet,
+            "space_unbind" => Op::SpaceUnbind,
             _ => return None,
         })
     }
@@ -143,7 +155,7 @@ impl Op {
     /// The ops the worker delivers. S28's session revoke joined in 0.46.1
     /// (plan B7: "S28 adds its op to `Op::DELIVERED`"); K31's App Space
     /// membership ops ride the same worker.
-    pub const DELIVERED: [Op; 11] = [
+    pub const DELIVERED: [Op; 13] = [
         Op::Provision,
         Op::Update,
         Op::Deprovision,
@@ -155,6 +167,8 @@ impl Op {
         Op::AvatarClear,
         Op::HomeClient,
         Op::AppSettings,
+        Op::PolicySet,
+        Op::SpaceUnbind,
     ];
 
     /// K31's App Space membership ops.
@@ -190,6 +204,9 @@ pub enum Cause {
     /// A Connect login was linked to the owner: it is `k2:owner` in chat
     /// now, so its own `k2:connect` member goes.
     OwnerLinked,
+    /// An App was removed from the box (Sew 0.5.0: its Spaces are
+    /// unbound in Sew).
+    AppRemoved,
 }
 
 impl Cause {
@@ -210,6 +227,7 @@ impl Cause {
             Cause::ConnectUserDelete => "connect_user_delete",
             Cause::PassMint => "pass_mint",
             Cause::OwnerLinked => "owner_linked",
+            Cause::AppRemoved => "app_removed",
         }
     }
 }
@@ -953,7 +971,10 @@ pub fn apply_reconcile(
         // The orphan deprovisions above are this sweep's own open rows.
         busy.extend(orphan_ops.iter().map(|o| o.subject_key.clone()));
         let held = outbox::held_subjects(&tx, kind)?;
-        let (planned, mut summary) = reconcile::plan(&built.desired, actual, &busy, &held);
+        // Sew 0.5.0: once the managed-fields policy is K2's, no provision
+        // carries title/pronouns (they are the members' own).
+        let own = kind == CHAT_KIND && policy::members_own_title_and_pronouns(&tx)?;
+        let (planned, mut summary) = reconcile::plan_with(&built.desired, actual, &busy, &held, own);
         summary.orphans_removed = built.orphans.len();
         let mut ops = orphan_ops;
         ops.extend(planned.into_iter().map(|p| p.into_new_op(kind)));
@@ -989,10 +1010,23 @@ pub fn apply_reconcile(
 
 // ── Decision 13: home client and per-App settings ────────────────────
 
+/// What the sweep read of Sew's org policy `identity.managed_fields`
+/// ([`policy`]).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PolicyRead {
+    /// Not read: Sew lacks `k2_managed_avatar`, or the read failed (K2
+    /// keeps what it last saw).
+    NotRead,
+    /// The value Sew showed (`None` = absent, Sew's default).
+    Seen(Option<serde_json::Value>),
+}
+
 /// The sweep's settings step: record the feature flags Sew reported
-/// (`features` from its status; never its version), then queue the
-/// settings it can take and doesn't have yet. Returns the rows queued.
-pub fn apply_settings(kind: &str, sew_features: &[String]) -> Result<usize, String> {
+/// (`features` from its status; never its version) and the managed-fields
+/// policy it showed, then queue the settings it can take and doesn't have
+/// yet (the home client and App settings, the policy, unbinds of removed
+/// Apps' Spaces). Returns the rows queued.
+pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyRead) -> Result<usize, String> {
     if kind != CHAT_KIND {
         return Ok(0);
     }
@@ -1002,8 +1036,13 @@ pub fn apply_settings(kind: &str, sew_features: &[String]) -> Result<usize, Stri
         if features::note(&tx, kind, sew_features, now)? {
             crate::log_debug!("[grant-hook] Sew features: {}", sew_features.join(","));
         }
+        if let PolicyRead::Seen(v) = policy_read {
+            policy::note(&tx, v.as_ref(), now)?;
+        }
         let busy = outbox::busy_subjects(&tx, kind)?;
-        let ops = home::plan(&tx, &busy)?;
+        let mut ops = home::plan(&tx, &busy)?;
+        ops.extend(policy::plan(&tx, &busy)?);
+        ops.extend(app_space::plan_unbinds(&tx, &busy)?);
         let n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
         tx.commit().map_err(|e| format!("settings commit: {e}"))?;
         Ok(n)
@@ -1164,6 +1203,56 @@ pub fn app_space_unbind(
     Ok(r)
 }
 
+/// An App was removed from the box (`service_id` = Sew's `app_id`): K2
+/// forgets its Space bindings (members stay) and, once Sew reports
+/// `space_unbind`, unbinds each Space in Sew too (an orphan: read-only,
+/// export still works; never released by K2). Returns the Spaces. A box
+/// without chat has nothing to do.
+pub fn app_spaces_app_removed(service_id: &str, actor: &str) -> Result<Vec<String>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    let now = outbox::now_secs();
+    let (spaces, queued) = crate::skin::with_skin_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("app removed begin: {e}"))?;
+        let spaces = app_space::app_removed(&tx, service_id, actor, now)?;
+        let mut queued = 0;
+        if !spaces.is_empty() {
+            let busy = outbox::busy_subjects(&tx, CHAT_KIND)?;
+            let mut ops = app_space::plan_unbinds(&tx, &busy)?;
+            ops.retain(|o| spaces.iter().any(|s| o.subject_key == app_space::unbind_subject(s)));
+            queued = outbox::enqueue(&tx, &ops, actor, now)?.len();
+        }
+        tx.commit().map_err(|e| format!("app removed commit: {e}"))?;
+        Ok((spaces, queued))
+    })?;
+    if !spaces.is_empty() {
+        crate::log_debug!(
+            "[grant-hook] App {service_id} removed: {} Space binding(s) forgotten, {queued} Sew unbind(s) queued",
+            spaces.len()
+        );
+        kick();
+    }
+    Ok(spaces)
+}
+
+/// The Sew unbinds K2 asked for (removed Apps' Spaces).
+pub fn app_space_unbinds() -> Result<Vec<app_space::Unbind>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(app_space::unbinds)
+}
+
+/// `title` and `pronouns` are the members' own on this box's Sew
+/// ([`policy::members_own_title_and_pronouns`]).
+pub fn members_own_title_and_pronouns() -> Result<bool, String> {
+    if !skin_store_exists() {
+        return Ok(false);
+    }
+    crate::skin::with_skin_conn(policy::members_own_title_and_pronouns)
+}
+
 /// A new Sew install id: store it and re-provision the owner (the new
 /// install is empty, so the first `owner/set` is allowed, §16.3).
 pub fn note_install_id(kind: &str, install_id: &str) -> Result<bool, String> {
@@ -1199,6 +1288,10 @@ pub fn note_install_id(kind: &str, install_id: &str) -> Result<bool, String> {
             members::forget_all(&tx)?;
             // Decision 13: the new install owes every setting again.
             home::forget_sent(&tx)?;
+            // Sew 0.5.0: its policy is unread, and none of the old Spaces
+            // are there to unbind.
+            policy::forget(&tx)?;
+            app_space::forget_unbinds(&tx)?;
         }
         tx.commit().map_err(|e| format!("install id commit: {e}"))?;
         Ok(changed)
@@ -1227,6 +1320,9 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
         members::after_done(conn, id, result, now)?;
         // Decision 13: Sew has that settings rev now.
         home::after_done(conn, id)?;
+        // Sew 0.5.0: the policy Sew answered with; an orphaned Space.
+        policy::after_done(conn, id, result, now)?;
+        app_space::after_done_unbind(conn, id, result, now)?;
         // K31: a delivered Space op moves the membership ledger on.
         app_space::after_done(conn, id, now)
     })

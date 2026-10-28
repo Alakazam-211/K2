@@ -807,6 +807,9 @@ pub fn app_removed(service_id: &str, actor: &str) -> Result<usize, String> {
     if !off.is_empty() {
         crate::log_debug!("[skin] App {svc} removed: chat switched off for {} people whose only App it was", off.len());
     }
+    // Its Sew Spaces: K2 forgets the bindings (members stay) and Sew
+    // unbinds them (read-only orphans) once it reports `space_unbind`.
+    crate::tool_hook::app_spaces_app_removed(svc, actor)?;
     Ok(off.len())
 }
 

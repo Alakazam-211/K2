@@ -652,6 +652,37 @@ pub struct SpaceMemberRemoveResponse {
     pub removed: bool,
 }
 
+/// `POST` (Sew 0.5.0, flag `space_unbind`): unbind a Space from its App.
+/// The Space becomes an orphan of that App: reads and export still work,
+/// writes answer 422 `invalid_state` reason [`reasons::SPACE_ORPHANED`].
+pub const MGMT_SPACES_UNBIND: &str = "/mgmt/v1/spaces/unbind";
+/// `POST` (Sew 0.5.0) `{space_id, confirm: true}`: forget an orphan's App
+/// so another App may bind it (until then a bind elsewhere answers 409
+/// reason [`reasons::SPACE_BOUND_ELSEWHERE`]). A person's call: K2 never
+/// sends it on its own.
+pub const MGMT_SPACES_RELEASE: &str = "/mgmt/v1/spaces/release";
+
+/// `MgmtSpaceUnbindRequest`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceUnbindRequest {
+    pub space_id: String,
+    pub app_id: String,
+}
+
+/// `MgmtSpaceUnbindResponse` (also the answer to `spaces/release`), read
+/// leniently.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpaceUnbindResponse {
+    pub space_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphaned_from: Option<String>,
+    #[serde(default)]
+    pub changed: bool,
+}
+
 // ── channels over mgmt (`sew_proto::mgmt::channels`, Sew A9, 0.5.0) ──
 
 /// `POST`: a text channel in an App-bound Space, made as the Space's owner.
@@ -761,6 +792,12 @@ pub mod reasons {
     pub const ASSISTANT_PERSON_INACTIVE: &str = "assistant_person_inactive";
     pub const PERSON_IS_GUEST: &str = "person_is_guest";
     pub const PERSON_HAS_ASSISTANTS: &str = "person_has_assistants";
+    /// 422 `invalid_state` (Sew 0.5.0): a write to a Space unbound from its
+    /// App (an orphan). Reads and export still work.
+    pub const SPACE_ORPHANED: &str = "space_orphaned";
+    /// 409 (Sew 0.5.0): a bind to another App while the Space is an orphan
+    /// of one; `spaces/release` first.
+    pub const SPACE_BOUND_ELSEWHERE: &str = "space_bound_elsewhere";
 }
 
 #[cfg(test)]

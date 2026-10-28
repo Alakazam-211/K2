@@ -371,3 +371,91 @@ fn the_reconcile_sweep_plans_app_spaces_too() {
     assert_eq!(r[0].op, "space_member_add");
     assert_eq!(r[0].actor, hook::ACTOR_RECONCILE);
 }
+
+fn unbind_rows() -> Vec<outbox::OutboxRow> {
+    rows().into_iter().filter(|r| r.op == "space_unbind").collect()
+}
+
+/// Sew 0.5.0: removing an App forgets its bindings (members stay, nobody
+/// is removed) and queues Sew's unbind only once Sew reports
+/// `space_unbind`; binding the Space again drops an unsent unbind.
+#[test]
+fn an_app_removed_unbinds_its_spaces_once_sew_can() {
+    let _e = setup();
+    let ann = person("ann");
+    app_user(&ann, "hearth");
+    chat(&ann, "member");
+    bind("hearth", SPACE);
+    bind("hearth", SPACE2);
+    bind("booking", "spc_other1");
+    let add = open_space_rows().into_iter().find(|r| r.op == "space_member_add").expect("add");
+    hook::record_done(&add.id, 200, &added_body(&pext(&ann.id))).unwrap();
+
+    // No flag: K2 forgets the bindings and remembers the wish; nothing queued.
+    let spaces = hook::app_spaces_app_removed("hearth", "system:app-removed").unwrap();
+    assert_eq!(spaces, vec![SPACE2.to_string(), SPACE.to_string()]);
+    let left: Vec<String> = hook::app_spaces().unwrap().into_iter().map(|v| v.binding.app_id).collect();
+    assert_eq!(left, ["booking"], "another App's binding stays");
+    assert!(unbind_rows().is_empty());
+    let u = hook::app_space_unbinds().unwrap();
+    assert_eq!(u.iter().map(|u| (u.space_id.as_str(), u.app_id.as_str(), u.done_at)).collect::<Vec<_>>(), [(SPACE2, "hearth", None), (SPACE, "hearth", None)]);
+    let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
+    assert_eq!((s.removes, s.kept), (0, 2), "members stay (K2 forgets its ledger in both): {s:?}");
+
+    // Bound again before Sew could unbind: that wish goes.
+    bind("hearth", SPACE2);
+    assert_eq!(hook::app_space_unbinds().unwrap().len(), 1);
+
+    // The flag: the sweep's settings step queues exactly one unbind.
+    hook::note_features_for_tests(&["space_unbind"]).unwrap();
+    hook::apply_settings(CHAT_KIND, &["space_unbind".to_string()], &hook::PolicyRead::NotRead).unwrap();
+    let r = unbind_rows();
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!((r[0].subject_key.as_str(), r[0].cause.as_str()), (format!("unbind:{SPACE}").as_str(), "app_removed"));
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&r[0].payload_raw).unwrap(), serde_json::json!({"space_id": SPACE, "app_id": "hearth"}));
+    // Open: a second sweep queues nothing more.
+    hook::apply_settings(CHAT_KIND, &["space_unbind".to_string()], &hook::PolicyRead::NotRead).unwrap();
+    assert_eq!(unbind_rows().len(), 1);
+    hook::record_done(&r[0].id, 200, &format!(r#"{{"space_id":"{SPACE}","orphaned_from":"hearth","changed":true}}"#)).unwrap();
+    let u = hook::app_space_unbinds().unwrap();
+    assert!(u[0].done_at.is_some());
+    assert_eq!(u[0].orphaned_from.as_deref(), Some("hearth"));
+    hook::apply_settings(CHAT_KIND, &["space_unbind".to_string()], &hook::PolicyRead::NotRead).unwrap();
+    assert_eq!(unbind_rows().len(), 1, "done: never again");
+
+    // A new Sew install has none of these Spaces.
+    hook::note_install_id(CHAT_KIND, "1").unwrap();
+    hook::note_install_id(CHAT_KIND, "2").unwrap();
+    assert!(hook::app_space_unbinds().unwrap().is_empty());
+}
+
+/// Sew 0.5.0: the policy op follows what the sweep read; title/pronouns
+/// are the members' only while Sew reports the flag AND shows K2's set.
+#[test]
+fn the_managed_fields_policy_is_planned_from_what_sew_showed() {
+    use serde_json::json;
+    let _e = setup();
+    let flag = ["k2_managed_avatar".to_string()];
+    let policy_rows = || rows().into_iter().filter(|r| r.op == "policy_set").collect::<Vec<_>>();
+    // Not read yet: nothing (K2 never sets blind).
+    hook::apply_settings(CHAT_KIND, &flag, &hook::PolicyRead::NotRead).unwrap();
+    assert!(policy_rows().is_empty());
+    // Absent (Sew's default): one row, once.
+    hook::apply_settings(CHAT_KIND, &flag, &hook::PolicyRead::Seen(None)).unwrap();
+    hook::apply_settings(CHAT_KIND, &flag, &hook::PolicyRead::Seen(None)).unwrap();
+    let r = policy_rows();
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!(r[0].subject_key, "policy:identity.managed_fields");
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&r[0].payload_raw).unwrap(), json!({"changes": {"identity.managed_fields": ["display_name", "avatar"]}}));
+    assert!(!hook::members_own_title_and_pronouns().unwrap());
+    hook::record_done(&r[0].id, 200, r#"{"policies":{"identity.managed_fields":["display_name","avatar"]}}"#).unwrap();
+    assert!(hook::members_own_title_and_pronouns().unwrap());
+    // Seen as K2's (any order): nothing more.
+    hook::apply_settings(CHAT_KIND, &flag, &hook::PolicyRead::Seen(Some(json!(["avatar", "display_name"])))).unwrap();
+    assert_eq!(policy_rows().len(), 1);
+    // The flag gone (a rollback to 0.3.x): nothing sent, and K2 owns
+    // title/pronouns again.
+    hook::apply_settings(CHAT_KIND, &[], &hook::PolicyRead::NotRead).unwrap();
+    assert!(!hook::members_own_title_and_pronouns().unwrap());
+    assert_eq!(policy_rows().len(), 1);
+}

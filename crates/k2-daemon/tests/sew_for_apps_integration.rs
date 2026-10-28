@@ -508,3 +508,216 @@ async fn channel_create_refusals() {
     assert_eq!(channel_posts(&env).len(), n, "none of these reached Sew: {}", env.sew.log());
     env.sew.assert_clean();
 }
+
+// ── Sew 0.5.0: the managed-fields policy (k2_managed_avatar) ─────────
+
+const POLICIES: &str = "/mgmt/v1/policies";
+
+fn policy_calls(env: &Env, method: &str) -> usize {
+    env.sew.calls().iter().filter(|c| c.path == POLICIES && c.method == method).count()
+}
+
+/// Sew 0.5.0: once Sew reports `k2_managed_avatar`, K2 reads the org
+/// policy and makes `identity.managed_fields` = `[display_name, avatar]`
+/// (compared as a set; set once, again only when it drifts or on a new
+/// install). From then on no provision carries `title`/`pronouns`: they are
+/// the member's own. An older Sew never sees the policy call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn managed_fields_policy_follows_the_flag_and_title_pronouns_become_the_members() {
+    use serde_json::json;
+    let env = setup().await;
+    let p = skin::add_principal("ivy").unwrap();
+    let g = chat(&p.id);
+    drain(&env).await;
+    let ext = pext(&p.id);
+
+    // An older Sew (no flag): never read, never set; K2 round-trips the
+    // Sew-local title as before (A8).
+    worker::reconcile_once().await.expect("sweep without the flag");
+    drain(&env).await;
+    assert_eq!((policy_calls(&env, "GET"), policy_calls(&env, "POST")), (0, 0), "{}", env.sew.log());
+    assert!(!hook::members_own_title_and_pronouns().unwrap());
+    env.sew.set_sew_profile(&ext, None, Some("CTO"), None);
+    skin::update_grant_scope(&g.id, "guest", "owner-token").unwrap();
+    drain(&env).await;
+    let flip = env.sew.posts().into_iter().filter(|c| c.body["external_id"] == ext.as_str()).last().unwrap();
+    assert_eq!(flip.body["profile"]["title"], "CTO", "copied back on an older Sew");
+
+    // The flag: read (absent = Sew's default), then set once.
+    env.sew.set_features(&["k2_managed_avatar"]);
+    worker::reconcile_once().await.expect("sweep with the flag");
+    drain(&env).await;
+    assert_eq!(policy_calls(&env, "GET"), 1, "{}", env.sew.log());
+    assert_eq!(policy_calls(&env, "POST"), 1, "{}", env.sew.log());
+    assert_eq!(env.sew.policy("identity.managed_fields"), Some(json!(["display_name", "avatar"])));
+    let set = env.sew.posts().into_iter().find(|c| c.path == POLICIES).unwrap();
+    assert_eq!(set.body, json!({"changes": {"identity.managed_fields": ["display_name", "avatar"]}}));
+    let row = rows().into_iter().find(|r| r.op == "policy_set").expect("a policy_set row (the audit trail)");
+    assert_eq!((row.state.as_str(), row.actor.as_str(), row.cause.as_str()), ("done", "system:reconcile", "reconcile"));
+    assert!(hook::members_own_title_and_pronouns().unwrap(), "Sew's answer showed K2's set");
+
+    // Idle sweep: read again, nothing sent.
+    worker::reconcile_once().await.expect("idle sweep");
+    drain(&env).await;
+    assert_eq!((policy_calls(&env, "GET"), policy_calls(&env, "POST")), (2, 1));
+
+    // Title/pronouns are the member's now: a re-provision carries neither,
+    // and the member's own values stay.
+    env.sew.set_sew_profile(&ext, None, Some("Founder"), Some("she/her"));
+    skin::update_grant_scope(&g.id, "member", "owner-token").unwrap();
+    drain(&env).await;
+    let back = env
+        .sew
+        .posts()
+        .into_iter()
+        .filter(|c| c.body["external_id"] == ext.as_str() && c.path.ends_with("/provision"))
+        .last()
+        .unwrap();
+    assert_eq!(back.body["guest"], false);
+    assert!(back.body["profile"].get("title").is_none() && back.body["profile"].get("pronouns").is_none(), "{}", back.body);
+    let m = env.sew.member(&ext).unwrap();
+    assert_eq!((m.title.as_deref(), m.pronouns.as_deref()), (Some("Founder"), Some("she/her")));
+    // A reconcile repair (made a guest behind K2's back): the same.
+    env.sew.with_members(|ms| ms.get_mut(&ext).unwrap().guest = true);
+    worker::reconcile_once().await.expect("repair sweep");
+    drain(&env).await;
+    let m = env.sew.member(&ext).unwrap();
+    assert!(!m.guest, "repaired: {}", env.sew.log());
+    assert_eq!((m.title.as_deref(), m.pronouns.as_deref()), (Some("Founder"), Some("she/her")));
+
+    // The same set in another order is K2's: nothing sent.
+    env.sew.set_policy("identity.managed_fields", Some(json!(["avatar", "display_name"])));
+    worker::reconcile_once().await.expect("sweep, reordered");
+    drain(&env).await;
+    assert_eq!(policy_calls(&env, "POST"), 1, "order is not significant");
+
+    // An admin put Sew's default back: K2 sets it again.
+    env.sew.set_policy("identity.managed_fields", Some(json!(["display_name", "title", "pronouns"])));
+    worker::reconcile_once().await.expect("sweep after drift");
+    assert!(!hook::members_own_title_and_pronouns().unwrap(), "not K2's until Sew shows it");
+    drain(&env).await;
+    assert_eq!(policy_calls(&env, "POST"), 2);
+    assert_eq!(env.sew.policy("identity.managed_fields"), Some(json!(["display_name", "avatar"])));
+
+    // A new install (its default shown explicitly): set again.
+    env.sew.reinstall("246813579");
+    env.sew.set_policy_default_shown(true);
+    worker::reconcile_once().await.expect("sweep after reinstall");
+    drain(&env).await;
+    assert_eq!(policy_calls(&env, "POST"), 3, "{}", env.sew.log());
+    assert_eq!(env.sew.policy("identity.managed_fields"), Some(json!(["display_name", "avatar"])));
+    assert!(env.sew.member(&ext).is_some(), "re-provisioned");
+    env.sew.assert_clean();
+}
+
+/// A failed policy read fails nothing else and sends nothing; the next
+/// read decides.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_policy_read_sends_nothing() {
+    let env = setup().await;
+    env.sew.set_features(&["k2_managed_avatar"]);
+    env.sew.set_policy_get_fails(true);
+    let r = worker::reconcile_once().await.expect("sweep");
+    assert!(r.failed.is_empty(), "{:?}", r.failed);
+    drain(&env).await;
+    assert_eq!(policy_calls(&env, "POST"), 0, "{}", env.sew.log());
+    assert!(!hook::members_own_title_and_pronouns().unwrap());
+    env.sew.set_policy_get_fails(false);
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    assert_eq!(policy_calls(&env, "POST"), 1, "{}", env.sew.log());
+    assert!(hook::members_own_title_and_pronouns().unwrap());
+    env.sew.assert_clean();
+}
+
+// ── Sew 0.5.0: a removed App's Spaces are unbound in Sew (space_unbind) ─
+
+const ORPHAN: &str = "48831765147549711";
+
+/// An App with one user (`who`) who has chat, its Space bound on both sides.
+async fn app_with_space(env: &Env, who: &str, space: &str) -> (String, String) {
+    let svc = uuid::Uuid::new_v4().to_string();
+    let u = skin::add_principal_for_app(who, None, &svc, None, "test").unwrap();
+    chat(&u.id);
+    drain(env).await;
+    env.sew.add_app_space(space, &svc);
+    hook::app_space_bind(&svc, space, "owner-token").unwrap();
+    drain(env).await;
+    assert!(env.sew.space(space).unwrap().members.contains(&pext(&u.id)), "{}", env.sew.log());
+    (svc, u.id)
+}
+
+/// Sew 0.5.0: removing an App forgets its bindings (members stay) and
+/// unbinds each Space in Sew: a read-only orphan, never released by K2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn removing_an_app_unbinds_its_spaces_in_sew() {
+    let env = setup().await;
+    env.sew.set_features(&["space_unbind"]);
+    worker::reconcile_once().await.expect("sweep with the flag");
+    let (svc, uid) = app_with_space(&env, "jon", ORPHAN).await;
+
+    skin::app_chat::app_removed(&svc, "system:app-removed").unwrap();
+    assert!(hook::app_spaces().unwrap().is_empty(), "K2 forgot the binding");
+    drain(&env).await;
+    let sp = env.sew.space(ORPHAN).unwrap();
+    assert_eq!((sp.app_id.as_deref(), sp.orphaned_from.as_deref()), (None, Some(svc.as_str())), "{}", env.sew.log());
+    assert!(sp.members.contains(&pext(&uid)), "members stay (read-only)");
+    let un = env.sew.posts().into_iter().find(|c| c.path == "/mgmt/v1/spaces/unbind").unwrap();
+    assert_eq!(un.body, serde_json::json!({"space_id": ORPHAN, "app_id": svc}));
+    assert_eq!(un.actor.as_deref(), Some("system:app-removed"));
+    let row = rows().into_iter().find(|r| r.op == "space_unbind").unwrap();
+    assert_eq!(
+        (row.state.as_str(), row.cause.as_str(), row.subject_key.as_str()),
+        ("done", "app_removed", format!("unbind:{ORPHAN}").as_str())
+    );
+    let u = hook::app_space_unbinds().unwrap();
+    assert_eq!(u.len(), 1);
+    assert!(u[0].done_at.is_some());
+    assert_eq!(u[0].orphaned_from.as_deref(), Some(svc.as_str()));
+
+    // Later sweeps never write to the orphan (no adds, no removes) and
+    // never unbind it again.
+    let before = env.sew.posts().len();
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    let after: Vec<_> = env.sew.posts().into_iter().skip(before).filter(|c| c.path.contains("/spaces/")).map(|c| c.path).collect();
+    assert!(after.is_empty(), "{after:?}");
+    assert!(env.sew.calls().iter().all(|c| c.status != 422), "{}", env.sew.log());
+    // Removing it again finds nothing to do.
+    skin::app_chat::app_removed(&svc, "system:app-removed").unwrap();
+    assert_eq!(hook::app_space_unbinds().unwrap().len(), 1);
+    // assert_clean also proves K2 never sent `spaces/release`.
+    env.sew.assert_clean();
+}
+
+/// An App removed while Sew lacks `space_unbind` (0.3.x): K2 keeps the
+/// wish and unbinds after the upgrade. A Space bound again before then is
+/// never orphaned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_app_removed_before_the_upgrade_is_unbound_after_it() {
+    let env = setup().await;
+    let (svc, _) = app_with_space(&env, "kim", ORPHAN).await;
+    let (svc2, _) = app_with_space(&env, "lou", SPACE).await;
+    skin::app_chat::app_removed(&svc, "system:app-removed").unwrap();
+    skin::app_chat::app_removed(&svc2, "system:app-removed").unwrap();
+    worker::reconcile_once().await.expect("sweep without the flag");
+    drain(&env).await;
+    assert!(env.sew.posts().iter().all(|c| c.path != "/mgmt/v1/spaces/unbind"), "an older Sew never sees it");
+    assert_eq!(env.sew.space(ORPHAN).unwrap().app_id.as_deref(), Some(svc.as_str()));
+    let u = hook::app_space_unbinds().unwrap();
+    assert_eq!(u.len(), 2);
+    assert!(u.iter().all(|u| u.done_at.is_none()));
+    // The second App's Space is bound again (the same App id) before the
+    // upgrade: its unbind is dropped.
+    hook::app_space_bind(&svc2, SPACE, "owner-token").unwrap();
+    assert_eq!(hook::app_space_unbinds().unwrap().len(), 1);
+
+    env.sew.set_features(&["space_unbind"]);
+    worker::reconcile_once().await.expect("sweep after the upgrade");
+    drain(&env).await;
+    assert_eq!(env.sew.space(ORPHAN).unwrap().orphaned_from.as_deref(), Some(svc.as_str()), "{}", env.sew.log());
+    assert_eq!(env.sew.space(SPACE).unwrap().app_id.as_deref(), Some(svc2.as_str()), "bound again: never orphaned");
+    let unbinds: Vec<_> = env.sew.posts().into_iter().filter(|c| c.path == "/mgmt/v1/spaces/unbind").collect();
+    assert_eq!(unbinds.len(), 1, "{}", env.sew.log());
+    env.sew.assert_clean();
+}

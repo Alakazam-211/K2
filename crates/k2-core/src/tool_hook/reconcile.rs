@@ -215,6 +215,18 @@ pub fn plan(
     busy: &HashSet<String>,
     held: &HashMap<String, Option<String>>,
 ) -> (Vec<PlannedOp>, Summary) {
+    plan_with(desired, actual, busy, held, false)
+}
+
+/// [`plan`], knowing whether `title`/`pronouns` are the members' own (Sew
+/// 0.5.0 with K2's managed-fields policy: no provision carries them).
+pub fn plan_with(
+    desired: &[Desired],
+    actual: &[MgmtPrincipal],
+    busy: &HashSet<String>,
+    held: &HashMap<String, Option<String>>,
+    members_own_title_and_pronouns: bool,
+) -> (Vec<PlannedOp>, Summary) {
     let mut out = Vec::new();
     let mut s = Summary::default();
     let by_ext: HashMap<String, &MgmtPrincipal> = actual
@@ -245,7 +257,7 @@ pub fn plan(
         // deactivated one: provision reactivates and sets the profile)
         // round-trips the fields K2 does not own.
         let mut filled = d.clone();
-        chat::fill_provision_from_member(&mut filled.request, m);
+        chat::fill_provision_from_member_as(&mut filled.request, m, members_own_title_and_pronouns);
         if m.deactivated {
             out.push(provision(&filled));
             s.provisioned += 1;

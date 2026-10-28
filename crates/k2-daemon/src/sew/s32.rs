@@ -716,9 +716,12 @@ pub fn ship_tick_with(env: &Env, fs: &dyn ShipFs) -> Option<String> {
 
 fn app_spaces_list() -> R<Value> {
     let v = k2_core::tool_hook::app_spaces().map_err(|e| no("db_error", 500, e))?;
+    // Sew 0.5.0: Spaces of removed Apps, unbound in Sew (read-only).
+    let unbound = k2_core::tool_hook::app_space_unbinds().map_err(|e| no("db_error", 500, e))?;
     Ok(json!({
         "ok": true,
         "spaces": v,
+        "unbound": unbound,
         "note": "members come only from each App's user grants (k2 app grant); Admin Access never adds anyone",
     }))
 }
@@ -744,6 +747,15 @@ fn app_space_bind(env: &Env, who: &Who, v: &Value) -> R<Value> {
     let body = json!({"space_id": space, "app_id": app});
     match sup::mgmt(env, "POST", k2_core::tool_hook::sew_wire::MGMT_SPACES_BIND, Some(&body)) {
         Ok(_) => {}
+        // Sew 0.5.0: an orphan (unbound from a removed App) binds to another
+        // App only after a person releases it in Sew.
+        Err(super::ops::MgmtError::Status(409, b)) if b.contains(k2_core::tool_hook::sew_wire::reasons::SPACE_BOUND_ELSEWHERE) => {
+            return Err(no(
+                "space_bound_elsewhere",
+                409,
+                format!("Sew keeps that Space for the App it was unbound from (read-only); a person must release it in Sew before another App can bind it: {b}"),
+            ));
+        }
         Err(super::ops::MgmtError::Status(409, b)) => {
             return Err(no("space_bound", 409, format!("Sew says that Space belongs to another App: {b}")));
         }

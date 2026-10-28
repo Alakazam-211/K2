@@ -4,9 +4,11 @@
 // subdomain it owns under k2.dev via the frpc reverse tunnel.
 //
 // MVP (buildable now, no control-plane changes):
-//   - tunnel config form: token + subdomain + serverAddr (default
-//     178.156.232.105:7000) → Save (POST /cli/tunnel/config; the token is
-//     redacted on read → tokenSet:bool, never echoed back)
+//   - tunnel config form: token + subdomain + an optional relay address
+//     (Advanced; the daemon owns the default, relay.k2.dev since 0.46.6) →
+//     Save (POST /cli/tunnel/config; the token is redacted on read →
+//     tokenSet:bool, never echoed back). The relay address is sent only
+//     when the person edited it, never on a subdomain bind.
 //   - Start / Stop + live status (GET /cli/tunnel/status) + public URL
 //     https://<sub>.k2.dev + a "frpc not installed" hint surfaced from the
 //     connector's error.
@@ -76,8 +78,58 @@ import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 import { isAirgap } from '@/lib/airgap'
 
-const DEFAULT_SERVER_ADDR = '178.156.232.105'
-const DEFAULT_SERVER_PORT = 7000
+// 0.46.6: no relay address lives here. The daemon owns the default
+// (relay.k2.dev) and the relay list; the form shows what the daemon
+// stores and only placeholders otherwise (an empty field is never sent).
+const RELAY_PLACEHOLDER = 'relay.k2.dev'
+const PORT_PLACEHOLDER = '7000'
+
+/** POST /cli/tunnel/config body for a subdomain bind (account flow). No
+ *  relay address: like `k2 connect login`, a bind never pins one, so the
+ *  daemon keeps its own (relay.k2.dev, or the list k2.dev serves). */
+export function bindConfigBody(
+  sub: { label: string; tunnel_token: string },
+  deviceId: string,
+  deviceLabel: string,
+): Record<string, unknown> {
+  return {
+    subdomain: sub.label,
+    token: sub.tunnel_token,
+    // Persist this device's claim identity now so a later auto-start /
+    // headless boot can renew the lease without the renderer (K2 #674).
+    deviceId,
+    deviceLabel,
+  }
+}
+
+/** POST /cli/tunnel/config body for the Advanced "Save". The relay
+ *  address and port go only when the person edited them (`relayEdited`),
+ *  so a save never re-pins what the field happened to show. */
+export function manualConfigBody(form: {
+  serverAddr: string
+  serverPort: string
+  subdomain: string
+  token: string
+  relayEdited: boolean
+}): { ok: true; body: Record<string, unknown> } | { ok: false; error: string } {
+  const body: Record<string, unknown> = { subdomain: form.subdomain.trim() }
+  if (form.relayEdited) {
+    const addr = form.serverAddr.trim()
+    const port = form.serverPort.trim()
+    if (addr) body.serverAddr = addr
+    if (port) {
+      const portNum = Number(port)
+      if (!Number.isInteger(portNum) || portNum <= 0 || portNum > 65535) {
+        return { ok: false, error: 'Server port must be 1–65535' }
+      }
+      body.serverPort = portNum
+    }
+  }
+  // Only send the token when the user typed one (empty string would
+  // CLEAR it server-side; undefined leaves the saved token untouched).
+  if (form.token.trim()) body.token = form.token.trim()
+  return { ok: true, body }
+}
 
 // Keychain coordinates for the k2.dev ACCOUNT session. Kept distinct from
 // the host-token service (`com.k2so.connect.host-token`) so the two never
@@ -443,8 +495,11 @@ export function K2ConnectSection({
   /** Which host panel to show. Shell owns the peer tabs. */
   panel?: K2ConnectHostPanel
 }): React.JSX.Element {
-  const [serverAddr, setServerAddr] = useState(DEFAULT_SERVER_ADDR)
-  const [serverPort, setServerPort] = useState(String(DEFAULT_SERVER_PORT))
+  const [serverAddr, setServerAddr] = useState('')
+  const [serverPort, setServerPort] = useState('')
+  // True once the person typed in the relay fields; only then does Save
+  // send them (0.46.6: a save never re-pins the address it was shown).
+  const [relayEdited, setRelayEdited] = useState(false)
   const [subdomain, setSubdomain] = useState('')
   const [token, setToken] = useState('')
   const [tokenSet, setTokenSet] = useState(false)
@@ -566,8 +621,9 @@ export function K2ConnectSection({
       const res = await tunnelGet('config')
       if (res.ok) {
         const cfg = (await res.json()) as TunnelConfigView
-        setServerAddr(cfg.serverAddr || DEFAULT_SERVER_ADDR)
-        setServerPort(String(cfg.serverPort || DEFAULT_SERVER_PORT))
+        setServerAddr(cfg.serverAddr || '')
+        setServerPort(cfg.serverPort ? String(cfg.serverPort) : '')
+        setRelayEdited(false)
         setSubdomain(cfg.subdomain || '')
         setTokenSet(cfg.tokenSet)
         setAutoStart(cfg.autoStart ?? false)
@@ -960,20 +1016,13 @@ export function K2ConnectSection({
     setBusy(true)
     setError(null)
     setSavedMsg(null)
-    const portNum = Number(serverPort)
-    if (!Number.isInteger(portNum) || portNum <= 0 || portNum > 65535) {
-      setError('Server port must be 1–65535')
+    const built = manualConfigBody({ serverAddr, serverPort, subdomain, token, relayEdited })
+    if (!built.ok) {
+      setError(built.error)
       setBusy(false)
       return
     }
-    // Only send the token when the user typed one (empty string would
-    // CLEAR it server-side; undefined leaves the saved token untouched).
-    const body: Record<string, unknown> = {
-      serverAddr: serverAddr.trim(),
-      serverPort: portNum,
-      subdomain: subdomain.trim(),
-    }
-    if (token.trim()) body.token = token.trim()
+    const body = built.body
     try {
       const res = await tunnelPost('config', body)
       if (!res.ok) {
@@ -983,6 +1032,9 @@ export function K2ConnectSection({
       const cfg = (await res.json()) as TunnelConfigView
       setTokenSet(cfg.tokenSet)
       setToken('') // never keep the secret in the field after save
+      setServerAddr(cfg.serverAddr || '')
+      setServerPort(cfg.serverPort ? String(cfg.serverPort) : '')
+      setRelayEdited(false)
       setSavedMsg('Saved')
       setTimeout(() => setSavedMsg(null), 1500)
     } catch (e) {
@@ -1207,16 +1259,7 @@ export function K2ConnectSection({
     setBusy(true)
     setError(null)
     try {
-      const res = await tunnelPost('config', {
-        serverAddr: serverAddr.trim() || DEFAULT_SERVER_ADDR,
-        serverPort: Number(serverPort) || DEFAULT_SERVER_PORT,
-        subdomain: sub.label,
-        token: sub.tunnel_token,
-        // Persist this device's claim identity now so a later auto-start /
-        // headless boot can renew the lease without the renderer (K2 #674).
-        deviceId,
-        deviceLabel: deviceLabel ?? '',
-      })
+      const res = await tunnelPost('config', bindConfigBody(sub, deviceId, deviceLabel ?? ''))
       if (!res.ok) {
         setError(await errText(res))
         return
@@ -1742,16 +1785,22 @@ export function K2ConnectSection({
                   <input
                     className={inputCls}
                     style={{ maxWidth: 150 }}
-                    placeholder="server address"
+                    placeholder={RELAY_PLACEHOLDER}
                     value={serverAddr}
-                    onChange={(e) => setServerAddr(e.target.value)}
+                    onChange={(e) => {
+                      setServerAddr(e.target.value)
+                      setRelayEdited(true)
+                    }}
                   />
                   <input
                     className={inputCls}
                     style={{ maxWidth: 64 }}
-                    placeholder="port"
+                    placeholder={PORT_PLACEHOLDER}
                     value={serverPort}
-                    onChange={(e) => setServerPort(e.target.value)}
+                    onChange={(e) => {
+                      setServerPort(e.target.value)
+                      setRelayEdited(true)
+                    }}
                   />
                 </div>
               </SettingRow>

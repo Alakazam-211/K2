@@ -38386,6 +38386,14 @@ PRESENCE
   k2 doc watch notes.md        each change as it lands, with who made it (Ctrl-C)
   k2 doc open / leave          stay present between verbs / go now
 
+HISTORY (needs the history right)
+  k2 doc log notes.md                 changes (who, how, +/-) and versions, newest first
+  k2 doc revert 812 notes.md          reverse change 812 days later (yours, made for you,
+                                      or as an owner); too old = exit 8, restore instead
+  k2 doc versions · show --version V · diff --version V [--to W]
+  k2 doc restore --version V notes.md a NEW change by you; undo reverses it
+  k2 doc undo --partial               undo what still can be, report the rest (exit 1)
+
 RIGHTS
   Your own workspace: read, edit and history. Another workspace: it must
   be connected to yours (k2 connections) AND a person must share the file
@@ -38406,7 +38414,8 @@ EXITS
   0 ok · 1 the tool's "no" (grep found nothing, diff differs, a patch or
   write conflicted, the doc moved: read again) or daemon unreachable ·
   2 bad usage / unsupported flag / too many edits (retry) · 3 refused ·
-  4 no such file, or it can't be a live doc. Errors end with a JSON line
+  4 no such file or change, or it can't be a live doc · 5 leased ·
+  6 the docs store failed · 8 too old. Errors end with a JSON line
   {"error":{"code","hint","status"}} on stderr.
 EOF
 }
@@ -71759,14 +71768,19 @@ Edit (each is one change; your own `undo` reverts it):
   k2 doc replace --lines a,b|--range L:C-L:C <f> < text  (or --text "...")
   k2 doc delete --lines a,b|--range L:C-L:C <f>
   k2 doc write --base V|live <f> < whole-file   three-way merge from version V
-  k2 doc undo [--steps N] <f> · redo [--steps N] <f>
+  k2 doc undo [--steps N] [--partial|--drop] [--for <person>] <f> · redo [--steps N] <f>
+  k2 doc revert <change> [--partial] <f>   reverse one change from the log, days later
 Presence:
   k2 doc who <f> · follow <name> <f> · cursor --at L:C [--to L:C] <f>
   k2 doc open <f> · leave <f>         stay present / leave now
   k2 doc watch <f>                    print each change as it lands (also: tail -f)
 State and history:
   k2 doc status [<f>] · flush <f>     disk state; write back now
-  k2 doc log <f>                      versions (needs the history right)
+History (needs the history right):
+  k2 doc log [--by P] [--since 2h] [-n N] [--pending] [--for P|me] <f>   changes + versions
+  k2 doc versions <f> · show --version V <f> · diff --version V [--to W] [-U N] <f>
+  k2 doc restore --version V <f>      forward: a new change you can undo
+  k2 doc version --name "before launch" [--version V] <f>
   k2 doc approvals [--pending] [--mine] <f> · approve|decline <change> <f>
 Sharing with another workspace (people only):
   k2 doc share <file-or-folder> --with <ws> [--write] [--history] -w <ws>
@@ -71782,8 +71796,10 @@ Exit: 0 ok · 1 the tool's "no" (grep found nothing, diff differs, a patch
 or write conflicted, the doc moved) or the daemon is unreachable · 2 bad
 usage, unsupported flag, rate limited · 3 refused (not_connected,
 doc_not_shared, doc_forbidden, history_forbidden …; the last line says how
-to ask) · 4 no such file, or it can't be a live doc (declined: not
-Markdown, a secret, too large). See `k2 study docs`.
+to ask) · 4 no such file or change, or it can't be a live doc (declined:
+not Markdown, a secret, too large) · 5 leased · 6 the docs store failed ·
+8 too old (a revert past the window: restore a version instead; a write
+base no longer kept: read again). See `k2 study docs`.
 EOF
 }
 
@@ -71832,9 +71848,13 @@ elif raw.strip():
     hint = raw.strip()[:300]
 if status == "000":
     code, hint = "daemon_unreachable", "no answer from the K2 daemon"
+# The daemon names the exit for every kit error (error.exit, the kit'"'"'s
+# K-EXIT-1 table); K2'"'"'s own refusals go by status.
 rc = {"400": 2, "401": 3, "403": 3, "404": 4, "405": 2, "413": 2, "422": 4, "429": 2}.get(status, 1)
 if status == "409":
-    rc = {"not_joined": 2, "bad_approval": 2, "pack_mismatch": 4}.get(code, 1)
+    rc = {"not_joined": 2, "bad_approval": 2, "pack_mismatch": 4, "held": 2, "revert_too_old": 8, "base_expired": 8}.get(code, 1)
+if isinstance(v, dict) and isinstance(v.get("error"), dict) and isinstance(v["error"].get("exit"), int):
+    rc = v["error"]["exit"]
 if not hint:
     hint = "the daemon refused (HTTP %s)" % status
 if not as_json:
@@ -71910,7 +71930,7 @@ if path:
     q.append(("path", path))
 if ob:
     q.append(("onBehalfOf", ob))
-q += list(zip(rest[0::2], rest[1::2]))
+q += [(k, v) for k, v in zip(rest[0::2], rest[1::2]) if v != ""]
 print(urllib.parse.urlencode(q))
 PY
 }
@@ -72124,6 +72144,129 @@ sys.stdout.flush()
     done
 }
 
+# An undo / redo / revert answer: what applied, what was skipped (exit 1).
+_doc_print_undo() {
+    local verb="$1"
+    if [ "${_DOC_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_DOC_BODY"
+        python3 -c 'import json,sys; sys.exit(int(json.loads(sys.stdin.read()).get("exit", 0)))' <<<"$_DOC_BODY"
+        exit $?
+    fi
+    printf '%s' "$_DOC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+verb = sys.argv[1]
+if v.get("nothing"):
+    print("nothing to %s" % verb, file=sys.stderr)
+elif v.get("historyLost") or v.get("clearedByPurge"):
+    print(v.get("hint", "no undo history"), file=sys.stderr)
+elif v.get("dropped") is not None:
+    print("dropped the top step (change %s); nothing applied" % v["dropped"], file=sys.stderr)
+else:
+    r = v.get("result") or {}
+    print("%s %s step(s) (+%s -%s) · v%s" % (verb, v.get("steps", 1), r.get("linesAdded", 0), r.get("linesRemoved", 0), r.get("version")), file=sys.stderr)
+    for c in v.get("skipped") or []:
+        ln = c.get("lines") or ["?", "?"]
+        print("skipped lines %s-%s (%s): changed by someone since" % (ln[0], ln[1], c.get("kind")), file=sys.stderr)
+    if v.get("blocked"):
+        print("stopped: the next step overlaps later edits", file=sys.stderr)
+sys.exit(int(v.get("exit", 0)))
+' "$verb"
+    exit $?
+}
+
+# History reads and writes: versions, show, restore, version --name, revert.
+_doc_history() {
+    local verb="$1"; shift
+    local ver="" name="" partial=@false
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --version) ver="${2:-}"; shift 2 ;;
+            --version=*) ver="${1#*=}"; shift ;;
+            --name) name="${2:-}"; shift 2 ;;
+            --name=*) name="${1#*=}"; shift ;;
+            --partial) partial=@true; shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    case "$ver" in *[!0-9]*) _doc_die usage "--version takes a version id (k2 doc versions)" ;; esac
+    _doc_parse "${rest[@]}"
+    local path change=""
+    if [ "$verb" = revert ]; then
+        [ ${#_DOC_ARGS[@]} -eq 2 ] || _doc_die usage "k2 doc revert <change> [--partial] <file.md>"
+        change="${_DOC_ARGS[0]}"
+        case "$change" in ''|*[!0-9]*) _doc_die usage "the change is a number (k2 doc log)" ;; esac
+        path="$(_doc_path "${_DOC_ARGS[1]}")"
+    else
+        _doc_one_path "$verb"; path="$_DOC_PATH"
+    fi
+    case "$verb" in
+        versions)
+            _doc_call GET /cli/docs/versions "$(_doc_query "$path")"
+            _doc_print_json_or '
+import json, sys, time
+for x in json.load(sys.stdin).get("versions") or []:
+    t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime((x.get("atMs") or 0) / 1000))
+    name = (" \"%s\"" % x["name"]) if x.get("name") else ""
+    print("%-6s %s  at change %-6s %-16s%s  %s" % (x.get("id"), t, x.get("version"), x.get("reason"), name, ", ".join(x.get("authors") or [])))
+' ;;
+        show)
+            [ -n "$ver" ] || _doc_die usage "k2 doc show --version V <file.md>"
+            _doc_call GET /cli/docs/show "$(_doc_query "$path" version "$ver")"
+            if [ "${_DOC_JSON:-0}" = "1" ]; then printf '%s\n' "$_DOC_BODY"; return 0; fi
+            printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("text", ""))' ;;
+        restore)
+            [ -n "$ver" ] || _doc_die usage "k2 doc restore --version V <file.md>"
+            _doc_call POST /cli/docs/restore "$(_doc_body "$path" version "@int:$ver")"
+            _doc_print_json_or '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("result") or {}
+print("restored version %s as a new change (+%s -%s) · v%s; k2 doc undo reverses it" % (v.get("restored"), r.get("linesAdded", 0), r.get("linesRemoved", 0), r.get("version")), file=sys.stderr)
+' ;;
+        version)
+            [ -n "$name" ] || _doc_die usage "k2 doc version --name \"<name>\" [--version V] <file.md>"
+            if [ -n "$ver" ]; then
+                _doc_call POST /cli/docs/name "$(_doc_body "$path" name "$name" version "@int:$ver")"
+            else
+                _doc_call POST /cli/docs/name "$(_doc_body "$path" name "$name")"
+            fi
+            _doc_print_json_or 'import json,sys; v=json.load(sys.stdin); print("version %s named \"%s\"" % (v.get("version"), v.get("name")))' ;;
+        revert)
+            _doc_call POST /cli/docs/revert "$(_doc_body "$path" change "@int:$change" partial "$partial")"
+            _doc_print_undo revert ;;
+    esac
+}
+
+# `diff --version V [--to W] [-U N]`: a unified diff between versions (or a
+# version and the live doc). Exit 1 when they differ.
+_doc_history_diff() {
+    local from="" to="" ctx=""
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --version) from="${2:-}"; shift 2 ;;
+            --version=*) from="${1#*=}"; shift ;;
+            --to) to="${2:-}"; shift 2 ;;
+            -U) ctx="${2:-}"; shift 2 ;;
+            -u) shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    case "$from$to$ctx" in *[!0-9]*) _doc_die usage "--version, --to and -U take numbers" ;; esac
+    _doc_parse "${rest[@]}"
+    _doc_one_path diff; local path="$_DOC_PATH"
+    _doc_call GET /cli/docs/diff "$(_doc_query "$path" from "$from" to "$to" context "$ctx")"
+    if [ "${_DOC_JSON:-0}" = "1" ]; then
+        printf '%s\n' "$_DOC_BODY"
+    else
+        printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("text", ""))'
+    fi
+    python3 -c 'import json,sys; sys.exit(int(json.loads(sys.stdin.read()).get("exit", 0)))' <<<"$_DOC_BODY"
+    exit $?
+}
+
 cmd_doc() {
     local verb="${1:-}"
     if [ -z "$verb" ] || _wants_help "$@"; then
@@ -72132,8 +72275,20 @@ cmd_doc() {
     fi
     shift
     case "$verb" in
-        cat|head|wc|grep|sed|diff|view|patch|apply|append|insert|replace|delete)
+        diff)
+            # `diff --version V`: the doc's history; otherwise the text tool
+            # (your copy on stdin vs the doc).
+            local a hist=0
+            for a in "$@"; do case "$a" in --version|--version=*) hist=1 ;; esac; done
+            if [ "$hist" = 1 ]; then
+                _doc_history_diff "$@"
+            else
+                _doc_tool diff "$@"
+            fi ;;
+        cat|head|wc|grep|sed|view|patch|apply|append|insert|replace|delete)
             _doc_tool "$verb" "$@" ;;
+        versions|show|restore|version|revert)
+            _doc_history "$verb" "$@" ;;
         tail)
             local a f=0
             for a in "$@"; do case "$a" in -f|--follow) f=1 ;; esac; done
@@ -72200,28 +72355,72 @@ if a:
     print("on behalf of %s: %s" % (a.get("onBehalfOf"), a.get("state")), file=sys.stderr)
 ' ;;
         undo|redo)
-            local steps=1
+            local steps=1 mode="all" for_p=""
             local -a rest=()
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --steps) steps="${2:-}"; shift 2 ;;
                     --steps=*) steps="${1#*=}"; shift ;;
+                    --partial) mode="partial"; shift ;;
+                    --drop) mode="drop"; shift ;;
+                    --for) for_p="${2:-}"; shift 2 ;;
+                    --for=*) for_p="${1#*=}"; shift ;;
                     *) rest+=("$1"); shift ;;
                 esac
             done
             case "$steps" in ''|*[!0-9]*) _doc_die usage "--steps needs a number" ;; esac
             _doc_parse "${rest[@]}"
             _doc_one_path "$verb"; local path="$_DOC_PATH"
-            _doc_call POST "/cli/docs/$verb" "$(_doc_body "$path" steps "@int:$steps")"
+            _doc_call POST "/cli/docs/$verb" "$(_doc_body "$path" steps "@int:$steps" mode "$mode" forPerson "$for_p")"
+            _doc_print_undo "$verb" ;;
+        log)
+            local by="" since="" n="" pend=@false for_p=""
+            local -a rest=()
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --by) by="${2:-}"; shift 2 ;;
+                    --since) since="${2:-}"; shift 2 ;;
+                    -n) n="${2:-}"; shift 2 ;;
+                    --pending) pend=@true; shift ;;
+                    --for|--on-behalf-of) for_p="${2:-}"; shift 2 ;;
+                    *) rest+=("$1"); shift ;;
+                esac
+            done
+            case "$n" in *[!0-9]*) _doc_die usage "-n needs a number" ;; esac
+            local since_ms=""
+            if [ -n "$since" ]; then
+                since_ms="$(python3 -c '
+import re, sys, time
+s = sys.argv[1]
+m = re.fullmatch(r"(\d+)([smhdw])", s)
+if not m:
+    sys.exit(1)
+mult = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[m.group(2)]
+print(int((time.time() - int(m.group(1)) * mult) * 1000))
+' "$since")" || _doc_die usage "--since takes a duration: 30m, 2h, 7d"
+            fi
+            _doc_parse "${rest[@]}"
+            _doc_one_path log; local path="$_DOC_PATH"
+            _doc_call GET /cli/docs/log "$(_doc_query "$path" by "$by" sinceMs "$since_ms" n "$n" pending "$([ "$pend" = @true ] && echo 1 || echo 0)" forPerson "$for_p")"
             _doc_print_json_or '
-import json, sys
+import json, sys, time
 v = json.load(sys.stdin)
-if v.get("nothing"):
-    print("nothing to %s" % sys.argv[1], file=sys.stderr)
-else:
-    r = v.get("result") or {}
-    print("%s %s step(s) · v%s" % (sys.argv[1], v.get("steps"), r.get("version")), file=sys.stderr)
-' "$verb" ;;
+rows = v.get("log") or []
+if not rows:
+    print("No history.")
+for x in rows:
+    t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime((x.get("atMs") or 0) / 1000))
+    if x.get("type") == "version":
+        name = (" \"%s\"" % x["name"]) if x.get("name") else ""
+        print("  version %-5s %s  %s%s" % (x.get("id"), t, x.get("reason"), name))
+    else:
+        who = x.get("author") or "?"
+        if x.get("onBehalfOf"):
+            who += " for %s (%s)" % (x["onBehalfOf"], x.get("approval") or "pending")
+        of = (" of %s" % x["of"]) if x.get("of") is not None else ""
+        print("change %-6s %s  %-8s%s +%s -%s  %s via %s" % (x.get("change"), t, x.get("kind"), of,
+              x.get("linesAdded", 0), x.get("linesRemoved", 0), who, x.get("via")))
+' ;;
         status)
             _doc_parse "$@"
             if [ ${#_DOC_ARGS[@]} -eq 0 ]; then
@@ -72269,18 +72468,6 @@ elif verb == "open":
 else:
     print("left %s" % v["doc"]["path"])
 ' "$verb" ;;
-        log)
-            _doc_parse "$@"
-            _doc_one_path log; local path="$_DOC_PATH"
-            _doc_call GET /cli/docs/log "$(_doc_query "$path")"
-            _doc_print_json_or '
-import json, sys, time
-v = json.load(sys.stdin)
-for x in v.get("versions") or []:
-    t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime((x.get("atMs") or 0) / 1000))
-    name = (" \"%s\"" % x["name"]) if x.get("name") else ""
-    print("v%-6s %s  %-15s%s  %s" % (x.get("version"), t, x.get("reason"), name, ", ".join(x.get("authors") or [])))
-' ;;
         approvals)
             local pend="" mine=""
             local -a rest=()

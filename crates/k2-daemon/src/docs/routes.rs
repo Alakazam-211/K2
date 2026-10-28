@@ -43,8 +43,8 @@ use serde_json::{json, Value};
 
 use k2_mpc_base::session::position::{self, At, LineCol, LineRange};
 use k2_mpc_base::session::{
-    Approval, ApprovalState, DiskState, EditResult, EditWithError, Need, RosterEntry, Role, Session, SessionError, Stay,
-    TextFilePack, UndoOutcome, WriteOutcome,
+    Approval, ApprovalState, ConflictRegion, DiskState, EditResult, EditWithError, LogItem, LogQuery, Need, RosterEntry,
+    Role, Session, SessionError, Stay, TextFilePack, UndoMode, UndoOutcome, UndoRequest, VersionInfo, WriteOutcome,
 };
 use k2_mpc_base::store::DocStore;
 use k2_mpc_base::text::merge::Conflict;
@@ -91,8 +91,15 @@ const ROOT: &str = TextFilePack::ROOT;
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
-    UNSHARE, FLUSH, TOOL,
+    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT,
 ];
+
+pub const VERSIONS: &str = "/cli/docs/versions";
+pub const SHOW: &str = "/cli/docs/show";
+pub const DIFF: &str = "/cli/docs/diff";
+pub const RESTORE: &str = "/cli/docs/restore";
+pub const NAME: &str = "/cli/docs/name";
+pub const REVERT: &str = "/cli/docs/revert";
 
 fn is_post_route(path: &str) -> bool {
     matches!(
@@ -106,11 +113,20 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/unshare"
             | "/cli/docs/flush"
             | "/cli/docs/tool"
+            | "/cli/docs/name"
     ) || is_edit_route(path)
 }
 
 fn is_edit_route(path: &str) -> bool {
-    matches!(path, "/cli/docs/edit" | "/cli/docs/write" | "/cli/docs/undo" | "/cli/docs/redo")
+    matches!(
+        path,
+        "/cli/docs/edit"
+            | "/cli/docs/write"
+            | "/cli/docs/undo"
+            | "/cli/docs/redo"
+            | "/cli/docs/restore"
+            | "/cli/docs/revert"
+    )
 }
 
 /// Request input: the JSON body over the query params.
@@ -141,7 +157,50 @@ impl Input<'_> {
 }
 
 fn bad(msg: impl Into<String>) -> CliResponse {
-    refusal("400 Bad Request", "bad_request", msg)
+    with_exit(refusal("400 Bad Request", "bad_request", msg), k2_mpc_base::tools::exit::USAGE)
+}
+
+impl Input<'_> {
+    /// A boolean flag: JSON `true`, or `1` / `true` in the query.
+    fn flag(&self, k: &str) -> bool {
+        match self.body.get(k) {
+            Some(Value::Bool(b)) => *b,
+            _ => self.str(k).is_some_and(|v| v == "1" || v == "true"),
+        }
+    }
+}
+
+/// A person on this box, by login (or `owner`, or `person:<key>`), as a pid.
+fn person_pid(named: &str) -> Result<String, CliResponse> {
+    let login = named.trim();
+    let login = login.strip_prefix(host::PERSON_PREFIX).unwrap_or(login);
+    let key = k2_core::notify_prefs::People::load()
+        .map(|p| p.person_key(login))
+        .unwrap_or_else(|_| login.to_ascii_lowercase());
+    if host::person_exists(&key) {
+        Ok(format!("{}{key}", host::PERSON_PREFIX))
+    } else {
+        Err(refusal("404 Not Found", "person_not_found", format!("no person '{named}' on this server")))
+    }
+}
+
+/// Anyone a `log` filter names: `me`, a pid as is, a person by login, or an
+/// agent by its workspace.
+fn any_pid(named: &str, caller: &DocCaller) -> Result<String, CliResponse> {
+    let n = named.trim();
+    if n.eq_ignore_ascii_case("me") {
+        return Ok(caller.pid());
+    }
+    if Principal::parse(n).is_some() || n.starts_with("kit:") {
+        return Ok(n.to_string());
+    }
+    if let Ok(p) = person_pid(n) {
+        return Ok(p);
+    }
+    match target::workspace_root(n) {
+        Ok((id, _)) => Ok(format!("{}{id}", host::AGENT_PREFIX)),
+        Err(_) => Err(refusal("404 Not Found", "participant_not_found", format!("no person or agent '{named}' here"))),
+    }
 }
 
 fn ok(mut v: Value) -> CliResponse {
@@ -206,8 +265,13 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         Err(resp) => return resp,
     };
     drop(store);
-    if path == LOG {
-        return log(&rt, &target, rights);
+    // History reads need the history right (K-PERM-9); the kit checks it
+    // too, this gives the refusal its own code first.
+    if matches!(path, LOG | VERSIONS | SHOW | DIFF | RESTORE) && !rights.history {
+        return with_exit(
+            refusal("403 Forbidden", "history_forbidden", "you may read this doc but not its history"),
+            k2_mpc_base::tools::exit::REFUSED,
+        );
     }
     let session = match open(&rt, &target) {
         Ok(s) => s,
@@ -315,9 +379,38 @@ impl VerbError {
     }
 }
 
-/// The kit's errors on the wire (SESSIONS.md "Errors").
+/// `r` with `error.exit` set: the CLI exits with it (the kit's K-EXIT-1
+/// table, `tools::session_exit`, for every session error).
+fn with_exit(mut r: CliResponse, exit: u8) -> CliResponse {
+    if let Ok(mut v) = serde_json::from_str::<Value>(&r.body) {
+        if let Some(e) = v.get_mut("error").and_then(Value::as_object_mut) {
+            e.insert("exit".into(), json!(exit));
+            r.body = v.to_string();
+        }
+    }
+    r
+}
+
+/// The kit's errors on the wire (SESSIONS.md "Errors"), each with its exit
+/// code (`error.exit`).
 pub fn session_error(e: &SessionError) -> CliResponse {
+    with_exit(session_error_body(e), k2_mpc_base::tools::session_exit(e))
+}
+
+fn session_error_body(e: &SessionError) -> CliResponse {
     match e {
+        SessionError::Held { reason } => refusal(
+            "409 Conflict",
+            "held",
+            format!("held ({reason}): too many of your edits for this person wait for their approval; ask them to approve or decline some"),
+        ),
+        SessionError::RevertTooOld { seq } => refusal(
+            "409 Conflict",
+            "revert_too_old",
+            format!("change {seq} is older than the revert window; restore an older version instead (k2 doc restore --version V)"),
+        ),
+        SessionError::NoSuchChange(seq) => refusal("404 Not Found", "no_such_change", format!("no change {seq} in this doc")),
+        SessionError::Store(err) => refusal("500 Internal Server Error", "store_error", format!("the docs store failed: {err}")),
         SessionError::Forbidden { need } => match need {
             Need::Read => refusal("403 Forbidden", "doc_forbidden", "you can't read this doc"),
             Need::Edit => refusal("403 Forbidden", "doc_forbidden", "you can't edit this doc (read-only)"),
@@ -456,9 +549,95 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             if steps == 0 || steps > MAX_STEPS {
                 return Err(VerbError::Response(bad(format!("steps must be 1..={MAX_STEPS}"))));
             }
+            let mode = match input.str("mode").as_deref().map(str::trim) {
+                None | Some("") | Some("all") => UndoMode::All,
+                Some("partial") => UndoMode::Partial,
+                Some("drop") => UndoMode::Drop,
+                Some(other) => return Err(VerbError::Response(bad(format!("mode must be all, partial or drop (got {other})")))),
+            };
+            let mut req = UndoRequest::steps(steps).mode(mode);
+            if let Some(p) = input.str("forPerson").filter(|p| !p.trim().is_empty()) {
+                req = req.for_person(person_pid(&p).map_err(VerbError::Response)?);
+            }
             let j = join(s, c, Stay::UntilIdle)?;
-            let out = if path == UNDO { s.undo(j.conn, steps)? } else { s.redo(j.conn, steps)? };
+            let out = if path == UNDO { s.undo_with(j.conn, &req)? } else { s.redo_with(j.conn, &req)? };
             Ok(undo_response(c, out))
+        }
+        REVERT => {
+            let change = input
+                .u64("change")
+                .map_err(VerbError::Response)?
+                .ok_or_else(|| VerbError::Response(bad("change is required: the change number from k2 doc log")))?;
+            let partial = input.flag("partial");
+            let j = join(s, c, Stay::UntilIdle)?;
+            let out = s.revert(j.conn, change, partial)?;
+            Ok(undo_response(c, out))
+        }
+        RESTORE => {
+            let v = input
+                .u64("version")
+                .map_err(VerbError::Response)?
+                .ok_or_else(|| VerbError::Response(bad("version is required: a version id from k2 doc versions")))?;
+            let j = join(s, c, Stay::UntilIdle)?;
+            let r = s.restore(j.conn, v)?;
+            edit_reply(s, c, &r, Some(("restored", json!(v))))
+        }
+        NAME => {
+            let name = input
+                .str("name")
+                .filter(|n| !n.trim().is_empty())
+                .ok_or_else(|| VerbError::Response(bad("name is required")))?;
+            let v = input.u64("version").map_err(VerbError::Response)?;
+            let j = join(s, c, Stay::UntilIdle)?;
+            let id = s.name_version(j.conn, name.trim(), v)?;
+            Ok(ok(json!({ "doc": doc_json(t), "version": id, "name": name.trim() })))
+        }
+        VERSIONS => {
+            let j = join(s, c, Stay::UntilIdle)?;
+            let vs = s.versions(j.conn)?;
+            Ok(ok(json!({ "doc": doc_json(t), "versions": vs.iter().map(version_json).collect::<Vec<_>>() })))
+        }
+        LOG => {
+            let mut q = LogQuery::default();
+            if let Some(by) = input.str("by").filter(|p| !p.trim().is_empty()) {
+                q = q.by(any_pid(&by, c.caller).map_err(VerbError::Response)?);
+            }
+            if let Some(since) = input.u64("sinceMs").map_err(VerbError::Response)? {
+                q = q.since_ms(since);
+            }
+            if let Some(n) = input.u64("n").map_err(VerbError::Response)? {
+                q = q.limit(n as usize);
+            }
+            if let Some(p) = input.str("forPerson").filter(|p| !p.trim().is_empty()) {
+                q = q.on_behalf_of(any_pid(&p, c.caller).map_err(VerbError::Response)?);
+            }
+            if input.flag("pending") {
+                q = q.pending();
+            }
+            let j = join(s, c, Stay::UntilIdle)?;
+            let items = s.log(j.conn, &q)?;
+            Ok(ok(json!({ "doc": doc_json(t), "log": items.iter().map(log_item_json).collect::<Vec<_>>() })))
+        }
+        SHOW => {
+            let v = input
+                .u64("version")
+                .map_err(VerbError::Response)?
+                .ok_or_else(|| VerbError::Response(bad("version is required")))?;
+            let j = join(s, c, Stay::UntilIdle)?;
+            let roots = s.show(j.conn, v)?;
+            let text = roots.into_iter().find(|(r, _)| r == ROOT).map(|(_, t)| t).unwrap_or_default();
+            Ok(ok(json!({ "doc": doc_json(t), "version": v, "text": text })))
+        }
+        DIFF => {
+            let from = input
+                .u64("from")
+                .map_err(VerbError::Response)?
+                .ok_or_else(|| VerbError::Response(bad("from is required: a version id")))?;
+            let to = input.u64("to").map_err(VerbError::Response)?;
+            let context = input.u64("context").map_err(VerbError::Response)?.unwrap_or(3).min(1000) as usize;
+            let j = join(s, c, Stay::UntilIdle)?;
+            let d = s.diff_version(j.conn, ROOT, from, to, context)?;
+            Ok(ok(json!({ "doc": doc_json(t), "from": from, "to": to, "text": d.text, "differs": d.differs, "exit": d.exit() })))
         }
         APPROVE => {
             let seq = input.u64("change").map_err(VerbError::Response)?.ok_or_else(|| {
@@ -566,13 +745,24 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         return edit_reply(s, c, &r, warning);
     }
     let base: u64 = base.trim().parse().map_err(|_| VerbError::Response(bad("base must be a version number or \"live\"")))?;
-    match s.write_base(j.conn, ROOT, base, &text)? {
+    let out = s.write_base(j.conn, ROOT, base, &text)?;
+    let exit = out.exit();
+    match out {
         WriteOutcome::Applied(r) => edit_reply(s, c, &r, None),
-        WriteOutcome::Conflicts(conf) => Ok(conflicts_response(c.target, None, &conf)),
-        WriteOutcome::BaseExpired => Ok(refusal(
-            "409 Conflict",
-            "base_expired",
-            format!("version {base} is no longer kept as a base; read the doc again and retry"),
+        WriteOutcome::Conflicts(conf) => Ok(conflicts_response(
+            c.target,
+            None,
+            conflicts_json(&conf),
+            "conflicts",
+            "your change overlaps edits made since; nothing was applied",
+        )),
+        WriteOutcome::BaseExpired => Ok(with_exit(
+            refusal(
+                "409 Conflict",
+                "base_expired",
+                format!("version {base} is no longer kept as a base; read the doc again and retry"),
+            ),
+            exit,
         )),
     }
 }
@@ -854,36 +1044,6 @@ fn show_rel(rel: &str) -> &str {
     }
 }
 
-/// `log`: the doc's stored versions, metadata only (who, when, why), for a
-/// caller with the history right (K-PERM-9).
-fn log(rt: &Arc<super::Runtime>, t: &Target, rights: DocRights) -> CliResponse {
-    if !rights.history {
-        return refusal("403 Forbidden", "history_forbidden", "you may read this doc but not its history");
-    }
-    let Some(store) = rt.store() else {
-        return refusal("503 Service Unavailable", "docs_unavailable", "live docs are restarting; run the command again");
-    };
-    let id = match store.find(&t.key()) {
-        Ok(Some(id)) => id,
-        Ok(None) => return ok(json!({ "doc": doc_json(t), "versions": [] })),
-        Err(e) => return refusal("500 Internal Server Error", "docs_failed", e.to_string()),
-    };
-    match store.versions(id) {
-        Ok(vs) => ok(json!({
-            "doc": doc_json(t),
-            "versions": vs.iter().map(|(vid, v)| json!({
-                "id": vid,
-                "version": v.seq,
-                "atMs": v.at_ms,
-                "reason": format!("{:?}", v.reason).to_ascii_lowercase(),
-                "name": v.name,
-                "authors": v.authors,
-            })).collect::<Vec<_>>(),
-        })),
-        Err(e) => refusal("500 Internal Server Error", "docs_failed", e.to_string()),
-    }
-}
-
 // ── shapes ────────────────────────────────────────────────────────────
 
 fn doc_json(t: &Target) -> Value {
@@ -899,6 +1059,59 @@ fn edit_json(r: &EditResult) -> Value {
     })
 }
 
+fn lower<T: std::fmt::Debug>(v: &T) -> String {
+    let s = format!("{v:?}");
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn version_json(v: &VersionInfo) -> Value {
+    json!({
+        "id": v.id,
+        "version": v.seq,
+        "atMs": v.at_ms,
+        "reason": lower(&v.reason),
+        "name": v.name,
+        "authors": v.authors,
+        "bytes": v.bytes,
+    })
+}
+
+fn log_item_json(i: &LogItem) -> Value {
+    match i {
+        LogItem::Change { info, approval } => json!({
+            "type": "change",
+            "change": info.seq,
+            "kind": lower(&info.kind),
+            "of": info.of,
+            "author": info.author,
+            "via": info.via,
+            "atMs": info.at_ms,
+            "onBehalfOf": info.on_behalf_of,
+            "approval": approval.map(|a| lower(&a)),
+            "linesAdded": info.lines_added,
+            "linesRemoved": info.lines_removed,
+        }),
+        LogItem::Version(v) => {
+            let mut j = version_json(v);
+            j["type"] = json!("version");
+            j
+        }
+        other => json!({ "type": "other", "item": format!("{other:?}") }),
+    }
+}
+
+/// merge3 conflicts (`write --base`).
 fn conflicts_json(c: &[Conflict]) -> Value {
     Value::Array(
         c.iter()
@@ -907,28 +1120,86 @@ fn conflicts_json(c: &[Conflict]) -> Value {
     )
 }
 
-fn conflicts_response(t: &Target, step: Option<usize>, c: &[Conflict]) -> CliResponse {
+/// Undo / redo / revert conflict regions (live coordinates, a kind).
+fn regions_json(c: &[ConflictRegion]) -> Value {
+    Value::Array(
+        c.iter()
+            .map(|c| {
+                json!({
+                    "lines": [c.lines.0, c.lines.1],
+                    "kind": lower(&c.kind),
+                    "base": c.base,
+                    "ours": c.ours,
+                    "theirs": c.theirs,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn conflicts_response(t: &Target, step: Option<usize>, conflicts: Value, code: &str, hint: &str) -> CliResponse {
     CliResponse {
         status: "409 Conflict",
         content_type: "application/json",
         body: json!({
             "ok": false,
             "doc": doc_json(t),
-            "error": { "code": "conflicts", "hint": "your change overlaps edits made since; nothing was applied", "step": step },
-            "conflicts": conflicts_json(c),
+            "error": { "code": code, "hint": hint, "step": step, "exit": k2_mpc_base::tools::exit::NO },
+            "conflicts": conflicts,
         })
         .to_string(),
     }
 }
 
+/// Undo, redo and revert outcomes. Applied (all or the clean part) is 200
+/// with `exit` (1 when regions were skipped or a later step blocked);
+/// nothing applied because of conflicts is 409 (exit 1).
 fn undo_response(c: &Call, out: UndoOutcome) -> CliResponse {
     let t = c.target;
+    let exit = out.exit();
     match out {
-        UndoOutcome::Applied { steps, result } => ok(json!({ "doc": doc_json(t), "steps": steps, "result": edit_json(&result) })),
-        UndoOutcome::Conflicts { step, conflicts } => conflicts_response(t, Some(step), &conflicts),
-        UndoOutcome::Nothing => ok(json!({ "doc": doc_json(t), "steps": 0, "nothing": true })),
+        UndoOutcome::Applied { steps, result, skipped, blocked, .. } => ok(json!({
+            "doc": doc_json(t),
+            "steps": steps,
+            "result": edit_json(&result),
+            "skipped": regions_json(&skipped),
+            "blocked": blocked.as_deref().map(regions_json),
+            "exit": exit,
+        })),
+        UndoOutcome::Conflicts { step, conflicts, .. } => conflicts_response(
+            t,
+            Some(step),
+            regions_json(&conflicts),
+            "conflicts",
+            "it overlaps edits made since; nothing was applied (--partial applies the clean parts)",
+        ),
+        UndoOutcome::Blocked { conflicts, .. } => conflicts_response(
+            t,
+            None,
+            regions_json(&conflicts),
+            "blocked",
+            "every part of it overlaps edits made since; nothing was applied (--drop removes the step)",
+        ),
+        UndoOutcome::Dropped { change, .. } => ok(json!({ "doc": doc_json(t), "dropped": change, "exit": exit })),
+        UndoOutcome::Nothing => ok(json!({ "doc": doc_json(t), "steps": 0, "nothing": true, "exit": exit })),
+        UndoOutcome::HistoryLost => ok(json!({
+            "doc": doc_json(t),
+            "steps": 0,
+            "historyLost": true,
+            "hint": "your undo history went with the last reload; use k2 doc revert <change> (k2 doc log)",
+            "exit": exit,
+        })),
+        UndoOutcome::ClearedByPurge => ok(json!({
+            "doc": doc_json(t),
+            "steps": 0,
+            "clearedByPurge": true,
+            "hint": "your undo history was cleared by a purge",
+            "exit": exit,
+        })),
+        other => ok(json!({ "doc": doc_json(t), "outcome": format!("{other:?}"), "exit": exit })),
     }
 }
+
 
 fn kind_str(k: ParticipantKind) -> &'static str {
     match k {

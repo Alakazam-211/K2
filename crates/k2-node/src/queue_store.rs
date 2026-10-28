@@ -341,7 +341,8 @@ mod tests {
         assert_eq!(rot.last_submitter.get(&(1, "ws:a".to_string())).map(String::as_str), Some("ws/s1/builder-a"), "a ':' in a workspace id survives");
         assert_eq!(rot.last_line, Some(Line::Priority), "the alternation survives a restart");
         s.forget(1).unwrap();
-        assert!(s.usage().unwrap().is_empty() && s.asks(1).unwrap().is_empty() && s.rotation().unwrap() == Rotation::default());
+        assert!(s.usage().unwrap().is_empty() && s.asks(1).unwrap().is_empty());
+        assert_eq!(s.rotation().unwrap(), Rotation { last_line: Some(Line::Priority), ..Default::default() }, "a forgotten server leaves only the node-wide line alternation");
     }
 
     #[test]

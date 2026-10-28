@@ -1305,6 +1305,9 @@ mod tests {
         assert_eq!(w.order()[0], "b0");
         // Aged jobs skip the turns (by arrival), inside the line only.
         w.now = 10_000;
+        for (i, e) in w.queued.iter_mut().enumerate() {
+            e.enqueued_at = w.now - 20 + i as i64;
+        }
         w.queued[3].enqueued_at = w.now - 3600;
         assert_eq!(w.order()[0], "a3");
     }

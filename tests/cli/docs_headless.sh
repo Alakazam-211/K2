@@ -145,7 +145,10 @@ exec /bin/cat > /dev/null
 EOF
 chmod +x "$SB/shim/claude"
 
-start_daemon daemon1.log
+# Tier 0's size cap, lowered so the cap check stays small (the default is
+# 32 MiB); 4 MiB still moves a 3 MiB file, past any argv limit.
+T0_CAP=4
+start_daemon daemon1.log K2_DOCS_BLOB_MAX_MIB=$T0_CAP
 ok "sandbox daemon ready ($DAEMON_BIN)"
 [ -f "$SB/.k2/docs.redb" ] || fail "no ~/.k2/docs.redb in the sandbox home"
 ok "docs store at ~/.k2/docs.redb"
@@ -218,7 +221,8 @@ owner GET /cli/docs/read "" "path=$A/notes/plan.md"
 want 200 "owner read by absolute path"
 jok "$BODY" 'j["doc"]["path"] == "notes/plan.md"' "an absolute path normalises to (workspace, rel)"
 owner GET /cli/docs/read "" "workspace=$A&path=.k2/vault/keys.md"; want 422 "vault"; code_is protected "vault"; ok "vault files are never docs"
-owner GET /cli/docs/read "" "workspace=$A&path=notes/a.txt"; want 422 "txt"; code_is not_markdown "txt"; ok "non-Markdown is declined"
+owner GET /cli/docs/status "" "workspace=$A&path=notes/a.txt"; want 200 "txt"
+jok "$BODY" 'j["tier"] == 0 and j["current"]["reason"] == "import"' "any other file is a tier-0 doc"
 owner GET /cli/docs/read "" "workspace=$A&path=../beta/home.md"; want 400 "escape"; ok "the jail refuses .."
 owner GET /cli/docs/read "" "path=notes/plan.md"; want 400 "no workspace"; code_is workspace_required "no workspace"; ok "a person names the workspace"
 owner GET /cli/docs/edit "" "workspace=$A&path=notes/plan.md"; want 405 "GET on edit"; ok "GET on a POST route is 405"
@@ -492,14 +496,246 @@ want_rc 0 "pool status"
 has "$OUT" "disk sync on" "pool status"
 ok "k2 doc status (no path): the pool"
 
+echo "== tier 0: any file (presence, a lease, versions, restore) =="
+# mk <file> <seed> <n>: a PNG header, a NUL, then n seeded random bytes.
+mk() { python3 -c 'import random,sys; r=random.Random(int(sys.argv[2])); open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n\x00" + r.randbytes(int(sys.argv[3])))' "$@"; }
+# put <src> <dst>: an app's save (written aside, renamed over).
+put() { cp "$1" "$(dirname "$2")/.k2-test-save.tmp" && mv -f "$(dirname "$2")/.k2-test-save.tmp" "$2"; }
+# same_bytes <file> <expected> <what>: wait up to 8 s for the bytes.
+same_bytes() {
+    for _ in $(seq 1 80); do cmp -s "$1" "$2" && return 0; sleep 0.1; done
+    fail "$3: $1 does not hold the bytes of $2"
+}
+# t0_wait <ws> <rel> <python condition over j> <what>: poll the owner's status.
+t0_wait() {
+    for _ in $(seq 1 80); do
+        owner GET /cli/docs/status "" "workspace=$1&path=$2"
+        [ "$CODE" = 200 ] && jcheck "$BODY" "$3" && return 0
+        sleep 0.1
+    done
+    fail "$4: $3 never held: $BODY"
+}
+# wbody <ws> <rel> <base> <file> [onBehalfOf]: a write's JSON body.
+wbody() {
+    python3 -c '
+import base64, json, sys
+d = {"workspace": sys.argv[1], "path": sys.argv[2], "base": sys.argv[3], "bytesB64": base64.b64encode(open(sys.argv[4], "rb").read()).decode()}
+if len(sys.argv) > 5:
+    d["onBehalfOf"] = sys.argv[5]
+print(json.dumps(d))' "$@"
+}
+mkdir -p "$B/img" "$B/.k2/wiki/assets" "$B/.git/hooks"
+mk "$B/img/logo.png" 1 4096
+cp "$B/img/logo.png" "$WORK/logo.v0"
+mk "$WORK/other.bin" 2 1000
+mk "$WORK/logo.big" 3 $((3 * 1024 * 1024))
+mk "$WORK/outside.png" 4 2048
+mk "$WORK/app-save.png" 5 2048
+
+owner GET /cli/docs/status "" "workspace=$B&path=img/logo.png"
+want 200 "tier-0 status"
+jok "$BODY" 'j["tier"] == 0 and j["lease"] is None and j["current"]["reason"] == "import" and j["current"]["size"] == 4105 and j["owner"] is True and j["conflictCopies"] == [] and j["disk"]["state"] == "clean"' "owner: a PNG is a tier-0 doc (imported, no lease, disk clean)"
+V0="$(jq_ "$BODY" 'j["version"]')"
+[ -d "$SB/.k2/docs-blobs" ] || fail "no ~/.k2/docs-blobs in the sandbox home"
+mode="$(python3 -c 'import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))' "$SB/.k2/docs-blobs")"
+[ "$mode" = "0o700" ] || fail "~/.k2/docs-blobs is $mode, want 0o700"
+ok "blobs live in ~/.k2/docs-blobs (owner-only)"
+owner GET /cli/docs/read "" "workspace=$B&path=img/logo.png"
+want 200 "tier-0 read"
+python3 -c 'import base64,json,sys; j=json.loads(sys.argv[1]); sys.exit(0 if base64.b64decode(j["bytesB64"]) == open(sys.argv[2],"rb").read() and j["size"] == 4105 else 1)' "$BODY" "$B/img/logo.png" \
+    || fail "read: the bytes are not the file's"
+ok "read: the current bytes, exact (base64)"
+owner POST /cli/docs/tool '{"path":"img/logo.png","argv":["grep","x"]}' "workspace=$B"
+want 400 "a text tool on tier 0"; code_is not_a_text_doc "a text tool on tier 0"
+jok "$BODY" 'j["error"]["exit"] == 2 and "lease" in j["error"]["hint"] and j["error"]["verb"] == "grep"' "a text verb on any other file: not_a_text_doc (exit 2), naming what it has"
+cli agent "$B" doc sed -i 's/a/b/' img/logo.png
+want_rc 2 "sed -i on tier 0"; has "$ERR" "not_a_text_doc" "sed -i on tier 0"
+cli agent "$B" doc undo img/logo.png
+want_rc 2 "undo on tier 0"
+cli agent "$B" doc diff --version "$V0" img/logo.png
+want_rc 2 "diff --version on tier 0"
+ok "agent: text verbs exit 2 on a tier-0 doc"
+
+cli agent "$B" doc lease --ttl 10m img/logo.png
+want_rc 0 "agent lease"; has "$OUT" "leased img/logo.png" "agent lease"
+owner GET /cli/docs/status "" "workspace=$B&path=img/logo.png"
+jok "$BODY" 'j["lease"]["pid"].startswith("agent:") and not j["lease"]["mine"] and j["lease"]["expiresMs"] > 0' "status shows the agent's lease"
+cli agent "$B" doc who img/logo.png
+want_rc 0 "who"; has "$OUT" "holds the lease" "who shows the holder"
+ok "agent: k2 doc lease (status and who show the holder)"
+owner POST /cli/docs/write "$(wbody "$B" img/logo.png "$V0" "$WORK/other.bin")"
+want 409 "write under the agent's lease"; code_is leased "write under a lease"
+jok "$BODY" 'j["error"]["exit"] == 5 and j["error"]["holder"].startswith("agent:") and j["error"]["retryAfterMs"] > 0' "someone else's lease: 409 leased, exit 5, with holder and expiry"
+cli owner "$WORK" doc write --base "$V0" --file "$WORK/other.bin" -w "$B" img/logo.png
+want_rc 5 "k2 doc write under someone else's lease"; has "$ERR" "leased by" "exit 5 names the holder"
+cmp -s "$B/img/logo.png" "$WORK/logo.v0" || fail "a refused write changed the file"
+ok "owner: a write under the agent's lease exits 5; nothing is written"
+cli agent "$B" doc write --base "$V0" --file "$WORK/logo.big" img/logo.png
+want_rc 0 "agent write --base (3 MiB)"
+same_bytes "$B/img/logo.png" "$WORK/logo.big" "write-back of a 3 MiB write"
+owner GET /cli/docs/status "" "workspace=$B&path=img/logo.png"
+V1="$(jq_ "$BODY" 'j["version"]')"
+jok "$BODY" "j['version'] != $V0 and j['current']['reason'] == 'write' and j['current']['author'].startswith('agent:') and j['current']['size'] == 3 * 1024 * 1024 + 9" "the write is a new version by the agent"
+ok "agent: write --base V of a 3 MiB file (through temp files), written back"
+cli agent "$B" doc write --base "$V0" --file "$WORK/other.bin" img/logo.png
+want_rc 1 "stale base"; has "$ERR" "stale" "stale base"
+cli agent "$B" doc write --base live --file "$WORK/other.bin" img/logo.png
+want_rc 2 "--base live"
+ok "a stale base exits 1 and --base live exits 2: never last-writer-wins"
+cli agent "$B" doc lease --renew img/logo.png; want_rc 0 "renew"
+cli agent "$B" doc unlock img/logo.png; want_rc 0 "unlock"; has "$OUT" "released" "unlock"
+cli agent "$B" doc lease --renew img/logo.png; want_rc 2 "renew with no lease"; has "$ERR" "no_lease" "renew with no lease"
+ok "renew, unlock; renewing with no lease exits 2"
+cli agent "$B" doc lock img/logo.png; want_rc 0 "lock"
+cli agent "$B" doc lease --break img/logo.png; want_rc 3 "an agent breaks"; has "$ERR" "not_the_owner" "an agent breaks"
+cli owner "$WORK" doc lease --break -w "$B" img/logo.png; want_rc 0 "owner breaks"; has "$OUT" "broke" "owner breaks"
+owner GET /cli/docs/status "" "workspace=$B&path=img/logo.png"
+jok "$BODY" 'j["lease"] is None' "the broken lease is gone"
+ok "only the owner breaks someone's lease"
+
+cli agent "$B" doc versions --json img/logo.png
+want_rc 0 "versions"
+jok "$OUT" '[v["reason"] for v in j["versions"]] == ["import", "write"] and j["versions"][-1]["current"] and all("blob" not in v for v in j["versions"])' "versions: import, then the write; metadata only"
+cli agent "$B" doc show --version "$V0" --out "$WORK/shown.png" img/logo.png
+want_rc 0 "show --out"
+cmp -s "$WORK/shown.png" "$WORK/logo.v0" || fail "show --version $V0 --out: not the imported bytes"
+ok "show --version V --out FILE: that version's exact bytes"
+cli agent "$B" doc restore --version "$V0" img/logo.png
+want_rc 0 "restore"
+same_bytes "$B/img/logo.png" "$WORK/logo.v0" "restore write-back"
+owner GET /cli/docs/status "" "workspace=$B&path=img/logo.png"
+jok "$BODY" "j['current']['reason'] == 'restore' and j['current']['restoredFrom'] == $V0 and j['current']['author'].startswith('agent:')" "restore is a new version, attributed, pointing at V0"
+ok "restore --version V: forward, attributed, written back"
+cli agent "$B" doc version --name baseline img/logo.png; want_rc 0 "version --name"
+cli agent "$B" doc versions --json img/logo.png
+jok "$OUT" 'any(v["name"] == "baseline" and v["current"] for v in j["versions"]) and len(j["versions"]) == 3' "the current version is named"
+cli agent "$B" doc log img/logo.png; want_rc 0 "log"
+has "$OUT" "restore" "log lists the restore"; has "$OUT" " by " "log names who"
+cli agent "$B" doc blame img/logo.png; want_rc 0 "blame"
+has "$OUT" "set by" "blame"; has "$OUT" "3 versions" "blame counts the history"
+cli agent "$B" doc blame -L 1,2 img/logo.png; want_rc 2 "blame -L on tier 0"
+ok "version --name, log and blame on any file"
+printf 'plain text\n' >"$B/notes.txt"
+cli agent "$B" doc status --json notes.txt; want_rc 0 "text file status"
+TV0="$(jq_ "$OUT" 'j["version"]')"
+jok "$OUT" 'j["tier"] == 0' "a .txt file is tier 0"
+cli agent "$B" doc show --version "$TV0" notes.txt; want_rc 0 "show to stdout"
+[ "$OUT" = "plain text" ] || fail "show --version to stdout: '$OUT'"
+ok "show --version prints text bytes to a pipe"
+
+put "$WORK/outside.png" "$B/img/logo.png"
+t0_wait "$B" img/logo.png 'j["current"]["reason"] == "external" and j["current"]["author"] == "kit:external" and not j["conflictCopies"]' "an outside save"
+ok "an outside save without a lease is a new version by kit:external (no conflict copy)"
+cli agent "$B" doc lease img/logo.png; want_rc 0 "lease before the app's save"
+put "$WORK/app-save.png" "$B/img/logo.png"
+t0_wait "$B" img/logo.png 'len(j["conflictCopies"]) == 1 and j["current"]["reason"] == "external" and j["current"]["conflictCopy"]' "a save under the lease"
+cmp -s "$B/img/logo.png" "$WORK/app-save.png" || fail "the app's save didn't stay current"
+copy="$B/$(jq_ "$BODY" 'j["conflictCopies"][0]')"
+case "$copy" in *"logo (conflict "*").png") ;; *) fail "conflict copy name: $copy" ;; esac
+cmp -s "$copy" "$WORK/outside.png" || fail "the conflict copy doesn't hold the replaced content"
+ok "a save under someone's lease keeps both: the save is current, the replaced content a version and a conflict copy"
+note=""
+for _ in $(seq 1 80); do
+    note="$(grep -rl "Conflicting save: img/logo.png" "$B/.k2/inbox" 2>/dev/null | head -1 || true)"
+    [ -n "$note" ] && break
+    sleep 0.1
+done
+[ -n "$note" ] || fail "no inbox note for the conflicting save under $B/.k2/inbox"
+ok "the conflicting save leaves an inbox note"
+cli agent "$B" doc status img/logo.png; want_rc 0 "status lists the copy"; has "$OUT" "conflict copy: img/logo (conflict" "status lists the copy"
+cli agent "$B" doc unlock img/logo.png; want_rc 0 "unlock after the conflict"
+
+python3 -c 'import sys; open(sys.argv[1],"wb").write(b"\0" * (int(sys.argv[2]) * 1048576 + 1))' "$B/big.bin" "$T0_CAP"
+owner GET /cli/docs/status "" "workspace=$B&path=big.bin"
+want 422 "over the cap"; code_is too_large "over the cap"
+jok "$BODY" '"4.0 MiB" in j["error"]["hint"]' "the refusal names the cap"
+cli agent "$B" doc status big.bin; want_rc 4 "over the cap (CLI)"
+printf '#!/bin/sh\n' >"$B/.git/hooks/pre-commit"
+owner GET /cli/docs/status "" "workspace=$B&path=.git/hooks/pre-commit"; want 422 "git hook"; code_is protected "git hook"
+printf '{}\n' >"$B/.k2/agent-thing.json"
+owner GET /cli/docs/status "" "workspace=$B&path=.k2/agent-thing.json"; want 422 "k2 config"; code_is protected "k2 config"
+printf 'x\n' >"$B/deploy.pem"
+owner GET /cli/docs/status "" "workspace=$B&path=deploy.pem"; want 422 "pem"; code_is secret "pem"
+mk "$B/.k2/wiki/assets/map.png" 6 64
+owner GET /cli/docs/status "" "workspace=$B&path=.k2/wiki/assets/map.png"; want 200 "wiki attachment"
+ok "declined: over the cap (exit 4), git's folder, K2's .k2 config, secrets; wiki attachments are docs"
+
+cli owner "$WORK" doc lease -w "$B" img/logo.png; want_rc 0 "owner lease before mv"
+cli agent "$B" doc mv img/logo.png img/brand.png; want_rc 5 "mv under someone else's lease"
+cli owner "$WORK" doc unlock -w "$B" img/logo.png; want_rc 0 "owner unlock"
+cli agent "$B" doc mv img/logo.png img/brand.png; want_rc 0 "mv"
+[ -f "$B/img/brand.png" ] && [ ! -e "$B/img/logo.png" ] || fail "mv: $(ls "$B/img")"
+cli agent "$B" doc versions --json img/brand.png; want_rc 0 "versions after mv"
+jok "$OUT" 'len(j["versions"]) >= 5' "the moved doc keeps its versions"
+cli agent "$B" doc mv img/brand.png img/brand.md; want_rc 2 "mv to Markdown"; has "$ERR" "tier_change" "mv to Markdown"
+ok "mv keeps an any-file doc's history (not under someone else's lease, never into Markdown)"
+agent POST /cli/docs/write "$(wbody "$B" img/brand.png 1 "$WORK/other.bin" owner)"
+want 400 "on-behalf blob write"; code_is on_behalf_not_built "on-behalf blob write"
+cli agent "$B" doc lease home.md; want_rc 2 "lease on Markdown"; has "$ERR" "no_lease_on_text" "lease on Markdown"
+ok "on-behalf blob writes wait for the kit (exit 2); Markdown has no lease"
+cli agent "$B" doc status --json home.md; want_rc 0 "Markdown status"
+jok "$OUT" 'j["tier"] == 1' "a Markdown doc says tier 1"
+HV="$(jq_ "$OUT" 'j["version"]')"
+CLI_IN="$(cat "$B/home.md")"$'\nrewritten through bytesB64\n'
+cli agent "$B" doc write --base "$HV" home.md; want_rc 0 "Markdown write (bytesB64)"
+for _ in $(seq 1 80); do grep -q 'rewritten through bytesB64' "$B/home.md" && break; sleep 0.1; done
+grep -q 'rewritten through bytesB64' "$B/home.md" || fail "the Markdown write never reached the file: $(cat "$B/home.md")"
+ok "k2 doc write on Markdown still merges from --base V (sent as bytes)"
+
+mk "$A/notes/diagram.bin" 7 512
+cli agent "$B" doc status -w "$A" notes/diagram.bin; want_rc 3 "unshared tier-0"; has "$ERR" "doc_not_shared" "unshared tier-0"
+owner POST /cli/docs/share "$(json workspace "$A" path notes/diagram.bin with "$B")"; want 200 "share a tier-0 file"
+cli agent "$B" doc status --json -w "$A" notes/diagram.bin; want_rc 0 "shared tier-0"
+jok "$OUT" 'j["rights"] == {"read": True, "edit": False, "history": False} and j["conflictCopies"] is None and j["owner"] is False' "a read-only share: read, no edit, no history"
+cli agent "$B" doc lease -w "$A" notes/diagram.bin; want_rc 3 "lease on a read-only share"; has "$ERR" "doc_forbidden" "lease read-only"
+cli agent "$B" doc versions -w "$A" notes/diagram.bin; want_rc 3 "versions without history"; has "$ERR" "history_forbidden" "versions without history"
+owner POST /cli/docs/unshare "$(json workspace "$A" path notes/diagram.bin with "$B")"; want 200 "unshare a tier-0 file"
+ok "agent, another workspace: the same shares and rights on any file"
+
+grep -q '"doc-lease-broken"' "$audit" || fail "no doc-lease-broken line in $audit"
+grep -q '"doc-conflict"' "$audit" || fail "no doc-conflict line in $audit"
+if grep -q 'plain text' "$audit"; then fail "doc content leaked into the audit: $audit"; fi
+ok "a broken lease and a conflicting save are audited, metadata only"
+cli owner "$WORK" doc status; want_rc 0 "pool"
+has "$OUT" "any-file docs:" "pool shows any-file docs"
+ok "k2 doc status (pool) shows any-file docs"
+
+echo "== tier 0: a removed workspace's blob key goes with it =="
+C="$WORK/gamma"
+mkdir -p "$C"
+git -c init.defaultBranch=main -C "$C" init -q || fail "git init $C"
+reg="$(curl -s -X POST -H 'Content-Type: application/json' \
+    -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "seedWiki": False, "seedAgentsMd": False}))' "$C")" \
+    "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
+case "$reg" in *'"error"'*) fail "register $C: $reg" ;; *"$C"*) ;; *) fail "register $C: $reg" ;; esac
+mk "$C/photo.png" 8 256
+owner GET /cli/docs/status "" "workspace=$C&path=photo.png"; want 200 "gamma's tier-0 doc"
+CID="$(jq_ "$BODY" 'j["doc"]["workspace"]')"
+owner POST /cli/projects/delete "$(json id "$CID")"
+case "$CODE" in 200) ;; *) fail "remove gamma: HTTP $CODE $BODY" ;; esac
+ok "gamma: a tier-0 doc, then the workspace removed"
+
 echo "== restart (docs written back and released on stop, reconciled on open) =="
+owner POST /cli/docs/lease '{"path":"notes.txt"}' "workspace=$B"
+want 200 "owner lease before the restart"
+jok "$BODY" 'j["lease"]["mine"]' "the owner holds notes.txt's lease"
 owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":".k2/wiki/Home.md","edits":[{"after":3,"text":"last words"}]}))')" "workspace=$A"
 want 200 "edit just before stop"
 stop_daemon
 file_is "$A/.k2/wiki/Home.md" '"# Wiki\n\nedited outside\nlast words\n"' "release flushes"
 ok "a normal stop writes back what was unwritten"
 printf '# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n' >"$A/.k2/wiki/Home.md"
-start_daemon daemon2.log
+printf 'edited while K2 was down\n' >"$B/notes.txt"
+start_daemon daemon2.log K2_DOCS_BLOB_MAX_MIB=$T0_CAP
 doc_is "$A" .k2/wiki/Home.md '"# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n"' "reconcile"
 ok "the store reopens and reconciles edits made while K2 was down"
+owner POST /cli/docs/lease '{"path":"notes.txt","action":"renew"}' "workspace=$B"
+want 409 "renew after a restart"; code_is no_lease "renew after a restart"
+jok "$BODY" 'j["error"]["exit"] == 2' "leases live in memory: after a restart, renew exits 2 (K-T0-7)"
+t0_wait "$B" notes.txt 'j["current"]["reason"] == "external" and j["current"]["size"] == len("edited while K2 was down\n")' "tier-0 reconcile"
+owner GET /cli/docs/versions "" "workspace=$B&path=notes.txt"; want 200 "versions after the restart"
+jok "$BODY" '[v["reason"] for v in j["versions"]] == ["import", "external"]' "a tier-0 doc keeps its versions and takes edits made while K2 was down"
+for _ in $(seq 1 120); do grep -q "\"doc-space-key-purged\"" "$audit" && break; sleep 0.25; done
+grep "\"doc-space-key-purged\"" "$audit" | grep -q "space=$CID key_destroyed=true" || fail "no doc-space-key-purged line for $CID in $audit"
+ok "the removed workspace's docs and blob key are gone (audited)"
 echo "PASS ($pass checks)"

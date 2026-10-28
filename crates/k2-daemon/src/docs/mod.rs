@@ -28,7 +28,7 @@ pub mod shares;
 pub mod target;
 pub mod watch;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
@@ -221,7 +221,7 @@ fn spawn_timer() {
                         rt.recheck_rights();
                     }
                     if n % SWEEP_EVERY_TICKS == 0 {
-                        rt.sweep_orphan_shares();
+                        rt.sweep_orphans();
                     }
                 }
                 Err(Unavailable::Released) => return,
@@ -244,6 +244,10 @@ fn workspace_exists(id: &str) -> bool {
     }
 }
 
+/// Host-table namespace of the workspaces (spaces) K2 has opened docs in, so
+/// the sweep can delete a removed workspace's docs (`delete_space`).
+const SPACES_NS: &str = "k2.docs.spaces";
+
 impl Runtime {
     /// The session for `key`, syncing with the file at `abs` inside `root`
     /// (`open_file`: import, or reconcile a stored doc with the file).
@@ -251,10 +255,27 @@ impl Runtime {
         let s = self.manager.open_file(Arc::new(MARKDOWN), key, abs, root)?;
         let rel_in_k2 = key.path.starts_with(".k2/");
         let fresh = self.opened.lock().expect("docs opened set").insert(key.clone(), abs.to_path_buf()).is_none();
-        if fresh && rel_in_k2 {
-            self.watch.watch_k2_file(abs);
+        if fresh {
+            if rel_in_k2 {
+                self.watch.watch_k2_file(abs);
+            }
+            self.note_space(&key.space);
         }
         Ok(s)
+    }
+
+    /// Remember that `space` holds docs (once per space).
+    fn note_space(&self, space: &str) {
+        let Some(store) = self.store() else { return };
+        match store.host_get(SPACES_NS, space) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                if let Err(e) = store.host_put(SPACES_NS, space, b"") {
+                    log_debug!("[docs] WARN: can't record space {space}: {e}");
+                }
+            }
+            Err(e) => log_debug!("[docs] WARN: can't read space {space}: {e}"),
+        }
     }
 
     /// Loaded session for `key`, if any (never loads).
@@ -295,7 +316,8 @@ impl Runtime {
     }
 
     /// The kit's timer: due write-backs, the stat backup, idle expiry and
-    /// unload. Failures are per doc (write-back retries next tick).
+    /// unload, version cuts and retention. Failures are per doc
+    /// (write-back retries next tick).
     fn tick(&self) {
         match self.manager.tick() {
             Ok(rep) => {
@@ -308,31 +330,19 @@ impl Runtime {
         }
     }
 
-    /// Every loaded doc's participants have their rights re-checked (losing
-    /// read removes them; the kit audits it through the host). Keys that
-    /// unloaded drop out, with their `.k2/` watches.
+    /// Every loaded doc's participants have their rights re-checked (the
+    /// kit's `recheck_rights`; losing read removes them, audited through the
+    /// host). The watcher's index drops what unloaded, with its `.k2/`
+    /// watch.
     fn recheck_rights(&self) {
-        let keys: Vec<(DocKey, PathBuf)> =
-            self.opened.lock().expect("docs opened set").iter().map(|(k, p)| (k.clone(), p.clone())).collect();
-        let mut gone = Vec::new();
-        for (k, p) in keys {
-            match self.manager.get(&k) {
-                Some(s) => match s.recheck_rights() {
-                    Ok(changed) => {
-                        for c in changed {
-                            log_debug!("[docs] rights of {} on {} now {:?}", c.pid, host::key_label(&k), c.rights);
-                        }
-                    }
-                    Err(SessionError::Unloaded | SessionError::Released) => gone.push((k, p)),
-                    Err(e) => log_debug!("[docs] WARN: recheck_rights on {}: {e}", host::key_label(&k)),
-                },
-                None => gone.push((k, p)),
-            }
+        for (k, c) in self.manager.recheck_rights() {
+            log_debug!("[docs] rights of {} on {} now {:?}", c.pid, host::key_label(&k), c.rights);
         }
-        if !gone.is_empty() {
-            let mut set = self.opened.lock().expect("docs opened set");
-            for (k, p) in gone {
-                set.remove(&k);
+        let loaded: HashSet<DocKey> = self.manager.loaded_keys().into_iter().collect();
+        let mut set = self.opened.lock().expect("docs opened set");
+        let gone: Vec<DocKey> = set.keys().filter(|k| !loaded.contains(*k)).cloned().collect();
+        for k in gone {
+            if let Some(p) = set.remove(&k) {
                 if k.path.starts_with(".k2/") {
                     self.watch.unwatch_k2_file(&p);
                 }
@@ -340,17 +350,51 @@ impl Runtime {
         }
     }
 
-    /// Erase the shares of workspaces that are gone (as owner or sharee).
-    /// The kit never erases host rows; this is K2's purge path for them.
-    fn sweep_orphan_shares(&self) {
+    /// A removed workspace's records: its shares (as owner or sharee, K2's
+    /// host rows) and its docs (`delete_space`, every kit table). This is
+    /// housekeeping, not privacy erasure: redb doesn't zero freed pages
+    /// until the kit's erasure slice. Never on a DB error.
+    fn sweep_orphans(&self) {
         let Some(store) = self.store() else { return };
         match shares::sweep_orphans(&store, workspace_exists) {
             Ok(0) => {}
             Ok(n) => {
-                log_debug!("[docs] erased {n} share(s) of removed workspaces");
-                host::audit("doc-share-erased", "k2", format!("count={n} reason=workspace_removed"));
+                log_debug!("[docs] removed {n} share(s) of removed workspaces");
+                host::audit("doc-share-removed", "k2", format!("count={n} reason=workspace_removed"));
             }
             Err(e) => log_debug!("[docs] WARN: share sweep: {e}"),
+        }
+        let spaces = match store.host_scan(SPACES_NS, "") {
+            Ok(rows) => rows,
+            Err(e) => {
+                log_debug!("[docs] WARN: space sweep: {e}");
+                return;
+            }
+        };
+        drop(store);
+        for (space, _) in spaces {
+            if workspace_exists(&space) {
+                continue;
+            }
+            match self.manager.delete_space(&space) {
+                Ok(keys) => {
+                    let mut set = self.opened.lock().expect("docs opened set");
+                    for k in &keys {
+                        if let Some(p) = set.remove(k) {
+                            if k.path.starts_with(".k2/") {
+                                self.watch.unwatch_k2_file(&p);
+                            }
+                        }
+                    }
+                    drop(set);
+                    if let Some(store) = self.store() {
+                        let _ = store.host_delete(SPACES_NS, &space);
+                    }
+                    log_debug!("[docs] removed {} doc(s) of removed workspace {space}", keys.len());
+                    host::audit("doc-space-removed", "k2", format!("space={space} docs={} reason=workspace_removed", keys.len()));
+                }
+                Err(e) => log_debug!("[docs] WARN: removing the docs of {space}: {e}"),
+            }
         }
     }
 }

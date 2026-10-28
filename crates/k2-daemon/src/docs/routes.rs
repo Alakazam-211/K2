@@ -410,6 +410,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
             format!("change {seq} is older than the revert window; restore an older version instead (k2 doc restore --version V)"),
         ),
         SessionError::NoSuchChange(seq) => refusal("404 Not Found", "no_such_change", format!("no change {seq} in this doc")),
+        SessionError::Deleted => refusal("404 Not Found", "doc_deleted", "this doc was removed (its workspace is gone)"),
         SessionError::Store(err) => refusal("500 Internal Server Error", "store_error", format!("the docs store failed: {err}")),
         SessionError::Forbidden { need } => match need {
             Need::Read => refusal("403 Forbidden", "doc_forbidden", "you can't read this doc"),
@@ -419,6 +420,11 @@ fn session_error_body(e: &SessionError) -> CliResponse {
                 "403 Forbidden",
                 "not_the_approver",
                 "only the person this change was made for can approve or decline it",
+            ),
+            Need::AuthorOrOwner => refusal(
+                "403 Forbidden",
+                "not_author_or_owner",
+                "only the change's author, the person it was made for, or an owner can revert it",
             ),
             _ => refusal("403 Forbidden", "doc_forbidden", "refused"),
         },

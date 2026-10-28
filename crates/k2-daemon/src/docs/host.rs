@@ -232,6 +232,12 @@ impl Host for K2Host {
                     log_debug!("[docs] {pid} left {} ({conn}, {reason:?})", key_label(key))
                 }
             },
+            AuditEvent::RecheckFailed { key, error } => {
+                log_debug!("[docs] WARN: rights re-check failed on {}: {error}", key_label(key))
+            }
+            AuditEvent::DocDeleted { key, connections } => {
+                audit(AUDIT_FILE, "k2", format!("{} removed connections={}", key_label(key), connections.len()))
+            }
             AuditEvent::Joined { key, pid, conn, .. } => {
                 log_debug!("[docs] {pid} joined {} ({conn})", key_label(key))
             }

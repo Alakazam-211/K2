@@ -273,7 +273,9 @@ pub const SKILL_VERSION_ZEN: u32 = 44;
 /// Bumped to 36 (0.46.5, compute job tiers): the k2-cli skill gains a
 /// "Compute nodes" block with the Priority courtesy rule (Priority is
 /// optional; one submitter per server at a time, not enforced).
-pub const SKILL_VERSION_WORKSPACE: u32 = 36;
+/// Bumped to 37 (Markdown multiplayer v1, K3): the k2-cli skill gains a
+/// "Live docs (Markdown)" block (`k2 doc`, edit live docs through it).
+pub const SKILL_VERSION_WORKSPACE: u32 = 37;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

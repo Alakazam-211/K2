@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { listen, emit } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { daemonCliGet, daemonCliPost, daemonCliPostQuery } from '@/lib/daemon-cli'
+import { harnessLabel, harnessOfCommand, movePinnedChat, movePinnedChatMessage } from '@/lib/pinned-harness'
 import { asArray } from '@/lib/as-array'
 import { isBuiltinAgentType } from '@/lib/agent-type'
 import {
@@ -3123,8 +3124,15 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
   const selectedPreset = selected ? resolvePreset(selected) : undefined
   const value = selected ? (selectedPreset?.id ?? selected) : ''
 
+  // 0.46.6: the default agent only changes NEW chats. After a change, offer
+  // to move the pinned chat too (one tap; the daemon does the move).
+  const [offerMove, setOfferMove] = useState<string | null>(null)
+  const [moveNote, setMoveNote] = useState('')
+  const [moving, setMoving] = useState(false)
+
   const handleChange = async (presetId: string): Promise<void> => {
     setSelected(presetId)
+    setMoveNote('')
     try {
       await daemonCliPost(primaryScope(), 'projects/update', { id: projectId, defaultAgent: presetId || '' })
       emitProjectsChanged()
@@ -3133,28 +3141,73 @@ function DefaultAgentSelector({ projectId, currentDefaultAgent }: { projectId: s
         p.id === projectId ? { ...p, defaultAgent: presetId || null } : p
       )
       useProjectsStore.setState({ projects: updated })
+      const chosen = presetId ? resolvePreset(presetId) : globalPreset
+      setOfferMove(harnessOfCommand(chosen?.command))
     } catch (err) {
       console.error('[default-agent-selector] Update failed:', err)
     }
   }
 
+  const handleMove = async (harness: string): Promise<void> => {
+    setMoving(true)
+    try {
+      const r = await movePinnedChat(primaryScope(), projectId, harness)
+      setMoveNote(movePinnedChatMessage(r))
+      setOfferMove(null)
+    } catch (err) {
+      setMoveNote(`The pinned chat was not moved: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setMoving(false)
+    }
+  }
+
   return (
-    <div className="flex items-center justify-between py-2 border-t border-[var(--color-border)]">
-      <div>
-        <span className="text-xs text-[var(--color-text-secondary)]">Default Agent</span>
-        <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
-          {metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit-with-AI uses Settings → Default AI Agent.
-        </p>
+    <div className="py-2 border-t border-[var(--color-border)]">
+      <div className="flex items-center justify-between">
+        <div>
+          <span className="text-xs text-[var(--color-text-secondary)]">Default Agent</span>
+          <p className="text-[9px] text-[var(--color-text-muted)] mt-0.5">
+            {metaChordLabel('Shift+Meta+T') ? `The agent ${metaChordLabel('Shift+Meta+T')} launches` : 'The default agent'} for this workspace. Edit-with-AI uses Settings → Default AI Agent.
+          </p>
+        </div>
+        <SettingDropdown
+          value={value}
+          options={[
+            { value: '', label: `Inherit global (${globalPreset?.label ?? globalDefaultAgent})` },
+            ...enabledPresets.map((p) => ({ value: p.id, label: p.label })),
+          ]}
+          onChange={handleChange}
+          placeholder={selected || undefined}
+        />
       </div>
-      <SettingDropdown
-        value={value}
-        options={[
-          { value: '', label: `Inherit global (${globalPreset?.label ?? globalDefaultAgent})` },
-          ...enabledPresets.map((p) => ({ value: p.id, label: p.label })),
-        ]}
-        onChange={handleChange}
-        placeholder={selected || undefined}
-      />
+      {offerMove && (
+        <div className="flex items-center justify-between gap-2 mt-2" data-testid="default-agent-move-pinned">
+          <span className="text-[10px] text-[var(--color-text-secondary)]">
+            Also move the pinned chat to {harnessLabel(offerMove)}? New chats use it already; the pinned chat (heartbeats, Threads, messages) keeps its harness until moved.
+          </span>
+          <div className="flex gap-1 flex-shrink-0">
+            <button
+              type="button"
+              disabled={moving}
+              onClick={() => { void handleMove(offerMove) }}
+              className="px-2 py-0.5 text-[10px] rounded bg-[var(--color-accent)] text-white disabled:opacity-50 cursor-pointer no-drag"
+            >
+              {moving ? 'Moving…' : 'Move'}
+            </button>
+            <button
+              type="button"
+              disabled={moving}
+              onClick={() => setOfferMove(null)}
+              className="px-2 py-0.5 text-[10px] rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] cursor-pointer no-drag"
+            >
+              Not now
+            </button>
+          </div>
+        </div>
+      )}
+      {moveNote && (
+        <p className="text-[9px] text-[var(--color-text-muted)] mt-1" data-testid="default-agent-move-note">{moveNote}</p>
+      )}
     </div>
   )
 }

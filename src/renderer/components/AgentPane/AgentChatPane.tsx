@@ -44,6 +44,8 @@ import {
 import type { ServerScope } from '@/kessel/server-scope'
 import { SessionTokenPicker } from '@/components/Settings/shared/LlmLoginPicker'
 import { useBrowserOverlay } from '@/lib/browser-overlay'
+import { harnessLabel, harnessOfCommand, movePinnedChat, movePinnedChatMessage, PINNED_HARNESSES } from '@/lib/pinned-harness'
+import { usePresetsStore } from '@/stores/presets'
 
 interface AgentChatPaneProps {
   agentName: string
@@ -296,6 +298,36 @@ function ChatHeader({
     : 'New chat'
   const canContinue = currentSessionId != null && currentSessionId !== ''
 
+  // 0.46.6 — "Move pinned chat to …": one item per harness an enabled preset
+  // runs, except the one the pinned chat is on. The daemon does the move
+  // (agent/harness); the old chat stays in this list.
+  const presets = usePresetsStore((s) => s.presets)
+  const currentHarness = harnessOfCommand(currentSession?.provider || pinnedProvider)
+  const moveTargets = useMemo(() => {
+    const seen = new Set<string>()
+    for (const p of presets) {
+      if (p.enabled === 0) continue
+      const h = harnessOfCommand(p.command)
+      if (h && h !== currentHarness) seen.add(h)
+    }
+    return PINNED_HARNESSES.filter((h) => seen.has(h))
+  }, [presets, currentHarness])
+  const [moving, setMoving] = useState(false)
+  const [moveNote, setMoveNote] = useState('')
+  const moveTo = async (harness: string): Promise<void> => {
+    setHistoryOpen(false)
+    setMoving(true)
+    setMoveNote('')
+    try {
+      const r = await movePinnedChat(room.scope, projectPath, harness)
+      setMoveNote(movePinnedChatMessage(r))
+    } catch (err) {
+      setMoveNote(`The pinned chat was not moved: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setMoving(false)
+    }
+  }
+
   return (
     <div
       className="border-b border-[var(--color-border)] flex-shrink-0 relative"
@@ -375,6 +407,24 @@ function ChatHeader({
           >
             Continue in a new chat…
           </button>
+          {moveTargets.length > 0 && (
+            <div className="border-t border-[var(--color-border)] py-1" data-testid="pinned-move-harness">
+              {moveTargets.map((h) => (
+                <button
+                  key={h}
+                  type="button"
+                  data-testid={`pinned-move-${h}`}
+                  disabled={moving}
+                  title="Ends this pinned chat and starts a new one on that harness with a summary. Heartbeats, Threads and messages follow; this chat stays in the list below."
+                  onClick={() => { void moveTo(h) }}
+                  className="w-full text-left px-3 py-1.5 text-[11px] flex items-center gap-2 text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] cursor-pointer no-drag disabled:opacity-50"
+                >
+                  <ProviderIcon provider={h} size={12} />
+                  <span>Move pinned chat to {harnessLabel(h)}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <div
             role="listbox"
             data-testid="pinned-session-list"
@@ -451,6 +501,17 @@ function ChatHeader({
       </button>
       </div>
     </div>
+    {(moving || moveNote) && (
+      <button
+        type="button"
+        data-testid="pinned-move-note"
+        onClick={() => setMoveNote('')}
+        title="Dismiss"
+        className="w-full text-left px-3 pb-1 text-[10px] text-[var(--color-text-muted)] no-drag cursor-pointer"
+      >
+        {moving ? 'Moving the pinned chat…' : moveNote}
+      </button>
+    )}
     </div>
   )
 }

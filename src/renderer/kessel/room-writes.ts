@@ -37,6 +37,7 @@ export const ROOM_WRITES: Readonly<Record<string, string>> = Object.freeze({
   'terminal/pin-size': 'the tab menu pins a session size on B',
   'terminal/send-message': 'compose, Chat about and chat-history sends type into a session on B',
   'workspace/ensure-pinned-chat': 'the pinned Chat starts B’s canonical chat session',
+  'agent/harness': 'the pinned Chat menu moves B’s pinned chat to another harness (B checks the login is owner or Admin)',
   'session/set-surfaced': 'closing a heartbeat tab minimizes it on B instead of killing it',
   'agents/ensure-cli': 'an agent launch (+ menu, Ctrl+1–9) makes sure that CLI is ready on B',
   'workspace/set-chat-session': 'picking a chat for the pinned Chat on B (call site checks the room write)',

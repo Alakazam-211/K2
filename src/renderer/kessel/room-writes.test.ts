@@ -79,6 +79,8 @@ const ABOVE_MEMBER_ROOM_WRITES = new Map([
   // A confirm card's Allow: the confirm Settings takes, on B (0.46.6).
   ['vault/confirm/start', 'Admin'],
   ['vault/confirm/finish', 'Admin'],
+  // Moving a pinned chat to another harness (0.46.6): owner or Admin.
+  ['agent/harness', 'Admin'],
 ])
 
 describe('the room write allowlist', () => {

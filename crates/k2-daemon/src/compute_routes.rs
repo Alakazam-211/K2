@@ -2249,9 +2249,9 @@ fn cache_clear(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::V
 
 // ── job tiers (prd-compute-job-tiers-v1) ─────────────────────────────
 
-/// `with` from a run request (`--with REPO[@SHA]`): `[{repo, sha?}]`.
+/// `with` from a run request (`--with DIR[@SHA]`): `[{repo, sha?}]`.
 fn with_asks(v: &serde_json::Value) -> R<Vec<(String, Option<String>)>> {
-    let bad = || no(REPO_INVALID, 400, "--with REPO[@SHA]: a git repo inside the workspace, optionally at a commit");
+    let bad = || no(REPO_INVALID, 400, "--with DIR[@SHA]: a git repo (or a worktree of one) inside the workspace, relative to its folder, optionally at a commit");
     match v.get("with") {
         None | Some(serde_json::Value::Null) => Ok(Vec::new()),
         Some(serde_json::Value::Array(a)) => {
@@ -4623,6 +4623,18 @@ mod tests {
             let e = cache_from(&bad).unwrap_err();
             assert_eq!((e.code, e.status), (pcache::codes::CACHE_INVALID, 400), "{bad}");
         }
+    }
+
+    /// A malformed `--with` names the flag as the CLI help does (`DIR[@SHA]`).
+    #[test]
+    fn a_bad_with_names_dir_at_sha_like_the_help() {
+        for bad in [serde_json::json!({"with": "x"}), serde_json::json!({"with": [{"repo": ""}]}), serde_json::json!({"with": [{"repo": "a", "sha": 7}]})] {
+            let e = with_asks(&bad).expect_err("refused");
+            assert_eq!((e.code, e.status), (REPO_INVALID, 400), "{bad}");
+            assert!(e.hint.starts_with("--with DIR[@SHA]: "), "{bad}: {}", e.hint);
+            assert!(!e.hint.contains("REPO"), "{bad}: {}", e.hint);
+        }
+        assert_eq!(with_asks(&serde_json::json!({"with": [{"repo": "a", "sha": "abc"}]})).expect("ok"), vec![("a".to_string(), Some("abc".to_string()))]);
     }
 
     /// `k2 compute grants --workspace WS` (0.46.6 papercut): the filter is

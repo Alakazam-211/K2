@@ -72260,7 +72260,7 @@ _doc_history_diff() {
     case "$from$to$ctx" in *[!0-9]*) _doc_die usage "--version, --to and -U take numbers" ;; esac
     _doc_parse "${rest[@]}"
     _doc_one_path diff; local path="$_DOC_PATH"
-    _doc_call GET /cli/docs/diff "$(_doc_query "$path" from "$from" to "$to" context "$ctx")"
+    _doc_call GET /cli/docs/diff "$(_doc_query "$path" fromVersion "$from" toVersion "$to" context "$ctx")"
     if [ "${_DOC_JSON:-0}" = "1" ]; then
         printf '%s\n' "$_DOC_BODY"
     else

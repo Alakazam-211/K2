@@ -644,11 +644,13 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             Ok(ok(json!({ "doc": doc_json(t), "version": v, "text": text })))
         }
         DIFF => {
+            // `fromVersion`, not `from`: the cell socket stamps `from` (the
+            // sender) on every call.
             let from = input
-                .u64("from")
+                .u64("fromVersion")
                 .map_err(VerbError::Response)?
-                .ok_or_else(|| VerbError::Response(bad("from is required: a version id")))?;
-            let to = input.u64("to").map_err(VerbError::Response)?;
+                .ok_or_else(|| VerbError::Response(bad("fromVersion is required: a version id")))?;
+            let to = input.u64("toVersion").map_err(VerbError::Response)?;
             let context = input.u64("context").map_err(VerbError::Response)?.unwrap_or(3).min(1000) as usize;
             let j = join(s, c, Stay::UntilIdle)?;
             let d = s.diff_version(j.conn, ROOT, from, to, context)?;

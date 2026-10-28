@@ -511,7 +511,7 @@ mod tests {
         assert!(!both.iter().any(|v| v.starts_with("projects.")), "no project chat on the Garden bridge");
         // The rows each joined both transports under their own feature;
         // the Garden transport's key is garden-person-rows-v1 (boot-status).
-        let person_rows: [(&str, &str); 12] = [
+        let person_rows: [(&str, &str); 13] = [
             ("thread.catchup", "inbox-catchup-v1"),
             ("thread.unread", "app-thread-parity-v1"),
             ("thread.mute", "app-read-state-v1"),
@@ -523,6 +523,8 @@ mod tests {
             ("tickets.create", "app-api-v1"),
             ("tickets.comment", "app-api-v1"),
             ("tickets.resolve", "app-api-v1"),
+            // 0.46.6: a ticket message's file, under its own feature key.
+            ("tickets.attachment", "ticket-attachments-v1"),
             ("activity.snapshot", "app-api-v1"),
         ];
         for (verb, feature) in person_rows {

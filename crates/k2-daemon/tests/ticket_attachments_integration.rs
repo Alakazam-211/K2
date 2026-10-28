@@ -304,7 +304,9 @@ async fn ticket_files_store_show_open_and_refuse() {
     f.set_modified(std::time::SystemTime::now() + Duration::from_secs(30)).unwrap();
     drop(f);
     let shown = show(port, OWNER, &id).await;
-    assert_eq!(shown["comments"][0]["attachments"][0]["state"], "ok", "a same-bytes touch stays ok (re-hash): {shown}");
+    assert_eq!(shown["comments"][0]["attachments"][0]["state"], "changed", "show is a stat, as the Thread list: {shown}");
+    let r = door(port, OWNER, &id, &seed_id, 0, "mode=meta").await;
+    assert_eq!(r.json()["state"], "ok", "the door re-hashes: a same-bytes touch stays ok: {}", r.body);
     write(&ws.path, "out/a.png", &png(10, 10));
     std::fs::remove_file(ws.path.join("out/b.png")).unwrap();
     let shown = show(port, OWNER, &id).await;

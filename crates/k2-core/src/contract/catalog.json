@@ -17441,6 +17441,8 @@
         "skin_room",
         "cap_not_granted",
         "usage",
+        "not_bound",
+        "author_unknown",
         "not_found",
         "failed"
       ],

@@ -46,6 +46,8 @@ pub const SECRET_DIRS: &[&str] = &[
     "federation",
     "wiki-public-chat",
     "skin",
+    // Live docs, tier 0: blob files hold workspace file contents.
+    crate::docs_store::BLOBS_DIR,
 ];
 
 /// Subtrees the DB sweep never walks. The sandbox roots hold dirs chowned

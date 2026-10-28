@@ -1,42 +1,50 @@
 //! Tier 0 on `/cli/docs/*`: any file that isn't Markdown is a blob doc
-//! (kit amendment 3, `BlobSession`), with the same caller, target, rights
-//! and shares as Markdown (PRD K-T0-1…9).
+//! (kit amendments 3, 10, 11: `BlobSession`), with the same caller, target,
+//! rights and shares as Markdown (PRD K-T0-1…9).
 //!
 //! | Route | Right | Kit call |
 //! |---|---|---|
-//! | `status` | read (+ history for the conflict copies) | `status`, `conflict_copies` |
+//! | `status` | read (+ history for the conflict copies) | `status` (`conflict_copies`) |
 //! | `flush` | read | `flush` |
-//! | `read` | read | `read` (the current bytes, verified, as base64) |
+//! | `read`, `tool` `cat` | read | `read` (the current bytes, verified; `cat` takes no flags) |
 //! | `who` | read | `roster` (the lease holder is an editor; `region`) |
 //! | `open` / `leave` | read | `join_shared(Held)` / `leave` |
-//! | `view` | read | `set_region` (`region`: "page 3"; `lines` needs a text doc) |
+//! | `view` | read | `set_region` (`region`: "page 3") |
 //! | `lease` | edit (release: read; break: owner) | `acquire_lease`, `renew_lease`, `release_lease`, `break_lease` |
 //! | `write` | edit | `write_bytes` from `base` (a version; `live` is refused: never last-writer-wins) |
-//! | `versions`, `log` | history | `versions` |
+//! | `versions` | history | `versions` |
+//! | `log` | history | `log` (`--pending`: pending approvals) |
 //! | `show` | history | `read_version` (bytes, base64) |
 //! | `restore` | edit + history | `restore` |
 //! | `name` | edit | `name_version` (the current one by default) |
-//! | `blame` | history | `blame` (the whole blob: who set the current version, the history summarised) |
-//! | `mv` | edit | `rekey` + `file_moved` |
+//! | `blame` | history | `blame` (the whole blob) |
+//! | `approve` | the named person | `set_approval` (a decline says how to restore) |
+//! | `approvals` | read | `approvals` |
+//! | `mv` | edit | `rekey` + `file_moved` (not under someone else's lease) |
 //!
-//! Every other verb needs a text doc and refuses with `not_a_text_doc`
-//! (exit 2), naming what tier 0 has. Which kit verbs are which is
-//! [`TIER0_VERBS`] / [`TEXT_ONLY_VERBS`], checked against the kit's
-//! registry (`KIT_VERBS`) by a test, so a new kit verb fails until it is
-//! classified. The lease is K2's verb (`lease`, `lock`, `unlock`) until the
-//! kit's registry has one.
+//! **Which verbs.** The kit's registry says which verbs work on any file
+//! (`VerbSpec::tiers`, [`registry`] = `Registry::for_tier(Tier::Blob)`); a
+//! route whose verb isn't there refuses with `not_a_text_doc` (exit 2),
+//! naming what tier 0 has. K2 adds `lock` / `unlock` (the CLI's names for
+//! `lease` / `lease --release`) and `view --region`.
 //!
-//! **Not built (kit K-T0-9):** on-behalf writes (their approvals), so an
-//! agent's write, restore or lease `--on-behalf-of` someone is refused;
-//! purge stays off `k2 doc`.
+//! **On someone's behalf** (K-T0-9, kit amendment 11): an agent's write or
+//! restore `--on-behalf-of` a person applies at once and waits for that
+//! person's approval (`approve` / `decline <version>`); a decline names the
+//! version to restore, nothing is restored for them. Purge stays off
+//! `k2 doc`.
 
 use std::io::Read;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use serde_json::{json, Value};
 
-use k2_mpc_base::session::{BlobSession, BlobWriteResult, Joined, LeaseInfo, SessionError, Stay};
+use k2_mpc_base::parity::{Registry, Tier};
+use k2_mpc_base::session::{
+    ApprovalState, BlobLogEntry, BlobSession, BlobWriteResult, ConflictCopy, Joined, LeaseInfo,
+    SessionError, Stay,
+};
 use k2_mpc_base::store::{BlobVersion, DocKey, VersionId};
 
 use super::caller::refusal;
@@ -45,61 +53,19 @@ use super::target::Target;
 use crate::cli_response::CliResponse;
 use k2_mpc_base::tools::exit;
 
-/// Kit verbs (`KIT_VERBS` names) that work on a tier-0 doc.
-pub const TIER0_VERBS: &[&str] = &[
-    "open",
-    "leave",
-    "who",
-    "follow",
-    "write",
-    "status",
-    "flush",
-    "watch",
-    "tail -f",
-    "log",
-    "show --version",
-    "blame",
-    "restore",
-    "version --name",
-    "mv",
-];
+/// The verbs that work on a tier-0 doc: the kit's registry for tier 0.
+pub fn registry() -> &'static Registry {
+    static R: OnceLock<Registry> = OnceLock::new();
+    R.get_or_init(|| Registry::for_tier(Tier::Blob))
+}
 
-/// Kit verbs that need a text doc (tier 1).
-pub const TEXT_ONLY_VERBS: &[&str] = &[
-    "cat",
-    "wc",
-    "head",
-    "tail",
-    "sed",
-    "view",
-    "grep",
-    "cursor",
-    "insert",
-    "replace",
-    "delete",
-    "sed -i",
-    "patch",
-    "apply",
-    "append",
-    "undo",
-    "redo",
-    "undo --drop",
-    "undo --partial",
-    "diff --version",
-    "diff",
-    "approve",
-    "decline",
-    "log --pending",
-    "revert",
-];
-
-/// K2's own tier-0 verbs (the lease), not in the kit's registry yet.
-pub const LEASE_VERBS: &[&str] = &["lease", "lock", "unlock"];
+/// K2's own names on top of the registry (CLI aliases and K2's verbs).
+pub const K2_VERBS: &[&str] = &["lock", "unlock", "view --region", "versions", "approvals", "watch"];
 
 /// What a tier-0 doc offers, for the teaching refusal.
 pub fn offered() -> String {
-    let mut v: Vec<&str> = TIER0_VERBS.iter().copied().filter(|v| *v != "tail -f").collect();
-    v.push("lease");
+    let mut v: Vec<&str> = registry().verbs().iter().map(|v| v.name).collect();
+    v.extend(K2_VERBS.iter().copied());
     v.join(", ")
 }
 
@@ -110,7 +76,7 @@ pub fn not_a_text_doc(t: &Target, verb: &str) -> CliResponse {
         "error": {
             "code": "not_a_text_doc",
             "hint": format!(
-                "`{verb}` works on text docs; {} is an any-file doc (tier 0), which has: {}. Read its bytes with k2 doc show --version V (k2 doc status shows V), or open the file itself",
+                "`{verb}` works on text docs; {} is an any-file doc (tier 0), which has: {}. k2 doc cat prints its bytes",
                 t.rel,
                 offered()
             ),
@@ -122,9 +88,11 @@ pub fn not_a_text_doc(t: &Target, verb: &str) -> CliResponse {
     CliResponse { status: "400 Bad Request", content_type: "application/json", body: body.to_string() }
 }
 
-/// The verb a route names when it needs a text doc (`None`: tier 0 has it).
-fn text_only_route(path: &str, c: &Call) -> Option<String> {
-    match path {
+/// The registry verb a route runs (its CLI form), for the routes that map
+/// to one; `None` for K2's own routes (status, read, versions, view
+/// --region, approvals...), which tier 0 serves.
+fn route_verb(path: &str, c: &Call) -> Option<String> {
+    let v = match path {
         routes::TOOL => {
             let argv: Vec<String> = c
                 .input
@@ -133,43 +101,29 @@ fn text_only_route(path: &str, c: &Call) -> Option<String> {
                 .and_then(Value::as_array)
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
                 .unwrap_or_default();
-            Some(if argv.is_empty() { "tool".to_string() } else { k2_mpc_base::parity::verb_form(&argv) })
+            return Some(if argv.is_empty() { "tool".to_string() } else { k2_mpc_base::parity::verb_form(&argv) });
         }
-        routes::EDIT => Some("edit".into()),
-        routes::CURSOR => Some("cursor".into()),
-        routes::UNDO => Some("undo".into()),
-        routes::REDO => Some("redo".into()),
-        routes::REVERT => Some("revert".into()),
-        routes::DIFF => Some("diff --version".into()),
-        routes::APPROVE => Some("approve".into()),
-        routes::APPROVALS => Some("approvals".into()),
-        routes::VIEW if c.input.str("lines").is_some() => Some("view --lines".into()),
-        routes::LOG if c.input.flag("pending") => Some("log --pending".into()),
-        routes::BLAME if c.input.str("lines").is_some_and(|l| !l.trim().is_empty()) => Some("blame -L".into()),
-        _ => None,
-    }
-}
-
-/// Routes that write (refused on someone's behalf until the kit records
-/// approvals for blob writes, K-T0-9).
-fn writes(path: &str) -> bool {
-    matches!(path, routes::WRITE | routes::RESTORE | routes::LEASE | routes::NAME | routes::MV)
+        routes::EDIT => "edit",
+        routes::CURSOR => "cursor",
+        routes::UNDO => "undo",
+        routes::REDO => "redo",
+        routes::REVERT => "revert",
+        routes::DIFF => "diff --version",
+        routes::CLAIM => "claim",
+        routes::ACTIVITY => "activity",
+        routes::VIEW if c.input.str("lines").is_some() => "view",
+        routes::BLAME if c.input.str("lines").is_some_and(|l| !l.trim().is_empty()) => "blame -L",
+        _ => return None,
+    };
+    Some(v.to_string())
 }
 
 /// The tier-0 entry, after the caller, target and rights checks.
 pub(super) fn handle(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
-    if let Some(verb) = text_only_route(path, c) {
-        return not_a_text_doc(c.target, &verb);
-    }
-    if c.on_behalf.is_some() && writes(path) {
-        return routes::with_exit(
-            refusal(
-                "400 Bad Request",
-                "on_behalf_not_built",
-                "on-behalf changes to any-file docs need approvals, which aren't built yet; make the change as yourself",
-            ),
-            exit::USAGE,
-        );
+    if let Some(verb) = route_verb(path, c) {
+        if registry().get(&verb).is_none() {
+            return not_a_text_doc(c.target, &verb);
+        }
     }
     let s = match open(rt, c.target) {
         Ok(s) => s,
@@ -231,6 +185,11 @@ fn body_bytes(c: &Call) -> Result<Vec<u8>, VerbError> {
     }
 }
 
+/// A version number param (`what` names it in the refusal).
+fn version_param(c: &Call, key: &str, what: &str) -> Result<VersionId, VerbError> {
+    c.input.u64(key).map_err(VerbError::Response)?.ok_or_else(|| VerbError::Response(routes::bad(format!("{key} is required: {what}"))))
+}
+
 fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) -> Result<CliResponse, VerbError> {
     let t = c.target;
     let input = c.input;
@@ -238,21 +197,19 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         routes::STATUS => {
             let j = join(s, c, Stay::UntilIdle)?;
             let st = s.status()?;
-            let copies = if c.rights.history {
-                let files = s.conflict_copies(j.conn)?;
-                Some(files.iter().map(|p| copy_rel(t, p)).collect::<Vec<_>>())
-            } else {
-                None
-            };
             let declined = match &st.disk {
                 Some(k2_mpc_base::session::DiskState::Declined(reason)) => Some(reason.clone()),
                 _ => None,
             };
+            // Conflict copies hold earlier content: history only.
+            let copies = c.rights.history.then(|| st.conflict_copies.iter().map(|cc| copy_json(t, cc)).collect::<Vec<_>>());
+            let approval = s.approval(j.conn, st.version).ok().flatten();
             Ok(ok0(
                 t,
                 json!({
                     "version": st.version,
                     "current": version_json(st.version, &st.current, st.version),
+                    "approval": approval.as_ref().map(|a| routes::lower(&a.state)),
                     "participants": st.participants,
                     "connections": st.connections,
                     "lease": st.lease.as_ref().map(|l| lease_json(l, c)),
@@ -284,6 +241,34 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
                     "rights": c.rights.json(),
                 }),
             ))
+        }
+        // `cat` on any file (the registry's tier-0 form): the bytes, as a
+        // text tool answers (stdout, or stdoutB64 when not UTF-8).
+        routes::TOOL => {
+            let argv: Vec<&str> = input.body.get("argv").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            if argv.len() > 1 {
+                return Ok(ok0(
+                    t,
+                    json!({
+                        "exit": exit::USAGE,
+                        "stdout": "",
+                        "stderr": format!("k2 doc cat: {} is an any-file doc: cat prints its bytes and takes no flags", t.rel),
+                    }),
+                ));
+            }
+            let j = join(s, c, Stay::UntilIdle)?;
+            let r = s.read(j.conn)?;
+            let version = r.version;
+            let bytes = read_all(r.reader)?;
+            let mut v = json!({ "exit": exit::OK, "version": version, "stderr": "" });
+            match String::from_utf8(bytes) {
+                Ok(text) => v["stdout"] = json!(text),
+                Err(e) => {
+                    v["stdout"] = Value::Null;
+                    v["stdoutB64"] = json!(routes::b64(e.as_bytes()));
+                }
+            }
+            Ok(ok0(t, v))
         }
         routes::WHO => {
             let j = join(s, c, Stay::UntilIdle)?;
@@ -323,7 +308,7 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             let bytes = body_bytes(c)?;
             let j = join(s, c, Stay::UntilIdle)?;
             let w = s.write_bytes(j.conn, &bytes, base)?;
-            Ok(ok0(t, json!({ "result": write_json(&w) })))
+            on_behalf_reply(s, c, j.conn, json!({ "result": write_json(&w) }), w.changed.then_some(w.version))
         }
         routes::VERSIONS => {
             let j = join(s, c, Stay::UntilIdle)?;
@@ -332,35 +317,23 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             Ok(ok0(t, json!({ "versions": vs.iter().map(|(id, v)| version_json(*id, v, cur)).collect::<Vec<_>>() })))
         }
         routes::LOG => {
-            let by = match input.str("by").filter(|p| !p.trim().is_empty()) {
-                Some(b) => Some(routes::any_pid(&b, c.caller).map_err(VerbError::Response)?),
-                None => None,
+            let any = |k: &str| -> Result<Option<String>, VerbError> {
+                match input.str(k).filter(|p| !p.trim().is_empty()) {
+                    Some(b) => Ok(Some(routes::any_pid(&b, c.caller).map_err(VerbError::Response)?)),
+                    None => Ok(None),
+                }
             };
-            let for_person = match input.str("forPerson").filter(|p| !p.trim().is_empty()) {
-                Some(p) => Some(routes::any_pid(&p, c.caller).map_err(VerbError::Response)?),
-                None => None,
-            };
+            let (by, for_person) = (any("by")?, any("forPerson")?);
             let since = input.u64("sinceMs").map_err(VerbError::Response)?;
             let n = input.u64("n").map_err(VerbError::Response)?;
+            let pending = input.flag("pending");
             let j = join(s, c, Stay::UntilIdle)?;
-            let cur = s.status()?.version;
-            let rows = log_rows(s.versions(j.conn)?, by.as_deref(), for_person.as_deref(), since, n);
-            Ok(ok0(
-                t,
-                json!({
-                    "log": rows.iter().map(|(id, v)| {
-                        let mut x = version_json(*id, v, cur);
-                        x["type"] = json!("version");
-                        x
-                    }).collect::<Vec<_>>(),
-                }),
-            ))
+            let f = LogFilter { by: by.as_deref(), for_person: for_person.as_deref(), since_ms: since, pending };
+            let rows = log_rows(s.log(j.conn)?, &f, n);
+            Ok(ok0(t, json!({ "log": rows.iter().map(|e| log_json(t, e)).collect::<Vec<_>>() })))
         }
         routes::SHOW => {
-            let v = input
-                .u64("version")
-                .map_err(VerbError::Response)?
-                .ok_or_else(|| VerbError::Response(routes::bad("version is required (k2 doc versions)")))?;
+            let v = version_param(c, "version", "a version id (k2 doc versions)")?;
             let j = join(s, c, Stay::UntilIdle)?;
             let r = s.read_version(j.conn, v)?;
             let info = r.info.clone();
@@ -377,13 +350,10 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
             ))
         }
         routes::RESTORE => {
-            let v = input
-                .u64("version")
-                .map_err(VerbError::Response)?
-                .ok_or_else(|| VerbError::Response(routes::bad("version is required: a version id from k2 doc versions")))?;
+            let v = version_param(c, "version", "a version id from k2 doc versions")?;
             let j = join(s, c, Stay::UntilIdle)?;
             let w = s.restore(j.conn, v)?;
-            Ok(ok0(t, json!({ "restored": v, "result": write_json(&w) })))
+            on_behalf_reply(s, c, j.conn, json!({ "restored": v, "result": write_json(&w) }), w.changed.then_some(w.version))
         }
         routes::NAME => {
             let name = input
@@ -412,11 +382,38 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
                 json!({
                     "version": b.version,
                     "current": version_json(b.version, &b.current, b.version),
+                    "approval": b.approval.as_ref().map(routes::lower),
                     "versions": b.versions,
                     "authors": authors,
                     "rendered": render_blame(&t.rel, b.version, &b.current, b.versions, &b.authors),
                 }),
             ))
+        }
+        // `approve` / `decline <version>`: only the person it was made for.
+        routes::APPROVE => {
+            let v = version_param(c, "change", "the version (k2 doc log --pending)")?;
+            let state = match input.str("state").as_deref().map(str::trim) {
+                Some("approved") | Some("approve") => ApprovalState::Approved,
+                Some("declined") | Some("decline") => ApprovalState::Declined,
+                _ => return Err(VerbError::Response(routes::bad("state must be approved or declined"))),
+            };
+            let j = join(s, c, Stay::UntilIdle)?;
+            let a = s.set_approval(j.conn, v, state)?;
+            Ok(ok0(t, approval_reply(v, routes::approval_json(&a.approval), a.approval.state, a.restore_to, &a.later)))
+        }
+        routes::APPROVALS => {
+            let pending_only = input.flag("pending");
+            let mine = input.flag("mine");
+            let me = c.caller.pid();
+            let j = join(s, c, Stay::UntilIdle)?;
+            let rows: Vec<Value> = s
+                .approvals(j.conn)?
+                .into_iter()
+                .filter(|(_, a)| !pending_only || a.state == ApprovalState::Pending)
+                .filter(|(_, a)| !mine || a.on_behalf_of == me)
+                .map(|(v, a)| json!({ "change": v, "approval": routes::approval_json(&a) }))
+                .collect();
+            Ok(ok0(t, json!({ "approvals": rows })))
         }
         routes::MV => {
             // A rename moves the file under its lease holder: theirs only.
@@ -424,20 +421,59 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
                 return Err(VerbError::Session(SessionError::Leased { holder: l.pid, name: l.name, expires_ms: l.expires_ms }));
             }
             Ok(routes::mv(
-            rt,
-            c,
-            || {
-                let j = join(s, c, Stay::UntilIdle)?;
-                s.flush(j.conn).map(|_| ())
-            },
-            |p: &Path| s.file_moved(p).map(|_| ()),
-        ))
+                rt,
+                c,
+                || {
+                    let j = join(s, c, Stay::UntilIdle)?;
+                    s.flush(j.conn).map(|_| ())
+                },
+                |p: &Path| s.file_moved(p).map(|_| ()),
+            ))
         }
         _ => Ok(CliResponse::not_found()),
     }
 }
 
+/// A write's or restore's answer, with the pending approval when an agent
+/// made it on a person's behalf.
+fn on_behalf_reply(
+    s: &BlobSession,
+    c: &Call,
+    conn: k2_mpc_base::session::ConnId,
+    mut v: Value,
+    new_version: Option<VersionId>,
+) -> Result<CliResponse, VerbError> {
+    if let Some(person) = c.on_behalf {
+        v["onBehalfOf"] = json!(person);
+        if let Some(a) = new_version.map(|nv| s.approval(conn, nv)).transpose()?.flatten() {
+            v["approval"] = routes::approval_json(&a);
+        }
+    }
+    Ok(ok0(c.target, v))
+}
+
+/// `approve` / `decline`: the record, and on a decline the way back
+/// (nothing is restored for the person: blobs don't merge).
+fn approval_reply(v: VersionId, approval: Value, state: ApprovalState, restore_to: Option<VersionId>, later: &[VersionId]) -> Value {
+    let mut out = json!({ "change": v, "approval": approval });
+    if state == ApprovalState::Declined {
+        out["restoreTo"] = json!(restore_to);
+        out["later"] = json!(later);
+        out["hint"] = json!(match (restore_to, later.is_empty()) {
+            (Some(r), true) => format!("declined; to undo it: k2 doc restore --version {r}"),
+            (Some(r), false) => format!(
+                "declined; to undo it: k2 doc restore --version {r} (versions {} came after it and would be replaced too)",
+                later.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+            ),
+            (None, _) => "declined; there is no earlier version to restore".to_string(),
+        });
+    }
+    out
+}
+
 /// `lease`: `action` acquire (default) | renew | release | break, `ttlSecs`.
+/// Release without holding it and break with nobody holding it exit 1 (the
+/// kit's registry).
 fn lease(s: &Arc<BlobSession>, c: &Call) -> Result<CliResponse, VerbError> {
     let t = c.target;
     let ttl_ms = match c.input.u64("ttlSecs").map_err(VerbError::Response)? {
@@ -450,53 +486,90 @@ fn lease(s: &Arc<BlobSession>, c: &Call) -> Result<CliResponse, VerbError> {
     match action.as_str() {
         "acquire" | "" => {
             let l = s.acquire_lease(j.conn, ttl_ms)?;
-            Ok(ok0(t, json!({ "action": "acquire", "lease": lease_json(&l, c) })))
+            Ok(ok0(t, json!({ "action": "acquire", "lease": lease_json(&l, c), "exit": exit::OK })))
         }
         "renew" => {
             let l = s.renew_lease(j.conn, ttl_ms)?;
-            Ok(ok0(t, json!({ "action": "renew", "lease": lease_json(&l, c) })))
+            Ok(ok0(t, json!({ "action": "renew", "lease": lease_json(&l, c), "exit": exit::OK })))
         }
         "release" => {
             let released = s.release_lease(j.conn)?;
-            Ok(ok0(t, json!({ "action": "release", "released": released })))
+            Ok(ok0(t, json!({ "action": "release", "released": released, "exit": if released { exit::OK } else { exit::NO } })))
         }
         "break" => {
             let broken = s.break_lease(j.conn)?;
-            Ok(ok0(t, json!({ "action": "break", "broken": broken.as_ref().map(|l| lease_json(l, c)) })))
+            Ok(ok0(
+                t,
+                json!({
+                    "action": "break",
+                    "broken": broken.as_ref().map(|l| lease_json(l, c)),
+                    "exit": if broken.is_some() { exit::OK } else { exit::NO },
+                }),
+            ))
         }
         other => Err(VerbError::Response(routes::bad(format!("action must be acquire, renew, release or break (got {other})")))),
     }
 }
 
-/// The versions a `log` shows: newest first, filtered by who set them, for
-/// whom, since when, at most `n`.
-fn log_rows(
-    all: Vec<(VersionId, BlobVersion)>,
-    by: Option<&str>,
-    for_person: Option<&str>,
+/// What a `log` keeps: who set the version, for whom, since when, pending
+/// approvals only.
+struct LogFilter<'a> {
+    by: Option<&'a str>,
+    for_person: Option<&'a str>,
     since_ms: Option<u64>,
-    n: Option<u64>,
-) -> Vec<(VersionId, BlobVersion)> {
-    let mut rows: Vec<(VersionId, BlobVersion)> = all
-        .into_iter()
-        .rev()
-        .filter(|(_, v)| by.is_none_or(|b| v.author == b))
-        .filter(|(_, v)| for_person.is_none_or(|p| v.on_behalf_of.as_deref() == Some(p)))
-        .filter(|(_, v)| since_ms.is_none_or(|s| v.at_ms >= s))
-        .collect();
-    if let Some(n) = n {
-        rows.truncate(n as usize);
-    }
-    rows
+    pending: bool,
 }
 
-/// A conflict copy as the doc's workspace names it (else its file name).
+impl LogFilter<'_> {
+    fn keeps(&self, author: &str, on_behalf_of: Option<&str>, at_ms: u64, approval: Option<ApprovalState>) -> bool {
+        self.by.is_none_or(|b| author == b)
+            && self.for_person.is_none_or(|p| on_behalf_of == Some(p))
+            && self.since_ms.is_none_or(|s| at_ms >= s)
+            && (!self.pending || approval == Some(ApprovalState::Pending))
+    }
+}
+
+/// The entries a `log` shows: newest first, filtered, at most `n`.
+fn log_rows(all: Vec<BlobLogEntry>, f: &LogFilter, n: Option<u64>) -> Vec<BlobLogEntry> {
+    all.into_iter()
+        .rev()
+        .filter(|e| f.keeps(&e.author, e.on_behalf_of.as_deref(), e.at_ms, e.approval))
+        .take(n.map_or(usize::MAX, |n| n as usize))
+        .collect()
+}
+
+/// A path as the doc's workspace names it (else its file name).
 fn copy_rel(t: &Target, p: &Path) -> String {
     p.strip_prefix(&t.root)
         .ok()
         .map(|r| r.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/"))
         .or_else(|| p.file_name().map(|n| n.to_string_lossy().to_string()))
         .unwrap_or_default()
+}
+
+fn copy_json(t: &Target, c: &ConflictCopy) -> Value {
+    json!({ "path": copy_rel(t, &c.path), "version": c.version, "kept": c.kept, "atMs": c.at_ms })
+}
+
+/// One log entry (metadata only).
+fn log_json(t: &Target, e: &BlobLogEntry) -> Value {
+    json!({
+        "type": "version",
+        "id": e.id,
+        "kind": routes::lower(&e.kind),
+        "reason": routes::lower(&e.kind),
+        "of": e.of,
+        "author": e.author,
+        "authorLabel": routes::pid_label(&e.author),
+        "via": e.via,
+        "atMs": e.at_ms,
+        "onBehalfOf": e.on_behalf_of,
+        "approval": e.approval.as_ref().map(routes::lower),
+        "name": e.name,
+        "redacted": e.redacted,
+        "size": e.size,
+        "conflictCopy": e.conflict_copy.as_deref().map(|p| copy_rel(t, p)),
+    })
 }
 
 fn lease_json(l: &LeaseInfo, c: &Call) -> Value {
@@ -565,7 +638,7 @@ pub fn render_blame(
 }
 
 /// `YYYY-MM-DD HH:MM:SS` UTC.
-fn utc(ms: u64) -> String {
+pub(super) fn utc(ms: u64) -> String {
     let secs = (ms / 1000) as i64;
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // H. Hinnant's civil-from-days.
@@ -598,7 +671,7 @@ pub fn notify_conflict(key: DocKey, current: VersionId, kept: VersionId, copy: O
             },
         );
         if let Some(copy) = &copy {
-            body.push_str(&format!(", also beside the file as \"{copy}\""));
+            body.push_str(&format!(", also kept as the copy \"{copy}\" (next to the file's folder, under .k2/conflicts)"));
         }
         body.push_str(&format!(
             "\n\nk2 doc versions {p} lists them; k2 doc restore --version {kept} {p} makes the replaced one current again.",
@@ -627,72 +700,71 @@ pub fn notify_conflict(key: DocKey, current: VersionId, kept: VersionId, copy: O
 #[cfg(test)]
 mod tests {
     use super::*;
-    use k2_mpc_base::blob::BlobId;
-    use k2_mpc_base::store::BlobReason;
 
-    /// K-PAR-5 for tier 0: every verb of the kit's registry is classified
-    /// (works on any file, or needs a text doc), nothing twice, nothing
-    /// stale. A new kit verb fails here until K2 decides.
+    /// The kit decides which verbs work on any file (`VerbSpec::tiers`):
+    /// the leases are there, the text tools aren't, and K2's own names
+    /// aren't the kit's.
     #[test]
-    fn every_kit_verb_is_classified_for_tier_0() {
-        let names: Vec<&str> = k2_mpc_base::parity::KIT_VERBS.iter().map(|v| v.name).collect();
-        let mut missing = Vec::new();
-        for n in &names {
-            let a = TIER0_VERBS.contains(n);
-            let b = TEXT_ONLY_VERBS.contains(n);
-            if a == b {
-                missing.push(format!("{n} (tier0 {a}, text-only {b})"));
-            }
+    fn the_tier_0_verbs_come_from_the_kits_registry() {
+        let names: Vec<&str> = registry().verbs().iter().map(|v| v.name).collect();
+        for v in ["open", "leave", "cat", "who", "write", "status", "flush", "log", "show --version", "restore",
+            "version --name", "mv", "blame", "lease", "lease --renew", "lease --release", "lease --break", "approve",
+            "decline", "log --pending"]
+        {
+            assert!(names.contains(&v), "{v} is not a tier-0 verb in the kit's registry: {names:?}");
         }
-        assert!(missing.is_empty(), "kit verbs not classified exactly once: {missing:?}");
-        for v in TIER0_VERBS.iter().chain(TEXT_ONLY_VERBS) {
-            assert!(names.contains(v), "{v} is classified but isn't a kit verb any more");
+        for v in ["grep", "sed -i", "undo", "claim", "replace", "diff --version", "revert", "cursor"] {
+            assert!(!names.contains(&v), "{v} is a tier-0 verb now: route it in tier0.rs");
         }
-        for v in LEASE_VERBS {
-            assert!(!names.contains(v), "{v} is a kit verb now: classify it there and drop it from LEASE_VERBS");
+        for v in K2_VERBS {
+            assert!(registry().get(v).is_none(), "{v} is a kit verb now: drop it from K2_VERBS");
         }
     }
 
-    /// The CLI routes every tier-0 verb and the lease verbs, and its help
-    /// shows them.
+    /// K-PAR-5 for tier 0: every verb of the kit's tier-0 registry is a
+    /// `k2 doc` verb the CLI routes, and its help shows it; K2's lease
+    /// aliases too.
     #[test]
-    fn the_cli_routes_and_documents_the_lease_verbs() {
+    fn every_tier_0_verb_is_a_k2_doc_verb() {
         let cli = include_str!("../../../../cli/k2");
         let start = cli.find("\ncmd_doc() {").expect("cmd_doc in cli/k2");
         let end = cli[start..].find("# END_CLI_DOC").expect("END_CLI_DOC") + start;
         let body = &cli[start..end];
-        for v in LEASE_VERBS {
-            assert!(
-                body.lines().any(|l| l.trim_start().split(')').next().is_some_and(|p| p.split('|').any(|w| w == *v))),
-                "cmd_doc has no case for {v}"
-            );
-        }
+        let labels: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.trim_start().split_once(')').map(|(p, _)| p))
+            .filter(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c == '|' || c == '-'))
+            .flat_map(|p| p.split('|'))
+            .collect();
         let usage_start = cli.find("\n_doc_usage() {").expect("_doc_usage");
         let usage = &cli[usage_start..cli[usage_start..].find("\nEOF\n").expect("usage end") + usage_start];
-        assert!(usage.contains("k2 doc lease"), "help lacks k2 doc lease");
+        let mut missing = Vec::new();
+        for name in registry().verbs().iter().map(|v| v.name).chain(["lock", "unlock"]) {
+            let word = name.split_whitespace().next().unwrap_or(name);
+            let routed = labels.contains(&word);
+            let documented = usage.contains(&format!("k2 doc {word}")) || usage.contains(&format!("|{word}")) || usage.contains(&format!("{word}|")) || usage.contains(&format!(" {word} "));
+            if !routed || !documented {
+                missing.push(format!("{name} (routed {routed}, in help {documented})"));
+            }
+        }
+        assert!(missing.is_empty(), "tier-0 verbs k2 doc lacks: {missing:?}");
         assert!(usage.contains("Any other file"), "help lacks the tier-0 section");
     }
 
-    fn v(author: &str, at: u64, behalf: Option<&str>) -> BlobVersion {
-        let mut x = BlobVersion::new(BlobId::from_slice(&[7u8; 32]).expect("id"), 3, at, author, author, "cli", BlobReason::Write);
-        x.on_behalf_of = behalf.map(str::to_string);
-        x
-    }
-
     #[test]
-    fn log_is_newest_first_and_filters_by_author_person_time_and_count() {
-        let all = vec![
-            (1, v("kit:import", 10, None)),
-            (2, v("agent:a", 20, Some("person:owner"))),
-            (3, v("person:owner", 30, None)),
-            (4, v("agent:a", 40, None)),
-        ];
-        let ids = |r: Vec<(VersionId, BlobVersion)>| r.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
-        assert_eq!(ids(log_rows(all.clone(), None, None, None, None)), vec![4, 3, 2, 1]);
-        assert_eq!(ids(log_rows(all.clone(), Some("agent:a"), None, None, None)), vec![4, 2]);
-        assert_eq!(ids(log_rows(all.clone(), None, Some("person:owner"), None, None)), vec![2]);
-        assert_eq!(ids(log_rows(all.clone(), None, None, Some(25), None)), vec![4, 3]);
-        assert_eq!(ids(log_rows(all, None, None, None, Some(1))), vec![4]);
+    fn log_filters_by_author_person_time_and_pending() {
+        let all = LogFilter { by: None, for_person: None, since_ms: None, pending: false };
+        assert!(all.keeps("kit:import", None, 10, None));
+        let by = LogFilter { by: Some("agent:a"), ..all };
+        assert!(by.keeps("agent:a", None, 1, None) && !by.keeps("person:owner", None, 1, None));
+        let behalf = LogFilter { for_person: Some("person:owner"), ..all };
+        assert!(behalf.keeps("agent:a", Some("person:owner"), 1, None) && !behalf.keeps("agent:a", None, 1, None));
+        let since = LogFilter { since_ms: Some(25), ..all };
+        assert!(since.keeps("x", None, 25, None) && !since.keeps("x", None, 24, None));
+        let pending = LogFilter { pending: true, ..all };
+        assert!(pending.keeps("agent:a", Some("person:owner"), 1, Some(ApprovalState::Pending)));
+        assert!(!pending.keeps("agent:a", Some("person:owner"), 1, Some(ApprovalState::Approved)));
+        assert!(!pending.keeps("person:owner", None, 1, None));
     }
 
     #[test]
@@ -703,10 +775,31 @@ mod tests {
 
     #[test]
     fn a_version_carries_metadata_never_the_blob_id() {
-        let j = version_json(5, &v("person:owner", 1, None), 5);
+        let v = BlobVersion::new(
+            k2_mpc_base::blob::BlobId::from_slice(&[7u8; 32]).expect("id"),
+            3,
+            1,
+            "person:owner",
+            "Owner",
+            "cli",
+            k2_mpc_base::store::BlobReason::Write,
+        );
+        let j = version_json(5, &v, 5);
         assert_eq!(j["current"], true);
         assert_eq!(j["reason"], "write");
         assert!(j.get("blob").is_none(), "{j}");
         assert!(!j.to_string().contains(&"07".repeat(32)), "the keyed id leaked: {j}");
+    }
+
+    #[test]
+    fn a_decline_says_how_to_restore_and_what_else_it_replaces() {
+        let r = approval_reply(7, json!({}), ApprovalState::Declined, Some(6), &[8, 9]);
+        assert_eq!(r["restoreTo"], 6);
+        assert!(r["hint"].as_str().expect("hint").contains("restore --version 6 (versions 8, 9 came after it"), "{r}");
+        assert_eq!(
+            approval_reply(7, json!({}), ApprovalState::Declined, Some(6), &[])["hint"],
+            "declined; to undo it: k2 doc restore --version 6"
+        );
+        assert!(approval_reply(7, json!({}), ApprovalState::Approved, Some(6), &[]).get("hint").is_none());
     }
 }

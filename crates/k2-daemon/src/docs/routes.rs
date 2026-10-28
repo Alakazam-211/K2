@@ -50,15 +50,16 @@ use serde_json::{json, Value};
 
 use k2_mpc_base::session::position::{self, At, LineCol, LineRange};
 use k2_mpc_base::session::{
-    Approval, ApprovalState, ConflictRegion, DiskState, EditResult, EditWithError, LogItem, LogQuery, Need, RosterEntry,
-    Role, Session, SessionError, Stay, UndoMode, UndoOutcome, UndoRequest, VersionInfo, WriteOutcome,
+    Approval, ApprovalState, ClaimId, ClaimInfo, ClaimPolicy, ConflictRegion, DiskState, EditResult, EditWithError,
+    LogItem, LogQuery, Need, Notes, RosterEntry, Role, Session, SessionError, Stay, UndoMode, UndoOutcome, UndoRequest,
+    VersionInfo, WriteOutcome,
 };
 use k2_core::log_debug;
 use k2_mpc_base::blob::BlobError;
 use k2_mpc_base::store::{DocKey, DocStore, StoreError};
 use k2_mpc_base::text::merge::Conflict;
 use k2_mpc_base::text::Hunk;
-use k2_mpc_base::{Edit, ParticipantKind};
+use k2_mpc_base::ParticipantKind;
 
 use super::caller::{refusal, DocCaller};
 use super::host::{self, CrossRefusal, DocRights, Principal};
@@ -115,11 +116,15 @@ const ROOT: &str = k2_mpc_markdown::ROOT;
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
-    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE,
+    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
 pub const LEASE: &str = "/cli/docs/lease";
+/// Agent presence (kit amendment 13): take, renew, release a claim.
+pub const CLAIM: &str = "/cli/docs/claim";
+/// Agent presence: the doc's recent reads, edits and claims.
+pub const ACTIVITY: &str = "/cli/docs/activity";
 
 pub const VERSIONS: &str = "/cli/docs/versions";
 pub const SHOW: &str = "/cli/docs/show";
@@ -145,6 +150,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/name"
             | "/cli/docs/mv"
             | "/cli/docs/lease"
+            | "/cli/docs/claim"
     ) || is_edit_route(path)
 }
 
@@ -338,15 +344,100 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         );
     }
     let r = verb(path, &session, &call);
-    match r {
+    let (r, s) = match r {
         // The pool unloaded the session between open and the call (it was
         // idle and nobody held it): open again, once.
         Err(VerbError::Session(SessionError::Unloaded)) => match open(&rt, &target) {
-            Ok(s) => verb(path, &s, &call).unwrap_or_else(VerbError::into_response),
-            Err(resp) => resp,
+            Ok(s) => (verb(path, &s, &call), s),
+            Err(resp) => return resp,
         },
+        r => (r, session),
+    };
+    match r {
         Ok(resp) => resp,
+        // An agent's edit (or claim) ran into someone's claim: it waits in
+        // line, and the bounce reaches its terminal and Chatter.
+        Err(VerbError::Session(e @ SessionError::Claimed { .. })) => super::claims::bounced(&s, &call, &e),
         Err(e) => e.into_response(),
+    }
+}
+
+/// The claim policy for this caller's edits: agents respect each other's
+/// claims (a bounce, exit 5); a person is never held back by one.
+fn policy(c: &Call) -> ClaimPolicy {
+    match c.caller {
+        DocCaller::Agent { .. } => ClaimPolicy::Respect,
+        DocCaller::Person { .. } => ClaimPolicy::Ignore,
+    }
+}
+
+/// Heads-up notes for the CLI's stderr: one `note: …` line each.
+fn notes_text(n: &Notes) -> Value {
+    if n.is_empty() {
+        Value::Null
+    } else {
+        Value::String(n.to_string())
+    }
+}
+
+fn claim_json(c: &ClaimInfo) -> Value {
+    json!({
+        "id": c.id.to_string(),
+        "pid": c.pid,
+        "name": c.name,
+        "label": pid_label(&c.pid),
+        "lines": [c.lines.first, c.lines.last],
+        "takenMs": c.taken_ms,
+        "expiresMs": c.expires_ms,
+        "remainingMs": c.remaining_ms,
+        "note": c.note,
+        "hold": c.hold,
+        "forEdit": c.for_edit,
+        "waiters": c.waiters,
+    })
+}
+
+/// `claim`: `action` take (default: `lines` a,b, `ttlMs`, `note`, `hold`) |
+/// renew (`id`, `ttlMs`, `hold`) | release (`id`; none: all yours). Needs
+/// edit (release: read).
+fn claim(s: &Session, c: &Call) -> Result<CliResponse, VerbError> {
+    let input = c.input;
+    let ttl = input.u64("ttlMs").map_err(VerbError::Response)?;
+    let id = match input.str("id").filter(|i| !i.trim().is_empty()) {
+        Some(i) => Some(
+            ClaimId::parse(i.trim()).ok_or_else(|| VerbError::Response(bad(format!("{i:?} is not a claim id (claim-12 or 12)"))))?,
+        ),
+        None => None,
+    };
+    let hold = match input.body.get("hold") {
+        Some(Value::Bool(b)) => Some(*b),
+        _ => input.str("hold").map(|h| h == "1" || h == "true"),
+    };
+    let action = input.str("action").map(|a| a.trim().to_ascii_lowercase()).unwrap_or_else(|| "take".into());
+    let j = join(s, c, Stay::UntilIdle)?;
+    match action.as_str() {
+        "take" | "" => {
+            let lines = input.str("lines").ok_or_else(|| VerbError::Response(bad("lines is required (a,b)")))?;
+            let (first, last) = parse_lines(&lines).map_err(|m| VerbError::Response(bad(m)))?;
+            let note = input.str("note").map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
+            let info = s.claim(j.conn, LineRange { root: ROOT.to_string(), first, last }, ttl, note, hold.unwrap_or(false))?;
+            Ok(ok(json!({ "doc": doc_json(c.target), "action": "take", "claim": claim_json(&info) })))
+        }
+        "renew" => {
+            let info = s.renew_claim(j.conn, id, ttl, hold)?;
+            Ok(ok(json!({ "doc": doc_json(c.target), "action": "renew", "claim": claim_json(&info) })))
+        }
+        "release" => {
+            let ids = s.release_claim(j.conn, id)?;
+            let exit = if ids.is_empty() { k2_mpc_base::tools::exit::NO } else { k2_mpc_base::tools::exit::OK };
+            Ok(ok(json!({
+                "doc": doc_json(c.target),
+                "action": "release",
+                "released": ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "exit": exit,
+            })))
+        }
+        other => Err(VerbError::Response(bad(format!("action must be take, renew or release (got {other})")))),
     }
 }
 
@@ -453,13 +544,7 @@ pub(super) fn with_exit(mut r: CliResponse, exit: u8) -> CliResponse {
 /// The kit's errors on the wire (SESSIONS.md "Errors"), each with its exit
 /// code (`error.exit`).
 pub fn session_error(e: &SessionError) -> CliResponse {
-    let exit = match e {
-        // A version that never existed is "not found" (4); the kit's
-        // `session_exit` sends every store error to 6 (store unavailable).
-        SessionError::Store(StoreError::NoVersion(..)) => k2_mpc_base::tools::exit::NOT_FOUND,
-        _ => k2_mpc_base::tools::session_exit(e),
-    };
-    with_exit(session_error_body(e), exit)
+    with_exit(session_error_body(e), k2_mpc_base::tools::session_exit(e))
 }
 
 /// `4m 10s`, `35s`.
@@ -498,6 +583,49 @@ fn session_error_body(e: &SessionError) -> CliResponse {
                 .to_string(),
             }
         }
+        // Agent presence (kit amendment 13). An agent's bounce is answered
+        // by `claims::bounced` (it waits in line); this is everyone else's.
+        SessionError::Claimed { id, by, lines, remaining_ms, note, .. } => CliResponse {
+            status: "409 Conflict",
+            content_type: "application/json",
+            body: json!({
+                "ok": false,
+                "error": {
+                    "code": "claimed",
+                    "hint": format!(
+                        "lines {}–{} are claimed by {}{} for another {}; nothing applied",
+                        lines.0,
+                        lines.1,
+                        pid_label(by),
+                        note.as_deref().map(|n| format!(" (\"{n}\")")).unwrap_or_default(),
+                        human_ms(*remaining_ms)
+                    ),
+                    "claim": id.to_string(),
+                    "by": by,
+                    "lines": [lines.0, lines.1],
+                    "remainingMs": remaining_ms,
+                    "retryAfterMs": remaining_ms,
+                },
+            })
+            .to_string(),
+        },
+        SessionError::NoClaim(id) => refusal(
+            "404 Not Found",
+            "no_claim",
+            match id {
+                Some(id) => format!("no live claim {id} here (it ended); k2 doc who lists the claims"),
+                None => "you hold no claim here".to_string(),
+            },
+        ),
+        SessionError::ClaimContended { id, waiters, remaining_ms } => refusal(
+            "409 Conflict",
+            "claim_contended",
+            format!(
+                "{waiters} waiting for {id}: you can't extend it or hold it now (it ends in {}); finish, or release it",
+                human_ms(*remaining_ms)
+            ),
+        ),
+        SessionError::BadClaim(m) => bad(m.clone()),
         SessionError::NoLease => refusal(
             "409 Conflict",
             "no_lease",
@@ -561,7 +689,7 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::Stale { expected, actual } => CliResponse {
             status: "409 Conflict",
             content_type: "application/json",
-            body: json!({ "ok": false, "error": { "code": "stale", "hint": format!("the doc moved from version {expected} to {actual}; read it again and retry"), "expected": expected, "actual": actual } }).to_string(),
+            body: json!({ "ok": false, "error": { "code": "stale", "hint": format!("doc changed since {expected} (now {actual}): nothing applied. Read it again (k2 doc cat) and redo the edit from what you see"), "expected": expected, "actual": actual } }).to_string(),
         },
         SessionError::RateLimited { retry_after_ms } => CliResponse {
             status: "429 Too Many Requests",
@@ -621,6 +749,39 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             })))
         }
         TOOL => tool(s, c),
+        CLAIM => claim(s, c),
+        ACTIVITY => {
+            let n = input.u64("n").map_err(VerbError::Response)?.unwrap_or(20).clamp(1, 256) as usize;
+            let j = join(s, c, Stay::UntilIdle)?;
+            let rows = s.activity(j.conn, n)?;
+            let rendered: String = rows
+                .iter()
+                .map(|a| {
+                    format!(
+                        "{}  {:<28} {:<12} {:<16}{}\n",
+                        super::tier0::utc(a.at_ms),
+                        pid_label(&a.pid),
+                        a.kind.as_str(),
+                        a.verb,
+                        a.lines.as_ref().map(|l| format!(" lines {}-{}", l.first, l.last)).unwrap_or_default()
+                    )
+                })
+                .collect();
+            Ok(ok(json!({
+                "doc": doc_json(t),
+                "activity": rows.iter().map(|a| json!({
+                    "pid": a.pid,
+                    "name": a.name,
+                    "label": pid_label(&a.pid),
+                    "kind": a.kind.as_str(),
+                    "verb": a.verb,
+                    "lines": a.lines.as_ref().map(|l| json!([l.first, l.last])),
+                    "atMs": a.at_ms,
+                    "claim": a.claim.map(|c| c.to_string()),
+                })).collect::<Vec<_>>(),
+                "rendered": rendered,
+            })))
+        }
         BLAME => {
             // P22, `blame [-L a,b]`: read + history (gated above and by the
             // kit). Each line's most recent author by change id.
@@ -669,6 +830,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 s.set_view(j.conn, LineRange { root: ROOT.to_string(), first, last })?;
             }
             let r = s.read(j.conn)?;
+            super::claims::record_read(c.caller, &t.key(), r.version);
             let text = String::from_utf8(r.bytes.clone()).map_err(|_| VerbError::Response(bad("doc bytes are not UTF-8")))?;
             let disk_matches = std::fs::read(&t.abs).map(|b| b == r.bytes).unwrap_or(false);
             Ok(ok(json!({
@@ -731,6 +893,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             }
             let j = join(s, c, Stay::UntilIdle)?;
             let out = if path == UNDO { s.undo_with(j.conn, &req)? } else { s.redo_with(j.conn, &req)? };
+            own_change(c, &out);
             Ok(undo_response(c, out))
         }
         REVERT => {
@@ -741,6 +904,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             let partial = input.flag("partial");
             let j = join(s, c, Stay::UntilIdle)?;
             let out = s.revert(j.conn, change, partial)?;
+            own_change(c, &out);
             Ok(undo_response(c, out))
         }
         RESTORE => {
@@ -750,6 +914,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                 .ok_or_else(|| VerbError::Response(bad("version is required: a version id from k2 doc versions")))?;
             let j = join(s, c, Stay::UntilIdle)?;
             let r = s.restore(j.conn, v)?;
+            super::claims::record_read(c.caller, &t.key(), r.version);
             edit_reply(s, c, &r, Some(("restored", json!(v))))
         }
         NAME => {
@@ -842,6 +1007,14 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
     }
 }
 
+/// An agent's own undo, redo or revert: it knows that change, so its next
+/// edit is checked from the version after it.
+fn own_change(c: &Call, out: &UndoOutcome) {
+    if let UndoOutcome::Applied { result, .. } = out {
+        super::claims::record_read(c.caller, &c.target.key(), result.version);
+    }
+}
+
 /// The edit's own approval, when an agent made it on someone's behalf (the
 /// kit records `Pending` with the change; edits are never held).
 fn edit_reply(s: &Session, c: &Call, r: &EditResult, extra: Option<(&str, Value)>) -> Result<CliResponse, VerbError> {
@@ -866,33 +1039,50 @@ fn edit(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         Some(Value::Array(a)) if !a.is_empty() => a.clone(),
         _ => return Err(VerbError::Response(bad("edits is required: a non-empty list"))),
     };
-    let if_version = c.input.u64("ifVersion").map_err(VerbError::Response)?;
+    // `ifVersion`, else (an agent) the version it last read: positions are
+    // from that version, and the edit applies only if the doc is still
+    // there (the live text under the lock must be the text read at V).
+    let key = c.target.key();
+    let if_version = match c.input.u64("ifVersion").map_err(VerbError::Response)? {
+        Some(v) => Some(v),
+        None => super::claims::last_read(c.caller, &key),
+    };
     let j = join(s, c, Stay::UntilIdle)?;
-    let result = match if_version {
-        // Positions are from version V: refuse at once if the doc moved,
-        // else the kit re-checks V atomically with the edit.
+    let pol = policy(c);
+    const MOVED: &str = "\u{0}moved";
+    let (expected, at_v) = match if_version {
         Some(v) => {
             let r = s.read(j.conn)?;
             if r.version != v {
                 return Err(VerbError::Session(SessionError::Stale { expected: v, actual: r.version }));
             }
             let text = r.text_by_root.iter().find(|(root, _)| root == ROOT).map(|(_, t)| t.clone()).unwrap_or_default();
-            let hunks = hunks_for(&text, &ops).map_err(|m| VerbError::Response(bad(m)))?;
-            s.edit(j.conn, vec![Edit::Text { root: ROOT.to_string(), hunks }], Some(v))?
+            (Some(v), Some(text))
         }
-        // Positions against the live text, computed and applied under the
-        // session lock.
-        None => match s.edit_with(j.conn, ROOT, |live| hunks_for(live, &ops).map(|h| splice(live, &h))) {
-            Ok(Some(r)) => r,
-            Ok(None) => {
-                let mut r = EditResult::default();
-                r.version = s.status()?.version;
-                r
-            }
-            Err(EditWithError::Compute(m)) => return Err(VerbError::Response(bad(m))),
-            Err(EditWithError::Session(e)) => return Err(VerbError::Session(e)),
-        },
+        None => (None, None),
     };
+    // Positions against the live text, computed and applied under the
+    // session lock, with the caller's claim policy.
+    let result = match s.edit_with_policy(j.conn, ROOT, pol, |live| {
+        if at_v.as_deref().is_some_and(|t| t != live) {
+            return Err(MOVED.to_string());
+        }
+        hunks_for(live, &ops).map(|h| splice(live, &h))
+    }) {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            let mut r = EditResult::default();
+            r.version = s.status()?.version;
+            r
+        }
+        Err(EditWithError::Compute(m)) if m == MOVED => {
+            let actual = s.status()?.version;
+            return Err(VerbError::Session(SessionError::Stale { expected: expected.unwrap_or(actual), actual }));
+        }
+        Err(EditWithError::Compute(m)) => return Err(VerbError::Response(bad(m))),
+        Err(EditWithError::Session(e)) => return Err(VerbError::Session(e)),
+    };
+    super::claims::record_read(c.caller, &key, result.version);
     edit_reply(s, c, &result, None)
 }
 
@@ -915,8 +1105,10 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         .str("base")
         .ok_or_else(|| VerbError::Response(bad("base is required: a version you read, or \"live\"")))?;
     let j = join(s, c, Stay::UntilIdle)?;
+    let key = c.target.key();
     if base.trim() == "live" {
-        let r = s.replace_text(j.conn, ROOT, &text)?;
+        let r = s.replace_text_with(j.conn, ROOT, &text, policy(c))?;
+        super::claims::record_read(c.caller, &key, r.version);
         let warning = matches!(c.caller, DocCaller::Agent { .. }).then(|| {
             (
                 "warning",
@@ -926,17 +1118,32 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         return edit_reply(s, c, &r, warning);
     }
     let base: u64 = base.trim().parse().map_err(|_| VerbError::Response(bad("base must be a version number or \"live\"")))?;
-    let out = s.write_base(j.conn, ROOT, base, &text)?;
+    let report = s.write_base_with(j.conn, ROOT, base, &text, policy(c))?;
+    let out = report.outcome;
     let exit = out.exit();
     match out {
-        WriteOutcome::Applied(r) => edit_reply(s, c, &r, None),
-        WriteOutcome::Conflicts(conf) => Ok(conflicts_response(
-            c.target,
-            None,
-            conflicts_json(&conf),
-            "conflicts",
-            "your change overlaps edits made since; nothing was applied",
-        )),
+        WriteOutcome::Applied(r) => {
+            super::claims::record_read(c.caller, &key, r.version);
+            edit_reply(s, c, &r, Some(("notes", notes_text(&report.notes))))
+        }
+        WriteOutcome::Conflicts(conf) => {
+            // Who claimed or last edited each conflicting region.
+            let who: Vec<String> = report.conflict_notes.iter().map(|(i, n)| format!("conflict {}: {n}", i + 1)).collect();
+            let mut r = conflicts_response(
+                c.target,
+                None,
+                conflicts_json(&conf),
+                "conflicts",
+                "your change overlaps edits made since; nothing was applied",
+            );
+            if !who.is_empty() {
+                if let Ok(mut v) = serde_json::from_str::<Value>(&r.body) {
+                    v["notes"] = json!(who.join("\n"));
+                    r.body = v.to_string();
+                }
+            }
+            Ok(r)
+        }
         WriteOutcome::BaseExpired => Ok(with_exit(
             refusal(
                 "409 Conflict",
@@ -1030,8 +1237,23 @@ pub const FENCE_PREFIX: &str = "k2 doc";
 /// (`exit` 0, 1 = the tool's "no", 2 = refused usage, nothing applied);
 /// K2 and session refusals keep their HTTP status, so the permission
 /// wrapper can teach them.
+/// The Markdown pack's verb registry (the kit's text verbs and the pack's).
+fn registry() -> &'static k2_mpc_base::parity::Registry {
+    static R: std::sync::OnceLock<k2_mpc_base::parity::Registry> = std::sync::OnceLock::new();
+    R.get_or_init(|| k2_mpc_base::parity::Registry::for_pack(&k2_mpc_markdown::PACK).expect("the Markdown pack's verb registry"))
+}
+
+/// True when `argv` is an edit verb that `run_tool` runs (the kit's or the
+/// pack's): the ones `--if-version` guards.
+pub(super) fn is_tool_edit(argv: &[String]) -> bool {
+    use k2_mpc_base::parity::{Api, VerbKind};
+    registry()
+        .get(&k2_mpc_base::parity::verb_form(argv))
+        .is_some_and(|v| v.kind == VerbKind::Edit && v.api.contains(&Api::RunTool))
+}
+
 fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
-    let argv: Vec<String> = match c.input.body.get("argv") {
+    let mut argv: Vec<String> = match c.input.body.get("argv") {
         Some(Value::Array(a)) if !a.is_empty() && a.len() <= MAX_ARGV => a
             .iter()
             .map(|v| v.as_str().map(str::to_string))
@@ -1044,8 +1266,14 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         None | Some(Value::Null) => Vec::new(),
         Some(_) => return Err(VerbError::Response(bad("stdin must be a string"))),
     };
+    let key = c.target.key();
+    let is_edit = is_tool_edit(&argv);
+    // An agent's edit verb is guarded by the version it last read (unless
+    // it named one): an edit from a stale read is refused, exit 1.
+    let guarded = if is_edit { super::claims::guard_argv(c.caller, &key, &mut argv) } else { None };
     let j = join(s, c, Stay::UntilIdle)?;
-    let out = match s.run_tool(j.conn, ROOT, &argv, &stdin) {
+    let opts = k2_mpc_base::tools::ToolOptions::new().policy(policy(c));
+    let out = match s.run_tool_with(j.conn, ROOT, &argv, &stdin, &opts) {
         Ok(o) => o,
         Err(k2_mpc_base::tools::ToolRunError::Tool(e)) => {
             return Ok(ok(json!({
@@ -1057,6 +1285,9 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         }
         Err(k2_mpc_base::tools::ToolRunError::Session(e)) => return Err(VerbError::Session(e)),
     };
+    if !is_edit || out.changed.is_some() {
+        super::claims::record_read(c.caller, &key, out.version);
+    }
     let me = c.caller.participant(c.on_behalf);
     let stderr = if out.changed.is_some() {
         format!("{} as {}", out.stderr_summary, me.name)
@@ -1082,6 +1313,10 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         "version": out.version,
         "changed": out.changed.as_ref().map(edit_json),
         "fence": fence,
+        // Heads-up notes and `--for-edit`'s outcome: stderr lines.
+        "notes": notes_text(&out.notes),
+        "forEdit": out.for_edit.as_ref().map(|f| f.to_string()),
+        "ifVersion": guarded,
     });
     if !stdout_b64.is_null() {
         v["stdoutB64"] = stdout_b64;
@@ -1141,7 +1376,7 @@ pub(super) fn disk_json(d: Option<&DiskState>) -> Value {
     }
 }
 
-fn approval_json(a: &Approval) -> Value {
+pub(super) fn approval_json(a: &Approval) -> Value {
     json!({
         "state": match a.state {
             ApprovalState::Pending => "pending",
@@ -1485,6 +1720,9 @@ pub(super) fn roster_json(e: &RosterEntry) -> Value {
         // Tier 0: what they look at ("page 3") and whether they hold the lease.
         "region": e.region,
         "holdsLease": e.holds_lease,
+        // Agent presence: live claims, and the lines of their latest edit.
+        "claims": e.claims.iter().map(claim_json).collect::<Vec<_>>(),
+        "lastEdit": e.last_edit.as_ref().map(|l| json!([l.first, l.last])),
     })
 }
 

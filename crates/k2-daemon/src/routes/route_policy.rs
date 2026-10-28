@@ -721,9 +721,11 @@ pub const ROUTES: &[Route] = &[
     // handler checks rights per doc (read / edit / history) on every call.
     // Shares to another workspace (MI25) need an Admin login, like
     // connections; the handler refuses agents (they ask with a card).
+    get("/cli/docs/activity", Member),
     get("/cli/docs/approvals", Member),
     post("/cli/docs/approve", Member),
     get("/cli/docs/blame", Member),
+    post("/cli/docs/claim", Member),
     post("/cli/docs/cursor", Member),
     get("/cli/docs/diff", Member),
     post("/cli/docs/edit", Member),

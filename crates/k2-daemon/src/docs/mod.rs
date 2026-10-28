@@ -31,6 +31,7 @@
 //! (`purge_space_key`).
 
 pub mod caller;
+pub mod claims;
 pub mod host;
 pub mod routes;
 pub mod shares;
@@ -362,6 +363,7 @@ impl Runtime {
     /// session's key; the watcher index and `.k2/` watches follow.
     pub fn rekey(&self, old: &DocKey, new: &DocKey, new_abs: &Path) -> Result<(), SessionError> {
         self.manager.rekey(old, new.clone())?;
+        claims::rekey(old, new);
         let mut set = self.opened.lock().expect("docs opened set");
         if let Some(p) = set.remove(old) {
             if old.path.starts_with(".k2/") {

@@ -33,7 +33,9 @@ use std::sync::Weak;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use k2_core::log_debug;
-use k2_mpc_base::session::{AuditEvent, Host, LeaveReason, Participant, PurgedScope, Rights};
+use k2_mpc_base::session::{
+    AuditEvent, ClaimEnd, Host, LeaveReason, Participant, PurgedScope, ReservationEnd, Rights,
+};
 use k2_mpc_base::store::{DocKey, DocStore, PurgeCounts};
 
 /// pid prefix for people.
@@ -215,6 +217,13 @@ impl Host for K2Host {
         now_ms()
     }
 
+    /// Tier 0's conflict copies go under the workspace's `.k2/conflicts/`
+    /// (K-A11Y-5: out of the way, and out of Git: K2 writes a `*`
+    /// `.gitignore` there the first time).
+    fn conflict_dir(&self, file: &std::path::Path) -> Option<std::path::PathBuf> {
+        conflict_dir_for(file)
+    }
+
     fn on_event(&self, ev: &AuditEvent) {
         match ev {
             AuditEvent::Refused { key, pid, action, need } => audit(
@@ -287,6 +296,23 @@ impl Host for K2Host {
             AuditEvent::BlobMerged { key, version } => {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} merged version={version}", key_label(key)))
             }
+            // Agent presence (kit amendments 13/14): when a claim (or its
+            // hand-off) ends with someone waiting, that agent is told the
+            // lines are free and the version to re-read at. Off the lock.
+            AuditEvent::ClaimEnded { key, pid, how, lines, version, next_waiter, .. } => {
+                log_debug!("[docs] {pid}'s claim on {} lines {}-{} ended ({})", key_label(key), lines.first, lines.last, how.as_str());
+                if let Some((_, waiter)) = next_waiter.as_ref().filter(|_| !matches!(how, ClaimEnd::Reset)) {
+                    super::claims::notify_free(key.clone(), waiter.clone(), pid.clone(), (lines.first, lines.last), *version);
+                }
+            }
+            AuditEvent::ReservationEnded { key, pid, how, lines, version, next_waiter, .. } => {
+                log_debug!("[docs] {}'s hand-off on {} ended ({how:?})", pid, key_label(key));
+                if let Some((_, waiter)) =
+                    next_waiter.as_ref().filter(|_| !matches!(how, ReservationEnd::Claimed | ReservationEnd::Reset))
+                {
+                    super::claims::notify_free(key.clone(), waiter.clone(), pid.clone(), (lines.first, lines.last), *version);
+                }
+            }
             AuditEvent::RecheckFailed { key, error } => {
                 log_debug!("[docs] WARN: rights re-check failed on {}: {error}", key_label(key))
             }
@@ -305,6 +331,21 @@ impl Host for K2Host {
             other => log_debug!("[docs] event {other:?}"),
         }
     }
+}
+
+/// `<workspace>/.k2/conflicts` for a file: the nearest folder above it that
+/// has a `.k2` folder (a workspace root). `None` (beside the file) when
+/// there is none. Creates the folder and its `.gitignore` once.
+pub fn conflict_dir_for(file: &std::path::Path) -> Option<std::path::PathBuf> {
+    let root = file.ancestors().skip(1).find(|d| d.join(".k2").is_dir())?;
+    let dir = root.join(".k2").join("conflicts");
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|_| std::fs::write(&ignore, "*\n")) {
+            log_debug!("[docs] WARN: conflict folder {}: {e}", dir.display());
+        }
+    }
+    Some(dir)
 }
 
 /// Milliseconds since the epoch (the kit's clock and the share stamps).

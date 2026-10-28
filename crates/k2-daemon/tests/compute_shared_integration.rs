@@ -493,7 +493,13 @@ async fn raising_a_grant_resends_node_queued_jobs_with_the_new_cap() {
     assert!(line.starts_with("queued on k2n9-vin: 1 of 3 — your workspace runs "), "{line}");
     assert!(line.ends_with("(its grant); jobs behind it may start first"), "{line}");
 
-    // Raise the grant 1 → 3: both are asked back, oldest first.
+    // Raise the grant 1 → 3: both are asked back, oldest first. (Both were
+    // submitted in the same second: make `old` the older one for certain.)
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE compute_jobs SET created_at = created_at - 10 WHERE id = ?1", params![old]).expect("age old");
+    }
     let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "maxParallel": 3})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(j(&r)["resent"], 2, "{}", r.body);

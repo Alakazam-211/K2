@@ -266,8 +266,10 @@ export function PermissionNoteBox({
 type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string }
 
 /** The vault confirm actions a permission card may ask for (§17.4). */
-function confirmActionOf(action: string | undefined): 'app-approve' | 'node-admin' | 'vault-move' | null {
-  return action === 'app-approve' || action === 'node-admin' || action === 'vault-move' ? action : null
+function confirmActionOf(action: string | undefined): 'app-approve' | 'node-admin' | 'vault-move' | 'chat-owner-handoff' | null {
+  return action === 'app-approve' || action === 'node-admin' || action === 'vault-move' || action === 'chat-owner-handoff'
+    ? action
+    : null
 }
 
 /** Allow / Deny (with its optional reason) / the confirm step, for one

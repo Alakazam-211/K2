@@ -13,6 +13,7 @@
 //! | `gardens.rs` | E1, Garden access A4 | `garden.keep-mine`; `garden.access` (+ `-off`), `garden.delete` |
 //! | `held.rs` | E2 | `apps.approve`, `mail.approve`, `garden.proposal.approve`, `sources.approve` |
 //! | `compute.rs` | E2 | `compute.admin-approve` (cut if late) |
+//! | `sew.rs` | Sew (Rosson 2026-10-28) | `sew.owner-handoff` |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -26,6 +27,7 @@ pub(crate) mod compute;
 pub(crate) mod connections;
 pub(crate) mod gardens;
 pub(crate) mod held;
+pub(crate) mod sew;
 pub(crate) mod switches;
 
 /// The asking side, fixed at request time.
@@ -102,6 +104,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(gardens::actions());
     out.extend(held::actions());
     out.extend(compute::actions());
+    out.extend(sew::actions());
     out
 }
 
@@ -113,6 +116,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(gardens::not_cardable());
     out.extend(held::not_cardable());
     out.extend(compute::not_cardable());
+    out.extend(sew::not_cardable());
     out
 }
 

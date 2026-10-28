@@ -14,6 +14,7 @@
 // person they can keep working with the agent and can leave a note for an
 // owner or admin; there are no info cards.
 
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { daemonCliPost } from '@/lib/daemon-cli'
 import { daemonErrorOf } from '@/lib/daemon-error'
 import { isWebClient } from '@/lib/is-web'
@@ -448,6 +449,14 @@ export function permissionAnswerBody(addr: string, id: string, a: PermissionAnsw
   return body
 }
 
+/** What an answer hands back to the person who answered only
+ *  (`sew.owner-handoff`: a one-time link that opens Sew as its owner). */
+export function forYouOpenUrl(answer: unknown): string | null {
+  const f = (answer as { forYou?: { openUrl?: unknown } } | null)?.forYou
+  const url = typeof f?.openUrl === 'string' ? f.openUrl : null
+  return url && /^https:\/\//.test(url) ? url : null
+}
+
 /** The card's actions on the Thread's own server (`scope`, `addr`). */
 export function permissionCardActions(
   scope: ServerScope,
@@ -456,7 +465,13 @@ export function permissionCardActions(
   openSettings?: (section: string) => void,
 ): PermissionCardActions {
   return {
-    answer: (a) => daemonCliPost(scope, 'thread/answer', permissionAnswerBody(addr, id, a)),
+    answer: async (a) => {
+      const r = await daemonCliPost(scope, 'thread/answer', permissionAnswerBody(addr, id, a))
+      // Opened here, for this person only; the card and the agent never see it.
+      const url = forYouOpenUrl(r)
+      if (url) await openUrl(url)
+      return r
+    },
     note: (text, item) => daemonCliPost(scope, 'thread/permission-note', { addr, id, text, ...(item ? { item } : {}) }),
     undo: (item) => daemonCliPost(scope, 'thread/permission-undo', { addr, id, ...(item ? { item } : {}) }),
     confirmScope: scope,

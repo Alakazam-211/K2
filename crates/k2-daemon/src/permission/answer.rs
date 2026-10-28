@@ -32,6 +32,30 @@ use super::store::{self, Decided};
 use super::inject;
 use crate::cli_response::CliResponse;
 
+thread_local! {
+    /// The request `apply` is running for (its display id): the confirm a
+    /// card action takes is bound to it (`secretId`).
+    static CURRENT_REQUEST: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// What `apply` hands back to the person who answered ONLY (the HTTP
+    /// answer's `forYou`): never the card, the stored result or the agent's
+    /// turn (`sew.owner-handoff`'s one-time link).
+    static FOR_ANSWERER: std::cell::RefCell<Option<serde_json::Value>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The display id of the request being applied on this thread.
+pub(crate) fn current_request() -> Option<String> {
+    CURRENT_REQUEST.with(|c| c.borrow().clone())
+}
+
+/// Give the answering person (only) `v` in the answer's `forYou`.
+pub(crate) fn set_for_answerer(v: serde_json::Value) {
+    FOR_ANSWERER.with(|c| *c.borrow_mut() = Some(v));
+}
+
+fn take_for_answerer() -> Option<serde_json::Value> {
+    FOR_ANSWERER.with(|c| c.borrow_mut().take())
+}
+
 /// The card being answered.
 pub(crate) struct CardRef<'a> {
     pub conversation_id: &'a str,
@@ -246,19 +270,21 @@ pub(crate) fn answer(
         (Some(cb), false) => cb.doc.choice.as_ref().and_then(|c| c.action.as_ref()).and_then(|a| a.result.clone()).unwrap_or(json!(null)),
         (None, false) => json!(null),
     };
-    CliResponse::ok_json(
-        json!({
-            "ok": true,
-            "id": card.card_id,
-            "seq": seq,
-            "kind": "choice",
-            "status": status,
-            "answer": answer,
-            "action": { "id": action.id, "result": result },
-            "decided": decided.iter().map(|r| json!({ "id": r.display_id(), "state": r.state.as_str() })).collect::<Vec<_>>(),
-        })
-        .to_string(),
-    )
+    let mut out = json!({
+        "ok": true,
+        "id": card.card_id,
+        "seq": seq,
+        "kind": "choice",
+        "status": status,
+        "answer": answer,
+        "action": { "id": action.id, "result": result },
+        "decided": decided.iter().map(|r| json!({ "id": r.display_id(), "state": r.state.as_str() })).collect::<Vec<_>>(),
+    });
+    // Only this HTTP answer carries it (never the card or the agent's turn).
+    if let Some(v) = take_for_answerer() {
+        out["forYou"] = v;
+    }
+    CliResponse::ok_json(out.to_string())
 }
 
 /// Decide one request: the compare-and-set, the current-state check, the
@@ -348,7 +374,10 @@ fn decide_one(
     }
 
     // 3. The apply, through the route's own entry, as the answerer.
-    match (registered.apply)(&ctx, who, token) {
+    CURRENT_REQUEST.with(|c| *c.borrow_mut() = Some(req.display_id().to_string()));
+    let applied = (registered.apply)(&ctx, who, token);
+    CURRENT_REQUEST.with(|c| *c.borrow_mut() = None);
+    match applied {
         Applied::Done { message } => {
             let w = present::words(registered.spec, &ctx);
             let mut msg = if message.trim().is_empty() {

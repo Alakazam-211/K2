@@ -141,6 +141,8 @@ pub(crate) const V1_ACTIONS: [&str; 32] = [
     "sim.use",
     // 0.46.6 (prd-box-move-carry-v1 Q3): run a held box-move step.
     "vault.move-approve",
+    // 0.46.6 (Rosson 2026-10-28): open Sew as its owner, for the owner.
+    "sew.owner-handoff",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -167,6 +169,10 @@ pub(crate) const ROWS: &[Row] = &[
     // Job tiers (0.46.5): `--tier ci` / `--gate` without a grant that
     // allows CI, and a compute manager setting `allowCi` on a grant.
     Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "ci_not_allowed"), "/cli/compute/", ANY) },
+    // ── Sew (0.46.6) ───────────────────────────────────────────────────
+    // An agent's own call to the owner handoff: agents never become Sew's
+    // install owner; the owner opens it for themselves on a card.
+    row(ask("sew.owner-handoff", Floor::Owner), code(403, "owner_only"), "/cli/sew/owner-handoff", POST),
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
@@ -709,6 +715,7 @@ mod tests {
             (403, "POST", "/cli/compute/admin/approve", vec![], Some(json!({"request":"nar_1"})), json!({"error":{"code":"owner_only"}}), "compute.admin-approve"),
             // A box-move step an agent ran, held for the owner (0.46.6).
             (202, "POST", "/cli/migrate/secrets/export", vec![], None, json!({"ok":false,"status":"held","request":{"id":"mv_0123456789ab","step":"export"}}), "vault.move-approve"),
+            (403, "POST", "/cli/sew/owner-handoff", vec![], None, json!({"ok":false,"error":{"code":"owner_only","hint":"agents never get Sew's install owner; ask a person to open Sew as owner"}}), "sew.owner-handoff"),
             // App users (0225): the skin-manage door's refusal on a user route.
             (403, "POST", "/cli/skin/users/password", vec![], None, json!({"ok":false,"error":{"code":"app_users_off"}}), "apps.manage-users"),
             // Garden access (A2's refusals, prd-garden-access-v1 G11–G12).

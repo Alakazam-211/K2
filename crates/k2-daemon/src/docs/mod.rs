@@ -564,3 +564,29 @@ pub fn pool_json() -> serde_json::Value {
         Err(u) => serde_json::json!({ "running": false, "error": u.message() }),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tier_0_cap_is_32_mib_and_the_env_only_lowers_it() {
+        assert_eq!(parse_blob_max(None), BLOB_MAX_BYTES);
+        assert_eq!(BLOB_MAX_BYTES, 32 << 20);
+        assert_eq!(parse_blob_max(Some("4")), 4 << 20);
+        assert_eq!(parse_blob_max(Some(" 1 ")), 1 << 20);
+        assert_eq!(parse_blob_max(Some("64")), BLOB_MAX_BYTES, "never past the default (it sizes the body cap)");
+        for junk in ["0", "", "x", "-3"] {
+            assert_eq!(parse_blob_max(Some(junk)), BLOB_MAX_BYTES, "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn a_write_body_fits_a_whole_file_at_the_cap_as_base64() {
+        let at_cap = (BLOB_MAX_BYTES as usize).div_ceil(3) * 4;
+        assert!(routes::max_body(routes::WRITE) > at_cap + 1024, "room for the JSON around it");
+        assert!(routes::max_body("/cli/docs/write?token=x") > at_cap, "the query string is ignored");
+        assert_eq!(routes::max_body(routes::EDIT), routes::MAX_BODY);
+        assert_eq!(routes::max_body(routes::LEASE), routes::MAX_BODY);
+    }
+}

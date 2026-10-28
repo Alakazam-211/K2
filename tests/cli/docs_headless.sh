@@ -148,7 +148,8 @@ chmod +x "$SB/shim/claude"
 # Tier 0's size cap, lowered so the cap check stays small (the default is
 # 32 MiB); 4 MiB still moves a 3 MiB file, past any argv limit.
 T0_CAP=4
-start_daemon daemon1.log K2_DOCS_BLOB_MAX_MIB=$T0_CAP
+export K2_DOCS_BLOB_MAX_MIB=$T0_CAP
+start_daemon daemon1.log
 ok "sandbox daemon ready ($DAEMON_BIN)"
 [ -f "$SB/.k2/docs.redb" ] || fail "no ~/.k2/docs.redb in the sandbox home"
 ok "docs store at ~/.k2/docs.redb"
@@ -726,7 +727,7 @@ file_is "$A/.k2/wiki/Home.md" '"# Wiki\n\nedited outside\nlast words\n"' "releas
 ok "a normal stop writes back what was unwritten"
 printf '# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n' >"$A/.k2/wiki/Home.md"
 printf 'edited while K2 was down\n' >"$B/notes.txt"
-start_daemon daemon2.log K2_DOCS_BLOB_MAX_MIB=$T0_CAP
+start_daemon daemon2.log
 doc_is "$A" .k2/wiki/Home.md '"# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n"' "reconcile"
 ok "the store reopens and reconciles edits made while K2 was down"
 owner POST /cli/docs/lease '{"path":"notes.txt","action":"renew"}' "workspace=$B"

@@ -353,12 +353,32 @@ async fn s7_deploy_switch_rollback_stop_start_with_no_dropped_requests() {
     assert_eq!(d2["result"], "live");
     assert_eq!(body_of(front, "/"), "200 v2");
 
-    // Rollback: the previous instance is still warm → instant.
+    // Rollback: the previous instance is still warm → instant. A request
+    // v2 is answering when the rollback switches away from it is still
+    // answered by v2: the rolled-back instance stops only after its drain
+    // (it used to be stopped at once, dropping whatever it was serving:
+    // the load loop's rare "None").
+    // 1.5 s: inside the fixture's 2 s drain window (`drainSecs: 2`), so
+    // the drain lets it finish; a request longer than the window is cut
+    // at its deadline by design.
+    let slow = std::thread::spawn(move || http_get(front, "/slow=1.5"));
+    let v2_port = d2["port"].as_u64().unwrap() as u16;
+    // Held for three polls in a row (≥ 200 ms): the load loop's own
+    // requests last a few ms, the slow one 1.5 s.
+    let mut held = 0;
+    wait_until("the slow request is on v2", 10, || {
+        let on = k2_daemon::apps::router::live("s7app").is_some_and(|b| b.port == v2_port && b.active() >= 1);
+        held = if on { held + 1 } else { 0 };
+        held >= 3
+    })
+    .await;
     let r = load.phase("rollback to v1 (warm)", post(d.port, "/cli/app/rollback", OWNER, json!({"app": "s7app"}))).await;
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.json()["instant"], true);
     assert_eq!(r.json()["deployment"]["kind"], "rollback");
     assert_eq!(body_of(front, "/"), "200 v1");
+    let slow = slow.join().unwrap();
+    assert_eq!(slow.as_ref().map(|(s, b)| (*s, b.trim())), Some((200, "v2")), "the request in flight across the rollback was answered");
 
     // L3 status: who, commit, state.
     let r = get(d.port, "/cli/app/deployment", OWNER, &format!("app=s7app&id={}", d2["id"].as_str().unwrap())).await;

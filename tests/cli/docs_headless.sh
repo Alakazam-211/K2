@@ -312,6 +312,16 @@ CH="$(jq_ "$BODY" 'j["result"]["version"]')"
 owner GET /cli/docs/approvals "" "workspace=$A&path=notes/plan.md&pending=1&mine=1"
 want 200 "approvals"
 jok "$BODY" "any(a['change'] == $CH for a in j['approvals'])" "the owner sees it pending (log --pending --on-behalf-of me)"
+# The kit's `approvals --on-behalf-of me|P` (its alias of log --pending).
+owner GET /cli/docs/approvals "" "workspace=$A&path=notes/plan.md&pending=1&forPerson=me"
+want 200 "approvals for me"
+jok "$BODY" "any(a['change'] == $CH for a in j['approvals'])" "approvals --on-behalf-of me lists it"
+owner GET /cli/docs/approvals "" "workspace=$A&path=notes/plan.md&pending=1&forPerson=owner"
+want 200 "approvals for owner"
+jok "$BODY" "any(a['change'] == $CH for a in j['approvals'])" "approvals --on-behalf-of owner lists it"
+owner GET /cli/docs/log "" "workspace=$A&path=notes/plan.md&pending=1&forPerson=me"
+want 200 "log --pending for me"
+jok "$BODY" "any(x.get('change') == $CH for x in j['log'])" "log --pending --on-behalf-of me lists the same change"
 agent POST /cli/docs/approve "$(python3 -c 'import json,sys; print(json.dumps({"workspace":sys.argv[1],"path":"notes/plan.md","change":int(sys.argv[2]),"state":"approved"}))' "$A" "$CH")"
 want 403 "agent approves"; code_is not_the_approver "agent approves"; ok "the agent can't approve its own edit"
 owner POST /cli/docs/approve "$(python3 -c 'import json,sys; print(json.dumps({"workspace":sys.argv[1],"path":"notes/plan.md","change":int(sys.argv[2]),"state":"approved"}))' "$A" "$CH")"
@@ -839,6 +849,23 @@ for _ in $(seq 1 80); do grep -q more "$B/bom.txt" && break; sleep 0.1; done
 python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); sys.exit(0 if b == b"\xef\xbb\xbfwith bom\nmore\n" else 1)' "$B/bom.txt" \
     || fail "bom.txt: $(od -c "$B/bom.txt" | head -3)"
 ok "a write body's leading BOM is dropped: the file keeps exactly one"
+# The kit (base v0.9.1) takes the BOM off, not K2: `--base live` from the
+# CLI with cat's bytes, and a Markdown file with a BOM, each keep exactly one.
+CLI_IN=$'\xef\xbb\xbfwith bom\nmore\nlive\n'
+cli agent "$B" doc write --base live bom.txt; want_rc 0 "write --base live of cat's bytes, BOM included"
+for _ in $(seq 1 80); do grep -q live "$B/bom.txt" && break; sleep 0.1; done
+python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); sys.exit(0 if b == b"\xef\xbb\xbfwith bom\nmore\nlive\n" else 1)' "$B/bom.txt" \
+    || fail "bom.txt after --base live: $(od -c "$B/bom.txt" | head -3)"
+printf '\xef\xbb\xbf# Notes\n' >"$B/bom.md"
+owner GET /cli/docs/status "" "workspace=$B&path=bom.md"; want 200 "bom.md status"
+jok "$BODY" "j['tier'] == 1 and j['pack'] == 'markdown'" "a Markdown file with a BOM is live Markdown"
+MBV="$(jq_ "$BODY" 'j["version"]')"
+owner POST /cli/docs/write "$(python3 -c 'import json,sys; print(json.dumps({"workspace":sys.argv[1],"path":"bom.md","base":sys.argv[2],"text":"﻿# Notes\nmore\n"}))' "$B" "$MBV")"
+want 200 "write a Markdown body that starts with a BOM"
+for _ in $(seq 1 80); do grep -q more "$B/bom.md" && break; sleep 0.1; done
+python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); sys.exit(0 if b == b"\xef\xbb\xbf# Notes\nmore\n" else 1)' "$B/bom.md" \
+    || fail "bom.md: $(od -c "$B/bom.md" | head -3)"
+ok "the kit drops cat's BOM from a write body (--base live, and Markdown): one BOM, never two"
 
 echo "== CSV as text: rows and cells merge, a moved row conflicts =="
 owner GET /cli/docs/read "" "workspace=$B&path=data.csv"; want 200 "csv read"

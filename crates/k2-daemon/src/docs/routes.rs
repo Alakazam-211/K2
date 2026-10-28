@@ -15,7 +15,7 @@
 //! | `/cli/docs/leave` | POST | read | `leave` | P2 |
 //! | `/cli/docs/view` | POST | read | `set_view` | P4 |
 //! | `/cli/docs/cursor` | POST | edit | `set_cursor` | P8 |
-//! | `/cli/docs/edit` | POST | edit | `edit_with`, or `edit` with `ifVersion` | P9–P11, P15 |
+//! | `/cli/docs/edit` | POST | edit | `edit_with_options` (claim policy, `ifVersion`) | P9–P11, P15 |
 //! | `/cli/docs/write` | POST | edit | `write_base` / `replace_text` (`base: "live"`) | P14 |
 //! | `/cli/docs/undo`, `/cli/docs/redo` | POST | edit | `undo` / `redo` | P16 |
 //! | `/cli/docs/approve` | POST | the named person | `set_approval` | P29 |
@@ -50,7 +50,7 @@ use serde_json::{json, Value};
 
 use k2_mpc_base::session::position::{self, At, LineCol, LineRange};
 use k2_mpc_base::session::{
-    Approval, ApprovalState, ClaimId, ClaimInfo, ClaimPolicy, ConflictRegion, DiskState, EditResult, EditWithError,
+    Approval, ApprovalState, ClaimId, ClaimInfo, ClaimPolicy, ConflictRegion, DiskState, EditOptions, EditResult, EditWithError,
     LogItem, LogQuery, Need, Notes, RosterEntry, Role, Session, SessionError, Stay, UndoMode, UndoOutcome, UndoRequest,
     VersionInfo, WriteOutcome,
 };
@@ -238,6 +238,16 @@ pub(super) fn any_pid(named: &str, caller: &DocCaller) -> Result<String, CliResp
         Ok((id, _)) => Ok(format!("{}{id}", host::AGENT_PREFIX)),
         Err(_) => Err(refusal("404 Not Found", "participant_not_found", format!("no person or agent '{named}' here"))),
     }
+}
+
+/// Whose records `approvals` lists: `forPerson` (the kit's `approvals
+/// --on-behalf-of me|P`, its alias of `log --pending`, P30), else the
+/// caller's with `mine`; `None` lists everyone's the caller may see.
+pub(super) fn approvals_for(input: &Input<'_>, caller: &DocCaller) -> Result<Option<String>, CliResponse> {
+    if let Some(p) = input.str("forPerson").filter(|p| !p.trim().is_empty()) {
+        return any_pid(&p, caller).map(Some);
+    }
+    Ok(input.flag("mine").then(|| caller.pid()))
 }
 
 pub(super) fn ok(mut v: Value) -> CliResponse {
@@ -1066,15 +1076,14 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             Ok(ok(json!({ "doc": doc_json(t), "change": seq, "approval": approval_json(&a) })))
         }
         APPROVALS => {
-            let pending_only = input.str("pending").is_some_and(|v| v == "1" || v == "true");
-            let mine = input.str("mine").is_some_and(|v| v == "1" || v == "true");
-            let me = c.caller.pid();
+            let pending_only = input.flag("pending");
+            let for_person = approvals_for(input, c.caller).map_err(VerbError::Response)?;
             let j = join(s, c, Stay::UntilIdle)?;
             let rows: Vec<Value> = s
                 .approvals(j.conn)?
                 .into_iter()
                 .filter(|(_, a)| !pending_only || a.state == ApprovalState::Pending)
-                .filter(|(_, a)| !mine || a.on_behalf_of == me)
+                .filter(|(_, a)| for_person.as_ref().is_none_or(|p| &a.on_behalf_of == p))
                 .map(|(seq, a)| json!({ "change": seq, "approval": approval_json(&a) }))
                 .collect();
             Ok(ok(json!({ "doc": doc_json(t), "approvals": rows })))
@@ -1117,43 +1126,27 @@ fn edit(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     };
     // `ifVersion`, else (an agent) the version it last read: positions are
     // from that version, and the edit applies only if the doc is still
-    // there (the live text under the lock must be the text read at V).
+    // there. The kit checks the version and the claim policy under the
+    // session lock (`edit_with_options`); a doc no longer at V is `Stale`
+    // (exit 1) with nothing applied.
     let key = c.target.key();
     let if_version = match c.input.u64("ifVersion").map_err(VerbError::Response)? {
         Some(v) => Some(v),
         None => super::claims::last_read(c.caller, &key),
     };
     let j = join(s, c, Stay::UntilIdle)?;
-    let pol = policy(c);
-    const MOVED: &str = "\u{0}moved";
-    let (expected, at_v) = match if_version {
-        Some(v) => {
-            let r = s.read(j.conn)?;
-            if r.version != v {
-                return Err(VerbError::Session(SessionError::Stale { expected: v, actual: r.version }));
-            }
-            let text = r.text_by_root.iter().find(|(root, _)| root == ROOT).map(|(_, t)| t.clone()).unwrap_or_default();
-            (Some(v), Some(text))
-        }
-        None => (None, None),
-    };
+    let mut opts = EditOptions::new().policy(policy(c));
+    if let Some(v) = if_version {
+        opts = opts.if_version(v);
+    }
     // Positions against the live text, computed and applied under the
-    // session lock, with the caller's claim policy.
-    let result = match s.edit_with_policy(j.conn, ROOT, pol, |live| {
-        if at_v.as_deref().is_some_and(|t| t != live) {
-            return Err(MOVED.to_string());
-        }
-        hunks_for(live, &ops).map(|h| splice(live, &h))
-    }) {
+    // session lock.
+    let result = match s.edit_with_options(j.conn, ROOT, &opts, |live| hunks_for(live, &ops).map(|h| splice(live, &h))) {
         Ok(Some(r)) => r,
         Ok(None) => {
             let mut r = EditResult::default();
             r.version = s.status()?.version;
             r
-        }
-        Err(EditWithError::Compute(m)) if m == MOVED => {
-            let actual = s.status()?.version;
-            return Err(VerbError::Session(SessionError::Stale { expected: expected.unwrap_or(actual), actual }));
         }
         Err(EditWithError::Compute(m)) => return Err(VerbError::Response(bad(m))),
         Err(EditWithError::Session(e)) => return Err(VerbError::Session(e)),
@@ -1176,13 +1169,10 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         }
         _ => return Err(VerbError::Response(bad("text is required (a string in the JSON body)"))),
     };
-    // A text file's `cat` gives its exact bytes, BOM included; edit verbs
-    // never see the BOM, so a body made from `cat` drops its own (else it
-    // would be written as a second one). The text pack's HOST-INTEGRATION §6.
-    let text = match c.target.tier {
-        target::Tier::Text(_) => text.strip_prefix('\u{feff}').map(str::to_string).unwrap_or(text),
-        _ => text,
-    };
+    // A text file's `cat` gives its exact bytes, BOM included. The kit
+    // (base v0.9.1) takes one leading U+FEFF off a write body when the file
+    // has a BOM, for `--base V` and `--base live` alike, so the file never
+    // gets a second one; without a BOM in the file a leading U+FEFF is text.
     let base = c
         .input
         .str("base")
@@ -1327,12 +1317,12 @@ fn registry() -> &'static k2_mpc_base::parity::Registry {
 }
 
 /// True when `argv` is an edit verb that `run_tool` runs (the kit's or the
-/// pack's): the ones `--if-version` guards.
+/// pack's, by the kit's own flag): the ones `--if-version` guards.
 pub(super) fn is_tool_edit(argv: &[String]) -> bool {
-    use k2_mpc_base::parity::{Api, VerbKind};
+    use k2_mpc_base::parity::VerbKind;
     registry()
         .get(&k2_mpc_base::parity::verb_form(argv))
-        .is_some_and(|v| v.kind == VerbKind::Edit && v.api.contains(&Api::RunTool))
+        .is_some_and(|v| v.kind == VerbKind::Edit && v.runs_through_run_tool())
 }
 
 fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
@@ -2016,8 +2006,8 @@ mod tests {
         assert!(handle("GET", "/cli/docs/nope", &params, b"", &caller).status.starts_with("404"));
     }
 
-    /// The undo promise (kit v0.9.0) is in `k2 doc --help` and `k2 study
-    /// docs` word for word (line breaks aside).
+    /// The undo promise, as the kit's v0.9.1 CHANGELOG corrected it, is in
+    /// `k2 doc --help` and `k2 study docs` word for word (line breaks aside).
     #[test]
     fn the_undo_promise_is_in_the_help_and_the_study_page_verbatim() {
         const PROMISE: &str = "Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, a plain undo applies nothing and reports the conflict; with --partial it applies the parts it cleanly can and reports the rest. It never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.";
@@ -2030,6 +2020,11 @@ mod tests {
         for start in ["\n_doc_usage() {", "\n_study_page_docs() {"] {
             assert!(page(start).contains(PROMISE), "the promise isn't verbatim in {start}");
         }
+        // The kit's own wording: its v0.9.1 CHANGELOG states it on one line.
+        let changelog = include_str!("../../../../vendor/k2-mpc-base/CHANGELOG.md");
+        let from = changelog.find("## v0.9.1").expect("v0.9.1 in the kit's CHANGELOG");
+        let to = changelog[from + 1..].find("\n## v").expect("the section after v0.9.1") + from + 1;
+        assert!(changelog[from..to].lines().any(|l| l == PROMISE), "the promise isn't the kit's v0.9.1 wording");
     }
 
     /// Provenance is kit-stamped only (spec U23, `sec.client_provenance_refused`):

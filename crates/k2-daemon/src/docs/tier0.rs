@@ -60,7 +60,7 @@ pub fn registry() -> &'static Registry {
 }
 
 /// K2's own names on top of the registry (CLI aliases and K2's verbs).
-pub const K2_VERBS: &[&str] = &["lock", "unlock", "view --region", "versions", "approvals", "watch"];
+pub const K2_VERBS: &[&str] = &["lock", "unlock", "view --region", "versions", "watch"];
 
 /// What a tier-0 doc offers, for the teaching refusal.
 pub fn offered() -> String {
@@ -90,7 +90,7 @@ pub fn not_a_text_doc(t: &Target, verb: &str) -> CliResponse {
 
 /// The registry verb a route runs (its CLI form), for the routes that map
 /// to one; `None` for K2's own routes (status, read, versions, view
-/// --region, approvals...), which tier 0 serves.
+/// --region...), which tier 0 serves.
 fn route_verb(path: &str, c: &Call) -> Option<String> {
     let v = match path {
         routes::TOOL => {
@@ -111,6 +111,8 @@ fn route_verb(path: &str, c: &Call) -> Option<String> {
         routes::DIFF => "diff --version",
         routes::CLAIM => "claim",
         routes::ACTIVITY => "activity",
+        // The kit's alias of `log --pending` (P30), on both tiers.
+        routes::APPROVALS => "approvals",
         routes::VIEW if c.input.str("lines").is_some() => "view",
         routes::BLAME if c.input.str("lines").is_some_and(|l| !l.trim().is_empty()) => "blame -L",
         _ => return None,
@@ -443,14 +445,13 @@ fn verb(path: &str, rt: &Arc<super::Runtime>, s: &Arc<BlobSession>, c: &Call) ->
         }
         routes::APPROVALS => {
             let pending_only = input.flag("pending");
-            let mine = input.flag("mine");
-            let me = c.caller.pid();
+            let for_person = routes::approvals_for(input, c.caller).map_err(VerbError::Response)?;
             let j = join(s, c, Stay::UntilIdle)?;
             let rows: Vec<Value> = s
                 .approvals(j.conn)?
                 .into_iter()
                 .filter(|(_, a)| !pending_only || a.state == ApprovalState::Pending)
-                .filter(|(_, a)| !mine || a.on_behalf_of == me)
+                .filter(|(_, a)| for_person.as_ref().is_none_or(|p| &a.on_behalf_of == p))
                 .map(|(v, a)| json!({ "change": v, "approval": routes::approval_json(&a) }))
                 .collect();
             Ok(ok0(t, json!({ "approvals": rows })))
@@ -759,6 +760,15 @@ mod tests {
         for v in K2_VERBS {
             assert!(registry().get(v).is_none(), "{v} is a kit verb now: drop it from K2_VERBS");
         }
+    }
+
+    /// `k2 doc approvals` is the kit's verb since base v0.9.1: its alias of
+    /// `log --pending` (P30) on any file too, so the approvals route on a
+    /// tier-0 doc goes through the registry like the kit's other verbs.
+    #[test]
+    fn approvals_is_the_kits_alias_of_log_pending_on_tier_0() {
+        let a = registry().get("approvals").expect("approvals in the kit's tier-0 registry");
+        assert_eq!(a.alias_of(), Some("log --pending"));
     }
 
     /// K-PAR-5 for tier 0: every verb of the kit's tier-0 registry is a

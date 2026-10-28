@@ -209,6 +209,17 @@ def main():
             n, a = svc.call("x:SpamDnsblServer/set", {"destroy": bad})
             info("sandbox: spam rules calling bit_and dropped", f"{len(bad)}: {n}")
 
+    # Keep outbound mail queued: every remote delivery goes to a loopback
+    # port nothing listens on (a temporary failure, retried later), the way
+    # a real message waits on a slow receiver. Without it, 0.16.25 fails a
+    # `.test` recipient at once (no MX) and the message leaves the queue
+    # before anyone can look it up.
+    n, a = svc.call("x:MtaRoute/set", {"create": {"h": {"@type": "Relay", "name": "k2probehold", "description": "probe: hold",
+                                                        "address": "127.0.0.1", "port": 9, "protocol": "smtp", "implicitTls": False}}})
+    info("setup: hold route", f"{n} {json.dumps(a)[:200]}")
+    n, a = svc.call("x:MtaOutboundStrategy/set", {"update": {"singleton": {"route": {"else": "'k2probehold'"}}}})
+    info("setup: outbound strategy -> hold route", f"{n} {json.dumps(a)[:200]}")
+
     # ── W: the webhook ───────────────────────────────────────────────
     srv = http.server.HTTPServer(("127.0.0.1", 0), Hook)
     port = srv.server_address[1]
@@ -303,6 +314,17 @@ def main():
             if got.get("envId"):
                 break
         info("W3 lookups (at once, then after 200/500/1000 ms)", " ".join(tries))
+        if not got.get("envId"):
+            n, q = svc.call("x:QueuedMessage/query", {})
+            ids = q.get("ids") or []
+            listed = svc.call("x:QueuedMessage/get", {"ids": ids, "properties": ["id", "envId", "returnPath"]})[1] if ids else {}
+            info("W3 the queue now", json.dumps(listed)[:600])
+            later = []
+            for _, body in Hook.got:
+                for e in json.loads(body).get("events") or []:
+                    if (e.get("data") or {}).get("queueId") == qid:
+                        later.append(e.get("type"))
+            info("W3 events for that queueId", json.dumps(later))
         check("W3 queueId -> registry id -> x:QueuedMessage envId is K2's ENVID (with K2's retries)", got.get("envId") == envid, f"{rid}: {json.dumps(g)[:300]}")
     # A local delivery (sender to a box mailbox): which events, does it carry the queue id?
     mbox = account(svc, f"bob{tag}", did)

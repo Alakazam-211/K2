@@ -19,6 +19,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | `ConnId` | kit | one connection (a tab, a `watch`, a CLI caller); `Copy`, passed to every call |
 | `Config` | host | every limit below; `Config::default()` then set fields |
 | `tools` | kit | the text verbs (`cat`, `grep`, `sed`, `patch`...) and `Session::run_tool` ([Tools](#tools)) |
+| history | kit | `Session::undo_with`, `redo_with`, `revert`, `restore`, `name_version`, `versions`, `log`, `diff_version`, `show` ([Undo and redo](#undo-and-redo), [Versions and history](#versions-and-history), [Revert](#revert)) |
 
 **Host rules.** `Host` methods are called **with a session locked**. They must be quick and
 must not call back into the kit, or they deadlock. Events carry metadata only, never doc content.
@@ -67,8 +68,10 @@ must not call back into the kit, or they deadlock. Events carry metadata only, n
    is free for the next process (`DocStore::open_with_retry`).
 
 The host drives time: call `tick()` on a timer (about once a second). It closes idle
-connections, runs the disk stat backup and due write-backs, and unloads idle sessions, all on
-`Host::now_ms`, and returns a `TickReport { left, written, ingested, unloaded, errors }`.
+connections, cuts idle versions, runs version retention and the revert window (every
+`history_tick_ms`), runs the disk stat backup and due write-backs, and unloads idle sessions,
+all on `Host::now_ms`, and returns a `TickReport { left, written, ingested, unloaded, errors,
+versions_cut, versions_thinned, reverts_dropped, .. }`.
 (`expire_idle()` and `unload_idle()` remain for hosts without files.) The kit starts no
 threads of its own. `recheck_rights()` per session is the host's periodic rights re-check
 (PRD §11.2).
@@ -105,7 +108,8 @@ threads of its own. `recheck_rights()` per session is the host's periodic rights
   **once**: repeating the same state returns the record, the other state or `Pending` is
   `BadApproval`, and a change without an approval is `NoApproval { seq }`. It emits
   `AuditEvent::Approval { key, seq, pid, state }` (metadata only). A declined change stays
-  applied: an explicit edit, a restore or the agent's undo reverses it.
+  applied: the person's `revert`, an explicit edit, a restore or the agent's undo reverses it.
+  New on-behalf edits are held past the pending cap ([Revert](#revert)).
 - `approval(conn, seq) -> Option<Approval>` and `approvals(conn)` (for `log --pending`) need
   read; the author and the person see their own records, everything else needs `history`.
 - `Approval { state, by, at_ms, author, on_behalf_of }` survives compaction (the log entry may
@@ -122,12 +126,14 @@ threads of its own. `recheck_rights()` per session is the host's periodic rights
 `Rights { read, edit, history }` (`#[non_exhaustive]`): `Rights::none()`, `read_only()`,
 `editor()` (read + edit), `full()` (read + edit + history), and `.with_history(bool)`.
 **History is never implied** by read or edit; the host grants it explicitly (K-PERM-9: owner
-and editors by default, not App guests or read-only shares). It gates history reads (versions,
-log, diff, show, blame: C7a) and other people's approval records today.
+and editors by default, not App guests or read-only shares). It gates the history reads
+(`versions`, `log`, `diff_version`, `show`; blame later), `restore` (with edit), and other
+people's approval records. `revert` needs edit and is allowed for the change's author, the
+person it was made for, or an owner (`Rights::owner`; refused as `Forbidden { need: Owner }`).
 
 - The host is asked on **every** call, for the connection's pid: read for every call, and
   edit on every edit call (`edit`, `edit_with`, `replace_text`, `write_base`, `undo`, `redo`,
-  `set_cursor`), and history on history reads.
+  `revert`, `restore`, `name_version`, `set_cursor`), and history on history reads.
 - A refusal returns `Forbidden { need }` and emits `AuditEvent::Refused { pid, action, need }`.
 - A pid found without read is removed on the spot, with **all** its connections
   (`Left { reason: RightsLost }` for each), and their subscriptions close.
@@ -147,7 +153,8 @@ log, diff, show, blame: C7a) and other people's approval records today.
 Every read records a **read base**: that version's text, valid for `write_base`. The cache
 belongs to the doc. It keeps the last `read_bases_max` (64) versions, each for
 `read_base_ttl_ms` (30 min), and at most `read_bases_max_bytes` (16 MiB) in all. The live
-version and any stored version (the import today; versions in C7a) are always valid bases.
+version and any stored version (import, automatic and named versions) are always valid bases;
+an unknown or expired base is `BaseExpired`, exit 8.
 
 ## Editing
 
@@ -190,27 +197,31 @@ A poisoned doc is never encoded, compacted or written back from. Carets, views a
 
 ## Undo and redo
 
-`undo(conn, steps)` and `redo(conn, steps)` act only on the caller's own batches. One edit call
-is one batch.
-- **Undo is per participant (pid), across their connections.** It is person-level: undo
-  through one tab reverts the pid's last edit, whichever of their tabs or CLI calls made it.
-  It never reverts another pid's change.
-- Undo is `merge3(after, before, live)`, applied through the calling connection. If someone
-  else's later edit overlaps, it returns `UndoOutcome::Conflicts { step, conflicts }` and
-  applies nothing.
-- `steps > 1` is all or nothing: every step is planned before any is applied, then each step
-  is logged as its own change in one store append.
-- Redo reverses undo. A new edit by the pid clears their redo stack.
-- `UndoOutcome::Nothing` means the stack is empty.
-- The stacks survive leave and rejoin, but not an unload.
-- Bounds: `undo_depth` (100) per pid per stack, and `undo_max_bytes` (32 MiB) per session,
-  oldest batches first.
+Undo follows the kit's undo spec v1.4 (`.k2/prds/spec-undo-v1.md`, U1–U22, O1–O5), implemented
+once in `session/undo.rs` over the applied-hunk stream.
 
-A batch stores only the **region** it changed (text before and after), not whole texts. The
-region's bounds move through every later change. A later deletion that crosses a region's
-edge makes that undo report a conflict (conservative; see `src/session/undo.rs`). The region
-is merged with `merge3_window`, so the end-of-text rule (O5) applies only when the region ends
-where the doc does, as in a whole-text merge.
+- **Own batches only, per pid** (U2). One edit call (or verb, restore, revert) is one batch; a
+  pid's tabs, devices and CLI calls share one stack. Undo never reverts another pid's change.
+  `kit:import` and `kit:external` changes are on no stack (U4): `restore` or `revert` reverse
+  them.
+- **Regions are canonical hunks** (U8): a `sed -i` touching lines 3 and 300 is two regions.
+  Each region keeps its text before and after the change and its bounds, carried through every
+  later change like a caret (an insertion exactly at an edge is pulled inside; a deletion
+  across an edge **taints** it, U9). Two regions of one batch that come to touch keep an
+  insertion at their shared edge in the left one only (m-d).
+- **Undoing a region** is `merge3_window(after, before, live[s'..e'], at_end)`, where `at_end`
+  holds only when the region ends at the root's end **and** the root was non-empty after the
+  change (the merge's base, U10, m11). Within a step, regions apply back to front.
+- **Conflicts** are `ConflictRegion { root, range (live bytes), lines (1-based), kind: Overlap |
+  Taint | Erased, base, ours, theirs }`: one per region, never a sub-range (U11).
+- **Redo** (U17) reapplies exactly the regions the undo applied (skipped ones are not redone).
+  A new batch by the pid clears their redo stack (U7). Undo and redo are themselves not new
+  undoable batches.
+- **Bounds** (U6): `undo_depth` (100) batches per stack and `undo_max_bytes` (4 MiB) per pid
+  per doc, both stacks together; that pid's oldest batches go first. Stacks survive leave and
+  rejoin, and are lost on unload, recovery and restart.
+- Applied hunks are validated and made canonical (touching hunks coalesced) before they reach
+  the engine, so every carry (carets, stacks, revert records) sees the same hunks.
 
 `merge3` is built on `diff::hunks`, which is a pure function of its input (undo spec D1–D3):
 no clock, a counted work budget, a pinned tie-break. So undo, redo and `write --base` give the
@@ -218,12 +229,97 @@ same result on every machine and under any load.
 
 ### Undo modes
 
-The requirements PRD fixes one undo semantics for both engines:
-- **`undo`, all or nothing (built here).** Every requested step applies, or none does, and the
-  overlapping regions are reported as conflicts.
-- **`undo --partial` (C6/C7a, not built yet).** Applies what it can and reports the rest.
-- A person's Ctrl+Z in a native editor is **partial**: their editor's undo manager reverts
-  what it can of their own changes.
+`undo(conn, n)` / `redo(conn, n)` are all-or-nothing; `undo_with(conn, &UndoRequest)` /
+`redo_with` take `UndoRequest { steps, mode, for_person }` (`UndoRequest::steps(n)
+.mode(..).for_person(..)`).
+
+| Mode | Behaviour | Outcome |
+|---|---|---|
+| `UndoMode::All` (`undo`) | Plan the newest N batches newest first on a scratch copy; any conflicting region applies **nothing** and reports **every** conflicting region of the first conflicting step (U13). Otherwise all N steps apply as one store append. | `Applied { steps, result, skipped: [], blocked: None }` or `Conflicts { step, conflicts }` |
+| `UndoMode::Partial` (`--partial`; a person's Ctrl+Z) | Per step, apply every clean region; skip and report the rest — exactly the set `All` would report (U14, U15). A step with any applied region is consumed (redo gets only those). A step whose **every** region conflicts is not consumed: it stays on top and planning stops there. | `Applied { skipped, blocked: Some(..) if a later step stopped it }`, or `Blocked { conflicts }` when the top step is blocked |
+| `UndoMode::Drop` (`--drop`) | Remove the top step without applying it (the escape from a blocked step, m-c). It doesn't go to redo. | `Dropped { change }` |
+| `for_person: Some(p)` (`--for p`) | Only batches the assistant made on behalf of `p` (U2, K-HIST-21). | as above |
+
+Nothing to do: `Nothing`; `HistoryLost` when the pid had changes before the session (re)loaded
+(U18: "lost with the session; use revert"); `ClearedByPurge` once after
+`Session::clear_undo_history()` (the purge hook, U19). `UndoOutcome::exit()`: 1 when anything
+conflicted, was skipped or blocked, else 0.
+
+## Versions and history
+
+A **version** is an engine-neutral snapshot (each root's text) at a log position.
+
+| Cut | When (K-HIST-4) | `VersionReason` |
+|---|---|---|
+| import | the doc is created | `Import` |
+| idle | `idle_version_ms` (2 min) after the last change, on `tick` | `Idle` |
+| before an agent edit | an Agent's edit changing more than `agent_version_lines` (20) lines or `agent_version_percent` (10 %) of the doc's lines (max of added, removed), in the edit's transaction | `BeforeAgent` |
+| outside edit | before (when the doc moved since the last version) and after it | `BeforeExternal`, `External` |
+| restore | before it, in its transaction | `BeforeRestore` |
+| named | `name_version(conn, name, None)` cuts one of the live doc; `Some(v)` names version `v` (needs edit) | `Named` |
+
+Each cut is skipped when the newest version is already at the current log position.
+**Retention** (K-HIST-7, every `history_tick_ms` on `tick`): every version for
+`version_keep_all_ms` (30 days), then the newest per hour to `version_hourly_until_ms` (90 days),
+then the newest per day; then at most `version_max_count` (500) versions and
+`version_max_bytes` (64 MiB) per doc, oldest unnamed first. Named versions are never removed.
+Stored versions are always valid `write_base` bases.
+
+**History reads** (need `history`):
+
+| Call | Verb | Returns |
+|---|---|---|
+| `versions(conn)` | `log` (versions part) | `Vec<VersionInfo { id, seq, at_ms, reason, name, authors, bytes }>`, oldest first |
+| `log(conn, &LogQuery)` | `log [--by P] [--since T] [-n N] [--pending] [--on-behalf-of P]` | `Vec<LogItem>`, newest first: `Change { info: ChangeInfo { seq, kind, of, author, via, at_ms, on_behalf_of, lines_added, lines_removed }, approval }` and `Version(VersionInfo)`; a version at position S lists before change S. `--pending`/`--on-behalf-of` list changes only |
+| `diff_version(conn, root, from, to, context)` | `diff --version V` (`to: None` = live) | `DiffOutput { text (diff -u), differs }`; `exit()` 0 same, 1 different |
+| `show(conn, version)` | `show --version V` | each root's text |
+
+`ChangeKind`: `Edit`, `Undo`, `Redo`, `Restore` (`of` = version), `Revert` (`of` = change),
+`External`, `Import`. Change summaries are written in each change's transaction and kept for the
+doc's life (compaction never loses them). `approvals(conn)` keeps amendment 1's rule (own records
+without history).
+
+**Restore** (`restore(conn, version)`, needs edit and history; K-HIST-8): a version of the doc
+as it is is cut, then "now → V" applies as a **new change by the restorer** (`ChangeKind::Restore`).
+History is never rewritten; the restorer's `undo` reverses it.
+
+## Revert
+
+`revert(conn, change, partial)` (K-HIST-19, spec U22) reverses one named change (its log
+position, the stable change id) days later and after restarts, independent of undo stacks.
+
+- **The record.** Every change (edits, undo/redo, restore, revert, outside edits, the import)
+  writes a revert record in its own transaction: canonical hunks with the deleted text, author,
+  `on_behalf_of`. It lives in the store, so purge and the byte scan reach it.
+- **The carry** (m9: no per-keystroke work over all records). Bounds live in an **offset tree**
+  per root and bias (`session/carry.rs`): a treap over the positions in order, each node holding
+  the gap to its predecessor; a hunk splits by value and shifts everything after it by changing
+  one gap, and collapses the positions strictly inside a replaced range with one lazy
+  "collapse + taint" tag. **O(log R) expected per hunk** for R records; reading a record walks its
+  parent pointers (O(log R)); taint is resolved lazily on read. The tree is built from the store
+  on the first revert (or window pass) of a session — replaying the stored hunk shapes from the
+  window's cut, O(L log R) — and then kept up to date by every change. Measured: about 160 node
+  visits per change at R = 10^4 (115 at 10^3); p95 ≈ 10 µs in a debug build. The spec's BM (≤ 20 µs
+  p95 at R = 10^5) is the ignored test `revert_carry_per_apply_r1e5` (release, compute node).
+- **Applying** uses undo's region rules (U8–U11): all or nothing, or `partial` for every clean
+  region (a fully conflicting revert applies nothing: `Blocked`, exit 1). A region over redacted
+  text is `ConflictKind::Erased` (after a purge). The revert is a new change by the caller
+  (`ChangeKind::Revert`, `of` = the change), on their undo stack.
+- **Rights:** edit, and the caller is the change's author, its `on_behalf_of` person, or an
+  owner. Otherwise `Forbidden { need: Owner }`.
+- **The window** (K-HIST-23, a `tick` duty): records of changes newer than `revert_keep_ms` (30
+  days) **or** among the last `revert_keep_changes` (10,000), whichever reaches further, plus
+  every **pending** on-behalf change's; at most `revert_max_bytes` (64 MiB) per doc, oldest
+  non-pending dropped first. Pending records older than the cut get their carried bounds
+  persisted (so a rebuild never replays past it). Outside the window: `RevertTooOld { seq }`,
+  **exit 8**, never retry; the way back is `restore --version`. Unknown positions:
+  `NoSuchChange`, exit 4.
+- **The pending cap:** while a doc holds `pending_max_records` (1,000) pending on-behalf records
+  or `pending_max_bytes` (16 MiB) of them, new on-behalf edits (edit, `edit_with`, tools,
+  `replace_text`, `write_base`, `restore`) are refused with `Held { reason: "approvals_backlog" }`,
+  exit 2, until the person approves or declines some. Undo, redo and revert are not held (they
+  reverse changes). A pending record is kept whatever the window says, and released to it when
+  settled.
 
 ## Presence
 
@@ -421,11 +517,18 @@ lines; the host picks the prefix (its CLI's name), renders pids (`Sam (person)`)
 `--fence` / `--no-fence`. Control characters in names are replaced, so a name can't break a
 fence line. The doc's display name is the key's `path`.
 
-**Exit codes** are mapped in one place: `tools::exit::{OK, NO, USAGE, REFUSED, NOT_FOUND}`,
-`ToolError::exit()` (always 2), `ToolRunError::exit()`, and `tools::session_exit(&SessionError)`
-(the table under Errors: `Forbidden` 3; `NotFound`, `Declined`, `PackMismatch` 4; bad input,
-`NotJoined`, `RateLimited` 2; the rest 1). Usage errors exit 2 for every verb, where GNU sed
-and the coreutils use 1.
+**Exit codes** are mapped in one place, the requirements' one table (K-EXIT-1):
+`tools::exit::{OK 0, NO 1, USAGE 2, HELD 2, REFUSED 3, NOT_FOUND 4, LEASED 5, STORE 6,
+LINK_LOST 7, TOO_OLD 8}`, `ToolError::exit()` (always 2), `ToolRunError::exit()`,
+`tools::session_exit(&SessionError)` (total: every variant is listed, see Errors),
+`WriteOutcome::exit()` (conflict 1, `BaseExpired` 8), `UndoOutcome::exit()` and
+`DiffOutput::exit()`. Exit 8 never carries a retry-after. Usage errors exit 2 for every verb,
+where GNU sed and the coreutils use 1.
+
+**History verbs are session methods, not tools** (decision, C7a): `undo`, `redo`, `revert`,
+`restore`, `version --name`, `log`, `diff --version` and `show --version` need rights the text
+tools don't (history, owner) and return structured values the host renders; `run_tool` stays
+the pure text verbs.
 
 **One doc per call.** A second file operand is unsupported; a host grepping several docs
 runs the verb per doc, passes `-H` when there are several, and combines the exits.
@@ -451,7 +554,14 @@ runs the verb per doc, passes `-H` when there are several, and combines the exit
 | `idle_leave_ms` | 60 s | connections without a hold close |
 | `away_after_ms` | 60 s | not visible → away |
 | `read_bases_max` / `read_base_ttl_ms` / `read_bases_max_bytes` | 64 / 30 min / 16 MiB | `write_base` bases |
-| `undo_depth` / `undo_max_bytes` | 100 / 32 MiB | undo history |
+| `undo_depth` / `undo_max_bytes` | 100 / 4 MiB | undo history, per pid per doc (spec U6) |
+| `idle_version_ms` | 2 min | idle version after the last change |
+| `agent_version_lines` / `agent_version_percent` | 20 / 10 | version before a large agent edit |
+| `version_keep_all_ms` / `version_hourly_until_ms` | 30 / 90 days | retention bands |
+| `version_max_count` / `version_max_bytes` | 500 / 64 MiB | version cap per doc |
+| `revert_keep_ms` / `revert_keep_changes` / `revert_max_bytes` | 30 days / 10,000 / 64 MiB | the revert window |
+| `pending_max_records` / `pending_max_bytes` | 1,000 / 16 MiB | the pending on-behalf cap (`approvals_backlog`) |
+| `history_tick_ms` | 1 min | how often `tick` runs retention and the window per loaded doc |
 | `edit_rate_per_s` / `edit_burst` | 10 / 10 | Edit calls per **pid** per doc, across their connections. A token bucket on the host clock; the bucket survives leave and rejoin. Over the limit → `RateLimited { retry_after_ms }`. A call takes a token once rights pass, even if it then fails. |
 | `subscriber_queue` | 1024 | events per subscriber |
 | `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append at either threshold |
@@ -463,9 +573,12 @@ runs the verb per doc, passes `-H` when there are several, and combines the exit
 
 ## Errors (`SessionError`)
 
-| Error | Meaning | Suggested exit |
+| Error | Meaning | Exit (`session_exit`) |
 |---|---|---|
-| `Forbidden { need }` | No right (`Read`, `Edit`, `History`, or `Approver`: not the person the change was for). For read, the pid is also removed. | 3 |
+| `Forbidden { need }` | No right (`Read`, `Edit`, `History`, `Approver`: not the person the change was for; `Owner`: a revert by someone not its author or person). For read, the pid is also removed. | 3 |
+| `Held { reason }` | `approvals_backlog`: too many pending on-behalf changes; nothing applied | 2 |
+| `RevertTooOld { seq }` | the change is outside the revert window; use `restore --version` | 8 (never retry) |
+| `NoSuchChange(n)` | no change (revert) or version (restore, show, diff, name) `n` | 4 |
 | `NotJoined { conn }` | The connection isn't in this doc: join again | 2 (or rejoin silently) |
 | `Stale { expected, actual }` | `edit(.., if_version)` but the doc moved; nothing applied | 1 (re-read and retry) |
 | `RateLimited { retry_after_ms }` | over the edit rate | 2 |
@@ -476,16 +589,16 @@ runs the verb per doc, passes `-H` when there are several, and combines the exit
 | `NoApproval { seq }` / `BadApproval` | no approval to settle / already settled the other way | 2 |
 | `BadPath` | `open_file` / `file_moved`: not a regular file inside the root | 2 |
 | `Disk(_)` | reading or writing the file failed; nothing lost, write-back retries | 1 |
-| `Store(_)` | store failure; nothing acked | 1 |
+| `Store(_)` | store failure; nothing acked | 6 |
 | `Pack(_)` | pack bug or damaged codec settings | 1 |
 | `Unloaded` / `Released` / `Broken` | stale handle: open again | retry |
-| `Leased` / `NoLease` / `Blob(_)` / `NoBlobStore` | tier 0: see [Tier 0](#tier-0-any-file) | 5 / 2 / 1 or 4 / 4 |
+| `Leased` / `NoLease` / `Blob(_)` / `NoBlobStore` | tier 0: see [Tier 0](#tier-0-any-file) | 5 / 2 / 1 (`TooLarge` 4) / 4 |
 
 `edit_with` returns `EditWithError<E>`: either `Session(SessionError)` or `Compute(E)` (the
 tool's own error, e.g. "pattern not found": exit 1).
 
-A conflict is not an error. It is a value (`WriteOutcome::Conflicts`, `UndoOutcome::Conflicts`):
-exit 1, and nothing is applied.
+A conflict is not an error. It is a value (`WriteOutcome::Conflicts`, `UndoOutcome::Conflicts`
+/ `Blocked`): exit 1, and nothing is applied. `WriteOutcome::BaseExpired` is exit 8.
 
 ## Parity rows served (`k2-mpc-markdown/docs/PARITY.md`)
 
@@ -504,15 +617,17 @@ exit 1, and nothing is applied.
 | P13 | `patch`, `append`, `replace-section` | `run_tool` (inside `edit_with`); `replace-section` is the Markdown pack's |
 | P14 | `write --base V` / `--base live` | `write_base(V)` / `replace_text` |
 | P15 | formatting | as P9–P13 (Markdown formatting is text) |
-| P16 | `undo`, `redo` | `undo`, `redo` (per pid; `--partial` later) |
+| P16 | `undo`, `redo`, `undo --drop` | `undo` / `redo`, `undo_with` / `redo_with` (`UndoMode::All`, `Partial`, `Drop`; `for_person`) |
 | P17 | `status`, `flush` | `status` (`disk`); `flush(conn) -> FlushOutcome { written, hash, disk }` |
 | P18 | `watch`, `tail -f` | `join(Stay::Held)` + `subscribe` |
-| P19 | `log`, `diff --version`, `show --version` | versions and history (C7a); the store already lists versions |
-| P20 | `restore`, `version --name` | C7a (restore = `replace_text` as a `Restore` participant, after a version) |
+| P19 | `log`, `diff --version`, `show --version` | `log(LogQuery)`, `diff_version`, `show`, `versions` (need history) |
+| P20 | `restore`, `version --name` | `restore` (a forward change by the restorer, after a version), `name_version` |
 | P21 | `mv` | `SessionManager::rekey` + `Session::file_moved` |
 | P22 | `blame` | later (client→pid mapping is recorded now) |
 | P24 | export | `read` (`bytes`) |
 | P25 | why live editing is off | `open` → `Declined { code, message }`; `status().declined` |
+| P26 | Ctrl+Z (`undo --partial`) | `undo_with(UndoMode::Partial)` (the native tab's grouping is G3) |
+| P31 | `revert <change>` | `revert(conn, change, partial)` (author, the person, or owner; too old: exit 8) |
 
 ## Not in this slice
 
@@ -523,10 +638,14 @@ exit 1, and nothing is applied.
   (K-DISK-13).
 - **C5, wire:** the socket, Yjs sync and awareness, each socket being a `join` connection.
   This needs the strict decoder.
-- **C6, rest:** `undo --partial`, `write --base --partial`, intent ranges;
-  `replace-section` (the Markdown pack's, on `edit_with`).
-- **C7a, history:** automatic and named versions, restore, history and diff, blame, stored
-  versions as `write --base` bases beyond the import, and possibly `undo --partial`.
+- **C6, rest:** `write --base --partial` (K-BR-9), intent ranges; `replace-section` (the
+  Markdown pack's, on `edit_with`); the `spec_undo::model` oracle and trace test (K-HIST-14/15).
+- **After C7a:** blame (C7b); purge (redacting revert records, versions, the byte scan:
+  `DocStore::revert_records` is the hook, `clear_undo_history` clears the stacks); `diff
+  --version` from the **disk** (the host reads the file and uses the `diff` tool); thinning
+  change summaries (kept for the doc's life today); retention for docs that are never loaded
+  again (it runs on `tick` for loaded ones); the native tab's grouping and Ctrl+Z with unacked
+  ops (G3).
 
 ## Tier 0: any file
 
@@ -710,6 +829,14 @@ field in `--json` would be clearer than reusing 2.
 version records `on_behalf_of`), automatic version retention, the K-T0-4 fuzz target, and
 hashing outside the session lock (a large outside save is hashed under it today).
 
+## Store: history tables
+
+Five tables beside the log, created on open (the store format stays 2): `changes` (summary and
+hunk shape per change; `DocStore::change`, `scan_changes`), `reverts` (revert records),
+`revert_index`, `revert_carry`, `revert_stats`; plus `DocStore::version_infos` (version headers
+without content). Content lives only in `reverts` (and versions); purge's byte scan must cover
+both. Changes made before this slice have no summary or record (`revert` says too old).
+
 ## Store: the host's table
 
 `DocStore` has a small key-value table for the host's own records next to the docs (same
@@ -720,6 +847,32 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Amendment 4: history (C7a)
+
+**Breaking:**
+1. `UndoOutcome` is `#[non_exhaustive]`; `Applied` gains `skipped` and `blocked`, `Conflicts`
+   carries `Vec<ConflictRegion>` (one per region, live coordinates, a `kind`) instead of
+   merge3's `Vec<Conflict>`; new variants `Blocked`, `Dropped`, `HistoryLost`,
+   `ClearedByPurge`.
+2. `Config::undo_max_bytes` is now **per pid per doc** (both stacks), default **4 MiB** (was
+   32 MiB per session), per spec U6.
+3. `tools::session_exit` follows K-EXIT-1: `Store` exits **6** (was 1), `Leased` **5** (was 1),
+   `Blob(TooLarge)` and `NoBlobStore` 4.
+4. Behaviour: whole-text `merge3` (and `write_base`) on an **empty** base no longer lands two
+   different writes (O5 needs a non-empty doc, K-BR-11): it conflicts.
+5. Behaviour: undo regions are per canonical hunk (a two-place edit can now partly conflict);
+   hunks given to `edit` are coalesced when touching before they apply.
+
+**Additive:** `Session::undo_with`, `redo_with`, `revert`, `restore`, `name_version`,
+`versions`, `log`, `diff_version`, `show`, `clear_undo_history`; `UndoRequest`, `UndoMode`,
+`ConflictRegion`, `ConflictKind`, `LogQuery`, `LogItem`, `DiffOutput`, `WriteOutcome::exit`,
+`UndoOutcome::exit`; `store::ChangeInfo`, `ChangeKind`, `VersionInfo`, `DocStore::change`,
+`scan_changes`, `version_infos`; `SessionError::Held`, `RevertTooOld`, `NoSuchChange`;
+`Action::Revert`, `History`; `TickReport::versions_cut`, `versions_thinned`,
+`reverts_dropped`; `tools::exit::{HELD, LEASED, STORE, LINK_LOST, TOO_OLD}`; `Config` fields
+in the Limits table. Store: five new tables (format stays 2). Versions are now cut
+automatically (idle, before large agent edits, before restores).
 
 ### Rename (2026-10-27)
 

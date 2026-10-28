@@ -15,7 +15,7 @@ use super::pack::{Declined, Pack};
 use super::participant::ConnId;
 use super::tier0::{BlobPack, BlobSession};
 use crate::blob::{BlobError, BlobInfo, BlobStore};
-use crate::store::{DocKey, DocStore, Seq, BLOB_DOC_PACK};
+use crate::store::{DocKey, DocStore, Seq, VersionId, BLOB_DOC_PACK};
 
 /// Returned by [`SessionManager::stats`] (for the host's doctor/status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +56,12 @@ pub struct TickReport {
     /// Tier 0: outside saves that conflicted (doc, the new current version, the conflict
     /// copy written, if any).
     pub conflicts: Vec<(DocKey, Seq, Option<PathBuf>)>,
+    /// Versions cut after quiet following edits (K-HIST-4).
+    pub versions_cut: Vec<(DocKey, VersionId)>,
+    /// Versions removed by retention (K-HIST-7), over every doc.
+    pub versions_thinned: usize,
+    /// Revert records that left the revert window (K-HIST-23), over every doc.
+    pub reverts_dropped: u64,
 }
 
 struct Pool {
@@ -237,6 +243,17 @@ impl SessionManager {
             ..TickReport::default()
         };
         for (k, s) in self.loaded()? {
+            match s.history_tick() {
+                Ok(h) => {
+                    if let Some(v) = h.cut {
+                        rep.versions_cut.push((k.clone(), v));
+                    }
+                    rep.versions_thinned += h.thinned;
+                    rep.reverts_dropped += h.reverts_dropped;
+                }
+                Err(SessionError::Unloaded | SessionError::Released) => {}
+                Err(e) => rep.errors.push((k.clone(), e)),
+            }
             match s.disk_tick() {
                 Ok((check, written)) => {
                     if let Some(DiskCheck::Ingested { version }) = check {

@@ -585,6 +585,9 @@ fn positional_edits_are_guarded_and_edit_with_is_atomic() {
 fn write_base_merges_conflicts_and_expires() {
     let mut c = Config::default();
     c.read_bases_max = 2;
+    // stored versions are always valid bases: keep agent edits from cutting any here
+    c.agent_version_lines = usize::MAX;
+    c.agent_version_percent = usize::MAX;
     let f = fx_with("wbase", c);
     let s = f.open("w.md", b"alpha\nbeta\ngamma\n");
     let a = f.join(&s, "a", Rights::editor());
@@ -727,7 +730,9 @@ fn undo_redo_is_per_participant() {
     replace(&s, b, "four", "FOUR");
     // a's undo reverts only a's change
     match s.undo(a, 1).unwrap() {
-        UndoOutcome::Applied { steps: 1, result } => {
+        UndoOutcome::Applied {
+            steps: 1, result, ..
+        } => {
             assert_eq!((result.lines_added, result.lines_removed), (1, 1))
         }
         o => panic!("{o:?}"),
@@ -761,7 +766,9 @@ fn undo_redo_is_per_participant() {
     assert_eq!(text(&s, a), "ONE\ntwo\nTHREE\nFOUR\n");
     // now a can undo both remaining batches in one atomic call
     match s.undo(a, 5).unwrap() {
-        UndoOutcome::Applied { steps: 2, result } => assert_eq!(result.lines_removed, 2),
+        UndoOutcome::Applied {
+            steps: 2, result, ..
+        } => assert_eq!(result.lines_removed, 2),
         o => panic!("{o:?}"),
     }
     assert_eq!(text(&s, a), "one\ntwo\nthree\nFOUR\n");

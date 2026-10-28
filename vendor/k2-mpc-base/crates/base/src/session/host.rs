@@ -142,8 +142,12 @@ pub enum Action {
     BreakLease,
     /// Tier 0: restoring an older version.
     Restore,
-    /// Tier 0: listing or reading versions, naming one.
+    /// Listing or reading versions, naming one (tier 0 and text docs).
     Versions,
+    /// `revert <change>`.
+    Revert,
+    /// `log`, `diff --version`, `show --version`.
+    History,
 }
 
 /// How a tier-0 lease ended ([`AuditEvent::LeaseEnded`]).

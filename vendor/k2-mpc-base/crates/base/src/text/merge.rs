@@ -14,8 +14,9 @@
 //! - O2: an insertion strictly inside the other side's range conflicts;
 //! - O3: touching at a boundary does not conflict: the insertion lands on that side of it;
 //! - O4: an identical change on both sides is taken once;
-//! - O5: two different insertions at the same point conflict, except at the end of the
-//!   text, where both land, theirs first, then ours (two agents appending to a log).
+//! - O5: two different insertions at the same point conflict, except at the end of a
+//!   **non-empty** text, where both land, theirs first, then ours (two agents appending to
+//!   a log). Two writes to an empty doc conflict (K-BR-11, spec v1.3 R3).
 //!
 //! O5 makes the merge asymmetric in one place: with both sides appending, swapping ours
 //! and theirs swaps the order of the two appends. Everything else is symmetric.
@@ -54,14 +55,17 @@ pub enum Merge {
     Conflicts(Vec<Conflict>),
 }
 
-/// Merge whole texts: the end of `base` is the end of the text (O5 applies there).
+/// Merge whole texts: the end of `base` is the end of the text, so O5 applies there when
+/// `base` is non-empty (two writes to an empty doc conflict).
 pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
-    merge3_window(base, ours, theirs, true)
+    merge3_window(base, ours, theirs, !base.is_empty())
 }
 
 /// Merge a window of a longer text (undo merges one region of the doc). `at_end` says
-/// whether the window ends where the whole text ends: only then do same-point insertions at
-/// the window's end both land (O5); elsewhere they conflict as anywhere else.
+/// whether the window ends where the whole text ends **and** the whole text was non-empty
+/// before the merge (the caller folds that in; the window's own base may be empty): only
+/// then do same-point insertions at the window's end both land (O5); elsewhere they
+/// conflict as anywhere else.
 pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merge {
     let a = diff::hunks(base, ours);
     let b = diff::hunks(base, theirs);
@@ -273,8 +277,7 @@ mod tests {
             clean(base, "# Log\n- one\n- one\n", "# Log\n- one\n- two\n"),
             "# Log\n- one\n- two\n- one\n"
         );
-        // empty base, and an identical append taken once (O4 before O5)
-        assert_eq!(clean("", "b\n", "a\n"), "a\nb\n");
+        // an identical append taken once (O4 before O5)
         assert_eq!(
             clean(base, "# Log\n- one\nx\n", "# Log\n- one\nx\n"),
             "# Log\n- one\nx\n"
@@ -288,6 +291,19 @@ mod tests {
         assert!(matches!(
             merge3(base, "# Log\n- uno\n", "# Log\n- eins\n"),
             Merge::Conflicts(_)
+        ));
+    }
+
+    #[test]
+    fn empty_base_double_write_conflicts() {
+        // K-BR-11 / CT merge.empty_base_same_point_conflicts: O5 needs a non-empty doc
+        assert!(matches!(merge3("", "b\n", "a\n"), Merge::Conflicts(_)));
+        // the same text written twice is still taken once (O4)
+        assert_eq!(clean("", "a\n", "a\n"), "a\n");
+        // a window may have an empty base and still be at the end of a non-empty doc
+        assert!(matches!(
+            merge3_window("", "x\n", "y\n", true),
+            Merge::Clean(_)
         ));
     }
 

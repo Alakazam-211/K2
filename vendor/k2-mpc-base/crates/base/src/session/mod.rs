@@ -18,6 +18,7 @@
 //! - Presence: roles, carets and viewing ranges carried through every change, idle expiry,
 //!   per-participant undo/redo, change subscriptions, rate limits, a memory-bounded pool.
 
+mod carry;
 mod config;
 mod disk;
 mod error;
@@ -34,13 +35,14 @@ mod tier0;
 mod undo;
 
 pub use crate::store::{Approval, ApprovalState};
+pub use crate::store::{ChangeInfo, ChangeKind, VersionInfo};
 pub use config::Config;
 pub use disk::{is_write_temp, DiskCheck, DiskState, FlushOutcome};
 pub use error::{EditWithError, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, Rights};
 pub use live::{
-    ChangeEvent, EditResult, Joined, ReadResult, RightsChange, Session, Status, UndoOutcome,
-    WriteOutcome,
+    ChangeEvent, DiffOutput, EditResult, Joined, LogItem, LogQuery, ReadResult, RightsChange,
+    Session, Status, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{Declined, Pack, PackContent, PackError, TextFilePack};
@@ -53,6 +55,7 @@ pub use tier0::{
     conflict_copy_name, AnyFile, BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus,
     BlobWriteResult, LeaseInfo, MERGE_PID, REGION_MAX_BYTES,
 };
+pub use undo::{ConflictKind, ConflictRegion};
 
 #[cfg(test)]
 mod disk_crash_tests;

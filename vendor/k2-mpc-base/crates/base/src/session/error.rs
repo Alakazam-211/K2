@@ -46,6 +46,17 @@ pub enum SessionError {
     /// a regular file inside the root (a folder, a symlink resolving outside it...).
     #[error("bad path: {0}")]
     BadPath(String),
+    /// Refused for now, not for good: `approvals_backlog` (too many pending on-behalf
+    /// changes; the person approves or declines some first). Exit 2.
+    #[error("held: {reason}")]
+    Held { reason: &'static str },
+    /// `revert`: the change is older than the revert window (K-HIST-23). Exit 8; never
+    /// retry. The way back is `restore --version`.
+    #[error("change {seq} is too old to revert (revert_too_old); use restore --version")]
+    RevertTooOld { seq: Seq },
+    /// No change at that log position (`revert`), or no such version. Exit 4.
+    #[error("no change or version {0} in this doc")]
+    NoSuchChange(u64),
     /// Reading or writing the file failed. Nothing is lost: the doc keeps its changes and
     /// write-back retries.
     #[error("disk: {0}")]

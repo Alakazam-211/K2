@@ -1,65 +1,118 @@
-//! Per-participant undo, kept small.
+//! Undo, redo and revert over text, to the undo spec v1.4 (`.k2/prds/spec-undo-v1.md`).
 //!
-//! Undo is a three-way merge (`merge3(after, before, live)`), so it only reverts what the
-//! participant changed and refuses when someone else has since edited the same text. Keeping
-//! whole before/after texts per batch would cost two copies of the doc per step, so a batch
-//! keeps only its **region**: the span its hunks covered, as text before and after the
-//! change. The region's bounds are carried through every later change (anyone's) like a
-//! caret; at undo time the region's live text is "theirs".
+//! Undo is a three-way merge per **region** (U8): a region is one **canonical hunk** of a
+//! change (sorted, non-overlapping, coalesced when touching), kept as its text before and
+//! after the change. A `sed -i` touching lines 3 and 300 is two regions. Each region's
+//! bounds are carried through every later change to its root, by anyone, like a caret: an
+//! insertion exactly at its start or end is pulled inside it (start [`Bias::Before`], end
+//! [`Bias::After`]). Two regions of one change can come to touch (someone deleted what
+//! separated them); an insertion at their shared edge then goes to the **left** region
+//! only (m-d). A later deletion across a region's edge **taints** it (U9): a tainted region
+//! always conflicts.
 //!
-//! Inside the region the merge is exactly `merge3`. Changes outside it are, by definition,
-//! not overlapping, so they would merge cleanly anyway. Insertions exactly at a region's
-//! edges are pulled inside it, so `merge3`'s "two insertions at one point conflict" rule
-//! still applies there. The one case a region can't represent is a later deletion that
-//! crosses one of its edges: the batch is then **tainted** and its undo reports a conflict
-//! (conservative: a whole-text merge might have succeeded).
+//! Undoing a region is `merge3_window(base = after, ours = before, theirs = live[s'..e'],
+//! at_end)` where `at_end` holds only when the region ends at the root's end **and** the
+//! root was non-empty after the change being undone (the merge's base, U10, v1.4 m11), so the
+//! end-of-text rule O5 fires exactly where a whole-text `merge3` would fire it (U12).
+//!
+//! Within one step, regions are applied **back to front**; the windows are disjoint, so each
+//! region merges against the step's starting text and lower regions keep their bounds
+//! (U10, m-d). A plan carries the regions of the later steps through each planned step.
+//!
+//! Modes (U13–U15): all-or-nothing reports **every** conflicting region of the first
+//! conflicting step and applies nothing; `--partial` applies every clean region, reports the
+//! rest (the same set), and stops at a step whose every region conflicts (it stays on top).
 
-use std::collections::VecDeque;
+use std::ops::Range;
 
 use super::position::{self, transform, Bias};
 use crate::doc::Edit;
 use crate::store::Seq;
 use crate::text::diff::{self, Hunk};
-use crate::text::merge::{self, Conflict, Merge};
+use crate::text::merge::{self, Merge};
 
+/// Why a region of an undo, redo or revert conflicts (U11).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ConflictKind {
+    /// Someone else changed text overlapping the region since (merge rules O1, O2, O5).
+    Overlap,
+    /// A later deletion crossed one of the region's edges (U9).
+    Taint,
+    /// The region overlaps content a purge redacted (revert only; v1.3 m-g).
+    Erased,
+}
+
+/// One conflicting region of an undo, redo or revert, in **live** coordinates (U11): one
+/// entry per region (= per canonical hunk of the change), never a sub-range of one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ConflictRegion {
+    pub root: String,
+    /// The region's live byte range `[s', e')`.
+    pub range: Range<usize>,
+    /// 1-based live lines (first, last), inclusive.
+    pub lines: (usize, usize),
+    pub kind: ConflictKind,
+    /// The region's text as the change left it (the merge's base).
+    pub base: String,
+    /// What the undo wanted to put back.
+    pub ours: String,
+    /// The live text of the region now.
+    pub theirs: String,
+}
+
+/// One region of a change: what to turn back (`after` into `before`) and where it is now.
 #[derive(Debug, Clone)]
 pub(crate) struct Region {
     pub root: String,
     /// Bounds in the current text (carried through every change).
     pub start: usize,
     pub end: usize,
-    /// The region's text before and after the participant's change.
+    /// The text to restore.
     pub before: String,
+    /// The text the change left (the merge's base).
     pub after: String,
     pub tainted: bool,
+    /// The root was empty right after the change (the whole doc's merge base): the
+    /// end-of-text rule O5 then never applies (U10, v1.4 m11).
+    pub base_doc_empty: bool,
+    /// The region overlaps redacted content (revert records after a purge).
+    pub erased: bool,
 }
 
 impl Region {
-    /// The region of a change: `hunks` (non-empty, valid) applied to `before_text`.
-    pub fn of_change(root: &str, before_text: &str, hunks: &[Hunk]) -> Self {
-        let (first, last) = (&hunks[0], &hunks[hunks.len() - 1]);
-        let (s, e) = (first.start, last.end);
-        let local: Vec<Hunk> = hunks
+    /// One region per canonical hunk of a change: `hunks` (sorted, valid against
+    /// `before_text`) applied to `before_text`. Touching hunks are coalesced first. Bounds
+    /// are in the coordinates of the text after the change.
+    pub fn of_change(root: &str, before_text: &str, hunks: &[Hunk]) -> Vec<Region> {
+        let hunks = diff::coalesce(hunks.to_vec());
+        let grow: isize = hunks
             .iter()
-            .map(|h| Hunk {
-                start: h.start - s,
-                end: h.end - s,
-                insert: h.insert.clone(),
+            .map(|h| h.insert.len() as isize - (h.end - h.start) as isize)
+            .sum();
+        let empty_after = (before_text.len() as isize + grow) == 0;
+        let mut delta: isize = 0;
+        hunks
+            .into_iter()
+            .map(|h| {
+                let start = (h.start as isize + delta) as usize;
+                delta += h.insert.len() as isize - (h.end - h.start) as isize;
+                Region {
+                    root: root.to_owned(),
+                    start,
+                    end: start + h.insert.len(),
+                    before: before_text[h.start..h.end].to_owned(),
+                    after: h.insert,
+                    tainted: false,
+                    base_doc_empty: empty_after,
+                    erased: false,
+                }
             })
-            .collect();
-        let before = before_text[s..e].to_owned();
-        let after = diff::apply(&before, &local);
-        Region {
-            root: root.to_owned(),
-            start: s,
-            end: s + after.len(),
-            before,
-            after,
-            tainted: false,
-        }
+            .collect()
     }
 
-    /// Carry the region through a later change to its root.
+    /// Carry the region through a later change to its root (U8, U9).
     pub fn transform(&mut self, hunks: &[Hunk]) {
         let crosses = |p: usize| hunks.iter().any(|h| h.start < p && p < h.end);
         if crosses(self.start) || crosses(self.end) {
@@ -75,186 +128,384 @@ impl Region {
         self.before.len() + self.after.len() + self.root.len() + 64
     }
 
-    /// Hunks (in `live` coordinates) that revert this region's change, or the conflicts.
-    fn revert(&self, live: &str) -> Result<Vec<Hunk>, Vec<Conflict>> {
+    /// The region's text after undoing it, merged with `live` (`Ok(merged window text)`),
+    /// or the conflict (U10, U11).
+    fn revert(&self, live: &str) -> Result<String, Box<ConflictRegion>> {
         let theirs = match live.get(self.start..self.end) {
-            Some(t) if !self.tainted => t,
-            _ => return Err(vec![self.whole_conflict(live)]),
+            Some(t) => t,
+            None => return Err(self.conflict(live, ConflictKind::Taint).into()),
         };
-        // The region is a window of the doc: O5 (appends at the end both land) only applies
-        // when it ends where the doc does, so undo matches a whole-text merge3 (U12).
-        let at_end = self.end == live.len();
+        if self.erased {
+            return Err(self.conflict(live, ConflictKind::Erased).into());
+        }
+        if self.tainted {
+            return Err(self.conflict(live, ConflictKind::Taint).into());
+        }
+        let at_end = self.end == live.len() && !self.base_doc_empty;
         match merge::merge3_window(&self.after, &self.before, theirs, at_end) {
-            Merge::Clean(c) => Ok(c
-                .hunks
-                .into_iter()
-                .map(|h| Hunk {
-                    start: h.start + self.start,
-                    end: h.end + self.start,
-                    insert: h.insert,
-                })
-                .collect()),
-            Merge::Conflicts(cs) => {
-                // Report in live coordinates (approximate: offsets within the region are
-                // the region's own, before the later edits).
-                let l0 = position::line_of(live, self.start) - 1;
-                Err(cs
-                    .into_iter()
-                    .map(|c| Conflict {
-                        base: c.base.start + self.start..c.base.end + self.start,
-                        lines: (c.lines.0 + l0, c.lines.1 + l0),
-                        ..c
-                    })
-                    .collect())
-            }
+            Merge::Clean(c) => Ok(c.text),
+            Merge::Conflicts(_) => Err(self.conflict(live, ConflictKind::Overlap).into()),
         }
     }
 
-    fn whole_conflict(&self, live: &str) -> Conflict {
-        let s = self.start.min(live.len());
-        let e = self.end.clamp(s, live.len());
-        let theirs = live.get(s..e).unwrap_or("").to_owned();
+    fn conflict(&self, live: &str, kind: ConflictKind) -> ConflictRegion {
+        let s = floor_char(live, self.start.min(live.len()));
+        let e = floor_char(live, self.end.clamp(s, live.len()));
+        let theirs = live[s..e].to_owned();
         let first = position::line_of(live, s);
-        Conflict {
-            base: s..e,
-            lines: (first, first + theirs.matches('\n').count()),
-            base_text: self.after.clone(),
+        let spans = theirs
+            .matches('\n')
+            .count()
+            .saturating_sub(usize::from(theirs.ends_with('\n')));
+        ConflictRegion {
+            root: self.root.clone(),
+            range: s..e,
+            lines: (first, first + spans),
+            kind,
+            base: self.after.clone(),
             ours: self.before.clone(),
             theirs,
         }
     }
 }
 
-/// One participant edit call (or one undo/redo step), as it can be reverted.
+fn floor_char(s: &str, mut i: usize) -> usize {
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// The shared-edge rule (m-d): two regions of one change that came to touch keep a foreign
+/// insertion at their shared edge in the left region only. `regions` are one change's, in
+/// order (by root, then start); the clamp is idempotent and commutes with carrying.
+pub(crate) fn clamp_shared_edges(regions: &mut [Region]) {
+    for k in 1..regions.len() {
+        let (l, r) = regions.split_at_mut(k);
+        let (prev, next) = (&l[k - 1], &mut r[0]);
+        if prev.root == next.root && next.start < prev.end {
+            next.start = prev.end;
+            next.end = next.end.max(next.start);
+        }
+    }
+}
+
+/// One change by one participant, as it can be undone (U1): its regions, in order.
 #[derive(Debug, Clone)]
 pub(crate) struct Batch {
-    /// Log position of the change (orders batches across participants for eviction).
+    /// The change's log position (its stable change id). For an undo step that changed
+    /// nothing, the version it was planned at.
     pub seq: Seq,
-    /// At most one region per root.
+    /// The person an assistant made the change for (`undo --for`, U2).
+    pub on_behalf_of: Option<String>,
+    /// Ordered by root, then start.
     pub regions: Vec<Region>,
 }
 
 impl Batch {
     pub fn bytes(&self) -> usize {
-        self.regions.iter().map(Region::bytes).sum()
+        self.regions.iter().map(Region::bytes).sum::<usize>() + 64
     }
 
     pub fn transform(&mut self, root: &str, hunks: &[Hunk]) {
+        let mut any = false;
         for r in self.regions.iter_mut().filter(|r| r.root == root) {
             r.transform(hunks);
+            any = true;
+        }
+        if any {
+            clamp_shared_edges(&mut self.regions);
         }
     }
 }
 
-/// Plan reverting the newest `n` batches of `stack`, newest first, against `texts`.
-/// Returns one edit list per step (an empty list when a step has nothing left to revert),
-/// or the first conflicting step (1-based) with its conflicts. Changes nothing.
-pub(crate) fn plan(
-    texts: &[(&'static str, String)],
-    stack: &VecDeque<Batch>,
-    n: usize,
-) -> Result<Vec<Vec<Edit>>, (usize, Vec<Conflict>)> {
-    let mut pending: Vec<Batch> = stack.iter().rev().take(n).cloned().collect();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Mode {
+    /// All or nothing (U13).
+    All,
+    /// Apply every clean region; stop at a step whose every region conflicts (U14).
+    Partial,
+}
+
+/// One planned step.
+#[derive(Debug)]
+pub(crate) struct StepPlan {
+    /// The edits, one per touched root, in the coordinates of the text before the step
+    /// (canonical hunks). Empty when every applied region was already as wanted.
+    pub edits: Vec<Edit>,
+    /// The regions of the step for the opposite stack, in the coordinates after the step:
+    /// one per **applied** region, turning the step back (U17: redo reapplies exactly these).
+    pub inverse: Vec<Region>,
+    /// Regions skipped as conflicts (`--partial` only).
+    pub skipped: Vec<ConflictRegion>,
+}
+
+#[derive(Debug)]
+pub(crate) enum Plan {
+    /// Steps to apply, newest first. `blocked`: with `--partial`, the next step whose every
+    /// region conflicts (it stays where it is; planning stopped there). `steps` is empty
+    /// when the very first step was blocked.
+    Steps {
+        steps: Vec<StepPlan>,
+        blocked: Option<Vec<ConflictRegion>>,
+    },
+    /// All or nothing: step `step` (1-based) conflicts; every conflicting region of it.
+    Conflict {
+        step: usize,
+        conflicts: Vec<ConflictRegion>,
+    },
+}
+
+/// Plan undoing `batches` (newest first) against `texts` in `mode`. Changes nothing.
+pub(crate) fn plan(texts: &[(&'static str, String)], mut batches: Vec<Batch>, mode: Mode) -> Plan {
     let mut scratch: Vec<(&str, String)> = texts
         .iter()
         .filter(|(r, _)| {
-            pending
+            batches
                 .iter()
                 .any(|b| b.regions.iter().any(|g| g.root == *r))
         })
         .map(|(r, t)| (*r, t.clone()))
         .collect();
-    let mut out = Vec::with_capacity(pending.len());
-    for k in 0..pending.len() {
-        let mut edits = Vec::new();
-        for r in &pending[k].regions {
-            let live = &scratch
+    let mut steps = Vec::with_capacity(batches.len());
+    for k in 0..batches.len() {
+        let regions = std::mem::take(&mut batches[k].regions);
+        // every region merges against the step's starting text (windows are disjoint)
+        let mut results: Vec<(usize, Result<String, Box<ConflictRegion>>)> = Vec::new();
+        for (idx, r) in regions.iter().enumerate() {
+            let Some((_, live)) = scratch.iter().find(|(n, _)| *n == r.root) else {
+                continue; // a root the schema no longer has: nothing to undo there
+            };
+            results.push((idx, r.revert(live)));
+        }
+        let conflicts: Vec<ConflictRegion> = results
+            .iter()
+            .filter_map(|(_, r)| r.as_ref().err().map(|c| (**c).clone()))
+            .collect();
+        if !conflicts.is_empty() {
+            match mode {
+                Mode::All => {
+                    return Plan::Conflict {
+                        step: k + 1,
+                        conflicts,
+                    }
+                }
+                Mode::Partial if conflicts.len() == results.len() => {
+                    return Plan::Steps {
+                        steps,
+                        blocked: Some(conflicts),
+                    };
+                }
+                Mode::Partial => {}
+            }
+        }
+        let mut step = StepPlan {
+            edits: Vec::new(),
+            inverse: Vec::new(),
+            skipped: conflicts,
+        };
+        for (root, live) in scratch.iter_mut() {
+            // applied regions of this root, in order (regions are ordered by start)
+            let applied: Vec<(&Region, &String)> = results
                 .iter()
-                .find(|(n, _)| *n == r.root)
-                .expect("scratch has every region's root")
-                .1;
-            match r.revert(live) {
-                Ok(hs) if hs.is_empty() => {}
-                Ok(hs) => edits.push(Edit::Text {
-                    root: r.root.clone(),
-                    hunks: hs,
-                }),
-                Err(c) => return Err((k + 1, c)),
+                .filter_map(|(i, r)| r.as_ref().ok().map(|m| (&regions[*i], m)))
+                .filter(|(g, _)| g.root == *root)
+                .collect();
+            if applied.is_empty() {
+                continue;
+            }
+            let mut hunks = Vec::new();
+            let mut shift: isize = 0;
+            let mut inverse = Vec::with_capacity(applied.len());
+            for (g, merged) in &applied {
+                let theirs = &live[g.start..g.end];
+                for h in diff::hunks(theirs, merged) {
+                    hunks.push(Hunk {
+                        start: h.start + g.start,
+                        end: h.end + g.start,
+                        insert: h.insert,
+                    });
+                }
+                let start = (g.start as isize + shift) as usize;
+                inverse.push(Region {
+                    root: (*root).to_owned(),
+                    start,
+                    end: start + merged.len(),
+                    before: theirs.to_owned(),
+                    after: (*merged).clone(),
+                    tainted: false,
+                    base_doc_empty: false, // set below, once the step's text is known
+                    erased: false,
+                });
+                shift += merged.len() as isize - (g.end - g.start) as isize;
+            }
+            let hunks = diff::coalesce(hunks);
+            let after = diff::apply(live, &hunks);
+            for g in &mut inverse {
+                g.base_doc_empty = after.is_empty();
+            }
+            step.inverse.extend(inverse);
+            for later in &mut batches[k + 1..] {
+                later.transform(root, &hunks);
+            }
+            // the redo regions of the steps already planned move with this one too
+            for prev in &mut steps {
+                let p: &mut StepPlan = prev;
+                for g in p.inverse.iter_mut().filter(|g| g.root == *root) {
+                    g.transform(&hunks);
+                }
+                clamp_shared_edges(&mut p.inverse);
+            }
+            *live = after;
+            if !hunks.is_empty() {
+                step.edits.push(Edit::Text {
+                    root: (*root).to_owned(),
+                    hunks,
+                });
             }
         }
-        for e in &edits {
-            let Edit::Text { root, hunks } = e;
-            let t = &mut scratch
-                .iter_mut()
-                .find(|(n, _)| *n == root)
-                .expect("root present")
-                .1;
-            *t = diff::apply(t, hunks);
-            for later in &mut pending[k + 1..] {
-                later.transform(root, hunks);
-            }
-        }
-        out.push(edits);
+        steps.push(step);
     }
-    Ok(out)
+    Plan::Steps {
+        steps,
+        blocked: None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn region(before: &str, after: &str) -> (Region, Vec<Hunk>) {
+    const R: &str = "r";
+
+    fn batch(before: &str, after: &str) -> Batch {
         let hs = diff::hunks(before, after);
-        (Region::of_change("r", before, &hs), hs)
+        Batch {
+            seq: 1,
+            on_behalf_of: None,
+            regions: Region::of_change(R, before, &hs),
+        }
+    }
+
+    fn carry(b: &mut Batch, old: &str, new: &str) {
+        b.transform(R, &diff::hunks(old, new));
+    }
+
+    fn texts(t: &str) -> Vec<(&'static str, String)> {
+        vec![(R, t.to_owned())]
+    }
+
+    fn undone(live: &str, b: Batch, mode: Mode) -> (String, Vec<ConflictRegion>) {
+        match plan(&texts(live), vec![b], mode) {
+            Plan::Steps { steps, blocked } => {
+                assert!(blocked.is_none(), "blocked: {blocked:?}");
+                let s = &steps[0];
+                let out = match s.edits.first() {
+                    Some(Edit::Text { hunks, .. }) => diff::apply(live, hunks),
+                    None => live.to_owned(),
+                };
+                (out, s.skipped.clone())
+            }
+            Plan::Conflict { conflicts, .. } => (live.to_owned(), conflicts),
+        }
     }
 
     #[test]
-    fn region_holds_only_the_changed_span() {
-        let (r, _) = region("aaa bbb ccc\nddd\n", "aaa BBB ccc\nddd\n");
-        assert_eq!((r.start, r.end), (4, 7));
-        assert_eq!((r.before.as_str(), r.after.as_str()), ("bbb", "BBB"));
-        assert_eq!(
-            r.revert("aaa BBB ccc\nddd\n").unwrap(),
-            diff::hunks("BBB", "bbb")
-                .into_iter()
-                .map(|h| Hunk {
-                    start: h.start + 4,
-                    end: h.end + 4,
-                    ..h
-                })
-                .collect::<Vec<_>>()
-        );
+    fn a_region_per_canonical_hunk() {
+        let b = batch("a\nb\nc\nd\ne\n", "a\nB\nc\nd\nE\n");
+        assert_eq!(b.regions.len(), 2);
+        assert_eq!((b.regions[0].start, b.regions[0].end), (2, 3));
+        assert_eq!((b.regions[1].start, b.regions[1].end), (8, 9));
+        assert_eq!(b.regions[1].before, "e");
     }
 
     #[test]
-    fn later_edits_elsewhere_merge_and_overlaps_conflict() {
-        let before = "one two three\n";
-        let after = "one TWO three\n";
-        let (mut r, _) = region(before, after);
-        // someone prepends text and appends at the end: the region moves, undo still applies
-        let live = "zero one TWO three!\n";
-        r.transform(&diff::hunks(after, live));
-        let hs = r.revert(live).unwrap();
-        assert_eq!(diff::apply(live, &hs), "zero one two three!\n");
-        // someone edits inside the region: conflict
-        let mut r2 = region(before, after).0;
-        let live2 = "one TwO three\n";
-        r2.transform(&diff::hunks(after, live2));
-        assert!(r2.revert(live2).is_err());
+    fn partial_skips_exactly_what_all_or_nothing_reports() {
+        let before = "one\ntwo\nthree\nfour\n";
+        let after = "ONE\ntwo\nthree\nFOUR\n";
+        let live = "ONE\ntwo\nthree\nFOxUR\n"; // someone edits inside the second region
+        let mut b = batch(before, after);
+        carry(&mut b, after, live);
+        let all = match plan(&texts(live), vec![b.clone()], Mode::All) {
+            Plan::Conflict { step: 1, conflicts } => conflicts,
+            p => panic!("{p:?}"),
+        };
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].range, 14..19);
+        assert_eq!(all[0].lines, (4, 4));
+        let (out, skipped) = undone(live, b, Mode::Partial);
+        assert_eq!(skipped, all);
+        assert_eq!(out, "one\ntwo\nthree\nFOxUR\n");
+        // an insertion touching a region's edge is O3: no conflict
+        let mut b = batch(before, after);
+        carry(&mut b, after, "ONE\ntwo\nthree\nFOUR!\n");
+        let (out, skipped) = undone("ONE\ntwo\nthree\nFOUR!\n", b, Mode::All);
+        assert!(skipped.is_empty());
+        assert_eq!(out, "one\ntwo\nthree\nfour!\n");
+    }
+
+    #[test]
+    fn eof_rule_uses_the_whole_doc_base() {
+        // B deletes the last line, someone appends: undo lands, theirs first (U12)
+        let mut b = batch("a\nx\n", "a\n");
+        carry(&mut b, "a\n", "a\ny\n");
+        assert_eq!(undone("a\ny\n", b, Mode::All).0, "a\ny\nx\n");
+        // B deletes the whole doc, someone appends: the base is "", so it conflicts (m11)
+        let mut b = batch("x\n", "");
+        carry(&mut b, "", "y\n");
+        let (out, c) = undone("y\n", b, Mode::All);
+        assert_eq!(out, "y\n");
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].kind, ConflictKind::Overlap);
+    }
+
+    #[test]
+    fn shared_edge_insert_goes_to_the_left_region_only() {
+        let mut b = batch("a\nX\nb\nY\nc\n", "a\n1\nb\n2\nc\n");
+        assert_eq!(b.regions.len(), 2);
+        // someone deletes what separated them: the regions touch at 3
+        carry(&mut b, "a\n1\nb\n2\nc\n", "a\n12\nc\n");
+        assert_eq!((b.regions[0].end, b.regions[1].start), (3, 3));
+        assert!(!b.regions[0].tainted && !b.regions[1].tainted);
+        // someone inserts "Z" at the shared edge: the left region takes it
+        carry(&mut b, "a\n12\nc\n", "a\n1Z2\nc\n");
+        assert_eq!((b.regions[0].start, b.regions[0].end), (2, 4));
+        assert_eq!((b.regions[1].start, b.regions[1].end), (4, 5));
     }
 
     #[test]
     fn a_deletion_across_an_edge_taints() {
-        let (mut r, _) = region("abc def ghi", "abc DEF ghi");
-        let live = "abc DEghi";
-        r.transform(&[Hunk {
-            start: 6,
-            end: 8,
-            insert: String::new(),
-        }]);
-        assert!(r.tainted);
-        let c = r.revert(live).unwrap_err();
-        assert_eq!(c.len(), 1);
+        let mut b = batch("abc def ghi", "abc DEF ghi");
+        carry(&mut b, "abc DEF ghi", "abc DEghi");
+        assert!(b.regions[0].tainted);
+        let (_, c) = undone("abc DEghi", b, Mode::All);
+        assert_eq!(c[0].kind, ConflictKind::Taint);
         assert_eq!(c[0].ours, "def");
+    }
+
+    #[test]
+    fn inverse_regions_redo_exactly_what_was_undone() {
+        let before = "one\ntwo\nthree\n";
+        let after = "ONE\ntwo\nTHREE\n";
+        let live = "ONE\ntwo\nTHxREE\n";
+        let mut b = batch(before, after);
+        carry(&mut b, after, live);
+        let Plan::Steps { steps, .. } = plan(&texts(live), vec![b], Mode::Partial) else {
+            panic!()
+        };
+        let Edit::Text { hunks, .. } = &steps[0].edits[0];
+        let undone = diff::apply(live, hunks);
+        assert_eq!(undone, "one\ntwo\nTHxREE\n");
+        assert_eq!(steps[0].inverse.len(), 1); // the skipped region isn't redone
+        let redo = Batch {
+            seq: 2,
+            on_behalf_of: None,
+            regions: steps[0].inverse.clone(),
+        };
+        let Plan::Steps { steps, .. } = plan(&texts(&undone), vec![redo], Mode::All) else {
+            panic!()
+        };
+        let Edit::Text { hunks, .. } = &steps[0].edits[0];
+        assert_eq!(diff::apply(&undone, hunks), live);
     }
 }

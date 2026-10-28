@@ -16,9 +16,15 @@
 
 mod blob;
 mod enc;
+mod history;
 
 pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
+pub(crate) use history::{
+    window_plan, Carry, NewChange, RecordHunk, RecordRoot, Retention, RevertRecord, RevertWindow,
+    RootShape,
+};
+pub use history::{ChangeInfo, ChangeKind, VersionInfo};
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -494,6 +500,29 @@ fn dec_version(b: &[u8]) -> Result<Version, StoreError> {
     })
 }
 
+/// Store `versions` (in order) after the doc's last version, in `w`.
+fn put_versions(
+    w: &redb::WriteTransaction,
+    id: DocId,
+    versions: &[Version],
+) -> Result<(), StoreError> {
+    if versions.is_empty() {
+        return Ok(());
+    }
+    let mut t = w.open_table(VERSIONS)?;
+    let mut last = t
+        .range((id, 0)..=(id, u64::MAX))?
+        .next_back()
+        .transpose()?
+        .map(|(k, _)| k.value().1)
+        .unwrap_or(0);
+    for v in versions {
+        last += 1;
+        t.insert((id, last), enc_version(v).as_slice())?;
+    }
+    Ok(())
+}
+
 fn enc_snapshot(seq: Seq, state: &[u8]) -> Vec<u8> {
     let mut w = W::default();
     w.u8(1).u64(seq).bytes(state);
@@ -539,6 +568,7 @@ impl DocStore {
             w.open_table(HOST)?;
             w.open_table(SYNC)?;
             blob::create_tables(&w)?;
+            history::create_tables(&w)?;
         }
         w.commit()?;
         Ok(Self { db })
@@ -605,11 +635,13 @@ impl DocStore {
         entry: Option<&LogEntry>,
         version: &Version,
     ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
-        self.create_imported_synced(meta, client, owner, entry, version, None)
+        self.create_imported_synced(meta, client, owner, entry, version, None, None)
     }
 
     /// [`DocStore::create_imported`], also recording the disk-sync state (its `seq` is set
-    /// to the import's position) in the same transaction.
+    /// to the import's position) and the import's change summary and revert record, in the
+    /// same transaction.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_imported_synced(
         &self,
         meta: &DocMeta,
@@ -618,6 +650,7 @@ impl DocStore {
         entry: Option<&LogEntry>,
         version: &Version,
         sync: Option<&SyncState>,
+        change: Option<&NewChange>,
     ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
         let w = self.db.begin_write()?;
         let out = {
@@ -635,6 +668,9 @@ impl DocStore {
             let seq = match entry {
                 Some(e) => {
                     put_entry(&w, id, 1, e)?;
+                    if let Some(c) = change {
+                        history::put_changes(&w, id, &[1], std::slice::from_ref(c))?;
+                    }
                     Some(1)
                 }
                 None => None,
@@ -906,13 +942,16 @@ impl DocStore {
 
     /// One transaction for a change that came from disk (or only moves the sync point):
     /// append `entries` (their first position must be `expect_first`, so the records below
-    /// can name it), store `versions`, replace the doc's metadata, set the synced state and
-    /// clear any write-back in flight.
+    /// can name it) with their change summaries and revert records (`changes`), store
+    /// `versions`, replace the doc's metadata, set the synced state and clear any write-back
+    /// in flight.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn commit_disk(
         &self,
         id: DocId,
         expect_first: Seq,
         entries: &[LogEntry],
+        changes: &[NewChange],
         versions: &[Version],
         meta: &DocMeta,
         synced: &SyncState,
@@ -924,6 +963,7 @@ impl DocStore {
                 return Err(StoreError::LogMoved(id, expect_first, first));
             }
         }
+        history::put_changes(&w, id, &seqs, changes)?;
         {
             let mut docs = w.open_table(DOCS)?;
             let old = dec_meta(docs.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
@@ -932,19 +972,7 @@ impl DocStore {
             }
             docs.insert(id, enc_meta(meta).as_slice())?;
         }
-        {
-            let mut t = w.open_table(VERSIONS)?;
-            let mut last = t
-                .range((id, 0)..=(id, u64::MAX))?
-                .next_back()
-                .transpose()?
-                .map(|(k, _)| k.value().1)
-                .unwrap_or(0);
-            for v in versions {
-                last += 1;
-                t.insert((id, last), enc_version(v).as_slice())?;
-            }
-        }
+        put_versions(&w, id, versions)?;
         {
             let mut t = w.open_table(SYNC)?;
             t.insert((id, SYNCED), enc_sync(synced).as_slice())?;
@@ -1041,12 +1069,20 @@ impl DocStore {
     /// do ([`crate::session::Session::set_approval`]).
     pub fn set_approval(&self, id: DocId, seq: Seq, a: &Approval) -> Result<(), StoreError> {
         let w = self.db.begin_write()?;
-        {
+        let settles = {
             let mut t = w.open_table(APPROVALS)?;
-            if t.get((id, seq))?.is_none() {
+            let Some(old) = t
+                .get((id, seq))?
+                .map(|v| dec_approval(v.value()))
+                .transpose()?
+            else {
                 return Err(StoreError::NoApproval(id, seq));
-            }
+            };
             t.insert((id, seq), enc_approval(a).as_slice())?;
+            old.state == ApprovalState::Pending && a.state != ApprovalState::Pending
+        };
+        if settles {
+            history::settle_pending(&w, id, seq)?;
         }
         w.commit()?;
         Ok(())

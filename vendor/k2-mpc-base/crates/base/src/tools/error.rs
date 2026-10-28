@@ -16,6 +16,16 @@ pub mod exit {
     pub const REFUSED: u8 = 3;
     /// Not found: no such doc, or live editing is off for it.
     pub const NOT_FOUND: u8 = 4;
+    /// Held: a permission card pending or `approvals_backlog` (the same code as usage).
+    pub const HELD: u8 = 2;
+    /// Leased by someone else (tier 0).
+    pub const LEASED: u8 = 5;
+    /// The store is unavailable (disk full, fsync failure): nothing acked.
+    pub const STORE: u8 = 6;
+    /// Link lost mid-verb (federation; the host's).
+    pub const LINK_LOST: u8 = 7;
+    /// Too old: `revert_too_old`, `base_expired`. Never retry the same request.
+    pub const TOO_OLD: u8 = 8;
 }
 
 /// Why a tool call was refused before it changed anything. Every variant exits 2
@@ -84,15 +94,18 @@ impl ToolRunError {
     }
 }
 
-/// The exit code for a session error, per `docs/SESSIONS.md`:
-/// 3 refused (no right), 4 not found or live editing off, 2 bad input or rate limited,
-/// 1 a failure the caller can retry (stale, disk, store, a stale handle).
+/// The exit code for a session error: the requirements' one table (K-EXIT-1, `docs/SESSIONS.md`).
+/// Total: every variant is listed, so a new one doesn't compile until it is mapped.
 pub fn session_exit(e: &SessionError) -> u8 {
+    use crate::blob::BlobError;
     match e {
         SessionError::Forbidden { .. } => exit::REFUSED,
         SessionError::NotFound(_)
         | SessionError::Declined(_)
-        | SessionError::PackMismatch { .. } => exit::NOT_FOUND,
+        | SessionError::PackMismatch { .. }
+        | SessionError::NoSuchChange(_)
+        | SessionError::NoBlobStore
+        | SessionError::Blob(BlobError::TooLarge { .. }) => exit::NOT_FOUND,
         SessionError::NotJoined { .. }
         | SessionError::RateLimited { .. }
         | SessionError::BadParticipant(_)
@@ -101,7 +114,70 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::NoApproval { .. }
         | SessionError::BadApproval(_)
         | SessionError::BadPath(_)
+        | SessionError::NoLease
         | SessionError::Doc(_) => exit::USAGE,
-        _ => exit::NO,
+        SessionError::Held { .. } => exit::HELD,
+        SessionError::Leased { .. } => exit::LEASED,
+        SessionError::Store(_) => exit::STORE,
+        SessionError::RevertTooOld { .. } => exit::TOO_OLD,
+        SessionError::Stale { .. }
+        | SessionError::Disk(_)
+        | SessionError::Blob(_)
+        | SessionError::Pack(_)
+        | SessionError::Unloaded
+        | SessionError::Released
+        | SessionError::Broken(_) => exit::NO,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::{Need, SessionError};
+
+    /// K-EXIT-1: one table. `session_exit` lists every variant (a new one doesn't compile
+    /// until mapped); this pins the codes.
+    #[test]
+    fn exit_code_table_is_total() {
+        let cases: Vec<(SessionError, u8)> = vec![
+            (
+                SessionError::Forbidden {
+                    need: Need::History,
+                },
+                3,
+            ),
+            (SessionError::NoSuchChange(9), 4),
+            (SessionError::NoBlobStore, 4),
+            (SessionError::RateLimited { retry_after_ms: 1 }, 2),
+            (
+                SessionError::Held {
+                    reason: "approvals_backlog",
+                },
+                2,
+            ),
+            (SessionError::NoLease, 2),
+            (
+                SessionError::Leased {
+                    holder: "h".into(),
+                    name: "H".into(),
+                    expires_ms: 1,
+                },
+                5,
+            ),
+            (SessionError::Store(crate::store::StoreError::Locked), 6),
+            (SessionError::RevertTooOld { seq: 1 }, 8),
+            (
+                SessionError::Stale {
+                    expected: 1,
+                    actual: 2,
+                },
+                1,
+            ),
+            (SessionError::Unloaded, 1),
+        ];
+        for (e, code) in cases {
+            assert_eq!(session_exit(&e), code, "{e:?}");
+        }
+        assert_eq!(exit::TOO_OLD, 8);
     }
 }

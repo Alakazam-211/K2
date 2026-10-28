@@ -24,11 +24,43 @@ pub struct Config {
     pub read_bases_max_bytes: usize,
 
     // --- undo ---
-    /// Undo (and redo) batches kept per participant. Default 100.
+    /// Undo (and redo) batches kept per participant per doc. Default 100 (spec U6).
     pub undo_depth: usize,
-    /// Bytes of undo/redo text kept per session across participants; the oldest batches go
-    /// first. Default 32 MiB.
+    /// Bytes of retained region text per participant per doc, undo and redo stacks
+    /// together; that participant's oldest batches go first. Default 4 MiB (spec U6).
     pub undo_max_bytes: usize,
+
+    // --- versions and history (K-HIST-4, -7, -22, -23) ---
+    /// Cut a version after this much quiet following edits. Default 2 min.
+    pub idle_version_ms: u64,
+    /// Cut a version before an agent edit changing more than this many lines... Default 20.
+    pub agent_version_lines: usize,
+    /// ...or more than this percent of the doc's lines. Default 10.
+    pub agent_version_percent: usize,
+    /// Retention: keep every automatic version this long... Default 30 days.
+    pub version_keep_all_ms: u64,
+    /// ...then one per hour up to this age, then one per day. Default 90 days.
+    pub version_hourly_until_ms: u64,
+    /// At most this many versions per doc (the oldest unnamed go first). Default 500.
+    pub version_max_count: usize,
+    /// At most this many bytes of version content per doc. Default 64 MiB.
+    pub version_max_bytes: u64,
+    /// The revert window: records of changes newer than this... Default 30 days.
+    pub revert_keep_ms: u64,
+    /// ...or among the last this many changes, whichever reaches further, are kept (and
+    /// every pending on-behalf change's). Default 10,000.
+    pub revert_keep_changes: u64,
+    /// At most this many bytes of revert records per doc (oldest non-pending dropped
+    /// first). Default 64 MiB.
+    pub revert_max_bytes: u64,
+    /// Pending on-behalf records per doc; past either cap new on-behalf edits are held
+    /// (`approvals_backlog`). Default 1,000...
+    pub pending_max_records: u64,
+    /// ...or 16 MiB.
+    pub pending_max_bytes: u64,
+    /// How often [`super::SessionManager::tick`] runs a loaded doc's retention (version
+    /// thinning, the revert window). Default 1 min.
+    pub history_tick_ms: u64,
 
     // --- limits ---
     /// Edit calls (`edit`, `replace_text`, `write_base`, `undo`, `redo`) per second per
@@ -85,6 +117,8 @@ pub struct Config {
     pub blob_merge_max_bytes: u64,
 }
 
+const DAY: u64 = 24 * 60 * 60_000;
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -95,7 +129,20 @@ impl Default for Config {
             read_base_ttl_ms: 30 * 60_000,
             read_bases_max_bytes: 16 << 20,
             undo_depth: 100,
-            undo_max_bytes: 32 << 20,
+            undo_max_bytes: 4 << 20,
+            idle_version_ms: 2 * 60_000,
+            agent_version_lines: 20,
+            agent_version_percent: 10,
+            version_keep_all_ms: 30 * DAY,
+            version_hourly_until_ms: 90 * DAY,
+            version_max_count: 500,
+            version_max_bytes: 64 << 20,
+            revert_keep_ms: 30 * DAY,
+            revert_keep_changes: 10_000,
+            revert_max_bytes: 64 << 20,
+            pending_max_records: 1_000,
+            pending_max_bytes: 16 << 20,
+            history_tick_ms: 60_000,
             edit_rate_per_s: 10,
             edit_burst: 10,
             subscriber_queue: 1024,

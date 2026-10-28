@@ -8,26 +8,31 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod history;
+
+pub use history::{DiffOutput, LogItem, LogQuery};
+
+use super::carry::RevertIndex;
 use super::config::Config;
 use super::disk::{self, DiskCheck, DiskState, FileStat, FlushOutcome, Probe, ReadFile};
 use super::error::{EditWithError, Result, SessionError};
 use super::host::{Action, AuditEvent, Host, LeaveReason, Need, Rights};
 use super::pack::{Declined, Pack, PackError};
 use super::participant::{
-    ConnId, CursorAt, Participant, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID,
+    ConnId, CursorAt, Participant, ParticipantKind, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID,
 };
 use super::position::{self, At, Bias, Cursor, LineRange};
 use super::presence::{self, Presence};
 use super::ratelimit::Bucket;
 use super::summary;
-use super::undo::{self, Batch, Region};
+use super::undo::{self, Batch, ConflictRegion, Mode, Plan, Region};
 use crate::doc::{ClientId, Doc, DocError, Edit, Neutral, MAX_CLIENT_ID};
 use crate::engine::{ENGINE_FORMAT, ENGINE_NAME};
 use crate::hash::{hex, sha256};
 use crate::schema::{Kind, Schema};
 use crate::store::{
-    Approval, ApprovalState, DocId, DocKey, DocMeta, DocStore, LogEntry, Seq, SyncState, Version,
-    VersionReason,
+    Approval, ApprovalState, ChangeInfo, ChangeKind, DocId, DocKey, DocMeta, DocStore, LogEntry,
+    NewChange, RecordHunk, RecordRoot, RevertRecord, Seq, SyncState, Version, VersionReason,
 };
 use crate::text::diff::{self, Hunk};
 use crate::text::lines;
@@ -83,19 +88,118 @@ pub enum WriteOutcome {
     BaseExpired,
 }
 
-/// Returned by [`Session::undo`] and [`Session::redo`].
+impl WriteOutcome {
+    /// The exit code (K-EXIT-1): 0 applied, 1 conflict, 8 base expired (never retry).
+    pub fn exit(&self) -> u8 {
+        match self {
+            WriteOutcome::Applied(_) => crate::tools::exit::OK,
+            WriteOutcome::Conflicts(_) => crate::tools::exit::NO,
+            WriteOutcome::BaseExpired => crate::tools::exit::TOO_OLD,
+        }
+    }
+}
+
+/// How an undo or redo treats conflicts (undo spec U13, U14).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum UndoMode {
+    /// All or nothing (`undo`): any conflicting region applies nothing (U13).
+    #[default]
+    All,
+    /// `--partial`: apply every region that merges cleanly, report the rest; a step whose
+    /// every region conflicts stays on top (U14). A person's Ctrl+Z.
+    Partial,
+    /// `--drop`: remove the top step without applying it (the escape from a blocked step).
+    Drop,
+}
+
+/// What [`Session::undo_with`] / [`Session::redo_with`] do.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UndoRequest {
+    /// Steps (batches), newest first. Default 1.
+    pub steps: usize,
+    pub mode: UndoMode,
+    /// `--for <person>`: only batches made on that person's behalf (an assistant, U2).
+    pub for_person: Option<String>,
+}
+
+impl Default for UndoRequest {
+    fn default() -> Self {
+        Self {
+            steps: 1,
+            mode: UndoMode::All,
+            for_person: None,
+        }
+    }
+}
+
+impl UndoRequest {
+    pub fn steps(steps: usize) -> Self {
+        Self {
+            steps,
+            ..Self::default()
+        }
+    }
+    pub fn mode(self, mode: UndoMode) -> Self {
+        Self { mode, ..self }
+    }
+    pub fn for_person(self, pid: impl Into<String>) -> Self {
+        Self {
+            for_person: Some(pid.into()),
+            ..self
+        }
+    }
+}
+
+/// Returned by [`Session::undo`], [`Session::redo`] (and their `_with` forms) and
+/// [`Session::revert`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum UndoOutcome {
-    /// `steps` batches were reverted (fewer than asked when the stack ran out).
-    Applied { steps: usize, result: EditResult },
-    /// Step `step` (1-based) overlaps a later edit by someone else. Nothing was applied.
-    /// Positions are approximate locations in the live text.
+    /// `steps` batches were undone (fewer than asked when the stack ran out or, with
+    /// `--partial`, when a step was blocked). `skipped`: conflicting regions `--partial`
+    /// left alone. `blocked`: with `--partial`, the next step's regions, all conflicting;
+    /// that step stays on top.
+    Applied {
+        steps: usize,
+        result: EditResult,
+        skipped: Vec<ConflictRegion>,
+        blocked: Option<Vec<ConflictRegion>>,
+    },
+    /// All or nothing: step `step` (1-based) conflicts; every conflicting region of it, in
+    /// live coordinates (U11). Nothing was applied.
     Conflicts {
         step: usize,
-        conflicts: Vec<Conflict>,
+        conflicts: Vec<ConflictRegion>,
     },
+    /// `--partial`: the top step's every region conflicts. Nothing was applied and it stays
+    /// on top; `--drop` removes it.
+    Blocked { conflicts: Vec<ConflictRegion> },
+    /// `--drop` removed the top step (change `change`) without applying it.
+    Dropped { change: Seq },
     /// Nothing to undo (or redo).
     Nothing,
+    /// Nothing to undo: this participant's history was lost when the session unloaded or
+    /// the daemon restarted (U6, U18). `revert` still reaches their changes.
+    HistoryLost,
+    /// Nothing to undo: a purge cleared every stack of this doc (U19).
+    ClearedByPurge,
+}
+
+impl UndoOutcome {
+    /// The exit code (K-EXIT-1): 1 when anything conflicted or was skipped, else 0.
+    pub fn exit(&self) -> u8 {
+        match self {
+            UndoOutcome::Applied {
+                skipped, blocked, ..
+            } if skipped.is_empty() && blocked.is_none() => crate::tools::exit::OK,
+            UndoOutcome::Applied { .. }
+            | UndoOutcome::Conflicts { .. }
+            | UndoOutcome::Blocked { .. } => crate::tools::exit::NO,
+            _ => crate::tools::exit::OK,
+        }
+    }
 }
 
 /// One applied change to one root, sent to subscribers.
@@ -179,6 +283,10 @@ impl std::ops::DerefMut for Member {
 struct History {
     undo: VecDeque<Batch>,
     redo: VecDeque<Batch>,
+    /// Bytes held by both stacks (bounded by [`Config::undo_max_bytes`]).
+    bytes: usize,
+    /// A purge cleared the stacks; said once on the next undo or redo.
+    cleared: bool,
     bucket: Option<Bucket>,
     last_read: Option<Seq>,
 }
@@ -206,7 +314,15 @@ struct State {
     members: Vec<Member>,
     joins: u64,
     hist: HashMap<String, History>,
-    undo_bytes: usize,
+    /// The version the session loaded (or reloaded) at: undo history before it was lost.
+    loaded_seq: Seq,
+    /// The newest stored version's log position, and when the doc last changed.
+    last_version_seq: Seq,
+    last_change_ms: u64,
+    /// When the next retention pass is due ([`Config::history_tick_ms`]).
+    next_history_ms: u64,
+    /// Carried bounds of the revert records; built on first use (`None`: not built).
+    reverts: Option<RevertIndex>,
     read_bases: VecDeque<ReadBase>,
     read_base_bytes: usize,
     /// Recent change authors, for "contributors since last read".
@@ -363,6 +479,7 @@ impl Session {
         } = init;
         let schema = pack.schema();
         let texts = texts_of(&doc, &schema)?;
+        let last_version_seq = store.last_version(doc_id)?.map_or(0, |(_, v)| v.seq);
         Ok(Self {
             host,
             config,
@@ -385,7 +502,11 @@ impl Session {
                 members: Vec::new(),
                 joins: 0,
                 hist: HashMap::new(),
-                undo_bytes: 0,
+                loaded_seq: loaded_version,
+                last_version_seq,
+                last_change_ms: now,
+                next_history_ms: now,
+                reverts: None,
                 read_bases: VecDeque::new(),
                 read_base_bytes: 0,
                 authors,
@@ -500,13 +621,42 @@ impl Session {
             reason: VersionReason::Import,
             name: None,
             authors: vec![IMPORT_PID.to_owned()],
-            content: ordered,
+            content: ordered.clone(),
         };
         // the bytes are the file's: the doc as imported is what the file holds
         let sync = SyncState {
             hash: sha256(bytes).to_vec(),
             seq: 0,
             state: doc.encode_state()?,
+        };
+        let change = NewChange {
+            info: ChangeInfo {
+                lines_added: ordered
+                    .iter()
+                    .map(|(_, Neutral::Text(t))| t.lines().count() as u64)
+                    .sum(),
+                ..ChangeInfo::new(ChangeKind::Import, IMPORT_PID, "disk", now)
+            },
+            record: RevertRecord {
+                author: IMPORT_PID.to_owned(),
+                on_behalf_of: None,
+                at_ms: now,
+                roots: ordered
+                    .iter()
+                    .filter(|(_, Neutral::Text(t))| !t.is_empty())
+                    .map(|(root, Neutral::Text(t))| RecordRoot {
+                        root: root.clone(),
+                        empty_after: false,
+                        hunks: vec![RecordHunk {
+                            start: 0,
+                            end: 0,
+                            insert: t.clone(),
+                            deleted: String::new(),
+                            redacted: false,
+                        }],
+                    })
+                    .collect(),
+            },
         };
         let (doc_id, seq, _) = store.create_imported_synced(
             &meta,
@@ -515,6 +665,7 @@ impl Session {
             entry.as_ref(),
             &version,
             Some(&sync),
+            Some(&change),
         )?;
         let ub = entry.as_ref().map_or(0, |e| e.update.len() as u64);
         let mut authors = VecDeque::new();
@@ -1161,8 +1312,9 @@ impl Session {
                 });
             }
         }
+        self.check_backlog(&st, i)?;
         let edits = self.normalize(edits)?;
-        self.commit(&mut st, i, vec![edits], Origin::Edit, now)
+        self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
     /// Read live, compute, apply, atomically: run `f` on the live text of `root` under the
@@ -1183,6 +1335,7 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
+        self.check_backlog(&st, i)?;
         let hunks = {
             let live = self.text_of(&st, root)?.1;
             let computed = match catch_unwind(AssertUnwindSafe(|| f(live))) {
@@ -1202,12 +1355,14 @@ impl Session {
             root: root.to_owned(),
             hunks,
         }];
-        Ok(Some(self.commit(
+        Ok(Some(self.commit_edit(
             &mut st,
             i,
-            vec![edits],
-            Origin::Edit,
+            edits,
+            ChangeKind::Edit,
+            None,
             now,
+            Vec::new(),
         )?))
     }
 
@@ -1218,6 +1373,7 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
+        self.check_backlog(&st, i)?;
         let new_text = self.pack.normalize_input(root, new_text);
         let live = self.text_of(&st, root)?.1;
         let hunks = lines::align_insertions(live, diff::hunks(live, &new_text));
@@ -1225,7 +1381,7 @@ impl Session {
             root: root.to_owned(),
             hunks,
         }];
-        self.commit(&mut st, i, vec![edits], Origin::Edit, now)
+        self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())
     }
 
     /// `write --base V`: apply only what the caller changed between version `base` and
@@ -1243,6 +1399,7 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::WriteBase, now)?;
+        self.check_backlog(&st, i)?;
         let live = self.text_of(&st, root)?.1.to_owned();
         let Some(base_text) = self.base_text(&mut st, root, base, now)? else {
             return Ok(WriteOutcome::BaseExpired);
@@ -1255,35 +1412,46 @@ impl Session {
                     root: root.to_owned(),
                     hunks: c.hunks,
                 }];
-                Ok(WriteOutcome::Applied(self.commit(
+                Ok(WriteOutcome::Applied(self.commit_edit(
                     &mut st,
                     i,
-                    vec![edits],
-                    Origin::Edit,
+                    edits,
+                    ChangeKind::Edit,
+                    None,
                     now,
+                    Vec::new(),
                 )?))
             }
         }
     }
 
-    /// Revert the participant's own last `steps` edit batches, newest first, three-way
-    /// merged against everything since. All steps apply, or none (a step that overlaps
-    /// someone else's later edit gives [`UndoOutcome::Conflicts`]). Never touches anyone
-    /// else's changes.
-    ///
-    /// Undo is **per participant (pid)**, across their connections: an undo through one
-    /// connection reverts the pid's last edit, whichever connection made it.
+    /// Undo the participant's own last `steps` batches, newest first, all or nothing (spec
+    /// U13): [`UndoRequest::steps`] with [`UndoMode::All`].
     pub fn undo(&self, conn: ConnId, steps: usize) -> Result<UndoOutcome> {
-        self.undo_redo(conn, steps, Origin::Undo)
+        self.undo_with(conn, &UndoRequest::steps(steps))
     }
 
-    /// Re-apply what the participant's undo reverted. A new edit by them clears the redo
-    /// stack.
+    /// Redo what the participant's undo undid, all or nothing.
     pub fn redo(&self, conn: ConnId, steps: usize) -> Result<UndoOutcome> {
-        self.undo_redo(conn, steps, Origin::Redo)
+        self.redo_with(conn, &UndoRequest::steps(steps))
     }
 
-    fn undo_redo(&self, conn: ConnId, steps: usize, origin: Origin) -> Result<UndoOutcome> {
+    /// Undo to the undo spec (U8–U18): the caller's own batches only, per **pid** across
+    /// their connections, never anyone else's change. Each region (one canonical hunk) is
+    /// three-way merged against the live text. [`UndoMode::All`] applies every requested
+    /// step or nothing; [`UndoMode::Partial`] applies every clean region and reports the
+    /// rest; [`UndoMode::Drop`] removes the top step unapplied. Needs edit.
+    pub fn undo_with(&self, conn: ConnId, req: &UndoRequest) -> Result<UndoOutcome> {
+        self.undo_redo(conn, req, Origin::Undo)
+    }
+
+    /// Redo (U17): reapplies exactly the regions the undo applied. A new edit by the
+    /// participant clears their redo stack. Modes as [`Session::undo_with`].
+    pub fn redo_with(&self, conn: ConnId, req: &UndoRequest) -> Result<UndoOutcome> {
+        self.undo_redo(conn, req, Origin::Redo)
+    }
+
+    fn undo_redo(&self, conn: ConnId, req: &UndoRequest, origin: Origin) -> Result<UndoOutcome> {
         let now = self.now();
         let mut st = self.lock()?;
         let action = if origin == Origin::Undo {
@@ -1293,22 +1461,153 @@ impl Session {
         };
         let i = self.admit_edit(&mut st, conn, action, now)?;
         let st = &mut *st;
-        let h = st.hist.entry(st.members[i].p.pid.clone()).or_default();
+        let pid = st.members[i].p.pid.clone();
+        let h = st.hist.entry(pid.clone()).or_default();
         let stack = if origin == Origin::Undo {
             &h.undo
         } else {
             &h.redo
         };
-        let n = steps.min(stack.len());
-        if n == 0 {
+        let take = if req.mode == UndoMode::Drop {
+            1
+        } else {
+            req.steps.max(1)
+        };
+        let picked: Vec<usize> = (0..stack.len())
+            .rev()
+            .filter(|&k| {
+                req.for_person
+                    .as_ref()
+                    .map_or(true, |p| stack[k].on_behalf_of.as_ref() == Some(p))
+            })
+            .take(take)
+            .collect();
+        if picked.is_empty() {
+            if h.cleared {
+                h.cleared = false;
+                return Ok(UndoOutcome::ClearedByPurge);
+            }
+            if origin == Origin::Undo && stack.is_empty() && self.history_lost(st, &pid)? {
+                return Ok(UndoOutcome::HistoryLost);
+            }
             return Ok(UndoOutcome::Nothing);
         }
-        let planned = match undo::plan(&st.texts, stack, n) {
-            Ok(p) => p,
-            Err((step, conflicts)) => return Ok(UndoOutcome::Conflicts { step, conflicts }),
+        if req.mode == UndoMode::Drop {
+            let b = Self::take_batches(st, &pid, origin, &picked).remove(0);
+            return Ok(UndoOutcome::Dropped { change: b.seq });
+        }
+        let batches: Vec<Batch> = picked.iter().map(|&k| stack[k].clone()).collect();
+        let mode = if req.mode == UndoMode::Partial {
+            Mode::Partial
+        } else {
+            Mode::All
         };
-        let result = self.commit(st, i, planned, origin, now)?;
-        Ok(UndoOutcome::Applied { steps: n, result })
+        let (steps, blocked) = match undo::plan(&st.texts, batches, mode) {
+            Plan::Conflict { step, conflicts } => {
+                return Ok(UndoOutcome::Conflicts { step, conflicts })
+            }
+            Plan::Steps { steps, blocked } if steps.is_empty() => {
+                return Ok(UndoOutcome::Blocked {
+                    conflicts: blocked.unwrap_or_default(),
+                })
+            }
+            Plan::Steps { steps, blocked } => (steps, blocked),
+        };
+        let n = steps.len();
+        let kind = if origin == Origin::Undo {
+            ChangeKind::Undo
+        } else {
+            ChangeKind::Redo
+        };
+        let mut skipped = Vec::new();
+        let mut inverses = Vec::with_capacity(n);
+        let commit_steps: Vec<Step> = steps
+            .into_iter()
+            .map(|p| {
+                skipped.extend(p.skipped);
+                inverses.push(p.inverse);
+                Step {
+                    edits: p.edits,
+                    kind,
+                    of: None,
+                }
+            })
+            .collect();
+        let (result, done) = self.commit(st, i, commit_steps, now, Vec::new())?;
+        let consumed = Self::take_batches(st, &pid, origin, &picked[..n]);
+        for ((inv, d), b) in inverses.into_iter().zip(done).zip(consumed) {
+            let batch = Batch {
+                seq: d.map_or(st.version, |x| x.0),
+                on_behalf_of: b.on_behalf_of,
+                regions: inv,
+            };
+            self.push_batch(st, &pid, batch, origin);
+        }
+        Ok(UndoOutcome::Applied {
+            steps: n,
+            result,
+            skipped,
+            blocked,
+        })
+    }
+
+    /// Remove the batches at `idx` (newest first) from `pid`'s undo (or redo) stack;
+    /// returns them in the same order.
+    fn take_batches(st: &mut State, pid: &str, origin: Origin, idx: &[usize]) -> Vec<Batch> {
+        let h = st.hist.entry(pid.to_owned()).or_default();
+        let stack = if origin == Origin::Undo {
+            &mut h.undo
+        } else {
+            &mut h.redo
+        };
+        let mut sorted: Vec<usize> = idx.to_vec();
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+        let mut taken: Vec<(usize, Batch)> = Vec::with_capacity(idx.len());
+        for k in sorted {
+            if let Some(b) = stack.remove(k) {
+                h.bytes = h.bytes.saturating_sub(b.bytes());
+                taken.push((k, b));
+            }
+        }
+        idx.iter()
+            .filter_map(|k| {
+                let at = taken.iter().position(|(j, _)| j == k)?;
+                Some(taken.swap_remove(at).1)
+            })
+            .collect()
+    }
+
+    /// Whether `pid` changed this doc before the session loaded (their undo history was
+    /// lost with the previous session, U18). Looks back at most 10,000 changes.
+    fn history_lost(&self, st: &State, pid: &str) -> Result<bool> {
+        if st.loaded_seq == 0 {
+            return Ok(false);
+        }
+        let mut found = false;
+        let mut seen = 0;
+        self.store(st)?.scan_changes(self.doc_id, |c| {
+            seen += 1;
+            if c.seq <= st.loaded_seq && c.author == pid {
+                found = true;
+            }
+            !found && seen < 10_000
+        })?;
+        Ok(found)
+    }
+
+    /// Clear every participant's undo and redo stacks (a purge, spec U19). Their next undo
+    /// or redo says [`UndoOutcome::ClearedByPurge`]. Revert records are not touched here.
+    pub fn clear_undo_history(&self) -> Result<()> {
+        let mut st = self.lock()?;
+        for h in st.hist.values_mut() {
+            if !h.undo.is_empty() || !h.redo.is_empty() {
+                h.cleared = true;
+            }
+            h.undo.clear();
+            h.redo.clear();
+            h.bytes = 0;
+        }
+        Ok(())
     }
 
     fn normalize(&self, edits: Vec<Edit>) -> Result<Vec<Edit>> {
@@ -1338,28 +1637,117 @@ impl Session {
         Ok(out)
     }
 
-    /// Apply `steps` (each one change) as member `i`, log them in one durable append, and do
-    /// the bookkeeping: attribution, carets, undo, events, compaction.
+    /// Refuse a new on-behalf edit while the doc's pending on-behalf records are over
+    /// their cap (K-HIST-23): `held: approvals_backlog`, so revertability is never lost.
+    fn check_backlog(&self, st: &State, i: usize) -> Result<()> {
+        if st.members[i].p.on_behalf_of.is_none() {
+            return Ok(());
+        }
+        let stats = self.store(st)?.revert_stats(self.doc_id)?;
+        let c = &self.config;
+        if stats.pending_count >= c.pending_max_records
+            || stats.pending_bytes >= c.pending_max_bytes
+        {
+            return Err(SessionError::Held {
+                reason: "approvals_backlog",
+            });
+        }
+        Ok(())
+    }
+
+    /// [`Session::commit`] of one edit step, then the batch onto the caller's undo stack.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_edit(
+        &self,
+        st: &mut State,
+        i: usize,
+        edits: Vec<Edit>,
+        kind: ChangeKind,
+        of: Option<u64>,
+        now: u64,
+        versions: Vec<Version>,
+    ) -> Result<EditResult> {
+        let step = Step { edits, kind, of };
+        let (res, mut done) = self.commit(st, i, vec![step], now, versions)?;
+        if let Some((seq, regions)) = done.pop().flatten() {
+            let pid = st.members[i].p.pid.clone();
+            let batch = Batch {
+                seq,
+                on_behalf_of: st.members[i].p.on_behalf_of.clone(),
+                regions,
+            };
+            self.push_batch(st, &pid, batch, Origin::Edit);
+        }
+        Ok(res)
+    }
+
+    /// A version of `texts` at log position `seq`, with the authors since the last one.
+    fn version_of(
+        st: &State,
+        seq: Seq,
+        reason: VersionReason,
+        name: Option<String>,
+        texts: &[(&'static str, String)],
+        now: u64,
+    ) -> Version {
+        let mut authors: Vec<String> = Vec::new();
+        for (_, a) in st
+            .authors
+            .iter()
+            .filter(|(s, _)| *s > st.last_version_seq && *s <= seq)
+        {
+            if !authors.contains(a) {
+                authors.push(a.clone());
+            }
+        }
+        Version {
+            seq,
+            at_ms: now,
+            reason,
+            name,
+            authors,
+            content: neutral(texts),
+        }
+    }
+
+    /// Apply `steps` (each one change) as member `i`, log them with their change records
+    /// (and `versions`, stored before them) in one durable transaction, and do the
+    /// bookkeeping: attribution, carets, events, compaction. An agent's edit over
+    /// [`Config::agent_version_lines`] lines or [`Config::agent_version_percent`] of the doc
+    /// cuts a version of the text before it first (K-HIST-4). Returns, per step, its log
+    /// position and regions (`None` when it changed nothing); undo stacks are the caller's.
+    #[allow(clippy::type_complexity)]
     fn commit(
         &self,
         st: &mut State,
         i: usize,
-        steps: Vec<Vec<Edit>>,
-        origin: Origin,
+        steps: Vec<Step>,
         now: u64,
-    ) -> Result<EditResult> {
+        mut versions: Vec<Version>,
+    ) -> Result<(EditResult, Vec<Option<(Seq, Vec<Region>)>>)> {
         let n_steps = steps.len();
-        // for a multi-step summary: the touched roots' text before everything
-        let orig: Vec<(&'static str, String)> = if n_steps > 1 {
+        let agent_cut = n_steps == 1
+            && steps[0].kind == ChangeKind::Edit
+            && st.members[i].p.kind == ParticipantKind::Agent
+            && st.last_version_seq != st.version;
+        // the touched roots' text before everything (multi-step summary, agent versions)
+        let orig: Vec<(&'static str, String)> = if n_steps > 1 || agent_cut {
             st.texts.clone()
         } else {
             Vec::new()
         };
+        let version_before = st.version;
         let mut applied: Vec<Applied> = Vec::new();
+        let mut which: Vec<Option<usize>> = Vec::with_capacity(n_steps);
         for step in steps {
-            match self.apply_local(st, i, step) {
-                Ok(Some(a)) => applied.push(a),
-                Ok(None) => {}
+            match self.apply_local(st, i, step.edits) {
+                Ok(Some(mut a)) => {
+                    a.kind = step.kind;
+                    a.of = step.of;
+                    which.push(Some(applied.len()));
+                    applied.push(a);
+                }
+                Ok(None) => which.push(None),
                 // a doc the engine poisoned is reloaded, even when nothing was applied
                 Err(e) if applied.is_empty() && !poisons(&e) => return Err(e),
                 Err(e) => {
@@ -1368,45 +1756,65 @@ impl Session {
                 }
             }
         }
-        // the batches being undone/redone are done with, applied or not
-        let pid = st.members[i].p.pid.clone();
-        if origin != Origin::Edit {
-            let h = st.hist.entry(pid.clone()).or_default();
-            let src = if origin == Origin::Undo {
-                &mut h.undo
-            } else {
-                &mut h.redo
-            };
-            let mut freed = 0;
-            for _ in 0..n_steps {
-                if let Some(b) = src.pop_back() {
-                    freed += b.bytes();
-                }
-            }
-            st.undo_bytes -= freed;
-        }
         if applied.is_empty() {
-            return Ok(EditResult {
+            let res = EditResult {
                 version: st.version,
                 ..EditResult::default()
-            });
+            };
+            return Ok((res, which.into_iter().map(|_| None).collect()));
         }
+        if agent_cut {
+            let a = &applied[0];
+            let lines = a.added.max(a.removed);
+            let total: usize = orig.iter().map(|(_, t)| position::line_count(t)).sum();
+            let c = &self.config;
+            if lines > c.agent_version_lines
+                || lines.saturating_mul(100) > total.saturating_mul(c.agent_version_percent)
+            {
+                let v = Self::version_of(
+                    st,
+                    version_before,
+                    VersionReason::BeforeAgent,
+                    None,
+                    &orig,
+                    now,
+                );
+                versions.insert(0, v);
+            }
+        }
+        let pid = st.members[i].p.pid.clone();
         let m = &st.members[i];
         let (client, via, obo) = (m.client, m.p.via.clone(), m.p.on_behalf_of.clone());
-        let entries: Vec<LogEntry> = applied
-            .iter_mut()
-            .map(|a| LogEntry {
+        let mut entries = Vec::with_capacity(applied.len());
+        let mut changes = Vec::with_capacity(applied.len());
+        for a in &mut applied {
+            entries.push(LogEntry {
                 author: pid.clone(),
                 client,
                 at_ms: now,
                 via: via.clone(),
                 update: std::mem::take(&mut a.update),
                 on_behalf_of: obo.clone(),
-            })
-            .collect();
+            });
+            changes.push(NewChange {
+                info: ChangeInfo {
+                    of: a.of,
+                    on_behalf_of: obo.clone(),
+                    lines_added: a.added as u64,
+                    lines_removed: a.removed as u64,
+                    ..ChangeInfo::new(a.kind, &pid, &via, now)
+                },
+                record: RevertRecord {
+                    author: pid.clone(),
+                    on_behalf_of: obo.clone(),
+                    at_ms: now,
+                    roots: std::mem::take(&mut a.record),
+                },
+            });
+        }
         let appended = self
             .store(st)
-            .and_then(|s| Ok(s.append(self.doc_id, &entries)?));
+            .and_then(|s| Ok(s.commit_changes(self.doc_id, &entries, &changes, &versions)?));
         let seqs = match appended {
             Ok(s) => s,
             Err(e) => {
@@ -1414,10 +1822,18 @@ impl Session {
                 return Err(e);
             }
         };
+        if let Some(ix) = st.reverts.as_mut() {
+            ix.bind(&seqs);
+        }
+        if let Some(v) = versions.iter().map(|v| v.seq).max() {
+            st.last_version_seq = st.last_version_seq.max(v);
+        }
+        st.last_change_ms = now;
         // bookkeeping
         let mut changed = Vec::new();
         let (mut added, mut removed) = (0, 0);
         let mut last_end = None;
+        let mut regions_of = Vec::with_capacity(applied.len());
         for ((a, seq), e) in applied.into_iter().zip(&seqs).zip(&entries) {
             st.log_entries += 1;
             st.log_bytes += e.update.len() as u64;
@@ -1444,11 +1860,7 @@ impl Session {
                 (added, removed) = (a.added, a.removed);
             }
             last_end = a.last_end.or(last_end);
-            let batch = Batch {
-                seq: *seq,
-                regions: a.regions,
-            };
-            self.push_batch(st, &pid, batch, origin);
+            regions_of.push(Some((*seq, a.regions)));
         }
         st.version = *seqs.last().expect("one seq per entry");
         Self::mark_dirty(st, now);
@@ -1474,64 +1886,88 @@ impl Session {
             });
         }
         self.maybe_compact(st);
-        Ok(EditResult {
-            version: st.version,
-            changed,
-            lines_added: added,
-            lines_removed: removed,
-        })
+        let done = which
+            .into_iter()
+            .map(|w| w.and_then(|k| regions_of[k].take()))
+            .collect();
+        Ok((
+            EditResult {
+                version: st.version,
+                changed,
+                lines_added: added,
+                lines_removed: removed,
+            },
+            done,
+        ))
     }
 
+    /// Put a batch on `pid`'s undo stack (an edit, a redo) or redo stack (an undo), within
+    /// [`Config::undo_depth`] and [`Config::undo_max_bytes`] per pid (oldest first, U6). A
+    /// new edit clears the redo stack (U7).
     fn push_batch(&self, st: &mut State, pid: &str, batch: Batch, origin: Origin) {
         let c = &self.config;
         let h = st.hist.entry(pid.to_owned()).or_default();
-        let mut freed = 0;
+        let History {
+            undo, redo, bytes, ..
+        } = h;
         if origin == Origin::Edit {
-            freed += h.redo.drain(..).map(|b| b.bytes()).sum::<usize>();
+            *bytes -= redo.drain(..).map(|b| b.bytes()).sum::<usize>();
         }
-        let added = batch.bytes();
+        *bytes += batch.bytes();
         let dst = if origin == Origin::Undo {
-            &mut h.redo
+            &mut *redo
         } else {
-            &mut h.undo
+            &mut *undo
         };
         dst.push_back(batch);
         while dst.len() > c.undo_depth {
-            freed += dst.pop_front().map_or(0, |b| b.bytes());
+            *bytes -= dst.pop_front().map_or(0, |b| b.bytes());
         }
-        st.undo_bytes = st.undo_bytes + added - freed;
-        // over the byte cap: drop the oldest batches across everyone
-        while st.undo_bytes > c.undo_max_bytes {
-            let oldest = st
-                .hist
-                .values_mut()
-                .flat_map(|h| [&mut h.undo, &mut h.redo])
-                .filter(|s| !s.is_empty())
-                .min_by_key(|s| s.front().map(|b| b.seq));
-            match oldest.and_then(|s| s.pop_front()) {
-                Some(b) => st.undo_bytes -= b.bytes(),
-                None => break,
-            }
+        // over the byte bound: drop this pid's oldest batches, either stack
+        while *bytes > c.undo_max_bytes {
+            let from_undo = match (undo.front(), redo.front()) {
+                (Some(u), Some(r)) => u.seq <= r.seq,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            let s = if from_undo { &mut *undo } else { &mut *redo };
+            *bytes -= s.pop_front().map_or(0, |b| b.bytes());
         }
+        h.cleared = false;
     }
 
     /// Apply one change to the in-memory doc and carry every stored position through it.
-    /// Nothing is logged here. `Ok(None)` when it changes nothing; an error changes nothing.
+    /// Hunks are validated and made canonical (touching hunks coalesced) first. Nothing is
+    /// logged here. `Ok(None)` when it changes nothing; an error changes nothing.
     fn apply_local(&self, st: &mut State, i: usize, edits: Vec<Edit>) -> Result<Option<Applied>> {
         let client = st.members[i].client;
-        let Some(update) = st.doc.edit_as(client, &edits)? else {
+        let mut canon = Vec::with_capacity(edits.len());
+        for e in edits {
+            let Edit::Text { root, hunks } = e;
+            let (_, text) = self.text_of(st, &root)?;
+            diff::validate(text, &hunks).map_err(DocError::from)?;
+            canon.push(Edit::Text {
+                root,
+                hunks: diff::coalesce(hunks),
+            });
+        }
+        let Some(update) = st.doc.edit_as(client, &canon)? else {
             return Ok(None);
         };
         let mut a = Applied {
             update,
             roots: Vec::new(),
             regions: Vec::new(),
+            record: Vec::new(),
+            kind: ChangeKind::Edit,
+            of: None,
             changed: Vec::new(),
             added: 0,
             removed: 0,
             last_end: None,
         };
-        for e in edits {
+        for e in canon {
             let Edit::Text { root, hunks } = e;
             if hunks.is_empty() {
                 continue;
@@ -1540,7 +1976,9 @@ impl Session {
             let before = std::mem::take(&mut st.texts[ti].1);
             let after = diff::apply(&before, &hunks);
             debug_assert_eq!(Ok(after.as_str()), st.doc.text(&root).as_deref());
-            a.regions.push(Region::of_change(&root, &before, &hunks));
+            a.regions.extend(Region::of_change(&root, &before, &hunks));
+            a.record
+                .push(record_root(&root, &before, after.is_empty(), &hunks));
             Self::carry(st, &root, &hunks);
             a.changed
                 .extend(summary::changed_lines(&root, &after, &hunks));
@@ -1556,10 +1994,20 @@ impl Session {
             st.texts[ti].1 = after;
             a.roots.push((root, hunks));
         }
+        // the revert index has been carried past this change: add its own regions
+        if let Some(ix) = st.reverts.as_mut() {
+            let r: Vec<(String, usize, usize)> = a
+                .regions
+                .iter()
+                .map(|g| (g.root.clone(), g.start, g.end))
+                .collect();
+            ix.stage(&r);
+        }
         Ok(Some(a))
     }
 
-    /// Carry every stored position (carets, views, undo regions) through a change to `root`.
+    /// Carry every stored position (carets, views, undo regions, revert records) through a
+    /// change to `root`.
     fn carry(st: &mut State, root: &str, hunks: &[Hunk]) {
         for m in &mut st.members {
             if let Some(c) = m.cursor.as_mut().filter(|c| c.root == root) {
@@ -1575,6 +2023,9 @@ impl Session {
             for b in h.undo.iter_mut().chain(h.redo.iter_mut()) {
                 b.transform(root, hunks);
             }
+        }
+        if let Some(ix) = st.reverts.as_mut() {
+            ix.carry(root, hunks);
         }
     }
 
@@ -1617,8 +2068,10 @@ impl Session {
                 for h in st.hist.values_mut() {
                     h.undo.clear();
                     h.redo.clear();
+                    h.bytes = 0;
                 }
-                st.undo_bytes = 0;
+                st.loaded_seq = version;
+                st.reverts = None;
                 self.reload_disk(st);
                 self.emit(AuditEvent::Recovered {
                     key: st.key.clone(),
@@ -2200,7 +2653,7 @@ impl Session {
                 seq: d.synced_seq,
                 state: d.replica.encode_state()?,
             };
-            store.commit_disk(self.doc_id, st.version + 1, &[], &[], &meta, &sync)?;
+            store.commit_disk(self.doc_id, st.version + 1, &[], &[], &[], &meta, &sync)?;
             d.synced_hash = h;
             st.codec = content.codec;
             if was_declined {
@@ -2233,24 +2686,45 @@ impl Session {
         let after = texts_of(&st.doc, &self.schema)?;
         let seq = st.version + 1;
         let mut versions = Vec::new();
-        let last = store.last_version(self.doc_id)?.map(|(_, v)| v.seq);
-        if last != Some(st.version) {
-            let since = last.unwrap_or(0);
-            let mut authors: Vec<String> = Vec::new();
-            for (_, a) in st.authors.iter().filter(|(s, _)| *s > since) {
-                if !authors.contains(a) {
-                    authors.push(a.clone());
-                }
-            }
-            versions.push(Version {
-                seq: st.version,
-                at_ms: now,
-                reason: VersionReason::BeforeExternal,
-                name: None,
-                authors,
-                content: neutral(&before),
-            });
+        if st.last_version_seq != st.version {
+            versions.push(Self::version_of(
+                st,
+                st.version,
+                VersionReason::BeforeExternal,
+                None,
+                &before,
+                now,
+            ));
         }
+        // the change as applied to the live doc (canonical hunks per root)
+        let root_hunks: Vec<(&'static str, Vec<Hunk>)> = before
+            .iter()
+            .zip(&after)
+            .filter(|((_, old), (_, new))| old != new)
+            .map(|((root, old), (_, new))| (*root, diff::hunks(old, new)))
+            .collect();
+        let mut info = ChangeInfo::new(ChangeKind::External, EXTERNAL_PID, "disk", now);
+        let mut record = Vec::new();
+        for ((root, hunks), ((_, old), (_, new))) in root_hunks.iter().zip(
+            before
+                .iter()
+                .zip(&after)
+                .filter(|((_, old), (_, new))| old != new),
+        ) {
+            let (a, r) = summary::line_counts(old, new, hunks);
+            info.lines_added += a as u64;
+            info.lines_removed += r as u64;
+            record.push(record_root(root, old, new.is_empty(), hunks));
+        }
+        let change = NewChange {
+            info,
+            record: RevertRecord {
+                author: EXTERNAL_PID.to_owned(),
+                on_behalf_of: None,
+                at_ms: now,
+                roots: record,
+            },
+        };
         versions.push(Version {
             seq,
             at_ms: now,
@@ -2277,6 +2751,7 @@ impl Session {
             self.doc_id,
             seq,
             std::slice::from_ref(&entry),
+            std::slice::from_ref(&change),
             &versions,
             &meta,
             &sync,
@@ -2285,25 +2760,35 @@ impl Session {
             return Err(e.into());
         }
         // bookkeeping, as for any change
-        for ((root, old), (_, new)) in before.iter().zip(&after) {
-            if old != new {
-                let hunks = diff::hunks(old, new);
-                Self::carry(st, root, &hunks);
-                Self::broadcast(
-                    st,
-                    &ChangeEvent {
-                        version: seq,
-                        pid: EXTERNAL_PID.to_owned(),
-                        client,
-                        via: "disk".to_owned(),
-                        root: (*root).to_owned(),
-                        hunks,
-                        at_ms: now,
-                        on_behalf_of: None,
-                    },
-                );
+        let mut regions = Vec::new();
+        for (root, hunks) in root_hunks {
+            Self::carry(st, root, &hunks);
+            let mut delta: isize = 0;
+            for h in &hunks {
+                let s0 = (h.start as isize + delta) as usize;
+                regions.push((root.to_owned(), s0, s0 + h.insert.len()));
+                delta += h.insert.len() as isize - (h.end - h.start) as isize;
             }
+            Self::broadcast(
+                st,
+                &ChangeEvent {
+                    version: seq,
+                    pid: EXTERNAL_PID.to_owned(),
+                    client,
+                    via: "disk".to_owned(),
+                    root: root.to_owned(),
+                    hunks,
+                    at_ms: now,
+                    on_behalf_of: None,
+                },
+            );
         }
+        if let Some(ix) = st.reverts.as_mut() {
+            ix.stage(&regions);
+            ix.bind(&[seq]);
+        }
+        st.last_version_seq = seq;
+        st.last_change_ms = now;
         st.texts = after;
         st.version = seq;
         st.codec = content.codec;
@@ -2477,10 +2962,39 @@ struct Init {
     now: u64,
 }
 
+/// One change for [`Session::commit`].
+struct Step {
+    edits: Vec<Edit>,
+    kind: ChangeKind,
+    /// A restore's version, a revert's change.
+    of: Option<u64>,
+}
+
+/// One root of a change's revert record: its canonical hunks with the deleted text.
+fn record_root(root: &str, before: &str, empty_after: bool, hunks: &[Hunk]) -> RecordRoot {
+    RecordRoot {
+        root: root.to_owned(),
+        empty_after,
+        hunks: hunks
+            .iter()
+            .map(|h| RecordHunk {
+                start: h.start as u64,
+                end: h.end as u64,
+                insert: h.insert.clone(),
+                deleted: before[h.start..h.end].to_owned(),
+                redacted: false,
+            })
+            .collect(),
+    }
+}
+
 struct Applied {
     update: Vec<u8>,
     roots: Vec<(String, Vec<Hunk>)>,
     regions: Vec<Region>,
+    record: Vec<RecordRoot>,
+    kind: ChangeKind,
+    of: Option<u64>,
     changed: Vec<LineRange>,
     added: usize,
     removed: usize,

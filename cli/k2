@@ -18,8 +18,10 @@ set -euo pipefail
 # (`python3`, `py -3`, `python`) and drop the CRs from its stdout, so every
 # `$(python3 …)` below reads what it reads on macOS and Linux. Unix shells
 # never enter this branch.
+_K2_WINDOWS=""
 case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*)
+        _K2_WINDOWS=1
         _k2_py=""
         for _k2_c in "command python3" "py -3" "python"; do
             if $_k2_c -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
@@ -1141,6 +1143,14 @@ cli_post_json() {
 # Same wire request as cli_post_json.
 cli_post_json_stdin() {
     local endpoint="$1"
+    if [ -n "$_K2_WINDOWS" ]; then
+        # Git for Windows' curl is a native program: it can't open bash's
+        # /dev/fd/3 (curl exit 26, nothing printed). cli_post_json reads
+        # the body from stdin and hands curl the URL and body as config
+        # on its stdin, so neither the token nor the body is on argv.
+        cli_post_json "$endpoint"
+        return
+    fi
     local url="${BASE_URL}${endpoint}?token=${TOKEN}"
     url="${url//\\/\\\\}"
     url="${url//\"/\\\"}"

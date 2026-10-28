@@ -588,10 +588,10 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     let (queued, active) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        (
-            store::jobs_in_states(&conn, &n.id, &["queued"]).len(),
-            store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES).len(),
-        )
+        // Node-queued jobs (a shared node's queue) count as queued, not
+        // running: their rows stay `assigned` until the node starts them.
+        let (node_queued, running): (Vec<_>, Vec<_>) = store::jobs_in_states(&conn, &n.id, store::ACTIVE_STATES).into_iter().partition(|r| r.node_queued);
+        (store::jobs_in_states(&conn, &n.id, &["queued"]).len() + node_queued.len(), running.len())
     };
     let mut v = serde_json::to_value(n).unwrap_or_default();
     v["online"] = online.into();
@@ -796,10 +796,16 @@ fn node_status(who: &Who, n: &store::NodeRow) -> serde_json::Value {
         )
     };
     let viewer = who.passport();
+    // A shared node's queued jobs stay `assigned` here (reason
+    // `node_queued`): they wait in the node's own queue, so they're
+    // queued, not running (0.46.6: `status` showed "run 6/3" on a node
+    // running 2). The node's queue first, in its order, then this server's.
+    let (node_queued, active): (Vec<_>, Vec<_>) = active.into_iter().partition(|r| r.node_queued);
     let running: Vec<serde_json::Value> = active.iter().map(|r| job_entry(viewer, r, &decision, now)).collect();
-    let mut waiting_jobs: Vec<(usize, serde_json::Value)> = queued
+    let mut waiting_jobs: Vec<((u8, usize), serde_json::Value)> = node_queued
         .iter()
-        .map(|r| (decision.waiting.get(&r.id).map(|(p, _)| *p).unwrap_or(usize::MAX), job_entry(viewer, r, &decision, now)))
+        .map(|r| ((0, r.node_pos.map(|p| p.max(0) as usize).unwrap_or(usize::MAX)), job_entry(viewer, r, &decision, now)))
+        .chain(queued.iter().map(|r| ((1, decision.waiting.get(&r.id).map(|(p, _)| *p).unwrap_or(usize::MAX)), job_entry(viewer, r, &decision, now))))
         .collect();
     waiting_jobs.sort_by_key(|(p, _)| *p);
     let state = if n.state == "pending" {

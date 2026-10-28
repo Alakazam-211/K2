@@ -397,6 +397,16 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     assert_eq!((g["state"].as_str(), g["nodeQueued"].as_bool()), (Some("queued"), Some(true)), "{g}");
     let msg = g["queue"]["message"].as_str().unwrap();
     assert_eq!(msg, "queued on k2n2-m1, position 2, ETA ~6m (fair share: another server's jobs run first)");
+    // `status` / `nodes` count it as queued, never running (0.46.6: a
+    // node-queued row stays `assigned`, and `status` showed "run 6/3" on a
+    // node running 2).
+    let r = get(d.port, "/cli/compute/nodes", OWNER, "detail=1").await;
+    let me = j(&r)["nodes"].as_array().unwrap().iter().find(|n| n["name"] == "k2n2-m1").unwrap().clone();
+    assert_eq!((me["running"].as_u64(), me["queued"].as_u64()), (Some(0), Some(1)), "{me}");
+    assert_eq!(me["status"]["running"].as_array().map(Vec::len), Some(0), "{me}");
+    let q = me["status"]["queued"].as_array().unwrap();
+    assert_eq!(q.len(), 1, "{me}");
+    assert_eq!(q[0]["state"], "queued", "{me}");
 
     // Cancel without --force: asks the node; the start wins → job_started.
     let r = post(d.port, "/cli/compute/jobs/cancel", OWNER, json!({"job": job, "ifState": "queued"})).await;

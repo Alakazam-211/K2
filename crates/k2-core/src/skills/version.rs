@@ -283,7 +283,8 @@ pub const SKILL_VERSION_ZEN: u32 = 45;
 /// a person's files reach the agent (`Attached: <abs path>`).
 /// Bumped to 39 (0.46.6, compute): the Compute nodes block leads with
 /// `--dirty` and shows `--repo`/`--with`/`--cache`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 39;
+/// Bumped to 40 (0.46.6, box moves carry the vault): the Study topics gain `box-move`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 40;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

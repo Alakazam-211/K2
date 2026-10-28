@@ -717,7 +717,7 @@ feedback-loop, ticket-brief, zen, sidecars, llm-tokens, llm-accounts,
 publish-framing, compute, compute-shared, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, sim, design, db-upgrade, jobs, folder-trust,
-email-notifications.
+email-notifications, box-move.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
 what never to infer.

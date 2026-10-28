@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 39
-skill_checksum: 2e6b92e33455b056
+skill_version: 40
+skill_checksum: 4be3c21794829213
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -327,7 +327,7 @@ feedback-loop, ticket-brief, zen, sidecars, llm-tokens, llm-accounts,
 publish-framing, compute, compute-shared, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, sim, design, db-upgrade, jobs, folder-trust,
-email-notifications.
+email-notifications, box-move.
 Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
 what never to infer.

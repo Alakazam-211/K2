@@ -601,7 +601,11 @@ async fn agent_publishes_end_to_end_with_the_real_cli() {
         let l = TcpListener::bind(("127.0.0.1", 0)).expect("free port");
         l.local_addr().expect("addr").port()
     };
+    // `--cmd` runs in sh on Unix and in cmd.exe on Windows.
+    #[cfg(not(windows))]
     let cmd = format!("exec python3 -m http.server {port} --bind 127.0.0.1");
+    #[cfg(windows)]
+    let cmd = format!("python -m http.server {port} --bind 127.0.0.1");
     let port_s = port.to_string();
     let (rc, out) = agent_cli(
         d.port,

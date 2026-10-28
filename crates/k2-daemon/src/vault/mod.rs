@@ -943,7 +943,8 @@ mod tests {
                 if p.extension().and_then(|x| x.to_str()) != Some("rs") {
                     continue;
                 }
-                let rel = p.strip_prefix(&root).expect("rel").to_string_lossy().to_string();
+                // '/' separators on every OS (the exemptions below use them).
+                let rel = p.strip_prefix(&root).expect("rel").to_string_lossy().replace('\\', "/");
                 if rel == "vault/mod.rs" || rel.ends_with("tests.rs") || rel.ends_with("/tests") {
                     continue;
                 }

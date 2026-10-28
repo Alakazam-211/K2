@@ -479,7 +479,9 @@ fn leftover_trust_is_reported_and_forget_removes_it() {
     register(&ws);
     let path = s(&ws);
     std::fs::create_dir_all(e.home.join(".codex")).unwrap();
-    std::fs::write(e.home.join(".codex/config.toml"), format!("[projects.\"{path}\"]\ntrust_level = \"trusted\"\n")).unwrap();
+    // A TOML basic string escapes '\' (a Windows path), as Codex writes it.
+    let key = path.replace('\\', "\\\\");
+    std::fs::write(e.home.join(".codex/config.toml"), format!("[projects.\"{key}\"]\ntrust_level = \"trusted\"\n")).unwrap();
     let r = held(&ws);
     assert_eq!(r.leftover, vec![format!("Codex: {path} (~/.codex/config.toml)")]);
     assert!(r.message.contains(&gate::forget_hint(&path)), "{}", r.message);

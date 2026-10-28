@@ -2005,7 +2005,8 @@ mod tests {
         let fake = AttachFake::new(&[Some("call.m4a")]);
         let resp = get_into(&fake, &root, "calls/", 1);
         assert_eq!(resp.status, "200 OK", "{}", resp.body);
-        let wrote = root.join("calls/call.m4a");
+        // Joined part by part: the daemon reports the OS path ('\' on Windows).
+        let wrote = root.join("calls").join("call.m4a");
         assert_eq!(body_json(&resp)["wrote"], wrote.to_string_lossy().as_ref());
         assert_eq!(std::fs::read(&wrote).unwrap(), b"bytes-of-B1");
         // Same folder without the slash: the file is there now, so the

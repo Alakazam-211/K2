@@ -1370,7 +1370,7 @@ mod tests {
         )
         .unwrap();
         let p = body["personaPath"].as_str().expect("old personaPath");
-        assert!(p.ends_with("agent/AGENT.md"), "old-only: {p}");
+        assert!(std::path::Path::new(p).ends_with("agent/AGENT.md"), "old-only: {p}");
 
         std::fs::write(dir.join("ROLE.md"), "---\nname: neu\n---\nnew\n").unwrap();
         let body: serde_json::Value = serde_json::from_str(
@@ -1378,7 +1378,7 @@ mod tests {
         )
         .unwrap();
         let p = body["personaPath"].as_str().expect("both personaPath");
-        assert!(p.ends_with("agent/ROLE.md"), "ROLE.md wins: {p}");
+        assert!(std::path::Path::new(p).ends_with("agent/ROLE.md"), "ROLE.md wins: {p}");
 
         std::fs::remove_file(dir.join("AGENT.md")).unwrap();
         let body: serde_json::Value = serde_json::from_str(
@@ -1386,7 +1386,7 @@ mod tests {
         )
         .unwrap();
         let p = body["personaPath"].as_str().expect("new personaPath");
-        assert!(p.ends_with("agent/ROLE.md"), "new-only: {p}");
+        assert!(std::path::Path::new(p).ends_with("agent/ROLE.md"), "new-only: {p}");
 
         let _ = std::fs::remove_dir_all(&path);
     }

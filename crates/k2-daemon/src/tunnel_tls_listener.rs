@@ -1618,12 +1618,20 @@ mod tests {
             .await
             .expect("bind [::]:0 (this test needs dual-stack loopback)");
         let main_port = main.local_addr().unwrap().port();
+        #[allow(unused_mut)]
+        let mut listeners = vec![main];
+        // Windows: an IPv6 socket is v6-only, so the IPv4 aliases get their
+        // own listener on the same port (Unix: `[::]` is dual-stack).
+        #[cfg(windows)]
+        listeners.push(TcpListener::bind(("127.0.0.1", main_port)).await.expect("bind 127.0.0.1 on the main port"));
         let (accepted_tx, accepted) = tokio::sync::watch::channel(0usize);
+        let accepted_tx = Arc::new(accepted_tx);
         let (settled_tx, settled) = tokio::sync::watch::channel(0usize);
         let settled_tx = Arc::new(settled_tx);
         let got_bytes = Arc::new(AtomicUsize::new(0));
-        {
+        for main in listeners {
             let got_bytes = got_bytes.clone();
+            let (accepted_tx, settled_tx) = (accepted_tx.clone(), settled_tx.clone());
             tokio::spawn(async move {
                 while let Ok((mut s, _)) = main.accept().await {
                     accepted_tx.send_modify(|n| *n += 1);

@@ -150,7 +150,9 @@ fn extra_watches_cover_git_dirs_outside_the_roots() {
     let gitdir = s(&gs.repos[0].dirs.gitdir);
     assert!(extra.contains(&(gitdir.clone(), false)), "{extra:?}");
     assert!(extra.contains(&(common.clone(), false)), "{extra:?}");
-    assert!(extra.contains(&(format!("{common}/refs"), true)), "{extra:?}");
+    // Joined, not "{common}/refs": Windows joins with '\'.
+    let refs = s(&gs.repos[0].dirs.commondir.join("refs"));
+    assert!(extra.contains(&(refs, true)), "{extra:?}");
     // With the main repo as a root everything is already covered.
     assert!(gs.extra_watches(&[s(&main), s(&wt)]).is_empty());
 }

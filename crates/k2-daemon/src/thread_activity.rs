@@ -1941,7 +1941,9 @@ mod tests {
                 if p.is_dir() {
                     walk(&p, out);
                 } else if p.extension().is_some_and(|x| x == "rs") {
-                    out.push((p.display().to_string(), std::fs::read_to_string(&p).expect("read source")));
+                    // '/' separators on every OS (the checks below match on them).
+                    let path = p.display().to_string().replace('\\', "/");
+                    out.push((path, std::fs::read_to_string(&p).expect("read source")));
                 }
             }
         }

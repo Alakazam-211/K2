@@ -34,12 +34,17 @@ const LOGIN: &str = "/cli/auth/login";
 
 /// The loopback aliases a nested target can use to reach the daemon
 /// port; `true` = served by the IPv6 daemon, `false` = the IPv4 one.
+/// Windows refuses to dial 0.0.0.0 at all (WSAEADDRNOTAVAIL), so there it
+/// is not an alias that reaches the daemon.
+#[cfg(not(windows))]
 const ALIASES: [(&str, bool); 4] = [
     ("127.0.0.1", false),
     ("localhost", false),
     ("0.0.0.0", false),
     ("::1", true),
 ];
+#[cfg(windows)]
+const ALIASES: [(&str, bool); 3] = [("127.0.0.1", false), ("localhost", false), ("::1", true)];
 
 /// The plain local sockets (control).
 const LOCAL: [(&str, bool); 2] = [("127.0.0.1", false), ("::1", true)];

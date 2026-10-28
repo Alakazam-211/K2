@@ -1640,7 +1640,8 @@ mod gap_route_tests {
         let id = uuid::Uuid::new_v4();
         let dir = std::env::temp_dir().join(format!("agent-conf-charter-{}-{id}", std::process::id()));
         std::fs::create_dir_all(dir.join(".k2")).expect("mkdir .k2");
-        let gone = dir.join(".k2/skills/k2so/SKILL.md");
+        // Joined part by part: Windows stores a link target with '\'.
+        let gone = dir.join(".k2").join("skills").join("k2so").join("SKILL.md");
         k2_core::test_env::symlink(&gone, dir.join("CLAUDE.md")).expect("dangling link");
         let path = dir.to_string_lossy().into_owned();
         {

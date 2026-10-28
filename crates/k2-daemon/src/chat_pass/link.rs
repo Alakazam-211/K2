@@ -45,6 +45,12 @@ impl SewStatus for SewRow {
         if !crate::sew::health::GATE_PASS {
             return Ok(());
         }
+        // Unit tests run the production row source with real ops but no Sew
+        // listening: the gate itself is tested through `sew::health` and the
+        // `NotReady` double in `mint_tests`.
+        if cfg!(test) {
+            return Ok(());
+        }
         crate::sew::health::mint_gate(&crate::sew::supervisor::live())
     }
 }

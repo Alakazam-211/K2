@@ -76,12 +76,14 @@ fn a_mint_waits_through_an_upgrade_but_not_through_a_stop() {
     assert!(h.ready, "{h:?}");
     assert_eq!(ops.api_health_calls(), 3);
     // Upgrading past the cap: K2 gives up after MINT_WAIT_MS.
-    let n = (MINT_WAIT_MS / POLL_MS) as usize + 5;
+    // Exactly one probe plus one per poll: nothing left queued after.
+    let n = (MINT_WAIT_MS / POLL_MS) as usize + 1;
     ops.queue_api_health((0..n).map(|_| Ok((503, json!({"ready": false, "reason": "upgrading"})))).collect());
     let before = ops.api_health_calls();
     let h = wait_ready(&env, MINT_WAIT_MS);
     assert_eq!(h.reason.as_deref(), Some("upgrading"));
-    assert_eq!(ops.api_health_calls() - before, (MINT_WAIT_MS / POLL_MS) as usize + 1, "one probe, then one per poll");
+    assert_eq!(ops.api_health_calls() - before, n, "one probe, then one per poll");
+    assert!(ops.api_health_q.lock().unwrap().is_empty());
     // Stopping: one probe, no wait.
     ops.queue_api_health(vec![Ok((503, json!({"ready": false, "reason": "stopping"})))]);
     let before = ops.api_health_calls();

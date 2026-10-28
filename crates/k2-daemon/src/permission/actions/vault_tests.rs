@@ -89,7 +89,8 @@ async fn an_agent_refused_a_wider_delivery_asks_and_the_owner_allow_widens_it() 
     };
     let p = crate::permission::walls::permission_for(&req).expect("teaches");
     assert_eq!(p["action"], ACTION, "{p}");
-    assert!(p["command"].as_str().unwrap().starts_with(&format!("k2 permission request vault.delivery secret={name} delivery=env")), "{p}");
+    assert!(p["command"].as_str().unwrap().starts_with(&format!("k2 permission request vault.delivery delivery=env secret={name} --why")), "{p}");
+    assert_eq!((p["params"]["secret"].as_str(), p["params"]["delivery"].as_str()), (Some(name.as_str()), Some("env")), "{p}");
 
     // It asks; the card says what changes.
     let v1 = ask_ok(&ws, ACTION, json!({ "secret": name, "delivery": "env" }));

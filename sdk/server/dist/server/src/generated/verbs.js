@@ -5,7 +5,7 @@
 // The server SDK's verb table and types (runtime S23). `fromEnv()` builds
 // one helper per row; `call` / `subscribe` reach the same verbs by name.
 /** The catalog version this table was generated from. */
-export const CATALOG_VERSION = 33;
+export const CATALOG_VERSION = 34;
 /** Every App verb, in catalog order. */
 export const APP_VERBS = {
     'me.get': {
@@ -1317,6 +1317,50 @@ export const APP_VERBS = {
         responseNames: {},
         response: { "additionalProperties": false, "properties": { "app": { "type": "string" }, "caps": { "items": { "type": "string" }, "type": "array" }, "expiresAt": { "type": "string" }, "expiresInMs": { "type": "integer" }, "jti": { "type": "string" }, "ok": { "type": "boolean" }, "pass": { "type": "string" }, "personProof": { "type": "boolean" }, "provenance": { "type": "string" }, "sewRole": { "type": "string" }, "sid": { "type": "string" }, "sub": { "type": "string" } }, "type": "object" },
     },
+    'guests.chat': {
+        cap: 'guests:chat',
+        effect: 'read',
+        kind: 'call',
+        feature: 'app-chat-v1',
+        door: 'link',
+        http: { method: 'GET', route: '/cli/skin/guests/chat', params: {}, query: [] },
+        socket: null,
+        responseNames: {},
+        response: { "additionalProperties": false, "properties": { "app": { "type": ["string", "null"] }, "appScoped": { "type": "boolean" }, "changed": { "type": "boolean" }, "enabled": { "type": "boolean" }, "managedBy": { "type": ["string", "null"] }, "maxMembers": { "type": ["integer", "null"] }, "members": { "type": ["integer", "null"] }, "ok": { "type": "boolean" }, "principalId": { "type": "string" }, "scope": { "enum": ["member", "guest", null], "type": ["string", "null"] }, "username": { "type": "string" }, "warning": { "type": ["string", "null"] } }, "type": "object" },
+    },
+    'guests.setChat': {
+        cap: 'guests:chat',
+        effect: 'write',
+        kind: 'call',
+        feature: 'app-chat-v1',
+        door: 'link',
+        http: { method: 'POST', route: '/cli/skin/guests/chat', params: {}, query: [] },
+        socket: null,
+        responseNames: {},
+        response: { "additionalProperties": false, "properties": { "app": { "type": ["string", "null"] }, "appScoped": { "type": "boolean" }, "changed": { "type": "boolean" }, "enabled": { "type": "boolean" }, "managedBy": { "type": ["string", "null"] }, "maxMembers": { "type": ["integer", "null"] }, "members": { "type": ["integer", "null"] }, "ok": { "type": "boolean" }, "principalId": { "type": "string" }, "scope": { "enum": ["member", "guest", null], "type": ["string", "null"] }, "username": { "type": "string" }, "warning": { "type": ["string", "null"] } }, "type": "object" },
+    },
+    'chat.member': {
+        cap: 'chat:read',
+        effect: 'read',
+        kind: 'call',
+        feature: 'app-chat-v1',
+        door: 'link',
+        http: { method: 'GET', route: '/cli/sew/app/member', params: {}, query: [] },
+        socket: null,
+        responseNames: {},
+        response: { "additionalProperties": false, "properties": { "app": { "type": "string" }, "externalId": { "type": "string" }, "memberId": { "type": "string" }, "ok": { "type": "boolean" }, "principalId": { "type": "string" }, "state": { "enum": ["active", "deactivated"], "type": "string" }, "username": { "type": "string" } }, "type": "object" },
+    },
+    'chat.whois': {
+        cap: 'chat:read',
+        effect: 'read',
+        kind: 'call',
+        feature: 'app-chat-v1',
+        door: 'link',
+        http: { method: 'POST', route: '/cli/sew/app/whois', params: {}, query: [] },
+        socket: null,
+        responseNames: {},
+        response: { "additionalProperties": false, "properties": { "app": { "type": "string" }, "members": { "items": { "additionalProperties": false, "properties": { "deleted": { "type": "boolean" }, "displayName": { "type": "string" }, "imageHash": { "type": "string" }, "isThisAppUser": { "type": "boolean" }, "kind": { "enum": ["person", "agent", "unknown"], "type": "string" }, "memberId": { "type": "string" }, "principalId": { "type": "string" }, "username": { "type": "string" } }, "type": "object" }, "type": "array" }, "ok": { "type": "boolean" } }, "type": "object" },
+    },
     'project.list': {
         cap: 'thread:read',
         effect: 'read',
@@ -1374,6 +1418,6 @@ export const APP_VERBS = {
     },
 };
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'];
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'];
 /** The surface names, in catalog order (the client builds one object each). */
 export const APP_SURFACES = ['me', 'roomAgents', 'guests', 'app', 'password', 'profile', 'push', 'pairing', 'email', 'thread', 'files', 'resources', 'tickets', 'wiki', 'storeDocs', 'db', 'heartbeats', 'activity', 'agentIdentity', 'room', 'chat', 'project'];

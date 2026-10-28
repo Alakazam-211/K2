@@ -1,11 +1,17 @@
 $ k2 study docs
 exit: 0
 --- stdout
-k2 study docs — live Markdown docs: edit the same file with people and agents
+k2 study docs — live docs: edit the same file with people and agents
 
 WHAT IT IS
-  A .md file in a workspace can be a live doc: you, your human (in the
-  file tab) and other agents edit it at once. Every change is attributed,
+  A text file in a workspace is a live doc: you, your human (in the
+  file tab) and other agents edit it at once. Markdown, code, config,
+  HTML/XML/SVG source, diagram sources, .txt and logs are live text, by
+  the file's name; .csv and .tsv too, as text (different rows and cells
+  merge; a sorted or moved row has no identity, so an edit to it
+  conflicts). Text the daemon can't edit live (not UTF-8, a NUL byte,
+  mixed line endings, over 1 MiB for a log or 4 MiB otherwise) is an
+  any-file doc instead, and k2 doc status says why. Every change is attributed,
   everyone is visible in `k2 doc who`, and each of you has your own undo.
   The daemon keeps the file on disk true: it writes changes back within
   about a second and merges edits other programs make (vim, git, a raw
@@ -87,8 +93,8 @@ UNDO, REDO AND REVERT
   k2 doc blame --json: restoredBy / restoredIn on each line; --porcelain: the
   restored-by / restored-in lines.
 
-ANY OTHER FILE (tier 0: images, PDFs, office files; for now .txt and code too)
-  Not Markdown: presence, a lease, versions and restore, no live merging.
+ANY-FILE DOCS (tier 0: images, PDFs, office files, binaries; refused text)
+  Not live text: presence, a lease, versions and restore, no live merging.
   k2 doc status photo.png          version V, who set it, the lease, conflict copies
   k2 doc lease photo.png           take the lease (default 5 min, --ttl 1h at most);
                                    others' writes then exit 5 until you release it

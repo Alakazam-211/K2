@@ -45317,7 +45317,7 @@ _study_title() {
         garden-data) echo "Garden data: a widget's keyspace and grants" ;;
         changes) echo "Git changes: review, stage, discard, commit" ;;
         sim) echo "The mobile device: tree first, act, read the diff" ;;
-        docs) echo "Live docs: edit Markdown with people and agents" ;;
+        docs) echo "Live docs: edit Markdown, code and text with people and agents" ;;
         design) echo "Design notes: what a Design tab sends you" ;;
         permissions) echo "Permission cards (Beta)" ;;
         garden-access) echo "Garden access: who may edit a Garden" ;;
@@ -45430,7 +45430,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   garden-changes      Gardens in 0.46.3: what's retired, what to update before 0.47.0
   changes             Git changes (the Changes tab): your own workspace; discard = Trash
   sim                 The mobile device: tree, act, read the diff; held = wait; secrets from the vault
-  docs                Live Markdown docs: k2 doc verbs, presence, rights, shares, exits
+  docs                Live docs: k2 doc verbs, presence, rights, shares, exits
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
   folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
   email-notifications  Email from senders: K2's resets, an App's email.send, scope, limits
@@ -45662,11 +45662,17 @@ EOF
 
 _study_page_docs() {
     cat <<'EOF'
-k2 study docs — live Markdown docs: edit the same file with people and agents
+k2 study docs — live docs: edit the same file with people and agents
 
 WHAT IT IS
-  A .md file in a workspace can be a live doc: you, your human (in the
-  file tab) and other agents edit it at once. Every change is attributed,
+  A text file in a workspace is a live doc: you, your human (in the
+  file tab) and other agents edit it at once. Markdown, code, config,
+  HTML/XML/SVG source, diagram sources, .txt and logs are live text, by
+  the file's name; .csv and .tsv too, as text (different rows and cells
+  merge; a sorted or moved row has no identity, so an edit to it
+  conflicts). Text the daemon can't edit live (not UTF-8, a NUL byte,
+  mixed line endings, over 1 MiB for a log or 4 MiB otherwise) is an
+  any-file doc instead, and k2 doc status says why. Every change is attributed,
   everyone is visible in `k2 doc who`, and each of you has your own undo.
   The daemon keeps the file on disk true: it writes changes back within
   about a second and merges edits other programs make (vim, git, a raw
@@ -45748,8 +45754,8 @@ UNDO, REDO AND REVERT
   k2 doc blame --json: restoredBy / restoredIn on each line; --porcelain: the
   restored-by / restored-in lines.
 
-ANY OTHER FILE (tier 0: images, PDFs, office files; for now .txt and code too)
-  Not Markdown: presence, a lease, versions and restore, no live merging.
+ANY-FILE DOCS (tier 0: images, PDFs, office files, binaries; refused text)
+  Not live text: presence, a lease, versions and restore, no live merging.
   k2 doc status photo.png          version V, who set it, the lease, conflict copies
   k2 doc lease photo.png           take the lease (default 5 min, --ttl 1h at most);
                                    others' writes then exit 5 until you release it
@@ -56468,7 +56474,7 @@ WORKSPACE
                                         Edit workspace agent profile
   workspace resources list|add|remove   Pin an existing file in the Files drawer
 
-DOCS (live Markdown: edit the same .md with people and agents; `k2 doc --help`)
+DOCS (live docs: edit the same file with people and agents; `k2 doc --help`)
   doc cat|head|tail|grep|sed -n <f>     Read the live doc (GNU flags, a subset)
   doc sed -i|patch|insert|replace|append|delete <f>   One atomic edit, yours to undo
   doc write --base V <f> < text         Rewrite from what you read (three-way merge)
@@ -83729,11 +83735,19 @@ _DOC_FILE=""
 
 _doc_usage() {
     cat <<'EOF'
-Usage: k2 doc <verb> [flags] <file.md>
+Usage: k2 doc <verb> [flags] <file>
 
-Live Markdown docs: you, your human and other agents edit the same file at
-once. The daemon keeps the file on disk true (writes back within ~1 s and
-merges edits other programs make). Every verb shows you in `k2 doc who`.
+Live docs: you, your human and other agents edit the same file at once. The
+daemon keeps the file on disk true (writes back within ~1 s and merges edits
+other programs make). Every verb shows you in `k2 doc who`.
+
+Which files are live: Markdown (.md, .markdown) and any other text, by the
+file's name (code, config, HTML/XML/SVG source, diagram sources, .txt, logs,
+and .csv/.tsv as text: different rows and cells merge, a moved row doesn't).
+They take every verb below. Files that aren't text (images, media, office
+files, archives, binaries), and text the daemon can't edit live (not UTF-8,
+a NUL byte, mixed line endings, or over its size cap: 1 MiB for logs, 4 MiB
+for others) are any-file docs instead (below); `k2 doc status` says why.
 Lines starting "note:" on stderr say who else is on the lines you touched.
 
 Read (the doc's path is the LAST argument; GNU flags, a subset):
@@ -83803,9 +83817,9 @@ History (needs the history right):
   k2 doc restore --version V <f>      forward: a new change you can undo
   k2 doc version --name "before launch" [--version V] <f>
   k2 doc approvals [--pending] [--mine] <f> · approve|decline <change> <f>
-Any other file (tier 0: images, PDFs, office files, and for now .txt and code
-too): presence, a lease, versions and restore. The text verbs above (grep,
-sed, undo, claim …) need a Markdown doc (.md, .markdown).
+Any-file docs (tier 0: files that aren't text, and refused text): presence, a
+lease, versions and restore, no live merging. The text verbs above (grep, sed,
+undo, claim …) refuse with not_a_text_doc and say why the file isn't live text.
   k2 doc cat <f> (its bytes; pipe them) · who|open|leave|status|flush|watch <f>
   k2 doc view --region "page 3" <f>   say what you're looking at
   k2 doc lease [--ttl 5m] <f>         take the lease (exit 5 while someone else has it)

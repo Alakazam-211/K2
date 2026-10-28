@@ -45,6 +45,8 @@ pub(crate) struct FakeEngine {
     /// lookups made.
     pub queued: Mutex<HashMap<String, String>>,
     pub queue_lookups: Mutex<Vec<String>>,
+    /// The next N lookups miss (the queued event comes before the write).
+    pub queue_misses: Mutex<usize>,
 }
 
 impl MailEngine for FakeEngine {
@@ -91,6 +93,11 @@ impl MailEngine for FakeEngine {
     }
     fn queued_env_id(&self, registry_id: &str) -> Result<Option<String>, String> {
         self.queue_lookups.lock().unwrap().push(registry_id.to_string());
+        let mut misses = self.queue_misses.lock().unwrap();
+        if *misses > 0 {
+            *misses -= 1;
+            return Ok(None);
+        }
         Ok(self.queued.lock().unwrap().get(registry_id).cloned())
     }
 }
@@ -2263,6 +2270,22 @@ fn n6_the_webhook_links_a_queued_send_once_and_records_delivered_and_delayed() {
     );
     assert_eq!((v["linked"].clone(), v["recorded"].clone()), (json!(0), json!(0)));
     assert_eq!(send::status(&f.app, &fast).expect("status")["recipientStatus"], json!([{"to": "d@x.test", "status": "submitted"}]));
+    // The queued event can come just before the message is in the queue
+    // (live on Stalwart 0.16.25): a first miss is asked again.
+    let out = send::send(&app_caller(&f.app), &json!({"to": "g@x.test", "subject": "Slow", "text": "t"}), now()).expect("sent");
+    let slow = out["id"].as_str().expect("id").to_string();
+    f.engine.queued.lock().unwrap().insert(webhook::registry_id(8), slow);
+    *f.engine.queue_misses.lock().unwrap() = 2;
+    let before = f.engine.queue_lookups.lock().unwrap().len();
+    let (_, v) = hook_post(
+        "hook-key",
+        json!([
+            {"type": webhook::QUEUED, "data": {"queueId": 8, "from": s.envelope(), "to": ["g@x.test"]}},
+            {"type": "delivery.delivered", "data": {"queueId": 8, "to": "g@x.test", "code": 250}},
+        ]),
+    );
+    assert_eq!((v["linked"].clone(), v["recorded"].clone()), (json!(1), json!(1)), "{v}");
+    assert_eq!(f.engine.queue_lookups.lock().unwrap().len() - before, 3, "two misses, then found");
     // An envelope id that is another sender's send is never kept for this one.
     let sys = system_sender_on();
     let c = send::Composed { subject: "Code".into(), text: "123".into(), html: None };

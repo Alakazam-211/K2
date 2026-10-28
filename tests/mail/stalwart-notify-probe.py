@@ -291,9 +291,19 @@ def main():
         qid = e["data"]["queueId"]
         info("W3 queueId JSON type", type(qid).__name__)
         rid = registry_id(int(qid))
-        n, g = svc.call("x:QueuedMessage/get", {"ids": [rid], "properties": ["id", "envId"]})
-        got = (g.get("list") or [{}])[0]
-        check("W3 queueId -> registry id -> x:QueuedMessage envId is K2's ENVID", got.get("envId") == envid, f"{rid}: {json.dumps(g)[:300]}")
+        # The queued event is emitted just before the message is written to
+        # the queue: ask at once, then after K2's waits (200, 500, 1000 ms).
+        tries = []
+        got = {}
+        for wait_ms in (0, 200, 500, 1000):
+            time.sleep(wait_ms / 1000)
+            n, g = svc.call("x:QueuedMessage/get", {"ids": [rid], "properties": ["id", "envId"]})
+            got = (g.get("list") or [{}])[0]
+            tries.append("found" if got.get("envId") else "missing")
+            if got.get("envId"):
+                break
+        info("W3 lookups (at once, then after 200/500/1000 ms)", " ".join(tries))
+        check("W3 queueId -> registry id -> x:QueuedMessage envId is K2's ENVID (with K2's retries)", got.get("envId") == envid, f"{rid}: {json.dumps(g)[:300]}")
     # A local delivery (sender to a box mailbox): which events, does it carry the queue id?
     mbox = account(svc, f"bob{tag}", did)
     before = len(Hook.got)
@@ -310,8 +320,14 @@ def main():
     n, g = svc.call("x:MtaStageData/get", {"ids": ["singleton"], "properties": ["enableSpamFilter"]})
     info("S stock enableSpamFilter (authenticated mail is not filtered when it says is_empty(authenticated_as))",
          json.dumps((g.get("list") or [{}])[0])[:300])
-    n, a = svc.call("x:SpamDnsblSettings/set", {"update": {"singleton": {"domainLimit": 0, "emailLimit": 0, "ipLimit": 0, "urlLimit": 0}}})
-    info("S DNS blocklists off (no outside lookups)", f"{n} {json.dumps(a)[:160]}")
+    # The DNSBL limits can't be 0 (MinValue 1), so drop every blocklist
+    # server in this throwaway sandbox instead: no blocklist is asked.
+    n, q = svc.call("x:SpamDnsblServer/query", {})
+    ids = q.get("ids") or []
+    if ids:
+        n, a = svc.call("x:SpamDnsblServer/set", {"destroy": ids})
+        left = svc.call("x:SpamDnsblServer/query", {})[1].get("ids") or []
+        check("S DNS blocklists off (no outside lookups)", not left, f"{len(ids)} destroyed, {len(left)} left: {n}")
     n, a = svc.call("x:SpamPyzor/set", {"update": {"singleton": {"enable": False}}})
     info("S Pyzor off (no outside lookups)", f"{n} {json.dumps(a)[:160]}")
     n, a = svc.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
@@ -319,7 +335,8 @@ def main():
 
     def message(from_addr):
         return (f"From: Brand <{from_addr}>\r\nTo: someone@outside.test\r\nSubject: Your sign-in code\r\n"
-                f"Date: {email.utils.formatdate(localtime=False)}\r\nMessage-ID: <k2.{tag}@{BOUNCE}>\r\n"
+                # K2's Message-ID is on the From's domain (mail::send::new_message_id_for).
+                f"Date: {email.utils.formatdate(localtime=False)}\r\nMessage-ID: <k2.{tag}@{from_addr.split('@')[1]}>\r\n"
                 "MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
                 "Your sign-in code is 482913. It expires in 10 minutes.\r\n\r\n--\r\nSent by K2 for Brand.\r\n")
 

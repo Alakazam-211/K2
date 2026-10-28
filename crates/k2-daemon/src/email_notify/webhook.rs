@@ -48,7 +48,7 @@ use k2_core::email_notify::{self as store, Sender};
 use k2_core::email_outcomes as oc;
 
 use super::engine::CredError;
-use super::{fail, Fail, R};
+use super::{fail, Fail};
 use crate::cli_response::CliResponse;
 
 pub const EVENTS_PATH: &str = "/cli/email/events";
@@ -226,6 +226,26 @@ pub fn outcome_for(e: &HookEvent) -> Option<&'static str> {
     }
 }
 
+/// Waits before asking the queue again for a message it doesn't show yet.
+/// Stalwart emits the queued event just before it writes the message to
+/// the queue (live on 0.16.25: an immediate lookup can miss it), so a
+/// first miss is retried briefly. Tests don't wait.
+const QUEUE_RETRY_MS: &[u64] = if cfg!(test) { &[0, 0, 0] } else { &[200, 500, 1_000] };
+
+/// The envelope id of a queued message, asked again after short waits
+/// while the queue doesn't show it yet (`Ok(None)` after the last try).
+pub fn lookup_queued(engine: &dyn super::engine::MailEngine, registry_id: &str) -> Result<Option<String>, String> {
+    let mut found = engine.queued_env_id(registry_id)?;
+    for ms in QUEUE_RETRY_MS {
+        if found.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(*ms));
+        found = engine.queued_env_id(registry_id)?;
+    }
+    Ok(found)
+}
+
 /// What one batch did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Applied {
@@ -275,13 +295,13 @@ pub fn apply(events: &[HookEvent], now: i64) -> Applied {
                     }
                 }
             }
-            let env = match engine.as_ref().map(|x| x.queued_env_id(&registry_id(n))) {
-                Some(Ok(v)) => v,
-                Some(Err(err)) => {
+            let Some(eng) = engine.as_ref() else { continue };
+            let env = match lookup_queued(eng.as_ref(), &registry_id(n)) {
+                Ok(v) => v,
+                Err(err) => {
                     k2_core::log_debug!("[email-notify] WARN webhook: queue lookup for {qid} failed: {}", super::send::mask_addresses(&err));
                     continue;
                 }
-                None => continue,
             };
             let db = k2_core::db::shared();
             let conn = db.lock();

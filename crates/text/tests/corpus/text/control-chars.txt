@@ -1,0 +1,4 @@
+Page one.
+Page two after a form feed.
+[1mbold via ANSI escape[0m
+bell char  kept

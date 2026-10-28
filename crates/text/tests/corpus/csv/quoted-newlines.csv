@@ -1,0 +1,10 @@
+ticket,title,body,status
+101,Login fails,"Steps:
+1. open the app
+2. press login
+
+Expected: it works",open
+102,"Typo, header","The header says ""Wellcome""",closed
+103,Empty body,"",open
+104,Multi,"line one
+line two",review

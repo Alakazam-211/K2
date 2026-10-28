@@ -1,0 +1,1 @@
+Classic Mac OS text file.Every line ends with a bare carriage return.Second paragraph.

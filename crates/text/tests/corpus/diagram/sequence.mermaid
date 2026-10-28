@@ -1,0 +1,7 @@
+sequenceDiagram
+    autonumber
+    participant U as Utilisateur
+    participant S as Serveur
+    U->>S: POST /login
+    S-->>U: 200 OK (jeton)
+    Note over U,S: le jeton expire après 15 min ⏱

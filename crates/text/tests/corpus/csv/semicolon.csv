@@ -1,0 +1,5 @@
+Datum;Artikel;Menge;Preis;Bemerkung
+01.10.2026;Schrauben;100;0,05;
+02.10.2026;"Dübel; groß";40;0,12;"Lager ""Nord"""
+03.10.2026;Muttern;250;0,03;nachbestellt
+04.10.2026;Kleber;3;4,99;"enthält, Komma"

@@ -1,0 +1,5 @@
+graph states {
+	idle -- running [label="start"];
+	running -- idle [label="stop"];
+	running -- failed;
+}

@@ -1,0 +1,19 @@
+/* Theme tokens and a card. */
+:root {
+  --fg: #1d1d1f;
+  --bg: #fbfbfd;
+  --accent: hsl(212 92% 45%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root { --fg: #f5f5f7; --bg: #111; }
+}
+
+.card {
+  color: var(--fg);
+  background: var(--bg);
+  border-radius: 12px;
+  font-family: "Söhne", system-ui, sans-serif;
+}
+
+.card::before { content: "→ "; }

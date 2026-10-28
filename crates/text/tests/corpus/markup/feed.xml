@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Release notes</title>
+  <updated>2026-10-01T09:00:00Z</updated>
+  <entry>
+    <title>v2.0 — “Nebula”</title>
+    <content type="html"><![CDATA[<p>Faster sync &amp; fewer conflicts.</p>]]></content>
+  </entry>
+</feed>

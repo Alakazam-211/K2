@@ -1,0 +1,9 @@
+@startuml
+node "Edge" {
+  [Proxy]
+}
+node "App" {
+  [API] --> [Queue]
+}
+[Proxy] --> [API]
+@enduml

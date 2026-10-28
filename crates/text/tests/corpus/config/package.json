@@ -1,0 +1,14 @@
+{
+  "name": "demo-app",
+  "version": "0.3.1",
+  "private": true,
+  "description": "Démo — a small app ✨",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node --test"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

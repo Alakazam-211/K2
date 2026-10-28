@@ -55,6 +55,7 @@ part_web() {
     step "typecheck:web";                          bun run typecheck:web
     step "vitest";                                 bunx vitest run --reporter=dot
     step "App server SDK typecheck";               bunx tsc -p sdk/server/tsconfig.json
+    step "App server SDK dist is fresh";           node scripts/sdk-server-dist.mjs --check
     step "k2 zen widget CLI (no daemon)";          bash tests/cli/zen_widget_offline.sh
     step "vite build hosted web";                  bun run vite:build:web
 }

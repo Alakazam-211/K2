@@ -235,9 +235,43 @@ fn record_inherited(service_id: &str, names: Vec<String>) {
 const BASE_EXACT: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR"];
 
 fn base_env() -> HashMap<String, String> {
-    std::env::vars()
-        .filter(|(k, _)| BASE_EXACT.contains(&k.as_str()) || k.starts_with("LC_") || k.starts_with("K2_PUBLISH_"))
-        .collect()
+    #[cfg(not(windows))]
+    {
+        std::env::vars()
+            .filter(|(k, _)| BASE_EXACT.contains(&k.as_str()) || k.starts_with("LC_") || k.starts_with("K2_PUBLISH_"))
+            .collect()
+    }
+    // Windows: names are case-insensitive (the system's is `Path`), and a
+    // Windows program needs the system's own variables to start at all.
+    #[cfg(windows)]
+    {
+        std::env::vars()
+            .filter(|(k, _)| {
+                BASE_EXACT.iter().chain(WINDOWS_BASE).any(|b| b.eq_ignore_ascii_case(k))
+                    || k.to_ascii_uppercase().starts_with("K2_PUBLISH_")
+            })
+            .collect()
+    }
+}
+
+/// Windows: the system variables a clean environment keeps.
+#[cfg(windows)]
+const WINDOWS_BASE: &[&str] = &[
+    "SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "USERPROFILE", "USERNAME", "APPDATA", "LOCALAPPDATA",
+    "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "TEMP", "TMP", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE",
+];
+
+/// Clean mode's fixed PATH: the system's own folders only.
+pub(crate) fn clean_path() -> String {
+    #[cfg(windows)]
+    {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        format!(r"{root}\System32;{root};{root}\System32\Wbem;{root}\System32\WindowsPowerShell\v1.0")
+    }
+    #[cfg(not(windows))]
+    {
+        k2_core::app_grace::scan::CLEAN_PATH.to_string()
+    }
 }
 
 /// Parse `.env.k2` lines into (key, value-or-ref).
@@ -332,8 +366,11 @@ pub fn apply_service(cmd: &mut Command, service_id: &str, name: &str, workspace_
     cmd.env_clear();
     cmd.envs(base_env());
     if se.clean_mode {
-        cmd.env("PATH", k2_core::app_grace::scan::CLEAN_PATH);
-        cmd.env("HOME", ensure_service_home(service_id));
+        cmd.env("PATH", clean_path());
+        let home = ensure_service_home(service_id);
+        #[cfg(windows)]
+        cmd.env("USERPROFILE", &home);
+        cmd.env("HOME", home);
     }
     cmd.env("PORT", port.to_string());
     cmd.envs(identity);
@@ -589,7 +626,9 @@ mod tests {
 
     fn env_of(cmd: &Command, key: &str) -> Option<String> {
         cmd.get_envs()
-            .find(|(k, _)| *k == std::ffi::OsStr::new(key))
+            // Windows names are case-insensitive: setting PATH over the
+            // inherited Path keeps the key spelled Path.
+            .find(|(k, _)| if cfg!(windows) { k.eq_ignore_ascii_case(key) } else { *k == std::ffi::OsStr::new(key) })
             .and_then(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
     }
 
@@ -637,7 +676,15 @@ mod tests {
             let mut cmd = Command::new("true");
             let a = apply_service(&mut cmd, &id, "jobs", "ws-1", &dir, 4321);
             assert!(a.fixed_path);
-            assert_eq!(env_of(&cmd, "PATH").as_deref(), Some(k2_core::app_grace::scan::CLEAN_PATH));
+            assert_eq!(env_of(&cmd, "PATH").as_deref(), Some(clean_path().as_str()));
+            // Windows: the system's own variables survive the clean env
+            // (a program can't start without SystemRoot), and the
+            // service's home is its USERPROFILE too.
+            #[cfg(windows)]
+            {
+                assert_eq!(env_of(&cmd, "SystemRoot"), std::env::var("SystemRoot").ok());
+                assert_eq!(env_of(&cmd, "USERPROFILE"), env_of(&cmd, "HOME"));
+            }
             let home = env_of(&cmd, "HOME").expect("HOME");
             assert_eq!(std::path::PathBuf::from(&home), service_home(&id));
             assert!(std::path::Path::new(&home).is_dir());
@@ -710,7 +757,14 @@ mod tests {
             std::fs::write(t.path().join(".env.k2"), format!("MODE=prod\nDB_PASSWORD=literal-not-allowed\n")).expect("env.k2");
             set(&svc, Some("clean"), None).expect("clean");
             let leak = k2_core::test_env::EnvVar::set("K2_VAULT_TEST_LEAK", "should-not-pass");
-            let mut cmd = Command::new("/usr/bin/env");
+            // What the service sees: env(1), or cmd's `set` on Windows.
+            let mut cmd = if cfg!(windows) {
+                let mut c = Command::new("cmd");
+                c.args(["/d", "/c", "set"]);
+                c
+            } else {
+                Command::new("/usr/bin/env")
+            };
             let _ = apply(&mut cmd, &svc, &ws, t.path(), 4321);
             let out = cmd.output().expect("run env");
             drop(leak);

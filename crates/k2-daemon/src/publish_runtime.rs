@@ -473,6 +473,16 @@ fn spawn_prepared(
     }
 }
 
+/// Windows: run `line` as cmd.exe runs a typed command line. `arg()` would
+/// escape inner quotes as `\"`, which cmd.exe doesn't read, mangling a
+/// line like `python -c "…"`. cmd's own form is `/d /s /c "<line>"`:
+/// `/s` strips just the outer quotes, `/d` skips AutoRun.
+#[cfg(windows)]
+pub(crate) fn cmd_exe_line(c: &mut Command, line: &str) {
+    use std::os::windows::process::CommandExt;
+    c.args(["/d", "/s", "/c"]).raw_arg(format!("\"{line}\""));
+}
+
 fn spawn_child(
     cmd: &str,
     cwd: &Path,
@@ -495,10 +505,17 @@ fn spawn_child(
     }
     #[cfg(windows)]
     {
-        let _ = service;
         let mut c = Command::new("cmd.exe");
-        c.arg("/c").arg(cmd).current_dir(cwd);
-        spawn_prepared(c, project_id, name, true)
+        c.current_dir(cwd);
+        cmd_exe_line(&mut c, cmd);
+        // The same vault rules as Unix: clean env + granted secrets for
+        // new services; older ones keep inheriting.
+        let mut enrich = true;
+        if let Some((service_id, port)) = service {
+            let applied = crate::vault::publish_env::apply_service(&mut c, service_id, name, project_id, cwd, port);
+            enrich = !applied.fixed_path;
+        }
+        spawn_prepared(c, project_id, name, enrich)
     }
     #[cfg(not(any(unix, windows)))]
     {
@@ -567,7 +584,9 @@ pub fn validate_skin_root(workspace: &Path, raw: &str) -> Result<String, String>
         return Ok(String::new());
     }
     let p = Path::new(t);
-    if p.is_absolute() {
+    // `has_root` too: on Windows `/tmp` or `\tmp` is rooted on the current
+    // drive without being absolute.
+    if p.is_absolute() || p.has_root() {
         return Err("skinRoot must be a workspace-relative directory".into());
     }
     if p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
@@ -2127,6 +2146,9 @@ pub(crate) mod win_job {
 
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    const TH32CS_SNAPTHREAD: u32 = 0x0000_0004;
+    const THREAD_SUSPEND_RESUME: u32 = 0x0002;
     const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
     const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: i32 = 9;
 
@@ -2180,6 +2202,53 @@ pub(crate) mod win_job {
         fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut core::ffi::c_void;
         fn GetExitCodeProcess(h: *mut core::ffi::c_void, code: *mut u32) -> i32;
         fn TerminateProcess(h: *mut core::ffi::c_void, code: u32) -> i32;
+        fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> *mut core::ffi::c_void;
+        fn Thread32First(snap: *mut core::ffi::c_void, te: *mut ThreadEntry) -> i32;
+        fn Thread32Next(snap: *mut core::ffi::c_void, te: *mut ThreadEntry) -> i32;
+        fn OpenThread(access: u32, inherit: i32, tid: u32) -> *mut core::ffi::c_void;
+        fn ResumeThread(h: *mut core::ffi::c_void) -> u32;
+    }
+
+    /// THREADENTRY32.
+    #[repr(C)]
+    struct ThreadEntry {
+        size: u32,
+        usage: u32,
+        thread_id: u32,
+        owner_pid: u32,
+        base_pri: i32,
+        delta_pri: i32,
+        flags: u32,
+    }
+
+    /// Resume every thread of `pid` (a CREATE_SUSPENDED child has one).
+    /// `false` when none could be resumed.
+    fn resume_process(pid: u32) -> bool {
+        const INVALID: isize = -1;
+        let mut resumed = false;
+        // SAFETY: a snapshot handle checked and closed once; the entry is
+        // sized as the API requires; thread handles are closed after use.
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+            if snap.is_null() || snap as isize == INVALID {
+                return false;
+            }
+            let mut te: ThreadEntry = std::mem::zeroed();
+            te.size = std::mem::size_of::<ThreadEntry>() as u32;
+            let mut ok = Thread32First(snap, &mut te) != 0;
+            while ok {
+                if te.owner_pid == pid {
+                    let th = OpenThread(THREAD_SUSPEND_RESUME, 0, te.thread_id);
+                    if !th.is_null() {
+                        resumed |= ResumeThread(th) != u32::MAX;
+                        CloseHandle(th);
+                    }
+                }
+                ok = Thread32Next(snap, &mut te) != 0;
+            }
+            CloseHandle(snap);
+        }
+        resumed
     }
 
     pub struct Job(*mut core::ffi::c_void);
@@ -2207,8 +2276,13 @@ pub(crate) mod win_job {
         }
     }
 
+    /// Start `cmd` inside a new kill-on-close job. The child is created
+    /// suspended and resumed only once it is in the job: started running,
+    /// it could start its own children (cmd.exe running the service)
+    /// before the assignment, and those would escape the job and outlive
+    /// a stop.
     pub fn spawn_in_job(cmd: &mut Command) -> Result<(Child, Job), String> {
-        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW | CREATE_SUSPENDED);
         let child = cmd.spawn().map_err(|e| format!("spawn: {e}"))?;
         let job_h = unsafe { CreateJobObjectW(std::ptr::null_mut(), std::ptr::null()) };
         if job_h.is_null() {
@@ -2241,6 +2315,12 @@ pub(crate) mod win_job {
             let _ = child.kill();
             unsafe { CloseHandle(job_h) };
             return Err("AssignProcessToJobObject failed — Job Objects are required".into());
+        }
+        if !resume_process(child.id()) {
+            let mut child = child;
+            let _ = child.kill();
+            unsafe { CloseHandle(job_h) };
+            return Err("could not resume the new process after placing it in its job".into());
         }
         Ok((child, Job(job_h)))
     }
@@ -3041,7 +3121,24 @@ mod tests {
     /// A command that opens `port` only after `delay_s` seconds (a build
     /// before the server binds).
     fn late_listener_cmd(port: u16, delay_s: f32) -> String {
-        format!("sleep {delay_s}; exec {}", listener_cmd(port))
+        if cfg!(windows) {
+            // cmd.exe has no `sleep`/`exec`: python waits, then binds.
+            format!(
+                "{py} -c \"import time,socket,itertools; time.sleep({delay_s}); s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(('127.0.0.1',{port})); s.listen(8); [s.accept()[0].close() for _ in itertools.count()]\"",
+                py = k2_core::test_env::PYTHON
+            )
+        } else {
+            format!("sleep {delay_s}; exec {}", listener_cmd(port))
+        }
+    }
+
+    /// A service command that runs about `secs` and never listens.
+    fn idle_cmd(secs: u32) -> String {
+        if cfg!(windows) {
+            format!("ping -n {} 127.0.0.1 >nul", secs + 1)
+        } else {
+            format!("sleep {secs}")
+        }
     }
 
     fn grace_spec(project_id: &str, name: &str, cmd: String, dir: &Path, port: u16, no_tunnel: bool, pt: ProbeTimeout) -> RunSpec {
@@ -3258,7 +3355,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let project_id = make_project(&dir.to_string_lossy());
         let started = Instant::now();
-        let json = run(grace_spec(&project_id, &name, "sleep 30".into(), &dir, port, false, ProbeTimeout::Ms(1500)))
+        let json = run(grace_spec(&project_id, &name, idle_cmd(30), &dir, port, false, ProbeTimeout::Ms(1500)))
             .expect("inside the grace the run answers starting");
         assert_eq!(json.status, STATUS_STARTING, "{json:?}");
         let pid = json.pid.expect("pid") as i32;
@@ -3300,7 +3397,7 @@ mod tests {
         let dir = _home.path().join("ws-grace-sync");
         fs::create_dir_all(&dir).unwrap();
         let project_id = make_project(&dir.to_string_lossy());
-        let err = run(grace_spec(&project_id, &name, "sleep 30".into(), &dir, port, false, ProbeTimeout::Keep))
+        let err = run(grace_spec(&project_id, &name, idle_cmd(30), &dir, port, false, ProbeTimeout::Keep))
             .expect_err("default grace miss rolls back");
         assert!(err.message.contains("never accepted within 400ms"), "{}", err.message);
         assert!(err.message.contains("raise --probe-timeout"), "{}", err.message);

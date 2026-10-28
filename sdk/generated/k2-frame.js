@@ -63,6 +63,8 @@
       'links.open': Object.freeze({ cap: 'links:open', reach: 'local', kind: 'call', feature: 'zen-widgets-v1' }),
       'downloads.begin': Object.freeze({ cap: 'downloads:save', reach: 'local', kind: 'call', feature: 'zen-files-v1' }),
       'downloads.save': Object.freeze({ cap: 'downloads:save', reach: 'local', kind: 'call', feature: 'zen-files-v1' }),
+      'uploads.pick': Object.freeze({ cap: 'uploads:pick', reach: 'local', kind: 'call', feature: 'zen-files-v1' }),
+      'uploads.dropped': Object.freeze({ cap: 'uploads:pick', reach: 'local', kind: 'event', feature: 'zen-files-v1' }),
       'files.list': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'files.read': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
       'files.readBinary': Object.freeze({ cap: 'files:read', reach: 'portable', kind: 'call', feature: 'app-api-v1' }),
@@ -75,6 +77,7 @@
       'store.get': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.list': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.changes': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
+      'store.history': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-history-v1' }),
       'blobs.get': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
       'blobs.info': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
       'blobs.list': Object.freeze({ cap: 'store:read', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
@@ -86,6 +89,8 @@
       'store.txAdd': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.txCommit': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
       'store.txAbort': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-data-v1' }),
+      'store.restore': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-history-v1' }),
+      'store.snapshot': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-history-v1' }),
       'blobs.put': Object.freeze({ cap: 'store:write', reach: 'local', kind: 'call', feature: 'garden-blobs-v1' }),
       'guests.rooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
       'guests.setRooms': Object.freeze({ cap: 'guests:rooms', reach: 'portable', kind: 'call', feature: 'guests-rooms-v1' }),
@@ -977,6 +982,54 @@ return transport.call('downloads.save', [name, null, Object.assign({}, o, { tick
 }
 downloads.save = download
 k2.download = download
+}
+if (groups.uploads) {
+var uploads = groups.uploads
+if (uploads.pick) k2.pick = uploads.pick
+var hasFiles = function (e) {
+var t = e.dataTransfer && e.dataTransfer.types
+return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0
+}
+k2.onDrop = function (/** @type {(d: unknown) => void} */ cb) {
+if (typeof cb !== 'function') throw badData('uploads.dropped', 'onDrop takes a function')
+var off = subscribe('uploads.dropped', [cb])
+var doc = g.document
+var put = groups.blobs && groups.blobs.put
+if (!doc || typeof doc.addEventListener !== 'function' || !put) return off
+var over = function (e) {
+if (!hasFiles(e)) return
+e.preventDefault()
+e.dataTransfer.dropEffect = 'copy'
+}
+var drop = function (e) {
+if (!hasFiles(e)) return
+e.preventDefault()
+var x = e.clientX
+var y = e.clientY
+var files = Array.prototype.slice.call(e.dataTransfer.files, 0, 20)
+Promise.all(
+files.map(function (/** @type {File} */ f) {
+return put(f).then(function (/** @type {any} */ i) {
+return { ref: i.ref, name: f.name, size: i.size, mime: i.mime }
+})
+}),
+).then(
+function (list) {
+if (list.length) cb({ files: list, x: x, y: y })
+},
+function (/** @type {unknown} */ err) {
+console.warn('[k2] a dropped file was not kept:', err)
+},
+)
+}
+doc.addEventListener('dragover', over)
+doc.addEventListener('drop', drop)
+return function () {
+off()
+doc.removeEventListener('dragover', over)
+doc.removeEventListener('drop', drop)
+}
+}
 }
 
 Object.keys(groups).forEach(function (surface) {

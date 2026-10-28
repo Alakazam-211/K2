@@ -43,6 +43,12 @@
       "label": "Save files to your Downloads",
       "sentence": "Save files it makes (like a PNG or PDF of your board) to your Downloads folder when you click in it."
     },
+    {
+      "name": "uploads:pick",
+      "exposure": ["widget"],
+      "label": "Take files you pick or drop",
+      "sentence": "Get the files you pick in K2's file picker or drop on it, and keep them in this widget's data on this computer. Agents you allow can read them too."
+    },
     {"name": "agents:add", "label": "Open Add agent"},
     {"name": "gardens:manage", "label": "Create, rename and delete Gardens"},
     {"name": "gardens:template", "label": "Turn this Garden into a built-in page"},
@@ -163,7 +169,7 @@
     {"code": "server_not_saved", "doc": "The source's server isn't one of your saved servers (Settings → Network → Connected Servers)."},
     {"code": "unreachable", "retryable": true, "doc": "The source's server didn't answer. The error carries `last`: the last view K2 has, with phase stale."},
     {"code": "removed", "doc": "The source was removed on its server (its name is held for 7 days)."},
-    {"code": "no_history", "doc": "The source keeps states only, so it has no history."},
+    {"code": "no_history", "doc": "No history to answer from: the source keeps states only, or the restore point is older than the changes K2 keeps (7 days)."},
     {"code": "failed", "doc": "The call failed; the message says why."},
     {"code": "conflict", "doc": "The key changed since you read it (ifRev didn't match); read it again and retry."},
     {"code": "space_full", "doc": "This widget's data is full (20 MiB or 100,000 keys; saves 5 MiB or 10,000)."},
@@ -4331,6 +4337,10 @@
                 "at": {
                   "type": "integer",
                   "description": "Seconds since the Unix epoch."
+                },
+                "restore": {
+                  "type": "string",
+                  "description": "Set when a restore wrote this change: the restore's id (by is who restored)."
                 }
               },
               "required": [
@@ -4729,6 +4739,392 @@
       ],
       "doc": "Drop a transaction's staged writes.",
       "example": "await tx.abort()"
+    },
+    {
+      "verb": "store.history",
+      "cap": "store:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "garden-history-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string",
+              "description": "One key's changes."
+            },
+            "prefix": {
+              "type": "string"
+            },
+            "before": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Changes older than this rev (next.before from an earlier page)."
+            },
+            "after": {
+              "type": "string",
+              "description": "next.after from an earlier page (with before)."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "from": {
+              "type": "string",
+              "description": "Read another widget's data on this Garden instead (in your manifest's reads). Read-only."
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "StoreHistory",
+        "type": "object",
+        "properties": {
+          "head": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "oldest": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The oldest rev store.restore can go back to (K2 keeps 7 days of changes)."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "StoreHistoryItem",
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "rev": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "deleted": {
+                  "type": "boolean"
+                },
+                "value": {
+                  "type": "json",
+                  "description": "What this change wrote (null for a delete)."
+                },
+                "prev": {
+                  "type": "json",
+                  "description": "The value just before it (null when the key didn't exist or K2 no longer keeps it; see prevKind)."
+                },
+                "prevKind": {
+                  "enum": [
+                    "value",
+                    "none",
+                    "unknown"
+                  ],
+                  "description": "value: prev holds it; none: the key didn't exist; unknown: not kept (trimmed, or written by an older K2)."
+                },
+                "by": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "integer",
+                  "description": "Seconds since the Unix epoch."
+                },
+                "restore": {
+                  "type": "string",
+                  "description": "Set when a restore wrote this change: the restore's id."
+                }
+              },
+              "required": [
+                "key",
+                "rev",
+                "deleted",
+                "value",
+                "prev",
+                "prevKind",
+                "by",
+                "at"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "next": {
+            "title": "StoreHistoryCursor",
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "before": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "after": {
+                "type": "string",
+                "description": "The page ended inside the rev before: pass it back too."
+              }
+            },
+            "required": [
+              "before"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "head",
+          "oldest",
+          "items",
+          "next"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_key",
+        "bad_args"
+      ],
+      "doc": "Every change in the last 7 days, newest first, each with its value before and after (store.changes keeps only the latest per key).",
+      "example": "const {items, next} = await k2.store.history({prefix: 'board/b1/', limit: 200})"
+    },
+    {
+      "verb": "store.restore",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-history-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "toRev": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Go back to the state right after this rev."
+            },
+            "at": {
+              "type": "integer",
+              "description": "Go back to this time (seconds since the Unix epoch)."
+            },
+            "snapshot": {
+              "type": "string",
+              "description": "A store.snapshot ref; restores exactly the keys it saved."
+            },
+            "prefixes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only keys under these (1 to 16); none = the whole space."
+            },
+            "except": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Leave keys under these alone (0 to 16)."
+            },
+            "dryRun": {
+              "type": "boolean",
+              "description": "Count what would change; write nothing."
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "StoreRestored",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The restore's id (null on a dry run); its changes carry it as restore."
+          },
+          "rev": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The new rev (null on a dry run, or when nothing changed)."
+          },
+          "written": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "families": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The top-level key families it rewrites."
+          },
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The first 50 keys it rewrites."
+          }
+        },
+        "required": [
+          "id",
+          "rev",
+          "written",
+          "deleted",
+          "families",
+          "keys"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_args",
+        "bad_key",
+        "no_history",
+        "blob_missing",
+        "space_full",
+        "store_full",
+        "paused"
+      ],
+      "doc": "Put keys back as they were at a rev, a time (last 7 days) or a snapshot, as one new change you can undo.",
+      "example": "await k2.store.restore({at: yesterday, prefixes: ['board/b1/'], except: ['board/b1/versions/']})"
+    },
+    {
+      "verb": "store.snapshot",
+      "cap": "store:write",
+      "exposure": [
+        "garden-local"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "garden-history-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "prefixes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only keys under these (1 to 16); none = the whole space."
+            },
+            "except": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Leave out keys under these (0 to 16)."
+            },
+            "label": {
+              "type": "string",
+              "maxLength": 120
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "StoreSnapshot",
+        "type": "object",
+        "properties": {
+          "ref": {
+            "type": "string",
+            "description": "A file in this widget's data; keep it under a key to keep the version."
+          },
+          "rev": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "keys": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "ref",
+          "rev",
+          "keys",
+          "bytes"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_args",
+        "bad_key",
+        "too_large",
+        "space_full",
+        "store_full",
+        "paused"
+      ],
+      "doc": "Save keys as they are now as a file in this widget's data (a named version); store.restore({snapshot}) puts them back.",
+      "example": "const {ref, rev} = await k2.store.snapshot({prefixes: ['board/b1/'], except: ['board/b1/versions/'], label})"
     },
     {
       "verb": "blobs.put",
@@ -5263,6 +5659,181 @@
       ],
       "doc": "Save a file the widget made to the person's Downloads, just after a click in it (or with a downloads.begin ticket); K2's toast names it.",
       "example": "const {saved, name} = await k2.download('board.json', JSON.stringify(doc))"
+    },
+    {
+      "verb": "uploads.pick",
+      "cap": "uploads:pick",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "zen-files-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "title": "opts",
+          "type": "object",
+          "properties": {
+            "accept": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Up to 20 of .ext, type/* or type/subtype (like ['image/*', '.pdf'])."
+            },
+            "multiple": {
+              "type": "boolean"
+            },
+            "max": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "required": [],
+          "additionalProperties": false,
+          "default": {}
+        }
+      ],
+      "response": {
+        "title": "UploadPicked",
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "title": "UploadedFile",
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string",
+                  "description": "Put it in a value (k2.store.put) to keep the file; read it with k2.blobs.get."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The file's name (plain text, never a path)."
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Bytes."
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "Sniffed from the bytes by K2."
+                }
+              },
+              "required": [
+                "ref",
+                "name",
+                "size",
+                "mime"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Empty when the person cancelled."
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_granted",
+        "author_unknown",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "bad_args",
+        "too_large",
+        "space_full",
+        "store_full",
+        "paused",
+        "busy"
+      ],
+      "doc": "Open K2's file picker from a click; the files the person picks become files in this widget's data (refs, never paths).",
+      "example": "const {files} = await k2.pick({accept: ['image/*'], multiple: true})"
+    },
+    {
+      "verb": "uploads.dropped",
+      "cap": "uploads:pick",
+      "exposure": [
+        "widget"
+      ],
+      "reach": "local",
+      "effect": "read",
+      "kind": "event",
+      "feature": "zen-files-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [],
+      "response": {
+        "title": "UploadDropped",
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "title": "UploadedFile",
+              "type": "object",
+              "properties": {
+                "ref": {
+                  "type": "string",
+                  "description": "Put it in a value (k2.store.put) to keep the file; read it with k2.blobs.get."
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The file's name (plain text, never a path)."
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Bytes."
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "Sniffed from the bytes by K2."
+                }
+              },
+              "required": [
+                "ref",
+                "name",
+                "size",
+                "mime"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "x": {
+            "type": "number",
+            "description": "Where they were dropped, in the frame's CSS pixels."
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "files",
+          "x",
+          "y"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [],
+      "doc": "Files the person drops on the widget, already in its data (a phone never drops: offer k2.pick too).",
+      "example": "k2.onDrop(({files, x, y}) => place(files, x, y))"
     },
     {
       "verb": "save.get",

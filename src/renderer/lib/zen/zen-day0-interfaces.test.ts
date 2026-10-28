@@ -85,9 +85,10 @@ describe('day-0: verb tables', () => {
       // 0.46.5 (prd-garden-board-needs-v1): blobs.put/get and downloads.*
       // are frame rows the custom layer answers (bytes over the widget door
       // and K2's download path); blobs.info/list are garden-local.
-      if (verb === 'blobs.put' || verb === 'blobs.get' || verb.startsWith('downloads.')) {
+      // 0.46.6: uploads.pick / uploads.dropped (K2's picker and drops) too.
+      if (verb === 'blobs.put' || verb === 'blobs.get' || verb.startsWith('downloads.') || verb.startsWith('uploads.')) {
         expect(row.reach).toBe('local')
-        expect(['store:read', 'store:write', 'downloads:save']).toContain(row.cap)
+        expect(['store:read', 'store:write', 'downloads:save', 'uploads:pick']).toContain(row.cap)
         expect(verb in ZEN_VERBS, verb).toBe(false)
         continue
       }

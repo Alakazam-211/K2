@@ -476,8 +476,8 @@ mod tests {
         let local = c.verbs_exposed_to(Exposure::GardenLocal);
         assert_eq!(
             local.len(),
-            40,
-            "store.* ×11 (store.patch since catalog v21, 0.46.4), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), blobs.info / blobs.list (0.46.5), and tickets.attachment (catalog v31, 0.46.6)"
+            43,
+            "store.* ×14 (store.patch since catalog v21, 0.46.4; store.history, store.restore and store.snapshot since catalog v32, 0.46.6), save.* ×4, viewer.get, guests.rooms, guests.setRooms, app.rooms, guests.list (catalog v22, 0.46.4), room.members, app.self, app.usage, widget.self, the 12 person rows, box usage's app.resources (0.46.4), blobs.info / blobs.list (0.46.5), and tickets.attachment (catalog v31, 0.46.6)"
         );
         let both: Vec<&str> = local.iter().filter(|v| v.exposed_to(Exposure::App)).map(|v| v.verb.as_str()).collect();
         assert_eq!(
@@ -729,6 +729,8 @@ mod tests {
                 "sources:read",
                 "links:open",
                 "downloads:save",
+                // 0.46.6: k2.pick / k2.onDrop (uploads.pick, uploads.dropped).
+                "uploads:pick",
                 // 0.46.5: the byte rows (blobs.put / blobs.get) are frame rows.
                 "store:read",
                 "store:write",
@@ -750,6 +752,7 @@ mod tests {
                 // 0.46.4: k2.open(url), answered by the custom layer.
                 "links:open",
                 "downloads:save",
+                "uploads:pick",
                 "files:read",
                 "tickets:read",
                 "tickets:post",
@@ -777,6 +780,7 @@ mod tests {
             "sources:read",
             "links:open",
             "downloads:save",
+            "uploads:pick",
             "files:read",
             "tickets:read",
             "tickets:post",

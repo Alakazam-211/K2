@@ -300,6 +300,9 @@ pub const USER_WIDGET_CAPS: &[&str] = &[
     // 0.46.5 (prd-garden-board-needs-v1 §4): `k2.download`, answered by the
     // custom layer over K2's own download path, after a click in the frame.
     "downloads:save",
+    // 0.46.6 (prd-garden-board-needs-v1 §5): `k2.pick` / `k2.onDrop`, answered
+    // by the custom layer; picked and dropped files become this widget's blobs.
+    "uploads:pick",
     // 0.46.3 (garden-person-rows-v1): the Garden bridge's person rows.
     "files:read",
     "tickets:read",

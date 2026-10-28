@@ -28,7 +28,7 @@ import { SEALED_FRAME_GUARD } from '../sealed-frame-guard'
  *  32 KB with 0.46.1's SDK and its garden-local App rows; 40 KB with
  *  catalog v20's Garden columns and agent list rows, 0.46.3 r10; the Rust
  *  cap is `FRAME_MAX_BYTES`). */
-export const K2_FRAME_MAX_BYTES = 40 * 1024
+export const K2_FRAME_MAX_BYTES = 48 * 1024
 
 /** k2-frame.js: the table, then the runtime. */
 export function k2FrameScript(): string {

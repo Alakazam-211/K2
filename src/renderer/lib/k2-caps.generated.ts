@@ -48,6 +48,11 @@ export const K2_CAPS = {
     sentence: 'Save files it makes (like a PNG or PDF of your board) to your Downloads folder when you click in it.',
     exposure: ['widget'],
   },
+  'uploads:pick': {
+    label: 'Take files you pick or drop',
+    sentence: "Get the files you pick in K2's file picker or drop on it, and keep them in this widget's data on this computer. Agents you allow can read them too.",
+    exposure: ['widget'],
+  },
   'agents:add': { label: 'Open Add agent', exposure: [] },
   'gardens:manage': { label: 'Create, rename and delete Gardens', exposure: [] },
   'gardens:template': { label: 'Turn this Garden into a built-in page', exposure: [] },
@@ -114,6 +119,6 @@ export const K2_CAPS = {
 export type K2Cap = keyof typeof K2_CAPS
 
 /** Caps a custom widget may ask for (= the Rust `USER_WIDGET_CAPS`). */
-export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'downloads:save', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members'] as const
+export const USER_WIDGET_CAPS = ['agents:read', 'presence:read', 'thread:read', 'thread:post', 'sources:read', 'links:open', 'downloads:save', 'uploads:pick', 'files:read', 'tickets:read', 'tickets:post', 'store:read', 'store:write', 'guests:rooms', 'activity:read', 'room:members'] as const
 
 export type UserWidgetCap = (typeof USER_WIDGET_CAPS)[number]

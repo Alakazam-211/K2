@@ -1052,6 +1052,63 @@
     downloads.save = download
     k2.download = download
   }
+  // k2.pick({accept, multiple, max}) (0.46.6) = k2.uploads.pick: K2's picker,
+  // from a click; the files become this widget's data (refs, never paths).
+  // k2.onDrop(cb): files dropped on the widget, already in its data, at frame
+  // coordinates. The desktop hands the frame the drop; in the web client the
+  // frame sees it itself and keeps the files with blobs.put, so cb gets the
+  // same {files, x, y} either way. Returns the unsubscribe.
+  if (groups.uploads) {
+    var uploads = groups.uploads
+    if (uploads.pick) k2.pick = uploads.pick
+    /** @param {any} e */
+    var hasFiles = function (e) {
+      var t = e.dataTransfer && e.dataTransfer.types
+      return !!t && Array.prototype.indexOf.call(t, 'Files') >= 0
+    }
+    k2.onDrop = function (/** @type {(d: unknown) => void} */ cb) {
+      if (typeof cb !== 'function') throw badData('uploads.dropped', 'onDrop takes a function')
+      var off = subscribe('uploads.dropped', [cb])
+      var doc = g.document
+      var put = groups.blobs && groups.blobs.put
+      if (!doc || typeof doc.addEventListener !== 'function' || !put) return off
+      /** @param {any} e */
+      var over = function (e) {
+        if (!hasFiles(e)) return
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }
+      /** @param {any} e */
+      var drop = function (e) {
+        if (!hasFiles(e)) return
+        e.preventDefault()
+        var x = e.clientX
+        var y = e.clientY
+        var files = Array.prototype.slice.call(e.dataTransfer.files, 0, 20)
+        Promise.all(
+          files.map(function (/** @type {File} */ f) {
+            return put(f).then(function (/** @type {any} */ i) {
+              return { ref: i.ref, name: f.name, size: i.size, mime: i.mime }
+            })
+          }),
+        ).then(
+          function (list) {
+            if (list.length) cb({ files: list, x: x, y: y })
+          },
+          function (/** @type {unknown} */ err) {
+            console.warn('[k2] a dropped file was not kept:', err)
+          },
+        )
+      }
+      doc.addEventListener('dragover', over)
+      doc.addEventListener('drop', drop)
+      return function () {
+        off()
+        doc.removeEventListener('dragover', over)
+        doc.removeEventListener('drop', drop)
+      }
+    }
+  }
 
   Object.keys(groups).forEach(function (surface) {
     if (surface === 'widget') return // served by the k2.widget getter

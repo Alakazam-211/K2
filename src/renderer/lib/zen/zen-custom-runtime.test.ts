@@ -150,6 +150,30 @@ describe('TUWA6: the frame runtime', () => {
     await expect(early).resolves.toEqual([{ id: 'g-test0001', name: 'Garden 1', index: 1 }])
   })
 
+  it('k2.pick is uploads.pick and k2.onDrop listens on uploads.dropped (0.46.6, GP2/GP4)', async () => {
+    const r = realm()
+    const { heard, host } = connect(r)
+    await tick()
+    heard.length = 0
+    const picked = r.k2.pick({ accept: ['image/*'], multiple: true })
+    const got: unknown[] = []
+    const off = r.k2.onDrop((d: unknown) => got.push(d))
+    await tick()
+    const call = heard.find((m) => (m as { verb?: string }).verb === 'uploads.pick') as { id: number; args: unknown[] }
+    expect(call.args).toEqual([{ accept: ['image/*'], multiple: true }])
+    const file = { ref: `k2blob:sha256-${'ef'.repeat(32)}`, name: 'a.png', size: 3, mime: 'image/png' }
+    host.postMessage({ id: call.id, ok: true, value: { files: [file] } })
+    await expect(picked).resolves.toEqual({ files: [file] })
+    const sub = (heard.find((m) => (m as { verb?: string }).verb === 'uploads.dropped') as { sub: number }).sub
+    host.postMessage({ sub, value: { files: [file], x: 4, y: 5 } })
+    await tick()
+    expect(got).toEqual([{ files: [file], x: 4, y: 5 }])
+    off()
+    await tick()
+    expect(heard).toContainEqual({ unsub: sub })
+    expect(() => r.k2.onDrop('nope')).toThrow(/onDrop takes a function/)
+  })
+
   it('every named helper sends the same message as k2.call; subscribe returns an unsubscribe', async () => {
     const r = realm()
     const { heard } = connect(r)

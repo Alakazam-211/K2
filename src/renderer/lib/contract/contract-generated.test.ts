@@ -89,8 +89,8 @@ describe('TUWA4 twin: generated files match the catalog', () => {
     }
   })
 
-  it('the frame script stays under 40 KB (UWA5, raised for Garden data, then the 0.46.1 SDK and its App rows, then catalog v20)', () => {
-    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(40 * 1024)
+  it('the frame script stays under 48 KB (UWA5, raised for Garden data, then the 0.46.1 SDK and its App rows, then catalog v20, then Garden files)', () => {
+    expect(Buffer.byteLength(read('sdk/generated/k2-frame.js'), 'utf8')).toBeLessThanOrEqual(48 * 1024)
   })
 })
 
@@ -177,6 +177,13 @@ describe('TUWA5: the generated tables', () => {
       'blobs.list': { cap: 'store:read', reach: 'local', kind: 'call' },
       'downloads.begin': { cap: 'downloads:save', reach: 'local', kind: 'call' },
       'downloads.save': { cap: 'downloads:save', reach: 'local', kind: 'call' },
+      // Catalog v31 (0.46.6): K2's picker and drops (frame rows), and full
+      // history (garden-local).
+      'uploads.pick': { cap: 'uploads:pick', reach: 'local', kind: 'call' },
+      'uploads.dropped': { cap: 'uploads:pick', reach: 'local', kind: 'event' },
+      'store.history': { cap: 'store:read', reach: 'local', kind: 'call' },
+      'store.restore': { cap: 'store:write', reach: 'local', kind: 'call' },
+      'store.snapshot': { cap: 'store:write', reach: 'local', kind: 'call' },
       // Garden data (contract-garden-data-v1 §7.2): garden-local rows, the
       // daemon answers them through /cli/zen/call.
       'save.get': { cap: null, reach: 'local', kind: 'call' },
@@ -270,6 +277,7 @@ describe('TUWA5: the generated tables', () => {
       'sources:read',
       'links:open',
       'downloads:save',
+      'uploads:pick',
       'store:read',
       'store:write',
       'guests:rooms',
@@ -288,6 +296,7 @@ describe('TUWA5: the generated tables', () => {
       'sources:read',
       'links:open',
       'downloads:save',
+      'uploads:pick',
       'files:read',
       'tickets:read',
       'tickets:post',

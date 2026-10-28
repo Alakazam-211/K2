@@ -660,6 +660,9 @@ fn pid_label(pid: &str) -> String {
     if pid == k2_mpc_base::session::EXTERNAL_PID {
         return "an outside edit".to_string();
     }
+    if pid == k2_mpc_base::session::IMPORT_PID {
+        return "the original file".to_string();
+    }
     match Principal::parse(pid) {
         Some(Principal::Person(k)) => {
             let people = k2_core::notify_prefs::People::load().unwrap_or_default();

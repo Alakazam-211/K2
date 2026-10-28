@@ -172,9 +172,10 @@ for ws in "$A" "$B"; do
 done
 ok "workspaces alpha + beta registered"
 # beta's pinned chat (the shim records its env): its passport and cell
-# socket. Again after a daemon restart (a new session, a new socket).
+# socket. Again after a daemon restart: a fresh spawn rewrites claude.env;
+# a session kept alive across the restart (k2-ptyd) keeps its passport, and
+# the new daemon serves its cell socket again.
 get_passport() {
-    rm -f "$SB/claude.env"
     local resp
     resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
         -H 'Content-Type: application/json' --data-raw "$(json project "$B")" || true)"
@@ -184,6 +185,7 @@ get_passport() {
     PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
     SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
     [ -n "$PASSPORT" ] || fail "the pinned chat got no passport"
+    for _ in $(seq 1 200); do [ -S "$SOCK" ] && break; sleep 0.05; done
     [ -S "$SOCK" ] || fail "the pinned chat's cell socket is missing: '$SOCK'"
 }
 get_passport

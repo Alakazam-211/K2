@@ -74,10 +74,10 @@ owner() {
     local m="$1" p="$2" b="${3:-}" q="${4:-}"
     local out
     if [ "$m" = "GET" ]; then
-        out="$(curl -s -G -w '\n%{http_code}' "$BASE$p" --data-urlencode "token=$DTOKEN" ${q:+--data-raw "$q"})"
+        out="$(curl -s -G -w '\n%{http_code}' "$BASE$p" --data-urlencode "token=$DTOKEN" ${q:+--data-raw "$q"} || true)"
     else
         [ -n "$b" ] || b='{}'
-        out="$(curl -s -X "$m" -w '\n%{http_code}' -H 'Content-Type: application/json' --data-raw "$b" "$BASE$p?token=$DTOKEN${q:+&$q}")"
+        out="$(curl -s -X "$m" -w '\n%{http_code}' -H 'Content-Type: application/json' --data-raw "$b" "$BASE$p?token=$DTOKEN${q:+&$q}" || true)"
     fi
     BODY="${out%$'\n'*}"; CODE="${out##*$'\n'}"
 }
@@ -86,10 +86,10 @@ agent() {
     local m="$1" p="$2" b="${3:-}" q="${4:-}"
     local out
     if [ "$m" = "GET" ]; then
-        out="$(curl -s -G -w '\n%{http_code}' --unix-socket "$SOCK" -H "Authorization: Bearer $PASSPORT" "http://localhost$p" ${q:+--data-raw "$q"})"
+        out="$(curl -s -G -w '\n%{http_code}' --unix-socket "$SOCK" -H "Authorization: Bearer $PASSPORT" "http://localhost$p" ${q:+--data-raw "$q"} || true)"
     else
         [ -n "$b" ] || b='{}'
-        out="$(curl -s -X "$m" -w '\n%{http_code}' --unix-socket "$SOCK" -H "Authorization: Bearer $PASSPORT" -H 'Content-Type: application/json' --data-raw "$b" "http://localhost$p${q:+?$q}")"
+        out="$(curl -s -X "$m" -w '\n%{http_code}' --unix-socket "$SOCK" -H "Authorization: Bearer $PASSPORT" -H 'Content-Type: application/json' --data-raw "$b" "http://localhost$p${q:+?$q}" || true)"
     fi
     BODY="${out%$'\n'*}"; CODE="${out##*$'\n'}"
 }
@@ -161,21 +161,31 @@ printf '# Wiki\n' >"$A/.k2/wiki/Home.md"
 printf 'secret\n' >"$A/.k2/vault/keys.md"
 printf 'not markdown\n' >"$A/notes/a.txt"
 printf '# B home\n' >"$B/home.md"
+# add-from-path registers git checkouts only; no user/system git config.
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1
 for ws in "$A" "$B"; do
+    git -c init.defaultBranch=main -C "$ws" init -q || fail "git init $ws"
     reg="$(curl -s -X POST -H 'Content-Type: application/json' \
         -d "$(python3 -c 'import json,sys; print(json.dumps({"path": sys.argv[1], "seedWiki": False, "seedAgentsMd": False}))' "$ws")" \
         "$BASE/cli/projects/add-from-path?token=$DTOKEN")"
-    case "$reg" in *"$ws"*) ;; *) fail "register $ws: $reg" ;; esac
+    case "$reg" in *'"error"'*) fail "register $ws: $reg" ;; *"$ws"*) ;; *) fail "register $ws: $reg" ;; esac
 done
 ok "workspaces alpha + beta registered"
-resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
-    -H 'Content-Type: application/json' --data-raw "$(json project "$B")")"
-case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
-for _ in $(seq 1 100); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
-PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
-SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
-[ -n "$PASSPORT" ] || fail "the pinned chat got no passport"
-[ -S "$SOCK" ] || fail "the pinned chat's cell socket is missing: '$SOCK'"
+# beta's pinned chat (the shim records its env): its passport and cell
+# socket. Again after a daemon restart (a new session, a new socket).
+get_passport() {
+    rm -f "$SB/claude.env"
+    local resp
+    resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
+        -H 'Content-Type: application/json' --data-raw "$(json project "$B")" || true)"
+    case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
+    for _ in $(seq 1 100); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
+    PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
+    SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
+    [ -n "$PASSPORT" ] || fail "the pinned chat got no passport"
+    [ -S "$SOCK" ] || fail "the pinned chat's cell socket is missing: '$SOCK'"
+}
+get_passport
 ok "beta's agent passport + cell socket"
 
 # file_is <path> <python string literal>: wait up to 8 s for the file to hold it.
@@ -260,6 +270,7 @@ file_is "$A/.k2/wiki/Home.md" '"# Wiki\n\nedited outside\nlast words\n"' "releas
 ok "a normal stop writes back what was unwritten"
 printf '# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n' >"$A/.k2/wiki/Home.md"
 start_daemon daemon2.log
+get_passport
 doc_is "$A" .k2/wiki/Home.md '"# Wiki\n\nedited outside\nlast words\nwhile K2 was down\n"' "reconcile"
 ok "the store reopens and reconciles edits made while K2 was down"
 

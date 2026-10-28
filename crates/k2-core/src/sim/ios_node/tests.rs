@@ -36,6 +36,7 @@ fn req(profile: Option<&str>) -> BootRequest {
         // The server's own folder: it must never reach the node (IR-5).
         data_dir: PathBuf::from("/home/k2/.k2/sim/ios-node/devices/SERVER-ONLY"),
         boot_timeout: Duration::from_secs(30),
+        grant_exempt: false,
     }
 }
 
@@ -359,6 +360,20 @@ fn node_selection_failures_teach_with_the_right_codes() {
     assert_eq!(e.code(), "sim_invalid");
     // A named node that runs no iPhones.
     assert_eq!(lane.boot(&req(Some("k2n2-m1:iPhone 17"))).unwrap_err().code(), "sim_lane_unavailable");
+}
+
+/// The grant rule matches `k2 compute run`: the owner and admins may boot
+/// on any active Mac node without a grant; everyone else needs one.
+#[test]
+fn the_owner_and_admins_need_no_grant() {
+    let dir = FakeDirectory::new();
+    let lane = Arc::new(IosNodeLane::new(dir.clone()).with_timeouts(Duration::from_secs(10), Duration::from_secs(120)));
+    dir.node.attach_lane(&lane);
+    assert_eq!(lane.boot(&req(None)).unwrap_err().code(), "sim_node_not_granted");
+    assert!(dir.node.sessions().is_empty());
+    let b = lane.boot(&BootRequest { grant_exempt: true, ..req(None) }).expect("an owner or admin boots without a grant");
+    assert_eq!(b.profile.name, "iPhone 17 (on k2n1-m4)");
+    assert_eq!(dir.node.sessions().len(), 1);
 }
 
 #[test]

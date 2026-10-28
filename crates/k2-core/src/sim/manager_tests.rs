@@ -387,12 +387,12 @@ fn an_iphone_on_a_mac_node_is_outside_the_box_limits() {
     limits::save_settings(&limits::SimSettings { max_devices: Some(1), min_free_ram_bytes: Some(250 << 30), ..Default::default() }).expect("limits");
 
     // The gate runs first, only for the node lane.
-    let refuse = || Err(SimError::new(403, "sim_node_needs_admin", "no").exit(3));
+    let refuse = || -> R<bool> { Err(SimError::new(403, "sim_node_needs_admin", "no").exit(3)) };
     let e = m.boot_gated(&a, &person(), &req("ios"), &refuse).expect_err("gated");
     assert_eq!(e.code, "sim_node_needs_admin");
     assert!(m.row(&a).expect("row").is_none(), "nothing started before the gate");
 
-    let v = m.boot_gated(&a, &person(), &req("ios"), &|| Ok(())).expect("ios-node boots on a full box");
+    let v = m.boot_gated(&a, &person(), &req("ios"), &|| Ok(false)).expect("ios-node boots on a full box");
     assert_eq!((v.lane, v.state), (LaneKind::IosNode, SimState::Running));
     assert_eq!(v.profile.as_ref().map(|p| p.name.as_str()), Some("iPhone 17 (on k2n1-m4)"));
     {

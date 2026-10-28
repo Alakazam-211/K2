@@ -348,7 +348,9 @@ impl IosNodeLane {
                 outdated.push(n);
             } else if !f.ready {
                 not_ready.push(n);
-            } else if !self.dir.granted(&n.id, &req.workspace_id) {
+            } else if !req.grant_exempt && !self.dir.granted(&n.id, &req.workspace_id) {
+                // As with `k2 compute run`: the owner and admins may use any
+                // active node without a grant; agents and others need one.
                 not_granted.push(n);
             } else if let Some(h) = &n.hold {
                 busy.push(format!("{} is {h}", n.name));

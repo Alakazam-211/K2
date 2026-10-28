@@ -160,7 +160,7 @@ fn boot_fixture(tag: &str) -> Booted {
     let xcode = lane.xcode_version().unwrap();
     let app = build_fixture(&home);
     let data_dir = home.join("data").join(KEY);
-    let req = BootRequest { workspace_id: "live-p4".into(), workspace_key: KEY.into(), profile_id: None, data_dir: data_dir.clone(), boot_timeout: Duration::from_secs(240) };
+    let req = BootRequest { workspace_id: "live-p4".into(), workspace_key: KEY.into(), profile_id: None, data_dir: data_dir.clone(), boot_timeout: Duration::from_secs(240), grant_exempt: false };
     let t0 = Instant::now();
     let booted = lane.boot(&req).expect("boot");
     eprintln!("booted {} ({}, {}) in {:?} with Xcode {xcode}", booted.device_id, booted.profile.name, booted.profile.os, t0.elapsed());

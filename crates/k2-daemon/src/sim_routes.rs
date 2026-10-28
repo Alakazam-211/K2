@@ -224,9 +224,18 @@ fn agent_switch(c: &Caller, ws: &Ws) -> Result<(), SimError> {
 /// "Allow mobile devices" ([`agent_switch`]) and "Allow compute nodes"
 /// (`compute.use`; 403 `compute_off`, which the permission-card wall
 /// already turns into `Ask with:`). Run only when the picked lane is
-/// `ios-node`.
-fn node_lease_gate(c: &Caller, ws: &Ws) -> Result<(), SimError> {
+/// `ios-node`. Answers whether the booter needs no compute grant on the
+/// node: the same rule as `k2 compute run` (the owner token and Owner or
+/// Admin logins; agents and shell tabs need the grant).
+fn node_lease_gate(c: &Caller, ws: &Ws) -> Result<bool, SimError> {
     match c {
+        Caller::Owner => Ok(true),
+        Caller::Login { username }
+            if k2_core::connect_users::role_for_user(username)
+                .is_some_and(|r| matches!(r, k2_core::connect_users::Role::Owner | k2_core::connect_users::Role::Admin)) =>
+        {
+            Ok(true)
+        }
         Caller::Agent(a) => {
             let on = {
                 let db = k2_core::db::shared();
@@ -234,7 +243,7 @@ fn node_lease_gate(c: &Caller, ws: &Ws) -> Result<(), SimError> {
                 k2_core::compute::store::agents_can_use_compute(&conn, &a.project_id)
             };
             if on {
-                Ok(())
+                Ok(false)
             } else {
                 Err(SimError::new(
                     403,
@@ -247,7 +256,7 @@ fn node_lease_gate(c: &Caller, ws: &Ws) -> Result<(), SimError> {
                 .exit(3))
             }
         }
-        _ if can_control(c) => Ok(()),
+        _ if can_control(c) => Ok(false),
         _ => Err(SimError::new(
             403,
             "sim_node_needs_admin",

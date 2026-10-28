@@ -1106,6 +1106,7 @@ mod tests {
             profile_id: profile.map(str::to_string),
             data_dir: std::env::temp_dir().join(format!("k2-ios-data-{key}-{}", std::process::id())),
             boot_timeout: Duration::from_secs(60),
+            grant_exempt: false,
         }
     }
 

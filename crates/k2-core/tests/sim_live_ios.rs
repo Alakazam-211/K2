@@ -108,6 +108,7 @@ fn an_agent_drives_the_ios_simulator_end_to_end() {
         profile_id: None,
         data_dir: data_dir.clone(),
         boot_timeout: Duration::from_secs(240),
+        grant_exempt: false,
     };
     let t0 = Instant::now();
     let booted = lane.boot(&req).expect("boot");

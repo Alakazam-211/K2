@@ -197,6 +197,10 @@ pub struct BootRequest {
     pub data_dir: PathBuf,
     /// How long the lane may take to reach "booted" before failing.
     pub boot_timeout: Duration,
+    /// The booter is the owner or an admin, who (as with `k2 compute run`)
+    /// may use any active compute node without a grant. Only the `ios-node`
+    /// lane reads it; agents and other people always need the grant.
+    pub grant_exempt: bool,
 }
 
 /// What a lane returns once a device is up.

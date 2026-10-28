@@ -516,14 +516,16 @@ impl Manager {
     // ── boot / stop / erase ──────────────────────────────────────────
 
     pub fn boot(&self, ws: &Ws, actor: &Actor, req: &BootReq) -> R<SimView> {
-        self.boot_gated(ws, actor, req, &|| Ok(()))
+        self.boot_gated(ws, actor, req, &|| Ok(false))
     }
 
     /// [`Self::boot`], with the daemon's check for leasing a Mac node
     /// (`node_gate`, run only when the picked lane is `ios-node`): people
     /// need control (owner, admins), agents `sim.use` and `compute.use`
-    /// (decision D2, prd-ios-on-mac-node-0467-v1 §3.5).
-    pub fn boot_gated(&self, ws: &Ws, actor: &Actor, req: &BootReq, node_gate: &dyn Fn() -> R<()>) -> R<SimView> {
+    /// (decision D2, prd-ios-on-mac-node-0467-v1 §3.5). It answers whether
+    /// the booter is the owner or an admin, who (as with `k2 compute run`)
+    /// needs no compute grant on the node.
+    pub fn boot_gated(&self, ws: &Ws, actor: &Actor, req: &BootReq, node_gate: &dyn Fn() -> R<bool>) -> R<SimView> {
         let lock = self.op_lock(&ws.id);
         let _g = lock.lock();
         if let Some(r) = self.row(ws)? {
@@ -544,9 +546,7 @@ impl Manager {
         // A Mac node runs the device: the box's own limits don't apply
         // (IN-A4); the node admits on its own memory and disk.
         let remote = lane.kind() == LaneKind::IosNode;
-        if remote {
-            node_gate()?;
-        }
+        let grant_exempt = if remote { node_gate()? } else { false };
         let mut probe = lane.probe();
         Self::fold_setup(&setup, &mut probe);
         if !probe.ready {
@@ -602,6 +602,7 @@ impl Manager {
             profile_id: req.device.clone(),
             data_dir,
             boot_timeout: BOOT_TIMEOUT,
+            grant_exempt,
         };
         let t0 = Instant::now();
         self.booting.lock().insert(ws.id.clone(), (row.id, ws.clone()));

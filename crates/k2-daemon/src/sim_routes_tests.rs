@@ -590,7 +590,8 @@ fn only_the_box_owner_accepts_licences_and_status_says_who_can() {
 /// An iPhone on a Mac compute node (decision D2): it leases a shared
 /// Mac, so the owner and admins boot one, and agents need both "Allow
 /// mobile devices" and "Allow compute nodes" (`compute_off`, exit 3, which
-/// the permission-card wall turns into `Ask with:`). A Member can't.
+/// the permission-card wall turns into `Ask with:`). A Member can't. The
+/// grant rule matches `k2 compute run`: the owner needs none, agents do.
 #[cfg(unix)]
 #[test]
 fn an_iphone_on_a_mac_node_needs_control_or_an_agent_with_compute() {
@@ -607,7 +608,14 @@ fn an_iphone_on_a_mac_node_needs_control_or_an_agent_with_compute() {
     k2_core::sim::register_lane(lane.clone());
     manager::manager().refresh_probes();
     let ws = insert_project("sim-node", &tmp.join("ws"));
-    dir.grant(&ws);
+
+    // As with `k2 compute run`, the owner needs no grant on the node.
+    let r = post(BOOT, Caller::Owner, json!({ "workspace": ws, "platform": "ios", "noTab": true }));
+    assert_eq!(r.status, "200 OK", "the owner boots without a grant: {}", r.body);
+    assert_eq!(dir.node.sessions().len(), 1);
+    let r = post(STOP, Caller::Owner, json!({ "workspace": ws }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(dir.node.sessions().is_empty());
 
     // The chooser lists the node's iPhones by name.
     let r = get(DEVICES, Caller::Owner, &[("workspace", &ws), ("platform", "ios")]);
@@ -639,6 +647,12 @@ fn an_iphone_on_a_mac_node_needs_control_or_an_agent_with_compute() {
         let conn = db.lock();
         k2_core::compute::store::set_agents_can_use_compute(&conn, &ws, true).expect("compute on");
     }
+    // Both switches, but no grant on the Mac: agents need one.
+    let r = post(BOOT, agent(&ws), json!({ "platform": "ios", "noTab": true }));
+    assert_eq!((r.status, code(&r).as_str()), ("403 Forbidden", "sim_node_not_granted"), "{}", r.body);
+    assert_eq!(body(&r)["exit"], json!(3));
+    assert!(dir.node.sessions().is_empty());
+    dir.grant(&ws);
     let r = post(BOOT, agent(&ws), json!({ "platform": "ios", "noTab": true }));
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert_eq!(body(&r)["lane"], json!("ios-node"));
@@ -646,12 +660,6 @@ fn an_iphone_on_a_mac_node_needs_control_or_an_agent_with_compute() {
     let r = post(STOP, Caller::Owner, json!({ "workspace": ws }));
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert!(dir.node.sessions().is_empty(), "stop frees the Mac");
-
-    // The owner boots it too.
-    let r = post(BOOT, Caller::Owner, json!({ "workspace": ws, "platform": "ios", "noTab": true }));
-    assert_eq!(r.status, "200 OK", "{}", r.body);
-    let r = post(STOP, Caller::Owner, json!({ "workspace": ws }));
-    assert_eq!(r.status, "200 OK", "{}", r.body);
 
     crate::sim_routes::clear_lanes_for_tests();
     let _ = std::fs::remove_dir_all(&tmp);

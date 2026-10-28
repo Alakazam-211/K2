@@ -179,7 +179,7 @@ check) check ;;
 2)
     echo "Sitting 2 — the keys. U2 is made inside _k2sign (nobody sees its password); U3 goes to your password manager; U1 moves in."
     echo "BEFORE you start:"
-    echo "  - U1's password must be in your password manager. Today it's the TAURI_SIGNING_PRIVATE_KEY_PASSWORD= value in the K2"
+    echo "  - U1's password must be in your password manager. Today it's the value on the TAURI_SIGNING_PRIVATE_KEY_PASSWORD line in the K2"
     echo "    checkout's .env: open .env in an editor (don't cat it), copy the value into a password-manager entry 'K2 update key U1'."
     echo "  - Make a NEW long password for U3 in your password manager (entry 'K2 update key U3 - password')."
     echo "  - Stop every agent: quit K2 from its menu-bar icon, then run 'k2 daemon stop' (it ends agent sessions), and close every"

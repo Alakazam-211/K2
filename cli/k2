@@ -2750,13 +2750,26 @@ cmd_heartbeat_list() {
     # GH#27: --json dumps the raw daemon array (pass-through, no table);
     # --archived delegates to the archived listing (either flag order).
     local as_json=0 archived=0
+    # 0.46.6: --workspace <ws> lists another workspace's (people; the
+    # daemon refuses an agent's passport with other_workspace, exit 3).
+    local -a hb_ws=()
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --json)     as_json=1; shift ;;
             --archived) archived=1; shift ;;
+            --workspace|--project)
+                [ -n "${2:-}" ] || { echo "Usage: k2 heartbeat schedule list [--archived] [--workspace <ws>] [--json]" >&2; exit 2; }
+                local hb_w="$2"
+                if [ -d "$hb_w" ]; then hb_w="$(cd "$hb_w" && pwd)"; fi
+                hb_ws=("workspace=$(urlencode "$hb_w")")
+                shift 2 ;;
             *) shift ;;
         esac
     done
+    if [ "${#hb_ws[@]}" -gt 0 ] && [ "$archived" = "1" ]; then
+        echo "Error: --archived with --workspace isn't supported; list the active ones, or run it from that workspace" >&2
+        exit 2
+    fi
     if [ "$archived" = "1" ]; then
         if [ "$as_json" = "1" ]; then
             cmd_heartbeat_list_archived --json
@@ -2766,10 +2779,10 @@ cmd_heartbeat_list() {
         return
     fi
     if [ "$as_json" = "1" ]; then
-        cli_send cli_request "/cli/heartbeat/list"
+        cli_send cli_request "/cli/heartbeat/list" ${hb_ws[@]+"${hb_ws[@]}"}
         return
     fi
-    cli_send cli_request "/cli/heartbeat/list" | python3 -c "
+    cli_send cli_request "/cli/heartbeat/list" ${hb_ws[@]+"${hb_ws[@]}"} | python3 -c "
 import json, sys
 try:
     rows = json.loads(sys.stdin.read())
@@ -2785,9 +2798,9 @@ try:
             if code in ('owner_only', 'forbidden', 'gated') and 'ask your human' not in hint:
                 hint = (hint + ' — ' if hint else '') + 'requires owner/admin — ask your human'
             print(f'Error: {hint}', file=sys.stderr)
-            sys.exit(3 if code in ('owner_only', 'forbidden', 'gated') else 1)
+            sys.exit(3 if code in ('owner_only', 'forbidden', 'gated', 'other_workspace') else 1)
         print(f'Error: {err}', file=sys.stderr)
-        sys.exit(1)
+        sys.exit(4 if 'workspace not found' in str(err) else 1)
     if not rows:
         print('No heartbeats configured for this workspace.'); sys.exit(0)
     # Heartbeat S3 (HB24): Next + Waiting come from the daemon's stored
@@ -2982,23 +2995,74 @@ except Exception as e:
 
 cmd_heartbeat_enable_disable() {
     local enabled="$1"; shift
-    local name="${1:-}"
-    [ -z "$name" ] && { echo "Usage: k2 heartbeat enable|disable <name>" >&2; exit 1; }
+    local name="" ws="" as_json=0
+    local usage="Usage: k2 heartbeat schedule enable|disable <name> [--workspace <ws>] [--json]"
+    # 0.46.6: --workspace <ws> (or <ws>/<name>) names another workspace's
+    # heartbeat. People only: the owner, an Admin, or a person in a K2
+    # shell tab. An agent gets exit 3 (other_workspace) and, with
+    # permission cards on, the Ask-with line (heartbeat.pause-other /
+    # heartbeat.resume-other). Before, the flag was taken as the name and
+    # every spelling answered no_such_heartbeat.
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --workspace|--project)
+                ws="${2:-}"
+                [ -n "$ws" ] || { echo "$usage" >&2; exit 2; }
+                shift 2 ;;
+            --workspace=*|--project=*) ws="${1#*=}"; shift ;;
+            -*) echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"; shift
+                else echo "Unexpected argument: $1" >&2; echo "$usage" >&2; exit 2; fi ;;
+        esac
+    done
+    [ -z "$name" ] && { echo "$usage" >&2; exit 1; }
+    local extra=()
+    if [ -n "$ws" ]; then
+        if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
+        extra=("workspace=$(urlencode "$ws")")
+    fi
     # GH#27: this used to print "Heartbeat 'x' trued/falsed" and swallowed
-    # daemon errors (> /dev/null). Surface {"error"} with exit 1 and say
+    # daemon errors (> /dev/null). Surface the error and say
     # Enabled/Disabled like a human would.
-    local verb="Enabled"
-    [ "$enabled" = "false" ] && verb="Disabled"
-    cli_send cli_request_post "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" | python3 -c "
-import json, sys
+    local out rc=0
+    out="$(cli_send cli_request_post "/cli/heartbeat/enable" "name=$(urlencode "$name")&enabled=$enabled" ${extra[@]+"${extra[@]}"})" || true
+    printf '%s' "$out" | HB_NAME="$name" HB_ENABLED="$enabled" HB_JSON="$as_json" python3 -c '
+import json, os, sys
+name = os.environ["HB_NAME"]
+verb = "Enabled" if os.environ["HB_ENABLED"] == "true" else "Disabled"
+raw = sys.stdin.read()
 try:
-    d = json.loads(sys.stdin.read())
-except Exception as e:
-    print(f'Error: {e}', file=sys.stderr); sys.exit(1)
-if isinstance(d, dict) and d.get('error'):
-    print(f\"Error: {d['error']}\", file=sys.stderr); sys.exit(1)
-" || exit 1
-    echo "$verb heartbeat: $name"
+    d = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %r" % raw[:300], file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict):
+    print("Error: unexpected reply: %r" % raw[:300], file=sys.stderr)
+    sys.exit(1)
+err = d.get("error")
+if err == "no_such_heartbeat":
+    msg = d.get("message") or ("no heartbeat named %s" % name)
+    print("Error (no_such_heartbeat): %s" % msg, file=sys.stderr)
+    sys.exit(1)
+if isinstance(err, dict):
+    code = err.get("code") or "error"
+    print("Error (%s): %s" % (code, err.get("hint") or code), file=sys.stderr)
+    refused = ("other_workspace", "admin_only", "owner_only", "forbidden", "wrong_credential", "invalid_token")
+    sys.exit(3 if code in refused else 1)
+if err:
+    print("Error: %s" % err, file=sys.stderr)
+    sys.exit(4 if "workspace not found" in str(err) else 1)
+if os.environ["HB_JSON"] == "1":
+    print(json.dumps(d, indent=2))
+    sys.exit(0)
+if d.get("workspace"):
+    print("%s heartbeat: %s (workspace %s)" % (verb, d.get("heartbeat") or name, d["workspace"]))
+else:
+    print("%s heartbeat: %s" % (verb, name))
+' || rc=$?
+    return "$rc"
 }
 
 # 0.37.8 — flip the per-heartbeat opt-in to deliver WAKEUP.md into the
@@ -50088,6 +50152,7 @@ SCHEDULE (CRUD on heartbeat definitions)
        a sidecar: k2 heartbeat session <n> --set sales/reviewer
        (UUID form still works: --set <session-id> --provider <p>)
   heartbeat schedule list [--archived] [--json]  (--json: raw array)
+  heartbeat schedule list --workspace <ws>       Another workspace's (people only)
   heartbeat schedule remove <n> [--purge]
        Default archives (restorable). --purge hard-deletes and is
        owner-only: agents archive instead.
@@ -50096,8 +50161,25 @@ SCHEDULE (CRUD on heartbeat definitions)
        spec flags change the schedule; --instructions/--instructions-file
        have the daemon rewrite the WAKEUP.md (either or both)
   heartbeat schedule rename <old> <new>
-  heartbeat schedule enable <n>                  Resume scheduling
-  heartbeat schedule disable <n>                 Pause scheduling
+  heartbeat schedule enable <n> [--workspace <ws>]   Resume scheduling
+  heartbeat schedule disable <n> [--workspace <ws>]  Pause scheduling
+       (also: heartbeat enable|disable <n> [--workspace <ws>])
+       --workspace <ws>: a heartbeat of ANOTHER workspace (handle, name or
+       path; <ws>/<n> means the same). Without it: your own workspace.
+       Who may pause or resume another workspace's heartbeat: the server's
+       owner, an Admin login, or a person typing in a K2 shell tab. An agent
+       (an LLM chat in K2, like you) may not. K2 checks the names first
+       (exit 4: no such workspace; exit 1: no such heartbeat there: ask
+       your person for the right name), then refuses an agent with exit 3
+       (other_workspace). With permission cards on, that error ends with an
+       "Ask with:" line; run it as printed, filling in only --why:
+         k2 permission request heartbeat.pause-other target=<ws> heartbeat=<n> --why "…"
+       (key=value pairs in any order; heartbeat.resume-other to resume).
+       Your person gets a card on your Thread; when they tap Allow, K2
+       pauses it as them and you get a message saying so (or that they
+       declined). Don't run disable again: it stays paused until someone
+       resumes it. No "Ask with:" line (cards off): ask your person to run
+       the same command themselves.
 
 SIGNAL (immediate one-shot triggers)
   heartbeat signal fire <n> [--force]
@@ -50127,8 +50209,13 @@ EXAMPLES
   k2 heartbeat schedule add --name roundup --hourly --every 1 --unit hours
   k2 heartbeat schedule list
   k2 heartbeat schedule disable deploy-check
+  k2 heartbeat schedule disable triage --workspace companion
   k2 heartbeat signal fire deploy-check
   k2 heartbeat log
+
+EXIT CODES (enable/disable)
+  0 done · 1 error (no such heartbeat: the error names the workspace) ·
+  2 bad usage · 3 refused · 4 workspace not found
 EOF
 }
 

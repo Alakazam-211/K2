@@ -109,7 +109,7 @@ const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over S
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 35] = [
+pub(crate) const V1_ACTIONS: [&str; 37] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -156,6 +156,16 @@ pub(crate) const V1_ACTIONS: [&str; 35] = [
     // workspace's secrets as a file or env (a handed-over or person-given
     // secret it may not widen itself).
     "vault.delivery",
+    // 0.46.6: pause / resume another workspace's heartbeat.
+    "heartbeat.pause-other",
+    "heartbeat.resume-other",
+];
+
+/// `heartbeat.pause-other` / `-resume-other`: the workspace and heartbeat
+/// the refusal names, else what the request named.
+const HEARTBEAT_OTHER_PARAMS: &[(&str, &[ParamFrom])] = &[
+    ("target", &[ParamFrom::Response("/error/workspace"), ParamFrom::Query("workspace")]),
+    ("heartbeat", &[ParamFrom::Response("/error/heartbeat"), ParamFrom::Query("name")]),
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -198,6 +208,19 @@ pub(crate) const ROWS: &[Row] = &[
     Row {
         params: &[("harness", &[ParamFrom::Response("/error/harness"), ParamFrom::Body("/provider")])],
         ..row(ask("agent.harness-switch", Floor::Admin), code(403, "harness_needs_person"), "/cli/workspace/swap-canonical", POST)
+    },
+    // `k2 heartbeat disable|enable <n> --workspace <another>` (0.46.6): the
+    // refusal names the workspace and the heartbeat; `enabled=` (the CLI
+    // sends true|false) picks pause or resume.
+    Row {
+        when: &[("enabled", "false")],
+        params: HEARTBEAT_OTHER_PARAMS,
+        ..row(ask("heartbeat.pause-other", Floor::Admin), code(403, "other_workspace"), "/cli/heartbeat/enable", POST)
+    },
+    Row {
+        when: &[("enabled", "true")],
+        params: HEARTBEAT_OTHER_PARAMS,
+        ..row(ask("heartbeat.resume-other", Floor::Admin), code(403, "other_workspace"), "/cli/heartbeat/enable", POST)
     },
     // ── mobile devices (0.46.6) ────────────────────────────────────────
     row(ask("sim.use", Floor::Admin), code(403, "sim_switch_off"), "/cli/sim/", ANY),
@@ -770,6 +793,9 @@ mod tests {
             (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"swapped":false}), "agent.harness-switch"),
             // 0.46.6: `k2 vault delivery NAME env` on a secret the agent can't widen.
             (403, "POST", "/cli/vault/policy", vec![], Some(json!({"name":"K2N12_ENROLL_CODE","delivery":"env"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"K2N12_ENROLL_CODE","delivery":"env"}}), "vault.delivery"),
+            // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
+            (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "false"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":false}}), "heartbeat.pause-other"),
+            (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "true"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":true}}), "heartbeat.resume-other"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -833,6 +859,42 @@ mod tests {
         .unwrap();
         assert_eq!(p["command"], "k2 permission request agent.harness-switch harness=claude --why \"<what you need it for>\"");
         assert_eq!(p["approvers"], "owner or admin");
+    }
+
+    /// 0.46.6: another workspace's heartbeat. The workspace (its handle) and
+    /// the heartbeat come from the refusal, not the agent's spelling (a path,
+    /// `ws/name`); `enabled=` picks pause or resume; the same code on
+    /// another heartbeat route (show) names no card.
+    #[test]
+    fn heartbeat_other_teaches_the_workspace_and_heartbeat_it_was_refused_on() {
+        let refusal = |enabled: bool| {
+            json!({"error":{"code":"other_workspace","hint":"x","workspace":"companion","heartbeat":"triage","enabled":enabled}})
+        };
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/heartbeat/enable",
+            &[("name", "companion/triage"), ("enabled", "false"), ("workspace", "/Users/x/companion")],
+            None,
+            refusal(false),
+        )
+        .unwrap();
+        assert_eq!(action_of(&p), "heartbeat.pause-other", "{p}");
+        assert_eq!(p["params"], json!({"target": "companion", "heartbeat": "triage"}), "{p}");
+        assert_eq!(p["approvers"], "owner or admin");
+        let cmd = p["command"].as_str().unwrap();
+        assert!(
+            cmd.starts_with("k2 permission request heartbeat.pause-other ")
+                && cmd.contains(" target=companion")
+                && cmd.contains(" heartbeat=triage")
+                && cmd.ends_with(" --why \"<what you need it for>\""),
+            "{cmd}"
+        );
+        let p = teach_of(403, "POST", "/cli/heartbeat/enable", &[("name", "triage"), ("enabled", "true")], None, refusal(true)).unwrap();
+        assert_eq!(action_of(&p), "heartbeat.resume-other", "{p}");
+        // `other_workspace` from heartbeat show is no card's wall.
+        let p = teach_of(403, "GET", "/cli/heartbeat/show", &[("name", "triage")], None, json!({"error":{"code":"other_workspace","hint":"x"}})).unwrap();
+        assert_eq!(p["requestable"], false, "{p}");
     }
 
     /// `sources.approve` teaches the source the agent tried (`name`) and
@@ -988,7 +1050,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 35);
+        assert_eq!(V1_ACTIONS.len(), 37);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

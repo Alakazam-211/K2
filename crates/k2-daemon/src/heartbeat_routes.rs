@@ -510,16 +510,18 @@ thread_local! {
 }
 
 /// Run `f` with `actor` as the request's audit actor (AH18). Always
-/// clears the slot afterward.
+/// puts the slot back afterward (`None` at the top of a request; a nested
+/// call, such as a cross-workspace heartbeat pause naming its actor,
+/// restores the dispatcher's).
 pub fn with_request_actor<R>(actor: Option<String>, f: impl FnOnce() -> R) -> R {
-    struct ClearOnDrop;
-    impl Drop for ClearOnDrop {
+    struct RestoreOnDrop(Option<String>);
+    impl Drop for RestoreOnDrop {
         fn drop(&mut self) {
-            REQUEST_ACTOR.with(|c| *c.borrow_mut() = None);
+            let prev = self.0.take();
+            REQUEST_ACTOR.with(|c| *c.borrow_mut() = prev);
         }
     }
-    let _guard = ClearOnDrop;
-    REQUEST_ACTOR.with(|c| *c.borrow_mut() = actor);
+    let _guard = RestoreOnDrop(REQUEST_ACTOR.with(|c| c.replace(actor)));
     f()
 }
 

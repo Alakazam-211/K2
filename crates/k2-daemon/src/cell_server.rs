@@ -587,6 +587,10 @@ mod unix_impl {
             None
         };
         params.insert("cell_session_id".to_string(), this_session_id.clone());
+        // 0.46.6: the request's own `project=` survives the stamp under a
+        // server-only key (heartbeat pause / resume refuses an agent naming
+        // another workspace this way, as with `workspace=`).
+        crate::caller_workspace::keep_client_project(&mut params);
         stamp_principal(&mut params, &principal);
         if let Some(t) = inbox_target {
             params.insert("project".to_string(), t.clone());

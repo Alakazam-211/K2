@@ -563,13 +563,26 @@ async fn app_heartbeats_jail_caps_projection_writes_and_actors() {
         let login = http(port, "POST", "/cli/auth/login", Some(r#"{"username":"connie","password":"connie-pass-123"}"#));
         assert_eq!(login.status, 200, "connect login; {}", login.body);
         let connie = login.json()["token"].as_str().expect("connect token").to_string();
-        let r = http(
-            port,
-            "POST",
-            &format!("/cli/heartbeat/enable?token={connie}"),
-            Some(&serde_json::json!({"project": a.path, "name": "inbox-sweep", "enabled": false}).to_string()),
-        );
-        assert_eq!(r.status, 200, "Connect user POST enable (AH6 both); {}", r.body);
+        // 0.46.6: a login has no workspace of its own, so pausing or
+        // resuming any workspace's heartbeat needs an Admin, whichever way
+        // the workspace is named (`project=` here): a Member is refused.
+        let enable_as = |tok: &str| {
+            http(
+                port,
+                "POST",
+                &format!("/cli/heartbeat/enable?token={tok}"),
+                Some(&serde_json::json!({"project": a.path, "name": "inbox-sweep", "enabled": false}).to_string()),
+            )
+        };
+        let r = enable_as(&connie);
+        assert_status(&r, 403, "admin_only", "a Member login can't pause a workspace's heartbeat");
+        assert!(row(&a, "inbox-sweep").expect("row").enabled, "a refused Member changes nothing");
+        owner_post(port, "/cli/users/set-role", r#"{"username":"connie","role":"admin"}"#);
+        let login = http(port, "POST", "/cli/auth/login", Some(r#"{"username":"connie","password":"connie-pass-123"}"#));
+        assert_eq!(login.status, 200, "connect login as admin; {}", login.body);
+        let connie = login.json()["token"].as_str().expect("connect token").to_string();
+        let r = enable_as(&connie);
+        assert_eq!(r.status, 200, "Connect Admin POST enable (AH6 both); {}", r.body);
         assert_eq!(
             last_change(&a, "inbox-sweep"),
             ("disabled".to_string(), Some("user:connie".to_string()))

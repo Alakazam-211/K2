@@ -198,6 +198,29 @@ pub const CELL_SESSION_KEY: &str = "cell_session_id";
 pub fn strip_request_stamps(params: &mut std::collections::HashMap<String, String>) {
     params.remove(PRINCIPAL_BOUND_KEY);
     params.remove(CELL_SESSION_KEY);
+    params.remove(CLIENT_PROJECT_KEY);
+}
+
+/// The params key a passport's own `project=` claim is kept in before
+/// [`stamp_principal`] overwrites `project` with its workspace (0.46.6:
+/// heartbeat pause / resume reads it, so naming another workspace with
+/// `project=` is refused like `workspace=`, never silently retargeted).
+/// Set only by the server ([`keep_client_project`]).
+pub const CLIENT_PROJECT_KEY: &str = "client_project";
+
+/// Keep the request's own `project=` (else `project_path=`) under
+/// [`CLIENT_PROJECT_KEY`]; call it right before [`stamp_principal`]. A
+/// value the client sent under that key is dropped first.
+pub fn keep_client_project(params: &mut std::collections::HashMap<String, String>) {
+    params.remove(CLIENT_PROJECT_KEY);
+    let claim = params
+        .get("project")
+        .or_else(|| params.get("project_path"))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(c) = claim {
+        params.insert(CLIENT_PROJECT_KEY.to_string(), c);
+    }
 }
 
 /// Stamp server-side caller identity into a params map.

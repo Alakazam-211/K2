@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup } from '@testing-library/react'
+import { act, cleanup, fireEvent } from '@testing-library/react'
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => null) }))
 vi.mock('@tauri-apps/api/event', () => ({
@@ -20,14 +20,17 @@ vi.mock('@/lib/daemon-cli', () => ({
   daemonCliGet: vi.fn(async () => {
     throw new Error('the row must not call the daemon while rendering')
   }),
+  daemonCliPostQuery: vi.fn(async () => ({ success: true })),
 }))
 vi.mock('@/lib/heartbeat-launch', () => ({ launchHeartbeat: vi.fn(async () => undefined) }))
-vi.mock('@/components/common/HeartbeatSessionPicker', () => ({ openHeartbeatTarget: vi.fn() }))
+vi.mock('@/components/common/HeartbeatSessionPicker', () => ({ openHeartbeatTarget: vi.fn(async () => undefined) }))
 vi.mock('@/stores/heartbeat-sessions', () => ({
   useHeartbeatSessionsStore: { getState: () => ({ refresh: vi.fn() }) },
 }))
 
-import { HeartbeatEntryRow } from './HeartbeatEntry'
+import { HeartbeatEntryRow, heartbeatToggleNeedsAdmin } from './HeartbeatEntry'
+import { daemonCliPostQuery } from '@/lib/daemon-cli'
+import { setPoolStatusSource, type PoolHostStatus } from '@/lib/pool-hooks'
 import type { HeartbeatEntry, HeartbeatRow } from '@/stores/heartbeat-sessions'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { fakeScope } from '@/test-utils/fake-scope'
@@ -219,5 +222,72 @@ describe('HB26: the guesswork is gone', () => {
     expect(src).not.toContain('matchesScheduleDay')
     expect(src).not.toMatch(/return 'now'/)
     expect(src).toContain('<HeartbeatStatusLine')
+  })
+})
+
+describe('0.46.6: pausing a heartbeat on another server needs an Admin there', () => {
+  /** The connection pool's view of B, with this login's role (whoami). */
+  function poolSays(role: string | null): () => void {
+    const entries: Record<string, PoolHostStatus> = {
+      [scopeNew.hostKey]: { reach: 'online', auth: 'ok', role, checkedAt: NOW },
+    }
+    return setPoolStatusSource({ getState: () => ({ entries }), subscribe: () => () => {} })
+  }
+
+  function toggle(view: ReturnType<typeof renderInRoom>): HTMLButtonElement {
+    const el = view.container.querySelector('button[role="switch"]')
+    if (!(el instanceof HTMLButtonElement)) throw new Error('expected the heartbeat toggle')
+    return el
+  }
+
+  afterEach(() => {
+    vi.mocked(daemonCliPostQuery).mockClear()
+  })
+
+  it('a Member in a room on B sees the toggle off with the hint, and a click sends nothing', async () => {
+    const off = poolSays('member')
+    try {
+      const view = renderRow(entry({ enabled: true }))
+      const t = toggle(view)
+      expect(t.disabled).toBe(true)
+      expect(t.title).toBe('An Admin can pause this heartbeat')
+      expect(view.getByText('An Admin can pause this heartbeat')).toBeTruthy()
+      await act(async () => {
+        fireEvent.click(t)
+      })
+      expect(daemonCliPostQuery).not.toHaveBeenCalled()
+      cleanup()
+      const paused = renderRow(entry({ enabled: false }))
+      expect(toggle(paused).disabled).toBe(true)
+      expect(paused.getByText('An Admin can resume this heartbeat')).toBeTruthy()
+    } finally {
+      off()
+    }
+  })
+
+  it('an Admin in a room on B toggles it as before', async () => {
+    const off = poolSays('admin')
+    try {
+      const view = renderRow(entry({ enabled: true }))
+      const t = toggle(view)
+      expect(t.disabled).toBe(false)
+      expect(view.queryByText(/An Admin can/)).toBeNull()
+      await act(async () => {
+        fireEvent.click(t)
+      })
+      expect(daemonCliPostQuery).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(daemonCliPostQuery).mock.calls[0]?.[1]).toBe('heartbeat/enable')
+    } finally {
+      off()
+    }
+  })
+
+  it('the rule: the window\'s own server and a role not read yet leave it to the daemon', () => {
+    expect(heartbeatToggleNeedsAdmin({ isPrimary: false }, 'member')).toBe(true)
+    expect(heartbeatToggleNeedsAdmin({ isPrimary: false }, 'viewer')).toBe(true)
+    expect(heartbeatToggleNeedsAdmin({ isPrimary: false }, 'admin')).toBe(false)
+    expect(heartbeatToggleNeedsAdmin({ isPrimary: false }, 'owner')).toBe(false)
+    expect(heartbeatToggleNeedsAdmin({ isPrimary: false }, null)).toBe(false)
+    expect(heartbeatToggleNeedsAdmin({ isPrimary: true }, 'member')).toBe(false)
   })
 })

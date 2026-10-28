@@ -14007,14 +14007,29 @@ async fn handle_one_request(
                 }
                 let mut params = super::http::parse_params(&path, &query);
                 crate::heartbeat_app_routes::fold_json_body(&mut params, &post_body);
+                // 0.46.6: identity keys are the server's, never the
+                // request's (query or folded body). A passport also carries
+                // its session, so a K2 shell tab (a person) is told apart
+                // from an agent (`heartbeat_other`), as on the cell socket.
+                crate::caller_workspace::strip_request_stamps(&mut params);
                 if let Some(ref principal) = scoped_principal {
+                    let presented = presented_bearer(&query, bearer_token.as_deref());
+                    if let Some(v) = crate::session_token::require_hook(presented, p) {
+                        params.insert(crate::caller_workspace::CELL_SESSION_KEY.to_string(), v.session_id);
+                    }
+                    // Its own `project=` claim survives the stamp (heartbeat
+                    // pause / resume refuses another workspace named so).
+                    crate::caller_workspace::keep_client_project(&mut params);
                     crate::caller_workspace::stamp_principal(&mut params, principal);
                 }
                 let p_owned = p.to_string();
+                let ingress_label = ingress.as_str().to_string();
                 let resp = tokio::task::spawn_blocking(move || {
                     crate::caller_workspace::with_request_principal(scoped_principal, || {
                         crate::heartbeat_routes::with_request_actor(actor, || {
-                            crate::cli::dispatch(&p_owned, &params)
+                            crate::heartbeat_other::with_ingress(&ingress_label, || {
+                                crate::cli::dispatch(&p_owned, &params)
+                            })
                         })
                     })
                 })

@@ -153,6 +153,9 @@ pub enum ParamKind {
     /// A vault secret of the asking workspace, by name (never a value):
     /// `vault.delivery secret=` (2026-10-28).
     Secret,
+    /// A heartbeat, by name, of the workspace another param names:
+    /// `heartbeat.pause-other target= heartbeat=` (0.46.6).
+    Heartbeat,
 }
 
 /// One value an action takes (`key=value` on the CLI).

@@ -98,6 +98,8 @@ pub mod heartbeat_app_routes;
 pub mod agent_identity_routes;
 pub mod heartbeat_launch;
 pub mod heartbeat_monitor;
+// 0.46.6: pause / resume another workspace's heartbeat (people; agents ask).
+pub mod heartbeat_other;
 pub mod heartbeat_routes;
 // `k2 job`: daemon-run scheduled jobs (prd-vault-gaps-v1 item 5).
 pub mod jobs;

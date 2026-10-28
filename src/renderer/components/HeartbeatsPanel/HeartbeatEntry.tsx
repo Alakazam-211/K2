@@ -6,7 +6,8 @@ import { daemonCliPostQuery } from '@/lib/daemon-cli'
 import { deriveDeliveryTarget } from '@/lib/heartbeat-delivery'
 import { launchHeartbeat } from '@/lib/heartbeat-launch'
 import { HeartbeatStatusLine } from '@/components/common/HeartbeatStatusLine'
-import { scopeMayWrite } from '@/kessel/server-scope'
+import { scopeMayWrite, type ServerScope } from '@/kessel/server-scope'
+import { usePoolHostStatus } from '@/components/TopBar/top-bar-scope'
 import {
   type HeartbeatEntry,
 } from '@/stores/heartbeat-sessions'
@@ -44,6 +45,13 @@ export function HeartbeatEntryRow({
   // window's). An older server shows the schedule text only (HB30).
   const nextFire = useRoomSupports('heartbeat-next-fire')
 
+  // 0.46.6: pausing or resuming a heartbeat on another server needs an
+  // Admin there (the daemon refuses a Member login with admin_only). The
+  // role is the one the connection pool already read for this server
+  // (whoami); no fetch per row.
+  const pool = usePoolHostStatus(room.scope.isPrimary ? null : room.scope.hostKey)
+  const needsAdmin = heartbeatToggleNeedsAdmin(room.scope, pool?.role ?? null)
+
   const handleClick = (): void => {
     if (!projectPath) {
       console.warn('[heartbeats-panel] click ignored — projectPath missing')
@@ -77,7 +85,7 @@ export function HeartbeatEntryRow({
 
   const handleToggle = useCallback(async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (busy || !projectPath || entry.state === 'archived') return
+    if (busy || needsAdmin || !projectPath || entry.state === 'archived') return
     // Home M4/M5: `heartbeat/enable` is a GET that writes: held to the
     // room's write rules.
     if (!scopeMayWrite(room.scope, 'heartbeat/enable')) return
@@ -97,7 +105,7 @@ export function HeartbeatEntryRow({
     } finally {
       setBusy(false)
     }
-  }, [busy, projectPath, entry.row.name, entry.row.enabled, entry.state])
+  }, [busy, needsAdmin, projectPath, entry.row.name, entry.row.enabled, entry.state])
 
   const archived = entry.state === 'archived'
 
@@ -164,11 +172,17 @@ export function HeartbeatEntryRow({
             onClick={handleToggle}
             role="switch"
             aria-checked={entry.row.enabled}
-            disabled={busy}
-            className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 ${
+            disabled={busy || needsAdmin}
+            className={`w-7 h-3.5 flex items-center transition-colors no-drag cursor-pointer flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed ${
               entry.row.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
             }`}
-            title={entry.row.enabled ? 'Enabled — click to disable' : 'Disabled — click to enable'}
+            title={
+              needsAdmin
+                ? adminHint(entry.row.enabled)
+                : entry.row.enabled
+                  ? 'Enabled — click to disable'
+                  : 'Disabled — click to enable'
+            }
           >
             <span
               className={`w-2.5 h-2.5 bg-[var(--color-on-accent)] block transition-transform ${
@@ -176,6 +190,11 @@ export function HeartbeatEntryRow({
               }`}
             />
           </button>
+          {needsAdmin && (
+            <span data-heartbeat-admin-hint="" className="text-[9px] text-[var(--color-text-muted)] truncate flex-1">
+              {adminHint(entry.row.enabled)}
+            </span>
+          )}
           <button
             type="button"
             onClick={handleLaunch}
@@ -189,6 +208,19 @@ export function HeartbeatEntryRow({
       )}
     </div>
   )
+}
+
+/** Is the viewer below Admin on the room's server (e.g. a Member in a
+ *  remote room on Home)? Then the daemon refuses a pause or resume
+ *  (`admin_only`), so the toggle is off with a hint. The window's own
+ *  server, and a role not read yet, leave it to the daemon. */
+export function heartbeatToggleNeedsAdmin(scope: Pick<ServerScope, 'isPrimary'>, role: string | null): boolean {
+  if (scope.isPrimary || role === null) return false
+  return role !== 'owner' && role !== 'admin'
+}
+
+function adminHint(enabled: boolean): string {
+  return enabled ? 'An Admin can pause this heartbeat' : 'An Admin can resume this heartbeat'
 }
 
 /**

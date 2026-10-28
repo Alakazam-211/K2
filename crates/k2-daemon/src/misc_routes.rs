@@ -146,27 +146,15 @@ fn session_kind_and_handle(
 /// workspace, so a passport may name only that one (403
 /// `other_workspace`, never a silent read of its own). No `workspace=`:
 /// `project` as before.
+///
+/// Pause and resume (`/cli/heartbeat/enable`) have their own door,
+/// [`crate::heartbeat_other`]: people may name another workspace, an agent
+/// asks with a permission card.
 fn heartbeat_workspace(params: &HashMap<String, String>, project: String) -> Result<String, CliResponse> {
     let Some(ws) = params.get("workspace").map(|s| s.trim()).filter(|s| !s.is_empty()) else {
         return Ok(project);
     };
-    use crate::workspace_msg::WorkspaceResolve;
-    let path = match crate::workspace_msg::resolve_workspace_detailed(ws) {
-        WorkspaceResolve::Found(p) => p,
-        WorkspaceResolve::Ambiguous { handles } => {
-            return Err(CliResponse::bad_request(format!(
-                "AMBIG: workspace '{ws}' matches more than one project (handles: {})",
-                handles.join(", ")
-            )))
-        }
-        WorkspaceResolve::Retired { handle } => {
-            return Err(CliResponse::bad_request(format!(
-                "workspace not found: {ws}. {}",
-                k2_core::workspace::handle::retired_handle_message(&handle)
-            )))
-        }
-        WorkspaceResolve::Miss => return Err(CliResponse::bad_request(format!("workspace not found: {ws}"))),
-    };
+    let path = resolve_heartbeat_workspace(ws)?;
     if crate::caller_workspace::principal_from_params(params).is_some() && path != project {
         return Err(CliResponse {
             status: "403 Forbidden",
@@ -179,6 +167,24 @@ fn heartbeat_workspace(params: &HashMap<String, String>, project: String) -> Res
         });
     }
     Ok(path)
+}
+
+/// A heartbeat verb's `workspace=` (handle, name, path or id) → its path.
+/// 400 `workspace not found: …` (the CLI exits 4) or `AMBIG: …`.
+pub(crate) fn resolve_heartbeat_workspace(ws: &str) -> Result<String, CliResponse> {
+    use crate::workspace_msg::WorkspaceResolve;
+    match crate::workspace_msg::resolve_workspace_detailed(ws.trim()) {
+        WorkspaceResolve::Found(p) => Ok(p),
+        WorkspaceResolve::Ambiguous { handles } => Err(CliResponse::bad_request(format!(
+            "AMBIG: workspace '{ws}' matches more than one project (handles: {})",
+            handles.join(", ")
+        ))),
+        WorkspaceResolve::Retired { handle } => Err(CliResponse::bad_request(format!(
+            "workspace not found: {ws}. {}",
+            k2_core::workspace::handle::retired_handle_message(&handle)
+        ))),
+        WorkspaceResolve::Miss => Err(CliResponse::bad_request(format!("workspace not found: {ws}"))),
+    }
 }
 
 /// Long-tail `/cli/*` dispatch. Returns `Some(resp)` for a handled
@@ -1119,6 +1125,11 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
             match need_project(params) {
                 Ok(pp) => {
+                    // Pause / resume: people may name another workspace;
+                    // an agent is refused with a card to ask (0.46.6).
+                    if p == crate::heartbeat_other::ROUTE {
+                        return Some(crate::heartbeat_other::route(params, &pp));
+                    }
                     let pp = match heartbeat_workspace(params, pp) {
                         Ok(pp) => pp,
                         Err(r) => return Some(r),

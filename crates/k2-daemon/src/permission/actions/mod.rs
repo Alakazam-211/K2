@@ -16,6 +16,7 @@
 //! | `sew.rs` | Sew (Rosson 2026-10-28) | `sew.owner-handoff` |
 //! | `harness.rs` | 0.46.6 | `agent.harness-switch` (move the pinned chat to another harness) |
 //! | `vault.rs` | 0.46.6 | `vault.delivery` (let the agent read one of its secrets as file or env) |
+//! | `heartbeats.rs` | 0.46.6 | `heartbeat.pause-other`, `heartbeat.resume-other` (another workspace's heartbeat) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -29,6 +30,7 @@ pub(crate) mod compute;
 pub(crate) mod connections;
 pub(crate) mod gardens;
 pub(crate) mod harness;
+pub(crate) mod heartbeats;
 pub(crate) mod held;
 pub(crate) mod sew;
 pub(crate) mod switches;
@@ -111,6 +113,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(sew::actions());
     out.extend(harness::actions());
     out.extend(vault::actions());
+    out.extend(heartbeats::actions());
     out
 }
 
@@ -125,6 +128,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(sew::not_cardable());
     out.extend(harness::not_cardable());
     out.extend(vault::not_cardable());
+    out.extend(heartbeats::not_cardable());
     out
 }
 

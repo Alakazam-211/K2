@@ -1,10 +1,10 @@
 [package]
 name = "k2-mpc-base"
-version = "0.0.0"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Multiplayer kit for file-type packs: docs on K2-defined primitives (engine hidden), text diff and three-way merge, file codecs; sessions, presence, persistence, history and the parity framework to follow."
+description = "Multiplayer kit for file-type packs: docs on K2-defined primitives (engine hidden), text diff and three-way merge, file codecs; sessions, presence, persistence, history, text tools and the agent-parity framework."
 
 [features]
 # Decoding bytes from remote clients (sync step 1/2, updates). Off by default, and a host must

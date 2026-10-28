@@ -136,6 +136,94 @@ pub struct EditOutput {
     pub exit: u8,
 }
 
+impl EditOutput {
+    /// What an edit verb produced: the new text (`None`: apply nothing, e.g. a section not
+    /// found), its report for stdout, and its exit code (0, or 1 for the tool's "no").
+    /// For a pack's own verbs ([`PackVerb`]).
+    pub fn new(text: Option<String>, stdout: Vec<u8>, exit: u8) -> Self {
+        EditOutput { text, stdout, exit }
+    }
+}
+
+/// A pack verb's parsed call: `(doc name, live text, stdin) -> EditOutput`. A pure function
+/// of its inputs, run under the session lock inside [`crate::session::Session::edit_with`]:
+/// bounded, no I/O, never calling back into the kit.
+pub type PackEdit = Box<dyn FnOnce(&str, &str, &[u8]) -> Result<EditOutput, ToolError>>;
+
+/// An edit verb a pack adds beside the kit's tools (amendment 6), e.g. Markdown's
+/// `replace-section`. Declared by [`crate::session::Pack::verbs`];
+/// [`crate::session::Session::run_tool`] runs it exactly like a kit edit verb: `parse`
+/// checks the arguments before the doc is touched (an error exits 2 and applies nothing),
+/// then the returned [`PackEdit`] computes on the live text inside `edit_with`, and the
+/// result applies as one change (or, with `text: None`, nothing does). Needs read and
+/// edit. The parity registry ([`crate::parity::Registry::for_pack`]) lists it with the
+/// person actions it serves.
+#[derive(Clone, Copy)]
+pub struct PackVerb {
+    name: &'static str,
+    usage: &'static str,
+    serves: &'static [crate::parity::PersonAction],
+    exits: &'static [u8],
+    parse: fn(&[String]) -> Result<PackEdit, ToolError>,
+}
+
+impl PackVerb {
+    /// An edit verb. `name` is `argv[0]` (one word, not a kit verb); `usage` its flags, one
+    /// line; `serves` the person actions it serves (at least one); `exits` every exit code
+    /// it can end with (besides the session's refusals); `parse` gets the arguments after
+    /// the verb.
+    pub const fn edit(
+        name: &'static str,
+        usage: &'static str,
+        serves: &'static [crate::parity::PersonAction],
+        exits: &'static [u8],
+        parse: fn(&[String]) -> Result<PackEdit, ToolError>,
+    ) -> Self {
+        PackVerb {
+            name,
+            usage,
+            serves,
+            exits,
+            parse,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+    pub fn usage(&self) -> &'static str {
+        self.usage
+    }
+    pub fn serves(&self) -> &'static [crate::parity::PersonAction] {
+        self.serves
+    }
+    pub fn exits(&self) -> &'static [u8] {
+        self.exits
+    }
+    /// Parse the arguments after the verb (`argv[1..]`).
+    pub fn parse(&self, args: &[String]) -> Result<PackEdit, ToolError> {
+        (self.parse)(args)
+    }
+}
+
+impl std::fmt::Debug for PackVerb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PackVerb")
+            .field("name", &self.name)
+            .field("usage", &self.usage)
+            .field("serves", &self.serves)
+            .field("exits", &self.exits)
+            .finish_non_exhaustive()
+    }
+}
+
+/// True when `name` (an `argv[0]`) is one of the kit's tools (or one it refuses with a
+/// hint, `egrep`/`fgrep`). A pack verb by such a name is never routed.
+pub fn is_kit_verb(name: &str) -> bool {
+    matches!(name, "egrep" | "fgrep")
+        || VERBS.iter().any(|(v, _)| v.split(' ').next() == Some(name))
+}
+
 /// Read verbs need read rights; edit verbs edit rights.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {

@@ -2222,6 +2222,14 @@ impl Session {
 
     // ----- for the manager -----
 
+    /// The pack's own verb `name` ([`Pack::verbs`]), when `name` isn't a kit verb.
+    pub(crate) fn pack_verb(&self, name: &str) -> Option<crate::tools::PackVerb> {
+        if crate::tools::is_kit_verb(name) {
+            return None;
+        }
+        self.pack.verbs().iter().find(|v| v.name() == name).copied()
+    }
+
     pub(crate) fn schema_name(&self) -> &'static str {
         self.schema.name
     }

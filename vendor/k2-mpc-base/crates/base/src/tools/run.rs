@@ -1,8 +1,8 @@
 //! [`Session::run_tool`]: a verb on a live doc, as one call.
 
-use super::error::{exit, ToolError, ToolRunError};
+use super::error::{exit, ToolRunError};
 use super::fence::Fence;
-use super::{EditOutput, Kind, Tool, ToolDoc};
+use super::{EditOutput, Kind, Tool, ToolDoc, ToolError};
 use crate::session::{ConnId, EditResult, EditWithError, Session};
 use crate::store::Seq;
 
@@ -45,6 +45,9 @@ impl Session {
     /// - **Edit verbs** need edit and run through [`Session::edit_with`]: the tool computes
     ///   on the live text and the result applies as one atomic change (or nothing does).
     ///   The caret moves to the end of the last hunk.
+    /// - **The pack's own verbs** ([`crate::session::Pack::verbs`], e.g. Markdown's
+    ///   `replace-section`): a verb no kit tool has is looked up there and runs as an edit
+    ///   verb, the same way (amendment 6). A kit verb's name always means the kit's verb.
     ///
     /// A refused tool ([`ToolError`], exit 2) or session ([`crate::session::SessionError`])
     /// applies nothing. A tool's "no" (grep found nothing, a patch failed) is not an error:
@@ -56,6 +59,12 @@ impl Session {
         argv: &[String],
         stdin: &[u8],
     ) -> Result<ToolOutput, ToolRunError> {
+        if let Some(v) = argv.first().and_then(|n| self.pack_verb(n)) {
+            let edit = v.parse(&argv[1..])?;
+            let name = self.key()?.path;
+            let doc = name.clone();
+            return self.run_edit(conn, root, &name, move |live| edit(&doc, live, stdin));
+        }
         let tool = Tool::parse(argv)?;
         let name = self.key()?.path;
         match tool.kind() {
@@ -86,47 +95,57 @@ impl Session {
                     fence: Some(fence),
                 })
             }
-            Kind::Edit => {
-                let mut report: Option<EditOutput> = None;
-                let res = self.edit_with(conn, root, |live| {
-                    let mut o = tool.edit(&name, live, stdin).map_err(Stop::Tool)?;
-                    let text = o.text.take();
-                    report = Some(o);
-                    text.ok_or(Stop::NoApply)
-                });
-                let (changed, applied) = match res {
-                    Ok(c) => (c, true),
-                    Err(EditWithError::Compute(Stop::NoApply)) => (None, false),
-                    Err(EditWithError::Compute(Stop::Tool(e))) => return Err(e.into()),
-                    Err(EditWithError::Session(e)) => return Err(e.into()),
-                };
-                let report = report.unwrap_or(EditOutput {
-                    text: None,
-                    stdout: Vec::new(),
-                    exit: exit::OK,
-                });
-                let (version, summary) = match &changed {
-                    Some(c) => (c.version, edited(&name, c)),
-                    None => {
-                        let v = self.status()?.version;
-                        let what = if applied {
-                            "no change to"
-                        } else {
-                            "nothing applied to"
-                        };
-                        (v, format!("{what} {name} · v{v}"))
-                    }
-                };
-                Ok(ToolOutput {
-                    stdout: report.stdout,
-                    stderr_summary: summary,
-                    exit: report.exit,
-                    version,
-                    changed,
-                    fence: None,
-                })
-            }
+            Kind::Edit => self.run_edit(conn, root, &name, |live| tool.edit(&name, live, stdin)),
         }
+    }
+
+    /// An edit verb (the kit's or a pack's): `f` computes on the live text inside
+    /// `edit_with`, and its text applies as one change (`None`: nothing applies).
+    fn run_edit(
+        &self,
+        conn: ConnId,
+        root: &str,
+        name: &str,
+        f: impl FnOnce(&str) -> Result<EditOutput, ToolError>,
+    ) -> Result<ToolOutput, ToolRunError> {
+        let mut report: Option<EditOutput> = None;
+        let res = self.edit_with(conn, root, |live| {
+            let mut o = f(live).map_err(Stop::Tool)?;
+            let text = o.text.take();
+            report = Some(o);
+            text.ok_or(Stop::NoApply)
+        });
+        let (changed, applied) = match res {
+            Ok(c) => (c, true),
+            Err(EditWithError::Compute(Stop::NoApply)) => (None, false),
+            Err(EditWithError::Compute(Stop::Tool(e))) => return Err(e.into()),
+            Err(EditWithError::Session(e)) => return Err(e.into()),
+        };
+        let report = report.unwrap_or(EditOutput {
+            text: None,
+            stdout: Vec::new(),
+            exit: exit::OK,
+        });
+        let (version, summary) = match &changed {
+            Some(c) => (c.version, edited(name, c)),
+            None => {
+                let v = self.status()?.version;
+                let what = if applied {
+                    "no change to"
+                } else {
+                    "nothing applied to"
+                };
+                (v, format!("{what} {name} · v{v}"))
+            }
+        };
+        Ok(ToolOutput {
+            stdout: report.stdout,
+            stderr_summary: summary,
+            exit: report.exit,
+            version,
+            changed,
+            fence: None,
+        })
     }
 }
 

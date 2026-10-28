@@ -175,6 +175,17 @@ for n in "2 --key U2" "2 --key U2b"; do
     awk '/Rebuild K2 Release Approve/{r=NR} /supports --timeout/{c=NR} /inside _k2sign/{g=NR} END{exit !(r && c && g && r<c && c<g)}' "$tmp/sit.out" \
         && pass "sitting $n rebuilds the approval app and checks --timeout before making any key" || fail "sitting $n app rebuild" "$(head -20 "$tmp/sit.out")"
 done
+# signer_current: the test install (from the fixture tree) matches that tree, and a
+# changed installed k2sign.py or policy is caught (sitting 2/3 refuse a stale signer).
+sc() { bash -c 'eval "$(sed -n "/^show()/,/^}/p;/^signer_current()/,/^}/p" "$1")"; HERE="$2"; TREE="$3"; signer_current "$4"' _ \
+    "$REPO/scripts/k2sign/sitting.sh" "$TREE/scripts/k2sign" "$TREE" "$TROOT"; }
+sc > "$tmp/sc.out" 2>&1 && pass "signer_current: the installed signer matches its checkout" || fail "signer_current" "$(cat "$tmp/sc.out")"
+cp "$L/k2sign.py" "$tmp/py2.bak"; printf '\n# other commit\n' >> "$L/k2sign.py"
+sc > "$tmp/sc.out" 2>&1 && fail "stale k2sign.py not caught" "" || { grep -q "differs from this checkout in: k2sign.py" "$tmp/sc.out" && pass "a signer installed from another commit is caught (k2sign.py)" || fail "stale msg" "$(cat "$tmp/sc.out")"; }
+cp "$tmp/py2.bak" "$L/k2sign.py"
+HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 2 --key U2 --commit 0123456 > "$tmp/sit.out" 2>&1
+awk '/installed signer is this commit/{s=NR} /Rebuild K2 Release Approve/{r=NR} END{exit !(s && r && s<r)}' "$tmp/sit.out" \
+    && pass "sitting 2 checks the installed signer first" || fail "sitting 2 signer check"
 HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 3 --key U2 --commit 0123456 > "$tmp/sit.out" 2>&1
 grep -q "supports --timeout" "$tmp/sit.out" && pass "sitting 3 checks the approval app supports --timeout" || fail "sitting 3 app check"
 HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 0 --key U2b > "$tmp/sit.out" 2>&1

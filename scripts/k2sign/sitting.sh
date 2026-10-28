@@ -95,6 +95,38 @@ app_check() {
         esac
     fi
 }
+# The installed signer must be this checkout's (install.sh from this commit):
+# k2sign.py, check-daemon-asset.py, the policy and both wrappers (with the
+# python path install.sh wrote into them). pubkeys is not compared: it names
+# its commit and changes when the public keys land (sitting 3 re-installs).
+signer_current() { # [ETC_ROOT] (tests only)
+    local r="${1:-}" lib etc py bad="" f want got
+    lib="$r/usr/local/libexec/k2sign" etc="$r/usr/local/etc/k2sign"
+    [ -f "$lib/k2sign" ] || { echo "no signer installed at $lib"; return 1; }
+    py="$(sed -n "s/^K2SIGN_PYTHON='\(.*\)'$/\1/p" "$lib/k2sign")"
+    for f in k2sign.py:"$HERE/k2sign.py" check-daemon-asset.py:"$TREE/scripts/lib/check-daemon-asset.py" policy:"$HERE/policy"; do
+        want="$(/usr/bin/shasum -a 256 "${f#*:}" | awk '{print $1}')"
+        case "${f%%:*}" in policy) got="$etc/policy" ;; *) got="$lib/${f%%:*}" ;; esac
+        [ "$(/usr/bin/shasum -a 256 "$got" 2>/dev/null | awk '{print $1}')" = "$want" ] || bad="$bad ${f%%:*}"
+    done
+    for w in k2sign k2sign-admin; do
+        want="$(sed "s#@PYTHON@#$py#" "$HERE/$w" | /usr/bin/shasum -a 256 | awk '{print $1}')"
+        [ "$(/usr/bin/shasum -a 256 "$lib/$w" | awk '{print $1}')" = "$want" ] || bad="$bad $w"
+    done
+    [ -z "$bad" ] && return 0
+    echo "the installed signer differs from this checkout in:$bad"
+    return 1
+}
+signer_check() {
+    printf '\n\033[1m▶ check: the installed signer is this commit'"'"'s\033[0m\n    (compares /usr/local/libexec/k2sign and the policy with this checkout; reads only)\n'
+    if [ "$RUN" = 1 ] && ask; then
+        local why
+        if why="$(signer_current)"; then ok "the installed signer matches this checkout"; else
+            printf '  \033[1;31m%s. Run: sudo bash %s, send K2 the hashes, then run this sitting again.\033[0m\n' "$why" "$(show "$HERE/install.sh")"
+            exit 1
+        fi
+    fi
+}
 need_host() {
     local h
     h="$(scutil --get LocalHostName 2>/dev/null || true)"
@@ -234,6 +266,7 @@ check) check ;;
             || { echo "  $U1_KEY.pub is not U1 (E9111446F65EBB05): tell K2."; exit 1; }
         ok "agents stopped; U1's key file is $U1_KEY (id E9111446F65EBB05)"
     fi
+    signer_check
     step "Rebuild K2 Release Approve from this commit (keeps your approver key; adds --timeout)" bash "$HERE/approve/build.sh"
     app_check
     step "$KEY inside _k2sign (random password, never shown); prints its PUBLIC line (Password: = Mac admin password)" sudo "$LIBEXEC/k2sign-admin" generate-u2
@@ -272,6 +305,7 @@ check) check ;;
     need_commit
     step "Re-install from this commit: pins U2/U3; refuses if the tree's U2 isn't the one generate-u2 made (Password: = Mac admin password)" sudo bash "$HERE/install.sh"
     note "Send K2 the 'Hashes' lines again and wait for 'they match'."
+    signer_check
     app_check
     step "The signer's GitHub side (must end 'gh-selfcheck ok')" sudo -n -u _k2sign "$LIBEXEC/k2sign" gh-selfcheck
     step "Preflight as the release does it (must end 'preflight ok')" bash "$TREE/scripts/sign-daemon.sh" --preflight 0.46.6

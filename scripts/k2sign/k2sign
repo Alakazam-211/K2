@@ -1,0 +1,30 @@
+#!/bin/bash
+# k2sign — the release signer (prd-signing-user-v1 §4.2). Installed by
+# scripts/k2sign/install.sh as /usr/local/libexec/k2sign/k2sign (root:wheel
+# 0755), with @PYTHON@ replaced by the Command Line Tools python3 (the
+# resolved binary; its whole folder chain is root-only, unlike Xcode.app's).
+#
+# The ONLY command the release user may run as _k2sign without a password:
+#   sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign <verb> ...
+# File bytes come in on stdin; signatures go out on stdout. This wrapper
+# throws the caller's environment away (env -i), sets a fixed PATH, HOME and
+# umask, and runs k2sign.py with python3 -I (no PYTHON* env, no user site).
+# Every tool k2sign.py runs is called by absolute path.
+#
+# Test mode (K2SIGN_TEST_ROOT) is passed through so k2sign.py can REFUSE it
+# when this runs as _k2sign or root; sudo's env_reset drops it anyway.
+set -u
+K2SIGN_PYTHON='@PYTHON@'
+root="${K2SIGN_TEST_ROOT:-}"
+keep=()
+if [ -n "$root" ]; then
+    keep+=("K2SIGN_TEST_ROOT=$root")
+    for v in K2SIGN_TEST_NOW K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_EVIDENCE; do
+        if [ -n "${!v:-}" ]; then keep+=("$v=${!v}"); fi
+    done
+fi
+umask 077
+cd / || exit 4
+exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$root/var/k2sign" LANG=C \
+    ${keep[@]+"${keep[@]}"} \
+    "$K2SIGN_PYTHON" -I "$root/usr/local/libexec/k2sign/k2sign.py" signer "$@"

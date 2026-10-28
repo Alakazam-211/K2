@@ -1,0 +1,28 @@
+#!/bin/bash
+# k2sign-admin — root-only admin verbs for the release signer
+# (prd-signing-user-v1 §4.4, §7, §9). Installed by scripts/k2sign/install.sh
+# as /usr/local/libexec/k2sign/k2sign-admin (root:wheel 0755). No sudoers
+# rule covers it: it always needs the admin password.
+#
+#   sudo /usr/local/libexec/k2sign/k2sign-admin set-approver ~/.k2-release-approve/approver.pem
+#   sudo /usr/local/libexec/k2sign/k2sign-admin generate-u2
+#   sudo /usr/local/libexec/k2sign/k2sign-admin import u1 ~/.tauri/k2so-updater.key
+#   sudo /usr/local/libexec/k2sign/k2sign-admin approve <version> <base> <asset>... [--windows] [--reapprove]
+#   sudo /usr/local/libexec/k2sign/k2sign-admin repin
+#
+# Same fixed environment as k2sign; k2sign.py refuses its test mode as root.
+set -u
+K2SIGN_PYTHON='@PYTHON@'
+root="${K2SIGN_TEST_ROOT:-}"
+keep=()
+if [ -n "$root" ]; then
+    keep+=("K2SIGN_TEST_ROOT=$root")
+    for v in K2SIGN_TEST_NOW K2SIGN_TEST_SIGNER_USER; do
+        if [ -n "${!v:-}" ]; then keep+=("$v=${!v}"); fi
+    done
+fi
+umask 077
+cd / || exit 4
+exec /usr/bin/env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$root/var/k2sign" LANG=C \
+    ${keep[@]+"${keep[@]}"} \
+    "$K2SIGN_PYTHON" -I "$root/usr/local/libexec/k2sign/k2sign.py" admin "$@"

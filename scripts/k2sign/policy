@@ -1,0 +1,23 @@
+# k2sign policy (prd-signing-user-v1 §4.1). Installed by scripts/k2sign/install.sh
+# as /usr/local/etc/k2sign/policy (root:wheel 0644) and hashed into
+# pins.sha256: any edit needs root and `k2sign-admin repin`, and a re-run of
+# install.sh puts this reviewed copy back.
+#
+# approval=off is the SOFT rollback (prd §9): no Touch ID session is needed,
+# every other check still runs. release.sh skips Step 0.46 when status says off.
+approval = on
+# A Touch ID approval opens a session this long (covers K2_RELEASE_RESUME and
+# by-hand sign-daemon.sh re-runs); after it, release.sh asks to RE-APPROVE.
+session_hours = 12
+# An issued challenge must be approved within this many minutes, once.
+challenge_minutes = 15
+# The biggest file the signer accepts on stdin (K2.app.tar.gz is ~300 MB).
+max_stdin_mb = 1024
+# What each key may sign ({version} is the release version). The Windows
+# setup signs under two names (A7): setup.exe for U1, the URL name for U2.
+assets.u1 = K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 setup.exe
+assets.u2 = K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 K2_{version}_x64-setup.exe
+# Signable only when the approval said "windows": true (A7, Q5).
+windows_assets = setup.exe K2_{version}_x64-setup.exe
+# The repository S3's GitHub checks read (attestations, tags, main).
+repo = Alakazam-211/K2

@@ -249,8 +249,8 @@ fn rate_limited(retry_ms: i64) -> Reply {
 /// The pass's `app` claim (spec v1.3): the App's service id, for an App
 /// session only. The owner, a handoff, a Connect login and a box login
 /// (`host`, not an App) carry none. A service id outside Sew's grammar
-/// (never one K2 mints: those are lowercase UUIDs) is left out and logged,
-/// never a refused mint.
+/// (never one K2 mints: those are lowercase UUIDs) gives `None` here, and
+/// the mint refuses it ([`app_claim_refused`], decision 13).
 pub fn app_claim(ident: &PassIdentity) -> Option<String> {
     if ident.provenance != Provenance::AppSession {
         return None;
@@ -262,6 +262,15 @@ pub fn app_claim(ident: &PassIdentity) -> Option<String> {
         super::keyring::klog(format!("pass mint: app id {app:?} is outside Sew's app grammar; no app claim"));
         None
     }
+}
+
+/// Sew decision 13 (Rosson 2026-10-28): Sew scopes a session to its App's
+/// Spaces by the `app` claim, so an App session's pass ALWAYS carries it. A
+/// service id outside Sew's grammar (never one K2 mints) is refused, never
+/// minted without the claim (no claim = an unscoped session in Sew).
+pub fn app_claim_refused(ident: &PassIdentity) -> bool {
+    ident.provenance == Provenance::AppSession
+        && ident.app.as_deref().is_some_and(|a| a != k2_core::skin::HOST_APP_ID && !super::app_claim_ok(a))
 }
 
 /// K-M4: on an App's link, only that App's guest sessions mint (a Meet
@@ -406,6 +415,16 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                     audit("chat-pass", &actor, "no_chat_grant", req.ingress, req.ip);
                     return error(403, "no_chat_grant", "this person has no chat access (grant kind chat)", None).into();
                 }
+                Err(Refusal::NoChatCaps { actor }) => {
+                    audit("chat-pass", &actor, "no_chat_caps", req.ingress, req.ip);
+                    return error(
+                        403,
+                        "no_chat_caps",
+                        "this person's App role holds no chat cap the App may hand out (its manifest caps, as the owner approved them): give the role chat:read or more (k2 app role room <role> <room> --caps …)",
+                        None,
+                    )
+                    .into();
+                }
                 Err(Refusal::TiedPendingReset { actor }) => {
                     audit("chat-pass", &actor, "tied_pending_reset", req.ingress, req.ip);
                     return error(403, "tied_pending_reset", TIED_PENDING_RESET_MESSAGE, None).into();
@@ -433,6 +452,16 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
         audit(event, &ident.actor, "sew_unavailable", req.ingress, req.ip);
         let hint = details["hint"].as_str().unwrap_or("Sew is not ready").to_string();
         return error(503, "sew_unavailable", &hint, Some(details)).into();
+    }
+    if app_claim_refused(&ident) {
+        audit(event, &ident.actor, "app_claim_invalid", req.ingress, req.ip);
+        return error(
+            403,
+            "app_claim_invalid",
+            "this App's id doesn't fit Sew's app claim, and an App session never gets a pass without one",
+            None,
+        )
+        .into();
     }
     let app = app_claim(&ident);
     let claims = match ChatPassClaims::new(&install_id, &ident.sub, &ident.sid, d.now)

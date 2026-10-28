@@ -114,6 +114,12 @@ export const K2_CAPS = {
     exposure: ['app'],
   },
   'wallet:self': { label: "Use the person's own wallet (an owner setting per App, never a room cap)", exposure: ['app'] },
+  'chat:read': { label: "Read chat in this App's Spaces (Sew; a ceiling on the person's chat pass)", exposure: ['app'] },
+  'chat:post': { label: 'Post, react and upload in chat', exposure: ['app'] },
+  'chat:respond': { label: 'Answer chat cards', exposure: ['app'] },
+  'voice:join': { label: 'Join voice channels and calls', exposure: ['app'] },
+  'voice:video': { label: 'Turn on camera and share the screen in a call (with voice:join)', exposure: ['app'] },
+  'guests:chat': { label: "Give its own guests chat (an owner grant per App, never a guest's)", exposure: ['app'] },
 } as const satisfies Record<string, K2CapInfo>
 
 export type K2Cap = keyof typeof K2_CAPS

@@ -175,6 +175,12 @@ wallet:self (Use the person's own wallet (an owner setting per App, never a room
   wallet.loginCancel       POST /cli/skin/wallet/login/cancel (browser only)  Cancel the person's own running sign-in.
   wallet.use               POST /cli/skin/wallet/use (browser only)           Choose which item the person's own agents run on for a provider.
   wallet.remove            POST /cli/skin/wallet/remove (browser only)        Delete one of the person's own items for good (not Trash): its sessions stop, its sealed secret and folder are destroyed.
+chat:read (Read chat in this App's Spaces (Sew; a ceiling on the person's chat pass))
+  chat.member              GET  /cli/sew/app/member (server only)             One of this App's users (by principal id or username) → their Sew member id; anyone else is the same not_found as nobody.
+  chat.whois               POST /cli/sew/app/whois (server only)              Sew member ids → which of this App's users each is; everyone else shows only memberId, kind and isThisAppUser: false.
+guests:chat (Give its own guests chat (an owner grant per App, never a guest's))
+  guests.chat              GET  /cli/skin/guests/chat (server only)           One of this App's guests: their chat (member, guest or none), who gave it, and this App's member ceiling.
+  guests.setChat           POST /cli/skin/guests/chat (server only)           Give one of this App's guests chat (member or guest) or take it away; only grants this App made, within its ceiling; idempotent, audited.
 
 REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   401 pass_required (no pass: every call, login too) / pass_invalid

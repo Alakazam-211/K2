@@ -134,6 +134,33 @@ fn principal_where(
     .map_err(|e| format!("chat principal lookup: {e}"))
 }
 
+/// Sew for Apps A3 (P1): the name Sew shows for a person. K2 is the only
+/// source: their own 0.46.5 profile display name, else their full name,
+/// else their username; at most 100 characters (Sew's limit).
+pub fn principal_display_name(
+    conn: &Connection,
+    principal_id: &str,
+    full_name: Option<&str>,
+    username: &str,
+) -> Result<String, String> {
+    let display: Option<String> = conn
+        .query_row(
+            "SELECT display_name FROM principal_profiles WHERE principal_id = ?1",
+            params![principal_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()
+        .map_err(|e| format!("profile display name lookup: {e}"))?
+        .flatten();
+    let pick = [display.as_deref(), full_name]
+        .into_iter()
+        .flatten()
+        .map(str::trim)
+        .find(|s| !s.is_empty())
+        .unwrap_or(username);
+    Ok(truncate_chars(pick, DISPLAY_NAME_MAX))
+}
+
 pub fn principal_by_id(conn: &Connection, id: &str) -> Result<Option<PrincipalFacts>, String> {
     principal_where(conn, "id = ?1", id)
 }
@@ -401,6 +428,7 @@ pub fn provision_request(
             let p = principal_by_id(conn, &grant.subject_id)?
                 .ok_or_else(|| format!("unknown principal id '{}'", grant.subject_id))?;
             check_username(&p.username)?;
+            let display_name = principal_display_name(conn, &p.id, p.full_name.as_deref(), &p.username)?;
             ProvisionRequest {
                 external_id: ext,
                 kind: MemberKind::Person,
@@ -408,10 +436,7 @@ pub fn provision_request(
                 assistant_of: None,
                 guest: scope == ChatScope::Guest,
                 profile: ProfileInput {
-                    display_name: truncate_chars(
-                        p.full_name.as_deref().unwrap_or(&p.username),
-                        DISPLAY_NAME_MAX,
-                    ),
+                    display_name,
                     username: p.username,
                     email: p.email,
                     title: None,
@@ -633,6 +658,13 @@ pub fn update_op(
     })
 }
 
+/// A provision op, then the person's picture when they have one (A3).
+fn with_picture(conn: &Connection, provision: NewOp, grant: &SkinGrant, cause: Cause) -> Result<Vec<NewOp>, String> {
+    let mut out = vec![provision];
+    out.extend(super::avatar::after_provision(conn, grant, cause)?);
+    Ok(out)
+}
+
 pub struct ChatProvisioner;
 
 impl ToolProvisioner for ChatProvisioner {
@@ -751,16 +783,17 @@ impl ToolProvisioner for ChatProvisioner {
         ctx: &HookCtx,
     ) -> Result<Vec<NewOp>, String> {
         match *ev {
+            // A3: a person's picture follows their (re)provision.
             HookEvent::GrantCreated { grant } if grant.enabled => {
-                Ok(vec![provision_op(conn, grant, ctx, Cause::GrantCreate)?])
+                with_picture(conn, provision_op(conn, grant, ctx, Cause::GrantCreate)?, grant, Cause::GrantCreate)
             }
             HookEvent::GrantEnabled { grant } => {
-                Ok(vec![provision_op(conn, grant, ctx, Cause::GrantEnable)?])
+                with_picture(conn, provision_op(conn, grant, ctx, Cause::GrantEnable)?, grant, Cause::GrantEnable)
             }
             // G3 upsert. S27-A8 caveat: Sew clears omitted title/pronouns on
             // an upsert of an active member (see the PRD amendments).
             HookEvent::GrantUpdated { new, .. } if new.enabled => {
-                Ok(vec![provision_op(conn, new, ctx, Cause::GrantUpdate)?])
+                with_picture(conn, provision_op(conn, new, ctx, Cause::GrantUpdate)?, new, Cause::GrantUpdate)
             }
             HookEvent::GrantDeleted { grant } => {
                 Ok(vec![deprovision_op(grant, Cause::GrantDelete)?])
@@ -776,14 +809,14 @@ impl ToolProvisioner for ChatProvisioner {
                     return Ok(Vec::new());
                 }
                 let ext = external_id("principal", &principal.id)?;
-                let display = principal
-                    .full_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or(&principal.username);
+                let display = principal_display_name(
+                    conn,
+                    &principal.id,
+                    principal.full_name.as_deref(),
+                    &principal.username,
+                )?;
                 let patch = ProfilePatch {
-                    display_name: Some(truncate_chars(display, DISPLAY_NAME_MAX)),
+                    display_name: Some(display),
                     email: match principal
                         .email
                         .as_deref()

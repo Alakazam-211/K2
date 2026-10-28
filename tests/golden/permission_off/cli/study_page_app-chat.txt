@@ -1,0 +1,92 @@
+$ k2 study app-chat
+exit: 0
+--- stdout
+k2 study app-chat — Chat, voice and calls in your App (Sew for Apps)
+
+ONE IDENTITY. Your App user IS their chat user: K2 makes their Sew member
+k2:principal:<principalId>. No chat sign-up, no link step. Store principal
+ids, never emails. Their name and picture in chat are K2's (profile display
+name, else full name, else username); never edit them in Sew.
+
+GIVE ONE APP USER CHAT (in order; <app> = your App's id or name, k2 app list):
+ 1. Sew is on in K2 mode: k2 hostchat status shows "identity: k2". If Sew
+    isn't installed, the owner runs k2 hostchat enable (never --identity
+    standalone: it can't change later).
+ 2. A Space for your App. The owner (or an admin) gives your workspace
+    "Manage Sew" once: k2 agent access set <your workspace> chat_manage on.
+    Then you run:
+      k2 chat space create <slug> --name "<Name>"   (the box owner owns it;
+                          you get manage access; the answer shows space.id)
+      k2 hostchat app-space bind <app> <space-id>
+    A person is in your bound Space while they hold your App's login AND
+    chat (step 4). No k2 hostchat people step for App users; Connect owners
+    and admins are never added by role.
+ 3. Chat caps on the person's role (App-wide; any one room line counts):
+      k2 app role list                        (the line's current caps)
+      k2 app role room <role> <room> --caps <current caps>,chat:read,chat:post
+    --caps REPLACES the line, so keep what it had. chat:respond (answer
+    cards), voice:join and voice:video (calls) are the other chat caps.
+    The owner, or you with "Let this agent manage its Apps' users".
+ 4. The person gets chat. k2 hostchat home shows "app-scoped sessions":
+    no (today): only the owner gives chat, with
+        k2 app user chat <username> member --app <app>
+      and must hear first: "this App can see all chat this person can"
+      (Sew doesn't keep your App's sessions to your Spaces yet).
+    yes: the owner runs k2 app grant <app> --kind guests-chat [--max N]
+      once; then your server gives chat itself:
+        k2.asApp().guests.setChat({username, scope: 'member'})
+      (or you: k2 app user chat <username> member --app <app>). Chat the
+      owner gave stays the owner's: your App can't change or remove it.
+    Use k2 app user chat, not k2 app grant add --kind chat.
+ 5. Check: k2 app user chat <username> --app <app> → member, chat id.
+ 6. Your server signs them in to chat (the SDK: k2 study app-api):
+      k2.withGuest(s, () => k2.chat.pass())  → Sew POST /api/v1/auth/k2
+    Right after step 4, Sew may answer not_provisioned for a few seconds:
+    retry.
+
+MANIFEST. requires {sew: ">=0.3.1"}, boxServices sew-api and sew-signal,
+caps chat:read chat:post (K2 gates on Sew's flags, never on this number).
+Your next deploy is held until the owner approves them (k2 app approvals),
+unless the owner ticked your workspace's Sew core (k2 app access <ws>
+--core sew=on): then the chat caps go through at once.
+
+CEILING. A person's pass caps = role chat caps ∩ your manifest's (as
+approved), chat:read added. It never grants: Sew's roles decide inside a Space. A
+role with none of your chat caps → 403 no_chat_caps.
+
+VOICE AND CALLS for a custom App come with Sew 0.4.1: they need Sew's
+app_origin flag ("app origin" in k2 hostchat home). Don't promise calls
+before it shows. Then: the owner turns voice on (k2 hostchat media
+install), you add voice:join (voice:video) to the manifest and the role,
+and requires {voice: true}. K2 tells Sew your App's own wss:// origin
+itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
+
+YOUR SERVER (never the browser):
+  chat.member({principal})  GET /cli/sew/app/member → memberId (DMs, calls,
+      mentions). Your App's own pass needs chat:read (its manifest caps).
+  chat.whois({memberIds})   POST /cli/sew/app/whois (≤100) → your users in
+      full; anyone else only {memberId, kind, isThisAppUser: false}.
+  guests.chat / guests.setChat  GET|POST /cli/skin/guests/chat (step 4).
+Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
+calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
+on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.
+
+NEVER Sew's mgmt socket, Postgres, keys, TURN secret, /etc/sew or
+Sew-On-Behalf-Of. Agents never join calls (k2 chat for them).
+
+ERRORS chat_not_app_scoped (step 4: the owner gives chat) · Sew's
+not_provisioned (retry a few seconds after step 4) · grant_required
+· app_pass_required · cap_not_granted · not_found (not your user) ·
+no_chat_member · no_chat_grant · no_chat_caps · not_app_granted ·
+chat_off_for_person · shared_person · has_assistants · chat_limit ·
+username_unusable (2–64 a-z 0-9 _ -, not here/channel/everyone/all) ·
+chat_unavailable · rate_limited (60/min per App).
+
+HOME. The owner's home client (k2 hostchat home client <app>, usually
+Hearth) sees every Space a person is in; k2 hostchat home app <app>
+--hidden on keeps an App out of it. Both wait for Sew's home_client flag.
+Recording is off by default. Guide: docs/app-chat-sew.md.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

@@ -121,6 +121,10 @@ pub enum Refusal {
     /// this person's credentials, and a chat grant is box-wide, so no chat
     /// pass until their own password reset drops the tie.
     TiedPendingReset { actor: String },
+    /// 403 `no_chat_caps` (Sew for Apps A1): the App declares chat caps in
+    /// its manifest, and this person's App role holds none of them that
+    /// the owner approved for the App. Never an uncapped pass instead.
+    NoChatCaps { actor: String },
     /// 503 `chat_unavailable` (a store failed).
     Unavailable(String),
 }
@@ -135,9 +139,8 @@ pub fn owner_sid(owner_token: &str) -> String {
 }
 
 /// The App-role caps a pass may carry: the session snapshot's caps that
-/// are chat caps. Today's App roles hold only room caps (`thread:*`, …;
-/// `parse_caps` refuses `chat:*`), so this is empty until K9 adds the App
-/// caps column; the plumbing passes them through once they exist.
+/// are chat caps (Sew for Apps A1: an App role lists them on any room
+/// line; the snapshot is the union), in [`super::CHAT_CAPS`] order.
 pub fn chat_caps_of(snapshot_caps: &[String]) -> Vec<String> {
     let mut out: Vec<String> = super::CHAT_CAPS
         .iter()
@@ -146,6 +149,40 @@ pub fn chat_caps_of(snapshot_caps: &[String]) -> Vec<String> {
         .collect();
     out.dedup();
     out
+}
+
+/// What an App's own manifest says about chat (Sew for Apps A1, the
+/// manifest ceiling): `effective = manifest ∩ owner-approved ∩ role`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppChatCeiling {
+    /// No runtime App behind the login (the box login `host`, a published
+    /// `--cmd` service, a test): the role's own chat caps stand.
+    NotManaged,
+    /// The App's live manifest names no chat cap (Hearth and Meet before
+    /// they declare any): the role's own chat caps stand, as before A1.
+    NotDeclared,
+    /// The App asks for these chat caps and the owner approved them (a
+    /// suspended App, or one whose chat caps wait for approval, is
+    /// `Declared([])`).
+    Declared(Vec<String>),
+}
+
+/// The caps a pass carries for a role's `role_chat` under the App's
+/// ceiling. `Err(())` = the App declares chat caps and nothing is left:
+/// refuse (`no_chat_caps`), because an empty list would mint a pass with
+/// no `caps` claim, which Sew reads as no ceiling at all.
+pub fn narrow_to_app(role_chat: &[String], ceiling: &AppChatCeiling) -> Result<Vec<String>, ()> {
+    match ceiling {
+        AppChatCeiling::NotManaged | AppChatCeiling::NotDeclared => Ok(role_chat.to_vec()),
+        AppChatCeiling::Declared(allowed) => {
+            let out: Vec<String> = role_chat.iter().filter(|c| allowed.iter().any(|a| a == *c)).cloned().collect();
+            if out.is_empty() {
+                Err(())
+            } else {
+                Ok(out)
+            }
+        }
+    }
 }
 
 /// A Connect login's identity under the ruling `owner_connect_is_k2_owner`.
@@ -237,13 +274,22 @@ pub fn classify_with(bearer: &str, owner_token: &str, owner_connect_is_k2_owner:
             Ok(Some(_)) => return Err(Refusal::TiedPendingReset { actor }),
             Err(e) => return Err(Refusal::Unavailable(e)),
         }
+        // A1: the role's chat caps under the App's own manifest ceiling.
+        let ceiling = if pass.app == k2_core::skin::HOST_APP_ID {
+            AppChatCeiling::NotManaged
+        } else {
+            crate::apps::grants::chat_ceiling(&pass.app).map_err(Refusal::Unavailable)?
+        };
+        let Ok(caps) = narrow_to_app(&chat_caps_of(&pass.caps), &ceiling) else {
+            return Err(Refusal::NoChatCaps { actor });
+        };
         return Ok(PassIdentity {
             sub: format!("k2:principal:{principal_id}"),
             sid: k2_core::sew_revoke::skin_sid(&pass.id),
             actor,
             provenance: Provenance::AppSession,
             sew_role: SewRole::Member,
-            caps: chat_caps_of(&pass.caps),
+            caps,
             app: Some(pass.app.clone()),
         });
     }

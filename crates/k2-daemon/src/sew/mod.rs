@@ -40,6 +40,7 @@
 //!   routes).
 
 pub mod health;
+pub mod home;
 pub mod meet;
 pub mod ops;
 pub mod routes;

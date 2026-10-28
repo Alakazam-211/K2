@@ -1195,7 +1195,8 @@ pub const APP_CORES: &[&str] = &["db", "files", "thread", "mail", "sew"];
 /// a person's grant (never implied by a core), `files:upload` (0.46.4) is
 /// per role only (never implied by a core), and unknown caps are never
 /// carried.
-/// Mail and Sew have no App caps yet (MCS11–12, the Sew App slice).
+/// Mail has no App caps yet (MCS11–12). Sew's are the chat caps (Sew for
+/// Apps A1, 0.46.6: `chat:*`, `voice:join`, `voice:video`).
 pub fn app_core_of_cap(cap: &str) -> Option<&'static str> {
     use crate::skin::*;
     match cap.trim() {
@@ -1213,6 +1214,7 @@ pub fn app_core_of_cap(cap: &str) -> Option<&'static str> {
             Some("thread")
         }
         c if c == CAP_STORE_READ || c == CAP_STORE_WRITE => Some("db"),
+        c if is_chat_cap(c) => Some("sew"),
         _ => None,
     }
 }

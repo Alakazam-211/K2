@@ -237,7 +237,8 @@ pub fn classify(
             body: resp.body_text(),
             reconcile: false,
         },
-        404 if op == Op::Update => Outcome::Done {
+        // A3: no such member (yet, or any more): the sweep re-plans.
+        404 if matches!(op, Op::Update | Op::AvatarSet | Op::AvatarClear) => Outcome::Done {
             status,
             body: resp.body_text(),
             reconcile: true,
@@ -343,6 +344,12 @@ fn path_for(op: Op) -> &'static str {
         // K31 (SW13): App Space membership.
         Op::SpaceMemberAdd => sew_wire::MGMT_SPACE_MEMBERS_ADD,
         Op::SpaceMemberRemove => sew_wire::MGMT_SPACE_MEMBERS_REMOVE,
+        // A3: the set path carries `external_id` in its query ([`send_row`]).
+        Op::AvatarSet => hook::avatar::MGMT_AVATAR,
+        Op::AvatarClear => hook::avatar::MGMT_AVATAR_CLEAR,
+        // Decision 13: the App id is in the path ([`hook::home::path_for`]).
+        Op::HomeClient => hook::home::MGMT_HOME_CLIENT,
+        Op::AppSettings => "/mgmt/v1/apps/{app_id}/settings",
     }
 }
 
@@ -477,14 +484,34 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                     }
                 }
             }
-            let res = client
-                .post(
-                    path_for(op),
-                    row.payload_raw.as_bytes(),
-                    &row.idem_key,
-                    &row.actor,
-                )
-                .await;
+            let res = if op == Op::AvatarSet {
+                // A3: the raw picture, read now; a superseded row (the
+                // picture changed or went) finishes unsent.
+                let raw = row.payload_raw.clone();
+                match blocking(move || hook::avatar_bytes(&raw)).await {
+                    Ok(Some(bytes)) => {
+                        let ext = row.subject_key.clone();
+                        client
+                            .post_typed(&hook::avatar::set_path(&ext, hook::avatar::row_force(&row.payload_raw)), &bytes, hook::avatar::CONTENT_TYPE, &row.idem_key, &row.actor)
+                            .await
+                    }
+                    Ok(None) => {
+                        report.done += 1;
+                        let id = row.id.clone();
+                        blocking(move || hook::record_superseded(&id)).await?;
+                        continue;
+                    }
+                    Err(e) => {
+                        report.blocked += 1;
+                        let id = row.id.clone();
+                        blocking(move || hook::record_blocked(&id, None, &e)).await?;
+                        continue;
+                    }
+                }
+            } else {
+                let path = hook::home::path_for(op, &row.subject_key).unwrap_or_else(|| path_for(op).to_string());
+                client.post(&path, row.payload_raw.as_bytes(), &row.idem_key, &row.actor).await
+            };
             let now = k2_core::tool_hook::outbox::now_secs();
             let outcome = refine_space(cfg, &row, classify(cfg, &row, res.as_ref(), now));
             if visible_change(&row, &outcome) {
@@ -673,7 +700,11 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
     let k = kind.to_string();
     blocking(move || {
         hook::set_health(&k, true, None)?;
-        hook::apply_reconcile(&k, &actual).map(|_| ())
+        hook::apply_reconcile(&k, &actual)?;
+        // Decision 13: each chat App's signalling origin, then the settings
+        // Sew's feature flags say it takes (never by version).
+        crate::sew::home::refresh_origins();
+        hook::apply_settings(&k, &status.features).map(|_| ())
     })
     .await
 }

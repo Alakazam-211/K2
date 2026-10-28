@@ -10,7 +10,7 @@ use std::sync::Arc;
 use k2_core::tool_hook::ConnectChatGate;
 use k2_vault::keystore::fake::FakeKeyStore;
 use k2_vault::{Actor, AgentActor, KeyStore, LocalVault, Role, VaultError};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::handoff::{self, RedeemError};
 use super::identity::{self, Provenance, SewRole};
@@ -99,7 +99,16 @@ fn caps_claim_is_optional_closed_and_verifies() {
     assert_eq!(plain.clone().with_caps(vec![]).expect("empty").caps, None);
     assert!(plain.clone().with_caps(vec!["thread:read".into()]).is_err());
     assert!(plain.clone().with_caps(vec!["admin".into()]).is_err());
-    assert_eq!(CHAT_CAPS, ["chat:read", "chat:post", "chat:respond", "voice:join"]);
+    assert_eq!(CHAT_CAPS, ["chat:read", "chat:post", "chat:respond", "voice:join", "voice:video"]);
+    // A12: voice:video rides the claim (Sew 0.4.1 reads it; an older Sew
+    // ignores the unknown, well-formed cap).
+    let video = plain.clone().with_caps(vec!["voice:video".into(), "voice:join".into()]).expect("video");
+    assert_eq!(
+        video.caps.as_deref(),
+        Some(&["chat:read".to_string(), "voice:join".to_string(), "voice:video".to_string()][..])
+    );
+    let got = verify_with_jwks(&r.ring.sign(&video, T0).expect("sign"), &jwks, AUD, T0).expect("verifies");
+    assert_eq!(got.caps, video.caps);
 }
 
 #[test]
@@ -132,6 +141,30 @@ fn app_role_caps_pass_through_only_chat_caps() {
     let snap = vec!["thread:read".to_string(), "chat:post".into(), "voice:join".into(), "files:read".into()];
     assert_eq!(identity::chat_caps_of(&snap), vec!["chat:post".to_string(), "voice:join".into()]);
     assert!(identity::chat_caps_of(&["thread:read".to_string(), "thread:post".into()]).is_empty());
+    let snap = vec!["voice:video".to_string(), "voice:join".into()];
+    assert_eq!(identity::chat_caps_of(&snap), vec!["voice:join".to_string(), "voice:video".into()], "in CHAT_CAPS order");
+}
+
+/// A1: the App's manifest ceiling narrows a role's chat caps, never widens
+/// them; an App that declares chat caps refuses a role left with none.
+#[test]
+fn app_ceiling_narrows_role_chat_caps_a1() {
+    use identity::{narrow_to_app, AppChatCeiling};
+    let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<String>>();
+    let role = v(&["chat:post", "voice:join", "voice:video"]);
+    // No manifest (a published --cmd App, the box login) or a manifest
+    // that names no chat cap: the role's own chat caps (legacy, unchanged).
+    assert_eq!(narrow_to_app(&role, &AppChatCeiling::NotManaged), Ok(role.clone()));
+    assert_eq!(narrow_to_app(&role, &AppChatCeiling::NotDeclared), Ok(role.clone()));
+    assert_eq!(narrow_to_app(&[], &AppChatCeiling::NotDeclared), Ok(vec![]));
+    // A declared ceiling: role ∩ ceiling.
+    let c = AppChatCeiling::Declared(v(&["chat:read", "chat:post", "voice:join"]));
+    assert_eq!(narrow_to_app(&role, &c), Ok(v(&["chat:post", "voice:join"])), "voice:video isn't in the App's ceiling");
+    // Nothing left, or the owner approved none yet: refused, never an
+    // uncapped pass.
+    assert_eq!(narrow_to_app(&v(&["chat:respond"]), &c), Err(()));
+    assert_eq!(narrow_to_app(&[], &c), Err(()), "a role with no chat cap on a chat App");
+    assert_eq!(narrow_to_app(&role, &AppChatCeiling::Declared(vec![])), Err(()));
 }
 
 // ── identity ────────────────────────────────────────────────────────
@@ -742,6 +775,51 @@ fn two_apps_on_one_box_each_mint_for_their_own_guests_k_m4() {
     assert!(!mint::link_admits(&connect, meet));
 }
 
+/// Sew for Apps A1: an App role's chat caps (on any of its room lines)
+/// ride the person's pass as its `caps` ceiling, with `chat:read` added;
+/// a role without chat caps on an App with no manifest keeps the old
+/// no-claim pass.
+#[test]
+fn app_role_chat_caps_ride_the_pass_a1() {
+    let _home = TempHome::new();
+    let r = ring("a1-role");
+    let mut policy = k2_core::skin::RoomPolicy::new();
+    policy.insert("room-a".into(), vec!["thread:read".into(), "chat:post".into()]);
+    policy.insert("room-b".into(), vec!["voice:join".into(), "voice:video".into()]);
+    k2_core::skin::create_role("crew", &policy).expect("role with chat caps");
+    let cy = k2_core::skin::add_principal("cy").expect("principal");
+    k2_core::skin::insert_chat_grant_for_tests(&cy.id).expect("chat grant");
+    k2_core::skin::create_grant(&k2_core::skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: cy.id.clone(),
+        kind: "app".into(),
+        target_id: HEARTH_SVC.into(),
+        role: Some("crew".into()),
+        scope: None,
+        created_by: None,
+    })
+    .expect("app grant with the role");
+    let cy_h = k2_core::skin::create_app_session_token("cy", HEARTH_SVC).expect("cy → Hearth");
+    let plain = app_guest("dee", &[HEARTH_SVC]);
+    let dee_h = k2_core::skin::create_app_session_token("dee", HEARTH_SVC).expect("dee → Hearth");
+    let jwks = r.ring.public_jwks(T0).expect("jwks");
+    with_deps(&r, T0, false, |d| {
+        let x = mint::handle_pass_with(&req(Some(&cy_h.raw), b"{}"), d);
+        assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+        let b = body(&x);
+        let want = json!(["chat:read", "chat:post", "voice:join", "voice:video"]);
+        assert_eq!(b["caps"], want, "the role's chat caps, chat:read first: {b}");
+        let c = verify_with_jwks(b["pass"].as_str().expect("pass"), &jwks, AUD, T0).expect("verifies");
+        assert_eq!(serde_json::to_value(&c.caps).unwrap(), want, "the JWS carries the same ceiling");
+        assert_eq!(c.app.as_deref(), Some(HEARTH_SVC));
+        // No chat cap on the role, no manifest: no claim (as before A1).
+        let x = mint::handle_pass_with(&req(Some(&dee_h.raw), b"{}"), d);
+        assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+        assert!(body(&x).get("caps").is_none(), "{}", x.response.body);
+    });
+    assert!(!plain.is_empty());
+}
+
 /// Spec v1.3's `app` claim: App sessions only, in Sew's grammar; K2's
 /// service ids (lowercase UUIDs) always fit.
 #[test]
@@ -763,7 +841,9 @@ fn app_claim_is_for_app_sessions_only_and_fits_sews_grammar() {
     let host = identity::PassIdentity { app: Some(k2_core::skin::HOST_APP_ID.into()), ..app_session.clone() };
     assert_eq!(mint::app_claim(&host), None, "a box login is no App");
     let odd = identity::PassIdentity { app: Some("Svc With Spaces".into()), ..app_session.clone() };
-    assert_eq!(mint::app_claim(&odd), None, "outside Sew's grammar: left out, never refused");
+    assert_eq!(mint::app_claim(&odd), None, "outside Sew's grammar: no claim …");
+    assert!(mint::app_claim_refused(&odd), "… so the mint refuses it (decision 13: an App session always carries app)");
+    assert!(!mint::app_claim_refused(&app_session) && !mint::app_claim_refused(&host));
     for p in [Provenance::OwnerToken, Provenance::ConnectLogin, Provenance::OwnerHandoff] {
         let i = identity::PassIdentity { provenance: p, ..app_session.clone() };
         assert_eq!(mint::app_claim(&i), None, "{p:?}");

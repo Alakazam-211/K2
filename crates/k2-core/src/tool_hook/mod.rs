@@ -39,7 +39,11 @@
 //!   [`kick_reconcile`] and the sweep fixes the drift.
 
 pub mod app_space;
+pub mod avatar;
 pub mod chat;
+pub mod features;
+pub mod home;
+pub mod members;
 pub mod outbox;
 pub mod reconcile;
 pub mod sew_wire;
@@ -89,6 +93,17 @@ pub enum Op {
     SpaceMemberAdd,
     /// K31: remove one person from an App's Sew Space.
     SpaceMemberRemove,
+    /// Sew for Apps A3: push the person's K2 picture
+    /// (`POST /mgmt/v1/principals/avatar`, raw JPEG; [`avatar`]).
+    AvatarSet,
+    /// Sew for Apps A3: clear it (`POST /mgmt/v1/principals/avatar/clear`).
+    AvatarClear,
+    /// Decision 13: the install's home client (`POST /mgmt/v1/home-client`;
+    /// [`home`]).
+    HomeClient,
+    /// Decision 13: one App's `hidden_from_home` and label
+    /// (`POST /mgmt/v1/apps/{app_id}/settings`).
+    AppSettings,
 }
 
 impl Op {
@@ -101,6 +116,10 @@ impl Op {
             Op::SewSessionRevoke => "sew_session_revoke",
             Op::SpaceMemberAdd => "space_member_add",
             Op::SpaceMemberRemove => "space_member_remove",
+            Op::AvatarSet => "avatar_set",
+            Op::AvatarClear => "avatar_clear",
+            Op::HomeClient => "home_client",
+            Op::AppSettings => "app_settings",
         }
     }
 
@@ -113,6 +132,10 @@ impl Op {
             "sew_session_revoke" => Op::SewSessionRevoke,
             "space_member_add" => Op::SpaceMemberAdd,
             "space_member_remove" => Op::SpaceMemberRemove,
+            "avatar_set" => Op::AvatarSet,
+            "avatar_clear" => Op::AvatarClear,
+            "home_client" => Op::HomeClient,
+            "app_settings" => Op::AppSettings,
             _ => return None,
         })
     }
@@ -120,7 +143,7 @@ impl Op {
     /// The ops the worker delivers. S28's session revoke joined in 0.46.1
     /// (plan B7: "S28 adds its op to `Op::DELIVERED`"); K31's App Space
     /// membership ops ride the same worker.
-    pub const DELIVERED: [Op; 7] = [
+    pub const DELIVERED: [Op; 11] = [
         Op::Provision,
         Op::Update,
         Op::Deprovision,
@@ -128,6 +151,10 @@ impl Op {
         Op::SewSessionRevoke,
         Op::SpaceMemberAdd,
         Op::SpaceMemberRemove,
+        Op::AvatarSet,
+        Op::AvatarClear,
+        Op::HomeClient,
+        Op::AppSettings,
     ];
 
     /// K31's App Space membership ops.
@@ -911,6 +938,10 @@ pub fn apply_reconcile(
         let tx = conn
             .unchecked_transaction()
             .map_err(|e| format!("reconcile begin: {e}"))?;
+        // A6: Sew's list is canonical for member ids (the identity map).
+        if kind == CHAT_KIND {
+            members::reconcile(&tx, actual, now)?;
+        }
         let built = reconcile::build_desired(&tx, &ctx)?;
         let mut orphan_ops = Vec::new();
         for (g, cause) in &built.orphans {
@@ -937,6 +968,9 @@ pub fn apply_reconcile(
                 );
             }
             ops.extend(space_ops);
+            // A3: pictures Sew doesn't show yet (after the member ops, on
+            // each member's own queue).
+            ops.extend(avatar::plan(&tx, &busy)?);
         }
         let ids = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?;
         let summary_json = serde_json::to_value(&summary).unwrap_or_default();
@@ -951,6 +985,124 @@ pub fn apply_reconcile(
     })?;
     kick();
     Ok(summary)
+}
+
+// ── Decision 13: home client and per-App settings ────────────────────
+
+/// The sweep's settings step: record the feature flags Sew reported
+/// (`features` from its status; never its version), then queue the
+/// settings it can take and doesn't have yet. Returns the rows queued.
+pub fn apply_settings(kind: &str, sew_features: &[String]) -> Result<usize, String> {
+    if kind != CHAT_KIND {
+        return Ok(0);
+    }
+    let now = outbox::now_secs();
+    let n = crate::skin::with_skin_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("settings begin: {e}"))?;
+        if features::note(&tx, kind, sew_features, now)? {
+            crate::log_debug!("[grant-hook] Sew features: {}", sew_features.join(","));
+        }
+        let busy = outbox::busy_subjects(&tx, kind)?;
+        let ops = home::plan(&tx, &busy)?;
+        let n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
+        tx.commit().map_err(|e| format!("settings commit: {e}"))?;
+        Ok(n)
+    })?;
+    if n > 0 {
+        kick();
+    }
+    Ok(n)
+}
+
+/// Did the box's Sew report `flag` in its last status ([`features`])?
+/// `false` before any sweep, or on a box without Sew.
+pub fn sew_has(flag: &str) -> Result<bool, String> {
+    if !skin_store_exists() {
+        return Ok(false);
+    }
+    crate::skin::with_skin_conn(|conn| features::has(conn, CHAT_KIND, flag))
+}
+
+/// Every flag the box's Sew last reported (empty before any sweep).
+pub fn sew_features() -> Result<Vec<String>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(|conn| features::list(conn, CHAT_KIND))
+}
+
+/// Tests: as if Sew's status had reported `flags`.
+#[cfg(any(test, feature = "test-util"))]
+pub fn note_features_for_tests(flags: &[&str]) -> Result<(), String> {
+    let f: Vec<String> = flags.iter().map(|s| s.to_string()).collect();
+    crate::skin::with_skin_conn(|conn| features::note(conn, CHAT_KIND, &f, outbox::now_secs()).map(|_| ()))
+}
+
+/// Record the signalling origins of `apps` (`(service id, wss origin or
+/// None, label)`, computed by the daemon from the App's bindings) before
+/// the sweep plans settings. Returns how many changed.
+pub fn note_app_origins(apps: &[(String, Option<String>, String)]) -> Result<usize, String> {
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| {
+        let mut n = 0;
+        for (app, origin, name) in apps {
+            if home::set_app_origin(conn, app, origin.as_deref(), name, ACTOR_RECONCILE, now)? {
+                n += 1;
+            }
+        }
+        Ok(n)
+    })
+}
+
+/// The Apps the sweep keeps an origin for: those bound to a Sew Space,
+/// those with the owner's guests-chat grant, and those with settings.
+pub fn chat_apps() -> Result<Vec<String>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(|conn| {
+        let mut out: Vec<String> = app_space::bindings(conn)?.into_iter().map(|b| b.app_id).collect();
+        let mut st = conn.prepare("SELECT service_id FROM app_chat_grants").map_err(|e| format!("chat apps: {e}"))?;
+        let g = st
+            .query_map([], |r| r.get::<_, String>(0))
+            .map_err(|e| format!("chat apps: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("chat apps: {e}"))?;
+        out.extend(g);
+        out.extend(home::apps(conn)?);
+        out.sort();
+        out.dedup();
+        Ok(out)
+    })
+}
+
+/// The owner's settings, as stored (`GET /cli/sew/home`).
+pub fn home_settings() -> Result<Vec<home::Setting>, String> {
+    if !skin_store_exists() {
+        return Ok(Vec::new());
+    }
+    crate::skin::with_skin_conn(home::list)
+}
+
+/// Set (`Some`) or clear the home client; the next sweep delivers it.
+pub fn set_home_client(app_id: Option<&str>, actor: &str) -> Result<bool, String> {
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| home::set_home_client(conn, app_id, actor, now))?;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
+}
+
+/// Set an App's `hidden_from_home` (and its label); the next sweep
+/// delivers it.
+pub fn set_app_home(app_id: &str, hidden: bool, display_name: &str, actor: &str) -> Result<bool, String> {
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| home::set_app(conn, app_id, hidden, display_name, actor, now))?;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
 }
 
 // ── K31: App Space bindings ──────────────────────────────────────────
@@ -1041,6 +1193,12 @@ pub fn note_install_id(kind: &str, install_id: &str) -> Result<bool, String> {
                 })
                 .collect();
             outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?;
+            // A3: the new install has no picture K2 pushed; A6: every
+            // member id changed.
+            avatar::forget_all(&tx)?;
+            members::forget_all(&tx)?;
+            // Decision 13: the new install owes every setting again.
+            home::forget_sent(&tx)?;
         }
         tx.commit().map_err(|e| format!("install id commit: {e}"))?;
         Ok(changed)
@@ -1063,9 +1221,36 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
     let now = outbox::now_secs();
     crate::skin::with_skin_conn(|conn| {
         outbox::mark_done(conn, id, status as i64, Some(result), now)?;
+        // A3: a delivered picture is what Sew shows now.
+        avatar::after_done(conn, id, now)?;
+        // A6: a delivered provision/deprovision moves the identity map on.
+        members::after_done(conn, id, result, now)?;
+        // Decision 13: Sew has that settings rev now.
+        home::after_done(conn, id)?;
         // K31: a delivered Space op moves the membership ledger on.
         app_space::after_done(conn, id, now)
     })
+}
+
+/// A3: an `avatar_set` row whose picture changed before it went: finished
+/// unsent (`superseded`; the newer row behind it carries the picture).
+pub fn record_superseded(id: &str) -> Result<(), String> {
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| {
+        conn.execute(
+            "UPDATE tool_outbox SET state = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![outbox::STATE_SUPERSEDED, now, id],
+        )
+        .map(|_| ())
+        .map_err(|e| format!("tool_outbox supersede: {e}"))
+    })
+}
+
+/// A3: the picture an `avatar_set` row sends, read at send time (`None` =
+/// superseded: the picture changed or went since the row was queued).
+pub fn avatar_bytes(payload_raw: &str) -> Result<Option<Vec<u8>>, String> {
+    let v: serde_json::Value = serde_json::from_str(payload_raw).map_err(|e| format!("avatar row payload: {e}"))?;
+    crate::skin::with_skin_conn(|conn| avatar::picture_for_send(conn, &v))
 }
 
 /// A8: store the filled provision body (or just the mark, when nothing
@@ -1153,6 +1338,26 @@ pub fn prune() -> Result<usize, String> {
     }
     let now = outbox::now_secs();
     crate::skin::with_skin_conn(|conn| outbox::prune(conn, now))
+}
+
+/// A6: one mapped member by external id (`k2:principal:<id>` …).
+pub fn chat_member(ext: &str) -> Result<Option<members::MemberRow>, String> {
+    if !skin_store_exists() {
+        return Ok(None);
+    }
+    crate::skin::with_skin_conn(|conn| members::by_external_id(conn, ext))
+}
+
+/// Tests: map `ext` ↔ `member_id` directly (as a delivered provision would).
+#[cfg(any(test, feature = "test-util"))]
+pub fn map_member_for_tests(ext: &str, member_id: &str, kind: &str, username: &str, state: &str) -> Result<(), String> {
+    crate::skin::with_skin_conn(|conn| members::upsert(conn, ext, member_id, kind, Some(username), state, outbox::now_secs()))
+}
+
+/// Tests: make `ext` a tombstone directly.
+#[cfg(any(test, feature = "test-util"))]
+pub fn tombstone_member_for_tests(ext: &str) -> Result<(), String> {
+    crate::skin::with_skin_conn(|conn| members::tombstone(conn, ext, outbox::now_secs()))
 }
 
 /// Tests: every pending row due now.

@@ -145,6 +145,11 @@ export const FEATURES = {
    *  offers the cap only at or above this (an older server refuses the
    *  unknown cap). Confirm at the release cut. */
   'thread-download': '0.46.3',
+  /** Sew for Apps A1 (0.46.6): the App role chat caps (`chat:read|post|
+   *  respond`, `voice:join`, `voice:video`). Settings → User Access offers
+   *  them on role lines only at or above this (an older server refuses an
+   *  unknown cap). Confirm at the release cut. */
+  'app-chat-caps': '0.46.6',
   /** App phone pairing (prd-app-phone-pairing-v1, 0.46.5): `/cli/app/pairing*`
    *  and the Settings → Apps → <App> → Phones card. Confirm at the release cut. */
   'app-phone-pairing': '0.46.5',

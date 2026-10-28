@@ -7871,6 +7871,10 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Set/reset K2-login password (empty stdin clears)
   k2 app user unlock <username> [--json]
                                         Clear an app guest login lock (does not change the password)
+  k2 app user chat <username> [member|guest|none] [--app <app>] [--json]
+                                        A person's chat (their Sew account, k2:principal:<id>); no scope = show it.
+                                        The owner: anyone (--app: that App's user). An agent: its own App's
+                                        users under its guests-chat grant, once Sew has app_scoped_sessions.
   k2 app user list                     Roster (username  full name|—  role|—  rooms|—  email|—  [agent:<ws>] [waiting for reset: set up by <ws>'s agent]; no secrets)
   k2 app user remove <username>        Drop principal + login sessions (platform tokens survive)
   k2 app user rooms <username> --agent sales [--apply-tokens] [--app <app>]
@@ -7886,6 +7890,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         files:write never reaches the agent's .k2/ folder unless you add
                                         files:agentconfig too (owner only; not recommended). k2 study apps.
                                         files:upload = drop files into --upload folders, never see them.
+                                        Chat caps (App-wide; any room line counts): chat:read, chat:post,
+                                        chat:respond, voice:join, voice:video (needs voice:join). They cap the
+                                        person's Sew chat pass; Sew's roles still decide. k2 study app-chat.
   k2 app role room <role> <handle> --clear
                                         Drop that room from the role
   k2 app role paths <role> <room> [--read jobs/J1/,jobs/J3/] [--write jobs/J1/in/] [--upload Inbox/] [--upload-dir jobs/J1/in]
@@ -7908,6 +7915,7 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Thread-only rooms). --target: host, a service id, or <workspace>/<name>.
                                         Other kinds need --scope and no --role (recorded, not enforced).
   k2 app grant add --kind chat --subject-kind principal --subject <username|id> [--scope member|guest]
+                                        (an App's user: k2 app user chat <user> member --app <app> instead)
   k2 app grant add --kind chat --subject-kind workspace --subject <handle|id> --scope coworker|assistant:<username|owner>
   k2 app grant add --kind chat --subject-kind connect --subject <login|id> [--scope member|guest]
                                         chat grants create the person's or agent's Sew account (Linux, Sew enabled);
@@ -7942,6 +7950,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         owner; or the App's own agent in its own room with "Let this
                                         agent manage its Apps' users" (else, or another workspace's
                                         room, one held request: a card for the owner, exit 2).
+  k2 app grant <app> --kind guests-chat [--max N] [--revoke]
+                                        Lets <app> give its own users chat (the owner only; works once Sew has
+                                        app_scoped_sessions: k2 hostchat home). k2 study app-chat.
   k2 app guest rooms <app> <user> [set <room,...>]
                                         Read/set one guest's rooms on <app> (owner; an agent within the grant).
                                         k2 app guest --help.
@@ -10341,6 +10352,98 @@ AFTERWARDS
   k2 app handover finish <app>     end the undo window (B after a deploy)
   k2 app handover undo <app>       the owner, within 72 hours
   The agent that takes it gets "Apps you maintain" in its context.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+EOF
+}
+
+_study_page_app_chat() {
+    cat <<'EOF'
+k2 study app-chat — Chat, voice and calls in your App (Sew for Apps)
+
+ONE IDENTITY. Your App user IS their chat user: K2 makes their Sew member
+k2:principal:<principalId>. No chat sign-up, no link step. Store principal
+ids, never emails. Their name and picture in chat are K2's (profile display
+name, else full name, else username); never edit them in Sew.
+
+GIVE ONE APP USER CHAT (in order; <app> = your App's id or name, k2 app list):
+ 1. Sew is on in K2 mode: k2 hostchat status shows "identity: k2". If Sew
+    isn't installed, the owner runs k2 hostchat enable (never --identity
+    standalone: it can't change later).
+ 2. A Space for your App. The owner (or an admin) gives your workspace
+    "Manage Sew" once: k2 agent access set <your workspace> chat_manage on.
+    Then you run:
+      k2 chat space create <slug> --name "<Name>"   (the box owner owns it;
+                          you get manage access; the answer shows space.id)
+      k2 hostchat app-space bind <app> <space-id>
+    A person is in your bound Space while they hold your App's login AND
+    chat (step 4). No k2 hostchat people step for App users; Connect owners
+    and admins are never added by role.
+ 3. Chat caps on the person's role (App-wide; any one room line counts):
+      k2 app role list                        (the line's current caps)
+      k2 app role room <role> <room> --caps <current caps>,chat:read,chat:post
+    --caps REPLACES the line, so keep what it had. chat:respond (answer
+    cards), voice:join and voice:video (calls) are the other chat caps.
+    The owner, or you with "Let this agent manage its Apps' users".
+ 4. The person gets chat. k2 hostchat home shows "app-scoped sessions":
+    no (today): only the owner gives chat, with
+        k2 app user chat <username> member --app <app>
+      and must hear first: "this App can see all chat this person can"
+      (Sew doesn't keep your App's sessions to your Spaces yet).
+    yes: the owner runs k2 app grant <app> --kind guests-chat [--max N]
+      once; then your server gives chat itself:
+        k2.asApp().guests.setChat({username, scope: 'member'})
+      (or you: k2 app user chat <username> member --app <app>). Chat the
+      owner gave stays the owner's: your App can't change or remove it.
+    Use k2 app user chat, not k2 app grant add --kind chat.
+ 5. Check: k2 app user chat <username> --app <app> → member, chat id.
+ 6. Your server signs them in to chat (the SDK: k2 study app-api):
+      k2.withGuest(s, () => k2.chat.pass())  → Sew POST /api/v1/auth/k2
+    Right after step 4, Sew may answer not_provisioned for a few seconds:
+    retry.
+
+MANIFEST. requires {sew: ">=0.3.1"}, boxServices sew-api and sew-signal,
+caps chat:read chat:post (K2 gates on Sew's flags, never on this number).
+Your next deploy is held until the owner approves them (k2 app approvals),
+unless the owner ticked your workspace's Sew core (k2 app access <ws>
+--core sew=on): then the chat caps go through at once.
+
+CEILING. A person's pass caps = role chat caps ∩ your manifest's (as
+approved), chat:read added. It never grants: Sew's roles decide inside a Space. A
+role with none of your chat caps → 403 no_chat_caps.
+
+VOICE AND CALLS for a custom App come with Sew 0.4.1: they need Sew's
+app_origin flag ("app origin" in k2 hostchat home). Don't promise calls
+before it shows. Then: the owner turns voice on (k2 hostchat media
+install), you add voice:join (voice:video) to the manifest and the role,
+and requires {voice: true}. K2 tells Sew your App's own wss:// origin
+itself (k2 hostchat media url is the box-wide voice URL Hearth uses).
+
+YOUR SERVER (never the browser):
+  chat.member({principal})  GET /cli/sew/app/member → memberId (DMs, calls,
+      mentions). Your App's own pass needs chat:read (its manifest caps).
+  chat.whois({memberIds})   POST /cli/sew/app/whois (≤100) → your users in
+      full; anyone else only {memberId, kind, isThisAppUser: false}.
+  guests.chat / guests.setChat  GET|POST /cli/skin/guests/chat (step 4).
+Proxy /sew/* (sews_ bearer), the gateway WS (sewtk_ ticket) and, for
+calls, wss://<your origin>/rtc/v1 → K2_BOX_SEW_SIGNAL. Exact Origin + Host
+on every POST and upgrade; __Host- cookie; CSP connect-src 'self'.
+
+NEVER Sew's mgmt socket, Postgres, keys, TURN secret, /etc/sew or
+Sew-On-Behalf-Of. Agents never join calls (k2 chat for them).
+
+ERRORS chat_not_app_scoped (step 4: the owner gives chat) · Sew's
+not_provisioned (retry a few seconds after step 4) · grant_required
+· app_pass_required · cap_not_granted · not_found (not your user) ·
+no_chat_member · no_chat_grant · no_chat_caps · not_app_granted ·
+chat_off_for_person · shared_person · has_assistants · chat_limit ·
+username_unusable (2–64 a-z 0-9 _ -, not here/channel/everyone/all) ·
+chat_unavailable · rate_limited (60/min per App).
+
+HOME. The owner's home client (k2 hostchat home client <app>, usually
+Hearth) sees every Space a person is in; k2 hostchat home app <app>
+--hidden on keeps an App out of it. Both wait for Sew's home_client flag.
+Recording is off by default. Guide: docs/app-chat-sew.md.
 
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 EOF
@@ -14499,6 +14602,15 @@ without the owner token.
   k2 app grant <app> --kind guests-rooms --revoke
                                        Take it back (an agent may, for its own
                                        App: it only narrows).
+  k2 app grant <app> --kind guests-chat [--max N] [--revoke]
+                                       Sew for Apps (0.46.6): lets <app> give its
+                                       own guests chat (member|guest|none) with its
+                                       own pass (POST /cli/skin/guests/chat,
+                                       k2.asApp().guests.setChat), up to N people
+                                       (default 100). The owner only. Works once Sew
+                                       has app_scoped_sessions (k2 hostchat home);
+                                       until then this App can see all chat its
+                                       people can. k2 study app-chat.
   k2 app grants <app> [--json]         The App's owner grants.
   k2 app guest rooms <app> <user> [--json]
                                        One guest's rooms on <app> and its role.
@@ -14590,10 +14702,41 @@ if "changed" in v and "before" in v:
 print(line)'
 }
 
-cmd_app_grant_kind() {
-    local app="" kind="" revoke=0 json_out=0 rooms_csv=""
+# k2 agent access set <workspace> chat_manage on|off (Sew for Apps, 0.46.6):
+# "Manage Sew" for one workspace's agent. The owner or an admin (the daemon
+# refuses an agent: it never loosens its own access).
+cmd_agent_access() {
+    local usage="usage: k2 agent access set <workspace> chat_manage on|off [--json]"
+    case "${1:-}" in
+        -h|--help|"") echo "$usage"; echo "  chat_manage = \"Manage Sew\": the agent may run Sew here, create Spaces and bind them to its Apps."; [ -z "${1:-}" ] && exit 2; return 0 ;;
+        set) shift ;;
+        *) echo "$usage" >&2; exit 2 ;;
+    esac
+    local ws="" toggle="" value="" json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) echo "$usage"; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; echo "$usage" >&2; exit 2 ;;
+            *) if [ -z "$ws" ]; then ws="$1"; elif [ -z "$toggle" ]; then toggle="$1"; elif [ -z "$value" ]; then value="$1"; else echo "$usage" >&2; exit 2; fi; shift ;;
+        esac
+    done
+    [ -n "$ws" ] && [ "$toggle" = chat_manage ] || { echo "$usage" >&2; exit 2; }
+    case "$value" in on|off) ;; *) echo "$usage" >&2; exit 2 ;; esac
+    _compute_call POST /cli/agent-access/set "$(_compute_json K2_CJ_workspace="$ws" K2_CJ_toggle=chat_manage K2_CJ_value_b="$([ "$value" = on ] && echo 1 || echo 0)")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("Manage Sew is %s for %s" % ("on" if v.get("agentsCanManageChat") else "off", v.get("workspace")))'
+}
+
+cmd_app_grant_kind() {
+    local app="" kind="" revoke=0 json_out=0 rooms_csv="" max=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --max) max="${2:-}"; shift 2 ;;
             --kind) kind="${2:-}"; shift 2 ;;
             --kind=*) kind="${1#--kind=}"; shift ;;
             --room|--agent) rooms_csv="${rooms_csv:+$rooms_csv,}${2:-}"; shift 2 ;;
@@ -14607,6 +14750,7 @@ cmd_app_grant_kind() {
     done
     if [ -z "$app" ] || [ -z "$kind" ]; then
         echo "usage: k2 app grant <app> --kind guests-rooms [--room <handle>]... [--revoke]" >&2
+        echo "       k2 app grant <app> --kind guests-chat [--max N] [--revoke]" >&2
         exit 2
     fi
     if [ "$revoke" = 1 ]; then
@@ -14616,7 +14760,21 @@ cmd_app_grant_kind() {
 import json, sys
 v = json.load(sys.stdin)
 a = v["app"]
-print("%s: guests-rooms grant %s" % (a.get("handle") or a.get("serviceId"), "revoked" if v.get("revoked") else "was not there"))'
+print("%s: %s grant %s" % (a.get("handle") or a.get("serviceId"), sys.argv[1], "revoked" if v.get("revoked") else "was not there"))' "$kind"
+        return 0
+    fi
+    if [ "$kind" = guests-chat ]; then
+        _app_rt_post /cli/app/grant "$(_compute_json K2_CJ_app="$app" K2_CJ_kind="$kind" K2_CJ_maxMembers_n="$max")"
+        [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+a, g = v["app"], v["grant"]
+print("%s may give its own guests chat: up to %s people (k2 app user chat <user> member|guest|none --app %s)" % (a.get("handle") or a.get("serviceId"), g.get("maxMembers"), a.get("name")))
+print("  its server: GET|POST /cli/skin/guests/chat with its own pass (k2.asApp().guests.setChat)")
+if v.get("warning"):
+    print("  note: %s; until Sew has app_scoped_sessions the App cannot give chat itself (chat_not_app_scoped)" % v["warning"])'
         return 0
     fi
     local rooms_j
@@ -14656,7 +14814,8 @@ gs = v.get("grants") or []
 if not gs:
     print("%s: no owner grants (k2 app grant %s --kind guests-rooms, the owner)" % (a.get("handle"), a.get("name"))); sys.exit(0)
 for g in gs:
-    print("%s  %s  hands out %s  by %s %s" % (a.get("handle"), g["kind"], ", ".join(g.get("handsOut") or []), g.get("grantedBy"),
+    what = ("up to %s people" % g.get("maxMembers")) if g["kind"] == "guests-chat" else ("hands out " + ", ".join(g.get("handsOut") or []))
+    print("%s  %s  %s  by %s %s" % (a.get("handle"), g["kind"], what, g.get("grantedBy"),
         time.strftime("%Y-%m-%d %H:%M", time.localtime(g["grantedAt"]))))'
 }
 
@@ -15218,6 +15377,46 @@ print(json.dumps({"username": os.environ["K2_SKIN_USER"], "password": os.environ
 import json,sys
 d=json.load(sys.stdin)
 print("Skin password %s for %s" % ("set" if d.get("hasPassword") else "cleared", d.get("username","")))'
+                    ;;
+                chat)
+                    # Sew for Apps A2 (0.46.6): a person's chat (their Sew
+                    # account). The owner: anyone; an agent: its own App's
+                    # guests (--app) within that App's guests-chat grant.
+                    local username="" scope="" app="" json_out=0
+                    while [[ $# -gt 0 ]]; do
+                        case "$1" in
+                            --app) app="${2:-}"; shift 2 ;;
+                            --json) json_out=1; shift ;;
+                            --help|-h) echo "Usage: k2 app user chat <username> [member|guest|none] [--app <app>] [--json]" >&2; exit 0 ;;
+                            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+                            *) if [[ -z "$username" ]]; then username="$1"; elif [[ -z "$scope" ]]; then scope="$1"; else echo "Unexpected: $1" >&2; exit 2; fi; shift ;;
+                        esac
+                    done
+                    [[ -z "$username" ]] && { echo "Usage: k2 app user chat <username> [member|guest|none] [--app <app>] [--json]" >&2; exit 2; }
+                    if [[ -z "$scope" ]]; then
+                        local q="username=$(urlencode "$username")"
+                        [[ -n "$app" ]] && q="$q&app=$(urlencode "$app")"
+                        _compute_call GET /cli/app/guest/chat "$q"
+                    else
+                        case "$scope" in member|guest|none) ;; *) echo "scope is member, guest or none" >&2; exit 2 ;; esac
+                        _compute_call POST /cli/app/guest/chat "$(_compute_json K2_CJ_username="$username" K2_CJ_scope="$scope" K2_CJ_app="$app")"
+                    fi
+                    if [[ "$json_out" -eq 1 ]]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+                    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+scope = v.get("scope") or "no chat"
+state = "" if v.get("enabled") or not v.get("scope") else "  [switched off by the owner]"
+by = {"app": "  (given by the App)", "owner": "  (given by the owner)"}.get(v.get("managedBy") or "", "")
+line = "%s: %s%s%s" % (v.get("username"), scope, by, state)
+if v.get("app"):
+    line += "  on %s, %s of %s people" % (v["app"], v.get("members"), v.get("maxMembers") if v.get("maxMembers") is not None else "?")
+if "changed" in v and not v.get("changed"):
+    line += "  (unchanged)"
+print(line)
+print("  chat id: k2:principal:%s" % v.get("principalId"))
+if v.get("warning"):
+    print("  note: " + v["warning"])'
                     ;;
                 unlock)
                     local username="" json_out=0
@@ -36056,6 +36255,13 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "Wrap the value in a JSON object instead."}]
     },
     {
+      "name": "agent access",
+      "usage": "k2 agent access set <workspace> chat_manage on|off [--json]",
+      "description": "\"Manage Sew\" for one workspace's agent: it may run Sew on this server, create Spaces and bind them to its Apps. The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
+    },
+    {
       "name": "agent set",
       "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--dry-run] [--json]",
       "description": "Change one or more settings in a single call (hire's SETTINGS flags plus project membership; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",
@@ -39106,7 +39312,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
 
 _study_usage() {
     cat <<'EOF'
@@ -39124,6 +39330,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
+  app-chat
   skins  feedback-loop  ticket-brief  zen  sidecars  llm-tokens  llm-accounts  publish-framing  compute
   compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
@@ -39163,6 +39370,7 @@ _study_title() {
         app-push) echo "Notifications to a custom App's own phone app" ;;
         app-pairing) echo "Pairing a custom App's own phone app by QR" ;;
         app-profile) echo "A person's own profile, picture and sessions in an App" ;;
+        app-chat) echo "Chat, voice and calls in your App (Sew for Apps)" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
@@ -39268,6 +39476,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-push            Your App's own phone app: keys in the vault, register, send, limits
   app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
   app-profile         A person's own profile, picture and sessions in an App; who decides
+  app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
@@ -39330,6 +39539,7 @@ _study_page() {
         app-push) _study_page_app_push ;;
         app-pairing) _study_page_app_pairing ;;
         app-profile) _study_page_app_profile ;;
+        app-chat) _study_page_app_chat ;;
         email-notifications) _study_page_email_notifications ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
@@ -39861,6 +40071,12 @@ wallet:self (Use the person's own wallet (an owner setting per App, never a room
   wallet.loginCancel       POST /cli/skin/wallet/login/cancel (browser only)  Cancel the person's own running sign-in.
   wallet.use               POST /cli/skin/wallet/use (browser only)           Choose which item the person's own agents run on for a provider.
   wallet.remove            POST /cli/skin/wallet/remove (browser only)        Delete one of the person's own items for good (not Trash): its sessions stop, its sealed secret and folder are destroyed.
+chat:read (Read chat in this App's Spaces (Sew; a ceiling on the person's chat pass))
+  chat.member              GET  /cli/sew/app/member (server only)             One of this App's users (by principal id or username) → their Sew member id; anyone else is the same not_found as nobody.
+  chat.whois               POST /cli/sew/app/whois (server only)              Sew member ids → which of this App's users each is; everyone else shows only memberId, kind and isThisAppUser: false.
+guests:chat (Give its own guests chat (an owner grant per App, never a guest's))
+  guests.chat              GET  /cli/skin/guests/chat (server only)           One of this App's guests: their chat (member, guest or none), who gave it, and this App's member ceiling.
+  guests.setChat           POST /cli/skin/guests/chat (server only)           Give one of this App's guests chat (member or guest) or take it away; only grants this App made, within its ceiling; idempotent, audited.
 
 REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   401 pass_required (no pass: every call, login too) / pass_invalid
@@ -44682,6 +44898,8 @@ COMMANDS
   retire <name>           Safely decommission an agent (guards + archive; never deletes)
   restart <name>          Restart the agent's chat session (reloads charter + MCP config; same conversation)
   identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
+  access set <ws> chat_manage on|off
+                          "Manage Sew" for that workspace's agent (the owner or an admin)
   context <subcommand>    Manage the always-on AGENTS.md context stack (layers)
   team [served|link|unlink]  Team links: who serves this agent, who it serves (agents read their own)
   instances [show|hire|retire]  Hires made from an inline recipe (owner/admin; v1 API keys hire too)
@@ -57317,12 +57535,18 @@ Off-box copies (a folder on ANOTHER disk you mounted: NFS, SMB, sshfs, a replica
          none = backups stay on this box only (alarm k2_backup_offbox_none).
   k2 hostchat mirror dir <path> | none [--json]
          Sew's keyring mirror (restarts Sew). Never the K2 vault or ~/.k2.
-App Spaces (members come ONLY from each App's user grants: k2 app grant):
+App Spaces (members: the App's users who also have chat; never Connect owners/admins by role):
   k2 hostchat app-spaces [--json]
-  k2 hostchat app-space bind <app-id> <space-id> [--json]
-  k2 hostchat app-space unbind <app-id> <space-id> [--remove-app-members] [--json]
+  k2 hostchat app-space bind <app> <space-id> [--json]      (<app>: its id or name, k2 app list)
+  k2 hostchat app-space unbind <app> <space-id> [--remove-app-members] [--json]
           everyone stays by default (K2 stops managing the Space; bind again to resume).
           --remove-app-members: the members K2 added there leave; people added by hand never do.
+Home client (each App session sees only its own App's Spaces once Sew has app_scoped_sessions):
+  k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
+  k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth)
+  k2 hostchat home app <app> --hidden on|off    "App-only": its Spaces never show in the home client
+          The human output says "app-scoped sessions yes|no", "app origin yes|no" (Sew's flags
+          app_scoped_sessions, app_origin): k2 study app-chat.
 Person only (outside K2, with Touch ID / your login / the vault password):
   k2 hostchat purge --confirm-hostname HOST [--keep-backups]    (the owner; HOST = purgeConfirmHostname
                                             in status: Sew's public host, else the box hostname)
@@ -57372,7 +57596,8 @@ Config:
 
 People (K2 users who can use Sew here: member by default; a guest sees only channels they're invited to):
   k2 hostchat people list | people add <user> [--guest] | people set <user> --guest on|off | people remove <user>
-  (Spaces add them separately; App Spaces take their members from k2 app grant.)
+  (Spaces add them separately. An App's users: k2 app user chat <user> member --app <app>, and its
+   bound Spaces take them in; k2 study app-chat.)
 
 Agents (alias of k2 chat access):
   k2 hostchat agents [list] [--space S] [--workspace W]
@@ -57659,6 +57884,7 @@ cmd_hostchat() {
         log) _hostchat_log "$@"; return ;;
         deliveries|delivery) _hostchat_deliveries "$@"; return ;;
         app-space|app-spaces) _hostchat_app_space "$sub" "$@"; return ;;
+        home) _hostchat_home "$@"; return ;;
         agents|agent)
             # Alias of `k2 chat access …` (no sub = the box-wide list).
             local _a="${1:-list}"; [ $# -gt 0 ] && shift
@@ -57952,6 +58178,62 @@ _hostchat_app_space() {
             _hostchat_call POST "/cli/sew/app-spaces/$sub" "$(_compute_json K2_CJ_app="${pos[0]}" K2_CJ_spaceId="${pos[1]}" K2_CJ_removeAppMembers_b="$rm_b")"
             _hostchat_print "app-space-$sub" "$as_json" ;;
     esac
+}
+
+# k2 hostchat home [client <app-id>|none] | home app <app-id> --hidden on|off
+# (Sew decision 13): the install's home client (Hearth sees every Space a
+# person is in) and an App's "App-only" mark. Delivered by the grant-hook
+# sweep once Sew reports the home_client feature flag.
+_hostchat_home() {
+    local sub="${1:-}"
+    case "$sub" in
+        client|app) shift ;;
+        ""|-*) sub="show" ;;
+        *) echo '{"error":"usage","hint":"k2 hostchat home [client <app-id>|none] | home app <app-id> --hidden on|off"}' >&2; exit 2 ;;
+    esac
+    local as_json=0 hidden="" pos=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=1; shift ;;
+            --hidden) hidden="${2:-}"; shift 2 ;;
+            -h|--help) _hostchat_usage; return 0 ;;
+            -*) echo "{\"error\":\"usage\",\"hint\":\"unknown flag $1 (k2 hostchat home --help)\"}" >&2; exit 2 ;;
+            *) pos+=("$1"); shift ;;
+        esac
+    done
+    case "$sub" in
+        show) _hostchat_call GET /cli/sew/home "" ;;
+        client)
+            [ -n "${pos[0]:-}" ] || { echo '{"error":"usage","hint":"k2 hostchat home client <app-id>|none"}' >&2; exit 2; }
+            if [ "${pos[0]}" = none ]; then
+                _hostchat_call POST /cli/sew/home/client '{"app":null}'
+            else
+                _hostchat_call POST /cli/sew/home/client "$(_compute_json K2_CJ_app="${pos[0]}")"
+            fi ;;
+        app)
+            local h_b
+            case "$hidden" in on|true|yes) h_b=1 ;; off|false|no) h_b=0 ;; *) echo '{"error":"usage","hint":"--hidden on|off"}' >&2; exit 2 ;; esac
+            [ -n "${pos[0]:-}" ] || { echo '{"error":"usage","hint":"k2 hostchat home app <app-id> --hidden on|off"}' >&2; exit 2; }
+            _hostchat_call POST /cli/sew/home/app "$(_compute_json K2_CJ_app="${pos[0]}" K2_CJ_hidden_b="$h_b")" ;;
+    esac
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if not v.get("ok", True):
+    print(json.dumps(v)); sys.exit(0)
+sew = v.get("sew") or {}
+yn = lambda b: "yes" if b else "no"
+print("Sew flags:    app-scoped sessions %s · home client %s · app origin (voice for Apps) %s · K2-managed avatar %s" % (
+    yn(sew.get("appScopedSessions")), yn(sew.get("homeClient")), yn(sew.get("appOrigin")), yn(sew.get("k2ManagedAvatar"))))
+if not sew.get("appScopedSessions"):
+    print("              not app-scoped yet: only the owner gives chat (k2 app user chat <user> member --app <app>),")
+    print("              and an App can see all chat its people can")
+hc = v.get("homeClient")
+print("home client:  %s%s" % (hc or "none", "" if v.get("homeClientDelivered", True) else "  (sending)"))
+for a in v.get("apps") or []:
+    print("  %-38s %-20s %s%s%s" % (a.get("app"), a.get("name") or "", "App-only" if a.get("hiddenFromHome") else "shown in the home client",
+        ("  origin " + a["origin"]) if a.get("origin") else "", "" if a.get("delivered") else "  (sending)"))'
 }
 
 # k2 hostchat meet bind <app-id> | unbind (K-M2).
@@ -75573,6 +75855,9 @@ case "${1:-help}" in
             hire)   shift 2; cmd_agent_hire "$@" ;;
             # 0.46.1: picture, color and name (agents: their own color and picture).
             identity) shift 2; cmd_agent_identity "$@" ;;
+            # Sew for Apps (0.46.6): the switch the Sew hints name
+            # (`k2 agent access set <ws> chat_manage on`), owner/admin only.
+            access) shift 2; cmd_agent_access "$@" ;;
             # 0.45.6 agent hire: team links, hire instances, the hire root.
             team|teams) shift 2; cmd_agent_team "$@" ;;
             instances|instance) shift 2; cmd_agent_instances "$@" ;;

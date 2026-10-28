@@ -724,7 +724,13 @@ fn app_spaces_list() -> R<Value> {
 }
 
 fn app_space_bind(env: &Env, who: &Who, v: &Value) -> R<Value> {
-    let app = s(v, "app").unwrap_or("").to_ascii_lowercase();
+    // Sew for Apps: a runtime App's id or an App's name resolves to its
+    // service id (Sew's `app_id` is the pass's `app` claim); anything else
+    // is taken as given, as before.
+    let app = match s(v, "app").filter(|a| !a.is_empty()) {
+        Some(a) => super::home::resolve_app(a).map(|r| r.0).unwrap_or_else(|_| a.to_ascii_lowercase()),
+        None => String::new(),
+    };
     let space = s(v, "spaceId").unwrap_or("").to_string();
     k2_core::tool_hook::app_space::check_ids(&app, &space).map_err(|e| no("bad_request", 400, e))?;
     let row = need_row()?;

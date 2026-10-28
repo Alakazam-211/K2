@@ -88,6 +88,10 @@ pub mod link;
 /// RS-A15 `guests:rooms` (0.46.1): an App sets its own guests' rooms.
 #[path = "skin_guest_rooms.rs"]
 pub mod guest_rooms;
+/// Sew for Apps A2 (0.46.6): `guests:chat`, an App gives its own guests
+/// chat under the owner's grant.
+#[path = "skin_app_chat.rs"]
+pub mod app_chat;
 #[path = "skin_members.rs"]
 pub mod members;
 /// Person wallets (0.46.3): an App user's live access, read-only.
@@ -240,6 +244,36 @@ pub const CAP_PUSH_SEND: &str = "push:send";
 /// Q13), so a deploy that adds it is held for the owner once. Approving it
 /// grants no sender: the owner does that with `k2 app email on`.
 pub const CAP_EMAIL_SEND: &str = "email:send";
+/// Sew for Apps A1 (K9, 0.46.6): the chat caps an App role carries into a
+/// person's Sew chat pass, as its `caps` ceiling (Sew SW3). They are
+/// App-wide, not per room: a role holds one when ANY of its room lines
+/// lists it (the session snapshot's union), and a pass carries the role's
+/// chat caps narrowed by the App's own manifest ceiling
+/// (`chat_pass::identity`). A ceiling never grants: Sew's roles inside a
+/// Space still decide. Never defaults, never implied by a Thread cap.
+///
+/// Read the App's Spaces (every present ceiling holds it: Sew SW3).
+pub const CAP_CHAT_READ: &str = "chat:read";
+/// Post, react and upload in the App's Spaces.
+pub const CAP_CHAT_POST: &str = "chat:post";
+/// Answer cards (reserved in Sew).
+pub const CAP_CHAT_RESPOND: &str = "chat:respond";
+/// Join voice channels and DM calls (Rosson 2026-10-28: App users may use
+/// voice and calls). K2 never mints a media token; Sew does.
+pub const CAP_VOICE_JOIN: &str = "voice:join";
+/// Camera and screen-share leases in a call (A12, Rosson yes 2026-10-28).
+/// Means nothing without [`CAP_VOICE_JOIN`] ([`parse_caps`] refuses it
+/// alone). A Sew older than 0.4.1 ignores it (an unknown, well-formed cap
+/// grants nothing there), so its roles alone decide video.
+pub const CAP_VOICE_VIDEO: &str = "voice:video";
+/// The chat caps, in the order a pass lists them.
+pub const CHAT_CAPS: &[&str] = &[CAP_CHAT_READ, CAP_CHAT_POST, CAP_CHAT_RESPOND, CAP_VOICE_JOIN, CAP_VOICE_VIDEO];
+
+/// Is `cap` one of [`CHAT_CAPS`]?
+pub fn is_chat_cap(cap: &str) -> bool {
+    CHAT_CAPS.contains(&cap.trim())
+}
+
 /// Caps an App's own pass may carry that no guest role ever holds (they
 /// aren't in the accepted role caps): the link's ceiling adds them
 /// ([`link::link_caps`]).
@@ -272,6 +306,11 @@ const ACCEPTED_CAPS: &[&str] = &[
     CAP_PROJECT_WRITE,
     CAP_FILES_DOWNLOAD,
     CAP_FILES_UPLOAD,
+    CAP_CHAT_READ,
+    CAP_CHAT_POST,
+    CAP_CHAT_RESPOND,
+    CAP_VOICE_JOIN,
+    CAP_VOICE_VIDEO,
 ];
 
 /// Connect / Server Access names — never a skin role. `viewer` stays
@@ -512,6 +551,11 @@ pub fn parse_caps(raw: Option<&[String]>) -> Result<Vec<String>, String> {
             {
                 return Err(format!(
                     "{CAP_FILES_AGENT_CONFIG} only widens {CAP_FILES_WRITE}; list {CAP_FILES_WRITE} too"
+                ));
+            }
+            if out.iter().any(|c| c == CAP_VOICE_VIDEO) && !out.iter().any(|c| c == CAP_VOICE_JOIN) {
+                return Err(format!(
+                    "{CAP_VOICE_VIDEO} only widens {CAP_VOICE_JOIN} (camera and screen in a call); list {CAP_VOICE_JOIN} too"
                 ));
             }
         }
@@ -1531,6 +1575,9 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     // app-user-profile (0.46.5): profile settings, profiles, session
     // meta. Additive, no numbered step (a 0.46.4 ignores them).
     profile::ensure_schema(&conn)?;
+    // Sew for Apps A2 (0.46.6): the owner's per-App guests-chat grants.
+    // Additive, no numbered step.
+    app_chat::ensure_schema(&conn)?;
     // Copy existing guests once. A deleted host row stays deleted.
     ensure_host_grant_backfill(&mut conn)?;
     rebuild_tokens_table_if_needed(&mut conn)?;
@@ -1542,6 +1589,14 @@ fn open_db(path: &Path) -> Result<Connection, String> {
     crate::tool_hook::outbox::ensure_schema(&conn)?;
     // K31: App ↔ Space bindings and the membership ledger (same rules).
     crate::tool_hook::app_space::ensure_schema(&conn)?;
+    // Sew for Apps A3: the picture Sew shows per member (same rules).
+    crate::tool_hook::avatar::ensure_schema(&conn)?;
+    // Sew for Apps A6: the identity map, principal ↔ Sew member.
+    crate::tool_hook::members::ensure_schema(&conn)?;
+    // Decision 13: the owner's home-client and per-App settings for Sew.
+    crate::tool_hook::home::ensure_schema(&conn)?;
+    // Sew's feature flags as the sweep last saw them.
+    crate::tool_hook::features::ensure_schema(&conn)?;
     // S24-1: numbered, additive steps on top of the idempotent block above.
     run_schema_steps(&mut conn)?;
     // skin.db AND its -wal/-shm: the WAL holds recent pages (guest
@@ -2436,6 +2491,20 @@ fn plan_principal_changed(
         ops.extend(p.plan(tx, &HookEvent::PrincipalChanged { principal }, &ctx)?);
     }
     Ok(outbox::enqueue(tx, &ops, actor, now_secs())?.len())
+}
+
+/// Sew for Apps A3: a profile write (display name) changed what Sew shows
+/// for `principal_id`: enqueue the chat `update` on the caller's open
+/// transaction (no-op without a chat grant). Returns the rows queued.
+pub(crate) fn plan_principal_changed_by_id(tx: &Connection, principal_id: &str, actor: &str) -> Result<usize, String> {
+    let p = tx
+        .query_row(&format!("{PRINCIPAL_SELECT} WHERE p.id = ?1"), params![principal_id], map_principal_row)
+        .optional()
+        .map_err(|e| format!("skin principal lookup: {e}"))?;
+    match p {
+        Some(p) => plan_principal_changed(tx, &p, actor),
+        None => Ok(0),
+    }
 }
 
 fn principal_by_username(
@@ -7242,6 +7311,44 @@ mod tests {
             );
             assert!(!revoke_token(&meta.id).expect("idempotent"));
         });
+    }
+
+    /// Sew for Apps A1: the five chat caps are role caps, never defaults,
+    /// never implied, and `voice:video` needs `voice:join` beside it.
+    #[test]
+    fn parse_caps_accepts_chat_caps_never_implied_a1() {
+        let all: Vec<String> = CHAT_CAPS.iter().map(|c| c.to_string()).collect();
+        assert_eq!(parse_caps(Some(&all)).expect("chat caps"), all);
+        for c in CHAT_CAPS {
+            assert!(is_chat_cap(c), "{c}");
+            assert!(!DEFAULT_CAPS.contains(c), "{c} is never a default");
+        }
+        let defaults = parse_caps(None).expect("defaults");
+        assert!(!defaults.iter().any(|c| is_chat_cap(c)), "Thread-only defaults carry no chat cap: {defaults:?}");
+        let voice = parse_caps(Some(&["voice:join".into()])).expect("voice alone");
+        assert_eq!(voice, vec![CAP_VOICE_JOIN], "voice:join alone does not add chat:read here (the pass adds it)");
+        let err = parse_caps(Some(&["voice:video".into()])).unwrap_err();
+        assert!(err.contains("voice:video only widens voice:join"), "{err}");
+        let err = parse_caps(Some(&["voice:video".into(), "chat:post".into()])).unwrap_err();
+        assert!(err.contains("list voice:join too"), "{err}");
+        assert!(parse_caps(Some(&["voice:join".into(), "voice:video".into()])).is_ok());
+        let err = parse_caps(Some(&["voice:speak".into()])).unwrap_err();
+        assert!(err.contains("unknown capability") && err.contains("voice:video"), "the accepted list names them: {err}");
+        assert!(!is_chat_cap("thread:read") && !is_chat_cap("chat:manage"));
+    }
+
+    /// A1: a role's chat caps reach the session snapshot (its union) from
+    /// any room line, so the chat pass can carry them.
+    #[test]
+    fn chat_caps_on_any_room_line_reach_the_session_union_a1() {
+        let mut policy = RoomPolicy::new();
+        policy.insert("room-a".into(), vec![CAP_THREAD_READ.into(), CAP_CHAT_POST.into()]);
+        policy.insert("room-b".into(), vec![CAP_VOICE_JOIN.into(), CAP_VOICE_VIDEO.into()]);
+        let caps = union_caps(&policy);
+        for c in [CAP_THREAD_READ, CAP_CHAT_POST, CAP_VOICE_JOIN, CAP_VOICE_VIDEO] {
+            assert!(caps.iter().any(|x| x == c), "{c} in {caps:?}");
+        }
+        assert!(!caps.iter().any(|x| x == CAP_CHAT_READ), "never implied by the union: {caps:?}");
     }
 
     #[test]

@@ -263,9 +263,11 @@ pub(crate) fn mark_name_conn(conn: &Connection, principal_id: &str, by_self: boo
 }
 
 /// Set or clear (`None`) the person's display name (already cleaned).
+/// Sew for Apps A3: K2 is the only source of the name Sew shows, so the
+/// chat `update` is queued in the same transaction.
 pub fn set_display_name(principal_id: &str, display_name: Option<&str>) -> Result<(), String> {
     let now = now_secs();
-    with_conn(|conn| {
+    let queued = with_conn(|conn| {
         let tx = immediate_tx(conn)?;
         ensure_row(&tx, principal_id, now)?;
         tx.execute(
@@ -273,8 +275,19 @@ pub fn set_display_name(principal_id: &str, display_name: Option<&str>) -> Resul
             params![principal_id, display_name, now],
         )
         .map_err(|e| format!("profile display name: {e}"))?;
-        tx.commit().map_err(|e| format!("profile commit: {e}"))
-    })
+        let n = super::plan_principal_changed_by_id(&tx, principal_id, &sync_actor(principal_id))?;
+        tx.commit().map_err(|e| format!("profile commit: {e}"))?;
+        Ok(n)
+    })?;
+    if queued > 0 {
+        crate::tool_hook::kick();
+    }
+    Ok(())
+}
+
+/// The actor on a chat row a profile write queued: the person themselves.
+fn sync_actor(principal_id: &str) -> String {
+    format!("{SELF_ACTOR_PREFIX}{principal_id}")
 }
 
 /// SHA-256 hex of a stored picture (what `imageHash` carries).
@@ -301,23 +314,41 @@ pub fn set_image(principal_id: &str, jpeg: &[u8]) -> Result<String, String> {
             params![principal_id, jpeg, hash, now],
         )
         .map_err(|e| format!("profile image: {e}"))?;
-        tx.commit().map_err(|e| format!("profile commit: {e}"))
+        // Sew for Apps A3: the picture reaches the person's Sew member.
+        let n = crate::tool_hook::avatar::on_picture_changed(&tx, principal_id, &sync_actor(principal_id))?;
+        tx.commit().map_err(|e| format!("profile commit: {e}"))?;
+        Ok(n)
+    })
+    .map(|n| {
+        if n > 0 {
+            crate::tool_hook::kick();
+        }
     })?;
     Ok(hash)
 }
 
-/// Remove the person's picture. `true` when there was one.
+/// Remove the person's picture. `true` when there was one. Sew for Apps
+/// A3: Sew's copy is cleared too (same transaction).
 pub fn clear_image(principal_id: &str) -> Result<bool, String> {
     let now = now_secs();
-    with_conn(|conn| {
-        conn.execute(
-            "UPDATE principal_profiles SET image = NULL, image_type = NULL, image_hash = NULL, image_set_at = NULL, updated_at = ?2
-             WHERE principal_id = ?1 AND image IS NOT NULL",
-            params![principal_id, now],
-        )
-        .map(|n| n > 0)
-        .map_err(|e| format!("profile image clear: {e}"))
-    })
+    let (had, queued) = with_conn(|conn| {
+        let tx = immediate_tx(conn)?;
+        let had = tx
+            .execute(
+                "UPDATE principal_profiles SET image = NULL, image_type = NULL, image_hash = NULL, image_set_at = NULL, updated_at = ?2
+                 WHERE principal_id = ?1 AND image IS NOT NULL",
+                params![principal_id, now],
+            )
+            .map(|n| n > 0)
+            .map_err(|e| format!("profile image clear: {e}"))?;
+        let n = if had { crate::tool_hook::avatar::on_picture_changed(&tx, principal_id, &sync_actor(principal_id))? } else { 0 };
+        tx.commit().map_err(|e| format!("profile commit: {e}"))?;
+        Ok((had, n))
+    })?;
+    if queued > 0 {
+        crate::tool_hook::kick();
+    }
+    Ok(had)
 }
 
 // ── names ────────────────────────────────────────────────────────────

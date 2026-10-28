@@ -97,13 +97,18 @@ export const SKIN_AGENT_CONFIG_CAP = 'files:agentconfig' as const
 export const SKIN_AGENT_CONFIG_LABEL: string = K2_CAPS[SKIN_AGENT_CONFIG_CAP].label
 
 /** Toggle `cap` in a room's cap set. Dropping `files:write` also drops the
- *  `.k2/` opt-in (it means nothing alone and the daemon refuses it). */
+ *  `.k2/` opt-in, and dropping `voice:join` drops `voice:video` (each means
+ *  nothing alone and the daemon refuses it); `voice:video` brings
+ *  `voice:join` with it. */
 export function toggleSkinCap(prev: ReadonlySet<string>, cap: string, on: boolean): Set<string> {
   const next = new Set(prev)
-  if (on) next.add(cap)
-  else {
+  if (on) {
+    next.add(cap)
+    if (cap === 'voice:video') next.add('voice:join')
+  } else {
     next.delete(cap)
     if (cap === 'files:write') next.delete(SKIN_AGENT_CONFIG_CAP)
+    if (cap === 'voice:join') next.delete('voice:video')
   }
   return next
 }
@@ -158,6 +163,25 @@ export function skinCapChoices(appHeartbeats: boolean, agentIdentity: boolean, f
       (agentIdentity || !(SKIN_AGENT_IDENTITY_CAPS as readonly string[]).includes(c)) &&
       (fileDownload || !(SKIN_DOWNLOAD_CAPS as readonly string[]).includes(c)),
   )
+}
+
+// Sew for Apps A1 (0.46.6): the chat caps an App role carries into a
+// person's Sew chat pass as its ceiling. App-wide (any room line of the role
+// counts), never defaults, offered on role lines only (a platform token never
+// mints a chat pass), and only when the server ships them (`app-chat-caps`).
+export const SKIN_CHAT_CAPS = ['chat:read', 'chat:post', 'chat:respond', 'voice:join', 'voice:video'] as const
+export type SkinChatCap = (typeof SKIN_CHAT_CAPS)[number]
+
+/** Every cap a role line may show, with its label. */
+export const ROLE_CAP_LABELS: Readonly<Record<string, string>> = {
+  ...SKIN_CAP_LABELS,
+  ...Object.fromEntries(SKIN_CHAT_CAPS.map((cap) => [cap, K2_CAPS[cap].label])),
+}
+
+/** A role line's choices: the room caps, then the chat caps when the
+ *  server ships them. */
+export function roleCapChoices(base: readonly SkinCap[], appChat: boolean): readonly string[] {
+  return appChat ? [...base, ...SKIN_CHAT_CAPS] : base
 }
 
 export type FrontDoorMode = 'connect' | 'direct'
@@ -612,10 +636,12 @@ export function SkinAccessSection(): React.JSX.Element {
   const agentConfigOptIn = useServerSupports('agent-config-write')
   const fileDownload = useServerSupports('thread-download')
   const phonePairing = useServerSupports('app-phone-pairing')
+  const appChat = useServerSupports('app-chat-caps')
   const capChoices = useMemo(
     () => skinCapChoices(appHeartbeats, agentIdentity, fileDownload),
     [appHeartbeats, agentIdentity, fileDownload],
   )
+  const roleChoices = useMemo(() => roleCapChoices(capChoices, appChat), [capChoices, appChat])
   const [users, setUsers] = useState<SkinUser[]>([])
   const [roles, setRoles] = useState<SkinRole[]>([])
   const [tokens, setTokens] = useState<SkinTokenRow[]>([])
@@ -1198,10 +1224,10 @@ export function SkinAccessSection(): React.JSX.Element {
                         </label>
                         {included ? (
                           <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
-                            {capChoices.map((cap) => (
+                            {roleChoices.map((cap) => (
                               <label
                                 key={`role-${ws.handle}-${cap}`}
-                                title={SKIN_CAP_LABELS[cap]}
+                                title={ROLE_CAP_LABELS[cap]}
                                 className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                               >
                                 <SquareCheckbox
@@ -1363,10 +1389,10 @@ export function SkinAccessSection(): React.JSX.Element {
                                   </label>
                                   {included ? (
                                     <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5">
-                                      {capChoices.map((cap) => (
+                                      {roleChoices.map((cap) => (
                                         <label
                                           key={`edit-role-${r.name}-${ws.handle}-${cap}`}
-                                          title={SKIN_CAP_LABELS[cap]}
+                                          title={ROLE_CAP_LABELS[cap]}
                                           className="flex items-center gap-1.5 cursor-pointer select-none no-drag"
                                         >
                                           <SquareCheckbox

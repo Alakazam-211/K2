@@ -380,7 +380,8 @@ fn access_reads_and_the_box_view_show_the_cores() {
     assert_eq!(acc["cores"], json!(["thread", "sew"]), "{v}");
     let list = acc["coreList"].as_array().unwrap();
     assert_eq!(list.iter().map(|c| c["core"].as_str().unwrap()).collect::<Vec<_>>(), vec!["db", "files", "thread", "mail", "sew"]);
-    assert_eq!(list.iter().filter(|c| c["enforced"] == json!(true)).count(), 3, "{v}");
+    assert_eq!(list.iter().filter(|c| c["enforced"] == json!(true)).count(), 4, "Sew is enforced since A1 (0.46.6): {v}");
+    assert_eq!(list[4]["later"], J::Null, "{v}");
     let (_, mine) = get("/cli/app/list", &agent(&f.ws_a), &[("workspace", &f.ws_b)]);
     assert_eq!(mine["access"]["workspaceId"], json!(f.ws_a), "an agent reads its own: {mine}");
 

@@ -21,9 +21,12 @@
 //!   `dbRaw` stays a person-present confirm.
 //! - **Caps in no core** reach the agent itself (`heartbeats:write`,
 //!   `files:agentconfig`, N3): never pre-approved, always the person's.
-//! - **Mail and Sew** are stored and shown and take effect when App mail
-//!   (MCS11–12) and Sew for Apps land. No App cap belongs to them yet, and
-//!   App mail sends stay held for the owner even then (N4).
+//! - **Mail** is stored and shown and takes effect when App mail
+//!   (MCS11–12) lands. No App cap belongs to it yet, and App mail sends
+//!   stay held for the owner even then (N4).
+//! - **Sew** (enforced since Sew for Apps A1, 0.46.6): the chat caps
+//!   (`chat:read|post|respond`, `voice:join`, `voice:video`) are its caps,
+//!   so a ticked Sew pre-approves an App asking for them.
 //! - **Unticking** stops future automatic additions. Caps an App already
 //!   has stay until the owner narrows that App (Q4: nothing that runs
 //!   loses a cap).
@@ -42,10 +45,11 @@ use serde_json::{json, Value as J};
 use super::access::{self, core_name, Level};
 use super::routes::{no, ws_by_id, ws_handle, R};
 
-/// Cores whose tick is enforced in 0.46.3.
-pub const ENFORCED: &[&str] = &["db", "files", "thread"];
+/// Cores whose tick is enforced (Database, Files and Thread since 0.46.3;
+/// Sew since Sew for Apps A1, 0.46.6).
+pub const ENFORCED: &[&str] = &["db", "files", "thread", "sew"];
 
-/// Is this core's tick enforced yet (Mail and Sew wait for their App slice)?
+/// Is this core's tick enforced yet (Mail waits for its App slice)?
 pub fn enforced(core: &str) -> bool {
     ENFORCED.contains(&core)
 }
@@ -66,7 +70,6 @@ pub fn label(core: &str) -> &'static str {
 pub fn later(core: &str) -> Option<&'static str> {
     match core {
         "mail" => Some("takes effect when App mail lands"),
-        "sew" => Some("takes effect when Sew for Apps lands"),
         _ => None,
     }
 }
@@ -359,9 +362,13 @@ mod tests {
         assert_eq!((n.cores.len(), n.person), (0, v(&["heartbeats:write"])), "heartbeats:write is in no core");
         assert!(need(&v(&["db"]), &v(&["store:read", "store:write"])).is_empty());
         assert!(need(&[], &[]).is_empty(), "asking for nothing needs nothing");
-        // Ticking Mail or Sew covers no cap today.
+        // Ticking Mail or Sew covers no Thread cap.
         let n = need(&v(&["mail", "sew"]), &v(&["thread:read"]));
         assert_eq!(n.cores, vec!["thread"]);
+        // Sew for Apps A1: the chat caps are Sew's.
+        let chat = v(&["chat:read", "chat:post", "voice:join", "voice:video"]);
+        assert_eq!(need(&v(&["thread"]), &chat).cores, vec!["sew"]);
+        assert!(need(&v(&["sew"]), &chat).is_empty(), "a ticked Sew pre-approves the chat caps");
     }
 
     #[test]

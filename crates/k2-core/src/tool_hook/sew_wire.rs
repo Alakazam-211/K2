@@ -465,6 +465,11 @@ pub struct Status {
     pub install_id: String,
     /// `k2` | `standalone`.
     pub provider: String,
+    /// Feature flags (Sew 2026-10-28): sorted, never renamed. K2 gates on
+    /// these, never on `version` ([`super::features`]). Absent on an older
+    /// Sew: none.
+    #[serde(default)]
+    pub features: Vec<String>,
 }
 
 /// One row of `GET /mgmt/v1/principals` (S27-A5: no `guest` bool, no

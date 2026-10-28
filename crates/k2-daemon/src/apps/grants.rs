@@ -172,6 +172,40 @@ pub fn narrow_for_link(app_id: &str, ceiling: &[String], workspace_id: &str) -> 
     effective(ceiling, set.as_deref(), workspace_id, suspended, &Actor::App)
 }
 
+// ── the chat ceiling (Sew for Apps A1) ───────────────────────────────
+
+/// The chat caps the App behind `service_id` may hand its people's chat
+/// passes: its live manifest's chat caps, narrowed by the owner's approved
+/// set (the same formula as every other cap, §5.3). A suspended App gets
+/// `Declared([])`; an App that carries no pass (the stage-1 process
+/// engine) keeps its manifest's chat caps, as [`narrow_for_link`] keeps its
+/// ceiling. No runtime App (a published `--cmd` service) is `NotManaged`.
+pub fn chat_ceiling(service_id: &str) -> Result<crate::chat_pass::identity::AppChatCeiling, String> {
+    use crate::chat_pass::identity::AppChatCeiling;
+    let h = k2_core::db::shared();
+    let conn = h.lock();
+    let app = match store::get_app_by_service(&conn, service_id) {
+        Ok(Some(a)) => a,
+        Ok(None) => return Ok(AppChatCeiling::NotManaged),
+        Err(e) => return Err(format!("app lookup: {e}")),
+    };
+    let Some(seed) = app.live_seed.as_deref() else { return Ok(AppChatCeiling::NotManaged) };
+    let manifest = seed_caps(&conn, seed).map_err(|e| format!("seed caps: {e}"))?.unwrap_or_default();
+    let chat: Vec<String> =
+        k2_core::skin::CHAT_CAPS.iter().filter(|c| manifest.iter().any(|m| m.trim() == **c)).map(|c| c.to_string()).collect();
+    if chat.is_empty() {
+        return Ok(AppChatCeiling::NotDeclared);
+    }
+    if is_suspended(&conn, &app.app_id).map_err(|e| format!("suspend lookup: {e}"))? {
+        return Ok(AppChatCeiling::Declared(Vec::new()));
+    }
+    if !carries_pass(&app) {
+        return Ok(AppChatCeiling::Declared(chat));
+    }
+    let set = approved(&conn, &app).map_err(|e| format!("approved caps: {e}"))?.unwrap_or_default();
+    Ok(AppChatCeiling::Declared(chat.into_iter().filter(|c| set.iter().any(|a| a.trim() == c)).collect()))
+}
+
 // ── the deploy hold (S20) ────────────────────────────────────────────
 
 /// What a deploy of `seed` asks for beyond the App's approved set.

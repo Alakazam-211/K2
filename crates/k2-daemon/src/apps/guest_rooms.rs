@@ -10,7 +10,17 @@
 //! POST /cli/app/guest/rooms    {app, username, rooms}      set them
 //! GET  /cli/app/guest/ceiling  ?app=                       the App's own room, grant and ceiling (app.rooms)
 //! GET  /cli/app/guest/list     ?app=&cursor=&limit=        the App's guests with their rooms (guests.list)
+//! GET  /cli/app/guest/chat     ?username=[&app=]           one person's chat (Sew for Apps A2)
+//! POST /cli/app/guest/chat     {username, scope, app?}     set it: member | guest | none
 //! ```
+//!
+//! **Chat (Sew for Apps A2, 0.46.6).** `POST /cli/app/grant {app, kind:
+//! "guests-chat", maxMembers?}` is the owner's only (an agent's is
+//! refused, never held: chat is box-wide). `k2 app user chat` is the owner
+//! for any person (with `app`, that App's guest, audited on the App), or an
+//! agent for its own workspace's App with "Let this agent manage its Apps'
+//! users" on, under that App's grant and rules, as the App itself
+//! (`k2_core::skin::app_chat`).
 //!
 //! Who may do what:
 //! - **The grant** is the owner's (owner token, an Owner login, or a human
@@ -40,6 +50,7 @@ use std::collections::HashMap;
 
 use k2_core::connect_users::Role;
 use k2_core::deploy::codes;
+use k2_core::skin::app_chat as ac;
 use k2_core::skin::guest_rooms::{self as gr, Ceiling};
 use serde_json::{json, Value as J};
 
@@ -54,6 +65,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/app/guest/rooms",
     GUEST_CEILING,
     GUEST_LIST,
+    GUEST_CHAT,
     super::agent_grants::COPY_HOST,
 ];
 pub const POST_ROUTES: &[&str] = &["/cli/app/grant", "/cli/app/grant/revoke", super::agent_grants::COPY_HOST];
@@ -63,6 +75,9 @@ pub const GUEST_ROOMS: &str = "/cli/app/guest/rooms";
 pub const GUEST_CEILING: &str = "/cli/app/guest/ceiling";
 /// `k2 app guest list <app>` (GET only).
 pub const GUEST_LIST: &str = "/cli/app/guest/list";
+/// `k2 app user chat <user> [member|guest|none] [--app <app>]` (Sew for
+/// Apps A2): GET reads, POST sets.
+pub const GUEST_CHAT: &str = "/cli/app/guest/chat";
 
 pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMap<String, String>) -> CliResponse {
     let r = match (path, is_post) {
@@ -74,6 +89,8 @@ pub fn handle(path: &str, who: &Who, is_post: bool, body: &[u8], params: &HashMa
         (GUEST_ROOMS, true) => guest_set(who, body),
         (GUEST_CEILING, false) => guest_ceiling(who, params),
         (GUEST_LIST, false) => guest_list(who, params),
+        (GUEST_CHAT, false) => chat_read(who, params),
+        (GUEST_CHAT, true) => chat_set(who, body),
         (GUEST_CEILING | GUEST_LIST, true) => Err(no("method_not_allowed", 405, format!("{path} is a GET"))),
         _ => Err(no("not_found", 404, "no such App route")),
     };
@@ -91,11 +108,23 @@ fn owner_only(what: &str) -> Refusal {
     no(codes::OWNER_ONLY, 403, format!("only the server's owner {what} (the owner token or an Owner login; never an agent)"))
 }
 
-fn kind_of(v: &J) -> R<()> {
+/// The two owner grants an App can hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Rooms,
+    Chat,
+}
+
+fn kind_of(v: &J) -> R<Kind> {
     match s(v, "kind") {
-        Some(gr::GRANT_KIND) => Ok(()),
-        Some(k) => Err(no(codes::BAD_REQUEST, 400, format!("unknown grant kind '{k}' (kinds: {})", gr::GRANT_KIND))),
-        None => Err(no(codes::BAD_REQUEST, 400, format!("name the kind (--kind {})", gr::GRANT_KIND))),
+        Some(gr::GRANT_KIND) => Ok(Kind::Rooms),
+        Some(ac::GRANT_KIND) => Ok(Kind::Chat),
+        Some(k) => Err(no(
+            codes::BAD_REQUEST,
+            400,
+            format!("unknown grant kind '{k}' (kinds: {}, {})", gr::GRANT_KIND, ac::GRANT_KIND),
+        )),
+        None => Err(no(codes::BAD_REQUEST, 400, format!("name the kind (--kind {} or {})", gr::GRANT_KIND, ac::GRANT_KIND))),
     }
 }
 
@@ -131,7 +160,10 @@ fn app_json(t: &Target) -> J {
 fn list(who: &Who, params: &HashMap<String, String>) -> R<J> {
     need_credential(who)?;
     let t = target(who, params.get("app").map(String::as_str))?;
-    let grants: Vec<J> = gr::get_grant(&t.service_id).map_err(store)?.iter().map(|g| grant_json(&t, g)).collect();
+    let mut grants: Vec<J> = gr::get_grant(&t.service_id).map_err(store)?.iter().map(|g| grant_json(&t, g)).collect();
+    if let Some(g) = ac::get_grant(&t.service_id).map_err(store)? {
+        grants.push(chat_grant_json(&g));
+    }
     Ok(json!({ "ok": true, "app": app_json(&t), "grants": grants }))
 }
 
@@ -151,7 +183,9 @@ fn rooms_arg(v: &J) -> R<Vec<String>> {
 fn give(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
-    kind_of(&v)?;
+    if kind_of(&v)? == Kind::Chat {
+        return give_chat(who, &v);
+    }
     let agent = super::routes::agent_ws(who).map(str::to_string);
     if agent.is_none() && !owner_rights(who) {
         return Err(owner_only("grants an App guests:rooms (k2 app grant <app> --kind guests-rooms)"));
@@ -178,13 +212,16 @@ fn give(who: &Who, body: &[u8]) -> R<J> {
 fn take_back(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
-    kind_of(&v)?;
+    let kind = kind_of(&v)?;
     if matches!(who, Who::Login { role, .. } if *role != Role::Owner) {
         return Err(owner_only("revokes an App's grant over a login"));
     }
     let t = target(who, s(&v, "app"))?;
-    let was = gr::revoke(&t.service_id, &actor(who)).map_err(store)?;
-    Ok(json!({ "ok": true, "app": app_json(&t), "revoked": was.is_some() }))
+    let was = match kind {
+        Kind::Rooms => gr::revoke(&t.service_id, &actor(who)).map_err(store)?.is_some(),
+        Kind::Chat => ac::revoke(&t.service_id, &actor(who)).map_err(store)?.is_some(),
+    };
+    Ok(json!({ "ok": true, "app": app_json(&t), "revoked": was }))
 }
 
 /// The ceiling the caller acts with on `t`'s guests.
@@ -305,6 +342,139 @@ fn guest_set(who: &Who, body: &[u8]) -> R<J> {
     Ok(j)
 }
 
+// ── chat (Sew for Apps A2) ───────────────────────────────────────────
+
+fn chat_grant_json(g: &ac::ChatGrant) -> J {
+    json!({
+        "kind": g.kind,
+        "maxMembers": g.max_members,
+        "grantedBy": g.granted_by,
+        "grantedAt": g.granted_at,
+    })
+}
+
+/// `POST /cli/app/grant {app, kind: guests-chat, maxMembers?}`: the
+/// owner's only. A chat grant is box-wide (one Sew account per person), so
+/// an agent never gives its App this (no held card either: the owner runs
+/// `k2 app grant <app> --kind guests-chat`).
+fn give_chat(who: &Who, v: &J) -> R<J> {
+    if !owner_rights(who) {
+        return Err(owner_only("grants an App guests:chat (k2 app grant <app> --kind guests-chat [--max N])"));
+    }
+    let t = target(who, s(v, "app"))?;
+    let max = match v.get("maxMembers") {
+        None | Some(J::Null) => None,
+        Some(n) => Some(
+            n.as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .ok_or_else(|| no(codes::BAD_REQUEST, 400, format!("maxMembers is a number, 1..={}", ac::MAX_MAX_MEMBERS)))?,
+        ),
+    };
+    let (before, after) = ac::grant(&t.service_id, max, &actor(who)).map_err(|e| no(codes::BAD_REQUEST, 400, e))?;
+    // Sew 2026-10-28 (rule 3): until Sew scopes sessions to an App, the App
+    // can't use the grant, and chat the owner gives its people lets the App
+    // see all their chat.
+    let scoped = ac::app_scoped().map_err(store)?;
+    Ok(json!({
+        "ok": true,
+        "app": app_json(&t),
+        "grant": chat_grant_json(&after),
+        "replaced": before.map(|b| b.max_members),
+        "appScoped": scoped,
+        "warning": (!scoped).then_some(ac::WARN_UNSCOPED),
+    }))
+}
+
+fn chat_refusal(e: ac::Refusal) -> Refusal {
+    let extra = match &e {
+        ac::Refusal::RateLimited { retry_after_ms } => Some(json!({ "retryAfterMs": retry_after_ms })),
+        ac::Refusal::Limit { max } => Some(json!({ "maxMembers": max })),
+        _ => None,
+    };
+    Refusal { code: e.code(), status: e.status(), hint: e.hint(), extra }
+}
+
+/// Who the caller is for `k2 app user chat`, and the App it acts in.
+/// `write` = a set: an agent then needs "manage its Apps' users" and the
+/// App's guests-chat grant. A read (its own App's users) needs neither.
+fn chat_caller(who: &Who, app: Option<&str>, write: bool) -> R<(ac::Caller, Option<Target>)> {
+    if owner_rights(who) {
+        let t = match app {
+            Some(a) => Some(target(who, Some(a))?),
+            None => None,
+        };
+        return Ok((ac::Caller::Owner, t));
+    }
+    match who {
+        Who::Agent { .. } => {
+            let Some(a) = app else {
+                return Err(no(codes::BAD_REQUEST, 400, "an agent names its own App (--app <app>)"));
+            };
+            // `target` keeps a passport to its own workspace's Apps.
+            let t = target(who, Some(a))?;
+            if !write {
+                return Ok((ac::Caller::App, Some(t)));
+            }
+            if !super::agent_grants::may_self(who) {
+                return Err(super::agent_grants::users_off("Giving your App's guests chat"));
+            }
+            if ac::get_grant(&t.service_id).map_err(store)?.is_none() {
+                return Err(no(
+                    "grant_required",
+                    403,
+                    format!("{} has no guests:chat grant: the owner runs k2 app grant {} --kind guests-chat", t.name, t.name),
+                ));
+            }
+            Ok((ac::Caller::App, Some(t)))
+        }
+        _ => Err(owner_only("changes a person's chat over a login")),
+    }
+}
+
+/// GET `/cli/app/guest/chat?username=[&app=]`.
+fn chat_read(who: &Who, params: &HashMap<String, String>) -> R<J> {
+    need_credential(who)?;
+    let app = params.get("app").map(|a| a.trim()).filter(|a| !a.is_empty());
+    let (caller, t) = chat_caller(who, app, false)?;
+    let user = params.get("username").map(String::as_str).filter(|u| !u.trim().is_empty());
+    let user = user.ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the person (username)"))?;
+    let svc = t.as_ref().map(|t| t.service_id.as_str());
+    let view = match (caller, svc) {
+        (ac::Caller::App, Some(svc)) => ac::read(svc, user),
+        _ => ac::owner_read(svc, user),
+    }
+    .map_err(chat_refusal)?;
+    serde_json::to_value(view).map_err(|e| store(e.to_string()))
+}
+
+/// POST `/cli/app/guest/chat {username, scope, app?}`.
+fn chat_set(who: &Who, body: &[u8]) -> R<J> {
+    need_credential(who)?;
+    let v = json_body(body)?;
+    let (caller, t) = chat_caller(who, s(&v, "app"), true)?;
+    let user = s(&v, "username").ok_or_else(|| no(codes::BAD_REQUEST, 400, "name the person (username)"))?;
+    let scope = s(&v, "scope")
+        .and_then(ac::Scope::parse)
+        .ok_or_else(|| no(codes::BAD_REQUEST, 400, "scope is member, guest or none"))?;
+    if caller == ac::Caller::App {
+        // As for guest rooms: never a box login, never an owner-made test guest.
+        let grants = k2_core::skin::list_grants().map_err(store)?;
+        let want = user.trim().to_ascii_lowercase();
+        if let Some(p) = k2_core::skin::list_principals().map_err(store)?.into_iter().find(|p| p.username == want) {
+            if crate::skin_routes::has_box_login(&p.id, &grants) {
+                return Err(super::agent_grants::refusal_of(&crate::skin_routes::box_login_refused(&p.username)));
+            }
+        }
+        if let Some(r) = crate::skin_routes::agent_test_guest_refused(&actor(who), user) {
+            return Err(super::agent_grants::refusal_of(&r));
+        }
+    }
+    let svc = t.as_ref().map(|t| t.service_id.clone());
+    let view = ac::set(&caller, svc.as_deref(), user, scope, &actor(who), "cli").map_err(chat_refusal)?;
+    serde_json::to_value(view).map_err(|e| store(e.to_string()))
+}
+
 #[cfg(test)]
 #[path = "guest_rooms_tests.rs"]
 mod tests;
+

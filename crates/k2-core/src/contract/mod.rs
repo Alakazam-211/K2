@@ -480,10 +480,16 @@ mod tests {
             .into_iter()
             // `push:send` (0.46.4) is the App's own cap (its link pass),
             // never a guest role's.
-            .filter(|cap| *cap != crate::skin::guest_rooms::CAP && *cap != crate::person_wallet::CAP && !crate::skin::APP_ONLY_CAPS.contains(cap))
+            .filter(|cap| {
+                *cap != crate::skin::guest_rooms::CAP
+                    && *cap != crate::skin::app_chat::CAP
+                    && *cap != crate::person_wallet::CAP
+                    && !crate::skin::APP_ONLY_CAPS.contains(cap)
+            })
             .collect();
         assert_eq!(pass_caps, accepted, "ACCEPTED_CAPS vs the catalog's app caps");
         assert!(!accepted.contains(&crate::skin::guest_rooms::CAP), "guests:rooms is an owner grant, never a pass cap");
+        assert!(!accepted.contains(&crate::skin::app_chat::CAP), "guests:chat is an owner grant, never a pass cap");
         assert!(!accepted.contains(&crate::person_wallet::CAP), "wallet:self is an owner setting per App, never a pass cap");
     }
 
@@ -658,6 +664,17 @@ mod tests {
                 "no_app_key",
                 // Sew's chat pass (S28 §9) through the App transport.
                 "no_chat_grant",
+                // Sew for Apps (0.46.6): A1, decision 13, A2, A6.
+                "no_chat_caps",
+                "app_claim_invalid",
+                "not_app_granted",
+                "chat_off_for_person",
+                "shared_person",
+                "has_assistants",
+                "chat_limit",
+                "username_unusable",
+                "chat_not_app_scoped",
+                "no_chat_member",
                 "chat_unavailable",
                 // RS-A15 guest rooms (both transports).
                 "app_pass_required",

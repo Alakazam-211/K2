@@ -283,6 +283,10 @@ pub const ROUTES: &[Route] = &[
     // prd-app-caps-0464-v1 AC4 (0.46.4): reads (the owner, or a passport
     // on its own App; the handler refuses logins). GET only.
     get("/cli/app/guest/ceiling", Member),
+    // Sew for Apps A2 (0.46.6): `k2 app user chat` (the owner: any person;
+    // a passport: its own App's guests within the App's guests-chat
+    // grant; the handler refuses Admin/Member logins).
+    split("/cli/app/guest/chat", Member, Admin),
     get("/cli/app/guest/list", Member),
     split("/cli/app/guest/rooms", Member, Admin),
     // Q8 (prd-agent-app-permissions-v1 §6): the owner hands an App to
@@ -1324,6 +1328,10 @@ pub const ROUTES: &[Route] = &[
     get("/cli/sew/app-spaces", Member),
     post("/cli/sew/app-spaces/bind", Admin),
     post("/cli/sew/app-spaces/unbind", Admin),
+    // Sew for Apps A6 (0.46.6): chat.member / chat.whois, an App's own
+    // pass with chat:read (the handler refuses the rest).
+    get("/cli/sew/app/member", NoLogin),
+    post("/cli/sew/app/whois", NoLogin),
     get("/cli/sew/approvals", Admin),
     post("/cli/sew/approvals/approve", Admin),
     post("/cli/sew/approvals/approve-batch", Admin),
@@ -1365,6 +1373,11 @@ pub const ROUTES: &[Route] = &[
     get("/cli/sew/chat/unread", NoLogin),
     get("/cli/sew/chat/wait", NoLogin),
     get("/cli/sew/chat/whoami", NoLogin),
+    // Decision 13 (Sew for Apps, 0.46.6): the home client and an App's
+    // "App-only" mark (read: any login; writes: Manage Sew, Admin floor).
+    get("/cli/sew/home", Member),
+    post("/cli/sew/home/app", Admin),
+    post("/cli/sew/home/client", Admin),
     get("/cli/sew/job", Member),
     get("/cli/sew/keys", Admin),
     post("/cli/sew/keys/drop-previous", Admin),
@@ -1486,6 +1499,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/grants/host", Owner),
     post("/cli/skin/grants/role", Owner),
     post("/cli/skin/grants/update", Owner),
+    // Sew for Apps A2 (0.46.6): guests.chat / guests.setChat, an App's own
+    // pass under the owner's guests-chat grant (the handler refuses the
+    // rest). ("chat" sorts before "list".)
+    both("/cli/skin/guests/chat", NoLogin),
     // prd-app-caps-0464-v1 AC5 (0.46.4): guests.list, an App's own pass
     // only (the handler refuses the rest).
     get("/cli/skin/guests/list", NoLogin),

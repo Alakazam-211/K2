@@ -109,7 +109,8 @@ describe('the workspace card', () => {
     expect(screen.getByTestId('apps-switch-users-row').textContent).toContain('Never a box login')
     for (const c of ['db', 'files', 'thread', 'mail', 'sew']) expect(box(c).checked).toBe(false)
     expect(screen.getByTestId('apps-core-mail-later').textContent).toBe('Takes effect when App mail lands')
-    expect(screen.getByTestId('apps-core-sew-later').textContent).toBe('Takes effect when Sew for Apps lands')
+    // Sew for Apps A1 (0.46.6): the Sew tick is enforced (the chat caps).
+    expect(screen.queryByTestId('apps-core-sew-later')).toBeNull()
     expect(screen.queryByTestId('apps-core-db-later')).toBeNull()
   })
 

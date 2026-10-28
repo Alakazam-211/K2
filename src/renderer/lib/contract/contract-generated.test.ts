@@ -359,6 +359,14 @@ describe('TUWA10: one cap table', () => {
       'push:send': "Send notifications to this App's users' phones",
       // 0.46.5 Email Notifications (catalog v26): the App's own cap, off until the owner grants a sender.
       'email:send': "Send email from this App's sender",
+      // 0.46.6 Sew for Apps: App-wide chat caps (the person's chat pass ceiling).
+      'chat:read': "Read chat in this App's Spaces (Sew; a ceiling on the person's chat pass)",
+      'chat:post': 'Post, react and upload in chat',
+      'chat:respond': 'Answer chat cards',
+      'voice:join': 'Join voice channels and calls',
+      'voice:video': 'Turn on camera and share the screen in a call (with voice:join)',
+      // An owner grant to the App itself, never a role's or a pass's cap.
+      'guests:chat': "Give its own guests chat (an owner grant per App, never a guest's)",
     })
   })
 

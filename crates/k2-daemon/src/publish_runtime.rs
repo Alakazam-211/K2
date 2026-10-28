@@ -1595,6 +1595,11 @@ pub fn rm(project_id: &str, name: &str, keep_hostname: bool) -> Result<(), Publi
         let runtime = crate::app_pairing::runtime_app(&row.id).map(|a| a.app_id);
         crate::app_pairing::forget_app(&row.id, runtime.as_deref());
         crate::email_notify::forget_app(&row.id);
+        // Sew for Apps A6 (Q12): people whose only App this was lose chat
+        // (deactivated, never deleted); its guests-chat grant goes.
+        if let Err(e) = k2_core::skin::app_chat::app_removed(&row.id, "system:app-removed") {
+            log_debug!("[publish] rm {project_id}/{name}: WARN chat users of a removed App: {e}");
+        }
     }
     if !keep_hostname && label_is_ours {
         if row.as_ref().is_some_and(|r| r.expose == EXPOSE_TUNNEL) {

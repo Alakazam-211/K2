@@ -752,6 +752,11 @@ pub const FEATURE_APP_USER_PROFILE: &str = "app-user-profile-v1";
 /// `/v1/apps/<id>/email/*` (App key scope `email`), `/cli/app/email/*` and
 /// `/cli/notifications/email/*`. k2.db migration 0227.
 pub const FEATURE_EMAIL_NOTIFICATIONS: &str = "email-notifications-v1";
+/// Sew for Apps (0.46.6): App role chat caps on the chat pass (A1),
+/// `guests.chat|setChat` under the owner's `guests-chat` grant (A2),
+/// `chat.member|whois` (A6) and the home-client settings (decision 13).
+/// skin.db tables only, no SQL migration.
+pub const FEATURE_APP_CHAT: &str = "app-chat-v1";
 /// Thread push message previews (0.46.1): `POST /cli/push/register-device`
 /// takes `previews` (absent = keep the stored value), its reply and
 /// `GET /cli/push/device` carry `previews` + `previewsAllowed`, and a
@@ -1001,6 +1006,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_PAIRING);
     out.push(FEATURE_APP_USER_PROFILE);
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
+    out.push(FEATURE_APP_CHAT);
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
@@ -1124,6 +1130,7 @@ mod tests {
                 "app-phone-pairing-v1",
                 "app-user-profile-v1",
                 "email-notifications-v1",
+                "app-chat-v1",
                 "activity-live-busy",
                 "thread-push-v1",
                 "push-previews-v1",

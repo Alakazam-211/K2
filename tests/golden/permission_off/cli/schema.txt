@@ -430,6 +430,13 @@ exit: 0
       "flags": [{"name": "--json", "arg": null, "description": "Wrap the value in a JSON object instead."}]
     },
     {
+      "name": "agent access",
+      "usage": "k2 agent access set <workspace> chat_manage on|off [--json]",
+      "description": "\"Manage Sew\" for one workspace's agent: it may run Sew on this server, create Spaces and bind them to its Apps. The owner or an admin; an agent can't loosen its own access. POST /cli/agent-access/set.",
+      "args": [{"name": "workspace", "required": true}],
+      "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output."}]
+    },
+    {
       "name": "agent set",
       "usage": "k2 agent set <name> [--mode <m>] [--enabled <bool>] [--name <new>] [--persona <file.md>] [--add-project <p>]... [--remove-project <p>]... [--dry-run] [--json]",
       "description": "Change one or more settings in a single call (hire's SETTINGS flags plus project membership; no connection wiring or launching). Unknown flags exit 2 listing the valid ones.",

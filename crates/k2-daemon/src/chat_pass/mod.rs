@@ -64,12 +64,16 @@ pub const APPROVAL_JWKS_PATH_RESERVED: &str = "/v1/chat/jwks/approval";
 /// on the unknown `kid`.
 pub const JWKS_CACHE_CONTROL: &str = "public, max-age=300";
 
-/// The App-wide chat caps a pass may carry (S28 vs-live, K7/K9). A
-/// ceiling Sew enforces (SW3), never a grant: `voice:join` only lets the
-/// holder through to Sew's own media token (rev 144: K2 never mints one).
-pub const CHAT_CAPS: &[&str] = &[CAP_CHAT_READ, "chat:post", "chat:respond", "voice:join"];
+/// The App-wide chat caps a pass may carry (S28 vs-live, K7/K9; Sew for
+/// Apps A1 + A12, 0.46.6: `voice:video`). A ceiling Sew enforces (SW3),
+/// never a grant: `voice:join` only lets the holder through to Sew's own
+/// media token (rev 144: K2 never mints one). The list is the App role
+/// caps' ([`k2_core::skin::CHAT_CAPS`]): one list, so a role can never
+/// hold a chat cap a pass can't carry. A Sew older than 0.4.1 ignores
+/// `voice:video` (an unknown, well-formed cap grants nothing there).
+pub const CHAT_CAPS: &[&str] = k2_core::skin::CHAT_CAPS;
 /// Every present `caps` claim holds this one (Sew SW3).
-pub const CAP_CHAT_READ: &str = "chat:read";
+pub const CAP_CHAT_READ: &str = k2_core::skin::CAP_CHAT_READ;
 
 /// The seven claims of a chat pass (S28 §6), plus the optional `caps`
 /// ceiling (K7) and the optional `app` (spec v1.3). `caps` is omitted (not

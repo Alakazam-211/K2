@@ -155,6 +155,8 @@ impl std::fmt::Display for TransportError {
     }
 }
 
+const JSON: &str = "application/json";
+
 impl MgmtClient {
     /// Sew's own token file ([`k2_root_proto::sew::SEW_MGMT_TOKEN`]) means
     /// [`TokenSource::Helper`]; any other path is read as a file.
@@ -183,7 +185,7 @@ impl MgmtClient {
     }
 
     pub async fn get(&self, path: &str) -> Result<MgmtResponse, TransportError> {
-        self.call("GET", path, None, None, None).await
+        self.call("GET", path, None, None, None, JSON).await
     }
 
     pub async fn post(
@@ -193,7 +195,21 @@ impl MgmtClient {
         idem_key: &str,
         actor: &str,
     ) -> Result<MgmtResponse, TransportError> {
-        self.call("POST", path, Some(body), Some(idem_key), Some(actor))
+        self.call("POST", path, Some(body), Some(idem_key), Some(actor), JSON)
+            .await
+    }
+
+    /// A POST whose body isn't JSON (Sew for Apps A3: the raw picture of
+    /// `POST /mgmt/v1/principals/avatar`).
+    pub async fn post_typed(
+        &self,
+        path: &str,
+        body: &[u8],
+        content_type: &str,
+        idem_key: &str,
+        actor: &str,
+    ) -> Result<MgmtResponse, TransportError> {
+        self.call("POST", path, Some(body), Some(idem_key), Some(actor), content_type)
             .await
     }
 
@@ -204,17 +220,19 @@ impl MgmtClient {
         body: Option<&[u8]>,
         idem_key: Option<&str>,
         actor: Option<&str>,
+        content_type: &str,
     ) -> Result<MgmtResponse, TransportError> {
         let token = self.token(false).await?;
-        let r = self.send(&token, method, path, body, idem_key, actor).await?;
+        let r = self.send(&token, method, path, body, idem_key, actor, content_type).await?;
         // A helper-cached token Sew refused (rotated): fetch it once more.
         if r.status == 401 && self.source == TokenSource::Helper {
             let token = self.token(true).await?;
-            return self.send(&token, method, path, body, idem_key, actor).await;
+            return self.send(&token, method, path, body, idem_key, actor, content_type).await;
         }
         Ok(r)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn send(
         &self,
         token: &str,
@@ -223,6 +241,7 @@ impl MgmtClient {
         body: Option<&[u8]>,
         idem_key: Option<&str>,
         actor: Option<&str>,
+        content_type: &str,
     ) -> Result<MgmtResponse, TransportError> {
         let mut head = format!(
             "{method} {path} HTTP/1.1\r\nHost: sew\r\nConnection: close\r\nAuthorization: Bearer {token}\r\nAccept: application/json\r\n"
@@ -237,7 +256,7 @@ impl MgmtClient {
         let body = body.unwrap_or(&[]);
         if method == "POST" {
             head.push_str(&format!(
-                "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                "Content-Type: {content_type}\r\nContent-Length: {}\r\n",
                 body.len()
             ));
         }

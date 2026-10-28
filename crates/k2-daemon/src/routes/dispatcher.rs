@@ -10888,6 +10888,55 @@ async fn handle_one_request(
                 // rooms with its own pass (link or remote) under the
                 // owner's `guests-rooms` grant. Never a guest's pass, the
                 // owner token or a login (floor NoLogin; handler refuses).
+                // Sew for Apps A2 (0.46.6): an App gives its own guests chat
+                // with its own pass under the owner's `guests-chat` grant.
+                // Never a guest's pass, the owner token or a login (floor
+                // NoLogin; the handler refuses).
+                // Sew for Apps A6 (0.46.6): the chat identity map, an App's
+                // own pass with chat:read (floor NoLogin; the handler refuses).
+                crate::chat_map_routes::MEMBER | crate::chat_map_routes::WHOIS => {
+                    let body = if is_post {
+                        super::http::read_post_body(&mut *stream, &mut buf).await
+                    } else {
+                        let _ = stream.read(&mut buf).await;
+                        Vec::new()
+                    };
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+                        let pass = presented.and_then(crate::apps::gateway::resolve_pass);
+                        let params = super::http::parse_params(&path, &query);
+                        let link = crate::guest_rooms_routes::OnLink::current();
+                        let route = p.to_string();
+                        tokio::task::spawn_blocking(move || {
+                            crate::chat_map_routes::handle(&route, pass, link.as_ref(), is_post, &body, &params)
+                        })
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    } else {
+                        crate::chat_map_routes::app_pass_required()
+                    }
+                }
+                crate::guest_chat_routes::ROUTE => {
+                    let body = if is_post {
+                        super::http::read_post_body(&mut *stream, &mut buf).await
+                    } else {
+                        let _ = stream.read(&mut buf).await;
+                        Vec::new()
+                    };
+                    let presented = super::http::extract_token(&query);
+                    if presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+                        let pass = presented.and_then(crate::apps::gateway::resolve_pass);
+                        let params = super::http::parse_params(&path, &query);
+                        let link = crate::guest_rooms_routes::OnLink::current();
+                        tokio::task::spawn_blocking(move || {
+                            crate::guest_chat_routes::handle(pass, link.as_ref(), is_post, &body, &params)
+                        })
+                            .await
+                            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e))
+                    } else {
+                        crate::guest_chat_routes::app_pass_required()
+                    }
+                }
                 crate::guest_rooms_routes::ROUTE => {
                     let body = if is_post {
                         super::http::read_post_body(&mut *stream, &mut buf).await

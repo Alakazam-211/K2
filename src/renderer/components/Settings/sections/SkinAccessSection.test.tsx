@@ -36,6 +36,9 @@ import {
   SKIN_AGENT_CONFIG_CAP,
   SKIN_AGENT_CONFIG_LABEL,
   toggleSkinCap,
+  SKIN_CHAT_CAPS,
+  ROLE_CAP_LABELS,
+  roleCapChoices,
   parseFrontDoor,
   parseSkinUsers,
   parseSkinTokens,
@@ -995,6 +998,23 @@ describe('TUWA10: Settings → Apps reads the shared cap table', () => {
       'agent:handle': "Change the agent's handle (its address)",
       'files:download': 'Download Thread files (a save, not just a view; a person grants it)',
     })
+  })
+
+  it('A1: chat caps are role-line only, never default, gated by the server, and voice:video rides voice:join', () => {
+    expect(SKIN_CHAT_CAPS).toEqual(['chat:read', 'chat:post', 'chat:respond', 'voice:join', 'voice:video'])
+    for (const cap of SKIN_CHAT_CAPS) {
+      expect(DEFAULT_SKIN_CAPS as readonly string[]).not.toContain(cap)
+      expect(SKIN_CAP_CHOICES as readonly string[]).not.toContain(cap)
+      expect(ROLE_CAP_LABELS[cap].length).toBeGreaterThan(0)
+    }
+    const base = skinCapChoices(true, true, true)
+    expect(roleCapChoices(base, false)).toEqual(base)
+    expect(roleCapChoices(base, true)).toEqual([...base, ...SKIN_CHAT_CAPS])
+    const on = toggleSkinCap(new Set(['thread:read']), 'voice:video', true)
+    expect([...on].sort()).toEqual(['thread:read', 'voice:join', 'voice:video'])
+    const off = toggleSkinCap(on, 'voice:join', false)
+    expect([...off]).toEqual(['thread:read'])
+    expect([...toggleSkinCap(on, 'voice:video', false)].sort()).toEqual(['thread:read', 'voice:join'])
   })
 
   it('files:download is its own group, never default, never a files cap, and gated by the server', () => {

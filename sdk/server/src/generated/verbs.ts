@@ -1348,6 +1348,50 @@ export const APP_VERBS = {
     responseNames: {},
     response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"caps":{"items":{"type":"string"},"type":"array"},"expiresAt":{"type":"string"},"expiresInMs":{"type":"integer"},"jti":{"type":"string"},"ok":{"type":"boolean"},"pass":{"type":"string"},"personProof":{"type":"boolean"},"provenance":{"type":"string"},"sewRole":{"type":"string"},"sid":{"type":"string"},"sub":{"type":"string"}},"type":"object"},
   },
+  'guests.chat': {
+    cap: 'guests:chat',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-chat-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/skin/guests/chat', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":["string","null"]},"appScoped":{"type":"boolean"},"changed":{"type":"boolean"},"enabled":{"type":"boolean"},"managedBy":{"type":["string","null"]},"maxMembers":{"type":["integer","null"]},"members":{"type":["integer","null"]},"ok":{"type":"boolean"},"principalId":{"type":"string"},"scope":{"enum":["member","guest",null],"type":["string","null"]},"username":{"type":"string"},"warning":{"type":["string","null"]}},"type":"object"},
+  },
+  'guests.setChat': {
+    cap: 'guests:chat',
+    effect: 'write',
+    kind: 'call',
+    feature: 'app-chat-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/skin/guests/chat', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":["string","null"]},"appScoped":{"type":"boolean"},"changed":{"type":"boolean"},"enabled":{"type":"boolean"},"managedBy":{"type":["string","null"]},"maxMembers":{"type":["integer","null"]},"members":{"type":["integer","null"]},"ok":{"type":"boolean"},"principalId":{"type":"string"},"scope":{"enum":["member","guest",null],"type":["string","null"]},"username":{"type":"string"},"warning":{"type":["string","null"]}},"type":"object"},
+  },
+  'chat.member': {
+    cap: 'chat:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-chat-v1',
+    door: 'link',
+    http: { method: 'GET', route: '/cli/sew/app/member', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"externalId":{"type":"string"},"memberId":{"type":"string"},"ok":{"type":"boolean"},"principalId":{"type":"string"},"state":{"enum":["active","deactivated"],"type":"string"},"username":{"type":"string"}},"type":"object"},
+  },
+  'chat.whois': {
+    cap: 'chat:read',
+    effect: 'read',
+    kind: 'call',
+    feature: 'app-chat-v1',
+    door: 'link',
+    http: { method: 'POST', route: '/cli/sew/app/whois', params: {}, query: [] },
+    socket: null,
+    responseNames: {},
+    response: {"additionalProperties":false,"properties":{"app":{"type":"string"},"members":{"items":{"additionalProperties":false,"properties":{"deleted":{"type":"boolean"},"displayName":{"type":"string"},"imageHash":{"type":"string"},"isThisAppUser":{"type":"boolean"},"kind":{"enum":["person","agent","unknown"],"type":"string"},"memberId":{"type":"string"},"principalId":{"type":"string"},"username":{"type":"string"}},"type":"object"},"type":"array"},"ok":{"type":"boolean"}},"type":"object"},
+  },
   'project.list': {
     cap: 'thread:read',
     effect: 'read',
@@ -3260,6 +3304,65 @@ export interface AppChatPass {
   readonly sub: string
 }
 
+export interface AppGuestChat {
+  /** The App's service id. */
+  readonly app: string | null
+  /** This server's Sew keeps this App's sessions to its own Spaces (app_scoped_sessions). */
+  readonly appScoped: boolean
+  /** true only when a set wrote something. */
+  readonly changed: boolean
+  /** Whether the person's chat grant is on. */
+  readonly enabled: boolean
+  /** app = this App gave it; owner = the owner (or another App) did; null = no chat. */
+  readonly managedBy: string | null
+  /** This App's ceiling (the owner's grant). */
+  readonly maxMembers: number | null
+  /** People this App gave chat to. */
+  readonly members: number | null
+  readonly ok: boolean
+  /** The person's id: k2:principal:<id> in Sew. Store this, never the email. */
+  readonly principalId: string
+  /** member | guest; null = no chat. */
+  readonly scope: 'member' | 'guest' | null
+  readonly username: string
+  /** Until appScoped: this App can see all chat this person can. */
+  readonly warning: string | null
+}
+
+export interface AppChatMember {
+  readonly app: string
+  /** k2:principal:<principalId>, the stable key in Sew. */
+  readonly externalId: string
+  /** Sew's member id: open DMs, ring calls, mention or add members with it. */
+  readonly memberId: string
+  readonly ok: boolean
+  readonly principalId: string
+  readonly state: 'active' | 'deactivated'
+  readonly username: string
+}
+
+export interface AppChatWhoisRow {
+  /** The person was deleted in K2: show a deleted user. */
+  readonly deleted: boolean
+  /** The name Sew shows (K2's profile display name, else full name, else username). */
+  readonly displayName?: string
+  /** The K2 profile picture's hash, when there is one. */
+  readonly imageHash?: string
+  readonly isThisAppUser: boolean
+  readonly kind: 'person' | 'agent' | 'unknown'
+  readonly memberId: string
+  /** Only for this App's users. */
+  readonly principalId?: string
+  /** This App's users, and its own room agent's handle. */
+  readonly username?: string
+}
+
+export interface AppChatWhois {
+  readonly app: string
+  readonly members: AppChatWhoisRow[]
+  readonly ok: boolean
+}
+
 export interface AppProjectMember {
   readonly handle: string
   /** The member agent's project id. */
@@ -3361,7 +3464,7 @@ export interface AppProjectFrame {
 }
 
 /** The shared error codes (catalog `errors`). */
-export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'] as const
+export const APP_ERROR_CODES = ['cap_not_granted', 'not_bound', 'rate_limited', 'too_large', 'unknown_verb', 'verb_unavailable', 'verb_local', 'not_exposed', 'sending_off', 'server_not_saved', 'unreachable', 'removed', 'no_history', 'failed', 'conflict', 'space_full', 'value_too_large', 'bad_key', 'not_granted', 'resync', 'author_unknown', 'stale_widget', 'store_full', 'bad_tx', 'tx_expired', 'busy', 'paused', 'blob_missing', 'bad_args', 'bad_shape', 'pass_required', 'pass_invalid', 'pass_wrong_link', 'not_on_link', 'json_required', 'skin_room', 'usage', 'not_found', 'bad_login', 'locked', 'card_not_pending', 'guest_required', 'no_app_pass', 'no_app_key', 'no_chat_grant', 'no_chat_caps', 'app_claim_invalid', 'not_app_granted', 'chat_off_for_person', 'shared_person', 'has_assistants', 'chat_limit', 'username_unusable', 'chat_not_app_scoped', 'no_chat_member', 'chat_unavailable', 'app_pass_required', 'grant_required', 'outside_app_rooms', 'above_role', 'has_role', 'confirm_required', 'declined', 'refresh_invalid', 'refresh_reused', 'person_pass_required', 'wallet_off', 'push_off', 'not_for_host', 'channel_unavailable', 'push_devices_full', 'push_not_configured', 'too_many_recipients', 'push_queue_full', 'airgap', 'vault_closed', 'token_in_use', 'pairing_off', 'pairing_from_device', 'reauth_required', 'device_signin_off', 'host_not_paired', 'no_public_host', 'pairing_not_served', 'pair_code_invalid', 'pairing_not_from_browser', 'duplicate_label', 'needs_editor', 'retired', 'card_person_only', 'edit_off', 'type_refused', 'type_mismatch', 'bad_image', 'agent_login', 'email_off', 'no_sender', 'sender_not_granted', 'system_sender', 'recipient_out_of_scope', 'header_not_allowed', 'message_too_large', 'domain_not_ready', 'dmarc_missing', 'relay_not_ready', 'idempotency_conflict', 'no_mail_path'] as const
 
 export type AppErrorCode = (typeof APP_ERROR_CODES)[number]
 
@@ -3486,6 +3589,10 @@ export interface AppVerbs {
   'app.self': { args: { app?: string }; value: AppSelf }
   'app.usage': { args: { app?: string; hours?: number }; value: AppUsage }
   'chat.pass': { args: Record<string, never>; value: AppChatPass }
+  'guests.chat': { args: { app?: string; username: string }; value: AppGuestChat }
+  'guests.setChat': { args: { app?: string; scope: 'member' | 'guest' | 'none'; username: string }; value: AppGuestChat }
+  'chat.member': { args: { app?: string; principal?: string; username?: string }; value: AppChatMember }
+  'chat.whois': { args: { app?: string; memberIds: string[] }; value: AppChatWhois }
   'project.list': { args: Record<string, never>; value: AppProjectList }
   'project.read': { args: { afterSeq?: number; beforeSeq?: number; group: string; limit?: number }; value: AppProjectPage }
   'project.post': { args: { body: string; group: string }; value: AppProjectPosted }
@@ -3493,7 +3600,7 @@ export interface AppVerbs {
   'project.events': { args: { group: string }; value: AppProjectFrame }
 }
 
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead'
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events'
 
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
@@ -3523,6 +3630,10 @@ export interface AppSurfaces {
     devices(args?: {  }): Promise<AppDevices>
     /** Sign one of this guest's own devices out (its pass and refresh token end). no cap · POST /cli/skin/devices/revoke. e.g. `await k2.asGuest(pass).guests.revokeDevice({id})` */
     revokeDevice(args: { id: string }): Promise<AppOk>
+    /** One of this App's guests: their chat (member, guest or none), who gave it, and this App's member ceiling. cap guests:chat · GET /cli/skin/guests/chat. e.g. `const c = await k2.asApp().guests.chat({username: 'dana'})` */
+    chat(args: { app?: string; username: string }): Promise<AppGuestChat>
+    /** Give one of this App's guests chat (member or guest) or take it away; only grants this App made, within its ceiling; idempotent, audited. cap guests:chat · POST /cli/skin/guests/chat. e.g. `await k2.asApp().guests.setChat({username: 'dana', scope: 'member'})` */
+    setChat(args: { app?: string; scope: 'member' | 'guest' | 'none'; username: string }): Promise<AppGuestChat>
   }
   readonly app: {
     /** This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it). no cap · GET /cli/skin/app-rooms. e.g. `const {ceiling, granted} = await k2.asApp().app.rooms()` */
@@ -3759,6 +3870,10 @@ export interface AppSurfaces {
   readonly chat: {
     /** Mint a Sew chat pass for the guest of this request (a login with a chat grant; server only, never a handoff code). no cap · POST /cli/sew/pass. e.g. `const {pass} = await k2.withGuest(guestPass, () => k2.chat.pass())` */
     pass(args?: Record<string, never>): Promise<AppChatPass>
+    /** One of this App's users (by principal id or username) → their Sew member id; anyone else is the same not_found as nobody. cap chat:read · GET /cli/sew/app/member. e.g. `const {memberId} = await k2.asApp().chat.member({principal: user.principalId})` */
+    member(args: { app?: string; principal?: string; username?: string }): Promise<AppChatMember>
+    /** Sew member ids → which of this App's users each is; everyone else shows only memberId, kind and isThisAppUser: false. cap chat:read · POST /cli/sew/app/whois. e.g. `const {members} = await k2.asApp().chat.whois({memberIds: ['48831765147549712']})` */
+    whois(args: { app?: string; memberIds: string[] }): Promise<AppChatWhois>
   }
   readonly project: {
     /** The project chats this pass can read: a project shows only when every member agent is a room it holds with thread:read. cap thread:read · GET /cli/skin/projects. e.g. `const {projects} = await k2.project.list()` */

@@ -2293,6 +2293,11 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     // prd-app-phone-pairing-v1: its pairing config, codes and link files go.
     crate::app_pairing::forget_app(&app.service_id, Some(&app.app_id));
     crate::email_notify::forget_app(&app.service_id);
+    // Sew for Apps A6 (Q12): people whose only App this was lose chat
+    // (deactivated, never deleted); its guests-chat grant goes.
+    if let Err(e) = k2_core::skin::app_chat::app_removed(&app.service_id, "system:app-removed") {
+        k2_core::log_debug!("[apps] {}: WARN chat users of a removed App: {e}", app.app_id);
+    }
     audit_human(&app.app_id, "uninstall", who, json!({ "purge": purge }));
     if purge {
         let _ = std::fs::remove_dir_all(deploy::app_dir(&app.app_id));

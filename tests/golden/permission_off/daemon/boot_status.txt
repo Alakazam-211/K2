@@ -41,6 +41,7 @@ features:
   app-phone-pairing-v1
   app-user-profile-v1
   email-notifications-v1
+  app-chat-v1
   activity-live-busy
   thread-push-v1
   push-previews-v1

@@ -139,6 +139,15 @@ struct State {
     chat_posts: Vec<(u64, u64, String)>,
     /// SW13 Spaces by id.
     spaces: BTreeMap<String, Space>,
+    /// Sew for Apps A3: the picture K2 pushed per external id (sha256 hex
+    /// of the raw bytes, length).
+    avatars: BTreeMap<String, (String, usize)>,
+    /// Sew for Apps D13: `/mgmt/v1/apps/{app_id}/settings` bodies by App,
+    /// and the install's home client.
+    app_settings: BTreeMap<String, Value>,
+    home_client: Option<Option<String>>,
+    /// The status `features` (default none).
+    features: Vec<String>,
 }
 
 pub struct FakeSew {
@@ -223,6 +232,10 @@ impl FakeSew {
     pub fn set_install_id(&self, id: &str) {
         self.with(|s| s.install_id = id.into())
     }
+    /// The feature flags `GET /mgmt/v1/status` reports (Sew 2026-10-28).
+    pub fn set_features(&self, f: &[&str]) {
+        self.with(|s| s.features = f.iter().map(|x| x.to_string()).collect())
+    }
     pub fn set_provider(&self, p: &str) {
         self.with(|s| s.provider = p.into())
     }
@@ -253,6 +266,9 @@ impl FakeSew {
         self.with(|s| {
             s.install_id = id.into();
             s.members.clear();
+            s.avatars.clear();
+            s.app_settings.clear();
+            s.home_client = None;
             s.owner = None;
             s.idem.clear();
         })
@@ -321,6 +337,21 @@ impl FakeSew {
 
     pub fn space(&self, space_id: &str) -> Option<Space> {
         self.with(|s| s.spaces.get(space_id).cloned())
+    }
+
+    /// A3: the picture Sew holds for `ext` (sha256 hex, length).
+    pub fn avatar(&self, ext: &str) -> Option<(String, usize)> {
+        self.with(|s| s.avatars.get(ext).cloned())
+    }
+
+    /// D13: the last settings body K2 sent for `app`.
+    pub fn app_settings(&self, app: &str) -> Option<Value> {
+        self.with(|s| s.app_settings.get(app).cloned())
+    }
+
+    /// D13: the home client K2 set (`None` = never sent).
+    pub fn home_client(&self) -> Option<Option<String>> {
+        self.with(|s| s.home_client.clone())
     }
 
     pub fn member(&self, ext: &str) -> Option<Member> {
@@ -432,7 +463,7 @@ fn sha(s: &str) -> String {
 async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
-    let (head, body) = loop {
+    let (head, body, raw) = loop {
         match stream.read(&mut chunk).await {
             Ok(0) | Err(_) => return,
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
@@ -451,6 +482,7 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
             break (
                 head,
                 String::from_utf8_lossy(&buf[end + 4..end + 4 + len]).to_string(),
+                buf[end + 4..end + 4 + len].to_vec(),
             );
         }
     };
@@ -465,6 +497,7 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
     let actor = header(&head, "sew-actor");
     let auth = header(&head, "authorization");
     let act = (header(&head, "sew-act-as"), header(&head, "sew-via"));
+    let ctype = header(&head, "content-type");
 
     let (status, out, extra, drop_conn) = {
         let mut s = state.lock().unwrap();
@@ -478,6 +511,7 @@ async fn serve(mut stream: UnixStream, state: Arc<Mutex<State>>) {
             actor.as_deref(),
             &act,
             &body,
+            (&raw, ctype.as_deref()),
         )
     };
     if drop_conn {
@@ -511,6 +545,7 @@ fn handle(
     actor: Option<&str>,
     act: &(Option<String>, Option<String>),
     body: &str,
+    raw: (&[u8], Option<&str>),
 ) -> (u16, String, String, bool) {
     let parsed: Value = serde_json::from_str(body).unwrap_or(Value::Null);
     let record = |s: &mut State, status: u16, replayed: bool| {
@@ -554,7 +589,7 @@ fn handle(
             sew_wire::MGMT_STATUS => (
                 200,
                 json!({
-                    "version": "0.0.0-fake", "schema_version": 1, "install_id": s.install_id,
+                    "version": "0.0.0-fake", "features": s.features.clone(), "schema_version": 1, "install_id": s.install_id,
                     "provider": s.provider, "db": {}, "jobs": {}, "search": {}, "keys": {},
                     "sessions": 0, "sockets": 0
                 })
@@ -634,6 +669,10 @@ fn handle(
         sew_wire::MGMT_SPACES_BIND => space_bind(s, body),
         sew_wire::MGMT_SPACE_MEMBERS_ADD => space_members_add(s, body),
         sew_wire::MGMT_SPACE_MEMBERS_REMOVE => space_member_remove(s, body),
+        "/mgmt/v1/principals/avatar" => avatar_set(s, query, raw),
+        "/mgmt/v1/principals/avatar/clear" => avatar_clear(s, body),
+        "/mgmt/v1/home-client" => home_client(s, body),
+        p if p.starts_with("/mgmt/v1/apps/") && p.ends_with("/settings") => app_settings(s, p, body),
         p if acting.is_some() => chat_post(s, acting.expect("acting"), p, body),
         sew_client::proto::routes::MGMT_SPACES_CREATE => space_create(s, body),
         _ => {
@@ -651,6 +690,79 @@ fn handle(
     }
     record(s, st, false);
     (st, b, String::new(), drop_conn)
+}
+
+// ── Sew for Apps A3: pictures; D13: home client and App settings ──────
+
+fn query_param<'a>(query: &'a str, k: &str) -> Option<&'a str> {
+    query.split('&').find_map(|kv| kv.split_once('=').filter(|(a, _)| *a == k).map(|(_, v)| v))
+}
+
+fn avatar_set(s: &mut State, query: &str, raw: (&[u8], Option<&str>)) -> (u16, String) {
+    let ext = query_param(query, "external_id").unwrap_or("").to_string();
+    if raw.1 != Some("image/jpeg") || raw.0.is_empty() || !matches!(query_param(query, "force"), Some("true" | "false")) {
+        s.bad_bodies.push(format!("avatar {ext}: type {:?}, {} bytes, query {query}", raw.1, raw.0.len()));
+        return err(400, "validation_failed", "a JPEG body and force=true|false", json!({}));
+    }
+    let Some(m) = s.members.get(&ext) else {
+        return err(404, "not_found", "no such member", json!({}));
+    };
+    let id = m.member_id;
+    let h = Sha256::digest(raw.0);
+    let hex: String = h.iter().map(|b| format!("{b:02x}")).collect();
+    s.avatars.insert(ext, (hex, raw.0.len()));
+    (200, json!({"member_id": id.to_string(), "applied": true}).to_string())
+}
+
+fn avatar_clear(s: &mut State, body: &str) -> (u16, String) {
+    let v: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return bad_body(s, "avatar clear", e, body),
+    };
+    let ext = v["external_id"].as_str().unwrap_or("").to_string();
+    if v.as_object().map_or(true, |o| o.keys().any(|k| k != "external_id" && k != "force")) {
+        return bad_body(s, "avatar clear", "unknown field", body);
+    }
+    let Some(m) = s.members.get(&ext) else {
+        return err(404, "not_found", "no such member", json!({}));
+    };
+    let id = m.member_id;
+    let had = s.avatars.remove(&ext).is_some();
+    (200, json!({"member_id": id.to_string(), "applied": had}).to_string())
+}
+
+fn home_client(s: &mut State, body: &str) -> (u16, String) {
+    let v: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return bad_body(s, "home-client", e, body),
+    };
+    let app = match v.get("app_id") {
+        Some(Value::Null) => None,
+        Some(Value::String(a)) => Some(a.clone()),
+        _ => return bad_body(s, "home-client", "app_id is a string or null", body),
+    };
+    s.home_client = Some(app.clone());
+    (200, json!({"home_client": app}).to_string())
+}
+
+fn app_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
+    let app = path.trim_start_matches("/mgmt/v1/apps/").trim_end_matches("/settings").to_string();
+    let v: Value = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => return bad_body(s, "app settings", e, body),
+    };
+    // Any subset per call (Sew 2026-10-28); origin is a wss:// URL.
+    let ok_keys = v.as_object().is_some_and(|o| !o.is_empty() && o.keys().all(|k| ["hidden_from_home", "display_name", "origin"].contains(&k.as_str())));
+    let ok_types = v.get("hidden_from_home").is_none_or(Value::is_boolean)
+        && v.get("origin").is_none_or(|o| o.as_str().is_some_and(|o| o.starts_with("wss://")));
+    if app.is_empty() || !ok_keys || !ok_types {
+        return bad_body(s, "app settings", "fields: hidden_from_home (bool), display_name, origin (wss://)", body);
+    }
+    let entry = s.app_settings.entry(app.clone()).or_insert_with(|| json!({}));
+    for (k, x) in v.as_object().cloned().unwrap_or_default() {
+        entry[k] = x;
+    }
+    (200, json!({"app_id": app, "applied": true}).to_string())
 }
 
 // ── S30 K15: the act-as `/api/v1` slice and SW11 spaces/create ─────────

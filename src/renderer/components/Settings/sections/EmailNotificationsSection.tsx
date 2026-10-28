@@ -12,8 +12,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { SettingEntry } from '../searchManifest'
 import {
-  emailNotifyApi,
-  type EmailNotifyApi,
+  emailNotifyApiOn,
   notifyErrorMessage,
   ownerText,
   pauseText,
@@ -50,7 +49,7 @@ function Chip({ text, tone }: { text: string; tone: 'ok' | 'warn' | 'error' | 'm
   )
 }
 
-function SenderRow({ api, s, onResumed }: { api: EmailNotifyApi; s: NotifySender; onResumed: () => void }): React.JSX.Element {
+function SenderRow({ s, api, onResumed }: { s: NotifySender; api: EmailNotifyApi; onResumed: () => void }): React.JSX.Element {
   const [busy, setBusy] = useState(false)
   const [askPassword, setAskPassword] = useState(false)
   const [password, setPassword] = useState('')
@@ -112,8 +111,11 @@ function SenderRow({ api, s, onResumed }: { api: EmailNotifyApi; s: NotifySender
   )
 }
 
+type EmailNotifyApi = ReturnType<typeof emailNotifyApiOn>
+
+/** `scope`: the server this page shows. */
 export function EmailNotificationsSection({ scope }: { scope: ServerScope }): React.JSX.Element {
-  const api = useMemo(() => emailNotifyApi(scope), [scope])
+  const emailNotifyApi = useMemo(() => emailNotifyApiOn(scope), [scope])
   const [status, setStatus] = useState<NotifyStatus | null>(null)
   const [agents, setAgents] = useState<NotifyAgent[]>([])
   const [sups, setSups] = useState<NotifySuppression[]>([])
@@ -125,10 +127,10 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
   const load = useCallback(async (): Promise<void> => {
     try {
       const [st, ag, su, lg] = await Promise.all([
-        api.status(),
-        api.agents(),
-        api.suppressions(),
-        api.log(30),
+        emailNotifyApi.status(),
+        emailNotifyApi.agents(),
+        emailNotifyApi.suppressions(),
+        emailNotifyApi.log(30),
       ])
       setStatus(st)
       setAgents(ag)
@@ -138,7 +140,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
     } catch (e) {
       setError(notifyErrorMessage(e))
     }
-  }, [])
+  }, [emailNotifyApi])
 
   useEffect(() => {
     void load()
@@ -146,7 +148,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
 
   const find = async (): Promise<void> => {
     try {
-      setSups(await api.suppressions(search))
+      setSups(await emailNotifyApi.suppressions(search))
     } catch (e) {
       setError(notifyErrorMessage(e))
     }
@@ -155,7 +157,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
   const unsuppress = async (): Promise<void> => {
     if (!search.trim()) return
     try {
-      const r = await api.removeSuppression(search.trim())
+      const r = await emailNotifyApi.removeSuppression(search.trim())
       setNote(`Removed ${r.removed} entr${r.removed === 1 ? 'y' : 'ies'}: mail may go to ${search.trim()} again.`)
       await find()
     } catch (e) {
@@ -165,8 +167,8 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
 
   const turnOff = async (ws: string): Promise<void> => {
     try {
-      await api.agentOff(ws)
-      setAgents(await api.agents())
+      await emailNotifyApi.agentOff(ws)
+      setAgents(await emailNotifyApi.agents())
     } catch (e) {
       setError(notifyErrorMessage(e))
     }
@@ -200,7 +202,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
       <div>
         <Title>System sender</Title>
         {status.systemSender ? (
-          <SenderRow api={api} s={status.systemSender} onResumed={() => void load()} />
+          <SenderRow s={status.systemSender} api={emailNotifyApi} onResumed={() => void load()} />
         ) : (
           <p className={muted}>None. K2's own resets and codes can't be emailed until you set one: k2 notifications email system-sender set &lt;sender&gt;.</p>
         )}
@@ -212,7 +214,7 @@ export function EmailNotificationsSection({ scope }: { scope: ServerScope }): Re
         {others.length === 0 ? (
           <p className={muted}>No other senders. Add one: k2 notifications email sender add noreply@&lt;your domain&gt;.</p>
         ) : (
-          others.map((s) => <SenderRow key={s.id} api={api} s={s} onResumed={() => void load()} />)
+          others.map((s) => <SenderRow key={s.id} s={s} api={emailNotifyApi} onResumed={() => void load()} />)
         )}
       </div>
 

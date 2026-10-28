@@ -71,35 +71,31 @@ export interface NotifyLogItem {
 
 export const RESUME_CONFIRM_ACTION = 'email-resume'
 
-/** The calls, on the server Settings shows (its `scope`, passed in by
- *  Settings; never a silent fallback to the window's primary server). */
-export type EmailNotifyApi = ReturnType<typeof emailNotifyApi>
-
-export const emailNotifyApi = (on: ServerScope) => {
-  const scope = () => on
+/** The routes on one server (Settings passes the server it shows). */
+export function emailNotifyApiOn(scope: ServerScope) {
   return {
-    status: () => daemonCliGet<NotifyStatus>(scope(), 'notifications/email'),
+    status: () => daemonCliGet<NotifyStatus>(scope, 'notifications/email'),
     agents: async (): Promise<NotifyAgent[]> => {
-      const r = await daemonCliGet<{ agents?: NotifyAgent[] }>(scope(), 'notifications/email/agents')
+      const r = await daemonCliGet<{ agents?: NotifyAgent[] }>(scope, 'notifications/email/agents')
       return Array.isArray(r?.agents) ? r.agents : []
     },
-    agentOff: (workspace: string) => daemonCliPost<{ ok: boolean }>(scope(), 'notifications/email/agent/off', { workspace }),
+    agentOff: (workspace: string) => daemonCliPost<{ ok: boolean }>(scope, 'notifications/email/agent/off', { workspace }),
     suppressions: async (address?: string): Promise<NotifySuppression[]> => {
       const q = address && address.trim() ? { address: address.trim(), limit: 100 } : { limit: 100 }
-      const r = await daemonCliGet<{ suppressions?: NotifySuppression[] }>(scope(), 'notifications/email/suppressions', q)
+      const r = await daemonCliGet<{ suppressions?: NotifySuppression[] }>(scope, 'notifications/email/suppressions', q)
       return Array.isArray(r?.suppressions) ? r.suppressions : []
     },
     removeSuppression: (address: string) =>
-      daemonCliPost<{ ok: boolean; removed: number }>(scope(), 'notifications/email/suppressions/rm', { address, all: true }),
+      daemonCliPost<{ ok: boolean; removed: number }>(scope, 'notifications/email/suppressions/rm', { address, all: true }),
     log: async (limit = 30): Promise<NotifyLogItem[]> => {
-      const r = await daemonCliGet<{ items?: NotifyLogItem[] }>(scope(), 'notifications/email/log', { limit })
+      const r = await daemonCliGet<{ items?: NotifyLogItem[] }>(scope, 'notifications/email/log', { limit })
       return Array.isArray(r?.items) ? r.items : []
     },
     /** Resume a paused sender: a fresh owner confirm bound to its address
      *  (Touch ID / login where the server offers it, else the vault
      *  password), then the resume. */
     resume: async (sender: NotifySender, password?: string): Promise<void> => {
-      const v = vaultConfirmOn(scope())
+      const v = vaultConfirmOn(scope)
       const { methods } = await v.start(RESUME_CONFIRM_ACTION, sender.address)
       const method = password !== undefined ? 'vault-password' : pickMethod(methods)
       if (!method) throw new Error(JSON.stringify({ error: { code: 'password_needed', hint: 'enter the vault password to confirm' } }))
@@ -110,7 +106,7 @@ export const emailNotifyApi = (on: ServerScope) => {
         label: `resume ${sender.address}`.slice(0, 64),
         ...(password !== undefined ? { password } : {}),
       })
-      await daemonCliPost(scope(), 'notifications/email/sender/resume', { sender: sender.address, confirmToken: token })
+      await daemonCliPost(scope, 'notifications/email/sender/resume', { sender: sender.address, confirmToken: token })
     },
   }
 }

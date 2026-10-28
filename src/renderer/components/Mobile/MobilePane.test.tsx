@@ -504,6 +504,78 @@ describe('no device running', () => {
     expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'iphone_16', platform: 'ios', noTab: true } }])
   })
 
+  // iPhone on a Mac compute node (0.46.7): the lane is registered on every
+  // unix server, so "no Mac" is an unusable ios-node lane, not a missing one.
+  const NO_MAC_NODE = [
+    { lane: 'android', usable: true, ready: true },
+    { lane: 'ios-node', usable: false, ready: false, detail: 'No Mac can run an iPhone for this server yet.' },
+  ]
+
+  it('no Mac node: the owner gets the steps and a button to Compute settings', async () => {
+    daemon.whoami = { owner: true, role: 'owner' }
+    daemon.status = status({ sim: STOPPED, lanes: NO_MAC_NODE, canControl: true })
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-platform]')).toBeNull()
+    expect(document.querySelector('[data-mobile-iphone-note]')?.textContent).toBe('iPhone needs a Mac (this computer or a Mac compute node)')
+    expect(document.querySelector('[data-mobile-mac-node]')?.getAttribute('data-mobile-mac-node')).toBe('add')
+    const steps = Array.from(document.querySelectorAll('[data-mobile-mac-steps] li')).map((l) => l.textContent)
+    expect(steps).toEqual([
+      'On this server: k2 compute node add <name>',
+      'On the Mac: install k2-node, Xcode and an iOS Simulator runtime (xcodebuild -downloadPlatform iOS)',
+      'On the Mac: sudo k2-node setup --sim',
+      'On this server: k2 compute grant <name> --workspace <workspace>',
+    ])
+    expect(document.querySelector('[data-mobile-mac-ask]')).toBeNull()
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-mobile-open-compute]') as HTMLButtonElement)
+    })
+    expect(useSettingsStore.getState().activeSection).toBe('compute')
+  })
+
+  it('no Mac node: a Member is told who to ask, with no steps', async () => {
+    daemon.status = status({ sim: null, lanes: NO_MAC_NODE, canControl: false })
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-mac-node]')?.getAttribute('data-mobile-mac-node')).toBe('ask')
+    expect(document.querySelector('[data-mobile-mac-ask]')?.textContent).toBe('Ask the owner of this server to add a Mac to run iPhones.')
+    expect(document.querySelector('[data-mobile-mac-steps]')).toBeNull()
+    expect(document.querySelector('[data-mobile-open-compute]')).toBeNull()
+  })
+
+  it('an iPhone on a Mac node: the chooser names the node, boot sends platform ios, and the steps show while it boots', async () => {
+    const NODE_17 = { id: 'k2n1-m4:com.apple.CoreSimulator.SimDeviceType.iPhone-17', name: 'iPhone 17 (on k2n1-m4)', widthPt: 402, heightPt: 874, scale: 3, os: 'iOS 26.5', default: true }
+    daemon.whoami = { owner: true, role: 'owner' }
+    daemon.status = status({ sim: null, canControl: true, lanes: [{ lane: 'ios-node', usable: true, ready: true, detail: 'iPhones on k2n1-m4' }] })
+    daemon.devicesByPlatform = { ios: { lane: 'ios-node', devices: [NODE_17] } }
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-mac-node]')).toBeNull()
+    expect(listed('ios')).toEqual(['iPhone 17 (on k2n1-m4)'])
+    await act(async () => {
+      fireEvent.click(startRow(NODE_17.id))
+    })
+    await flush()
+    expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: NODE_17.id, platform: 'ios', noTab: true } }])
+    cleanup()
+    daemon.status = status({ canControl: true, lanes: [{ lane: 'ios-node', usable: true, ready: true }], sim: { ...RUNNING, lane: 'ios-node', state: 'booting', profile: NODE_17, reason: 'Starting on k2n1-m4' } })
+    renderMobile(createStubSimStream())
+    await flush()
+    // The loading screen's starting step is the node's step.
+    expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('booting')
+    expect(document.querySelector('[data-mobile-boot-step="booting"]')?.textContent).toContain('Starting on k2n1-m4')
+  })
+
+  it('a node that needs its owner names the node in the step', async () => {
+    daemon.status = status({
+      sim: null,
+      lanes: [{ lane: 'ios-node', usable: true, ready: false, needs: [{ kind: 'owner-step', what: 'On k2n1-m4: install an iOS Simulator runtime', command: 'xcodebuild -downloadPlatform iOS' }] }],
+    })
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe('On k2n1-m4: install an iOS Simulator runtime: xcodebuild -downloadPlatform iOS')
+  })
+
   it('a watch-only login has no Start (the daemon says canControl false)', async () => {
     daemon.status = status({ sim: null, canControl: false })
     renderMobile(createStubSimStream())

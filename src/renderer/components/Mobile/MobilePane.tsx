@@ -38,6 +38,7 @@ import type { MobileItemData } from '@/stores/tabs'
 import { roomProjectForCwd } from '@/stores/room'
 import { DeviceFrame, useElementSize } from './DeviceFrame'
 import { frameLayout, resolveDeviceShape } from './device-frame'
+import { MacNodeNote } from './MacNodeNote'
 import { MobileBootScreen, type MobileBootPhase } from './MobileBootScreen'
 import { MobileControlRail, RAIL_INSET_PX } from './MobileControlRail'
 import {
@@ -56,6 +57,7 @@ import {
   firstUsableLane,
   IPHONE_NEEDS_A_MAC,
   lanePlatform,
+  macNodeCard,
   offeredPlatforms,
   screenshotSim,
   setupAcceptedLine,
@@ -318,7 +320,9 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
   if (!status) return statusError ? `Can't reach the device service: ${statusError}` : 'Checking for devices…'
   const s = status.sim
   if (s?.state === 'installing') return `Installing the device tools for ${s.profile?.name ?? 'the device'}… (first use only)`
-  if (s?.state === 'booting') return `Starting ${s.profile?.name ?? 'the device'}…`
+  // A Mac node's boot names its step ("Finding a Mac node", "Starting on
+  // k2n1-m4", "Booting iPhone 17"); a local boot has none.
+  if (s?.state === 'booting') return s.reason ? `${s.reason}…` : `Starting ${s.profile?.name ?? 'the device'}…`
   if (s?.state === 'stopping') return `Stopping ${s.profile?.name ?? 'the device'}…`
   if (s?.state === 'running') return null
   const lane = firstUsableLane(status.lanes)
@@ -333,6 +337,8 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
       return `The owner of this server must accept ${all} first.`
     }
     const step = lane.needs.find((n) => n.kind === 'owner-step')
+    // A step on another machine already names it ("On k2n1-m4: …").
+    if (step && step.kind === 'owner-step' && step.what.startsWith('On ')) return `${step.what}: ${step.command}`
     if (step && step.kind === 'owner-step') return `The owner of this server must ${step.what} first: ${step.command}`
     if (lane.setup?.running) return `${setupAcceptedLine(lane.setup)}Setting up the device tools: ${lane.detail ?? 'installing…'}`
     if (lane.setup?.error) return `The device setup didn't finish: ${lane.setup.error}`
@@ -421,9 +427,10 @@ function MobileDevice({
         : firstLane
           ? lanePlatform(firstLane.lane)
           : null
-  // No iOS lane at all on this server (a Mac's own lane that isn't usable
-  // yet explains itself in the lane's detail instead).
-  const iphoneNote = status && !status.lanes.some((l) => lanePlatform(l.lane) === 'ios') ? IPHONE_NEEDS_A_MAC : null
+  // No iPhone lane can run here: say what it needs, and the no-Mac-node
+  // card (the owner's steps, or who to ask). Not over a running device.
+  const macCard = status && !simIsUp(session) ? macNodeCard(status.lanes, canControl) : null
+  const iphoneNote = macCard ? IPHONE_NEEDS_A_MAC : null
   const platformsKey = platforms.join(',')
   useEffect(() => {
     if (!workspaceRef || !visible || !canControl || !platformsKey) return
@@ -1147,6 +1154,7 @@ function MobileDevice({
       phase={bootPhase}
       startedAt={bootRun && !bootRun.failed ? bootRun.startedAt : Date.now()}
       withInstall={bootRun?.withInstall ?? false}
+      bootStep={sessionState === 'booting' ? session?.reason ?? null : null}
     />
   ) : bootRun?.failed && bootFailed ? (
     <MobileBootScreen
@@ -1310,11 +1318,7 @@ function MobileDevice({
               {blocked}
             </div>
             {canControl && pickerGroups.length > 0 ? <DevicePicker {...pickerProps} /> : null}
-            {iphoneNote && canControl ? (
-              <div className="text-center text-[11px] text-[var(--color-text-muted)]" data-mobile-iphone-note="">
-                {iphoneNote}
-              </div>
-            ) : null}
+            {iphoneNote && macCard ? <MacNodeNote note={iphoneNote} card={macCard} /> : null}
           </div>
         )}
         {banner ? (

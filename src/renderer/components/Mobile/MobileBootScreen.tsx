@@ -35,6 +35,9 @@ export interface MobileBootScreenProps {
   /** Retry the start (the same boot as Start); omitted when there is none. */
   onRetry?: () => void
   retryDisabled?: boolean
+  /** The daemon's current step on the session row ("Starting on k2n1-m4"
+   *  for an iPhone on a Mac node), shown as the starting step. */
+  bootStep?: string | null
 }
 
 /** `m:ss`. */
@@ -43,9 +46,9 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-function stepLabel(step: MobileBootPhase, deviceName: string): string {
+function stepLabel(step: MobileBootPhase, deviceName: string, bootStep: string | null): string {
   if (step === 'installing') return 'Installing the device tools (first use only)'
-  if (step === 'booting') return `Starting ${deviceName}`
+  if (step === 'booting') return bootStep ?? `Starting ${deviceName}`
   return 'Connecting the screen'
 }
 
@@ -57,6 +60,7 @@ export function MobileBootScreen({
   error = null,
   onRetry,
   retryDisabled = false,
+  bootStep = null,
 }: MobileBootScreenProps): React.JSX.Element {
   const failed = error !== null
   const [now, setNow] = useState(() => Date.now())
@@ -120,7 +124,7 @@ export function MobileBootScreen({
                   state === 'next' ? 'text-white/40' : state === 'done' ? 'text-white/60' : 'text-white'
                 }
               >
-                {stepLabel(s, deviceName)}
+                {stepLabel(s, deviceName, bootStep)}
               </span>
             </li>
           )

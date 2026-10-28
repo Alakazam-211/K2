@@ -335,6 +335,28 @@ export function offeredPlatforms(lanes: readonly SimLaneStatus[]): SimPlatform[]
   return out
 }
 
+/** The owner's steps to run iPhones from a server without one (0.46.7,
+ *  prd-ios-on-mac-node-0467-v1 §3.9). Most happen on the Mac, so this is a
+ *  list to follow, not a one-click card. */
+export const MAC_NODE_STEPS: readonly string[] = [
+  'On this server: k2 compute node add <name>',
+  'On the Mac: install k2-node, Xcode and an iOS Simulator runtime (xcodebuild -downloadPlatform iOS)',
+  'On the Mac: sudo k2-node setup --sim',
+  'On this server: k2 compute grant <name> --workspace <workspace>',
+]
+
+/** What Members and agents see instead of the steps. */
+export const ASK_FOR_A_MAC = 'Ask the owner of this server to add a Mac to run iPhones.'
+
+/** The no-Mac-node card: shown when no iPhone lane can run here. The owner
+ *  and admins get the steps; everyone else gets who to ask. */
+export type MacNodeCard = { kind: 'add'; steps: readonly string[] } | { kind: 'ask'; line: string }
+
+export function macNodeCard(lanes: readonly SimLaneStatus[], canControl: boolean): MacNodeCard | null {
+  if (lanes.some((l) => lanePlatform(l.lane) === 'ios' && l.usable)) return null
+  return canControl ? { kind: 'add', steps: MAC_NODE_STEPS } : { kind: 'ask', line: ASK_FOR_A_MAC }
+}
+
 /** A device that occupies the screen area (not stopped / failed / none). */
 export function simIsUp(view: SimView | null): boolean {
   return !!view && (view.state === 'installing' || view.state === 'booting' || view.state === 'running' || view.state === 'stopping')

@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 35,
+  "catalogVersion": 36,
   "caps": [
     {
       "name": "agents:read",
@@ -301,7 +301,9 @@
     {"code": "dmarc_missing", "doc": "The sender's domain has no DMARC record (any policy works); its owner publishes one."},
     {"code": "relay_not_ready", "doc": "The sender's SMTP relay hasn't passed a test or lost its login."},
     {"code": "idempotency_conflict", "doc": "This idempotencyKey was used in the last 24 h for a different email."},
-    {"code": "no_mail_path", "doc": "This server has no way to send email (no hosted mail and no relay sender)."}
+    {"code": "no_mail_path", "doc": "This server has no way to send email (no hosted mail and no relay sender)."},
+    {"code": "email_paused", "doc": "This App's sender is paused: too many recipients hard-bounced or reported spam in 24 hours. Only the owner resumes it (k2 notifications email sender resume); check who the App mails."},
+    {"code": "all_suppressed", "doc": "Every recipient is suppressed (a hard bounce, a spam complaint or an unsubscribe), so nothing was sent."}
   ],
   "bannedFields": [
     "projectPath",
@@ -11505,6 +11507,8 @@
         "relay_not_ready",
         "idempotency_conflict",
         "no_mail_path",
+        "email_paused",
+        "all_suppressed",
         "airgap",
         "vault_closed",
         "usage",
@@ -11584,6 +11588,40 @@
           "error": {
             "type": "string",
             "description": "The refusal or failure code."
+          },
+          "recipientStatus": {
+            "type": "array",
+            "description": "What happened to each recipient: submitted until a delivery or complaint report says more (bounces and complaints come from reports the mail server receives; a relay sender's stay submitted).",
+            "items": {
+              "title": "AppEmailRecipientStatus",
+              "type": "object",
+              "properties": {
+                "to": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "queued",
+                    "scheduled",
+                    "held",
+                    "submitted",
+                    "failed",
+                    "refused",
+                    "cancelled",
+                    "delivered",
+                    "delayed",
+                    "bounced",
+                    "complained",
+                    "suppressed"
+                  ]
+                }
+              },
+              "required": [
+                "to",
+                "status"
+              ],
+              "additionalProperties": false
+            }
           }
         },
         "required": [
@@ -11698,6 +11736,14 @@
                 },
                 "purpose": {
                   "type": "string"
+                },
+                "bounced": {
+                  "type": "integer",
+                  "description": "Recipients a delivery report says bounced."
+                },
+                "complained": {
+                  "type": "integer",
+                  "description": "Recipients who reported it as spam."
                 },
                 "createdAt": {
                   "type": "integer",

@@ -197,7 +197,10 @@ fn exposure_counts_are_pinned() {
     // Catalog v34 (0.46.6, Sew for Apps): + guests.chat, guests.setChat,
     // chat.member, chat.whois (app).
     // Catalog v35 (0.46.6, Sew for Apps A9): + chat.createChannel (app).
-    assert_eq!(c.catalog_version, 35);
+    // Catalog v36 (0.46.6, email notifications part 2): email.status
+    // recipientStatus, email.log bounced/complained, errors email_paused and
+    // all_suppressed; no new rows.
+    assert_eq!(c.catalog_version, 36);
     assert_eq!(
         c.verbs.len(),
         226,

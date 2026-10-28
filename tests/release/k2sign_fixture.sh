@@ -7,7 +7,8 @@
 set -euo pipefail
 export PYTHONDONTWRITEBYTECODE=1
 unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD K2_SIGN_APPROVE_CMD K2SIGN_TEST_NOW \
-    K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_EVIDENCE K2SIGN_TEST_ROOT K2_SIGNER || true
+    K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_EVIDENCE K2SIGN_TEST_ROOT K2_SIGNER K2SIGN_TEST_GITHUB_API \
+    K2SIGN_TEST_ANCHOR K2SIGN_TEST_NOTARIZED || true
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 npass=0 nfail=0
@@ -26,13 +27,14 @@ MINISIGN="$(command -v minisign)" || { echo "FAIL: minisign is not installed (br
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/k2sign-test.XXXXXX")"
 tmp="$(cd "$tmp" && pwd -P)"
-trap 'rm -rf "$tmp"' EXIT
+GH_PID=""
+trap '[ -z "$GH_PID" ] || kill "$GH_PID" 2>/dev/null; rm -rf "$tmp"' EXIT
 TREE="$tmp/tree"
 TROOT="$tmp/root"
 mkdir -p "$TREE/scripts" "$TREE/crates/k2-release-keys/src" "$TROOT" "$tmp/keys" "$tmp/home"
 cp -R "$REPO/scripts/k2sign" "$TREE/scripts/"
 mkdir -p "$TREE/scripts/lib"
-cp "$REPO/scripts/lib/sign-updater.sh" "$REPO/scripts/lib/sign-approve.sh" "$TREE/scripts/lib/"
+cp "$REPO/scripts/lib/sign-updater.sh" "$REPO/scripts/lib/sign-approve.sh" "$REPO/scripts/lib/check-daemon-asset.py" "$TREE/scripts/lib/"
 cp "$REPO/crates/k2-release-keys/src/lib.rs" "$TREE/crates/k2-release-keys/src/lib.rs"
 
 # Throwaway U1 (Tauri form: base64 of the minisign secret key file), U3.
@@ -67,7 +69,39 @@ PY
 fixture_keys "$U1_LINE"
 
 install_signer() {
-    K2SIGN_TEST_ROOT="$TROOT" bash "$TREE/scripts/k2sign/install.sh" --test --minisign "$MINISIGN" > "$tmp/install.out" 2>&1
+    K2SIGN_TEST_ROOT="$TROOT" bash "$TREE/scripts/k2sign/install.sh" --test --minisign "$MINISIGN" \
+        --gh "$REPO/tests/release/fixtures/gh-stub.sh" > "$tmp/install.out" 2>&1
+}
+
+# A fake GitHub API (the S3 evidence) on 127.0.0.1; routes in $ROUTES.
+GH_TOKEN_VALUE="github_pat_k2signTEST$(printf '%040d' 0)"
+FIX="$TROOT/fixtures"
+mkdir -p "$FIX/attest"
+ROUTES="$FIX/routes.json"
+printf '{"/repos/Alakazam-211/K2": {"full_name": "Alakazam-211/K2"}}\n' > "$ROUTES"
+printf '%s\n' "$GH_TOKEN_VALUE" > "$FIX/token"
+python3 -I "$REPO/tests/release/fixtures/fake_github.py" "$ROUTES" "$FIX/token" "$FIX/port" "$FIX/api.log" &
+GH_PID=$!
+disown "$GH_PID" 2>/dev/null || true
+for _ in $(seq 50); do [ -s "$FIX/port" ] && break; sleep 0.1; done
+[ -s "$FIX/port" ] || { echo "FAIL: the fake GitHub API did not start" >&2; exit 1; }
+export K2SIGN_TEST_GITHUB_API="http://127.0.0.1:$(cat "$FIX/port")"
+# route <path> <json>: add or replace one fake API answer.
+route() {
+    python3 -I - "$ROUTES" "$1" "$2" <<'PY'
+import json, sys
+p, path, body = sys.argv[1:4]
+r = json.load(open(p))
+if body == "-":
+    r.pop(path, None)
+else:
+    r[path] = json.loads(body)
+json.dump(r, open(p, "w"))
+PY
+}
+set_gh_token() {
+    printf '%s\n' "$GH_TOKEN_VALUE" > "$tmp/tok"
+    EXPECT_STDIN="$tmp/tok" expect 0 "GitHub token saved" "$ADM" set-gh-token --stdin
 }
 install_signer || { cat "$tmp/install.out" >&2; echo "FAIL: test install" >&2; exit 1; }
 
@@ -117,6 +151,7 @@ ready() {
     /usr/bin/openssl ec -in "$tmp/keys/approver.key" -pubout -out "$tmp/keys/approver.pem" 2>/dev/null
     expect 0 "approver key installed" "$ADM" set-approver "$tmp/keys/approver.pem" \
         || { echo "FAIL: set-approver: $(cat "$tmp/out")" >&2; exit 1; }
+    set_gh_token || { echo "FAIL: set-gh-token: $(cat "$tmp/out")" >&2; exit 1; }
 }
 
 # approve_with <key> <challenge file> <der out>: what K2 Release Approve does, with openssl.

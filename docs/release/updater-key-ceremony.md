@@ -40,7 +40,7 @@ commands and changes nothing unless you add `--run`):
 |---|---|---|---|---|
 | `check` | any time | 1 min | nothing | nothing |
 | `0` (S0 spike) | before sitting 1 | ~10 min | nothing (Developer ID build may prompt for the login keychain) | Touch ID ×2 |
-| `1` | after the lane is reviewed | ~20 min | admin password ×2 | Touch ID ×1 (enrol) |
+| `1` | after the lane is reviewed | ~25 min | admin password ×2–3, the new GitHub token (pasted at a hidden prompt) | Touch ID ×1 (enrol) |
 | `2` (agents paused) | after sitting 1 | ~30 min | admin password ×2, U3's new password ×2, U1's password ×1, `saved` | nothing |
 | `3` | after K2 lands the public keys | ~10 min | admin password ×1 | Touch ID ×1 |
 
@@ -52,9 +52,14 @@ refuses to start without them:
 2. K2 runs `bash scripts/updater-key-ceremony.sh pubkeys <U2> <U3>` on the
    lane, runs the gates, and lands lane + pubkeys **together** on main.
 3. Sitting `3` from that main commit: re-pin, preflight, the S2-6 proof.
-4. Release: one Touch ID at Step 0.46. **Not before the S3 per-file checks
-   land**: until then the signer refuses every real update file (it signs
-   only its preflight self-test), by design.
+4. Release: one Touch ID at Step 0.46. The signer then checks every file
+   itself before signing it (slice S3): Linux daemons against GitHub (the
+   tag, base + bump only, base on main, the build attestation from
+   daemon-binaries.yml at the tag, the bytes); K2.app.tar.gz (Developer ID
+   team 36B8R93HXV, stapled and notarized, the version, the signed daemon
+   helper and k2-ptyd); the macOS daemon (arm64, one build marker for the
+   version, the embedded k2-ptyd signed by the team); the Windows setup only
+   when the approval named it (a PE for x64; no independent evidence).
 
 **Rollback.**
 - Soft: root sets `approval = off` in `/usr/local/etc/k2sign/policy` and
@@ -75,7 +80,7 @@ refuses to start without them:
 | (a) | CryptoKit SE key, `.biometryCurrentSet`, no keychain entitlement, ad hoc **and** Developer ID | **open:** needs z3mbpZ + Touch ID (`sitting.sh 0`) |
 | (b) | `open -W -n -a` shows the Touch ID sheet from iTerm and from SSH | **open:** `sitting.sh 0` |
 | (c) | LibreSSL 3.3.6 `openssl dgst -sha256 -verify` accepts CryptoKit's DER ECDSA | **pass** (2026-10-28, z3mbp, LibreSSL 3.3.6): a CryptoKit P-256 signature (software key: the SE key's DER and PEM formats are the same) verifies, a one-byte change is refused; the test suite then uses openssl-made P-256 signatures in the same format |
-| (d) | `gh attestation verify --bundle` with a read-only token in a scratch HOME | **open:** an S3 question (the signer's GitHub evidence); not needed by S1/S2 |
+| (d) | gh attestation verify with only a read-only token in a scratch HOME | **partly answered (2026-10-28):** gh needs a token even for a public repo's attestations (exit 4 without one), and GitHub serves cli/cli's bundle by URL, not inline, so the signer lets the pinned gh fetch it. The rest is proven at sitting 1 by `k2sign gh-selfcheck` (as `_k2sign`, with its own token, on cli/cli's attestation of the pinned gh zip). The token needs Contents + Attestations read-only on K2 |
 | (e) | a 300 MB stdin stream through `sudo -n -u` | **open:** needs sudo in a VM (the Tart `k2-newuser-base` VM), never on z3mbpZ itself |
 
 A failure in (a) or (b) switches the approval to the passphrase fallback

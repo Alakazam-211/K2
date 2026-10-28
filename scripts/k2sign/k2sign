@@ -19,7 +19,8 @@ root="${K2SIGN_TEST_ROOT:-}"
 keep=()
 if [ -n "$root" ]; then
     keep+=("K2SIGN_TEST_ROOT=$root")
-    for v in K2SIGN_TEST_NOW K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_EVIDENCE; do
+    for v in K2SIGN_TEST_NOW K2SIGN_TEST_SIGNER_USER K2SIGN_TEST_EVIDENCE K2SIGN_TEST_GITHUB_API \
+             K2SIGN_TEST_ANCHOR K2SIGN_TEST_NOTARIZED; do
         if [ -n "${!v:-}" ]; then keep+=("$v=${!v}"); fi
     done
 fi

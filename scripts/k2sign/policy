@@ -19,5 +19,15 @@ assets.u1 = K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daem
 assets.u2 = K2.app.tar.gz k2-daemon-macos-aarch64 k2-daemon-linux-x86_64 k2-daemon-linux-aarch64 K2_{version}_x64-setup.exe
 # Signable only when the approval said "windows": true (A7, Q5).
 windows_assets = setup.exe K2_{version}_x64-setup.exe
-# The repository S3's GitHub checks read (attestations, tags, main).
+# The repository S3's GitHub checks read (attestations, tags, main), and
+# the API the signer reads it through (its own read-only token).
 repo = Alakazam-211/K2
+github_api = https://api.github.com
+# The workflow whose build attestation a Linux daemon must carry, at refs/tags/v<x>.
+daemon_workflow = .github/workflows/daemon-binaries.yml
+# What the release commit (Step 8.9) may change on top of the approved base
+# commit: release.sh's RELEASE_COMMIT_FILES (a test keeps the two equal).
+release_commit_files = package.json src-tauri/tauri.conf.json cli/k2 Cargo.lock src-tauri/Cargo.toml crates/k2-core/Cargo.toml crates/k2-daemon/Cargo.toml crates/k2-menubar/Cargo.toml WHATS_NEW.md
+# The Developer ID team every Mac file must be signed by (K2.app, its daemon
+# helper, k2-ptyd inside the standalone macOS daemon).
+apple_team = 36B8R93HXV

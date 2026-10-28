@@ -859,6 +859,12 @@ pub fn decide(
             }
         }
         let account = match rec.as_ref().and_then(|(a, _)| a.clone()) {
+            // The token it started on is the one live now (it became the
+            // server default since): it runs in the live home, never from
+            // the slot too, or the one sign-in would be live in two places
+            // (refreshes rotate between them, and a `/login` typed there
+            // writes the default's slot) (LT-A15). The history is carried.
+            Some(id) if live_owner(conn, tool)?.as_deref() == Some(id.as_str()) => None,
             Some(id) => Some(get(conn, &id)?.ok_or_else(|| WalletError::NotFound(id.clone()))?),
             // Started in the live home (or before K2 tracked logins).
             None => None,
@@ -893,6 +899,17 @@ pub fn decide_spawn(
     let Some(e) = d.account else {
         let mut l = pool(conn, tool)?;
         l.source = d.source;
+        // A resume of a chat that ran from a token's slot, now that token
+        // is live (LT-A15): its history comes to the live home.
+        if is_resume && d.source == Source::Resume {
+            if let Some(cid) = conversation_id.map(str::trim).filter(|c| valid_conversation_id(c)) {
+                let from = recorded_home(&d.recorded, tool);
+                let to = store::live_home(tool).0;
+                if from != to {
+                    l.carry = Some(Carry { conversation_id: cid.to_string(), from, to });
+                }
+            }
+        }
         return Ok(l);
     };
     if d.source == Source::Resume && e.removed_at.is_some() {

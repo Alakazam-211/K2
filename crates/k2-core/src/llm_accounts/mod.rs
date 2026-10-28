@@ -212,6 +212,11 @@ pub enum WalletError {
     /// missing key): 503 with a one-line hint. The server default keeps
     /// working (it is in the CLI's own store).
     VaultUnavailable(String),
+    /// A token's saved sign-in was another account's (slot drift): K2
+    /// moved it to that account's own token and refused to make it live
+    /// under this label (409 `account_moved`). Carries what was saved
+    /// where, for the Owner/Admin notice.
+    Moved(String, Vec<wallet::Adopted>),
     Io(String),
     Db(rusqlite::Error),
 }
@@ -240,8 +245,8 @@ impl std::fmt::Display for WalletError {
             WalletError::LockBusy(t) => {
                 write!(f, "another change to the {t} tokens is in progress; try again")
             }
-            WalletError::Conflict(_, hint) => write!(f, "{hint}"),
             WalletError::VaultUnavailable(why) => write!(f, "{why}"),
+            WalletError::Conflict(_, hint) | WalletError::Moved(hint, _) => write!(f, "{hint}"),
             WalletError::Io(e) => write!(f, "io: {e}"),
             WalletError::Db(e) => write!(f, "db: {e}"),
         }
@@ -268,6 +273,7 @@ impl WalletError {
             WalletError::LockBusy(_) => "busy",
             WalletError::Conflict(code, _) => code,
             WalletError::VaultUnavailable(_) => "vault_unavailable",
+            WalletError::Moved(..) => "account_moved",
             WalletError::Io(_) => "io",
             WalletError::Db(_) => "db",
         }
@@ -278,7 +284,8 @@ impl WalletError {
             | WalletError::ActiveLogin
             | WalletError::NotSignedIn(_)
             | WalletError::LockBusy(_)
-            | WalletError::Conflict(..) => "409 Conflict",
+            | WalletError::Conflict(..)
+            | WalletError::Moved(..) => "409 Conflict",
             WalletError::NotFound(_) => "404 Not Found",
             WalletError::AirGap => "403 Forbidden",
             WalletError::LiveStoreUnavailable(_) => "422 Unprocessable Entity",

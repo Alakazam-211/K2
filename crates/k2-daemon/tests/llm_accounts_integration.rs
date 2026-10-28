@@ -557,11 +557,25 @@ async fn wallet_routes_end_to_end() {
     assert!(audit.contains("llm_accounts.switch"), "switch is audited: {audit}");
 }
 
+fn outside_notices() -> i64 {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT COUNT(*) FROM feedback WHERE agent_name = 'k2-llm'", [], |r| r.get(0)).expect("count notices")
+}
+
+/// Rosson 2026-10-27: a `/login` typed into a terminal outside K2 left
+/// another account live while K2 recorded "Default". Adding tokens,
+/// switching and switching back must all keep working: the outside
+/// sign-in is saved as its own token, Default's slot is never touched.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn switch_refuses_to_save_another_accounts_live_login_and_audits_it() {
+async fn an_outside_login_is_saved_as_its_own_token_and_nothing_is_blocked() {
     let env = setup();
     let d = futures_block(test_harness::start(OWNER));
     reset_wallet_tables();
+    {
+        let db = k2_core::db::shared();
+        db.lock().execute("DELETE FROM feedback WHERE agent_name = 'k2-llm'", []).expect("reset notices");
+    }
     let port = d.port;
     let live = env.home.join(".claude/.credentials.json");
     std::fs::create_dir_all(live.parent().unwrap()).unwrap();
@@ -582,6 +596,7 @@ async fn switch_refuses_to_save_another_accounts_live_login_and_audits_it() {
     post(port, "/cli/llm/accounts/login/input", OWNER, json!({"loginId": login_id, "text": PASTED}));
     let st = poll_login(port, &login_id, |l| l["done"] == true);
     assert_eq!(st["state"], "signed_in", "{st}");
+    let work_bytes = std::fs::read_to_string(env.home.join(format!(".k2/llm-accounts/claude/{work_id}/.credentials.json"))).unwrap();
     let default_id = account_by_label(&js(&get(port, "/cli/llm/accounts/list", OWNER)), "claude", "Default")["id"]
         .as_str()
         .unwrap()
@@ -598,18 +613,93 @@ async fn switch_refuses_to_save_another_accounts_live_login_and_audits_it() {
         r#"{"numStartups": 3, "oauthAccount": {"accountUuid": "uuid-third", "emailAddress": "third@example.test"}}"#,
     )
     .unwrap();
+
+    // 1. Adding a token still works in this state.
+    let r = post(port, "/cli/llm/accounts/add", OWNER, json!({"tool":"claude","label":"Extra","mode":"other_device"}));
+    assert_eq!(r.status, 200, "add while another account is live: {}", r.body);
+    let extra_login = js(&r)["login"]["loginId"].as_str().unwrap().to_string();
+    poll_login(port, &extra_login, |l| l["state"] == "waiting_for_code");
+    post(port, "/cli/llm/accounts/login/input", OWNER, json!({"loginId": extra_login, "text": PASTED}));
+    assert_eq!(poll_login(port, &extra_login, |l| l["done"] == true)["state"], "signed_in");
+    // 2. The switch goes through: the outside sign-in becomes its own token.
     let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": work_id}));
-    assert_eq!(r.status, 409, "{}", r.body);
-    assert_eq!(code(&r), "account_mismatch");
-    assert!(r.body.contains("third@example.test") && r.body.contains("first@example.test"), "{}", r.body);
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = js(&r);
+    let adopted = v["switch"]["adopted"].as_array().expect("adopted");
+    assert_eq!(adopted.len(), 1, "{v}");
+    assert_eq!(adopted[0]["label"], "third@example.test");
+    assert_eq!(adopted[0]["created"], true);
+    assert_eq!(adopted[0]["foundUnder"], "Default");
     assert!(!r.body.contains(MARKER));
     assert_eq!(std::fs::read_to_string(&default_slot).unwrap(), default_before, "Default's slot never got the third account's token");
-    assert_eq!(std::fs::read_to_string(&live).unwrap(), third, "live untouched");
+    assert_eq!(std::fs::read_to_string(&live).unwrap(), work_bytes, "Work is live");
     let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
-    assert_eq!(tool_doc(&list, "claude")["activeId"], default_id.as_str(), "default unchanged");
+    assert_eq!(tool_doc(&list, "claude")["activeId"], work_id.as_str());
+    let third_row = account_by_label(&list, "claude", "third@example.test");
+    assert_eq!(third_row["addedOutsideK2"], true);
+    assert_eq!(third_row["state"], "signed_in");
+    let third_slot = env.home.join(format!(".k2/llm-accounts/claude/{}/.credentials.json", third_row["id"].as_str().unwrap()));
+    assert_eq!(std::fs::read_to_string(&third_slot).unwrap(), third, "the outside sign-in kept whole");
+    assert_eq!(account_by_label(&list, "claude", "Default")["addedOutsideK2"], false);
+    assert_eq!(outside_notices(), 1, "one notice for Owners/Admins");
     let audit = std::fs::read_to_string(env.home.join(".k2/auth-audit.jsonl")).unwrap_or_default();
-    assert!(audit.contains("llm_accounts.switch_refused") && audit.contains("account_mismatch"), "refusal audited: {audit}");
+    assert!(audit.contains("llm_accounts.outside_adopted"), "adoption audited: {audit}");
+    let adopted_lines: Vec<&str> = audit.lines().filter(|l| l.contains("llm_accounts.outside_adopted")).collect();
+    assert!(!adopted_lines.is_empty() && adopted_lines.iter().all(|l| !l.contains('@')), "token ids only, no email: {adopted_lines:?}");
     assert!(!audit.contains(MARKER));
+    assert!(!db_dump().contains(MARKER));
+    // A page refresh never renames Default after the outside login.
+    let r = post(port, "/cli/llm/accounts/refresh", OWNER, json!({}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    assert_eq!(account_by_label(&list, "claude", "Default")["email"], "first@example.test", "Default keeps its account");
+
+    // 3. Back to Default: no sign-in needed, its own token goes live.
+    let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": default_id}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(std::fs::read_to_string(&live).unwrap(), default_before);
+    assert_eq!(js(&r)["switch"]["adopted"].as_array().map(Vec::len), Some(0));
+
+    // 4. The same account signs in outside K2 again: its token is updated,
+    //    no second token, no second notice.
+    let third2 = format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-3b","refreshToken":"{MARKER}-rt-3b","expiresAt":4000000000000}}}}"#);
+    std::fs::write(&live, &third2).unwrap();
+    std::fs::write(
+        env.home.join(".claude.json"),
+        r#"{"numStartups": 3, "oauthAccount": {"accountUuid": "uuid-third", "emailAddress": "third@example.test"}}"#,
+    )
+    .unwrap();
+    let r = post(port, "/cli/llm/accounts/switch", OWNER, json!({"id": work_id}));
+    assert_eq!(r.status, 200, "{}", r.body);
+    let adopted = js(&r)["switch"]["adopted"].as_array().expect("adopted").clone();
+    assert_eq!(adopted.len(), 1);
+    assert_eq!(adopted[0]["created"], false);
+    assert_eq!(std::fs::read_to_string(&third_slot).unwrap(), third2, "the token of that account got the new sign-in");
+    let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    let thirds = tool_doc(&list, "claude")["accounts"].as_array().unwrap().iter().filter(|a| a["email"] == "third@example.test").count();
+    assert_eq!(thirds, 1, "no duplicate token");
+    assert_eq!(outside_notices(), 1, "no second notice for the same account");
+    assert_eq!(std::fs::read_to_string(&default_slot).unwrap(), default_before, "Default still untouched");
+
+    // 5. Signing in again the token on record as live works after another
+    //    outside login: the outside one is saved first.
+    let fourth = format!(r#"{{"claudeAiOauth":{{"accessToken":"{MARKER}-at-4","refreshToken":"{MARKER}-rt-4","expiresAt":4000000000000}}}}"#);
+    std::fs::write(&live, &fourth).unwrap();
+    std::fs::write(
+        env.home.join(".claude.json"),
+        r#"{"numStartups": 3, "oauthAccount": {"accountUuid": "uuid-fourth", "emailAddress": "fourth@example.test"}}"#,
+    )
+    .unwrap();
+    let r = post(port, "/cli/llm/accounts/login", OWNER, json!({"id": work_id, "mode": "other_device"}));
+    assert_eq!(r.status, 200, "sign in again while another account is live: {}", r.body);
+    let relogin = js(&r)["login"]["loginId"].as_str().unwrap().to_string();
+    post(port, "/cli/llm/accounts/login/cancel", OWNER, json!({"loginId": relogin}));
+    poll_login(port, &relogin, |l| l["done"] == true);
+    let list = js(&get(port, "/cli/llm/accounts/list", OWNER));
+    let fourth_row = account_by_label(&list, "claude", "fourth@example.test");
+    assert_eq!(tool_doc(&list, "claude")["activeId"], fourth_row["id"], "the live sign-in is on record as what it is");
+    assert_eq!(std::fs::read_to_string(&live).unwrap(), fourth, "the live store was not touched");
+    assert_eq!(outside_notices(), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

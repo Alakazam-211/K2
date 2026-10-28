@@ -156,8 +156,17 @@ fn import_and_sign_in_record_each_tokens_account() {
     }
 }
 
+fn by_label(conn: &Connection, tool: Tool, label: &str) -> Entry {
+    lookup(conn, Some(tool), label).unwrap_or_else(|e| panic!("no token {label:?}: {e}"))
+}
+
+/// Rosson 2026-10-27: an outside `/login` while A is the default. The
+/// switch to B saves the outside sign-in as its own token C and goes
+/// through; A's slot is never touched, so switching back needs no
+/// sign-in; adding works; the same account again updates C (no D); the
+/// notice flag is set once.
 #[test]
-fn a_live_login_of_another_account_is_never_saved_into_the_owners_slot() {
+fn an_outside_login_is_adopted_as_its_own_token_and_the_switch_goes_through() {
     let h = Home::new();
     let conn = db();
     let (a, b) = two_logins(&h, &conn);
@@ -165,41 +174,78 @@ fn a_live_login_of_another_account_is_never_saved_into_the_owners_slot() {
     // Someone ran `/login` as C outside K2: the live token is C's, while
     // K2's record says A is live.
     write_live(&h, "c");
-    let vendor = FakeVendor::new(&[("a", "uuid-a", "a@example.test"), ("b", "uuid-b", "b@example.test"), ("c", "uuid-c", "c@example.test")]);
-    let err = wallet::switch(&conn, Tool::Claude, &b.id, Some("owner-token"), Some(&vendor)).unwrap_err();
-    assert_eq!(err.code(), "account_mismatch", "{err}");
-    let text = err.to_string();
-    assert!(text.contains("c@example.test") && text.contains("a@example.test"), "{text}");
-    assert!(text.contains("checked with the provider"), "{text}");
-    assert!(!text.contains(MARKER), "no token in the error: {text}");
-    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), a_slot_before, "A's slot untouched");
-    assert_eq!(live_bytes(&h), cred("c"), "live untouched");
-    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()), "default unchanged");
-    // The live token really is A's: the same switch goes through.
-    write_live(&h, "a");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
+    let vendor = FakeVendor::new(&[
+        ("a", "uuid-a", "a@example.test"),
+        ("b", "uuid-b", "b@example.test"),
+        ("c", "uuid-c", "c@example.test"),
+        ("c2", "uuid-c", "c@example.test"),
+        ("e", "uuid-e", "e@example.test"),
+    ]);
+    // Adding a token works in this state (the live store isn't touched).
+    let added = wallet::begin_new(&conn, Tool::Claude, "added", None).unwrap();
+    store::write_slot(Tool::Claude, &added.id, &cred("e")).unwrap();
+    fs::write(
+        store::slot_dir(Tool::Claude, &added.id).join(".claude.json"),
+        json!({"oauthAccount": profile("uuid-e", "e@example.test")}).to_string(),
+    )
+    .unwrap();
+    assert_eq!(wallet::finalize_login(&conn, &added.id, None).unwrap().state, state::SIGNED_IN);
+    assert_eq!(live_bytes(&h), cred("c"), "adding left the live store alone");
+
     let out = wallet::switch(&conn, Tool::Claude, &b.id, Some("owner-token"), Some(&vendor)).unwrap();
-    assert!(out.saved_outgoing);
-    assert_eq!(out.verified_by, Some(Source::Vendor));
+    assert_eq!(out.adopted.len(), 1, "{out:?}");
+    let c = &out.adopted[0];
+    assert_eq!((c.label.as_str(), c.created, c.notify), ("c@example.test", true, true));
+    assert_eq!((c.found_in.as_str(), c.found_under.as_str()), ("live", "Default"));
+    assert!(out.needs_sign_in.is_empty());
+    let c_entry = get(&conn, &c.id).unwrap().unwrap();
+    assert_eq!(c_entry.created_by.as_deref(), Some(wallet::OUTSIDE_K2), "marked added outside K2");
+    assert_eq!(c_entry.state, state::SIGNED_IN);
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &c.id)).unwrap(), cred("c"), "C's sign-in kept whole");
+    assert_eq!(identity::slot_profile(&c.id).unwrap().0["accountUuid"], "uuid-c");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), a_slot_before, "A's slot untouched");
+    assert_eq!(identity::slot_profile(&a.id).unwrap().0["accountUuid"], "uuid-a", "A's record untouched");
+    assert_eq!(live_bytes(&h), cred("b"));
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(b.id.as_str()));
+    assert!(!serde_json::to_string(&out).unwrap().contains(MARKER), "no token in the outcome");
+
+    // Back to A: no sign-in, its own token.
+    let out = wallet::switch(&conn, Tool::Claude, &a.id, None, Some(&vendor)).unwrap();
+    assert!(out.adopted.is_empty());
+    assert_eq!(live_bytes(&h), cred("a"));
+
+    // C signs in outside K2 again (a new token of the same account):
+    // C's token is updated, no D, no second notice.
+    write_live(&h, "c2");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, Some(&vendor)).unwrap();
+    assert_eq!(out.adopted.len(), 1);
+    assert_eq!((out.adopted[0].id.as_str(), out.adopted[0].created, out.adopted[0].notify), (c.id.as_str(), false, false));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &c.id)).unwrap(), cred("c2"));
+    assert_eq!(list_for(&conn, Tool::Claude).unwrap().len(), 4, "A, B, added, C: no duplicate");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"), "A still its own");
+}
+
+#[test]
+fn without_the_vendor_claude_json_names_the_outside_login_and_it_is_adopted() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    // `/login` as C rewrote both the token and ~/.claude.json; Anthropic
+    // can't be asked (air-gap, offline, an expired access token).
+    write_live(&h, "c");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    assert_eq!(out.adopted.len(), 1);
+    assert_eq!(out.adopted[0].label, "c@example.test");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &out.adopted[0].id)).unwrap(), cred("c"));
     assert_eq!(live_bytes(&h), cred("b"));
 }
 
 #[test]
-fn without_the_vendor_a_stale_claude_json_naming_another_account_also_refuses() {
-    let h = Home::new();
-    let conn = db();
-    let (a, b) = two_logins(&h, &conn);
-    // `/login` as C rewrote both the token and ~/.claude.json.
-    write_live(&h, "c");
-    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
-    let err = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap_err();
-    assert_eq!(err.code(), "account_mismatch");
-    assert!(err.to_string().contains("run /login as a@example.test"), "{err}");
-    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"));
-    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()));
-}
-
-#[test]
-fn a_saved_sign_in_of_another_account_is_never_made_live() {
+fn a_saved_sign_in_of_another_account_is_moved_to_its_own_token_and_never_made_live() {
     let h = Home::new();
     let conn = db();
     let (a, b) = two_logins(&h, &conn);
@@ -207,12 +253,189 @@ fn a_saved_sign_in_of_another_account_is_never_made_live() {
     store::write_slot(Tool::Claude, &b.id, &cred("d")).unwrap();
     let vendor = FakeVendor::new(&[("a", "uuid-a", "a@example.test"), ("d", "uuid-d", "d@example.test")]);
     let err = wallet::switch(&conn, Tool::Claude, &b.id, None, Some(&vendor)).unwrap_err();
-    assert_eq!(err.code(), "account_mismatch");
-    assert!(err.to_string().contains("saved sign-in for \"b\" belongs to d@example.test"), "{err}");
+    assert_eq!(err.code(), "account_moved");
+    let text = err.to_string();
+    assert!(text.contains("saved sign-in for \"b\" belongs to d@example.test"), "{text}");
+    assert!(text.contains("\"b\" needs signing in again"), "{text}");
+    assert!(!text.contains(MARKER));
+    let WalletError::Moved(_, moved) = err else { panic!("not Moved") };
+    assert_eq!(moved.len(), 1);
+    assert_eq!((moved[0].label.as_str(), moved[0].found_in.as_str(), moved[0].notify), ("d@example.test", "slot", true));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &moved[0].id)).unwrap(), cred("d"), "D's sign-in kept");
+    let b_now = get(&conn, &b.id).unwrap().unwrap();
+    assert_eq!(b_now.state, state::NEEDS_LOGIN, "B says sign in again");
+    assert_eq!(b_now.email.as_deref(), Some("b@example.test"), "B still shows its own account");
+    assert!(!store::slot_has_cred(Tool::Claude, &b.id), "D's sign-in is no longer under B");
+    assert_eq!(identity::slot_profile(&b.id).unwrap().0["accountUuid"], "uuid-b");
+    let backups: Vec<_> = fs::read_dir(store::removed_root()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+    assert!(backups.iter().any(|n| n.contains(&b.id) && n.starts_with("drift-")), "a copy in .removed: {backups:?}");
     assert_eq!(live_bytes(&h), cred("a"), "live untouched");
     assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()));
     let live_cfg: Value = serde_json::from_str(&fs::read_to_string(h.p(".claude.json")).unwrap()).unwrap();
     assert_eq!(live_cfg["oauthAccount"]["accountUuid"], "uuid-a", "profile untouched");
+    // A recheck keeps "sign in again" (not "not set up").
+    assert_eq!(wallet::recheck(&conn, &b.id).unwrap().state, state::NEEDS_LOGIN);
+    // And B can be signed in again.
+    assert_eq!(wallet::begin_relogin(&conn, &b.id).unwrap().state, state::SIGNING_IN);
+}
+
+/// The sewlab state (2026-10-27): an outside `/login` as C, and the
+/// default token A's own slot ALSO holds C's sign-in (crossed earlier),
+/// while A's record still names A. Switching to R (A's account, re-added
+/// as a new token) goes through; C ends up as its own token; A says
+/// "sign in again" and still shows A.
+#[test]
+fn slot_drift_on_the_default_token_is_repaired_on_the_next_switch() {
+    let h = Home::new();
+    let conn = db();
+    let (a, _b) = two_logins(&h, &conn);
+    write_live(&h, "c");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
+    store::write_slot(Tool::Claude, &a.id, &cred("c")).unwrap();
+    // A page refresh in that state (field: A's row showed C's email).
+    assert_eq!(wallet::recheck(&conn, &a.id).unwrap().email.as_deref(), Some("a@example.test"));
+    let r = wallet::begin_new(&conn, Tool::Claude, "rA", None).unwrap();
+    store::write_slot(Tool::Claude, &r.id, &cred("r")).unwrap();
+    fs::write(
+        store::slot_dir(Tool::Claude, &r.id).join(".claude.json"),
+        json!({"oauthAccount": profile("uuid-a", "a@example.test")}).to_string(),
+    )
+    .unwrap();
+    let r = wallet::finalize_login(&conn, &r.id, None).unwrap();
+    let vendor = FakeVendor::new(&[("c", "uuid-c", "c@example.test"), ("r", "uuid-a", "a@example.test")]);
+    let target = get(&conn, &r.id).unwrap().unwrap();
+    let pre = wallet::precheck(Tool::Claude, &target, wallet::generation(&conn, Tool::Claude).unwrap(), Some(&vendor)).unwrap();
+    let out = wallet::switch_prechecked(&conn, Tool::Claude, &r.id, Some("owner-token"), &pre).unwrap();
+    assert_eq!(live_bytes(&h), cred("r"), "rA is live");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(r.id.as_str()));
+    let c = by_label(&conn, Tool::Claude, "c@example.test");
+    assert_eq!(c.created_by.as_deref(), Some(wallet::OUTSIDE_K2));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &c.id)).unwrap(), cred("c"));
+    assert_eq!(out.needs_sign_in, vec!["Default".to_string()]);
+    assert_eq!(out.adopted.iter().filter(|x| x.notify).count(), 1, "one notice: {out:?}");
+    assert!(out.adopted.iter().all(|x| x.id == c.id), "both finds went to C: {out:?}");
+    let a_now = get(&conn, &a.id).unwrap().unwrap();
+    assert_eq!(a_now.state, state::NEEDS_LOGIN);
+    assert_eq!(a_now.email.as_deref(), Some("a@example.test"));
+    assert!(!store::slot_has_cred(Tool::Claude, &a.id));
+    assert_eq!(list_for(&conn, Tool::Claude).unwrap().len(), 4, "Default, b, rA, C");
+}
+
+/// The same state with no answer from Anthropic: the default token's slot
+/// holds the same sign-in as the live one, and Claude's own config in
+/// that slot names the outside account. Still repaired.
+#[test]
+fn slot_drift_is_repaired_without_the_vendor_when_the_slot_config_names_the_other_account() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    write_live(&h, "c");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
+    store::write_slot(Tool::Claude, &a.id, &cred("c")).unwrap();
+    fs::write(
+        store::slot_dir(Tool::Claude, &a.id).join(".claude.json"),
+        json!({"oauthAccount": profile("uuid-c", "c@example.test"), "projects": {}}).to_string(),
+    )
+    .unwrap();
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    assert_eq!(out.needs_sign_in, vec!["Default".to_string()], "{out:?}");
+    let c = by_label(&conn, Tool::Claude, "c@example.test");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &c.id)).unwrap(), cred("c"));
+    assert!(!store::slot_has_cred(Tool::Claude, &a.id));
+    // Claude's config in A's slot names A again; the rest is kept.
+    let cfg: Value = serde_json::from_str(&fs::read_to_string(store::slot_dir(Tool::Claude, &a.id).join(".claude.json")).unwrap()).unwrap();
+    assert_eq!(cfg["oauthAccount"]["accountUuid"], "uuid-a");
+    assert!(cfg["projects"].is_object());
+    assert_eq!(live_bytes(&h), cred("b"));
+}
+
+/// Someone signed in outside K2 as B, an account that already has a token,
+/// then switches to B: B's token takes the newer sign-in, no new token.
+#[test]
+fn an_outside_login_of_the_target_account_goes_to_the_target_token() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    write_live(&h, "b2");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-b", "b@example.test"))).unwrap();
+    let vendor = FakeVendor::new(&[("a", "uuid-a", "a@example.test"), ("b", "uuid-b", "b@example.test"), ("b2", "uuid-b", "b@example.test")]);
+    let target = get(&conn, &b.id).unwrap().unwrap();
+    let pre = wallet::precheck(Tool::Claude, &target, wallet::generation(&conn, Tool::Claude).unwrap(), Some(&vendor)).unwrap();
+    let out = wallet::switch_prechecked(&conn, Tool::Claude, &b.id, None, &pre).unwrap();
+    assert_eq!(out.adopted.len(), 1);
+    assert_eq!((out.adopted[0].id.as_str(), out.adopted[0].created, out.adopted[0].notify), (b.id.as_str(), false, false));
+    assert_eq!(live_bytes(&h), cred("b2"), "the newer sign-in stays live");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &b.id)).unwrap(), cred("b2"));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"), "A untouched");
+    assert_eq!(active_id(&conn, Tool::Claude).unwrap().as_deref(), Some(b.id.as_str()));
+    assert_eq!(list_for(&conn, Tool::Claude).unwrap().len(), 2);
+}
+
+#[test]
+fn signing_in_again_works_while_another_account_is_live() {
+    let h = Home::new();
+    let conn = db();
+    let (a, _b) = two_logins(&h, &conn);
+    write_live(&h, "c");
+    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
+    // A is on record as live, but C is: signing A in again saves C first.
+    let (e, adopted) = wallet::begin_relogin_settled(&conn, &a.id, Some("owner-token")).unwrap();
+    assert_eq!(e.state, state::SIGNING_IN);
+    assert_eq!(adopted.len(), 1);
+    assert_eq!(live_owner(&conn, Tool::Claude).unwrap().as_deref(), Some(adopted[0].id.as_str()), "C is on record as live");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"), "A untouched");
+    assert_eq!(live_bytes(&h), cred("c"), "the live store untouched");
+    restore_signed_in(&conn, &a.id);
+}
+
+#[test]
+fn a_live_swap_sign_in_works_while_another_account_is_live() {
+    let h2 = Home::new();
+    let conn = db();
+    let (a, _b) = two_logins(&h2, &conn);
+    write_live(&h2, "d");
+    fs::write(h2.p(".claude.json"), claude_json(&profile("uuid-d", "d@example.test"))).unwrap();
+    let new = wallet::begin_new(&conn, Tool::Claude, "fresh", None).unwrap();
+    let ticket = wallet::begin_live_swap(&conn, Tool::Claude, &new.id, None).unwrap();
+    assert_eq!(ticket.adopted.len(), 1);
+    assert!(ticket.adopted[0].notify);
+    assert_eq!(ticket.previous_id.as_deref(), Some(ticket.adopted[0].id.as_str()), "D goes back after the sign-in");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"), "A untouched");
+    // The tool's own `/login` writes the token and its profile.
+    fs::write(h2.p(".claude/.credentials.json"), cred("f")).unwrap();
+    fs::write(h2.p(".claude.json"), claude_json(&profile("uuid-f", "f@example.test"))).unwrap();
+    let got = wallet::live_swap_poll(&ticket).unwrap().expect("changed");
+    wallet::live_swap_complete(&conn, &ticket, &got, None).unwrap();
+    assert_eq!(fs::read(h2.p(".claude/.credentials.json")).unwrap(), cred("d"), "D restored");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &new.id)).unwrap(), cred("f"));
+    assert_eq!(identity::read_record(Tool::Claude, &new.id).unwrap().account_uuid.as_deref(), Some("uuid-f"));
+}
+
+fn restore_signed_in(conn: &Connection, id: &str) {
+    update_meta(conn, id, &MetaUpdate { state: Some(state::SIGNED_IN.into()), ..Default::default() }).unwrap();
+}
+
+/// LT-A3 + lineage: after K2's own switches, ~/.claude.json is K2's
+/// writing, so it names nobody. The live sign-in is A's own (the CLI
+/// renewed its access token; same refresh token as A's slot): it goes back
+/// into A's slot, with no "checking" token and nothing adopted.
+#[test]
+fn a_claude_json_k2_wrote_and_the_owners_own_sign_in_capture_into_the_owner() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    wallet::switch(&conn, Tool::Claude, &a.id, None, None).unwrap();
+    let mut renewed: Value = serde_json::from_slice(&cred("a")).unwrap();
+    renewed["claudeAiOauth"]["accessToken"] = json!(format!("{MARKER}-access-a-renewed"));
+    let renewed = serde_json::to_vec(&renewed).unwrap();
+    fs::write(h.p(".claude/.credentials.json"), &renewed).unwrap();
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    assert!(out.adopted.is_empty(), "{out:?}");
+    assert!(out.saved_outgoing);
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), renewed, "A's own renewed sign-in");
+    assert!(list_for(&conn, Tool::Claude).unwrap().iter().all(|e| e.state != state::UNKNOWN), "no checking token");
+    assert_eq!(list_for(&conn, Tool::Claude).unwrap().len(), 2);
 }
 
 #[test]
@@ -379,21 +602,59 @@ fn two_phase_switch_uses_phase_one_answers_and_refuses_when_anything_moved() {
 }
 
 #[test]
-fn the_air_gap_fallback_names_what_the_file_says_and_what_was_expected() {
+fn codex_an_outside_login_is_adopted_by_its_own_id_token_and_nothing_is_blocked() {
     let h = Home::new();
     let conn = db();
-    let (_a, b) = two_logins(&h, &conn);
-    fs::write(h.p(".claude.json"), claude_json(&profile("uuid-c", "c@example.test"))).unwrap();
-    // No vendor answer (air-gap or a failed check): ~/.claude.json decides.
-    let err = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap_err();
-    assert_eq!(err.code(), "account_mismatch");
-    let text = err.to_string();
-    assert!(text.contains("~/.claude.json names c@example.test"), "{text}");
-    assert!(text.contains("you expected \"Default\" (a@example.test)"), "{text}");
+    let jwt = |claims: Value| {
+        use base64::Engine;
+        let enc = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!("{}.{}.sig", enc.encode(b"{}"), enc.encode(claims.to_string()))
+    };
+    let auth = |sub: &str, email: &str, n: u32| {
+        serde_json::to_vec(&json!({"tokens": {
+            "id_token": jwt(json!({"sub": sub, "email": email})),
+            "refresh_token": format!("{MARKER}-rt-{sub}-{n}")
+        }}))
+        .unwrap()
+    };
+    fs::create_dir_all(h.p(".codex")).unwrap();
+    fs::write(h.p(".codex/auth.json"), auth("user-a", "a@example.test", 1)).unwrap();
+    let a = wallet::import_live(&conn, Tool::Codex, None).unwrap().unwrap();
+    let b = create(&conn, Tool::Codex, "b", None).unwrap();
+    store::write_slot(Tool::Codex, &b.id, &auth("user-b", "b@example.test", 1)).unwrap();
+    // A `codex login` as C outside K2.
+    fs::write(h.p(".codex/auth.json"), auth("user-c", "c@example.test", 1)).unwrap();
+    // A page refresh keeps A's account on A.
+    assert_eq!(wallet::recheck(&conn, &a.id).unwrap().email.as_deref(), Some("a@example.test"));
+    // Adding a token works in this state.
+    let d = wallet::begin_new(&conn, Tool::Codex, "d", None).unwrap();
+    store::write_slot(Tool::Codex, &d.id, &auth("user-d", "d@example.test", 1)).unwrap();
+    assert_eq!(wallet::finalize_login(&conn, &d.id, None).unwrap().state, state::SIGNED_IN);
+
+    let out = wallet::switch(&conn, Tool::Codex, &b.id, None, None).unwrap();
+    assert_eq!(out.adopted.len(), 1);
+    let c = out.adopted[0].clone();
+    assert_eq!((c.label.as_str(), c.created, c.notify), ("c@example.test", true, true));
+    assert_eq!(get(&conn, &c.id).unwrap().unwrap().created_by.as_deref(), Some(wallet::OUTSIDE_K2));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Codex, &c.id)).unwrap(), auth("user-c", "c@example.test", 1));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Codex, &a.id)).unwrap(), auth("user-a", "a@example.test", 1), "A untouched");
+    assert_eq!(fs::read(h.p(".codex/auth.json")).unwrap(), auth("user-b", "b@example.test", 1));
+
+    // Back to A with no sign-in.
+    let out = wallet::switch(&conn, Tool::Codex, &a.id, None, None).unwrap();
+    assert!(out.adopted.is_empty());
+    assert_eq!(fs::read(h.p(".codex/auth.json")).unwrap(), auth("user-a", "a@example.test", 1));
+
+    // C again (a new sign-in of the same account): C's token, no new one.
+    fs::write(h.p(".codex/auth.json"), auth("user-c", "c@example.test", 2)).unwrap();
+    let out = wallet::switch(&conn, Tool::Codex, &b.id, None, None).unwrap();
+    assert_eq!((out.adopted[0].id.as_str(), out.adopted[0].created, out.adopted[0].notify), (c.id.as_str(), false, false));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Codex, &c.id)).unwrap(), auth("user-c", "c@example.test", 2));
+    assert_eq!(list_for(&conn, Tool::Codex).unwrap().len(), 4, "Default, b, d, C");
 }
 
 #[test]
-fn codex_capture_is_checked_against_the_sign_ins_own_id_token() {
+fn codex_a_slot_holding_another_accounts_sign_in_is_moved_out() {
     let h = Home::new();
     let conn = db();
     let jwt = |claims: Value| {
@@ -410,12 +671,271 @@ fn codex_capture_is_checked_against_the_sign_ins_own_id_token() {
     };
     fs::create_dir_all(h.p(".codex")).unwrap();
     fs::write(h.p(".codex/auth.json"), auth("user-a", "a@example.test")).unwrap();
-    let a = wallet::import_live(&conn, Tool::Codex, None).unwrap().unwrap();
-    let b = create(&conn, Tool::Codex, "b", None).unwrap();
+    let _a = wallet::import_live(&conn, Tool::Codex, None).unwrap().unwrap();
+    let b = wallet::begin_new(&conn, Tool::Codex, "b", None).unwrap();
     store::write_slot(Tool::Codex, &b.id, &auth("user-b", "b@example.test")).unwrap();
-    // A `codex login` as C outside K2.
-    fs::write(h.p(".codex/auth.json"), auth("user-c", "c@example.test")).unwrap();
+    let b = wallet::finalize_login(&conn, &b.id, None).unwrap();
+    assert_eq!(b.email.as_deref(), Some("b@example.test"));
+    // A `codex login` as E ran with CODEX_HOME at B's slot.
+    store::write_slot(Tool::Codex, &b.id, &auth("user-e", "e@example.test")).unwrap();
+    assert_eq!(wallet::recheck(&conn, &b.id).unwrap().email.as_deref(), Some("b@example.test"), "B keeps its account");
     let err = wallet::switch(&conn, Tool::Codex, &b.id, None, None).unwrap_err();
+    assert_eq!(err.code(), "account_moved", "{err}");
+    let e = by_label(&conn, Tool::Codex, "e@example.test");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Codex, &e.id)).unwrap(), auth("user-e", "e@example.test"));
+    assert_eq!(get(&conn, &b.id).unwrap().unwrap().state, state::NEEDS_LOGIN);
+    assert!(!store::slot_has_cred(Tool::Codex, &b.id));
+    assert_eq!(fs::read(h.p(".codex/auth.json")).unwrap(), auth("user-a", "a@example.test"), "live untouched");
+}
+
+/// A vendor spy: counts refreshes (each one succeeds and changes nothing)
+/// and answers who each fake token belongs to.
+struct Spy {
+    refreshes: std::sync::atomic::AtomicUsize,
+    vendor: FakeVendor,
+}
+
+impl Refresher for Spy {
+    fn refresh(&self, _tool: Tool, _id: &str) -> Result<(), String> {
+        self.refreshes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn identify(&self, tool: Tool, b: &[u8]) -> Option<AccountIdentity> {
+        self.vendor.identify(tool, b)
+    }
+}
+
+fn spy(rows: &[(&str, &str, &str)]) -> Spy {
+    Spy { refreshes: std::sync::atomic::AtomicUsize::new(0), vendor: FakeVendor::new(rows) }
+}
+
+/// A Claude credential of sign-in `tag` whose access token expires in a
+/// minute (due for a refresh).
+fn expiring(tag: &str) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "claudeAiOauth": {
+            "accessToken": format!("{MARKER}-access-{tag}"),
+            "refreshToken": format!("{MARKER}-refresh-{tag}"),
+            "expiresAt": now() * 1000 + 60_000,
+            "subscriptionType": "max"
+        }
+    }))
+    .unwrap()
+}
+
+/// LT-A3 + LT-A8 (PRD tests 5 and 7): `~/.claude.json` K2 wrote itself
+/// never names the live sign-in. With no vendor answer the live bytes go
+/// to a "checking" token, never into A's slot, and the switch completes.
+/// A later answer names it (renamed, recorded, one notice).
+#[test]
+fn a_claude_json_k2_wrote_never_names_the_live_sign_in_and_unknown_goes_to_a_checking_token() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    wallet::switch(&conn, Tool::Claude, &a.id, None, None).unwrap();
+    let cfg: Value = serde_json::from_str(&fs::read_to_string(h.p(".claude.json")).unwrap()).unwrap();
+    assert_eq!(cfg["oauthAccount"]["accountUuid"], "uuid-a", "K2 wrote A's profile");
+    // An outside `/login` as C left C's token live; the file still names A
+    // (written by K2), and Anthropic can't be asked.
+    write_live(&h, "c");
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    assert!(out.adopted.is_empty(), "nobody could name it: {out:?}");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"), "never into A's slot");
+    assert_eq!(live_bytes(&h), cred("b"), "the switch completed");
+    let checking: Vec<Entry> = list_for(&conn, Tool::Claude).unwrap().into_iter().filter(|e| e.state == state::UNKNOWN).collect();
+    assert_eq!(checking.len(), 1);
+    let u = &checking[0];
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &u.id)).unwrap(), cred("c"));
+    assert!(identity::read_record(Tool::Claude, &u.id).is_none(), "no account on record yet");
+    // Later Anthropic answers: it is C, a new account here.
+    let v = spy(&[("c", "uuid-c", "c@example.test")]);
+    let named = wallet::resolve_unverified(&conn, Tool::Claude, &v, now()).unwrap();
+    assert_eq!(named.len(), 1);
+    assert_eq!((named[0].id.as_str(), named[0].label.as_str(), named[0].created, named[0].notify), (u.id.as_str(), "c@example.test", true, true));
+    let u_now = get(&conn, &u.id).unwrap().unwrap();
+    assert_eq!(u_now.state, state::SIGNED_IN);
+    assert_eq!(u_now.created_by.as_deref(), Some(wallet::OUTSIDE_K2));
+    assert_eq!(identity::read_record(Tool::Claude, &u.id).unwrap().account_uuid.as_deref(), Some("uuid-c"));
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"), "C's bytes were never in A's slot");
+    assert_eq!(v.refreshes.load(std::sync::atomic::Ordering::SeqCst), 0, "far from expiry: no refresh");
+}
+
+/// LT-A8: a checking token whose account already has an idle token merges
+/// into it (newer bytes win) and the checking row is gone.
+#[test]
+fn a_checking_token_of_a_known_account_merges_into_that_token() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    wallet::switch(&conn, Tool::Claude, &a.id, None, None).unwrap();
+    // A's own CLI rotated its sign-in (a2, a later expiry); offline.
+    let a2 = serde_json::to_vec(&json!({"claudeAiOauth": {
+        "accessToken": format!("{MARKER}-access-a2"), "refreshToken": format!("{MARKER}-refresh-a2"),
+        "expiresAt": FAR + 1000, "subscriptionType": "max"
+    }}))
+    .unwrap();
+    fs::write(h.p(".claude/.credentials.json"), &a2).unwrap();
+    wallet::switch(&conn, Tool::Claude, &b.id, None, None).unwrap();
+    let u = list_for(&conn, Tool::Claude).unwrap().into_iter().find(|e| e.state == state::UNKNOWN).expect("a checking token");
+    let mut rows = FakeVendor::new(&[]).accounts.into_inner().unwrap();
+    rows.push((format!("{MARKER}-access-a2"), AccountIdentity { account_uuid: Some("uuid-a".into()), email: Some("a@example.test".into()), org_uuid: None }));
+    let v = Spy { refreshes: std::sync::atomic::AtomicUsize::new(0), vendor: FakeVendor { accounts: Mutex::new(rows) } };
+    let named = wallet::resolve_unverified(&conn, Tool::Claude, &v, now()).unwrap();
+    assert_eq!(named.len(), 1);
+    assert_eq!((named[0].id.as_str(), named[0].created, named[0].notify), (a.id.as_str(), false, false));
+    assert!(get(&conn, &u.id).unwrap().is_none(), "the checking row is gone");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), a2, "A has its newer sign-in back");
+}
+
+/// LT-A10 (PRD test 9): a slot holding the live sign-in's refresh token is
+/// never refreshed by K2 (keep-warm, the switch's lazy refresh).
+#[test]
+fn a_copy_of_the_live_sign_in_is_never_refreshed() {
+    let h = Home::new();
+    let conn = db();
+    let (_a, b) = two_logins(&h, &conn);
+    // B's slot holds a copy of the live sign-in (same refresh token), due.
+    let mut copy: Value = serde_json::from_slice(&expiring("a")).unwrap();
+    copy["claudeAiOauth"]["accessToken"] = json!(format!("{MARKER}-access-b-copy"));
+    store::write_slot(Tool::Claude, &b.id, &serde_json::to_vec(&copy).unwrap()).unwrap();
+    assert!(identity::shares_live_grant(Tool::Claude, &b.id));
+    let v = spy(&[]);
+    let res = wallet::keep_warm(&conn, &v, now(), &|_| false).unwrap();
+    assert!(res.is_empty(), "{res:?}");
+    let target = get(&conn, &b.id).unwrap().unwrap();
+    wallet::precheck(Tool::Claude, &target, wallet::generation(&conn, Tool::Claude).unwrap(), Some(&v)).unwrap();
+    assert_eq!(v.refreshes.load(std::sync::atomic::Ordering::SeqCst), 0, "no refresh of the live lineage");
+}
+
+/// LT-A9: keep-warm refreshes an idle slot, then the vendor names it: it
+/// is another account's, so it moves to that account's token.
+#[test]
+fn keep_warm_finds_and_repairs_a_drifted_slot() {
+    let h = Home::new();
+    let conn = db();
+    let (_a, b) = two_logins(&h, &conn);
+    let d = expiring("d");
+    store::write_slot(Tool::Claude, &b.id, &d).unwrap();
+    let v = spy(&[("d", "uuid-d", "d@example.test")]);
+    let res = wallet::keep_warm(&conn, &v, now(), &|_| false).unwrap();
+    assert_eq!(res.len(), 1);
+    assert_eq!(v.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let moved = res[0].adopted.clone().expect("moved");
+    assert_eq!((moved.label.as_str(), moved.found_in.as_str(), moved.notify), ("d@example.test", "slot", true));
+    assert_eq!(get(&conn, &b.id).unwrap().unwrap().state, state::NEEDS_LOGIN);
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &moved.id)).unwrap(), d, "D's sign-in kept whole");
+    assert!(!store::slot_has_cred(Tool::Claude, &b.id));
+    assert_eq!(identity::read_record(Tool::Claude, &b.id).unwrap().account_uuid.as_deref(), Some("uuid-b"));
+}
+
+/// LT-A4: the one guarded write refuses another account's bytes, and bytes
+/// nobody can name unless they are the same sign-in.
+#[test]
+fn the_guarded_write_never_files_another_accounts_sign_in() {
+    let h = Home::new();
+    let conn = db();
+    let (a, _b) = two_logins(&h, &conn);
+    let c = AccountIdentity { account_uuid: Some("uuid-c".into()), email: Some("c@example.test".into()), org_uuid: None };
+    let a_entry = get(&conn, &a.id).unwrap().unwrap();
+    let err = wallet::file_bytes(Tool::Claude, &a.id, Some(&a_entry), &cred("c"), wallet::Incoming::Known(&c, Source::Vendor), "test").unwrap_err();
     assert_eq!(err.code(), "account_mismatch");
-    assert_eq!(fs::read(store::slot_cred_path(Tool::Codex, &a.id)).unwrap(), auth("user-a", "a@example.test"));
+    let err = wallet::file_bytes(Tool::Claude, &a.id, Some(&a_entry), &cred("c"), wallet::Incoming::Unknown, "test").unwrap_err();
+    assert_eq!(err.code(), "account_mismatch");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), cred("a"), "nothing written");
+    // The same sign-in (a newer access token) and K2's own refresh go in.
+    let mut newer: Value = serde_json::from_slice(&cred("a")).unwrap();
+    newer["claudeAiOauth"]["accessToken"] = json!(format!("{MARKER}-access-a-new"));
+    let newer = serde_json::to_vec(&newer).unwrap();
+    wallet::file_bytes(Tool::Claude, &a.id, Some(&a_entry), &newer, wallet::Incoming::Unknown, "test").unwrap();
+    wallet::file_bytes(Tool::Claude, &a.id, None, &newer, wallet::Incoming::OwnRefresh, "test").unwrap();
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &a.id)).unwrap(), newer);
+}
+
+/// LT-A11 (PRD test 12): signing token B in again as another account files
+/// that sign-in under the account's own token; B keeps its record and
+/// needs its own sign-in.
+#[test]
+fn signing_a_token_in_again_as_another_account_files_it_elsewhere() {
+    let h = Home::new();
+    let conn = db();
+    let (_a, b) = two_logins(&h, &conn);
+    wallet::begin_relogin(&conn, &b.id).unwrap();
+    // Claude's own login, with its home at B's slot, as C.
+    fs::write(store::slot_cred_path(Tool::Claude, &b.id), cred("c")).unwrap();
+    fs::write(
+        store::slot_dir(Tool::Claude, &b.id).join(".claude.json"),
+        json!({"oauthAccount": profile("uuid-c", "c@example.test")}).to_string(),
+    )
+    .unwrap();
+    let err = wallet::finalize_login(&conn, &b.id, None).unwrap_err();
+    assert_eq!(err.code(), "account_moved");
+    assert!(err.to_string().contains("That sign-in is c@example.test's"), "{err}");
+    let WalletError::Moved(_, moved) = err else { panic!("not Moved") };
+    assert!(!moved[0].notify, "a K2 sign-in, not one made outside K2");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Claude, &moved[0].id)).unwrap(), cred("c"));
+    assert_eq!(identity::read_record(Tool::Claude, &b.id).unwrap().account_uuid.as_deref(), Some("uuid-b"), "B's record never moves");
+    assert_eq!(get(&conn, &b.id).unwrap().unwrap().state, state::NEEDS_LOGIN);
+    assert_eq!(identity::slot_profile(&b.id).unwrap().0["accountUuid"], "uuid-b");
+}
+
+/// LT-A12 (PRD test 14): one notice per account per server, even after the
+/// adopted token is removed and the account signs in outside K2 again.
+/// The decisions file holds account keys only.
+#[test]
+fn an_account_is_told_about_once() {
+    let h = Home::new();
+    let conn = db();
+    let (a, b) = two_logins(&h, &conn);
+    let vendor = FakeVendor::new(&[
+        ("a", "uuid-a", "a@example.test"),
+        ("b", "uuid-b", "b@example.test"),
+        ("c", "uuid-c", "c@example.test"),
+        ("c2", "uuid-c", "c@example.test"),
+    ]);
+    write_live(&h, "c");
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, Some(&vendor)).unwrap();
+    assert!(out.adopted[0].notify);
+    wallet::remove(&conn, &out.adopted[0].id).unwrap();
+    wallet::switch(&conn, Tool::Claude, &a.id, None, Some(&vendor)).unwrap();
+    write_live(&h, "c2");
+    let out = wallet::switch(&conn, Tool::Claude, &b.id, None, Some(&vendor)).unwrap();
+    assert_eq!(out.adopted.len(), 1);
+    assert!(out.adopted[0].created, "a new token: the old one was removed");
+    assert!(!out.adopted[0].notify, "the same account is not told about twice");
+    let decisions = fs::read_to_string(wallet::outside_decisions_path(Tool::Claude)).unwrap();
+    assert!(decisions.contains("uuid-c"), "{decisions}");
+    assert!(!decisions.contains(MARKER) && !decisions.contains("@"), "account keys only: {decisions}");
+}
+
+#[test]
+fn grok_names_its_account_from_auth_json_and_an_outside_login_is_adopted() {
+    let h = Home::new();
+    let conn = db();
+    let auth = |user: &str, email: &str, n: u32| {
+        serde_json::to_vec(&json!({"https://auth.example.test::client": {
+            "user_id": user, "email": email, "principal_id": format!("p-{user}"), "team_id": "t1",
+            "refresh_token": format!("{MARKER}-grok-rt-{user}-{n}"), "key": "jwt"
+        }}))
+        .unwrap()
+    };
+    let who = identity::cred_identity(Tool::Grok, &auth("g-a", "a@example.test", 1)).expect("named");
+    assert_eq!((who.account_uuid.as_deref(), who.email.as_deref()), (Some("g-a"), Some("a@example.test")));
+    let two: Value = json!({
+        "i1::c": {"user_id": "g-a", "refresh_token": "r1"},
+        "i2::c": {"user_id": "g-b", "refresh_token": "r2"}
+    });
+    assert!(identity::cred_identity(Tool::Grok, two.to_string().as_bytes()).is_none(), "two users: nobody");
+    fs::create_dir_all(h.p(".grok")).unwrap();
+    fs::write(h.p(".grok/auth.json"), auth("g-a", "a@example.test", 1)).unwrap();
+    let a = wallet::import_live(&conn, Tool::Grok, None).unwrap().unwrap();
+    let b = create(&conn, Tool::Grok, "b", None).unwrap();
+    store::write_slot(Tool::Grok, &b.id, &auth("g-b", "b@example.test", 1)).unwrap();
+    fs::write(h.p(".grok/auth.json"), auth("g-c", "c@example.test", 1)).unwrap();
+    let out = wallet::switch(&conn, Tool::Grok, &b.id, None, None).unwrap();
+    assert_eq!(out.adopted.len(), 1);
+    assert_eq!(out.adopted[0].label, "c@example.test");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Grok, &a.id)).unwrap(), auth("g-a", "a@example.test", 1), "A untouched");
+    assert_eq!(fs::read(store::slot_cred_path(Tool::Grok, &out.adopted[0].id)).unwrap(), auth("g-c", "c@example.test", 1));
 }

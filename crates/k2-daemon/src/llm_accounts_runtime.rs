@@ -35,6 +35,66 @@ pub const SWITCH_NOTE: &str =
 const KEEP_WARM_EVERY: Duration = Duration::from_secs(30 * 60);
 const KEEP_WARM_FIRST: Duration = Duration::from_secs(120);
 
+/// Who files the notice about a sign-in made outside K2.
+pub const OUTSIDE_NOTICE_FROM: &str = "k2-llm";
+
+/// The Owner/Admin notice text for one adopted sign-in (`None`: no notice;
+/// only a NEW token is told about, so one account is told about once).
+pub fn adopted_notice(a: &wallet::Adopted) -> Option<(String, String)> {
+    if !a.notify {
+        return None;
+    }
+    let tool = Tool::parse(&a.tool).map(Tool::display).unwrap_or("an LLM tool");
+    let title = format!("{tool} sign-in made outside K2, saved as \"{}\"", a.label);
+    let mut body = format!(
+        "Someone signed in to {tool} as {} outside K2. K2 saved it as a new token \"{}\".",
+        a.account, a.label
+    );
+    if a.found_in == "slot" {
+        body.push_str(&format!(
+            " It was found in the token \"{}\", which needs signing in again.",
+            a.found_under
+        ));
+    } else if a.found_in == "live" {
+        body.push_str(&format!(" The token \"{}\" was left as it was; switching back to it needs no sign-in.", a.found_under));
+    }
+    if let Some(same) = &a.same_account_as {
+        body.push_str(&format!(" That account already had a token ({same}) that was in use, so this is a second one."));
+    }
+    body.push_str(&format!(
+        "\n\nKeep: nothing to do; it is in Settings → Language Models → Subs / Tokens.\n\
+         Remove: Remove it there, or `k2 llm tokens remove {} \"{}\"` (it goes to Trash).",
+        a.tool, a.label
+    ));
+    Some((title, body))
+}
+
+/// Tell the server's Owners and Admins (an `fyi` ticket, the usual owner
+/// notice path) about each account K2 saw signed in outside K2 for the
+/// first time on this server, and audit every adoption (token ids only,
+/// never an email). Never a token; the email is the one the token list
+/// shows.
+pub fn notice_adopted(adopted: &[wallet::Adopted]) {
+    for a in adopted {
+        k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
+            "llm_accounts.outside_adopted",
+            "k2",
+            format!("{} {} ({})", a.tool, a.id, a.found_in),
+            "daemon",
+            "-",
+            "cli",
+        ));
+    }
+    for (title, body) in adopted.iter().filter_map(adopted_notice) {
+        if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], OUTSIDE_NOTICE_FROM, &title, &body) {
+            k2_core::log_debug!("[llm-accounts] outside sign-in notice not filed: {e}");
+        }
+    }
+    if let Some(a) = adopted.first() {
+        emit(Tool::parse(&a.tool));
+    }
+}
+
 /// Where the browser for a login is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -668,9 +728,13 @@ pub fn start_login(
     store::ensure_private_dir(&slot).map_err(|e| WalletError::Io(e.to_string()))?;
 
     let ticket = if method == wallet::LoginMethod::LiveSwap {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        Some(wallet::begin_live_swap(&conn, tool, &entry.id, Some(started_by))?)
+        let t = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            wallet::begin_live_swap(&conn, tool, &entry.id, Some(started_by))?
+        };
+        notice_adopted(&t.adopted);
+        Some(t)
     } else {
         None
     };
@@ -844,6 +908,16 @@ fn active_is(tool: Tool, id: &str) -> bool {
     wallet_core::active_id(&conn, tool).ok().flatten().as_deref() == Some(id)
 }
 
+/// The server default, or the subscription in the live store behind an
+/// API-token default: the CLI owns its refresh and the shared probe its
+/// usage row, so the idle-slot probe leaves it alone (LT-A16).
+fn live_or_default(tool: Tool, id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    wallet_core::active_id(&conn, tool).ok().flatten().as_deref() == Some(id)
+        || wallet_core::live_owner(&conn, tool).ok().flatten().as_deref() == Some(id)
+}
+
 fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
     loop {
         std::thread::sleep(Duration::from_millis(400));
@@ -1005,6 +1079,13 @@ fn watch(id: String, mut events: tokio::sync::broadcast::Receiver<AlacEvent>) {
                         Ok(_) => {
                             let offer = !active_is(tool, &account_id);
                             finish(&id, "signed_in", None, offer);
+                        }
+                        Err(WalletError::Moved(hint, adopted)) => {
+                            // Signed in as another account (LT-A11): saved
+                            // as that account's token; this one keeps its
+                            // own state and says so.
+                            notice_adopted(&adopted);
+                            finish(&id, "failed", Some(hint), false);
                         }
                         Err(e) => {
                             restore_entry_state(&account_id, tool, &prev_state, new_entry);
@@ -1187,7 +1268,7 @@ pub fn apply_spawn_login(
         }
         // A fresh spawn, or a resume moved to its chat's token: record
         // where the conversation now runs.
-        if !resume || login.source == k2_core::llm_accounts::pins::Source::SessionPin {
+        if !resume || login.source == k2_core::llm_accounts::pins::Source::SessionPin || login.carry.is_some() {
             k2_core::llm_accounts::pins::record_spawn(&conn, &login, session_key, conversation.as_deref())?;
         }
         login
@@ -1389,18 +1470,25 @@ pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
         return Ok(());
     }
     let tool = entry.tool().ok_or("unknown tool")?;
-    if active_is(tool, &entry.id) || !slots::has_cred(tool, &entry.id) {
+    if live_or_default(tool, &entry.id) || !slots::has_cred(tool, &entry.id) {
         return Ok(());
     }
     let _lock = store::lock_tool(tool, Duration::from_secs(5)).map_err(|e| e.to_string())?;
-    if active_is(tool, &entry.id) {
+    if live_or_default(tool, &entry.id) {
         return Ok(());
     }
     let slot = store::slot_dir(tool, &entry.id);
     let claude_token = if tool == Tool::Claude {
         let meta = slots::slot_meta(tool, &entry.id);
         let expired = meta.expires_at.map(|x| x <= chrono::Utc::now().timestamp() + 60).unwrap_or(false);
-        if expired && meta.has_refresh {
+        // Never refresh a slot a running CLI owns, or a copy of the live
+        // sign-in: either refresh would revoke that CLI's token (LT-A16,
+        // LT-A10). The reading then uses the token as it is.
+        if expired
+            && meta.has_refresh
+            && !slot_in_use(&entry.id)
+            && !k2_core::llm_accounts::identity::shares_live_grant(tool, &entry.id)
+        {
             let _ = wallet::claude_refresh_slot(&entry.id, &post_json);
         }
         let meta = slots::slot_meta(tool, &entry.id);
@@ -1428,7 +1516,7 @@ pub fn probe_idle_usage(entry: &Entry) -> Result<(), String> {
         let conn = db.lock();
         // A switch may have made it live while the check ran: then the shared
         // probe owns its row.
-        if active_is(tool, &entry.id) {
+        if live_or_default(tool, &entry.id) {
             return Ok(());
         }
         wallet_core::update_meta(
@@ -1462,7 +1550,7 @@ pub fn probe_idle_stale(max_age: Duration) {
     };
     for e in entries {
         let Some(tool) = e.tool() else { continue };
-        if e.state != state::SIGNED_IN || e.is_api_key() || !tool.subscription_supported() || active_is(tool, &e.id) {
+        if e.state != state::SIGNED_IN || e.is_api_key() || !tool.subscription_supported() || live_or_default(tool, &e.id) {
             continue;
         }
         let fresh = e.usage_checked_at.is_some_and(|t| now.timestamp() - t < max_age.as_secs() as i64);
@@ -1482,9 +1570,68 @@ pub fn probe_idle_stale(max_age: Duration) {
 
 // ── Boot + loop ─────────────────────────────────────────────────────
 
+/// Settle who is live for `tool` now (LT-A5): the vendor is asked with no
+/// lock held, then the wallet commits under its locks. A sign-in made
+/// outside K2 becomes its own token (notice + audit). `mirror`: copy a
+/// matching live sign-in into its token's slot (LT-A14).
+pub fn reconcile_tool(tool: Tool, mirror: bool) -> Vec<wallet::Adopted> {
+    reconcile_tool_with(tool, mirror, Some(&DaemonRefresher))
+}
+
+/// [`reconcile_tool`] with a given vendor client (a switch passes its own).
+pub fn reconcile_tool_with(tool: Tool, mirror: bool, vendor: Option<&dyn wallet::Refresher>) -> Vec<wallet::Adopted> {
+    if !tool.subscription_supported() {
+        return Vec::new();
+    }
+    let answer = wallet::LiveAnswer::ask(tool, vendor);
+    let res = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        wallet::reconcile_live(&conn, tool, answer.as_ref(), mirror)
+    };
+    match res {
+        Ok(a) => {
+            notice_adopted(&a);
+            a
+        }
+        Err(e) => {
+            k2_core::log_debug!("[llm-accounts] reconcile {}: {}", tool.as_str(), e.code());
+            Vec::new()
+        }
+    }
+}
+
+/// Name the "checking" tokens of `tool` (LT-A8): refresh, ask, then merge
+/// or rename (notice + audit).
+pub fn resolve_checking(tool: Tool) {
+    if !tool.subscription_supported() || !vendor_calls_allowed() {
+        return;
+    }
+    let res = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        wallet::resolve_unverified(&conn, tool, &DaemonRefresher, chrono::Utc::now().timestamp())
+    };
+    match res {
+        Ok(a) => notice_adopted(&a),
+        Err(e) => k2_core::log_debug!("[llm-accounts] checking tokens {}: {}", tool.as_str(), e.code()),
+    }
+}
+
 /// Import each tool's live login as the active "Default" wallet entry
-/// when nothing is active yet. Local reads only.
+/// when nothing is active yet, record each token's account (LT-A1), then
+/// settle who is live (a sign-in made outside K2 while K2 was down).
 pub fn boot_import() {
+    wallet::set_in_use_probe(slot_in_use);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        match k2_core::llm_accounts::identity::backfill_records(&conn) {
+            Ok(0) => {}
+            Ok(n) => k2_core::log_debug!("[llm-accounts] recorded the account of {n} token(s)"),
+            Err(e) => k2_core::log_debug!("[llm-accounts] account records: {}", e.code()),
+        }
+    }
     for tool in Tool::ALL {
         let r = {
             let db = k2_core::db::shared();
@@ -1495,6 +1642,11 @@ pub fn boot_import() {
             Ok(Some(_)) => emit(Some(tool)),
             Ok(None) => {}
             Err(e) => k2_core::log_debug!("[llm-accounts] import {}: {}", tool.as_str(), e),
+        }
+    }
+    for tool in Tool::SUBSCRIPTION {
+        if !reconcile_tool(tool, false).is_empty() {
+            emit(Some(tool));
         }
     }
     // Claude items an earlier K2 (0.45.1/0.45.2) left unreadable by
@@ -1525,6 +1677,14 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
     if k2_core::airgap::enabled() {
         return Vec::new();
     }
+    // Who is live, each pass: an outside sign-in becomes its own token,
+    // and a matching live sign-in is mirrored into its token's slot so
+    // switching back after a later outside `/login` needs no sign-in
+    // (LT-A5, LT-A14). Then the "checking" tokens are named (LT-A8).
+    for tool in Tool::SUBSCRIPTION {
+        reconcile_tool(tool, true);
+        resolve_checking(tool);
+    }
     let res = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1537,6 +1697,8 @@ pub fn keep_warm_tick() -> Vec<wallet::WarmResult> {
             return Vec::new();
         }
     };
+    let moved: Vec<wallet::Adopted> = res.iter().filter_map(|r| r.adopted.clone()).collect();
+    notice_adopted(&moved);
     let entries = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -2170,5 +2332,34 @@ mod tests {
         assert_eq!(LoginMode::parse(None), LoginMode::OtherDevice);
         assert_eq!(LoginMode::parse(Some("this_computer")), LoginMode::ThisComputer);
         assert_eq!(LoginMode::parse(Some("bogus")), LoginMode::OtherDevice);
+    }
+
+    fn adopted(created: bool, found_in: &str) -> wallet::Adopted {
+        wallet::Adopted {
+            tool: "claude".into(),
+            id: "acc_x".into(),
+            label: "c@example.test".into(),
+            account: "c@example.test".into(),
+            created,
+            notify: created,
+            found_in: found_in.into(),
+            found_under: "Default".into(),
+            same_account_as: None,
+        }
+    }
+
+    #[test]
+    fn an_outside_sign_in_is_told_once_with_keep_and_remove() {
+        let (title, body) = adopted_notice(&adopted(true, "live")).expect("a new token is told about");
+        assert_eq!(title, "Claude sign-in made outside K2, saved as \"c@example.test\"");
+        assert!(
+            body.starts_with("Someone signed in to Claude as c@example.test outside K2. K2 saved it as a new token \"c@example.test\"."),
+            "{body}"
+        );
+        assert!(body.contains("\"Default\" was left as it was"), "{body}");
+        assert!(body.contains("Keep:") && body.contains("k2 llm tokens remove claude \"c@example.test\"") && body.contains("Trash"), "{body}");
+        assert!(adopted_notice(&adopted(false, "live")).is_none(), "an existing token of that account: no second notice");
+        let (_, body) = adopted_notice(&adopted(true, "slot")).unwrap();
+        assert!(body.contains("found in the token \"Default\", which needs signing in again"), "{body}");
     }
 }

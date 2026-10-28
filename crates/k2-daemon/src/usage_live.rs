@@ -156,6 +156,12 @@ pub fn apply_live(
         return false;
     }
     let live = live_owner(tool);
+    // A reading of the live store is not the default token's while the
+    // live sign-in is known to be another account (LT-A6).
+    let from_live = account.as_deref().is_none_or(str::is_empty);
+    if from_live && k2_core::llm_accounts::wallet::live_is_other_account(tool) {
+        return false;
+    }
     let account = account.filter(|a| !a.is_empty()).or_else(|| live.clone());
     let mut wrote = false;
     if let Some(id) = account.as_deref().filter(|id| wallet_known(id)) {

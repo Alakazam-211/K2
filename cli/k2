@@ -23433,6 +23433,13 @@ else:
     print("%s: server default is now %s%s" % (tool, a.get("label") or s.get("toLabel") or s.get("to"), was))
     for w in v.get("warnings") or []:
         print("WARN: %s" % w)
+    for d in s.get("adopted") or []:
+        if d.get("created"):
+            print("Saved a sign-in made outside K2 (%s) as the new token \"%s\"; the token \"%s\" was left as it was." % (d.get("account"), d.get("label"), d.get("foundUnder")))
+        else:
+            print("Saved a sign-in made outside K2 (%s) to its own token \"%s\"." % (d.get("account"), d.get("label")))
+    for n in s.get("needsSignIn") or []:
+        print("\"%s\" held another account'"'"'s sign-in; it needs signing in again (k2 llm tokens login %s \"%s\")." % (n, tool, n))
     if tool == "claude" and not s.get("profileSwapped"):
         print("Note: ~/.claude.json was not updated, so Claude /status may still name the previous account.")
     print("Changing the server default token affects every chat that uses Server default on this server.")

@@ -57,6 +57,9 @@ export interface LlmAccount {
   lastUsedAt: number | null
   createdAt: number
   createdBy: string | null
+  /** K2 saved this token from a sign-in someone made outside K2 (a
+   *  `/login` in a terminal). Additive (0.46.6); absent on older daemons. */
+  addedOutsideK2?: boolean
   usage: HarnessUsage | null
   usageCheckedAt: number | null
 }

@@ -187,6 +187,22 @@ describe('Tokens column', () => {
     expect(column).not.toMatch(/\blogins?\b|wallet|\bpool\b|pinned|Make active/i)
   })
 
+  it('marks a token K2 saved from a sign-in made outside K2, and only that one', async () => {
+    const outside = account({ id: 'acc_outside', label: 'someone@example.test', email: 'someone@example.test', addedOutsideK2: true, createdBy: 'outside-k2' })
+    h.daemonCliGet.mockImplementation(async (route: string, params?: Record<string, string>) => {
+      if (route !== 'llm/accounts/list') return routeGet(route, params)
+      const d = doc() as { tools: Array<{ tool: string; accounts: unknown[] }> }
+      d.tools.find((t) => t.tool === 'claude')!.accounts.push(outside)
+      return d
+    })
+    await renderColumn()
+    const chip = screen.getByTestId('llm-outside-acc_outside')
+    expect(chip.textContent).toBe('Added outside K2')
+    expect(chip.getAttribute('title')).toContain('outside K2')
+    expect(screen.queryByTestId('llm-outside-acc_work')).toBeNull()
+    expect(screen.queryByTestId('llm-outside-acc_home')).toBeNull()
+  })
+
   it('Use this token posts switch with the id', async () => {
     await renderColumn()
     const row = screen.getByTestId('llm-account-acc_home')

@@ -929,7 +929,12 @@ fn probe_and_write_mode(io: &dyn UsageIo, only: Option<&str>, mode: Mode) -> Res
         match (&gen_before, &gen_after) {
             (Some(b), Some(a)) if a == b => {
                 row.account_id = Some(b.0.clone());
-                record_on_wallet(&b.0, &row);
+                // Not the default's reading while the live sign-in is known
+                // to be another account (LT-A6).
+                let other = k2_core::llm_accounts::Tool::parse(name).is_some_and(k2_core::llm_accounts::wallet::live_is_other_account);
+                if !other {
+                    record_on_wallet(&b.0, &row);
+                }
             }
             (Some(_), _) => {
                 // A switch ran during the probe: the reading may be either

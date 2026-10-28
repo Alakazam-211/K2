@@ -234,7 +234,11 @@ class H(BaseHTTPRequestHandler):
         elif verb == "switch":
             out = {"switch": {"tool": "claude", "from": "acc_work", "to": b.get("id"), "savedOutgoing": True,
                               "refreshed": False, "alreadyActive": False, "fromLabel": "work", "toLabel": "personal",
-                              "profileSwapped": True},
+                              "profileSwapped": True,
+                              "adopted": [{"tool": "claude", "id": "acc_out", "label": "someone@example.test",
+                                           "account": "someone@example.test", "created": True, "notify": True,
+                                           "foundIn": "live", "foundUnder": "work", "sameAccountAs": None}],
+                              "needsSignIn": ["work"]},
                    "warnings": ["personal is at 100% of its Weekly limit until 2026-10-10T12:00:00Z"],
                    "account": acct(b.get("id"), "personal", True)}
         elif verb == "next":
@@ -389,6 +393,9 @@ out="$(owner llm tokens switch claude personal)"
 assert_contains "switch says server default" "$out" "claude: server default is now personal (was work)"
 assert_contains "switch warns about a used-up token" "$out" "WARN: personal is at 100% of its Weekly limit until 2026-10-10T12:00:00Z"
 assert_absent "switch: profile swapped, no note" "$out" "Note: ~/.claude.json"
+assert_contains "switch names an outside sign-in it saved" "$out" 'Saved a sign-in made outside K2 (someone@example.test) as the new token "someone@example.test"; the token "work" was left as it was.'
+assert_contains "switch names a token that needs signing in again" "$out" '"work" held another account'"'"'s sign-in; it needs signing in again (k2 llm tokens login claude "work").'
+
 assert_contains "switch says every chat" "$out" "every chat that uses Server default on this server"
 assert_eq "switch is a POST" "$(last method)" "POST"
 assert_eq "switch path" "$(last path)" "/cli/llm/accounts/switch"

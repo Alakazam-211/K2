@@ -267,6 +267,15 @@ fn log_waiting(tool: Tool, id: &str, what: &str, why: &str) {
     crate::log_debug!("[llm-accounts] {}/{id}: {what} waiting to seal ({why}); the file copy is kept", tool.as_str());
 }
 
+/// Does a slot file hold another account's sign-in than its token's
+/// recorded account (LT-A13)? Codex and Grok: the credential names it;
+/// Claude: Claude's own `.claude.json` in that slot (a mismatch signal).
+/// A token with no recorded account has nothing to compare: `false`.
+fn other_account_in_file(tool: Tool, id: &str, bytes: &[u8]) -> bool {
+    let Some(rec) = super::identity::read_record(tool, id) else { return false };
+    super::identity::slot_identity(tool, id, bytes, None).is_some_and(|(f, _)| rec.identity().same_account(&f) == Some(false))
+}
+
 // ── The two stores ──────────────────────────────────────────────────
 
 /// One saved login's credential, wherever it is kept. Every server-login
@@ -322,6 +331,15 @@ impl SlotStore for VaultStore {
         let plain = store::read_slot(tool, id);
         if let Ok(Some(b)) = &plain {
             if store::validate_cred(tool, b).is_ok() {
+                // A file of another account (a CLI signed in in this slot's
+                // home) is never sealed as this login's newest copy
+                // (prd-llm-tokens-outside-logins-v1 LT-A13): the vault keeps
+                // the last copy that matched, and the wallet's drift repair
+                // moves the file to its account's token.
+                if other_account_in_file(tool, id, b) {
+                    log_waiting(tool, id, "sign-in", "the slot file is another account's sign-in (drift)");
+                    return plain;
+                }
                 // Plaintext is newest: the vault catches up first.
                 if let Synced::Waiting(why) = sync_up(tool, id, SealKind::LoginSlot, b) {
                     log_waiting(tool, id, "sign-in", &why);
@@ -525,6 +543,9 @@ pub struct SyncReport {
     pub empty: usize,
     /// The vault couldn't be reached at all.
     pub vault_closed: bool,
+    /// A slot file that holds another account's sign-in: never sealed
+    /// (LT-A13); the wallet's drift repair moves it (ids).
+    pub drift: Vec<String>,
 }
 
 fn now() -> i64 {
@@ -565,6 +586,11 @@ pub fn sync_to_vault(entries: &[Entry], removed: &[Entry]) -> SyncReport {
             (SealKind::ApiKey, store::read_api_key(tool, &e.id).map(String::into_bytes))
         } else {
             match store::read_slot(tool, &e.id) {
+                // Never seal another account's sign-in (LT-A13).
+                Ok(Some(b)) if other_account_in_file(tool, &e.id, &b) => {
+                    r.drift.push(e.id.clone());
+                    continue;
+                }
                 Ok(Some(b)) if store::validate_cred(tool, &b).is_ok() => (SealKind::LoginSlot, Some(b)),
                 Ok(Some(_)) => {
                     r.broken.push(e.id.clone());

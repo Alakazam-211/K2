@@ -722,3 +722,37 @@ fn live_writes_on_file_stores_are_verified_and_refuse_broken_input() {
     assert_eq!(store::write_live(Tool::Codex, b"[1,2]").unwrap_err().code(), "credential_invalid");
     assert_eq!(fs::read(h.p(".codex/auth.json")).unwrap(), good, "unchanged");
 }
+
+/// LT-A4: one guarded write. Every server-token slot write in
+/// `llm_accounts` goes through `wallet::file_bytes`, whose one callee is
+/// the store switch (`slots::write_slot`: files or the vault). A new call
+/// anywhere else fails here. `store.rs` and `slots.rs` are the store layer
+/// itself (`slots` writes the vault's own sealed copy back to a file).
+#[test]
+fn every_slot_write_goes_through_file_bytes() {
+    let sources = [
+        ("wallet.rs", include_str!("wallet.rs")),
+        ("identity.rs", include_str!("identity.rs")),
+        ("pins.rs", include_str!("pins.rs")),
+        ("mod.rs", include_str!("mod.rs")),
+    ];
+    for (name, src) in sources {
+        let calls = src.matches("write_slot(").count();
+        match name {
+            "wallet.rs" => {
+                assert_eq!(calls, 1, "wallet.rs: exactly one write_slot call, inside file_bytes");
+                let body_start = src.find("pub(crate) fn file_bytes(").expect("file_bytes exists");
+                let body_end = body_start + src[body_start..].find("\n}\n").expect("file_bytes ends");
+                let call = src.find("slots::write_slot(").expect("the one call");
+                assert!(call > body_start && call < body_end, "the one write_slot call is inside file_bytes");
+            }
+            other => assert_eq!(calls, 0, "{other} must not write a slot; go through wallet::file_bytes"),
+        }
+        {
+            for (i, line) in src.lines().enumerate() {
+                let raw = line.contains("slot_cred_path(") && (line.contains("write") || line.contains("fs::copy") || line.contains("rename"));
+                assert!(!raw, "{name}:{}: a raw write into a slot's credential file: {line}", i + 1);
+            }
+        }
+    }
+}

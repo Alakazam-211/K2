@@ -237,6 +237,8 @@ fn recheck_after_switch(tool: Tool, from: Option<String>) {
         return;
     }
     let _ = std::thread::Builder::new().name("llm-switch-usage".into()).spawn(move || {
+        // A "checking" token the switch made is idle now: name it (LT-A8).
+        rt::resolve_checking(tool);
         if let Err(e) = crate::subscription_usage::probe_now(Some(tool.as_str())) {
             k2_core::log_debug!("[llm-accounts] usage after switch ({}): {e}", tool.as_str());
         }
@@ -266,7 +268,7 @@ fn switch_two_phase(
     key: &str,
     vendor: &dyn wallet::Refresher,
 ) -> Result<(wallet::SwitchOutcome, Tool, Vec<String>), WalletError> {
-    let (tool, target, gen) = with_conn(|conn| -> Result<(Tool, Entry, wallet::Generation), WalletError> {
+    let (tool, target) = with_conn(|conn| -> Result<(Tool, Entry), WalletError> {
         let target = if next {
             let tool = Tool::parse(b.tool.as_deref().unwrap_or(""))
                 .ok_or_else(|| WalletError::UnknownTool(b.tool.clone().unwrap_or_default()))?;
@@ -280,8 +282,16 @@ fn switch_two_phase(
             wallet_core::lookup(conn, tool_hint, &id)?
         };
         let tool = target.tool().ok_or_else(|| WalletError::UnknownTool(target.tool.clone()))?;
-        Ok((tool, target.clone(), wallet::generation(conn, tool)?))
+        Ok((tool, target.clone()))
     })?;
+    // Phase 0 (LT-A5): settle who is live first, without the network
+    // (the credential, Claude's own ~/.claude.json), so a sign-in made
+    // outside K2 is its own token before the generation is read (phase 2
+    // then doesn't answer `changed` for it). One only the vendor can name
+    // is adopted in phase 2 with phase 1's answers. Its notices go out here.
+    let phase0 = rt::reconcile_tool_with(tool, false, None);
+    let gen = with_conn(|conn| wallet::generation(conn, tool))?;
+    let target = with_conn(|conn| wallet_core::lookup(conn, Some(tool), &target.id))?;
     // A sign-in rewriting that slot must finish first.
     if rt::running_for(&target.id).is_some() {
         return Err(WalletError::Conflict(
@@ -290,12 +300,17 @@ fn switch_two_phase(
         ));
     }
     let pre = wallet::precheck(tool, &target, gen, Some(vendor))?;
-    with_conn(|conn| {
+    let (mut out, warnings) = with_conn(|conn| -> Result<_, WalletError> {
         // A warning, never a refusal: the person may still want it.
         let warnings = wallet_core::get(conn, &target.id)?.map(|e| exhausted_warnings(&e)).unwrap_or_default();
-        let out = wallet::switch_prechecked(conn, tool, &target.id, Some(key), &pre)?;
-        Ok((out, tool, warnings))
-    })
+        Ok((wallet::switch_prechecked(conn, tool, &target.id, Some(key), &pre)?, warnings))
+    })?;
+    // Phase 2 found more (rare: the live store moved after phase 0): tell
+    // about those (never under the database lock: the notice files a
+    // ticket); phase 0 told about its own. Both go in the answer.
+    rt::notice_adopted(&out.adopted);
+    out.adopted.splice(0..0, phase0);
+    Ok((out, tool, warnings))
 }
 
 /// `refresh {usage:true}` for every token (Settings → LLMs opening) runs
@@ -406,6 +421,7 @@ fn account_json(e: &Entry, active: bool, human: bool) -> Value {
         "lastUsedAt": e.last_used_at,
         "createdAt": e.created_at,
         "createdBy": e.created_by,
+        "addedOutsideK2": e.created_by.as_deref() == Some(wallet::OUTSIDE_K2),
         "usage": usage_for(e),
         "usageCheckedAt": e.usage_checked_at,
     })
@@ -781,8 +797,13 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                 Ok(e) => e.state,
                 Err(e) => return wallet_err(e),
             };
-            let entry = match with_conn(|conn| wallet::begin_relogin(conn, &id)) {
-                Ok(e) => e,
+            // Re-adding a token whose sign-in got swapped outside K2 always
+            // works: that outside sign-in is saved as its own token first.
+            let entry = match with_conn(|conn| wallet::begin_relogin_settled(conn, &id, Some(&key))) {
+                Ok((e, adopted)) => {
+                    rt::notice_adopted(&adopted);
+                    e
+                }
                 Err(e) => return wallet_err(e),
             };
             let mode = rt::LoginMode::parse(b.mode.as_deref());
@@ -850,7 +871,10 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     "there is no other signed-in subscription for that tool; add one on Settings → Language Models → Subs / Tokens",
                 ),
                 Err(e) => {
-                    if matches!(e.code(), "account_mismatch" | "signing_in" | "changed") {
+                    if let WalletError::Moved(_, adopted) = &e {
+                        rt::notice_adopted(adopted);
+                    }
+                    if matches!(e.code(), "account_mismatch" | "account_moved" | "signing_in" | "changed") {
                         audit("llm_accounts.switch_refused", &key, e.code(), ingress);
                         k2_core::log_debug!("llm: switch refused for {key}: {}", e.code());
                     }
@@ -1020,6 +1044,11 @@ fn handle_post(path: &str, body: &[u8], key: String, ingress: &str) -> CliRespon
                     .unwrap_or_default(),
             };
             let mut out = Vec::new();
+            // Who is live, without the network (LT-A5/A6): a sign-in made
+            // outside K2 shows as its own token, never as the default's.
+            for tool in Tool::SUBSCRIPTION {
+                rt::reconcile_tool_with(tool, false, None);
+            }
             // Every token's usage at most once a minute (the page asks on
             // open); one named token always.
             let all = b.id.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_none();

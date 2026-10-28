@@ -441,6 +441,31 @@ pub(crate) fn write_slot(tool: Tool, id: &str, bytes: &[u8]) -> Result<(), Walle
     write_private(&slot_cred_path(tool, id), bytes).map_err(|e| WalletError::Io(e.to_string()))
 }
 
+/// Take another account's sign-in out of a slot (slot drift): a copy goes
+/// to `.removed/<why>-<tool>-<id>-<ts>-<n>/` (0700/0600, like a removed
+/// token), then the slot's file and, on macOS, the slot's hashed keychain
+/// item are deleted, so the token reads as signed out. The caller holds
+/// the tool lock and the slot lock, and has saved the bytes elsewhere.
+pub(crate) fn set_aside_slot_cred(tool: Tool, id: &str, bytes: &[u8], why: &str) -> Result<PathBuf, WalletError> {
+    let dest = removed_root().join(format!("{why}-{}-{}-{}-{}", tool.as_str(), id, super::now(), &uuid::Uuid::new_v4().simple().to_string()[..6]));
+    ensure_private_dir(&removed_root()).map_err(|e| WalletError::Io(e.to_string()))?;
+    ensure_private_dir(&dest).map_err(|e| WalletError::Io(e.to_string()))?;
+    write_private(&dest.join(tool.cred_file_name()), bytes).map_err(|e| WalletError::Io(e.to_string()))?;
+    if tool == Tool::Claude && keychain_enabled() {
+        let svc = claude_keychain_service(Some(&slot_dir(tool, id)));
+        let acct = claude_keychain_account();
+        if let Ok(true) = keychain::exists(&svc, &acct) {
+            keychain::delete(&svc, &acct).map_err(WalletError::Io)?;
+        }
+    }
+    match fs::remove_file(slot_cred_path(tool, id)) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(WalletError::Io(e.to_string())),
+    }
+    Ok(dest)
+}
+
 // ── Live store ──────────────────────────────────────────────────────
 
 /// Read the tool's live login. `Ok(None)` = signed out.

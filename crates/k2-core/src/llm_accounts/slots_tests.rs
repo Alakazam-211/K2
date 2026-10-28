@@ -203,6 +203,41 @@ fn with_no_file_the_vault_copy_is_used_and_a_spawn_gets_it_back() {
     assert_eq!(fs::read(e.live()).unwrap(), cred("b"));
 }
 
+/// prd-llm-tokens-outside-logins-v1 LT-A13 (PRD test 20): a slot file of
+/// ANOTHER account (a `/login` typed in a session running in this slot's
+/// home) is never sealed as the login's newest copy, and drift repair
+/// moves it to its account's token and puts the vault's last matching
+/// copy back, with no new sign-in.
+#[test]
+fn another_accounts_slot_file_is_never_sealed_and_repair_restores_the_vault_copy() {
+    let e = Env::new(Storage::Vault);
+    let conn = db();
+    let b = idle(&conn, "b", "b");
+    let who_b = la::identity::AccountIdentity { account_uuid: Some("uuid-b".into()), email: Some("b@example.test".into()), org_uuid: None };
+    la::identity::write_record(Tool::Claude, &b.id, &who_b, la::identity::Source::Vendor, la::identity::origin::K2_SIGN_IN).unwrap();
+    assert_eq!(read_slot(Tool::Claude, &b.id).unwrap().unwrap(), cred("b"));
+    assert_eq!(vault_of(&e, &b.id).unwrap(), cred("b"));
+    // Claude, with its home at B's slot, signed in as C.
+    store::write_private(&slot_file(&b.id), &cred("c")).unwrap();
+    fs::write(
+        store::slot_dir(Tool::Claude, &b.id).join(".claude.json"),
+        r#"{"oauthAccount":{"accountUuid":"uuid-c","emailAddress":"c@example.test"}}"#,
+    )
+    .unwrap();
+    assert_eq!(read_slot(Tool::Claude, &b.id).unwrap().unwrap(), cred("c"), "the file is what is there");
+    assert_eq!(vault_of(&e, &b.id).unwrap(), cred("b"), "never sealed over B's copy");
+    let r = sync_to_vault(&la::list(&conn).unwrap(), &[]);
+    assert_eq!(r.drift, vec![b.id.clone()]);
+    assert_eq!(vault_of(&e, &b.id).unwrap(), cred("b"), "the sync pass doesn't seal it either");
+    // Drift repair: C's sign-in to its own token; B's own copy back.
+    let b_now = la::get(&conn, &b.id).unwrap().unwrap();
+    let moved = wallet::heal_drift(&conn, Tool::Claude, &b_now, None, None, None).unwrap().expect("moved");
+    assert_eq!(moved.label, "c@example.test");
+    assert_eq!(read_slot(Tool::Claude, &moved.id).unwrap().unwrap(), cred("c"));
+    assert_eq!(read_slot(Tool::Claude, &b.id).unwrap().unwrap(), cred("b"), "B's own sealed copy is back");
+    assert_eq!(la::get(&conn, &b.id).unwrap().unwrap().state, state::SIGNED_IN, "no new sign-in needed");
+}
+
 #[test]
 fn a_closed_vault_keeps_the_files_working_and_refuses_what_only_it_holds() {
     let e = Env::new(Storage::Vault);

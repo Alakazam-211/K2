@@ -153,6 +153,31 @@ fn resume_uses_the_recorded_login_even_after_pins_change() {
     assert!(r.account_id.is_none());
 }
 
+/// LT-A15: a chat that started on token A's slot, resumed after A became
+/// the server default, runs in the live home (never from A's slot too:
+/// one sign-in live in two places), and its history is carried there.
+#[test]
+fn a_resume_onto_the_server_default_runs_in_the_live_home_with_its_history() {
+    let h = Home::new("resume-default");
+    let conn = db();
+    let (_d, a, _b) = pool(&h, &conn);
+    pins::pin(&conn, ScopeKind::Workspace, "proj-1", None, &a.id, None).unwrap();
+    let l = pins::decide_spawn(&conn, Tool::Claude, "proj-1", Some("proj-1"), Some("conv-a"), false).unwrap();
+    assert_eq!(l.account_id.as_deref(), Some(a.id.as_str()));
+    pins::record_spawn(&conn, &l, "proj-1", Some("conv-a")).unwrap();
+    // A becomes the server default (its pin goes first).
+    assert!(pins::unpin(&conn, ScopeKind::Workspace, "proj-1", Tool::Claude).unwrap());
+    wallet::switch(&conn, Tool::Claude, &a.id, None, None).unwrap();
+    assert_eq!(live_owner(&conn, Tool::Claude).unwrap().as_deref(), Some(a.id.as_str()));
+    let r = pins::decide_spawn(&conn, Tool::Claude, "proj-1", Some("proj-1"), Some("conv-a"), true).unwrap();
+    assert_eq!(r.source, Source::Resume);
+    assert!(r.account_id.is_none() && r.home.is_none() && r.env.is_empty(), "no CLAUDE_CONFIG_DIR: the live home");
+    let carry = r.carry.expect("its history comes along");
+    assert_eq!(carry.conversation_id, "conv-a");
+    assert_eq!(carry.from, store::slot_dir(Tool::Claude, &a.id));
+    assert_eq!(carry.to, store::live_home(Tool::Claude).0);
+}
+
 #[test]
 fn pin_and_pool_are_exclusive_for_subscription_logins() {
     let h = Home::new("excl");

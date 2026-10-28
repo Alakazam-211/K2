@@ -352,6 +352,15 @@ function AccountRow({
               Server default
             </span>
           )}
+          {account.addedOutsideK2 && (
+            <span
+              className="text-[8px] uppercase tracking-wider font-semibold px-1 py-px border border-[var(--color-border)] text-[var(--color-text-muted)] flex-shrink-0"
+              title="Someone signed in outside K2 (for example /login in a terminal). K2 saved that sign-in as this token. Keep it, or remove it."
+              data-testid={`llm-outside-${account.id}`}
+            >
+              Added outside K2
+            </span>
+          )}
           <span className="text-[10px] text-[var(--color-text-muted)]">
             {STATE_LABELS[account.state] ?? account.state}
           </span>

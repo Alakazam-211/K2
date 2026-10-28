@@ -1109,6 +1109,10 @@ pub const ROUTES: &[Route] = &[
     // sender or relay, the system sender, tests and settings are the
     // owner's, with a fresh confirm where they widen.
     get("/cli/notifications/email", Admin),
+    // N10: a workspace's agent email notices (on: the owner + a confirm).
+    post("/cli/notifications/email/agent/off", Admin),
+    post("/cli/notifications/email/agent/on", Owner),
+    get("/cli/notifications/email/agents", Admin),
     get("/cli/notifications/email/log", Admin),
     post("/cli/notifications/email/relay/add", Owner),
     post("/cli/notifications/email/relay/rm", Admin),
@@ -1136,11 +1140,17 @@ pub const ROUTES: &[Route] = &[
     // the handler (Admins are read-only on people).
     get("/cli/notify/admin", Admin),
     post("/cli/notify/admin/set", Admin),
+    // N10: an agent emails a person here (the handler takes only this
+    // workspace's agent: its passport or a shell tab in it).
+    post("/cli/notify/email", Member),
     // Email Notifications part 2, slice V: a person's own notice address
     // (the handler resolves the person; agents never reach it).
     get("/cli/notify/email/address", Member),
     post("/cli/notify/email/address/remove", Member),
     post("/cli/notify/email/address/set", Member),
+    // N10: a person mutes one workspace's notices; the agent turns its own off.
+    post("/cli/notify/email/mute", Member),
+    post("/cli/notify/email/off", Member),
     both("/cli/notify/prefs", Member),
     post("/cli/onboarding/adopt", Member),
     post("/cli/onboarding/agents-md-generate-enabled", Member),

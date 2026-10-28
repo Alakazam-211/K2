@@ -413,6 +413,9 @@ pub fn set_system(id_or_address: &str, actor: &str, now: i64) -> R<J> {
     }
     let db = k2_core::db::shared();
     let conn = db.lock();
+    if let Some(ws) = store::agent_for_sender(&conn, &s.id).map_err(db_fail)? {
+        return Err(fail(409, "sender_in_use", format!("{} is workspace {ws}'s notice sender; the system sender is its own address", s.address)));
+    }
     let tx = conn.unchecked_transaction().map_err(db_fail)?;
     if let Some(old) = store::system_sender(&tx).map_err(db_fail)? {
         if old.id != s.id {

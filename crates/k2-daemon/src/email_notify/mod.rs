@@ -39,6 +39,7 @@
 //! **Logs (E22).** Daemon log lines here carry ids and counts only: never
 //! an address, a subject or a body.
 
+pub mod agent_notices;
 pub mod app_routes;
 pub mod budget;
 pub mod compose;
@@ -73,10 +74,11 @@ pub const CONFIRM_RELAY: &str = "email-relay"; // host|fromDomain|username (rela
 pub const CONFIRM_TEST: &str = "email-test"; // the sender address
 pub const CONFIRM_APP_ON: &str = "app-email-on"; // serviceId|senderAddress (app_binding)
 pub const CONFIRM_RESUME: &str = "email-resume"; // the paused sender's address (N6)
+pub const CONFIRM_AGENT_ON: &str = "agent-email-on"; // projectId|senderAddress (N10)
 pub const CONFIRM_APP_ANY: &str = "app-email-any"; // serviceId|senderAddress (app_binding)
 
 /// Every confirm action this module registers (vault_routes' list).
-pub const CONFIRM_ACTIONS: &[&str] = &[CONFIRM_SENDER, CONFIRM_SYSTEM_SENDER, CONFIRM_RELAY, CONFIRM_TEST, CONFIRM_APP_ON, CONFIRM_APP_ANY, CONFIRM_RESUME];
+pub const CONFIRM_ACTIONS: &[&str] = &[CONFIRM_SENDER, CONFIRM_SYSTEM_SENDER, CONFIRM_RELAY, CONFIRM_TEST, CONFIRM_APP_ON, CONFIRM_APP_ANY, CONFIRM_RESUME, CONFIRM_AGENT_ON];
 
 /// Is Email Notifications allowed on this box at all (default yes)?
 ///
@@ -143,6 +145,20 @@ pub fn confirm_reason(action: &str, secret_id: Option<&str>) -> Option<Result<St
             )
         }
         CONFIRM_TEST => format!("send one test email from {} to your own address", clean(id)),
+        CONFIRM_AGENT_ON => {
+            let Some((project, sender_raw)) = id.split_once('|') else {
+                return Some(Err("secretId for an agent email confirm is projectId|senderAddress"));
+            };
+            let Some(path) = crate::workspace_msg::resolve_workspace(project.trim()) else { return Some(Err("no workspace by that id")) };
+            let agent = k2_core::workspace::display::agent_display_name(&path);
+            let Ok(sender) = senders::find_live(sender_raw.trim()) else { return Some(Err("no live sender by that address")) };
+            format!(
+                "let {} (workspace {}) email people on this server from {}",
+                clean(&agent),
+                clean(project),
+                sender.address
+            )
+        }
         CONFIRM_RESUME => format!("resume email from {}: its sends go out again (it was paused for bounces or complaints)", clean(id)),
         CONFIRM_APP_ON | CONFIRM_APP_ANY => {
             let Some((service_id, sender_raw)) = app_binding_parts(id) else {

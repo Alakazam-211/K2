@@ -25,7 +25,8 @@ WHO GETS IT
   Admins set what new people get per workspace. Someone reading that
   Thread right now (desktop or phone) is not pushed. Someone who muted
   that Thread is never pushed by it.
-  You can't see or change anyone's choice. There is no `k2 notify`.
+  You can't see or change anyone's choice.
+  (`k2 notify email` emails a person; it never pushes.)
 
 UNREAD AND WAITING (0.46.1)
   Each person has their own unread count per Thread: your posts count

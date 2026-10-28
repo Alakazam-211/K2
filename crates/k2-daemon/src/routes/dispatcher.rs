@@ -7745,8 +7745,14 @@ async fn handle_one_request(
         // handlers; every mutation is POST-only.
         // Off (K2_EMAIL_NOTIFICATIONS=off), these fall through to the unknown-route
         // answer, as before the feature (security review L9).
-        p if crate::email_notify::box_enabled() && (crate::email_notify::owner_routes::is_route(p) || crate::email_notify::app_routes::is_route(p)) => {
-            let post_route = crate::email_notify::owner_routes::is_post_route(p) || crate::email_notify::app_routes::is_post_route(p);
+        p if crate::email_notify::box_enabled()
+            && (crate::email_notify::owner_routes::is_route(p)
+                || crate::email_notify::app_routes::is_route(p)
+                || crate::email_notify::agent_notices::is_agent_route(p)) =>
+        {
+            let post_route = crate::email_notify::owner_routes::is_post_route(p)
+                || crate::email_notify::app_routes::is_post_route(p)
+                || crate::email_notify::agent_notices::is_agent_route(p);
             if post_route && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                 return DispatchOutcome::Done;
             }
@@ -7769,6 +7775,8 @@ async fn handle_one_request(
             let r = tokio::task::spawn_blocking(move || {
                 if crate::email_notify::owner_routes::is_route(&p_owned) {
                     crate::email_notify::owner_routes::handle(&p_owned, who, is_post, &body_bytes, &params)
+                } else if crate::email_notify::agent_notices::is_agent_route(&p_owned) {
+                    crate::email_notify::agent_notices::handle(&p_owned, who, is_post, &body_bytes)
                 } else {
                     crate::email_notify::app_routes::handle(&p_owned, who, is_post, &body_bytes, &params)
                 }

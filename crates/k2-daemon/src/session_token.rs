@@ -599,6 +599,12 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // Changes tab v1 (`k2 changes`): the cell server scopes every one
         // of these to the passport's own workspace (git_routes::AGENT_ROUTES).
         "/cli/git/commit",
+        // Email Notifications part 2, N10a: an agent emails a person here
+        // (`k2 notify email`) or turns its own notices off. Exact paths: a
+        // person's own notice address (`/cli/notify/email/address*`, mute)
+        // is never an agent verb.
+        "/cli/notify/email",
+        "/cli/notify/email/off",
         "/cli/git/diff-file",
         "/cli/git/discard",
         // C5: review notes (list + resolve only) and `k2 changes open`.

@@ -340,7 +340,7 @@ pub fn mask_addresses(s: &str) -> String {
 }
 
 /// Mark a handed-off (or failed) row; the answer row.
-fn finish(log_id: &str, from_status: &str, outcome: &R<String>, now: i64) -> R<LogRow> {
+pub(crate) fn finish(log_id: &str, from_status: &str, outcome: &R<String>, now: i64) -> R<LogRow> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     match outcome {

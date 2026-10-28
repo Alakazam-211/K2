@@ -54,7 +54,7 @@ pub const STOP_PATH: &str = "/cli/email/stop";
 pub const PURPOSE_MAIL: &str = "verify_address";
 
 pub fn is_person_route(p: &str) -> bool {
-    p == ADDRESS_PATH || p == ADDRESS_SET_PATH || p == ADDRESS_REMOVE_PATH
+    p == ADDRESS_PATH || p == ADDRESS_SET_PATH || p == ADDRESS_REMOVE_PATH || p == super::agent_notices::MUTE
 }
 
 pub fn is_public_page(p: &str) -> bool {
@@ -93,7 +93,7 @@ pub fn compose_verify(box_label: &str, asker: &str, why: &str, address: &str, co
 }
 
 /// The front-door URL for `path` with `?t=token`.
-fn link(path: &str, token: &str) -> R<String> {
+pub(crate) fn link(path: &str, token: &str) -> R<String> {
     match crate::app_user_invites::k2_front_door_url(path) {
         Ok(Some(u)) => Ok(format!("{u}?t={token}")),
         Ok(None) => Err(fail(409, "no_front_door", "this server has no front door URL for the confirm link (Settings → Apps → front door, or connect the server)")),
@@ -188,7 +188,8 @@ fn person_view(person: &str, now: i64) -> R<J> {
     let live = store::live_for(&conn, store::PURPOSE_PERSON_NOTICE, person, now).map_err(super::db_fail)?;
     let verified = live.iter().find(|v| v.is_verified()).map(row_json);
     let pending: Vec<J> = live.iter().filter(|v| v.state == store::ST_PENDING).map(row_json).collect();
-    Ok(json!({ "ok": true, "person": person, "address": verified, "pending": pending }))
+    let muted = k2_core::email_notify::notice_mutes(&conn, person).map_err(super::db_fail)?;
+    Ok(json!({ "ok": true, "person": person, "address": verified, "pending": pending, "mutedWorkspaces": muted }))
 }
 
 fn remove(person: &str, role: Role, actor_person: &str, v: &J, now: i64) -> R<J> {
@@ -218,7 +219,7 @@ fn remove(person: &str, role: Role, actor_person: &str, v: &J, now: i64) -> R<J>
 /// owner token).
 pub fn person_route(is_post: bool, path: &str, body: &[u8], person: &str, role: Role, params: &HashMap<String, String>) -> CliResponse {
     let now = super::now();
-    let post_only = path == ADDRESS_SET_PATH || path == ADDRESS_REMOVE_PATH;
+    let post_only = path == ADDRESS_SET_PATH || path == ADDRESS_REMOVE_PATH || path == super::agent_notices::MUTE;
     if post_only && !is_post {
         return CliResponse::method_not_allowed();
     }
@@ -241,6 +242,7 @@ pub fn person_route(is_post: bool, path: &str, body: &[u8], person: &str, role: 
             request(store::PURPOSE_PERSON_NOTICE, person, a, person, now)
         }),
         ADDRESS_REMOVE_PATH => body_json(body).and_then(|v| remove(person, role, person, &v, now)),
+        p if p == super::agent_notices::MUTE => body_json(body).and_then(|v| super::agent_notices::mute(person, &v, now)),
         _ => Err(fail(404, "not_found", "no such route")),
     };
     respond(r)

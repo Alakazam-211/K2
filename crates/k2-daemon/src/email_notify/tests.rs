@@ -2027,3 +2027,117 @@ fn n7_strict_dmarc_on_both_a_hosted_apex_and_a_stray_via_are_refused() {
     // The bounce subdomain must be hosted and Verified.
     assert_eq!(code(&add_via("c@brand.test", "bounce.brand.test")), "domain_not_ready");
 }
+
+// ── part 2, N10a: agent email notices ────────────────────────────────
+
+/// The owner confirms `addr` as their notice address (slice V's store).
+fn owner_notice_address(addr: &str) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let i = k2_core::email_verify::issue(&conn, k2_core::email_verify::PURPOSE_PERSON_NOTICE, "owner", addr, "owner", now()).expect("issue");
+    k2_core::email_verify::confirm(&conn, &i.token, now()).expect("confirm");
+}
+
+fn agent_send(who: &Who, body: J) -> (u16, J) {
+    let r = agent_notices::handle(agent_notices::SEND, who.clone(), true, body.to_string().as_bytes());
+    (status_of(&r), body_of(&r))
+}
+
+#[test]
+fn n10_an_agent_emails_a_confirmed_person_from_its_own_sender_once_the_owner_turns_it_on() {
+    let f = fx("n10send");
+    k2_core::skin::set_front_door("direct", Some("https://box.brand.test"), None, None).expect("door");
+    let agent = Who::Agent { project_id: f.ws.clone(), session_id: "s".into() };
+    let note = json!({"to": "owner", "subject": "Nightly build failed", "text": "The 02:00 build failed at step 3."});
+    // Off by default.
+    let (st, v) = agent_send(&agent, note.clone());
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("agent_email_off")), "{v}");
+    // The owner grants a sender of the workspace's own, with a confirm bound to both.
+    let s = add_hosted("notices@notify.brand.test");
+    let body = json!({"workspace": f.ws, "sender": s.address}).to_string();
+    let r = owner_routes::handle(owner_routes::AGENT_ON, Who::Owner, true, body.as_bytes(), &HashMap::new());
+    let v = body_of(&r);
+    let bind = agent_notices::on_binding(&f.ws, &s.address);
+    assert_eq!((v["error"]["action"].clone(), v["error"]["secretId"].clone()), (json!(CONFIRM_AGENT_ON), json!(bind)), "{v}");
+    let admin = Who::Login { username: "ada".into(), role: Role::Admin };
+    assert_eq!(body_of(&owner_routes::handle(owner_routes::AGENT_ON, admin, true, body.as_bytes(), &HashMap::new()))["error"]["code"], "owner_only");
+    let tok = crate::vault::ensure_test_vault().confirm.mint(CONFIRM_AGENT_ON, Some(&bind), "owner", "local-auth");
+    let b = json!({"workspace": f.ws, "sender": s.address, "confirmToken": tok}).to_string();
+    let r = owner_routes::handle(owner_routes::AGENT_ON, Who::Owner, true, b.as_bytes(), &HashMap::new());
+    assert_eq!(status_of(&r), 200, "{}", r.body);
+    // The workspace's sender can't also be an App's or the system's.
+    let tok = crate::vault::ensure_test_vault().confirm.mint(CONFIRM_APP_ON, Some(&app_binding(&f.app, &s.address)), "owner", "local-auth");
+    let (st, v) = app_post(app_routes::ON, &Who::Owner, json!({"app": f.app, "sender": s.address, "confirmToken": tok}));
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("sender_in_use")), "{v}");
+    assert_eq!(code(&senders::set_system(&s.id, "owner", now())), "sender_in_use");
+    // No confirmed notice address yet.
+    let (st, v) = agent_send(&agent, note.clone());
+    assert_eq!((st, v["error"]["code"].clone()), (409, json!("no_notice_address")), "{v}");
+    owner_notice_address("me@x.test");
+    let (st, v) = agent_send(&agent, note.clone());
+    assert_eq!((st, v["to"].clone()), (202, json!("the owner")), "{v}");
+    let m = f.engine.sent.lock().unwrap().last().cloned().expect("sent");
+    assert_eq!((m.from.as_str(), m.rcpt.clone()), (s.address.as_str(), vec!["me@x.test".to_string()]));
+    let text = m.email.to_string();
+    assert!(text.contains("The 02:00 build failed") && text.contains("an AI agent on box.brand.test"), "{text}");
+    assert!(text.contains("https://box.brand.test/cli/email/stop?t=k2es_"), "the stop link: {text}");
+    assert_eq!(m.email["header:List-Unsubscribe-Post:asText"], "List-Unsubscribe=One-Click");
+    assert!(m.email["header:List-Unsubscribe:asText"].as_str().is_some_and(|h| h.starts_with("<https://box.brand.test/cli/email/stop?t=k2es_")));
+    assert!(m.email["htmlBody"].is_null(), "text only");
+    // The log row carries the workspace.
+    let id = v["id"].as_str().expect("id");
+    let row = log_row(id);
+    assert_eq!((row.origin.as_str(), row.purpose.as_deref()), ("agent", Some(store::PURPOSE_AGENT_NOTICE)));
+    // Refusals.
+    for (body, code_) in [
+        (json!({"to": "owner", "subject": "x", "text": "t", "html": "<b>"}), "usage"),
+        (json!({"to": "me@x.test", "subject": "x", "text": "t"}), "person_only"),
+        (json!({"to": "nobody", "subject": "x", "text": "t"}), "no_such_person"),
+        (json!({"to": "owner", "subject": "", "text": "t"}), "usage"),
+        (json!({"to": "owner", "subject": "x", "text": "x".repeat(16 * 1024 + 1)}), "usage"),
+    ] {
+        assert_eq!(agent_send(&agent, body.clone()).1["error"]["code"], code_, "{body}");
+    }
+    let (st, v) = agent_send(&Who::Owner, note.clone());
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("agent_only")), "{v}");
+    let stranger = Who::Agent { project_id: f.other_ws.clone(), session_id: "s".into() };
+    assert_eq!(agent_send(&stranger, note.clone()).1["error"]["code"], "agent_email_off", "another workspace has its own switch");
+    // The budget: 10 an hour per workspace.
+    for _ in 0..9 {
+        assert_eq!(agent_send(&agent, note.clone()).0, 202);
+    }
+    let (st, v) = agent_send(&agent, note.clone());
+    assert_eq!((st, v["error"]["code"].clone()), (429, json!("rate_limited")), "{v}");
+}
+
+#[test]
+fn n10_a_person_mutes_a_workspace_and_the_agent_can_turn_its_own_notices_off() {
+    let f = fx("n10mute");
+    k2_core::skin::set_front_door("direct", Some("https://box.brand.test"), None, None).expect("door");
+    let s = add_hosted("notices@notify.brand.test");
+    agent_notices::agent_on(&f.ws, &s, "owner", now()).expect("on");
+    owner_notice_address("me@x.test");
+    let agent = Who::Agent { project_id: f.ws.clone(), session_id: "s".into() };
+    let note = json!({"to": "owner", "subject": "Hi", "text": "t"});
+    assert_eq!(agent_send(&agent, note.clone()).0, 202);
+    // The owner mutes this workspace (a person route, never an agent's).
+    let (st, v) = person_call(agent_notices::MUTE, "owner", Role::Owner, true, json!({"workspace": f.ws, "muted": true}), &[]);
+    assert_eq!((st, v["muted"].clone()), (200, json!(true)), "{v}");
+    let (_, v) = person_call(verify::ADDRESS_PATH, "owner", Role::Owner, false, json!({}), &[]);
+    assert_eq!(v["mutedWorkspaces"], json!([f.ws]));
+    let (st, v) = agent_send(&agent, note.clone());
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("person_muted")), "{v}");
+    person_call(agent_notices::MUTE, "owner", Role::Owner, true, json!({"workspace": f.ws, "muted": false}), &[]);
+    assert_eq!(agent_send(&agent, note.clone()).0, 202);
+    // The agent turns its own off; only the owner turns it back on.
+    let r = agent_notices::handle(agent_notices::OFF, agent.clone(), true, b"{}");
+    assert_eq!(status_of(&r), 200, "{}", r.body);
+    assert_eq!(agent_send(&agent, note.clone()).1["error"]["code"], "agent_email_off");
+    let r = agent_notices::handle(agent_notices::OFF, agent.clone(), false, b"");
+    assert_eq!(status_of(&r), 405);
+    // The passport allowlist: the agent verbs yes, a person's address never.
+    assert!(crate::session_token::is_agent_verb(agent_notices::SEND) && crate::session_token::is_agent_verb(agent_notices::OFF));
+    for p in [verify::ADDRESS_SET_PATH, verify::ADDRESS_PATH, agent_notices::MUTE, owner_routes::AGENT_ON] {
+        assert!(!crate::session_token::is_agent_verb(p), "{p}");
+    }
+}

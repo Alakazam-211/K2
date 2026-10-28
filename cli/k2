@@ -13949,6 +13949,15 @@ server, or the server's owner). An agent can't run them (refused, 403).
                                     (confirmed and waiting). --person: another
                                     person's (the server's owner or an Admin).
 
+Agents' email notices (an agent emails a person on this server; off by default):
+  k2 notifications email agent [list] [--json]
+  k2 notifications email agent on <workspace> --sender <address>
+                                    The owner, with a confirm: the workspace's
+                                    agent may email people here from <address>
+                                    (a sender of its own: not the system
+                                    sender, not an App's). k2 notify --help.
+  k2 notifications email agent off <workspace>    the owner or an Admin
+
 A hosted sender needs its domain Verified (k2 hostmail domain check) and a
 DMARC record (any policy). On a Mac (no hosted mail), add a relay first.
 Grant a sender to an App: k2 app email on. The guide: k2 study email-notifications.
@@ -13961,6 +13970,131 @@ cmd_notifications() {
         ""|-h|--help|help) _notifications_usage ;;
         *) echo "usage: k2 notifications email … (k2 notifications --help)" >&2; exit 2 ;;
     esac
+}
+
+# N10a: the owner's switch for a workspace's agent notices.
+cmd_notifications_agent() {
+    local verb="${1:-list}"
+    [ $# -gt 0 ] && shift
+    local ws="" sender="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --sender) sender="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) [ -z "$ws" ] || { echo "one workspace at a time" >&2; exit 2; }; ws="$1"; shift ;;
+        esac
+    done
+    case "$verb" in
+        list|ls|--json)
+            _compute_call GET /cli/notifications/email/agents "" tcp
+            if [ "$json_out" = 1 ] || [ "$verb" = --json ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+rows = json.load(sys.stdin).get("agents") or []
+if not rows:
+    print("No workspace has email notices (k2 notifications email agent on <workspace> --sender <address>).")
+for r in rows:
+    print("%-28s %-3s %s%s" % (r.get("workspace"), "on" if r.get("on") else "off", r.get("sender") or "(sender removed)", ("  (" + r["offReason"] + ")") if r.get("offReason") else ""))'
+            ;;
+        on)
+            { [ -n "$ws" ] && [ -n "$sender" ]; } || { echo "usage: k2 notifications email agent on <workspace> --sender <address>" >&2; exit 2; }
+            local body
+            body="$(K2_EA_WS="$ws" K2_EA_S="$sender" python3 -c 'import json,os; print(json.dumps({"workspace": os.environ["K2_EA_WS"], "sender": os.environ["K2_EA_S"]}))')"
+            _email_post /cli/notifications/email/agent/on "$body"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("email notices on for %s from %s" % (v.get("workspace"), v.get("sender")))'
+            ;;
+        off)
+            [ -n "$ws" ] || { echo "usage: k2 notifications email agent off <workspace>" >&2; exit 2; }
+            local body
+            body="$(K2_EA_WS="$ws" python3 -c 'import json,os; print(json.dumps({"workspace": os.environ["K2_EA_WS"]}))')"
+            _email_post /cli/notifications/email/agent/off "$body"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("email notices off for %s" % v.get("workspace"))'
+            ;;
+        *) echo "usage: k2 notifications email agent [list] | on <workspace> --sender <address> | off <workspace>" >&2; exit 2 ;;
+    esac
+}
+
+_notify_usage() {
+    cat <<'EOF'
+k2 notify email: an agent emails a person on this server (text only).
+
+  k2 notify email <login|owner> --subject "…" --text "…"
+  k2 notify email <login|owner> --subject "…" --text-file <file>
+                 One email to that person, from this workspace's own sender.
+                 <login> is their K2 login on this server (owner = the
+                 server's owner); never an email address. They must have
+                 confirmed a notice address (they run k2 notifications email
+                 address set themselves) and not muted this workspace.
+                 Text only: a subject up to 200 characters, a body up to
+                 16 KB; no HTML, no attachments, no Reply-To. K2 adds a line
+                 saying which agent sent it, and a link to stop them.
+                 At most 10 an hour and 50 a day per workspace.
+                 Off until the owner turns it on for the workspace
+                 (k2 notifications email agent on <workspace> --sender …).
+                 If it's off (agent_email_off), ask with a permission card.
+  k2 notify email off
+                 Turn this workspace's notices off. Only the owner turns them
+                 back on.
+
+For people (not agents), from their own terminal:
+  k2 notify email mute <workspace>      stop that workspace's notices to you
+  k2 notify email unmute <workspace>
+EOF
+}
+
+cmd_notify() {
+    case "${1:-}" in
+        email) shift; cmd_notify_email "$@" ;;
+        ""|-h|--help|help) _notify_usage ;;
+        *) echo "usage: k2 notify email … (k2 notify --help)" >&2; exit 2 ;;
+    esac
+}
+
+cmd_notify_email() {
+    case "${1:-}" in
+        ""|-h|--help|help) _notify_usage; return 0 ;;
+        off)
+            [ $# -eq 1 ] || { echo "usage: k2 notify email off" >&2; exit 2; }
+            _app_rt_post /cli/notify/email/off '{}'
+            [ "$_CP_STATUS" = 200 ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            echo "email notices off for this workspace (the owner turns them back on)"
+            return 0
+            ;;
+        mute|unmute)
+            local verb="$1" ws="${2:-}"
+            { [ -n "$ws" ] && [ $# -eq 2 ]; } || { echo "usage: k2 notify email $verb <workspace>" >&2; exit 2; }
+            local body raw
+            body="$(K2_EA_WS="$ws" K2_EA_M="$verb" python3 -c 'import json,os; print(json.dumps({"workspace": os.environ["K2_EA_WS"], "muted": os.environ["K2_EA_M"] == "mute"}))')"
+            raw="$(_compute_send POST /cli/notify/email/mute "$body" tcp)"
+            _compute_split "$raw"
+            [ "$_CP_STATUS" = 200 ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(("muted" if v.get("muted") else "unmuted") + " email notices from " + str(v.get("workspace")))'
+            return 0
+            ;;
+    esac
+    local person="$1"
+    shift
+    local subject="" text="" text_file="" have_text=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --subject) subject="${2:-}"; shift 2 ;;
+            --text) text="${2:-}"; have_text=1; shift 2 ;;
+            --text-file) text_file="${2:-}"; shift 2 ;;
+            *) echo "Unknown argument: $1 (k2 notify --help)" >&2; exit 2 ;;
+        esac
+    done
+    if [ -n "$text_file" ]; then
+        [ "$have_text" = 0 ] || { echo "--text or --text-file, not both" >&2; exit 2; }
+        [ -f "$text_file" ] || { echo "no file $text_file" >&2; exit 2; }
+        text="$(cat "$text_file")"
+    fi
+    { [ -n "$subject" ] && [ -n "$text" ]; } || { echo "usage: k2 notify email <login|owner> --subject \"…\" --text \"…\"" >&2; exit 2; }
+    local body
+    body="$(K2_NE_TO="$person" K2_NE_S="$subject" K2_NE_T="$text" python3 -c 'import json,os; e=os.environ; print(json.dumps({"to": e["K2_NE_TO"], "subject": e["K2_NE_S"], "text": e["K2_NE_T"]}))')"
+    _app_rt_post /cli/notify/email "$body"
+    case "$_CP_STATUS" in 200|202) ;; *) _compute_fail "$_CP_STATUS" "$_CP_BODY" ;; esac
+    printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("sent to %s (%s, %s)" % (v.get("to"), v.get("id"), v.get("status")))'
 }
 
 _notif_sender_print() {
@@ -14010,6 +14144,7 @@ print("log kept %s days; owner address %s" % (st.get("logRetentionDays"), st.get
         relay|relays) cmd_notifications_relay "$@" ;;
         address) cmd_notifications_address "$@" ;;
         suppressions|suppression) cmd_notifications_suppressions "$@" ;;
+        agent|agents) cmd_notifications_agent "$@" ;;
         log)
             local app="" limit="" json_out=0
             while [ $# -gt 0 ]; do
@@ -14049,7 +14184,7 @@ print(json.dumps(b))')" || { echo "--retention-days is a number" >&2; exit 2; }
             _email_post /cli/notifications/email/settings "$body"
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; s=json.load(sys.stdin).get("settings") or {}; print("log kept %s days; owner address %s" % (s.get("logRetentionDays"), s.get("ownerEmail") or "not set"))'
             ;;
-        *) echo "usage: k2 notifications email status|sender|system-sender|relay|suppressions|address|log|settings (--help)" >&2; exit 2 ;;
+        *) echo "usage: k2 notifications email status|sender|system-sender|relay|suppressions|address|agent|log|settings (--help)" >&2; exit 2 ;;
     esac
 }
 
@@ -41360,7 +41495,8 @@ WHO GETS IT
   Admins set what new people get per workspace. Someone reading that
   Thread right now (desktop or phone) is not pushed. Someone who muted
   that Thread is never pushed by it.
-  You can't see or change anyone's choice. There is no `k2 notify`.
+  You can't see or change anyone's choice.
+  (`k2 notify email` emails a person; it never pushes.)
 
 UNREAD AND WAITING (0.46.1)
   Each person has their own unread count per Thread: your posts count
@@ -77935,6 +78071,10 @@ EOF
     notifications)
         # Email Notifications (prd-email-notifications-core-v1, 0.46.5).
         shift; cmd_notifications "$@"
+        ;;
+    notify)
+        # Agent email notices to people here (email notifications part 2, N10a).
+        shift; cmd_notify "$@"
         ;;
     compute)
         # K2 compute nodes (prd-k2-compute-nodes-v1).

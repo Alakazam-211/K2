@@ -1812,6 +1812,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     crate::email_notify::CONFIRM_APP_ANY,
     // N6 (0.46.6): resuming an auto-paused sender (`secretId` = its address).
     crate::email_notify::CONFIRM_RESUME,
+    // N10 (0.46.6): a workspace's agent email notices (`secretId` =
+    // projectId|senderAddress).
+    crate::email_notify::CONFIRM_AGENT_ON,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

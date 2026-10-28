@@ -156,6 +156,15 @@ fn on(who: &Who, v: &J) -> Result<J, CliResponse> {
     if let Some(other) = sender.app().filter(|a| *a != t.service_id) {
         return Err(super::fail_response(&fail(409, "sender_in_use", &format!("{} is App {other}'s sender (one App per address)", sender.address))));
     }
+    // N10: a workspace's notice sender is that workspace's alone.
+    let agent_owner = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::agent_for_sender(&conn, &sender.id).map_err(|e| super::fail_response(&super::db_fail(e)))?
+    };
+    if let Some(ws) = agent_owner {
+        return Err(super::fail_response(&fail(409, "sender_in_use", &format!("{} is workspace {ws}'s notice sender (one owner per address)", sender.address))));
+    }
     // L11: the confirm binds the App AND this sender.
     let binding = super::app_binding(&t.service_id, &sender.address);
     let needed = |f: Fail, action: &str| -> CliResponse {

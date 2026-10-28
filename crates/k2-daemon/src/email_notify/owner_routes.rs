@@ -27,6 +27,9 @@
 //! GET  /cli/notifications/email/suppressions          ?address=&limit=                                              (N6)
 //! POST /cli/notifications/email/suppressions/add      {address, sender?}                                            (N6)
 //! POST /cli/notifications/email/suppressions/rm       {address, sender?, all?}                                      owner (N6)
+//! GET  /cli/notifications/email/agents                                                                              (N10)
+//! POST /cli/notifications/email/agent/on              {workspace, sender, confirmToken}                             owner + confirm (N10)
+//! POST /cli/notifications/email/agent/off             {workspace}                                                   (N10)
 //! ```
 
 use std::collections::HashMap;
@@ -59,12 +62,15 @@ pub const SENDER_RESUME: &str = "/cli/notifications/email/sender/resume";
 pub const SUPPRESSIONS: &str = "/cli/notifications/email/suppressions";
 pub const SUPPRESSION_ADD: &str = "/cli/notifications/email/suppressions/add";
 pub const SUPPRESSION_RM: &str = "/cli/notifications/email/suppressions/rm";
+pub const AGENTS: &str = "/cli/notifications/email/agents";
+pub const AGENT_ON: &str = "/cli/notifications/email/agent/on";
+pub const AGENT_OFF: &str = "/cli/notifications/email/agent/off";
 
 pub const ROUTES: &[&str] = &[
     STATUS, SENDERS, SENDER_ADD, SENDER_SET, SENDER_CHECK, SENDER_RM, SYSTEM, SYSTEM_SET, SYSTEM_CLEAR, SYSTEM_TEST, RELAYS, RELAY_ADD, RELAY_TEST, RELAY_RM,
-    LOG, SETTINGS, SENDER_RESUME, SUPPRESSIONS, SUPPRESSION_ADD, SUPPRESSION_RM,
+    LOG, SETTINGS, SENDER_RESUME, SUPPRESSIONS, SUPPRESSION_ADD, SUPPRESSION_RM, AGENTS, AGENT_ON, AGENT_OFF,
 ];
-pub const POST_ROUTES: &[&str] = &[SENDER_ADD, SENDER_SET, SENDER_CHECK, SENDER_RM, SYSTEM_SET, SYSTEM_CLEAR, SYSTEM_TEST, RELAY_ADD, RELAY_TEST, RELAY_RM, SETTINGS, SENDER_RESUME, SUPPRESSION_ADD, SUPPRESSION_RM];
+pub const POST_ROUTES: &[&str] = &[SENDER_ADD, SENDER_SET, SENDER_CHECK, SENDER_RM, SYSTEM_SET, SYSTEM_CLEAR, SYSTEM_TEST, RELAY_ADD, RELAY_TEST, RELAY_RM, SETTINGS, SENDER_RESUME, SUPPRESSION_ADD, SUPPRESSION_RM, AGENT_ON, AGENT_OFF];
 
 pub fn is_route(p: &str) -> bool {
     ROUTES.contains(&p)
@@ -488,6 +494,18 @@ fn suppression_rm(who: &Who, v: &J) -> R<J> {
     Ok(json!({ "ok": true, "removed": removed }))
 }
 
+/// POST `agent/on`: the owner in person, with a fresh confirm bound to the
+/// workspace and the sender (N10).
+fn agent_on(who: &Who, v: &J) -> Result<J, CliResponse> {
+    let ws = s(v, "workspace").ok_or_else(|| super::fail_response(&fail(400, "usage", "send {workspace, sender}")))?;
+    let raw = s(v, "sender").ok_or_else(|| super::fail_response(&fail(400, "usage", "send {workspace, sender}")))?;
+    let (project, _) = super::agent_notices::resolve_workspace(ws).map_err(|f| super::fail_response(&f))?;
+    let sender = super::senders::find_live(raw).map_err(|f| super::fail_response(&f))?;
+    let binding = super::agent_notices::on_binding(&project, &sender.address);
+    confirm(who, v, super::CONFIRM_AGENT_ON, &binding).map_err(|f| confirm_needed(f, super::CONFIRM_AGENT_ON, &binding))?;
+    super::agent_notices::agent_on(&project, &sender, &actor(who), super::now()).map_err(|f| super::fail_response(&f))
+}
+
 fn either(r: Result<J, CliResponse>) -> CliResponse {
     match r {
         Ok(v) => respond(Ok(v)),
@@ -532,6 +550,9 @@ pub fn handle(path: &str, who: Who, is_post: bool, body_bytes: &[u8], params: &H
         SUPPRESSIONS => respond(suppressions(params)),
         SUPPRESSION_ADD => respond(suppression_add(&who, &v)),
         SUPPRESSION_RM => respond(suppression_rm(&who, &v)),
+        AGENTS => respond(super::agent_notices::list()),
+        AGENT_ON => either(agent_on(&who, &v)),
+        AGENT_OFF => respond(id_of("workspace").and_then(|w| super::agent_notices::resolve_workspace(&w)).and_then(|(p, _)| super::agent_notices::owner_off(&p, &actor(&who), super::now()))),
         _ => super::fail_response(&fail(404, "not_found", "no such Email Notifications route")),
     }
 }

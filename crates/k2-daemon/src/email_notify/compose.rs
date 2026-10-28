@@ -437,6 +437,10 @@ pub fn email_json(m: &Message<'_>) -> J {
     v
 }
 
+/// Headers only K2's own code sets (an App request can't: `parse` refuses
+/// them): the one-click stop on agent notices (N10, RFC 8058).
+pub const K2_HEADERS: &[&str] = &["List-Unsubscribe", "List-Unsubscribe-Post"];
+
 /// The envelope `mailFrom.parameters` (E8): headers-only DSNs, K2's log
 /// id as the envelope id.
 pub fn envelope_params(log_id: &str) -> J {
@@ -481,7 +485,7 @@ pub fn rfc822(m: &Message<'_>, date: std::time::SystemTime) -> Result<Vec<u8>, S
     // no line breaks) go at the top of the header block.
     let mut out = Vec::with_capacity(formatted.len() + 256);
     for (k, v) in m.headers {
-        if !header_name_allowed(k) || !header_value_ok(v) {
+        if !(header_name_allowed(k) || K2_HEADERS.contains(&k.as_str())) || !header_value_ok(v) {
             return Err("compose: a header failed its check".to_string());
         }
         out.extend_from_slice(format!("{k}: {v}\r\n").as_bytes());

@@ -9,6 +9,7 @@
 //! | App with scope `any` | 30/h, 300/day |
 //! | warm-up: App sends from a domain verified < 14 days ago (relay: a sender < 14 days old) | 20/h, 200/day |
 //! | K2's system mail (exempt from warm-up) | 200/h |
+//! | one workspace's agent notices to people here (N10) | 10/h, 50/day (+ warm-up) |
 //! | everything on the box | 1,000/h |
 //!
 //! **When a send counts (security review M1).** Every row counts at its
@@ -38,6 +39,9 @@ pub const WARMUP_DAILY: i64 = 200;
 pub const WARMUP_SECS: i64 = 14 * DAY;
 pub const SYSTEM_HOURLY: i64 = 200;
 pub const BOX_HOURLY: i64 = 1_000;
+/// N10: one workspace's agent notices.
+pub const AGENT_HOURLY: i64 = 10;
+pub const AGENT_DAILY: i64 = 50;
 
 /// Who a send is for, as far as budgets go.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +50,8 @@ pub enum Kind<'a> {
     System,
     /// An App's send (its link, key, or its agent/owner via the CLI).
     App { app: &'a str, scope_any: bool, warmup_domain: Option<&'a str> },
+    /// A workspace's agent notice to a person on this box (N10).
+    Agent { project: &'a str, warmup_domain: Option<&'a str> },
 }
 
 fn limited(what: &str, used: i64, limit: i64, window: i64, oldest: Option<i64>, at: i64) -> Fail {
@@ -107,6 +113,15 @@ pub fn check(kind: &Kind<'_>, n: usize, at: i64) -> R<()> {
             }
             Ok(())
         }
+        Kind::Agent { project, warmup_domain } => {
+            check_one(&conn, &Bucket::Workspace(project), "this workspace's email notice budget", AGENT_HOURLY, HOUR, n, at)?;
+            check_one(&conn, &Bucket::Workspace(project), "this workspace's email notice budget", AGENT_DAILY, DAY, n, at)?;
+            if let Some(d) = warmup_domain {
+                check_one(&conn, &Bucket::Domain(d), "the new domain's warm-up budget (its first 14 days)", WARMUP_HOURLY, HOUR, n, at)?;
+                check_one(&conn, &Bucket::Domain(d), "the new domain's warm-up budget (its first 14 days)", WARMUP_DAILY, DAY, n, at)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -114,7 +129,7 @@ pub fn check(kind: &Kind<'_>, n: usize, at: i64) -> R<()> {
 /// for its scope (M1).
 pub fn pending_cap(kind: &Kind<'_>) -> i64 {
     match kind {
-        Kind::System => 0,
+        Kind::System | Kind::Agent { .. } => 0,
         Kind::App { scope_any, warmup_domain, .. } => {
             let mut cap = APP_DAILY;
             if *scope_any {

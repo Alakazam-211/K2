@@ -843,6 +843,8 @@ pub enum Bucket<'a> {
     Domain(&'a str),
     /// K2's own system mail.
     System,
+    /// One workspace's agent notices (N10).
+    Workspace(&'a str),
     /// Everything on the box.
     Box,
 }
@@ -866,6 +868,7 @@ pub fn sum_recipients(conn: &Connection, bucket: &Bucket<'_>, from: i64, until: 
             Some(d),
         ),
         Bucket::System => (format!("origin = 'system' AND {LIVE}"), None),
+        Bucket::Workspace(p) => (format!("origin = 'agent' AND project_id = ?3 AND {LIVE}"), Some(p)),
         Bucket::Box => (LIVE.to_string(), None),
     };
     let q = format!("SELECT COALESCE(SUM(recipient_count), 0), MIN({AT}) FROM email_notify_log WHERE {AT} >= ?1 AND {AT} <= ?2 AND {sql}");
@@ -874,6 +877,118 @@ pub fn sum_recipients(conn: &Connection, bucket: &Bucket<'_>, from: i64, until: 
         None => conn.query_row(&q, params![from, until], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))),
     };
     r.map_err(err("budget count"))
+}
+
+// ── agent notices (N10, migration 0247) ──────────────────────────────
+
+/// The log purpose of an agent's notice to a person.
+pub const PURPOSE_AGENT_NOTICE: &str = "agent_notice";
+
+/// A workspace's notice sender and its switch.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSender {
+    pub project_id: String,
+    pub sender_id: String,
+    pub enabled: bool,
+    pub granted_by: String,
+    pub granted_at: i64,
+    pub off_reason: Option<String>,
+    pub updated_at: i64,
+}
+
+const AGENT_COLS: &str = "project_id, sender_id, enabled, granted_by, granted_at, off_reason, updated_at";
+
+fn map_agent(r: &rusqlite::Row) -> rusqlite::Result<AgentSender> {
+    Ok(AgentSender {
+        project_id: r.get(0)?,
+        sender_id: r.get(1)?,
+        enabled: r.get::<_, i64>(2)? != 0,
+        granted_by: r.get(3)?,
+        granted_at: r.get(4)?,
+        off_reason: r.get(5)?,
+        updated_at: r.get(6)?,
+    })
+}
+
+pub fn agent_sender(conn: &Connection, project_id: &str) -> Result<Option<AgentSender>, String> {
+    conn.query_row(&format!("SELECT {AGENT_COLS} FROM email_agent_senders WHERE project_id = ?1"), params![project_id], map_agent)
+        .optional()
+        .map_err(err("agent sender read"))
+}
+
+/// The workspace holding `sender_id`, if any (a sender is one owner's).
+pub fn agent_for_sender(conn: &Connection, sender_id: &str) -> Result<Option<String>, String> {
+    conn.query_row("SELECT project_id FROM email_agent_senders WHERE sender_id = ?1", params![sender_id], |r| r.get(0))
+        .optional()
+        .map_err(err("agent sender read"))
+}
+
+pub fn list_agent_senders(conn: &Connection) -> Result<Vec<AgentSender>, String> {
+    let mut st = conn.prepare(&format!("SELECT {AGENT_COLS} FROM email_agent_senders ORDER BY project_id")).map_err(err("agent list"))?;
+    let rows = st.query_map([], map_agent).map_err(err("agent list"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(err("agent list"))
+}
+
+/// Give `sender_id` to the workspace and turn its notices on.
+pub fn set_agent_on(conn: &Connection, project_id: &str, sender_id: &str, by: &str, now: i64) -> Result<(), String> {
+    conn.execute(
+        "INSERT INTO email_agent_senders (project_id, sender_id, enabled, granted_by, granted_at, off_reason, updated_at) \
+         VALUES (?1, ?2, 1, ?3, ?4, NULL, ?4) \
+         ON CONFLICT(project_id) DO UPDATE SET sender_id = excluded.sender_id, enabled = 1, granted_by = excluded.granted_by, \
+           granted_at = excluded.granted_at, off_reason = NULL, updated_at = excluded.updated_at",
+        params![project_id, sender_id, by, now],
+    )
+    .map_err(err("agent on"))?;
+    Ok(())
+}
+
+/// Turn a workspace's notices off (the sender stays its own).
+pub fn set_agent_off(conn: &Connection, project_id: &str, reason: &str, now: i64) -> Result<bool, String> {
+    let n = conn
+        .execute(
+            "UPDATE email_agent_senders SET enabled = 0, off_reason = ?2, updated_at = ?3 WHERE project_id = ?1",
+            params![project_id, reason, now],
+        )
+        .map_err(err("agent off"))?;
+    Ok(n == 1)
+}
+
+/// A person mutes (or unmutes) one workspace's notices.
+pub fn set_notice_mute(conn: &Connection, principal: &str, project_id: &str, muted: bool, now: i64) -> Result<(), String> {
+    if muted {
+        conn.execute(
+            "INSERT OR IGNORE INTO email_notice_mutes (principal, project_id, created_at) VALUES (?1, ?2, ?3)",
+            params![principal, project_id, now],
+        )
+    } else {
+        conn.execute("DELETE FROM email_notice_mutes WHERE principal = ?1 AND project_id = ?2", params![principal, project_id])
+    }
+    .map_err(err("notice mute"))?;
+    Ok(())
+}
+
+/// Did this person mute this workspace? Fail closed (muted).
+pub fn notice_muted(conn: &Connection, principal: &str, project_id: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM email_notice_mutes WHERE principal = ?1 AND project_id = ?2",
+        params![principal, project_id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(true)
+}
+
+pub fn notice_mutes(conn: &Connection, principal: &str) -> Result<Vec<String>, String> {
+    let mut st = conn.prepare("SELECT project_id FROM email_notice_mutes WHERE principal = ?1 ORDER BY project_id").map_err(err("mutes"))?;
+    let rows = st.query_map(params![principal], |r| r.get(0)).map_err(err("mutes"))?;
+    rows.collect::<rusqlite::Result<Vec<String>>>().map_err(err("mutes"))
+}
+
+/// Stamp the workspace an agent notice came from on its log row.
+pub fn set_log_project(conn: &Connection, id: &str, project_id: &str) -> Result<(), String> {
+    conn.execute("UPDATE email_notify_log SET project_id = ?2 WHERE id = ?1", params![id, project_id]).map_err(err("log project"))?;
+    Ok(())
 }
 
 // ── idempotency ──────────────────────────────────────────────────────

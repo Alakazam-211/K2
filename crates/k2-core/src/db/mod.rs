@@ -1690,6 +1690,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // `email_senders.envelope_address`. ADD COLUMN only; renumber freely
         // on a slip (and edit the migration-order tests).
         ("0246_email_sender_envelope", include_str!("../../drizzle_sql/0246_email_sender_envelope.sql")),
+        // 0247 — agent email notices (prd-email-notifications-part2-v1
+        // §4 N10, 0.46.6): `email_agent_senders`, `email_notice_mutes` and
+        // `email_notify_log.project_id`. Additive; renumber freely on a slip
+        // (and edit the migration-order tests).
+        ("0247_email_agent_notices", include_str!("../../drizzle_sql/0247_email_agent_notices.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2353,7 +2358,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0246_email_sender_envelope",
+            last_name, "0247_email_agent_notices",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2449,6 +2454,8 @@ mod tests {
                 "0245_email_notify_outcomes",
                 // 0.46.6: send-only apex senders (email notifications part 2, N7).
                 "0246_email_sender_envelope",
+                // 0.46.6: agent email notices (email notifications part 2, N10a).
+                "0247_email_agent_notices",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2552,6 +2559,8 @@ mod tests {
                 "0245_email_notify_outcomes",
                 // 0.46.6: send-only apex senders (email notifications part 2, N7).
                 "0246_email_sender_envelope",
+                // 0.46.6: agent email notices (email notifications part 2, N10a).
+                "0247_email_agent_notices",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2779,7 +2788,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0246_email_sender_envelope", "0246 (0.46.6) runs last");
+        assert_eq!(top, "0247_email_agent_notices", "0247 (0.46.6) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2814,7 +2823,8 @@ mod tests {
                 "0244_email_verified_addresses",
                 "0244_email_verified_addresses",
                 "0245_email_notify_outcomes",
-                "0246_email_sender_envelope"
+                "0246_email_sender_envelope",
+                "0247_email_agent_notices"
             ],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244 then 0245)"
         );
@@ -3658,6 +3668,7 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0247_email_agent_notices'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0246_email_sender_envelope'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0245_email_notify_outcomes'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0244_email_verified_addresses'", []).unwrap();

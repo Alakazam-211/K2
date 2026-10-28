@@ -45672,7 +45672,8 @@ WHAT IT IS
   merge; a sorted or moved row has no identity, so an edit to it
   conflicts). Text the daemon can't edit live (not UTF-8, a NUL byte,
   mixed line endings, over 1 MiB for a log or 4 MiB otherwise) is an
-  any-file doc instead, and k2 doc status says why. Every change is attributed,
+  any-file doc instead, and k2 doc status says why. A file keeps its own
+  BOM and line endings; a write body's leading BOM is dropped. Every change is attributed,
   everyone is visible in `k2 doc who`, and each of you has your own undo.
   The daemon keeps the file on disk true: it writes changes back within
   about a second and merges edits other programs make (vim, git, a raw
@@ -83744,10 +83745,17 @@ other programs make). Every verb shows you in `k2 doc who`.
 Which files are live: Markdown (.md, .markdown) and any other text, by the
 file's name (code, config, HTML/XML/SVG source, diagram sources, .txt, logs,
 and .csv/.tsv as text: different rows and cells merge, a moved row doesn't).
-They take every verb below. Files that aren't text (images, media, office
-files, archives, binaries), and text the daemon can't edit live (not UTF-8,
-a NUL byte, mixed line endings, or over its size cap: 1 MiB for logs, 4 MiB
-for others) are any-file docs instead (below); `k2 doc status` says why.
+Names without an extension count too (Makefile, Dockerfile, README), and an
+unknown name is live if its bytes are plain text. They take every verb below.
+Files that aren't text (images, media, office files, archives, binaries), and
+text the daemon can't edit live (not UTF-8, a NUL byte, more than one
+line-ending style, or over its size cap: 1 MiB for logs, 4 MiB for others)
+are any-file docs instead (below); `k2 doc status` says why. Over 32 MiB a
+file is no doc at all (exit 4). A live file keeps its own BOM and line
+endings (LF or CRLF); a write body's leading BOM is dropped. If another
+program makes a live file unreadable as text, edits exit 4 and the file isn't
+written until it reads as text again. `mv` keeps the kind: text stays text
+(notes.txt to notes.toml), never Markdown or an any-file doc.
 Lines starting "note:" on stderr say who else is on the lines you touched.
 
 Read (the doc's path is the LAST argument; GNU flags, a subset):

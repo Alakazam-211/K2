@@ -22,7 +22,7 @@ pub fn ignore_sigpipe() {
 /// would produce.
 ///
 /// Why: macOS launchd does not source `.zshrc` / `.bash_profile` when
-/// it starts jobs. Both K2SO's Tauri `.app` and `k2so-daemon` are
+/// it starts jobs. Both K2's Tauri `.app` and `k2-daemon` are
 /// launchd children, so they inherit the kernel's sparse default
 /// (`/usr/bin:/bin:/usr/sbin:/sbin`). User binaries installed under
 /// `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, or any

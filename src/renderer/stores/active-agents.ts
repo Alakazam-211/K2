@@ -733,7 +733,7 @@ export function startAgentPolling(): void {
     // info"; Surfaced means "this PTY is already running, mount a tab
     // on it." The tab-creation path is the same — createCompanionTab
     // attaches by terminal_id rather than spawning fresh.
-    // See `.k2so/prds/heartbeat-active-session-tracking.md`.
+    // See `.k2/prds/heartbeat-active-session-tracking.md`.
     listen<{
       terminalId: string | null
       command: string | null
@@ -788,7 +788,7 @@ export function startAgentPolling(): void {
         // mounts, attachAgentName is on the data when /cli/sessions/v2/spawn
         // is called and the daemon returns the existing session
         // (`reused: true`).
-        // See `.k2so/prds/heartbeat-active-session-tracking.md`.
+        // See `.k2/prds/heartbeat-active-session-tracking.md`.
         const cmd = command.split(' ')[0] || 'shell'
         const tabId = crypto.randomUUID()
         const paneGroupId = terminalId

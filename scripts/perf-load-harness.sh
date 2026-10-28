@@ -1,7 +1,7 @@
 #!/bin/bash
-# K2SO Performance Load Harness
+# K2 Performance Load Harness
 #
-# Exercises K2SO under heavy filesystem + DB + terminal load to reveal
+# Exercises K2 under heavy filesystem + DB + terminal load to reveal
 # whether any instrumented hot path breaches the 16ms UI-frame budget
 # under contention. Output drives the P3/P4 decision (tokio polling /
 # daemon split). If nothing stalls, both phases fall through their gates.
@@ -10,7 +10,7 @@
 #
 # 1. External load:     filesystem storm (save-storm simulation), k2so CLI
 #                       spam (DB write pressure), optional CPU hogger.
-# 2. In-app load:       YOU follow the printed checklist inside K2SO —
+# 2. In-app load:       YOU follow the printed checklist inside K2 —
 #                       open N terminals, run noisy commands, fire a
 #                       fuzzy search every so often.
 # 3. Capture + analyze: K2SO's stderr (with K2SO_PERF=1) collects
@@ -19,7 +19,7 @@
 #
 # Prerequisites
 #
-#   - K2SO dev build running with stderr captured to a log file:
+#   - K2 dev build running with stderr captured to a log file:
 #
 #       K2SO_PERF=1 bun run tauri dev 2>&1 | tee /tmp/k2so-perf.log
 #

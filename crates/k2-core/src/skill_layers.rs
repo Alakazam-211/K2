@@ -1,8 +1,8 @@
 //! Skill-layer management (Phase 2 Unit 6).
 //!
 //! "Skill layers" are user-authored markdown fragments that augment
-//! K2SO's built-in agent prompts. They live under
-//! `~/.k2so/templates/<tier>/<filename>.md` where `<tier>` is one of
+//! K2's built-in agent prompts. They live under
+//! `~/.k2/templates/<tier>/<filename>.md` where `<tier>` is one of
 //! `manager`, `agent-template`, or `custom-agent`.
 
 use serde::{Deserialize, Serialize};

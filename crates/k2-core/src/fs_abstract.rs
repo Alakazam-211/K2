@@ -3,7 +3,7 @@
 //!
 //! # Why this exists
 //!
-//! Most of K2SO's business logic (agent scaffolding, SKILL.md
+//! Most of K2's business logic (agent scaffolding, SKILL.md
 //! regeneration, work-item triage, heartbeat wake composition) is
 //! entangled with `std::fs::*` calls. That coupling means every unit
 //! test has to scaffold a real tempdir on disk — slow on macOS, and
@@ -22,15 +22,15 @@
 //! Zed's suite runs thousands of filesystem-touching tests in
 //! seconds because of this seam.
 //!
-//! # Scope for K2SO
+//! # Scope for K2
 //!
 //! We port the essential methods but skip Zed's heavy extras:
-//! - **No file watchers** — K2SO uses `notify` directly for watchers
+//! - **No file watchers** — K2 uses `notify` directly for watchers
 //!   and the UX wrapper doesn't need the same abstraction.
 //! - **No git integration on the trait** — we keep `git2` out; tests
 //!   that need git state scaffold a real repo.
 //! - **No async executor** — Zed's `BackgroundExecutor` + custom
-//!   scheduler are ~1000 LOC of machinery K2SO doesn't need. K2SO's
+//!   scheduler are ~1000 LOC of machinery K2 doesn't need. K2's
 //!   fs ops are synchronous today; if that changes we can add async
 //!   methods later.
 //!
@@ -57,7 +57,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Metadata returned by `Fs::metadata`. Keep minimal — only the
-/// fields K2SO business logic actually reads.
+/// fields K2 business logic actually reads.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FsMetadata {
     pub is_dir: bool,
@@ -231,10 +231,10 @@ impl Fs for RealFs {
 // Test-only in-memory filesystem. Compiled only under `cfg(test)` —
 // lands in no production artifact.
 
-// FakeFs is available whenever cfg(test) is active for k2so-core OR the
+// FakeFs is available whenever cfg(test) is active for k2-core OR the
 // `test-util` feature is enabled — the latter lets downstream crates'
 // (src-tauri's) test binaries reach FakeFs even though cfg(test) in
-// k2so-core is off when compiled as a library dep.
+// k2-core is off when compiled as a library dep.
 #[cfg(any(test, feature = "test-util"))]
 pub use fake::FakeFs;
 

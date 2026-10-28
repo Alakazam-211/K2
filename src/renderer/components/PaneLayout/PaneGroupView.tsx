@@ -259,7 +259,7 @@ export function PaneGroupView({ tabId, paneGroupId }: PaneGroupViewProps): React
                 // A5: Kessel — the daemon-hosted thin client.
                 // ('alacritty-v2' is the pre-rename working name for
                 // the same stack; in-flight tabs stamped with it
-                // dispatch here too.) See .k2so/prds/alacritty-v2.md.
+                // dispatch here too.) See .k2/prds/alacritty-v2.md.
                 const agentPty = isAgentPtyTerminalItem(item)
                 const pane = (
                   <TerminalPane

@@ -1061,7 +1061,7 @@ export function bootProjects(): void {
 // `onActiveHostChange` fires AFTER the flip, so the restore targets the new
 // host's projects + its last-active selection.
 // 0.39.45 (GH #18/#26) — daemon push: the registered project set changed
-// (another window, the CLI's `k2so workspace create`, an onboarding flow,
+// (another window, the CLI's `k2 workspace create`, an onboarding flow,
 // or a remote client added/removed a project). Re-fetch so the nav +
 // Settings update WITHOUT a manual window reload. This replaces reliance
 // on the local-only Tauri `sync:projects` event, which never fires for

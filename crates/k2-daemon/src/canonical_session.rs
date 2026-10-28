@@ -9,10 +9,10 @@
 //! For automation deployments (an SMS bridge that opens workspaces and
 //! messages them, say) a fresh workspace flow is:
 //!
-//!   k2so workspace open <path>
+//!   k2 workspace open <path>
 //!   k2so settings --mode custom
-//!   # write .k2so/agent/AGENT.md
-//!   <webhook fires k2so msg <ws> --wake within ~150ms>
+//!   # write .k2/agent/AGENT.md
+//!   <webhook fires k2 msg <ws> --wake within ~150ms>
 //!
 //! The daemon knows the workspace has a primary agent the moment
 //! AGENT.md is written, but no canonical PTY exists and no
@@ -36,11 +36,11 @@
 //!
 //! 1. Resolves the workspace's primary agent via
 //!    `find_primary_agent` (post-unification: read
-//!    `.k2so/agent/AGENT.md`'s `name:` field).
+//!    `.k2/agent/AGENT.md`'s `name:` field).
 //! 2. Single-flight check: if a v2 session is already registered
 //!    under canonical key `<project_id>:<agent>`, return early as
 //!    `reused: true`.
-//! 3. Loads the agent's launch profile (`.k2so/agent/AGENT.md`'s
+//! 3. Loads the agent's launch profile (`.k2/agent/AGENT.md`'s
 //!    `launch:` YAML block) or falls back to the default profile
 //!    (`claude --dangerously-skip-permissions` at project root).
 //! 4. Spawns via `spawn_agent_session_v2_blocking` under the

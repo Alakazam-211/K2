@@ -1,8 +1,8 @@
-//! Workspace-targeted messaging — `k2so msg <workspace> "text" [--from <name>]`.
+//! Workspace-targeted messaging — `k2 msg <workspace> "text" [--from <name>]`.
 //!
 //! **0.38.6 contract: deliver-or-loudly-fail.**
 //!
-//! `deliver_live` is the only delivery path used by `k2so msg`. It runs
+//! `deliver_live` is the only delivery path used by `k2 msg`. It runs
 //! a four-branch cascade against the recipient workspace's pinned chat
 //! session, with an internal retry window so the chronic "first call
 //! returns success but doesn't land" UX disappears:
@@ -195,7 +195,7 @@ fn spawn_fail_reason(e: &str) -> MsgReason {
 // Canonical response shape
 // ─────────────────────────────────────────────────────────────────────
 
-/// Canonical response shape for every `k2so msg` call.
+/// Canonical response shape for every `k2 msg` call.
 ///
 /// Serializes to the public JSON contract:
 /// `{success, target_session_id, attempts, reason, hint}`.
@@ -910,7 +910,7 @@ const WAKE_QUIESCE_STABLE: Duration = Duration::from_millis(360);
 // which wrote to the retired `.k2so/work/inbox/` layout) was removed
 // here. `msg` is strictly live-or-fail; new inbox-delivery callers
 // should compose against `k2_core::inbox::compose` directly so they
-// land in the canonical `.k2so/inbox/` location the renderer reads.
+// land in the canonical `.k2/inbox/` location the renderer reads.
 
 const MAX_ATTEMPTS: u8 = 3;
 const BACKOFF_MS: [u64; 2] = [200, 400];

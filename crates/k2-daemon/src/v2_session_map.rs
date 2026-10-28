@@ -4,7 +4,7 @@
 //! Parallel to `session_map.rs` (which holds Kessel-T0's
 //! `SessionStreamSession`). They're kept separate so v1 / Kessel-T0
 //! and v2 can coexist during the transition without sharing a
-//! heterogeneous map. Post-cleanup (`.k2so/prds/post-landing-cleanup.md`),
+//! heterogeneous map. Post-cleanup (`.k2/prds/post-landing-cleanup.md`),
 //! this may become the only daemon session map.
 //!
 //! Lifecycle:

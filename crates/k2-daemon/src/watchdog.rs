@@ -8,7 +8,7 @@
 //! child, and emitting a `SemanticEvent::Custom` frame so audit
 //! (activity_feed via bus subscribers) records the escalation.
 //!
-//! The pure decision logic lives in k2so-core so it can be tested
+//! The pure decision logic lives in k2-core so it can be tested
 //! without any tokio runtime. See the module-level docs there for
 //! the escalation ladder.
 //!

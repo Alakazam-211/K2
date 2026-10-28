@@ -3,7 +3,7 @@
 // k2so_workspace_set_agent_display_name, k2so_agents_resume_chat_args) OFF
 // the Tauri invoke proxy ONTO the host-aware `daemonCliGet` HTTP layer.
 //
-// Routes (all GET, confirmed against crates/k2so-daemon/src/cli.rs):
+// Routes (all GET, confirmed against crates/k2-daemon/src/cli.rs):
 //   GET workspace/agent-display-name?project=     → {display_name}  (snake)
 //   GET workspace/set-agent-display-name?project=&name=  (GET mutation)
 //   GET workspace/resume-chat-args?project=       → camelCase ResumeChatArgs

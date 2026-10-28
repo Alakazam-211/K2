@@ -17,7 +17,7 @@
 //! archive.ndjson           ← active segment; new frames append here
 //! archive.000.ndjson       ← first rotated segment (oldest)
 //! archive.001.ndjson       ← second rotated segment
-//! archive.000.ndjson.gz    ← compacted by `k2so sessions compact`
+//! archive.000.ndjson.gz    ← compacted by `k2 sessions compact`
 //! ```
 //!
 //! The ACTIVE segment always has the stable name `archive.ndjson`.
@@ -34,7 +34,7 @@
 //! **Aggregate cap** (`HARD_LIMIT_BYTES`, default 5 GB): when the
 //! sum of every segment in this session's directory exceeds the
 //! cap, the writer freezes — session stays live, archive stops
-//! growing. Operators run `k2so sessions compact <id>` to gzip old
+//! growing. Operators run `k2 sessions compact <id>` to gzip old
 //! segments, reducing aggregate usage and unfreezing writes on the
 //! next pass.
 //!
@@ -65,7 +65,7 @@ pub const ROTATE_BYTES: u64 = 50 * 1024 * 1024;
 pub const WARN_BYTES: u64 = 1_024 * 1024 * 1024;
 
 /// Aggregate size at which the writer freezes. Session stays alive;
-/// archive stops growing. Operators run `k2so sessions compact
+/// archive stops growing. Operators run `k2 sessions compact
 /// <id>` to gzip older segments, which reduces aggregate size and
 /// unfreezes the writer on its next pass.
 pub const HARD_LIMIT_BYTES: u64 = 5 * 1_024 * 1_024 * 1_024;
@@ -470,7 +470,7 @@ pub async fn compute_aggregate_bytes(dir: &Path) -> std::io::Result<u64> {
 
 /// Every rotated (but not yet compacted) segment in `session_dir`,
 /// sorted by index ascending. Callers can pass these to a gzip
-/// helper — the `k2so sessions compact` CLI walks this list,
+/// helper — the `k2 sessions compact` CLI walks this list,
 /// gzips each, and removes the original.
 ///
 /// Pure enumeration: doesn't touch the active segment, doesn't

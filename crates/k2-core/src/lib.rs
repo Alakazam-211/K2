@@ -1,11 +1,11 @@
-//! K2SO core library.
+//! K2 core library.
 //!
 //! Home of the device-local runtime that was previously embedded inside
 //! `src-tauri/src/`: SQLite database, Alacritty terminal backend,
 //! heartbeat scheduler, agent-lifecycle HTTP hooks, and the pluggable
 //! `PushTarget` interface for notification delivery.
 //!
-//! Both the `k2so-daemon` binary and the `src-tauri` Tauri app link this
+//! Both the `k2-daemon` binary and the `src-tauri` Tauri app link this
 //! crate so the core logic executes in exactly one place — the daemon —
 //! while the Tauri app stays a thin client that proxies state-mutating
 //! commands over HTTP.
@@ -13,12 +13,12 @@
 //! Module migration from src-tauri lands incrementally.
 
 /// Safe `eprintln!` replacement that silently ignores stderr write
-/// failures. When K2SO is launched from Finder there's no tty attached and
+/// failures. When K2 is launched from Finder there's no tty attached and
 /// the default `eprintln!` panics on broken-pipe, which then cascades into
 /// abort(). This macro swallows the write result instead.
 ///
-/// `#[macro_export]` so both k2so-core-internal modules and downstream
-/// crates (src-tauri, k2so-daemon) can share one definition.
+/// `#[macro_export]` so both k2-core-internal modules and downstream
+/// crates (src-tauri, k2-daemon) can share one definition.
 #[macro_export]
 macro_rules! log_debug {
     ($($arg:tt)*) => {{
@@ -113,7 +113,7 @@ pub mod companion;
 // K2 compute nodes, controller side (prd-k2-compute-nodes-v1).
 pub mod compute;
 // Phase 2.5e: workspace-to-workspace connections registry (relocated
-// from `agents/connections.rs`). Powers `k2so connections list/add/
+// from `agents/connections.rs`). Powers `k2 connections list/add/
 // remove`. Not workspace-scoped — operates on `workspace_relations`
 // linking two projects together.
 pub mod connections;
@@ -456,7 +456,7 @@ pub mod scheduler;
 pub mod skill_layers;
 // Phase 2.5b — unified home for documentation profiles. Consolidates
 // the three legacy folders (`.k2so/agents/`, `.k2so/agent-templates/`,
-// bare-md `.k2so/skills/*.md`) into `.k2so/skills/<name>/SKILL.md`
+// bare-md `.k2/skills/*.md`) into `.k2/skills/<name>/SKILL.md`
 // via a first-boot daemon migration. See [`skills`] module docs.
 pub mod skills;
 pub mod terminal;
@@ -477,7 +477,7 @@ pub mod zen;
 
 // Session Stream primitives — landed in 0.34.0 behind a feature flag;
 // the flag was retired in 0.39.0e (these are always-on now). See
-// .k2so/prds/session-stream-and-awareness-bus.md for the original rollout.
+// .k2/prds/session-stream-and-awareness-bus.md for the original rollout.
 pub mod awareness;
 pub use k2_client::browser_notes;
 pub mod session;

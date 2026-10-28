@@ -326,7 +326,7 @@ html[data-style="terminal"] [contenteditable="true"]:not([data-zen-root] *) *::s
     background: transparent;
   }
 
-  /* ── Search panel — match K2SO theme ────────────────────────────────── */
+  /* ── Search panel — match K2 theme ────────────────────────────────── */
   .cm-panel.cm-search {
     display: flex;
     flex-wrap: wrap;

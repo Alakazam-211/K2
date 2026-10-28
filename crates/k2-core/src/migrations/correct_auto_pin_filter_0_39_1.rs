@@ -4,7 +4,7 @@
 //! 0.39.0 shipped [`super::auto_pin_existing_agents_0_39_0`] with an
 //! over-broad filter that pinned `('agent', 'custom', 'manager',
 //! 'coordinator', 'pod')` workspaces. The pre-0.39.0 sidebar only
-//! auto-promoted `agent` (K2SO Agent) and `custom` (Custom Agent) —
+//! auto-promoted `agent` (K2 Agent) and `custom` (Custom Agent) —
 //! manager-mode workspaces never appeared in the auto-promoted Agents
 //! section. The over-pin surprised users by surfacing their manager
 //! workspaces at the top of the Pinned list.

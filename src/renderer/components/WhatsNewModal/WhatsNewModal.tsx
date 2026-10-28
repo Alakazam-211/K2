@@ -51,7 +51,7 @@ interface WhatsNewModalProps {
  * skipped. "Got it" marks the current daemon version as seen; the
  * modal won't reopen until the next K2 update.
  *
- * Daemon-side logic lives in `k2so_core::whats_new`. This component
+ * Daemon-side logic lives in `k2_core::whats_new`. This component
  * does client-side splitting of the markdown into per-version pages
  * for the pagination UI, but the source of truth for what to show is
  * the daemon's `slice_unseen` output.

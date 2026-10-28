@@ -8,7 +8,7 @@
 // #672 — the boot-time daemon sweep half of this suite was REMOVED: the
 // renderer no longer reaps. The daemon now owns reaping (incl. its own
 // boot reconciliation that reaps aged-out survivors), keyed on the
-// canonical Active set. See .k2so/prds/daemon-canonical-active.md §4.3.
+// canonical Active set. See .k2/prds/daemon-canonical-active.md §4.3.
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 

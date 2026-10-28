@@ -66,7 +66,7 @@ export function AgentPane({ agentName, projectPath, section, restoredSessionId }
 // Keyed `<hostKey>|<worktreeId>` (Home M1, MS14).
 const worktreeLastTab = new Map<string, 'task' | 'chat' | 'review'>()
 
-// ── Review tab types (mirrors k2so_core::agents::reviews::ReviewItem) ─
+// ── Review tab types (mirrors k2_core::agents::reviews::ReviewItem) ─
 
 interface WorktreeReviewDiffFile {
   path: string

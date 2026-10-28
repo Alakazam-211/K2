@@ -61,7 +61,7 @@ fn tmp_project_dir(tag: &str) -> PathBuf {
 /// cross-test interference on the shared in-memory DB.
 fn seed_project(path: &str) -> String {
     // SessionId doubles as a unique string generator here — it's
-    // already in the test surface of k2so-core and saves a
+    // already in the test surface of k2-core and saves a
     // dev-dep on `uuid`.
     let id = format!("proj-{}", k2_core::session::SessionId::new());
     let db = k2_core::db::shared();

@@ -13,7 +13,7 @@ mod font_renderer;
 // module below is now the only daemon-side terminal type.
 
 // Kessel daemon-hosted PTY + Term module (Phase A1 of the
-// .k2so/prds/alacritty-v2.md plan). Minimal: no LineMux, no byte
+// .k2/prds/alacritty-v2.md plan). Minimal: no LineMux, no byte
 // broadcast, no ring, no APC. Uses alacritty's built-in
 // EventLoop::spawn() rather than a custom reader.
 pub mod daemon_pty;
@@ -120,7 +120,7 @@ static SHARED: OnceLock<Arc<Mutex<TerminalManager>>> = OnceLock::new();
 /// HashMap. Previous design had AppState own a `Mutex<TerminalManager>`
 /// directly, which meant agent_hooks and companion needed AppState
 /// access to spawn or inspect terminals — a strong coupling that
-/// blocked moving those modules into k2so-core. Now everyone shares
+/// blocked moving those modules into k2-core. Now everyone shares
 /// this singleton.
 pub fn shared() -> Arc<Mutex<TerminalManager>> {
     SHARED

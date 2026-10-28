@@ -143,7 +143,7 @@ pub fn k2_agents_clear_session_id(
 /// that ATTACHES to the existing PTY (no fresh spawn). When
 /// transitioning 1 → 0, the renderer is expected to remove the tab
 /// without killing the PTY (the heartbeat session keeps running in
-/// the background). See `.k2so/prds/heartbeat-active-session-tracking.md`.
+/// the background). See `.k2/prds/heartbeat-active-session-tracking.md`.
 ///
 /// `terminal_id`, `command`, `args`, `heartbeat_name` are forwarded
 /// in the surfaced-event payload so the renderer can construct a tab

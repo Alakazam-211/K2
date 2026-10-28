@@ -1,6 +1,6 @@
 //! Unified lookup over the daemon's session map.
 //!
-//! K2SO holds one agent → session map:
+//! K2 holds one agent → session map:
 //!
 //!   - [`crate::v2_session_map`] — Kessel's `DaemonPtySession`
 //!     (alacritty Term + grid WS pipeline).

@@ -93,7 +93,7 @@ impl LineMux {
     ///
     /// APC sequences in the `k2so:` namespace are extracted *before*
     /// reaching vte — vte 0.15 silently drops APC content, and APC is
-    /// a K2SO concept anyway — and emitted as `Frame::AgentSignal`
+    /// a K2 concept anyway — and emitted as `Frame::AgentSignal`
     /// or `Frame::SemanticEvent` at their correct stream position.
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Frame> {
         self.state.frames_out.clear();

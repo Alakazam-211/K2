@@ -47,7 +47,7 @@ export const FEATURES = {
    *  version; not yet wired to a control. */
   'remote-update-app': '0.39.35',
   /** Canonical daemon-owned Active set + daemon-side reaping (#672,
-   *  .k2so/prds/daemon-canonical-active.md). The daemon owns the Active
+   *  .k2/prds/daemon-canonical-active.md). The daemon owns the Active
    *  set and the grace-reap; it exposes GET /cli/projects/active, POST
    *  /cli/projects/{activate,pin,dismiss}, and pushes an `active_changed`
    *  event over the session-events WS. When SUPPORTED the renderer mirrors
@@ -58,7 +58,7 @@ export const FEATURES = {
    *  renderer reaper was deleted in this release). */
   'canonical-active': '0.39.38',
   /** POST /cli/workspace/ensure-pinned-chat — daemon-owned pinned-chat
-   *  session lifecycle (#683, .k2so/prds/daemon-owned-pinned-chat.md).
+   *  session lifecycle (#683, .k2/prds/daemon-owned-pinned-chat.md).
    *  The daemon owns find-or-spawn + resume/fresh + refresh +
    *  dropdown-switch respawn; the renderer asks it to `ensure`, attaches
    *  the grid-WS, and renders. When SUPPORTED (always true for `local`)

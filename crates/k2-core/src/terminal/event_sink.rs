@@ -4,8 +4,8 @@
 //! Before this trait existed, `AlacrittyTerminalInstance` held a
 //! `tauri::AppHandle` and called `app_handle.emit(...)` directly on every
 //! title/bell/exit/grid event. That tied the whole terminal module to Tauri
-//! and made it impossible to move into k2so-core (shared by the Tauri app
-//! and the k2so-daemon).
+//! and made it impossible to move into k2-core (shared by the Tauri app
+//! and the k2-daemon).
 //!
 //! The trait is intentionally tiny and synchronous — emissions are
 //! fire-and-forget from the terminal's perspective. Implementations

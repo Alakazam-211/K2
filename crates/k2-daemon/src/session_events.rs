@@ -479,7 +479,7 @@ pub enum SessionEvent {
     /// 0.39.45 (GH #18/#26) — the registered project set changed (a
     /// project was added, removed, or re-registered). APP-LEVEL. The
     /// renderer re-fetches the project list on receipt, so a workspace
-    /// added in another window, by the CLI (`k2so workspace create`),
+    /// added in another window, by the CLI (`k2 workspace create`),
     /// or by an onboarding flow appears in the nav/Settings WITHOUT a
     /// manual window reload. Pre-0.39.45 the only signal was the local
     /// Tauri `sync:projects` event, which never fires for CLI/remote

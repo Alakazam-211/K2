@@ -1,4 +1,4 @@
-//! HTTP route surface for the k2so-daemon binary.
+//! HTTP route surface for the k2-daemon binary.
 //!
 //! Pre-0.39.0 the entire route surface lived inline in `main.rs`'s
 //! `handle_connection()` (1369 lines of inline match arms after the

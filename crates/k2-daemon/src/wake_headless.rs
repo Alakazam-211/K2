@@ -530,7 +530,7 @@ fn spawn_wake_headless_with(
 /// adopted on disk**.
 ///
 /// This is the eager write-truth-at-the-source half of the pinned-chat
-/// identity SSOT (see `.k2so/prds/pinned-chat-identity-ssot.md` §4.1a).
+/// identity SSOT (see `.k2/prds/pinned-chat-identity-ssot.md` §4.1a).
 /// Agents write their on-disk session record a beat after spawn (the
 /// session id only lands once the conversation persists), so we sleep
 /// ~5s on a detached thread, probe the PROVIDER's on-disk store via the

@@ -4583,8 +4583,8 @@ export function ConnectedWorkspacesPanel({ projectId }: { projectId: string }): 
 }
 
 /// Compact summary row returned by the new `k2so_skills_list` Tauri
-/// verb. Shape matches `k2so_core::skills::crud::SkillSummary` — see
-/// `crates/k2so-core/src/skills/crud.rs`.
+/// verb. Shape matches `k2_core::skills::crud::SkillSummary` — see
+/// `crates/k2-core/src/skills/crud.rs`.
 interface SkillSummary {
   name: string
   title: string | null

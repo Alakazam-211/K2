@@ -193,7 +193,7 @@ pub enum Delivery {
 pub struct AgentSignal {
     pub id: SignalId,
     /// Session the sender was inside when emitting. Optional because
-    /// `k2so msg` CLI invocations aren't attached to a live session.
+    /// `k2 msg` CLI invocations aren't attached to a live session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionId>,
     pub from: AgentAddress,

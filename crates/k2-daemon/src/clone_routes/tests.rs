@@ -1,10 +1,10 @@
 //! Integration-ish tests for the Clone-to unpack route.
 //!
-//! Each test builds a synthetic bundle (via the k2so-core engine) from a
+//! Each test builds a synthetic bundle (via the k2-core engine) from a
 //! temp source workspace, then unpacks it into a temp DEST with a temp
 //! HOME override so the `~/.claude/projects/<slug>/` placement is hermetic
 //! and the real home is never touched. Registration goes through the
-//! shared in-memory test DB (k2so-core `test-util`).
+//! shared in-memory test DB (k2-core `test-util`).
 
 use super::*;
 use k2_core::clone;

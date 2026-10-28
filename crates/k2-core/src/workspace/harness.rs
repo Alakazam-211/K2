@@ -70,7 +70,7 @@ pub const HARNESS_WORKSPACE_FILES: &[&str] = &[
 // ══════════════════════════════════════════════════════════════════════
 
 /// One entry in the Add-Workspace preview. Mirrors what the CLI's
-/// `k2so workspace preview` reports, but structured for the UI.
+/// `k2 workspace preview` reports, but structured for the UI.
 #[derive(serde::Serialize, Debug)]
 pub struct WorkspacePreviewEntry {
     pub path: String,
@@ -282,7 +282,7 @@ pub(crate) fn scaffold_aider_conf(project_path: &str) {
 
 
 /// Inspect a workspace path WITHOUT mutating anything. Returns a list
-/// of entries describing what K2SO will do on add.
+/// of entries describing what K2 will do on add.
 pub fn k2_agents_preview_workspace_ingest(
     project_path: String,
 ) -> Result<Vec<WorkspacePreviewEntry>, String> {

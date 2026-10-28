@@ -34,7 +34,7 @@ pub use k2_client::{perf, perf_hist, perf_timer};
 // `HashMap<String, RecommendedWatcher>`. Inlined into `watcher.rs`
 // as a `LazyLock<Mutex<_>>` static so the only host-side process state
 // lives next to the only consumer.
-// Tauri-side HTTP client for the k2so-daemon. Routes state-mutating
+// Tauri-side HTTP client for the k2-daemon. Routes state-mutating
 // commands through the daemon's loopback HTTP instead of running them
 // in-process.
 mod daemon_client;
@@ -449,7 +449,7 @@ mod daemon_stale_binary_tests {
 ///     can't trust the path we'd write.
 ///   - We only rewrite for transient/missing recorded paths, never just
 ///     because a different *stable + existing* path is recorded (the
-///     dev-box `…/target/release/k2so-daemon` case).
+///     dev-box `…/target/release/k2-daemon` case).
 ///   - 0.43.2 migration: a plist that still records this app's old
 ///     `K2.app/Contents/MacOS/k2-daemon` is moved to the nested
 ///     `K2.app/Contents/Helpers/K2 Daemon.app/Contents/MacOS/k2-daemon`
@@ -1058,7 +1058,7 @@ pub fn run() {
             // Phase 2 Unit 7c — workspace regen bridge retired.
             // `k2_core::workspace::agent_launch` now calls
             // `workspace::write_workspace_skill_file` directly (the
-            // SKILL scaffolding moved into k2so-core during Unit 7b),
+            // SKILL scaffolding moved into k2-core during Unit 7b),
             // so the WorkspaceRegenProvider trait + Tauri impl that
             // used to forward eager regens back into src-tauri are
             // gone. Both daemon and Tauri contexts hit the same body.
@@ -1077,7 +1077,7 @@ pub fn run() {
             // Phase 2 Unit 4 — workspace_layouts settings.json→SQLite
             // migration moved into the daemon's first-boot pass
             // (`k2_core::db_ops::migrate_workspace_layouts_to_db`)
-            // so K2SO Connect and headless daemons pick it up.
+            // so K2 Connect and headless daemons pick it up.
 
             // Create skill layer template directories if they don't exist
             {
@@ -1107,7 +1107,7 @@ pub fn run() {
             // AGENT.md frontmatter rewrite (pod-member → agent-template,
             // pod-leader → manager) moved to the daemon's first-boot
             // pass (`run_legacy_agent_types_v1_migration` in
-            // `crates/k2so-daemon/src/main.rs`). Headless / remote
+            // `crates/k2-daemon/src/main.rs`). Headless / remote
             // daemons now pick it up without Tauri being present.
 
             // Linux/other platforms: no launchd. Linux package owns a
@@ -1256,7 +1256,7 @@ pub fn run() {
             // boot sweep (`run_workspace_legacy_migrations_sweep` →
             // `ensure_all_skills_up_to_date`). The per-version
             // `skill_regen_version` gate this block used was replaced
-            // by per-file checksum gates inside k2so-core's
+            // by per-file checksum gates inside k2-core's
             // `ensure_skill_up_to_date`, so a stale `skill_regen_version`
             // value is harmless — the writers don't touch disk if the
             // file already matches. Block deleted; daemon owns the pass.
@@ -1353,12 +1353,12 @@ pub fn run() {
 
                         // Phase 2 Unit 3 — terminal PTY lifecycle moved
                         // to the daemon. Tauri quit MUST NOT kill the
-                        // PTYs anymore: K2SO Connect (daemon on remote
+                        // PTYs anymore: K2 Connect (daemon on remote
                         // machine) and Mobile Companion both require
                         // PTYs to survive the local Tauri quitting.
                         // The daemon process owns the TerminalManager
                         // and reaps dead PTYs in its own watchdog (see
-                        // `crates/k2so-daemon/src/watchdog.rs`).
+                        // `crates/k2-daemon/src/watchdog.rs`).
                         //
                         // Phase 2 Unit 2 — the LLM lives in the daemon
                         // now; Tauri no longer owns a model handle, so
@@ -1383,7 +1383,7 @@ pub fn run() {
                 });
             }
             // Phase 4 H7: Tauri no longer runs its own HTTP listener.
-            // The k2so-daemon (launchd-managed) is the sole server for
+            // The k2-daemon (launchd-managed) is the sole server for
             // every /cli/* route + /hook/* + /events WS, and writes
             // heartbeat.port + heartbeat.token itself on startup.
             //
@@ -1405,14 +1405,14 @@ pub fn run() {
             // now run in `k2so-daemon::main::run_workspace_legacy_migrations_sweep`.
             // The daemon executes the same idempotent sweep on its
             // own boot, so this Tauri-side thread is gone. Remote
-            // daemons (K2SO Connect) and headless boots now pick up
+            // daemons (K2 Connect) and headless boots now pick up
             // these migrations without Tauri being present.
             //
             // Phase 4 H7: the old 60s heartbeat.port watchdog used to
             // periodically rewrite heartbeat.port with Tauri's own port.
             // Post-H7 the daemon owns heartbeat.port and runs its own
             // re-claim loop (see `run_heartbeat_port_watchdog` in
-            // k2so-daemon). Tauri re-writing the file would fight the
+            // k2-daemon). Tauri re-writing the file would fight the
             // daemon for ownership, so this loop is gone.
 
             // Linux and Windows keep the in-window tray. macOS does not
@@ -1562,7 +1562,7 @@ pub fn run() {
             // hits `/cli/terminal/{create,kill,resize,scroll,log,
             // kill-foreground,set-focus,active-count,foreground-cmd,
             // exists,get-grid,list-running}` and the legacy
-            // `lifecycle-write` route on k2so-daemon directly. The
+            // `lifecycle-write` route on k2-daemon directly. The
             // daemon's TerminalEventSink broadcasts grid/title/exit/
             // bell events over /events WS; daemon_events.rs re-emits
             // via AppHandle::emit so the renderer's
@@ -1597,7 +1597,7 @@ pub fn run() {
             // Claude Auth: Phase 2 Unit 5 — moved to daemon
             // (`/cli/claude-auth/*`). Renderer hits the daemon
             // directly; no Tauri command surface remains.
-            // K2SO Agents
+            // K2 Agents
             commands::k2so_agents::k2so_agents_list,
             commands::k2so_agents::k2so_chat_refresh_broadcast,
             // Plan B cleanup — `states_*` command surface deleted. Routed
@@ -1676,7 +1676,7 @@ pub fn run() {
             // Phase 2 Unit 6 — `commands::skill_layers::*` shims
             // deleted. Renderer hits `/cli/skill-layers/*` on the
             // daemon.
-            // k2so-daemon lifecycle (Settings panel reads this to show
+            // k2-daemon lifecycle (Settings panel reads this to show
             // "daemon: running / not installed / unreachable") and
             // controls the launch agent install/uninstall/restart.
             commands::daemon::daemon_status,
@@ -1701,7 +1701,7 @@ pub fn run() {
             commands::secrets::k2_account_session_get,
             commands::secrets::k2_account_session_clear,
             // K2 Connect — client address book (non-secret host list)
-            // persisted to ~/.k2so/connect-hosts.json.
+            // persisted to ~/.k2/connect-hosts.json.
             commands::connect_hosts::connect_hosts_read,
             commands::connect_hosts::connect_hosts_write,
             commands::connect_hosts::connect_cli_token_upsert,

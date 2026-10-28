@@ -51,7 +51,7 @@ export interface HeartbeatRow {
    *  PTY no longer exists. The TabBar uses this to detect "this open
    *  tab is the live heartbeat session" without depending on
    *  per-tab stamped metadata. See migration 0036 +
-   *  `.k2so/prds/heartbeat-active-session-tracking.md`. */
+   *  `.k2/prds/heartbeat-active-session-tracking.md`. */
   activeTerminalId?: string | null
   /** S5 — the daemon's reason this row is not firing, rendered through
    *  `lib/heartbeat-wait.ts`. Older daemons omit these. */

@@ -1,4 +1,4 @@
-//! K2SO Agent system — the desktop's agent / heartbeat / workspace-session
+//! K2 Agent system — the desktop's agent / heartbeat / workspace-session
 //! commands.
 //!
 //! 0.46.4: this app no longer links k2-core. Every command here that used
@@ -439,7 +439,7 @@ mod pure_helper_tests {
     fn compose_manager_wake_uses_provided_body() {
         let out = compose_manager_wake_from_body(Some("custom manager instructions"));
         assert!(out.contains("custom manager instructions"), "body inlined");
-        // No K2SO boilerplate prefix anymore — body is the message.
+        // No K2 boilerplate prefix anymore — body is the message.
         assert!(!out.contains("K2SO Heartbeat Wake"), "preamble retired in P8: {}", out);
     }
 

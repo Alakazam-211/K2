@@ -54,7 +54,7 @@ pub struct AutoPinOutcome {
 pub fn run(conn: &Connection) -> Result<AutoPinOutcome, rusqlite::Error> {
     // 0.39.1 fix: original 0.39.0 ship included manager / coordinator
     // / pod in the filter, but the pre-0.39.0 sidebar only auto-
-    // promoted `agent` (K2SO Agent) and `custom` (Custom Agent) — not
+    // promoted `agent` (K2 Agent) and `custom` (Custom Agent) — not
     // manager-mode workspaces. Filter narrowed to match the original
     // auto-promote scope. See correct_auto_pin_filter_0_39_1 for the
     // corrective migration that unpins manager/coordinator/pod for

@@ -12,7 +12,7 @@ import type { HarnessProbe } from './canonicalState'
 import { harnessStateLabel } from './canonicalState'
 import { primaryScope } from '@/kessel/server-scope'
 
-// ── Manifest shapes (mirror crates/k2so-core/src/workspace/canonical.rs) ──
+// ── Manifest shapes (mirror crates/k2-core/src/workspace/canonical.rs) ──
 interface ManifestEntry {
   relative_path: string
   harness: string

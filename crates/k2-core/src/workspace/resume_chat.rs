@@ -1,7 +1,7 @@
 //! Resume-chat argument resolver — daemon-owned per the daemon-first
 //! architecture invariant (`feedback_daemon_first.md`).
 //!
-//! The pinned chat tab in K2SO and any other thin client that wants to
+//! The pinned chat tab in K2 and any other thin client that wants to
 //! attach to a workspace's canonical agent session calls into this
 //! helper to get the right command + args. Three cases (each speaking
 //! the resolved provider's own dialect via the Slice-3
@@ -81,13 +81,13 @@
 //! stays fixed.
 //!
 //! Lifted from `src-tauri/src/commands/k2so_agents.rs::k2_agents_resume_chat_args`
-//! (which was a Tauri-side command pre-0.37.5). Moving it to k2so-core
+//! (which was a Tauri-side command pre-0.37.5). Moving it to k2-core
 //! means:
 //!
 //!   - The daemon's `/cli/workspace/resume-chat-args` route calls it
 //!     directly (canonical thin-client surface — Tauri proxies through
 //!     this route via HTTP, mobile companion + future MCP do the same).
-//!   - CLI verb `k2so workspace resume-chat-args <ws>` calls the same
+//!   - CLI verb `k2 workspace resume-chat-args <ws>` calls the same
 //!     route.
 //!   - Tests can exercise the logic without booting Tauri.
 

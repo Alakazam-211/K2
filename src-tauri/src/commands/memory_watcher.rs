@@ -109,7 +109,7 @@ fn read_process_memory() -> Result<RendererMemoryStatus, String> {
     // Other platforms: return zeros + the PID so the renderer-side
     // logging still has a stable shape; threshold checks won't fire
     // because the value is 0. We can plumb a platform-appropriate
-    // call here when K2SO ports to Linux/Windows.
+    // call here when K2 ports to Linux/Windows.
     Ok(RendererMemoryStatus {
         resident_bytes: 0,
         virtual_bytes: 0,

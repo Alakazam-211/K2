@@ -23,7 +23,7 @@ use super::event_sink::TerminalEventSink;
 use super::font_renderer::GlyphCache;
 use super::grid_types::*;
 
-// ── K2SO Event Listener ──────────────────────────────────────────────────
+// ── K2 Event Listener ──────────────────────────────────────────────────
 
 /// Event listener that forwards alacritty terminal events to the active
 /// [`TerminalEventSink`] (or onto the wakeup channel, for grid-redraw
@@ -222,7 +222,7 @@ fn flags_to_u8(flags: CellFlags) -> u8 {
 
 /// Per-terminal glyph cache wrapper. Tracks font-size + DPR scaling and
 /// derived cell metrics used by the grid emission loop for layout. Was
-/// previously `GlyphState` when K2SO also shipped an experimental GPU
+/// previously `GlyphState` when K2 also shipped an experimental GPU
 /// bitmap renderer — that code was removed in 0.32.11; this struct only
 /// retains the cell-metrics glyph cache that the DOM grid path still uses.
 pub struct GlyphState {
@@ -471,7 +471,7 @@ impl TerminalManager {
             }
         }
 
-        // K2SO CLI: add cli/ directory to PATH so agents can call `k2so` commands
+        // K2 CLI: add cli/ directory to PATH so agents can call `k2so` commands
         // Search order:
         //   1. Bundled resources: K2SO.app/Contents/Resources/_up_/cli/ (production)
         //   2. Repo root: ../../cli/ relative to binary (development)
@@ -510,7 +510,7 @@ impl TerminalManager {
         }
 
         // Set project path so the CLI knows which workspace it's operating in.
-        // Resolve the project root by walking up from cwd to find .k2so/ or .git/,
+        // Resolve the project root by walking up from cwd to find .k2/ or .git/,
         // similar to how `git` finds its repo root. This ensures k2so CLI commands
         // work correctly even when the terminal cwd is a worktree or subdirectory.
         let project_root = {

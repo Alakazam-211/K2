@@ -3,7 +3,7 @@
 //! Pins the workspace-token resolver against the schema after
 //! unification. The smart-cascade `deliver_live` path requires
 //! spawning `claude` (or a substitute) and is exercised end-to-end
-//! through `cli/k2so` against a live daemon — those checks live in
+//! through `cli/k2` against a live daemon — those checks live in
 //! CI's smoke harness, not here.
 //!
 //! What we cover here:

@@ -4,7 +4,7 @@
 //! RFC3339 string of its last fire, decide whether the scheduler tick
 //! should fire this project now. No DB, no Tauri, no IO — just string /
 //! JSON / chrono math — so the logic is testable in isolation and runs
-//! identically inside the Tauri app today and the k2so-daemon tomorrow.
+//! identically inside the Tauri app today and the k2-daemon tomorrow.
 //!
 //! SCOPE (reliability overhaul): this evaluator gates only the
 //! project-level Lane-A tick (`workspace/scheduler.rs`, the legacy

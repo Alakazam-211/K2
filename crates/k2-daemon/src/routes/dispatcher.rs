@@ -1,4 +1,4 @@
-//! HTTP route dispatcher for the k2so-daemon binary.
+//! HTTP route dispatcher for the k2-daemon binary.
 //!
 //! Pre-0.39.0 this entire function body lived inline in `main.rs`'s
 //! `handle_connection`. Extraction is a mechanical move — every match
@@ -2848,7 +2848,7 @@ async fn handle_one_request(
         }
         // Kessel (A3): grid snapshot + delta WS endpoint.
         // Serves one Tauri thin client per session. Single-subscriber
-        // by design. See `.k2so/prds/alacritty-v2.md`.
+        // by design. See `.k2/prds/alacritty-v2.md`.
         "/cli/sessions/grid" => {
             // Auth: the owner/connect-user token (token_ok) OR a P3b per-session
             // STREAM token scoped to EXACTLY this request's `?session=` (the
@@ -2887,7 +2887,7 @@ async fn handle_one_request(
         // stream. Pushes `session_added`/`session_removed` JSON
         // frames to subscribers whose `path=` matches the affected
         // session's cwd. Renderer + mobile companion consume the
-        // same wire format. See `.k2so/prds/daemon-authoritative-tabs.md`.
+        // same wire format. See `.k2/prds/daemon-authoritative-tabs.md`.
         p if p == crate::overlay_ws::OVERLAY_WS_PATH => {
             // Skin tokens are a third class: NOT token_ok. Overlay WS accepts
             // a live `k2skn_` pass with thread:read; chatterlog frames are
@@ -4604,7 +4604,7 @@ async fn handle_one_request(
         // GET/POST /cli/tunnel/config — read or set the K2 Connect tunnel
         // config. GET returns a REDACTED view (tokenSet bool, never the
         // secret token); POST applies a partial update and persists
-        // ~/.k2so/tunnel.json. This is what the desktop K2 Connect page
+        // ~/.k2/tunnel.json. This is what the desktop K2 Connect page
         // calls to BIND a chosen subdomain (token + subdomain) before
         // `start`. GET must NOT read a body (read_post_body blocks on a
         // bodyless keep-alive GET); only POST drains the body.
@@ -6046,7 +6046,7 @@ async fn handle_one_request(
                 .await;
         }
         // POST /cli/claude-auth/install-scheduler — Phase 2 Unit 5.
-        // Writes ~/.k2so/claude-auth-refresh.sh + loads the
+        // Writes ~/.k2/claude-auth-refresh.sh + loads the
         // launchd plist (macOS) or installs the crontab entry
         // (linux). Idempotent. POST-only (see /refresh-now comment).
         "/cli/claude-auth/install-scheduler" => {
@@ -6436,10 +6436,10 @@ async fn handle_one_request(
         }
         // Phase 2 Unit 7c — heartbeat-launchd installer routes.
         // Daemon owns its own `dev.k2.heartbeat.plist` so
-        // K2SO Connect (remote daemon without Tauri) can install +
+        // K2 Connect (remote daemon without Tauri) can install +
         // remove the scheduler under its own GUI session. Method
         // gates are inline so a stray GET can't trigger a
-        // launchctl bootstrap. See `crates/k2so-core/src/heartbeats/
+        // launchctl bootstrap. See `crates/k2-core/src/heartbeats/
         // install.rs` for the install/uninstall bodies.
         "/cli/heartbeat/install-launchd" => {
             if !super::http::require_post(&mut *stream, &mut buf, is_post).await { return DispatchOutcome::Done; }

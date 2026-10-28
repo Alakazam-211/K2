@@ -23,7 +23,7 @@ use crate::workspace::provider_resume::{
 };
 
 /// File name under the workspace's handoff dir (`.k2/handoffs/`, or
-/// `.k2so/handoffs/` when that is the workspace dot dir).
+/// `.k2/handoffs/` when that is the workspace dot dir).
 pub const HANDOFF_FILE_NAME: &str = "CANONICAL-HANDOFF.md";
 
 /// Directory under the workspace dot dir that holds handoffs. The file

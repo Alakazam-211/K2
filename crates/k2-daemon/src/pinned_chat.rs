@@ -1,6 +1,6 @@
 //! Daemon-owned pinned-chat session lifecycle — Phase 1 (0.39.39).
 //!
-//! Authoritative spec: `.k2so/prds/daemon-owned-pinned-chat.md`.
+//! Authoritative spec: `.k2/prds/daemon-owned-pinned-chat.md`.
 //!
 //! ## The one endpoint (decision D1)
 //!

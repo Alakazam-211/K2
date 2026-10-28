@@ -199,7 +199,7 @@ pub fn launchctl_list_args() -> Vec<String> {
 /// Generate the plist XML body the canonical daemon launch agent would
 /// install. Thin re-export of `crate::wake::DaemonPlist::canonical(...).to_xml()`
 /// — exposed at this path so K2 Connect callers can grab "what plist
-/// would K2SO write for this daemon binary?" without going through the
+/// would K2 write for this daemon binary?" without going through the
 /// `wake` module's install-shaped surface.
 ///
 /// `program` is the path the plist's `ProgramArguments` will point at.
@@ -217,7 +217,7 @@ pub fn generate_plist_content(program: PathBuf) -> String {
 ///
 /// Two transient cases:
 /// 1. A mounted DMG / removable volume: anything under `/Volumes/`.
-///    First-running K2SO straight from the mounted installer records
+///    First-running K2 straight from the mounted installer records
 ///    `/Volumes/K2SO/K2SO.app/Contents/MacOS/k2so-daemon`; once the
 ///    user ejects the DMG that path is gone but launchd keeps trying.
 /// 2. Gatekeeper App Translocation: when an app is launched from a
@@ -262,7 +262,7 @@ pub fn is_transient_exe_location(p: &Path) -> bool {
 /// converges.
 ///
 /// Rules (conservative — must not churn the dev-box case where the
-/// daemon legitimately runs from `…/target/release/k2so-daemon`):
+/// daemon legitimately runs from `…/target/release/k2-daemon`):
 /// - If the *current* exe is itself transient, never rewrite — we can't
 ///   trust the path we'd write, and a real `/Applications` launch will
 ///   fix it later.
@@ -313,7 +313,7 @@ pub fn should_rewrite_plist(
         return false;
     }
     // Recorded is a *different* path that is stable AND exists — leave
-    // it alone. This is the dev-box case (`…/target/release/k2so-daemon`)
+    // it alone. This is the dev-box case (`…/target/release/k2-daemon`)
     // and we must not churn it on every launch.
     false
 }

@@ -165,7 +165,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         },
 
         // 0.37.4: read the workspace's primary-agent display name.
-        // Reads `.k2so/agent/AGENT.md` frontmatter — first
+        // Reads `.k2/agent/AGENT.md` frontmatter — first
         // `display_name:` (the user-editable label), then `name:`
         // (the technical agent name), then `projects.name`. Total —
         // always returns a string. Mtime-cached, so render-path

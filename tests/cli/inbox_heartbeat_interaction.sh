@@ -18,7 +18,7 @@
 # doesn't match the actual code path — heartbeat `smart_launch`
 # spawns Claude via PTY with WAKEUP.md as the wake message; the
 # inbox isn't read by the daemon, the spawned Claude session reads
-# it via `k2so inbox` from inside its own terminal. Triggering an
+# it via `k2 inbox` from inside its own terminal. Triggering an
 # actual PTY spawn from this test would require Claude on PATH,
 # which doesn't exist in CI sandboxes. So this test pivots to the
 # coexistence + non-interference contract — the realistic

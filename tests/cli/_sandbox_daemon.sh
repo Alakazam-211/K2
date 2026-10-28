@@ -10,7 +10,7 @@
 #
 # Hard rules (see CLAUDE.md / memory/feedback_subagent_no_prod_reload.md):
 #   - HOME=$SANDBOX_HOME for the daemon process. Never touch ~/.k2so/.
-#   - Daemon binary is the worktree's target/release/k2so-daemon —
+#   - Daemon binary is the worktree's target/release/k2-daemon —
 #     never `cargo install`, never bind to /Applications/K2SO.app.
 
 set -euo pipefail

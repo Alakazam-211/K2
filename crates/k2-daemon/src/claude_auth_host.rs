@@ -34,7 +34,7 @@
 //! The shell script the plist invokes (`claude-auth-refresh.sh`)
 //! still does its own OAuth dance via `curl + python3` — the same
 //! pre-Unit-5 implementation. Phase 2.1's CLI verb cleanup is the
-//! right time to point the scheduler at `k2so claude-auth refresh`
+//! right time to point the scheduler at `k2 claude-auth refresh`
 //! (which would HTTP-POST to the daemon's `/cli/claude-auth/refresh-now`
 //! route) instead of the standalone shell script. Until then we
 //! keep the bash script as-is to avoid coupling the scheduler's
@@ -651,7 +651,7 @@ fn legacy_refresh_now() -> CliResponse {
 
 /// Handler for `POST /cli/claude-auth/install-scheduler`.
 ///
-/// 1. Creates `~/.k2so/` if missing.
+/// 1. Creates `~/.k2/` if missing.
 /// 2. Writes `claude-auth-refresh.sh` with executable mode.
 /// 3. On macOS, writes + loads the launchd plist. On Linux, edits
 ///    the user's crontab.

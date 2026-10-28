@@ -15,7 +15,7 @@
 //!
 //! Follows Zed's `TerminalBuilder` pattern — uses alacritty's
 //! built-in event loop instead of a custom reader thread. See
-//! `.k2so/prds/alacritty-v2.md` for the product context.
+//! `.k2/prds/alacritty-v2.md` for the product context.
 //!
 //! **Deliberately NOT used by** `session_stream_pty.rs` or any
 //! Kessel-T0 path. Those stay on their own fork. When v2 ships and
@@ -35,7 +35,7 @@ use alacritty_terminal::event::{
 /// Re-exported so downstream crates (the daemon, tests) can pattern-
 /// match on alacritty's lifecycle events without needing their own
 /// direct `alacritty_terminal` dependency. The daemon crate only
-/// depends on k2so-core; this keeps that surface honest.
+/// depends on k2-core; this keeps that surface honest.
 pub use alacritty_terminal::event::Event as AlacEvent;
 
 use alacritty_terminal::event_loop::{EventLoop, Notifier};

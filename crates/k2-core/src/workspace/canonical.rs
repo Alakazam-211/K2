@@ -67,10 +67,10 @@ pub const HARNESS_PROBE_TARGETS: &[(&str, &str)] = &[
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HarnessFileState {
-    /// File is canonicalized — either a K2SO-generated copy (signature
+    /// File is canonicalized — either a K2-generated copy (signature
     /// present) or a symlink into the canonical SKILL.md.
     Unified { form: UnifiedForm },
-    /// File exists and has user content but is NOT K2SO-managed (no
+    /// File exists and has user content but is NOT K2-managed (no
     /// signature, not a symlink).
     Unmanaged,
     /// No such file at this path — nothing to do here.
@@ -707,7 +707,7 @@ mod tests {
         let proj = scratch_project();
         let path = proj.to_str().unwrap();
 
-        // Claude: a K2SO-generated copy (signature present).
+        // Claude: a K2-generated copy (signature present).
         fs::write(
             proj.join("CLAUDE.md"),
             format!("---\n{}\n---\n# managed\n", K2_GENERATED_SIGNATURE),

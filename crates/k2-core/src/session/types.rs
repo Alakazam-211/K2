@@ -3,7 +3,7 @@
 //! Phase 1 scope: plain-old-data (POD). `broadcast::Sender<Frame>` +
 //! replay ring from the PRD's `Session` struct land in Phase 2 when
 //! a consumer actually subscribes. See
-//! `.k2so/prds/session-stream-and-awareness-bus.md` §"Session persistence
+//! `.k2/prds/session-stream-and-awareness-bus.md` §"Session persistence
 //! model" for the three-layer live / replay-ring / archive split.
 //!
 //! The `cwd` field binds every session to an explicit worktree path —
@@ -65,7 +65,7 @@ pub enum HarnessKind {
     Pi,
     /// Goose.
     Goose,
-    /// Harness K2SO hasn't characterized. T0 only, no recognizer.
+    /// Harness K2 hasn't characterized. T0 only, no recognizer.
     Other,
 }
 

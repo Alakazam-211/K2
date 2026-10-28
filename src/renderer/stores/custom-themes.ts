@@ -132,7 +132,7 @@ export function bootCustomThemes(): void {
 }
 
 // #625 — on a real active-host CHANGE, drop the load gate and reload the
-// theme list from the NEW host's `~/.k2so/themes/`. `loadCustomThemes()`
+// theme list from the NEW host's `~/.k2/themes/`. `loadCustomThemes()`
 // uses host-aware `daemonCliGet()` (reads `activeHost` at call time), and
 // `onActiveHostChange` fires AFTER the flip, so this targets the new host.
 onActiveHostChange(() => {

@@ -100,7 +100,7 @@ interface AgentChatPaneProps {
    *  launch config directly so the same session resumes immediately.
    *  Renderer holds the canonical record; the daemon's auto-stamp
    *  hook reconciles DB state on the next spawn. See
-   *  `.k2so/prds/canonical-lane-restore.md`.
+   *  `.k2/prds/canonical-lane-restore.md`.
    *
    *  0.39.39 (#683) — in the DAEMON-OWNED path this is downgraded to a
    *  NON-AUTHORITATIVE offline hint (PRD §4.5 / D3): it's forwarded to
@@ -132,7 +132,7 @@ interface AgentChatPaneProps {
  * PTY — see `.k2so/prds/heartbeats-sidebar-audit.md` Phase 1.
  *
  * ── 0.39.39 (#683) daemon-owned pinned-chat lifecycle ──────────────
- * `.k2so/prds/daemon-owned-pinned-chat.md`. The DAEMON now owns the
+ * `.k2/prds/daemon-owned-pinned-chat.md`. The DAEMON now owns the
  * pinned-chat session lifecycle (find-or-spawn, resume/fresh decision,
  * refresh, dropdown-switch respawn). The renderer asks the daemon to
  * `ensure-pinned-chat`, attaches the grid-WS, and renders. This kills
@@ -1109,7 +1109,7 @@ function AgentChatTerminalDaemon({ agentName, projectId, projectPath, restoredSe
 
   // Subscribe to the daemon's session lifecycle for THIS workspace.
   //   SessionAdded(agent_name === projectId) → re-attach (daemon respawned
-  //     on refresh / switch / k2so msg find-or-spawn).
+  //     on refresh / switch / k2 msg find-or-spawn).
   //   SessionRemoved(agent_name === projectId) → show idle. NO auto-respawn
   //     (PRD §4: the daemon never auto-spawns a pinned chat).
   useEffect(() => {

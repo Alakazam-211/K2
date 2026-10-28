@@ -387,7 +387,7 @@ function AppRoot(): React.JSX.Element {
   const toggleRunningAgents = useRunningAgentsStore((s) => s.toggle)
 
   // Prewarm the daemon_ws_url cache at app mount. The underlying
-  // Tauri command reads two files from ~/.k2so/ on every call; the
+  // Tauri command reads two files from ~/.k2/ on every call; the
   // result is stable for the app session so one fetch is enough.
   // Fire-and-forget — the first Kessel pane would trigger this
   // anyway, but kicking it off at mount hides the ~5-10ms disk I/O
@@ -860,7 +860,7 @@ function AppRoot(): React.JSX.Element {
       // would suppress that auto-inject. The system shortcut
       // (Fn-Fn or Globe) fires `startDictation:` against the first
       // responder, which is the focused shadow textarea inside the
-      // active terminal pane. See PRD: .k2so/prds/voice-dictation.md.
+      // active terminal pane. See PRD: .k2/prds/voice-dictation.md.
       // Menu zoom — same CSS path as Cmd+=/- (not native WKWebView zoom,
       // which would also scale terminal cells and fight the terminal-font
       // shortcuts).
@@ -919,7 +919,7 @@ function AppRoot(): React.JSX.Element {
   //
   // Used to also signal "active agents" / "working panes", but the
   // post-daemon architecture makes that misleading: agents and PTY
-  // sessions live in k2so-daemon and keep running across Tauri
+  // sessions live in k2-daemon and keep running across Tauri
   // window closes. Reopening the app reconnects to whatever was
   // already in flight. Closing isn't destructive for sessions, so
   // there's nothing to warn about.

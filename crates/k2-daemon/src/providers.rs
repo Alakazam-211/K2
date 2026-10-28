@@ -1,4 +1,4 @@
-//! Daemon implementations of the k2so-core awareness provider traits.
+//! Daemon implementations of the k2-core awareness provider traits.
 //!
 //! F1 of Phase 3.1 — `DaemonInjectProvider` + `DaemonWakeProvider` —
 //! plus G4 of Phase 3.2, which teaches `DaemonWakeProvider` to
@@ -61,7 +61,7 @@ impl InjectProvider for DaemonInjectProvider {
 
 // NB: the formatter that turns an AgentSignal into bytes-for-PTY
 // lives at the crate root (`crate::inject_bytes_for_signal`) —
-// both this provider (called by egress::try_inject via k2so-core's
+// both this provider (called by egress::try_inject via k2-core's
 // render function) and the spawn-path drain loop use it. Since
 // egress::try_inject formats at its own site and we don't see
 // signal context here (only bytes), the provider impl stays
@@ -302,7 +302,7 @@ fn launch_request_for(
     }
 }
 
-/// Register both providers on the k2so-core ambient singletons.
+/// Register both providers on the k2-core ambient singletons.
 /// Called once at daemon startup before the accept loop.
 pub fn register_all() {
     k2_core::awareness::set_inject_provider(Box::new(DaemonInjectProvider));

@@ -7,19 +7,19 @@ pub mod projects;
 // in any of these modules, so the whole files were removed.
 pub mod settings;
 // Phase 2 Unit 2 — `assistant` command shims deleted. The renderer
-// hits `/cli/llm/*` on k2so-daemon directly; the daemon owns the
+// hits `/cli/llm/*` on k2-daemon directly; the daemon owns the
 // LLM worker subprocess + supervisor (timeout/RSS/queue/crash
 // isolation). No Tauri-side LLM surface remains.
 //
 // Phase 2 Unit 6 — `chat_history` command shims deleted alongside
 // the rest of Unit 6's batch. The renderer hits `/cli/chat/*` on
-// k2so-daemon directly.
+// k2-daemon directly.
 pub mod updater;
 // Linux deb/rpm/Arch: in-app download + SHA256SUMS verify + pkexec install
 // + local daemon restart + relaunch (OS integration; SUMS logic in k2-core).
 pub mod linux_pkg_update;
 // Phase 2 Unit 5 — `claude_auth` command shims deleted. The renderer
-// hits `/cli/claude-auth/*` on k2so-daemon directly; no Tauri-side
+// hits `/cli/claude-auth/*` on k2-daemon directly; no Tauri-side
 // command surface for it remains. Scheduler ownership (the launchd
 // plist `dev.k2.claude-auth.plist`) now lives in the
 // daemon's `claude_auth_host` module so refresh keeps working when
@@ -27,14 +27,14 @@ pub mod linux_pkg_update;
 pub mod k2so_agents;
 pub mod format;
 // Phase 2 Unit 1 — `companion` command shims deleted. The renderer
-// hits `/cli/companion/*` on k2so-daemon directly; no Tauri-side
+// hits `/cli/companion/*` on k2-daemon directly; no Tauri-side
 // command surface for it remains.
 //
 // Phase 2 Unit 6 — `filesystem`, `chat_history`, `themes`,
 // `skill_layers`, `review_checklist`, `project_config`, `whats_new`
 // command shims deleted. The renderer hits `/cli/fs/*`, `/cli/chat/*`,
 // `/cli/themes/*`, `/cli/skill-layers/*`, `/cli/review-checklist/*`,
-// `/cli/project-config/*`, and `/cli/whats_new` on k2so-daemon
+// `/cli/project-config/*`, and `/cli/whats_new` on k2-daemon
 // directly.
 pub mod daemon;
 pub mod linux_desktop;
@@ -57,7 +57,7 @@ pub mod skills;
 // Linux Secret Service / Windows Credential Manager via the `keyring`
 // crate. Tokens NEVER touch connect-hosts.json.
 pub mod secrets;
-// K2 Connect — client address book persistence (`~/.k2so/connect-hosts.json`,
+// K2 Connect — client address book persistence (`~/.k2/connect-hosts.json`,
 // non-secret host list only). Tokens live in the keychain (see `secrets`).
 pub mod connect_hosts;
 // K2 Connect remote-files Phase 2 — read a LOCAL dropped file's bytes

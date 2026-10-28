@@ -24,7 +24,7 @@
 //! `fs::remove_*` candidates. This helper exposes that policy as a
 //! single function call: route through the trash crate for paths
 //! outside `temp_dir()`, but skip straight to `fs::remove_*` for
-//! paths under it. Production never trashes K2SO-scratch paths, so
+//! paths under it. Production never trashes K2-scratch paths, so
 //! the only behavioral change is "tests stop prompting Touch ID."
 //!
 //! ## When to use
@@ -62,7 +62,7 @@ pub fn scratch_safe_trash<P: AsRef<Path>>(path: P) -> Result<(), String> {
     if path_is_under_temp_dir(path_ref) {
         // SAFETY: test scratch path under temp_dir() — bypass trash
         // crate to avoid TCC prompt. Permanent delete is acceptable
-        // because the path is K2SO-owned scratch.
+        // because the path is K2-owned scratch.
         let result = if path_ref.is_dir() {
             fs::remove_dir_all(path_ref)
         } else {

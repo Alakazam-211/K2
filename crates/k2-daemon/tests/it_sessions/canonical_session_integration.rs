@@ -5,7 +5,7 @@
 //! an automation deployment: a fresh workspace with mode set + AGENT.md
 //! written must have a `workspace_sessions` row + a v2_session_map
 //! entry under the canonical key BEFORE any consumer (webhook
-//! `k2so msg --wake`, renderer pinned-tab attach, etc.) can race.
+//! `k2 msg --wake`, renderer pinned-tab attach, etc.) can race.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex as StdMutex;
@@ -595,7 +595,7 @@ async fn boot_sweep_does_not_resurrect_enabled_or_disabled_agents() {
 ///
 /// 1. Fresh workspace registered
 /// 2. mode=custom set + AGENT.md written
-/// 3. Webhook fires `k2so msg --wake` ~150ms later
+/// 3. Webhook fires `k2 msg --wake` ~150ms later
 ///
 /// After the fix, the canonical session must already exist by the
 /// time step 3 happens. The downstream `--wake` cascade should hit
@@ -618,7 +618,7 @@ async fn ensure_then_wake_lands_in_same_session_no_duplicate_spawn() {
     assert!(!ensured.reused);
     let canonical_session = ensured.session_id.clone();
 
-    // Step 2: a follow-up call (simulating what `k2so msg --wake`
+    // Step 2: a follow-up call (simulating what `k2 msg --wake`
     // does internally — checking for the canonical session before
     // spawning) must report the SAME session, not spawn fresh.
     let post_wake = ensure_canonical_session(&project_path)

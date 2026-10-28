@@ -99,7 +99,7 @@ pub fn claude_history_path() -> Option<PathBuf> {
 /// `_` and any mid-component `.` (and never canonicalized symlinks). So for
 /// any workspace path containing `_`, a dotted path component, or a
 /// symlinked prefix, K2SO computed a DIFFERENT slug than Claude — the
-/// bundler enumerated `~/.claude/projects/<K2SO-slug>/` (which didn't exist)
+/// bundler enumerated `~/.claude/projects/<K2-slug>/` (which didn't exist)
 /// and got 0 sessions, unpack wrote to the wrong slug dir, and `/resume` +
 /// the pinned-chat dropdown's exists-check never saw Claude's real history.
 /// Every caller of this fn (clone inventory/unpack/repair, resume,

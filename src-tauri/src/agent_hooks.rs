@@ -1,7 +1,7 @@
 //! Agent lifecycle hook glue (Tauri side).
 //!
 //! The hook notification server (HTTP listener + `/cli/*` dispatcher) was
-//! retired in 0.39.0; all hook traffic now terminates in `k2so-daemon`.
+//! retired in 0.39.0; all hook traffic now terminates in `k2-daemon`.
 //! What remains in this module:
 //!
 //!   - Tauri command shims (`k2so_heartbeat_*`, `k2so_session_lookup_*`,
@@ -15,7 +15,7 @@
 //! See `src-tauri/src/lib.rs` for the broader Tauri-vs-daemon split.
 
 // Ring buffer + canonical event mapping + URL query parsing now live
-// in k2so-core so the daemon can share them. The Tauri-side HTTP
+// in k2-core so the daemon can share them. The Tauri-side HTTP
 // dispatcher that consumed these helpers at runtime was retired in
 // 0.39.0 (see the deletion manifest under "Family 6"); the remaining
 // references are exclusively in the unit-test module below, so the
@@ -81,7 +81,7 @@ fn heartbeat_launch_with(client: &DaemonClient, project_path: &str, name: &str) 
 /// `activeTerminalId` is non-null only when the daemon's
 /// `v2_session_map` has the corresponding session — the daemon
 /// performs lazy-cleanup of stale columns inside the same call.
-/// See `.k2so/prds/heartbeat-active-session-tracking.md`.
+/// See `.k2/prds/heartbeat-active-session-tracking.md`.
 #[tauri::command]
 pub async fn k2so_heartbeat_active_session(
     project_path: String,
@@ -142,7 +142,7 @@ fn sessions_list_for_workspace_with(client: &DaemonClient, path: &str) -> Result
 // helpers were orphaned behind `#[allow(dead_code)]`. They are now
 // removed: the equivalent surface lives on the daemon as
 // `/cli/agents/mode`, `/cli/agents/settings/*`, and
-// `/cli/workspace/remove` (see crates/k2so-daemon/src/cli.rs), and
+// `/cli/workspace/remove` (see crates/k2-daemon/src/cli.rs), and
 // the daemon delegates into `k2_core::workspace::*` for the
 // actual DB work — the canonical single source of truth.
 //

@@ -1,8 +1,8 @@
 //! Daemon-side handlers for `/cli/settings/{get,update,reset}` —
 //! Phase 2 Unit 7a.
 //!
-//! Owns the read/write surface for `~/.k2so/settings.json` so the
-//! Tauri thin client (and any K2SO Connect / Mobile Companion future
+//! Owns the read/write surface for `~/.k2/settings.json` so the
+//! Tauri thin client (and any K2 Connect / Mobile Companion future
 //! client) talks to a single writer instead of racing with an
 //! in-process Tauri copy. The actual JSON shape + tmp+rename writer
 //! lives in `k2_core::app_settings`; these handlers translate

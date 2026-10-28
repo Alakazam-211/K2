@@ -9,14 +9,14 @@
 //! Differentiates between:
 //!
 //! - The workspace-level primary agent (resolved via
-//!   [`crate::agents::find_primary_agent`]) — fires when `.k2so/inbox/`
+//!   [`crate::agents::find_primary_agent`]) — fires when `.k2/inbox/`
 //!   has items at the root level (untriaged arrivals).
 //! - Top-tier agents with type `manager`/`custom`/`k2so` under
-//!   `.k2so/agents/<name>/` (fires when that agent's inbox has items OR
+//!   `.k2/agents/<name>/` (fires when that agent's inbox has items OR
 //!   its custom-timing `next_wake` has elapsed).
 //!
 //! All gating decisions write audit rows into `heartbeat_fires` so
-//! `k2so heartbeat status` can show exactly why a specific tick did or
+//! `k2 heartbeat status` can show exactly why a specific tick did or
 //! did not fire.
 //!
 //! Pure function — no PTY spawning, no emissions. Host process (daemon
@@ -157,7 +157,7 @@ pub fn get_highest_inbox_priority(project_path: &str, agent_name: &str) -> u8 {
 /// Iterate the workspace + each top-tier agent and return the names
 /// ready to launch. The caller is responsible for spawning PTYs. All
 /// gating decisions write `heartbeat_fires` audit rows so
-/// `k2so heartbeat status` can show what happened.
+/// `k2 heartbeat status` can show what happened.
 pub fn k2_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, String> {
     let tick_start = std::time::Instant::now();
 
@@ -353,7 +353,7 @@ pub fn k2_agents_scheduler_tick(project_path: String) -> Result<Vec<String>, Str
                 // read `<agent>/heartbeat.json` via `read_heartbeat_config`
                 // and fired wakes based on `next_wake` / `active_hours` /
                 // `interval_seconds`. Retired in 0.39.0d; the on-disk
-                // reader/writer + `k2so heartbeat get/set/noop/action`
+                // reader/writer + `k2 heartbeat get/set/noop/action`
                 // CLI verbs were deleted in 0.40.31. Workspace-scoped
                 // scheduled heartbeats in the `agent_heartbeats` DB
                 // table are the canonical path for custom agents.)

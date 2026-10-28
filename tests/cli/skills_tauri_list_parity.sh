@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 0.39.0g Phase 2.5b followup — verify the new Tauri `k2so_skills_list`
 # command and the existing daemon `/cli/agents/list` route (which the
-# `k2so skills list` CLI verb shells through) return the same set of
+# `k2 skills list` CLI verb shells through) return the same set of
 # skill names for a workspace post-consolidation.
 #
 # Why this matters: the workspace settings Skills section uses the
@@ -14,16 +14,16 @@
 #
 # Why we don't invoke the Tauri command directly: there's no headless
 # Tauri test harness wired into this project. The Tauri verb is a
-# one-line forward to `k2so_core::skills::crud::list`, which reads
+# one-line forward to `k2_core::skills::crud::list`, which reads
 # `.k2so/skills/<name>/` directly. The daemon `/cli/agents/list` route
 # (post-2.5b consolidation) ALSO reads `.k2so/skills/<name>/` via
-# `k2so_core::agents::commands::list`. So filesystem-level inspection
+# `k2_core::agents::commands::list`. So filesystem-level inspection
 # of `.k2so/skills/` is a load-bearing proxy for the Tauri verb's
 # answer — same source folder, same probe rules.
 #
 # Hard rules:
 #   - HOME=$SANDBOX_HOME. No prod daemon contact.
-#   - Daemon binary is the worktree's target/{release,debug}/k2so-daemon.
+#   - Daemon binary is the worktree's target/{release,debug}/k2-daemon.
 
 set -euo pipefail
 
@@ -91,7 +91,7 @@ if ! echo "$REG_RESP" | grep -qF "\"path\":\"$WS\""; then
     exit 1
 fi
 
-# Daemon-side view: what the CLI `k2so skills list` sees (it shells
+# Daemon-side view: what the CLI `k2 skills list` sees (it shells
 # `/cli/agents/list`).
 WS_ENC="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$WS")"
 AGENTS_URL="http://127.0.0.1:${K2SO_PORT}/cli/agents/list?project=${WS_ENC}&token=${K2SO_TOKEN}"
@@ -100,7 +100,7 @@ echo "  /cli/agents/list response: $AGENTS_RESP"
 
 # Filesystem-side view: what the Tauri `k2so_skills_list` will see
 # (it reads `.k2/skills/<name>/` directly via
-# `k2so_core::skills::crud::list`, skipping dotfile dirs).
+# `k2_core::skills::crud::list`, skipping dotfile dirs).
 FS_NAMES="$(ls -1 "$WS/.k2/skills" | grep -v '^\.' | sort | tr '\n' ',' | sed 's/,$//')"
 echo "  filesystem .k2/skills/ basenames: $FS_NAMES"
 

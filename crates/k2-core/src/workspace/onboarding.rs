@@ -6,7 +6,7 @@
 //! Used by:
 //! - The Tauri WorkspaceOnboardingModal in the renderer (display +
 //!   button-click only — no logic lives in the renderer).
-//! - The `k2so onboarding` CLI subcommand for headless setups.
+//! - The `k2 onboarding` CLI subcommand for headless setups.
 //!
 //! Three options surfaced to the user:
 //!
@@ -52,7 +52,7 @@ pub struct DetectedHarnessFile {
     /// table — not derived from the filename so we control wording.
     pub label: String,
     /// Bytes of user content (post-frontmatter strip and post-
-    /// K2SO-marker strip) — gives the picker a sense of how much
+    /// K2-marker strip) — gives the picker a sense of how much
     /// real content the file has without rendering the full body.
     pub byte_count: usize,
     /// First ~400 chars of the body, for the picker preview pane.
@@ -92,7 +92,7 @@ pub fn skip_flag_path(project_path: &str) -> PathBuf {
     crate::workspace_dot_dir(project_path).join(SKIP_HARNESS_FLAG_FILENAME)
 }
 
-/// Whether the user has opted out of K2SO touching harness files
+/// Whether the user has opted out of K2 touching harness files
 /// for this workspace. Cheap fs-stat read on every regen tick.
 pub fn is_harness_management_skipped(project_path: &str) -> bool {
     skip_flag_path(project_path).exists()
@@ -540,7 +540,7 @@ pub fn skip_harness_management(project_path: &str) -> Result<(), String> {
 }
 
 /// Remove the skip flag — used when a user changes their mind
-/// and wants K2SO to take over harness management on the next
+/// and wants K2 to take over harness management on the next
 /// regen.
 pub fn unskip_harness_management(project_path: &str) -> Result<(), String> {
     let flag = skip_flag_path(project_path);
@@ -569,9 +569,9 @@ const HARNESS_PROBES: &[(&str, &str)] = &[
 /// Scan the workspace root for harness files with substantive
 /// user content. Files that are missing, empty, dangling
 /// symlinks, K2SO-managed symlinks, or contain only the K2SO
-/// marker block (no real user content beyond what K2SO wrote)
+/// marker block (no real user content beyond what K2 wrote)
 /// are excluded — the picker should never present a fresh-from-
-/// K2SO file as "your existing context."
+/// K2 file as "your existing context."
 ///
 /// Respects the skip-harness-management flag: if the user has
 /// already chosen "Do it later" for this workspace, scan returns
@@ -602,8 +602,8 @@ pub fn scan_harness_files(project_path: &str) -> Vec<DetectedHarnessFile> {
         };
 
         // Strip frontmatter (Cursor MDC and any markdown with
-        // YAML frontmatter) and K2SO marker blocks so a file
-        // containing *only* K2SO-injected content registers as
+        // YAML frontmatter) and K2 marker blocks so a file
+        // containing *only* K2-injected content registers as
         // empty.
         let body = strip_frontmatter(&content);
         let user_body = strip_k2_managed_block(body);
@@ -636,7 +636,7 @@ pub fn scan_harness_files(project_path: &str) -> Vec<DetectedHarnessFile> {
 // ── Adopt ──────────────────────────────────────────────────────────
 
 /// Adopt a harness file as the seed for `.k2so/PROJECT.md`. The
-/// source body (frontmatter and K2SO markers stripped) is written
+/// source body (frontmatter and K2 markers stripped) is written
 /// to PROJECT.md, the original is archived to
 /// `.k2so/migration/<leaf>-<ts>.<ext>` (matching the existing
 /// CLAUDE.md migration archive convention), and the original is

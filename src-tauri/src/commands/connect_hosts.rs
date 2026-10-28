@@ -1,5 +1,5 @@
-//! K2 Connect client address book persistence — `~/.k2so/connect-hosts.json`
-//! (PRD §1, §3 of `.k2so/prds/k2-connect-client-ux.md`, build order step #3).
+//! K2 Connect client address book persistence — `~/.k2/connect-hosts.json`
+//! (PRD §1, §3 of `.k2/prds/k2-connect-client-ux.md`, build order step #3).
 //!
 //! The NON-SECRET half of a saved [`ConnectHost`]: label, hostname, port,
 //! secure flag, remember flag, lastConnectedAt. The auth TOKEN never lives
@@ -33,7 +33,7 @@ fn k2_home_dir() -> PathBuf {
         .join(".k2")
 }
 
-/// Path to `~/.k2so/connect-hosts.json`.
+/// Path to `~/.k2/connect-hosts.json`.
 fn hosts_path() -> PathBuf {
     k2_home_dir().join("connect-hosts.json")
 }
@@ -49,7 +49,7 @@ fn restrict_mode(file: &Path) {
 #[cfg(not(unix))]
 fn restrict_mode(_file: &Path) {}
 
-/// Read `~/.k2so/connect-hosts.json` and return its raw JSON text.
+/// Read `~/.k2/connect-hosts.json` and return its raw JSON text.
 ///
 /// Missing file → `"[]"` so the renderer always gets a valid JSON array
 /// to parse (empty address book). Malformed/unreadable file is surfaced
@@ -64,7 +64,7 @@ pub fn connect_hosts_read() -> Result<String, String> {
     fs::read_to_string(&file).map_err(|e| format!("read connect-hosts.json: {e}"))
 }
 
-/// Write the (token-less) host list to `~/.k2so/connect-hosts.json` via
+/// Write the (token-less) host list to `~/.k2/connect-hosts.json` via
 /// tmp+rename, chmod 0600.
 ///
 /// `json` is the renderer-owned serialized `ConnectHost[]` MINUS the
@@ -216,9 +216,9 @@ mod tests {
 
     // connect-hosts.json is HOME-relative. Serialize these tests against
     // each other with a module-local lock so cargo's parallel runner
-    // can't race two of them swapping `$HOME`. (k2so-core's crate-wide
+    // can't race two of them swapping `$HOME`. (k2-core's crate-wide
     // HOME_LOCK is `pub(crate)` and not reachable from this crate; no
-    // OTHER test in the k2so crate touches ~/.k2so/connect-hosts.json,
+    // OTHER test in the k2so crate touches ~/.k2/connect-hosts.json,
     // so a module-local lock is sufficient here.)
     static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 

@@ -20,12 +20,12 @@
 //! 0.39.x entry, so first-time-on-a-minor-track users can read the
 //! whole story.
 //!
-//! State lives in `~/.k2so/whats-new.state` — a single line containing
+//! State lives in `~/.k2/whats-new.state` — a single line containing
 //! the last version the user dismissed the popup for. Absent file =
 //! never dismissed = show on next launch.
 //!
 //! This module is intentionally pure: the daemon HTTP route in
-//! `k2so-daemon::cli` is the only network surface; the CLI verb
+//! `k2-daemon::cli` is the only network surface; the CLI verb
 //! `k2 whats-new` and the renderer's modal both go through that
 //! route. Daemon-first per the architecture invariant.
 
@@ -53,7 +53,7 @@ pub const WHATS_NEW_MARKDOWN: &str = include_str!("../../../WHATS_NEW.md");
 pub struct VersionSection {
     /// Version string in `X.Y.Z` form (e.g. `"0.38.7"`).
     pub version: String,
-    /// Human title from the header (e.g. `"Update notes when K2SO updates"`).
+    /// Human title from the header (e.g. `"Update notes when K2 updates"`).
     pub title: String,
     /// Full markdown for this section, including the header line.
     pub content: String,
@@ -244,7 +244,7 @@ pub fn slice_minor_track(sections: &[VersionSection], current: &str) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// State file I/O (~/.k2so/whats-new.state)
+// State file I/O (~/.k2/whats-new.state)
 // ─────────────────────────────────────────────────────────────────────
 
 /// Path to the single-line state file: `~/.k2/whats-new.state`. Absent

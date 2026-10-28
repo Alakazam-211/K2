@@ -2,7 +2,7 @@
 //
 // Previously (#657) the renderer scheduled a 15s grace-reap that closed a
 // dismissed workspace's pinned-Chat v2 session. Per
-// .k2so/prds/daemon-canonical-active.md §4.5/§6 the DAEMON now owns the
+// .k2/prds/daemon-canonical-active.md §4.5/§6 the DAEMON now owns the
 // Active set AND the grace-reap; the renderer is a pure consumer of the
 // canonical Active mirror and must NOT close v2 sessions for
 // age-out/dismiss anymore.

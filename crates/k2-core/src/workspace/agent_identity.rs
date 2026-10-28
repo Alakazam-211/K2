@@ -138,7 +138,7 @@ pub fn workspace_heartbeats_dir(project_path: &str) -> PathBuf {
 /// agent (hands, memory, self-built tools, proactivity via
 /// heartbeats); skills are the documentation profiles that describe
 /// how this workspace-agent operates. Replaces the pre-2.5b split
-/// across `.k2so/agents/<name>/` and `.k2so/agent-templates/<role>/`
+/// across `.k2/agents/<name>/` and `.k2/agent-templates/<role>/`
 /// which carried over from the earlier sub-agent model. Migration
 /// runs at daemon boot per upgraded workspace; see
 /// [`crate::skills::consolidation::consolidate_skills_v1`].
@@ -171,7 +171,7 @@ pub fn skill_dir(project_path: &str, skill_name: &str) -> PathBuf {
 ///    moves any files. During that window the dir exists but has
 ///    no persona yet, and the migration's own primary-detection
 ///    walk needs `agent_type_for` to read from the LEGACY
-///    `.k2so/agents/<name>/AGENT.md` to determine the primary.
+///    `.k2/agents/<name>/AGENT.md` to determine the primary.
 ///    Gating the probe on the populated state avoids a
 ///    chicken-and-egg failure during migration.
 /// 2. `<project>/.k2so/skills/<agent_name>/` exists with either
@@ -265,7 +265,7 @@ pub fn agent_types_equal(a: &str, b: &str) -> bool {
 
 /// Find the workspace's primary scheduleable agent.
 ///
-/// A workspace is one-of Custom / K2SO Agent / Workspace Manager
+/// A workspace is one-of Custom / K2 Agent / Workspace Manager
 /// (mutually exclusive by design), but agent-mode swaps can leave
 /// orphan directories from prior modes on disk. This fn uses
 /// `projects.agent_mode` as the source of truth and only returns an
@@ -341,10 +341,10 @@ pub fn find_primary_agent(project_path: &str) -> Option<String> {
             }
             // 0.39.0f: dropped the pre-0.37.0 `__lead__` sentinel
             // fallback. Post-unification the workspace's primary
-            // agent ALWAYS materializes as `.k2so/agent/AGENT.md`
+            // agent ALWAYS materializes as `.k2/agent/AGENT.md`
             // (handled by the unified probe above). If we reach
             // here with `wanted == "manager"` it means the legacy
-            // `.k2so/agents/<n>/` scan didn't find a manager-type
+            // `.k2/agents/<n>/` scan didn't find a manager-type
             // dir AND the unified file is missing — i.e., the
             // workspace is in manager mode but its primary agent
             // hasn't been scaffolded yet. Return None so callers

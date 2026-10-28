@@ -1,8 +1,8 @@
-//! Daemon-owned global application settings (`~/.k2so/settings.json`).
+//! Daemon-owned global application settings (`~/.k2/settings.json`).
 //!
 //! Phase 2 Unit 7a — moves the `AppSettings` schema + on-disk
 //! tmp-and-rename writer from `src-tauri/src/commands/settings.rs` into
-//! k2so-core so the daemon can serve `/cli/settings/{get,update,reset}`
+//! k2-core so the daemon can serve `/cli/settings/{get,update,reset}`
 //! without Tauri being present.
 //!
 //! The daemon is the only writer: Tauri's `settings_update` proxies to
@@ -1702,7 +1702,7 @@ impl Default for OrgChartNight {
     }
 }
 
-/// Read `~/.k2so/settings.json` and parse into `AppSettings`. Missing
+/// Read `~/.k2/settings.json` and parse into `AppSettings`. Missing
 /// or malformed files yield `AppSettings::default()`. Always
 /// deep-merges with defaults so freshly-added keys are present in
 /// returned values.
@@ -1917,7 +1917,7 @@ pub fn reset() -> Result<AppSettings, String> {
 mod tests {
     use super::*;
 
-    /// Each test points HOME at a fresh tempdir so `~/.k2so/settings.json`
+    /// Each test points HOME at a fresh tempdir so `~/.k2/settings.json`
     /// is isolated from the developer's real settings file and from
     /// concurrent tests.
     /// Holds a `crate::test_env::TempHome` (the ONE env lock; HOME

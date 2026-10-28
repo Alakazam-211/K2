@@ -11,10 +11,10 @@
 // KEYS, including the two riskiest REMAPS:
 //
 //   1. heartbeat/rename — renderer var oldName/newName → route reads
-//      `from`/`to` (verified crates/k2so-daemon/src/heartbeat_routes.rs).
+//      `from`/`to` (verified crates/k2-daemon/src/heartbeat_routes.rs).
 //   2. agents/lock      — renderer projectPath/agentName/terminalId →
 //      route reads project/agent/terminal_id (verified
-//      crates/k2so-daemon/src/cli.rs `/cli/agents/lock`).
+//      crates/k2-daemon/src/cli.rs `/cli/agents/lock`).
 //
 // A regression that reverts a remap (e.g. sends `oldName` again, which the
 // route would silently drop → empty rename) fails these loudly. The param
@@ -101,7 +101,7 @@ describe('host-aware CLI swaps — wire contract', () => {
 // renderer swaps `invoke(cmd, {...})` → `daemonCliPost(route, {...})`.
 // Each swap remaps the renderer's camelCase args to the route's exact
 // snake_case body fields (verified against
-// crates/k2so-daemon/src/{skills,agents,heartbeat}_routes.rs). A
+// crates/k2-daemon/src/{skills,agents,heartbeat}_routes.rs). A
 // regression that reverts a remap (e.g. sends `sourceProjectId` again,
 // which the route ignores → empty `source_project_id` → 400) fails
 // these loudly. The two riskiest swaps are locked below:
@@ -195,7 +195,7 @@ describe('host-aware CLI POST swaps — GAP wire contract', () => {
 // reads on LOCAL Tauri invoke(), so the "Connected Workspaces" panel went
 // blank against a remote K2 Connect host. These two GET reads close that
 // gap. The renderer holds a camelCase `projectId`; the route reads the
-// query param `project_id` (verified crates/k2so-daemon/src/agents_routes.rs
+// query param `project_id` (verified crates/k2-daemon/src/agents_routes.rs
 // `/cli/relations/list{,-incoming}` → `str_param(params, "project_id")`).
 // A regression that sends `projectId` again would silently read an empty
 // id → empty array → blank panel; the not-toHaveProperty guards catch it.

@@ -37,7 +37,7 @@ use crate::fs_atomic::atomic_write;
 /// Write `signal` into the inbox for `target_agent`. Caller resolves
 /// the target name (e.g. from `signal.to`) and the inbox root
 /// (typically `<project>/.k2so/awareness/inbox/` or
-/// `~/.k2so/awareness/inbox/` for workspace-less daemons).
+/// `~/.k2/awareness/inbox/` for workspace-less daemons).
 ///
 /// Returns the path the file landed at — useful for tests and for
 /// the `DeliveryReport` returned by `egress::deliver`.
@@ -125,7 +125,7 @@ pub fn drain(inbox_root: &Path, agent: &str) -> Vec<AgentSignal> {
 }
 
 /// Peek at pending signal count without consuming them. Useful for
-/// dashboards / telemetry / the `k2so connections list` output. Same
+/// dashboards / telemetry / the `k2 connections list` output. Same
 /// directory-missing-is-empty semantics as `drain`.
 pub fn pending_count(inbox_root: &Path, agent: &str) -> usize {
     let agent_dir = inbox_root.join(sanitize_agent_name(agent));

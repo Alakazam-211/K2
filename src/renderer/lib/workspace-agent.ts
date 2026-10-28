@@ -1,15 +1,15 @@
 // Plan B (Bulk-2) — host-aware client for the workspace primary-agent
 // display-name + resume-chat-args routes. These were the 3 daemon-proxy
 // commands in `commands/k2so_agents.rs` (each `cli_get`-ed the daemon then
-// fell back to an in-process k2so-core call if the daemon was unreachable).
+// fell back to an in-process k2-core call if the daemon was unreachable).
 //
 // Moving them onto `daemonCli*` makes them work against ANY daemon (local
 // OR a remote K2 Connect host) instead of the localhost-pinned Tauri proxy.
 // The in-process fallback is intentionally dropped — the daemon is the
 // single source of truth (daemon-first); a renderer talking to a remote
-// daemon has no local k2so-core to fall back to anyway.
+// daemon has no local k2-core to fall back to anyway.
 //
-// Routes (confirmed against `crates/k2so-daemon/src/cli.rs`):
+// Routes (confirmed against `crates/k2-daemon/src/cli.rs`):
 //   GET /cli/workspace/agent-display-name?project=<path>      → {display_name}
 //   GET /cli/workspace/set-agent-display-name?project=&name=  → mutation (echo)
 //   GET /cli/workspace/resume-chat-args?project=<path>        → ResumeChatArgs

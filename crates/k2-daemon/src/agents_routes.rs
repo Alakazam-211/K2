@@ -10,7 +10,7 @@
 //! knows how to find daemon sessions (H1-H4).
 //!
 //! The heavy lifting (decision tree for launch, worktree + task
-//! CLAUDE.md for delegate) is already in k2so-core:
+//! CLAUDE.md for delegate) is already in k2-core:
 //! - `k2_core::workspace::agent_launch::k2_agents_build_launch`
 //!   walks the three wake branches (resume active / delegate from
 //!   inbox / fresh launch) and returns the launch JSON.
@@ -844,7 +844,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // ── Scheduler / triage ──────────────────────────────────────
         // `/cli/agents/triage` is READ-ONLY (plain-text summary; no
         // CLI verb calls it any more). `/cli/scheduler-tick` is the
-        // DESTRUCTIVE heartbeat fire path — `~/.k2so/heartbeat.sh`
+        // DESTRUCTIVE heartbeat fire path — `~/.k2/heartbeat.sh`
         // invokes it on launchd's schedule and parses `"count":N`
         // to log what fired.
         "/cli/agents/triage" => match need_project(params) {
@@ -1179,7 +1179,7 @@ pub fn handle_regenerate_workspace_skill(body: &[u8]) -> CliResponse {
 /// DESIGN NOTE: a dedicated route (rather than reusing the generic
 /// `/cli/fs/write-file`) is the correct choice — `k2_agents_save_agent_md`
 /// is NOT a plain byte write. The core fn resolves the canonical
-/// `.k2so/agent/<agent>/AGENT.md` path from `(project_path, agent_name)`,
+/// `.k2/agent/<agent>/AGENT.md` path from `(project_path, agent_name)`,
 /// applies the same backup/validation the editor pipeline owns, and keeps
 /// the harness mirror in sync. `/cli/fs/write-file` would require the
 /// renderer to know + recompute that path itself (re-implementing core

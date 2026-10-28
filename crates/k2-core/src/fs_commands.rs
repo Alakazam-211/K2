@@ -10,12 +10,12 @@
 //!   home of the file tree, chat history sidebar, theme manager, etc.
 //!
 //! Operations are deliberately daemon-side because the **daemon owns the
-//! filesystem** in the K2SO Connect architecture. When the Tauri client
+//! filesystem** in the K2 Connect architecture. When the Tauri client
 //! lives on Machine A and the daemon on Machine B, the file tree the user
 //! browses is Machine B's tree. (`open-in-finder` and `open-external` are
 //! the lone exceptions — they open the local file on the daemon's machine,
 //! which is the right behavior in Bundled mode and harmless-but-unusable
-//! in K2SO Connect mode. Phase 3.1 will route those through the renderer.)
+//! in K2 Connect mode. Phase 3.1 will route those through the renderer.)
 //!
 //! Path safety: `validate_path` rejects empty paths and resolves symlinks
 //! / `..` segments via `canonicalize` for reads. Writes accept paths whose
@@ -561,7 +561,7 @@ fn map_io_err(e: std::io::Error) -> String {
 pub const MAX_UPLOAD_SIZE: u64 = 100 * 1024 * 1024;
 
 /// Ensure `<workspace_path>/.k2so/downloads/` exists and return its path.
-/// Mirrors the `.k2so/` creation pattern used by `inbox` /
+/// Mirrors the `.k2/` creation pattern used by `inbox` /
 /// `workspace::onboarding` — `create_dir_all` is idempotent, so repeated
 /// calls are cheap and safe.
 pub fn ensure_downloads_dir(workspace_path: &str) -> Result<PathBuf, String> {
@@ -1304,7 +1304,7 @@ pub fn duplicate(path: &str) -> Result<String, String> {
 // ── open-finder / open-external ───────────────────────────────────────
 
 /// Reveal the path in the user's Finder window. Daemon-side caveat:
-/// when the daemon runs on a different machine (K2SO Connect), this
+/// when the daemon runs on a different machine (K2 Connect), this
 /// opens Finder on the **daemon's** machine, not the user's. Phase 3.1
 /// will route this through the renderer; for now Bundled mode is the
 /// only use case and the behavior matches the pre-Phase-2 Tauri
@@ -1432,7 +1432,7 @@ pub fn open_external(url: &str) -> Result<String, String> {
 /// the web Clipboard API. The terminal paste handler calls this to
 /// match the drag-drop behavior for Finder-copied files.
 ///
-/// K2SO Connect caveat: returns paths from the **daemon's** pasteboard.
+/// K2 Connect caveat: returns paths from the **daemon's** pasteboard.
 /// In Bundled mode (daemon + Tauri on the same machine) this is the
 /// user's pasteboard — same behavior as the pre-Phase-2 Tauri command.
 /// In Connect mode the renderer should fall back to a renderer-side

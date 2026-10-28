@@ -1,5 +1,5 @@
 // useActiveStore — the canonical Active mirror (#672,
-// .k2so/prds/daemon-canonical-active.md §1).
+// .k2/prds/daemon-canonical-active.md §1).
 //
 // The DAEMON owns the Active set: a workspace is Active iff it's pinned
 // (manually_active) OR was interacted-with inside `active_window_hours`.

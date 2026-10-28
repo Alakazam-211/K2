@@ -411,7 +411,7 @@ pub(crate) fn singleton_lock_fd() -> Option<std::os::unix::io::RawFd> {
 }
 
 async fn async_main() {
-    // Force a reference to k2so-core so the crate boundary is exercised
+    // Force a reference to k2-core so the crate boundary is exercised
     // at build-time until we actually use it for real work.
     k2_core::__scaffolding_marker();
     // Std-thread work that wakes an agent spawns a session, which needs this
@@ -994,7 +994,7 @@ async fn async_main() {
     let token = generate_token();
 
     // Daemon-specific port/token files (read by Tauri's daemon_client
-    // for its internal HTTP client and by `k2so daemon status`). These
+    // for its internal HTTP client and by `k2 daemon status`). These
     // have existed since 0.33.0 and are intentionally separate from
     // heartbeat.port to avoid clashes while the Tauri agent_hooks
     // listener coexisted.
@@ -1011,7 +1011,7 @@ async fn async_main() {
     // delayed `run_heartbeat_port_watchdog` when Tauri wasn't
     // running. H7 flips that around: the daemon owns heartbeat.port
     // unconditionally at startup, and Tauri stops binding its own
-    // listener. The CLI (`cli/k2so`) + every launchd hook script
+    // listener. The CLI (`cli/k2`) + every launchd hook script
     // read these files to discover the sole HTTP server.
     if let Err(e) = write_restricted(&k2_dir.join("heartbeat.port"), port.to_string().as_bytes()) {
         log_debug!("[daemon] WARN: write heartbeat.port: {e}");
@@ -1421,7 +1421,7 @@ async fn async_main() {
     // pre-existing layout into the `workspace_layouts` table, then
     // strips the key from settings.json. Idempotent on the second
     // boot (the key is gone). Running daemon-side means a remote
-    // daemon (K2SO Connect) picks it up without Tauri being present.
+    // daemon (K2 Connect) picks it up without Tauri being present.
     k2_core::db_ops::migrate_workspace_layouts_to_db();
 
     // 0.34.0 Phase 3.1 — register the daemon-side InjectProvider +
@@ -2548,7 +2548,7 @@ fn run_workspace_unification_sweep() {
     // Migrate heartbeat WAKEUP.md files written to the wrong
     // location. Between the unification migration shipping (which
     // moves heartbeats to .k2so/heartbeats/) and the heartbeat
-    // write-path fix landing, K2SO's heartbeat scaffolding code
+    // write-path fix landing, K2's heartbeat scaffolding code
     // wrote new WAKEUP.md files to .k2so/agent/heartbeats/<sched>/
     // (because agent_dir's layout-aware probe correctly resolved
     // to .k2so/agent/ post-migration, but the heartbeat code was

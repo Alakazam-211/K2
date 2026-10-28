@@ -1,4 +1,4 @@
-// Renderer-side helper for talking to `k2so-daemon`'s `/cli/*` HTTP
+// Renderer-side helper for talking to `k2-daemon`'s `/cli/*` HTTP
 // surface. Phase 2 Unit 6 added the file tree / chat history sidebar /
 // theme manager / skill layers / review checklist routes; before that
 // only Unit 1's CompanionSection used this pattern (hand-rolled fetch).
@@ -452,7 +452,7 @@ function safeHostKey(scope: ServerScope): string {
  * for the lifetime of the app process, so a daemon restart that
  * mints a new port would otherwise be silently routed to a dead
  * socket for the duration of the session. Invalidation forces the
- * next call to re-read `~/.k2so/daemon.{port,token}` from disk.
+ * next call to re-read `~/.k2/daemon.{port,token}` from disk.
  */
 export async function daemonCliGet<T = unknown>(
   scope: ServerScope,

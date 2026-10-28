@@ -1,5 +1,5 @@
 #!/bin/bash
-# K2SO Performance Log Analyzer
+# K2 Performance Log Analyzer
 #
 # Reads a K2SO stderr log (with K2SO_PERF=1 enabled), extracts every
 # `[perf] <name> — p50=... p99=...` summary line, and prints the

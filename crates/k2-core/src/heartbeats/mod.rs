@@ -4,14 +4,14 @@
 //! when launchd wakes the laptop and fires the heartbeat plist, the
 //! daemon calls [`k2_agents_heartbeat_tick`] to find eligible
 //! heartbeats, runs them, and stamps audit rows so
-//! `k2so heartbeat status <name>` can show what happened.
+//! `k2 heartbeat status <name>` can show what happened.
 //!
 //! The entire surface is Tauri-free. src-tauri keeps `#[tauri::command]`
 //! wrappers around these functions so the existing UI frontend keeps
 //! working unchanged; the daemon calls them directly over its HTTP
 //! routes (`/cli/heartbeat/*`).
 //!
-//! See `.k2so/prds/multi-schedule-heartbeat.md` for the data-model
+//! See `.k2/prds/multi-schedule-heartbeat.md` for the data-model
 //! decisions behind this (per-heartbeat folder + `WAKEUP.md`,
 //! workspace-relative `wakeup_path`, `heartbeat_fires` audit table).
 
@@ -254,7 +254,7 @@ pub fn k2_heartbeat_add_with_instructions(
             .ok_or_else(|| format!("heartbeat '{name}' vanished after insert"))?
     };
 
-    // Daemon-first cron bootstrap: ensure ~/.k2so/heartbeat.sh + the
+    // Daemon-first cron bootstrap: ensure ~/.k2/heartbeat.sh + the
     // launchd plist (or crontab) are installed so this heartbeat
     // actually fires on schedule. Idempotent — a no-op when the
     // infrastructure is already in place. Errors are logged, not

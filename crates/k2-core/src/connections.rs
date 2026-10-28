@@ -3,7 +3,7 @@
 //!
 //! Powers `k2 connections list/add/remove`. A connection is a row
 //! in `workspace_relations` linking two projects (`source_project_id`
-//! → `target_project_id`) so cross-workspace `k2so msg` can verify
+//! → `target_project_id`) so cross-workspace `k2 msg` can verify
 //! the sender is actually allowed to post.
 //!
 //! Moved to core so the daemon can serve `/cli/connections`
@@ -48,7 +48,7 @@ pub struct Peer {
     /// project row exists AND its path exists on disk. `list` used to
     /// render orphaned/moved peers indistinguishably from live ones,
     /// sending operators down "the wiring is fine" rabbit holes when
-    /// `k2so msg` then bounced.
+    /// `k2 msg` then bounced.
     #[serde(default)]
     pub reachable: bool,
     /// Every distinct relation_type value seen across the
@@ -1480,7 +1480,7 @@ mod tests {
     // initiated it. `connections("add", ...)` therefore must NOT
     // insert a (this→target) row when the reverse (target→this)
     // already exists, or migration 0051's symmetric-dedup work would
-    // be silently undone by every future `k2so connections add`.
+    // be silently undone by every future `k2 connections add`.
 
     #[test]
     fn add_creates_new_relation_when_no_existing() {

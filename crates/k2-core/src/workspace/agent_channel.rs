@@ -17,7 +17,7 @@
 //! - [`release`] — drop reservations held by this agent (all or a
 //!   named subset).
 //!
-//! All four land in k2so-core so the daemon serves them headlessly.
+//! All four land in k2-core so the daemon serves them headlessly.
 //! Tauri keeps its `#[tauri::command]` handlers as thin forwards.
 
 use std::fs;

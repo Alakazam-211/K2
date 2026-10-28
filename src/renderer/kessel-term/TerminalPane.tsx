@@ -17,7 +17,7 @@
 // No local alacritty_terminal::Term. No ANSI parser. No byte
 // stream. The daemon does all of that; we render JSON-serialized
 // grid deltas to DOM using the CellRun vocabulary from
-// k2so-core's grid_snapshot module.
+// k2-core's grid_snapshot module.
 //
 // Deliberately kept small (< 450 lines). The Kessel-T0-era
 // SessionStreamViewTerm (the retired JSON-stream beta) was ~600 lines because it held a local
@@ -215,7 +215,7 @@ function focusTerminalShadowIfSafe(
   el.focus({ preventScroll: true })
 }
 
-// ── Wire types (mirror k2so-core/src/terminal/grid_snapshot.rs) ───
+// ── Wire types (mirror k2-core/src/terminal/grid_snapshot.rs) ───
 
 interface CellRun {
   text: string

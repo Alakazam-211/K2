@@ -61,7 +61,7 @@ pub struct ReviewItem {
 /// `.k2so/agents/<name>/work/done/` — a directory tree retired by
 /// the workspace==agent unification migration. On every upgraded
 /// workspace the old walk silently returned `Ok(vec![])`, breaking
-/// the desktop Review Queue UI, `k2so reviews`, and the companion's
+/// the desktop Review Queue UI, `k2 reviews`, and the companion's
 /// pending-review badge. The walk now enumerates the workspace's
 /// post-2.5b unified inbox (`.k2so/inbox/done/*.md`), which is where
 /// completed work waits for review.
@@ -355,7 +355,7 @@ pub fn review_request_changes(
 /// Sub-agent completion. Workspace States (capability tiers) retired —
 /// completion always moves the work item from `active/` to `done/` for
 /// human review (formerly the default when no state was set / gated).
-/// Auto-merge-by-source is gone; use `k2so review approve` explicitly.
+/// Auto-merge-by-source is gone; use `k2 review approve` explicitly.
 /// Returns JSON the CLI echoes back.
 pub fn agent_complete(
     project_path: String,

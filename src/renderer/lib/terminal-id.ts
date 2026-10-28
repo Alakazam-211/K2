@@ -1,7 +1,7 @@
 /**
  * Terminal-ID format helpers for agent chat + heartbeat sessions.
  *
- * Mirror of `crates/k2so-core/src/agents/terminal_id.rs` — both sides
+ * Mirror of `crates/k2-core/src/agents/terminal_id.rs` — both sides
  * MUST agree on the format. Tests pin both implementations to the same
  * round-trip strings.
  *

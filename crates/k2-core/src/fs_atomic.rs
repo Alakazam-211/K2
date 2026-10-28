@@ -1,7 +1,7 @@
 //! Atomic filesystem primitives shared by migration, teardown, and skill
 //! regeneration paths.
 //!
-//! Why it exists: K2SO writes several canonical files (SKILL.md, AGENTS.md
+//! Why it exists: K2 writes several canonical files (SKILL.md, AGENTS.md
 //! marker injection, harness-discovery targets) whose mid-write corruption
 //! can silently lose the user's accumulated context. Direct `fs::write`
 //! cannot guarantee that a power loss or SIGKILL mid-syscall leaves the
@@ -229,7 +229,7 @@ pub fn unique_archive_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
 /// this instead of `let _ = fs::...` so failures leave an audit trail.
 ///
 /// Uses a raw stderr write rather than `eprintln!` because the latter
-/// panics on write failure, and K2SO can run with no tty attached when
+/// panics on write failure, and K2 can run with no tty attached when
 /// launched from Finder.
 pub fn log_if_err<T, E: std::fmt::Display>(op: &str, path: &Path, result: Result<T, E>) {
     if let Err(e) = result {

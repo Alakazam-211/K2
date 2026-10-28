@@ -1,5 +1,5 @@
 //! Smart heartbeat launch — single entry point for the Launch button,
-//! the `k2so heartbeat launch <name>` CLI verb, and the cron-tick
+//! the `k2 heartbeat launch <name>` CLI verb, and the cron-tick
 //! scheduler. Per the daemon-first principle, all the decision +
 //! spawn logic lives here in the daemon; the Tauri command and CLI
 //! sub-command are thin proxies that hit the `/cli/heartbeat/launch`
@@ -31,7 +31,7 @@
 //!      directive.
 //!
 //! In all three cases a `heartbeat_fires` audit row is written so
-//! `k2so heartbeat status <name>` reflects the decision.
+//! `k2 heartbeat status <name>` reflects the decision.
 //!
 //! 0.46.9 (field report 2026-11-05): before a fire injects into, reuses or
 //! resumes a heartbeat session, `hb_stale` checks it. A session whose last
@@ -301,7 +301,7 @@ fn smart_launch_inner(
 
     // 0.37.8 — opt-in: deliver into the workspace's pinned chat
     // session via `workspace_msg::deliver_live`, the same smart
-    // cascade `k2so msg --wake` uses. Reuses the four-branch primitive
+    // cascade `k2 msg --wake` uses. Reuses the four-branch primitive
     // (active_terminal_id alive → inject / argv-scan / saved
     // session_id → resume_and_fire / nothing → fresh_fire) keyed on
     // `workspace_sessions` columns so heartbeat-driven activity lands
@@ -1108,7 +1108,7 @@ fn run_workspace_session_delivery(
     };
 
     // 0.38.6: heartbeat-initiated delivery is internal-to-daemon, not
-    // a user-typed `k2so msg` call. Sender identity is "heartbeat"
+    // a user-typed `k2 msg` call. Sender identity is "heartbeat"
     // so the wake prompt arrives in the recipient PTY tagged with a
     // clear origin. The workspace token can be the project path
     // directly (it's already a registered project).

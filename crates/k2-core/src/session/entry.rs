@@ -6,7 +6,7 @@
 //! channel; late subscribers can drain the replay ring to catch up
 //! before hooking into live.
 //!
-//! Layers in the PRD at `.k2so/prds/session-stream-and-awareness-bus.md`
+//! Layers in the PRD at `.k2/prds/session-stream-and-awareness-bus.md`
 //! §"Session persistence model":
 //!   - Live broadcast:   `tokio::sync::broadcast::Sender<Frame>`
 //!   - Replay ring:      bounded `VecDeque<Frame>` (front-pop on overflow)
@@ -49,7 +49,7 @@ use crate::session::Frame;
 pub const REPLAY_CAP: usize = 50_000;
 
 /// Broadcast-channel capacity — matches the daemon's existing
-/// `/events` endpoint (crates/k2so-daemon/src/events.rs:48). Slow
+/// `/events` endpoint (crates/k2-daemon/src/events.rs:48). Slow
 /// receivers get `RecvError::Lagged(n)` once the channel's internal
 /// buffer fills; they can then catch up from the replay ring.
 pub const BROADCAST_CAP: usize = 256;

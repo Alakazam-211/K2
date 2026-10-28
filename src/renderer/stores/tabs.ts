@@ -505,7 +505,7 @@ export interface TerminalItemData {
   /** Set on tabs that are attached to a heartbeat's live PTY.
    *  Closing the tab flips `surfaced=false` instead of killing the
    *  PTY (the heartbeat keeps firing in the background).
-   *  See `.k2so/prds/heartbeat-active-session-tracking.md`. */
+   *  See `.k2/prds/heartbeat-active-session-tracking.md`. */
   heartbeatName?: string
   /** Override the v2_session_map agent_name TerminalPane uses on
    *  /cli/sessions/v2/spawn. Necessary for surfaced heartbeat tabs:
@@ -568,7 +568,7 @@ export interface AgentItemData {
    *  Stamped by `AgentChatPane` after it resolves its launch
    *  config (either from a restored hint or from
    *  `k2so_agents_resume_chat_args`). See
-   *  `.k2so/prds/canonical-lane-restore.md`. */
+   *  `.k2/prds/canonical-lane-restore.md`. */
   sessionId?: string
 }
 
@@ -960,7 +960,7 @@ export interface TabsState {
    *  a restored hint or from `k2so_agents_resume_chat_args`). The
    *  serialized layout becomes the renderer-side canonical record,
    *  surviving daemon DB races + crash windows. See
-   *  `.k2so/prds/canonical-lane-restore.md`.
+   *  `.k2/prds/canonical-lane-restore.md`.
    *
    *  GH#608: `ownerProjectId` is the canonical id of the workspace whose
    *  pinned chat spawned this session (AgentChatPane resolves it
@@ -1338,7 +1338,7 @@ function serializeTab(tab: Tab): SerializedTab {
           // 0.37.12 — pinned chat tab carries its canonical Claude
           // session id so close → reopen resumes the same conversation
           // without a daemon roundtrip race. See PRD
-          // .k2so/prds/canonical-lane-restore.md.
+          // .k2/prds/canonical-lane-restore.md.
           sessionId: d.sessionId,
         }
       } else if (item.type === 'browser') {
@@ -3192,7 +3192,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
 
   /**
    * Close a terminal session on the appropriate backend for its
-   * renderer. This is the A6 contract (.k2so/prds/alacritty-v2.md):
+   * renderer. This is the A6 contract (.k2/prds/alacritty-v2.md):
    * a DELIBERATE tab close closes the daemon session. Kessel requires
    * this explicit call because its component unmount cleanup
    * intentionally does NOT close the daemon session — that's what
@@ -3247,7 +3247,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     // heartbeat continues to fire on schedule. We still flip the
     // surfaced flag so the UI knows the tab is gone, but we don't
     // call cli_sessions_v2_close (which would unregister + SIGHUP).
-    // See `.k2so/prds/heartbeat-active-session-tracking.md`.
+    // See `.k2/prds/heartbeat-active-session-tracking.md`.
     //
     // Detection has two paths:
     //   (a) stamped metadata — SessionSurfaced flow set heartbeatName +
@@ -3379,7 +3379,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
       // 0.39.0: Chat + Inbox tabs render for EVERY workspace, including
       // ones with agentMode === 'off'. Reason: per the workspace==agent
       // model, every workspace is an agent that other workspaces can
-      // message via `k2so msg <workspace>` regardless of whether the
+      // message via `k2 msg <workspace>` regardless of whether the
       // user has agent automation actively running here. The Inbox tab
       // shows incoming cross-workspace messages; the Chat tab spawns a
       // CLI session (Claude Code, Codex, etc.) against this workspace
@@ -4169,7 +4169,7 @@ export function createTabsStore(binding: TabsRoomBinding): TabsStore {
     openAgentPane: (agentName: string, projectPath: string, title?: string) => {
       const state = get()
 
-      // If this is the primary agent (manager lead, k2so agent, or custom agent),
+      // If this is the primary agent (manager lead, k2 agent, or custom agent),
       // redirect to the pinned system agent tab if it exists
       // If a pinned system agent tab exists, redirect to it for the primary agent
       const sysTab = state.tabs.find((t) => t.isSystemAgent)

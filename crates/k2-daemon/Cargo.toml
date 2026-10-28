@@ -85,7 +85,7 @@ xvfb-systemd-tests = ["xvfb-tests"]
 # mgmt + sync only: no gateway (no tungstenite/zstd/webpki pulled in).
 sew-client = { path = "../../third_party/sew-client", default-features = false, features = ["mgmt", "sync"] }
 # Session Stream + Awareness Bus primitives are now always compiled
-# into k2so-core (the `session_stream` feature flag was retired in
+# into k2-core (the `session_stream` feature flag was retired in
 # 0.39.0e).
 k2-core = { path = "../k2-core" }
 # Signed approvals (prd-signed-approvals-v1 S1): the payload and record shape
@@ -134,7 +134,7 @@ getrandom = "0.2"
 # a byte-by-byte timing side-channel; subtle::ConstantTimeEq does not.
 subtle = "2.6"
 
-# Home-directory lookup for ~/.k2so/{daemon.port,daemon.token,daemon.log}.
+# Home-directory lookup for ~/.k2/{daemon.port,daemon.token,daemon.log}.
 dirs = "5"
 # canonicalize without the Windows \\?\ verbatim prefix (git, stored
 # workspace paths and path comparisons need the plain C:\ form); exactly
@@ -163,8 +163,8 @@ chrono-tz = "0.10"
 
 # rusqlite — the per-project heartbeat-schedule route in cli.rs pokes
 # the `projects` table directly (it's the only daemon code that touches
-# a column k2so-core doesn't already wrap). Bundled feature matches
-# what k2so-core uses so rusqlite resolves to a single crate version.
+# a column k2-core doesn't already wrap). Bundled feature matches
+# what k2-core uses so rusqlite resolves to a single crate version.
 rusqlite = { version = "0.41", features = ["bundled", "hooks"] }
 
 # Futures helpers (Stream trait / StreamExt / SinkExt) needed by
@@ -402,7 +402,7 @@ seccompiler = { version = "0.4", optional = true }
 sha2 = "0.10"
 
 [dev-dependencies]
-# Enable k2so-core's `test-util` feature for integration tests that
+# Enable k2-core's `test-util` feature for integration tests that
 # need the in-memory DB helper (`db::init_for_tests`). Production
 # binaries don't link this path — only `cargo test` does.
 k2-core = { path = "../k2-core", features = ["test-util"] }

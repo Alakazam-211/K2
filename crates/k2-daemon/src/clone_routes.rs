@@ -217,7 +217,7 @@ fn build_workspace_bundle(
         (settings, pinned_chat, chat_pins)
     };
 
-    // Temp bundle path: ~/.k2so/clone-tmp/<name>-<ts>.tar.gz
+    // Temp bundle path: ~/.k2/clone-tmp/<name>-<ts>.tar.gz
     let tmp_dir = home.join(".k2").join("clone-tmp");
     std::fs::create_dir_all(&tmp_dir)
         .map_err(|e| BundleError::Internal(format!("create clone-tmp dir: {e}")))?;
@@ -328,7 +328,7 @@ fn build_workspace_bundle(
 ///
 /// Inventories the three state locations, captures the source workspace's
 /// K2 settings from the projects DB row, tar.gz's everything to
-/// `~/.k2so/clone-tmp/<name>-<ts>.tar.gz`, and returns the bundle path + a
+/// `~/.k2/clone-tmp/<name>-<ts>.tar.gz`, and returns the bundle path + a
 /// summary (entry count, scrubbed-secret count, byte size).
 ///
 /// With `vault_target`, also seals the chosen vault secrets to the
@@ -578,7 +578,7 @@ pub fn unpack_and_register_with_carry(
     }
 
     // Best-effort: the uploaded bundle has now been fully extracted, so
-    // delete it to avoid leaking `~/.k2so/clone-tmp/*.tar.gz` on the
+    // delete it to avoid leaking `~/.k2/clone-tmp/*.tar.gz` on the
     // DESTINATION machine (task #655). Failures here are non-fatal — the
     // source-side stale-prune in `handle_clone_bundle` is the backstop.
     remove_unpacked_bundle(bundle_path);

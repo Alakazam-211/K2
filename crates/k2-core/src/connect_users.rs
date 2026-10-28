@@ -2,7 +2,7 @@
 //! surface (K2SO #617).
 //!
 //! **Two auth levels.** The daemon owner holds the local daemon token
-//! (`~/.k2so/daemon.token`); that token is the OWNER credential — full
+//! (`~/.k2/daemon.token`); that token is the OWNER credential — full
 //! access including user management + tunnel control. A *connect-user*
 //! is a username+password account the owner provisions; the remote
 //! person logs in over `https://<sub>.k2.dev` and receives a session
@@ -10,7 +10,7 @@
 //! daemon access but is NOT the owner (no user management, no tunnel
 //! control). Granular per-user scopes are a FUTURE pass.
 //!
-//! **Storage.** Accounts live in `~/.k2so/connect-users.json`, written
+//! **Storage.** Accounts live in `~/.k2/connect-users.json`, written
 //! 0600 (owner-only) via tmp+rename — mirroring `tunnel/config.rs`. The
 //! file holds argon2id password *hashes*, never plaintext. Sessions are
 //! in-memory only (an `OnceLock<Mutex<HashMap>>` singleton like the
@@ -329,7 +329,7 @@ impl From<StoredConnectUser> for ConnectUser {
 }
 
 /// A provisioned connect-user account. Persisted to
-/// `~/.k2so/connect-users.json`. The `password_hash` is an argon2id
+/// `~/.k2/connect-users.json`. The `password_hash` is an argon2id
 /// PHC string and is NEVER exposed off-disk (see [`ConnectUserView`]).
 ///
 /// Deserializes through [`StoredConnectUser`] so a row stored with the
@@ -502,7 +502,7 @@ pub struct PeopleRow {
 
 /// Owner-configurable, server-enforced complexity policy for connect-user
 /// passwords. Persisted alongside the user list in
-/// `~/.k2so/connect-users.json` under a top-level `policy` field. The
+/// `~/.k2/connect-users.json` under a top-level `policy` field. The
 /// default preserves the pre-#620 behavior (length-8, no character-class
 /// requirements) so existing stores load unchanged.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -669,7 +669,7 @@ fn config_dir() -> PathBuf {
         .join(".k2")
 }
 
-/// Path to `~/.k2so/connect-users.json`.
+/// Path to `~/.k2/connect-users.json`.
 pub fn store_path() -> PathBuf {
     config_dir().join("connect-users.json")
 }

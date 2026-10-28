@@ -1,7 +1,7 @@
 //! Roster — "who's in my team?"
 //!
 //! 0.39.0 rewrite (workspace==agent model). Pre-0.39 the roster
-//! enumerated `.k2so/agents/<name>/` subdirectories under a workspace
+//! enumerated `.k2/agents/<name>/` subdirectories under a workspace
 //! root and called those entries "agents." That mental model belonged
 //! to the pre-Phase-2.1 multi-agent-per-workspace world; post-0.39 a
 //! workspace IS an agent, and the team for that agent is the set of
@@ -16,12 +16,12 @@
 //!   check whether any registered session has that agent_name binding.
 //!   A peer with no live session is `Offline`.
 //! - **Skill summary** → `None` for now. Pre-0.39 this was read from
-//!   `.k2so/agents/<name>/SKILL.md` inside the calling workspace's
+//!   `.k2/agents/<name>/SKILL.md` inside the calling workspace's
 //!   tree; peers live in SEPARATE filesystem trees, so reading their
 //!   SKILL.md cleanly would require either an MCP-style read endpoint
 //!   on each peer's daemon, or path enumeration via the `projects`
 //!   table — neither is in scope for this commit. Follow-up:
-//!   `.k2so/inbox/issues/peer-skill-summary-read.md` once the daemon
+//!   `.k2/inbox/issues/peer-skill-summary-read.md` once the daemon
 //!   exposes a `/cli/skills/profile` over a connected workspace.
 //!
 //! All filter shapes still exist (`LiveInWorkspace`, `LiveEverywhere`,
@@ -186,7 +186,7 @@ fn live_agent_names() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     //! Tests for the 0.39.0 roster rewrite — verifies the data source
-    //! is connections, not `.k2so/agents/` directory walk.
+    //! is connections, not `.k2/agents/` directory walk.
     //!
     //! Each test seeds its own UUID-keyed `projects` rows so it
     //! doesn't collide with other tests sharing the process-wide

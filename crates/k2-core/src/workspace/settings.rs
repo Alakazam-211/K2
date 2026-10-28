@@ -1,7 +1,7 @@
 //! Per-project settings accessors — thin DB wrappers.
 //!
-//! The CLI's `k2so mode`, `k2so heartbeat on/off`, `k2so worktree`,
-//! `k2so settings` commands all land here. Each is a read-or-write
+//! The CLI's `k2 mode`, `k2 heartbeat on/off`, `k2 worktree`,
+//! `k2 settings` commands all land here. Each is a read-or-write
 //! against the `projects` table filtered by path. Kept separate from
 //! the broader `AppSettings` (in `src-tauri/src/commands/settings.rs`)
 //! because that struct is mostly UI preferences; these are per-project
@@ -600,9 +600,9 @@ pub fn set_agentic_enabled(_enabled: bool) -> Result<(), String> {
     .map(|_| ())
 }
 
-/// Read the "keep daemon running when K2SO quits" preference from
-/// `~/.k2so/settings.json`. Defaults to `true` — matches the
-/// persistent-agents flagship: if the user installed K2SO and opted
+/// Read the "keep daemon running when K2 quits" preference from
+/// `~/.k2/settings.json`. Defaults to `true` — matches the
+/// persistent-agents flagship: if the user installed K2 and opted
 /// into heartbeats, they presumably want them to keep firing when the
 /// window closes. The menubar icon provides visibility into what's
 /// running, so defaulting ON doesn't leave the user wondering.
@@ -614,8 +614,8 @@ pub fn get_keep_daemon_on_quit() -> bool {
     crate::app_settings::load().keep_daemon_on_quit
 }
 
-/// Set the "keep daemon running when K2SO quits" preference in
-/// `~/.k2so/settings.json`. Atomic via [`crate::app_settings::update`].
+/// Set the "keep daemon running when K2 quits" preference in
+/// `~/.k2/settings.json`. Atomic via [`crate::app_settings::update`].
 pub fn set_keep_daemon_on_quit(keep: bool) -> Result<(), String> {
     crate::app_settings::update(serde_json::json!({
         "keepDaemonOnQuit": keep,
@@ -3213,7 +3213,7 @@ mod tests {
     //
     // 0.39.0 moved the four global toggles (agentic_systems_enabled,
     // keep_daemon_on_quit) off of the SQLite `app_settings (key, value)`
-    // table and onto `~/.k2so/settings.json`. These tests pin the
+    // table and onto `~/.k2/settings.json`. These tests pin the
     // round-trip through the JSON store so we never regress that
     // canonicalization.
     //

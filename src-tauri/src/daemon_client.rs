@@ -1,7 +1,7 @@
-//! Tauri-side HTTP client for the k2so-daemon.
+//! Tauri-side HTTP client for the k2-daemon.
 //!
 //! The daemon exposes a token-authed HTTP server on `127.0.0.1:<random>` —
-//! see `crates/k2so-daemon/src/main.rs`. This module is the Tauri app's
+//! see `crates/k2-daemon/src/main.rs`. This module is the Tauri app's
 //! counterpart: it discovers the daemon's port + token via the conventional
 //! `~/.k2/daemon.port` / `~/.k2/daemon.token` files and wraps
 //! `reqwest::blocking` calls so command handlers in `src-tauri` can proxy
@@ -27,7 +27,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 /// Minimal JSON shape returned by `GET /status` on the daemon.
-/// Keep in lockstep with `crates/k2so-daemon/src/main.rs::send_response`
+/// Keep in lockstep with `crates/k2-daemon/src/main.rs::send_response`
 /// body composition.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DaemonStatus {
@@ -429,7 +429,7 @@ mod tests {
     // query /status') lives in a manual script rather than here because
     // spawning launchd'd processes from cargo test is fiddly on macOS —
     // the daemon's auth-token file is a per-boot singleton at
-    // ~/.k2so/daemon.token, so a test can't pave over a real running
+    // ~/.k2/daemon.token, so a test can't pave over a real running
     // daemon without tripping the user's own workflow. Smoke-test
     // workflow is in scripts/perf-load-harness.sh neighborhood.
     //
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn status_decodes_from_canonical_daemon_body() {
-        // Matches the format emitted by k2so-daemon/src/main.rs.
+        // Matches the format emitted by k2-daemon/src/main.rs.
         let json = r#"{"version":"0.33.0-dev","uptime_secs":42,"pid":12345,"port":58211}"#;
         let s: DaemonStatus = serde_json::from_str(json).expect("decode");
         assert_eq!(s.version, "0.33.0-dev");

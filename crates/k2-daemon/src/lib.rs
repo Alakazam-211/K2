@@ -586,7 +586,7 @@ pub struct DaemonState {
 // ── #630 auth-route integration harness ─────────────────────────────
 //
 // Compiled ONLY into the test-facing lib (never the binary). Lets
-// `crates/k2so-daemon/tests/auth_routes_integration.rs` spin a real
+// `crates/k2-daemon/tests/auth_routes_integration.rs` spin a real
 // in-process daemon listener and drive REAL HTTP requests through
 // `routes::dispatcher::dispatch` so the full dispatch + auth-gate +
 // handler stack is exercised end-to-end.

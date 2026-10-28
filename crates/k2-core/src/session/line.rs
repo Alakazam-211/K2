@@ -1,10 +1,10 @@
 //! Line — the unit of the scrollback.
 //!
 //! The line-oriented scrollback is the core structural difference
-//! between K2SO's new producer and a traditional terminal emulator.
+//! between K2's new producer and a traditional terminal emulator.
 //! Each consumer wraps lines at its own viewport width — nothing
 //! here carries grid-level layout. See
-//! `.k2so/prds/session-stream-and-awareness-bus.md` §"Primitive A".
+//! `.k2/prds/session-stream-and-awareness-bus.md` §"Primitive A".
 //!
 //! The `SeqnoGen` monotonic stamp pattern mirrors the 0.32.13
 //! alacritty_backend seqno damage tracking (`Arc<AtomicU64>` per

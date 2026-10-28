@@ -30,7 +30,7 @@ pub fn ensure_agent_wakeup(project_path: &str, agent_name: &str, agent_type: &st
     if path.exists() {
         return;
     }
-    // Multi-heartbeat lives at .k2so/heartbeats/<name>/WAKEUP.md
+    // Multi-heartbeat lives at .k2/heartbeats/<name>/WAKEUP.md
     // (post-0.37.0 workspace-level layout). If any heartbeat folder
     // already exists, we're past the legacy single-slot world and
     // the agent-root wakeup.md is no longer the source of truth.

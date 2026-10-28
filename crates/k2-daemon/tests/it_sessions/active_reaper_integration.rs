@@ -1,5 +1,5 @@
 //! Spawn-backed integration tests for the daemon-side Active reaper
-//! (task #672, PRD `.k2so/prds/daemon-canonical-active.md`).
+//! (task #672, PRD `.k2/prds/daemon-canonical-active.md`).
 //!
 //! These exercise the REAL `active_reaper::reconcile_pass` (via the
 //! `ReaperTestDriver`) against REAL `DaemonPtySession` PTYs registered

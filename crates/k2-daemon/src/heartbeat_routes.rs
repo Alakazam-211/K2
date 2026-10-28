@@ -1080,7 +1080,7 @@ pub fn dispatch_get(
             // it to TerminalPane's `attachAgentName` override and
             // /cli/sessions/v2/spawn returns the existing session
             // (reused=true) instead of spawning a duplicate. See
-            // `.k2so/prds/heartbeat-active-session-tracking.md`.
+            // `.k2/prds/heartbeat-active-session-tracking.md`.
             let name = params.get("name").cloned().unwrap_or_default();
             if name.is_empty() {
                 return Err("Missing 'name' parameter".to_string());

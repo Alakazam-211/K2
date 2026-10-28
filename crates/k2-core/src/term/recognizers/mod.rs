@@ -4,7 +4,7 @@
 //! `SemanticEvent` frames derived from the harness's ANSI-grid
 //! output patterns. This is the tier between raw VTE parsing (T0)
 //! and structured-mode adapters (T1) in the PRD at
-//! `.k2so/prds/session-stream-and-awareness-bus.md`.
+//! `.k2/prds/session-stream-and-awareness-bus.md`.
 //!
 //! One file per harness family — keeps the surface contained and
 //! easy to iterate on as each harness's output format drifts.

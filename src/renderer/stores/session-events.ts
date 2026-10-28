@@ -6,7 +6,7 @@
 // to keep the tab store in sync with what the daemon thinks exists,
 // replacing the old `sync:tabs` Tauri-event broadcast.
 //
-// Wire format (matches `crates/k2so-daemon/src/session_events.rs`):
+// Wire format (matches `crates/k2-daemon/src/session_events.rs`):
 //   { kind: 'hello',           workspace_path, subscriber_id }
 //   { kind: 'session_added',   workspace_path, paneGroupId?, agent_name, command?, args, cwd?, isV2 }
 //   { kind: 'session_removed', workspace_path, paneGroupId?, agent_name }
@@ -101,7 +101,7 @@ export interface HelloEvent {
 
 /**
  * Canonical daemon-owned Active delta (#672,
- * .k2so/prds/daemon-canonical-active.md §4.4). Broadcast on the SAME
+ * .k2/prds/daemon-canonical-active.md §4.4). Broadcast on the SAME
  * session-events bus, but NOT tied to a workspace path — the daemon emits
  * it to every subscriber after any Active recompute (activate / pin /
  * dismiss / window-tick / reap-close). Carries the WHOLE set so client
@@ -117,7 +117,7 @@ export interface ActiveChangedEvent {
 //
 // These let the renderer DROP its polling intervals and subscribe to the
 // daemon's source-of-truth. Wire-frozen against
-// `crates/k2so-daemon/src/session_events.rs`. App-level events are
+// `crates/k2-daemon/src/session_events.rs`. App-level events are
 // forwarded to EVERY subscriber regardless of `?path=`; workspace-scoped
 // events carry a `workspacePath` and are forwarded only when it matches the
 // subscriber's `?path=` (cwd-prefix rule). Field names are camelCase on the
@@ -508,7 +508,7 @@ export interface HeartbeatRosterChangedEvent {
  *  removed, or re-registered) — 0.39.45, GH #18/#26. Payload-free by
  *  design: consumers re-fetch the canonical list (`fetchProjects`)
  *  rather than patching from a diff. Fires for mutations made by OTHER
- *  windows, the CLI (`k2so workspace create`), onboarding flows, and on
+ *  windows, the CLI (`k2 workspace create`), onboarding flows, and on
  *  remote daemons over K2 Connect — all the paths the old local-only
  *  Tauri `sync:projects` event never covered. */
 export interface ProjectsChangedEvent {

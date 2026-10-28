@@ -1,6 +1,6 @@
 //! macOS menubar icon for the persistent-agents feature.
 //!
-//! Gives the user visibility into "what's running when K2SO is closed"
+//! Gives the user visibility into "what's running when K2 is closed"
 //! — the key UX gap that persistent agents introduces. The default
 //! "keep daemon running on quit" preference is only safe because the
 //! menubar icon surfaces the daemon's state outside the main window.
@@ -103,7 +103,7 @@ fn live_items_slot() -> &'static Mutex<Option<LiveTrayItems>> {
 }
 
 /// Install the tray icon + wire the refresh loop. Called once from
-/// `lib.rs::setup()` AFTER the main window is created (so "Show K2SO"
+/// `lib.rs::setup()` AFTER the main window is created (so "Show K2"
 /// has something to target).
 pub fn install(app: &AppHandle<Wry>) -> Result<(), String> {
     let menu = build_menu(app)?;

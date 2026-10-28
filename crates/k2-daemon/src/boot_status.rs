@@ -501,7 +501,7 @@ pub fn detail() -> String {
 ///     replacing the whole signed/notarized bundle, which only the
 ///     co-located app's Tauri updater can do (Shape A). The daemon
 ///     remote-triggers that app rather than swapping its own binary.
-///   - `"standalone"` — a bare `k2so-daemon` binary under a supervisor
+///   - `"standalone"` — a bare `k2-daemon` binary under a supervisor
 ///     (launchd/systemd). Updating is the in-daemon download→verify→
 ///     stage→swap path (Shape B).
 ///   - `"package"` (0.46.3) — a package manager installed the binary

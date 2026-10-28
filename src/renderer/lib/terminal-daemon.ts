@@ -16,7 +16,7 @@ import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
 import { asArray } from '@/lib/as-array'
 import type { ServerScope } from '@/kessel/server-scope'
 
-// Wire shape mirrors `crates/k2so-core/src/terminal/grid_types.rs::GridUpdate`.
+// Wire shape mirrors `crates/k2-core/src/terminal/grid_types.rs::GridUpdate`.
 // Kept here only as a type re-export hook; consumers can `import type
 // { GridUpdate }` from wherever they already do — terminal-daemon.ts
 // doesn't own the shape.

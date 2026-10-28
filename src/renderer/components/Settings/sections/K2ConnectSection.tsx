@@ -172,7 +172,7 @@ function getDeviceId(): string {
 
 // K2 #674: the lease-renewal cadence (re-claim well inside the 3-minute
 // server TTL) now lives in the DAEMON
-// (`crates/k2so-core/src/tunnel/lease.rs::RENEW_INTERVAL`) so it survives
+// (`crates/k2-core/src/tunnel/lease.rs::RENEW_INTERVAL`) so it survives
 // this panel closing and works headless. The renderer no longer schedules
 // renewal — it only fires one-shot claims on explicit user actions.
 
@@ -462,7 +462,7 @@ export function K2ConnectSection({
   // "another device" when absent.
   const deviceLabel = typeof navigator !== 'undefined' ? navigator.platform || undefined : undefined
   // K2 #674: the PERIODIC lease renewal now lives in the DAEMON
-  // (`crates/k2so-core/src/tunnel/lease.rs`), tied to the tunnel's
+  // (`crates/k2-core/src/tunnel/lease.rs`), tied to the tunnel's
   // lifecycle, so the lease survives this panel being closed and works
   // headless. The renderer keeps only the ONE-SHOT claims on explicit user
   // actions (start / swap, below) and the status DISPLAY. It pushes this
@@ -623,7 +623,7 @@ export function K2ConnectSection({
   }
 
   // K2 #674: the renderer no longer drives the periodic lease renewal —
-  // the daemon owns it now (see `crates/k2so-core/src/tunnel/lease.rs`), so
+  // the daemon owns it now (see `crates/k2-core/src/tunnel/lease.rs`), so
   // the lease survives this panel unmounting and a headless daemon. When a
   // tunnel is already running with an account session + bound subdomain
   // (resumed session / auto-start), just (re)assert this device's claim

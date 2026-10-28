@@ -14,7 +14,7 @@
 //! which routed into Tauri's `commands::terminal::terminal_create`
 //! which called `state.terminal_manager.lock().create(...)`. When
 //! Tauri quit, the close-handler ran `manager.kill_all()` and every
-//! PTY died with it. That breaks K2SO Connect (PTYs are on a remote
+//! PTY died with it. That breaks K2 Connect (PTYs are on a remote
 //! daemon; Tauri quitting locally must not kill them) and breaks
 //! Mobile Companion (the daemon is the long-lived process that
 //! owns the network surface — terminals should outlive the

@@ -23,9 +23,9 @@
 //! didn't wait for). The token still rotates every boot — only the
 //! port is sticky.
 //!
-//! This module is split out from `k2so-daemon/src/main.rs` so the
+//! This module is split out from `k2-daemon/src/main.rs` so the
 //! algorithm can be unit-tested without spawning the full daemon
-//! binary, and so future remote-daemon flavors (K2SO Connect) share
+//! binary, and so future remote-daemon flavors (K2 Connect) share
 //! one implementation.
 
 use std::net::{Ipv4Addr, SocketAddr, TcpListener as StdTcpListener};
@@ -34,7 +34,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 /// Outcome of [`claim_port`]. The `port` is what the caller should
-/// publish into `~/.k2so/daemon.port` (always equals the port the
+/// publish into `~/.k2/daemon.port` (always equals the port the
 /// returned listener actually bound to). `reused` is `true` when we
 /// successfully claimed the previously-written port and `false` when
 /// we fell back to a kernel-assigned ephemeral port.

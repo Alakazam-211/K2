@@ -157,7 +157,7 @@ pub fn k2_agents_build_launch(
     // CLI tools, PROJECT.md, and primary agent persona via the
     // symlinked ./CLAUDE.md → SKILL.md discovery path. Phase 2 Unit
     // 7c: now calls `workspace::write_workspace_skill_file` directly
-    // — the SKILL scaffolding moved to k2so-core in Unit 7b so the
+    // — the SKILL scaffolding moved to k2-core in Unit 7b so the
     // WorkspaceRegenProvider bridge that used to forward this call
     // back to src-tauri is no longer needed. Both daemon and Tauri
     // contexts hit the same body now.

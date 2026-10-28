@@ -3,7 +3,7 @@
 //! Backs the Settings → Permissions page. Five permissions surface
 //! to the user:
 //!
-//! | Permission | Why K2SO needs it | Detection |
+//! | Permission | Why K2 needs it | Detection |
 //! |---|---|---|
 //! | Microphone | Apple Dictation (and any future voice features) | `AVCaptureDevice.authorizationStatus(for:.audio)` |
 //! | Full Disk Access | Workspace folders outside `~/Documents` (TCC-protected) | Try-read `~/Library/Safari/Bookmarks.plist` |

@@ -1,7 +1,7 @@
 //! Agent CRUD commands.
 //!
 //! Phase 2.5d: extracted from the monolithic `agents/commands.rs`. This
-//! is the business logic behind the bulk of the `k2so agents *` CLI
+//! is the business logic behind the bulk of the `k2 agents *` CLI
 //! surface — list / create / delete / get_profile / update_profile /
 //! update_field — plus the shared helpers `cleanup_agent_backups` and
 //! `log_agent_warning` they all rely on. Every function is
@@ -33,7 +33,7 @@ use crate::workspace::work_item::atomic_write;
 use crate::heartbeats::control::ensure_agent_wakeup;
 use crate::workspace::scheduler::{agent_work_dir, count_md_files};
 
-/// Summary row the UI agent-list + `k2so agents list` CLI render.
+/// Summary row the UI agent-list + `k2 agents list` CLI render.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct K2AgentInfo {

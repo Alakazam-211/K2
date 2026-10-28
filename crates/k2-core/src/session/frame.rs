@@ -7,7 +7,7 @@
 //! individual harness surfaces that doesn't map cleanly rides on
 //! `SemanticKind::Custom` rather than adding a new Frame variant.
 //!
-//! See `.k2so/prds/session-stream-and-awareness-bus.md` §"Primitive A"
+//! See `.k2/prds/session-stream-and-awareness-bus.md` §"Primitive A"
 //! for the full design and §"How this fixes the companion reflow"
 //! for how per-client consumption escapes the baked-width trap.
 //!
@@ -46,7 +46,7 @@ pub enum Frame {
         payload: serde_json::Value,
     },
     /// Cross-agent signal lifted from a `k2so:` APC escape or a
-    /// `k2so msg` CLI emit. Also routed to the Awareness Bus; visible
+    /// `k2 msg` CLI emit. Also routed to the Awareness Bus; visible
     /// here for session-level auditing.
     AgentSignal(AgentSignal),
     /// Opaque PTY byte slice. Kept for pixel-perfect replay,

@@ -63,7 +63,7 @@ fi
 echo "→ POST /cli/inbox/compose with project=$WORKSPACE_B"
 # Note: we deliberately set project= to workspace B's path (not the
 # sandbox HOME). This is exactly what cmd_msg_inbox_form does when the
-# user runs `k2so msg <target-ws> --inbox`.
+# user runs `k2 msg <target-ws> --inbox`.
 #
 # The daemon's inbox POST routes pull params from the URL query
 # string (not the body) — same as /cli/inbox/respond etc. `curl -sG

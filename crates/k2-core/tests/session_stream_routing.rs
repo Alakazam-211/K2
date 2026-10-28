@@ -227,7 +227,7 @@ fn resolve_for_agent_ignores_signal_to_field() {
 // "team" is the set of other connected workspaces, not subdirectories
 // in its own tree. The integration-level filesystem tests that lived
 // here were superseded by the in-module tests in
-// `crates/k2so-core/src/awareness/roster.rs`, which can seed the
+// `crates/k2-core/src/awareness/roster.rs`, which can seed the
 // shared in-memory DB directly without needing the daemon to be up.
 //
 // `agent_info_json_serializes_cleanly` survives because it's a pure

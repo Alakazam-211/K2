@@ -1,6 +1,6 @@
 //! Tauri-side subscriber for the daemon's `/events` WebSocket.
 //!
-//! When the k2so-daemon is running, it publishes agent-hook events
+//! When the k2-daemon is running, it publishes agent-hook events
 //! (`HookEvent::AgentLifecycle`, `::AgentReply`, …) as JSON frames on
 //! `ws://127.0.0.1:<port>/events?token=<t>`. This module runs a
 //! background thread that connects to that stream, decodes each frame,
@@ -24,7 +24,7 @@ use tungstenite::{client::client, Message};
 
 use k2_client::log_debug;
 
-/// Wire shape matches `crates/k2so-daemon/src/events.rs::WireEvent`.
+/// Wire shape matches `crates/k2-daemon/src/events.rs::WireEvent`.
 #[derive(Debug, Clone, Deserialize)]
 struct WireEvent {
     event: String,

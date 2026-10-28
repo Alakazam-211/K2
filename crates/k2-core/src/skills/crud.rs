@@ -1,7 +1,7 @@
 //! Phase 2.5b follow-up: CRUD helpers over `.k2so/skills/<name>/`.
 //!
 //! The Tauri command surface (`src-tauri/src/commands/skills.rs`)
-//! and the CLI verbs (`k2so skills list|create|profile|remove`) each
+//! and the CLI verbs (`k2 skills list|create|profile|remove`) each
 //! wrap these functions one-for-one. Underlying file shape post-2.5b:
 //!
 //! ```text
@@ -15,7 +15,7 @@
 //! cheaply without parsing the full body. Heavier fields (role,
 //! inbox/active/done counts) live on `K2AgentInfo` and remain on
 //! the legacy `k2_core::agents::commands::list` surface for the
-//! existing K2SO Agents panel.
+//! existing K2 Agents panel.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -587,7 +587,7 @@ fn classify_skill_dir(dir: &Path) -> Option<String> {
 ///   as a mirror when its name is `k2so-<X>` AND a sibling source
 ///   directory `<X>/` also exists at `.k2so/skills/<X>/`. The bare
 ///   `k2so-<X>` heuristic isn't enough — a legitimate agent named
-///   `k2so-agent` (the K2SO planner role) carries the `k2so-`
+///   `k2so-agent` (the K2 planner role) carries the `k2so-`
 ///   prefix as part of its own name; we must NOT skip it just for
 ///   that. Iterating the mirrors would double-regenerate (and
 ///   re-key the underlying agent the second pass).
@@ -772,7 +772,7 @@ mod regenerate_skills_tests {
             "regen should process the seeded cli-eng skill; got updated={updated}, out={out}",
         );
 
-        // The regenerated SKILL.md should now carry the K2SO-managed
+        // The regenerated SKILL.md should now carry the K2-managed
         // frontmatter + use canonical A25 verbs (no deprecated ones).
         let regenerated = std::fs::read_to_string(cli_eng_dir.join("SKILL.md"))
             .expect("agent-dir SKILL.md exists post-regen");
@@ -894,12 +894,12 @@ mod regenerate_skills_tests {
 
     #[test]
     fn regenerate_skills_processes_literal_k2so_agent_dir() {
-        // Regression guard: `k2so-agent` (the K2SO planner role) is a
+        // Regression guard: `k2so-agent` (the K2 planner role) is a
         // legitimate agent name that happens to share the `k2so-`
         // prefix with the harness-fanout mirror naming convention.
         // The mirror-detection heuristic must check for a sibling
         // SOURCE dir (here, `agent/`) before skipping — without
-        // that check, every workspace's K2SO planner agent would
+        // that check, every workspace's K2 planner agent would
         // silently no-op on regen.
         let proj = scratch_project();
 

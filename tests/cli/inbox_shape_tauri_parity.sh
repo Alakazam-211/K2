@@ -4,7 +4,7 @@
 # `k2so_inbox_*` Tauri commands expect (and that the React frontend
 # deserialises into the `InboxItem` interface).
 #
-# Both sides wrap the SAME `k2so_core::inbox::*` functions, so this
+# Both sides wrap the SAME `k2_core::inbox::*` functions, so this
 # test is a pin against accidental shape drift. If someone renames a
 # field in `InboxItem` (Rust) but forgets to update the React
 # interface, the renderer would silently render undefined values for
@@ -14,12 +14,12 @@
 # Why not invoke the Tauri command directly? There's no headless
 # Tauri test harness wired into this project (no tauri-driver in
 # CI). The daemon HTTP route + the Tauri command both call
-# `k2so_core::inbox::list_folder` directly with identical serde
+# `k2_core::inbox::list_folder` directly with identical serde
 # shapes, so HTTP-side verification is a load-bearing proxy.
 #
 # Hard rules from CLAUDE.md:
 #   - HOME=$SANDBOX. No prod daemon contact.
-#   - Daemon binary is the worktree's target/{release,debug}/k2so-daemon.
+#   - Daemon binary is the worktree's target/{release,debug}/k2-daemon.
 
 set -euo pipefail
 
@@ -94,7 +94,7 @@ PYEOF
 
 # Now verify the lightweight `/cli/inbox/list` empty-folder behaviour
 # matches what `k2so_inbox_count` returns. Tauri command body:
-#   k2so_core::inbox::list_root(&workspace).len()
+#   k2_core::inbox::list_root(&workspace).len()
 # So one seeded item -> count == 1.
 COUNT_LEN="$(echo "$RESP" | python3 -c "import sys, json; print(len(json.load(sys.stdin)))")"
 if [ "$COUNT_LEN" != "1" ]; then

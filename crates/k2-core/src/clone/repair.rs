@@ -33,7 +33,7 @@ use crate::chat_history::claude_project_hash;
 use std::path::{Path, PathBuf};
 
 /// The PRE-0.39.44 ("legacy") Claude slug encoder, kept ONLY to detect
-/// stale dirs that an earlier K2SO build wrote/unpacked into.
+/// stale dirs that an earlier K2 build wrote/unpacked into.
 ///
 /// The old rule was `replace("/.","/-").replace('/',"-").replace(' ',"-")`:
 /// it PRESERVED `_` and any mid-component `.`, and never canonicalized

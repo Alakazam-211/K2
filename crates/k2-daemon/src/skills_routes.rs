@@ -54,7 +54,7 @@ use crate::cli_response::CliResponse;
 struct CreateBody {
     /// Absolute workspace path the skill is created under.
     project_path: String,
-    /// New skill name (`.k2so/skills/<name>/`). Alphanumeric + `-`/`_`.
+    /// New skill name (`.k2/skills/<name>/`). Alphanumeric + `-`/`_`.
     name: String,
     /// Optional seed skill to copy frontmatter/body from.
     from_skill: Option<String>,
@@ -168,7 +168,7 @@ pub fn handle_remove(body: &[u8]) -> CliResponse {
 /// Handler for `POST /cli/skills/write-opt-in`.
 ///
 /// Wraps `k2_core::skills::content::write_opt_in_skill`. Writes one of
-/// the three canonical opt-in skills to `.k2so/skills/<name>/SKILL.md`
+/// the three canonical opt-in skills to `.k2/skills/<name>/SKILL.md`
 /// and returns the absolute path written. Mirrors the
 /// `k2_write_opt_in_skill` Tauri command (including its
 /// unknown-skill-name error).

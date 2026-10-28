@@ -14,7 +14,7 @@
 //!     source. Deterministic for the caller-supplied clock.
 //!   - **Host part (daemon).** Clock source, session enumeration,
 //!     PTY write, child kill, SemanticEvent emission, env-var
-//!     config overrides. Lives in `k2so-daemon/src/watchdog.rs`.
+//!     config overrides. Lives in `k2-daemon/src/watchdog.rs`.
 //!
 //! Why that split: every side effect is host-specific. The
 //! decision logic is a 20-line state machine that benefits from

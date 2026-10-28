@@ -1,5 +1,5 @@
 //! Canonical daemon-owned "Active" set compute (PRD
-//! `.k2so/prds/daemon-canonical-active.md`, task #672).
+//! `.k2/prds/daemon-canonical-active.md`, task #672).
 //!
 //! The Active set is a **derived** property of the daemon — there is no
 //! new storage for it. A workspace is Active iff it is manually pinned

@@ -3,7 +3,7 @@
 //! Serves grid snapshots + deltas from a daemon-hosted
 //! `DaemonPtySession`'s `alacritty_terminal::Term` to a single
 //! Tauri-side thin client. This is the daemon half of the A3 + A5
-//! protocol defined in `.k2so/prds/alacritty-v2.md`.
+//! protocol defined in `.k2/prds/alacritty-v2.md`.
 //!
 //! Flow:
 //!

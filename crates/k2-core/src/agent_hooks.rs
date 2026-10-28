@@ -1,11 +1,11 @@
 //! Helpers + route handlers shared between the Tauri app's agent-
 //! lifecycle HTTP server (`src-tauri/src/agent_hooks.rs`) and the
-//! k2so-daemon counterpart (`crates/k2so-daemon/src/main.rs`).
+//! k2-daemon counterpart (`crates/k2-daemon/src/main.rs`).
 //!
 //! Scope:
 //! - Event-name canonicalization (`map_event_type`) + URL / query
 //!   parsing.
-//! - 50-slot recent-event ring buffer used by `k2so hooks status`.
+//! - 50-slot recent-event ring buffer used by `k2 hooks status`.
 //! - `AgentHookEventSink` trait + `set_sink`/`emit` ambient-singleton
 //!   plumbing so both hosts' handlers emit through the same API.
 //! - `emit_lifecycle` — the legacy `agent:lifecycle` emit, now fed only
@@ -13,7 +13,7 @@
 //!   working-v1 DA13); no raw hook writes a status any more.
 //!
 //! The daemon's `AgentHookEventSink` impl publishes events onto
-//! its `/events` WebSocket (see `crates/k2so-daemon/src/events.rs`);
+//! its `/events` WebSocket (see `crates/k2-daemon/src/events.rs`);
 //! src-tauri's routes back onto `AppHandle::emit` directly.
 
 use parking_lot::Mutex;
@@ -55,7 +55,7 @@ pub enum HookEvent {
     /// than spawn a new PTY. Differs from `CliTerminalSpawnBackground`
     /// in semantic: Spawn means "I just spawned a new PTY"; Surfaced
     /// means "this PTY is already running, mount a tab on it." See
-    /// `.k2so/prds/heartbeat-active-session-tracking.md`.
+    /// `.k2/prds/heartbeat-active-session-tracking.md`.
     SessionSurfaced,
     /// Fires when a workspace session's `surfaced` flag flips 1 → 0
     /// (close-as-minimize). The PTY stays alive in the daemon; every
@@ -223,7 +223,7 @@ impl HookEvent {
 
 /// Abstraction for "how do agent-hook emissions reach the UI." The
 /// Tauri app provides an impl that calls `AppHandle::emit`; the future
-/// k2so-daemon provides one that fans out over the companion WS.
+/// k2-daemon provides one that fans out over the companion WS.
 pub trait AgentHookEventSink: Send + Sync {
     fn emit(&self, event: HookEvent, payload: serde_json::Value);
 }
@@ -252,7 +252,7 @@ pub fn emit(event: HookEvent, payload: serde_json::Value) {
 
 const RECENT_EVENTS_CAP: usize = 50;
 
-/// Past-events ring buffer used by `k2so hooks status` and friends.
+/// Past-events ring buffer used by `k2 hooks status` and friends.
 /// Keyed by insertion order; newest at the back.
 static RECENT_EVENTS: OnceLock<Mutex<VecDeque<RecentEvent>>> = OnceLock::new();
 
@@ -318,7 +318,7 @@ pub fn record_recent_hook_event(
 }
 
 /// Snapshot the recent events (newest last). Exposed for the CLI's
-/// `k2so hooks status` probe.
+/// `k2 hooks status` probe.
 pub fn get_recent_events() -> Vec<RecentEvent> {
     recent_events().lock().iter().cloned().collect()
 }

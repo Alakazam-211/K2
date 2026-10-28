@@ -1,6 +1,6 @@
 // Cached accessor for `invoke('daemon_ws_url')`.
 //
-// The underlying Tauri command reads two files from `~/.k2so/` on
+// The underlying Tauri command reads two files from `~/.k2/` on
 // every call (heartbeat.port + heartbeat.token). That's ~5-10ms of
 // synchronous disk I/O. Every Kessel pane mount was paying the cost
 // independently — a visible delay contributor on top of the

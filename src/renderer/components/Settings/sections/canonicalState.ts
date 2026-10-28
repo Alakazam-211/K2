@@ -1,6 +1,6 @@
 // TypeScript mirror of the canonical-state types returned by the
 // `k2so_detect_canonical_state` Tauri command (canonical-agents PRD §5.2).
-// Source of truth: crates/k2so-core/src/workspace/canonical.rs
+// Source of truth: crates/k2-core/src/workspace/canonical.rs
 // (HarnessProbe / HarnessFileState / UnifiedForm, serde tag = "kind").
 
 export type UnifiedForm = 'copy' | 'symlink'

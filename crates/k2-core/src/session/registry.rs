@@ -1,6 +1,6 @@
 //! `SessionRegistry` — in-process map of `SessionId → SessionEntry`.
 //!
-//! Mirrors the singleton pattern used across k2so-core
+//! Mirrors the singleton pattern used across k2-core
 //! (`db::shared()`, `terminal::shared()`). One
 //! registry per process — the daemon and Tauri (when running in
 //! the same process during dev) share the same map via

@@ -8,7 +8,7 @@
 //! previous port and silently sent HTTP traffic to a dead socket
 //! until they hit ECONNREFUSED.
 //!
-//! Post-fix the daemon reads `~/.k2so/daemon.port` first, attempts
+//! Post-fix the daemon reads `~/.k2/daemon.port` first, attempts
 //! to bind that exact port, and falls back to ephemeral only when
 //! it's taken. This test spawns the compiled daemon binary twice
 //! in a row (with a between-runs grace window for SO_REUSEADDR

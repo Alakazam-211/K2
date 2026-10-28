@@ -1,6 +1,6 @@
 //! macOS launchd plist generation + install/uninstall helpers.
 //!
-//! The persistent-agents feature puts k2so-daemon under launchd so the
+//! The persistent-agents feature puts k2-daemon under launchd so the
 //! process runs in the background regardless of whether the Tauri app is
 //! open, survives crashes via `KeepAlive: true`, and can (optionally)
 //! wake the system from sleep on a scheduled interval to fire heartbeats
@@ -42,15 +42,15 @@ pub fn launch_agents_dir() -> Option<PathBuf> {
     crate::paths::home_dir().map(|h| h.join("Library/LaunchAgents"))
 }
 
-/// Describes the k2so-daemon plist. Exposed as a builder so the Tauri
-/// app (or a future `k2so daemon install` CLI subcommand) can compose
+/// Describes the k2-daemon plist. Exposed as a builder so the Tauri
+/// app (or a future `k2 daemon install` CLI subcommand) can compose
 /// the config from user settings without this module knowing about
 /// Settings.
 #[derive(Debug, Clone)]
 pub struct DaemonPlist {
     /// Reverse-DNS identifier. Matches the plist filename: `<label>.plist`.
     pub label: String,
-    /// Absolute path to the k2so-daemon binary.
+    /// Absolute path to the k2-daemon binary.
     pub program: PathBuf,
     /// Additional arguments passed to the binary after `program`.
     pub args: Vec<String>,
@@ -65,7 +65,7 @@ pub struct DaemonPlist {
 }
 
 impl DaemonPlist {
-    /// Canonical config: k2so-daemon, always-on, logs under `~/.k2so/`.
+    /// Canonical config: k2-daemon, always-on, logs under `~/.k2/`.
     pub fn canonical(program: PathBuf) -> Self {
         let k2_dir = crate::paths::home_dir()
             .map(|h| h.join(".k2"))

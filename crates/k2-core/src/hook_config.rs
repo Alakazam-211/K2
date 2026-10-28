@@ -3,14 +3,14 @@
 //!
 //! Just two atomic values — the port the hook server is listening on and
 //! the 32-byte hex token required for every request. Kept as a standalone
-//! module so k2so-core's terminal backend can read them (it exports the
+//! module so k2-core's terminal backend can read them (it exports the
 //! values into child-process environments as `K2SO_HOOK_PORT` and
 //! `K2SO_HOOK_TOKEN`) without having to depend on the full `agent_hooks`
 //! HTTP server body (which still lives in src-tauri for now).
 //!
 //! The HTTP server in `src-tauri/src/agent_hooks.rs` is the single writer
 //! — it calls [`set_port`] and [`set_token`] once at startup. Everything
-//! else (terminal, CLI discovery via `~/.k2so/heartbeat.port`) is a
+//! else (terminal, CLI discovery via `~/.k2/heartbeat.port`) is a
 //! reader.
 
 use std::sync::atomic::{AtomicU16, Ordering};

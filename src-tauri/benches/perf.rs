@@ -1,4 +1,4 @@
-//! K2SO performance benchmarks.
+//! K2 performance benchmarks.
 //!
 //! Each group compares two or more approaches to the same hot path so we
 //! have apples-to-apples numbers driving the P1/P2 code changes. Run with:
@@ -205,7 +205,7 @@ fn bench_reflow(c: &mut Criterion) {
 // Serial `fs::read_dir` recursion (current `search_walk`) vs the `ignore`
 // crate's work-stealing parallel walker (P2.4 target).
 //
-// We walk the K2SO source tree itself as a realistic corpus — ~thousands of
+// We walk the K2 source tree itself as a realistic corpus — ~thousands of
 // files across nested directories, including .git, node_modules-class
 // exclusions, etc.
 
@@ -213,7 +213,7 @@ fn bench_file_walker(c: &mut Criterion) {
     let mut group = c.benchmark_group("file_walker");
     group.sample_size(20); // directory walk is slow, fewer samples
 
-    // Walk from the K2SO src-tauri root so we have a realistic tree.
+    // Walk from the K2 src-tauri root so we have a realistic tree.
     // Project root inferred from CARGO_MANIFEST_DIR (set by cargo).
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let walk_root = std::path::PathBuf::from(manifest_dir);

@@ -55,7 +55,7 @@ pub fn map_projects_path_unique(path: &str, err: impl std::fmt::Display) -> Stri
     }
 }
 
-/// Register an existing folder as a K2SO workspace — inserts rows in
+/// Register an existing folder as a K2 workspace — inserts rows in
 /// `projects` + `workspaces` under a transaction. Errors if the path
 /// is already registered.
 ///

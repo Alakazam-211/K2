@@ -8,8 +8,8 @@
 //! new worktree.
 //!
 //! Phase 2.1 (PRD A23) reframed delegation as a harness responsibility:
-//! K2SO no longer spawns sub-agent processes; the parent harness owns
-//! the spawn and K2SO just tracks the workspace state. The four public
+//! K2 no longer spawns sub-agent processes; the parent harness owns
+//! the spawn and K2 just tracks the workspace state. The four public
 //! frontmatter helpers ([`add_worktree_to_frontmatter`],
 //! [`strip_worktree_from_frontmatter`], [`update_assigned_by`],
 //! [`shorten_slug`]) are still used by the review queue (`reviews.rs`)

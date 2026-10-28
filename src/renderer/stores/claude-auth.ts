@@ -3,7 +3,7 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { withCliTokenQuery, withDaemonFetch } from '@/web/session-token'
 import { primaryScope } from '@/kessel/server-scope'
 
-// Phase 2 Unit 5 — Claude Auth scheduler lives in k2so-daemon
+// Phase 2 Unit 5 — Claude Auth scheduler lives in k2-daemon
 // (`/cli/claude-auth/*`). The Tauri-side `claude_auth_*` commands
 // were deleted along with `src-tauri/src/commands/claude_auth.rs`.
 // Helpers below call the daemon directly so the Settings panel

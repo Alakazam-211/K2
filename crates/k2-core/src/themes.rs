@@ -1,6 +1,6 @@
 //! Custom-theme management (Phase 2 Unit 6).
 //!
-//! Themes live as JSON files under `~/.k2so/themes/`. Each file is
+//! Themes live as JSON files under `~/.k2/themes/`. Each file is
 //! authored either by the AIFileEditor in Settings or copy-pasted by
 //! hand; both paths go through `create_template` first to seed a
 //! valid skeleton.
@@ -140,7 +140,7 @@ pub(crate) static HOME_LOCK: crate::test_env::SharedEnvLock = crate::test_env::S
 mod tests {
     //! Tests for the Phase 2 Unit 6 themes module.
     //!
-    //! `themes_dir()` hardcodes `crate::paths::home_dir().join(".k2so/themes")`,
+    //! `themes_dir()` hardcodes `crate::paths::home_dir().join(".k2/themes")`,
     //! so we install a fresh HOME for each test via a `HomeGuard` over
     //! `test_env::TempHome` (which holds the ONE crate-wide env lock).
     use super::*;
@@ -226,7 +226,7 @@ mod tests {
         let _g = TEST_LOCK.lock();
         let _h = HomeGuard::new();
         ensure_dir().expect("ensure_dir");
-        // /tmp/whatever — definitely not under ~/.k2so/themes.
+        // /tmp/whatever — definitely not under ~/.k2/themes.
         let escape = crate::test_env::unique_temp_path("not-a-theme").with_extension("json");
         fs::write(&escape, "{}").expect("seed file");
         let err = delete(escape.to_str().unwrap()).expect_err("must reject");

@@ -1005,7 +1005,7 @@ function ResetAllRow(): React.JSX.Element {
 // The shape returned by `daemon_status` is a tagged union — we dispatch
 // on `state` to decide which action buttons to show. Every button is a
 // thin wrapper over a Tauri command; the command handlers wrap
-// k2so_core::wake / launchctl. The frontend never touches launchctl
+// k2_core::wake / launchctl. The frontend never touches launchctl
 // directly.
 
 type DaemonStatusState =

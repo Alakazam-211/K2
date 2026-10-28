@@ -1,4 +1,4 @@
-//! Tauri command surface for the k2so-daemon.
+//! Tauri command surface for the k2-daemon.
 //!
 //! Exposes a tiny, frontend-facing view of the persistent-agent daemon's
 //! lifecycle — enough for a Settings panel to show "daemon: running
@@ -93,7 +93,7 @@ fn status_from(client: Result<DaemonClient, String>) -> DaemonStatusResponse {
     }
 }
 
-/// Locate the `k2so-daemon` binary bundled next to the current Tauri
+/// Locate the `k2-daemon` binary bundled next to the current Tauri
 /// executable. Matches the search path used by the first-launch
 /// migration so Install / Reinstall operations agree on which binary
 /// the plist should point at. Returns `Err` if the binary isn't

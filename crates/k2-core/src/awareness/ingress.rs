@@ -13,7 +13,7 @@
 //! become Bus activity.
 //!
 //! The inbox_root is resolved lazily from a process-wide default
-//! (`~/.k2so/awareness/inbox/`) so callers in different workspaces
+//! (`~/.k2/awareness/inbox/`) so callers in different workspaces
 //! don't have to thread the path through. Phase 4 adds per-workspace
 //! override via an ambient provider.
 
@@ -28,7 +28,7 @@ use crate::session::SessionId;
 
 /// Override for the default inbox root. Daemon sets this at startup
 /// so signal deliveries for cross-session targets land in the right
-/// project directory. Unset → `~/.k2so/awareness/inbox/` default.
+/// project directory. Unset → `~/.k2/awareness/inbox/` default.
 static INBOX_ROOT_OVERRIDE: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
 
 fn inbox_root_slot() -> &'static Mutex<Option<PathBuf>> {
@@ -49,7 +49,7 @@ pub fn clear_inbox_root_for_tests() {
 }
 
 /// Current effective inbox root. Override → default
-/// `~/.k2so/awareness/inbox/`. If home can't be resolved (headless
+/// `~/.k2/awareness/inbox/`. If home can't be resolved (headless
 /// container without $HOME), falls back to `/tmp/.k2so-awareness-inbox`
 /// so the pipeline still works — tests should prefer
 /// `set_inbox_root` over relying on the fallback.
@@ -110,7 +110,7 @@ pub fn from_session(
 }
 
 /// Route a signal emitted from outside any session (e.g. the
-/// `k2so msg` CLI). Caller supplies the workspace + from-agent
+/// `k2 msg` CLI). Caller supplies the workspace + from-agent
 /// directly since there's no session to infer from.
 pub fn from_cli(signal: AgentSignal) -> DeliveryReport {
     egress::deliver(&signal, &inbox_root())

@@ -1,5 +1,5 @@
 //! Daemon-side Active reaper (task #672, PRD
-//! `.k2so/prds/daemon-canonical-active.md` §4.3).
+//! `.k2/prds/daemon-canonical-active.md` §4.3).
 //!
 //! A single long-lived tokio task that OWNS the grace-reap of dormant
 //! workspace chat PTYs. It replaces the per-client renderer sweeps

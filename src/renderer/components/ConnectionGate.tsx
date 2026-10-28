@@ -465,7 +465,7 @@ export async function fetchBootStatus(timeoutMs = 2000): Promise<BootProbeResult
   } catch (err) {
     // Network error, timeout, port file missing, unparseable body — daemon
     // isn't reachable yet. Invalidate cached port so the next poll re-reads
-    // ~/.k2so/daemon.port (covers a kickstart-assigned port change).
+    // ~/.k2/daemon.port (covers a kickstart-assigned port change).
     invalidateDaemonWs()
     logRemotePath('boot-status', {
       kind: 'network',

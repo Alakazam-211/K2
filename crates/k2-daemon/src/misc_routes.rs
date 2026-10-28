@@ -1025,7 +1025,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         }
 
         // P5.6: DB-as-source-of-truth replacement for the legacy
-        // ~/.k2so/heartbeat-projects.txt file. heartbeat.sh now calls
+        // ~/.k2/heartbeat-projects.txt file. heartbeat.sh now calls
         // this once per cron tick and iterates the response, calling
         // /cli/scheduler-tick per project. Newline-delimited plain
         // text so bash can `while read` without a JSON parser.
@@ -1367,7 +1367,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         // daemon owns the onboarding routes (Phase 2.5c moved the
         // command surface out of the legacy `k2_core::agents::*`
         // umbrella). Daemon exposes the four ops over HTTP so the
-        // `k2so onboarding` CLI subcommand and any other headless
+        // `k2 onboarding` CLI subcommand and any other headless
         // caller can drive the same flow as the Tauri
         // `WorkspaceOnboardingModal`.
         // Adopt + Start Fresh fire the workspace-regen bridge —
@@ -1391,7 +1391,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                     ) {
                         Ok(outcome) => {
                             // Unit 7c: regen directly (workspace_regen
-                            // bridge retired — body lives in k2so-core).
+                            // bridge retired — body lives in k2-core).
                             k2_core::workspace::skill_regen::write_workspace_skill_file(&p);
                             respond(Ok::<_, String>(outcome))
                         }

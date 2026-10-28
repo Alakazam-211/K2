@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // #683 (0.39.39) — daemon-owned pinned-chat lifecycle, RENDERER cutover.
-// `.k2so/prds/daemon-owned-pinned-chat.md`.
+// `.k2/prds/daemon-owned-pinned-chat.md`.
 //
 // Verifies the renderer's reduced role against the FROZEN ensure-pinned-chat
 // contract:
@@ -533,7 +533,7 @@ describe('#683 daemon-owned path — broadcast re-attach / idle', () => {
     h.sessionHandlers.current!.onRemoved!({ agent_name: 'proj-1', workspace_path: '/ws' })
     await waitFor(() => expect(screen.queryByText('Chat session ended')).not.toBeNull())
 
-    // Daemon respawned (e.g. k2so msg find-or-spawn) → SessionAdded.
+    // Daemon respawned (e.g. k2 msg find-or-spawn) → SessionAdded.
     h.sessionHandlers.current!.onAdded!({
       agent_name: 'proj-1',
       workspace_path: '/ws',

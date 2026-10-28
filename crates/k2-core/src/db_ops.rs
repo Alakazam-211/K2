@@ -146,7 +146,7 @@ pub fn focus_groups_assign_project(
     )
     .map_err(|e| e.to_string())?;
 
-    // Write the focus group name to .k2so/config.json
+    // Write the focus group name to .k2/config.json
     let project = Project::get(&conn, project_id).map_err(|e| e.to_string())?;
     let group_name = match focus_group_id {
         Some(gid) => FocusGroup::get(&conn, gid).ok().map(|g| g.name),

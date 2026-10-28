@@ -3,8 +3,8 @@
 //!
 //! When a new work item lands in an agent's inbox while that agent
 //! isn't actively connected (e.g. via `k2 msg --inbox-wake`, or any other
-//! inbox writer), K2SO drops a [`ChannelEvent`] into a per-agent
-//! queue here. The agent's next wake (via `k2so checkin`
+//! inbox writer), K2 drops a [`ChannelEvent`] into a per-agent
+//! queue here. The agent's next wake (via `k2 checkin`
 //! or the `/cli/events` drain route) reads them all in one shot,
 //! empties the queue, and acts on them.
 //!
@@ -14,7 +14,7 @@
 //! model, not a durable queue.
 //!
 //! Serialization format (`type` / `message` / `priority` / `timestamp`)
-//! matches what the CLI's `k2so events` command consumes and what
+//! matches what the CLI's `k2 events` command consumes and what
 //! agents see in their wake context.
 
 use std::collections::{HashMap, VecDeque};

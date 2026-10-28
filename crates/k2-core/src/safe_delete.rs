@@ -20,7 +20,7 @@
 //! - The user manually created or edited content under it (their
 //!   code, AGENT.md they tweaked, work-item markdown they wrote,
 //!   skill layer files they authored).
-//! - K2SO created it but losing it would surprise the user
+//! - K2 created it but losing it would surprise the user
 //!   (CLAUDE.md, .aider.conf.yml, persona files).
 //! - It's the workspace root, a worktree, or any subtree thereof.
 //!
@@ -41,7 +41,7 @@
 //! - `awareness::inbox::drain`: same as above.
 //! - `agents::session::*_unlock`: `.lock` file removal.
 //! - Test cleanup paths: temp workspaces under `std::env::temp_dir()`.
-//! - launchd plist install/uninstall: K2SO-owned, recreatable.
+//! - launchd plist install/uninstall: K2-owned, recreatable.
 //!
 //! Each remaining `fs::remove_*` call site has an inline comment
 //! justifying why it's safe.

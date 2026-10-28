@@ -967,7 +967,7 @@ pub fn handle_agents_reap(_params: &HashMap<String, String>) -> CliResponse {
 }
 
 /// Build the `v2_session_map` lookup key for a workspace-addressed
-/// read (`k2so read <workspace> [--agent <name>]`).
+/// read (`k2 read <workspace> [--agent <name>]`).
 ///
 /// - **No agent** → the workspace's canonical (primary / coordinator)
 ///   session, keyed by the bare `project_id`

@@ -15,12 +15,12 @@
 //!   and spawns a PTY per agent via `spawn_wake_via_session_stream`
 //!   (when the project has `use_session_stream='on'`) or the
 //!   legacy `spawn_wake_headless` (otherwise). Called by
-//!   `~/.k2so/heartbeat.sh` on launchd's schedule.
+//!   `~/.k2/heartbeat.sh` on launchd's schedule.
 //!
 //! Phase 4 H7 retired Tauri's HTTP listener and pointed every
 //! /cli/* route at the daemon. An earlier iteration of this file
 //! put the destructive path at `/cli/agents/triage` — which
-//! silently changed user-facing `k2so agents triage` from
+//! silently changed user-facing `k2 agents triage` from
 //! "show me what's pending" to "launch everything that's pending"
 //! AND left `/cli/scheduler-tick` returning a bare decision list,
 //! which caused `heartbeat.sh` to silently no-op every tick. This
@@ -173,7 +173,7 @@ fn write_tick_gap_audit(project_path: &str, gap_secs: i64) {
 /// Handler for `/cli/heartbeat/active-projects` — newline-delimited
 /// list of project paths with at least one enabled, non-archived
 /// `workspace_heartbeats` row. Replaces the static
-/// `~/.k2so/heartbeat-projects.txt` file (which went stale because
+/// `~/.k2/heartbeat-projects.txt` file (which went stale because
 /// nothing kept it in sync with workspace creation/deletion).
 ///
 /// heartbeat.sh calls this once per cron tick and iterates the
@@ -347,7 +347,7 @@ pub fn handle_scheduler_fire(project_path: &str) -> String {
 
     let candidates = heartbeat::k2_agents_heartbeat_tick(project_path);
     // Cron tick uses the same smart_launch decision tree the Launch
-    // button + `k2so heartbeat launch` CLI use. The decision tree
+    // button + `k2 heartbeat launch` CLI use. The decision tree
     // (fresh / inject-into-live / resume-and-fire) handles
     // per-heartbeat session resume + audit row writing.
     //

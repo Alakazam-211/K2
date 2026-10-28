@@ -1,5 +1,5 @@
 //! 0.37.8 — `use_workspace_session` branch routes the heartbeat fire
-//! through `workspace_msg::deliver_live` (the `k2so msg --wake`
+//! through `workspace_msg::deliver_live` (the `k2 msg --wake`
 //! primitive) so the WAKEUP.md prompt lands in the workspace's pinned
 //! chat session instead of the heartbeat's own saved session.
 //!
@@ -14,7 +14,7 @@
 //!    stay UNTOUCHED on the new path — un-checking the flag must
 //!    leave the historical session intact.
 //! 4. A `heartbeat_fires` audit row is written with decision `fired`
-//!    so `k2so heartbeat status <name>` reflects the decision.
+//!    so `k2 heartbeat status <name>` reflects the decision.
 //!
 //! Test substitutes `claude` with `cat` via
 //! `K2SO_WAKE_HEADLESS_TEST_COMMAND` so we don't need claude on PATH

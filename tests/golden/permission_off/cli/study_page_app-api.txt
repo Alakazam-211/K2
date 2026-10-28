@@ -13,7 +13,7 @@ again on pass_invalid), or, on a guest's own calls, the session pass
 that guest's login returned. A login sent without the App pass is
 401 pass_required. Users and rooms use the App key
 ($K2_SECRETS_DIR/K2_APP_KEY) on /v1/apps/$K2_APP_ID/... instead.
-From K2's verb catalog, version 36.
+From K2's verb catalog, version 37.
 
 THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   Once per App (again after a K2 update), in the folder you deploy:

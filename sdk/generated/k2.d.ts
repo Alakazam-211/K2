@@ -517,13 +517,19 @@ export interface AppSecretCard {
   readonly answeredBy?: AppPostAuthor
   /** fetch, file or env. */
   readonly delivery?: string
+  /** The environment variable an env delivery uses. */
+  readonly envName?: string
   /** Seconds since the epoch, when a pending card expires. */
   readonly expiresAt?: number
   readonly hosts?: string[]
+  /** How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering. */
+  readonly inject?: { dst: string; fmt: string }
   readonly name: string
   readonly prompt?: string
   /** A k2v:// reference to the stored secret (never its value). */
   readonly ref?: string
+  /** A secret by this name already exists; Save replaces it. */
+  readonly replaces?: boolean
   /** workspace, server or session. */
   readonly scope?: string
   readonly secretKind?: string

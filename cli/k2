@@ -382,6 +382,10 @@ _cli_tool_id_for_verb() {
         # K2 vault: an `id` tool, so inside a K2 terminal the daemon sees the
         # session passport (agent-level), never the owner token.
         vault) echo "vault" ;;
+        # Box moves (prd-box-move-carry-v1): id + locked, so inside a K2
+        # terminal the daemon sees the session passport (its steps are held
+        # for the owner, with the permission card), never the owner token.
+        migrate) echo "migrate" ;;
         # k2 job (prd-vault-gaps-v1 item 5): id + locked, so inside a K2
         # terminal the daemon sees the session passport (its own workspace's
         # jobs only), never the owner token.
@@ -429,7 +433,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs|sim|chat) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs|sim|chat|migrate) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -437,7 +441,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs|sim|chat) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs|sim|chat|migrate) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -865,6 +869,13 @@ if [ "${1:-}" = "llm" ]; then
 fi
 # `k2 vault` / `k2 vault <verb> --help` only print help (no daemon needed).
 if [ "${1:-}" = "vault" ]; then
+    case "${2:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
+# `k2 migrate` / `k2 migrate <verb> --help` only print help (no daemon needed).
+if [ "${1:-}" = "migrate" ]; then
     case "${2:-}" in
         ""|help|--help|-h) _skip_conn_gate=1 ;;
         *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
@@ -25464,6 +25475,9 @@ if v.get("newerRows"):
     print("NEEDS UPDATE:   %s" % v.get("newerRows"))
 if v.get("rollback"):
     print("PROBLEM:        vault.db looks older than expected; the owner confirms in Settings → Vault")
+if v.get("movedOut"):
+    m = v["movedOut"]
+    print("FROZEN:         exported for a box move at %s (move key %s): reads work, writes wait. Called off? k2 migrate export-secrets --unfreeze" % (m.get("at"), m.get("moveKey")))
 print()
 print(v.get("honest", ""))
 if v.get("recoveryHint"):
@@ -26958,6 +26972,326 @@ for p in rows:
 if v.get("needNewerK2"): print("%d more need a newer K2 to read" % v["needNewerK2"])'
             ;;
         *) _vault_sub_usage placement; exit 2 ;;
+    esac
+}
+
+# ── k2 migrate (box moves carry the vault; prd-box-move-carry-v1) ────
+
+_migrate_help() {
+    cat <<'EOF'
+k2 migrate — move this K2 box's vault to new hardware (0.46.6+ on both boxes)
+
+The vault (every secret, including the K2 Connect tunnel token and the mail
+and database passwords) moves as one encrypted file. The old box's key never
+leaves it: the new box makes a one-time move key, the old box exports its
+vault to that key, and the new box re-wraps the vault to its own key.
+
+THE STEPS (in this order)
+  0. Final /home sync from the old box to the new one WITHOUT ~/.k2/vault/
+     (rsync --exclude .k2/vault/): an old vault.db copied over an imported
+     one breaks it (vault_substituted). Never copy
+     /var/lib/k2-root-helper/keep/ (the old box's key stays there). Start
+     the new box's daemon with its tunnel parked (k2 tunnel disable there).
+  1. NEW box:  k2 migrate import-secrets begin
+               prints the move key (age1…) and its fingerprint. Send both to
+               the old box's owner. The key lasts 24 h or one import; begin
+               again shows the same key (--new makes another, and files made
+               for the old one then no longer open).
+  2. OLD box:  stop its other agents and heartbeats, then
+               k2 migrate export-secrets --to age1… --out ~/move.k2mv
+               writes the file and FREEZES the old vault: reads keep working,
+               writes wait (vault_moved_out). Run it as late as you can, right
+               before the cut-over. Check the printed fingerprint is the one
+               the new box showed.
+  3. Copy the file from the old box to the new one (scp). It is encrypted to
+     the move key. Delete the old box's copy of the file once step 5 worked.
+  4. NEW box:  k2 migrate import-secrets ~/move.k2mv
+               without --apply it is a DRY RUN (it prints "DRY RUN — nothing
+               changed"): checks the file and lists what it holds (secret
+               counts, tunnel token present or MISSING, systemd credentials to
+               re-place). Anyone may run it.
+  5. NEW box:  k2 migrate import-secrets ~/move.k2mv --apply
+               replaces this box's vault (the old files go to
+               ~/.k2/vault/replaced-<time>/), works even when this box's vault
+               is closed (vault_key_missing). Then: k2 vault status (open,
+               rollback: false, the same secret count).
+  6. Re-place each systemd credential the import (and the dry run) lists:
+               k2 vault systemd-cred NAME --replace
+  The tunnel is never started by these steps; the token is inside the moved
+  vault. Hand the tunnel over as your move runbook says (the old box's frpc
+  stops first).
+
+WHO
+  export, import --apply, --undo and --unfreeze are for the box owner as a
+  person, with the vault confirm (Touch ID, the vault password or a K2
+  Connect owner login). Run from your own terminal or SSH login (not a K2
+  terminal), k2 asks for the confirm. Anyone else (an agent, a script, an
+  SSH session without a terminal) gets the step HELD as mv_… (exit 2, a
+  "HELD: …" line on stderr; with --json, "status": "held" on stdout).
+  Nothing runs yet:
+    owner:  k2 migrate approve mv_…        (own terminal; asks the confirm)
+    agent:  k2 permission request vault.move-approve request=mv_… --why "…"
+            (a card on the owner's Thread; they approve with the confirm)
+    anyone: k2 migrate status              (held steps: pending/done/failed,
+                                           and the result once it ran)
+  An approved step runs exactly as it was asked (an export writes its --out
+  file then). A held step waits 24 h, then expires: run the step again.
+  begin, status and the dry run need no approval (an agent may run them).
+  On a box whose vault is closed there is no vault confirm: there the
+  person's own terminal or SSH login (or a K2 Connect owner login) is the
+  check.
+
+CALLING IT OFF
+  New box, before the cut-over (before it takes over the tunnel):
+                                 k2 migrate import-secrets --undo
+                                 (puts the replaced vault back; keeps the
+                                 imported one in ~/.k2/vault/undone-<time>/)
+  Old box:                       k2 migrate export-secrets --unfreeze
+                                 (lifts the freeze and drops the move key)
+  Nothing on the old box is ever deleted by a move.
+
+REFUSALS (code: what to do)
+  move_key_wrong         the file was made for another move key: compare the
+                         fingerprints; export again to this box's key (k2
+                         migrate status shows it; begin only if it expired)
+  move_stale             a vault.db of the SAME vault on this box is newer than
+                         the file (the old box was unfrozen and wrote, and that
+                         vault.db reached this box): export again (the same
+                         move key works while it lasts)
+  move_file_bad          the file was changed or isn't a move file: copy again
+  move_file_needs_newer  made by a newer K2: update K2 on this box
+  no_move_key            run k2 migrate import-secrets begin first (24 h)
+  kek_rotation_pending   the old box is mid key rotation: finish it first
+  vault_moved_out (423)  this vault is frozen for a move (writes wait)
+  vault_substituted      a vault.db made with another box's key is in
+                         ~/.k2/vault/ (a sync copied it): import over it
+
+COMMANDS
+  k2 migrate status [--json]
+  k2 migrate import-secrets begin [--new] [--json]
+  k2 migrate export-secrets --to <age1…> --out <file> [--json]
+  k2 migrate export-secrets --unfreeze [--json]
+  k2 migrate import-secrets <file> [--apply] [--json]
+  k2 migrate import-secrets --undo [--json]
+  k2 migrate approve <mv_…> [--json]
+
+Exit: 0 done, 2 held for the owner (or a usage error; --json tells them
+apart), 3 refused, 4 not found.
+More: k2 study box-move
+EOF
+}
+
+# POST/GET a /cli/migrate/secrets route. Inside a K2 terminal it goes with
+# the session's passport (an agent: held, with the permission card hint);
+# elsewhere over vault.sock, where the daemon checks for a person.
+_migrate_send() {
+    local method="$1" route="$2" payload="${3:-}" tty="0" out
+    if [ -n "${K2_HOOK_SOCK:-}${K2_HOOK_TOKEN:-}${K2SO_HOOK_SOCK:-}${K2SO_HOOK_TOKEN:-}" ] || [ ! -S "$(_vault_sock)" ]; then
+        _sidecar_split "$(_sidecar_send "$method" "/cli/migrate/secrets/${route}" "$payload")"
+        return 0
+    fi
+    [ -t 0 ] && [ -t 1 ] && tty="1"
+    [ -t 0 ] && [ -t 2 ] && tty="1"
+    if [ "$method" = "GET" ]; then
+        out="$(curl -s -G --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
+            -H "X-K2-Tty: ${tty}" --connect-timeout 5 --max-time 600 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    else
+        out="$(printf '%s' "$payload" | curl -s -X POST --unix-socket "$(_vault_sock)" "http://localhost/cli/migrate/secrets/${route}" \
+            -H "X-K2-Tty: ${tty}" -H "Content-Type: application/json" --data-binary @- \
+            --connect-timeout 5 --max-time 600 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+    fi
+    _sidecar_split "$out"
+}
+
+# One gated step: send it; when the daemon asks for the vault confirm (a
+# person at a terminal), get it and send again. A held step exits 2.
+_migrate_step() {
+    local route="$1" payload="$2" as_json="$3" render="$4"
+    _migrate_send POST "$route" "$payload"
+    if [ "$_SC_STATUS" = "403" ] && printf '%s' "$_SC_BODY" | grep -q '"vault_confirm_required"'; then
+        local binding label tok
+        binding="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("confirm") or {}).get("secretId") or "")')"
+        label="$(printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("confirm") or {}).get("label") or "")')"
+        if [ -n "$binding" ]; then
+            tok="$(_vault_confirm_token vault-move "$binding" "$label")" || exit 3
+            payload="$(python3 -c 'import json,sys; o=json.loads(sys.argv[1]); o["confirmToken"]=sys.argv[2]; print(json.dumps(o))' "$payload" "$tok")"
+            _migrate_send POST "$route" "$payload"
+        fi
+    fi
+    _migrate_finish "$as_json" "$render"
+}
+
+# Print a migrate answer: --json raw; a hold → its hint, exit 2; a refusal
+# → code: hint, exit 3/4/…; else the step's own rendering.
+_migrate_finish() {
+    local as_json="$1" render="${2:-plain}"
+    if [ "$_SC_STATUS" = "202" ]; then
+        if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; else
+            printf '%s' "$_SC_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("HELD: " + v.get("hint",""))' >&2
+        fi
+        exit 2
+    fi
+    if [ "$_SC_STATUS" != "200" ]; then
+        if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; exit "$(_vault_exit_for "$_SC_STATUS")"; fi
+        [ "$_SC_STATUS" = "000" ] && { echo "vault_unavailable: the K2 daemon didn't answer (is it running on this machine?)" >&2; exit 1; }
+        _vault_fail "$_SC_STATUS" "$_SC_BODY"
+    fi
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_SC_BODY"; return 0; fi
+    printf '%s' "$_SC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+kind = sys.argv[1]
+if kind == "plain":
+    # k2 migrate approve: the held step it ran, by its answer.
+    kind = "export" if "out" in v else "unfreeze" if "wasFrozen" in v else "undo" if "undone" in v else "import" if "replaced" in v else "plain"
+def key(k):
+    k = k or {}
+    return "%s  (fingerprint %s, expires %s)" % (k.get("recipient"), k.get("fingerprint"), k.get("expiresAt"))
+def creds(v):
+    c = v.get("systemdCreds") or []
+    if c:
+        print("re-place:     " + ", ".join("%s (%s)" % (x.get("secret"), x.get("unit")) for x in c))
+        print("              k2 vault systemd-cred NAME --replace, for each")
+if kind == "begin":
+    print(("new move key: " if v.get("created") else "move key:     ") + key(v.get("moveKey")))
+    print("next:         on the OLD box: k2 migrate export-secrets --to %s --out ~/move.k2mv" % (v.get("moveKey") or {}).get("recipient"))
+elif kind == "export":
+    print("exported:     %s (%s bytes) for move key %s" % (v.get("out"), v.get("bytes"), v.get("moveKey")))
+    s = v.get("secrets") or {}
+    print("vault:        %s gen %s, %s yours / %s K2 system secrets" % (v.get("vaultId"), v.get("gen"), s.get("user"), s.get("system")))
+    print("FROZEN:       this vault reads but refuses writes until the move is done or called off")
+    print("next:         " + (v.get("next") or ""))
+elif kind == "unfreeze":
+    print("unfrozen:     writes work again; the move key holder is gone" if v.get("wasFrozen") else "not frozen")
+elif kind == "dry":
+    s = v.get("secrets") or {}
+    src = v.get("source") or {}
+    print("DRY RUN — nothing changed")
+    print("vault:        %s gen %s, %s yours / %s K2 system secrets" % (v.get("vaultId"), v.get("gen"), s.get("user"), s.get("system")))
+    print("from:         %s (%s%s), exported %s" % (src.get("host") or "?", v.get("sourceKeyHome"), (", tunnel " + src["tunnelSubdomain"]) if src.get("tunnelSubdomain") else "", v.get("exportedAt")))
+    print("tunnel token: " + str(v.get("tunnelToken")))
+    creds(v)
+    r = v.get("replaces") or {}
+    if r.get("open"):
+        print("replaces:     this box’s vault %s (%s yours); it is kept in ~/.k2/vault/replaced-<time>/" % (r.get("vaultId"), r.get("userSecrets")))
+    else:
+        print("replaces:     this box’s closed vault (%s); kept in ~/.k2/vault/replaced-<time>/" % r.get("error"))
+    print("next:         " + (v.get("next") or ""))
+elif kind == "import":
+    s = v.get("secrets") or {}
+    print("imported:     %s gen %s, key home %s, rollback %s" % (v.get("vaultId"), v.get("gen"), v.get("keyHome"), "yes" if v.get("rollback") else "no"))
+    print("secrets:      %s yours / %s K2 system" % (s.get("user"), s.get("system")))
+    print("tunnel token: " + str(v.get("tunnelToken")))
+    creds(v)
+    print("replaced:     " + str(v.get("replaced")))
+    for line in v.get("next") or []:
+        print("next:         " + line)
+elif kind == "undo":
+    vv = v.get("vault") or {}
+    print("undone:       the import of %s; the replaced vault is back (%s)" % (v.get("undone"), "open" if vv.get("open") else "closed: " + str(vv.get("error"))))
+    print(v.get("note") or "")
+elif kind == "status":
+    vv = v.get("vault") or {}
+    if vv.get("open"):
+        print("vault:        open (%s, key home %s)" % (vv.get("vaultId"), vv.get("keyHome")))
+    else:
+        e = vv.get("error") or {}
+        print("vault:        CLOSED — %s: %s" % (e.get("code"), e.get("hint")))
+    f = v.get("frozen")
+    print("frozen:       " + ("YES since %s for move key %s (k2 migrate export-secrets --unfreeze to call it off)" % (f.get("at"), f.get("moveKey")) if f else "no"))
+    print("move key:     " + (key(v.get("moveKey")) if v.get("moveKey") else "none (k2 migrate import-secrets begin)"))
+    li = v.get("lastImport")
+    print("last import:  " + ("%s at %s (undo: k2 migrate import-secrets --undo)" % (li.get("vaultId"), li.get("at")) if li else "none"))
+    for h in v.get("held") or []:
+        print("held:         %s %-8s %-8s by %s, expires %s" % (h.get("id"), h.get("step"), h.get("status"), h.get("by"), h.get("expiresAt")))
+else:
+    print(json.dumps(v, indent=2))
+' "$render"
+}
+
+cmd_migrate() {
+    local sub="${1:-}"
+    [ $# -gt 0 ] && shift
+    case "$sub" in
+        ""|-h|--help|help) _migrate_help; return 0 ;;
+        status)
+            local as_json=0
+            [ "${1:-}" = "--json" ] && as_json=1
+            _migrate_send GET status ""
+            _migrate_finish "$as_json" status
+            ;;
+        approve)
+            local id="" as_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=1; shift ;;
+                    -h|--help) echo "k2 migrate approve <mv_…> — run a held move step (box owner, own terminal; asks the vault confirm)"; return 0 ;;
+                    -*) echo "usage: k2 migrate approve <mv_…> [--json]" >&2; exit 2 ;;
+                    *) id="$1"; shift ;;
+                esac
+            done
+            [ -n "$id" ] || { echo "usage: k2 migrate approve <mv_…> (k2 migrate status lists held steps)" >&2; exit 2; }
+            local kind="plain"
+            _migrate_step approve "$(python3 -c 'import json,sys; print(json.dumps({"request": sys.argv[1]}))' "$id")" "$as_json" "$kind"
+            ;;
+        export-secrets)
+            local to="" out="" unfreeze=0 as_json=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --to) to="${2:-}"; shift 2 ;;
+                    --out|-o) out="${2:-}"; shift 2 ;;
+                    --unfreeze) unfreeze=1; shift ;;
+                    --json) as_json=1; shift ;;
+                    -h|--help) _migrate_help; return 0 ;;
+                    *) echo "usage: k2 migrate export-secrets --to <age1…> --out <file> | --unfreeze (k2 migrate --help)" >&2; exit 2 ;;
+                esac
+            done
+            if [ "$unfreeze" = "1" ]; then
+                _migrate_step unfreeze '{}' "$as_json" unfreeze
+                return 0
+            fi
+            [ -n "$to" ] && [ -n "$out" ] || { echo "usage: k2 migrate export-secrets --to <age1… from the new box> --out <file>" >&2; exit 2; }
+            case "$out" in /*) ;; *) out="$(pwd)/$out" ;; esac
+            _migrate_step export "$(python3 -c 'import json,sys; print(json.dumps({"to": sys.argv[1], "out": sys.argv[2]}))' "$to" "$out")" "$as_json" export
+            ;;
+        import-secrets)
+            local file="" apply=0 undo=0 new=0 as_json=0 begin=0
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    begin) begin=1; shift ;;
+                    --new) new=1; shift ;;
+                    --apply) apply=1; shift ;;
+                    --undo) undo=1; shift ;;
+                    --json) as_json=1; shift ;;
+                    -h|--help) _migrate_help; return 0 ;;
+                    -*) echo "usage: k2 migrate import-secrets begin | <file> [--apply] | --undo (k2 migrate --help)" >&2; exit 2 ;;
+                    *) file="$1"; shift ;;
+                esac
+            done
+            if [ "$begin" = "1" ]; then
+                _migrate_send POST begin "$(python3 -c 'import json,sys; print(json.dumps({"new": sys.argv[1] == "1"}))' "$new")"
+                _migrate_finish "$as_json" begin
+                return 0
+            fi
+            if [ "$undo" = "1" ]; then
+                _migrate_step undo '{}' "$as_json" undo
+                return 0
+            fi
+            [ -n "$file" ] || { echo "usage: k2 migrate import-secrets <file> [--apply] (or: begin, --undo)" >&2; exit 2; }
+            case "$file" in /*) ;; *) file="$(pwd)/$file" ;; esac
+            local body
+            body="$(python3 -c 'import json,sys; print(json.dumps({"file": sys.argv[1], "apply": sys.argv[2] == "1"}))' "$file" "$apply")"
+            if [ "$apply" = "1" ]; then
+                _migrate_step import "$body" "$as_json" import
+            else
+                _migrate_send POST import "$body"
+                _migrate_finish "$as_json" dry
+            fi
+            ;;
+        *)
+            echo "usage: k2 migrate status | import-secrets … | export-secrets … | approve mv_… (k2 migrate --help)" >&2
+            exit 2
+            ;;
     esac
 }
 
@@ -28639,6 +28973,10 @@ if not d.get("running"):
         print("  State:      RELEASED — this device is unpaired (re-pair to mint a fresh identity)")
     elif d.get("enabled") is False:
         print("  State:      DISABLED (by you, persisted) — re-enable with: k2 tunnel enable")
+    # prd-box-move-carry-v1 BM-A12: a closed vault holds the token; the
+    # device is still paired. Older daemons omit it.
+    if d.get("token_locked"):
+        print("  Token:      LOCKED — " + d["token_locked"])
 if d.get("running"):
     public_url = d.get("public_url") or "(assigned by server)"
     print(f"  Public URL: {public_url}")
@@ -38573,7 +38911,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile skins feedback-loop ticket-brief zen sidecars llm-tokens llm-accounts publish-framing compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
 
 _study_usage() {
     cat <<'EOF'
@@ -38595,7 +38933,7 @@ Topics:
   compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  db-upgrade  jobs
-  folder-trust  email-notifications
+  folder-trust  email-notifications  box-move
 EOF
 }
 
@@ -38644,6 +38982,7 @@ _study_title() {
         jobs) echo "Scheduled jobs the daemon runs" ;;
         folder-trust) echo "Who may start AI tools in a folder" ;;
         email-notifications) echo "One-way email from senders no agent can read" ;;
+        box-move) echo "Moving a box: the vault and the tunnel token" ;;
         notifications) echo "Thread posts and phone pushes" ;;
         data-sources) echo "Data sources and triggers" ;;
         projects) echo "K2 projects and who may change them" ;;
@@ -38759,6 +39098,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   design              Design notes from a page: the shape, k2 browser note, answer in Thread
   folder-trust        Folder trust: the card, asking vs deciding, re-scan, honest limits
   email-notifications  Email from senders: K2's resets, an App's email.send, scope, limits
+  box-move            Move a box: carry the vault (tunnel token too), freeze, undo, who confirms
 
 Usage: k2 study [list|<topic>|--json]
 EOF
@@ -38829,8 +39169,84 @@ _study_page() {
         permissions) _study_page_permissions ;;
         garden-access) _study_page_garden_access ;;
         garden-changes) _study_page_garden_changes ;;
+        box-move) _study_page_box_move ;;
         *) return 1 ;;
     esac
+}
+
+_study_page_box_move() {
+    cat <<'EOF'
+k2 study box-move — moving a box: the vault and the tunnel token
+
+WHY A STEP OF ITS OWN
+  Copying /home moves vault.db but not the key that opens it: on a Linux box
+  the key lives with the root helper (/var/lib/k2-root-helper/keep/), on a
+  Mac in the Keychain. A copied vault.db alone stays closed
+  (vault_key_missing), and the K2 Connect tunnel token is a secret IN the
+  vault, so the box also can't connect. k2 tunnel status then says
+  "Token: LOCKED — the tunnel token is in the vault, which isn't open", not
+  "not paired".
+
+HOW THE MOVE WORKS
+  The old box's key never leaves it. The new box makes a one-time move key;
+  the old box wraps its vault's data key to that move key and writes one
+  encrypted file; the new box opens it and re-wraps the data key to its own
+  key. Every secret moves: yours, the tunnel token, mail and database
+  passwords. Works between any key homes (Mac Keychain, root helper,
+  systemd credentials, a file key).
+
+THE ORDER (both boxes on 0.46.6+)
+  1. Final /home sync WITHOUT ~/.k2/vault/ (rsync --exclude .k2/vault/):
+     an old vault.db synced over the imported one breaks it
+     (vault_substituted). Never copy /var/lib/k2-root-helper/keep/: the old
+     box's key stays where it is.
+  2. Start the new box's daemon with the tunnel parked (k2 tunnel disable).
+  3. NEW: k2 migrate import-secrets begin      → age1… + fingerprint
+  4. OLD: stop agents and heartbeats, then
+          k2 migrate export-secrets --to age1… --out ~/move.k2mv
+     The old vault is now FROZEN: it reads, writes wait (vault_moved_out).
+  5. Copy the file from the old box to the new one (scp, from either side).
+     Delete the old box's copy of the FILE once the import worked (never
+     its vault).
+  6. NEW: k2 migrate import-secrets ~/move.k2mv           (dry run: no --apply)
+          k2 migrate import-secrets ~/move.k2mv --apply
+  7. NEW: k2 vault status → open, rollback: false, the secret count;
+     the import said "tunnel token: present".
+  8. NEW: k2 vault systemd-cred NAME --replace for each credential the
+     import listed (they are tied to the old machine).
+  9. Then tombstone the old box and hand over the tunnel, as usual. Nothing
+     here starts the tunnel; its token is in the moved vault.
+
+WHO DOES WHAT
+  begin, status and the dry run: the owner, an admin, or an agent.
+  export, import --apply, --undo, --unfreeze: the box OWNER, as a person,
+  with the vault confirm. From your own terminal or SSH login K2 asks for it
+  (Touch ID, the vault password; a K2 Connect owner login uses its own
+  password). An agent, a script or an SSH session without a terminal never
+  runs these: the step is HELD as mv_… (exit 2) for the owner, who runs
+  k2 migrate approve mv_… or taps the Thread card an agent asks for with
+  k2 permission request vault.move-approve request=mv_…
+  Once approved, the step runs as it was asked; k2 migrate status shows it.
+  A box whose vault is closed has no confirm to take: there the person's
+  own terminal or SSH login, or a Connect owner login, imports.
+
+IF IT GOES WRONG
+  The import checks the file's signature, its hash, the move key, the audit
+  chain and the secret count; a failed check puts this box's files back by
+  itself. move_stale: a vault.db of the same vault already on the new box is
+  NEWER than the file (the old box was unfrozen and wrote, and its vault.db
+  reached the new box): export again, to the same move key while it lasts.
+  Call it off: NEW k2 migrate import-secrets --undo (before the cut-over);
+  OLD k2 migrate export-secrets --unfreeze. Nothing on the old box is ever
+  deleted. After the cut-over, secrets changed on the new box aren't on the
+  old one: k2 vault audit on the new box lists them.
+
+AFTER
+  Optional clean break: k2 vault rekey on the new box (a new data key; an
+  old copy of the vault could not read secrets added after).
+
+More: k2 migrate --help   k2 study vault
+EOF
 }
 
 _study_page_sim() {
@@ -48189,6 +48605,12 @@ TUNNEL (device → primary *.k2.dev; not custom DNS zones)
   tunnel status [--json]                        Running? + public URL
   tunnel subdomains [--json]                    Daemon-cached nested map (label -> target + workspace)
   tunnel --help                                 Product boundary vs publish/dns
+
+BOX MOVES (carry the vault, incl. the tunnel token, to new hardware)
+  migrate import-secrets begin                  New box: a one-time move key (age1…)
+  migrate export-secrets --to age1… --out FILE  Old box: export + freeze (owner confirms)
+  migrate import-secrets FILE [--apply]         New box: check, then adopt (owner confirms)
+  migrate status | approve mv_… | --help        Held steps, undo, unfreeze: k2 migrate --help
 
 APPS (guests / roles / tokens for apps on this box; not desktop updates)
   app user|role|token|hydra|front-door ...      Canonical family. See `k2 app --help`.
@@ -75580,6 +76002,10 @@ EOF
     vault)
         # K2 vault (prd-k2-vault-v1 §14).
         shift; cmd_vault "$@"
+        ;;
+    migrate)
+        # Box moves carry the vault (prd-box-move-carry-v1).
+        shift; cmd_migrate "$@"
         ;;
     job|jobs)
         # Daemon-run scheduled jobs (prd-vault-gaps-v1 item 5).

@@ -19,6 +19,6 @@ Topics:
   compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
   garden-data  garden-access  garden-changes  changes  sim  db-upgrade  jobs
-  folder-trust  email-notifications
+  folder-trust  email-notifications  box-move
 --- stderr
 --- requests

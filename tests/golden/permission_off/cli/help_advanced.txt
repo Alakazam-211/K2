@@ -47,6 +47,12 @@ TUNNEL (device → primary *.k2.dev; not custom DNS zones)
   tunnel subdomains [--json]                    Daemon-cached nested map (label -> target + workspace)
   tunnel --help                                 Product boundary vs publish/dns
 
+BOX MOVES (carry the vault, incl. the tunnel token, to new hardware)
+  migrate import-secrets begin                  New box: a one-time move key (age1…)
+  migrate export-secrets --to age1… --out FILE  Old box: export + freeze (owner confirms)
+  migrate import-secrets FILE [--apply]         New box: check, then adopt (owner confirms)
+  migrate status | approve mv_… | --help        Held steps, undo, unfreeze: k2 migrate --help
+
 APPS (guests / roles / tokens for apps on this box; not desktop updates)
   app user|role|token|hydra|front-door ...      Canonical family. See `k2 app --help`.
   leftover: k2 skin … and k2 skin-token …       Same argv; teach line on stderr.

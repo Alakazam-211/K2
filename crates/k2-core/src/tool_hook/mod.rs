@@ -207,6 +207,9 @@ pub enum Cause {
     /// An App was removed from the box (Sew 0.5.0: its Spaces are
     /// unbound in Sew).
     AppRemoved,
+    /// A Space binding was dropped by hand (`k2 hostchat app-space
+    /// unbind`; Sew 0.5.0: unbound in Sew too).
+    SpaceUnbound,
 }
 
 impl Cause {
@@ -228,6 +231,7 @@ impl Cause {
             Cause::PassMint => "pass_mint",
             Cause::OwnerLinked => "owner_linked",
             Cause::AppRemoved => "app_removed",
+            Cause::SpaceUnbound => "space_unbound",
         }
     }
 }
@@ -971,10 +975,7 @@ pub fn apply_reconcile(
         // The orphan deprovisions above are this sweep's own open rows.
         busy.extend(orphan_ops.iter().map(|o| o.subject_key.clone()));
         let held = outbox::held_subjects(&tx, kind)?;
-        // Sew 0.5.0: once the managed-fields policy is K2's, no provision
-        // carries title/pronouns (they are the members' own).
-        let own = kind == CHAT_KIND && policy::members_own_title_and_pronouns(&tx)?;
-        let (planned, mut summary) = reconcile::plan_with(&built.desired, actual, &busy, &held, own);
+        let (planned, mut summary) = reconcile::plan(&built.desired, actual, &busy, &held);
         summary.orphans_removed = built.orphans.len();
         let mut ops = orphan_ops;
         ops.extend(planned.into_iter().map(|p| p.into_new_op(kind)));
@@ -1042,8 +1043,9 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
         let busy = outbox::busy_subjects(&tx, kind)?;
         let mut ops = home::plan(&tx, &busy)?;
         ops.extend(policy::plan(&tx, &busy)?);
-        ops.extend(app_space::plan_unbinds(&tx, &busy)?);
-        let n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
+        let mut n = outbox::enqueue(&tx, &ops, ACTOR_RECONCILE, now)?.len();
+        // Unbinds go under the actor who asked for each.
+        n += app_space::queue_unbinds(&tx, now)?;
         tx.commit().map_err(|e| format!("settings commit: {e}"))?;
         Ok(n)
     })?;
@@ -1187,6 +1189,8 @@ pub fn app_space_bind(
 
 /// Forget `app` ↔ `space`. Members stay unless `remove_members` (then only
 /// the members K2 added automatically leave; S32 Q3, Rosson 2026-10-27).
+/// Sew 0.5.0 (`space_unbind`): the Space is unbound in Sew too (a
+/// read-only orphan), after any member removes this queues.
 pub fn app_space_unbind(
     app_id: &str,
     space_id: &str,
@@ -1197,6 +1201,12 @@ pub fn app_space_unbind(
     let r = crate::skin::with_skin_conn(|conn| {
         let gone = app_space::unbind(conn, app_id, space_id, remove_members, actor, now)?;
         let s = app_space::reconcile(conn, actor, now)?;
+        if gone {
+            let tx = conn.unchecked_transaction().map_err(|e| format!("app space unbind begin: {e}"))?;
+            app_space::want_unbind(&tx, app_id, space_id, Cause::SpaceUnbound, actor, now)?;
+            app_space::queue_unbinds(&tx, now)?;
+            tx.commit().map_err(|e| format!("app space unbind commit: {e}"))?;
+        }
         Ok((gone, s))
     })?;
     kick();
@@ -1218,10 +1228,7 @@ pub fn app_spaces_app_removed(service_id: &str, actor: &str) -> Result<Vec<Strin
         let spaces = app_space::app_removed(&tx, service_id, actor, now)?;
         let mut queued = 0;
         if !spaces.is_empty() {
-            let busy = outbox::busy_subjects(&tx, CHAT_KIND)?;
-            let mut ops = app_space::plan_unbinds(&tx, &busy)?;
-            ops.retain(|o| spaces.iter().any(|s| o.subject_key == app_space::unbind_subject(s)));
-            queued = outbox::enqueue(&tx, &ops, actor, now)?.len();
+            queued = app_space::queue_unbinds(&tx, now)?;
         }
         tx.commit().map_err(|e| format!("app removed commit: {e}"))?;
         Ok((spaces, queued))
@@ -1244,13 +1251,13 @@ pub fn app_space_unbinds() -> Result<Vec<app_space::Unbind>, String> {
     crate::skin::with_skin_conn(app_space::unbinds)
 }
 
-/// `title` and `pronouns` are the members' own on this box's Sew
-/// ([`policy::members_own_title_and_pronouns`]).
-pub fn members_own_title_and_pronouns() -> Result<bool, String> {
+/// Sew shows K2's managed-fields policy ([`policy::is_set`]): K2 is the
+/// only writer of the name, title, pronouns and picture.
+pub fn sew_policy_is_k2s() -> Result<bool, String> {
     if !skin_store_exists() {
         return Ok(false);
     }
-    crate::skin::with_skin_conn(policy::members_own_title_and_pronouns)
+    crate::skin::with_skin_conn(policy::is_set)
 }
 
 /// A new Sew install id: store it and re-provision the owner (the new
@@ -1324,7 +1331,17 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
         policy::after_done(conn, id, result, now)?;
         app_space::after_done_unbind(conn, id, result, now)?;
         // K31: a delivered Space op moves the membership ledger on.
-        app_space::after_done(conn, id, now)
+        app_space::after_done(conn, id, now)?;
+        // Sew 0.5.0: an unbind waiting for its Space's member removes can
+        // go once they are delivered.
+        let removed = conn
+            .query_row("SELECT op FROM tool_outbox WHERE id = ?1", rusqlite::params![id], |r| r.get::<_, String>(0))
+            .optional()
+            .map_err(|e| format!("tool_outbox read: {e}"))?;
+        if removed.as_deref().and_then(Op::parse) == Some(Op::SpaceMemberRemove) {
+            app_space::queue_unbinds(conn, now)?;
+        }
+        Ok(())
     })
 }
 

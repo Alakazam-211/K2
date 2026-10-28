@@ -1,16 +1,22 @@
-//! Sew 0.5.0 (`k2_managed_avatar`): K2 owns the name and the picture.
+//! Sew 0.5.0 (`k2_managed_avatar`): K2 owns the person's profile in Sew.
 //!
 //! Once Sew reports the [`super::features::K2_MANAGED_AVATAR`] flag, K2
 //! makes the install's org policy `identity.managed_fields` exactly
-//! `["display_name", "avatar"]` (compared **as a set**; order is not
-//! significant). With it set:
-//! - a member can't upload or clear their own picture (Sew answers 403
-//!   `policy_denied`, reason `managed_by_provider`); K2's `force=true`
-//!   pushes ([`super::avatar`]) are the only writer;
-//! - `title` and `pronouns` become the member's own fields, so **K2 stops
-//!   sending them** ([`members_own_title_and_pronouns`]): a provision no
-//!   longer copies them back from Sew's member list (A8's round trip), and
-//!   K2's `principals/update` never carries them.
+//! `["display_name", "title", "pronouns", "avatar"]` (compared **as a
+//! set**; order is not significant). With it set, a member can't edit those
+//! fields in Sew (their own avatar upload or clear answers 403
+//! `policy_denied`, reason `managed_by_provider`), and K2's `force=true`
+//! pushes ([`super::avatar`]) are the only picture writer.
+//!
+//! **Why title and pronouns stay K2's (Sew 2026-10-28, option a).** Sew
+//! 0.5.0's `principals/provision` is a declarative upsert: an absent
+//! `title` or `pronouns` CLEARS it. If they were the member's own, every
+//! re-provision (a guest flip, an assistant re-pin, a reconcile repair)
+//! would race the member's edits. So K2 keeps sending them (A8: a provision
+//! to an existing member carries the values Sew's member list holds) and
+//! keeps them managed. Sew 0.5.1 makes provision leave member-owned fields
+//! alone; then K2 can narrow the set to `[display_name, avatar]` and stop
+//! sending title/pronouns (a 0.46.7 follow-up, gated on Sew 0.5.1).
 //!
 //! **Reconcile, never assume.** The sweep reads `GET /mgmt/v1/policies`
 //! (`{"policies": {...}}`; an absent key is Sew's default
@@ -21,13 +27,13 @@
 //!
 //! | Op | Sew call | Body |
 //! |---|---|---|
-//! | `policy_set` | `POST /mgmt/v1/policies` | `{"changes": {"identity.managed_fields": ["display_name", "avatar"]}}` |
+//! | `policy_set` | `POST /mgmt/v1/policies` | `{"changes": {"identity.managed_fields": ["display_name", "title", "pronouns", "avatar"]}}` |
 //!
 //! Sew's answer is `200 {policies}`; the same value again is a no-op there
 //! (no audit row), and a duplicate or unknown value is `400
 //! validation_failed` (the row blocks loudly). A Sew without the flag (0.3.x)
-//! never sees the call, and K2 keeps today's behaviour there. A new install
-//! (purge, reinstall) forgets what K2 saw, so the next sweep sets it again.
+//! never sees the call. A new install (purge, reinstall) forgets what K2
+//! saw, so the next sweep sets it again.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
@@ -38,8 +44,9 @@ use super::{features, Cause, NewOp, Op, CHAT_KIND};
 pub const MGMT_POLICIES: &str = "/mgmt/v1/policies";
 /// The policy key K2 sets.
 pub const MANAGED_FIELDS: &str = "identity.managed_fields";
-/// The fields K2 owns once Sew manages the avatar for it.
-pub const K2_MANAGED_FIELDS: [&str; 2] = ["display_name", "avatar"];
+/// The fields K2 owns in Sew 0.5.0 (option a: title and pronouns stay
+/// K2's until Sew 0.5.1's provision leaves member-owned fields alone).
+pub const K2_MANAGED_FIELDS: [&str; 4] = ["display_name", "title", "pronouns", "avatar"];
 /// Outbox subject of the `policy_set` row.
 pub const SUBJECT: &str = "policy:identity.managed_fields";
 
@@ -57,8 +64,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
 }
 
 /// Is `v` (the policy's value as Sew showed it; `None` = absent, Sew's
-/// default) exactly K2's set? Order is not significant; anything that is
-/// not a list of strings is not K2's.
+/// default) exactly K2's set? Order is not significant; a duplicate, or
+/// anything that is not a list of strings, is not K2's.
 pub fn is_k2_set(v: Option<&Value>) -> bool {
     let Some(Value::Array(items)) = v else { return false };
     let mut have: Vec<&str> = Vec::with_capacity(items.len());
@@ -108,9 +115,8 @@ pub fn seen_is_k2(conn: &Connection) -> Result<Option<bool>, String> {
         .map_err(|e| format!("sew policy read: {e}"))
 }
 
-/// `title` and `pronouns` are the member's own (K2 must not send them):
-/// Sew reports `k2_managed_avatar` AND its policy is K2's set.
-pub fn members_own_title_and_pronouns(conn: &Connection) -> Result<bool, String> {
+/// Sew reports `k2_managed_avatar` AND last showed K2's set.
+pub fn is_set(conn: &Connection) -> Result<bool, String> {
     Ok(features::has(conn, CHAT_KIND, features::K2_MANAGED_AVATAR)? && seen_is_k2(conn)? == Some(true))
 }
 
@@ -167,16 +173,19 @@ mod tests {
 
     #[test]
     fn k2s_set_is_compared_as_a_set() {
-        assert!(is_k2_set(Some(&json!(["display_name", "avatar"]))));
-        assert!(is_k2_set(Some(&json!(["avatar", "display_name"]))), "order is not significant");
+        assert!(is_k2_set(Some(&json!(["display_name", "title", "pronouns", "avatar"]))));
+        assert!(is_k2_set(Some(&json!(["avatar", "pronouns", "display_name", "title"]))), "order is not significant");
         assert!(!is_k2_set(None), "absent = Sew's default, not K2's");
         assert!(!is_k2_set(Some(&json!(["display_name", "title", "pronouns"]))), "Sew's default");
-        assert!(!is_k2_set(Some(&json!(["display_name"]))));
-        assert!(!is_k2_set(Some(&json!(["display_name", "avatar", "title"]))));
-        assert!(!is_k2_set(Some(&json!(["display_name", "avatar", "avatar"]))), "a duplicate is not the set");
-        assert!(!is_k2_set(Some(&json!("display_name,avatar"))));
-        assert!(!is_k2_set(Some(&json!(["display_name", 1]))));
-        assert_eq!(set_body(), json!({"changes": {"identity.managed_fields": ["display_name", "avatar"]}}));
+        assert!(!is_k2_set(Some(&json!(["display_name", "avatar"]))), "the 0.5.1 narrowing, not 0.5.0's");
+        assert!(!is_k2_set(Some(&json!(["display_name", "title", "pronouns", "avatar", "email"]))));
+        assert!(!is_k2_set(Some(&json!(["display_name", "title", "pronouns", "avatar", "avatar"]))), "a duplicate is not the set");
+        assert!(!is_k2_set(Some(&json!("display_name,title,pronouns,avatar"))));
+        assert!(!is_k2_set(Some(&json!(["display_name", "title", "pronouns", 1]))));
+        assert_eq!(
+            set_body(),
+            json!({"changes": {"identity.managed_fields": ["display_name", "title", "pronouns", "avatar"]}})
+        );
     }
 
     #[test]

@@ -179,6 +179,9 @@ struct State {
     policy_default_shown: bool,
     /// `GET /mgmt/v1/policies` answers 503.
     policy_get_fails: bool,
+    /// Provisions that cleared a title or pronouns an existing member had
+    /// (Sew 0.5.0's provision clears an absent one).
+    profile_clears: Vec<String>,
 }
 
 pub struct FakeSew {
@@ -291,6 +294,11 @@ impl FakeSew {
     /// `GET /mgmt/v1/policies` answers 503 while `on`.
     pub fn set_policy_get_fails(&self, on: bool) {
         self.with(|s| s.policy_get_fails = on)
+    }
+    /// Every provision that cleared a title or pronouns an existing member
+    /// had (the clear is applied, as the real Sew 0.5.0 does).
+    pub fn profile_clears(&self) -> Vec<String> {
+        self.with(|s| s.profile_clears.clone())
     }
     pub fn set_token(&self, t: &str) {
         self.with(|s| s.token = t.into())
@@ -844,14 +852,6 @@ const MANAGED_FIELDS: &str = "identity.managed_fields";
 const DEFAULT_MANAGED: [&str; 3] = ["display_name", "title", "pronouns"];
 const MANAGEABLE: [&str; 6] = ["display_name", "username", "email", "title", "pronouns", "avatar"];
 
-/// Does the install's policy make `field` the provider's (K2's)?
-fn provider_owns(s: &State, field: &str) -> bool {
-    match s.policies.get(MANAGED_FIELDS) {
-        Some(Value::Array(a)) => a.iter().any(|v| v.as_str() == Some(field)),
-        _ => DEFAULT_MANAGED.contains(&field),
-    }
-}
-
 fn policies_json(s: &State) -> Value {
     let mut p = serde_json::Map::new();
     p.insert("gifs.enabled".into(), json!(true));
@@ -1110,14 +1110,6 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
         return bad_body(s, "provision", "unknown external id form", body);
     }
     let ext = req.external_id.to_string();
-    // Sew 0.5.0: once the policy makes title/pronouns the member's own, a
-    // provider write of them is K2 overwriting the member (refused loudly
-    // here); their absence keeps the member's values.
-    let own_title = !provider_owns(s, "title");
-    let own_pronouns = !provider_owns(s, "pronouns");
-    if (own_title && req.profile.title.is_some()) || (own_pronouns && req.profile.pronouns.is_some()) {
-        s.bad_bodies.push(format!("provision sent member-owned title/pronouns: {body}"));
-    }
     if let Some(person) = &req.assistant_of {
         match s.members.get(&person.to_string()) {
             None => {
@@ -1148,6 +1140,7 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
         );
     }
     let (created, reactivated);
+    let mut s_clears = Vec::new();
     let id = match s.members.get_mut(&ext) {
         Some(m) => {
             created = false;
@@ -1159,13 +1152,15 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
             m.username = req.profile.username.clone();
             m.display_name = req.profile.display_name.clone();
             // Declarative: absent clears (live Sew, S9 §6.4 step 4).
+            // Sew 0.5.0 too (provisioning.rs profile_of + set_profile_in),
+            // whatever the managed-fields policy says. Each clear of a
+            // title/pronouns the member had is recorded ([`FakeSew::profile_clears`]).
+            if (m.title.is_some() && req.profile.title.is_none()) || (m.pronouns.is_some() && req.profile.pronouns.is_none()) {
+                s_clears.push(format!("{ext}: title {:?} pronouns {:?} cleared by {body}", m.title, m.pronouns));
+            }
             m.email = req.profile.email.clone();
-            if !own_title {
-                m.title = req.profile.title.clone();
-            }
-            if !own_pronouns {
-                m.pronouns = req.profile.pronouns.clone();
-            }
+            m.title = req.profile.title.clone();
+            m.pronouns = req.profile.pronouns.clone();
             m.member_id
         }
         None => {
@@ -1193,6 +1188,7 @@ fn provision(s: &mut State, body: &str) -> (u16, String) {
             id
         }
     };
+    s.profile_clears.extend(s_clears);
     (
         200,
         json!({"member_id": id.to_string(), "created": created, "reactivated": reactivated, "changed": !created})
@@ -1206,9 +1202,6 @@ fn update(s: &mut State, body: &str) -> (u16, String) {
         Err(e) => return bad_body(s, "update", e, body),
     };
     let ext = req.external_id.to_string();
-    if (!provider_owns(s, "title") && !req.profile.title.is_keep()) || (!provider_owns(s, "pronouns") && !req.profile.pronouns.is_keep()) {
-        s.bad_bodies.push(format!("update sent member-owned title/pronouns: {body}"));
-    }
     if let Some(u) = &req.profile.username {
         if active_username_holder(s, u, &ext).is_some() {
             return err(

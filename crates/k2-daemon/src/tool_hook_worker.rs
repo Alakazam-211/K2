@@ -52,9 +52,9 @@
 //! managed-fields policy the sweep found not K2's; `k2_core::tool_hook::policy`)
 //! and `space_unbind` (`POST /mgmt/v1/spaces/unbind` for a removed App's
 //! Space; a 404, no such Space, is `done`). Both follow the table above; a
-//! 400 `validation_failed` blocks loudly. Before the first send of a
-//! provision on a Sew whose policy is K2's, `title`/`pronouns` are dropped
-//! from the body (they are the member's own).
+//! 400 `validation_failed` blocks loudly. Provisions still carry
+//! `title`/`pronouns` (A8's copy-back): Sew 0.5.0's provision clears an
+//! absent one, so K2 keeps them managed until Sew 0.5.1.
 //!
 //! K26: a pass that finished, blocked or held a row, or saw a row fail for
 //! the first time, emits ONE `sew:changed {reason: grant-hook}` (the
@@ -411,21 +411,10 @@ async fn fill_provision(
     }
     let page: sew_wire::MgmtPrincipalPage = serde_json::from_slice(&resp.body)
         .map_err(|e| blocked(format!("unexpected body ({e})"), Some(resp.status)))?;
-    // Sew 0.5.0: with K2's managed-fields policy, title/pronouns are the
-    // member's own and no provision carries them.
-    let own = blocking(hook::members_own_title_and_pronouns)
-        .await
-        .map_err(|e| blocked(format!("policy state ({e})"), None))?;
     let Some(m) = page.items.iter().find(|m| m.external_id == req.external_id) else {
-        if own && (req.profile.title.is_some() || req.profile.pronouns.is_some()) {
-            req.profile.title = None;
-            req.profile.pronouns = None;
-            let v = serde_json::to_value(&req).map_err(|e| blocked(format!("encode ({e})"), None))?;
-            return Ok(Some(v));
-        }
         return Ok(None);
     };
-    if hook::chat::fill_provision_from_member_as(&mut req, m, own) {
+    if hook::chat::fill_provision_from_member(&mut req, m) {
         let v = serde_json::to_value(&req).map_err(|e| blocked(format!("encode ({e})"), None))?;
         Ok(Some(v))
     } else {

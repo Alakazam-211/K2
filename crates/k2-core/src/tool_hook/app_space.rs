@@ -44,18 +44,21 @@
 //! again; the Sew 0.4.0 wiring (unban, and public → private Spaces) calls it
 //! once that version is pinned (slot: [`SEW_040_UNBAN_SLOT`]).
 //!
-//! **Sew's side of an unbind (Sew 0.5.0, flag `space_unbind`).** When an
-//! App is removed from the box, K2 forgets its bindings (members stay, as
-//! the default unbind does) and asks Sew to unbind each Space too
-//! (`POST /mgmt/v1/spaces/unbind {space_id, app_id}` → `{space_id, app_id?,
-//! orphaned_from?, changed}`): the Space becomes an orphan of that App,
-//! read-only (writes answer 422 `space_orphaned`; reads and export still
-//! work). The wish is kept in `tool_app_space_unbinds` and sent by the S27
-//! worker (op `space_unbind`, subject `unbind:<space id>`) once Sew reports
-//! the flag, so an App removed before the upgrade is unbound after it.
-//! K2 never releases an orphan (`spaces/release` lets it be bound to
-//! another App): that is a person's call. The explicit `app-space unbind`
-//! (K2 stops managing members) does not orphan the Space in Sew.
+//! **Sew's side of an unbind (Sew 0.5.0, flag `space_unbind`).** "Unbind"
+//! means one thing everywhere (K2 2026-10-28): an App removed from the box
+//! (its bindings forgotten, members kept, Rosson's unbind default) and an
+//! explicit `k2 hostchat app-space unbind` both ask Sew to unbind the Space
+//! too (`POST /mgmt/v1/spaces/unbind {space_id, app_id}` → `{space_id,
+//! app_id?, orphaned_from?, changed}`): the Space becomes an orphan of that
+//! App, read-only (writes answer 422 `space_orphaned`; reads and export
+//! still work). The wish is kept in `tool_app_space_unbinds` and sent by
+//! the S27 worker (op `space_unbind`, subject `unbind:<space id>`) once Sew
+//! reports the flag, so an unbind before the upgrade lands after it, and
+//! only after the Space's own membership rows are settled (an unbind with
+//! `--remove-app-members` removes them first). Binding the same App again
+//! before it is sent drops it. K2 never releases an orphan
+//! (`spaces/release` lets another App bind it): that is the Sew install
+//! owner's call.
 //!
 //! Tables live in `skin.db` (idempotent DDL like `tool_outbox`), so this
 //! needs no main-DB migration.
@@ -125,7 +128,8 @@ pub fn ensure_schema(conn: &Connection) -> Result<(), String> {
             wanted_at     INTEGER NOT NULL,
             wanted_by     TEXT NOT NULL,
             done_at       INTEGER,
-            orphaned_from TEXT
+            orphaned_from TEXT,
+            cause         TEXT NOT NULL
          );",
     )
     .map_err(|e| format!("skin.db app spaces schema: {e}"))
@@ -667,14 +671,16 @@ pub fn unbind_subject(space_id: &str) -> String {
 }
 
 /// Remember that Sew should unbind `space_id` from `app_id` (sent by
-/// [`plan_unbinds`] once Sew reports `space_unbind`).
-pub fn want_unbind(conn: &Connection, app_id: &str, space_id: &str, actor: &str, now: i64) -> Result<(), String> {
+/// [`plan_unbinds`] once Sew reports `space_unbind`). `cause`: the App was
+/// removed ([`Cause::AppRemoved`]) or the binding was dropped by hand
+/// ([`Cause::SpaceUnbound`]).
+pub fn want_unbind(conn: &Connection, app_id: &str, space_id: &str, cause: Cause, actor: &str, now: i64) -> Result<(), String> {
     conn.execute(
-        "INSERT INTO tool_app_space_unbinds (space_id, app_id, wanted_at, wanted_by, done_at, orphaned_from)
-         VALUES (?1, ?2, ?3, ?4, NULL, NULL)
+        "INSERT INTO tool_app_space_unbinds (space_id, app_id, wanted_at, wanted_by, done_at, orphaned_from, cause)
+         VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5)
          ON CONFLICT(space_id) DO UPDATE SET app_id = excluded.app_id, wanted_at = excluded.wanted_at,
-            wanted_by = excluded.wanted_by, done_at = NULL, orphaned_from = NULL",
-        params![space_id, app_id, now, actor],
+            wanted_by = excluded.wanted_by, done_at = NULL, orphaned_from = NULL, cause = excluded.cause",
+        params![space_id, app_id, now, actor, cause.as_str()],
     )
     .map(|_| ())
     .map_err(|e| format!("app space unbind write: {e}"))
@@ -715,11 +721,13 @@ pub struct Unbind {
     pub done_at: Option<i64>,
     /// The App Sew records the orphan as coming from.
     pub orphaned_from: Option<String>,
+    /// `app_removed` | `space_unbound` (an unbind by hand).
+    pub cause: String,
 }
 
 pub fn unbinds(conn: &Connection) -> Result<Vec<Unbind>, String> {
     let mut st = conn
-        .prepare("SELECT space_id, app_id, wanted_at, wanted_by, done_at, orphaned_from FROM tool_app_space_unbinds ORDER BY space_id")
+        .prepare("SELECT space_id, app_id, wanted_at, wanted_by, done_at, orphaned_from, cause FROM tool_app_space_unbinds ORDER BY space_id")
         .map_err(|e| format!("app space unbinds: {e}"))?;
     let rows = st
         .query_map([], |r| {
@@ -730,37 +738,57 @@ pub fn unbinds(conn: &Connection) -> Result<Vec<Unbind>, String> {
                 wanted_by: r.get(3)?,
                 done_at: r.get(4)?,
                 orphaned_from: r.get(5)?,
+                cause: r.get(6)?,
             })
         })
         .map_err(|e| format!("app space unbinds: {e}"))?;
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| format!("app space unbinds row: {e}"))
 }
 
-/// One `space_unbind` op per unsent wish, once Sew reports `space_unbind`
-/// (skipping subjects with an open row).
-pub fn plan_unbinds(conn: &Connection, busy: &HashSet<String>) -> Result<Vec<NewOp>, String> {
+/// One `space_unbind` op per unsent wish, once Sew reports `space_unbind`,
+/// with the actor who asked for it. Skipped while the unbind has an open
+/// row, and while any membership row of that Space is open (an unbind
+/// with `--remove-app-members` removes them first: Sew refuses writes to
+/// an orphan with 422 `space_orphaned`).
+pub fn plan_unbinds(conn: &Connection, busy: &HashSet<String>) -> Result<Vec<(NewOp, String)>, String> {
     if !super::features::has(conn, CHAT_KIND, super::features::SPACE_UNBIND)? {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
     for u in unbinds(conn)?.into_iter().filter(|u| u.done_at.is_none()) {
         let subject = unbind_subject(&u.space_id);
-        if busy.contains(&subject) {
+        let members = format!("{SUBJECT_PREFIX}{}:", u.space_id);
+        if busy.contains(&subject) || busy.iter().any(|k| k.starts_with(&members)) {
             continue;
         }
         let body = sew_wire::SpaceUnbindRequest { space_id: u.space_id.clone(), app_id: u.app_id.clone() };
-        out.push(NewOp {
-            tool: CHAT_KIND,
-            op: Op::SpaceUnbind,
-            subject_key: subject,
-            payload: serde_json::to_value(&body).map_err(|e| format!("space unbind body: {e}"))?,
-            grant_id: None,
-            grant_rev: None,
-            cause: Cause::AppRemoved,
-            after_subject: None,
-        });
+        out.push((
+            NewOp {
+                tool: CHAT_KIND,
+                op: Op::SpaceUnbind,
+                subject_key: subject,
+                payload: serde_json::to_value(&body).map_err(|e| format!("space unbind body: {e}"))?,
+                grant_id: None,
+                grant_rev: None,
+                cause: if u.cause == Cause::AppRemoved.as_str() { Cause::AppRemoved } else { Cause::SpaceUnbound },
+                after_subject: None,
+            },
+            u.wanted_by,
+        ));
     }
     Ok(out)
+}
+
+/// Queue every unbind [`plan_unbinds`] allows now, each under the actor
+/// who asked for it. MUST run inside the caller's transaction. Returns how
+/// many went in.
+pub fn queue_unbinds(conn: &Connection, now: i64) -> Result<usize, String> {
+    let busy = outbox::busy_subjects(conn, CHAT_KIND)?;
+    let mut n = 0;
+    for (op, actor) in plan_unbinds(conn, &busy)? {
+        n += outbox::enqueue(conn, std::slice::from_ref(&op), &actor, now)?.len();
+    }
+    Ok(n)
 }
 
 /// An App was removed from the box: forget each of its bindings (members
@@ -770,7 +798,7 @@ pub fn app_removed(conn: &Connection, app_id: &str, actor: &str, now: i64) -> Re
     let spaces: Vec<String> = bindings(conn)?.into_iter().filter(|b| b.app_id == app_id).map(|b| b.space_id).collect();
     for space in &spaces {
         unbind(conn, app_id, space, false, actor, now)?;
-        want_unbind(conn, app_id, space, actor, now)?;
+        want_unbind(conn, app_id, space, Cause::AppRemoved, actor, now)?;
     }
     Ok(spaces)
 }

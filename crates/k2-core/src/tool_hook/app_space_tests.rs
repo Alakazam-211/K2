@@ -429,8 +429,8 @@ fn an_app_removed_unbinds_its_spaces_once_sew_can() {
     assert!(hook::app_space_unbinds().unwrap().is_empty());
 }
 
-/// Sew 0.5.0: the policy op follows what the sweep read; title/pronouns
-/// are the members' only while Sew reports the flag AND shows K2's set.
+/// Sew 0.5.0: the policy op follows what the sweep read; it counts as set
+/// only while Sew reports the flag AND shows K2's set.
 #[test]
 fn the_managed_fields_policy_is_planned_from_what_sew_showed() {
     use serde_json::json;
@@ -446,16 +446,60 @@ fn the_managed_fields_policy_is_planned_from_what_sew_showed() {
     let r = policy_rows();
     assert_eq!(r.len(), 1, "{r:?}");
     assert_eq!(r[0].subject_key, "policy:identity.managed_fields");
-    assert_eq!(serde_json::from_str::<serde_json::Value>(&r[0].payload_raw).unwrap(), json!({"changes": {"identity.managed_fields": ["display_name", "avatar"]}}));
-    assert!(!hook::members_own_title_and_pronouns().unwrap());
-    hook::record_done(&r[0].id, 200, r#"{"policies":{"identity.managed_fields":["display_name","avatar"]}}"#).unwrap();
-    assert!(hook::members_own_title_and_pronouns().unwrap());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&r[0].payload_raw).unwrap(),
+        json!({"changes": {"identity.managed_fields": ["display_name", "title", "pronouns", "avatar"]}})
+    );
+    assert!(!hook::sew_policy_is_k2s().unwrap());
+    hook::record_done(&r[0].id, 200, r#"{"policies":{"identity.managed_fields":["display_name","title","pronouns","avatar"]}}"#).unwrap();
+    assert!(hook::sew_policy_is_k2s().unwrap());
     // Seen as K2's (any order): nothing more.
-    hook::apply_settings(CHAT_KIND, &flag, &hook::PolicyRead::Seen(Some(json!(["avatar", "display_name"])))).unwrap();
+    hook::apply_settings(CHAT_KIND, &flag, &hook::PolicyRead::Seen(Some(json!(["avatar", "pronouns", "title", "display_name"])))).unwrap();
     assert_eq!(policy_rows().len(), 1);
-    // The flag gone (a rollback to 0.3.x): nothing sent, and K2 owns
-    // title/pronouns again.
+    // The 0.5.1 narrowing is not 0.5.0's set: K2 sets its own again.
+    hook::apply_settings(CHAT_KIND, &flag, &hook::PolicyRead::Seen(Some(json!(["display_name", "avatar"])))).unwrap();
+    assert_eq!(policy_rows().len(), 2);
+    // The flag gone (a rollback to 0.3.x): nothing more sent.
     hook::apply_settings(CHAT_KIND, &[], &hook::PolicyRead::NotRead).unwrap();
-    assert!(!hook::members_own_title_and_pronouns().unwrap());
-    assert_eq!(policy_rows().len(), 1);
+    assert!(!hook::sew_policy_is_k2s().unwrap());
+    assert_eq!(policy_rows().len(), 2);
+}
+
+/// Sew 0.5.0: an explicit unbind orphans the Space in Sew too, under the
+/// actor who asked; with `--remove-app-members` only after those removes
+/// are delivered (Sew refuses writes to an orphan).
+#[test]
+fn an_explicit_unbind_also_unbinds_in_sew_after_its_removes() {
+    let _e = setup();
+    hook::note_features_for_tests(&["space_unbind"]).unwrap();
+    let ann = person("ann");
+    app_user(&ann, "hearth");
+    chat(&ann, "member");
+    bind("hearth", SPACE);
+    let add = open_space_rows().into_iter().find(|r| r.op == "space_member_add").expect("add");
+    hook::record_done(&add.id, 200, &added_body(&pext(&ann.id))).unwrap();
+
+    // Keep members: queued at once.
+    hook::app_space_unbind("hearth", SPACE, "owner-token", false).unwrap();
+    let r = unbind_rows();
+    assert_eq!(r.len(), 1, "{r:?}");
+    assert_eq!((r[0].cause.as_str(), r[0].actor.as_str()), ("space_unbound", "owner-token"));
+    hook::record_done(&r[0].id, 200, &format!(r#"{{"space_id":"{SPACE}","orphaned_from":"hearth","changed":true}}"#)).unwrap();
+
+    // Remove members: the unbind waits for the remove.
+    bind("hearth", SPACE2);
+    let add = open_space_rows().into_iter().find(|r| r.op == "space_member_add").expect("add");
+    hook::record_done(&add.id, 200, &added_body(&pext(&ann.id))).unwrap();
+    hook::app_space_unbind("hearth", SPACE2, "owner-token", true).unwrap();
+    let rm = open_space_rows().into_iter().find(|r| r.op == "space_member_remove").expect("remove queued");
+    assert_eq!(unbind_rows().len(), 1, "no unbind while the remove is open");
+    hook::apply_settings(CHAT_KIND, &["space_unbind".to_string()], &hook::PolicyRead::NotRead).unwrap();
+    assert_eq!(unbind_rows().len(), 1, "a sweep waits too");
+    hook::record_done(&rm.id, 200, r#"{"removed":true}"#).unwrap();
+    let r = unbind_rows();
+    assert_eq!(r.len(), 2, "{r:?}");
+    assert_eq!(r[1].subject_key, format!("unbind:{SPACE2}"));
+    assert_eq!(r[1].cause, "space_unbound");
+    let u = hook::app_space_unbinds().unwrap();
+    assert!(u.iter().all(|u| u.cause == "space_unbound"), "{u:?}");
 }

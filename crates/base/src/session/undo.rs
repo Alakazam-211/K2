@@ -1,4 +1,4 @@
-//! Undo, redo and revert over text, to the undo spec v1.8 (`docs/SPEC-UNDO.md`).
+//! Undo, redo and revert over text, to the undo spec v1.9 (`docs/SPEC-UNDO.md`).
 //!
 //! Undo is a three-way merge per **region** (U8): a region is one **canonical hunk** of a
 //! change (sorted, non-overlapping, coalesced when touching), kept as its text before and

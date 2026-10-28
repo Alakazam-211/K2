@@ -6,6 +6,11 @@ bounds, on which commit, by which job. Requirements: E-HIST-5, E-HIST-13, E-HIST
 E-HIST-16, E-PROOF-1 of the MPC requirements PRD.
 
 ## What is specified
+- **v1.9 (fidelity review of v1.8; no change to the kit's behaviour):** U10a is read over the
+  regions a step **applies** (a skipped region lends its roots to none); I1 is checked
+  **after every step** of an undo or redo (the kit commits each step as its own change); O4a
+  looks for the live root in the text as the step merges it (after earlier steps), window
+  included. New mutant (xi) `no-o4a`.
 - **v1.8 (provenance):** an element an undo, redo or revert puts back records the **root** it
   restores (U23, path-compressed); windows are read **by root** (U8); U10a and revert follow
   the root; O4 is judged on (position, root); O4a refuses to put back a live root; invariant
@@ -44,7 +49,7 @@ Quint model:
 - The bounded world's own: an undo or redo request spends the budget whatever it finds.
 
 ## Invariants checked (every transition; each a rule id in `viol`)
-`I1` (v1.8: at most one live element per root), `own_only` (U10a, **enforced**; by root since v1.8), `U9` (a tainted region is never applied), `U13` (a refused
+`I1` (v1.8: at most one live element per root; after every step of an undo or redo since v1.9), `own_only` (U10a, **enforced**; by root since v1.8; over the applied regions since v1.9), `U9` (a tainted region is never applied), `U13` (a refused
 request changes nothing), `U15` (identical reports), `U17` (redo reapplies exactly the applied
 regions), `U19` (a purge empties every stack), `U22a` (revert's conflicts ⊇ undo's, same
 bounds, same text), `RT` (a restart changes no revert's outcome or text, every record, both
@@ -65,11 +70,17 @@ Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least)
 | **(viii) `f3-rediff`**: sides by re-diffing strings (F3) | own_only | same | 3 | 3 |
 | **(ix) `restart-single-taint`**: one taint flag read back at both edges | RT | 1 pid × 3 events + 1 revert + 1 restart (`abba`, 4) | 4 | 4 |
 | **(x) `provenance-ignored-in-O4`** (v1.8): O4 on element identity, no O4a | I1 | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 | 3 |
+| **(xi) `no-o4a`** (v1.9): O4 on (range, roots), no O4a | I1 | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 4 | 4 |
 
 TLC with one worker (a shortest counterexample): v1.8, k2-arch job `a75a2670` (every mutant,
 the same depths as v1.7 for (i)–(ix)); the smoke job `ac55d0a0` agrees. v1.7: `7a899e60`,
 `0c00aee0`. (x)'s witness: seed `ab`, p1 deletes `b`, undoes, reverts its delete: by element
 identity both `b`s land at the doc's end (O5), two live elements with one root.
+v1.9: job `20db2b75` (every mutant, one TLC worker: (i)–(x) as v1.8, (xi) at 4). (xi)'s
+least witness is at the doc's end: p1 deletes `b`, undoes, p2 types `a` before the restored
+`b`, p1 reverts its delete; theirs (`a` and the restored `b`) and ours (`b`) differ by roots,
+so O5 lands both: two live `b` with one root. Its mid-text witness (two undos, depth 5,
+inside 2 × 2 + 2 undos + 1 revert) is a test in `tests/mutants.rs`.
 
 The same set fails `cargo test -p k2-mpc-spec-undo --features mutants --test mutants`. On
 walks at the literal G1 bound (20,000 walks each, this Mac, smoke size): f3-rediff fails
@@ -90,6 +101,11 @@ G1-run mutant walks: TODO.
 | | | 2 × 2 + 2 undos + 1 revert | TODO | TODO | TODO |
 | Walks at the literal G1 bound | `undo_enum walk` | 3 × 3 + 2 undos + 1 revert (`abb`, 4) | TODO walks | TODO | TODO |
 | Walks, G1 + 1 restart | `undo_enum walk --restarts 1` | same + 1 restart | TODO walks | TODO | TODO |
+
+**v1.8 → v1.9:** unchanged at every bound above (TLC = enumerator; jobs `0b8fedfe`,
+`e6427b49`), and no violation set changed (enumerator without `--first`, v0.9.0 against
+this, `5597f6ea` and `3951cf03`): the oracle never breaks I1, so U10a's two readings agree
+and no step-only I1 failure exists.
 
 **Old vs new counts (v1.7 → v1.8):** 3,891 → 3,889; 34,125 → 35,792; 218,761 → 220,210;
 500,176 → 542,418; 193,161 → 200,530 (TLC = enumerator at each, v1.7 job `7a899e60`). Roots
@@ -113,6 +129,7 @@ touching_regions 2,288, revert_extra_conflict 145. G1 run: TODO.
 ## ITF replay
 Quint simulator traces exported as ITF and replayed step by step into the oracle (action
 enabled, cut, outcome, whole state):
+- v1.9: the same 1,000 + 1,000 traces, **0 mismatches** (`0b8fedfe`).
 - v1.8: 1,000 traces at 2 × 1 + 1 undo + 1 revert (4,000 steps) and 1,000 at 2 × 1 + 2 undos +
   1 revert (5,000 steps), **0 mismatches** (`00d8b0dc`); 300 traces with and 300 without a
   restart, 0 (smoke `ac55d0a0`).
@@ -122,6 +139,10 @@ enabled, cut, outcome, whole state):
 - At G1 (`g1-smoke.sh`): TODO.
 
 ## The trace test (oracle vs the kit on Yrs)
+- **v1.9:** 256 traces (28,632 steps) and the restart twin: **0 mismatches**, the same figures
+  as v1.8 (the kit is unchanged). The kit-side U10a check now also holds the kit's removals to
+  the roots of the **applied** regions (the oracle's, by the element correspondence): 2,874
+  steps checked, 9,543 removals, 0 unresolved.
 - **v1.8:** 256 traces (28,632 steps) and the 64-trace restart twin (6,580 steps): **0 mismatches**, run locally (about 39 s). New since v1.8: each live character's root and root author, I1, and U10a **by root** are compared on both sides (the kit side from per-character blame and a mirror of each pid's stacks: 2,874 steps checked, 9,543 removals, 0 unresolved; a by-element check fails 31 of 64 traces). Class `concurrent_restores_of_one_root`: 186 hits (O4 took a restoration once 72, O4a 12, a base element counted by root only 102), plus 31 in the twin. U22a's cost: 8 of 2,286 revert regions (0.35%); with touching regions 8 of 408 (1.96%). Commit `0ad8d4c`.
 - 256 seeded traces (28,632 steps), every case class hit, **0 mismatches**; the restart twin
   (64 stack-free traces, 6,580 steps): **0 mismatches** (commit b90c172 and later).
@@ -160,6 +181,8 @@ v0.8.2's kit and pass here.
   and its persisted carry, the U6 bounds, purge redaction of records.
 
 ## Log
+- 2026-10-28: v1.9 (fidelity review): U10a over applied regions, I1 per step, O4a wording,
+  mutant (xi); counts unchanged, (xi) at depth 4 in both.
 - 2026-10-28: v1.8 (provenance): spec, kit, oracle, Quint, counts and mutants filled in;
   the trace test's v1.8 run below; G1-run numbers still pending.
 - 2026-10-28: drafted with the v1.7 slice (kit v0.9.0 prep); G1-run numbers pending.

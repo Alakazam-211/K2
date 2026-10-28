@@ -1232,3 +1232,169 @@ fn registry_rows_for_the_new_verbs() {
     );
     assert_eq!(form(&["view", "--lines", "1,2", "--for-edit"]), "view");
 }
+
+// ---------- last-edit ranges don't expand (finding F2) ----------
+
+fn last_edit(f: &Fx, obs: ConnId, pid: &str) -> Option<LineRange> {
+    f.s.roster(obs)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.participant.pid == pid)
+        .and_then(|r| r.last_edit)
+}
+
+fn edited_notes_from<'a>(n: &'a Notes, pid: &str) -> Vec<&'a LineRange> {
+    n.notes
+        .iter()
+        .filter(|x| x.pid == pid && x.kind == NoteKind::Edited)
+        .map(|x| &x.lines)
+        .collect()
+}
+
+/// A's line is undone, then B types at the same spot: nothing says A edited B's line.
+#[test]
+fn last_edit_undone_then_someone_types_there_is_not_theirs() {
+    let f = fx("f2-undo");
+    let a = f.agent("a");
+    let b = f.agent("b");
+    let obs = f.person("obs");
+    let out = f.s.run_tool(
+        a,
+        ROOT,
+        &["insert".into(), "--line".into(), "6".into()],
+        b"A new\n",
+    );
+    assert!(out.unwrap().changed.is_some());
+    assert_eq!(last_edit(&f, obs, "a"), Some(lines(6, 6)));
+    assert!(matches!(
+        f.s.undo(a, 1).unwrap(),
+        k2_mpc_base::session::UndoOutcome::Applied { .. }
+    ));
+    let out =
+        f.s.run_tool(
+            b,
+            ROOT,
+            &["insert".into(), "--line".into(), "6".into()],
+            b"B new\n",
+        )
+        .unwrap();
+    assert!(
+        edited_notes_from(&out.notes, "a").is_empty(),
+        "{:?}",
+        out.notes
+    );
+    // a's range: gone with its text, or at least not on b's line
+    let le = last_edit(&f, obs, "a");
+    assert!(
+        le.as_ref().map_or(true, |l| l.first > 6 || l.last < 6),
+        "{le:?}"
+    );
+    assert_eq!(last_edit(&f, obs, "b"), Some(lines(6, 6)));
+}
+
+/// Text typed at the edges of A's edited line stays out of A's range; a claim there still
+/// takes it in (claims keep expanding anchors). A range whose text is all deleted is gone,
+/// and none ever names a line past the end.
+#[test]
+fn last_edit_does_not_take_in_text_typed_at_its_edges() {
+    let f = fx("f2-edges");
+    let a = f.agent("a");
+    let b = f.agent("b");
+    let obs = f.person("obs");
+    f.tool(a, &["sed", "-i", "2s/two/TWO/"]);
+    f.claim(a, 2, 2);
+    assert_eq!(last_edit(&f, obs, "a"), Some(lines(2, 2)));
+    let ins = |argv: &[&str], stdin: &str| {
+        let argv: Vec<String> = argv.iter().map(|x| (*x).to_owned()).collect();
+        f.s.run_tool(b, ROOT, &argv, stdin.as_bytes()).unwrap()
+    };
+    // a line typed right before a's text (at its first byte)
+    ins(&["insert", "--line", "2"], "B1\n");
+    assert_eq!(last_edit(&f, obs, "a"), Some(lines(3, 3)));
+    // the claim took it in
+    let claims = f.s.claims(obs).unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].lines, lines(2, 3));
+    // text typed right after a's text, before its line break
+    let out = ins(&["insert", "--at", "3:4"], "\nB2");
+    assert_eq!(f.text(obs).lines().nth(2), Some("TWO"));
+    assert_eq!(last_edit(&f, obs, "a"), Some(lines(3, 3)));
+    assert!(
+        edited_notes_from(&out.notes, "a")
+            .iter()
+            .all(|l| l.first == 3 && l.last == 3),
+        "{:?}",
+        out.notes
+    );
+    // a's text deleted: a's range is gone
+    ins(&["delete", "--lines", "3,3"], "");
+    assert_eq!(last_edit(&f, obs, "a"), None);
+    // a appends the last line; b deletes everything after line 1: never past the end
+    f.s.run_tool(a, ROOT, &["append".into()], b"last\n")
+        .unwrap();
+    let n = f.text(obs).lines().count();
+    assert_eq!(last_edit(&f, obs, "a"), Some(lines(n, n)));
+    let r = format!("2,{n}");
+    ins(&["delete", "--lines", &r], "");
+    assert_eq!(last_edit(&f, obs, "a"), None);
+    let le = last_edit(&f, obs, "b");
+    assert!(le.as_ref().map_or(true, |l| l.last <= 1), "{le:?}");
+}
+
+// ---------- adjacent claims and their shared edge (soak finding) ----------
+
+/// Two participants' claims that come to share an edge (the line break between them was
+/// deleted) both take in text typed at that edge, since both anchors expand: their spans
+/// then overlap, which a claim's acquire refuses. Kept as the soak found it, with the
+/// behaviour wanted (ignored until the kit settles the shared edge).
+#[test]
+#[ignore = "soak finding: adjacent claims both expand over text typed at their shared edge"]
+fn adjacent_claims_never_overlap_after_typing_at_their_shared_edge() {
+    let f = fx("shared-edge");
+    let a = f.agent("a");
+    let b = f.agent("b");
+    let c = f.person("c");
+    f.claim(a, 1, 1);
+    f.claim(b, 2, 2);
+    // c joins lines 1 and 2: the claims now meet at one point
+    let t = f.text(c);
+    let nl = t.find('\n').unwrap();
+    f.s.edit(
+        c,
+        vec![k2_mpc_base::Edit::Text {
+            root: ROOT.into(),
+            hunks: vec![k2_mpc_base::text::diff::Hunk {
+                start: nl,
+                end: nl + 1,
+                insert: String::new(),
+            }],
+        }],
+        None,
+    )
+    .unwrap();
+    // c types at that point
+    f.s.edit(
+        c,
+        vec![k2_mpc_base::Edit::Text {
+            root: ROOT.into(),
+            hunks: vec![k2_mpc_base::text::diff::Hunk {
+                start: nl,
+                end: nl,
+                insert: "X".into(),
+            }],
+        }],
+        None,
+    )
+    .unwrap();
+    let cl = f.s.claims(c).unwrap();
+    assert_eq!(cl.len(), 2, "{cl:?}");
+    let (x, y) = (&cl[0], &cl[1]);
+    assert!(
+        x.end <= y.start || y.end <= x.start,
+        "a's {}..{} and b's {}..{} overlap",
+        x.start,
+        x.end,
+        y.start,
+        y.end
+    );
+}

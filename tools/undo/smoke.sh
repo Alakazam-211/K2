@@ -1,13 +1,16 @@
 # Smoke (one short job, <= 15 min): typecheck; a tiny simulator run exported as ITF and
 # replayed into spec_undo::model (also with a restart); TLC's exact count at a tiny bound
 # against the enumerator's; TLC on every mutant at the same bound, and on the restart mutant
-# and mutant (x) at their own bounds (each must violate its rule).
+# and mutants (x), (xi) at their own bounds (each must violate its rule).
 B="2 1 1 0 4"            # pids events undos reverts maxlen
 I="0, 1, 1"              # the seed text abb
 EB="--pids 2 --events 1 --undos 1 --reverts 0 --maxlen 4 --init abb"
 timed "typecheck undo" q typecheck undo.qnt
 inst u_tiny $B "$I" true true none
 timed "typecheck u_tiny" q typecheck u_tiny.qnt
+# Apalache reads the model's IR as one JSON string of at most 20,000,000 characters (Jackson's
+# default); v1.9's is about 19.85 MB, so a change that grows it past the limit shows here
+q compile --target json --main=u_tiny u_tiny.qnt > u_tiny.json && echo "=== IR size: $(wc -c < u_tiny.json) bytes (Apalache's limit 20000000)"
 itfinst itf_tiny 2 1 1 1 4 "$I" true true none
 mkdir -p "$ROOT/itf"
 timed "simulate + ITF (2x1 +1 undo +1 revert, 300 traces)" q run itf_tiny.qnt --main=itf_tiny --init=winit --step=wstep \
@@ -31,6 +34,10 @@ timed "enumerator, mutant restart-single-taint" E bfs --pids 1 --events 3 --undo
 inst m_prov 1 1 1 1 4 "0, 1" true true x-provenance-ignored-in-o4
 tlc m_prov "$INV" 120
 timed "enumerator, mutant x-provenance-ignored-in-o4" E bfs --pids 1 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant x-provenance-ignored-in-o4
+# mutant (xi) (v1.9: O4 on roots, no O4a) at its own bound: 2 pids x 1 event + 1 undo + 1 revert, seed ab
+inst m_xi 2 1 1 1 4 "0, 1" true true xi-no-o4a
+tlc m_xi "$INV" 240
+timed "enumerator, mutant xi-no-o4a" E bfs --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant xi-no-o4a
 # ITF with a restart: 2 pids x 1 event + 1 undo + 1 revert + 1 restart
 itfinst itf_rst 2 1 1 1 4 "$I" true true none 1
 mkdir -p "$ROOT/itf_rst"

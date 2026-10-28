@@ -12,9 +12,9 @@ use std::time::Duration;
 use k2_mpc_base::doc::Neutral;
 use k2_mpc_base::parity::{PersonAction, Registry};
 use k2_mpc_base::session::{
-    AuditEvent, ClaimEnd, ClaimPolicy, Config, ConnId, Declined, Host, LineRange, Pack,
-    PackContent, PackError, Participant, ParticipantKind, ReservationEnd, Rights, Session,
-    SessionError, SessionManager, Stay, TextFilePack,
+    AuditEvent, ClaimEnd, ClaimPolicy, Config, ConnId, Declined, EditOptions, EditWithError, Host,
+    LineRange, Pack, PackContent, PackError, Participant, ParticipantKind, ReservationEnd, Rights,
+    Session, SessionError, SessionManager, Stay, TextFilePack,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_base::text::diff::Hunk;
@@ -940,4 +940,133 @@ fn a_claim_ended_by_its_owners_edit_reports_the_version_after_it() {
     assert_eq!(ev.2, out.version);
     assert_eq!(ev.2, read_version(&s, bot));
     assert_eq!(ev.1, lines(3, 5), "moved by Sam's line, grown by the bot's");
+}
+
+// ---------- `Session::edit_with_options`: the guard and the policy in one public call ----------
+
+/// A host's direct edit route: the text it computed from a read at version V, applied only if
+/// the doc is still at V, under the claim policy, both checked under the lock.
+fn direct(
+    s: &Session,
+    c: ConnId,
+    opts: &EditOptions,
+    new_text: &str,
+) -> Result<Option<k2_mpc_base::session::EditResult>, EditWithError<std::convert::Infallible>> {
+    let t = new_text.to_owned();
+    s.edit_with_options(c, ROOT, opts, move |_| Ok(t))
+}
+
+#[test]
+fn edit_with_options_applies_at_the_version_and_refuses_a_stale_one() {
+    let f = fx("ewo-version");
+    let s = f.open("d.md");
+    let agent = f.join(&s, "agent", ParticipantKind::Agent);
+    let v = read_version(&s, agent);
+    let mine = DOC.replace("alpha", "ALPHA");
+    // at V: applies, one change
+    let r = direct(&s, agent, &EditOptions::new().if_version(v), &mine)
+        .unwrap()
+        .expect("a change");
+    assert_eq!(r.version, v + 1);
+    assert_eq!(text(&s, agent), mine);
+    // at the old V: Stale, nothing applied, no new version, no doc text in the refusal
+    let e = direct(&s, agent, &EditOptions::new().if_version(v), DOC).unwrap_err();
+    match &e {
+        EditWithError::Session(SessionError::Stale { expected, actual }) => {
+            assert_eq!((*expected, *actual), (v, v + 1));
+        }
+        e => panic!("want Stale, got {e:?}"),
+    }
+    let shown = format!("{e} {e:?}");
+    for w in DOC_WORDS {
+        assert!(!shown.contains(w), "a refusal quotes the doc: {shown}");
+    }
+    assert_eq!(text(&s, agent), mine);
+    assert_eq!(read_version(&s, agent), v + 1);
+    // no guard: as edit_with
+    assert!(direct(&s, agent, &EditOptions::new(), DOC)
+        .unwrap()
+        .is_some());
+    assert_eq!(text(&s, agent), DOC);
+}
+
+/// Sam's edit lands after the call started, before its critical section: refused, because the
+/// version is checked under the lock (a host comparing texts before the call would miss it).
+#[test]
+fn edit_with_options_race_inside_the_call_is_refused() {
+    let f = fx("ewo-race");
+    let s = f.open("d.md");
+    let agent = f.join(&s, "agent", ParticipantKind::Agent);
+    let sam = f.join(&s, "sam", ParticipantKind::Person);
+    let v = read_version(&s, agent);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let s2 = s.clone();
+    *f.host.inject.lock().unwrap() = Some(Box::new(move || {
+        let s3 = s2.clone();
+        std::thread::spawn(move || {
+            other_edit(&s3, sam);
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("the injected edit blocked: the clock was read under the session lock");
+    }));
+    let e = direct(
+        &s,
+        agent,
+        &EditOptions::new().if_version(v),
+        &DOC.replace("beta", "BETA"),
+    )
+    .unwrap_err();
+    assert!(f.host.inject.lock().unwrap().is_none(), "the hook ran");
+    assert!(
+        matches!(e, EditWithError::Session(SessionError::Stale { expected, actual }) if expected == v && actual == v + 1),
+        "{e:?}"
+    );
+    assert!(text(&s, agent).contains("beta two") && text(&s, agent).contains("sam was here"));
+}
+
+#[test]
+fn edit_with_options_respects_claims_for_agents_only_and_stale_comes_first() {
+    let f = fx("ewo-claims");
+    let s = f.open("d.md");
+    let agent = f.join(&s, "agent", ParticipantKind::Agent);
+    let bot = f.join(&s, "bot", ParticipantKind::Agent);
+    let sam = f.join(&s, "sam", ParticipantKind::Person);
+    s.claim(bot, lines(1, 2), None, None, false).unwrap();
+    let v = read_version(&s, agent);
+    let mine = DOC.replace("alpha", "A");
+    let respect = EditOptions::new().policy(ClaimPolicy::Respect);
+    // an agent under Respect at V: the claim refuses (5), nothing applied
+    let e = direct(&s, agent, &respect.if_version(v), &mine).unwrap_err();
+    assert!(
+        matches!(e, EditWithError::Session(SessionError::Claimed { ref by, .. }) if by == "bot"),
+        "{e:?}"
+    );
+    // stale and claimed: the version refuses first
+    let e = direct(&s, agent, &respect.if_version(v - 1), &mine).unwrap_err();
+    assert!(
+        matches!(e, EditWithError::Session(SessionError::Stale { .. })),
+        "{e:?}"
+    );
+    assert_eq!(text(&s, agent), DOC);
+    // an edit outside the claim applies under Respect
+    let outside = DOC.replace("delta", "D");
+    assert!(direct(&s, agent, &respect.if_version(v), &outside)
+        .unwrap()
+        .is_some());
+    // Ignore: the same claimed edit applies; and a person is never refused
+    let v = read_version(&s, agent);
+    let mine = outside.replace("alpha", "A");
+    assert!(direct(&s, agent, &EditOptions::new().if_version(v), &mine)
+        .unwrap()
+        .is_some());
+    let v = read_version(&s, sam);
+    assert!(
+        direct(&s, sam, &respect.if_version(v), &mine.replace("beta", "B"))
+            .unwrap()
+            .is_some()
+    );
+    // the defaults are Ignore and no guard
+    assert_eq!(EditOptions::default().policy, ClaimPolicy::Ignore);
+    assert_eq!(EditOptions::default().if_version, None);
 }

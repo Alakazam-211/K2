@@ -17,3 +17,4 @@ for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-
 done
 timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 20000 --threads "$(nproc)" --mutant restart-single-taint
 timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 20000 --threads "$(nproc)" --mutant x-provenance-ignored-in-o4
+timed "walks at G1, mutant xi-no-o4a (must fail)" E walk --g1 --probes 20000 --threads "$(nproc)" --mutant xi-no-o4a

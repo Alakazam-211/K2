@@ -50,4 +50,8 @@ timed "enumerator, mutant restart-single-taint" E bfs --pids 1 --events 3 --undo
 inst m_prov 1 1 1 1 4 "0, 1" true true x-provenance-ignored-in-o4
 TLC_WORKERS=1 tlc m_prov "$INV" 120
 timed "enumerator, mutant x-provenance-ignored-in-o4" E bfs --pids 1 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant x-provenance-ignored-in-o4
+# mutant (xi) (v1.9: no O4a) at its own bound: 2 pids x 1 event + 1 undo + 1 revert, seed ab
+inst m_xi 2 1 1 1 4 "0, 1" true true xi-no-o4a
+TLC_WORKERS=1 tlc m_xi "$INV" 240
+timed "enumerator, mutant xi-no-o4a" E bfs --pids 2 --events 1 --undos 1 --reverts 1 --maxlen 4 --init ab --first --mutant xi-no-o4a
 ;; esac

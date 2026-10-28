@@ -134,7 +134,38 @@ impl VerbSpec {
     const fn on(self, tiers: &'static [Tier]) -> Self {
         VerbSpec { tiers, ..self }
     }
+
+    /// Whether it runs through [`crate::session::Session::run_tool`] on a text doc: the
+    /// kit's verbs in [`RUN_TOOL_VERBS`] and every pack verb. A host routes these to
+    /// `run_tool` (or `run_tool_with`) and the others to their own session calls
+    /// ([`VerbSpec::api`]). On a blob doc no verb runs through `run_tool` (`cat` there is
+    /// `BlobSession::read`).
+    pub fn runs_through_run_tool(&self) -> bool {
+        self.source == Source::Pack || RUN_TOOL_VERBS.contains(&self.name)
+    }
+
+    /// The verb this one is another name for ([`ALIASES`]), if any: the same row, the same
+    /// binding, under a host-neutral name.
+    pub fn alias_of(&self) -> Option<&'static str> {
+        ALIASES
+            .iter()
+            .find(|(a, _)| *a == self.name)
+            .map(|(_, of)| *of)
+    }
 }
+
+/// The kit's verbs that run through [`crate::session::Session::run_tool`] (a flag per verb,
+/// as data; [`VerbSpec::runs_through_run_tool`]). Kept consistent with `run_tool` itself
+/// by tests: each one runs there, and every other registered verb is refused there.
+pub const RUN_TOOL_VERBS: &[&str] = &[
+    "cat", "wc", "head", "tail", "sed", "view", "grep", "insert", "replace", "delete", "sed -i",
+    "patch", "apply", "append", "diff",
+];
+
+/// Verbs that are another name for a verb (alias, verb): the same rights, calls, actions,
+/// flags, exits, tiers and binding. A pack's parity list may list an alias or leave it out
+/// (an alias is never required); the kit's cases cover both names.
+pub const ALIASES: &[(&str, &str)] = &[("approvals", "log --pending")];
 
 use Api as A;
 use PersonAction as P;
@@ -557,6 +588,17 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK0,
     )
     .on(BOTH),
+    // the same list under a host-neutral name: what `log --pending` does, flag for flag
+    kit(
+        "approvals",
+        H,
+        NH,
+        &[A::Log],
+        &[P::Pending],
+        "approvals [--on-behalf-of me|P] (the same as log --pending)",
+        OK0,
+    )
+    .on(BOTH),
     kit(
         "revert",
         E,
@@ -786,6 +828,8 @@ mod tests {
                 "log --pending",
             ),
             (&["log", "-n", "3"], "log"),
+            (&["approvals"], "approvals"),
+            (&["approvals", "--on-behalf-of", "me"], "approvals"),
             (&["blame", "-L", "2,4"], "blame"),
             (&["diff", "--version", "3"], "diff --version"),
             (&["diff", "-u"], "diff"),
@@ -859,6 +903,54 @@ mod tests {
         assert_eq!(r.serving(PersonAction::Undo).count(), 3);
     }
 
+    /// The `run_tool` flag is data; here it must agree with the rest of the row and with the
+    /// kit's tools (`tests/registry.rs` checks it against `Session::run_tool` itself).
+    #[test]
+    fn run_tool_flag_agrees_with_the_row() {
+        let r = Registry::kit();
+        for n in RUN_TOOL_VERBS {
+            assert!(r.get(n).is_some(), "{n} is not a registered verb");
+        }
+        for v in KIT_VERBS {
+            let t = v.runs_through_run_tool();
+            assert_eq!(
+                t,
+                v.api.contains(&Api::RunTool),
+                "{}: the flag and the RunTool call disagree",
+                v.name
+            );
+            assert_eq!(
+                t,
+                crate::tools::VERBS.iter().any(|(n, _)| *n == v.name),
+                "{}: the flag and the kit's tools disagree",
+                v.name
+            );
+            if t {
+                assert!(v.applies_to(Tier::Text), "{}", v.name);
+            }
+        }
+    }
+
+    /// An alias is its verb's row under another name.
+    #[test]
+    fn aliases_are_their_verbs_rows() {
+        let r = Registry::for_tier(Tier::Blob);
+        for (alias, of) in ALIASES {
+            for r in [Registry::kit(), r.clone()] {
+                let (a, v) = (r.get(alias).unwrap(), r.get(of).unwrap());
+                assert_eq!(a.alias_of(), Some(*of));
+                assert_eq!(v.alias_of(), None, "{of}: an alias of an alias");
+                assert_eq!(
+                    (a.kind, a.needs, a.api, a.serves, a.exits, a.tiers, a.source),
+                    (v.kind, v.needs, v.api, v.serves, v.exits, v.tiers, v.source),
+                    "{alias}"
+                );
+                assert_eq!(a.runs_through_run_tool(), v.runs_through_run_tool());
+            }
+        }
+        assert_eq!(Registry::kit().serving(PersonAction::Pending).count(), 2);
+    }
+
     /// Every verb's tiers are tiers of every action it serves (so a tier's list can list
     /// it), and the tier registries hold exactly their verbs.
     #[test]
@@ -901,6 +993,7 @@ mod tests {
                 "approve",
                 "decline",
                 "log --pending",
+                "approvals",
                 "lease",
                 "lease --renew",
                 "lease --release",
@@ -917,6 +1010,7 @@ mod tests {
             "approve",
             "decline",
             "log --pending",
+            "approvals",
         ] {
             assert_eq!(text.get(n).map(|v| v.tiers), Some(BOTH), "{n}");
         }

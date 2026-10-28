@@ -58,6 +58,25 @@ pub trait Pack: Send + Sync {
         Cow::Borrowed(text)
     }
 
+    /// Whether the file's bytes put a byte-order mark (U+FEFF, UTF-8 `EF BB BF`) in front
+    /// of `root`'s text, under these codec settings. The doc text never holds it, but `cat`
+    /// prints the file's bytes, BOM included; so a `write` or `write --base` body that
+    /// starts with U+FEFF has that one U+FEFF taken off when this is true (else text read
+    /// with `cat` and written back would gain a second BOM).
+    ///
+    /// Default: for a pack whose schema is one text root, whether [`Pack::encode`] of that
+    /// root, empty, starts with the BOM's bytes. A pack with other roots or another encoding
+    /// overrides it (or keeps the default, `false`).
+    fn writes_bom(&self, root: &str, codec: &[u8]) -> bool {
+        let schema = self.schema();
+        match schema.roots {
+            [(r, Kind::Text)] if *r == root => self
+                .encode(&[(root.to_owned(), Neutral::Text(String::new()))], codec)
+                .is_ok_and(|b| b.starts_with(text_file::BOM)),
+            _ => false,
+        }
+    }
+
     /// The pack's own edit verbs (Markdown's `replace-section`), beside the kit's text
     /// tools. [`super::Session::run_tool`] routes a verb no kit tool has by this name, and
     /// [`crate::parity::Registry::for_pack`] registers them for the parity harness. A name
@@ -151,6 +170,10 @@ impl Pack for TextFilePack {
 
     fn normalize_input<'a>(&self, _root: &str, text: &'a str) -> Cow<'a, str> {
         text_file::normalize_input(text)
+    }
+
+    fn writes_bom(&self, root: &str, codec: &[u8]) -> bool {
+        root == Self::ROOT && Self::format(codec).is_ok_and(|f| f.bom)
     }
 }
 

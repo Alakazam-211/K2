@@ -7,7 +7,7 @@ mutants that must fail in both.
 
 | Piece | Where |
 |---|---|
-| The Quint model | `spec/quint/undo.qnt` (SPEC-UNDO v1.8, over abstract text) |
+| The Quint model | `spec/quint/undo.qnt` (SPEC-UNDO v1.9, over abstract text) |
 | Evidence for G1 | `docs/evidence/g1-undo.md` |
 | The pinned diff | `spec/quint/undo_diff.qnt`, equal to `diff::hunks` on every pair of texts up to 4 long (`crates/spec-undo/tests/quint_diff.rs`) |
 | The bounded world (the same abstraction, in Rust, over the oracle) | `crates/spec-undo/src/bounded.rs` |
@@ -97,8 +97,8 @@ appears.
 
 | Invariant | Rule |
 |---|---|
-| `own_only` | `hist.undo_own_only` (U10a; by root since v1.8): every character an undo, redo or revert deletes has a root the change it reverses inserted (an undo of a batch: its inserted roots; a redo: the roots the undo put back; a revert of `c`: `c`'s inserted roots). **Enforced** (stopped at) since v1.7 |
-| `I1` | (v1.8) at most one live element per provenance root, in every state |
+| `own_only` | `hist.undo_own_only` (U10a; by root since v1.8): every character an undo, redo or revert deletes has a root the change it reverses inserted (an undo of a batch: its inserted roots; a redo: the roots the undo put back; a revert of `c`: `c`'s inserted roots), **in the regions the step applied** (v1.9). **Enforced** (stopped at) since v1.7 |
+| `I1` | (v1.8) at most one live element per provenance root, in every state, and (v1.9) after every step of an undo or redo: each step is its own change |
 | `RT` | restart transparency (U22a v1.6): a restart changes no revert's outcome or text, for every record, all or nothing and `--partial` (v1.7) |
 | `U9` | a tainted region is never applied |
 | `U13` | a refused all-or-nothing request, or a blocked one, changes nothing |
@@ -138,6 +138,98 @@ p2 replaced p1's letter), which is right by identity; whole-text merge3 of the s
 clean (its diff deletes the seed's `a` instead). U12 says the region form is the definition,
 so the definition stands; the note's claim "U10 equals whole-text merge3 outside the taint
 case" needs "outside repeated text" (or to be dropped).
+
+## Results v1.9 (fidelity review of v1.8)
+
+### What changed
+
+No change to what the kit does; the rules are read more tightly and the checks follow:
+
+- **U10a over the applied regions.** `own_only`'s set is the base roots the ours of each
+  region the step **applied** deletes; v1.8 took every region of the batch, a skipped one
+  included, which only I1 made the same. Oracle (`own_roots(regions, applied)`), Quint
+  (`ownRoots(rs, applied)`), the enumerator (it reads the oracle's flag) and the trace
+  test's kit-side check (the kit's removals against the oracle's applied-region roots, by
+  the element correspondence, on top of the change-level check).
+- **I1 after every step.** The kit commits each step of an undo or redo as its own change
+  (its own change ID, log entry and revert record; `commit` takes one `Step` per planned
+  step, in one durable append), and its live-root index asserts I1 as each step's
+  restorations enter it. The oracle checks I1 after each applied step
+  (`Hits::i1_violated`), the enumerator reads it, and the Quint model flags `I1` in `viol`
+  in `commit` (every change, so every step), kept by `nextOf`.
+- **O4a's wording**: the live text as the step merges it (after the earlier steps of the
+  request), window included. The oracle and the model already read it so.
+- **Mutant (xi) `xi-no-o4a`**: O4 on (range, roots) as specified, no O4a.
+
+### Counts: v1.8 → v1.9 (TLC = enumerator)
+
+The changes reach no state at the small bounds (the oracle never breaks I1, so the two
+readings of U10a agree and no step-only I1 failure exists): every count is v1.8's and no
+violation set changed.
+
+| Bound | v1.8 (TLC = enumerator) | v1.9 enumerator | v1.9 TLC | TLC wall |
+|---|---|---|---|---|
+| 2 pids × 1 event + 1 undo (`abb`, 4) | 3,889 | 3,889 | 3,889 | 3 s |
+| 2 × 1 + 1 undo + 1 revert (`abb`, 4) | 35,792 | 35,792 | 35,792 | 22 s |
+| 3 × 1 + 1 undo (`abb`, 4) | 220,210 | 220,210 | 220,210 | 115 s |
+| 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 144 | 144 | 144 | 1 s |
+| 2 × 2 + 1 undo (`ab`, 3) | 542,418 | 542,418 | 542,418 | 266 s |
+| 1 × 3 + 1 revert + 1 restart (`abba`, 4) | 200,530 | 200,530 | 200,530 | 123 s |
+| 2 × 1 + 2 undos + 1 revert (`ab`, 4) | 49,656 | 49,656 | 49,656 | 63 s |
+
+ITF replay: 1,000 traces at 2 × 1 + 1 undo + 1 revert (4,000 steps) and 1,000 at 2 × 1 + 2
+undos + 1 revert (5,000 steps): **0 mismatches**.
+
+**Violation sets.** On the enumerator without `--first` (every rule's least depth, the whole
+bound), v0.9.0's binaries against these, at every bound above and at each mutant's bound:
+**identical**: the same distinct counts and the same rules at the same least depths
+(mutants (i)–(x) each only their own rule; the oracle none; (x) at 1 × 1 + 1 undo + 1
+revert, 2 × 1 + 1 undo + 1 revert and 2 × 1 + 2 undos + 1 revert: `I1@3` only, no
+`own_only`). (xi), on these binaries only: clean at 1 × 1 + 1 undo + 1 revert (144 states);
+`I1@4` only at 2 × 1 + 1 undo + 1 revert (14,697 states) and at 2 × 1 + 2 undos + 1 revert
+(49,830). Removing O4a breaks I1 but not U10a: what the second restoration removes is still
+its own root's.
+
+### Mutant (xi): least depth
+
+| Mutant | Rule | Bound | Enumerator (depth) | TLC, one worker (actions) |
+|---|---|---|---|---|
+| **(xi) `xi-no-o4a`** (v1.9) | **I1** | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 4 | 4 |
+
+Not at 1 × 1 + 1 undo + 1 revert (144 states, clean: the one pid's one event is the delete,
+so nothing foreign lands beside the restored letter, and O4 takes the second restoration
+once). Every other mutant fails as in v1.8 (same rules, same depths).
+**(xi)'s least witness is at the doc's end** (the oracle's `o4a_at_the_end`): p1 deletes `b`
+(`a`); p1 undoes (`ab`, the new `b` with the seed `b`'s root); p2 types `a` before it
+(`aab`); p1 reverts its delete: theirs inserts `a` and the restored `b`, ours `b`; not
+identical by roots (O4), so O5 lands both (`aabb`) and two live `b` share a root. The
+**mid-text witness** (the oracle's `o4a_mid_text`) needs two undos: depth 5 at 2 × 1 + 2
+undos + 1 revert (inside `PART=exhaustive`'s 2 × 2 + 2 undos + 1 revert); it is in
+`tests/mutants.rs` (`no_o4a_fails_i1_in_mid_text`: the oracle blocks p2's `undo --partial`
+by O4a, the mutant applies it and fails I1).
+
+### The model's size
+
+Apalache reads the model's IR (`quint compile --target json`) as **one JSON string of at most
+20,000,000 characters** (Jackson's default `maxStringLength`; the server gives "Invalid strict
+JSON: String value length ... exceeds the maximum allowed"). v1.8's IR is 19,827,223 bytes;
+v1.9's 19,868,662. A first v1.9 draft that carried the per-step I1 flag in a new field of the
+request's result record, then one that read and rebuilt the state in `undoRedo`, grew it to
+about 20.03 MB and every compile failed: every expression whose type holds the whole state
+carries that type in the IR. The per-step flag therefore lives in `commit` (one record
+update, inside the state). `smoke.sh` prints the size.
+
+### Jobs (an x86 compute node, `--cpus 4 --mem 8G`, `APA_HEAP=4g TLC_HEAP=2g NODE_HEAP_MB=2048`)
+
+| Job | What | Result |
+|---|---|---|
+| `5597f6ea` | enumerator only, v0.9.0 (baseline): every mutant without `--first`, and the oracle at every bound | the v1.8 violation sets and counts |
+| `03867f52`, `cbf8cddd` | `counts.sh` `PART=m`, first drafts | IR over 20 MB: every compile failed (above) |
+| `20db2b75` | IR sizes (v1.8, v1.9 with and without the per-step flag), then `counts.sh` `PART=m` | every mutant, one TLC worker: the depths above; (xi) 4 and 4 |
+| `0b8fedfe` | `counts.sh` `PART=a` | four bounds equal, as v1.8; ITF 2,000 traces, 0 mismatches |
+| `e6427b49` | `counts.sh` `PART=b` | three bounds equal, as v1.8 |
+| `3951cf03` | enumerator only, this commit: as `5597f6ea`, plus (xi) | the counts and violation sets of `5597f6ea`, exactly; (xi) as above |
+| `e4c17c6c` | `smoke.sh` | typechecks; IR 19,853,379 bytes (`u_tiny`); ITF 0 mismatches (with and without a restart); TLC = enumerator at 2 × 1 + 1 undo (3,889); every mutant fails in both, (xi) at 4 |
 
 ## Results v1.8 (provenance roots)
 
@@ -221,7 +313,8 @@ root, I1 fails. The oracle takes it once (O4 on roots).
   after earlier steps of a multi-step undo), anywhere in it, window included; only when the
   merge is otherwise clean; O5 is then not counted as landed.
 - **U10a's set:** the `after` roots at the positions ours deletes, over the step's batch (a
-  change region: everything it inserted; a redo region: what the undo put back).
+  change region: everything it inserted; a redo region: what the undo put back). *v1.9:
+  over the regions the step applied only.*
 - **Redo regions:** `before` roots are the whole window the undo saw, `after` roots what it
   left; ours' inserted roots are the window characters the undo removed.
 - **Bounds decide the window, roots only classify inside it:** a restored base element that
@@ -381,17 +474,7 @@ grant there allows long jobs):
 unset $(env | grep -oE '^K2(SO)?_[A-Za-z0-9_]*')
 tools/undo-enum-job.sh tools/undo/g1.sh /tmp/undo-g1
 k2 compute run k2n1-m4 --no-source --needs rust@stable --cpus 6 --mem 4G \
-  --env CARGO_BUILD_### Jobs (k2-arch, `--mem 12G`, commit `cbe337e`'s tools; the bundle as `tools/README.md`)
-
-| Job | What | Result |
-|---|---|---|
-| `ac55d0a0` | `smoke.sh` (commit `c906453`) | Quint typechecks; ITF 0 mismatches (with and without a restart); TLC = enumerator at 2 × 1 + 1 undo; every mutant fails in both |
-| `00d8b0dc` | `counts.sh`, `PART=a` | four bounds equal; ITF 2,000 traces, 0 mismatches |
-| `85262144` | `counts.sh`, `PART=b` | three bounds equal (one quint compile retried, the known flake) |
-| `a75a2670` | `counts.sh`, `PART=m` | every mutant, one TLC worker: the depths above |
-
-The G1-bound estimates below are v1.7's; v1.8's states are a few percent more at the bounds
-above.=6 --env THREADS=6 --env PART=exhaustive --timeout 3h --tier batch \
+  --env CARGO_BUILD_JOBS=6 --env THREADS=6 --env PART=exhaustive --timeout 3h --tier batch \
   --detach $(cat /tmp/undo-g1/env-args) -- sh -ec "$(cat /tmp/undo-g1/job.sh)"
 ```
 

@@ -50,7 +50,7 @@ fn row(a: PersonAction) -> ParityRow {
         P::WhyOff => ParityRow::live(a, &["status"]),
         P::Purge => ParityRow::deferred(a, &["purge"], "later", "no purge verb yet"),
         P::Approve => ParityRow::live(a, &["approve", "decline"]),
-        P::Pending => ParityRow::live(a, &["log --pending"]),
+        P::Pending => ParityRow::live(a, &["log --pending", "approvals"]),
         P::Lease => ParityRow::live(a, &["lease", "lease --renew"]),
         P::ReleaseLease => ParityRow::live(a, &["lease --release"]),
         P::BreakLease => ParityRow::live(a, &["lease --break"]),
@@ -107,8 +107,9 @@ fn agent_parity_any_file() {
         .iter()
         .filter(|m| matches!(m.0, PersonAction::Approve | PersonAction::Pending))
         .count();
-    assert_eq!(approvals, 4, "the approval rows' cases (P29, P30)");
-    assert_eq!(report.matched.len(), 31, "{:?}", report.matched);
+    // P30 twice: `log --pending` and its alias `approvals`
+    assert_eq!(approvals, 5, "the approval rows' cases (P29, P30)");
+    assert_eq!(report.matched.len(), 32, "{:?}", report.matched);
 }
 
 /// A tier-0 list must have every blob action's row, not the text-only ones.

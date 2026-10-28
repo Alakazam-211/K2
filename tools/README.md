@@ -1,7 +1,64 @@
 # tools/
 
-Jobs for compute nodes: the undo spec's model check (`docs/MODEL-CHECK.md`). Nothing here is
-shipped or needed to build the kit.
+Jobs for compute nodes: the kit's heavy tests ([Test jobs](#test-jobs): the full suite, the
+32-participant soak, the live GNU parity) and the undo spec's model check
+(`docs/MODEL-CHECK.md`). Nothing here is shipped or needed to build the kit.
+
+## Test jobs
+
+`test-bundle.sh` writes a self-contained job for a node with no checkout (`--no-source`), for
+any part of the repo:
+
+```sh
+tools/test-bundle.sh [--rev REV] <commands file> <out dir> <path>...
+```
+
+- **What travels:** the listed paths, from a clean `git archive` of `REV` (default `HEAD`),
+  never the working tree: commit first. When `Cargo.toml` travels and a workspace member
+  doesn't, the job narrows the manifest's `members` line to the members shipped (its only
+  change).
+- **The commands file** is sourced at the repo root. It runs each step as `timed LABEL
+  CMD...`, which prints `=== LABEL: exit N, wall Ss`; the job exits non-zero if any step
+  failed (the later steps still run). The job prints a heartbeat every 4 minutes, so a long
+  step isn't stopped as stalled.
+- **How it travels:** an xz tarball, base64, in chunks of at most `CHUNK` characters
+  (default 8000) passed as `BUNDLE_B64_0`, `BUNDLE_B64_1`, ...; the job joins them, checks
+  the sha256 written into `job.sh`, and unpacks.
+- **Limits a runner may set** (measured on ours): one variable's value well below Linux's 128
+  KiB per argument (8 KiB), and **about 66 variables per job** (more is refused,
+  `env_too_many`). So the bundler stops with a clear message when the bundle needs more than
+  `MAX_CHUNKS` (default 64) chunks, about 500 KB of base64. Ship fewer paths when it does;
+  xz fits about a quarter more than gzip (the kit plus a pack: 56 chunks against 77).
+- **fmt and clippy run locally,** not on nodes: a node may have no `rustfmt` or `clippy`
+  and a read-only toolchain. Nodes run the tests, the licence check and the soak.
+
+| Commands file | Ships | Length | What |
+|---|---|---|---|
+| `tests/full.sh` | `tools/tests/full-paths.sh $PART` | ≈ 5–15 min a part | the workspace's tests (debug) in four parts, `--env PART=`: `base-a` (the kit's unit tests, doctests, every integration test but tier 0's), `base-b` (tier 0's), `conformance`, `spec-undo` (with its mutant tests). The whole workspace is over one job's limit (about 61 of 64 chunks a part) |
+| `tests/soak.sh` | `Cargo.toml Cargo.lock crates/base` | `SOAK_SECS` + build (default 10 min) | the 32-participant soak in release (`crates/base/tests/soak.rs`: progress every 30 s, a summary with peak memory), then its CI variant |
+| `tests/gnu-parity.sh` | `scripts/gnu-parity.py crates/base/tests/golden` | < 1 min | the golden corpus's `gnu: same` cases against the real GNU tools (K-PAR-7); needs python3 and the GNU tools, no Rust |
+
+A run, from the repo root with any `K2_*`/`K2SO_*` variables unset, **always with an explicit
+`--mem`**:
+
+```sh
+unset $(env | grep -oE '^K2(SO)?_[A-Za-z0-9_]*')
+tools/test-bundle.sh tools/tests/soak.sh /tmp/soak Cargo.toml Cargo.lock crates/base
+k2 compute run <node> --no-source --needs rust@stable --cpus 4 --mem 8G --timeout 40m \
+  --env SOAK_SECS=600 $(cat /tmp/soak/env-args) --detach -- sh -ec "$(cat /tmp/soak/job.sh)"
+```
+
+The GNU parity job is the same with `tools/tests/gnu-parity.sh`, its two paths and
+`--needs python@3.12`. A part of the full suite:
+
+```sh
+tools/test-bundle.sh tools/tests/full.sh /tmp/base-a $(tools/tests/full-paths.sh base-a)
+k2 compute run <node> --no-source --needs rust@stable --cpus 4 --mem 8G --timeout 40m \
+  --env PART=base-a $(cat /tmp/base-a/env-args) --detach -- sh -ec "$(cat /tmp/base-a/job.sh)"
+```
+
+fmt, clippy and the licence check (`scripts/check-licences.sh`, `cargo metadata` only) run
+locally.
 
 ## The undo model check
 

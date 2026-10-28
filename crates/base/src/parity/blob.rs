@@ -594,11 +594,11 @@ impl BlobAgent<'_> {
                 used.push(Api::Flush);
                 v(VerbValue::Flush(s.flush(c)?))
             }
-            "log" | "log --pending" => {
+            "log" | "log --pending" | "approvals" => {
                 let c = self.join(Stay::UntilIdle, used)?;
                 used.push(Api::Log);
                 let mut log = s.log(c)?;
-                if form == "log --pending" {
+                if form == "log --pending" || form == "approvals" {
                     log.retain(|e| e.approval == Some(ApprovalState::Pending));
                 }
                 if let Some(p) = arg_after(args, "--on-behalf-of") {

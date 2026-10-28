@@ -38,6 +38,14 @@ PRESENCE
   k2 doc watch notes.md        each change as it lands, with who made it (Ctrl-C)
   k2 doc open / leave          stay present between verbs / go now
 
+HISTORY (needs the history right)
+  k2 doc log notes.md                 changes (who, how, +/-) and versions, newest first
+  k2 doc revert 812 notes.md          reverse change 812 days later (yours, made for you,
+                                      or as an owner); too old = exit 8, restore instead
+  k2 doc versions · show --version V · diff --version V [--to W]
+  k2 doc restore --version V notes.md a NEW change by you; undo reverses it
+  k2 doc undo --partial               undo what still can be, report the rest (exit 1)
+
 RIGHTS
   Your own workspace: read, edit and history. Another workspace: it must
   be connected to yours (k2 connections) AND a person must share the file
@@ -58,7 +66,8 @@ EXITS
   0 ok · 1 the tool's "no" (grep found nothing, diff differs, a patch or
   write conflicted, the doc moved: read again) or daemon unreachable ·
   2 bad usage / unsupported flag / too many edits (retry) · 3 refused ·
-  4 no such file, or it can't be a live doc. Errors end with a JSON line
+  4 no such file or change, or it can't be a live doc · 5 leased ·
+  6 the docs store failed · 8 too old. Errors end with a JSON line
   {"error":{"code","hint","status"}} on stderr.
 --- stderr
 --- requests

@@ -295,7 +295,10 @@ pub const SKILL_VERSION_ZEN: u32 = 45;
 /// topics gain `publish-visibility` and `publish-dev` (publish visibility),
 /// `tauri` and `app-errors` (Tauri core TC-29); `k2 app status`,
 /// `k2 explain` and `k2 capabilities`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 45;
+/// Bumped to 46 (0.46.7, the multiplayer chain, one bump for all of it): the
+/// k2-cli skill gains a "Live docs" block (`k2 doc`, edit live docs through
+/// it; live docs are switched per kind of file, `k2 doc cores`, `core_off`).
+pub const SKILL_VERSION_WORKSPACE: u32 = 46;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

@@ -246,6 +246,14 @@ def main():
     for l in ls.get("list") or []:
         if (l.get("protocol") or "").lower() == "smtp" and l.get("name") == "smtp":
             smtp = int(next(iter(l["bind"])).rsplit(":", 1)[1])
+    if smtp is not None:
+        # The sandbox's inbound listener isn't on :25, and Stalwart's stock
+        # rule asks for auth on any other port (`local_port != 25`): make the
+        # sandbox port the "inbound" one, as :25 is on a real box.
+        n, a = svc.call("x:MtaStageAuth/set", {"update": {"singleton": {"require": {"else": f"local_port != {smtp}"}}}})
+        info("c sandbox: inbound auth rule moved to the sandbox port", f"{n} {json.dumps(a)[:160]}")
+        n, a = svc.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
+        info("c sandbox: reload", f"{n} {json.dumps(a)[:120]}")
     if smtp is None:
         check("c an SMTP listener to test", False, json.dumps(ls)[:300])
     else:

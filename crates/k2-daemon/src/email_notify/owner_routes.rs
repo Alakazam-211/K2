@@ -325,7 +325,9 @@ fn relay_add(who: &Who, v: &J) -> Result<J, CliResponse> {
         from_domain: s(v, "fromDomain").unwrap_or_default().to_string(),
     };
     let checked = super::relay::validate(&args).map_err(|f| super::fail_response(&f))?;
-    confirm(who, v, super::CONFIRM_RELAY, &checked.host).map_err(|f| confirm_needed(f, super::CONFIRM_RELAY, &checked.host))?;
+    // L11: the confirm binds the host, the From domain and the login.
+    let binding = super::relay_binding(&checked.host, &checked.from_domain, &checked.username);
+    confirm(who, v, super::CONFIRM_RELAY, &binding).map_err(|f| confirm_needed(f, super::CONFIRM_RELAY, &binding))?;
     super::relay::add(&checked, &actor(who), super::now()).map_err(|f| super::fail_response(&f))
 }
 

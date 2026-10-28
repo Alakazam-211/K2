@@ -88,6 +88,27 @@ pub fn domain_carries_sender(domain: &str) -> bool {
     k2_core::email_notify::domain_has_sender(&conn, &d).unwrap_or(true)
 }
 
+/// May `domain`'s DKIM/autoconfig rows go in a PARENT zone (Email
+/// Notifications E11: a sending subdomain without its own zone)?
+/// Security review L10: only with the box switch on AND either the
+/// domain carries a live sender, or the caller is the owner/Admin (no
+/// agent passport). A mail-manage agent adding `x.brand.com` gets the
+/// exact zone only, as before 0.46.5. Call it with no db lock held.
+pub fn parent_zone_allowed(domain: &str) -> bool {
+    if !super::box_enabled() {
+        return false;
+    }
+    if matches!(crate::mail::agent_creds::mail_caller(), crate::mail::agent_creds::MailCaller::Owner) {
+        return true;
+    }
+    // Fail closed the other way from the fence: an unreadable store means
+    // the exact zone only.
+    let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::email_notify::domain_has_sender(&conn, &d).unwrap_or(false)
+}
+
 /// Does any live hosted sender exist on this box? Fail-closed.
 fn any_hosted_sender() -> bool {
     let db = k2_core::db::shared();

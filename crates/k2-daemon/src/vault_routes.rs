@@ -1801,9 +1801,9 @@ const CONFIRM_ACTIONS: &[&str] = &[
     crate::vault_systemd_routes::CONFIRM_ACTION,
     // Email Notifications (prd-email-notifications-core-v1 §5.3, 0.46.5):
     // adding a sender (`secretId` = its address), the system sender (its
-    // address), a relay login (its host), a test send (the sender's
-    // address), turning an App's email on and its any-address scope (the
-    // App's service id). Every caller, the owner token included.
+    // address), a relay login (host|fromDomain|username, L11), a test send (the sender's
+    // address), turning an App's email on and its any-address scope
+    // (serviceId|senderAddress, L11). Every caller, the owner token included.
     crate::email_notify::CONFIRM_SENDER,
     crate::email_notify::CONFIRM_SYSTEM_SENDER,
     crate::email_notify::CONFIRM_RELAY,

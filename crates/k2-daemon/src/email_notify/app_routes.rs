@@ -60,16 +60,25 @@ fn target(who: &Who, raw: Option<&str>) -> R<Target> {
     crate::apps::grace::target(who, raw).map_err(from_refusal)
 }
 
+/// A person who sends as themselves (no agent gate): the owner token or
+/// an Owner/Admin login. A plain K2 shell tab is NOT one here (security
+/// review L1): an agent can type into a shell tab, so a shell passport
+/// counts as its workspace's agent ([`agent_at`]).
 fn person(who: &Who) -> bool {
-    crate::app_push::owner_routes::admin_human(who)
+    matches!(who, Who::Owner | Who::Login { role: Role::Owner | Role::Admin, .. })
 }
 
 fn owner_in_person(who: &Who) -> bool {
     matches!(who, Who::Owner | Who::Login { role: Role::Owner, .. })
 }
 
+/// The App's own agent at `at`: its workspace's harness passport, or a
+/// plain shell tab in that workspace (L1: same switches, same gate).
 fn agent_at(who: &Who, t: &Target, at: crate::apps::access::Level) -> bool {
-    crate::app_push::owner_routes::app_agent_at(who, t, at)
+    match who {
+        Who::Shell { project_id, .. } => *project_id == t.project_id && crate::apps::access::level(project_id) >= at,
+        _ => crate::app_push::owner_routes::app_agent_at(who, t, at),
+    }
 }
 
 fn may_read(who: &Who, t: &Target) -> R<()> {
@@ -93,7 +102,7 @@ fn s<'a>(v: &'a J, k: &str) -> Option<&'a str> {
     v.get(k).and_then(J::as_str).map(str::trim).filter(|x| !x.is_empty())
 }
 
-fn take_confirm(who: &Who, token: Option<&str>, action: &str, service_id: &str) -> R<()> {
+fn take_confirm(who: &Who, token: Option<&str>, action: &str, binding: &str) -> R<()> {
     let stamp = match who {
         Who::Owner => "owner".to_string(),
         Who::Login { username, .. } => format!("connect:{username}"),
@@ -114,8 +123,8 @@ fn take_confirm(who: &Who, token: Option<&str>, action: &str, service_id: &str) 
     let vault = crate::vault::get().map_err(|_| fail(503, "vault_closed", "the vault isn't open yet"))?;
     vault
         .confirm
-        .take(token, action, Some(service_id), &stamp)
-        .map_err(|_| fail(403, "vault_confirm_required", "confirm again: a confirm works once, for this App, within 60 seconds"))?;
+        .take(token, action, Some(binding), &stamp)
+        .map_err(|_| fail(403, "vault_confirm_required", "confirm again: a confirm works once, for this App and this sender, within 60 seconds"))?;
     Ok(())
 }
 
@@ -147,20 +156,23 @@ fn on(who: &Who, v: &J) -> Result<J, CliResponse> {
     if let Some(other) = sender.app().filter(|a| *a != t.service_id) {
         return Err(super::fail_response(&fail(409, "sender_in_use", &format!("{} is App {other}'s sender (one App per address)", sender.address))));
     }
+    // L11: the confirm binds the App AND this sender.
+    let binding = super::app_binding(&t.service_id, &sender.address);
     let needed = |f: Fail, action: &str| -> CliResponse {
         let mut r = super::fail_response(&f);
         if f.code == "vault_confirm_required" {
             if let Ok(mut b) = serde_json::from_str::<J>(&r.body) {
                 b["error"]["action"] = json!(action);
                 b["error"]["serviceId"] = json!(t.service_id);
+                b["error"]["secretId"] = json!(binding);
                 r.body = b.to_string();
             }
         }
         r
     };
-    take_confirm(who, s(v, "confirmToken"), super::CONFIRM_APP_ON, &t.service_id).map_err(|f| needed(f, super::CONFIRM_APP_ON))?;
+    take_confirm(who, s(v, "confirmToken"), super::CONFIRM_APP_ON, &binding).map_err(|f| needed(f, super::CONFIRM_APP_ON))?;
     if scope == store::SCOPE_ANY {
-        take_confirm(who, s(v, "confirmAnyToken"), super::CONFIRM_APP_ANY, &t.service_id).map_err(|f| needed(f, super::CONFIRM_APP_ANY))?;
+        take_confirm(who, s(v, "confirmAnyToken"), super::CONFIRM_APP_ANY, &binding).map_err(|f| needed(f, super::CONFIRM_APP_ANY))?;
     }
     let by = crate::apps::routes::actor(who);
     {

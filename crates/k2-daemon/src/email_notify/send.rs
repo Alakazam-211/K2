@@ -48,7 +48,8 @@ pub const MAX_REFUSED_ROWS_PER_HOUR: i64 = 100;
 pub enum Caller {
     /// The App itself: its link pass or an App key.
     App { app: String, actor: String },
-    /// A person (the owner, an Admin, a K2 shell tab) via `k2 app email send`.
+    /// A person (the owner token, an Owner/Admin login) via `k2 app email send`.
+    /// A plain K2 shell tab is the workspace's agent, never a person (L1).
     Person { app: String, actor: String },
     /// The App's own agent via `k2 app email send` (its agentSend gate).
     Agent { app: String, actor: String, project_id: String, project_path: String },

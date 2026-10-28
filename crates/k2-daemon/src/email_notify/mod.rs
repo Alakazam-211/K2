@@ -67,10 +67,10 @@ pub const SWITCH_ENV: &str = "K2_EMAIL_NOTIFICATIONS";
 /// the owner token included, needs one: agents can read the token.
 pub const CONFIRM_SENDER: &str = "email-sender"; // the address
 pub const CONFIRM_SYSTEM_SENDER: &str = "email-system-sender"; // the sender address
-pub const CONFIRM_RELAY: &str = "email-relay"; // the relay host
+pub const CONFIRM_RELAY: &str = "email-relay"; // host|fromDomain|username (relay_binding)
 pub const CONFIRM_TEST: &str = "email-test"; // the sender address
-pub const CONFIRM_APP_ON: &str = "app-email-on"; // the App's service id
-pub const CONFIRM_APP_ANY: &str = "app-email-any"; // the App's service id
+pub const CONFIRM_APP_ON: &str = "app-email-on"; // serviceId|senderAddress (app_binding)
+pub const CONFIRM_APP_ANY: &str = "app-email-any"; // serviceId|senderAddress (app_binding)
 
 /// Every confirm action this module registers (vault_routes' list).
 pub const CONFIRM_ACTIONS: &[&str] = &[CONFIRM_SENDER, CONFIRM_SYSTEM_SENDER, CONFIRM_RELAY, CONFIRM_TEST, CONFIRM_APP_ON, CONFIRM_APP_ANY];
@@ -128,34 +128,62 @@ pub fn confirm_reason(action: &str, secret_id: Option<&str>) -> Option<Result<St
     Some(Ok(match action {
         CONFIRM_SENDER => format!("add {} as a notification sender (K2 creates a send-only account no agent can read)", clean(id)),
         CONFIRM_SYSTEM_SENDER => format!("make {} the system sender: K2's own password resets and codes come from it", clean(id)),
-        CONFIRM_RELAY => format!("store an SMTP relay login for {} (notifications from this server go through it)", clean(id)),
+        CONFIRM_RELAY => {
+            let Some((host, from_domain, username)) = relay_binding_parts(id) else {
+                return Some(Err("secretId for a relay confirm is host|fromDomain|username"));
+            };
+            format!(
+                "store an SMTP relay login {} at {} for mail from {} (notifications from this server go through it)",
+                clean(username),
+                clean(host),
+                clean(from_domain)
+            )
+        }
         CONFIRM_TEST => format!("send one test email from {} to your own address", clean(id)),
         CONFIRM_APP_ON | CONFIRM_APP_ANY => {
-            let Some(row) = crate::app_push::published(id) else { return Some(Err("no published App by that service id")) };
-            let name: String = row.name.chars().filter(|c| !c.is_control()).take(64).collect();
-            let sender = {
-                let db = k2_core::db::shared();
-                let conn = db.lock();
-                pending_sender_label(&conn, id)
+            let Some((service_id, sender_raw)) = app_binding_parts(id) else {
+                return Some(Err("secretId for an App email confirm is serviceId|senderAddress"));
             };
+            let Some(row) = crate::app_push::published(service_id) else { return Some(Err("no published App by that service id")) };
+            let name: String = row.name.chars().filter(|c| !c.is_control()).take(64).collect();
+            // The sender from the daemon's own records, never the label sent.
+            let Ok(sender) = senders::find_live(sender_raw) else { return Some(Err("no live sender by that address")) };
             if action == CONFIRM_APP_ANY {
-                format!("let App {name} ({}) email ANY address, not only its own users", row.id)
+                format!("let App {name} ({}) email ANY address from {}, not only its own users", row.id, sender.address)
             } else {
-                format!("let App {name} ({}) send email{sender}", row.id)
+                format!("let App {name} ({}) send email as {}", row.id, sender.address)
             }
         }
         _ => return None,
     }))
 }
 
-/// ` as noreply@brand.com` when the App already holds a sender (the
-/// confirm sheet for turning it back on); empty otherwise (the CLI names
-/// the sender it asks for).
-fn pending_sender_label(conn: &rusqlite::Connection, app: &str) -> String {
-    match k2_core::email_notify::app_sender(conn, app) {
-        Ok(Some(s)) => format!(" as {}", s.address),
-        _ => String::new(),
-    }
+/// The `secretId` an `app-email-on`/`-any` confirm binds (security review
+/// L11): the App AND the sender, so a confirm for one sender can't turn
+/// the App on with another.
+pub fn app_binding(service_id: &str, sender_address: &str) -> String {
+    format!("{service_id}|{}", sender_address.trim().to_ascii_lowercase())
+}
+
+/// `(service id, sender address)` out of an [`app_binding`].
+pub fn app_binding_parts(id: &str) -> Option<(&str, &str)> {
+    let (svc, sender) = id.split_once('|')?;
+    let (svc, sender) = (svc.trim(), sender.trim());
+    (!svc.is_empty() && sender.contains('@')).then_some((svc, sender))
+}
+
+/// The `secretId` an `email-relay` confirm binds (L11): host, the From
+/// domain and the login, so a confirm for one relay can't store another.
+pub fn relay_binding(host: &str, from_domain: &str, username: &str) -> String {
+    format!("{host}|{from_domain}|{username}")
+}
+
+/// `(host, from domain, username)` out of a [`relay_binding`] (the
+/// username is last: it may hold any character).
+pub fn relay_binding_parts(id: &str) -> Option<(&str, &str, &str)> {
+    let mut it = id.splitn(3, '|');
+    let (h, d, u) = (it.next()?, it.next()?, it.next()?);
+    (!h.is_empty() && !d.is_empty() && !u.is_empty()).then_some((h, d, u))
 }
 
 /// Wall-clock seconds.

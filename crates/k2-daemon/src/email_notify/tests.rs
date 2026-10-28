@@ -1066,13 +1066,22 @@ fn on_is_the_owners_with_a_confirm_and_any_needs_a_second() {
     let (st, v) = app_post(app_routes::ON, &agent, json!({"app": f.app, "sender": s.address}));
     assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
     let (st, v) = app_post(app_routes::ON, &Who::Owner, json!({"app": f.app, "sender": s.address}));
+    let bind = app_binding(&f.app, &s.address);
     assert_eq!((st, v["error"]["action"].clone(), v["error"]["serviceId"].clone()), (403, json!(CONFIRM_APP_ON), json!(f.app)), "{v}");
+    assert_eq!(v["error"]["secretId"], json!(bind), "L11: the confirm binds the App and the sender");
     let vault = crate::vault::ensure_test_vault();
-    let tok = vault.confirm.mint(CONFIRM_APP_ON, Some(&f.app), "owner", "local-auth");
+    // L11: a confirm for the App alone, or for another sender, never turns it on.
+    let other = add_hosted("other@notify.brand.test");
+    for wrong in [f.app.clone(), app_binding(&f.app, &other.address)] {
+        let tok = vault.confirm.mint(CONFIRM_APP_ON, Some(&wrong), "owner", "local-auth");
+        let (st, v) = app_post(app_routes::ON, &Who::Owner, json!({"app": f.app, "sender": s.address, "confirmToken": tok}));
+        assert_eq!((st, v["error"]["code"].clone()), (403, json!("vault_confirm_required")), "{wrong}: {v}");
+    }
+    let tok = vault.confirm.mint(CONFIRM_APP_ON, Some(&bind), "owner", "local-auth");
     let (st, v) = app_post(app_routes::ON, &Who::Owner, json!({"app": f.app, "sender": s.address, "scope": "any", "confirmToken": tok}));
     assert_eq!((st, v["error"]["action"].clone()), (403, json!(CONFIRM_APP_ANY)), "any asks again: {v}");
-    let tok = vault.confirm.mint(CONFIRM_APP_ON, Some(&f.app), "owner", "local-auth");
-    let any = vault.confirm.mint(CONFIRM_APP_ANY, Some(&f.app), "owner", "local-auth");
+    let tok = vault.confirm.mint(CONFIRM_APP_ON, Some(&bind), "owner", "local-auth");
+    let any = vault.confirm.mint(CONFIRM_APP_ANY, Some(&bind), "owner", "local-auth");
     let (st, v) = app_post(app_routes::ON, &Who::Owner, json!({"app": f.app, "sender": s.address, "scope": "any", "confirmToken": tok, "confirmAnyToken": any}));
     assert_eq!((st, v["on"].clone(), v["recipientScope"].clone()), (200, json!(true), json!("any")), "{v}");
     // The App's agent may turn it off, never on.
@@ -1081,12 +1090,22 @@ fn on_is_the_owners_with_a_confirm_and_any_needs_a_second() {
     // The system sender is never granted.
     let sys = add_hosted("system@notify.brand.test");
     senders::set_system(&sys.id, "owner", now()).expect("system");
-    let tok = vault.confirm.mint(CONFIRM_APP_ON, Some(&f.other_app), "owner", "local-auth");
+    let tok = vault.confirm.mint(CONFIRM_APP_ON, Some(&app_binding(&f.other_app, &sys.address)), "owner", "local-auth");
     let (st, v) = app_post(app_routes::ON, &Who::Owner, json!({"app": f.other_app, "sender": sys.address, "confirmToken": tok}));
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("system_sender")), "{v}");
     // The confirm sheet names the App from the daemon's record.
-    let reason = confirm_reason(CONFIRM_APP_ANY, Some(&f.app)).expect("ours").expect("an App");
-    assert!(reason.contains("shop") && reason.contains("ANY"), "{reason}");
+    let reason = confirm_reason(CONFIRM_APP_ANY, Some(&bind)).expect("ours").expect("an App");
+    assert!(reason.contains("shop") && reason.contains("ANY") && reason.contains(&s.address), "{reason}");
+    let reason = confirm_reason(CONFIRM_APP_ON, Some(&bind)).expect("ours").expect("an App");
+    assert!(reason.contains("shop") && reason.contains(&s.address), "L11: the sheet names the sender: {reason}");
+    assert!(matches!(confirm_reason(CONFIRM_APP_ON, Some(&f.app)), Some(Err(_))), "the old App-only id is refused");
+    assert!(matches!(confirm_reason(CONFIRM_APP_ON, Some(&app_binding(&f.app, "nobody@notify.brand.test"))), Some(Err(_))), "an unknown sender");
+    // L11: the relay confirm binds host, From domain and login, and the sheet prints them.
+    let rb = relay_binding("smtp.relay.test", "brand.test", "user@relay");
+    assert_eq!(relay_binding_parts(&rb), Some(("smtp.relay.test", "brand.test", "user@relay")));
+    let r = confirm_reason(CONFIRM_RELAY, Some(&rb)).expect("ours").expect("text");
+    assert!(r.contains("smtp.relay.test") && r.contains("brand.test") && r.contains("user@relay"), "{r}");
+    assert!(matches!(confirm_reason(CONFIRM_RELAY, Some("smtp.relay.test")), Some(Err(_))), "host alone is refused");
 }
 
 #[test]
@@ -1126,6 +1145,39 @@ fn the_apps_agent_sends_under_its_gate_and_approval_holds_it() {
     let q: HashMap<String, String> = [("app".to_string(), f.app.clone())].into_iter().collect();
     assert_eq!(status_of(&app_routes::handle(app_routes::LOG, agent, false, b"", &q)), 200);
     assert_eq!(status_of(&app_routes::handle(app_routes::LOG, stranger, false, b"", &q)), 404);
+}
+
+#[test]
+fn a_shell_tab_is_its_workspaces_agent_never_a_person_l1() {
+    let f = fx("n11l1");
+    on_app(&f, store::SCOPE_ANY);
+    let shell = Who::Shell { project_id: f.ws.clone(), session_id: "s".into() };
+    let send_body = json!({"app": f.app, "to": "a@x.test", "subject": "Shell", "text": "t"});
+    // No switches: a shell tab is no longer let through as a person.
+    agent_switches(&f.ws, false, false);
+    let (st, v) = app_post(app_routes::SEND, &shell, send_body.clone());
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("forbidden")), "{v}");
+    let q: HashMap<String, String> = [("app".to_string(), f.app.clone())].into_iter().collect();
+    assert_eq!(status_of(&app_routes::handle(app_routes::LOG, shell.clone(), false, b"", &q)), 403, "no read either");
+    // With the switches, it is the App's agent: the agentSend gate applies (off by default).
+    agent_switches(&f.ws, true, true);
+    let (st, v) = app_post(app_routes::SEND, &shell, send_body.clone());
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("gated")), "{v}");
+    assert!(f.engine.sent.lock().unwrap().is_empty(), "nothing left the box");
+    assert_eq!(status_of(&app_routes::handle(app_routes::LOG, shell, false, b"", &q)), 200, "reads as the App's agent");
+    // A shell tab in another workspace is nobody here.
+    let other = Who::Shell { project_id: f.other_ws.clone(), session_id: "s".into() };
+    let (st, _) = app_post(app_routes::SEND, &other, send_body.clone());
+    assert!(st == 403 || st == 404, "{st}");
+    // Turning email on stays the owner's in person.
+    let (st, v) = app_post(app_routes::ON, &Who::Shell { project_id: f.ws.clone(), session_id: "s".into() }, json!({"app": f.app, "sender": "x@y.test"}));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "{v}");
+    // The owner token and an Admin login still send as themselves.
+    let (st, v) = app_post(app_routes::SEND, &Who::Owner, send_body.clone());
+    assert_eq!((st, v["status"].clone()), (202, json!("submitted")), "{v}");
+    let admin = Who::Login { username: "ada".into(), role: Role::Admin };
+    let (st, v) = app_post(app_routes::SEND, &admin, send_body);
+    assert_eq!((st, v["status"].clone()), (202, json!("submitted")), "{v}");
 }
 
 #[test]

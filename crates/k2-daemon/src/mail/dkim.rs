@@ -427,22 +427,29 @@ fn poll_zone_for_selectors(
 /// Is the zone `domain` lives in (its own binding, or for a sending
 /// subdomain the longest bound parent, Email Notifications E11) writable?
 fn apex_writable(domain: &str) -> bool {
+    let parent_ok = crate::email_notify::fence::parent_zone_allowed(domain);
     let db = k2_core::db::shared();
     let conn = db.lock();
-    if !crate::email_notify::box_enabled() {
+    if !parent_ok {
         return k2_core::domains::apex_attached_for_write(&conn, domain).unwrap_or(false);
     }
-    match binding_for(&conn, domain) {
+    match binding_for(&conn, domain, parent_ok) {
         Ok(Some((b, _))) => k2_core::domains::apex_attached_for_write(&conn, &b.apex).unwrap_or(false),
         _ => false,
     }
 }
 
-/// `domain`'s binding: with Email Notifications on, the longest bound
-/// zone it sits in (E11); off, only its own (exact) binding, as before
-/// the feature (security review L9).
-fn binding_for(conn: &rusqlite::Connection, domain: &str) -> rusqlite::Result<Option<(k2_core::domains::DomainBinding, String)>> {
-    if crate::email_notify::box_enabled() {
+/// `domain`'s binding: the longest bound zone it sits in (E11) when
+/// `parent_ok` ([`crate::email_notify::fence::parent_zone_allowed`]: the
+/// switch on, and a sender on the domain or the owner/Admin calling);
+/// otherwise only its own (exact) binding, as before the feature
+/// (security review L9, L10).
+fn binding_for(
+    conn: &rusqlite::Connection,
+    domain: &str,
+    parent_ok: bool,
+) -> rusqlite::Result<Option<(k2_core::domains::DomainBinding, String)>> {
+    if parent_ok {
         return k2_core::domains::binding_for_name(conn, domain);
     }
     Ok(k2_core::domains::get_binding(conn, domain)?.map(|b| (b, String::new())))
@@ -464,9 +471,10 @@ pub(crate) fn dkim_record_name(selector: &str, sub_labels: &str) -> String {
 
 /// `(zone id, writable, record name, zone apex)` for `domain`'s DKIM row.
 fn dkim_zone(domain: &str, selector: &str) -> Result<(Option<String>, bool, String, String), String> {
+    let parent_ok = crate::email_notify::fence::parent_zone_allowed(domain);
     let db = k2_core::db::shared();
     let conn = db.lock();
-    let (b, sub) = binding_for(&conn, domain)
+    let (b, sub) = binding_for(&conn, domain, parent_ok)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "no domain binding".to_string())?;
     Ok((b.zone_id.clone(), b.dns_write, dkim_record_name(selector, &sub), b.apex.clone()))
@@ -645,6 +653,43 @@ mod tests {
         assert!(dkim_zone("notify.brand.com", "s1").is_err(), "off: no parent-zone planting");
         assert_eq!(dkim_zone("brand.com", "s1").expect("exact").2, "s1._domainkey");
         crate::email_notify::set_test_switch(None);
+    }
+
+    #[test]
+    fn an_agent_adding_a_subdomain_gets_the_exact_zone_only_l10() {
+        // Security review L10: with the switch on, a mail-manage agent's
+        // x.brand.com must not land in brand.com's zone unless the domain
+        // carries a sender; the owner (no passport) still may.
+        let _db = k2_core::db::scoped_for_test();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_binding(&conn, "brand.com", Some("zone-brand"), true).unwrap();
+        }
+        let agent = || {
+            Some(crate::session_token::HookPrincipal {
+                workspace_uuid: "ws-it".to_string(),
+                agent_address: "agent".to_string(),
+            })
+        };
+        let as_agent = |d: &'static str| crate::caller_workspace::with_request_principal(agent(), || dkim_zone(d, "s1"));
+        assert!(as_agent("x.brand.com").is_err(), "an agent: no parent-zone planting");
+        assert!(!crate::caller_workspace::with_request_principal(agent(), || apex_writable("x.brand.com")));
+        assert_eq!(as_agent("brand.com").expect("exact").2, "s1._domainkey", "its own zone still works");
+        // The owner (no passport) may plant a subdomain into the parent zone.
+        assert_eq!(dkim_zone("x.brand.com", "s1").expect("owner").3, "brand.com");
+        // A domain carrying a live sender: the parent zone, whoever calls.
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO email_senders (id, address, domain, path, owner_kind, from_name, state, created_at, updated_at) \
+                 VALUES ('snd-l10', 'noreply@x.brand.com', 'x.brand.com', 'hosted', 'system', 'Brand', 'ready', 1, 1)",
+                [],
+            )
+            .expect("sender");
+        }
+        assert_eq!(as_agent("x.brand.com").expect("sender domain").3, "brand.com");
     }
 
     #[test]

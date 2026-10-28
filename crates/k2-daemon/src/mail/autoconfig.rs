@@ -201,9 +201,10 @@ fn zone_for(v: &serde_json::Value, domain: &str) -> Option<(String, String)> {
             (!d.is_empty()).then(|| (d, id.to_string()))
         })
         .collect();
-    // With Email Notifications off: the exact zone only, as before the
-    // feature (security review L9).
-    if !crate::email_notify::box_enabled() {
+    // The exact zone only unless a parent zone is allowed: the switch on,
+    // and a sender on the domain or the owner/Admin calling (security
+    // review L9, L10).
+    if !crate::email_notify::fence::parent_zone_allowed(domain) {
         let want = domain.trim().trim_end_matches('.').to_ascii_lowercase();
         return zones.into_iter().find(|(d, _)| *d == want).map(|(d, id)| (id, d));
     }
@@ -365,6 +366,30 @@ mod tests {
         assert_eq!(zone_for(&v, "Brand.com."), Some(("z-brand".to_string(), "brand.com".to_string())));
         crate::email_notify::set_test_switch(None);
         assert!(zone_for(&v, "notify.brand.com").is_some());
+    }
+
+    #[test]
+    fn an_agent_gets_the_exact_zone_unless_the_domain_carries_a_sender_l10() {
+        let _db = k2_core::db::scoped_for_test();
+        let v = serde_json::json!({ "zones": [{ "id": "z-brand", "domain": "brand.com." }]});
+        let agent = || {
+            Some(crate::session_token::HookPrincipal { workspace_uuid: "ws-it".to_string(), agent_address: "agent".to_string() })
+        };
+        let as_agent = |d: &'static str| crate::caller_workspace::with_request_principal(agent(), || zone_for(&v, d));
+        assert_eq!(as_agent("x.brand.com"), None, "an agent: no parent-zone planting");
+        assert_eq!(as_agent("brand.com"), Some(("z-brand".to_string(), "brand.com".to_string())));
+        assert!(zone_for(&v, "x.brand.com").is_some(), "the owner may");
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO email_senders (id, address, domain, path, owner_kind, from_name, state, created_at, updated_at) \
+                 VALUES ('snd-l10a', 'noreply@x.brand.com', 'x.brand.com', 'hosted', 'system', 'Brand', 'ready', 1, 1)",
+                [],
+            )
+            .expect("sender");
+        }
+        assert_eq!(as_agent("x.brand.com"), Some(("z-brand".to_string(), "brand.com".to_string())), "a sender's domain");
     }
 
     #[test]

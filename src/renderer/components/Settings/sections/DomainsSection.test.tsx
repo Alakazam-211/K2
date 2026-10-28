@@ -286,7 +286,7 @@ describe('DomainsSection — custom App names', () => {
     )
   })
 
-  it('a grandfathered name reads served by your own proxy, with no TXT to set', async () => {
+  it('a grandfathered name reads served by your own web server, with no TXT to set', async () => {
     const ext = structuredClone(WAITING)
     ext.names[0].app = {
       ...ext.names[0].app!,
@@ -300,7 +300,7 @@ describe('DomainsSection — custom App names', () => {
     listRows = [ext]
     render(<DomainsSection />)
     const chip = await screen.findByTestId('app-state-nsi.agentnsi.com')
-    expect(chip.textContent).toBe('served by your own proxy (not by K2) · primary')
+    expect(chip.textContent).toBe('served by your own web server (not by K2) · primary')
     expect(screen.queryByText(/\(DNS-only\)/)).toBeNull()
   })
 

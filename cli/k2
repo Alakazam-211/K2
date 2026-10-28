@@ -14043,8 +14043,9 @@ k2 notify email: an agent emails a person on this server (text only).
                  saying which agent sent it, and a link to stop them.
                  Refusals (the error code, then what to do):
                    agent_email_off    off for this workspace: only the owner
-                                      turns it on. The error ends with the
-                                      k2 permission request … line to ask.
+                                      turns it on. Ask them: run the
+                                      "Ask with:" line the error ends with,
+                                      if it has one, else a Thread message.
                    no_notice_address  the person hasn't confirmed an address
                                       (they run k2 notifications email
                                       address set themselves); tell them.

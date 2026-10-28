@@ -1381,7 +1381,8 @@ async fn queue_view_shows_whats_ahead_and_the_numbers() {
     let q = &second["queue"];
     assert_eq!((q["position"].as_u64(), q["reason"].as_str()), (Some(1), Some("local_resource_limit")), "{second}");
     let msg = q["message"].as_str().expect("message");
-    assert!(msg.starts_with("asks 4 CPUs; ") && msg.contains("of 6 CPUs free; 1 running"), "{msg}");
+    // 0.46.6: no --mem reserves the 4 GB default, so the ask names it.
+    assert!(msg.starts_with("asks 4.0 GB and 4 CPUs; ") && msg.contains("of 6 CPUs free; 1 running"), "{msg}");
     // A's next job is behind its grant (1 parallel), second in the queue.
     // FIFO is by created_at (whole seconds), then id: make the order certain.
     tokio::time::sleep(Duration::from_millis(1100)).await;
@@ -1585,6 +1586,8 @@ async fn job_tiers_on_a_solo_node() {
     let body = |client: &str, argv: &[&str], tier: Option<&str>| {
         let mut b = run_body("tiers", argv, client);
         b["noSource"] = json!(true);
+        // With --mem: no mem_defaulted note among the tier notes.
+        b["memBytes"] = json!(1u64 << 30);
         if let Some(t) = tier {
             b["tier"] = json!(t);
             // 0.46.6: Priority needs a one-line --why.
@@ -1739,6 +1742,9 @@ async fn job_tiers_v2_on_a_solo_node() {
     let (agent, _) = passport(&ws);
     let (outsider, _) = passport(&other);
     let (running, node_id) = online_node_for(&env, port, "tiers2", &ws).await;
+    // The other workspace may use compute too; it still never sees our jobs.
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": other.id, "toggle": "compute", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
     let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": "tiers2", "workspace": ws.id, "maxParallel": 4, "maxQueued": 20})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     node_pause(port, "tiers2", "pause").await;

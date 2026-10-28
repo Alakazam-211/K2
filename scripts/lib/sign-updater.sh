@@ -13,28 +13,28 @@
 #                                         UPDATER_KEYS (file: + version: exact)
 #   k2u_verify_u1 <file> <minisig> <asset>
 #                                         the bridge signature, as installs
-#                                         older than 0.46.5 check it
+#                                         older than 0.46.6 check it
 #   k2u_slot_key_id u2                    the U2 key id (k2_signatures key)
 #   k2u_b64 <file>                        one-line base64 of a file
 #
 # Two keys, every release signed with both (prd-security-sweep-0464-v1
 # SS4/SS5, option C, the bridge):
-#   U1  the retired key E9111446F65EBB05, for installs older than 0.46.5:
+#   U1  the retired key E9111446F65EBB05, for installs older than 0.46.6:
 #       the old fields (`signature` in latest.json, `.sig` for daemons),
 #       Tauri-signer format, trusted comment "timestamp:…\tfile:<asset>".
-#   U2  the new key (scripts/updater-key-ceremony.sh), the only one 0.46.5+
+#   U2  the new key (scripts/updater-key-ceremony.sh), the only one 0.46.6+
 #       trusts (with the offline backup U3): `k2_signatures` in latest.json,
 #       `.sig2` for daemons, trusted comment
 #       "timestamp:…\tfile:<asset>\tversion:<x.y.z>".
 #
 # What this stops and what it doesn't (security review, accepted risk for
-# 0.46.5 pending Rosson's OK): the key never sits in the environment or argv
+# 0.46.6 pending Rosson's OK): the key never sits in the environment or argv
 # of anything release.sh starts, so builds and packages don't inherit it.
 # Any process running as this macOS user can still read the key file and
 # ask the unlocked login keychain for its password (no `-T ""`: that would
 # break unattended releases). Same model as the root-helper key. The real
 # fix is SS2b: a separate `k2sign` user that holds the keys and only signs
-# (0.46.5).
+# (0.46.6).
 #
 # How the secret is handled:
 #   - The key file is read only inside k2u_sign, through a process
@@ -60,11 +60,11 @@
 # is for agent sessions only, a person caller must `reveal` with a per-use
 # Touch ID confirm (blocks an unattended release), env-file refuses
 # multi-line values, and macOS has no memory-backed folder for secret files.
-# Until a vault verb exists, the 0.46.5 fallback is the login keychain, the
+# Until a vault verb exists, the 0.46.6 fallback is the login keychain, the
 # same as the root-helper key. Swapping the source is k2u_password and
 # k2u_key_text only.
 #
-# ── One-time setup on z3mbpZ (Rosson, GUI terminal, before 0.46.5) ─────────
+# ── One-time setup on z3mbpZ (Rosson, GUI terminal, before 0.46.6) ─────────
 # U2: scripts/updater-key-ceremony.sh generate (docs/release/updater-key-ceremony.md).
 # U1 (today's key, for the bridge):
 #   mkdir -p ~/.k2-updater && chmod 700 ~/.k2-updater
@@ -257,7 +257,7 @@ k2u_sign() {
 }
 
 # k2u_verify_u2 <file> <minisig (raw or base64)> <asset> <version>: what a
-# 0.46.5+ install checks — a key from the source tree's UPDATER_KEYS, a
+# 0.46.6+ install checks — a key from the source tree's UPDATER_KEYS, a
 # prehashed signature, and a trusted comment with exactly one file:<asset>
 # and exactly one version:<version>.
 k2u_verify_u2() {
@@ -296,12 +296,12 @@ sys.exit(0 if files == [sys.argv[2]] and vers == [sys.argv[3]] else 1)' "$(print
 }
 
 # k2u_verify_u1 <file> <minisig (raw or base64)> <asset>: what an install
-# older than 0.46.5 checks on the bridge signature — the source tree's
-# LEGACY_UPDATER_KEY_B64 (U1), a prehashed signature (0.46.4 daemons refuse
+# older than 0.46.6 checks on the bridge signature — the source tree's
+# LEGACY_UPDATER_KEY_B64 (U1), a prehashed signature (0.46.5 and older daemons refuse
 # legacy ones) and a trusted comment with exactly one file:<asset> and no
 # version: field (the Tauri plugin would compare one with the manifest).
 # Dual-signing is fail closed both ways: a release without a good U1
-# signature strands every install still on 0.46.4 or older.
+# signature strands every install still on 0.46.5 or older.
 k2u_verify_u1() {
     local file="$1" sigf="$2" asset="$3" pub tc tmp
     pub="$(k2u_source_keys legacy)" || { k2u_fail "no U1 public key in the source tree"; return 1; }

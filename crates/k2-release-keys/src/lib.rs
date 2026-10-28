@@ -6,7 +6,7 @@
 //! [`UPDATER_KEYS`]. U1 (`E9111446F65EBB05`) is the retired key: z3mbpZ
 //! still signs every release with it during the bridge, in the old fields
 //! (`signature` in `latest.json`, `sig` in `daemon-latest.json`), so
-//! installs older than 0.46.5 keep updating. **No verifier in this tree
+//! installs older than 0.46.6 keep updating. **No verifier in this tree
 //! trusts U1**: it appears only as [`LEGACY_UPDATER_KEY_B64`], which the
 //! signing scripts and the copies test read.
 //!
@@ -53,14 +53,14 @@ pub const UPDATER_KEYS: &[TrustedKey] = &[];
 
 /// U1, the retired update key `E9111446F65EBB05` (the minisign key line).
 /// Signing scripts use it to make bridge signatures for installs older than
-/// 0.46.5; no verifier may use it. Removed when the bridge ends (SS6).
+/// 0.46.6; no verifier may use it. Removed when the bridge ends (SS6).
 pub const LEGACY_UPDATER_KEY_B64: &str = "RWQFu172RhQR6QBqzmij2E9btDGhDWmpdH+ah1/M4PmuHPINUWvKLf6o";
 /// U1's key id.
 pub const LEGACY_UPDATER_KEY_ID: &str = "E9111446F65EBB05";
 
 /// The first release signed with U2. Older releases carry no `sig2` /
-/// `k2_signatures`, so a 0.46.5+ verifier can't install them.
-pub const FIRST_U2_SIGNED_VERSION: &str = "0.46.5";
+/// `k2_signatures`, so a 0.46.6+ verifier can't install them.
+pub const FIRST_U2_SIGNED_VERSION: &str = "0.46.6";
 
 /// What a successful verify proved.
 #[derive(Debug, Clone, PartialEq, Eq)]

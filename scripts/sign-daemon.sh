@@ -41,7 +41,7 @@
 #   3. sign twice (scripts/lib/sign-updater.sh, each verified against the
 #      source tree's keys): `.sig` with the retired key U1 (raw minisig,
 #      `timestamp:…\tfile:k2-daemon-linux-<arch>`, for installs older than
-#      0.46.5) and `.sig2` with U2 (`…\tversion:<v>`, the only one 0.46.5+
+#      0.46.6) and `.sig2` with U2 (`…\tversion:<v>`, the only one 0.46.6+
 #      accepts; SS4/SS5);
 # then merge both into daemon-latest.json with scripts/merge-daemon-manifest.py
 # (the same script CI's old merge job ran: same keys and fields, plus
@@ -49,7 +49,7 @@
 # manifest never lists a daemon whose signatures aren't up yet. Finally it
 # re-downloads the published manifest, each published daemon (its hash must
 # be the one it signed) and the .sig2 files, and checks them the way a
-# 0.46.5 install does.
+# 0.46.6 install does.
 #
 # Re-running daemon-binaries.yml by hand: delete the release's
 # k2-daemon-linux-<arch> and .sha256 first (no --clobber), then
@@ -62,7 +62,7 @@
 # that passes every check here, and this script will sign it. SS1 stops the
 # key from being copied off GitHub and stops a swapped release asset. The
 # real fix is two independent builds (GitHub + K2 Compute) whose hashes
-# must match, which needs reproducible builds: 0.46.5 work, owner K2 (plan
+# must match, which needs reproducible builds: later work, owner K2 (plan
 # G12; docs/release/updater-key-ceremony.md "Next: two independent builds").
 #
 # Environment:
@@ -336,20 +336,20 @@ gh release upload "$TAG" -R "$REPO" "${up[@]}" --clobber
 gh release upload "$TAG" -R "$REPO" "$ASSETS/daemon-latest.json" --clobber
 [ -z "$OUT" ] || cp "$ASSETS"/*.sig "$ASSETS"/*.sig2 "$ASSETS/daemon-latest.json" "$OUT/"
 
-# 6. What a 0.46.5 install sees: the published manifest's sig2 for each
+# 6. What a 0.46.6 install sees: the published manifest's sig2 for each
 # Linux daemon, downloaded, verified with the source tree's UPDATER_KEYS.
 CHECK="$WORK/published"; mkdir -p "$CHECK"
 gh release download "$TAG" -R "$REPO" -p daemon-latest.json -D "$CHECK" --clobber
 for ARCH in "${ARCHES[@]}"; do
     A="k2-daemon-linux-$ARCH"
     python3 -I - "$CHECK/daemon-latest.json" "linux-$ARCH" "$(sha256_of "$ASSETS/$A")" "https://github.com/$REPO/releases/download/$TAG/$A.sig2" <<'PY' \
-        || die "published daemon-latest.json linux-$ARCH is wrong (sha256 or sig2): no 0.46.5+ Linux install could update"
+        || die "published daemon-latest.json linux-$ARCH is wrong (sha256 or sig2): no 0.46.6+ Linux install could update"
 import json, sys
 e = json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]
 sys.exit(0 if e.get("sha256") == sys.argv[3] and e.get("sig2") == sys.argv[4] else 1)
 PY
     python3 -I - "$CHECK/daemon-latest.json" "linux-$ARCH" "https://github.com/$REPO/releases/download/$TAG/$A.sig" <<'PY' \
-        || die "published daemon-latest.json linux-$ARCH has no (or a wrong) sig: installs on 0.46.4 or older could not update"
+        || die "published daemon-latest.json linux-$ARCH has no (or a wrong) sig: installs on 0.46.5 or older could not update"
 import json, sys
 e = json.load(open(sys.argv[1]))["artifacts"][sys.argv[2]]
 sys.exit(0 if e.get("sig") == sys.argv[3] else 1)
@@ -358,7 +358,7 @@ PY
     [ "$(sha256_of "$CHECK/$A")" = "$(sha256_of "$ASSETS/$A")" ] \
         || die "the published $A is not the binary that was signed (swapped after signing?) — delete its .sig/.sig2 from $TAG now"
     k2u_verify_u2 "$CHECK/$A" "$CHECK/$A.sig2" "$A" "$VERSION" || die "published $A.sig2 does not verify with UPDATER_KEYS"
-    # Fail closed on the bridge half too (installs on 0.46.4 or older).
-    k2u_verify_u1 "$CHECK/$A" "$CHECK/$A.sig" "$A" || die "published $A.sig (U1) does not verify: installs on 0.46.4 or older could not update"
+    # Fail closed on the bridge half too (installs on 0.46.5 or older).
+    k2u_verify_u1 "$CHECK/$A" "$CHECK/$A.sig" "$A" || die "published $A.sig (U1) does not verify: installs on 0.46.5 or older could not update"
 done
 log "done: $TAG Linux daemons signed (U1 + U2); daemon-latest.json lists them; the published binaries are the signed ones and both their signatures verify"

@@ -268,7 +268,7 @@ base64_dec() { python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64deco
 base64_dec "$tmp/app.sig" > "$tmp/app.raw"
 minisign -V -P "$U1_PUB_LINE" -m "$tmp/K2.app.tar.gz" -x "$tmp/app.raw" -q && pass "b64 verifies once unwrapped" || fail "b64 verify" ""
 
-echo "== k2u_sign u2: version in the signed comment, checked like a 0.46.5 install =="
+echo "== k2u_sign u2: version in the signed comment, checked like a 0.46.6 install =="
 lib k2u_sign u2 "$tmp/k2-daemon-macos-aarch64" k2-daemon-macos-aarch64 9.9.9 "$tmp/raw.sig2" raw 2>"$tmp/err" \
     && pass "U2 signature written" || fail "u2 sign" "$(cat "$tmp/err")"
 python3 -I - "$tmp/raw.sig2" "$U2_ID" <<'PY' && pass "U2: ED, key id U2, trusted comment timestamp + file + version" || fail "u2 format" "$(cat "$tmp/raw.sig2")"
@@ -286,7 +286,7 @@ python3 -I -c 'import base64,sys; sys.stdout.write(base64.b64encode(open(sys.arg
 lib k2u_verify_u2 "$tmp/k2-daemon-macos-aarch64" "$tmp/wrapped.sig2" k2-daemon-macos-aarch64 9.9.9 2>/dev/null && pass "k2u_verify_u2 reads the base64-wrapped form" || fail "verify_u2 wrapped" ""
 [ "$(lib k2u_slot_key_id u2)" = "$U2_ID" ] && pass "k2u_slot_key_id u2 = the source tree's primary" || fail "slot key id" ""
 
-echo "== k2u_verify_u1: the bridge half fails closed too (installs on 0.46.4 or older) =="
+echo "== k2u_verify_u1: the bridge half fails closed too (installs on 0.46.5 or older) =="
 lib k2u_verify_u1 "$tmp/k2-daemon-macos-aarch64" "$tmp/raw.sig" k2-daemon-macos-aarch64 2>"$tmp/err" \
     && pass "k2u_verify_u1 accepts the raw U1 signature" || fail "verify_u1 raw" "$(cat "$tmp/err")"
 lib k2u_verify_u1 "$tmp/K2.app.tar.gz" "$tmp/app.sig" K2.app.tar.gz 2>"$tmp/err" \
@@ -472,7 +472,7 @@ else
 fi
 for a in x86_64 aarch64; do
     lib k2u_verify_u2 "$good/k2-daemon-linux-$a" "$out/k2-daemon-linux-$a.sig2" "k2-daemon-linux-$a" "$V" 2>/dev/null \
-        && pass "linux-$a .sig2: U2, file + version, as 0.46.5 installs check" || fail "linux-$a sig2" ""
+        && pass "linux-$a .sig2: U2, file + version, as 0.46.6 installs check" || fail "linux-$a sig2" ""
     o="$(minisign -V -P "$U1_PUB_LINE" -m "$good/k2-daemon-linux-$a" -x "$out/k2-daemon-linux-$a.sig" -Q 2>&1)" \
         && [[ "$o" == *$'\tfile:k2-daemon-linux-'"$a" ]] && head -1 "$out/k2-daemon-linux-$a.sig" | grep -qx 'untrusted comment: signature from tauri secret key' \
         && pass "linux-$a .sig: raw minisig, verifies, file:k2-daemon-linux-$a" || fail "linux-$a sig" "$o"
@@ -747,15 +747,23 @@ rm -rf "$tmp/ib"
 if env -u K2_MANIFEST_URL K2_VERSION=0.46.3 K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 sh "$SRC/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
     fail "install-daemon.sh --version 0.46.3" "ran"
 else
-    grep -q "Versions before 0.46.5" "$tmp/inst.out" && pass "install-daemon.sh --version 0.46.3: refused before any download" || fail "version refusal" "$(cat "$tmp/inst.out")"
+    grep -q "Versions before 0.46.6" "$tmp/inst.out" && pass "install-daemon.sh --version 0.46.3: refused before any download" || fail "version refusal" "$(cat "$tmp/inst.out")"
 fi
 # v0.46.4 shipped signed with U1 only: it is a retired-key release too.
 rm -rf "$tmp/ib"
 if env -u K2_MANIFEST_URL K2_VERSION=0.46.4 K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 sh "$SRC/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
     fail "install-daemon.sh --version 0.46.4" "ran"
 else
-    grep -q "Versions before 0.46.5 are signed with the retired update key" "$tmp/inst.out" && pass "install-daemon.sh --version 0.46.4 (shipped U1-only): refused before any download" || fail "0.46.4 refusal" "$(cat "$tmp/inst.out")"
+    grep -q "Versions before 0.46.6 are signed with the retired update key" "$tmp/inst.out" && pass "install-daemon.sh --version 0.46.4 (shipped U1-only): refused before any download" || fail "0.46.4 refusal" "$(cat "$tmp/inst.out")"
 fi
+# v0.46.5 shipped signed with U1 only as well (the cutover is 0.46.6).
+rm -rf "$tmp/ib"
+if env -u K2_MANIFEST_URL K2_VERSION=0.46.5 K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 sh "$SRC/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
+    fail "install-daemon.sh --version 0.46.5" "ran"
+else
+    grep -q "Versions before 0.46.6 are signed with the retired update key" "$tmp/inst.out" && pass "install-daemon.sh --version 0.46.5 (shipped U1-only): refused before any download" || fail "0.46.5 refusal" "$(cat "$tmp/inst.out")"
+fi
+grep -q "(0.46.6 and newer)" <(sh "$SRC/scripts/install-daemon.sh" --help 2>&1) && pass "install-daemon.sh --help names the cutover from K2_FIRST_U2_VERSION" || fail "install help cutover" ""
 rm -rf "$tmp/ib"
 if env K2_MANIFEST_URL="file://$inst/dual.json" K2_BIN_DIR="$tmp/ib" K2_NO_SERVICE=1 K2_APP_ENGINE_PATH="$tmp/no-engine" sh "$ROOT/scripts/install-daemon.sh" >"$tmp/inst.out" 2>&1; then
     grep -q '^K2_DAEMON_PUBKEYS="RW' "$ROOT/scripts/install-daemon.sh" && pass "(this tree already has keys)" || fail "pre-ceremony installer" "installed with no keys"
@@ -766,7 +774,7 @@ fi
 cli_help="$(bash "$ROOT/cli/k2" daemon install --help 2>&1 || true)"
 grep -qi "an OLDER release than the one installed" "$ROOT/scripts/install-daemon.sh" \
     && [[ "$cli_help" == *"an OLDER release than the one installed"* ]] \
-    && pass "install-daemon.sh and k2 daemon install --help say an older 0.46.5+ install is an allowed explicit action" || fail "downgrade help" ""
+    && pass "install-daemon.sh and k2 daemon install --help say an older 0.46.6+ install is an allowed explicit action" || fail "downgrade help" ""
 
 echo "== k2 daemon install (cli/k2) checks sig2 the same way =="
 cli_install() { # <manifest> [extra args…]
@@ -793,14 +801,21 @@ rm -rf "$tmp/cb"
 if bash "$SRC/cli/k2" daemon install --version 0.46.3 --bin-dir "$tmp/cb" --no-service >"$tmp/cli.out" 2>&1; then
     fail "cli --version 0.46.3" "ran"
 else
-    grep -q "Versions before 0.46.5" "$tmp/cli.out" && pass "k2 daemon install --version 0.46.3: refused with the retired-key message" || fail "cli version" "$(cat "$tmp/cli.out")"
+    grep -q "Versions before 0.46.6" "$tmp/cli.out" && pass "k2 daemon install --version 0.46.3: refused with the retired-key message" || fail "cli version" "$(cat "$tmp/cli.out")"
 fi
 rm -rf "$tmp/cb"
 if bash "$SRC/cli/k2" daemon install --version 0.46.4 --bin-dir "$tmp/cb" --no-service >"$tmp/cli.out" 2>&1; then
     fail "cli --version 0.46.4" "ran"
 else
-    grep -q "Versions before 0.46.5 are signed with the retired update key" "$tmp/cli.out" && pass "k2 daemon install --version 0.46.4 (shipped U1-only): refused with the retired-key message" || fail "cli 0.46.4" "$(cat "$tmp/cli.out")"
+    grep -q "Versions before 0.46.6 are signed with the retired update key" "$tmp/cli.out" && pass "k2 daemon install --version 0.46.4 (shipped U1-only): refused with the retired-key message" || fail "cli 0.46.4" "$(cat "$tmp/cli.out")"
 fi
+rm -rf "$tmp/cb"
+if bash "$SRC/cli/k2" daemon install --version 0.46.5 --bin-dir "$tmp/cb" --no-service >"$tmp/cli.out" 2>&1; then
+    fail "cli --version 0.46.5" "ran"
+else
+    grep -q "Versions before 0.46.6 are signed with the retired update key" "$tmp/cli.out" && pass "k2 daemon install --version 0.46.5 (shipped U1-only): refused with the retired-key message" || fail "cli 0.46.5" "$(cat "$tmp/cli.out")"
+fi
+[[ "$cli_help" == *"(0.46.6 or newer)"* ]] && pass "k2 daemon install --help names the cutover from _DAEMON_FIRST_U2_VERSION" || fail "cli help cutover" ""
 
 echo "== no signing key outside the helper, no unpinned signer, no key on argv =="
 for f in scripts/release.sh scripts/build-local.sh scripts/windows-patch-latest-json.sh scripts/dev-build.sh scripts/build-app.sh scripts/lib/build-binaries.sh scripts/sign-daemon.sh; do

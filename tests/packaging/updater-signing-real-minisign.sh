@@ -15,7 +15,7 @@
 #   - minisign 0.12 reads the Tauri-format U1 key through a /dev/fd pipe and
 #     its password from stdin (k2u_sign), and signs prehashed (ED);
 #   - those U1 signatures are what a 0.46.4 install checks (old app plugin
-#     form, old daemon form), and the U2 signatures what a 0.46.5 install
+#     form, old daemon form), and the U2 signatures what a 0.46.6 install
 #     checks (file: + version:), with real minisign -V in the shell
 #     installers (cli/k2, install-daemon.sh).
 # The `security` tool is a stub over a temp folder: no real keychain. No

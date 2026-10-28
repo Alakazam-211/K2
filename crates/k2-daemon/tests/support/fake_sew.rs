@@ -82,7 +82,7 @@ pub struct Space {
     /// A9: channels by slug.
     pub channels: BTreeMap<String, Channel>,
     /// Sew 0.5.0 (`space_unbind`): the App this Space was unbound from (an
-    /// orphan: writes answer 422 `space_orphaned`).
+    /// orphan: adds and channel creates answer 422 `space_orphaned`; removes work).
     pub orphaned_from: Option<String>,
 }
 
@@ -1393,10 +1393,14 @@ fn space_member_remove(s: &mut State, body: &str) -> (u16, String) {
     let Some(sp) = s.spaces.get_mut(&req.space_id) else {
         return err(404, "not_found", "no such space", json!({}));
     };
-    if sp.orphaned_from.is_some() {
-        return orphaned(&req.space_id);
+    // Real Sew 0.5.0 (probed on a VM, 2026-10-28): a remove still works on
+    // an orphan, named by the App it was unbound from (adds and channel
+    // creates answer 422 space_orphaned).
+    let owner_app = sp.app_id.clone().or_else(|| sp.orphaned_from.clone());
+    if req.app_id.is_some() && owner_app != req.app_id {
+        return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
     }
-    if sp.app_id != req.app_id {
+    if req.app_id.is_none() && sp.app_id.is_some() {
         return err(409, "conflict", "app_id does not name the Space's App", json!({"reason": "app_mismatch"}));
     }
     let removed = sp.members.remove(&req.external_id.to_string());

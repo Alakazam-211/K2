@@ -467,7 +467,7 @@ fn the_managed_fields_policy_is_planned_from_what_sew_showed() {
 
 /// Sew 0.5.0: an explicit unbind orphans the Space in Sew too, under the
 /// actor who asked; with `--remove-app-members` only after those removes
-/// are delivered (Sew refuses writes to an orphan).
+/// are delivered (K2 settles its own removes first).
 #[test]
 fn an_explicit_unbind_also_unbinds_in_sew_after_its_removes() {
     let _e = setup();

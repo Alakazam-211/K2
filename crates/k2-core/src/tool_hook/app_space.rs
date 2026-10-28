@@ -50,7 +50,7 @@
 //! explicit `k2 hostchat app-space unbind` both ask Sew to unbind the Space
 //! too (`POST /mgmt/v1/spaces/unbind {space_id, app_id}` → `{space_id,
 //! app_id?, orphaned_from?, changed}`): the Space becomes an orphan of that
-//! App, read-only (writes answer 422 `space_orphaned`; reads and export
+//! App, read-only (adds and channel creates answer 422 `space_orphaned`, removes still work; reads and export
 //! still work). The wish is kept in `tool_app_space_unbinds` and sent by
 //! the S27 worker (op `space_unbind`, subject `unbind:<space id>`) once Sew
 //! reports the flag, so an unbind before the upgrade lands after it, and
@@ -748,8 +748,9 @@ pub fn unbinds(conn: &Connection) -> Result<Vec<Unbind>, String> {
 /// One `space_unbind` op per unsent wish, once Sew reports `space_unbind`,
 /// with the actor who asked for it. Skipped while the unbind has an open
 /// row, and while any membership row of that Space is open (an unbind
-/// with `--remove-app-members` removes them first: Sew refuses writes to
-/// an orphan with 422 `space_orphaned`).
+/// with `--remove-app-members` removes them first; Sew 0.5.0 still takes
+/// removes on an orphan, but a queued ADD there would answer 422
+/// `space_orphaned`, so K2 settles its own rows first).
 pub fn plan_unbinds(conn: &Connection, busy: &HashSet<String>) -> Result<Vec<(NewOp, String)>, String> {
     if !super::features::has(conn, CHAT_KIND, super::features::SPACE_UNBIND)? {
         return Ok(Vec::new());

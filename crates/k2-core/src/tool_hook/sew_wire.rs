@@ -654,7 +654,7 @@ pub struct SpaceMemberRemoveResponse {
 
 /// `POST` (Sew 0.5.0, flag `space_unbind`): unbind a Space from its App.
 /// The Space becomes an orphan of that App: reads and export still work,
-/// writes answer 422 `invalid_state` reason [`reasons::SPACE_ORPHANED`].
+/// adds and channel creates answer 422 `invalid_state` reason [`reasons::SPACE_ORPHANED`]; removes still work.
 pub const MGMT_SPACES_UNBIND: &str = "/mgmt/v1/spaces/unbind";
 /// `POST` (Sew 0.5.0) `{space_id, confirm: true}`: forget an orphan's App
 /// so another App may bind it (until then a bind elsewhere answers 409

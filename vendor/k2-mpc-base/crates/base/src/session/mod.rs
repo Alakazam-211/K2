@@ -39,21 +39,22 @@ pub use crate::store::{ChangeInfo, ChangeKind, VersionInfo};
 pub use config::Config;
 pub use disk::{is_write_temp, DiskCheck, DiskState, FlushOutcome};
 pub use error::{EditWithError, SessionError};
-pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, Rights};
+pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope, Rights};
 pub use live::{
-    ChangeEvent, DiffOutput, EditResult, Joined, LogItem, LogQuery, ReadResult, RightsChange,
-    Session, Status, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
+    Blame, BlameLine, ChangeEvent, DiffOutput, EditResult, Joined, LogItem, LogQuery, NotReached,
+    PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange, Session, Status, UndoMode,
+    UndoOutcome, UndoRequest, WriteOutcome,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{Declined, Pack, PackContent, PackError, TextFilePack};
 pub use participant::{
     ConnId, CursorAt, Participant, ParticipantKind, Role, RosterEntry, Stay, EXTERNAL_PID,
-    IMPORT_PID, RESERVED_PID_PREFIX,
+    IMPORT_PID, RESERVED_PID_PREFIX, UNKNOWN_PID,
 };
 pub use position::{At, Cursor, LineCol, LineRange};
 pub use tier0::{
-    conflict_copy_name, AnyFile, BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus,
-    BlobWriteResult, LeaseInfo, MERGE_PID, REGION_MAX_BYTES,
+    conflict_copy_name, AnyFile, BlobAuthor, BlobBlame, BlobMerge, BlobPack, BlobRead, BlobSession,
+    BlobStatus, BlobWriteResult, LeaseInfo, MERGE_PID, REGION_MAX_BYTES,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 

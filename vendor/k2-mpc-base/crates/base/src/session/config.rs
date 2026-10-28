@@ -101,6 +101,10 @@ pub struct Config {
     /// Files larger than this are declined without being read (`too_large`); the pack's
     /// own limit applies below it. Default 64 MiB.
     pub disk_read_max_bytes: u64,
+    /// Echo suppression: a hash of one of the kit's own writes is kept this long (in memory
+    /// only, keyed per doc; K-DISK-4, K-PURGE-13). A file holding an older write of ours
+    /// is then an outside edit. Default 60 s.
+    pub own_write_ttl_ms: u64,
 
     // --- tier 0 (blob docs) ---
     /// A lease lasts this long unless the caller asks otherwise; renew to keep it.
@@ -156,6 +160,7 @@ impl Default for Config {
             write_max_delay_ms: 5_000,
             disk_poll_ms: 3_000,
             disk_read_max_bytes: 64 << 20,
+            own_write_ttl_ms: 60_000,
             lease_default_ms: 5 * 60_000,
             lease_max_ms: 60 * 60_000,
             lease_auto_ms: 2 * 60_000,

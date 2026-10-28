@@ -8,18 +8,23 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod blame;
 mod history;
+mod purge;
 
+pub use blame::{Blame, BlameLine};
 pub use history::{DiffOutput, LogItem, LogQuery};
+pub use purge::{NotReached, PurgeOutcome, PurgeRequest, PurgeScope};
 
 use super::carry::RevertIndex;
 use super::config::Config;
 use super::disk::{self, DiskCheck, DiskState, FileStat, FlushOutcome, Probe, ReadFile};
 use super::error::{EditWithError, Result, SessionError};
-use super::host::{Action, AuditEvent, Host, LeaveReason, Need, Rights};
+use super::host::{Action, AuditEvent, Host, LeaveReason, Need, PurgedScope, Rights};
 use super::pack::{Declined, Pack, PackError};
 use super::participant::{
     ConnId, CursorAt, Participant, ParticipantKind, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID,
+    RESERVED_PID_PREFIX, UNKNOWN_PID,
 };
 use super::position::{self, At, Bias, Cursor, LineRange};
 use super::presence::{self, Presence};
@@ -28,11 +33,12 @@ use super::summary;
 use super::undo::{self, Batch, ConflictRegion, Mode, Plan, Region};
 use crate::doc::{ClientId, Doc, DocError, Edit, Neutral, MAX_CLIENT_ID};
 use crate::engine::{ENGINE_FORMAT, ENGINE_NAME};
-use crate::hash::{hex, sha256};
+use crate::hash::{file_hash, hex, hmac, legacy_matches};
 use crate::schema::{Kind, Schema};
 use crate::store::{
-    Approval, ApprovalState, ChangeInfo, ChangeKind, DocId, DocKey, DocMeta, DocStore, LogEntry,
-    NewChange, RecordHunk, RecordRoot, RevertRecord, Seq, SyncState, Version, VersionReason,
+    Approval, ApprovalState, ChangeInfo, ChangeKind, ClockSpan, DocId, DocKey, DocMeta, DocStore,
+    LogEntry, NewChange, RecordHunk, RecordRoot, RevertRecord, Seq, SyncState, Version,
+    VersionReason,
 };
 use crate::text::diff::{self, Hunk};
 use crate::text::lines;
@@ -329,10 +335,14 @@ struct State {
     authors: VecDeque<(Seq, String)>,
     subs: Vec<(ConnId, SyncSender<ChangeEvent>)>,
     disk: Option<Disk>,
+    /// The doc's hash key (in the store; a purge replaces it): every file hash is keyed by
+    /// it, so none is a plain content hash, and a purge makes the old ones meaningless.
+    hash_key: [u8; 32],
 }
 
 const AUTHORS_KEPT: usize = 1024;
-/// Hashes of the kit's own recent writes kept for echo suppression.
+/// Hashes of the kit's own recent writes kept for echo suppression (and at most
+/// [`Config::own_write_ttl_ms`] old).
 const OWN_WRITES_KEPT: usize = 8;
 
 /// Disk sync for a session opened with a file.
@@ -346,10 +356,13 @@ struct Disk {
     /// update is merged into the live doc, so edits not yet written survive.
     replica: Doc,
     replica_bytes: u64,
+    /// The keyed hash of the file's bytes as last synced (empty: unknown, after a purge).
     synced_hash: Vec<u8>,
     synced_seq: Seq,
-    /// Recent own writes: a file holding one of them is an echo, never an outside edit.
-    own: VecDeque<Vec<u8>>,
+    /// Recent own writes (keyed hash, when written): a file holding one of them is an echo,
+    /// never an outside edit. In memory only; expire after [`Config::own_write_ttl_ms`];
+    /// cleared by a purge (the key changes).
+    own: VecDeque<(Vec<u8>, u64)>,
     /// The file as last seen (`None`: read it on the next check).
     stat: Option<FileStat>,
     missing: bool,
@@ -480,6 +493,7 @@ impl Session {
         let schema = pack.schema();
         let texts = texts_of(&doc, &schema)?;
         let last_version_seq = store.last_version(doc_id)?.map_or(0, |(_, v)| v.seq);
+        let hash_key = store.doc_key(doc_id)?;
         Ok(Self {
             host,
             config,
@@ -512,6 +526,7 @@ impl Session {
                 authors,
                 subs: Vec::new(),
                 disk: None,
+                hash_key,
             }),
         })
     }
@@ -624,8 +639,9 @@ impl Session {
             content: ordered.clone(),
         };
         // the bytes are the file's: the doc as imported is what the file holds
+        let hash_key = crate::store::fresh_key()?;
         let sync = SyncState {
-            hash: sha256(bytes).to_vec(),
+            hash: file_hash(&hash_key, bytes),
             seq: 0,
             state: doc.encode_state()?,
         };
@@ -657,6 +673,11 @@ impl Session {
                     })
                     .collect(),
             },
+            span: Some(ClockSpan {
+                client,
+                start: 0,
+                end: doc.clock_of(client),
+            }),
         };
         let (doc_id, seq, _) = store.create_imported_synced(
             &meta,
@@ -664,7 +685,7 @@ impl Session {
             IMPORT_PID,
             entry.as_ref(),
             &version,
-            Some(&sync),
+            Some((&sync, &hash_key)),
             Some(&change),
         )?;
         let ub = entry.as_ref().map_or(0, |e| e.update.len() as u64);
@@ -1251,18 +1272,23 @@ impl Session {
                 .map(|(_, t)| t.clone()));
         }
         let store = self.store(st)?;
-        for (_, v) in store.versions(self.doc_id)? {
-            if v.seq == base {
-                return Ok(v
-                    .content
-                    .into_iter()
-                    .find(|(r, _)| r == root)
-                    .map(|(_, n)| match n {
-                        Neutral::Text(t) => t,
-                    }));
-            }
-        }
-        Ok(None)
+        // a version a purge cut spans from is no merge base: its text isn't what was read
+        let Some(vid) = store
+            .version_infos(self.doc_id)?
+            .into_iter()
+            .find(|v| v.seq == base && v.redacted.is_empty())
+            .map(|v| v.id)
+        else {
+            return Ok(None);
+        };
+        Ok(store
+            .version(self.doc_id, vid)?
+            .content
+            .into_iter()
+            .find(|(r, _)| r == root)
+            .map(|(_, n)| match n {
+                Neutral::Text(t) => t,
+            }))
     }
 
     /// Version, participants, log size, memory estimate, declined reason. Metadata only.
@@ -1595,19 +1621,28 @@ impl Session {
         Ok(found)
     }
 
-    /// Clear every participant's undo and redo stacks (a purge, spec U19). Their next undo
-    /// or redo says [`UndoOutcome::ClearedByPurge`]. Revert records are not touched here.
+    /// Clear every participant's undo and redo stacks (a purge does this, spec U19). Their
+    /// next undo or redo says [`UndoOutcome::ClearedByPurge`]. Revert records are not
+    /// touched here ([`Session::purge`] redacts them).
     pub fn clear_undo_history(&self) -> Result<()> {
         let mut st = self.lock()?;
+        Self::clear_stacks(&mut st);
+        Ok(())
+    }
+
+    /// Clear every stack; returns the batches dropped.
+    fn clear_stacks(st: &mut State) -> u64 {
+        let mut n = 0;
         for h in st.hist.values_mut() {
             if !h.undo.is_empty() || !h.redo.is_empty() {
                 h.cleared = true;
             }
+            n += (h.undo.len() + h.redo.len()) as u64;
             h.undo.clear();
             h.redo.clear();
             h.bytes = 0;
         }
-        Ok(())
+        n
     }
 
     fn normalize(&self, edits: Vec<Edit>) -> Result<Vec<Edit>> {
@@ -1810,6 +1845,7 @@ impl Session {
                     at_ms: now,
                     roots: std::mem::take(&mut a.record),
                 },
+                span: a.span.map(|(start, end)| ClockSpan { client, start, end }),
             });
         }
         let appended = self
@@ -1952,10 +1988,12 @@ impl Session {
                 hunks: diff::coalesce(hunks),
             });
         }
+        let clock_before = st.doc.clock_of(client);
         let Some(update) = st.doc.edit_as(client, &canon)? else {
             return Ok(None);
         };
         let mut a = Applied {
+            span: Some((clock_before, st.doc.clock_of(client))),
             update,
             roots: Vec::new(),
             regions: Vec::new(),
@@ -2365,7 +2403,7 @@ impl Session {
         let written = self.write_back(&mut st, now)?;
         Ok(FlushOutcome {
             written,
-            hash: hex(&sha256(&self.render(&st)?)),
+            hash: hex(&hmac(&st.hash_key, &self.render(&st)?)),
             disk: Self::disk_state(&st),
         })
     }
@@ -2409,11 +2447,12 @@ impl Session {
                 (
                     Doc::load(self.schema, &state)?,
                     state.len() as u64,
-                    sha256(&self.render(st)?).to_vec(),
+                    file_hash(&st.hash_key, &self.render(st)?),
                     st.version,
                 )
             }
         };
+        let key = st.hash_key;
         let mut d = Disk {
             path: path.to_owned(),
             root: root.to_owned(),
@@ -2433,15 +2472,22 @@ impl Session {
             Ok(Probe::File { real, .. }) => {
                 disk::clean_temps(&real);
                 match disk::read(&real, self.config.disk_read_max_bytes) {
-                    Ok(ReadFile::Bytes(b, _)) => Some(sha256(&b).to_vec()),
+                    Ok(ReadFile::Bytes(b, _)) => Some(b),
                     _ => None,
                 }
             }
             _ => None,
         };
-        // a write-back a crash interrupted: did it land?
+        // does `stored` (keyed, or a format-2 plain hash) name the file's bytes?
+        let names_file = |stored: &[u8]| {
+            on_disk
+                .as_deref()
+                .is_some_and(|b| stored == file_hash(&key, b) || legacy_matches(stored, b))
+        };
+        // a write-back a crash interrupted: did it land? (A format-2 plain hash is matched
+        // here; a synced one is replaced by a keyed one when the check below reads the file.)
         if let Some(p) = pending {
-            if on_disk.as_deref() == Some(p.hash.as_slice()) {
+            if names_file(&p.hash) {
                 let mut meta = store.meta(self.doc_id)?;
                 meta.synced_hash = Some(p.hash.clone());
                 meta.synced_seq = p.seq;
@@ -2457,7 +2503,7 @@ impl Session {
         st.disk = Some(d);
         let out = self.disk_check(st, now, true)?;
         // changes the file never got (a crash before write-back): write them soon
-        let live = sha256(&self.render(st)?).to_vec();
+        let live = file_hash(&st.hash_key, &self.render(st)?);
         if st.disk.as_ref().is_some_and(|d| d.synced_hash != live) {
             Self::mark_dirty(st, now);
         }
@@ -2566,14 +2612,16 @@ impl Session {
         };
         let was_missing = std::mem::replace(&mut d.missing, false);
         d.stat = Some(stat);
-        let h = sha256(&bytes).to_vec();
+        let h = file_hash(&st.hash_key, &bytes);
         if h == d.synced_hash {
             if was_missing || st.declined.is_some() {
                 self.restored(st)?;
             }
             return Ok(DiskCheck::Unchanged);
         }
-        if d.own.contains(&h) {
+        let ttl = self.config.own_write_ttl_ms;
+        d.own.retain(|(_, at)| now.saturating_sub(*at) <= ttl);
+        if d.own.iter().any(|(x, _)| *x == h) {
             // an older write of ours is back (an editor saved a stale buffer, or a late
             // echo): not an edit; the next write-back puts the doc back
             Self::mark_dirty(st, now);
@@ -2700,6 +2748,7 @@ impl Session {
         }
         let client = self.external_client(st)?;
         let before = st.texts.clone();
+        let clock_before = st.doc.clock_of(client);
         let d = st.disk.as_mut().expect("has disk");
         // the outside edit is made on the doc as the file held it, then merged into the
         // live doc: changes made since the last write-back are kept
@@ -2757,6 +2806,11 @@ impl Session {
                 at_ms: now,
                 roots: record,
             },
+            span: Some(ClockSpan {
+                client,
+                start: clock_before,
+                end: st.doc.clock_of(client),
+            }),
         };
         versions.push(Version {
             seq,
@@ -2853,7 +2907,7 @@ impl Session {
 
     /// After the sync point moved: dirty when the doc differs from the file, clean if not.
     fn settle_dirty(&self, st: &mut State, now: u64) -> Result<()> {
-        let live = sha256(&self.render(st)?).to_vec();
+        let live = file_hash(&st.hash_key, &self.render(st)?);
         let d = st.disk.as_mut().expect("has disk");
         if live == d.synced_hash {
             d.dirty_since = None;
@@ -2877,7 +2931,7 @@ impl Session {
             _ => false,
         };
         let bytes = self.render(st)?;
-        let h = sha256(&bytes).to_vec();
+        let h = file_hash(&st.hash_key, &bytes);
         let d = st.disk.as_mut().expect("has disk");
         if h == d.synced_hash && !stale {
             d.dirty_since = None;
@@ -2936,7 +2990,7 @@ impl Session {
         d.replica_bytes = pending.state.len() as u64;
         d.synced_hash = h.clone();
         d.synced_seq = st.version;
-        d.own.push_back(h);
+        d.own.push_back((h, now));
         while d.own.len() > OWN_WRITES_KEPT {
             d.own.pop_front();
         }
@@ -3023,6 +3077,8 @@ fn record_root(root: &str, before: &str, empty_after: bool, hunks: &[Hunk]) -> R
 
 struct Applied {
     update: Vec<u8>,
+    /// The engine clocks of `update`'s inserted text (blame's index).
+    span: Option<(u32, u32)>,
     roots: Vec<(String, Vec<Hunk>)>,
     regions: Vec<Region>,
     record: Vec<RecordRoot>,

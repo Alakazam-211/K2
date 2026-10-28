@@ -339,6 +339,61 @@ position, the stable change id) days later and after restarts, independent of un
   reverse changes). A pending record is kept whatever the window says, and released to it when
   settled.
 
+## Blame
+
+`blame(conn, root, lines: Option<LineRange>) -> Blame` (K-HIST-11, K-HIST-18, P22) gives
+each line of a text root its **most recent author**. Needs read and **history** (K-PERM-9;
+otherwise `Forbidden { need: History }` and `AuditEvent::Refused { action: Blame }`). It
+only reads: nothing in the doc, the store or presence changes.
+
+- **Grain: the character.** The engine reports, for every live character, the client ID and
+  clock that inserted it (Yrs `Text::diff_range(now, empty)`, D0's Q5, with GC on). That
+  call splits blocks, so it runs on a **throwaway replica** (a full copy of the doc): **O(doc)
+  per call**, never on the edit path; the live doc's state vector and encoded state are
+  byte-identical after (tested). The store maps a **client to its pid** (the client table:
+  `join`, the import, outside edits) and a **clock to its change** (`change_clocks`: the
+  clocks each change's inserted text occupies, written in the change's own transaction).
+- **The rule.** A line's characters are its text **and its `\n`**: a line split by a typed
+  `\n` goes to its typist, as in `git blame`. Each character carries its change; the line
+  goes to the character with the **greatest change id** (change ids increase in the
+  daemon's apply order, so this is the true most recent, immune to host clock skew: a later
+  change stamped with an earlier host time still wins; `at_ms` is shown, never ranked).
+  Characters whose change isn't recorded (inserted before v0.3.0) rank below every recorded
+  one; among only those, the line's first character decides.
+- **Undo, redo, restore, revert** insert text as new changes by the caller, so text they bring
+  back is **the caller's**, at that time (undo spec U18a): `kind` says which.
+- **`Blame { root, version, lines: Vec<BlameLine> }`**, `BlameLine { line (1-based), text
+  (without its \n), author, change, kind, via, at_ms, on_behalf_of, approval, erased }`.
+  `author` is a pid, `kit:import` (the file's first content), `kit:external` (an outside
+  edit), an erased participant's pseudonym, or **`kit:unknown`** (`UNKNOWN_PID`) when the
+  store has no owner for the client: never a guess. `change`, `kind`, `via`, `at_ms` are
+  `None` for text from before v0.3.0. Lines are counted as `git blame` counts them: a text
+  ending in `\n` has no empty last line; an empty text has none.
+- **`-L a,b`** (`lines: Some(LineRange { root, first, last })`): 1-based and inclusive;
+  `first` must be a line of the text (`BadPosition` otherwise, also for line 0, a reversed
+  range, or another root's range); `last` past the end is clamped.
+- **Erasure** (amendment 7's metadata rules). `erased: true` when a purge reached the change
+  behind the line (its revert record is redacted): its recorded content is gone; its id, time
+  and author stay, and after participant erasure the author is the **pseudonym** (the client
+  table and change summaries are renamed). The line's **text is the live text**, which a purge
+  never changes: to take it out, edit it out or purge with `and_remove` (then the line is
+  gone). Not known once the change's record has left the revert window.
+- **Rendering.** `Blame::render(label)` prints the `git blame`-like listing a host shows (the
+  change id, the author's label from `label(pid)` or the pid, `for <person>` and `(pending)` /
+  `(declined)` for on-behalf changes, the UTC date, `[erased]`, the line number, the text):
+  `7 (Alice              2026-10-27 09:20:00 2) Intro, revised.`. `Blame::porcelain()` is
+  `git blame --line-porcelain`-shaped: `<change> <line> <line> 1`, then `author`,
+  `author-time` (s), `author-time-ms`, `kind`, `via`, `on-behalf-of`, `approval`, `erased`,
+  then `\t<text>`. **Labels are the host's**: the kit only knows pids.
+- **Cost.** One full copy and walk of the doc, then one store read per run of text in the
+  range (runs are per client and consecutive clocks, not per character). Budgeted on native
+  (E-PERF-18: 50 ms for 1 MiB); a host computes it on demand (the gutter, the verb).
+
+**Tier 0** (whole-blob grain): `BlobSession::blame(conn) -> BlobBlame { version, current:
+BlobVersion, versions, authors: Vec<BlobAuthor { pid, versions, last_ms }> }`: who set the
+current version, when, through what and why, and the pointer's history summarised (how many
+versions; everyone who set one, most recent first). Needs read and history.
+
 ## Presence
 
 `roster(conn)` needs read. It has **one entry per participant (pid)**, however many connections
@@ -392,7 +447,8 @@ cheap stat backup. The three edit paths above are unchanged; disk sync sits besi
 folder, and `path` must be a regular file (not a folder, device or pipe) resolving, symlinks
 included, **inside `root`**. Otherwise `BadPath`.
 - A new doc is imported from the file (it must exist; `Declined` as for `open`).
-- A stored doc is **reconciled**: if the file isn't what the doc last synced (`synced_hash`),
+- A stored doc is **reconciled**: if the file isn't what the doc last synced (`synced_hash`:
+  HMAC-SHA256 under the doc's own key, never a plain content hash; K-PURGE-13),
   the difference is merged in as an outside edit (an edit made while no session was loaded),
   and changes the file never got (a crash before write-back, K-DISK-10) are written by the
   next write-back. A file that is gone opens `Missing`.
@@ -410,10 +466,11 @@ change, on `flush(conn)`, on unload, and on `release()`. Each write:
    tells a watcher to ignore it), the old file's permissions, fsync, rename over, fsync the
    folder. Symlinks are resolved, so a link stays a link and its target is written. Temp files
    a crash left are removed on open;
-4. records the new synced hash, position and state. The record is written **before** the
-   rename and promoted after it, so a crash in between is recognised on the next open (the
-   file matches the write in flight) instead of looking like an outside edit;
-5. remembers the last 8 written hashes for **echo suppression**.
+4. records the new synced hash (keyed), position and state. The record is written **before**
+   the rename and promoted after it, so a crash in between is recognised on the next open
+   (the file matches the write in flight) instead of looking like an outside edit;
+5. remembers the last 8 written hashes for **echo suppression**: keyed, in memory only, each
+   for `own_write_ttl_ms` (60 s), and forgotten by a purge.
 
 If the file was deleted, replaced by a folder, or re-pointed outside the root, nothing is
 written: the state is `Missing`, the doc and its edits are kept, `AuditEvent::FileMissing
@@ -423,8 +480,9 @@ file comes back, it is checked like any outside edit.
 **Outside edits (file → doc).** On `file_changed()`, or when `check_disk()` / `tick()` finds
 the size, mtime or inode changed (a rename-save changes the inode):
 - the file holds the last synced content → nothing;
-- it holds an older write of the kit's (an echo, or an editor saving a stale buffer) → not
-  an edit (`OwnWrite`); the next write-back puts the doc back;
+- it holds an older write of the kit's from the last 60 s (an echo, or an editor saving a
+  stale buffer) → not an edit (`OwnWrite`); the next write-back puts the doc back. An older
+  one (or one from before a purge) is an outside edit;
 - otherwise: a version "before external edit" is cut (when the doc moved since the last
   version), the diff from the **last synced text to the new file text** is applied as the
   reserved participant `kit:external` (`EXTERNAL_PID`, its own client ID per doc,
@@ -461,7 +519,7 @@ same spot would then land inside it. So the edit paths that diff (`edit_with`,
 | `Session::file_changed()` | the host's watcher saw a change: read and merge |
 | `Session::check_disk()` | read only if size, mtime or inode changed |
 | `Session::file_moved(new_path)` | the file now lives at `new_path` |
-| `Session::flush(conn)` | needs read; `FlushOutcome { written, hash (SHA-256 hex of the doc's bytes), disk }` |
+| `Session::flush(conn)` | needs read; `FlushOutcome { written, hash (HMAC-SHA256 hex of the doc's bytes under the doc's key: compare only with this doc's hashes; a purge changes it), disk }` |
 | `Session::file_path()` | the path as given |
 
 `DiskState`: `Clean`, `Dirty { since_ms }`, `Missing`, `Declined(reason)`. `DiskCheck`:
@@ -587,7 +645,7 @@ for good:
 2. Then **one store transaction** per call erases every kit row of those docs
    (`DocStore::delete_doc(id, now_ms)` / `delete_space(space, now_ms)`, also callable
    directly): `paths`, `docs`, `snapshots`, `updates`, `clients`, `versions`, `approvals`,
-   `sync` (the disk replica), `changes`, `reverts`, `revert_index`, `revert_carry`,
+   `sync` (the disk replica), `doc_keys`, `changes`, `reverts`, `revert_index`, `revert_carry`,
    `revert_stats`, `blob_versions`, `blob_sync`. A blob doc's versions **release** their blob
    references (the blob's grace starts then), so `BlobStore::gc` removes a blob nothing else
    references once `gc_grace_ms` has passed; a blob another doc still uses stays.
@@ -598,6 +656,162 @@ and the space's blob key (`BlobStore::purge_space_key` destroys it and every blo
 at once). `delete_doc` on a key with no doc is `NotFound`; `delete_space` returns the keys it
 deleted (empty when none). On a store error nothing is erased (a closed session reopens on
 the next `open`). A key can hold a new doc right after.
+
+## Erasure
+
+Agents paste secrets and people paste personal data. **Purge** removes content from
+everything the kit holds for a doc; **participant erasure** removes a person from its
+attribution. Both are owner only (`Rights::owner`; others get `Forbidden { need: Owner }`
+and `AuditEvent::Refused { action: Purge }`) and audited as metadata only.
+
+### Purge removes history, not live text
+
+What the doc says **now** stays; every other copy goes. To take text out of the doc as well,
+**edit it out first, then purge**: the deletion is an ordinary attributed change, and the
+purge then removes the text from that change's record too. `PurgeRequest::and_remove` does
+both for a text scope: it deletes every live copy of the text as the owner's change (which
+needs edit too), then purges, under the session's lock (no other call interleaves). It is two
+store transactions: a crash between them leaves the deletion done and the purge not.
+**Retrying the same request completes it**: with no live copy left, `and_remove` deletes
+nothing (`removed: None`) and the purge runs; a purge repeated after a complete one changes
+no content (it is idempotent).
+`PurgeOutcome::live_matches` counts the spans of live text the purged content still matches
+(whole or by an 8-byte window): non-zero means it is still in the doc.
+
+### `Session::purge(conn, PurgeRequest) -> PurgeOutcome`
+
+`PurgeRequest::new(scope)` (`.and_remove()`), with `PurgeScope`:
+
+| Scope | Taken whole | Searched for elsewhere |
+|---|---|---|
+| `History` | every revert record and every version's content: the whole history before now | (nothing needed) |
+| `Changes { from, to }` | those changes' revert records | the text they inserted and deleted (pieces of 8+ bytes) |
+| `Versions { from, to }` | those versions' content (entries and names stay) | the text of the changes between them |
+| `Text(String)` | (none) | the text (`purge --text`, read from stdin), at least 8 bytes |
+| `Participant { pid, pseudonym }` | the revert records of every change `pid` authored | their text; plus the renaming below |
+
+"Searched for" means: wherever any **8-byte window** of the text appears in a version's text or another change's revert record, that span or hunk is
+redacted too, so a copy made by a later change, a version cut while it was live, or the
+record of the change that deleted it are reached. `Debug` of a request never prints the
+text. Bad scopes: `NoSuchChange(n)` (4), `BadEdit` (exit 2: `and_remove` without a text
+scope; a `Text` shorter than 8 bytes, which would match innocent text across the whole
+history: "purge text of at least 8 bytes, or purge by change/version/participant"),
+`BadParticipant` (an empty or `kit:` pseudonym, erasing yourself).
+
+In order, under the session's lock:
+1. **The file is written back** (after merging any outside edit), so it holds the live text
+   and the sync replica is the live doc.
+2. **Every undo and redo stack of the doc is cleared** (spec U19): each holder's next undo or
+   redo says `UndoOutcome::ClearedByPurge`. The read-base cache is dropped (a pending
+   `write --base` gets `BaseExpired`).
+3. **One store transaction** (`DocStore::purge_doc`):
+   - the **log**: every entry up to now becomes `redacted {byte length}` (author, client,
+     time, surface and `on_behalf_of` stay); a **snapshot** re-encoded from the live doc
+     replaces what they held. The engine runs with GC on (K-PURGE-11), so deleted text is
+     not in that state: items keep their ids and lengths, not their content (K-PURGE-5: a
+     replica synced before the purge still merges);
+   - **versions**: the targeted ones lose all content, the others the matched spans; the
+     entry, its name and its authors stay, with `VersionInfo::redacted` (root, start,
+     length, in the coordinates of the text before any purge). `show`, `diff` and `restore`
+     see the text without the spans (a restore restores everything else); such a version is
+     never a `write --base` (`BaseExpired`);
+   - **revert records**: targeted and matched hunks are blanked and marked redacted; a
+     `revert` over one is a conflict of kind `ConflictKind::Erased` (with empty `base` and
+     `ours`); change summaries (`log`) keep every change's id, author, time and hunk lengths;
+   - the **sync table**: the replica and its hash; any write-back in flight is dropped;
+   - the doc's **hash key** is replaced, so every earlier keyed hash of it (synced, own
+     writes) means nothing: an echo of a write made before the purge is an outside edit.
+4. The in-memory doc and replica are reloaded from what was stored; own-write hashes are
+   forgotten.
+5. **The store file is rewritten** (below), so no freed page keeps a purged byte.
+6. `AuditEvent::Purged { key, by, scope: PurgedScope, counts: PurgeCounts }`: the scope
+   without its text (`Text { bytes }`, `Participant { pseudonym }`), counts only.
+
+`PurgeOutcome { counts, live_matches, removed, not_reached, rewrite }`. `PurgeCounts`:
+`log_entries`, `versions`, `revert_hunks`, `bytes`, `attributions`, `undo_batches`,
+`read_bases` (and the tier-0 counts below). `not_reached` lists `NotReached::ALWAYS` and what
+applied to this purge (below); the host prints it with `NotReached::describe` and tells the
+owner to **rotate the secret** (K-PURGE-10).
+
+A store upgraded from format 2 keeps a doc's plain SHA-256 sync hash until that doc is next
+opened with its file (the hash is re-keyed when the file is read) or purged.
+
+If the file can't be written back (missing, declined, or this session has no file), it still
+holds the text as last written, and so does the sync replica the kit keeps of it (re-encoded,
+its hash re-keyed or blanked): `NotReached::File`. Attach and flush the file, then purge
+again. Targeted changes whose records already left the revert window can't be identified:
+`NotReached::ChangesOutsideWindow(n)` (purge by text, or `History`).
+
+### Participant erasure (K-PURGE-7, U20)
+
+`PurgeScope::Participant { pid, pseudonym }` replaces `pid` by `pseudonym` in the log, change
+summaries, revert records, approvals (author, person, settler), versions' authors and the
+client table, keeping every count, and purges the content of their changes as above. The
+erased person's connections are removed (`Left { Kicked }`) and their undo history dropped
+(every other stack is cleared anyway, U19). The pseudonym is the host's choice; the audit
+event carries only it.
+
+### No bytes behind: the store file rewrite
+
+`DocStore::rewrite_file() -> RewriteReport { bytes_before, bytes_after, rows }` copies every
+row of every kit table into a fresh redb file beside the store (`<file>.rewrite`), commits it
+(durable), renames it over the store file (atomic: the path names the old store or the new
+one, never a partial one), syncs the folder, and closes the old file. The new file is written
+only from rows that exist at that moment, so it holds no byte of anything deleted or redacted
+before. A crash before the rename leaves the old store whole and the temp file, which `open`
+removes. Every other store call waits while it runs (a full copy): it is for purges, not
+routine use; a host may call it too. A table the kit doesn't know stops it (error) rather
+than being dropped.
+
+**Why not redb's compaction:** `Database::compact` relocates live pages towards the start of
+the file and truncates the tail; it doesn't zero freed pages, and redb never updates a page
+in place (copy-on-write), so a deleted row's bytes stay in freed pages until reused. The tests
+show a deleted row is still in the file until the rewrite.
+
+**What the rewrite doesn't reach:** the old file's disk blocks are released to the file
+system, not overwritten (raw-device forensics, until reused); APFS snapshots and backups
+taken before; the kit's process memory (freed, not scrubbed).
+
+### The byte scan
+
+`DocStore::scan_for(needles: &[&[u8]]) -> Vec<Finding { needle, offset, len }>` scans the raw
+store file (with the store's write guard, so no commit lands mid-scan); `store::scan_file`
+and `store::scan_bytes` scan any file or bytes. A needle matches **whole or by any 8-byte
+window** (`MIN_MATCH`), so a secret typed in two batches, or split across two records or
+pages, is still found; matches of one needle are merged. A scan reports, it never judges:
+gate tests plant random 32-byte secrets and expect zero findings; a production check shows
+findings outside live text to a person (a short needle can match innocent text).
+
+### Tier 0 (K-T0-9)
+
+`BlobSession::purge(conn, Some(version))` purges one version; `None` the whole history
+(every version but the current). Owner only. The **current version is refused**
+(`StoreError::CurrentVersion`, exit 2: write or restore another first). Each purged version
+keeps its entry (who, when, why, `size`) with `BlobVersion::redacted` set and the zero id:
+its keyed id is a digest of the content, so it goes too. Reading or restoring it is
+`StoreError::PurgedVersion` (exit 4). The file is written back first. A released blob that
+nothing else references is removed **at once** (index and file, no GC grace); one still
+referenced (the same bytes in another version or doc of the space, or a pack's `retain`)
+stays: `NotReached::SharedBlobs(n)`. The doc's recorded **conflict copies**
+(`BlobVersion::conflict_copy`, beside its file) are compared by keyed id: a copy whose bytes
+are a purged blob is deleted (`counts.conflict_copies`); others (edited since, or the current
+content) are left (`NotReached::ConflictCopies(n)`). `BlobSession::conflict_copies(conn)`
+lists the recorded copies that exist (needs history), for a byte scan. The store file is
+rewritten after. Blob ids stay keyed per space; `BlobStore::purge_space_key` still destroys a
+whole space. Approvals for on-behalf blob writes are not built yet.
+
+### What purge does not reach (K-PURGE-12)
+
+| Copy | Reached? | How |
+|---|---|---|
+| Update log, snapshots, versions, revert records, read-base cache, undo/redo stacks, sync replica and its hash, in-memory doc and replica, own-write hashes | **Yes** | above; the byte scan checks the store file |
+| The doc's file | **Yes**, when it can be written back | otherwise `NotReached::File` |
+| Tier-0 versions, blobs, kit conflict copies | **Yes** | `BlobSession::purge`; shared blobs and changed copies are reported |
+| Old store file pages | **Yes** | the rewrite; its released disk blocks are not (`FreedDiskBlocks`) |
+| Echo-suppression hashes | **Not kept** | in memory, keyed, expire after 60 s, forgotten by a purge |
+| Connected clients (`purged` frame), offline clients | **Not yet** / when they reconnect | the wire isn't built; `OfflineClients` |
+| The host's own rows (`host_*`) | **No** | opaque to the kit: `HostRows` |
+| Git history; agent transcripts and terminal scrollback; Spotlight; APFS snapshots and Time Machine; synced-folder history; K2 backups made before the purge; other apps and sent notifications | **No** | outside the kit: `NotReached::ALWAYS`; **rotate the secret** |
 
 ## Limits (`Config`)
 
@@ -623,12 +837,13 @@ the next `open`). A key can hold a new doc right after.
 | `write_quiet_ms` / `write_max_delay_ms` | 1 s / 5 s | write-back after this much quiet, or this long after the first unwritten change |
 | `disk_poll_ms` | 3 s | stat backup interval while anyone is present |
 | `disk_read_max_bytes` | 64 MiB | larger files are declined unread (`too_large`) |
+| `own_write_ttl_ms` | 60 s | how long an own write's (keyed) hash suppresses its echo |
 
 ## Errors (`SessionError`)
 
 | Error | Meaning | Exit (`session_exit`) |
 |---|---|---|
-| `Forbidden { need }` | No right (`Read`, `Edit`, `History`, `Approver`: not the person the change was for; `AuthorOrOwner`: a revert by someone not its author, its person or an owner; `Owner`: breaking a lease). For read, the pid is also removed. | 3 |
+| `Forbidden { need }` | No right (`Read`, `Edit`, `History`, `Approver`: not the person the change was for; `AuthorOrOwner`: a revert by someone not its author, its person or an owner; `Owner`: breaking a lease, purging). For read, the pid is also removed. | 3 |
 | `Held { reason }` | `approvals_backlog`: too many pending on-behalf changes; nothing applied | 2 |
 | `RevertTooOld { seq }` | the change is outside the revert window; use `restore --version` | 8 (never retry) |
 | `NoSuchChange(n)` | no change (revert) or version (restore, show, diff, name) `n` | 4 |
@@ -642,7 +857,7 @@ the next `open`). A key can hold a new doc right after.
 | `NoApproval { seq }` / `BadApproval` | no approval to settle / already settled the other way | 2 |
 | `BadPath` | `open_file` / `file_moved`: not a regular file inside the root | 2 |
 | `Disk(_)` | reading or writing the file failed; nothing lost, write-back retries | 1 |
-| `Store(_)` | store failure; nothing acked | 6 |
+| `Store(_)` | store failure; nothing acked (purge: `CurrentVersion` 2, `PurgedVersion` 4) | 6 |
 | `Pack(_)` | pack bug or damaged codec settings | 1 |
 | `Deleted` | the doc was deleted while this session was loaded | 4 |
 | `Unloaded` / `Released` / `Broken` | stale handle: open again | retry |
@@ -668,7 +883,8 @@ editor, an agent can do through a verb, with the same effect.
   `KIT_VERBS` are the kit's (the tools, the session verbs: `open`, `leave`, `who`,
   `follow`, `cursor`, `write`, `undo` / `redo` / `undo --drop` / `undo --partial`,
   `status`, `flush`, `watch`, `tail -f`, `log`, `diff --version`, `show --version`,
-  `restore`, `version --name`, `mv`, `approve`, `decline`, `log --pending`, `revert`).
+  `restore`, `version --name`, `mv`, `approve`, `decline`, `log --pending`, `revert`,
+  `blame`).
   `Registry::for_pack(&pack)` adds the pack's `verbs()` (refusing a name the kit has).
   A verb's **name is its CLI form**: `verb_form(argv)` gives it (`sed -i`, `undo --partial`,
   `log --pending`...), so a host's command table can be checked against the registry.
@@ -696,9 +912,11 @@ editor, an agent can do through a verb, with the same effect.
      connections, away), the **exit code** and the **output**.
   The actor has the same pid, name and colour in both worlds; a change by the actor that
   came through another surface than its path's handle fails the case.
-- **The kit's cases** are one exhaustive `match` over `PersonAction` (`kit_cases`): 51 cases
-  over the 26 rows the kit binds; empty for blame (P22), annotations (P23, P27) and purge
-  (P28), which a pack lists as deferred. A pack adds `Case`s for its own verbs.
+- **The kit's cases** are one exhaustive `match` over `PersonAction` (`kit_cases`): 54 cases
+  over the 27 rows the kit binds; empty for annotations (P23, P27) and purge (P28), which a
+  pack lists as deferred. P22's person path is what a tab's blame gutter shows (the same
+  `Session::blame` call: every line, then the lines in view), its agent path the `blame` verb
+  (`-L a,b`); a third case checks both are refused without the history right. A pack adds `Case`s for its own verbs.
   `check_list` runs steps 1–2 and case coverage without opening docs; `run_case` runs one.
 - Hunk shapes may differ between the paths (a typed hunk against a verb's minimal diff);
   the observable result may not. Edits are compared as `edit_summary` (version, ± lines,
@@ -727,7 +945,7 @@ editor, an agent can do through a verb, with the same effect.
 | P19 | `log`, `diff --version`, `show --version` | `log(LogQuery)`, `diff_version`, `show`, `versions` (need history) |
 | P20 | `restore`, `version --name` | `restore` (a forward change by the restorer, after a version), `name_version` |
 | P21 | `mv` | `SessionManager::rekey` + `Session::file_moved` |
-| P22 | `blame` | later (client→pid mapping is recorded now) |
+| P22 | `blame [-L a,b]` | `blame(conn, root, lines)` (needs history); tier 0: `BlobSession::blame` |
 | P23, P27 | `comment`, `suggest`... | later (M5, the annotation layer) |
 | P24 | export | `read` (`bytes`) |
 | P25 | why live editing is off | `open` → `Declined { code, message }`; `status().declined` |
@@ -748,8 +966,15 @@ editor, an agent can do through a verb, with the same effect.
   This needs the strict decoder.
 - **C6, rest:** `write --base --partial` (K-BR-9), intent ranges; the `spec_undo::model`
   oracle and trace test (K-HIST-14/15).
-- **After C7a:** blame (C7b); purge (redacting revert records, versions, the byte scan:
-  `DocStore::revert_records` is the hook, `clear_undo_history` clears the stacks); `diff
+- **Erasure, later rows:** a `purged` event to subscribers (K-PURGE-6: `ChangeEvent` is a
+  struct, so the host relays `AuditEvent::Purged` for now) and the `purged` frame (G4);
+  the 30-day lifetime of an orphaned doc's data (K-PURGE-8); backups (K-PURGE-9); held
+  refused client ops (V4: no wire yet); annotations (not built); participant erasure on
+  blob docs; approvals for on-behalf blob writes (K-T0-9).
+- **Blame, later:** blame of a version (`blame --version V`, with E-ERASE-7's `[erased]`
+  spans); blame through the wire (a Yjs client's own updates must record their clock spans
+  too when C5 lands); char-level blame export at the native migration (K-FMT-5, G5).
+- **After C7a:** `diff
   --version` from the **disk** (the host reads the file and uses the `diff` tool); thinning
   change summaries (kept for the doc's life today); retention for docs that are never loaded
   again (it runs on `tick` for loaded ones); the native tab's grouping and Ctrl+Z with unacked
@@ -932,18 +1157,19 @@ host's, not the kit's; the kit only ever says `Leased`. Exit 2 already means "ba
 rejoin / rate limited", so a separate code (e.g. 6) or `Leased` plus a `pending_request`
 field in `--json` would be clearer than reusing 2.
 
-**Not yet (tier 0):** per-blob purge and the purge byte scan over conflict copies
-(K-PURGE-3; `conflict_copy` records the names), approvals for on-behalf blob writes (the
-version records `on_behalf_of`), automatic version retention, the K-T0-4 fuzz target, and
-hashing outside the session lock (a large outside save is hashed under it today).
+**Not yet (tier 0):** approvals for on-behalf blob writes (the version records
+`on_behalf_of`), participant erasure on blob docs, automatic version retention, the K-T0-4
+fuzz target, and hashing outside the session lock (a large outside save is hashed under it
+today). Purge is in [Erasure](#erasure).
 
 ## Store: history tables
 
-Five tables beside the log, created on open (the store format stays 2): `changes` (summary and
-hunk shape per change; `DocStore::change`, `scan_changes`), `reverts` (revert records),
-`revert_index`, `revert_carry`, `revert_stats`; plus `DocStore::version_infos` (version headers
-without content). Content lives only in `reverts` (and versions); purge's byte scan must cover
-both. Changes made before this slice have no summary or record (`revert` says too old).
+Six tables beside the log, created on open: `changes` (summary and hunk shape per change;
+`DocStore::change`, `scan_changes`), `change_clocks` (the engine clocks each change's
+inserted text occupies: blame's index, v0.3.0), `reverts` (revert records), `revert_index`,
+`revert_carry`, `revert_stats`; plus `DocStore::version_infos` (version headers without
+content). Content lives only in `reverts` (and versions, the log, snapshots and the sync
+replica); a purge redacts them all ([Erasure](#erasure)). Changes made before this slice have no summary or record (`revert` says too old).
 Deleting a doc erases its rows here too ([Deleting docs](#deleting-docs)).
 
 ## Store: the host's table
@@ -956,6 +1182,61 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Amendment 8 (additive): blame (P22)
+
+**Additive:** `Session::blame`, `Blame` (`render`, `porcelain`), `BlameLine`, `UNKNOWN_PID`;
+`BlobSession::blame`, `BlobBlame`, `BlobAuthor`. Variants on `#[non_exhaustive]` enums:
+`Action::Blame`, `parity::Api::Blame`; `parity::VerbValue::Blame`. The `blame` verb in
+`KIT_VERBS` (history kind, needs read and history, serves P22) with kit parity cases.
+
+**Store:** one new table, `change_clocks` (client, first clock → end clock, change), written
+in each change's transaction, erased with the doc, copied by `rewrite_file`. **No format
+bump** (store format stays 3; K-FMT-10): a v0.2.0 build reads and writes a v0.3.0 store
+(its changes get no clock rows, so blame shows their text by client owner without a change
+id); only its `rewrite_file` refuses the table it doesn't know (an error, nothing dropped).
+Changes made before v0.3.0 have no clock rows either. No new dependency.
+
+**Behaviour:** none changes for existing calls.
+
+**Hosts:** route `k2 doc blame [-L a,b]` to `Session::blame` (history right) and print
+`Blame::render` with your name lookup (or `porcelain` for scripts), fenced for agents as
+`show`'s text is (it holds doc text); the tab's blame gutter
+calls the same method for the lines in view; tier-0 files call `BlobSession::blame`.
+
+### Amendment 7: erasure (purge, participant erasure, keyed hashes; store format 3)
+
+**Additive:** `Session::purge`, `PurgeRequest`, `PurgeScope`, `PurgeOutcome`, `NotReached`;
+`BlobSession::purge`, `BlobSession::conflict_copies`; `DocStore::rewrite_file`,
+`RewriteReport`, `DocStore::scan_for`, `DocStore::path`, `store::scan_file`, `scan_bytes`,
+`Finding`, `MIN_MATCH`, `PurgeCounts`, `Redaction`; `Config::own_write_ttl_ms`. Fields and
+variants on `#[non_exhaustive]` types: `VersionInfo::redacted`, `BlobVersion::redacted`,
+`Action::Purge`, `AuditEvent::Purged` (with `PurgedScope`), `StoreError::NoRandom`,
+`PurgedVersion`.
+
+**Store format 3** (reads 2; a format-2 build refuses it with `Newer`): `doc_keys` (a random
+per-doc hash key, erased with the doc); log entries v3, versions v2, blob versions v2 (all
+can hold redactions); sync hashes keyed. A format-2 doc's plain SHA-256 sync hash is read
+once, when its file is next read, and replaced by a keyed one. No new dependency.
+**Until then a format-2 store keeps a plain SHA-256 sync hash for each doc not reopened
+with its file (or purged) since the upgrade.**
+
+**Behaviour:**
+1. Sync and own-write hashes are HMAC-SHA256 under the doc's key, never a plain content hash
+   (K-PURGE-13). `FlushOutcome::hash` for a text doc is that keyed hash (still 64 hex
+   characters), no longer the plain SHA-256: compare it only with the same doc's hashes.
+2. Own-write hashes expire after `own_write_ttl_ms` (60 s): an editor saving a write of ours
+   older than that is an outside edit (it was an echo, up to 8 writes back, before).
+3. A version a purge redacted is never a `write --base` (`BaseExpired`).
+4. `DocStore` transactions hold a read guard on the database (for the file swap of
+   `rewrite_file`); no API change.
+5. `session_exit`: `Store(CurrentVersion)` is 2, `Store(PurgedVersion)` is 4.
+6. A `PurgeScope::Text` shorter than 8 bytes is refused (`BadEdit`, exit 2).
+
+**Hosts:** map `k2 doc purge` (`--range`, `--version`, `--text` from stdin, `--and-remove`)
+to `Session::purge` and print `not_reached` with "rotate the secret"; give `Rights::owner` to
+the workspace owner and admins (Q21); choose pseudonyms for participant erasure; audit
+`Purged`.
 
 ### Amendment 6 (additive): the parity framework and packs' own verbs (C-P)
 

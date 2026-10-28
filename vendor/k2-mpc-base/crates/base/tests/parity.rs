@@ -39,7 +39,7 @@ fn row(a: PersonAction) -> ParityRow {
         P::History => ParityRow::live(a, &["log", "diff --version", "show --version", "diff"]),
         P::Restore => ParityRow::live(a, &["restore", "version --name"]),
         P::Rename => ParityRow::live(a, &["mv"]),
-        P::Blame => ParityRow::deferred(a, &["blame"], "C7b", "blame lands with its UI"),
+        P::Blame => ParityRow::live(a, &["blame"]),
         P::Annotate => ParityRow::deferred(
             a,
             &[
@@ -77,9 +77,18 @@ fn agent_parity_text_pack() {
         .iter()
         .filter(|r| r.status == RowStatus::Live)
         .count();
-    assert_eq!(live, 26, "rows live");
+    assert_eq!(live, 27, "rows live");
     assert_eq!(report.not_applicable.len(), 1);
-    assert_eq!(report.deferred.len(), 4);
+    assert_eq!(report.deferred.len(), 3);
+    assert_eq!(
+        report
+            .matched
+            .iter()
+            .filter(|m| m.0 == PersonAction::Blame)
+            .count(),
+        3,
+        "P22's cases"
+    );
     assert!(report.matched.len() >= 45, "{} cases", report.matched.len());
     eprintln!(
         "agent parity: {} cases matched over {live} live rows in {:?}",
@@ -211,18 +220,45 @@ fn the_list_is_checked_both_ways() {
     );
 }
 
-/// Negative control: a deferred row whose verb now exists must be made live.
+/// Negative control: a deferred row whose verb now exists must be made live. P22 is the
+/// row that flipped (v0.3.0): kept deferred now that `blame` is registered and has cases,
+/// the list fails both ways.
 #[test]
 fn a_landed_deferred_verb_fails() {
     let mut r = rows();
-    let blame = r
-        .iter_mut()
-        .find(|x| x.action == PersonAction::Blame)
+    let i = r
+        .iter()
+        .position(|x| x.action == PersonAction::Blame)
         .unwrap();
-    blame.absent = &["log"];
+    r[i] = ParityRow::deferred(
+        PersonAction::Blame,
+        &["blame"],
+        "C7b",
+        "blame lands with its UI",
+    );
+    let f = list_failures(&r, &Registry::kit());
+    let s = parity::render(&f);
+    assert!(
+        f.iter().any(|x| matches!(x, Failure::UnexpectedVerb { action: PersonAction::Blame, verb, .. } if verb == "blame")),
+        "{s}"
+    );
+    assert!(
+        f.contains(&Failure::StaleDeferral(PersonAction::Blame)),
+        "{s}"
+    );
+    assert!(
+        f.iter().any(|x| matches!(x, Failure::VerbNotListed { action: PersonAction::Blame, verb } if verb == "blame")),
+        "{s}"
+    );
+    // a still-deferred row that names a registered verb fails too
+    let mut r = rows();
+    r.iter_mut()
+        .find(|x| x.action == PersonAction::Purge)
+        .unwrap()
+        .absent = &["log"];
     let f = list_failures(&r, &Registry::kit());
     assert!(
-        f.iter().any(|x| matches!(x, Failure::UnexpectedVerb { action: PersonAction::Blame, verb, .. } if verb == "log")),
+        f.iter().any(|x| matches!(x, Failure::UnexpectedVerb { action: PersonAction::Purge, verb, .. } if verb == "log")),
         "{}",
         parity::render(&f)
     );
@@ -236,6 +272,20 @@ fn a_landed_deferred_verb_fails() {
     let f = list_failures(&r, &Registry::kit());
     assert!(
         f.contains(&Failure::StaleDeferral(PersonAction::Find)),
+        "{}",
+        parity::render(&f)
+    );
+    // without the verb in the registry, the deferred P22 row is consistent again
+    let mut r = rows();
+    let i = r
+        .iter()
+        .position(|x| x.action == PersonAction::Blame)
+        .unwrap();
+    r[i] = ParityRow::deferred(PersonAction::Blame, &["blame"], "C7b", "test");
+    let f = parity::check_list(&r, &Registry::kit().without("blame"), &[]);
+    assert_eq!(
+        f,
+        vec![Failure::StaleDeferral(PersonAction::Blame)],
         "{}",
         parity::render(&f)
     );

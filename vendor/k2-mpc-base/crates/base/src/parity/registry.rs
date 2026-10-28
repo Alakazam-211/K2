@@ -13,7 +13,7 @@ pub enum VerbKind {
     Read,
     /// Changes the doc, presence or its records (`insert`, `cursor`, `undo`, `approve`).
     Edit,
-    /// Reads history (`log`, `diff --version`, `show --version`).
+    /// Reads history (`log`, `diff --version`, `show --version`, `blame`).
     History,
 }
 
@@ -52,6 +52,8 @@ pub enum Api {
     FileMoved,
     SetApproval,
     Revert,
+    /// `Session::blame`.
+    Blame,
 }
 
 /// Where a verb comes from.
@@ -378,6 +380,15 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK01,
     ),
     kit(
+        "blame",
+        H,
+        NH,
+        &[A::Blame],
+        &[P::Blame],
+        "blame [-L a,b]",
+        OK0,
+    ),
+    kit(
         "restore",
         E,
         &[Need::Read, Need::Edit, Need::History],
@@ -587,6 +598,7 @@ mod tests {
                 "log --pending",
             ),
             (&["log", "-n", "3"], "log"),
+            (&["blame", "-L", "2,4"], "blame"),
             (&["diff", "--version", "3"], "diff --version"),
             (&["diff", "-u"], "diff"),
             (&["show", "--version", "2"], "show --version"),

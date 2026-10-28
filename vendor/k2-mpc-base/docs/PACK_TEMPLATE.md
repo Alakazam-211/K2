@@ -24,7 +24,8 @@ pub fn parity_row(a: PersonAction) -> ParityRow {
     match a {
         P::Open => ParityRow::live(a, &["open"]),
         P::Paste => ParityRow::live(a, &["patch", "apply", "append", "my-verb"]),
-        P::Blame => ParityRow::deferred(a, &["blame"], "C7b", "why it waits"),
+        P::Blame => ParityRow::live(a, &["blame"]),
+        P::Annotate => ParityRow::deferred(a, &["comment"], "M5", "why it waits"),
         P::Export => ParityRow::not_applicable(a, &["cat"], &["export"], "why it doesn't apply"),
         // ... every action, no `_` arm
     }

@@ -8,14 +8,17 @@
 //! - [`doc`]: the loaded doc, wire and store bytes, edits as a participant.
 //! - [`schema`]: primitive kinds and pack schemas.
 //! - [`text`]: text algorithms (minimal diff, three-way merge) used by text edits.
-//! - [`store`]: persistence (snapshot + update log + attribution + engine-neutral versions).
+//! - [`store`]: persistence (snapshot + update log + attribution + engine-neutral versions),
+//!   with erasure: redacted records, the file rewrite and the byte scan.
 //! - [`codec`]: reusable file codecs (plain text with BOM/EOL round trip).
 //! - [`blob`]: the blob service (tier 0): content-addressed bytes under a host folder,
 //!   keyed per space, streamed and verified, with GC and purge.
 //! - [`session`]: loaded docs with participants: rights, presence, edits, `write --base`,
 //!   undo, change events, the memory-bounded pool (`docs/SESSIONS.md`); tier 0 for any
 //!   file ([`session::BlobSession`]: presence, a lease, versions and restore, conflict
-//!   copies).
+//!   copies); purge and participant erasure ([`Session::purge`], `docs/SESSIONS.md`,
+//!   "Erasure"); blame per line at the character's grain ([`Session::blame`],
+//!   `docs/SESSIONS.md`, "Blame").
 //! - [`conformance`]: K2's primitive semantics as tests any engine must pass.
 //! - [`tools`]: the text verbs agents run on a live doc (`cat`, `grep`, `sed`, `patch`...),
 //!   as pure functions and through [`Session::run_tool`]; packs add their own
@@ -26,7 +29,7 @@
 //! Disk sync (sessions opened with a file): atomic write-back, outside edits merged in as a
 //! CRDT change, echo suppression; the host watches and drives the clock.
 //!
-//! Planned here (see `docs/ARCHITECTURE.md`): sync transport, blame.
+//! Planned here (see `docs/ARCHITECTURE.md`): sync transport.
 
 pub mod blob;
 pub mod codec;

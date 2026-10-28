@@ -10,6 +10,11 @@
 //!   roots), not engine state, so versions survive an engine change.
 //! - **Format stamps.** The store has a format number, and each doc records its pack,
 //!   engine and engine-format, so a later release can re-encode on upgrade.
+//! - **Erasure.** Records can hold redactions instead of content (format 3); a purge redacts
+//!   a doc in one transaction (`DocStore::purge_doc`, for sessions), then
+//!   [`DocStore::rewrite_file`] leaves no byte of it in the file, which
+//!   [`DocStore::scan_for`] checks. No plain content hash is stored: sync hashes are keyed
+//!   per doc, blob ids per space.
 //!
 //! The host chooses the file path and calls [`DocStore::open_with_retry`] across its own
 //! process hand-offs (redb holds an exclusive lock while open).
@@ -18,16 +23,26 @@ mod blob;
 mod delete;
 mod enc;
 mod history;
+mod purge;
+mod rewrite;
+mod scan;
 
 pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
+pub use history::Redaction;
 pub(crate) use history::{
-    window_plan, Carry, NewChange, RecordHunk, RecordRoot, Retention, RevertRecord, RevertWindow,
-    RootShape,
+    window_plan, Carry, ClockSpan, NewChange, RecordHunk, RecordRoot, Retention, RevertRecord,
+    RevertWindow, RootShape,
 };
 pub use history::{ChangeInfo, ChangeKind, VersionInfo};
+pub use purge::PurgeCounts;
+pub(crate) use purge::{DocPurge, Pick};
+pub use rewrite::RewriteReport;
+pub(crate) use scan::Needles;
+pub use scan::{scan_bytes, scan_file, Finding, MIN_MATCH};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use redb::{Database, ReadableTable, TableDefinition};
@@ -41,7 +56,21 @@ use enc::{R, W};
 /// - 2: log records v2 (`on_behalf_of`), approvals, the host table. A format-1 store opens
 ///   as is (its records still decode) and is stamped 2; a build reading only format 1
 ///   refuses it with [`StoreError::Newer`] instead of misreading v2 log records.
-pub const STORE_FORMAT: u64 = 2;
+/// - 3: erasure. A per-doc hash key (`doc_keys`) and keyed sync hashes (HMAC-SHA256, 33
+///   bytes: a tag byte, then the MAC); redacted records: log entries v3 (`redacted {byte
+///   length}` in place of the update), versions v2 (purged spans cut out, their ranges
+///   kept), blob versions v2 (a purged version keeps its entry, not its blob). A format-2
+///   store opens as is and is stamped 3: its records still decode, and a doc's plain
+///   SHA-256 sync hash is read once, when its file is next read, and replaced by a keyed one
+///   (a purge replaces it too). A format-2 build refuses a format-3 store
+///   ([`StoreError::Newer`]).
+///
+///   v0.3.0 adds one table, `change_clocks` (blame's index from engine clocks to changes),
+///   **without a format bump** (K-FMT-10, N−1 reads): a v0.2.0 build reads and writes such a
+///   store as before (its changes get no clock rows; blame shows their text by client
+///   owner, without a change id), and only its `rewrite_file` refuses the table it doesn't
+///   know (an error, never a silent drop).
+pub const STORE_FORMAT: u64 = 3;
 
 pub type DocId = u64;
 /// Position in a doc's update log (1-based, increasing, never reused).
@@ -59,6 +88,8 @@ const APPROVALS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("appr
 const HOST: TableDefinition<(&str, &str), &[u8]> = TableDefinition::new("host");
 /// Disk sync: `(doc, 0)` is the synced state, `(doc, 1)` a write-back in flight.
 const SYNC: TableDefinition<(u64, u8), &[u8]> = TableDefinition::new("sync");
+/// Doc → its hash key: the key of its keyed sync hashes (format 3). A purge replaces it.
+const DOC_KEYS: TableDefinition<u64, &[u8]> = TableDefinition::new("doc_keys");
 const SYNCED: u8 = 0;
 const PENDING: u8 = 1;
 
@@ -96,6 +127,12 @@ pub enum StoreError {
     /// Tier 0: version {1} of blob doc {0} is its current content and can't be deleted.
     #[error("version {1} of doc {0} is its current content")]
     CurrentVersion(DocId, VersionId),
+    /// No randomness source for a new key (the kit reads `/dev/urandom`).
+    #[error("no randomness source: {0}")]
+    NoRandom(String),
+    /// Tier 0: version {1} of blob doc {0} was purged; its content is gone.
+    #[error("version {1} of doc {0} was purged")]
+    PurgedVersion(DocId, VersionId),
 }
 
 /// Disk sync: the doc state the file on disk corresponds to. Its text is the file's text
@@ -103,12 +140,42 @@ pub enum StoreError {
 /// change made from that state. Kept per doc so a restart can still merge correctly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SyncState {
-    /// SHA-256 of the file's bytes.
+    /// The keyed hash of the file's bytes (`hash::file_hash`, under the doc's key). Empty
+    /// after a purge that couldn't read the file: it then matches nothing, so the file is
+    /// read and compared with the replica's text on the next check. A format-2 store may
+    /// hold a plain SHA-256 (32 bytes) until the file is next read.
     pub hash: Vec<u8>,
     /// Log position the file corresponds to.
     pub seq: Seq,
     /// Engine state whose text is the file's text.
     pub state: Vec<u8>,
+}
+
+/// Algorithm of a doc's hash key: 1 = HMAC-SHA256.
+const ALG_HMAC_SHA256: u8 = 1;
+
+fn enc_doc_key(k: &[u8; 32]) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1).u8(ALG_HMAC_SHA256).bytes(k);
+    w.0
+}
+
+fn dec_doc_key(b: &[u8]) -> Result<[u8; 32], StoreError> {
+    let mut r = R::new(b, "doc key");
+    if r.u8()? != 1 || r.u8()? != ALG_HMAC_SHA256 {
+        return Err(StoreError::Corrupt("doc key version"));
+    }
+    let k = r
+        .bytes()?
+        .try_into()
+        .map_err(|_| StoreError::Corrupt("doc key"))?;
+    r.end()?;
+    Ok(k)
+}
+
+/// A fresh random key.
+pub(crate) fn fresh_key() -> Result<[u8; 32], StoreError> {
+    crate::hash::random32().map_err(|e| StoreError::NoRandom(e.to_string()))
 }
 
 fn enc_sync(s: &SyncState) -> Vec<u8> {
@@ -168,8 +235,10 @@ pub struct DocMeta {
     /// The pack codec's own settings for this file (e.g. BOM and line endings), opaque here.
     pub codec: Vec<u8>,
     pub created_ms: u64,
-    /// Disk sync: the hash of the bytes last written to or read from the file, and the log
-    /// position they correspond to.
+    /// Disk sync: the keyed hash (HMAC-SHA256 under the doc's own key, never a plain content
+    /// hash; format 3) of the bytes last written to or read from the file, and the log
+    /// position they correspond to. Opaque to hosts; meaningless after a purge rotates the
+    /// key.
     pub synced_hash: Option<Vec<u8>>,
     pub synced_seq: Seq,
     /// Why live editing is off for this doc, if it is.
@@ -319,7 +388,43 @@ pub struct Loaded {
 }
 
 pub struct DocStore {
-    db: Database,
+    /// Every transaction holds a read guard for its whole life; [`DocStore::rewrite_file`]
+    /// takes the write guard to swap in the rewritten file, so no transaction ever spans
+    /// the swap.
+    db: RwLock<Database>,
+    path: PathBuf,
+}
+
+/// A write transaction with the store's read guard held until it commits or drops.
+pub(crate) struct Wtx<'a> {
+    tx: redb::WriteTransaction,
+    _g: RwLockReadGuard<'a, Database>,
+}
+
+impl Wtx<'_> {
+    pub(crate) fn commit(self) -> Result<(), redb::CommitError> {
+        self.tx.commit()
+    }
+}
+
+impl std::ops::Deref for Wtx<'_> {
+    type Target = redb::WriteTransaction;
+    fn deref(&self) -> &redb::WriteTransaction {
+        &self.tx
+    }
+}
+
+/// A read transaction with the store's read guard held.
+pub(crate) struct Rtx<'a> {
+    tx: redb::ReadTransaction,
+    _g: RwLockReadGuard<'a, Database>,
+}
+
+impl std::ops::Deref for Rtx<'_> {
+    type Target = redb::ReadTransaction;
+    fn deref(&self) -> &redb::ReadTransaction {
+        &self.tx
+    }
 }
 
 fn enc_meta(m: &DocMeta) -> Vec<u8> {
@@ -361,36 +466,62 @@ fn dec_meta(b: &[u8]) -> Result<DocMeta, StoreError> {
     Ok(m)
 }
 
-/// Log record version 2: version 1 plus `on_behalf_of` at the end.
+/// Log record version 3: version 2 with the update either present (`0`, its bytes) or
+/// purged (`1`, its byte length only: K-PURGE-2's `redacted {byte length}`).
 fn enc_entry(e: &LogEntry) -> Vec<u8> {
+    enc_entry_as(e, None)
+}
+
+/// [`enc_entry`], or (`redacted: Some(n)`) the entry's metadata with `redacted {n}` in place
+/// of its update.
+fn enc_entry_as(e: &LogEntry, redacted: Option<u64>) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(2)
+    w.u8(3)
         .str(&e.author)
         .u64(e.client)
         .u64(e.at_ms)
-        .str(&e.via)
-        .bytes(&e.update)
-        .opt_str(e.on_behalf_of.as_deref());
+        .str(&e.via);
+    match redacted {
+        None => w.u8(0).bytes(&e.update),
+        Some(n) => w.u8(1).u64(n),
+    };
+    w.opt_str(e.on_behalf_of.as_deref());
     w.0
 }
 
-/// Decodes log records version 1 and 2.
+/// Decodes log records version 1, 2 and 3. A purged entry decodes with an empty update.
+#[cfg(test)]
 fn dec_entry(b: &[u8]) -> Result<LogEntry, StoreError> {
+    Ok(dec_entry_full(b)?.0)
+}
+
+/// The entry, and the purged update's byte length when it was purged.
+fn dec_entry_full(b: &[u8]) -> Result<(LogEntry, Option<u64>), StoreError> {
     let mut r = R::new(b, "log entry");
     let v = r.u8()?;
-    if v != 1 && v != 2 {
+    if !(1..=3).contains(&v) {
         return Err(StoreError::Corrupt("log entry version"));
     }
+    let (author, client, at_ms, via) = (r.str()?, r.u64()?, r.u64()?, r.str()?);
+    let (update, redacted) = if v < 3 {
+        (r.bytes()?, None)
+    } else {
+        match r.u8()? {
+            0 => (r.bytes()?, None),
+            1 => (Vec::new(), Some(r.u64()?)),
+            _ => return Err(StoreError::Corrupt("log entry")),
+        }
+    };
     let e = LogEntry {
-        author: r.str()?,
-        client: r.u64()?,
-        at_ms: r.u64()?,
-        via: r.str()?,
-        update: r.bytes()?,
+        author,
+        client,
+        at_ms,
+        via,
+        update,
         on_behalf_of: if v >= 2 { r.opt_str()? } else { None },
     };
     r.end()?;
-    Ok(e)
+    Ok((e, redacted))
 }
 
 fn enc_approval(a: &Approval) -> Vec<u8> {
@@ -448,13 +579,23 @@ fn put_entry(
 }
 
 fn enc_version(v: &Version) -> Vec<u8> {
+    enc_version_redacted(v, &[])
+}
+
+/// Version record 2: the header, the purged spans (`redacted`, in the coordinates of the
+/// text before any purge), then each root's content with those spans cut out.
+fn enc_version_redacted(v: &Version, redacted: &[Redaction]) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(1)
+    w.u8(2)
         .u64(v.seq)
         .u64(v.at_ms)
         .u8(v.reason as u8)
         .opt_str(v.name.as_deref())
         .strs(&v.authors);
+    w.u32(redacted.len() as u32);
+    for x in redacted {
+        w.str(&x.root).u64(x.start).u64(x.len);
+    }
     w.u32(v.content.len() as u32);
     for (root, n) in &v.content {
         w.str(root);
@@ -466,8 +607,34 @@ fn enc_version(v: &Version) -> Vec<u8> {
 }
 
 fn dec_version(b: &[u8]) -> Result<Version, StoreError> {
+    Ok(dec_version_full(b)?.0)
+}
+
+/// A version record's spans, versions 1 and 2 (version 1 has none).
+fn dec_redactions(r: &mut R<'_>, v: u8, total: usize) -> Result<Vec<Redaction>, StoreError> {
+    if v < 2 {
+        return Ok(Vec::new());
+    }
+    let n = r.u32()? as usize;
+    if n > total {
+        return Err(StoreError::Corrupt("version redactions"));
+    }
+    (0..n)
+        .map(|_| {
+            Ok(Redaction {
+                root: r.str()?,
+                start: r.u64()?,
+                len: r.u64()?,
+            })
+        })
+        .collect()
+}
+
+/// A version (its content as stored: purged spans cut out) and its purged spans.
+fn dec_version_full(b: &[u8]) -> Result<(Version, Vec<Redaction>), StoreError> {
     let mut r = R::new(b, "version");
-    if r.u8()? != 1 {
+    let ver = r.u8()?;
+    if ver != 1 && ver != 2 {
         return Err(StoreError::Corrupt("version record version"));
     }
     let (seq, at_ms, reason, name, authors) = (
@@ -477,6 +644,7 @@ fn dec_version(b: &[u8]) -> Result<Version, StoreError> {
         r.opt_str()?,
         r.strs()?,
     );
+    let redacted = dec_redactions(&mut r, ver, b.len())?;
     let n = r.u32()? as usize;
     if n > b.len() {
         return Err(StoreError::Corrupt("version roots"));
@@ -491,14 +659,17 @@ fn dec_version(b: &[u8]) -> Result<Version, StoreError> {
         content.push((root, val));
     }
     r.end()?;
-    Ok(Version {
-        seq,
-        at_ms,
-        reason,
-        name,
-        authors,
-        content,
-    })
+    Ok((
+        Version {
+            seq,
+            at_ms,
+            reason,
+            name,
+            authors,
+            content,
+        },
+        redacted,
+    ))
 }
 
 /// Store `versions` (in order) after the doc's last version, in `w`.
@@ -541,9 +712,38 @@ fn dec_snapshot(b: &[u8]) -> Result<(Seq, Vec<u8>), StoreError> {
 }
 
 impl DocStore {
+    fn guard(&self) -> RwLockReadGuard<'_, Database> {
+        self.db.read().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// A write transaction (redb's default durability: committed means on disk).
+    pub(crate) fn begin_write(&self) -> Result<Wtx<'_>, StoreError> {
+        let g = self.guard();
+        Ok(Wtx {
+            tx: g.begin_write()?,
+            _g: g,
+        })
+    }
+
+    pub(crate) fn begin_read(&self) -> Result<Rtx<'_>, StoreError> {
+        let g = self.guard();
+        Ok(Rtx {
+            tx: g.begin_read()?,
+            _g: g,
+        })
+    }
+
+    /// The store file's path.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Open (or create) the store at `path`.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let db = Database::create(path)?;
+        let path = path.as_ref().to_owned();
+        // a rewrite a crash interrupted left its temp file: the store itself is whole
+        let _ = std::fs::remove_file(rewrite::temp_path(&path));
+        let db = Database::create(&path)?;
         let w = db.begin_write()?;
         {
             let mut meta = w.open_table(META)?;
@@ -568,11 +768,15 @@ impl DocStore {
             w.open_table(APPROVALS)?;
             w.open_table(HOST)?;
             w.open_table(SYNC)?;
+            w.open_table(DOC_KEYS)?;
             blob::create_tables(&w)?;
             history::create_tables(&w)?;
         }
         w.commit()?;
-        Ok(Self { db })
+        Ok(Self {
+            db: RwLock::new(db),
+            path,
+        })
     }
 
     /// Open, retrying while another process (a daemon handing off) still holds the lock.
@@ -595,7 +799,7 @@ impl DocStore {
 
     /// Find the doc at `key`.
     pub fn find(&self, key: &DocKey) -> Result<Option<DocId>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         Ok(r.open_table(PATHS)?
             .get(key.index().as_str())?
             .map(|v| v.value()))
@@ -603,7 +807,7 @@ impl DocStore {
 
     /// Create a doc. Fails if its key already has one.
     pub fn create(&self, meta: &DocMeta) -> Result<DocId, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let id = {
             let mut paths = w.open_table(PATHS)?;
             let k = meta.key.index();
@@ -640,8 +844,8 @@ impl DocStore {
     }
 
     /// [`DocStore::create_imported`], also recording the disk-sync state (its `seq` is set
-    /// to the import's position) and the import's change summary and revert record, in the
-    /// same transaction.
+    /// to the import's position) with the doc's hash `key` (its hash is keyed by it), and
+    /// the import's change summary and revert record, in the same transaction.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_imported_synced(
         &self,
@@ -650,10 +854,10 @@ impl DocStore {
         owner: &str,
         entry: Option<&LogEntry>,
         version: &Version,
-        sync: Option<&SyncState>,
+        sync: Option<(&SyncState, &[u8; 32])>,
         change: Option<&NewChange>,
     ) -> Result<(DocId, Option<Seq>, VersionId), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let out = {
             let mut paths = w.open_table(PATHS)?;
             let k = meta.key.index();
@@ -680,13 +884,15 @@ impl DocStore {
             v.seq = seq.unwrap_or(0);
             w.open_table(VERSIONS)?
                 .insert((id, 1), enc_version(&v).as_slice())?;
-            if let Some(sy) = sync {
+            if let Some((sy, key)) = sync {
                 let sy = SyncState {
                     seq: v.seq,
                     ..sy.clone()
                 };
                 w.open_table(SYNC)?
                     .insert((id, SYNCED), enc_sync(&sy).as_slice())?;
+                w.open_table(DOC_KEYS)?
+                    .insert(id, enc_doc_key(key).as_slice())?;
             }
             (id, seq, 1)
         };
@@ -695,7 +901,7 @@ impl DocStore {
     }
 
     pub fn meta(&self, id: DocId) -> Result<DocMeta, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(DOCS)?;
         let v = t.get(id)?.ok_or(StoreError::NoDoc(id))?;
         dec_meta(v.value())
@@ -703,7 +909,7 @@ impl DocStore {
 
     /// Replace a doc's metadata. The key can't change here; use [`DocStore::rekey`].
     pub fn put_meta(&self, id: DocId, meta: &DocMeta) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(DOCS)?;
             let old = dec_meta(t.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
@@ -718,7 +924,7 @@ impl DocStore {
 
     /// Move a doc to a new key (a rename). Fails if the new key already has a doc.
     pub fn rekey(&self, id: DocId, new: DocKey) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut docs = w.open_table(DOCS)?;
             let mut meta = dec_meta(docs.get(id)?.ok_or(StoreError::NoDoc(id))?.value())?;
@@ -738,7 +944,7 @@ impl DocStore {
     /// Append entries to a doc's log in one durable transaction; returns their positions.
     /// An entry with `on_behalf_of` gets a `Pending` [`Approval`] in the same transaction.
     pub fn append(&self, id: DocId, entries: &[LogEntry]) -> Result<Vec<Seq>, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let seqs = self.append_in(&w, id, entries)?;
         w.commit()?;
         Ok(seqs)
@@ -784,7 +990,7 @@ impl DocStore {
 
     /// The latest snapshot and every logged update after it, in order.
     pub fn load(&self, id: DocId) -> Result<Loaded, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         if r.open_table(DOCS)?.get(id)?.is_none() {
             return Err(StoreError::NoDoc(id));
         }
@@ -797,7 +1003,12 @@ impl DocStore {
         let mut updates = Vec::new();
         for kv in r.open_table(UPDATES)?.range((id, from)..=(id, u64::MAX))? {
             let (k, v) = kv?;
-            updates.push((k.value().1, dec_entry(v.value())?));
+            let (e, redacted) = dec_entry_full(v.value())?;
+            if redacted.is_some() {
+                // a purge snapshots past every entry it redacts
+                return Err(StoreError::Corrupt("purged log entry after the snapshot"));
+            }
+            updates.push((k.value().1, e));
         }
         Ok(Loaded { snapshot, updates })
     }
@@ -814,7 +1025,7 @@ impl DocStore {
     /// Write `state` as the snapshot at position `upto` and drop log entries up to it, in one
     /// transaction. `state` must contain every update up to `upto`.
     pub fn compact(&self, id: DocId, upto: Seq, state: &[u8]) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             if w.open_table(DOCS)?.get(id)?.is_none() {
                 return Err(StoreError::NoDoc(id));
@@ -836,14 +1047,14 @@ impl DocStore {
 
     /// Record which participant owns a CRDT client ID in this doc (attribution, blame).
     pub fn set_client(&self, id: DocId, client: ClientId, owner: &str) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         w.open_table(CLIENTS)?.insert((id, client), owner)?;
         w.commit()?;
         Ok(())
     }
 
     pub fn client_owner(&self, id: DocId, client: ClientId) -> Result<Option<String>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         Ok(r.open_table(CLIENTS)?
             .get((id, client))?
             .map(|v| v.value().to_owned()))
@@ -851,7 +1062,7 @@ impl DocStore {
 
     /// Store a version; returns its id (increasing per doc).
     pub fn put_version(&self, id: DocId, v: &Version) -> Result<VersionId, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let vid = {
             if w.open_table(DOCS)?.get(id)?.is_none() {
                 return Err(StoreError::NoDoc(id));
@@ -872,7 +1083,7 @@ impl DocStore {
 
     /// All versions of a doc, oldest first.
     pub fn versions(&self, id: DocId) -> Result<Vec<(VersionId, Version)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let mut out = Vec::new();
         for kv in r.open_table(VERSIONS)?.range((id, 0)..=(id, u64::MAX))? {
             let (k, v) = kv?;
@@ -882,7 +1093,7 @@ impl DocStore {
     }
 
     pub fn version(&self, id: DocId, vid: VersionId) -> Result<Version, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(VERSIONS)?;
         let v = t.get((id, vid))?.ok_or(StoreError::NoVersion(id, vid))?;
         dec_version(v.value())
@@ -890,7 +1101,7 @@ impl DocStore {
 
     /// Name (or rename) a version.
     pub fn name_version(&self, id: DocId, vid: VersionId, name: &str) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(VERSIONS)?;
             let mut v = dec_version(
@@ -907,7 +1118,7 @@ impl DocStore {
 
     /// Delete a version (retention thinning). Named versions are refused: retention never drops them.
     pub fn delete_version(&self, id: DocId, vid: VersionId) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(VERSIONS)?;
             let v = dec_version(
@@ -933,7 +1144,7 @@ impl DocStore {
         &self,
         id: DocId,
     ) -> Result<(Option<SyncState>, Option<SyncState>), StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(SYNC)?;
         let get = |slot| -> Result<Option<SyncState>, StoreError> {
             t.get((id, slot))?.map(|v| dec_sync(v.value())).transpose()
@@ -957,7 +1168,7 @@ impl DocStore {
         meta: &DocMeta,
         synced: &SyncState,
     ) -> Result<Vec<Seq>, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let seqs = self.append_in(&w, id, entries)?;
         if let Some(&first) = seqs.first() {
             if first != expect_first {
@@ -986,7 +1197,7 @@ impl DocStore {
     /// Record a write-back about to happen (before the file is renamed into place), so a
     /// crash right after the rename can still tell the file is the kit's own write.
     pub(crate) fn set_pending_sync(&self, id: DocId, s: &SyncState) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         w.open_table(SYNC)?
             .insert((id, PENDING), enc_sync(s).as_slice())?;
         w.commit()?;
@@ -996,7 +1207,7 @@ impl DocStore {
     /// The write-back in flight landed: it becomes the synced state, and `meta` (with the
     /// new synced hash and position) is stored, in one transaction.
     pub(crate) fn promote_pending_sync(&self, id: DocId, meta: &DocMeta) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(SYNC)?;
             let p = t
@@ -1018,15 +1229,57 @@ impl DocStore {
 
     /// Forget a write-back in flight that didn't land.
     pub(crate) fn clear_pending_sync(&self, id: DocId) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         w.open_table(SYNC)?.remove((id, PENDING))?;
         w.commit()?;
         Ok(())
     }
 
+    /// The doc's hash key (format 3), created at random if it has none yet (a doc from a
+    /// format-2 store, or one created without a file). A purge replaces it.
+    pub(crate) fn doc_key(&self, id: DocId) -> Result<[u8; 32], StoreError> {
+        {
+            let r = self.begin_read()?;
+            if let Some(v) = r.open_table(DOC_KEYS)?.get(id)? {
+                return dec_doc_key(v.value());
+            }
+        }
+        let fresh = fresh_key()?;
+        let w = self.begin_write()?;
+        let k = {
+            if w.open_table(DOCS)?.get(id)?.is_none() {
+                return Err(StoreError::NoDoc(id));
+            }
+            let mut t = w.open_table(DOC_KEYS)?;
+            let found = t.get(id)?.map(|v| dec_doc_key(v.value())).transpose()?;
+            match found {
+                Some(k) => k,
+                None => {
+                    t.insert(id, enc_doc_key(&fresh).as_slice())?;
+                    fresh
+                }
+            }
+        };
+        w.commit()?;
+        Ok(k)
+    }
+
+    /// Replace the synced state and metadata, clearing any write-back in flight. One
+    /// transaction. (Tests: stage a format-2 plain hash.)
+    #[cfg(test)]
+    pub(crate) fn rekey_sync(
+        &self,
+        id: DocId,
+        meta: &DocMeta,
+        synced: &SyncState,
+    ) -> Result<(), StoreError> {
+        self.commit_disk(id, Seq::MAX, &[], &[], &[], meta, synced)
+            .map(|_| ())
+    }
+
     /// The client ID owned by `owner` in this doc, if any (the lowest, if several).
     pub fn client_owned_by(&self, id: DocId, owner: &str) -> Result<Option<ClientId>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         for kv in r.open_table(CLIENTS)?.range((id, 0)..=(id, u64::MAX))? {
             let (k, v) = kv?;
             if v.value() == owner {
@@ -1038,7 +1291,7 @@ impl DocStore {
 
     /// The newest version of a doc.
     pub fn last_version(&self, id: DocId) -> Result<Option<(VersionId, Version)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(VERSIONS)?;
         let last = t.range((id, 0)..=(id, u64::MAX))?.next_back().transpose()?;
         last.map(|(k, v)| Ok((k.value().1, dec_version(v.value())?)))
@@ -1049,7 +1302,7 @@ impl DocStore {
 
     /// The approval record of change `seq`, if it was made on someone's behalf.
     pub fn approval(&self, id: DocId, seq: Seq) -> Result<Option<Approval>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(APPROVALS)?;
         let v = t.get((id, seq))?;
         v.map(|v| dec_approval(v.value())).transpose()
@@ -1057,7 +1310,7 @@ impl DocStore {
 
     /// Every approval record of a doc, oldest change first.
     pub fn approvals(&self, id: DocId) -> Result<Vec<(Seq, Approval)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let mut out = Vec::new();
         for kv in r.open_table(APPROVALS)?.range((id, 0)..=(id, u64::MAX))? {
             let (k, v) = kv?;
@@ -1069,7 +1322,7 @@ impl DocStore {
     /// Replace an existing approval record. The store doesn't check who may do it: sessions
     /// do ([`crate::session::Session::set_approval`]).
     pub fn set_approval(&self, id: DocId, seq: Seq, a: &Approval) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let settles = {
             let mut t = w.open_table(APPROVALS)?;
             let Some(old) = t
@@ -1103,7 +1356,7 @@ impl DocStore {
 
     /// The value at `ns`/`key`.
     pub fn host_get(&self, ns: &str, key: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(HOST)?;
         let v = t.get((ns, key))?;
         Ok(v.map(|v| v.value().to_vec()))
@@ -1111,7 +1364,7 @@ impl DocStore {
 
     /// Delete `ns`/`key`; returns whether it existed. One durable transaction.
     pub fn host_delete(&self, ns: &str, key: &str) -> Result<bool, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let existed = w.open_table(HOST)?.remove((ns, key))?.is_some();
         w.commit()?;
         Ok(existed)
@@ -1120,7 +1373,7 @@ impl DocStore {
     /// Every `(key, value)` in `ns` whose key starts with `prefix` (`""` for all), in key
     /// order, from one consistent read.
     pub fn host_scan(&self, ns: &str, prefix: &str) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(HOST)?;
         let mut out = Vec::new();
         for kv in t.range((ns, prefix)..)? {
@@ -1136,7 +1389,7 @@ impl DocStore {
 
     /// Apply several puts and deletes in **one** durable transaction: all or none.
     pub fn host_batch(&self, ops: &[HostOp<'_>]) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(HOST)?;
             for op in ops {

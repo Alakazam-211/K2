@@ -158,10 +158,12 @@ impl Fx {
     }
 }
 
-const TEXT_TABLES: [&str; 13] = [
+const TEXT_TABLES: [&str; 15] = [
     "approvals",
+    "change_clocks",
     "changes",
     "clients",
+    "doc_keys",
     "docs",
     "paths",
     "revert_carry",

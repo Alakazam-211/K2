@@ -19,7 +19,7 @@
 //! - [`Doc::edit_as`] keeps nothing per participant after it returns: memory is the doc,
 //!   not the doc times the number of agents (tested in `tests/ephemeral_replicas.rs`).
 
-use crate::engine::{EngineDoc, YrsDoc};
+use crate::engine::{BlameRun, EngineDoc, YrsDoc};
 use crate::schema::{Kind, Schema};
 use crate::text::diff::{self, Hunk, HunkError};
 
@@ -260,6 +260,20 @@ impl Doc {
             return Ok(None);
         }
         self.inner.edit_as(client, edits).map(Some)
+    }
+
+    /// How many clock units `client` has inserted into this doc: a change by `client`
+    /// occupies the clocks between this before it and this after it (blame's index).
+    pub(crate) fn clock_of(&self, client: ClientId) -> u32 {
+        self.inner.clock_of(client)
+    }
+
+    /// Text root `root`'s live text as runs of the client (and clocks) that inserted it, in
+    /// order, covering the text exactly. **O(doc) per call** (a throwaway replica); leaves
+    /// this doc as it was. Fails on a poisoned doc.
+    pub(crate) fn blame_runs(&self, root: &str) -> Result<Vec<BlameRun>, DocError> {
+        self.root(root, Kind::Text)?;
+        self.inner.blame_runs(root)
     }
 
     /// Replace a text root with `new` as participant `client`, through a minimal diff.

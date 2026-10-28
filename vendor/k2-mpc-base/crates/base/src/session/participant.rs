@@ -57,6 +57,9 @@ pub enum ParticipantKind {
 /// saving it). It has its own client ID per doc, and its changes are logged `via: "disk"`.
 pub const EXTERNAL_PID: &str = "kit:external";
 
+/// Blame's author for text whose client the store has no owner for (never a guess).
+pub const UNKNOWN_PID: &str = "kit:unknown";
+
 /// Someone (or something) in a doc. **Identity is stamped by the host** from its own
 /// authentication; the kit never takes it from a client.
 ///

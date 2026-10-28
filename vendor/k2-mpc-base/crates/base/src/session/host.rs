@@ -20,8 +20,8 @@ pub struct Rights {
     /// other people's on-behalf changes. **Never implied** by read or edit: grant it
     /// explicitly. Meaningless without `read`.
     pub history: bool,
-    /// The doc's owner (the host decides who: e.g. the workspace owner and admins). Today:
-    /// breaking someone else's tier-0 lease. **Never implied** by any other right, not even
+    /// The doc's owner (the host decides who: e.g. the workspace owner and admins):
+    /// breaking someone else's tier-0 lease, purge and participant erasure. **Never implied** by any other right, not even
     /// [`Rights::full`]: grant it with [`Rights::with_owner`]. Meaningless without `read`.
     pub owner: bool,
 }
@@ -111,7 +111,7 @@ pub enum Need {
     /// Not a right the host grants: only the person a change was made on behalf of
     /// ([`super::Participant::on_behalf_of`]) may approve or decline it.
     Approver,
-    /// [`Rights::owner`]: breaking someone else's lease.
+    /// [`Rights::owner`]: breaking someone else's lease, purging.
     Owner,
     /// `revert <change>`: only the change's author, the person it was made for
     /// ([`super::Participant::on_behalf_of`]), or an owner ([`Rights::owner`]) may revert it.
@@ -153,6 +153,37 @@ pub enum Action {
     Revert,
     /// `log`, `diff --version`, `show --version`.
     History,
+    /// `purge` and participant erasure (owner only).
+    Purge,
+    /// `blame` (text and tier 0).
+    Blame,
+}
+
+/// What a purge targeted, as [`AuditEvent::Purged`] records it: metadata only (never the
+/// text, never a hash of it; an erased pid appears only as its pseudonym).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PurgedScope {
+    /// The whole history before the purge.
+    History,
+    /// Changes `from..=to`.
+    Changes {
+        from: crate::store::Seq,
+        to: crate::store::Seq,
+    },
+    /// Versions `from..=to`.
+    Versions {
+        from: crate::store::VersionId,
+        to: crate::store::VersionId,
+    },
+    /// A text the owner named, of `bytes` bytes.
+    Text { bytes: usize },
+    /// Participant erasure, to `pseudonym`.
+    Participant { pseudonym: String },
+    /// Tier 0: blob versions (`None`: every one but the current).
+    BlobVersions {
+        version: Option<crate::store::VersionId>,
+    },
 }
 
 /// How a tier-0 lease ended ([`AuditEvent::LeaseEnded`]).
@@ -285,5 +316,13 @@ pub enum AuditEvent {
     DocDeleted {
         key: DocKey,
         connections: Vec<(ConnId, String)>,
+    },
+    /// The owner `by` purged `scope` from the doc (K-PURGE-1): what changed, as counts. No
+    /// content and no content hash, ever.
+    Purged {
+        key: DocKey,
+        by: String,
+        scope: PurgedScope,
+        counts: crate::store::PurgeCounts,
     },
 }

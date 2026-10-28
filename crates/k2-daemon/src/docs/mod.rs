@@ -14,18 +14,28 @@
 //! | [`target`] | workspace + path → a jailed doc key, and the deny list (K2) |
 //! | [`shares`] | cross-workspace shares on the kit's host table (MI25) |
 //! | [`routes`] | `/cli/docs/*` (K2) |
+//! | [`tier0`] | the same routes on any other file: presence, a lease, versions and restore (tier 0) |
 //!
 //! **Disk sync** (kit C4): every doc is opened with `open_file`, so the file
 //! on disk stays true. The kit writes changes back (1 s quiet, 5 s at most,
 //! atomic, echo-suppressed), merges outside edits as `kit:external`, and
 //! reconciles a reopened doc with edits made while it was closed. K2 calls
 //! `tick()` every 250 ms and feeds `file_changed()` from its watcher.
+//!
+//! **Tier 0** (kit amendment 3): every other file in a workspace is a blob
+//! doc on the kit's `BlobStore` (bytes under `~/.k2/docs-blobs/`, the index
+//! in the store): presence, a lease, versions and restore, kept in sync
+//! with its file the same way. Files over [`blob_max_bytes`] are declined.
+//! The upkeep collects unreferenced blobs (`gc`, after the kit's 1 h grace)
+//! and, when a workspace is removed, destroys its blob key with its docs
+//! (`purge_space_key`).
 
 pub mod caller;
 pub mod host;
 pub mod routes;
 pub mod shares;
 pub mod target;
+pub mod tier0;
 pub mod watch;
 
 use std::collections::{HashMap, HashSet};
@@ -34,7 +44,8 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use k2_core::log_debug;
-use k2_mpc_base::session::{Config, PoolStats, Session, SessionError, SessionManager};
+use k2_mpc_base::blob::{BlobConfig, BlobStore};
+use k2_mpc_base::session::{AnyFile, BlobSession, Config, PoolStats, Session, SessionError, SessionManager};
 use k2_mpc_base::store::{DocKey, DocStore};
 
 /// The vendored kit writes docs back to their files (its C4, base
@@ -43,6 +54,15 @@ pub const KIT_DISK_SYNC: bool = true;
 
 /// Env override for the memory budget, in MiB.
 pub const ENV_MEMORY_MIB: &str = "K2_DOCS_MEMORY_MIB";
+
+/// Largest file that can be a tier-0 doc. Its bytes cross `/cli/docs/*`
+/// as base64 JSON (a `write` body, a `show` answer), so the cap bounds
+/// every buffer on the way.
+pub const BLOB_MAX_BYTES: u64 = 32 << 20;
+
+/// Env override for the tier-0 cap, in MiB (at most [`BLOB_MAX_BYTES`];
+/// tests lower it).
+pub const ENV_BLOB_MAX_MIB: &str = "K2_DOCS_BLOB_MAX_MIB";
 
 /// How long a starting daemon waits for the previous one to let go of the
 /// store (hand-off).
@@ -116,6 +136,42 @@ pub fn memory_budget_bytes() -> u64 {
     mib.saturating_mul(1 << 20)
 }
 
+/// The tier-0 size cap: `K2_DOCS_BLOB_MAX_MIB` (1 MiB up to the default),
+/// else [`BLOB_MAX_BYTES`].
+pub fn blob_max_bytes() -> u64 {
+    parse_blob_max(std::env::var(ENV_BLOB_MAX_MIB).ok().as_deref())
+}
+
+fn parse_blob_max(env: Option<&str>) -> u64 {
+    env.and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .map(|mib| mib.saturating_mul(1 << 20).min(BLOB_MAX_BYTES))
+        .unwrap_or(BLOB_MAX_BYTES)
+}
+
+/// The blob store over `store`, in [`k2_core::docs_store::blobs_path`]
+/// (owner-only). `None` (logged) when the folder can't be made: text docs
+/// still work, tier-0 calls answer `NoBlobStore`.
+fn open_blobs(store: &Arc<DocStore>) -> Option<Arc<BlobStore>> {
+    let dir = k2_core::docs_store::blobs_path();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        log_debug!("[docs] WARN: blob folder {} can't be made ({e}); any-file docs are off", dir.display());
+        return None;
+    }
+    if let Err(e) = k2_core::private_home::restrict_path(&dir) {
+        log_debug!("[docs] WARN: blob folder {}: {e}", dir.display());
+    }
+    let mut cfg = BlobConfig::default();
+    cfg.max_blob_bytes = blob_max_bytes();
+    match BlobStore::open(store.clone(), &dir, cfg, Arc::new(host::now_ms)) {
+        Ok(b) => Some(Arc::new(b)),
+        Err(e) => {
+            log_debug!("[docs] WARN: blob store at {} failed to open ({e}); any-file docs are off", dir.display());
+            None
+        }
+    }
+}
+
 fn config() -> Config {
     let mut c = Config::default();
     c.memory_budget_bytes = memory_budget_bytes();
@@ -141,20 +197,23 @@ pub fn start() {
     match opened {
         Ok(store) => {
             let store = Arc::new(store);
+            let mut manager =
+                SessionManager::new(store.clone(), Arc::new(host::K2Host::new(Arc::downgrade(&store))), config());
+            let blobs = open_blobs(&store);
+            if let Some(b) = &blobs {
+                manager = manager.with_blob_store(b.clone());
+            }
             let rt = Runtime {
-                manager: SessionManager::new(
-                    store.clone(),
-                    Arc::new(host::K2Host::new(Arc::downgrade(&store))),
-                    config(),
-                ),
+                manager,
                 store: Mutex::new(Some(store)),
                 opened: Mutex::new(HashMap::new()),
                 watch: watch::Watch::start(),
             };
             log_debug!(
-                "[docs] store open at {} (budget {} MiB, disk sync on)",
+                "[docs] store open at {} (budget {} MiB, disk sync on, any-file docs {})",
                 path.display(),
                 rt.manager.config().memory_budget_bytes >> 20,
+                if blobs.is_some() { "on" } else { "off" },
             );
             *s = Slot::Running(Arc::new(rt));
             drop(s);
@@ -251,15 +310,37 @@ impl Runtime {
     /// (`open_file`: import, or reconcile a stored doc with the file).
     pub fn open(&self, key: &DocKey, abs: &Path, root: &Path) -> Result<Arc<Session>, SessionError> {
         let s = self.manager.open_file(Arc::new(k2_mpc_markdown::PACK), key, abs, root)?;
-        let rel_in_k2 = key.path.starts_with(".k2/");
+        self.note_opened(key, abs);
+        Ok(s)
+    }
+
+    /// Tier 0: the blob doc for any other file at `abs` inside `root`
+    /// (`open_blob_file`: import, or reconcile a stored doc with the file).
+    pub fn open_blob(&self, key: &DocKey, abs: &Path, root: &Path) -> Result<Arc<BlobSession>, SessionError> {
+        let s = self.manager.open_blob_file(Arc::new(AnyFile), key, abs, root)?;
+        self.note_opened(key, abs);
+        Ok(s)
+    }
+
+    /// A doc was loaded: the watcher index, the `.k2/` watch, the space row.
+    fn note_opened(&self, key: &DocKey, abs: &Path) {
         let fresh = self.opened.lock().expect("docs opened set").insert(key.clone(), abs.to_path_buf()).is_none();
         if fresh {
-            if rel_in_k2 {
+            if key.path.starts_with(".k2/") {
                 self.watch.watch_k2_file(abs);
             }
             self.note_space(&key.space);
         }
-        Ok(s)
+    }
+
+    /// Loaded tier-0 doc for `key`, if any (never loads).
+    pub fn get_blob(&self, key: &DocKey) -> Option<Arc<BlobSession>> {
+        self.manager.get_blob(key)
+    }
+
+    /// The blob store, when any-file docs are on.
+    pub fn blobs(&self) -> Option<Arc<BlobStore>> {
+        self.manager.blob_store().cloned()
     }
 
     /// Remember that `space` holds docs (once per space).
@@ -388,6 +469,7 @@ impl Runtime {
             }
         };
         drop(store);
+        self.collect_blobs();
         for (space, _) in spaces {
             if workspace_exists(&space) {
                 continue;
@@ -403,14 +485,55 @@ impl Runtime {
                         }
                     }
                     drop(set);
+                    log_debug!("[docs] removed {} doc(s) of removed workspace {space}", keys.len());
+                    host::audit("doc-space-removed", "k2", format!("space={space} docs={} reason=workspace_removed", keys.len()));
+                    // The space's blob key goes with it, and every blob
+                    // stored under it: the same bytes stored again get an
+                    // unrelated id. The space row stays until this worked,
+                    // so a failure retries on the next sweep.
+                    if !self.purge_space_key(&space) {
+                        continue;
+                    }
                     if let Some(store) = self.store() {
                         let _ = store.host_delete(SPACES_NS, &space);
                     }
-                    log_debug!("[docs] removed {} doc(s) of removed workspace {space}", keys.len());
-                    host::audit("doc-space-removed", "k2", format!("space={space} docs={} reason=workspace_removed", keys.len()));
                 }
                 Err(e) => log_debug!("[docs] WARN: removing the docs of {space}: {e}"),
             }
+        }
+    }
+
+    /// Destroy a removed workspace's tier-0 key and blobs (K-T0-4), audited
+    /// as metadata. True when done (or there is no blob store).
+    fn purge_space_key(&self, space: &str) -> bool {
+        let Some(blobs) = self.blobs() else { return true };
+        match blobs.purge_space_key(space) {
+            Ok(r) => {
+                if r.key_destroyed || r.blobs_removed > 0 {
+                    host::audit(
+                        host::AUDIT_SPACE_KEY_PURGED,
+                        "k2",
+                        format!(
+                            "space={space} key_destroyed={} blobs={} bytes={} reason=workspace_removed",
+                            r.key_destroyed, r.blobs_removed, r.bytes_removed
+                        ),
+                    );
+                }
+                true
+            }
+            Err(e) => {
+                log_debug!("[docs] WARN: purging the blob key of {space}: {e}");
+                false
+            }
+        }
+    }
+
+    /// Blob GC: unreferenced blobs past the kit's grace (1 h), files a crash
+    /// left without an index row, purged spaces' folders.
+    fn collect_blobs(&self) {
+        let Some(blobs) = self.blobs() else { return };
+        if let Err(e) = blobs.gc() {
+            log_debug!("[docs] WARN: blob gc: {e}");
         }
     }
 }
@@ -427,6 +550,14 @@ pub fn pool_json() -> serde_json::Value {
                 "budgetBytes": p.budget_bytes,
                 "unloadedTotal": p.unloaded_total,
                 "diskSync": KIT_DISK_SYNC,
+                "anyFile": {
+                    "on": rt.blobs().is_some(),
+                    "loaded": p.blob_sessions,
+                    "blobs": p.blob_count,
+                    "bytes": p.blob_bytes,
+                    "unreferencedBytes": p.blob_unreferenced_bytes,
+                    "maxFileBytes": blob_max_bytes(),
+                },
             }),
             Err(e) => serde_json::json!({ "running": false, "error": e.to_string() }),
         },

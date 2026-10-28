@@ -66,11 +66,12 @@ mod unix_impl {
 
     /// The body cap for one request: [`MAX_BODY`], except the live-docs
     /// family, whose `write` carries a whole doc (up to 4 MiB of text, as an
-    /// escaped JSON string): `docs::routes::MAX_BODY`.
+    /// escaped JSON string, or a whole tier-0 file as base64):
+    /// `docs::routes::max_body`.
     fn body_cap(head: &str) -> usize {
         let target = head.lines().next().and_then(|l| l.split_whitespace().nth(1)).unwrap_or("");
         if target.starts_with(crate::docs::routes::PREFIX) {
-            crate::docs::routes::MAX_BODY
+            crate::docs::routes::max_body(target)
         } else {
             MAX_BODY
         }

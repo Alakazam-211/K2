@@ -2382,7 +2382,7 @@ async fn handle_one_request(
                 Err(crate::cli::CliResponse::forbidden())
             };
             let body = if is_post {
-                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::docs::routes::MAX_BODY).await {
+                match super::http::read_post_body_capped(&mut *stream, &mut buf, crate::docs::routes::max_body(p)).await {
                     Ok(b) => b,
                     Err(refused) => {
                         super::http::refuse_body_too_large(

@@ -13,7 +13,9 @@
 //!   Folders are watched while a doc in them is loaded (reference counted).
 //!
 //! The kit's own temp files (`.<name>.~mp<pid>-<n>.tmp`, `is_write_temp`)
-//! are ignored.
+//! are ignored. Markdown and tier-0 docs share this path: for a tier-0
+//! doc an outside save is a new version (or, under someone's lease, a
+//! conflict copy beside the file).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -138,8 +140,15 @@ pub(crate) fn changed<'a>(paths: impl Iterator<Item = &'a Path>) {
             if !seen.insert((key.space.clone(), key.path.clone())) {
                 continue;
             }
-            let Some(s) = rt.get(&key) else { continue };
-            let r = if is_file { s.file_changed() } else { s.check_disk() };
+            // A Markdown doc or a tier-0 doc: the same disk sync (an outside
+            // save becomes an attributed change, or a new version).
+            let r = if let Some(s) = rt.get(&key) {
+                if is_file { s.file_changed() } else { s.check_disk() }
+            } else if let Some(b) = rt.get_blob(&key) {
+                if is_file { b.file_changed() } else { b.check_disk() }
+            } else {
+                continue;
+            };
             if let Err(e) = r {
                 log_debug!("[docs] WARN: disk check of {} failed: {e}", super::host::key_label(&key));
             }
@@ -188,6 +197,15 @@ impl super::Runtime {
                 }
             }
             Err(e) => log_debug!("[docs] WARN: poll_disk: {e}"),
+        }
+        // Tier-0 docs (the kit's `poll_disk` covers text sessions).
+        let keys: Vec<k2_mpc_base::store::DocKey> = self.opened.lock().expect("docs opened set").keys().cloned().collect();
+        for k in keys {
+            if let Some(b) = self.get_blob(&k) {
+                if let Err(e) = b.check_disk() {
+                    log_debug!("[docs] WARN: disk check of {} failed: {e}", super::host::key_label(&k));
+                }
+            }
         }
     }
 }

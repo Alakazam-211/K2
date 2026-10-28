@@ -33,8 +33,8 @@ use std::sync::Weak;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use k2_core::log_debug;
-use k2_mpc_base::session::{AuditEvent, Host, LeaveReason, Participant, Rights};
-use k2_mpc_base::store::{DocKey, DocStore};
+use k2_mpc_base::session::{AuditEvent, Host, LeaveReason, Participant, PurgedScope, Rights};
+use k2_mpc_base::store::{DocKey, DocStore, PurgeCounts};
 
 /// pid prefix for people.
 pub const PERSON_PREFIX: &str = "person:";
@@ -50,28 +50,43 @@ pub const AUDIT_APPROVAL: &str = "doc-approval";
 pub const AUDIT_FILE: &str = "doc-file";
 /// The audit `user` for file events (the kit's outside-edit participant).
 const EXTERNAL: &str = k2_mpc_base::session::EXTERNAL_PID;
+/// Tier 0: an owner broke someone's lease.
+pub const AUDIT_LEASE_BROKEN: &str = "doc-lease-broken";
+/// Tier 0: another program saved a file under someone's lease (or over a
+/// version the file never got): the save is current, the replaced content
+/// is a version and a conflict copy.
+pub const AUDIT_CONFLICT: &str = "doc-conflict";
+/// A purge (owner only; not on `k2 doc`): scope and counts, never content.
+pub const AUDIT_PURGED: &str = "doc-purged";
+/// A removed workspace's tier-0 blob key was destroyed with its blobs.
+pub const AUDIT_SPACE_KEY_PURGED: &str = "doc-space-key-purged";
 
 /// What one principal may do with one doc (K2's copy of the kit's `Rights`,
-/// with a wire shape).
+/// with a wire shape). `owner` (break a tier-0 lease, purge) is never
+/// implied by the others.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct DocRights {
     pub read: bool,
     pub edit: bool,
     pub history: bool,
+    pub owner: bool,
 }
 
 impl DocRights {
-    pub const NONE: DocRights = DocRights { read: false, edit: false, history: false };
-    pub const FULL: DocRights = DocRights { read: true, edit: true, history: true };
+    pub const NONE: DocRights = DocRights { read: false, edit: false, history: false, owner: false };
+    pub const FULL: DocRights = DocRights { read: true, edit: true, history: true, owner: false };
+    /// The box owner and Admin logins: everything, and the doc owner's acts.
+    pub const OWNER: DocRights = DocRights { read: true, edit: true, history: true, owner: true };
 
-    /// The kit's view. Nothing without read; edit and history only with it.
+    /// The kit's view. Nothing without read; edit, history and owner only
+    /// with it.
     pub fn kit(self) -> Rights {
         let base = match (self.read, self.edit) {
             (true, true) => Rights::editor(),
             (true, false) => Rights::read_only(),
             _ => return Rights::none(),
         };
-        base.with_history(self.history)
+        base.with_history(self.history).with_owner(self.owner)
     }
 
     /// Wire shape: `{read, edit, history}`.
@@ -128,12 +143,17 @@ pub fn person_exists(person_key: &str) -> bool {
 /// owner linked, which resolve to `owner`) and every existing login may do
 /// everything (every role is Member or above, and Member writes files
 /// today: `/cli/fs/write-file` is a Member route). A login that no longer
-/// exists gets nothing.
+/// exists gets nothing. The doc owner's acts (breaking a tier-0 lease) are
+/// the box owner's and Admin logins' (PRD Q21: the workspace owner and
+/// admins); agents never have them.
 pub fn person_rights(person_key: &str) -> DocRights {
-    if person_exists(person_key) {
-        DocRights::FULL
-    } else {
-        DocRights::NONE
+    if person_key == k2_core::notify_prefs::OWNER {
+        return DocRights::OWNER;
+    }
+    match k2_core::connect_users::role_for_user(person_key) {
+        Some(role) if role >= k2_core::connect_users::Role::Admin => DocRights::OWNER,
+        Some(_) => DocRights::FULL,
+        None => DocRights::NONE,
     }
 }
 
@@ -157,7 +177,7 @@ pub fn agent_rights(agent_project: &str, space: &str, rel: &str, store: Option<&
         }
     });
     match granted {
-        Some((write, history)) => Ok(DocRights { read: true, edit: write, history }),
+        Some((write, history)) => Ok(DocRights { read: true, edit: write, history, owner: false }),
         None => Err(CrossRefusal::NotShared),
     }
 }
@@ -232,10 +252,40 @@ impl Host for K2Host {
                     log_debug!("[docs] {pid} left {} ({conn}, {reason:?})", key_label(key))
                 }
             },
-            // Purge isn't on k2 doc yet; when it runs, the audit gets what was
-            // reached (counts, scope), never content.
-            AuditEvent::Purged { key, by, scope, counts } => {
-                audit("doc-purged", by, format!("{} scope={scope:?} counts={counts:?}", key_label(key)))
+            // Purge stays off `k2 doc` (owner-only, a later surface); when it
+            // runs, the audit gets what was reached (scope, counts), never
+            // content and never a content hash (K-PURGE-1).
+            AuditEvent::Purged { key, by, scope, counts } => audit(AUDIT_PURGED, by, purged_outcome(key, scope, counts)),
+            // Tier 0 (kit amendment 3): leases are presence (debug log);
+            // a break and a conflicting save are audited, metadata only.
+            AuditEvent::LeaseAcquired { key, pid, expires_ms, auto } => {
+                log_debug!("[docs] {pid} holds the lease on {} until {expires_ms} (auto={auto})", key_label(key))
+            }
+            AuditEvent::LeaseEnded { key, pid, how } => {
+                log_debug!("[docs] {pid}'s lease on {} ended ({how:?})", key_label(key))
+            }
+            AuditEvent::LeaseBroken { key, by, holder, expires_ms } => audit(
+                AUDIT_LEASE_BROKEN,
+                by,
+                format!("{} holder={holder} expires_ms={expires_ms}", key_label(key)),
+            ),
+            AuditEvent::BlobConflict { key, current, kept, copy, lease_holder } => {
+                audit(
+                    AUDIT_CONFLICT,
+                    EXTERNAL,
+                    format!(
+                        "{} current={current} kept={kept} copy={} lease_holder={}",
+                        key_label(key),
+                        copy.as_deref().unwrap_or("-"),
+                        lease_holder.as_deref().unwrap_or("-")
+                    ),
+                );
+                // Both parties are told (K-T0-3): an inbox note, off the
+                // session lock.
+                super::tier0::notify_conflict(key.clone(), *current, *kept, copy.clone(), lease_holder.clone());
+            }
+            AuditEvent::BlobMerged { key, version } => {
+                audit(AUDIT_FILE, EXTERNAL, format!("{} merged version={version}", key_label(key)))
             }
             AuditEvent::RecheckFailed { key, error } => {
                 log_debug!("[docs] WARN: rights re-check failed on {}: {error}", key_label(key))
@@ -272,6 +322,36 @@ pub fn audit(event: &str, pid: &str, outcome: String) {
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(event, pid, outcome, "-", "-", "cli"));
 }
 
+/// A purge's Access Audit outcome: the doc, what was targeted and what
+/// changed, as numbers. A purged text appears only as its byte length; an
+/// erased participant only as its pseudonym. Never content, never a hash.
+pub fn purged_outcome(key: &DocKey, scope: &PurgedScope, c: &PurgeCounts) -> String {
+    let scope = match scope {
+        PurgedScope::History => "history".to_string(),
+        PurgedScope::Changes { from, to } => format!("changes:{from}-{to}"),
+        PurgedScope::Versions { from, to } => format!("versions:{from}-{to}"),
+        PurgedScope::Text { bytes } => format!("text:{bytes}B"),
+        PurgedScope::Participant { pseudonym } => format!("participant:{pseudonym}"),
+        PurgedScope::BlobVersions { version: Some(v) } => format!("blob_version:{v}"),
+        PurgedScope::BlobVersions { version: None } => "blob_versions:all_but_current".to_string(),
+        _ => "other".to_string(),
+    };
+    format!(
+        "{} scope={scope} log_entries={} versions={} revert_hunks={} bytes={} attributions={} undo_batches={} read_bases={} blob_versions={} blobs_removed={} conflict_copies={}",
+        key_label(key),
+        c.log_entries,
+        c.versions,
+        c.revert_hunks,
+        c.bytes,
+        c.attributions,
+        c.undo_batches,
+        c.read_bases,
+        c.blob_versions,
+        c.blobs_removed,
+        c.conflict_copies,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,15 +376,40 @@ mod tests {
     #[test]
     fn the_owner_has_every_right_and_an_agent_has_its_own_workspace() {
         let key = DocKey { space: "ws-a".into(), path: "a.md".into() };
-        assert_eq!(rights_for("person:owner", &key, None), DocRights::FULL);
+        assert_eq!(rights_for("person:owner", &key, None), DocRights::OWNER);
         assert_eq!(rights_for("agent:ws-a", &key, None), DocRights::FULL);
+    }
+
+    #[test]
+    fn only_the_box_owner_holds_the_doc_owners_acts_never_an_agent() {
+        let key = DocKey { space: "ws-a".into(), path: "a.png".into() };
+        assert!(rights_for("person:owner", &key, None).owner);
+        assert!(!rights_for("agent:ws-a", &key, None).owner, "an agent in its own workspace is not the doc owner");
+        assert!(DocRights::OWNER.kit().owner, "owner reaches the kit");
+        assert!(!DocRights::FULL.kit().owner, "owner is never implied");
     }
 
     #[test]
     fn kit_rights_follow_read_edit_and_history() {
         assert_eq!(DocRights::FULL.kit(), Rights::full());
-        assert_eq!(DocRights { read: true, edit: false, history: true }.kit(), Rights::read_only().with_history(true));
-        assert_eq!(DocRights { read: true, edit: true, history: false }.kit(), Rights::editor());
-        assert_eq!(DocRights { read: false, edit: true, history: true }.kit(), Rights::none());
+        let r = |read, edit, history, owner| DocRights { read, edit, history, owner };
+        assert_eq!(r(true, false, true, false).kit(), Rights::read_only().with_history(true));
+        assert_eq!(r(true, true, false, false).kit(), Rights::editor());
+        assert_eq!(r(false, true, true, true).kit(), Rights::none());
+    }
+
+    #[test]
+    fn a_purge_is_audited_as_numbers_never_content() {
+        let key = DocKey { space: "ws".into(), path: "notes/a.md".into() };
+        let mut c = PurgeCounts::default();
+        c.bytes = 42;
+        c.blob_versions = 2;
+        let line = purged_outcome(&key, &PurgedScope::Text { bytes: 42 }, &c);
+        assert_eq!(
+            line,
+            "ws:notes/a.md scope=text:42B log_entries=0 versions=0 revert_hunks=0 bytes=42 attributions=0 undo_batches=0 read_bases=0 blob_versions=2 blobs_removed=0 conflict_copies=0"
+        );
+        let blob = purged_outcome(&key, &PurgedScope::BlobVersions { version: None }, &c);
+        assert!(blob.contains("scope=blob_versions:all_but_current"), "{blob}");
     }
 }

@@ -22,6 +22,13 @@
 //! | `/cli/docs/approvals` | GET | read (others' records: history) | `approvals` | P30 |
 //! | `/cli/docs/shares` | GET | a person | host table ([`super::shares`]) | MI25 |
 //! | `/cli/docs/share`, `/cli/docs/unshare` | POST | a person (Admin floor for logins) | host table | MI25 |
+//! | `/cli/docs/lease` | POST | edit (release: read; break: owner) | tier 0 only: `acquire_lease` … `break_lease` | K-T0-2 |
+//!
+//! **Any other file** (not Markdown) is a tier-0 doc on the same routes
+//! ([`super::tier0`]): presence, a lease, versions, restore, `write --base`
+//! with bytes; a verb that needs a text doc refuses with `not_a_text_doc`
+//! (exit 2). Byte payloads ride as base64 (`bytesB64`): `write` sends them,
+//! `read` and `show` answer with them.
 //!
 //! Every param may come in the query string or the JSON body (the body
 //! wins): `workspace` (handle, name, id or root; an agent's own when
@@ -46,8 +53,9 @@ use k2_mpc_base::session::{
     Approval, ApprovalState, ConflictRegion, DiskState, EditResult, EditWithError, LogItem, LogQuery, Need, RosterEntry,
     Role, Session, SessionError, Stay, UndoMode, UndoOutcome, UndoRequest, VersionInfo, WriteOutcome,
 };
-use k2_mpc_base::store::{DocKey, DocStore};
 use k2_core::log_debug;
+use k2_mpc_base::blob::BlobError;
+use k2_mpc_base::store::{DocKey, DocStore, StoreError};
 use k2_mpc_base::text::merge::Conflict;
 use k2_mpc_base::text::Hunk;
 use k2_mpc_base::{Edit, ParticipantKind};
@@ -84,6 +92,21 @@ pub const PREFIX: &str = "/cli/docs/";
 /// Largest POST body: a 4 MiB doc as a JSON string, escaped, plus room.
 pub const MAX_BODY: usize = 12 << 20;
 
+/// Largest `write` body: a whole tier-0 file at the cap
+/// ([`super::BLOB_MAX_BYTES`]) as base64, plus room.
+pub const MAX_WRITE_BODY: usize = (super::BLOB_MAX_BYTES as usize).div_ceil(3) * 4 + (1 << 20);
+
+/// The body cap for one request to `path` (query string allowed): `write`
+/// carries a whole file, the rest at most a Markdown doc.
+pub fn max_body(path: &str) -> usize {
+    let route = path.split('?').next().unwrap_or(path);
+    if route == WRITE {
+        MAX_WRITE_BODY.max(MAX_BODY)
+    } else {
+        MAX_BODY
+    }
+}
+
 /// Most undo/redo steps one call may ask for.
 const MAX_STEPS: usize = 100;
 
@@ -92,8 +115,11 @@ const ROOT: &str = k2_mpc_markdown::ROOT;
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
-    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME,
+    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE,
 ];
+
+/// Tier 0's lease (K-T0-2): acquire, renew, release, break.
+pub const LEASE: &str = "/cli/docs/lease";
 
 pub const VERSIONS: &str = "/cli/docs/versions";
 pub const SHOW: &str = "/cli/docs/show";
@@ -118,6 +144,7 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/tool"
             | "/cli/docs/name"
             | "/cli/docs/mv"
+            | "/cli/docs/lease"
     ) || is_edit_route(path)
 }
 
@@ -134,13 +161,13 @@ fn is_edit_route(path: &str) -> bool {
 }
 
 /// Request input: the JSON body over the query params.
-struct Input<'a> {
-    params: &'a HashMap<String, String>,
-    body: Value,
+pub(super) struct Input<'a> {
+    pub(super) params: &'a HashMap<String, String>,
+    pub(super) body: Value,
 }
 
 impl Input<'_> {
-    fn str(&self, k: &str) -> Option<String> {
+    pub(super) fn str(&self, k: &str) -> Option<String> {
         match self.body.get(k) {
             Some(Value::String(s)) => Some(s.clone()),
             Some(Value::Number(n)) => Some(n.to_string()),
@@ -148,7 +175,7 @@ impl Input<'_> {
         }
     }
 
-    fn u64(&self, k: &str) -> Result<Option<u64>, CliResponse> {
+    pub(super) fn u64(&self, k: &str) -> Result<Option<u64>, CliResponse> {
         match self.body.get(k) {
             Some(Value::Number(n)) => n.as_u64().map(Some).ok_or_else(|| bad(format!("{k} must be a whole number"))),
             Some(Value::Null) | None => match self.params.get(k) {
@@ -160,13 +187,13 @@ impl Input<'_> {
     }
 }
 
-fn bad(msg: impl Into<String>) -> CliResponse {
+pub(super) fn bad(msg: impl Into<String>) -> CliResponse {
     with_exit(refusal("400 Bad Request", "bad_request", msg), k2_mpc_base::tools::exit::USAGE)
 }
 
 impl Input<'_> {
     /// A boolean flag: JSON `true`, or `1` / `true` in the query.
-    fn flag(&self, k: &str) -> bool {
+    pub(super) fn flag(&self, k: &str) -> bool {
         match self.body.get(k) {
             Some(Value::Bool(b)) => *b,
             _ => self.str(k).is_some_and(|v| v == "1" || v == "true"),
@@ -190,7 +217,7 @@ fn person_pid(named: &str) -> Result<String, CliResponse> {
 
 /// Anyone a `log` filter names: `me`, a pid as is, a person by login, or an
 /// agent by its workspace.
-fn any_pid(named: &str, caller: &DocCaller) -> Result<String, CliResponse> {
+pub(super) fn any_pid(named: &str, caller: &DocCaller) -> Result<String, CliResponse> {
     let n = named.trim();
     if n.eq_ignore_ascii_case("me") {
         return Ok(caller.pid());
@@ -207,7 +234,7 @@ fn any_pid(named: &str, caller: &DocCaller) -> Result<String, CliResponse> {
     }
 }
 
-fn ok(mut v: Value) -> CliResponse {
+pub(super) fn ok(mut v: Value) -> CliResponse {
     if let Some(o) = v.as_object_mut() {
         o.insert("ok".into(), Value::Bool(true));
     }
@@ -277,13 +304,38 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             k2_mpc_base::tools::exit::REFUSED,
         );
     }
+    let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights };
+    if target.tier == target::Tier::Blob {
+        return super::tier0::handle(path, &rt, &call);
+    }
+    if path == LEASE {
+        return with_exit(
+            refusal(
+                "400 Bad Request",
+                "no_lease_on_text",
+                format!(
+                    "{} is a Markdown doc: everyone's edits merge live, so it has no lease. Leases are for any other file (k2 doc lease photo.png)",
+                    target.rel
+                ),
+            ),
+            k2_mpc_base::tools::exit::USAGE,
+        );
+    }
     let session = match open(&rt, &target) {
         Ok(s) => s,
         Err(resp) => return resp,
     };
-    let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights };
     if path == MV {
-        return mv(&rt, &session, &call);
+        let s = &session;
+        return mv(
+            &rt,
+            &call,
+            || {
+                let j = join(s, &call, Stay::UntilIdle)?;
+                s.flush(j.conn).map(|_| ())
+            },
+            |p: &std::path::Path| s.file_moved(p).map(|_| ()),
+        );
     }
     let r = verb(path, &session, &call);
     match r {
@@ -299,13 +351,13 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
 }
 
 /// One doc call, resolved.
-struct Call<'a> {
-    caller: &'a DocCaller,
+pub(super) struct Call<'a> {
+    pub(super) caller: &'a DocCaller,
     /// `person:<key>` when an agent acts for that person.
-    on_behalf: Option<&'a str>,
-    target: &'a Target,
-    input: &'a Input<'a>,
-    rights: DocRights,
+    pub(super) on_behalf: Option<&'a str>,
+    pub(super) target: &'a Target,
+    pub(super) input: &'a Input<'a>,
+    pub(super) rights: DocRights,
 }
 
 /// K2's own rights check before the kit's (the kit re-asks on every call):
@@ -366,7 +418,7 @@ fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, CliRespons
     rt.open(&key, &t.abs, &t.root).map_err(|e| VerbError::Session(e).into_response())
 }
 
-enum VerbError {
+pub(super) enum VerbError {
     Session(SessionError),
     Response(CliResponse),
 }
@@ -378,7 +430,7 @@ impl From<SessionError> for VerbError {
 }
 
 impl VerbError {
-    fn into_response(self) -> CliResponse {
+    pub(super) fn into_response(self) -> CliResponse {
         match self {
             VerbError::Response(r) => r,
             VerbError::Session(e) => session_error(&e),
@@ -388,7 +440,7 @@ impl VerbError {
 
 /// `r` with `error.exit` set: the CLI exits with it (the kit's K-EXIT-1
 /// table, `tools::session_exit`, for every session error).
-fn with_exit(mut r: CliResponse, exit: u8) -> CliResponse {
+pub(super) fn with_exit(mut r: CliResponse, exit: u8) -> CliResponse {
     if let Ok(mut v) = serde_json::from_str::<Value>(&r.body) {
         if let Some(e) = v.get_mut("error").and_then(Value::as_object_mut) {
             e.insert("exit".into(), json!(exit));
@@ -401,11 +453,76 @@ fn with_exit(mut r: CliResponse, exit: u8) -> CliResponse {
 /// The kit's errors on the wire (SESSIONS.md "Errors"), each with its exit
 /// code (`error.exit`).
 pub fn session_error(e: &SessionError) -> CliResponse {
-    with_exit(session_error_body(e), k2_mpc_base::tools::session_exit(e))
+    let exit = match e {
+        // A version that never existed is "not found" (4); the kit's
+        // `session_exit` sends every store error to 6 (store unavailable).
+        SessionError::Store(StoreError::NoVersion(..)) => k2_mpc_base::tools::exit::NOT_FOUND,
+        _ => k2_mpc_base::tools::session_exit(e),
+    };
+    with_exit(session_error_body(e), exit)
+}
+
+/// `4m 10s`, `35s`.
+fn human_ms(ms: u64) -> String {
+    let s = ms.div_ceil(1000);
+    match s {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m {}s", s / 60, s % 60),
+        s => format!("{}h {}m", s / 3600, s / 60 % 60),
+    }
 }
 
 fn session_error_body(e: &SessionError) -> CliResponse {
     match e {
+        // Tier 0 (kit amendment 3).
+        SessionError::Leased { holder, name, expires_ms } => {
+            let left = expires_ms.saturating_sub(host::now_ms());
+            CliResponse {
+                status: "409 Conflict",
+                content_type: "application/json",
+                body: json!({
+                    "ok": false,
+                    "error": {
+                        "code": "leased",
+                        "hint": format!(
+                            "leased by {} for another {}: nothing was written. Try again after it expires, or ask them to let go (k2 doc lease --release)",
+                            pid_label(holder),
+                            human_ms(left)
+                        ),
+                        "holder": holder,
+                        "holderName": name,
+                        "expiresMs": expires_ms,
+                        "retryAfterMs": left,
+                    },
+                })
+                .to_string(),
+            }
+        }
+        SessionError::NoLease => refusal(
+            "409 Conflict",
+            "no_lease",
+            "nobody holds a lease on it (a daemon restart drops leases); take one with k2 doc lease",
+        ),
+        SessionError::NoBlobStore => refusal(
+            "503 Service Unavailable",
+            "any_file_off",
+            "any-file docs are off on this server (their store didn't open; see the daemon log)",
+        ),
+        SessionError::Blob(BlobError::TooLarge { limit }) => refusal(
+            "422 Unprocessable Entity",
+            "too_large",
+            format!("that is over the {} limit for any-file docs", target::human_bytes(*limit)),
+        ),
+        SessionError::Blob(err) => refusal("500 Internal Server Error", "blob_error", format!("the stored file failed: {err}")),
+        SessionError::Store(StoreError::NoVersion(_, v)) => {
+            refusal("404 Not Found", "no_such_version", format!("no version {v} of this doc (k2 doc versions)"))
+        }
+        SessionError::Store(StoreError::PurgedVersion(_, v)) => {
+            refusal("404 Not Found", "purged_version", format!("version {v} was purged; its content is gone"))
+        }
+        SessionError::Store(StoreError::CurrentVersion(_, v)) => {
+            refusal("409 Conflict", "current_version", format!("version {v} is the current one; write or restore another first"))
+        }
         SessionError::Held { reason } => refusal(
             "409 Conflict",
             "held",
@@ -432,6 +549,11 @@ fn session_error_body(e: &SessionError) -> CliResponse {
                 "403 Forbidden",
                 "not_author_or_owner",
                 "only the change's author, the person it was made for, or an owner can revert it",
+            ),
+            Need::Owner => refusal(
+                "403 Forbidden",
+                "not_the_owner",
+                "only the doc's owner (the box owner or an Admin login) can do that, e.g. break someone else's lease",
             ),
             _ => refusal("403 Forbidden", "doc_forbidden", "refused"),
         },
@@ -487,6 +609,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             let st = s.status()?;
             Ok(ok(json!({
                 "doc": doc_json(t),
+                "tier": 1,
                 "version": st.version,
                 "participants": st.participants,
                 "connections": st.connections,
@@ -564,7 +687,7 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
         }
         OPEN => {
             let j = join(s, c, Stay::Held)?;
-            Ok(ok(json!({ "doc": doc_json(t), "version": j.version, "client": j.client, "rights": rights.json() })))
+            Ok(ok(json!({ "doc": doc_json(t), "tier": 1, "version": j.version, "client": j.client, "rights": rights.json() })))
         }
         LEAVE => {
             let j = join(s, c, Stay::UntilIdle)?;
@@ -774,8 +897,17 @@ fn edit(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
 }
 
 fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
-    let text = match c.input.body.get("text") {
-        Some(Value::String(s)) => s.clone(),
+    // `text`, or `bytesB64` (what `k2 doc write` sends for every doc: the
+    // same bytes for any file) holding UTF-8.
+    let text = match (c.input.body.get("text"), c.input.body.get("bytesB64")) {
+        (Some(Value::String(s)), _) => s.clone(),
+        (None, Some(Value::String(b))) => {
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b.as_bytes())
+                .map_err(|e| VerbError::Response(bad(format!("bytesB64 is not base64: {e}"))))?;
+            String::from_utf8(bytes).map_err(|_| VerbError::Response(bad("a Markdown doc's new text must be UTF-8")))?
+        }
         _ => return Err(VerbError::Response(bad("text is required (a string in the JSON body)"))),
     };
     let base = c
@@ -822,7 +954,15 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
 /// the store record and session move (`rekey`, `file_moved`). A failed
 /// rekey renames the file back. File shares of the old name follow it
 /// (K-PERM-11); a folder share covers the new name only if it is inside.
-fn mv(rt: &Arc<super::Runtime>, s: &Arc<Session>, c: &Call) -> CliResponse {
+///
+/// `flush` writes the doc's unwritten changes to the old name (it joins);
+/// `moved` tells the session its file's new path (text or tier 0).
+pub(super) fn mv(
+    rt: &Arc<super::Runtime>,
+    c: &Call,
+    flush: impl FnOnce() -> Result<(), SessionError>,
+    moved: impl FnOnce(&std::path::Path) -> Result<(), SessionError>,
+) -> CliResponse {
     let t = c.target;
     if !c.rights.edit {
         return session_error(&SessionError::Forbidden { need: Need::Edit });
@@ -842,11 +982,7 @@ fn mv(rt: &Arc<super::Runtime>, s: &Arc<Session>, c: &Call) -> CliResponse {
             k2_mpc_base::tools::exit::REFUSED,
         );
     }
-    let j = match join(s, c, Stay::UntilIdle) {
-        Ok(j) => j,
-        Err(e) => return session_error(&e),
-    };
-    if let Err(e) = s.flush(j.conn) {
+    if let Err(e) = flush() {
         return session_error(&e);
     }
     if let Err(e) = std::fs::rename(&t.abs, &new_abs) {
@@ -859,7 +995,7 @@ fn mv(rt: &Arc<super::Runtime>, s: &Arc<Session>, c: &Call) -> CliResponse {
         let _ = std::fs::rename(&new_abs, &t.abs);
         return session_error(&e);
     }
-    if let Err(e) = s.file_moved(&new_abs) {
+    if let Err(e) = moved(&new_abs) {
         log_debug!("[docs] WARN: file_moved after mv to {new_rel}: {e}");
     }
     let mut moved_shares = 0usize;
@@ -961,7 +1097,7 @@ fn tool(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
 
 /// How a pid reads in a fence's contributors line: `Sam (person)`,
 /// `Writer (agent)`, `an outside edit`.
-fn pid_label(pid: &str) -> String {
+pub(super) fn pid_label(pid: &str) -> String {
     if pid == k2_mpc_base::session::EXTERNAL_PID {
         return "an outside edit".to_string();
     }
@@ -987,14 +1123,14 @@ fn pid_project(p: &Principal) -> String {
 }
 
 /// Standard base64 (non-UTF-8 tool output is rare: docs are UTF-8 text).
-fn b64(bytes: &[u8]) -> String {
+pub(super) fn b64(bytes: &[u8]) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
 /// `{state: clean|dirty|missing|declined, sinceMs?, reason?}`, or null for
 /// a session without a file.
-fn disk_json(d: Option<&DiskState>) -> Value {
+pub(super) fn disk_json(d: Option<&DiskState>) -> Value {
     match d {
         None => Value::Null,
         Some(DiskState::Clean) => json!({ "state": "clean" }),
@@ -1161,7 +1297,7 @@ fn show_rel(rel: &str) -> &str {
 
 // ── shapes ────────────────────────────────────────────────────────────
 
-fn doc_json(t: &Target) -> Value {
+pub(super) fn doc_json(t: &Target) -> Value {
     json!({ "workspace": t.project_id, "path": t.rel })
 }
 
@@ -1174,7 +1310,7 @@ fn edit_json(r: &EditResult) -> Value {
     })
 }
 
-fn lower<T: std::fmt::Debug>(v: &T) -> String {
+pub(super) fn lower<T: std::fmt::Debug>(v: &T) -> String {
     let s = format!("{v:?}");
     let mut out = String::with_capacity(s.len() + 4);
     for (i, ch) in s.chars().enumerate() {
@@ -1327,7 +1463,7 @@ fn kind_str(k: ParticipantKind) -> &'static str {
     }
 }
 
-fn roster_json(e: &RosterEntry) -> Value {
+pub(super) fn roster_json(e: &RosterEntry) -> Value {
     let p = &e.participant;
     json!({
         "pid": p.pid,
@@ -1346,6 +1482,9 @@ fn roster_json(e: &RosterEntry) -> Value {
         "lastEditMs": e.last_edit_ms,
         "held": matches!(e.stay, Stay::Held),
         "connections": e.connections,
+        // Tier 0: what they look at ("page 3") and whether they hold the lease.
+        "region": e.region,
+        "holdsLease": e.holds_lease,
     })
 }
 

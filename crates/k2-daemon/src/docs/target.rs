@@ -12,8 +12,13 @@
 //! inside the workspace root (`fs_routes::jail_rel_path`). The kit re-checks
 //! nothing about paths (it never touches disk in this slice).
 //!
-//! **Never live docs** (MI12), refused before any open:
-//! - anything that isn't `.md` / `.markdown` (`.mdx` is JSX), `not_markdown`;
+//! **Which tier.** `.md` / `.markdown` is a Markdown doc (tier 1, the
+//! Markdown pack); every other file is a tier-0 doc (the kit's blob docs:
+//! presence, a lease, versions and restore), up to
+//! [`super::blob_max_bytes`] (`too_large` past it). `.mdx` is JSX, so it is
+//! tier 0. A path keeps its tier for life (`mv` can't change it).
+//!
+//! **Never live docs** (MI12), refused before any open, on every tier:
 //! - secret files by path or content (`secret_paths::classify`), `secret`;
 //! - `.k2/vault/**`, `protected`;
 //! - files K2 generates and rewrites (AGENTS.md, its own skills, rosters,
@@ -23,6 +28,34 @@
 use std::path::{Path, PathBuf};
 
 use k2_mpc_base::store::DocKey;
+
+/// How much of the kit a file gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tier {
+    /// Markdown (tier 1): live co-editing, text tools, undo.
+    Markdown,
+    /// Any other file (tier 0): presence, a lease, versions and restore.
+    Blob,
+}
+
+impl Tier {
+    /// The tier a workspace-relative path gets (by name only).
+    pub fn of(rel: &str) -> Tier {
+        if k2_mpc_markdown::is_markdown_path(rel) {
+            Tier::Markdown
+        } else {
+            Tier::Blob
+        }
+    }
+
+    /// On the wire: `1` (Markdown) or `0` (any file).
+    pub fn number(self) -> u8 {
+        match self {
+            Tier::Markdown => 1,
+            Tier::Blob => 0,
+        }
+    }
+}
 
 /// A resolved, jailed doc.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +67,7 @@ pub struct Target {
     pub rel: String,
     /// Canonical absolute file path.
     pub abs: PathBuf,
+    pub tier: Tier,
 }
 
 impl Target {
@@ -106,14 +140,64 @@ pub fn is_vault(rel: &str) -> bool {
     lower == ".k2/vault" || lower.starts_with(".k2/vault/")
 }
 
-/// The deny list for an existing, jailed file (`rel` workspace-relative,
-/// `link` the path before symlinks were resolved, `abs` after).
-pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
-    if !k2_mpc_markdown::is_markdown_path(rel) {
-        return Err(Refusal::declined("not_markdown", format!("{rel} is not a Markdown file (.md, .markdown)")));
+/// True inside any `.git` folder: git's database, its config and its hooks
+/// (a written hook would run as the workspace's user).
+pub fn is_git_internal(rel: &str) -> bool {
+    let lower = rel.to_ascii_lowercase();
+    let segs: Vec<&str> = lower.split('/').collect();
+    segs.len() > 1 && segs[..segs.len() - 1].contains(&".git")
+}
+
+/// `.k2/` folders whose other files may be tier-0 docs (wiki attachments,
+/// PRD images). Everything else under `.k2/` is K2's configuration
+/// (settings, heartbeats, hooks, rosters): never written through a doc.
+const K2_DOC_DIRS: &[&str] = &[".k2/wiki/", ".k2/prds/", ".k2/docs/"];
+
+/// True for a path under `.k2/` outside [`K2_DOC_DIRS`].
+pub fn is_k2_config(rel: &str) -> bool {
+    let lower = rel.to_ascii_lowercase();
+    lower.starts_with(".k2/") && !K2_DOC_DIRS.iter().any(|d| lower.starts_with(d))
+}
+
+/// `n` bytes for a person: `512 B`, `3.0 KiB`, `40.0 MiB`.
+pub fn human_bytes(n: u64) -> String {
+    match n {
+        n if n < 1 << 10 => format!("{n} B"),
+        n if n < 1 << 20 => format!("{:.1} KiB", n as f64 / 1024.0),
+        n => format!("{:.1} MiB", n as f64 / 1_048_576.0),
     }
+}
+
+/// A tier-0 file over the cap is declined (exit 4), saying both sizes.
+pub fn size_cap(rel: &str, tier: Tier, len: u64, cap: u64) -> Result<(), Refusal> {
+    if tier == Tier::Blob && len > cap {
+        return Err(Refusal::declined(
+            "too_large",
+            format!(
+                "{rel} is {}; files over {} can't be live docs (any-file docs keep every version)",
+                human_bytes(len),
+                human_bytes(cap)
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// The deny list for an existing, jailed file (`rel` workspace-relative,
+/// `link` the path before symlinks were resolved, `abs` after). Applies to
+/// every tier.
+pub fn deny(rel: &str, link: &Path, abs: &Path) -> Result<(), Refusal> {
     if is_vault(rel) {
         return Err(Refusal::declined("protected", format!("{rel} is in the vault folder; it is never a live doc")));
+    }
+    if is_git_internal(rel) {
+        return Err(Refusal::declined("protected", format!("{rel} is inside git's own folder; it is never a live doc")));
+    }
+    if Tier::of(rel) == Tier::Blob && is_k2_config(rel) {
+        return Err(Refusal::declined(
+            "protected",
+            format!("{rel} is K2's own configuration; only Markdown and files under .k2/wiki, .k2/prds or .k2/docs are live docs there"),
+        ));
     }
     let link_name = link.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
     let is_root_mirror = MIRRORS.contains(&link_name.as_str())
@@ -185,7 +269,8 @@ fn rel_string(root: &Path, abs: &Path) -> Result<String, Refusal> {
 
 /// Where `mv` puts a doc: `to` relative to the doc's workspace (or absolute
 /// inside it). The new name must not exist yet, its folder must, it stays
-/// in the jail, and it passes the deny list by path (Markdown, not the
+/// in the jail, it keeps the doc's tier (a Markdown doc stays Markdown, any
+/// other file stays tier 0), and it passes the deny list by path (not the
 /// vault, not generated, not a secret's name). Returns `(rel, abs)`.
 pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     let to = to.trim();
@@ -214,14 +299,23 @@ pub fn resolve_new(t: &Target, to: &str) -> Result<(String, PathBuf), Refusal> {
     let parent = abs.parent().and_then(|p| p.canonicalize().ok()).ok_or_else(|| Refusal::bad("path_escapes", "bad folder"))?;
     let abs = parent.join(abs.file_name().unwrap_or_default());
     let rel = rel_string(&t.root, &abs)?;
-    if !k2_mpc_markdown::is_markdown_path(&rel) {
-        return Err(Refusal::declined("not_markdown", format!("{rel} is not a Markdown file (.md, .markdown)")));
+    if Tier::of(&rel) != t.tier {
+        return Err(Refusal::bad(
+            "tier_change",
+            match t.tier {
+                Tier::Markdown => format!("{} is a Markdown doc; mv keeps it one (name it .md or .markdown)", t.rel),
+                Tier::Blob => format!("{} is an any-file doc; mv can't make it a Markdown doc ({rel})", t.rel),
+            },
+        ));
     }
     if is_vault(&rel) {
         return Err(Refusal::declined("protected", format!("{rel} is in the vault folder")));
     }
     if is_generated(&rel) {
         return Err(Refusal::declined("generated", format!("K2 writes {rel} itself")));
+    }
+    if is_git_internal(&rel) || (t.tier == Tier::Blob && is_k2_config(&rel)) {
+        return Err(Refusal::declined("protected", format!("{rel} is protected (git's folder or K2's configuration)")));
     }
     if k2_core::secret_paths::is_secret_rel(&rel) {
         return Err(Refusal::declined("secret", format!("{rel} is a secret's name; it is never a live doc")));
@@ -335,7 +429,9 @@ pub fn resolve(workspace: Option<&str>, path: &str, default_workspace: Option<&s
     }
     let rel = rel_string(&root, &abs)?;
     deny(&rel, &link, &abs)?;
-    Ok(Target { project_id, root, rel, abs })
+    let tier = Tier::of(&rel);
+    size_cap(&rel, tier, meta.len(), super::blob_max_bytes())?;
+    Ok(Target { project_id, root, rel, abs, tier })
 }
 
 #[cfg(test)]
@@ -378,27 +474,64 @@ mod tests {
     }
 
     #[test]
-    fn deny_list_refuses_each_kind_and_admits_plain_markdown() {
+    fn deny_list_refuses_each_kind_and_admits_markdown_and_any_other_file() {
         let d = tmp();
-        let w = |rel: &str, body: &str| {
+        let w = |rel: &str, body: &[u8]| {
             let p = d.join(rel);
             std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
             std::fs::write(&p, body).expect("write");
             p
         };
-        let ok = w("notes/a.md", "# hi\n");
+        let ok = w("notes/a.md", b"# hi\n");
         assert_eq!(deny("notes/a.md", &ok, &ok), Ok(()));
-        let txt = w("a.txt", "x");
-        assert_eq!(deny("a.txt", &txt, &txt).expect_err("txt").code, "not_markdown");
-        let mdx = w("a.mdx", "x");
-        assert_eq!(deny("a.mdx", &mdx, &mdx).expect_err("mdx").code, "not_markdown");
-        let v = w(".k2/vault/k.md", "x");
+        let txt = w("a.txt", b"x");
+        assert_eq!(deny("a.txt", &txt, &txt), Ok(()));
+        let png = w("img/logo.png", &[0x89, b'P', b'N', b'G', 0, 0xff]);
+        assert_eq!(deny("img/logo.png", &png, &png), Ok(()));
+        let v = w(".k2/vault/k.md", b"x");
         assert_eq!(deny(".k2/vault/k.md", &v, &v).expect_err("vault").code, "protected");
-        let g = w(".k2/AGENTS.md", "x");
+        let vb = w(".k2/vault/blob.bin", &[0, 1, 2]);
+        assert_eq!(deny(".k2/vault/blob.bin", &vb, &vb).expect_err("vault blob").code, "protected");
+        let g = w(".k2/AGENTS.md", b"x");
         assert_eq!(deny(".k2/AGENTS.md", &g, &g).expect_err("gen").code, "generated");
-        let s = w(".ssh/notes.md", "x");
+        let s = w(".ssh/notes.md", b"x");
         assert_eq!(deny(".ssh/notes.md", &s, &s).expect_err("secret").code, "secret");
+        let key = w("keys/deploy.pem", b"x");
+        assert_eq!(deny("keys/deploy.pem", &key, &key).expect_err("secret by name").code, "secret");
+        let env = w(".env", b"API_KEY=sk-live-0123456789abcdef0123456789abcdef\n");
+        assert_eq!(deny(".env", &env, &env).expect_err("dotenv").code, "secret");
+        let hook = w(".git/hooks/pre-commit", b"#!/bin/sh\n");
+        assert_eq!(deny(".git/hooks/pre-commit", &hook, &hook).expect_err("git hook").code, "protected");
+        let cfg = w(".k2/heartbeats.json", b"{}");
+        assert_eq!(deny(".k2/heartbeats.json", &cfg, &cfg).expect_err("k2 config").code, "protected");
+        let att = w(".k2/wiki/assets/map.png", &[1, 2, 3]);
+        assert_eq!(deny(".k2/wiki/assets/map.png", &att, &att), Ok(()));
+        let prd = w(".k2/PROJECT.md", b"# p\n");
+        assert_eq!(deny(".k2/PROJECT.md", &prd, &prd), Ok(()), "Markdown under .k2/ stays a doc");
         std::fs::remove_dir_all(&d).expect("cleanup");
+    }
+
+    #[test]
+    fn markdown_is_tier_1_and_every_other_file_is_tier_0() {
+        for p in ["a.md", "notes/b.markdown", "C.MD"] {
+            assert_eq!(Tier::of(p), Tier::Markdown, "{p}");
+        }
+        for p in ["a.txt", "a.mdx", "logo.png", "report.pdf", "Makefile", ".bashrc", "x.md.bak"] {
+            assert_eq!(Tier::of(p), Tier::Blob, "{p}");
+        }
+        assert_eq!(Tier::Markdown.number(), 1);
+        assert_eq!(Tier::Blob.number(), 0);
+    }
+
+    #[test]
+    fn a_tier_0_file_over_the_cap_is_declined_with_both_sizes() {
+        let r = size_cap("big.bin", Tier::Blob, 40 << 20, 32 << 20).expect_err("over the cap");
+        assert_eq!((r.status, r.code), ("422 Unprocessable Entity", "too_large"));
+        assert!(r.message.contains("40.0 MiB") && r.message.contains("32.0 MiB"), "{}", r.message);
+        assert_eq!(size_cap("big.bin", Tier::Blob, 32 << 20, 32 << 20), Ok(()), "the cap itself is allowed");
+        assert_eq!(size_cap("big.md", Tier::Markdown, 40 << 20, 32 << 20), Ok(()), "Markdown has its own limit (the pack's)");
+        assert_eq!(human_bytes(512), "512 B");
+        assert_eq!(human_bytes(3 << 10), "3.0 KiB");
     }
 
     #[cfg(unix)]

@@ -157,6 +157,11 @@ else
     command -v gh >/dev/null 2>&1 || die "gh is not installed"
 fi
 [ -z "$FROM_DIR" ] || [ -d "$FROM_DIR" ] || die "--from-dir $FROM_DIR is not a directory"
+# Compute verdicts are written as this user and trust the controller's
+# `verified` flag (prd-signing-user-v1 A4): not evidence for the signing user.
+if [ -n "$FROM_DIR" ] && [ "$(k2u_backend)" = k2sign ]; then
+    die "compute builds are not signable through k2sign yet (S3b); K2_SIGNER=keychain signs them (rollback only)"
+fi
 if [ -n "$FROM_DIR" ]; then
     [ -n "$VERDICTS" ] && [ -d "$VERDICTS" ] || die "--from-dir needs --compute-verdict <state dir> (compute_release.py's receipt checks): no provenance, no signature"
 fi

@@ -23,6 +23,10 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export PYTHONDONTWRITEBYTECODE=1
 unset TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD K2_RELEASE_REPO || true
+# This file tests the keychain (stopgap) backend; tests/release/k2sign-*.sh
+# test the signing user, the default backend.
+export K2_SIGNER=keychain
+unset K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD || true
 
 # ── stubs ──
 bin="$tmp/bin"; mkdir -p "$bin"

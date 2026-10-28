@@ -17,6 +17,20 @@
 #   k2u_slot_key_id u2                    the U2 key id (k2_signatures key)
 #   k2u_b64 <file>                        one-line base64 of a file
 #
+# Two backends (prd-signing-user-v1 §4.7), chosen by K2_SIGNER:
+#   k2sign    (default) the keys live with the `_k2sign` macOS user
+#             (scripts/k2sign/). k2u_sign streams the file to
+#             `sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign sign` on
+#             stdin and gets the signature on stdout; the signer needs an
+#             approved Touch ID session (release.sh Step 0.46,
+#             scripts/lib/sign-approve.sh) and checks each file itself. This
+#             side still verifies every signature against the source tree's
+#             keys (an alarm: the tree belongs to this user) and keeps a COPY
+#             of the audit line; the real log is /var/k2sign/audit.
+#   keychain  the stopgap below (key file + login keychain password, read as
+#             this user), kept only for rollback until two releases have
+#             signed green through k2sign (retirement ledger).
+#
 # Two keys, every release signed with both (prd-security-sweep-0464-v1
 # SS4/SS5, option C, the bridge):
 #   U1  the retired key E9111446F65EBB05, for installs older than 0.46.6:
@@ -92,6 +106,23 @@ K2U_SRC_ROOT="${K2_UPDATER_SRC_ROOT:-$(cd "$K2U_LIB_DIR/../.." && pwd)}"
 
 k2u_log() { printf '[sign-updater] %s\n' "$*" >&2; }
 k2u_fail() { printf '[sign-updater] ERROR: %s\n' "$*" >&2; return 1; }
+
+k2u_backend() {
+    case "${K2_SIGNER:-k2sign}" in
+        k2sign|keychain) printf '%s' "${K2_SIGNER:-k2sign}" ;;
+        *) k2u_fail "K2_SIGNER must be k2sign or keychain (got '${K2_SIGNER}')"; return 1 ;;
+    esac
+}
+
+# The signer command (k2sign backend). Tests point K2SIGN_TEST_ROOT at a
+# test install; release.sh refuses that variable.
+k2u_k2sign() {
+    if [ -n "${K2SIGN_TEST_ROOT:-}" ]; then
+        "$K2SIGN_TEST_ROOT/usr/local/libexec/k2sign/k2sign" "$@"
+    else
+        /usr/bin/sudo -n -u _k2sign /usr/local/libexec/k2sign/k2sign "$@"
+    fi
+}
 
 # The signing key must never reach a build. release.sh calls this right
 # after it sources .env, before any build step.
@@ -190,27 +221,32 @@ k2u_mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 # Append one line per signature: utc time, asset, sha256, key id, trusted
 # comment (tabs written as \t), user.
 k2u_audit() {
-    local version="$1" asset="$2" file="$3" keyid="$4" comment="$5" dir f sha
+    local version="$1" asset="$2" file="$3" keyid="$4" comment="$5" backend="${6:-keychain}" dir f sha who
     dir="${K2_RELEASE_AUDIT_DIR:-$HOME/k2-release-audit}/$version"
     mkdir -p "$dir" || return 1
     f="$dir/signatures.tsv"
     [ -s "$f" ] || printf 'time\tasset\tsha256\tkey_id\ttrusted_comment\tuser\n' > "$f"
     sha="$(python3 -I -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$file")" || return 1
+    who="${USER:-$(id -un)}"
+    [ "$backend" = k2sign ] && who="_k2sign (copy; the real log is /var/k2sign/audit/$version)"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$asset" "$sha" "$keyid" \
-        "${comment//$'\t'/\\t}" "${USER:-$(id -un)}" >> "$f"
+        "${comment//$'\t'/\\t}" "$who" >> "$f"
 }
 
 # k2u_sign <slot> <file> <asset> <version> <out> raw|b64
 k2u_sign() {
     local slot="$1" file="$2" asset="$3" version="$4" out="$5" form="$6"
-    local key svc pub want_id tc uc work got algo id
+    local key svc pub want_id tc uc work got algo id backend
+    backend="$(k2u_backend)" || return 1
     case "$form" in raw|b64) ;; *) k2u_fail "k2u_sign: form must be raw or b64 (got '$form')"; return 1 ;; esac
     [ -f "$file" ] || { k2u_fail "k2u_sign: no file $file"; return 1; }
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { k2u_fail "k2u_sign: bad version '$version'"; return 1; }
     [[ "$asset" =~ ^[A-Za-z0-9._-]+$ ]] || { k2u_fail "k2u_sign: bad asset name '$asset'"; return 1; }
     key="$(k2u_key_path "$slot")" && svc="$(k2u_keychain_service "$slot")" \
         || { k2u_fail "k2u_sign: unknown key slot '$slot'"; return 1; }
-    [ -f "$key" ] || { k2u_fail "secret key missing: $key (one-time setup in scripts/lib/sign-updater.sh)"; return 1; }
+    if [ "$backend" = keychain ] && [ ! -f "$key" ]; then
+        k2u_fail "secret key missing: $key (one-time setup in scripts/lib/sign-updater.sh)"; return 1
+    fi
     pub="$(k2u_pubkey "$slot")" || { k2u_fail "no $slot public key in the source tree"; return 1; }
     want_id="$(k2u_key_id "$pub")" || return 1
     case "$slot" in
@@ -224,8 +260,23 @@ k2u_sign() {
             ;;
     esac
     work="$(mktemp -d "${TMPDIR:-/tmp}/k2u-sign.XXXXXX")" || return 1
-    # Subshell: pipefail and the pipe stay local; nothing is exported.
-    if ! (
+    if [ "$backend" = k2sign ]; then
+        # The bytes go to the signer on stdin; it checks them and signs them.
+        if ! k2u_k2sign sign "$slot" "$asset" "$version" raw < "$file" > "$work/sig" 2> "$work/err"; then
+            k2u_fail "$asset: the signer refused or failed: $(tr '\n' ' ' < "$work/err" | sed $'s/\x1b\\[[0-9;]*m//g' | head -c 400)"
+            rm -rf "$work"; return 1
+        fi
+        # The signer picks the timestamp; the rest of the comment is fixed.
+        tc="$(sed -n 3p "$work/sig")"; tc="${tc#trusted comment: }"
+        if ! python3 -I -c '
+import re, sys
+tc, slot, asset, version = sys.argv[1:5]
+want = r"timestamp:[0-9]+\tfile:" + re.escape(asset) + (r"\tversion:" + re.escape(version) if slot == "u2" else "")
+sys.exit(0 if re.fullmatch(want, tc) else 1)' "$tc" "$slot" "$asset" "$version"; then
+            k2u_fail "$asset: the signer's trusted comment '$tc' is not the expected form"; rm -rf "$work"; return 1
+        fi
+    elif ! (
+        # Subshell: pipefail and the pipe stay local; nothing is exported.
         set -o pipefail
         k2u_password "$svc" \
             | minisign -S -s <(k2u_key_text "$key") -m "$file" -x "$work/sig" -c "$uc" -t "$tc" \
@@ -252,8 +303,8 @@ k2u_sign() {
         mv "$work/sig" "$out"
     fi || { k2u_fail "$asset: could not write $out"; rm -rf "$work"; return 1; }
     rm -rf "$work"
-    k2u_audit "$version" "$asset" "$file" "$id" "$tc" || { k2u_fail "$asset: audit log write failed"; return 1; }
-    k2u_log "$asset signed with $slot ($id), $form → $out"
+    k2u_audit "$version" "$asset" "$file" "$id" "$tc" "$backend" || { k2u_fail "$asset: audit log write failed"; return 1; }
+    k2u_log "$asset signed with $slot ($id) via $backend, $form → $out"
 }
 
 # k2u_verify_u2 <file> <minisig (raw or base64)> <asset> <version>: what a
@@ -350,9 +401,40 @@ k2u_preflight_slot() {
     k2u_log "preflight ok: $slot key $(k2u_key_id "$(k2u_pubkey "$slot")") signs and verifies"
 }
 
+# k2sign backend: none of the stopgap's secrets may still be reachable from
+# this user (prd A16): no key file in ~/.k2-updater, no keychain item, no
+# TAURI_SIGNING_* line in the release checkout's .env.
+k2u_old_secrets_check() {
+    local bad="" f s
+    for f in "$HOME"/.k2-updater/*.key; do
+        [ -e "$f" ] && bad="$bad $f"
+    done
+    for s in k2-updater-signing-u1 k2-updater-signing-u2; do
+        if security find-generic-password -s "$s" >/dev/null 2>&1; then bad="$bad keychain:$s"; fi
+    done
+    if [ -f "$K2U_SRC_ROOT/.env" ] && grep -Eq '^[[:space:]]*(export[[:space:]]+)?TAURI_SIGNING_PRIVATE_KEY' "$K2U_SRC_ROOT/.env"; then
+        bad="$bad $K2U_SRC_ROOT/.env:TAURI_SIGNING_*"
+    fi
+    [ -z "$bad" ] && return 0
+    k2u_fail "update-key secrets are still reachable as $(id -un):$bad. With the signing user they live only in /var/k2sign; remove these (docs/release/updater-key-ceremony.md, \"The signing user\")."
+}
+
+k2u_preflight_k2sign() {
+    local version="$1" out want1 want2 got1 got2
+    k2u_old_secrets_check || return 1
+    out="$(k2u_k2sign preflight "$version")" || { k2u_fail "k2sign preflight failed (above)"; return 1; }
+    got1="$(printf '%s' "$out" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["u1"])')" || return 1
+    got2="$(printf '%s' "$out" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["u2"])')" || return 1
+    want1="$(k2u_slot_key_id u1)" && want2="$(k2u_slot_key_id u2)" || return 1
+    [ "$got1" = "$want1" ] || { k2u_fail "the signer's pinned U1 is $got1, this tree's is $want1"; return 1; }
+    [ "$got2" = "$want2" ] || { k2u_fail "the signer's pinned U2 is $got2, this tree's is $want2 (re-run scripts/k2sign/install.sh from this commit?)"; return 1; }
+    k2u_log "preflight ok: the signing user signs with U1 $got1 and U2 $got2, matching this tree"
+}
+
 k2u_preflight() {
-    local version="${1:-}" v
+    local version="${1:-}" v backend
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { k2u_fail "k2u_preflight <x.y.z>"; return 1; }
+    backend="$(k2u_backend)" || return 1
     k2u_env_guard || return 1
     command -v minisign >/dev/null 2>&1 || { k2u_fail "minisign is not installed (brew install minisign)"; return 1; }
     v="$(minisign -v 2>&1 | sed -n 's/^minisign \([0-9][0-9.]*\).*/\1/p' | head -1)"
@@ -360,6 +442,10 @@ k2u_preflight() {
         || { k2u_fail "minisign ${v:-?} is too old; 0.11 or newer signs prehashed by default (brew upgrade minisign)"; return 1; }
     [ -n "$(k2u_source_keys all 2>/dev/null)" ] \
         || { k2u_fail "UPDATER_KEYS in crates/k2-release-keys/src/lib.rs is empty: the update-key ceremony (scripts/updater-key-ceremony.sh) has not landed. A release now would ship installs that can never update."; return 1; }
+    if [ "$backend" = k2sign ]; then
+        k2u_preflight_k2sign "$version"
+        return
+    fi
     k2u_preflight_slot u1 "$version" || return 1
     k2u_preflight_slot u2 "$version" || return 1
 }

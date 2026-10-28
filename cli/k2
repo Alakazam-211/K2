@@ -10697,6 +10697,8 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
     k2 app domain add <app-id> app.example.com
   First the owner or an Admin runs k2 front enable and k2 domain add
   <apex>; then DNS records at your DNS host. Steps: k2 app domain --help.
+  A name your own web server serves (not K2's front) counts once added
+  with --external: k2 app domain add <app-id> <host> --external.
   K2 reads them at every start, so a changed binding reaches the App on
   its next deploy or restart (k2 app restart <app-id>). No public URL
   (a local-only App, no K2 Connect subdomain, no custom domain): neither
@@ -12240,6 +12242,7 @@ cmd_app_domain() {
     case "$verb" in
         add|rm) ;;
         check|primary) cmd_app_domain_custom "$verb" "$@"; return ;;
+        external) cmd_app_domain_external "$@"; return ;;
         list) cmd_app_domains "$@"; return ;;
         -h|--help|"")
             cat <<'EOF'
@@ -12263,9 +12266,23 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
                                            App's next start after that)
   k2 app domain rm <app-id> shop.example.com
                                            no longer served (cert files stay)
+  k2 app domain add <app-id> shop.example.com --external
+                                           your own web server serves it, not K2
+  k2 app domain external <app-id> shop.example.com on|off
+                                           switch a bound name to your own web
+                                           server (on) or to K2 (off)
 
   Who: the owner, an Admin login, or the App's own agent with "Build and
   run Apps" on (an agent binds only its own workspace's Apps).
+
+  YOUR OWN WEB SERVER (--external): if your own nginx, Caddy or other web
+  server serves the name (not K2's :443 front), K2 never makes it live,
+  so it is not one of the App's origins and the App refuses forms from
+  it. Add it with --external (or switch an added name with
+  k2 app domain external <app-id> <name> on), then k2 app restart
+  <app-id>: from that start the App treats it as its own origin. K2 sets
+  no records, runs no DNS check and gets no certificate for such a name.
+  Its domain must still be attached (k2 domain add <apex>).
 
   A dotted name outside k2.dev is a custom domain; anything else is a
   subdomain (below).
@@ -12307,6 +12324,7 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
   the TXT is gone, or a proxy is on). K2 then stops serving and renewing
   it; until day 7 it keeps serving and k2 app domains says what's wrong.
   To recover: fix the records, then k2 app domain check <app-id> <name>.
+  external: your own web server serves it (--external); K2 leaves it be.
 
   Where this works: a Linux server with its own public IP (a datacentre
   box). On a Mac or Windows computer there is no custom domain yet, even
@@ -12317,7 +12335,7 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
   router: Path B in 0.46.7 is the way (your address stays hidden); if you
   forward the router's port 443 to it, the records still work (shown
   under "Advanced: I've forwarded port 443"). Another web server already
-  on :443: k2 front --help.
+  on :443: k2 front --help, or let it keep serving the name (--external).
 
 SUBDOMAINS (k2 app domain add <app-id> <subdomain>)
   Any nested label your workspace holds, or one nobody holds yet (a label
@@ -12332,18 +12350,20 @@ EOF
             [ -n "$verb" ] && return 0 || exit 2 ;;
         *) echo "usage: k2 app domain add|rm <app-id> <subdomain> [--json]" >&2; exit 2 ;;
     esac
-    local app="" label="" json_out=0 transfer=""
+    local app="" label="" json_out=0 transfer="" external=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) json_out=1; shift ;;
             --transfer) transfer=1; shift ;;
+            --external) external=1; shift ;;
             -h|--help) cmd_app_domain --help; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) if [ -z "$app" ]; then app="$1"; else label="$1"; fi; shift ;;
         esac
     done
     { [ -z "$app" ] || [ -z "$label" ]; } && { echo "usage: k2 app domain $verb <app-id> <subdomain>" >&2; exit 2; }
-    _app_rt_post "/cli/app/domain/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_label="$label" K2_CJ_transfer_b="$transfer")"
+    [ -n "$external" ] && [ "$verb" != add ] && { echo "--external goes with k2 app domain add (to switch a bound name: k2 app domain external <app-id> <host> on|off)" >&2; exit 2; }
+    _app_rt_post "/cli/app/domain/$verb" "$(_compute_json K2_CJ_app="$app" K2_CJ_label="$label" K2_CJ_transfer_b="$transfer" K2_CJ_external_b="$external")"
     _app_grace_done "$json_out"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     if printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; d = json.load(sys.stdin); sys.exit(0 if ("custom" in d or "removed" in d) else 1)'; then
@@ -12387,12 +12407,13 @@ for t in v.get("taken") or []:
 for a in v.get("attached") or []:
     print("%s  (attached by %s%s)" % (host(a), a.get("addedBy"), ("; was " + a["previousTarget"]) if a.get("previousTarget") else ""))
 for c in v.get("custom") or []:
-    print("%s   %s%s" % (c.get("hostname"), c.get("state"), "  primary" if c.get("primary") else ""))
+    st = c.get("state")
+    print("%s   %s%s" % (c.get("hostname"), "external (served by your own server)" if st == "external" else st, "  primary" if c.get("primary") else ""))
     print("  %s" % c.get("words"))
     if c.get("lastError"):
         print("  last check: %s" % c["lastError"])
     su = c.get("setup") or {}
-    if c.get("state") not in ("live", "external"):
+    if st not in ("live", "external"):
         if su.get("message"):
             print("  %s" % su["message"])
         if su.get("records") == "advanced":
@@ -12401,7 +12422,35 @@ for c in v.get("custom") or []:
             for r in c.get("records") or []:
                 print("    %-5s %-40s %s" % (r.get("type"), r.get("name"), r.get("value")))
     if c.get("next"):
-        print("  %s" % c["next"])'
+        print("  %s" % c["next"])
+    if c.get("ownServer"):
+        print("  %s" % c["ownServer"])'
+}
+
+# k2 app domain external <app-id> <host> on|off (0.46.6): your own web
+# server serves the name (on: an origin from the App's next start; K2
+# makes no check or certificate for it), or K2's front does (off).
+cmd_app_domain_external() {
+    local app="" host="" mode="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) cmd_app_domain --help; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; elif [ -z "$host" ]; then host="$1"; else mode="$1"; fi; shift ;;
+        esac
+    done
+    local on
+    case "$mode" in
+        on) on=1 ;;
+        off) on=0 ;;
+        *) echo "usage: k2 app domain external <app-id> <host> on|off" >&2; exit 2 ;;
+    esac
+    [ -n "$app" ] && [ -n "$host" ] || { echo "usage: k2 app domain external <app-id> <host> on|off" >&2; exit 2; }
+    _app_rt_post /cli/app/domain/external "$(_compute_json K2_CJ_app="$app" K2_CJ_host="$host" K2_CJ_external_b="$on")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | _app_custom_print
 }
 
 # k2 app domain check|primary <app-id> <host> (0.46.6): re-run a custom
@@ -12438,7 +12487,11 @@ if v.get("primary"):
     print(v.get("note") or "")
     sys.exit(0)
 c = v.get("custom") or {}
-print("%s   %s%s" % (c.get("hostname"), c.get("state"), "  (already bound)" if v.get("already") else ""))
+st = c.get("state")
+already = ""
+if v.get("already"):
+    already = "  (no change)" if "external" in v else "  (already bound)"
+print("%s   %s%s" % (c.get("hostname"), "external (served by your own server)" if st == "external" else st, already))
 print("  %s" % c.get("words"))
 if c.get("lastError"):
     print("  last check: %s" % c["lastError"])
@@ -12448,15 +12501,19 @@ if isinstance(t, dict) and t.get("planted"):
 elif isinstance(t, dict) and t.get("why"):
     print("  TXT not set by K2: %s" % t["why"])
 su = c.get("setup") or {}
-if su.get("message") and c.get("state") not in ("live", "external"):
+if su.get("message") and st not in ("live", "external"):
     print("  %s" % su["message"])
-if c.get("state") != "live" and su.get("records") != "none":
+if st not in ("live", "external") and su.get("records") != "none":
     if su.get("records") == "advanced":
         print("  %s" % (su.get("advanced") or "Advanced:"))
     for r in c.get("records") or []:
         print("    %-5s %-40s %s" % (r.get("type"), r.get("name"), r.get("value")))
 if c.get("next"):
-    print("  %s" % c["next"])'
+    print("  %s" % c["next"])
+if c.get("ownServer"):
+    print("  %s" % c["ownServer"])
+if v.get("note") and not v.get("already"):
+    print("  %s" % v["note"])'
 }
 
 cmd_app_warnings() {
@@ -38372,11 +38429,12 @@ cmd_schema() {
     },
     {
       "name": "domain name add",
-      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]",
+      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--external] [--json]",
       "description": "Add a hostname under an attached apex. dns_manage (same as k2 cert issue). Apex add stays owner.",
       "args": [{"name": "hostname", "required": true}],
       "flags": [
-        {"name": "--role", "arg": "mail|publish|direct|other|app:<name>", "description": "Role (default other). app:<name> binds the hostname to that App or published service: it gets it in K2_APP_ORIGIN/K2_APP_ORIGINS on its next start."},
+        {"name": "--role", "arg": "mail|publish|direct|other|app:<name>", "description": "Role (default other). app:<name> binds the hostname to that App or published service: it is in K2_APP_ORIGIN/K2_APP_ORIGINS from its next start once K2 serves it (live), or with --external."},
+        {"name": "--external", "arg": null, "description": "With --role app:<name>: your own web server serves this name, not K2's front; an origin of the App from its next start (k2 app domain --help)."},
         {"name": "--json", "arg": null, "description": "JSON response."}
       ]
     },
@@ -66597,15 +66655,16 @@ print(json.dumps({"apex": a} if a else {}))')
 
 cmd_domain_name_add() {
     if _wants_help "$@"; then cmd_help_domain_name_add; exit 0; fi
-    local hostname="" role="" as_json=false
+    local hostname="" role="" as_json=false external=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --role)
                 [ $# -ge 2 ] || { _dom_err "usage" "--role requires mail|publish|direct|other|app:<name>"; exit 2; }
                 role="$2"; shift 2 ;;
+            --external) external=1; shift ;;
             --json) as_json=true; shift ;;
             -*)
-                _dom_err "usage" "unknown flag '$1' — usage: k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]"
+                _dom_err "usage" "unknown flag '$1' — usage: k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--external] [--json]"
                 exit 2 ;;
             *)
                 if [ -z "$hostname" ]; then hostname="$1"; else
@@ -66620,10 +66679,11 @@ cmd_domain_name_add() {
         exit 2
     fi
     local body RESP
-    body=$(D_HOST="$hostname" D_ROLE="$role" python3 -c 'import json,os
+    body=$(D_HOST="$hostname" D_ROLE="$role" D_EXTERNAL="$external" python3 -c 'import json,os
 b={"hostname": os.environ["D_HOST"]}
 r=os.environ.get("D_ROLE","").strip()
 if r: b["role"]=r
+if os.environ.get("D_EXTERNAL") == "1": b["external"]=True
 print(json.dumps(b))')
     RESP=$(cli_send cli_post_json "/cli/domains/names" "$body") || RESP=""
     local AS_JSON="$as_json" D_VERB="name-add"
@@ -66864,8 +66924,12 @@ cmd_help_domain_name_add() {
 Add a hostname under an attached apex (dns_manage). Apex must already
 be on this server (`k2 domain add` is owner). Then `k2 cert issue`.
 
+--external (with --role app:<name>): your own web server serves this
+name, not K2's front; the App treats it as its origin from its next
+start (k2 app restart <name>). Same as k2 app domain add … --external.
+
 USAGE
-  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]
+  k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--external] [--json]
 EOF
 }
 

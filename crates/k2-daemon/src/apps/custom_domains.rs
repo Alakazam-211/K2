@@ -191,7 +191,7 @@ pub fn state_words(d: &AppDomain) -> String {
     let words = match d.state.as_str() {
         domains::STATE_LIVE => "live: this box serves it".to_string(),
         domains::STATE_EXTERNAL => {
-            return "served by your own proxy (not by K2); bound before 0.46.6, it stays one of the App's origins".to_string()
+            return "served by your own web server (not by K2's front); one of the App's origins".to_string()
         }
         domains::STATE_ISSUING => "not served yet: proven, getting its certificate".to_string(),
         domains::STATE_VERIFYING => "not served yet: checking the DNS records".to_string(),

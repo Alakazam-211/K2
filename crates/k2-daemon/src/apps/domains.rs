@@ -9,6 +9,10 @@
 //! POST /cli/app/domain/rm      {app, label}    …and back to what it served before (or removed)
 //! ```
 //!
+//! Custom domains (0.46.6) ride the same routes plus `check`, `primary`
+//! and `external` (`{app, host, external: bool}`: the owner's own web
+//! server serves the name, not K2's front; see [`custom_external`]).
+//!
 //! - **Who:** as `label take`: the owner, an Admin, a shell tab, or the
 //!   agent of the App's workspace with "Build and run Apps" (without it the
 //!   change is a held `manage` request, S42).
@@ -41,9 +45,21 @@ use serde_json::{json, Value as J};
 use super::labels;
 use super::routes::{actor, app_for, b, db_err, json_body, need_build, need_credential, no, s, Refusal, Who, R};
 
-pub const ROUTES: &[&str] =
-    &["/cli/app/domains", "/cli/app/domain/add", "/cli/app/domain/rm", "/cli/app/domain/check", "/cli/app/domain/primary"];
-pub const POST_ROUTES: &[&str] = &["/cli/app/domain/add", "/cli/app/domain/rm", "/cli/app/domain/check", "/cli/app/domain/primary"];
+pub const ROUTES: &[&str] = &[
+    "/cli/app/domains",
+    "/cli/app/domain/add",
+    "/cli/app/domain/rm",
+    "/cli/app/domain/check",
+    "/cli/app/domain/primary",
+    "/cli/app/domain/external",
+];
+pub const POST_ROUTES: &[&str] = &[
+    "/cli/app/domain/add",
+    "/cli/app/domain/rm",
+    "/cli/app/domain/check",
+    "/cli/app/domain/primary",
+    "/cli/app/domain/external",
+];
 
 pub const RESERVED: &str = "reserved_label";
 pub const USE_LABEL_TAKE: &str = "use_label_take";
@@ -57,6 +73,7 @@ pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String
         "/cli/app/domain/rm" => rm(who, body),
         "/cli/app/domain/check" => custom_check(who, body),
         "/cli/app/domain/primary" => custom_primary(who, body),
+        "/cli/app/domain/external" => custom_external(who, body),
         _ => Err(no("not_found", 404, "no such App route")),
     }
 }
@@ -89,7 +106,20 @@ fn custom_json(d: &k2_core::domains::AppDomain) -> J {
     // 0.46.6 (PRD §7): which path this box offers; behind a router or on a
     // desktop, the Path B pointer; a web server that isn't K2's on :443.
     v["setup"] = super::custom_domain_flow::setup_advice();
+    if let Some(h) = own_server_hint(d, k2_core::front443::load().enabled) {
+        v["ownServer"] = json!(h);
+    }
     v
+}
+
+/// The one line for an App behind the owner's own web server: a name
+/// waiting for DNS on a box whose K2 front is off never goes live here, so
+/// it is no origin until the owner says their server serves it.
+fn own_server_hint(d: &k2_core::domains::AppDomain, front_enabled: bool) -> Option<String> {
+    use k2_core::domains::{STATE_VERIFYING, STATE_WAITING_DNS};
+    (!front_enabled && matches!(d.state.as_str(), STATE_WAITING_DNS | STATE_VERIFYING)).then(|| {
+        format!("If your own web server serves this name, run: k2 app domain add {} {} --external", d.app, d.hostname)
+    })
 }
 
 /// The next step in plain words, per state (PRD §9.1).
@@ -107,9 +137,11 @@ fn next_step(d: &k2_core::domains::AppDomain) -> String {
         ),
         STATE_ISSUING => format!("Proven; K2 is getting its certificate (TLS-ALPN-01 or DNS-01).{front}"),
         STATE_EXTERNAL => format!(
-            "Served by your own proxy (not by K2) and kept in the App's origins. For K2 to serve it (its own certificate, \
-             through the :443 front), point it at this box with the records below, then: k2 app domain check {} {}",
-            d.app, d.hostname
+            "Your own web server serves it, not K2: K2 makes no DNS check or certificate for it. It is one of the App's \
+             origins from the App's next start (k2 app restart {app}). For K2 to serve it instead: \
+             k2 app domain external {app} {host} off",
+            app = d.app,
+            host = d.hostname
         ),
         STATE_FAILING => format!(
             "Not served: {}. Fix the DNS records below, then: k2 app domain check {} {}",
@@ -133,10 +165,15 @@ fn app_domain_of(app: &AppRow, host: &str) -> R<k2_core::domains::AppDomain> {
         .ok_or_else(|| no(NOT_ATTACHED, 404, format!("{} has no custom domain {host} (k2 app domains {})", app.app_id, app.app_id)))
 }
 
-/// POST `/cli/app/domain/add {app, label: app.customer.com}` (custom).
+/// POST `/cli/app/domain/add {app, label: app.customer.com, external?}`
+/// (custom). `external: true` (`--external`): the owner's own web server
+/// serves the name, not K2's front; it is recorded `external` (an origin
+/// from the App's next start; no TXT, no check, no certificate). An
+/// already-bound name of this App is switched to `external`.
 fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
     use super::custom_domains as cd;
     let host = host_arg(v)?;
+    let external = b(v, "external");
     let caller = super::routes::agent_ws(who).map(str::to_string);
     let existing = {
         let db = k2_core::db::shared();
@@ -146,6 +183,9 @@ fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
     let role = format!("{}{}", k2_core::domains::ROLE_APP_PREFIX, app.app_id);
     if existing.as_ref().is_some_and(|e| e.role == role) {
         let d = app_domain_of(app, &host)?;
+        if external && d.state != k2_core::domains::STATE_EXTERNAL {
+            return set_external(who, app, &d, true);
+        }
         return Ok(json!({ "ok": true, "already": true, "app": app.app_id, "custom": custom_json(&d) }));
     }
     if let Some(e) = &existing {
@@ -179,26 +219,28 @@ fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
         let db = k2_core::db::shared();
         let conn = db.lock();
         k2_core::domains::upsert_name(&conn, &host, &binding.apex, &role).map_err(db_err)?;
+        if external {
+            k2_core::domains::set_app_external(&conn, &host, true).map_err(db_err)?;
+        }
         k2_core::domains::app_domain(&conn, &host).map_err(db_err)?.ok_or_else(|| db_err("the new row is gone"))?
     };
-    // §6: K2 plants the TXT itself on a K2-hosted zone. An agent needs
-    // `dns_manage` for that (§9.3); without it the record is shown.
-    let mut planted: J = J::Null;
-    if binding.dns_write && !binding.is_pending_ns() {
-        let may = match caller.as_deref().and_then(super::routes::ws_by_id) {
-            Some(ws) => k2_core::workspace::settings::dns_manage_allowed_for_path(&ws.path),
-            None => true,
-        };
-        planted = if !may {
-            json!({ "planted": false, "why": "this agent has no DNS write (dns_manage): set the TXT below, or ask the owner" })
-        } else {
-            match super::custom_domain_flow::plant_txt(&d, &binding) {
-                Ok(()) => json!({ "planted": true }),
-                Err(e) => json!({ "planted": false, "why": e }),
-            }
-        };
-    }
     let by = actor(who);
+    if external {
+        // The owner's own server serves it: no TXT, no check, no route.
+        labels::audit(&app.app_id, "custom_domain_add", &by, json!({ "host": host, "apex": binding.apex, "external": true }));
+        if existing.is_some() {
+            crate::front443::rebuild_now();
+        }
+        super::routes::mirror(&app.app_id);
+        return Ok(json!({
+            "ok": true,
+            "app": app.app_id,
+            "custom": custom_json(&d),
+            "external": true,
+            "note": restart_note(&app.app_id, &host),
+        }));
+    }
+    let planted = plant_for(caller.as_deref(), &d, &binding);
     labels::audit(&app.app_id, "custom_domain_add", &by, json!({ "host": host, "apex": binding.apex, "txt": planted }));
     crate::front443::rebuild_now();
     // The first check now (the re-check loop keeps trying every 10 min).
@@ -206,6 +248,97 @@ fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
     let d = app_domain_of(app, &host)?;
     super::routes::mirror(&app.app_id);
     Ok(json!({ "ok": true, "app": app.app_id, "custom": custom_json(&d), "txt": planted }))
+}
+
+/// §6: K2 plants the TXT itself on a K2-hosted zone. An agent needs
+/// `dns_manage` for that (§9.3); without it the record is shown. `null`
+/// when the zone isn't K2-hosted (the person sets it).
+fn plant_for(caller_ws: Option<&str>, d: &k2_core::domains::AppDomain, binding: &k2_core::domains::DomainBinding) -> J {
+    if !binding.dns_write || binding.is_pending_ns() {
+        return J::Null;
+    }
+    let may = match caller_ws.and_then(super::routes::ws_by_id) {
+        Some(ws) => k2_core::workspace::settings::dns_manage_allowed_for_path(&ws.path),
+        None => true,
+    };
+    if !may {
+        return json!({ "planted": false, "why": "this agent has no DNS write (dns_manage): set the TXT below, or ask the owner" });
+    }
+    match super::custom_domain_flow::plant_txt(d, binding) {
+        Ok(()) => json!({ "planted": true }),
+        Err(e) => json!({ "planted": false, "why": e }),
+    }
+}
+
+/// What an `external` name needs to reach the App: its next start.
+fn restart_note(app_id: &str, host: &str) -> String {
+    format!(
+        "{host} is served by your own web server, not K2. It is one of the App's origins from its next start: \
+         k2 app restart {app_id}"
+    )
+}
+
+/// POST `/cli/app/domain/external {app, host, external: true|false}`
+/// (`k2 app domain external <app> <host> on|off`): the owner's own web
+/// server serves the name (`on`: `external`, an origin from the App's next
+/// start; K2 stops routing, checking and renewing it), or K2's front
+/// should (`off`: back to `waiting_dns`, no origin until it is live,
+/// CD-A4). Same callers as `add`.
+fn custom_external(who: &Who, body: &[u8]) -> R<J> {
+    need_build(who)?;
+    let v = json_body(body)?;
+    let app = app_for(who, s(&v, "app"))?;
+    let host = host_arg(&v)?;
+    let on = v
+        .get("external")
+        .and_then(J::as_bool)
+        .ok_or_else(|| no(codes::BAD_REQUEST, 400, "say on or off: k2 app domain external <app-id> <host> on|off"))?;
+    let d = app_domain_of(&app, &host)?;
+    set_external(who, &app, &d, on)
+}
+
+/// Switch `d` to `external` (`on`) or back into K2's flow (`off`).
+fn set_external(who: &Who, app: &AppRow, d: &k2_core::domains::AppDomain, on: bool) -> R<J> {
+    let host = d.hostname.clone();
+    // `off` on a name already in K2's flow changes nothing either.
+    if (d.state == k2_core::domains::STATE_EXTERNAL) == on {
+        return Ok(json!({ "ok": true, "already": true, "app": app.app_id, "external": on, "custom": custom_json(d) }));
+    }
+    let was = d.state.clone();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::set_app_external(&conn, &host, on).map_err(db_err)?;
+    }
+    labels::audit(&app.app_id, "custom_domain_external", &actor(who), json!({ "host": host, "external": on, "was": was }));
+    // A name K2 served (live / issuing) leaves the door; one handed back
+    // gets its TXT (on a K2-hosted zone) and its first check now.
+    crate::front443::rebuild_now();
+    let mut planted = J::Null;
+    if !on {
+        let binding = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::get_binding(&conn, &d.apex).map_err(db_err)?
+        };
+        if let Some(binding) = binding {
+            let fresh = app_domain_of(app, &host)?;
+            planted = plant_for(super::routes::agent_ws(who), &fresh, &binding);
+        }
+        let _ = super::custom_domain_flow::check_now(&host);
+    }
+    let d = app_domain_of(app, &host)?;
+    super::routes::mirror(&app.app_id);
+    let note = if on {
+        restart_note(&app.app_id, &host)
+    } else {
+        format!(
+            "K2's front serves {host} once its DNS checks pass and it is live; until then it is not one of the App's \
+             origins. Then: k2 app restart {}",
+            app.app_id
+        )
+    };
+    Ok(json!({ "ok": true, "app": app.app_id, "external": on, "custom": custom_json(&d), "txt": planted, "note": note }))
 }
 
 /// POST `/cli/app/domain/rm {app, label: app.customer.com}` (custom): the
@@ -270,7 +403,9 @@ fn custom_primary(who: &Who, body: &[u8]) -> R<J> {
         "app": app.app_id,
         "primary": host,
         "live": d.is_live(),
-        "note": if d.is_live() {
+        // An `external` name (the owner's own server serves it) is an
+        // origin already: primary from the next start too.
+        "note": if d.is_origin() {
             format!("K2_APP_ORIGIN is https://{host} from the App's next start (k2 app restart {})", app.app_id)
         } else {
             format!("{host} becomes K2_APP_ORIGIN once it is live; until then the App's K2 label stays primary")
@@ -378,6 +513,13 @@ fn add(who: &Who, body: &[u8]) -> R<J> {
     let app = app_for(who, s(&v, "app"))?;
     if s(&v, "label").or_else(|| s(&v, "host")).is_some_and(is_custom_host) {
         return custom_add(who, &app, &v);
+    }
+    if b(&v, "external") {
+        return Err(no(
+            codes::BAD_REQUEST,
+            400,
+            "--external is for your own domain (e.g. shop.example.com): a <box>.k2.dev subdomain is always served by K2",
+        ));
     }
     let label = label_of(s(&v, "label").ok_or_else(|| no(codes::BAD_REQUEST, 400, "label is required (the subdomain, e.g. agents)"))?)?;
     let ws = app.owner_workspace.clone();
@@ -731,5 +873,145 @@ mod custom_tests {
         dns_manage("ws-nsi", true);
         let v = post(&agent("ws-nsi"), "/cli/app/domain/add", json!({ "app": "agentnsi", "label": "www.agentnsi.com" })).unwrap();
         assert_eq!(v["txt"]["planted"], true, "{v}");
+    }
+
+    /// No DNS read may happen: an `external` name is never checked.
+    struct NoLookup;
+    impl flow::Lookup for NoLookup {
+        fn txt(&self, n: &str) -> Result<Vec<String>, String> {
+            panic!("an external name was checked (TXT {n})")
+        }
+        fn addrs(&self, h: &str) -> Result<Vec<IpAddr>, String> {
+            panic!("an external name was checked (A {h})")
+        }
+        fn cname(&self, h: &str) -> Option<String> {
+            panic!("an external name was checked (CNAME {h})")
+        }
+    }
+
+    fn origins_of(app: &str) -> Vec<String> {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::domains::origin_hostnames_for_app(&conn, app).unwrap()
+    }
+
+    /// 0.46.6 parity with 0.46.5 for an App behind the owner's own web
+    /// server: `--external` records the name as `external` (an origin, no
+    /// TXT, no check, no certificate, no route); without it the name waits
+    /// for DNS and is no origin (CD-A4), and says how to opt in when K2's
+    /// front is off; `off` hands it back to K2's flow.
+    #[test]
+    fn external_names_are_origins_and_go_back_to_k2s_flow() {
+        let _db = k2_core::db::scoped_for_test();
+        let _home = crate::test_support::TempHome::new();
+        runtime_app("ws-shop", "shop");
+        build_switch("ws-shop", true);
+        flow::set_test_box_ips(Some(vec!["203.0.113.10".parse().unwrap()]));
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::domains::upsert_binding(&conn, "example.com", None, false).unwrap();
+        }
+        let me = agent("ws-shop");
+        assert!(!k2_core::front443::load().enabled, "this box has no K2 front");
+
+        // Without --external: waiting_dns, no origin, and the one line.
+        flow::set_test_lookup(Some(Box::new(Proven("unrelated".into()))));
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "shop", "label": "shop2.example.com" })).unwrap();
+        assert_eq!(v["custom"]["state"], "waiting_dns", "{v}");
+        assert_eq!(v["custom"]["notServedYet"], true, "{v}");
+        assert_eq!(
+            v["custom"]["ownServer"],
+            "If your own web server serves this name, run: k2 app domain add shop shop2.example.com --external",
+            "{v}"
+        );
+        assert!(origins_of("shop").is_empty(), "a bound name nothing serves is no origin (CD-A4)");
+
+        // The same name with --external: switched, an origin, never checked.
+        flow::set_test_lookup(Some(Box::new(NoLookup)));
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "shop", "label": "shop2.example.com", "external": true })).unwrap();
+        assert_eq!((v["custom"]["state"].as_str(), v["external"].as_bool()), (Some("external"), Some(true)), "{v}");
+        assert_eq!(v["custom"]["notServedYet"], false, "{v}");
+        assert!(v["custom"].get("ownServer").is_none(), "{v}");
+        assert!(v["note"].as_str().unwrap().ends_with("k2 app restart shop"), "{v}");
+        assert!(v["custom"]["next"].as_str().unwrap().contains("k2 app domain external shop shop2.example.com off"), "{v}");
+        assert_eq!(origins_of("shop"), vec!["shop2.example.com".to_string()]);
+
+        // A new name bound --external from the start: no TXT, no check.
+        let v = post(&me, "/cli/app/domain/add", json!({ "app": "shop", "label": "www.example.com", "external": true })).unwrap();
+        assert_eq!(v["custom"]["state"], "external", "{v}");
+        assert!(v.get("txt").is_none(), "{v}");
+        assert_eq!(origins_of("shop"), vec!["shop2.example.com".to_string(), "www.example.com".to_string()]);
+        let again = post(&me, "/cli/app/domain/add", json!({ "app": "shop", "label": "www.example.com", "external": true })).unwrap();
+        assert_eq!(again["already"], true, "{again}");
+        let again = post(&me, "/cli/app/domain/external", json!({ "app": "shop", "host": "www.example.com", "external": true })).unwrap();
+        assert_eq!(again["already"], true, "{again}");
+        assert!(flow::take_test_issues().is_empty(), "no certificate for an external name");
+        assert!(crate::apps::tls_door::reload().routed.is_empty(), "the door never routes an external name");
+
+        // Off: back to K2's flow (checked now, no origin until live).
+        flow::set_test_lookup(Some(Box::new(Proven("unrelated".into()))));
+        let v = post(&me, "/cli/app/domain/external", json!({ "app": "shop", "host": "shop2.example.com", "external": false })).unwrap();
+        assert_eq!((v["custom"]["state"].as_str(), v["external"].as_bool()), (Some("waiting_dns"), Some(false)), "{v}");
+        assert!(v["custom"]["checkedAt"].is_i64(), "checked at once: {v}");
+        assert_eq!(origins_of("shop"), vec!["www.example.com".to_string()]);
+        let again = post(&me, "/cli/app/domain/external", json!({ "app": "shop", "host": "shop2.example.com", "external": false })).unwrap();
+        assert_eq!(again["already"], true, "{again}");
+
+        // Refusals: no on|off, a k2.dev label, another workspace's agent,
+        // a Member login, an agent without "Build and run Apps".
+        let e = post(&me, "/cli/app/domain/external", json!({ "app": "shop", "host": "shop2.example.com" })).unwrap_err();
+        assert_eq!((e.status, e.code), (400, codes::BAD_REQUEST), "{e:?}");
+        let e = post(&me, "/cli/app/domain/add", json!({ "app": "shop", "label": "agents", "external": true })).unwrap_err();
+        assert_eq!((e.status, e.code), (400, codes::BAD_REQUEST), "{e:?}");
+        runtime_app("ws-other", "crm");
+        build_switch("ws-other", true);
+        let e = post(&agent("ws-other"), "/cli/app/domain/external", json!({ "app": "shop", "host": "shop2.example.com", "external": true }))
+            .unwrap_err();
+        assert_eq!(e.code, codes::APP_NOT_FOUND, "{e:?}");
+        let member = Who::Login { username: "mo".into(), role: k2_core::connect_users::Role::Member };
+        let e = post(&member, "/cli/app/domain/external", json!({ "app": "shop", "host": "shop2.example.com", "external": true }))
+            .unwrap_err();
+        assert_eq!(e.status, 403, "{e:?}");
+        build_switch("ws-shop", false);
+        let e = post(&me, "/cli/app/domain/add", json!({ "app": "shop", "label": "shop2.example.com", "external": true })).unwrap_err();
+        assert_eq!((e.status, e.code), (403, codes::APPS_MANAGE_OFF), "{e:?}");
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert_eq!(k2_core::domains::app_domain(&conn, "shop2.example.com").unwrap().unwrap().state, "waiting_dns", "untouched");
+        drop(conn);
+        flow::set_test_lookup(None);
+        flow::set_test_box_ips(None);
+    }
+
+    /// The opt-in line shows only where it helps: a name waiting for DNS
+    /// on a box without K2's front.
+    #[test]
+    fn the_own_server_line_is_for_a_waiting_name_without_the_front() {
+        let d = |state: &str| k2_core::domains::AppDomain {
+            hostname: "shop2.example.com".into(),
+            apex: "example.com".into(),
+            app: "shop".into(),
+            state: state.into(),
+            verify_token: "t".into(),
+            verified_at: None,
+            checked_at: None,
+            path: None,
+            is_primary: false,
+            last_error: None,
+            failing_since: None,
+            apex_attached: true,
+        };
+        use k2_core::domains::*;
+        for s in [STATE_WAITING_DNS, STATE_VERIFYING] {
+            assert_eq!(
+                own_server_hint(&d(s), false).as_deref(),
+                Some("If your own web server serves this name, run: k2 app domain add shop shop2.example.com --external")
+            );
+            assert_eq!(own_server_hint(&d(s), true), None, "K2's front is on: path (a) applies");
+        }
+        for s in [STATE_ISSUING, STATE_LIVE, STATE_FAILING, STATE_EXTERNAL] {
+            assert_eq!(own_server_hint(&d(s), false), None, "{s}");
+        }
     }
 }

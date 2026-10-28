@@ -469,6 +469,17 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
     // an agent may bind only its own workspace's (with "Build and run
     // Apps"). A name already bound to another workspace's App is never an
     // agent's to re-role.
+    // `--external` (0.46.6): the owner's own web server serves this App
+    // name, not K2's front; it is recorded `external` (an origin from the
+    // App's next start; no TXT check, no certificate, no front route).
+    let external = matches!(body_str(params, &["external"]), Some("1" | "true"));
+    if external && k2_core::domains::app_of_role(&role).is_none() {
+        return error_response(
+            "400 Bad Request",
+            "usage",
+            "--external is only for an App's name: --role app:<name> (k2 app domain --help)",
+        );
+    }
     let caller = caller_ws();
     if let Some(app) = k2_core::domains::app_of_role(&role) {
         if let Err(r) = crate::apps::custom_domains::may_bind(caller.as_deref(), app) {
@@ -525,6 +536,11 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
 
     match upsert_name(&conn, &hostname, &apex, &role) {
         Ok(n) => {
+            if external {
+                if let Err(e) = k2_core::domains::set_app_external(&conn, &n.hostname, true) {
+                    return error_response("500 Internal Server Error", "db", &e.to_string());
+                }
+            }
             drop(conn);
             if k2_core::domains::app_of_role(&n.role).is_some()
                 || existing.as_ref().is_some_and(|c| k2_core::domains::app_of_role(&c.role).is_some())
@@ -542,7 +558,15 @@ pub fn handle_names_add(params: &HashMap<String, String>) -> CliResponse {
             if let Some(app) = crate::apps::custom_domains::status_json_for(&n.hostname, false) {
                 name["app"] = app;
             }
-            CliResponse::ok_json(serde_json::json!({ "ok": true, "name": name }).to_string())
+            let mut out = serde_json::json!({ "ok": true, "name": name });
+            if let Some(app) = k2_core::domains::app_of_role(&n.role).filter(|_| external) {
+                out["note"] = serde_json::json!(format!(
+                    "{} is served by your own web server, not K2. It is one of the App's origins from its next start: \
+                     k2 app restart {app}",
+                    n.hostname
+                ));
+            }
+            CliResponse::ok_json(out.to_string())
         }
         Err(e) => error_response("500 Internal Server Error", "db", &e.to_string()),
     }

@@ -782,6 +782,7 @@ pub(crate) const MANAGE_HELD: &[&str] = &[
     // 0.46.6: custom domains (check, primary).
     "/cli/app/domain/check",
     "/cli/app/domain/primary",
+    "/cli/app/domain/external",
 ];
 
 thread_local! {
@@ -844,15 +845,31 @@ pub(crate) fn hold_without_switch(path: &str, who: &Who, body: &[u8]) -> Option<
                 },
                 Err(_) => format!("{:?}", raw.chars().take(80).collect::<String>()),
             });
+        // 0.46.6: what an `external` change says (the owner's own web
+        // server serves the name), so the owner sees it before approving.
+        let flag = match path {
+            "/cli/app/domain/external" => match v.get("external").and_then(J::as_bool) {
+                Some(true) => " on",
+                Some(false) => " off",
+                None => "",
+            },
+            "/cli/app/domain/add" if super::routes::b(&v, "external") => " --external",
+            _ => "",
+        };
         let summary = match &host {
-            Some(h) => format!("k2 app {verb} {label} {h}"),
+            Some(h) => format!("k2 app {verb} {label} {h}{flag}"),
             None => format!("k2 app {verb} {label}"),
         };
         let mut lines = vec![summary.clone()];
         if let Some(h) = &host {
-            let sub = super::origins::box_subdomain();
-            let sub = if sub.is_empty() { "<this box>".to_string() } else { sub };
-            lines.push(format!("hostname: {h}.{sub}.{}", k2_core::tunnel::config::SUBDOMAIN_HOST));
+            if super::domains::is_custom_host(h) {
+                // A custom domain is its own full name (not under k2.dev).
+                lines.push(format!("hostname: {h}"));
+            } else {
+                let sub = super::origins::box_subdomain();
+                let sub = if sub.is_empty() { "<this box>".to_string() } else { sub };
+                lines.push(format!("hostname: {h}.{sub}.{}", k2_core::tunnel::config::SUBDOMAIN_HOST));
+            }
         }
         let r = file(&Filing {
             who,

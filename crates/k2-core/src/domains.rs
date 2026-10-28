@@ -68,10 +68,13 @@ pub const STATE_VERIFYING: &str = "verifying";
 pub const STATE_ISSUING: &str = "issuing";
 pub const STATE_LIVE: &str = "live";
 pub const STATE_FAILING: &str = "failing";
-/// Grandfathered at the 0.46.6 upgrade: a name bound before the App TLS
-/// door existed, served by the box's own proxy (to the App's front port),
-/// not by K2. It stays an origin; K2 never routes, checks or issues for it
-/// until the owner moves it into the door flow (`k2 app domain check`).
+/// Served by the box's own web server (to the App's front port), not by
+/// K2's front. Either grandfathered at the 0.46.6 upgrade (a name bound
+/// before the App TLS door existed, 0236) or opted in by name
+/// (`k2 app domain add … --external`, `k2 app domain external … on`). It is
+/// an origin; K2 never routes, checks or issues for it until it is moved
+/// into the door flow (`k2 app domain external … off`, or
+/// `k2 app domain check` once the proof passes).
 pub const STATE_EXTERNAL: &str = "external";
 pub const APP_STATES: &[&str] =
     &[STATE_WAITING_DNS, STATE_VERIFYING, STATE_ISSUING, STATE_LIVE, STATE_FAILING, STATE_EXTERNAL];
@@ -247,6 +250,30 @@ pub fn set_app_state(conn: &Connection, hostname: &str, state: &str, last_error:
         "UPDATE domain_names SET state = ?2, last_error = ?3 WHERE hostname = ?1 AND role LIKE 'app:%'",
         params![hostname, state, last_error],
     )?;
+    Ok(n > 0)
+}
+
+/// Mark an `app:` hostname as served by the box's own web server (`on`:
+/// `external`, an origin; no checks, no certificate, no front route), or
+/// hand it back to K2's flow (`off`: `waiting_dns` with no check history,
+/// so the next check runs at once). A run of failed checks and the last
+/// error are cleared either way; the TXT token is kept. Returns whether a
+/// row changed (`false`: not an `app:` name).
+pub fn set_app_external(conn: &Connection, hostname: &str, on: bool) -> rusqlite::Result<bool> {
+    let n = if on {
+        conn.execute(
+            "UPDATE domain_names SET state = ?2, last_error = NULL, failing_since = NULL \
+             WHERE hostname = ?1 AND role LIKE 'app:%'",
+            params![hostname, STATE_EXTERNAL],
+        )?
+    } else {
+        conn.execute(
+            "UPDATE domain_names SET state = ?2, last_error = NULL, failing_since = NULL, checked_at = NULL, \
+               verified_at = NULL, path = NULL, verify_token = COALESCE(verify_token, ?3) \
+             WHERE hostname = ?1 AND role LIKE 'app:%'",
+            params![hostname, STATE_WAITING_DNS, new_verify_token()],
+        )?
+    };
     Ok(n > 0)
 }
 
@@ -951,6 +978,53 @@ mod tests {
         // Re-adding a grandfathered name keeps it external.
         upsert_name(&conn, "nsihomes.com", "nsihomes.com", "app:agentnsi").unwrap();
         assert_eq!(app_domain(&conn, "nsihomes.com").unwrap().unwrap().state, STATE_EXTERNAL);
+        let st: Option<String> = conn
+            .query_row("SELECT state FROM domain_names WHERE hostname = 'mail.example.com'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(st, None);
+    }
+
+    /// After the upgrade, a name the box's own web server serves is opted
+    /// in by name (`external`, an origin at once) and handed back to K2's
+    /// flow (`waiting_dns`, no origin until live, CD-A4); a non-App name
+    /// is never touched.
+    #[test]
+    fn a_name_is_marked_external_and_handed_back() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::db::run_migrations(&conn).unwrap();
+        upsert_binding(&conn, "example.com", None, false).unwrap();
+        upsert_name(&conn, "shop2.example.com", "example.com", "app:shop").unwrap();
+        upsert_name(&conn, "mail.example.com", "example.com", "mail").unwrap();
+        record_app_check(
+            &conn,
+            "shop2.example.com",
+            &CheckRecord { checked_at: 50, verified_at: None, path: None, failing_since: Some(40) },
+        )
+        .unwrap();
+        set_app_state(&conn, "shop2.example.com", STATE_WAITING_DNS, Some("no A record yet")).unwrap();
+        assert!(origin_hostnames_for_app(&conn, "shop").unwrap().is_empty(), "bound, not served: no origin");
+
+        assert!(set_app_external(&conn, "shop2.example.com", true).unwrap());
+        let d = app_domain(&conn, "shop2.example.com").unwrap().expect("bound");
+        assert_eq!((d.state.as_str(), d.last_error.as_deref(), d.failing_since), (STATE_EXTERNAL, None, None));
+        assert!(d.is_external() && d.is_origin() && !d.is_live());
+        assert_eq!(origin_hostnames_for_app(&conn, "shop").unwrap(), vec!["shop2.example.com".to_string()]);
+        assert!(live_hostnames_for_app(&conn, "shop").unwrap().is_empty(), "K2 doesn't serve it");
+        // Re-adding the name keeps it external.
+        upsert_name(&conn, "shop2.example.com", "example.com", "app:shop").unwrap();
+        assert_eq!(app_domain(&conn, "shop2.example.com").unwrap().unwrap().state, STATE_EXTERNAL);
+
+        let token = d.verify_token.clone();
+        assert_eq!(token.len(), 32);
+        assert!(set_app_external(&conn, "shop2.example.com", false).unwrap());
+        let d = app_domain(&conn, "shop2.example.com").unwrap().unwrap();
+        assert_eq!((d.state.as_str(), d.checked_at, d.verified_at), (STATE_WAITING_DNS, None, None));
+        assert_eq!(d.verify_token, token, "a TXT proof the person already set stays valid");
+        assert!(!d.is_origin());
+        assert!(origin_hostnames_for_app(&conn, "shop").unwrap().is_empty());
+
+        assert!(!set_app_external(&conn, "mail.example.com", true).unwrap(), "only app: names");
+        assert!(!set_app_external(&conn, "nope.example.com", true).unwrap());
         let st: Option<String> = conn
             .query_row("SELECT state FROM domain_names WHERE hostname = 'mail.example.com'", [], |r| r.get(0))
             .unwrap();

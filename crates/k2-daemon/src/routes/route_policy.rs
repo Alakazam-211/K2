@@ -245,6 +245,8 @@ pub const ROUTES: &[Route] = &[
     // 0.46.6: custom domains (re-check now; the App's primary origin).
     post("/cli/app/domain/check", Admin),
     post("/cli/app/domain/primary", Admin),
+    // 0.46.6: the owner's own web server serves a custom name (on|off).
+    post("/cli/app/domain/external", Admin),
     post("/cli/app/domain/rm", Admin),
     get("/cli/app/domains", Member),
     // Egress (S15): read and propose are Member (a passport sees its own

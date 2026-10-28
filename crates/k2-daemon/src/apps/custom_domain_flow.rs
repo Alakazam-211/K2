@@ -24,10 +24,13 @@
 //!   `issuing`/`live` daily. A failed re-check of a served name keeps it
 //!   serving and says so; after 7 days in a row it goes `failing`: its
 //!   route is removed (front443 / door) and it is not renewed.
-//! - **Grandfathered** (`external`, migration 0236): a name bound before
-//!   0.46.6, served by the box's own proxy. It stays an origin and is never
-//!   checked by the loop; `k2 app domain check` moves it into this flow only
-//!   when the proof passes (a failed check leaves it `external`).
+//! - **External** (`external`): served by the box's own web server, not by
+//!   K2's front. Grandfathered at the upgrade (migration 0236, a name bound
+//!   before 0.46.6) or opted in by name (`k2 app domain add … --external`,
+//!   `k2 app domain external … on`). It is an origin and is never checked
+//!   by the loop, ordered or routed; `k2 app domain external … off` hands
+//!   it back to `waiting_dns`, and `k2 app domain check` moves it into this
+//!   flow only when the proof passes (a failed check leaves it `external`).
 
 use std::net::IpAddr;
 use std::sync::{Mutex, OnceLock};

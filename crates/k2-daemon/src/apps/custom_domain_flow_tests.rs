@@ -269,7 +269,7 @@ fn a_grandfathered_name_stays_an_origin_until_the_owner_moves_it() {
     assert!(crate::apps::tls_door::reload().routed.is_empty(), "the door never routes it");
     let st = crate::apps::custom_domains::status_json(&ext, true);
     assert_eq!((st["notServedYet"].as_bool(), st["external"].as_bool()), (Some(false), Some(true)));
-    assert!(st["words"].as_str().unwrap().starts_with("served by your own proxy (not by K2)"), "{st}");
+    assert!(st["words"].as_str().unwrap().starts_with("served by your own web server (not by K2's front)"), "{st}");
     assert!(st.get("served").is_none() && st.get("warning").is_none(), "no probe, no warning spam: {st}");
     {
         let db = k2_core::db::shared();

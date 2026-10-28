@@ -263,7 +263,8 @@ pub fn pass(now: i64) -> (usize, usize) {
         let reports = match engine.fetch_reports(acct, REPORTS_PER_PASS) {
             Ok(r) => r,
             Err(e) => {
-                k2_core::log_debug!("[email-notify] WARN report read for sender {}: {}", s.id, super::send::mask_addresses(&e));
+                let why = super::send::mask_addresses(&e);
+                k2_core::log_debug!("[email-notify] WARN report read for sender {}: {why}", s.id);
                 continue;
             }
         };
@@ -284,7 +285,8 @@ pub fn pass(now: i64) -> (usize, usize) {
         }
         if !done.is_empty() {
             if let Err(e) = engine.destroy_emails(acct, &done) {
-                k2_core::log_debug!("[email-notify] WARN report destroy for sender {}: {}", s.id, super::send::mask_addresses(&e));
+                let why = super::send::mask_addresses(&e);
+                k2_core::log_debug!("[email-notify] WARN report destroy for sender {}: {why}", s.id);
             }
         }
         if touched {

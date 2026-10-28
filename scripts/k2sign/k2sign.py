@@ -856,17 +856,47 @@ def mac_daemon_evidence(ctx, pol, version, path, d):
         raise Refused("the k2-ptyd inside %s is not signed by team %s" % (MAC_DAEMON, pol["apple_team"]))
 
 
+# NSIS's first header: flags (4 bytes), then this signature; it sits on a
+# 512-byte boundary after the installer stub (NSIS fileform.h).
+NSIS_FIRSTHEADER_SIG = b"\xef\xbe\xad\xdeNullsoftInst"
+PE_MACHINES = {0x014C: "x86", 0x8664: "x64"}
+
+
 def pe_evidence(asset, path):
-    """The Windows setup: a PE32+ for x64. No independent evidence (A7);
-    signable only because the approval named it."""
+    """The Windows setup: an NSIS installer (what Tauri's bundler makes for
+    x64 apps: the NSIS stub itself is a 32-bit PE, so the machine type alone
+    says nothing about the app; checked on K2_0.40.99_x64-setup.exe). The
+    asset name is already pinned by the policy's allow-list. No independent
+    evidence (A7): signable only because the approval named it."""
     with open(path, "rb") as f:
         head = f.read(64)
         if head[:2] != b"MZ" or len(head) < 64:
             raise Refused("%s is not a Windows executable" % asset)
         f.seek(struct.unpack_from("<I", head, 0x3C)[0])
         pe = f.read(6)
-    if pe[:4] != b"PE\0\0" or struct.unpack_from("<H", pe, 4)[0] != 0x8664:
-        raise Refused("%s is not an x64 Windows executable" % asset)
+        if pe[:4] != b"PE\0\0":
+            raise Refused("%s is not a Windows executable (no PE header)" % asset)
+        machine = struct.unpack_from("<H", pe, 4)[0]
+        if machine not in PE_MACHINES:
+            raise Refused("%s is a PE for machine 0x%04x, not an x86 NSIS stub" % (asset, machine))
+        f.seek(0)
+        found, off, tail = False, 0, b""
+        while not found:
+            block = f.read(1 << 20)
+            if not block:
+                break
+            buf = tail + block
+            start = off - len(tail)
+            i = buf.find(NSIS_FIRSTHEADER_SIG)
+            while i >= 0:
+                if (start + i - 4) % 512 == 0:
+                    found = True
+                    break
+                i = buf.find(NSIS_FIRSTHEADER_SIG, i + 1)
+            tail = buf[-(len(NSIS_FIRSTHEADER_SIG) + 4):]
+            off += len(block)
+    if not found:
+        raise Refused("%s is not an NSIS installer (no NSIS header on a 512-byte boundary)" % asset)
 
 
 def check_evidence(ctx, pol, slot, asset, version, path, session, d):

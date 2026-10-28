@@ -9623,7 +9623,9 @@ if a.get("stateReason"):
     print("  why       %s" % a["stateReason"])
 print("  workspace %s" % a.get("workspaceHandle"))
 print("  url       %s" % (a.get("url") or "local only: http://127.0.0.1:%s" % a.get("frontPort")))
-print("  memory    %s" % ("no per-App limit" if a.get("memoryLimitBytes") is None else "%d MiB" % (a["memoryLimitBytes"] >> 20)))
+if a.get("frontPort"):
+    print("  front     127.0.0.1:%s (stable across deploys; your own web server proxies here)" % a["frontPort"])
+print("  memory   %s" % ("no per-App limit" if a.get("memoryLimitBytes") is None else "%d MiB" % (a["memoryLimitBytes"] >> 20)))
 live = rt.get("live")
 print("  live      %s" % ("%s on :%s (pid %s)" % (live["deployment"], live["port"], live.get("pid")) if live else "-"))
 warm = rt.get("warm")
@@ -12272,17 +12274,20 @@ CUSTOM DOMAINS (your own name, e.g. shop.example.com; Linux boxes)
                                            switch a bound name to your own web
                                            server (on) or to K2 (off)
 
-  Who: the owner, an Admin login, or the App's own agent with "Build and
-  run Apps" on (an agent binds only its own workspace's Apps).
+  Who (every verb here): the owner, an Admin login, or the App's own agent
+  with "Build and run Apps" on (an agent binds only its own workspace's
+  Apps).
 
   YOUR OWN WEB SERVER (--external): if your own nginx, Caddy or other web
   server serves the name (not K2's :443 front), K2 never makes it live,
   so it is not one of the App's origins and the App refuses forms from
-  it. Add it with --external (or switch an added name with
-  k2 app domain external <app-id> <name> on), then k2 app restart
-  <app-id>: from that start the App treats it as its own origin. K2 sets
-  no records, runs no DNS check and gets no certificate for such a name.
-  Its domain must still be attached (k2 domain add <apex>).
+  it. Run k2 app domain add <app-id> <name> --external (also for a name
+  you already added; same as k2 app domain external <app-id> <name> on),
+  then k2 app restart <app-id>: from that start the App treats it as its
+  own origin. Your server proxies the name to the App's front port
+  (k2 app inspect <app-id>: front). K2 sets no records, runs no DNS check
+  and gets no certificate for such a name. Its domain must still be
+  attached (k2 domain list; the owner runs k2 domain add <apex>).
 
   A dotted name outside k2.dev is a custom domain; anything else is a
   subdomain (below).

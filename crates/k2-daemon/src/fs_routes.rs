@@ -3622,12 +3622,10 @@ mod tests {
         std::fs::create_dir_all(dir.join("notes")).expect("notes dir");
         std::fs::write(dir.join(".k2/agent/ROLE.md"), b"original role").expect("role");
         std::fs::write(dir.join("notes/a.md"), b"note a").expect("note");
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(dir.join(".k2"), dir.join("cfg")).expect("cfg link");
-            std::os::unix::fs::symlink(dir.join(".k2/agent"), dir.join("agentdir"))
-                .expect("agentdir link");
-        }
+        // Directory symlinks on every OS (Windows: real symlinks, which a
+        // guest's write must not be able to follow into .k2 either).
+        k2_core::test_env::symlink(dir.join(".k2"), dir.join("cfg")).expect("cfg link");
+        k2_core::test_env::symlink(dir.join(".k2/agent"), dir.join("agentdir")).expect("agentdir link");
         let dir = dunce::canonicalize(&dir).expect("canon");
         let handle = format!("cf{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let id = insert_handled_project(&dir.to_string_lossy(), &handle);
@@ -3707,7 +3705,6 @@ mod tests {
         }
         // Symlinks inside the room that resolve into .k2, including a
         // not-yet-created folder behind the link.
-        #[cfg(unix)]
         for path in ["cfg/agent/ROLE.md", "agentdir/ROLE.md", "cfg/inbox/x.md", "cfg/newdir/x.md"] {
             let r = handle_write_file_gated(&write_body(&room, path, "guest text"), Some(pass.clone()));
             assert_protected(&r, &format!("write-file via symlink {path}"));

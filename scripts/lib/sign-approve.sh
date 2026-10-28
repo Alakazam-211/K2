@@ -58,11 +58,12 @@ k2sa_run_helper() {
     [[ "$timeout_min" =~ ^[1-9][0-9]{0,3}$ ]] || { k2sa_fail "K2_SIGN_APPROVE_TIMEOUT_MIN must be a whole number of minutes"; return 1; }
     limit=$((timeout_min * 60))
     if [ -n "${K2_SIGN_APPROVE_CMD:-}" ]; then
-        "$K2_SIGN_APPROVE_CMD" --challenge "$cf" --out "$of" &
+        "$K2_SIGN_APPROVE_CMD" --challenge "$cf" --out "$of" --timeout "$limit" &
     else
         local app="${K2_SIGN_APPROVE_APP:-$HOME/Applications/K2 Release Approve.app}"
         [ -d "$app" ] || { k2sa_fail "no approval app at $app (scripts/k2sign/approve/build.sh, then Enrol)"; return 1; }
-        /usr/bin/open -W -n -a "$app" --args --challenge "$cf" --out "$of" &
+        # --timeout: the app cancels its own sheet when the watchdog would.
+        /usr/bin/open -W -n -a "$app" --args --challenge "$cf" --out "$of" --timeout "$limit" &
     fi
     pid=$!
     while kill -0 "$pid" 2>/dev/null; do

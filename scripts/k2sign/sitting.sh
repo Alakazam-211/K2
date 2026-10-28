@@ -288,10 +288,14 @@ reenrol)
     step "Write a test challenge (not a release; the signer would never accept it)" /bin/sh -c 'mkdir -p "$2" && printf "%s" "$1" > "$2/c.json"' sh "$CH" "$RE"
     step "Proof 1 — Touch ID: TOUCH the sensor" /usr/bin/open -W -n -a "$APP" --args --challenge "$RE/c.json" --out "$RE/touch.der"
     step "  'Verified OK' = pass" /usr/bin/openssl dgst -sha256 -verify /usr/local/etc/k2sign/approver.pem -signature "$RE/touch.der" "$RE/c.json"
-    step "Proof 2 — password: DON'T touch; click 'Use Password…' and type your Mac login password" /usr/bin/open -W -n -a "$APP" --args --challenge "$RE/c.json" --out "$RE/pw.der"
+    step "Proof 2 — password: do NOT touch the sensor; click 'Use Password…' and type your Mac login password" /usr/bin/open -W -n -a "$APP" --args --challenge "$RE/c.json" --out "$RE/pw.der"
     step "  'Verified OK' = pass" /usr/bin/openssl dgst -sha256 -verify /usr/local/etc/k2sign/approver.pem -signature "$RE/pw.der" "$RE/c.json"
-    printf '\n\033[1m▶ Proof 3 — a bare SSH session can'"'"'t approve. From another Mac run this one line; if a sheet appears on %s'"'"'s screen, press Cancel:\033[0m\n    ssh z3thon@%s %q\n' \
-        "$HOST" "$HOST" "$(show "$APPBIN" --challenge "$RE/c.json" --out "$RE/ssh.der")"
+    printf '\n\033[1m▶ Proof 3 — nobody at the screen, no approval. From another Mac run this one line (it starts the app over SSH):\033[0m\n    ssh z3thon@%s %q\n' \
+        "$HOST" "$(show "$APPBIN" --challenge "$RE/c.json" --out "$RE/ssh.der" --timeout 30)"
+    echo "    On $HOST: do NOT touch the sensor or the keyboard. An approval sheet appears on the screen (an SSH-started"
+    echo "    app can show it; only the person at the screen can answer it). Either click Cancel with the mouse, or leave"
+    echo "    it alone: after 30 s it closes by itself. Expected on the other Mac: 'no approval (timed out after 30 s)' or"
+    echo "    'no approval: …canceled…', a non-zero exit, and no ssh.der."
     must_fail "  …it made no approval" /bin/test -s "$RE/ssh.der"
     step "Remove the test files" /bin/rm -rf "$RE"
     note "Done. Tell K2 the three results. The renamed old key files in ~/.k2-release-approve can be deleted."

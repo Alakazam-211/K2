@@ -140,6 +140,47 @@ fn session_kind_and_handle(
     ("other".to_string(), String::new())
 }
 
+/// `--workspace <ws>` on a heartbeat verb (`workspace=`, 0.46.6): the
+/// owner and Connect logins read and change THAT workspace's heartbeats
+/// instead of the caller's. A passport's `project=` is stamped to its own
+/// workspace, so a passport may name only that one (403
+/// `other_workspace`, never a silent read of its own). No `workspace=`:
+/// `project` as before.
+fn heartbeat_workspace(params: &HashMap<String, String>, project: String) -> Result<String, CliResponse> {
+    let Some(ws) = params.get("workspace").map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+        return Ok(project);
+    };
+    use crate::workspace_msg::WorkspaceResolve;
+    let path = match crate::workspace_msg::resolve_workspace_detailed(ws) {
+        WorkspaceResolve::Found(p) => p,
+        WorkspaceResolve::Ambiguous { handles } => {
+            return Err(CliResponse::bad_request(format!(
+                "AMBIG: workspace '{ws}' matches more than one project (handles: {})",
+                handles.join(", ")
+            )))
+        }
+        WorkspaceResolve::Retired { handle } => {
+            return Err(CliResponse::bad_request(format!(
+                "workspace not found: {ws}. {}",
+                k2_core::workspace::handle::retired_handle_message(&handle)
+            )))
+        }
+        WorkspaceResolve::Miss => return Err(CliResponse::bad_request(format!("workspace not found: {ws}"))),
+    };
+    if crate::caller_workspace::principal_from_params(params).is_some() && path != project {
+        return Err(CliResponse {
+            status: "403 Forbidden",
+            content_type: "application/json",
+            body: serde_json::json!({ "error": {
+                "code": "other_workspace",
+                "hint": format!("an agent reads and changes only its own workspace's heartbeats; a person runs this with --workspace {ws} from a terminal outside K2"),
+            }})
+            .to_string(),
+        });
+    }
+    Ok(path)
+}
+
 /// Long-tail `/cli/*` dispatch. Returns `Some(resp)` for a handled
 /// path, `None` if unknown (caller renders 404).
 pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliResponse> {
@@ -1078,6 +1119,10 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         p if p.starts_with("/cli/heartbeat/") || p == "/cli/heartbeat-log" => {
             match need_project(params) {
                 Ok(pp) => {
+                    let pp = match heartbeat_workspace(params, pp) {
+                        Ok(pp) => pp,
+                        Err(r) => return Some(r),
+                    };
                     let result = if p == "/cli/heartbeat-log" {
                         crate::heartbeat_routes::dispatch_log(&pp, params)
                     } else {
@@ -3526,5 +3571,91 @@ mod connections_list_users_tests {
             let z = row("z3thon");
             assert_eq!(z["displayName"], "Rosson Long");
         });
+    }
+}
+
+/// `k2 heartbeat show <name> --workspace <ws>` (0.46.6): the named
+/// workspace is read, not the caller's; a passport naming another
+/// workspace is refused, never answered with its own heartbeat.
+#[cfg(test)]
+mod heartbeat_workspace_param_tests {
+    use super::dispatch;
+    use std::collections::HashMap;
+
+    fn workspace_with_heartbeat(home: &std::path::Path, tag: &str, body: &str) -> (String, String, String) {
+        let handle = format!("{tag}{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let dir = home.join(&handle);
+        let rel = ".k2/heartbeats/nightly/WAKEUP.md";
+        std::fs::create_dir_all(dir.join(".k2/heartbeats/nightly")).unwrap();
+        std::fs::write(dir.join(rel), body).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        let id = uuid::Uuid::new_v4().to_string();
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, ?2, ?3, ?2)",
+            rusqlite::params![id, handle, path],
+        )
+        .unwrap();
+        k2_core::db::schema::AgentHeartbeat::insert(&conn, &uuid::Uuid::new_v4().to_string(), &id, "nightly", "hourly", "{}", rel, true)
+            .unwrap();
+        (id, path, handle)
+    }
+
+    fn show(params: &[(&str, &str)]) -> (String, serde_json::Value) {
+        let p: HashMap<String, String> = params.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let r = dispatch("/cli/heartbeat/show", &p).expect("heartbeat show is handled");
+        (r.status.to_string(), serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("{e}: {}", r.body)))
+    }
+
+    #[test]
+    fn workspace_names_the_heartbeat_to_read() {
+        let home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (_mine, my_path, _) = workspace_with_heartbeat(home.path(), "hbme", "MINE\n");
+        let (_theirs, their_path, their_handle) = workspace_with_heartbeat(home.path(), "hbthem", "THEIRS\n");
+
+        // No --workspace: the caller's own (project=), as before.
+        let (s, v) = show(&[("project", &my_path), ("name", "nightly")]);
+        assert_eq!(s, "200 OK", "{v}");
+        assert!(v["instructions"].as_str().unwrap_or("").contains("MINE"), "{v}");
+
+        // --workspace by handle or path reads THAT workspace (the owner).
+        for ws in [their_handle.as_str(), their_path.as_str()] {
+            let (s, v) = show(&[("project", &my_path), ("name", "nightly"), ("workspace", ws)]);
+            assert_eq!(s, "200 OK", "{ws}: {v}");
+            assert!(v["instructions"].as_str().unwrap_or("").contains("THEIRS"), "{ws}: {v}");
+        }
+
+        // An unknown workspace is an error, never the caller's heartbeat.
+        let (s, v) = show(&[("project", &my_path), ("name", "nightly"), ("workspace", "no-such-ws-xyz")]);
+        assert_eq!(s, "400 Bad Request", "{v}");
+        assert!(v["error"].as_str().unwrap_or("").contains("workspace not found"), "{v}");
+    }
+
+    #[test]
+    fn a_passport_may_name_only_its_own_workspace() {
+        let home = crate::test_support::TempHome::new();
+        k2_core::db::init_for_tests();
+        let (mine, my_path, my_handle) = workspace_with_heartbeat(home.path(), "hbpme", "MINE\n");
+        let (_t, _their_path, their_handle) = workspace_with_heartbeat(home.path(), "hbpthem", "THEIRS\n");
+        // What stamp_principal leaves for a passport: project = its own path.
+        let stamped = [
+            ("project", my_path.as_str()),
+            ("project_id", mine.as_str()),
+            (crate::caller_workspace::PRINCIPAL_BOUND_KEY, "1"),
+            ("name", "nightly"),
+        ];
+        let mut other = stamped.to_vec();
+        other.push(("workspace", their_handle.as_str()));
+        let (s, v) = show(&other);
+        assert_eq!(s, "403 Forbidden", "{v}");
+        assert_eq!(v["error"]["code"], "other_workspace", "{v}");
+
+        let mut own = stamped.to_vec();
+        own.push(("workspace", my_handle.as_str()));
+        let (s, v) = show(&own);
+        assert_eq!(s, "200 OK", "{v}");
+        assert!(v["instructions"].as_str().unwrap_or("").contains("MINE"), "{v}");
     }
 }

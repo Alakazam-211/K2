@@ -399,6 +399,11 @@
     "description": "Restart an agent's pinned chat session on the same conversation (resume), so it re-reads its charter and .mcp.json. Reports the old and new session ids. Sidecar tabs are not touched."
    },
    {
+    "name": "agent harness",
+    "usage": "k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--dry-run] [--json]",
+    "description": "Move a workspace's pinned chat (the one heartbeats, Threads and k2 msg go to) to another harness: claude, codex, grok, gemini, cursor, pi or hermes. Changing the workspace's default agent only changes NEW chats; this moves the existing pinned chat. K2 ends the current pinned chat, starts a new one on <harness> with a summary of the recent conversation, and points heartbeats, Threads and messages at it. The old chat stays in Chat history. Already on <harness>: nothing changes. A person runs it (owner, Admin, or a person in a K2 shell tab); an agent can't move its own pinned chat (exit 3: ask your person, or with permission cards on, k2 permission request agent.harness-switch harness=<harness>). Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found."
+   },
+   {
     "name": "agent context",
     "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|catalog> [args] [--json]",
     "description": "Day-2 management of the always-on AGENTS.md context management stack: pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found."
@@ -1350,7 +1355,7 @@
    },
    {
     "name": "heartbeat show",
-    "usage": "k2 heartbeat show <name> [--json]",
+    "usage": "k2 heartbeat show <name> [--workspace <ws>] [--json]",
     "description": "One heartbeat's full details (schedule, enabled, last fire, saved session)."
    },
    {

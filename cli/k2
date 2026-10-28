@@ -336,6 +336,10 @@ _cli_tool_id_for_verb() {
                 # 0.46.1: `k2 agent identity` sends the passport in a K2
                 # terminal, so an agent sets only its own color and picture.
                 identity) echo "agent-identity" ;;
+                # 0.46.6: `k2 agent harness` sends the passport in a K2
+                # terminal, so an agent is refused (it asks with a card)
+                # instead of moving its own pinned chat as the owner.
+                harness) echo "agent-harness" ;;
                 *) echo "" ;;
             esac ;;
         # The leftover spelling of `k2 agent identity` rides the same tool.
@@ -446,7 +450,7 @@ _cli_tool_default_mode() {
         help|schema|whats-new|checkin|activity|read|skills|wiki|tools-policy|study|"") echo "open" ;;
         msg|inbox|respond|awareness|connections|heartbeat|sidecar|project) echo "id" ;;
         mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session) echo "id" ;;
-        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs|sim|chat|migrate) echo "id" ;;
+        browser-open|settings|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|chat|migrate) echo "id" ;;
         *) echo "open" ;;
     esac
 }
@@ -454,7 +458,7 @@ _cli_tool_default_mode() {
 # True when the tool is a locked production floor (cannot be set Open).
 _cli_tool_is_locked() {
     case "${1:-}" in
-        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|changes|usage|hostchat|jobs|sim|chat|migrate) return 0 ;;
+        mail|db|store|dns|publish|connect-account|sessions-spawn|fs|daemon-admin|users-admin|api-key|skin|remote-session|llm-accounts|compute|vault|sources|agent-teams|agent-identity|agent-harness|changes|usage|hostchat|jobs|sim|chat|migrate) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -3192,18 +3196,35 @@ if os.environ['HAVE_INSTR'] == '1':
 cmd_heartbeat_show() {
     local name=""
     local as_json=0
+    local ws=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --json) as_json=1; shift ;;
+            # 0.46.6: another workspace's heartbeat (people; an agent reads
+            # its own). The daemon resolves `workspace=` (handle, name, path)
+            # and refuses a passport naming another workspace.
+            --workspace|--project)
+                ws="${2:-}"
+                [ -n "$ws" ] || { echo "Usage: k2 heartbeat show <name> [--workspace <ws>] [--json]" >&2; exit 2; }
+                shift 2 ;;
             -*) shift ;;
             *) if [ -z "$name" ]; then name="$1"; fi; shift ;;
         esac
     done
-    [ -z "$name" ] && { echo "Usage: k2 heartbeat show <name> [--json]" >&2; exit 1; }
-    cli_send cli_request "/cli/heartbeat/show" "name=$(urlencode "$name")" | NAME="$name" AS_JSON="$as_json" python3 -c "
+    [ -z "$name" ] && { echo "Usage: k2 heartbeat show <name> [--workspace <ws>] [--json]" >&2; exit 1; }
+    local extra=()
+    if [ -n "$ws" ]; then
+        # A directory also becomes PROJECT, for daemons older than the
+        # `workspace=` parameter.
+        if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; PROJECT="$ws"; fi
+        extra=("workspace=$(urlencode "$ws")")
+    fi
+    cli_send cli_request "/cli/heartbeat/show" "name=$(urlencode "$name")" ${extra[@]+"${extra[@]}"} | NAME="$name" AS_JSON="$as_json" WS="$ws" python3 -c "
 import json, os, sys
 name = os.environ['NAME']
 as_json = os.environ['AS_JSON'] == '1'
+ws = os.environ.get('WS', '')
+where = f'workspace {ws}' if ws else 'this workspace'
 try:
     row = json.loads(sys.stdin.read())
 except Exception as e:
@@ -3211,10 +3232,17 @@ except Exception as e:
 if not isinstance(row, dict):
     print(f'Error: unexpected reply: {row}', file=sys.stderr); sys.exit(1)
 if row.get('error') == 'no_such_heartbeat':
-    print(f'No heartbeat named \"{name}\" in this workspace.', file=sys.stderr)
+    print(f'No heartbeat named \"{name}\" in {where}.', file=sys.stderr)
     sys.exit(1)
-if row.get('error'):
-    print(f\"Error: {row.get('error')} (an older host has no heartbeat show; update it)\", file=sys.stderr)
+err = row.get('error')
+if isinstance(err, dict):
+    print(f\"Error ({err.get('code')}): {err.get('hint') or err.get('code')}\", file=sys.stderr)
+    sys.exit(3 if err.get('code') == 'other_workspace' else 1)
+if err and 'workspace not found' in str(err):
+    print(f'Error: {err}', file=sys.stderr)
+    sys.exit(4)
+if err:
+    print(f\"Error: {err} (an older host has no heartbeat show; update it)\", file=sys.stderr)
     sys.exit(1)
 if as_json:
     print(json.dumps(row, indent=2))
@@ -3225,6 +3253,8 @@ last = row.get('lastFired') or 'never'
 created = row.get('createdAt') or '?'
 pinned = 'yes' if row.get('useWorkspaceSession') else 'no'
 print(f'Name:           {row.get(\"name\")}')
+if ws:
+    print(f'Workspace:      {ws}')
 print(f'Frequency:      {row.get(\"frequency\")}')
 print(f'Enabled:        {enabled}')
 print(f'Pinned chat:    {pinned}')
@@ -5834,8 +5864,10 @@ except Exception:
 
 # Replace the workspace's pinned chat with a new session of another
 # harness. The daemon copies a transcript seed (and optional notes)
-# into that new chat. It does not resume the saved session, and it
-# does not move heartbeats onto the new session.
+# into that new chat. It does not resume the saved session. Heartbeats
+# on the pinned chat follow it; ones with their own session stay put.
+# The newer door is `k2 agent harness <workspace> <harness>`. Since
+# 0.46.6 an agent never swaps (exit 3, harness_needs_person).
 #
 #   k2 workspace swap-canonical <workspace> --agent claude
 #   k2 workspace swap-canonical <workspace> --agent claude --full --notes-file handoff.md
@@ -5943,6 +5975,8 @@ print(json.dumps({
         echo "Error: could not reach the daemon" >&2
         exit 1
     fi
+    # Permission cards: an agent's refusal ends with its Ask-with line.
+    _permission_note "$out"
     printf '%s' "$out" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
@@ -5953,13 +5987,15 @@ except Exception:
     sys.exit(1)
 if d.get("error") and not d.get("swapped"):
     err = d["error"]
+    code = err.get("code") if isinstance(err, dict) else ""
     if isinstance(err, dict):
         err = err.get("hint") or err.get("code") or err
     print("Error: %s" % err, file=sys.stderr)
     path = d.get("handoffPath") or ""
     if path:
         print("Handoff file: %s" % path, file=sys.stderr)
-    sys.exit(1)
+    # 0.46.6: a refused caller (an agent, a wrong credential) exits 3.
+    sys.exit(3 if code in ("harness_needs_person", "other_workspace", "wrong_credential", "invalid_token") else 1)
 if not d.get("swapped"):
     print("Error: canonical chat was not swapped", file=sys.stderr)
     sys.exit(1)
@@ -5988,7 +6024,7 @@ else:
     if hint:
         print(hint)
     print("The handoff file is on disk. Paste it into the new chat if it did not arrive.")
-print("Heartbeats that resume their own session were not moved.")
+print("Heartbeats on the pinned chat follow it; heartbeats that resume their own session were not moved.")
 '
 }
 
@@ -19055,10 +19091,16 @@ cmd_sessions_compact() {
 # adoption (sessions count shouldn't change when a focus window
 # opens on top of an existing workspace).
 #
+# 0.46.6: a refusal or error body (an object, not the list) prints the
+# daemon's error and exits 3 (refused) or 1, instead of a header and a
+# python AttributeError. Values reach python through the environment,
+# never spliced into its source. A workspace name or handle is resolved
+# to its path first (a directory is taken as is).
+#
 # Usage:
-#   k2 sessions live <path>             # human table
-#   k2 sessions live <path> --json      # raw JSON from daemon
-#   k2 sessions live <path> --count     # just the integer count
+#   k2 sessions live <workspace>          # human table
+#   k2 sessions live <workspace> --json   # raw JSON from daemon
+#   k2 sessions live <workspace> --count  # just the integer count
 cmd_sessions_live() {
     local path="${1:-}"
     local mode="table"
@@ -19071,9 +19113,22 @@ cmd_sessions_live() {
         esac
     done
     if [ -z "$path" ]; then
-        echo "Usage: k2 sessions live <workspace-path> [--json|--count]" >&2
-        echo "  Lists live daemon-side v2 sessions whose cwd is under <workspace-path>." >&2
+        echo "Usage: k2 sessions live <workspace> [--json|--count]" >&2
+        echo "  Lists live daemon-side v2 sessions whose cwd is under the workspace (a path, handle or name)." >&2
         exit 1
+    fi
+    if [ -d "$path" ]; then
+        path="$(cd "$path" && pwd)"
+    else
+        local resolved
+        resolved=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$path")" 2>/dev/null \
+            | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+print(d.get("path", "") if isinstance(d, dict) else "")' 2>/dev/null || true)
+        [ -n "$resolved" ] && path="$resolved"
     fi
     # Try the targeted endpoint first (post-0.37.11 daemons); fall back
     # to `/cli/agents/running` with client-side filtering for older
@@ -19085,85 +19140,80 @@ cmd_sessions_live() {
         fallback=1
         response=$(cli_request "/cli/agents/running")
     fi
-    case "$mode" in
-        json)
-            if [ "$fallback" = "1" ]; then
-                echo "$response" | python3 -c "
-import json, sys
-def _workspace_match(cwd: str, path: str) -> bool:
-    if not cwd: return False
-    p = path.rstrip('/')
-    c = cwd.rstrip('/')
-    return c == p or cwd.startswith(p + '/')
-path = '$path'
-all_sessions = json.loads(sys.stdin.read())
-filtered = [
-    {
-        'sessionId': s.get('terminalId'),
-        'agentName': s.get('agentName'),
-        'command': s.get('command'),
-        'args': [],
-        'cwd': s.get('cwd', ''),
-        'isV2': True,  # agents running only ever returns alive sessions; v2 status unknown but assumed
-    }
-    for s in all_sessions if _workspace_match(s.get('cwd') or '', path)
-]
-print(json.dumps(filtered, indent=2))
-"
-            else
-                echo "$response"
-            fi
-            ;;
-        count)
-            if [ "$fallback" = "1" ]; then
-                echo "$response" | python3 -c "
-import json, sys
-def _workspace_match(cwd: str, path: str) -> bool:
-    if not cwd: return False
-    p = path.rstrip('/')
-    c = cwd.rstrip('/')
-    return c == p or cwd.startswith(p + '/')
-path = '$path'
-sessions = json.loads(sys.stdin.read())
-print(sum(1 for s in sessions if _workspace_match(s.get('cwd') or '', path)))
-"
-            else
-                echo "$response" | python3 -c "import json,sys; print(len(json.loads(sys.stdin.read())))"
-            fi
-            ;;
-        *)
-            echo "$response" | python3 -c "
-import json, sys
-def _workspace_match(cwd: str, path: str) -> bool:
-    if not cwd: return False
-    p = path.rstrip('/')
-    c = cwd.rstrip('/')
-    return c == p or cwd.startswith(p + '/')
-fallback = $fallback
-path = '$path'
-raw = json.loads(sys.stdin.read())
+    printf '%s' "$response" | SL_MODE="$mode" SL_PATH="$path" SL_FALLBACK="$fallback" python3 -c '
+import json, os, sys
+mode = os.environ["SL_MODE"]
+path = os.environ["SL_PATH"]
+fallback = os.environ["SL_FALLBACK"] == "1"
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+except Exception:
+    print("Error: the daemon answered something that is not JSON: %r" % raw[:300], file=sys.stderr)
+    sys.exit(1)
+if not isinstance(data, list):
+    err = data.get("error") if isinstance(data, dict) else None
+    code = ""
+    if isinstance(err, dict):
+        code = str(err.get("code") or "")
+        msg = err.get("hint") or err.get("message") or code or json.dumps(err)
+    elif err:
+        msg = str(err)
+        code = msg
+    else:
+        msg = "unexpected answer: %s" % raw[:300]
+    print("Error: %s" % msg, file=sys.stderr)
+    refused = isinstance(data, dict) and (
+        "permission" in data
+        or any(w in (code + " " + msg).lower() for w in ("owner", "forbidden", "credential", "token", "person", "not allowed"))
+    )
+    if refused:
+        print("Live sessions are a person'"'"'s view: run this from a terminal outside K2 (an agent sees its own session with k2 whoami).", file=sys.stderr)
+    sys.exit(3 if refused else 1)
+def matches(cwd):
+    if not cwd:
+        return False
+    p = path.rstrip("/")
+    c = cwd.rstrip("/")
+    return c == p or cwd.startswith(p + "/")
 if fallback:
-    sessions = [s for s in raw if _workspace_match(s.get('cwd') or '', path)]
-    note = '  (using /cli/agents/running fallback — daemon pre-0.37.11)'
+    sessions = [
+        {
+            "sessionId": s.get("terminalId"),
+            "agentName": s.get("agentName"),
+            "command": s.get("command"),
+            "args": [],
+            "cwd": s.get("cwd") or "",
+            # agents/running only returns live sessions; v2 is assumed.
+            "isV2": True,
+        }
+        for s in data
+        if isinstance(s, dict) and matches(s.get("cwd") or "")
+    ]
+    note = "  (using /cli/agents/running fallback — daemon pre-0.37.11)"
 else:
-    sessions = raw
-    note = ''
-if not sessions:
-    print('No live sessions in this workspace.' + note)
+    sessions = [s for s in data if isinstance(s, dict)]
+    note = ""
+if mode == "json":
+    print(json.dumps(sessions, indent=2) if fallback else raw)
     sys.exit(0)
-print(f'{len(sessions)} live session(s):' + note)
-print(f'  {\"TERMINAL_ID\":<38}  {\"KIND\":<10}  {\"HANDLE\":<22}  {\"AGENT\":<24}  {\"CMD\":<14}  CWD')
+if mode == "count":
+    print(len(sessions))
+    sys.exit(0)
+if not sessions:
+    print("No live sessions in this workspace." + note)
+    sys.exit(0)
+print("%d live session(s):%s" % (len(sessions), note))
+print("  %-38s  %-10s  %-22s  %-24s  %-14s  CWD" % ("TERMINAL_ID", "KIND", "HANDLE", "AGENT", "CMD"))
 for s in sessions:
-    sid = s.get('sessionId') or s.get('terminalId') or '?'
-    kind = (s.get('kind') or '')[:10]
-    handle = (s.get('handle') or '')[:22]
-    name = s.get('agentName', '?')[:24]
-    cmd = (s.get('command') or 'shell')[:14]
-    cwd = s.get('cwd', '')
-    print(f'  {sid:<38}  {kind:<10}  {handle:<22}  {name:<24}  {cmd:<14}  {cwd}')
-"
-            ;;
-    esac
+    sid = s.get("sessionId") or s.get("terminalId") or "?"
+    kind = (s.get("kind") or "")[:10]
+    handle = (s.get("handle") or "")[:22]
+    name = (s.get("agentName") or "?")[:24]
+    cmd = (s.get("command") or "shell")[:14]
+    cwd = s.get("cwd") or ""
+    print("  %-38s  %-10s  %-22s  %-24s  %-14s  %s" % (sid, kind, handle, name, cmd, cwd))
+'
 }
 
 # `k2 sessions list`, `k2 sessions compact`, and any future
@@ -36355,6 +36405,21 @@ cmd_schema() {
       ]
     },
     {
+      "name": "agent harness",
+      "usage": "k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--dry-run] [--json]",
+      "description": "Move a workspace's pinned chat (the one heartbeats, Threads and k2 msg go to) to another harness: claude, codex, grok, gemini, cursor, pi or hermes. Changing the workspace's default agent only changes NEW chats; this moves the existing pinned chat. K2 ends the current pinned chat, starts a new one on <harness> with a summary of the recent conversation, and points heartbeats, Threads and messages at it. The old chat stays in Chat history. Already on <harness>: nothing changes. A person runs it (owner, Admin, or a person in a K2 shell tab); an agent can't move its own pinned chat (exit 3: ask your person, or with permission cards on, k2 permission request agent.harness-switch harness=<harness>). Exit 0 ok, 1 error, 2 bad usage, 3 refused, 4 not found.",
+      "args": [
+        {"name": "workspace", "required": true, "description": "Workspace handle, name or path."},
+        {"name": "harness", "required": true, "description": "claude, codex, grok, gemini, cursor, pi or hermes."}
+      ],
+      "flags": [
+        {"name": "--full", "arg": null, "description": "Seed the new chat with the whole old conversation (default: the recent part)."},
+        {"name": "--notes-file", "arg": "path", "description": "Extra handover notes for the new chat."},
+        {"name": "--dry-run", "arg": null, "description": "Show what would move; change nothing."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON (switched, alreadyOn, fromHarness, harness, sessionId, oldChatInHistory, ownSessionHeartbeats)."}
+      ]
+    },
+    {
       "name": "agent context",
       "usage": "k2 agent context <list|add|remove|on|off|move|show|regen|catalog> [args] [--json]",
       "description": "Day-2 management of the always-on AGENTS.md context management stack: pinned layers (Agent/Project/Tooling) plus optional ordered path layers. Workspace from K2_PROJECT_PATH / K2SO_PROJECT_PATH / PWD. Exit codes: 0 ok, 1 error, 2 bad usage, 3 precondition (e.g. duplicate_layer), 4 not found.",
@@ -37886,10 +37951,13 @@ cmd_schema() {
     },
     {
       "name": "heartbeat show",
-      "usage": "k2 heartbeat show <name> [--json]",
+      "usage": "k2 heartbeat show <name> [--workspace <ws>] [--json]",
       "description": "One heartbeat's full details (schedule, enabled, last fire, saved session).",
       "args": [{"name": "name", "required": true}],
-      "flags": [{"name": "--json", "arg": null, "description": "Raw row for scripting."}]
+      "flags": [
+        {"name": "--workspace", "arg": "ws", "description": "Another workspace's heartbeat (handle, name or path; people only, an agent reads its own)."},
+        {"name": "--json", "arg": null, "description": "Raw row for scripting."}
+      ]
     },
     {
       "name": "heartbeat status",
@@ -44932,6 +45000,10 @@ COMMANDS
   list                    List every agent on this server with mode + live status
   retire <name>           Safely decommission an agent (guards + archive; never deletes)
   restart <name>          Restart the agent's chat session (reloads charter + MCP config; same conversation)
+  harness <name> <harness>  Move the agent's pinned chat (what heartbeats, Threads and msg reach) to
+                          claude, codex, grok, gemini, cursor, pi or hermes. Changing the default
+                          agent only changes NEW chats. People run it; an agent is refused (exit 3)
+                          and asks its person (the refusal says how).
   identity [<name>]       Show or change the picture, color and name (an agent: its own color and picture)
   access set <ws> chat_manage on|off
                           "Manage Sew" for that workspace's agent (the owner or an admin)
@@ -45812,6 +45884,188 @@ FLAGS
   --dry-run               Show which session would restart; change nothing
   --json                  JSON output (old + new session ids)
 EOF
+}
+
+cmd_help_agent_harness() {
+    cat <<'EOF'
+Move a workspace's pinned chat to another harness (the coding CLI it runs:
+claude, codex, grok, gemini, cursor, pi or hermes).
+
+The pinned chat is the chat heartbeats, Threads and `k2 msg` go to. It keeps
+the harness it started with: changing the workspace's Default Agent only
+changes NEW chats. This command moves the pinned chat itself:
+
+  1. K2 ends the current pinned chat and starts a new one on <harness>,
+     seeded with a summary of the recent conversation (the same summary as
+     Chat history → "Continue in a new chat…").
+  2. Heartbeats on the pinned chat, Threads and messages go to the new chat.
+  3. The old chat stays in Chat history.
+
+Already on <harness>: nothing changes (exit 0).
+
+USAGE
+  k2 agent harness <workspace> <harness> [flags]
+
+  <workspace>   handle, name or path ("." = the current directory)
+  <harness>     claude, codex, grok, gemini, cursor, pi or hermes
+
+FLAGS
+  --full                  Seed with the whole old conversation (default: the recent part)
+  --notes-file <path>     Extra handover notes for the new chat
+  --dry-run               Show what would move; change nothing
+  --json                  The daemon's JSON
+
+WHO
+  A person: the owner (the desktop app, or a terminal outside K2), an Admin
+  login, or a person typing in a K2 shell tab. An agent can't move its own
+  pinned chat (that restarts its own session): it gets exit 3 and asks its
+  person to run this command, or, with permission cards on:
+    k2 permission request agent.harness-switch harness=<harness> --why "…"
+  In the app: the pinned chat's menu → "Move pinned chat to …", or answer
+  "Also move the pinned chat?" after changing a workspace's Default Agent.
+
+EXAMPLES
+  k2 agent harness sales claude
+  k2 agent harness ~/agents/ops claude --dry-run
+  k2 agent harness ops codex --full --notes-file handover.md
+
+EXIT CODES
+  0 ok (moved, or already there) · 1 error · 2 bad usage · 3 refused · 4 not found
+EOF
+}
+
+# `k2 agent harness <workspace> <harness>` (0.46.6) — move the pinned chat
+# to another harness. One daemon door: POST /cli/agent/harness. Inside a K2
+# terminal the passport goes (an `id` tool), so an agent is refused with
+# `harness_needs_person` (exit 3) instead of acting as the owner.
+cmd_agent_harness() {
+    if _wants_help "$@"; then cmd_help_agent_harness; exit 0; fi
+    local usage="usage: k2 agent harness <workspace> <harness> [--full] [--notes-file <path>] [--dry-run] [--json]  (harness: claude, codex, grok, gemini, cursor, pi or hermes)"
+    local ws="" harness="" mode="recent" notes_file="" dry_run=false as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --full) mode="full"; shift ;;
+            --recent) mode="recent"; shift ;;
+            --notes-file)
+                [ -n "${2:-}" ] || { _agent_err "bad_usage" "--notes-file takes a path — $usage"; exit 2; }
+                notes_file="$2"; shift 2 ;;
+            --dry-run) dry_run=true; shift ;;
+            --json) as_json=true; shift ;;
+            -*) _agent_err "bad_usage" "unknown flag '$1' — $usage"; exit 2 ;;
+            *)
+                if [ -z "$ws" ]; then ws="$1"
+                elif [ -z "$harness" ]; then harness="$1"
+                else _agent_err "bad_usage" "unexpected extra argument '$1' — $usage"; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$ws" ] || [ -z "$harness" ]; then
+        _agent_err "bad_usage" "$usage"
+        exit 2
+    fi
+    if [ -n "$notes_file" ] && [ ! -f "$notes_file" ]; then
+        _agent_err "not_found" "notes file not found: $notes_file"
+        exit 1
+    fi
+    # A directory goes as its absolute path; the daemon resolves handles,
+    # names and ids itself.
+    if [ -d "$ws" ]; then ws="$(cd "$ws" && pwd)"; fi
+    local body
+    body=$(H_WS="$ws" H_HARNESS="$harness" H_MODE="$mode" H_NOTES="$notes_file" H_DRY="$dry_run" python3 -c '
+import json, os
+notes = ""
+path = os.environ.get("H_NOTES", "")
+if path:
+    with open(path, encoding="utf-8", errors="replace") as f:
+        notes = f.read()
+print(json.dumps({
+    "workspace": os.environ["H_WS"],
+    "harness": os.environ["H_HARNESS"],
+    "mode": os.environ["H_MODE"],
+    "notes": notes,
+    "dryRun": os.environ.get("H_DRY") == "true",
+}))
+') || { _agent_err "bad_usage" "could not read the notes file: $notes_file"; exit 1; }
+    local raw
+    raw="$(_K2_SEND_MAX_TIME=150 cli_send_json POST /cli/agent/harness "$body")"
+    local status="${raw##*$'\n'}" resp="${raw%$'\n'*}"
+    if [ "$status" = "000" ] || [ -z "$status" ]; then
+        _agent_err "daemon_unreachable" "no answer from the K2 daemon"
+        exit 1
+    fi
+    printf '%s' "$resp" | H_STATUS="$status" H_JSON="$as_json" python3 -c '
+import json, os, sys
+status = int(os.environ["H_STATUS"])
+as_json = os.environ["H_JSON"] == "true"
+raw = sys.stdin.read()
+try:
+    d = json.loads(raw)
+except Exception:
+    print(json.dumps({"error": {"code": "daemon_error", "hint": "unparseable answer (HTTP %d): %s" % (status, raw[:300])}}), file=sys.stderr)
+    sys.exit(1)
+if not isinstance(d, dict):
+    print(json.dumps({"error": {"code": "daemon_error", "hint": "unexpected answer (HTTP %d): %s" % (status, raw[:300])}}), file=sys.stderr)
+    sys.exit(1)
+if status >= 300 or d.get("error"):
+    err = d.get("error")
+    if isinstance(err, dict):
+        code, hint = err.get("code") or "error", err.get("hint") or err.get("message") or ""
+    else:
+        code, hint = "error", str(err or "HTTP %d" % status)
+    if status == 404 and "route" in hint and "not found" in hint:
+        hint = "this K2 daemon has no k2 agent harness yet (update it); the older door is: k2 workspace swap-canonical <workspace> --agent <harness>"
+    if as_json:
+        print(json.dumps(d), file=sys.stderr)
+    else:
+        print("Error (%s): %s" % (code, hint), file=sys.stderr)
+        path = d.get("handoffPath") or ""
+        if path:
+            print("Handoff file: %s" % path, file=sys.stderr)
+    sys.exit(3 if status in (401, 403) else 4 if status == 404 else 2 if code in ("usage", "unknown_harness") else 1)
+if as_json:
+    print(json.dumps(d))
+    sys.exit(0)
+ws = d.get("workspace") or ""
+h = d.get("harness") or ""
+if d.get("alreadyOn"):
+    print("%s: the pinned chat is already on %s. Nothing changed." % (ws, h))
+    sys.exit(0)
+own = d.get("ownSessionHeartbeats") or []
+def own_note():
+    if own:
+        print("Heartbeats with their own session (they do not follow the pinned chat): %s." % ", ".join(own))
+        print("  Move one with: k2 heartbeat use-pinned-session on <name>")
+if d.get("dryRun"):
+    print("DRY RUN: would move %s'"'"'s pinned chat from %s to %s." % (ws, d.get("fromHarness") or "?", h))
+    print("The old chat would stay in Chat history; heartbeats, Threads and messages would go to the new chat.")
+    own_note()
+    sys.exit(0)
+print("Moved %s'"'"'s pinned chat: %s -> %s." % (ws, d.get("fromHarness") or "?", h))
+conv = d.get("claudeSessionId") or ""
+sid = d.get("sessionId") or ""
+if conv or sid:
+    print("New chat: %s%s" % (conv or "(id assigned when it starts)", (" (terminal %s)" % sid) if sid else ""))
+old = d.get("fromSessionId") or ""
+if old:
+    listed = d.get("oldChatInHistory")
+    if listed is False:
+        print("Old chat: %s (not listed in Chat history: it had no saved conversation)." % old)
+    else:
+        print("Old chat: %s (still in Chat history)." % old)
+print("Heartbeats on the pinned chat, Threads and messages now go to the %s chat." % h)
+own_note()
+if d.get("messageDelivered"):
+    print("The handover summary was sent into the new chat.")
+else:
+    print("The new chat is up, but the handover summary was not sent (%s)." % (d.get("messageReason") or "not delivered"))
+    if d.get("messageHint"):
+        print(d["messageHint"])
+    if d.get("handoffPath"):
+        print("It is on disk: %s" % d["handoffPath"])
+if d.get("seedError"):
+    print("Note: the old transcript was not copied (%s)." % d["seedError"])
+'
 }
 
 cmd_help_agent_list() {
@@ -48489,7 +48743,7 @@ DELIVERY (where a fire's wake message lands)
                                  still wants --provider claude|grok|…)
 
 INSPECTION (read-only)
-  heartbeat show <n> [--json]    Single heartbeat details + instructions
+  heartbeat show <n> [--workspace <ws>] [--json]  Single heartbeat details + instructions
   heartbeat status <n> [-n N]    Recent history: fires and changes, with
                                  who did it (owner, user, agent, app)
   heartbeat log [-n N]           Scheduler decisions
@@ -49101,7 +49355,7 @@ HEARTBEATS (workspace-scoped scheduled wakes)
   heartbeat signal wakeup <n>                   Open the WAKEUP.md
   heartbeat signal wake                         Auto-wake (no name needed)
 
-  heartbeat show <n> [--json]                   Single heartbeat details
+  heartbeat show <n> [--workspace <ws>] [--json]  Single heartbeat details
   heartbeat status <n> [-n N]                   Recent fire history
   heartbeat log [-n N]                          Scheduler decisions
 
@@ -75912,6 +76166,8 @@ case "${1:-help}" in
             list)   shift 2; cmd_agent_list "$@" ;;
             retire) shift 2; cmd_agent_retire "$@" ;;
             restart) shift 2; cmd_agent_restart "$@" ;;
+            # 0.46.6: move the pinned chat to another harness.
+            harness) shift 2; cmd_agent_harness "$@" ;;
             # Context management stack — day-2 AGENTS.md layer stack
             # (prd-context-hamburger-v1).
             context) shift 2; cmd_agent_context "$@" ;;

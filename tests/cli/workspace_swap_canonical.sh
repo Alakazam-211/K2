@@ -7,11 +7,12 @@
 #   2. A real headless daemon (temp HOME, claude + grok shims; never a real
 #      CLI):
 #      - an agent passport cannot swap another workspace's pinned chat
-#        (other_workspace, nothing written there);
-#      - an agent swaps its own pinned chat claude → grok: new --session-id,
-#        no --resume, the handoff reaches the new chat stamped as that
-#        agent (never "owner"), the handoff file is 0600 and gitignored
-#        under .k2/handoffs/, the saved row moves to grok;
+#        (other_workspace, exit 3, nothing written there), nor its own
+#        (0.46.6: harness_needs_person, exit 3, nothing spawned);
+#      - the owner swaps it claude → grok: new --session-id, no --resume,
+#        the handoff reaches the new chat stamped "owner", the handoff file
+#        is 0600 and gitignored under .k2/handoffs/, the saved row moves
+#        to grok;
 #      - the owner swaps it back grok → claude, stamped "owner";
 #      - GET is 405; an app-style bad token is 403; both swaps are audited.
 # Build first: cargo build -p k2-daemon (CARGO_TARGET_DIR honoured).
@@ -155,15 +156,23 @@ owner() {
 }
 
 capture agent workspace swap-canonical swapb --agent grok
-assert_eq "agent cannot swap another workspace (exit 1)" "$rc" "1"
-assert_contains "refusal names the rule" "$out" "only its own workspace"
+assert_eq "agent cannot swap another workspace (exit 3)" "$rc" "3"
+assert_contains "refusal names the rule" "$out" "another workspace's pinned chat"
 [ ! -e "$WSB/.k2/handoffs" ] && ok "nothing written into the other workspace" || bad "handoff written into swapb"
 [ ! -e "$SB/grok.argv" ] && ok "no grok spawned for the refused swap" || bad "grok spawned for a refused swap"
 
-MARK1="AGENT-NOTES-$$-$RANDOM"
+# 0.46.6: an agent never swaps its own pinned chat either (it would
+# restart its own session); a person does, or approves its card.
+capture agent workspace swap-canonical swapa --agent grok
+assert_eq "agent cannot swap its own chat (exit 3)" "$rc" "3"
+assert_contains "own-chat refusal says a person does it" "$out" "restarts your own session"
+[ ! -e "$WSA/.k2/handoffs" ] && ok "no handoff for the refused own swap" || bad "handoff written for a refused own swap"
+[ ! -e "$SB/grok.argv" ] && ok "no grok spawned for the refused own swap" || bad "grok spawned for a refused own swap"
+
+MARK1="OWNER-NOTES-1-$$-$RANDOM"
 printf 'Keep going on the release.\n%s\n' "$MARK1" > "$WORK/notes1.md"
-capture agent workspace swap-canonical swapa --agent grok --notes-file "$WORK/notes1.md"
-assert_eq "agent swaps its own chat (exit 0)" "$rc" "0"
+capture owner workspace swap-canonical swapa --agent grok --notes-file "$WORK/notes1.md"
+assert_eq "owner swaps the chat to grok (exit 0)" "$rc" "0"
 [ "$rc" = "0" ] || echo "$out" >&2
 assert_contains "says swapped to grok" "$out" "Swapped the canonical chat to grok."
 assert_contains "previous harness" "$out" "Previous harness: claude"
@@ -176,8 +185,8 @@ assert_absent "grok argv never names the old chat" "$GROK_ARGV" "$OLD_CLAUDE_ID"
 for _ in $(seq 1 100); do grep -Fq "$MARK1" "$SB/grok.stdin" 2>/dev/null && break; sleep 0.05; done
 GROK_IN="$(cat "$SB/grok.stdin" 2>/dev/null || true)"
 assert_contains "notes reached the new chat" "$GROK_IN" "$MARK1"
-assert_contains "stamped as the agent" "$GROK_IN" "[from swapa]"
-assert_absent "never stamped as the owner" "$GROK_IN" "[from owner]"
+assert_contains "stamped as the owner" "$GROK_IN" "[from owner]"
+assert_absent "never stamped as the agent" "$GROK_IN" "[from swapa]"
 HANDOFF="$WSA/.k2/handoffs/CANONICAL-HANDOFF.md"
 [ -f "$HANDOFF" ] && ok "handoff file under .k2/handoffs" || bad "no handoff at $HANDOFF"
 mode="$(stat -f %Lp "$HANDOFF" 2>/dev/null || stat -c %a "$HANDOFF")"
@@ -209,7 +218,8 @@ assert_contains "owner swap stamped as owner" "$CLAUDE_IN" "[from owner]"
 
 AUDIT="$(cat "$SB/.k2/auth-audit.jsonl" 2>/dev/null || true)"
 assert_contains "audit: refused agent swap" "$AUDIT" "refused:other_workspace"
-assert_contains "audit: agent swap" "$AUDIT" '"swapped:grok"'
+assert_contains "audit: refused own swap" "$AUDIT" "refused:needs_person"
+assert_contains "audit: owner swap to grok" "$AUDIT" '"swapped:grok"'
 assert_contains "audit: owner swap" "$AUDIT" '"swapped:claude"'
 assert_absent "notes never in the daemon log" "$(cat "$SB/daemon.log")" "$MARK1"
 

@@ -58,6 +58,7 @@ fn http(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Re
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e)
                 if matches!(
                     e.kind(),

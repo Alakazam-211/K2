@@ -899,9 +899,11 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
     let mut fds = vec![lock_fd];
     fds.extend(held.iter().map(|(_, l)| l.as_raw_fd()));
     // A successor without the App door (an older build) can't parse an
-    // `App` route kind: it gets the table without them (CD-A7).
+    // `App` route kind: it gets the table without them (CD-A7). Owner
+    // passthrough routes never ride the hand-off (an older successor can't
+    // parse the kind); the successor adds them from the owner's file.
     let front_routes = roles.contains(&Role::Front443).then(|| {
-        let t = (*crate::front443::routes::current()).clone();
+        let t = crate::front443::routes::current().without_kind(crate::front443::routes::Kind::Passthrough);
         if !roles_for_successor(&[Role::AppDoor], accepts.as_deref()).is_empty() {
             t
         } else {

@@ -700,3 +700,98 @@ async fn one_source_cannot_hold_more_than_its_hello_budget() {
     tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("a freed slot is usable").unwrap();
     assert_eq!(r.front.counters.per_ip_refused.load(Relaxed), 1);
 }
+
+// ── owner passthrough (0.46.6) ──────────────────────────────────────────
+
+fn alpn_ext(protos: &[&[u8]]) -> Vec<u8> {
+    let mut list = Vec::new();
+    for p in protos {
+        list.push(p.len() as u8);
+        list.extend_from_slice(p);
+    }
+    let mut data = (list.len() as u16).to_be_bytes().to_vec();
+    data.extend_from_slice(&list);
+    let mut e = vec![0x00, 0x10];
+    e.extend_from_slice(&(data.len() as u16).to_be_bytes());
+    e.extend_from_slice(&data);
+    e
+}
+
+/// A web server that isn't K2's, moved to a loopback port: its names pass
+/// through by SNI, TLS never terminated (the ClientHello reaches it byte
+/// for byte, so its own certificates and an `acme-tls/1` TLS-ALPN-01
+/// renewal hello work), with PROXY v2 first when the owner asks for it
+/// (its logs see the visitor, not 127.0.0.1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn passthrough_names_reach_the_owners_server_untouched_with_optional_proxy_v2() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (be_addr, mut rx) = backend().await;
+    let mut t = RouteTable::default();
+    t.insert("shop.example.com", be(Kind::Passthrough, be_addr, true)).unwrap();
+    t.insert("blog.example.com", be(Kind::Passthrough, be_addr, false)).unwrap();
+    let r = rig(16, Duration::from_secs(5), t).await;
+
+    // TLS-ALPN-01: the CA's acme-tls/1 hello for the owner's own name.
+    let mut exts = sni_ext(&[(0, b"shop.example.com")]);
+    exts.extend_from_slice(&alpn_ext(&[b"acme-tls/1"]));
+    let acme = hello_with(&exts);
+    let mut c = TcpStream::connect(r.addr).await.unwrap();
+    let client_addr = c.local_addr().unwrap();
+    c.write_all(&acme).await.unwrap();
+    let (_p, got) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+    let header = proxy_v2::header(client_addr, r.addr);
+    assert_eq!(&got[..header.len()], &header[..], "PROXY v2 first (owner asked)");
+    assert_eq!(&got[header.len()..], &acme[..], "the acme-tls/1 hello passes untouched");
+    let mut pong = [0u8; 4];
+    c.read_exact(&mut pong).await.unwrap();
+    assert_eq!(&pong, b"pong", "and the upstream answers the client itself");
+
+    // Without PROXY: exactly the client's bytes.
+    let plain = hello_with(&sni_ext(&[(0, b"blog.example.com")]));
+    let mut c2 = TcpStream::connect(r.addr).await.unwrap();
+    c2.write_all(&plain).await.unwrap();
+    let (_p, got2) = tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap();
+    assert_eq!(got2, plain);
+
+    // No default route: an unknown name is closed (the owner's choice).
+    let mut c3 = TcpStream::connect(r.addr).await.unwrap();
+    c3.write_all(&hello_with(&sni_ext(&[(0, b"other.example.com")]))).await.unwrap();
+    assert!(drain(&mut c3).await.is_empty());
+    assert_eq!(r.front.counters.passthrough.load(Relaxed), 2);
+    assert_eq!(r.front.counters.unknown_sni.load(Relaxed), 1);
+}
+
+/// `*`: every name nothing else routes (and a hello with no SNI) goes to
+/// the owner's server, whose own catch-all decides; K2's names still win.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_default_passthrough_takes_unknown_names_but_never_k2s() {
+    use std::sync::atomic::Ordering::Relaxed;
+    let (owner_addr, mut owner_rx) = backend().await;
+    let (k2_addr, mut k2_rx) = backend().await;
+    let mut t = RouteTable::default();
+    t.insert("app.example.com", be(Kind::App, k2_addr, false)).unwrap();
+    t.set_default(be(Kind::Passthrough, owner_addr, false)).unwrap();
+    assert!(t.set_default(be(Kind::Caddy, owner_addr, false)).is_err(), "only a passthrough is a default");
+    let r = rig(16, Duration::from_secs(5), t).await;
+    for (name, bytes) in [
+        ("unknown", hello_with(&sni_ext(&[(0, b"anything.example.net")]))),
+        ("no SNI", fixture("openssl-nosni.bin")),
+    ] {
+        let mut c = TcpStream::connect(r.addr).await.unwrap();
+        c.write_all(&bytes).await.unwrap();
+        let (_p, got) = tokio::time::timeout(Duration::from_secs(5), owner_rx.recv()).await.unwrap().unwrap();
+        assert_eq!(got, bytes, "{name}");
+    }
+    let mut c = TcpStream::connect(r.addr).await.unwrap();
+    c.write_all(&hello_with(&sni_ext(&[(0, b"app.example.com")]))).await.unwrap();
+    assert!(tokio::time::timeout(Duration::from_secs(5), k2_rx.recv()).await.unwrap().is_some(), "K2's name goes to K2");
+    assert!(tokio::time::timeout(Duration::from_millis(400), owner_rx.recv()).await.is_err());
+    assert_eq!(r.front.counters.passthrough.load(Relaxed), 2);
+    // Never handed to a successor (an older one can't parse the kind).
+    let mut t2 = RouteTable::default();
+    t2.insert("shop.example.com", be(Kind::Passthrough, owner_addr, false)).unwrap();
+    t2.set_default(be(Kind::Passthrough, owner_addr, false)).unwrap();
+    let handed = t2.without_kind(Kind::Passthrough);
+    assert!(handed.is_empty() && handed.default_route().is_none());
+    assert!(t2.fixed_backends_only().is_empty());
+}

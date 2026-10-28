@@ -303,3 +303,49 @@ fn under_air_gap_the_status_says_why_nothing_moves() {
     assert!(w.contains("Air-gap is on") && w.contains("stays waiting_dns"), "{w}");
     assert!(check_now(HOST).is_none(), "no check under air-gap");
 }
+
+// ── setup copy (0.46.6, PRD §7, PA-A11) ──────────────────────────────
+
+#[test]
+fn nat_is_the_egress_address_missing_from_every_interface() {
+    let on_if: Vec<std::net::Ipv4Addr> = vec!["203.0.113.10".parse().unwrap()];
+    assert_eq!(nat_verdict(Some("203.0.113.10"), &on_if), Some(false));
+    assert_eq!(nat_verdict(Some("198.51.100.4"), &on_if), Some(true), "egress elsewhere = a router");
+    assert_eq!(nat_verdict(Some("198.51.100.4"), &[]), Some(true), "only private interfaces = a router");
+    assert_eq!(nat_verdict(None, &on_if), None, "air-gap / lookup failed: can't tell");
+    assert_eq!(nat_verdict(Some("garbage"), &on_if), None);
+}
+
+/// Test 10 (PRD §11.1): behind a router → the Path B wording, Path A
+/// records only under "Advanced"; a desktop → no Path A records; a
+/// foreign :443 holder named with its fixes; unknown NAT → no Path B words.
+#[test]
+fn setup_advice_points_nat_and_desktops_at_path_b() {
+    let nat = advice_for(true, Some(true), true, None);
+    assert_eq!(nat["path"], "b");
+    assert_eq!(nat["records"], "advanced");
+    assert_eq!(nat["message"], NAT_WORDING);
+    assert!(nat["advanced"].as_str().unwrap().contains("forwarded port 443"));
+    let desk = advice_for(false, None, false, None);
+    assert_eq!(desk["path"], "b");
+    assert_eq!(desk["records"], "none");
+    assert_eq!(desk["message"], DESKTOP_WORDING);
+    let ok = advice_for(true, Some(false), true, None);
+    assert_eq!(ok["path"], "a");
+    assert!(ok["message"].is_null());
+    let unknown = advice_for(true, None, true, None);
+    assert_eq!(unknown["path"], "a", "unknown NAT never gets the Path B wording");
+    let off = advice_for(true, Some(false), false, None);
+    assert!(off["message"].as_str().unwrap().contains("k2 front enable"));
+    let holder = json!({"holder": "foreign", "units": ["caddy"], "message": crate::front443::foreign_443_message(&["caddy".to_string()])});
+    let foreign = advice_for(true, Some(false), false, Some(&holder));
+    let m = foreign["message"].as_str().unwrap();
+    assert!(m.contains("caddy") && m.contains("k2 front passthrough add") && m.contains("never takes :443"), "{m}");
+    assert_eq!(foreign["port443"]["holder"], "foreign");
+    // Through the seam: the add / check answer carries it.
+    set_test_nat(Some(Some(true)));
+    assert_eq!(behind_nat(), Some(true));
+    assert_eq!(setup_advice()["path"], "b");
+    set_test_nat(None);
+    assert_eq!(behind_nat(), None);
+}

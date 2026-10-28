@@ -23,8 +23,18 @@
 //!   127.0.0.1:8443 with `overrideProxyTrustedNetworks` (PROXY v2; loopback
 //!   clients refused, so no failed login through the front lands on 127.0.0.1).
 //!
+//! - 0.46.6, owner passthrough: names the owner's own web server answers
+//!   (a system Caddy or nginx moved from :443 to a loopback port) →
+//!   that port, untouched, no PROXY unless asked; `*` = every name nothing
+//!   else routes ([`passthrough_add`], `k2 front passthrough`). K2's own
+//!   names always win.
+//!
 //! Owner surface: `GET /cli/front/status`, `POST /cli/front/enable`
-//! (`{"mail": bool}`), `POST /cli/front/disable`; CLI `k2 front …`.
+//! (`{"mail": bool}`), `POST /cli/front/disable`, `GET
+//! /cli/front/passthrough`, `POST /cli/front/passthrough/{add,rm}`; CLI
+//! `k2 front …`. `status` and `enable` name a web server that isn't K2's
+//! holding :443 ([`port443_holder`]) with the ways to fix it: K2 never
+//! fights for the port.
 
 pub mod client_hello;
 pub mod proxy_v2;
@@ -112,7 +122,14 @@ pub async fn start() {
     // route that simply isn't loaded yet.
     let handed = routes::take_handed();
     let (ready_tx, mut ready_rx) = tokio::sync::watch::channel(handed.is_some());
-    if let Some(t) = handed {
+    if let Some(mut t) = handed {
+        // The owner's passthrough names never ride the hand-off: add them
+        // from the owner's file (no DB needed), so they route at once too.
+        let mut w = Vec::new();
+        add_passthrough(&mut t, &mut w);
+        for e in w {
+            log_debug!("[front443] passthrough not added: {e}");
+        }
         routes::install(t);
     }
     let front = server::Front::new(cap(), Box::new(routes::current));
@@ -191,9 +208,31 @@ pub fn rebuild() -> (Arc<RouteTable>, Vec<String>) {
         // Last: a custom App name never takes a name TURN, mail or Skin
         // Direct already routes (first route wins; refused at bind too).
         app_routes(&mut add);
+        // After every K2 name: the owner's passthrough names (K2's win).
+        add_passthrough(&mut t, &mut warnings);
     }
     routes::install(t);
     (routes::current(), warnings)
+}
+
+/// The owner's passthrough names (`~/.k2/front443-passthrough.json`) into
+/// `t`, after K2's own: a name K2 already routes is refused (warned), `*`
+/// becomes the default route.
+pub fn add_passthrough(t: &mut RouteTable, warnings: &mut Vec<String>) {
+    let list = match k2_core::front443::load_passthrough_checked() {
+        Ok(v) => v,
+        Err(e) => {
+            warnings.push(format!("passthrough names not loaded: {e}"));
+            return;
+        }
+    };
+    for p in list {
+        let b = Backend { kind: Kind::Passthrough, addr: p.to, proxy: p.proxy_v2, refuse_loopback_clients: false };
+        let r = if p.host == k2_core::front443::PASSTHROUGH_DEFAULT { t.set_default(b) } else { t.insert(&p.host, b) };
+        if let Err(e) = r {
+            warnings.push(format!("passthrough {}: {e}", p.host));
+        }
+    }
 }
 
 /// 0.46.6: every custom App name the door serves (`live`) or is getting a
@@ -228,6 +267,9 @@ pub fn current_use(host: &str) -> Option<String> {
         }
     }
     for (rh, b) in routes::current().entries() {
+        if rh == &h && b.kind == Kind::Passthrough {
+            return Some(format!("{h} is passed through to {} on :443 (k2 front passthrough rm {h})", b.addr));
+        }
         if rh == &h && b.kind != Kind::App {
             return Some(format!("{h} already routes to {} on :443", b.kind.as_str()));
         }
@@ -479,8 +521,17 @@ pub fn status_json() -> Value {
         }
     };
     let caddy = k2_core::skin_door::front_routes();
+    let passthrough = match k2_core::front443::load_passthrough_checked() {
+        Ok(v) => json!(v),
+        Err(e) => json!({"error": e}),
+    };
     json!({
         "enabled": cfg.enabled,
+        "passthrough": passthrough,
+        // Who holds :443 when the front doesn't (a web server that isn't
+        // K2's is named, with the ways to fix it).
+        "port443": if serving { Value::Null } else { port443_holder() },
+        "guard": crate::apps::guard::counters_json(),
         "mail": cfg.mail_behind_front(),
         "serving": serving,
         "socket": {"source": source, "local": local, "systemd": systemd_fds::report()},
@@ -549,6 +600,14 @@ fn gate() -> Result<(), Refusal> {
 /// restart to receive the socket (the route then restarts it).
 pub fn enable(mail: bool, daemon_port: u16) -> Result<Value, Refusal> {
     gate()?;
+    // A web server that isn't K2's holds :443: say so with the fixes, never
+    // fight for the port (systemd's socket would fail to bind anyway).
+    if !serving() {
+        let h = port443_holder();
+        if h["holder"] == "foreign" {
+            return Err((409, "port_443_taken", h["message"].as_str().unwrap_or("another web server holds :443").to_string()));
+        }
+    }
     let prev = k2_core::front443::load();
     if mail && !prev.mail_behind_front() {
         mail_check().map_err(|e| (409, "mail_not_movable", e))?;
@@ -665,4 +724,237 @@ pub fn disable(daemon_port: u16) -> Result<Value, Refusal> {
         "voice": voice,
         "warnings": warnings,
     }))
+}
+
+// ── who holds :443 (0.46.6) ──────────────────────────────────────────
+
+/// What holds :443 when the front doesn't.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Holder443 {
+    /// Nothing listens on :443.
+    Free,
+    /// The daemon's front serves it.
+    Front,
+    /// Skin Direct's Caddy (K2's own).
+    SkinDirect,
+    /// Stalwart's HTTPS listener (K2's hosted mail).
+    Mail,
+    /// A web server that isn't K2's: the active units K2 recognised (may be
+    /// empty: something listens, K2 can't tell what).
+    Foreign { units: Vec<String> },
+    /// Not Linux / can't read the socket table.
+    Unknown,
+}
+
+/// Units that commonly hold :443 (checked with `systemctl is-active`).
+pub const KNOWN_WEB_UNITS: &[&str] = &["caddy", "nginx", "apache2", "httpd", "haproxy", "traefik", "lighttpd", "envoy", "openresty"];
+
+/// Pure: decide from what K2 knows. A recognised web server unit that is
+/// active wins over K2's own guesses (a foreign proxy can hold :443 on a
+/// box that also runs hosted mail).
+pub fn classify_443(
+    listening: Option<bool>,
+    front_serving: bool,
+    skin_direct_443: bool,
+    mail_on_443: bool,
+    foreign_units: Vec<String>,
+) -> Holder443 {
+    if front_serving {
+        return Holder443::Front;
+    }
+    match listening {
+        None => Holder443::Unknown,
+        Some(false) => Holder443::Free,
+        Some(true) if !foreign_units.is_empty() => Holder443::Foreign { units: foreign_units },
+        Some(true) if skin_direct_443 => Holder443::SkinDirect,
+        Some(true) if mail_on_443 => Holder443::Mail,
+        Some(true) => Holder443::Foreign { units: Vec::new() },
+    }
+}
+
+/// The ways out when a web server that isn't K2's holds :443.
+pub fn foreign_443_message(units: &[String]) -> String {
+    let who = if units.is_empty() {
+        "Another program (not K2) holds port 443 on this box".to_string()
+    } else {
+        format!("A web server that isn't K2's holds port 443 on this box ({})", units.join(", "))
+    };
+    format!(
+        "{who}, so K2's :443 front can't take it and custom App names can't be served from this box's own IP yet. \
+         Ways to fix it: (1) move that server to a loopback port, e.g. 127.0.0.1:9443 (it keeps its own sites and \
+         certificates), then run k2 front enable and k2 front passthrough add <its host> --to 127.0.0.1:9443 (or '*' \
+         for every name K2 doesn't serve): its sites keep working and K2 serves your App names; (2) keep it and have it \
+         proxy the App's name to the App yourself (the name stays external); or (3) use K2 Connect for this name \
+         (path b, coming in 0.46.7). K2 never takes :443 from another server."
+    )
+}
+
+/// Is anything listening on TCP :443 (any address)? Linux only: the kernel
+/// socket table (`/proc/net/tcp{,6}`, state LISTEN). `None` elsewhere.
+fn listening_443() -> Option<bool> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let mut seen_any = false;
+    for f in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let Ok(t) = std::fs::read_to_string(f) else { continue };
+        seen_any = true;
+        if proc_net_listens(&t, 443) {
+            return Some(true);
+        }
+    }
+    seen_any.then_some(false)
+}
+
+/// Pure: does a `/proc/net/tcp`-format table have a LISTEN socket on `port`?
+pub fn proc_net_listens(table: &str, port: u16) -> bool {
+    let want = format!("{port:04X}");
+    table.lines().skip(1).any(|l| {
+        let mut cols = l.split_whitespace();
+        let (_sl, local, _rem, st) = (cols.next(), cols.next(), cols.next(), cols.next());
+        let port_hex = local.and_then(|a| a.rsplit_once(':')).map(|(_, p)| p);
+        port_hex.is_some_and(|p| p.eq_ignore_ascii_case(&want)) && st == Some("0A")
+    })
+}
+
+fn active_web_units() -> Vec<String> {
+    KNOWN_WEB_UNITS
+        .iter()
+        .filter(|u| {
+            std::process::Command::new("systemctl")
+                .args(["is-active", "--quiet", &format!("{u}.service")])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        })
+        .map(|u| u.to_string())
+        .collect()
+}
+
+/// `{holder, units?, message}` for status, setup and the doctor. Blocking
+/// (reads /proc, may run systemctl).
+pub fn port443_holder() -> Value {
+    let front = serving();
+    let listening = if front { Some(true) } else { listening_443() };
+    let units = if listening == Some(true) && !front && cfg!(target_os = "linux") { active_web_units() } else { Vec::new() };
+    let skin = k2_core::skin_door::live_listen().is_some_and(|l| l == ":443");
+    let mail_on = !mail_names().is_empty() && !k2_core::front443::mail_behind_front();
+    match classify_443(listening, front, skin, mail_on, units) {
+        Holder443::Front => json!({"holder": "k2-front", "message": "the :443 front serves it"}),
+        Holder443::Free => json!({"holder": "free", "message": "nothing listens on :443"}),
+        Holder443::SkinDirect => json!({
+            "holder": "k2-skin-direct",
+            "message": "Skin Direct's Caddy (K2's) holds :443; k2 front enable moves it behind the front"
+        }),
+        Holder443::Mail => json!({
+            "holder": "k2-mail",
+            "message": "hosted mail's HTTPS (K2's Stalwart) holds :443; k2 front enable --mail moves it behind the front"
+        }),
+        Holder443::Unknown => json!({
+            "holder": "unknown",
+            "message": "K2 can't read this box's socket table (the :443 front is Linux-only)"
+        }),
+        Holder443::Foreign { units } => json!({"holder": "foreign", "units": units, "message": foreign_443_message(&units)}),
+    }
+}
+
+// ── owner passthrough (0.46.6) ───────────────────────────────────────
+
+/// `GET /cli/front/passthrough`.
+pub fn passthrough_json() -> Result<Value, Refusal> {
+    let list = k2_core::front443::load_passthrough_checked().map_err(|e| (500, "passthrough_unreadable", e))?;
+    Ok(json!({
+        "ok": true,
+        "passthrough": list,
+        "frontEnabled": k2_core::front443::load().enabled,
+        "routes": routes::current().json(),
+    }))
+}
+
+fn passthrough_host(raw: &str) -> Result<String, Refusal> {
+    let t = raw.trim().trim_end_matches('.').to_ascii_lowercase();
+    if t == k2_core::front443::PASSTHROUGH_DEFAULT {
+        return Ok(t);
+    }
+    client_hello::host_name(t.as_bytes()).ok_or_else(|| {
+        (400, "bad_host", format!("not a host name: {raw:?} (a name like shop.example.com, or '*' for every name K2 doesn't serve)"))
+    })
+}
+
+/// `POST /cli/front/passthrough/add {host, to, proxyV2?, label?}`. Owner/Admin.
+pub fn passthrough_add(host: &str, to: &str, proxy_v2: bool, label: &str, by: &str, daemon_port: u16) -> Result<Value, Refusal> {
+    let host = passthrough_host(host)?;
+    let addr: SocketAddr = to.trim().parse().map_err(|_| {
+        (400, "bad_upstream", format!("--to must be a loopback address and port, e.g. 127.0.0.1:9443 (got {to:?})"))
+    })?;
+    if !addr.ip().is_loopback() {
+        return Err((
+            400,
+            "upstream_not_loopback",
+            format!("{addr} is not on this box's loopback: move the server to 127.0.0.1:<port> first"),
+        ));
+    }
+    if addr.port() == 0 || addr.port() == daemon_port || k2_core::front443::RESERVED_BACKEND_PORTS.contains(&addr.port()) {
+        return Err((409, "upstream_port_reserved", format!("port {} is K2's own; pick another loopback port (e.g. 9443)", addr.port())));
+    }
+    if host != k2_core::front443::PASSTHROUGH_DEFAULT {
+        if let Some(why) = current_use(&host).filter(|w| !w.contains("is passed through")) {
+            return Err((409, "host_is_k2s", format!("{why}: K2 serves that name itself")));
+        }
+        if crate::apps::tls_door::reload().routed.iter().any(|h| h.eq_ignore_ascii_case(&host)) {
+            return Err((409, "host_is_k2s", format!("{host} is a custom App name K2 serves (k2 app domain rm first)")));
+        }
+    }
+    let label: String = label.chars().filter(|c| !c.is_control()).take(80).collect();
+    let mut list = k2_core::front443::load_passthrough_checked().map_err(|e| (500, "passthrough_unreadable", e))?;
+    list.retain(|p| p.host != host);
+    if list.len() >= k2_core::front443::MAX_PASSTHROUGH {
+        return Err((409, "too_many", format!("at most {} passthrough names", k2_core::front443::MAX_PASSTHROUGH)));
+    }
+    list.push(k2_core::front443::Passthrough {
+        host: host.clone(),
+        to: addr,
+        proxy_v2,
+        label,
+        added_at: chrono::Utc::now().timestamp(),
+        added_by: by.to_string(),
+    });
+    list.sort_by(|a, b| a.host.cmp(&b.host));
+    k2_core::front443::save_passthrough(&list).map_err(|e| (500, "config_write_failed", e))?;
+    let (table, warnings) = rebuild_if_enabled();
+    let enabled = k2_core::front443::load().enabled;
+    Ok(json!({
+        "ok": true,
+        "host": host,
+        "to": addr.to_string(),
+        "proxyV2": proxy_v2,
+        "passthrough": list,
+        "routes": table,
+        "warnings": warnings,
+        "next": if enabled { "routed now" } else { "the :443 front is off: these route once the owner runs k2 front enable" },
+    }))
+}
+
+/// `POST /cli/front/passthrough/rm {host}`. Owner/Admin.
+pub fn passthrough_rm(host: &str) -> Result<Value, Refusal> {
+    let host = passthrough_host(host)?;
+    let mut list = k2_core::front443::load_passthrough_checked().map_err(|e| (500, "passthrough_unreadable", e))?;
+    let before = list.len();
+    list.retain(|p| p.host != host);
+    if list.len() == before {
+        return Err((404, "not_found", format!("{host} is not a passthrough name (k2 front passthrough)")));
+    }
+    k2_core::front443::save_passthrough(&list).map_err(|e| (500, "config_write_failed", e))?;
+    let (table, warnings) = rebuild_if_enabled();
+    Ok(json!({"ok": true, "removed": host, "passthrough": list, "routes": table, "warnings": warnings}))
+}
+
+fn rebuild_if_enabled() -> (Value, Vec<String>) {
+    if !k2_core::front443::load().enabled {
+        return (routes::current().json(), Vec::new());
+    }
+    let (t, w) = rebuild();
+    (t.json(), w)
 }

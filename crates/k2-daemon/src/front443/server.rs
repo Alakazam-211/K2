@@ -54,6 +54,8 @@ pub struct Counters {
     pub stalwart: AtomicU64,
     /// Custom App names routed to the App TLS door (0.46.6).
     pub app: AtomicU64,
+    /// Owner passthrough names (0.46.6, `k2 front passthrough`).
+    pub passthrough: AtomicU64,
     pub unknown_sni: AtomicU64,
     pub no_sni: AtomicU64,
     pub not_tls: AtomicU64,
@@ -76,7 +78,7 @@ impl Counters {
             "overCap": g(&self.over_cap),
             "perIpRefused": g(&self.per_ip_refused),
             "live": g(&self.live),
-            "routed": {"turn": g(&self.turn), "caddy": g(&self.caddy), "stalwart": g(&self.stalwart), "app": g(&self.app)},
+            "routed": {"turn": g(&self.turn), "caddy": g(&self.caddy), "stalwart": g(&self.stalwart), "app": g(&self.app), "passthrough": g(&self.passthrough)},
             "closed": {
                 "unknownSni": g(&self.unknown_sni),
                 "noSni": g(&self.no_sni),
@@ -303,14 +305,24 @@ async fn serve(f: &Front, mut tcp: TcpStream, peer: SocketAddr, slot: HelloSlot)
     let Some((head, hello)) = hello else {
         return;
     };
-    let Some(sni) = hello.sni else {
-        Counters::bump(&f.counters.no_sni);
-        return;
-    };
     let table = (f.table)();
-    let Some(b) = table.lookup(&sni).cloned() else {
-        Counters::bump(&f.counters.unknown_sni);
-        return;
+    // No SNI: closed, unless the owner set a default passthrough (their own
+    // web server answers it, as it did when it held :443 itself).
+    let (sni, b) = match hello.sni {
+        Some(sni) => match table.lookup(&sni).cloned() {
+            Some(b) => (sni, b),
+            None => {
+                Counters::bump(&f.counters.unknown_sni);
+                return;
+            }
+        },
+        None => match table.default_route().cloned() {
+            Some(b) => ("(no SNI)".to_string(), b),
+            None => {
+                Counters::bump(&f.counters.no_sni);
+                return;
+            }
+        },
     };
     let client_ip = proxy_v2::canonical(peer.ip());
     if b.refuse_loopback_clients && client_ip.is_loopback() {
@@ -347,6 +359,7 @@ async fn serve(f: &Front, mut tcp: TcpStream, peer: SocketAddr, slot: HelloSlot)
         Kind::Caddy => Counters::bump(&f.counters.caddy),
         Kind::Stalwart => Counters::bump(&f.counters.stalwart),
         Kind::App => Counters::bump(&f.counters.app),
+        Kind::Passthrough => Counters::bump(&f.counters.passthrough),
     }
     let _ = tokio::io::copy_bidirectional(&mut tcp, &mut up).await;
 }

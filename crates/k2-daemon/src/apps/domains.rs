@@ -86,6 +86,9 @@ fn custom_json(d: &k2_core::domains::AppDomain) -> J {
     v["hostname"] = json!(d.hostname);
     v["records"] = J::Array(super::custom_domain_flow::records_to_set(d));
     v["next"] = json!(next_step(d));
+    // 0.46.6 (PRD §7): which path this box offers; behind a router or on a
+    // desktop, the Path B pointer; a web server that isn't K2's on :443.
+    v["setup"] = super::custom_domain_flow::setup_advice();
     v
 }
 

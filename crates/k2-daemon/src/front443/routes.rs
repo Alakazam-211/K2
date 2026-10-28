@@ -1,8 +1,10 @@
 //! The front's route table: exact server name → loopback backend. Built
 //! by the daemon from its own state (voice, Skin Direct, hosted mail; see
 //! `front443::rebuild`) and swapped in atomically, so a connection always
-//! routes against one whole table. No wildcard, no default route: an
-//! unknown name is closed.
+//! routes against one whole table. No wildcard. An unknown name is closed,
+//! unless the owner set a default passthrough (`k2 front passthrough add
+//! '*' --to 127.0.0.1:<port>`, 0.46.6): then it goes to that local web
+//! server, untouched.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -23,6 +25,11 @@ pub enum Kind {
     /// The daemon's App TLS door on 127.0.0.1:38474 (0.46.6): custom
     /// App names (`app.customer.com`), PROXY v2 always.
     App,
+    /// 0.46.6: a name the owner passes through to a web server they already
+    /// run on this box (`k2 front passthrough add`), on its own loopback
+    /// port. Never in a hand-off table (an older successor can't parse it;
+    /// the successor adds its own from the owner's file).
+    Passthrough,
 }
 
 impl Kind {
@@ -32,6 +39,7 @@ impl Kind {
             Kind::Caddy => "caddy",
             Kind::Stalwart => "stalwart",
             Kind::App => "app",
+            Kind::Passthrough => "passthrough",
         }
     }
 }
@@ -53,6 +61,9 @@ pub struct Backend {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteTable {
     hosts: BTreeMap<String, Backend>,
+    /// The owner's default passthrough (every name nothing else routes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<Backend>,
 }
 
 impl RouteTable {
@@ -76,7 +87,24 @@ impl RouteTable {
     }
 
     pub fn lookup(&self, sni: &str) -> Option<&Backend> {
-        self.hosts.get(sni)
+        self.hosts.get(sni).or(self.default.as_ref())
+    }
+
+    /// Set the default route (owner passthrough only). Refuses a
+    /// non-loopback backend.
+    pub fn set_default(&mut self, b: Backend) -> Result<(), String> {
+        if b.kind != Kind::Passthrough {
+            return Err("only an owner passthrough can be the default route".into());
+        }
+        if !b.addr.ip().is_loopback() {
+            return Err(format!("default: backend {} is not loopback", b.addr));
+        }
+        self.default = Some(b);
+        Ok(())
+    }
+
+    pub fn default_route(&self) -> Option<&Backend> {
+        self.default.as_ref()
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (&String, &Backend)> {
@@ -92,20 +120,20 @@ impl RouteTable {
     }
 
     pub fn json(&self) -> serde_json::Value {
-        serde_json::Value::Array(
-            self.hosts
-                .iter()
-                .map(|(h, b)| {
-                    serde_json::json!({
-                        "host": h,
-                        "kind": b.kind,
-                        "backend": b.addr.to_string(),
-                        "proxyV2": b.proxy,
-                        "refuseLoopbackClients": b.refuse_loopback_clients,
-                    })
-                })
-                .collect(),
-        )
+        let row = |h: &str, b: &Backend| {
+            serde_json::json!({
+                "host": h,
+                "kind": b.kind,
+                "backend": b.addr.to_string(),
+                "proxyV2": b.proxy,
+                "refuseLoopbackClients": b.refuse_loopback_clients,
+            })
+        };
+        let mut v: Vec<serde_json::Value> = self.hosts.iter().map(|(h, b)| row(h, b)).collect();
+        if let Some(b) = &self.default {
+            v.push(row(k2_core::front443::PASSTHROUGH_DEFAULT, b));
+        }
+        serde_json::Value::Array(v)
     }
 }
 
@@ -135,6 +163,9 @@ pub fn fixed_backend(kind: Kind) -> Backend {
         Kind::Caddy => Backend { kind, addr: lo(k2_core::front443::CADDY_FRONT_PORT), proxy: false, refuse_loopback_clients: false },
         // The door reads PROXY v2 for the client address (CD-A9).
         Kind::App => Backend { kind, addr: lo(k2_core::front443::APP_DOOR_PORT), proxy: true, refuse_loopback_clients: false },
+        // Owner passthrough routes carry their own address; this one is a
+        // placeholder that no route ever equals (port 0).
+        Kind::Passthrough => Backend { kind, addr: lo(0), proxy: false, refuse_loopback_clients: false },
     }
 }
 
@@ -142,7 +173,10 @@ impl RouteTable {
     /// The table without `kind`'s routes (a hand-off to a successor that
     /// doesn't know that kind).
     pub fn without_kind(&self, kind: Kind) -> RouteTable {
-        RouteTable { hosts: self.hosts.iter().filter(|(_, b)| b.kind != kind).map(|(h, b)| (h.clone(), b.clone())).collect() }
+        RouteTable {
+            hosts: self.hosts.iter().filter(|(_, b)| b.kind != kind).map(|(h, b)| (h.clone(), b.clone())).collect(),
+            default: self.default.clone().filter(|b| b.kind != kind),
+        }
     }
 }
 
@@ -155,6 +189,9 @@ impl RouteTable {
     pub fn fixed_backends_only(&self) -> RouteTable {
         let mut t = RouteTable::default();
         for (h, b) in &self.hosts {
+            if b.kind == Kind::Passthrough {
+                continue;
+            }
             let f = fixed_backend(b.kind);
             let same = b.addr == f.addr
                 && b.refuse_loopback_clients == f.refuse_loopback_clients

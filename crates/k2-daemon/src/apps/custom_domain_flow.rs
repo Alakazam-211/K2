@@ -124,6 +124,16 @@ pub fn box_ips() -> Vec<IpAddr> {
     if let Some(v) = TEST_BOX_IPS.with(|c| c.borrow().clone()) {
         return v;
     }
+    let egress = egress_ipv4();
+    let local = crate::mail::cert_names::box_addrs_local(egress.as_deref());
+    let mut out: Vec<IpAddr> = local.v4.into_iter().map(IpAddr::V4).collect();
+    out.extend(local.v6.into_iter().map(IpAddr::V6));
+    out
+}
+
+/// The IPv4 this box reaches the internet from (cached for an hour;
+/// `None` under air-gap or when the lookup failed).
+pub fn egress_ipv4() -> Option<String> {
     static CACHE: OnceLock<Mutex<Option<(i64, Option<String>)>>> = OnceLock::new();
     let c = CACHE.get_or_init(|| Mutex::new(None));
     let egress = {
@@ -142,10 +152,107 @@ pub fn box_ips() -> Vec<IpAddr> {
             }
         }
     };
-    let local = crate::mail::cert_names::box_addrs_local(egress.as_deref());
-    let mut out: Vec<IpAddr> = local.v4.into_iter().map(IpAddr::V4).collect();
-    out.extend(local.v6.into_iter().map(IpAddr::V6));
-    out
+    egress
+}
+
+/// Pure (PA-A11): is the box behind a router? The egress IPv4 not on any
+/// interface = NAT (`true`); on one = `false`; unknown egress = `None`.
+pub fn nat_verdict(egress: Option<&str>, local_v4: &[std::net::Ipv4Addr]) -> Option<bool> {
+    let e: std::net::Ipv4Addr = egress?.trim().parse().ok()?;
+    Some(!local_v4.contains(&e))
+}
+
+/// This box: behind a home or office router? (`None` = can't tell:
+/// air-gap, or the egress lookup failed; then no Path B wording.)
+pub fn behind_nat() -> Option<bool> {
+    // Tests never touch the network: unset is "can't tell".
+    #[cfg(test)]
+    return TEST_NAT.with(|c| *c.borrow()).unwrap_or(None);
+    #[cfg(not(test))]
+    {
+        let (v4, _) = crate::mail::cert_names::local_interface_addrs();
+        nat_verdict(egress_ipv4().as_deref(), &v4)
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_NAT: std::cell::RefCell<Option<Option<bool>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Test seam: the NAT verdict.
+#[cfg(test)]
+pub(crate) fn set_test_nat(v: Option<Option<bool>>) {
+    TEST_NAT.with(|c| *c.borrow_mut() = v);
+}
+
+/// The Path B pointer for a box behind a router (PRD §7).
+pub const NAT_WORDING: &str = "This server is on a home or office connection. Pointing your domain here sends visitors \
+to your network directly and shows its address. Use K2 Connect instead (Pro, coming in 0.46.7): your domain points at \
+K2's relays and your address stays hidden.";
+/// The Path B pointer for a Mac or Windows computer (PRD §7).
+pub const DESKTOP_WORDING: &str = "Your own domain on this computer comes with K2 Connect in 0.46.7.";
+
+/// Pure: which path this box offers and what K2 says (PRD §7). `holder`:
+/// the :443 holder's JSON when the front is off (`front443::port443_holder`).
+pub fn advice_for(linux: bool, nat: Option<bool>, front_enabled: bool, holder: Option<&J>) -> J {
+    if !linux {
+        return json!({"path": "b", "pathA": false, "records": "none", "message": DESKTOP_WORDING});
+    }
+    if nat == Some(true) {
+        return json!({
+            "path": "b",
+            "pathA": true,
+            "behindNat": true,
+            "records": "advanced",
+            "message": NAT_WORDING,
+            "advanced": "Advanced: I've forwarded port 443 to this server: use the records below.",
+        });
+    }
+    if !front_enabled {
+        if let Some(h) = holder.filter(|h| h["holder"] == "foreign") {
+            return json!({
+                "path": "a",
+                "pathA": true,
+                "behindNat": nat,
+                "records": "shown",
+                "port443": h,
+                "message": h["message"],
+            });
+        }
+        return json!({
+            "path": "a",
+            "pathA": true,
+            "behindNat": nat,
+            "records": "shown",
+            "message": "Turn on the :443 front first: the owner runs k2 front enable (an agent's request is held for the owner).",
+        });
+    }
+    json!({"path": "a", "pathA": true, "behindNat": nat, "records": "shown", "message": J::Null})
+}
+
+/// [`advice_for`] for this box, cached 30 s (the :443 check may run
+/// `systemctl`).
+pub fn setup_advice() -> J {
+    // Tests: Linux wording, no :443 probe, no cache.
+    #[cfg(test)]
+    return advice_for(true, behind_nat(), k2_core::front443::load().enabled, None);
+    #[cfg(not(test))]
+    {
+        static CACHE: OnceLock<Mutex<Option<(i64, J)>>> = OnceLock::new();
+        let c = CACHE.get_or_init(|| Mutex::new(None));
+        let mut g = c.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some((at, v)) = g.as_ref() {
+            if now() - at < 30 {
+                return v.clone();
+            }
+        }
+        let front_enabled = k2_core::front443::load().enabled;
+        let holder = (cfg!(target_os = "linux") && !front_enabled).then(crate::front443::port443_holder);
+        let v = advice_for(cfg!(target_os = "linux"), behind_nat(), front_enabled, holder.as_ref());
+        *g = Some((now(), v.clone()));
+        v
+    }
 }
 
 /// Cloudflare's proxy ranges (a proxied, "orange cloud" record hides the
@@ -599,6 +706,11 @@ pub fn remove_txt(d: &AppDomain, binding: &k2_core::domains::DomainBinding) -> R
 /// The DNS records the person sets for path (a): the A/AAAA at this box
 /// and the TXT proof (DNS-only).
 pub fn records_to_set(d: &AppDomain) -> Vec<J> {
+    // A Mac or Windows computer gets no Path A records (front443 is
+    // Linux-only; PRD §7).
+    if !cfg!(target_os = "linux") && !cfg!(test) {
+        return Vec::new();
+    }
     let (txt_name, txt_value) = d.txt();
     let mut out: Vec<J> = Vec::new();
     for ip in box_ips() {

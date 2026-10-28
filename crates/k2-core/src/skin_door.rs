@@ -638,6 +638,16 @@ pub fn front_routes() -> Option<FrontCaddy> {
     st.front.clone()
 }
 
+/// Where the live Skin Caddy listens beside its loopback door (`:443`,
+/// `0.0.0.0:38472` for Direct's fallback, `127.0.0.1:38473` behind the
+/// front, `127.0.0.1:38472` for connect mode); `None` when no Caddy of ours
+/// runs. Read by the public-ports view (0.46.6).
+pub fn live_listen() -> Option<String> {
+    let g = live().lock();
+    let st = g.as_ref()?;
+    pid_alive(st.pid).then(|| st.listen.clone())
+}
+
 /// PATH-only. Do not bundle Caddy; do not search brew prefixes off PATH.
 pub fn resolve_caddy() -> Result<PathBuf, String> {
     which_in_path("caddy").ok_or_else(|| CADDY_MISSING.to_string())

@@ -355,7 +355,15 @@ pub struct TempHome {
 impl TempHome {
     /// A temp home under the system temp dir.
     pub fn new() -> Self {
-        Self::at(unique_temp_path("test-home"))
+        // The path reads `$TMPDIR` (std::env::temp_dir), so it is made under
+        // the env lock: picked before it, it could take another test's
+        // TMPDIR while that test held the lock (vault::spawn's short
+        // `/tmp/k2t-…` socket dir), leaving this HOME outside the temp dir
+        // once TMPDIR was restored (and inside a folder that test deletes).
+        // folder_trust then judged the home "not isolated" and skipped the
+        // gate (soak 2026-10-27, k2-daemon shuffled seed 5).
+        let lock = lock();
+        Self::at_locked(lock, unique_temp_path("test-home"))
     }
 
     /// A temp home with a SHORT path (`/tmp/k2t-<8 hex>`), for tests that
@@ -374,8 +382,12 @@ impl TempHome {
         Self::new()
     }
 
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn at(home: PathBuf) -> Self {
-        let lock = lock();
+        Self::at_locked(lock(), home)
+    }
+
+    fn at_locked(lock: EnvLock, home: PathBuf) -> Self {
         std::fs::create_dir_all(home.join(".k2")).expect("create temp HOME/.k2");
         let prev = std::env::var_os("HOME");
         std::env::set_var("HOME", &home);
@@ -528,6 +540,9 @@ fn write_executable_unix(path: &Path, contents: &str) {
 pub struct AgentShim {
     dir: PathBuf,
     _var: EnvVar,
+    /// Taken before the shim dir's path is made from `$TMPDIR` (see
+    /// [`TempHome::new`]); dropped last.
+    _lock: EnvLock,
 }
 
 impl AgentShim {
@@ -539,6 +554,7 @@ impl AgentShim {
     /// Install shims whose script body (after `#!/bin/sh`) is `body`.
     pub fn with_body(body: &str) -> Self {
         use crate::terminal::agent_spawn_guard::{AGENT_CLIS, SHIM_DIR_ENV};
+        let lock = lock();
         let dir = unique_temp_path("agent-shim");
         std::fs::create_dir_all(&dir).expect("create agent shim dir");
         for name in AGENT_CLIS {
@@ -553,7 +569,7 @@ impl AgentShim {
             None => dir.clone().into_os_string(),
         };
         let var = EnvVar::set(SHIM_DIR_ENV, list);
-        Self { dir, _var: var }
+        Self { dir, _var: var, _lock: lock }
     }
 
     /// The shim dir (holds one executable per agent CLI name).
@@ -1237,6 +1253,32 @@ mod tests {
             assert_eq!(std::env::var(KEY).unwrap(), "a");
         }
         assert_eq!(std::env::var_os(KEY), None);
+    }
+
+    /// Soak 2026-10-27 (k2-daemon seed 5): a TempHome made while another
+    /// test held the env lock with its own TMPDIR took that TMPDIR, so its
+    /// HOME ended up outside the temp dir once TMPDIR was restored. The
+    /// path is made under the lock now.
+    #[test]
+    fn temp_home_never_takes_another_tests_tmpdir() {
+        let held = lock();
+        let other = unique_temp_path("other-tmpdir");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        let tmpdir = EnvVar::set("TMPDIR", &other);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let t = std::thread::spawn(move || {
+            let h = TempHome::new();
+            tx.send((h.path().to_path_buf(), std::env::temp_dir())).expect("send");
+        });
+        // Let the other thread reach TempHome::new while TMPDIR is ours.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        drop(tmpdir);
+        drop(held);
+        let (home, tmp_then) = rx.recv().expect("the other thread's home");
+        t.join().expect("join");
+        let _ = std::fs::remove_dir_all(&other);
+        assert!(!home.starts_with(&other), "took another test's TMPDIR: {}", home.display());
+        assert!(home.starts_with(&tmp_then), "{} is outside the temp dir {}", home.display(), tmp_then.display());
     }
 
     #[test]

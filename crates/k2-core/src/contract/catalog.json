@@ -4795,6 +4795,7 @@
       "exposure": [
         "garden-local"
       ],
+      "phone": "door",
       "reach": "local",
       "effect": "read",
       "kind": "call",
@@ -4962,6 +4963,7 @@
       "exposure": [
         "garden-local"
       ],
+      "phone": "door",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -5089,6 +5091,7 @@
       "exposure": [
         "garden-local"
       ],
+      "phone": "door",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -5721,6 +5724,7 @@
       "exposure": [
         "widget"
       ],
+      "phone": "later",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -5824,6 +5828,7 @@
       "exposure": [
         "widget"
       ],
+      "phone": "later",
       "reach": "local",
       "effect": "read",
       "kind": "event",
@@ -17941,6 +17946,7 @@
         "app",
         "garden-local"
       ],
+      "phone": "door",
       "reach": "portable",
       "effect": "read",
       "kind": "call",

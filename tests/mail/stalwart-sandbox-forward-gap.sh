@@ -19,7 +19,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PROBE="$HERE/stalwart-forward-gap-probe.py"
+# STALWART_PROBE: another probe script in this folder (default: the forwarding gap).
+PROBE="$HERE/${STALWART_PROBE:-stalwart-forward-gap-probe.py}"
 [ "$#" -ge 1 ] || { echo "usage: $0 <stalwart version>..." >&2; exit 2; }
 
 sha_for() {

@@ -146,13 +146,41 @@ const PROVIDERS: &[ProviderResume] = &[
 /// `codex -c x=y` → `codex`.
 fn command_basename(command: &str) -> &str {
     let first = command.split_whitespace().next().unwrap_or("");
-    first.rsplit('/').next().unwrap_or(first)
+    let base = first.rsplit('/').next().unwrap_or(first);
+    if cfg!(windows) {
+        windows_program_name(base)
+    } else {
+        base
+    }
+}
+
+/// The program name in a Windows path: after the last '\' or '/', without
+/// a quote around it or a program extension (`codex.cmd` → `codex`).
+fn windows_program_name(path: &str) -> &str {
+    let path = path.trim_matches('"');
+    let base = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    for ext in [".exe", ".cmd", ".bat", ".com", ".ps1"] {
+        let cut = base.len().saturating_sub(ext.len());
+        if cut > 0 && base.get(cut..).is_some_and(|tail| tail.eq_ignore_ascii_case(ext)) {
+            return &base[..cut];
+        }
+    }
+    base
 }
 
 /// Resolve an adapter from a spawnable COMMAND (first token, basename
 /// match so path-qualified binaries count). `None` = unknown provider;
 /// callers must degrade to a fresh bare spawn (Slice-2 gate parity).
 pub fn provider_resume_for_command(command: &str) -> Option<&'static ProviderResume> {
+    // Windows: a saved command is usually a full path that may hold spaces
+    // (`C:\Program Files\nodejs\codex.cmd`), uses '\', and names the
+    // program with its extension. Try the whole command as that path first.
+    if cfg!(windows) {
+        let name = windows_program_name(command.trim());
+        if let Some(p) = PROVIDERS.iter().find(|p| p.command == name) {
+            return Some(p);
+        }
+    }
     let name = command_basename(command);
     if name.is_empty() {
         return None;
@@ -750,6 +778,21 @@ pub fn defer_adopt_fresh_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn windows_program_names_lose_the_folder_quotes_and_extension() {
+        assert_eq!(windows_program_name(r"C:\Users\a\AppData\Roaming\npm\codex.cmd"), "codex");
+        assert_eq!(windows_program_name(r#""C:\Program Files\nodejs\claude.EXE""#), "claude");
+        assert_eq!(windows_program_name(r"C:\tools/grok.exe"), "grok");
+        assert_eq!(windows_program_name("gemini"), "gemini");
+        assert_eq!(windows_program_name(".exe"), ".exe", "an extension alone is a name");
+        assert_eq!(windows_program_name("é.exé"), "é.exé", "never splits a character");
+        if cfg!(windows) {
+            for cmd in [r"C:\Program Files\nodejs\codex.cmd", r"C:\Users\a\.local\bin\claude.exe", "codex.cmd --yolo"] {
+                assert!(provider_resume_for_command(cmd).is_some(), "{cmd}");
+            }
+        }
+    }
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

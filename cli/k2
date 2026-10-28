@@ -1305,8 +1305,11 @@ _cli_skip_uds() {
 #   owner-only routes refuse with 403 rather than elevate).
 # Credentials and bodies ride curl config on stdin (_k2_curl), never argv.
 # Status 000 = the daemon did not answer.
+# Each request may take up to 60 s; a caller whose route blocks longer
+# (k2 sim boot/install/wait) sets _K2_SEND_MAX_TIME for that one call.
 cli_send_json() {
     local method="$1" path="$2" payload="${3:-}"
+    local mt="${_K2_SEND_MAX_TIME:-60}"
     local sock out="" _K2_CFG=""
     sock="$(_hook_sock)"
     if ! _cli_skip_uds && [ -n "$sock" ] && [ -S "$sock" ] && [ -n "${SCOPED_TOKEN:-}" ]; then
@@ -1314,11 +1317,11 @@ cli_send_json() {
         if [ "$method" = "GET" ]; then
             [ -n "$payload" ] && _k2_cfg_add data "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -G --unix-socket "$sock" "http://localhost${path}" \
-                --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null)" || out=""
+                --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null)" || out=""
         else
             _k2_cfg_add data-raw "$payload"
             out="$(_k2_curl "$_K2_CFG" -s -X POST --unix-socket "$sock" "http://localhost${path}" \
-                --connect-timeout 5 --max-time 60 -H "Content-Type: application/json" \
+                --connect-timeout 5 --max-time "$mt" -H "Content-Type: application/json" \
                 -w $'\n%{http_code}' 2>/dev/null)" || out=""
         fi
         if [ -n "$out" ] && [[ "$out" != *"not served on cell socket"* ]] && [[ "$out" != *$'\n000' ]]; then
@@ -1332,11 +1335,11 @@ cli_send_json() {
         _k2_cfg_add data-urlencode "token=${TOKEN}"
         [ -n "$payload" ] && _k2_cfg_add data "$payload"
         out="$(_k2_curl "$_K2_CFG" -s -G "${BASE_URL}${path}" \
-            --connect-timeout 5 --max-time 60 -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
+            --connect-timeout 5 --max-time "$mt" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     else
         _k2_cfg_add url "${BASE_URL}${path}?token=$(urlencode "$TOKEN")"
         _k2_cfg_add data-raw "$payload"
-        out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time 60 \
+        out="$(_k2_curl "$_K2_CFG" -s -X POST --connect-timeout 5 --max-time "$mt" \
             -H "Content-Type: application/json" -w $'\n%{http_code}' 2>/dev/null || printf '\n000'; printf x)"
     fi
     out="${out%x}"
@@ -72058,7 +72061,9 @@ _sim_boot() {
         esac
     done
     case "$platform" in ""|android|ios) ;; *) _sim_die usage "--platform is android or ios, not $platform" ;; esac
-    _sim_call POST /cli/sim/boot "$(_sim_body "s:platform=$platform" "s:device=$device" "b:noTab=$notab")"
+    # The daemon answers when the device runs: up to 240 s of boot (plus a
+    # first-use system image), so allow 330 s.
+    _K2_SEND_MAX_TIME=330 _sim_call POST /cli/sim/boot "$(_sim_body "s:platform=$platform" "s:device=$device" "b:noTab=$notab")"
     if [ "$_SIM_JSON" = "1" ]; then printf '%s\n' "$_SIM_BODY"; return 0; fi
     printf '%s' "$_SIM_BODY" | python3 -c '
 import json, sys
@@ -72110,7 +72115,8 @@ _sim_install() {
     local p="${_SIM_ARGS[0]}"
     [ -e "$p" ] || _sim_die not_found "no such file: $p (build the app in your terminal first)"
     p="$(cd "$(dirname "$p")" && pwd)/$(basename "$p")"
-    _sim_call POST /cli/sim/install "$(_sim_body "s:path=$p")"
+    # A large app can take minutes to push and install.
+    _K2_SEND_MAX_TIME=330 _sim_call POST /cli/sim/install "$(_sim_body "s:path=$p")"
     _sim_print line "Installed $(basename "$p")"
 }
 
@@ -72309,7 +72315,8 @@ _sim_wait() {
     done
     ms="$(_sim_ms "$timeout")" || _sim_die usage "--timeout is a duration like 10s or 2m"
     [ "$ms" -le 120000 ] || _sim_die usage "--timeout is at most 2m (wait again if you must)"
-    _sim_call POST /cli/sim/wait "$(_sim_body "s:for=$for_" "n:timeoutMs=$ms")"
+    # The daemon holds the request up to --timeout (2 m at most); allow 30 s more.
+    _K2_SEND_MAX_TIME=$(( ms / 1000 + 30 )) _sim_call POST /cli/sim/wait "$(_sim_body "s:for=$for_" "n:timeoutMs=$ms")"
     _sim_print line "ok wait"
 }
 

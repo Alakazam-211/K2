@@ -73,6 +73,8 @@ PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
     k2 app domain add <app-id> app.example.com
   First the owner or an Admin runs k2 front enable and k2 domain add
   <apex>; then DNS records at your DNS host. Steps: k2 app domain --help.
+  A name your own web server serves (not K2's front) counts once added
+  with --external: k2 app domain add <app-id> <host> --external.
   K2 reads them at every start, so a changed binding reaches the App on
   its next deploy or restart (k2 app restart <app-id>). No public URL
   (a local-only App, no K2 Connect subdomain, no custom domain): neither

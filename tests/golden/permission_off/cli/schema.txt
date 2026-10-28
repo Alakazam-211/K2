@@ -1949,11 +1949,12 @@ exit: 0
     },
     {
       "name": "domain name add",
-      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--json]",
+      "usage": "k2 domain name add <hostname> [--role mail|publish|direct|other|app:<name>] [--external] [--json]",
       "description": "Add a hostname under an attached apex. dns_manage (same as k2 cert issue). Apex add stays owner.",
       "args": [{"name": "hostname", "required": true}],
       "flags": [
-        {"name": "--role", "arg": "mail|publish|direct|other|app:<name>", "description": "Role (default other). app:<name> binds the hostname to that App or published service: it gets it in K2_APP_ORIGIN/K2_APP_ORIGINS on its next start."},
+        {"name": "--role", "arg": "mail|publish|direct|other|app:<name>", "description": "Role (default other). app:<name> binds the hostname to that App or published service: it is in K2_APP_ORIGIN/K2_APP_ORIGINS from its next start once K2 serves it (live), or with --external."},
+        {"name": "--external", "arg": null, "description": "With --role app:<name>: your own web server serves this name, not K2's front; an origin of the App from its next start (k2 app domain --help)."},
         {"name": "--json", "arg": null, "description": "JSON response."}
       ]
     },

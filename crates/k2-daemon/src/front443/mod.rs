@@ -784,7 +784,8 @@ pub fn foreign_443_message(units: &[String]) -> String {
          Ways to fix it: (1) move that server to a loopback port, e.g. 127.0.0.1:9443 (it keeps its own sites and \
          certificates), then run k2 front enable and k2 front passthrough add <its host> --to 127.0.0.1:9443 (or '*' \
          for every name K2 doesn't serve): its sites keep working and K2 serves your App names; (2) keep it and have it \
-         proxy the App's name to the App yourself (the name stays external); or (3) use K2 Connect for this name \
+         proxy the App's name to the App yourself, and add the name with k2 app domain add <app-id> <name> \
+         --external so the App takes it as its origin; or (3) use K2 Connect for this name \
          (path b, coming in 0.46.7). K2 never takes :443 from another server."
     )
 }

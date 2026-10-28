@@ -152,8 +152,10 @@ pub fn extract_login_path(stdout: &str) -> Option<String> {
     }
 }
 
-/// Windows: capture User + Machine `Path` values and merge them
-/// (User first, matching how interactive shells compose PATH). Prefer
+/// Windows: capture the Machine and User `Path` values and merge them
+/// Machine first, as Windows builds every process's PATH (so a program in
+/// both, like the Store's `python.exe` stub in the User PATH's WindowsApps
+/// and a real Python in Program Files, resolves as in a new terminal). Prefer
 /// PowerShell with a 5s timeout (mirrors Unix login-shell capture);
 /// on failure return `None` so [`augmented_path`] keeps the inherited
 /// PATH and known fallback dirs only.
@@ -165,15 +167,12 @@ fn capture_login_shell_path() -> Option<String> {
 
     // Single PowerShell invocation reads both User and Machine Path
     // environment values from the registry-backed Environment providers
-    // and joins them with `;` (User first). `-NoProfile` keeps startup
-    // cheap; we only need the stored Path values, not profile hooks.
+    // as two lines (Machine, then User); `windows_process_path` joins
+    // them. `-NoProfile` keeps startup cheap; we only need the stored
+    // Path values, not profile hooks.
     let script = r#"
-$user = [Environment]::GetEnvironmentVariable('Path','User')
-$machine = [Environment]::GetEnvironmentVariable('Path','Machine')
-$parts = @()
-if ($user) { $parts += $user }
-if ($machine) { $parts += $machine }
-Write-Output ($parts -join ';')
+Write-Output ([string][Environment]::GetEnvironmentVariable('Path','Machine'))
+Write-Output ([string][Environment]::GetEnvironmentVariable('Path','User'))
 "#;
 
     let (tx, rx) = mpsc::channel();
@@ -181,7 +180,11 @@ Write-Output ($parts -join ';')
         // Prefer `pwsh` (PowerShell 7+) then fall back to Windows PowerShell 5.
         let shells: &[&str] = &["pwsh", "powershell"];
         for shell in shells {
+            use std::os::windows::process::CommandExt;
+            // No console window flashes up from the windowless daemon.
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             let out = Command::new(shell)
+                .creation_flags(CREATE_NO_WINDOW)
                 .args([
                     "-NoProfile",
                     "-NonInteractive",
@@ -216,12 +219,28 @@ Write-Output ($parts -join ';')
         return None;
     }
 
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let text = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut lines = text.lines();
+    let machine = lines.next().unwrap_or("");
+    let user = lines.next().unwrap_or("");
+    let path = windows_process_path(machine, user);
     if path.is_empty() {
         None
     } else {
         Some(path)
     }
+}
+
+/// The PATH Windows gives a new process: the Machine value, then the
+/// User value (either may be empty).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn windows_process_path(machine: &str, user: &str) -> String {
+    [machine.trim().trim_end_matches(';'), user.trim().trim_end_matches(';')]
+        .iter()
+        .filter(|s| !s.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -516,6 +535,21 @@ mod tests {
         let (k, v) = env_path_entry(&env).unwrap();
         assert_eq!(k, "Path");
         assert_eq!(v, r"C:\Windows\System32");
+    }
+
+    #[test]
+    fn windows_process_path_is_machine_then_user() {
+        let p = windows_process_path(
+            r"C:\Program Files\Python312\;C:\Windows\system32",
+            r"C:\Users\a\AppData\Local\Microsoft\WindowsApps;",
+        );
+        assert_eq!(
+            p,
+            r"C:\Program Files\Python312\;C:\Windows\system32;C:\Users\a\AppData\Local\Microsoft\WindowsApps"
+        );
+        assert_eq!(windows_process_path("", r"C:\u"), r"C:\u");
+        assert_eq!(windows_process_path(r"C:\m", "  "), r"C:\m");
+        assert_eq!(windows_process_path("", ""), "");
     }
 
     /// Pure merge with semicolon-shaped synthetic strings — documents

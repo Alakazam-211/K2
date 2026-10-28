@@ -1047,11 +1047,13 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // there and what to ask their human for. update/rollback are NOT
         // here (owner/admin steps).
         "/cli/root-helper/status",
-        // `k2 workspace swap-canonical`: the handler classifies the
-        // passport like the sidecar routes. An agent may swap only its
-        // own workspace's pinned chat, stamped as itself (not the owner);
-        // a shell tab passport is a human and may swap any workspace.
+        // `k2 workspace swap-canonical` and `k2 agent harness` (0.46.6):
+        // the handlers classify the passport like the sidecar routes. A
+        // shell tab passport is a person and may move any workspace's
+        // pinned chat; an agent passport never moves one (its own gets
+        // `harness_needs_person`, a permission card when cards are on).
         "/cli/workspace/swap-canonical",
+        "/cli/agent/harness",
         // Skin roster GET + manage mutations (`k2 skin` / `k2 skin-token`).
         // Exact paths only — never prefix `/cli/skin/` (front-door / hydra
         // stay owner even when the Agent-tab toggle is ON). POST mutate is
@@ -2468,6 +2470,8 @@ mod tests {
         assert!(is_agent_verb("/cli/awareness/publish"));
         // The swap handler scopes an agent passport to its own workspace.
         assert!(is_agent_verb("/cli/workspace/swap-canonical"));
+        // `k2 agent harness`: the handler refuses an agent with a card.
+        assert!(is_agent_verb("/cli/agent/harness"));
         // C2: workspace-addressed terminal read is peer-gated agent verb.
         assert!(
             is_agent_verb("/cli/terminal/read"),

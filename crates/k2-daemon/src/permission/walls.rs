@@ -102,7 +102,7 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 33] = [
+pub(crate) const V1_ACTIONS: [&str; 34] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -143,6 +143,8 @@ pub(crate) const V1_ACTIONS: [&str; 33] = [
     "vault.move-approve",
     // 0.46.6 (Rosson 2026-10-28): open Sew as its owner, for the owner.
     "sew.owner-handoff",
+    // 0.46.6 (Rosson): move the agent's own pinned chat to another harness.
+    "agent.harness-switch",
 ];
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
@@ -176,6 +178,16 @@ pub(crate) const ROWS: &[Row] = &[
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
+    // `k2 agent harness` / `k2 workspace swap-canonical` on the agent's own
+    // workspace (0.46.6): the refusal carries the normalized harness.
+    Row {
+        params: &[("harness", &[ParamFrom::Response("/error/harness"), ParamFrom::Body("/harness")])],
+        ..row(ask("agent.harness-switch", Floor::Admin), code(403, "harness_needs_person"), "/cli/agent/harness", POST)
+    },
+    Row {
+        params: &[("harness", &[ParamFrom::Response("/error/harness"), ParamFrom::Body("/provider")])],
+        ..row(ask("agent.harness-switch", Floor::Admin), code(403, "harness_needs_person"), "/cli/workspace/swap-canonical", POST)
+    },
     // ── mobile devices (0.46.6) ────────────────────────────────────────
     row(ask("sim.use", Floor::Admin), code(403, "sim_switch_off"), "/cli/sim/", ANY),
     // ── Apps ───────────────────────────────────────────────────────────
@@ -728,6 +740,9 @@ mod tests {
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
             // Mobile dev (0.46.6): `k2 sim boot` with "Allow mobile devices" off.
             (403, "POST", "/cli/sim/boot", vec![], Some(json!({})), json!({"error":{"code":"sim_switch_off","hint":"x"},"code":"sim_switch_off"}), "sim.use"),
+            // 0.46.6: an agent moving its own pinned chat (both doors).
+            (403, "POST", "/cli/agent/harness", vec![], Some(json!({"workspace":"sales","harness":"Claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"switched":false}), "agent.harness-switch"),
+            (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"swapped":false}), "agent.harness-switch"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -777,6 +792,20 @@ mod tests {
         // Odd characters are single-quoted.
         let p = teach_of(403, "POST", "/cli/workspace/msg", &[("workspace", "a b'c")], None, json!({"error":{"code":"not_connected"}})).unwrap();
         assert_eq!(p["command"], "k2 permission request connections.add to='a b'\\''c' --why \"<what you need it for>\"");
+
+        // 0.46.6: the harness comes from the refusal (normalized), not the
+        // agent's spelling in the request.
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/agent/harness",
+            &[],
+            Some(json!({"workspace":"sales","harness":"Claude"})),
+            json!({"error":{"code":"harness_needs_person","harness":"claude"}}),
+        )
+        .unwrap();
+        assert_eq!(p["command"], "k2 permission request agent.harness-switch harness=claude --why \"<what you need it for>\"");
+        assert_eq!(p["approvers"], "owner or admin");
     }
 
     /// `sources.approve` teaches the source the agent tried (`name`) and
@@ -920,7 +949,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 33);
+        assert_eq!(V1_ACTIONS.len(), 34);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

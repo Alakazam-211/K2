@@ -3069,6 +3069,62 @@ async fn handle_one_request(
             super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
                 .await;
         }
+        // POST /cli/agent/harness — `k2 agent harness <workspace> <harness>`
+        // (0.46.6): move a pinned chat to another harness. Body
+        // {workspace, harness, mode?, notes?, dryRun?}. Classified like
+        // swap-canonical; an agent passport is refused with
+        // `harness_needs_person` (taught as a permission card).
+        crate::agent_harness::ROUTE => {
+            if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                crate::agent_harness::ROUTE,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            if matches!(
+                caller,
+                crate::sidecar_routes::Caller::WrongCredential
+                    | crate::sidecar_routes::Caller::Invalid
+            ) {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                let r = crate::agent_harness::handle(&[], &caller, ingress.as_str());
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = match super::http::read_post_body_capped(
+                &mut *stream,
+                &mut buf,
+                crate::agent_harness::MAX_BODY,
+            )
+            .await
+            {
+                Ok(b) => b,
+                Err(refused) => {
+                    super::http::refuse_body_too_large(
+                        &mut *stream,
+                        &refused,
+                        "413 Payload Too Large",
+                        "application/json",
+                        r#"{"error":{"code":"body_too_large","hint":"agent harness bodies are at most 256 KiB"},"switched":false}"#,
+                    )
+                    .await;
+                    return DispatchOutcome::Done;
+                }
+            };
+            let ingress_label = ingress.as_str().to_string();
+            let resp = tokio::task::spawn_blocking(move || {
+                crate::agent_harness::handle(&body_bytes, &caller, &ingress_label)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, resp.status, resp.content_type, &resp.body)
+                .await;
+        }
         // POST /cli/companion/set-password — Phase 2 Unit 1.
         // Body: `{"password": "..."}`. Hashes argon2id, stores in
         // macOS Keychain (preferred) or settings.json (fallback),

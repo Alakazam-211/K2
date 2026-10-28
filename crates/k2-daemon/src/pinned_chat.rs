@@ -697,7 +697,8 @@ fn handle_skin_ensure_pinned_chat_find_only(
 /// at 32,000 characters in k2-core; this covers them in any UTF-8.
 pub const SWAP_CANONICAL_MAX_BODY: usize = 256 * 1024;
 
-/// Handler for `POST /cli/workspace/swap-canonical`.
+/// Handler for `POST /cli/workspace/swap-canonical` (the older door of
+/// `k2 agent harness`, which is [`crate::agent_harness`]).
 ///
 /// Starts a never-chatted pinned session of `provider` and sends the
 /// handoff into that PTY. Does not resume the saved session. A handoff
@@ -707,9 +708,10 @@ pub const SWAP_CANONICAL_MAX_BODY: usize = 256 * 1024;
 /// - the owner token, a Connect login (its role already cleared the
 ///   route floor), or a passport from a plain shell tab (a human typing
 ///   in K2) may swap any workspace;
-/// - an agent passport may swap only its own workspace's pinned chat,
-///   and the handoff is stamped as coming from that agent, never from
-///   the owner;
+/// - an agent passport never swaps (0.46.6, Rosson): it would restart its
+///   own session. Its own workspace gets `harness_needs_person` (a
+///   permission card, `agent.harness-switch`, when cards are on); another
+///   workspace gets `other_workspace`. Nothing is written either way;
 /// - app passes, API keys, API cells, and bad tokens are refused before
 ///   anything is written.
 pub fn handle_swap_canonical(
@@ -722,8 +724,8 @@ pub fn handle_swap_canonical(
         // 0.46.0 stamp rule: the owner's linked username, else `owner`.
         Caller::Owner | Caller::Shell { .. } => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
         Caller::Login { username } => username.clone(),
-        // The passport's projects.id; the send path stamps its handle.
-        Caller::Agent(agent) => agent.project_id.clone(),
+        // Refused below, after the project is known.
+        Caller::Agent(_) => String::new(),
         Caller::WrongCredential => {
             return swap_refused(
                 "403 Forbidden",
@@ -760,17 +762,20 @@ pub fn handle_swap_canonical(
     if req.project.trim().is_empty() {
         return crate::cli_response::CliResponse::bad_request("project required");
     }
-    // An agent swaps only its own pinned chat. Checked before the
-    // handoff is written, so nothing lands in another workspace.
+    // An agent never swaps. Checked before the handoff is written, so
+    // nothing lands in any workspace.
     if let Caller::Agent(agent) = caller {
         match lookup_project_id(req.project.trim()) {
-            Some(id) if id == agent.project_id => {}
+            Some(id) if id == agent.project_id => {
+                swap_audit(caller, "refused:needs_person", ingress);
+                return crate::agent_harness::needs_person(&id, req.provider.trim());
+            }
             Some(_) => {
                 swap_audit(caller, "refused:other_workspace", ingress);
                 return swap_refused(
                     "403 Forbidden",
                     "other_workspace",
-                    "an agent can swap only its own workspace's pinned chat; the owner can run this from a terminal outside K2",
+                    "an agent can't move another workspace's pinned chat; a person runs `k2 agent harness <workspace> <harness>` from a terminal outside K2",
                 );
             }
             None => {
@@ -781,67 +786,70 @@ pub fn handle_swap_canonical(
             }
         }
     }
-    let prep = match k2_core::workspace::canonical_swap::prepare_canonical_swap(
-        req.project.trim(),
-        req.provider.trim(),
-        if req.mode.trim().is_empty() {
-            "recent"
-        } else {
-            req.mode.trim()
-        },
-        &req.notes,
-    ) {
-        Ok(prep) => prep,
-        Err(err) => return crate::cli_response::CliResponse::bad_request(err),
-    };
+    let mode = if req.mode.trim().is_empty() { "recent" } else { req.mode.trim() };
+    match run_swap(req.project.trim(), req.provider.trim(), mode, &req.notes, &from) {
+        Ok(mut done) => {
+            swap_audit(caller, &format!("swapped:{}", done["provider"].as_str().unwrap_or("")), ingress);
+            done["swapped"] = serde_json::Value::Bool(true);
+            crate::cli_response::CliResponse::ok_json(done.to_string())
+        }
+        Err(refused) => refused,
+    }
+}
 
-    let ensured = match ensure_pinned_chat_fresh(&prep.project_path, &prep.target_provider) {
-        Ok(out) => out,
-        Err(err) => return swap_failed(&prep.handoff_path, err),
-    };
+/// The swap itself, shared by `swap-canonical` and `k2 agent harness`
+/// (callers check who may run it first): write the handoff, start a
+/// never-chatted pinned session of `provider` (which repoints
+/// `workspace_sessions` to it, so heartbeats, Threads and messages
+/// follow), and send the handoff into it stamped `from`.
+///
+/// `Ok` is the result object without its `swapped` / `switched` flag.
+/// `Err` is the 400 to send: an unknown harness, an unregistered project,
+/// or a spawn that failed or did not come up fresh (the handoff file
+/// stays on disk and the body names it).
+pub(crate) fn run_swap(
+    project_path: &str,
+    provider: &str,
+    mode: &str,
+    notes: &str,
+    from: &str,
+) -> Result<serde_json::Value, crate::cli_response::CliResponse> {
+    let prep = k2_core::workspace::canonical_swap::prepare_canonical_swap(project_path, provider, mode, notes)
+        .map_err(crate::cli_response::CliResponse::bad_request)?;
+
+    let ensured = ensure_pinned_chat_fresh(&prep.project_path, &prep.target_provider)
+        .map_err(|err| swap_failed(&prep.handoff_path, err))?;
     if ensured.reused || !ensured.fresh_spawn {
-        return swap_failed(
-            &prep.handoff_path,
-            "canonical chat was reused instead of swapped",
-        );
+        return Err(swap_failed(&prep.handoff_path, "canonical chat was reused instead of swapped"));
     }
     if argv_still_resumes(&ensured.args, &prep.from_session_id) {
-        return swap_failed(
-            &prep.handoff_path,
-            "fresh spawn still names the previous session",
-        );
+        return Err(swap_failed(&prep.handoff_path, "fresh spawn still names the previous session"));
     }
 
-    swap_audit(caller, &format!("swapped:{}", prep.target_provider), ingress);
-    let sent =
-        crate::workspace_msg::send_message_to_session(&ensured.session_id, &from, &prep.message);
+    let sent = crate::workspace_msg::send_message_to_session(&ensured.session_id, from, &prep.message);
     log_debug!(
-        "[daemon/pinned-chat] swap-canonical provider={} from={} session={} delivered={} handoff={}",
+        "[daemon/pinned-chat] swap provider={} from={} session={} delivered={} handoff={}",
         prep.target_provider,
         prep.from_provider,
         ensured.session_id,
         sent.success,
         prep.handoff_path,
     );
-    crate::cli_response::CliResponse::ok_json(
-        serde_json::json!({
-            "swapped": true,
-            "provider": prep.target_provider,
-            "fromProvider": prep.from_provider,
-            "fromSessionId": prep.from_session_id,
-            "sessionId": ensured.session_id,
-            "claudeSessionId": ensured.claude_session_id,
-            "freshSpawn": ensured.fresh_spawn,
-            "reused": ensured.reused,
-            "pendingSessionDiscovery": ensured.pending_session_discovery,
-            "handoffPath": prep.handoff_path,
-            "seedError": prep.seed_error,
-            "messageDelivered": sent.success,
-            "messageReason": sent.reason,
-            "messageHint": sent.hint,
-        })
-        .to_string(),
-    )
+    Ok(serde_json::json!({
+        "provider": prep.target_provider,
+        "fromProvider": prep.from_provider,
+        "fromSessionId": prep.from_session_id,
+        "sessionId": ensured.session_id,
+        "claudeSessionId": ensured.claude_session_id,
+        "freshSpawn": ensured.fresh_spawn,
+        "reused": ensured.reused,
+        "pendingSessionDiscovery": ensured.pending_session_discovery,
+        "handoffPath": prep.handoff_path,
+        "seedError": prep.seed_error,
+        "messageDelivered": sent.success,
+        "messageReason": sent.reason,
+        "messageHint": sent.hint,
+    }))
 }
 
 fn swap_refused(
@@ -1108,17 +1116,22 @@ mod tests {
     }
 
     #[test]
-    fn swap_canonical_agent_passes_the_gate_for_its_own_workspace() {
-        let _home = crate::test_support::TempHome::new();
-        let own_path = "/nonexistent/k2-swap-own-ws";
-        let caller = agent_of(&register_project("own-ws", own_path));
-        // An unknown harness stops the request after the gate and
-        // before any spawn, so this proves the gate let it through.
-        let body = serde_json::json!({ "project": own_path, "provider": "aider" }).to_string();
+    fn swap_canonical_agent_never_swaps_its_own_workspace() {
+        // 0.46.6: swapping restarts the agent's own session, so a person
+        // does it (`harness_needs_person`; a card when cards are on).
+        let home = crate::test_support::TempHome::new();
+        let own = home.path().join("own-ws");
+        std::fs::create_dir_all(&own).unwrap();
+        let own_path = own.to_string_lossy().to_string();
+        let caller = agent_of(&register_project("own-ws", &own_path));
+        let body = serde_json::json!({ "project": own_path, "provider": "claude" }).to_string();
         let result = handle_swap_canonical(body.as_bytes(), &caller, "test");
-        assert_eq!(result.status, "400 Bad Request", "got: {}", result.body);
-        assert!(result.body.contains("unknown harness"), "got: {}", result.body);
-        assert!(!result.body.contains("other_workspace"), "got: {}", result.body);
+        assert_eq!(result.status, "403 Forbidden", "got: {}", result.body);
+        let v: serde_json::Value = serde_json::from_str(&result.body).expect("json");
+        assert_eq!(v["error"]["code"], "harness_needs_person", "got: {v}");
+        assert_eq!(v["error"]["harness"], "claude", "got: {v}");
+        assert_eq!(v["swapped"], false, "got: {v}");
+        assert!(!own.join(".k2").join("handoffs").exists(), "no handoff is written for a refused swap");
     }
 
     #[test]

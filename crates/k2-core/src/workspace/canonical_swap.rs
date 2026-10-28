@@ -117,13 +117,24 @@ pub fn prepare_canonical_swap(
     })
 }
 
+/// The harnesses a pinned chat can move to, in the order help text lists
+/// them (`k2 agent harness`, the `agent.harness-switch` card's choices).
+pub const KNOWN_HARNESSES: [&str; 7] = ["claude", "codex", "grok", "gemini", "cursor", "pi", "hermes"];
+
+/// A harness name, a binary (`cursor-agent`), a path or a preset command
+/// (`grok --always-approve`) to its provider key (`claude`, `grok`, …).
+/// `Err` names the known harnesses.
+pub fn normalize_harness(raw: &str) -> Result<&'static str, String> {
+    normalize_target(raw)
+}
+
 fn normalize_target(raw: &str) -> Result<&'static str, String> {
     let token = raw.trim().split_whitespace().next().unwrap_or("");
     let base = token.rsplit(['/', '\\']).next().unwrap_or(token);
     let lower = base.to_ascii_lowercase();
     if lower.is_empty() {
         return Err(
-            "provider required (claude, grok, cursor, gemini, pi, codex, or hermes)".to_string(),
+            "harness required (claude, codex, grok, gemini, cursor, pi, or hermes)".to_string(),
         );
     }
     if let Some(adapter) = provider_resume_for_provider(&lower) {
@@ -133,7 +144,7 @@ fn normalize_target(raw: &str) -> Result<&'static str, String> {
         return Ok(adapter.provider);
     }
     Err(format!(
-        "unknown harness: {raw} (expected claude, grok, cursor, gemini, pi, codex, or hermes)"
+        "unknown harness: {raw} (expected claude, codex, grok, gemini, cursor, pi, or hermes)"
     ))
 }
 

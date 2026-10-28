@@ -128,6 +128,9 @@ pub const ROUTES: &[Route] = &[
     // agent:identity in the room) or the owner / a Connect login, the same
     // floor as set-handle and set-agent-display-name.
     post("/cli/agent/handle", Member),
+    // `k2 agent harness` (0.46.6): moves a pinned chat. A person at the
+    // Admin floor; an agent passport gets `harness_needs_person` (a card).
+    post("/cli/agent/harness", Admin),
     both("/cli/agent/identity", Member),
     get("/cli/agent/list", Member),
     post("/cli/agent/reply", Member),

@@ -329,4 +329,95 @@ grep -q '"doc-approval"' "$audit" || fail "no doc-approval line in $audit"
 if grep -q 'for the owner\|agent line\|# Plan' "$audit"; then fail "doc content leaked into the audit: $audit"; fi
 ok "share, unshare and approval are audited, with no doc content"
 
+echo "== k2 doc (the CLI, K3) =="
+K2_CLI="$PROJECT_ROOT/cli/k2"
+# cli <owner|agent> <cwd> <args…> → OUT, ERR, RC. Never a TTY on stdin
+# (stdin: $CLI_IN when set).
+CLI_IN=""
+cli() {
+    local who="$1" cwd="$2"; shift 2
+    local -a envs=(HOME="$SB" K2_HOST=127.0.0.1 K2_PORT="$DPORT")
+    if [ "$who" = "agent" ]; then
+        envs+=(K2_HOOK_TOKEN="$PASSPORT" K2_HOOK_SOCK="$SOCK" K2_PROJECT_PATH="$B")
+    fi
+    set +e
+    OUT="$(cd "$cwd" && printf '%s' "$CLI_IN" | env "${envs[@]}" "$K2_CLI" "$@" 2>"$WORK/cli.err")"
+    RC=$?
+    set -e
+    ERR="$(cat "$WORK/cli.err")"
+    CLI_IN=""
+}
+want_rc() { [ "$RC" = "$1" ] || fail "$2: exit $RC (want $1)
+stdout: $OUT
+stderr: $ERR"; }
+has() { [[ "$1" == *"$2"* ]] || fail "$3: missing $(printf %q "$2") in:
+$1"; }
+
+set +e
+help_out="$(env HOME="$SB" "$K2_CLI" doc --help 2>&1)"; help_rc=$?
+set -e
+[ "$help_rc" = 0 ] || fail "k2 doc --help exit $help_rc: $help_out"
+has "$help_out" "k2 doc <verb> [flags] <file.md>" "help"
+ok "k2 doc --help needs no daemon"
+eval "$(sed -n '/^# BEGIN_CLI_TOOL_POLICY/,/^# END_CLI_TOOL_POLICY/p' "$K2_CLI")"
+[ "$(_cli_tool_id_for_verb doc)" = "docs" ] || fail "doc -> tool id docs"
+[ "$(_cli_tool_default_mode docs)" = "id" ] || fail "docs mode id"
+_cli_tool_is_locked docs || fail "docs locked"
+ok "doc is an id + locked tool (the passport inside K2, never the owner token)"
+
+cli owner "$WORK" doc cat -w "$A" notes/plan.md
+want_rc 0 "owner cat"
+[ "$OUT" = "$(cat "$A/notes/plan.md")" ] || fail "owner cat: '$OUT' is not the file"
+ok "owner: k2 doc cat -w <ws> <rel> prints the doc"
+cli owner "$A/notes" doc grep -n ONE plan.md
+want_rc 0 "owner grep (relative to cwd)"
+has "$OUT" ":ONE" "owner grep"
+lacks_fence="$ERR"
+[[ "$lacks_fence" != *"BEGIN"* ]] || fail "no fence outside a K2 terminal by default: $ERR"
+ok "owner: a path relative to where you stand; no fence outside K2"
+
+cli agent "$B" doc grep -n home home.md
+want_rc 0 "agent grep"
+has "$OUT" "home" "agent grep"
+has "$ERR" "k2 doc" "agent fence"
+has "$ERR" "BEGIN home.md" "agent fence"
+ok "agent: read output is fenced on stderr inside a K2 terminal"
+cli agent "$B" doc grep -q nothing-like-this home.md
+want_rc 1 "grep no match"
+ok "grep's 'no' is exit 1"
+cli agent "$B" doc sed -i 's/# B home/# B HOME/' home.md
+want_rc 0 "agent sed -i"
+has "$ERR" "as " "edit summary names the editor"
+for _ in $(seq 1 80); do grep -q '# B HOME' "$B/home.md" && break; sleep 0.1; done
+grep -q '# B HOME' "$B/home.md" || fail "sed -i never reached the file: $(cat "$B/home.md")"
+ok "agent: sed -i edits live and reaches the file"
+cli agent "$B" doc sed -i '1w /tmp/k2-doc-escape' home.md
+want_rc 2 "sed w refused"
+[ ! -e /tmp/k2-doc-escape ] || fail "sed w wrote a file"
+ok "sed's w command is refused, nothing applied (exit 2)"
+CLI_IN=$'appended by the CLI\n'
+cli agent "$B" doc append home.md
+want_rc 0 "append from stdin"
+cli agent "$B" doc tail -n 1 home.md
+want_rc 0 "tail"
+[ "$OUT" = "appended by the CLI" ] || fail "tail -n 1: '$OUT'"
+ok "append from stdin, tail -n 1"
+cli agent "$B" doc undo home.md
+want_rc 0 "undo"
+cli agent "$B" doc who home.md
+want_rc 0 "who"
+has "$OUT" "(agent)" "who lists the agent"
+ok "undo, who"
+cli agent "$B" doc cat -w "$A" notes/plan.md
+want_rc 3 "cross-workspace refused"
+has "$ERR" "doc_not_shared" "cross-workspace refused"
+ok "another workspace without a share: exit 3 doc_not_shared"
+cli agent "$B" doc cat no-such.md
+want_rc 4 "missing file"
+ok "no such file: exit 4"
+cli owner "$WORK" doc status
+want_rc 0 "pool status"
+has "$OUT" "disk sync on" "pool status"
+ok "k2 doc status (no path): the pool"
+
 echo "PASS ($pass checks)"

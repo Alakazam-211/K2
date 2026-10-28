@@ -96,9 +96,25 @@ pub struct Sender {
     pub created_at: i64,
     pub updated_at: i64,
     pub retired_at: Option<i64>,
+    /// N7: a send-only apex sender's mail-server account (Identity and
+    /// envelope MAIL FROM) on the bounce subdomain; `None` for the rest.
+    pub envelope_address: Option<String>,
 }
 
 impl Sender {
+    /// The envelope MAIL FROM and the mail-server Identity: the bounce
+    /// account for a send-only apex sender, else the address itself.
+    pub fn envelope(&self) -> &str {
+        self.envelope_address.as_deref().unwrap_or(&self.address)
+    }
+    /// The domain the mail-server account lives on.
+    pub fn envelope_domain(&self) -> &str {
+        self.envelope().rsplit_once('@').map(|(_, d)| d).unwrap_or(&self.domain)
+    }
+    /// Is this a send-only apex sender (N7)?
+    pub fn is_send_only(&self) -> bool {
+        self.envelope_address.is_some()
+    }
     pub fn is_system(&self) -> bool {
         self.owner_kind.as_deref() == Some(OWNER_SYSTEM)
     }
@@ -111,7 +127,7 @@ impl Sender {
 }
 
 const SENDER_COLS: &str = "id, address, domain, path, stalwart_account_id, relay_id, owner_kind, app_service_id, from_name, \
-     from_name_locked, reply_to_json, state, bounce_hints, last_sweep_at, created_at, updated_at, retired_at";
+     from_name_locked, reply_to_json, state, bounce_hints, last_sweep_at, created_at, updated_at, retired_at, envelope_address";
 
 fn map_sender(r: &rusqlite::Row) -> rusqlite::Result<Sender> {
     Ok(Sender {
@@ -132,6 +148,7 @@ fn map_sender(r: &rusqlite::Row) -> rusqlite::Result<Sender> {
         created_at: r.get(14)?,
         updated_at: r.get(15)?,
         retired_at: r.get(16)?,
+        envelope_address: r.get(17)?,
     })
 }
 
@@ -148,14 +165,16 @@ pub struct NewSender<'a> {
     pub reply_to: &'a [String],
     pub state: &'a str,
     pub now: i64,
+    /// N7: the bounce-subdomain account behind a send-only apex address.
+    pub envelope_address: Option<&'a str>,
 }
 
 pub fn insert_sender(conn: &Connection, s: &NewSender<'_>) -> Result<Sender, String> {
     let id = new_id("ens");
     conn.execute(
         "INSERT INTO email_senders (id, address, domain, path, stalwart_account_id, relay_id, owner_kind, app_service_id, \
-           from_name, from_name_locked, reply_to_json, state, created_at, updated_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8, ?9, ?10, ?11, ?11)",
+           from_name, from_name_locked, reply_to_json, state, created_at, updated_at, envelope_address) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL, ?7, ?8, ?9, ?10, ?11, ?11, ?12)",
         params![
             id,
             s.address,
@@ -167,7 +186,8 @@ pub fn insert_sender(conn: &Connection, s: &NewSender<'_>) -> Result<Sender, Str
             s.from_name_locked as i64,
             json_list(s.reply_to),
             s.state,
-            s.now
+            s.now,
+            s.envelope_address.map(|e| e.trim().to_ascii_lowercase())
         ],
     )
     .map_err(err("sender insert"))?;
@@ -241,7 +261,7 @@ pub fn app_sender(conn: &Connection, app: &str) -> Result<Option<Sender>, String
 /// Every live sender on `domain`.
 pub fn senders_on_domain(conn: &Connection, domain: &str) -> Result<Vec<Sender>, String> {
     let mut st = conn
-        .prepare(&format!("SELECT {SENDER_COLS} FROM email_senders WHERE domain = ?1 AND state <> 'retired'"))
+        .prepare(&format!("SELECT {SENDER_COLS} FROM email_senders WHERE (domain = ?1 OR envelope_address LIKE '%@' || ?1) AND state <> 'retired'"))
         .map_err(err("sender list"))?;
     let rows = st.query_map(params![domain.trim().to_ascii_lowercase()], map_sender).map_err(err("sender list"))?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(err("sender list"))
@@ -319,7 +339,7 @@ pub fn record_sweep(conn: &Connection, id: &str, dsns: i64, now: i64) -> Result<
 /// Is `domain` carrying a live sender (the E4 integrity fence)?
 pub fn domain_has_sender(conn: &Connection, domain: &str) -> Result<bool, String> {
     conn.query_row(
-        "SELECT COUNT(*) FROM email_senders WHERE domain = ?1 AND state <> 'retired'",
+        "SELECT COUNT(*) FROM email_senders WHERE (domain = ?1 OR envelope_address LIKE '%@' || ?1) AND state <> 'retired'",
         params![domain.trim().to_ascii_lowercase()],
         |r| r.get::<_, i64>(0),
     )
@@ -330,7 +350,7 @@ pub fn domain_has_sender(conn: &Connection, domain: &str) -> Result<bool, String
 /// Is `address` a sender's address, live or still reserved (E2)?
 pub fn is_reserved(conn: &Connection, address: &str) -> Result<bool, String> {
     conn.query_row(
-        "SELECT COUNT(*) FROM email_senders WHERE address = ?1",
+        "SELECT COUNT(*) FROM email_senders WHERE address = ?1 OR envelope_address = ?1",
         params![address.trim().to_ascii_lowercase()],
         |r| r.get::<_, i64>(0),
     )
@@ -944,6 +964,7 @@ mod tests {
                 reply_to: &[],
                 state: STATE_READY,
                 now,
+                envelope_address: None,
             },
         )
         .expect("insert")
@@ -970,6 +991,7 @@ mod tests {
                     reply_to: &[],
                     state: STATE_READY,
                     now: 1,
+                    envelope_address: None,
                 },
             )
             .is_err(),

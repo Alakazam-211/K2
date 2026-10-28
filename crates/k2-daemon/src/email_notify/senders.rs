@@ -31,6 +31,9 @@ pub struct AddArgs {
     pub name_locked: bool,
     pub reply_to: Vec<String>,
     pub relay: Option<String>,
+    /// N7: send from a bare domain whose mail lives elsewhere, through this
+    /// hosted bounce subdomain of it (e.g. `bounce.brand.com`).
+    pub via: Option<String>,
 }
 
 fn usage(h: impl Into<String>) -> Fail {
@@ -72,6 +75,10 @@ fn k2_side_free(conn: &rusqlite::Connection, address: &str) -> R<()> {
             fail(409, "exists", format!("{address} is already a sender ({})", s.id))
         });
     }
+    // N7: a send-only apex sender's bounce account is taken too.
+    if store::is_reserved(conn, address).map_err(db_fail)? {
+        return Err(fail(409, "exists", format!("{address} is already a sender's mail-server account (k2 notifications email sender list)")));
+    }
     if crate::mail::addresses::load_address(conn, address).is_some() {
         return Err(fail(
             409,
@@ -99,6 +106,12 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
         None => domain.clone(),
     };
     let reply_to = reply_to_list(&a.reply_to)?;
+    if let Some(via) = a.via.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if a.relay.as_deref().is_some_and(|r| !r.trim().is_empty()) {
+            return Err(usage("--via is for hosted mail; a relay sender sends from its own domain"));
+        }
+        return add_send_only(&address, &local, &domain, via, &name, a.name_locked, &reply_to, actor, now);
+    }
     let relay = match a.relay.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         Some(id) => {
             let db = k2_core::db::shared();
@@ -127,6 +140,7 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
                 reply_to: &reply_to,
                 state: store::STATE_NEEDS_TEST,
                 now,
+                envelope_address: None,
             },
         )
         .map_err(|e| if e.contains("UNIQUE") { fail(409, "exists", format!("{address} is already a sender")) } else { db_fail(e) })?;
@@ -185,6 +199,7 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
                 reply_to: &reply_to,
                 state: store::STATE_NEEDS_DMARC,
                 now,
+                envelope_address: None,
             },
         )
     };
@@ -228,6 +243,122 @@ pub fn add(a: &AddArgs, actor: &str, now: i64) -> R<J> {
         });
     }
     Ok(json!({ "ok": true, "sender": v }))
+}
+
+/// N7 (prd-email-notifications-part2-v1 §4 N7, vs-live EN-A8–EN-A11):
+/// `noreply@brand.com` while `brand.com`'s mail stays elsewhere. The apex
+/// is never added to the mail server (probe P4b: then the box refuses
+/// outsiders relaying to it, and its own mailboxes reach the apex by MX).
+/// The account, its Identity, the envelope MAIL FROM and the DKIM
+/// signature are `<local>@<via>`, a Verified hosted subdomain of the apex;
+/// K2 stamps the header From. DMARC passes on relaxed alignment only, so
+/// an apex with both `adkim=s` and `aspf=s` is refused (Rosson
+/// 2026-10-28). K2 never writes the apex's DMARC, MX or SPF.
+#[allow(clippy::too_many_arguments)]
+fn add_send_only(address: &str, local: &str, apex: &str, via: &str, name: &str, name_locked: bool, reply_to: &[String], actor: &str, now: i64) -> R<J> {
+    let via = via.trim().trim_end_matches('.').to_ascii_lowercase();
+    if !via.ends_with(&format!(".{apex}")) {
+        return Err(usage(format!("--via is a subdomain of {apex} (e.g. bounce.{apex}), so DMARC aligns")));
+    }
+    if !super::hosted_supported() {
+        return Err(fail(409, "no_mail_path", "sending from a bare domain needs hosted mail on this server"));
+    }
+    let envelope = format!("{local}@{via}");
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if crate::mail::domains::load_domain(&conn, apex).is_some() {
+            return Err(fail(
+                409,
+                "apex_hosted",
+                format!("{apex} is hosted here, so its senders don't need --via: k2 notifications email sender add {address}"),
+            ));
+        }
+        k2_side_free(&conn, address)?;
+        k2_side_free(&conn, &envelope)?;
+        crate::mail::domains::load_domain(&conn, &via).ok_or_else(|| {
+            fail(
+                409,
+                "domain_not_ready",
+                format!("{via} isn't a hosted domain here: k2 hostmail domain add {via}, publish its records (MX, SPF, DKIM), then k2 hostmail domain check {via}"),
+            )
+        })?
+    };
+    if row.status != "verified" {
+        return Err(fail(409, "domain_not_ready", format!("{via} isn't Verified yet (k2 hostmail domain check {via})")));
+    }
+    let Some(stw_domain) = row.stalwart_domain_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return Err(fail(409, "domain_not_ready", format!("{via} has no mail-server id; remove and re-add it")));
+    };
+    // Rosson's rule 4: a strict-on-both apex can't align: refuse before
+    // anything is created. No record yet is allowed (state needs_dmarc).
+    super::dmarc::forget(apex);
+    if let Ok(found) = super::dmarc::check(apex, now) {
+        if found.strict {
+            return Err(dmarc_strict(apex, &found.at));
+        }
+    }
+    let engine = super::engine::mail_engine()?;
+    if engine.address_taken(&envelope, stw_domain).map_err(|e| fail(502, "failed", format!("the mail server didn't answer: {e}")))? {
+        return Err(fail(409, "exists", format!("{envelope} is already an account, alias, list or catch-all on the mail server")));
+    }
+    let account = engine.create_sender_account(local, stw_domain).map_err(|e| fail(502, "failed", format!("the mail server refused the sender account: {e}")))?;
+    let inserted = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::insert_sender(
+            &conn,
+            &store::NewSender {
+                address,
+                domain: apex,
+                path: store::PATH_HOSTED,
+                stalwart_account_id: Some(&account),
+                relay_id: None,
+                from_name: name,
+                from_name_locked: name_locked,
+                reply_to,
+                state: store::STATE_NEEDS_DMARC,
+                now,
+                envelope_address: Some(&envelope),
+            },
+        )
+    };
+    let s = match inserted {
+        Ok(s) => s,
+        Err(e) => {
+            if let Err(r) = engine.retire_account(&account) {
+                k2_core::log_debug!("[email-notify] WARN send-only sender add rolled back but the account wasn't retired: {r}");
+            }
+            return Err(if e.contains("UNIQUE") { fail(409, "exists", format!("{address} is already a sender")) } else { db_fail(e) });
+        }
+    };
+    super::audit_line("email-sender-add", actor, &format!("sender={} path=hosted send_only=1", s.id));
+    let state = if super::dmarc::check(apex, now).is_ok() { store::STATE_READY } else { store::STATE_NEEDS_DMARC };
+    let s = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::set_sender_state(&conn, &s.id, state, now).map_err(db_fail)?;
+        store::get_sender(&conn, &s.id).map_err(db_fail)?.unwrap_or(s)
+    };
+    let mut v = sender_json(&s);
+    if state == store::STATE_NEEDS_DMARC {
+        v["next"] = json!(format!(
+            "publish a DMARC record at {apex}'s DNS (K2 never writes it), e.g. _dmarc.{apex} TXT \"v=DMARC1; p=none\" (adkim and aspf not both s), \
+             then k2 notifications email sender check {address}"
+        ));
+    }
+    Ok(json!({ "ok": true, "sender": v }))
+}
+
+fn dmarc_strict(apex: &str, at: &str) -> Fail {
+    fail(
+        409,
+        "dmarc_strict",
+        format!(
+            "{at} sets adkim=s and aspf=s, so mail signed and sent through a subdomain can never pass DMARC for {apex}. \
+             Relax one of them (adkim=r or aspf=r), or send from a subdomain of {apex} hosted here instead"
+        ),
+    )
 }
 
 /// Find a live sender by id or address.
@@ -343,20 +474,24 @@ pub fn ready(s: &Sender, now: i64) -> R<()> {
     if s.stalwart_account_id.as_deref().is_none_or(str::is_empty) {
         return Err(fail(409, "domain_not_ready", "the sender has no mail-server account; remove it and add it again"));
     }
+    // The hosted domain is the account's: the bounce subdomain for a
+    // send-only apex sender (N7), else the address's own.
+    let hosted = s.envelope_domain().to_string();
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        crate::mail::domains::load_domain(&conn, &s.domain)
+        crate::mail::domains::load_domain(&conn, &hosted)
     };
-    let Some(row) = row else { return Err(fail(409, "domain_not_ready", format!("{} isn't hosted here any more", s.domain))) };
+    let Some(row) = row else { return Err(fail(409, "domain_not_ready", format!("{hosted} isn't hosted here any more"))) };
     if row.status != "verified" {
-        return Err(fail(409, "domain_not_ready", format!("{} isn't Verified (k2 hostmail domain check {})", s.domain, s.domain)));
+        return Err(fail(409, "domain_not_ready", format!("{hosted} isn't Verified (k2 hostmail domain check {hosted})")));
     }
     #[cfg(not(test))]
     {
         // The domain's send mode (receive-only refuses; a relay route must
-        // resolve). Tests have no mail secrets store.
-        if let Err(e) = crate::mail::send::check_domain_send_mode(&crate::mail::secrets::FileSecretStore::default(), &s.address) {
+        // resolve). Tests have no mail secrets store. EN-A9: the envelope
+        // domain's mode governs.
+        if let Err(e) = crate::mail::send::check_domain_send_mode(&crate::mail::secrets::FileSecretStore::default(), s.envelope()) {
             let hint = match e {
                 crate::mail::send::SendError::SendMode(h) | crate::mail::send::SendError::Engine(h) => h,
                 _ => "the domain can't send".to_string(),
@@ -367,10 +502,14 @@ pub fn ready(s: &Sender, now: i64) -> R<()> {
     #[cfg(test)]
     {
         if row.send_mode == "receive-only" {
-            return Err(fail(409, "domain_not_ready", format!("domain '{}' is receive-only", s.domain)));
+            return Err(fail(409, "domain_not_ready", format!("domain '{hosted}' is receive-only")));
         }
     }
-    super::dmarc::check(&s.domain, now)?;
+    // DMARC is the From domain's (the apex for a send-only sender).
+    let found = super::dmarc::check(&s.domain, now)?;
+    if s.is_send_only() && found.strict {
+        return Err(dmarc_strict(&s.domain, &found.at));
+    }
     if s.state == store::STATE_NEEDS_DMARC {
         let db = k2_core::db::shared();
         let conn = db.lock();

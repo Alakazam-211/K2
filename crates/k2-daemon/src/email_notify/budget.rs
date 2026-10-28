@@ -71,7 +71,10 @@ fn check_one(conn: &rusqlite::Connection, b: &Bucket<'_>, what: &str, limit: i64
 /// Is `domain`'s sender (hosted: the domain's `verified_at`; relay: the
 /// sender's `created_at`) still warming up at `now`?
 pub fn warming_up(sender: &store::Sender, now: i64) -> bool {
-    let since = if sender.path == store::PATH_RELAY {
+    // A relay sender, and a send-only apex sender (N7: the From domain is
+    // new to this box whatever its bounce subdomain's age), warm up from
+    // the sender's own start.
+    let since = if sender.path == store::PATH_RELAY || sender.is_send_only() {
         Some(sender.created_at)
     } else {
         let db = k2_core::db::shared();

@@ -1978,3 +1978,52 @@ fn n6_report_parts_read_only_the_report_and_never_walk_into_a_returned_message()
     assert!(!parts[1].1.iter().any(|(_, b)| b == "b-inner"), "never inside the returned message");
     assert_eq!(engine::header_block(b"Message-ID: <a@b>\r\nX: y\r\n\r\nsecret body"), "Message-ID: <a@b>\nX: y");
 }
+
+// ── part 2, N7: send-only apex senders ───────────────────────────────
+
+fn add_via(addr: &str, via: &str) -> R<J> {
+    senders::add(&senders::AddArgs { address: addr.to_string(), name: Some("Brand".into()), via: Some(via.to_string()), ..Default::default() }, "owner", now())
+}
+
+#[test]
+fn n7_a_bare_domain_sends_through_its_hosted_bounce_subdomain_and_k2_stamps_the_from() {
+    let f = fx("n7send");
+    // brand.test's mail is elsewhere (not hosted here); notify.brand.test is.
+    let v = add_via("noreply@brand.test", DOMAIN).expect("added");
+    let s = senders::find_live(v["sender"]["id"].as_str().expect("id")).expect("live");
+    assert_eq!((s.address.as_str(), s.envelope(), s.domain.as_str()), ("noreply@brand.test", "noreply@notify.brand.test", "brand.test"));
+    assert_eq!(s.state, store::STATE_READY, "brand.test's p=reject is relaxed: it aligns");
+    assert_eq!(v["sender"]["envelope"], "noreply@notify.brand.test");
+    assert_eq!(f.engine.created.lock().unwrap().last().cloned(), Some(("noreply".to_string(), "stw-notify".to_string())), "the account is on the bounce subdomain");
+    // Both addresses are fenced from mailboxes and other senders.
+    assert!(fence::reserved("noreply@brand.test") && fence::reserved("noreply@notify.brand.test"));
+    assert_eq!(code(&senders::add(&senders::AddArgs { address: "noreply@notify.brand.test".into(), ..Default::default() }, "owner", now())), "exists");
+    // A send: the envelope is the bounce account, the header From the apex.
+    grant(&f.app, &s, store::SCOPE_ANY);
+    send::send(&app_caller(&f.app), &json!({"to": "c@x.test", "subject": "Hi", "text": "t"}), now()).expect("sent");
+    let m = f.engine.sent.lock().unwrap().last().cloned().expect("sent");
+    assert_eq!(m.from, "noreply@notify.brand.test", "Identity and MAIL FROM");
+    assert_eq!(m.email["from"][0]["email"], "noreply@brand.test", "the From K2 stamps");
+    // The domain carries a sender for the L10 parent-zone rule.
+    assert!(fence::domain_carries_sender(DOMAIN));
+}
+
+#[test]
+fn n7_strict_dmarc_on_both_a_hosted_apex_and_a_stray_via_are_refused() {
+    let f = fx("n7strict");
+    f.dns.set("_dmarc.brand.test", "v=DMARC1; p=reject; adkim=s; aspf=s");
+    let e = add_via("noreply@brand.test", DOMAIN).expect_err("strict");
+    assert_eq!((e.status, e.code), (409, "dmarc_strict"));
+    assert!(f.engine.created.lock().unwrap().is_empty(), "nothing created");
+    f.dns.set("_dmarc.brand.test", "v=DMARC1; p=reject; adkim=s");
+    let v = add_via("noreply@brand.test", DOMAIN).expect("one relaxed is enough");
+    // Turned strict later: the sender stops being ready.
+    f.dns.set("_dmarc.brand.test", "v=DMARC1; p=reject; adkim=s; aspf=s");
+    let r = senders::recheck(v["sender"]["id"].as_str().expect("id"), now()).expect("recheck");
+    assert_eq!(r["sender"]["notReady"]["code"], "dmarc_strict", "{r}");
+    // --via must be a subdomain of the address's domain, and a hosted apex doesn't need it.
+    assert_eq!(code(&add_via("a@brand.test", "bounce.other.test")), "usage");
+    assert_eq!(code(&add_via("b@notify.brand.test", "x.notify.brand.test")), "apex_hosted");
+    // The bounce subdomain must be hosted and Verified.
+    assert_eq!(code(&add_via("c@brand.test", "bounce.brand.test")), "domain_not_ready");
+}

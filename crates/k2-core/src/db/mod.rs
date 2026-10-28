@@ -1685,6 +1685,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // renumber freely on a slip (and edit the migration-order tests). The
         // store is `crate::email_outcomes`.
         ("0245_email_notify_outcomes", include_str!("../../drizzle_sql/0245_email_notify_outcomes.sql")),
+        // 0246 — a send-only apex sender's envelope account
+        // (prd-email-notifications-part2-v1 §4 N7, 0.46.6):
+        // `email_senders.envelope_address`. ADD COLUMN only; renumber freely
+        // on a slip (and edit the migration-order tests).
+        ("0246_email_sender_envelope", include_str!("../../drizzle_sql/0246_email_sender_envelope.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2348,7 +2353,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0245_email_notify_outcomes",
+            last_name, "0246_email_sender_envelope",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2442,6 +2447,8 @@ mod tests {
                 "0244_email_verified_addresses",
                 // 0.46.6: delivery outcomes, suppressions, pauses (email notifications part 2, N6).
                 "0245_email_notify_outcomes",
+                // 0.46.6: send-only apex senders (email notifications part 2, N7).
+                "0246_email_sender_envelope",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2543,6 +2550,8 @@ mod tests {
                 "0244_email_verified_addresses",
                 // 0.46.6: delivery outcomes, suppressions, pauses (email notifications part 2, N6).
                 "0245_email_notify_outcomes",
+                // 0.46.6: send-only apex senders (email notifications part 2, N7).
+                "0246_email_sender_envelope",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2770,7 +2779,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0245_email_notify_outcomes", "0245 (0.46.6) runs last");
+        assert_eq!(top, "0246_email_sender_envelope", "0246 (0.46.6) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2804,7 +2813,8 @@ mod tests {
                 "0242_app_custom_domains",
                 "0244_email_verified_addresses",
                 "0244_email_verified_addresses",
-                "0245_email_notify_outcomes"
+                "0245_email_notify_outcomes",
+                "0246_email_sender_envelope"
             ],
             "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244 then 0245)"
         );
@@ -3644,9 +3654,11 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0245 (delivery outcomes) and 0244 (verified addresses), 0.46.6,
-            // are the newest: their records go (their tables and indexes are
-            // IF NOT EXISTS).
+            // 0246 (sender envelope), 0245 (delivery outcomes) and 0244
+            // (verified addresses), 0.46.6, are the newest: their records go
+            // (their tables and indexes are IF NOT EXISTS; 0246's column
+            // re-add is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0246_email_sender_envelope'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0245_email_notify_outcomes'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0244_email_verified_addresses'", []).unwrap();
             // 0242 (App custom domains, 0.46.6) came before it: its record

@@ -310,6 +310,8 @@ pub fn sender_json(s: &k2_core::email_notify::Sender) -> J {
         "replyTo": s.reply_to,
         "state": s.state,
         "bounceHints": s.bounce_hints,
+        // N7: a send-only apex sender's bounce-subdomain account (null otherwise).
+        "envelope": s.envelope_address,
         "createdAt": s.created_at,
         "retiredAt": s.retired_at,
     })

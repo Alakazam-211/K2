@@ -9,7 +9,7 @@
 //! ```text
 //! GET  /cli/notifications/email                       status: switch, mail path, system sender, senders, relays, settings
 //! GET  /cli/notifications/email/senders               ?all=1 (retired too)
-//! POST /cli/notifications/email/sender/add            {address, name?, nameLocked?, replyTo?, relay?, confirmToken}   owner + confirm
+//! POST /cli/notifications/email/sender/add            {address, name?, nameLocked?, replyTo?, relay?, via?, confirmToken}   owner + confirm
 //! POST /cli/notifications/email/sender/set            {sender, name?, nameLocked?, replyTo?}
 //! POST /cli/notifications/email/sender/check          {sender}
 //! POST /cli/notifications/email/sender/rm             {sender}
@@ -205,6 +205,7 @@ fn sender_add(who: &Who, v: &J) -> Result<J, CliResponse> {
         name_locked: v.get("nameLocked").and_then(J::as_bool).unwrap_or(false),
         reply_to: str_list(v, "replyTo").map_err(|f| super::fail_response(&f))?,
         relay: s(v, "relay").map(str::to_string),
+        via: s(v, "via").map(str::to_string),
     };
     confirm(who, v, super::CONFIRM_SENDER, &address).map_err(|f| confirm_needed(f, super::CONFIRM_SENDER, &address))?;
     super::senders::add(&args, &actor(who), super::now()).map_err(|f| super::fail_response(&f))

@@ -13879,10 +13879,18 @@ ID / login / vault password), from a terminal outside K2.
 
   k2 notifications email [status] [--json]
   k2 notifications email sender add <address> [--name N] [--lock-name]
-                 [--reply-to <addr>]… [--relay <relay id>]
+                 [--reply-to <addr>]… [--relay <relay id> | --via <bounce subdomain>]
                                     A send-only account K2 creates (hosted
                                     mail, Linux) or an address on a relay. It
                                     is never a mailbox: no agent can read it.
+                                    --via: send as noreply@brand.com when
+                                    brand.com's mail lives elsewhere (Google,
+                                    Microsoft…). Host a subdomain here first
+                                    (k2 hostmail domain add bounce.brand.com,
+                                    then check it); bounces and the signature
+                                    use it, and K2 never changes brand.com's
+                                    DNS. brand.com needs a DMARC record whose
+                                    adkim and aspf aren't both s.
   k2 notifications email sender list [--all] [--json]
   k2 notifications email sender check <sender>   re-check DMARC and the domain
   k2 notifications email sender set <sender> [--name N] [--lock-name|--unlock-name] [--reply-to <addr>]…
@@ -13964,6 +13972,8 @@ if not s:
     print("no sender"); sys.exit(0)
 owner = s.get("owner") or "unassigned"
 print("%s  %s  %s  %s  %s (%s)" % (s.get("id"), s.get("address"), s.get("path"), s.get("state"), owner, s.get("fromName")))
+if s.get("envelope"):
+    print("  sends through %s (bounces and the signature use it; the From is %s)" % (s.get("envelope"), s.get("address")))
 nr = s.get("notReady")
 if nr:
     print("  not ready: %s: %s" % (nr.get("code"), nr.get("hint")))
@@ -14116,7 +14126,7 @@ cmd_notifications_sender() {
     [ $# -gt 0 ] && shift
     case "$verb" in
         add)
-            local addr="" name="" lock=0 relay=""
+            local addr="" name="" lock=0 relay="" via=""
             local rts=()
             while [ $# -gt 0 ]; do
                 case "$1" in
@@ -14124,13 +14134,14 @@ cmd_notifications_sender() {
                     --lock-name) lock=1; shift ;;
                     --reply-to) rts+=("${2:-}"); shift 2 ;;
                     --relay) relay="${2:-}"; shift 2 ;;
+                    --via) via="${2:-}"; shift 2 ;;
                     -*) echo "Unknown flag: $1" >&2; exit 2 ;;
                     *) addr="$1"; shift ;;
                 esac
             done
-            [ -n "$addr" ] || { echo "usage: k2 notifications email sender add <address> [--name N] [--lock-name] [--reply-to A]… [--relay ID]" >&2; exit 2; }
+            [ -n "$addr" ] || { echo "usage: k2 notifications email sender add <address> [--name N] [--lock-name] [--reply-to A]… [--relay ID | --via <bounce subdomain>]" >&2; exit 2; }
             local body
-            body="$(K2_EM_ADDR="$addr" K2_EM_NAME="$name" K2_EM_LOCK="$lock" K2_EM_RELAY="$relay" python3 -c '
+            body="$(K2_EM_ADDR="$addr" K2_EM_NAME="$name" K2_EM_LOCK="$lock" K2_EM_RELAY="$relay" K2_EM_VIA="$via" python3 -c '
 import json, os, sys
 e = os.environ
 b = {"address": e["K2_EM_ADDR"]}
@@ -14140,6 +14151,8 @@ if e.get("K2_EM_LOCK") == "1":
     b["nameLocked"] = True
 if e.get("K2_EM_RELAY"):
     b["relay"] = e["K2_EM_RELAY"]
+if e.get("K2_EM_VIA"):
+    b["via"] = e["K2_EM_VIA"]
 if sys.argv[1:]:
     b["replyTo"] = sys.argv[1:]
 print(json.dumps(b))' "${rts[@]}")"

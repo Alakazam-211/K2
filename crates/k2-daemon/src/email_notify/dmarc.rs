@@ -22,6 +22,10 @@ pub struct Found {
     pub at: String,
     /// `none` | `quarantine` | `reject`.
     pub policy: String,
+    /// N7 (Rosson 2026-10-28): both `adkim=s` and `aspf=s`. A send-only
+    /// apex sender can't align then (DKIM and SPF sit on the bounce
+    /// subdomain), so `sender add --via` refuses it (`dmarc_strict`).
+    pub strict: bool,
 }
 
 /// The result of a lookup.
@@ -50,6 +54,18 @@ pub fn parse(txt: &str) -> Option<String> {
     None
 }
 
+/// Does a valid DMARC record set strict alignment for BOTH DKIM and SPF
+/// (`adkim=s` and `aspf=s`; each defaults to relaxed)?
+pub fn strict_both(txt: &str) -> bool {
+    if parse(txt).is_none() {
+        return false;
+    }
+    let tag = |name: &str| {
+        txt.split(';').filter_map(|t| t.split_once('=')).find(|(k, _)| k.trim().eq_ignore_ascii_case(name)).map(|(_, v)| v.trim().to_ascii_lowercase())
+    };
+    tag("adkim").as_deref() == Some("s") && tag("aspf").as_deref() == Some("s")
+}
+
 /// Public suffixes with two labels K2 knows (enough to avoid treating
 /// `co.uk` as an organization).
 const TWO_LABEL_SUFFIXES: &[&str] = &["co.uk", "org.uk", "ac.uk", "gov.uk", "com.au", "net.au", "org.au", "co.nz", "co.jp", "com.br", "com.mx", "co.za", "co.in", "com.sg"];
@@ -66,9 +82,9 @@ pub fn org_domain(domain: &str) -> String {
     labels[labels.len().saturating_sub(keep)..].join(".")
 }
 
-fn lookup_one(r: &dyn DnsResolver, name: &str) -> Result<Option<String>, String> {
+fn lookup_one(r: &dyn DnsResolver, name: &str) -> Result<Option<(String, bool)>, String> {
     match r.txt(&format!("_dmarc.{name}")) {
-        Ok(records) => Ok(records.iter().map(|c| join_chunks(c)).find_map(|t| parse(&t))),
+        Ok(records) => Ok(records.iter().map(|c| join_chunks(c)).find_map(|t| parse(&t).map(|p| (p, strict_both(&t))))),
         Err(DnsError::NotFound) => Ok(None),
         Err(DnsError::Other(e)) => Err(e),
     }
@@ -77,13 +93,13 @@ fn lookup_one(r: &dyn DnsResolver, name: &str) -> Result<Option<String>, String>
 /// Look up `domain`'s DMARC (its own, else its organizational domain's).
 pub fn lookup(r: &dyn DnsResolver, domain: &str) -> Result<Dmarc, String> {
     let d = domain.trim().trim_end_matches('.').to_ascii_lowercase();
-    if let Some(p) = lookup_one(r, &d)? {
-        return Ok(Dmarc::Found(Found { at: format!("_dmarc.{d}"), policy: p }));
+    if let Some((p, strict)) = lookup_one(r, &d)? {
+        return Ok(Dmarc::Found(Found { at: format!("_dmarc.{d}"), policy: p, strict }));
     }
     let org = org_domain(&d);
     if org != d {
-        if let Some(p) = lookup_one(r, &org)? {
-            return Ok(Dmarc::Found(Found { at: format!("_dmarc.{org}"), policy: p }));
+        if let Some((p, strict)) = lookup_one(r, &org)? {
+            return Ok(Dmarc::Found(Found { at: format!("_dmarc.{org}"), policy: p, strict }));
         }
     }
     Ok(Dmarc::Missing)
@@ -198,6 +214,16 @@ mod tests {
         assert_eq!(parse("p=reject; v=DMARC1"), None, "v must come first");
         assert_eq!(parse("v=spf1 mx ~all"), None);
         assert_eq!(parse("v=DMARC1; p=maybe"), None);
+    }
+
+    #[test]
+    fn strict_alignment_needs_both_tags() {
+        assert!(strict_both("v=DMARC1; p=reject; adkim=s; aspf=s"));
+        assert!(strict_both("v=DMARC1;p=none;ASPF=S;ADKIM=s"));
+        assert!(!strict_both("v=DMARC1; p=reject; adkim=s"), "aspf defaults to relaxed");
+        assert!(!strict_both("v=DMARC1; p=reject; adkim=r; aspf=s"));
+        assert!(!strict_both("v=DMARC1; p=reject"));
+        assert!(!strict_both("adkim=s; aspf=s"), "not a DMARC record");
     }
 
     #[test]

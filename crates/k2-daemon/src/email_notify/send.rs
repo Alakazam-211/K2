@@ -304,7 +304,9 @@ pub fn deliver(
     engine
         .submit(&super::engine::HostedMail {
             account_id: account,
-            from: &s.address,
+            // The Identity and envelope MAIL FROM: the bounce account for a
+            // send-only apex sender (N7); the header From stays `s.address`.
+            from: s.envelope(),
             rcpt: envelope,
             email: compose::email_json(&m),
             params: compose::envelope_params(log_id),
@@ -770,7 +772,13 @@ impl crate::mail::submit::MailSubmit for HeldSubmit {
             return Err(SubmitError::Engine("email notifications are off on this server".into()));
         }
         super::senders::ready(&s, now).map_err(|f| SubmitError::Engine(f.hint))?;
-        let envelope = msg.all_recipients();
+        super::outcomes::refuse_if_paused(&s).map_err(|f| SubmitError::Engine(f.hint))?;
+        // N6: suppressions as they stand when the owner approves.
+        let (envelope, dropped) = super::outcomes::split_suppressed(&s, Some(&self.held.app), &msg.all_recipients());
+        super::outcomes::record_suppressed(&self.held.log_id, &s, &dropped, now);
+        if envelope.is_empty() {
+            return Err(SubmitError::Engine(super::outcomes::all_suppressed().hint));
+        }
         // An App's email.send (not K2's invite text) re-checks the scope the
         // App has now: narrowed to users after it was held, it doesn't leave.
         if row.purpose.is_none() {

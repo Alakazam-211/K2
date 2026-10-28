@@ -49,7 +49,8 @@ pub enum LaneKind {
     Android,
     /// iOS Simulator on a Mac daemon with Xcode.
     Ios,
-    /// iOS Simulator on a leased Mac compute node (later; not 0.46.6).
+    /// iOS Simulator on a leased Mac compute node (0.46.7,
+    /// `sim::ios_node`).
     IosNode,
 }
 
@@ -632,6 +633,57 @@ pub enum LaneError {
     Timeout { message: String },
     /// A tool failed. `message` is redacted, bounded tool output. 502.
     Tool { message: String },
+    /// A leased Mac node said no, or can't be used (the `ios-node` lane,
+    /// prd-ios-on-mac-node-0467-v1 §3.5). `reason` picks the code.
+    Node { reason: NodeReason, message: String },
+}
+
+/// Why the `ios-node` lane can't go on (§3.5's failure table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeReason {
+    /// No Mac node offers iPhones to this server (IR-11: the one code for
+    /// "iPhone needs a Mac"). 409, exit 3.
+    LaneUnavailable,
+    /// A ready node, but this workspace has no compute grant on it. 403, exit 3.
+    NotGranted,
+    /// Every ready node is busy, held, draining or low on memory or disk. 409, exit 2.
+    Busy,
+    /// The node's helper or protocol is older than this server's. 409, exit 3.
+    Outdated,
+    /// The node refused a command or an argument (its policy). 403.
+    Refused,
+    /// `open-url` to an address the Mac can't reach (this server's
+    /// localhost or LAN). 400.
+    UrlUnreachable,
+}
+
+impl NodeReason {
+    pub fn code(self) -> &'static str {
+        match self {
+            NodeReason::LaneUnavailable => "sim_lane_unavailable",
+            NodeReason::NotGranted => "sim_node_not_granted",
+            NodeReason::Busy => "sim_node_busy",
+            NodeReason::Outdated => "sim_node_outdated",
+            NodeReason::Refused => "sim_node_refused",
+            NodeReason::UrlUnreachable => "sim_url_unreachable",
+        }
+    }
+    pub fn http_status(self) -> u16 {
+        match self {
+            NodeReason::LaneUnavailable | NodeReason::Busy | NodeReason::Outdated => 409,
+            NodeReason::NotGranted | NodeReason::Refused => 403,
+            NodeReason::UrlUnreachable => 400,
+        }
+    }
+    /// The CLI's exit code: 2 held (try later), 3 needs a person.
+    pub fn exit(self) -> u8 {
+        match self {
+            NodeReason::Busy => 2,
+            NodeReason::LaneUnavailable | NodeReason::NotGranted | NodeReason::Outdated => 3,
+            NodeReason::Refused | NodeReason::UrlUnreachable => 1,
+        }
+    }
 }
 
 impl LaneError {
@@ -643,7 +695,8 @@ impl LaneError {
             | LaneError::Unsupported { message }
             | LaneError::Invalid { message }
             | LaneError::Timeout { message }
-            | LaneError::Tool { message } => message,
+            | LaneError::Tool { message }
+            | LaneError::Node { message, .. } => message,
         }
     }
 
@@ -656,6 +709,7 @@ impl LaneError {
             LaneError::Invalid { .. } => "sim_invalid",
             LaneError::Timeout { .. } => "sim_timeout",
             LaneError::Tool { .. } => "sim_tool_failed",
+            LaneError::Node { reason, .. } => reason.code(),
         }
     }
 
@@ -668,7 +722,12 @@ impl LaneError {
             LaneError::Invalid { .. } => 400,
             LaneError::Timeout { .. } => 504,
             LaneError::Tool { .. } => 502,
+            LaneError::Node { reason, .. } => reason.http_status(),
         }
+    }
+
+    pub fn node(reason: NodeReason, m: impl Into<String>) -> LaneError {
+        LaneError::Node { reason, message: m.into() }
     }
 
     pub fn tool(m: impl Into<String>) -> LaneError {

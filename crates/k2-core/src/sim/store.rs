@@ -93,10 +93,11 @@ pub fn all(conn: &Connection) -> rusqlite::Result<Vec<SimRow>> {
 }
 
 /// Rows that hold a slot against the box limit (booting / running /
-/// stopping), other than `except_project`.
+/// stopping), other than `except_project`. An iPhone on a Mac node runs
+/// on the node, not this box, so `ios-node` rows never count (IN-A4).
 pub fn count_occupying(conn: &Connection, except_project: Option<&str>) -> rusqlite::Result<u32> {
     conn.query_row(
-        "SELECT COUNT(*) FROM sim_sessions WHERE state IN ('booting','running','stopping') AND project_id IS NOT ?1",
+        "SELECT COUNT(*) FROM sim_sessions WHERE state IN ('booting','running','stopping') AND lane != 'ios-node' AND project_id IS NOT ?1",
         params![except_project],
         |r| r.get::<_, i64>(0),
     )

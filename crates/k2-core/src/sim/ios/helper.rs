@@ -438,9 +438,10 @@ impl HelloInfo {
     }
 }
 
-/// Shared between the reader thread and callers.
+/// Shared between the reader thread and callers. A helper on a Mac node
+/// (`sim::ios_node`) uses the same inbox over its stream channel.
 #[derive(Default)]
-struct Inbox {
+pub(crate) struct Inbox {
     pending: Mutex<HashMap<u64, mpsc::Sender<J>>>,
     frames: Mutex<Option<Arc<FrameSlot>>>,
     units: Arc<UnitQueue>,
@@ -455,10 +456,109 @@ struct Inbox {
     /// The newest `input_error` (a fire-and-forget input the helper
     /// refused), until a gesture's `up` takes it.
     input_error: Mutex<Option<SimError>>,
+    next_id: AtomicU64,
 }
 
 impl Inbox {
-    fn dispatch(&self, m: Message) {
+    /// A live inbox and the receiver that gets the helper's `ready` (or
+    /// why it never came). `cap`: the newest protocol to accept.
+    pub(crate) fn starting(cap: Option<u32>) -> (Arc<Inbox>, mpsc::Receiver<SimResult<J>>) {
+        let inbox = Arc::new(Inbox { cap, next_id: AtomicU64::new(1), ..Default::default() });
+        inbox.alive.store(true, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        *inbox.ready.lock().unwrap() = Some(tx);
+        (inbox, rx)
+    }
+
+    pub(crate) fn is_alive(&self) -> bool {
+        self.alive.load(Ordering::SeqCst)
+    }
+
+    /// `helper_gone` with why, when the helper stopped.
+    fn check_alive(&self) -> SimResult<()> {
+        if self.is_alive() {
+            return Ok(());
+        }
+        let why = self.gone_reason.lock().unwrap().clone().unwrap_or_else(|| "it exited".into());
+        Err(SimError::new("helper_gone", format!("the Simulator helper stopped ({why}); run k2 sim boot")))
+    }
+
+    /// One `nr` request (fix 3): `send` writes the line; no reply. A
+    /// refusal arrives as an `input_error` event.
+    pub(crate) fn notify(&self, op: &str, args: J, send: impl FnOnce(&[u8]) -> std::io::Result<()>) -> SimResult<()> {
+        self.check_alive()?;
+        send(nr_line(op, args).as_bytes()).map_err(|e| SimError::new("helper_gone", format!("cannot reach the Simulator helper: {e}")))
+    }
+
+    /// The newest fire-and-forget failure since the last take.
+    pub(crate) fn take_input_error(&self) -> Option<SimError> {
+        self.input_error.lock().unwrap().take()
+    }
+
+    /// The protocol the gate chose at `ready`.
+    pub(crate) fn protocol(&self) -> u32 {
+        self.protocol.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn set_gone(&self, why: String) {
+        *self.gone_reason.lock().unwrap() = Some(why);
+    }
+
+    pub(crate) fn set_frame_slot(&self, slot: Option<Arc<FrameSlot>>) {
+        let mut g = self.frames.lock().unwrap();
+        if let Some(old) = g.take() {
+            old.close();
+        }
+        *g = slot;
+    }
+
+    /// One request: `send` writes the JSON line; the reply comes back
+    /// through [`Self::dispatch`]. A reply with `ok:false` becomes a
+    /// `SimError` with the helper's code. `tail` explains an exit.
+    pub(crate) fn request(
+        &self,
+        op: &str,
+        mut args: J,
+        timeout: Duration,
+        send: impl FnOnce(&[u8]) -> std::io::Result<()>,
+        tail: impl FnOnce() -> String,
+    ) -> SimResult<J> {
+        self.check_alive()?;
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = mpsc::channel();
+        self.pending.lock().unwrap().insert(id, tx);
+        if !args.is_object() {
+            args = json!({});
+        }
+        args["id"] = json!(id);
+        args["op"] = json!(op);
+        let line = format!("{args}\n");
+        if let Err(e) = send(line.as_bytes()) {
+            self.pending.lock().unwrap().remove(&id);
+            return Err(SimError::new("helper_gone", format!("cannot reach the Simulator helper: {e}")));
+        }
+        let reply = match rx.recv_timeout(timeout) {
+            Ok(v) => v,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.pending.lock().unwrap().remove(&id);
+                return Err(SimError::new("helper_timeout", format!("the Simulator helper took longer than {}s on {op}", timeout.as_secs())));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(SimError::new("helper_gone", format!("the Simulator helper exited during {op}. {}", tail())));
+            }
+        };
+        if reply.get("ok").and_then(J::as_bool) == Some(true) {
+            if op == "hello" {
+                self.hello.lock().unwrap().note(&reply);
+            }
+            Ok(reply)
+        } else {
+            let code = helper_code(reply.get("code").and_then(J::as_str).unwrap_or("helper_error"));
+            Err(SimError::new(code, reply.get("error").and_then(J::as_str).unwrap_or("the helper refused").to_string()))
+        }
+    }
+
+    pub(crate) fn dispatch(&self, m: Message) {
         match m {
             Message::Frame(f) => {
                 if let Some(slot) = self.frames.lock().unwrap().as_ref() {
@@ -518,7 +618,7 @@ impl Inbox {
         }
     }
 
-    fn closed(&self) {
+    pub(crate) fn closed(&self) {
         self.alive.store(false, Ordering::SeqCst);
         // Dropping the senders wakes every waiting caller with an error.
         self.pending.lock().unwrap().clear();
@@ -598,7 +698,6 @@ pub struct HelperProc {
     child: Mutex<Child>,
     stdin: Mutex<BufWriter<ChildStdin>>,
     inbox: Arc<Inbox>,
-    next_id: AtomicU64,
     stderr_tail: Arc<Mutex<Vec<String>>>,
 }
 
@@ -652,10 +751,7 @@ impl HelperProc {
         let spawned = cmd.spawn();
         drop(frames_tx); // the child holds the only write end now
         let mut child = spawned.map_err(|e| SimError::new("helper_spawn_failed", format!("cannot start {}: {e}", bin.display())))?;
-        let inbox = Arc::new(Inbox { cap: Some(newest_protocol()), ..Inbox::default() });
-        inbox.alive.store(true, Ordering::SeqCst);
-        let (ready_tx, ready_rx) = mpsc::channel();
-        *inbox.ready.lock().unwrap() = Some(ready_tx);
+        let (inbox, ready_rx) = Inbox::starting(Some(newest_protocol()));
 
         let mut stdout = child.stdout.take().expect("piped stdout");
         let ib = inbox.clone();
@@ -699,7 +795,7 @@ impl HelperProc {
         });
 
         let stdin = child.stdin.take().expect("piped stdin");
-        let me = Self { child: Mutex::new(child), stdin: Mutex::new(BufWriter::new(stdin)), inbox, next_id: AtomicU64::new(1), stderr_tail };
+        let me = Self { child: Mutex::new(child), stdin: Mutex::new(BufWriter::new(stdin)), inbox, stderr_tail };
         match ready_rx.recv_timeout(Duration::from_secs(30)) {
             Ok(Ok(_)) => Ok(me),
             Ok(Err(e)) => Err(e),
@@ -713,59 +809,26 @@ impl HelperProc {
 
     /// Sends one request and waits for its reply. A reply with `ok:false`
     /// becomes a `SimError` with the helper's code.
-    pub fn call(&self, op: &str, mut args: J, timeout: Duration) -> SimResult<J> {
-        if !self.alive() {
-            let why = self.inbox.gone_reason.lock().unwrap().clone().unwrap_or_else(|| "it exited".into());
-            return Err(SimError::new("helper_gone", format!("the Simulator helper stopped ({why}); run k2 sim boot")));
-        }
-        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        let (tx, rx) = mpsc::channel();
-        self.inbox.pending.lock().unwrap().insert(id, tx);
-        if !args.is_object() {
-            args = json!({});
-        }
-        args["id"] = json!(id);
-        args["op"] = json!(op);
-        let line = format!("{args}\n");
-        {
-            let mut w = self.stdin.lock().unwrap();
-            if let Err(e) = w.write_all(line.as_bytes()).and_then(|_| w.flush()) {
-                self.inbox.pending.lock().unwrap().remove(&id);
-                return Err(SimError::new("helper_gone", format!("cannot reach the Simulator helper: {e}")));
-            }
-        }
-        let reply = match rx.recv_timeout(timeout) {
-            Ok(v) => v,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                self.inbox.pending.lock().unwrap().remove(&id);
-                return Err(SimError::new("helper_timeout", format!("the Simulator helper took longer than {}s on {op}", timeout.as_secs())));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let tail = self.stderr_tail.lock().unwrap().join(" | ");
-                return Err(SimError::new("helper_gone", format!("the Simulator helper exited during {op}. {tail}")));
-            }
-        };
-        if reply.get("ok").and_then(J::as_bool) == Some(true) {
-            if op == "hello" {
-                self.inbox.hello.lock().unwrap().note(&reply);
-            }
-            Ok(reply)
-        } else {
-            let code = helper_code(reply.get("code").and_then(J::as_str).unwrap_or("helper_error"));
-            Err(SimError::new(code, reply.get("error").and_then(J::as_str).unwrap_or("the helper refused").to_string()))
-        }
+    pub fn call(&self, op: &str, args: J, timeout: Duration) -> SimResult<J> {
+        self.inbox.request(
+            op,
+            args,
+            timeout,
+            |line| {
+                let mut w = self.stdin.lock().unwrap();
+                w.write_all(line).and_then(|_| w.flush())
+            },
+            || self.stderr_tail.lock().unwrap().join(" | "),
+        )
     }
 
     /// Writes one `nr` request and returns once it is written: no id, no
     /// reply (fix 3). A refusal arrives as an `input_error` event.
     pub fn notify(&self, op: &str, args: J) -> SimResult<()> {
-        if !self.alive() {
-            let why = self.inbox.gone_reason.lock().unwrap().clone().unwrap_or_else(|| "it exited".into());
-            return Err(SimError::new("helper_gone", format!("the Simulator helper stopped ({why}); run k2 sim boot")));
-        }
-        let line = nr_line(op, args);
-        let mut w = self.stdin.lock().unwrap();
-        w.write_all(line.as_bytes()).and_then(|_| w.flush()).map_err(|e| SimError::new("helper_gone", format!("cannot reach the Simulator helper: {e}")))
+        self.inbox.notify(op, args, |line| {
+            let mut w = self.stdin.lock().unwrap();
+            w.write_all(line).and_then(|_| w.flush())
+        })
     }
 
     /// The helper's newest stderr lines, oldest first.
@@ -775,7 +838,7 @@ impl HelperProc {
 
     /// The protocol the gate chose at `ready`.
     pub fn protocol(&self) -> u32 {
-        self.inbox.protocol.load(Ordering::SeqCst)
+        self.inbox.protocol()
     }
 
     /// The helper's clock against ours, taken when `ready` arrived.
@@ -816,14 +879,10 @@ impl HelperIo for HelperProc {
         HelperProc::notify(self, op, args)
     }
     fn take_input_error(&self) -> Option<SimError> {
-        self.inbox.input_error.lock().unwrap().take()
+        self.inbox.take_input_error()
     }
     fn frame_slot(&self, slot: Option<Arc<FrameSlot>>) {
-        let mut g = self.inbox.frames.lock().unwrap();
-        if let Some(old) = g.take() {
-            old.close();
-        }
-        *g = slot;
+        self.inbox.set_frame_slot(slot);
     }
     fn alive(&self) -> bool {
         HelperProc::alive(self)
@@ -861,6 +920,8 @@ fn helper_code(c: &str) -> &'static str {
         "no_frame" => "no_frame",
         "no_device" => "no_device",
         "no_indigo" | "no_hid_client" | "no_ax" | "no_coresimulator" | "unsupported_xcode" => "unsupported_xcode",
+        // A Mac node refused a helper request it relays (its policy).
+        "sim_node_refused" => "node_refused",
         _ => "helper_error",
     }
 }

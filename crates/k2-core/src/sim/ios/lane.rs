@@ -84,6 +84,9 @@ pub fn lane_err(e: SimError) -> LaneError {
         "timeout" | "helper_timeout" => LaneError::timeout(m),
         "no_device" | "not_booted" | "helper_gone" | "helper_exited" => LaneError::not_running(m),
         "unsupported" => LaneError::unsupported(m),
+        // A Mac node's policy said no (the `ios-node` lane's remote runner).
+        "node_refused" => LaneError::node(NodeReason::Refused, m),
+        "node_reconnecting" | "node_gone" => LaneError::not_running(m),
         "wrong_platform" | "bad_app" | "bad_request" | "bad_profile" | "unmappable" | "stale_element" | "no_app" => LaneError::invalid(m),
         _ => LaneError::tool(m),
     }
@@ -122,7 +125,7 @@ impl IosLane {
     }
 
     fn ensure_set(&self) -> SimResult<()> {
-        std::fs::create_dir_all(&self.cfg.set_path).map_err(|e| SimError::new("tool", format!("cannot create {}: {e}", self.cfg.set_path.display())))
+        self.simctl.runner().ensure_dir(&self.cfg.set_path)
     }
 
     /// `xcodebuild -version` → "26.5 (17F42)", cached.
@@ -770,21 +773,18 @@ impl SimLane for IosLane {
             }
             self.simctl.delete(&d.udid).lane()?;
         }
-        if data_dir.exists() {
-            std::fs::remove_dir_all(data_dir).map_err(|e| LaneError::tool(format!("cannot remove {}: {e}", data_dir.display())))?;
-        }
-        Ok(())
+        self.simctl.runner().remove_dir_all(data_dir).lane()
     }
 
     fn install_app(&self, dev: &DeviceRef, artifact: &Path) -> Result<InstallOutcome, LaneError> {
         let plist = artifact.join("Info.plist");
-        if artifact.extension().and_then(|e| e.to_str()) != Some("app") || !artifact.is_dir() || !plist.is_file() {
+        let runner = self.simctl.runner().clone();
+        if artifact.extension().and_then(|e| e.to_str()) != Some("app") || !runner.is_dir(artifact) || !runner.is_file(&plist) {
             return Err(LaneError::invalid(format!(
                 "{} isn't an iOS .app bundle (a folder ending in .app with an Info.plist). Build for the Simulator, then pass the .app from the build folder.",
                 artifact.display()
             )));
         }
-        let runner = self.simctl.runner().clone();
         let app_id = plist_string(runner.as_ref(), &plist, "CFBundleIdentifier").ok_or_else(|| LaneError::invalid(format!("{} has no CFBundleIdentifier", plist.display())))?;
         checked_app_id(&app_id).lane()?;
         let version = plist_string(runner.as_ref(), &plist, "CFBundleShortVersionString");
@@ -920,14 +920,15 @@ impl SimLane for IosLane {
 
     fn screenshot(&self, dev: &DeviceRef) -> Result<Frame, LaneError> {
         let h = self.helper(&dev.device_id).lane()?;
-        std::fs::create_dir_all(&dev.data_dir).map_err(|e| LaneError::tool(format!("cannot create {}: {e}", dev.data_dir.display())))?;
+        let runner = self.simctl.runner().clone();
+        runner.ensure_dir(&dev.data_dir).lane()?;
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
         let path = dev.data_dir.join(format!(".shot-{}-{nanos}.png", std::process::id()));
         let v = h.call("image", json!({"path": path.to_string_lossy(), "scale": 1.0}), INPUT_TIMEOUT).lane();
-        let bytes = std::fs::read(&path);
-        let _ = std::fs::remove_file(&path);
+        let bytes = runner.read(&path);
+        let _ = runner.remove_file(&path);
         let v = v?;
-        let bytes = bytes.map_err(|e| LaneError::tool(format!("the helper wrote no screenshot: {e}")))?;
+        let bytes = bytes.map_err(|e| LaneError::tool(format!("the helper wrote no screenshot: {}", e.message)))?;
         let (wpt, _, scale) = self.screen(&dev.device_id);
         let w = v.get("width").and_then(J::as_u64).unwrap_or(0) as u32;
         Ok(Frame {

@@ -28,8 +28,7 @@ fn save_id(t: &TreeResp) -> String {
 /// The lane registry and the sim home are process-wide: tests that use
 /// them run one at a time.
 fn sim_lock() -> std::sync::MutexGuard<'static, ()> {
-    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    L.lock().unwrap_or_else(|e| e.into_inner())
+    crate::sim::test_lock()
 }
 
 /// One sequential scenario: the lane registry and the sim home are
@@ -328,6 +327,126 @@ fn take_over_and_hand_back_are_audited_and_moves_are_not() {
     m.hold(&w, &person(), HoldAction::HandBack).expect("hand back");
     assert_eq!(count() - start, 2, "take_over + hand_back, nothing for the input");
     m.stop(&w, &person(), "test").expect("stop");
+    crate::sim::clear_lanes();
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+/// An iPhone on a Mac node: it never counts against this box's
+/// device limit, the box's free RAM doesn't stop it, the node gate runs
+/// only for it, its steps show on the row, and a `type --secret` value
+/// stays out of the audit, the relay and the node's log.
+#[cfg(unix)]
+#[test]
+fn an_iphone_on_a_mac_node_is_outside_the_box_limits() {
+    use crate::sim::ios_node::{fake_node, IosNodeLane};
+    let _g = crate::sim::test_lock();
+    /// Even when an assert fails: no running row or lane is left for the
+    /// next test (the database and the registry are process-wide).
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            let _ = conn.execute("DELETE FROM sim_sessions WHERE project_id LIKE 'p-node-%'", []);
+            drop(conn);
+            crate::sim::clear_lanes();
+        }
+    }
+    let _cleanup = Cleanup;
+    let tmp = std::env::temp_dir().join(format!("k2-sim-node-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("a")).expect("ws a");
+    std::fs::create_dir_all(tmp.join("b")).expect("ws b");
+    crate::sim::set_base_for_tests(tmp.join("home"));
+    limits::save_settings(&limits::SimSettings { max_devices: Some(1), min_free_ram_bytes: Some(0), ..Default::default() }).expect("limits");
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT OR REPLACE INTO projects (id, name, path) VALUES ('p-node-a', 'na', ?1), ('p-node-b', 'nb', ?2), ('p-node-c', 'nc', ?1 || '-c')",
+            rusqlite::params![tmp.join("a").display().to_string(), tmp.join("b").display().to_string()],
+        )
+        .expect("projects");
+    }
+    let android = Arc::new(FakeLane::new(LaneKind::Android));
+    crate::sim::register_lane(android.clone());
+    let dir = fake_node::FakeDirectory::new();
+    dir.grant("p-node-a");
+    let node_lane = Arc::new(IosNodeLane::new(dir.clone()));
+    dir.node.attach_lane(&node_lane);
+    crate::sim::register_lane(node_lane.clone());
+    let a = ws("p-node-a", &tmp.join("a"));
+    let b = ws("p-node-b", &tmp.join("b"));
+    let m = manager();
+    m.refresh_probes();
+
+    // The box's one slot is taken by an Android device.
+    let req = |p: &str| BootReq { platform: Some(p.into()), no_tab: true, ..Default::default() };
+    assert_eq!(m.boot(&b, &person(), &req("android")).expect("android").state, SimState::Running);
+    // And the box "has" no free RAM now.
+    limits::save_settings(&limits::SimSettings { max_devices: Some(1), min_free_ram_bytes: Some(250 << 30), ..Default::default() }).expect("limits");
+
+    // The gate runs first, only for the node lane.
+    let refuse = || Err(SimError::new(403, "sim_node_needs_admin", "no").exit(3));
+    let e = m.boot_gated(&a, &person(), &req("ios"), &refuse).expect_err("gated");
+    assert_eq!(e.code, "sim_node_needs_admin");
+    assert!(m.row(&a).expect("row").is_none(), "nothing started before the gate");
+
+    let v = m.boot_gated(&a, &person(), &req("ios"), &|| Ok(())).expect("ios-node boots on a full box");
+    assert_eq!((v.lane, v.state), (LaneKind::IosNode, SimState::Running));
+    assert_eq!(v.profile.as_ref().map(|p| p.name.as_str()), Some("iPhone 17 (on k2n1-m4)"));
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        assert_eq!(store::count_occupying(&conn, None).expect("count"), 1, "only the Android device holds a box slot");
+    }
+    // The Android lane's own box check still refuses on the full box.
+    let e = m.boot(&ws("p-node-c", &tmp.join("a")), &person(), &req("android")).expect_err("box full");
+    assert_eq!(e.code, "sim_limit");
+
+    // A step lands on a booting row as its reason.
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE sim_sessions SET state = 'booting' WHERE project_id = 'p-node-a'", []).expect("booting");
+    }
+    let rid = m.row(&a).expect("row").expect("a").id;
+    m.booting.lock().insert(a.id.clone(), (rid, a.clone()));
+    m.progress(&a.id, "Starting on k2n1-m4");
+    assert_eq!(m.row(&a).expect("row").expect("a").reason.as_deref(), Some("Starting on k2n1-m4"));
+    m.booting.lock().remove(&a.id);
+    m.progress(&a.id, "ignored when not booting");
+    assert_eq!(m.row(&a).expect("row").expect("a").reason.as_deref(), Some("Starting on k2n1-m4"));
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE sim_sessions SET state = 'running' WHERE project_id = 'p-node-a'", []).expect("running");
+    }
+
+    // type --secret: the canary reaches the field and nowhere else.
+    const CANARY: &str = "k2-canary-mgr-7c1d";
+    let tap = ActReq { workspace: None, action: ActSpec::Tap { element: None, x: Some(200.0), y: Some(262.0), hold_ms: None }, no_diff: true };
+    m.act(&a, &person(), &tap, None).expect("tap");
+    let sec = ActReq { workspace: None, action: ActSpec::Type { into: None, text: None, secret: Some("pw".into()) }, no_diff: true };
+    let r = m.act(&a, &person(), &sec, Some(SimText::secret(CANARY))).expect("secret");
+    assert!(!r.line.contains(CANARY));
+    assert_eq!(dir.node.world.lock().unwrap().field, CANARY);
+    assert!(!fake_node::relay_carries(&dir.node, CANARY.as_bytes()), "the relay leg carries the secret");
+    assert!(!dir.node.log.lock().unwrap().iter().any(|l| l.contains(CANARY)));
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        let rows = store::recent_audit(&conn, None, 500).expect("audit");
+        assert!(!rows.iter().any(|r| r.detail.to_string().contains(CANARY) || r.actor.contains(CANARY)), "the secret reached sim_audit");
+        let row = store::by_project(&conn, "p-node-a").expect("row").expect("a");
+        assert!(!row.lane_state.to_string().contains(CANARY));
+    }
+
+    // The reaper asks the session, not the node (IR-6); stop frees the node.
+    let swept = m.sweep(&|id: &str| (id == "p-node-a").then(|| a.clone()));
+    assert!(!swept.iter().any(|l| l.contains("exited")), "{swept:?}");
+    m.stop(&a, &person(), "stopped by owner").expect("stop");
+    assert!(dir.node.sessions().is_empty());
     crate::sim::clear_lanes();
     let _ = std::fs::remove_dir_all(&tmp);
 }

@@ -28,6 +28,11 @@ pub mod hold;
 // on Linux nodes; it registers only on macOS.
 #[cfg(unix)]
 pub mod ios;
+// An iPhone on a leased Mac compute node (0.46.7): the iOS lane over a
+// remote host. Unix only, like `ios` (IR-12); registers on Linux and macOS
+// servers once the daemon installs its node directory.
+#[cfg(unix)]
+pub mod ios_node;
 pub mod lane;
 pub mod licence;
 pub mod limits;
@@ -50,6 +55,19 @@ pub const BOOT_STATUS_KEY: &str = "mobile-sim-v1";
 /// What the tab says about isolation (PRD §8, "Honest limits").
 pub const ISOLATION_NOTE: &str =
     "Separate, not sealed: the device runs as the same system user as this server's agents.";
+
+/// The same note for an iPhone on a Mac compute node (0.46.7, §3.7's
+/// honest limit): its own user on the Mac, shared by that Mac's iPhones.
+pub const ISOLATION_NOTE_NODE: &str =
+    "Separate, not sealed: this iPhone runs on a Mac compute node, as a Simulator user its other iPhones share.";
+
+/// What the tab says about isolation for a device on `lane`.
+pub fn isolation_note(lane: LaneKind) -> &'static str {
+    match lane {
+        LaneKind::IosNode => ISOLATION_NOTE_NODE,
+        _ => ISOLATION_NOTE,
+    }
+}
 
 static BASE_OVERRIDE: RwLock<Option<PathBuf>> = RwLock::new(None);
 
@@ -117,11 +135,24 @@ pub fn lanes() -> Vec<Arc<dyn SimLane>> {
     lanes_cell().read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// k2-core tests that register lanes or move the sim home (both
+/// process-wide) hold this so they never run side by side.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Register the lanes built into this daemon for this OS.
 pub fn register_builtin_lanes() {
     register_lane(Arc::new(android::AndroidLane::new(sim_home().join("android"))));
     #[cfg(target_os = "macos")]
     register_lane(Arc::new(ios::IosLane::new(ios::IosLaneConfig::under(&sim_home()))));
+    // The daemon installs its compute directory first (`ios_node::install`).
+    #[cfg(unix)]
+    if let Some(l) = ios_node::lane() {
+        register_lane(l);
+    }
 }
 
 #[cfg(test)]

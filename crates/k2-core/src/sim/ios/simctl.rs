@@ -54,7 +54,10 @@ pub struct Output {
     pub stderr: String,
 }
 
-/// Runs one program to completion, or kills it at `timeout`.
+/// Runs one program to completion, or kills it at `timeout`; and the few
+/// disk touches the lane makes (IN-A3). The disk methods default to this
+/// machine's disk, so the local lane is unchanged; the `ios-node` lane's
+/// runner does each one on the Mac node, where every path is policed.
 pub trait Runner: Send + Sync {
     fn run(&self, program: &str, args: &[String], timeout: Duration) -> SimResult<Output>;
 
@@ -62,6 +65,30 @@ pub trait Runner: Send + Sync {
     /// must never be on a command line, e.g. `simctl pbcopy`).
     fn run_input(&self, program: &str, _args: &[String], _input: &[u8], _timeout: Duration) -> SimResult<Output> {
         Err(SimError::new("spawn_failed", format!("this runner can't send input to {program}")))
+    }
+
+    fn ensure_dir(&self, p: &Path) -> SimResult<()> {
+        std::fs::create_dir_all(p).map_err(|e| SimError::new("tool", format!("cannot create {}: {e}", p.display())))
+    }
+    fn is_dir(&self, p: &Path) -> bool {
+        p.is_dir()
+    }
+    fn is_file(&self, p: &Path) -> bool {
+        p.is_file()
+    }
+    fn read(&self, p: &Path) -> SimResult<Vec<u8>> {
+        std::fs::read(p).map_err(|e| SimError::new("tool", format!("cannot read {}: {e}", p.display())))
+    }
+    fn remove_file(&self, p: &Path) -> SimResult<()> {
+        std::fs::remove_file(p).map_err(|e| SimError::new("tool", format!("cannot remove {}: {e}", p.display())))
+    }
+    /// Remove a folder and everything in it; a missing folder is fine.
+    fn remove_dir_all(&self, p: &Path) -> SimResult<()> {
+        match std::fs::remove_dir_all(p) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(SimError::new("tool", format!("cannot remove {}: {e}", p.display()))),
+        }
     }
 }
 
@@ -289,7 +316,7 @@ impl Simctl {
     fn call(&self, rest: &[&str], timeout: Duration) -> SimResult<Output> {
         // simctl refuses a --set that doesn't exist yet (seen live on the
         // first probe); K2's own set folder is ours to create.
-        let _ = std::fs::create_dir_all(&self.set);
+        let _ = self.runner.ensure_dir(&self.set);
         let out = self.runner.run("xcrun", &self.args(rest), timeout)?;
         if out.status != 0 {
             return Err(simctl_error(rest.first().copied().unwrap_or(""), &out));
@@ -388,7 +415,7 @@ impl Simctl {
     /// Puts `text` on the device's pasteboard (`simctl pbcopy`, over stdin:
     /// the text is never on a command line).
     pub fn pbcopy(&self, udid: &str, text: &str) -> SimResult<()> {
-        let _ = std::fs::create_dir_all(&self.set);
+        let _ = self.runner.ensure_dir(&self.set);
         let out = self.runner.run_input("xcrun", &self.args(&["pbcopy", udid]), text.as_bytes(), QUICK)?;
         if out.status != 0 {
             return Err(simctl_error("pbcopy", &out));

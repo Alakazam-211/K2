@@ -109,6 +109,7 @@ impl From<LaneError> for SimError {
     fn from(e: LaneError) -> SimError {
         let exit = match e {
             LaneError::NeedsSetup { .. } => 3,
+            LaneError::Node { reason, .. } => reason.exit(),
             _ => 1,
         };
         let needs = match &e {
@@ -218,12 +219,19 @@ pub struct Manager {
     /// neither).
     db_reads: AtomicU64,
     db_writes: AtomicU64,
+    /// Workspaces whose device is booting right now (project id → row id
+    /// and workspace), so a lane's [`Manager::progress`] can name its step.
+    booting: Mutex<HashMap<String, (i64, Ws)>>,
 }
 
 static MANAGER: OnceLock<Manager> = OnceLock::new();
 
 pub fn manager() -> &'static Manager {
-    MANAGER.get_or_init(Manager::new)
+    MANAGER.get_or_init(|| {
+        #[cfg(unix)]
+        super::ios_node::set_progress_hook(|ws, step| manager().progress(ws, step));
+        Manager::new()
+    })
 }
 
 fn now() -> i64 {
@@ -258,12 +266,30 @@ impl Manager {
             probes: Mutex::new(HashMap::new()),
             db_reads: AtomicU64::new(0),
             db_writes: AtomicU64::new(0),
+            booting: Mutex::new(HashMap::new()),
         }
     }
 
     /// `(row reads, last_used_at writes)` so far.
     pub fn db_statements(&self) -> (u64, u64) {
         (self.db_reads.load(Ordering::SeqCst), self.db_writes.load(Ordering::SeqCst))
+    }
+
+    /// A booting device's current step ("Finding a Mac node", "Starting on
+    /// k2n1-m4"…) as the row's reason, pushed as `sim_state` (IN-A13).
+    /// Ignored when the workspace isn't booting.
+    pub fn progress(&self, workspace_id: &str, step: &str) {
+        let Some((id, ws)) = self.booting.lock().get(workspace_id).cloned() else { return };
+        let db = crate::db::shared();
+        let conn = db.lock();
+        if store::set_state(&conn, id, SimState::Booting, Some(step), now()).is_err() {
+            return;
+        }
+        let row = store::by_id(&conn, id).ok().flatten();
+        drop(conn);
+        if let Some(r) = row {
+            self.emit_state(&r, &ws);
+        }
     }
 
     fn op_lock(&self, project_id: &str) -> Arc<Mutex<()>> {
@@ -290,6 +316,18 @@ impl Manager {
             c.insert(p.lane, p.clone());
         }
         out
+    }
+
+    /// Re-probe one lane (the `ios-node` lane when a node's offer changes);
+    /// the others keep their cached answer.
+    pub fn refresh_probe(&self, kind: LaneKind) {
+        if self.probes.lock().is_empty() {
+            return; // the first status call probes everything
+        }
+        if let Some(l) = super::lane(kind) {
+            let p = l.probe();
+            self.probes.lock().insert(kind, p);
+        }
     }
 
     pub fn probes(&self) -> Vec<LaneProbe> {
@@ -330,11 +368,19 @@ impl Manager {
                 return super::lane(*k).ok_or_else(|| SimError::new(503, "sim_unavailable", "lane vanished"));
             }
         }
-        // An iPhone asked for on a server with no iOS lane at all (a Linux
-        // box, no Mac compute node): say what it needs, never a bare 400.
+        // An iPhone asked for on a server where no iOS lane can run (a
+        // Linux box with no Mac compute node, or one not set up): say what
+        // it needs, never a bare 400 or 503. One code (IR-11); the line
+        // comes from the lanes' own probes when they have one.
         let ios_only = order.iter().all(|k| k.platform() == "ios");
-        if ios_only && order.iter().all(|k| super::lane(*k).is_none()) {
-            return Err(SimError::new(409, SIM_LANE_UNAVAILABLE, IPHONE_NEEDS_A_MAC));
+        if ios_only {
+            let why: Vec<String> = order
+                .iter()
+                .filter(|k| super::lane(**k).is_some())
+                .filter_map(|k| probes.iter().find(|p| p.lane == *k).and_then(|p| p.detail.clone()))
+                .collect();
+            let msg = if why.is_empty() { IPHONE_NEEDS_A_MAC.to_string() } else { format!("{IPHONE_NEEDS_A_MAC}. {}", why.join(" ")) };
+            return Err(SimError::new(409, SIM_LANE_UNAVAILABLE, msg).exit(3));
         }
         let why: Vec<String> = order
             .iter()
@@ -470,6 +516,14 @@ impl Manager {
     // ── boot / stop / erase ──────────────────────────────────────────
 
     pub fn boot(&self, ws: &Ws, actor: &Actor, req: &BootReq) -> R<SimView> {
+        self.boot_gated(ws, actor, req, &|| Ok(()))
+    }
+
+    /// [`Self::boot`], with the daemon's check for leasing a Mac node
+    /// (`node_gate`, run only when the picked lane is `ios-node`): people
+    /// need control (owner, admins), agents `sim.use` and `compute.use`
+    /// (Rosson D2, prd-ios-on-mac-node-0467-v1 §3.5).
+    pub fn boot_gated(&self, ws: &Ws, actor: &Actor, req: &BootReq, node_gate: &dyn Fn() -> R<()>) -> R<SimView> {
         let lock = self.op_lock(&ws.id);
         let _g = lock.lock();
         if let Some(r) = self.row(ws)? {
@@ -487,6 +541,12 @@ impl Manager {
         }
         let lane = self.pick_lane(req.platform.as_deref())?;
         let setup = self.setup.lock().clone();
+        // A Mac node runs the device: the box's own limits don't apply
+        // (IN-A4); the node admits on its own memory and disk.
+        let remote = lane.kind() == LaneKind::IosNode;
+        if remote {
+            node_gate()?;
+        }
         let mut probe = lane.probe();
         Self::fold_setup(&setup, &mut probe);
         if !probe.ready {
@@ -508,23 +568,25 @@ impl Manager {
             e.lane = Some(lane.kind());
             return Err(e);
         }
-        // Box limits and disk.
-        let lim = limits::current();
-        {
-            let db = crate::db::shared();
-            let conn = db.lock();
-            let running = store::count_occupying(&conn, Some(&ws.id))?;
-            if let Err(r) = limits::check_boot(&lim, running, crate::disk_guard::box_mem().1) {
-                return Err(SimError::new(409, "sim_limit", r.message()));
-            }
-        }
+        // Box limits and disk (this box's devices only).
         let key = super::workspace_key(&ws.id);
         let data_dir = super::device_dir(lane.kind(), &key);
-        let need = if data_dir.exists() { limits::BOOT_DISK_BYTES } else { limits::BOOT_DISK_BYTES * 2 };
-        let probe_path = super::sim_home();
-        let _ = std::fs::create_dir_all(&probe_path);
-        if let crate::disk_guard::Verdict::Refuse(f) = crate::disk_guard::check(&[probe_path], need) {
-            return Err(SimError::new(409, "disk_low", f.sentence("boot a device")));
+        if !remote {
+            let lim = limits::current();
+            {
+                let db = crate::db::shared();
+                let conn = db.lock();
+                let running = store::count_occupying(&conn, Some(&ws.id))?;
+                if let Err(r) = limits::check_boot(&lim, running, crate::disk_guard::box_mem().1) {
+                    return Err(SimError::new(409, "sim_limit", r.message()));
+                }
+            }
+            let need = if data_dir.exists() { limits::BOOT_DISK_BYTES } else { limits::BOOT_DISK_BYTES * 2 };
+            let probe_path = super::sim_home();
+            let _ = std::fs::create_dir_all(&probe_path);
+            if let crate::disk_guard::Verdict::Refuse(f) = crate::disk_guard::check(&[probe_path], need) {
+                return Err(SimError::new(409, "disk_low", f.sentence("boot a device")));
+            }
         }
         std::fs::create_dir_all(&data_dir).map_err(|e| SimError::new(500, "sim_io", format!("create {}: {e}", data_dir.display())))?;
         let row = {
@@ -542,7 +604,9 @@ impl Manager {
             boot_timeout: BOOT_TIMEOUT,
         };
         let t0 = Instant::now();
+        self.booting.lock().insert(ws.id.clone(), (row.id, ws.clone()));
         let res = lane.boot(&breq);
+        self.booting.lock().remove(&ws.id);
         let db = crate::db::shared();
         match res {
             Ok(b) => {

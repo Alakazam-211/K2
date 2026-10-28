@@ -444,7 +444,7 @@ pub fn apply(d: &AppDomain, o: &Outcome, at: i64) -> Next {
                 &conn,
                 host,
                 STATE_EXTERNAL,
-                Some(&format!("still served by your own proxy; K2 can serve it once: {reason}")),
+                Some(&format!("still served by your own web server; K2 can serve it once: {reason}")),
             );
             Next::Nothing
         }

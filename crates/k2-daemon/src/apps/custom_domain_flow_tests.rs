@@ -282,7 +282,7 @@ fn a_grandfathered_name_stays_an_origin_until_the_owner_moves_it() {
     let (r, _) = check_with(HOST, &Fake::new(proof(&d), &["198.51.100.20"]), &|_| *issues.borrow_mut() += 1).unwrap();
     assert_eq!(r.state, STATE_EXTERNAL);
     assert!(r.is_origin());
-    assert!(r.last_error.as_deref().unwrap().contains("still served by your own proxy"), "{:?}", r.last_error);
+    assert!(r.last_error.as_deref().unwrap().contains("still served by your own web server"), "{:?}", r.last_error);
     assert_eq!(*issues.borrow(), 0);
 
     // Proven: into the door flow (issuing, one order).

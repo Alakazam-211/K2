@@ -1028,8 +1028,13 @@ pub(crate) fn garden_owner_may(caller: &Caller, garden: Option<&str>) -> bool {
 /// True when `username` is the owner person: a live (existing, enabled)
 /// Connect login the owner linked to themselves. An unlinked login is
 /// itself, whatever its role (0.46.0, `notify_prefs::People::person_key`).
-/// Fails closed when the logins can't be read.
+/// Fails closed when the logins can't be read. A login named `owner` or
+/// `agent` (the daemon's names for the owner token and for a request with
+/// no person) is never the owner person, linked or not.
 pub(crate) fn login_is_owner_person(username: &str) -> bool {
+    if is_reserved_login_name(username) {
+        return false;
+    }
     let people = match k2_core::notify_prefs::People::load() {
         Ok(p) => p,
         Err(e) => {
@@ -1038,6 +1043,27 @@ pub(crate) fn login_is_owner_person(username: &str) -> bool {
         }
     };
     people.user(username).is_some_and(|u| !u.disabled) && people.is_linked(username)
+}
+
+/// `owner` / `agent`: names a Connect login made before 0.46.6 could have
+/// but that stand for the owner token and for no person. Once 0.46.6's
+/// `k2_core::connect_users::is_reserved_username` is on the same branch,
+/// this can call it instead.
+pub(crate) fn is_reserved_login_name(username: &str) -> bool {
+    let n = username.trim();
+    n.eq_ignore_ascii_case("owner") || n.eq_ignore_ascii_case("agent")
+}
+
+/// Who a Keep-as-mine card answer comes from (GP-B1 follow-up).
+/// `owner` is the owner token's session author, but a Connect login made
+/// before 0.46.6 could carry the same name, so while a login named `owner`
+/// exists (`owner_login_exists`) the bare string proves nothing: `None`,
+/// refused (fail closed). Any other author is a login, checked as one.
+pub(crate) fn garden_card_caller(session_author: &str, owner_login_exists: bool) -> Option<crate::sidecar_routes::Caller> {
+    if session_author == "owner" {
+        return (!owner_login_exists).then_some(crate::sidecar_routes::Caller::Owner);
+    }
+    Some(crate::sidecar_routes::Caller::Login { username: session_author.to_string() })
 }
 
 /// The live version (bundle hash) of a user widget and its maker now, for
@@ -1656,5 +1682,29 @@ pub fn handle(
     match r {
         Ok(v) => ok(v),
         Err(e) => err(e),
+    }
+}
+
+#[cfg(test)]
+mod reserved_owner_name_tests {
+    use super::*;
+    use crate::sidecar_routes::Caller;
+
+    /// GP-B1 follow-up: the Keep-as-mine card's `owner` author is the owner
+    /// token only while no Connect login is named `owner`; with one, it is
+    /// refused (fail closed). A login of another name is checked as itself,
+    /// and a login named `owner` or `agent` is never the owner person.
+    #[test]
+    fn a_login_named_owner_is_never_the_garden_owner() {
+        assert_eq!(garden_card_caller("owner", false), Some(Caller::Owner), "the real owner token");
+        assert_eq!(garden_card_caller("owner", true), None, "a login named owner exists: fail closed");
+        assert_eq!(garden_card_caller("gina", true), Some(Caller::Login { username: "gina".into() }));
+        for name in ["owner", "Owner", " OWNER ", "agent"] {
+            assert!(is_reserved_login_name(name), "{name}");
+            assert!(!login_is_owner_person(name), "{name} is never the owner person");
+        }
+        assert!(!is_reserved_login_name("owner2") && !is_reserved_login_name("rosson"));
+        // The owner token itself still passes the resolver.
+        assert!(garden_owner_may(&Caller::Owner, None));
     }
 }

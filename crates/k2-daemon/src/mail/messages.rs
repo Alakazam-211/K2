@@ -914,7 +914,7 @@ pub fn resolve_out_path(ws_root: &str, out: &str) -> Result<PathBuf, String> {
         return Err("empty 'out' path".to_string());
     }
     let rel = Path::new(out);
-    if rel.is_absolute() {
+    if rel.is_absolute() || rel.has_root() {
         return Err(format!(
             "'out' must be a path inside the workspace (relative), got absolute: {out}"
         ));
@@ -974,7 +974,7 @@ pub fn resolve_out_target(ws_root: &str, out: &str) -> Result<OutTarget, String>
         }
     }
     let rel = Path::new(out);
-    if rel.is_absolute() {
+    if rel.is_absolute() || rel.has_root() {
         return Err(format!(
             "'out' must be a path inside the workspace (relative), got absolute: {out}"
         ));
@@ -1053,7 +1053,7 @@ pub fn resolve_in_path(ws_root: &str, path: &str) -> Result<PathBuf, InPathError
         return Err(InPathError::Usage("empty attachment path".to_string()));
     }
     let rel = Path::new(raw);
-    if rel.is_absolute() {
+    if rel.is_absolute() || rel.has_root() {
         return Err(InPathError::Usage(format!(
             "attachment path must be inside the workspace (relative), got absolute: {raw}"
         )));

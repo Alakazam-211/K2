@@ -11,6 +11,14 @@
 #       part-way removes everything the run made. Prints the two PUBLIC key
 #       lines.
 #
+#   bash scripts/updater-key-ceremony.sh generate --signer k2sign
+#       The signing-user path (prd-signing-user-v1; Rosson chose it
+#       2026-10-28): U2 is made INSIDE the `_k2sign` user first
+#       (`sudo /usr/local/libexec/k2sign/k2sign-admin generate-u2`: random
+#       password nobody sees), so this makes U3 only, exactly as below, and
+#       prints both public lines. Nothing goes to ~/.k2-updater or the
+#       keychain.
+#
 #   bash scripts/updater-key-ceremony.sh drill <U3 key file> [--root DIR]
 #       The U3 restore drill: sign a throwaway file with U3 restored from the
 #       password manager, check it against UPDATER_KEYS' backup key, then
@@ -153,6 +161,11 @@ ceremony_cleanup() {
 }
 
 generate() {
+    if [ "${1:-}" = "--signer" ]; then
+        [ "${2:-}" = k2sign ] || die "generate --signer k2sign (the only other path is plain generate)"
+        generate_k2sign
+        return
+    fi
     [ "$(uname -s)" = Darwin ] || die "run this on z3mbpZ (macOS), in its GUI session"
     [ -t 0 ] && [ -t 1 ] || die "run this in a terminal (passwords are typed at prompts, never passed in)"
     command -v minisign >/dev/null 2>&1 || die "minisign is not installed (brew install minisign)"
@@ -219,6 +232,49 @@ generate() {
     say "and lands it with the SS4/SS5 code. Then, here: bash scripts/sign-daemon.sh --preflight <next version>"
 }
 
+# The signing-user ceremony: U2 already exists inside _k2sign; make U3
+# (password manager only) and print both public lines.
+generate_k2sign() {
+    [ "$(uname -s)" = Darwin ] || die "run this on z3mbpZ (macOS), in its GUI session"
+    [ -t 0 ] && [ -t 1 ] || die "run this in a terminal (passwords are typed at prompts, never passed in)"
+    command -v minisign >/dev/null 2>&1 || die "minisign is not installed (brew install minisign)"
+    local gen="${K2SIGN_ETC:-/usr/local/etc/k2sign}/u2-generated.pub" u2 ans
+    [ -f "$gen" ] || die "no $gen: run 'sudo /usr/local/libexec/k2sign/k2sign-admin generate-u2' first (sitting 2)"
+    u2="$(tr -d '[:space:]' < "$gen")"
+    trap ceremony_cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    say ""
+    say "── 1/2  U3, the offline backup key (goes to your password manager, NOT this Mac) ──"
+    U3DIR="$(mktemp -d "${TMPDIR:-/tmp}/K2-U3-backup.XXXXXX")"; chmod 700 "$U3DIR"
+    tmutil addexclusion "$U3DIR" 2>/dev/null || say "(note: tmutil addexclusion failed; \$TMPDIR is outside Time Machine anyway)"
+    say "minisign asks for a NEW password twice (from your password manager)."
+    minisign -G -p "$U3DIR/k2-updater-u3.pub" -s "$U3DIR/k2-updater-u3.key"
+    chmod 600 "$U3DIR/k2-updater-u3.key"
+    say ""
+    say "U3's secret key is in $U3DIR/k2-updater-u3.key (still encrypted with U3's password)."
+    say "  1. In your password manager, make an entry 'K2 update key U3 - key file' and"
+    say "     ATTACH that file to it (drag it from the Finder window that opens now)."
+    say "  2. Make a SEPARATE entry 'K2 update key U3 - password' holding U3's password."
+    open -R "$U3DIR/k2-updater-u3.key" 2>/dev/null || true
+    read -r -p "Type 'saved' once BOTH entries exist (anything else stops and removes everything): " ans
+    [ "$ans" = "saved" ] || die "not saved"
+    local u3
+    u3="$(sed -n 2p "$U3DIR/k2-updater-u3.pub")"
+    shred_file "$U3DIR/k2-updater-u3.key"
+    rm -rf "$U3DIR"
+    U3DIR=""
+    CEREMONY_DONE=1
+    say "U3's secret key is overwritten and deleted from this Mac."
+    say ""
+    say "── 2/2  Send K2 these two PUBLIC key lines (safe to share) ──"
+    say "U2 (primary, inside _k2sign): $u2"
+    say "U3 (backup):                  $u3"
+    say ""
+    say "K2 runs: bash scripts/updater-key-ceremony.sh pubkeys <U2 line> <U3 line>, lands it with the"
+    say "signing lane, and you re-run 'sudo bash scripts/k2sign/install.sh' from that commit (it pins them)."
+}
+
 # The U3 drill (runbook): restore U3's key file from the password manager
 # to a temp path, sign a throwaway file with it, and check the signature
 # with the BACKUP key in the source tree's UPDATER_KEYS, the way installs
@@ -262,5 +318,5 @@ case "${1:-}" in
     generate) shift; generate "$@" ;;
     pubkeys) shift; pubkeys "$@" ;;
     drill) shift; drill "$@" ;;
-    *) die "usage: updater-key-ceremony.sh generate | pubkeys [--root DIR] <U2-line> <U3-line> | drill <U3 key file> [--root DIR]" ;;
+    *) die "usage: updater-key-ceremony.sh generate [--signer k2sign] | pubkeys [--root DIR] <U2-line> <U3-line> | drill <U3 key file> [--root DIR]" ;;
 esac

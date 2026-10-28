@@ -17,10 +17,18 @@
 //! passes it as `--if-version` on the agent's next edit verb (unless it
 //! gave one), so an edit made from a stale read is refused (`doc changed
 //! since V (now W)`, exit 1) instead of landing on text the agent never
-//! saw. Memory only; a restart forgets it (the next edit is unguarded until
-//! the agent reads again). People are never guarded.
+//! saw. People are never guarded.
+//!
+//! **It survives a restart.** The table is kept in memory and written behind
+//! to the docs store's host table (namespace [`LAST_READ_NS`], key
+//! `<space>\x1f<path>\x1f<pid>`, value the version in decimal): the upkeep
+//! tick flushes what changed (one transaction), release flushes the rest,
+//! and a miss after a restart loads the row. So the `--if-version` safety
+//! net holds across daemon restarts. A moved doc's rows move with it; a
+//! removed workspace's go with its docs. No daemon-DB migration: the rows
+//! live beside the docs they name.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -28,46 +36,156 @@ use serde_json::json;
 
 use k2_core::log_debug;
 use k2_mpc_base::session::{Session, SessionError, Stay};
-use k2_mpc_base::store::{DocKey, Seq};
+use k2_mpc_base::store::{DocKey, DocStore, HostOp, Seq};
 
 use super::caller::DocCaller;
 use super::host::{self, Principal};
 use super::routes::{self, Call};
 use crate::cli_response::CliResponse;
 
-/// Most (agent, doc) pairs remembered; past it the table starts over.
+/// The docs store's host-table namespace of the last-read rows.
+pub const LAST_READ_NS: &str = "k2.docs.lastread";
+
+/// Most (agent, doc) pairs kept in memory; past it the cache starts over
+/// (after a flush: the store still has every row).
 const LAST_READ_MAX: usize = 50_000;
 
-fn table() -> &'static Mutex<HashMap<(String, DocKey), Seq>> {
-    static T: OnceLock<Mutex<HashMap<(String, DocKey), Seq>>> = OnceLock::new();
-    T.get_or_init(|| Mutex::new(HashMap::new()))
+#[derive(Default)]
+struct LastRead {
+    map: HashMap<(String, DocKey), Seq>,
+    /// Recorded since the last flush.
+    dirty: HashSet<(String, DocKey)>,
+}
+
+fn table() -> &'static Mutex<LastRead> {
+    static T: OnceLock<Mutex<LastRead>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(LastRead::default()))
+}
+
+fn row_key(pid: &str, key: &DocKey) -> String {
+    format!("{}\u{1f}{}\u{1f}{pid}", key.space, key.path)
 }
 
 /// Remember that `caller` saw `key` at `version` (agents only).
 pub fn record_read(caller: &DocCaller, key: &DocKey, version: Seq) {
     let DocCaller::Agent { .. } = caller else { return };
     let mut t = table().lock().expect("docs last-read table");
-    if t.len() >= LAST_READ_MAX {
-        t.clear();
+    if t.map.len() >= LAST_READ_MAX && t.dirty.is_empty() {
+        t.map.clear();
     }
-    t.insert((caller.pid(), key.clone()), version);
+    let k = (caller.pid(), key.clone());
+    t.map.insert(k.clone(), version);
+    t.dirty.insert(k);
 }
 
-/// The version `caller` (an agent) last saw in `key`, if any.
+/// The version `caller` (an agent) last saw in `key`, if any: memory, else
+/// the store (after a restart).
 pub fn last_read(caller: &DocCaller, key: &DocKey) -> Option<Seq> {
-    let DocCaller::Agent { .. } = caller else { return None };
-    table().lock().expect("docs last-read table").get(&(caller.pid(), key.clone())).copied()
+    let store = super::runtime().ok().and_then(|rt| rt.store());
+    last_read_in(store.as_deref(), caller, key)
 }
 
-/// A doc moved: what was read under the old key is the same doc.
-pub fn rekey(old: &DocKey, new: &DocKey) {
-    let mut t = table().lock().expect("docs last-read table");
-    let moved: Vec<(String, Seq)> =
-        t.iter().filter(|((_, k), _)| k == old).map(|((pid, _), v)| (pid.clone(), *v)).collect();
-    for (pid, v) in moved {
-        t.remove(&(pid.clone(), old.clone()));
-        t.insert((pid, new.clone()), v);
+fn last_read_in(store: Option<&DocStore>, caller: &DocCaller, key: &DocKey) -> Option<Seq> {
+    let DocCaller::Agent { .. } = caller else { return None };
+    let pid = caller.pid();
+    if let Some(v) = table().lock().expect("docs last-read table").map.get(&(pid.clone(), key.clone())) {
+        return Some(*v);
     }
+    let v = load(store?, &pid, key)?;
+    table().lock().expect("docs last-read table").map.entry((pid, key.clone())).or_insert(v);
+    Some(v)
+}
+
+/// One stored row (an unreadable one is logged and treated as no read:
+/// the edit is then unguarded, never refused on a bad row).
+fn load(store: &DocStore, pid: &str, key: &DocKey) -> Option<Seq> {
+    match store.host_get(LAST_READ_NS, &row_key(pid, key)) {
+        Ok(Some(b)) => std::str::from_utf8(&b).ok().and_then(|s| s.parse().ok()),
+        Ok(None) => None,
+        Err(e) => {
+            log_debug!("[docs] WARN: last-read row of {pid} on {}: {e}", host::key_label(key));
+            None
+        }
+    }
+}
+
+/// Write the reads recorded since the last flush, in one transaction (the
+/// upkeep tick, and release). A failed write keeps them for the next one.
+pub fn flush(store: &DocStore) {
+    let rows: Vec<(String, String)> = {
+        let mut t = table().lock().expect("docs last-read table");
+        let dirty: Vec<(String, DocKey)> = t.dirty.drain().collect();
+        dirty.into_iter().filter_map(|k| t.map.get(&k).map(|v| (row_key(&k.0, &k.1), v.to_string()))).collect()
+    };
+    if rows.is_empty() {
+        return;
+    }
+    let ops: Vec<HostOp> =
+        rows.iter().map(|(k, v)| HostOp::Put { ns: LAST_READ_NS, key: k, value: v.as_bytes() }).collect();
+    if let Err(e) = store.host_batch(&ops) {
+        log_debug!("[docs] WARN: last-read rows not written ({e}); retrying on the next tick");
+        let mut t = table().lock().expect("docs last-read table");
+        let again: Vec<(String, DocKey)> = t.map.keys().filter(|(p, k)| rows.iter().any(|(rk, _)| *rk == row_key(p, k))).cloned().collect();
+        t.dirty.extend(again);
+    }
+}
+
+/// A doc moved: what was read under the old key is the same doc (memory
+/// and store).
+pub fn rekey(store: Option<&DocStore>, old: &DocKey, new: &DocKey) {
+    {
+        let mut t = table().lock().expect("docs last-read table");
+        let moved: Vec<(String, Seq)> =
+            t.map.iter().filter(|((_, k), _)| k == old).map(|((pid, _), v)| (pid.clone(), *v)).collect();
+        for (pid, v) in moved {
+            t.map.remove(&(pid.clone(), old.clone()));
+            t.dirty.remove(&(pid.clone(), old.clone()));
+            t.map.insert((pid.clone(), new.clone()), v);
+            t.dirty.insert((pid, new.clone()));
+        }
+    }
+    let Some(store) = store else { return };
+    let prefix = format!("{}\u{1f}{}\u{1f}", old.space, old.path);
+    match store.host_scan(LAST_READ_NS, &prefix) {
+        Ok(rows) => {
+            let moved: Vec<(String, String, Vec<u8>)> = rows
+                .into_iter()
+                .filter_map(|(k, v)| k.strip_prefix(&prefix).map(|pid| (k.clone(), row_key(pid, new), v)))
+                .collect();
+            let mut ops: Vec<HostOp> = Vec::new();
+            for (oldk, newk, v) in &moved {
+                ops.push(HostOp::Delete { ns: LAST_READ_NS, key: oldk });
+                ops.push(HostOp::Put { ns: LAST_READ_NS, key: newk, value: v });
+            }
+            if !ops.is_empty() {
+                if let Err(e) = store.host_batch(&ops) {
+                    log_debug!("[docs] WARN: moving last-read rows of {}: {e}", host::key_label(old));
+                }
+            }
+        }
+        Err(e) => log_debug!("[docs] WARN: last-read rows of {}: {e}", host::key_label(old)),
+    }
+}
+
+/// A removed workspace: its docs' last-read rows go with them. False when
+/// the store refused (the sweep retries).
+pub fn forget_space(store: Option<&DocStore>, space: &str) -> bool {
+    {
+        let mut t = table().lock().expect("docs last-read table");
+        t.map.retain(|(_, k), _| k.space != space);
+        t.dirty.retain(|(_, k)| k.space != space);
+    }
+    let Some(store) = store else { return true };
+    let prefix = format!("{space}\u{1f}");
+    let keys = match store.host_scan(LAST_READ_NS, &prefix) {
+        Ok(rows) => rows.into_iter().map(|(k, _)| k).filter(|k| k.starts_with(&prefix)).collect::<Vec<_>>(),
+        Err(e) => {
+            log_debug!("[docs] WARN: last-read rows of {space}: {e}");
+            return false;
+        }
+    };
+    let ops: Vec<HostOp> = keys.iter().map(|k| HostOp::Delete { ns: LAST_READ_NS, key: k }).collect();
+    ops.is_empty() || store.host_batch(&ops).map_err(|e| log_debug!("[docs] WARN: last-read rows of {space}: {e}")).is_ok()
 }
 
 /// `argv` with `--if-version <last read>` after the verb, for an agent's
@@ -219,9 +337,44 @@ mod tests {
         record_read(&person, &k, 9);
         assert_eq!(last_read(&person, &k), None);
         let moved = key("claims-test-moved.md");
-        rekey(&k, &moved);
+        rekey(None, &k, &moved);
         assert_eq!(last_read(&agent, &moved), Some(42));
         assert_eq!(last_read(&agent, &k), None);
+    }
+
+    fn temp_store() -> (DocStore, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("k2-lastread-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        (DocStore::open(dir.join("docs.redb")).expect("open a temp docs store"), dir)
+    }
+
+    /// The --if-version safety net survives a restart: what was flushed
+    /// loads back once memory is empty; a moved doc's rows move; a removed
+    /// workspace's rows go.
+    #[test]
+    fn last_reads_survive_a_restart_through_the_docs_store() {
+        let (store, dir) = temp_store();
+        let agent = DocCaller::Agent { project_id: "lastread-agent".into() };
+        let k = DocKey { space: "lastread-ws".into(), path: "notes/a.md".into() };
+        record_read(&agent, &k, 1842);
+        flush(&store);
+        assert_eq!(load(&store, &agent.pid(), &k), Some(1842), "flushed to the store");
+        // A restart: memory is gone, the row isn't.
+        table().lock().expect("table").map.retain(|(p, _), _| *p != agent.pid());
+        assert_eq!(last_read_in(Some(&store), &agent, &k), Some(1842), "loaded back after a restart");
+        let moved = DocKey { space: "lastread-ws".into(), path: "notes/b.md".into() };
+        rekey(Some(&store), &k, &moved);
+        assert_eq!(load(&store, &agent.pid(), &k), None, "the old row moved");
+        assert_eq!(load(&store, &agent.pid(), &moved), Some(1842), "to the new name");
+        let other = DocKey { space: "lastread-other".into(), path: "x.md".into() };
+        record_read(&agent, &other, 7);
+        flush(&store);
+        assert!(forget_space(Some(&store), "lastread-ws"));
+        assert_eq!(load(&store, &agent.pid(), &moved), None, "a removed workspace's rows go");
+        assert_eq!(last_read_in(Some(&store), &agent, &moved), None);
+        assert_eq!(load(&store, &agent.pid(), &other), Some(7), "another workspace's stay");
+        drop(store);
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]

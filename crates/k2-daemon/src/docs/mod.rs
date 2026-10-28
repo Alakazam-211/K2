@@ -222,9 +222,24 @@ pub fn start() {
             watch::spawn_fs_changed_listener();
         }
         Err(e) => {
-            log_debug!("[docs] WARN: docs store at {} failed to open: {e}", path.display());
-            *s = Slot::Failed(e.to_string());
+            let why = store_open_error(&e);
+            log_debug!("[docs] WARN: docs store at {} failed to open: {why}", path.display());
+            *s = Slot::Failed(why);
         }
+    }
+}
+
+/// What a failed store open says. A store written by a newer K2 (a newer
+/// store format) can't be opened by this one, and there is no way back:
+/// say exactly that (0.46.7 moved stores to format 5).
+pub fn store_open_error(e: &k2_mpc_base::store::StoreError) -> String {
+    match e {
+        k2_mpc_base::store::StoreError::Newer { found } => format!(
+            "the docs store was written by a newer K2 (store format {found}; this K2 reads up to {}). \
+             A box that opened documents with a newer K2 can't go back to an older K2: update K2 again",
+            k2_mpc_base::store::STORE_FORMAT
+        ),
+        other => other.to_string(),
     }
 }
 
@@ -259,6 +274,9 @@ pub fn release(why: &str) -> bool {
     };
     if let Err(e) = rt.manager.release() {
         log_debug!("[docs] WARN: release ({why}): {e}");
+    }
+    if let Some(store) = rt.store() {
+        claims::flush(&store);
     }
     rt.store.lock().expect("docs store handle").take();
     rt.watch.stop();
@@ -363,7 +381,7 @@ impl Runtime {
     /// session's key; the watcher index and `.k2/` watches follow.
     pub fn rekey(&self, old: &DocKey, new: &DocKey, new_abs: &Path) -> Result<(), SessionError> {
         self.manager.rekey(old, new.clone())?;
-        claims::rekey(old, new);
+        claims::rekey(self.store().as_deref(), old, new);
         let mut set = self.opened.lock().expect("docs opened set");
         if let Some(p) = set.remove(old) {
             if old.path.starts_with(".k2/") {
@@ -426,6 +444,10 @@ impl Runtime {
             }
             Err(SessionError::Released) => {}
             Err(e) => log_debug!("[docs] WARN: tick: {e}"),
+        }
+        // Agents' last reads, written behind (they survive a restart).
+        if let Some(store) = self.store() {
+            claims::flush(&store);
         }
     }
 
@@ -493,7 +515,7 @@ impl Runtime {
                     // stored under it: the same bytes stored again get an
                     // unrelated id. The space row stays until this worked,
                     // so a failure retries on the next sweep.
-                    if !self.purge_space_key(&space) {
+                    if !self.purge_space_key(&space) || !claims::forget_space(self.store().as_deref(), &space) {
                         continue;
                     }
                     if let Some(store) = self.store() {
@@ -570,6 +592,14 @@ pub fn pool_json() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_too_new_store_says_there_is_no_way_back() {
+        let m = store_open_error(&k2_mpc_base::store::StoreError::Newer { found: 6 });
+        assert!(m.contains("store format 6"), "{m}");
+        assert!(m.contains("can't go back to an older K2"), "{m}");
+        assert_eq!(k2_mpc_base::store::STORE_FORMAT, 5, "0.46.7 ships store format 5 (WHATS_NEW says so)");
+    }
 
     #[test]
     fn the_tier_0_cap_is_32_mib_and_the_env_only_lowers_it() {

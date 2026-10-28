@@ -276,6 +276,19 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             Err(e) => return bad(format!("body is not JSON: {e}")),
         }
     };
+    // Provenance (who put restored text back) is the kit's alone: it stamps
+    // it in its own undo, redo and revert. A request naming it is refused
+    // before anything reaches the kit.
+    if let Some(k) = provenance_field(params, &body) {
+        return with_exit(
+            refusal(
+                "400 Bad Request",
+                "provenance_is_kit_only",
+                format!("`{k}` can't be set: who restored text is recorded by the docs kit itself, in its own undo, redo and revert"),
+            ),
+            k2_mpc_base::tools::exit::USAGE,
+        );
+    }
     let input = Input { params, body };
 
     if path == STATUS && input.str("path").is_none_or(|p| p.trim().is_empty()) {
@@ -439,6 +452,29 @@ fn claim(s: &Session, c: &Call) -> Result<CliResponse, VerbError> {
         }
         other => Err(VerbError::Response(bad(format!("action must be take, renew or release (got {other})")))),
     }
+}
+
+/// Fields that would name a restore's provenance (the kit's spec U23):
+/// refused on every route, in the query or the JSON body, at any depth.
+const PROVENANCE_FIELDS: &[&str] =
+    &["restores", "restored", "restoredBy", "restoredIn", "restored_by", "restored_in", "provenance", "root", "roots"];
+
+/// The first provenance field a request names, if any.
+pub(super) fn provenance_field(params: &HashMap<String, String>, body: &Value) -> Option<String> {
+    fn walk(v: &Value) -> Option<String> {
+        match v {
+            Value::Object(o) => o.iter().find_map(|(k, v)| {
+                if PROVENANCE_FIELDS.iter().any(|f| f.eq_ignore_ascii_case(k)) {
+                    Some(k.clone())
+                } else {
+                    walk(v)
+                }
+            }),
+            Value::Array(a) => a.iter().find_map(walk),
+            _ => None,
+        }
+    }
+    params.keys().find(|k| PROVENANCE_FIELDS.iter().any(|f| f.eq_ignore_ascii_case(k))).cloned().or_else(|| walk(body))
 }
 
 /// One doc call, resolved.
@@ -809,8 +845,14 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
                     "onBehalfOf": l.on_behalf_of,
                     "approval": l.approval.as_ref().map(lower),
                     "erased": l.erased,
+                    // Text an undo, redo or revert put back: blamed on its
+                    // original author; who put it back, and in which change.
+                    "restoredBy": l.restored_by,
+                    "restoredByLabel": l.restored_by.as_deref().map(pid_label),
+                    "restoredIn": l.restored_in,
                 })).collect::<Vec<_>>(),
                 "rendered": b.render(|pid| Some(pid_label(pid))),
+                "porcelain": b.porcelain(),
             })))
         }
         FLUSH => {
@@ -1931,6 +1973,54 @@ mod tests {
             assert!(resp.status.starts_with("405"), "{wrong} {r} answered {}", resp.status);
         }
         assert!(handle("GET", "/cli/docs/nope", &params, b"", &caller).status.starts_with("404"));
+    }
+
+    /// The undo promise (kit v0.9.0) is in `k2 doc --help` and `k2 study
+    /// docs` word for word (line breaks aside).
+    #[test]
+    fn the_undo_promise_is_in_the_help_and_the_study_page_verbatim() {
+        const PROMISE: &str = "Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, the undo applies what it cleanly can and reports the rest as a conflict; it never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.";
+        let cli = include_str!("../../../../cli/k2");
+        let page = |start: &str| {
+            let s = cli.find(start).unwrap_or_else(|| panic!("{start} in cli/k2"));
+            let body = &cli[s..s + cli[s..].find("\nEOF\n").expect("heredoc end")];
+            body.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        for start in ["\n_doc_usage() {", "\n_study_page_docs() {"] {
+            assert!(page(start).contains(PROMISE), "the promise isn't verbatim in {start}");
+        }
+    }
+
+    /// Provenance is kit-stamped only (spec U23, `sec.client_provenance_refused`):
+    /// a caller naming it, on any route, in the body (at any depth) or the
+    /// query, is refused before the docs runtime, a target or the kit is
+    /// touched (this test has no runtime: reaching it would answer 503).
+    #[test]
+    fn a_provenance_field_is_refused_on_every_route_and_never_reaches_the_kit() {
+        let agent = DocCaller::Agent { project_id: "p1".into() };
+        let owner = super::super::caller::owner();
+        for r in ROUTES {
+            let m = if is_post_route(r) { "POST" } else { "GET" };
+            for caller in [&agent, &owner] {
+                for body in [
+                    r#"{"path":"a.md","restores":"agent:x"}"#,
+                    r#"{"path":"a.md","edits":[{"lines":"1,1","text":"x","provenance":{"root":"1:2"}}]}"#,
+                    r#"{"path":"a.md","argv":["undo"],"restoredBy":"person:owner"}"#,
+                ] {
+                    let resp = handle(m, r, &HashMap::new(), if m == "POST" { body.as_bytes() } else { b"" }, caller);
+                    if m == "GET" {
+                        continue;
+                    }
+                    assert!(resp.status.starts_with("400"), "{m} {r} {body}: {} {}", resp.status, resp.body);
+                    assert!(resp.body.contains("provenance_is_kit_only"), "{m} {r}: {}", resp.body);
+                }
+                let mut q = HashMap::new();
+                q.insert("restored_in".to_string(), "7".to_string());
+                let resp = handle(m, r, &q, b"", caller);
+                assert!(resp.body.contains("provenance_is_kit_only"), "{m} {r} (query): {}", resp.body);
+            }
+        }
+        assert_eq!(provenance_field(&HashMap::new(), &json!({"path": "a.md", "text": "restores"})), None, "a value is not a field");
     }
 
     #[test]

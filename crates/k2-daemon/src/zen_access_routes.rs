@@ -7,8 +7,8 @@
 //! generic Zen arm's 404, and `zen_routes` / `zen_agent_routes` take their
 //! 0.46.3 paths. The branches sit at the route edges.
 //!
-//! - **The resolver (G10)**, [`garden_access_may`]: the owner token and an
-//!   Owner login edit; a live local passport (any session in a listed
+//! - **The resolver (G10)**, [`garden_access_may`]: the owner token and a
+//!   login the owner linked (the owner person, GP-B1) edit; a live local passport (any session in a listed
 //!   workspace's room: the pinned chat, another harness tab, a sidecar cell,
 //!   a plain shell tab) edits when its workspace is listed, else asks; a
 //!   passport whose session is gone is refused (`session_gone`).
@@ -349,7 +349,7 @@ fn garden_of_file(file: Option<&str>) -> Option<String> {
 
 // ── stamps (G9) ──────────────────────────────────────────────────────
 
-/// The maker a caller signs as: the person (owner token or Owner login),
+/// The maker a caller signs as: the person (owner token or a login the owner linked),
 /// or the workspace of a local agent or shell passport.
 pub(crate) fn signer_of(caller: &Caller) -> Option<(MadeBy, CallerKind)> {
     match caller {
@@ -665,7 +665,7 @@ fn look_write(caller: &Caller, path: &str, ingress: &str) -> Option<CliResponse>
 }
 
 /// **G11/G12 with the switch on**: what `zen_routes::handle` does for a
-/// request that isn't the owner token (nor an Owner login on a GardenOwner
+/// request that isn't the owner token (nor the owner's linked login on a GardenOwner
 /// route). `None` lets the route run.
 pub(crate) fn passport_gate(path: &str, caller: &Caller, body: &[u8], ingress: &str) -> Option<CliResponse> {
     if !crate::zen_routes::is_local_passport(caller) {
@@ -1060,7 +1060,7 @@ pub(crate) fn unsign_entry(caller: &Caller, widget: &str, version: &str, ingress
 }
 
 /// `POST /cli/zen/widget/sign {widget, garden?, version?, ask?}` with the
-/// switch on: the person (owner token or Owner login) or a local passport
+/// switch on: the person (owner token or a login the owner linked) or a local passport
 /// signs the live clean version. The person, or an agent listed on every
 /// placing Garden, vouches (overwrites another signer); anyone else stamps
 /// an unsigned version only when that leaves it passing in every Garden
@@ -1310,7 +1310,7 @@ pub(crate) fn agent_view(project_id: &str) -> J {
 }
 
 /// May `caller` read the list and History as the person? The owner token
-/// (presented as such) or an Owner login.
+/// (presented as such) or a login the owner linked (GP-B1).
 fn person(owner: bool, caller: &Caller) -> bool {
     match caller {
         Caller::Owner => owner,

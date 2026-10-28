@@ -5,8 +5,8 @@
 //! catalog action an agent may ask for.
 //!
 //! **Floor: `GardenOwner`**, the owner of that Garden from any signed-in
-//! surface (the owner token, or an Owner login from the phone, the web or
-//! another server). `apply` goes through `zen_routes::claim_entry`, which
+//! surface (the owner token, or a login the owner linked, from the phone,
+//! the web or another server; GP-B1). `apply` goes through `zen_routes::claim_entry`, which
 //! runs `zen_routes::garden_owner_may`, the one resolver Settings' "It's
 //! mine" uses too, so card and Settings stay one door (§6.4, C15).
 //!

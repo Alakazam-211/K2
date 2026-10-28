@@ -70,6 +70,12 @@ fn login(name: &str, role: Role) -> String {
     user
 }
 
+/// Link `users` to the owner (`ownerAccounts`, what `POST
+/// /cli/owner/accounts` writes): they become the owner PERSON.
+fn link_to_owner(users: &[&str]) {
+    k2_core::app_settings::update(json!({ "ownerAccounts": users })).expect("link to the owner");
+}
+
 fn as_login(user: &str) -> Answerer {
     let role = k2_core::connect_users::role_for_user(user).expect("a login");
     Answerer::Login { user: user.to_string(), role: format!("{role:?}").to_ascii_lowercase() }
@@ -603,16 +609,44 @@ fn manager(id: &str) -> Caller {
     Caller::Agent(crate::sidecar_routes::AgentCaller { project_id: id.into(), map_key: None, args: vec![], sandboxed: false })
 }
 
+/// GP-B1: the Garden's owner is the owner PERSON (the owner token and the
+/// logins the owner linked, whatever their role), not the Owner role. The
+/// owner's phone paired as their linked Admin login may; another person's
+/// unlinked Owner-role login may not.
 #[test]
-fn garden_owner_is_the_owner_token_or_an_owner_login() {
+fn garden_owner_is_the_owner_token_or_a_login_the_owner_linked() {
     let _e = zen_env();
-    let owner = login("e1go", Role::Owner);
+    let linked_owner = login("e1go", Role::Owner);
+    let linked_admin = login("e1gl", Role::Admin);
+    let other_owner = login("e1gx", Role::Owner);
     let admin = login("e1ga", Role::Admin);
     let member = login("e1gm", Role::Member);
     let may = |c: &Caller| crate::zen_routes::garden_owner_may(c, Some("garden-1"));
+    // Before any link, no login is the owner person: not even an Owner.
+    for u in [&linked_owner, &linked_admin, &other_owner] {
+        assert!(!may(&Caller::Login { username: u.clone() }), "{u} isn't linked yet");
+    }
+    link_to_owner(&[&linked_owner, &linked_admin]);
     assert!(may(&Caller::Owner));
-    assert!(may(&Caller::Login { username: owner }));
+    assert!(may(&Caller::Login { username: linked_owner.clone() }));
+    assert!(may(&Caller::Login { username: linked_admin.clone() }), "the owner's phone, paired as their linked Admin");
+    // The floor the permission cards check is the same rule.
+    use k2_core::permission::catalog::Floor;
+    let floor = |u: &str, role: &str| {
+        crate::permission::present::meets_floor(Floor::GardenOwner, &Answerer::Login { user: u.into(), role: role.into() })
+    };
+    assert!(floor(&linked_admin, "admin"));
+    assert!(!floor(&other_owner, "owner"), "an unlinked Owner-role login is another person");
+    let mut names = crate::permission::present::eligible_logins(Floor::GardenOwner);
+    names.sort();
+    let mut want = vec![linked_owner.clone(), linked_admin.clone()];
+    want.sort();
+    assert_eq!(names, want, "the card's approvers are the owner person's logins");
+    // A disabled linked login is not the person any more.
+    k2_core::connect_users::set_disabled(&linked_owner, true).expect("disable");
+    assert!(!may(&Caller::Login { username: linked_owner }));
     for c in [
+        Caller::Login { username: other_owner },
         Caller::Login { username: admin },
         Caller::Login { username: member },
         Caller::Login { username: "no-such-login".into() },
@@ -625,14 +659,18 @@ fn garden_owner_is_the_owner_token_or_an_owner_login() {
     }
 }
 
-/// Settings widens with the card (exception 3): an Owner login claims,
-/// resumes and approves; an Admin login doesn't; the lock and every other
-/// Zen route stay owner-token only.
+/// Settings widens with the card (exception 3): the owner's linked login
+/// (here an Admin-role one, as pairing picks when no Owner login is
+/// linked) claims, resumes and approves; an unlinked login doesn't, even
+/// an Owner-role one (GP-B1); the lock and every other Zen route stay
+/// owner-token only.
 #[test]
-fn settings_takes_an_owner_login_on_the_three_garden_owner_routes_only() {
+fn settings_takes_the_owners_linked_login_on_the_three_garden_owner_routes_only() {
     let e = zen_env();
-    let owner = Caller::Login { username: login("e1zo", Role::Owner) };
-    let admin = Caller::Login { username: login("e1za", Role::Admin) };
+    let mine = login("e1zo", Role::Admin);
+    link_to_owner(&[&mine]);
+    let owner = Caller::Login { username: mine };
+    let admin = Caller::Login { username: login("e1za", Role::Owner) };
     let (s, v) = zen("/cli/zen/widget/folder/put", true, &Caller::Owner, json!({"widget": "board", "files": widget_folder("board", "v1")}));
     assert_eq!(s, "200 OK", "{v}");
     // Keep as mine (claim).
@@ -677,8 +715,9 @@ fn settings_takes_an_owner_login_on_the_three_garden_owner_routes_only() {
 #[test]
 fn keep_mine_through_the_card_takes_the_gardens_owner() {
     let e = zen_env();
-    let owner_user = login("e1ko", Role::Owner);
-    let admin_user = login("e1ka", Role::Admin);
+    let owner_user = login("e1ko", Role::Admin);
+    link_to_owner(&[&owner_user]);
+    let admin_user = login("e1ka", Role::Owner);
     let mgr = manager("w-e1-keep");
     let conv = uuid::Uuid::new_v4().to_string();
     {

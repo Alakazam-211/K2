@@ -3,8 +3,8 @@
 //!
 //! `zen_routes::handle` has already applied Zen's rules (this computer's
 //! owner token, or a LOCAL agent / K2 shell passport; a Connect login, an
-//! app pass or a sandboxed agent gets 403 `zen_local_only`; an Owner login
-//! may approve a proposal, `zen_routes::GARDEN_OWNER_ROUTES`), refused a GET
+//! app pass or a sandboxed agent gets 403 `zen_local_only`; the owner's linked
+//! login may approve a proposal, `zen_routes::GARDEN_OWNER_ROUTES`), refused a GET
 //! on a POST row, and refused a put that names a locked Garden (423).
 //!
 //! | route                         | person | agent with the switch | other agent |
@@ -900,9 +900,9 @@ fn decided_by(caller: &Caller) -> String {
 }
 
 /// Proposal approve takes the Garden's owner from any signed-in surface
-/// (permission cards §5.2.1, Rosson Q2): an Owner login approves as the
-/// person, through the same `zen_routes::garden_owner_may` the card uses.
-/// An Admin or Member login never gets here (`zen_routes::handle` answers
+/// (permission cards §5.2.1, Rosson Q2): a login the owner linked approves
+/// as the person, through the same `zen_routes::garden_owner_may` the card
+/// uses (GP-B1). Any other login never gets here (`zen_routes::handle` answers
 /// it `zen_local_only`), and a passport keeps its own role.
 fn approver(r: Role, caller: &Caller) -> Role {
     match caller {

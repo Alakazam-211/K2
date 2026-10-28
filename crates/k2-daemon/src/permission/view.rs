@@ -202,6 +202,26 @@ fn meets(floor: &str, f: &Facts) -> bool {
     present::meets_floor(present::floor_of(floor), &who)
 }
 
+/// [`meets`] for one item, by its action's catalog floor when K2 knows the
+/// action: `approvers.floor` reads `owner` for a GardenOwner row, whose
+/// answerer is the owner PERSON (a linked login of any role, GP-B1), not
+/// an Owner-role login.
+fn meets_item(item: &ItemView, f: &Facts) -> bool {
+    match present::find_action(&item.action) {
+        Some(a) if f.person => present::meets_floor(a.spec.floor, &answerer_of(f)),
+        Some(_) => false,
+        None => meets(&item.approvers.floor, f),
+    }
+}
+
+fn answerer_of(f: &Facts) -> Answerer {
+    if f.via == "owner-token" {
+        Answerer::OwnerToken
+    } else {
+        Answerer::Login { user: f.login.clone(), role: f.role.clone() }
+    }
+}
+
 // ── the current Settings state (§4.2, §6.2) ──────────────────────────
 
 /// `check` for the request a card shows (`view.requestId`: `pr_…` or a
@@ -432,7 +452,7 @@ fn project_one(doc: &OverlayDoc, view: PermissionView, viewer: &Viewer, cards: u
     let choice = doc.choice.as_ref().expect("a permission card is a choice card");
     let action = choice.action.as_ref().expect("a permission card has an action");
     let state = current_state(view.item.state, &view.item.request_id, &choice.status, choice.answer.as_deref());
-    let can = meets(&view.item.approvers.floor, &f);
+    let can = meets_item(&view.item, &f);
     let agent = agent_of(&view.item, doc);
     let is_asker = f.person && view.item.asked_for.as_deref() == Some(f.login.as_str());
 
@@ -512,11 +532,11 @@ fn project_batch(doc: &OverlayDoc, view: BatchView, viewer: &Viewer, cards: u8) 
         .collect();
     let open = |s: &RequestState| s.is_open() || *s == RequestState::Applying;
     let batch_state = if choice.status == "pending" && states.iter().any(open) { BatchState::Pending } else { BatchState::Done };
-    let can = meets(&view.approvers.floor, &f);
+    let can = meets(&view.approvers.floor, &f) || view.items.iter().any(|i| meets_item(i, &f));
     let pending_items: Vec<(&ItemView, RequestState)> =
         view.items.iter().zip(states.iter().copied()).filter(|(_, s)| *s == RequestState::Pending).collect();
     let can_all = f.person
-        && pending_items.iter().all(|(i, _)| meets(&i.approvers.floor, &f) && matches!(i.proof, ViewProof::Click));
+        && pending_items.iter().all(|(i, _)| meets_item(i, &f) && matches!(i.proof, ViewProof::Click));
     let agent = view.items.first().map(|i| agent_of(i, doc)).unwrap_or_else(|| doc.from.clone());
 
     if cards == CARDS_CONTRACT && f.person {
@@ -531,7 +551,7 @@ fn project_batch(doc: &OverlayDoc, view: BatchView, viewer: &Viewer, cards: u8) 
             .into_iter()
             .zip(states.iter().copied())
             .map(|(i, s)| {
-                let can_i = meets(&i.approvers.floor, &f);
+                let can_i = meets_item(&i, &f);
                 item_for(i, s, can_i, &f)
             })
             .collect();

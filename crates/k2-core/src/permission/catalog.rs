@@ -177,8 +177,9 @@ pub enum Floor {
     /// The owner token, an Owner login or an Admin login.
     Admin,
     /// The owner of that Garden from any signed-in surface: the owner token
-    /// or a Connect Owner login (phone, web, another server). Resolved by
-    /// `zen::garden_owner_may`, which Settings calls too (§5.2.1).
+    /// or a Connect login the owner linked, whatever its role (phone, web,
+    /// another server; GP-B1). Resolved by `zen::garden_owner_may`, which
+    /// Settings calls too (§5.2.1).
     GardenOwner,
 }
 

@@ -330,15 +330,21 @@ async fn every_e1_switch_applies_the_same_through_the_card_and_settings() {
 
     // ── the Garden's owner from the phone ───────────────────────────
     // Keep as mine is retired (0.46.3: Garden access is always on), for
-    // every caller; widget resume keeps the Owner-login gate it shared.
+    // every caller; widget resume keeps the Garden-owner gate it shared:
+    // the owner PERSON (GP-B1), so an Owner-role login is past it only once
+    // the owner linked it.
     for who in [&admin, &owner] {
         let r = post(port, "/cli/zen/widget/claim", who, Some(json!({ "widget": "board" }))).await;
         assert_eq!((r.status, json_of(&r)["error"].as_str()), (410, Some("retired")), "{}", r.body);
     }
-    let r = post(port, "/cli/zen/widget/resume", &admin, Some(json!({ "widget": "board" }))).await;
-    assert_eq!((r.status, json_of(&r)["error"].as_str()), (403, Some("owner_only")), "{}", r.body);
+    for who in [&admin, &owner] {
+        let r = post(port, "/cli/zen/widget/resume", who, Some(json!({ "widget": "board" }))).await;
+        assert_eq!((r.status, json_of(&r)["error"].as_str()), (403, Some("owner_only")), "unlinked: {}", r.body);
+    }
+    let r = post(port, "/cli/owner/accounts", OWNER, Some(json!({ "accounts": ["e1owner"] }))).await;
+    assert_eq!(r.status, 200, "link e1owner to the owner: {}", r.body);
     let r = post(port, "/cli/zen/widget/resume", &owner, Some(json!({ "widget": "board" }))).await;
-    assert_ne!(json_of(&r)["error"].as_str(), Some("owner_only"), "an Owner login is past the gate: {}", r.body);
+    assert_ne!(json_of(&r)["error"].as_str(), Some("owner_only"), "the owner's linked login is past the gate: {}", r.body);
     assert_ne!(json_of(&r)["error"].as_str(), Some("zen_local_only"), "{}", r.body);
     let r = post(port, "/cli/zen/garden/lock", &owner, Some(json!({ "garden": "g", "locked": true }))).await;
     assert_eq!((r.status, json_of(&r)["error"].as_str()), (403, Some("owner_only")), "the lock stays owner-token only: {}", r.body);

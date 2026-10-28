@@ -41,6 +41,9 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **`k2 daemon status` shows whether agents survive restarts** and how many came back at the last restart, like `k2 daemon survive status` (macOS and Linux; `--json` has `ptyd` and `adopted`).
 - **The daemon's error log stops filling up with K2 Connect lines.** K2's own 10-second tunnel check was logged as a failed TLS handshake each time (one log reached 163 MB). Those checks are quiet now, and real handshake failures are logged once, then as a count every 10 minutes.
 
+### Gardens
+- **Your Gardens answer to you, not to anyone with the Owner role.** Resuming a paused widget, approving a Garden proposal, signing a widget and answering a Garden card now take the owner token or a login you linked to yourself with **This is me (owner)**, whatever its role. So the phone you paired as your linked Admin login can do them, and another person's Owner-role login that you didn't link no longer can.
+
 ## 0.46.5 — Agents stay up
 
 ### When you update

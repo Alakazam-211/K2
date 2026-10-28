@@ -754,17 +754,22 @@ fn push_samples(out: &mut Out) {
 /// `garden_cards::present_detail` with Garden access lists on, answered on
 /// the Thread route. The same `cards=2` permission view as every card
 /// (Appendix C): only the words differ. Floor GardenOwner reads `owner`,
-/// so maya (Admin) waits.
+/// and its answerer is the owner PERSON (GP-B1): rosson is the owner's
+/// linked login here; maya (an unlinked Admin) waits.
 fn garden_samples(out: &mut Out) {
     // Garden access lists on for these cards only (generate() holds the
-    // TempHome's env lock, so no other test sees the switch).
+    // TempHome's env lock, so no other test sees the switch), and rosson
+    // linked to the owner for these cards only (the other samples stay as
+    // they were).
     struct On;
     impl Drop for On {
         fn drop(&mut self) {
             k2_core::zen::garden_access::set_switch(false);
+            k2_core::app_settings::update(json!({ "ownerAccounts": [] })).expect("unlink rosson");
         }
     }
     k2_core::zen::garden_access::set_switch(true);
+    k2_core::app_settings::update(json!({ "ownerAccounts": [ROSSON] })).expect("link rosson to the owner");
     let _on = On;
     let f = k2_core::zen::ZenFiles::local();
     f.setup().expect("zen setup");

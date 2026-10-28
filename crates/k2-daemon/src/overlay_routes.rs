@@ -2708,6 +2708,27 @@ pub(crate) fn require_action_card_person(params: &HashMap<String, String>, sessi
     Ok(())
 }
 
+/// [`require_action_card_person`] for the Keep-as-mine card
+/// ([`crate::action_cards::KEEP_WIDGET`]): its Settings control is a
+/// GardenOwner one, so the answerer is the Garden's owner PERSON (the owner
+/// token or a login the owner linked, whatever its role), through
+/// `zen_routes::garden_owner_may`, the same check its apply runs (GP-B1).
+/// Another person's unlinked Owner-role login is refused.
+pub(crate) fn require_garden_owner_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
+    refuse_action_card_non_person(params, verb)?;
+    let caller = if session_author == "owner" {
+        crate::sidecar_routes::Caller::Owner
+    } else {
+        crate::sidecar_routes::Caller::Login { username: session_author.to_string() }
+    };
+    if !crate::zen_routes::garden_owner_may(&caller, None) {
+        return Err(action_card_person_only(&format!(
+            "only this server's owner {verb} this card (the owner token or a login the owner linked, as in Settings → Gardens → Local Data)"
+        )));
+    }
+    Ok(())
+}
+
 /// Settings (action) cards are answered by people only (§6.1): an agent
 /// passport (its own or another workspace's), a K2 terminal cell, a Garden
 /// widget and an App guest are refused, whatever the floor.
@@ -2873,7 +2894,12 @@ fn answer_action_card(
     if action.id == k2_core::permission::CARD_ACTION_PERMISSION || action.id == k2_core::permission::CARD_ACTION_BATCH {
         return answer_permission_card(params, resolved, card_id, action, session_author);
     }
-    if let Err(r) = require_action_card_person(params, session_author, "answers") {
+    let gate = if action.id == crate::action_cards::KEEP_WIDGET {
+        require_garden_owner_card_person(params, session_author, "answers")
+    } else {
+        require_action_card_person(params, session_author, "answers")
+    };
+    if let Err(r) = gate {
         return r;
     }
     if let Some(r) = refuse_if_expired(resolved, card_id) {

@@ -719,7 +719,7 @@ rows, 64 KB request bodies, a GET on a POST route is 405.
 | `GET widget/bundle` | `?widget=<name or k2:…@n>&garden=<id>?` | `{ok, widget, hash, nonce, html, bytes}`; 404 `unknown_widget`; 409 `widget_broken`. With `garden=` naming a locked Garden, that Garden's frozen copy (zen-garden-lock-v1) |
 | `POST widget/new` | `{name, from?}` (`hello`, `arcade`, `k2:diary`) | `{ok, name, path, files, changed}`; 409 `widget_exists`; 404 `zen_not_set_up` |
 | `POST widget/pause` | `{garden, placement, reason: "runaway"}` | `{ok, paused, changed}`; the renderer's runaway guard tripped. Taking power away: anything Zen accepts |
-| `POST widget/resume` | `{garden, placement}` | `{ok, paused: null, resumed, changed}`; the person's Resume click: owner token only (a passport, Connect login, API key or app pass gets 403 `owner_only`) |
+| `POST widget/resume` | `{garden, placement}` | `{ok, paused: null, resumed, changed}`; the person's Resume click: the Garden's owner person only, i.e. the owner token or a Connect login the owner linked (`ownerAccounts`), whatever its role (a passport, any other login even an Owner-role one, an API key or an app pass gets 403 `owner_only`). Keep as mine, proposal approve and Sign follow the same person rule (0.46.6, GP-B1) |
 | `GET templates` | — | `[{id, short, label, description, section, newUsers}]` |
 
 **No grants** (2026-10-08). The first Zen v2 build's grant routes

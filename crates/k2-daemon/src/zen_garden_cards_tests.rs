@@ -92,6 +92,15 @@ fn login(name: &str, role: Role) -> String {
     user
 }
 
+/// The owner person's own login (the phone they paired): an Owner-role
+/// login the owner LINKED (`ownerAccounts`). An unlinked Owner-role login
+/// is another person and isn't the Garden's owner (GP-B1).
+fn owner_login(name: &str) -> String {
+    let user = login(name, Role::Owner);
+    k2_core::app_settings::update(json!({ "ownerAccounts": [&user] })).expect("link to the owner");
+    user
+}
+
 /// A new Garden: `(id, name)`.
 fn new_garden(e: &Env, name: &str) -> (String, String) {
     let g = e.f.new_garden(name, None, None, None).unwrap_or_else(|err| panic!("new garden {name}: {err:?}"));
@@ -226,7 +235,7 @@ fn off_the_rows_are_listed_and_answer_not_available() {
 #[test]
 fn made_then_allow_lists_the_agent_through_the_card() {
     let e = env(true);
-    let owner = login("a4o", Role::Owner);
+    let owner = owner_login("a4o");
     let admin = login("a4a", Role::Admin);
     let ws = seed("billing");
     let g = new_garden(&e, "Sales board");
@@ -392,7 +401,7 @@ fn a_renamed_garden_is_named_by_its_current_name() {
 #[test]
 fn the_delete_card_deletes_as_the_person() {
     let e = env(true);
-    let owner = login("a4do", Role::Owner);
+    let owner = owner_login("a4do");
     let ws = seed("del");
     let stranger = seed("str");
     let g = new_garden(&e, "Sales board");
@@ -446,13 +455,21 @@ fn the_delete_card_deletes_as_the_person() {
 #[test]
 fn settings_and_the_card_are_one_door_for_both_prompts() {
     let e = env(true);
-    let owner = login("a4po", Role::Owner);
+    let owner = owner_login("a4po");
     let admin = login("a4pa", Role::Admin);
     let member = login("a4pm", Role::Member);
     let ws = seed("par");
     let g = new_garden(&e, "Shared");
     let agent = Caller::Agent(AgentCaller { project_id: ws.id.clone(), map_key: None, args: vec![], sandboxed: false });
-    for c in [Caller::Login { username: admin.clone() }, Caller::Login { username: member }, agent, Caller::Shell { project_id: ws.id.clone() }] {
+    // GP-B1: another person's unlinked Owner-role login is refused like an Admin.
+    let other_owner = login("a4px", Role::Owner);
+    for c in [
+        Caller::Login { username: admin.clone() },
+        Caller::Login { username: member },
+        Caller::Login { username: other_owner },
+        agent,
+        Caller::Shell { project_id: ws.id.clone() },
+    ] {
         let r = access_entry(&c, &g.0, &ws.id, true, "settings");
         assert_eq!(r.status, "403 Forbidden", "{c:?}: {}", r.body);
         let r = delete_entry(&c, &g.0, "settings");

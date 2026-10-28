@@ -640,8 +640,18 @@ fn garden_proposal_approve_is_the_gardens_owner_through_the_same_door_as_setting
     assert_eq!(refused_code(apply_as(&pr, &Answerer::Login { user: admin, role: "admin".into() }, None)), "zen_local_only");
     assert_eq!(proposal_status(&id), "pending");
 
-    // An Owner login (the phone, the web) approves it as the person.
-    let owner = login("e2gpo", Role::Owner);
+    // Another person's unlinked Owner-role login isn't the Garden's owner
+    // (GP-B1).
+    let other = login("e2gpx", Role::Owner);
+    below_floor(answer_as(&other, &ws, &card, json!({ "answer": "Allow" })), "owner");
+    let (s, v) = zen("/cli/zen/proposals/approve", false, &crate::sidecar_routes::Caller::Login { username: other.clone() }, json!({ "id": id }));
+    assert_eq!((s.as_str(), v["error"].as_str()), ("403 Forbidden", Some("zen_local_only")), "{v}");
+    assert_eq!(proposal_status(&id), "pending");
+
+    // The owner's linked login (the phone, the web) approves it as the
+    // person, whatever its role.
+    let owner = login("e2gpo", Role::Admin);
+    k2_core::app_settings::update(json!({ "ownerAccounts": [&owner] })).expect("link to the owner");
     let (s, a) = answer_as(&owner, &ws, &card, json!({ "answer": "Allow", "client": "phone" }));
     assert_eq!(s, "200 OK", "{a}");
     assert_eq!(a["action"]["result"]["outcome"], "approved", "{a}");

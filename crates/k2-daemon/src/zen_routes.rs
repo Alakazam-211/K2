@@ -8,9 +8,9 @@
 //! passes and `role_gate` lets the request reach this check; the check
 //! itself lives here (Z59), after the dispatcher consumed the request.
 //! One widening (permission cards §5.2.1, Rosson Q2): the Garden's owner
-//! from any signed-in surface, an **Owner** login too, may use Keep as mine
-//! (`widget/claim`), widget resume and proposal approve
-//! ([`GARDEN_OWNER_ROUTES`], [`garden_owner_may`]).
+//! person from any signed-in surface, a login the owner linked too, may use
+//! Keep as mine (`widget/claim`), widget resume and proposal approve
+//! ([`GARDEN_OWNER_ROUTES`], [`garden_owner_may`]; GP-B1).
 //!
 //! Gardens (G13): `setup` is the only route that creates the folder; the
 //! `garden/*` routes are the only writers of `gardens.json`. Every change
@@ -981,8 +981,8 @@ const OWNER_ONLY: &str = "Only you can resume a paused widget, in the K2 app: cl
 
 // ── GardenOwner (prd-agent-settings-cards-v1 rev 3.1 §5.2.1, Rosson Q2) ──
 
-/// The routes the Garden's owner may use from any signed-in surface (an
-/// Owner login too, not only this computer's owner token): Keep as mine
+/// The routes the Garden's owner may use from any signed-in surface (a
+/// login the owner linked too, not only this computer's owner token): Keep as mine
 /// (`widget/claim`), widget resume and proposal approve. Settings and the
 /// permission card both pass [`garden_owner_may`], so they stay one door.
 /// Every other Zen route stays this computer's owner token (or a local
@@ -992,13 +992,20 @@ pub const GARDEN_OWNER_ROUTES: &[&str] =
 
 /// **The one GardenOwner resolver.** May `caller` act as the owner of
 /// `garden` (or of a widget, which belongs to the Gardens of this
-/// computer's owner)? A Garden is a personal page of this computer's owner,
-/// so today the answer is the same for every Garden:
+/// computer's owner)? A Garden is a personal page of this computer's owner
+/// **person**, so today the answer is the same for every Garden:
 /// - the owner token (the desktop app, a terminal outside K2): yes;
-/// - a Connect **Owner** login on this server (the phone, the web, another
-///   server's K2 signed in with that login): yes;
-/// - an Admin or Member login, an agent or K2 terminal passport, an App
-///   pass, an API key: no.
+/// - a Connect login the owner LINKED to themselves (`ownerAccounts`;
+///   the phone the owner paired, the web, another server's K2 signed in
+///   with it), whatever its role: yes. That is the person rule Homes,
+///   pairing and notify prefs use (`k2_core::notify_prefs::People`).
+/// - any other login, even an Owner-role one (another person), an agent
+///   or K2 terminal passport, an App pass, an API key: no.
+///
+/// GP-B1 (prd-gardens-on-phone-v1-vs-live): this used to accept any
+/// Owner-role login, so another person's unlinked Owner login could Resume,
+/// approve and Sign on the owner's Gardens, while the owner's own phone,
+/// paired as their linked Admin login, couldn't.
 ///
 /// `garden` is the Garden the request names, when it names one. It is
 /// unused until Gardens belong to different people; then only this
@@ -1008,11 +1015,24 @@ pub(crate) fn garden_owner_may(caller: &Caller, garden: Option<&str>) -> bool {
     let _ = garden;
     match caller {
         Caller::Owner => true,
-        Caller::Login { username } => {
-            k2_core::connect_users::role_for_user(username) == Some(k2_core::connect_users::Role::Owner)
-        }
+        Caller::Login { username } => login_is_owner_person(username),
         _ => false,
     }
+}
+
+/// True when `username` is the owner person: a live (existing, enabled)
+/// Connect login the owner linked to themselves. An unlinked login is
+/// itself, whatever its role (0.46.0, `notify_prefs::People::person_key`).
+/// Fails closed when the logins can't be read.
+pub(crate) fn login_is_owner_person(username: &str) -> bool {
+    let people = match k2_core::notify_prefs::People::load() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("[zen] the owner person check couldn't read the logins: {e}");
+            return false;
+        }
+    };
+    people.user(username).is_some_and(|u| !u.disabled) && people.is_linked(username)
 }
 
 /// The live version (bundle hash) of a user widget and its maker now, for
@@ -1427,8 +1447,8 @@ pub fn handle(
         return err(ZenError::OwnerOnly(LOCK_OWNER_ONLY.into()));
     }
     // The Garden's owner from any signed-in surface (permission cards
-    // §5.2.1, Rosson Q2): the owner token, or an Owner login (the phone, the
-    // web, another server's K2). Keep as mine, widget resume and proposal
+    // §5.2.1, Rosson Q2): the owner token, or a login the owner linked (the
+    // phone, the web, another server's K2; GP-B1). Keep as mine, widget resume and proposal
     // approve take it; the card's apply goes through the same check.
     let garden_owner = match caller {
         Caller::Owner => owner,
@@ -1443,7 +1463,7 @@ pub fn handle(
         audit("zen.widget.refused", caller, format!("{path}: owner token only"), ingress);
         return err(ZenError::OwnerOnly(CLAIM_OWNER_ONLY.into()));
     }
-    // Garden access (G14): with the switch on, an Owner login may also Sign
+    // Garden access (G14): with the switch on, the owner's linked login may also Sign
     // (the history modal's button).
     let garden_owner_login =
         garden_owner && !owner && (GARDEN_OWNER_ROUTES.contains(&path) || (access_on && path == "/cli/zen/widget/sign"));

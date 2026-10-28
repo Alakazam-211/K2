@@ -609,9 +609,16 @@ fn a_keep_card_is_answered_by_the_owner_only() {
     refused(&crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "ada"), "an admin");
     assert_eq!(card(&conv, &id).status, "pending", "refusals leave the card waiting");
     assert!(unkept(), "nothing kept by a refused tap");
-    // An Owner login (the phone, the web).
+    // Another person's Owner-role login, not linked to the owner: not the
+    // Garden's owner (GP-B1).
+    k2_core::connect_users::add_user("otto", "password-for-tests-4").expect("add owner");
+    k2_core::connect_users::set_role("otto", k2_core::connect_users::Role::Owner).expect("owner");
+    refused(&crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "otto"), "an unlinked owner");
+    assert!(unkept(), "nothing kept by another person");
+    // The owner's linked login (the phone, the web).
     k2_core::connect_users::add_user("olga", "password-for-tests-2").expect("add owner");
     k2_core::connect_users::set_role("olga", k2_core::connect_users::Role::Owner).expect("owner");
+    k2_core::app_settings::update(json!({ "ownerAccounts": ["olga"] })).expect("link to the owner");
     let r = crate::overlay_routes::dispatch_post_as("/cli/thread/answer", &HashMap::new(), body.as_bytes(), "olga");
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert!(!unkept(), "the owner login kept it");

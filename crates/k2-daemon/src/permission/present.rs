@@ -176,13 +176,15 @@ pub(crate) fn words_hash(w: &Words) -> String {
 
 // ── who may answer (§6.1; the catalog floor) ────────────────────────
 
-/// The answerer meets the floor. GardenOwner is the owner of that Garden:
-/// the owner token or an Owner login (§5.2.1).
+/// The answerer meets the floor. GardenOwner is the owner person of that
+/// Garden: the owner token or a login the owner linked, whatever its role
+/// (§5.2.1, GP-B1: an unlinked Owner-role login is another person).
 pub(crate) fn meets_floor(floor: Floor, who: &Answerer) -> bool {
     match who {
         Answerer::OwnerToken => true,
-        Answerer::Login { role, .. } => match floor {
-            Floor::Owner | Floor::GardenOwner => role == "owner",
+        Answerer::Login { user, role } => match floor {
+            Floor::GardenOwner => crate::zen_routes::login_is_owner_person(user),
+            Floor::Owner => role == "owner",
             Floor::Admin => role == "owner" || role == "admin",
         },
     }

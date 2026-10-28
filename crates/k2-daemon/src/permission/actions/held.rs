@@ -475,7 +475,7 @@ fn apply_sources(ctx: &Ctx, who: &Answerer, _token: Option<&str>) -> Applied {
 // ── garden.proposal.approve ─────────────────────────────────────────
 
 /// The Garden's owner from any signed-in surface (§5.2.1): the owner token
-/// or an Owner login, through E1's `zen_routes::garden_owner_may`, the one
+/// or a login the owner linked (GP-B1), through E1's `zen_routes::garden_owner_may`, the one
 /// resolver Settings calls too.
 pub(crate) static GARDEN_PROPOSAL_APPROVE: ActionSpec = ActionSpec {
     id: "garden.proposal.approve",

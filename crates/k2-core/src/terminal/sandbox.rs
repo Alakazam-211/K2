@@ -301,9 +301,17 @@ impl SandboxBackend for Passthrough {
             }
             None => (None, false),
         };
+        // Windows: CreateProcess refuses a folder that isn't there ("The
+        // directory name is invalid"), where Unix's chdir just fails and
+        // the agent starts anyway. Same outcome as Unix: start it in the
+        // daemon's folder rather than not at all.
+        #[cfg(windows)]
+        let working_directory = req.cwd.filter(|p| p.is_dir());
+        #[cfg(not(windows))]
+        let working_directory = req.cwd;
         let pty_options = TtyOptions {
             shell,
-            working_directory: req.cwd,
+            working_directory,
             drain_on_exit: req.drain_on_exit,
             env: req.env,
             #[cfg(target_os = "windows")]

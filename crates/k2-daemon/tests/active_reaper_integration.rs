@@ -98,7 +98,7 @@ fn spawn_named_pty(agent_name: &str, cwd: &PathBuf) -> Arc<DaemonPtySession> {
         cols: 80,
         rows: 24,
         cwd: Some(cwd.clone()),
-        program: Some("cat".to_string()),
+        program: Some(k2_core::test_env::pty_idle_program("cat")),
         ..DaemonPtyConfig::default()
     };
     let session = DaemonPtySession::spawn(cfg).expect("spawn cat PTY");

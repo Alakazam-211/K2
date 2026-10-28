@@ -158,7 +158,7 @@ fn spawn_cat(cwd: &Path, key: &str) -> Arc<DaemonPtySession> {
         cols: 80,
         rows: 24,
         cwd: Some(cwd.to_path_buf()),
-        program: Some("cat".to_string()),
+        program: Some(k2_core::test_env::pty_idle_program("cat")),
         ..DaemonPtyConfig::default()
     };
     let session = DaemonPtySession::spawn(cfg).expect("spawn cat PTY");
@@ -859,7 +859,7 @@ fn a_legacy_shell_counts_as_live_and_announces_itself() {
             .create(
                 id.clone(),
                 dir.to_string_lossy().into_owned(),
-                Some("cat".into()),
+                Some(k2_core::test_env::pty_idle_program("cat")),
                 None,
                 Some(80),
                 Some(24),

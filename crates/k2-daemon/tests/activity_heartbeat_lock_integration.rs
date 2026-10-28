@@ -106,7 +106,7 @@ fn spawn_cat(cwd: &Path, key: &str) -> Arc<DaemonPtySession> {
         cols: 80,
         rows: 24,
         cwd: Some(cwd.to_path_buf()),
-        program: Some("cat".to_string()),
+        program: Some(k2_core::test_env::pty_idle_program("cat")),
         ..DaemonPtyConfig::default()
     };
     let session = DaemonPtySession::spawn(cfg).expect("spawn cat PTY");

@@ -76,12 +76,14 @@ fn set_agent_enabled(workspace_id: &str, enabled: bool) {
 fn write_test_agent_md(project: &Path, agent_name: &str, agent_type: &str) {
     let dir = project.join(".k2so/agent");
     std::fs::create_dir_all(&dir).unwrap();
+    // Windows: System32's cmd.exe stands in for `cat`.
+    let cat = k2_core::test_env::pty_idle_program("cat");
     let body = format!(
         "---\n\
          name: {agent_name}\n\
          type: {agent_type}\n\
          launch:\n  \
-           command: cat\n\
+           command: {cat}\n\
          ---\n\
          # {agent_name}\n"
     );
@@ -196,8 +198,8 @@ async fn ensure_canonical_session_honors_projects_default_agent() {
         let conn = db.lock();
         conn.execute(
             "INSERT INTO agent_presets (id, label, command, icon, enabled, sort_order, is_built_in) \
-             VALUES (?1, 'canon-cat-agent', 'cat', '', 1, 990, 0)",
-            rusqlite::params![preset_id],
+             VALUES (?1, 'canon-cat-agent', ?2, '', 1, 990, 0)",
+            rusqlite::params![preset_id, k2_core::test_env::pty_idle_program("cat")],
         )
         .unwrap();
         conn.execute(
@@ -216,7 +218,7 @@ async fn ensure_canonical_session_honors_projects_default_agent() {
         .expect("canonical session must be registered");
     assert_eq!(
         live.program.as_deref(),
-        Some("cat"),
+        Some(k2_core::test_env::pty_idle_program("cat").as_str()),
         "fresh canonical spawn must run the workspace's default agent \
          (projects.default_agent → preset command), NOT hardcoded claude"
     );

@@ -109,7 +109,8 @@ async fn bare_tab_cap_refuses_spawn_number_cap_plus_one() {
 
     // A spawn WITH a command is exempt even at cap (recovery/claude/
     // heartbeat shapes must keep working). `cat` = cheap long-lived child.
-    let (status, body) = spawn("tab-cap-with-cmd", &cwd, Some("cat"));
+    let cat = k2_core::test_env::pty_idle_program("cat");
+    let (status, body) = spawn("tab-cap-with-cmd", &cwd, Some(&cat));
     assert_eq!(
         status, "200 OK",
         "command-carrying spawn must be exempt from the cap, got {status}: {body}"

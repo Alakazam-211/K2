@@ -133,7 +133,7 @@ async fn spawn_cat(
     let mut body = serde_json::json!({
         "agent_name": agent_name,
         "cwd": std::env::temp_dir().to_string_lossy(),
-        "command": "/bin/cat",
+        "command": k2_core::test_env::pty_idle_program("/bin/cat"),
     });
     if let Some(c) = cols {
         body["cols"] = serde_json::json!(c);

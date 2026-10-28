@@ -118,7 +118,7 @@ async fn spawn_cat_session(port: u16, agent_name: &str, cwd: &str) -> String {
     let body = serde_json::json!({
         "agent_name": agent_name,
         "cwd": cwd,
-        "command": "/bin/cat",
+        "command": k2_core::test_env::pty_idle_program("/bin/cat"),
         "cols": 80,
         "rows": 24,
     })

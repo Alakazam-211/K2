@@ -243,6 +243,23 @@ pub fn unique_temp_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("k2-{tag}-{}", uuid::Uuid::new_v4().simple()))
 }
 
+/// A cheap long-lived program for a test PTY, one that just waits for
+/// input: `unix` (`cat` or `/bin/cat`) on Unix. Windows has no `cat`;
+/// System32's `cmd.exe` stays open the same way and echoes what is typed,
+/// and the temp-HOME spawn belt allows it (System32, like `/bin`).
+pub fn pty_idle_program(unix: &str) -> String {
+    #[cfg(windows)]
+    {
+        let _ = unix;
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        format!(r"{root}\System32\cmd.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        unix.to_string()
+    }
+}
+
 /// The bash a test runs `cli/k2` with: `bash` on Unix; on Windows, Git for
 /// Windows' bash (Windows looks a program up through the child's PATH, which
 /// these tests set, so a bare name isn't enough). `K2_TEST_BASH` overrides.

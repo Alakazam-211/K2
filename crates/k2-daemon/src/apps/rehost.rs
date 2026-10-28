@@ -70,6 +70,24 @@ pub struct AppStatus {
     pub detail: Option<String>,
     pub deployment: Option<String>,
     pub at: i64,
+    /// The last re-host run's way of moving it (kept across later states):
+    /// `overlap` (the new instance beside the old, then the switch) or
+    /// `pause` (stop first, then start). `None`: it never ran here.
+    pub mode: Option<String>,
+    /// The last run was `k2 app rehost` (not the wave's own turn).
+    pub forced: bool,
+}
+
+/// `overlap` | `pause`: the words for a run's `pause` flag.
+pub const MODE_OVERLAP: &str = "overlap";
+pub const MODE_PAUSE: &str = "pause";
+
+pub fn mode_word(pause: bool) -> &'static str {
+    if pause {
+        MODE_PAUSE
+    } else {
+        MODE_OVERLAP
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -105,11 +123,28 @@ fn now() -> i64 {
 
 fn set_app(app: &str, state: &str, code: Option<&str>, detail: Option<String>, deployment: Option<&str>) {
     with_status(|s| {
+        // The last run's mode and `forced` stay until the next run.
+        let (mode, forced) = s.apps.get(app).map(|a| (a.mode.clone(), a.forced)).unwrap_or_default();
         s.apps.insert(
             app.to_string(),
-            AppStatus { state: state.into(), code: code.map(Into::into), detail, deployment: deployment.map(Into::into), at: now() },
+            AppStatus { state: state.into(), code: code.map(Into::into), detail, deployment: deployment.map(Into::into), at: now(), mode, forced },
         );
     });
+}
+
+/// A run starts: record how it moves the App and who asked.
+fn set_run(app: &str, pause: bool, forced: bool) {
+    with_status(|s| {
+        if let Some(a) = s.apps.get_mut(app) {
+            a.mode = Some(mode_word(pause).into());
+            a.forced = forced;
+        }
+    });
+}
+
+/// The last run's mode for `app` (`overlap` | `pause`), if it ran.
+pub fn last_mode(app: &str) -> Option<String> {
+    with_status(|s| s.apps.get(app).and_then(|a| a.mode.clone()))
 }
 
 fn set_wave(state: &str, reason: Option<String>) {
@@ -313,6 +348,7 @@ pub fn turn(ops: &dyn WaveOps, app: &AppRow, forced: Option<Forced>) -> Turn {
     };
     ops.audit(&app.app_id, "rehost_due", json!({ "why": why, "pause": pause, "k2Version": ops.k2_version() }));
     set_app(&app.app_id, "running", None, Some(format!("due: {why}{}", if pause { "; a short pause" } else { "" })), None);
+    set_run(&app.app_id, pause, forced.is_some());
     let reason = format!("K2 updated to {}", ops.k2_version());
     match ops.rehost(app, pause, &reason) {
         Outcome::Live(dep) => {
@@ -816,6 +852,21 @@ pub(crate) fn status_route(who: &Who, params: &HashMap<String, String>) -> R<J> 
     }
 }
 
+/// A run's Done/Failed answer: the deployment row (`deployment`, `done`)
+/// plus the App, `rehost` (`done` | `failed`), how it moved (`mode`, the
+/// last run's: `overlap` | `pause`), `forced: true` and, failed, `why`. The
+/// row alone names no App, which the CLI printed as "None moved…".
+pub fn run_answer(mut out: J, app: &str, word: &str, why: Option<&str>) -> J {
+    out["rehost"] = json!(word);
+    out["app"] = json!(app);
+    out["mode"] = json!(last_mode(app));
+    out["forced"] = json!(true);
+    if let Some(w) = why {
+        out["why"] = json!(w);
+    }
+    out
+}
+
 /// `POST /cli/app/rehost/run {app, yes?, pause?}` (owner or switch 1 for
 /// its own App: restart-class, A20): move it to a fresh instance now.
 pub(crate) fn run_route(who: &Who, body: &[u8]) -> R<J> {
@@ -831,17 +882,8 @@ pub(crate) fn run_route(who: &Who, body: &[u8]) -> R<J> {
     let ops = LiveOps;
     ops.audit(&app.app_id, "rehost_requested", json!({ "by": super::routes::actor(who), "yes": forced.yes, "pause": forced.pause }));
     match turn(&ops, &app, Some(forced)) {
-        Turn::Done(dep) => {
-            let mut out = super::routes::deployment_answer(&dep, 0)?;
-            out["rehost"] = json!("done");
-            Ok(out)
-        }
-        Turn::Failed(dep, why) => {
-            let mut out = super::routes::deployment_answer(&dep, 0)?;
-            out["rehost"] = json!("failed");
-            out["why"] = json!(why);
-            Ok(out)
-        }
+        Turn::Done(dep) => Ok(run_answer(super::routes::deployment_answer(&dep, 0)?, &app.app_id, "done", None)),
+        Turn::Failed(dep, why) => Ok(run_answer(super::routes::deployment_answer(&dep, 0)?, &app.app_id, "failed", Some(&why))),
         Turn::Deferred(code, detail) => Err(no(code, 409, format!("{}: {detail}", app.app_id))),
         Turn::NotDue => Ok(json!({ "ok": true, "app": app.app_id, "rehost": "current" })),
     }

@@ -8595,6 +8595,8 @@ if "rehost" in v:
         print("  wave: %s%s" % (w.get("state"), (" (" + w["code"] + ")") if w.get("code") else ""))
         if w.get("detail"):
             print("    " + w["detail"])
+        if w.get("mode"):
+            print("  last re-host: %s (%s), %s" % (w["mode"], {"overlap": "no downtime", "pause": "stopped briefly"}.get(w["mode"], "?"), "asked for with k2 app rehost" if w.get("forced") else "started by K2 after an update"))
     sys.exit(0)
 print("Re-host wave (K2 %s): %s%s" % (v.get("k2Version"), v.get("state"), (" — " + v["reason"]) if v.get("reason") else ""))
 for a, s in sorted((v.get("apps") or {}).items()):
@@ -8650,13 +8652,20 @@ if v.get("warning"):
 import json, sys
 v = json.load(sys.stdin)
 r = v.get("rehost")
+app = v.get("app") or sys.argv[1]
+how = {"overlap": "the new instance started beside the old one and took over, with no downtime", "pause": "the App was stopped briefly (two copies of it can not run at once), then started on the new instance"}.get(v.get("mode"))
 if r == "current":
-    print("%s already runs on this K2 (nothing to move)" % v.get("app"))
+    print("%s already runs on this K2 (nothing to move)" % app)
 elif r == "done":
-    print("%s moved to a fresh instance (%s)" % (v.get("app"), (v.get("deployment") or {}).get("id")))
+    print("%s moved to a fresh instance (%s)" % (app, (v.get("deployment") or {}).get("id")))
+    if how:
+        print("  how: %s: %s" % (v["mode"], how))
 else:
-    print("%s: the re-host failed; it keeps running on its previous instance: %s" % (v.get("app"), v.get("why")))
-    sys.exit(1)'
+    print("%s: the re-host failed; it keeps running on its previous instance: %s" % (app, v.get("why")))
+    if how:
+        print("  how it was tried: %s (%s)" % (v["mode"], {"overlap": "a new instance beside the old one", "pause": "stop first, then start"}[v["mode"]]))
+    print("  why: k2 app history %s ; try again: k2 app rehost %s" % (app, app))
+    sys.exit(1)' "$app"
             fi
             ;;
     esac

@@ -465,3 +465,49 @@ fn the_policy_route_validates_and_the_status_route_reads() {
     let (n, v) = call("/cli/app/rehost/run", member(), &format!(r#"{{"app":"{id}"}}"#), &[]);
     assert_eq!(n, 403, "{v}");
 }
+
+/// `k2 app rehost` printed "None moved to a fresh instance": the Done and
+/// Failed answers now name the App and how it moved, and the status keeps
+/// the last run's mode (`overlap` | `pause`) and whether it was asked for,
+/// across later states, until the next run.
+#[test]
+fn a_run_names_the_app_and_its_mode() {
+    let _g = serial();
+    let mut f = Fake::default();
+    let (wave, asked, failed) = ("wm-wave", "wm-asked", "wm-failed");
+    f.apps = vec![row(wave)];
+    assert!(matches!(run_wave(&f)[0].1, Turn::Done(_)));
+    let st = status_json()["apps"][wave].clone();
+    assert_eq!(st["state"], "done");
+    assert_eq!((st["mode"].as_str(), st["forced"].as_bool()), (Some("overlap"), Some(false)), "the wave's own turn: {st}");
+
+    f.shape.insert(asked.into(), "it holds extra ports (5000)".into());
+    assert!(matches!(turn(&f, &row(asked), Some(Forced { yes: false, pause: true })), Turn::Done(_)));
+    let st = status_json()["apps"][asked].clone();
+    assert_eq!((st["mode"].as_str(), st["forced"].as_bool()), (Some("pause"), Some(true)), "{st}");
+    let deployment = json!({ "ok": true, "deployment": { "id": "d-new-wm-asked" }, "done": true });
+    let out = run_answer(deployment.clone(), asked, "done", None);
+    assert_eq!(out["app"], asked, "{out}");
+    assert_eq!((out["rehost"].as_str(), out["mode"].as_str(), out["forced"].as_bool()), (Some("done"), Some("pause"), Some(true)), "{out}");
+    assert_eq!(out["deployment"]["id"], "d-new-wm-asked", "the deployment row stays");
+    assert!(out.get("why").is_none(), "{out}");
+
+    f.fail = vec![failed.into()];
+    assert!(matches!(turn(&f, &row(failed), Some(Forced::default())), Turn::Failed(..)));
+    let st = status_json()["apps"][failed].clone();
+    assert_eq!(st["state"], "failed");
+    assert_eq!((st["mode"].as_str(), st["forced"].as_bool()), (Some("overlap"), Some(true)), "{st}");
+    let out = run_answer(deployment, failed, "failed", Some("health_failed"));
+    assert_eq!((out["app"].as_str(), out["mode"].as_str(), out["why"].as_str()), (Some(failed), Some("overlap"), Some("health_failed")), "{out}");
+
+    // A later deferral keeps the last run's words.
+    f.busy = vec![asked.into()];
+    assert!(matches!(turn(&f, &row(asked), None), Turn::Deferred(defer::BUSY, _)));
+    let st = status_json()["apps"][asked].clone();
+    assert_eq!(st["state"], "deferred");
+    assert_eq!((st["mode"].as_str(), st["forced"].as_bool()), (Some("pause"), Some(true)), "{st}");
+
+    // Never ran here: no mode, and the answer says so (null).
+    assert_eq!(last_mode("wm-never"), None);
+    assert!(run_answer(json!({}), "wm-never", "done", None)["mode"].is_null());
+}

@@ -242,6 +242,7 @@ pub mod thread_activity_limit;
 pub mod hook_install;
 pub mod session_events;
 pub mod session_events_ws;
+pub mod session_author;
 pub mod session_lookup;
 pub mod sessions_bytes_ws;
 pub mod sessions_grid_ws;

@@ -247,7 +247,7 @@ pub fn my_assignee_names(
 ) -> Vec<String> {
     let user = username.map(str::trim).filter(|u| !u.is_empty());
     let owner_person =
-        owner || user.is_some_and(|u| people.person_key(u) == k2_core::notify_prefs::OWNER);
+        owner || user.is_some_and(|u| people.login_person_key(u).as_deref() == Some(k2_core::notify_prefs::OWNER));
     let mut names: Vec<String> = Vec::new();
     if owner_person {
         names.push(k2_core::notify_prefs::OWNER.to_string());

@@ -219,10 +219,15 @@ fn role_str(r: Role) -> &'static str {
 /// An answerer from the Thread route's caller: the owner token, or a
 /// Connect login with its role.
 pub(crate) fn answerer_for(session_author: &str) -> Answerer {
-    if session_author == "owner" {
+    if crate::session_author::is_owner_token(session_author) {
         return Answerer::OwnerToken;
     }
-    let role = k2_core::connect_users::role_for_user(session_author).map(role_str).unwrap_or("member");
+    // A reserved-name login (made before 0.46.6) meets no floor.
+    let role = if k2_core::connect_users::is_reserved_username(session_author) {
+        "none"
+    } else {
+        k2_core::connect_users::role_for_user(session_author).map(role_str).unwrap_or("member")
+    };
     Answerer::Login { user: session_author.to_string(), role: role.to_string() }
 }
 
@@ -233,7 +238,7 @@ pub(crate) fn eligible_logins(floor: Floor) -> Vec<String> {
     let Ok(users) = k2_core::connect_users::list_users() else { return Vec::new() };
     users
         .into_iter()
-        .filter(|u| !u.disabled)
+        .filter(|u| !u.disabled && !k2_core::connect_users::is_reserved_username(&u.username))
         .filter(|u| meets_floor(floor, &Answerer::Login { user: u.username.clone(), role: role_str(u.role).to_string() }))
         .map(|u| u.username)
         .collect()

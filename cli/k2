@@ -31777,7 +31777,10 @@ if os.environ.get("AS_JSON") == "1":
             "lastName": u.get("lastName"),
             "displayName": u.get("displayName") or username,
         })
-    print(json.dumps({"ok": True, "users": out}, ensure_ascii=False, separators=(",", ":")))
+    doc = {"ok": True, "users": out}
+    if d.get("doctor"):
+        doc["doctor"] = d["doctor"]
+    print(json.dumps(doc, ensure_ascii=False, separators=(",", ":")))
     sys.exit(0)
 if not users:
     print("No connect users yet.")
@@ -31813,6 +31816,9 @@ w_dis = max([len(r[3]) for r in rows] + [len("DISABLED")])
 print("%-*s  %-*s  %-*s  %-*s  %s" % (w_user, "USERNAME", w_name, "NAME", w_role, "ROLE", w_dis, "DISABLED", "CREATED"))
 for u, name, role, dis, created in rows:
     print("%-*s  %-*s  %-*s  %-*s  %s" % (w_user, u, w_name, name, w_role, role, w_dis, dis, created))
+# 0.46.6: a login with a name K2 keeps for itself acts as nobody.
+for line in d.get("doctor") or []:
+    sys.stderr.write("doctor: %s\n" % line)
 '
             ;;
         add)

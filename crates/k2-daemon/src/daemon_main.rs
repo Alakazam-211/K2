@@ -620,6 +620,13 @@ async fn async_main() {
         Ok(n) => log_debug!("[daemon/users] gave {n} Connect account(s) a stable id"),
         Err(e) => log_debug!("[daemon/users] ERROR: Connect account id backfill: {e}"),
     }
+    // 0.46.6: a login with a name K2 keeps for itself (made before the
+    // rule) acts as nobody; say so where the owner looks (k2 users list).
+    if let Ok(reserved) = k2_core::connect_users::reserved_name_users() {
+        if let Some(line) = k2_core::connect_users::reserved_name_doctor_line(&reserved) {
+            log_debug!("[daemon/users] {line}");
+        }
+    }
 
     // k2-ptyd S3 B0 (prd-k2-ptyd-v1 §7.9): the agent sessions that
     // survived the restart in k2-ptyd. Connects to an EXISTING ptyd only

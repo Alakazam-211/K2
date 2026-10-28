@@ -57,7 +57,17 @@ pub fn handle_list() -> CliResponse {
                     })
                 })
                 .collect();
-            CliResponse::ok_json(serde_json::json!({ "users": users }).to_string())
+            // 0.46.6: logins with a name K2 keeps for itself (`owner`,
+            // `agent`), made before the rule, act as nobody; the doctor
+            // line says what to do.
+            let reserved: Vec<String> =
+                views.iter().map(|v| v.username.clone()).filter(|u| connect_users::is_reserved_username(u)).collect();
+            let mut out = serde_json::json!({ "users": users });
+            if let Some(line) = connect_users::reserved_name_doctor_line(&reserved) {
+                out["reservedNames"] = serde_json::json!(reserved);
+                out["doctor"] = serde_json::json!([line]);
+            }
+            CliResponse::ok_json(out.to_string())
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -539,6 +549,23 @@ pub fn handle_login_audited(body: &[u8]) -> LoginReply {
     // (3 consecutive fails → 15-minute per-username lockout). The 401 it
     // returns is the SAME generic body whether the creds were wrong or
     // the account is currently locked — no user/lock enumeration.
+    // 0.46.6: a reserved name (`owner`, `agent`) never signs in; say why
+    // (the names are public, so this tells nobody anything about accounts).
+    if connect_users::is_reserved_username(&req.username) {
+        return LoginReply {
+            response: CliResponse {
+                status: "403 Forbidden",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": {
+                    "code": "reserved_name",
+                    "hint": "this username is one K2 uses for the server's owner and its agents, so it can't sign in. If you are the server's owner, use the K2 app on the server itself; anyone else, ask the owner for a login with another username",
+                } })
+                .to_string(),
+            },
+            user: req.username,
+            outcome: "reserved_name",
+        };
+    }
     match connect_users::check_and_record(&req.username, &req.password) {
         connect_users::LoginOutcome::Ok => {}
         connect_users::LoginOutcome::BadCreds => {

@@ -8611,13 +8611,7 @@ async fn handle_one_request(
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
             }
-            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
-                "owner".to_string()
-            } else {
-                super::http::extract_token(&query)
-                    .and_then(k2_core::connect_users::validate_session)
-                    .unwrap_or_else(|| "agent".to_string())
-            };
+            let session_author = crate::session_author::for_request(&query, state.token.as_str(), "agent");
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {
                 crate::caller_workspace::with_request_principal(scoped_principal, || {
@@ -8770,12 +8764,8 @@ async fn handle_one_request(
             let p_owned = p.to_string();
             let session_author = if let Some(name) = skin_author {
                 name
-            } else if super::http::token_is_owner(&query, state.token.as_str()) {
-                "owner".to_string()
             } else {
-                super::http::extract_token(&query)
-                    .and_then(k2_core::connect_users::validate_session)
-                    .unwrap_or_else(|| "owner".to_string())
+                crate::session_author::for_request(&query, state.token.as_str(), crate::session_author::OWNER_TOKEN)
             };
             // inbox-catchup-v1: `gb:` entries go through the Grok Bots
             // gate as the TCP caller (never for an App guest), project chat
@@ -8930,12 +8920,8 @@ async fn handle_one_request(
             let p_owned = p.to_string();
             let session_author = if let Some(ref pass) = skin_pass {
                 pass.username.clone()
-            } else if super::http::token_is_owner(&query, state.token.as_str()) {
-                "owner".to_string()
             } else {
-                super::http::extract_token(&query)
-                    .and_then(k2_core::connect_users::validate_session)
-                    .unwrap_or_else(|| "owner".to_string())
+                crate::session_author::for_request(&query, state.token.as_str(), crate::session_author::OWNER_TOKEN)
             };
             let result = tokio::task::spawn_blocking(move || {
                 crate::feedback_routes::dispatch_post_as_gated(
@@ -8976,13 +8962,7 @@ async fn handle_one_request(
             }
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             let p_owned = p.to_string();
-            let session_author = if super::http::token_is_owner(&query, state.token.as_str()) {
-                "owner".to_string()
-            } else {
-                super::http::extract_token(&query)
-                    .and_then(k2_core::connect_users::validate_session)
-                    .unwrap_or_else(|| "owner".to_string())
-            };
+            let session_author = crate::session_author::for_request(&query, state.token.as_str(), crate::session_author::OWNER_TOKEN);
             let result = tokio::task::spawn_blocking(move || {
                 crate::feedback_routes::dispatch_post_as(&p_owned, &body_bytes, &session_author)
             })

@@ -99,8 +99,8 @@ fn device_removed(device_id: &str) -> CliResponse {
 
 /// The person key for `actor`, or 403 (a login that no longer exists).
 /// Only the owner token and the logins the owner linked are the owner
-/// person, never a username match: a Connect user literally named `owner`
-/// that isn't linked gets 403 (its name would be the owner's key).
+/// person, never a username match: a Connect user with a reserved name
+/// (`owner`, made before 0.46.6) gets 403, linked or not.
 pub fn person_for(actor: &Actor) -> Result<String, CliResponse> {
     if actor.owner_token {
         return Ok(OWNER.to_string());
@@ -113,7 +113,7 @@ pub fn person_for(actor: &Actor) -> Result<String, CliResponse> {
         error(
             "403 Forbidden",
             "homes_person_only",
-            "this login is named 'owner' but isn't one of the owner's linked accounts, so it has no Homes; the owner can link it, or give the person a login with another name",
+            "this login's name is one K2 uses for the server's owner and its agents, so it has no Homes; the owner can remove it in Settings → Admin Access and add the person under another name",
         )
     })
 }
@@ -379,7 +379,9 @@ mod tests {
     #[test]
     fn a_connect_user_named_owner_is_not_the_owner_person() {
         let _home = crate::test_support::TempHome::new();
-        k2_core::connect_users::add_user("owner", "password123").expect("user named owner");
+        // A login of that name can't be made since 0.46.6; one made before can.
+        assert!(k2_core::connect_users::add_user("owner", "password123").is_err());
+        k2_core::connect_users::test_add_legacy_reserved_user("owner", "password123").expect("user named owner");
         k2_core::connect_users::add_user("gina", "password123").expect("user");
         assert_eq!(person(&Actor::owner_token(), "owner token"), OWNER);
         let r = person_for(&Actor::login("owner")).expect_err("a login named owner is not the owner person");
@@ -395,10 +397,10 @@ mod tests {
         assert_eq!(crate::session_events_ws::socket_person(Some(&named_owner)), None, "no owner frames on its sockets");
         assert_eq!(crate::session_events_ws::socket_login_person(None, "owner"), None, "nor when the roster can't be read");
         assert_eq!(crate::session_events_ws::socket_person(Some(&crate::presence::PresenceIdentity::Owner)).as_deref(), Some(OWNER));
-        // The owner links it on purpose: now it is the owner person.
+        // Linked or not, a reserved name is nobody (0.46.6, fail closed).
         k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["owner"] })).expect("link");
-        assert_eq!(person(&Actor::login("owner"), "linked"), OWNER);
-        assert_eq!(crate::session_events_ws::socket_person(Some(&named_owner)).as_deref(), Some(OWNER));
+        assert!(person_for(&Actor::login("owner")).is_err(), "linked: still refused");
+        assert_eq!(crate::session_events_ws::socket_person(Some(&named_owner)), None);
         // A linked login of another name still is; the roster-less fallback
         // never makes anyone the owner.
         k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["gina"] })).expect("link gina");

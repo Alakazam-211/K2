@@ -2210,8 +2210,14 @@ fn card_answerer(params: &HashMap<String, String>, resolved: &ResolvedOverlay, s
     if let Some(pass) = request_skin() {
         return Ok(k2_vault::Actor::Guest { username: pass.username.clone(), workspace_id: resolved.project_id.clone() });
     }
-    if session_author == "owner" {
+    // The owner token's author; no login can carry it (session_author).
+    if crate::session_author::is_owner_token(session_author) {
         return Ok(k2_vault::Actor::Owner);
+    }
+    // A reserved-name login (made before 0.46.6) is nobody, whatever role
+    // it was given.
+    if k2_core::connect_users::is_reserved_username(session_author) || session_author == crate::session_author::RESERVED_LOGIN {
+        return Err(forbidden("this login's name is one K2 uses for the server's owner and its agents, so it can't answer cards"));
     }
     let role = match k2_core::connect_users::role_for_user(session_author) {
         Some(k2_core::connect_users::Role::Owner) => k2_vault::Role::Owner,
@@ -2698,8 +2704,11 @@ fn action_card_person_only(hint: &str) -> CliResponse {
 /// waiting card) never comes through a route, so it isn't checked here.
 pub(crate) fn require_action_card_person(params: &HashMap<String, String>, session_author: &str, verb: &str) -> Result<(), CliResponse> {
     refuse_action_card_non_person(params, verb)?;
-    let owner = session_author == "owner"
-        || matches!(k2_core::connect_users::role_for_user(session_author), Some(k2_core::connect_users::Role::Owner));
+    // The owner token (no login can carry its author string), or an
+    // Owner-role login whose name isn't reserved.
+    let owner = crate::session_author::is_owner_token(session_author)
+        || (!k2_core::connect_users::is_reserved_username(session_author)
+            && matches!(k2_core::connect_users::role_for_user(session_author), Some(k2_core::connect_users::Role::Owner)));
     if !owner {
         return Err(action_card_person_only(&format!(
             "only this server's owner {verb} a settings card (the same people as Settings → Gardens → Local Data)"
@@ -7968,6 +7977,51 @@ mod tests {
         assert_error_code(&tap, "409 Conflict", "imported_read_only");
         let void = post_json("/cli/thread/void", &HashMap::new(), serde_json::json!({ "addr": dst, "id": card }));
         assert_error_code(&void, "409 Conflict", "imported_read_only");
+    }
+
+    /// A Connect login named `owner` (made before 0.46.6, given the Owner
+    /// role) can't answer settings or secret cards: its session reads as
+    /// the reserved-login author, never as the owner token's `owner`. The
+    /// real owner token still answers.
+    #[test]
+    fn a_login_named_owner_cannot_answer_owner_cards() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::connect_users::test_add_legacy_reserved_user("owner", "password123").expect("legacy owner login");
+        k2_core::connect_users::set_role("owner", k2_core::connect_users::Role::Owner).expect("owner role");
+        let tok = k2_core::connect_users::create_session("owner");
+        let author = crate::session_author::for_token(Some(&tok), crate::session_author::OWNER_TOKEN);
+        assert_eq!(author, crate::session_author::RESERVED_LOGIN);
+        let none = HashMap::new();
+        let resolved = ResolvedOverlay {
+            conversation_id: "c-1".into(),
+            project_id: "p-1".into(),
+            addr: "w".into(),
+            requested_addr: "w".into(),
+            canonical_alias: false,
+        };
+        let r = require_action_card_person(&none, &author, "answers").expect_err("reserved login");
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(card_answerer(&none, &resolved, &author).is_err(), "secret cards too");
+        use crate::permission::actions::Answerer;
+        use crate::permission::present::{answerer_for, meets_floor};
+        use k2_core::permission::catalog::Floor;
+        // The bare reserved name meets no floor even with the Owner role.
+        assert!(!meets_floor(Floor::Admin, &answerer_for("owner-not-a-token-path")), "unknown login: member");
+        assert!(!meets_floor(Floor::Admin, &answerer_for(&author)));
+        k2_core::connect_users::test_add_legacy_reserved_user("agent", "password123").expect("legacy agent login");
+        k2_core::connect_users::set_role("agent", k2_core::connect_users::Role::Owner).expect("owner role");
+        assert!(!meets_floor(Floor::Owner, &answerer_for("agent")), "a reserved name meets no floor");
+        assert!(require_action_card_person(&none, "agent", "answers").is_err());
+        assert!(card_answerer(&none, &resolved, "agent").is_err());
+        // The real owner token.
+        assert!(require_action_card_person(&none, crate::session_author::OWNER_TOKEN, "answers").is_ok());
+        assert!(matches!(card_answerer(&none, &resolved, crate::session_author::OWNER_TOKEN), Ok(k2_vault::Actor::Owner)));
+        assert!(matches!(answerer_for(crate::session_author::OWNER_TOKEN), Answerer::OwnerToken));
+        assert!(meets_floor(Floor::Owner, &answerer_for(crate::session_author::OWNER_TOKEN)));
+        // A non-reserved Owner-role login still answers settings cards.
+        k2_core::connect_users::add_user("rosson", "password123").expect("rosson");
+        k2_core::connect_users::set_role("rosson", k2_core::connect_users::Role::Owner).expect("role");
+        assert!(require_action_card_person(&none, "rosson", "answers").is_ok());
     }
 
     // Thread card hygiene (permission cards lane B, §6.9, §6.10).

@@ -66,7 +66,7 @@ impl People {
         let mut out: Vec<String> = self
             .users
             .iter()
-            .filter(|u| self.person_key(&u.username) == OWNER && !u.username.eq_ignore_ascii_case(OWNER))
+            .filter(|u| self.login_person_key(&u.username).as_deref() == Some(OWNER))
             .map(|u| u.username.clone())
             .collect();
         out.sort();
@@ -95,33 +95,40 @@ impl People {
     /// The person key for an authenticated **Connect login** (never the
     /// owner token, which callers map to [`OWNER`] themselves). Only a
     /// login the owner linked is the owner person. A login whose name is
-    /// literally `owner` and isn't linked is NOT the owner, and its own
-    /// name would collide with the owner's key, so it has no person key
-    /// (`None`): callers refuse it or give it nothing person-scoped.
+    /// literally `owner` is NOT the owner, and its own name would collide
+    /// with the owner's key, so it has no person key (`None`): callers
+    /// refuse it or give it nothing person-scoped. Since 0.46.6 every
+    /// reserved name (`owner`, `agent`, see
+    /// [`crate::connect_users::is_reserved_username`]) is `None`, even if
+    /// linked: such a login can't be made and an old one acts as nobody.
     pub fn login_person_key(&self, login: &str) -> Option<String> {
         let login = login.trim();
+        if crate::connect_users::is_reserved_username(login) {
+            return None;
+        }
         if self.is_linked(login) {
             return Some(OWNER.to_string());
-        }
-        if login.eq_ignore_ascii_case(OWNER) {
-            return None;
         }
         Some(login.to_ascii_lowercase())
     }
 
     /// The person a registered device belongs to, or `None` when the
     /// device must not get pushes: its login was removed or is disabled
-    /// (TP11). A device registered by the owner token always counts.
+    /// (TP11). A device registered by the owner token (`owner`) counts,
+    /// unless a Connect login named `owner` exists (made before 0.46.6):
+    /// its devices and the owner token's then look the same, so none of
+    /// them gets the owner's pushes until that login is removed (fail
+    /// closed; the doctor line says so). Any other reserved name gets none.
     pub fn device_person(&self, device_username: &str) -> Option<String> {
         let name = device_username.trim();
-        if name.eq_ignore_ascii_case(OWNER) && self.user(name).is_none() {
-            return Some(OWNER.to_string());
+        if crate::connect_users::is_reserved_username(name) {
+            return (name.eq_ignore_ascii_case(OWNER) && self.user(name).is_none()).then(|| OWNER.to_string());
         }
         let user = self.user(name)?;
         if user.disabled {
             return None;
         }
-        Some(self.person_key(&user.username))
+        self.login_person_key(&user.username)
     }
 
     /// The role a person key stands for (for `can_act_on`): `owner` is an
@@ -162,7 +169,8 @@ impl People {
         let mut users: Vec<&ConnectUserView> = self.users.iter().collect();
         users.sort_by(|a, b| a.username.cmp(&b.username));
         for u in users {
-            if self.person_key(&u.username) == OWNER {
+            // Linked logins fold into owner; a reserved-name login is nobody.
+            if self.login_person_key(&u.username).is_none_or(|p| p == OWNER) {
                 continue;
             }
             out.push(PersonRow {
@@ -661,8 +669,18 @@ mod tests {
         let linked = People { linked: vec!["gina".into()], ..p.clone() };
         assert_eq!(linked.login_person_key("gina").as_deref(), Some(OWNER), "a linked login is the owner person");
         assert_eq!(linked.login_person_key("owner"), None, "linking someone else doesn't make 'owner' the owner");
-        let linked_owner = People { linked: vec!["owner".into()], ..p };
-        assert_eq!(linked_owner.login_person_key("owner").as_deref(), Some(OWNER), "the owner linked it on purpose");
+        // 0.46.6: a reserved name is nobody, linked or not.
+        let linked_owner = People { linked: vec!["owner".into(), "agent".into()], ..p.clone() };
+        assert_eq!(linked_owner.login_person_key("owner"), None, "a reserved name, even linked");
+        assert_eq!(linked_owner.login_person_key("agent"), None);
+        // Devices: the owner token's `owner` devices are the owner's while no
+        // login of that name exists; with one, none of them are (fail closed).
+        let clean = People { linked: vec![], users: vec![user("gina", Role::Admin, false)] };
+        assert_eq!(clean.device_person("owner").as_deref(), Some(OWNER), "the real owner token's phone");
+        assert_eq!(clean.device_person("gina").as_deref(), Some("gina"));
+        assert_eq!(p.device_person("owner"), None, "a login named owner exists: fail closed");
+        assert_eq!(p.device_person("gina").as_deref(), Some("gina"));
+        assert_eq!(People { users: vec![user("agent", Role::Admin, false)], ..clean }.device_person("agent"), None);
     }
 
     /// Owner-linked accounts: a linked login IS the owner person, whatever

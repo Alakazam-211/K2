@@ -62,6 +62,26 @@ impl Actor {
     }
 }
 
+/// The caller's person key: the owner token is the owner; a login is the
+/// owner only when the owner linked it, else itself. Never a username
+/// match: a reserved-name login (`owner`, made before 0.46.6) is nobody
+/// (`None`).
+pub fn actor_person(people: &People, actor: &Actor) -> Option<String> {
+    if actor.owner_token {
+        Some(OWNER.to_string())
+    } else {
+        people.login_person_key(&actor.login)
+    }
+}
+
+fn reserved_login_refusal() -> CliResponse {
+    error(
+        "403 Forbidden",
+        "reserved_login",
+        "this login's name is one K2 uses for the server's owner and its agents, so it can't use notices or profiles; the owner can remove it in Settings → Admin Access and add the person under another name",
+    )
+}
+
 /// GET chain (`crate::cli::dispatch`): no identity reaches it, so the
 /// reads refuse and the POST-only path answers 405. The real traffic
 /// takes the dispatcher arm, which resolves the caller first.
@@ -120,7 +140,7 @@ pub fn handle_with_params(
             None => return error("403 Forbidden", "forbidden", "invalid or missing token"),
         }
     };
-    let person = if actor.owner_token { OWNER.to_string() } else { people.person_key(&actor.login) };
+    let Some(person) = actor_person(&people, actor) else { return reserved_login_refusal() };
     if path == PEOPLE_COLOR_PATH {
         // Person colours need no DB: settings + connect-users.json only.
         return if is_post { people_color_write(&people, actor, role, body) } else { people_color_view(&people, actor) };
@@ -643,7 +663,7 @@ fn people_color_write(people: &People, actor: &Actor, role: Role, body: &[u8]) -
         },
         _ => return usage("send {\"color\": \"#RRGGBB\" | null}"),
     };
-    let me = if actor.owner_token { OWNER.to_string() } else { people.person_key(&actor.login) };
+    let Some(me) = actor_person(people, actor) else { return reserved_login_refusal() };
     let target_login: String = match v.get("user") {
         None | Some(serde_json::Value::Null) => {
             if actor.owner_token {
@@ -786,7 +806,7 @@ fn people_name_write(people: &People, actor: &Actor, role: Role, body: &[u8]) ->
     if first.is_none() && last.is_none() {
         return usage("send {\"firstName\"?: string|null, \"lastName\"?: string|null}");
     }
-    let me = if actor.owner_token { OWNER.to_string() } else { people.person_key(&actor.login) };
+    let Some(me) = actor_person(people, actor) else { return reserved_login_refusal() };
     let caller = caller_login(actor);
     let target_login: String = match v.get("person") {
         None | Some(serde_json::Value::Null) => caller.clone(),
@@ -1608,5 +1628,37 @@ mod tests {
         // The GET chain (no identity): the read refuses, the dismiss is 405.
         assert_eq!(dispatch(OWNER_ACCOUNT_PROMPT_PATH, &HashMap::new()).expect("claimed").status, "403 Forbidden");
         assert_eq!(dispatch(OWNER_ACCOUNT_PROMPT_DISMISS_PATH, &HashMap::new()).expect("claimed").status, "405 Method Not Allowed");
+    }
+
+    /// A Connect login named `owner` (made before 0.46.6, even as an
+    /// Owner-role login, even linked) is never the owner person on notices,
+    /// colours or names; the owner token still is.
+    #[test]
+    fn a_login_named_owner_is_never_the_owner_person_here() {
+        let _f = fixture();
+        connect_users::test_add_legacy_reserved_user("owner", "password123").expect("legacy owner login");
+        connect_users::set_role("owner", Role::Owner).expect("owner role");
+        k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["owner"] })).expect("link");
+        let named = Actor::login("owner");
+        for (path, body) in [
+            (PREFS_PATH, None),
+            (PEOPLE_COLOR_PATH, Some(serde_json::json!({ "color": "#112233" }))),
+            (PEOPLE_NAME_PATH, Some(serde_json::json!({ "firstName": "Not" }))),
+        ] {
+            let r = match body {
+                Some(b) => post(path, b, &named),
+                None => get(path, &named),
+            };
+            assert_eq!(r.status, "403 Forbidden", "{path}: {}", r.body);
+            assert!(r.body.contains("reserved_login"), "{path}: {}", r.body);
+        }
+        assert_eq!(k2_core::app_settings::load().owner_color, None, "the owner's colour is untouched");
+        let people = People::load().expect("people");
+        assert_eq!(actor_person(&people, &named), None);
+        assert_eq!(actor_person(&people, &Actor::owner_token()).as_deref(), Some(OWNER));
+        // The real owner token still works.
+        ok(get(PREFS_PATH, &Actor::owner_token()));
+        ok(post(PEOPLE_COLOR_PATH, serde_json::json!({ "color": "#112233" }), &Actor::owner_token()));
+        assert_eq!(k2_core::app_settings::load().owner_color.as_deref(), Some("#112233"));
     }
 }

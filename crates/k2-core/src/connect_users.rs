@@ -486,6 +486,43 @@ pub fn normalize_username(raw: &str) -> Result<String, String> {
     Ok(lowered)
 }
 
+/// Names a Connect login can never have: the daemon uses them for callers
+/// that aren't logins (`owner` is the owner token's session author and
+/// person key, `agent` the author of a request with no person behind it).
+/// A login with one of these names would read as that caller.
+pub const RESERVED_USERNAMES: &[&str] = &["owner", "agent"];
+
+/// Is `name` (any case, padded or not) a [`RESERVED_USERNAMES`] entry?
+pub fn is_reserved_username(name: &str) -> bool {
+    let n = name.trim();
+    RESERVED_USERNAMES.iter().any(|r| r.eq_ignore_ascii_case(n))
+}
+
+/// The refusal for creating (or signing in as) a reserved name.
+pub fn reserved_username_hint(name: &str) -> String {
+    format!(
+        "'{}' is a name K2 uses for the server's owner and its agents, so no login can have it; pick another username",
+        name.trim().to_ascii_lowercase()
+    )
+}
+
+/// Existing logins whose names are reserved (made before 0.46.6). They
+/// can't sign in and act as nobody until the owner removes them.
+pub fn reserved_name_users() -> Result<Vec<String>, String> {
+    Ok(list_users()?.into_iter().map(|u| u.username).filter(|u| is_reserved_username(u)).collect())
+}
+
+/// The doctor line for [`reserved_name_users`], or `None` when there are none.
+pub fn reserved_name_doctor_line(users: &[String]) -> Option<String> {
+    if users.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "login(s) made before K2 0.46.6 with a name K2 uses for the server's owner and its agents: {}. They can't sign in and have no access now. Remove each in Settings → Admin Access and add the person again under another username.",
+        users.join(", ")
+    ))
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Hashing
 // ─────────────────────────────────────────────────────────────────────
@@ -735,7 +772,27 @@ pub fn add_user_with_names(
     first_name: Option<&str>,
     last_name: Option<&str>,
 ) -> Result<(), String> {
+    add_user_inner(username, password, first_name, last_name, false)
+}
+
+/// Tests only: a login with a reserved name, as one made before 0.46.6
+/// (when nothing refused it) would be stored.
+#[cfg(any(test, feature = "test-util"))]
+pub fn test_add_legacy_reserved_user(username: &str, password: &str) -> Result<(), String> {
+    add_user_inner(username, password, None, None, true)
+}
+
+fn add_user_inner(
+    username: &str,
+    password: &str,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    allow_reserved: bool,
+) -> Result<(), String> {
     let username = normalize_username(username)?;
+    if is_reserved_username(&username) && !allow_reserved {
+        return Err(reserved_username_hint(&username));
+    }
     let first_name = match first_name {
         Some(raw) => crate::person_name::normalize(raw).map_err(|e| format!("firstName: {e}"))?,
         None => None,
@@ -1172,8 +1229,11 @@ pub fn verify(username: &str, password: &str) -> bool {
         Err(_) => None.unwrap_or_default(),
     };
 
+    // A reserved name (a login made before 0.46.6) never signs in: it
+    // takes the unknown-user branch, with the same argon2 cost.
     let found = normalized
         .as_ref()
+        .filter(|n| !is_reserved_username(n))
         .and_then(|n| store.users.iter().find(|u| &u.username == n));
 
     // A process-wide dummy hash so the unknown/disabled branches incur the
@@ -1826,8 +1886,22 @@ struct ValidSession {
 /// once a day per phone, never on every request).
 fn validate_session_record(token: &str) -> Option<ValidSession> {
     match lookup_session(token) {
+        // A login with a reserved name (made before 0.46.6) is nobody: its
+        // name would read as the owner token or an agent (fail closed).
+        Lookup::Live(v) if is_reserved_username(&v.username) => None,
         Lookup::Live(v) => Some(v),
         Lookup::DeviceEnded | Lookup::Unknown => None,
+    }
+}
+
+/// The reserved name of a live session `token`'s login, when its name is
+/// reserved ([`is_reserved_username`]): [`validate_session`] refuses such a
+/// session; this lets the route layer tell it from "no session at all", so
+/// it never falls back to the owner token's author for it.
+pub fn reserved_login_session(token: &str) -> Option<String> {
+    match lookup_session(token) {
+        Lookup::Live(v) if is_reserved_username(&v.username) => Some(v.username),
+        _ => None,
     }
 }
 
@@ -2372,6 +2446,37 @@ mod tests {
             assert!(!verify("dave", "oldpassword"));
             assert!(verify("dave", "newpassword"));
             assert_eq!(validate_session(&tok), None, "rotation must revoke session");
+        });
+    }
+
+    /// No login can be called `owner` or `agent` (the daemon's names for the
+    /// owner token and for a request with no person). One made before 0.46.6
+    /// fails closed: no sign-in, no live session, and a doctor line.
+    #[test]
+    fn reserved_names_are_refused_and_old_ones_fail_closed() {
+        with_temp_home(|| {
+            for name in ["owner", "Owner", " OWNER ", "agent"] {
+                let e = add_user(name, "password").expect_err(name);
+                assert!(e.contains("server's owner and its agents"), "{name}: {e}");
+            }
+            assert!(list_users().expect("list").is_empty(), "nothing was created");
+            assert!(is_reserved_username("Owner") && !is_reserved_username("owner2") && !is_reserved_username("rosson"));
+            assert_eq!(reserved_name_doctor_line(&reserved_name_users().expect("users")), None);
+            // One from before the rule.
+            test_add_legacy_reserved_user("owner", "password").expect("legacy");
+            add_user("gina", "password").expect("gina");
+            assert!(!verify("owner", "password"), "a reserved name never signs in");
+            assert!(verify("gina", "password"));
+            let tok = create_session("owner");
+            assert_eq!(validate_session(&tok), None, "its session is nobody");
+            assert_eq!(role_for_session(&tok), None);
+            assert_eq!(reserved_login_session(&tok).as_deref(), Some("owner"), "told apart from no session");
+            let gina = create_session("gina");
+            assert_eq!(validate_session(&gina).as_deref(), Some("gina"));
+            assert_eq!(reserved_login_session(&gina), None);
+            assert_eq!(reserved_login_session("not-a-token"), None);
+            let line = reserved_name_doctor_line(&reserved_name_users().expect("users")).expect("doctor line");
+            assert!(line.contains("owner") && line.contains("Admin Access"), "{line}");
         });
     }
 

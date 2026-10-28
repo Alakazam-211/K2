@@ -335,7 +335,7 @@ async fn ticket_files_store_show_open_and_refuse() {
     let shown = show(port, OWNER, &id).await;
     let row = shown["comments"].as_array().unwrap().iter().find(|c| c["id"] == agent_comment.as_str()).cloned().unwrap();
     assert!(row.get("attachments").is_none(), "corrupt JSON drops the files: {row}");
-    let r = get(port, "/cli/feedback/list", OWNER, &format!("project={}&all=1", enc(&ws.id))).await;
+    let r = get(port, "/cli/feedback/list", OWNER, &format!("project={}&all=1", enc(&ws.path.to_string_lossy()))).await;
     assert_eq!(r.status, 200, "the list still reads: {}", r.body);
 
     // ── a removed workspace: gone, and attaching is refused ───────────

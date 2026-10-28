@@ -2,10 +2,10 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 31,
-  "catalogSha256": "48003a5783b83ec530a9d98048cbd247ca448e183dd0421db3dba5784f24217d",
+  "catalogSha256": "77416acde351cb0c15a6e1ed83d7793b9cd73ba19d1ed8636f01f306c642b8ed",
   "runtimeSha256": "a78ae1d3663e0f6edbd3e755a8c76770396e1964173d7ce17573bb935bf43a6e",
   "files": {
-    "cli/k2": "c1c3e04e5d66fdc80859e37ecca74828c393c584a5d338dce6cb1ab5435e6c87",
+    "cli/k2": "32a2e28033734fb93bf28fd7be23cc72fc1d79a2d70eafa2e64a4701b6196e1f",
     "cli/k2#study app-api": "6854e2c1bf897bf391ccf4055ae1a58364ec0ac58c5e3343b2e6c0e9ed80a898",
     "cli/k2#study live": "9d8f1fbe777a2686adb42d1a3a762a0c9457d1da6236222db7e3d0aa0084f572",
     "cli/k2#zen guide libs": "63056b26d9270ae9ed49a301dcd9ce004485d7c4e8f35f6ea62a08dc6e1bc0b3",

@@ -202,15 +202,18 @@ fn meets(floor: &str, f: &Facts) -> bool {
     present::meets_floor(present::floor_of(floor), &who)
 }
 
-/// [`meets`] for one item, by its action's catalog floor when K2 knows the
-/// action: `approvers.floor` reads `owner` for a GardenOwner row, whose
-/// answerer is the owner PERSON (a linked login of any role, GP-B1), not
-/// an Owner-role login.
+/// [`meets`] for one item. A GardenOwner row's `approvers.floor` reads
+/// `owner`, but its answerer is the owner PERSON (a linked login of any
+/// role, GP-B1), not an Owner-role login: those rows are judged by the
+/// catalog floor. Every other row keeps the card's stored floor, which can
+/// sit above the catalog's (an Admin-floor action shown at owner floor
+/// stays owner-only).
 fn meets_item(item: &ItemView, f: &Facts) -> bool {
     match present::find_action(&item.action) {
-        Some(a) if f.person => present::meets_floor(a.spec.floor, &answerer_of(f)),
-        Some(_) => false,
-        None => meets(&item.approvers.floor, f),
+        Some(a) if a.spec.floor == k2_core::permission::catalog::Floor::GardenOwner => {
+            f.person && present::meets_floor(a.spec.floor, &answerer_of(f))
+        }
+        _ => meets(&item.approvers.floor, f),
     }
 }
 

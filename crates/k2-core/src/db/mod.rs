@@ -1654,6 +1654,11 @@ fn run_migrations_through(conn: &Connection, last: Option<&str>) -> Result<()> {
         // New tables only: renumber freely on a slip (and edit the
         // migration-order tests below).
         ("0234_sew_chat", include_str!("../../drizzle_sql/0234_sew_chat.sql")),
+        // 0240 — compute queue "N of M" (prd-compute-job-tiers-v2 L6,
+        // 0.46.6): `compute_jobs.node_of`, the size of the shared node's
+        // queue a node-queued job waits in. ADD COLUMN only. Provisional
+        // number: renumber at integration (Ops - Migration numbers).
+        ("0240_compute_queue_of", include_str!("../../drizzle_sql/0240_compute_queue_of.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2317,7 +2322,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0234_sew_chat",
+            last_name, "0240_compute_queue_of",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2401,6 +2406,8 @@ mod tests {
                 "0232_ticket_attachments",
                 // 0.46.6: Sew chat for agents (S30).
                 "0234_sew_chat",
+                // 0.46.6: compute queue "N of M" (provisional number).
+                "0240_compute_queue_of",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2492,6 +2499,8 @@ mod tests {
                 "0232_ticket_attachments",
                 // 0.46.6: Sew chat for agents (S30).
                 "0234_sew_chat",
+                // 0.46.6: compute queue "N of M" (provisional number).
+                "0240_compute_queue_of",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2719,7 +2728,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0234_sew_chat", "0234 (0.46.6, Sew chat) runs last");
+        assert_eq!(top, "0240_compute_queue_of", "0240 (0.46.6, compute queue N of M) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2747,9 +2756,10 @@ mod tests {
                 "0231_zen_version_carry",
                 "0233_sim_switch",
                 "0232_ticket_attachments",
-                "0234_sew_chat"
+                "0234_sew_chat",
+                "0240_compute_queue_of"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232 then 0234)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234 then 0240)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");

@@ -20045,9 +20045,12 @@ Agents:
                                 node at spawn; names only in the plan (k2 study compute)
                  [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
                  [--exclusive] [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
-                 [--wait [--failures] [--max-wait 9m]]
+                 [--wait [--failures] [--max-wait 9m] [--quiet]]
+                                print the job id, then stream its output and exit
+                                with its code (--quiet: no output, only the exit)
                  [--artifact GLOB]... [--json]
-                 [--queue-timeout 30m|off] [--retries N] [--stall-timeout 30m|off]
+                 [--queue-timeout 2h|off] [--retries N] [--stall-timeout 30m|off]
+                                queue timeout: 2h attached or --wait, 24h --detach
                  [--shards N]   (with --any: N jobs, {shard}/{shards} in the command)
                  [--tier ci|priority|normal]   queue order on the node (never stops a running job)
                       ci        highest; next free slot (needs a grant with --ci; release and CI runs)
@@ -20079,11 +20082,14 @@ Agents:
                                              copy kept artifacts here (all, or NAMEs);
                                              --over-relay: files over 100 MB through
                                              the relay too (up to 500 MB)
-  k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]
+  k2 compute wait <job>... [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]
                  block until the jobs end, no log text; exit = the job's exit
                  code (first failing job for several), 3 for cancelled/failed/
                  timeout, 3 + still_running when --max-wait passes first.
-                 run --wait = submit, print the id, then wait (no [compute]
+                 --follow (one job): stream its output too (resume a run --wait
+                 whose shell timed out). While queued it prints where it waits,
+                 "N of M" and why.
+                 run --wait = submit, print the id, then stream (no [compute]
                  message while it waits; a --detach job always gets one).
   k2 compute attach <job> [--since SEQ] [--raw]
   k2 compute logs <job> [--tail N] [--failures] [--raw]
@@ -20225,8 +20231,9 @@ This computer (its owner):
   k2 compute local disable [--yes]   lists the jobs running here first; with
                           jobs running it asks (or needs --yes): they stop now
 
-Never stuck: a job that can't start within --queue-timeout (default 30m
-attached, 24h --detach) fails with queue_timeout; --any jobs move off a node
+Never stuck: a job that can't start within --queue-timeout (default 2h
+attached or --wait, 24h --detach) fails with queue_timeout, naming the last
+thing it waited on; --any jobs move off a node
 that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
 retry --retries times (default 1) with backoff, on another node when --any.
 A job that prints nothing for --stall-timeout (default 30m) ends as
@@ -20538,7 +20545,12 @@ elif verb == "get":
         q = j["queue"]
         at = q.get("aheadTiers") or {}
         behind = ", ".join(x for x in [("%d CI" % at["ci"]) if at.get("ci") else "", ("%d Priority" % at["priority"]) if at.get("priority") else ""] if x)
-        print("  queued: position %s%s%s — %s (%s)" % (q["position"], (" of %s" % q["of"]) if q.get("of") else "", (", behind " + behind) if behind else "", q["reason"], q["message"]))
+        if q.get("line"):
+            # 0.46.6 (L6): where it waits, N of M, why, and whether jobs
+            # behind it may start first.
+            print("  %s%s" % (q["line"], ("  [behind %s]" % behind) if behind else ""))
+        else:
+            print("  queued: position %s%s%s — %s (%s)" % (q["position"], (" of %s" % q["of"]) if q.get("of") else "", (", behind " + behind) if behind else "", q["reason"], q["message"]))
         if q.get("parallel"):
             print("  the node runs %s job(s) from this workspace at a time" % q["parallel"])
         for a in q.get("ahead") or []:
@@ -20590,7 +20602,7 @@ elif verb == "queue":
     if not rows:
         print("(nothing running or queued)")
     else:
-        print("%-3s %-34s %-4s %-12s %-8s %-5s %s" % ("#", "who", "tier", "class", "state", "cpus", "eta"))
+        print("%-3s %-34s %-4s %-12s %-8s %-5s %-10s %s" % ("#", "who", "tier", "class", "state", "cpus", "eta", "why"))
     for e in rows:
         if e.get("mine") and e.get("short"):
             who = "you: %s %s" % (e["short"], e.get("argv") or "")
@@ -20607,10 +20619,10 @@ elif verb == "queue":
             etas = "~%dm left" % max(1, (eta + 59) // 60)
         else:
             etas = "~%dm" % max(1, (eta + 59) // 60)
-        if e.get("blockedBy"):
-            etas += " (%s)" % e["blockedBy"]
+        # WHY (0.46.6, L6): the wait in words (an older daemon: the code).
+        why = e.get("why") or e.get("blockedBy") or ""
         cpus = ("%g" % (e["cpuMillis"] / 1000)) if e.get("cpuMillis") else "-"
-        print("%-3s %-34s %-4s %-12s %-8s %-5s %s" % (e.get("pos"), who[:34], tier_tag(e.get("tier")) or "-", e.get("class") or "-", e.get("state"), cpus, etas))
+        print("%-3s %-34s %-4s %-12s %-8s %-5s %-10s %s" % (e.get("pos"), who[:34], tier_tag(e.get("tier")) or "-", e.get("class") or "-", e.get("state"), cpus, etas, why))
     if tier_counts(v.get("tiers")):
         print("queued: " + tier_counts(v.get("tiers"), bare=True))
     for t in v.get("totals") or []:
@@ -20677,18 +20689,32 @@ _compute_print_result() {
 # _compute_follow <job> <raw 0|1> [cursor|seq:N] [json 0|1]
 # json=1: every log line goes to stderr and the result object is printed
 # on stdout at the end (same exit code).
+# Callers may set _CP_DEADLINE (epoch seconds: run --wait --max-wait, wait
+# --follow --max-wait; past it: still_running, exit 3, the job keeps going)
+# and _CP_FAILURES=1 (after a failing exit, the failing tests).
 _compute_follow() {
     local job="$1" raw="${2:-0}" start="${3:-0}" as_json="${4:-0}"
     local cursor=0 query state_file fails=0 lost=0 gen=""
     state_file="$(mktemp -t k2-compute-XXXXXX)"
     # shellcheck disable=SC2064
-    trap "rm -f '$state_file' '$state_file.err'; echo '[k2 compute] detached; the job keeps running. k2 compute attach ${job:0:8} | k2 compute cancel ${job:0:8} --force' >&2; exit 130" INT
+    trap "rm -f '$state_file' '$state_file.err' '$state_file.q'; echo '[k2 compute] detached; the job keeps running. k2 compute attach ${job:0:8} | k2 compute cancel ${job:0:8} --force' >&2; exit 130" INT
     case "$start" in
         seq:*) query="since_seq=${start#seq:}" ;;
         *) cursor="$start"; query="" ;;
     esac
     while :; do
-        local q="job=$(urlencode "$job")&wait=20"
+        local poll=20
+        if [ -n "${_CP_DEADLINE:-}" ]; then
+            local left=$(( _CP_DEADLINE - $(date +%s) ))
+            if [ "$left" -le 0 ]; then
+                rm -f "$state_file" "$state_file.err" "$state_file.q"
+                trap - INT
+                echo "{\"error\":\"still_running\",\"jobs\":[\"${job:0:8}\"],\"hint\":\"--max-wait passed; the job keeps going: k2 compute wait ${job:0:8} --follow\"}" >&2
+                exit 3
+            fi
+            [ "$left" -lt "$poll" ] && poll="$left"
+        fi
+        local q="job=$(urlencode "$job")&wait=$poll"
         # Follow one attempt at a time: a retry is a new generation.
         [ -n "$gen" ] && q="$q&generation=$gen"
         if [ -n "$query" ]; then q="$q&$query"; query=""; else q="$q&cursor=$cursor"; fi
@@ -20739,9 +20765,12 @@ fa = ((j.get("ctl") or {}).get("failedAttempts") or [{}])[-1]
 open(os.environ["K2_CP_STATE"], "w").write("|".join([
     s(v.get("cursor", 0)), "1" if v.get("end") else "0", s(j.get("state")), s(j.get("exitCode")),
     s(j.get("signal")), s(j.get("reason")), s(j.get("short")), s(j.get("node")),
-    s(j.get("startedAt")), s(j.get("endedAt")), s(q.get("position")), s(q.get("reason")),
+    s(j.get("startedAt")), s(j.get("endedAt")), s(q.get("position")), s(q.get("waitReason") or q.get("reason")),
     s(v.get("generation")), s(j.get("generation")), s(j.get("attempt")), s(fa.get("reason") or fa.get("state")),
 ]) + "\n")
+# The wait line (0.46.6: where it waits, N of M, why) in its own file: it
+# has spaces and punctuation the "|" fields drop.
+open(os.environ["K2_CP_STATE"] + ".q", "w").write((q.get("line") or "").replace("\n", " ") + "\n")
 # The teaching error line for a non-result end (JSON-safe here, not in bash).
 err = {"error": j.get("state"), "reason": j.get("reason"), "detail": j.get("detail"),
        "hint": "k2 compute get %s --json; k2 compute retry %s" % (j.get("short"), j.get("short"))}
@@ -20763,11 +20792,17 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
         # A line on every position or reason change (k2 compute get <job>
         # shows the jobs ahead).
         if [ "$st" = "queued" ] && [ -n "$qreason" ] && [ "$qpos|$qreason" != "${_CP_LAST_Q:-}" ]; then
-            echo "[k2 compute] queued on $node: position $qpos ($qreason)" >&2
+            local qline=""
+            IFS= read -r qline < "$state_file.q" || true
+            if [ -n "$qline" ]; then
+                echo "[k2 compute] $qline" >&2
+            else
+                echo "[k2 compute] queued on $node: position $qpos ($qreason)" >&2
+            fi
             _CP_LAST_Q="$qpos|$qreason"
         fi
         if [ "$end" = "1" ]; then
-            rm -f "$state_file"
+            rm -f "$state_file" "$state_file.q"
             trap - INT
             [ "$st" = "done" ] && rm -f "$state_file.err"
             [ "$as_json" = "1" ] && _compute_print_result "$job"
@@ -20779,6 +20814,10 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
                 done)
                     if [ -n "$code" ]; then
                         echo "[k2 compute] exit $code$took · k2 compute logs $short --failures" >&2
+                        if [ "$code" != "0" ] && [ "${_CP_FAILURES:-0}" = "1" ]; then
+                            echo "── failures in $short (k2 compute logs $short --failures --tail 60) ──" >&2
+                            ( cmd_compute_logs "$job" --failures --tail 60 ) >&2 || true
+                        fi
                         exit "$code"
                     fi
                     echo "[k2 compute] killed by signal $sig$took" >&2
@@ -20797,7 +20836,7 @@ open(os.environ["K2_CP_STATE"] + ".err", "w").write(json.dumps(err) + "\n")
 
 cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
-    local retry="" raw=0 workspace="" wait=0 wait_failures=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
+    local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=()
     while [ $# -gt 0 ]; do
@@ -20842,6 +20881,8 @@ sys.exit(0 if ok else 1)'; then
                 fi ;;
             --secret) secrets+=("${2:-}"); shift 2 ;;
             --wait) wait=1; shift ;;
+            # --wait --quiet: the old exit-only wait (no log text; 0.46.6).
+            --quiet|-q) wait_quiet=1; shift ;;
             --failures) wait_failures=1; shift ;;
             --max-wait) max_wait="${2:-}"; shift 2 ;;
             --any) any=1; shift ;;
@@ -20900,8 +20941,8 @@ sys.exit(0 if ok else 1)'; then
         echo "usage: --wait and --detach don't mix (--wait blocks until the end; --detach returns at once)" >&2
         exit 2
     fi
-    if { [ "$wait_failures" = "1" ] || [ -n "$max_wait" ]; } && [ "$wait" = "0" ]; then
-        echo "usage: --failures and --max-wait go with --wait (k2 compute run <node> --wait --failures -- …)" >&2
+    if { [ "$wait_failures" = "1" ] || [ -n "$max_wait" ] || [ "$wait_quiet" = "1" ]; } && [ "$wait" = "0" ]; then
+        echo "usage: --failures, --max-wait and --quiet go with --wait (k2 compute run <node> --wait --failures -- …)" >&2
         exit 2
     fi
     # --wait: attached on the daemon (detach:false), so an agent in a K2 tab
@@ -21076,10 +21117,18 @@ print(j["id"] + "\t" + ("set" if v.get("shards") else "one") + "\t" + line)')"
     fi
     if [ "$wait" = "1" ]; then
         # The id first, so an agent whose shell tool times out can resume
-        # with `k2 compute wait <id>`. Log text never streams here. A split
-        # run's id waits like one job (it ends when its last shard does).
-        # --json: the id goes to stderr so stdout is only the wait JSON.
+        # with `k2 compute wait <id> --follow`. Then (0.46.6, L8) the wait
+        # lines and the job's output, streamed like an attached run, ending
+        # with the job's exit code; --max-wait still bounds it. --quiet
+        # (and --json, whose stdout is the wait JSON) keep the exit-only
+        # wait. A split run's id waits like one job (no log stream: its
+        # shards each have one).
         if [ "$as_json" = "1" ]; then echo "${job_id:0:8}" >&2; else echo "${job_id:0:8}"; fi
+        if [ "$wait_quiet" = "0" ] && [ "$as_json" = "0" ] && [ "$kind" != "set" ]; then
+            [ -n "$max_wait" ] && _CP_DEADLINE=$(( $(date +%s) + $(_compute_secs "$max_wait") ))
+            _CP_FAILURES="$wait_failures"
+            _compute_follow "$job_id" "$raw" 0 0
+        fi
         local -a wargs=("$job_id")
         [ "$wait_failures" = "1" ] && wargs+=(--failures)
         [ -n "$max_wait" ] && wargs+=(--max-wait "$max_wait")
@@ -21478,22 +21527,33 @@ sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))' "$tmp"
 # exit code, 128+signal, or 3 for cancelled/failed/timeout/interrupted/
 # unknown). --max-wait: exit 3 + still_running when D passes first.
 cmd_compute_wait() {
-    local failures=0 quiet=0 max_wait="" as_json=0
+    local failures=0 quiet=0 max_wait="" as_json=0 follow=0
     local -a jobs=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --failures) failures=1; shift ;;
             --quiet|-q) quiet=1; shift ;;
             --json) as_json=1; shift ;;
+            --follow|-f) follow=1; shift ;;
             --max-wait) max_wait="${2:-}"; shift 2 ;;
-            -*) echo "usage: k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2 ;;
+            -*) echo "usage: k2 compute wait <job>... [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2 ;;
             *) jobs+=("$1"); shift ;;
         esac
     done
-    [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
+    [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
     local deadline=""
     if [ -n "$max_wait" ]; then
         deadline=$(( $(date +%s) + $(_compute_secs "$max_wait") ))
+    fi
+    # --follow (0.46.6, L8): stream one job's output from where it is now,
+    # like run --wait (resuming after a shell timeout).
+    if [ "$follow" = "1" ]; then
+        if [ "${#jobs[@]}" -ne 1 ] || [ "$as_json" = "1" ] || [ "$quiet" = "1" ]; then
+            echo "usage: k2 compute wait <job> --follow [--failures] [--max-wait 9m]   (one job; no --json or --quiet)" >&2; exit 2
+        fi
+        _CP_DEADLINE="$deadline"
+        _CP_FAILURES="$failures"
+        _compute_follow "${jobs[0]}" 0 0 0
     fi
     local dir n=0 j
     dir="$(mktemp -d -t k2-compute-wait-XXXXXX)"
@@ -21532,9 +21592,11 @@ import json, sys
 j = json.load(open(sys.argv[1]))
 q = j.get("queue") or {}
 st = j.get("state") or "?"
-key = "%s|%s|%s" % (st, q.get("position"), q.get("reason"))
+key = "%s|%s|%s" % (st, q.get("position"), q.get("waitReason") or q.get("reason"))
 term = st in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown")
-if st == "queued" and q:
+if st == "queued" and q.get("line"):
+    line = "%s %s" % (j.get("short"), q["line"])
+elif st == "queued" and q:
     line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), j.get("node"), q.get("position"),
         (" of %s" % q["of"]) if q.get("of") else "", q.get("reason"))
 else:
@@ -42898,9 +42960,12 @@ RUN
   --any: whichever granted node fits (warm slot first, then free CPU).
   Longer than your shell tool's timeout? Use --detach. (If an attached
   run gets killed, the job keeps going and you still get that line.)
-  WAIT without log text: k2 compute run <node> --wait -- cargo test
-  prints the job id, then blocks and exits with the job's exit code;
-  k2 compute wait <id>... does the same for jobs already submitted.
+  WAIT: k2 compute run <node> --wait -- cargo test prints the job id,
+  then where it waits ("queued on k2n9-vin: 2 of 5 — why"), then streams
+  the job's output and exits with the job's exit code (0.46.6).
+  --wait --quiet: no output, only the wait lines and the exit code.
+  k2 compute wait <id> --follow resumes the stream; k2 compute wait
+  <id>... (no --follow) blocks without log text for jobs already submitted.
   --max-wait 9m stops waiting first (exit 3, still_running, with the
   wait line to run next), so a shell tool capped at 10 minutes can loop.
   --failures prints the failure lines of a job that ended non-zero.
@@ -43082,8 +43147,9 @@ RESULTS (one object, artifacts, test lists)
   first, then the log lines that look like failures.
 
 NEVER STUCK
-  --queue-timeout 30m|off   not started in time → failed/queue_timeout (exit 3,
-                            with what it waited on). Default 30m, 24h --detach.
+  --queue-timeout 2h|off    not started in time → failed/queue_timeout (exit 3,
+                            with what it waited on). Default 2h attached or
+                            --wait, 24h --detach.
   --any jobs move: off a node that sleeps (60 s), is paused or set aside, and
   off a busy node onto one that can start them now.
   A node offline 10 min while running your job: that attempt ends
@@ -43327,8 +43393,15 @@ WHAT YOU SEE
   k2 compute queue <node>   the whole node queue. Other servers' jobs show
                       as "another server", tier, class, size and ETA only. No
                       command, workspace, session, job id or logs. Ever.
-  k2 compute get <job>      "queued on k2n2-m1, position 2, ETA ~6m (fair
-                      share: another server's jobs run first)"
+  k2 compute get <job>      "queued on k2n2-m1: 2 of 5, ETA ~6m — your
+                      workspace runs 3 of 3 here (its grant); jobs behind it
+                      may start first" (0.46.6: every waiting job says why)
+                      or "waits on this server for k2n2-m1 (1 of 2) — this
+                      server's queue on the node is full" (not sent yet)
+  A job waiting for its OWN limit (its workspace's grant, this server's
+  share, the per-submitter cap) lets jobs behind it start first; that is
+  why a newer job can start ahead of it. A job waiting for ROOM (slots,
+  CPU, memory) or behind a hold doesn't.
   ETAs are durations, never clock times, and rounded for other servers.
 
 THE QUEUE (the node decides, one queue for every server)

@@ -389,14 +389,14 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     assert_eq!(row(&job).tier, "normal");
 
     // The node queues it: shown as queued at the node's place.
-    compute_ws::test_frame("shr-1", state(&job, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 2, eta_secs: Some(360), eta_p90_secs: Some(600), blocked_by: Some("fair_share_wait".into()) })));
+    compute_ws::test_frame("shr-1", state(&job, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 2, of: None, eta_secs: Some(360), eta_p90_secs: Some(600), blocked_by: Some("fair_share_wait".into()) })));
     let rj = row(&job);
     assert_eq!((rj.state.as_str(), rj.node_queued, rj.node_pos), ("assigned", true, Some(2)));
     let r = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={job}")).await;
     let g = j(&r);
     assert_eq!((g["state"].as_str(), g["nodeQueued"].as_bool()), (Some("queued"), Some(true)), "{g}");
     let msg = g["queue"]["message"].as_str().unwrap();
-    assert_eq!(msg, "queued on k2n2-m1, position 2, ETA ~6m (fair share: another server's jobs run first)");
+    assert_eq!(msg, "queued on k2n2-m1, position 2, ETA ~6m — fair share: another server's jobs run first");
     // `status` / `nodes` count it as queued, never running (0.46.6: a
     // node-queued row stays `assigned`, and `status` showed "run 6/3" on a
     // node running 2).
@@ -424,7 +424,7 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id})).await;
     let job2 = j(&r)["job"]["id"].as_str().unwrap().to_string();
     assert_eq!(assigns(&node.frames()).len(), 1);
-    compute_ws::test_frame("shr-1", state(&job2, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 1, eta_secs: None, eta_p90_secs: None, blocked_by: None })));
+    compute_ws::test_frame("shr-1", state(&job2, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 1, of: None, eta_secs: None, eta_p90_secs: None, blocked_by: None })));
     let r = post(d.port, "/cli/compute/jobs/cancel", OWNER, json!({"job": job2, "ifState": "queued"})).await;
     assert_eq!(j(&r)["state"], "cancel_requested", "{}", r.body);
     compute_ws::test_frame("shr-1", state(&job2, 1, JobState::Cancelled, Some("cancelled"), None));
@@ -456,6 +456,60 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     compute_ws::test_detach("shr-1");
 }
 
+/// prd-compute-job-tiers-v2 L5 + L6 (T23–T26, the 10-27 night): jobs
+/// waiting in a shared node's queue carry their workspace's cap from when
+/// they were sent. Raising the grant re-sends them (withdraw, then the
+/// same node again with the grant's cap, oldest first): a new generation,
+/// no move, no V71 withdraw, no retry. The wait says why, "N of M", and
+/// that jobs behind it may start first.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn raising_a_grant_resends_node_queued_jobs_with_the_new_cap() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let ws = seed_ws(&env, "capper");
+    active_node("cap-1", "k2n9-vin", "linux", &ws);
+    let mut node = compute_ws::test_attach("cap-1", offer(&["artifacts", "stall", FEATURE_QUEUE, FEATURE_SERVERS], 1, Some(view(Role::Tenant, 1, 0))));
+    let r = run(d.port, OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "detach": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let old = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let r = run(d.port, OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "detach": true})).await;
+    let older2 = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let a = assigns(&node.frames());
+    assert_eq!(a.len(), 2);
+    assert!(a.iter().all(|x| x.2.ws_max_running == Some(1)), "cap 1 from the grant at send");
+    let wait = QueuePos { pos: 1, of: Some(3), eta_secs: None, eta_p90_secs: None, blocked_by: Some("workspace_running_full".into()) };
+    compute_ws::test_frame("cap-1", state(&old, 1, JobState::Queued, Some("node_queued"), Some(wait.clone())));
+    compute_ws::test_frame("cap-1", state(&older2, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 2, ..wait })));
+    // L6: the wait in words, its place, and that it lets others pass.
+    let r = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={old}")).await;
+    let q = j(&r)["queue"].clone();
+    assert_eq!((q["position"].as_i64(), q["of"].as_i64(), q["waitReason"].as_str(), q["holdsQueue"].as_bool()), (Some(1), Some(3), Some("workspace_running_full"), Some(false)), "{q}");
+    let line = q["line"].as_str().unwrap();
+    assert!(line.starts_with("queued on k2n9-vin: 1 of 3 — your workspace runs "), "{line}");
+    assert!(line.ends_with("(its grant); jobs behind it may start first"), "{line}");
+
+    // Raise the grant 1 → 3: both are asked back, oldest first.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "maxParallel": 3})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["resent"], 2, "{}", r.body);
+    assert_eq!(cancels(&node.frames()), vec![(old.clone(), 1, CANCEL_WITHDRAW.to_string()), (older2.clone(), 1, CANCEL_WITHDRAW.to_string())]);
+    assert_eq!(row(&old).reason.as_deref(), Some("withdraw_resend"));
+    // The same grant again re-sends nothing.
+    let r = post(d.port, "/cli/compute/grants/set", OWNER, json!({"node": "k2n9-vin", "workspace": ws.id, "maxParallel": 3})).await;
+    assert_eq!(j(&r)["resent"], 0, "{}", r.body);
+    // The node gives each back: sent again to the SAME node with cap 3.
+    compute_ws::test_frame("cap-1", state(&old, 1, JobState::Cancelled, Some("withdrawn"), None));
+    compute_ws::test_frame("cap-1", state(&older2, 1, JobState::Cancelled, Some("withdrawn"), None));
+    let again = assigns(&node.frames());
+    assert_eq!(again.iter().map(|x| (x.0.clone(), x.1)).collect::<Vec<_>>(), vec![(old.clone(), 2), (older2.clone(), 2)], "oldest first, new generation");
+    assert!(again.iter().all(|x| x.2.ws_max_running == Some(3)), "the fresh cap");
+    let rj = row(&old);
+    assert_eq!((rj.node_id.as_str(), rj.generation, rj.attempt, rj.withdraws, rj.ctl.retries_used), ("cap-1", 2, 1, 0, 0), "no move, no V71 count, no retry: {rj:?}");
+    assert!(!rj.is_terminal());
+    assert_eq!((events("resend", &old), events("withdraw", &old)), (1, 0));
+    compute_ws::test_detach("cap-1");
+}
+
 /// V46 + V71: `--any` leaves a shared node only after the node confirms
 /// the withdraw; it comes back under a new generation, with no retry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -472,7 +526,7 @@ async fn any_moves_only_after_a_confirmed_withdraw_under_a_new_generation() {
     let job = j(&r)["job"]["id"].as_str().unwrap().to_string();
     assert_eq!(row(&job).node_id, "mv-a");
     assert_eq!(assigns(&a.frames()).len(), 1, "any_hold_secs = 0: into A's queue at once");
-    compute_ws::test_frame("mv-a", state(&job, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 3, eta_secs: Some(900), eta_p90_secs: None, blocked_by: None })));
+    compute_ws::test_frame("mv-a", state(&job, 1, JobState::Queued, Some("node_queued"), Some(QueuePos { pos: 3, of: None, eta_secs: Some(900), eta_p90_secs: None, blocked_by: None })));
     // B comes online, idle (a solo 0.46.2 node).
     let mut b = compute_ws::test_attach("mv-b", v0462(offer(&["artifacts", "stall"], 0, None)));
     assert!(assigns(&b.frames()).is_empty(), "nothing moves before a withdraw");

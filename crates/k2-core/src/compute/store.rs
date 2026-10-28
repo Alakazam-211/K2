@@ -781,6 +781,10 @@ pub struct JobRow {
     pub submitter: Option<String>,
     /// `--supersede KEY`.
     pub supersede_key: Option<String>,
+    /// How many jobs wait in the node's queue ("N of M"; 0240,
+    /// prd-compute-job-tiers-v2 L6). Absent from a node older than 0.46.6.
+    #[serde(skip)]
+    pub node_of: Option<i64>,
 }
 
 impl JobRow {
@@ -804,7 +808,7 @@ const JOB_COLS: &str = "id, client_job_id, node_id, workspace_id, session_id, re
     plan_digest, exclusive, detach, retry_interrupted, exit_code, signal, created_at, assigned_at, started_at, \
     ended_at, log_seq, log_bytes, summary_json, receipt_json, receipt_ok, notified_at, class, est_secs, node_queued, \
     node_pos, node_eta_secs, node_eta_p90_secs, node_blocked_by, node_seen_at, withdraws, withdrawn_at, tier, tier_asked, \
-    submitter, supersede_key";
+    submitter, supersede_key, node_of";
 
 fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
     let argv: String = r.get(6)?;
@@ -858,7 +862,7 @@ fn job_from_row(r: &Row<'_>) -> rusqlite::Result<JobRow> {
         tier: r.get(44)?,
         tier_asked: r.get(45)?,
         submitter: r.get(46)?,
-        supersede_key: r.get(47)?,
+        supersede_key: r.get(47)?, node_of: r.get(48)?,
     })
 }
 
@@ -1300,7 +1304,7 @@ pub fn replace_if_queued(conn: &Connection, id: &str, by_job: &str, at: i64) -> 
 pub fn mark_node_queued(conn: &Connection, id: &str, generation: i64, pos: Option<&QueuePos>, reason: Option<&str>, at: i64) -> Result<bool, String> {
     conn.execute(
         "UPDATE compute_jobs SET node_queued = 1, reason = COALESCE(?8, reason), node_pos = ?3, node_eta_secs = ?4, \
-         node_eta_p90_secs = ?5, node_blocked_by = ?6, node_seen_at = ?7 WHERE id = ?1 AND generation = ?2 AND state = 'assigned'",
+         node_eta_p90_secs = ?5, node_blocked_by = ?6, node_seen_at = ?7, node_of = ?9 WHERE id = ?1 AND generation = ?2 AND state = 'assigned'",
         params![
             id,
             generation,
@@ -1309,7 +1313,8 @@ pub fn mark_node_queued(conn: &Connection, id: &str, generation: i64, pos: Optio
             pos.and_then(|p| p.eta_p90_secs).map(|e| e as i64),
             pos.and_then(|p| p.blocked_by.clone()),
             at,
-            reason
+            reason,
+            pos.and_then(|p| p.of).map(i64::from)
         ],
     )
     .map_err(|e| e.to_string())
@@ -1320,7 +1325,7 @@ pub fn mark_node_queued(conn: &Connection, id: &str, generation: i64, pos: Optio
 pub fn clear_node_queued(conn: &Connection, id: &str) {
     let _ = conn.execute(
         "UPDATE compute_jobs SET node_queued = 0, node_pos = NULL, node_eta_secs = NULL, node_eta_p90_secs = NULL, \
-         node_blocked_by = NULL WHERE id = ?1 AND node_queued = 1",
+         node_blocked_by = NULL, node_of = NULL WHERE id = ?1 AND node_queued = 1",
         params![id],
     );
 }
@@ -1335,7 +1340,7 @@ pub fn requeue_new_generation(conn: &Connection, id: &str, generation: i64, reas
     conn.execute(
         "UPDATE compute_jobs SET state = 'queued', reason = ?3, detail = NULL, generation = generation + 1, \
          assigned_at = NULL, started_at = NULL, log_seq = 0, log_bytes = 0, node_queued = 0, node_pos = NULL, \
-         node_eta_secs = NULL, node_eta_p90_secs = NULL, node_blocked_by = NULL \
+         node_eta_secs = NULL, node_eta_p90_secs = NULL, node_blocked_by = NULL, node_of = NULL \
          WHERE id = ?1 AND generation = ?2 AND state IN ('assigned','preparing','running','finishing')",
         params![id, generation, reason],
     )
@@ -1365,7 +1370,7 @@ pub fn requeue_new_attempt(conn: &Connection, id: &str, reason: &str) -> Result<
          generation = generation + 1, exit_code = NULL, signal = NULL, assigned_at = NULL, started_at = NULL, \
          ended_at = NULL, log_seq = 0, log_bytes = 0, summary_json = NULL, receipt_json = NULL, receipt_ok = NULL, \
          notified_at = NULL, node_queued = 0, node_pos = NULL, node_eta_secs = NULL, node_eta_p90_secs = NULL, \
-         node_blocked_by = NULL WHERE id = ?1",
+         node_blocked_by = NULL, node_of = NULL WHERE id = ?1",
         params![id, reason],
     )
     .map_err(|e| e.to_string())?;
@@ -1628,7 +1633,7 @@ mod tests {
         set_job_queue_facts(&c, &j.id, "batch", Some(90)).unwrap();
         assert!(!mark_node_queued(&c, &j.id, 1, None, Some("node_queued"), 5).unwrap(), "only an assigned row");
         assert!(assign_if_queued(&c, &j.id, 5).unwrap());
-        let pos = QueuePos { pos: 2, eta_secs: Some(360), eta_p90_secs: Some(600), blocked_by: Some("over_quota".into()) };
+        let pos = QueuePos { pos: 2, of: None, eta_secs: Some(360), eta_p90_secs: Some(600), blocked_by: Some("over_quota".into()) };
         assert!(!mark_node_queued(&c, &j.id, 9, Some(&pos), None, 6).unwrap(), "another generation");
         assert!(mark_node_queued(&c, &j.id, 1, Some(&pos), Some("node_queued"), 6).unwrap());
         let r = job_by_id(&c, &j.id).unwrap();

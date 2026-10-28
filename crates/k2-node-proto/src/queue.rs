@@ -84,6 +84,11 @@ pub fn isolation_blocks<'a>(one_uid: bool, slot: Slot, ws: &str, secret: bool, r
     running.into_iter().any(|(s, w, sec)| (one_uid || s == slot) && w != ws && (secret || sec))
 }
 
+/// A lingering unit (a leftover process of an earlier job) enters the
+/// queue as a running job whose id starts with this (`k2-node`'s
+/// `LINGER_PREFIX`): the wait reason says `lingering`, not isolation.
+pub const LINGER_JOB_PREFIX: &str = "lingering:";
+
 /// The node's capacity for queued work right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caps {
@@ -225,9 +230,14 @@ pub struct Input<'a> {
 pub struct Info {
     /// 1-based position in the node's queue (start order).
     pub pos: u32,
+    /// How many jobs wait in the node's queue (the M of "N of M").
+    pub of: u32,
     pub starts_now: bool,
     pub eta_secs: Option<u64>,
     pub eta_p90_secs: Option<u64>,
+    /// Why it doesn't start now (every queued job that doesn't start has
+    /// one; prd-compute-job-tiers-v2 L6): a node-wide or tenant-wide
+    /// block, or a [`blocked`] wait code.
     pub blocked_by: Option<String>,
 }
 
@@ -388,17 +398,20 @@ struct SimRun {
     exclusive: bool,
     /// Simulated end time; `None` = unknown.
     end: Option<u64>,
+    /// A lingering unit, not a job ([`LINGER_JOB_PREFIX`]).
+    lingering: bool,
 }
 
-/// Why a job can't start in this state: `Wait` lets later jobs go
+/// Why a job can't start in this state, with its wait code
+/// ([`blocked`], prd-compute-job-tiers-v2 T25): `Wait` lets later jobs go
 /// (tenant or workspace limits); `Capacity` is the node being full (the
 /// hold applies: at once behind a CI or Priority head, after 20 min behind
 /// a Normal one); `Never` can't fit even on an idle node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Fit {
     Now,
-    Wait,
-    Capacity,
+    Wait(&'static str),
+    Capacity(&'static str),
     Never,
 }
 
@@ -413,27 +426,38 @@ fn fit(input: &Input<'_>, e: &Queued, t: &Tenant, run: &[SimRun]) -> Fit {
     // other tenants (§2.5 of the vs-live).
     let mine = run.iter().filter(|r| r.slot == e.slot).count() as u32;
     if mine >= t.limits.max_running {
-        return Fit::Wait;
+        return Fit::Wait(blocked::SERVER_RUNNING_FULL);
     }
     if let Some(m) = e.ws_max_running {
         if run.iter().filter(|r| r.slot == e.slot && r.ws == e.workspace_id).count() as u32 >= m.max(1) {
-            return Fit::Wait;
+            return Fit::Wait(blocked::WORKSPACE_RUNNING_FULL);
         }
     }
     // SE26: no secret job beside another workspace's job under one uid. A
     // CI or Priority job waits for the node to drain toward it (T4: as
-    // `Wait` it could starve while other workspaces keep starting).
-    if isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, run.iter().map(|r| (r.slot, r.ws.as_str(), r.secret))) {
-        return if band_of(e, t, input.now, input.cfg).holds() { Fit::Capacity } else { Fit::Wait };
+    // `Wait` it could starve while other workspaces keep starting). A
+    // leftover unit counts as such a job; the reason then says so.
+    let blockers: Vec<&SimRun> = run
+        .iter()
+        .filter(|r| isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, [(r.slot, r.ws.as_str(), r.secret)]))
+        .collect();
+    if !blockers.is_empty() {
+        let code = if blockers.iter().all(|r| r.lingering) { blocked::LINGERING } else { crate::secret::codes::ISOLATION_WAIT };
+        return if band_of(e, t, input.now, input.cfg).holds() { Fit::Capacity(code) } else { Fit::Wait(code) };
     }
     let used_cpu: u64 = run.iter().map(|r| r.cpu).sum();
     let used_mem: u64 = run.iter().map(|r| r.mem).sum();
     let excl_running = run.iter().any(|r| r.exclusive);
-    if excl_running || (e.exclusive && !run.is_empty()) || run.len() as u32 >= caps.parallel_max {
-        return Fit::Capacity;
+    if excl_running || (e.exclusive && !run.is_empty()) {
+        return Fit::Capacity(blocked::WAITING_FOR_IDLE);
+    }
+    if run.len() as u32 >= caps.parallel_max {
+        // Every slot taken by leftover units only: say so.
+        let code = if run.iter().all(|r| r.lingering) { blocked::LINGERING } else { blocked::WAITING_FOR_ROOM };
+        return Fit::Capacity(code);
     }
     if used_cpu.saturating_add(cpu) > caps.cpu_millis || used_mem.saturating_add(mem) > caps.mem_bytes {
-        return Fit::Capacity;
+        return Fit::Capacity(blocked::WAITING_FOR_ROOM);
     }
     Fit::Now
 }
@@ -442,6 +466,8 @@ struct Sim {
     /// Per queued index: start time (secs from now) if simulated.
     start_at: Vec<Option<u64>>,
     blocked: Vec<Option<String>>,
+    /// Why it doesn't start now (the first round only; T25).
+    why_now: Vec<Option<&'static str>>,
 }
 
 /// Run the queue forward. `p90` picks the slow estimates.
@@ -449,6 +475,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
     let q = input.queued;
     let mut start_at = vec![None; q.len()];
     let mut blocked: Vec<Option<String>> = vec![None; q.len()];
+    let mut why_now: Vec<Option<&'static str>> = vec![None; q.len()];
     let mut run: Vec<SimRun> = input
         .running
         .iter()
@@ -460,6 +487,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
             mem: r.mem_bytes,
             exclusive: r.exclusive,
             end: if p90 { r.left_p90.or(r.left_p50) } else { r.left_p50 },
+            lingering: r.job_id.starts_with(LINGER_JOB_PREFIX),
         })
         .collect();
     // Who can never start here (the whole run).
@@ -481,34 +509,55 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
         }
     }
     let mut now: u64 = 0;
-    for _round in 0..(4 * q.len() + 8) {
+    for round in 0..(4 * q.len() + 8) {
         // Start pass at `now`, in order, with the hold: the first job that
         // waits for capacity holds every later start at once when it is
         // CI or Priority ("next free slot"), after 20 min when it is
         // Normal. The order is band-first, so nothing of a higher band
-        // ever sits behind it.
-        let mut held = false;
+        // ever sits behind it. `held`: the hold's wait code once set.
+        let mut held: Option<&'static str> = None;
         let mut capacity_head_seen = false;
         let mut started = Vec::new();
         for i in &pending {
             let e = &q[*i];
             let t = tenant_of(input.tenants, e.slot).expect("checked");
-            match fit(input, e, t, &run) {
-                Fit::Now if !held => {
+            let f = fit(input, e, t, &run);
+            if round == 0 {
+                // Why it doesn't start now (T25): a hold ahead outranks the
+                // room it waits for; its own limit stays its own reason.
+                why_now[*i] = match (&f, held) {
+                    (Fit::Now, None) | (Fit::Never, _) => None,
+                    (Fit::Now, Some(h)) | (Fit::Capacity(_), Some(h)) => Some(h),
+                    (Fit::Wait(c), _) | (Fit::Capacity(c), None) => Some(*c),
+                };
+            }
+            match f {
+                Fit::Now if held.is_none() => {
                     let cpu = e.cpu_millis.unwrap_or_else(|| input.caps.default_cpu());
                     let mem = e.mem_bytes.unwrap_or_else(|| input.caps.default_mem());
                     let est = if p90 { e.est_p90.or(e.est_p50) } else { e.est_p50 };
-                    run.push(SimRun { slot: e.slot, ws: e.workspace_id.clone(), secret: e.secret, cpu, mem, exclusive: e.exclusive, end: est.map(|d| now + d.max(1)) });
+                    run.push(SimRun {
+                        slot: e.slot,
+                        ws: e.workspace_id.clone(),
+                        secret: e.secret,
+                        cpu,
+                        mem,
+                        exclusive: e.exclusive,
+                        end: est.map(|d| now + d.max(1)),
+                        lingering: false,
+                    });
                     start_at[*i] = Some(now);
                     started.push(*i);
                 }
-                Fit::Capacity if !capacity_head_seen => {
+                Fit::Capacity(_) if !capacity_head_seen => {
                     capacity_head_seen = true;
                     let waited = input.now - e.enqueued_at + now as i64;
                     // Its band as of the real now (ETAs don't age a job
                     // into a hold it doesn't have yet).
-                    if band_of(e, t, input.now, input.cfg).holds() || waited >= input.cfg.backfill_hold_secs {
-                        held = true;
+                    if band_of(e, t, input.now, input.cfg).holds() {
+                        held = Some(blocked::TIER_HOLD);
+                    } else if waited >= input.cfg.backfill_hold_secs {
+                        held = Some(blocked::BACKFILL_HOLD);
                     }
                 }
                 Fit::Never => blocked[*i] = Some(blocked::EXCEEDS_NODE_CAPS.into()),
@@ -527,7 +576,7 @@ fn simulate(input: &Input<'_>, ord: &[usize], p90: bool) -> Sim {
         now = next.max(now);
         run.retain(|r| r.end.is_none_or(|e| e > now));
     }
-    Sim { start_at, blocked }
+    Sim { start_at, blocked, why_now }
 }
 
 /// The whole answer for a snapshot: order, starts, positions and ETAs.
@@ -538,6 +587,7 @@ pub fn decide(input: &Input<'_>) -> Decision {
     let mut info = vec![Info::default(); input.queued.len()];
     let mut start = Vec::new();
     let mut rotation = input.rotation.clone();
+    let of = ord.len() as u32;
     for (pos, i) in ord.iter().enumerate() {
         let e = &input.queued[*i];
         let now = fast.start_at[*i] == Some(0);
@@ -553,15 +603,15 @@ pub fn decide(input: &Input<'_>) -> Decision {
                 }
             }
         }
-        // SE26: say why it waits when only the isolation rule holds it now.
-        if blocked_by.is_none()
-            && !now
-            && isolation_blocks(input.cfg.one_uid, e.slot, &e.workspace_id, e.secret, input.running.iter().map(|r| (r.slot, r.workspace_id.as_str(), r.secret)))
-        {
-            blocked_by = Some(crate::secret::codes::ISOLATION_WAIT.into());
+        // Every job that doesn't start now says why (T25): its own limit,
+        // the node's room, isolation (SE26) or a leftover unit, or a hold
+        // ahead of it.
+        if blocked_by.is_none() && !now {
+            blocked_by = fast.why_now[*i].map(str::to_string);
         }
         info[*i] = Info {
             pos: pos as u32 + 1,
+            of,
             starts_now: now,
             eta_secs: fast.start_at[*i],
             eta_p90_secs: slow.start_at[*i].or(fast.start_at[*i]),
@@ -1226,6 +1276,94 @@ mod tests {
         let d = w.decide();
         assert_eq!(w.ids(&d.start), vec!["b"]);
         assert_eq!(d.info[0].eta_secs, Some(30));
+    }
+
+    /// 10-27 (prd-compute-job-tiers-v2 §3, T23/T25): an older job carrying
+    /// a stale cap of 1 sits at position 1 while a newer cap-3 job of the
+    /// same workspace starts past it. It now says why, and that it lets
+    /// others pass; with the refreshed cap it starts beside the running work.
+    #[test]
+    fn a_stale_workspace_cap_says_why_and_a_fresh_one_starts() {
+        let mut w = World::new(3, vec![tenant(0, 1)]);
+        w.running = vec![running(0, "r", 1000, Some(600))];
+        let mut old = q(0, "old", "w", w.now - 40 * 60);
+        old.ws_max_running = Some(1);
+        let mut new = q(0, "new", "w", w.now - 120);
+        new.ws_max_running = Some(3);
+        w.queued = vec![old, new];
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["new"], "the cap-3 job starts past the cap-1 one");
+        assert_eq!((d.info[0].pos, d.info[0].of), (1, 2));
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::WORKSPACE_RUNNING_FULL));
+        assert!(blocked::lets_others_pass(blocked::WORKSPACE_RUNNING_FULL));
+        // The server re-sent it with the grant's current cap (L5).
+        w.queued[0].ws_max_running = Some(3);
+        let d = w.decide();
+        assert_eq!(w.ids(&d.start), vec!["old", "new"], "both start beside the running job, oldest first");
+    }
+
+    /// Every queued job that doesn't start has a reason (T25), and each
+    /// wait kind has its own code.
+    #[test]
+    fn every_waiting_job_says_why() {
+        // Room: the node is full.
+        let mut w = World::new(1, vec![tenant(0, 1), tenant(1, 1)]);
+        w.running = vec![running(1, "r", 1000, Some(60))];
+        w.queued = vec![q(0, "a", "w", 1)];
+        let d = w.decide();
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::WAITING_FOR_ROOM));
+        assert_eq!((d.info[0].pos, d.info[0].of), (1, 1));
+        // The server's share: max_running reached.
+        let mut w = World::new(4, vec![tenant(0, 1)]);
+        w.tenants[0].limits.max_running = 1;
+        w.running = vec![running(0, "r", 1000, Some(60))];
+        w.queued = vec![q(0, "a", "w", 1)];
+        assert_eq!(w.decide().info[0].blocked_by.as_deref(), Some(blocked::SERVER_RUNNING_FULL));
+        // A Priority head waiting for room holds the job behind it.
+        let mut w = World::new(1, vec![gate_tenant(0)]);
+        w.running = vec![running(0, "r", 1000, Some(60))];
+        let mut p = q(0, "p", "w", 1);
+        p.tier = Tier::Priority;
+        w.queued = vec![p, q(0, "n", "w2", 2)];
+        let d = w.decide();
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::WAITING_FOR_ROOM));
+        assert_eq!(d.info[1].blocked_by.as_deref(), Some(blocked::TIER_HOLD));
+        // A Normal head that waited 20 min holds with backfill_hold.
+        let mut w = World::new(4, vec![tenant(0, 1), tenant(1, 1)]);
+        w.running = vec![running(1, "big-running", 6000, Some(300))];
+        let mut big = q(0, "big", "w", w.now - 20 * 60);
+        big.cpu_millis = Some(4000);
+        w.queued = vec![big, q(1, "small", "w", w.now - 30)];
+        let d = w.decide();
+        assert!(d.start.is_empty());
+        assert_eq!(d.info[0].blocked_by.as_deref(), Some(blocked::WAITING_FOR_ROOM));
+        assert_eq!(d.info[1].blocked_by.as_deref(), Some(blocked::BACKFILL_HOLD));
+        // An exclusive job waits for an idle node.
+        let mut w = World::new(4, vec![tenant(0, 1)]);
+        w.running = vec![running(0, "r", 1000, Some(60))];
+        let mut x = q(0, "x", "w2", 1);
+        x.exclusive = true;
+        w.queued = vec![x];
+        assert_eq!(w.decide().info[0].blocked_by.as_deref(), Some(blocked::WAITING_FOR_IDLE));
+    }
+
+    /// A leftover unit (a lingering job's process) blocks a secret job by
+    /// SE26 and fills a slot: the reason says `lingering`, not isolation.
+    #[test]
+    fn a_lingering_unit_is_named_as_such() {
+        let mut w = World::new(2, vec![tenant(0, 1)]);
+        let mut l = running(0, &format!("{LINGER_JOB_PREFIX}unit-1"), 0, None);
+        l.workspace_id = "(unknown workspace)".into();
+        l.secret = true;
+        w.running = vec![l.clone()];
+        w.queued = vec![q(0, "a", "w", 1)];
+        assert_eq!(w.decide().info[0].blocked_by.as_deref(), Some(blocked::LINGERING));
+        // Both slots taken by leftovers only.
+        let mut w = World::new(1, vec![tenant(0, 1)]);
+        l.secret = false;
+        w.running = vec![l];
+        w.queued = vec![q(0, "a", "w", 1)];
+        assert_eq!(w.decide().info[0].blocked_by.as_deref(), Some(blocked::LINGERING));
     }
 
     #[test]

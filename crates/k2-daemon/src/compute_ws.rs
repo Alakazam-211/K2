@@ -514,7 +514,7 @@ async fn run_session(
                 let reason = match j.reason.as_deref() {
                     Some("cancel_requested") => "cancelled",
                     Some(pending::CANCEL) if j.node_queued => frames::CANCEL_IF_QUEUED,
-                    Some(pending::WITHDRAW) | Some(pending::TIMEOUT) if j.node_queued => frames::CANCEL_WITHDRAW,
+                    Some(pending::WITHDRAW) | Some(pending::TIMEOUT) | Some(pending::RESEND) if j.node_queued => frames::CANCEL_WITHDRAW,
                     _ => return None,
                 };
                 Some(Frame::Cancel(Cancel { job_id: j.id.clone(), generation: j.generation as u32, reason: reason.into() }))
@@ -983,7 +983,7 @@ fn apply_observation(
         // here unless someone asked to cancel it: it goes to the move path.
         let user_cancel = asked == Some("cancel_requested") || asked == Some(pending::CANCEL);
         let given_back = matches!(reason, Some(pshare::codes::WITHDRAWN) | Some(pshare::codes::SUPERSEDED))
-            || matches!(asked, Some(pending::WITHDRAW) | Some(pending::TIMEOUT));
+            || matches!(asked, Some(pending::WITHDRAW) | Some(pending::TIMEOUT) | Some(pending::RESEND));
         if given_back && !user_cancel {
             drop(conn);
             return given_back_job(node_id, &job);
@@ -1119,6 +1119,31 @@ fn given_back_job(node_id: &str, job: &store::JobRow) {
         notify_change();
         return;
     }
+    // L5 / retier (prd-compute-job-tiers-v2 T24): a re-send to the same
+    // node with a fresh plan. Requeued under a new generation (the queue
+    // clock, `ctl.queued_at`, is kept: `--queue-timeout` still counts from
+    // submit), never moved, never a V71 withdraw, no health strike; the
+    // next pass sends it again, oldest first.
+    if job.reason.as_deref() == Some(pending::RESEND) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if store::requeue_new_generation(&conn, &job.id, job.generation, RESENT) != Ok(true) {
+            return;
+        }
+        store::record_event(
+            &conn,
+            "controller",
+            "resend",
+            Some(node_id),
+            Some(&job.workspace_id),
+            Some(&job.id),
+            serde_json::json!({"generation": job.generation, "newGeneration": job.generation + 1}),
+        );
+        drop(conn);
+        kick(node_id);
+        notify_change();
+        return;
+    }
     let row = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1143,6 +1168,52 @@ fn given_back_job(node_id: &str, job: &store::JobRow) {
     }
     kick(node_id);
     notify_change();
+}
+
+/// The reason a re-sent job carries while it is back on this server.
+pub const RESENT: &str = "resent";
+
+/// Re-send (prd-compute-job-tiers-v2 L5, T24): ask the node to give back
+/// every job of `workspace_id` that waits in `node_id`'s queue (only if not
+/// started), so the next pass sends each again with a fresh plan (the
+/// grant's current cap, a new tier). `only`: just these job ids (retier).
+/// Oldest first, so the workspace keeps its own order. A job the node
+/// already started answers its real state and stays (V57). Returns how many
+/// were asked. Works with 0.46.4/0.46.5 nodes as they are (the existing
+/// withdraw cancel).
+pub fn resend_queued(node_id: &str, workspace_id: &str, only: Option<&[String]>) -> usize {
+    let jobs: Vec<store::JobRow> = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::node_queued_jobs(&conn)
+            .into_iter()
+            .filter(|j| j.node_id == node_id && j.workspace_id == workspace_id)
+            .filter(|j| only.is_none_or(|ids| ids.contains(&j.id)))
+            // Already waiting for the node's answer (a cancel, a move, a
+            // timeout, an earlier re-send): leave it.
+            .filter(|j| !pending::any(j.reason.as_deref()) && j.reason.as_deref() != Some("cancel_requested"))
+            .collect()
+    };
+    let mut asked = 0;
+    for j in jobs {
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::set_job_reason(&conn, &j.id, Some(pending::RESEND), j.detail.as_deref());
+            store::record_event(&conn, "controller", "resend_asked", Some(node_id), Some(&j.workspace_id), Some(&j.id), serde_json::json!({"generation": j.generation}));
+        }
+        if send_cancel_if_not_started(node_id, &j.id, j.generation, frames::CANCEL_WITHDRAW) {
+            asked += 1;
+        } else {
+            // Not sent (the node just dropped): the reattach's welcome
+            // repeats the withdraw (pending markers survive a reconnect).
+            log_debug!("[compute] resend {}: node {node_id} not attached; the withdraw goes out on reattach", j.id);
+        }
+    }
+    if asked > 0 {
+        notify_change();
+    }
+    asked
 }
 
 /// A job reached its end: message the requesting session once (detached).
@@ -2230,7 +2301,9 @@ pub fn kick(node_id: &str) {
 /// A changed plan is written back (JSON and digest) while the row is still
 /// queued; `None` when it no longer is (a cancel won): don't send.
 fn fit_plan_to(conn: &rusqlite::Connection, job: store::JobRow, plan: frames::Plan, features: &[String]) -> Option<(store::JobRow, frames::Plan)> {
-    match crate::compute_place::fit_plan(&plan, &job, features) {
+    // L5 (T23): the workspace's cap as its grant says right now.
+    let ws_cap = store::grant(conn, &job.node_id, &job.workspace_id).map(|g| g.max_parallel.max(1) as u32);
+    match crate::compute_place::fit_plan(&plan, &job, features, ws_cap) {
         None => Some((job, plan)),
         Some(p) => {
             if store::rewrite_queued_plan(conn, &job.id, &p, &job.ctl) != Ok(true) {

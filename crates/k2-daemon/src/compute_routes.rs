@@ -1287,22 +1287,29 @@ fn grant_set(who: &Who, body: &[u8], mgr: Option<&Manager>) -> R<serde_json::Val
         max_queued: n_pos(&v, "maxQueued", 1, 1000)?,
         allow_ci,
     };
-    let g = {
+    let (g, before) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
+        let before = store::grant(&conn, &n.id, &ws.id);
         let g = store::set_grant(&conn, &n.id, &ws.id, &limits, &who.label(), compute::now()).map_err(|e| no("internal", 500, e))?;
         store::record_event(&conn, &who.label(), "grant", Some(&n.id), Some(&ws.id), None, serde_json::to_value(&g).unwrap_or_default());
-        g
+        (g, before)
     };
     if let Some(m) = mgr {
         crate::compute_manage::audit(m, "grant", &n.name, &[("for", &ws.handle)]);
     }
+    // L5 (prd-compute-job-tiers-v2 T23/T24): each job in a shared node's
+    // queue carries its workspace's cap from when it was sent. A changed
+    // cap re-sends this workspace's jobs waiting there (withdraw, then
+    // send again with the grant's cap, oldest first). A solo node reads
+    // the grant live and needs nothing.
+    let resent = if before.as_ref().is_none_or(|b| b.max_parallel != g.max_parallel) { compute_ws::resend_queued(&n.id, &ws.id, None) } else { 0 };
     let switch_on = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         store::agents_can_use_compute(&conn, &ws.id)
     };
-    Ok(serde_json::json!({"ok": true, "node": n.name, "workspace": ws.handle, "grant": g, "agentsCanUseCompute": switch_on,
+    Ok(serde_json::json!({"ok": true, "node": n.name, "workspace": ws.handle, "grant": g, "agentsCanUseCompute": switch_on, "resent": resent,
         "note": if switch_on { "agents in this workspace can use the node now" } else { "agents also need Settings → Workspaces → <agent> → Agent → Allow compute nodes (k2 compute access on --workspace <ws>)" }}))
 }
 
@@ -2860,23 +2867,68 @@ fn job_summary(j: &store::JobRow) -> serde_json::Value {
 /// `queued on k2n2-m1, position 2, ETA ~6m (fair share: …)`.
 fn node_queue_json(j: &store::JobRow, node: Option<&str>) -> serde_json::Value {
     let node = node.unwrap_or("the node");
-    let pos = j.node_pos.map(|p| format!(", position {p}")).unwrap_or_default();
+    // "2 of 5" (prd-compute-job-tiers-v2 L6, T26): the node's place; a node
+    // older than 0.46.6 sends no total.
+    let place = match (j.node_pos, j.node_of) {
+        (Some(p), Some(m)) => format!(": {p} of {m}"),
+        (Some(p), None) => format!(", position {p}"),
+        _ => String::new(),
+    };
     let eta = j.node_eta_secs.map(|e| format!(", ETA {}", share::human_eta(e.max(0) as u64))).unwrap_or_default();
-    let why = j.node_blocked_by.as_deref().map(|b| format!(" ({})", share::blocked_words(b))).unwrap_or_default();
+    let words = j.node_blocked_by.as_deref().map(|b| share::wait_words(b, &node_wait_facts(j)));
+    let passes = j.node_blocked_by.as_deref().is_some_and(pshare::blocked::lets_others_pass);
+    let why = words.as_deref().map(|w| format!(" — {w}{}", if passes { "; jobs behind it may start first" } else { "" })).unwrap_or_default();
     let reason = match j.reason.as_deref() {
         Some(r) if pending::any(Some(r)) || r == "cancel_requested" => r.to_string(),
         _ => pshare::codes::NODE_QUEUED.to_string(),
     };
+    let line = format!("queued on {node}{place}{eta}{why}");
     serde_json::json!({
         "onNode": true,
+        "where": "node",
         "position": j.node_pos,
+        "of": j.node_of,
         "etaSecs": j.node_eta_secs,
         "etaP90Secs": j.node_eta_p90_secs,
         "blockedBy": j.node_blocked_by,
+        "waitReason": j.node_blocked_by,
+        "waitWords": words,
+        "holdsQueue": !passes,
         "reason": reason,
-        "message": format!("queued on {node}{pos}{eta}{why}"),
+        "message": line,
+        "line": line,
         "seenAt": j.node_seen_at,
     })
+}
+
+/// The numbers behind a node-queued job's wait (L6): its ask, the node's
+/// free room from its live offer, this workspace's and this server's
+/// running jobs there and their caps.
+fn node_wait_facts(j: &store::JobRow) -> share::WaitFacts {
+    let plan = j.plan();
+    let offer = compute_ws::live_view(&j.node_id).2;
+    let active = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::jobs_in_states(&conn, &j.node_id, store::ACTIVE_STATES)
+    };
+    let started: Vec<&store::JobRow> = active.iter().filter(|r| !r.node_queued).collect();
+    share::WaitFacts {
+        asks_cpu_millis: plan.as_ref().and_then(|p| p.limits.cpu_millis),
+        asks_mem_bytes: plan.as_ref().and_then(|p| p.limits.mem_bytes),
+        free_cpu_millis: offer.as_ref().map(|o| o.free.cpu_millis),
+        free_mem_bytes: offer.as_ref().map(|o| o.free.mem_bytes),
+        cap_cpu_millis: offer.as_ref().map(|o| o.caps.cpu_millis),
+        cap_mem_bytes: offer.as_ref().map(|o| o.caps.mem_bytes),
+        running: offer.as_ref().map(|o| o.running),
+        parallel: offer.as_ref().map(|o| o.parallel_max),
+        ws_running: Some(started.iter().filter(|r| r.workspace_id == j.workspace_id).count() as u32),
+        ws_cap: plan.as_ref().and_then(|p| p.ws_max_running),
+        server_running: Some(started.len() as u32),
+        server_cap: offer.as_ref().and_then(|o| o.share.as_ref()).map(|v| v.limits.max_running),
+        submitter_running: None,
+        submitter_cap: None,
+    }
 }
 
 /// One job as another job's queue view (or `status`) shows it. `viewer` =
@@ -2941,16 +2993,59 @@ fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Decision) -> O
     // "behind 1 CI" (prd §4.1): the queued jobs ahead of it, by tier.
     let ahead_ci = before.iter().filter(|(_, q)| q.tier() == Tier::Ci).count();
     let ahead_p = before.iter().filter(|(_, q)| q.tier() == Tier::Priority).count();
+    // L6 (prd-compute-job-tiers-v2, T26): two kinds of place. On a shared
+    // node a job here waits on THIS server (its share is full, a feature
+    // or `--any` wait) before it joins the node's queue; on a solo node
+    // this server orders the node's queue itself.
+    let on_shared = offer.as_ref().is_some_and(share::is_shared);
+    let node_name = node_name_of(&j.node_id);
+    let ws_running = active.iter().filter(|r| r.workspace_id == j.workspace_id && !r.node_queued).count() as u32;
+    let plan = j.plan();
+    let facts = share::WaitFacts {
+        asks_cpu_millis: plan.as_ref().and_then(|p| p.limits.cpu_millis),
+        asks_mem_bytes: plan.as_ref().and_then(|p| p.limits.mem_bytes),
+        free_cpu_millis: offer.as_ref().map(|o| o.free.cpu_millis),
+        free_mem_bytes: offer.as_ref().map(|o| o.free.mem_bytes),
+        cap_cpu_millis: offer.as_ref().map(|o| o.caps.cpu_millis),
+        cap_mem_bytes: offer.as_ref().map(|o| o.caps.mem_bytes),
+        running: Some(active.iter().filter(|r| !r.node_queued).count() as u32),
+        parallel: offer.as_ref().map(|o| o.parallel_max),
+        ws_running: Some(ws_running),
+        ws_cap: Some(grant_parallel),
+        ..Default::default()
+    };
+    // The scheduler's own message already carries its numbers; the grant
+    // cap gets the PRD's words.
+    let words = if why.code == scheduler::GRANT_PARALLEL_FULL { share::wait_words(&why.code, &facts) } else { why.message.clone() };
+    let passes = why.code == scheduler::GRANT_PARALLEL_FULL || pshare::blocked::lets_others_pass(&why.code);
+    let tail = if passes { "; jobs behind it may start first" } else { "" };
+    let line = if on_shared {
+        format!("waits on this server for {node_name} ({pos} of {}) — {words}{tail}", queued.len())
+    } else {
+        format!("queued on {node_name}: {pos} of {} — {words}{tail}", queued.len())
+    };
     Some(serde_json::json!({
+        "where": if on_shared { "server" } else { "node" },
         "position": pos,
         "of": queued.len(),
         "reason": why.code,
         "message": why.message,
+        "waitReason": why.code,
+        "waitWords": words,
+        "holdsQueue": !passes,
+        "line": line,
         "ahead": ahead,
         "parallel": parallel,
         "tier": j.tier().as_str(),
         "aheadTiers": {"ci": ahead_ci, "priority": ahead_p},
     }))
+}
+
+/// A node's name for a line (its id when it's gone).
+fn node_name_of(node_id: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    store::node_by_id(&conn, node_id).map(|n| n.name).unwrap_or_else(|| node_id.to_string())
 }
 
 fn job_for(who: &Who, token: Option<&str>) -> R<store::JobRow> {
@@ -3022,6 +3117,8 @@ fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
                     "etaSecs": q.eta_secs,
                     "etaP90Secs": q.eta_p90_secs,
                     "blockedBy": q.blocked_by,
+                    // The WHY column (L6): the code in words.
+                    "why": q.blocked_by.as_deref().map(share::blocked_words),
                     "server": if q.mine { None } else { q.server_label.clone() },
                 });
                 if let Some(id) = q.job_id.as_deref().filter(|_| q.mine) {
@@ -3065,6 +3162,7 @@ fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
         let mut e = serde_json::json!({"mine": true, "class": r.class, "tier": r.tier().as_str(), "state": "queued", "ageSecs": (now - r.created_at).max(0)});
         if let Some((_, w)) = decision.waiting.get(&r.id) {
             e["blockedBy"] = w.code.clone().into();
+            e["why"] = w.message.clone().into();
         }
         own_entry(r, &mut e);
         entries.push(e);
@@ -3158,7 +3256,13 @@ fn wait_fingerprint(j: &store::JobRow) -> (WaitPrint, Vec<WaitPrint>) {
         } else {
             (j.state == "queued").then(|| compute_ws::decision_for(&j.node_id).waiting.get(&j.id).map(|(p, _)| *p)).flatten()
         };
-        (j.state.clone(), j.reason.clone(), j.generation, position)
+        // A node-queued job's wait reason (L6) changes the print too, so a
+        // waiter prints the new "why" at once.
+        let reason = match (&j.reason, &j.node_blocked_by) {
+            (Some(r), Some(b)) if j.node_queued => Some(format!("{r}:{b}")),
+            (r, _) => r.clone(),
+        };
+        (j.state.clone(), reason, j.generation, position)
     };
     let kids = if j.ctl.shards.is_empty() {
         Vec::new()
@@ -3570,10 +3674,14 @@ fn job_logs(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value>
                 "end": terminal && !more,
                 "nodeOnline": compute_ws::is_online(&row.node_id),
             });
+            // The wait line a follower prints (L6): why it waits and where,
+            // on this server or in the node's own queue.
             if row.state == "queued" {
-                if let Some((pos, why)) = compute_ws::decision_for(&row.node_id).waiting.get(&row.id) {
-                    out["queue"] = serde_json::json!({"position": pos, "reason": why.code, "message": why.message});
+                if let Some(q) = queue_view(who, &row, &compute_ws::decision_for(&row.node_id)) {
+                    out["queue"] = q;
                 }
+            } else if row.node_queued {
+                out["queue"] = out["job"]["queue"].clone();
             }
             return Ok(out);
         }

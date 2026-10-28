@@ -39,9 +39,14 @@ pub mod pending {
     pub const TIMEOUT: &str = "withdraw_timeout";
     /// `k2 compute cancel` without `--force` on a node-queued job.
     pub const CANCEL: &str = "cancel_if_queued";
+    /// Re-send (prd-compute-job-tiers-v2 L5, T24): the job's plan changed
+    /// while it waited in the node's queue (its grant's cap, or a retier):
+    /// withdraw it, then send it again to the SAME node with the fresh
+    /// plan. Never a move: no `--any` move, no V71 count, no health strike.
+    pub const RESEND: &str = "withdraw_resend";
 
     pub fn any(reason: Option<&str>) -> bool {
-        matches!(reason, Some(WITHDRAW) | Some(TIMEOUT) | Some(CANCEL))
+        matches!(reason, Some(WITHDRAW) | Some(TIMEOUT) | Some(CANCEL) | Some(RESEND))
     }
 }
 
@@ -272,7 +277,100 @@ pub fn blocked_words(code: &str) -> String {
         share::codes::TENANT_WALL_MISSING => "the node's wall for this server is missing (its owner is told)".into(),
         share::codes::FAIR_SHARE_WAIT => "fair share: another server's jobs run first".into(),
         share::codes::TENANT_QUEUE_FULL => "this server's queue on the node is full".into(),
+        // prd-compute-job-tiers-v2 L6 (T25): why a job in a node's queue
+        // doesn't start now. [`wait_words`] adds the numbers when known.
+        share::blocked::WORKSPACE_RUNNING_FULL => "your workspace runs as many jobs here as its grant allows".into(),
+        share::blocked::SERVER_RUNNING_FULL => "this server runs as many jobs here as its share allows".into(),
+        share::blocked::SUBMITTER_RUNNING_FULL => "you run as many jobs here as the per-submitter cap allows".into(),
+        share::blocked::WAITING_FOR_ROOM => "waiting for room on the node (slots, CPU or memory)".into(),
+        share::blocked::WAITING_FOR_IDLE => "an exclusive job waits for the node to empty (or one is running)".into(),
+        share::blocked::TIER_HOLD => "a CI or Priority job ahead takes the next free slot".into(),
+        share::blocked::BACKFILL_HOLD => "a job ahead has waited 20+ min for room; nothing else starts until it fits".into(),
+        share::blocked::TURN => "other submitters' jobs go first (turns)".into(),
+        share::blocked::BATCH_WINDOW => "Batch: it starts when the node is idle (or inside the node's batch window)".into(),
+        share::blocked::LINGERING => "a leftover process from an earlier job holds a slot".into(),
+        crate::compute::proto::secret::codes::ISOLATION_WAIT => "a job with vault secrets can't share the node's job user with another workspace's job".into(),
         other => other.replace('_', " "),
+    }
+}
+
+/// What the server knows when it words a wait (all optional: a missing
+/// number just isn't printed).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WaitFacts {
+    /// The job's own ask (`--cpus` in millicores, `--mem` in bytes).
+    pub asks_cpu_millis: Option<u64>,
+    pub asks_mem_bytes: Option<u64>,
+    /// Free under the node's caps right now, and the caps.
+    pub free_cpu_millis: Option<u64>,
+    pub free_mem_bytes: Option<u64>,
+    pub cap_cpu_millis: Option<u64>,
+    pub cap_mem_bytes: Option<u64>,
+    /// Running on the node, and its parallel slots.
+    pub running: Option<u32>,
+    pub parallel: Option<u32>,
+    /// This workspace's running jobs here, and its grant's cap.
+    pub ws_running: Option<u32>,
+    pub ws_cap: Option<u32>,
+    /// This server's running jobs here, and its share's `max_running`.
+    pub server_running: Option<u32>,
+    pub server_cap: Option<u32>,
+    /// The submitter's running jobs here, and the per-submitter cap.
+    pub submitter_running: Option<u32>,
+    pub submitter_cap: Option<u32>,
+}
+
+fn gb1(b: u64) -> String {
+    let g = b as f64 / (1u64 << 30) as f64;
+    let s = format!("{g:.1}");
+    s.strip_suffix(".0").map(str::to_string).unwrap_or(s) + " GB"
+}
+
+fn cpus1(m: u64) -> String {
+    let c = m as f64 / 1000.0;
+    let s = format!("{c:.1}");
+    s.strip_suffix(".0").map(str::to_string).unwrap_or(s) + " CPUs"
+}
+
+/// [`blocked_words`] with the numbers (prd-compute-job-tiers-v2 L6):
+/// "your workspace runs 3 of 3 here (its grant)", "asks 4 CPUs, 24 GB;
+/// 4 CPUs, 4 GB of 52 GB free; 2 of 3 running".
+pub fn wait_words(code: &str, f: &WaitFacts) -> String {
+    let n_of = |a: Option<u32>, b: Option<u32>| a.zip(b);
+    match code {
+        share::blocked::WORKSPACE_RUNNING_FULL | crate::compute::scheduler::GRANT_PARALLEL_FULL => match n_of(f.ws_running, f.ws_cap) {
+            Some((r, c)) => format!("your workspace runs {r} of {c} here (its grant)"),
+            None => blocked_words(share::blocked::WORKSPACE_RUNNING_FULL),
+        },
+        share::blocked::SERVER_RUNNING_FULL => match n_of(f.server_running, f.server_cap) {
+            Some((r, c)) => format!("this server runs {r} of {c} here (its share)"),
+            None => blocked_words(code),
+        },
+        share::blocked::SUBMITTER_RUNNING_FULL => match n_of(f.submitter_running, f.submitter_cap) {
+            Some((r, c)) => format!("you run {r} of {c} here (per-submitter cap)"),
+            None => blocked_words(code),
+        },
+        share::blocked::WAITING_FOR_ROOM | crate::compute::proto::refusal::LOCAL_RESOURCE_LIMIT | crate::compute::proto::refusal::PARALLEL_FULL => {
+            let mut parts = Vec::new();
+            let asks: Vec<String> = [f.asks_cpu_millis.map(cpus1), f.asks_mem_bytes.map(gb1)].into_iter().flatten().collect();
+            if !asks.is_empty() {
+                parts.push(format!("asks {}", asks.join(", ")));
+            }
+            let free: Vec<String> = [f.free_cpu_millis.map(cpus1), f.free_mem_bytes.map(gb1)].into_iter().flatten().collect();
+            if !free.is_empty() {
+                let of = f.cap_mem_bytes.map(|c| format!(" of {}", gb1(c))).unwrap_or_default();
+                parts.push(format!("{}{of} free", free.join(", ")));
+            }
+            if let Some((r, p)) = n_of(f.running, f.parallel) {
+                parts.push(format!("{r} of {p} running"));
+            }
+            if parts.is_empty() {
+                blocked_words(share::blocked::WAITING_FOR_ROOM)
+            } else {
+                format!("waiting for room: {}", parts.join("; "))
+            }
+        },
+        other => blocked_words(other),
     }
 }
 

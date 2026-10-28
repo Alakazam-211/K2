@@ -162,6 +162,38 @@ pub mod blocked {
     pub const INSTALLING_TOOLS: &str = super::codes::INSTALLING_TOOLS;
     /// Bigger than the node's caps even when idle (the server's code).
     pub const EXCEEDS_NODE_CAPS: &str = "exceeds_node_caps";
+
+    // ── why a job doesn't start now (prd-compute-job-tiers-v2 L6, T25) ──
+    // Plain strings in `QueuePos.blocked_by`: an older server shows the
+    // code as it is.
+    /// The workspace runs its grant's `max_parallel` here (`Plan.ws_max_running`).
+    pub const WORKSPACE_RUNNING_FULL: &str = "workspace_running_full";
+    /// This server runs its share's `max_running` here.
+    pub const SERVER_RUNNING_FULL: &str = "server_running_full";
+    /// The submitter runs its per-submitter cap here (L3).
+    pub const SUBMITTER_RUNNING_FULL: &str = "submitter_running_full";
+    /// No room yet: parallel slots, CPU or memory.
+    pub const WAITING_FOR_ROOM: &str = "waiting_for_room";
+    /// An exclusive job waits for the node to empty, or one is running.
+    pub const WAITING_FOR_IDLE: &str = crate::refusal::WAITING_FOR_IDLE;
+    /// A CI or Priority job ahead takes the next free slot.
+    pub const TIER_HOLD: &str = crate::tiers::codes::TIER_HOLD;
+    /// A Normal job ahead waited 20+ min for room: nothing else starts
+    /// until it fits.
+    pub const BACKFILL_HOLD: &str = "backfill_hold";
+    /// Other submitters' jobs go first (L4 turns).
+    pub const TURN: &str = "turn";
+    /// Batch: only when the node is idle or inside its batch window (L1).
+    pub const BATCH_WINDOW: &str = "batch_window";
+    /// A leftover process from an earlier job holds a slot (its unit is
+    /// still alive; SE26 counts it as another workspace's secret job).
+    pub const LINGERING: &str = "lingering";
+
+    /// A job waiting for one of these doesn't hold the queue: jobs behind
+    /// it may start first (its own limit, not the node's room).
+    pub fn lets_others_pass(code: &str) -> bool {
+        matches!(code, WORKSPACE_RUNNING_FULL | SERVER_RUNNING_FULL | SUBMITTER_RUNNING_FULL | BATCH_WINDOW)
+    }
 }
 
 // ── small enums ──────────────────────────────────────────────────────
@@ -888,6 +920,11 @@ pub fn round_eta(secs: u64) -> u64 {
 pub struct QueuePos {
     /// 1-based position in the node's whole queue.
     pub pos: u32,
+    /// How many jobs wait in the node's queue ("N of M",
+    /// prd-compute-job-tiers-v2 L6). Absent from a node older than 0.46.6;
+    /// an older server ignores it (no `deny_unknown_fields`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub of: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eta_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

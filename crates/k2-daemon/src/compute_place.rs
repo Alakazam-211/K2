@@ -405,12 +405,20 @@ pub fn offers_tiers(features: &[String]) -> bool {
 /// digest wouldn't match and it would fail `plan_mismatch`; a node updated
 /// since gets the tier. `Some(plan)` when it changed; the caller rewrites
 /// the queued row (JSON and digest) before sending.
-pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String]) -> Option<Plan> {
+///
+/// `ws_cap`: the workspace's grant `max_parallel` on that node right now
+/// (prd-compute-job-tiers-v2 L5, T23). The plan carries it to a node
+/// offering `queue` (`Plan.ws_max_running`); it is refreshed before every
+/// send, so raising a grant reaches jobs submitted before it (10-27: jobs
+/// kept a cap of 1 from submit). `None` leaves the plan's value.
+pub fn fit_plan(plan: &Plan, j: &JobRow, features: &[String], ws_cap: Option<u32>) -> Option<Plan> {
     let has = |f: &str| features.iter().any(|x| x == f);
     let mut p = plan.clone();
     p.tier = offers_tiers(features).then(|| j.tier());
     if !has(pshare::FEATURE_QUEUE) {
         strip_queue_fields(&mut p);
+    } else if let Some(c) = ws_cap {
+        p.ws_max_running = Some(c.max(1));
     }
     if !has(FEATURE_STALL) {
         p.stall_secs = None;
@@ -935,12 +943,12 @@ mod tests {
         let job = JobRow { id: "j1".into(), tier: "priority".into(), ..Default::default() };
         let new_node = vec![FEATURE_TIERS.to_string(), pshare::FEATURE_QUEUE.to_string()];
         let old_node = vec![pshare::FEATURE_QUEUE.to_string()];
-        assert_eq!(fit_plan(&plan, &job, &old_node), None, "no tier, an old node: as it is");
-        let tiered = fit_plan(&plan, &job, &new_node).expect("a node with tiers gets the tier");
+        assert_eq!(fit_plan(&plan, &job, &old_node, None), None, "no tier, an old node: as it is");
+        let tiered = fit_plan(&plan, &job, &new_node, None).expect("a node with tiers gets the tier");
         assert_eq!(tiered.tier, Some(JobTier::Priority));
         assert_ne!(tiered.digest().unwrap(), plan.digest().unwrap());
-        assert_eq!(fit_plan(&tiered, &job, &new_node), None, "already fits");
-        let back = fit_plan(&tiered, &job, &old_node).expect("a rolled-back node loses the tier");
+        assert_eq!(fit_plan(&tiered, &job, &new_node, None), None, "already fits");
+        let back = fit_plan(&tiered, &job, &old_node, None).expect("a rolled-back node loses the tier");
         assert_eq!((back.tier, back.digest().unwrap()), (None, plan.digest().unwrap()), "the untiered digest, byte for byte");
         assert!(offers_tiers(&new_node) && !offers_tiers(&old_node));
         // A v0.46.2 node (no `queue`, no `stall`): every field it doesn't
@@ -949,11 +957,37 @@ mod tests {
         let mut full = tiered.clone();
         full.ws_max_running = Some(2);
         full.stall_secs = Some(600);
-        let bare = fit_plan(&full, &job, &[]).expect("fitted");
+        let bare = fit_plan(&full, &job, &[], Some(3)).expect("fitted");
         assert_eq!((bare.tier, bare.class, bare.ws_max_running, bare.stall_secs), (None, None, None, None));
         let mut want = plan.clone();
         want.class = None;
         assert_eq!(bare.digest().unwrap(), want.digest().unwrap(), "what a v0.46.2 node computes");
-        assert_eq!(fit_plan(&bare, &job, &[]), None);
+        assert_eq!(fit_plan(&bare, &job, &[], Some(3)), None);
+    }
+
+    /// prd-compute-job-tiers-v2 L5 (T23, 10-27): the workspace cap in a
+    /// plan follows the grant at every send. A plan stored with cap 1 goes
+    /// out with the grant's current 3 to a node with a queue; a node
+    /// without one never gets the field; the same cap again is no change.
+    #[test]
+    fn the_workspace_cap_is_refreshed_from_the_grant_before_every_send() {
+        let mut plan: Plan = serde_json::from_value(serde_json::json!({
+            "job_id": "j1", "node_id": "n1", "workspace_id": "w1", "workspace_label": "k2", "requested_by": "owner",
+            "argv": ["true"], "env": {}, "cwd": null,
+            "limits": {"max_secs": 60, "cpu_millis": null, "mem_bytes": null, "disk_bytes": 1, "log_cap_bytes": 1},
+            "src": null, "exclusive": false, "created_at": 1, "class": "interactive"
+        }))
+        .expect("a plan");
+        plan.ws_max_running = Some(1);
+        let job = JobRow { id: "j1".into(), tier: "normal".into(), ..Default::default() };
+        let queue_node = vec![FEATURE_TIERS.to_string(), pshare::FEATURE_QUEUE.to_string()];
+        let fresh = fit_plan(&plan, &job, &queue_node, Some(3)).expect("the stale cap is rewritten");
+        assert_eq!(fresh.ws_max_running, Some(3));
+        assert_ne!(fresh.digest().unwrap(), plan.digest().unwrap(), "a new digest: the row is rewritten before the send");
+        assert_eq!(fit_plan(&fresh, &job, &queue_node, Some(3)), None, "already current");
+        let lowered = fit_plan(&fresh, &job, &queue_node, Some(1)).expect("a lowered grant reaches it too");
+        assert_eq!(lowered.ws_max_running, Some(1));
+        let solo = fit_plan(&plan, &job, &[FEATURE_TIERS.to_string()], Some(3)).expect("fitted");
+        assert_eq!(solo.ws_max_running, None, "a node without a queue never gets the field");
     }
 }

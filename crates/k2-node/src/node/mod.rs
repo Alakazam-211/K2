@@ -292,7 +292,7 @@ pub struct Node {
 
 /// The running-jobs key prefix of a stand-in for a lingering unit, and the
 /// workspace it stands for (no workspace has that id).
-pub(crate) const LINGER_PREFIX: &str = "lingering:";
+pub(crate) const LINGER_PREFIX: &str = k2_node_proto::queue::LINGER_JOB_PREFIX;
 pub(crate) const LINGER_WORKSPACE: &str = "(unknown workspace)";
 
 /// Something that holds a slot until it's confirmed gone ([`Node::hold_lingering`]).

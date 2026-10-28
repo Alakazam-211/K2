@@ -49,7 +49,7 @@ impl Default for Tuning {
             retry_cap_secs: 600,
             quarantine_after: 3,
             quarantine_secs: 1800,
-            queue_timeout_attached_secs: 1800,
+            queue_timeout_attached_secs: 7200,
             queue_timeout_detached_secs: 86_400,
             stall_secs: 1800,
             tick_millis: 5000,
@@ -261,6 +261,16 @@ mod tests {
         }
         assert_eq!(h.consecutive, 0);
         assert!(!h.is_set_aside(10));
+    }
+
+    /// prd-compute-job-tiers-v2 L7 (Q17): an attached or `--wait` run may
+    /// wait 2 h in a queue (was 30 min: 10-27's attached runs failed
+    /// `queue_timeout` behind a stale cap); `--detach` keeps 24 h.
+    #[test]
+    fn queue_timeouts_are_two_hours_attached_and_a_day_detached() {
+        let t = Tuning::default();
+        assert_eq!(t.queue_timeout_attached_secs, 2 * 3600);
+        assert_eq!(t.queue_timeout_detached_secs, 24 * 3600);
     }
 
     #[test]

@@ -517,7 +517,7 @@ impl FairQ {
                 continue;
             }
             let info = &d.info[i];
-            let pos = QueuePos { pos: info.pos, eta_secs: info.eta_secs, eta_p90_secs: info.eta_p90_secs, blocked_by: info.blocked_by.clone() };
+            let pos = QueuePos { pos: info.pos, of: Some(info.of), eta_secs: info.eta_secs, eta_p90_secs: info.eta_p90_secs, blocked_by: info.blocked_by.clone() };
             let epoch = *t.hub.connected.borrow();
             let key = (t.slot, r.job_id.clone(), r.generation);
             let mut st = self.st.lock().unwrap();

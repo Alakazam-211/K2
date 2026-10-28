@@ -62,8 +62,10 @@ pub enum DiskCheck {
 pub struct FlushOutcome {
     /// Whether the file was written (false when it already held the doc).
     pub written: bool,
-    /// SHA-256 (lowercase hex) of the doc's bytes now: what the file holds when `disk` is
-    /// [`DiskState::Clean`]. For a tier-0 blob doc, the current blob's id (its keyed hash).
+    /// HMAC-SHA256 (lowercase hex) of the doc's bytes now, under the doc's own key: what the
+    /// file holds when `disk` is [`DiskState::Clean`]. Compare it only with this doc's
+    /// hashes; a purge replaces the key. For a tier-0 blob doc, the current blob's id (its
+    /// keyed hash).
     pub hash: String,
     /// `None` for a session without a file.
     pub disk: Option<DiskState>,

@@ -10,13 +10,15 @@ use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use yrs::block::ClientID;
+use yrs::types::text::ChangeKind as YChangeKind;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    Doc, GetString, OffsetKind, Options, ReadTxn, StateVector, Text, TextRef, Transact, Update,
+    Any, Doc, GetString, OffsetKind, Options, Out, ReadTxn, Snapshot, StateVector, Text, TextRef,
+    Transact, Update,
 };
 
-use super::{EngineDoc, SESSION_CLIENT};
+use super::{BlameRun, EngineDoc, SESSION_CLIENT};
 use crate::doc::{ClientId, DocError, Edit, UpdateInfo, MAX_CLIENT_ID};
 use crate::schema::{Kind, Schema};
 use crate::text::diff::Hunk;
@@ -31,10 +33,15 @@ pub(crate) struct YrsDoc {
     poisoned: bool,
 }
 
+/// Every Yrs doc the kit makes. **GC stays on** (`skip_gc: false`, K-PURGE-11, E-ERASE-10):
+/// deleted text leaves the doc's state when the deleting transaction commits (its items
+/// keep their IDs and lengths, not their content), so a re-encoded state never carries
+/// deleted content. Purge depends on it; `gc_is_on` fails if it is turned off.
 fn new_doc(client: u64) -> Doc {
     Doc::with_options(Options {
         client_id: ClientID::new(client),
         offset_kind: OffsetKind::Utf16,
+        skip_gc: false,
         ..Options::default()
     })
 }
@@ -142,6 +149,27 @@ impl YrsDoc {
         } else {
             Ok(())
         }
+    }
+
+    /// A throwaway replica of this doc (its full state applied to a fresh Yrs doc), with
+    /// the replica's handle on text root `root`. Nothing about it outlives the caller.
+    fn replica(&self, client: u64, root: &str) -> Result<(Doc, TextRef), DocError> {
+        let replica = new_doc(client);
+        let t = replica.get_or_insert_text(root);
+        let full = guarded(|| {
+            Ok(self
+                .doc
+                .transact()
+                .encode_state_as_update_v1(&StateVector::default()))
+        })?;
+        guarded(|| {
+            let u = Update::decode_v1(&full).map_err(|e| DocError::Apply(e.to_string()))?;
+            replica
+                .transact_mut()
+                .apply_update(u)
+                .map_err(|e| DocError::Apply(e.to_string()))
+        })?;
+        Ok((replica, t))
     }
 
     /// The full state, v2, under `catch_unwind` even when the doc looks usable.
@@ -352,6 +380,54 @@ impl EngineDoc for YrsDoc {
         self.apply_trusted(&update)?;
         Ok(update)
     }
+
+    fn clock_of(&self, client: ClientId) -> u32 {
+        self.doc
+            .transact()
+            .state_vector()
+            .get(&ClientID::new(client))
+    }
+
+    /// `diff_range(now, empty)` (proven in D0, Q5): with the empty snapshot as the low end,
+    /// every live item is "added", so each comes back as its own run with its ID, GC on.
+    /// It **splits blocks** (it takes `&mut` of a transaction), so it runs on a throwaway
+    /// replica, never on this doc: the cost is a full encode, decode and walk, O(doc).
+    fn blame_runs(&self, root: &str) -> Result<Vec<BlameRun>, DocError> {
+        self.usable()?;
+        let (replica, t) = self.replica(SESSION_CLIENT, root)?;
+        guarded(|| {
+            let mut txn = replica.transact_mut();
+            let now = txn.snapshot();
+            let diffs = t.diff_range(&mut txn, Some(&now), Some(&Snapshot::default()), |c| c);
+            let mut out: Vec<BlameRun> = Vec::with_capacity(diffs.len());
+            // the clock just past the last run (its first clock plus its UTF-16 length)
+            let mut end = 0u32;
+            for d in diffs {
+                let (Out::Any(Any::String(s)), Some(y)) = (&d.insert, &d.ychange) else {
+                    return Err(DocError::Apply("blame: a run that is not text".into()));
+                };
+                if y.kind != YChangeKind::Added {
+                    return Err(DocError::Apply("blame: a run that is not live".into()));
+                }
+                let len16 = s.encode_utf16().count() as u32;
+                let (client, clock) = (y.id.client.get(), y.id.clock);
+                // adjacent items of one client with consecutive clocks are one run
+                match out.last_mut() {
+                    Some(last) if last.client == client && clock == end => {
+                        last.bytes += s.len();
+                    }
+                    _ => out.push(BlameRun {
+                        bytes: s.len(),
+                        client,
+                        clock,
+                    }),
+                }
+                end = clock + len16;
+            }
+            drop(txn);
+            Ok(out)
+        })
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +450,49 @@ mod tests {
             .apply_update(Update::decode_v1(&u).unwrap())
             .unwrap();
         (d, t)
+    }
+
+    /// Whether any 8-byte window of `secret` appears in `hay` (the purge scan's rule).
+    fn holds_any_window(hay: &[u8], secret: &[u8]) -> bool {
+        secret.windows(8).any(|w| hay.windows(8).any(|h| h == w))
+    }
+
+    /// E-ERASE-10 / K-PURGE-11: with GC on, a deleted secret is absent from the encoded
+    /// state (and from a doc loaded from it). The control runs the same steps on a Yrs doc
+    /// with `skip_gc: true` and must find the secret, so the check can fail.
+    #[test]
+    fn gc_is_on() {
+        let secret = crate::hash::hex(&crate::hash::random32().unwrap());
+        let mut d = Doc::new(S).unwrap();
+        d.replace_text_as(500, "source", &format!("a {secret} b\n"))
+            .unwrap();
+        d.replace_text_as(501, "source", "a  b\n").unwrap();
+        let state = d.encode_state().unwrap();
+        assert!(!holds_any_window(&state, secret.as_bytes()));
+        let again = Doc::load(S, &state).unwrap();
+        assert_eq!(again.text("source").unwrap(), "a  b\n");
+        assert!(!holds_any_window(
+            &again.encode_state().unwrap(),
+            secret.as_bytes()
+        ));
+        // the mutant: GC off keeps the deleted content in the state
+        let m = yrs::Doc::with_options(Options {
+            client_id: ClientID::new(500),
+            offset_kind: OffsetKind::Utf16,
+            skip_gc: true,
+            ..Options::default()
+        });
+        let t = m.get_or_insert_text("source");
+        t.insert(&mut m.transact_mut(), 0, &format!("a {secret} b\n"));
+        let n = secret.len() as u32;
+        t.remove_range(&mut m.transact_mut(), 2, n);
+        let kept = m
+            .transact()
+            .encode_state_as_update_v2(&StateVector::default());
+        assert!(
+            holds_any_window(&kept, secret.as_bytes()),
+            "the skip_gc control must keep the secret"
+        );
     }
 
     #[test]
@@ -666,6 +785,67 @@ mod tests {
             "{t:?}"
         );
         assert!(d.encode_state().is_ok());
+    }
+
+    /// D0's Q5 on the kit's doc: every live character's inserting client and clock, as
+    /// runs covering the text (UTF-16 clocks, emoji included), one client's consecutive
+    /// clocks merged across changes; and the call leaves the doc alone (throwaway replica):
+    /// its state vector and encoded state are byte-identical after.
+    #[test]
+    fn blame_runs_cover_the_text_and_leave_the_doc_alone() {
+        let run = |bytes, client, clock| BlameRun {
+            bytes,
+            client,
+            clock,
+        };
+        let mut d = Doc::new(S).unwrap();
+        d.replace_text_as(500, "source", "aaaa\nbbbb\n").unwrap();
+        // 600 replaces the third `a` and appends a line, in one change (applied back to
+        // front: the appended line takes 600's clocks 0..4, the `X` clock 4)
+        let h = |start, end, insert: &str| Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        };
+        d.edit_as(
+            600,
+            &[Edit::Text {
+                root: "source".into(),
+                hunks: vec![h(2, 3, "X"), h(10, 10, "🎉y\n")],
+            }],
+        )
+        .unwrap();
+        d.replace_text_as(500, "source", "aaXa\nbbbb\n🎉y\nzz")
+            .unwrap();
+        let (sv, state) = (d.state_vector(), d.encode_state().unwrap());
+        let runs = d.blame_runs("source").unwrap();
+        assert_eq!(
+            runs,
+            vec![
+                run(2, 500, 0),
+                run(1, 600, 4),
+                run(7, 500, 3),
+                run(6, 600, 0), // 🎉 is 4 bytes, 2 clocks
+                run(2, 500, 10),
+            ]
+        );
+        assert_eq!(d.state_vector(), sv);
+        assert_eq!(d.encode_state().unwrap(), state);
+        assert_eq!(d.blame_runs("source").unwrap(), runs, "repeatable");
+        // one client typing on: one run across its changes
+        let mut e = Doc::new(S).unwrap();
+        e.replace_text_as(7, "source", "ab").unwrap();
+        e.replace_text_as(7, "source", "abc").unwrap();
+        assert_eq!(e.blame_runs("source").unwrap(), vec![run(3, 7, 0)]);
+        assert_eq!(e.clock_of(7), 3);
+        assert_eq!(e.clock_of(8), 0);
+        // an empty root has no runs; a missing one is refused
+        assert!(Doc::new(S)
+            .unwrap()
+            .blame_runs("source")
+            .unwrap()
+            .is_empty());
+        assert!(matches!(e.blame_runs("nope"), Err(DocError::NoRoot { .. })));
     }
 
     #[test]

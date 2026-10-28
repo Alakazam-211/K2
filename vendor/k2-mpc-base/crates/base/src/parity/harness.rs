@@ -700,6 +700,7 @@ pub enum VerbValue {
     Version(u64),
     Approval(Approval),
     Moved(crate::session::DiskCheck),
+    Blame(crate::session::Blame),
 }
 
 /// One verb's result.
@@ -1071,6 +1072,34 @@ impl Agent<'_> {
                 let c = self.join(Stay::UntilIdle, used)?;
                 used.push(Api::SetApproval);
                 v(VerbValue::Approval(s.set_approval(c, seq, state)?))
+            }
+            "blame" => {
+                // `-L a,b`, `-La,b` or `-L=a,b` (git's forms); `b` may be past the end
+                let spec = args
+                    .iter()
+                    .position(|a| a == "-L")
+                    .and_then(|i| args.get(i + 1).cloned())
+                    .or_else(|| {
+                        args.iter().find_map(|a| {
+                            a.strip_prefix("-L")
+                                .filter(|r| !r.is_empty())
+                                .map(|r| r.trim_start_matches('=').to_owned())
+                        })
+                    });
+                let lines = match spec {
+                    None => None,
+                    Some(r) => {
+                        let (a, b) = r.split_once(',').ok_or("-L a,b")?;
+                        Some(LineRange {
+                            root: root.to_owned(),
+                            first: num(a)? as usize,
+                            last: num(b)? as usize,
+                        })
+                    }
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::Blame);
+                v(VerbValue::Blame(s.blame(c, root, lines)?))
             }
             "revert" => {
                 let seq = num(positional(args).ok_or("which change?")?)?;

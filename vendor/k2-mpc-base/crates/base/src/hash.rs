@@ -1,5 +1,7 @@
-//! SHA-256 of file contents, for disk sync (the synced hash and echo suppression), and
-//! HMAC-SHA256, the keyed hash that addresses blobs (tier 0).
+//! SHA-256, and HMAC-SHA256: the keyed hash that addresses blobs (tier 0, per space key)
+//! and names a file's content for disk sync (the synced hash and echo suppression, per doc
+//! key). No plain content hash is stored (K-PURGE-1, -13): a hash of a short secret can be
+//! brute-forced, a keyed one can't, and destroying its key makes it meaningless.
 //!
 //! Written here rather than taken from a crate: the kit needs one stable content hash, and
 //! the store keeps it across releases, so it can't be `std`'s `DefaultHasher` (its algorithm
@@ -161,6 +163,39 @@ impl HmacSha256 {
     }
 }
 
+/// HMAC-SHA256 of `data` under `key`, in one call.
+pub(crate) fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
+    let mut m = HmacSha256::new(key);
+    m.update(data);
+    m.finish()
+}
+
+/// First byte of a keyed file hash ([`file_hash`]).
+const KEYED_FILE_HASH: u8 = 1;
+
+/// The keyed hash of a file's bytes under its doc's key: `1 ‖ HMAC-SHA256(key, bytes)`
+/// (33 bytes). A 32-byte hash is a format-2 store's plain SHA-256 ([`legacy_matches`]).
+pub(crate) fn file_hash(key: &[u8; 32], data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(33);
+    out.push(KEYED_FILE_HASH);
+    out.extend_from_slice(&hmac(key, data));
+    out
+}
+
+/// Whether `stored` is a format-2 plain SHA-256 of `data` (read once, then replaced by a
+/// keyed hash; never written).
+pub(crate) fn legacy_matches(stored: &[u8], data: &[u8]) -> bool {
+    stored.len() == 32 && stored == sha256(data)
+}
+
+/// 32 random bytes from the OS (`/dev/urandom`): blob space keys and per-doc hash keys.
+pub(crate) fn random32() -> std::io::Result<[u8; 32]> {
+    use std::io::Read;
+    let mut k = [0u8; 32];
+    std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut k))?;
+    Ok(k)
+}
+
 /// Lowercase hex.
 pub(crate) fn hex(b: &[u8]) -> String {
     use std::fmt::Write;
@@ -258,5 +293,23 @@ mod tests {
             hex(&m.finish()),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
+    }
+
+    #[test]
+    fn file_hashes_are_keyed_and_legacy_is_read_only() {
+        let (k1, k2) = ([1u8; 32], [2u8; 32]);
+        let h = file_hash(&k1, b"secret");
+        assert_eq!(h.len(), 33);
+        assert_eq!(h[0], KEYED_FILE_HASH);
+        assert_eq!(&h[1..], &hmac(&k1, b"secret"));
+        // another key (a purge rotates it): unrelated
+        assert_ne!(h, file_hash(&k2, b"secret"));
+        // never the plain hash
+        assert_ne!(&h[1..], &sha256(b"secret"));
+        assert!(legacy_matches(&sha256(b"secret"), b"secret"));
+        assert!(!legacy_matches(&h, b"secret"));
+        assert!(!legacy_matches(&sha256(b"secret"), b"other"));
+        let (a, b) = (random32().unwrap(), random32().unwrap());
+        assert_ne!(a, b);
     }
 }

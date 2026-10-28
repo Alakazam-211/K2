@@ -1,7 +1,7 @@
 //! Deleting docs: every kit row of a doc (or of every doc in a space) in **one** transaction.
 //!
 //! Erased per doc: `paths`, `docs`, `snapshots`, `updates`, `clients`, `versions`,
-//! `approvals`, `sync` (the disk replica), the history tables (`changes`, `reverts`,
+//! `approvals`, `sync` (the disk replica), `doc_keys` (its hash key), the history tables (`changes`, `reverts`,
 //! `revert_index`, `revert_carry`, `revert_stats`) and the tier-0 tables (`blob_versions`,
 //! `blob_sync`). A blob doc's versions each held a reference on their blob in `blobs`: those
 //! references are released (the blob's grace starts then), so [`crate::blob::BlobStore::gc`]
@@ -18,8 +18,8 @@
 use redb::{ReadableTable, WriteTransaction};
 
 use super::{
-    blob, dec_meta, history, DocId, DocKey, DocStore, StoreError, APPROVALS, CLIENTS, DOCS, PATHS,
-    SNAPSHOTS, SYNC, UPDATES, VERSIONS,
+    blob, dec_meta, history, DocId, DocKey, DocStore, StoreError, APPROVALS, CLIENTS, DOCS,
+    DOC_KEYS, PATHS, SNAPSHOTS, SYNC, UPDATES, VERSIONS,
 };
 
 /// Erase every kit row of doc `id` in `w`; returns its key.
@@ -38,6 +38,7 @@ fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreE
     }
     w.open_table(DOCS)?.remove(id)?;
     w.open_table(SNAPSHOTS)?.remove(id)?;
+    w.open_table(DOC_KEYS)?.remove(id)?;
     for t in [UPDATES, VERSIONS, APPROVALS] {
         w.open_table(t)?
             .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
@@ -61,7 +62,7 @@ impl DocStore {
     /// The store doesn't know about loaded sessions: a host deletes through
     /// [`crate::session::SessionManager::delete_doc`], which closes them first.
     pub fn delete_doc(&self, id: DocId, now_ms: u64) -> Result<DocKey, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let key = delete_in(&w, id, now_ms)?;
         w.commit()?;
         Ok(key)
@@ -70,7 +71,7 @@ impl DocStore {
     /// Delete every doc in `space`, as [`DocStore::delete_doc`] does, in **one** durable
     /// transaction. Returns their keys (empty when the space has none).
     pub fn delete_space(&self, space: &str, now_ms: u64) -> Result<Vec<DocKey>, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let ids: Vec<DocId> = {
             let prefix = format!("{space}\u{0}");
             let paths = w.open_table(PATHS)?;
@@ -106,7 +107,9 @@ impl DocStore {
     #[cfg(test)]
     pub(crate) fn tables_holding(&self, id: DocId) -> Result<Vec<&'static str>, StoreError> {
         use super::blob::{BLOB_SYNC, BLOB_VERSIONS};
-        use super::history::{CHANGES, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS};
+        use super::history::{
+            CHANGES, CHANGE_CLOCKS, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS,
+        };
         use redb::{MultimapTableHandle, TableDefinition, TableHandle};
 
         fn pair<V: redb::Value + 'static>(
@@ -137,7 +140,7 @@ impl DocStore {
             Ok(r.open_table(t)?.get(id)?.is_some())
         }
 
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let multimap: Vec<String> = r
             .list_multimap_tables()?
             .map(|t| t.name().to_owned())
@@ -161,6 +164,7 @@ impl DocStore {
                 }
                 "docs" => ("docs", one(&r, DOCS, id)?),
                 "snapshots" => ("snapshots", one(&r, SNAPSHOTS, id)?),
+                "doc_keys" => ("doc_keys", one(&r, DOC_KEYS, id)?),
                 "revert_stats" => ("revert_stats", one(&r, REVERT_STATS, id)?),
                 "updates" => ("updates", pair(&r, UPDATES, id)?),
                 "clients" => ("clients", pair(&r, CLIENTS, id)?),
@@ -170,6 +174,13 @@ impl DocStore {
                 "reverts" => ("reverts", pair(&r, REVERTS, id)?),
                 "revert_index" => ("revert_index", pair(&r, REVERT_INDEX, id)?),
                 "revert_carry" => ("revert_carry", pair(&r, REVERT_CARRY, id)?),
+                "change_clocks" => (
+                    "change_clocks",
+                    r.open_table(CHANGE_CLOCKS)?
+                        .range((id, 0, 0)..=(id, u64::MAX, u64::MAX))?
+                        .next()
+                        .is_some(),
+                ),
                 "blob_versions" => ("blob_versions", pair(&r, BLOB_VERSIONS, id)?),
                 "sync" => ("sync", slot(&r, SYNC, id)?),
                 "blob_sync" => ("blob_sync", slot(&r, BLOB_SYNC, id)?),

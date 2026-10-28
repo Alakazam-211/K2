@@ -375,22 +375,48 @@ fn enc_entry_v1(e: &LogEntry) -> Vec<u8> {
     w.0
 }
 
+fn enc_entry_v2(e: &LogEntry) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(2)
+        .str(&e.author)
+        .u64(e.client)
+        .u64(e.at_ms)
+        .str(&e.via)
+        .bytes(&e.update)
+        .opt_str(e.on_behalf_of.as_deref());
+    w.0
+}
+
 #[test]
-fn log_records_v2_and_v1_both_decode() {
+fn log_records_v3_v2_and_v1_all_decode() {
     let mut e = entry("agent-a", 9, vec![1, 2, 3]);
     // v1 (stored before amendment 1): decodes with no on_behalf_of
     let v1 = enc_entry_v1(&e);
     assert_eq!(v1[0], 1);
     assert_eq!(dec_entry(&v1).unwrap(), e);
-    // v2 round trips, with and without on_behalf_of
-    let v2 = enc_entry(&e);
-    assert_eq!(v2[0], 2, "new records are version 2");
-    assert_eq!(dec_entry(&v2).unwrap(), e);
+    // v2 (format 2) still decodes
+    e.on_behalf_of = Some("rosson".into());
+    assert_eq!(dec_entry(&enc_entry_v2(&e)).unwrap(), e);
+    e.on_behalf_of = None;
+    // v3 round trips, with and without on_behalf_of
+    let v3 = enc_entry(&e);
+    assert_eq!(v3[0], 3, "new records are version 3");
+    assert_eq!(dec_entry(&v3).unwrap(), e);
     e.on_behalf_of = Some("rosson".into());
     assert_eq!(dec_entry(&enc_entry(&e)).unwrap(), e);
+    // a purged entry keeps its metadata and length, not its update
+    let red = enc_entry_as(&e, Some(3));
+    let (d, n) = dec_entry_full(&red).unwrap();
+    assert_eq!(n, Some(3));
+    assert!(d.update.is_empty());
+    assert_eq!(
+        (d.author.as_str(), d.client, d.at_ms),
+        ("agent-a", 9, e.at_ms)
+    );
+    assert_eq!(d.on_behalf_of.as_deref(), Some("rosson"));
     // damaged records are loud
     let mut bad = enc_entry(&e);
-    bad[0] = 3;
+    bad[0] = 4;
     assert_eq!(
         dec_entry(&bad),
         Err(StoreError::Corrupt("log entry version"))
@@ -401,7 +427,7 @@ fn log_records_v2_and_v1_both_decode() {
         dec_entry(&trailing).is_err(),
         "a v1 record with extra bytes"
     );
-    assert!(dec_entry(&enc_entry(&e)[..v2.len() - 1]).is_err());
+    assert!(dec_entry(&enc_entry(&e)[..v3.len() - 1]).is_err());
 }
 
 #[test]
@@ -412,7 +438,7 @@ fn v1_log_records_load_from_a_store() {
     let mut doc = Doc::new(S).unwrap();
     let u = doc.replace_text_as(5, "source", "old\n").unwrap().unwrap();
     // write a v1 record directly, as a format-1 store holds it
-    let w = s.db.begin_write().unwrap();
+    let w = s.begin_write().unwrap();
     w.open_table(UPDATES)
         .unwrap()
         .insert((id, 1), enc_entry_v1(&entry("a", 5, u)).as_slice())
@@ -429,11 +455,11 @@ fn v1_log_records_load_from_a_store() {
 }
 
 #[test]
-fn format_1_stores_are_stamped_2_and_newer_refused() {
+fn older_formats_are_stamped_3_and_newer_refused() {
     let d = TmpDir::new("format");
     {
         let s = DocStore::open(d.db()).unwrap();
-        let w = s.db.begin_write().unwrap();
+        let w = s.begin_write().unwrap();
         w.open_table(META)
             .unwrap()
             .insert("store_format", 1u64)
@@ -442,7 +468,7 @@ fn format_1_stores_are_stamped_2_and_newer_refused() {
     }
     {
         let s = DocStore::open(d.db()).unwrap();
-        let r = s.db.begin_read().unwrap();
+        let r = s.begin_read().unwrap();
         let f = r
             .open_table(META)
             .unwrap()
@@ -451,18 +477,18 @@ fn format_1_stores_are_stamped_2_and_newer_refused() {
             .unwrap()
             .value();
         assert_eq!(f, STORE_FORMAT);
-        assert_eq!(STORE_FORMAT, 2);
+        assert_eq!(STORE_FORMAT, 3);
         drop(r);
-        let w = s.db.begin_write().unwrap();
+        let w = s.begin_write().unwrap();
         w.open_table(META)
             .unwrap()
-            .insert("store_format", 3u64)
+            .insert("store_format", 4u64)
             .unwrap();
         w.commit().unwrap();
     }
     assert!(matches!(
         DocStore::open(d.db()),
-        Err(StoreError::Newer { found: 3 })
+        Err(StoreError::Newer { found: 4 })
     ));
 }
 

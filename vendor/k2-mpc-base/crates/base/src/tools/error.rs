@@ -101,6 +101,7 @@ impl ToolRunError {
 /// Total: every variant is listed, so a new one doesn't compile until it is mapped.
 pub fn session_exit(e: &SessionError) -> u8 {
     use crate::blob::BlobError;
+    use crate::store::StoreError;
     match e {
         SessionError::Forbidden { .. } => exit::REFUSED,
         SessionError::NotFound(_)
@@ -109,6 +110,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::NoSuchChange(_)
         | SessionError::NoBlobStore
         | SessionError::Deleted
+        | SessionError::Store(StoreError::PurgedVersion(..))
         | SessionError::Blob(BlobError::TooLarge { .. }) => exit::NOT_FOUND,
         SessionError::NotJoined { .. }
         | SessionError::RateLimited { .. }
@@ -119,6 +121,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::BadApproval(_)
         | SessionError::BadPath(_)
         | SessionError::NoLease
+        | SessionError::Store(StoreError::CurrentVersion(..))
         | SessionError::Doc(_) => exit::USAGE,
         SessionError::Held { .. } => exit::HELD,
         SessionError::Leased { .. } => exit::LEASED,
@@ -170,6 +173,15 @@ mod tests {
                 5,
             ),
             (SessionError::Store(crate::store::StoreError::Locked), 6),
+            // purge: the current blob version is refused (2); a purged one is gone (4)
+            (
+                SessionError::Store(crate::store::StoreError::CurrentVersion(1, 2)),
+                2,
+            ),
+            (
+                SessionError::Store(crate::store::StoreError::PurgedVersion(1, 2)),
+                4,
+            ),
             (SessionError::RevertTooOld { seq: 1 }, 8),
             (
                 SessionError::Stale {

@@ -187,11 +187,7 @@ pub struct BlobStore {
 
 /// 32 random bytes from the OS.
 fn random_key() -> Result<[u8; 32], BlobError> {
-    let mut k = [0u8; 32];
-    File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut k))
-        .map_err(|e| BlobError::NoRandom(e.to_string()))?;
-    Ok(k)
+    crate::hash::random32().map_err(|e| BlobError::NoRandom(e.to_string()))
 }
 
 impl BlobStore {
@@ -487,6 +483,28 @@ impl BlobStore {
             blobs_removed: rows.len(),
             bytes_removed: rows.iter().map(|(_, s)| s).sum(),
         })
+    }
+
+    /// Remove now, without the GC grace, the blobs in `rows` (`(space no, id, size)`) that
+    /// nothing references: a purge's blobs. Index row first, then the file. Returns the
+    /// blobs and bytes removed.
+    pub(crate) fn remove_unreferenced_now(
+        &self,
+        rows: &[(u64, BlobId, u64)],
+    ) -> Result<(u64, u64), BlobError> {
+        let _g = self.guard();
+        let gone = self.docs.blob_remove_unreferenced(rows)?;
+        let (mut n, mut bytes) = (0, 0);
+        for (no, id, size) in &gone {
+            match fs::remove_file(self.path_of(*no, id)) {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(io_err("removing a purged blob", e)),
+            }
+            n += 1;
+            bytes += size;
+        }
+        Ok((n, bytes))
     }
 
     /// Totals over the index.

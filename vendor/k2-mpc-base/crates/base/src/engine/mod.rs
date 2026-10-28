@@ -20,6 +20,19 @@ pub(crate) const ENGINE_NAME: &str = "yrs-0.28";
 /// Stored state is Yjs v2.
 pub(crate) const ENGINE_FORMAT: u32 = 2;
 
+/// One run of a text root's live text inserted by one client with consecutive clocks
+/// ([`EngineDoc::blame_runs`]). The runs of a root, in order, cover its text exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BlameRun {
+    /// The run's length in UTF-8 bytes.
+    pub bytes: usize,
+    /// The client that inserted it.
+    pub client: ClientId,
+    /// The clock of its first character. Clocks count UTF-16 code units: the character at
+    /// UTF-16 offset `k` of the run has clock `clock + k`.
+    pub clock: u32,
+}
+
 #[allow(dead_code)] // the trait documents the seam; one implementation today
 pub(crate) trait EngineDoc: Sized + Send {
     fn new(schema: &Schema) -> Self;
@@ -33,4 +46,11 @@ pub(crate) trait EngineDoc: Sized + Send {
     fn apply_trusted(&mut self, update: &[u8]) -> Result<(), DocError>;
     /// Apply already-validated edits as `client` through a throwaway replica; return the update.
     fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Vec<u8>, DocError>;
+    /// How many clock units `client` has inserted into this doc (0 if none): a change by
+    /// `client` occupies the clocks between this before it and this after it.
+    fn clock_of(&self, client: ClientId) -> u32;
+    /// Blame (K-HIST-11): text root `root`'s live text as runs, each with the client and
+    /// clock that inserted it. **O(doc) per call** (the engine copies the doc to a throwaway
+    /// replica and walks it); never on the edit path. Leaves this doc as it was.
+    fn blame_runs(&self, root: &str) -> Result<Vec<BlameRun>, DocError>;
 }

@@ -18,15 +18,16 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use super::config::Config;
 use super::disk::{self, DiskCheck, DiskState, FileStat, FlushOutcome, Probe};
 use super::error::{Result, SessionError};
-use super::host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need};
-use super::live::{probe_error, Joined};
+use super::host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope};
+use super::live::{probe_error, Joined, NotReached, PurgeOutcome};
 use super::pack::Declined;
 use super::participant::{ConnId, Participant, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID};
 use super::presence::{self, Presence};
 use super::ratelimit::Bucket;
 use crate::blob::{BlobError, BlobId, BlobInfo, BlobReader, BlobStore};
 use crate::store::{
-    BlobReason, BlobSync, BlobVersion, DocId, DocKey, DocMeta, DocStore, VersionId, BLOB_DOC_PACK,
+    BlobReason, BlobSync, BlobVersion, DocId, DocKey, DocMeta, DocStore, PurgeCounts, StoreError,
+    VersionId, BLOB_DOC_PACK,
 };
 
 /// The participant a pack's merge of a conflicting save is attributed to (tier 0.5).
@@ -118,7 +119,7 @@ fn split_ext(name: &str) -> (&str, &str) {
 }
 
 /// Days since 1970-01-01 to a proleptic Gregorian date (H. Hinnant's algorithm).
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
     let z = z + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -166,6 +167,35 @@ pub struct BlobWriteResult {
     /// Whether the file was written back (false without a file, when it is missing, or when
     /// the write-back failed: it retries on `tick`).
     pub written: bool,
+}
+
+/// One author of a blob doc's history, in [`BlobBlame::authors`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobAuthor {
+    /// A pid, the kit's own (`kit:import`, `kit:external`), or an erased participant's
+    /// pseudonym.
+    pub pid: String,
+    /// How many versions they set.
+    pub versions: usize,
+    /// When they last set one (host clock, ms).
+    pub last_ms: u64,
+}
+
+/// Returned by [`BlobSession::blame`]: tier 0's blame is the pointer's history (the blob
+/// is one opaque unit, K-HIST-11's "whole blob" grain). Metadata only, no content.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobBlame {
+    /// The current version.
+    pub version: VersionId,
+    /// Who set it, when, through what, why, for whom (`author`, `at_ms`, `via`, `reason`,
+    /// `on_behalf_of`, `restored_from`...).
+    pub current: BlobVersion,
+    /// How many versions the history holds (purged ones included: their entries stay).
+    pub versions: usize,
+    /// Everyone who set a version, most recent first.
+    pub authors: Vec<BlobAuthor>,
 }
 
 /// Returned by [`BlobSession::status`]. Metadata only.
@@ -847,12 +877,43 @@ impl BlobSession {
         Ok(Self::store(&st)?.blob_versions(self.doc_id)?)
     }
 
+    /// **Blame** for any file (tier 0, P22): the current version's setter and a summary of
+    /// the version history (how many versions, who set them, most recent first). Needs read
+    /// and history (K-PERM-9).
+    pub fn blame(&self, conn: ConnId) -> Result<BlobBlame> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
+        self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
+        let all = Self::store(&st)?.blob_versions(self.doc_id)?;
+        let mut authors: Vec<BlobAuthor> = Vec::new();
+        for (_, v) in all.iter().rev() {
+            match authors.iter_mut().find(|a| a.pid == v.author) {
+                Some(a) => a.versions += 1,
+                None => authors.push(BlobAuthor {
+                    pid: v.author.clone(),
+                    versions: 1,
+                    last_ms: v.at_ms,
+                }),
+            }
+        }
+        Ok(BlobBlame {
+            version: st.vid,
+            current: st.cur.clone(),
+            versions: all.len(),
+            authors,
+        })
+    }
+
     /// One version's content, streaming and verified. Needs history.
     pub fn read_version(&self, conn: ConnId, vid: VersionId) -> Result<BlobRead> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::History, Action::Versions, now)?;
         let info = Self::store(&st)?.blob_version(self.doc_id, vid)?;
+        if info.redacted {
+            return Err(StoreError::PurgedVersion(self.doc_id, vid).into());
+        }
         let reader = self.blobs.reader(&st.key.space, &info.blob)?;
         Ok(BlobRead {
             version: vid,
@@ -1035,6 +1096,9 @@ impl BlobSession {
         let pid = st.members[i].p.pid.clone();
         self.check_lease(st, &pid, now)?;
         let old = Self::store(st)?.blob_version(self.doc_id, vid)?;
+        if old.redacted {
+            return Err(StoreError::PurgedVersion(self.doc_id, vid).into());
+        }
         if old.blob == st.cur.blob {
             return Ok(BlobWriteResult {
                 version: st.vid,
@@ -1060,6 +1124,151 @@ impl BlobSession {
         v.on_behalf_of = p.on_behalf_of.clone();
         v.restored_from = Some(vid);
         self.commit_own(st, i, v, now)
+    }
+
+    // ----- erasure (K-PURGE, K-T0-9) -----
+
+    /// **Purge** blob version `version` (`Some`; the current one is refused with
+    /// [`StoreError::CurrentVersion`]: write or restore another first), or (`None`) the
+    /// doc's whole history: every version but the current. Owner only (refused with
+    /// [`Need::Owner`]). Each purged version keeps its entry (who, when, why, size) with
+    /// [`BlobVersion::redacted`] set and the zero id (its keyed id is a digest of the
+    /// content: it goes too); reading or restoring it fails with
+    /// [`StoreError::PurgedVersion`].
+    ///
+    /// Then, at once (no GC grace): each released blob nothing else references is removed,
+    /// index and file; one still referenced (the same bytes in another version or doc, or a
+    /// pack's retain) stays and is counted as [`NotReached::SharedBlobs`]. The doc's
+    /// recorded **conflict copies** (beside its file) are scanned: one whose bytes are a
+    /// purged blob (compared by keyed id, never a plain hash) is deleted; others are left and
+    /// counted ([`NotReached::ConflictCopies`]). The file is written back first, so it holds
+    /// the current content; the store file is rewritten after. Audited as
+    /// [`AuditEvent::Purged`]. Approvals of on-behalf blob writes aren't built yet (K-T0-9).
+    pub fn purge(&self, conn: ConnId, version: Option<VersionId>) -> Result<PurgeOutcome> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        let i = self.admit(st, conn, Need::Owner, Action::Purge, now)?;
+        let by = st.members[i].p.pid.clone();
+        let store = Self::store(st)?;
+        let all = store.blob_versions(self.doc_id)?;
+        let vids: Vec<VersionId> = match version {
+            Some(v) if v == st.vid => return Err(StoreError::CurrentVersion(self.doc_id, v).into()),
+            Some(v) => {
+                if !all.iter().any(|(id, _)| *id == v) {
+                    return Err(StoreError::NoVersion(self.doc_id, v).into());
+                }
+                vec![v]
+            }
+            None => all
+                .iter()
+                .filter(|(id, v)| *id != st.vid && !v.redacted)
+                .map(|(id, _)| *id)
+                .collect(),
+        };
+        let mut not_reached = Vec::new();
+        // the file holds the current content first (an outside save is recorded, not lost)
+        if st.disk.is_some() {
+            let ok = self.write_back(st, now).is_ok()
+                && matches!(Self::disk_state(st), Some(DiskState::Clean));
+            if !ok {
+                not_reached.push(NotReached::File);
+            }
+        }
+        let space = st.key.space.clone();
+        let released = store.blob_purge_versions(self.doc_id, &vids, now)?;
+        let purged: Vec<BlobId> = released.iter().map(|r| r.1).collect();
+        let free: Vec<(u64, BlobId, u64)> = released
+            .iter()
+            .filter(|r| r.3 == 0)
+            .map(|r| (r.0, r.1, r.2))
+            .collect();
+        let shared = released.len() as u64 - free.len() as u64;
+        if shared > 0 {
+            not_reached.push(NotReached::SharedBlobs(shared));
+        }
+        let (blobs_removed, _) = self.blobs.remove_unreferenced_now(&free)?;
+        // conflict copies the kit wrote for this doc (recorded on the versions)
+        let (mut copies_removed, mut copies_left) = (0, 0);
+        let dir = st
+            .disk
+            .as_ref()
+            .and_then(|d| match disk::probe(&d.path, &d.root) {
+                Ok(Probe::File { real, .. }) => real.parent().map(Path::to_owned),
+                _ => d.path.parent().map(Path::to_owned),
+            });
+        if let Some(dir) = &dir {
+            for name in all.iter().filter_map(|(_, v)| v.conflict_copy.as_deref()) {
+                let p = dir.join(name);
+                let Ok(mut f) = File::open(&p) else { continue };
+                let id = self.blobs.id_of(&space, &mut f).ok().map(|x| x.0);
+                drop(f);
+                match id {
+                    Some(id) if purged.contains(&id) => {
+                        if std::fs::remove_file(&p).is_ok() {
+                            copies_removed += 1;
+                        } else {
+                            copies_left += 1;
+                        }
+                    }
+                    Some(id) if id == st.cur.blob => {}
+                    _ => copies_left += 1,
+                }
+            }
+        } else if all.iter().any(|(_, v)| v.conflict_copy.is_some()) {
+            not_reached.push(NotReached::File);
+        }
+        if copies_left > 0 {
+            not_reached.push(NotReached::ConflictCopies(copies_left));
+        }
+        if let Some(d) = st.disk.as_mut() {
+            d.own.retain(|b| !purged.contains(b));
+        }
+        let counts = PurgeCounts {
+            blob_versions: vids.len() as u64,
+            blobs_removed,
+            conflict_copies: copies_removed,
+            ..PurgeCounts::default()
+        };
+        let rewrite = match store.rewrite_file() {
+            Ok(r) => Some(r),
+            Err(_) => {
+                not_reached.push(NotReached::StoreFile);
+                None
+            }
+        };
+        not_reached.extend(NotReached::ALWAYS);
+        self.emit(AuditEvent::Purged {
+            key: st.key.clone(),
+            by,
+            scope: PurgedScope::BlobVersions { version },
+            counts,
+        });
+        Ok(PurgeOutcome::of_blobs(counts, not_reached, rewrite))
+    }
+
+    /// The doc's recorded conflict copies that exist beside its file now (for a byte scan,
+    /// K-T0-9). Needs history.
+    pub fn conflict_copies(&self, conn: ConnId) -> Result<Vec<PathBuf>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::History, Action::Versions, now)?;
+        let Some(d) = st.disk.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let dir = match disk::probe(&d.path, &d.root) {
+            Ok(Probe::File { real, .. }) => real.parent().map(Path::to_owned),
+            _ => d.path.parent().map(Path::to_owned),
+        };
+        let Some(dir) = dir else {
+            return Ok(Vec::new());
+        };
+        Ok(Self::store(&st)?
+            .blob_versions(self.doc_id)?
+            .into_iter()
+            .filter_map(|(_, v)| v.conflict_copy.map(|c| dir.join(c)))
+            .filter(|p| p.is_file())
+            .collect())
     }
 
     // ----- for the manager -----

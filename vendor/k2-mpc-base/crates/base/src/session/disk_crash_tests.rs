@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::*;
 use crate::doc::Doc;
-use crate::hash::sha256;
+use crate::hash::{file_hash, sha256};
 use crate::store::{DocKey, DocStore, SyncState};
 
 struct H(AtomicU64);
@@ -41,8 +41,13 @@ fn key() -> DocKey {
 
 /// Edit, then "crash" during a write-back: the write-in-flight record is stored and (when
 /// `landed`) the file renamed into place, but the promotion never happens. Returns the
-/// reopened session's text and the file's bytes.
-fn crash_during_write_back(tag: &str, landed: bool) -> (String, Vec<u8>, Arc<DocStore>) {
+/// reopened session's text and the file's bytes. `legacy`: the record holds a format-2
+/// plain SHA-256, as a store written before format 3 does.
+fn crash_during_write_back(
+    tag: &str,
+    landed: bool,
+    legacy: bool,
+) -> (String, Vec<u8>, Arc<DocStore>) {
     let (dir, store, host) = setup(tag);
     let (ws, file) = (dir.join("ws"), dir.join("ws/a.md"));
     fs::write(&file, b"a\n").unwrap();
@@ -59,7 +64,11 @@ fn crash_during_write_back(tag: &str, landed: bool) -> (String, Vec<u8>, Arc<Doc
             .set_pending_sync(
                 id,
                 &SyncState {
-                    hash: sha256(&bytes).to_vec(),
+                    hash: if legacy {
+                        sha256(&bytes).to_vec()
+                    } else {
+                        file_hash(&store.doc_key(id).unwrap(), &bytes)
+                    },
                     seq: s.status().unwrap().version,
                     state: live.encode_state().unwrap(),
                 },
@@ -83,6 +92,10 @@ fn crash_during_write_back(tag: &str, landed: bool) -> (String, Vec<u8>, Arc<Doc
         None,
         "nothing left in flight"
     );
+    // no plain content hash is left in the store (format 3: keyed, 33 bytes)
+    let synced = store.sync_states(id).unwrap().0.unwrap().hash;
+    assert_eq!(synced.len(), 33);
+    assert_eq!(store.meta(id).unwrap().synced_hash, Some(synced));
     drop(s);
     mgr.release().unwrap();
     let _ = fs::remove_dir_all(&dir);
@@ -93,14 +106,66 @@ fn crash_during_write_back(tag: &str, landed: bool) -> (String, Vec<u8>, Arc<Doc
 fn a_write_back_that_landed_is_recognised_not_merged_again() {
     // without the in-flight record the file would look like an outside edit adding "b"
     // to the old synced text, and merging it would give "abb"
-    let (text, bytes, _) = crash_during_write_back("landed", true);
+    let (text, bytes, _) = crash_during_write_back("landed", true, false);
     assert_eq!(text, "ab\n");
     assert_eq!(bytes, b"ab\n");
 }
 
+/// A format-2 store's write in flight (a plain SHA-256) is still recognised, then re-keyed.
+#[test]
+fn a_format_2_write_in_flight_is_recognised_and_rekeyed() {
+    let (text, bytes, _) = crash_during_write_back("landed-legacy", true, true);
+    assert_eq!(text, "ab\n", "not merged again");
+    assert_eq!(bytes, b"ab\n");
+}
+
+/// A format-2 doc's synced hash is a plain SHA-256: on the next open it still names the
+/// file (no outside edit is seen), and it is replaced by a keyed one at once.
+#[test]
+fn a_format_2_synced_hash_is_read_once_then_rekeyed() {
+    let (dir, store, host) = setup("legacy-synced");
+    let (ws, file) = (dir.join("ws"), dir.join("ws/a.md"));
+    fs::write(&file, b"a\n").unwrap();
+    let p = || Participant::new("agent", "A", "#000", ParticipantKind::Agent, "cli");
+    let id = {
+        let mgr = SessionManager::new(store.clone(), host.clone(), Config::default());
+        let s = mgr.open_file(Arc::new(MD), &key(), &file, &ws).unwrap();
+        let c = s.join(p(), Stay::Held).unwrap().conn;
+        s.replace_text(c, TextFilePack::ROOT, "ab\n").unwrap();
+        s.flush(c).unwrap();
+        let id = store.find(&key()).unwrap().unwrap();
+        // as a format-2 store holds it
+        let mut meta = store.meta(id).unwrap();
+        let mut synced = store.sync_states(id).unwrap().0.unwrap();
+        synced.hash = sha256(b"ab\n").to_vec();
+        meta.synced_hash = Some(synced.hash.clone());
+        store.rekey_sync(id, &meta, &synced).unwrap();
+        drop(s);
+        mgr.release().unwrap();
+        id
+    };
+    let versions = store.version_infos(id).unwrap().len();
+    let mgr = SessionManager::new(store.clone(), host, Config::default());
+    let s = mgr.open_file(Arc::new(MD), &key(), &file, &ws).unwrap();
+    let c = s.join(p(), Stay::Held).unwrap().conn;
+    assert_eq!(s.read(c).unwrap().text_by_root[0].1, "ab\n");
+    assert_eq!(
+        store.version_infos(id).unwrap().len(),
+        versions,
+        "no outside edit was seen"
+    );
+    let synced = store.sync_states(id).unwrap().0.unwrap().hash;
+    assert_eq!(synced.len(), 33, "re-keyed");
+    assert_eq!(store.meta(id).unwrap().synced_hash, Some(synced));
+    assert_eq!(s.check_disk().unwrap(), DiskCheck::Unchanged);
+    drop(s);
+    mgr.release().unwrap();
+    let _ = fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_write_back_that_did_not_land_is_redone() {
-    let (text, bytes, _) = crash_during_write_back("lost", false);
+    let (text, bytes, _) = crash_during_write_back("lost", false, false);
     assert_eq!(text, "ab\n");
     assert_eq!(bytes, b"ab\n", "the reopened session wrote it");
 }

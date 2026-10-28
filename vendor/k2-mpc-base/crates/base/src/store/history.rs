@@ -1,23 +1,27 @@
 //! History records next to the log: a **change summary** per change (the `log`, kept for
-//! the doc's life), a **revert record** per change (its hunks with the deleted text, author,
+//! the doc's life), its **clock span** (which engine clocks its inserted text has: blame's
+//! index from a character to its change, kept for the doc's life), a **revert record** per change (its hunks with the deleted text, author,
 //! `on_behalf_of`; kept inside the revert window), the **carried bounds** of pending
 //! records older than the window's cut, and per-doc **stats** (record count and bytes,
 //! pending on-behalf count and bytes). All are written in the transaction of the change
 //! itself, so they never disagree with the log, and none of them depends on the log: a
 //! compaction can drop log entries and revert still works (K-HIST-20, -22).
 //!
-//! **Purge reach (K-PURGE-3; the purge itself is a later slice).** Content lives only in
-//! `REVERTS` rows (`RecordHunk::insert` / `deleted`). A purge redacts those (sets
-//! `redacted`, blanks the text; a revert then reports the region as `erased`) and scans
-//! them in its byte scan; `CHANGES`, `REVERT_INDEX`, `REVERT_CARRY` and `REVERT_STATS` hold
-//! positions, sizes and metadata only. [`DocStore::revert_records`] is the hook.
+//! **Purge reach (K-PURGE-3).** Content lives only in `REVERTS` rows (`RecordHunk::insert`
+//! / `deleted`). A purge redacts those (sets `redacted`, blanks the text; a revert then
+//! reports the region as `erased`); `CHANGES` (which keeps every change's id, author, time
+//! and hunk lengths), `CHANGE_CLOCKS` (client IDs, clocks and change ids), `REVERT_INDEX`,
+//! `REVERT_CARRY` and `REVERT_STATS` hold positions, sizes and metadata only.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use redb::{ReadableTable, TableDefinition};
 
 use super::enc::{R, W};
-use super::{dec_version, DocId, DocStore, Seq, StoreError, Version, VersionId, VersionReason};
+use super::{
+    dec_redactions, dec_version, DocId, DocStore, Seq, StoreError, Version, VersionId,
+    VersionReason,
+};
 
 pub(super) const CHANGES: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("changes");
 pub(super) const REVERTS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("reverts");
@@ -27,6 +31,11 @@ pub(super) const REVERT_INDEX: TableDefinition<(u64, u64), &[u8]> =
 pub(super) const REVERT_CARRY: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("revert_carry");
 pub(super) const REVERT_STATS: TableDefinition<u64, &[u8]> = TableDefinition::new("revert_stats");
+/// `(doc, client, first clock)` → `(end clock, seq)`: the engine clocks each change's inserted
+/// text occupies ([`ClockSpan`]), so blame can map a live character to its change. Added in
+/// v0.3.0 (store format 3, additive: changes made before have no row).
+pub(super) const CHANGE_CLOCKS: TableDefinition<(u64, u64, u64), &[u8]> =
+    TableDefinition::new("change_clocks");
 
 pub(super) fn create_tables(w: &redb::WriteTransaction) -> Result<(), StoreError> {
     w.open_table(CHANGES)?;
@@ -34,6 +43,7 @@ pub(super) fn create_tables(w: &redb::WriteTransaction) -> Result<(), StoreError
     w.open_table(REVERT_INDEX)?;
     w.open_table(REVERT_CARRY)?;
     w.open_table(REVERT_STATS)?;
+    w.open_table(CHANGE_CLOCKS)?;
     Ok(())
 }
 
@@ -166,11 +176,26 @@ impl RevertRecord {
     }
 }
 
-/// A change as appended: its summary and its revert record.
+/// The engine clocks a change's inserted text occupies: client `client`, clocks
+/// `start..end` (the engine's own units). Engine clocks per client only grow, so the spans
+/// of one client's changes never overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ClockSpan {
+    pub client: u64,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// `(start, end, seq)`: change `seq` inserted the text at clocks `start..end` of one client.
+pub(crate) type SpanOf = (u32, u32, Seq);
+
+/// A change as appended: its summary, its revert record and, when it inserted anything, its
+/// clock span.
 #[derive(Debug, Clone)]
 pub(crate) struct NewChange {
     pub info: ChangeInfo,
     pub record: RevertRecord,
+    pub span: Option<ClockSpan>,
 }
 
 /// The carried bounds of one record, as of log position `carried_to`.
@@ -190,6 +215,17 @@ pub(crate) struct RevertStats {
     pub pending_bytes: u64,
 }
 
+/// A span of a version a purge removed (K-PURGE-2, -4): `len` bytes of root `root` from
+/// byte `start`, in the coordinates of the version's text before any purge. The version
+/// keeps its entry; its text is stored, shown, diffed and restored without the span.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct Redaction {
+    pub root: String,
+    pub start: u64,
+    pub len: u64,
+}
+
 /// A version without its content (`log`, `versions`, retention).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -203,6 +239,9 @@ pub struct VersionInfo {
     pub authors: Vec<String>,
     /// Stored size (content included).
     pub bytes: u64,
+    /// The spans a purge removed from its content (empty when none): `show`, `diff` and
+    /// `restore` see the text without them, and it is no `write --base` (format 3).
+    pub redacted: Vec<Redaction>,
 }
 
 /// Version retention (K-HIST-7).
@@ -224,7 +263,7 @@ pub(crate) struct RevertWindow {
 
 // ----- encodings -----
 
-fn enc_change(c: &ChangeInfo, shape: &[RootShape]) -> Vec<u8> {
+pub(super) fn enc_change(c: &ChangeInfo, shape: &[RootShape]) -> Vec<u8> {
     let mut w = W::default();
     w.u8(1)
         .u8(c.kind.to_u8())
@@ -246,7 +285,7 @@ fn enc_change(c: &ChangeInfo, shape: &[RootShape]) -> Vec<u8> {
     w.0
 }
 
-fn dec_change(
+pub(super) fn dec_change(
     seq: Seq,
     b: &[u8],
     with_shape: bool,
@@ -293,7 +332,7 @@ fn dec_change(
     Ok((info, shape))
 }
 
-fn enc_record(rec: &RevertRecord) -> Vec<u8> {
+pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
     let mut w = W::default();
     w.u8(1)
         .str(&rec.author)
@@ -315,7 +354,7 @@ fn enc_record(rec: &RevertRecord) -> Vec<u8> {
     w.0
 }
 
-fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
+pub(super) fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
     let mut r = R::new(b, "revert record");
     if r.u8()? != 1 {
         return Err(StoreError::Corrupt("revert record version"));
@@ -358,14 +397,14 @@ fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
     })
 }
 
-fn enc_pair(a: u64, b: u64) -> [u8; 16] {
+pub(super) fn enc_pair(a: u64, b: u64) -> [u8; 16] {
     let mut out = [0u8; 16];
     out[..8].copy_from_slice(&a.to_le_bytes());
     out[8..].copy_from_slice(&b.to_le_bytes());
     out
 }
 
-fn dec_pair(b: &[u8]) -> Result<(u64, u64), StoreError> {
+pub(super) fn dec_pair(b: &[u8]) -> Result<(u64, u64), StoreError> {
     if b.len() != 16 {
         return Err(StoreError::Corrupt("revert index"));
     }
@@ -404,7 +443,7 @@ fn dec_carry(b: &[u8]) -> Result<Carry, StoreError> {
     })
 }
 
-fn enc_stats(s: &RevertStats) -> Vec<u8> {
+pub(super) fn enc_stats(s: &RevertStats) -> Vec<u8> {
     let mut w = W::default();
     w.u8(1)
         .u64(s.count)
@@ -432,7 +471,8 @@ fn dec_stats(b: &[u8]) -> Result<RevertStats, StoreError> {
 /// The header of a stored version (everything before its content).
 fn dec_version_head(id: VersionId, b: &[u8]) -> Result<VersionInfo, StoreError> {
     let mut r = R::new(b, "version");
-    if r.u8()? != 1 {
+    let ver = r.u8()?;
+    if ver != 1 && ver != 2 {
         return Err(StoreError::Corrupt("version record version"));
     }
     let (seq, at_ms, reason, name, authors) = (
@@ -442,6 +482,7 @@ fn dec_version_head(id: VersionId, b: &[u8]) -> Result<VersionInfo, StoreError> 
         r.opt_str()?,
         r.strs()?,
     );
+    let redacted = dec_redactions(&mut r, ver, b.len())?;
     Ok(VersionInfo {
         id,
         seq,
@@ -450,10 +491,11 @@ fn dec_version_head(id: VersionId, b: &[u8]) -> Result<VersionInfo, StoreError> 
         name,
         authors,
         bytes: b.len() as u64,
+        redacted,
     })
 }
 
-fn stats_in(
+pub(super) fn stats_in(
     t: &impl ReadableTable<u64, &'static [u8]>,
     id: DocId,
 ) -> Result<RevertStats, StoreError> {
@@ -477,10 +519,17 @@ pub(super) fn put_changes(
     let mut rt = w.open_table(REVERTS)?;
     let mut it = w.open_table(REVERT_INDEX)?;
     let mut st = w.open_table(REVERT_STATS)?;
+    let mut kt = w.open_table(CHANGE_CLOCKS)?;
     let mut stats = stats_in(&st, id)?;
     for (&seq, c) in seqs.iter().zip(changes) {
         let shape = c.record.shape();
         ct.insert((id, seq), enc_change(&c.info, &shape).as_slice())?;
+        if let Some(k) = c.span.filter(|k| k.end > k.start) {
+            kt.insert(
+                (id, k.client, u64::from(k.start)),
+                enc_pair(u64::from(k.end), seq).as_slice(),
+            )?;
+        }
         let rec = enc_record(&c.record);
         let n = rec.len() as u64;
         rt.insert((id, seq), rec.as_slice())?;
@@ -503,6 +552,8 @@ pub(super) fn delete_rows(w: &redb::WriteTransaction, id: DocId) -> Result<(), S
             .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
     }
     w.open_table(REVERT_STATS)?.remove(id)?;
+    w.open_table(CHANGE_CLOCKS)?
+        .retain_in((id, 0, 0)..=(id, u64::MAX, u64::MAX), |_, _| false)?;
     Ok(())
 }
 
@@ -615,7 +666,7 @@ impl DocStore {
         versions: &[Version],
     ) -> Result<Vec<Seq>, StoreError> {
         debug_assert_eq!(entries.len(), changes.len());
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let seqs = self.append_in(&w, id, entries)?;
         put_changes(&w, id, &seqs, changes)?;
         super::put_versions(&w, id, versions)?;
@@ -625,11 +676,87 @@ impl DocStore {
 
     /// The summary of change `seq`, if this store recorded one.
     pub fn change(&self, id: DocId, seq: Seq) -> Result<Option<ChangeInfo>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(CHANGES)?;
         let v = t.get((id, seq))?;
         v.map(|v| dec_change(seq, v.value(), false).map(|x| x.0))
             .transpose()
+    }
+
+    /// Blame's lookups, in one read: for each `(client, from, to)`, the clock spans of
+    /// `client`'s changes that meet clocks `from..to`, in clock order, as
+    /// `(start, end, seq)`. Clocks no recorded change covers (changes made before v0.3.0)
+    /// are simply not covered.
+    pub(crate) fn clock_spans(
+        &self,
+        id: DocId,
+        runs: &[(u64, u32, u32)],
+    ) -> Result<Vec<Vec<SpanOf>>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(CHANGE_CLOCKS)?;
+        let mut out = Vec::with_capacity(runs.len());
+        for &(client, from, to) in runs {
+            let mut spans = Vec::new();
+            if to > from {
+                // the span starting at or before `from` may reach into it
+                let first = t
+                    .range((id, client, 0)..=(id, client, u64::from(from)))?
+                    .next_back();
+                let later =
+                    t.range((id, client, u64::from(from) + 1)..(id, client, u64::from(to)))?;
+                for kv in first.into_iter().chain(later) {
+                    let (k, v) = kv?;
+                    let (end, seq) = dec_pair(v.value())?;
+                    let start = u32::try_from(k.value().2)
+                        .map_err(|_| StoreError::Corrupt("change clocks"))?;
+                    let end =
+                        u32::try_from(end).map_err(|_| StoreError::Corrupt("change clocks"))?;
+                    if end > from {
+                        spans.push((start, end, seq));
+                    }
+                }
+            }
+            out.push(spans);
+        }
+        Ok(out)
+    }
+
+    /// The summaries of changes `seqs` this store recorded, in one read.
+    pub(crate) fn change_infos(
+        &self,
+        id: DocId,
+        seqs: &BTreeSet<Seq>,
+    ) -> Result<HashMap<Seq, ChangeInfo>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(CHANGES)?;
+        let mut out = HashMap::with_capacity(seqs.len());
+        for &seq in seqs {
+            if let Some(v) = t.get((id, seq))? {
+                out.insert(seq, dec_change(seq, v.value(), false)?.0);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Which of changes `seqs` a purge reached: their revert record (while in the window)
+    /// has a redacted hunk (blame marks their text `erased`).
+    pub(crate) fn purged_changes(
+        &self,
+        id: DocId,
+        seqs: &BTreeSet<Seq>,
+    ) -> Result<HashSet<Seq>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(REVERTS)?;
+        let mut out = HashSet::new();
+        for &seq in seqs {
+            if let Some(v) = t.get((id, seq))? {
+                let rec = dec_record(v.value())?;
+                if rec.roots.iter().flat_map(|x| &x.hunks).any(|h| h.redacted) {
+                    out.insert(seq);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Change summaries, newest first, while `f` returns true.
@@ -638,7 +765,7 @@ impl DocStore {
         id: DocId,
         mut f: impl FnMut(ChangeInfo) -> bool,
     ) -> Result<(), StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(CHANGES)?;
         for kv in t.range((id, 0)..=(id, u64::MAX))?.rev() {
             let (k, v) = kv?;
@@ -655,7 +782,7 @@ impl DocStore {
         id: DocId,
         after: Seq,
     ) -> Result<Vec<(Seq, Vec<RootShape>)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(CHANGES)?;
         let mut out = Vec::new();
         for kv in t.range((id, after.saturating_add(1))..=(id, u64::MAX))? {
@@ -672,17 +799,15 @@ impl DocStore {
         id: DocId,
         seq: Seq,
     ) -> Result<Option<RevertRecord>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(REVERTS)?;
         let v = t.get((id, seq))?;
         v.map(|v| dec_record(v.value())).transpose()
     }
 
-    /// Every revert record of a doc, oldest first: the hook for purge's redaction and
-    /// byte scan (K-PURGE-3).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// Every revert record of a doc, oldest first (purge reads the targeted ones' text).
     pub(crate) fn revert_records(&self, id: DocId) -> Result<Vec<(Seq, RevertRecord)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(REVERTS)?;
         let mut out = Vec::new();
         for kv in t.range((id, 0)..=(id, u64::MAX))? {
@@ -694,7 +819,7 @@ impl DocStore {
 
     /// The window's index: `(seq, at_ms, bytes)` per record, oldest first.
     pub(crate) fn revert_index(&self, id: DocId) -> Result<Vec<(Seq, u64, u64)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(REVERT_INDEX)?;
         let mut out = Vec::new();
         for kv in t.range((id, 0)..=(id, u64::MAX))? {
@@ -707,7 +832,7 @@ impl DocStore {
 
     /// Carried bounds persisted for records older than the window's cut.
     pub(crate) fn revert_carries(&self, id: DocId) -> Result<BTreeMap<Seq, Carry>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(REVERT_CARRY)?;
         let mut out = BTreeMap::new();
         for kv in t.range((id, 0)..=(id, u64::MAX))? {
@@ -718,7 +843,7 @@ impl DocStore {
     }
 
     pub(crate) fn revert_stats(&self, id: DocId) -> Result<RevertStats, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         stats_in(&r.open_table(REVERT_STATS)?, id)
     }
 
@@ -731,7 +856,7 @@ impl DocStore {
         drop: &[Seq],
         carries: &[(Seq, Carry)],
     ) -> Result<(u64, u64), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let (mut n, mut bytes) = (0, 0);
         {
             let mut rt = w.open_table(REVERTS)?;
@@ -760,7 +885,7 @@ impl DocStore {
 
     /// Every version's header and size, oldest first (no content is decoded).
     pub fn version_infos(&self, id: DocId) -> Result<Vec<VersionInfo>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let mut out = Vec::new();
         for kv in r
             .open_table(super::VERSIONS)?
@@ -785,7 +910,7 @@ impl DocStore {
         if plan.is_empty() {
             return Ok(plan);
         }
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(super::VERSIONS)?;
             for &vid in &plan {
@@ -817,6 +942,7 @@ mod tests {
             name: named.then(|| format!("v{id}")),
             authors: vec![],
             bytes: 10,
+            redacted: vec![],
         }
     }
 
@@ -936,12 +1062,39 @@ mod tests {
                     }],
                 }],
             };
-            (entry, NewChange { info, record })
+            let start = if obo.is_some() { 8 } else { 0 };
+            let span = Some(ClockSpan {
+                client: 7,
+                start,
+                end: start + 8,
+            });
+            (entry, NewChange { info, record, span })
         };
         let (e1, c1) = change(None, "SECRET-1");
         let (e2, c2) = change(Some("p"), "SECRET-2");
         let seqs = store.commit_changes(id, &[e1, e2], &[c1, c2], &[]).unwrap();
         assert_eq!(seqs, vec![1, 2]);
+        // blame's index: clocks to changes, across span edges, other clients uncovered
+        assert_eq!(
+            store
+                .clock_spans(
+                    id,
+                    &[(7, 0, 3), (7, 6, 10), (7, 16, 20), (8, 0, 9), (7, 5, 5)]
+                )
+                .unwrap(),
+            vec![
+                vec![(0, 8, 1)],
+                vec![(0, 8, 1), (8, 16, 2)],
+                vec![],
+                vec![],
+                vec![],
+            ]
+        );
+        let both: BTreeSet<Seq> = [1, 2, 9].into();
+        let infos = store.change_infos(id, &both).unwrap();
+        assert_eq!(infos.len(), 2);
+        assert_eq!(infos[&2].on_behalf_of.as_deref(), Some("p"));
+        assert!(store.purged_changes(id, &both).unwrap().is_empty());
         let st = store.revert_stats(id).unwrap();
         assert_eq!((st.count, st.pending_count), (2, 1));
         assert!(st.pending_bytes > 0 && st.bytes > st.pending_bytes);

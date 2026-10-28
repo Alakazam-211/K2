@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "k2-mpc-base",
  "proptest",

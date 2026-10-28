@@ -24,6 +24,10 @@ pub(super) const BLOB_SYNC: TableDefinition<(u64, u8), &[u8]> = TableDefinition:
 /// A purged space: its key's number and the blobs (id, size) whose rows were removed.
 pub(crate) type PurgedSpace = (u64, Vec<(BlobId, u64)>);
 
+/// A blob a purge released: the space's key number, its id and size, and the references
+/// it still has (0: nothing else uses it, so its bytes can go now).
+pub(crate) type PurgedBlob = (u64, BlobId, u64, u64);
+
 const SYNCED: u8 = 0;
 const PENDING: u8 = 1;
 
@@ -173,6 +177,9 @@ pub struct BlobVersion {
     /// The conflict copy the kit wrote beside the file when this save conflicted (its file
     /// name, in the same folder), holding the content that was current before it.
     pub conflict_copy: Option<String>,
+    /// A purge removed this version's content (format 3): the entry stays (who, when, why,
+    /// `size`), `blob` is the zero id, and reading or restoring it fails.
+    pub redacted: bool,
 }
 
 impl BlobVersion {
@@ -199,6 +206,7 @@ impl BlobVersion {
             name: None,
             restored_from: None,
             conflict_copy: None,
+            redacted: false,
         }
     }
 }
@@ -218,9 +226,10 @@ fn r_opt_u64(r: &mut R<'_>) -> Result<Option<u64>, StoreError> {
     }
 }
 
+/// Blob version record 2: record 1 plus the `redacted` flag at the end.
 fn enc_version(v: &BlobVersion) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(1).bytes(v.blob.as_bytes()).u64(v.size);
+    w.u8(2).bytes(v.blob.as_bytes()).u64(v.size);
     opt_u64(&mut w, v.mtime_ms);
     w.u64(v.at_ms)
         .str(&v.author)
@@ -231,12 +240,14 @@ fn enc_version(v: &BlobVersion) -> Vec<u8> {
         .opt_str(v.name.as_deref());
     opt_u64(&mut w, v.restored_from);
     w.opt_str(v.conflict_copy.as_deref());
+    w.u8(u8::from(v.redacted));
     w.0
 }
 
 fn dec_version(b: &[u8]) -> Result<BlobVersion, StoreError> {
     let mut r = R::new(b, "blob version");
-    if r.u8()? != 1 {
+    let ver = r.u8()?;
+    if ver != 1 && ver != 2 {
         return Err(StoreError::Corrupt("blob version record version"));
     }
     let blob = BlobId::from_slice(&r.bytes()?).ok_or(StoreError::Corrupt("blob id"))?;
@@ -253,6 +264,7 @@ fn dec_version(b: &[u8]) -> Result<BlobVersion, StoreError> {
         name: r.opt_str()?,
         restored_from: r_opt_u64(&mut r)?,
         conflict_copy: r.opt_str()?,
+        redacted: ver >= 2 && r.u8()? != 0,
     };
     r.end()?;
     Ok(v)
@@ -370,7 +382,7 @@ impl DocStore {
     // ----- blob index (crate-private: the blob store keeps files and rows consistent) -----
 
     pub(crate) fn blob_space(&self, space: &str) -> Result<Option<SpaceKey>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(BLOB_SPACES)?;
         let v = t.get(space)?;
         v.map(|v| dec_space(v.value())).transpose()
@@ -382,7 +394,7 @@ impl DocStore {
         space: &str,
         fresh: [u8; 32],
     ) -> Result<SpaceKey, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let k = {
             let mut t = w.open_table(BLOB_SPACES)?;
             let found = t.get(space)?.map(|v| dec_space(v.value())).transpose()?;
@@ -404,7 +416,7 @@ impl DocStore {
 
     /// Every live space number (folders of other numbers belong to purged spaces).
     pub(crate) fn blob_space_nos(&self) -> Result<Vec<u64>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let mut out = Vec::new();
         for kv in r.open_table(BLOB_SPACES)?.iter()? {
             out.push(dec_space(kv?.1.value())?.no);
@@ -413,7 +425,7 @@ impl DocStore {
     }
 
     pub(crate) fn blob_row(&self, no: u64, id: &BlobId) -> Result<Option<BlobRow>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(BLOBS)?;
         let v = t.get((no, id.as_bytes().as_slice()))?;
         v.map(|v| dec_row(v.value())).transpose()
@@ -428,7 +440,7 @@ impl DocStore {
         size: u64,
         now: u64,
     ) -> Result<bool, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let new = {
             let mut t = w.open_table(BLOBS)?;
             let k = (no, id.as_bytes().as_slice());
@@ -467,7 +479,7 @@ impl DocStore {
         delta: i64,
         now: u64,
     ) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let k = space_in(&w, space)?;
         adjust_ref(&w, k.no, id, delta, now)?;
         w.commit()?;
@@ -480,7 +492,7 @@ impl DocStore {
         now: u64,
         grace_ms: u64,
     ) -> Result<Vec<(u64, BlobId, u64)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let mut out = Vec::new();
         for kv in r.open_table(BLOBS)?.iter()? {
             let (k, v) = kv?;
@@ -499,7 +511,7 @@ impl DocStore {
         &self,
         rows: &[(u64, BlobId, u64)],
     ) -> Result<Vec<(u64, BlobId, u64)>, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let mut gone = Vec::new();
         {
             let mut t = w.open_table(BLOBS)?;
@@ -524,7 +536,7 @@ impl DocStore {
     /// Destroy a space's key and every index row of its blobs, in one transaction. Returns
     /// the key's number and the rows removed (`None`: the space had no key).
     pub(crate) fn blob_purge_space(&self, space: &str) -> Result<Option<PurgedSpace>, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let out = {
             let mut spaces = w.open_table(BLOB_SPACES)?;
             let found = spaces
@@ -558,7 +570,7 @@ impl DocStore {
 
     /// (blobs, bytes, of which unreferenced bytes) over the whole index.
     pub(crate) fn blob_totals(&self) -> Result<(u64, u64, u64), StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let (mut n, mut bytes, mut unref) = (0, 0, 0);
         for kv in r.open_table(BLOBS)?.iter()? {
             let row = dec_row(kv?.1.value())?;
@@ -581,7 +593,7 @@ impl DocStore {
         first: &BlobVersion,
         sync: Option<&BlobSync>,
     ) -> Result<(DocId, VersionId), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let id = {
             let mut paths = w.open_table(PATHS)?;
             let k = meta.key.index();
@@ -619,7 +631,7 @@ impl DocStore {
         versions: &[BlobVersion],
         sync: Option<&BlobSync>,
     ) -> Result<Vec<VersionId>, StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         let mut last = last_vid(&w, id)?;
         if last != expect_last {
             return Err(StoreError::LogMoved(id, expect_last, last));
@@ -646,7 +658,7 @@ impl DocStore {
 
     /// Every version of a blob doc, oldest first.
     pub fn blob_versions(&self, id: DocId) -> Result<Vec<(VersionId, BlobVersion)>, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let mut out = Vec::new();
         for kv in r
             .open_table(BLOB_VERSIONS)?
@@ -659,7 +671,7 @@ impl DocStore {
     }
 
     pub fn blob_version(&self, id: DocId, vid: VersionId) -> Result<BlobVersion, StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(BLOB_VERSIONS)?;
         let v = t.get((id, vid))?.ok_or(StoreError::NoVersion(id, vid))?;
         dec_version(v.value())
@@ -667,7 +679,7 @@ impl DocStore {
 
     /// The latest version of a blob doc: its current content.
     pub fn blob_current(&self, id: DocId) -> Result<(VersionId, BlobVersion), StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(BLOB_VERSIONS)?;
         let last = t.range((id, 0)..=(id, u64::MAX))?.next_back().transpose()?;
         let (k, v) = last.ok_or(StoreError::NoDoc(id))?;
@@ -681,7 +693,7 @@ impl DocStore {
         vid: VersionId,
         name: &str,
     ) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(BLOB_VERSIONS)?;
             let mut v = dec_version(
@@ -705,7 +717,7 @@ impl DocStore {
         vid: VersionId,
         now: u64,
     ) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let key = {
                 let docs = w.open_table(DOCS)?;
@@ -732,13 +744,81 @@ impl DocStore {
         Ok(())
     }
 
+    /// Purge versions `vids` of blob doc `id` (the current one is refused:
+    /// [`StoreError::CurrentVersion`]), in one transaction: each keeps its entry with
+    /// `redacted` set and the zero id (its keyed id is a digest of the content: it goes too),
+    /// and releases its reference on its blob at `now`. Returns the blobs released, with the
+    /// references each still has. Already purged versions are skipped.
+    pub(crate) fn blob_purge_versions(
+        &self,
+        id: DocId,
+        vids: &[VersionId],
+        now: u64,
+    ) -> Result<Vec<PurgedBlob>, StoreError> {
+        let w = self.begin_write()?;
+        let out = {
+            let key = {
+                let docs = w.open_table(DOCS)?;
+                let m = docs.get(id)?.ok_or(StoreError::NoDoc(id))?;
+                super::dec_meta(m.value())?.key
+            };
+            let last = last_vid(&w, id)?;
+            let space = space_in(&w, &key.space).ok();
+            let mut released: Vec<(BlobId, u64)> = Vec::new();
+            for &vid in vids {
+                if vid == last {
+                    return Err(StoreError::CurrentVersion(id, vid));
+                }
+                let mut v = {
+                    let t = w.open_table(BLOB_VERSIONS)?;
+                    let g = t.get((id, vid))?.ok_or(StoreError::NoVersion(id, vid))?;
+                    dec_version(g.value())?
+                };
+                if v.redacted {
+                    continue;
+                }
+                let blob = v.blob;
+                v.blob = BlobId::from_slice(&[0; 32]).expect("32 bytes");
+                v.redacted = true;
+                w.open_table(BLOB_VERSIONS)?
+                    .insert((id, vid), enc_version(&v).as_slice())?;
+                if let Some(k) = &space {
+                    match adjust_ref(&w, k.no, &blob, -1, now) {
+                        Ok(()) | Err(StoreError::NoBlob(_)) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+                released.push((blob, v.size));
+            }
+            let mut out = Vec::new();
+            if let Some(k) = &space {
+                let t = w.open_table(BLOBS)?;
+                let mut seen = std::collections::HashSet::new();
+                for (b, size) in released {
+                    if !seen.insert(b) {
+                        continue;
+                    }
+                    let refs = t
+                        .get((k.no, b.as_bytes().as_slice()))?
+                        .map(|v| dec_row(v.value()))
+                        .transpose()?
+                        .map_or(0, |r| r.refs);
+                    out.push((k.no, b, size, refs));
+                }
+            }
+            out
+        };
+        w.commit()?;
+        Ok(out)
+    }
+
     // ----- blob-doc disk sync (crate-private: sessions keep these consistent) -----
 
     pub(crate) fn blob_sync_states(
         &self,
         id: DocId,
     ) -> Result<(Option<BlobSync>, Option<BlobSync>), StoreError> {
-        let r = self.db.begin_read()?;
+        let r = self.begin_read()?;
         let t = r.open_table(BLOB_SYNC)?;
         let get = |slot| -> Result<Option<BlobSync>, StoreError> {
             t.get((id, slot))?.map(|v| dec_sync(v.value())).transpose()
@@ -748,7 +828,7 @@ impl DocStore {
 
     /// Set the synced state (clearing a write-back in flight).
     pub(crate) fn set_blob_synced(&self, id: DocId, s: &BlobSync) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         {
             let mut t = w.open_table(BLOB_SYNC)?;
             t.insert((id, SYNCED), enc_sync(s).as_slice())?;
@@ -761,7 +841,7 @@ impl DocStore {
     /// Record a write-back about to happen (before the rename), so a crash right after it
     /// is recognised on the next open as the kit's own write, not an outside edit.
     pub(crate) fn set_blob_pending(&self, id: DocId, s: &BlobSync) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         w.open_table(BLOB_SYNC)?
             .insert((id, PENDING), enc_sync(s).as_slice())?;
         w.commit()?;
@@ -769,7 +849,7 @@ impl DocStore {
     }
 
     pub(crate) fn clear_blob_pending(&self, id: DocId) -> Result<(), StoreError> {
-        let w = self.db.begin_write()?;
+        let w = self.begin_write()?;
         w.open_table(BLOB_SYNC)?.remove((id, PENDING))?;
         w.commit()?;
         Ok(())

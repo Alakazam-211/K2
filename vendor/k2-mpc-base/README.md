@@ -10,10 +10,11 @@ lives here, so a new type takes days or weeks, not months:
 - sessions, presence, permission hooks, persistence and snapshots, disk sync;
 - tier 0 for any file: presence, a lease, versions and restore, conflict copies, on a keyed
   content-addressed blob store;
-- text tools agents run (`cat`, `grep`, `sed -i`, `patch`...), history (versions, undo, revert);
+- text tools agents run (`cat`, `grep`, `sed -i`, `patch`...), history (versions, undo, revert,
+  blame per line at the character's grain), erasure (purge);
 - the agent-parity framework: a verb registry and a harness proving each person action has a
   verb with the same effect;
-- planned: sync transport, blame.
+- planned: sync transport.
 
 The CRDT engine (Yrs, Yjs-compatible, today) is private to this crate. Packs never touch it,
 so it can be replaced without changing them.

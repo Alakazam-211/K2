@@ -879,9 +879,84 @@ fn p31_agent(a: &mut Agent<'_>) -> R {
     agent_step(a.verb(&["revert", &seq], b"")?, undo_out)
 }
 
+// ---------- P22: blame ----------
+
+/// A history with every kind of author: the import, a person, an agent, an assistant acting
+/// for the actor (pending), an outside edit; a second apart each.
+fn blame_setup(stage: &mut Stage) -> Result<(), String> {
+    stage.advance(1_000);
+    stage.edit_as("sam", |t| t.replace("Intro line.", "Intro, revised."))?;
+    stage.advance(1_000);
+    stage.other("bot", ParticipantKind::Agent)?;
+    stage.edit_as("bot", |t| {
+        t.replace(
+            "- keep files plain
+",
+            "- keep files plain
+- ship blame
+",
+        )
+    })?;
+    stage.advance(1_000);
+    stage.assistant("aide", ACTOR)?;
+    stage.edit_as("aide", |t| t.replace("write more", "write MORE"))?;
+    stage.advance(1_000);
+    // another program edits the file (after the kit wrote it back)
+    let sam = stage.other("sam", ParticipantKind::Person)?;
+    stage
+        .session()
+        .flush(sam)
+        .map_err(|e| format!("flush: {e}"))?;
+    let t = stage.text()?;
+    stage.write_file(t.replace("End.", "The end.").as_bytes())?;
+    stage.advance(1_000);
+    Ok(())
+}
+fn blame_no_history_setup(stage: &mut Stage) -> Result<(), String> {
+    blame_setup(stage)?;
+    stage.grant(ACTOR, Rights::editor());
+    Ok(())
+}
+fn blame_out(o: &VerbOut) -> Output {
+    match &o.value {
+        VerbValue::Blame(b) => Output::value(&b.lines),
+        v => Output::value(v),
+    }
+}
+fn p22_person(p: &mut Person<'_>) -> R {
+    // the tab's blame gutter: the same session call, every line
+    let c = p.conn()?;
+    let root = p.root().to_owned();
+    person_step(p.session().blame(c, &root, None), |b| {
+        Output::value(b.lines)
+    })
+}
+fn p22_agent(a: &mut Agent<'_>) -> R {
+    agent_step(a.verb(&["blame"], b"")?, blame_out)
+}
+fn p22_range_person(p: &mut Person<'_>) -> R {
+    // the gutter of the lines in view (3 to 9), as the verb prints them
+    let c = p.conn()?;
+    let root = p.root().to_owned();
+    let r = LineRange {
+        root: root.clone(),
+        first: 3,
+        last: 9,
+    };
+    person_step(p.session().blame(c, &root, Some(r)), |b| {
+        Output::Text(b.render(|_| None))
+    })
+}
+fn p22_range_agent(a: &mut Agent<'_>) -> R {
+    agent_step(a.verb(&["blame", "-L", "3,9"], b"")?, |o| match &o.value {
+        VerbValue::Blame(b) => Output::Text(b.render(|_| None)),
+        v => Output::value(v),
+    })
+}
+
 /// The kit's cases for `action`: each kit verb serving it, the person's way and the
-/// agent's way. Empty for the rows the kit doesn't bind yet (deferred: P22 blame, P23 and
-/// P27 annotations, P28 purge); a pack's list must then mark them deferred.
+/// agent's way. Empty for the rows the kit doesn't bind yet (deferred: P23 and P27
+/// annotations, P28 purge); a pack's list must then mark them deferred.
 pub fn kit_cases(action: PersonAction) -> Vec<Case> {
     use PersonAction as P;
     let c = Case::new;
@@ -1195,8 +1270,34 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
             p31_agent,
         )
         .setup(aide_setup)],
+        P::Blame => vec![
+            c(
+                action,
+                "blame",
+                "import, person, agent, assistant, outside edit",
+                p22_person,
+                p22_agent,
+            )
+            .setup(blame_setup),
+            c(
+                action,
+                "blame",
+                "-L: the lines in view",
+                p22_range_person,
+                p22_range_agent,
+            )
+            .setup(blame_setup),
+            c(
+                action,
+                "blame",
+                "no history right: refused",
+                p22_person,
+                p22_agent,
+            )
+            .setup(blame_no_history_setup),
+        ],
         // not bound by the kit yet: the pack's list marks these deferred
-        P::Blame | P::Annotate | P::Mention | P::Purge => Vec::new(),
+        P::Annotate | P::Mention | P::Purge => Vec::new(),
     }
 }
 

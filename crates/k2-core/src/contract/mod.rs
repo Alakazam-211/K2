@@ -497,6 +497,8 @@ mod tests {
                 "files.readBinary",
                 "tickets.list",
                 "tickets.show",
+                // Catalog v31 (0.46.6): a ticket message's file.
+                "tickets.attachment",
                 "tickets.create",
                 "tickets.comment",
                 "tickets.resolve",

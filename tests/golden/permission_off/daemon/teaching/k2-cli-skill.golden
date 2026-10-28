@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 37
-skill_checksum: e7aefd237d87fa34
+skill_version: 38
+skill_checksum: 5ffe1a26482638e9
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---

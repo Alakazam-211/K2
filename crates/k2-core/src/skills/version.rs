@@ -274,7 +274,9 @@ pub const SKILL_VERSION_ZEN: u32 = 44;
 /// "Compute nodes" block with the Priority courtesy rule (Priority is
 /// optional; one submitter per server at a time, not enforced).
 /// Bumped to 37 (0.46.6, mobile development): the Study topics gain `sim`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 37;
+/// Bumped to 38 (0.46.6, ticket attachments): `k2 tickets … --file` and how
+/// a person's files reach the agent (`Attached: <abs path>`).
+pub const SKILL_VERSION_WORKSPACE: u32 = 38;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

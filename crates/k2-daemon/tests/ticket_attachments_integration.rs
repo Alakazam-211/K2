@@ -184,7 +184,7 @@ async fn ticket_files_store_show_open_and_refuse() {
         }
     }
     let r = post(port, "/cli/feedback/comment", OWNER, json!({ "id": id, "body": "x", "author": "scout", "attachments": [{ "path": ".env" }] })).await;
-    assert!(r.body.contains("this ticket") && r.body.contains("k2 vault"), "{}", r.body);
+    assert!(r.body.contains("can't ride a ticket") && r.body.contains("k2 vault"), "{}", r.body);
     // Files on a plain resolve: a usage error (TK7); nothing changes.
     let r = post(port, "/cli/feedback/resolve", OWNER, json!({ "id": id, "attachments": [{ "path": "docs/plan.md" }] })).await;
     assert_eq!((r.status, code_of(&r).as_str()), (400, "usage"), "{}", r.body);

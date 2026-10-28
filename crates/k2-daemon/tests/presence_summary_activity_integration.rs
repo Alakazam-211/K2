@@ -168,7 +168,7 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
             cols: 80,
             rows: 24,
             cwd: Some(cwd.clone()),
-            program: Some("cat".to_string()),
+            program: Some(k2_core::test_env::pty_idle_program("cat")),
             ..DaemonPtyConfig::default()
         };
         let session: Arc<DaemonPtySession> = DaemonPtySession::spawn(cfg).expect("spawn cat PTY");
@@ -243,7 +243,17 @@ async fn summary_lists_busy_workspaces_from_activity_and_hooks() {
 
         // 1. A braille spinner title through the real PTY → the activity
         //    observer says working (busy).
+        // Unix: the PTY echoes the OSC back through `cat`. Windows (cmd.exe
+        // in the PTY, no echo of raw bytes): a helper prints the OSC to the
+        // terminal, as an agent CLI sets its title.
+        #[cfg(not(windows))]
         session.write(b"\x1b]0;\xe2\xa0\x8b Working\x07\n".to_vec());
+        #[cfg(windows)]
+        {
+            let helper = home.join("set-title");
+            k2_core::test_env::write_executable(&helper, "#!/bin/sh\nprintf '\\033]0;\\342\\240\\213 Working\\007'\n");
+            session.write(format!("\"{}.exe\"\r", helper.display()).into_bytes());
+        }
         await_activity(
             port,
             serde_json::json!([busy_ws("working", "working", true, counts(1, 0, 0)), beat]),

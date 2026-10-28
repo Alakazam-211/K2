@@ -44,8 +44,7 @@ HOW YOU GET A SECRET (delivery)
   api     k2 vault get NAME prints it into your transcript. Rare.
   agent   ssh keys: $SSH_AUTH_SOCK in new sessions; ssh and git sign with
           it, nobody sees the key. k2 vault public-key NAME: the .pub line.
-  Default for keys is fetch. "Agent can see this" in k2 vault list means
-  file/env/api.
+  Default: fetch. "Agent can see this" (k2 vault list) means file/env/api.
 
 KINDS AND DELIVERY (--kind on set; the default delivery follows it)
   api_key oauth_token generic  fetch  k2 vault fetch --secret NAME URL
@@ -54,8 +53,7 @@ KINDS AND DELIVERY (--kind on set; the default delivery follows it)
   ssh_key                      file   ssh -i $K2_SECRETS_DIR/NAME
                                           -o IdentitiesOnly=yes host
                                agent  plain ssh and git (--delivery agent)
-  tls_key                      file   point the server at
-                                          $K2_SECRETS_DIR/NAME
+  tls_key                      file   the server reads $K2_SECRETS_DIR/NAME
   Every kind allows fetch, file and env (up to its ceiling, default env);
   api only if the delivery or ceiling says api. Change it with
   k2 vault delivery NAME file|env. Fetch needs sites (--for) and puts the
@@ -93,11 +91,10 @@ WHO SETS WHAT
   exact line `k2 compute run --secret` prints (k2 study compute, SECRETS).
 
 PEOPLE ONLY
-  The recovery key, the vault password, reveal and key rotation are for
-  your owner, from their own terminal or Settings. If doctor/status says
-  "recovery: not confirmed", don't run it — tell your owner.
-  Backups (k2 vault backup), restoring one (k2 vault restore) and a root
-  unit's credential (k2 vault systemd-cred) are theirs too.
+  The recovery key, the vault password, reveal, key rotation, backups and
+  restores (k2 vault backup / restore) are your owner's, from their own
+  terminal or Settings. If doctor/status says "recovery: not confirmed",
+  don't run it — tell your owner.
 
 MOVING TO ANOTHER BOX
   With "Allow managing server-wide secrets": new box `k2 vault recipient`;
@@ -123,8 +120,7 @@ GIVING A SECRET TO ANOTHER AGENT
   (peer_too_old); 4 = no such secret or agent. Every step is logged.
 
 PUBLISHED SERVICES
-  New services start clean (base env + granted secrets). [legacy env] ones
-  inherit the daemon's: k2 publish env <name> clean, then secret add.
+  New ones start clean; [legacy env] ones: k2 publish env <name> clean.
 
 CLI TOOLS (gh, vercel: tools that read a token from the environment)
   1. k2 vault set GITHUB_CLI --kind oauth_token < token

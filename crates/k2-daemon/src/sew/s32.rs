@@ -801,12 +801,12 @@ fn app_space_unbind(who: &Who, v: &Value) -> R<Value> {
         "everyone stays in the Space; K2 no longer manages its members"
     };
     let sew = if k2_core::tool_hook::sew_has(k2_core::tool_hook::features::SPACE_UNBIND).unwrap_or(false) {
-        "Sew keeps the Space read-only for this App (history and export still work)"
+        "The Space is now read-only in Sew: nobody can post; history and export still work"
     } else {
-        "once this box's Sew can unbind (Sew 0.5.0+), it keeps the Space read-only for this App"
+        "This box's Sew is older than 0.5.0: the Space stays writable until Sew is upgraded, then becomes read-only"
     };
     let hint = format!(
-        "{members}. {sew}. Bind the same App again to resume; another App can bind it only after the Sew install owner releases it in Sew"
+        "{members}. {sew}. app-space bind with the same App makes it writable again; another App can bind it only after the Sew install owner releases it in Sew's own admin"
     );
     Ok(json!({"ok": true, "app": app, "spaceId": space, "removeAppMembers": remove, "plan": plan, "hint": hint}))
 }

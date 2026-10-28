@@ -59531,10 +59531,13 @@ App Spaces (members: the App's users who also have chat; never Connect owners/ad
   k2 hostchat app-spaces [--json]
   k2 hostchat app-space bind <app> <space-id> [--json]      (<app>: its id or name, k2 app list)
   k2 hostchat app-space unbind <app> <space-id> [--remove-app-members] [--json]
-          everyone stays by default (K2 stops managing the Space; bind the same App again to resume).
+          everyone stays by default (K2 stops managing the Space).
           --remove-app-members: the members K2 added there leave; people added by hand never do.
-          Sew 0.5.0+ keeps an unbound Space read-only for its App (removing an App does the same);
-          another App can bind it only after the Sew install owner releases it in Sew.
+          On Sew 0.5.0+ (k2 hostchat status shows the version) the Space becomes read-only: nobody
+          can post; history and export still work. On an older Sew it stays writable until Sew is
+          upgraded. Removing an App does the same to its Spaces. app-space bind with the same App
+          makes it writable again; another App can bind it only after the Sew install owner
+          releases it in Sew's own admin (until then that bind is refused: space_bound_elsewhere).
 Home client (each App session sees only its own App's Spaces once Sew has app_scoped_sessions):
   k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
   k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth)

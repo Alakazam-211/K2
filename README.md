@@ -13,5 +13,8 @@ Markdown, byte for byte.
 - **Its own verb:** `replace-section` (replace the body under a heading), through the kit's
   `Pack::verbs`.
 
+- **Demo:** `cargo run -p k2-mpc-markdown --example multiplayer_demo`, with three agents and
+  one person on one doc (`docs/DEMO.md`, which also has a script to replay it on a host).
+
 Check this repo out next to `k2-mpc-base` (sibling directories).
 Status: early. Licence: not yet chosen.

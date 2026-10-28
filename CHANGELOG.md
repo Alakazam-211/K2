@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.1 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.9.1** (additive: `edit_with_options`, the `run_tool` flag, the
+`approvals` alias of `log --pending`, one BOM on `write`; fixes for blame's `restored by` on a
+partly restored line and for last-edit notes). No pack code change: the double-BOM fix comes
+through the kit's `TextFilePack`, and the P30 row may leave the `approvals` alias out. The
+demo's transcript now shows both demo findings fixed (`restored by` on scenes 6 and 8; no
+`edited lines 25–26` notes), and the demo fails if a partly restored line lacks it.
+
+**A multiplayer demo** (`docs/DEMO.md`): three agents and one person on one Markdown doc through the kit's sessions, headless and deterministic. It covers presence notes; a claim, a bounce and a retry with `--if-version`; a person never refused; a `write --base` merge and a conflict; exact `replace`; undo with provenance; blame with `restored by`; and a revert. The example is `crates/markdown/examples/multiplayer_demo.rs`. `tests/demo_transcript.rs` compares its transcript with `tests/golden/multiplayer_demo.txt`. `docs/DEMO.md` maps each scene to a host's doc CLI, so it can be replayed as a dogfood script. No pack or API change; no new dependency.
+
 ## v0.7.0 (2026-10-28)
 
 **Requires `k2-mpc-base` v0.9.0** (undo, redo and revert never remove another participant's text, and text they put back keeps its provenance: blame names who first wrote it and who put it back; a behaviour change in undo and blame, hence the minor bump). The base's **store format is 5** (an in-place upgrade from 4; an older build refuses it). `Cargo.lock` only; no pack change.

@@ -41,6 +41,7 @@ for v in $(env | grep -oE '^K2(SO)?_[A-Z0-9_]+'); do unset "$v"; done
 export HOME="$WORK/home"
 mkdir -p "$HOME/.k2"
 MODE_FILE="$WORK/mode"
+BODY_FILE="$WORK/body"
 
 cat >"$WORK/stub.py" <<'PY'
 import json, os
@@ -103,6 +104,11 @@ class H(BaseHTTPRequestHandler):
         if mode == "update_dropin_na":
             return self._send(200, json.dumps({"heal": {"result": "up_to_date", "version": "0.46.5"}, "cli": {"result": "current"},
                 "dropin": {"result": "not_applicable", "reason": "not a systemd unit"}, "status": STATUS}))
+        if mode == "update_newer_daemon":
+            return self._send(200, json.dumps({"target": "0.46.4",
+                "warnings": ["the installed daemon binary is v0.46.5, newer than the helper this fetches (v0.46.4): run `k2 root-helper update --version 0.46.5` (or `--match-installed`) to install its helper now; otherwise the daemon fetches it after it restarts on v0.46.5"],
+                "heal": {"result": "up_to_date", "version": "0.46.4"}, "cli": {"result": "current"},
+                "dropin": {"result": "not_applicable"}, "status": STATUS}))
         if mode == "no_command":
             d = dict(STATUS); d["installCommand"] = None
             return self._send(200, json.dumps(d))
@@ -113,7 +119,7 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
-        self.rfile.read(n)
+        open(os.environ["BODY_FILE"], "w").write(self.rfile.read(n).decode())
         self._answer()
 
     def log_message(self, *_a):
@@ -124,7 +130,7 @@ PY
 
 PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 echo ok >"$MODE_FILE"
-MODE_FILE="$MODE_FILE" PORT="$PORT" python3 "$WORK/stub.py" &
+MODE_FILE="$MODE_FILE" BODY_FILE="$BODY_FILE" PORT="$PORT" python3 "$WORK/stub.py" &
 STUB_PID=$!
 for _i in $(seq 1 50); do
     if curl -sf --connect-timeout 1 "http://127.0.0.1:${PORT}/cli/root-helper/status" >/dev/null 2>&1; then
@@ -187,6 +193,30 @@ run root-helper update
 assert_eq "dropin n/a: exit 0" "$rc" "0"
 assert_absent "dropin n/a: no line off systemd" "$out" "unit dropin"
 assert_absent "dropin: no traceback" "$err" "Traceback"
+
+echo "== update: --version / --match-installed and the newer-daemon warning (0.46.6) =="
+echo update_dropin_current >"$MODE_FILE"
+run root-helper update
+assert_eq "update plain: exit 0" "$rc" "0"
+assert_eq "update plain: empty body" "$(cat "$BODY_FILE")" "{}"
+run root-helper update --version 0.46.5
+assert_eq "update --version: exit 0" "$rc" "0"
+assert_eq "update --version: sends the version" "$(cat "$BODY_FILE")" '{"version": "0.46.5"}'
+run root-helper update --match-installed
+assert_eq "update --match-installed: exit 0" "$rc" "0"
+assert_eq "update --match-installed: sends matchInstalled" "$(cat "$BODY_FILE")" '{"matchInstalled": true}'
+run root-helper update --version 0.46.5 --match-installed
+assert_eq "update both: usage exit 2" "$rc" "2"
+assert_contains "update both: says not both" "$err" "not both"
+run root-helper update --version
+assert_eq "update --version without value: exit 2" "$rc" "2"
+echo update_newer_daemon >"$MODE_FILE"
+run root-helper update
+assert_eq "newer daemon: exit 0" "$rc" "0"
+assert_contains "newer daemon: which helper" "$out" "helper for : v0.46.4"
+assert_contains "newer daemon: the warning" "$out" "warning    : the installed daemon binary is v0.46.5"
+assert_contains "newer daemon: the fix" "$out" "k2 root-helper update --version 0.46.5"
+assert_absent "newer daemon: no traceback" "$err" "Traceback"
 
 for sub in status update rollback; do
     echo "== $sub: string error body =="

@@ -6,6 +6,12 @@
 //! - `POST /cli/root-helper/update` — Admin; passports refused. Runs the
 //!   auto-heal now. Body `{"fromDir": "<dir>"}` installs from local signed
 //!   assets (air-gap) — the signature still gates it, no root needed.
+//!   `{"version": "x.y.z"}` fetches that release's helper instead of the
+//!   running daemon's; `{"matchInstalled": true}` fetches the version of
+//!   the daemon binary on disk (a swap already done, restart pending). The
+//!   answer's `warnings` say when the installed or a staged daemon is newer
+//!   than the helper it fetched (0.46.6: sewlab stayed on helper 0.46.4
+//!   because `update` ran before the binary swap).
 //! - `POST /cli/root-helper/rollback` — Admin; passports refused.
 //!
 //! `setup` (the box-sudo install button) is a later slice with the
@@ -132,10 +138,29 @@ pub fn handle(
                     Err(e) => refuse("409 Conflict", "rollback_failed", e),
                 };
             }
-            let from_dir = serde_json::from_slice::<Value>(body)
-                .ok()
-                .and_then(|v| v["fromDir"].as_str().map(str::to_string))
+            let req = serde_json::from_slice::<Value>(body).unwrap_or(Value::Null);
+            let from_dir = req["fromDir"]
+                .as_str()
+                .map(str::to_string)
                 .filter(|s| !s.is_empty());
+            let requested = req["version"].as_str().filter(|s| !s.is_empty());
+            let match_installed = req["matchInstalled"].as_bool() == Some(true);
+            let running = env!("CARGO_PKG_VERSION");
+            // Read every time: it also feeds the "newer daemon" warning.
+            let installed = on_disk_daemon_version();
+            let target = match update_target(
+                running,
+                requested,
+                match_installed,
+                installed.as_deref(),
+            ) {
+                Ok(t) => t,
+                Err(r) => return r,
+            };
+            let staged = crate::update_routes::staged_target_version();
+            let warnings = newer_daemon_warnings(&target, installed.as_deref(), staged.as_deref());
+            let mut plan = heal::live_plan(None);
+            plan.daemon_version = target.clone();
             let out = match from_dir {
                 Some(dir) => {
                     let p = std::path::PathBuf::from(&dir);
@@ -147,13 +172,10 @@ pub fn handle(
                         );
                     }
                     // Air-gap: never the network; the signature still gates it.
-                    heal::run_once(
-                        &heal::DirOps { dir: p },
-                        &heal::live_plan(Some(false)),
-                        &who,
-                    )
+                    plan.airgap = false;
+                    heal::run_once(&heal::DirOps { dir: p }, &plan, &who)
                 }
-                None => heal::run_once(&heal::LiveOps, &heal::live_plan(None), &who),
+                None => heal::run_once(&heal::LiveOps, &plan, &who),
             };
             let cli = root_helper::cli_refresh::run_once(
                 &root_helper::cli_refresh::LiveCliOps,
@@ -166,9 +188,186 @@ pub fn handle(
             // The answer says whether one restart is still needed.
             let dropin = crate::handoff_setup::after_helper_update(false);
             ok(
-                json!({"heal": out, "cli": cli, "dropin": dropin, "status": root_helper::status_json(&root_helper::state(), crate::mail::supervisor::mail_helper_legacy_state().as_str(), root_helper::legacy_pg_present(), None)}),
+                json!({"target": target, "warnings": warnings, "heal": out, "cli": cli, "dropin": dropin, "status": root_helper::status_json(&root_helper::state(), crate::mail::supervisor::mail_helper_legacy_state().as_str(), root_helper::legacy_pg_present(), None)}),
             )
         }
         _ => refuse("404 Not Found", "not_found", "unknown root-helper route"),
+    }
+}
+
+/// Which release's helper `update` fetches: `version` when asked, the
+/// on-disk daemon's with `matchInstalled`, else the running daemon's.
+fn update_target(
+    running: &str,
+    requested: Option<&str>,
+    match_installed: bool,
+    installed: Option<&str>,
+) -> Result<String, CliResponse> {
+    use k2_root_proto::version::Semver;
+    match (requested, match_installed) {
+        (Some(_), true) => Err(refuse(
+            "400 Bad Request",
+            "bad_request",
+            "give --version or --match-installed, not both",
+        )),
+        (Some(v), false) => match Semver::parse(v) {
+            Some(sv) => Ok(sv.to_string()),
+            None => Err(refuse(
+                "400 Bad Request",
+                "bad_version",
+                format!("--version must be x.y.z (got {v:?})"),
+            )),
+        },
+        (None, true) => match installed.and_then(Semver::parse) {
+            Some(sv) => Ok(sv.to_string()),
+            None => Err(refuse(
+                "409 Conflict",
+                "installed_version_unknown",
+                "could not read the version of the daemon binary on disk; pass --version <x.y.z>",
+            )),
+        },
+        (None, false) => Ok(running.to_string()),
+    }
+}
+
+/// One warning per daemon (installed on disk, staged by an update) whose
+/// version is newer than the helper `update` fetches for `target`: once
+/// that daemon runs it wants its own helper, and this one is already old.
+fn newer_daemon_warnings(target: &str, installed: Option<&str>, staged: Option<&str>) -> Vec<String> {
+    use k2_root_proto::version::Semver;
+    let Some(t) = Semver::parse(target) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (what, v) in [("installed daemon binary", installed), ("staged daemon update", staged)] {
+        let Some(sv) = v.and_then(Semver::parse) else {
+            continue;
+        };
+        if sv > t {
+            out.push(format!(
+                "the {what} is v{sv}, newer than the helper this fetches (v{t}): \
+                 run `k2 root-helper update --version {sv}` (or `--match-installed`) to install its helper now; \
+                 otherwise the daemon fetches it after it restarts on v{sv}"
+            ));
+        }
+    }
+    out
+}
+
+/// The version of the daemon binary at this process's own path, read with
+/// `k2-daemon --version` (which never boots). After a binary swap Linux
+/// names the running image `<path> (deleted)`; the new file at `<path>` is
+/// the installed daemon. `None` when it can't be read within 5 s.
+fn on_disk_daemon_version() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let path = installed_daemon_path(&exe);
+    if !path.is_file() {
+        return None;
+    }
+    let mut child = std::process::Command::new(&path)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let out = child.wait_with_output().ok()?;
+    parse_daemon_version_line(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn installed_daemon_path(exe: &std::path::Path) -> std::path::PathBuf {
+    let s = exe.to_string_lossy();
+    match s.strip_suffix(" (deleted)") {
+        Some(p) => std::path::PathBuf::from(p),
+        None => exe.to_path_buf(),
+    }
+}
+
+/// `k2-daemon 0.46.5` → `0.46.5`.
+fn parse_daemon_version_line(out: &str) -> Option<String> {
+    let line = out.lines().next()?.trim();
+    let v = line.strip_prefix("k2-daemon ")?.trim();
+    k2_root_proto::version::Semver::parse(v).map(|sv| sv.to_string())
+}
+
+#[cfg(test)]
+mod update_version_tests {
+    use super::*;
+
+    fn code(r: CliResponse) -> String {
+        let v: Value = serde_json::from_str(&r.body).expect("json error body");
+        v["error"]["code"].as_str().expect("error code").to_string()
+    }
+
+    #[test]
+    fn default_target_is_the_running_daemon() {
+        assert_eq!(update_target("0.46.4", None, false, Some("0.46.5")).ok(), Some("0.46.4".into()));
+    }
+
+    #[test]
+    fn version_flag_picks_that_release() {
+        assert_eq!(update_target("0.46.4", Some("0.46.5"), false, None).ok(), Some("0.46.5".into()));
+        let bad = update_target("0.46.4", Some("v0.46.5"), false, None).err().expect("refused");
+        assert_eq!(bad.status, "400 Bad Request");
+        assert_eq!(code(bad), "bad_version");
+    }
+
+    #[test]
+    fn match_installed_reads_the_disk_daemon() {
+        assert_eq!(update_target("0.46.4", None, true, Some("0.46.5")).ok(), Some("0.46.5".into()));
+        let unknown = update_target("0.46.4", None, true, None).err().expect("refused");
+        assert_eq!(code(unknown), "installed_version_unknown");
+        let both = update_target("0.46.4", Some("0.46.5"), true, Some("0.46.5")).err().expect("refused");
+        assert_eq!(code(both), "bad_request");
+    }
+
+    /// The sewlab case: `update` before restarting onto a swapped binary
+    /// fetched the old helper silently. Now it warns, naming the fix.
+    #[test]
+    fn warns_when_installed_or_staged_daemon_is_newer() {
+        let w = newer_daemon_warnings("0.46.4", Some("0.46.5"), None);
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("installed daemon binary is v0.46.5"), "{}", w[0]);
+        assert!(w[0].contains("k2 root-helper update --version 0.46.5"), "{}", w[0]);
+
+        let w = newer_daemon_warnings("0.46.4", Some("0.46.4"), Some("0.46.6"));
+        assert_eq!(w.len(), 1, "{w:?}");
+        assert!(w[0].contains("staged daemon update is v0.46.6"), "{}", w[0]);
+
+        assert!(newer_daemon_warnings("0.46.5", Some("0.46.5"), Some("0.46.4")).is_empty());
+        assert!(newer_daemon_warnings("0.46.5", None, None).is_empty());
+    }
+
+    #[test]
+    fn installed_path_strips_the_deleted_marker() {
+        assert_eq!(
+            installed_daemon_path(std::path::Path::new("/opt/k2/k2-daemon (deleted)")),
+            std::path::PathBuf::from("/opt/k2/k2-daemon")
+        );
+        assert_eq!(
+            installed_daemon_path(std::path::Path::new("/opt/k2/k2-daemon")),
+            std::path::PathBuf::from("/opt/k2/k2-daemon")
+        );
+    }
+
+    #[test]
+    fn parses_the_daemon_version_line() {
+        assert_eq!(parse_daemon_version_line("k2-daemon 0.46.5\n").as_deref(), Some("0.46.5"));
+        assert_eq!(parse_daemon_version_line("something else"), None);
+        assert_eq!(parse_daemon_version_line(""), None);
     }
 }

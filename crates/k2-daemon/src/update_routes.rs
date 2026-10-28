@@ -487,6 +487,22 @@ pub fn create_job(target_version: &str) -> String {
     job_id
 }
 
+/// The highest target version among update jobs that have a verified
+/// binary staged and not yet applied: the daemon that runs after the next
+/// apply. `k2 root-helper update` warns when it is newer than the helper it
+/// is about to fetch.
+pub fn staged_target_version() -> Option<String> {
+    use k2_root_proto::version::Semver;
+    jobs()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .filter(|j| j.phase == Phase::Staged && j.target_known)
+        .filter_map(|j| Semver::parse(&j.target_version).map(|v| (v, j.target_version.clone())))
+        .max_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, v)| v)
+}
+
 /// Snapshot a job's state for the status route.
 pub fn get_job(job_id: &str) -> Option<Job> {
     jobs()

@@ -19252,8 +19252,13 @@ _root_helper_usage() {
 k2 root-helper — K2's one root door on Linux (/usr/local/libexec/k2-root-helper)
 
   k2 root-helper status [--events] [--json]   state, version, protocol, auto-heal, legacy helpers
-  k2 root-helper update [--from <dir>]        install the signed helper for this daemon's version now
+  k2 root-helper update [--from <dir>] [--version <x.y.z> | --match-installed]
+                                              install the signed helper for this daemon's version now
                                               (--from: a dir holding k2-root-helper-linux-<arch> + .sig; air-gap)
+                                              (--version: that release's helper instead; --match-installed: the
+                                               version of the daemon binary on disk, e.g. after a binary swap
+                                               before the restart. It warns when a newer daemon is installed
+                                               or staged than the helper it fetches.)
   k2 root-helper rollback                     one step back to the previous helper
   k2 root-helper install-command              the one root command for a box without it
 
@@ -19325,6 +19330,10 @@ _root_helper_render() {
 import json, os
 d = json.loads(os.environ["K2_RH_BODY"])
 h = d.get("heal")
+if h is not None and d.get("target"):
+    print("helper for :", "v" + str(d["target"]))
+for w in d.get("warnings") or []:
+    print("warning    :", w)
 if h is not None:
     print("heal       :", h.get("result"), {k: v for k, v in h.items() if k != "result"} or "")
     dr = d.get("dropin") or {}
@@ -19382,7 +19391,7 @@ if "state" in d:
 cmd_root_helper() {
     local sub="${1:-status}"
     [ $# -gt 0 ] && shift
-    local as_json=0 events=0 from="" raw
+    local as_json=0 events=0 from="" version="" match_installed=0 raw
     case "$sub" in
         help|--help|-h) _root_helper_usage; return 0 ;;
     esac
@@ -19391,6 +19400,8 @@ cmd_root_helper() {
             --json) as_json=1; shift ;;
             --events) events=1; shift ;;
             --from) from="${2:-}"; shift 2 ;;
+            --version) version="${2:-}"; [ -n "$version" ] || { echo "usage: --version needs x.y.z" >&2; exit 2; }; shift 2 ;;
+            --match-installed) match_installed=1; shift ;;
             -h|--help) _root_helper_usage; return 0 ;;
             *) echo "usage: unknown argument '$1' (k2 root-helper --help)" >&2; exit 2 ;;
         esac
@@ -19404,10 +19415,23 @@ cmd_root_helper() {
             ;;
         update)
             local body="{}"
+            if [ -n "$version" ] && [ "$match_installed" = 1 ]; then
+                echo "usage: give --version or --match-installed, not both" >&2
+                exit 2
+            fi
             if [ -n "$from" ]; then
                 case "$from" in /*) ;; *) from="$(cd "$from" 2>/dev/null && pwd)" || { echo "--from: no such directory" >&2; exit 2; } ;; esac
-                body="$(K2_RH_FROM="$from" python3 -c 'import json, os; print(json.dumps({"fromDir": os.environ["K2_RH_FROM"]}))')"
             fi
+            body="$(K2_RH_FROM="$from" K2_RH_VERSION="$version" K2_RH_MATCH="$match_installed" python3 -c '
+import json, os
+b = {}
+if os.environ["K2_RH_FROM"]:
+    b["fromDir"] = os.environ["K2_RH_FROM"]
+if os.environ["K2_RH_VERSION"]:
+    b["version"] = os.environ["K2_RH_VERSION"]
+if os.environ["K2_RH_MATCH"] == "1":
+    b["matchInstalled"] = True
+print(json.dumps(b))')"
             raw="$(_sidecar_send POST /cli/root-helper/update "$body")" || true
             _root_helper_render "$as_json" "$raw"
             ;;

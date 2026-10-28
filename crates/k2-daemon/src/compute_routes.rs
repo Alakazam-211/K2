@@ -1706,9 +1706,14 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Node: by name, or --any.
     let mut warnings: Vec<String> = Vec::new();
     let node = pick_node(v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
-    // The default `--mem` never asks more than a small node has.
+    // The default `--mem` never asks more than a small node has, nor more
+    // than this server's share on a shared node allows per job.
     let mem_bytes = match (mem_defaulted, compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone())) {
-        (true, Some(o)) if o.caps.mem_bytes > 0 && o.caps.mem_bytes < compute::DEFAULT_MEM_BYTES => Some(o.caps.mem_bytes),
+        (true, Some(o)) => {
+            let node_cap = (o.caps.mem_bytes > 0).then_some(o.caps.mem_bytes);
+            let share_cap = o.share.as_ref().filter(|v| v.shared && v.limits.max_mem_gb > 0).map(|v| u64::from(v.limits.max_mem_gb) << 30);
+            Some([Some(compute::DEFAULT_MEM_BYTES), node_cap, share_cap].into_iter().flatten().min().unwrap_or(compute::DEFAULT_MEM_BYTES))
+        }
         _ => mem_bytes,
     };
     if !artifacts.is_empty() && !node_features(&node).iter().any(|f| f == results::FEATURE_ARTIFACTS) {

@@ -60,6 +60,11 @@ fn ts(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+/// Now, as vault rows write it (RFC 3339, seconds, `Z`).
+pub(crate) fn now_ts() -> String {
+    ts(now())
+}
+
 fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
 }
@@ -144,6 +149,12 @@ fn holders_of(wraps: &[Wrap]) -> Vec<Holder> {
 fn holder_change_allowed(holder: &str, actor: &Actor, proof: &HumanProof) -> Result<()> {
     if holder == "recovery" {
         return Err(VaultError::forbidden("vault_admin_required", "the recovery key has its own steps (k2 vault recovery)"));
+    }
+    if holder == crate::boxmove::MOVE_HOLDER {
+        return Err(VaultError::forbidden(
+            "holder_reserved",
+            "the move key is added by k2 migrate export-secrets and removed by its --unfreeze or the import",
+        ));
     }
     if !actor.is_admin_human() {
         return Err(VaultError::forbidden("vault_admin_required", "only the owner changes who can open the vault"));
@@ -493,6 +504,11 @@ pub struct LocalVault {
     kdf: KdfCost,
     redactor: Mutex<Option<Arc<Redactor>>>,
     recovery_pending: Mutex<HashMap<String, PendingRecovery>>,
+    /// prd-box-move-carry-v1 §3.2: this vault was exported for a box move
+    /// (`moved-out.json` beside vault.db). Reads work; every write is
+    /// refused with `vault_moved_out` (423) except audit rows, roll-ups
+    /// and session placeholders, which never move `gen` while frozen.
+    frozen: std::sync::atomic::AtomicBool,
 }
 
 impl LocalVault {
@@ -615,7 +631,11 @@ impl LocalVault {
             kdf: opts.kdf,
             redactor: Mutex::new(None),
             recovery_pending: Mutex::new(HashMap::new()),
+            frozen: std::sync::atomic::AtomicBool::new(false),
         };
+        if v.dir.join(crate::boxmove::FROZEN_MARKER).exists() {
+            v.frozen.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         v.check_anchor(&header)?;
         v.verify_all();
         // The full audit chain, once, off the sign path (item 3).
@@ -768,12 +788,44 @@ impl LocalVault {
 
     // ── internal: transactions, header, audit ───────────────────────
 
+    /// Was this vault exported for a box move (reads only until
+    /// `k2 migrate export-secrets --unfreeze`)?
+    pub fn is_frozen(&self) -> bool {
+        self.frozen.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    pub(crate) fn set_frozen(&self, on: bool) {
+        // Under the connection lock: a write that already holds it
+        // finishes first, and every later one sees the new state.
+        let _conn = self.conn.lock();
+        self.frozen.store(on, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Run a mutation: body + audit rows + gen bump + header MAC in one
-    /// transaction, then the anchor (VS8 write order).
+    /// transaction, then the anchor (VS8 write order). Refused while the
+    /// vault is frozen for a box move.
     fn mutate<T>(&self, bump_gen: bool, f: impl FnOnce(&Transaction<'_>, &Keys) -> Result<(T, Vec<Entry>)>) -> Result<T> {
+        self.mutate_inner(bump_gen, false, f)
+    }
+
+    /// The writes a frozen vault still takes (audit rows, session
+    /// placeholders). They never move `gen` while frozen, so the export
+    /// snapshot stays the newest anchored state of this vault.
+    fn mutate_frozen_ok<T>(&self, bump_gen: bool, f: impl FnOnce(&Transaction<'_>, &Keys) -> Result<(T, Vec<Entry>)>) -> Result<T> {
+        self.mutate_inner(bump_gen, true, f)
+    }
+
+    fn mutate_inner<T>(&self, bump_gen: bool, frozen_ok: bool, f: impl FnOnce(&Transaction<'_>, &Keys) -> Result<(T, Vec<Entry>)>) -> Result<T> {
         self.flush_rollups_if_due();
         let keys = self.keys.read();
         let mut conn = self.conn.lock();
+        // Checked under the connection lock: the export sets the freeze
+        // under this lock and then snapshots, so no write lands between.
+        let frozen = self.is_frozen();
+        if frozen && !frozen_ok {
+            return Err(crate::boxmove::moved_out());
+        }
+        let bump_gen = bump_gen && !frozen;
         let tx = conn.transaction()?;
         let (out, entries) = f(&tx, &keys)?;
         let mut h = load_header(&tx)?.ok_or_else(|| VaultError::internal("header missing"))?.0;
@@ -800,7 +852,7 @@ impl LocalVault {
         if entries.is_empty() {
             return;
         }
-        let r = self.mutate(false, |_, _| Ok(((), entries)));
+        let r = self.mutate_frozen_ok(false, |_, _| Ok(((), entries)));
         if let Err(e) = r {
             self.tamper_once(format!("audit write failed: {}", e.code));
         }
@@ -831,7 +883,7 @@ impl LocalVault {
     pub fn flush_rollups(&self) {
         let rows = self.rollups.lock().drain();
         if !rows.is_empty() {
-            let _ = self.mutate(true, |_, _| Ok(((), rows)));
+            let _ = self.mutate_frozen_ok(true, |_, _| Ok(((), rows)));
         }
     }
 
@@ -846,13 +898,14 @@ impl LocalVault {
         // Write directly (we're not inside a transaction here).
         let keys = self.keys.read();
         let mut conn = self.conn.lock();
+        let bump = !*self.rollback.lock() && !self.is_frozen();
         let res = (|| -> Result<Header> {
             let tx = conn.transaction()?;
             let mut h = load_header(&tx)?.ok_or_else(|| VaultError::internal("header missing"))?.0;
             for e in &rows {
                 append_audit(&tx, &keys.audit, &mut h, e)?;
             }
-            if !*self.rollback.lock() {
+            if bump {
                 h.gen += 1;
             }
             write_header(&tx, &h, &keys.header)?;
@@ -863,7 +916,7 @@ impl LocalVault {
         drop(keys);
         match res {
             Ok(h) => {
-                if !*self.rollback.lock() {
+                if bump {
                     self.write_anchor(&h);
                 }
             }
@@ -2634,12 +2687,73 @@ impl LocalVault {
         })
     }
 
+    /// The box-move export's own holder (prd-box-move-carry-v1): the data
+    /// key wrapped to the new box's one-time move key, after the person's
+    /// confirm (`proof`). `frozen_ok`: a second export replacing it on an
+    /// already frozen vault. Audited like any confirmed holder change.
+    pub(crate) fn put_move_wrap(&self, recipient: &Recipient, actor: &Actor, proof: &HumanProof, frozen_ok: bool) -> Result<()> {
+        if !actor.is_admin_human() || !matches!(proof, HumanProof::Confirmed { .. }) {
+            return Err(VaultError::forbidden("vault_confirm_required", "a box move export needs the owner's confirm"));
+        }
+        let stamp = actor.stamp();
+        let r = *recipient;
+        let fp = r.fingerprint();
+        let holder = crate::boxmove::MOVE_HOLDER.to_string();
+        self.mutate_inner(true, frozen_ok, |tx, keys| {
+            let mut h = load_header(tx)?.ok_or_else(|| VaultError::internal("header"))?.0;
+            let old = h.wraps.iter().find(|w| w.holder == holder).map(|w| wrap_fingerprint(&w.recipient));
+            let wrapped = agefmt::encrypt(&[r], keys.vdk.as_bytes());
+            h.wraps.retain(|w| w.holder != holder);
+            h.wraps.push(Wrap { holder: holder.clone(), recipient: r.encode(), wrapped: base64_encode(&wrapped), created_at: ts(now()) });
+            write_header(tx, &h, &keys.header)?;
+            let mut rows = vec![];
+            if let Some(o) = &old {
+                rows.push(Entry::new("unwrap", &stamp, &format!("ok:{holder}")).consumer(format!("{HOLDER_CONFIRMED_PREFIX}{o}")));
+            }
+            rows.push(Entry::new("wrap", &stamp, &format!("ok:{holder}")).consumer(format!("{HOLDER_CONFIRMED_PREFIX}{fp}")));
+            Ok(((), rows))
+        })
+    }
+
+    /// Drop the box-move holder (`Ok(false)` when it wasn't there): after
+    /// an import (the one-time key is gone) or an unfreeze (the move is off).
+    pub(crate) fn drop_move_wrap(&self, stamp: &str) -> Result<bool> {
+        let holder = crate::boxmove::MOVE_HOLDER;
+        if !self.wrap_holders().iter().any(|h| h == holder) {
+            return Ok(false);
+        }
+        let stamp = stamp.to_string();
+        self.mutate(true, |tx, keys| {
+            let mut h = load_header(tx)?.ok_or_else(|| VaultError::internal("header"))?.0;
+            let old = h.wraps.iter().find(|w| w.holder == holder).map(|w| wrap_fingerprint(&w.recipient)).unwrap_or_default();
+            h.wraps.retain(|w| w.holder != holder);
+            write_header(tx, &h, &keys.header)?;
+            Ok((true, vec![Entry::new("unwrap", &stamp, &format!("ok:{holder}")).consumer(format!("{HOLDER_CONFIRMED_PREFIX}{old}"))]))
+        })
+    }
+
+    /// The age holders this vault has (`recovery`, `backup`, `move`, …).
+    pub fn wrap_holders(&self) -> Vec<String> {
+        let conn = self.conn.lock();
+        load_header(&conn).ok().flatten().map(|(h, _)| h.wraps.into_iter().map(|w| w.holder).collect()).unwrap_or_default()
+    }
+
+    /// `(gen, audit_seq, audit_mac hex)` from this vault's header.
+    pub(crate) fn head(&self) -> Result<(u64, u64, String)> {
+        let conn = self.conn.lock();
+        let (h, _) = load_header(&conn)?.ok_or_else(|| VaultError::internal("header missing"))?;
+        Ok((h.gen, h.audit_seq, hex(&h.audit_mac)))
+    }
+
     // ── KEK rotation, rekey, rollback acknowledge ───────────────────
 
     /// Rotate the box key: new KEK, re-wrap, then commit it in the store.
     pub fn kek_rotate(&self, actor: &Actor, proof: &HumanProof) -> Result<()> {
         if !actor.is_admin_human() || !matches!(proof, HumanProof::Confirmed { .. }) {
             return Err(VaultError::forbidden("vault_confirm_required", "rotating the box key needs the owner's confirm"));
+        }
+        if self.is_frozen() {
+            return Err(crate::boxmove::moved_out());
         }
         let next = self.ks.stage_next()?;
         let res = self.rewrap_box(&next, &actor.stamp(), "kek-rotate");
@@ -2690,6 +2804,9 @@ impl LocalVault {
     pub fn rekey(&self, actor: &Actor, proof: &HumanProof) -> Result<()> {
         if !actor.is_admin_human() || !matches!(proof, HumanProof::Confirmed { .. }) {
             return Err(VaultError::forbidden("vault_confirm_required", "a rekey needs the owner's confirm"));
+        }
+        if self.is_frozen() {
+            return Err(crate::boxmove::moved_out());
         }
         self.flush_rollups();
         let stamp = actor.stamp();
@@ -2896,6 +3013,11 @@ impl LocalVault {
         // row edited in place is caught here; the sign path checks only
         // the tail.
         self.verify_audit_full();
+        if self.is_frozen() {
+            // Moved out (prd-box-move-carry-v1 §3.2): the ticker's writes
+            // (expiry, retention, card expiry) wait; reads go on.
+            return Ok(vec![]);
+        }
         let cutoff = ts(now() - chrono::Duration::days(VERSION_RETENTION_DAYS));
         let req_cutoff = ts(now() - chrono::Duration::days(REQUEST_EXPIRY_DAYS));
         let nowt = ts(now());
@@ -3170,7 +3292,7 @@ impl LocalVault {
         let h = self.placeholder_hash(&token);
         let (sid, ws, sess, prov) =
             (secret_id.to_string(), workspace_id.to_string(), session_id.to_string(), provider.to_string());
-        self.mutate(false, |tx, _| {
+        self.mutate_frozen_ok(false, |tx, _| {
             tx.execute(
                 "INSERT INTO placeholder (token_hash, secret_id, workspace_id, session_id, provider, created_at, expires_at) VALUES (?1,?2,?3,?4,?5,?6,?7)",
                 params![h, sid, ws, sess, prov, ts(now()), expires_at],
@@ -3229,7 +3351,7 @@ impl LocalVault {
 
     fn drop_session_material(&self, session_id: Option<&str>) -> Result<()> {
         let sess = session_id.map(str::to_string);
-        self.mutate(false, |tx, _| {
+        self.mutate_frozen_ok(false, |tx, _| {
             match &sess {
                 Some(s) => tx.execute("DELETE FROM placeholder WHERE session_id = ?1", params![s])?,
                 None => tx.execute("DELETE FROM placeholder", [])?,
@@ -3349,6 +3471,17 @@ impl LocalVault {
         Ok((h.vault_id, n as u64))
     }
 
+    /// Read a vault.db header without any key (its columns are plain):
+    /// `(vault id, gen, audit_seq, audit_mac hex)`, or `None` when there is
+    /// no vault.db or no header. The header MAC isn't checked here.
+    pub fn peek_header(path: &Path) -> Result<Option<(String, u64, u64, String)>> {
+        if !path.exists() {
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        Ok(load_header(&conn)?.map(|(h, _)| (h.vault_id, h.gen, h.audit_seq, hex(&h.audit_mac))))
+    }
+
     /// How many active `user` secrets this vault holds.
     pub fn user_secret_count(&self) -> u64 {
         let conn = self.conn.lock();
@@ -3390,10 +3523,15 @@ impl LocalVault {
         }
         let kek = ks.load_or_init()?;
         let keys = Keys::derive(vdk, &kek, &vid);
+        // BM-A6: a reused box may keep a higher anchor `gen` from an older
+        // install (the keeper only counts up), so the adopted vault starts
+        // above both: gen = max(this vault.db, the anchor) + 1.
+        let anchor_gen = ks.anchor()?.map(|a| a.gen).unwrap_or(0);
         {
             let mut conn = Connection::open(&path)?;
             let tx = conn.transaction()?;
             let mut h2 = h.clone();
+            h2.gen = h2.gen.max(anchor_gen);
             let (n, ct) = xseal(&keys.boxw, &box_aad(&vid), keys.vdk.as_bytes());
             h2.box_wrap = n.to_vec();
             h2.box_wrap.extend_from_slice(&ct);

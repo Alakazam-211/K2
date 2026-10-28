@@ -140,6 +140,10 @@ impl<T: KeeperTransport> KeyStore for KeeperKeyStore<T> {
         Ok(())
     }
 
+    fn rotation_pending(&self) -> Result<bool> {
+        Ok(self.status()?.next.as_deref() == Some("present"))
+    }
+
     fn stage_next(&self) -> Result<Key32> {
         Self::key_from(self.t.call(&["keep", "kek", "stage"])?)
     }

@@ -608,7 +608,7 @@ impl LocalVault {
         }
         // A new socket is never bound yet: the binding comes from ptyd.
         let s2 = AgentSocket { ptyd_boot: String::new(), pid: 0, started_at: 0, proc_start: 0, ..s.clone() };
-        self.mutate(false, |tx, keys| {
+        self.mutate_frozen_ok(false, |tx, keys| {
             let mac = hmac(&keys.row, &socket_mac_input(&s2));
             tx.execute(SOCKET_UPSERT, rusqlite::params_from_iter(socket_params(&s2, &mac).iter().map(|b| b.as_ref())))?;
             Ok(((), vec![]))
@@ -629,7 +629,7 @@ impl LocalVault {
             return Ok(rec.ptyd_boot == ptyd_boot && rec.pid == pid && rec.started_at == started_at && rec.proc_start == proc_start);
         }
         let s2 = AgentSocket { ptyd_boot: ptyd_boot.to_string(), pid, started_at, proc_start, ..rec };
-        self.mutate(false, |tx, keys| {
+        self.mutate_frozen_ok(false, |tx, keys| {
             let mac = hmac(&keys.row, &socket_mac_input(&s2));
             tx.execute(SOCKET_UPSERT, rusqlite::params_from_iter(socket_params(&s2, &mac).iter().map(|b| b.as_ref())))?;
             Ok(((), vec![]))
@@ -664,7 +664,7 @@ impl LocalVault {
     /// Drop a record (the socket is gone).
     pub fn agent_socket_remove(&self, tag: &str) -> Result<()> {
         let t = tag.to_string();
-        self.mutate(false, |tx, _| {
+        self.mutate_frozen_ok(false, |tx, _| {
             tx.execute("DELETE FROM agent_socket WHERE tag = ?1", params![t])?;
             Ok(((), vec![]))
         })

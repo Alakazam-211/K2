@@ -114,4 +114,11 @@ pub trait KeyStore: Send + Sync {
 
     /// Remove the KEK entirely (after an in-place move to a better store).
     fn remove(&self) -> Result<()>;
+
+    /// A KEK rotation is half done (a staged next key is present). The box
+    /// move export refuses then (BM-A8): the vault may already be wrapped
+    /// to the staged key.
+    fn rotation_pending(&self) -> Result<bool> {
+        Ok(false)
+    }
 }

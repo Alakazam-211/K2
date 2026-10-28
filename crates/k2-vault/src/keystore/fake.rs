@@ -77,6 +77,10 @@ impl KeyStore for FakeKeyStore {
         Ok(())
     }
 
+    fn rotation_pending(&self) -> Result<bool> {
+        Ok(self.next.lock().is_some())
+    }
+
     fn stage_next(&self) -> Result<Key32> {
         let k = Key32::random();
         *self.next.lock() = Some(*k.as_bytes());

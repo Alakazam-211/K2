@@ -14,6 +14,7 @@
 
 pub mod agefmt;
 pub mod audit;
+pub mod boxmove;
 pub mod carry;
 pub mod confirm;
 pub mod crypto;

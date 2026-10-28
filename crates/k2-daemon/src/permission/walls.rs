@@ -102,7 +102,7 @@ const IN_SETTINGS: &str = "a person with the owner role does this, in Settings o
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 32] = [
+pub(crate) const V1_ACTIONS: [&str; 33] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -920,7 +920,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 32);
+        assert_eq!(V1_ACTIONS.len(), 33);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

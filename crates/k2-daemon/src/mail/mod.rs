@@ -183,6 +183,9 @@ pub mod sieve_user;
 // 0.46.6: mailboxes can't write their own Sieve; enotify off; leftover
 // user scripts recorded then removed (boot / enable / upgrade); audit.
 pub mod sieve_lockdown;
+// Live probe against a real Stalwart (ignored; root on the probe box).
+#[cfg(test)]
+mod sieve_lockdown_live;
 pub mod spam;
 pub mod helper;
 pub mod supervisor;

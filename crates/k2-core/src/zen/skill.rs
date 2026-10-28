@@ -582,6 +582,19 @@ saves). `k2 zen guide services` has every rule; `k2 study garden-data` is your s
   (`null` removes a field; fields it doesn't name stay, even ones your code doesn't\n\
   know). It answers `{rev, value}` with the whole document. Prefer it to a\n\
   read-modify-write `put`; agents: `k2 store patch --widget <w> <key> --value '{…}'`.\n\
+- **Files (images, PDFs) are blobs, never base64 in a value:** `const {ref} = await\n\
+  k2.blobs.put(file)`, keep `ref` in a value, draw with `img.src = await k2.blobs.url(ref)`.\n\
+  `k2.pick({accept: ['image/*'], multiple: true})` (cap `uploads:pick`) opens K2's picker\n\
+  from a click; `k2.onDrop(({files, x, y}) => …)` takes drops (a phone never drops: keep a\n\
+  pick button). `k2.download(name, data)` (cap `downloads:save`) saves to Downloads.\n\
+- **History and undo:** `k2.store.history({prefix})` lists 7 days of changes with each\n\
+  `prev`; `k2.store.restore({at | toRev | snapshot, prefixes, except, dryRun})` goes back\n\
+  as one new change; `k2.store.snapshot({prefixes, label})` saves a version (keep its ref\n\
+  under a key). After a restore, match your echoes by rev and take who and when from\n\
+  `by` / `at` (restored values bring their old `updatedBy`); a change with `restore` was a\n\
+  restore. Keys that mirror access go in the manifest's `restoreSkips`. Agents:\n\
+  `k2 store history|snapshot|restore --widget <w> --prefix p/` (always a prefix: the whole\n\
+  widget is the person's).\n\
 - **Agents use `k2 store --widget <name>`** (`get put patch rm list changes batch grants\n\
   export`). Every call needs a grant the person gave (Settings → Gardens → Local Data,\n\
   or `k2 zen data grant`), or one a grant admin gave. `k2 store grants --widget <w>`\n\

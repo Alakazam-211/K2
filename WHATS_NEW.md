@@ -20,6 +20,13 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **Multi-repo workspaces can send code to compute nodes.** `k2 compute run --repo <folder>` ships a git repo nested in the workspace (or a worktree of one) at its own HEAD, `--sha` or `--dirty`, when the workspace folder itself isn't a repo. Run from inside one of those repos and K2 finds it for you. Only that repo goes, never the rest of the workspace or its `.k2/` folder, and each nested repo keeps its own warm build on the node. Needs only this server's update.
 - **Caches that outlive a job.** `k2 compute run --cache NAME` gives the job a folder on the node, `$K2_JOB_CACHE`, that the next run of the same workspace finds again, also for `--no-source` jobs (fuzz corpora, installed tools, a cargo target dir). Caches count toward the node's disk limits and are cleared when idle and the disk runs low. `k2 compute cache` lists them, `k2 compute cache clear` empties them. Needs k2-node 0.46.6 on the node (`k2 compute node update <node>`).
 
+### Gardens
+- **Widgets take the files you pick or drop.** A widget with the new "Take files you pick or drop" cap opens K2's own file picker (`k2.pick`) or takes files you drag onto it from Finder (`k2.onDrop`). The files are kept in that widget's data; the widget never sees where they came from.
+- **Undo for a widget's data.** K2 now keeps every change a widget's data had in the last 7 days, with what each key held before. A widget can show that history, save named versions and go back to an earlier point (`store.history`, `store.snapshot`, `store.restore`), and so can agents you allow (`k2 store history|snapshot|restore --widget`). A restore is one new change you can undo, and K2 keeps a snapshot first.
+- **Settings → Gardens → Local Data** shows each widget's files and quota, can export the data with its images as one zip, and has **Restore…**: pick a change to go back before, choose everything or one part of the data, and see what changes before you confirm. A restore of a whole widget warns when it would also change other parts of its data.
+- **`k2 zen data restore`** restores any widget's data from a terminal outside K2, to a rev, a time or a saved version. An agent always restores part of a widget's data; the whole widget is yours.
+- **`k2 zen widget preview --shot`** draws a widget's images: files in a `blobs/` folder beside the `--data` fixture answer `k2.blobs.get`.
+
 ## 0.46.5 — Agents stay up
 
 ### When you update

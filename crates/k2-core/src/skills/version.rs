@@ -216,7 +216,12 @@ pub const SKILL_VERSION_CANONICAL_AGENT: u32 = 2;
 /// (counts and step kinds, never text); `activity:read` is a bridge cap; the
 /// `k2-activity@1` library draws K2's activity bar. Never infer activity
 /// from messages.
-pub const SKILL_VERSION_ZEN: u32 = 44;
+/// v45 = Garden files and history (0.46.6, prd-garden-board-needs-v1):
+/// blobs, `k2.pick` / `k2.onDrop`, `k2.download`, `store.history|restore|
+/// snapshot`, the restore echo rule, `restoreSkips`, and the agent's
+/// `k2 store history|snapshot|restore --widget` (always a prefix).
+/// (Integrator: renumber if another held branch took 45.)
+pub const SKILL_VERSION_ZEN: u32 = 45;
 /// Bumped to 5 in 0.39.0: same Phase 2.1 A25 verb refresh applied to
 /// the workspace-root template body (Cli tools section, workflow
 /// docs). Was 4 since 0.32.7 (SOURCE sub-regions adoption).

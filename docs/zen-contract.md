@@ -911,6 +911,75 @@ identical texts to one agent in 10 minutes) pauses posting (`sending_off`;
 the frame keeps running) with a small "Paused: too many posts. Resume"
 notice on the widget, in every window, until the person clicks Resume.
 
+### Files, pick and drop, history (garden-blobs-v1, zen-files-v1, garden-history-v1)
+
+prd-garden-board-needs-v1: blobs and `k2.download` (0.46.5, catalog v30);
+`k2.pick`, `k2.onDrop` and full history (0.46.6, catalog v31).
+
+**Bytes on the port.** A frame message may carry one transferred
+`ArrayBuffer` as `bytes`, only on `blobs.put` (16 MiB) and `downloads.save`
+(50 MiB); anywhere else, or anything but an `ArrayBuffer`, is `bad_args`.
+The 64 KB message check can't see transferred bytes, so the custom layer
+checks them itself. A `blobs.get` reply moves its buffer back the same way
+(`{id, ok: true, value, bytes}`). Replies into the frame are not size
+capped; a `store.history` page is up to 128 KiB.
+
+**Files.** A value names a file as the exact string
+`k2blob:sha256-<64 lowercase hex>`; a write naming a file this widget's data
+doesn't hold is `blob_missing`. Files are pending until a key names them
+(dropped after 24 h) and kept 35 days after the last key lets go. Quota:
+256 MiB per widget, 2 GiB in all.
+
+**Pick and drop (`uploads:pick`).** `k2.pick({accept, multiple, max})` opens
+K2's own picker after a press in the frame (within 5 s, once every 2 s,
+10 a minute, one at a time) and answers `{files: [{ref, name, size, mime}]}`
+(`[]` on cancel; `accept` is up to 20 of `.ext`, `type/*`, `type/subtype`;
+the daemon checks each file again). `k2.onDrop(cb)` gets
+`{files, x, y}` (frame CSS pixels) for files dropped on the widget, already
+in its data: on the desktop K2's drop router hands them to a frame that
+listens (and draws a drop ring while a drag is over it); in the web client
+the frame sees the drop itself and the SDK keeps the files with
+`blobs.put`. A phone never drops: always offer a pick button too. Reading a
+picked file back needs `store:read`; the web client's drop also needs
+`store:write`.
+
+**History.** Every change keeps its value before (7 days, up to 32 MiB per
+widget, oldest trimmed first). `store.history({key | prefix, before, after,
+limit})` answers newest first with `value`, `prev`, `prevKind`
+(`value` | `none` | `unknown`), `by`, `at`, and `restore` when a restore
+wrote it; `oldest` is the oldest rev a restore can go back to.
+`store.restore({toRev | at | snapshot, prefixes, except, dryRun})` writes the
+chosen keys back as one new rev you can undo (answer `{id, rev, written,
+deleted, families, keys}`; `no_history` past the kept changes). A
+`store.snapshot({prefixes, except, label})` is a JSON file in the widget's
+data (keep its ref under a key); restoring it always uses the keys it saved.
+The manifest's `restoreSkips` (key prefixes, at most 16) are left alone by a
+restore unless its `prefixes` name them. An agent's restore always names
+`prefixes` (the whole widget is the person's: `k2 zen data restore`, or
+Settings → Gardens → Local Data → Restore…).
+
+**Echoes after a restore (GH13).** Restored values are the old values byte
+for byte, including bookkeeping fields a widget keeps inside them
+(`updatedBy`, `updatedAt`, a batch id). So: match your own echoes by the rev
+your write answered; take who and when from the change's `by` and `at`;
+treat a change with `restore` as a restore by `by`, and don't re-sync or
+re-broadcast it as a fresh edit without checking (a widget that mirrors
+keys into access should hold one that widens access and ask the person).
+
+**What a widget can draw to a canvas (U0).** Draw images into a canvas you
+export from `data:` URLs (`k2.blobs.get(ref)` then `FileReader`), not
+`blob:` URLs. Measured 2026-10-27 in K2's sealed frame
+(`tests/frame/canvas-taint.spec.ts`, Playwright 1.61 on macOS): a `data:`
+SVG with `foreignObject` does **not** taint the canvas in Chromium or WebKit
+(`getImageData` works). But **WebKit encodes no canvas at all in the
+sandboxed (opaque-origin) frame**: `toDataURL` answers an empty `data:` URL
+and `toBlob` answers `null`, even for a canvas with nothing foreign on it.
+So in K2's macOS and Linux webviews (WebKit), make the PNG from
+`getImageData` with a small encoder in the widget, then
+`k2.download(name, bytes)`; `toBlob` works in Chromium (the web client in
+Chrome, WebView2). Still to measure by hand: WKWebView in a signed build,
+WebKitGTK, WebView2.
+
 ### Events
 
 No new event kind: a widget save, a pause and a resume each emit exactly

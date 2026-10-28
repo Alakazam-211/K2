@@ -1323,6 +1323,17 @@ pub(crate) async fn send_response(stream: &mut TcpStream, status: &str, ct: &str
     send_response_with_cookie(stream, status, ct, body, None).await;
 }
 
+/// Refuse a WebSocket upgrade with the complete HTTP response `resp`. The
+/// dispatcher only peeked the upgrade request, so it is read off the socket
+/// first (bounded, so a request already consumed never stalls this): a
+/// socket closed with unread bytes is reset, and on Windows that reset can
+/// reach the client before it reads the refusal.
+pub(crate) async fn refuse_upgrade(stream: &mut TcpStream, resp: &str) {
+    let mut buf = [0u8; 8192];
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(250), stream.read(&mut buf)).await;
+    let _ = stream.write_all(resp.as_bytes()).await;
+}
+
 /// Like [`send_response`] but optionally emits a `Set-Cookie` header
 /// (hosted web client login/logout). `set_cookie` is the header **value**
 /// only (no `Set-Cookie:` prefix) — see [`session_cookie_set_value`] /

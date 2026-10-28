@@ -487,7 +487,7 @@ async fn refuse_http(stream: &mut TcpStream, r: CliResponse) {
         k2_core::frame_policy::CONNECT_HEADER_LINES,
         r.body
     );
-    let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
+    crate::routes::http::refuse_upgrade(stream, &resp).await;
 }
 
 /// `WS /cli/skin/projects/events?group=` for a resolved pass. The project

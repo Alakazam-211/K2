@@ -456,7 +456,7 @@ async fn send_http(stream: &mut TcpStream, status: &str, body: &str) {
         body.len(),
         k2_core::frame_policy::CONNECT_HEADER_LINES,
     );
-    let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
+    crate::routes::http::refuse_upgrade(stream, &resp).await;
 }
 
 /// WS handler. The dispatcher has authenticated `viewer` (a guest pass

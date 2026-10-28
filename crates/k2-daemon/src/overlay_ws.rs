@@ -598,6 +598,8 @@ pub(crate) fn guest_read_wire(mut body: serde_json::Map<String, serde_json::Valu
 /// `skin_raw` (0.46.3): the guest's raw pass, re-resolved on every guest
 /// turn frame ([`guest_ear_check`]); `None` for owner/Connect. A guest
 /// gets ear frames only with `?ear=1` ([`ear_opted_in`]).
+use crate::routes::http::refuse_upgrade;
+
 pub async fn serve_overlay_events_connection(
     stream: &mut TcpStream,
     params: HashMap<String, String>,
@@ -618,7 +620,7 @@ pub async fn serve_overlay_events_connection(
             body.len(),
             frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
         );
-        let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
+        refuse_upgrade(stream, &resp).await;
         return;
     };
 
@@ -637,7 +639,7 @@ pub async fn serve_overlay_events_connection(
                     k2_core::frame_policy::CONNECT_HEADER_LINES,
                     r.body
                 );
-                let _ = tokio::io::AsyncWriteExt::write_all(stream, resp.as_bytes()).await;
+                refuse_upgrade(stream, &resp).await;
                 return;
             }
         }

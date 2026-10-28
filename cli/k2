@@ -19643,16 +19643,23 @@ HOW K2 SENDS IT (fetch only)
                              K2 builds the Authorization: Basic header.
   --inject-dst basic --inject-format 'USER:{}'
                              a Basic login as USER; the person pastes only the password
-  --inject-header NAME       the secret is the value of header NAME (X-Api-Key)
-  --inject-dst query:PARAM   the secret is the URL parameter PARAM (sites can log URLs)
+  --inject-header NAME       the secret, as is, is the value of header NAME (X-Api-Key)
+  --inject-dst query:PARAM   the secret, as is, is the URL parameter PARAM (sites can
+                             log URLs)
   --inject-format 'FORMAT'   how the value is written; {} is the secret, once
-                             ('Token {}'). With only a format, it goes in Authorization.
-  Once saved, only a person can change how it is sent.
+                             ('Token {}'). It combines with --inject-dst or
+                             --inject-header; alone, it goes in Authorization.
+  Once saved, only a person can change how it is sent. Cards take no presets
+  (those are for k2 vault set).
 
 EXAMPLES
   k2 thread secret ops --name STRIPE_KEY --for api.stripe.com
   k2 thread secret ops --name JIRA_LOGIN --kind password --for acme.atlassian.net \
       --inject-dst basic --prompt "Your Jira email and API token, as email:token"
+  k2 thread secret ops --name MAIL_API --for api.mail.example \
+      --inject-dst basic --inject-format 'api:{}'      # user api; paste only the key
+  k2 thread secret ops --name HOOK_TOKEN --for hooks.example.com \
+      --inject-header X-Hook-Token --inject-format 'Token {}'
   k2 thread secret ops --name WEATHER_KEY --for api.weather.example --inject-dst query:appid
   k2 thread secret ops --name GITHUB_CLI --delivery env
 
@@ -28021,7 +28028,10 @@ EOF
 k2 vault presets [--json]
 
 Known key formats: the sites and where the key goes. Use one with
-k2 vault set NAME --preset <id>.
+k2 vault set NAME --preset <id>. Run it to see the ids.
+
+Presets are for k2 vault set only. A secret card (k2 thread secret) has
+none: name the site and how K2 sends it there (k2 thread secret --help).
 
 Example: k2 vault presets
 EOF

@@ -1160,10 +1160,14 @@ fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
 }
 
 /// Stop an instance in the background and record its deployment's result.
+/// It stops only once the connections that reached it before it left the
+/// route have drained (a rollback retires the instance it just switched
+/// away from: stopping it at once dropped a request in flight).
 fn retire(app_id: &str, inst: Instance, result: &'static str, t: &Timings) {
     let grace = Duration::from_secs(t.stop_grace_secs);
     let app_id = app_id.to_string();
     let _ = std::thread::Builder::new().name("app-retire".into()).spawn(move || {
+        router::drain_port_blocking(&app_id, inst.handle.port, Duration::from_secs(inst.drain_secs));
         let _ = engine_of(&inst.handle).stop(&inst.handle, grace);
         let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, result, None));
         audit(&app_id, "stopped", "system", json!({ "deployment": inst.handle.deployment_id, "result": result }));
@@ -1443,7 +1447,11 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
         });
     }
     let grace = Duration::from_secs(t.stop_grace_secs);
+    let app = app_id.to_string();
     let _ = std::thread::Builder::new().name("app-rollback-stop".into()).spawn(move || {
+        // Requests it was still answering finish first (an unhealthy one
+        // may still answer some; an exited one has none).
+        router::drain_port_blocking(&app, bad.handle.port, Duration::from_secs(bad.drain_secs));
         let _ = engine_of(&bad.handle).stop(&bad.handle, grace);
     });
     if rehost {
@@ -1929,6 +1937,8 @@ pub fn stop_app(app: &AppRow, actor: &str) -> Result<(), Fail> {
         router::drain_blocking(&be, Duration::from_secs(d));
     }
     for inst in [live, warm].into_iter().flatten() {
+        // The warm one may still be draining from its own switch.
+        router::drain_port_blocking(&app.app_id, inst.handle.port, Duration::from_secs(inst.drain_secs));
         let _ = engine_of(&inst.handle).stop(&inst.handle, Duration::from_secs(t.stop_grace_secs));
         let _ = db(|c| store::set_result(c, &inst.handle.deployment_id, store::RESULT_STOPPED, None));
     }

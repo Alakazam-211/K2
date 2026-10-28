@@ -13,6 +13,12 @@
 //! - A switch only changes where **new** connections go. Spliced
 //!   connections to the old backend keep running until they close or the
 //!   drain deadline passes; then they are cut.
+//! - A connection is counted on its backend **before** it dials, and a
+//!   connection that read the route just before a switch but counts itself
+//!   only after the old backend's drain began moves to the live backend
+//!   instead ([`splice_with`]). So a drain never misses a request, and an
+//!   old instance is stopped only once its drain is done
+//!   ([`drain_port_blocking`], the supervisor's retire and stop paths).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -81,6 +87,20 @@ fn write_lock() -> &'static Mutex<()> {
     &L
 }
 
+/// Backends a switch or a clear took off the route, while anything still
+/// holds them (a drain thread, a connection spliced to them). Weak: a
+/// backend nobody holds has no connections left to wait for.
+fn displaced() -> &'static Mutex<Vec<std::sync::Weak<Backend>>> {
+    static D: Mutex<Vec<std::sync::Weak<Backend>>> = Mutex::new(Vec::new());
+    &D
+}
+
+fn note_displaced(be: &Arc<Backend>) {
+    let mut d = displaced().lock().unwrap_or_else(|e| e.into_inner());
+    d.retain(|w| w.strong_count() > 0);
+    d.push(Arc::downgrade(be));
+}
+
 /// The live backend for an App label (one atomic load).
 pub fn live(app_id: &str) -> Option<Arc<Backend>> {
     table().load().get(app_id).cloned()
@@ -107,6 +127,9 @@ pub fn switch_with(app_id: &str, port: u16, client_ip: bool) -> (Arc<Backend>, O
     let mut next: Table = (*cur).clone();
     next.insert(app_id.to_string(), be.clone());
     table().store(Arc::new(next));
+    if let Some(p) = &prev {
+        note_displaced(p);
+    }
     (be, prev)
 }
 
@@ -118,6 +141,7 @@ pub fn clear(app_id: &str) -> Option<Arc<Backend>> {
     let mut next: Table = (*cur).clone();
     next.remove(app_id);
     table().store(Arc::new(next));
+    note_displaced(&prev);
     Some(prev)
 }
 
@@ -141,7 +165,30 @@ pub fn drain_blocking(be: &Arc<Backend>, deadline: Duration) -> usize {
     left
 }
 
+/// Drain every backend a switch or a clear took off `app_id`'s route that
+/// points at `port` (an instance about to be stopped), cutting what is
+/// left after `deadline`. Returns how many were cut. Blocking. An instance
+/// is stopped only after this: a request that reached it before the
+/// switch is answered, never dropped with the process.
+pub fn drain_port_blocking(app_id: &str, port: u16, deadline: Duration) -> usize {
+    let mine: Vec<Arc<Backend>> = {
+        let d = displaced().lock().unwrap_or_else(|e| e.into_inner());
+        d.iter().filter_map(|w| w.upgrade()).filter(|b| b.app_id == app_id && b.port == port).collect()
+    };
+    let live = live(app_id);
+    mine.iter().filter(|b| !live.as_ref().is_some_and(|l| Arc::ptr_eq(l, b))).map(|b| drain_blocking(b, deadline)).sum()
+}
+
 struct Guard(Arc<Backend>);
+
+impl Guard {
+    /// Count a connection on `be` (before it dials, so a drain that starts
+    /// in between waits for it).
+    fn count(be: Arc<Backend>) -> Self {
+        be.active.fetch_add(1, Ordering::SeqCst);
+        Guard(be)
+    }
+}
 
 impl Drop for Guard {
     fn drop(&mut self) {
@@ -173,6 +220,25 @@ pub async fn splice_with<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    // Count first, then look at `draining` (both SeqCst; the drain sets
+    // `draining` and then reads the count): either the drain sees this
+    // connection and waits for it, or this connection sees the drain and
+    // takes the live backend instead. A connection that read the route
+    // just before a switch is never spliced to an instance whose drain
+    // has already finished (and that may be stopping).
+    let mut guard = Guard::count(be);
+    for _ in 0..3 {
+        if !guard.0.is_draining() {
+            break;
+        }
+        match live(&guard.0.app_id) {
+            Some(next) if !Arc::ptr_eq(&next, &guard.0) => guard = Guard::count(next),
+            // Nothing live (stopped): keep the old one, still counted.
+            _ => break,
+        }
+    }
+    let be = guard.0.clone();
+    be.total.fetch_add(1, Ordering::SeqCst);
     let mut upstream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(("127.0.0.1", be.port)))
         .await
         .map_err(|_| format!("App {} backend :{} did not accept within 5s", be.app_id, be.port))?
@@ -182,9 +248,7 @@ where
     crate::splice_guard::refuse_self_dial(&upstream)
         .map_err(|why| format!("App {} backend :{}: {why}", be.app_id, be.port))?;
     let _splice_mark = crate::splice_guard::mark(&upstream);
-    be.active.fetch_add(1, Ordering::SeqCst);
-    be.total.fetch_add(1, Ordering::SeqCst);
-    let _guard = Guard(be.clone());
+    let _guard = guard;
     let mut cut = be.cut_tx.subscribe();
     if *cut.borrow() {
         return Ok(());
@@ -602,6 +666,76 @@ mod tests {
         assert!(clear(app).is_some());
         assert!(get_via_front(front).await.contains("503"));
         close_front(app);
+    }
+
+    /// Serve one connection on a fresh listener by splicing it to `be`, as
+    /// a front connection that read the route earlier would.
+    async fn splice_once(be: Arc<Backend>) -> (u16, tokio::task::JoinHandle<Result<(), String>>) {
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let h = tokio::spawn(async move {
+            let (mut s, _) = l.accept().await.unwrap();
+            splice(&mut s, be, None).await
+        });
+        (port, h)
+    }
+
+    /// The race behind the S7 "1 of ~3300 dropped" flake: a connection
+    /// reads the route (the old backend), then the switch happens and the
+    /// old backend's drain sees no connections and ends, and only then
+    /// does the connection dial. It must go to the live backend, never to
+    /// the old instance (which is being stopped).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_connection_that_read_the_route_before_a_drain_goes_to_the_live_backend() {
+        let app = "router-late-pick";
+        let a = tagged_server("A", 0).await;
+        let b = tagged_server("B", 0).await;
+        let (old, _) = switch(app, a);
+        let picked = live(app).expect("routed");
+        assert!(Arc::ptr_eq(&picked, &old));
+
+        let (_, prev) = switch(app, b);
+        let prev = prev.expect("previous backend");
+        let p2 = prev.clone();
+        let cut = tokio::task::spawn_blocking(move || drain_blocking(&p2, Duration::from_secs(5))).await.unwrap();
+        assert_eq!(cut, 0, "nothing was counted on the old backend yet");
+
+        let (port, h) = splice_once(picked).await;
+        let got = get_via_front(port).await;
+        assert!(got.ends_with("B\n"), "the late connection went to the live backend: {got}");
+        h.await.unwrap().unwrap();
+        assert_eq!(prev.active(), 0);
+        assert_eq!(prev.total(), 0, "never spliced to the drained backend");
+        clear(app);
+    }
+
+    /// An instance leaving the route is stopped only after the requests
+    /// it already had are answered: `drain_port_blocking` waits for every
+    /// backend a switch took off that port, and leaves the live one alone.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drain_port_waits_for_requests_on_a_displaced_backend() {
+        let app = "router-drain-port";
+        let a_slow = tagged_server("A-slow", 800).await;
+        let b = tagged_server("B", 0).await;
+        let (old, _) = switch(app, a_slow);
+        let (port, h) = splice_once(old.clone()).await;
+        let inflight = tokio::spawn(get_via_front(port));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(old.active(), 1);
+        switch(app, b);
+        drop(old);
+
+        // The live backend is never drained by its port.
+        assert_eq!(tokio::task::spawn_blocking(move || drain_port_blocking(app, b, Duration::from_secs(5))).await.unwrap(), 0);
+        assert!(!live(app).unwrap().is_draining());
+
+        let t0 = std::time::Instant::now();
+        let cut = tokio::task::spawn_blocking(move || drain_port_blocking(app, a_slow, Duration::from_secs(5))).await.unwrap();
+        assert_eq!(cut, 0, "it finished inside the drain");
+        assert!(t0.elapsed() >= Duration::from_millis(300), "it waited for the request in flight ({:?})", t0.elapsed());
+        assert!(inflight.await.unwrap().ends_with("A-slow\n"), "the old request was answered");
+        h.await.unwrap().unwrap();
+        clear(app);
     }
 }
 

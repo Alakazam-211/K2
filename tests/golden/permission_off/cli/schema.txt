@@ -1398,7 +1398,7 @@ exit: 0
     {
       "name": "hostmail password rotate",
       "usage": "k2 hostmail password rotate <addr> [--json]",
-      "description": "Rotate the IMAP/SMTP password for a hosted address (one secret for both). POST /cli/mail/address/password {address}. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only: an agent can't loosen mail rules on its own sends). Agents without mail_manage never get a mail password. Prints the new secret once (username, IMAP host:443 ALPN, submission :465). Invalidates the mint-time secret. Not rotate-admin. No 993. Cannot GET the old secret.",
+      "description": "Rotate the IMAP/SMTP password for a hosted address (one secret for both). POST /cli/mail/address/password {address}. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only: an agent can't loosen mail rules on its own sends). Agents without mail_manage never get a mail password. Prints the new secret once (username, IMAP host:443 ALPN, submission :465). Invalidates the mint-time secret; the mailbox's API keys and app passwords stop working too (prints how many API keys it revoked). Not rotate-admin. No 993. Cannot GET the old secret.",
       "args": [{"name": "addr", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (once password + client block)."}]
     },
@@ -1675,7 +1675,7 @@ exit: 0
     {
       "name": "hostmail audit-sieve",
       "usage": "k2 hostmail audit-sieve [--json]",
-      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off. Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
+      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off; also K2 mailboxes that can still create their own API keys (sysApiKeyCreate) and every account holding API keys (counts only). Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },

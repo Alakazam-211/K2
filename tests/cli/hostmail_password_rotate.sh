@@ -31,7 +31,7 @@ fi
 
 help="$("$K2" hostmail password rotate --help)"
 printf '%s' "$help" | grep -q 'k2 hostmail password rotate' || fail "rotate --help must be leaf help: $help"
-printf '%s' "$help" | grep -q 'app passwords do not' || fail "rotate --help must say app passwords survive: $help"
+printf '%s' "$help" | grep -q 'Every API key on the mailbox is revoked' || fail "rotate --help must say API keys are revoked: $help"
 printf '%s' "$help" | grep -q '443' || fail "rotate --help must mention 443: $help"
 printf '%s' "$help" | grep -q '465' || fail "rotate --help must mention 465: $help"
 if printf '%s' "$help" | grep -q 'k2 hostmail <command>'; then

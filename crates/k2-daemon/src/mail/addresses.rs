@@ -248,6 +248,10 @@ pub trait AddressEngine {
     /// Callers must pass `stalwart_account_id`, never username lookup
     /// (`rotate_account_secret` is leftover bootstrap-admin recovery).
     fn set_password(&self, stalwart_account_id: &str, new_secret: &str) -> Result<(), String>;
+    /// API key ids on the mailbox (`x:ApiKey/query`, delegated).
+    fn list_api_keys(&self, stalwart_account_id: &str) -> Result<Vec<String>, String>;
+    /// Destroy API keys on the mailbox (`x:ApiKey/set destroy`).
+    fn destroy_api_keys(&self, stalwart_account_id: &str, ids: &[String]) -> Result<(), String>;
 }
 
 impl AddressEngine for StalwartClient {
@@ -277,6 +281,12 @@ impl AddressEngine for StalwartClient {
     }
     fn set_password(&self, stalwart_account_id: &str, new_secret: &str) -> Result<(), String> {
         self.account_set_password(stalwart_account_id, new_secret)
+    }
+    fn list_api_keys(&self, stalwart_account_id: &str) -> Result<Vec<String>, String> {
+        self.api_key_query_ids(stalwart_account_id)
+    }
+    fn destroy_api_keys(&self, stalwart_account_id: &str, ids: &[String]) -> Result<(), String> {
+        self.api_keys_destroy(stalwart_account_id, ids)
     }
 }
 
@@ -541,8 +551,12 @@ fn client_block(hostname: &str, username: &str, password: &str) -> serde_json::V
     })
 }
 
-const ROTATE_NOTE: &str =
-    "IMAP/SMTP sessions on the mailbox password die; app passwords do not.";
+/// ✔ LIVE (Stalwart 0.16.10 and 0.16.25, 2026-10-28): the password write
+/// replaces the account's whole credential list, so app passwords stop
+/// working too (an earlier note said they did not); API keys are also
+/// revoked explicitly after the write.
+const ROTATE_NOTE: &str = "IMAP/SMTP sessions on the old password die. The mailbox's API keys \
+     and app passwords stop working too; add app passwords again with `k2 hostmail app-password`.";
 
 // ── Operations ──────────────────────────────────────────────────────────
 
@@ -679,6 +693,9 @@ pub fn mint_address(
     // user redirect/notify script would forward its mail anywhere).
     let permissions =
         super::sieve_lockdown::mint_permissions(dav_permissions).map_err(AddrError::Engine)?;
+    // 0.46.6: nor mint its own API keys (a key outlives the password).
+    let permissions =
+        super::api_key_lockdown::mint_permissions(permissions).map_err(AddrError::Engine)?;
     let account_id = engine
         .create_account(
             &local,
@@ -864,6 +881,9 @@ pub fn rotate_address_password(
     };
 
     let password = secrets::generate_secret().map_err(AddrError::Engine)?;
+    // 0.46.6: the API keys on the mailbox, listed before the password
+    // write (Stalwart 0.16 drops them with it), revoked after it.
+    let keys_before = engine.list_api_keys(account_id);
     engine
         .set_password(account_id, &password)
         .map_err(AddrError::Engine)?;
@@ -874,11 +894,36 @@ pub fn rotate_address_password(
             "[mail] address password vault write failed after Stalwart set for {address}: {e}"
         );
     }
+    // The new password is set: now no key minted with the old one may
+    // outlive it. A failure here still returns the once password (the
+    // engine already took it), with the failure in the reply.
+    let revoke = super::api_key_lockdown::revoke_after_rotate(
+        keys_before,
+        &|| engine.list_api_keys(account_id),
+        &|ids| engine.destroy_api_keys(account_id, ids),
+    );
+    match &revoke.error {
+        None => k2_core::log_debug!(
+            "[mail] password rotated for {address}; {} API key(s) revoked",
+            revoke.revoked
+        ),
+        Some(e) => k2_core::log_debug!(
+            "[mail] password rotated for {address}; API key revoke INCOMPLETE ({} revoked): {e}",
+            revoke.revoked
+        ),
+    }
 
     let mut v = client_block(&hostname, &row.address, &password);
     v["ok"] = serde_json::Value::Bool(true);
     v["address"] = serde_json::Value::String(row.address.clone());
     v["note"] = serde_json::Value::String(ROTATE_NOTE.to_string());
+    v["apiKeysRevoked"] = serde_json::json!(revoke.revoked);
+    if let Some(e) = revoke.error {
+        v["apiKeysWarning"] = serde_json::Value::String(format!(
+            "API keys on this mailbox may still work: {e}. Rotate again, or check with \
+             `k2 hostmail audit-sieve`."
+        ));
+    }
     Ok(v)
 }
 
@@ -995,6 +1040,13 @@ pub(crate) mod tests {
         pub fail_set_password: bool,
         pub on_create: Option<Box<dyn Fn() + Send + Sync>>,
         next_id: Mutex<u32>,
+        /// API keys on the mailbox (any account id).
+        pub api_keys: Mutex<Vec<String>>,
+        /// Model Stalwart 0.16: the password write drops every key.
+        pub password_drops_keys: bool,
+        pub fail_destroy_keys: bool,
+        /// Ordered engine calls: `set_password`, `list_keys`, `destroy_keys:<ids>`.
+        pub calls: Mutex<Vec<String>>,
     }
 
     impl FakeAddrEngine {
@@ -1011,6 +1063,10 @@ pub(crate) mod tests {
                 fail_set_password: false,
                 on_create: None,
                 next_id: Mutex::new(0),
+                api_keys: Mutex::new(Vec::new()),
+                password_drops_keys: false,
+                fail_destroy_keys: false,
+                calls: Mutex::new(Vec::new()),
             }
         }
     }
@@ -1068,6 +1124,22 @@ pub(crate) mod tests {
                 .lock()
                 .unwrap()
                 .push((stalwart_account_id.to_string(), new_secret.to_string()));
+            self.calls.lock().unwrap().push("set_password".to_string());
+            if self.password_drops_keys {
+                self.api_keys.lock().unwrap().clear();
+            }
+            Ok(())
+        }
+        fn list_api_keys(&self, _stalwart_account_id: &str) -> Result<Vec<String>, String> {
+            self.calls.lock().unwrap().push("list_keys".to_string());
+            Ok(self.api_keys.lock().unwrap().clone())
+        }
+        fn destroy_api_keys(&self, _stalwart_account_id: &str, ids: &[String]) -> Result<(), String> {
+            self.calls.lock().unwrap().push(format!("destroy_keys:{}", ids.join(",")));
+            if self.fail_destroy_keys {
+                return Err("x:ApiKey/set destroy rejected — forbidden".to_string());
+            }
+            self.api_keys.lock().unwrap().retain(|k| !ids.contains(k));
             Ok(())
         }
     }
@@ -1435,6 +1507,8 @@ pub(crate) mod tests {
             for name in super::super::sieve_lockdown::SIEVE_WRITE_PERMISSIONS {
                 assert_eq!(p["disabledPermissions"][name], true, "{p}");
             }
+            // 0.46.6: and the mailbox can't mint its own API keys.
+            assert_eq!(p["disabledPermissions"]["sysApiKeyCreate"], true, "{p}");
             assert!(p["disabledPermissions"].get("davFileGet").is_none(), "no DAV policy: {p}");
         }
 
@@ -1460,6 +1534,7 @@ pub(crate) mod tests {
         assert_eq!(p["disabledPermissions"]["jmapSieveScriptCreate"], true, "{p}");
         assert_eq!(p["disabledPermissions"]["jmapSieveScriptUpdate"], true, "{p}");
         assert_eq!(p["disabledPermissions"]["jmapSieveScriptDestroy"], true, "{p}");
+        assert_eq!(p["disabledPermissions"]["sysApiKeyCreate"], true, "{p}");
         drop(perms);
         reset();
         cleanup_domain(&domain);
@@ -1997,12 +2072,11 @@ pub(crate) mod tests {
         assert_eq!(v["imapStartTls"]["port"], 143);
         assert_eq!(v["submission"]["port"], 465);
         assert_eq!(v["jmap"]["port"], 443);
-        let note = v["note"].as_str().unwrap_or("");
-        assert!(
-            note.contains("IMAP/SMTP sessions on the mailbox password die"),
-            "{note}"
-        );
-        assert!(note.contains("app passwords do not"), "{note}");
+        let note = v["note"].as_str().expect("note");
+        assert!(note.contains("IMAP/SMTP sessions on the old password die"), "{note}");
+        assert!(note.contains("API keys and app passwords stop working too"), "{note}");
+        assert_eq!(v["apiKeysRevoked"], 0, "no keys on this mailbox: {v}");
+        assert!(v.get("apiKeysWarning").is_none(), "{v}");
 
         assert_eq!(
             engine.passwords_set.lock().unwrap().as_slice(),
@@ -2035,6 +2109,74 @@ pub(crate) mod tests {
         assert_eq!(v["password"].as_str().unwrap().len(), 64);
         assert_eq!(engine.passwords_set.lock().unwrap().len(), 1);
         assert!(vault.stored.lock().unwrap().is_empty());
+        cleanup_domain(&domain);
+    }
+
+    /// 0.46.6: a rotation revokes every API key on the mailbox AFTER the
+    /// new password is set, and reports how many. Both server behaviours:
+    /// keys that survive the password write (destroyed here) and Stalwart
+    /// 0.16's whole-credentials write that already dropped them (counted
+    /// from the list taken just before).
+    #[test]
+    fn rotate_revokes_the_mailbox_api_keys_after_the_new_password() {
+        let _mail = crate::mail::mail_server_test_lock();
+        let domain = unique("rot-keys") + ".example";
+        cleanup_domain(&domain);
+        let domain_id = seed_domain(&domain, "verified", Some("stw-k"));
+        let vault = FakeVault::default();
+        let address = format!("keys@{domain}");
+        seed_active_address(&address, &domain_id, &unique("proj"), Some("acc-k"), "active");
+
+        let engine = FakeAddrEngine::ok();
+        *engine.api_keys.lock().unwrap() = vec!["k1".into(), "k2".into()];
+        let v = rotate_address_password(&engine, &vault, &address).expect("rotate");
+        assert_eq!(v["apiKeysRevoked"], 2, "{v}");
+        assert!(v.get("apiKeysWarning").is_none(), "{v}");
+        assert!(engine.api_keys.lock().unwrap().is_empty(), "no key outlives the rotation");
+        assert_eq!(
+            *engine.calls.lock().unwrap(),
+            ["list_keys", "set_password", "list_keys", "destroy_keys:k1,k2"],
+            "keys are destroyed only after the new password is set"
+        );
+
+        let dropping = FakeAddrEngine { password_drops_keys: true, ..FakeAddrEngine::ok() };
+        *dropping.api_keys.lock().unwrap() = vec!["k1".into(), "k2".into(), "k3".into()];
+        let v = rotate_address_password(&dropping, &vault, &address).expect("rotate");
+        assert_eq!(v["apiKeysRevoked"], 3, "counted from the list before the write: {v}");
+        assert_eq!(
+            *dropping.calls.lock().unwrap(),
+            ["list_keys", "set_password", "list_keys", "destroy_keys:"]
+        );
+        cleanup_domain(&domain);
+    }
+
+    /// A revoke that fails still returns the once password (the engine
+    /// already took it) and says loudly that keys may still work.
+    #[test]
+    fn rotate_reports_a_failed_key_revoke_and_keeps_the_password() {
+        let _mail = crate::mail::mail_server_test_lock();
+        let domain = unique("rot-keyfail") + ".example";
+        cleanup_domain(&domain);
+        let domain_id = seed_domain(&domain, "verified", Some("stw-kf"));
+        let vault = FakeVault::default();
+        let address = format!("stuck@{domain}");
+        seed_active_address(&address, &domain_id, &unique("proj"), Some("acc-kf"), "active");
+        let engine = FakeAddrEngine { fail_destroy_keys: true, ..FakeAddrEngine::ok() };
+        *engine.api_keys.lock().unwrap() = vec!["k1".into()];
+        let v = rotate_address_password(&engine, &vault, &address).expect("password still rotated");
+        assert_eq!(v["password"].as_str().expect("once password").len(), 64);
+        assert_eq!(v["apiKeysRevoked"], 0, "{v}");
+        let warn = v["apiKeysWarning"].as_str().expect("warning");
+        assert!(warn.contains("may still work") && warn.contains("forbidden"), "{warn}");
+        assert_eq!(engine.api_keys.lock().unwrap().as_slice(), ["k1"]);
+        // A refused password write revokes nothing (no half rotation).
+        let refusing = FakeAddrEngine { fail_set_password: true, ..FakeAddrEngine::ok() };
+        *refusing.api_keys.lock().unwrap() = vec!["k1".into()];
+        assert!(matches!(
+            rotate_address_password(&refusing, &vault, &address),
+            Err(AddrError::Engine(_))
+        ));
+        assert_eq!(*refusing.calls.lock().unwrap(), ["list_keys"], "no destroy without a new password");
         cleanup_domain(&domain);
     }
 

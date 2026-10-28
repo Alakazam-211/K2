@@ -15,6 +15,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Hosted mail
 - **Hosted mail: mailbox users can no longer create their own server-side filter scripts; K2-managed forwarding is unaffected.** Forwarding and out-of-office you set with `k2 hostmail forward` / `ooo` keep working. Filter scripts that mailbox users had already added are recorded in the auth audit log and removed when K2 starts, and you get one notice listing them. `k2 hostmail audit-sieve` shows the filter scripts on every mailbox without changing anything.
+- **Hosted mail: mailbox users can no longer create mail server API keys, and a password change revokes the keys a mailbox already has.** K2 turns off API key creation on every mailbox when it starts and records each change in the auth audit log. `k2 hostmail password rotate` now revokes every API key on the mailbox and says how many. `k2 hostmail audit-sieve` also lists mailboxes that still hold API keys.
 
 ### Vault
 - **Adding or removing a vault backup key now needs a person and a confirm, and `k2 vault status` lists every key holder.** Run `k2 vault backup key <age1…>` (or `k2 vault backup key remove`) from your own terminal; it asks you to confirm. Status shows who can open the vault (this machine's key, the recovery key, a backup key) by fingerprint. If a backup key was added earlier without a confirm, you get one notice and `k2 vault doctor` names it, so you can remove it if it isn't yours. A vault backup from the K2 app needs a confirm too.

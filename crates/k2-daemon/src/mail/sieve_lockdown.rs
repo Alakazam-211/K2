@@ -50,13 +50,16 @@
 //! scan, read-only, across EVERY user account on the server (K2-minted
 //! or not): non-K2 scripts with their targets (domain only), K2-named
 //! scripts with unrecognised content, which mailboxes still lack the
-//! lock, and whether `enotify` is off. Owner/admin only.
+//! lock, and whether `enotify` is off. Owner/admin only. It also reports
+//! the API key lockdown (`mail::api_key_lockdown`, run from this pass):
+//! K2 mailboxes that can still mint keys, and every account's key count.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::Value;
 
 use crate::cli_response::CliResponse;
+use crate::mail::api_key_lockdown::{self, ApiKeyLockApi};
 use crate::mail::dav::{merge_permissions, protected_reason};
 use crate::mail::jmap::{SieveScriptInfo, StalwartClient};
 use crate::mail::sieve_user;
@@ -911,9 +914,12 @@ pub fn notice_text(report: &ReconcileReport) -> Option<(String, String)> {
 // ── Read-only audit ─────────────────────────────────────────────────────
 
 /// The read-only audit across every account on the server. `k2_minted`
-/// maps K2's account ids to their addresses.
+/// maps K2's account ids to their addresses. 0.46.6: also, per account,
+/// whether it can still mint API keys (`sysApiKeyCreate`, K2 mailboxes)
+/// and how many API keys it holds (`keys`, `x:ApiKey/query`).
 pub fn audit(
     api: &dyn SieveLockApi,
+    keys: &dyn ApiKeyLockApi,
     k2_minted: &HashMap<String, String>,
     is_hosted: &dyn Fn(&str) -> bool,
 ) -> Result<Value, String> {
@@ -929,6 +935,7 @@ pub fn audit(
     let (mut scanned, mut k2_count, mut locked, mut unlocked) = (0usize, 0usize, 0usize, 0usize);
     let (mut user_scripts, mut unrecognised, mut outside, mut errors, mut skipped) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
+    let (mut key_locked, mut key_unlocked, mut key_holders, mut key_total) = (0usize, 0usize, 0usize, 0usize);
     for row in &rows {
         let Some(id) = row.get("id").and_then(|v| v.as_str()) else { continue };
         if protected_reason(row).is_some() {
@@ -939,12 +946,18 @@ pub fn audit(
         let address = k2_minted.get(id).cloned();
         let is_k2 = address.is_some();
         let sieve_locked = is_locked(row.get("permissions"));
+        let api_key_locked = api_key_lockdown::is_locked(row.get("permissions"));
         if is_k2 {
             k2_count += 1;
             if sieve_locked {
                 locked += 1;
             } else {
                 unlocked += 1;
+            }
+            if api_key_locked {
+                key_locked += 1;
+            } else {
+                key_unlocked += 1;
             }
         }
         let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -954,7 +967,27 @@ pub fn audit(
             "address": address,
             "k2Minted": is_k2,
             "sieveLocked": sieve_locked,
+            "apiKeyLocked": api_key_locked,
         });
+        // A K2 mailbox that can still mint keys, or any account holding
+        // keys, is listed even with no scripts.
+        let mut keys_flag = is_k2 && !api_key_locked;
+        match keys.api_key_ids(id) {
+            Ok(k) => {
+                entry["apiKeys"] = serde_json::json!(k.len());
+                if !k.is_empty() {
+                    key_holders += 1;
+                    key_total += k.len();
+                    keys_flag = true;
+                }
+            }
+            Err(e) => {
+                errors += 1;
+                entry["apiKeys"] = Value::Null;
+                entry["apiKeysError"] = serde_json::json!(e);
+                keys_flag = true;
+            }
+        }
         match scan_account(api, id, is_hosted) {
             Ok(scripts) => {
                 let listed: Vec<&ScriptView> = scripts.iter().filter(|s| s.owner != Owner::K2).collect();
@@ -963,7 +996,7 @@ pub fn audit(
                 outside += listed.iter().filter(|s| s.targets.iter().any(|t| t.external)).count();
                 entry["k2Scripts"] = serde_json::json!(scripts.len() - listed.len());
                 entry["scripts"] = Value::Array(listed.iter().map(|s| s.to_json()).collect());
-                if listed.is_empty() && (sieve_locked || !is_k2) {
+                if listed.is_empty() && (sieve_locked || !is_k2) && !keys_flag {
                     continue;
                 }
             }
@@ -991,6 +1024,10 @@ pub fn audit(
             "userScripts": user_scripts,
             "unrecognisedK2Scripts": unrecognised,
             "scriptsWithOutsideTargets": outside,
+            "apiKeyLockedMailboxes": key_locked,
+            "apiKeyUnlockedMailboxes": key_unlocked,
+            "accountsWithApiKeys": key_holders,
+            "apiKeys": key_total,
             "errors": errors,
         },
         "enotify": enotify,
@@ -1096,7 +1133,7 @@ pub fn handle_audit_get(_params: &HashMap<String, String>) -> CliResponse {
         Err(e) => return crate::mail::hosted::err_json("500 Internal Server Error", "error", e),
     };
     let is_hosted = |d: &str| hosted.contains(d);
-    match audit(&client, &minted, &is_hosted) {
+    match audit(&client, &client, &minted, &is_hosted) {
         Ok(v) => CliResponse::ok_json(v.to_string()),
         Err(e) => crate::mail::hosted::err_json("502 Bad Gateway", "engine", e),
     }
@@ -1225,6 +1262,9 @@ fn run_live(reason: &'static str) {
             k2_core::log_debug!("{P} owner notice FAILED: {e}");
         }
     }
+    // 0.46.6: same pass, same engine lock — take `sysApiKeyCreate` off
+    // every K2 mailbox (one audit line per mailbox changed).
+    super::api_key_lockdown::run_with(&client, &accounts, reason);
 }
 
 /// Record one script before anything removes it: the auth-audit log,
@@ -1465,11 +1505,28 @@ mod tests {
         caps: RefCell<Value>,
         fail_destroy: bool,
         reload_fails: bool,
+        /// API keys per account (0.46.6 audit).
+        api_keys: HashMap<String, usize>,
     }
 
     impl Fake {
         fn push(&self, s: String) {
             self.log.borrow_mut().push(s);
+        }
+    }
+
+    impl ApiKeyLockApi for Fake {
+        fn key_account_rows(&self, ids: &[String]) -> Result<Vec<Value>, String> {
+            SieveLockApi::account_rows(self, ids)
+        }
+        fn key_set_permissions(&self, id: &str, _p: &Value) -> Result<(), String> {
+            self.push(format!("keyperm:{id}"));
+            Ok(())
+        }
+        fn api_key_ids(&self, a: &str) -> Result<Vec<String>, String> {
+            self.push(format!("keys:{a}"));
+            let n = self.api_keys.get(a).copied().unwrap_or(0);
+            Ok((0..n).map(|i| format!("{a}-key{i}")).collect())
         }
     }
 
@@ -1676,13 +1733,17 @@ mod tests {
 
     #[test]
     fn audit_is_read_only_and_lists_non_k2_scripts() {
+        let full_lock = api_key_lockdown::mint_permissions(mint_permissions(None).unwrap()).unwrap();
         let mut fake = Fake {
             rows: vec![
                 user_row("a", Value::Null),
-                user_row("b", mint_permissions(None).unwrap()),
+                user_row("b", full_lock.clone()),
+                user_row("c", full_lock),
+                user_row("d", mint_permissions(None).unwrap()),
                 user_row("ext", Value::Null),
             ],
             caps: RefCell::new(Value::Null),
+            api_keys: [("c".to_string(), 1), ("ext".to_string(), 2)].into_iter().collect(),
             ..Fake::default()
         };
         fake.scripts.insert(
@@ -1697,31 +1758,52 @@ mod tests {
         let minted: HashMap<String, String> = [
             ("a".to_string(), "alice@example.test".to_string()),
             ("b".to_string(), "bob@example.test".to_string()),
+            ("c".to_string(), "carol@example.test".to_string()),
+            ("d".to_string(), "dave@example.test".to_string()),
         ]
         .into_iter()
         .collect();
-        let v = audit(&fake, &minted, &hosted).expect("audit");
+        let v = audit(&fake, &fake, &minted, &hosted).expect("audit");
         for entry in fake.log.borrow().iter() {
-            assert!(entry.starts_with("list:"), "audit wrote something: {entry}");
+            assert!(
+                entry.starts_with("list:") || entry.starts_with("keys:"),
+                "audit wrote something: {entry}"
+            );
         }
         assert_eq!(v["readOnly"], true);
         assert_eq!(v["enotify"]["disabled"], false);
-        assert_eq!(v["summary"]["k2Mailboxes"], 2);
-        assert_eq!(v["summary"]["lockedMailboxes"], 1);
+        assert_eq!(v["summary"]["k2Mailboxes"], 4);
+        assert_eq!(v["summary"]["lockedMailboxes"], 3);
         assert_eq!(v["summary"]["unlockedMailboxes"], 1);
         assert_eq!(v["summary"]["userScripts"], 2);
         assert_eq!(v["summary"]["scriptsWithOutsideTargets"], 1);
+        // 0.46.6: API keys.
+        assert_eq!(v["summary"]["apiKeyLockedMailboxes"], 2);
+        assert_eq!(v["summary"]["apiKeyUnlockedMailboxes"], 2, "a and d");
+        assert_eq!(v["summary"]["accountsWithApiKeys"], 2, "c and ext");
+        assert_eq!(v["summary"]["apiKeys"], 3);
+        assert_eq!(v["summary"]["errors"], 0);
         let accts = v["accounts"].as_array().expect("accounts");
-        assert_eq!(accts.len(), 2, "b is clean and locked → not listed: {v}");
+        let ids: Vec<&str> = accts.iter().map(|e| e["accountId"].as_str().unwrap()).collect();
+        assert_eq!(ids, ["a", "c", "d", "ext"], "b is clean and fully locked → not listed: {v}");
         let a = accts.iter().find(|e| e["accountId"] == "a").expect("a");
         assert_eq!(a["address"], "alice@example.test");
         assert_eq!(a["sieveLocked"], false);
+        assert_eq!(a["apiKeyLocked"], false);
+        assert_eq!(a["apiKeys"], 0);
         assert_eq!(a["k2Scripts"], 1);
         assert_eq!(a["scripts"][0]["name"], "mine");
         assert_eq!(a["scripts"][0]["targets"][0]["domain"], "outside.test");
         assert!(!v.to_string().contains("exfil@"), "domain only: {v}");
+        let c = accts.iter().find(|e| e["accountId"] == "c").expect("c holds a key");
+        assert_eq!(c["apiKeyLocked"], true);
+        assert_eq!(c["apiKeys"], 1);
+        let d = accts.iter().find(|e| e["accountId"] == "d").expect("d can still mint keys");
+        assert_eq!(d["sieveLocked"], true);
+        assert_eq!(d["apiKeyLocked"], false);
         let e = accts.iter().find(|e| e["accountId"] == "ext").expect("ext");
         assert_eq!(e["k2Minted"], false);
+        assert_eq!(e["apiKeys"], 2);
     }
 
     // ── K2's own forwards keep working ──

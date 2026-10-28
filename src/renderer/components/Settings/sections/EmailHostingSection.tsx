@@ -1182,7 +1182,7 @@ function AddressesPanel({
     const confirmed = await useConfirmDialogStore.getState().confirm({
       title: `Rotate IMAP/SMTP password for ${row.address}?`,
       message:
-        'IMAP/SMTP sessions on the mailbox password die; app passwords do not. The new password is shown once and cannot be retrieved again.',
+        'IMAP/SMTP sessions on the old password die, and the mailbox\'s API keys and app passwords stop working too. The new password is shown once and cannot be retrieved again.',
       confirmLabel: 'Rotate password',
       destructive: true,
     })
@@ -1243,7 +1243,7 @@ function AddressesPanel({
           </p>
           <p className="text-[10px] text-[var(--color-text-muted)]">
             {onceCreds.note ??
-              'IMAP/SMTP sessions on the mailbox password die; app passwords do not.'}
+              'IMAP/SMTP sessions on the old password die, and the mailbox\'s API keys and app passwords stop working too.'}
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-primary)]">
             <dt className="text-[var(--color-text-muted)]">Host</dt>

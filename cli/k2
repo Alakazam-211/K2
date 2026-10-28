@@ -37308,7 +37308,7 @@ cmd_schema() {
     {
       "name": "hostmail password rotate",
       "usage": "k2 hostmail password rotate <addr> [--json]",
-      "description": "Rotate the IMAP/SMTP password for a hosted address (one secret for both). POST /cli/mail/address/password {address}. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only: an agent can't loosen mail rules on its own sends). Agents without mail_manage never get a mail password. Prints the new secret once (username, IMAP host:443 ALPN, submission :465). Invalidates the mint-time secret. Not rotate-admin. No 993. Cannot GET the old secret.",
+      "description": "Rotate the IMAP/SMTP password for a hosted address (one secret for both). POST /cli/mail/address/password {address}. Owner, or an IT agent (mail_manage) for any mailbox but its own workspace's (exit 3 owner_only: an agent can't loosen mail rules on its own sends). Agents without mail_manage never get a mail password. Prints the new secret once (username, IMAP host:443 ALPN, submission :465). Invalidates the mint-time secret; the mailbox's API keys and app passwords stop working too (prints how many API keys it revoked). Not rotate-admin. No 993. Cannot GET the old secret.",
       "args": [{"name": "addr", "required": true}],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output (once password + client block)."}]
     },
@@ -37585,7 +37585,7 @@ cmd_schema() {
     {
       "name": "hostmail audit-sieve",
       "usage": "k2 hostmail audit-sieve [--json]",
-      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off. Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
+      "description": "Read-only audit of server-side filter (Sieve) scripts on every user account: scripts other than K2's own k2/k2-forward (and K2-named scripts with content K2 did not write), their redirect/notify targets as domains only (external = not hosted here), K2 mailboxes still without the Sieve lock, and whether enotify is off; also K2 mailboxes that can still create their own API keys (sysApiKeyCreate) and every account holding API keys (counts only). Changes nothing. GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.",
       "args": [],
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
@@ -55658,7 +55658,12 @@ elif verb == "password_rotate":
         _ep("imap    ", "imap", 443)
         _ep("submit  ", "submission", 465)
         _ep("jmap    ", "jmap", 443)
+        if "apiKeysRevoked" in d:
+            print("api keys : %s revoked" % d["apiKeysRevoked"])
+        if d.get("apiKeysWarning"):
+            print("WARNING  : %s" % d["apiKeysWarning"])
         print("note: this invalidates the mint-time secret — Mail.app sessions must use the new password")
+        print("note: the mailbox's API keys and app passwords stop working too (k2 hostmail app-password to add new ones)")
 
 elif verb == "ooo_get":
     d = call("GET", "/cli/mail/ooo", params={"address": env("M_ADDRESS")})
@@ -56188,12 +56193,23 @@ elif verb == "audit_sieve":
         print("user scripts     : %s (%s reach outside this box)" % (s.get("userScripts", "?"), s.get("scriptsWithOutsideTargets", "?")))
         print("k2-named, other  : %s" % s.get("unrecognisedK2Scripts", "?"))
         print("enotify          : %s" % enotify)
+        print("api key lock     : %s K2 mailboxes locked, %s NOT locked (can still create API keys)" % (s.get("apiKeyLockedMailboxes", "?"), s.get("apiKeyUnlockedMailboxes", "?")))
+        print("api keys held    : %s on %s account(s)" % (s.get("apiKeys", "?"), s.get("accountsWithApiKeys", "?")))
         if s.get("errors"):
             print("errors           : %s" % s["errors"])
         for a in d.get("accounts") or []:
             who = a.get("address") or ("%s (not a K2 mailbox)" % (a.get("name") or a.get("accountId")))
+            flags = ""
+            if a.get("k2Minted") and not a.get("sieveLocked"):
+                flags += "  [Sieve NOT locked]"
+            if a.get("k2Minted") and a.get("apiKeyLocked") is False:
+                flags += "  [API keys NOT locked]"
+            if a.get("apiKeys"):
+                flags += "  [%s API key(s)]" % a["apiKeys"]
             print("")
-            print("%s%s" % (who, "" if a.get("sieveLocked") or not a.get("k2Minted") else "  [Sieve NOT locked]"))
+            print("%s%s" % (who, flags))
+            if a.get("apiKeysError"):
+                print("  api keys: could not list (%s)" % a["apiKeysError"])
             if a.get("error"):
                 print("  error: %s" % a["error"])
             for sc in a.get("scripts") or []:
@@ -56202,7 +56218,10 @@ elif verb == "audit_sieve":
                 print("  %-24s %-8s %-24s %s" % ('"%s"' % sc.get("name"), "active" if sc.get("active") else "inactive", sc.get("owner"), tg))
         if not d.get("accounts"):
             print("")
-            print("nothing found: no user Sieve scripts and every K2 mailbox is locked")
+            print("nothing found: no user Sieve scripts, no API keys, and every K2 mailbox is locked")
+        elif s.get("apiKeys"):
+            print("")
+            print("To revoke a mailbox's API keys: k2 hostmail password rotate <address>")
 
 elif verb == "dav":
     # Calendars S2: owner DAV policy. status = GET; enable/disable = POST
@@ -63588,7 +63607,8 @@ COMMANDS
                               mail_manage. --domain is 400 this cut.
   audit-sieve [--json]        Read-only: user Sieve scripts on every mailbox
                               (targets as domains), mailboxes without the
-                              Sieve lock, enotify state. Owner/admin.
+                              Sieve lock, enotify state, mailboxes that can
+                              still create API keys or hold any. Owner/admin.
   cert renew                  Retry ACME for the mail hostname (enable is
                               not the retry path; disable is not a retry).
                               If DNS is not ns1/ns2.k2.dev, add mail.<apex>
@@ -63848,8 +63868,11 @@ Rotate the IMAP/SMTP password for a hosted address (one secret for
 both). POST /cli/mail/address/password {address}. The new password is
 printed once with the Mail.app client block (IMAP host:443 ALPN,
 submission :465). This invalidates the mint-time secret — existing
-mailbox-password sessions die, app passwords do not (`k2 hostmail
-app-password`). Cannot GET the old secret. No port 993.
+mailbox-password sessions die. Every API key on the mailbox is revoked
+too (the output says how many), so a key someone made with the old
+password stops working. App passwords on the mailbox also stop working;
+add new ones with `k2 hostmail app-password`. Cannot GET the old secret.
+No port 993.
 
 Who: the owner, or an IT agent (a workspace allowed to manage hosted
 mail) for any mailbox but its own workspace's (a person's mailbox in its
@@ -64918,8 +64941,16 @@ user account on the mail server: scripts that are not K2's own `k2` /
 write (owner `k2-unrecognised-content`), each one's redirect/notify
 targets as DOMAINS only (external = not hosted on this box), and which
 K2 mailboxes still lack the Sieve lock; plus whether enotify is off.
-Changes nothing. K2 itself removes user scripts at daemon start (each
-recorded first in ~/.k2/auth-audit.jsonl, event mail-sieve-removed).
+
+It also covers mail server API keys: which K2 mailboxes can still create
+their own API keys (marked [API keys NOT locked]) and how many API keys
+any account holds (counts only, never the keys). K2 never creates keys
+on a mailbox. To revoke a mailbox's keys, set a new password with
+`k2 hostmail password rotate <address>`.
+
+Changes nothing. K2 itself removes user scripts and turns off API key
+creation on every K2 mailbox when the daemon starts (each recorded in
+~/.k2/auth-audit.jsonl, events mail-sieve-removed / mail-apikey-locked).
 GET /cli/mail/sieve-audit. Owner/admin only, not mail_manage.
 
 USAGE

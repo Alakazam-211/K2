@@ -887,6 +887,13 @@ impl StalwartClient {
     }
 
     /// Rotate an account's Password credential.
+    ///
+    /// ✔ LIVE (0.16.10 and 0.16.25, 2026-10-28): `credentials` is written
+    /// as a whole property, so this REPLACES the account's credential
+    /// list — its API keys and app passwords go too, not only index 0.
+    /// The mailbox rotation still revokes API keys explicitly afterwards
+    /// (`addresses::rotate_address_password`), so it holds if this ever
+    /// becomes a `credentials/0` patch.
     pub fn account_set_password(&self, account_id: &str, new_secret: &str) -> Result<(), String> {
         let resp = self.registry_call(
             "x:Account/set",
@@ -995,6 +1002,36 @@ impl StalwartClient {
             .as_str()
             .map(str::to_string)
             .ok_or_else(|| "x:ApiKey/set create: no secret in reply".to_string())
+    }
+
+    /// API key ids on one account (`x:ApiKey/query`, `accountId` = that
+    /// account, service key by delegation). ✔ LIVE-VERIFIED 0.16.10 and
+    /// 0.16.25 (2026-10-28, tests/mail/stalwart-apikey-probe.py): lists
+    /// only that account's API keys — never its password or app passwords.
+    pub fn api_key_query_ids(&self, account_id: &str) -> Result<Vec<String>, String> {
+        let resp = self.registry_call(
+            "x:ApiKey/query",
+            serde_json::json!({ "accountId": account_id }),
+        )?;
+        Ok(parse_query_ids(&resp))
+    }
+
+    /// Destroy API keys on one account (`x:ApiKey/set destroy`). Every id
+    /// must come back under `destroyed`. Empty `ids` = no call. ✔
+    /// LIVE-VERIFIED on both versions: the key stops working at once;
+    /// the account's password and app passwords are untouched.
+    pub fn api_keys_destroy(&self, account_id: &str, ids: &[String]) -> Result<(), String> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        let resp = self.registry_call(
+            "x:ApiKey/set",
+            serde_json::json!({ "accountId": account_id, "destroy": ids }),
+        )?;
+        for id in ids {
+            parse_set_destroyed("x:ApiKey/set", id, &resp)?;
+        }
+        Ok(())
     }
 
     // ── S2 domain calls ─────────────────────────────────────────────
@@ -8866,6 +8903,46 @@ mod app_password_tests {
         assert_eq!(req["methodCalls"][0][1]["destroy"][0], "ap1");
     }
 
+    /// 0.46.6: the mailbox API key revoke (password rotation) — query
+    /// and destroy ride the mailbox's `accountId` on the service key.
+    #[test]
+    fn api_key_query_and_destroy_address_the_mailbox() {
+        let query = serde_json::json!({
+            "methodResponses": [["x:ApiKey/query", { "ids": ["k1", "k2"] }, "0"]],
+        })
+        .to_string();
+        let destroyed = serde_json::json!({
+            "methodResponses": [["x:ApiKey/set", { "destroyed": ["k1", "k2"] }, "0"]],
+        })
+        .to_string();
+        let partial = serde_json::json!({
+            "methodResponses": [["x:ApiKey/set", {
+                "destroyed": ["k1"],
+                "notDestroyed": { "k2": { "type": "forbidden" } },
+            }, "0"]],
+        })
+        .to_string();
+        let (port, rx) = spawn_mock_server(vec![SESSION.to_string(), query, destroyed, partial]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+        assert_eq!(c.api_key_query_ids("mbox-1").expect("query"), vec!["k1", "k2"]);
+        let ids = vec!["k1".to_string(), "k2".to_string()];
+        c.api_keys_destroy("mbox-1", &ids).expect("destroy");
+        let err = c.api_keys_destroy("mbox-1", &ids).expect_err("a key left behind is an error");
+        assert!(err.contains("k2") || err.contains("forbidden"), "{err}");
+        // Nothing to destroy: no call at all (the mock has no reply left).
+        c.api_keys_destroy("mbox-1", &[]).expect("empty is a no-op");
+
+        let _sess = rx.recv().expect("session");
+        let q = body_json(&rx.recv().expect("query"));
+        assert_eq!(q["methodCalls"][0][0], "x:ApiKey/query");
+        assert_eq!(q["methodCalls"][0][1]["accountId"], "mbox-1");
+        let d = body_json(&rx.recv().expect("destroy"));
+        assert_eq!(d["methodCalls"][0][0], "x:ApiKey/set");
+        assert_eq!(d["methodCalls"][0][1]["accountId"], "mbox-1");
+        assert_eq!(d["methodCalls"][0][1]["destroy"], serde_json::json!(["k1", "k2"]));
+        assert!(d["methodCalls"][0][1].get("create").is_none(), "{d}");
+    }
+
     #[test]
     fn account_set_password_patches_credentials_0_only() {
         let set_reply = serde_json::json!({
@@ -8888,6 +8965,9 @@ mod app_password_tests {
         assert_ne!(creds["0"]["@type"], "AppPassword");
     }
 
+    /// Request shape only (a recorded mock). ⚠ LIVE 2026-10-28 (0.16.10 and
+    /// 0.16.25): the real server drops app passwords on this write — see
+    /// `account_set_password` and tests/mail/stalwart-apikey-probe.py.
     #[test]
     fn app_password_survives_primary_rotate_recorded_jmap() {
         let created = serde_json::json!({

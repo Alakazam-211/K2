@@ -213,7 +213,10 @@ fn sender_add(who: &Who, v: &J) -> Result<J, CliResponse> {
         relay: s(v, "relay").map(str::to_string),
         via: s(v, "via").map(str::to_string),
     };
-    confirm(who, v, super::CONFIRM_SENDER, &address).map_err(|f| confirm_needed(f, super::CONFIRM_SENDER, &address))?;
+    // A send-only apex sender's confirm names the bounce subdomain too (its
+    // account, MAIL FROM and DKIM live there): an apex-only confirm doesn't do.
+    let bind = super::sender_binding(&address, args.via.as_deref());
+    confirm(who, v, super::CONFIRM_SENDER, &bind).map_err(|f| confirm_needed(f, super::CONFIRM_SENDER, &bind))?;
     super::senders::add(&args, &actor(who), super::now()).map_err(|f| super::fail_response(&f))
 }
 

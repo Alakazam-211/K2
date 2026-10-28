@@ -2017,6 +2017,40 @@ fn n7_a_bare_domain_sends_through_its_hosted_bounce_subdomain_and_k2_stamps_the_
 }
 
 #[test]
+fn n7_the_owners_confirm_covers_the_bounce_subdomain_and_an_apex_only_confirm_is_refused() {
+    let f = fx("n7bind");
+    let add = |body: J| {
+        let r = owner_routes::handle(owner_routes::SENDER_ADD, Who::Owner, true, body.to_string().as_bytes(), &HashMap::new());
+        (status_of(&r), body_of(&r))
+    };
+    // Without a confirm: the CLI is told to confirm the address AND the bounce subdomain.
+    let (st, v) = add(json!({"address": "noreply@brand.test", "via": "Notify.Brand.test."}));
+    let bind = sender_binding("noreply@brand.test", Some(DOMAIN));
+    assert_eq!(bind, format!("noreply@brand.test|{DOMAIN}"));
+    assert_eq!((st, v["error"]["action"].clone(), v["error"]["secretId"].clone()), (403, json!(CONFIRM_SENDER), json!(bind)), "{v}");
+    // The sheet names both.
+    let sheet = confirm_reason(CONFIRM_SENDER, Some(&bind)).expect("ours").expect("text");
+    assert!(sheet.contains("noreply@brand.test") && sheet.contains(DOMAIN), "{sheet}");
+    // An old apex-only confirm doesn't add a send-only sender, nor one for another subdomain.
+    let vault = crate::vault::ensure_test_vault();
+    for wrong in ["noreply@brand.test".to_string(), sender_binding("noreply@brand.test", Some("bounce.brand.test"))] {
+        let tok = vault.confirm.mint(CONFIRM_SENDER, Some(&wrong), "owner", "local-auth");
+        let (st, v) = add(json!({"address": "noreply@brand.test", "via": DOMAIN, "confirmToken": tok}));
+        assert_eq!((st, v["error"]["code"].clone()), (403, json!("vault_confirm_required")), "{wrong}: {v}");
+    }
+    assert!(f.engine.created.lock().unwrap().is_empty(), "nothing created");
+    let tok = vault.confirm.mint(CONFIRM_SENDER, Some(&bind), "owner", "local-auth");
+    let (st, v) = add(json!({"address": "noreply@brand.test", "via": DOMAIN, "confirmToken": tok}));
+    assert_eq!(st, 200, "{v}");
+    assert_eq!(v["sender"]["envelope"], "noreply@notify.brand.test");
+    // A hosted sender's confirm is still the address alone.
+    assert_eq!(sender_binding("a@notify.brand.test", None), "a@notify.brand.test");
+    assert_eq!(sender_binding_parts("a@b.test"), Some(("a@b.test", None)));
+    assert_eq!(sender_binding_parts("a@b.test|x.b.test"), Some(("a@b.test", Some("x.b.test"))));
+    assert_eq!(sender_binding_parts("a@b.test|"), None);
+}
+
+#[test]
 fn n7_strict_dmarc_on_both_a_hosted_apex_and_a_stray_via_are_refused() {
     let f = fx("n7strict");
     f.dns.set("_dmarc.brand.test", "v=DMARC1; p=reject; adkim=s; aspf=s");

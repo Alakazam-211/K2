@@ -71,7 +71,7 @@ pub const SWITCH_ENV: &str = "K2_EMAIL_NOTIFICATIONS";
 
 /// Vault confirm actions (`secretId` noted per action). Every caller,
 /// the owner token included, needs one: agents can read the token.
-pub const CONFIRM_SENDER: &str = "email-sender"; // the address
+pub const CONFIRM_SENDER: &str = "email-sender"; // the address, or address|via (sender_binding)
 pub const CONFIRM_SYSTEM_SENDER: &str = "email-system-sender"; // the sender address
 pub const CONFIRM_RELAY: &str = "email-relay"; // host|fromDomain|username (relay_binding)
 pub const CONFIRM_TEST: &str = "email-test"; // the sender address
@@ -134,7 +134,17 @@ pub fn confirm_reason(action: &str, secret_id: Option<&str>) -> Option<Result<St
     };
     let clean = |s: &str| -> String { s.chars().filter(|c| !c.is_control()).take(120).collect() };
     Some(Ok(match action {
-        CONFIRM_SENDER => format!("add {} as a notification sender (K2 creates a send-only account no agent can read)", clean(id)),
+        CONFIRM_SENDER => match sender_binding_parts(id) {
+            Some((address, Some(via))) => format!(
+                "add {} as a notification sender through {} (K2 creates a send-only account no agent can read on {}; \
+                 its envelope sender and DKIM signature are there, and K2 stamps From: {})",
+                clean(address),
+                clean(via),
+                clean(via),
+                clean(address)
+            ),
+            _ => format!("add {} as a notification sender (K2 creates a send-only account no agent can read)", clean(id)),
+        },
         CONFIRM_SYSTEM_SENDER => format!("make {} the system sender: K2's own password resets and codes come from it", clean(id)),
         CONFIRM_RELAY => {
             let Some((host, from_domain, username)) = relay_binding_parts(id) else {
@@ -193,6 +203,30 @@ pub fn app_binding_parts(id: &str) -> Option<(&str, &str)> {
     let (svc, sender) = id.split_once('|')?;
     let (svc, sender) = (svc.trim(), sender.trim());
     (!svc.is_empty() && sender.contains('@')).then_some((svc, sender))
+}
+
+/// The `secretId` an `email-sender` confirm for `sender add` binds: the
+/// address, or `address|via` for a send-only apex sender (N7), so the
+/// owner's confirm covers the bounce subdomain too and an apex-only
+/// confirm can't add one.
+pub fn sender_binding(address: &str, via: Option<&str>) -> String {
+    let address = address.trim();
+    // `via` as `sender add` reads it (senders::add_send_only).
+    match via.map(|v| v.trim().trim_end_matches('.').to_ascii_lowercase()).filter(|v| !v.is_empty()) {
+        Some(via) => format!("{address}|{via}"),
+        None => address.to_string(),
+    }
+}
+
+/// `(address, via)` out of a [`sender_binding`].
+pub fn sender_binding_parts(id: &str) -> Option<(&str, Option<&str>)> {
+    match id.split_once('|') {
+        Some((a, v)) => {
+            let (a, v) = (a.trim(), v.trim());
+            (a.contains('@') && !v.is_empty() && !v.contains('|')).then_some((a, Some(v)))
+        }
+        None => id.contains('@').then_some((id.trim(), None)),
+    }
 }
 
 /// The `secretId` an `email-relay` confirm binds (L11): host, the From

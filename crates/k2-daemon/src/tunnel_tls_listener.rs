@@ -194,6 +194,66 @@ const CERT_CHECK_INTERVAL: Duration = Duration::from_secs(12 * 60 * 60);
 // H2 (E2E splice DoS hardening) — timeouts + a global connection cap
 // ─────────────────────────────────────────────────────────────────────
 
+/// How often a run of deduped TLS handshake failures is summarised in the
+/// log (see [`HandshakeLogThrottle`]).
+const HANDSHAKE_LOG_SUMMARY_EVERY: Duration = Duration::from_secs(10 * 60);
+
+/// Dedupe for "connection ended … TLS handshake …" lines (0.46.6): a client
+/// retrying a bad handshake, or a scanner, wrote one line per attempt
+/// forever. The first failure of a window is logged as is; the rest are
+/// counted, and the first failure after the window ends is logged with the
+/// count of those suppressed before it. Other connection errors (upstream,
+/// routing) are not throttled.
+#[derive(Debug, Default)]
+struct HandshakeLogThrottle {
+    window_start: Option<std::time::Instant>,
+    suppressed: u64,
+}
+
+impl HandshakeLogThrottle {
+    /// The line to log for one failure at `now`, or `None` to stay quiet.
+    fn note(&mut self, now: std::time::Instant, line: String) -> Option<String> {
+        match self.window_start {
+            Some(start) if now.saturating_duration_since(start) < HANDSHAKE_LOG_SUMMARY_EVERY => {
+                self.suppressed += 1;
+                None
+            }
+            _ => {
+                let out = if self.suppressed > 0 {
+                    format!(
+                        "{line} (and {} more TLS handshake failures not logged in the {} min before)",
+                        self.suppressed,
+                        HANDSHAKE_LOG_SUMMARY_EVERY.as_secs() / 60
+                    )
+                } else {
+                    line
+                };
+                self.window_start = Some(now);
+                self.suppressed = 0;
+                Some(out)
+            }
+        }
+    }
+}
+
+fn handshake_log_throttle() -> &'static std::sync::Mutex<HandshakeLogThrottle> {
+    static T: std::sync::OnceLock<std::sync::Mutex<HandshakeLogThrottle>> = std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+/// The log line for a connection that ended with `err`, or `None` when a
+/// handshake failure is deduped ([`HandshakeLogThrottle`]).
+fn connection_ended_line(peer: std::net::SocketAddr, err: &str, now: std::time::Instant) -> Option<String> {
+    let line = format!("[daemon/e2e] connection ended peer={peer}: {err}");
+    if !err.starts_with("TLS handshake") {
+        return Some(line);
+    }
+    handshake_log_throttle()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .note(now, line)
+}
+
 /// Deadline for the inbound TLS handshake. A client (or the relay
 /// forwarding ciphertext) that opens the TCP/TLS connection but never
 /// completes the handshake would otherwise pin a spawned task — and a
@@ -609,8 +669,11 @@ async fn accept_loop(
                         // diagnosable without packet capture. Peer is the
                         // frpc local hop (usually 127.0.0.1) when E2E sits
                         // behind the tunnel — still distinguishes concurrent
-                        // dialers and timestamps the storm.
-                        log_debug!("[daemon/e2e] connection ended peer={peer}: {e}");
+                        // dialers and timestamps the storm. 0.46.6: handshake
+                        // failures are deduped (first one, then a count).
+                        if let Some(line) = connection_ended_line(peer, &e, std::time::Instant::now()) {
+                            log_debug!("{line}");
+                        }
                     }
                 });
             }
@@ -886,9 +949,17 @@ async fn serve_one(
     // `None` = no header, an old relay, or not a loopback peer: Apps then
     // get no client-IP headers at all, never a client's.
     let peer = tcp.peer_addr().map_err(|e| format!("peer address: {e}"))?;
-    let client_ip = crate::client_ip::read_tunnel_preamble(&mut tcp, peer, deadline)
-        .await
-        .map_err(|e| format!("TLS handshake failed: {e}"))?;
+    let client_ip = match crate::client_ip::read_tunnel_preamble(&mut tcp, peer, deadline).await {
+        Ok(ip) => ip,
+        // 0.46.6: a loopback connect-and-close is a liveness probe, not a
+        // client: the tunnel connector checks frpc's localPort (this
+        // listener) every 10 s (`probe_local_desync`), and `ensure` checks
+        // the recorded port the same way. Each used to log "TLS handshake
+        // failed: closed before the first byte" (163 MB of
+        // daemon.stderr.log on z3mbpZ). Nothing to serve, nothing to log.
+        Err(e) if e == crate::client_ip::CLOSED_BEFORE_FIRST_BYTE => return Ok(()),
+        Err(e) => return Err(format!("TLS handshake failed: {e}")),
+    };
 
     let mut tls = match tokio::time::timeout_at(deadline, acceptor.accept(tcp)).await {
         Ok(Ok(tls)) => tls,
@@ -1887,6 +1958,70 @@ mod tests {
             elapsed < TLS_HANDSHAKE_TIMEOUT + Duration::from_secs(3),
             "handshake should have been abandoned ~{TLS_HANDSHAKE_TIMEOUT:?} in, took {elapsed:?}"
         );
+    }
+
+    // ── 0.46.6: daemon.stderr.log spam from the E2E listener ────────
+
+    /// The tunnel connector's localPort probe (and `ensure`'s) is a TCP
+    /// connect-and-close every 10 s. serve_one treats it as a quiet probe:
+    /// `Ok`, so nothing is logged (it used to log "TLS handshake failed:
+    /// closed before the first byte" every time).
+    #[tokio::test]
+    async fn loopback_connect_and_close_is_a_quiet_probe() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let _home = crate::test_support::TempHome::new();
+        let (cert_pem, key_pem) =
+            k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
+        let server_config =
+            k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("server config");
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+        let port = l.local_addr().unwrap().port();
+        // Exactly what `local_port_reachable` does: connect, then drop.
+        let probe = std::thread::spawn(move || {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+            drop(std::net::TcpStream::connect(addr).expect("probe connect"));
+        });
+        let (server_tcp, _peer) = l.accept().await.expect("accept");
+        probe.join().expect("probe thread");
+        let res = tokio::time::timeout(Duration::from_secs(5), serve_one(server_tcp, acceptor, port))
+            .await
+            .expect("serve_one returns at once on a closed probe");
+        assert_eq!(res, Ok(()), "a connect-and-close probe must not be a handshake failure");
+    }
+
+    /// A repeating handshake failure logs the first line, stays quiet for
+    /// the rest of the window, then logs the next one with the count.
+    #[test]
+    fn handshake_failures_are_deduped_with_a_count() {
+        let mut t = HandshakeLogThrottle::default();
+        let t0 = std::time::Instant::now();
+        assert_eq!(t.note(t0, "first".into()).as_deref(), Some("first"));
+        for i in 1..=59u64 {
+            assert_eq!(t.note(t0 + Duration::from_secs(10 * i), "again".into()), None, "attempt {i}");
+        }
+        let later = t0 + HANDSHAKE_LOG_SUMMARY_EVERY + Duration::from_secs(1);
+        let line = t.note(later, "next".into()).expect("a summary after the window");
+        assert!(line.starts_with("next (and 59 more TLS handshake failures"), "{line}");
+        // The count starts over.
+        assert_eq!(t.note(later + Duration::from_secs(1), "x".into()), None);
+        let quiet_window = later + HANDSHAKE_LOG_SUMMARY_EVERY;
+        assert_eq!(t.note(quiet_window, "y".into()).as_deref(), Some("y (and 1 more TLS handshake failures not logged in the 10 min before)"));
+        // A failure after a window with nothing suppressed is plain.
+        let much_later = quiet_window + HANDSHAKE_LOG_SUMMARY_EVERY * 2;
+        assert_eq!(t.note(much_later, "z".into()).as_deref(), Some("z"));
+    }
+
+    /// Only handshake failures are throttled; other endings always log.
+    #[test]
+    fn only_handshake_failures_are_throttled() {
+        let peer: std::net::SocketAddr = "127.0.0.1:5555".parse().unwrap();
+        let now = std::time::Instant::now();
+        for _ in 0..3 {
+            let line = connection_ended_line(peer, "upstream refused", now).expect("not throttled");
+            assert_eq!(line, "[daemon/e2e] connection ended peer=127.0.0.1:5555: upstream refused");
+        }
     }
 
     // ── H2: global connection-cap semaphore ─────────────────────────

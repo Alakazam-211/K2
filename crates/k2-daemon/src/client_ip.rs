@@ -121,6 +121,10 @@ pub fn trusted_source(p: &proxy_v2::Parsed) -> Option<IpAddr> {
     }
 }
 
+/// The [`read_tunnel_preamble`] error for a loopback peer that connected
+/// and closed without sending a byte.
+pub const CLOSED_BEFORE_FIRST_BYTE: &str = "closed before the first byte";
+
 /// Read frpc's PROXY v2 header off a connection the E2E listener accepted,
 /// before the TLS handshake, by `deadline`.
 ///
@@ -130,7 +134,9 @@ pub fn trusted_source(p: &proxy_v2::Parsed) -> Option<IpAddr> {
 /// - A header → it is consumed; `Ok(Some(ip))` when it names a real
 ///   client ([`trusted_source`]), else `Ok(None)`.
 /// - A malformed or truncated header, a close or the deadline → `Err`;
-///   the caller drops the connection.
+///   the caller drops the connection. A close before any byte is exactly
+///   [`CLOSED_BEFORE_FIRST_BYTE`] (a loopback liveness probe, see
+///   `tunnel_tls_listener::serve_one`).
 pub async fn read_tunnel_preamble(
     tcp: &mut TcpStream,
     peer: SocketAddr,
@@ -143,7 +149,7 @@ pub async fn read_tunnel_preamble(
         let mut first = [0u8; 1];
         let n = tcp.peek(&mut first).await.map_err(|e| format!("read before TLS: {e}"))?;
         if n == 0 {
-            return Err("closed before the first byte".to_string());
+            return Err(CLOSED_BEFORE_FIRST_BYTE.to_string());
         }
         if first[0] != proxy_v2::SIGNATURE[0] {
             return Ok(None);

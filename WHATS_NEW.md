@@ -38,6 +38,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 - **A Linux server stops cleanly after a no-downtime reload.** On servers whose K2 unit the root helper manages, a stop or restart after `systemctl reload` used to kill the daemon at once, skipping its shutdown (a stop could leave agents running). The helper's unit settings now wait for the daemon to finish, as K2's own unit files already did.
 - **`sudo k2-node …` works on Linux compute nodes.** The node installer now links `/usr/local/bin/k2-node` to the node binary, so you no longer need its full path.
 - **`k2 daemon status` shows whether agents survive restarts** and how many came back at the last restart, like `k2 daemon survive status` (macOS and Linux; `--json` has `ptyd` and `adopted`).
+- **The daemon's error log stops filling up with K2 Connect lines.** K2's own 10-second tunnel check was logged as a failed TLS handshake each time (one log reached 163 MB). Those checks are quiet now, and real handshake failures are logged once, then as a count every 10 minutes.
 
 ## 0.46.5 — Agents stay up
 

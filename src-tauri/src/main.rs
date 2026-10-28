@@ -2,6 +2,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // `k2 --version`: print and exit before anything starts. dev-build.sh /
+    // release.sh exec an uninstalled bundle this way (AMFI check); a full
+    // app start from there kickstarted the user's running daemon.
+    if let Some(version) = k2_lib::version_flag_output(std::env::args()) {
+        println!("{version}");
+        return;
+    }
+
     // 0.37.9 — raise RLIMIT_NOFILE so the Tauri process can hold
     // enough fds for many concurrent PTYs / WS sockets / watchers.
     // launchd-launched apps inherit a 256/1024 soft limit by default,

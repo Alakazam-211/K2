@@ -597,6 +597,67 @@ fn reload_daemon_launch_agent(plist_path: &std::path::Path) {
 /// blocking reqwest runtime the old Kessel-T0 spawn path needed warm.
 pub fn warm_http_pool_async() {}
 
+/// `k2 --version` / `k2 -V` on the app binary: the text to print, or `None`
+/// to start the app normally.
+///
+/// `main` prints this and exits BEFORE Tauri starts. dev-build.sh and
+/// release.sh exec the freshly signed, NOT installed bundle with `--version`
+/// as their AMFI launch check (AMFI kills a bad signature at exec, before
+/// `main`, so an early exit still proves the binary launches). Before this,
+/// `--version` was ignored and the whole app started from the build folder:
+/// `check_daemon_version_and_restart` saw that bundle's `k2-daemon` newer
+/// than the running daemon (the mtime check) and kickstarted the user's live
+/// daemon. A version check must never touch the running daemon.
+pub fn version_flag_output<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .skip(1)
+        .any(|a| matches!(a.as_ref(), "--version" | "-V"))
+        .then(|| format!("k2 {}", env!("CARGO_PKG_VERSION")))
+}
+
+#[cfg(test)]
+mod version_flag_tests {
+    use super::version_flag_output;
+
+    #[test]
+    fn version_flag_prints_the_app_version_and_skips_startup() {
+        let want = format!("k2 {}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(version_flag_output(["k2", "--version"]), Some(want.clone()));
+        assert_eq!(version_flag_output(["k2", "-V"]), Some(want));
+    }
+
+    #[test]
+    fn no_version_flag_starts_the_app() {
+        assert_eq!(version_flag_output(["k2"]), None);
+        assert_eq!(version_flag_output(["k2", "k2://open"]), None);
+        // The program path itself is never read as the flag.
+        assert_eq!(version_flag_output(["--version"]), None);
+    }
+
+    /// main.rs must check the flag before anything else runs (Tauri, the
+    /// daemon version check, fd limits).
+    #[test]
+    fn main_checks_version_flag_first() {
+        let main_src = include_str!("main.rs");
+        let body = &main_src[main_src.find("fn main()").expect("fn main")..];
+        let flag = body
+            .find("version_flag_output")
+            .expect("main must call version_flag_output");
+        let run = body.find("k2_lib::run()").expect("main must call run");
+        let nofile = body
+            .find("raise_nofile_limit")
+            .expect("main raises the fd limit");
+        assert!(
+            flag < run && flag < nofile,
+            "--version must short-circuit before startup"
+        );
+    }
+}
+
 // ── 0.39.x (Issue #6): webview liveness watchdog ─────────────────────
 //
 // K2SO can land in a black, unresponsive window where the renderer JS

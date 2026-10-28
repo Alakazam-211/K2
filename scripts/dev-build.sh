@@ -82,6 +82,9 @@ k2_daemon_helper_verify "$APP" || exit 1
 k2_daemon_helper_verify_signed "$APP" || exit 1
 
 echo ""; echo "Step 4: launch smoke-test (AMFI exec check)..."
+# `k2 --version` prints and exits before the app starts (0.46.6), so this
+# check never runs the daemon version check from an uninstalled bundle
+# (that used to kickstart the running daemon). Exit 0 = launchable.
 "$APP/Contents/MacOS/k2" --version >/tmp/k2-dev-smoke.out 2>&1 &
 SMOKE_PID=$!
 sleep 2

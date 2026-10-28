@@ -681,6 +681,9 @@ k2_daemon_helper_verify_signed "target/release/bundle/macos/K2.app"
 # BEFORE wasting a notarization round-trip or publishing an un-launchable build.
 echo ""
 echo "Step 3.5: Launch smoke-test (AMFI exec check)..."
+# `k2 --version` prints and exits before the app starts (0.46.6), so this
+# check never runs the daemon version check from an uninstalled bundle
+# (that used to kickstart the running daemon). Exit 0 = launchable.
 SMOKE_BIN="target/release/bundle/macos/K2.app/Contents/MacOS/k2"
 "$SMOKE_BIN" --version >/tmp/k2-smoke.out 2>&1 &
 SMOKE_PID=$!

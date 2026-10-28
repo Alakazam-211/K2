@@ -128,7 +128,7 @@ updater-key rollout:
    K2.app.tar.gz (Developer ID team 36B8R93HXV, stapled and notarized, the
    version, the signed daemon helper and k2-ptyd); the macOS daemon (arm64,
    one build marker for the version, the embedded k2-ptyd signed by the
-   team); the Windows setup only when the approval named it (a PE for x64;
+   team); the Windows setup only when the approval named it (an NSIS installer, whose stub is a 32-bit PE even for x64;
    no independent evidence).
 
 If z3mbp's sitting 2 slips past the landing, U2b needs a second pubkeys

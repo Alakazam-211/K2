@@ -194,20 +194,43 @@ signs "K2.app.tar.gz with its evidence" "$tmp/app5.tgz" u2 K2.app.tar.gz "$V5"
 printf 'not a tarball' > "$tmp/junk"; refuses "a file that isn't a tarball" "$tmp/junk" u1 K2.app.tar.gz 0.46.25 "no approved signing session"
 unset K2SIGN_TEST_NOTARIZED K2SIGN_TEST_ANCHOR
 
-echo "== the Windows setup: only when approved, and a PE32+ for x64 =="
+echo "== the Windows setup: only when approved, and an NSIS installer (Tauri's stub is a 32-bit PE) =="
 V6=0.46.26; open_session "$V6" "$B1" --windows K2.app.tar.gz setup.exe "K2_${V6}_x64-setup.exe"
-python3 -I -c '
-import struct, sys
-b = bytearray(512); b[0:2] = b"MZ"; struct.pack_into("<I", b, 0x3C, 0x80); b[0x80:0x84] = b"PE\0\0"
-struct.pack_into("<H", b, 0x84, int(sys.argv[2], 16)); open(sys.argv[1], "wb").write(bytes(b))' "$tmp/setup.exe" 8664
-python3 -I -c '
-import struct, sys
-b = bytearray(512); b[0:2] = b"MZ"; struct.pack_into("<I", b, 0x3C, 0x80); b[0x80:0x84] = b"PE\0\0"
-struct.pack_into("<H", b, 0x84, int(sys.argv[2], 16)); open(sys.argv[1], "wb").write(bytes(b))' "$tmp/setup86.exe" 14c
-refuses "a 32-bit setup" "$tmp/setup86.exe" u1 setup.exe "$V6" "is not an x64 Windows executable"
-signs "the approved Windows setup (u1 name)" "$tmp/setup.exe" u1 setup.exe "$V6"
+# mkpe <out> <machine hex> [nsis|no-nsis|misaligned]: shaped like Tauri's NSIS
+# setup: a 32-bit (x86) stub PE, then NSIS's first header (flags, 0xDEADBEEF,
+# "NullsoftInst", header and data sizes) on a 512-byte boundary, then data.
+mkpe() {
+    python3 -I - "$@" <<'PY'
+import os, struct, sys
+out, machine, kind = sys.argv[1], int(sys.argv[2], 16), sys.argv[3]
+stub = bytearray(0x9000)                          # the stub's sections (a real one is ~ 36 KB)
+stub[0:2] = b"MZ"; struct.pack_into("<I", stub, 0x3C, 0x80)
+stub[0x80:0x84] = b"PE\0\0"; struct.pack_into("<H", stub, 0x84, machine)
+stub[0x98:0x9A] = b"\x0b\x01"                     # optional header magic: PE32 (NSIS stubs are 32-bit)
+stub[0x200:0x217] = b"Nullsoft Install System"    # the stub's own string, not the header
+fh = struct.pack("<I", 0) + b"\xef\xbe\xad\xde" + b"NullsoftInst" + struct.pack("<II", 4096, 70000)
+body = os.urandom(70000)
+if kind == "nsis":
+    data = bytes(stub) + fh + body
+elif kind == "misaligned":
+    data = bytes(stub) + b"\0" * 3 + fh + body
+else:
+    data = bytes(stub) + body
+open(out, "wb").write(data)
+PY
+}
+mkpe "$tmp/setup.exe" 14c nsis
+mkpe "$tmp/setup-nonsis.exe" 14c no-nsis
+mkpe "$tmp/setup-mis.exe" 14c misaligned
+mkpe "$tmp/setup-arm.exe" aa64 nsis
+mkpe "$tmp/setup64.exe" 8664 nsis
+refuses "a PE that isn't an NSIS installer" "$tmp/setup-nonsis.exe" u1 setup.exe "$V6" "is not an NSIS installer"
+refuses "an NSIS signature off the 512-byte boundary" "$tmp/setup-mis.exe" u1 setup.exe "$V6" "is not an NSIS installer"
+refuses "a PE for another machine (ARM64)" "$tmp/setup-arm.exe" u1 setup.exe "$V6" "machine 0xaa64"
+printf 'not a PE' > "$tmp/setup-txt.exe"; refuses "not an executable" "$tmp/setup-txt.exe" u1 setup.exe "$V6" "is not a Windows executable"
+signs "the approved Windows setup: Tauri's 32-bit NSIS stub (u1 name)" "$tmp/setup.exe" u1 setup.exe "$V6"
 signs "…and the u2 name" "$tmp/setup.exe" u2 "K2_${V6}_x64-setup.exe" "$V6"
-refuses "S3-7 the same setup name, other bytes" "$tmp/setup86.exe" u2 "K2_${V6}_x64-setup.exe" "$V6" "REFUSED-SWAP"
+refuses "S3-7 the same setup name, other bytes" "$tmp/setup64.exe" u2 "K2_${V6}_x64-setup.exe" "$V6" "REFUSED-SWAP"
 refuses "S3-8 a Windows setup outside a windows session" "$tmp/setup.exe" u1 setup.exe "$V5" "is not in $V5's approved asset list"
 
 echo "== gh-selfcheck: the pinned gh, the token and gh's JSON fields (cli/cli's attestation of the gh zip) =="

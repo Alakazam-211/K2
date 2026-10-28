@@ -309,7 +309,7 @@ pub async fn probe_install_update() -> Result<InstallUpdateProbe, String> {
 //
 // prd-security-sweep-0464-v1 SS4 (option C): the Tauri plugin verifies a
 // download with ONE key, the `signature` field, which carries the retired
-// key U1 for installs older than 0.46.5. This app instead trusts only
+// key U1 for installs older than 0.46.6. This app instead trusts only
 // `k2_release_keys::UPDATER_KEYS` (U2 + the offline backup U3) and reads
 // `k2_signatures` from latest.json. The plugin still finds the update
 // (`check()`, which verifies nothing) and installs the bytes (`install()`,

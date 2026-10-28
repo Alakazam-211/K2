@@ -48,7 +48,7 @@ use crate::cli_response::CliResponse;
 // The update keys live in `k2_release_keys::UPDATER_KEYS` (SS4): U2 and
 // the offline backup U3. The daemon never trusts the retired key U1, and
 // never reads the manifest's old `sig` field (that is for installs older
-// than 0.46.5).
+// than 0.46.6).
 
 /// The marketing version this build reports + compares against the
 /// manifest. Mirrors what `/boot-status` returns.
@@ -66,14 +66,14 @@ pub struct Artifact {
     /// Direct download URL for the `k2-daemon-<os>-<arch>` binary.
     pub url: String,
     /// Direct download URL for the detached minisign `.sig` made with the
-    /// retired key U1. Kept in the manifest for installs older than 0.46.5;
+    /// retired key U1. Kept in the manifest for installs older than 0.46.6;
     /// this daemon never reads it.
     pub sig: String,
     /// Lowercase hex SHA-256 of the binary (independent integrity check
     /// layered on top of the signature).
     pub sha256: String,
     /// Direct download URL for the `.sig2` (U2/U3, SS4): the only signature
-    /// this daemon accepts. Absent on releases before 0.46.5.
+    /// this daemon accepts. Absent on releases before 0.46.6.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig2: Option<String>,
 }
@@ -1142,7 +1142,7 @@ pub fn handle_app_update_progress(body: &[u8]) -> CliResponse {
 /// worker thread spawned by [`handle_start`].
 fn run_download_stage(job_id: &str, artifact: &Artifact, version: &str) {
     // SS4: only the U2/U3 signature counts. A manifest without `sig2` is a
-    // release before 0.46.5 (or a broken publish): refuse before
+    // release before 0.46.6 (or a broken publish): refuse before
     // downloading anything.
     let Some(sig2_url) = artifact.sig2.clone() else {
         return fail_job(

@@ -205,10 +205,13 @@ fn helpers() {
     assert_eq!(key_id_of(LEGACY_UPDATER_KEY_B64).as_deref(), Some(LEGACY_UPDATER_KEY_ID));
     assert_eq!(url_asset_name("https://x/y/K2.app.tar.gz?a=1"), Some("K2.app.tar.gz"));
     assert!(version_older_than("0.46.3", FIRST_U2_SIGNED_VERSION));
-    // v0.46.4 shipped signed with U1 only (`4ee5c5e61`): a 0.46.5+ verifier
-    // must call it a retired-key release, never point people at it.
+    // v0.46.4 (`4ee5c5e61`) and v0.46.5 (`63e96484a`) shipped signed with U1
+    // only: a 0.46.6+ verifier must call them retired-key releases, never
+    // point people at them. The cutover is this one constant.
+    assert_eq!(FIRST_U2_SIGNED_VERSION, "0.46.6");
     assert!(version_older_than("0.46.4", FIRST_U2_SIGNED_VERSION));
-    assert!(!version_older_than("0.46.5", FIRST_U2_SIGNED_VERSION));
+    assert!(version_older_than("0.46.5", FIRST_U2_SIGNED_VERSION));
+    assert!(!version_older_than("0.46.6", FIRST_U2_SIGNED_VERSION));
     assert!(!version_older_than("0.47.0", FIRST_U2_SIGNED_VERSION));
     assert!(version_older_than("v0.9.99", FIRST_U2_SIGNED_VERSION));
     assert!(version_older_than("junk", FIRST_U2_SIGNED_VERSION));

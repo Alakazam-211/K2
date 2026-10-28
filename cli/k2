@@ -4252,7 +4252,7 @@ cmd_daemon_uninstall() {
 # lands: then `k2 daemon install` refuses every binary.
 _DAEMON_UPDATE_PUBKEYS=""
 # Releases before this carry no .sig2 (signed with the retired key only).
-_DAEMON_FIRST_U2_VERSION="0.46.5"
+_DAEMON_FIRST_U2_VERSION="0.46.6"
 
 _DAEMON_DEFAULT_LATEST_URL="https://github.com/Alakazam-211/K2/releases/latest/download/daemon-latest.json"
 _DAEMON_VERSION_URL_TMPL="https://github.com/Alakazam-211/K2/releases/download/v%s/daemon-latest.json"
@@ -4423,11 +4423,11 @@ cmd_daemon_install() {
                 echo "                           [--manifest-url <url>] [--no-service] [--dry-run]"
                 echo ""
                 echo "  Install the STANDALONE (headless, no-GUI) K2 daemon binary"
-                echo "  from a signed GitHub release (0.46.5 or newer). Minisign-verifies"
+                echo "  from a signed GitHub release ($_DAEMON_FIRST_U2_VERSION or newer). Minisign-verifies"
                 echo "  the binary with the embedded K2 update keys before installing."
                 echo ""
                 echo "  --version       install a specific release tag (default: latest)."
-                echo "                  0.46.5 or newer; an OLDER release than the one installed"
+                echo "                  $_DAEMON_FIRST_U2_VERSION or newer; an OLDER release than the one installed"
                 echo "                  is allowed here on purpose (a local, explicit action). The"
                 echo "                  daemon's own self-update refuses a downgrade unless the"
                 echo "                  owner asks for it."
@@ -4495,7 +4495,7 @@ cmd_daemon_install() {
     mver=$(_daemon_manifest_version "$manifest")
     url=$(_daemon_manifest_field "$manifest" "$platform" "url") || true
     # Only the K2 update keys' signature (.sig2) counts; `sig` is for
-    # installs older than 0.46.5.
+    # installs older than $_DAEMON_FIRST_U2_VERSION.
     sig=$(_daemon_manifest_field "$manifest" "$platform" "sig2") || true
     sha256=$(_daemon_manifest_field "$manifest" "$platform" "sha256") || true
 

@@ -460,7 +460,9 @@ pub fn slice_name(slot: Slot) -> String {
 
 /// What `tenant.prepare` / `tenant.wipe` run (the wall isn't offered
 /// without them).
-pub const TENANT_TOOLS: &[&str] = &["setfacl", "useradd", "groupadd", "userdel", "groupdel"];
+/// `unshare` is for the wall's self-test (a walled job can't make a user
+/// namespace, SB-A1).
+pub const TENANT_TOOLS: &[&str] = &["setfacl", "useradd", "groupadd", "userdel", "groupdel", "unshare"];
 
 /// `no-lan` (V62): every non-public range through which a job could reach
 /// a machine on the LAN, the tailnet or a multicast group, and the IPv6
@@ -590,7 +592,17 @@ pub struct UnitPlan {
     pub lan_extra: Vec<String>,
     /// Secret-env (SE22): no core dumps (`LimitCORE=0`).
     pub no_core: bool,
+    /// A `team` tenant's unit (SB-A1): no new user or network namespaces
+    /// ([`TEAM_RESTRICT_NAMESPACES`]), whatever the host's AppArmor sysctl
+    /// says. The owner's and `own` tenants' units keep them (Chromium's
+    /// sandbox in Playwright tests needs a user namespace).
+    pub restrict_userns: bool,
 }
+
+/// What a `team` tenant's unit may never create (SB-A1): the kernel's
+/// user-namespace and network-namespace code is reachable from inside
+/// them, so another server's jobs keep away from it on every node.
+pub const TEAM_RESTRICT_NAMESPACES: &str = "RestrictNamespaces=~user net";
 
 /// The fixed template (argv[0] is `systemd-run`).
 pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
@@ -650,6 +662,9 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
         // A secret job's memory never lands in a core file (SE22).
         prop("LimitCORE=0".into());
     }
+    if p.restrict_userns {
+        prop(TEAM_RESTRICT_NAMESPACES.into());
+    }
     prop(format!("TimeoutStopSec={}", p.stop_grace_secs.clamp(1, 600)));
     // The job's /tmp and /var/tmp are its own folders in its job root (not
     // PrivateTmp, whose /var/tmp/systemd-private-* sits outside the slot):
@@ -697,6 +712,20 @@ pub fn systemd_run_argv(p: &UnitPlan) -> Vec<String> {
     a.push("job-exec".into());
     a.push(p.root.join(crate::wall::EXEC_SPEC).display().to_string());
     a
+}
+
+/// The wall's self-test, run inside a throwaway unit: root's processes are
+/// hidden, `/dev/shm` is the unit's own, and no user namespace can be made
+/// (a team tenant's limit, SB-A1). `unshare` must be there to prove the
+/// last one, so its absence fails the test rather than passing it.
+pub const WALL_SELFTEST_SCRIPT: &str =
+    "test ! -e /proc/1/cmdline && test -z \"$(ls -A /dev/shm)\" && command -v unshare >/dev/null && ! unshare -U true 2>/dev/null && echo k2-wall-ok";
+
+/// Whether a slot's unit gets [`TEAM_RESTRICT_NAMESPACES`]: every tenant
+/// unless its `servers.toml` line says `own`. The owner (slot 0) and `own`
+/// servers keep today's unit.
+pub fn team_unit(slot: Slot, trust: Option<share::Trust>) -> bool {
+    slot != OWNER_SLOT && trust != Some(share::Trust::Own)
 }
 
 fn refuse(c: &str, m: impl Into<String>) -> AdminRefusal {
@@ -967,7 +996,10 @@ impl Executor {
     /// starts as the owner's job user, and from inside it PID 1 (root's)
     /// is invisible and `/dev/shm` is its own. A kernel without hidepid
     /// (< 5.8), cgroup BPF or IPC namespaces, or a systemd that drops a
-    /// property, fails it, and the node offers no `tenant-wall`.
+    /// property, fails it, and the node offers no `tenant-wall`. It also
+    /// proves a team tenant's namespace limit holds (SB-A1): systemd skips
+    /// `RestrictNamespaces=` without seccomp, so `unshare -U` must fail
+    /// inside the unit.
     pub fn wall_selftest(&self) -> Result<(), String> {
         static PASSED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
         if PASSED.get().is_some() {
@@ -995,12 +1027,13 @@ impl Executor {
             "PrivateIPC=yes".into(),
             "TemporaryFileSystem=/dev/shm:mode=1777".into(),
             format!("IPAddressDeny={}", NO_LAN_DENY.join(" ")),
+            TEAM_RESTRICT_NAMESPACES.into(),
             "RuntimeMaxSec=20".into(),
         ] {
             a.push("-p".into());
             a.push(p);
         }
-        a.extend(["--".into(), "/bin/sh".into(), "-c".into(), "test ! -e /proc/1/cmdline && test -z \"$(ls -A /dev/shm)\" && echo k2-wall-ok".into()]);
+        a.extend(["--".into(), "/bin/sh".into(), "-c".into(), WALL_SELFTEST_SCRIPT.into()]);
         let mut child = std::process::Command::new(prog)
             .args(&a)
             .env_clear()
@@ -1201,7 +1234,11 @@ impl Executor {
         } else {
             Network::On
         };
-        let network = if s.tenant == OWNER_SLOT { asked } else { asked.min(tenant_entry(&self.paths.config_dir, s.tenant)?.network) };
+        // Root reads the slot's line itself, so a node process can never
+        // get an owner- or own-shaped unit for a team server (SB-A1).
+        let entry = if s.tenant == OWNER_SLOT { None } else { Some(tenant_entry(&self.paths.config_dir, s.tenant)?) };
+        let network = entry.as_ref().map_or(asked, |e| asked.min(e.network));
+        let restrict_userns = team_unit(s.tenant, entry.as_ref().map(|e| e.trust));
         let v = systemd();
         if s.tenant != OWNER_SLOT && v < MIN_SYSTEMD_TENANT {
             return Err(refuse(share::codes::TENANT_WALL_MISSING, format!("systemd {v} is older than {MIN_SYSTEMD_TENANT}: no tenant jobs here")));
@@ -1223,6 +1260,7 @@ impl Executor {
             private_ipc: v >= MIN_SYSTEMD_PRIVATE_IPC,
             lan_extra: if network == Network::NoLan { lan_deny_extra() } else { Vec::new() },
             no_core: s.stdin,
+            restrict_userns,
         };
         {
             let mut g = starting().lock().unwrap_or_else(|e| e.into_inner());
@@ -1237,7 +1275,7 @@ impl Executor {
                 event: "job".into(),
                 // `stdin` only says a secret-env pipe was relayed; root never
                 // sees what is in it.
-                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin}),
+                detail: json!({"unit": unit, "tenant": s.tenant, "network": network.as_str(), "ok": r.is_ok(), "stdin": s.stdin, "restrict_namespaces": restrict_userns}),
                 ..Default::default()
             },
             self.now(),
@@ -1496,7 +1534,36 @@ mod tests {
             private_ipc: false,
             lan_extra: Vec::new(),
             no_core: false,
+            restrict_userns: false,
         }
+    }
+
+    /// SB-A1: a team tenant's unit can't make user or network namespaces;
+    /// the owner's and an `own` tenant's units are unchanged (Chromium's
+    /// sandbox), and only that one property differs.
+    #[test]
+    fn only_a_team_tenant_unit_restricts_namespaces() {
+        assert!(!team_unit(OWNER_SLOT, None), "owner");
+        assert!(!team_unit(OWNER_SLOT, Some(share::Trust::Team)), "slot 0 is always the owner");
+        assert!(!team_unit(2, Some(share::Trust::Own)), "own-trust server");
+        assert!(team_unit(2, Some(share::Trust::Team)), "team server");
+        assert!(team_unit(2, None), "a tenant with no known trust fails closed");
+        let plain = systemd_run_argv(&plan());
+        assert!(!plain.iter().any(|x| x.starts_with("RestrictNamespaces")), "owner unit: {plain:?}");
+        let mut p = plan();
+        p.restrict_userns = true;
+        let a = systemd_run_argv(&p);
+        assert!(a.iter().any(|x| x == "RestrictNamespaces=~user net"), "{a:?}");
+        let i = a.iter().position(|x| x == "RestrictNamespaces=~user net").unwrap();
+        assert_eq!(a[i - 1], "-p", "passed as a unit property");
+        let mut b = a.clone();
+        b.retain(|x| x != TEAM_RESTRICT_NAMESPACES && x != "-p");
+        let mut c = plain.clone();
+        c.retain(|x| x != "-p");
+        assert_eq!(b, c, "only RestrictNamespaces differs");
+        assert!(WALL_SELFTEST_SCRIPT.contains("! unshare -U true"), "the self-test proves the limit holds");
+        assert!(WALL_SELFTEST_SCRIPT.contains("command -v unshare"), "a missing unshare fails the self-test");
+        assert!(TENANT_TOOLS.contains(&"unshare"));
     }
 
     /// SE22: a secret-env unit gets `LimitCORE=0`; every other unit's

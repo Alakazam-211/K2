@@ -330,7 +330,10 @@ impl SandboxBackend for Passthrough {
         // killpg on its pgid is daemon-safe.
         #[cfg(unix)]
         let child_pid: Option<i32> = Some(pty.child().id() as i32);
-        #[cfg(not(unix))]
+        // Windows: the ConPTY child's pid, from alacritty's exit watcher.
+        #[cfg(windows)]
+        let child_pid: Option<i32> = pty.child_watcher().pid().map(|p| p.get() as i32);
+        #[cfg(not(any(unix, windows)))]
         let child_pid: Option<i32> = None;
 
         Ok(SpawnedChild { pty, child_pid })

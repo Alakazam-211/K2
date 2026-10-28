@@ -427,7 +427,11 @@ fn pid_alive(pid: i32) -> bool {
     {
         pid > 0 && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        u32::try_from(pid).is_ok_and(|p| p > 0 && k2_core::win_proc::pid_alive(p))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         false

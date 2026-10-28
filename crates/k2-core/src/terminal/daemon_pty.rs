@@ -1948,6 +1948,14 @@ impl DaemonPtySession {
                 }
             }
         }
+        #[cfg(windows)]
+        {
+            if let Some(pid) = self.child_pid().and_then(|p| u32::try_from(p).ok()).filter(|p| *p > 0) {
+                if !crate::win_proc::pid_alive(pid) {
+                    return false;
+                }
+            }
+        }
         true
     }
 
@@ -2593,6 +2601,14 @@ impl DaemonPtySession {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
+        }
+
+        // Windows: no process groups or signals. End the child and its
+        // descendants (an agent CLI's node/tool children) the way killpg
+        // does on Unix; closing the ConPTY alone left them running.
+        #[cfg(windows)]
+        if let Ok(p) = u32::try_from(pid) {
+            crate::win_proc::terminate_tree(p);
         }
 
         // 2026-07-02 PTY-master leak fix — release the master fd NOW.

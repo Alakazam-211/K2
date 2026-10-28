@@ -184,6 +184,29 @@ pub fn children_of(parent: u32) -> Vec<u32> {
     out
 }
 
+/// End `pid` and every process descended from it (Windows' answer to a
+/// Unix `killpg` of the child's group). The tree is read first, each child
+/// kept only when it started after its parent (a recycled pid that merely
+/// names the old parent is never touched); then the root goes first, so it
+/// can't start more, then the descendants. Returns how many ended.
+pub fn terminate_tree(pid: u32) -> usize {
+    let Some(root_start) = start_key(pid) else { return 0 };
+    let mut tree = vec![pid];
+    let mut frontier = vec![(pid, root_start)];
+    while let Some((parent, parent_start)) = frontier.pop() {
+        for child in children_of(parent) {
+            if tree.contains(&child) {
+                continue;
+            }
+            if let Some(started) = start_key(child).filter(|s| *s >= parent_start) {
+                tree.push(child);
+                frontier.push((child, started));
+            }
+        }
+    }
+    tree.into_iter().filter(|p| terminate(*p)).count()
+}
+
 /// `cmdline` split into argv the way Windows programs parse their own
 /// (CommandLineToArgvW): quotes and backslashes as the C runtime reads them.
 pub fn split_command_line(cmdline: &str) -> Vec<String> {

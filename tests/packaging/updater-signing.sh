@@ -910,7 +910,7 @@ for want in \
     '[ -s "$SIG_FILE" ] || { echo "FATAL: $SIG_FILE missing or empty' \
     'k2u_verify_u1 "target/release/bundle/macos/K2.app.tar.gz" "$d/app.sig" K2.app.tar.gz \' \
     'k2u_verify_u1 "$DIST_DIR/$MAC_ASSET" "$d/mac.sig" "$MAC_ASSET" \' \
-    'for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR; do'; do
+    'for _k2_seam in K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD; do'; do
     grep -qF -- "$want" "$R" && pass "release.sh (dual-sign): $want" || fail "release.sh dual-sign" "missing: $want"
 done
 grep -qF 'k2u_sign u2 "$ASSETS/$A" "$A" "$VERSION" "$ASSETS/$A.sig2" raw' "$ROOT/scripts/sign-daemon.sh" \
@@ -936,6 +936,13 @@ if env -u K2_UPDATER_SRC_ROOT K2_SIGN_SOURCE_DIR=/tmp/y bash -c "$seam_snip" >"$
 else
     pass "release.sh refuses K2_SIGN_SOURCE_DIR (a test seam)"
 fi
+for _seam in K2SIGN_TEST_ROOT K2_SIGN_APPROVE_CMD; do
+    if env -u K2_UPDATER_SRC_ROOT -u K2_SIGN_SOURCE_DIR "$_seam=/tmp/z" bash -c "$seam_snip" >"$tmp/seam.out" 2>&1; then
+        fail "seam guard $_seam" "passed with $_seam set"
+    else
+        grep -q "$_seam is set" "$tmp/seam.out" && pass "release.sh refuses $_seam (signing-user test seam)" || fail "seam guard $_seam" "$(cat "$tmp/seam.out")"
+    fi
+done
 grep -qF 'k2u_sign u2 "$STAGE/setup.exe" "$WIN_ASSET" "$VERSION" "$STAGE/setup.exe.sig2" raw' "$ROOT/scripts/windows-patch-latest-json.sh" \
     && pass "the Windows patch signs setup.exe with U2 too" || fail "windows u2" ""
 

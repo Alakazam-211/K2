@@ -24,12 +24,27 @@
 //
 // `compact` (the Zen Conversation widget): the same simple card, with
 // "More options" opening the full card in the Thread pane.
+//
+// 0.46.6 (prd-secret-card-injection-v1): the agent can say how K2 sends the
+// secret (`secret.inject`: a header, a Basic login or a query parameter).
+// The sentence says it ("…as a Basic login (user:password)"), Save echoes it
+// back as the approval (the daemon refuses an answer without it, so an
+// older client can't save what it never showed), and Advanced lets the
+// person change it. A sending this card can't show (from a newer K2) turns
+// Save off with "Update K2 to answer this card".
 
 import { useRef, useState, type JSX, type ReactNode } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { SquareRadio } from '@/components/ui'
 import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
-import { cardExpiryLabel, type OverlaySecret, type SecretDelivery, type SecretScope, type ThreadAnswerPayload } from './overlayThread'
+import {
+  cardExpiryLabel,
+  type OverlaySecret,
+  type SecretDelivery,
+  type SecretInject,
+  type SecretScope,
+  type ThreadAnswerPayload,
+} from './overlayThread'
 
 /** The daemon refusals that turn the card red and want a second click.
  *  `card_readable_delivery` only comes from a server older than 0.46.3
@@ -94,6 +109,62 @@ function listWords(items: readonly string[]): string {
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 }
 
+/** The Basic login's user when the format fixes one (`ws123:{}`). */
+export function basicUser(inj: SecretInject | null | undefined): string | null {
+  if (!inj || inj.dst !== 'basic') return null
+  const m = /^(.+):\{\}$/.exec(inj.fmt)
+  return m && !m[1].includes('{}') ? m[1] : null
+}
+
+/** Can this card show the sending? (`basic`, `header:<Name>`, `query:<param>`.) */
+export function injectKnown(inj: SecretInject | null | undefined): boolean {
+  if (!inj) return true
+  return inj.dst === 'basic' || /^header:./.test(inj.dst) || /^query:./.test(inj.dst)
+}
+
+/** How K2 sends it, in words (the daemon's `Inject::words`). */
+export function injectWords(inj: SecretInject): string {
+  const shown = inj.fmt.split('{}').join('‹secret›')
+  if (inj.dst === 'basic') {
+    const user = basicUser(inj)
+    if (user) return `as a Basic login for user ${user}`
+    return inj.fmt === '{}' ? 'as a Basic login (user:password)' : `as a Basic login of ${shown}`
+  }
+  if (inj.dst.startsWith('header:')) {
+    const h = inj.dst.slice('header:'.length)
+    return inj.fmt === '{}' ? `in the ${h} header` : `as ${h}: ${shown}`
+  }
+  if (inj.dst.startsWith('query:')) return `in the URL as ?${inj.dst.slice('query:'.length)}=${shown}`
+  return 'in a way this app can\'t show'
+}
+
+const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/
+const QUERY_NAME = /^[A-Za-z0-9_.-]{1,64}$/
+
+/** What is wrong with a sending the person typed, or null. */
+export function injectProblem(inj: SecretInject | null): string | null {
+  if (!inj) return null
+  if (inj.fmt.split('{}').length !== 2) return 'The format needs exactly one {} where the secret goes.'
+  if (inj.dst.startsWith('header:') && !HEADER_NAME.test(inj.dst.slice('header:'.length))) return 'Name the header.'
+  if (inj.dst.startsWith('query:') && !QUERY_NAME.test(inj.dst.slice('query:'.length)))
+    return 'Name the URL parameter (letters, digits, _ - .).'
+  return null
+}
+
+type InjectMode = 'default' | 'bearer' | 'header' | 'basic' | 'query'
+
+function injectMode(inj: SecretInject | null): InjectMode {
+  if (!inj) return 'default'
+  if (inj.dst === 'basic') return 'basic'
+  if (inj.dst.startsWith('query:')) return 'query'
+  if (inj.dst.toLowerCase() === 'header:authorization' && inj.fmt === 'Bearer {}') return 'bearer'
+  return 'header'
+}
+
+function sameInject(a: SecretInject | null, b: SecretInject | null): boolean {
+  return a === b || (!!a && !!b && a.dst === b.dst && a.fmt === b.fmt)
+}
+
 /** Where the secret is kept, in the plain sentence. */
 export const SECRET_SCOPE_WORDS: Record<SecretScope, string> = {
   workspace: 'this workspace',
@@ -109,12 +180,18 @@ export function SecretPlan({
   scope,
   sites,
   compact = false,
+  inject = null,
+  envName = null,
 }: {
   agent: string
   delivery: SecretDelivery
   scope: SecretScope
   sites: readonly string[]
   compact?: boolean
+  /** How K2 sends it (fetch only). */
+  inject?: SecretInject | null
+  /** The env variable an env delivery uses. */
+  envName?: string | null
 }): JSX.Element {
   const b = (t: string): ReactNode => <strong className="font-semibold">{t}</strong>
   const where = SECRET_SCOPE_WORDS[scope]
@@ -123,13 +200,22 @@ export function SecretPlan({
     body = (
       <>
         {b(agent)} will get this as {delivery === 'file' ? 'a ' : 'an '}
-        {b(delivery === 'file' ? 'file it can read' : 'environment variable it can read')}, for {b(where)}.
+        {b(delivery === 'file' ? 'file it can read' : 'environment variable it can read')}
+        {delivery === 'env' && envName ? (
+          <>
+            {' '}
+            (<span className="font-mono">${envName}</span>)
+          </>
+        ) : null}
+        , for {b(where)}.
       </>
     )
   } else if (sites.length > 0) {
     body = (
       <>
-        K2 will add this to calls to {b(listWords(sites.map(siteLabel)))}, for {b(where)}; {b(agent)} never sees it.
+        K2 will add this to calls to {b(listWords(sites.map(siteLabel)))}
+        {inject ? <> {b(injectWords(inject))}</> : null}, for {b(where)}; {b(agent)} never sees it.
+        {inject?.dst.startsWith('query:') ? ' Sites can log URLs.' : null}
       </>
     )
   } else {
@@ -141,7 +227,13 @@ export function SecretPlan({
     )
   }
   return (
-    <div data-testid="thread-secret-plan" data-delivery={delivery} data-scope={scope} className="break-words">
+    <div
+      data-testid="thread-secret-plan"
+      data-delivery={delivery}
+      data-scope={scope}
+      data-inject={inject ? `${inject.dst} ${inject.fmt}` : ''}
+      className="break-words"
+    >
       {body}
     </div>
   )
@@ -200,6 +292,7 @@ export function SecretCard({
   const proposedScope = normalScope(secret.scope)
   const proposedSites = (secret.hosts ?? []).filter((h) => h.trim() !== '')
   const proposedDelivery = normalDelivery(secret.delivery)
+  const proposedInject: SecretInject | null = secret.inject ?? null
 
   const fieldRef = useRef<HTMLInputElement>(null)
   const [hasValue, setHasValue] = useState(false)
@@ -207,6 +300,7 @@ export function SecretCard({
   const [scope, setScope] = useState<SecretScope>(proposedScope)
   const [sites, setSites] = useState<SiteChip[]>(() => proposedSites.map((value) => ({ value, byAgent: true })))
   const [delivery, setDelivery] = useState<SecretDelivery>(proposedDelivery)
+  const [inject, setInject] = useState<SecretInject | null>(proposedInject)
   const [siteDraft, setSiteDraft] = useState('')
   const [warning, setWarning] = useState<{ code: string; hint: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -216,6 +310,15 @@ export function SecretCard({
   const sitesChanged =
     siteValues.length !== proposedSites.length || siteValues.some((v, i) => v !== proposedSites[i])
   const needsSite = delivery === 'fetch' && sites.length === 0
+  // A sending this app can't show (a newer K2's): never save it unseen.
+  const unknownInject = !injectKnown(proposedInject)
+  const injectFix = injectProblem(inject)
+  const basicLogin = delivery === 'fetch' && inject?.dst === 'basic'
+  const placeholder = basicLogin
+    ? basicUser(inject)
+      ? `Paste the password for ${basicUser(inject)}`
+      : 'Paste it as user:password'
+    : 'Paste the value'
   const provider = providerForSites(siteValues)
   const prompt = (secret.prompt ?? '').slice(0, SECRET_PROMPT_MAX)
 
@@ -238,7 +341,7 @@ export function SecretCard({
 
   const save = async (): Promise<void> => {
     const el = fieldRef.current
-    if (!el || busy || needsSite) return
+    if (!el || busy || needsSite || unknownInject || injectFix) return
     const confirm = warning !== null
     setBusy(true)
     setError(null)
@@ -250,6 +353,9 @@ export function SecretCard({
         ...(scope !== proposedScope ? { scope } : {}),
         ...(sitesChanged ? { hosts: siteValues } : {}),
         ...(delivery !== proposedDelivery ? { delivery } : {}),
+        // The sentence said how K2 sends it: echo what was shown (or the
+        // person's own choice). A card that names one needs this.
+        ...(inject ? { inject: { dst: inject.dst, fmt: inject.fmt } } : {}),
         // The plain sentence above the field said what the agent can do with it.
         disclosed: true,
         ...(withConfirm ? { confirm: true } : {}),
@@ -321,6 +427,35 @@ export function SecretCard({
     file: `a file ${agent} can read`,
     env: `an environment variable ${agent} can read`,
   }
+  const mode = injectMode(inject)
+  const modeLabel: Record<InjectMode, string> = {
+    default: 'The format K2 knows for this key (else a Bearer token)',
+    bearer: 'A Bearer token (Authorization: Bearer)',
+    header: 'A header',
+    basic: 'A Basic login',
+    query: 'A URL parameter',
+  }
+  const pickMode = (m: InjectMode): void => {
+    const keep = (want: InjectMode): SecretInject | null =>
+      injectMode(proposedInject) === want ? proposedInject : null
+    const next: Record<InjectMode, SecretInject | null> = {
+      default: null,
+      bearer: { dst: 'header:Authorization', fmt: 'Bearer {}' },
+      header: keep('header') ?? { dst: 'header:', fmt: '{}' },
+      basic: keep('basic') ?? { dst: 'basic', fmt: '{}' },
+      query: keep('query') ?? { dst: 'query:', fmt: '{}' },
+    }
+    setInject(next[m])
+    changed()
+  }
+  const editInject = (patch: Partial<SecretInject>): void => {
+    setInject((prev) => (prev ? { ...prev, ...patch } : prev))
+    changed()
+  }
+  const injectModes: InjectMode[] = proposedInject
+    ? ['bearer', 'header', 'basic', 'query']
+    : ['default', 'bearer', 'header', 'basic', 'query']
+  const fieldCls = `flex-1 min-w-0 bg-transparent ${text} outline-none border ${border} px-2 py-0.5 font-mono`
 
   return (
     <div
@@ -360,7 +495,25 @@ export function SecretCard({
           {prompt}
         </div>
       )}
-      <SecretPlan agent={agent} delivery={delivery} scope={scope} sites={siteValues} compact={compact} />
+      <SecretPlan
+        agent={agent}
+        delivery={delivery}
+        scope={scope}
+        sites={siteValues}
+        compact={compact}
+        inject={delivery === 'fetch' ? inject : null}
+        envName={secret.envName ?? null}
+      />
+      {secret.replaces && (
+        <div data-testid="thread-secret-replaces">
+          This replaces the <span className="font-mono">{secret.name}</span> already saved, with what this card says.
+        </div>
+      )}
+      {unknownInject && (
+        <div className={`text-[11px] ${danger}`} role="alert" data-testid="thread-secret-update">
+          Update K2 to answer this card. {agent} asked K2 to send this secret in a way this app can&apos;t show.
+        </div>
+      )}
       <input
         ref={fieldRef}
         data-testid="thread-secret-field"
@@ -368,7 +521,7 @@ export function SecretCard({
         autoComplete="off"
         spellCheck={false}
         aria-label={`Value for ${secret.name}`}
-        placeholder="Paste the value"
+        placeholder={placeholder}
         onChange={(e) => {
           setHasValue(e.currentTarget.value !== '')
           changed()
@@ -428,6 +581,77 @@ export function SecretCard({
                   </label>
                 ))}
               </fieldset>
+
+              {delivery === 'fetch' && !unknownInject && (
+                <fieldset className="flex flex-col gap-1" data-testid="thread-secret-inject">
+                  <legend className={`mb-0.5 ${muted}`}>How K2 sends it</legend>
+                  {injectModes.map((m) => (
+                    <label key={m} className="flex items-start gap-1 cursor-pointer">
+                      <SquareRadio
+                        className="mt-0.5"
+                        name={`secret-inject-${secret.name}`}
+                        value={m}
+                        checked={mode === m}
+                        onChange={() => pickMode(m)}
+                      />
+                      <span>{modeLabel[m]}</span>
+                    </label>
+                  ))}
+                  {mode === 'header' && inject && (
+                    <div className="flex gap-1">
+                      <input
+                        data-testid="thread-secret-inject-header"
+                        aria-label="Header name"
+                        placeholder="Header name, like X-Api-Key"
+                        value={inject.dst.slice('header:'.length)}
+                        onChange={(e) => editInject({ dst: `header:${e.target.value.trim()}` })}
+                        className={fieldCls}
+                      />
+                      <input
+                        data-testid="thread-secret-inject-format"
+                        aria-label="Format"
+                        placeholder="{}"
+                        value={inject.fmt}
+                        onChange={(e) => editInject({ fmt: e.target.value })}
+                        className={fieldCls}
+                      />
+                    </div>
+                  )}
+                  {mode === 'basic' && inject && (
+                    <input
+                      data-testid="thread-secret-inject-user"
+                      aria-label="Basic login user"
+                      placeholder="User (leave empty to paste user:password)"
+                      value={basicUser(inject) ?? (inject.fmt === '{}' ? '' : inject.fmt)}
+                      onChange={(e) => {
+                        const u = e.target.value.trim()
+                        editInject({ fmt: u ? `${u}:{}` : '{}' })
+                      }}
+                      className={fieldCls}
+                    />
+                  )}
+                  {mode === 'query' && inject && (
+                    <input
+                      data-testid="thread-secret-inject-query"
+                      aria-label="URL parameter"
+                      placeholder="Parameter name, like appid"
+                      value={inject.dst.slice('query:'.length)}
+                      onChange={(e) => editInject({ dst: `query:${e.target.value.trim()}` })}
+                      className={fieldCls}
+                    />
+                  )}
+                  {!sameInject(inject, proposedInject) && proposedInject && (
+                    <span className={`text-[10px] ${muted}`} data-testid="thread-secret-inject-changed">
+                      {agent} suggested {injectWords(proposedInject)}.
+                    </span>
+                  )}
+                  {injectFix && (
+                    <span className={`text-[10px] ${danger}`} data-testid="thread-secret-inject-problem">
+                      {injectFix}
+                    </span>
+                  )}
+                </fieldset>
+              )}
 
               <div className="flex flex-col gap-1" data-testid="thread-secret-sites">
                 <div className={muted}>Only send it to</div>
@@ -536,7 +760,7 @@ export function SecretCard({
         <button
           type="button"
           data-testid="thread-secret-submit"
-          disabled={!hasValue || busy || needsSite}
+          disabled={!hasValue || busy || needsSite || unknownInject || injectFix !== null}
           onClick={() => void save()}
           className={`px-2 py-1 text-[11px] border ${
             warning ? 'border-[var(--color-danger,#e5484d)]' : border

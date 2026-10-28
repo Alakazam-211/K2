@@ -162,6 +162,22 @@ export interface OverlaySecret {
   /** Unix seconds a still-pending card expires (the daemon turns it
    *  `expired`; never a client timer). Absent: open until answered. */
   expiresAt?: number | null
+  /** How K2 sends it (prd-secret-card-injection-v1, 0.46.6): a header, a
+   *  Basic login or a query parameter, and the format. The card shows it
+   *  and Save echoes it back (`inject`); the daemon refuses an answer
+   *  without it. Absent: the card names none (K2's default for the key). */
+  inject?: SecretInject | null
+  /** The environment variable an env delivery uses (`HETZNER_ROBOT`). */
+  envName?: string | null
+  /** A secret by this name already exists; Save replaces it. */
+  replaces?: boolean
+}
+
+/** How K2 sends a secret: `dst` is `basic`, `header:<Name>` or
+ *  `query:<param>`; `fmt` holds one `{}` where the value goes. */
+export interface SecretInject {
+  dst: string
+  fmt: string
 }
 
 /** A secret another agent sent (prd-agent-secret-handoff-v1 §10.1, H18):
@@ -238,6 +254,10 @@ export interface ThreadAnswerPayload {
   delivery?: SecretDelivery
   confirm?: boolean
   disclosed?: boolean
+  /** A secret card's "how K2 sends it", as the card showed it (or as the
+   *  person changed it under Advanced). Required by the daemon on a card
+   *  that names one (0.46.6). */
+  inject?: SecretInject
   /** Set when a custom Garden widget answers (`thread.answer`, a choice
    *  only): the daemon checks the widget's approved `thread:post`. */
   origin?: ThreadWidgetOrigin
@@ -254,8 +274,8 @@ export function threadAnswerBody(
   addr: string,
   id: string,
   payload: ThreadAnswerPayload,
-): Record<string, string | ThreadWidgetOrigin> {
-  const body: Record<string, string | ThreadWidgetOrigin> = { addr, id }
+): Record<string, string | ThreadWidgetOrigin | SecretInject> {
+  const body: Record<string, string | ThreadWidgetOrigin | SecretInject> = { addr, id }
   if (payload.origin) body.origin = threadWidgetOriginBody(payload.origin)
   if (payload.answer !== undefined) body.answer = payload.answer
   if (payload.item) body.item = payload.item
@@ -269,6 +289,7 @@ export function threadAnswerBody(
     if (payload.delivery) body.delivery = payload.delivery
     if (payload.confirm) body.confirm = '1'
     if (payload.disclosed) body.disclosed = '1'
+    if (payload.inject) body.inject = { dst: payload.inject.dst, fmt: payload.inject.fmt }
   }
   return body
 }
@@ -1204,6 +1225,12 @@ function coerceSecret(raw: unknown): OverlaySecret | null {
   if (typeof s.delivery === 'string') out.delivery = s.delivery
   if (typeof s.secretKind === 'string') out.secretKind = s.secretKind
   if (typeof s.ref === 'string') out.ref = s.ref
+  const inj = s.inject as Record<string, unknown> | null | undefined
+  if (inj && typeof inj === 'object' && typeof inj.dst === 'string' && typeof inj.fmt === 'string') {
+    out.inject = { dst: inj.dst, fmt: inj.fmt }
+  }
+  if (typeof s.envName === 'string') out.envName = s.envName
+  if (s.replaces === true) out.replaces = true
   Object.assign(out, closedExtras(s))
   return out
 }

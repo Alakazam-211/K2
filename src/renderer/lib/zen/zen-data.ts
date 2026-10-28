@@ -2256,6 +2256,11 @@ export function installZenDataVerbs(): () => void {
                   : {}),
                 ...(answer.confirm === true ? { confirm: true } : {}),
                 ...(answer.disclosed === true ? { disclosed: true } : {}),
+                // How K2 sends it, as the card showed it (0.46.6): a card
+                // that names one is refused without this echo.
+                ...(isObj(answer.inject) && typeof answer.inject.dst === 'string' && typeof answer.inject.fmt === 'string'
+                  ? { inject: { dst: answer.inject.dst, fmt: answer.inject.fmt } }
+                  : {}),
               }
             : null
       if (!payload || (payload.answer === undefined && payload.secret === undefined)) {

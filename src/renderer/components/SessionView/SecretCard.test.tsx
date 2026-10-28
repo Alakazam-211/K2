@@ -421,3 +421,173 @@ describe('secret card helpers', () => {
     })
   })
 })
+
+// 0.46.6 (prd-secret-card-injection-v1): the agent says how K2 sends it; the
+// card shows it, Save echoes it, Advanced lets the person change it.
+describe('SecretCard: how K2 sends it', () => {
+  const ROBOT = ['https://robot-ws.your-server.de:443']
+
+  it('a Basic card says so, asks for user:password and echoes the sending on Save', async () => {
+    const { calls, onSubmit } = recorder()
+    card({ name: 'HETZNER_ROBOT', hosts: ROBOT, delivery: 'fetch', inject: { dst: 'basic', fmt: '{}' } }, onSubmit)
+    expect(plan()).toBe(
+      'K2 will add this to calls to robot-ws.your-server.de as a Basic login (user:password), for this workspace; sales never sees it.',
+    )
+    expect(screen.getByTestId('thread-secret-plan').getAttribute('data-inject')).toBe('basic {}')
+    expect(field().placeholder).toBe('Paste it as user:password')
+    paste(`robotuser:${VALUE}`)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0]).toEqual({ secret: `robotuser:${VALUE}`, inject: { dst: 'basic', fmt: '{}' }, disclosed: true })
+  })
+
+  it('a Basic login for a named user asks only for the password', () => {
+    card({ hosts: ROBOT, inject: { dst: 'basic', fmt: 'ws123:{}' } }, async () => {})
+    expect(plan()).toContain('as a Basic login for user ws123,')
+    expect(field().placeholder).toBe('Paste the password for ws123')
+  })
+
+  it('a header and a query parameter read in plain words', () => {
+    card({ hosts: ROBOT, inject: { dst: 'header:X-Api-Key', fmt: '{}' } }, async () => {})
+    expect(plan()).toContain('robot-ws.your-server.de in the X-Api-Key header, for this workspace')
+    cleanup()
+    card({ hosts: ROBOT, inject: { dst: 'header:Authorization', fmt: 'Token {}' } }, async () => {})
+    expect(plan()).toContain('as Authorization: Token ‹secret›,')
+    cleanup()
+    card({ hosts: ROBOT, inject: { dst: 'query:appid', fmt: '{}' } }, async () => {})
+    expect(plan()).toBe(
+      'K2 will add this to calls to robot-ws.your-server.de in the URL as ?appid=‹secret›, for this workspace; sales never sees it. Sites can log URLs.',
+    )
+    expect(field().placeholder).toBe('Paste the value')
+  })
+
+  it('the person changes it under Advanced; the change is what Save sends', async () => {
+    const { calls, onSubmit } = recorder()
+    card({ hosts: ROBOT, inject: { dst: 'basic', fmt: '{}' } }, onSubmit)
+    openAdvanced()
+    const box = screen.getByTestId('thread-secret-inject')
+    expect((box.querySelector('input[value="basic"]') as HTMLInputElement).checked).toBe(true)
+    // A card that names a sending has no "K2's default" choice.
+    expect(box.querySelector('input[value="default"]')).toBeNull()
+    fireEvent.change(screen.getByTestId('thread-secret-inject-user'), { target: { value: 'ws123' } })
+    expect(plan()).toContain('as a Basic login for user ws123')
+    expect(screen.getByTestId('thread-secret-inject-changed').textContent).toBe(
+      'sales suggested as a Basic login (user:password).',
+    )
+    fireEvent.click(box.querySelector('input[value="header"]') as HTMLInputElement)
+    paste(VALUE)
+    const save = screen.getByTestId('thread-secret-submit') as HTMLButtonElement
+    // No header name yet: Save waits and says why.
+    expect(save.disabled).toBe(true)
+    expect(screen.getByTestId('thread-secret-inject-problem').textContent).toBe('Name the header.')
+    fireEvent.change(screen.getByTestId('thread-secret-inject-header'), { target: { value: 'X-Robot-Key' } })
+    expect(save.disabled).toBe(false)
+    fireEvent.change(screen.getByTestId('thread-secret-inject-format'), { target: { value: 'no slot' } })
+    expect(save.disabled).toBe(true)
+    expect(screen.getByTestId('thread-secret-inject-problem').textContent).toBe(
+      'The format needs exactly one {} where the secret goes.',
+    )
+    fireEvent.change(screen.getByTestId('thread-secret-inject-format'), { target: { value: 'Key {}' } })
+    expect(plan()).toContain('as X-Robot-Key: Key ‹secret›')
+    fireEvent.click(save)
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0]).toEqual({ secret: VALUE, inject: { dst: 'header:X-Robot-Key', fmt: 'Key {}' }, disclosed: true })
+  })
+
+  it('a card without a sending saves as before; the person may still pick one', async () => {
+    const { calls, onSubmit } = recorder()
+    card({ hosts: ROBOT }, onSubmit)
+    expect(plan()).toBe('K2 will add this to calls to robot-ws.your-server.de, for this workspace; sales never sees it.')
+    openAdvanced()
+    const box = screen.getByTestId('thread-secret-inject')
+    expect((box.querySelector('input[value="default"]') as HTMLInputElement).checked).toBe(true)
+    paste(VALUE)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0]).toEqual({ secret: VALUE, disclosed: true })
+    fireEvent.click(box.querySelector('input[value="query"]') as HTMLInputElement)
+    fireEvent.change(screen.getByTestId('thread-secret-inject-query'), { target: { value: 'key' } })
+    paste(VALUE)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(calls).toHaveLength(2))
+    expect(calls[1]).toEqual({ secret: VALUE, inject: { dst: 'query:key', fmt: '{}' }, disclosed: true })
+  })
+
+  it('a sending this app cannot show turns Save off with "Update K2 to answer this card"', () => {
+    card({ hosts: ROBOT, inject: { dst: 'sign:future', fmt: '{}' } }, async () => {})
+    expect(screen.getByTestId('thread-secret-update').textContent).toContain('Update K2 to answer this card.')
+    paste(VALUE)
+    expect((screen.getByTestId('thread-secret-submit') as HTMLButtonElement).disabled).toBe(true)
+    openAdvanced()
+    expect(screen.queryByTestId('thread-secret-inject')).toBeNull()
+  })
+
+  it('shows the daemon refusal for an older-client answer in its words', async () => {
+    card({ hosts: ROBOT, inject: { dst: 'basic', fmt: '{}' } }, async () => {
+      throw refusal('card_inject_unseen', 'Update K2 to answer this card. It sends HETZNER_ROBOT as a Basic login (user:password)')
+    })
+    paste(`u:${VALUE}`)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(screen.getByTestId('thread-secret-error').textContent).toContain('Update K2 to answer this card.'))
+    expect(screen.queryByTestId('thread-secret-warning')).toBeNull()
+  })
+
+  it('says when Save replaces a saved secret, and names the env variable', () => {
+    card({ name: 'hetzner-robot', delivery: 'env', envName: 'HETZNER_ROBOT', replaces: true }, async () => {})
+    expect(plan()).toBe('sales will get this as an environment variable it can read ($HETZNER_ROBOT), for this workspace.')
+    expect(screen.getByTestId('thread-secret-replaces').textContent).toBe(
+      'This replaces the hetzner-robot already saved, with what this card says.',
+    )
+  })
+
+  it('the compact card shows the sending and echoes it', async () => {
+    const { calls, onSubmit } = recorder()
+    card({ hosts: ROBOT, inject: { dst: 'basic', fmt: '{}' } }, onSubmit, { compact: true })
+    expect(plan()).toContain('as a Basic login (user:password)')
+    paste(`u:${VALUE}`)
+    fireEvent.click(screen.getByTestId('thread-secret-submit'))
+    await waitFor(() => expect(calls).toHaveLength(1))
+    expect(calls[0].inject).toEqual({ dst: 'basic', fmt: '{}' })
+  })
+
+  it('the wire body carries inject as {dst, fmt}; a snapshot keeps inject, envName and replaces', () => {
+    expect(
+      threadAnswerBody('sales', 'c1', { secret: VALUE, inject: { dst: 'basic', fmt: '{}' }, disclosed: true }),
+    ).toEqual({ addr: 'sales', id: 'c1', secret: VALUE, inject: { dst: 'basic', fmt: '{}' }, disclosed: '1' })
+    const snap = threadItemsFromSnapshot({
+      conversation_id: 'c',
+      has_more: false,
+      items: [
+        {
+          collection: 'thread',
+          seq: 1,
+          id: 's1',
+          doc: {
+            id: 's1',
+            kind: 'secret',
+            from: 'sales',
+            secret: {
+              name: 'HETZNER_ROBOT',
+              status: 'pending',
+              hosts: ROBOT,
+              delivery: 'fetch',
+              inject: { dst: 'basic', fmt: '{}', extra: 'dropped' },
+              envName: 'HETZNER_ROBOT',
+              replaces: true,
+            },
+          },
+        },
+      ],
+    })
+    expect(snap.items[0].doc.secret).toEqual({
+      name: 'HETZNER_ROBOT',
+      status: 'pending',
+      prompt: null,
+      hosts: ROBOT,
+      delivery: 'fetch',
+      inject: { dst: 'basic', fmt: '{}' },
+      envName: 'HETZNER_ROBOT',
+      replaces: true,
+    })
+  })
+})

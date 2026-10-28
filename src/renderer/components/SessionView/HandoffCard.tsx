@@ -27,11 +27,15 @@ export interface HandoffCardProps {
   nowSec?: number
   /** POSTs `/cli/vault/incoming/decide`. Throws the daemon's refusal. */
   onDecide: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
+  /** The card sits in a room on another server, which this window can't
+   *  decide for (a room never sends `vault/incoming/decide`): no buttons,
+   *  just "Open <host> directly to accept this". */
+  remoteHost?: string | null
 }
 
 const NAME_RE = /^[A-Za-z0-9_.-]{1,64}$/
 
-export function HandoffCard({ handoff, answeredBy, nowSec, onDecide }: HandoffCardProps): JSX.Element {
+export function HandoffCard({ handoff, answeredBy, nowSec, onDecide, remoteHost = null }: HandoffCardProps): JSX.Element {
   const { agent, host: peerHost } = splitPeer(handoff.from)
   const host = handoff.host || peerHost
   const [always, setAlways] = useState(false)
@@ -70,7 +74,8 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide }: HandoffCa
   }
 
   const expiry = cardExpiryLabel(handoff.expiresAt, nowSec ?? Math.floor(Date.now() / 1000))
-  const sites = handoff.hosts.map(siteLabel).filter(Boolean)
+  // A doc from another server can come without `hosts`.
+  const sites = (handoff.hosts ?? []).map(siteLabel).filter(Boolean)
 
   const decide = async (body: Omit<HandoffDecideBody, 'id'>): Promise<void> => {
     if (busy) return
@@ -129,18 +134,23 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide }: HandoffCa
           </div>
         )}
       </div>
-      {handoff.note.trim() && (
+      {(handoff.note ?? '').trim() && (
         <div data-testid="thread-handoff-note" className="whitespace-pre-wrap break-words">
-          <span className={muted}>Note: </span>&lsquo;{handoff.note.trim()}&rsquo;
+          <span className={muted}>Note: </span>&lsquo;{(handoff.note ?? '').trim()}&rsquo;
         </div>
       )}
-      {clash && (
+      {remoteHost && (
+        <div className={`text-[11px] ${muted}`} data-testid="thread-handoff-remote">
+          Open {remoteHost} directly to accept this.
+        </div>
+      )}
+      {!remoteHost && clash && (
         <div className={`text-[10px] ${muted}`} data-testid="thread-handoff-clash">
           {handoff.workspace || 'This agent'} already has a secret named {handoff.name}. Accept it under another name, or
           replace the current one with this as a new version.
         </div>
       )}
-      {renaming && (
+      {!remoteHost && renaming && (
         <div className="flex gap-1" data-testid="thread-handoff-rename">
           <input
             data-testid="thread-handoff-as"
@@ -161,6 +171,7 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide }: HandoffCa
           </button>
         </div>
       )}
+      {!remoteHost && (
       <label className={`flex items-center gap-1 cursor-pointer ${muted}`}>
         <input
           type="checkbox"
@@ -170,11 +181,13 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide }: HandoffCa
         />
         Always accept from {agent}
       </label>
+      )}
       {error && (
         <div className={`text-[11px] ${danger}`} role="alert" data-testid="thread-handoff-error">
           {error}
         </div>
       )}
+      {!remoteHost && (
       <div className="flex flex-wrap justify-end gap-2">
         <button
           type="button"
@@ -218,6 +231,7 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide }: HandoffCa
           </button>
         )}
       </div>
+      )}
     </div>
   )
 }

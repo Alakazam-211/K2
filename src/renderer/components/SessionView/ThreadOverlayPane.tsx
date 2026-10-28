@@ -40,6 +40,7 @@ import { ThreadMessageColumn } from '@/components/Thread/ThreadColumn'
 import { useRenderWindow } from '@/components/Thread/useRenderWindow'
 import { ZenActivityDrawer } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { handoffApi, type HandoffDecideBody, type HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
+import { scopeMayWrite } from '@/kessel/server-scope'
 
 // The choice card lives in its own file; Zen and Grok Bots import it from here.
 import { CloneProposalsBanner } from '@/components/CloneToDialog/CloneProposalsBanner'
@@ -158,6 +159,9 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
     [workspaceName, roomScope.label],
   )
   const handoffDecide = useCallback((body: HandoffDecideBody) => handoffApi.decide(body, roomScope), [roomScope])
+  // A remote (or view-only) room never sends `vault/incoming/decide`: its
+  // handoff cards say to open that server directly instead of Accept.
+  const handoffRemoteHost = scopeMayWrite(roomScope, 'vault/incoming/decide') ? null : roomScope.label || roomScope.hostKey
   // The column's message box draws the drawer: hand it the live turn.
   const liveTurn = turn ?? null
   useEffect(() => {
@@ -371,6 +375,7 @@ export const ThreadOverlayPane = memo(function ThreadOverlayPane({
                 voidById={voidById}
                 cardContext={cardContext}
                 onHandoffDecide={handoffDecide}
+                handoffRemoteHost={handoffRemoteHost}
                 still={win.wasDrawn(it.id)}
               />
             ))}
@@ -424,6 +429,7 @@ interface OverlayRowProps {
   voidById: (id: string) => void
   cardContext: SecretCardContext
   onHandoffDecide: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
+  handoffRemoteHost: string | null
   still: boolean
 }
 
@@ -448,6 +454,7 @@ const OverlayRow = memo(
     a.voidById === b.voidById &&
     a.cardContext === b.cardContext &&
     a.onHandoffDecide === b.onHandoffDecide &&
+    a.handoffRemoteHost === b.handoffRemoteHost &&
     a.still === b.still,
 )
 
@@ -461,6 +468,7 @@ export function ThreadItemRow({
   onVoid,
   cardContext,
   onHandoffDecide,
+  handoffRemoteHost = null,
   still,
 }: {
   item: OverlayThreadItem
@@ -478,6 +486,8 @@ export function ThreadItemRow({
   cardContext?: SecretCardContext
   /** A handoff card's decision on the room's server. */
   onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
+  /** The room's server when this window can't decide there (a remote room). */
+  handoffRemoteHost?: string | null
   /** Drawn again by the render window: no message-in animation. */
   still?: boolean
 }): JSX.Element {
@@ -499,6 +509,7 @@ export function ThreadItemRow({
       // The desktop Thread is where Zen's "More options" leads: the full card.
       secret={secret}
       onHandoffDecide={onHandoffDecide}
+      handoffRemoteHost={handoffRemoteHost}
       still={still}
     />
   )

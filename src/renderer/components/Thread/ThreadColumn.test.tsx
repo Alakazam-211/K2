@@ -229,3 +229,34 @@ describe('k2:kanban@2 Thread panel', () => {
     expect(css).toContain('@container (max-width: 479.98px) { .msg { max-width: calc(100% - 12px); } }')
   })
 })
+
+// A handoff doc as it arrives from another server (Home): coerced before it
+// draws, so a doc without `hosts` never crashes the bubble; a remote room's
+// card says to open that server instead of Accept.
+describe('ThreadBubble: a handoff card from another server', () => {
+  const doc = (handoff: Record<string, unknown>) =>
+    ({
+      seq: 1,
+      id: 'h1',
+      doc: { id: 'h1', kind: 'handoff', from: 'k2', created_at: 0, body: 'sales sent STRIPE_KEY.', handoff },
+    }) as unknown as OverlayThreadItem
+  const raw = { deliveryId: 'hd_1', name: 'STRIPE_KEY', from: 'sales::rosson.k2.dev', kind: 'api_key', note: '', status: 'pending' }
+
+  it('a doc without hosts draws the card', () => {
+    const r = render(<ThreadBubble item={doc(raw)} mine={false} author="sales" timeLabel="now" viewer={null} />)
+    expect(r.getByTestId('thread-handoff-header').textContent).toContain('STRIPE_KEY')
+  })
+
+  it('a doc that is not a handoff body draws no card', () => {
+    const r = render(<ThreadBubble item={doc({ name: 'X' })} mine={false} author="sales" timeLabel="now" viewer={null} />)
+    expect(r.queryByTestId('thread-handoff-card')).toBeNull()
+  })
+
+  it('a remote room says to open the server directly', () => {
+    const r = render(
+      <ThreadBubble item={doc(raw)} mine={false} author="sales" timeLabel="now" viewer={null} handoffRemoteHost="rosson.k2.dev" />,
+    )
+    expect(r.getByTestId('thread-handoff-remote').textContent).toBe('Open rosson.k2.dev directly to accept this.')
+    expect(r.queryByTestId('thread-handoff-accept')).toBeNull()
+  })
+})

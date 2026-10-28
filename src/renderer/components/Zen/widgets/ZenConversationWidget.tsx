@@ -95,6 +95,7 @@ function Bubble({
   viewer,
   nowSec,
   server,
+  remoteServer = null,
   onAnswer,
   onVoid,
   onMoreOptions,
@@ -104,6 +105,9 @@ function Bubble({
   viewer: ThreadViewer | null
   nowSec: number
   server?: string
+  /** The agent's server when it isn't this computer: a handoff card there
+   *  says to open that server (this window decides only its own). */
+  remoteServer?: string | null
   /** Resolves when the daemon took the answer; throws its refusal. */
   onAnswer(payload: ThreadAnswerPayload): Promise<void>
   onVoid(): void
@@ -124,6 +128,7 @@ function Bubble({
       // prd-k2-vault-v1 KV9: the compact card (the proposal's defaults),
       // same answer body; More options opens the full one.
       secret={{ compact: true, server, onMoreOptions }}
+      handoffRemoteHost={remoteServer}
     />
   )
 }
@@ -833,6 +838,7 @@ export function ZenConversation({
                 viewer={view?.viewer ?? null}
                 nowSec={nowSec}
                 server={row.server ?? 'this computer'}
+                remoteServer={row.server}
                 onAnswer={(payload) => answer(it.id, payload)}
                 onVoid={() => dismiss(it.id)}
                 onMoreOptions={moreOptions}

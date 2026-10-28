@@ -25,7 +25,7 @@ import {
   type HandoffDecideBody,
   type HandoffDecideResult,
 } from '@/components/Settings/sections/handoff-api'
-import { sameThreadItem, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
+import { coerceHandoff, sameThreadItem, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
@@ -339,6 +339,10 @@ export interface ThreadBubbleProps {
   /** A handoff card's decision (`/cli/vault/incoming/decide` on the room's
    *  server). Absent: this window's own server. */
   onHandoffDecide?: (body: HandoffDecideBody) => Promise<HandoffDecideResult | void>
+  /** The room is on another server this window can't decide a handoff
+   *  for (a remote room, a Home row elsewhere): its name. The card then
+   *  says "Open <host> directly to accept this" instead of Accept. */
+  handoffRemoteHost?: string | null
   /** A line under "author · time", on the same side (the project chat's
    *  "delivered to …"). Absent (the Thread): nothing is drawn. */
   footer?: ReactNode
@@ -377,6 +381,7 @@ export function sameBubbleProps(a: ThreadBubbleProps, b: ThreadBubbleProps): boo
     a.onAnswer === b.onAnswer &&
     a.onVoid === b.onVoid &&
     a.onHandoffDecide === b.onHandoffDecide &&
+    a.handoffRemoteHost === b.handoffRemoteHost &&
     a.still === b.still &&
     shallowSame(a.secret, b.secret) &&
     sameChatNode(a.footer, b.footer)
@@ -395,10 +400,14 @@ export const ThreadBubble = memo(function ThreadBubble({
   secret,
   nowSec,
   onHandoffDecide,
+  handoffRemoteHost = null,
   footer,
   still = false,
 }: ThreadBubbleProps): JSX.Element {
   const kind = item.doc.kind
+  // A handoff doc as it arrived (a live frame, another server's row) is
+  // coerced here like a snapshot row: no `hosts` must never crash a bubble.
+  const handoff = useMemo(() => (kind === 'handoff' ? coerceHandoff(item.doc.handoff) : null), [kind, item.doc.handoff])
   const text = threadBubbleText(item)
   const files = item.doc.attachments ?? []
   // A post that is only files (`k2 thread <addr> --file …`) has no bubble.
@@ -483,13 +492,14 @@ export const ThreadBubble = memo(function ThreadBubble({
             />
           </div>
         )}
-        {kind === 'handoff' && item.doc.handoff && (
+        {handoff && (
           <div style={{ marginTop: 6 }}>
             <HandoffCard
-              handoff={item.doc.handoff}
-              answeredBy={cardAnswererLabel(item.doc.handoff.answeredBy, viewer)}
+              handoff={handoff}
+              answeredBy={cardAnswererLabel(handoff.answeredBy, viewer)}
               nowSec={nowSec}
               onDecide={onHandoffDecide ?? ((body) => handoffApi.decide(body))}
+              remoteHost={handoffRemoteHost}
             />
           </div>
         )}

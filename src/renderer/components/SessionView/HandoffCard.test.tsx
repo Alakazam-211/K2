@@ -183,3 +183,28 @@ describe('coerceHandoff', () => {
     expect(snap.items[0]?.doc.handoff?.deliveryId).toBe(BASE.deliveryId)
   })
 })
+
+// Home / remote rooms (Rosson hit these live, 0.46.6): a handoff doc from
+// another server can come without `hosts`, and a remote room can't decide.
+describe('HandoffCard from another server', () => {
+  it('a doc without hosts renders (no crash, no "for …" sites)', () => {
+    const raw = { ...BASE } as Partial<OverlayHandoff>
+    delete raw.hosts
+    render(<HandoffCard handoff={raw as OverlayHandoff} onDecide={async () => {}} />)
+    const header = screen.getByTestId('thread-handoff-header').textContent ?? ''
+    expect(header).toContain('STRIPE_KEY')
+    expect(header).not.toContain(', for ')
+    expect(screen.getByTestId('thread-handoff-accept')).toBeTruthy()
+  })
+
+  it('in a remote room: no Accept or Decline, just "Open <host> directly to accept this"', () => {
+    const onDecide = vi.fn(async () => {})
+    render(<HandoffCard handoff={BASE} onDecide={onDecide} remoteHost="rosson.k2.dev" />)
+    expect(screen.getByTestId('thread-handoff-remote').textContent).toBe('Open rosson.k2.dev directly to accept this.')
+    for (const id of ['thread-handoff-accept', 'thread-handoff-decline', 'thread-handoff-accept-as', 'thread-handoff-replace', 'thread-handoff-always']) {
+      expect(screen.queryByTestId(id)).toBeNull()
+    }
+    expect(screen.getByTestId('thread-handoff-header').textContent).toContain('STRIPE_KEY')
+    expect(onDecide).not.toHaveBeenCalled()
+  })
+})

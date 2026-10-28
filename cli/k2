@@ -29731,11 +29731,15 @@ _CONNECT_NO_DAEMON=10
 _connect_curl_daemon() {
     local method="$1" endpoint="$2" body="${3:-}"
     local req
-    req="$(M="$method" E="$endpoint" B="$body" python3 -c '
+    # MSYS2_ENV_CONV_EXCL: on Windows, Git Bash rewrites an environment
+    # value that looks like a POSIX path for a native program, so
+    # "/subdomains" reached Python as "C:/Program Files/Git/subdomains".
+    # These values are API paths, never files. Unix ignores the variable.
+    req="$(MSYS2_ENV_CONV_EXCL=K2CC_ K2CC_M="$method" K2CC_E="$endpoint" K2CC_B="$body" python3 -c '
 import json, os
-d = {"method": os.environ["M"], "endpoint": os.environ["E"]}
-if os.environ.get("B"):
-    d["body"] = os.environ["B"]
+d = {"method": os.environ["K2CC_M"], "endpoint": os.environ["K2CC_E"]}
+if os.environ.get("K2CC_B"):
+    d["body"] = os.environ["K2CC_B"]
 print(json.dumps(d))
 ')" || return 1
     local _K2_CFG="" out="" rc=1 code="" resp=""

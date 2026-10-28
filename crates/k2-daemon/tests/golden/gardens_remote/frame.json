@@ -14,7 +14,8 @@
         "zen-widgets-v1",
         "garden-data-v1",
         "guests-rooms-v1",
-        "garden-blobs-v1"
+        "garden-blobs-v1",
+        "garden-history-v1"
       ],
       "k2": "hello",
       "motion": {

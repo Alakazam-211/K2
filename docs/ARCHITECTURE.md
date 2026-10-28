@@ -64,7 +64,7 @@ All Rust source lives under `src-tauri/src/`.
 
 ### `db/` -- SQLite Database
 
-- Database lives at `~/.k2so/k2so.db`.
+- Database lives at `~/.k2/k2.db` (`~/.k2/k2so.db` is a compat link to it since 0.46.6).
 - Uses WAL mode and foreign key enforcement.
 - Migrations are embedded in the binary (via `include_str!`) and tracked in a `_migrations` table.
 - `schema.rs` defines typed structs and CRUD methods for all 7 tables.
@@ -174,7 +174,7 @@ Frontend listens with `listen("event_name", callback)` from `@tauri-apps/api/eve
 
 ## Database Schema
 
-SQLite database at `~/.k2so/k2so.db` with 7 tables (plus `_migrations`):
+SQLite database at `~/.k2/k2.db` (formerly `k2so.db`) with 7 tables (plus `_migrations`):
 
 ```sql
 focus_groups

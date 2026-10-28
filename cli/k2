@@ -156,14 +156,26 @@ _thread_md_nudge() {
 # → the one with more live workspaces (a stub k2.db cannot hide k2so.db);
 # else k2.db if it exists, else k2so.db if it exists, else k2.db. Never
 # creates either file.
+#
+# prd-k2-db-rename-v1 DB-A9: K2's database is only ever opened through
+# _k2_db_uri (`file:…?mode=rw`): it opens an existing file and never
+# creates a missing one (a plain `sqlite3 <missing>` mints a 0-byte stub,
+# which is how the z3mbp stub k2.db appeared). Not `-readonly`/`mode=ro`:
+# the sqlite3 CLI refuses those on a WAL database once K2 has stopped and
+# removed its -shm. Callers only read.
+_k2_db_uri() {
+    local p="$1"
+    p="${p//%/%25}"; p="${p//\?/%3f}"; p="${p//#/%23}"
+    printf 'file:%s?mode=rw' "$p"
+}
 _k2_home_db() {
     local new="$K2_HOME/k2.db"
     local old="$K2_HOME/k2so.db"
     if [ -f "$new" ] && [ ! -L "$new" ] && [ -f "$old" ] && [ ! -L "$old" ]; then
         local cn=0 co=0
         if command -v sqlite3 >/dev/null 2>&1; then
-            cn=$(sqlite3 "$new" "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');" 2>/dev/null || true)
-            co=$(sqlite3 "$old" "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');" 2>/dev/null || true)
+            cn=$(sqlite3 "$(_k2_db_uri "$new")" "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');" 2>/dev/null || true)
+            co=$(sqlite3 "$(_k2_db_uri "$old")" "SELECT count(*) FROM projects WHERE id NOT IN ('_orphan', '_broadcast');" 2>/dev/null || true)
         fi
         cn=$(( ${cn:-0} + 0 ))
         co=$(( ${co:-0} + 0 ))
@@ -5639,7 +5651,9 @@ print('yes' if (agent_inbox or ws_inbox) else 'no')
 import json, os, sqlite3
 try:
     db = os.path.expanduser('$(_k2_home_db)')
-    conn = sqlite3.connect(db)
+    # DB-A9: read-only, and never create a missing file.
+    uri = 'file:' + db.replace('%', '%25').replace('?', '%3f').replace('#', '%23') + '?mode=ro'
+    conn = sqlite3.connect(uri, uri=True)
     project = '$PROJECT'
     row = conn.execute('SELECT id FROM projects WHERE path = ?', (project,)).fetchone()
     if not row:
@@ -18597,7 +18611,7 @@ cmd_signal() {
         # SQL-escape single quotes in the path (doubled per SQL spec).
         local _safe_path="${PROJECT//\'/\'\'}"
         local _resolved
-        _resolved=$(sqlite3 "$_k2_db" \
+        _resolved=$(sqlite3 "$(_k2_db_uri "$_k2_db")" \
             "SELECT id FROM projects WHERE path = '${_safe_path}' LIMIT 1;" 2>/dev/null || true)
         if [ -n "$_resolved" ]; then
             workspace_id="$_resolved"
@@ -65924,6 +65938,16 @@ OWNER (engine — server-side owner/admin gate; agents exit 3)
                                  "Allow this agent to manage Postgres versions"
                                  (owner turns on; owner or Admin turns off; never an agent)
 
+K2'S OWN DATABASE (~/.k2/k2.db; k2so.db is a link to it)
+  home [--json]                  which file K2 uses and what the 0.46.6 switch did
+                                 (owner or Admin)
+  home --keep k2.db|k2so.db      owner: when both files hold workspaces, keep this one;
+                                 at the next K2 start the other moves to
+                                 ~/.k2/db-quarantine (never deleted).
+  Peek at it with sqlite3 -readonly ~/.k2/k2.db while K2 runs, or
+  sqlite3 'file:<home>/.k2/k2.db?mode=rw' when K2 is stopped. Never a plain
+  sqlite3 <file>: on a missing file it creates an empty one. Copies: .backup.
+
 AGENT (workspace — identity from token, never body project=)
   create [--id <client-id>] [--db-access off|read|write] [--json]
                                  needs db_agent_access=write (create-only passport)
@@ -66069,8 +66093,59 @@ _db_take_workspace_flags() {
     done
 }
 
+# `k2 db home [--keep k2.db|k2so.db] [--json]` — where K2 keeps its own
+# database (prd-k2-db-rename-v1). Reading: the owner or an Admin. --keep
+# (owner only) chooses the copy to keep when two hold workspaces; the
+# next K2 start moves the other into ~/.k2/db-quarantine (never deleted).
+_db_home() {
+    local keep="" as_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --keep) keep="${2:-}"; shift 2 || { _db_err "usage" "--keep needs k2.db or k2so.db"; exit 2; } ;;
+            --keep=*) keep="${1#--keep=}"; shift ;;
+            --json) as_json=true; shift ;;
+            -h|--help|help) cmd_help_db; exit 0 ;;
+            *) _db_err "usage" "k2 db home [--keep k2.db|k2so.db] [--json]"; exit 2 ;;
+        esac
+    done
+    local out rc=0
+    if [ -n "$keep" ]; then
+        case "$keep" in k2.db|k2so.db) ;; *) _db_err "usage" "--keep must be k2.db or k2so.db"; exit 2 ;; esac
+        out="$(cli_request_post "/cli/db-home/keep" "keep=$(urlencode "$keep")")" || rc=$?
+    else
+        out="$(cli_request "/cli/db-home")" || rc=$?
+    fi
+    [ "$rc" -eq 0 ] || exit "$rc"
+    D_OUT="$out" D_JSON="$as_json" python3 -c '
+import json, os, sys
+raw = os.environ["D_OUT"]
+try:
+    v = json.loads(raw)
+except Exception:
+    print(raw); sys.exit(1)
+if os.environ["D_JSON"] == "true":
+    print(json.dumps(v, ensure_ascii=False)); sys.exit(0 if v.get("ok", True) else 3)
+err = v.get("error")
+if err:
+    print("Error (%s): %s" % (err.get("code"), err.get("hint")), file=sys.stderr)
+    sys.exit(2 if err.get("code") == "usage" else 3)
+if "message" in v:
+    print(v["message"]); sys.exit(0)
+h = v.get("homeDb") or {}
+print("K2 database:  %s (%s)" % (h.get("file") or "?", h.get("outcome") or "not started"))
+if h.get("reason"): print("why:          %s" % h["reason"])
+if h.get("markerAt"): print("switched at:  %s" % h["markerAt"])
+if h.get("held"): print("on hold:      %s/db-switch-hold exists (the switch waits)" % h.get("dir", "~/.k2"))
+b = h.get("blocked") or {}
+if b.get("message"): print("\n" + b["message"])
+c = h.get("choice") or {}
+if c.get("keep"): print("\nChosen: keep %s (applies at the next K2 start)." % c["keep"])
+'
+}
+
 cmd_db() {
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_db; exit 0; fi
+    if [ "$1" = "home" ]; then shift; _db_home "$@"; exit $?; fi
     _db_take_workspace_flags "$@"
     if [ ${#_db_ws_args[@]} -eq 0 ]; then cmd_help_db; exit 0; fi
     set -- "${_db_ws_args[@]}"

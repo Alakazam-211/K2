@@ -1,7 +1,7 @@
 //! 0.40.0 rebrand — one-time `~/.k2so` → `~/.k2` home-directory
 //! migration.
 //!
-//! Everything daemon-owned (k2so.db, daemon.port/token, heartbeat.port/
+//! Everything daemon-owned (the home DB, then k2so.db, daemon.port/token, heartbeat.port/
 //! token, logs, frpc config, themes, settings.json, connect-users.json,
 //! clone-tmp) lived under `~/.k2so`. As of 0.40.0 the canonical home is
 //! `~/.k2`; this module moves the directory ONCE and leaves

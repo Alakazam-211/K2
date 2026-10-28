@@ -118,7 +118,7 @@ croner = "3"
 # Serialize/Deserialize impls used by session::SessionId (0.34.0).
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# Home-directory lookup for ~/.k2so/k2so.db.
+# Home-directory lookup for ~/.k2 (the home database ~/.k2/k2.db).
 dirs = "5"
 # canonicalize without the Windows \\?\ verbatim prefix (git, stored
 # workspace paths and path comparisons need the plain C:\ form); exactly

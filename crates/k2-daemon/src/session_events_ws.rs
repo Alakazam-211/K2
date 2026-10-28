@@ -327,22 +327,23 @@ pub(crate) fn person_may_see(event: &SessionEvent, socket_person: Option<&str>) 
 /// The person key of the identity that holds a socket (`None` when it
 /// could not be resolved).
 pub(crate) fn socket_person(identity: Option<&crate::presence::PresenceIdentity>) -> Option<String> {
-    let login = match identity? {
-        crate::presence::PresenceIdentity::Owner => "owner".to_string(),
-        crate::presence::PresenceIdentity::ConnectUser { username, .. } => username.clone(),
+    let username = match identity? {
+        crate::presence::PresenceIdentity::Owner => return Some(k2_core::notify_prefs::OWNER.to_string()),
+        crate::presence::PresenceIdentity::ConnectUser { username, .. } => username,
     };
-    Some(match k2_core::notify_prefs::People::load() {
-        Ok(people) => people.person_key(&login),
-        // Can't read the roster: the owner token is still the owner; a
-        // login is its own name (never another person's frames).
-        Err(_) => {
-            if login == "owner" {
-                login
-            } else {
-                login.to_ascii_lowercase()
-            }
-        }
-    })
+    socket_login_person(k2_core::notify_prefs::People::load().ok().as_ref(), username)
+}
+
+/// A Connect login's socket person: only a linked login is the owner,
+/// never a username match. An unlinked login literally named `owner` gets
+/// no person (no person-scoped frames: they'd be the owner's).
+pub(crate) fn socket_login_person(people: Option<&k2_core::notify_prefs::People>, username: &str) -> Option<String> {
+    match people {
+        Some(p) => p.login_person_key(username),
+        // Can't read the roster: a login is its own name (never another
+        // person's frames), and `owner` is nobody's.
+        None => k2_core::notify_prefs::People::default().login_person_key(username),
+    }
 }
 
 /// RL6 / A30: the close code for a subscriber that fell behind the bus.

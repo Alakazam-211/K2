@@ -98,6 +98,9 @@ fn device_removed(device_id: &str) -> CliResponse {
 }
 
 /// The person key for `actor`, or 403 (a login that no longer exists).
+/// Only the owner token and the logins the owner linked are the owner
+/// person, never a username match: a Connect user literally named `owner`
+/// that isn't linked gets 403 (its name would be the owner's key).
 pub fn person_for(actor: &Actor) -> Result<String, CliResponse> {
     if actor.owner_token {
         return Ok(OWNER.to_string());
@@ -106,7 +109,13 @@ pub fn person_for(actor: &Actor) -> Result<String, CliResponse> {
         return Err(not_a_person());
     }
     let people = People::load().map_err(|e| error("500 Internal Server Error", "store", e))?;
-    Ok(people.person_key(&actor.login))
+    people.login_person_key(&actor.login).ok_or_else(|| {
+        error(
+            "403 Forbidden",
+            "homes_person_only",
+            "this login is named 'owner' but isn't one of the owner's linked accounts, so it has no Homes; the owner can link it, or give the person a login with another name",
+        )
+    })
 }
 
 fn now_ms() -> i64 {
@@ -354,6 +363,48 @@ mod tests {
         assert_eq!(r.status, "403 Forbidden");
         assert!(r.body.contains("homes_person_only"), "{}", r.body);
         assert!(refuse_outside_person_arm("/cli/thread", false).is_none());
+    }
+
+    /// The person key, or a loud failure naming the refusal.
+    fn person(a: &Actor, what: &str) -> String {
+        match person_for(a) {
+            Ok(p) => p,
+            Err(r) => panic!("{what}: {} {}", r.status, r.body),
+        }
+    }
+
+    /// Only the owner token and logins the owner linked are the owner
+    /// person: a Connect user literally named `owner` is refused, and gets
+    /// none of the owner's Homes frames, until the owner links it.
+    #[test]
+    fn a_connect_user_named_owner_is_not_the_owner_person() {
+        let _home = crate::test_support::TempHome::new();
+        k2_core::connect_users::add_user("owner", "password123").expect("user named owner");
+        k2_core::connect_users::add_user("gina", "password123").expect("user");
+        assert_eq!(person(&Actor::owner_token(), "owner token"), OWNER);
+        let r = person_for(&Actor::login("owner")).expect_err("a login named owner is not the owner person");
+        assert_eq!(r.status, "403 Forbidden");
+        assert!(r.body.contains("homes_person_only"), "{}", r.body);
+        let r = person_for(&Actor::login("OWNER")).expect_err("any case");
+        assert_eq!(r.status, "403 Forbidden");
+        assert_eq!(person(&Actor::login("gina"), "gina"), "gina");
+        let named_owner = crate::presence::PresenceIdentity::ConnectUser {
+            username: "owner".into(),
+            role: k2_core::connect_users::Role::Member,
+        };
+        assert_eq!(crate::session_events_ws::socket_person(Some(&named_owner)), None, "no owner frames on its sockets");
+        assert_eq!(crate::session_events_ws::socket_login_person(None, "owner"), None, "nor when the roster can't be read");
+        assert_eq!(crate::session_events_ws::socket_person(Some(&crate::presence::PresenceIdentity::Owner)).as_deref(), Some(OWNER));
+        // The owner links it on purpose: now it is the owner person.
+        k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["owner"] })).expect("link");
+        assert_eq!(person(&Actor::login("owner"), "linked"), OWNER);
+        assert_eq!(crate::session_events_ws::socket_person(Some(&named_owner)).as_deref(), Some(OWNER));
+        // A linked login of another name still is; the roster-less fallback
+        // never makes anyone the owner.
+        k2_core::app_settings::update(serde_json::json!({ "ownerAccounts": ["gina"] })).expect("link gina");
+        assert_eq!(person(&Actor::login("gina"), "gina linked"), OWNER);
+        assert!(person_for(&Actor::login("owner")).is_err(), "unlinked again");
+        assert_eq!(crate::session_events_ws::socket_login_person(None, "gina").as_deref(), Some("gina"));
     }
 
     #[test]

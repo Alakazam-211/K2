@@ -92,6 +92,23 @@ impl People {
         login.to_ascii_lowercase()
     }
 
+    /// The person key for an authenticated **Connect login** (never the
+    /// owner token, which callers map to [`OWNER`] themselves). Only a
+    /// login the owner linked is the owner person. A login whose name is
+    /// literally `owner` and isn't linked is NOT the owner, and its own
+    /// name would collide with the owner's key, so it has no person key
+    /// (`None`): callers refuse it or give it nothing person-scoped.
+    pub fn login_person_key(&self, login: &str) -> Option<String> {
+        let login = login.trim();
+        if self.is_linked(login) {
+            return Some(OWNER.to_string());
+        }
+        if login.eq_ignore_ascii_case(OWNER) {
+            return None;
+        }
+        Some(login.to_ascii_lowercase())
+    }
+
     /// The person a registered device belongs to, or `None` when the
     /// device must not get pushes: its login was removed or is disabled
     /// (TP11). A device registered by the owner token always counts.
@@ -628,6 +645,24 @@ mod tests {
         assert_eq!(demoted.role_of(OWNER), Some(Role::Owner));
         assert_eq!(demoted.role_of("gina"), Some(Role::Admin));
         assert_eq!(demoted.role_of("ghost"), None);
+    }
+
+    /// A Connect user literally named `owner` is not the owner person by
+    /// its name: only the owner token and linked logins are. Unlinked, it
+    /// has no person key at all (it would collide with the owner's); the
+    /// owner can still link it on purpose.
+    #[test]
+    fn a_login_named_owner_is_not_the_owner_person() {
+        let p = People { linked: vec![], users: vec![user("owner", Role::Member, false), user("gina", Role::Admin, false)] };
+        assert_eq!(p.login_person_key("owner"), None, "a username match never makes the owner person");
+        assert_eq!(p.login_person_key(" OWNER "), None, "any case or padding");
+        assert_eq!(p.login_person_key("gina"), Some("gina".to_string()));
+        assert_eq!(p.login_person_key("Gina"), Some("gina".to_string()));
+        let linked = People { linked: vec!["gina".into()], ..p.clone() };
+        assert_eq!(linked.login_person_key("gina").as_deref(), Some(OWNER), "a linked login is the owner person");
+        assert_eq!(linked.login_person_key("owner"), None, "linking someone else doesn't make 'owner' the owner");
+        let linked_owner = People { linked: vec!["owner".into()], ..p };
+        assert_eq!(linked_owner.login_person_key("owner").as_deref(), Some(OWNER), "the owner linked it on purpose");
     }
 
     /// Owner-linked accounts: a linked login IS the owner person, whatever

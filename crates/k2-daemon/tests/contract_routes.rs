@@ -406,7 +406,7 @@ async fn get_on_every_write_binding_is_405() {
         Some(p) => std::env::set_var("HOME", p),
         None => std::env::remove_var("HOME"),
     }
-    std::fs::remove_dir_all(&home).expect("remove temp HOME");
+    k2_core::test_env::remove_test_dir(&home);
 }
 
 // ── TUWA11: k2 zen guide api ────────────────────────────────────────────

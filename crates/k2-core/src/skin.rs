@@ -2181,6 +2181,13 @@ fn with_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(f: F) -> Result<T, 
     f(conn)
 }
 
+/// Close the cached skin.db connection (the next call opens it again). For
+/// a test that removes the home it pointed at: Windows can't delete a
+/// database file that is still open.
+pub fn close_cached_connection() {
+    *db().lock() = None;
+}
+
 /// The one skin.db connection, for [`crate::tool_hook`] (same mutex as
 /// every `skin::*` function; not reentrant).
 pub(crate) fn with_skin_conn<T, F: FnOnce(&Connection) -> Result<T, String>>(

@@ -431,6 +431,8 @@ mod tests {
         conn.execute("INSERT INTO entries VALUES ('data:board', 'late', 5, 0, '1', 1, 5, 'owner')", []).expect("late");
         let frozen = export_route(&c, &DataWho::Owner, &params(&[("widget", "board"), ("at", "2026-10-13")])).expect("at");
         assert_eq!(keys(&frozen), ["obj/1", "project/7/obj/9", "project/8/obj/1"]);
+        // Windows can't delete a file that is still open.
+        drop(conn);
         std::fs::remove_dir_all(&d).expect("cleanup");
     }
 

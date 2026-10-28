@@ -387,7 +387,7 @@ fn with_temp_home<F: FnOnce()>(f: F) {
         Some(p) => std::env::set_var("HOME", p),
         None => std::env::remove_var("HOME"),
     }
-    std::fs::remove_dir_all(&tmp).expect("remove temp HOME");
+    k2_core::test_env::remove_test_dir(&tmp);
 }
 
 fn futures_block<F: std::future::Future>(fut: F) -> F::Output {

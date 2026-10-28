@@ -243,6 +243,33 @@ pub fn unique_temp_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("k2-{tag}-{}", uuid::Uuid::new_v4().simple()))
 }
 
+/// Remove a test's temp dir, or panic naming what couldn't go. Windows
+/// refuses to delete a file something still holds open (Unix doesn't
+/// mind), so a bare `remove_dir_all` failure says only "in use"; this
+/// lists which files, so the holder can be found.
+pub fn remove_test_dir(dir: &Path) {
+    // The process keeps one skin.db connection for its life; a test home
+    // that held skin.db can't be removed on Windows while it is open.
+    crate::skin::close_cached_connection();
+    let Err(e) = std::fs::remove_dir_all(dir) else { return };
+    let mut stuck = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for ent in rd.flatten() {
+            let p = ent.path();
+            if p.is_dir() && !p.is_symlink() {
+                stack.push(p);
+            } else if let Err(err) = std::fs::remove_file(&p) {
+                stuck.push(format!("{} ({err})", p.display()));
+            }
+        }
+    }
+    stuck.sort();
+    stuck.truncate(12);
+    panic!("remove {}: {e}; still held: {stuck:#?}", dir.display());
+}
+
 /// RAII temp `$HOME`: holds [`lock`], points `$HOME` at a fresh temp dir
 /// (with `.k2/` pre-created so writers that stage a tmp file and rename it
 /// into `~/.k2/…` find the parent), checks the test cannot reach the

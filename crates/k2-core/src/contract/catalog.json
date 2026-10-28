@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 36,
+  "catalogVersion": 37,
   "caps": [
     {
       "name": "agents:read",
@@ -12253,6 +12253,31 @@
                         "expiresAt": {
                           "type": "integer",
                           "description": "Seconds since the epoch, when a pending card expires."
+                        },
+                        "inject": {
+                          "type": "object",
+                          "description": "How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering.",
+                          "properties": {
+                            "dst": {
+                              "type": "string"
+                            },
+                            "fmt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "dst",
+                            "fmt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "envName": {
+                          "type": "string",
+                          "description": "The environment variable an env delivery uses."
+                        },
+                        "replaces": {
+                          "type": "boolean",
+                          "description": "A secret by this name already exists; Save replaces it."
                         }
                       },
                       "required": [
@@ -12562,6 +12587,31 @@
                         "expiresAt": {
                           "type": "integer",
                           "description": "Seconds since the epoch, when a pending card expires."
+                        },
+                        "inject": {
+                          "type": "object",
+                          "description": "How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering.",
+                          "properties": {
+                            "dst": {
+                              "type": "string"
+                            },
+                            "fmt": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "dst",
+                            "fmt"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "envName": {
+                          "type": "string",
+                          "description": "The environment variable an env delivery uses."
+                        },
+                        "replaces": {
+                          "type": "boolean",
+                          "description": "A secret by this name already exists; Save replaces it."
                         }
                       },
                       "required": [
@@ -13430,6 +13480,23 @@
               "type": "string",
               "description": "A secret's delivery: fetch for guests."
             },
+            "inject": {
+              "type": "object",
+              "description": "A secret card that names how K2 sends it (secret.inject): echo it back, as shown. Without it such a card answers card_inject_unseen.",
+              "properties": {
+                "dst": {
+                  "type": "string"
+                },
+                "fmt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "dst",
+                "fmt"
+              ],
+              "additionalProperties": false
+            },
             "confirm": {
               "type": "boolean"
             }
@@ -13804,6 +13871,31 @@
                   "expiresAt": {
                     "type": "integer",
                     "description": "Seconds since the epoch, when a pending card expires."
+                  },
+                  "inject": {
+                    "type": "object",
+                    "description": "How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering.",
+                    "properties": {
+                      "dst": {
+                        "type": "string"
+                      },
+                      "fmt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "dst",
+                      "fmt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "envName": {
+                    "type": "string",
+                    "description": "The environment variable an env delivery uses."
+                  },
+                  "replaces": {
+                    "type": "boolean",
+                    "description": "A secret by this name already exists; Save replaces it."
                   }
                 },
                 "required": [
@@ -14346,6 +14438,31 @@
                   "expiresAt": {
                     "type": "integer",
                     "description": "Seconds since the epoch, when a pending card expires."
+                  },
+                  "inject": {
+                    "type": "object",
+                    "description": "How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering.",
+                    "properties": {
+                      "dst": {
+                        "type": "string"
+                      },
+                      "fmt": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "dst",
+                      "fmt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "envName": {
+                    "type": "string",
+                    "description": "The environment variable an env delivery uses."
+                  },
+                  "replaces": {
+                    "type": "boolean",
+                    "description": "A secret by this name already exists; Save replaces it."
                   }
                 },
                 "required": [
@@ -14953,6 +15070,31 @@
                               "expiresAt": {
                                 "type": "integer",
                                 "description": "Seconds since the epoch, when a pending card expires."
+                              },
+                              "inject": {
+                                "type": "object",
+                                "description": "How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering.",
+                                "properties": {
+                                  "dst": {
+                                    "type": "string"
+                                  },
+                                  "fmt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "dst",
+                                  "fmt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "envName": {
+                                "type": "string",
+                                "description": "The environment variable an env delivery uses."
+                              },
+                              "replaces": {
+                                "type": "boolean",
+                                "description": "A secret by this name already exists; Save replaces it."
                               }
                             },
                             "required": [
@@ -15250,6 +15392,31 @@
                               "expiresAt": {
                                 "type": "integer",
                                 "description": "Seconds since the epoch, when a pending card expires."
+                              },
+                              "inject": {
+                                "type": "object",
+                                "description": "How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering.",
+                                "properties": {
+                                  "dst": {
+                                    "type": "string"
+                                  },
+                                  "fmt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "dst",
+                                  "fmt"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "envName": {
+                                "type": "string",
+                                "description": "The environment variable an env delivery uses."
+                              },
+                              "replaces": {
+                                "type": "boolean",
+                                "description": "A secret by this name already exists; Save replaces it."
                               }
                             },
                             "required": [

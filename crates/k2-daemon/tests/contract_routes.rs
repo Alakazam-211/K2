@@ -200,7 +200,10 @@ fn exposure_counts_are_pinned() {
     // Catalog v36 (0.46.6, email notifications part 2): email.status
     // recipientStatus, email.log bounced/complained, errors email_paused and
     // all_suppressed; no new rows.
-    assert_eq!(c.catalog_version, 36);
+    // Catalog v37 (0.46.6, secret cards that say how a secret is sent): the
+    // secret card's inject/envName/replaces and thread.answerCard's inject
+    // echo, no new rows.
+    assert_eq!(c.catalog_version, 37);
     assert_eq!(
         c.verbs.len(),
         226,

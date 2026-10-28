@@ -289,14 +289,25 @@ impl SandboxBackend for Passthrough {
     fn spawn(&self, req: SpawnRequest) -> io::Result<SpawnedChild> {
         // Map the readable ShellSpec back into alacritty's `tty::Shell` at the
         // PTY open — same program + args as before, so spawn is byte-identical.
+        #[cfg(not(windows))]
         let shell = req.shell.map(|s| Shell::new(s.program, s.args));
+        // Windows: ConPTY takes one command line, so the program and its
+        // args must be quoted/escaped (a prompt with spaces is one arg).
+        #[cfg(windows)]
+        let (shell, escape_args) = match req.shell {
+            Some(s) => {
+                let (program, args, escape) = super::win_cmd::conpty_command(&s.program, &s.args);
+                (Some(Shell::new(program, args)), escape)
+            }
+            None => (None, false),
+        };
         let pty_options = TtyOptions {
             shell,
             working_directory: req.cwd,
             drain_on_exit: req.drain_on_exit,
             env: req.env,
             #[cfg(target_os = "windows")]
-            escape_args: false,
+            escape_args,
         };
 
         // Window ID is used on macOS/Windows to associate the PTY with a

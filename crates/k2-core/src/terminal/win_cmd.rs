@@ -35,6 +35,24 @@ pub fn which(program: &str, path: &str) -> Option<PathBuf> {
     find_on_path(program, &split_search_dirs(path), &pathext, &|p: &Path| p.is_file())
 }
 
+/// How a ConPTY spawn of `(program, args)` must be handed to alacritty,
+/// which joins `program` and `args` into one command line:
+/// `(program, args, escape_args)`. A program path with spaces is quoted
+/// (else `C:\Program Files\...` splits at the space), and args are
+/// escaped the C-runtime way (else an arg with spaces, a whole prompt,
+/// arrives as several). The one exception is the `cmd /d /s /c "<payload>"`
+/// wrapper [`resolve_for_pty`] builds for npm `.cmd` shims: its payload is
+/// already in cmd.exe's own syntax and must reach it as written.
+pub fn conpty_command(program: &str, args: &[String]) -> (String, Vec<String>, bool) {
+    let quoted = if program.contains(char::is_whitespace) && !program.starts_with('"') {
+        format!("\"{program}\"")
+    } else {
+        program.to_string()
+    };
+    let cmd_wrapper = args.len() == 4 && args[..3].iter().map(String::as_str).eq(["/d", "/s", "/c"]);
+    (quoted, args.to_vec(), !cmd_wrapper)
+}
+
 /// Testable core. `exists` is injected so macOS unit tests can fake a
 /// Windows npm layout.
 pub fn resolve_for_pty(
@@ -245,6 +263,26 @@ mod tests {
 
     /// npm's global dir holds `codex` (an sh script for Git Bash), `codex.cmd`
     /// and `codex.ps1`: the .cmd is the Windows program, never the script.
+    #[test]
+    fn conpty_command_quotes_a_spaced_program_escapes_args_and_leaves_the_cmd_wrapper() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        // A prompt with spaces stays one arg: escaping on.
+        let (p, a, esc) = conpty_command(r"C:\Program Files\nodejs\codex.exe", &s(&["--", "hello from the API"]));
+        assert_eq!(p, r#""C:\Program Files\nodejs\codex.exe""#);
+        assert_eq!(a, s(&["--", "hello from the API"]));
+        assert!(esc);
+        // No spaces: the program is untouched.
+        let (p, _, esc) = conpty_command(r"C:\tools\claude.exe", &[]);
+        assert_eq!((p.as_str(), esc), (r"C:\tools\claude.exe", true));
+        // K2's own npm .cmd wrapper goes through as cmd.exe syntax.
+        let (p, a, esc) = conpty_command(r"C:\Windows\System32\cmd.exe", &s(&["/d", "/s", "/c", r#""C:\npm\codex.cmd" "a b""#]));
+        assert_eq!(p, r"C:\Windows\System32\cmd.exe");
+        assert_eq!(a.len(), 4);
+        assert!(!esc, "the wrapper's payload is already quoted for cmd.exe");
+        // Any other cmd use is escaped like everything else.
+        assert!(conpty_command("cmd.exe", &s(&["/c", "dir", r"C:\Program Files"])).2);
+    }
+
     #[test]
     fn an_extensionless_npm_script_is_never_the_program() {
         let dir = PathBuf::from(r"C:\Users\x\AppData\Roaming\npm");

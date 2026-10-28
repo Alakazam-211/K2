@@ -232,6 +232,11 @@ impl Host for K2Host {
                     log_debug!("[docs] {pid} left {} ({conn}, {reason:?})", key_label(key))
                 }
             },
+            // Purge isn't on k2 doc yet; when it runs, the audit gets what was
+            // reached (counts, scope), never content.
+            AuditEvent::Purged { key, by, scope, counts } => {
+                audit("doc-purged", by, format!("{} scope={scope:?} counts={counts:?}", key_label(key)))
+            }
             AuditEvent::RecheckFailed { key, error } => {
                 log_debug!("[docs] WARN: rights re-check failed on {}: {error}", key_label(key))
             }

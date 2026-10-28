@@ -243,15 +243,15 @@ viewer above).
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. These packages do **not** relicense the product. |
 
-## Multiplayer kit: k2-mpc-base v0.1.0 (vendored)
+## Multiplayer kit: k2-mpc-base v0.3.0 (vendored)
 
 Live docs (Markdown multiplayer v1) run on Alakazam Labs' multiplayer kit,
 vendored with `git subtree`.
 
 | | |
 |--|--|
-| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, text tools, parity), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.1.0` (`d718c06`) |
+| **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity), with its own `NOTICE.md` and `CHANGELOG.md` |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.3.0` (`ea924f6`) |
 | **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
 
 Its Rust dependencies, in K2's `Cargo.lock`:
@@ -268,7 +268,7 @@ Its Rust dependencies, in K2's `Cargo.lock`:
 `unicode-ident` is `(MIT OR Apache-2.0) AND Unicode-3.0`, used only at build
 time by procedural macros; Unicode-3.0 is OSI-approved and permissive.
 
-## Multiplayer kit: k2-mpc-markdown v0.1.0 (vendored)
+## Multiplayer kit: k2-mpc-markdown v0.2.0 (vendored)
 
 The Markdown type pack for the kit (schema, file codec, its own verbs such as
 `replace-section`, the parity list), vendored beside it.
@@ -276,9 +276,9 @@ The Markdown type pack for the kit (schema, file codec, its own verbs such as
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-markdown` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.1.0` (`098c6d4`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.2.0` (`7a0a91f`) |
 | **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
-| **Dependencies** | k2-mpc-base only (above) |
+| **Dependencies** | k2-mpc-base only (above): yrs (MIT), regex-automata, redb and thiserror (MIT OR Apache-2.0), and `unicode-ident` (build time only, Unicode-3.0) |
 
 Update both sections on every kit bump.
 

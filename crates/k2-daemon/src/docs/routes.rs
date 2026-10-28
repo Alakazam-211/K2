@@ -92,7 +92,7 @@ const ROOT: &str = k2_mpc_markdown::ROOT;
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
-    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV,
+    UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME,
 ];
 
 pub const VERSIONS: &str = "/cli/docs/versions";
@@ -102,6 +102,7 @@ pub const RESTORE: &str = "/cli/docs/restore";
 pub const NAME: &str = "/cli/docs/name";
 pub const REVERT: &str = "/cli/docs/revert";
 pub const MV: &str = "/cli/docs/mv";
+pub const BLAME: &str = "/cli/docs/blame";
 
 fn is_post_route(path: &str) -> bool {
     matches!(
@@ -270,7 +271,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     drop(store);
     // History reads need the history right (K-PERM-9); the kit checks it
     // too, this gives the refusal its own code first.
-    if matches!(path, LOG | VERSIONS | SHOW | DIFF | RESTORE) && !rights.history {
+    if matches!(path, LOG | VERSIONS | SHOW | DIFF | RESTORE | BLAME) && !rights.history {
         return with_exit(
             refusal("403 Forbidden", "history_forbidden", "you may read this doc but not its history"),
             k2_mpc_base::tools::exit::REFUSED,
@@ -497,6 +498,37 @@ fn verb(path: &str, s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError
             })))
         }
         TOOL => tool(s, c),
+        BLAME => {
+            // P22, `blame [-L a,b]`: read + history (gated above and by the
+            // kit). Each line's most recent author by change id.
+            let range = match input.str("lines").filter(|l| !l.trim().is_empty()) {
+                Some(l) => {
+                    let (first, last) = parse_lines(&l).map_err(|m| VerbError::Response(bad(m)))?;
+                    Some(LineRange { root: ROOT.to_string(), first, last })
+                }
+                None => None,
+            };
+            let j = join(s, c, Stay::UntilIdle)?;
+            let b = s.blame(j.conn, ROOT, range)?;
+            Ok(ok(json!({
+                "doc": doc_json(t),
+                "version": b.version,
+                "lines": b.lines.iter().map(|l| json!({
+                    "line": l.line,
+                    "text": l.text,
+                    "author": l.author,
+                    "authorLabel": pid_label(&l.author),
+                    "change": l.change,
+                    "kind": l.kind.as_ref().map(lower),
+                    "via": l.via,
+                    "atMs": l.at_ms,
+                    "onBehalfOf": l.on_behalf_of,
+                    "approval": l.approval.as_ref().map(lower),
+                    "erased": l.erased,
+                })).collect::<Vec<_>>(),
+                "rendered": b.render(|pid| Some(pid_label(pid))),
+            })))
+        }
         FLUSH => {
             let j = join(s, c, Stay::UntilIdle)?;
             let f = s.flush(j.conn)?;

@@ -179,7 +179,8 @@ get_passport() {
     resp="$(curl -s -X POST "$BASE/cli/workspace/ensure-pinned-chat?token=$DTOKEN" \
         -H 'Content-Type: application/json' --data-raw "$(json project "$B")" || true)"
     case "$resp" in *'"sessionId"'*) ;; *) fail "pinned chat: $resp" ;; esac
-    for _ in $(seq 1 100); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
+    for _ in $(seq 1 400); do [ -s "$SB/claude.env" ] && break; sleep 0.05; done
+    [ -s "$SB/claude.env" ] || fail "the pinned chat's harness never started (no claude.env after 20 s): $resp"
     PASSPORT="$(sed -n 's/^K2_HOOK_TOKEN=//p' "$SB/claude.env" | head -1)"
     SOCK="$(sed -n 's/^K2_HOOK_SOCK=//p' "$SB/claude.env" | head -1)"
     [ -n "$PASSPORT" ] || fail "the pinned chat got no passport"
@@ -455,6 +456,12 @@ want_rc 0 "undo the restore"
 cli agent "$B" doc cat home.md
 [ "$OUT" != "# B home" ] || fail "undo of the restore changed nothing"
 ok "restore is a new change, and undo reverses it"
+cli agent "$B" doc blame home.md
+want_rc 0 "blame"
+has "$OUT" "(agent)" "blame names the agent's lines"
+cli agent "$B" doc blame --json -L 1,1 home.md
+want_rc 0 "blame -L"
+jok "$OUT" 'len(j["lines"]) == 1 and j["lines"][0]["line"] == 1 and j["lines"][0]["author"]' "blame -L 1,1: one line with its author"
 cli agent "$B" doc revert 999999 home.md
 want_rc 4 "no such change"
 ok "revert of an unknown change: exit 4"

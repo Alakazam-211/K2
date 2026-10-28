@@ -1088,8 +1088,23 @@ mod tests {
         // `thread-push-v1` is on only once the DB (with migration 0157) is
         // up: before init it is absent, after it present.
         let _ = k2_core::db::shared();
+        // `mobile-sim-v1` follows the process-wide sim lane registry and the
+        // manager's probe cache, which the sim tests fill with a fake lane:
+        // hold their lock and start from no lanes (soak 2026-10-27, shuffled
+        // seeds 3, 5 and 6), then check the key both ways.
+        let _sim = crate::sim_routes::sim_test_lock();
+        crate::sim_routes::clear_lanes_for_tests();
+        let without_lanes = features();
+        k2_core::sim::register_lane(std::sync::Arc::new(k2_core::sim::fake::FakeLane::new(k2_core::sim::LaneKind::Android)));
+        k2_core::sim::manager::manager().refresh_probes();
+        let with_a_lane = features();
+        crate::sim_routes::clear_lanes_for_tests();
+        let mut want_with_a_lane = without_lanes.clone();
+        want_with_a_lane.insert(want_with_a_lane.len() - 1, k2_core::sim::BOOT_STATUS_KEY);
+        assert_eq!(with_a_lane, want_with_a_lane, "a usable lane adds mobile-sim-v1 just before the tail");
+        assert_eq!(k2_core::sim::BOOT_STATUS_KEY, "mobile-sim-v1");
         assert_eq!(
-            features(),
+            without_lanes,
             vec![
                 "spawn-attach-only",
                 "tickets-list-all",

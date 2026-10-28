@@ -1509,6 +1509,12 @@ async fn async_main() {
     // 10 s (the rest are retried in the background). No-op without ptyd.
     crate::ptyd_adopt::b1();
 
+    // Mobile dev: register the device lanes before `ready`, so the first
+    // `/boot-status` a client reads as ready already lists `mobile-sim-v1`
+    // where a lane can run (`sim_routes::start` below runs later in boot).
+    // Cheap: no probe runs here.
+    crate::sim_routes::register_lanes();
+
     boot_status::set_ready();
     log_debug!("[daemon] boot complete — phase=ready");
     // 0.46.4: the boot migrations' leftovers whose trash timed out, now off
@@ -1787,8 +1793,9 @@ async fn async_main() {
     crate::garden_data::start();
     // Local Grok Bots (0.45.7): idle unless Show is on.
     crate::grokbots_watch::start();
-    // Mobile dev (prd-mobile-dev-v1, 0.46.6): device lanes, re-adopt
-    // recorded devices, and the idle / data reaper. Headless like the rest.
+    // Mobile dev (prd-mobile-dev-v1, 0.46.6): probe the device lanes
+    // (registered before `ready`), re-adopt recorded devices, and the idle
+    // / data reaper. Headless like the rest.
     crate::sim_routes::start();
 
     // Heartbeat S3 wait pass (HB18/HB22): fills every row's stored

@@ -202,7 +202,7 @@ fn sim_routes_end_to_end_on_a_fake_lane() {
     assert!(run_card(&params, CARD_ACCEPT, "someone-who-is-not-owner").is_err());
     assert_eq!(run_card(&params, CARD_NOT_NOW, "anyone").expect("not now")["ok"], json!(true));
 
-    k2_core::sim::clear_lanes();
+    crate::sim_routes::clear_lanes_for_tests();
     let _ = std::fs::remove_dir_all(&tmp);
 }
 

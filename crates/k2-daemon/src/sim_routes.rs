@@ -179,6 +179,18 @@ pub(crate) fn sim_test_lock() -> std::sync::MutexGuard<'static, ()> {
     L.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Tests (under [`sim_test_lock`]): no lanes AND no cached probes. The
+/// manager caches lane probes, so clearing only the registry left a fake
+/// lane's `usable` probe behind, and every later test in the process saw
+/// `mobile-sim-v1` in `/boot-status` features (soak 2026-10-27, shuffled
+/// seeds 3, 5 and 6).
+#[cfg(test)]
+pub(crate) fn clear_lanes_for_tests() {
+    k2_core::sim::clear_lanes();
+    let left = manager::manager().refresh_probes();
+    assert!(left.is_empty(), "no lane may answer a probe after clear_lanes: {left:?}");
+}
+
 /// [`resolve_ws`] for the stream socket.
 pub fn resolve_ws_for(c: &Caller, token: Option<&str>) -> Result<Ws, SimError> {
     resolve_ws(c, token)
@@ -554,11 +566,19 @@ pub fn run_card(params: &Value, answer: &str, by: &str) -> Result<Value, String>
 
 // ── daemon lifecycle ─────────────────────────────────────────────────
 
-/// At daemon start: register this OS's lanes, wire the event hook, probe
-/// (for the boot-status key), re-adopt recorded devices, and start the
-/// reaper.
-pub fn start() {
+/// Register this OS's device lanes. The daemon calls it just before
+/// `boot_status::set_ready()`: `/boot-status` `features` lists
+/// `mobile-sim-v1` from the registered lanes, and [`start`] runs later in
+/// boot, so a client that read the features the moment the daemon turned
+/// ready was told Mobile isn't there. Cheap: no probe runs here.
+pub fn register_lanes() {
     k2_core::sim::register_builtin_lanes();
+}
+
+/// At daemon start (lanes already registered by [`register_lanes`]): wire
+/// the event hook, probe (for the boot-status key), re-adopt recorded
+/// devices, and start the reaper.
+pub fn start() {
     manager::set_event_hook(crate::session_events::emit_sim);
     std::thread::Builder::new()
         .name("k2-sim-reaper".into())

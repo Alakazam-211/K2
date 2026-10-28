@@ -512,7 +512,7 @@ mod tests {
         drop(hub_a);
         drop(hub_b);
         m.stop(&ws, &manager::Actor::Person { name: "owner".into() }, "test").expect("stop");
-        k2_core::sim::clear_lanes();
+        crate::sim_routes::clear_lanes_for_tests();
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

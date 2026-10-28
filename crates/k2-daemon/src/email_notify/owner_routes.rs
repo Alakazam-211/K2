@@ -23,6 +23,10 @@
 //! POST /cli/notifications/email/relay/rm              {relay}
 //! GET  /cli/notifications/email/log                   ?app=&limit=&status=
 //! POST /cli/notifications/email/settings              {logRetentionDays?, ownerEmail?}                              owner
+//! POST /cli/notifications/email/sender/resume         {sender, confirmToken}                                        owner + confirm (N6)
+//! GET  /cli/notifications/email/suppressions          ?address=&limit=                                              (N6)
+//! POST /cli/notifications/email/suppressions/add      {address, sender?}                                            (N6)
+//! POST /cli/notifications/email/suppressions/rm       {address, sender?, all?}                                      owner (N6)
 //! ```
 
 use std::collections::HashMap;
@@ -51,12 +55,16 @@ pub const RELAY_TEST: &str = "/cli/notifications/email/relay/test";
 pub const RELAY_RM: &str = "/cli/notifications/email/relay/rm";
 pub const LOG: &str = "/cli/notifications/email/log";
 pub const SETTINGS: &str = "/cli/notifications/email/settings";
+pub const SENDER_RESUME: &str = "/cli/notifications/email/sender/resume";
+pub const SUPPRESSIONS: &str = "/cli/notifications/email/suppressions";
+pub const SUPPRESSION_ADD: &str = "/cli/notifications/email/suppressions/add";
+pub const SUPPRESSION_RM: &str = "/cli/notifications/email/suppressions/rm";
 
 pub const ROUTES: &[&str] = &[
     STATUS, SENDERS, SENDER_ADD, SENDER_SET, SENDER_CHECK, SENDER_RM, SYSTEM, SYSTEM_SET, SYSTEM_CLEAR, SYSTEM_TEST, RELAYS, RELAY_ADD, RELAY_TEST, RELAY_RM,
-    LOG, SETTINGS,
+    LOG, SETTINGS, SENDER_RESUME, SUPPRESSIONS, SUPPRESSION_ADD, SUPPRESSION_RM,
 ];
-pub const POST_ROUTES: &[&str] = &[SENDER_ADD, SENDER_SET, SENDER_CHECK, SENDER_RM, SYSTEM_SET, SYSTEM_CLEAR, SYSTEM_TEST, RELAY_ADD, RELAY_TEST, RELAY_RM, SETTINGS];
+pub const POST_ROUTES: &[&str] = &[SENDER_ADD, SENDER_SET, SENDER_CHECK, SENDER_RM, SYSTEM_SET, SYSTEM_CLEAR, SYSTEM_TEST, RELAY_ADD, RELAY_TEST, RELAY_RM, SETTINGS, SENDER_RESUME, SUPPRESSION_ADD, SUPPRESSION_RM];
 
 pub fn is_route(p: &str) -> bool {
     ROUTES.contains(&p)
@@ -176,7 +184,7 @@ fn status() -> R<J> {
         "hostedMail": super::hosted_supported(),
         "airgap": super::airgap_blocks(),
         "systemSender": system.as_ref().map(sender_json),
-        "senders": senders.iter().map(sender_json).collect::<Vec<_>>(),
+        "senders": senders.iter().map(with_pause).collect::<Vec<_>>(),
         "relays": relays.iter().map(super::relay::relay_json).collect::<Vec<_>>(),
         "settings": settings,
         "agpl": AGPL_NOTE,
@@ -396,6 +404,89 @@ fn settings(who: &Who, v: &J) -> R<J> {
     Ok(json!({ "ok": true, "settings": st }))
 }
 
+/// A sender as the owner sees it, with its auto-pause (N6; `null` when
+/// not paused). Called with no db lock held.
+fn with_pause(s: &store::Sender) -> J {
+    let mut j = sender_json(s);
+    j["paused"] = super::outcomes::pause_json(s);
+    j
+}
+
+/// POST `sender/resume`: the owner in person, with a fresh confirm bound to
+/// the sender's address (N6: a resume starts a new counting window).
+fn sender_resume(who: &Who, v: &J) -> Result<J, CliResponse> {
+    let raw = s(v, "sender").ok_or_else(|| super::fail_response(&fail(400, "usage", "send {sender} (an id or address)")))?;
+    let sender = super::senders::find_live(raw).map_err(|f| super::fail_response(&f))?;
+    if !super::outcomes::is_paused(&sender) {
+        return Err(super::fail_response(&fail(409, "not_paused", format!("{} isn't paused", sender.address))));
+    }
+    confirm(who, v, super::CONFIRM_RESUME, &sender.address).map_err(|f| confirm_needed(f, super::CONFIRM_RESUME, &sender.address))?;
+    super::outcomes::resume(&sender, &actor(who), super::now()).map_err(|f| super::fail_response(&f))
+}
+
+fn suppression_json(x: &k2_core::email_outcomes::Suppression) -> J {
+    json!({
+        "addressSha256": x.address_sha256,
+        "domain": x.domain,
+        "scope": x.scope,
+        "scopeRef": if x.scope_ref.is_empty() { J::Null } else { json!(x.scope_ref) },
+        "reason": x.reason,
+        "createdAt": x.created_at,
+        "createdBy": x.created_by,
+    })
+}
+
+/// GET `suppressions?address=&limit=`: Admins. Addresses are kept hashed,
+/// so a search names the address; the list shows domains and reasons.
+fn suppressions(params: &HashMap<String, String>) -> R<J> {
+    let limit = params.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(100).clamp(1, 1000);
+    let address = params.get("address").map(|a| a.trim()).filter(|a| !a.is_empty());
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let list = k2_core::email_outcomes::list_suppressions(&conn, address, limit).map_err(db_fail)?;
+    Ok(json!({ "ok": true, "suppressions": list.iter().map(suppression_json).collect::<Vec<_>>() }))
+}
+
+/// `(scope, scope_ref)` from `{sender?}`: a sender's own list, else box-wide.
+fn scope_of(v: &J) -> R<(&'static str, String)> {
+    match s(v, "sender") {
+        Some(raw) => Ok((k2_core::email_outcomes::SCOPE_SENDER, super::senders::find_live(raw)?.id)),
+        None => Ok((k2_core::email_outcomes::SCOPE_BOX, String::new())),
+    }
+}
+
+/// POST `suppressions/add {address, sender?}`: Admins (it only narrows).
+fn suppression_add(who: &Who, v: &J) -> R<J> {
+    let a = super::compose::strict_address(s(v, "address").ok_or_else(|| fail(400, "usage", "send {address}"))?)?;
+    let (scope, scope_ref) = scope_of(v)?;
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let added = k2_core::email_outcomes::suppress(&conn, &a, scope, &scope_ref, k2_core::email_outcomes::R_MANUAL, &actor(who), super::now())
+        .map_err(db_fail)?;
+    drop(conn);
+    super::audit_line("email-suppression-add", &actor(who), &format!("scope={scope} added={added}"));
+    Ok(json!({ "ok": true, "added": added, "scope": scope }))
+}
+
+/// POST `suppressions/rm {address, sender?, all?}`: the owner (it widens
+/// what leaves the box again).
+fn suppression_rm(who: &Who, v: &J) -> R<J> {
+    owner(who)?;
+    let a = super::compose::strict_address(s(v, "address").ok_or_else(|| fail(400, "usage", "send {address}"))?)?;
+    let all = v.get("all").and_then(J::as_bool).unwrap_or(false);
+    let scope = if all { None } else { Some(scope_of(v)?) };
+    let removed = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::email_outcomes::unsuppress(&conn, &a, scope.as_ref().map(|(s, r)| (*s, r.as_str()))).map_err(db_fail)?
+    };
+    if removed == 0 {
+        return Err(fail(404, "not_found", "that address isn't suppressed there"));
+    }
+    super::audit_line("email-suppression-rm", &actor(who), &format!("removed={removed}"));
+    Ok(json!({ "ok": true, "removed": removed }))
+}
+
 fn either(r: Result<J, CliResponse>) -> CliResponse {
     match r {
         Ok(v) => respond(Ok(v)),
@@ -421,7 +512,7 @@ pub fn handle(path: &str, who: Who, is_post: bool, body_bytes: &[u8], params: &H
     let id_of = |k: &str| s(&v, k).map(str::to_string).ok_or_else(|| fail(400, "usage", format!("send {{{k}}}")));
     match path {
         STATUS => respond(status()),
-        SENDERS => respond(super::senders::list(params.get("all").is_some_and(|a| a == "1" || a == "true")).map(|l| json!({ "ok": true, "senders": l.iter().map(sender_json).collect::<Vec<_>>() }))),
+        SENDERS => respond(super::senders::list(params.get("all").is_some_and(|a| a == "1" || a == "true")).map(|l| json!({ "ok": true, "senders": l.iter().map(with_pause).collect::<Vec<_>>() }))),
         SENDER_ADD => either(sender_add(&who, &v)),
         SENDER_SET => either(sender_set(&who, &v)),
         SENDER_CHECK => respond(id_of("sender").and_then(|id| super::senders::recheck(&id, super::now()))),
@@ -436,6 +527,10 @@ pub fn handle(path: &str, who: Who, is_post: bool, body_bytes: &[u8], params: &H
         RELAY_RM => respond(id_of("relay").and_then(|id| super::relay::remove(&id, &actor(&who)))),
         LOG => respond(log(&who, params)),
         SETTINGS => respond(settings(&who, &v)),
+        SENDER_RESUME => either(sender_resume(&who, &v)),
+        SUPPRESSIONS => respond(suppressions(params)),
+        SUPPRESSION_ADD => respond(suppression_add(&who, &v)),
+        SUPPRESSION_RM => respond(suppression_rm(&who, &v)),
         _ => super::fail_response(&fail(404, "not_found", "no such Email Notifications route")),
     }
 }

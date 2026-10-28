@@ -166,6 +166,7 @@ pub mod db;
 /// Email Notifications' k2.db rows (migration 0227,
 /// prd-email-notifications-core-v1, 0.46.5); the rules live in k2-daemon.
 pub mod email_notify;
+pub mod email_outcomes;
 pub mod email_verify;
 // Runtime stage H: the "handed off, drain only" flag the spawn choke
 // points check.

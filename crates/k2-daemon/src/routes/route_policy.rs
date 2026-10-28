@@ -1116,10 +1116,17 @@ pub const ROUTES: &[Route] = &[
     get("/cli/notifications/email/relays", Admin),
     post("/cli/notifications/email/sender/add", Owner),
     post("/cli/notifications/email/sender/check", Admin),
+    // N6: resuming an auto-paused sender is the owner's, with a confirm.
+    post("/cli/notifications/email/sender/resume", Owner),
     post("/cli/notifications/email/sender/rm", Admin),
     post("/cli/notifications/email/sender/set", Admin),
     get("/cli/notifications/email/senders", Admin),
     post("/cli/notifications/email/settings", Owner),
+    // N6: suppressed addresses (hashed). Adding narrows (Admins); removing
+    // widens (the owner).
+    get("/cli/notifications/email/suppressions", Admin),
+    post("/cli/notifications/email/suppressions/add", Admin),
+    post("/cli/notifications/email/suppressions/rm", Owner),
     get("/cli/notifications/email/system-sender", Admin),
     post("/cli/notifications/email/system-sender/clear", Admin),
     post("/cli/notifications/email/system-sender/set", Owner),

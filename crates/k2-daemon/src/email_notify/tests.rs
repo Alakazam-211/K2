@@ -38,6 +38,9 @@ pub(crate) struct FakeEngine {
     pub sent: Mutex<Vec<Sent>>,
     pub swept: Mutex<Vec<(String, i64)>>,
     pub fail_submit: Mutex<Option<String>>,
+    /// N6: reports waiting per account; destroyed ids.
+    pub reports: Mutex<HashMap<String, Vec<engine::RawReport>>>,
+    pub destroyed: Mutex<Vec<String>>,
 }
 
 impl MailEngine for FakeEngine {
@@ -70,6 +73,17 @@ impl MailEngine for FakeEngine {
     fn sweep_account(&self, id: &str, before: i64) -> Result<(u64, u64), String> {
         self.swept.lock().unwrap().push((id.to_string(), before));
         Ok((3, 2))
+    }
+    fn fetch_reports(&self, account_id: &str, limit: usize) -> Result<Vec<engine::RawReport>, String> {
+        let all = self.reports.lock().unwrap().get(account_id).cloned().unwrap_or_default();
+        Ok(all.into_iter().take(limit).collect())
+    }
+    fn destroy_emails(&self, account_id: &str, ids: &[String]) -> Result<(), String> {
+        if let Some(list) = self.reports.lock().unwrap().get_mut(account_id) {
+            list.retain(|r| !ids.contains(&r.email_id));
+        }
+        self.destroyed.lock().unwrap().extend(ids.iter().cloned());
+        Ok(())
     }
 }
 
@@ -1766,4 +1780,201 @@ fn v_people_read_and_remove_their_own_admins_anyones_and_senders_are_refused() {
     k2_core::skin::set_front_door("direct", None, None, None).expect("no door");
     let (st, v) = person_call(SET, "ann", Role::Member, true, json!({"address": "ann3@x.test"}), &[]);
     assert_eq!((st, v["error"]["code"].clone()), (409, json!("no_front_door")), "{v}");
+}
+
+// ── part 2, N6: outcomes, suppressions, auto-pause ───────────────────
+
+fn dsn_report(id: &str, envelope_id: &str, rcpt: &str, action: &str, status: &str) -> engine::RawReport {
+    engine::RawReport {
+        email_id: id.to_string(),
+        kind: engine::ReportKind::Dsn,
+        report: format!(
+            "Reporting-MTA: dns; mail.brand.test\r\nOriginal-Envelope-Id: {envelope_id}\r\n\r\n\
+             Final-Recipient: rfc822; {rcpt}\r\nAction: {action}\r\nStatus: {status}\r\n"
+        ),
+        original_headers: None,
+    }
+}
+
+fn queue_reports(f: &Fx, s: &store::Sender, reports: Vec<engine::RawReport>) {
+    f.engine.reports.lock().unwrap().insert(s.stalwart_account_id.clone().expect("acct"), reports);
+}
+
+#[test]
+fn n6_a_dsn_records_the_bounce_suppresses_box_wide_and_forged_reports_change_nothing() {
+    let f = fx("n6dsn");
+    let s = on_app(&f, store::SCOPE_ANY);
+    let out = send::send(&app_caller(&f.app), &json!({"to": ["gone@x.test", "ok@y.test"], "subject": "Hi", "text": "t"}), now()).expect("sent");
+    let id = out["id"].as_str().expect("id").to_string();
+    queue_reports(&f, &s, vec![
+        dsn_report("m1", &id, "Gone@X.test", "failed", "5.1.1"),
+        dsn_report("m2", &id, "ok@y.test", "delivered", "2.0.0"),
+        // Forged: a send this sender never made, and a stranger on a real send.
+        dsn_report("m3", "enl_forged", "victim@z.test", "failed", "5.1.1"),
+        dsn_report("m4", &id, "victim@z.test", "failed", "5.1.1"),
+    ]);
+    let (read, recorded) = outcomes::pass(now());
+    assert_eq!((read, recorded), (4, 2), "two real outcomes");
+    let mut gone = f.engine.destroyed.lock().unwrap().clone();
+    gone.sort();
+    assert_eq!(gone, vec!["m1", "m2", "m3", "m4"], "every report read is destroyed");
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        assert_eq!(k2_core::email_outcomes::suppressed_for(&conn, "gone@x.test", "another-sender", None).as_deref(), Some("hard_bounce"), "box-wide");
+        assert_eq!(k2_core::email_outcomes::suppressed_for(&conn, "victim@z.test", &s.id, None), None, "a forged report suppresses nobody");
+    }
+    // What the App sees.
+    let st = send::status(&f.app, &id).expect("status");
+    assert_eq!(st["status"], "submitted", "the top-level status is unchanged");
+    assert_eq!(st["recipients"], 2, "the count keeps its shape");
+    assert_eq!(st["recipientStatus"], json!([{"to": "gone@x.test", "status": "bounced"}, {"to": "ok@y.test", "status": "delivered"}]));
+    let log = send::log(&f.app, None, None, None, None).expect("log");
+    assert_eq!((log["items"][0]["bounced"].clone(), log["items"][0]["complained"].clone()), (json!(1), json!(0)));
+    // The next send drops the suppressed address; all suppressed sends nothing.
+    let n = f.engine.sent.lock().unwrap().len();
+    let out = send::send(&app_caller(&f.app), &json!({"to": ["gone@x.test", "ok@y.test"], "subject": "Again", "text": "t"}), now()).expect("sent");
+    assert_eq!(f.engine.sent.lock().unwrap().last().expect("sent").rcpt, vec!["ok@y.test".to_string()]);
+    let st = send::status(&f.app, out["id"].as_str().expect("id")).expect("status");
+    assert_eq!(st["recipientStatus"][0], json!({"to": "gone@x.test", "status": "suppressed"}));
+    let e = send::send(&app_caller(&f.app), &json!({"to": "gone@x.test", "subject": "x", "text": "t"}), now()).expect_err("all suppressed");
+    assert_eq!((e.status, e.code), (409, "all_suppressed"));
+    assert_eq!(f.engine.sent.lock().unwrap().len(), n + 1);
+    // K2's own fixed mail to it isn't sent either, and answers the same as a sent one.
+    let sys = system_sender_on();
+    let c = send::Composed { subject: "Code".into(), text: "123".into(), html: None };
+    let log_id = send::system_send_from(&sys, "email_code", None, "gone@x.test", &c).expect("same answer");
+    assert_eq!(f.engine.sent.lock().unwrap().len(), n + 1, "nothing left the box");
+    assert_eq!(log_row(&log_id).error_code.as_deref(), Some("all_suppressed"));
+}
+
+#[test]
+fn n6_a_complaint_ties_to_its_send_by_message_id_and_suppresses_for_that_sender() {
+    let f = fx("n6arf");
+    let s = on_app(&f, store::SCOPE_ANY);
+    let out = send::send(&app_caller(&f.app), &json!({"to": "angry@x.test", "subject": "Hi", "text": "t"}), now()).expect("sent");
+    let row = log_row(out["id"].as_str().expect("id"));
+    let mid = row.message_id.clone().expect("message id");
+    queue_reports(&f, &s, vec![engine::RawReport {
+        email_id: "a1".into(),
+        kind: engine::ReportKind::Arf,
+        report: "Feedback-Type: abuse\nVersion: 1\nOriginal-Rcpt-To: angry@x.test\n".into(),
+        original_headers: Some(format!("From: x\nMessage-ID: <{}>\nSubject: Hi", mid.trim_matches(|c| c == '<' || c == '>'))),
+    }]);
+    assert_eq!(outcomes::pass(now()), (1, 1));
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    assert_eq!(k2_core::email_outcomes::suppressed_for(&conn, "angry@x.test", &s.id, None).as_deref(), Some("complaint"));
+    assert_eq!(k2_core::email_outcomes::suppressed_for(&conn, "angry@x.test", "other", None), None, "only that sender");
+}
+
+/// `n` one-recipient submitted rows from `s`, the first `bounced` of them hard-bounced.
+fn seed_rate(s: &store::Sender, app: &str, n: usize, bounced: usize) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    for i in 0..n {
+        let to = vec![format!("r{i}@x.test")];
+        let id = store::insert_log(&conn, &store::NewLog {
+            sender_id: &s.id, origin: store::ORIGIN_APP, app_service_id: Some(app), purpose: None, to: &to, subject: "", tags: &[],
+            status: store::ST_SUBMITTED, error_code: None, message_id: None, send_after: None, scope_any: false, now: now(),
+        }).expect("row");
+        if i < bounced {
+            k2_core::email_outcomes::record(&conn, &id, &s.id, &to[0], k2_core::email_outcomes::K_HARD, Some("5.1.1"), "dsn", now()).expect("outcome");
+        }
+    }
+}
+
+#[test]
+fn n6_over_five_percent_hard_bounces_pauses_an_apps_sender_never_the_system_sender() {
+    let f = fx("n6pause");
+    let s = on_app(&f, store::SCOPE_ANY);
+    seed_rate(&s, &f.app, 80, 4);
+    assert_eq!(outcomes::evaluate(&s, now()), None, "5% is not over");
+    seed_rate(&s, &f.app, 0, 0);
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let to = vec!["r-extra@x.test".to_string()];
+        let id = store::insert_log(&conn, &store::NewLog {
+            sender_id: &s.id, origin: store::ORIGIN_APP, app_service_id: Some(&f.app), purpose: None, to: &to, subject: "", tags: &[],
+            status: store::ST_SUBMITTED, error_code: None, message_id: None, send_after: None, scope_any: false, now: now(),
+        }).expect("row");
+        for k in 0..3 {
+            k2_core::email_outcomes::record(&conn, &id, &s.id, &format!("b{k}@x.test"), k2_core::email_outcomes::K_HARD, None, "dsn", now()).expect("o");
+        }
+    }
+    assert_eq!(outcomes::evaluate(&s, now()), Some("hard_bounces"), "7 of 81");
+    let e = send::send(&app_caller(&f.app), &json!({"to": "z@x.test", "subject": "x", "text": "t"}), now()).expect_err("paused");
+    assert_eq!((e.status, e.code, e.retry_after_ms), (423, "email_paused", None));
+    let r = super::fail_response(&e);
+    assert!(r.status.starts_with("423"), "{}", r.status);
+    // K2's own mail for the App rides the system sender while it's paused (EN-A13).
+    let sys = system_sender_on();
+    assert_eq!(send::sender_for(Some(&f.app)).expect("ok").expect("a sender").id, sys.id);
+    assert!(send::app_sender_if_on(&f.app).is_none());
+    // Owner listings show it; resume needs the owner in person and a confirm bound to the address.
+    let r = owner_routes::handle(owner_routes::SENDERS, Who::Owner, false, b"", &HashMap::new());
+    let listed = body_of(&r)["senders"].as_array().expect("senders").iter().find(|x| x["id"] == s.id).cloned().expect("listed");
+    assert_eq!(listed["paused"]["reason"], "hard_bounces", "{listed}");
+    let admin = Who::Login { username: "ada".into(), role: Role::Admin };
+    let body = json!({"sender": s.address}).to_string();
+    assert_eq!(body_of(&owner_routes::handle(owner_routes::SENDER_RESUME, admin, true, body.as_bytes(), &HashMap::new()))["error"]["code"], "owner_only");
+    let r = owner_routes::handle(owner_routes::SENDER_RESUME, Who::Owner, true, body.as_bytes(), &HashMap::new());
+    let v = body_of(&r);
+    assert_eq!((v["error"]["action"].clone(), v["error"]["secretId"].clone()), (json!(CONFIRM_RESUME), json!(s.address)), "{v}");
+    let vault = crate::vault::ensure_test_vault();
+    let tok = vault.confirm.mint(CONFIRM_RESUME, Some(&s.address), "owner", "local-auth");
+    let b = json!({"sender": s.address, "confirmToken": tok}).to_string();
+    let r = owner_routes::handle(owner_routes::SENDER_RESUME, Who::Owner, true, b.as_bytes(), &HashMap::new());
+    assert_eq!(status_of(&r), 200, "{}", r.body);
+    send::send(&app_caller(&f.app), &json!({"to": "z@x.test", "subject": "x", "text": "t"}), now()).expect("sends again");
+    assert_eq!(outcomes::evaluate(&s, now()), None, "a resume starts a new window");
+    // The system sender is never paused, however bad its rate.
+    seed_rate(&sys, &f.app, 60, 30);
+    assert_eq!(outcomes::evaluate(&sys, now()), Some("hard_bounces"), "it trips");
+    assert!(!outcomes::is_paused(&sys), "but only a warning");
+    send::system_send_from(&sys, "email_code", None, "fine@x.test", &send::Composed { subject: "c".into(), text: "1".into(), html: None }).expect("still sends");
+}
+
+#[test]
+fn n6_suppression_routes_are_hashed_admins_add_and_the_owner_removes() {
+    let _f = fx("n6sup");
+    let admin = Who::Login { username: "ada".into(), role: Role::Admin };
+    let post = |who: &Who, path: &str, body: J| {
+        let r = owner_routes::handle(path, who.clone(), true, body.to_string().as_bytes(), &HashMap::new());
+        (status_of(&r), body_of(&r))
+    };
+    let (st, v) = post(&admin, owner_routes::SUPPRESSION_ADD, json!({"address": "Bad@X.test"}));
+    assert_eq!((st, v["scope"].clone()), (200, json!("box")), "{v}");
+    let q: HashMap<String, String> = [("address".to_string(), "bad@x.test".to_string())].into_iter().collect();
+    let r = owner_routes::handle(owner_routes::SUPPRESSIONS, admin.clone(), false, b"", &q);
+    assert!(!r.body.contains("bad@x.test"), "never the address: {}", r.body);
+    assert_eq!(body_of(&r)["suppressions"][0]["reason"], "manual");
+    let (st, v) = post(&admin, owner_routes::SUPPRESSION_RM, json!({"address": "bad@x.test"}));
+    assert_eq!((st, v["error"]["code"].clone()), (403, json!("owner_only")), "removing widens: the owner's");
+    let (st, v) = post(&Who::Owner, owner_routes::SUPPRESSION_RM, json!({"address": "bad@x.test"}));
+    assert_eq!((st, v["removed"].clone()), (200, json!(1)), "{v}");
+    let r = owner_routes::handle(owner_routes::SUPPRESSION_ADD, Who::Owner, false, b"", &HashMap::new());
+    assert_eq!(status_of(&r), 405);
+    let agent = Who::Agent { project_id: "ws".into(), session_id: "s".into() };
+    assert_eq!(post(&agent, owner_routes::SUPPRESSION_ADD, json!({"address": "x@x.test"})).0, 403);
+}
+
+#[test]
+fn n6_report_parts_read_only_the_report_and_never_walk_into_a_returned_message() {
+    let get = json!({"list": [
+        {"id": "e1", "bodyStructure": {"type": "multipart/report", "subParts": [
+            {"type": "text/plain", "blobId": "b-text"},
+            {"type": "message/delivery-status", "blobId": "b-dsn"},
+            {"type": "text/rfc822-headers", "blobId": "b-hdr"}]}},
+        {"id": "e2", "bodyStructure": {"type": "multipart/report", "subParts": [
+            {"type": "message/feedback-report", "blobId": "b-arf"},
+            {"type": "message/rfc822", "blobId": "b-orig", "subParts": [{"type": "message/delivery-status", "blobId": "b-inner"}]}]}},
+        {"id": "e3", "bodyStructure": {"type": "text/plain", "blobId": "b-plain"}}
+    ]});
+    let parts = crate::mail::jmap::report_parts_from_get(&get);
+    assert_eq!(parts.len(), 2, "a plain reply to the sender is left for the sweep");
+    assert_eq!(parts[0].1, vec![("message/delivery-status".to_string(), "b-dsn".to_string()), ("text/rfc822-headers".to_string(), "b-hdr".to_string())]);
+    assert!(!parts[1].1.iter().any(|(_, b)| b == "b-inner"), "never inside the returned message");
+    assert_eq!(engine::header_block(b"Message-ID: <a@b>\r\nX: y\r\n\r\nsecret body"), "Message-ID: <a@b>\nX: y");
 }

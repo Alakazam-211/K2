@@ -1680,6 +1680,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // by lanes in flight; renumber freely on a slip (and edit the
         // migration-order tests). The store is `crate::email_verify`.
         ("0244_email_verified_addresses", include_str!("../../drizzle_sql/0244_email_verified_addresses.sql")),
+        // 0245 — delivery outcomes, suppressions and sender pauses
+        // (prd-email-notifications-part2-v1 §4 N6, 0.46.6). New tables only;
+        // renumber freely on a slip (and edit the migration-order tests). The
+        // store is `crate::email_outcomes`.
+        ("0245_email_notify_outcomes", include_str!("../../drizzle_sql/0245_email_notify_outcomes.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2343,7 +2348,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0244_email_verified_addresses",
+            last_name, "0245_email_notify_outcomes",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2435,6 +2440,8 @@ mod tests {
                 "0242_app_custom_domains",
                 // 0.46.6: verified addresses (email notifications part 2, V).
                 "0244_email_verified_addresses",
+                // 0.46.6: delivery outcomes, suppressions, pauses (email notifications part 2, N6).
+                "0245_email_notify_outcomes",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2534,6 +2541,8 @@ mod tests {
                 "0242_app_custom_domains",
                 // 0.46.6: verified addresses (email notifications part 2, V).
                 "0244_email_verified_addresses",
+                // 0.46.6: delivery outcomes, suppressions, pauses (email notifications part 2, N6).
+                "0245_email_notify_outcomes",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2761,7 +2770,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0244_email_verified_addresses", "0244 (0.46.6, verified addresses) runs last");
+        assert_eq!(top, "0245_email_notify_outcomes", "0245 (0.46.6) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2793,9 +2802,11 @@ mod tests {
                 "0240_compute_queue_of",
                 "0241_compute_submitter_cap",
                 "0242_app_custom_domains",
-                "0244_email_verified_addresses"
+                "0244_email_verified_addresses",
+                "0244_email_verified_addresses",
+                "0245_email_notify_outcomes"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242 then 0244)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244 then 0245)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3633,8 +3644,10 @@ mod tests {
                 conn.execute_batch(&format!("DROP TABLE {t};")).unwrap();
             }
             conn.execute("DELETE FROM _migrations WHERE name = '0164_garden_data'", []).unwrap();
-            // 0244 (verified addresses, 0.46.6) is the newest: its record
-            // goes (its tables and indexes are IF NOT EXISTS).
+            // 0245 (delivery outcomes) and 0244 (verified addresses), 0.46.6,
+            // are the newest: their records go (their tables and indexes are
+            // IF NOT EXISTS).
+            conn.execute("DELETE FROM _migrations WHERE name = '0245_email_notify_outcomes'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0244_email_verified_addresses'", []).unwrap();
             // 0242 (App custom domains, 0.46.6) came before it: its record
             // goes (its columns stay; re-adding is skipped as duplicates).

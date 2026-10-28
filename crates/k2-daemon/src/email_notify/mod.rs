@@ -44,6 +44,7 @@ pub mod budget;
 pub mod compose;
 pub mod dmarc;
 pub mod engine;
+pub mod outcomes;
 pub mod fence;
 pub mod link_routes;
 pub mod owner_routes;
@@ -71,10 +72,11 @@ pub const CONFIRM_SYSTEM_SENDER: &str = "email-system-sender"; // the sender add
 pub const CONFIRM_RELAY: &str = "email-relay"; // host|fromDomain|username (relay_binding)
 pub const CONFIRM_TEST: &str = "email-test"; // the sender address
 pub const CONFIRM_APP_ON: &str = "app-email-on"; // serviceId|senderAddress (app_binding)
+pub const CONFIRM_RESUME: &str = "email-resume"; // the paused sender's address (N6)
 pub const CONFIRM_APP_ANY: &str = "app-email-any"; // serviceId|senderAddress (app_binding)
 
 /// Every confirm action this module registers (vault_routes' list).
-pub const CONFIRM_ACTIONS: &[&str] = &[CONFIRM_SENDER, CONFIRM_SYSTEM_SENDER, CONFIRM_RELAY, CONFIRM_TEST, CONFIRM_APP_ON, CONFIRM_APP_ANY];
+pub const CONFIRM_ACTIONS: &[&str] = &[CONFIRM_SENDER, CONFIRM_SYSTEM_SENDER, CONFIRM_RELAY, CONFIRM_TEST, CONFIRM_APP_ON, CONFIRM_APP_ANY, CONFIRM_RESUME];
 
 /// Is Email Notifications allowed on this box at all (default yes)?
 ///
@@ -141,6 +143,7 @@ pub fn confirm_reason(action: &str, secret_id: Option<&str>) -> Option<Result<St
             )
         }
         CONFIRM_TEST => format!("send one test email from {} to your own address", clean(id)),
+        CONFIRM_RESUME => format!("resume email from {}: its sends go out again (it was paused for bounces or complaints)", clean(id)),
         CONFIRM_APP_ON | CONFIRM_APP_ANY => {
             let Some((service_id, sender_raw)) = app_binding_parts(id) else {
                 return Some(Err("secretId for an App email confirm is serviceId|senderAddress"));
@@ -225,6 +228,7 @@ fn status_line(code: u16) -> &'static str {
         405 => "405 Method Not Allowed",
         409 => "409 Conflict",
         413 => "413 Payload Too Large",
+        423 => "423 Locked",
         429 => "429 Too Many Requests",
         502 => "502 Bad Gateway",
         503 => "503 Service Unavailable",

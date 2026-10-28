@@ -550,13 +550,19 @@ pub fn send(caller: &Caller, v: &J, now: i64) -> R<J> {
         cap_ok(&app).map_err(|f| refuse(&s.id, f))?;
     }
     check_from(req.from.as_deref(), &s).map_err(|f| refuse(&s.id, f))?;
-    // 4. The sender may send.
+    // 4. The sender may send (and isn't auto-paused, N6).
     super::senders::ready(&s, now).map_err(|f| refuse(&s.id, f))?;
+    super::outcomes::refuse_if_paused(&s).map_err(|f| refuse(&s.id, f))?;
     let scope_any = st.recipient_scope == store::SCOPE_ANY;
     // 5. Name, Reply-To, scope.
     let name = from_name(&req, &s).map_err(|f| refuse(&s.id, f))?;
     let rt = reply_to(&req, &s, scope_any).map_err(|f| refuse(&s.id, f))?;
     check_scope(&app, scope_any, &envelope).map_err(|f| refuse(&s.id, f))?;
+    // N6: suppressed recipients leave the envelope; none left: nothing goes.
+    let (keep, dropped) = super::outcomes::split_suppressed(&s, Some(&app), &envelope);
+    if keep.is_empty() {
+        return Err(refuse(&s.id, super::outcomes::all_suppressed()));
+    }
     // 8 (decided before anything is written): the agent's gate.
     let gate = match caller {
         Caller::Agent { project_path, .. } => {
@@ -631,6 +637,7 @@ pub fn send(caller: &Caller, v: &J, now: i64) -> R<J> {
         store::get_log(&conn, &id).map_err(db_fail)?.ok_or_else(|| db_fail("the log row vanished"))?
     };
     super::audit_line("email-send", caller.actor(), &format!("app={app} log={} status={} recipients={}", row.id, row.status, row.recipient_count));
+    super::outcomes::record_suppressed(&row.id, &s, &dropped, now);
     match status {
         store::ST_HELD => {
             let Caller::Agent { project_id, actor, .. } = caller else { return Err(db_fail("held without an agent")) };
@@ -646,7 +653,7 @@ pub fn send(caller: &Caller, v: &J, now: i64) -> R<J> {
             Ok(accepted(&row))
         }
         _ => {
-            let out = deliver(&s, &row.id, &name, &req.to, &req.cc, &envelope, &req.subject, req.text.as_deref(), req.html.as_deref(), &rt, &req.headers);
+            let out = deliver(&s, &row.id, &name, &req.to, &req.cc, &keep, &req.subject, req.text.as_deref(), req.html.as_deref(), &rt, &req.headers);
             let done = finish(&row.id, store::ST_QUEUED, &out, now)?;
             match out {
                 Ok(_) => Ok(accepted(&done)),
@@ -877,12 +884,18 @@ pub fn flush_due(now: i64, limit: usize) -> usize {
                 continue;
             }
         }
-        if let Err(f) = super::senders::ready(&s, now) {
+        if let Err(f) = super::senders::ready(&s, now).and_then(|_| super::outcomes::refuse_if_paused(&s)) {
             fail_row(f.code);
             continue;
         }
         let scope_any = st.recipient_scope == store::SCOPE_ANY;
-        let envelope = req.envelope();
+        // N6: suppressions as they stand now, not when it was scheduled.
+        let (envelope, dropped) = super::outcomes::split_suppressed(&s, Some(&app), &req.envelope());
+        if envelope.is_empty() {
+            super::outcomes::record_suppressed(&row.id, &s, &dropped, now);
+            fail_row("all_suppressed");
+            continue;
+        }
         let checked = from_name(&req, &s).and_then(|n| reply_to(&req, &s, scope_any).map(|rt| (n, rt))).and_then(|nr| check_scope(&app, scope_any, &envelope).map(|_| nr));
         let (name, rt) = match checked {
             Ok(nr) => nr,
@@ -912,6 +925,7 @@ pub fn flush_due(now: i64, limit: usize) -> usize {
             }
             continue;
         }
+        super::outcomes::record_suppressed(&row.id, &s, &dropped, now);
         let out = deliver(&s, &row.id, &name, &req.to, &req.cc, &envelope, &req.subject, req.text.as_deref(), req.html.as_deref(), &rt, &req.headers);
         if out.is_ok() {
             sent += 1;
@@ -943,8 +957,12 @@ pub fn sender_for(app: Option<&str>) -> R<Option<Sender>> {
         return Ok(None);
     }
     if let Some(a) = app.filter(|a| !a.is_empty() && *a != k2_core::skin::HOST_APP_ID) {
+        // EN-A13: a paused App sender's K2 mail (codes, resets) rides the
+        // system sender instead; App-written text never does (E14).
         if let Ok((_, s)) = app_sender(a) {
-            return Ok(Some(s));
+            if !super::outcomes::is_paused(&s) {
+                return Ok(Some(s));
+            }
         }
     }
     super::senders::system()
@@ -956,7 +974,7 @@ pub fn app_sender_if_on(app: &str) -> Option<Sender> {
     if app.is_empty() || app == k2_core::skin::HOST_APP_ID || !super::box_enabled() {
         return None;
     }
-    app_sender(app).ok().map(|(_, s)| s)
+    app_sender(app).ok().map(|(_, s)| s).filter(|s| !super::outcomes::is_paused(s))
 }
 
 /// [`system_send`] from a sender the caller already picked
@@ -989,6 +1007,37 @@ pub fn send_fixed(s: &Sender, origin: &str, purpose: &str, app: Option<&str>, to
         return Err(fail(400, "usage", "the message doesn't fit the composition limits"));
     }
     super::senders::ready(s, now)?;
+    super::outcomes::refuse_if_paused(s)?;
+    // N6: a suppressed address gets nothing, and the caller the same answer
+    // as a sent one (the profile's public doors stay enumeration-safe).
+    let (keep, dropped) = super::outcomes::split_suppressed(s, app, &to);
+    if keep.is_empty() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let id = store::insert_log(
+            &conn,
+            &store::NewLog {
+                sender_id: &s.id,
+                origin,
+                app_service_id: app,
+                purpose: Some(purpose),
+                to: &to,
+                subject: "",
+                tags: &[],
+                status: store::ST_REFUSED,
+                error_code: Some("all_suppressed"),
+                message_id: None,
+                send_after: None,
+                scope_any: false,
+                now,
+            },
+        )
+        .map_err(db_fail)?;
+        drop(conn);
+        super::outcomes::record_suppressed(&id, s, &dropped, now);
+        k2_core::log_debug!("[email-notify] {origin} mail {purpose} log={id} not sent: the recipient is suppressed");
+        return Ok(id);
+    }
     let id = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1097,14 +1146,21 @@ pub fn app_link_mail(
 
 /// `email.status`: one of this App's rows.
 pub fn status(app: &str, id: &str) -> R<J> {
-    let db = k2_core::db::shared();
-    let conn = db.lock();
-    match store::get_log(&conn, id.trim()).map_err(db_fail)? {
+    let row = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::get_log(&conn, id.trim()).map_err(db_fail)?
+    };
+    match row {
         // Review L8: K2's own mail about the App's users (the owner's resets)
         // isn't the App's to see.
         Some(r) if r.app_service_id.as_deref() == Some(app) && r.origin != store::ORIGIN_SYSTEM => {
             let mut v = row_json(&r);
             v["ok"] = json!(true);
+            // N6: what happened to each recipient (the top-level status
+            // stays `submitted` once handed off). `recipients` stays the
+            // count (catalog shape), so the list is `recipientStatus`.
+            v["recipientStatus"] = super::outcomes::recipients_json(&r);
             Ok(v)
         }
         _ => Err(fail(404, "not_found", "no email of this App by that id (the log keeps 30 days)")),
@@ -1143,6 +1199,10 @@ pub fn log(app: &str, limit: Option<usize>, before: Option<i64>, status: Option<
             if let Some(p) = &r.purpose {
                 v["purpose"] = json!(p);
             }
+            // N6: recipients that bounced or complained.
+            let (bounced, complained) = super::outcomes::counts(&r.id);
+            v["bounced"] = json!(bounced);
+            v["complained"] = json!(complained);
             v
         })
         .collect();

@@ -2487,6 +2487,11 @@ pub fn remove_principal_as(username: &str, actor: &str) -> Result<bool, String> 
             if let Err(e) = crate::email_notify::purge_recipient(&conn, email) {
                 crate::log_debug!("[skin] WARN email log purge for a removed person: {e}");
             }
+            // EN-A21: their delivery outcomes go too (a suppression, a hash
+            // only, stays).
+            if let Err(e) = crate::email_outcomes::forget_recipient(&conn, email) {
+                crate::log_debug!("[skin] WARN email outcomes purge for a removed person: {e}");
+            }
         }
     }
     if enqueued > 0 {

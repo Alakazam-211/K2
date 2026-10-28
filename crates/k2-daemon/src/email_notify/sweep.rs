@@ -2,6 +2,9 @@
 //!
 //! - Every [`TICK_SECS`]: scheduled sends that are due, then kept bodies and
 //!   approvals a removed App user left ([`super::send::tick`]).
+//! - Every 5 minutes (N6): the delivery and complaint reports in each hosted
+//!   sender's Inbox and Junk ([`super::outcomes::pass`]); a bad rate pauses
+//!   an App's sender.
 //! - Hourly:
 //!   - E5: destroy everything older than 24 h in each hosted sender's
 //!     mailbox (DSNs, ARF reports, replies to a no-reply address, a draft a
@@ -93,6 +96,14 @@ pub fn hourly(now: i64) -> (u64, usize) {
     drop(conn);
     // Verified addresses (slice V): expire due links, forget long-dead rows.
     super::verify::hourly(now);
+    // N6: outcome rows go with their log row (retention).
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = k2_core::email_outcomes::purge_orphans(&conn) {
+            k2_core::log_debug!("[email-notify] WARN outcome purge: {e}");
+        }
+    }
     if destroyed > 0 || purged > 0 {
         k2_core::log_debug!("[email-notify] hourly: {destroyed} sender-mailbox message(s) destroyed, {purged} log row(s) past retention");
     }
@@ -106,6 +117,20 @@ pub fn spawn() {
         loop {
             let _ = tokio::task::spawn_blocking(|| super::send::tick(super::now())).await;
             tokio::time::sleep(std::time::Duration::from_secs(TICK_SECS)).await;
+        }
+    });
+    tokio::spawn(async move {
+        // N6: delivery and complaint reports, every 5 minutes (headless).
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        loop {
+            match tokio::task::spawn_blocking(|| super::outcomes::pass(super::now())).await {
+                Ok((read, recorded)) if read > 0 => {
+                    k2_core::log_debug!("[email-notify] reports: {read} read, {recorded} outcome(s) recorded")
+                }
+                Ok(_) => {}
+                Err(e) => k2_core::log_debug!("[email-notify] WARN report pass join: {e}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(super::outcomes::PASS_SECS)).await;
         }
     });
     tokio::spawn(async move {

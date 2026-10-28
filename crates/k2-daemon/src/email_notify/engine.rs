@@ -42,6 +42,37 @@ pub trait MailEngine: Send + Sync {
     fn submit(&self, m: &HostedMail<'_>) -> Result<(), String>;
     /// E5: destroy messages older than `before_unix`; `(destroyed, DSNs)`.
     fn sweep_account(&self, account_id: &str, before_unix: i64) -> Result<(u64, u64), String>;
+    /// N6: the delivery and complaint reports waiting in the account's
+    /// Inbox and Junk (the report part only, never a returned body).
+    fn fetch_reports(&self, account_id: &str, limit: usize) -> Result<Vec<RawReport>, String>;
+    /// N6: destroy the reports the pass recorded.
+    fn destroy_emails(&self, account_id: &str, ids: &[String]) -> Result<(), String>;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportKind {
+    /// RFC 3464 `message/delivery-status`.
+    Dsn,
+    /// RFC 5965 `message/feedback-report`.
+    Arf,
+}
+
+/// One report read from a sender's mailbox.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawReport {
+    pub email_id: String,
+    pub kind: ReportKind,
+    /// The report part's text.
+    pub report: String,
+    /// A complaint's original header block (headers only; the rest is
+    /// cut before it is kept).
+    pub original_headers: Option<String>,
+}
+
+/// Keep only a message's header block (up to the first blank line).
+pub fn header_block(raw: &[u8]) -> String {
+    let s = String::from_utf8_lossy(&raw[..raw.len().min(64 * 1024)]).replace("\r\n", "\n");
+    s.split("\n\n").next().unwrap_or("").to_string()
 }
 
 impl MailEngine for StalwartClient {
@@ -81,6 +112,36 @@ impl MailEngine for StalwartClient {
             .ok_or_else(|| "sweep: bad time".to_string())?
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         self.email_sweep_older_than(account_id, &before)
+    }
+
+    fn fetch_reports(&self, account_id: &str, limit: usize) -> Result<Vec<RawReport>, String> {
+        let mut out = Vec::new();
+        for (email_id, parts) in self.email_report_parts(account_id, limit)? {
+            let find = |pred: &dyn Fn(&str) -> bool| parts.iter().find(|(t, _)| pred(t)).map(|(t, b)| (t.clone(), b.clone()));
+            let (kind, (ty, blob)) = if let Some(p) = find(&|t| t.ends_with("delivery-status")) {
+                (ReportKind::Dsn, p)
+            } else if let Some(p) = find(&|t| t == "message/feedback-report") {
+                (ReportKind::Arf, p)
+            } else {
+                continue;
+            };
+            let bytes = self.blob_download(account_id, &blob, "report", &ty)?;
+            let report = String::from_utf8_lossy(&bytes[..bytes.len().min(64 * 1024)]).into_owned();
+            let original_headers = if kind == ReportKind::Arf {
+                match find(&|t| t == "text/rfc822-headers" || t == "message/rfc822" || t == "message/global") {
+                    Some((t, b)) => Some(header_block(&self.blob_download(account_id, &b, "original", &t)?)),
+                    None => None,
+                }
+            } else {
+                None
+            };
+            out.push(RawReport { email_id, kind, report, original_headers });
+        }
+        Ok(out)
+    }
+
+    fn destroy_emails(&self, account_id: &str, ids: &[String]) -> Result<(), String> {
+        self.email_destroy(account_id, ids).map(|_| ())
     }
 }
 

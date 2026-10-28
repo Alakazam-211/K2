@@ -13887,6 +13887,24 @@ ID / login / vault password), from a terminal outside K2.
   k2 notifications email sender check <sender>   re-check DMARC and the domain
   k2 notifications email sender set <sender> [--name N] [--lock-name|--unlock-name] [--reply-to <addr>]…
   k2 notifications email sender rm <sender>       its address stays reserved 30 days
+  k2 notifications email sender resume <sender>   the owner, with a confirm: an App's sender
+                                    that K2 paused (over 5% hard bounces or 0.1%
+                                    spam complaints of at least 50 recipients in
+                                    24 h) sends again; its count starts over.
+                                    `sender list` marks paused senders. The
+                                    system sender is never paused (you get a
+                                    warning notice instead).
+  k2 notifications email suppressions [list] [<address>] [--limit N] [--json]
+                                    Addresses K2 won't send to: a hard bounce
+                                    (every sender), a spam complaint (that sender
+                                    only), or added by hand. Kept hashed: list
+                                    shows the domain, reason and hash; give an
+                                    address to look it up.
+  k2 notifications email suppressions add <address> [--sender <sender>]
+                                    Owner or Admin. Without --sender: every sender.
+  k2 notifications email suppressions rm <address> [--sender <sender> | --all]
+                                    The owner: mail may go to it again (from every
+                                    sender, that sender, or --all of its entries).
   k2 notifications email system-sender [show] | set <sender> | clear | test
                                     K2's own mail (owner password resets with
                                     no --from, codes) comes from it.
@@ -13981,6 +13999,7 @@ print("log kept %s days; owner address %s" % (st.get("logRetentionDays"), st.get
         system-sender) cmd_notifications_system "$@" ;;
         relay|relays) cmd_notifications_relay "$@" ;;
         address) cmd_notifications_address "$@" ;;
+        suppressions|suppression) cmd_notifications_suppressions "$@" ;;
         log)
             local app="" limit="" json_out=0
             while [ $# -gt 0 ]; do
@@ -14020,7 +14039,7 @@ print(json.dumps(b))')" || { echo "--retention-days is a number" >&2; exit 2; }
             _email_post /cli/notifications/email/settings "$body"
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; s=json.load(sys.stdin).get("settings") or {}; print("log kept %s days; owner address %s" % (s.get("logRetentionDays"), s.get("ownerEmail") or "not set"))'
             ;;
-        *) echo "usage: k2 notifications email status|sender|system-sender|relay|address|log|settings (--help)" >&2; exit 2 ;;
+        *) echo "usage: k2 notifications email status|sender|system-sender|relay|suppressions|address|log|settings (--help)" >&2; exit 2 ;;
     esac
 }
 
@@ -14144,7 +14163,17 @@ rows = json.load(sys.stdin).get("senders") or []
 if not rows:
     print("No senders yet: k2 notifications email sender add noreply@<your domain>"); sys.exit(0)
 for s in rows:
-    print("%s  %-34s %-6s %-11s %-18s %s" % (s.get("id"), s.get("address"), s.get("path"), s.get("state"), s.get("owner") or "unassigned", s.get("fromName")))'
+    p = s.get("paused")
+    paused = ("  PAUSED (%s; resume: k2 notifications email sender resume %s)" % (p.get("reason"), s.get("address"))) if p else ""
+    print("%s  %-34s %-6s %-11s %-18s %s%s" % (s.get("id"), s.get("address"), s.get("path"), s.get("state"), s.get("owner") or "unassigned", s.get("fromName"), paused))'
+            ;;
+        resume)
+            local who="${1:-}"
+            { [ -n "$who" ] && [ $# -eq 1 ]; } || { echo "usage: k2 notifications email sender resume <sender>" >&2; exit 2; }
+            local body
+            body="$(K2_EM_S="$who" python3 -c 'import json,os; print(json.dumps({"sender": os.environ["K2_EM_S"]}))')"
+            _email_post /cli/notifications/email/sender/resume "$body"
+            printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("resumed %s: its sends go out again (a new 24-hour count starts now)" % v.get("sender"))'
             ;;
         check|set|rm|remove)
             local who="" name="" lockflag=""
@@ -14180,7 +14209,64 @@ print(json.dumps(b))' "${rts[@]}")"
                 printf '%s' "$_CP_BODY" | _notif_sender_print
             fi
             ;;
-        *) echo "usage: k2 notifications email sender add|list|check|set|rm" >&2; exit 2 ;;
+        *) echo "usage: k2 notifications email sender add|list|check|set|resume|rm" >&2; exit 2 ;;
+    esac
+}
+
+# N6: addresses K2 won't send to (kept hashed; a search names the address).
+cmd_notifications_suppressions() {
+    local verb="${1:-list}"
+    [ $# -gt 0 ] && shift
+    local addr="" sender="" all=0 json_out=0 limit=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --sender) sender="${2:-}"; shift 2 ;;
+            --all) all=1; shift ;;
+            --limit) limit="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) [ -z "$addr" ] || { echo "one address at a time" >&2; exit 2; }; addr="$1"; shift ;;
+        esac
+    done
+    case "$verb" in
+        list|ls)
+            local q=""
+            [ -n "$addr" ] && q="address=$(urlencode "$addr")"
+            [ -n "$limit" ] && q="${q:+$q&}limit=$(urlencode "$limit")"
+            _compute_call GET /cli/notifications/email/suppressions "$q" tcp
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+rows = json.load(sys.stdin).get("suppressions") or []
+if not rows:
+    print("No suppressed addresses" + (" matching that one." if len(sys.argv) > 1 and sys.argv[1] else "."))
+for x in rows:
+    where = "every sender" if x.get("scope") == "box" else "sender " + (x.get("scopeRef") or "?")
+    print("%s  @%-28s %-12s %-16s %s" % (time.strftime("%Y-%m-%d", time.localtime(x.get("createdAt") or 0)), x.get("domain"), x.get("reason"), where, x.get("addressSha256")[:12]))' "$addr"
+            ;;
+        add|rm|remove)
+            [ -n "$addr" ] || { echo "usage: k2 notifications email suppressions $verb <address> [--sender <sender>]" >&2; exit 2; }
+            [ "$verb" = remove ] && verb=rm
+            local body
+            body="$(K2_EM_A="$addr" K2_EM_S="$sender" K2_EM_ALL="$all" python3 -c '
+import json, os
+e = os.environ
+b = {"address": e["K2_EM_A"]}
+if e.get("K2_EM_S"):
+    b["sender"] = e["K2_EM_S"]
+if e.get("K2_EM_ALL") == "1":
+    b["all"] = True
+print(json.dumps(b))')"
+            _app_rt_post "/cli/notifications/email/suppressions/$verb" "$body"
+            [ "$_CP_STATUS" = 200 ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            if [ "$verb" = add ]; then
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(("suppressed (%s)" % v.get("scope")) if v.get("added") else "already suppressed")'
+            else
+                printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print("removed %s suppression(s)" % json.load(sys.stdin).get("removed"))'
+            fi
+            ;;
+        *) echo "usage: k2 notifications email suppressions [list] [<address>] | add <address> [--sender S] | rm <address> [--sender S|--all]" >&2; exit 2 ;;
     esac
 }
 

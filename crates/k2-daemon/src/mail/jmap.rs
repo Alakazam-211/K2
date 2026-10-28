@@ -5531,6 +5531,99 @@ impl StalwartClient {
         }
         Ok((destroyed, dsns))
     }
+
+    /// Email Notifications N6 (EN-A3, EN-A30): the delivery and complaint
+    /// reports in a sender account's Inbox and Junk, oldest first. Only
+    /// `bodyStructure` is read here; the caller downloads the report part
+    /// (`message/delivery-status`, `message/feedback-report`) and, for a
+    /// complaint, the original's headers part, never a body.
+    /// Returns `(email id, [(part type, blob id)])` for messages that hold
+    /// a report part.
+    pub fn email_report_parts(&self, account_id: &str, limit: usize) -> Result<Vec<(String, Vec<(String, String)>)>, String> {
+        let mut boxes = Vec::new();
+        for role in ["inbox", "junk"] {
+            if let Some(id) = self.mailbox_role_id(account_id, role)? {
+                boxes.push(serde_json::json!({ "inMailbox": id }));
+            }
+        }
+        if boxes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let q = self.mail_call(
+            account_id,
+            "Email/query",
+            serde_json::json!({
+                "filter": { "operator": "OR", "conditions": boxes },
+                "sort": [{ "property": "receivedAt", "isAscending": true }],
+                "limit": limit,
+            }),
+        )?;
+        let ids = parse_query_ids(&q);
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let g = self.mail_call(
+            account_id,
+            "Email/get",
+            serde_json::json!({
+                "ids": ids,
+                "properties": ["id", "bodyStructure"],
+                "bodyProperties": ["partId", "blobId", "type", "subParts"],
+            }),
+        )?;
+        Ok(report_parts_from_get(&g))
+    }
+
+    /// Destroy messages in an account (the report pass, after recording).
+    pub fn email_destroy(&self, account_id: &str, ids: &[String]) -> Result<usize, String> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let args = self.mail_call(account_id, "Email/set", serde_json::json!({ "destroy": ids }))?;
+        Ok(args.get("destroyed").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0))
+    }
+}
+
+/// The report part types N6 reads.
+pub(crate) const REPORT_PART_TYPES: &[&str] = &[
+    "message/delivery-status",
+    "message/global-delivery-status",
+    "message/feedback-report",
+    "text/rfc822-headers",
+    "message/rfc822",
+    "message/global",
+];
+
+/// Pure: `(email id, [(type, blob)])` out of an `Email/get` answer with
+/// `bodyStructure`, for messages holding a delivery or feedback report.
+pub(crate) fn report_parts_from_get(get: &serde_json::Value) -> Vec<(String, Vec<(String, String)>)> {
+    fn walk(part: &serde_json::Value, out: &mut Vec<(String, String)>) {
+        let ty = part.get("type").and_then(|t| t.as_str()).unwrap_or("").to_ascii_lowercase();
+        if REPORT_PART_TYPES.contains(&ty.as_str()) {
+            if let Some(b) = part.get("blobId").and_then(|b| b.as_str()) {
+                out.push((ty.clone(), b.to_string()));
+            }
+            // Never walk into a returned message (its body is not ours to read).
+            return;
+        }
+        if let Some(subs) = part.get("subParts").and_then(|s| s.as_array()) {
+            for s in subs {
+                walk(s, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for e in get.get("list").and_then(|l| l.as_array()).into_iter().flatten() {
+        let Some(id) = e.get("id").and_then(|i| i.as_str()) else { continue };
+        let mut parts = Vec::new();
+        if let Some(bs) = e.get("bodyStructure") {
+            walk(bs, &mut parts);
+        }
+        if parts.iter().any(|(t, _)| t.ends_with("delivery-status") || t == "message/feedback-report") {
+            out.push((id.to_string(), parts));
+        }
+    }
+    out
 }
 
 #[cfg(test)]

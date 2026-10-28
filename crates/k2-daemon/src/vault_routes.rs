@@ -1810,6 +1810,8 @@ const CONFIRM_ACTIONS: &[&str] = &[
     crate::email_notify::CONFIRM_TEST,
     crate::email_notify::CONFIRM_APP_ON,
     crate::email_notify::CONFIRM_APP_ANY,
+    // N6 (0.46.6): resuming an auto-paused sender (`secretId` = its address).
+    crate::email_notify::CONFIRM_RESUME,
 ];
 
 fn confirm_start(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, VaultError> {

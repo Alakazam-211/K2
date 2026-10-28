@@ -1,7 +1,7 @@
 ---
 k2_skill: k2-cli
-skill_version: 40
-skill_checksum: 4be3c21794829213
+skill_version: 41
+skill_checksum: 9cc643a4cf19c6d3
 name: k2-cli
 description: K2 CLI reference — msg, inbox, activity, connections, heartbeat
 ---
@@ -279,16 +279,20 @@ Run `k2 heartbeat --help` for the full surface.
 Builds and tests on your owner's other machines. Read `k2 study compute` first.
 ```
 k2 compute nodes                                       # what you may use, and who is on the critical path
-k2 compute run <node> --dirty -- cargo nextest run -p <crate>   # your uncommitted work too; no commit needed
-k2 compute run --any --detach -- <command>             # any granted node; prints a job id
+k2 compute run <node> --mem 24G --dirty -- cargo nextest run -p <crate>   # your uncommitted work too; no commit needed
+k2 compute run <node> --mem 8G --wait -- <command>     # prints the id, then streams; exits with its code
+k2 compute run --any --mem 8G --detach -- <command>    # any granted node; prints a job id
 k2 compute run <node> --repo <dir> --with <sibling> --dirty -- <command>   # multi-repo workspace; siblings side by side
 k2 compute run <node> --cache <name> -- <command>      # $K2_JOB_CACHE survives between runs on that node
-k2 compute run <node> --tier priority -- <command>     # only when you are the critical path
-k2 compute wait <job> | logs <job> --failures | get <job>
+k2 compute run <node> --priority --why "<what waits on it>" -- <command>   # only when you are the critical path
+k2 compute run <node> --tier batch --mem 24G -- <command>   # overnight/soak: starts when the node is idle
+k2 compute wait <job> --follow | logs <job> --failures | get <job> | queue <node>
 ```
+**Always pass `--mem`** with what the job needs: without it the job reserves 4 GB and is stopped above it.
+
 **Priority = the critical path.** Use `--tier priority` only when one result is blocking others (the next builder, an integration pass, a release). One submitter on this server at a time: if `k2 compute nodes` shows someone else on the critical path, use Normal unless the coordinator named you. Priority is optional: if work is independent, leave everything Normal. It all still runs, in parallel, just more slowly.
 
-Tiers never stop a running job. `--tier ci` needs a grant with `--ci` from your owner (ask: `k2 permission request compute.ci --why "…"`).
+Lines: CI first, then Priority and Standard take turns (Standard never starves), then Batch on an idle node. `--priority` needs a one-line `--why`. Submitters take turns inside a line: builders that share a session pass `--submitter <name>`. Every waiting job says why (`k2 compute get <job>`). Tiers never stop a running job. `--tier ci` needs a grant with `--ci` from your owner (ask: `k2 permission request compute.ci --why "…"`).
 
 ## Agent presets (which agent program a workspace launches)
 ```

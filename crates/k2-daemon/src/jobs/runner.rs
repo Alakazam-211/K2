@@ -174,6 +174,45 @@ pub fn run_dir(workspace_root: &Path, rel: &str) -> Result<PathBuf, JobError> {
 /// daemon's own PATH, then the system folders. Cron's `/usr/bin:/bin`
 /// has no `k2`; a job always does.
 pub fn job_path(daemon_path: Option<&str>, home: Option<&Path>) -> String {
+    #[cfg(windows)]
+    {
+        job_path_windows(daemon_path, home, std::env::var("LOCALAPPDATA").ok().as_deref(), std::env::var("SystemRoot").ok().as_deref())
+    }
+    #[cfg(not(windows))]
+    {
+        job_path_unix(daemon_path, home)
+    }
+}
+
+/// Windows: `;`-separated (`:` is in every drive letter). The CLI's homes
+/// first (`%LOCALAPPDATA%\K2\cli`, where Install CLI puts `k2`, and
+/// `~\.local\bin`), then the daemon's PATH, then the system folders.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn job_path_windows(daemon_path: Option<&str>, home: Option<&Path>, local_app_data: Option<&str>, system_root: Option<&str>) -> String {
+    let mut out: Vec<String> = vec![];
+    let mut add = |p: String| {
+        if !p.is_empty() && !out.iter().any(|o| o.eq_ignore_ascii_case(&p)) {
+            out.push(p);
+        }
+    };
+    if let Some(l) = local_app_data {
+        add(format!(r"{l}\K2\cli"));
+    }
+    if let Some(h) = home {
+        add(format!(r"{}\.local\bin", h.display()));
+    }
+    for p in daemon_path.unwrap_or("").split(';') {
+        add(p.to_string());
+    }
+    let root = system_root.unwrap_or(r"C:\Windows");
+    for p in [format!(r"{root}\System32"), root.to_string(), format!(r"{root}\System32\Wbem")] {
+        add(p);
+    }
+    out.join(";")
+}
+
+#[cfg_attr(windows, allow(dead_code))]
+fn job_path_unix(daemon_path: Option<&str>, home: Option<&Path>) -> String {
     let mut out: Vec<String> = vec![];
     let mut add = |p: String| {
         if !p.is_empty() && !out.contains(&p) {
@@ -201,6 +240,15 @@ pub fn job_path(daemon_path: Option<&str>, home: Option<&Path>) -> String {
 fn job_env(job: &Job, root: &Path, run_id: &str, passport: &str) -> HashMap<String, String> {
     let mut env = HashMap::new();
     for k in ["HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "XDG_RUNTIME_DIR"] {
+        if let Ok(v) = std::env::var(k) {
+            if !v.is_empty() {
+                env.insert(k.to_string(), v);
+            }
+        }
+    }
+    // Windows programs need the system's own variables to start.
+    #[cfg(windows)]
+    for k in ["SystemRoot", "SystemDrive", "windir", "ComSpec", "PATHEXT", "USERPROFILE", "USERNAME", "APPDATA", "LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "TEMP", "TMP", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"] {
         if let Ok(v) = std::env::var(k) {
             if !v.is_empty() {
                 env.insert(k.to_string(), v);
@@ -246,8 +294,14 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     if !mat.skipped.is_empty() {
         sink.lock().note(&format!("[k2] vault items not delivered: {}\n", mat.skipped.join("; ")));
     }
-    let mut cmd = Command::new(&job.argv[0]);
-    cmd.args(&job.argv[1..])
+    // Windows: an npm-style `.cmd` program runs through cmd.exe, found on
+    // the run's PATH by cmd.exe's rule.
+    #[cfg(windows)]
+    let (prog, args) = k2_core::terminal::win_cmd::resolve_spawn(&job.argv[0], &job.argv[1..], env.get("PATH").map(String::as_str).unwrap_or(""));
+    #[cfg(not(windows))]
+    let (prog, args) = (job.argv[0].clone(), job.argv[1..].to_vec());
+    let mut cmd = Command::new(&prog);
+    cmd.args(&args)
         .current_dir(&cwd)
         .env_clear()
         .envs(&env)
@@ -462,6 +516,24 @@ pub fn stop_leftover_group(pid: i64, run_id: &str) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn windows_path_uses_semicolons_cli_homes_first_and_dedupes() {
+        let p = job_path_windows(
+            Some(r"C:\Program Files\nodejs;C:\Users\a\.local\bin;C:\WINDOWS\system32"),
+            Some(Path::new(r"C:\Users\a")),
+            Some(r"C:\Users\a\AppData\Local"),
+            Some(r"C:\WINDOWS"),
+        );
+        let parts: Vec<&str> = p.split(';').collect();
+        assert_eq!(parts[0], r"C:\Users\a\AppData\Local\K2\cli");
+        assert_eq!(parts[1], r"C:\Users\a\.local\bin");
+        assert_eq!(parts[2], r"C:\Program Files\nodejs", "drive letters survive: {p}");
+        assert_eq!(parts.iter().filter(|x| x.eq_ignore_ascii_case(r"C:\WINDOWS\System32")).count(), 1, "{p}");
+        assert!(parts.contains(&r"C:\WINDOWS") && parts.contains(&r"C:\WINDOWS\System32\Wbem"), "{p}");
+    }
+
+    // Unix's `:`-separated PATH (Windows: the test above).
+    #[cfg(not(windows))]
     #[test]
     fn path_puts_the_cli_homes_first_and_dedupes() {
         let p = job_path(Some("/usr/bin:/custom/bin:/usr/local/bin"), Some(Path::new("/home/k2")));

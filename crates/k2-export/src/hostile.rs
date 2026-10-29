@@ -80,12 +80,14 @@ impl Exporter for Hostile {
             // kills the worker.
             "hostile-malloc" => loop {
                 // SAFETY: a fresh allocation, written in full, never freed.
-                let p = unsafe { libc::malloc(16 << 20) } as *mut u8;
+                // black_box: LLVM may otherwise elide a malloc whose result is never used.
+                let p = std::hint::black_box(unsafe { libc::malloc(16 << 20) } as *mut u8);
                 if p.is_null() {
                     return Err(ExportError::Limit("memory"));
                 }
                 // SAFETY: p points at 16 MiB just allocated.
                 unsafe { std::ptr::write_bytes(p, 7, 16 << 20) };
+                std::hint::black_box(p);
             },
             "hostile-exit" => std::process::exit(0),
             // The names of every environment variable it got (one a line).

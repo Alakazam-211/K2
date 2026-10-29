@@ -2762,7 +2762,17 @@ fn pick_node(
         ));
     }
     let ex = place::Explain { policy, cands: &report.cands, skipped: &report.skipped, project_key: pk.as_deref(), commit: commit.as_deref() };
-    let rec = place::placement_record(c, tier, want, &ex, now);
+    let mut rec = place::placement_record(c, tier, want, &ex, now);
+    // P1 doesn't look for the node that holds a --cache yet (0.46.7): say
+    // so, so a resume never silently starts from an empty cache.
+    if let Some(name) = s(v, "cache") {
+        let note = format!(
+            "--cache {name}: K2 doesn't yet pick the node that already holds this cache, so it may be empty on {}; name the node to reuse it",
+            c.node.name
+        );
+        rec.why.push_str(&format!(" · cache {name} may be empty here (name the node to reuse it)"));
+        warnings.push(note);
+    }
     Ok((c.node.clone(), rec))
 }
 

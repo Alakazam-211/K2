@@ -214,7 +214,7 @@ fn offer(rev: u64, free_gb: u64, caps_gb: u64, running: u32) -> Offer {
         boot_id: "b".into(),
         ledger_id: "l".into(),
         node_version: "0.46.6".into(),
-        features: vec!["artifacts".into(), "stall".into()],
+        features: vec!["artifacts".into(), "stall".into(), k2_core::compute::proto::cache::FEATURE_JOB_CACHE.into()],
     }
 }
 
@@ -437,6 +437,12 @@ async fn a_timeout_over_a_grant_skips_that_node() {
     let r = run(d.port, OWNER, &me, json!({"timeoutSecs": 5 * 3600})).await;
     assert_eq!((r.status, code(&r)), (404, "no_node_fits".to_string()), "{}", r.body);
     assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("2 with a grant shorter than --timeout 5h00m"), "{}", r.body);
+    // --cache with no node named: P1 says the cache may be empty there.
+    let r = run(d.port, OWNER, &me, json!({"cache": "cp24"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert!(v["placement"]["why"].as_str().unwrap().ends_with("· cache cp24 may be empty here (name the node to reuse it)"), "{v}");
+    assert!(v["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().starts_with("--cache cp24: K2 doesn't yet pick the node")), "{v}");
     // --os spellings fold (the nodes say `linux`): `Linux` fits; `darwin`
     // (= macos) skips both with the os/arch count.
     let r = run(d.port, OWNER, &me, json!({"os": "Linux"})).await;

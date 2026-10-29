@@ -4248,6 +4248,7 @@ dependencies = [
  "k2-core",
  "k2-mpc-base",
  "k2-mpc-markdown",
+ "k2-mpc-text",
  "k2-node",
  "k2-node-proto",
  "k2-ptyd",
@@ -4268,6 +4269,7 @@ dependencies = [
  "parking_lot",
  "pg_query",
  "rcgen 0.13.2",
+ "redb",
  "reqwest 0.12.28",
  "rusqlite",
  "rustls 0.23.46",
@@ -4307,7 +4309,7 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-base"
-version = "0.3.0"
+version = "0.9.5"
 dependencies = [
  "redb",
  "regex-automata",
@@ -4317,7 +4319,14 @@ dependencies = [
 
 [[package]]
 name = "k2-mpc-markdown"
-version = "0.2.0"
+version = "0.7.5"
+dependencies = [
+ "k2-mpc-base",
+]
+
+[[package]]
+name = "k2-mpc-text"
+version = "0.2.6"
 dependencies = [
  "k2-mpc-base",
 ]
@@ -11150,8 +11159,6 @@ dependencies = [
 [[package]]
 name = "yrs"
 version = "0.28.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52c70dc8beca8666c77612a96889106ca3cd65318609721f464624ff79685da9"
 dependencies = [
  "arc-swap",
  "async-lock",

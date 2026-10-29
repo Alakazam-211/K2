@@ -23,14 +23,10 @@ START HERE
   Each verb has its own help: k2 vault <verb> --help.
 
 ASKING: YOU MAKE THE CHOICES
-  Pick them on the card yourself: --for (sites), --delivery fetch|file|env,
-  --scope workspace|server|session, --kind, and for fetch how K2 sends it:
-  --inject-dst basic|header:<Name>|query:<param>, --inject-format 'user:{}'
-  (k2 thread secret --help). The card tells the person what happens in one
-  sentence; they paste and Save. Prefer fetch with exact sites; file/env
-  only when a tool must read the value. If the setup is wrong, void the
-  card (k2 thread void <addr> <card-id>) and ask again. A card for a name
-  that already exists replaces it, with the card's sites and sending.
+  Pick them on the card: --for (sites), --delivery fetch|file|env, --scope,
+  --kind; fetch: --inject-dst header:<N>|query:<p>|basic (user:password).
+  Prefer fetch with exact sites; file/env only when a tool must read it.
+  Bad card: k2 thread void <addr> <card-id>. Same name: saving replaces it.
 
 HOW YOU GET A SECRET (delivery)
   fetch   K2 makes the HTTPS call and adds the key. You never see it.

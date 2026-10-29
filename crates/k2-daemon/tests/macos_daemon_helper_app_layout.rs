@@ -139,6 +139,19 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
     );
     let call = unconditional(&|t| t.starts_with("k2_daemon_helper_assemble "), "assemble K2 Daemon.app");
     assert!(call.contains("\"$out/k2-ptyd\""), "{SHARED_FN} assembles without k2-ptyd: {call}");
+    // The export worker (vs-live §3.1) rides the same way: built in the one
+    // sidecar call and nested beside the daemon, under the name the daemon
+    // looks for (`docs::export_worker::binary`).
+    let export_name = k2_export::proto::BINARY_NAME;
+    assert!(
+        helper.contains(&format!("K2_DAEMON_HELPER_EXPORT=\"{export_name}\"")),
+        "scripts/macos-daemon-helper-app.sh export name drifted from k2_export::proto::BINARY_NAME"
+    );
+    assert!(
+        array.iter().any(|t| *t == "-p k2-export --bin k2-export"),
+        "K2_MAC_SIDECAR_CARGO_ARGS no longer builds k2-export: {array:?}"
+    );
+    assert!(call.contains("\"$out/k2-export\""), "{SHARED_FN} assembles without k2-export: {call}");
 
     // The three callers source the shared file and call the function.
     for script in ["scripts/release.sh", "scripts/build-app.sh", "scripts/dev-build.sh"] {
@@ -163,6 +176,8 @@ fn ptyd_is_nested_beside_the_daemon_by_every_build_script() {
         .find(|l| l.trim_start().starts_with("k2_daemon_helper_assemble "))
         .unwrap_or_else(|| panic!("{script} does not assemble K2 Daemon.app"));
     assert!(call.contains("target/release/k2-ptyd") || call.contains("$PTYD_SRC"), "{script} assembles without k2-ptyd: {call}");
+    assert!(body.contains("cargo build --release -p k2-export --bin k2-export"), "{script} does not build k2-export");
+    assert!(call.contains("$EXPORT_SRC"), "{script} assembles without k2-export: {call}");
 }
 
 #[cfg(target_os = "macos")]

@@ -209,6 +209,9 @@ jobs:
           # shellcheck source=scripts/linux-ptyd-embed.sh
           source scripts/linux-ptyd-embed.sh
           k2_ptyd_build_for_embed "${{ matrix.target }}"
+          # The export worker rides inside the daemon the same way
+          # (prd-k2-core-exports-v1, vs-live §3.1).
+          k2_export_build_for_embed "${{ matrix.target }}"
           cargo build --release \
             --target ${{ matrix.target }} \
             --bin k2-daemon \
@@ -218,6 +221,7 @@ jobs:
           cp "$TARGET_DIR/${{ matrix.target }}/release/k2-daemon" \
              "${{ matrix.asset }}"
           assert_daemon_embeds_ptyd "${{ matrix.asset }}"
+          assert_daemon_embeds_export "${{ matrix.asset }}"
           # The marker sign-daemon.sh requires exactly once (version + arch).
           test "$(grep -a -o 'K2_DAEMON_BUILD v=[0-9.]* os=linux arch=[a-z0-9_]*;' "${{ matrix.asset }}" | wc -l)" = 1
           # The root helper (prd-k2-root-helper-v1): its own crate, no

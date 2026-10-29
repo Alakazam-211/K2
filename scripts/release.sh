@@ -737,7 +737,7 @@ codesign --force --options runtime --timestamp \
     --entitlements "$ENTITLEMENTS" \
     --sign "$SIGNING_IDENTITY" \
     "target/release/bundle/macos/K2.app"
-echo "  Signed (main + K2 Daemon.app + k2-ptyd + frpc + bundle) with entitlements."
+echo "  Signed (main + K2 Daemon.app + k2-ptyd + k2-export + frpc + bundle) with entitlements."
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 k2_daemon_helper_verify_signed "target/release/bundle/macos/K2.app"
 
@@ -793,6 +793,8 @@ staple_with_retry "K2.app"
 echo "  App notarized and stapled."
 # k2-ptyd (P2): the notarized app still ships the signed nested PTY host.
 k2_daemon_helper_verify_shipped_ptyd "K2.app"
+# The export worker (vs-live §3.1): signed and nested the same way.
+k2_daemon_helper_verify_shipped_export "K2.app"
 
 # ── Step 5: Create update bundle (tar.gz) from notarized app + sign it ──
 echo ""
@@ -803,6 +805,7 @@ COPYFILE_DISABLE=1 tar -czf "target/release/bundle/macos/K2.app.tar.gz" \
 # k2-ptyd (P59): the desktop update installs this bundle; it must carry the
 # PTY host, or agents would stop surviving after the update.
 k2_daemon_helper_verify_tarball_ptyd "target/release/bundle/macos/K2.app.tar.gz"
+k2_daemon_helper_verify_tarball_export "target/release/bundle/macos/K2.app.tar.gz"
 
 # Sign the update bundle with the update key. The Tauri app updater reads
 # the signature base64-wrapped (b64), exactly as the tauri signer wrote it.

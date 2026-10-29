@@ -106,23 +106,23 @@ k2_build_mac_binaries() {
     bun run tauri build || { echo "FATAL: tauri build failed" >&2; return 1; }
     [ -d "$app" ] || { echo "FATAL: $app missing after tauri build" >&2; return 1; }
 
-    echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-node, k2-menubar (one cargo call)..."
+    echo ""; echo "  Build 2/2: k2-daemon, k2-power-helper, k2-ptyd, k2-export, k2-node, k2-menubar (one cargo call)..."
     # k2-ptyd rides beside the daemon in K2 Daemon.app (prd-k2-ptyd-v1 §7.1);
     # k2-node never links k2-core (CN26). One call, one feature resolution
     # (see the header); k2_build_standalone_macos_daemon uses the same array.
     cargo build --release "${K2_MAC_SIDECAR_CARGO_ARGS[@]}" \
-        || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-node, k2-menubar) failed" >&2; return 1; }
+        || { echo "FATAL: sidecar build (k2-daemon, k2-ptyd, k2-export, k2-node, k2-menubar) failed" >&2; return 1; }
 
     local bin
-    for bin in k2-daemon k2-power-helper k2-ptyd k2-node k2-menubar; do
+    for bin in k2-daemon k2-power-helper k2-ptyd k2-export k2-node k2-menubar; do
         [ -x "$out/$bin" ] || { echo "FATAL: $bin missing at $out/$bin after cargo build" >&2; return 1; }
     done
     assert_daemon_oauth_not_placeholder "$out/k2-daemon" || return 1
 
     echo ""; echo "  Bundling sidecars into $app..."
     # k2-daemon lives in a nested background-only helper app so Activity
-    # Monitor shows the K2 icon + "K2 Daemon"; k2-ptyd sits beside it.
-    k2_daemon_helper_assemble "$app" "$out/k2-daemon" "$out/k2-ptyd" || return 1
+    # Monitor shows the K2 icon + "K2 Daemon"; k2-ptyd and k2-export sit beside it.
+    k2_daemon_helper_assemble "$app" "$out/k2-daemon" "$out/k2-ptyd" "$out/k2-export" || return 1
     k2_daemon_helper_verify "$app" || return 1
     # Heartbeat S2 (D11): the wake helper. The daemon copies it to
     # /Library/PrivilegedHelperTools only after the user approves the one

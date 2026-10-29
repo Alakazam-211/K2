@@ -147,9 +147,16 @@ if [ ! -x "$PTYD_SRC" ]; then
     echo "  FATAL: k2-ptyd not at $PTYD_SRC after cargo build" >&2
     exit 1
 fi
+# k2-export (the export worker) rides beside it too (vs-live §3.1).
+cargo build --release -p k2-export --bin k2-export
+EXPORT_SRC="target/release/k2-export"
+if [ ! -x "$EXPORT_SRC" ]; then
+    echo "  FATAL: k2-export not at $EXPORT_SRC after cargo build" >&2
+    exit 1
+fi
 # shellcheck source=scripts/macos-daemon-helper-app.sh
 source "$PROJECT_DIR/scripts/macos-daemon-helper-app.sh"
-k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC" "$PTYD_SRC"
+k2_daemon_helper_assemble "target/release/bundle/macos/K2.app" "$DAEMON_SRC" "$PTYD_SRC" "$EXPORT_SRC"
 k2_daemon_helper_verify "target/release/bundle/macos/K2.app"
 
 echo ""

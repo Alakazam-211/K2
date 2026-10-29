@@ -152,7 +152,7 @@ jobs:
       - name: cargo check (deny warnings, all targets)
         env:
           RUSTFLAGS: -D warnings
-        run: cargo check -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2-node -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys --all-targets
+        run: cargo check -p k2-core -p k2-client -p k2-daemon -p k2-node-proto -p k2-node -p k2-root-proto -p k2-root-helper -p k2-app-engine -p k2-ptyd -p k2-release-keys -p k2-export --all-targets
 
       # The test steps below run cargo-nextest with the repo's `ci` profile
       # (.config/nextest.toml: every test in its own process, no retries,
@@ -180,6 +180,14 @@ jobs:
           cargo build -p k2-ptyd --bin k2-ptyd
           cargo nextest run --profile ci -p k2-ptyd
           cargo nextest run --profile ci -p k2-core --test ptyd_backend
+
+      # The export worker (prd-k2-core-exports-v1, vs-live E4): every limit
+      # proven against the real binary with the hostile exporters (a test
+      # build only; release builds never enable test-hostile).
+      - name: cargo nextest k2-export (Linux)
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo nextest run --profile ci -p k2-export --features test-hostile
 
       # K2 root helper (prd-k2-root-helper-v1 RH16): a REQUIRED test step —
       # a bug here is a root bug. Pure unit tests over temp roots + the

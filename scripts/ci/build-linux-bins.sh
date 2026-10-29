@@ -124,6 +124,8 @@ ENGINE="k2-app-engine-linux-$ARCH"
 
 echo "Building k2-ptyd for the daemon to embed ($TRIPLE)..."
 k2_ptyd_build_for_embed "$TRIPLE"
+echo "Building k2-export for the daemon to embed ($TRIPLE)..."
+k2_export_build_for_embed "$TRIPLE"
 echo "Building k2-daemon + k2-node ($TRIPLE)..."
 cargo build --release --target "$TRIPLE" --bin k2-daemon --bin k2-node
 echo "Building k2-root-helper ($TRIPLE)..."
@@ -141,6 +143,7 @@ cp "$REL/k2-app-engine" "$OUT/$ENGINE"
 # The byte checks daemon-binaries.yml runs, before anything leaves the node.
 # release.sh runs them again on what it fetched (scripts/lib/compute-release.sh).
 assert_daemon_embeds_ptyd "$OUT/$DAEMON"
+assert_daemon_embeds_export "$OUT/$DAEMON"
 # The marker scripts/sign-daemon.sh requires exactly once (version + arch).
 test "$(grep -a -o 'K2_DAEMON_BUILD v=[0-9.]* os=linux arch=[a-z0-9_]*;' "$OUT/$DAEMON" | wc -l)" = 1 \
     || { echo "FATAL: $DAEMON has no single K2_DAEMON_BUILD marker" >&2; exit 1; }
@@ -168,12 +171,13 @@ done
 
 VERSION="$(grep -m1 '^version = ' crates/k2-daemon/Cargo.toml | sed 's/version = "\(.*\)"/\1/')"
 PTYD_SHA="$(_k2_sha256_of "$K2_PTYD_EMBED")"
+EXPORT_SHA="$(_k2_sha256_of "$K2_EXPORT_EMBED")"
 K2_BI_OUT="$OUT" K2_BI_ARCH="$ARCH" K2_BI_VERSION="$VERSION" K2_BI_OAUTH="$OAUTH_MODE" \
 K2_BI_COMMIT="$(k2_ci_rev HEAD "${BUILD_COMMIT:-unknown}")" \
 K2_BI_TREE="$(k2_ci_rev 'HEAD^{tree}' "${BUILD_TREE:-unknown}")" \
 K2_BI_RUSTC="$(rustc -vV)" K2_BI_CARGO="$(cargo -V)" \
 K2_BI_GLIBC="$(ldd --version 2>/dev/null | head -1 || echo unknown)" \
-K2_BI_PTYD="$PTYD_SHA" \
+K2_BI_PTYD="$PTYD_SHA" K2_BI_EXPORT="$EXPORT_SHA" \
 K2_BI_FILES="$DAEMON $NODE $HELPER $ENGINE" \
 python3 - <<'PY'
 import hashlib, json, os
@@ -191,6 +195,7 @@ info = {
     "oauth": os.environ["K2_BI_OAUTH"],
     "remap": "/k2 /cargo /target",
     "ptyd_sha256": os.environ["K2_BI_PTYD"],
+    "export_sha256": os.environ["K2_BI_EXPORT"],
     "rustc": os.environ["K2_BI_RUSTC"],
     "cargo": os.environ["K2_BI_CARGO"],
     "glibc": os.environ["K2_BI_GLIBC"],

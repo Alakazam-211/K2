@@ -110,6 +110,9 @@ def byte_checks(path, name, version, arch, info, problems):
             ptyd = (info or {}).get("ptyd_sha256", "")
             if len(ptyd) != 64 or ptyd.encode() not in data:
                 problems.append(f"{name}: does not embed k2-ptyd (P84)")
+            exp = (info or {}).get("export_sha256", "")
+            if len(exp) != 64 or exp.encode() not in data:
+                problems.append(f"{name}: does not embed k2-export (exports vs-live §3.1)")
             oauth = (info or {}).get("oauth")
             if oauth == "baked":
                 for env in ("K2_GMAIL_CLIENT_ID", "K2_GMAIL_CLIENT_SECRET"):

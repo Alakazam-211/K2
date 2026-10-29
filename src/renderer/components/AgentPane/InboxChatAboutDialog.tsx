@@ -12,6 +12,7 @@ import {
   type MsgResponse,
 } from '@/components/Terminal/terminalCompose'
 import {
+  chatAboutOpenLine,
   chatAboutStampLine,
   formatChatAboutPayload,
   formatInboxError,
@@ -19,6 +20,26 @@ import {
 } from './inbox-browser'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
+import { stashSourceFor } from '@/lib/prompt-stash/compose'
+import { saveToStash } from '@/stores/prompt-stash'
+import { useToastStore } from '@/stores/toast'
+
+/** "Save for later" (spec-prompt-stash-v1): the note, with the inbox stamp
+ *  as a quote, into the person's stash on this device. Nothing is sent. */
+export async function saveInboxChatAboutForLater(args: {
+  scope: ServerScope
+  projectPath: string
+  stamp: ChatAboutStamp
+  note: string
+}): Promise<boolean> {
+  const agent = args.projectPath.split('/').filter(Boolean).pop() || args.projectPath
+  const r = await saveToStash({
+    text: args.note.trim(),
+    quotes: [{ text: `${chatAboutStampLine(args.stamp)}\n${chatAboutOpenLine(args.stamp)}`, from: 'Inbox' }],
+    source: stashSourceFor(args.scope, agent, agent),
+  })
+  return r.status === 'saved'
+}
 
 function sendFailureMessage(status: ComposeStatus): string {
   if (status.kind === 'pty_died') {
@@ -134,6 +155,22 @@ export function InboxChatAboutDialog({
     if (!sending) onClose()
   }
 
+  const saveForLater = async (): Promise<void> => {
+    if (sending) return
+    setSending(true)
+    setError(null)
+    try {
+      const saved = await saveInboxChatAboutForLater({ scope: room.scope, projectPath, stamp: frozen, note })
+      if (!saved) return
+      useToastStore.getState().addToast('Saved to your stash', 'success', 2500)
+      onClose()
+    } catch (err) {
+      setError(`Couldn't save to your stash: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSending(false)
+    }
+  }
+
   return (
     <>
       <DialogScrim
@@ -199,6 +236,16 @@ export function InboxChatAboutDialog({
         </div>
 
         <div className="px-4 py-3 border-t border-[var(--color-border)] flex justify-end gap-2">
+          <button
+            type="button"
+            data-testid="inbox-chat-about-save-later"
+            onClick={() => { void saveForLater() }}
+            disabled={sending}
+            title="Keep this in your stash to send later (on this device)"
+            className="mr-auto px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer disabled:opacity-40"
+          >
+            Save for later
+          </button>
           <button
             type="button"
             data-testid="inbox-chat-about-cancel"

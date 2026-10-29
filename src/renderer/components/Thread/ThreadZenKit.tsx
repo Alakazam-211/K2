@@ -36,6 +36,7 @@ import {
 import { openSettingsPage } from '@/lib/open-settings-page'
 import type { SettingsSection } from '@/stores/settings'
 import { threadBubbleMaxWidth, useThreadColumnNarrow } from './ThreadColumn'
+import { StashOfferCard, ThreadMessageMoreButton, openThreadMessageMenu } from '@/components/PromptStash/StashFromThread'
 
 import {
   CHAMFER_CUT,
@@ -112,6 +113,8 @@ ${SCOPE} [data-zen-soft-button]:hover:not(:disabled) { background: var(--zen-sur
 ${SCOPE} [data-zen-soft-button]:disabled { opacity: 0.45; }
 ${SCOPE} [data-zen-compose-input]::placeholder { color: var(--zen-text-muted); opacity: 1; }
 ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
+${SCOPE} [data-zen-message-more] { opacity: 0; transition: opacity 120ms ease; }
+${SCOPE} [data-zen-message]:hover [data-zen-message-more], ${SCOPE} [data-zen-message-more]:focus-visible { opacity: 1; }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-compose] [data-zen-soft-button]:hover:not(:disabled) { background: var(--zen-surface); }
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-bubble="agent"] *::selection,
 [${THREAD_ZEN_SCOPE_ATTR}] [data-zen-bubble="agent"]::selection { background: color-mix(in srgb, var(--zen-accent) 30%, transparent); color: var(--zen-bubble-agent-text); }
@@ -303,7 +306,14 @@ export function threadBubbleText(item: OverlayThreadItem): string {
   if (d.kind === 'secret') return d.secret ? '' : d.body || ''
   // A handoff card draws itself; `body` is the plain line for old renderers.
   if (d.kind === 'handoff') return d.handoff ? '' : d.body || ''
+  // A stash offer draws its own card; `body` is the fallback for old clients.
+  if (d.kind === 'stash.offer') return d.stash ? '' : d.body || ''
   return d.body || ''
+}
+
+/** An agent's post (not a person's: no daemon author stamp, not compose). */
+function isAgentPost(item: OverlayThreadItem): boolean {
+  return !item.doc.author && item.doc.via !== 'compose'
 }
 
 /** How a bubble's secret card draws. */
@@ -415,6 +425,13 @@ export const ThreadBubble = memo(function ThreadBubble({
   // A narrow column (ThreadColumn): the whole column but a small inset.
   const narrow = useThreadColumnNarrow()
   const permissionActions = usePermissionActions(item, onAnswer)
+  // "Save to stash" (spec-prompt-stash-v1) on an agent's message, where the
+  // Thread knows its server (the desktop Thread).
+  const source = useThreadAttachmentSource()
+  const offer = kind === 'stash.offer' ? item.doc.stash ?? null : null
+  const stashText = offer ? offer.text : text
+  const menuOn = !mine && !!source && isAgentPost(item) && stashText.trim().length > 0
+  const menuArgs = { scope: source?.scope ?? null, text: stashText, agent: item.doc.from || '', agentName: author }
   return (
     <div
       data-zen-message={item.id}
@@ -429,6 +446,16 @@ export const ThreadBubble = memo(function ThreadBubble({
     >
       {bubble && <div
         className="selectable-copy"
+        onContextMenu={
+          menuOn
+            ? (e) => {
+                // A selection keeps the webview's own Copy menu.
+                if (window.getSelection()?.toString()) return
+                e.preventDefault()
+                void openThreadMessageMenu(e.clientX, e.clientY, menuArgs)
+              }
+            : undefined
+        }
         data-zen-bubble={mine ? 'me' : 'agent'}
         data-chamfer=""
         style={{
@@ -492,6 +519,9 @@ export const ThreadBubble = memo(function ThreadBubble({
             />
           </div>
         )}
+        {offer && (
+          <StashOfferCard offer={offer} scope={source?.scope ?? null} agent={item.doc.from || ''} agentName={author} />
+        )}
         {handoff && (
           <div style={{ marginTop: 6 }}>
             <HandoffCard
@@ -517,6 +547,7 @@ export const ThreadBubble = memo(function ThreadBubble({
         }}
       >
         <span data-thread-author="">{author}</span> · <span data-thread-time="">{timeLabel}</span>
+        {menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => void openThreadMessageMenu(x, y, menuArgs)} /> : null}
       </span>
       {footer != null && (
         <span

@@ -47,7 +47,7 @@ export const OVERLAY_PAGE_SIZE = 25
  *  field, so a field left out here vanishes on load (0.46.1 RC: file chips
  *  never drew from a loaded Thread, and a files-only post was an empty
  *  bubble). */
-type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments' | 'context'>
+type DocExtras = Pick<OverlayDoc, 'widget' | 'author' | 'design' | 'attachments' | 'context' | 'stash'>
 function docExtras(src: Record<string, unknown>): DocExtras {
   const out: DocExtras = {}
   const w = src.widget
@@ -65,7 +65,19 @@ function docExtras(src: Record<string, unknown>): DocExtras {
   if (attachments.length > 0) out.attachments = attachments
   const context = coerceThreadContext(src.context)
   if (context) out.context = context
+  const stash = coerceStashOffer(src.stash)
+  if (stash) out.stash = stash
   return out
+}
+
+/** A `stash.offer` card's payload (spec-prompt-stash-v1 "Card"): the text,
+ *  else none. */
+export function coerceStashOffer(raw: unknown): OverlayStashOffer | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.text !== 'string' || !o.text.trim()) return null
+  const title = typeof o.title === 'string' && o.title.trim() ? o.title.trim() : undefined
+  return title ? { text: o.text, title } : { text: o.text }
 }
 
 /** The doc's `context` (thread-context-v1): all four strings, else none. */
@@ -331,6 +343,17 @@ export interface OverlayDoc {
    *  feature `thread-context-v1`): a Garden widget's line, shown as a chip,
    *  never the person's words. Absent on every other doc. */
   context?: ThreadContextDoc | null
+  /** A `stash.offer` card (spec-prompt-stash-v1, agreed with K2 Companion):
+   *  an agent offers a prompt; the person's tap saves it to their stash on
+   *  their own device. Nothing goes back to the daemon. `body` carries the
+   *  readable fallback (title, blank line, text). */
+  stash?: OverlayStashOffer | null
+}
+
+/** `doc.stash` on a `stash.offer` card. */
+export interface OverlayStashOffer {
+  text: string
+  title?: string
 }
 
 /** A doc's `context` (`k2_core::overlay::doc::ThreadContext`). */

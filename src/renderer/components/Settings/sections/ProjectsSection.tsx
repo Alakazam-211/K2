@@ -57,7 +57,7 @@ import { FederatedConnectionRow } from './FederatedConnectionRow'
 import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
 import { HideApiSessionsToggle } from '@/components/WorkspacePanel/HideApiSessionsToggle'
 import { WorkspaceCompletionSoundToggle } from '@/components/WorkspacePanel/WorkspaceCompletionSoundToggle'
-import { DesignModeSettingRow } from '@/components/Design/DesignModeSettingRow'
+import { WorkspaceTabsSettings } from '@/components/Settings/PinnedTabSettingRows'
 import { FolderTrustRow } from './FolderTrustRow'
 import { AgentEmailNoticesRow } from './AgentEmailNoticesRow'
 import { WorkspacePhonePushToggle } from '@/components/WorkspacePanel/WorkspacePhonePushToggle'
@@ -102,6 +102,7 @@ export const PROJECTS_MANIFEST: SettingEntry[] = [
   { id: 'projects.cursor-migrate', section: 'projects', label: 'Cursor Session Migration', description: 'Port Cursor IDE sessions into K2', keywords: ['cursor', 'migrate', 'session', 'import'] },
   { id: 'projects.default-model', section: 'projects', label: 'Default model', description: 'Per-workspace default LLM model for new sessions', keywords: ['default model', 'opus', 'sonnet', 'workspace model'] },
   { id: 'projects.llm-logins', section: 'projects', label: 'LLM tokens', description: 'Use a specific Claude / Codex / Grok / Gemini subscription or API token for this workspace\'s agents instead of the server default', keywords: ['token', 'tokens', 'subscription', 'api token', 'api key', 'server default', 'login', 'account', 'pin'] },
+  { id: 'projects.tabs', section: 'projects', label: 'Tabs: Show the Design tab, Show the Mobile tab', description: 'Keep the Design and Mobile tabs pinned next to Chat and Inbox for this workspace. + → Design and + → Mobile work either way', keywords: ['tabs', 'pinned', 'design', 'mobile', 'phone', 'simulator', 'design mode', 'remove', 'bring back', 'show'] },
   { id: 'projects.force-model-on-resume', section: 'projects', label: 'Force model on resume', description: 'Pass workspace default model when resuming a session', keywords: ['resume', 'model', 'force'] },
   { id: 'projects.db-agent-create', section: 'projects', label: 'Allow this agent to create databases', description: 'Per-workspace passport for k2 db create (create-only; existing DBs stay usable)', keywords: ['db_agent_access', 'create', 'passport', 'agent', 'write', 'database', 'sql'] },
   { id: 'projects.agents-can-manage-skin', section: 'projects', label: 'Build and run Apps', description: 'Apps (beta) for this agent: Build and run Apps, Manage its Apps end to end (budgets, quotas, egress hosts, box services, keys), Let this agent manage its Apps\' users (App users, test guests, passwords, rooms), and what its Apps may use (Database, Files and rooms, Thread, Mail, Sew). The owner turns them on; an admin only off. Loosening the wall always asks you', keywords: ['agents_can_manage_skin', 'agents_can_manage_apps_full', 'app_cores', 'cores', 'apps', 'app', 'build', 'run', 'manage', 'end to end', 'database', 'files', 'rooms', 'thread', 'mail', 'sew', 'passport', 'agent', 'guests', 'roles', 'k2 app access'] },
@@ -1436,10 +1437,11 @@ function ProjectDetail({
               <DefaultAgentSelector projectId={project.id} currentDefaultAgent={project.defaultAgent} />
               <DefaultModelControls project={project} />
               <WorkspaceCompletionSoundToggle project={project} />
-              <DesignModeSettingRow project={project} scope={primaryScope()} />
               <FolderTrustRow scope={primaryScope()} projectPath={project.path} />
               <WorkspacePhonePushToggle project={project} />
             </SettingsGroup>
+
+            <WorkspaceTabsSettings project={project} scope={primaryScope()} />
 
             <SettingsGroup title="LLM tokens">
               <WorkspaceLlmTokens scope={primaryScope()} projectId={project.id} />

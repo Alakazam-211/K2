@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Fail loud: the palette (Select) toggle and its colour, the tray's Send all
 // and per-tile Send, the pop-up's overlay claim (which freezes the page) and its keys,
-// the tray's actions, the web stub, and the Design mode switch.
+// the tray's actions, the web stub, and the "Show the Design tab" switch.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 
@@ -294,9 +294,9 @@ describe('DesignWebStub', () => {
 })
 
 describe('DesignModeSettingRow', () => {
-  it('turns Design mode off for the workspace and updates the projects store', async () => {
+  it('turns "Show the Design tab" off for the workspace and updates the projects store', async () => {
     render(<DesignModeSettingRow scope={PRIMARY} project={{ id: 'p1', path: '/w/docs', designModeEnabled: 1 }} />)
-    const sw = screen.getByRole('switch', { name: 'Design mode' })
+    const sw = screen.getByRole('switch', { name: 'Show the Design tab' })
     expect(sw.getAttribute('aria-checked')).toBe('true')
     await act(async () => {
       fireEvent.click(sw)
@@ -311,6 +311,6 @@ describe('DesignModeSettingRow', () => {
 
   it('a missing value reads as on', () => {
     render(<DesignModeSettingRow scope={PRIMARY} project={{ id: 'p2', path: '/w/x' }} />)
-    expect(screen.getByRole('switch', { name: 'Design mode' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('switch', { name: 'Show the Design tab' }).getAttribute('aria-checked')).toBe('true')
   })
 })

@@ -1,7 +1,8 @@
-// Per-workspace "Design mode" setting (late decision Q-F2, 2026-10-16).
-// Daemon-owned: `projects.design_mode_enabled` (0/1, default 1 = ON),
-// written through `POST /cli/workspace/set`. Off removes the pinned Design
-// tab and hides Design from the + menu for that workspace.
+// Per-workspace "Show the Design tab" setting (late decision Q-F2,
+// 2026-10-16, as "Design mode"; renamed 2026-10-29). Daemon-owned:
+// `projects.design_mode_enabled` (0/1, default 1 = ON), written through
+// `POST /cli/workspace/set`. Off removes the pinned Design tab only; + →
+// Design opens an ordinary Design tab either way.
 
 import { daemonCliPost } from '@/lib/daemon-cli'
 import type { ServerScope } from '@/kessel/server-scope'

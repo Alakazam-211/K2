@@ -55,7 +55,7 @@ impl Drop for Env {
 fn setup() -> Env {
     let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let home = PathBuf::from(format!("/tmp/k2nae-{:x}", nanos % 0xffff_ffff));
+    let home = k2_core::test_env::short_tmp(format!("k2nae-{:x}", nanos % 0xffff_ffff));
     std::fs::create_dir_all(&home).unwrap();
     let home = dunce::canonicalize(&home).unwrap();
     let env = Env { prev_home: std::env::var_os("HOME"), home: home.clone(), _guard: guard };
@@ -213,7 +213,7 @@ async fn propose_approve_and_the_real_node_runs_it() {
         },
     )
     .unwrap();
-    let admin_sock = PathBuf::from(format!("/tmp/k2nae-{}.sock", &k2_node_proto::crypto::random_id().unwrap()[..10]));
+    let admin_sock = k2_core::test_env::short_tmp(format!("k2nae-{}.sock", &k2_node_proto::crypto::random_id().unwrap()[..10]));
     let paths = ExecPaths { config_dir: layout.config.clone(), state_dir: dir.join("admin-state"), home: layout.home.clone(), binary: dir.join("bin/k2-node") };
     k2_node::admin::exec::ensure_state_dir(&paths.state_dir).unwrap();
     let exec = Arc::new(Executor::new(paths, Arc::new(SystemPlatform) as Arc<dyn Platform>));

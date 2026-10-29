@@ -129,7 +129,7 @@ fn with_short_home<F: FnOnce(&Path)>(f: F) {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let tmp = PathBuf::from(format!("/tmp/k2he{}{}", std::process::id(), nanos % 1_000_000));
+    let tmp = k2_core::test_env::short_tmp(format!("k2he{}{}", std::process::id(), nanos % 1_000_000));
     std::fs::create_dir_all(tmp.join(".k2")).expect("create temp HOME");
     let _restore = Restore { prev: std::env::var_os("HOME"), tmp: tmp.clone() };
     std::env::set_var("HOME", &tmp);

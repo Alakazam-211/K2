@@ -180,7 +180,7 @@ impl Harness {
             std::env::remove_var(k);
         }
         // Short path: ptyd's control socket and the cell sockets live under it.
-        let home = PathBuf::from(format!("/tmp/k2sv{tag}-{}", std::process::id()));
+        let home = k2_core::test_env::short_tmp(format!("k2sv{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join(".k2")).unwrap();
         std::fs::create_dir_all(home.join("ws")).unwrap();

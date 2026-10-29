@@ -125,7 +125,7 @@ async fn the_family_answers_by_switch_state_on_tcp_and_the_cell() {
         }
     }
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let home = PathBuf::from(format!("/tmp/k2pci{:x}", nanos % 0xffff_ffff));
+    let home = k2_core::test_env::short_tmp(format!("k2pci{:x}", nanos % 0xffff_ffff));
     std::fs::create_dir_all(&home).unwrap();
     let home = dunce::canonicalize(&home).unwrap();
     let _home = Home { prev: std::env::var_os("HOME"), home: home.clone() };

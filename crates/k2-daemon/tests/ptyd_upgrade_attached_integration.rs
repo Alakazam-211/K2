@@ -86,7 +86,7 @@ async fn an_attached_session_survives_a_ptyd_upgrade_with_no_lost_or_doubled_byt
     // would keep the session in-process, P46).
     std::env::remove_var("INVOCATION_ID");
     // Short path: the ptyd socket lives under HOME (sun_path is 104 bytes on macOS).
-    let home = PathBuf::from(format!("/tmp/k2upa-{}", std::process::id()));
+    let home = k2_core::test_env::short_tmp(format!("k2upa-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     let k2 = home.join(".k2");
     std::fs::create_dir_all(&k2).unwrap();

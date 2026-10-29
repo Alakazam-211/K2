@@ -41,7 +41,7 @@ fn set_short_home() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = PathBuf::from(format!("/tmp/k2c3{}{}", std::process::id(), nanos % 1_000_000));
+    let tmp = k2_core::test_env::short_tmp(format!("k2c3{}{}", std::process::id(), nanos % 1_000_000));
     std::fs::create_dir_all(&tmp).expect("create temp HOME");
     std::env::set_var("HOME", &tmp);
     // In-memory DB so handle_hook_complete (which locks the shared DB) +

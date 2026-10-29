@@ -73,7 +73,12 @@ fn setup() -> TestEnv {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
+    // Windows: "/tmp" has no drive, so K2 would skip it as HOME and use
+    // USERPROFILE (the real home); the temp folder is absolute there.
+    #[cfg(not(windows))]
     let home = PathBuf::from(format!("/tmp/k2laf-{:x}", nanos % 0xffff_ffff));
+    #[cfg(windows)]
+    let home = std::env::temp_dir().join(format!("k2laf-{:x}", nanos % 0xffff_ffff));
     let shim = home.join("shim");
     std::fs::create_dir_all(&shim).expect("shim dir");
     for name in ["claude", "codex", "grok"] {
@@ -85,7 +90,11 @@ fn setup() -> TestEnv {
         std::env::remove_var(v);
     }
     std::env::set_var("HOME", &home);
+    #[cfg(not(windows))]
     std::env::set_var("PATH", format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", shim.display()));
+    // Windows: the shims first, then the system folders the daemon needs.
+    #[cfg(windows)]
+    std::env::set_var("PATH", k2_core::test_env::path_list_prepend(&shim, k2_core::test_env::cli_path("")));
     std::env::set_var("K2_TEST_AGENT_SHIM_DIR", &shim);
     k2_core::airgap::set_setting_enabled(false);
     TestEnv { home, prev, _guard: guard }

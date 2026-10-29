@@ -88,7 +88,7 @@ async fn canonical_chat_and_heartbeat_spawns_land_on_ptyd_unless_the_owner_turne
         std::env::remove_var(k);
     }
     // Short path: the ptyd socket lives under HOME (sun_path is 104 bytes on macOS).
-    let home = PathBuf::from(format!("/tmp/k2p76-{}", std::process::id()));
+    let home = k2_core::test_env::short_tmp(format!("k2p76-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     std::fs::create_dir_all(home.join(".k2")).unwrap();
     std::env::set_var("HOME", &home);

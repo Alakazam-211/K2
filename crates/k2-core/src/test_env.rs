@@ -247,6 +247,21 @@ pub fn unique_temp_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("k2-{tag}-{}", uuid::Uuid::new_v4().simple()))
 }
 
+/// A short temp path for a test's HOME (or a socket): `/tmp/<name>` on
+/// Unix, short so a per-cell socket under it fits SUN_LEN. Windows: the
+/// temp folder, because "/tmp" has no drive there, so K2 skips it as HOME
+/// and uses USERPROFILE: the real home, not the test's.
+pub fn short_tmp(name: impl AsRef<str>) -> PathBuf {
+    #[cfg(windows)]
+    {
+        std::env::temp_dir().join(name.as_ref())
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from(format!("/tmp/{}", name.as_ref()))
+    }
+}
+
 /// `first` ahead of the path list `rest` (PATH, K2_TEST_AGENT_SHIM_DIR),
 /// joined with this OS's separator: `first:rest` on Unix, `first;rest` on
 /// Windows (where ':' is part of a drive path). An empty `rest` is `first`.

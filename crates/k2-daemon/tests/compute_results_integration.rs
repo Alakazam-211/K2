@@ -56,7 +56,7 @@ impl Drop for Env {
 fn setup() -> Env {
     let guard = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let home = PathBuf::from(format!("/tmp/k2cr-{:x}", nanos % 0xffff_ffff));
+    let home = k2_core::test_env::short_tmp(format!("k2cr-{:x}", nanos % 0xffff_ffff));
     std::fs::create_dir_all(&home).unwrap();
     let home = dunce::canonicalize(&home).unwrap();
     let env = Env { prev_home: std::env::var_os("HOME"), home: home.clone(), _guard: guard };

@@ -59,7 +59,7 @@ fn setup() -> TestEnv {
         .expect("clock after epoch")
         .as_nanos();
     // Short: per-cell socket paths must fit SUN_LEN.
-    let home = PathBuf::from(format!("/tmp/k2st-{:x}", nanos % 0xffff_ffff));
+    let home = k2_core::test_env::short_tmp(format!("k2st-{:x}", nanos % 0xffff_ffff));
     let shim_dir = home.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     let shim = shim_dir.join("claude");

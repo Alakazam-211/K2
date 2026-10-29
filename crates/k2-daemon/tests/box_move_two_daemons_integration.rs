@@ -40,7 +40,7 @@ impl Drop for KillOnDrop {
 
 /// A short scratch HOME (the vault socket path must fit SUN_LEN).
 fn scratch_home(tag: &str) -> PathBuf {
-    let home = PathBuf::from(format!("/tmp/k2bm-{tag}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
+    let home = k2_core::test_env::short_tmp(format!("k2bm-{tag}-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]));
     std::fs::create_dir_all(home.join(".k2")).expect("mkdir home");
     home
 }

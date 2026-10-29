@@ -26,7 +26,7 @@ fn set_short_home() -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let tmp = PathBuf::from(format!("/tmp/k2hs{}{}", std::process::id(), nanos % 1_000_000));
+    let tmp = k2_core::test_env::short_tmp(format!("k2hs{}{}", std::process::id(), nanos % 1_000_000));
     std::fs::create_dir_all(&tmp).expect("create temp HOME");
     std::env::set_var("HOME", &tmp);
     let _ = k2_core::db::init_for_tests();

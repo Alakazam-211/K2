@@ -129,7 +129,7 @@ fn setup() -> TestEnv {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
         .as_nanos();
-    let home = PathBuf::from(format!("/tmp/k2la-{:x}", nanos % 0xffff_ffff));
+    let home = k2_core::test_env::short_tmp(format!("k2la-{:x}", nanos % 0xffff_ffff));
     let shim = home.join("shim");
     let log = home.join("shim-log");
     std::fs::create_dir_all(&shim).expect("shim dir");

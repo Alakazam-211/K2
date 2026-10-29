@@ -12971,7 +12971,7 @@ _app_updates_promote() {
             *) [ -z "$app" ] || { echo "usage: k2 app updates promote <app> --from <channel> --to <channel> [--version <v>]" >&2; exit 2; }; app="$1"; shift ;;
         esac
     done
-    { [ -n "$app" ] && [ -n "$from" ] && [ -n "$to" ]; } || { echo "usage: k2 app updates promote <app> --from <channel> --to <channel> [--version <v>]" >&2; exit 2; }
+    { [ -n "$app" ] && [ -n "$to" ] && { [ -n "$from" ] || [ -n "$ver" ]; }; } || { echo "usage: k2 app updates promote <app> --from <channel> --to <channel> [--version <v>] (or --to <channel> --version <v>)" >&2; exit 2; }
     _app_rt_post /cli/app/updates/promote "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_to="$to" K2_CJ_version="$ver" K2_CJ_dropPlatforms_b="$drop")"
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi

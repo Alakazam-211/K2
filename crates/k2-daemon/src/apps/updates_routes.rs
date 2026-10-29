@@ -113,7 +113,9 @@ fn audit(app: &AppRow, event: &str, by: &str, payload: J) {
 
 fn the_app(who: &Who, raw: Option<&str>) -> R<AppRow> {
     need_credential(who)?;
-    let app = app_for(who, raw)?;
+    // Settings names an App by its service id; agents by its App id.
+    let by_service = raw.and_then(|r| db(|c| deploy::store::get_app_by_service(c, r.trim())).ok().flatten()).map(|a| a.app_id);
+    let app = app_for(who, by_service.as_deref().or(raw))?;
     if app.app_id == k2_core::skin::HOST_APP_ID {
         return Err(no("not_for_host", 400, "the update feed is for a published App, never the box login (host)"));
     }
@@ -896,14 +898,19 @@ fn promote(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = the_app(who, s(&v, "app"))?;
     need_build(who)?;
-    let from = need_channel(s(&v, "from"), "--from")?;
     let to = need_channel(s(&v, "to"), "--to")?;
-    if from == to {
+    // --from names where the release is; with --version it may be left out.
+    let from = match (s(&v, "from"), s(&v, "version")) {
+        (None, Some(_)) => None,
+        (f, _) => Some(need_channel(f, "--from")?),
+    };
+    if from.as_deref() == Some(to.as_str()) {
         return Err(no(codes::BAD_REQUEST, 400, "--from and --to are the same channel"));
     }
-    let version = match s(&v, "version") {
-        Some(x) => x.to_string(),
-        None => current_of(&app, &from)?.map(|r| r.version).ok_or_else(|| no(uc::CHANNEL_EMPTY, 409, format!("{from} has no release to promote")))?,
+    let version = match (s(&v, "version"), &from) {
+        (Some(x), _) => x.to_string(),
+        (None, Some(f)) => current_of(&app, f)?.map(|r| r.version).ok_or_else(|| no(uc::CHANNEL_EMPTY, 409, format!("{f} has no release to promote")))?,
+        (None, None) => return Err(no(codes::BAD_REQUEST, 400, "name --from <channel> or --version <v>")),
     };
     let rel = live_release(&app, &version)?;
     if let Some(cur) = current_of(&app, &to)? {

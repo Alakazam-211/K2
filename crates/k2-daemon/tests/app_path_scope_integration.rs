@@ -238,6 +238,65 @@ async fn rs_a1_a2_a3_scoped_logins_see_only_their_folders_in_any_room() {
     assert!(r.status == 401 || r.status == 403, "a guest can't edit roles: {} {}", r.status, r.body);
 }
 
+/// A hard link is another path's file under a harmless name (the download
+/// door's round 2 A3 rule): one placed inside a granted folder, pointing at
+/// a sibling job or at a file outside the room, serves nothing through any
+/// read door. It is refused like any path outside the folders, on every OS.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_hard_link_inside_a_granted_folder_serves_nothing() {
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let desk = seed_ws(&env, &format!("desk{tag}"));
+    let docs = seed_ws(&env, &format!("docs{tag}"));
+    seed_jobs(&docs);
+    std::fs::hard_link(docs.path.join("jobs/J2/secret.txt"), docs.path.join("jobs/J1/harmless.txt")).unwrap();
+    let outside = env.path().join(format!("outside-{tag}.txt"));
+    std::fs::write(&outside, b"outside the room").unwrap();
+    std::fs::hard_link(&outside, docs.path.join("jobs/J1/notes.txt")).unwrap();
+
+    let role = format!("linked{tag}");
+    role_with_rooms(port, &role, &[(&desk, &["thread:read"]), (&docs, &["files:read"])]).await;
+    owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": docs.handle, "read": ["jobs/J1"] })).await;
+    let person = login_with_role(port, &format!("lnk{tag}"), &role).await;
+    let no_cap = guest_get(port, "/cli/fs/read-dir", &person, &desk, ".").await;
+    assert_missing_cap(&no_cap, "files:read", "desk has no files cap");
+
+    // A plain file in the folder still reads.
+    let r = guest_get(port, "/cli/fs/read-binary", &person, &docs, "jobs/J1/plan.pdf").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+
+    let refused = |r: &Resp, what: &str| {
+        assert_missing_cap(r, "files:read", what);
+        assert_eq!(r.body, no_cap.body, "{what}: byte-identical to a missing cap");
+        assert!(!r.body.contains("job two only") && !r.body.contains("outside the room"), "{what}: {}", r.body);
+    };
+    for scoped in [true, false] {
+        if !scoped {
+            // The whole room: a link to a file outside it still serves nothing.
+            owner_ok(port, "/cli/skin/roles/paths", json!({ "name": role, "handle": docs.handle, "clear": true })).await;
+        }
+        for (route, rel) in [
+            ("/cli/fs/read-file", "jobs/J1/harmless.txt"),
+            ("/cli/fs/read-binary", "jobs/J1/harmless.txt"),
+            ("/cli/fs/read-file", "jobs/J1/notes.txt"),
+            ("/cli/fs/read-binary", "jobs/J1/notes.txt"),
+        ] {
+            let r = guest_get(port, route, &person, &docs, rel).await;
+            refused(&r, &format!("scoped={scoped} {route} {rel}"));
+        }
+        let r = get(
+            port,
+            "/cli/fs/read-range",
+            &person,
+            &format!("workspace={}&path={}&offset=0&len=4", enc(&docs.handle), enc("jobs/J1/notes.txt")),
+        )
+        .await;
+        refused(&r, &format!("scoped={scoped} read-range"));
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn writes_need_a_write_folder_and_uploads_land_in_upload_dir() {
     let env = setup(&[]);

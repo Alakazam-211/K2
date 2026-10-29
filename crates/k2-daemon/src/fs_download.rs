@@ -158,6 +158,16 @@ fn hard_linked(meta: &std::fs::Metadata, path: &Path) -> bool {
     }
 }
 
+/// `path` is a file with more than one link (see [`hard_linked`]). For the
+/// guest read doors: a link placed inside a guest's folders must not serve
+/// the file it points at. A folder, or nothing at all, is not.
+pub(crate) fn hard_linked_file(path: &Path) -> bool {
+    match std::fs::metadata(path) {
+        Ok(m) if m.is_file() => hard_linked(&m, path),
+        _ => false,
+    }
+}
+
 /// Round 2 A3: the content bytes one listing may scan (each text file
 /// costs up to 1 MiB); past it the listing stops and says `truncated`.
 pub const LIST_SCAN_BUDGET: u64 = 64 * 1024 * 1024;

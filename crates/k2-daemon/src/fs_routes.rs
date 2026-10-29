@@ -1161,6 +1161,13 @@ pub(crate) fn skin_jail_need(
     if let Some(r) = scope_gate_landed(&scope, resolved, &jailed, need, true) {
         return Err(r);
     }
+    // A hard link has no target the jail could resolve: one inside the
+    // guest's folders may be a private file (a sibling's, or outside the
+    // room) under a harmless name. Refused like a path outside the folders,
+    // as the download door does (round 2 A3).
+    if need == PathNeed::Read && crate::fs_download::hard_linked_file(&jailed) {
+        return Err(scope_refused(need));
+    }
     Ok(jailed)
 }
 
@@ -1181,7 +1188,11 @@ pub(crate) fn guest_may_read_rel(pass: &SkinPass, project_id: &str, root: &str, 
         return false;
     };
     match jail_rel_path(root, rel, false) {
-        Ok(jailed) => scope_gate_landed(&scope, &ws, &jailed, PathNeed::Read, true).is_none(),
+        // A hard link is never readable by a guest (see skin_jail_need).
+        Ok(jailed) => {
+            scope_gate_landed(&scope, &ws, &jailed, PathNeed::Read, true).is_none()
+                && !crate::fs_download::hard_linked_file(&jailed)
+        }
         Err(_) => true,
     }
 }

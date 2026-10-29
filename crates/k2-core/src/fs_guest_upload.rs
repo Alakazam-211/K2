@@ -153,6 +153,12 @@ fn open_part_no_follow(path: &Path) -> std::io::Result<fs::File> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.custom_flags(libc::O_NOFOLLOW);
     }
+    // Windows: open a link itself, never its target (as O_NOFOLLOW).
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(0x0020_0000); // FILE_FLAG_OPEN_REPARSE_POINT
+    }
     opts.open(path)
 }
 
@@ -332,6 +338,14 @@ fn write_guest_upload_chunk_locked(
     })?;
     let meta = f.metadata().map_err(|e| GuestChunkError::Io(e.to_string()))?;
     if !meta.file_type().is_file() {
+        return Err(GuestChunkError::Invalid(
+            "upload part is not a regular file".to_string(),
+        ));
+    }
+    // A part with another name (a hard link placed at the part's name) is
+    // someone else's file: a guest's chunk must never truncate or write it.
+    // Fail closed when the count can't be read.
+    if crate::private_fs::link_count(&f).map_or(true, |n| n > 1) {
         return Err(GuestChunkError::Invalid(
             "upload part is not a regular file".to_string(),
         ));
@@ -583,6 +597,24 @@ mod tests {
         let err = write_guest_upload_chunk(&t.0, &p, "big.bin", 0, b"EVIL", false, None)
             .expect_err("symlinked part must be refused");
         assert!(matches!(err, GuestChunkError::Invalid(_)), "{err:?}");
+        assert_eq!(fs::read(&target).expect("victim"), b"untouched");
+    }
+
+    /// A hard link planted at the part's name is another path's file: the
+    /// guest's first chunk (which truncates) and a resumed one are refused,
+    /// and the file is untouched. Every OS.
+    #[test]
+    fn hard_link_at_part_name_is_refused_and_target_untouched() {
+        let t = Tmp::new("hardlink");
+        let target = t.0.join("victim.txt");
+        fs::write(&target, b"untouched").expect("victim");
+        let p = part(&t.0, "alice", "u1");
+        fs::hard_link(&target, t.0.join(&p)).expect("plant hard link");
+        for offset in [0, 9] {
+            let err = write_guest_upload_chunk(&t.0, &p, "big.bin", offset, b"EVIL", false, None)
+                .expect_err("a hard-linked part must be refused");
+            assert!(matches!(err, GuestChunkError::Invalid(_)), "offset {offset}: {err:?}");
+        }
         assert_eq!(fs::read(&target).expect("victim"), b"untouched");
     }
 

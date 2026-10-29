@@ -1,0 +1,41 @@
+[package]
+name = "k2-export"
+# The worker has its own version line, independent of the K2 release (like
+# k2-ptyd): the daemon checks the protocol in the hello (proto::PROTO), not
+# this number. release.sh does not bump it.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "K2 export worker: turns a doc version's bytes into another format in its own process (prd-k2-core-exports-v1 §4.3, vs-live §3). Never links k2-core."
+
+# The worker parses hostile bytes (P1+ decoders), so it holds no tokens, no
+# DB and no OS integration: it never links k2-core or k2-daemon (like
+# k2-node, CN26). The lib holds the wire protocol and the host-side runner
+# (spawn, limits, watchdog) the daemon links; the bin is the worker.
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "k2-export"
+path = "src/main.rs"
+
+[features]
+# TEST ONLY: register exporters that panic, abort, allocate without bound,
+# sleep, spin, flood output, exit without a final frame and fail to decode,
+# to prove every limit (tests/limits.rs). Release builds never enable it;
+# the helper-app verify refuses a k2-export carrying its marker.
+test-hostile = []
+
+[dependencies]
+k2-mpc-base = { path = "../../vendor/k2-mpc-base/crates/base" }
+serde_json = "1"
+libc = "0.2"
+
+[[test]]
+name = "limits"
+path = "tests/limits.rs"
+required-features = ["test-hostile"]
+
+[[test]]
+name = "worker"
+path = "tests/worker.rs"

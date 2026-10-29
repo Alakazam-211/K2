@@ -25,6 +25,7 @@ members = [
     # (k2_core::test_env::write_executable). Never shipped.
     "tests/fakes/sh-shim",
     "crates/k2-ptyd",
+    "crates/k2-export",
 ]
 # Sew's vendored client crates (S30 K15, third_party/SEW-VENDOR.txt) keep
 # their own manifests and lints: never workspace members. Vendored repos

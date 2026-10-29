@@ -201,13 +201,10 @@ REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   Content-Type: application/json; guests.login, thread.send,
   thread.answerCard, thread.voidCard and resources.add/remove also
   take application/x-www-form-urlencoded); 423 locked on login
-  (Retry-After); 403 password_change_required on login: the owner, an
-  admin, an agent, an App key or K2 set that password, so no pass: send
-  the person to changeUrl (token in the #fragment; null: your own form
-  posts {token: changeToken, password} to password.reset), where they
-  choose a new one, then sign in again. k2.login returns this as
-  {mustChangePassword, changeToken, changeUrl}; an older @k2/server
-  throws it: update it (k2 app sdk add <app-folder>, npm install).
+  (Retry-After); 403 password_change_required on login: someone else set
+  that password, so no pass; send the person to changeUrl (null: your form
+  posts {token: changeToken, password} to password.reset), then they sign
+  in again. An older @k2/server throws it: k2 app sdk add <app-folder>.
 
 RULES: one guest's pass per guest request; send it as Authorization:
   Bearer (a pass in ?token= still works but lands in your own logs, and

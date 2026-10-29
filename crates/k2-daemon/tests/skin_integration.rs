@@ -3768,6 +3768,10 @@ async fn skin_guest_email_create_login_forgot_matrix() {
         assert_eq!(cv["username"], "jane", "{}", created.body);
         assert_eq!(cv["email"], "jane@clinic.com", "{}", created.body);
         assert_eq!(cv["hasPassword"], true, "{}", created.body);
+        // 0.46.6: the owner typed it, so it is temporary; this test signs in
+        // as jane by email, so she keeps it as her own.
+        assert_eq!(cv["passwordMustChange"], true, "{}", created.body);
+        test_harness::guest_with_own_password("jane", "s3cret-horse");
 
         let get_email = http(
             port,

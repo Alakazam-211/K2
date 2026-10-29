@@ -182,7 +182,8 @@ async fn an_owner_set_password_gets_no_pass_on_any_path_until_the_person_changes
         assert_eq!(r.status, 401, "an older change token is void: {}", r.body);
     }
     let r = get(port, "/cli/skin/profile", &t_last, "").await;
-    assert_eq!(r.status, 401, "not a pass: {}", r.body);
+    assert_eq!((r.status, r.code()), (403, "guest_required".to_string()), "not a person's pass: {}", r.body);
+    assert!(!r.body.contains(&dana), "{}", r.body);
     let r = login_json(port, json!({ "username": dana, "password": t_last, "app": app })).await;
     assert_eq!(r.status, 401, "not a password: {}", r.body);
 

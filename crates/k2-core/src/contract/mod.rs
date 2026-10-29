@@ -750,6 +750,9 @@ mod tests {
                 // Catalog v35 (email notifications part 2, N6).
                 "email_paused",
                 "all_suppressed",
+                // Catalog v38 (must-change at next sign-in, 0.46.6).
+                "password_change_required",
+                "password_unchanged",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

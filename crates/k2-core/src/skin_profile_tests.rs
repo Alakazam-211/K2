@@ -71,14 +71,15 @@ fn table_exists(name: &str) -> bool {
 // ── P1 store ─────────────────────────────────────────────────────────
 
 #[test]
-fn tables_come_at_open_and_the_schema_version_stays_6() {
+fn tables_come_at_open_with_no_schema_step_of_their_own() {
     let _f = fx("open");
     for t in ["app_profile_settings", "principal_profiles", "session_meta"] {
         assert!(table_exists(t), "{t}");
     }
     let v: i64 = with_conn(|conn| conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|e| e.to_string())).unwrap();
     assert_eq!(v, crate::skin::SKIN_SCHEMA_VERSION);
-    assert_eq!(v, 6, "no numbered step for the profile tables");
+    // 6 when they shipped (0.46.5); 7 is must-change (0.46.6), not them.
+    assert_eq!(v, 7, "no numbered step for the profile tables");
     with_conn(|conn| ensure_schema(conn)).expect("a second run is a no-op");
 }
 

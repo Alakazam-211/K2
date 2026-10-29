@@ -646,7 +646,7 @@ describe('frosted glass behind the message box', () => {
     // Nothing to follow: the stylesheet's default (6px above the slot).
     expect(threadFadeTop(500, [])).toBeNull()
     expect(THREAD_FOOTER_FADE_CSS).toContain('top: -6px; pointer-events: none; z-index: 0; transition: top 200ms')
-    expect(FOOTER_FADE_TARGETS).toEqual(['[data-zen-attachments]', '[data-zen-drawer-clip]', '[data-zen-compose-box]'])
+    expect(FOOTER_FADE_TARGETS).toEqual(['[data-zen-attachments]', '[data-zen-drawer-clip]', '[data-stash-tab]', '[data-stash-drawer]', '[data-zen-compose-box]'])
   })
 
   it('the column measures it: the tab while it is out, the field when it is closed', () => {

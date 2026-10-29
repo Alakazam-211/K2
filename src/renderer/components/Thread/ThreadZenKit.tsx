@@ -163,8 +163,9 @@ ${SCOPE} [data-zen-compose-input]:focus { outline: none; }
 export const FOOTER_FADE_PX = 6
 
 /** What the strip's top follows, topmost first found wins by position:
- *  the file chips, the activity drawer's tab, the field. */
-export const FOOTER_FADE_TARGETS = ['[data-zen-attachments]', '[data-zen-drawer-clip]', '[data-zen-compose-box]'] as const
+ *  the file chips, the activity drawer's tab, the stash ear (and the open
+ *  stash) on the box's top edge, the field. */
+export const FOOTER_FADE_TARGETS = ['[data-zen-attachments]', '[data-zen-drawer-clip]', '[data-stash-tab]', '[data-stash-drawer]', '[data-zen-compose-box]'] as const
 
 /** The strip's `top` (px, relative to the bar's slot) from the slot's top
  *  and the tops of what sits on the box (viewport px): FOOTER_FADE_PX above

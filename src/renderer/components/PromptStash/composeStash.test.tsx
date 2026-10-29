@@ -1,0 +1,303 @@
+// @vitest-environment jsdom
+// Prompt stash in the composers (spec-prompt-stash-v1 Acceptance 1–7): Cmd+S
+// saves then clears, Cmd+S on an empty box opens the drawer, the button is
+// always there, the activity bar slides away while the drawer is open and
+// comes back, a pick goes below existing text, and a server switch keeps
+// the list. A fake IndexedDB stands in for the webview's. Fail loud.
+import 'fake-indexeddb/auto'
+import { IDBFactory } from 'fake-indexeddb'
+import { act, cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ServerScope } from '@/kessel/server-scope'
+
+const h = vi.hoisted(() => {
+  const daemonCliGet = vi.fn(async (_scope: unknown, route: string) => {
+    if (route === 'terminal/compose-history') return { items: [] }
+    return []
+  })
+  const daemonCliPost = vi.fn(async () => ({ ok: true }))
+  return { daemonCliGet, daemonCliPost }
+})
+
+vi.mock('@/lib/daemon-cli', () => ({
+  daemonCliGet: h.daemonCliGet,
+  daemonCliPost: h.daemonCliPost,
+}))
+
+import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
+import { SessionViewChromeContext, type SessionViewChromeValue } from '@/components/SessionView/sessionViewChrome'
+import { ThreadComposeDrawerContext } from '@/components/SessionView/threadComposeDrawer'
+import { coerceThreadTurn, type ThreadTurn } from '@/components/SessionView/overlayThread'
+import { closeStashDbForTests } from '@/lib/prompt-stash/idb'
+import { isMacPlatform } from '@/lib/desktop-chrome'
+import { primaryScope } from '@/kessel/server-scope'
+import { fakeScope } from '@/test-utils/fake-scope'
+import { renderInRoom, testRoom } from '@/test-utils/room'
+import { STASH_CAP } from '@/lib/prompt-stash/record'
+import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { useToastStore } from '@/stores/toast'
+import { usePromptStashStore, type StashSaveResult } from '@/stores/prompt-stash'
+
+const chrome: SessionViewChromeValue = {
+  viewTab: 'thread',
+  splitLeft: 'terminal',
+  splitRight: 'thread',
+  overlayAddr: 'sales',
+  conversationId: 'c',
+  agentName: 'sales',
+  displayName: 'Sales',
+}
+
+function turn(): ThreadTurn {
+  const now = Date.now()
+  const t = coerceThreadTurn(
+    { turnId: 't1', state: 'working', phase: 'tool', phaseSince: now, line: 'Reading `a.rs`', startedAt: now - 5_000, subagents: 0, background: 0, tally: { read: 1 }, end: null, serverNow: now, rev: 1 },
+    now,
+  )
+  if (!t) throw new Error('fixture is not a turn')
+  return t
+}
+
+function renderThreadBar(scope: ServerScope = primaryScope(), withTurn = false): void {
+  const room = testRoom({ tabs: {}, scope, isPrimary: scope === primaryScope(), projects: [] })
+  renderInRoom(
+    room,
+    <SessionViewChromeContext.Provider value={chrome}>
+      <ThreadComposeDrawerContext.Provider value={withTurn ? { turn: turn() } : null}>
+        <TerminalComposeBar sessionId="sess-1" workspacePath="/ws/sales" sendDestination="thread" />
+      </ThreadComposeDrawerContext.Provider>
+    </SessionViewChromeContext.Provider>,
+  )
+}
+
+function renderPtyBar(): void {
+  const room = testRoom({ tabs: {}, scope: primaryScope(), projects: [] })
+  renderInRoom(room, <TerminalComposeBar sessionId="sess-2" workspacePath="/ws/sales" sendDestination="pty" />)
+}
+
+function box(): HTMLTextAreaElement {
+  return screen.getByRole('textbox') as HTMLTextAreaElement
+}
+
+function type(text: string): void {
+  fireEvent.change(box(), { target: { value: text } })
+}
+
+function pressStash(target: Element = box()): void {
+  const mac = isMacPlatform()
+  fireEvent.keyDown(target, { key: 's', metaKey: mac, ctrlKey: !mac })
+}
+
+function activityPhase(): string | null {
+  return document.querySelector('[data-zen-drawer]')?.getAttribute('data-phase') ?? null
+}
+
+async function reloadStore(): Promise<void> {
+  await closeStashDbForTests()
+  usePromptStashStore.setState({ items: [], loaded: false })
+  await usePromptStashStore.getState().load()
+}
+
+const realSave = usePromptStashStore.getState().save
+
+beforeEach(async () => {
+  cleanup()
+  await closeStashDbForTests()
+  ;(globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory()
+  localStorage.clear()
+  usePromptStashStore.setState({ items: [], loaded: false, removeAfterUse: false, save: realSave })
+})
+afterEach(async () => {
+  cleanup()
+  await closeStashDbForTests()
+})
+
+describe('Cmd+S with text', () => {
+  it('writes first, then clears; the draft survives a reload', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const save = vi.fn(async (...args: Parameters<typeof realSave>): Promise<StashSaveResult> => {
+      await gate
+      return realSave(...args)
+    })
+    usePromptStashStore.setState({ save })
+    renderThreadBar()
+    type('remember this prompt')
+    pressStash()
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    // The write hasn't landed: the box still holds the draft.
+    expect(box().value).toBe('remember this prompt')
+    await act(async () => {
+      release()
+    })
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(save.mock.calls[0][0]).toMatchObject({
+      text: 'remember this prompt',
+      source: { server_id: 'local', agent: 'sales', agent_name: 'Sales', user: 'owner' },
+    })
+    await reloadStore()
+    expect(usePromptStashStore.getState().items.map((r) => r.text)).toEqual(['remember this prompt'])
+  })
+
+  it('a failed write keeps the draft in the box', async () => {
+    usePromptStashStore.setState({
+      save: vi.fn(async () => {
+        throw new Error('disk full')
+      }),
+    })
+    renderThreadBar()
+    type('keep me')
+    pressStash()
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.map((t) => t.message)).toContain("Couldn't stash: disk full. Your draft is still here."),
+    )
+    expect(box().value).toBe('keep me')
+  })
+
+  it('works in the terminal compose bar too', async () => {
+    renderPtyBar()
+    type('pty draft')
+    pressStash()
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(usePromptStashStore.getState().items.map((r) => r.text)).toEqual(['pty draft'])
+    expect(screen.getByTestId('stash-button').getAttribute('aria-label')).toBe('Stash (1 item)')
+  })
+
+  it('at the cap it asks first, and a no keeps the draft and the list', async () => {
+    for (let i = 0; i < STASH_CAP; i++) await realSave({ text: `p${i}`, source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } }, [], { now: 1_000 + i })
+    renderThreadBar()
+    type('the 51st')
+    pressStash()
+    await waitFor(() => expect(useConfirmDialogStore.getState().isOpen).toBe(true))
+    expect(useConfirmDialogStore.getState().message).toBe('Your stash is full (50). Remove the oldest?')
+    act(() => useConfirmDialogStore.getState().close())
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(box().value).toBe('the 51st')
+    expect(usePromptStashStore.getState().items).toHaveLength(STASH_CAP)
+    expect(usePromptStashStore.getState().items.some((r) => r.text === 'p0')).toBe(true)
+  })
+})
+
+describe('the button and the drawer', () => {
+  it('the button is always there, with no activity bar', async () => {
+    renderThreadBar()
+    const btn = screen.getByTestId('stash-button')
+    expect(btn.getAttribute('aria-label')).toBe('Stash (0 items)')
+    expect(document.querySelector('[data-zen-drawer]')).toBeNull()
+  })
+
+  it('sits just right of the activity bar on the box\'s top edge', () => {
+    renderThreadBar(primaryScope(), true)
+    const row = document.querySelector('[data-zen-stash-row]') as HTMLElement
+    const activity = row.querySelector('[data-zen-drawer]') as HTMLElement
+    const btn = within(row).getByTestId('stash-button')
+    expect(activity.compareDocumentPosition(btn) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    const field = document.querySelector('[data-zen-compose-box]') as HTMLElement
+    expect(row.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+  })
+
+  it('Cmd+S on an empty box opens the drawer, newest first, with source, age and files', async () => {
+    await realSave({ text: 'older', source: { server_id: 'local', server_label: 'This computer', user: 'owner', agent: 'sales', agent_name: 'Sales' } }, [], { now: Date.now() - 3 * 3600_000 })
+    await realSave(
+      { text: 'newer', source: { server_id: 'box.k2.dev', server_label: 'Box', user: 'rosson', agent: 'ops', agent_name: 'Ops' } },
+      [{ name: 'a.png', type: 'image/png', bytes: new Blob([new Uint8Array([1])]) }],
+      { now: Date.now() - 5 * 60_000 },
+    )
+    renderThreadBar()
+    await waitFor(() => expect(screen.getByTestId('stash-button').getAttribute('aria-label')).toBe('Stash (2 items)'))
+    pressStash()
+    const drawer = await screen.findByTestId('stash-drawer')
+    const rows = drawer.querySelectorAll('[data-stash-row]')
+    expect([...rows].map((r) => r.querySelector('[data-stash-preview]')?.textContent)).toEqual(['newer', 'older'])
+    expect(rows[0].querySelector('[data-stash-source]')?.textContent).toBe('Ops on Box')
+    expect(rows[0].querySelector('[data-stash-age]')?.textContent).toBe('5m')
+    expect(rows[0].querySelector('[data-stash-files]')?.getAttribute('data-stash-files')).toBe('1')
+    expect(rows[1].querySelector('[data-stash-age]')?.textContent).toBe('3h')
+    expect(rows[1].querySelector('[data-stash-files]')).toBeNull()
+    // The list has the keys.
+    expect(document.activeElement).toBe(screen.getByTestId('stash-list'))
+  })
+
+  it('the activity bar slides away while the drawer is open and comes back on close', async () => {
+    renderThreadBar(primaryScope(), true)
+    expect(activityPhase()).toBe('in')
+    fireEvent.click(screen.getByTestId('stash-button'))
+    await screen.findByTestId('stash-drawer')
+    expect(activityPhase()).toBe('out')
+    // Esc closes it; the bar slides back in.
+    fireEvent.keyDown(screen.getByTestId('stash-list'), { key: 'Escape' })
+    expect(screen.queryByTestId('stash-drawer')).toBeNull()
+    expect(activityPhase()).toBe('in')
+  })
+
+  it('arrow keys and Enter pick; the pick goes below existing text, the bar comes back, the item stays', async () => {
+    await realSave({ text: 'second stash', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } }, [], { now: 1_000 })
+    await realSave({ text: 'first stash', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } }, [], { now: 2_000 })
+    renderThreadBar(primaryScope(), true)
+    type('already typed')
+    fireEvent.click(screen.getByTestId('stash-button'))
+    const list = await screen.findByTestId('stash-list')
+    await waitFor(() => expect(list.querySelectorAll('[data-stash-row]')).toHaveLength(2))
+    expect(activityPhase()).toBe('out')
+    fireEvent.keyDown(list, { key: 'ArrowDown' })
+    fireEvent.keyDown(list, { key: 'Enter' })
+    expect(box().value).toBe('already typed\n\nsecond stash')
+    expect(screen.queryByTestId('stash-drawer')).toBeNull()
+    expect(activityPhase()).toBe('in')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20))
+    })
+    expect(usePromptStashStore.getState().items.map((r) => r.text)).toEqual(['first stash', 'second stash'])
+  })
+
+  it('with "Remove after use" on, a pick takes the item out', async () => {
+    await realSave({ text: 'one shot', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } })
+    renderThreadBar()
+    fireEvent.click(screen.getByTestId('stash-button'))
+    const toggle = (await screen.findByTestId('stash-remove-after-use')) as HTMLInputElement
+    expect(toggle.checked).toBe(false)
+    fireEvent.click(toggle)
+    expect(usePromptStashStore.getState().removeAfterUse).toBe(true)
+    const row = await waitFor(() => {
+      const r = document.querySelector('[data-stash-row]')
+      if (!r) throw new Error('no row yet')
+      return r
+    })
+    fireEvent.click(row)
+    expect(box().value).toBe('one shot')
+    await waitFor(() => expect(usePromptStashStore.getState().items).toEqual([]))
+  })
+
+  it('✕ removes a row', async () => {
+    await realSave({ text: 'drop me', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } })
+    renderThreadBar()
+    fireEvent.click(screen.getByTestId('stash-button'))
+    const remove = await screen.findByRole('button', { name: /Remove “drop me” from the stash/ })
+    fireEvent.click(remove)
+    await waitFor(() => expect(document.querySelector('[data-stash-row]')).toBeNull())
+    expect(usePromptStashStore.getState().items).toEqual([])
+  })
+})
+
+describe('per person on this device', () => {
+  it('a stash made on one server shows in a composer on another', async () => {
+    const remote = fakeScope('box.k2.dev', { remote: true })
+    renderThreadBar(remote)
+    type('from the box')
+    pressStash()
+    await waitFor(() => expect(box().value).toBe(''))
+    expect(usePromptStashStore.getState().items[0].source.server_id).toBe('box.k2.dev')
+    cleanup()
+    // Another server's composer (this computer): same list.
+    renderThreadBar(primaryScope())
+    expect(screen.getByTestId('stash-button').getAttribute('aria-label')).toBe('Stash (1 item)')
+    type('')
+    pressStash()
+    const drawer = await screen.findByTestId('stash-drawer')
+    expect(drawer.querySelector('[data-stash-preview]')?.textContent).toBe('from the box')
+  })
+})

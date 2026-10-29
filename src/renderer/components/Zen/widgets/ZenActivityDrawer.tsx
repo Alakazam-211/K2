@@ -426,6 +426,8 @@ export function ZenActivityDrawer({
   turn,
   onStop,
   attached = true,
+  hidden = false,
+  margin,
 }: {
   turn: ThreadTurn | null
   /** Sends Esc to the agent's session (the desktop Thread). Absent: no Stop. */
@@ -433,6 +435,11 @@ export function ZenActivityDrawer({
   /** On a message box's top edge (default). False: a free tile (a Thread
    *  with no message box, e.g. a view-only room). */
   attached?: boolean
+  /** Slide away while something else holds the box's top edge (the open
+   *  prompt stash, spec-prompt-stash-v1); slides back in when it clears. */
+  hidden?: boolean
+  /** The clip box's margin, when the caller shares the top edge. */
+  margin?: string
 }): React.JSX.Element | null {
   // The last live state, for the supersede hold (a message sent mid-turn).
   // No turn (a Thread switch, or the server says none runs) or another
@@ -442,7 +449,7 @@ export function ZenActivityDrawer({
   else if (!turn || turn.turnId !== lastLive.current?.turnId) lastLive.current = null
   const now = useDrawerNow(turn, lastLive.current !== null && turn?.end?.reason === 'superseded')
   const drawn = zenDrawerHeldTurn(turn, lastLive.current, now)
-  const line = drawn ? threadDrawerLine(drawn, now) : null
+  const line = drawn && !hidden ? threadDrawerLine(drawn, now) : null
   const stoppable = !!onStop && !!drawn && threadStripView(drawn, now)?.stoppable === true
   const shown = line !== null
   const last = useRef<ThreadDrawerLine | null>(line)
@@ -517,7 +524,7 @@ export function ZenActivityDrawer({
 
   return (
     // The clip box: the tile slides up out of the message box's top edge.
-    <div data-zen-drawer-clip="" style={{ overflow: 'hidden', margin: attached ? '0 14px -1px' : '0 var(--zen-gap, 12px) 8px' }}>
+    <div data-zen-drawer-clip="" style={{ overflow: 'hidden', margin: margin ?? (attached ? '0 14px -1px' : '0 var(--zen-gap, 12px) 8px') }}>
       <style data-zen-drawer-styles="">{ZEN_DRAWER_CSS}</style>
       <div
         role="status"

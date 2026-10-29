@@ -102,6 +102,11 @@ import {
   threadComposeStackNext,
   threadComposeTextSlotStyle,
 } from '@/components/Thread/ThreadZenKit'
+import { isMacPlatform } from '@/lib/desktop-chrome'
+import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
+import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
+import { readStashFile, saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
+import { StashDrawer, StashSquareButton, StashTab } from '@/components/PromptStash/PromptStash'
 
 /** Shown when Thread Send runs before this cell has its own address. The draft stays. */
 const THREAD_ADDR_NOT_READY = "This session isn't ready yet. Your draft is still here."
@@ -212,6 +217,19 @@ export function TerminalComposeBar({
   const slashBtnRef = useRef<HTMLButtonElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const imagePaths = extractImagePathsFromDraft(draft)
+  // Prompt stash (spec-prompt-stash-v1): the person's saved drafts on this
+  // device. Cmd+S saves the draft, then clears the box; on an empty box it
+  // opens the drawer. While the drawer is open the activity bar slides away.
+  const [stashOpen, setStashOpen] = useState(false)
+  const [stashing, setStashing] = useState(false)
+  const stashItems = usePromptStashStore((s) => s.items)
+  const stashLoaded = usePromptStashStore((s) => s.loaded)
+  const stashRemoveAfterUse = usePromptStashStore((s) => s.removeAfterUse)
+  const stashChord = stashChordLabel(isMacPlatform())
+  useEffect(() => {
+    if (usePromptStashStore.getState().loaded) return
+    void usePromptStashStore.getState().load().catch((err: unknown) => console.warn('[stash] load failed:', err))
+  }, [])
 
   // S4 (thread-attachments-v1): on a Thread send to a server that takes
   // them, picked/dropped files wait here as chips and ride the post as
@@ -564,6 +582,96 @@ export function TerminalComposeBar({
     [addThreadFiles, insertPathsText, scope, threadFilesOn, workspacePath],
   )
 
+  const closeStash = useCallback((refocus = true) => {
+    setStashOpen(false)
+    if (refocus) requestAnimationFrame(() => textareaRef.current?.focus())
+  }, [])
+
+  // Save the whole draft, THEN clear the box (a crash between the two can't
+  // lose it). Attached files are read into the stash first; one that can't
+  // be read keeps the draft where it is.
+  const stashDraft = useCallback(async () => {
+    if (stashing) return
+    const startDraft = draft
+    const startFiles = pendingFiles
+    const inlinePaths = extractImagePathsFromDraft(startDraft)
+    const text = inlinePaths.reduce((cur, p) => removePathFromDraft(cur, p), startDraft).trim()
+    const paths = [...startFiles.map((f) => f.path), ...inlinePaths]
+    if (!text && paths.length === 0) return
+    setStashing(true)
+    try {
+      const files = await readComposeFiles(scope, paths)
+      const agent = threadAddr || agentName || workspacePath.split('/').pop() || ''
+      const result = await saveToStash(
+        { text, source: stashSourceFor(scope, agent, sessionChrome?.displayName || agentName) },
+        files,
+      )
+      if (result.status !== 'saved') return
+      // Clear only what was saved: text typed meanwhile stays.
+      setDraft((cur) => (cur === startDraft ? '' : cur))
+      if (startFiles.length > 0) {
+        const saved = new Set(startFiles.map((f) => f.path))
+        setThreadFiles((cur) => cur.filter((f) => !saved.has(f.path)))
+      }
+      setHistoryIndex(-1)
+      historyDraftRef.current = ''
+    } catch (err) {
+      useToastStore.getState().addToast(`Couldn't stash: ${err instanceof Error ? err.message : String(err)}. Your draft is still here.`, 'error')
+    } finally {
+      setStashing(false)
+    }
+  }, [agentName, draft, pendingFiles, scope, sessionChrome?.displayName, stashing, threadAddr, workspacePath])
+
+  // Put a stash into the box: below any text, its files attached again
+  // (uploaded to this composer's server). It stays in the stash unless
+  // "Remove after use" is on.
+  const pickStash = useCallback(
+    async (rec: StashRecord) => {
+      const body = stashBody(rec)
+      setDraft((cur) => insertStashBelow(cur, body))
+      setHistoryIndex(-1)
+      historyDraftRef.current = ''
+      closeStash(false)
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (!ta) return
+        ta.focus()
+        ta.setSelectionRange(ta.value.length, ta.value.length)
+      })
+      try {
+        if (rec.attachments.length > 0) {
+          const read = await Promise.all(rec.attachments.map((a) => readStashFile(a)))
+          const files = read.filter((f): f is File => f !== null)
+          if (files.length < rec.attachments.length) {
+            useToastStore.getState().addToast("Some of this stash's files are gone from this computer.", 'warning')
+          }
+          if (files.length > 0) {
+            if (threadFilesOn) await addThreadFiles({ files })
+            else {
+              const payload = await composeAttachPayload(scope, { files, workspacePath })
+              if (payload) insertPathsText(payload)
+            }
+          }
+        }
+        await usePromptStashStore.getState().markUsed(rec.id)
+      } catch (err) {
+        useToastStore.getState().addToast(`Couldn't restore the stash's files: ${err instanceof Error ? err.message : String(err)}`, 'error')
+      }
+    },
+    [addThreadFiles, closeStash, insertPathsText, scope, threadFilesOn, workspacePath],
+  )
+
+  const removeStash = useCallback((id: string) => {
+    void usePromptStashStore.getState().remove(id).catch((err: unknown) => {
+      useToastStore.getState().addToast(`Couldn't remove it: ${err instanceof Error ? err.message : String(err)}`, 'error')
+    })
+  }, [])
+
+  const toggleStash = useCallback(() => {
+    if (stashOpen) closeStash()
+    else setStashOpen(true)
+  }, [closeStash, stashOpen])
+
   const send = useCallback(async () => {
     const text = draft.trim()
     const command = slashCommand
@@ -691,6 +799,15 @@ export function TerminalComposeBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Cmd+S / Ctrl+S: stash a draft, or open the stash on an empty box.
+      // Never the browser's Save dialog.
+      if (!e.nativeEvent.isComposing && isStashChord(e, isMacPlatform())) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (draft.trim() || pendingFiles.length > 0) void stashDraft()
+        else setStashOpen(true)
+        return
+      }
       // Menu path first: Enter selects (does not send); arrows move
       // highlight (do not walk compose send-history). 0 matches / menu
       // closed falls through to send then history.
@@ -806,6 +923,7 @@ export function TerminalComposeBar({
       slashHighlight,
       slashMatches,
       slashMenuOpen,
+      stashDraft,
     ],
   )
 
@@ -959,6 +1077,19 @@ export function TerminalComposeBar({
           document.body,
         )
       : null
+  const stashDrawerEl = (look: 'zen' | 'square'): React.JSX.Element => (
+    <StashDrawer
+      items={stashItems}
+      loaded={stashLoaded}
+      onPick={(rec) => void pickStash(rec)}
+      onRemove={removeStash}
+      onClose={() => closeStash()}
+      removeAfterUse={stashRemoveAfterUse}
+      onRemoveAfterUseChange={(on) => usePromptStashStore.getState().setRemoveAfterUse(on)}
+      chord={stashChord}
+      look={look}
+    />
+  )
   const textarea = (
     <textarea
       ref={textareaRef}
@@ -1031,7 +1162,7 @@ export function TerminalComposeBar({
       rows={1}
       spellCheck={false}
       placeholder={messagePlaceholder}
-      title="Enter to send, Shift+Enter for newline. Drop files for paths."
+      title={`Enter to send, Shift+Enter for newline. ${stashChord} stashes the draft. Drop files for paths.`}
       data-zen-compose-input={zenLook ? '' : undefined}
       className="block w-full resize-none overflow-x-hidden bg-transparent text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
       style={{
@@ -1107,9 +1238,22 @@ export function TerminalComposeBar({
             ) : undefined
           }
           drawer={
-            threadDrawer ? (
-              <ZenActivityDrawer turn={threadDrawer.turn} onStop={threadDrawer.onStop} />
-            ) : undefined
+            // The box's top edge: the activity bar (or, while it is open,
+            // the stash, which slides up over it as the bar slides away)
+            // and, just right of it, the stash button, always there.
+            <div data-zen-stash-row="" className="flex min-w-0 items-end" style={{ margin: '0 14px -1px', gap: 6 }}>
+              <div className="grid min-w-0 flex-1 items-end">
+                {threadDrawer ? (
+                  <div style={{ gridArea: '1 / 1', minWidth: 0 }}>
+                    <ZenActivityDrawer turn={threadDrawer.turn} onStop={threadDrawer.onStop} hidden={stashOpen} margin="0" />
+                  </div>
+                ) : null}
+                {stashOpen ? (
+                  <div style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1 }}>{stashDrawerEl('zen')}</div>
+                ) : null}
+              </div>
+              <StashTab count={stashItems.length} open={stashOpen} onToggle={toggleStash} chord={stashChord} />
+            </div>
           }
         >
           <div
@@ -1179,6 +1323,7 @@ export function TerminalComposeBar({
     >
       {addrError}
       {fileInput}
+      {stashOpen ? stashDrawerEl('square') : null}
       <div
         className="flex min-w-0 w-full flex-col bg-[var(--color-bg)]"
         style={{ border: '1px solid var(--color-border)', borderRadius: 0 }}
@@ -1248,6 +1393,14 @@ export function TerminalComposeBar({
       <div className="relative min-w-0 flex-1">
       {textarea}
       </div>
+      <StashSquareButton
+        count={stashItems.length}
+        open={stashOpen}
+        onToggle={toggleStash}
+        chord={stashChord}
+        size={btnSize}
+        marginBottom={btnNudge}
+      />
       <button
         type="button"
         aria-label="Send message"

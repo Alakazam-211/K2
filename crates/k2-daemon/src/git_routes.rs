@@ -582,7 +582,11 @@ pub fn handle_git_merge_branch(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    serialized(git::merge_branch(&b.path, &b.branch))
+    // A fast-forward over uncommitted changes → 409 `main_has_uncommitted_changes`.
+    match git::merge_branch(&b.path, &b.branch) {
+        Ok(v) => ok_serialized(v),
+        Err(e) => git_error(e),
+    }
 }
 
 pub fn handle_git_abort_merge(body: &[u8]) -> CliResponse {

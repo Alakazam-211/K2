@@ -421,3 +421,28 @@ fn remove_worktree_route_removes_a_real_worktree_and_its_row() {
     let rows = Workspace::list(&conn, &project_id).expect("list");
     assert!(rows.iter().all(|w| w.id != ws_id), "workspace row deleted");
 }
+
+// ── merge-branch never fast-forwards over uncommitted changes ───────
+
+#[test]
+fn merge_branch_route_refuses_a_fast_forward_over_uncommitted_changes() {
+    let d = repo("merge-dirty");
+    git(&d, &["checkout", "-q", "-b", "feature"]);
+    std::fs::write(d.join("a.txt"), "from feature\n").expect("feature a");
+    git(&d, &["commit", "-q", "-am", "feature"]);
+    git(&d, &["checkout", "-q", "-"]);
+    std::fs::write(d.join("a.txt"), "uncommitted on main\n").expect("dirty a");
+
+    let r = post("/cli/git/merge-branch", serde_json::json!({ "path": s(&d), "branch": "feature" }));
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert_eq!(code(&r), "main_has_uncommitted_changes");
+    assert!(json(&r)["error"].as_str().expect("error").contains("a.txt"), "{}", r.body);
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "uncommitted on main\n");
+
+    // With the change put back, the same fast-forward goes through.
+    git(&d, &["checkout", "--", "a.txt"]);
+    let ok = post("/cli/git/merge-branch", serde_json::json!({ "path": s(&d), "branch": "feature" }));
+    assert_eq!(ok.status, "200 OK", "{}", ok.body);
+    assert_eq!(json(&ok)["success"], true);
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "from feature\n");
+}

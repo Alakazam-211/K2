@@ -1106,15 +1106,34 @@ pub fn merge_branch(repo_path: &str, branch_name: &str) -> Result<MergeResult, S
     }
 
     if analysis.is_fast_forward() {
-        // Fast-forward: just move HEAD
+        // Fast-forward like `git merge --ff-only`: refuse when it would
+        // overwrite uncommitted work, update the files with a SAFE
+        // checkout (never a forced one), then move HEAD. Uncommitted
+        // changes to files the fast-forward doesn't touch stay as they are.
         let target_oid = annotated.id();
+        let target_tree = repo
+            .find_commit(target_oid)
+            .and_then(|c| c.tree())
+            .map_err(|e| format!("Failed to read branch '{branch_name}': {e}"))?;
+        let blocked = fast_forward_blockers(&repo, &target_tree)?;
+        if !blocked.is_empty() {
+            return Err(format!(
+                "{}: merging '{branch_name}' would overwrite uncommitted changes in {}; commit or stash them first",
+                refusal::MAIN_HAS_UNCOMMITTED_CHANGES,
+                blocked.join(", ")
+            ));
+        }
+        repo.checkout_tree(target_tree.as_object(), Some(git2::build::CheckoutBuilder::new().safe()))
+            .map_err(|e| {
+                format!(
+                    "{}: merging '{branch_name}' would overwrite uncommitted changes ({e}); commit or stash them first",
+                    refusal::MAIN_HAS_UNCOMMITTED_CHANGES
+                )
+            })?;
         let mut reference = repo.head().map_err(|e| format!("Failed to get HEAD: {e}"))?;
         reference
             .set_target(target_oid, &format!("Fast-forward merge {branch_name}"))
             .map_err(|e| format!("Failed to fast-forward: {e}"))?;
-
-        repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
-            .map_err(|e| format!("Failed to checkout after fast-forward: {e}"))?;
 
         return Ok(MergeResult {
             success: true,
@@ -1174,6 +1193,40 @@ pub fn merge_branch(repo_path: &str, branch_name: &str) -> Result<MergeResult, S
             merged_files: 0,
         })
     }
+}
+
+/// Paths with uncommitted changes (staged, unstaged or untracked) that a
+/// fast-forward from HEAD to `target` would write over, sorted.
+fn fast_forward_blockers(repo: &Repository, target: &git2::Tree) -> Result<Vec<String>, String> {
+    let head_tree = repo
+        .head()
+        .and_then(|h| h.peel_to_tree())
+        .map_err(|e| format!("Failed to read HEAD: {e}"))?;
+    let diff = repo
+        .diff_tree_to_tree(Some(&head_tree), Some(target), None)
+        .map_err(|e| format!("Failed to diff for fast-forward: {e}"))?;
+    let mut touched = std::collections::HashSet::new();
+    for d in diff.deltas() {
+        for f in [d.old_file(), d.new_file()] {
+            if let Some(p) = f.path().and_then(|p| p.to_str()) {
+                touched.insert(p.to_string());
+            }
+        }
+    }
+    let mut opts = StatusOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(true).include_ignored(false);
+    let statuses = repo
+        .statuses(Some(&mut opts))
+        .map_err(|e| format!("Failed to read status: {e}"))?;
+    let mut blocked: Vec<String> = statuses
+        .iter()
+        .filter(|e| e.status() != git2::Status::CURRENT && !e.status().contains(git2::Status::IGNORED))
+        .filter_map(|e| e.path().map(str::to_string))
+        .filter(|p| touched.contains(p))
+        .collect();
+    blocked.sort();
+    blocked.dedup();
+    Ok(blocked)
 }
 
 /// Check if a merge is currently in progress.
@@ -1315,3 +1368,7 @@ pub fn gather_git_context(project_path: &str) -> serde_json::Value {
 #[cfg(test)]
 #[path = "git_worktree_guard_tests.rs"]
 mod worktree_guard_tests;
+
+#[cfg(test)]
+#[path = "git_merge_guard_tests.rs"]
+mod merge_guard_tests;

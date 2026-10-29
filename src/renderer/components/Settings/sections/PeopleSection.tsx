@@ -50,6 +50,8 @@ export type PersonRow = {
   storedEmailRefused: string | null
   /** The login is locked (wrong passwords) until then, epoch seconds. */
   lockedUntil: number | null
+  /** A box login (signs in to K2 itself): only the owner resets it (0.46.6, the daemon's rule). */
+  boxLogin: boolean
 }
 
 type RoomAccess = { handle: string; caps: string[] }
@@ -115,6 +117,19 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
 
+/** Why an Admin's password actions are off on a box login's row. */
+export const BOX_LOGIN_REASON = 'This person also has a login for this K2 server, not only its Apps. Only the owner can change their password or unlock them: ask the owner.'
+
+/**
+ * The daemon's rule (0.46.6, `owner_or_admin_for`): the Owner resets,
+ * sets and unlocks anyone; an Admin only people who use Apps alone, never
+ * a box login. Anyone else: nothing.
+ */
+export function canResetPassword(role: 'owner' | 'admin' | null, row: Pick<PersonRow, 'boxLogin'>): boolean {
+  if (role === 'owner') return true
+  return role === 'admin' && !row.boxLogin
+}
+
 export function parsePeople(raw: unknown): PersonRow[] {
   const list = asRecord(raw).users
   if (!Array.isArray(list)) return []
@@ -136,6 +151,7 @@ export function parsePeople(raw: unknown): PersonRow[] {
       tiedReasons: parseStringList(rec.tiedReasons),
       storedEmailRefused: asString(rec.storedEmailRefused),
       lockedUntil: typeof rec.lockedUntil === 'number' ? rec.lockedUntil : null,
+      boxLogin: rec.boxLogin === true,
     }]
   })
 }
@@ -256,9 +272,12 @@ export function PeopleSection(): React.JSX.Element {
   const [grantApp, setGrantApp] = useState('')
   const [grantTarget, setGrantTarget] = useState('')
   const [grantScope, setGrantScope] = useState('')
-  // Owner only (0.46.6): the daemon lets only the Owner manage App users,
-  // so nobody else sees actions that would fail.
-  const [isOwner, setIsOwner] = useState(false)
+  // 0.46.6: the daemon lets the Owner manage every App user's password
+  // and an Admin those of people who only use Apps (never a box login);
+  // adding a user stays the Owner's. Nobody sees actions that would fail.
+  const [viewerRole, setViewerRole] = useState<'owner' | 'admin' | null>(null)
+  const isOwner = viewerRole === 'owner'
+  const canResetRow = (row: PersonRow): boolean => canResetPassword(viewerRole, row)
   const [menuFor, setMenuFor] = useState<string | null>(null)
   const [dialog, setDialog] = useState<{ kind: 'reset' | 'set'; username: string } | null>(null)
   const [adding, setAdding] = useState(false)
@@ -269,7 +288,7 @@ export function PeopleSection(): React.JSX.Element {
   useEffect(() => {
     let live = true
     void fetchViewerRole().then((role) => {
-      if (live) setIsOwner(role === 'owner')
+      if (live) setViewerRole(role === 'owner' || role === 'admin' ? role : null)
     })
     return () => {
       live = false
@@ -544,7 +563,7 @@ export function PeopleSection(): React.JSX.Element {
                     </span>
                   ) : null}
                 </button>
-                {isOwner ? (
+                {viewerRole ? (
                   <button
                     type="button"
                     aria-label={`Password actions for ${row.username}`}
@@ -556,7 +575,7 @@ export function PeopleSection(): React.JSX.Element {
                     ⋯
                   </button>
                 ) : null}
-                {isOwner && menuFor === row.username ? (
+                {viewerRole && menuFor === row.username ? (
                   <div
                     role="menu"
                     aria-label={`Password actions for ${row.username}`}
@@ -565,10 +584,17 @@ export function PeopleSection(): React.JSX.Element {
                       if (e.key === 'Escape') setMenuFor(null)
                     }}
                   >
+                    {!canResetRow(row) ? (
+                      <p data-testid={`owner-only-${row.username}`} className="max-w-[14rem] px-3 py-1 text-[10px] leading-snug text-[var(--color-text-muted)]">
+                        {BOX_LOGIN_REASON}
+                      </p>
+                    ) : null}
                     <button
                       type="button"
                       role="menuitem"
-                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer"
+                      disabled={!canResetRow(row)}
+                      title={canResetRow(row) ? undefined : BOX_LOGIN_REASON}
+                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
                       onClick={() => {
                         setMenuFor(null)
                         setDialog({ kind: 'reset', username: row.username })
@@ -579,7 +605,9 @@ export function PeopleSection(): React.JSX.Element {
                     <button
                       type="button"
                       role="menuitem"
-                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer"
+                      disabled={!canResetRow(row)}
+                      title={canResetRow(row) ? undefined : BOX_LOGIN_REASON}
+                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
                       onClick={() => {
                         setMenuFor(null)
                         setDialog({ kind: 'set', username: row.username })
@@ -591,8 +619,9 @@ export function PeopleSection(): React.JSX.Element {
                       <button
                         type="button"
                         role="menuitem"
-                        disabled={busy === `unlock:${row.username}`}
-                        className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40"
+                        disabled={!canResetRow(row) || busy === `unlock:${row.username}`}
+                        title={canResetRow(row) ? undefined : BOX_LOGIN_REASON}
+                        className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40 disabled:cursor-default"
                         onClick={() => {
                           setMenuFor(null)
                           void unlock(row.username)
@@ -655,7 +684,7 @@ export function PeopleSection(): React.JSX.Element {
             onGrantTarget={setGrantTarget}
             onGrantScope={setGrantScope}
             onAddGrant={() => void addGrant()}
-            onReset={isOwner ? () => setDialog({ kind: 'reset', username: person.username }) : null}
+            onReset={canResetRow(person) ? () => setDialog({ kind: 'reset', username: person.username }) : null}
           />
         ) : (
           <p className="text-[10px] text-[var(--color-text-muted)]">Select a person.</p>
@@ -733,7 +762,8 @@ function roleBits(role: RoleRow | null, fallbackHandles: string[]): React.JSX.El
  * The owner's Reset password (a one-time link, or mailed to an address
  * you give) is what lifts the tie. The stored email is never used: an
  * agent could have chosen it. Nothing for an untied person. `onReset`:
- * opens the Reset password sheet (the owner only; null hides it).
+ * opens the Reset password sheet (the owner, or an Admin for someone who
+ * only uses Apps; null hides it).
  */
 export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: (() => void) | null }): React.JSX.Element | null {
   if (!person.tiedTo) return null

@@ -94,6 +94,13 @@ function Sheet({
   )
 }
 
+/**
+ * A password someone else set is temporary (0.46.6 must-change): said
+ * wherever Settings shows or confirms one, when the daemon says so
+ * (`passwordMustChange` on the reply).
+ */
+export const MUST_CHANGE_NOTE = 'It’s temporary: the next time they sign in, K2 asks them to choose their own.'
+
 /** A secret shown once: the value, Copy, and how long it lasts. */
 export function OneTimeSecret({
   label,
@@ -340,7 +347,7 @@ export function SetPasswordDialog({
   const [shown, setShown] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [done, setDone] = useState<{ generated: string | null } | null>(null)
+  const [done, setDone] = useState<{ generated: string | null; mustChange: boolean } | null>(null)
 
   const submit = async (generate: boolean): Promise<void> => {
     setBusy(true)
@@ -349,7 +356,7 @@ export function SetPasswordDialog({
       const body = generate ? { username: person.username, generate: true } : { username: person.username, password }
       const r = rec(await post('skin/users/password', body))
       setPassword('')
-      setDone({ generated: generate ? str(r.generatedPassword) : null })
+      setDone({ generated: generate ? str(r.generatedPassword) : null, mustChange: r.passwordMustChange === true })
     } catch (e) {
       setError(daemonErrorText(e))
     } finally {
@@ -363,13 +370,14 @@ export function SetPasswordDialog({
         <>
           {done.generated ? (
             <OneTimeSecret
-              label={`New password for ${person.username}. Give it to them yourself.`}
+              label={`New password for ${person.username}. Give it to them yourself. They’re signed out of every App and device.${done.mustChange ? ` ${MUST_CHANGE_NOTE}` : ''}`}
               value={done.generated}
               copyLabel="Copy password"
             />
           ) : (
             <p className={NOTE}>
               Password set. Give it to {person.username} yourself. They’re signed out of every App and device.
+              {done.mustChange ? ` ${MUST_CHANGE_NOTE}` : ''}
             </p>
           )}
           <div className="flex justify-end">
@@ -519,7 +527,8 @@ export function AddUserDialog({
         if (mail) body.email = mail
         const r = rec(await post('skin/users', body))
         const generated = mode === 'generate' ? str(r.generatedPassword) : null
-        added = { username: name, secret: generated ? { kind: 'password', value: generated, expiry: null } : null, note: null }
+        const mustChange = r.passwordMustChange === true ? MUST_CHANGE_NOTE : null
+        added = { username: name, secret: generated ? { kind: 'password', value: generated, expiry: null } : null, note: mustChange }
       }
       if (full) {
         try {

@@ -426,8 +426,19 @@ fn process_env_has_reads_a_childs_own_environment() {
     // A process that holds the value is never judged to lack it: on macOS 27
     // `/bin/sleep`'s environment is hidden, and on Linux a read mid-exec is
     // empty: both `None`. Otherwise it's read: `Some(true)`.
+    // Right after `spawn` the child can still be the forked copy of this
+    // test process (before exec), whose environment is the parent's and
+    // lacks the key: poll past that window, 5 s cap, so only a process that
+    // stays "lacks it" after exec fails.
     let mut sleep = std::process::Command::new("sleep").arg("60").env(&key, &value).spawn().expect("spawn sleep");
-    let judged = process_env_has(sleep.id() as i64, &key, value.as_bytes());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let judged = loop {
+        let judged = process_env_has(sleep.id() as i64, &key, value.as_bytes());
+        if judged != Some(false) || std::time::Instant::now() >= deadline {
+            break judged;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
     sleep.kill().expect("kill sleep");
     sleep.wait().expect("reap sleep");
     assert_ne!(judged, Some(false), "a hidden environment is \"can't tell\", not \"lacks it\"");

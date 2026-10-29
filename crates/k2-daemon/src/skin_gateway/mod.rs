@@ -1237,34 +1237,9 @@ fn read_static_file(root: &Path, url_path: &str) -> Result<(String, Vec<u8>), ()
         .extension()
         .and_then(|s| s.to_str())
         .map(str::to_ascii_lowercase);
-    Ok((static_content_type(ext.as_deref()).to_string(), bytes))
-}
-
-/// Content-Type for a static App file by (lower-case) extension. Browsers
-/// refuse `.wasm` for streaming compile and `.mjs` as a module script unless
-/// the type is exact, so unknown types stay `application/octet-stream`.
-fn static_content_type(ext: Option<&str>) -> &'static str {
-    match ext {
-        Some("html" | "htm") => "text/html; charset=utf-8",
-        Some("css") => "text/css; charset=utf-8",
-        Some("js" | "mjs" | "cjs") => "text/javascript; charset=utf-8",
-        Some("wasm") => "application/wasm",
-        Some("json" | "map") => "application/json",
-        Some("webmanifest") => "application/manifest+json",
-        Some("txt") => "text/plain; charset=utf-8",
-        Some("svg") => "image/svg+xml",
-        Some("png") => "image/png",
-        Some("jpg" | "jpeg") => "image/jpeg",
-        Some("gif") => "image/gif",
-        Some("webp") => "image/webp",
-        Some("avif") => "image/avif",
-        Some("ico") => "image/x-icon",
-        Some("woff2") => "font/woff2",
-        Some("woff") => "font/woff",
-        Some("ttf") => "font/ttf",
-        Some("otf") => "font/otf",
-        _ => "application/octet-stream",
-    }
+    // The MIME table is shared with K2's static file server (0.46.7 TC-2);
+    // this helper's path list is its own (`is_static_path`, unchanged).
+    Ok((crate::static_files::content_type(ext.as_deref()).to_string(), bytes))
 }
 
 fn upstream_addr(gw: &Gateway) -> Result<String, String> {
@@ -1717,6 +1692,19 @@ mod tests {
             assert_eq!(bytes, b"x");
         }
         std::fs::remove_dir_all(&root).expect("cleanup");
+    }
+
+    /// vs-live TA-3 (0.46.7): moving the MIME table into `static_files`
+    /// doesn't change what the `--skin` helper serves; `k2 publish` keeps
+    /// its own model (Rosson 2026-10-29). This pins its path list.
+    #[test]
+    fn the_helper_static_path_list_is_pinned() {
+        for p in ["/", "/index.html", "/login", "/reset", "/assets/app.js", "/assets", "/login?next=/", SET_PASSWORD_PATH] {
+            assert!(is_static_path(p), "{p} is the helper's");
+        }
+        for p in ["/favicon.ico", "/sw.js", "/manifest.webmanifest", "/robots.txt", "/app.wasm", "/docs/", "/index.htm"] {
+            assert!(!is_static_path(p), "{p} is not the helper's (static Apps serve it, not --skin)");
+        }
     }
 
     #[test]

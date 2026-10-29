@@ -407,6 +407,8 @@ pub mod governed_app_routes;
 pub mod guest_chat_routes;
 pub mod guest_rooms_routes;
 pub mod skin_gateway;
+// K2's own static file server (0.46.7 static Apps, prd-tauri-core-0467-v1 TC-2).
+pub mod static_files;
 // The daemon's Tokio runtime for plain std threads (wakes off the runtime).
 pub mod rt;
 // The boot sequence (was the body of `main.rs`).

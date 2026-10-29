@@ -76,7 +76,10 @@ pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
 ///       (must-change at next sign-in, 0.46.6, [`must_change`]). A K2
 ///       older than this refuses the file, so a downgrade can never sign a
 ///       person in on a temporary password someone else chose.
-pub const SKIN_SCHEMA_VERSION: i64 = 7;
+///   8 = `login_lockouts.last_failed_at` (0.46.6, App guest login
+///       lockout fix 1c): a failure count older than
+///       [`LOCKOUT_FAIL_WINDOW_SECS`] is forgotten.
+pub const SKIN_SCHEMA_VERSION: i64 = 8;
 
 /// Agent ties and the tied user's ceiling (agent-app-users, 0.46.4).
 #[path = "skin_ties.rs"]
@@ -369,6 +372,12 @@ fn grant_role_remove_err(name: &str) -> String {
 /// Dummy argon2 + the 500 ms 401 delay is **not** lockout.
 const LOCKOUT_THRESHOLD: u32 = 3;
 const LOCKOUT_DURATION_SECS: i64 = 15 * 60;
+/// 0.46.6 (App guest login lockout, fix 1c): failures count toward the
+/// lock only while they are recent. A failure more than this long after
+/// the last one starts the count again at 1, so stale failures (an old
+/// test run, a typo last week) can't add up to a lock days later. A row
+/// written before schema step 8 has no time and starts again too.
+pub const LOCKOUT_FAIL_WINDOW_SECS: i64 = 15 * 60;
 
 /// Public consume/change min length (Connect default). Owner `users/password`
 /// empty still clears via [`set_principal_password`].
@@ -1905,6 +1914,11 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
     if v == 6 {
         backup_before_step(conn, 7)?;
     }
+    // Failure decay (0.46.6, step 8): a version-7 file (a 0.46.6 build
+    // before it) is copied first too (`skin.db.pre-8.bak`).
+    if v == 7 {
+        backup_before_step(conn, 8)?;
+    }
     while v < SKIN_SCHEMA_VERSION {
         let next = v + 1;
         let tx = conn
@@ -1944,6 +1958,10 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
                 must_change::step7_must_change(&tx)?;
                 Vec::new()
             }
+            8 => {
+                step8_lockout_fail_time(&tx)?;
+                Vec::new()
+            }
             other => return Err(format!("skin.db: no schema step {other}")),
         };
         tx.execute_batch(&format!("PRAGMA user_version = {next};"))
@@ -1954,6 +1972,17 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
             record_access_audit("app_grant_upgrade", &user, &line);
         }
         v = next;
+    }
+    Ok(())
+}
+
+/// Step 8 (0.46.6, App guest login lockout fix 1c): when the last failure
+/// on a `login_lockouts` row happened. Existing rows keep NULL: their
+/// count starts again at the next failure ([`LOCKOUT_FAIL_WINDOW_SECS`]).
+fn step8_lockout_fail_time(conn: &Connection) -> Result<(), String> {
+    if !column_exists(conn, "login_lockouts", "last_failed_at")? {
+        conn.execute_batch("ALTER TABLE login_lockouts ADD COLUMN last_failed_at INTEGER;")
+            .map_err(|e| format!("skin.db step 8: {e}"))?;
     }
     Ok(())
 }
@@ -3947,7 +3976,7 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
             return Ok((principal, slot, Some(until - now)));
         }
         conn.execute(
-            "UPDATE login_lockouts SET locked_until = NULL, failed_count = 0
+            "UPDATE login_lockouts SET locked_until = NULL, failed_count = 0, last_failed_at = NULL
              WHERE username IN (?1, ?2) AND locked_until IS NOT NULL",
             params![slot.primary, slot.extra],
         )
@@ -3980,30 +4009,40 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
             )
             .map_err(|e| format!("skin lockout clear: {e}"))?;
         } else {
-            let failed: i64 = conn
+            let now = now_secs();
+            // 0.46.6 (fix 1c): only recent failures add up. A count whose
+            // last failure is older than the window (or has no time: a row
+            // from before schema step 8) is forgotten.
+            let earlier: i64 = conn
                 .query_row(
-                    "SELECT failed_count FROM login_lockouts WHERE username = ?1",
+                    "SELECT failed_count, last_failed_at FROM login_lockouts WHERE username = ?1",
                     params![slot.primary],
-                    |r| r.get(0),
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?)),
                 )
                 .optional()
                 .map_err(|e| format!("skin lockout count: {e}"))?
-                .unwrap_or(0)
-                + 1;
+                .map(|(count, last)| match last {
+                    Some(at) if now.saturating_sub(at) <= LOCKOUT_FAIL_WINDOW_SECS => count,
+                    _ => 0,
+                })
+                .unwrap_or(0);
+            let failed = earlier + 1;
             if failed >= i64::from(LOCKOUT_THRESHOLD) {
                 conn.execute(
-                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
-                     VALUES (?1, 0, ?2)
-                     ON CONFLICT(username) DO UPDATE SET failed_count = 0, locked_until = excluded.locked_until",
-                    params![slot.primary, now_secs().saturating_add(LOCKOUT_DURATION_SECS)],
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until, last_failed_at)
+                     VALUES (?1, 0, ?2, ?3)
+                     ON CONFLICT(username) DO UPDATE SET failed_count = 0, locked_until = excluded.locked_until,
+                        last_failed_at = excluded.last_failed_at",
+                    params![slot.primary, now.saturating_add(LOCKOUT_DURATION_SECS), now],
                 )
                 .map_err(|e| format!("skin lockout set: {e}"))?;
             } else {
                 conn.execute(
-                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
-                     VALUES (?1, ?2, NULL)
-                     ON CONFLICT(username) DO UPDATE SET failed_count = excluded.failed_count, locked_until = NULL",
-                    params![slot.primary, failed],
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until, last_failed_at)
+                     VALUES (?1, ?2, NULL, ?3)
+                     ON CONFLICT(username) DO UPDATE SET failed_count = excluded.failed_count, locked_until = NULL,
+                        last_failed_at = excluded.last_failed_at",
+                    params![slot.primary, failed, now],
                 )
                 .map_err(|e| format!("skin lockout bump: {e}"))?;
             }
@@ -8326,6 +8365,136 @@ mod tests {
         });
     }
 
+    /// Move the last failure on `key`'s row back by `secs` (a clock for
+    /// the 15-minute window without sleeping).
+    fn age_last_failure(key: &str, secs: i64) {
+        let n = with_conn(|conn| {
+            conn.execute(
+                "UPDATE login_lockouts SET last_failed_at = last_failed_at - ?2 WHERE username = ?1 AND last_failed_at IS NOT NULL",
+                params![key, secs],
+            )
+            .map_err(|e| e.to_string())
+        })
+        .expect("age the last failure");
+        assert_eq!(n, 1, "{key} has a timed failure row");
+    }
+
+    fn failed_count_of(key: &str) -> (i64, Option<i64>, Option<i64>) {
+        with_conn(|conn| {
+            conn.query_row(
+                "SELECT failed_count, locked_until, last_failed_at FROM login_lockouts WHERE username = ?1",
+                params![key],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .map_err(|e| e.to_string())
+        })
+        .unwrap_or_else(|e| panic!("{key}: {e}"))
+    }
+
+    /// 0.46.6 (App guest login lockout, fix 1c): failures older than 15
+    /// minutes are forgotten. Two old failures and one new one are not a
+    /// lock; three within the window still are; a correct password still
+    /// clears the count. Known and unknown names alike.
+    #[test]
+    fn lockout_forgets_failures_older_than_the_window() {
+        with_temp_home(|| {
+            add_principal("eve").unwrap();
+            set_principal_password("eve", Some("right-password")).unwrap();
+            for who in ["eve", "nobody-here"] {
+                for _ in 0..2 {
+                    assert!(matches!(check_and_record_login(who, "wrong"), SkinLoginOutcome::BadCreds), "{who}");
+                }
+                let (count, locked, at) = failed_count_of(who);
+                assert_eq!((count, locked), (2, None), "{who}");
+                assert!(at.is_some_and(|t| (now_secs() - t).abs() <= 5), "{who}: the failure is timed: {at:?}");
+                // 16 minutes pass: the two failures are forgotten.
+                age_last_failure(who, LOCKOUT_FAIL_WINDOW_SECS + 60);
+                assert!(matches!(check_and_record_login(who, "wrong"), SkinLoginOutcome::BadCreds), "{who}");
+                assert_eq!(failed_count_of(who).0, 1, "{who}: the count started again");
+                if who == "eve" {
+                    match check_and_record_login(who, "right-password") {
+                        SkinLoginOutcome::Ok(_) => {}
+                        other => panic!("not locked after old failures, got {other:?}"),
+                    }
+                }
+            }
+            // Exactly at the window's edge the count still holds; three
+            // failures inside it are still a lock.
+            for _ in 0..2 {
+                assert!(matches!(check_and_record_login("eve", "wrong"), SkinLoginOutcome::BadCreds));
+            }
+            age_last_failure("eve", LOCKOUT_FAIL_WINDOW_SECS - 5);
+            assert!(matches!(check_and_record_login("eve", "wrong"), SkinLoginOutcome::BadCreds));
+            match check_and_record_login("eve", "right-password") {
+                SkinLoginOutcome::LockedOut { retry_after_secs } => {
+                    assert!((1..=LOCKOUT_DURATION_SECS).contains(&retry_after_secs), "{retry_after_secs}")
+                }
+                other => panic!("three failures inside the window lock, got {other:?}"),
+            }
+        });
+    }
+
+    /// 0.46.6 (fix 1c): a count written before schema step 8 has no time:
+    /// it is forgotten at the next failure (the stale counts that locked a
+    /// real guest out after one wrong password), and a live lock on such a
+    /// row still holds until it ends.
+    #[test]
+    fn an_untimed_count_from_before_step8_starts_again() {
+        with_temp_home(|| {
+            add_principal("ida").unwrap();
+            set_principal_password("ida", Some("right-password")).unwrap();
+            add_principal("lou").unwrap();
+            set_principal_password("lou", Some("right-password")).unwrap();
+            with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until) VALUES ('ida', 2, NULL), ('lou', 0, ?1)",
+                    params![now_secs() + 600],
+                )
+                .map_err(|e| e.to_string())
+            })
+            .expect("seed old rows");
+            assert!(matches!(check_and_record_login("ida", "wrong"), SkinLoginOutcome::BadCreds));
+            let (count, locked, at) = failed_count_of("ida");
+            assert_eq!((count, locked), (1, None), "two old failures and one new are not a lock");
+            assert!(at.is_some(), "the new failure is timed");
+            match check_and_record_login("ida", "right-password") {
+                SkinLoginOutcome::Ok(_) => {}
+                other => panic!("ida signs in, got {other:?}"),
+            }
+            assert!(lock_rows().iter().all(|r| r.0 != "ida"), "a correct password clears the row");
+            match check_and_record_login("lou", "right-password") {
+                SkinLoginOutcome::LockedOut { .. } => {}
+                other => panic!("an old live lock still holds, got {other:?}"),
+            }
+        });
+    }
+
+    /// Step 8: a version-7 file (an earlier 0.46.6 build) gains
+    /// `login_lockouts.last_failed_at`, is backed up first, and keeps its
+    /// rows (the old count has no time).
+    #[test]
+    fn step8_adds_the_failure_time_to_a_v7_file() {
+        with_temp_home(|| {
+            add_principal("kim").unwrap();
+            assert!(matches!(check_and_record_login("kim", "wrong"), SkinLoginOutcome::BadCreds));
+            let path = store_path();
+            *db().lock() = None;
+            {
+                let conn = Connection::open(&path).unwrap();
+                conn.execute_batch("ALTER TABLE login_lockouts DROP COLUMN last_failed_at; PRAGMA user_version = 7;")
+                    .unwrap();
+                assert!(!table_columns(&conn, "login_lockouts").split(',').any(|c| c == "last_failed_at"));
+            }
+            let _ = std::fs::remove_file(path.with_file_name("skin.db.pre-8.bak"));
+            assert!(principal_exists("kim").unwrap(), "the v7 file opens and keeps its rows");
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 8);
+            assert!(path.with_file_name("skin.db.pre-8.bak").exists(), "backed up before step 8");
+            let cols = with_conn(|c| Ok(table_columns(c, "login_lockouts"))).unwrap();
+            assert!(cols.split(',').any(|c| c == "last_failed_at"), "{cols}");
+            assert_eq!(failed_count_of("kim"), (1, None, None), "the old count survives, untimed");
+        });
+    }
+
     fn lock_rows() -> Vec<(String, i64, Option<i64>)> {
         with_conn(|conn| {
             let mut stmt = conn
@@ -8829,7 +8998,7 @@ mod tests {
     #[test]
     fn step6_adds_ties_and_invites_to_a_v5_file() {
         with_temp_home(|| {
-            assert_eq!(SKIN_SCHEMA_VERSION, 7);
+            assert_eq!(SKIN_SCHEMA_VERSION, 8);
             add_principal("ada").unwrap();
             let path = store_path();
             *db().lock() = None;
@@ -8839,7 +9008,7 @@ mod tests {
                     .unwrap();
             }
             assert!(principal_exists("ada").unwrap(), "the v5 file opens and keeps its rows");
-            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 7, "steps 6 and 7 ran");
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 8, "steps 6, 7 and 8 ran");
             let tables: Vec<String> = with_conn(|c| {
                 let mut st = c
                     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('principal_agent_ties','app_user_invites') ORDER BY name")
@@ -8850,15 +9019,15 @@ mod tests {
             .unwrap();
             assert_eq!(tables, vec!["app_user_invites".to_string(), "principal_agent_ties".to_string()]);
             // A file from a newer K2 than this one: refused, exact text.
-            with_conn(|c| c.execute_batch("PRAGMA user_version = 8;").map_err(|e| e.to_string())).unwrap();
+            with_conn(|c| c.execute_batch("PRAGMA user_version = 9;").map_err(|e| e.to_string())).unwrap();
             *db().lock() = None;
             let err = open_db(&path).expect_err("newer schema must refuse");
             assert_eq!(
                 err,
-                "skin.db schema version 8 is newer than this K2 understands (7). Refusing to open it: update K2, or restore the skin.db backup taken before the downgrade."
+                "skin.db schema version 9 is newer than this K2 understands (8). Refusing to open it: update K2, or restore the skin.db backup taken before the downgrade."
             );
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+            conn.execute_batch("PRAGMA user_version = 8;").unwrap();
         });
     }
 
@@ -8892,7 +9061,7 @@ mod tests {
             }
             let _ = std::fs::remove_file(path.with_file_name("skin.db.pre-6.bak"));
             assert!(principal_exists("tied").unwrap(), "the file opens");
-            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 7);
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 8);
             assert!(path.with_file_name("skin.db.pre-6.bak").exists(), "backed up before step 6");
             let t = ties::get(&tied.id).unwrap().expect("moved");
             assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), ("ws-t", vec!["upgrade".to_string()]));
@@ -12031,7 +12200,7 @@ mod tests {
     #[test]
     fn r3_step5_adds_room_paths_to_a_v4_file() {
         with_temp_home(|| {
-            assert_eq!(SKIN_SCHEMA_VERSION, 7);
+            assert_eq!(SKIN_SCHEMA_VERSION, 8);
             let room = uuid::Uuid::new_v4().to_string();
             create_role("staff", &one_room_policy(&room, &[CAP_FILES_READ])).unwrap();
             add_principal("ada").unwrap();

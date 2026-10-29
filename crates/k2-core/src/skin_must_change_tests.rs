@@ -54,7 +54,7 @@ fn session_rows(pid: &str) -> i64 {
 #[test]
 fn step7_adds_the_flag_and_the_token_table_and_a_v6_file_upgrades() {
     let f = fx("s7");
-    assert_eq!(crate::skin::SKIN_SCHEMA_VERSION, 7);
+    assert_eq!(crate::skin::SKIN_SCHEMA_VERSION, 8);
     assert!(!flag(&f.pid), "a new person starts with the flag off");
     // An existing guest whose password the owner set before the upgrade
     // (0.46.5 had no flag): never locked out by the upgrade.
@@ -71,7 +71,7 @@ fn step7_adds_the_flag_and_the_token_table_and_a_v6_file_upgrades() {
     let _ = std::fs::remove_file(path.with_file_name("skin.db.pre-7.bak"));
     assert!(crate::skin::principal_exists("dana").unwrap(), "the v6 file opens and keeps its rows");
     let v: i64 = with_conn(|c| c.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|e| e.to_string())).unwrap();
-    assert_eq!(v, 7);
+    assert_eq!(v, 8, "steps 7 and 8 ran");
     assert!(path.with_file_name("skin.db.pre-7.bak").exists(), "backed up before step 7");
     assert!(!flag(&f.pid), "an upgraded person has the flag off");
     assert_eq!(live_change_tokens(&f.pid), 0, "the table exists");

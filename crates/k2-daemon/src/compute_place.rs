@@ -121,8 +121,9 @@ pub struct Want {
     /// only nodes where this workspace may send CI: the share's `gate` and
     /// a grant with `allow_ci` (or an owner/Admin caller) (T12).
     pub tier: JobTier,
-    /// `--cache NAME` (protocol 6): the node must offer `job-cache`.
-    pub cache: bool,
+    /// `--cache NAME` (protocol 6): the node must offer `job-cache`; the
+    /// node that ran this workspace's last job with it ranks first (CE-6).
+    pub cache: Option<String>,
     /// `--with` (protocol 6): the node must offer `multi-repo`.
     pub multi_repo: bool,
 }
@@ -145,7 +146,7 @@ impl Want {
             stall: j.ctl.stall_secs.is_some_and(|s| s > 0),
             secret_ids: j.ctl.secrets.iter().map(|p| p.secret_id.clone()).collect(),
             tier: j.tier(),
-            cache: plan.cache.is_some(),
+            cache: plan.cache.clone(),
             multi_repo: !plan.with.is_empty(),
         }
     }
@@ -284,6 +285,12 @@ pub struct Cand {
     pub pending: Pending,
     /// This controller's placements there in the last 30 s.
     pub recent: u32,
+    /// This workspace's last job with the same `--cache NAME` ran here
+    /// (warmth 3, CE-6, CE-A15).
+    pub holds_cache: bool,
+    /// Solo node: this server's estimate of the wait there (P2,
+    /// [`solo_eta`]); `None` on a shared node (it quotes) or offline.
+    pub est_wait: Option<u64>,
 }
 
 impl Cand {
@@ -293,9 +300,25 @@ impl Cand {
     }
 
     /// The node's ETA for this ask (shared nodes with a quote; `None` =
-    /// unknown, as every solo node).
+    /// unknown, as every solo node). Placement v1 ranks by this only.
     pub fn eta(&self, w: &Want) -> Option<u64> {
         self.shared_view().and_then(|v| share::eta_for(v, w.cpu_millis, w.mem_bytes))
+    }
+
+    /// The wait for this ask and its basis: the node's quote (`quote`),
+    /// else this server's estimate on a solo node (`estimate`, P2).
+    pub fn wait_eta(&self, w: &Want) -> Option<(u64, &'static str)> {
+        self.eta(w).map(|e| (e, "quote")).or_else(|| self.est_wait.map(|e| (e, "estimate")))
+    }
+
+    /// Each need's state here (CE-1).
+    pub fn needs(&self, w: &Want) -> Vec<NeedStatus> {
+        need_states(&self.offer, &w.needs)
+    }
+
+    /// A `sys:` need this node can't install (macOS): ranked last.
+    fn unsupported(&self, w: &Want) -> bool {
+        self.needs(w).iter().any(|s| s.state == NeedState::UnsupportedOnOs)
     }
 
     /// Node-wide free memory and CPU: the last offer's (it counts every
@@ -461,6 +484,142 @@ pub fn wants_components(needs: &[String]) -> bool {
     needs.iter().any(|t| !need_components(t).is_empty())
 }
 
+// ── the tools a node has (CE-1, CE-2) ────────────────────────────────
+
+/// What a node has for one need, from its offer's `tools` map (re-probed
+/// every 10 min; the node installs what's missing either way).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NeedState {
+    /// Installed: a `mise:<tool>` version matching the need's version
+    /// prefix (`latest`/`lts`: any), the Rust channel in `rust-toolchains`
+    /// with every component it names, `cargo-nextest` present.
+    Ready,
+    /// The node can install it, but it isn't there yet (also: every need
+    /// on an older node without a tools map).
+    Install,
+    /// A `sys:` package on macOS (no system packages there). Ranks the
+    /// node last, never filters it: the package may be installed already.
+    UnsupportedOnOs,
+}
+
+impl NeedState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NeedState::Ready => "ready",
+            NeedState::Install => "install",
+            NeedState::UnsupportedOnOs => "unsupported_on_os",
+        }
+    }
+}
+
+/// One need against one node (`--plan` `needs`, CE-2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NeedStatus {
+    pub need: String,
+    pub state: NeedState,
+    /// The version (or Rust toolchain) found, when ready.
+    pub have: Option<String>,
+}
+
+impl NeedStatus {
+    /// `{"need","state","have"}` (stable keys; `have` null when absent).
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::json!({"need": self.need, "state": self.state.as_str(), "have": self.have})
+    }
+}
+
+/// `22.23.3` matches `22` and `22.23` (on a dot), `latest`/`lts` match any.
+fn version_matches(have: &str, want: &str) -> bool {
+    matches!(want, "latest" | "lts") || have == want || have.strip_prefix(want).is_some_and(|r| r.starts_with('.'))
+}
+
+/// A rustup toolchain dir (`stable-aarch64-apple-darwin`,
+/// `1.99.1-x86_64-unknown-linux-gnu`) is `channel` for that host. Never
+/// `nightly` for `nightly-2026-09-01-…`, nor `1.99` for `1.99.1-…`.
+fn toolchain_is(entry: &str, channel: &str) -> bool {
+    entry == channel
+        || entry
+            .strip_prefix(channel)
+            .and_then(|r| r.strip_prefix('-'))
+            .and_then(|host| host.split('-').next())
+            .is_some_and(|arch| !arch.is_empty() && !arch.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// The offer's OS is macOS (`os` label, spellings folded).
+fn offer_is_macos(o: &Offer) -> bool {
+    label_matches("os", "macos", o.labels.get("os").map(String::as_str))
+}
+
+/// Each need's state on the node behind `offer` (CE-1). Tool keys the node
+/// reports: `mise:<tool>` (installed versions, comma list),
+/// `rust-toolchains` (toolchain dirs), `rust-components:<toolchain>`
+/// (k2-node 0.46.7, CE-A10: installed components), `cargo-nextest`.
+pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
+    let list = |k: &str| -> Vec<String> { offer.tools.get(k).map(|v| v.split(',').map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect()).unwrap_or_default() };
+    let mac = offer_is_macos(offer);
+    needs
+        .iter()
+        .map(|token| {
+            let st = |state: NeedState, have: Option<String>| NeedStatus { need: token.clone(), state, have };
+            let Ok((base, comps)) = split_rust_components(token) else { return st(NeedState::Install, None) };
+            match needs::parse(&base) {
+                Ok(needs::Need::System { .. }) if mac => st(NeedState::UnsupportedOnOs, None),
+                Ok(needs::Need::System { .. }) => st(NeedState::Install, None),
+                Ok(needs::Need::Nextest) => match offer.tools.get("cargo-nextest") {
+                    Some(v) => st(NeedState::Ready, Some(v.clone())),
+                    None => st(NeedState::Install, None),
+                },
+                Ok(needs::Need::Rust { channel, .. }) => {
+                    let Some(tc) = list("rust-toolchains").into_iter().find(|e| toolchain_is(e, &channel)) else { return st(NeedState::Install, None) };
+                    let have_comps: Vec<String> = offer
+                        .tools
+                        .iter()
+                        .find(|(k, _)| k.strip_prefix("rust-components:").is_some_and(|x| x == tc || toolchain_is(x, &channel)))
+                        .map(|(_, v)| v.split(',').map(|c| if c.trim() == "llvm-tools-preview" { "llvm-tools".to_string() } else { c.trim().to_string() }).collect())
+                        .unwrap_or_default();
+                    if comps.iter().all(|c| have_comps.contains(c)) {
+                        st(NeedState::Ready, Some(tc))
+                    } else {
+                        st(NeedState::Install, None)
+                    }
+                }
+                Ok(needs::Need::Tool { tool, version }) => match list(&format!("mise:{tool}")).into_iter().rfind(|v| version_matches(v, &version)) {
+                    Some(v) => st(NeedState::Ready, Some(v)),
+                    None => st(NeedState::Install, None),
+                },
+                Err(_) => st(NeedState::Install, None),
+            }
+        })
+        .collect()
+}
+
+/// Every need is ready there (and there is at least one).
+pub fn tools_ready(states: &[NeedStatus]) -> bool {
+    !states.is_empty() && states.iter().all(|s| s.state == NeedState::Ready)
+}
+
+/// "tools ready" · "installs rust@stable, cmake@3 first (~minutes)" ·
+/// "sys:pkg-config: no system packages on macOS" (CE-2); `None` with no
+/// needs.
+pub fn tools_words(states: &[NeedStatus]) -> Option<String> {
+    if states.is_empty() {
+        return None;
+    }
+    let of = |s: NeedState| states.iter().filter(|x| x.state == s).map(|x| x.need.as_str()).collect::<Vec<_>>();
+    let (install, unsupported) = (of(NeedState::Install), of(NeedState::UnsupportedOnOs));
+    let mut parts = Vec::new();
+    if install.is_empty() && unsupported.is_empty() {
+        parts.push("tools ready".to_string());
+    }
+    if !install.is_empty() {
+        parts.push(format!("installs {} first (~minutes)", install.join(", ")));
+    }
+    if !unsupported.is_empty() {
+        parts.push(format!("{}: no system packages on macOS (fails unless already there)", unsupported.join(", ")));
+    }
+    Some(parts.join(" · "))
+}
+
 /// Features a plan needs from the node's k2-node.
 pub fn required_features(w: &Want) -> Vec<&'static str> {
     let mut f = Vec::new();
@@ -479,7 +638,7 @@ pub fn required_features(w: &Want) -> Vec<&'static str> {
     if !w.secret_ids.is_empty() {
         f.push(k2_core::compute::proto::secret::FEATURE_SECRET_ENV);
     }
-    if w.cache {
+    if w.cache.is_some() {
         f.push(k2_core::compute::proto::cache::FEATURE_JOB_CACHE);
     }
     if w.multi_repo {
@@ -558,10 +717,11 @@ pub fn candidates(w: &Want, exclude: &[String], now: i64) -> Vec<Cand> {
 /// grant on is never listed or counted in auto mode (S2): an agent never
 /// learns it exists.
 pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
-    let rows = {
+    let (rows, cache_at, waits) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_nodes(&conn, false)
+        let cache_at = w.cache.as_deref().and_then(|name| cache_node(&conn, &w.ws_id, name));
+        (store::list_nodes(&conn, false), cache_at, SoloWaits::read(&conn, now))
     };
     let feats = required_features(w);
     let mut out = CandReport::default();
@@ -639,9 +799,75 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
         }
         let pending = pending_for(&n.id, online.then_some(offer.revision), now);
         let recent = recent_for(&n.id, now);
-        out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent });
+        let holds_cache = cache_at.as_deref() == Some(n.id.as_str());
+        let est_wait = (online && !share::is_shared(&offer)).then(|| waits.eta(&n.id, offer.parallel_max));
+        out.cands.push(Cand { node: n, online, offer, load, queued: queued_all, grant, pending, recent, holds_cache, est_wait });
     }
     out
+}
+
+// ── resume affinity and solo waits (CE-6, P2) ────────────────────────
+
+/// CE-6, CE-A15: the node that ran this workspace's most recent job with
+/// cache `name` (any end state; it started there, so the cache was made
+/// there). Only this workspace's rows (S3). `None` when no job used it.
+pub fn cache_node(conn: &rusqlite::Connection, ws_id: &str, name: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT node_id FROM compute_jobs WHERE workspace_id = ?1 AND json_extract(plan_json, '$.cache') = ?2 \
+         AND started_at IS NOT NULL ORDER BY started_at DESC, created_at DESC LIMIT 1",
+        rusqlite::params![ws_id, name],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()
+}
+
+/// A job's estimate when it has none (P2: 15 min per unknown).
+pub const UNKNOWN_EST_SECS: u64 = 900;
+
+/// The wait on a solo node (prd-compute-auto-placement-v1 §4.2, P2): the
+/// estimates of the jobs ahead ÷ its parallel slots, plus the least time
+/// left on a running job; an unknown estimate counts 15 min. Pure, so
+/// `get`'s `wait.etaSecs` can use it for one queued job (Lane B).
+pub fn solo_eta(ahead: &[Option<u64>], running_left: &[Option<u64>], parallel_max: u32) -> u64 {
+    let sum: u64 = ahead.iter().map(|e| e.unwrap_or(UNKNOWN_EST_SECS)).sum();
+    let first = running_left.iter().map(|l| l.unwrap_or(UNKNOWN_EST_SECS)).min().unwrap_or(0);
+    sum / u64::from(parallel_max.max(1)) + first
+}
+
+/// This server's queued and running jobs per node, for [`solo_eta`].
+#[derive(Debug, Default)]
+pub struct SoloWaits {
+    ahead: HashMap<String, Vec<Option<u64>>>,
+    left: HashMap<String, Vec<Option<u64>>>,
+}
+
+impl SoloWaits {
+    pub fn read(conn: &rusqlite::Connection, now: i64) -> Self {
+        let est = |j: &JobRow| j.est_secs.filter(|e| *e > 0).map(|e| e as u64);
+        let mut w = SoloWaits::default();
+        for j in store::queued_jobs(conn) {
+            w.ahead.entry(j.node_id.clone()).or_default().push(est(&j));
+        }
+        for j in store::active_jobs(conn) {
+            if j.node_queued {
+                w.ahead.entry(j.node_id.clone()).or_default().push(est(&j));
+                continue;
+            }
+            let left = match (j.started_at, est(&j)) {
+                (Some(s), Some(e)) => Some((s + e as i64 - now).max(0) as u64),
+                (None, Some(e)) => Some(e),
+                (_, None) => None,
+            };
+            w.left.entry(j.node_id.clone()).or_default().push(left);
+        }
+        w
+    }
+
+    /// The estimated wait for a new job on `node_id`.
+    pub fn eta(&self, node_id: &str, parallel_max: u32) -> u64 {
+        let none = Vec::new();
+        solo_eta(self.ahead.get(node_id).unwrap_or(&none), self.left.get(node_id).unwrap_or(&none), parallel_max)
+    }
 }
 
 /// How good a pick is.
@@ -686,6 +912,17 @@ pub fn warmth(c: &Cand, project_key: Option<&str>, commit: Option<&str>) -> u8 {
         .unwrap_or(0)
 }
 
+/// Placement v2's warmth (§4.1 step 4, CE-1, CE-6): 3 = this workspace's
+/// last job with the same `--cache NAME` ran here; 2/1 = a warm slot
+/// ([`warmth`]); a node where every need is ready is worth at least 1 (a
+/// warm slot's band, CE-1). v1 keeps [`warmth`].
+pub fn warmth_v2(c: &Cand, w: &Want, project_key: Option<&str>, commit: Option<&str>) -> u8 {
+    if c.holds_cache && w.cache.is_some() {
+        return 3;
+    }
+    warmth(c, project_key, commit).max(u8::from(tools_ready(&c.needs(w))))
+}
+
 /// Pick one candidate with the ranking `computePlacement` names.
 pub fn choose_by<'a>(
     policy: compute::PlacementPolicy,
@@ -695,9 +932,22 @@ pub fn choose_by<'a>(
     project_key: Option<&str>,
     commit: Option<&str>,
 ) -> Option<(&'a Cand, Tier)> {
+    rank(policy, cands, w, prefer_not, project_key, commit).into_iter().next()
+}
+
+/// Every usable candidate, best first, by the ranking `computePlacement`
+/// names (`--plan`'s `ranking`, P2). The first is what [`choose_by`] picks.
+pub fn rank<'a>(
+    policy: compute::PlacementPolicy,
+    cands: &'a [Cand],
+    w: &Want,
+    prefer_not: &[String],
+    project_key: Option<&str>,
+    commit: Option<&str>,
+) -> Vec<(&'a Cand, Tier)> {
     match policy {
-        compute::PlacementPolicy::V1 => choose(cands, w, prefer_not, project_key, commit),
-        compute::PlacementPolicy::V2 => choose_v2(cands, w, prefer_not, project_key, commit),
+        compute::PlacementPolicy::V1 => rank_v1(cands, w, prefer_not, project_key, commit),
+        compute::PlacementPolicy::V2 => rank_v2(cands, w, prefer_not, project_key, commit),
     }
 }
 
@@ -706,7 +956,13 @@ pub fn choose_by<'a>(
 /// else the least-loaded online node, else the most recently seen offline
 /// one. `prefer_not` (sibling shards, failed nodes) loses ties.
 pub fn choose<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: Option<&str>, commit: Option<&str>) -> Option<(&'a Cand, Tier)> {
-    let mut best: Option<(&Cand, (Tier, bool, i64, u8, i64, u64))> = None;
+    rank_v1(cands, w, prefer_not, project_key, commit).into_iter().next()
+}
+
+/// v1, best first. A stable sort on the score, highest first: among equal
+/// scores the earlier candidate stays first (the old loop's `>`).
+fn rank_v1<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: Option<&str>, commit: Option<&str>) -> Vec<(&'a Cand, Tier)> {
+    let mut scored: Vec<(&Cand, (Tier, bool, i64, u8, i64, u64))> = Vec::new();
     for c in cands {
         let Some(tier) = c.tier(w) else { continue };
         let warmth = warmth(c, project_key, commit);
@@ -724,42 +980,43 @@ pub fn choose<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_ke
             (Tier::Busy, None) => -(i64::MAX / 2),
             _ => 0,
         };
-        let score = (tier, !prefer_not.contains(&c.node.id), eta, warmth, busy, tie);
-        if best.as_ref().is_none_or(|(_, b)| score > *b) {
-            best = Some((c, score));
-        }
+        scored.push((c, (tier, !prefer_not.contains(&c.node.id), eta, warmth, busy, tie)));
     }
-    best.map(|(c, s)| (c, s.0))
+    scored.sort_by(|a, b| b.1.cmp(&a.1));
+    scored.into_iter().map(|(c, s)| (c, s.0)).collect()
 }
 
 /// The v2 sort key (smaller wins), PRD §4.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum V2Key {
-    /// Starts now: band (a warm slot worth one band), `prefer_not`,
-    /// warmth, recent placements, this workspace's running jobs, load,
-    /// free CPU, `sys:` support, name.
-    Now(u8, bool, Reverse<u8>, u32, u32, u32, Reverse<u64>, bool, String),
-    /// Busy everywhere: `prefer_not`, a quoted ETA (`(0, secs)`, lower
-    /// first) before an unknown one (`(1, 0)`), fewer jobs there, warmth,
-    /// name.
-    Busy(bool, (u8, u64), u64, Reverse<u8>, String),
+    /// Starts now: not the node that holds the `--cache` (CE-6: that one
+    /// first), a `sys:` need it can't install (CE-1: last), band (warmth
+    /// worth one band), `prefer_not`, warmth, recent placements, this
+    /// workspace's running jobs, load, free CPU, `sys:` support, name.
+    Now(bool, bool, u8, bool, Reverse<u8>, u32, u32, u32, Reverse<u64>, bool, String),
+    /// Busy everywhere: `prefer_not`, a `sys:` need it can't install, a
+    /// known ETA (`(0, secs)`, quoted or estimated, lower first) before an
+    /// unknown one (`(1, 0)`), fewer jobs there, warmth, name.
+    Busy(bool, bool, (u8, u64), u64, Reverse<u8>, String),
     /// Only offline: `prefer_not`, the most recently seen, name.
     Offline(bool, Reverse<i64>, String),
 }
 
 fn v2_key(c: &Cand, tier: Tier, w: &Want, prefer_not: &[String], project_key: Option<&str>, commit: Option<&str>) -> V2Key {
     let avoid = prefer_not.contains(&c.node.id);
-    let warm = warmth(c, project_key, commit);
+    let warm = warmth_v2(c, w, project_key, commit);
     let name = c.node.name.clone();
+    let unsupported = c.unsupported(w);
     match tier {
         Tier::Now => {
             let band = c.band(w).saturating_sub(u8::from(warm >= 1));
             let no_sys = w.wants_sys() && !c.offer.features.iter().any(|f| f == needs::FEATURE_SYSTEM_PACKAGES);
-            V2Key::Now(band, avoid, Reverse(warm), c.recent, c.ws_running(w), c.load_after(w), Reverse(c.free_now().1), no_sys, name)
+            let cache_elsewhere = !(c.holds_cache && w.cache.is_some());
+            V2Key::Now(cache_elsewhere, unsupported, band, avoid, Reverse(warm), c.recent, c.ws_running(w), c.load_after(w), Reverse(c.free_now().1), no_sys, name)
         }
         Tier::Busy => {
-            let eta = c.eta(w).map(|e| (0, e)).unwrap_or((1, 0));
-            V2Key::Busy(avoid, eta, u64::from(c.running_now()) + c.queued as u64, Reverse(warm), name)
+            let eta = c.wait_eta(w).map(|(e, _)| (0, e)).unwrap_or((1, 0));
+            V2Key::Busy(avoid, unsupported, eta, u64::from(c.running_now()) + c.queued as u64, Reverse(warm), name)
         }
         Tier::Offline => V2Key::Offline(avoid, Reverse(c.node.last_seen.unwrap_or(0)), name),
     }
@@ -773,11 +1030,37 @@ fn v2_key(c: &Cand, tier: Tier, w: &Want, prefer_not: &[String], project_key: Op
 /// free CPU, `sys:` support and name; else the shortest quoted wait; else
 /// the most recently seen offline node.
 pub fn choose_v2<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: Option<&str>, commit: Option<&str>) -> Option<(&'a Cand, Tier)> {
-    cands
+    rank_v2(cands, w, prefer_not, project_key, commit).into_iter().next()
+}
+
+/// v2, best first (a stable sort: the first minimum is [`choose_v2`]'s).
+fn rank_v2<'a>(cands: &'a [Cand], w: &Want, prefer_not: &[String], project_key: Option<&str>, commit: Option<&str>) -> Vec<(&'a Cand, Tier)> {
+    let mut keyed: Vec<(&Cand, Tier, V2Key)> = cands.iter().filter_map(|c| c.tier(w).map(|t| (c, t, v2_key(c, t, w, prefer_not, project_key, commit)))).collect();
+    keyed.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+    keyed.into_iter().map(|(c, t, _)| (c, t)).collect()
+}
+
+/// `--plan`'s `ranking` (P2, CE-2): the top three candidates, each with
+/// its state, band, warmth, wait and needs. Granted node names and
+/// node-wide numbers only (S2).
+pub fn ranking_json(ranked: &[(&Cand, Tier)], w: &Want, project_key: Option<&str>, commit: Option<&str>) -> serde_json::Value {
+    ranked
         .iter()
-        .filter_map(|c| c.tier(w).map(|t| (c, t, v2_key(c, t, w, prefer_not, project_key, commit))))
-        .min_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)))
-        .map(|(c, t, _)| (c, t))
+        .take(3)
+        .map(|(c, t)| {
+            let eta = c.wait_eta(w);
+            serde_json::json!({
+                "node": c.node.name,
+                "state": match t { Tier::Now => "now", Tier::Busy => "busy", Tier::Offline => "offline" },
+                "band": (*t == Tier::Now).then(|| c.band(w)),
+                "warmth": warmth_v2(c, w, project_key, commit),
+                "etaSecs": eta.map(|e| e.0),
+                "etaBasis": eta.map(|e| e.1).unwrap_or("unknown"),
+                "needs": c.needs(w).iter().map(NeedStatus::json).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>()
+        .into()
 }
 
 // ── the placement record (§7) ────────────────────────────────────────
@@ -805,7 +1088,7 @@ pub fn mem_words(b: u64) -> String {
 }
 
 /// "~6 min" / "~40s".
-fn wait_words(secs: u64) -> String {
+pub fn wait_words(secs: u64) -> String {
     if secs < 90 {
         format!("~{secs}s")
     } else {
@@ -879,31 +1162,44 @@ pub fn placement_record(c: &Cand, tier: Tier, w: &Want, ex: &Explain<'_>, now: i
     let considered = ex.cands.len() as u32 - unavailable;
     let warm = warmth(c, ex.project_key, ex.commit);
     let free = free_words(c);
-    let with_free = |s: String| if free.is_empty() { s } else { format!("{s} · {free}") };
+    // CE-1/CE-2: "tools ready" or what it installs first.
+    let tools = tools_words(&c.needs(w));
+    let with_tools = |s: String| match &tools {
+        Some(t) => format!("{s} · {t}"),
+        None => s,
+    };
+    let with_free = |s: String| {
+        let s = with_tools(s);
+        if free.is_empty() { s } else { format!("{s} · {free}") }
+    };
     let (code, why, eta) = match tier {
         Tier::Now => {
-            let eff = |x: &Cand| x.band(w).saturating_sub(u8::from(warmth(x, ex.project_key, ex.commit) >= 1));
+            let eff = |x: &Cand| x.band(w).saturating_sub(u8::from(warmth_v2(x, w, ex.project_key, ex.commit) >= 1));
             let spread = ex.cands.iter().any(|x| {
                 x.node.id != c.node.id && x.tier(w) == Some(Tier::Now) && eff(x) == eff(c) && (x.recent > c.recent || x.ws_running(w) > c.ws_running(w))
             });
-            let (code, what) = if warm >= 2 {
-                ("starts_now_warm", "warm slot (this commit)")
+            let cache_here = w.cache.as_deref().filter(|_| c.holds_cache);
+            let (code, what) = if let Some(name) = cache_here {
+                ("starts_now_cache", format!("cache {name} was here"))
+            } else if warm >= 2 {
+                ("starts_now_warm", "warm slot (this commit)".to_string())
             } else if warm == 1 {
-                ("starts_now_warm", "warm slot (this repo: incremental)")
+                ("starts_now_warm", "warm slot (this repo: incremental)".to_string())
             } else if c.idle() {
-                ("starts_now_idle", "idle")
+                ("starts_now_idle", "idle".to_string())
             } else if spread {
-                ("starts_now_spread", "spread (fewer of the latest jobs there)")
+                ("starts_now_spread", "spread (fewer of the latest jobs there)".to_string())
             } else {
-                ("starts_now_least_loaded", "least loaded")
+                ("starts_now_least_loaded", "least loaded".to_string())
             };
             (code, with_free(format!("starts now · {what}")), None)
         }
-        Tier::Busy => match c.eta(w) {
-            Some(e) => ("queued_quoted_eta", format!("no node free now; shortest wait {} (quoted) · it moves if another frees up first", wait_words(e)), Some(e)),
+        Tier::Busy => match c.wait_eta(w) {
+            Some((e, "quote")) => ("queued_quoted_eta", with_tools(format!("no node free now; shortest wait {} (quoted) · it moves if another frees up first", wait_words(e))), Some(e)),
+            Some((e, _)) => ("queued_est_wait", with_tools(format!("no node free now; shortest wait {} (estimate) · it moves if another frees up first", wait_words(e))), Some(e)),
             None => (
                 "queued_least_busy",
-                format!("no node free now; least busy ({} running, {} queued) · it moves if another frees up first", c.running_now(), c.queued),
+                with_tools(format!("no node free now; least busy ({} running, {} queued) · it moves if another frees up first", c.running_now(), c.queued)),
                 None,
             ),
         },
@@ -1642,7 +1938,7 @@ mod tests {
         if running > 0 {
             load.running_by_workspace.insert("ws-other-secret".into(), running);
         }
-        Cand { node: node_row(id), online: true, offer, load, queued: 0, grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0 }
+        Cand { node: node_row(id), online: true, offer, load, queued: 0, grant: Some(grant_row(id, 7200, 2)), pending: Pending::default(), recent: 0, holds_cache: false, est_wait: None }
     }
 
     /// Make `c` a node shared with another server (this server a tenant):
@@ -1692,7 +1988,7 @@ mod tests {
             stall: false,
             secret_ids: vec![],
             tier: JobTier::Normal,
-            cache: false,
+            cache: None,
             multi_repo: false,
         }
     }
@@ -1972,6 +2268,135 @@ mod tests {
         assert!(!label_matches("arch", "arm64", None), "no label: no match");
         assert!(label_matches("gpu", "nvidia", Some("nvidia")) && !label_matches("gpu", "NVIDIA", Some("nvidia")), "other labels are exact");
         assert!(!label_matches("gpu", "darwin", Some("macos")), "aliases only for os and arch");
+    }
+
+    fn with_tools(mut c: Cand, tools: &[(&str, &str)]) -> Cand {
+        for (k, v) in tools {
+            c.offer.tools.insert(k.to_string(), v.to_string());
+        }
+        c.offer.features.push(needs::FEATURE_NEEDS.to_string());
+        c
+    }
+
+    const LINUX_RUST: &[(&str, &str)] = &[
+        ("rust-toolchains", "1.99.1-x86_64-unknown-linux-gnu,stable-x86_64-unknown-linux-gnu"),
+        ("cargo-nextest", "0.9.100"),
+        ("mise:cmake", "3.30.2,3.31.1"),
+        ("mise:node", "22.23.3"),
+    ];
+
+    /// CE-1: each need's state from the offer's tools map.
+    #[test]
+    fn need_states_read_the_offers_tools() {
+        let c = with_tools(cand("n", 32, 32, 0, 4), LINUX_RUST);
+        let toks: Vec<String> =
+            ["rust@stable", "rust@1.99.1", "rust@1.99", "rust@nightly", "cargo-nextest", "cmake@3", "cmake@3.31", "cmake@3.3", "node@lts", "python@3.12", "sys:pkg-config"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+        let got: Vec<(String, &str, Option<String>)> = need_states(&c.offer, &toks).into_iter().map(|s| (s.need, s.state.as_str(), s.have)).collect();
+        let want = |n: &str, st: &str, h: Option<&str>| (n.to_string(), st, h.map(str::to_string));
+        assert_eq!(
+            got,
+            vec![
+                want("rust@stable", "ready", Some("stable-x86_64-unknown-linux-gnu")),
+                want("rust@1.99.1", "ready", Some("1.99.1-x86_64-unknown-linux-gnu")),
+                want("rust@1.99", "install", None),
+                want("rust@nightly", "install", None),
+                want("cargo-nextest", "ready", Some("0.9.100")),
+                want("cmake@3", "ready", Some("3.31.1")),
+                want("cmake@3.31", "ready", Some("3.31.1")),
+                want("cmake@3.3", "install", None),
+                want("node@lts", "ready", Some("22.23.3")),
+                want("python@3.12", "install", None),
+                want("sys:pkg-config", "install", None),
+            ]
+        );
+        assert!(!toolchain_is("nightly-2026-09-01-x86_64-unknown-linux-gnu", "nightly"), "a dated nightly isn't the nightly channel");
+        assert!(toolchain_is("nightly-2026-09-01-x86_64-unknown-linux-gnu", "nightly-2026-09-01"));
+        // Components: ready only when the node lists each for that toolchain.
+        let comps = vec!["rust@stable+clippy+llvm-tools".to_string()];
+        assert_eq!(need_states(&c.offer, &comps)[0].state, NeedState::Install, "no rust-components report (older node)");
+        let mut d = c.clone();
+        d.offer.tools.insert("rust-components:stable-x86_64-unknown-linux-gnu".into(), "cargo,clippy,llvm-tools-preview,rustc".into());
+        assert_eq!(need_states(&d.offer, &comps)[0].state, NeedState::Ready);
+        // macOS: a sys: need is unsupported; an older node with no tools
+        // map installs everything.
+        let mut mac = c.clone();
+        mac.offer.labels.insert("os".into(), "macos".into());
+        assert_eq!(need_states(&mac.offer, &toks[10..])[0].state, NeedState::UnsupportedOnOs);
+        let bare = cand("old", 32, 32, 0, 4);
+        assert!(need_states(&bare.offer, &toks).iter().all(|s| s.state == NeedState::Install));
+        // Stable JSON keys (CE-2 acceptance 3).
+        let j = need_states(&c.offer, &["cmake@4".to_string()])[0].json();
+        assert_eq!(j, serde_json::json!({"need": "cmake@4", "state": "install", "have": null}));
+        assert_eq!(tools_words(&need_states(&c.offer, &["rust@stable".to_string(), "cmake@4".to_string(), "python@3".to_string()])).unwrap(), "installs cmake@4, python@3 first (~minutes)");
+        assert_eq!(tools_words(&need_states(&c.offer, &["rust@stable".to_string()])).unwrap(), "tools ready");
+        assert_eq!(tools_words(&[]), None);
+    }
+
+    /// CE-1 acceptance 1–3: tools ready is worth a warm slot's band; a
+    /// heavy ready node still loses to an idle one that must install; a
+    /// `sys:` need ranks a Mac last.
+    #[test]
+    fn placement_prefers_a_node_with_the_tools_ready() {
+        let mut w = want(2);
+        w.needs = vec!["rust@stable".into(), "cargo-nextest".into()];
+        let bare = with_tools(cand("a-bare", 32, 32, 0, 4), &[]);
+        let ready = with_tools(cand("b-ready", 32, 32, 0, 4), LINUX_RUST);
+        assert_eq!(pick(V2, &[bare.clone(), ready.clone()], &w).0, "b-ready", "both idle: tools ready wins");
+        let cands = [bare.clone(), ready.clone()];
+        let ex = Explain { policy: V2, cands: &cands, skipped: &BTreeMap::new(), project_key: None, commit: None };
+        let rec = placement_record(&ready, Tier::Now, &w, &ex, 1);
+        assert!(rec.why.starts_with("starts now · idle · tools ready · "), "{}", rec.why);
+        let rec = placement_record(&bare, Tier::Now, &w, &ex, 1);
+        assert!(rec.why.contains("installs rust@stable, cargo-nextest first (~minutes)"), "{}", rec.why);
+        // One-band rule: ready but heavy loses to idle that must install.
+        let heavy = with_tools(cand("a-heavy-ready", 4, 32, 3, 4), LINUX_RUST);
+        let idle = with_tools(cand("b-idle-bare", 32, 32, 0, 4), &[]);
+        assert_eq!(heavy.band(&w), 2);
+        assert_eq!(pick(V2, &[heavy, idle], &w).0, "b-idle-bare");
+        // sys: on a Mac ranks it last, never filters it.
+        let mut s = want(2);
+        s.needs = vec!["sys:pkg-config".into()];
+        let mut mac = with_tools(cand("a-mac", 32, 32, 0, 4), &[]);
+        mac.offer.labels.insert("os".into(), "macos".into());
+        let linux = with_tools(cand("b-linux", 32, 32, 0, 4), &[]);
+        assert_eq!(pick(V2, &[mac.clone(), linux], &s).0, "b-linux");
+        assert_eq!(pick(V2, &[mac], &s).0, "a-mac", "alone it is still a candidate");
+        // v1 ignores tools: its order is unchanged (the list order breaks the tie).
+        assert_eq!(pick(V1, &[bare, ready], &w).0, "a-bare");
+    }
+
+    /// P2: the solo-node wait estimate, and busy nodes ranked by it.
+    #[test]
+    fn a_solo_nodes_wait_is_estimated() {
+        assert_eq!(solo_eta(&[Some(600), None], &[Some(120), Some(300)], 2), (600 + UNKNOWN_EST_SECS) / 2 + 120);
+        assert_eq!(solo_eta(&[], &[None], 4), UNKNOWN_EST_SECS, "an unknown running job: 15 min");
+        assert_eq!(solo_eta(&[], &[], 4), 0);
+        let w = want(2);
+        let mut solo = cand("a-solo", 30, 32, 2, 2);
+        solo.est_wait = Some(200);
+        let quoted = shared(cand("b-quoted", 30, 32, 2, 2), Some((false, Some(900))));
+        let mut unknown = cand("c-unknown", 30, 32, 2, 2);
+        unknown.est_wait = None;
+        assert_eq!(order(V2, &[unknown.clone(), quoted.clone(), solo.clone()], &w), vec!["a-solo", "b-quoted", "c-unknown"]);
+        assert_eq!(order(V1, &[unknown.clone(), quoted.clone(), solo.clone()], &w)[0], "b-quoted", "v1 knows only quotes");
+        let all = [solo.clone(), quoted, unknown];
+        let ex = Explain { policy: V2, cands: &all, skipped: &BTreeMap::new(), project_key: None, commit: None };
+        let rec = placement_record(&solo, Tier::Busy, &w, &ex, 1);
+        assert_eq!((rec.code.as_str(), rec.eta_secs), ("queued_est_wait", Some(200)));
+        assert!(rec.why.contains("~200s (estimate)") || rec.why.contains("~4 min (estimate)"), "{}", rec.why);
+        // --plan's ranking: top three, stable keys.
+        let ranked = rank(V2, &all, &w, &[], None, None);
+        let r = ranking_json(&ranked, &w, None, None);
+        assert_eq!(r.as_array().unwrap().len(), 3);
+        assert_eq!(r[0]["node"], "a-solo");
+        assert_eq!((r[0]["state"].as_str(), r[0]["etaSecs"].as_u64(), r[0]["etaBasis"].as_str()), (Some("busy"), Some(200), Some("estimate")));
+        assert_eq!((r[1]["etaBasis"].as_str(), r[2]["etaBasis"].as_str()), (Some("quote"), Some("unknown")));
+        for k in ["node", "state", "band", "warmth", "etaSecs", "etaBasis", "needs"] {
+            assert!(r[2].get(k).is_some(), "{k} in {}", r[2]);
+        }
     }
 
     /// CE-16: `rust@<channel>+component` splits on `+` (a comma would split

@@ -1768,7 +1768,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         stall: stall.is_some_and(|x| x > 0),
         secret_ids: secrets_found.iter().map(|f| f.secret_id.clone()).collect(),
         tier: tier_ask,
-        cache: cache.is_some(),
+        cache: cache.clone(),
         multi_repo: !with_asks(v)?.is_empty(),
     };
     // Node: by name (pinned), or auto (no node named, or --any).
@@ -2611,8 +2611,23 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     let n = f.node;
     let (online, route, live) = compute_ws::live_view(&n.id);
     let offer = live.or_else(|| n.last_offer.clone());
-    let cand = crate::compute_place::candidates(f.want, &[], now).into_iter().find(|c| c.node.id == n.id);
-    let starts_now = cand.as_ref().is_some_and(|c| c.starts_now(f.want));
+    let report = crate::compute_place::candidates_report(f.want, &[], now);
+    let cand = report.cands.iter().find(|c| c.node.id == n.id);
+    let starts_now = cand.is_some_and(|c| c.starts_now(f.want));
+    // CE-1/CE-2: each need's state on this node, and the top three
+    // candidates the ranking saw (P2).
+    let need_states = match (cand, offer.as_ref()) {
+        (Some(c), _) => c.needs(f.want),
+        (None, Some(o)) => crate::compute_place::need_states(o, f.needs),
+        (None, None) => f
+            .needs
+            .iter()
+            .map(|t| crate::compute_place::NeedStatus { need: t.clone(), state: crate::compute_place::NeedState::Install, have: None })
+            .collect(),
+    };
+    let (pk, commit) = warm_key(f.ws, f.v).map(|(p, c)| (Some(p), c)).unwrap_or((None, None));
+    let ranked = crate::compute_place::rank(compute::placement_policy(), &report.cands, f.want, &[], pk.as_deref(), commit.as_deref());
+    let ranking = crate::compute_place::ranking_json(&ranked, f.want, pk.as_deref(), commit.as_deref());
     let decision = compute_ws::decision_for(&n.id);
     let ahead = decision.waiting.len();
     let blocking = decision.waiting.values().min_by_key(|(pos, _)| *pos).map(|(_, r)| serde_json::json!({"code": r.code, "message": r.message}));
@@ -2663,7 +2678,9 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
             "queued": {"waiting": queued_ws, "max": g.max_queued, "left": (g.max_queued - queued_ws).max(0)},
         })),
         "limits": {"timeoutSecs": f.timeout, "diskGb": f.disk_gb, "stallSecs": f.stall, "queueTimeoutSecs": f.queue_timeout, "retries": f.retries},
-        "needs": f.needs,
+        "needs": need_states.iter().map(crate::compute_place::NeedStatus::json).collect::<Vec<_>>(),
+        "toolsLine": crate::compute_place::tools_words(&need_states),
+        "ranking": ranking,
         "artifacts": f.artifacts,
         "warnings": f.warnings,
     });

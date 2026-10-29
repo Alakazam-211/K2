@@ -249,6 +249,65 @@ describe('layout (M-A1)', () => {
 })
 
 describe('no device running', () => {
+  it('a start shows the loading screen: booting → connecting the screen → gone at the first frame', async () => {
+    daemon.status = status({ sim: STOPPED })
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    expect(document.querySelector('[data-mobile-boot]')).toBeNull()
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-mobile-start]') as HTMLButtonElement)
+    })
+    await flush()
+    // The status still says stopped: the screen covers the gap.
+    expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('booting')
+    expect(document.querySelector('[data-mobile-boot-title]')?.textContent).toBe('Starting Pixel 9')
+    expect(document.querySelector('[data-mobile-blocked]')).toBeNull()
+    const step = (s: string): string | null =>
+      document.querySelector(`[data-mobile-boot-step="${s}"]`)?.getAttribute('data-state') ?? null
+    daemon.status = status({ sim: { ...RUNNING, state: 'booting' } })
+    await act(async () => {
+      for (const fn of simEvents.fns) fn({ kind: 'sim_state', workspace: 'p-docs', sim: 's1' })
+    })
+    await flush()
+    expect(step('booting')).toBe('now')
+    daemon.status = status()
+    await act(async () => {
+      for (const fn of simEvents.fns) fn({ kind: 'sim_state', workspace: 'p-docs', sim: 's1' })
+    })
+    await flush()
+    expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('connecting')
+    expect(step('booting')).toBe('done')
+    expect(step('connecting')).toBe('now')
+    expect(document.querySelector('[data-mobile-canvas]')).not.toBeNull()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    await flush()
+    expect(document.querySelector('[data-mobile-boot]')).toBeNull()
+  })
+
+  it('a start that fails keeps the screen with the error and Try again boots again', async () => {
+    daemon.status = status({ sim: { ...RUNNING, state: 'booting' } })
+    renderMobile(createStubSimStream())
+    await flush()
+    expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('booting')
+    daemon.status = status({ sim: { ...RUNNING, state: 'failed', reason: 'emulator exited' } })
+    await act(async () => {
+      for (const fn of simEvents.fns) fn({ kind: 'sim_state', workspace: 'p-docs', sim: 's1' })
+    })
+    await flush()
+    expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('failed')
+    expect(document.querySelector('[data-mobile-boot-error]')?.textContent).toBe('The device stopped: emulator exited')
+    expect(document.querySelector('[data-mobile-boot-step="booting"]')?.getAttribute('data-state')).toBe('failed')
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-mobile-boot-retry]') as HTMLButtonElement)
+    })
+    await flush()
+    expect(daemon.posts.map((p) => p.route)).toEqual(['sim/boot'])
+    expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('booting')
+  })
+
   it('shows the chooser and Start; Start boots the picked device with noTab and remembers it', async () => {
     daemon.status = status({ sim: STOPPED })
     renderMobile(createStubSimStream())

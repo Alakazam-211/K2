@@ -28,6 +28,7 @@ import { DesignThreadColumn } from '@/components/Design/DesignThreadColumn'
 import { pinnedChatItem } from '@/components/Design/pinned-chat-item'
 import type { MobileItemData } from '@/stores/tabs'
 import { roomProjectForCwd } from '@/stores/room'
+import { MobileBootScreen, type MobileBootPhase } from './MobileBootScreen'
 import { MobileToolbar } from './MobileToolbar'
 import { readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
 import {
@@ -276,6 +277,9 @@ function MobileDevice({
 
   // ── Gestures to the daemon ────────────────────────────────────────────
   const [busy, setBusy] = useState(false)
+  // A boot this tab asked for that the status doesn't show yet (the
+  // loading screen covers the gap between Start and `booting`).
+  const [bootPending, setBootPending] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const act = useCallback(
     async (what: string, fn: () => Promise<void>) => {
@@ -304,10 +308,17 @@ function MobileDevice({
     (which: string) => {
       if (!workspaceRef) return
       remember(which)
+      setBootPending(true)
       void act('boot', async () => {
         // The platform (android | ios), never a lane name: the daemon picks
         // the lane, and the tab only offers platforms it reported.
-        await bootSim(scope, workspaceRef, { device: which, ...(platform ? { platform } : {}) })
+        try {
+          const view = await bootSim(scope, workspaceRef, { device: which, ...(platform ? { platform } : {}) })
+          if (!simIsUp(view)) setBootPending(false)
+        } catch (err) {
+          setBootPending(false)
+          throw err
+        }
       })
     },
     [act, platform, remember, scope, workspaceRef],
@@ -409,6 +420,45 @@ function MobileDevice({
     stream.send(r.send)
   }
 
+  // ── Loading screen (installing → booting → first frame) ───────────────
+  const sessionState = session?.state ?? null
+  useEffect(() => {
+    if (sessionState === 'installing' || sessionState === 'booting' || sessionState === 'running') setBootPending(false)
+  }, [sessionState])
+  const streamClosed = stream.conn === 'error' || stream.conn === 'closed'
+  const bootPhase: MobileBootPhase | null =
+    sessionState === 'installing'
+      ? 'installing'
+      : sessionState === 'booting'
+        ? 'booting'
+        : running && !stream.hasFrame && !streamClosed
+          ? 'connecting'
+          : bootPending
+            ? 'booting'
+            : null
+  const bootFailed = sessionState === 'failed' || (running && !stream.hasFrame && streamClosed)
+  const [bootRun, setBootRun] = useState<{
+    startedAt: number
+    phase: MobileBootPhase
+    withInstall: boolean
+    failed: boolean
+  } | null>(null)
+  useEffect(() => {
+    setBootRun((prev) => {
+      if (bootPhase) {
+        if (!prev || prev.failed) {
+          return { startedAt: Date.now(), phase: bootPhase, withInstall: bootPhase === 'installing', failed: false }
+        }
+        const withInstall = prev.withInstall || bootPhase === 'installing'
+        return prev.phase === bootPhase && prev.withInstall === withInstall ? prev : { ...prev, phase: bootPhase, withInstall }
+      }
+      // A start that stopped keeps its screen (with the error); anything
+      // else (stopped, first frame drawn) ends it.
+      if (prev && bootFailed) return prev.failed ? prev : { ...prev, failed: true }
+      return null
+    })
+  }, [bootPhase, bootFailed])
+
   const blocked = deviceNotice(status, statusError)
   const laneReady = !!status && status.lanes.some((l) => l.usable && l.ready)
   // Stopped (or failed) on a ready lane: offer Start right there, not only
@@ -419,6 +469,29 @@ function MobileDevice({
   const overlayBox = renderOverlay && screen && live ? box() : null
   const banner = holdBanner(hold, tookOver)
   const shownNotice = notice ?? stream.inputError
+  const bootDevice = session?.profile?.name ?? devices.find((d) => d.id === device)?.name ?? (device || 'the device')
+  const bootScreen = bootPhase ? (
+    <MobileBootScreen
+      deviceName={bootDevice}
+      phase={bootPhase}
+      startedAt={bootRun && !bootRun.failed ? bootRun.startedAt : Date.now()}
+      withInstall={bootRun?.withInstall ?? false}
+    />
+  ) : bootRun?.failed && bootFailed ? (
+    <MobileBootScreen
+      deviceName={bootDevice}
+      phase={bootRun.phase}
+      startedAt={bootRun.startedAt}
+      withInstall={bootRun.withInstall}
+      error={
+        sessionState === 'failed'
+          ? blocked
+          : stream.reason ?? 'The device stream closed. Reopen the tab to try again.'
+      }
+      onRetry={sessionState === 'failed' && canStart ? () => boot(device) : undefined}
+      retryDisabled={busy}
+    />
+  ) : null
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" data-testid="mobile-device">
@@ -502,7 +575,7 @@ function MobileDevice({
               {overlayBox && screen && renderOverlay ? renderOverlay({ box: overlayBox, screen }) : null}
             </div>
           </div>
-        ) : (
+        ) : bootScreen ? null : (
           <div className="flex max-w-sm flex-col items-center gap-3">
             <div className="text-center text-xs text-[var(--color-text-muted)]" data-mobile-blocked="">
               {blocked}
@@ -520,6 +593,11 @@ function MobileDevice({
             ) : null}
           </div>
         )}
+        {bootScreen ? (
+          <div className="absolute inset-0 flex items-center justify-center bg-[var(--color-bg)] p-4" data-mobile-boot-overlay="">
+            {bootScreen}
+          </div>
+        ) : null}
         {banner ? (
           <div
             className="absolute bottom-2 left-1/2 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]"

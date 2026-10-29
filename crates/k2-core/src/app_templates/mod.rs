@@ -156,6 +156,7 @@ pub fn plan(folder: &Path, template: &str, name: Option<&str>, sub: Option<&str>
             new_file(folder, "k2/web.manifest.json", &text::web_manifest(&app_id, &base), &mut p);
             p.next = vec![
                 "build the site (its output folder, like dist/)".into(),
+                format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
                 format!("k2 app deploy {app_id} dist --manifest k2/web.manifest.json"),
                 format!("k2 app list   (its URL: https://{host_s}/)"),
             ];
@@ -167,6 +168,7 @@ pub fn plan(folder: &Path, template: &str, name: Option<&str>, sub: Option<&str>
             p.next = vec![
                 "cd k2/api && npm install".into(),
                 "k2 app sdk add k2/api".into(),
+                format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
                 format!("k2 app deploy {app_id} k2/api"),
                 format!("k2 app list   (its URL: https://{host_s}/)"),
             ];
@@ -265,6 +267,7 @@ fn plan_tauri(folder: &Path, base: &str, app_id: &str, host: &str, p: &mut Plan)
     p.next = vec![
         "npx tauri signer generate -w ~/.tauri/myapp.key   (on your own Mac; keep the key there, or in the K2 vault)".into(),
         "put the printed public key in src-tauri/tauri.conf.json plugins.updater.pubkey".into(),
+        format!("k2 app install {app_id} --tunnel   (once: the App and its public URL)"),
         format!("k2 app updates key {app_id} --set \"$(cat ~/.tauri/myapp.key.pub)\""),
         format!("npm run build && k2 app deploy {app_id} dist --manifest k2/web.manifest.json"),
         format!("k2 app updates push {app_id} --channel beta --version <x.y.z> --artifact <platform>=<file>"),

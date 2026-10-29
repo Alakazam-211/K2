@@ -61,25 +61,27 @@ pub fn tauri_readme(app_id: &str, host: &str) -> String {
 
 ## Next
 
-1. Make the update signing key **on your own Mac** (it never goes to K2):
-   `npx tauri signer generate -w ~/.tauri/myapp.key`
+1. Make the update signing key **on your own Mac** (the private key stays
+   yours): `npx tauri signer generate -w ~/.tauri/myapp.key`
    Put the public key it prints in `src-tauri/tauri.conf.json` →
    `plugins.updater.pubkey`.
-2. Give K2 the public key (never the private one):
+2. Create the App once, with its public URL: `k2 app install {app_id} --tunnel`
+3. Give K2 the same public key (never the private one):
    `k2 app updates key {app_id} --set "$(cat ~/.tauri/myapp.key.pub)"`
-3. Deploy the web build: `npm run build && k2 app deploy {app_id} dist --manifest k2/web.manifest.json`
-4. Ship a signed update to testers, then to everyone:
+4. Deploy the web build: `npm run build && k2 app deploy {app_id} dist --manifest k2/web.manifest.json`
+5. Ship a signed update to testers, then to everyone:
    `k2 app updates push {app_id} --channel beta --version 1.0.1 --artifact darwin-aarch64=<file>.app.tar.gz`
    `k2 app updates promote {app_id} --from beta --to stable`
-5. See how it is doing: `k2 app status {app_id}`
+6. See how it is doing: `k2 app status {app_id}`
 
 ## Where the signing keys live
 
 - The updater key and your Apple Developer ID stay on **your own Mac**: in
   your login Keychain or a key file there, used from your own terminal.
 - For unattended builds on your own Mac enrolled as your K2 compute node, the
-  key can sit in the K2 vault and is handed to that one job as a file.
-- K2 stores only the updater's **public** key, and refuses a private one.
+  key can sit in your K2 vault and is handed only to that one job as a file.
+- K2's App records hold only the updater's **public** key; a private one is
+  refused.
 
 ## Uploads from the phone app
 
@@ -146,6 +148,7 @@ with `$PORT` set and checks `GET /healthz`.
 
 - `cd k2/api && npm install`, then `k2 app sdk add k2/api` (once, and again
   after a K2 update): it puts `@k2/server` in `vendor/`.
+- Create the App once, with its public URL: `k2 app install {app_id} --tunnel`
 - Deploy: `k2 app deploy {app_id} k2/api`
 
 ## Uploads in parts

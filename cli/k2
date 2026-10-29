@@ -13478,8 +13478,9 @@ file: one that is already there is listed as skipped and left as it is.
       k2/api/: a small server for the App (<name>-api): a health route and an
       upload route that takes a phone's file in parts of at most 16 MiB.
 
-  <name>        the App name (default: the folder's name), used as <name>-web
-                or <name>-api. Lower-case letters, digits and -.
+  <name>        the App name, used as <name>-web or <name>-api. Default: the
+                folder's name made into one (lower case, anything else
+                becomes -: "Field Notes" is field-notes).
   --dry-run     print every file and change; write nothing.
 
 Then: the commands it prints (Next:), and k2 study tauri.
@@ -13557,9 +13558,11 @@ are served in the same two files.
                                        that leaves out a path already set is
                                        refused (link_path_dropped) unless
                                        --drop names it, written as k2 app links
-                                       shows it: phones and Apple's CDN keep
-                                       the old file for days. Quote paths so
-                                       the shell keeps * and ?.
+                                       shows it (query pairs sorted by name):
+                                       phones and Apple's CDN keep the old
+                                       file for days. An app left out is
+                                       removed. Quote paths so the shell
+                                       keeps * and ?.
   k2 app links off <app>               Stop serving them (the apps and paths
                                        stay; set turns them on again).
   k2 app links check <app> [--json]    Fetch both files from each host over the
@@ -46724,16 +46727,18 @@ START
   It writes k2/web.manifest.json and k2/README.md, and adds the updater
   lines to src-tauri/tauri.conf.json (only keys it lacks; order and spacing
   kept). tauri.conf.json5 and Tauri.toml are not edited: it prints the lines
-  to add. <name> is --name, else the folder's name in lower case. The web
+  to add. <name> is --name, else the folder's name made into one (lower
+  case, anything else becomes -: "Field Notes" is field-notes). The web
   build's App is <name>-web; the server is <name>-api, written by a second
-  run with --template node-api. The first k2 app deploy of a name creates
-  the App.
+  run with --template node-api. Create each App once, with its public URL:
+  k2 app install <name>-web --tunnel (likewise <name>-api).
 
 1. THE WEB BUILD: A STATIC APP
   host.mode "static": K2 serves the folder itself, no server runs, nothing
   of yours executes on the box. Deploys, rollback, labels and custom domains
   work as for any App.
     npm run build
+    k2 app install <name>-web --tunnel          (once)
     k2 app deploy <name>-web dist --manifest k2/web.manifest.json
   --manifest packs that file as the Seed's manifest.json, so dist/ deploys as
   the build wrote it. If dist/ has its own manifest.json with other content
@@ -46745,21 +46750,23 @@ START
   headers (CSP, Permissions-Policy, Referrer-Policy, COOP/COEP/CORP, HSTS;
   framing stays K2's: no frame-ancestors), immutable (globs cached for a
   year; default: hashed files under assets/). HTML and JSON are always
-  revalidated. They need K2 0.46.7: k2 app validate says so.
+  revalidated. Static Apps and these keys need K2 0.46.7 or newer (k2 app
+  validate warns).
 
 2. THE APP'S SERVER
   k2 app init --template node-api writes k2/api/: a small @k2/server server
   with a health route and an upload route (below). Then:
     cd k2/api && npm install && cd -
     k2 app sdk add k2/api
+    k2 app install <name>-api --tunnel          (once)
     k2 app deploy <name>-api k2/api
 
 3. UPDATES (k2 app updates)
   Tauri's updater asks the App's own host for new versions:
     https://<name>-web.<box>.k2.dev/_k2/updates/<channel>/{{target}}/{{arch}}/{{current_version}}
   (<box>: this server's K2 Connect name.) init writes the stable channel;
-  a tester build whose endpoint says beta gets beta. The archives come from
-  K2's download host, never from your box.
+  for testers, build a copy with stable changed to beta in that endpoint.
+  The archives come from K2's download host, never from your box.
   The updater's PUBLIC key goes in two places: tauri.conf.json
   plugins.updater.pubkey (the app checks updates with it) and K2 (K2 checks
   archives with it before anything is uploaded):
@@ -46777,15 +46784,16 @@ START
   one stay on it: push a higher version (1.5.1).
 
 4. SIGNING: ON YOUR OWN MAC
-  The private updater key and your Apple Developer ID stay yours: never on
-  the box K2 runs on, never on a node someone else owns.
+  The private updater key and your Apple Developer ID stay yours: never in
+  K2's App records, never on a node someone else owns.
   - Interactive: the keys stay in your login Keychain (or a key file on your
     Mac); you, or your agent in your own terminal, run
       codesign …  and  npx tauri signer sign …
     then k2 app updates push.
   - Unattended: your own Mac enrolled as your K2 compute node; you put the
-    key in your K2 vault, and it is handed to that one job on that Mac as a
-    file (k2 compute run --secret NAME …; k2 study vault).
+    key in your K2 vault (encrypted, yours), and it is handed only to that
+    one job on that Mac as a file (k2 compute run --secret NAME …; k2 study
+    vault).
   K2's App records hold only the public key; a private key is refused.
 
 5. "OPEN IN APP" LINKS (k2 app links)
@@ -46794,10 +46802,11 @@ START
   K2 serves /.well-known/apple-app-site-association and assetlinks.json on
   the App's hosts, with or without phone pairing. In the app, list each host
   exactly (applinks:<name>-web.<box>.k2.dev), never a wildcard. Each set
-  gives every app and path again; one that leaves out a path already set is
-  refused (link_path_dropped) unless --drop '<path>' names it (phones and
-  Apple's CDN keep the old file for days). k2 app links check <name>-web
-  (the owner) compares what the internet sees.
+  replaces the whole list: give every app and path again (an app left out
+  is removed). One that leaves out a path already set is refused
+  (link_path_dropped) unless --drop '<path>' names it as k2 app links shows
+  it (phones and Apple's CDN keep the old file for days). k2 app links check
+  <name>-web (the owner) compares what the internet sees.
 
 6. PUSH: THROUGH THE APP'S SERVER
   Tauri has no first-party push plugin: the app needs a native plugin that
@@ -46809,7 +46818,8 @@ START
 7. BIG UPLOADS FROM THE PHONE
   Tauri's HTTP plugin holds a whole request body in memory (about 50 MB is
   the practical ceiling). Send files in parts of at most 16 MiB (raw bytes)
-  to your server; it hands each part to K2 as that person:
+  to your server (https://<name>-api.<box>.k2.dev), with the person's session
+  pass as Authorization: Bearer <pass>; it hands each part to K2 as them:
     PUT /upload/<uploadId>?room=<room>&filename=<name>&offset=<bytes>[&last=1]
     → k2.asGuest(pass).files.uploadChunk({ workspace: room, dir: 'uploads',
         filename, uploadId, offset, base64, isLast })

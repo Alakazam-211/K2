@@ -831,7 +831,13 @@ mod tests {
                 "store:write",
                 "guests:rooms",
                 "activity:read",
-                "room:members"
+                "room:members",
+                // 0.46.7 Workbench (catalog v40): garden-local only.
+                "git:read",
+                "git:notes",
+                "compute:read",
+                "agents:start",
+                "agents:stop"
             ]
         );
         for name in ["files:read", "tickets:read", "tickets:post"] {

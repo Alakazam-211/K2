@@ -65,6 +65,13 @@ pub const KANBAN_WIDGET_LATEST: &str = "k2:kanban@5";
 /// minute. Place it with `widget = "k2:box-disk@1"`.
 pub const BOX_DISK_WIDGET: &str = "k2:box-disk@1";
 
+/// The Workbench's inbox and review (0.46.7, catalog v40): worktree agents
+/// sorted by what needs you, with pin / snooze / hide in the inbox's data,
+/// and the picked task's files, diffs, commits, compute runs, notes and
+/// Land / Retire / Discard (K2's sheet). `workbench-1.toml` places both.
+pub const WORK_INBOX_WIDGET: &str = "k2:work-inbox@1";
+pub const REVIEW_WIDGET: &str = "k2:review@1";
+
 /// The prefix every built-in widget name starts with.
 pub const BUILTIN_PREFIX: &str = "k2:";
 
@@ -382,6 +389,32 @@ pub const BUILTIN_WIDGETS: &[BuiltinWidget] = &[
             ("index.html", include_str!("box-disk-1/index.html")),
             ("card.css", include_str!("box-disk-1/card.css")),
             ("card.js", include_str!("box-disk-1/card.js")),
+        ],
+    },
+    // The Workbench (0.46.7, research-t3code-ui-as-garden-v1; Rosson
+    // 2026-10-29: "build the garden and I'll try it out"): the inbox of
+    // worktree agents and the review beside K2's own Conversation widget
+    // (`workbench-1.toml`). Both share `workbench-kit/`.
+    BuiltinWidget {
+        name: "work-inbox",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("work-inbox-1/manifest.json")),
+            ("index.html", include_str!("work-inbox-1/index.html")),
+            ("work.css", include_str!("workbench-kit/work.css")),
+            ("work-common.js", include_str!("workbench-kit/work-common.js")),
+            ("inbox.js", include_str!("work-inbox-1/inbox.js")),
+        ],
+    },
+    BuiltinWidget {
+        name: "review",
+        version: 1,
+        files: &[
+            ("manifest.json", include_str!("review-1/manifest.json")),
+            ("index.html", include_str!("review-1/index.html")),
+            ("work.css", include_str!("workbench-kit/work.css")),
+            ("work-common.js", include_str!("workbench-kit/work-common.js")),
+            ("review.js", include_str!("review-1/review.js")),
         ],
     },
 ];
@@ -1246,6 +1279,44 @@ mod tests {
             );
         }
         assert!(calls.iter().any(|c| c == "app.resources"), "it reads app.resources");
+    }
+
+    /// The Workbench's widgets (0.46.7): clean bundles whose caps are the
+    /// catalog's, that call only catalog verbs (plus the runtime's own
+    /// helpers), guard every Workbench verb with k2.can, and put text in
+    /// with textContent only (agent and git text is data, never markup).
+    #[test]
+    fn the_workbench_widgets_bundle_and_call_only_catalog_verbs() {
+        let c = crate::contract::catalog();
+        for (id, folder, script) in [(WORK_INBOX_WIDGET, "work-inbox-1", "inbox.js"), (REVIEW_WIDGET, "review-1", "review.js")] {
+            let w = builtin_widget(&parse_widget_ref(id).expect("parses")).unwrap_or_else(|| panic!("{id} ships"));
+            let files: std::collections::BTreeMap<String, Vec<u8>> =
+                w.files.iter().map(|(n, b)| (n.to_string(), b.as_bytes().to_vec())).collect();
+            let checked = crate::zen::widgets::check_files("k2", folder, &files);
+            assert!(checked.errors.is_empty(), "{id}: {:?}", checked.errors);
+            assert!(checked.bundle.is_some(), "{id} bundles");
+            let m = checked.manifest.as_ref().expect("a manifest");
+            for cap in &m.caps {
+                assert!(crate::zen::USER_WIDGET_CAPS.contains(&cap.as_str()), "{id}: {cap}");
+            }
+            let js = format!("{}\n{}", file(w, "work-common.js"), file(w, script));
+            for bad in ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "fetch(", "XMLHttpRequest", "WebSocket", "localStorage", "eval(", "new Function"] {
+                assert!(!js.contains(bad), "{id} has {bad}");
+            }
+            let runtime = ["can", "ready", "call", "subscribe", "store.subscribe", "connected", "config"];
+            for (i, _) in js.match_indices("k2.") {
+                let before = js[..i].chars().last().unwrap_or(' ');
+                if before.is_ascii_alphanumeric() || before == '_' {
+                    continue;
+                }
+                let call: String = js[i + 3..].chars().take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '.').collect();
+                let call = call.trim_end_matches('.');
+                if call.is_empty() || runtime.contains(&call) || call.split('.').count() < 2 && runtime.contains(&call) {
+                    continue;
+                }
+                assert!(c.verb(call).is_some() || runtime.contains(&call), "{id} calls k2.{call}, which isn't a catalog verb");
+            }
+        }
     }
 
     /// Integration (Zen v2, B1 × B3): every library a built-in widget asks

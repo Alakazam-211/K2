@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Work inbox</title>
+<link rel="stylesheet" href="work.css">
+</head>
+<body>
+<header class="bar" role="toolbar" aria-label="Work inbox">
+  <button class="btn primary" id="btnNew" type="button" title="Start an agent on a new task in its own worktree">+ New task</button>
+  <input type="search" id="filter" placeholder="Filter" autocomplete="off" aria-label="Filter tasks">
+  <button class="btn" id="btnHidden" type="button" aria-pressed="false" title="Show hidden tasks">Hidden</button>
+</header>
+<p class="banner" id="banner" role="status" hidden></p>
+<main id="list" class="list" aria-label="Tasks"></main>
+
+<div class="overlay" id="newTask" hidden>
+  <form class="dlg" id="newForm" role="dialog" aria-modal="true" aria-labelledby="newTitle">
+    <h3 id="newTitle">New task</h3>
+    <label class="field" for="ntWs">Workspace</label>
+    <select id="ntWs"></select>
+    <label class="field" for="ntName">Name <span class="hint">becomes the branch k2/&lt;name&gt;</span></label>
+    <input id="ntName" type="text" maxlength="40" autocomplete="off" placeholder="fix-login">
+    <label class="field" for="ntBrief">Brief <span class="hint">markdown: what to do</span></label>
+    <textarea id="ntBrief" rows="7" maxlength="20000"></textarea>
+    <div class="two">
+      <div>
+        <label class="field" for="ntBase">Start from</label>
+        <input id="ntBase" type="text" maxlength="200" autocomplete="off" placeholder="main">
+      </div>
+      <div>
+        <label class="field" for="ntHarness">Harness <span class="hint">optional</span></label>
+        <input id="ntHarness" type="text" maxlength="40" autocomplete="off" placeholder="claude">
+      </div>
+    </div>
+    <p class="note" id="ntNote"></p>
+    <div class="dlg-actions">
+      <button class="btn" id="ntCancel" type="button">Cancel</button>
+      <button class="btn primary" id="ntGo" type="submit">Start</button>
+    </div>
+  </form>
+</div>
+
+<script src="work-common.js"></script>
+<script src="inbox.js"></script>
+</body>
+</html>

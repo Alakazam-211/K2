@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "Work inbox",
+  "description": "The Workbench's inbox: your agents' tasks in their own worktrees, sorted by what needs you. Pin, snooze or hide a task; start a new one. Picking one shows its Thread and its review.",
+  "entry": "index.html",
+  "caps": ["agents:read", "thread:read", "activity:read", "store:read", "store:write", "git:read", "agents:start", "agents:stop"],
+  "reasons": {
+    "agents:read": "to list your agents and show the one you pick in the Thread beside the inbox",
+    "thread:read": "to see which tasks have cards waiting for you",
+    "activity:read": "to see which tasks are working right now",
+    "store:read": "to remember pins, snoozes, hidden tasks and the task you picked",
+    "store:write": "to save pins, snoozes, hidden tasks and the task you picked",
+    "git:read": "to see each task's branch and how far it is from main",
+    "agents:start": "to start a new task in its own worktree (K2 asks you first)",
+    "agents:stop": "to stop a task's current turn when you press Stop"
+  }
+}

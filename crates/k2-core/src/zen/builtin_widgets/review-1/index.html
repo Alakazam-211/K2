@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Review</title>
+<link rel="stylesheet" href="work.css">
+</head>
+<body>
+<header class="bar" aria-label="Review">
+  <span class="title" id="title">Review</span>
+  <button class="btn small" id="btnRefresh" type="button" title="Read git again">Refresh</button>
+</header>
+<p class="banner" id="banner" role="status" hidden></p>
+<div class="review" id="review">
+  <p class="empty" id="empty">Pick a task in the inbox to review it here.</p>
+  <div id="body" hidden>
+    <div class="meta" id="meta"></div>
+    <div class="tabs" role="tablist">
+      <button class="btn small" id="tabBranch" type="button" role="tab" aria-selected="true">Branch</button>
+      <button class="btn small" id="tabLocal" type="button" role="tab" aria-selected="false">Uncommitted</button>
+      <button class="btn small" id="btnView" type="button" title="Unified or side by side">Side by side</button>
+    </div>
+    <div class="files" id="files" aria-label="Changed files"></div>
+    <div class="diff" id="diff" aria-label="Diff"></div>
+    <div class="panel notes" id="notesPanel" hidden>
+      <h5>Your notes <span class="hint">(click a line number to add one)</span></h5>
+      <div id="notes"></div>
+    </div>
+    <div class="panel" id="commitsPanel" hidden>
+      <h5 id="commitsTitle">Commits</h5>
+      <ul id="commits"></ul>
+    </div>
+    <div class="panel" id="testsPanel" hidden>
+      <h5>Tests on compute</h5>
+      <ul id="tests"></ul>
+    </div>
+  </div>
+</div>
+<div class="actions" id="actions" hidden>
+  <button class="btn primary" id="btnLand" type="button">Land</button>
+  <button class="btn" id="btnAsk" type="button">Ask for changes</button>
+  <button class="btn" id="btnTerm" type="button">Terminal</button>
+  <button class="btn" id="btnRetire" type="button">Retire</button>
+  <button class="btn danger" id="btnDiscard" type="button">Discard</button>
+</div>
+
+<div class="overlay" id="noteDlg" hidden>
+  <form class="dlg" id="noteForm" role="dialog" aria-modal="true" aria-labelledby="noteTitle">
+    <h3 id="noteTitle">Note</h3>
+    <textarea id="noteBody" rows="4" maxlength="4000"></textarea>
+    <div class="dlg-actions">
+      <button class="btn" id="noteCancel" type="button">Cancel</button>
+      <button class="btn primary" type="submit">Add note</button>
+    </div>
+  </form>
+</div>
+
+<script src="work-common.js"></script>
+<script src="review.js"></script>
+</body>
+</html>

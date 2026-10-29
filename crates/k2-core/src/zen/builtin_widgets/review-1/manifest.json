@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "Review",
+  "description": "The Workbench's review: the task the inbox picked, its changed files and diffs, its commits and test runs on compute, and Land, Ask for changes or Discard (K2 asks you first).",
+  "entry": "index.html",
+  "caps": ["agents:read", "git:read", "git:notes", "compute:read", "agents:start", "store:read", "store:write"],
+  "reads": ["k2:work-inbox"],
+  "reasons": {
+    "agents:read": "to open the task's terminal in K2 when you press Terminal",
+    "git:read": "to show the task's branch, changed files, diffs and commits",
+    "git:notes": "to send your line notes to the task's agent when you press Ask for changes",
+    "compute:read": "to show the test runs the agent ran on compute for this branch",
+    "agents:start": "to land, retire or discard the task when you press those buttons (K2 asks you first)",
+    "store:read": "to follow the task the inbox picked and keep your unsent notes",
+    "store:write": "to keep your unsent notes"
+  }
+}

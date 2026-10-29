@@ -1,0 +1,113 @@
+# Garden catalog entry `k2.workbench@1` (0.46.7, Rosson 2026-10-29: "Green
+# light to build this as a garden experimentally first … just build the
+# garden and I'll try it out"; research-t3code-ui-as-garden-v1 + vs-live).
+#
+# The Workbench: T3 Code's inbox of coding agents, re-planned with K2's
+# Threads instead of a headless agent. Three columns:
+#   Work inbox  k2:work-inbox@1: every sidecar on this computer (a worktree
+#               agent works in .worktrees/k2-<name> on branch k2/<name>),
+#               sorted Needs you / Working / Ready to land / Idle, with
+#               pin, snooze-until and hide kept in this Garden's data
+#               (snoozed tasks come back at their time), + New task, and
+#               your other computers' agents, read only
+#   Thread      K2's own Conversation widget, following the inbox's pick:
+#               the task's own Thread (a sidecar's ws/name address), its
+#               cards, files and activity
+#   Review      k2:review@1: the picked task's changed files and diffs (the
+#               k2-diff kit when it is loaded), commits, compute runs, line
+#               notes → Ask for changes, and Land / Retire / Discard (each
+#               asks the person on K2's own sheet first)
+# K2's own controls sit in one ⋯ menu, as on the Kanban.
+#
+# Released files never change (a better page is workbench-2.toml). The
+# [catalog] table is metadata, not part of the page.
+id = "k2.workbench@1"
+schema = 1
+
+[catalog]
+short = "workbench"
+label = "Workbench"
+description = "Your agents' tasks, each in its own git worktree: an inbox sorted by what needs you, the task's Thread, and a review with diffs, tests on compute and Land."
+order = 30
+# Offered in New Garden, never seeded (experimental, 0.46.7).
+new_users = false
+theme = "glass"
+
+[layout]
+kind = "columns"
+canvas = "full"
+
+[[layout.column]]
+widget = "inbox"
+size = 26
+min-width = 260
+
+[[layout.column]]
+widget = "thread"
+size = 44
+min-width = 340
+
+[[layout.column]]
+widget = "review"
+size = 30
+min-width = 300
+collapsible = true
+label = "Review"
+
+[[widget]]
+id = "inbox"
+kind = "custom"
+widget = "k2:work-inbox@1"
+column = 0
+
+# K2's Thread, following the inbox's pick.
+[[widget]]
+id = "thread"
+kind = "conversation"
+column = 1
+[widget.props]
+agents = "inbox"
+activity-drawer = true
+mute = true
+
+[[widget]]
+id = "review"
+kind = "custom"
+widget = "k2:review@1"
+column = 2
+
+[[widget]]
+id = "more"
+kind = "menu"
+slot = "top"
+align = "start"
+[widget.props]
+icon = "dots"
+label = "Workbench"
+
+[[widget]]
+kind = "garden-switcher"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "theme-picker"
+slot = "menu"
+menu = "more"
+
+[[widget]]
+kind = "zen-toggle"
+slot = "menu"
+menu = "more"
+
+[[control]]
+kind = "garden-switcher"
+placement = "menu:more"
+
+[[control]]
+kind = "drag-region"
+placement = "top"
+
+[[control]]
+kind = "zen-toggle"
+placement = "menu:more"

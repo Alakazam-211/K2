@@ -279,6 +279,13 @@ pub fn handle_users_get() -> CliResponse {
                 Ok(m) => m,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            // A box login (a `host` grant, 0.46.6): only the owner resets,
+            // sets or unlocks it ([`owner_or_admin_for`]), so Settings can
+            // say so to an Admin before they try.
+            let grants = match skin::list_grants() {
+                Ok(g) => g,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             let users: Vec<serde_json::Value> = users
                 .iter()
                 .map(|u| {
@@ -305,6 +312,7 @@ pub fn handle_users_get() -> CliResponse {
                         None => serde_json::Value::Null,
                     };
                     v["passwordMustChange"] = serde_json::json!(must_change.contains(&u.id));
+                    v["boxLogin"] = serde_json::json!(has_box_login(&u.id, &grants));
                     v["storedEmailRefused"] = match email_refused.get(&u.id) {
                         Some(why) => serde_json::json!(why),
                         None => serde_json::Value::Null,
@@ -3962,6 +3970,32 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["cleared"], true, "{v}");
         assert!(list("lena")["lockedUntil"].is_null(), "unlock clears the lock");
+    }
+
+    /// 0.46.6: the users list says who has a box login (`boxLogin`), by
+    /// the same rule [`owner_or_admin_for`] keeps the owner's, so
+    /// Settings can tell an Admin before they try.
+    #[test]
+    fn users_list_says_who_has_a_box_login() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        skin::add_principal("bea").expect("bea");
+        skin::add_principal("cal").expect("cal");
+        // add_principal gives a box login (an unassigned host grant); cal
+        // loses hers, so she only uses Apps.
+        assert!(skin::set_host_login("cal", false).expect("host login off"), "cal had a box login to remove");
+        let r = handle_users_get();
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        let users = v["users"].as_array().expect("users");
+        let row = |who: &str| users.iter().find(|u| u["username"] == who).cloned().unwrap_or_else(|| panic!("no {who}: {v}"));
+        assert_eq!(row("bea")["boxLogin"], serde_json::json!(true), "{v}");
+        assert_eq!(row("cal")["boxLogin"], serde_json::json!(false), "{v}");
+        let grants = skin::list_grants().expect("grants");
+        for who in ["bea", "cal"] {
+            let id = row(who)["id"].as_str().expect("id").to_string();
+            assert_eq!(row(who)["boxLogin"], serde_json::json!(has_box_login(&id, &grants)), "the list and the reset rule agree on {who}");
+        }
     }
 
     /// 0.46.6: `generate: true` on a password set and on a user add — the

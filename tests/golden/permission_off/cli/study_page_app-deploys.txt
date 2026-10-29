@@ -62,6 +62,18 @@ MANIFEST (manifest.json at the folder root, schema 1)
   Unknown keys are errors. net and secrets are refused: secrets come from
   the vault. dataRevision + dataDown guard rollbacks across migrations.
 
+STATIC APPS (0.46.7: a built site, no server)
+  "host":{"mode":"static","root":"."} and K2 serves the folder itself: no
+  App code runs, so no wall and no engine are needed (macOS dev boxes too);
+  k2 app list and inspect say static, isolation none. Deploys, rollback,
+  labels and custom domains work as for any App. Keys: root, spa, notFound,
+  headers (an allow-list; no frame-ancestors), immutable (cache globs).
+  k2 app deploy <app-id> dist --manifest k2/web.manifest.json packs that
+  file as the Seed's manifest.json, so the build output deploys as it is.
+  host.checks (any mode): your own probes, run by k2 app status and after
+  each deploy; never a gate. The static keys and host.checks need K2 0.46.7.
+  A starter: k2 app init --template static|tauri; k2 study tauri.
+
 PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   Every App process gets the https origins people reach it on:
     K2_APP_ORIGIN    the primary one: the custom domain you picked with

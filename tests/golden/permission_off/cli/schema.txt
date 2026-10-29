@@ -2507,6 +2507,31 @@ exit: 0
       "flags": [{"name": "--json", "arg": null, "description": "{version, sha256, packages[]}."}]
     },
     {
+      "name": "app init",
+      "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name>] [--dry-run] [--json]",
+      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders).",
+      "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
+      "flags": [
+        {"name": "--template", "arg": "tauri|static|node-api", "description": "What to write."},
+        {"name": "--name", "arg": "name", "description": "The App name (default: the folder's name)."},
+        {"name": "--dry-run", "arg": null, "description": "Print every file and change; write nothing."},
+        {"name": "--json", "arg": null, "description": "{template, folder, name, files[{path, action, note, content?}], next[], notes[], applied?}."}
+      ]
+    },
+    {
+      "name": "app links",
+      "usage": "k2 app links <app> | k2 app links set <app> [--ios ID]… [--android PKG:SHA256[,…]]… [--path P]… [--drop P]… | off <app> | check <app> [--json]",
+      "description": "Open-in-app links for an App's own iOS and Android apps: K2 serves the AASA and assetlinks.json on the App's hosts, with or without phone pairing. A path may carry a query pattern (/messages?addr=*). A path already set is removed only with --drop (refused link_path_dropped otherwise). Apps K2 doesn't front (host.clientIp: false) are refused needs_k2_front. GET /cli/app/links?app=, POST /cli/app/links/set|off|check {app, ios, android, paths, drop}. The owner, an Admin or the App's agent with Build and run Apps; check is the owner's.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--ios", "arg": "TEAMID.bundle.id", "description": "An iOS app id (repeat)."},
+        {"name": "--android", "arg": "package:SHA256[,SHA256]", "description": "An Android package and its signing fingerprints (repeat)."},
+        {"name": "--path", "arg": "path", "description": "A path the apps open, optionally ?name=pattern (repeat; at most 20)."},
+        {"name": "--drop", "arg": "path", "description": "Remove a path that was set before, on purpose (repeat)."},
+        {"name": "--json", "arg": null, "description": "{app, appId, name, state, served, hosts[], ios[], android[], paths[{spec, path, query, since}], pairing, warnings?}."}
+      ]
+    },
+    {
       "name": "app user add",
       "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
       "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",

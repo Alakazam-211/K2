@@ -183,6 +183,37 @@ set -e
 expect_eq "placement v3 is a usage error" "$rc" "2"
 expect_has "--help: no node, K2 picks" "$(k2 compute --help)" "No node: K2 picks one of the nodes granted to you"
 expect_has "study compute: WHERE IT RUNS" "$(k2 study compute)" "WHERE IT RUNS (0.46.6)"
+
+echo "== easy mode: presets, prefixes, --now, --tag, --exclusive, prewarm (0.46.7) =="
+mkdir -p "$WS/.k2"
+printf '[defaults]\nmem = "1G"\n\n[presets.small]\nmem = "512M"\nenv = { CARGO_BUILD_JOBS = "1" }\n' > "$WS/.k2/compute.toml"
+plan_err="$(k2 compute run --plan --no-source --preset small -- true 2>&1 >/dev/null)"
+expect_has "--plan prints what the preset set" "$plan_err" "[k2 compute] from .k2/compute.toml, preset small: mem 0.5G (preset); env CARGO_BUILD_JOBS (preset)"
+expect_has "--plan prints the limits" "$plan_err" "ends after 30m with no output (--stall-timeout)"
+set +e
+k2 compute run --plan --no-source --preset nosuch -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "an unknown preset exits 2" "$rc" "2"
+expect_has "preset_not_found lists the presets" "$(cat "$SANDBOX/err")" "presets small"
+rm -f "$WS/.k2/compute.toml"
+set +e
+k2 compute run mi --no-source -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "a unique node prefix runs (mi → mini)" "$rc" "0"
+set +e
+k2 compute run --now --no-source --tag smoke:t1 -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "--now on an idle node runs" "$rc" "0"
+set +e
+k2 compute run --no-source --tag 'bad tag' -- true >/dev/null 2>&1; rc=$?
+set -e
+expect_eq "a bad --tag exits 2" "$rc" "2"
+set +e
+k2 compute run --no-source --exclusive -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "--exclusive without --why exits 2" "$rc" "2"
+pw_err="$(k2 compute prewarm --needs cmake@3 --plan 2>&1 >/dev/null)"
+expect_has "prewarm --plan names what it would install" "$pw_err" "[k2 compute] mini: would install cmake@3"
 out="$(k2 compute nodes)"
 expect_has "nodes shows unreserved CPU" "$out" "unreserved"
 expect_has "nodes shows this workspace's grant in human units" "$out" "grant 2h/job 2 parallel 10 queued"

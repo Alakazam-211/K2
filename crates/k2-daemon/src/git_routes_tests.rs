@@ -350,3 +350,74 @@ fn agent_route_refuses_a_workspace_inside_a_bigger_repo() {
     assert_eq!(r.status, "403 Forbidden", "{}", r.body);
     assert!(json(&r)["error"].as_str().expect("hint").contains("reaches outside"));
 }
+
+// ── remove-worktree only removes a worktree of that workspace ───────
+
+/// Register `d` as a K2 workspace (projects row) in this thread's DB.
+fn register(d: &Path) -> String {
+    let id = format!("p-{}", uuid::Uuid::new_v4().simple());
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, ?1, ?2)", rusqlite::params![id, s(d)])
+        .expect("project row");
+    id
+}
+
+fn code(r: &CliResponse) -> String {
+    json(r)["code"].as_str().unwrap_or_else(|| panic!("no code: {} {}", r.status, r.body)).to_string()
+}
+
+#[test]
+fn remove_worktree_route_refuses_folders_that_are_not_worktrees() {
+    let d = repo("rm-refuse");
+    register(&d);
+    let elsewhere = tmp("rm-elsewhere");
+    std::fs::write(elsewhere.join("keep.txt"), "precious\n").expect("keep");
+
+    let r = post("/cli/git/remove-worktree", serde_json::json!({ "projectPath": s(&d), "worktreePath": s(&elsewhere) }));
+    assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    assert_eq!(code(&r), "not_a_worktree_of_project");
+    assert_eq!(std::fs::read_to_string(elsewhere.join("keep.txt")).expect("intact"), "precious\n");
+
+    // The workspace's own (main) checkout is refused too.
+    let r = post("/cli/git/remove-worktree", serde_json::json!({ "projectPath": s(&d), "worktreePath": s(&d) }));
+    assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    assert_eq!(code(&r), "not_a_worktree_of_project");
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("intact"), "one\ntwo\n");
+}
+
+#[test]
+fn remove_worktree_route_refuses_a_project_that_is_not_a_workspace() {
+    let d = repo("rm-unregistered");
+    let wt = git::create_worktree(&s(&d), "feature/unregistered").expect("worktree");
+    let r = post("/cli/git/remove-worktree", serde_json::json!({ "projectPath": s(&d), "worktreePath": wt.path }));
+    assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    assert_eq!(code(&r), "not_found");
+    assert!(Path::new(&wt.path).join("a.txt").is_file(), "worktree left in place");
+}
+
+#[test]
+fn remove_worktree_route_removes_a_real_worktree_and_its_row() {
+    let d = repo("rm-real");
+    let project_id = register(&d);
+    let wt = git::create_worktree(&s(&d), "feature/real").expect("worktree");
+    let wt_path = wt.path.clone();
+    let ws_id = format!("w-{}", uuid::Uuid::new_v4().simple());
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        Workspace::create(&conn, &ws_id, &project_id, None, "worktree", Some(&wt.branch), &wt.branch, 1, Some(&wt.path))
+            .expect("workspace row");
+    }
+
+    let r = post(
+        "/cli/git/remove-worktree",
+        serde_json::json!({ "projectPath": s(&d), "worktreePath": wt_path, "workspaceId": ws_id }),
+    );
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(!Path::new(&wt_path).exists(), "worktree moved away");
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let rows = Workspace::list(&conn, &project_id).expect("list");
+    assert!(rows.iter().all(|w| w.id != ws_id), "workspace row deleted");
+}

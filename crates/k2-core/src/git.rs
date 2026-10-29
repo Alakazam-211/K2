@@ -412,14 +412,75 @@ pub fn checkout_worktree(
 
 // ── Remove Worktree ───────────────────────────────────────────────────────
 
+/// Refusal codes that [`remove_worktree`] and [`merge_branch`] put at the
+/// start of their error text (`"<code>: <hint>"`); [`refusal::code_of`]
+/// reads them back so the daemon can answer with a status and a `code`.
+pub mod refusal {
+    /// `project_path` is not inside a git repository.
+    pub const NOT_A_REPO: &str = "not_a_repo";
+    /// The folder to remove is not a linked worktree of the project's
+    /// repository (any other folder, the main worktree, the project itself).
+    pub const NOT_A_WORKTREE_OF_PROJECT: &str = "not_a_worktree_of_project";
+    /// A fast-forward would overwrite uncommitted changes on the target.
+    pub const MAIN_HAS_UNCOMMITTED_CHANGES: &str = "main_has_uncommitted_changes";
+
+    const ALL: [&str; 3] = [NOT_A_REPO, NOT_A_WORKTREE_OF_PROJECT, MAIN_HAS_UNCOMMITTED_CHANGES];
+
+    /// The refusal code an error from this module starts with, if any.
+    pub fn code_of(err: &str) -> Option<&'static str> {
+        ALL.into_iter().find(|c| err.strip_prefix(c).is_some_and(|rest| rest.starts_with(':')))
+    }
+}
+
+/// `worktree_path`, canonical, when it is a linked worktree of the
+/// repository that holds `project_path` (listed by `git worktree list`,
+/// not the main worktree, not the project folder itself). `Ok(None)` when
+/// nothing is at `worktree_path` (nothing to remove; only a prune is
+/// left). Anything else is refused: this path only ever trashes a worktree.
+fn checked_linked_worktree(project_path: &str, worktree_path: &str) -> Result<Option<std::path::PathBuf>, String> {
+    let project = dunce::canonicalize(project_path)
+        .map_err(|e| format!("{}: {project_path} is not a folder on this machine ({e})", refusal::NOT_A_REPO))?;
+    let listed = list_worktrees(&project.to_string_lossy());
+    if listed.is_empty() {
+        return Err(format!("{}: {} is not a git repository", refusal::NOT_A_REPO, project.display()));
+    }
+    // Truly missing (not even a dangling link): nothing to trash.
+    if std::fs::symlink_metadata(worktree_path).is_err() {
+        return Ok(None);
+    }
+    let not_ours = |why: &str| {
+        format!(
+            "{}: {worktree_path} {why}; only a linked worktree of {} can be removed",
+            refusal::NOT_A_WORKTREE_OF_PROJECT,
+            project.display()
+        )
+    };
+    let wt = dunce::canonicalize(worktree_path).map_err(|_| not_ours("can't be resolved"))?;
+    if wt == project {
+        return Err(not_ours("is the workspace itself"));
+    }
+    let entry = listed
+        .iter()
+        .find(|w| dunce::canonicalize(&w.path).is_ok_and(|p| p == wt))
+        .ok_or_else(|| not_ours("is not a worktree of this repository"))?;
+    if entry.is_main || entry.is_bare {
+        return Err(not_ours("is the repository's main worktree"));
+    }
+    Ok(Some(wt))
+}
+
 pub fn remove_worktree(
     project_path: &str,
     worktree_path: &str,
     force: bool,
 ) -> Result<(), String> {
-    let wt = Path::new(worktree_path);
+    // Only a linked worktree of this project's repository, by its real
+    // (canonical) path; anything else is refused before any rename/trash.
+    let checked = checked_linked_worktree(project_path, worktree_path)?;
+    let wt_buf = checked.clone().unwrap_or_else(|| std::path::PathBuf::from(worktree_path));
+    let wt = wt_buf.as_path();
 
-    if wt.exists() {
+    if checked.is_some() && wt.exists() {
         // Rename to a temp name so the UI path disappears instantly
         let temp_name = format!(
             ".k2so-delete-{}",
@@ -471,11 +532,12 @@ pub fn remove_worktree(
     let _ = crate::git_safe::git(project_path)
         .args(["worktree", "prune"])
         .output();
-    if Path::new(worktree_path).exists() {
-        crate::safe_delete::trash(worktree_path).map_err(|e| {
+    if checked.is_some() && wt.exists() {
+        crate::safe_delete::trash(wt).map_err(|e| {
             format!(
                 "worktree trash failed: {} (worktree NOT removed; the dir is intact at {})",
-                e, worktree_path
+                e,
+                wt.display()
             )
         })?;
     }
@@ -1249,3 +1311,7 @@ pub fn gather_git_context(project_path: &str) -> serde_json::Value {
         "recentLog": run(&["log", "--oneline", "-5"]),
     })
 }
+
+#[cfg(test)]
+#[path = "git_worktree_guard_tests.rs"]
+mod worktree_guard_tests;

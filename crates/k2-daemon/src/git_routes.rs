@@ -348,14 +348,39 @@ struct RemoveWorktreeBody {
     force: Option<bool>,
 }
 
+/// A `k2_core::git` error → `{"error", "code"}` when it carries a
+/// [`git::refusal`] code (409 for uncommitted changes, else 400); a plain
+/// 400 otherwise, exactly as before.
+fn git_error(e: String) -> CliResponse {
+    let Some(code) = git::refusal::code_of(&e) else {
+        return CliResponse::bad_request(e);
+    };
+    let status = if code == git::refusal::MAIN_HAS_UNCOMMITTED_CHANGES { "409 Conflict" } else { "400 Bad Request" };
+    CliResponse {
+        status,
+        content_type: "application/json",
+        body: serde_json::json!({ "error": e, "code": code }).to_string(),
+    }
+}
+
+/// `POST /cli/git/remove-worktree`: `projectPath` must be a registered K2
+/// workspace root (canonical compare, like the clone pull-pack), and core
+/// only trashes a linked worktree of that workspace's repository.
 pub fn handle_git_remove_worktree(body: &[u8]) -> CliResponse {
     let b: RemoveWorktreeBody = match parse_body(body) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(e) = git::remove_worktree(&b.project_path, &b.worktree_path, b.force.unwrap_or(false))
-    {
-        return CliResponse::bad_request(e);
+    let registered = dunce::canonicalize(b.project_path.trim())
+        .is_ok_and(|p| crate::clone_routes::is_registered_workspace(&p));
+    if !registered {
+        return changes_error(git_changes::ChangesError::new(
+            git_changes::codes::NOT_FOUND,
+            format!("{} is not a K2 workspace on this server", b.project_path),
+        ));
+    }
+    if let Err(e) = git::remove_worktree(&b.project_path, &b.worktree_path, b.force.unwrap_or(false)) {
+        return git_error(e);
     }
     if let Some(ws_id) = b.workspace_id {
         let db = db::shared();

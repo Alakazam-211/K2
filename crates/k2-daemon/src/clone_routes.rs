@@ -932,7 +932,7 @@ pub fn handle_clone_pack(
 /// canonicalized too (best-effort; a stale row whose dir vanished simply
 /// never matches) so symlinked spellings of the same workspace compare
 /// equal.
-fn is_registered_workspace(canonical: &std::path::Path) -> bool {
+pub(crate) fn is_registered_workspace(canonical: &std::path::Path) -> bool {
     let projects = match pops::projects_list() {
         Ok(p) => p,
         Err(_) => return false,

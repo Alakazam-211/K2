@@ -134,16 +134,26 @@ fn secret_file(resolved: &SkinWorkspace, real: &Path) -> bool {
 }
 
 /// Round 2 A3: a hard link (`nlink > 1`) may be another path's file under
-/// a harmless name; the download door never lists or serves one.
-fn hard_linked(meta: &std::fs::Metadata) -> bool {
+/// a harmless name; the download door never lists or serves one. Windows'
+/// `Metadata` has no link count, so it is read from an open handle; a file
+/// that can't be opened counts as linked (fail closed).
+fn hard_linked(meta: &std::fs::Metadata, path: &Path) -> bool {
     #[cfg(unix)]
     {
+        let _ = path;
         use std::os::unix::fs::MetadataExt;
         meta.nlink() > 1
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
         let _ = meta;
+        std::fs::File::open(path)
+            .and_then(|f| k2_core::private_fs::link_count(&f))
+            .map_or(true, |n| n > 1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (meta, path);
         false
     }
 }
@@ -208,7 +218,7 @@ fn walk(
         if items.len() >= MAX_ITEMS {
             return true;
         }
-        if !seen_files.insert(real.to_path_buf()) || hard_linked(&meta) {
+        if !seen_files.insert(real.to_path_buf()) || hard_linked(&meta, real) {
             return false;
         }
         // A file past the scan limit isn't read (it costs nothing).
@@ -320,7 +330,7 @@ pub fn handle_get(params: &HashMap<String, String>, pass: &SkinPass) -> CliRespo
         return deny("landed");
     }
     match std::fs::metadata(&real) {
-        Ok(m) if m.is_file() && !hard_linked(&m) => {}
+        Ok(m) if m.is_file() && !hard_linked(&m, &real) => {}
         Ok(m) if m.is_file() => return deny("hard_link"),
         _ => return deny("not_a_file"),
     }

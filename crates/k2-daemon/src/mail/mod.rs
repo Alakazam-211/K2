@@ -187,7 +187,8 @@ pub mod sieve_lockdown;
 // mint + boot/upgrade); a password rotation revokes the mailbox's keys.
 pub mod api_key_lockdown;
 // Live probe against a real Stalwart (ignored; root on the probe box).
-#[cfg(test)]
+// Unix only: it sets file modes, and hosted mail is a Linux server's.
+#[cfg(all(test, unix))]
 mod sieve_lockdown_live;
 pub mod spam;
 pub mod helper;

@@ -20351,7 +20351,7 @@ _sessions_usage() {
     cat <<'EOF'
 k2 sessions — who is working in this workspace, and past conversations to reopen
 
-  k2 sessions [--all] [--json]                 live sessions here (you, the main agent, sidecars, chats)
+  k2 sessions [--all] [--json]                 live sessions here (* marks you), with their state
   k2 sessions --past [--search <text>] [--days N] [--cli <cli>] [--limit N] [--json]
                                                past conversations in this workspace, newest first
   k2 sessions show <id|address> [--tail N] [--json]
@@ -20359,11 +20359,12 @@ k2 sessions — who is working in this workspace, and past conversations to reop
   k2 sessions open <id> [--name <name>] [--brief <file>|-] [--brief-text "…"] [--force] [--json]
                                                reopen a past conversation as a sidecar, same history
   k2 sessions new <name> [--cli <cli>] [--brief <file>|-] [--brief-text "…"] [--json]
-                                               start a new sidecar (same as k2 sidecar new)
-  k2 sessions stop <name|address> [--force]    stop a sidecar; its history stays (open or msg wakes it)
+                                               start a helper (a sidecar); prints its address <ws>/<name>
+  k2 sessions stop <name|address> [--force]    stop is sleep: its history stays (open or msg wakes it)
 
 Talk to any of them: k2 msg <address> "…"      (a sleeping one wakes)
-                     k2 msg --session <id> "…" (reopens a past one, then delivers)
+                     k2 msg --session <id> "…" (delivers to whoever holds it; a past one is reopened first)
+Replies arrive in your terminal as [from <address>] …; answer with k2 msg <address>.
 One conversation never runs twice: opening a live one prints its address.
 <id> is the short id from --past (6+ characters), the full id, or an address.
 Agents see their own workspace only. Opening, starting and stopping follow
@@ -46603,12 +46604,15 @@ WHO IS HERE
   k2 connections         shows the same list first ("This workspace")
   Roles: main (the pinned chat, address <ws>), sidecar (opened by k2 sessions
   new/open or k2 sidecar), chat (a tab a person opened), heartbeat (a
-  scheduled run). States: working, waiting (needs a person), idle, asleep.
-  Every address works with k2 msg: <ws> for main, <ws>/<name> or <ws>/<n>.
+  scheduled run). * marks you. States: working and waiting (needs a person)
+  are busy; idle is free; asleep wakes when messaged.
+  Addresses for k2 msg: <ws> is main (this workspace's name), <ws>/<name> a
+  named one, <ws>/<n> (a number) an unnamed one.
 
 TALK TO ONE
   k2 msg <address> "…"          live or asleep (it wakes); never yourself
-  Same workspace is always allowed. Replies come back as [from <address>].
+  Same workspace is always allowed. Replies arrive in your terminal as
+  [from <address>] …; answer with k2 msg <address>.
 
 PAST CONVERSATIONS (this workspace's folder and its .worktrees/ only)
   k2 sessions --past [--search "<words>"] [--days N] [--cli <cli>]
@@ -46620,7 +46624,8 @@ PAST CONVERSATIONS (this workspace's folder and its .worktrees/ only)
   (worktree chats are not found) and no message text (show lists facts only).
 
 REOPEN (same history)
-  k2 msg --session <id> "…"      reopens a past one; your message is its first turn
+  k2 msg --session <id> "…"      held: delivered to its holder; past: reopened,
+                                 and your message is its first turn
   k2 sessions open <id> [--name <name>]   reopen without a message; prints the address
   One conversation never runs twice: if something holds it, you get its address.
   Refused, exit 1: conversation_recently_active (written in the last 120 s,
@@ -46628,9 +46633,10 @@ REOPEN (same history)
   live), name_differs, folder_gone/worktree_gone (410), folder_trust_pending.
 
 START AND STOP HELPERS
-  k2 sessions new <name> --brief <file> [--cli <cli>]   default: your own CLI
+  k2 sessions new <name> --brief <file> [--cli <cli>]   prints <ws>/<name>; default: your CLI
   k2 sessions stop <name>        stop is sleep; open or msg brings it back
-  In the brief, say "when done, k2 msg <ws> with a summary".
+  In the brief, say "when done, k2 msg <ws> with a summary". A helper works in
+  your checkout: for a separate branch, tell it to make its own git worktree.
 
 WHO MAY
   Reading (list, past, show): any session, its own workspace only. A

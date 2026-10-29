@@ -299,7 +299,8 @@ fn the_walls_match_the_refusals() {
     assert_eq!(code("compute.use"), ["compute_off"]);
     assert_eq!(code("compute.operate"), ["operate_off"]);
     assert_eq!(code("compute.manage"), ["owner_only"]);
-    assert_eq!(code("agents.manage"), ["gated"]);
+    // `/cli/sidecar/` and `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-X4).
+    assert_eq!(code("agents.manage"), ["gated", "gated"]);
     assert_eq!(code("projects.manage"), ["agent_permission_off"]);
     assert_eq!(code("apps.build"), ["apps_manage_off"]);
     assert!(code("apps.manage-full").is_empty() && code("apps.core").is_empty());

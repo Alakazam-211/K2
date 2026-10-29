@@ -476,7 +476,7 @@ Reopen without a message: k2 sessions open <id> [--name <name>]  — prints its 
 Start a helper:           k2 sessions new <name> --brief <file>   ; stop: k2 sessions stop <name>
 One conversation never runs twice; opening a live one prints its address.
 ```
-Only the main session may open, start or stop sessions, and only when "Allow hiring and managing agents" is on. Put the handback in the brief: "when done, `k2 msg <primary>` with a summary". No secrets in a brief. `k2 study sessions`.
+Only the main session may open, start or stop sessions, and only when "Allow hiring and managing agents" is on. A helper shares your checkout: for a separate branch, say in the brief to work in its own git worktree. Put the handback in the brief: "when done, `k2 msg <ws>` with a summary" (`<ws>` is the main session's address, this workspace's name). No secrets in a brief. `k2 study sessions`.
 
 ## Overlay thread (side channel with the human)
 Not PTY inject — that is `k2 msg`. Write and read the user-agent overlay
@@ -727,7 +727,7 @@ Topics: what, source, map, identity, send, human, people, auth, errors, context,
 db, mail, connect-boundary, apps, app-deploys, app-move, app-api, live,
 app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
 app-runtime, app-handover, app-push, app-pairing, app-profile, app-chat, skins,
-feedback-loop, ticket-brief, zen, sidecars, llm-tokens, llm-accounts,
+feedback-loop, ticket-brief, zen, sidecars, sessions, llm-tokens, llm-accounts,
 publish-framing, compute, compute-shared, vault,
 notifications, data-sources, projects, hooks, agent-hire, garden-data,
 garden-access, garden-changes, changes, sim, design, db-upgrade, jobs, folder-trust,

@@ -21660,8 +21660,10 @@ Agents:
                                 --repo folder, else the workspace folder; .k2/ isn't
                                 committed, so it stays on this machine). [defaults]
                                 apply to every run, [presets.NAME] on top, and a
-                                flag beats both; --needs and --env add to the
-                                file's per tool and per name. Keys: os arch mem
+                                flag beats both. --needs and --env merge: a flag
+                                replaces the file's entry for the same tool or name
+                                (--needs rust@stable over rust@1.99.1) and the
+                                file's others stay. Keys: os arch mem
                                 cpus needs env timeout stall_timeout tier cache.
                                 --plan shows what came from where
                  [--now]        start at once or fail (exit 3 not_now, naming the
@@ -21773,9 +21775,10 @@ Agents:
                  [--plan] [--wait] [--json]
                  install the tools ahead of time: one idle-time (Batch) job on
                  each node granted to you that matches (--os/--arch/--node, or
-                 the preset's os/arch) and lacks one of them; a node that has
-                 them all is only reported. The jobs are detached; --wait
-                 waits for them to end
+                 the preset's os/arch; none: every granted node) and lacks one
+                 of them; a node that has them all is only reported. The jobs
+                 are detached and wait for an idle node; --wait waits for them
+                 (exit as k2 compute wait)
   k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--limit N] [--workspace WS] [--json]
                  From a git worktree inside the workspace (.claude/worktrees/x) the
                  workspace is found for you, and run takes HEAD and --dirty from

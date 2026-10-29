@@ -164,7 +164,7 @@ pub(crate) fn resolve_screen_lines(
                 }
             }
             return Err(CliResponse::bad_request(format!(
-                "no live session for sidecar '{ws}' — it may be asleep (check `k2 sessions live`)"
+                "no live session for sidecar '{ws}' — it may be asleep (see `k2 sessions --all`; `k2 msg <address>` wakes it)"
             )));
         }
         if let Some(crate::workspace_msg::MsgTarget::Session { session_id }) =
@@ -201,7 +201,7 @@ pub(crate) fn resolve_screen_lines(
             Some(session) => Ok(v2_grid_lines(&session, requested_lines)),
             None => Err(CliResponse::bad_request(format!(
                 "no live session for workspace '{ws}'{} — it may be asleep \
-                 (check with `k2 sessions live {ws}`)",
+                 (see who is there with `k2 sessions`)",
                 agent
                     .map(|a| format!(" agent '{a}'"))
                     .unwrap_or_default(),

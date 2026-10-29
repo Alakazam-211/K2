@@ -1003,9 +1003,9 @@ fn deliver_live_inner(
                 ));
             } else if workspace_token.contains('/') && !k2_core::paths::is_path_token(workspace_token) {
                 resp.hint = Some(match explain_unresolved_sidecar(workspace_token) {
-                    Some(why) => format!("{why}. Use `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`)."),
+                    Some(why) => format!("{why}. Use `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions` lists the addresses)."),
                     None => format!(
-                        "Unknown workspace/handle '{workspace_token}'. Use `k2 msg <workspace>` for the primary or `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions live`). Hyphenated names like `sales-reviewer` are workspaces, not sidecars."
+                        "Unknown workspace/handle '{workspace_token}'. Use `k2 msg <workspace>` for the primary or `k2 msg <workspace>/<handle>` for a sidecar (`k2 sessions` lists the addresses). Hyphenated names like `sales-reviewer` are workspaces, not sidecars."
                     ),
                 });
             } else if let Some(s) = suggestion {

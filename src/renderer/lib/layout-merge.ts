@@ -109,6 +109,7 @@ function canonicalTab(tab: SerializedTab): unknown {
   if (t.isSystemAgent === false) delete t.isSystemAgent
   if (t.isPinnedFile === false) delete t.isPinnedFile
   if (t.isPinnedDesign === false) delete t.isPinnedDesign
+  if (t.isPinnedMobile === false) delete t.isPinnedMobile
   return t
 }
 
@@ -137,9 +138,11 @@ export function serializedPaneGroupSignature(tab: SerializedTab): string {
 }
 
 /** `chat` / `inbox` for a pinned system agent tab, `pinned-design` for the
- *  pinned Design tab (one per room, D-A3), else null. */
+ *  pinned Design tab (one per room, D-A3), `pinned-mobile` for the pinned
+ *  Mobile tab (one per room), else null. */
 function systemSection(tab: SerializedTab): string | null {
   if (tab.isPinnedDesign === true && !tab.isSystemAgent) return 'pinned-design'
+  if (tab.isPinnedMobile === true && !tab.isSystemAgent) return 'pinned-mobile'
   if (!tab.isSystemAgent) return null
   for (const pg of Object.values(tab.paneGroups ?? {})) {
     for (const item of pg?.items ?? []) {

@@ -1,11 +1,16 @@
 // Pinned tabs (Rosson 2026-10-16): any tab can be pinned from the tab
-// itself. A column's strip is always [system][design][pinned][regular]:
+// itself. A column's strip is always
+// [system][design][mobile][pinned][regular]:
 //
 //   - system  — the workspace's Chat / Inbox tabs (`isSystemAgent`);
 //   - design  — the workspace's pinned Design tab (`isPinnedDesign`,
 //               prd-browser-design-mode-v1 DD3 / D-A3). Fixed like the
 //               system tabs (no drag, no user unpin) but NOT an agent tab;
-//               the workspace's "Design mode" setting adds or removes it;
+//               the workspace's "Show the Design tab" setting adds or
+//               removes it;
+//   - mobile  — the workspace's pinned Mobile tab (`isPinnedMobile`), fixed
+//               the same way; "Show the Mobile tab" adds or removes it
+//               (Rosson 2026-10-29);
 //   - pinned  — tabs the user pinned, in pin order;
 //   - regular — everything else.
 //
@@ -20,6 +25,7 @@
 export interface PinnableTab {
   isSystemAgent?: boolean
   isPinnedDesign?: boolean
+  isPinnedMobile?: boolean
   isPinnedFile?: boolean
 }
 
@@ -28,24 +34,37 @@ export function isPinnedDesignTab(tab: PinnableTab | null | undefined): boolean 
   return !!tab && tab.isPinnedDesign === true && tab.isSystemAgent !== true
 }
 
-/** System and pinned-Design tabs sit in fixed places: no drag, no user pin. */
-export function isFixedTab(tab: PinnableTab | null | undefined): boolean {
-  return !!tab && (tab.isSystemAgent === true || isPinnedDesignTab(tab))
+/** The workspace's pinned Mobile tab (never a system or Design tab). */
+export function isPinnedMobileTab(tab: PinnableTab | null | undefined): boolean {
+  return !!tab && tab.isPinnedMobile === true && tab.isSystemAgent !== true && tab.isPinnedDesign !== true
 }
 
-/** True when the user pinned this tab (system and Design tabs are fixed, not pinned). */
+/** The workspace's pinned Design or Mobile tab: a fixed tab a person can
+ *  remove from the strip (its workspace setting turns off). */
+export function isPinnedFeatureTab(tab: PinnableTab | null | undefined): boolean {
+  return isPinnedDesignTab(tab) || isPinnedMobileTab(tab)
+}
+
+/** System, pinned-Design and pinned-Mobile tabs sit in fixed places: no
+ *  drag, no user pin. */
+export function isFixedTab(tab: PinnableTab | null | undefined): boolean {
+  return !!tab && (tab.isSystemAgent === true || isPinnedFeatureTab(tab))
+}
+
+/** True when the user pinned this tab (system, Design and Mobile tabs are fixed, not pinned). */
 export function isPinnedTab(tab: PinnableTab | null | undefined): boolean {
   return !!tab && tab.isPinnedFile === true && !isFixedTab(tab)
 }
 
-/** 0 system, 1 pinned Design, 2 user pinned, 3 regular. */
-function band(tab: PinnableTab): 0 | 1 | 2 | 3 {
+/** 0 system, 1 pinned Design, 2 pinned Mobile, 3 user pinned, 4 regular. */
+function band(tab: PinnableTab): 0 | 1 | 2 | 3 | 4 {
   if (tab.isSystemAgent === true) return 0
   if (isPinnedDesignTab(tab)) return 1
-  return isPinnedTab(tab) ? 2 : 3
+  if (isPinnedMobileTab(tab)) return 2
+  return isPinnedTab(tab) ? 3 : 4
 }
 
-/** Stable sort into [system][design][pinned][regular]. Returns the SAME
+/** Stable sort into [system][design][mobile][pinned][regular]. Returns the SAME
  *  array when it is already in that order, so a no-op never churns the store
  *  (every new `tabs` array is an autosave). */
 export function orderPinnedTabs<T extends PinnableTab>(tabs: T[]): T[] {
@@ -57,10 +76,10 @@ export function orderPinnedTabs<T extends PinnableTab>(tabs: T[]): T[] {
     }
   }
   if (ordered) return tabs
-  return [0, 1, 2, 3].flatMap((b) => tabs.filter((t) => band(t) === b))
+  return [0, 1, 2, 3, 4].flatMap((b) => tabs.filter((t) => band(t) === b))
 }
 
-/** Counts of the fixed (system + pinned Design) and user-pinned bands of an
+/** Counts of the fixed (system + pinned Design / Mobile) and user-pinned bands of an
  *  ordered strip. `system` counts every fixed tab, so it is also the index
  *  of the first user-pinned tab. */
 export function pinnedBands(tabs: PinnableTab[]): { system: number; pinned: number } {
@@ -68,8 +87,8 @@ export function pinnedBands(tabs: PinnableTab[]): { system: number; pinned: numb
   let pinned = 0
   for (const t of tabs) {
     const b = band(t)
-    if (b <= 1) system++
-    else if (b === 2) pinned++
+    if (b <= 2) system++
+    else if (b === 3) pinned++
   }
   return { system, pinned }
 }

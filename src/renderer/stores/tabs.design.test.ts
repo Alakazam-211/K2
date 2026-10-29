@@ -59,8 +59,16 @@ function strip(tabs: Tab[] = useTabsStore.getState().tabs): string[] {
   })
 }
 
+// "Show the Mobile tab" off here: these tests are about the Design tab (the
+// pinned Mobile tab has its own file, tabs.pinned-mobile.test.ts).
 function project(path: string, designMode?: boolean): ProjectPathEntry {
-  return { id: `id-${path}`, path, primaryWorkspaceId: null, ...(designMode === undefined ? {} : { designMode }) }
+  return {
+    id: `id-${path}`,
+    path,
+    primaryWorkspaceId: null,
+    mobileTab: false,
+    ...(designMode === undefined ? {} : { designMode }),
+  }
 }
 
 async function ensureSystemTabs(path: string): Promise<void> {

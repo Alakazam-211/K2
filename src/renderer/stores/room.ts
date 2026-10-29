@@ -30,6 +30,7 @@ import {
 } from '@/stores/tabs'
 import type { ProjectWithWorkspaces } from '@/stores/projects'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
+import { mobileTabIndexValue } from '@/lib/workspace-tab-settings'
 import { createHeartbeatSessionsStore, useHeartbeatSessionsStore, type HeartbeatSessionsStore } from '@/stores/heartbeat-sessions'
 import { acquireServerView, type ActiveViewStore, type PresenceViewStore } from '@/stores/server-view'
 import { PRIMARY_ACTIVE_SET, PRIMARY_PRESENCE } from '@/stores/primary-room-sources'
@@ -295,6 +296,7 @@ function pathIndex(projects: RoomProjectsStore): () => ProjectPathEntry[] {
         primaryWorkspaceId: sorted[0]?.id ?? null,
         hideApiSessions: (p.hideApiSessions ?? 0) === 1,
         designMode: isDesignModeEnabled(p),
+        mobileTab: mobileTabIndexValue(p),
       }
     })
 }

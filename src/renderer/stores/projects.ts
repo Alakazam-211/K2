@@ -36,6 +36,7 @@ import { takeHostSelect } from '@/lib/home-pending-select'
 import { primaryScope } from '@/kessel/server-scope'
 import { setAgentDisplayName } from '@/lib/workspace-agent'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
+import { mobileTabIndexValue } from '@/lib/workspace-tab-settings'
 
 // #657 — hand tabs.ts a lazy reader for `activeProjectId` so the
 // dismiss-reap path can honor "never reap the foreground workspace"
@@ -70,6 +71,7 @@ registerProjectsPathIndex(() =>
       primaryWorkspaceId: sorted[0]?.id ?? null,
       hideApiSessions: (p.hideApiSessions ?? 0) === 1,
       designMode: isDesignModeEnabled(p),
+      mobileTab: mobileTabIndexValue(p),
     }
   }),
 )
@@ -260,8 +262,11 @@ interface Project {
   // 0101 — per-workspace completion chime (0/1, default 1 / ON).
   // Missing → treat as 1. Written via workspace/set completion_sound_enabled.
   completionSoundEnabled?: number
-  // 0178 — per-workspace Design mode (0/1, default 1 / ON). Missing → ON.
+  // 0179 — "Show the Design tab" (0/1, default 1 / ON). Missing → ON.
   designModeEnabled?: number
+  // 0250 — "Show the Mobile tab": null = auto (shown where the server can
+  // run a phone), 0 = off, 1 = on. Missing → auto.
+  mobileTabEnabled?: number | null
   // 0103 — workspace address token. Empty until backfilled / minted.
   handle?: string
   // Create-only passport for `k2 db create` (`off` | `read` | `write`).

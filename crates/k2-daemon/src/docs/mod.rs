@@ -15,6 +15,8 @@
 //! | [`shares`] | cross-workspace shares on the kit's host table (MI25) |
 //! | [`routes`] | `/cli/docs/*` (K2) |
 //! | [`tier0`] | the same routes on any other file: presence, a lease, versions and restore (tier 0) |
+//! | [`export`] | `k2 doc export`: the kit's export verb (P24), jobs, placement, audit |
+//! | [`export_worker`] | the `k2-export` worker: which binary, its hello, limits, slots |
 //!
 //! **Disk sync** (kit C4): every doc is opened with `open_file`, so the file
 //! on disk stays true. The kit writes changes back (1 s quiet, 5 s at most,
@@ -32,6 +34,8 @@
 
 pub mod caller;
 pub mod claims;
+pub mod export;
+pub mod export_worker;
 pub mod host;
 pub mod routes;
 pub mod shares;
@@ -220,6 +224,9 @@ pub fn start() {
             drop(s);
             spawn_timer();
             watch::spawn_fs_changed_listener();
+            // Exports: a previous run's leftover jobs, and the worker's hello.
+            export::sweep_leftovers();
+            export_worker::check_in_background();
         }
         Err(e) => {
             let why = store_open_error(&e);
@@ -504,6 +511,7 @@ impl Runtime {
         };
         drop(store);
         self.collect_blobs();
+        export::sweep_leftovers();
         for (space, _) in spaces {
             if workspace_exists(&space) {
                 continue;

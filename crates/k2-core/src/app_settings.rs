@@ -798,6 +798,19 @@ pub struct AppSettings {
     /// boot; `K2_DOCS_MEMORY_MIB` overrides it. Shown by `GET /cli/docs/pool`.
     #[serde(default = "default_docs_memory_budget_mib")]
     pub docs_memory_budget_mib: u64,
+    /// Doc exports (`k2 doc export`, vs-live §2 step 7, §3.3): each export
+    /// worker's wall time in seconds (0 = the default, 300).
+    #[serde(default)]
+    pub docs_export_wall_secs: u64,
+    /// Each export worker's memory cap in MiB (0 = the default, 1024).
+    #[serde(default)]
+    pub docs_export_memory_mib: u64,
+    /// Largest export output in MiB (0 = the default, 512).
+    #[serde(default)]
+    pub docs_export_max_output_mib: u64,
+    /// Export workers running at once on this box (0 = the default, 2).
+    #[serde(default)]
+    pub docs_export_workers: u64,
     /// K2 Mail S2 (prd-email-server-v1 §11.1.2) — the GLOBAL default
     /// mail domain agents mint on when they don't name one. Stored in
     /// NORMALIZED form (lowercase punycode A-label; the write path
@@ -1268,6 +1281,10 @@ impl Default for AppSettings {
             mail_quota_bytes: default_mail_quota_bytes(),
             mail_quota_messages: default_mail_quota_messages(),
             docs_memory_budget_mib: default_docs_memory_budget_mib(),
+            docs_export_wall_secs: 0,
+            docs_export_memory_mib: 0,
+            docs_export_max_output_mib: 0,
+            docs_export_workers: 0,
             mail_default_domain: String::new(),
             mail_oauth_gmail_client_id: String::new(),
             mail_oauth_microsoft_client_id: String::new(),

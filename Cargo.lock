@@ -4246,6 +4246,7 @@ dependencies = [
  "instant-acme",
  "jsonwebtoken",
  "k2-core",
+ "k2-export",
  "k2-mpc-base",
  "k2-mpc-markdown",
  "k2-mpc-text",
@@ -4293,6 +4294,15 @@ dependencies = [
  "windows-sys 0.61.2",
  "x509-parser",
  "zeroize",
+]
+
+[[package]]
+name = "k2-export"
+version = "0.1.0"
+dependencies = [
+ "k2-mpc-base",
+ "libc",
+ "serde_json",
 ]
 
 [[package]]

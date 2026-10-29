@@ -973,6 +973,12 @@ pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
 /// store, `~/.k2/docs.redb`).
 pub const FEATURE_DOCS_MD: &str = "docs-md-v1";
 
+/// `k2 doc export` (prd-k2-core-exports-v1, vs-live R9): `/cli/docs/export*`
+/// and the `k2-export` worker. Listed while live docs are up AND the worker
+/// resolved and passed its hello; without it `as-is` still runs in the
+/// daemon, but a client shouldn't offer other targets.
+pub const FEATURE_DOCS_EXPORT: &str = "docs-export-v1";
+
 /// Per-agent unread and ticket counts (0.46.4, Rosson 2026-10-24):
 /// `presence/summary` `agentActivity` entries carry the caller's `unread`,
 /// `waiting`, `muted` on that agent's Threads and the agent's
@@ -1099,6 +1105,9 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_SITE_VISIBILITY);
     if crate::docs::live_ready() {
         out.push(FEATURE_DOCS_MD);
+        if crate::docs::export_worker::ready() {
+            out.push(FEATURE_DOCS_EXPORT);
+        }
     }
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);

@@ -23,6 +23,10 @@
 //! | `/cli/docs/shares` | GET | a person | host table ([`super::shares`]) | MI25 |
 //! | `/cli/docs/share`, `/cli/docs/unshare` | POST | a person (Admin floor for logins) | host table | MI25 |
 //! | `/cli/docs/lease` | POST | edit (release: read; break: owner) | tier 0 only: `acquire_lease` … `break_lease` | K-T0-2 |
+//! | `/cli/docs/export` | POST | read (+ history with `version`; edit where it lands) | `export` / `export --version`: `file_now_to` / `file_at_to`, `ExportRegistry::export` ([`super::export`]) | P24 |
+//! | `/cli/docs/export/targets` | GET | read | `ExportRegistry::targets_for` + the worker's `describe` | P24 |
+//! | `/cli/docs/export/status`, `/cli/docs/export/fetch` | GET | the job's caller | the job table | P24 |
+//! | `/cli/docs/export/cancel` | POST | the job's caller | a kill | P24 |
 //!
 //! **Any other file** (not Markdown) is a tier-0 doc on the same routes
 //! ([`super::tier0`]): presence, a lease, versions, restore, `write --base`
@@ -120,6 +124,7 @@ const ROOT: &str = k2_mpc_markdown::ROOT;
 pub const ROUTES: &[&str] = &[
     STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
+    super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
 ];
 
 /// Tier 0's lease (K-T0-2): acquire, renew, release, break.
@@ -154,6 +159,8 @@ fn is_post_route(path: &str) -> bool {
             | "/cli/docs/mv"
             | "/cli/docs/lease"
             | "/cli/docs/claim"
+            | "/cli/docs/export"
+            | "/cli/docs/export/cancel"
     ) || is_edit_route(path)
 }
 
@@ -304,6 +311,10 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     }
     let input = Input { params, body };
 
+    // Export jobs (`k2 doc export`): status, cancel, fetch name a job, not a doc.
+    if super::export::JOB_ROUTES.contains(&path) {
+        return super::export::job_route(path, caller, &input);
+    }
     if path == STATUS && input.str("path").is_none_or(|p| p.trim().is_empty()) {
         return ok(json!({ "pool": super::pool_json() }));
     }
@@ -320,12 +331,23 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     };
     let target = match target::resolve(input.str("workspace").as_deref(), &input.str("path").unwrap_or_default(), caller.default_workspace()) {
         Ok(t) => t,
-        Err(r) => return target_refusal(r),
+        Err(r) => {
+            let r = target_refusal(r);
+            if path == super::export::EXPORT {
+                super::export::audit_early_refusal(None, &caller.pid(), &input, &r);
+            }
+            return r;
+        }
     };
     let store = rt.store();
     let rights = match rights_or_refusal(caller, &target, input.str("workspace").as_deref(), store.as_deref()) {
         Ok(r) => r,
-        Err(resp) => return resp,
+        Err(resp) => {
+            if path == super::export::EXPORT {
+                super::export::audit_early_refusal(Some(&target), &caller.pid(), &input, &resp);
+            }
+            return resp;
+        }
     };
     drop(store);
     // History reads need the history right (K-PERM-9); the kit checks it
@@ -337,6 +359,11 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         );
     }
     let call = Call { caller, on_behalf: on_behalf.as_deref(), target: &target, input: &input, rights };
+    // `k2 doc export` (P24), on either tier: the kit's export verb decides
+    // which right (read; history with a version).
+    if path == super::export::EXPORT || path == super::export::TARGETS {
+        return super::export::doc_route(path, &rt, &call);
+    }
     if target.tier == target::Tier::Blob {
         return super::tier0::handle(path, &rt, &call, None);
     }
@@ -564,7 +591,7 @@ fn rights_or_refusal(
 /// reconcile a stored one with edits made while it was closed. A loaded
 /// session is returned as is (its file is kept true by the watcher and the
 /// kit's stat backup, which also checks on every join).
-fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, SessionError> {
+pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, SessionError> {
     let key = t.key();
     if let Some(s) = rt.get(&key) {
         return Ok(s);
@@ -1344,7 +1371,7 @@ pub const FENCE_PREFIX: &str = "k2 doc";
 /// K2 and session refusals keep their HTTP status, so the permission
 /// wrapper can teach them.
 /// The Markdown pack's verb registry (the kit's text verbs and the pack's).
-fn registry() -> &'static k2_mpc_base::parity::Registry {
+pub(super) fn registry() -> &'static k2_mpc_base::parity::Registry {
     static R: std::sync::OnceLock<k2_mpc_base::parity::Registry> = std::sync::OnceLock::new();
     R.get_or_init(|| k2_mpc_base::parity::Registry::for_pack(&k2_mpc_markdown::PACK).expect("the Markdown pack's verb registry"))
 }

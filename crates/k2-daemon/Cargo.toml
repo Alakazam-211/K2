@@ -208,6 +208,11 @@ parking_lot = "0.12"
 # already linked through k2-core — no new crate).
 k2-ptyd = { path = "../k2-ptyd" }
 
+# Exports (prd-k2-core-exports-v1, vs-live §3): the worker's wire and the
+# host-side runner (spawn, limits, watchdog). The worker binary itself never
+# links k2-core; the daemon embeds it like k2-ptyd (build.rs).
+k2-export = { path = "../k2-export" }
+
 # base64 — Phase 2 Unit 6 `/cli/fs/read-binary` encodes file bytes
 # into the JSON response so the existing `/cli/*` dispatcher (JSON
 # only) can carry them. ~33% wire overhead, but stays within the

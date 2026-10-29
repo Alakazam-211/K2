@@ -283,7 +283,7 @@ fn workspace_by_id(id: &str) -> Result<(String, String), Refusal> {
 
 /// The registered workspace whose root holds the canonical `abs` (longest
 /// root wins: a workspace nested inside another owns its own files).
-fn workspace_holding(abs: &Path) -> Result<(String, PathBuf), Refusal> {
+pub(super) fn workspace_holding(abs: &Path) -> Result<(String, PathBuf), Refusal> {
     let projects = {
         let db = k2_core::db::shared();
         let conn = db.lock();

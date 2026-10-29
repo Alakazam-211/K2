@@ -181,7 +181,7 @@ pub fn with_fallback(mut r: CliResponse, f: &Fallback) -> CliResponse {
 }
 
 /// Load the blob doc synced with its file (`open_blob_file`).
-fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<BlobSession>, CliResponse> {
+pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<BlobSession>, CliResponse> {
     let key = t.key();
     if let Some(s) = rt.get_blob(&key) {
         return Ok(s);

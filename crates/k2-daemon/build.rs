@@ -26,6 +26,7 @@ fn main() {
     let feature_on = std::env::var("CARGO_FEATURE_SANDBOX_MICROVM").is_ok();
 
     embed_ptyd();
+    embed_export();
 
     // Link libkrun ONLY for linux + sandbox-microvm. Anywhere else: do nothing.
     if target_os != "linux" || !feature_on {
@@ -71,4 +72,35 @@ fn embed_ptyd() {
         }
     };
     std::fs::write(&out, code).expect("write ptyd_embed.rs");
+}
+
+/// Exports (vs-live §3.1): embed the release-built `k2-export` worker (path
+/// in `K2_EXPORT_EMBED`) and its sha256, exactly as `embed_ptyd` does, so
+/// the standalone daemon downloads (Linux, `k2-daemon-macos-aarch64`) carry
+/// it with no new asset. `K2_REQUIRE_EXPORT_EMBED=1` (release builds) makes
+/// a missing or unreadable binary a build failure.
+fn embed_export() {
+    use sha2::{Digest, Sha256};
+    println!("cargo:rerun-if-env-changed=K2_EXPORT_EMBED");
+    println!("cargo:rerun-if-env-changed=K2_REQUIRE_EXPORT_EMBED");
+    let out = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR")).join("export_embed.rs");
+    let required = std::env::var("K2_REQUIRE_EXPORT_EMBED").map(|v| v == "1").unwrap_or(false);
+    let code = match std::env::var("K2_EXPORT_EMBED").ok().filter(|p| !p.is_empty()) {
+        Some(path) => {
+            println!("cargo:rerun-if-changed={path}");
+            let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("K2_EXPORT_EMBED={path}: {e}"));
+            assert!(bytes.len() > 4096, "K2_EXPORT_EMBED={path} is too small to be k2-export");
+            assert!(
+                !bytes.windows(30).any(|w| w == b"K2_EXPORT_TEST_HOSTILE_ENABLED"),
+                "K2_EXPORT_EMBED={path} is a test-hostile build; never embed it"
+            );
+            let sha = Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>();
+            format!("pub static EXPORT_EMBED: Option<(&[u8], &str)> = Some((include_bytes!({path:?}), {sha:?}));\n")
+        }
+        None => {
+            assert!(!required, "K2_REQUIRE_EXPORT_EMBED=1 but K2_EXPORT_EMBED is not set");
+            "pub static EXPORT_EMBED: Option<(&[u8], &str)> = None;\n".to_string()
+        }
+    };
+    std::fs::write(&out, code).expect("write export_embed.rs");
 }

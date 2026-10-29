@@ -1,0 +1,51 @@
+{
+ "job": "41f256f3",
+ "collected": "2026-10-28",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "41f256f3",
+   "run": "walks_at_the_literal_G1_bound",
+   "tool": "enumerator",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null,
+   "exit": 0,
+   "wall_s": 6473,
+   "mode": "walk",
+   "source": "log",
+   "status": "PARTIAL"
+  },
+  {
+   "job": "41f256f3",
+   "run": "walks_at_G1,_mutant_i-no-taint_(must_fail)",
+   "tool": "enumerator",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null,
+   "exit": 1,
+   "wall_s": 40,
+   "mode": "walk",
+   "source": "log",
+   "status": "VIOLATION",
+   "violation": "[U22a@7,U9@3,own_only@3]"
+  },
+  {
+   "job": "41f256f3",
+   "run": "walks_at_G1,_mutant_iii-partial-hides-taint_(must_fail)",
+   "tool": "enumerator",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null,
+   "exit": 1,
+   "wall_s": 45,
+   "mode": "walk",
+   "source": "log",
+   "status": "VIOLATION",
+   "violation": "[U15@3]"
+  }
+ ]
+}

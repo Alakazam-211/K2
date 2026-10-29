@@ -1,0 +1,71 @@
+{
+ "job": "a9580183",
+ "collected": "2026-10-28",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "a9580183",
+   "run": "before_cell_set_10000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 10000,
+   "median_us": 13800,
+   "ninety_ninth_us": 15300,
+   "max_us": 15500,
+   "peak_extra_heap_kib": 6144,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a9580183",
+   "run": "before_cell_set_25000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 25000,
+   "median_us": 37800,
+   "ninety_ninth_us": 41600,
+   "max_us": 41800,
+   "peak_extra_heap_kib": 14643,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a9580183",
+   "run": "before_cell_set_50000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 50000,
+   "median_us": 80400,
+   "ninety_ninth_us": 86500,
+   "max_us": 90800,
+   "peak_extra_heap_kib": 29286,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a9580183",
+   "run": "before_cell_set_100000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 100000,
+   "median_us": 172300,
+   "ninety_ninth_us": 185100,
+   "max_us": 189600,
+   "peak_extra_heap_kib": 58573,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

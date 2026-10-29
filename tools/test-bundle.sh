@@ -44,6 +44,14 @@ EXPORT="$OUT/export"
 rm -rf "$EXPORT" && mkdir -p "$EXPORT"
 git -C "$ROOT" archive --format=tar "$REV" -- "$@" | tar -xf - -C "$EXPORT"
 cp "$CMDS" "$EXPORT/cmds.sh"
+# vendor/yrs travels without src/ (and its tests, benches, README): the job rebuilds src/ from
+# the upstream crate on crates.io and vendor/yrs/K2.patch, checked against VENDORED's
+# src-sha256 (v0.9.3; with it the kit is over a job's limit; docs/YRS-FORK.md)
+YRS=0
+if [ -d "$EXPORT/vendor/yrs/src" ]; then
+  YRS=1
+  rm -rf "$EXPORT/vendor/yrs/src" "$EXPORT/vendor/yrs/tests" "$EXPORT/vendor/yrs/benches" "$EXPORT/vendor/yrs/README.md"
+fi
 # the workspace members that travel (when the workspace manifest does)
 MEMBERS=""
 if [ -f "$EXPORT/Cargo.toml" ]; then
@@ -83,6 +91,21 @@ echo "$SHA  b.txz" | sha256sum -c - >/dev/null || { echo "bundle sha256 mismatch
 tar xJf b.txz && rm -f b.b64 b.txz
 echo "bundle ok: sha256 $SHA, $N chunk(s)"
 JOB
+if [ "$YRS" = 1 ]; then
+cat >> "$OUT/job.sh" <<'JOB'
+# vendor/yrs/src: the upstream crate (its sha256 checked) plus the fork's patch, then checked
+# file by file against VENDORED's src-sha256; the benches (not shipped) leave the manifest
+set -- $(sed -n 's/^crate //p' vendor/yrs/VENDORED); YC=$1; YSHA=$2
+curl -sSfL --retry 3 -o yrs.crate "https://static.crates.io/crates/${YC%-*}/$YC.crate"
+echo "$YSHA  yrs.crate" | sha256sum -c - >/dev/null || { echo "vendor/yrs: $YC.crate sha256 mismatch" >&2; exit 1; }
+mkdir -p yrs-crate && tar xzf yrs.crate -C yrs-crate && mv "yrs-crate/$YC/src" vendor/yrs/src && rm -rf yrs.crate yrs-crate
+( cd vendor && patch -p1 -s --no-backup-if-mismatch < yrs/K2.patch ) || { echo "vendor/yrs: K2.patch does not apply" >&2; exit 1; }
+YSUM=$(cd vendor/yrs/src && find . -type f | LC_ALL=C sort | sed 's|^\./||' | while read -r f; do sha256sum "$f"; done | sha256sum | cut -d' ' -f1)
+[ "$YSUM" = "$(sed -n 's/^src-sha256 //p' vendor/yrs/VENDORED)" ] || { echo "vendor/yrs: rebuilt src differs from VENDORED" >&2; exit 1; }
+sed -i '/^\[\[bench\]\]/,/^$/d' vendor/yrs/Cargo.toml
+echo "vendor/yrs: $YC + K2.patch, src-sha256 $YSUM"
+JOB
+fi
 if [ -n "$MEMBERS" ]; then
   echo "sed -i 's|^members = .*|members = [$MEMBERS]|' Cargo.toml && grep '^members' Cargo.toml" >> "$OUT/job.sh"
 fi

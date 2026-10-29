@@ -1,4 +1,4 @@
-//! Line-aligned insertions, for edits that merge as CRDT changes.
+//! Line-aligned insertions (and, for outside saves, deletions), for edits that merge.
 //!
 //! A minimal diff trims the common prefix to the character, so adding the line
 //! `agent-17` after the line `agent-1` comes out as inserting `"7\nagent-1"` in the middle
@@ -37,6 +37,82 @@ pub fn align_insertions(old: &str, mut hunks: Vec<Hunk>) -> Vec<Hunk> {
         }
     }
     hunks
+}
+
+/// `hunks` (sorted, non-overlapping, against `old`) with pure deletions that hold a line
+/// break slid to whole lines where possible: to start at a line start and end with `\n`
+/// (v0.9.5). The same rotation as [`align_insertions`]: applying the result to `old` gives
+/// the same text; hunks keep their order and never come to touch a neighbour.
+///
+/// A minimal diff can express deleting the line `p01:1` before `p01:2` as deleting
+/// `1\np01:`, across the break. Merged with another side's line inserted at that line start
+/// (an outside save, [`super::merge::merge3_keep_both`]), the insertion would fall inside the
+/// deletion and the two sides' lines would be spliced; aligned, it touches the deletion's
+/// end and lands whole.
+pub fn align_deletions(old: &str, mut hunks: Vec<Hunk>) -> Vec<Hunk> {
+    for i in 0..hunks.len() {
+        let h = &hunks[i];
+        if !h.insert.is_empty() || !old[h.start..h.end].contains('\n') {
+            continue;
+        }
+        let lo = if i == 0 { 0 } else { hunks[i - 1].end + 1 };
+        let hi = hunks
+            .get(i + 1)
+            .map_or(old.len(), |n| n.start.saturating_sub(1));
+        if let Some(slid) = slide_deletion(old, h.start, h.end, lo, hi) {
+            hunks[i] = slid;
+        }
+    }
+    hunks
+}
+
+fn whole_lines(old: &str, start: usize, end: usize) -> bool {
+    (start == 0 || old.as_bytes()[start - 1] == b'\n') && old.as_bytes()[end - 1] == b'\n'
+}
+
+fn slide_deletion(old: &str, start: usize, end: usize, lo: usize, hi: usize) -> Option<Hunk> {
+    if whole_lines(old, start, end) {
+        return None;
+    }
+    let found = |start: usize, end: usize| {
+        Some(Hunk {
+            start,
+            end,
+            insert: String::new(),
+        })
+    };
+    // left: the character before the deletion equals its last one
+    let (mut s, mut e) = (start, end);
+    for _ in 0..MAX_SLIDE {
+        let (Some(c), Some(d)) = (old[..s].chars().next_back(), old[..e].chars().next_back())
+        else {
+            break;
+        };
+        if c != d || s - c.len_utf8() < lo {
+            break;
+        }
+        s -= c.len_utf8();
+        e -= c.len_utf8();
+        if whole_lines(old, s, e) {
+            return found(s, e);
+        }
+    }
+    // right: the character after it equals its first one
+    let (mut s, mut e) = (start, end);
+    for _ in 0..MAX_SLIDE {
+        let (Some(c), Some(d)) = (old[s..].chars().next(), old[e..].chars().next()) else {
+            break;
+        };
+        if c != d || e + c.len_utf8() > hi {
+            break;
+        }
+        s += c.len_utf8();
+        e += c.len_utf8();
+        if whole_lines(old, s, e) {
+            return found(s, e);
+        }
+    }
+    None
 }
 
 fn aligned(old: &str, at: usize, insert: &str) -> bool {
@@ -136,7 +212,47 @@ mod tests {
         assert_eq!(diff::apply(old, &a), new);
     }
 
+    #[test]
+    fn line_deletions_move_to_whole_lines() {
+        let old = "x\np01:1\np01:2\n";
+        let new = "x\np01:2\n";
+        let a = align_deletions(old, diff::hunks(old, new));
+        assert_eq!(
+            a,
+            vec![Hunk {
+                start: 2,
+                end: 8,
+                insert: String::new()
+            }]
+        );
+        assert_eq!(diff::apply(old, &a), new);
+        // deletions inside a line, and replacements, are left alone
+        assert_eq!(
+            align_deletions("abc\n", diff::hunks("abc\n", "ac\n")),
+            diff::hunks("abc\n", "ac\n")
+        );
+        assert_eq!(
+            align_deletions("ab\ncd\n", diff::hunks("ab\ncd\n", "aXd\n")),
+            diff::hunks("ab\ncd\n", "aXd\n")
+        );
+    }
+
     proptest! {
+        #[test]
+        fn deletions_same_text_valid_hunks(
+            old in "[ab\n日]{0,24}",
+            new in "[ab\n日]{0,24}",
+        ) {
+            let h = align_insertions(&old, diff::hunks(&old, &new));
+            let a = align_deletions(&old, h.clone());
+            prop_assert!(diff::validate(&old, &a).is_ok(), "{:?}", a);
+            prop_assert_eq!(diff::apply(&old, &a), new);
+            prop_assert_eq!(a.len(), h.len());
+            for w in a.windows(2) {
+                prop_assert!(w[0].end < w[1].start, "touching: {:?}", a);
+            }
+        }
+
         #[test]
         fn same_text_valid_hunks(
             old in "[ab\n日]{0,24}",

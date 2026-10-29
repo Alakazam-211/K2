@@ -28,6 +28,9 @@ pub struct LogQuery {
     pub on_behalf_of: Option<String>,
     /// `--pending`: on-behalf changes still waiting for approval (versions are left out).
     pub pending: bool,
+    /// `--pending --all` (`approvals --all`, v0.9.2): with `pending`, every on-behalf
+    /// change with an approval record, settled ones too (approved, declined).
+    pub settled: bool,
 }
 
 impl LogQuery {
@@ -58,6 +61,14 @@ impl LogQuery {
     pub fn pending(self) -> Self {
         Self {
             pending: true,
+            ..self
+        }
+    }
+    /// `--pending --all`: every approval record, pending or settled ([`LogQuery::settled`]).
+    pub fn with_settled(self) -> Self {
+        Self {
+            pending: true,
+            settled: true,
             ..self
         }
     }
@@ -219,7 +230,9 @@ impl Session {
                 && q.on_behalf_of
                     .as_ref()
                     .map_or(true, |p| c.on_behalf_of.as_ref() == Some(p))
-                && (!q.pending || approval == Some(ApprovalState::Pending));
+                && (!q.pending
+                    || approval == Some(ApprovalState::Pending)
+                    || (q.settled && approval.is_some()));
             if keep {
                 items.push(LogItem::Change { info: c, approval });
             }

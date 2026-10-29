@@ -105,6 +105,11 @@ pub enum NotReached {
     /// Tier 0: this many recorded conflict copies didn't match purged content (edited since,
     /// or holding the current content) and were left.
     ConflictCopies(u64),
+    /// A doc promoted from tier 0 (v0.9.2): this many tier-0 versions it kept (content that
+    /// didn't read as text) were not searched. Only [`PurgeScope::History`] reaches them, or
+    /// [`Session::purge_tier0`]; also reported by a `History` purge whose released blobs
+    /// couldn't be removed (no blob store): they go with the blob store's GC.
+    Tier0History(u64),
     /// Git history, if the file was ever committed.
     GitHistory,
     /// Agent transcripts and terminal scrollback.
@@ -152,6 +157,9 @@ impl NotReached {
             NotReached::StoreFile => "freed pages of the store file (rewrite failed)",
             NotReached::SharedBlobs(_) => "blobs still used by other versions or docs",
             NotReached::ConflictCopies(_) => "conflict copies that don't match purged content",
+            NotReached::Tier0History(_) => {
+                "non-text versions kept from before the doc read as text (purge_tier0)"
+            }
             NotReached::GitHistory => "git history, if the file was committed",
             NotReached::Transcripts => "agent transcripts and terminal scrollback",
             NotReached::SearchIndex => "Spotlight and other search indexes",
@@ -232,6 +240,9 @@ impl Session {
         let i = self.admit(st, conn, Need::Owner, Action::Purge, now)?;
         let by = st.members[i].p.pid.clone();
         let store = self.store(st)?.clone();
+        // a store holding a newer kit's data can't be rewritten: refuse before anything
+        // changes (v0.9.5)
+        store.check_rewritable()?;
         // check the scope before anything changes
         let mut picks = (Pick::None, Pick::None);
         let mut erase: Option<(String, String)> = None;
@@ -408,7 +419,13 @@ impl Session {
                 return Err(e.into());
             }
         };
-        let doc = Doc::load(self.schema, &state)?;
+        let doc = self.checked(Doc::load(self.schema, &state)?);
+        if !file_holds_live {
+            // the replica is kept below (re-encoded): if the doc still renders to the synced
+            // bytes (the file missing, say), it must be the doc's elements, not an older copy
+            // of its text, before the new key leaves the sync point unknown (v0.9.4)
+            self.resync_if_synced(st)?;
+        }
         let key = fresh_key()?;
         let sync = if file_holds_live {
             Some(SyncState {
@@ -475,12 +492,16 @@ impl Session {
         st.log_bytes = 0;
         st.state_bytes = state.len() as u64;
         if let (Some(d), Some(s)) = (st.disk.as_mut(), &sync) {
-            d.replica = Doc::load(self.schema, &s.state)?;
+            d.replica = self.checked(Doc::load(self.schema, &s.state)?);
             d.replica_bytes = s.state.len() as u64;
             d.synced_hash = s.hash.clone();
             d.synced_seq = s.seq;
             d.own.clear();
+            d.echoed = None;
         }
+        // a doc promoted from tier 0 (v0.9.2): the tier-0 versions it kept are history too
+        let whole = matches!(req.scope, PurgeScope::History);
+        self.purge_kept_tier0(st, &store, whole, now, &mut counts, &mut not_reached)?;
         let rewrite = match store.rewrite_file() {
             Ok(r) => Some(r),
             Err(_) => {

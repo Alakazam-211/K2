@@ -1,0 +1,10 @@
+#!/bin/sh
+# Git pre-commit hook: when the commit touches docs/evidence/ (notes or run records), every
+# count in the evidence notes must be cited and match its run (tools/evidence/check.py).
+# Install: ln -s ../../tools/evidence/pre-commit .git/hooks/pre-commit
+top=$(git rev-parse --show-toplevel) || exit 1
+if git diff --cached --name-only | grep -q '^docs/evidence/'; then
+  cd "$top" && "${PYTHON:-python3}" tools/evidence/check.py || {
+    echo "pre-commit: the evidence check failed (tools/evidence/README.md); commit refused" >&2; exit 1; }
+fi
+exit 0

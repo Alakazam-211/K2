@@ -71,6 +71,11 @@ pub const CLASSES: &[&str] = &[
     "revert_restart_transparent",
     "exact_sides_differ_from_rediff",
     "concurrent_restores_of_one_root",
+    // its parts (v0.9.2, as `restore_parts`): O4 took a restoration once (by root); O4a
+    // fired (the root already live); a window character was the base's by root only
+    "concurrent_restore_o4",
+    "concurrent_restore_o4a",
+    "concurrent_restore_base_by_root",
 ];
 
 /// Low entropy on purpose (repeated text is where a wrong position hides), with multi-byte
@@ -2025,13 +2030,18 @@ impl Runner {
         if hits.concurrent_restore {
             self.hit("concurrent_restores_of_one_root");
         }
-        for (on, part) in [
-            (hits.o4_restore, "o4_restore"),
-            (hits.o4a, "o4a"),
-            (hits.base_by_root, "base_by_root"),
+        for (on, part, class) in [
+            (hits.o4_restore, "o4_restore", "concurrent_restore_o4"),
+            (hits.o4a, "o4a", "concurrent_restore_o4a"),
+            (
+                hits.base_by_root,
+                "base_by_root",
+                "concurrent_restore_base_by_root",
+            ),
         ] {
             if on {
                 *self.res.restore_parts.entry(part).or_default() += 1;
+                self.hit(class);
             }
         }
         for id in head_before + 1..=self.model.head {

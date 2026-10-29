@@ -25,11 +25,14 @@ use super::pack::Declined;
 use super::participant::{ConnId, Participant, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID};
 use super::presence::{self, Presence};
 use super::ratelimit::Bucket;
+
+mod promote;
 use crate::blob::{BlobError, BlobId, BlobInfo, BlobReader, BlobStore};
 use crate::store::{
     Approval, ApprovalState, BlobReason, BlobSync, BlobVersion, DocId, DocKey, DocMeta, DocStore,
     PurgeCounts, StoreError, VersionId, BLOB_DOC_PACK,
 };
+pub use promote::{Promoted, Promotion};
 
 /// The participant a pack's merge of a conflicting save is attributed to (tier 0.5).
 pub const MERGE_PID: &str = "kit:merge";
@@ -350,8 +353,11 @@ struct BDisk {
     /// What the file holds (as the kit last saw or wrote it).
     synced: BlobId,
     /// Recent own writes: a file holding one of them is an echo, never an outside edit.
+    /// Cleared by every outside save taken in (v0.9.5: a write of ours from before a
+    /// person's save, back again, is that person's save).
     own: VecDeque<BlobId>,
-    stat: Option<FileStat>,
+    /// The file as last seen, with git's racy mark (`disk::Seen`).
+    stat: Option<disk::Seen>,
     missing: bool,
     /// Why the file can't be a blob doc now (too large); writes are refused.
     declined: Option<String>,
@@ -374,7 +380,7 @@ struct BState {
     copies: Option<Vec<CopyRec>>,
     /// Copies a person edited (their bytes no longer match their version), by path, at the
     /// stat they had: never deleted, and not re-hashed until they change.
-    copies_edited: HashMap<PathBuf, FileStat>,
+    copies_edited: HashMap<PathBuf, disk::Seen>,
     /// When the conflict-copy cleanup last ran (host clock).
     last_cleanup_ms: Option<u64>,
 }
@@ -399,7 +405,7 @@ fn relative_path(base: &Path, target: &Path) -> PathBuf {
 
 /// A recorded copy's path: `rec` joined to the file's folder `base`, `..` resolved lexically
 /// (`base` is canonical). An absolute `rec` stands on its own.
-fn resolve_copy(base: &Path, rec: &str) -> PathBuf {
+pub(super) fn resolve_copy(base: &Path, rec: &str) -> PathBuf {
     let mut out = base.to_path_buf();
     for c in Path::new(rec).components() {
         match c {
@@ -411,6 +417,54 @@ fn resolve_copy(base: &Path, rec: &str) -> PathBuf {
         }
     }
     out
+}
+
+/// A doc's blob versions as log entries, oldest first (a blob doc's `log`; a promoted
+/// doc's tier-0 history). `base`: the file's folder, against which conflict copies resolve.
+pub(super) fn blob_log(
+    store: &DocStore,
+    doc_id: DocId,
+    base: Option<&Path>,
+) -> Result<Vec<BlobLogEntry>> {
+    let approvals: HashMap<VersionId, ApprovalState> = store
+        .blob_approvals(doc_id)?
+        .into_iter()
+        .map(|(v, a)| (v, a.state))
+        .collect();
+    Ok(store
+        .blob_versions(doc_id)?
+        .into_iter()
+        .map(|(id, v)| {
+            let kind = match v.reason {
+                BlobReason::Import => BlobLogKind::Import,
+                BlobReason::Write => BlobLogKind::Write,
+                BlobReason::Restore => BlobLogKind::Restore,
+                BlobReason::External if v.conflict_copy.is_some() => BlobLogKind::ConflictKept,
+                BlobReason::External => BlobLogKind::External,
+                BlobReason::Merged => BlobLogKind::Merged,
+            };
+            let conflict_copy = v.conflict_copy.as_deref().map(|c| match base {
+                Some(b) => resolve_copy(b, c),
+                None => PathBuf::from(c),
+            });
+            BlobLogEntry {
+                id,
+                kind,
+                of: v.restored_from,
+                author: v.author,
+                author_name: v.author_name,
+                via: v.via,
+                at_ms: v.at_ms,
+                on_behalf_of: v.on_behalf_of,
+                name: v.name,
+                redacted: v.redacted,
+                size: v.size,
+                mtime_ms: v.mtime_ms,
+                conflict_copy,
+                approval: approvals.get(&id).copied(),
+            }
+        })
+        .collect())
 }
 
 /// A loaded blob doc and the people and agents in it (tier 0). Thread-safe; every call
@@ -538,7 +592,7 @@ impl BlobSession {
         first.mtime_ms = from_file.and_then(|s| s.mtime_ms());
         let sync = from_file.map(|s| BlobSync {
             blob: info.id,
-            stat: Some(s.to_bytes()),
+            stat: disk::Seen::now(s).persisted(),
         });
         let (doc_id, vid) = store.create_blob_doc(&meta, &first, sync.as_ref())?;
         Ok(Self::build(
@@ -1041,45 +1095,7 @@ impl BlobSession {
         self.admit(&mut st, conn, Need::History, Action::History, now)?;
         let base = Self::copy_base(&st);
         let store = Self::store(&st)?;
-        let approvals: HashMap<VersionId, ApprovalState> = store
-            .blob_approvals(self.doc_id)?
-            .into_iter()
-            .map(|(v, a)| (v, a.state))
-            .collect();
-        Ok(store
-            .blob_versions(self.doc_id)?
-            .into_iter()
-            .map(|(id, v)| {
-                let kind = match v.reason {
-                    BlobReason::Import => BlobLogKind::Import,
-                    BlobReason::Write => BlobLogKind::Write,
-                    BlobReason::Restore => BlobLogKind::Restore,
-                    BlobReason::External if v.conflict_copy.is_some() => BlobLogKind::ConflictKept,
-                    BlobReason::External => BlobLogKind::External,
-                    BlobReason::Merged => BlobLogKind::Merged,
-                };
-                let conflict_copy = v.conflict_copy.as_deref().map(|c| match &base {
-                    Some(b) => resolve_copy(b, c),
-                    None => PathBuf::from(c),
-                });
-                BlobLogEntry {
-                    id,
-                    kind,
-                    of: v.restored_from,
-                    author: v.author,
-                    author_name: v.author_name,
-                    via: v.via,
-                    at_ms: v.at_ms,
-                    on_behalf_of: v.on_behalf_of,
-                    name: v.name,
-                    redacted: v.redacted,
-                    size: v.size,
-                    mtime_ms: v.mtime_ms,
-                    conflict_copy,
-                    approval: approvals.get(&id).copied(),
-                }
-            })
-            .collect())
+        blob_log(&store, self.doc_id, base.as_deref())
     }
 
     /// **Blame** for any file (tier 0, P22): the current version's setter and a summary of
@@ -1497,6 +1513,9 @@ impl BlobSession {
         let i = self.admit(st, conn, Need::Owner, Action::Purge, now)?;
         let by = st.members[i].p.pid.clone();
         let store = Self::store(st)?;
+        // a store holding a newer kit's data can't be rewritten: refuse before anything
+        // changes (v0.9.5)
+        store.check_rewritable()?;
         let all = store.blob_versions(self.doc_id)?;
         let vids: Vec<VersionId> = match version {
             Some(v) if v == st.vid => return Err(StoreError::CurrentVersion(self.doc_id, v).into()),
@@ -1690,7 +1709,11 @@ impl BlobSession {
                 continue;
             }
             let stat = FileStat::of(&meta);
-            if st.copies_edited.get(&path) == Some(&stat) {
+            if st
+                .copies_edited
+                .get(&path)
+                .is_some_and(|s| s.vouches_for(stat))
+            {
                 continue;
             }
             let (Ok(kept), Ok(saved)) = (
@@ -1703,7 +1726,7 @@ impl BlobSession {
                 continue;
             }
             if meta.len() != kept.size {
-                st.copies_edited.insert(path, stat);
+                st.copies_edited.insert(path, disk::Seen::now(stat));
                 continue;
             }
             let hashed = File::open(&path).and_then(|mut f| {
@@ -1719,7 +1742,7 @@ impl BlobSession {
                     removed.push(path);
                 }
                 Ok((id, _)) if id != kept.blob => {
-                    st.copies_edited.insert(path, stat);
+                    st.copies_edited.insert(path, disk::Seen::now(stat));
                 }
                 _ => {}
             }
@@ -1847,7 +1870,8 @@ impl BlobSession {
     }
 
     /// The stat backup: like [`BlobSession::file_changed`], but reads the file only if its
-    /// size, mtime or inode changed. An outside save becomes a version by
+    /// size, mtime or inode changed, or if the kit's last look was inside the file's mtime
+    /// tick (git's racy rule). An outside save becomes a version by
     /// [`EXTERNAL_PID`] (`via: "disk"`). When it lands while the lease is held, or while the
     /// doc has a version the file doesn't have yet, it is a **conflict**: a pack that can
     /// merge merges it ([`DiskCheck::Merged`]); otherwise the save stays current (the person
@@ -1921,7 +1945,11 @@ impl BlobSession {
             root: root.to_owned(),
             synced: synced.blob,
             own: VecDeque::new(),
-            stat: synced.stat.as_deref().and_then(FileStat::from_bytes),
+            stat: synced
+                .stat
+                .as_deref()
+                .and_then(FileStat::from_bytes)
+                .map(disk::Seen::loaded),
             missing: false,
             declined: None,
             dirty_since: None,
@@ -1949,11 +1977,11 @@ impl BlobSession {
                         self.doc_id,
                         &BlobSync {
                             blob: id,
-                            stat: Some(stat.to_bytes()),
+                            stat: disk::Seen::now(stat).persisted(),
                         },
                     )?;
                     d.synced = id;
-                    d.stat = Some(stat);
+                    d.stat = Some(disk::Seen::now(stat));
                 }
                 None => store.clear_blob_pending(self.doc_id)?,
             }
@@ -2017,12 +2045,12 @@ impl BlobSession {
             self.doc_id,
             &BlobSync {
                 blob,
-                stat: Some(stat.to_bytes()),
+                stat: disk::Seen::now(stat).persisted(),
             },
         )?;
         let d = st.disk.as_mut().expect("has disk");
         d.synced = blob;
-        d.stat = Some(stat);
+        d.stat = Some(disk::Seen::now(stat));
         Ok(())
     }
 
@@ -2039,7 +2067,7 @@ impl BlobSession {
             Ok(_) => return Ok(self.set_missing(st)),
             Err(e) => return Err(self.disk_error(st, &path.display().to_string(), e)),
         };
-        if !force && !d.missing && d.stat == Some(stat) {
+        if !force && !d.missing && d.stat.is_some_and(|s| s.vouches_for(stat)) {
             return Ok(DiskCheck::Unchanged);
         }
         let max = self.blobs.config().max_blob_bytes;
@@ -2055,7 +2083,7 @@ impl BlobSession {
             Ok(Some(v)) => v,
             Ok(None) => {
                 let d = st.disk.as_mut().expect("has disk");
-                d.stat = Some(stat);
+                d.stat = Some(disk::Seen::now(stat));
                 d.missing = false;
                 if d.declined.is_none() {
                     d.declined = Some(format!("the file is over the {max}-byte blob limit"));
@@ -2074,7 +2102,7 @@ impl BlobSession {
         let d = st.disk.as_mut().expect("has disk");
         let was_missing = std::mem::replace(&mut d.missing, false);
         let was_declined = d.declined.take().is_some();
-        d.stat = Some(stat);
+        d.stat = Some(disk::Seen::now(stat));
         if was_missing || was_declined {
             self.emit(AuditEvent::FileRestored {
                 key: st.key.clone(),
@@ -2093,12 +2121,23 @@ impl BlobSession {
         if d.own.contains(&id) {
             // an older write of ours is back (an app saved a stale buffer, or a late echo):
             // its content is a version already; the file holds it now, and the next
-            // write-back puts the current version back
+            // write-back puts the current version back. Only writes made since the last
+            // outside save count (the set is cleared by each: v0.9.5), and every suppressed
+            // echo is reported
             self.set_synced(st, id, stat)?;
             Self::mark_dirty(st, now);
+            self.emit(AuditEvent::EchoSuppressed {
+                key: st.key.clone(),
+            });
             return Ok(DiskCheck::OwnWrite);
         }
-        self.ingest(st, &real, now)
+        let out = self.ingest(st, &real, now)?;
+        // a person saved since the kit's recent writes: one of them coming back now is their
+        // save, not an echo (v0.9.5)
+        if let Some(d) = st.disk.as_mut() {
+            d.own.clear();
+        }
+        Ok(out)
     }
 
     /// Record the file's new content (another program saved it).
@@ -2138,7 +2177,7 @@ impl BlobSession {
         theirs.mtime_ms = stat.mtime_ms();
         let sync = BlobSync {
             blob: info.id,
-            stat: Some(stat.to_bytes()),
+            stat: disk::Seen::now(stat).persisted(),
         };
         if !conflict {
             let vid = store.commit_blob_versions(
@@ -2152,7 +2191,7 @@ impl BlobSession {
             st.cur = theirs;
             let d = st.disk.as_mut().expect("has disk");
             d.synced = info.id;
-            d.stat = Some(stat);
+            d.stat = Some(disk::Seen::now(stat));
             d.dirty_since = None;
             self.emit(AuditEvent::ExternalEdit {
                 key: st.key.clone(),
@@ -2191,7 +2230,7 @@ impl BlobSession {
         }
         let d = st.disk.as_mut().expect("has disk");
         d.synced = info.id;
-        d.stat = Some(stat);
+        d.stat = Some(disk::Seen::now(stat));
         d.dirty_since = None;
         self.emit(AuditEvent::ExternalEdit {
             key: st.key.clone(),
@@ -2260,7 +2299,7 @@ impl BlobSession {
         st.cur = merged;
         let d = st.disk.as_mut().expect("has disk");
         d.synced = theirs.blob;
-        d.stat = Some(stat);
+        d.stat = Some(disk::Seen::now(stat));
         self.emit(AuditEvent::ExternalEdit {
             key: st.key.clone(),
             seq: vids[0],
@@ -2395,7 +2434,7 @@ impl BlobSession {
         }
         let d = st.disk.as_mut().expect("has disk");
         d.synced = blob;
-        d.stat = Some(stat);
+        d.stat = Some(disk::Seen::now(stat));
         d.own.push_back(blob);
         while d.own.len() > OWN_WRITES_KEPT {
             d.own.pop_front();

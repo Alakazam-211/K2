@@ -103,21 +103,25 @@ fn copy<K: redb::Key + 'static, V: redb::Value + 'static>(
     Ok(n)
 }
 
-fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
-    let r = old.begin_read()?;
+/// The first table this kit doesn't know (a multimap table, or a table outside [`TABLES`]),
+/// if any: data a newer kit wrote without a format bump (v0.9.7's `authored`).
+fn unknown_table(r: &ReadTransaction) -> Result<Option<String>, StoreError> {
     if let Some(t) = r.list_multimap_tables()?.next() {
-        return Err(StoreError::Db(format!(
-            "rewrite: unknown multimap table {:?}",
-            t.name()
-        )));
+        return Ok(Some(t.name().to_owned()));
     }
     for t in r.list_tables()? {
         if !TABLES.contains(&t.name()) {
-            return Err(StoreError::Db(format!(
-                "rewrite: unknown table {:?}",
-                t.name()
-            )));
+            return Ok(Some(t.name().to_owned()));
         }
+    }
+    Ok(None)
+}
+
+fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
+    let r = old.begin_read()?;
+    // a table this kit doesn't know can't be copied: refused as a newer kit's store (v0.9.5)
+    if let Some(table) = unknown_table(&r)? {
+        return Err(StoreError::NewerData { table });
     }
     let w = new.begin_write()?;
     let mut n = 0;
@@ -153,6 +157,39 @@ fn io(what: &str, e: std::io::Error) -> StoreError {
 }
 
 impl DocStore {
+    /// Whether [`DocStore::rewrite_file`] can copy this store: [`StoreError::NewerData`]
+    /// when it holds a table this kit doesn't know (a newer kit's data). Read-only. A purge
+    /// checks it before changing anything (v0.9.5), so it refuses cleanly instead of purging
+    /// rows and then failing to rewrite the file.
+    pub fn check_rewritable(&self) -> Result<(), StoreError> {
+        let g = self.db.read().unwrap_or_else(|p| p.into_inner());
+        let r = g.begin_read()?;
+        match unknown_table(&r)? {
+            Some(table) => Err(StoreError::NewerData { table }),
+            None => Ok(()),
+        }
+    }
+
+    /// Test-only: add a table this kit doesn't know (as a newer kit would, v0.9.7's
+    /// `authored`), with one row, through redb's normal API; a multimap table when
+    /// `multimap`.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn add_table_for_tests(&self, name: &str, multimap: bool) -> Result<(), StoreError> {
+        let g = self.db.write().unwrap_or_else(|p| p.into_inner());
+        let w = g.begin_write()?;
+        if multimap {
+            let mut t =
+                w.open_multimap_table(redb::MultimapTableDefinition::<u64, u64>::new(name))?;
+            t.insert(1, 2)?;
+        } else {
+            let mut t = w.open_table(TableDefinition::<u64, &[u8]>::new(name))?;
+            t.insert(1, b"a newer kit's row".as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
     /// Rewrite the store into a fresh file and atomically put it in place of the old one
     /// (module docs): after it, the file holds no byte of anything deleted or redacted
     /// before it. Every other store call waits while it runs (a full copy). A purge calls

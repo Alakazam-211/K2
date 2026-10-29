@@ -1434,11 +1434,11 @@ fn helper_for(pid: &str, person: &str) -> Participant {
 fn on_behalf_edits_apply_at_once_and_carry_metadata() {
     let f = fx("obo");
     let s = f.open("o.md", b"one\ntwo\n");
-    let person = f.join(&s, "rosson", Rights::editor());
+    let person = f.join(&s, "alice", Rights::editor());
     let watch = s.subscribe(person).unwrap();
     f.host.grant("helper", Rights::editor());
     let h = s
-        .join(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .join(helper_for("helper", "alice"), Stay::UntilIdle)
         .unwrap()
         .conn;
     replace(&s, h, "two", "TWO");
@@ -1447,20 +1447,20 @@ fn on_behalf_edits_apply_at_once_and_carry_metadata() {
     let ev = watch.recv().unwrap();
     assert_eq!(
         (ev.pid.as_str(), ev.on_behalf_of.as_deref()),
-        ("helper", Some("rosson"))
+        ("helper", Some("alice"))
     );
     // logged with the metadata, approval pending
     let id = f.store.find(&key("o.md")).unwrap().unwrap();
     let (seq, e) = f.store.load(id).unwrap().updates.pop().unwrap();
     assert_eq!(
         (e.author.as_str(), e.on_behalf_of.as_deref()),
-        ("helper", Some("rosson"))
+        ("helper", Some("alice"))
     );
     let a = s.approval(person, seq).unwrap().unwrap();
     assert_eq!(a.state, ApprovalState::Pending);
     assert_eq!(
         (a.author.as_str(), a.on_behalf_of.as_str()),
-        ("helper", "rosson")
+        ("helper", "alice")
     );
     // the person's own edit has none, and an event says so
     replace(&s, person, "one", "ONE");
@@ -1473,15 +1473,15 @@ fn on_behalf_edits_apply_at_once_and_carry_metadata() {
             need: Need::History
         })
     );
-    f.host.grant("rosson", Rights::full());
+    f.host.grant("alice", Rights::full());
     assert_eq!(s.approval(person, ev.version).unwrap(), None);
-    // presence shows "helper for rosson"
+    // presence shows "helper for alice"
     let roster = s.roster(person).unwrap();
     let row = roster
         .iter()
         .find(|r| r.participant.pid == "helper")
         .unwrap();
-    assert_eq!(row.participant.on_behalf_of.as_deref(), Some("rosson"));
+    assert_eq!(row.participant.on_behalf_of.as_deref(), Some("alice"));
     // the agent's undo is its own, and works as for anyone
     assert!(matches!(
         s.undo(h, 1).unwrap(),
@@ -1506,9 +1506,9 @@ fn on_behalf_needs_a_real_person_and_rights_are_the_agents() {
     }
     // acting for someone never widens the agent's own rights (the host is asked about the
     // agent, and here grants it read only)
-    f.host.grant("rosson", Rights::full());
+    f.host.grant("alice", Rights::full());
     let h = s
-        .join(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .join(helper_for("helper", "alice"), Stay::UntilIdle)
         .unwrap()
         .conn;
     assert_eq!(
@@ -1518,10 +1518,10 @@ fn on_behalf_needs_a_real_person_and_rights_are_the_agents() {
     // shared joins don't mix principals: acting for another person is another connection
     f.host.grant("helper", Rights::editor());
     let a = s
-        .join_shared(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .join_shared(helper_for("helper", "alice"), Stay::UntilIdle)
         .unwrap();
     let a2 = s
-        .join_shared(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .join_shared(helper_for("helper", "alice"), Stay::UntilIdle)
         .unwrap();
     let b = s
         .join_shared(helper_for("helper", "sam"), Stay::UntilIdle)
@@ -1537,12 +1537,12 @@ fn on_behalf_needs_a_real_person_and_rights_are_the_agents() {
 fn only_the_named_person_settles_an_approval_once() {
     let f = fx("approve");
     let s = f.open("o.md", b"one\n");
-    let person = f.join(&s, "rosson", Rights::editor());
+    let person = f.join(&s, "alice", Rights::editor());
     let other = f.join(&s, "sam", Rights::editor());
     let auditor = f.join(&s, "aud", Rights::read_only().with_history(true));
     f.host.grant("helper", Rights::editor());
     let h = s
-        .join(helper_for("helper", "rosson"), Stay::UntilIdle)
+        .join(helper_for("helper", "alice"), Stay::UntilIdle)
         .unwrap()
         .conn;
     replace(&s, h, "one", "uno");
@@ -1589,12 +1589,12 @@ fn only_the_named_person_settles_an_approval_once() {
         .unwrap();
     assert_eq!(
         (d.state, d.by.as_deref(), d.at_ms),
-        (ApprovalState::Declined, Some("rosson"), Some(now))
+        (ApprovalState::Declined, Some("alice"), Some(now))
     );
     assert!(f.host.events().iter().any(|e| matches!(
         e,
         AuditEvent::Approval { seq: s2, pid, state: ApprovalState::Declined, .. }
-            if *s2 == seq && pid == "rosson"
+            if *s2 == seq && pid == "alice"
     )));
     // once: the same again is a no-op, the other way is refused
     assert_eq!(
@@ -1620,6 +1620,6 @@ fn only_the_named_person_settles_an_approval_once() {
     f.mgr.release().unwrap();
     let mgr = SessionManager::new(f.store.clone(), f.host.clone(), Config::default());
     let s = mgr.open(pack(), &key("o.md"), None).unwrap();
-    let p = s.join(agent("rosson"), Stay::UntilIdle).unwrap().conn;
+    let p = s.join(agent("alice"), Stay::UntilIdle).unwrap().conn;
     assert_eq!(s.approval(p, seq).unwrap(), Some(d));
 }

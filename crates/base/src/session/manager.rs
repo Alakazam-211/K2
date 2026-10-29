@@ -13,7 +13,7 @@ use super::host::{AuditEvent, Host};
 use super::live::{probe_error, RightsChange, Session};
 use super::pack::{Declined, Pack};
 use super::participant::ConnId;
-use super::tier0::{BlobPack, BlobSession};
+use super::tier0::{AnyFile, BlobPack, BlobSession, Promotion};
 use crate::blob::{BlobError, BlobInfo, BlobStore};
 use crate::store::{DocKey, DocStore, Seq, VersionId, BLOB_DOC_PACK};
 
@@ -171,6 +171,9 @@ impl SessionManager {
                 None => return Err(SessionError::NotFound(key.clone())),
             },
         };
+        if let Some(b) = &self.blobs {
+            session.set_blob_store(b.clone());
+        }
         let s = Arc::new(session);
         pool.sessions.insert(key.clone(), s.clone());
         self.enforce_budget(&mut pool, Some(key));
@@ -444,6 +447,92 @@ impl SessionManager {
         };
         s.attach_file(path, &root)?;
         Ok(s)
+    }
+
+    /// **Tier 0 → text** (v0.9.2): the blob doc at `key`, whose file now reads as text,
+    /// becomes a text doc of `pack` with the **same key and doc id**, keeping its history
+    /// (`docs/SESSIONS.md`, "Tier 0 → text"). The host calls it when `open_file` with a
+    /// text pack says [`SessionError::PackMismatch`] with `stored: "kit:blob"` and the file
+    /// now decodes; rights are the host's to check first (as for
+    /// [`SessionManager::delete_doc`]).
+    ///
+    /// The blob doc is loaded and reconciled with the file (path rules as
+    /// [`SessionManager::open_blob_file`]: a save made since is a version first) and written
+    /// back; then, under its lock, every version is decoded by `pack`, oldest first. Each
+    /// one that decodes becomes a text version (an import chain: one change per version
+    /// whose text differs from the one before, by its author at its time, `via` and
+    /// `on_behalf_of` as recorded, the approval carried); one that doesn't, or that was
+    /// purged, stays in the doc's **tier-0 history** ([`Session::tier0_log`]). One store
+    /// transaction switches the doc: a crash before it leaves the blob doc as it was. Then
+    /// the blob session closes ([`AuditEvent::Promoted`] names its connections) and the
+    /// text session opens on the file. Returns it and what each version became.
+    ///
+    /// Errors (nothing changed): [`SessionError::NotFound`]; [`SessionError::PackMismatch`]
+    /// when the doc at `key` isn't a blob doc; [`SessionError::Leased`] while anyone holds
+    /// the lease; [`SessionError::Declined`] when the current version doesn't decode (the
+    /// pack's reason); [`SessionError::Disk`] when the file can't be written back first;
+    /// [`SessionError::NoBlobStore`].
+    pub fn promote_blob_file(
+        &self,
+        pack: Arc<dyn super::Pack>,
+        key: &DocKey,
+        path: &Path,
+        root: &Path,
+    ) -> Result<(Arc<Session>, Promotion)> {
+        self.stored_blob_doc(key)?;
+        let blob = self.open_blob_file(Arc::new(AnyFile), key, path, root)?;
+        let done = self.promote_loaded(&pack, key, &blob)?;
+        Ok((self.open_file(pack, key, path, root)?, done))
+    }
+
+    /// [`SessionManager::promote_blob_file`] for a blob doc without a file.
+    pub fn promote_blob(
+        &self,
+        pack: Arc<dyn super::Pack>,
+        key: &DocKey,
+    ) -> Result<(Arc<Session>, Promotion)> {
+        self.stored_blob_doc(key)?;
+        let blob = self.open_blob(Arc::new(AnyFile), key, None)?;
+        let done = self.promote_loaded(&pack, key, &blob)?;
+        Ok((self.open(pack, key, None)?, done))
+    }
+
+    /// `NotFound` / `PackMismatch` unless the store holds a blob doc at `key`.
+    fn stored_blob_doc(&self, key: &DocKey) -> Result<()> {
+        self.blobs()?;
+        let store = self.pool()?.store.clone().ok_or(SessionError::Released)?;
+        let id = store
+            .find(key)?
+            .ok_or_else(|| SessionError::NotFound(key.clone()))?;
+        let meta = store.meta(id)?;
+        if meta.pack != BLOB_DOC_PACK {
+            return Err(SessionError::PackMismatch {
+                stored: meta.pack,
+                pack: BLOB_DOC_PACK.to_owned(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Promote the loaded blob session `blob` and take it out of the pool. Holds the pool
+    /// lock throughout (pool, then session: the lock order), so no `open_blob` hands out
+    /// the closing session meanwhile.
+    fn promote_loaded(
+        &self,
+        pack: &Arc<dyn super::Pack>,
+        key: &DocKey,
+        blob: &Arc<BlobSession>,
+    ) -> Result<Promotion> {
+        let mut pool = self.pool()?;
+        let done = blob.promote(pack)?;
+        if pool
+            .blob_sessions
+            .get(key)
+            .is_some_and(|s| Arc::ptr_eq(s, blob))
+        {
+            pool.blob_sessions.remove(key);
+        }
+        Ok(done)
     }
 
     /// The loaded blob doc for `key`, if any (never loads).

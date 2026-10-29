@@ -395,14 +395,14 @@ fn log_records_v3_v2_and_v1_all_decode() {
     assert_eq!(v1[0], 1);
     assert_eq!(dec_entry(&v1).unwrap(), e);
     // v2 (format 2) still decodes
-    e.on_behalf_of = Some("rosson".into());
+    e.on_behalf_of = Some("alice".into());
     assert_eq!(dec_entry(&enc_entry_v2(&e)).unwrap(), e);
     e.on_behalf_of = None;
     // v3 round trips, with and without on_behalf_of
     let v3 = enc_entry(&e);
     assert_eq!(v3[0], 3, "new records are version 3");
     assert_eq!(dec_entry(&v3).unwrap(), e);
-    e.on_behalf_of = Some("rosson".into());
+    e.on_behalf_of = Some("alice".into());
     assert_eq!(dec_entry(&enc_entry(&e)).unwrap(), e);
     // a purged entry keeps its metadata and length, not its update
     let red = enc_entry_as(&e, Some(3));
@@ -413,7 +413,7 @@ fn log_records_v3_v2_and_v1_all_decode() {
         (d.author.as_str(), d.client, d.at_ms),
         ("agent-a", 9, e.at_ms)
     );
-    assert_eq!(d.on_behalf_of.as_deref(), Some("rosson"));
+    assert_eq!(d.on_behalf_of.as_deref(), Some("alice"));
     // damaged records are loud
     let mut bad = enc_entry(&e);
     bad[0] = 4;
@@ -730,12 +730,12 @@ fn on_behalf_entries_get_a_pending_approval_in_the_same_append() {
     let u1 = doc.replace_text_as(5, "source", "a\n").unwrap().unwrap();
     let u2 = doc.replace_text_as(6, "source", "a\nb\n").unwrap().unwrap();
     let mut obo = entry("helper", 6, u2);
-    obo.on_behalf_of = Some("rosson".into());
-    let seqs = s.append(id, &[entry("rosson", 5, u1), obo]).unwrap();
+    obo.on_behalf_of = Some("alice".into());
+    let seqs = s.append(id, &[entry("alice", 5, u1), obo]).unwrap();
     assert_eq!(seqs, vec![1, 2]);
     assert_eq!(s.approval(id, 1).unwrap(), None, "own edits have none");
     let p = s.approval(id, 2).unwrap().unwrap();
-    assert_eq!(p, Approval::pending("helper", "rosson"));
+    assert_eq!(p, Approval::pending("helper", "alice"));
     assert_eq!(
         (p.state, p.by.as_deref(), p.at_ms),
         (ApprovalState::Pending, None, None)
@@ -743,7 +743,7 @@ fn on_behalf_entries_get_a_pending_approval_in_the_same_append() {
     // compaction drops the log entry but not the approval
     s.compact(id, 2, &doc.encode_state().unwrap()).unwrap();
     assert!(s.load(id).unwrap().updates.is_empty());
-    let done = p.settled(ApprovalState::Declined, "rosson", 77);
+    let done = p.settled(ApprovalState::Declined, "alice", 77);
     s.set_approval(id, 2, &done).unwrap();
     assert_eq!(s.approval(id, 2).unwrap(), Some(done.clone()));
     assert_eq!(s.approvals(id).unwrap(), vec![(2, done)]);
@@ -809,4 +809,52 @@ fn host_table_is_opaque_and_transactional() {
         s.host_get("ns2", "a/1").unwrap().as_deref(),
         Some(&b"other ns"[..])
     );
+}
+
+/// v0.9.5 (rollback): a store holding a table this kit doesn't know (v0.9.7's `authored`,
+/// added without a format bump, or any other) is refused for a rewrite with
+/// `StoreError::NewerData` (the registry's `MPC-E502 store_newer`), its message naming the
+/// table and the kit to upgrade to, and the store file is left exactly as it was. Both
+/// branches: an unknown table and an unknown multimap table. Made through redb's normal API.
+#[test]
+fn a_newer_kits_table_refuses_the_rewrite_and_changes_nothing() {
+    for (name, multimap) in [
+        ("authored", false),
+        ("later_kit", false),
+        ("authored_mm", true),
+    ] {
+        let d = TmpDir::new(&format!("newer-table-{name}"));
+        let s = DocStore::open(d.db()).unwrap();
+        s.create(&meta("a.md")).unwrap();
+        s.add_table_for_tests(name, multimap).unwrap();
+        let before = std::fs::read(d.db()).unwrap();
+        let want = StoreError::NewerData {
+            table: name.to_owned(),
+        };
+        assert_eq!(s.check_rewritable(), Err(want.clone()), "{name}");
+        assert_eq!(s.rewrite_file().err(), Some(want.clone()), "{name}");
+        let kit = if name == "authored" {
+            "kit ≥ v0.9.7"
+        } else {
+            "a newer kit"
+        };
+        assert_eq!(
+            want.to_string(),
+            format!(
+                "This store holds data from a newer kit (table \"{name}\"). Upgrade K2 to a \
+                 version with {kit} to purge or rewrite it; reading and editing still work."
+            )
+        );
+        assert_eq!(
+            std::fs::read(d.db()).unwrap(),
+            before,
+            "{name}: the store unchanged"
+        );
+        assert!(
+            !rewrite::temp_path(&d.db()).exists(),
+            "{name}: no temp file left"
+        );
+        // reading still works
+        assert!(s.find(&key("a.md")).unwrap().is_some());
+    }
 }

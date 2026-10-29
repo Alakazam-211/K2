@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.9.1"
+version = "0.9.5"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -16,10 +16,16 @@ untrusted-wire = []
 # in-process sync between two of this kit's docs and a comparable state vector. Off by
 # default; no host enables it.
 conformance = []
+# Test-only: choose the engine's edit path per thread, shadow each edit through another path,
+# and mint client IDs from a seed (`k2_mpc_base::differential`: the differential tests and the
+# soak's shadow mode). Off by default; no host enables it.
+differential = []
 
 [dependencies]
-# The engine is private to this crate. Pinned exactly: its encoding is part of the stored format.
-yrs = "=0.28.0"
+# The engine is private to this crate: Yrs v0.28.0 plus the k2 patches (`Doc::transact_mut_as`,
+# bounded decoder reservations), vendored at a tag (`vendor/yrs/VENDORED`, `docs/YRS-FORK.md`).
+# Pinned exactly: its encoding is part of the stored format.
+yrs = { path = "../../vendor/yrs", version = "=0.28.0" }
 thiserror = "2"
 # Same major as the host already uses, so vendoring adds no second copy.
 redb = "2"
@@ -29,8 +35,8 @@ redb = "2"
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "perf", "unicode", "meta", "hybrid", "nfa-pikevm", "nfa-backtrack", "dfa-onepass"] }
 
 [dev-dependencies]
-k2-mpc-base = { path = ".", features = ["untrusted-wire"] }
+k2-mpc-base = { path = ".", features = ["untrusted-wire", "differential"] }
 proptest = "1"
 rand = { version = "0.8", features = ["small_rng"] }
-# Tests stand in for remote clients with raw Yrs docs (Yjs wire-compatible).
-yrs = "=0.28.0"
+# Tests stand in for remote clients with raw Yrs docs (Yjs wire-compatible): the same copy.
+yrs = { path = "../../vendor/yrs", version = "=0.28.0" }

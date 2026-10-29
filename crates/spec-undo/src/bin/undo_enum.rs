@@ -19,12 +19,29 @@
 //!   (not exhaustive: for bounds too large to enumerate, such as the literal G1 bound). The
 //!   summary counts the transitions that hit each case class (E-HIST-13, `bounded::CLASSES`).
 //!   A progress line (walks, steps, violations, classes so far) every `--progress` seconds.
+//!   `--bias redo-after-partial` weighs the next step instead of drawing it uniformly: a
+//!   step that redoes a partial undo's entry (the class `redo_after_partial`) weighs 256, a
+//!   step that leaves a new such redo entry (an undo that skipped regions) 64, any other
+//!   `undo --partial` 4, every other step 1. Every enabled step keeps a weight of at least
+//!   1, so no path of the bound is left out, and every step is checked as in a plain walk;
+//!   only the odds change (the walks are not a uniform sample of paths).
 //! - `knuth`: Knuth's random-probe estimate of the search tree's size per depth (an upper
 //!   bound on the states `dfs --dedup seed` visits), for runtime estimates.
 //!
-//! Every run ends with one `SUMMARY ...` line. Exit: 0 complete, no violation of a `--stop`
+//! Every run ends with one `SUMMARY: ...` line (for people) and one `RUNREC {json}` line (the
+//! run's record for `tools/evidence/`: `--run NAME`, default from the mode, bound and mutant;
+//! status COMPLETE, PARTIAL (a time limit: a lower bound), VIOLATION, SAMPLED (walks: cite
+//! `walks`, `steps` by field) or ESTIMATE). `SUMMARY:` has a colon so that the evidence
+//! collector, which parses another enumerator's `SUMMARY ` lines, never reads this one: the
+//! RUNREC line is this run's record. Exit: 0 complete, no violation of a `--stop`
 //! rule; 1 a violation (its least depth and action sequence are printed); 2 usage; 3 time
 //! limit.
+//!
+//! **A panic in the oracle** (one of its own assertions, e.g. `window.rs`'s shared-edge check
+//! under a mutant) is caught at the step that raised it and counted as a violation of the
+//! pseudo-rule `panic` (always a stop rule): `panic@<depth>` in the SUMMARY with the message
+//! (`panic="..."`), the action sequence printed, every worker stopped, exit 1 (v0.9.3; before,
+//! a walker's panic left the progress thread running and the process never exited).
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -34,9 +51,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use spec_undo::bounded::{self, Act, Bound, State, View, CLASSES, STOP};
+use spec_undo::bounded::{self, Act, Bound, State, View, CLASSES, PANIC, STOP};
 #[cfg(feature = "mutants")]
 use spec_undo::model::mutant;
+use spec_undo::model::Mode;
 
 struct Opts {
     b: Bound,
@@ -58,6 +76,66 @@ struct Opts {
     first: bool,
     /// bfs: write every distinct state as a line of canonical JSON (`View::json`).
     dump: Option<String>,
+    /// The run's name in its `RUNREC` record (default: from the mode, bound and mutant).
+    run: Option<String>,
+    /// walk: how the next step is drawn ([`Bias`]).
+    bias: Bias,
+}
+
+/// `walk --bias`: how a walk draws its next step among the enabled ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bias {
+    /// Uniformly (the default).
+    None,
+    /// Toward the class `redo_after_partial` (module doc). Every step keeps a weight >= 1.
+    RedoAfterPartial,
+}
+
+impl Bias {
+    fn name(self) -> &'static str {
+        match self {
+            Bias::None => "none",
+            Bias::RedoAfterPartial => "redo-after-partial",
+        }
+    }
+
+    fn by_name(name: &str) -> Option<Bias> {
+        [Bias::None, Bias::RedoAfterPartial]
+            .into_iter()
+            .find(|b| b.name() == name)
+    }
+
+    /// The weight of the step `a` from `s` to `t` (at least 1).
+    fn weight(self, s: &State, a: &Act, t: &State) -> u64 {
+        match self {
+            Bias::None => 1,
+            Bias::RedoAfterPartial => {
+                if t.hit.contains(&"redo_after_partial") {
+                    256
+                } else if after_partial_redos(t) > after_partial_redos(s) {
+                    64
+                } else if matches!(
+                    a,
+                    Act::Undo {
+                        mode: Mode::Partial,
+                        ..
+                    }
+                ) {
+                    4
+                } else {
+                    1
+                }
+            }
+        }
+    }
+}
+
+/// The redo entries left by an undo step that skipped regions, over every pid.
+fn after_partial_redos(s: &State) -> usize {
+    s.m.stacks
+        .values()
+        .map(|st| st.redo.iter().filter(|b| b.after_partial).count())
+        .sum()
 }
 
 fn usage(msg: &str) -> ! {
@@ -65,9 +143,10 @@ fn usage(msg: &str) -> ! {
     eprintln!(
         "usage: undo_enum [bfs|dfs|knuth|walk] [--pids N] [--events N] [--undos N] [--reverts N] [--restarts N] \
          [--maxlen N] [--init ab] [--no-multi] [--no-purge] [--no-reduce] [--u12] [--sym] \
-         [--stop R1,R2|all|none] [--mutant NAME] [--threads N] [--seed-depth D] \
+         [--stop R1,R2|all|none] [--mutant NAME] [--threads N] [--seed-depth D] [--run NAME] \
          [--dedup seed|global] [--checkpoint FILE] [--progress SECS] [--time-limit SECS] \
-         [--probes N] [--rng N] [--sample K] [--first] [--dump FILE]"
+         [--probes N] [--rng N] [--bias none|redo-after-partial] [--sample K] [--first] \
+         [--dump FILE]"
     );
     std::process::exit(2)
 }
@@ -89,7 +168,9 @@ fn parse() -> Opts {
         rng: 1,
         sample: None,
         first: false,
+        run: None,
         dump: None,
+        bias: Bias::None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -135,12 +216,22 @@ fn parse() -> Opts {
             "--time-limit" => o.time_limit = Some(num(val("--time-limit"))),
             "--probes" => o.probes = num(val("--probes")),
             "--rng" => o.rng = num(val("--rng")),
+            "--bias" => {
+                let v = val("--bias");
+                o.bias = Bias::by_name(&v).unwrap_or_else(|| usage(&format!("bias {v}")));
+            }
+            "--run" => o.run = Some(val("--run")),
             "--sample" => o.sample = Some(num(val("--sample")) as usize),
             "--first" => o.first = true,
             "--dump" => o.dump = Some(val("--dump")),
             _ => usage(&format!("unknown argument {a}")),
         }
     }
+    if o.bias != Bias::None && o.mode != "walk" {
+        usage("--bias is for walk only");
+    }
+    // a panic in the oracle always stops a run
+    o.stop.push(PANIC);
     o
 }
 
@@ -183,7 +274,17 @@ fn print_path(b: &Bound, path: &[Act]) {
     let mut s = State::init(b);
     println!("  0: {:?}", s.text());
     for (i, a) in path.iter().enumerate() {
-        let (t, o) = s.step(b, a).expect("a recorded step");
+        let (t, o) = match s.try_step(b, a) {
+            Ok(Some(x)) => x,
+            Ok(None) => {
+                println!("  {}: {a:?}\n     -> cut", i + 1);
+                return;
+            }
+            Err(msg) => {
+                println!("  {}: {a:?}\n     -> the oracle panicked: {msg}", i + 1);
+                return;
+            }
+        };
         println!(
             "  {}: {a:?}\n     -> {:?} authors {:?} {o:?}",
             i + 1,
@@ -192,6 +293,57 @@ fn print_path(b: &Bound, path: &[Act]) {
         );
         s = t;
     }
+}
+
+/// ` panic="<message>"` for a SUMMARY line, when the oracle panicked.
+fn panic_field(msg: Option<&str>) -> String {
+    msg.map_or(String::new(), |m| {
+        format!(" panic={:?}", m.lines().next().unwrap_or(""))
+    })
+}
+
+/// One `RUNREC` line for the run (the evidence records, `tools/evidence/README.md`): the
+/// run's name, `"tool":"enumerator"`, its mode, and `fields` (already JSON values).
+fn runrec(o: &Opts, t0: Instant, exit: i32, fields: &[(&str, String)]) {
+    let b = &o.b;
+    let run = o.run.clone().unwrap_or_else(|| {
+        format!(
+            "{}_{}x{}_u{}_r{}_rs{}_{}{}{}",
+            o.mode,
+            b.pids,
+            b.events,
+            b.undos,
+            b.reverts,
+            b.restarts,
+            o.mutant,
+            if o.sym { "_sym" } else { "" },
+            match o.bias {
+                Bias::None => String::new(),
+                bias => format!("_bias-{}", bias.name()),
+            }
+        )
+    });
+    let mut j = format!(
+        "{{\"job\":null,\"run\":{:?},\"tool\":\"enumerator\",\"mode\":{:?}",
+        run, o.mode
+    );
+    if o.bias != Bias::None {
+        j.push_str(&format!(",\"bias\":{:?}", o.bias.name()));
+    }
+    for (k, v) in fields {
+        j.push_str(&format!(",{k:?}:{v}"));
+    }
+    j.push_str(&format!(
+        ",\"exit\":{exit},\"wall_s\":{},\"bound\":{:?}}}",
+        t0.elapsed().as_secs(),
+        b.describe()
+    ));
+    println!("RUNREC {j}");
+}
+
+/// A JSON string.
+fn js(s: &str) -> String {
+    format!("{s:?}")
 }
 
 fn header(o: &Opts) -> String {
@@ -204,7 +356,10 @@ fn header(o: &Opts) -> String {
         o.stop.join(","),
         o.seed_depth,
         if o.dedup_global { "global" } else { "seed" }
-    )
+    ) + &match o.bias {
+        Bias::None => String::new(),
+        bias => format!(" bias={}", bias.name()),
+    }
 }
 
 fn main() {
@@ -275,7 +430,7 @@ fn run_bfs(o: &Opts) -> i32 {
         .map(|(r, (d, _))| format!("{r}@{d}"))
         .collect();
     println!(
-        "SUMMARY mode=bfs distinct={} transitions={} cut={} max_depth={} violations=[{}] observed=[{}] classes=[{}] wall={:.1}s",
+        "SUMMARY: mode=bfs distinct={} transitions={} cut={} max_depth={} violations=[{}] observed=[{}] classes=[{}] wall={:.1}s{}",
         c.distinct(),
         c.transitions,
         c.cut,
@@ -283,15 +438,43 @@ fn run_bfs(o: &Opts) -> i32 {
         stopped.join(","),
         observed.join(","),
         classes_line(&classes),
-        t0.elapsed().as_secs_f64()
+        t0.elapsed().as_secs_f64(),
+        panic_field(c.panic.as_deref())
     );
-    i32::from(!stopped.is_empty())
+    let exit = i32::from(!stopped.is_empty());
+    let least = c
+        .violations
+        .iter()
+        .filter(|(r, _)| o.stop.contains(r))
+        .min_by_key(|(_, (d, _))| *d);
+    let mut f = vec![
+        ("states", c.distinct().to_string()),
+        ("depth", (c.per_depth.len() - 1).to_string()),
+        ("transitions", c.transitions.to_string()),
+        ("cut", c.cut.to_string()),
+        ("queued", "0".into()),
+    ];
+    match least {
+        Some((r, (d, _))) => {
+            f.push(("status", js("VIOLATION")));
+            f.push(("violation", js(r)));
+            f.push(("trace_states", (d + 1).to_string()));
+            f.push(("violation_depth", d.to_string()));
+        }
+        None => f.push(("status", js("COMPLETE"))),
+    }
+    if let Some(m) = &c.panic {
+        f.push(("error", js(m)));
+    }
+    runrec(o, t0, exit, &f);
+    exit
 }
 
 /// The distinct states at `depth`, breadth-first and exact (canonical fingerprints), with
 /// the violations met on the way.
-/// The seeds (each with its action sequence), the states above them, the violations met.
-type Seeds = (Vec<(State, Vec<Act>)>, u64, Vec<String>);
+/// The seeds (each with its action sequence), the states above them, the violations met,
+/// and the oracle's panic message if it panicked (the search stopped there).
+type Seeds = (Vec<(State, Vec<Act>)>, u64, Vec<String>, Option<String>);
 /// Per finished seed: states, max depth, violations (`rule@depth`).
 type SeedResult = (u64, usize, Vec<String>);
 
@@ -306,8 +489,17 @@ fn seeds(o: &Opts, perms: &[Vec<usize>]) -> Seeds {
         let mut next = Vec::new();
         for (s, path) in &level {
             for a in s.actions(b) {
-                let Some((t, _)) = s.step(b, &a) else {
-                    continue;
+                let t = match s.try_step(b, &a) {
+                    Ok(Some((t, _))) => t,
+                    Ok(None) => continue,
+                    Err(msg) => {
+                        let mut p = path.clone();
+                        p.push(a);
+                        println!("violation {PANIC} at depth {} (seed search):", p.len());
+                        print_path(b, &p);
+                        viol.push(format!("{PANIC}@{}", p.len()));
+                        return (Vec::new(), seen.len() as u64, viol, Some(msg));
+                    }
                 };
                 if !seen.insert(canon_fp(&t, o.sym, perms)) {
                     continue;
@@ -334,7 +526,7 @@ fn seeds(o: &Opts, perms: &[Vec<usize>]) -> Seeds {
     // the states shallower than the seeds (each seed is counted by its own subtree); a
     // seed search that stopped early has its last level as the seeds
     let above = seen.len() as u64 - level.len() as u64;
-    (level, above, viol)
+    (level, above, viol, None)
 }
 
 /// One seed's subtree, depth first.
@@ -348,6 +540,8 @@ struct Walk<'a> {
     viol: BTreeMap<&'static str, (usize, Vec<Act>)>,
     counter: &'a AtomicU64,
     stop: &'a AtomicBool,
+    /// The oracle panicked in this subtree: its message (the run stops).
+    panic: Option<String>,
 }
 
 impl Walk<'_> {
@@ -367,8 +561,19 @@ impl Walk<'_> {
         }
         self.max_depth = self.max_depth.max(path.len());
         for a in s.actions(&self.o.b) {
-            let Some((t, _)) = s.step(&self.o.b, &a) else {
-                continue;
+            let t = match s.try_step(&self.o.b, &a) {
+                Ok(Some((t, _))) => t,
+                Ok(None) => continue,
+                Err(msg) => {
+                    path.push(a);
+                    self.viol
+                        .entry(PANIC)
+                        .or_insert_with(|| (path.len(), path.clone()));
+                    path.pop();
+                    self.panic = Some(msg);
+                    self.stop.store(true, Ordering::Relaxed);
+                    return;
+                }
             };
             if !self.fresh(canon_fp(&t, self.o.sym, self.perms)) {
                 continue;
@@ -394,7 +599,32 @@ impl Walk<'_> {
 fn run_dfs(o: &Opts) -> i32 {
     let t0 = Instant::now();
     let perms = bounded::perms(o.b.pids);
-    let (mut seeds, above, seed_viol) = seeds(o, &perms);
+    let (mut seeds, above, seed_viol, seed_panic) = seeds(o, &perms);
+    if let Some(msg) = seed_panic {
+        println!(
+            "SUMMARY: mode=dfs states={above} seeds=0/0 complete=false max_depth=0 dedup={} violations=[{}] observed=[] wall={:.1}s{}",
+            if o.dedup_global { "global" } else { "seed" },
+            seed_viol
+                .iter()
+                .filter(|v| v.starts_with(PANIC))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(","),
+            t0.elapsed().as_secs_f64(),
+            panic_field(Some(&msg))
+        );
+        runrec(
+            o,
+            t0,
+            1,
+            &[
+                ("status", js("VIOLATION")),
+                ("violation", js(PANIC)),
+                ("error", js(&msg)),
+            ],
+        );
+        return 1;
+    }
     let all_seeds = seeds.len();
     if let Some(k) = o.sample {
         // a uniform sample of k seeds (a partial Fisher-Yates with a fixed xorshift)
@@ -463,6 +693,7 @@ fn run_dfs(o: &Opts) -> i32 {
     let stop = AtomicBool::new(false);
     let results: Mutex<BTreeMap<usize, SeedResult>> = Mutex::new(done.clone());
     let first_viol: Mutex<BTreeMap<&'static str, (usize, Vec<Act>)>> = Mutex::new(BTreeMap::new());
+    let panicked: Mutex<Option<String>> = Mutex::new(None);
     let finished = AtomicUsize::new(done.len());
     std::thread::scope(|sc| {
         // progress
@@ -510,12 +741,10 @@ fn run_dfs(o: &Opts) -> i32 {
                     viol: BTreeMap::new(),
                     counter: &counter,
                     stop: &stop,
+                    panic: None,
                 };
                 let mut path = p.clone();
                 w.go(s, &mut path);
-                if stop.load(Ordering::Relaxed) {
-                    break; // an unfinished seed is not checkpointed
-                }
                 let vs: Vec<String> = w
                     .viol
                     .iter()
@@ -529,6 +758,12 @@ fn run_dfs(o: &Opts) -> i32 {
                             *e = (d, path);
                         }
                     }
+                }
+                if let Some(msg) = w.panic {
+                    panicked.lock().expect("lock").get_or_insert(msg);
+                }
+                if stop.load(Ordering::Relaxed) {
+                    break; // an unfinished seed is not checkpointed
                 }
                 if let Some(ck) = &ck {
                     let mut f = ck.lock().expect("lock");
@@ -572,7 +807,14 @@ fn run_dfs(o: &Opts) -> i32 {
             *e = (*e).min(d);
         }
     }
-    for (r, (d, path)) in first_viol.into_inner().expect("viol") {
+    let first_viol = first_viol.into_inner().expect("viol");
+    // a panic (in a seed the run left unfinished) counts too
+    for (r, (d, _)) in &first_viol {
+        let e = least.entry((*r).to_owned()).or_insert(*d);
+        *e = (*e).min(*d);
+    }
+    let panicked = panicked.into_inner().expect("panic");
+    for (r, (d, path)) in first_viol {
         if o.stop.contains(&r) {
             println!("violation {r} at depth {d}:");
             print_path(&o.b, &path);
@@ -587,7 +829,7 @@ fn run_dfs(o: &Opts) -> i32 {
             .join(",")
     };
     let complete = res.len() == n;
-    if o.sample.is_some() {
+    if o.sample.is_some() && panicked.is_none() {
         let sub: Vec<f64> = res.values().map(|r| r.0 as f64).collect();
         let mean = sub.iter().sum::<f64>() / sub.len().max(1) as f64;
         let var =
@@ -595,29 +837,74 @@ fn run_dfs(o: &Opts) -> i32 {
         let est = above as f64 + mean * all_seeds as f64;
         let se = (var / sub.len().max(1) as f64).sqrt() * all_seeds as f64;
         println!(
-            "SUMMARY mode=dfs-sample estimate={est:.3e} se={se:.2e} seeds={}/{all_seeds} mean_per_seed={mean:.3e} max_per_seed={:.3e} wall={:.1}s ({:.0} states/s)",
+            "SUMMARY: mode=dfs-sample estimate={est:.3e} se={se:.2e} seeds={}/{all_seeds} mean_per_seed={mean:.3e} max_per_seed={:.3e} wall={:.1}s ({:.0} states/s)",
             res.len(),
             sub.iter().cloned().fold(0.0, f64::max),
             t0.elapsed().as_secs_f64(),
             sub.iter().sum::<f64>() / t0.elapsed().as_secs_f64()
         );
+        runrec(
+            o,
+            t0,
+            0,
+            &[
+                ("status", js("ESTIMATE")),
+                ("estimate", format!("{}", est.round() as u64)),
+                ("seeds", res.len().to_string()),
+            ],
+        );
         return 0;
     }
     println!(
-        "SUMMARY mode=dfs states={states} seeds={}/{n} complete={complete} max_depth={max_depth} dedup={} violations=[{}] observed=[{}] wall={:.1}s",
+        "SUMMARY: mode=dfs states={states} seeds={}/{n} complete={complete} max_depth={max_depth} dedup={} violations=[{}] observed=[{}] wall={:.1}s{}",
         res.len(),
         if o.dedup_global { "global" } else { "seed" },
         fmt(true),
         fmt(false),
-        t0.elapsed().as_secs_f64()
+        t0.elapsed().as_secs_f64(),
+        panic_field(panicked.as_deref())
     );
-    if !fmt(true).is_empty() {
+    let exit = if !fmt(true).is_empty() {
         1
     } else if !complete {
         3
     } else {
         0
+    };
+    let least_stop = least
+        .iter()
+        .filter(|(r, _)| o.stop.contains(&r.as_str()))
+        .min_by_key(|(_, d)| **d);
+    let mut f = vec![
+        ("states", states.to_string()),
+        ("depth", max_depth.to_string()),
+        ("seeds", format!("{}", res.len())),
+        ("seeds_all", n.to_string()),
+    ];
+    match least_stop {
+        Some((r, d)) => {
+            f.push(("status", js("VIOLATION")));
+            f.push(("violation", js(r)));
+            f.push(("trace_states", (d + 1).to_string()));
+        }
+        // a run its time limit stopped: its count is a lower bound
+        None if !complete => {
+            f.push(("status", js("PARTIAL")));
+            f.push(("queued", (n - res.len()).to_string()));
+            if let Some(t) = o.time_limit {
+                f.push(("cap_s", t.to_string()));
+            }
+        }
+        None => {
+            f.push(("status", js("COMPLETE")));
+            f.push(("queued", "0".into()));
+        }
     }
+    if let Some(m) = &panicked {
+        f.push(("error", js(m)));
+    }
+    runrec(o, t0, exit, &f);
+    exit
 }
 
 /// Knuth's estimator: random root-to-leaf probes over the search tree (successors not cut,
@@ -641,11 +928,33 @@ fn run_knuth(o: &Opts) -> i32 {
                 per.push(0.0);
             }
             per[depth] += weight;
-            let kids: Vec<State> = s
-                .actions(&o.b)
-                .iter()
-                .filter_map(|a| s.step(&o.b, a).map(|x| x.0))
-                .collect();
+            let mut kids: Vec<State> = Vec::new();
+            for a in s.actions(&o.b) {
+                match s.try_step(&o.b, &a) {
+                    Ok(Some((t, _))) => kids.push(t),
+                    Ok(None) => {}
+                    Err(msg) => {
+                        println!(
+                            "SUMMARY: mode=knuth violations=[{PANIC}@{}] wall={:.1}s{}",
+                            depth + 1,
+                            t0.elapsed().as_secs_f64(),
+                            panic_field(Some(&msg))
+                        );
+                        runrec(
+                            o,
+                            t0,
+                            1,
+                            &[
+                                ("status", js("VIOLATION")),
+                                ("violation", js(PANIC)),
+                                ("trace_states", (depth + 2).to_string()),
+                                ("error", js(&msg)),
+                            ],
+                        );
+                        return 1;
+                    }
+                }
+            }
             if kids.is_empty() {
                 break;
             }
@@ -663,10 +972,20 @@ fn run_knuth(o: &Opts) -> i32 {
         per.iter().map(|v| format!("{v:.3e}")).collect::<Vec<_>>()
     );
     println!(
-        "SUMMARY mode=knuth tree_nodes~{total:.3e} probes={} max_depth={} wall={:.1}s ({probe_s:.2e} s/probe)",
+        "SUMMARY: mode=knuth tree_nodes~{total:.3e} probes={} max_depth={} wall={:.1}s ({probe_s:.2e} s/probe)",
         o.probes,
         per.len() - 1,
         t0.elapsed().as_secs_f64()
+    );
+    runrec(
+        o,
+        t0,
+        0,
+        &[
+            ("status", js("ESTIMATE")),
+            ("tree_nodes", format!("{}", total.round() as u64)),
+            ("probes", o.probes.to_string()),
+        ],
     );
     0
 }
@@ -681,7 +1000,19 @@ fn run_walk(o: &Opts) -> i32 {
     let first: Mutex<BTreeMap<&'static str, Vec<Act>>> = Mutex::new(BTreeMap::new());
     let classes: Vec<AtomicU64> = CLASSES.iter().map(|_| AtomicU64::new(0)).collect();
     let all_done = AtomicBool::new(false);
+    // the oracle panicked: every walker stops (its message)
+    let halt = AtomicBool::new(false);
+    let panicked: Mutex<Option<String>> = Mutex::new(None);
+    /// Ends the progress thread however the walkers end (a panic included), so the scope
+    /// can join it.
+    struct Done<'a>(&'a AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
     std::thread::scope(|sc| {
+        let done_guard = Done(&all_done);
         // progress, at least every `--progress` seconds (a node stops a job that prints
         // nothing for its stall timeout)
         sc.spawn(|| {
@@ -713,26 +1044,65 @@ fn run_walk(o: &Opts) -> i32 {
         });
         let workers: Vec<_> = (0..o.threads)
             .map(|t| {
-                let (done, finished, steps, first, classes) =
-                    (&done, &finished, &steps, &first, &classes);
+                let (done, finished, steps, first, classes, halt, panicked) =
+                    (&done, &finished, &steps, &first, &classes, &halt, &panicked);
                 sc.spawn(move || {
                     let mut x = o.rng.max(1).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (t as u64 + 1);
-                    while done.fetch_add(1, Ordering::Relaxed) < o.probes {
+                    'walks: while !halt.load(Ordering::Relaxed)
+                        && done.fetch_add(1, Ordering::Relaxed) < o.probes
+                    {
                         let mut s = State::init(&o.b);
                         let mut path: Vec<Act> = Vec::new();
                         loop {
-                            let mut kids: Vec<(Act, State)> = s
-                                .actions(&o.b)
-                                .into_iter()
-                                .filter_map(|a| s.step(&o.b, &a).map(|(t, _)| (a, t)))
-                                .collect();
+                            if halt.load(Ordering::Relaxed) {
+                                break 'walks;
+                            }
+                            let mut kids: Vec<(Act, State)> = Vec::new();
+                            for a in s.actions(&o.b) {
+                                match s.try_step(&o.b, &a) {
+                                    Ok(Some((t, _))) => kids.push((a, t)),
+                                    Ok(None) => {}
+                                    Err(msg) => {
+                                        // the oracle panicked: a violation, and the run stops
+                                        let mut p = path.clone();
+                                        p.push(a);
+                                        let mut f = first.lock().expect("lock");
+                                        let e = f.entry(PANIC).or_insert_with(|| p.clone());
+                                        if p.len() < e.len() {
+                                            *e = p;
+                                        }
+                                        panicked.lock().expect("lock").get_or_insert(msg);
+                                        halt.store(true, Ordering::Relaxed);
+                                        break 'walks;
+                                    }
+                                }
+                            }
                             if kids.is_empty() {
                                 break;
                             }
                             x ^= x << 13;
                             x ^= x >> 7;
                             x ^= x << 17;
-                            let (a, t) = kids.swap_remove((x % kids.len() as u64) as usize);
+                            let pick = match o.bias {
+                                // uniform: the same draw as before the bias existed
+                                Bias::None => (x % kids.len() as u64) as usize,
+                                bias => {
+                                    let w: Vec<u64> =
+                                        kids.iter().map(|(a, t)| bias.weight(&s, a, t)).collect();
+                                    let mut r = x % w.iter().sum::<u64>();
+                                    w.iter()
+                                        .position(|&k| {
+                                            if r < k {
+                                                true
+                                            } else {
+                                                r -= k;
+                                                false
+                                            }
+                                        })
+                                        .expect("r < the total weight")
+                                }
+                            };
+                            let (a, t) = kids.swap_remove(pick);
                             path.push(a);
                             steps.fetch_add(1, Ordering::Relaxed);
                             for h in &t.hit {
@@ -759,10 +1129,18 @@ fn run_walk(o: &Opts) -> i32 {
             })
             .collect();
         for w in workers {
-            w.join().expect("a walker panicked");
+            if let Err(p) = w.join() {
+                // a panic outside the oracle's steps: reported like one
+                panicked
+                    .lock()
+                    .expect("lock")
+                    .get_or_insert(bounded::panic_message(p.as_ref()));
+                first.lock().expect("lock").entry(PANIC).or_default();
+            }
         }
-        all_done.store(true, Ordering::Relaxed);
+        drop(done_guard);
     });
+    let panicked = panicked.into_inner().expect("panic");
     let classes: Vec<u64> = classes.iter().map(|c| c.load(Ordering::Relaxed)).collect();
     for (c, n) in CLASSES.iter().zip(&classes) {
         println!("class {c:24} {n}");
@@ -787,15 +1165,42 @@ fn run_walk(o: &Opts) -> i32 {
             .join(",")
     };
     println!(
-        "SUMMARY mode=walk walks={} steps={} violations=[{}] observed=[{}] classes=[{}] wall={:.1}s",
-        o.probes,
+        "SUMMARY: mode=walk walks={} steps={} violations=[{}] observed=[{}] classes=[{}] wall={:.1}s{}",
+        finished.load(Ordering::Relaxed),
         steps.load(Ordering::Relaxed),
         fmt(true),
         fmt(false),
         classes_line(&classes),
-        t0.elapsed().as_secs_f64()
+        t0.elapsed().as_secs_f64(),
+        panic_field(panicked.as_deref())
     );
-    i32::from(!fmt(true).is_empty())
+    let exit = i32::from(!fmt(true).is_empty());
+    // walks sample the bound: no state count; cite `walks` and `steps` by field
+    let least = first
+        .iter()
+        .filter(|(r, _)| o.stop.contains(*r))
+        .min_by_key(|(_, p)| p.len());
+    let mut f = vec![
+        ("walks", finished.load(Ordering::Relaxed).to_string()),
+        ("walks_asked", o.probes.to_string()),
+        ("steps", steps.load(Ordering::Relaxed).to_string()),
+    ];
+    for (c, n) in CLASSES.iter().zip(&classes) {
+        f.push((c, n.to_string()));
+    }
+    match least {
+        Some((r, p)) => {
+            f.push(("status", js("VIOLATION")));
+            f.push(("violation", js(r)));
+            f.push(("trace_states", (p.len() + 1).to_string()));
+        }
+        None => f.push(("status", js("SAMPLED"))),
+    }
+    if let Some(m) = &panicked {
+        f.push(("error", js(m)));
+    }
+    runrec(o, t0, exit, &f);
+    exit
 }
 
 fn rss_mib() -> u64 {

@@ -1063,6 +1063,57 @@ fn p30_person(p: &mut Person<'_>) -> R {
 fn p30_agent(a: &mut Agent<'_>) -> R {
     p30_agent_as(a, &["log", "--pending", "--on-behalf-of", "me"])
 }
+/// As [`p30_setup`], then sam settles the bot's two edits made for sam: one approved, one
+/// declined (`approvals --all` lists settled records too).
+fn p30_all_setup(stage: &mut Stage) -> Result<(), String> {
+    p30_setup(stage)?;
+    let first = stage.edit_as("bot", |t| t.replace("MORE", "More"))?;
+    let second = stage.edit_as("bot", |t| t.replace("INTRO", "Intro"))?;
+    let sam = stage.other("sam", ParticipantKind::Person)?;
+    for (seq, state) in [
+        (first, ApprovalState::Approved),
+        (second, ApprovalState::Declined),
+    ] {
+        stage
+            .session()
+            .set_approval(sam, seq, state)
+            .map_err(|e| format!("sam settles {seq}: {e}"))?;
+    }
+    Ok(())
+}
+/// `approvals --all`: every approval record, settled ones too, newest first, with its state.
+fn p30_all_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    person_step(p.session().approvals(c), |mut all| {
+        all.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
+        let rows: Vec<(u64, ApprovalState)> = all.into_iter().map(|(s, a)| (s, a.state)).collect();
+        Output::value(rows)
+    })
+}
+fn p30_all_agent(a: &mut Agent<'_>) -> R {
+    p30_all_agent_as(a, &["approvals", "--all"])
+}
+fn p30_all_log_agent(a: &mut Agent<'_>) -> R {
+    p30_all_agent_as(a, &["log", "--pending", "--all"])
+}
+fn p30_all_agent_as(a: &mut Agent<'_>, argv: &[&str]) -> R {
+    agent_step(a.verb(argv, b"")?, |o| match &o.value {
+        VerbValue::Log(l) => {
+            let rows: Vec<(u64, ApprovalState)> = l
+                .iter()
+                .filter_map(|i| match i {
+                    LogItem::Change {
+                        info,
+                        approval: Some(s),
+                    } => Some((info.seq, *s)),
+                    _ => None,
+                })
+                .collect();
+            Output::value(rows)
+        }
+        v => Output::value(v),
+    })
+}
 /// P30 through the alias (`approvals`, the same as `log --pending`).
 fn p30_alias_agent(a: &mut Agent<'_>) -> R {
     p30_agent_as(a, &["approvals", "--on-behalf-of", "me"])
@@ -1562,6 +1613,22 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
                 p30_alias_agent,
             )
             .setup(p30_setup),
+            c(
+                action,
+                "approvals",
+                "--all: settled ones too, newest first",
+                p30_all_person,
+                p30_all_agent,
+            )
+            .setup(p30_all_setup),
+            c(
+                action,
+                "log --pending",
+                "--all: settled ones too, newest first",
+                p30_all_person,
+                p30_all_log_agent,
+            )
+            .setup(p30_all_setup),
         ],
         P::Revert => vec![c(
             action,

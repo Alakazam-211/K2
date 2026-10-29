@@ -109,7 +109,10 @@ impl ToolRunError {
 pub fn session_exit(e: &SessionError) -> u8 {
     use crate::blob::BlobError;
     match e {
-        SessionError::Forbidden { .. } => exit::REFUSED,
+        SessionError::Forbidden { .. }
+        | SessionError::Doc(crate::doc::DocError::Unaccepted | crate::doc::DocError::Quarantined) => {
+            exit::REFUSED
+        }
         SessionError::NotFound(_)
         | SessionError::Declined(_)
         | SessionError::PackMismatch { .. }
@@ -161,6 +164,7 @@ fn store_exit(e: &crate::store::StoreError) -> u8 {
         S::CurrentVersion(..) => exit::USAGE,
         S::Db(_)
         | S::Newer { .. }
+        | S::NewerData { .. }
         | S::Corrupt(_)
         | S::KeyTaken(_)
         | S::Locked

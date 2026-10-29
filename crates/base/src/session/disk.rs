@@ -71,6 +71,62 @@ pub struct FlushOutcome {
     pub disk: Option<DiskState>,
 }
 
+/// The coarsest modification-time granularity the kit allows for: FAT and exFAT keep 2 s,
+/// HFS+ 1 s, network shares whatever their server keeps (ext4 and XFS a kernel tick, APFS
+/// ns). Two writes inside it can leave the same mtime.
+pub(crate) const RACY_NS: u128 = 2_000_000_000;
+
+/// The wall clock in ns since the Unix epoch: what a file's mtime is measured on (never the
+/// host's clock).
+pub(crate) fn wall_ns() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos())
+}
+
+/// A file as last seen: its stat, and whether that stat can vouch for its content (git's
+/// "racy clean" rule). A stat taken within [`RACY_NS`] of its own mtime (or with an mtime
+/// in the future, or none) is **racy**: a same-size write in place within the same mtime
+/// tick would leave it equal. An equal racy stat proves nothing, so the file is read and
+/// hashed; the mark clears when it is seen again after mtime + [`RACY_NS`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Seen {
+    pub stat: FileStat,
+    pub racy: bool,
+}
+
+impl Seen {
+    /// `stat`, just taken.
+    pub(crate) fn now(stat: FileStat) -> Self {
+        Self::at(stat, wall_ns())
+    }
+
+    pub(crate) fn at(stat: FileStat, wall_ns: u128) -> Self {
+        let racy = stat
+            .mtime_ns
+            .map_or(true, |m| wall_ns < m.saturating_add(RACY_NS));
+        Seen { stat, racy }
+    }
+
+    /// Whether `now` (a stat just taken) is surely the same content: equal, and not racy.
+    pub(crate) fn vouches_for(&self, now: FileStat) -> bool {
+        !self.racy && self.stat == now
+    }
+
+    /// What to keep in the store: only a stat that can vouch for the content. A racy one
+    /// is not kept (`None`: the next open hashes the file), so a reopen honours the rule
+    /// with no change to the record's format.
+    pub(crate) fn persisted(&self) -> Option<Vec<u8>> {
+        (!self.racy).then(|| self.stat.to_bytes())
+    }
+
+    /// A stat read back from the store: the kit keeps only non-racy ones; one kept by an
+    /// older kit is racy when its mtime is still within [`RACY_NS`] of now.
+    pub(crate) fn loaded(stat: FileStat) -> Self {
+        Self::now(stat)
+    }
+}
+
 /// What identifies one state of a file cheaply: a rename-save changes the inode, an
 /// in-place save the size or mtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +351,35 @@ pub(crate) fn atomic_write_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stat_at(mtime_ns: Option<u128>) -> FileStat {
+        FileStat {
+            len: 7,
+            mtime_ns,
+            ino: 1,
+            dev: 2,
+        }
+    }
+
+    /// Git's racy rule: a stat taken within RACY_NS of its mtime (or ahead of it, or with
+    /// none) can't vouch for the content; one taken after mtime + RACY_NS can.
+    #[test]
+    fn a_stat_is_racy_until_its_mtime_is_older_than_the_granularity() {
+        let m = 1_700_000_000_000_000_000u128;
+        let s = stat_at(Some(m));
+        assert!(Seen::at(s, m).racy, "taken in its own tick");
+        assert!(Seen::at(s, m + RACY_NS - 1).racy);
+        assert!(!Seen::at(s, m + RACY_NS).racy, "clears after mtime + G");
+        assert!(Seen::at(s, m - 5).racy, "an mtime in the future");
+        assert!(Seen::at(stat_at(None), m).racy, "no mtime");
+        // an equal stat vouches only when not racy
+        assert!(!Seen::at(s, m).vouches_for(s));
+        assert!(Seen::at(s, m + RACY_NS).vouches_for(s));
+        assert!(!Seen::at(s, m + RACY_NS).vouches_for(stat_at(Some(m + 1))));
+        // only a stat that vouches is kept in the store
+        assert_eq!(Seen::at(s, m).persisted(), None);
+        assert_eq!(Seen::at(s, m + RACY_NS).persisted(), Some(s.to_bytes()));
+    }
 
     #[test]
     fn file_stat_round_trips() {

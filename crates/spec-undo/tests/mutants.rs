@@ -1,8 +1,8 @@
 //! The model check's mutants (spec §8 Mutants; `model::mutant`) at a tiny bound: each must
 //! violate the rule it breaks, at the depth given, on the enumerator; the oracle of record
 //! violates none of the rules the runs stop at. The same set fails TLC on `undo.qnt`
-//! (`tools/undo/counts.sh`, `PART=m`). Needs `--features mutants`; one test, so one mutant is
-//! active at a time in this process.
+//! (`tools/undo/counts.sh`, `PART=m`). Needs `--features mutants`; one in-process test, so one
+//! mutant is active at a time in this process (the enumerator test runs the binary).
 
 use spec_undo::bounded::{bfs, Bound, STOP};
 use spec_undo::model::mutant::{self, Mutant};
@@ -152,4 +152,81 @@ fn no_o4a_fails_i1_in_mid_text() {
     let (u, o4a, viol, i1, _) = run(Mutant::NoO4a);
     assert!(matches!(u, Outcome::Applied { .. }) && !o4a, "{u:?}");
     assert!(viol && !i1, "no O4a: two live elements with one root");
+}
+
+/// A panic in the oracle (the harness mutant: it panics on an undo with something to undo)
+/// ends every mode of `undo_enum` promptly, as a violation `panic@<depth>` with its message,
+/// exit 1 (v0.9.3: a walker's panic used to leave the process running until the job's
+/// timeout). The dfs run puts the panic below its seeds, in a worker.
+#[test]
+fn an_oracle_panic_ends_every_enumerator_mode_as_a_violation() {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let bound = [
+        "--pids",
+        "2",
+        "--events",
+        "1",
+        "--undos",
+        "1",
+        "--reverts",
+        "1",
+        "--maxlen",
+        "3",
+        "--init",
+        "ab",
+        "--mutant",
+        "harness-oracle-panics",
+        "--threads",
+        "4",
+    ];
+    for (mode, extra) in [
+        ("walk", &["--probes", "1000000"][..]),
+        ("bfs", &[][..]),
+        ("dfs", &["--seed-depth", "1"][..]),
+        ("knuth", &["--probes", "100000"][..]),
+    ] {
+        let t0 = Instant::now();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_undo_enum"))
+            .arg(mode)
+            .args(bound)
+            .args(extra)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("undo_enum runs");
+        // it must end on its own, promptly
+        let status = loop {
+            if let Some(st) = child.try_wait().expect("wait") {
+                break st;
+            }
+            if t0.elapsed() > Duration::from_secs(60) {
+                let _ = child.kill();
+                panic!("undo_enum {mode} still running after 60 s with a panicking oracle");
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let out = child.wait_with_output().expect("output");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let summary = stdout
+            .lines()
+            .find(|l| l.starts_with("SUMMARY"))
+            .unwrap_or_else(|| panic!("{mode}: no SUMMARY line:\n{stdout}"));
+        assert_eq!(status.code(), Some(1), "{mode}: {summary}");
+        assert!(summary.contains("panic@"), "{mode}: {summary}");
+        assert!(
+            summary.contains("panic=\"harness mutant: the oracle panics on an undo\""),
+            "{mode}: {summary}"
+        );
+        let depth: usize = summary
+            .split("panic@")
+            .nth(1)
+            .and_then(|r| r.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|d| d.parse().ok())
+            .expect("a depth");
+        assert!(
+            depth >= 2,
+            "{mode}: an undo with something to undo: {summary}"
+        );
+    }
 }

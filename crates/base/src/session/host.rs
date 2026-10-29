@@ -4,7 +4,7 @@ use super::awareness::{ClaimEnd, ClaimId, ReservationEnd};
 use super::participant::{ConnId, Participant};
 use super::position::LineRange;
 use crate::doc::ClientId;
-use crate::store::DocKey;
+use crate::store::{DocKey, Seq};
 
 /// What a participant may do with one doc, as the host decides it.
 ///
@@ -272,6 +272,10 @@ pub enum AuditEvent {
     FileDeclined { key: DocKey, code: &'static str },
     /// The file is back (after missing or declined).
     FileRestored { key: DocKey },
+    /// The file came back holding one of the kit's own recent writes, made since the last
+    /// outside save (an editor saved a stale buffer, or a late echo): it was not taken as an
+    /// edit, and the next write-back puts the doc back (v0.9.5; before, suppressed silently).
+    EchoSuppressed { key: DocKey },
     /// Reading or writing the file failed (write-back retries).
     DiskError { key: DocKey, error: String },
     /// The person `pid` settled the approval of on-behalf change `seq`. For a tier-0 blob
@@ -334,6 +338,37 @@ pub enum AuditEvent {
     DocDeleted {
         key: DocKey,
         connections: Vec<(ConnId, String)>,
+    },
+    /// The tier-0 blob doc at `key` became a text doc, keeping its key and its history
+    /// (v0.9.2, [`crate::session::SessionManager::promote_blob_file`]). Its blob session
+    /// closed: `connections` (each with its pid) were in it and are gone; later calls on it
+    /// fail with [`crate::session::SessionError::Unloaded`]. Tell those tabs to open the
+    /// text doc. `text_versions` blob versions became text versions (through `changes` log
+    /// changes); `tier0_kept` stay as the doc's tier-0 history (non-text or purged).
+    Promoted {
+        key: DocKey,
+        connections: Vec<(ConnId, String)>,
+        text_versions: u64,
+        changes: u64,
+        tier0_kept: u64,
+    },
+    /// The edit path's runtime check (v0.9.3, [`crate::session::Config::edit_check_every`])
+    /// found that change `change`'s update, made on the doc as `client`, differed from the
+    /// same edit made through a throwaway replica. The replica's update was applied (never
+    /// the other), and the doc uses that path until it is reloaded. Metadata only. A bug in
+    /// the engine: report it.
+    EditPathMismatch {
+        key: DocKey,
+        client: ClientId,
+        change: Seq,
+    },
+    /// The runtime check found the engine's cached text of `root` different from a fresh
+    /// read, at change `change` (checked before and after it). The fresh text was used, and
+    /// the doc reads its texts afresh until it is reloaded. Metadata only.
+    TextCacheMismatch {
+        key: DocKey,
+        root: String,
+        change: Seq,
     },
     /// `pid` took claim `claim` on `lines` until `expires_ms` (amendment 13). `for_edit`:
     /// implicitly, by a read verb's `--for-edit`. Metadata only (the claim's note is not

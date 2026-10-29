@@ -653,11 +653,13 @@ impl Session {
         }
         let pid = &st.members[i].p.pid;
         let text = self.text_of(st, root)?.1;
-        if let Some(c) = st
+        let fates = awareness::claim_fates(&st.aware.claims, root, hunks, pid);
+        if let Some((c, _)) = st
             .aware
             .claims
             .iter()
-            .find(|c| c.pid != *pid && c.touched_by(root, hunks))
+            .zip(&fates)
+            .find(|(c, f)| c.pid != *pid && f.touched)
         {
             return Err(SessionError::Claimed {
                 id: c.id,

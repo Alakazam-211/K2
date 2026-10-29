@@ -1,0 +1,35 @@
+{
+ "job": "6a6c1557",
+ "collected": "2026-10-28",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "6a6c1557",
+   "run": "enumerator_3x1u2r1",
+   "tool": "enumerator",
+   "states": 8516359,
+   "depth": null,
+   "queued": null,
+   "cap_s": null,
+   "exit": 0,
+   "wall_s": 169,
+   "mode": "dfs",
+   "source": "log",
+   "status": "COMPLETE"
+  },
+  {
+   "job": "6a6c1557",
+   "run": "enumerator_2x2u2r1",
+   "tool": "enumerator",
+   "states": 717352254,
+   "depth": null,
+   "queued": null,
+   "cap_s": null,
+   "exit": 0,
+   "wall_s": 7464,
+   "mode": "dfs",
+   "source": "log",
+   "status": "COMPLETE"
+  }
+ ]
+}

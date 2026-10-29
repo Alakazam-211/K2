@@ -109,6 +109,16 @@ pub struct Config {
     /// On unload, compact when the log has at least this many entries. Default 100.
     pub unload_compact_entries: u64,
 
+    // --- engine ---
+    /// The edit path's runtime check (v0.9.3): one edit in this many is also made through a
+    /// throwaway replica and the two updates compared byte for byte, and the engine's cached
+    /// texts compared with a fresh read. A mismatch is never served (the replica's update is
+    /// applied), is reported ([`super::AuditEvent::EditPathMismatch`],
+    /// [`super::AuditEvent::TextCacheMismatch`]), and the doc uses the replica path (or reads
+    /// its texts afresh) until it is reloaded. A sampled edit costs O(doc), as every edit did
+    /// before v0.9.3. 0: never. Default 1,000 ([`crate::doc::DEFAULT_EDIT_CHECK_EVERY`]).
+    pub edit_check_every: u32,
+
     // --- pool ---
     /// Memory budget for loaded sessions; idle sessions unload, least recently used first,
     /// while the estimate is over it. Default 256 MiB.
@@ -199,6 +209,7 @@ impl Default for Config {
             compact_entries: 1_000,
             compact_bytes: 2 << 20,
             unload_compact_entries: 100,
+            edit_check_every: crate::doc::DEFAULT_EDIT_CHECK_EVERY,
             memory_budget_bytes: 256 << 20,
             memory_factor: 20,
             idle_unload_ms: 10 * 60_000,

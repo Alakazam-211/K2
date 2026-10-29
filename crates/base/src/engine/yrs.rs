@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Mutex;
 
 use yrs::block::ClientID;
 use yrs::types::text::ChangeKind as YChangeKind;
@@ -20,7 +21,7 @@ use yrs::{
 #[cfg(feature = "conformance")]
 use yrs::{Assoc, IndexedSequence, StickyIndex};
 
-use super::{BlameRun, EngineDoc, SESSION_CLIENT};
+use super::{BlameRun, EngineCheck, EngineDoc, SESSION_CLIENT};
 use crate::doc::{ClientId, DocError, Edit, UpdateInfo, MAX_CLIENT_ID};
 use crate::schema::{Kind, Schema};
 use crate::text::diff::Hunk;
@@ -33,6 +34,45 @@ pub(crate) struct YrsDoc {
     /// panicked apply that may have half-integrated. Nothing is encoded or edited from a
     /// poisoned doc; its owner reloads it from the store.
     poisoned: bool,
+    /// Each text root's text, as last read or written (v0.9.2). Reading it out of Yrs walks
+    /// every item of the root, deleted ones included, so it grows with the doc's history,
+    /// not its text; an edit made here knows its result. Emptied by every apply.
+    text_cache: Mutex<HashMap<&'static str, String>>,
+    /// The sampled runtime check of the edit path and the text cache (v0.9.3).
+    checks: Checks,
+}
+
+/// The canary (v0.9.3): every `every`th edit is also made the old way (a throwaway replica
+/// as the client, from the state before it) and the two updates compared byte for byte, and
+/// the text cache is compared with a fresh read. A mismatch is never served: the doc goes
+/// back to the state before the edit and takes the throwaway's update, then makes every
+/// later edit that way (`fallback`), or reads every text afresh (`cache_off`), until it is
+/// reloaded. What it found waits in `found` for the owner to report.
+#[derive(Debug, Default)]
+struct Checks {
+    /// 0: never.
+    every: u32,
+    edits: u64,
+    fallback: bool,
+    cache_off: bool,
+    found: Vec<EngineCheck>,
+    /// Whether the edit in progress is a sampled one.
+    now: bool,
+}
+
+impl Checks {
+    fn new() -> Self {
+        Self {
+            every: crate::doc::DEFAULT_EDIT_CHECK_EVERY,
+            ..Self::default()
+        }
+    }
+
+    /// Count an edit; whether it is a sampled one.
+    fn sample(&mut self) -> bool {
+        self.edits += 1;
+        self.every != 0 && self.edits % u64::from(self.every) == 0
+    }
 }
 
 /// Every Yrs doc the kit makes. **GC stays on** (`skip_gc: false`, K-PURGE-11, E-ERASE-10):
@@ -50,6 +90,28 @@ fn new_doc(client: u64) -> Doc {
 
 fn guarded<T>(f: impl FnOnce() -> Result<T, DocError>) -> Result<T, DocError> {
     catch_unwind(AssertUnwindSafe(f)).unwrap_or(Err(DocError::Panic))
+}
+
+/// The one way the kit decodes update bytes that come from outside it (v0.9.5): v1 only (the
+/// fork bounds what decoding allocates), then refused when any block carries subdocument
+/// content, which the kit never uses ([`DocError::Unaccepted`]). Decode-only: nothing is
+/// applied before the check, and the caller applies the update returned (decoded once).
+fn decode_accepted(update: &[u8]) -> Result<Update, DocError> {
+    let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
+    if u.has_subdoc_content() {
+        return Err(DocError::Unaccepted);
+    }
+    Ok(u)
+}
+
+/// The store-load scan (v0.9.5): a stored state or log entry holding subdocument content is
+/// never loaded as live ([`DocError::Quarantined`]). Expected never to fire: the kit never
+/// writes such content, and refuses it at every ingress.
+fn stored_accepted(u: &Update) -> Result<(), DocError> {
+    if u.has_subdoc_content() {
+        return Err(DocError::Quarantined);
+    }
+    Ok(())
 }
 
 fn roots(doc: &Doc, schema: &Schema) -> HashMap<&'static str, TextRef> {
@@ -98,6 +160,14 @@ fn state_vector_well_formed(b: &[u8]) -> bool {
 /// by 3 (each client section is at least its block count, client ID and clock), and the
 /// first client's block count can't exceed the bytes left. More than one client is allowed
 /// here; [`EngineDoc::check_update`] decides what other clients' blocks may be.
+/// A client update's bytes: the cheap shape check, then [`decode_accepted`].
+fn decode_client(update: &[u8]) -> Result<Update, DocError> {
+    if !client_update_well_formed(update) {
+        return Err(DocError::Decode("malformed update".into()));
+    }
+    decode_accepted(update)
+}
+
 fn client_update_well_formed(b: &[u8]) -> bool {
     let mut at = 0;
     let Some(clients) = read_varuint(b, &mut at) else {
@@ -134,7 +204,7 @@ fn continues_each_client(have: &StateVector, u: &Update) -> Result<(), DocError>
 }
 
 /// A text root's hunks with their UTF-16 (offset, length), ready to apply.
-type TextPlan<'a> = (&'a str, &'a [Hunk], Vec<(u32, u32)>);
+pub(crate) type TextPlan<'a> = (&'a str, &'a [Hunk], Vec<(u32, u32)>);
 
 /// UTF-16 offset and length of each hunk, in one forward pass over `text`.
 fn to_utf16(text: &str, hunks: &[Hunk]) -> Vec<(u32, u32)> {
@@ -181,6 +251,14 @@ pub(crate) fn insert_clocks(clock_before: u32, edits: &[Edit]) -> Vec<Vec<u32>> 
 }
 
 impl YrsDoc {
+    /// Drop the cached texts (the doc is about to change).
+    fn forget_texts(&mut self) {
+        self.text_cache
+            .get_mut()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
+    }
+
     fn has_pending(&self) -> bool {
         let txn = self.doc.transact();
         let s = txn.store();
@@ -217,6 +295,215 @@ impl YrsDoc {
         Ok((replica, t))
     }
 
+    /// Make the change `plans` as `client` on this doc and return its update: on return the
+    /// doc holds the change. Today's path is the only one in a build without the test-only
+    /// `differential` hooks ([`crate::differential`]), which may choose another per thread.
+    fn make_change(&mut self, client: ClientId, plans: &[TextPlan]) -> Result<Vec<u8>, DocError> {
+        #[cfg(any(test, feature = "differential"))]
+        {
+            crate::differential::make(self, client, plans)
+        }
+        #[cfg(not(any(test, feature = "differential")))]
+        {
+            self.checked_change(client, plans)
+        }
+    }
+
+    /// The edit path (v0.9.3): the change made **on this doc, as `client`**
+    /// (`transact_mut_as`, the k2-yrs patch), with the sampled canary ([`Checks`]). The caller
+    /// holds the doc exclusively (`&mut`; a session's lock), so no one else writes as `client`
+    /// meanwhile, and the doc holds everything `client` ever wrote: it is the only writer of
+    /// every client ID it edits as (`session::one_writer_tests`).
+    pub(crate) fn checked_change(
+        &mut self,
+        client: ClientId,
+        plans: &[TextPlan],
+    ) -> Result<Vec<u8>, DocError> {
+        let sampled = self.checks.now;
+        if self.checks.fallback {
+            let update = self.throwaway_update(client, plans)?;
+            self.apply_trusted(&update)?;
+            return Ok(update);
+        }
+        if !sampled {
+            return self.main_doc_update(client, plans);
+        }
+        // the canary: the same edit the old way, from the state before it
+        let before = self.encode_v2()?;
+        let want = self.throwaway_update(client, plans)?;
+        let got = self.main_doc_update(client, plans)?;
+        if got == want {
+            return Ok(got);
+        }
+        // never serve the fast result: back to the state before, the throwaway's update on it
+        self.reset_to(&before)?;
+        self.apply_trusted(&want)?;
+        self.checks.fallback = true;
+        self.checks.found.push(EngineCheck::EditPath { client });
+        Ok(want)
+    }
+
+    /// The change made on this doc as `client`, in one transaction (`transact_mut_as`): each
+    /// root's hunks back to front, so earlier offsets stay valid. O(the change) plus Yrs's
+    /// walk to each position. A panic inside poisons the doc (it may have half-applied).
+    fn main_doc_update(
+        &mut self,
+        client: ClientId,
+        plans: &[TextPlan],
+    ) -> Result<Vec<u8>, DocError> {
+        self.forget_texts();
+        #[cfg(any(test, feature = "differential"))]
+        let planted = crate::differential::planted_divergence();
+        #[cfg(not(any(test, feature = "differential")))]
+        let planted = false;
+        let (doc, texts) = (&self.doc, &self.texts);
+        let made = guarded(|| {
+            let mut txn = doc.transact_mut_as(ClientID::new(client));
+            for (root, hunks, pos) in plans {
+                let t = &texts[root];
+                if planted {
+                    // test builds only: a fast path that diverges (front to back)
+                    let mut delta: i64 = 0;
+                    for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()) {
+                        let at = (i64::from(s16) + delta) as u32;
+                        if len16 > 0 {
+                            t.remove_range(&mut txn, at, len16);
+                        }
+                        let ins = h.insert.encode_utf16().count() as i64;
+                        if ins > 0 {
+                            t.insert(&mut txn, at, &h.insert);
+                        }
+                        delta += ins - i64::from(len16);
+                    }
+                    continue;
+                }
+                for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
+                    if len16 > 0 {
+                        t.remove_range(&mut txn, s16, len16);
+                    }
+                    if !h.insert.is_empty() {
+                        t.insert(&mut txn, s16, &h.insert);
+                    }
+                }
+            }
+            Ok(txn.encode_update_v1())
+        });
+        if made.is_err() {
+            self.poisoned = true;
+        }
+        made
+    }
+
+    /// Replace this doc's state with `state` (v2, from [`YrsDoc::encode_v2`] of this doc):
+    /// the canary's way back. The checks' state stays.
+    fn reset_to(&mut self, state: &[u8]) -> Result<(), DocError> {
+        let doc = new_doc(SESSION_CLIENT);
+        let texts: HashMap<&'static str, TextRef> = self
+            .texts
+            .keys()
+            .map(|n| (*n, doc.get_or_insert_text(*n)))
+            .collect();
+        guarded(|| {
+            let u = Update::decode_v2(state).map_err(|e| DocError::Load(e.to_string()))?;
+            doc.transact_mut()
+                .apply_update(u)
+                .map_err(|e| DocError::Load(e.to_string()))
+        })?;
+        self.doc = doc;
+        self.texts = texts;
+        self.poisoned = false;
+        self.forget_texts();
+        Ok(())
+    }
+
+    /// The canary on the text cache: each cached text against a fresh read. A mismatch is
+    /// replaced by the fresh text, reported, and the cache is off until reload.
+    fn check_text_cache(&mut self) {
+        if self.checks.cache_off {
+            // nothing cached is read any more
+            self.forget_texts();
+            return;
+        }
+        let mut stale = Vec::new();
+        {
+            let cache = self.text_cache.get_mut().unwrap_or_else(|p| p.into_inner());
+            for (name, cached) in cache.iter() {
+                let fresh = self.texts[name].get_string(&self.doc.transact());
+                if *cached != fresh {
+                    stale.push(*name);
+                }
+            }
+        }
+        if !stale.is_empty() {
+            self.forget_texts();
+            self.checks.cache_off = true;
+            for root in stale {
+                self.checks.found.push(EngineCheck::TextCache { root });
+            }
+        }
+    }
+
+    /// How often the canary samples an edit (0: never).
+    pub(crate) fn set_check_every(&mut self, every: u32) {
+        self.checks.every = every;
+    }
+
+    /// What the canary found since the last call.
+    pub(crate) fn take_checks(&mut self) -> Vec<EngineCheck> {
+        std::mem::take(&mut self.checks.found)
+    }
+
+    /// Whether the canary switched this doc to the throwaway path (until reload).
+    pub(crate) fn on_fallback(&self) -> bool {
+        self.checks.fallback
+    }
+
+    /// Today's edit path: the change made on a throwaway replica of this doc (its full
+    /// current state, applied to a fresh Yrs doc with `client`'s ID), edited, encoded and
+    /// dropped. Nothing about the replica outlives the call. The doc itself doesn't change:
+    /// the caller applies the update.
+    pub(crate) fn throwaway_update(
+        &self,
+        client: ClientId,
+        plans: &[TextPlan],
+    ) -> Result<Vec<u8>, DocError> {
+        // The replica lives only inside this function: built from the session, edited as
+        // `client`, encoded, dropped. Nothing about it outlives the call.
+        let replica = new_doc(client);
+        let rtexts: HashMap<&str, TextRef> = self
+            .texts
+            .keys()
+            .map(|n| (*n, replica.get_or_insert_text(*n)))
+            .collect();
+        let full = guarded(|| {
+            Ok(self
+                .doc
+                .transact()
+                .encode_state_as_update_v1(&StateVector::default()))
+        })?;
+        guarded(|| {
+            let u = Update::decode_v1(&full).map_err(|e| DocError::Apply(e.to_string()))?;
+            replica
+                .transact_mut()
+                .apply_update(u)
+                .map_err(|e| DocError::Apply(e.to_string()))
+        })?;
+        let mut txn = replica.transact_mut();
+        for (root, hunks, pos) in plans {
+            let t = &rtexts[root];
+            // Back to front, so earlier offsets stay valid.
+            for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
+                if len16 > 0 {
+                    t.remove_range(&mut txn, s16, len16);
+                }
+                if !h.insert.is_empty() {
+                    t.insert(&mut txn, s16, &h.insert);
+                }
+            }
+        }
+        Ok(txn.encode_update_v1())
+    }
+
     /// The full state, v2, under `catch_unwind` even when the doc looks usable.
     fn encode_v2(&self) -> Result<Vec<u8>, DocError> {
         guarded(|| {
@@ -225,6 +512,248 @@ impl YrsDoc {
                 .transact()
                 .encode_state_as_update_v2(&StateVector::default()))
         })
+    }
+}
+
+/// Test-only engine pieces of the differential hooks ([`crate::differential`]).
+#[cfg(any(test, feature = "differential"))]
+impl YrsDoc {
+    /// A separate doc with this doc's state (its v2 encoding, applied to a fresh doc with the
+    /// same roots): the reference side of a shadowed edit.
+    pub(crate) fn twin(&self) -> Result<YrsDoc, DocError> {
+        self.usable()?;
+        let state = self.encode_v2()?;
+        let doc = new_doc(SESSION_CLIENT);
+        let texts: HashMap<&'static str, TextRef> = self
+            .texts
+            .keys()
+            .map(|n| (*n, doc.get_or_insert_text(*n)))
+            .collect();
+        guarded(|| {
+            let u = Update::decode_v2(&state).map_err(|e| DocError::Load(e.to_string()))?;
+            doc.transact_mut()
+                .apply_update(u)
+                .map_err(|e| DocError::Load(e.to_string()))
+        })?;
+        Ok(YrsDoc {
+            doc,
+            texts,
+            poisoned: false,
+            text_cache: Mutex::new(HashMap::new()),
+            checks: Checks::new(),
+        })
+    }
+
+    /// The full state, v2 (`None` on a poisoned doc), and the state vector, sorted.
+    pub(crate) fn snapshot_for_tests(&self) -> (Option<Vec<u8>>, Vec<(u64, u32)>) {
+        let state = if self.usable().is_ok() {
+            self.encode_v2().ok()
+        } else {
+            None
+        };
+        let mut sv: Vec<(u64, u32)> = self
+            .doc
+            .transact()
+            .state_vector()
+            .iter()
+            .map(|(c, k)| (c.get(), *k))
+            .collect();
+        sv.sort_unstable();
+        (state, sv)
+    }
+
+    /// Each root's text read from the engine (not the cache), in root-name order.
+    pub(crate) fn texts_for_tests(&self) -> Vec<(&'static str, String)> {
+        let mut v: Vec<(&'static str, String)> = self
+            .texts
+            .iter()
+            .map(|(n, t)| (*n, t.get_string(&self.doc.transact())))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// A wrong cached text for `root` (the canary's test).
+    pub(crate) fn corrupt_text_cache(&mut self, root: &str, text: &str) {
+        if let Some((name, _)) = self.texts.get_key_value(root) {
+            let name = *name;
+            self.text_cache
+                .get_mut()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(name, text.to_owned());
+        }
+    }
+
+    /// Mutant edit path: the throwaway replica, with each root's hunks applied **front to
+    /// back** (offsets shifted as it goes). The same text, but a change's insertions take
+    /// their clocks in another order, so its update differs whenever it inserts at two
+    /// places. The doc doesn't change (the caller applies the update).
+    pub(crate) fn mutant_front_to_back(
+        &self,
+        client: ClientId,
+        plans: &[TextPlan],
+    ) -> Result<Vec<u8>, DocError> {
+        let (replica, _) = self.replica(client, plans.first().map_or("", |p| p.0))?;
+        let rtexts: HashMap<&str, TextRef> = self
+            .texts
+            .keys()
+            .map(|n| (*n, replica.get_or_insert_text(*n)))
+            .collect();
+        guarded(|| {
+            let mut txn = replica.transact_mut();
+            for (root, hunks, pos) in plans {
+                let t = &rtexts[root];
+                let mut delta: i64 = 0;
+                for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()) {
+                    let at = (i64::from(s16) + delta) as u32;
+                    if len16 > 0 {
+                        t.remove_range(&mut txn, at, len16);
+                    }
+                    let ins = h.insert.encode_utf16().count() as i64;
+                    if ins > 0 {
+                        t.insert(&mut txn, at, &h.insert);
+                    }
+                    delta += ins - i64::from(len16);
+                }
+            }
+            Ok(txn.encode_update_v1())
+        })
+    }
+
+    /// Mutant edit path: `client` edits on `kept`, a replica of this doc taken at its first
+    /// edit and never synced after (a stale base: what a kept replica that missed updates
+    /// would do). Positions are this doc's, applied to the old replica.
+    pub(crate) fn mutant_stale(
+        &self,
+        client: ClientId,
+        plans: &[TextPlan],
+        kept: &mut HashMap<ClientId, Doc>,
+    ) -> Result<Vec<u8>, DocError> {
+        let replica = match kept.entry(client) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                e.insert(self.replica(client, plans.first().map_or("", |p| p.0))?.0)
+            }
+        };
+        let replica = &*replica;
+        let rtexts: HashMap<&str, TextRef> = plans
+            .iter()
+            .map(|p| (p.0, replica.get_or_insert_text(p.0)))
+            .collect();
+        guarded(|| {
+            let mut txn = replica.transact_mut();
+            for (root, hunks, pos) in plans {
+                let t = &rtexts[root];
+                for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
+                    let len = t.len(&txn);
+                    let s = s16.min(len);
+                    let l = len16.min(len - s);
+                    if l > 0 {
+                        t.remove_range(&mut txn, s, l);
+                    }
+                    if !h.insert.is_empty() {
+                        t.insert(&mut txn, s, &h.insert);
+                    }
+                }
+            }
+            Ok(txn.encode_update_v1())
+        })
+    }
+}
+
+impl YrsDoc {
+    /// Check (as [`EngineDoc::check_update`]) and apply an update from a connection that owns
+    /// client `allowed`, decoded once ([`decode_accepted`]): nothing is applied unless every
+    /// check passed.
+    #[cfg_attr(not(feature = "untrusted-wire"), allow(dead_code))]
+    pub(crate) fn apply_client(
+        &mut self,
+        update: &[u8],
+        allowed: ClientId,
+    ) -> Result<UpdateInfo, DocError> {
+        if self.poisoned {
+            return Err(DocError::Pending);
+        }
+        let u = decode_client(update)?;
+        let info = self.check_decoded(&u, allowed)?;
+        self.apply_decoded(u)?;
+        Ok(info)
+    }
+
+    /// The client-ID and continuity checks of [`EngineDoc::check_update`] on a decoded update.
+    fn check_decoded(&self, u: &Update, allowed: ClientId) -> Result<UpdateInfo, DocError> {
+        guarded(|| {
+            // Each client's upper clock over every content block (items and GC; skips carry
+            // nothing). Not `Update::state_vector`: that counts only runs starting at clock
+            // 0, so it says nothing about a held block from the middle of a history.
+            let mut upper: HashMap<ClientId, u32> = HashMap::new();
+            for (c, ranges) in u.insertions(true).iter() {
+                let end = ranges.iter().map(|r| r.end).max().unwrap_or(0);
+                let e = upper.entry(c.get()).or_insert(0);
+                *e = (*e).max(end);
+            }
+            // The upper state vector too, in case it names a client the set doesn't.
+            for (c, clock) in u.state_vector().iter() {
+                let e = upper.entry(c.get()).or_insert(0);
+                *e = (*e).max(*clock);
+            }
+            let mut clients: Vec<(ClientId, u32)> = upper.into_iter().collect();
+            clients.sort_unstable();
+            let have = self.doc.transact().state_vector();
+            let mut inserts = Vec::new();
+            for &(c, up) in &clients {
+                // a client listed with no content range is not "known"
+                let known = up != 0 && up <= have.get(&ClientID::new(c));
+                if c != allowed && !known {
+                    return Err(DocError::ForeignClient { allowed, found: c });
+                }
+                if !known {
+                    inserts.push(c);
+                }
+            }
+            continues_each_client(&have, u)?;
+            Ok(UpdateInfo {
+                delete_only: inserts.is_empty(),
+                inserts_from: inserts,
+            })
+        })
+    }
+
+    /// Apply a decoded update. Anything after decoding that goes wrong (an apply error, a
+    /// panic, or unresolved dependencies left pending) **poisons** the doc.
+    fn apply_decoded(&mut self, u: Update) -> Result<(), DocError> {
+        if self.poisoned {
+            return Err(DocError::Pending);
+        }
+        self.forget_texts();
+        let applied = guarded(|| {
+            self.doc
+                .transact_mut()
+                .apply_update(u)
+                .map_err(|e| DocError::Apply(e.to_string()))
+        });
+        if let Err(e) = applied {
+            self.poisoned = true;
+            return Err(e);
+        }
+        if self.has_pending() {
+            self.poisoned = true;
+            return Err(DocError::Pending);
+        }
+        Ok(())
+    }
+
+    /// Whether this doc and `other` hold the same inserts: their state vectors are equal
+    /// (compared as maps, not as encoded bytes, whose order is a hash map's). O(clients).
+    pub(crate) fn same_state_vector(&self, other: &YrsDoc) -> bool {
+        self.doc.transact().state_vector() == other.doc.transact().state_vector()
+    }
+
+    /// Whether this doc holds updates it couldn't integrate (missing dependencies: yrs's
+    /// pending structs or delete set) or is poisoned. Never true on a correct stream: an
+    /// apply that leaves anything pending poisons the doc and fails. K-AUD-1 (v0.9.5).
+    pub(crate) fn unresolved(&self) -> bool {
+        self.poisoned || self.has_pending()
     }
 }
 
@@ -265,9 +794,9 @@ impl YrsDoc {
         if self.poisoned {
             return Err(DocError::Pending);
         }
-        let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
+        let u = decode_accepted(update)?;
         continues_each_client(&self.doc.transact().state_vector(), &u)?;
-        self.apply_trusted(update)
+        self.apply_decoded(u)
     }
 
     /// A relative position in text root `root` at UTF-16 offset `at16`, stuck to the
@@ -295,6 +824,8 @@ impl EngineDoc for YrsDoc {
             doc,
             texts,
             poisoned: false,
+            text_cache: Mutex::new(HashMap::new()),
+            checks: Checks::new(),
         }
     }
 
@@ -302,6 +833,7 @@ impl EngineDoc for YrsDoc {
         let e = Self::new(schema);
         guarded(|| {
             let u = Update::decode_v2(state).map_err(|err| DocError::Load(err.to_string()))?;
+            stored_accepted(&u)?;
             e.doc
                 .transact_mut()
                 .apply_update(u)
@@ -316,7 +848,15 @@ impl EngineDoc for YrsDoc {
     }
 
     fn text(&self, root: &str) -> String {
-        self.texts[root].get_string(&self.doc.transact())
+        let (name, t) = self.texts.get_key_value(root).expect("a schema root");
+        if self.checks.cache_off {
+            return t.get_string(&self.doc.transact());
+        }
+        let mut cache = self.text_cache.lock().unwrap_or_else(|p| p.into_inner());
+        cache
+            .entry(*name)
+            .or_insert_with(|| t.get_string(&self.doc.transact()))
+            .clone()
     }
 
     fn state_vector(&self) -> Vec<u8> {
@@ -354,45 +894,8 @@ impl EngineDoc for YrsDoc {
     ///
     /// `inserts_from` lists only clients with genuinely new insertions (at most `allowed`).
     fn check_update(&self, update: &[u8], allowed: ClientId) -> Result<UpdateInfo, DocError> {
-        if !client_update_well_formed(update) {
-            return Err(DocError::Decode("malformed update".into()));
-        }
-        guarded(|| {
-            let u = Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string()))?;
-            // Each client's upper clock over every content block (items and GC; skips carry
-            // nothing). Not `Update::state_vector`: that counts only runs starting at clock
-            // 0, so it says nothing about a held block from the middle of a history.
-            let mut upper: HashMap<ClientId, u32> = HashMap::new();
-            for (c, ranges) in u.insertions(true).iter() {
-                let end = ranges.iter().map(|r| r.end).max().unwrap_or(0);
-                let e = upper.entry(c.get()).or_insert(0);
-                *e = (*e).max(end);
-            }
-            // The upper state vector too, in case it names a client the set doesn't.
-            for (c, clock) in u.state_vector().iter() {
-                let e = upper.entry(c.get()).or_insert(0);
-                *e = (*e).max(*clock);
-            }
-            let mut clients: Vec<(ClientId, u32)> = upper.into_iter().collect();
-            clients.sort_unstable();
-            let have = self.doc.transact().state_vector();
-            let mut inserts = Vec::new();
-            for &(c, up) in &clients {
-                // a client listed with no content range is not "known"
-                let known = up != 0 && up <= have.get(&ClientID::new(c));
-                if c != allowed && !known {
-                    return Err(DocError::ForeignClient { allowed, found: c });
-                }
-                if !known {
-                    inserts.push(c);
-                }
-            }
-            continues_each_client(&have, &u)?;
-            Ok(UpdateInfo {
-                delete_only: inserts.is_empty(),
-                inserts_from: inserts,
-            })
-        })
+        let u = decode_client(update)?;
+        self.check_decoded(&u, allowed)
     }
 
     /// Apply a kit-made update. A decode error changes nothing. Anything after decoding
@@ -404,74 +907,55 @@ impl EngineDoc for YrsDoc {
             return Err(DocError::Pending);
         }
         let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
-        let applied = guarded(|| {
-            self.doc
-                .transact_mut()
-                .apply_update(u)
-                .map_err(|e| DocError::Apply(e.to_string()))
-        });
-        if let Err(e) = applied {
-            self.poisoned = true;
-            return Err(e);
-        }
-        if self.has_pending() {
-            self.poisoned = true;
-            return Err(DocError::Pending);
-        }
-        Ok(())
+        // the store-load scan: the store's log is replayed through here
+        stored_accepted(&u)?;
+        self.apply_decoded(u)
     }
 
     fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Vec<u8>, DocError> {
         self.usable()?;
+        // the canary (v0.9.3): a sampled edit first checks the text cache its positions are
+        // computed against, and is then made both ways (`checked_change`)
+        self.checks.now = self.checks.sample();
+        if self.checks.now {
+            self.check_text_cache();
+        }
         // Positions are computed against the session's current text, before the replica exists.
+        let mut before: Vec<String> = Vec::with_capacity(edits.len());
         let plans: Vec<TextPlan> = edits
             .iter()
             .map(|e| match e {
                 Edit::Text { root, hunks } => {
                     let cur = self.text(root);
-                    (root.as_str(), hunks.as_slice(), to_utf16(&cur, hunks))
+                    let pos = to_utf16(&cur, hunks);
+                    before.push(cur);
+                    (root.as_str(), hunks.as_slice(), pos)
                 }
             })
             .collect();
 
-        // The replica lives only inside this block: built from the session, edited as
-        // `client`, encoded, dropped. Nothing about it outlives the call.
-        let update = {
-            let replica = new_doc(client);
-            let rtexts: HashMap<&str, TextRef> = self
-                .texts
-                .keys()
-                .map(|n| (*n, replica.get_or_insert_text(*n)))
-                .collect();
-            let full = guarded(|| {
-                Ok(self
-                    .doc
-                    .transact()
-                    .encode_state_as_update_v1(&StateVector::default()))
-            })?;
-            guarded(|| {
-                let u = Update::decode_v1(&full).map_err(|e| DocError::Apply(e.to_string()))?;
-                replica
-                    .transact_mut()
-                    .apply_update(u)
-                    .map_err(|e| DocError::Apply(e.to_string()))
-            })?;
-            let mut txn = replica.transact_mut();
-            for (root, hunks, pos) in &plans {
-                let t = &rtexts[root];
-                // Back to front, so earlier offsets stay valid.
-                for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
-                    if len16 > 0 {
-                        t.remove_range(&mut txn, s16, len16);
-                    }
-                    if !h.insert.is_empty() {
-                        t.insert(&mut txn, s16, &h.insert);
-                    }
+        let update = self.make_change(client, &plans)?;
+        // the texts it made are known: no walk of the doc to read them again (a root edited
+        // twice in one call is read afresh)
+        let cache_on = !self.checks.cache_off;
+        let mut cache = self.text_cache.lock().unwrap_or_else(|p| p.into_inner());
+        for (k, (root, hunks, _)) in plans.iter().enumerate() {
+            if cache_on && plans.iter().filter(|p| p.0 == *root).count() == 1 {
+                if let Some((name, _)) = self.texts.get_key_value(*root) {
+                    let after = crate::text::diff::apply(&before[k], hunks);
+                    debug_assert_eq!(
+                        after,
+                        self.texts[*root].get_string(&self.doc.transact()),
+                        "the cached text is the doc's"
+                    );
+                    cache.insert(*name, after);
                 }
             }
-            txn.encode_update_v1()
-        };
-        self.apply_trusted(&update)?;
+        }
+        drop(cache);
+        if self.checks.now {
+            self.check_text_cache();
+        }
         Ok(update)
     }
 
@@ -697,6 +1181,33 @@ mod tests {
     fn resync(c: &(yrs::Doc, TextRef), session: &Doc) -> Vec<u8> {
         let sv = StateVector::decode_v1(&session.state_vector()).unwrap();
         c.0.transact().encode_state_as_update_v1(&sv)
+    }
+
+    /// v0.9.5: the store-load scan. A stored state, or a log entry replayed from the store,
+    /// holding subdocument content is never loaded (quarantined); ordinary ones load. (The
+    /// in-process delivery between the kit's docs, `deliver_local`, exists only with the
+    /// test-only `conformance` feature and refuses it as client updates are refused.) Built
+    /// through Yrs's normal API.
+    #[test]
+    fn stored_subdocument_content_is_quarantined() {
+        use yrs::Map;
+        let mut e = Doc::new(S).unwrap();
+        e.replace_text_as(7, "source", "base\n").unwrap();
+        let c = client_doc(100, &e);
+        let sv = StateVector::decode_v1(&e.state_vector()).unwrap();
+        c.0.get_or_insert_map("m")
+            .insert(&mut c.0.transact_mut(), "sub", yrs::Doc::new());
+        let u = c.0.transact().encode_state_as_update_v1(&sv);
+        let state =
+            c.0.transact()
+                .encode_state_as_update_v2(&StateVector::default());
+        assert_eq!(Doc::load(S, &state).err(), Some(DocError::Quarantined));
+        assert!(Doc::load(S, &e.encode_state().unwrap()).is_ok());
+        let mut f = Doc::load(S, &e.encode_state().unwrap()).unwrap();
+        let before = f.state_vector();
+        assert_eq!(f.apply_trusted(&u), Err(DocError::Quarantined));
+        assert_eq!(f.state_vector(), before, "nothing applied");
+        assert!(f.encode_state().is_ok(), "not poisoned");
     }
 
     #[test]

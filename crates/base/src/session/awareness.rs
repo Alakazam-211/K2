@@ -11,7 +11,8 @@
 //! [`Bias::Before`] (it sticks to the character before: Yrs `Assoc::Before`), its end with
 //! [`Bias::After`] (the character after: `Assoc::After`). Text typed at either edge lands
 //! inside, and the span never inverts (the opposite convention inverts an empty or
-//! near-empty range on the first keystroke at its edge).
+//! near-empty range on the first keystroke at its edge). Where two participants' claims
+//! meet, text typed there joins only one of them ([`claim_fates`]): claims never overlap.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -450,17 +451,11 @@ impl Claim {
         self.root == root && overlap((self.s, self.e), (s, e))
     }
 
-    /// A change's `hunks` (old-text coordinates) to `root` touch it: a replacement or
-    /// deletion changes a character inside it, or an insertion lands inside it (at either
-    /// edge too: the anchors are expanding).
-    pub fn touched_by(&self, root: &str, hunks: &[Hunk]) -> bool {
-        self.root == root && hunks.iter().any(|h| touches(h, self.s, self.e))
-    }
-
-    pub fn carry(&mut self, hunks: &[Hunk]) {
-        let (s, e) = carry_span(self.s, self.e, hunks);
+    /// Carry it through `hunks` with the biases [`claim_fates`] gave it.
+    pub fn carry(&mut self, hunks: &[Hunk], fate: Fate) {
+        let s = position::transform(self.s, hunks, fate.s);
+        self.e = position::transform(self.e, hunks, fate.e).max(s);
         self.s = s;
-        self.e = e;
     }
 
     /// Waiters other than the owner.
@@ -602,6 +597,96 @@ pub(crate) fn touches(h: &Hunk, s: usize, e: usize) -> bool {
     } else {
         h.start < e.max(s + 1) && s < h.end
     }
+}
+
+/// How one change meets one live claim ([`claim_fates`]): the biases its start and end are
+/// carried with, and whether the change touches it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Fate {
+    pub s: Bias,
+    pub e: Bias,
+    pub touched: bool,
+}
+
+/// How a change by `typist` to `root` (`hunks`, sorted, in the claims' coordinates) meets
+/// each live claim, in `claims` order.
+///
+/// Anchors expand (text typed at a claim's edge lands inside), except where claims of
+/// **more than one participant** meet: text inserted at a point two participants' claims
+/// both hold (they share an edge there, once the text between them was deleted, or one is
+/// empty there) joins **one** claim: the typist's own if they hold one there (the first
+/// they acquired), otherwise the one acquired first ([`ClaimId`] order). Every other claim
+/// there carries the insertion outside it: an end there stays before it, a start there
+/// moves past it, an empty claim goes to the side away from the one that took it; and the
+/// insertion doesn't touch it (no `Edited` end, no `Respect` refusal for it). So two
+/// participants' claims never come to overlap. One participant's own claims meeting there
+/// (and nobody else's) all expand, as before.
+pub(crate) fn claim_fates(claims: &[Claim], root: &str, hunks: &[Hunk], typist: &str) -> Vec<Fate> {
+    let mut fates: Vec<Fate> = claims
+        .iter()
+        .map(|_| Fate {
+            s: Bias::Before,
+            e: Bias::After,
+            touched: false,
+        })
+        .collect();
+    // per claim, the insertions it gives up (they join another participant's claim)
+    let mut gives_up: Vec<Vec<usize>> = vec![Vec::new(); claims.len()];
+    for (j, h) in hunks.iter().enumerate() {
+        if h.start != h.end || h.insert.is_empty() {
+            continue;
+        }
+        let p = h.start;
+        let holders: Vec<usize> = (0..claims.len())
+            .filter(|&k| claims[k].root == root && claims[k].s <= p && p <= claims[k].e)
+            .collect();
+        let Some(&first) = holders.first() else {
+            continue;
+        };
+        if holders.iter().all(|&k| claims[k].pid == claims[first].pid) {
+            continue;
+        }
+        let pick = |own: bool| {
+            holders
+                .iter()
+                .copied()
+                .filter(|&k| !own || claims[k].pid == typist)
+                .min_by_key(|&k| claims[k].id)
+        };
+        let w = pick(true)
+            .or_else(|| pick(false))
+            .expect("holders is not empty");
+        let winner_before = claims[w].s < p;
+        for &k in holders.iter().filter(|&&k| k != w) {
+            let c = &claims[k];
+            let f = &mut fates[k];
+            if c.s == p && c.e == p {
+                let b = if winner_before {
+                    Bias::After
+                } else {
+                    Bias::Before
+                };
+                (f.s, f.e) = (b, b);
+            } else if c.e == p {
+                f.e = Bias::Before;
+            } else if c.s == p {
+                f.s = Bias::After;
+            } else {
+                // p inside it: it already overlaps the winner (not reachable while claims
+                // never overlap); it keeps expanding
+                continue;
+            }
+            gives_up[k].push(j);
+        }
+    }
+    for (k, c) in claims.iter().enumerate() {
+        fates[k].touched = c.root == root
+            && hunks
+                .iter()
+                .enumerate()
+                .any(|(j, h)| !gives_up[k].contains(&j) && touches(h, c.s, c.e));
+    }
+    fates
 }
 
 /// Carry an expanding span through `hunks`.

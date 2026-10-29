@@ -2,7 +2,19 @@
 # after review, never as a smoke run. PART picks what runs (each fits a 2 h job on 12 cores):
 #   PART=exhaustive (default)  3x1 + 2 undos + 1 revert, then 2x2 + 2 undos + 1 revert, exactly
 #   PART=walks                 WALKS (default 5,000,000) random walks at the literal G1 bound,
-#                              then every mutant on 50,000 walks (each must fail)
+#                              then every mutant on 50,000 walks (each must fail), then
+#                              WALKS_RST (default 1,000,000) walks with 1 restart. Over 2 h
+#                              on 8 threads: run it in its three pieces instead,
+#   PART=walks-main            the WALKS walks only (108 min on 8 threads),
+#   PART=walks-mutants         every mutant on 50,000 walks (each must fail; minutes),
+#   PART=walks-restart         the WALKS_RST walks with 1 restart.
+#   PART=walks-bias            WALKS_BIAS (default 200,000) walks at G1 with
+#                              `--bias redo-after-partial` (the class redo_after_partial, thin in
+#                              uniform walks), then every mutant on 50,000 biased walks (each
+#                              must fail), then WALKS_BIAS_RST (default 1,000) biased walks
+#                              with 1 restart.
+#   PART=walks-bias-restart    only the biased walks with 1 restart (WALKS_BIAS_RST, default
+#                              1,000,000 here: about 11 min on 8 threads).
 #   PART=long                  3x2 + 2 undos (no revert), exactly: many hours
 # The literal G1 bound (3 pids x 3 events, 2 undos, 1 revert) is far beyond exhaustive reach
 # (>= 1e13 states even with pid symmetry and per-seed dedup), hence the walks.
@@ -20,16 +32,33 @@ case ${PART:-exhaustive} in
   exhaustive)
     run_g 3x1u2r1 --pids 3 --events 1 --undos 2 --reverts 1 --init abb --seed-depth 2
     run_g 2x2u2r1 --pids 2 --events 2 --undos 2 --reverts 1 --init abb --seed-depth 3 ;;
-  walks)
-    timed "walks at the literal G1 bound" E walk --g1 --probes ${WALKS:-5000000} --threads "$T"
-    for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff; do
-      timed "walks at G1, mutant $m (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant $m
+  walks|walks-main|walks-mutants|walks-restart)
+    P=${PART}
+    if [ "$P" = walks ] || [ "$P" = walks-main ]; then
+      timed "walks at the literal G1 bound" E walk --g1 --probes ${WALKS:-5000000} --threads "$T"
+    fi
+    if [ "$P" = walks ] || [ "$P" = walks-mutants ]; then
+      for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff; do
+        timed "walks at G1, mutant $m (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant $m
+      done
+      timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint
+      timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant x-provenance-ignored-in-o4
+      timed "walks at G1, mutant xi-no-o4a (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant xi-no-o4a
+    fi
+    if [ "$P" = walks ] || [ "$P" = walks-restart ]; then
+      timed "walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_RST:-1000000} --threads "$T"
+    fi ;;
+  walks-bias)
+    B="--bias redo-after-partial"
+    timed "biased walks at G1" E walk --g1 --probes ${WALKS_BIAS:-200000} --threads "$T" $B
+    for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff x-provenance-ignored-in-o4 xi-no-o4a; do
+      timed "biased walks at G1, mutant $m (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant $m $B
     done
-    timed "walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_RST:-1000000} --threads "$T"
-    timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint
-    timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant x-provenance-ignored-in-o4
-    timed "walks at G1, mutant xi-no-o4a (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant xi-no-o4a ;;
+    timed "biased walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint $B
+    timed "biased walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_BIAS_RST:-1000} --threads "$T" $B ;;
+  walks-bias-restart)
+    timed "biased walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_BIAS_RST:-1000000} --threads "$T" --bias redo-after-partial ;;
   long)
     run_g 3x2u2r0 --pids 3 --events 2 --undos 2 --reverts 0 --init abb --seed-depth 3 ;;
-  *) echo "PART: exhaustive, walks or long" >&2; exit 2 ;;
+  *) echo "PART: exhaustive, walks (walks-main, walks-mutants, walks-restart), walks-bias, walks-bias-restart or long" >&2; exit 2 ;;
 esac

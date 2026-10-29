@@ -43,6 +43,10 @@ pub enum Mutant {
     /// ours hunk that puts back a root live elsewhere in the text (at the doc's end beside a
     /// foreign insertion, or in mid-text outside the region's window) applies, failing I1.
     NoO4a,
+    /// Not a spec mutant: the oracle panics on an undo with something to undo (depth 2 at
+    /// the least). The enumerator's own test (a panic in the oracle must end a run promptly,
+    /// as a violation, in every mode: `tests/mutants.rs`).
+    OraclePanics,
 }
 
 impl Mutant {
@@ -60,18 +64,28 @@ impl Mutant {
         ("xi-no-o4a", Mutant::NoO4a),
     ];
 
+    /// Harness mutants: not wrong variants of the spec, so not in [`Mutant::ALL`] (nor in
+    /// `undo.qnt`); tests of the enumerator itself.
+    pub const HARNESS: [(&'static str, Mutant); 1] =
+        [("harness-oracle-panics", Mutant::OraclePanics)];
+
     /// A mutant by its command-line name (`none` is the oracle).
     pub fn by_name(name: &str) -> Option<Mutant> {
         if name == "none" {
             return Some(Mutant::None);
         }
-        Self::ALL.iter().find(|(n, _)| *n == name).map(|(_, m)| *m)
+        Self::ALL
+            .iter()
+            .chain(Self::HARNESS.iter())
+            .find(|(n, _)| *n == name)
+            .map(|(_, m)| *m)
     }
 
     /// Its command-line name.
     pub fn name(self) -> &'static str {
         Self::ALL
             .iter()
+            .chain(Self::HARNESS.iter())
             .find(|(_, m)| *m == self)
             .map_or("none", |(n, _)| n)
     }
@@ -85,6 +99,7 @@ static ACTIVE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0)
 pub fn active() -> Mutant {
     match ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
         0 => Mutant::None,
+        HARNESS_INDEX => Mutant::OraclePanics,
         k => Mutant::ALL[k as usize - 1].1,
     }
 }
@@ -98,10 +113,17 @@ pub fn active() -> Mutant {
 
 /// Make `m` the active mutant, process-wide (test builds with the `mutants` feature only).
 #[cfg(feature = "mutants")]
+const HARNESS_INDEX: u8 = 255;
+
+#[cfg(feature = "mutants")]
 pub fn set(m: Mutant) {
-    let k = Mutant::ALL
-        .iter()
-        .position(|(_, x)| *x == m)
-        .map_or(0, |i| i as u8 + 1);
+    let k = if m == Mutant::OraclePanics {
+        HARNESS_INDEX
+    } else {
+        Mutant::ALL
+            .iter()
+            .position(|(_, x)| *x == m)
+            .map_or(0, |i| i as u8 + 1)
+    };
     ACTIVE.store(k, std::sync::atomic::Ordering::Relaxed);
 }

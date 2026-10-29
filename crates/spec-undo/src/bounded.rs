@@ -430,6 +430,12 @@ impl State {
 
     /// Take `a`: the next state and the oracle's outcome, or `None` when the cut forbids it
     /// (the text would be longer than `maxlen`).
+    /// [`State::step`] with a panic in the model caught: `Err(message)`.
+    pub fn try_step(&self, b: &Bound, a: &Act) -> Result<Option<(State, Outcome)>, String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.step(b, a)))
+            .map_err(|p| panic_message(p.as_ref()))
+    }
+
     pub fn step(&self, b: &Bound, a: &Act) -> Option<(State, Outcome)> {
         let mut s = self.clone();
         let p = pid(a.pid());
@@ -588,6 +594,12 @@ impl State {
             (hits.revert_extra_conflicts > 0, "revert_extra_conflict"),
             (hits.touching_regions, "touching_regions"),
             (hits.concurrent_restore, "concurrent_restore"),
+            // its three parts (v0.9.2; the trace test's v1.8 split): (a) O4 took a
+            // restoration once, by root; (b) O4a fired (the root is already live: a
+            // conflict); (c) a window character was the base's by root only
+            (hits.o4_restore, "concurrent_restore_o4"),
+            (hits.o4a, "concurrent_restore_o4a"),
+            (hits.base_by_root, "concurrent_restore_base_by_root"),
         ] {
             if on {
                 hit.push(class);
@@ -982,6 +994,9 @@ pub struct Counts {
     pub cut: u64,
     /// Rule → the least depth at which it was first violated, and the action sequence.
     pub violations: BTreeMap<&'static str, (usize, Vec<Act>)>,
+    /// The model panicked ([`PANIC`] is then among the violations): its message. The search
+    /// stopped there.
+    pub panic: Option<String>,
 }
 
 impl Counts {
@@ -998,6 +1013,19 @@ pub const RULES: &[&str] = &[
 /// The rules a run stops at by default: every rule but the diagnostic `U12` (`--u12` only).
 /// `own_only` is enforced since v1.7 (F3 fixed: exact hunk sets), by root since v1.8; `I1`
 /// since v1.8.
+/// The model panicked while stepping (one of the oracle's own assertions, e.g. `window.rs`'s
+/// shared-edge check): reported like a violated rule, `panic@<depth>` with its message, and
+/// a stop rule in every mode (the run ends).
+pub const PANIC: &str = "panic";
+
+/// A caught panic's message.
+pub fn panic_message(p: &(dyn std::any::Any + Send)) -> String {
+    p.downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| p.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a panic without a message".to_owned())
+}
+
 pub const STOP: &[&str] = &[
     "own_only", "I1", "U9", "U13", "U15", "U17", "U19", "U22a", "RT", "O5",
 ];
@@ -1018,6 +1046,11 @@ pub const CLASSES: &[&str] = &[
     "touching_regions",
     "revert_extra_conflict",
     "concurrent_restore",
+    // its parts (a transition can hit more than one): O4 took a restoration once (by
+    // root); O4a fired; the base was counted by root only
+    "concurrent_restore_o4",
+    "concurrent_restore_o4a",
+    "concurrent_restore_base_by_root",
 ];
 
 /// Breadth-first, with an exact visited set of canonical views: TLC's "distinct states"
@@ -1045,9 +1078,19 @@ pub fn bfs(
         let mut next = Vec::new();
         for (s, path) in &frontier {
             for a in s.actions(b) {
-                let Some((t, _)) = s.step(b, &a) else {
-                    counts.cut += 1;
-                    continue;
+                let t = match s.try_step(b, &a) {
+                    Ok(Some((t, _))) => t,
+                    Ok(None) => {
+                        counts.cut += 1;
+                        continue;
+                    }
+                    Err(msg) => {
+                        let mut p = path.clone();
+                        p.push(a);
+                        counts.violations.insert(PANIC, (depth, p));
+                        counts.panic = Some(msg);
+                        return counts;
+                    }
                 };
                 counts.transitions += 1;
                 let v = t.canonical(sym);

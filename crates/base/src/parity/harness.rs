@@ -1043,7 +1043,11 @@ impl Agent<'_> {
                     q = q.limit(num(&n)? as usize);
                 }
                 if form == "log --pending" || form == "approvals" {
-                    q = q.pending();
+                    q = if args.iter().any(|a| a == "--all") {
+                        q.with_settled()
+                    } else {
+                        q.pending()
+                    };
                 }
                 if let Ok(p) = arg_after(args, "--on-behalf-of") {
                     q = q.on_behalf_of(if p == "me" { ACTOR.to_owned() } else { p });

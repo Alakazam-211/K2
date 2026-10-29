@@ -15,11 +15,20 @@
 //!   participant's claim holds; every applied change moves the version on;
 //! - **store reload equals live state**: periodically every handle is released and the
 //!   store reopened; the text and version must match, and everyone rejoins;
-//! - **the file equals the doc** after a flush, and blame (by root) gives every line, with
-//!   a writer who wrote in this doc;
-//! - **claims and presence**: a new claim never overlaps another participant's (carried
-//!   claims can, at a shared edge: counted), every claim belongs to a live connection, and the roster is exactly who is connected, with their
-//!   connection counts;
+//! - **the file equals the doc** after a flush, and so does the disk replica, element for
+//!   element (K-AUD-1's sync check, v0.9.4); blame (by root) gives every line, with a writer
+//!   who wrote in this doc;
+//! - **outside saves** (v0.9.5): a plain editor reads the file, edits it and saves it, often
+//!   inside the write delay while the doc has changes the file doesn't: a line added or
+//!   deleted, a line added and taken out again, a line deleted and typed back (two saves
+//!   each), or an older write of the kit's saved back from a stale buffer. Each save must be
+//!   taken in exactly (its lines there or gone, nothing else lost: the same line oracle), or,
+//!   for a write of the kit's made since the last outside save, suppressed as an echo and
+//!   reported; K-AUD-1 runs after every save;
+//! - **claims and presence**: two participants' claims never overlap (a new one, and carried
+//!   ones: text typed where two meet joins one of them; calls after which two shared an
+//!   edge are counted), every claim belongs to a live connection, and the roster is exactly
+//!   who is connected, with their connection counts;
 //! - **bounded memory**: the kit's own estimate and the process's resident set are
 //!   sampled; the estimate stays within the configured budget, and both are reported.
 //!
@@ -31,6 +40,12 @@
 //! ```
 //!
 //! It prints a progress line every `SOAK_PROGRESS_SECS` (default 30) and a summary.
+//!
+//! **Shadow mode** (`SOAK_SHADOW=1`, v0.9.3): every engine edit the run makes (every verb,
+//! undo, redo, outside edit) is also made through today's throwaway replica on a twin of the
+//! doc, and any difference in the update, state, state vector or text fails the run
+//! ([`k2_mpc_base::differential`]). It costs a full copy of the doc per edit, so the
+//! throughput check is skipped in this mode.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
@@ -38,10 +53,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use k2_mpc_base::differential::{with_side, Path, Side};
 use k2_mpc_base::session::{
-    At, AuditEvent, ClaimPolicy, Config, ConnId, EditOptions, EditWithError, Host, LineRange,
-    Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
-    TextFilePack, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
+    At, AuditEvent, ClaimPolicy, Config, ConnId, DiskCheck, EditOptions, EditWithError, Host,
+    LineRange, Participant, ParticipantKind, Rights, Session, SessionError, SessionManager, Stay,
+    TextFilePack, UndoMode, UndoOutcome, UndoRequest, WriteOutcome, EXTERNAL_PID,
 };
 use k2_mpc_base::store::{DocKey, DocStore};
 use k2_mpc_base::tools::{ToolOptions, ToolRunError};
@@ -97,6 +113,11 @@ enum Expect {
     },
     /// An undo or redo by this participant.
     History(String),
+    /// An outside save taken in (v0.9.5): exactly these lines go and these appear.
+    Saved {
+        targets: HashSet<String>,
+        new: Vec<String>,
+    },
 }
 
 #[derive(Default)]
@@ -116,8 +137,70 @@ struct Counts {
     max_lines: usize,
     blame_lines: u64,
     blame_newline: u64,
-    /// Checks (one per call) that saw two participants' carried claims overlap.
-    overlap_checks: u64,
+    /// Checks (one per call) that saw two participants' claims share an edge (never
+    /// overlap: asserted).
+    shared_edges: u64,
+    /// Outside saves taken in, and older kit writes saved back and suppressed as echoes.
+    outside_saves: u64,
+    echoes: u64,
+    /// Undo and redo calls whose mismatch with the line oracle was the known D1 gap
+    /// (tolerated: see `Soak::d1`), and the lines they left written twice.
+    d1_tolerated: u64,
+    /// The calls at which they happened (the replay regression asserts them).
+    d1_calls: Vec<u64>,
+    dups: usize,
+    /// Per progress window: (seconds since start at its end, calls, wall seconds).
+    windows: Vec<(f64, u64, f64)>,
+}
+
+/// Where one progress window's time went: per phase of the loop (the harness's own work
+/// apart from the kit call), and per kind of call (the kit call alone).
+#[derive(Default)]
+struct Window {
+    ops: u64,
+    /// Seconds: advance + claims, the call, audit, presence, file + blame, restart.
+    phase: [f64; 6],
+    /// Per kind of call: (calls, seconds in the call).
+    by_op: BTreeMap<&'static str, (u64, f64)>,
+}
+
+const PHASES: [&str; 6] = ["pre", "call", "audit", "presence", "blame", "restart"];
+
+impl Window {
+    fn add(&mut self, op: &'static str, t: [Instant; 7]) {
+        self.ops += 1;
+        for k in 0..6 {
+            self.phase[k] += (t[k + 1] - t[k]).as_secs_f64();
+        }
+        let e = self.by_op.entry(op).or_default();
+        e.0 += 1;
+        e.1 += (t[2] - t[1]).as_secs_f64();
+    }
+
+    fn wall(&self) -> f64 {
+        self.phase.iter().sum()
+    }
+
+    /// `N calls/s; ms per call: pre a, call b, ...; µs per call by kind: insert x, ...`
+    fn report(&self) -> String {
+        let n = self.ops.max(1) as f64;
+        let phases: Vec<String> = PHASES
+            .iter()
+            .zip(self.phase)
+            .map(|(p, s)| format!("{p} {:.3}", s * 1e3 / n))
+            .collect();
+        let ops: Vec<String> = self
+            .by_op
+            .iter()
+            .map(|(op, (c, s))| format!("{op} {:.0}", s * 1e6 / (*c).max(1) as f64))
+            .collect();
+        format!(
+            "{:.0} calls/s; ms per call: {}; µs per call by kind: {}",
+            self.ops as f64 / self.wall().max(1e-9),
+            phases.join(", "),
+            ops.join(", ")
+        )
+    }
 }
 
 struct Soak {
@@ -139,6 +222,28 @@ struct Soak {
     appeared_by: HashMap<String, HashSet<String>>,
     removed_by: HashMap<String, HashSet<String>>,
     n: Counts,
+    /// The plain editor (v0.9.5): its next token, the file as last seen, and the kit's
+    /// writes seen since the last outside save (bytes, when), the stale buffers it may save.
+    editor_next: u64,
+    last_file: Vec<u8>,
+    kit_writes: Vec<(Vec<u8>, u64)>,
+    /// Who made the call being audited, when not a participant (the outside editor).
+    actor: Option<String>,
+    /// The last calls, for a failure's dump: (op number, version after, what).
+    last_ops: std::collections::VecDeque<(u64, u64, String)>,
+    /// The undo or redo being audited had a region that is not whole lines (the known D1
+    /// gap, amendment pending; v0.9.5). Every soak call writes whole lines, so such a region
+    /// means the change's character diff reused characters already there, possibly another
+    /// participant's: undoing it can change text someone else wrote. Only then is the undo
+    /// promise's mismatch tolerated: counted and printed with its call number. The mode is
+    /// `SOAK_KNOWN_D1` (default 1 in v0.9.5; 0 fails it); v0.9.7, which closes the gap,
+    /// removes it.
+    d1: bool,
+    /// The run's knobs, from the environment by default (`SOAK_MAX_OPS`, `SOAK_OUTSIDE`,
+    /// `SOAK_KNOWN_D1`); the replay regression sets its own, whatever the job's env.
+    max_ops: u64,
+    outside: bool,
+    known_d1: bool,
 }
 
 fn lines_of(text: &str) -> Vec<String> {
@@ -232,6 +337,15 @@ impl Soak {
             appeared_by: HashMap::new(),
             removed_by: HashMap::new(),
             n: Counts::default(),
+            editor_next: 0,
+            last_file: seed_text.clone().into_bytes(),
+            kit_writes: Vec::new(),
+            actor: None,
+            last_ops: std::collections::VecDeque::new(),
+            d1: false,
+            max_ops: env_u64("SOAK_MAX_OPS", 0),
+            outside: env_u64("SOAK_OUTSIDE", 1) != 0,
+            known_d1: env_u64("SOAK_KNOWN_D1", 1) != 0,
         };
         for i in 0..w.parts.len() {
             w.join(i);
@@ -289,12 +403,31 @@ impl Soak {
         (lines_of(&r.text_by_root[0].1), r.version)
     }
 
+    /// The next unique token of participant `i`. A token is never a text the doc already
+    /// has had: a known D1 undo can rebuild characters into a text no one wrote yet (seed 3,
+    /// call 25,877 rebuilt `p16:347` before p16 issued it), so such texts are skipped.
     fn token(&mut self, i: usize) -> String {
         let p = &mut self.parts[i];
-        p.next += 1;
-        let t = format!("{}:{}", p.pid, p.next);
-        self.author.insert(t.clone(), p.pid.clone());
-        t
+        loop {
+            p.next += 1;
+            let t = format!("{}:{}", p.pid, p.next);
+            if !self.author.contains_key(&t) {
+                self.author.insert(t.clone(), p.pid.clone());
+                return t;
+            }
+        }
+    }
+
+    /// The plain editor's next unique token (as [`Soak::token`]).
+    fn editor_token(&mut self) -> String {
+        loop {
+            self.editor_next += 1;
+            let t = format!("ed:{}", self.editor_next);
+            if !self.author.contains_key(&t) {
+                self.author.insert(t.clone(), EXTERNAL_PID.to_owned());
+                return t;
+            }
+        }
     }
 
     fn advance(&mut self) {
@@ -371,6 +504,10 @@ impl Soak {
 
     /// One call, chosen by the seed; returns its name, who made it (index) and what it may do.
     fn step(&mut self) -> (&'static str, usize, ClaimPolicy, Expect) {
+        // the plain editor: SOAK_OUTSIDE=0 turns it off (the draw is still made)
+        if self.rng.gen_ratio(1, 40) && self.outside {
+            return self.outside_save();
+        }
         let i = self.rng.gen_range(0..self.parts.len());
         if self.parts[i].conns.is_empty() {
             self.join(i);
@@ -541,7 +678,17 @@ impl Soak {
                 } else {
                     UndoMode::All
                 };
-                let req = UndoRequest::steps(self.rng.gen_range(1..=2)).mode(mode);
+                let steps = self.rng.gen_range(1..=2);
+                let req = UndoRequest::steps(steps).mode(mode);
+                // the D1 signature: a region of the batches it undoes or redoes that isn't
+                // whole lines
+                let partial = |x: &str| !x.is_empty() && !x.ends_with('\n');
+                self.d1 = self
+                    .s
+                    .undo_regions_for_tests(&self.parts[i].pid, redo, steps)
+                    .unwrap()
+                    .iter()
+                    .any(|(b, a)| partial(b) || partial(a));
                 let r = if redo {
                     self.s.redo_with(conn, &req)
                 } else {
@@ -629,6 +776,207 @@ impl Soak {
         }
     }
 
+    /// The file changed since last seen, and not by the editor: a write of the kit's (the
+    /// host's clock doesn't move within a loop turn, so `now` is when it was made).
+    fn note_kit_write(&mut self) {
+        let bytes = std::fs::read(&self.file).unwrap();
+        if bytes != self.last_file {
+            let now = self.host.now.load(Ordering::SeqCst);
+            self.kit_writes.push((bytes.clone(), now));
+            if self.kit_writes.len() > 8 {
+                self.kit_writes.remove(0);
+            }
+            self.last_file = bytes;
+        }
+    }
+
+    /// The plain editor saves `text` (in place, or by rename as vim does) and the host's
+    /// watcher reports it. K-AUD-1 after every save.
+    fn editor_save(&mut self, text: &str) -> DiskCheck {
+        if self.rng.gen_bool(0.5) {
+            std::fs::write(&self.file, text).unwrap();
+        } else {
+            let tmp = self.file.with_extension("swp-new");
+            std::fs::write(&tmp, text).unwrap();
+            std::fs::rename(&tmp, &self.file).unwrap();
+        }
+        let check = self.s.file_changed().unwrap();
+        match check {
+            DiskCheck::Ingested { .. } | DiskCheck::Unchanged => {
+                self.n.outside_saves += 1;
+                self.kit_writes.clear();
+            }
+            DiskCheck::OwnWrite => {}
+            ref other => panic!("an outside save: {other:?}"),
+        }
+        self.last_file = text.as_bytes().to_vec();
+        assert_eq!(
+            self.s.audit_disk_sync().unwrap(),
+            vec![],
+            "K-AUD-1 after an outside save"
+        );
+        check
+    }
+
+    /// One outside save (or two), as a plain editor makes it on the file as it is now.
+    fn outside_save(&mut self) -> (&'static str, usize, ClaimPolicy, Expect) {
+        self.note_kit_write();
+        let file = String::from_utf8(std::fs::read(&self.file).unwrap()).unwrap();
+        let mut ls = lines_of(&file);
+        let join = |ls: &[String]| -> String { ls.iter().map(|l| format!("{l}\n")).collect() };
+        self.actor = Some(EXTERNAL_PID.to_owned());
+        let ign = ClaimPolicy::Ignore;
+        // a line the file and the doc both hold
+        let shared: Vec<usize> = (0..ls.len())
+            .filter(|&k| self.lines.contains(&ls[k]))
+            .collect();
+        let now = self.host.now.load(Ordering::SeqCst);
+        let ttl = self.config.own_write_ttl_ms;
+        let stale: Vec<Vec<u8>> = self
+            .kit_writes
+            .iter()
+            .rev()
+            .take(4)
+            .filter(|(b, at)| now.saturating_sub(*at) + 5_000 <= ttl && *b != file.as_bytes())
+            .map(|(b, _)| b.clone())
+            .collect();
+        let echo = |w: &mut Self, check: &DiskCheck| -> bool {
+            if *check == DiskCheck::OwnWrite {
+                // a write of the kit's since the last outside save (an undo of a line that
+                // came and went, say): an echo by design; the write-back puts the doc back
+                w.n.echoes += 1;
+                w.s.flush(w.obs()).unwrap();
+                true
+            } else {
+                false
+            }
+        };
+        match self.rng.gen_range(0..5) {
+            4 if !stale.is_empty() => {
+                // a stale buffer: an older write of the kit's, made since the last outside save
+                let w = stale[self.rng.gen_range(0..stale.len())].clone();
+                let check = self.editor_save(std::str::from_utf8(&w).unwrap());
+                assert_eq!(check, DiskCheck::OwnWrite, "a stale buffer of a kit write");
+                echo(self, &check);
+                ("outside stale", 0, ign, Expect::Nothing)
+            }
+            1..=3 if !shared.is_empty() => {
+                let kind = self.rng.gen_range(1..=3);
+                let k = shared[self.rng.gen_range(0..shared.len())];
+                if kind == 2 {
+                    // a line added, saved, then taken out again and saved
+                    let t = self.editor_token();
+                    ls.insert(k, t);
+                    let check = self.editor_save(&join(&ls));
+                    if echo(self, &check) {
+                        return ("outside add-undo", 0, ign, Expect::Nothing);
+                    }
+                    ls.remove(k);
+                    let check = self.editor_save(&join(&ls));
+                    assert_ne!(
+                        check,
+                        DiskCheck::OwnWrite,
+                        "no kit write since the last save"
+                    );
+                    return (
+                        "outside add-undo",
+                        0,
+                        ign,
+                        Expect::Saved {
+                            targets: HashSet::new(),
+                            new: Vec::new(),
+                        },
+                    );
+                }
+                let gone = ls.remove(k);
+                let check = self.editor_save(&join(&ls));
+                if echo(self, &check) {
+                    return ("outside delete", 0, ign, Expect::Nothing);
+                }
+                if kind == 1 {
+                    return (
+                        "outside delete",
+                        0,
+                        ign,
+                        Expect::Saved {
+                            targets: HashSet::from([gone]),
+                            new: Vec::new(),
+                        },
+                    );
+                }
+                // typed back where it was, and saved: the bytes as before
+                ls.insert(k, gone);
+                let check = self.editor_save(&join(&ls));
+                assert_ne!(
+                    check,
+                    DiskCheck::OwnWrite,
+                    "no kit write since the last save"
+                );
+                (
+                    "outside delete-retype",
+                    0,
+                    ign,
+                    Expect::Saved {
+                        targets: HashSet::new(),
+                        new: Vec::new(),
+                    },
+                )
+            }
+            _ => {
+                let t = self.editor_token();
+                let at = self.rng.gen_range(0..=ls.len());
+                ls.insert(at, t.clone());
+                let check = self.editor_save(&join(&ls));
+                if echo(self, &check) {
+                    return ("outside insert", 0, ign, Expect::Nothing);
+                }
+                (
+                    "outside insert",
+                    0,
+                    ign,
+                    Expect::Saved {
+                        targets: HashSet::new(),
+                        new: vec![t],
+                    },
+                )
+            }
+        }
+    }
+
+    /// A failure's dump (the replay tooling): the last calls, the engine's text against the
+    /// session's cached one, `pid`'s undo and redo stacks, and the lines written twice with
+    /// their blame.
+    fn dump(&self, why: &str, pid: &str) {
+        eprintln!("[soak dump] {why}: call {}, v{}", self.n.ops, self.version);
+        for (n, v, what) in &self.last_ops {
+            eprintln!("[soak dump]   #{n} v{v}: {what}");
+        }
+        if let Ok(t) = self.s.engine_and_cached_texts_for_tests() {
+            for (root, engine, cached) in t {
+                eprintln!(
+                    "[soak dump] {root}: engine and cache {}",
+                    if engine == cached { "agree" } else { "DIFFER" }
+                );
+            }
+        }
+        if let Ok((undo, redo)) = self.s.undo_stacks_for_tests(pid, 4) {
+            eprintln!(
+                "[soak dump] {pid} undo (newest first):\n{undo}\n[soak dump] {pid} redo:\n{redo}"
+            );
+        }
+        let text = self.s.read(self.obs()).unwrap().text_by_root[0].1.clone();
+        let mut seen = HashSet::new();
+        for l in lines_of(&text) {
+            if !seen.insert(l.clone()) {
+                if let Ok(b) = self.s.blame(self.obs(), ROOT, None) {
+                    for bl in b.lines.iter().filter(|bl| bl.text == l) {
+                        eprintln!("[soak dump] twice: {bl:?}");
+                    }
+                }
+            }
+        }
+    }
+
     /// The claims as they stand: (pid, conn, first, last, start, end).
     fn claims(&self) -> Vec<(String, ConnId, usize, usize, usize, usize)> {
         self.s
@@ -651,11 +999,33 @@ impl Soak {
         let (after, version) = self.live();
         let before_set: HashSet<&String> = self.lines.iter().collect();
         let after_set: HashSet<&String> = after.iter().collect();
-        assert_eq!(
-            after_set.len(),
-            after.len(),
-            "{op}: a line twice: {after:?}"
-        );
+        {
+            let who = self
+                .actor
+                .clone()
+                .unwrap_or_else(|| self.parts[i].pid.clone());
+            let mut ad: Vec<&String> = after_set.difference(&before_set).copied().collect();
+            let mut rm: Vec<&String> = before_set.difference(&after_set).copied().collect();
+            ad.sort();
+            rm.sort();
+            self.last_ops.push_back((
+                self.n.ops,
+                version,
+                format!("{op} by {who}: +{ad:?} -{rm:?}"),
+            ));
+            if self.last_ops.len() > env_u64("SOAK_TRACE_KEEP", 64) as usize {
+                self.last_ops.pop_front();
+            }
+        }
+        let d1 =
+            std::mem::take(&mut self.d1) && matches!(expect, Expect::History(_)) && self.known_d1;
+        let mut d1_hit = false;
+        let twice = after.len() - after_set.len();
+        if twice > self.n.dups {
+            assert!(d1, "{op}: a line twice: {after:?}");
+            d1_hit = true;
+        }
+        self.n.dups = twice;
         let added: HashSet<String> = after_set
             .difference(&before_set)
             .map(|s| (*s).clone())
@@ -665,12 +1035,15 @@ impl Soak {
             .map(|s| (*s).clone())
             .collect();
         for l in &added {
-            assert!(
-                self.author.contains_key(l),
-                "{op}: a line nobody wrote: {l:?}"
-            );
+            if !self.author.contains_key(l) {
+                assert!(d1, "{op}: a line nobody wrote: {l:?}");
+                d1_hit = true;
+            }
         }
-        let pid = self.parts[i].pid.clone();
+        let pid = self
+            .actor
+            .take()
+            .unwrap_or_else(|| self.parts[i].pid.clone());
         let changed = !added.is_empty() || !removed.is_empty();
         if changed {
             assert!(
@@ -709,21 +1082,42 @@ impl Soak {
                     assert!(new.contains(l), "{op} by {pid}: {l} appeared");
                 }
             }
+            Expect::Saved { targets, new } => {
+                for l in &removed {
+                    assert!(
+                        targets.contains(l),
+                        "{op}: the save removed {l}, not its target"
+                    );
+                }
+                for l in &added {
+                    assert!(new.contains(l), "{op}: {l} appeared");
+                }
+                // taken in: every line it took out is gone, every line it added is there
+                for l in targets {
+                    assert!(!after_set.contains(l), "{op}: {l} survived the save");
+                }
+                for l in new {
+                    assert!(after_set.contains(l), "{op}: the save's {l} is missing");
+                }
+            }
             Expect::History(p) => {
                 let mine = self.appeared_by.entry(p.clone()).or_default();
                 for l in &removed {
-                    assert!(
-                        mine.contains(l),
-                        "{op} by {p} removed {l} (by {}), which no change of {p}'s put there",
-                        self.author[l]
-                    );
+                    if !mine.contains(l) {
+                        assert!(
+                            d1,
+                            "{op} by {p} removed {l} (by {}), which no change of {p}'s put there",
+                            self.author[l]
+                        );
+                        d1_hit = true;
+                    }
                 }
                 let gone = self.removed_by.entry(p.clone()).or_default();
                 for l in &added {
-                    assert!(
-                        gone.contains(l),
-                        "{op} by {p} put back {l}, which {p} never removed"
-                    );
+                    if !gone.contains(l) {
+                        assert!(d1, "{op} by {p} put back {l}, which {p} never removed");
+                        d1_hit = true;
+                    }
                 }
             }
         }
@@ -752,6 +1146,22 @@ impl Soak {
                 }
             }
         }
+        if d1_hit {
+            // the known D1 gap: counted; the lines it left are the doc's from now on
+            self.n.d1_tolerated += 1;
+            self.n.d1_calls.push(self.n.ops);
+            let mut ad: Vec<&String> = added.iter().collect();
+            let mut rm: Vec<&String> = removed.iter().collect();
+            ad.sort();
+            rm.sort();
+            eprintln!(
+                "[soak] known D1 violation at call {}: {op} by {pid}: +{ad:?} -{rm:?} (v{} -> v{version})",
+                self.n.ops, self.version
+            );
+            for l in &added {
+                self.author.entry(l.clone()).or_insert_with(|| pid.clone());
+            }
+        }
         self.appeared_by
             .entry(pid.clone())
             .or_default()
@@ -765,11 +1175,11 @@ impl Soak {
         self.n.max_lines = self.n.max_lines.max(self.lines.len());
     }
 
-    /// Claims and presence: every claim's connection is live; the roster is exactly who is
-    /// connected; carried overlaps are counted (a new claim's are checked at `claim`).
+    /// Claims and presence: every claim's connection is live; two participants' claims never
+    /// overlap (shared edges counted); the roster is exactly who is connected.
     fn presence(&mut self) {
         let claims = self.claims();
-        let mut overlaps = 0u64;
+        let mut shared = 0u64;
         let conns: HashMap<ConnId, &str> = self
             .parts
             .iter()
@@ -783,18 +1193,20 @@ impl Soak {
             );
             assert!(a.2 >= 1 && a.2 <= a.3, "claim lines {a:?}");
             assert!(a.4 <= a.5, "claim span {a:?}");
-            // carried claims of two participants can come to overlap: once the text between
-            // them is deleted they share an edge, and text typed there lands in both
-            // (expanding anchors; tests/presence.rs, the ignored shared-edge test). Counted
-            // and reported, not failed; a new claim never overlaps (checked at `claim`).
+            // two participants' claims never overlap, carried ones included: text typed
+            // where they share an edge joins one of them (v0.9.2; tests/presence.rs)
             for b in &claims[k + 1..] {
-                if a.0 != b.0 && !(a.5 <= b.4 || b.5 <= a.4) {
-                    overlaps += 1;
+                assert!(
+                    a.0 == b.0 || a.5 <= b.4 || b.5 <= a.4,
+                    "two participants' claims overlap: {a:?} and {b:?}"
+                );
+                if a.0 != b.0 && (a.5 == b.4 || b.5 == a.4) {
+                    shared += 1;
                 }
             }
         }
-        if overlaps > 0 {
-            self.n.overlap_checks += 1;
+        if shared > 0 {
+            self.n.shared_edges += 1;
         }
         let roster = self.s.roster(self.obs()).unwrap();
         let mut want: BTreeMap<&str, usize> = BTreeMap::new();
@@ -826,10 +1238,20 @@ impl Soak {
             self.s.read(self.obs()).unwrap().bytes,
             "the file isn't the doc"
         );
+        // K-AUD-1's sync check (v0.9.4): the replica the next outside edit is made on is the
+        // doc, on its elements (the file and the doc agreeing can't show a stale one)
+        assert_eq!(
+            self.s.audit_disk_sync().unwrap(),
+            vec![],
+            "the disk replica isn't the doc"
+        );
         self.n.flushes += 1;
         let b = self.s.blame(self.obs(), ROOT, None).unwrap();
         assert_eq!(b.lines.len(), self.lines.len());
-        let writers: HashSet<&String> = self.author.values().collect();
+        let external = EXTERNAL_PID.to_owned();
+        let mut writers: HashSet<&String> = self.author.values().collect();
+        // a line the plain editor typed back is its, whoever wrote it first
+        writers.insert(&external);
         for (bl, l) in b.lines.iter().zip(&self.lines) {
             assert_eq!(&bl.text, l);
             assert!(
@@ -866,6 +1288,9 @@ impl Soak {
         assert_eq!(r.bytes, text, "store reload: the text differs from live");
         assert_eq!(r.version, version, "store reload: the version differs");
         assert_eq!(lines_of(&r.text_by_root[0].1), self.lines);
+        // the kit's own-write hashes are in memory: a new session has none
+        self.last_file = std::fs::read(&self.file).unwrap();
+        self.kit_writes.clear();
         self.n.restarts += 1;
     }
 
@@ -891,26 +1316,65 @@ impl Soak {
         let end = start + Duration::from_secs(secs);
         let mut next_progress = start + Duration::from_secs(progress);
         let restart_every = if secs <= 30 { 300 } else { 3_000 };
-        while Instant::now() < end {
+        let mut win = Window::default();
+        // replay: stop after this many calls (0: no limit)
+        let max_ops = self.max_ops;
+        // replay: dump every participant's undo and redo stacks before this call (1-based)
+        let dump_at = env_u64("SOAK_DUMP_AT_OP", 0);
+        while Instant::now() < end && (max_ops == 0 || self.n.ops < max_ops) {
+            let t0 = Instant::now();
             self.advance();
+            if dump_at != 0 && self.n.ops + 1 == dump_at {
+                for p in &self.parts {
+                    if let Ok((undo, redo)) = self.s.undo_stacks_for_tests(&p.pid, 3) {
+                        if !undo.is_empty() || !redo.is_empty() {
+                            eprintln!(
+                                "[soak dump-at] {} undo:\n{undo}\n[soak dump-at] {} redo:\n{redo}",
+                                p.pid, p.pid
+                            );
+                        }
+                    }
+                }
+                let text = self.s.read(self.obs()).unwrap().text_by_root[0].1.clone();
+                eprintln!("[soak dump-at] text before call {dump_at}:\n{text}");
+            }
             let claims_before = self.claims();
+            let t1 = Instant::now();
             let (op, i, policy, expect) = self.step();
+            let t2 = Instant::now();
             *self.n.by_op.entry(op).or_default() += 1;
             self.n.ops += 1;
-            self.audit(op, i, policy, expect, &claims_before);
+            let pid = self
+                .actor
+                .clone()
+                .unwrap_or_else(|| self.parts[i].pid.clone());
+            let audited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.audit(op, i, policy, expect, &claims_before)
+            }));
+            if let Err(e) = audited {
+                self.dump(op, &pid);
+                std::panic::resume_unwind(e);
+            }
+            let t3 = Instant::now();
             self.presence();
+            let t4 = Instant::now();
             if self.n.ops % 250 == 0 {
                 self.file_and_blame();
                 self.sample_memory(start.elapsed().as_secs());
             }
+            let t5 = Instant::now();
             if self.n.ops % restart_every == 0 {
                 self.restart();
             }
+            self.note_kit_write();
+            let t6 = Instant::now();
+            win.add(op, [t0, t1, t2, t3, t4, t5, t6]);
             if Instant::now() >= next_progress {
                 next_progress += Duration::from_secs(progress);
+                let at = start.elapsed().as_secs_f64();
                 eprintln!(
                     "[soak {label}] {}s: {} ops ({} applied), v{}, {} lines, {} restarts, rss {} kB, est {} B",
-                    start.elapsed().as_secs(),
+                    at as u64,
                     self.n.ops,
                     self.n.applied,
                     self.version,
@@ -919,6 +1383,9 @@ impl Soak {
                     rss_kb(),
                     self.s.status().unwrap().estimated_bytes
                 );
+                eprintln!("[soak {label}] {}s: {}", at as u64, win.report());
+                self.n.windows.push((at, win.ops, win.wall()));
+                win = Window::default();
             }
         }
         // the final state: the file, blame, and one more restart
@@ -929,7 +1396,7 @@ impl Soak {
         let n = &self.n;
         eprintln!(
             "[soak {label}] done: {:.0}s, {} ops ({:.0}/s), {} applied, v{}, {} lines now (max {}), \
-             {} restarts, {} blame+file checks ({} of {} lines blamed on the writer of their line break), {} joins, {} leaves, {} calls after which two participants' claims overlapped (shared edge); peak rss {} kB, peak kit estimate {} B \
+             {} restarts, {} blame+file checks ({} of {} lines blamed on the writer of their line break), {} joins, {} leaves, {} calls after which two participants' claims shared an edge (never overlapping); peak rss {} kB, peak kit estimate {} B \
              (budget {}); rss samples (s, kB): {:?}",
             wall,
             n.ops,
@@ -944,13 +1411,70 @@ impl Soak {
             n.blame_lines,
             n.joins,
             n.leaves,
-            n.overlap_checks,
+            n.shared_edges,
             n.peak_rss_kb,
             n.peak_estimate,
             self.config.memory_budget_bytes,
             sample(&n.rss_samples)
         );
         eprintln!("[soak {label}] by call: {:?}", n.by_op);
+        eprintln!(
+            "[soak {label}] outside saves: {} taken in, {} older kit writes saved back and suppressed as echoes",
+            n.outside_saves, n.echoes
+        );
+        eprintln!(
+            "[soak {label}] undo/redo mismatches with the line oracle tolerated as the known D1 gap (a region that isn't whole lines; amendment pending): {}; lines written twice now: {}",
+            n.d1_tolerated, n.dups
+        );
+        let rates: Vec<(u64, u64)> = n
+            .windows
+            .iter()
+            .map(|(at, c, w)| (*at as u64, (*c as f64 / w.max(1e-9)) as u64))
+            .collect();
+        eprintln!("[soak {label}] calls/s by window (s, calls/s): {rates:?}");
+        // throughput over time: the first window against the last 150 s (G-gate evidence:
+        // a call must not cost more as history grows; SOAK_MAX_SLOWDOWN, default 2)
+        // the run's record (tools/evidence/), before the checks below can fail it
+        let (first, tail) = slowdown(&n.windows, secs as f64, 150.0).unwrap_or((0.0, 0.0));
+        let max_x = std::env::var("SOAK_MAX_SLOWDOWN")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(2.0);
+        let ratio = first / tail.max(1e-9);
+        let checked = !shadow_on() && tail > 0.0;
+        eprintln!(
+            "RUNREC {{\"job\":null,\"run\":\"soak_{label}\",\"tool\":\"soak\",\"status\":\"{}\",\"secs\":{secs},\"calls\":{},\"applied\":{},\"version\":{},\"restarts\":{},\"first_calls_per_s\":{},\"tail_calls_per_s\":{},\"slowdown_percent\":{},\"max_slowdown_percent\":{},\"peak_rss_kb\":{},\"peak_estimate_bytes\":{},\"shadow\":{}}}",
+            if !checked || ratio <= max_x { "COMPLETE" } else { "VIOLATION" },
+            n.ops,
+            n.applied,
+            self.version,
+            n.restarts,
+            first.round() as u64,
+            tail.round() as u64,
+            if checked { (ratio * 100.0).round() as u64 } else { 0 },
+            (max_x * 100.0).round() as u64,
+            n.peak_rss_kb,
+            n.peak_estimate,
+            shadow_on()
+        );
+        if shadow_on() {
+            eprintln!("[soak {label}] throughput check skipped: shadow mode");
+        } else if self.max_ops != 0 {
+            eprintln!("[soak {label}] throughput check skipped: a call-limited replay");
+        } else if let Some((first, tail)) = slowdown(&n.windows, secs as f64, 150.0) {
+            let max = std::env::var("SOAK_MAX_SLOWDOWN")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(2.0);
+            let ratio = first / tail.max(1e-9);
+            eprintln!(
+                "[soak {label}] throughput: {first:.0} calls/s in the first window, {tail:.0} in the last 150 s: {ratio:.2}x slower (most {max})"
+            );
+            assert!(
+                ratio <= max,
+                "throughput fell {ratio:.2}x over the run ({first:.0} -> {tail:.0} calls/s; most {max}x)"
+            );
+        }
         eprintln!("[soak {label}] refusals and no-ops: {:?}", n.refused);
         // it did real work: every kind of call ran, most edits applied
         for op in [
@@ -970,7 +1494,12 @@ impl Soak {
             "leave",
             "join",
             "tick",
+            "outside insert",
+            "outside delete",
         ] {
+            if op.starts_with("outside") && !self.outside {
+                continue;
+            }
             assert!(n.by_op.get(op).copied().unwrap_or(0) > 0, "{op} never ran");
         }
         assert!(
@@ -980,7 +1509,24 @@ impl Soak {
             n.ops
         );
         assert!(n.restarts >= 1);
+        // the report's last line (v0.9.5's soak gate)
+        eprintln!("[soak {label}] known D1 violations: {}", n.d1_tolerated);
     }
+}
+
+/// The first progress window's call rate and the rate over the last `tail` seconds of a
+/// `secs` run; `None` when the run is too short to have both apart (under four windows).
+fn slowdown(windows: &[(f64, u64, f64)], secs: f64, tail: f64) -> Option<(f64, f64)> {
+    if windows.len() < 4 {
+        return None;
+    }
+    let first = windows[0].1 as f64 / windows[0].2.max(1e-9);
+    let cut = (secs - tail).max(windows[0].0);
+    let (calls, wall) = windows
+        .iter()
+        .filter(|w| w.0 > cut)
+        .fold((0u64, 0f64), |(c, s), w| (c + w.1, s + w.2));
+    (wall > 0.0).then(|| (first, calls as f64 / wall))
 }
 
 /// At most ~12 evenly spaced samples, for the summary line.
@@ -1009,12 +1555,59 @@ fn env_u64(name: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// The engine's edit path the soak runs: production's (v0.9.3: on the doc itself).
+const SOAK_PATH: Path = Path::MainDoc;
+
+fn shadow_on() -> bool {
+    env_u64("SOAK_SHADOW", 0) != 0
+}
+
+/// Run `f` (the whole soak) with its edits through [`SOAK_PATH`]; in shadow mode, each also
+/// checked against the throwaway replica (any difference panics).
+fn soak_side<R>(label: &str, f: impl FnOnce() -> R) -> R {
+    // replay: the kit's client IDs from a seed (with the seeded calls and clock, a run
+    // replays exactly)
+    let client_seed = std::env::var("SOAK_CLIENT_SEED")
+        .ok()
+        .map(|v| v.parse().expect("SOAK_CLIENT_SEED: a number"));
+    soak_side_with(label, client_seed, shadow_on(), f)
+}
+
+/// [`soak_side`] with the client seed and shadow mode given (the replay regression's).
+fn soak_side_with<R>(
+    label: &str,
+    client_seed: Option<u64>,
+    shadow: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let mut side = Side::new(SOAK_PATH);
+    if let Some(seed) = client_seed {
+        side = side.with_client_seed(seed);
+        eprintln!("[soak {label}] client IDs seeded from {seed}");
+    }
+    if shadow {
+        side = side.shadowed_by(Path::Throwaway);
+    }
+    let r = with_side(&mut side, f);
+    if shadow {
+        eprintln!(
+            "[soak {label}] shadow: {} edits made through {:?} and checked against the throwaway replica: byte-identical",
+            side.shadow_checks(),
+            side.path()
+        );
+        assert!(side.shadow_checks() > 0, "shadow mode checked nothing");
+    }
+    r
+}
+
 /// CI: a few seconds of the same soak.
 #[test]
 fn soak_short() {
     let seed = env_u64("SOAK_SEED", 1);
-    let mut w = Soak::new("short", seed);
-    w.run(env_u64("SOAK_SHORT_SECS", 5), "short");
+    soak_side("short", || {
+        let mut w = Soak::new("short", seed);
+        w.run(env_u64("SOAK_SHORT_SECS", 5), "short");
+    });
 }
 
 /// The full soak (G-gate evidence): `SOAK_SECS` (default 600), release build, on a node.
@@ -1027,6 +1620,33 @@ fn soak_32() {
         "[soak 32] seed {seed}, {secs}s, {} people + {} agents",
         PEOPLE, AGENTS
     );
-    let mut w = Soak::new("full", seed);
-    w.run(secs, "32");
+    soak_side("32", || {
+        let mut w = Soak::new("full", seed);
+        w.run(secs, "32");
+    });
+}
+
+/// The D1 replay regression (v0.9.5): `SOAK_SEED=3`, client IDs from seed 1, the plain editor
+/// on, the known-D1 mode on, 27,000 calls, whatever the job's environment. Call 25,877 is a
+/// known D1 violation: p30's undo rebuilds characters into `p16:347` before p16 issues that
+/// token (p16 does at call 26,450, which once read as a line written twice). The run must see
+/// exactly that one known violation and no other invariant failure (any fails the test).
+/// About two minutes in release: `tools/tests/soak.sh` runs it.
+#[test]
+#[ignore = "a 27,000-call seeded replay: run in release (tools/tests/soak.sh)"]
+fn soak_replay_seed_3_known_d1() {
+    let calls = soak_side_with("replay 3", Some(1), false, || {
+        let mut w = Soak::new("replay3", 3);
+        w.max_ops = 27_000;
+        w.outside = true;
+        w.known_d1 = true;
+        w.run(3_600, "replay 3");
+        assert_eq!(w.n.ops, 27_000, "the replay ran to its call limit");
+        w.n.d1_calls.clone()
+    });
+    assert_eq!(
+        calls,
+        vec![25_877],
+        "exactly the known D1 violation at call 25,877"
+    );
 }

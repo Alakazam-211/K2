@@ -23,6 +23,7 @@ mod blob;
 mod delete;
 mod enc;
 mod history;
+mod promote;
 mod purge;
 mod rewrite;
 mod scan;
@@ -35,6 +36,9 @@ pub(crate) use history::{
     Retention, RevertRecord, RevertWindow, RootRuns, RootShape, SpanOf,
 };
 pub use history::{ChangeInfo, ChangeKind, VersionInfo};
+pub(crate) use promote::PromoteRows;
+#[cfg(test)]
+pub(crate) use promote::FAIL_BEFORE_COMMIT as FAIL_PROMOTE_BEFORE_COMMIT;
 pub use purge::PurgeCounts;
 pub(crate) use purge::{DocPurge, Pick};
 pub use rewrite::RewriteReport;
@@ -121,6 +125,12 @@ pub enum StoreError {
     Db(String),
     #[error("store is format {found}; this build reads up to {STORE_FORMAT}")]
     Newer { found: u64 },
+    /// The store holds a table this kit doesn't know: data a newer kit added without a
+    /// format bump (v0.9.7's `authored`). Reading and editing still work; a rewrite (and so a
+    /// purge) is refused before anything changes (v0.9.5). In the error registry this is
+    /// `MPC-E502` `store_newer`, with details `{table}`; its message is the guidance. Exit 6.
+    #[error("{}", newer_data_guidance(table))]
+    NewerData { table: String },
     #[error("store record is damaged: {0}")]
     Corrupt(&'static str),
     #[error("no doc {0}")]
@@ -154,6 +164,21 @@ pub enum StoreError {
     /// Tier 0: version {1} of blob doc {0} was purged; its content is gone.
     #[error("version {1} of doc {0} was purged")]
     PurgedVersion(DocId, VersionId),
+}
+
+/// Tables a newer kit adds without a format bump, with the kit that adds them.
+const FUTURE_TABLES: &[(&str, &str)] = &[("authored", "v0.9.7")];
+
+/// [`StoreError::NewerData`]'s message: what holds the store, and what to upgrade to.
+fn newer_data_guidance(table: &str) -> String {
+    let kit = FUTURE_TABLES
+        .iter()
+        .find(|(t, _)| *t == table)
+        .map_or_else(|| "a newer kit".to_owned(), |(_, v)| format!("kit ≥ {v}"));
+    format!(
+        "This store holds data from a newer kit (table \"{table}\"). Upgrade K2 to a version \
+         with {kit} to purge or rewrite it; reading and editing still work."
+    )
 }
 
 /// Disk sync: the doc state the file on disk corresponds to. Its text is the file's text

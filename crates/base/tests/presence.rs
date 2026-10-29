@@ -1341,60 +1341,222 @@ fn last_edit_does_not_take_in_text_typed_at_its_edges() {
     assert!(le.as_ref().map_or(true, |l| l.last <= 1), "{le:?}");
 }
 
-// ---------- adjacent claims and their shared edge (soak finding) ----------
+// ---------- adjacent claims and their shared edge (soak finding, v0.9.2) ----------
 
-/// Two participants' claims that come to share an edge (the line break between them was
-/// deleted) both take in text typed at that edge, since both anchors expand: their spans
-/// then overlap, which a claim's acquire refuses. Kept as the soak found it, with the
-/// behaviour wanted (ignored until the kit settles the shared edge).
-#[test]
-#[ignore = "soak finding: adjacent claims both expand over text typed at their shared edge"]
-fn adjacent_claims_never_overlap_after_typing_at_their_shared_edge() {
-    let f = fx("shared-edge");
-    let a = f.agent("a");
-    let b = f.agent("b");
-    let c = f.person("c");
-    f.claim(a, 1, 1);
-    f.claim(b, 2, 2);
-    // c joins lines 1 and 2: the claims now meet at one point
-    let t = f.text(c);
-    let nl = t.find('\n').unwrap();
+/// Insert `x` at byte `at` as `c` (an engine edit: no claim policy).
+fn type_at(f: &Fx, c: ConnId, at: usize, x: &str) {
     f.s.edit(
         c,
         vec![k2_mpc_base::Edit::Text {
             root: ROOT.into(),
             hunks: vec![k2_mpc_base::text::diff::Hunk {
-                start: nl,
-                end: nl + 1,
+                start: at,
+                end: at,
+                insert: x.into(),
+            }],
+        }],
+        None,
+    )
+    .unwrap();
+}
+
+/// Delete bytes `s..e` as `c`.
+fn delete_at(f: &Fx, c: ConnId, s: usize, e: usize) {
+    f.s.edit(
+        c,
+        vec![k2_mpc_base::Edit::Text {
+            root: ROOT.into(),
+            hunks: vec![k2_mpc_base::text::diff::Hunk {
+                start: s,
+                end: e,
                 insert: String::new(),
             }],
         }],
         None,
     )
     .unwrap();
-    // c types at that point
-    f.s.edit(
-        c,
-        vec![k2_mpc_base::Edit::Text {
-            root: ROOT.into(),
-            hunks: vec![k2_mpc_base::text::diff::Hunk {
-                start: nl,
-                end: nl,
-                insert: "X".into(),
-            }],
-        }],
-        None,
-    )
-    .unwrap();
+}
+
+/// A held claim (it survives its owner's edits) on lines `first..=last`.
+fn claim_held(f: &Fx, c: ConnId, first: usize, last: usize) -> ClaimId {
+    f.s.claim(c, lines(first, last), None, None, true)
+        .unwrap()
+        .id
+}
+
+/// Every pair of two participants' live claims is apart (half-open spans).
+fn assert_apart(f: &Fx, c: ConnId) {
     let cl = f.s.claims(c).unwrap();
-    assert_eq!(cl.len(), 2, "{cl:?}");
-    let (x, y) = (&cl[0], &cl[1]);
-    assert!(
-        x.end <= y.start || y.end <= x.start,
-        "a's {}..{} and b's {}..{} overlap",
-        x.start,
-        x.end,
-        y.start,
-        y.end
-    );
+    for (k, x) in cl.iter().enumerate() {
+        for y in &cl[k + 1..] {
+            assert!(
+                x.pid == y.pid || x.end <= y.start || y.end <= x.start,
+                "{}'s {}..{} and {}'s {}..{} overlap",
+                x.pid,
+                x.start,
+                x.end,
+                y.pid,
+                y.start,
+                y.end
+            );
+        }
+    }
+}
+
+/// The span of claim `id` now.
+fn span(f: &Fx, c: ConnId, id: ClaimId) -> (usize, usize) {
+    let cl = f.s.claims(c).unwrap();
+    let x = cl.iter().find(|x| x.id == id).expect("claim live");
+    (x.start, x.end)
+}
+
+/// Agents `a` (line 1) and `b` (line 2) hold claims, in that order (held, so their owners'
+/// own typing doesn't end them); person `c` deletes the line break between them, so they
+/// meet at one point. Returns the point.
+fn shared_edge(
+    f: &Fx,
+    a: ConnId,
+    b: ConnId,
+    c: ConnId,
+    a_first: bool,
+) -> (ClaimId, ClaimId, usize) {
+    let (ia, ib) = if a_first {
+        let ia = claim_held(f, a, 1, 1);
+        (ia, claim_held(f, b, 2, 2))
+    } else {
+        let ib = claim_held(f, b, 2, 2);
+        (claim_held(f, a, 1, 1), ib)
+    };
+    let nl = f.text(c).find('\n').unwrap();
+    delete_at(f, c, nl, nl + 1);
+    assert_eq!(span(f, c, ia).1, nl);
+    assert_eq!(span(f, c, ib).0, nl);
+    (ia, ib, nl)
+}
+
+/// The rule: two participants' claims never overlap. Text typed where they meet joins the
+/// typist's own claim if they hold one of the two, otherwise the claim acquired first.
+/// (The soak found both anchors expanding there; this was its repro.)
+#[test]
+fn adjacent_claims_never_overlap_after_typing_at_their_shared_edge() {
+    let f = fx("shared-edge");
+    let a = f.agent("a");
+    let b = f.agent("b");
+    let c = f.person("c");
+    let (ia, ib, nl) = shared_edge(&f, a, b, c, true);
+    // a person with no claim types there: it joins a's (acquired first)
+    type_at(&f, c, nl, "X");
+    assert_apart(&f, c);
+    assert_eq!(span(&f, c, ia), (0, nl + 1), "X joins a's claim");
+    assert_eq!(span(&f, c, ib).0, nl + 1, "b's starts after X");
+    assert_eq!(&f.text(c)[nl..nl + 1], "X");
+}
+
+#[test]
+fn shared_edge_a_third_party_agent_typing_joins_the_claim_acquired_first() {
+    for a_first in [true, false] {
+        let f = fx("shared-edge-third");
+        let a = f.agent("a");
+        let b = f.agent("b");
+        let c = f.person("c");
+        let d = f.agent("d");
+        let (ia, ib, nl) = shared_edge(&f, a, b, c, a_first);
+        type_at(&f, d, nl, "YY");
+        assert_apart(&f, c);
+        if a_first {
+            assert_eq!(span(&f, c, ia).1, nl + 2, "a's (first) takes it");
+            assert_eq!(span(&f, c, ib).0, nl + 2);
+        } else {
+            assert_eq!(span(&f, c, ia).1, nl, "a's (second) stays before it");
+            assert_eq!(span(&f, c, ib).0, nl, "b's (first) takes it");
+            assert_eq!(span(&f, c, ib).1, f.text(c).find("two").unwrap() + 3);
+        }
+    }
+}
+
+#[test]
+fn shared_edge_a_claimant_typing_joins_their_own_claim() {
+    // b acquired second, but types there: its own claim takes the text
+    let f = fx("shared-edge-claimant");
+    let a = f.agent("a");
+    let b = f.agent("b");
+    let c = f.person("c");
+    let (ia, ib, nl) = shared_edge(&f, a, b, c, true);
+    type_at(&f, b, nl, "Z");
+    assert_apart(&f, c);
+    assert_eq!(span(&f, c, ia), (0, nl), "a's stays before Z");
+    assert_eq!(span(&f, c, ib).0, nl, "b's takes Z");
+    // and a, acquired first, typing there takes it into its own
+    type_at(&f, a, nl, "W");
+    assert_apart(&f, c);
+    assert_eq!(span(&f, c, ia), (0, nl + 1), "a's takes W");
+    assert_eq!(span(&f, c, ib).0, nl + 1);
+    assert_eq!(&f.text(c)[nl..nl + 2], "WZ");
+    // a person holding a claim is a claimant too
+    let g = fx("shared-edge-person-claimant");
+    let p = g.person("p");
+    let q = g.agent("q");
+    let r = g.person("r");
+    let (ip, iq, nl) = shared_edge(&g, p, q, r, true);
+    type_at(&g, q, nl, "V");
+    assert_apart(&g, r);
+    assert_eq!(span(&g, r, ip).1, nl);
+    assert_eq!(span(&g, r, iq).0, nl);
+}
+
+#[test]
+fn shared_edge_an_emptied_claim_moves_away_from_the_text() {
+    // b's line is emptied with its line break: b's claim is a point on a's end
+    let f = fx("shared-edge-empty");
+    let a = f.agent("a");
+    let b = f.agent("b");
+    let c = f.person("c");
+    let ia = claim_held(&f, a, 1, 1);
+    let ib = claim_held(&f, b, 2, 2);
+    let nl = f.text(c).find('\n').unwrap();
+    delete_at(&f, c, nl, nl + 4); // "\ntwo"
+    assert_eq!(span(&f, c, ib), (nl, nl));
+    type_at(&f, c, nl, "X");
+    assert_apart(&f, c);
+    assert_eq!(span(&f, c, ia), (0, nl + 1), "a's (first) takes X");
+    assert_eq!(span(&f, c, ib), (nl + 1, nl + 1), "b's point moves past X");
+    // b typing at its own point takes its text, a's stays
+    type_at(&f, b, nl + 1, "Y");
+    assert_apart(&f, c);
+    assert_eq!(span(&f, c, ia), (0, nl + 1));
+    assert_eq!(span(&f, c, ib), (nl + 1, nl + 2));
+}
+
+#[test]
+fn shared_edge_the_policy_and_edited_ends_follow_the_claim_that_takes_the_text() {
+    use k2_mpc_base::session::EditOptions;
+    let f = fx("shared-edge-policy");
+    let a = f.agent("a");
+    let b = f.agent("b");
+    let c = f.person("c");
+    let d = f.agent("d");
+    let ia = f.claim(a, 1, 1);
+    let ib = f.claim(b, 2, 2);
+    let nl = f.text(c).find('\n').unwrap();
+    delete_at(&f, c, nl, nl + 1);
+    let respect = EditOptions::new().policy(ClaimPolicy::Respect);
+    let ins = |t: &str, x: &str| format!("{}{x}{}", &t[..nl], &t[nl..]);
+    // a third agent under Respect: the text would join a's claim, so a's refuses it
+    match f
+        .s
+        .edit_with_options(d, ROOT, &respect, |t| Ok::<_, ()>(ins(t, "D")))
+    {
+        Err(EditWithError::Session(SessionError::Claimed { id, by, .. })) => {
+            assert_eq!((id, by.as_str()), (ia, "a"))
+        }
+        other => panic!("{other:?}"),
+    }
+    // b under Respect: it joins b's own claim, so a's doesn't stand in the way; b's own
+    // edit touching its (unheld) claim ends it; a's lives on, before the text
+    f.s.edit_with_options(b, ROOT, &respect, |t| Ok::<_, ()>(ins(t, "B")))
+        .unwrap()
+        .expect("applied");
+    let ended: Vec<(ClaimId, ClaimEnd)> = f.ended().into_iter().map(|e| (e.0, e.1)).collect();
+    assert_eq!(ended, vec![(ib, ClaimEnd::Edited)]);
+    assert_eq!(span(&f, c, ia), (0, nl));
 }

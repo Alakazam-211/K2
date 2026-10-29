@@ -1,0 +1,42 @@
+{
+ "job": "d9b8d20f",
+ "collected": "2026-10-28",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "d9b8d20f",
+   "run": "walk_3x3_u2_r1_rs1_none_bias-redo-after-partial",
+   "tool": "enumerator",
+   "mode": "walk",
+   "bias": "redo-after-partial",
+   "walks": 1000000,
+   "walks_asked": 1000000,
+   "steps": 13000000,
+   "eof_append": 40779,
+   "edge_insert": 356009,
+   "taint": 99666,
+   "partial": 160212,
+   "redo_after_partial": 28208,
+   "identical_reports": 148345,
+   "import_kept": 773851,
+   "purge_drops": 964327,
+   "restart": 780299,
+   "exact_vs_rediff": 67024,
+   "touching_regions": 125239,
+   "revert_extra_conflict": 5693,
+   "concurrent_restore": 73918,
+   "concurrent_restore_o4": 40404,
+   "concurrent_restore_o4a": 5777,
+   "concurrent_restore_base_by_root": 29358,
+   "status": "SAMPLED",
+   "exit": 0,
+   "wall_s": 767,
+   "bound": "pids=3 events=3 undos=2 reverts=1 restarts=1 maxlen=4 init=\"abb\" multi=true purge=true reduce=true u12=false",
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

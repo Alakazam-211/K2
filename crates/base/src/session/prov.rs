@@ -738,8 +738,132 @@ fn new_runs(text: &str, x: &Inserted) -> Vec<Run> {
     }
 }
 
+/// Each character of `text`, its element ID, from the engine's blame runs covering it;
+/// `None` when the runs don't cover the text exactly.
+pub(crate) fn elem_ids(text: &str, runs: &[crate::engine::BlameRun]) -> Option<Vec<ElemId>> {
+    let mut out = Vec::with_capacity(text.len());
+    let mut at = 0usize;
+    for r in runs {
+        let mut clock = r.clock;
+        for ch in text.get(at..at + r.bytes)?.chars() {
+            out.push(ElemId::new(r.client, clock));
+            clock += ch.len_utf16() as u32;
+        }
+        at += r.bytes;
+    }
+    (at == text.len()).then_some(out)
+}
+
+/// The change from `old` to `new` **at element identity** (SPEC-UNDO, preamble: every
+/// applied change is reported with each inserted or deleted element at its actual index),
+/// from each character's element ID (`old_ids`, `new_ids`): an old element missing from
+/// `new` is deleted, a new element missing from `old` is inserted where it stands, and the
+/// surviving elements keep their order (an engine merge never reorders them). The hunks are
+/// canonical (sorted; separated by at least one surviving element, so never touching) and
+/// replay `old` into `new` byte for byte. `None` if the IDs say otherwise (survivors out of
+/// order, a survivor whose character changed, or a replay that differs).
+///
+/// A diff of the two texts can't stand in for this: in repeated text it names another
+/// element than the one the engine inserted or deleted (v0.9.3: an outside edit putting a
+/// copy of a participant's line just before it was reported after it, and the participant's
+/// undo region was carried onto the copy).
+pub(crate) fn identity_hunks(
+    old: &str,
+    old_ids: &[ElemId],
+    new: &str,
+    new_ids: &[ElemId],
+) -> Option<Vec<Hunk>> {
+    use std::collections::HashSet;
+    let o: Vec<(usize, char)> = old.char_indices().collect();
+    let n: Vec<char> = new.chars().collect();
+    if o.len() != old_ids.len() || n.len() != new_ids.len() {
+        return None;
+    }
+    let in_old: HashSet<ElemId> = old_ids.iter().copied().collect();
+    let in_new: HashSet<ElemId> = new_ids.iter().copied().collect();
+    let byte = |i: usize| o.get(i).map_or(old.len(), |c| c.0);
+    let (mut hunks, mut cur): (Vec<Hunk>, Option<Hunk>) = (Vec::new(), None);
+    let (mut i, mut j) = (0usize, 0usize);
+    loop {
+        if i < o.len() && !in_new.contains(&old_ids[i]) {
+            // deleted
+            let at = byte(i);
+            let h = cur.get_or_insert_with(|| Hunk {
+                start: at,
+                end: at,
+                insert: String::new(),
+            });
+            h.end = at + o[i].1.len_utf8();
+            i += 1;
+        } else if j < n.len() && !in_old.contains(&new_ids[j]) {
+            // inserted, where it stands
+            let at = byte(i);
+            cur.get_or_insert_with(|| Hunk {
+                start: at,
+                end: at,
+                insert: String::new(),
+            })
+            .insert
+            .push(n[j]);
+            j += 1;
+        } else if i < o.len() && j < n.len() {
+            // a survivor on both sides: the same element, the same character
+            if old_ids[i] != new_ids[j] || o[i].1 != n[j] {
+                return None;
+            }
+            hunks.extend(cur.take());
+            i += 1;
+            j += 1;
+        } else if i == o.len() && j == n.len() {
+            break;
+        } else {
+            return None;
+        }
+    }
+    hunks.extend(cur.take());
+    (crate::text::diff::apply(old, &hunks) == new).then_some(hunks)
+}
+
 #[cfg(test)]
 mod tests {
+    /// `identity_hunks` names the elements the engine changed, where a diff of the texts
+    /// names others in repeated text; and refuses IDs that don't describe a merge.
+    #[test]
+    fn identity_hunks_follow_the_elements() {
+        let id = |c: u64, k: u32| ElemId::new(c, k);
+        // old `A B A` (a0's B at 2); the merge put a copy `B A` before a0's B: `A [B A] B A`
+        let old = "ABA";
+        let old_ids = [id(1, 0), id(7, 0), id(1, 1)];
+        let new = "ABABA";
+        let new_ids = [id(1, 0), id(9, 0), id(9, 1), id(7, 0), id(1, 1)];
+        let h = identity_hunks(old, &old_ids, new, &new_ids).unwrap();
+        assert_eq!(
+            h,
+            vec![Hunk {
+                start: 1,
+                end: 1,
+                insert: "BA".into()
+            }]
+        );
+        // the diff of the texts puts it after a0's B
+        assert_eq!(crate::text::diff::hunks(old, new)[0].start, 3);
+        // deletions and insertions, multi-byte, two separate hunks
+        let old = "aé日b";
+        let old_ids = [id(1, 0), id(1, 1), id(1, 2), id(1, 3)];
+        let new = "xé日yb";
+        let new_ids = [id(2, 0), id(1, 1), id(1, 2), id(2, 1), id(1, 3)];
+        let h = identity_hunks(old, &old_ids, new, &new_ids).unwrap();
+        assert_eq!(crate::text::diff::apply(old, &h), new);
+        assert_eq!(h.len(), 2);
+        assert_eq!((h[0].start, h[0].end, h[0].insert.as_str()), (0, 1, "x"));
+        assert_eq!((h[1].start, h[1].end, h[1].insert.as_str()), (6, 6, "y"));
+        // survivors out of order, or a survivor whose character changed: refused
+        assert!(identity_hunks("ab", &[id(1, 0), id(1, 1)], "ba", &[id(1, 1), id(1, 0)]).is_none());
+        assert!(identity_hunks("ab", &[id(1, 0), id(1, 1)], "ac", &[id(1, 0), id(1, 1)]).is_none());
+        // IDs that don't fit the text
+        assert!(identity_hunks("ab", &[id(1, 0)], "ab", &[id(1, 0), id(1, 1)]).is_none());
+    }
+
     use super::*;
     use proptest::prelude::*;
 

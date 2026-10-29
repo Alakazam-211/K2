@@ -51,8 +51,24 @@
 5. **Apps and editors bind to the kit's SDK** (the JS client and binding adapters), never to
    `y-*` packages. The engine can only be swapped on the server, at migration time; the SDK
    is what keeps packs and Apps unchanged.
-6. **One change per participant edit.** `Doc::edit_as` applies a list of edits as one change,
-   attributed to one client, through a throwaway replica that is never kept.
+6. **One change per participant edit, made on the doc itself as the participant.**
+   `Doc::edit_as` applies a list of edits as one change, attributed to one client, in one
+   engine transaction **on the doc itself, as that client** (`transact_mut_as`, the vendored
+   engine's k2 patch: `docs/YRS-FORK.md`). Nothing per participant is kept. *Why (v0.9.3):*
+   until v0.9.2 each edit was made on a throwaway replica built from the doc's full state
+   and dropped, so that memory was never the doc times its agents; but the engine keeps an
+   item per insertion ever made, so every edit cost O(history) (110 ms at 300k changes,
+   `docs/evidence/v0.9.3-edit-path.md`). On the doc itself, an edit costs the change plus
+   the engine's walk to its position, and no memory. *Safe because* the doc is the only
+   writer of every client ID it edits as: its owner holds it exclusively while it edits (a
+   session's lock), and it holds everything that client ever wrote. A second writer of one
+   `(client, clock)` would be dropped silently by every peer (`session/one_writer_tests.rs`
+   shows it, and checks the invariant under a random workload). *Checked continuously:* one
+   edit in `Config::edit_check_every` (default 1,000) is also made the old way, through a
+   throwaway replica from the state before it, and the two updates compared byte for byte
+   (the engine's text cache too, against a fresh read). A mismatch is never served: the doc
+   takes the replica's update, reports `AuditEvent::EditPathMismatch`, and makes its edits
+   through the replica until it is reloaded.
 7. **The file stays true, and the disk is never the merge authority.** A session writes its
    file back atomically and merges outside edits in as a CRDT change made from the file's
    last synced state (kept in the store, so restarts merge correctly too). It never writes

@@ -75,6 +75,7 @@
 // `thread.markRead`, `thread.attachment`, `thread.open`, `thread.links` and
 // `thread.pickFiles` are provided (`zen-thread-files.ts`).
 
+import { zenSidecarThread } from './zen-sidecar-reach'
 import { createStore } from 'zustand/vanilla'
 import { useHomesStore, selectedHome, resolveHomeId, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore, type ConnectHost } from '@/stores/connect-host'
@@ -1635,8 +1636,11 @@ export async function openZenConversation(
     emitRows()
     return rowFor(row, index, view)
   }
-  // vs-live Z52: the Agents page's own resolver, not the row handle.
-  const resolved = await resolvePinnedChatCopyableAddress(scope, workspacePath, projectId)
+  // vs-live Z52: the Agents page's own resolver, not the row handle. A
+  // sidecar's row (0.46.7 Workbench, `ws/name::local`) IS its Thread address:
+  // its own Thread, never its workspace's pinned Chat.
+  const sidecar = zenSidecarThread(address)
+  const resolved = sidecar ? { clipboard: sidecar } : await resolvePinnedChatCopyableAddress(scope, workspacePath, projectId)
   if (stale()) return rowFor(row, index, view)
   const fallback = parseHomeAddress(address)?.handle ?? ''
   if (!resolved?.clipboard) console.warn(`[zen] no pinned Chat address for ${address}; using ${fallback}`)
@@ -1672,6 +1676,16 @@ async function openInAgents(row: HomeRow): Promise<void> {
   if (!hostPool.entry(hostKey)?.boot?.version) await hostPool.check(hostKey)
   if (homeRoomVerdict(hostPool.entry(hostKey)?.boot) === 'switch') return
   await homeRooms.open(row, hostKey)
+}
+
+/** `agents.openTerminal` (0.46.7 Workbench, desktop only): leave Zen for
+ *  the agent's workspace on the Agents page, where its terminal (and a
+ *  sidecar's tab) is. A row this widget doesn't reach opens nothing. */
+export async function zenOpenAgentTerminal(view: ZenView, address: string): Promise<boolean> {
+  const row = viewRows(view).find((r) => r.address === address) ?? anyRow(address)
+  if (!row) return false
+  await openInAgents(row)
+  return true
 }
 
 function closeZenConversation(view: ZenView): void {

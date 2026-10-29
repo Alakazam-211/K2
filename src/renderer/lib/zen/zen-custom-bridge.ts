@@ -92,6 +92,7 @@ import type { OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { canonicalSourceAddress, ZenSourceError, type ZenSourcesReader } from './zen-sources'
 import { ZEN_STORE_VERBS, ZenStoreError, type ZenCustomStore } from './zen-custom-store'
 import { ZEN_GUEST_VERBS, ZenGuestsError, type ZenCustomGuests } from './zen-custom-guests'
+import { ZEN_WORK_VERBS, ZenWorkError, type ZenCustomWork } from './zen-custom-work'
 import { ZenWidgetError } from './zen-widget-routes'
 import type { ZenColumnFoldRefusal, ZenLayoutColumn } from './zen-columns'
 import { ZEN_THREAD_CONTEXT_PER_SECOND, clearZenThreadContextFor, zenThreadContextProblem } from './zen-thread-context'
@@ -230,6 +231,17 @@ export interface ZenCustomLayerDeps {
    *  frame. Without it `uploads.*` answer `verb_unavailable` (the preview,
    *  a headless daemon). */
   uploads?: ZenCustomUploads
+  /** 0.46.7 Workbench (catalog v40): the daemon's Workbench rows, with the
+   *  press rule and K2's sheet (`zen-custom-work`). Without it those verbs
+   *  answer `verb_unavailable`. */
+  work?: ZenCustomWork
+  /** `agents.openTerminal` (Workbench, desktop only: catalog `app: never`):
+   *  leave the Garden for the agent's own pane in Terminal view. Without it
+   *  the verb answers `verb_unavailable`. */
+  terminal?: {
+    pressed(): boolean
+    open(address: string): Promise<boolean>
+  }
   now(): number
 }
 
@@ -902,6 +914,14 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
       return layoutFold('layout.toggle', layout, col, !col.collapsed)
     },
     'agents.list': () => projectZenRows(inner('agents.list') as ZenAgentRow[], caps()),
+    // 0.46.7 Workbench: K2's own pane for a reached agent, after a press.
+    'agents.openTerminal': async (args) => {
+      const t = deps.terminal
+      if (!t) refuse('verb_unavailable', 'agents.openTerminal isn’t available here (K2’s desktop only).')
+      const address = needAddress('agents.openTerminal', args[0])
+      if (!t!.pressed()) refuse('failed', 'agents.openTerminal needs a click: it works only just after the person presses in the widget.')
+      return { opened: await t!.open(address) }
+    },
     'conversation.open': async (args) => {
       // In Zen only: `where: "agents"` is never passed through (UW16).
       const address = needAddress('conversation.open', args[0])
@@ -1216,6 +1236,20 @@ export function createZenCustomLayer(deps: ZenCustomLayerDeps): ZenCustomLayer {
     }
   }
 
+  // ── 0.46.7 Workbench rows: the daemon answers; a write needs a press, and
+  // start / land / settle wait for the person on K2's sheet ──────────────
+
+  for (const verb of ZEN_WORK_VERBS) {
+    calls[verb] = async (args) => {
+      if (!deps.work) refuse('verb_unavailable', `${verb} isn’t available here.`)
+      try {
+        return await deps.work!.call(verb, args)
+      } catch (err) {
+        throw toRefusal(err)
+      }
+    }
+  }
+
   // ── subscriptions ────────────────────────────────────────────────────────
 
   const subscribers: Record<
@@ -1515,6 +1549,7 @@ export function toRefusal(err: unknown): ZenCustomRefusal {
     return new ZenCustomRefusal(err.wire.code, err.wire.message, err.wire.last !== undefined ? { last: err.wire.last } : {})
   }
   if (err instanceof ZenGuestsError) return new ZenCustomRefusal(err.wire.code, err.wire.message)
+  if (err instanceof ZenWorkError) return new ZenCustomRefusal(err.wire.code, err.wire.message)
   if (err instanceof ZenCanvasError) return new ZenCustomRefusal(err.code, err.message)
   // 0.46.3 Thread parity verbs keep their code (bad_args, verb_unavailable, too_large…).
   if (err instanceof ZenThreadVerbError) return new ZenCustomRefusal(err.code, err.message)

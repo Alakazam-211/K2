@@ -366,6 +366,9 @@ fn work_row(t: &Target, with_git: bool) -> J {
         "thread": t.thread(),
         "workspace": t.ws_handle,
         "workspaceLabel": t.ws_label,
+        // The reach route's rename-repair hint (a widget never sees it: the
+        // catalog's WorkRow is closed).
+        "workspaceId": t.project_id,
         "name": s.name.clone().or_else(|| s.handle.clone()).unwrap_or_default(),
         "harness": s.provider,
         "live": live,

@@ -598,6 +598,8 @@ mod tests {
             // 0.46.5 (prd-garden-board-needs-v1): blobs and history keep
             // their own feature keys.
             let board_needs = [crate::garden_data::blobs::FEATURE, "garden-history-v1"].contains(&v.feature.as_str());
+            // 0.46.7 Workbench (catalog v40): its own feature key.
+            let board_needs = board_needs || v.feature == "workbench-v1";
             assert!(room_scope || box_card || board_needs || v.feature == crate::garden_data::FEATURE, "{}", v.verb);
         }
         assert!(c.verb("theme.changed").is_some_and(|v| v.kind == VerbKind::Event));
@@ -759,6 +761,8 @@ mod tests {
                 // Catalog v38 (must-change at next sign-in, 0.46.6).
                 "password_change_required",
                 "password_unchanged",
+                // 0.46.7 Workbench (catalog v40): git reads on a folder that isn't a repo.
+                "not_a_repo",
             ]
         );
         let retry: Vec<&str> = catalog().errors.iter().filter(|e| e.retryable).map(|e| e.code.as_str()).collect();

@@ -25416,7 +25416,7 @@
         "failed"
       ],
       "doc": "An agent's git status: its branch, changed files (uncommitted, and committed on the branch vs its base) with +/− counts. Paths are relative to its worktree.",
-      "example": "const s = await k2.git.snapshot(row.address)"
+      "example": "const s = await k2.git.snapshot({address: row.address})"
     },
     {
       "verb": "git.diffFile",
@@ -25591,7 +25591,7 @@
         "not_found"
       ],
       "doc": "One file's two sides (before and now) for a diff: draw it with the k2-diff kit (K2Diff.render).",
-      "example": "const d = await k2.git.diffFile(row.address, {file: 'src/app.ts', base: 'main'})"
+      "example": "const d = await k2.git.diffFile({address: row.address, file: 'src/app.ts', base: 'main'})"
     },
     {
       "verb": "git.log",
@@ -25708,7 +25708,7 @@
         "failed"
       ],
       "doc": "The commits on an agent's branch that its base doesn't have, newest first (what Land would put on the base).",
-      "example": "const {commits} = await k2.git.log(row.address)"
+      "example": "const {commits} = await k2.git.log({address: row.address})"
     },
     {
       "verb": "compute.jobs",
@@ -25845,7 +25845,7 @@
         "failed"
       ],
       "doc": "Recent compute jobs (k2 compute run) for an agent's branch: jobs its session sent, or that ran one of its branch's commits. Newest first.",
-      "example": "const jobs = await k2.compute.jobs(row.address)"
+      "example": "const jobs = await k2.compute.jobs({address: row.address})"
     },
     {
       "verb": "agents.start",
@@ -26008,7 +26008,7 @@
         "failed"
       ],
       "doc": "Stop the agent's current turn (its harness's own interrupt key), only just after a press in the widget.",
-      "example": "await k2.agents.stop(row.address)"
+      "example": "await k2.agents.stop({address: row.address})"
     },
     {
       "verb": "git.land",
@@ -26100,7 +26100,7 @@
         "confirm_required"
       ],
       "doc": "Ask to land an agent's branch on its base (cherry-pick its commits). K2's sheet shows the commits and files; only the person's Land there lands it. The widget hears landed, declined or conflict.",
-      "example": "const r = await k2.git.land(row.address)"
+      "example": "const r = await k2.git.land({address: row.address})"
     },
     {
       "verb": "agents.settle",
@@ -26181,7 +26181,7 @@
         "confirm_required"
       ],
       "doc": "Retire an agent: stop it, remove its worktree, delete its branch once landed (or with discard). K2's sheet asks the person first; its Thread stays.",
-      "example": "await k2.agents.settle(row.address, {discard: true})"
+      "example": "await k2.agents.settle({address: row.address, discard: true})"
     },
     {
       "verb": "git.note",
@@ -26279,7 +26279,7 @@
         "failed"
       ],
       "doc": "Ask for changes: review notes on the agent's files (K2's Changes tab shows them too), sent to that agent's Thread, only just after a press in the widget.",
-      "example": "await k2.git.note(row.address, [{file: 'src/a.ts', line: 12, body: 'Keep the old cookie'}])"
+      "example": "await k2.git.note({address: row.address, notes: [{file: 'src/a.ts', line: 12, body: 'Keep the old cookie'}]})"
     },
     {
       "verb": "agents.openTerminal",
@@ -26326,7 +26326,7 @@
         "verb_unavailable",
         "failed"
       ],
-      "doc": "Leave the Garden for the agent's own terminal in K2 (its pane, in Terminal view), only just after a press in the widget.",
+      "doc": "Leave the Garden for the agent's terminal in K2 (its workspace on the Agents page, where a sidecar's tab is), only just after a press in the widget. K2's desktop only: guard it with k2.can.",
       "example": "await k2.agents.openTerminal(row.address)"
     }
   ]

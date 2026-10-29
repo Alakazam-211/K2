@@ -1183,6 +1183,10 @@ mod tests {
                 "garden-blobs-v1",
                 "zen-files-v1",
                 "garden-history-v1",
+                // 0.46.7 Workbench (catalog v40): work.list, git.*, compute.jobs,
+                // git.note and the sheet-gated start / land / settle; GET
+                // /cli/workbench/agents (sidecars in the Garden reach).
+                "workbench-v1",
                 "gardens-remote-v1",
                 "grokbots-v1",
                 "app-api-v1",

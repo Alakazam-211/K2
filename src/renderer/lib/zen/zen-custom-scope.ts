@@ -20,6 +20,7 @@ import { useHomesStore, type Home, type HomeRow } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { daemonCliGet } from '@/lib/daemon-cli'
+import { zenSidecarRows, type ZenSidecarRow } from './zen-sidecar-reach'
 import { scopeForHost } from '@/kessel/server-scope'
 import {
   LOCAL_HOME_HOST,
@@ -179,7 +180,24 @@ function localRows(homes: readonly Home[]): HomeRow[] {
     requestZenServerRoster(LOCAL_HOME_HOST)
     pushRows(out, useZenServerRosters.getState().rosters[LOCAL_HOME_HOST]?.rows ?? [])
   }
-  return [...out.values()]
+  return withSidecars([...out.values()], zenSidecarRows())
+}
+
+/** 0.46.7 Workbench: each workspace's sidecars (`ws/name::local`) right
+ *  after its row; a sidecar whose workspace isn't in the reach stays out. */
+export function withSidecars(rows: readonly HomeRow[], sidecars: readonly ZenSidecarRow[]): HomeRow[] {
+  if (sidecars.length === 0) return [...rows]
+  const out: HomeRow[] = []
+  const seen = new Set(rows.map((r) => r.address))
+  for (const r of rows) {
+    out.push(r)
+    for (const s of sidecars) {
+      if (s.parent !== r.address || seen.has(s.address)) continue
+      seen.add(s.address)
+      out.push({ address: s.address, workspaceId: s.workspaceId ?? r.workspaceId, label: s.label })
+    }
+  }
+  return out
 }
 
 export interface ZenReachRows {

@@ -44,6 +44,8 @@ import { useToastStore } from '@/stores/toast'
 import { zenCustomSourcesFor } from '@/lib/zen/zen-custom-sources'
 import { createZenCustomStore, zenDataSpace } from '@/lib/zen/zen-custom-store'
 import { createZenCustomGuests, type ZenGuestRoomsAsk } from '@/lib/zen/zen-custom-guests'
+import { createZenCustomWork, type ZenWorkChange } from '@/lib/zen/zen-custom-work'
+import { ZenWorkSheet } from './ZenWorkSheet'
 import { ZenGuestRoomsSheet } from './ZenGuestRoomsSheet'
 import { createZenPermissionSheet, type ZenPermissionAsk } from '@/lib/zen/permission-sheet'
 import { ZenPermissionSheet } from './ZenPermissionSheet'
@@ -66,7 +68,7 @@ import {
   stopZenWidget,
   zenPlacementKey,
 } from '@/lib/zen/zen-custom-run'
-import { ensureZenConversation, zenAgentRows, zenCustomViewFor, zenThreadItemTarget } from '@/lib/zen/zen-data'
+import { ensureZenConversation, zenAgentRows, zenCustomViewFor, zenOpenAgentTerminal, zenThreadItemTarget } from '@/lib/zen/zen-data'
 import { zenWidgetDisplayName } from '@/lib/zen/zen-custom-words'
 import { createZenChordGate, zenFrameHasFocus, type ZenChordActions } from '@/lib/zen/zen-shortcut'
 import { currentZenGardenId, switchZenGardenByIndex, useZenGardensStore } from '@/lib/zen/zen-gardens'
@@ -126,6 +128,9 @@ export const ZEN_FRAME_FEATURES: readonly string[] = [
   'zen-files-v1',
   // 0.46.6: store.history, store.restore and store.snapshot (the daemon answers them).
   'garden-history-v1',
+  // 0.46.7 Workbench (catalog v40): work.list, git.*, compute.jobs, the
+  // sheet-gated start / land / settle, git.note and agents.openTerminal.
+  'workbench-v1',
 ]
 
 /** The Garden's theme as the frame gets it: the Zen root's `--zen-*`
@@ -180,6 +185,8 @@ export function ZenCustomFrame({
   const [permissionAsk, setPermissionAsk] = useState<{ ask: ZenPermissionAsk; resolve: () => void } | null>(null)
   // `k2.open` (0.46.4): K2's card the first time a site is opened from this Garden.
   const [linkAsk, setLinkAsk] = useState<{ ask: ZenLinkAsk; resolve: (answer: ZenLinkAnswer) => void } | null>(null)
+  // 0.46.7 Workbench: K2's sheet for a widget's Start, Land, Retire or Discard.
+  const [workAsk, setWorkAsk] = useState<{ change: ZenWorkChange; resolve: (yes: boolean) => void } | null>(null)
   const [downloadAsk, setDownloadAsk] = useState<{ ask: ZenDownloadAsk; resolve: (answer: ZenDownloadAnswer) => void } | null>(null)
   const loadedRef = useRef<Loaded | null>(null)
   loadedRef.current = loaded
@@ -424,6 +431,26 @@ export function ZenCustomFrame({
               }).then((r) => r.result),
             confirm: (ask) => new Promise((resolve) => setGuestAsk({ ask, resolve })),
           }),
+          // 0.46.7 Workbench: the daemon's rows; a write only just after a
+          // press in this frame, and start / land / settle wait for the
+          // person on ZenWorkSheet (K2's DOM over the card).
+          work: createZenCustomWork({
+            call: (verb, args, confirmToken) =>
+              gardenCall({
+                garden: gardenId,
+                placement: widgetRef.current.id,
+                hash: loadedRef.current?.hash ?? widgetRef.current.hash,
+                verb,
+                args: args as GardenCallBody['args'],
+                ...(confirmToken ? { confirmToken } : {}),
+              }).then((r) => r.result),
+            pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
+            confirm: (change) => new Promise<boolean>((resolve) => setWorkAsk({ change, resolve })),
+          }),
+          terminal: {
+            pressed: () => zenCanvasPressedWithin(key, ZEN_PICK_GESTURE_MS),
+            open: (address) => zenOpenAgentTerminal(zenCustomViewFor(gardenId, widgetRef.current), address),
+          },
           // Permission cards: `thread.answer` on one opens K2's sheet over
           // the card (outside the frame), only after a press in the widget.
           permissions: createZenPermissionSheet({
@@ -538,6 +565,16 @@ export function ZenCustomFrame({
           onDone={(answer) => {
             linkAsk.resolve(answer)
             setLinkAsk(null)
+          }}
+        />
+      )}
+      {workAsk && (
+        <ZenWorkSheet
+          change={workAsk.change}
+          widget={label}
+          onDone={(yes) => {
+            workAsk.resolve(yes)
+            setWorkAsk(null)
           }}
         />
       )}

@@ -643,7 +643,7 @@ fn push(who: &Who, body: &[u8]) -> R<J> {
         let out = std::fs::File::create(&dest).map_err(|e| cleanup(no("staging_failed", 500, e.to_string())))?;
         let checked = au::verify_and_hash(&key, &raw, Tee { r: src, w: std::io::BufWriter::new(out) }, au::MAX_ARTIFACT_BYTES)
             .map_err(|(code, hint)| cleanup(no(code, if code == uc::ARTIFACT_TOO_LARGE { 413 } else { 400 }, format!("{}: {hint}", platform.key()))))?;
-        staged.push(Staged { platform: platform.key(), host_name: host_name.clone(), content_type: ct, path: dest, sha256: checked.sha256, size: checked.size, sig_b64: b64 });
+        staged.push(Staged { platform: platform.key(), host_name: host_name.clone(), content_type: *ct, path: dest, sha256: checked.sha256, size: checked.size, sig_b64: b64 });
     }
     let by = actor(who);
     let now = deploy::now();

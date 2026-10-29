@@ -160,6 +160,30 @@ fi
 security find-identity -p codesigning "$KC" | sed 's/^/  /'
 pass "1 keychain: created in the job folder, identity imported$([ "$MODE" = real ] && echo ', intermediate imported')"
 
+if [ "$MODE" = selftest ]; then
+    echo "== probes for the real run (no key needed) =="
+    # Does trust evaluation work from inside the wall (trustd + the system
+    # roots), so a real Developer ID chain can be valid here?
+    if curl -fsS --proto '=https' --tlsv1.2 -o "$WORK/DeveloperIDG2CA.cer" https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer; then
+        security import "$WORK/DeveloperIDG2CA.cer" -k "$KC" >/dev/null 2>&1 || true
+        if security verify-cert -c "$WORK/DeveloperIDG2CA.cer" -p basic -k "$KC" >"$WORK/v.out" 2>&1; then
+            echo "  probe: Apple's Developer ID G2 intermediate verifies to Apple's root from inside the wall"
+        else
+            echo "  probe: the intermediate does NOT verify here: $(head -1 "$WORK/v.out")"
+        fi
+    else
+        echo "  probe: can't fetch Apple's intermediate (network)"
+    fi
+    if curl -fsS -o /dev/null -w '%{http_code}' http://timestamp.apple.com/ts01 >"$WORK/ts.out" 2>/dev/null || [ -s "$WORK/ts.out" ]; then
+        echo "  probe: timestamp.apple.com answers (HTTP $(cat "$WORK/ts.out"))"
+    else
+        echo "  probe: timestamp.apple.com unreachable"
+    fi
+    if xcrun --find notarytool >/dev/null 2>&1; then echo "  probe: notarytool at $(xcrun --find notarytool)"; else echo "  probe: no notarytool (install Xcode or the Command Line Tools)"; fi
+    if xcrun --find stapler >/dev/null 2>&1; then echo "  probe: stapler at $(xcrun --find stapler)"; else echo "  probe: no stapler"; fi
+    if command -v npx >/dev/null 2>&1; then echo "  probe: npx present (tauri signer sign via @tauri-apps/cli)"; else echo "  probe: no npx on this node (tauri signer needs node: --needs node@22)"; fi
+fi
+
 echo "== 2. codesign =="
 if [ "$MODE" = selftest ]; then
     if codesign --force --timestamp=none --options runtime --keychain "$KC" --sign "$IDENTITY" "$APP" 2>"$WORK/cs.err"; then

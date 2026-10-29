@@ -54,15 +54,17 @@ assert_contains "help: app spaces" "$out" "k2 hostchat app-space bind <app> <spa
 assert_contains "help: app grants only" "$out" "members: the App's users who also have chat; never Connect owners/admins by role"
 assert_contains "help: open" "$out" "k2 hostchat open [--print]"
 schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
-python3 -c '
+# On stdin, not argv: the schema (~300 KB) is over Linux's 128 KB limit for
+# one argument (E2BIG), so argv only worked on macOS.
+printf '%s' "$schema" | python3 -c '
 import json, sys
-cmds = {c["name"]: c for c in json.loads(sys.argv[1])["commands"]}
+cmds = {c["name"]: c for c in json.load(sys.stdin)["commands"]}
 u = cmds["hostchat"]["usage"]
 for verb in ("app-url", "ship", "mirror", "app-space", "open"):
     assert verb in u, verb
 for n in ("hostchat app-url", "hostchat ship", "hostchat mirror", "hostchat app-space", "hostchat open"):
     assert n in cmds, n
-' "$schema" && ok "schema lists the S32 verbs" || bad "schema lists the S32 verbs"
+' && ok "schema lists the S32 verbs" || bad "schema lists the S32 verbs"
 
 echo "== stub daemon =="
 OWNER="owner-disk-token-s32"

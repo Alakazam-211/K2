@@ -354,7 +354,7 @@ where
 {
     match live(app_id) {
         None => {
-            match crate::app_pairing::links::local_for(app_id) {
+            match super::local_answers::for_app(app_id) {
                 Some(l) => {
                     if let FirstRequest::Answered = answer_first(client, &l).await {
                         return;
@@ -401,7 +401,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mode = rewrite_mode(&be, label, mode);
-    let local = mode.and_then(|_| crate::app_pairing::links::local_for(label));
+    let local = mode.and_then(|_| super::local_answers::for_app(label));
     match (mode, local) {
         (Some(mode), Some(l)) => match answer_first(client, &l).await {
             FirstRequest::Answered => TlsAppOutcome::Answered,

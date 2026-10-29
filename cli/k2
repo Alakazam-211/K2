@@ -8470,6 +8470,14 @@ Make and ship:
                                        .k2appignore), so it rolls back with
                                        its SDK.
   k2 app rollback <app-id> [--to SEED] Instant while the previous one is warm.
+  k2 app updates push|ls|promote|rollback|pull <app-id> …
+                                       Signed desktop updates (Tauri's
+                                       updater): you sign on your own Mac;
+                                       each file is uploaded once to K2's
+                                       download host and the App's hosts
+                                       answer /_k2/updates/. Release
+                                       channels (stable, beta, your own).
+                                       k2 app updates --help.
 
 See and run it:
   k2 app list [--workspace WS]         Apps, state, live Seed, URL, and the
@@ -12556,6 +12564,522 @@ import json, sys
 v = json.load(sys.stdin)
 print("Kept Sew App kit %s (sha256 %s): %s" % (v["version"], v["sha256"][:12], ", ".join(p["name"] for p in v["packages"])))
 print("Now: k2 app sdk add <app-folder> --sew")
+'
+}
+
+# ── k2 app updates (0.46.7): an App's update feed (Tauri's updater) ──
+_app_updates_usage() {
+    cat <<'EOF'
+k2 app updates — signed desktop updates for an App (Tauri's updater)
+
+How it works: you sign each build with the App's OWN updater key on your
+own Mac (tauri signer sign); K2 keeps only the public key. A push checks
+every signature, uploads each file ONCE to K2's download host (dl.k2.dev),
+and then the App's own hosts answer Tauri's updater at
+  https://<app host>/_k2/updates/<channel>/{{target}}/{{arch}}/{{current_version}}
+  https://<app host>/_k2/updates/<channel>/latest.json
+with small JSON that points at the download host. Installers never stream
+from this box. Put the first URL in tauri.conf.json plugins.updater.endpoints
+(k2 app updates ls <app> prints it for your App's host).
+
+First, once per App:
+  k2 app updates key <app> --set <pubkey>
+        The App's updater PUBLIC key: the content of the .pub file that
+        tauri signer generate wrote (the same text as tauri.conf.json
+        plugins.updater.pubkey). --set-file <file.pub> reads it from a file.
+        A secret key is refused. Changing the key after the App has
+        releases is held for your owner (every installed copy would trust
+        the new key).
+  k2 app updates key <app>                     show the key and its id
+  k2 app updates token <app> --file <path>     keep the App's download-host
+  k2 app updates token <app> --stdin           token (k2dl_…, from K2 Web)
+        Read from a file or stdin, never typed on the command line. With a
+        vault secret: k2 app updates token <app> --file "$(k2 vault file
+        --secret <NAME>)". K2 never shows it again (token <app> shows set
+        or not and a fingerprint).
+
+Releases:
+  k2 app updates push <app> --channel <name> --version <semver>
+        --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>]
+        [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]
+        <platform> is Tauri's key: <os>-<arch> or <os>-<arch>-<installer>
+        (os darwin|linux|windows; arch x86_64|aarch64|i686|armv7; installer
+        app|appimage|deb|rpm|msi|nsis), e.g. darwin-aarch64, linux-x86_64,
+        windows-x86_64. Files: .app.tar.gz, .AppImage, .AppImage.tar.gz,
+        .deb, .rpm, .msi, .exe, .nsis.zip, .msi.zip, at most 512 MiB, inside
+        the App's workspace folder. The signature defaults to <file>.sig.
+        --version is strict SemVer 2.0.0 (1.4.1, 1.4.0-build.42; not 1.0 or
+        v1.0.0) and must be newer than the channel's current one. A channel
+        is stable, beta or your own name ([a-z][a-z0-9-], up to 20).
+        If the channel's current release has a platform this push lacks,
+        it is refused (those users would stop getting updates) unless you
+        name it with --drop-platform.
+        The push waits until every upload is confirmed, then the channel
+        moves and prints the download URLs. --no-wait returns at once (exit
+        2); follow it with k2 app updates ls <app>.
+  k2 app updates ls <app> [--channel <name>] [--release <id|version>] [--json]
+        Channels and their versions, every release with its files (links,
+        sizes, upload state), active users, and the updater URLs.
+  k2 app updates promote <app> --from beta --to stable [--version <v>] [--drop-platform] [--json]
+        Point --to at a release that is already uploaded (default: --from's
+        current one). No re-upload. Forward only.
+  k2 app updates rollback <app> --channel <name> --to <version> [--json]
+        Point a channel back at an older release it served before.
+        Tauri installs only NEWER versions by default, so people already on
+        the bad version STAY on it: a rollback protects new installs and
+        people still below. To fix people on the bad version, push a higher
+        version with the fix.
+  k2 app updates pull <app> --version <version> [--json]
+        Stop offering a release on every channel (each channel falls back to
+        its newest older release, or goes empty). Its files stay at their
+        download URLs.
+  k2 app updates stats <app> [--days 30] [--json]
+        Downloads per version (from the download host) and version checks
+        per day, platform and version (from this box). "unavailable" means
+        the download host didn't answer, not zero.
+  k2 app updates fleet [--json]
+        Every App's channels, release counts and check-ins, aggregate only
+        (owner and Admins).
+
+Active users: each update check counts once for its day, platform and
+version. If your app adds ?install=<random id, 8-64 of A-Z a-z 0-9 -> to
+its endpoint URL, distinct installs are counted too; only a hash of that
+id is kept, for two days. No addresses are kept.
+
+Who: reads, anyone who may see the App. Changes: the owner, an Admin, or
+the App's agent with "Build and run Apps".
+
+Exit codes: 0 done, 1 the push's upload failed, 2 usage error, held for
+your owner, or --no-wait (still uploading), 3 refused, with JSON on stderr:
+  no_update_key          set the App's key first: k2 app updates key <app> --set …
+  secret_key_refused     that was a SECRET key; give the .pub content
+  dl_token_missing       keep the App's token: k2 app updates token <app> --file …
+  dl_token_invalid       the token is wrong or revoked: ask K2 Web for a new one
+  signature_invalid      wrong key, or the file changed after signing
+  signature_missing      no <file>.sig: sign it, or pass --sig
+  version_invalid        not strict SemVer 2.0.0
+  version_not_newer      a push or promote must be newer (go back: rollback)
+  version_exists         a version is never replaced: ship a higher one
+  platform_dropped       add the platform's file, or --drop-platform it
+  platform_invalid       not a Tauri v2 platform key
+  artifact_type_refused  not a file type the updater uses
+  artifact_too_large     over 512 MiB
+  file_outside_workspace files must be inside the App's workspace folder
+  needs_k2_front         the App's manifest has host.clientIp: false
+  updates_host_unavailable  the download host didn't answer; try later
+  updates_host_refused   the download host refused a file (its reason shown)
+  dl_id_invalid          the App or box name can't form dev.k2.<box>.<app>
+  key_change_held        a key change waits for your owner's approval
+EOF
+}
+
+cmd_app_updates() {
+    local sub="${1:-}"
+    shift || true
+    case "$sub" in
+        ls|list) _app_updates_ls "$@" ;;
+        key) _app_updates_key "$@" ;;
+        token) _app_updates_token "$@" ;;
+        push) _app_updates_push "$@" ;;
+        promote) _app_updates_promote "$@" ;;
+        rollback) _app_updates_rollback "$@" ;;
+        pull) _app_updates_pull "$@" ;;
+        stats) _app_updates_stats "$@" ;;
+        fleet) _app_updates_fleet "$@" ;;
+        ""|-h|--help|help) _app_updates_usage ;;
+        *) echo "usage: k2 app updates ls|key|token|push|promote|rollback|pull|stats|fleet … (k2 app updates --help)" >&2; exit 2 ;;
+    esac
+}
+
+# Print a release's state and files (stdin: the ls answer, $1 release id).
+_app_updates_print_release() {
+    python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+rid = sys.argv[1]
+for r in v.get("releases", []):
+    if r["id"] != rid and r["version"] != rid:
+        continue
+    on = ", ".join(r.get("channels") or []) or "no channel"
+    print("%s %s: %s (%s)" % (v["app"], r["version"], r["state"], on))
+    if r.get("error"):
+        print("  error: %s" % r["error"])
+    for f in r.get("files", []):
+        print("  %-24s %10s  %s" % (f["platform"], "%.1f MiB" % (f["size"] / 1048576.0), f.get("url") or f.get("upload")))
+' "$1"
+}
+
+# k2 app updates ls <app> [--channel c] [--release r] [--json]
+_app_updates_ls() {
+    local app="" ch="" rel="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --channel) ch="${2:-}"; shift 2 ;;
+            --release) rel="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app updates ls <app> [--channel <name>] [--release <id|version>] [--json]" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app updates ls <app> [--channel <name>] [--release <id|version>] [--json]" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ -n "$ch" ] && q="$q&channel=$(urlencode "$ch")"
+    [ -n "$rel" ] && q="$q&release=$(urlencode "$rel")"
+    _compute_call GET /cli/app/updates "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+k = v.get("key")
+print("%s  (download id %s; updater key %s)" % (v["app"], v.get("dlId") or "-", k["keyId"] if k else "not set: k2 app updates key %s --set <pubkey>" % v["app"]))
+chans = v.get("channels") or []
+if chans:
+    print("Channels: " + ", ".join("%s %s" % (c["channel"], c.get("version") or "-") for c in chans))
+else:
+    print("Channels: none yet (k2 app updates push %s --channel stable …)" % v["app"])
+u = v.get("activeUsers") or {}
+print("Active users: %s today, %s at most on one day this week (counting %s)" % (u.get("today", 0), u.get("last7Days", 0), u.get("counting", "checks")))
+for r in v.get("releases", []):
+    on = ", ".join(r.get("channels") or [])
+    print("  %-14s %-9s %-16s %6.1f MiB  %s users%s" % (r["version"], r["state"], on or "-", r.get("size", 0) / 1048576.0, r.get("activeUsers", 0), ("  " + r["error"]) if r.get("error") else ""))
+    for f in r.get("files", []):
+        print("      %-24s %8.1f MiB  %s" % (f["platform"], f["size"] / 1048576.0, f.get("url") or f.get("upload")))
+e = v.get("endpoints")
+if e:
+    print("Updater endpoint (tauri.conf.json plugins.updater.endpoints): " + e["dynamic"])
+'
+}
+
+# k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>] [--json]
+_app_updates_key() {
+    local app="" key="" key_file="" json_out=0 setting=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --set) key="${2:-}"; setting=1; shift 2 ;;
+            --set-file) key_file="${2:-}"; setting=1; shift 2 ;;
+            --show) shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>]" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>]" >&2; exit 2; }
+    if [ "$setting" = 0 ]; then
+        _compute_call GET /cli/app/updates/key "app=$(urlencode "$app")"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if not v.get("pubkey"):
+    print("%s has no updater key: k2 app updates key %s --set <pubkey>" % (v["app"], v["app"]))
+else:
+    print("%s updater key %s (set by %s)" % (v["app"], v["keyId"], v.get("setBy")))
+    print(v["pubkey"])
+'
+        return 0
+    fi
+    if [ -n "$key_file" ]; then
+        [ -f "$key_file" ] || { echo "k2 app updates key: $key_file is not a file" >&2; exit 2; }
+        key="$(cat "$key_file")"
+    fi
+    [ -n "$key" ] || { echo "k2 app updates key: the key is empty" >&2; exit 2; }
+    _app_rt_post /cli/app/updates/key/set "$(_compute_json K2_CJ_app="$app" K2_CJ_pubkey="$key")"
+    if [ "$_CP_STATUS" = "202" ]; then
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | _app_held_exit; fi
+        return 2
+    fi
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("unchanged"):
+    print("%s already has updater key %s" % (v["app"], v["keyId"]))
+else:
+    print("%s updater key %s %s" % (v["app"], v["keyId"], "changed" if v.get("changed") else "set"))
+'
+}
+
+# k2 app updates token <app> --file <path> | --stdin | (show)
+_app_updates_token() {
+    local app="" file="" from_stdin=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --file) file="${2:-}"; shift 2 ;;
+            --stdin) from_stdin=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help; the token is read from --file or --stdin, never an argument)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app updates token <app> --file <path> | --stdin (never the token itself)" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app updates token <app> --file <path> | --stdin" >&2; exit 2; }
+    if [ -z "$file" ] && [ "$from_stdin" = 0 ]; then
+        _compute_call GET /cli/app/updates/token "app=$(urlencode "$app")"
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("set"):
+    print("%s: download-host token set (fingerprint %s) for %s on %s" % (v["app"], v["fingerprint"], v.get("dlId"), v.get("host")))
+else:
+    print("%s: no download-host token. Ask K2 Web for one for %s, then k2 app updates token %s --file <file>" % (v["app"], v.get("dlId"), v["app"]))
+'
+        return 0
+    fi
+    local body
+    if [ -n "$file" ]; then
+        [ -f "$file" ] || { echo "k2 app updates token: $file is not a file" >&2; exit 2; }
+        body="$(python3 -c 'import json, sys; print(json.dumps({"app": sys.argv[1], "token": sys.stdin.read().strip()}))' "$app" < "$file")"
+    else
+        body="$(python3 -c 'import json, sys; print(json.dumps({"app": sys.argv[1], "token": sys.stdin.read().strip()}))' "$app")"
+    fi
+    _app_rt_post /cli/app/updates/token/set "$body"
+    body=""
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s: download-host token kept in the vault (fingerprint %s, id %s)" % (v["app"], v["fingerprint"], v["dlId"]))
+'
+}
+
+# Absolute path of a file (relative to the caller's folder).
+_app_updates_abs() {
+    case "$1" in
+        /*) printf '%s' "$1" ;;
+        *) printf '%s/%s' "$(pwd -P)" "$1" ;;
+    esac
+}
+
+# k2 app updates push <app> --channel c --version v --artifact p=f … [--sig p=f] [--notes-file f] [--drop-platform p] [--no-wait] [--json]
+_app_updates_push() {
+    local app="" ch="" ver="" notes_file="" no_wait=0 json_out=0
+    local -a arts=() sigs=() drops=()
+    local usage="usage: k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --channel) ch="${2:-}"; shift 2 ;;
+            --version) ver="${2:-}"; shift 2 ;;
+            --artifact) arts+=("${2:-}"); shift 2 ;;
+            --sig) sigs+=("${2:-}"); shift 2 ;;
+            --notes-file) notes_file="${2:-}"; shift 2 ;;
+            --drop-platform) drops+=("${2:-}"); shift 2 ;;
+            --no-wait) no_wait=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "$usage" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    { [ -n "$app" ] && [ -n "$ch" ] && [ -n "$ver" ] && [ "${#arts[@]}" -gt 0 ]; } || { echo "$usage" >&2; exit 2; }
+    local a p f list="" notes=""
+    for a in "${arts[@]}"; do
+        p="${a%%=*}"; f="${a#*=}"
+        { [ "$p" != "$a" ] && [ -n "$p" ] && [ -n "$f" ]; } || { echo "k2 app updates push: --artifact takes <platform>=<file> (got '$a')" >&2; exit 2; }
+        [ -f "$f" ] || { echo "k2 app updates push: $f is not a file" >&2; exit 2; }
+        list="$list$p"$'\t'"$(_app_updates_abs "$f")"$'\n'
+    done
+    local siglist=""
+    for a in "${sigs[@]+"${sigs[@]}"}"; do
+        p="${a%%=*}"; f="${a#*=}"
+        { [ "$p" != "$a" ] && [ -n "$p" ] && [ -n "$f" ]; } || { echo "k2 app updates push: --sig takes <platform>=<file.sig> (got '$a')" >&2; exit 2; }
+        siglist="$siglist$p"$'\t'"$(_app_updates_abs "$f")"$'\n'
+    done
+    if [ -n "$notes_file" ]; then
+        [ -f "$notes_file" ] || { echo "k2 app updates push: $notes_file is not a file" >&2; exit 2; }
+        notes="$(cat "$notes_file")"
+    fi
+    local body
+    body="$(K2_UP_ARTS="$list" K2_UP_SIGS="$siglist" K2_UP_DROPS="$(printf '%s\n' "${drops[@]+"${drops[@]}"}")" K2_UP_NOTES="$notes" python3 -c '
+import json, os, sys
+sigs = dict(l.split("\t", 1) for l in os.environ["K2_UP_SIGS"].splitlines() if l)
+arts = []
+for l in os.environ["K2_UP_ARTS"].splitlines():
+    if not l:
+        continue
+    p, f = l.split("\t", 1)
+    a = {"platform": p, "path": f}
+    if p in sigs:
+        a["sig"] = sigs.pop(p)
+    arts.append(a)
+if sigs:
+    sys.stderr.write("k2 app updates push: --sig for a platform with no --artifact: %s\n" % ", ".join(sigs))
+    sys.exit(2)
+body = {"app": sys.argv[1], "channel": sys.argv[2], "version": sys.argv[3], "artifacts": arts,
+        "dropPlatforms": [d for d in os.environ["K2_UP_DROPS"].splitlines() if d]}
+if os.environ.get("K2_UP_NOTES"):
+    body["notes"] = os.environ["K2_UP_NOTES"]
+print(json.dumps(body))
+' "$app" "$ch" "$ver")" || exit 2
+    K2_CP_MAX_TIME=900 _app_rt_post /cli/app/updates/push "$body"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    local rid
+    rid="$(printf '%s' "$_CP_BODY" | python3 -c 'import json, sys; print(json.load(sys.stdin)["release"])')"
+    if [ "$no_wait" = 1 ]; then
+        if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else
+            echo "Uploading $app $ver ($rid) to the download host. Follow it: k2 app updates ls $app --release $rid"
+        fi
+        return 2
+    fi
+    [ "$json_out" = 1 ] || echo "Checked every signature; uploading $app $ver ($rid) to the download host…"
+    local state="uploading" waited=0
+    while [ "$state" = "uploading" ]; do
+        sleep 2; waited=$((waited + 2))
+        _compute_call GET /cli/app/updates "app=$(urlencode "$app")&release=$(urlencode "$rid")"
+        state="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+r = v.get("releases") or []
+print(r[0]["state"] if r else "missing")
+')"
+        if [ "$state" = "uploading" ] && [ $((waited % 60)) = 0 ] && [ "$json_out" = 0 ]; then echo "  still uploading (${waited}s)…"; fi
+    done
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | _app_updates_print_release "$rid"; fi
+    case "$state" in
+        live) [ "$json_out" = 1 ] || echo "$ch now serves $ver." ; return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# k2 app updates promote <app> --from a --to b [--version v] [--drop-platform] [--json]
+_app_updates_promote() {
+    local app="" from="" to="" ver="" drop=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --from) from="${2:-}"; shift 2 ;;
+            --to) to="${2:-}"; shift 2 ;;
+            --version) ver="${2:-}"; shift 2 ;;
+            --drop-platform) drop=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app updates promote <app> --from <channel> --to <channel> [--version <v>]" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    { [ -n "$app" ] && [ -n "$from" ] && [ -n "$to" ]; } || { echo "usage: k2 app updates promote <app> --from <channel> --to <channel> [--version <v>]" >&2; exit 2; }
+    _app_rt_post /cli/app/updates/promote "$(_compute_json K2_CJ_app="$app" K2_CJ_from="$from" K2_CJ_to="$to" K2_CJ_version="$ver" K2_CJ_dropPlatforms_b="$drop")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("unchanged"):
+    print("%s %s already serves %s" % (v["app"], v["channel"], v["version"]))
+else:
+    print("%s %s now serves %s (no re-upload). Fallback latest.json: %s" % (v["app"], v["channel"], v["version"], v.get("fallback")))
+'
+}
+
+# k2 app updates rollback <app> --channel c --to v [--json]
+_app_updates_rollback() {
+    local app="" ch="" to="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --channel) ch="${2:-}"; shift 2 ;;
+            --to) to="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app updates rollback <app> --channel <name> --to <version>" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    { [ -n "$app" ] && [ -n "$ch" ] && [ -n "$to" ]; } || { echo "usage: k2 app updates rollback <app> --channel <name> --to <version>" >&2; exit 2; }
+    _app_rt_post /cli/app/updates/rollback "$(_compute_json K2_CJ_app="$app" K2_CJ_channel="$ch" K2_CJ_to="$to")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+print("%s %s: %s -> %s" % (v["app"], v["channel"], v["from"], v["version"]))
+print("WARNING: " + v["warning"])
+'
+}
+
+# k2 app updates pull <app> --version v [--json]
+_app_updates_pull() {
+    local app="" ver="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --version) ver="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app updates pull <app> --version <version>" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    { [ -n "$app" ] && [ -n "$ver" ]; } || { echo "usage: k2 app updates pull <app> --version <version>" >&2; exit 2; }
+    _app_rt_post /cli/app/updates/pull "$(_compute_json K2_CJ_app="$app" K2_CJ_version="$ver")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("unchanged"):
+    print("%s %s was already pulled" % (v["app"], v["version"])); sys.exit(0)
+print("%s %s pulled." % (v["app"], v["version"]))
+for c in v.get("channels", []):
+    print("  %s now serves %s" % (c["channel"], c.get("now") or "nothing (empty)"))
+print(v.get("note", ""))
+'
+}
+
+# k2 app updates stats <app> [--days N] [--json]
+_app_updates_stats() {
+    local app="" days="30" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --days) days="${2:-}"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app updates --help)" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app updates stats <app> [--days 30]" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app updates stats <app> [--days 30]" >&2; exit 2; }
+    _compute_call GET /cli/app/updates/stats "app=$(urlencode "$app")&days=$(urlencode "$days")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d = v["downloads"]
+print("%s, %s to %s" % (v["app"], v["from"], v["to"]))
+if d.get("available"):
+    print("Downloads: %d" % d["total"])
+    for x in d.get("byVersion", []):
+        print("  %-14s %6d" % (x["version"], x["downloads"]))
+else:
+    print("Downloads: unavailable (%s)" % d.get("why"))
+u = v["activeUsers"]
+print("Active users: %s today, %s at most on one day this week (counting %s); %s checks" % (u["today"], u["last7Days"], u["counting"], u["checks"]))
+for ver, n in sorted((u.get("byVersion") or {}).items()):
+    print("  %-14s %6d" % (ver, n))
+'
+}
+
+# k2 app updates fleet [--json]
+_app_updates_fleet() {
+    local json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_updates_usage; return 0 ;;
+            *) echo "usage: k2 app updates fleet [--json]" >&2; exit 2 ;;
+        esac
+    done
+    _compute_call GET /cli/app/updates/fleet ""
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if not v["apps"]:
+    print("No App on this box has an update feed."); sys.exit(0)
+for a in v["apps"]:
+    ch = ", ".join("%s %s" % (c["channel"], c.get("version") or "-") for c in a["channels"]) or "no channel"
+    print("%-20s %-36s %s; %d releases; %s users this week" % (a["app"], a.get("dlId") or "-", ch, a["releases"], a["activeUsers"]["last7Days"]))
 '
 }
 
@@ -16838,6 +17362,7 @@ cmd_app() {
         rehost) shift; cmd_app_rehost "$@" ;;
         data) shift; cmd_app_data "$@" ;;
         sdk) shift; cmd_app_sdk "$@" ;;
+        updates) shift; cmd_app_updates "$@" ;;
         resources) shift; cmd_app_resources "$@" ;;
         label) shift; cmd_app_label "$@" ;;
         domain) shift; cmd_app_domain "$@" ;;
@@ -42918,6 +43443,108 @@ cmd_schema() {
         {"name": "--path", "arg": "path", "description": "A path the apps open, optionally ?name=pattern (repeat; at most 20)."},
         {"name": "--drop", "arg": "path", "description": "Remove a path that was set before, on purpose (repeat)."},
         {"name": "--json", "arg": null, "description": "{app, appId, name, state, served, hosts[], ios[], android[], paths[{spec, path, query, since}], pairing, warnings?}."}
+      ]
+    },
+    {
+      "name": "app updates push",
+      "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]",
+      "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "stable, beta or [a-z][a-z0-9-] up to 20."},
+        {"name": "--version", "arg": "semver", "description": "Strict SemVer 2.0.0 (1.4.1, 1.4.0-build.42)."},
+        {"name": "--artifact", "arg": "platform=file", "description": "Tauri v2 platform key and its archive (.app.tar.gz, .AppImage, .deb, .rpm, .msi, .exe, .nsis.zip, …). Repeat per platform."},
+        {"name": "--sig", "arg": "platform=file.sig", "description": "The signature file when it isn't <file>.sig."},
+        {"name": "--notes-file", "arg": "file", "description": "Release notes (up to 16 KiB)."},
+        {"name": "--drop-platform", "arg": "platform", "description": "Stop serving a platform the channel's current release has."},
+        {"name": "--no-wait", "arg": null, "description": "Return while uploading (exit 2)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates ls",
+      "usage": "k2 app updates ls <app> [--channel <name>] [--release <id|version>] [--json]",
+      "description": "Channels and their versions, every release with its files (download links, sizes, upload state), active users and the updater URLs to put in tauri.conf.json. GET /cli/app/updates.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "Only this channel's releases."},
+        {"name": "--release", "arg": "id|version", "description": "Only this release."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates key",
+      "usage": "k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>] [--json]",
+      "description": "Show or set the App's updater PUBLIC key (the .pub content tauri signer generate wrote; tauri.conf.json plugins.updater.pubkey). A secret key is refused. Changing it after the App has releases is held for the owner. GET /cli/app/updates/key, POST /cli/app/updates/key/set.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--set", "arg": "pubkey", "description": "The public key text."},
+        {"name": "--set-file", "arg": "file.pub", "description": "Read the public key from a file."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates token",
+      "usage": "k2 app updates token <app> [--file <path> | --stdin] [--json]",
+      "description": "Keep the App's download-host token (k2dl_…, minted by K2 Web) in the vault, read from a file or stdin, never an argument; without --file/--stdin, show whether one is set (fingerprint only). POST /cli/app/updates/token/set, GET /cli/app/updates/token.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--file", "arg": "path", "description": "Read the token from this file."},
+        {"name": "--stdin", "arg": null, "description": "Read the token from stdin."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates promote",
+      "usage": "k2 app updates promote <app> --from <channel> --to <channel> [--version <v>] [--drop-platform] [--json]",
+      "description": "Point a channel at a release that is already uploaded (default: --from's current one). No re-upload; forward only. POST /cli/app/updates/promote.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "channel", "description": "Where the release is now."},
+        {"name": "--to", "arg": "channel", "description": "The channel to move."},
+        {"name": "--version", "arg": "v", "description": "A specific uploaded release."},
+        {"name": "--drop-platform", "arg": null, "description": "Allow the release to serve fewer platforms than --to's current one."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates rollback",
+      "usage": "k2 app updates rollback <app> --channel <name> --to <version> [--json]",
+      "description": "Point a channel back at an older release it served. Tauri installs only newer versions by default, so people already on the bad version stay on it; ship a higher version to fix them. POST /cli/app/updates/rollback.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "The channel to move back."},
+        {"name": "--to", "arg": "version", "description": "An older release the channel served."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates pull",
+      "usage": "k2 app updates pull <app> --version <version> [--json]",
+      "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). Its files stay at their download URLs. POST /cli/app/updates/pull.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--version", "arg": "version", "description": "The release to pull."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates stats",
+      "usage": "k2 app updates stats <app> [--days 30] [--json]",
+      "description": "Downloads per version from the download host (unavailable when it doesn't answer, never zero) and update checks per day, platform and version from this box. GET /cli/app/updates/stats.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--days", "arg": "N", "description": "Window in days (1-366, default 30)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates fleet",
+      "usage": "k2 app updates fleet [--json]",
+      "description": "Every App's channels, release counts and check-ins on this box, aggregate only. The owner and Admins. GET /cli/app/updates/fleet.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
       ]
     },
     {
@@ -82496,8 +83123,8 @@ EOF
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
             # 0.46.4: `k2 app data` too (put|ls|get|rm|mv). 0.46.6: `k2 app
             # domain` (its custom-domain help, not the App family's) and
-            # `k2 app sdk` (add|status|kit).
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk)
+            # `k2 app sdk` (add|status|kit). 0.46.7: `k2 app updates`.
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk|updates)
                 shift; cmd_app "$@"
                 ;;
             # 0.46.7: `k2 app init` and `k2 app links` own their --help.

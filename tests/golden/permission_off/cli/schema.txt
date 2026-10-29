@@ -2532,6 +2532,108 @@ exit: 0
       ]
     },
     {
+      "name": "app updates push",
+      "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]",
+      "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "stable, beta or [a-z][a-z0-9-] up to 20."},
+        {"name": "--version", "arg": "semver", "description": "Strict SemVer 2.0.0 (1.4.1, 1.4.0-build.42)."},
+        {"name": "--artifact", "arg": "platform=file", "description": "Tauri v2 platform key and its archive (.app.tar.gz, .AppImage, .deb, .rpm, .msi, .exe, .nsis.zip, …). Repeat per platform."},
+        {"name": "--sig", "arg": "platform=file.sig", "description": "The signature file when it isn't <file>.sig."},
+        {"name": "--notes-file", "arg": "file", "description": "Release notes (up to 16 KiB)."},
+        {"name": "--drop-platform", "arg": "platform", "description": "Stop serving a platform the channel's current release has."},
+        {"name": "--no-wait", "arg": null, "description": "Return while uploading (exit 2)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates ls",
+      "usage": "k2 app updates ls <app> [--channel <name>] [--release <id|version>] [--json]",
+      "description": "Channels and their versions, every release with its files (download links, sizes, upload state), active users and the updater URLs to put in tauri.conf.json. GET /cli/app/updates.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "Only this channel's releases."},
+        {"name": "--release", "arg": "id|version", "description": "Only this release."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates key",
+      "usage": "k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>] [--json]",
+      "description": "Show or set the App's updater PUBLIC key (the .pub content tauri signer generate wrote; tauri.conf.json plugins.updater.pubkey). A secret key is refused. Changing it after the App has releases is held for the owner. GET /cli/app/updates/key, POST /cli/app/updates/key/set.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--set", "arg": "pubkey", "description": "The public key text."},
+        {"name": "--set-file", "arg": "file.pub", "description": "Read the public key from a file."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates token",
+      "usage": "k2 app updates token <app> [--file <path> | --stdin] [--json]",
+      "description": "Keep the App's download-host token (k2dl_…, minted by K2 Web) in the vault, read from a file or stdin, never an argument; without --file/--stdin, show whether one is set (fingerprint only). POST /cli/app/updates/token/set, GET /cli/app/updates/token.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--file", "arg": "path", "description": "Read the token from this file."},
+        {"name": "--stdin", "arg": null, "description": "Read the token from stdin."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates promote",
+      "usage": "k2 app updates promote <app> --from <channel> --to <channel> [--version <v>] [--drop-platform] [--json]",
+      "description": "Point a channel at a release that is already uploaded (default: --from's current one). No re-upload; forward only. POST /cli/app/updates/promote.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--from", "arg": "channel", "description": "Where the release is now."},
+        {"name": "--to", "arg": "channel", "description": "The channel to move."},
+        {"name": "--version", "arg": "v", "description": "A specific uploaded release."},
+        {"name": "--drop-platform", "arg": null, "description": "Allow the release to serve fewer platforms than --to's current one."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates rollback",
+      "usage": "k2 app updates rollback <app> --channel <name> --to <version> [--json]",
+      "description": "Point a channel back at an older release it served. Tauri installs only newer versions by default, so people already on the bad version stay on it; ship a higher version to fix them. POST /cli/app/updates/rollback.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--channel", "arg": "name", "description": "The channel to move back."},
+        {"name": "--to", "arg": "version", "description": "An older release the channel served."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates pull",
+      "usage": "k2 app updates pull <app> --version <version> [--json]",
+      "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). Its files stay at their download URLs. POST /cli/app/updates/pull.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--version", "arg": "version", "description": "The release to pull."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates stats",
+      "usage": "k2 app updates stats <app> [--days 30] [--json]",
+      "description": "Downloads per version from the download host (unavailable when it doesn't answer, never zero) and update checks per day, platform and version from this box. GET /cli/app/updates/stats.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--days", "arg": "N", "description": "Window in days (1-366, default 30)."},
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
+      "name": "app updates fleet",
+      "usage": "k2 app updates fleet [--json]",
+      "description": "Every App's channels, release counts and check-ins on this box, aggregate only. The owner and Admins. GET /cli/app/updates/fleet.",
+      "args": [],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "The daemon's JSON answer."}
+      ]
+    },
+    {
       "name": "app user add",
       "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
       "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",

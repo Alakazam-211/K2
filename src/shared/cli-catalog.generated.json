@@ -1624,6 +1624,51 @@
     "description": "Open-in-app links for an App's own iOS and Android apps: K2 serves the AASA and assetlinks.json on the App's hosts, with or without phone pairing. A path may carry a query pattern (/messages?addr=*). A path already set is removed only with --drop (refused link_path_dropped otherwise). Apps K2 doesn't front (host.clientIp: false) are refused needs_k2_front. GET /cli/app/links?app=, POST /cli/app/links/set|off|check {app, ios, android, paths, drop}. The owner, an Admin or the App's agent with Build and run Apps; check is the owner's."
    },
    {
+    "name": "app updates push",
+    "usage": "k2 app updates push <app> --channel <name> --version <semver> --artifact <platform>=<file> [--artifact …] [--sig <platform>=<file.sig>] [--notes-file <file>] [--drop-platform <platform>] [--no-wait] [--json]",
+    "description": "Ship a signed desktop update (Tauri's updater). Each file (inside the App's workspace) is checked against the App's updater public key, uploaded once to K2's download host (dl.k2.dev), and the channel moves only when every upload is confirmed. Strict SemVer 2.0.0, newer than the channel's current; a platform the channel serves can't silently disappear (--drop-platform). Waits for the uploads unless --no-wait (exit 2). POST /cli/app/updates/push. The owner, an Admin, or the App's agent with Build and run Apps."
+   },
+   {
+    "name": "app updates ls",
+    "usage": "k2 app updates ls <app> [--channel <name>] [--release <id|version>] [--json]",
+    "description": "Channels and their versions, every release with its files (download links, sizes, upload state), active users and the updater URLs to put in tauri.conf.json. GET /cli/app/updates."
+   },
+   {
+    "name": "app updates key",
+    "usage": "k2 app updates key <app> [--set <pubkey> | --set-file <file.pub>] [--json]",
+    "description": "Show or set the App's updater PUBLIC key (the .pub content tauri signer generate wrote; tauri.conf.json plugins.updater.pubkey). A secret key is refused. Changing it after the App has releases is held for the owner. GET /cli/app/updates/key, POST /cli/app/updates/key/set."
+   },
+   {
+    "name": "app updates token",
+    "usage": "k2 app updates token <app> [--file <path> | --stdin] [--json]",
+    "description": "Keep the App's download-host token (k2dl_…, minted by K2 Web) in the vault, read from a file or stdin, never an argument; without --file/--stdin, show whether one is set (fingerprint only). POST /cli/app/updates/token/set, GET /cli/app/updates/token."
+   },
+   {
+    "name": "app updates promote",
+    "usage": "k2 app updates promote <app> --from <channel> --to <channel> [--version <v>] [--drop-platform] [--json]",
+    "description": "Point a channel at a release that is already uploaded (default: --from's current one). No re-upload; forward only. POST /cli/app/updates/promote."
+   },
+   {
+    "name": "app updates rollback",
+    "usage": "k2 app updates rollback <app> --channel <name> --to <version> [--json]",
+    "description": "Point a channel back at an older release it served. Tauri installs only newer versions by default, so people already on the bad version stay on it; ship a higher version to fix them. POST /cli/app/updates/rollback."
+   },
+   {
+    "name": "app updates pull",
+    "usage": "k2 app updates pull <app> --version <version> [--json]",
+    "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). Its files stay at their download URLs. POST /cli/app/updates/pull."
+   },
+   {
+    "name": "app updates stats",
+    "usage": "k2 app updates stats <app> [--days 30] [--json]",
+    "description": "Downloads per version from the download host (unavailable when it doesn't answer, never zero) and update checks per day, platform and version from this box. GET /cli/app/updates/stats."
+   },
+   {
+    "name": "app updates fleet",
+    "usage": "k2 app updates fleet [--json]",
+    "description": "Every App's channels, release counts and check-ins on this box, aggregate only. The owner and Admins. GET /cli/app/updates/fleet."
+   },
+   {
     "name": "app user add",
     "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
     "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only."

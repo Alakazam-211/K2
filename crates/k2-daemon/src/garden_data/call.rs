@@ -141,6 +141,11 @@ pub(crate) fn run_call(b: &CallBody) -> CliResponse {
     if crate::garden_data::person_rows::is_verb(&b.verb) {
         return crate::garden_data::person_rows::handle(b);
     }
+    // 0.46.7 Workbench (catalog v40): worktree agents' git, compute jobs,
+    // notes, and the sheet-gated start / land / settle (`workbench_rows`).
+    if crate::garden_data::workbench_rows::is_verb(&b.verb) {
+        return crate::garden_data::workbench_rows::handle(b);
+    }
     match run(b) {
         Ok(v) => crate::garden_data::ok(json!({ "ok": true, "result": v })),
         Err(e) => response(&e),

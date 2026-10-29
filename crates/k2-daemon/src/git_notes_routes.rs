@@ -303,6 +303,21 @@ struct SendBody {
     ids: Vec<String>,
     #[serde(default)]
     wake: Option<bool>,
+    /// 0.46.7 Workbench: a sidecar's Thread address (`ws/name`) in the
+    /// workspace that holds `path`, so a worktree agent's notes reach that
+    /// agent, not the workspace's main agent. Absent: the workspace.
+    #[serde(default)]
+    to: Option<String>,
+}
+
+/// `to` when it is a sidecar of the workspace `project_id` (`<its handle>/<name>`).
+fn send_target(to: &str, project_id: &str) -> Result<String, CliResponse> {
+    let to = to.trim().to_ascii_lowercase();
+    let handle = k2_core::workspace_session_handles::workspace_address_name_shared(project_id).unwrap_or_default();
+    match to.split_once('/') {
+        Some((ws, name)) if !handle.is_empty() && ws == handle && !name.is_empty() && !name.contains('/') => Ok(to),
+        _ => Err(bad_request(format!("'to' must be a sidecar of this workspace ({handle}/<name>)"))),
+    }
 }
 
 fn humans_only(caller: &Caller) -> Option<CliResponse> {
@@ -645,8 +660,15 @@ fn handle_send(body: &[u8], caller: &Caller, deliver: &Deliver) -> CliResponse {
     if ws.is_empty() {
         return bad_request("Missing 'path'");
     }
-    let Some((_, project_root)) = owning_project(&ws) else {
+    let Some((project_id, project_root)) = owning_project(&ws) else {
         return not_found(format!("no K2 workspace holds {ws}"));
+    };
+    let target = match b.to.as_deref().filter(|t| !t.trim().is_empty()) {
+        Some(to) => match send_target(to, &project_id) {
+            Ok(t) => t,
+            Err(r) => return r,
+        },
+        None => project_root.clone(),
     };
     if !SENDING.lock().unwrap_or_else(|p| p.into_inner()).insert(ws.clone()) {
         return err("409 Conflict", "send_in_progress", "these notes are being sent right now");
@@ -667,7 +689,7 @@ fn handle_send(body: &[u8], caller: &Caller, deliver: &Deliver) -> CliResponse {
         return err("409 Conflict", "nothing_to_send", "no open notes waiting to be sent");
     }
     let (text, take) = git_notes::format_message(&pending, &ws);
-    let res = deliver(&DeliverRequest { target: &project_root, text: &text, from: name, actor, wake: b.wake.unwrap_or(true) });
+    let res = deliver(&DeliverRequest { target: &target, text: &text, from: name, actor, wake: b.wake.unwrap_or(true) });
     if !res.success {
         let reason = res.reason.clone().unwrap_or_else(|| "not_delivered".to_string());
         let hint = res.hint.clone().unwrap_or_else(|| format!("the message did not reach the agent ({reason})"));
@@ -693,7 +715,7 @@ fn handle_send(body: &[u8], caller: &Caller, deliver: &Deliver) -> CliResponse {
         "ids": ids,
         "remaining": pending.len() - take,
         "deliveryId": res.delivery_id,
-        "target": project_root,
+        "target": target,
     }))
 }
 

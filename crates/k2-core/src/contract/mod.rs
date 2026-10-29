@@ -162,6 +162,12 @@ pub struct VerbRow {
     /// `widget` or `garden-local`, absent on every other row. See [`phone`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phone: Option<Phone>,
+    /// Where the row runs for a Garden that became an App
+    /// (plan-gardens-tauri-compatible-v1 GTC-1): `door`, `host`, `later` or
+    /// `never`, the same words as `phone`. Set on the Workbench's rows
+    /// (catalog v40) first; the lint that requires it everywhere is GT-1's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<Phone>,
     pub reach: Reach,
     pub effect: Effect,
     pub kind: VerbKind,

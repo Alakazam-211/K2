@@ -339,6 +339,10 @@
     {"code": "not_a_repo", "doc": "The agent's folder isn't in a git repository, so there is no branch, diff or log to show."}
   ],
   "bannedFields": [
+    "workspacePath",
+    "repoRoot",
+    "hostKey",
+    "windowLabel",
     "projectPath",
     "path",
     "cwd",
@@ -25059,11 +25063,12 @@
     },
     {
       "verb": "work.list",
-      "cap": "agents:read",
+      "cap": "git:read",
       "exposure": [
         "garden-local"
       ],
       "phone": "door",
+      "app": "later",
       "reach": "local",
       "effect": "read",
       "kind": "call",
@@ -25220,6 +25225,7 @@
         "garden-local"
       ],
       "phone": "door",
+      "app": "later",
       "reach": "local",
       "effect": "read",
       "kind": "call",
@@ -25419,6 +25425,7 @@
         "garden-local"
       ],
       "phone": "door",
+      "app": "later",
       "reach": "local",
       "effect": "read",
       "kind": "call",
@@ -25593,6 +25600,7 @@
         "garden-local"
       ],
       "phone": "door",
+      "app": "later",
       "reach": "local",
       "effect": "read",
       "kind": "call",
@@ -25709,6 +25717,7 @@
         "garden-local"
       ],
       "phone": "door",
+      "app": "never",
       "reach": "local",
       "effect": "read",
       "kind": "call",
@@ -25783,26 +25792,29 @@
               ]
             },
             "createdAt": {
-              "type": "integer"
+              "type": "integer",
+              "description": "Seconds since the epoch."
             },
             "startedAt": {
               "type": [
                 "integer",
                 "null"
-              ]
+              ],
+              "description": "Seconds since the epoch."
             },
             "endedAt": {
               "type": [
                 "integer",
                 "null"
-              ]
+              ],
+              "description": "Seconds since the epoch."
             },
             "secs": {
               "type": [
                 "integer",
                 "null"
               ],
-              "description": "How long it ran."
+              "description": "How long it ran, in seconds (a duration)."
             }
           },
           "required": [
@@ -25842,6 +25854,7 @@
         "garden-local"
       ],
       "phone": "later",
+      "app": "later",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -25941,6 +25954,7 @@
         "garden-local"
       ],
       "phone": "later",
+      "app": "later",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -26006,6 +26020,7 @@
         "garden-local"
       ],
       "phone": "later",
+      "app": "later",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -26054,13 +26069,18 @@
               "type": "string"
             },
             "description": "Files in conflict: nothing landed, the agent was told."
+          },
+          "cancelled": {
+            "type": "boolean",
+            "description": "The person pressed Cancel on K2's sheet: nothing changed."
           }
         },
         "required": [
           "landed",
           "commits",
           "head",
-          "conflict"
+          "conflict",
+          "cancelled"
         ],
         "additionalProperties": false
       },
@@ -26092,6 +26112,7 @@
         "garden-local"
       ],
       "phone": "later",
+      "app": "later",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -26131,11 +26152,16 @@
           },
           "discarded": {
             "type": "boolean"
+          },
+          "cancelled": {
+            "type": "boolean",
+            "description": "The person pressed Cancel on K2's sheet: nothing changed."
           }
         },
         "required": [
           "settled",
-          "discarded"
+          "discarded",
+          "cancelled"
         ],
         "additionalProperties": false
       },
@@ -26164,6 +26190,7 @@
         "garden-local"
       ],
       "phone": "later",
+      "app": "later",
       "reach": "local",
       "effect": "write",
       "kind": "call",
@@ -26185,7 +26212,7 @@
             },
             "notes": {
               "type": "array",
-              "maxItems": 50,
+              "description": "Up to 50 notes.",
               "items": {
                 "title": "GitNoteIn",
                 "type": "object",
@@ -26261,6 +26288,7 @@
         "widget"
       ],
       "phone": "later",
+      "app": "never",
       "reach": "local",
       "effect": "write",
       "kind": "call",

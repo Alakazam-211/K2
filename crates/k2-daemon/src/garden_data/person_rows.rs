@@ -84,7 +84,7 @@ fn status_line(code: u16) -> &'static str {
     }
 }
 
-fn no(status: u16, code: &str, hint: impl Into<String>) -> CliResponse {
+pub(crate) fn no(status: u16, code: &str, hint: impl Into<String>) -> CliResponse {
     CliResponse {
         status: status_line(status),
         content_type: "application/json",
@@ -95,7 +95,7 @@ fn no(status: u16, code: &str, hint: impl Into<String>) -> CliResponse {
 /// A handler's refusal in the widget door's envelope (`{"error": {code,
 /// hint, …}}`), whatever shape the route used (`{ok:false, error:{…}}`,
 /// `{error:"text"}`).
-fn passthrough(r: CliResponse) -> CliResponse {
+pub(crate) fn passthrough(r: CliResponse) -> CliResponse {
     let code: u16 = r.status.split(' ').next().and_then(|c| c.parse().ok()).unwrap_or(500);
     let v: J = serde_json::from_str(&r.body).unwrap_or(J::Null);
     let mut err = match v.get("error") {
@@ -163,7 +163,7 @@ pub fn project(schema: &J, value: &J, names: &BTreeMap<String, String>) -> J {
 /// The row's one `args` object, checked against its request schema
 /// (unknown keys and missing required ones are `bad_request`, as the
 /// frame's own guard says them).
-fn args_of(row: &VerbRow, args: &[J]) -> Result<Map<String, J>, CliResponse> {
+pub(crate) fn args_of(row: &VerbRow, args: &[J]) -> Result<Map<String, J>, CliResponse> {
     let schema = row.request.as_array().and_then(|a| a.first());
     let given = match args.first() {
         None | Some(J::Null) => Map::new(),

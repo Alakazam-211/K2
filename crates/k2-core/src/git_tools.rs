@@ -410,9 +410,6 @@ pub fn set_done_listener(f: fn(&Path)) {
 /// clients used to learn only on their next poll). When it doesn't: return
 /// the shim folder to put first on the child's PATH.
 pub fn before_spawn(cwd: Option<&Path>) -> Option<PathBuf> {
-    if cfg!(windows) {
-        return None;
-    }
     if git_safe::availability().is_ready() {
         if let Some(cwd) = cwd {
             if marker_path(cwd).exists() {
@@ -423,6 +420,12 @@ pub fn before_spawn(cwd: Option<&Path>) -> Option<PathBuf> {
                 }
             }
         }
+        return None;
+    }
+    // Windows: no shim. It is a sh script named `git`, which a Windows
+    // program can't run (it looks for git.exe), and Windows K2 needs Git
+    // for Windows anyway. The waiting steps above still run there.
+    if cfg!(windows) {
         return None;
     }
     let home = crate::paths::home_dir()?;

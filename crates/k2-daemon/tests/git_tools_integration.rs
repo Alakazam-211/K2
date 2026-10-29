@@ -322,16 +322,34 @@ fn first_run_without_git_adds_the_workspace_and_finishes_git_later() {
     let path_file = ws_a.join(".k2-test-path");
     wait_for("the agent's PATH", 15, || path_file.exists() && std::fs::metadata(&path_file).is_ok_and(|m| m.len() > 0));
     let child_path = std::fs::read_to_string(&path_file).expect("read PATH");
-    // Staged under $HOME as the daemon sees it (not canonicalized).
-    let wait_dir = git_tools::wait_shim_dir_at(t.path());
-    assert_eq!(child_path.split(':').next(), Some(wait_dir.to_str().expect("utf8")), "PATH: {child_path}");
-    let shim_text = std::fs::read_to_string(wait_dir.join("git")).expect("shim staged");
-    assert_eq!(shim_text, git_tools::wait_shim_script(&git_tools::agent_note(), git_safe::apple_pair().as_ref()));
+    // Unix only: the git-wait shim is a sh script named `git`, first on the
+    // agent's PATH. On Windows the agent (a test shim) runs in Git Bash,
+    // which puts its own folders first, and Windows K2 needs Git for
+    // Windows anyway (the installer checks); the deferred git steps below
+    // are what Windows shares.
+    #[cfg(not(windows))]
+    {
+        // Staged under $HOME as the daemon sees it (not canonicalized).
+        let wait_dir = git_tools::wait_shim_dir_at(t.path());
+        assert_eq!(child_path.split(':').next(), Some(wait_dir.to_str().expect("utf8")), "PATH: {child_path}");
+        let shim_text = std::fs::read_to_string(wait_dir.join("git")).expect("shim staged");
+        assert_eq!(shim_text, git_tools::wait_shim_script(&git_tools::agent_note(), git_safe::apple_pair().as_ref()));
+    }
+    #[cfg(windows)]
+    let _ = &child_path;
     stop(&key_a);
     assert!(!ws_a.join(".git").exists(), "no git steps while git is missing");
 
-    // 5. git arrives.
+    // 5. git arrives. Windows: Git for Windows' git.exe finds the rest of
+    // Git relative to its own folder, so a link elsewhere can't run;
+    // instead its folder joins the probed folders.
+    #[cfg(not(windows))]
     k2_core::test_env::symlink(&git, ready_bin.join("git")).expect("link a real git");
+    #[cfg(windows)]
+    let _probe = k2_core::test_env::EnvVar::set(
+        git_safe::PROBE_PATH_ENV,
+        std::env::join_paths([usr_bin.as_path(), ready_bin.as_path(), git.parent().expect("git's folder")]).expect("join"),
+    );
     let probe = git_safe::refresh();
     assert!(probe.is_ready(), "{probe:?}");
     // 5a. The next spawn in workspace A runs its waiting steps first.

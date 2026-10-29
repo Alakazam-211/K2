@@ -2483,6 +2483,36 @@ exit: 0
       ]
     },
     {
+      "name": "app status",
+      "usage": "k2 app status <app-id> [--no-checks] [--public] [--json]",
+      "description": "How an App is doing in one answer: deploy, health, its host.checks, errors in the last hour, resources, door, hosts, phone, the update feed, and next: one exact command per red or yellow item. Exit 0 green, 1 red, 2 yellow, 3 refused. App output is never printed.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--no-checks", "arg": null, "description": "Show the host.checks run recorded when the live deploy switched in; run none now."},
+        {"name": "--public", "arg": null, "description": "Run host.checks through the App's public URL (TLS and the relay), not on this machine."},
+        {"name": "--json", "arg": null, "description": "{schema: 1, verdict, deploy, health, checks, errors, resources, door, hosts, phone, updates, next}."}
+      ]
+    },
+    {
+      "name": "explain",
+      "usage": "k2 explain [<id>] [--json]",
+      "description": "What an App refusal id means (the error field a refused k2 app command prints), the fix, who fixes it, the exit code. With no id: every id by area. No daemon. Exit 4 for an unknown id.",
+      "args": [{"name": "id", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{id, area, http, exit, what, fix, who, askable, status, aliases}."}
+      ]
+    },
+    {
+      "name": "capabilities",
+      "usage": "k2 capabilities [--node <name>] [--json]",
+      "description": "What this server can do for Apps before you try: engines, protocols, ports, domains, simulators, Postgres, mail, push keys (set or not), the update feed, limits, and the compute nodes your workspace may use. Each no row names the reason, the fix and the refusal id.",
+      "args": [],
+      "flags": [
+        {"name": "--node", "arg": "name", "description": "Only that compute node's row."},
+        {"name": "--json", "arg": null, "description": "{schema: 1, box: [...], compute: [...], doctor}; a row is {cap, ok, detail, missing?: {reason, fix, code}}."}
+      ]
+    },
+    {
       "name": "app sdk add",
       "usage": "k2 app sdk add <app-folder> [--sew] [--json]",
       "description": "Copy @k2/server (this K2's version) into <app-folder>/vendor/ and add \"@k2/server\": \"file:vendor/k2-server-<version>.tgz\" to its package.json (made when missing); then npm install and import { fromEnv } from '@k2/server'. --sew also copies @sew/client, voice, channel, e2ee and bff (Sew 0.5.0+ on this box), pins their links in npm overrides and prints the npm i line for their registry deps and peers. Idempotent; never runs npm or uses the network; writes only vendor/ and package.json. POST /cli/app/sdk/add {folder, sew}. Owner, Admin, a K2 terminal, or the App's agent with Build and run Apps (its own workspace's folders).",

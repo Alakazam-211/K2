@@ -2095,6 +2095,39 @@ export declare const APP_VERBS: {
             readonly type: "object";
         };
     };
+    readonly 'push.viewing': {
+        readonly cap: null;
+        readonly effect: "write";
+        readonly kind: "call";
+        readonly feature: "app-push-viewing-v1";
+        readonly door: "both";
+        readonly http: {
+            readonly method: "POST";
+            readonly route: "/cli/skin/push/viewing";
+            readonly params: {};
+            readonly query: readonly [];
+        };
+        readonly socket: null;
+        readonly responseNames: {};
+        readonly response: {
+            readonly additionalProperties: false;
+            readonly properties: {
+                readonly conversation: {
+                    readonly type: "string";
+                };
+                readonly ok: {
+                    readonly type: "boolean";
+                };
+                readonly ttlSecs: {
+                    readonly type: "integer";
+                };
+                readonly visible: {
+                    readonly type: "boolean";
+                };
+            };
+            readonly type: "object";
+        };
+    };
     readonly 'push.send': {
         readonly cap: "push:send";
         readonly effect: "write";
@@ -9375,6 +9408,13 @@ export interface AppPushRemoved {
     /** false when this guest had no such device (the same answer for anyone else's). */
     readonly removed: boolean;
 }
+export interface AppPushViewing {
+    readonly conversation: string;
+    readonly ok: boolean;
+    /** How long this call counts, in seconds (a duration): 90 for visible:true, 0 for false. */
+    readonly ttlSecs: number;
+    readonly visible: boolean;
+}
 export interface AppPushTo {
     /** A principal id or username of this App's guest. */
     readonly guest?: string;
@@ -11016,6 +11056,13 @@ export interface AppVerbs {
         };
         value: AppPushDevice;
     };
+    'push.viewing': {
+        args: {
+            conversation: string;
+            visible: boolean;
+        };
+        value: AppPushViewing;
+    };
     'push.send': {
         args: {
             androidChannel?: string;
@@ -11770,7 +11817,7 @@ export interface AppVerbs {
         value: AppProjectFrame;
     };
 }
-export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
+export type AppCallVerb = 'me.get' | 'roomAgents.list' | 'guests.login' | 'guests.rooms' | 'guests.setRooms' | 'app.rooms' | 'guests.list' | 'password.change' | 'guests.logout' | 'guests.refresh' | 'guests.devices' | 'guests.revokeDevice' | 'profile.get' | 'profile.update' | 'profile.setImage' | 'profile.clearImage' | 'profile.sessions' | 'profile.revokeSession' | 'profile.signOutOthers' | 'push.register' | 'push.unregister' | 'push.device' | 'push.prefs' | 'push.viewing' | 'push.send' | 'push.status' | 'push.devices' | 'pairing.start' | 'pairing.status' | 'pairing.cancel' | 'pairing.check' | 'pairing.redeem' | 'email.send' | 'email.status' | 'email.log' | 'app.info' | 'password.forgot' | 'password.reset' | 'thread.page' | 'thread.latest' | 'thread.activity' | 'thread.activityRooms' | 'thread.send' | 'thread.answerCard' | 'thread.voidCard' | 'thread.attachmentGet' | 'thread.catchup' | 'thread.setRead' | 'thread.markAllRead' | 'thread.unread' | 'thread.mute' | 'files.resolveLinks' | 'thread.ensurePinned' | 'files.list' | 'files.read' | 'files.readBinary' | 'files.readRange' | 'files.stat' | 'files.downloads' | 'files.download' | 'files.write' | 'files.uploadBinary' | 'files.uploadChunk' | 'files.create' | 'files.copy' | 'files.move' | 'files.rename' | 'resources.list' | 'resources.add' | 'resources.remove' | 'tickets.list' | 'tickets.show' | 'tickets.attachment' | 'tickets.create' | 'tickets.comment' | 'tickets.answer' | 'tickets.resolve' | 'tickets.assign' | 'wiki.index' | 'wiki.note' | 'storeDocs.collections' | 'storeDocs.get' | 'storeDocs.query' | 'db.tables' | 'db.rows' | 'db.insert' | 'db.update' | 'db.delete' | 'db.query' | 'heartbeats.list' | 'heartbeats.show' | 'heartbeats.status' | 'heartbeats.fires' | 'heartbeats.add' | 'heartbeats.edit' | 'heartbeats.enable' | 'heartbeats.rename' | 'heartbeats.archive' | 'heartbeats.fire' | 'activity.snapshot' | 'agentIdentity.get' | 'agentIdentity.set' | 'agentIdentity.setHandle' | 'room.members' | 'app.self' | 'app.usage' | 'chat.pass' | 'guests.chat' | 'guests.setChat' | 'chat.member' | 'chat.whois' | 'chat.createChannel' | 'project.list' | 'project.read' | 'project.post' | 'project.markRead';
 export type AppSubscribeVerb = 'thread.events' | 'thread.stream' | 'files.events' | 'activity.events' | 'project.events';
 /** The named helpers: one per App verb a server calls (browser-only rows have none), grouped by surface. */
 export interface AppSurfaces {
@@ -11919,6 +11966,11 @@ export interface AppSurfaces {
             mutedTopics?: string[];
             previews?: boolean | null;
         }): Promise<AppPushDevice>;
+        /** Say this guest has a Thread open (or closed it): agent-reply pushes for that Thread stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows the Thread; only that guest's own state changes. no cap · POST /cli/skin/push/viewing. e.g. `await k2.asGuest(pass).push.viewing({conversation, visible: true})` */
+        viewing(args: {
+            conversation: string;
+            visible: boolean;
+        }): Promise<AppPushViewing>;
         /** Notify this App's own guests' phones (a guest, a list, or a room's guests); answers at once with a sendId. cap push:send · POST /cli/skin/push/send. e.g. `const {sendId} = await k2.push.send({to: {guest: principalId}, title, body, data: {jobId}, topic: 'jobs'})` */
         send(args: {
             androidChannel?: string;

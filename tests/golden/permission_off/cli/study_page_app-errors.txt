@@ -1,0 +1,467 @@
+$ k2 study app-errors
+exit: 0
+--- stdout
+k2 study app-errors — every App refusal: what happened, the fix, who fixes it
+
+Every App route refuses with a stable id (error.code). The id never
+changes, so a script or an agent can match on it. Look one up:
+  k2 explain <id>          what happened, the fix, who fixes it
+  k2 explain <id> --json   the same as JSON
+  k2 explain               every id, by area
+An App command that is refused prints fix: <the fix> before K2's own
+Ask with: line, and its --json error object carries next (the fix) and
+explain ("k2 explain <id>"). The exit code each id gives is beside it:
+3 refused; 2 a bad request (fix the call); 1 a build or deploy that
+failed (read its report or the deployment's error). k2 explain itself
+exits 4 for an id it doesn't know.
+When the fix is the owner's or an Admin's: if the refusal ended with an
+Ask with: line, run it as printed (a permission card); otherwise tell
+your human what the fix says. "retired" ids are ones older K2 servers
+send; they still explain.
+
+DEPLOY (validate, build, deploy, rollback)
+  app_exists (exit 3)
+      fix: Deploy to it (k2 app deploy <app-id> <folder|seed>) or pick
+      another id. See what exists: k2 app list
+  app_id_invalid (exit 2)
+      fix: Pick a shorter, plain id (lowercase letters, digits and single
+      '-') and run the command again.
+  app_id_reserved (exit 2)
+      fix: Pick another id. A label with that name can still move to the
+      App: k2 app label take <app-id> <label>
+  app_not_found (exit 3)
+      fix: List the Apps you can see: k2 app list
+  build_failed (exit 1)
+      fix: Read the build output, fix the build in the folder, then run k2
+      app build <folder> again.
+  deploy_in_progress (exit 3)
+      fix: Wait for it to end (k2 app history <app-id>), then run the
+      command again.
+  folder_outside_workspace (exit 3)
+      fix: Copy or move the App's folder into your workspace, then build or
+      deploy from there.
+  is_an_app (exit 2)
+      fix: Use the App verbs: k2 app start|stop|deploy|uninstall <app-id>
+  label_taken (exit 3)
+      fix: Pick another App id, or ask the label's holder. Moving your own
+      label over: k2 study app-move
+  lockfile_required (exit 1)
+      fix: Commit a lockfile (npm install --package-lock-only) and build
+      again: k2 app build <folder>
+  manifest_conflict (exit 3)
+      fix: Keep one manifest: drop --manifest, or make the folder's
+      manifest.json match it, then run the command again.
+  manifest_invalid (exit 3)
+      fix: Check it: k2 app validate <folder>. Fix what it names, then
+      deploy again.
+  nothing_to_roll_back (exit 3)
+      fix: Deploy the Seed you want: k2 app deploy <app-id> <folder|seed>.
+      Past deploys: k2 app history <app-id>
+  requires_unmet (exit 3)
+      fix: The owner sets up what it names, then install or deploy again. K2
+      doesn't turn these on by itself.
+  rollback_crosses_migration (exit 3)
+      fix: Deploy a Seed that declares dataDown, or roll the data back
+      first. Past deploys: k2 app history <app-id>
+  seed_corrupt (exit 3)
+      fix: Build it again from the folder (k2 app build <folder>) and deploy
+      the new hash.
+  seed_invalid (exit 1)
+      fix: Fix each error the report names (k2 app validate <folder>), then
+      build and deploy again.
+  seed_not_found (exit 3)
+      fix: Build one and use the hash it prints: k2 app build <folder>
+
+RUNTIME (the App engine, the box, health)
+  crashlooping (exit 1)
+      fix: Read why: k2 app logs <app-id> and k2 app errors <app-id>. Fix
+      it, then deploy again.
+  engine_caller_refused (exit 3)
+      fix: Wait a minute and run the command again. If it stays, check k2
+      app engine status and report it.
+  engine_download_failed (exit 3)
+      fix: Check the box can reach K2's download host, then run k2 app
+      engine install again (or --from <dir>).
+  engine_install_failed (exit 3)
+      fix: Read the error, then run k2 app engine install again. If it
+      repeats, check k2 app engine status and report it.
+  engine_not_answering (exit 3)
+      fix: See its state: k2 app engine status. The owner reinstalls it with
+      k2 app engine install.
+  engine_protocol_mismatch (exit 3)
+      fix: Install the matching engine: k2 app engine install (the owner).
+      k2 app engine status shows both sides.
+  engine_refused (exit 3)
+      fix: Update K2 so the daemon and engine match (k2 update), then run k2
+      app engine install again.
+  engine_unavailable (exit 3)
+      fix: See what is missing: k2 app engine status. Or deploy walled: k2
+      app deploy <app-id> <folder|seed> --engine guarded
+  health_failed (exit 1)
+      fix: Read why: k2 app logs <app-id> and k2 app deployment <app-id>
+      <id>. Fix it and deploy again.
+  test_guest_unavailable (exit 3)
+      fix: Check the App's test guests (k2 app test-guests <app-id>), or
+      drop asTestGuest from the manifest.
+
+ACCESS (who may do what: switches, owners, workspaces)
+  apps_disabled (exit 3)
+      fix: The owner turns them on in Settings → Apps → This server.
+  apps_manage_off (exit 3)
+      fix: Ask your owner: Workspace settings → Agent → Apps, or k2 app
+      access <workspace> --build on (the owner's own terminal, outside K2).
+  bad_password (exit 2)
+      fix: Send a longer password (the refusal says the minimum).
+  grant_failed (exit 3)
+      fix: Read the reason and run the command again. See what is granted:
+      k2 app grants <app-id>
+  grant_required (exit 3)
+      fix: Ask for it: k2 app grant <app-id> --kind guests-rooms (or --kind
+      guests-chat, the owner's).
+  member_read_only (exit 3)
+      fix: Ask an Admin or the owner to make the change.
+  not_a_test_guest (exit 3)
+      fix: List them: k2 app test-guests <app-id>
+  owner_only (exit 3)
+      fix: Ask the owner. The refusal names where they do it.
+  parent_switch_off (exit 3)
+      fix: The owner turns both on: k2 app access <workspace> --build on
+      --manage on (the owner's own terminal, outside K2).
+  role_not_this_apps (exit 2)
+      fix: Use one of the App's roles, or create one: k2 app role create
+      <name> --app <app-id>
+  too_many_test_guests (exit 3)
+      fix: Remove one first. List them: k2 app test-guests <app-id>
+  workspace_not_found (exit 3)
+      fix: Check the name: k2 workspace list
+  wrong_credential (exit 3)
+      fix: Run k2 app from the workspace's own agent terminal, or as the
+      owner.
+
+APPROVALS (held requests the owner answers)
+  app_changed (exit 3)
+      fix: Ask again; the owner approves the new request.
+  logins_changed (exit 3)
+      fix: Ask again so the owner sees the current list: k2 app grant
+      copy-host <app-id>
+  no_applier (exit 3)
+      fix: Update K2 (k2 update), then ask again.
+  not_pending (exit 3)
+      fix: See where it stands: k2 app approvals --all
+  replay_failed (exit 3)
+      fix: Look up the inner code (k2 explain <code>), fix that, then ask
+      again.
+  request_expired (exit 3)
+      fix: Ask again.
+  request_not_found (exit 3)
+      fix: List them: k2 app approvals --all
+  too_many_pending (exit 3)
+      fix: Withdraw one (k2 app deny <id>) or wait for the owner. Yours: k2
+      app approvals
+  vault_confirm_required (exit 3)
+      fix: The owner runs the command in person; it asks for the confirm
+      (for example k2 app approve <id>).
+  widening_held (exit 3)
+      fix: Ask for it: k2 app config <app-id> --isolation <level>. The owner
+      approves it.
+
+DOOR (passes, App keys, quotas, suspend)
+  app_suspended (exit 3)
+      fix: The owner resumes it: k2 app resume <app-id> (or the App's own
+      agent, if it suspended it itself).
+  audit_unavailable (exit 3)
+      fix: Run it again in a moment. If it stays, report it.
+  cap_not_granted (exit 3)
+      fix: Add the capability to the App's manifest and deploy again; the
+      owner approves it once.
+  guest_required (exit 3)
+      fix: Sign the person in and send their session pass (Authorization:
+      Bearer k2skn_…).
+  link_unavailable (exit 3)
+      fix: Run it again: k2 app link <app-id> --rotate. If it repeats,
+      report it.
+  not_exposed (exit 3)
+      fix: Call it from the App's server side with its own pass.
+  owner_token_from_app (exit 3)
+      fix: Use the App key ($K2_SECRETS_DIR/K2_APP_KEY) on
+      /v1/apps/$K2_APP_ID/…, or: k2 app clean-mode <app> off
+  pass_invalid (exit 3)
+      fix: Sign in again to get a new pass.
+  pass_required (exit 3)
+      fix: Send the person's session pass (Authorization: Bearer k2skn_…).
+  pass_wrong_link (exit 3)
+      fix: Send this App's own pass, or a session pass of a person signed in
+      to this App (each App's server uses its own link).
+  signout_confirm_required (exit 3)
+      fix: Run it with the yes: k2 app seal rotate <app-id> --yes
+  skin_token (exit 3)
+      fix: Call it with the App's pass or the guest's session pass.
+  suspended (exit 3)
+      fix: The owner resumes it: k2 app resume <app-id>
+
+DATA (k2 app data and exec)
+  app_not_running (exit 3)
+      fix: Start it: k2 app start <app-id>
+  data_not_found (exit 3)
+      fix: List what is there: k2 app data ls <app-id> [<path>]
+  data_put_failed (exit 3)
+      fix: Read the reason, fix it (path, space, the App running), then run
+      k2 app data put again.
+  data_too_large (exit 2)
+      fix: Split or compress it inside the App first (k2 app exec <app-id>
+      -- …), then get the parts.
+  exec_unavailable (exit 3)
+      fix: Deploy it guarded: k2 app deploy <app-id> <folder|seed> --engine
+      guarded. Logs work anyway: k2 app logs <app-id>
+  websocket_required (exit 2)
+      fix: Use the CLI, which opens the WebSocket: k2 app shell <app-id>
+
+EGRESS (where an App may connect out)
+  egress_host_invalid (exit 2)
+      fix: Ask only for public hosts: k2 app egress add <app-id>
+      <host[:port]>
+  egress_self (exit 2)
+      fix: Drop it; call K2 on the App's gateway link instead.
+  open_path_only (exit 3)
+      fix: Ask for the hosts it needs: k2 app egress add <app-id>
+      <host[:port]>
+
+BOX (box prep, box services, Podman)
+  apps_running (exit 3)
+      fix: Stop every App first (k2 app stop <app-id>), then run k2 app box
+      unprep --yes.
+  box_prep_failed (exit 3)
+      fix: Fix what that step needs, then run k2 app box prepare again
+      (--dry-run shows every change).
+  box_service_invalid (exit 2)
+      fix: Fix what the refusal names: k2 app box-service request <app-id>
+      <name> [<host-port>] [--app-port N]
+  box_service_refused (exit 3)
+      fix: Pick another service or port. See this App's: k2 app box-service
+      <app-id>
+  confirm_needed (exit 3)
+      fix: Run k2 app box unprep --yes (--dry-run lists what it undoes).
+  disk_low (exit 3)
+      fix: See usage: k2 app resources. Free space, or pass --disk-override
+      "<reason>" (held for the owner unless you are the owner).
+  helper_needed (exit 3)
+      fix: The owner runs k2 root-helper update, or the one root step the
+      refusal prints (in an SSH session).
+  linux_only (exit 3)
+      fix: Run it on a Linux K2 box.
+  low_disk (exit 3)
+      fix: Free space on the box (k2 app resources shows usage), then run k2
+      app box prepare again.
+  podman_download_failed (exit 3)
+      fix: Check the box can reach K2's download host, then run k2 app box
+      prepare --install-podman again.
+  podman_install_needed (exit 3)
+      fix: The owner runs k2 app box prepare --install-podman (--dry-run
+      shows every change first).
+  podman_uninstall_failed (exit 3)
+      fix: Read the reason, then run k2 app box podman uninstall again (the
+      owner, outside K2).
+  port_owned (exit 3)
+      fix: Pick another port, or ask that App's agent (k2 msg <address>
+      "…") or the owner.
+  role_required (exit 3)
+      fix: Ask an Admin or the owner, or read your own Apps: k2 app
+      resources --app <app-id>
+  root_busy (exit 3)
+      fix: Wait for it to finish, then run the command again.
+  unprep_failed (exit 3)
+      fix: Read the reason, fix it, then run k2 app box unprep --yes again.
+  unsupported (exit 3)
+      fix: Run Apps on an x86_64 or aarch64 Linux box.
+
+DOMAINS (labels and custom domains)
+  app_not_healthy (exit 3)
+      fix: Deploy it and wait until it's live (k2 app deployment <app-id>
+      <id>; k2 app logs <app-id>), then run this again.
+  domain_not_attached (exit 3)
+      fix: See the App's names: k2 app domains <app-id>. A new zone: the
+      owner runs k2 domain add <apex> first.
+  holder_changed (exit 3)
+      fix: Ask again.
+  invalid_domain (exit 2)
+      fix: Check the spelling: k2 app domain add <app-id> <subdomain|host>
+  label_exists_elsewhere (exit 3)
+      fix: Pick a new label, or ask the owner to move it deliberately
+      (--transfer, from the owner's own terminal, outside K2).
+  label_move_failed (exit 3)
+      fix: Read the reason and run the command again. See the App's names:
+      k2 app domains <app-id>
+  label_not_taken (exit 3)
+      fix: See what it serves: k2 app domains <app-id>
+  label_owned_by_other_workspace (exit 3)
+      fix: Pick another label, or ask that workspace's agent. Moving one
+      across workspaces is the owner's hand-over.
+  label_serves_another_app (exit 3)
+      fix: Remove it there first: k2 app domain rm <other-app> <label>
+  legacy_not_running (exit 3)
+      fix: Start it (k2 publish start <label>), then run k2 app label return
+      <app-id> <label>.
+  no_public_label (exit 3)
+      fix: Point what calls it at the App's front port instead.
+  reserved_label (exit 2)
+      fix: Pick another subdomain: k2 app domain add <app-id> <subdomain>
+  too_many_custom_domains (exit 3)
+      fix: Remove one first: k2 app domain rm <app-id> <host>. See them: k2
+      app domains <app-id>
+  use_label_take (exit 3)
+      fix: Your --cmd service's label: k2 app label take <app-id> <label>.
+      Another service: stop it there first.
+
+HANDOVER (moving Apps between workspaces and boxes)
+  app_parked (exit 3)
+      fix: The owner gives it to a workspace: k2 app unpark <app-id> --to
+      <workspace>
+  copy_host_failed (exit 3)
+      fix: Read the reason, then run the move step again: k2 app move-plan
+      <service> --app <app-id>
+  handoff_needs_v1 (exit 3)
+      fix: Clear what it lists, or move the App by hand: the refusal's
+      manual steps (a new App id, its data, labels and domains).
+  handover_vault_closed (exit 3)
+      fix: Wait until K2 has finished starting (k2 vault status), then run
+      it again.
+  move_step_failed (exit 3)
+      fix: Fix what the step names, then run the plan again: k2 app
+      move-plan <service> --app <app-id>
+  not_a_cmd_service (exit 3)
+      fix: Check the name. Moving a --cmd service in: k2 study app-move
+  plan_changed (exit 3)
+      fix: Request again so the owner sees the current list: k2 app
+      move-plan <service> --app <app-id> --request
+
+PUSH (notifications to an App's users)
+  admin_only (exit 3)
+      fix: Read counts instead: k2 app push status <app>
+  app_pass_required (exit 3)
+      fix: Send it from the App's server side with its own pass.
+  channel_unavailable (exit 2)
+      fix: Register your own app instead (channel app).
+  push_devices_full (exit 3)
+      fix: Raise the limit (k2 app push set <app> --max-devices N), or
+      remove a device: k2 app push devices rm <app> <apd_…>
+  push_not_configured (exit 3)
+      fix: Add it: k2 app push setup <app> (--apns-key … or
+      --fcm-service-account …). Check: k2 app push status <app>
+  token_in_use (exit 3)
+      fix: Sign them out first (the App calls push.unregister on sign-out),
+      then register again.
+
+PAIRING (pairing a phone with an App)
+  bad_login (exit 3)
+      fix: Type the password again.
+  device_signin_off (exit 3)
+      fix: The App's owner turns it on: k2 app stay-signed-in <app> <days>
+  host_not_paired (exit 2)
+      fix: Use one of the App's pairing hosts: k2 app pairing status <app>
+  locked (exit 3)
+      fix: Wait and try again later, or ask the App's owner to unlock the
+      user: k2 app user unlock <username>
+  no_public_host (exit 3)
+      fix: Give it a label (k2 app domain add <app> <subdomain>, needs K2
+      Connect), then run k2 app pairing setup <app>.
+  not_for_host (exit 2)
+      fix: Name an App, not host.
+  pair_code_invalid (exit 3)
+      fix: Start again from the web App to get a fresh code.
+  pairing_from_device (exit 3)
+      fix: Start from the person's web sign-in.
+  pairing_not_from_browser (exit 3)
+      fix: Redeem it from the phone app. Webview origins: k2 app pairing
+      setup <app> --native-origin <origin>
+  pairing_not_served (exit 3)
+      fix: See why: k2 app pairing check <app>. Pairing needs a runtime App
+      with K2's front (host.clientIp on).
+  pairing_off (exit 3)
+      fix: The App's owner turns it on: k2 app pairing setup <app>.
+      Server-wide off (K2_APP_PAIRING=off) is the owner's.
+  reauth_required (exit 3)
+      fix: Ask the person for the password and send it with the start.
+
+LINKS (iOS and Android link files)
+  link_path_dropped (exit 3)
+      fix: Keep the path, or drop it on purpose: pass --drop <path>.
+  needs_k2_front (exit 3)
+      fix: Turn K2's front back on: remove host.clientIp: false from the
+      manifest and deploy again.
+
+UPDATES (a desktop app's update feed)
+  artifact_too_large (exit 2)
+      fix: Make the archive smaller (512 MiB at most) and upload it again.
+  artifact_type_refused (exit 2)
+      fix: Use one of: .app.tar.gz .AppImage .AppImage.tar.gz .deb .rpm .msi
+      .exe .nsis.zip .msi.zip
+  platform_dropped (exit 3)
+      fix: Add that platform's archive, or drop it on purpose: pass
+      --drop-platform <key>.
+  secret_key_refused (exit 2)
+      fix: Send the public key: k2 app updates key --set <public key>. Keep
+      the secret key on the signing Mac or in the vault.
+  signature_invalid (exit 2)
+      fix: Sign that archive again with the key that matches the App's
+      updater public key, then upload again.
+  signing_node_not_owner (exit 3)
+      fix: Run it on this server's own node (k2 compute nodes lists them).
+  updates_host_unavailable (exit 3)
+      fix: Wait and try again later; nothing to change on the App.
+  version_not_newer (exit 3)
+      fix: Give the release a higher semver version than the channel's
+      current one, then publish again.
+
+STATIC (static Apps (a built folder, no process))
+  static_not_on_runtime [retired] (exit 3)
+      fix: Update that server's K2 (from 0.46.7 a static App deploys), or
+      serve it with k2 publish run --skin there.
+
+GENERAL (any App route)
+  airgap (exit 3)
+      fix: Nothing to change while air-gap is on. The owner turns air-gap
+      off if this server should reach out.
+  bad_request (exit 2)
+      fix: Fix what the hint names and run the command again (k2 app --help
+      shows the shape).
+  db_error (exit 3)
+      fix: Run it again in a moment. If it repeats, report it with the hint.
+  email_off (exit 3)
+      fix: The owner turns it on: k2 app email on <app> --sender <address>
+  failed (exit 3)
+      fix: Run it again. If it repeats, report it with the hint.
+  forbidden (exit 3)
+      fix: Run it from the App's own workspace with a valid passport, or ask
+      the owner.
+  internal (exit 3)
+      fix: Run it again. If it repeats, report it with the hint.
+  io_error (exit 3)
+      fix: Check the box's disk (k2 app resources), then run it again. If it
+      repeats, report it.
+  method_not_allowed (exit 3)
+      fix: Use the method the hint names (a GET or a POST).
+  not_found (exit 3)
+      fix: Check the name or id: k2 app list
+  rate_limited (exit 3)
+      fix: Slow down and try again later; the hint says how often is fine.
+  skin_error (exit 3)
+      fix: Run it again. If it repeats, report it with the hint.
+  skin_room (exit 3)
+      fix: Use a room the pass holds, or have the owner add the room to the
+      pass.
+  state_write_failed (exit 3)
+      fix: Check the box's disk, then run it again. If it repeats, report
+      it.
+  store (exit 3)
+      fix: Run it again in a moment. If it repeats, report it.
+  too_large (exit 2)
+      fix: Send a smaller body (the hint says the limit).
+  usage (exit 2)
+      fix: Fix what the hint names; the command's --help shows the shape.
+  vault_closed (exit 3)
+      fix: Wait until K2 has finished starting, then run it again (k2 vault
+      status).
+  vault_error (exit 3)
+      fix: Run it again. If it repeats, check k2 vault status and report it.
+--- stderr
+--- requests

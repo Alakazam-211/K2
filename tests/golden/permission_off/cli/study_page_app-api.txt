@@ -58,6 +58,7 @@ no cap (your own rooms)
   push.unregister          POST /cli/skin/push/unregister                     Stop this App's notifications on one of this guest's own devices (signing out also removes it).
   push.device              GET  /cli/skin/push/device                         This guest's own push registration for one device (never the token).
   push.prefs               POST /cli/skin/push/prefs                          Change one device's notification choices (previews, muted topics) without its token.
+  push.viewing             POST /cli/skin/push/viewing                        Say this guest has a Thread open (or closed it): agent-reply pushes for that Thread stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows the Thread; only that guest's own state changes.
   pairing.start            POST /cli/skin/pair/start (server only)            Start pairing this guest's phone: a one-time code and its QR, from their own web sign-in (at most 15 minutes old, or with their password).
   pairing.status           GET  /cli/skin/pair/status (server only)           Is this guest's pairing done: pending, paired (with the device's name), expired or cancelled.
   pairing.cancel           POST /cli/skin/pair/cancel (server only)           Drop one of this guest's pairing codes (the QR stops working).
@@ -205,6 +206,13 @@ REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   that password, so no pass; send the person to changeUrl (null: your form
   posts {token: changeToken, password} to password.reset), then they sign
   in again. An older @k2/server throws it: k2 app sdk add <app-folder>.
+  What any id means and its fix: k2 explain <id> (k2 study app-errors).
+
+BIG UPLOADS from a phone app (a Tauri app's HTTP plugin holds a whole request
+  in memory; one big request fails near 50 MB): the phone sends the file to
+  your App's server in parts of at most 16 MiB, and the server passes each on,
+  in order: files.uploadChunk({workspace, dir, filename, uploadId, offset,
+  base64, isLast}). The last part lands the file (10 GiB at most).
 
 RULES: one guest's pass per guest request; send it as Authorization:
   Bearer (a pass in ?token= still works but lands in your own logs, and

@@ -360,6 +360,17 @@ export const APP_VERBS = {
         responseNames: {},
         response: { "additionalProperties": false, "properties": { "channel": { "enum": ["app", "k2-companion"] }, "configured": { "additionalProperties": false, "properties": { "apns": { "type": "boolean" }, "fcm": { "type": "boolean" } }, "type": "object" }, "deviceId": { "type": "string" }, "environment": { "enum": ["production", "sandbox"] }, "id": { "type": "string" }, "lastSeenAt": { "type": "integer" }, "mutedTopics": { "items": { "type": "string" }, "type": "array" }, "ok": { "type": "boolean" }, "platform": { "enum": ["apns", "fcm"] }, "previews": { "type": ["boolean", "null"] }, "who": { "type": "string" } }, "type": "object" },
     },
+    'push.viewing': {
+        cap: null,
+        effect: 'write',
+        kind: 'call',
+        feature: 'app-push-viewing-v1',
+        door: 'both',
+        http: { method: 'POST', route: '/cli/skin/push/viewing', params: {}, query: [] },
+        socket: null,
+        responseNames: {},
+        response: { "additionalProperties": false, "properties": { "conversation": { "type": "string" }, "ok": { "type": "boolean" }, "ttlSecs": { "type": "integer" }, "visible": { "type": "boolean" } }, "type": "object" },
+    },
     'push.send': {
         cap: 'push:send',
         effect: 'write',

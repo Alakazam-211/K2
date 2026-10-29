@@ -45743,6 +45743,24 @@ HISTORY (needs the history right)
   k2 doc undo --partial               undo what still can be, report the rest (exit 1)
   k2 doc blame notes.md               restored text shows "(restored by <who> in <change>)"
 
+EXPORT (a copy of a doc, now or at a version, as a new file)
+  k2 doc export --list notes.md               the targets this file can be exported to
+  k2 doc export --to as-is notes.md           the doc now, as notes.v42.md beside it
+                                              (42 = its doc version; "notes.v42 (2).md"
+                                              if that name is taken). Prints the path.
+  k2 doc export --to as-is --version 3 notes.md   version id 3 (k2 doc versions; needs
+                                              history); stderr says "version 3, doc
+                                              version 17" and the file is notes.v17.md
+  --out FILE writes exactly FILE: never over an existing file (exit 2). In a
+  workspace you need edit there (exit 3, export_place_forbidden: use --out
+  in your own workspace or a local path); outside every workspace the CLI
+  writes it. --option NAME=VALUE passes a target's option (--list shows them).
+  An export never changes the doc. The daemon runs it: as-is in the daemon,
+  other targets in a separate worker with memory, time and size limits
+  (export_limit, exit 2). Ctrl-C cancels (exit 1). A past version of a live
+  doc is written with today's line endings and BOM (a note says so).
+  Files over 32 MiB aren't docs, so they can't be exported.
+
 UNDO, REDO AND REVERT
   Undo only reverses your own changes and never alters a word someone else
   wrote: if someone has since changed one of your words, that word is theirs,
@@ -83824,6 +83842,21 @@ History (needs the history right):
   k2 doc restore --version V <f>      forward: a new change you can undo
   k2 doc version --name "before launch" [--version V] <f>
   k2 doc approvals [--pending] [--mine|--for P|me] <f> · approve|decline <change> <f>
+Export (a copy of the doc, now or at a version, as a new file; any doc):
+  k2 doc export --list <f>            the targets this file can be exported to
+  k2 doc export --to as-is <f>        the file now, written beside it as
+                                      <name>.v<N>.<ext> (N = the doc version;
+                                      " (2)" if that name is taken; never
+                                      overwrites). Prints the new file's path.
+  k2 doc export --to T --version V <f>   version V (an id from k2 doc versions;
+                                      needs the history right). The name carries
+                                      that version's doc version; both are printed
+  --option NAME=VALUE (repeat it) · --out FILE: exactly FILE (exit 2 if it
+  exists). In a workspace you need edit there (else exit 3,
+  export_place_forbidden); outside every workspace this CLI writes it.
+  Exit 2: a target or option the file doesn't have, or an export limit.
+  Files over 32 MiB aren't docs, so they can't be exported (exit 4). On a
+  terminal a long export shows progress; Ctrl-C cancels it (exit 1).
 Any-file docs (tier 0: files that aren't text, and refused text): presence, a
 lease, versions and restore, no live merging. The text verbs above (grep, sed,
 undo, claim …) refuse with not_a_text_doc and say why the file isn't live text.
@@ -84558,6 +84591,193 @@ _doc_history_diff() {
     exit $?
 }
 
+# `k2 doc export` (prd-k2-core-exports-v1 §4.3, vs-live E3): a doc's
+# version as a file, through the kit's export verb (P24). The daemon runs
+# the job; this polls it (progress on a TTY), cancels it on Ctrl-C, and for
+# an --out outside every workspace (or any --host call) writes the bytes
+# itself from `export/fetch`, never over an existing file.
+_doc_export() {
+    local to="" ver="" out="" list=0
+    local -a opts=() rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --list) list=1; shift ;;
+            --to) [ $# -ge 2 ] || _doc_die usage "--to needs a target (k2 doc export --list <file> shows them)"; to="$2"; shift 2 ;;
+            --to=*) to="${1#*=}"; shift ;;
+            --version) [ $# -ge 2 ] || _doc_die usage "--version needs a version id (k2 doc versions <file>)"; ver="$2"; shift 2 ;;
+            --version=*) ver="${1#*=}"; shift ;;
+            --option|-O) [ $# -ge 2 ] || _doc_die usage "--option needs NAME=VALUE"; opts+=("$2"); shift 2 ;;
+            --option=*) opts+=("${1#*=}"); shift ;;
+            --out|-o) [ $# -ge 2 ] || _doc_die usage "--out needs a file"; out="$2"; shift 2 ;;
+            --out=*) out="${1#*=}"; shift ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    case "$ver" in *[!0-9]*) _doc_die usage "--version takes a version id (the first column of k2 doc versions <file>)" ;; esac
+    _doc_parse "${rest[@]}"
+    _doc_one_path export; local path="$_DOC_PATH"
+    if [ "$list" = 1 ]; then
+        [ -z "$to$ver$out" ] && [ ${#opts[@]} -eq 0 ] || _doc_die usage "k2 doc export --list <file> takes no other export flags"
+        _doc_call GET /cli/docs/export/targets "$(_doc_query "$path")"
+        _doc_print_json_or '
+import json, sys
+v = json.load(sys.stdin)
+rows = v.get("targets") or []
+print("%-14s %-9s %-7s %-7s %s" % ("TARGET", "FIDELITY", "EXT", "RUNS", "OPTIONS"))
+for t in rows:
+    opts = []
+    for o in t.get("options") or []:
+        k = o.get("kind") or {}
+        kind = k.get("type", "")
+        if kind == "int":
+            kind = "%s..%s" % (k.get("min"), k.get("max"))
+        elif kind == "choice":
+            kind = "|".join(k.get("values") or [])
+        d = (" (default %s)" % o["default"]) if o.get("default") is not None else ""
+        opts.append("%s=%s%s" % (o.get("name"), kind, d))
+    print("%-14s %-9s %-7s %-7s %s" % (t.get("id"), t.get("fidelity"), t.get("extension") or "-", t.get("runs"), ", ".join(opts) or "-"))
+w = v.get("worker") or {}
+if not w.get("available"):
+    print("note: the export worker is not available here (%s); only targets run by the daemon are listed" % w.get("reason"), file=sys.stderr)
+'
+        return 0
+    fi
+    [ -n "$to" ] || _doc_die usage "k2 doc export --to <target> [--version V] [--option NAME=VALUE]... [--out FILE] <file>  (k2 doc export --list <file> shows the targets)"
+    # --out: from where you stand (absolute), unless -w names the workspace
+    # it is relative to. On --host it is a path on THIS machine: the CLI
+    # writes it (fetch).
+    local remote=0 local_out="" send_out=""
+    [ "${_K2_FORCE_TCP:-0}" = "1" ] && remote=1
+    if [ -n "$out" ]; then
+        if [ "$remote" = 1 ]; then
+            local_out="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$out")"
+        elif [ -n "$_DOC_WS" ] && [ "${out#/}" = "$out" ]; then
+            send_out="$out"
+        else
+            local_out="$(python3 -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$out")"
+            send_out="$local_out"
+        fi
+        if [ -n "$local_out" ] && { [ -e "$local_out" ] || [ -L "$local_out" ]; }; then
+            _doc_die exists "$out already exists; an export never overwrites a file (name another one)" 2
+        fi
+    fi
+    _doc_tmp
+    python3 - "$_DOC_WS" "$_DOC_OB" "$path" "$to" "$ver" "$send_out" "$([ "$remote" = 1 ] && [ -n "$out" ] && echo 1 || echo 0)" "${opts[@]}" >"$_DOC_TMPD/export.json" <<'PY' || _doc_die usage "couldn't build the request"
+import json, sys
+ws, ob, path, to, ver, out, fetch, opts = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7] == "1", sys.argv[8:]
+d = {"path": path, "target": to, "options": opts}
+if ws:
+    d["workspace"] = ws
+if ob:
+    d["onBehalfOf"] = ob
+if ver:
+    d["version"] = int(ver)
+if out:
+    d["out"] = out
+if fetch:
+    d["fetch"] = True
+print(json.dumps(d))
+PY
+    _doc_call_file POST /cli/docs/export "" "$_DOC_TMPD/export.json"
+    _DOC_BODY="$(cat "$_DOC_OUT")"
+    local job state
+    job="$(printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("job",""))')"
+    state="$(printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))')"
+    # Still running after the daemon's wait: poll; Ctrl-C cancels the job.
+    if [ "$state" != "done" ]; then
+        local _doc_export_cancel=0 tty=0
+        [ -t 2 ] && tty=1
+        trap '_doc_export_cancel=1' INT
+        while [ "$state" != "done" ]; do
+            if [ "$_doc_export_cancel" = 1 ]; then
+                _doc_call POST /cli/docs/export/cancel "$(_doc_body "" job "$job")" >/dev/null
+                _doc_export_cancel=2
+            fi
+            sleep 0.5
+            _doc_call GET /cli/docs/export/status "$(_doc_query "" job "$job")"
+            state="$(printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("state",""))')"
+            if [ "$tty" = 1 ] && [ "$state" != "done" ]; then
+                printf '%s' "$_DOC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d, t = v.get("done") or 0, v.get("total") or 0
+sys.stderr.write("\rexporting… %d%%  " % (100 * d // t) if t else "\rexporting…  ")
+sys.stderr.flush()
+'
+            fi
+        done
+        trap - INT
+        [ "$tty" = 1 ] && printf '\r\033[K' >&2
+    fi
+    # Outside every workspace (or --host): the CLI writes the bytes itself,
+    # to a temp name beside the file, linked into place only when complete.
+    local fetch
+    fetch="$(printf '%s' "$_DOC_BODY" | python3 -c 'import json,sys; print(1 if json.load(sys.stdin).get("fetch") else 0)')"
+    if [ "$fetch" = 1 ]; then
+        [ -n "$local_out" ] || _doc_die fetch_without_out "the daemon kept the export for you to fetch, but no --out names where (pass --out FILE)" 2
+        local part offset=0 eof=0
+        part="$(dirname "$local_out")/.$(basename "$local_out").k2x-$job.part"
+        python3 -c 'import sys; open(sys.argv[1], "xb").close()' "$part" 2>/dev/null \
+            || _doc_die io "can't write $part (no such folder, or no permission)" 1
+        local done_body="$_DOC_BODY"
+        while [ "$eof" != 1 ]; do
+            _doc_xfer GET /cli/docs/export/fetch "$(_doc_query "" job "$job" offset "$offset")" "" "$_DOC_TMPD/chunk.json"
+            if [ "$_DOC_STATUS" != "200" ]; then
+                rm -f "$part"
+                _doc_fail "$_DOC_STATUS" "$(cat "$_DOC_TMPD/chunk.json")"
+            fi
+            read -r offset eof < <(python3 -c '
+import base64, json, sys
+v = json.load(open(sys.argv[1], encoding="utf-8"))
+data = base64.b64decode(v["bytesB64"])
+with open(sys.argv[2], "ab") as f:
+    f.write(data)
+print(v["offset"] + len(data), 1 if v.get("eof") else 0)
+' "$_DOC_TMPD/chunk.json" "$part") || { rm -f "$part"; _doc_die io "writing $local_out failed" 1; }
+        done
+        if ! python3 -c '
+import os, sys
+part, out = sys.argv[1], sys.argv[2]
+with open(part, "rb") as f:
+    os.fsync(f.fileno())
+os.link(part, out)
+os.unlink(part)
+' "$part" "$local_out" 2>/dev/null; then
+            rm -f "$part"
+            _doc_die exists "$out appeared while exporting; an export never overwrites a file (name another one)" 2
+        fi
+        _DOC_BODY="$done_body"
+    fi
+    if [ "${_DOC_JSON:-0}" = "1" ]; then
+        printf '%s' "$_DOC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if sys.argv[1]:
+    v["wrote"] = sys.argv[1]
+print(json.dumps(v))
+' "$local_out"
+        return 0
+    fi
+    printf '%s' "$_DOC_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+local = sys.argv[1]
+placed = v.get("placed")
+where = local if v.get("fetch") else (placed or {}).get("path")
+full = local if v.get("fetch") else ((placed or {}).get("abs") if sys.argv[2] == "0" else None) or where
+ver = ("version %s" % v["version"]) if v.get("version") is not None else "now"
+print("exported %s as %s to %s (%s, doc version %s, %s bytes)" % (v["doc"]["path"], v.get("target"), where, ver, v.get("docVersion"), v.get("size")), file=sys.stderr)
+if v.get("codec") not in (None, "exact"):
+    print("note: rendered with today'"'"'s line endings and BOM, which an outside save may have changed since that version", file=sys.stderr)
+r = v.get("report") or {}
+for l in r.get("losses") or []:
+    print("note: lost %s: %s" % (l.get("kind"), l.get("detail")), file=sys.stderr)
+for n in r.get("notes") or []:
+    print("note: %s" % n, file=sys.stderr)
+print(full)
+' "$local_out" "$remote"
+}
+
 cmd_doc() {
     local verb="${1:-}"
     if [ -z "$verb" ] || _wants_help "$@"; then
@@ -85068,6 +85288,8 @@ for s in rows:
             fi
             _doc_call POST /cli/docs/mv "$(_doc_body "$path" to "$to")"
             _doc_print_json_or 'import json,sys; v=json.load(sys.stdin); print("moved %s -> %s" % (v.get("from"), v["doc"]["path"]))' ;;
+        export)
+            _doc_export "$@" ;;
         help) _doc_usage ;;
         *)
             # A verb of the doc's own pack (Markdown: replace-section), or a

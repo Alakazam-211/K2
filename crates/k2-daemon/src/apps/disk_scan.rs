@@ -597,8 +597,11 @@ fn disk_of(p: &Path, memo: &mut HashMap<PathBuf, Option<String>>) -> Option<Stri
 }
 
 /// What a runtime App row is called in the view.
-pub fn path_word(a: &store::AppRow) -> &'static str {
-    if a.path == "open" {
+pub fn path_word(a: &store::AppRow, is_static: bool) -> &'static str {
+    // 0.46.7 (TC-4): a static App runs no App code and has no memory.
+    if is_static {
+        "static"
+    } else if a.path == "open" {
         "open"
     } else if a.isolation == "container" {
         "walled"
@@ -624,6 +627,8 @@ struct Rows {
     will_clear: Option<(u64, u64)>,
     /// `SUM(size_bytes)` over every stored Seed (the daemon's copies).
     seeds_total: u64,
+    /// Apps whose live Seed is static (0.46.7).
+    statics: std::collections::BTreeSet<String>,
 }
 
 fn read_rows(now: i64, sweeping: bool) -> Rows {
@@ -682,7 +687,12 @@ fn read_rows(now: i64, sweeping: bool) -> Rows {
         None
     };
     let seeds_total = conn.query_row("SELECT COALESCE(SUM(size_bytes), 0) FROM seeds", [], |r| r.get::<_, i64>(0)).unwrap_or(0).max(0) as u64;
-    Rows { apps, app_seeds, budgets, services, projects, databases, owners, will_clear, seeds_total }
+    let statics = apps
+        .iter()
+        .filter(|a| a.live_seed.as_deref().is_some_and(|s| super::static_engine::seed_is_static(&conn, s)))
+        .map(|a| a.app_id.clone())
+        .collect();
+    Rows { apps, app_seeds, budgets, services, projects, databases, owners, will_clear, seeds_total, statics }
 }
 
 /// Live numbers gathered outside the DB lock.
@@ -766,7 +776,7 @@ fn compose(c: &Cache, rows: &Rows, live: &Live, now: i64, sweeping: bool) -> Sna
         out.push(Consumer {
             kind: "app".into(),
             id: a.app_id.clone(),
-            path: Some(path_word(a).into()),
+            path: Some(path_word(a, rows.statics.contains(&a.app_id)).into()),
             state: Some(a.state.clone()),
             owner,
             disk,

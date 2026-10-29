@@ -121,13 +121,7 @@ fn app_rows(snap: Option<&Snapshot>) -> R<Vec<Consumer>> {
             kind: "app".into(),
             id: a.app_id.clone(),
             path: Some(
-                if a.path == "open" {
-                    "open".into()
-                } else if a.isolation == "container" {
-                    "walled".into()
-                } else {
-                    "process".into()
-                },
+                super::disk_scan::path_word(a, a.live_seed.as_deref().is_some_and(|s| super::static_engine::seed_is_static(&conn, s))).into(),
             ),
             state: Some(a.state.clone()),
             owner: owner_of(&conn, &a.owner_workspace),

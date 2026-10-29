@@ -757,3 +757,134 @@ fn a_paused_rehost_stops_first_and_comes_back_if_the_new_instance_fails() {
     let seen = AtomicU64::new(super::super::engine_gate::generation());
     tick_until(&only, &seen, 15, "the live Seed is back", || live(id));
 }
+
+// ── 0.46.7: static Apps (prd-tauri-core-0467-v1 TC-2, TC-4; TA-4, TA-5) ──
+
+/// Store a static Seed (`host.mode: "static"`, `root: dist`) whose page
+/// says `body`; its hash.
+fn static_seed(home: &std::path::Path, tag: &str, body: &str) -> String {
+    let f = home.join("src").join(tag);
+    std::fs::create_dir_all(f.join("dist")).unwrap();
+    std::fs::write(f.join("dist/index.html"), body).unwrap();
+    let manifest = serde_json::json!({
+        "schema": 1, "kind": "app", "id": "st", "name": "st", "version": "1.0.0",
+        "host": { "mode": "static", "root": "dist" }
+    });
+    std::fs::write(f.join("manifest.json"), manifest.to_string()).unwrap();
+    let st = k2_core::deploy::seed::store_folder(&f, &std::collections::BTreeSet::new()).unwrap();
+    let h = k2_core::db::shared();
+    let c = h.lock();
+    store::upsert_seed(
+        &c,
+        &store::SeedRow {
+            hash: st.hash.clone(),
+            seed_id: "st".into(),
+            version: Some("1.0.0".into()),
+            host_mode: "static".into(),
+            manifest,
+            created_with: serde_json::json!({}),
+            report: serde_json::json!({}),
+            signer: "owner".into(),
+            origin: "build".into(),
+            built_for: None,
+            built_from: None,
+            source_ref: None,
+            data_revision: 0,
+            size_bytes: st.size_bytes as i64,
+            created_at: 1,
+            last_used_at: 1,
+        },
+    )
+    .unwrap();
+    st.hash
+}
+
+/// `GET /` on a loopback port: (status line, body).
+fn http_get(port: u16) -> (String, String) {
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.write_all(b"GET / HTTP/1.1\r\nHost: st.box.k2.dev\r\nConnection: close\r\n\r\n").unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    let (head, body) = out.split_once("\r\n\r\n").unwrap_or((&out, ""));
+    (head.lines().next().unwrap_or("").to_string(), body.to_string())
+}
+
+/// TC-2 + TA-5: a static Seed deploys on the static engine whatever the
+/// App's isolation says (no engine install, no `engine_unavailable`, never
+/// recorded as a weaker wall), goes live, keeps the previous Seed warm for
+/// an instant rollback, and stops.
+#[test]
+fn a_static_seed_deploys_on_the_static_engine_and_keeps_the_previous_warm() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s7t-static-deploy";
+    let one = static_seed(f._home.path(), "one", "<p>one</p>");
+    let two = static_seed(f._home.path(), "two", "<p>two</p>");
+    app(id, &one, store::STATE_INSTALLING, eng);
+    let first = go_live_first(id, &one);
+    assert_eq!(eng.starts.load(Ordering::SeqCst), 0, "the App's own engine never runs a static Seed");
+    let port = router::live(id).expect("routed").port;
+    assert_eq!(http_get(port), ("HTTP/1.1 200 OK".to_string(), "<p>one</p>".to_string()));
+    assert_eq!(runtime_json(id)["engine"], "static");
+    assert!(is_static_app(&app_row(id)));
+    assert_eq!(isolation_shown(&app_row(id)), super::super::static_engine::ISOLATION_NOTE);
+    assert!(!runs_unwalled(&app_row(id)), "a static App never counts as unwalled");
+    assert_eq!(live_fingerprint(&app_row(id)).expect("fingerprint").wall, "static");
+    // A second Seed: the first stays warm (and answering) through the
+    // watch window.
+    let second = go_live_first(id, &two);
+    let warm = with_rt(id, |rt| rt.warm.as_ref().map(|w| (w.handle.deployment_id.clone(), w.handle.port))).expect("warm");
+    assert_eq!(warm.0, first);
+    assert_eq!(http_get(warm.1).1, "<p>one</p>", "the warm Seed still answers: rollback is instant");
+    assert_eq!(http_get(router::live(id).unwrap().port).1, "<p>two</p>");
+    assert_ne!(first, second);
+    stop_app(&app_row(id), "owner").unwrap();
+    assert!(router::live(id).is_none());
+    assert_eq!(super::super::static_engine::engine().liveness(&RunHandle { app_id: id.into(), deployment_id: first, port: warm.1, pid: None, engine_ref: "static:".into() }), Liveness::Exited(None), "the warm instance stopped too");
+    forget(id);
+}
+
+/// TC-4 + TA-4: after a daemon restart a live static App is served again
+/// in line, before any engine wait, on its live deployment (no new
+/// deployment, no restart scheduled); its front then answers 200, never
+/// 503. A stopped static App stays down.
+#[test]
+fn static_apps_are_served_at_boot_before_the_engine_and_never_503() {
+    let f = fx();
+    let eng = TestEngine::leak(OK);
+    let id = "s7t-static-boot";
+    let down = "s7t-static-down";
+    let seed = static_seed(f._home.path(), "boot", "<p>back</p>");
+    app(id, &seed, store::STATE_RUNNING, eng);
+    app(down, &seed, store::STATE_STOPPED, eng);
+    // Its live deployment from before the restart.
+    let live_dep = db(|c| {
+        let d = store::insert_deployment(
+            c,
+            &store::NewDeployment { app_id: id, kind: store::KIND_DEPLOY, from_seed: None, to_seed: Some(&seed), commit_ref: None, actor: "owner", reason: None },
+        )?;
+        store::set_result(c, &d, store::RESULT_LIVE, None)?;
+        store::set_live(c, id, Some(&seed), Some(&d))?;
+        Ok(d)
+    })
+    .unwrap();
+    let only = ids(&[id, down]);
+    let served = serve_static_at_boot(now(), Some(&only));
+    assert_eq!(served, vec![id.to_string()], "only the App the owner wants running");
+    assert!(router::live(down).is_none());
+    let be = router::live(id).expect("routed before any front opens");
+    assert_eq!(http_get(be.port), ("HTTP/1.1 200 OK".to_string(), "<p>back</p>".to_string()));
+    assert_eq!(with_rt(id, |rt| rt.live.as_ref().map(|i| i.handle.deployment_id.clone())), Some(live_dep.clone()));
+    assert_eq!(deployments(id).len(), 1, "served again on its live deployment, no new one");
+    assert!(audit_events(id).iter().any(|e| e == "static_served"));
+    assert_eq!(live_fingerprint(&app_row(id)).expect("fingerprint").k2_version, env!("CARGO_PKG_VERSION"), "the re-host wave sees it current");
+    // The rest of boot (an engine that answers at once) leaves it be.
+    boot_with(&answering(vec![]), false, vec![], now(), Some(&only));
+    assert!(with_rt(id, |rt| rt.next_restart_at.is_none()), "no restart for a served static App");
+    let front = ensure_front(&app_row(id)).expect("front");
+    assert_eq!(http_get(front).0, "HTTP/1.1 200 OK", "through the front: 200, never 503");
+    stop_app(&app_row(id), "owner").unwrap();
+    forget(id);
+    forget(down);
+}

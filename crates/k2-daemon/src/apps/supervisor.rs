@@ -239,11 +239,29 @@ pub fn engine_for_app(app: &AppRow) -> Option<&'static dyn RuntimeEngine> {
 }
 
 /// Would this App run on the unwalled stage-1 process engine (guarded path,
-/// isolation `process`, not the owner's process exception)?
+/// isolation `process`, not the owner's process exception)? A static App
+/// never does: it runs no App code (0.46.7, TA-5).
 pub fn runs_unwalled(app: &AppRow) -> bool {
     !app.is_process_exception()
         && app.path != "open"
         && Isolation::parse(&app.isolation).unwrap_or(Isolation::Process) == Isolation::Process
+        && !is_static_app(app)
+}
+
+/// Is the App's live Seed a static one (`host.mode: "static"`, 0.46.7)?
+pub fn is_static_app(app: &AppRow) -> bool {
+    app.live_seed.as_deref().is_some_and(|s| db(|c| Ok(super::static_engine::seed_is_static(c, s))).unwrap_or(false))
+}
+
+/// The wall `k2 app inspect` / `status` show for an App: a static App's is
+/// `none (static: no App code)`, never a weaker wall (TA-5); others show
+/// their stored isolation.
+pub fn isolation_shown(app: &AppRow) -> String {
+    if is_static_app(app) {
+        super::static_engine::ISOLATION_NOTE.to_string()
+    } else {
+        app.isolation.clone()
+    }
 }
 
 /// The state line an unwalled App gets when the process engine is off.
@@ -290,11 +308,19 @@ pub fn spawn_stop_unwalled_if_off(actor: &'static str) {
 }
 
 fn is_process_engine(h: &RunHandle) -> bool {
-    !super::open::owns(h) && !super::guarded::owns(h) && !super::process_exception::owns(h) && test_engine(&h.app_id).is_none()
+    !super::static_engine::owns(h)
+        && !super::open::owns(h)
+        && !super::guarded::owns(h)
+        && !super::process_exception::owns(h)
+        && test_engine(&h.app_id).is_none()
 }
 
-/// The engine that runs an instance (by its handle).
+/// The engine that runs an instance (by its handle). A static instance is
+/// the static engine's whatever else the App is set to (TA-5).
 pub fn engine_of(h: &RunHandle) -> &'static dyn RuntimeEngine {
+    if super::static_engine::owns(h) {
+        return super::static_engine::engine();
+    }
     if let Some(e) = test_engine(&h.app_id) {
         return e;
     }
@@ -379,16 +405,24 @@ pub fn ensure_started() {
     }
     deploy::seed::clean_tmp();
     mark_interrupted();
+    let booted_at = now();
+    // TA-4 (0.46.7): static Apps need no engine, so they are served again
+    // first, before any front takes connections and before the engine is
+    // waited on: their routes are set when their doors open, and they
+    // never answer 503 after a restart or a hand-off.
+    let statics = serve_static_at_boot(booted_at, None);
     // R40: fronts first on a plain boot (the door exists while the engine
     // is waited on). After a hand-off the predecessor's sockets (R19)
     // already queue every connection, so they open once the routes are set
     // (`plan_boot`): a queued request waits a moment instead of meeting 503.
+    // A static App's route is already set, so its front opens now.
     if !crate::handoff::booted_from_handoff() {
         open_fronts();
+    } else {
+        open_fronts_of(&statics);
     }
     let unwalled_ok = deploy::process_engine_enabled();
     let local = engine().adopt().unwrap_or_default();
-    let booted_at = now();
     if !super::guarded::engine_installed() {
         boot_with(&LiveBoot { start: Instant::now() }, unwalled_ok, local, booted_at, None);
         // S2: the re-host wave (it waits for the heal and the predecessor).
@@ -423,6 +457,63 @@ fn open_fronts() {
             let _ = ensure_front(&app);
         }
     }
+}
+
+/// The front listeners of these Apps only (a hand-off's static Apps).
+fn open_fronts_of(ids: &[String]) {
+    if ids.is_empty() {
+        return;
+    }
+    for app in db(|c| store::list_apps(c, None)).unwrap_or_default() {
+        if ids.contains(&app.app_id) {
+            let _ = ensure_front(&app);
+        }
+    }
+}
+
+/// TA-4 (0.46.7): serve every live static App the owner wants running
+/// (R35's rule, [`wants_running`]) again now, in line: no engine is
+/// involved, so this never waits. Each keeps its live deployment (the same
+/// Seed, served again, like an adopted survivor) and gets this daemon's
+/// fingerprint, so the re-host wave doesn't move it again. One that can't
+/// be served is left to [`plan_boot`], which restarts it through the
+/// pipeline (its failure recorded there). Returns the Apps served.
+pub(crate) fn serve_static_at_boot(booted_at: i64, only: Option<&[String]>) -> Vec<String> {
+    let apps: Vec<AppRow> = db(|c| store::list_apps(c, None)).unwrap_or_default().into_iter().filter(|a| in_scope(&a.app_id, only)).collect();
+    let mut served = Vec::new();
+    for app in apps {
+        let (Some(seed), Some(dep)) = (app.live_seed.clone(), app.live_deployment.clone()) else { continue };
+        if !wants_running(&app, booted_at) || with_rt(&app.app_id, |rt| rt.live.is_some() || rt.busy) {
+            continue;
+        }
+        match seed_manifest(&seed) {
+            Ok(m) if m.is_static() => {}
+            _ => continue,
+        }
+        let started = free_port(false).map_err(|f| f.message).and_then(|port| {
+            let seed_ref = SeedRef { hash: seed.clone(), path: deploy::seed::seed_path(&seed) };
+            let s = super::static_engine::served_for(&seed_ref, &app.service_id).map_err(|e| e.to_string())?;
+            super::static_engine::serve(&app.app_id, &dep, port, s).map_err(|e| e.to_string())
+        });
+        let h = match started {
+            Ok(h) => h,
+            Err(e) => {
+                notes::error(&format!("{}: serving the static App at boot: {e} (a restart through the deploy pipeline follows)", app.app_id));
+                continue;
+            }
+        };
+        let inst = instance_for(h.clone(), &seed);
+        router::switch_with(&app.app_id, h.port, inst.client_ip);
+        with_rt(&app.app_id, |rt| rt.live = Some(inst));
+        let fp = fingerprint(&h);
+        let _ = db(|c| store::set_runtime_json(c, &dep, &serde_json::to_string(&fp).unwrap_or_default()));
+        if app.state != store::STATE_RUNNING {
+            let _ = db(|c| store::set_state(c, &app.app_id, store::STATE_RUNNING, None));
+        }
+        audit(&app.app_id, "static_served", "system", json!({ "deployment": dep, "port": h.port }));
+        served.push(app.app_id.clone());
+    }
+    served
 }
 
 /// Deploys a restart interrupted: stalled, and the agent hears (L3).
@@ -723,7 +814,8 @@ pub fn runtime_json(app_id: &str) -> serde_json::Value {
         "busy": rt.busy,
         "restartAt": rt.next_restart_at,
         "recentRestarts": rt.backoff.recent_restarts(),
-        "engine": rt.live.as_ref().map(|i| engine_of(&i.handle).isolation().as_str()),
+        // A static instance is K2's file server, not a wall (TA-5).
+        "engine": rt.live.as_ref().map(|i| if super::static_engine::owns(&i.handle) { "static" } else { engine_of(&i.handle).isolation().as_str() }),
         "engineCaps": rt.live.as_ref().map(|i| engine_of(&i.handle).caps()),
     })
 }
@@ -978,41 +1070,48 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Ok(m) => m,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
-    if !matches!(m.host.mode.as_str(), "cmd" | "next") {
-        return pipeline_fail(
-            app_id,
-            dep,
-            codes::STATIC_NOT_ON_RUNTIME,
-            "the runtime deploys `cmd` Apps in this release: serve the folder with a small server (host.mode \"cmd\")",
-        );
+    // 0.46.7 (TC-1/TC-2, TA-1): `static` deploys on the runtime.
+    let static_mode = m.is_static();
+    if !static_mode && !matches!(m.host.mode.as_str(), "cmd" | "next") {
+        return pipeline_fail(app_id, dep, codes::MANIFEST_INVALID, &format!("host.mode \"{}\": use static, cmd or next", m.host.mode));
     }
     let probe_as = if m.wants_test_guest_probe() { ProbeAs::TestGuest } else { ProbeAs::Anonymous };
     let headers = match health::probe_headers(app_id, probe_as) {
         Ok(h) => h,
         Err((code, msg)) => return pipeline_fail(app_id, dep, code, &msg),
     };
-    let wanted = Isolation::parse(&app.isolation).unwrap_or(Isolation::Process);
-    let Some(eng) = engine_for_app(&app) else {
-        if runs_unwalled(&app) {
-            return pipeline_fail(app_id, dep, codes::ENGINE_UNAVAILABLE, &format!("{app_id}: {}", deploy::PROCESS_ENGINE_OFF_HINT));
+    // TA-5: a static Seed takes the static engine by its mode, **before**
+    // the isolation check: no App code runs, so there is no wall to
+    // weaken (never `engine_unavailable`, never a fallback). Every other
+    // Seed gets the engine of the App's isolation, or none (AR24).
+    let eng: &'static dyn RuntimeEngine = if static_mode {
+        super::static_engine::engine()
+    } else {
+        let wanted = Isolation::parse(&app.isolation).unwrap_or(Isolation::Process);
+        let Some(eng) = engine_for_app(&app) else {
+            if runs_unwalled(&app) {
+                return pipeline_fail(app_id, dep, codes::ENGINE_UNAVAILABLE, &format!("{app_id}: {}", deploy::PROCESS_ENGINE_OFF_HINT));
+            }
+            return pipeline_fail(
+                app_id,
+                dep,
+                codes::ENGINE_UNAVAILABLE,
+                &format!(
+                    "no engine on this box gives path={} isolation={} (the guarded engine and the process exception run on Linux boxes)",
+                    app.path,
+                    wanted.as_str()
+                ),
+            );
+        };
+        if let Err(e) = k2_core::deploy::engine::require_isolation(eng, wanted) {
+            return pipeline_fail(app_id, dep, e.code, &e.message);
         }
-        return pipeline_fail(
-            app_id,
-            dep,
-            codes::ENGINE_UNAVAILABLE,
-            &format!(
-                "no engine on this box gives path={} isolation={} (the guarded engine and the process exception run on Linux boxes)",
-                app.path,
-                wanted.as_str()
-            ),
-        );
+        eng
     };
-    if let Err(e) = k2_core::deploy::engine::require_isolation(eng, wanted) {
-        return pipeline_fail(app_id, dep, e.code, &e.message);
-    }
     // K-M3: the App's seal key exists and is granted before the engine
-    // reads the vault grants (every start: deploy, restart, rollback).
-    if test_engine(&app.app_id).is_none() {
+    // reads the vault grants (every start: deploy, restart, rollback). A
+    // static App reads no vault grants.
+    if !static_mode && test_engine(&app.app_id).is_none() {
         super::seal::ensure_for_start(&app.app_id, &app.service_id);
     }
     let spec = spec_for(&app, &m, dep);
@@ -1021,7 +1120,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
         Ok(p) => p,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
-    let port = match free_port(test_engine(app_id).is_some()) {
+    let port = match free_port(!static_mode && test_engine(app_id).is_some()) {
         Ok(p) => p,
         Err(e) => return pipeline_fail(app_id, dep, e.code, &e.message),
     };
@@ -1033,8 +1132,9 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
     // S2 (Rosson Q4 + Q16): a re-host of an App that can't run two copies
     // (no room for both, `handover`) with "pause briefly and update" does
     // the same: a short pause, then the new instance.
-    let pause = with_rt(app_id, |rt| std::mem::take(&mut rt.stop_first));
-    if !spec.wall.extra_ports.is_empty() || pause {
+    // A static instance holds no extra ports and two copies always fit.
+    let pause = with_rt(app_id, |rt| std::mem::take(&mut rt.stop_first)) && !static_mode;
+    if (!spec.wall.extra_ports.is_empty() && !static_mode) || pause {
         let (live, warm) = with_rt(app_id, |rt| {
             rt.watch = None;
             let had = rt.live.is_some();
@@ -1473,7 +1573,9 @@ fn auto_rollback(app_id: &str, w: &Watch, bad: Instance, prev: Instance, why: &s
 fn fingerprint(h: &RunHandle) -> k2_core::deploy::rehost::Fingerprint {
     let checked = super::guarded::take_checked(&h.deployment_id);
     let arch = std::env::consts::ARCH;
-    let (wall, image) = if super::open::owns(h) {
+    let (wall, image) = if super::static_engine::owns(h) {
+        ("static", None)
+    } else if super::open::owns(h) {
         ("relaxed", super::guarded::full_image_for(arch).map(|b| b.digest.to_string()))
     } else if super::guarded::owns(h) {
         ("guarded", super::guarded::base_image_for(arch).map(|b| b.digest.to_string()))

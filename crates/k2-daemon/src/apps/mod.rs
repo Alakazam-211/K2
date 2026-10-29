@@ -121,6 +121,8 @@ pub mod seal;
 pub mod sdk;
 #[cfg(test)]
 mod sdk_tests;
+/// Static Apps (0.46.7, prd-tauri-core-0467-v1 TC-2): K2 serves the files.
+pub mod static_engine;
 pub mod supervisor;
 pub mod surfaces;
 pub mod suspend;

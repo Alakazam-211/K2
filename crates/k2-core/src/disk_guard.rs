@@ -981,7 +981,7 @@ pub struct Consumer {
     /// `app` | `service` | `database` | `workspace` | `shared`.
     pub kind: String,
     pub id: String,
-    /// Apps: the runtime path (`open` | `walled` | `process`).
+    /// Apps: the runtime path (`open` | `walled` | `process` | `static`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// Services: on the wall or not.

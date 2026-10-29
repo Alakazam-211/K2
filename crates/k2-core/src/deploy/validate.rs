@@ -204,11 +204,11 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
                 ));
             }
         }
-        "static" => warnings.push(issue(
-            super::codes::STATIC_NOT_ON_RUNTIME,
-            "the runtime deploys `cmd` Apps in this release: serve the folder with a small server (host.mode \"cmd\")",
-            at("host.mode"),
-        )),
+        // 0.46.7 (TC-1, TA-1): the runtime serves static Apps, so validate
+        // stops warning `static_not_on_runtime` in the same change that
+        // lets the pipeline deploy them. Its keys are checked against the
+        // Seed folder (`static_site::check_tree`).
+        "static" => {}
         other => errors.push(issue("manifest_invalid", format!("host.mode \"{other}\": use static, cmd or next"), at("host.mode"))),
     }
     if let Some(h) = &m.host.health {
@@ -810,6 +810,7 @@ mod tests {
         let (r, m) = validate_tree(&static_app(h.path(), STATIC), &Options::default());
         assert!(r.ok, "{r:?}");
         assert!(m.unwrap().is_static());
+        assert!(!r.warnings.iter().any(|w| w.code == "static_not_on_runtime"), "the runtime serves static Apps (TA-1): {r:?}");
         let need: Vec<&str> = r.warnings.iter().filter(|w| w.code == "needs_k2_0467").map(|w| w.message.as_str()).collect();
         assert_eq!(need.len(), 4, "mode, root, notFound, checks: {need:?}");
         assert!(need[0].starts_with("host.mode: static needs K2 0.46.7"), "{need:?}");

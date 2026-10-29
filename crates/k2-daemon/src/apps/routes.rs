@@ -1865,7 +1865,12 @@ fn url_for(app: &AppRow) -> Option<String> {
 
 fn app_summary(app: &AppRow) -> J {
     let lab = super::open::label_of(app);
+    // 0.46.7 (TC-2, TA-5): a static App runs no App code; its wall reads
+    // `none (static: no App code)`, never a weaker wall.
+    let is_static = super::supervisor::is_static_app(app);
     json!({
+        "mode": if is_static { "static" } else { "server" },
+        "isolationShown": if is_static { super::static_engine::ISOLATION_NOTE.to_string() } else { app.isolation.clone() },
         "appId": app.app_id,
         "serviceId": app.service_id,
         "workspace": app.owner_workspace,
@@ -1880,7 +1885,7 @@ fn app_summary(app: &AppRow) -> J {
         "path": app.path,
         "source": app.source,
         "folder": app.folder_path,
-        "label": lab.text,
+        "label": if is_static { "static: K2 serves the files (no App code runs)".to_string() } else { lab.text },
         "labelReason": lab.reason,
         "labelBack": lab.back,
         "io": k2_root_proto::apps::IoMax::from_column(app.io_max_json.as_deref()),

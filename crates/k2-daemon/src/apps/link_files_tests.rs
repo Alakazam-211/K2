@@ -96,6 +96,41 @@ fn links_answer_without_pairing_merge_with_it_and_pairing_alone_keeps_its_bytes(
     assert_eq!(served(&f.app_id, AASA, &host).unwrap(), pairing_only, "pairing-only bytes never change");
 }
 
+/// Answers a check's fetches with what K2 serves for `app_id` now.
+struct ServedFetcher(String);
+
+impl crate::app_pairing::links::Fetcher for ServedFetcher {
+    fn get(&self, url: &str) -> crate::app_pairing::links::Fetched {
+        use crate::app_pairing::links::Fetched;
+        let rest = url.strip_prefix("https://").expect("https");
+        let (host, path) = match rest.strip_prefix("app-site-association.cdn-apple.com/a/v1/") {
+            Some(h) => (h.to_string(), AASA.to_string()),
+            None => {
+                let (h, p) = rest.split_once('/').expect("a path");
+                (h.to_string(), format!("/{p}"))
+            }
+        };
+        match served(&self.0, &path, &host) {
+            Some(body) => Fetched::Ok { status: 200, body },
+            None => Fetched::Ok { status: 404, body: String::new() },
+        }
+    }
+}
+
+#[test]
+fn the_owners_check_compares_both_files_on_each_host() {
+    let f = fx("lk3");
+    store::set_off(&f.app, "owner").unwrap();
+    call(SET, &Who::Owner, set_body(&f.app, json!(["/a/*"]), json!([]))).expect("set");
+    set_fetcher_for_tests(Some(Box::new(ServedFetcher(f.app_id.clone()))));
+    let v = call(CHECK, &Who::Owner, json!({"app": f.app}));
+    set_fetcher_for_tests(None);
+    let v = v.expect("check");
+    assert_eq!(v["hosts"], json!([{"host": format!("{}.box.k2.dev", f.app_id), "aasa": "ok", "assetlinks": "ok", "appleCdn": "ok"}]));
+    let st = status_of(&Who::Owner, &f.app).expect("status");
+    assert_eq!(st["lastCheck"]["hosts"], v["hosts"], "status keeps the last check");
+}
+
 #[test]
 fn shipped_paths_are_frozen_and_only_the_apps_agent_with_the_switch_changes_them() {
     let f = fx("lk2");

@@ -243,7 +243,7 @@ fn fetcher() -> &'static Mutex<Option<Box<dyn links::Fetcher + Send>>> {
 
 /// Test seam: use `f` for `check` instead of the internet.
 #[cfg(test)]
-pub(crate) fn set_fetcher_for_tests(f: Option<Box<dyn links::Fetcher + Send>>) {
+fn set_fetcher_for_tests(f: Option<Box<dyn links::Fetcher + Send>>) {
     *fetcher().lock().unwrap_or_else(|e| e.into_inner()) = f;
 }
 

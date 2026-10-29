@@ -395,11 +395,80 @@ impl Cand {
     }
 }
 
+// ── rust components (CE-16, CE-A10) ──────────────────────────────────
+
+/// Offer feature (k2-node 0.46.7): the node installs the Rust components a
+/// need names (`rust@stable+clippy+rustfmt`). An older node is not a
+/// candidate for such a need (`node_too_old`), so the token never reaches
+/// a node that would refuse it.
+pub const FEATURE_RUST_COMPONENTS: &str = "rust-components";
+
+/// The components `rust@<channel>+<component>` may name.
+pub const RUST_COMPONENTS: &[&str] = &["clippy", "rustfmt", "rust-src", "llvm-tools", "rust-analyzer", "miri"];
+
+/// One need token split into its base and its Rust components:
+/// `rust@stable+clippy+rustfmt` → (`rust@stable`, [clippy, rustfmt]);
+/// `llvm-tools-preview` reads as `llvm-tools`; a component named twice
+/// counts once. Only a Rust need takes components (`+` stays part of any
+/// other token, e.g. `sys:g++`). A comma would split the needs list, hence
+/// `+`.
+pub fn split_rust_components(token: &str) -> Result<(String, Vec<String>), String> {
+    let t = token.trim();
+    let Some((head, tail)) = t.split_once('+') else { return Ok((t.to_string(), Vec::new())) };
+    if !matches!(needs::parse(head), Ok(needs::Need::Rust { .. })) {
+        return Ok((t.to_string(), Vec::new()));
+    }
+    let mut comps: Vec<String> = Vec::new();
+    for c in tail.split('+') {
+        let c = if c == "llvm-tools-preview" { "llvm-tools" } else { c };
+        if !RUST_COMPONENTS.contains(&c) {
+            return Err(format!(
+                "{t:?}: Rust components are {} joined to the channel with + (e.g. rust@stable+clippy+rustfmt); {c:?} isn't one",
+                RUST_COMPONENTS.join(", ")
+            ));
+        }
+        if !comps.iter().any(|x| x == c) {
+            comps.push(c.to_string());
+        }
+    }
+    Ok((head.to_string(), comps))
+}
+
+/// Check a needs list as the node will (`needs::parse_all`: supported,
+/// no duplicates, at most 32), Rust components included (CE-16). Returns
+/// the canonical tokens (`nodejs@v22` → `node@22`,
+/// `rust+clippy` → `rust@stable+clippy`).
+pub fn check_needs<S: AsRef<str>>(raw: &[S]) -> Result<Vec<String>, needs::NeedError> {
+    let mut bases = Vec::with_capacity(raw.len());
+    let mut comps = Vec::with_capacity(raw.len());
+    for t in raw {
+        let (b, c) = split_rust_components(t.as_ref()).map_err(|message| needs::NeedError { code: needs::NEED_INVALID, message })?;
+        bases.push(b);
+        comps.push(c);
+    }
+    let parsed = needs::parse_all(&bases)?;
+    Ok(parsed.iter().zip(comps).map(|(n, c)| if c.is_empty() { n.token() } else { format!("{}+{}", n.token(), c.join("+")) }).collect())
+}
+
+/// The Rust components a (canonical) need token names; empty for any other.
+pub fn need_components(token: &str) -> Vec<String> {
+    split_rust_components(token).map(|(_, c)| c).unwrap_or_default()
+}
+
+/// Any need names Rust components (the node must offer
+/// [`FEATURE_RUST_COMPONENTS`]).
+pub fn wants_components(needs: &[String]) -> bool {
+    needs.iter().any(|t| !need_components(t).is_empty())
+}
+
 /// Features a plan needs from the node's k2-node.
 pub fn required_features(w: &Want) -> Vec<&'static str> {
     let mut f = Vec::new();
     if !w.needs.is_empty() {
         f.push(needs::FEATURE_NEEDS);
+    }
+    if wants_components(&w.needs) {
+        f.push(FEATURE_RUST_COMPONENTS);
     }
     if w.artifacts {
         f.push(results::FEATURE_ARTIFACTS);
@@ -1903,6 +1972,28 @@ mod tests {
         assert!(!label_matches("arch", "arm64", None), "no label: no match");
         assert!(label_matches("gpu", "nvidia", Some("nvidia")) && !label_matches("gpu", "NVIDIA", Some("nvidia")), "other labels are exact");
         assert!(!label_matches("gpu", "darwin", Some("macos")), "aliases only for os and arch");
+    }
+
+    /// CE-16: `rust@<channel>+component` splits on `+` (a comma would split
+    /// the list), checks each component, and needs a node offering
+    /// `rust-components`; `+` in any other token stays as it is.
+    #[test]
+    fn rust_components_ride_on_the_rust_need() {
+        assert_eq!(check_needs(&["rust@stable+clippy+rustfmt", "cmake@3"]).unwrap(), vec!["rust@stable+clippy+rustfmt", "cmake@3"]);
+        assert_eq!(check_needs(&["rust+llvm-tools-preview+clippy+clippy"]).unwrap(), vec!["rust@stable+llvm-tools+clippy"], "alias, default channel, dedupe");
+        assert_eq!(check_needs(&["rust@nightly"]).unwrap(), vec!["rust@nightly"]);
+        let e = check_needs(&["rust@stable+cargo-fmt"]).unwrap_err();
+        assert_eq!(e.code, needs::NEED_INVALID);
+        assert!(e.message.contains("clippy, rustfmt, rust-src, llvm-tools, rust-analyzer, miri"), "{}", e.message);
+        assert_eq!(check_needs(&["rust@1.99+"]).unwrap_err().code, needs::NEED_INVALID, "an empty component");
+        assert_eq!(check_needs(&["rust@stable+clippy", "rust@nightly"]).unwrap_err().code, needs::NEED_INVALID, "rust twice");
+        assert_eq!(split_rust_components("sys:g++").unwrap(), ("sys:g++".to_string(), vec![]), "+ in a package name");
+        assert_eq!(need_components("rust@stable+miri"), vec!["miri"]);
+        let mut w = want(2);
+        w.needs = vec!["rust@stable".into()];
+        assert!(!required_features(&w).contains(&FEATURE_RUST_COMPONENTS));
+        w.needs = vec!["rust@stable+clippy".into()];
+        assert!(required_features(&w).contains(&FEATURE_RUST_COMPONENTS), "only nodes that install components");
     }
 
     #[test]

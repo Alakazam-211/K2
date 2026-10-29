@@ -1554,9 +1554,9 @@ fn needs_from(v: &serde_json::Value) -> R<Vec<String>> {
         Some(_) => return Err(no("need_invalid", 400, "needs is a list like [\"node@22\", \"python@3.12\"]")),
     };
     // An unsupported tool is refused here (400 → the CLI exits 2), never
-    // dropped: the job must not start without what it asked for.
-    let parsed = needs::parse_all(&raw).map_err(|e| no(e.code, 400, format!("--needs: {}", e.message)))?;
-    Ok(parsed.iter().map(|n| n.token()).collect())
+    // dropped: the job must not start without what it asked for. Rust
+    // components ride as `rust@<channel>+clippy+rustfmt` (CE-16).
+    crate::compute_place::check_needs(&raw).map_err(|e| no(e.code, 400, format!("--needs: {}", e.message)))
 }
 
 /// `artifacts` from a run body: globs (array, or one string), checked
@@ -1844,6 +1844,16 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
                 format!(
                     "'{}' runs an older k2-node that can't install --needs; update k2-node on that machine (sudo k2-node setup), or run without --needs",
                     node.name
+                ),
+            ));
+        }
+        if crate::compute_place::wants_components(&needs) && !feats.iter().any(|f| f == crate::compute_place::FEATURE_RUST_COMPONENTS) {
+            return Err(no(
+                "node_upgrade_required",
+                409,
+                format!(
+                    "'{}' runs a k2-node older than 0.46.7, which can't install Rust components (rust@<channel>+clippy); update it (k2 compute node update {}), pick another node, or drop the +components",
+                    node.name, node.name
                 ),
             ));
         }

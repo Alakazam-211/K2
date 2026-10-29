@@ -146,6 +146,17 @@ if [ "$MODE" = real ]; then
     fi
     security import "$INTERMEDIATE" -k "$KC" >/dev/null
 fi
+if [ "$MODE" = selftest ]; then
+    # codesign uses only TRUSTED identities. A real Developer ID chains to
+    # Apple's root through the imported intermediate; a self-signed one has
+    # to be trusted by hand, which needs an authorization the job may not
+    # get (no GUI). Try it and say what happened.
+    if security add-trusted-cert -r trustRoot -p codeSign -k "$KC" "$WORK/cs.pem" 2>"$WORK/trust.err"; then
+        echo "  trusted the throwaway root for code signing (user trust settings)"
+    else
+        echo "  add-trusted-cert refused: $(head -1 "$WORK/trust.err")"
+    fi
+fi
 security find-identity -p codesigning "$KC" | sed 's/^/  /'
 pass "1 keychain: created in the job folder, identity imported$([ "$MODE" = real ] && echo ', intermediate imported')"
 

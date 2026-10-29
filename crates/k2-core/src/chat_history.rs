@@ -1473,6 +1473,24 @@ fn branch_from_claude_slug_dir(dir_name: &str, project_hash: &str) -> Option<Str
 /// Mirrors the slug family of [`newest_claude_session_on_disk`] /
 /// [`claude_session_file_exists`]: `~/.claude/projects/<hash>` and
 /// `<hash>-*`. Zero-byte files are skipped.
+/// The first `cwd` a Claude transcript records (within its first 64
+/// lines), or `None`.
+pub fn claude_transcript_cwd(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file).lines().take(64) {
+        let Ok(line) = line else { break };
+        if !line.contains("\"cwd\"") {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) {
+            if let Some(cwd) = v.get("cwd").and_then(|c| c.as_str()).filter(|c| !c.is_empty()) {
+                return Some(cwd.trim_end_matches('/').to_string());
+            }
+        }
+    }
+    None
+}
+
 fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, project_filter: &str) {
     let Some(home) = crate::paths::home_dir() else {
         return;
@@ -1516,6 +1534,22 @@ fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, proje
             if sessions.contains_key(stem) {
                 continue;
             }
+            // The `<slug>-*` prefix also matches a sibling folder
+            // (`/x/K2-other` for `/x/K2`): the transcript's own `cwd` decides
+            // (prd-workspace-sessions-cli-v1 WS-P3). A file with no cwd
+            // line keeps the folder's word for it. The exact `<slug>` folder
+            // is unambiguous and keeps it too (a cloned workspace's copied
+            // transcripts still name the source folder).
+            let transcript_cwd = if name == project_hash {
+                None
+            } else {
+                claude_transcript_cwd(&path)
+            };
+            if let Some(cwd) = transcript_cwd.as_deref() {
+                if !matches_project_family(cwd, root) {
+                    continue;
+                }
+            }
             let timestamp = meta
                 .modified()
                 .ok()
@@ -1528,12 +1562,15 @@ fn union_claude_disk_sessions(sessions: &mut HashMap<String, ChatSession>, proje
                 stem.to_string(),
                 ChatSession {
                     session_id: stem.to_string(),
-                    project: project.clone(),
+                    project: transcript_cwd.clone().unwrap_or_else(|| project.clone()),
                     title,
                     timestamp,
                     provider: "claude".to_string(),
                     message_count,
-                    origin_branch: origin_branch.clone(),
+                    origin_branch: transcript_cwd
+                        .as_deref()
+                        .and_then(extract_worktree_branch)
+                        .or_else(|| origin_branch.clone()),
                     archived: false,
                     archived_at: None,
                     custom_name: None,
@@ -2322,6 +2359,20 @@ fn codex_history_index() -> HashMap<String, (i64, String)> {
 }
 
 pub fn parse_codex_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSession>, String> {
+    let mut unreadable = 0usize;
+    parse_codex_sessions_since(project_filter, None, &mut unreadable)
+}
+
+/// [`parse_codex_sessions`] with an mtime floor (`since_ms`: files last
+/// written before it are skipped without being opened, so a large
+/// `~/.codex/sessions` tree stays fast; prd-workspace-sessions-cli-v1
+/// WS-P5) and a count of rollout files whose header could not be read
+/// (`unreadable`, reported in `k2 sessions --past`'s `unsupported[]`).
+pub fn parse_codex_sessions_since(
+    project_filter: Option<&str>,
+    since_ms: Option<i64>,
+    unreadable: &mut usize,
+) -> Result<Vec<ChatSession>, String> {
     let home = match crate::paths::home_dir() {
         Some(h) => h,
         None => return Ok(vec![]),
@@ -2366,20 +2417,40 @@ pub fn parse_codex_sessions(project_filter: Option<&str>) -> Result<Vec<ChatSess
                     if path.extension().and_then(|s| s.to_str()) != Some("jsonl") {
                         continue;
                     }
+                    if let Some(floor) = since_ms {
+                        let written = f_entry
+                            .metadata()
+                            .ok()
+                            .and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        if written < floor {
+                            continue;
+                        }
+                    }
                     let file = match File::open(&path) {
                         Ok(f) => f,
-                        Err(_) => continue,
+                        Err(_) => {
+                            *unreadable += 1;
+                            continue;
+                        }
                     };
                     let mut reader = BufReader::new(file);
                     let mut first_line = String::new();
                     if reader.read_line(&mut first_line).is_err() {
+                        *unreadable += 1;
                         continue;
                     }
                     let header: serde_json::Value = match serde_json::from_str(first_line.trim()) {
                         Ok(v) => v,
-                        Err(_) => continue,
+                        Err(_) => {
+                            *unreadable += 1;
+                            continue;
+                        }
                     };
                     if header.get("type").and_then(|v| v.as_str()) != Some("session_meta") {
+                        *unreadable += 1;
                         continue;
                     }
                     let payload = match header.get("payload") {

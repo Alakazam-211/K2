@@ -1168,6 +1168,222 @@ fn sqlite_ro_uri(path: &Path) -> String {
     format!("file:{escaped}?mode=ro")
 }
 
+// ── Whole-conversation reader (`k2 sessions show`, `--past --search`) ──
+//
+// prd-workspace-sessions-cli-v1 WS-S1 / WS-P4: the same per-provider
+// transcripts and turn rules as the continue seed, but every user and
+// assistant message in order, with tool calls counted (never shown).
+
+/// One user or assistant message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranscriptMessage {
+    /// `user` | `assistant`.
+    pub role: String,
+    pub text: String,
+    /// Unix seconds, when the line carries a time.
+    pub at: Option<i64>,
+}
+
+/// A conversation read for `show` and search.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TranscriptDigest {
+    pub messages: Vec<TranscriptMessage>,
+    pub tool_calls: usize,
+    /// Bytes read (the search budget counts them).
+    pub bytes: u64,
+}
+
+/// The sentence for a CLI whose message text K2 does not read.
+pub const CURSOR_NO_TEXT: &str = "cursor chats are stored in a database K2 does not read message text from";
+
+/// The transcript file of a pi conversation by its header `id`
+/// (WS-A6: sidecars resume pi by file, agents see the id).
+pub fn pi_session_file(session_id: &str, project_path: &str) -> Option<PathBuf> {
+    find_pi(session_id, project_path)
+}
+
+fn line_time(v: &Value) -> Option<i64> {
+    let t = v
+        .get("timestamp")
+        .or_else(|| v.pointer("/payload/timestamp"))
+        .or_else(|| v.get("time"))?;
+    if let Some(s) = t.as_str() {
+        return parse_rfc3339_ms(s).map(|ms| ms / 1000);
+    }
+    t.as_i64().map(|n| if n > 100_000_000_000 { n / 1000 } else { n })
+}
+
+fn count_tool_parts(content: Option<&Value>) -> usize {
+    content
+        .and_then(|c| c.as_array())
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|p| {
+                    p.get("type")
+                        .and_then(|t| t.as_str())
+                        .is_some_and(|t| t == "tool_use" || t == "toolCall" || t == "tool_call")
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// `(role, text)` and tool calls for one transcript line.
+fn line_message(provider: &str, v: &Value) -> (Option<(String, String)>, usize) {
+    match provider {
+        "claude" => {
+            let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let tools = count_tool_parts(v.pointer("/message/content"));
+            let role = match kind {
+                "user" | "human" => "user",
+                "assistant" => "assistant",
+                _ => return (None, tools),
+            };
+            match claude_content(v) {
+                ContentShape::Text(t) if !t.trim().is_empty() => (Some((role.into(), t.trim().to_string())), tools),
+                _ => (None, tools),
+            }
+        }
+        "gemini" => {
+            if v.get("$set").is_some() {
+                return (None, 0);
+            }
+            let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            let tools = v.get("toolCalls").and_then(|t| t.as_array()).map_or(0, |a| a.len());
+            let role = match kind {
+                "user" => "user",
+                "gemini" => "assistant",
+                _ => return (None, tools),
+            };
+            (plain_content(v.get("content")).map(|t| (role.into(), t)), tools)
+        }
+        "grok" => {
+            if v.get("synthetic_reason").is_some() {
+                return (None, 0);
+            }
+            let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if kind.contains("tool") {
+                return (None, 1);
+            }
+            let role = match kind {
+                "user" => "user",
+                "assistant" => "assistant",
+                _ => return (None, 0),
+            };
+            (plain_content(v.get("content")).map(|t| (role.into(), t)), 0)
+        }
+        "pi" => {
+            if v.get("type").and_then(|t| t.as_str()) != Some("message") {
+                return (None, 0);
+            }
+            let Some(message) = v.get("message") else { return (None, 0) };
+            let role = message.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            let tools = count_tool_parts(message.get("content"));
+            if role != "user" && role != "assistant" {
+                return (None, tools);
+            }
+            let texts: Vec<String> = message
+                .get("content")
+                .and_then(|c| c.as_array())
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter(|p| p.get("type").and_then(|t| t.as_str()) == Some("text"))
+                        .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                        .map(|t| t.trim().to_string())
+                        .filter(|t| !t.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default();
+            if texts.is_empty() {
+                (None, tools)
+            } else {
+                (Some((role.into(), texts.join("\n"))), tools)
+            }
+        }
+        "codex" => {
+            let ptype = v.pointer("/payload/type").and_then(|t| t.as_str()).unwrap_or("");
+            if ptype == "function_call" || ptype == "custom_tool_call" || ptype == "local_shell_call" {
+                return (None, 1);
+            }
+            (codex_role_text(v), 0)
+        }
+        _ => (None, 0),
+    }
+}
+
+/// Every user and assistant message of one conversation, oldest first.
+/// `project_path` is the conversation's own cwd (Claude's folder slug
+/// comes from it). Cursor is `Err(CURSOR_NO_TEXT)`; a missing transcript
+/// is `Err("no readable transcript")`.
+pub fn read_transcript_messages(
+    provider: &str,
+    session_id: &str,
+    project_path: &str,
+) -> Result<TranscriptDigest, String> {
+    let provider = provider.trim();
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("sessionId required".into());
+    }
+    if provider == "cursor" {
+        return Err(CURSOR_NO_TEXT.into());
+    }
+    if provider == "hermes" {
+        let rows = hermes_rows(session_id, project_path)?;
+        let mut digest = TranscriptDigest::default();
+        for (role, content) in rows {
+            digest.bytes += content.len() as u64;
+            match role.as_str() {
+                "user" | "assistant" if !content.trim().is_empty() => digest.messages.push(TranscriptMessage {
+                    role,
+                    text: content.trim().to_string(),
+                    at: None,
+                }),
+                "tool" => digest.tool_calls += 1,
+                _ => {}
+            }
+        }
+        return Ok(digest);
+    }
+    let path = match provider {
+        "claude" => find_claude(session_id, project_path),
+        "gemini" => find_gemini(session_id, project_path),
+        "pi" => find_pi(session_id, project_path),
+        "grok" => find_grok(session_id, project_path),
+        "codex" => find_codex_rollout(session_id, project_path),
+        _ => return Err("unknown provider".into()),
+    }
+    .ok_or_else(|| "no readable transcript".to_string())?;
+    let text = read_transcript(&path)?;
+    let mut digest = TranscriptDigest {
+        bytes: text.len() as u64,
+        ..Default::default()
+    };
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        let (message, tools) = line_message(provider, &v);
+        digest.tool_calls += tools;
+        if let Some((role, text)) = message {
+            digest.messages.push(TranscriptMessage { role, text, at: line_time(&v) });
+        }
+    }
+    Ok(digest)
+}
+
+/// A message capped at the continue seed's per-turn limit (4,000 chars).
+pub fn cap_message(text: &str) -> String {
+    let t = text.trim();
+    if t.chars().count() <= TURN_CHAR_CAP {
+        t.to_string()
+    } else {
+        t.chars().take(TURN_CHAR_CAP).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

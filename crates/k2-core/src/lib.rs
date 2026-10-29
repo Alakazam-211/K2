@@ -73,6 +73,7 @@ pub mod redaction;
 pub mod secret_refs;
 pub mod chat_history;
 pub mod chat_continue;
+pub mod past_conversations;
 /// Host token ledger (`~/.k2/usage/tokens.sqlite`). Not the app database.
 pub mod token_usage;
 /// Estimated API-equivalent cost for the ledger (LiteLLM table, MIT).

@@ -26,6 +26,8 @@ import { useStore } from 'zustand'
 import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager'
 import { useToastStore } from '@/stores/toast'
 import { DevicePicker, type DevicePickerGroup } from './DevicePicker'
+import { MobileHoldPill, MobileNotice, type MobileNoticeTone } from './MobileNotice'
+import type { ComposeInsertDetail } from '@/lib/external-drop-router'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { DesignThreadColumn } from '@/components/Design/DesignThreadColumn'
@@ -38,7 +40,7 @@ import { MobileBootScreen, type MobileBootPhase } from './MobileBootScreen'
 import { MobileControlRail, RAIL_INSET_PX } from './MobileControlRail'
 import { readMobileLiveTouch, readMobileScreenOnly, writeMobileLiveTouch, writeMobileScreenOnly } from './mobile-view-prefs'
 import { MobileToolbar } from './MobileToolbar'
-import { readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
+import { DEFAULT_MOBILE_SPLIT, readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
 import {
   bootSim,
   fetchSimDevices,
@@ -74,6 +76,21 @@ import { defaultFps, type SimAppearance, type SimStreamConnector, wsSimStream } 
 import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
+
+/** A small JPEG of what the canvas shows (the screenshot toast's
+ *  thumbnail), or null when the canvas can't export (no frame, jsdom). */
+function canvasThumb(canvas: HTMLCanvasElement | null): string | null {
+  if (!canvas || canvas.width === 0 || canvas.height === 0) return null
+  try {
+    const url = canvas.toDataURL('image/jpeg', 0.6)
+    return typeof url === 'string' && url.startsWith('data:image/') ? url : null
+  } catch {
+    return null
+  }
+}
+
+/** Below this pane width the Thread and the device switch instead of split. */
+const NARROW_PX = 720
 
 /** A reconnect says so only once it has taken this long. */
 const RECONNECT_NOTE_AFTER_MS = 2000
@@ -129,7 +146,16 @@ export function MobilePane({
   useEffect(() => {
     setSplit(readMobileSplit(roomKey))
   }, [roomKey])
-  const rowRef = useRef<HTMLDivElement | null>(null)
+  // Narrow windows (research §4 item 10): a Thread | Device switch instead
+  // of a sliver of Thread beside a tiny phone.
+  const [rowRef, rowSize] = useElementSize<HTMLDivElement>()
+  const narrow = rowSize.width > 0 && rowSize.width < NARROW_PX
+  const [narrowView, setNarrowView] = useState<'thread' | 'device'>('device')
+  const resetSplit = useCallback(() => {
+    const next: [number, number] = [DEFAULT_MOBILE_SPLIT[0], DEFAULT_MOBILE_SPLIT[1]]
+    setSplit(next)
+    writeMobileSplit(roomKey, next)
+  }, [roomKey])
   const startSplitDrag = useCallback(
     (e: React.MouseEvent) => {
       e.preventDefault()
@@ -155,41 +181,81 @@ export function MobilePane({
     [roomKey, split],
   )
 
+  const switched = narrow && showChat
   return (
-    <div ref={rowRef} className="flex h-full w-full min-w-0" data-mobile-pane={itemId}>
-      {showChat && chatAgent && chatPath ? (
-        <>
-          <div className="h-full min-w-0 overflow-hidden" style={{ flex: `${split[0]} 1 0` }} data-mobile-chat="">
-            <DesignThreadColumn
-              projectPath={chatPath}
-              agentName={chatAgent}
-              conversationId={chatSession ?? null}
-              visible={tabVisible}
-            />
+    <div ref={rowRef} className="flex h-full w-full min-w-0 flex-col" data-mobile-pane={itemId}>
+      {switched ? (
+        <div className="flex flex-shrink-0 justify-center border-b border-[var(--color-border)] py-1.5" role="tablist" aria-label="Show" data-mobile-narrow="">
+          <div className="flex border border-[var(--color-border)] p-0.5" style={{ borderRadius: 'calc(var(--radius-field, 0px) * 100)' }}>
+            {(['thread', 'device'] as const).map((v) => (
+              <button
+                key={v}
+                type="button"
+                role="tab"
+                aria-selected={narrowView === v}
+                className={`h-6 cursor-pointer px-3 text-xs transition-colors ${
+                  narrowView === v
+                    ? 'bg-[var(--color-bg-elevated)] text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                }`}
+                style={{ borderRadius: 'calc(var(--radius-field, 0px) * 100)' }}
+                onClick={() => setNarrowView(v)}
+                data-mobile-narrow-view={v}
+              >
+                {v === 'thread' ? 'Thread' : 'Device'}
+              </button>
+            ))}
           </div>
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize Thread and device"
-            className="w-1 flex-shrink-0 cursor-col-resize bg-[var(--color-border)] hover:bg-[var(--color-accent)]"
-            onMouseDown={startSplitDrag}
-            data-mobile-split=""
-          />
-        </>
+        </div>
       ) : null}
-      <div className="h-full min-w-0" style={{ flex: `${showChat ? split[1] : 100} 1 0` }}>
-        <MobileDevice
-          itemId={itemId}
-          tabId={tabId}
-          paneGroupId={paneGroupId}
-          workspace={workspace}
-          data={data}
-          visible={tabVisible}
-          connector={connector}
-          renderOverlay={renderOverlay}
-          holdFrame={holdFrame}
-          toolbarExtra={toolbarExtra}
-        />
+      <div className="flex min-h-0 w-full min-w-0 flex-1">
+        {showChat && chatAgent && chatPath ? (
+          <>
+            <div
+              className={`h-full min-w-0 overflow-hidden ${switched && narrowView !== 'thread' ? 'hidden' : ''}`}
+              style={{ flex: switched ? '1 1 0' : `${split[0]} 1 0` }}
+              data-mobile-chat=""
+            >
+              <DesignThreadColumn
+                projectPath={chatPath}
+                agentName={chatAgent}
+                conversationId={chatSession ?? null}
+                visible={tabVisible}
+              />
+            </div>
+            {switched ? null : (
+              <div className="relative w-px flex-shrink-0 bg-[var(--color-border)]">
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize Thread and device"
+                  title="Drag to resize · double-click to reset"
+                  className="absolute inset-y-0 -left-1 z-10 w-[9px] cursor-col-resize transition-colors hover:bg-[var(--color-accent)]/25"
+                  onMouseDown={startSplitDrag}
+                  onDoubleClick={resetSplit}
+                  data-mobile-split=""
+                />
+              </div>
+            )}
+          </>
+        ) : null}
+        <div
+          className={`h-full min-w-0 ${switched && narrowView !== 'device' ? 'hidden' : ''}`}
+          style={{ flex: switched ? '1 1 0' : `${showChat ? split[1] : 100} 1 0` }}
+        >
+          <MobileDevice
+            itemId={itemId}
+            tabId={tabId}
+            paneGroupId={paneGroupId}
+            workspace={workspace}
+            data={data}
+            visible={tabVisible}
+            connector={connector}
+            renderOverlay={renderOverlay}
+            holdFrame={holdFrame}
+            toolbarExtra={toolbarExtra}
+          />
+        </div>
       </div>
     </div>
   )
@@ -308,7 +374,9 @@ function MobileDevice({
   // A boot this tab asked for that the status doesn't show yet (the
   // loading screen covers the gap between Start and `booting`).
   const [bootPending, setBootPending] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<{ text: string; tone: MobileNoticeTone; shot?: { path: string; thumb: string | null } } | null>(
+    null,
+  )
   const act = useCallback(
     async (what: string, fn: () => Promise<void>) => {
       setBusy(true)
@@ -318,7 +386,7 @@ function MobileDevice({
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         console.warn(`[mobile] ${what}:`, msg)
-        setNotice(msg)
+        setNotice({ text: msg, tone: 'error' })
       } finally {
         setBusy(false)
         refresh()
@@ -395,16 +463,31 @@ function MobileDevice({
   }, [act, scope, workspaceRef])
   const onScreenshot = useCallback(() => {
     if (!workspaceRef) return
+    // The toast's thumbnail: the frame on screen as the shot was taken.
+    const thumb = canvasThumb(canvasRef.current)
     void act('screenshot', async () => {
       const path = await screenshotSim(scope, workspaceRef)
-      try {
-        await navigator.clipboard.writeText(path)
-        setNotice(`Saved ${path} (path copied)`)
-      } catch {
-        setNotice(`Saved ${path}`)
-      }
+      setNotice({ text: `Saved ${path}`, tone: 'success', shot: { path, thumb } })
     })
   }, [act, scope, workspaceRef])
+  // Attach to Thread: the Thread message box beside the device takes the
+  // shot as an attachment (the same event a file drop sends it).
+  const stageEl = useRef<HTMLDivElement | null>(null)
+  const onAttachShot = useCallback((path: string) => {
+    const bar = stageEl.current?.closest('[data-mobile-pane]')?.querySelector('[data-mobile-chat] [data-compose-bar]')
+    if (!bar) {
+      setNotice({ text: "Open the agent's Thread beside the device to attach the screenshot.", tone: 'error' })
+      return
+    }
+    const detail: ComposeInsertDetail = { data: path, paths: [path], uploaded: true }
+    bar.dispatchEvent(new CustomEvent('k2so:compose-insert', { detail }))
+    setNotice({ text: 'Attached to your Thread message.', tone: 'success' })
+  }, [])
+  const onCopyShot = useCallback((path: string) => {
+    writeClipboardText(path)
+      .then(() => setNotice({ text: `Copied ${path}`, tone: 'success' }))
+      .catch((err: unknown) => setNotice({ text: `Couldn't copy: ${String(err)}`, tone: 'error' }))
+  }, [])
 
   // ── Stream ────────────────────────────────────────────────────────────
   const [fps, setFpsState] = useState(() => defaultFps(scope.isRemote))
@@ -695,7 +778,8 @@ function MobileDevice({
   const showRail = canControl && running
   const overlayBox = renderOverlay && screen && live ? box() : null
   const banner = holdBanner(hold, tookOver)
-  const shownNotice = notice ?? stream.inputError
+  const [dismissedInputError, setDismissedInputError] = useState<string | null>(null)
+  const inputNotice = stream.inputError && stream.inputError !== dismissedInputError ? stream.inputError : null
   // Room for the rail from the first boot step, so the phone doesn't shift
   // when the rail appears.
   const frame = frameLayout(shape, frameScreen, stageSize, {
@@ -744,17 +828,14 @@ function MobileDevice({
           setTookOver(false)
         }}
       />
-      {iphoneNote && canControl ? (
-        <div className="flex-shrink-0 border-b border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-muted)]" data-mobile-iphone-note="">
-          {iphoneNote}
-        </div>
-      ) : null}
-      {shownNotice ? (
-        <div className="flex-shrink-0 border-b border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-secondary)]" data-mobile-notice="">
-          {shownNotice}
-        </div>
-      ) : null}
-      <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6" data-mobile-stage="">
+      <div
+        ref={(el) => {
+          stageRef.current = el
+          stageEl.current = el
+        }}
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(ellipse_at_50%_40%,var(--color-bg)_0%,var(--color-bg-stripe)_75%)] px-6 pb-8 pt-10"
+        data-mobile-stage=""
+      >
         {running ? (
           <DeviceFrame shape={shape} layout={frame} screenOnly={screenOnly} dimmed={reconnecting}>
             <div
@@ -856,14 +937,39 @@ function MobileDevice({
               {blocked}
             </div>
             {canControl && pickerGroups.length > 0 ? <DevicePicker {...pickerProps} /> : null}
+            {iphoneNote && canControl ? (
+              <div className="text-center text-[11px] text-[var(--color-text-muted)]" data-mobile-iphone-note="">
+                {iphoneNote}
+              </div>
+            ) : null}
           </div>
         )}
         {banner ? (
-          <div
-            className="absolute bottom-2 left-1/2 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]"
-            data-mobile-held={hold.kind}
-          >
-            {banner}
+          <div className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2">
+            <MobileHoldPill text={banner} kind={hold.kind} />
+          </div>
+        ) : null}
+        {notice || inputNotice ? (
+          <div className="pointer-events-none absolute inset-x-3 bottom-3 z-20 flex flex-col items-center gap-2">
+            {notice ? (
+              <MobileNotice
+                tone={notice.tone}
+                text={notice.text}
+                thumb={notice.shot?.thumb}
+                actions={
+                  notice.shot
+                    ? [
+                        { label: 'Attach to Thread', onClick: () => onAttachShot(notice.shot!.path), testId: 'attach' },
+                        { label: 'Copy path', onClick: () => onCopyShot(notice.shot!.path), testId: 'copy' },
+                      ]
+                    : []
+                }
+                onDismiss={() => setNotice(null)}
+              />
+            ) : null}
+            {inputNotice ? (
+              <MobileNotice tone="error" text={inputNotice} onDismiss={() => setDismissedInputError(inputNotice)} />
+            ) : null}
           </div>
         ) : null}
       </div>

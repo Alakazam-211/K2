@@ -4,7 +4,7 @@
 // distorting, proportional corners and buttons, the island / punch-hole,
 // landscape, and screen-only.
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import {
   ANDROID_PHONE_SHAPE,
@@ -117,6 +117,38 @@ describe('DeviceFrame', () => {
     expect(document.querySelectorAll('[data-mobile-frame-button]').length).toBe(4)
     expect(document.querySelector('[data-mobile-floor]')).not.toBeNull()
     expect(document.querySelector('[data-mobile-frame-screen] [data-testid="screen"]')).not.toBeNull()
+  })
+
+  it('turning landscape animates the frame from the old pose (not a snap)', () => {
+    const animate = vi.fn()
+    const had = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate')
+    Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate })
+    try {
+      const portrait = frameLayout(IOS_PHONE_SHAPE, IPHONE, { width: 800, height: 600 })
+      const landscape = frameLayout(IOS_PHONE_SHAPE, { widthPt: 852, heightPt: 393 }, { width: 800, height: 600 })
+      const view = render(
+        <DeviceFrame shape={IOS_PHONE_SHAPE} layout={portrait}>
+          <canvas />
+        </DeviceFrame>,
+      )
+      expect(animate).not.toHaveBeenCalled()
+      view.rerender(
+        <DeviceFrame shape={IOS_PHONE_SHAPE} layout={landscape}>
+          <canvas />
+        </DeviceFrame>,
+      )
+      expect(animate).toHaveBeenCalledTimes(1)
+      expect(animate.mock.calls[0][0]).toEqual([{ transform: 'rotate(90deg)' }, { transform: 'rotate(0deg)' }])
+      view.rerender(
+        <DeviceFrame shape={IOS_PHONE_SHAPE} layout={portrait}>
+          <canvas />
+        </DeviceFrame>,
+      )
+      expect(animate.mock.calls[1][0]).toEqual([{ transform: 'rotate(-90deg)' }, { transform: 'rotate(0deg)' }])
+    } finally {
+      if (had) Object.defineProperty(HTMLElement.prototype, 'animate', had)
+      else delete (HTMLElement.prototype as { animate?: unknown }).animate
+    }
   })
 
   it('screen only drops the cut-out, buttons and floor', () => {

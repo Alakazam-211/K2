@@ -7,7 +7,7 @@
 // The frame only draws. The screen's content (canvas, input, overlays) is
 // `children`, so a later redesign restyles this file without touching input.
 
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { cutoutBox, type DeviceShape, type FrameLayout } from './device-frame'
 
 /** The element's content box, kept current with a ResizeObserver. */
@@ -53,12 +53,31 @@ export interface DeviceFrameProps {
   style?: React.CSSProperties
 }
 
+/** Rotation turns the phone over this long (research §4 item 7). */
+export const ROTATE_MS = 320
+
 export function DeviceFrame({ shape, layout, screenOnly = false, dimmed = false, children, className, style }: DeviceFrameProps): React.JSX.Element {
   const { width, height, edge, bezel, bodyRadius, screenRadius } = layout
+  // Rotation: the new frame starts in the old pose and turns into place,
+  // instead of the aspect snapping. Skipped for reduced motion.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const wasLandscape = useRef(layout.landscape)
+  useEffect(() => {
+    if (wasLandscape.current === layout.landscape) return
+    wasLandscape.current = layout.landscape
+    const el = rootRef.current
+    if (!el || typeof el.animate !== 'function') return
+    if (typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    el.animate([{ transform: `rotate(${layout.landscape ? 90 : -90}deg)` }, { transform: 'rotate(0deg)' }], {
+      duration: ROTATE_MS,
+      easing: 'cubic-bezier(.2,.8,.2,1)',
+    })
+  }, [layout.landscape])
   const screenBox = { width: Math.max(0, width - 2 * bezel), height: Math.max(0, height - 2 * bezel) }
   const cut = screenOnly ? null : cutoutBox(shape, layout, screenBox)
   return (
     <div
+      ref={rootRef}
       className={`relative flex-shrink-0 ${className ?? ''}`}
       style={{ width, height, ...style }}
       data-mobile-frame={screenOnly ? 'screen-only' : shape.id}

@@ -76,7 +76,9 @@ vi.mock('@/lib/daemon-cli', async () => {
 })
 vi.mock('@/components/Design/DesignThreadColumn', () => ({
   DesignThreadColumn: (props: { projectPath: string; agentName: string; visible: boolean }) => (
-    <div data-testid="design-thread-column" data-path={props.projectPath} data-agent={props.agentName} data-visible={String(props.visible)} />
+    <div data-testid="design-thread-column" data-path={props.projectPath} data-agent={props.agentName} data-visible={String(props.visible)}>
+      <div data-compose-bar="" />
+    </div>
   ),
 }))
 
@@ -257,6 +259,11 @@ describe('layout (M-A1)', () => {
     if (!saved) throw new Error('split not saved')
     expect(Object.values(saved)).toEqual([[24, 76]])
     expect(localStorage.getItem('k2.windowChrome.design.main')).toBeNull()
+    // Double-click resets it.
+    fireEvent.doubleClick(sep)
+    const reset = JSON.parse(localStorage.getItem(mobileSplitKey('main')) ?? 'null') as Record<string, number[]> | null
+    if (!reset) throw new Error('split not saved')
+    expect(Object.values(reset)).toEqual([[45, 55]])
   })
 })
 
@@ -614,7 +621,19 @@ describe('the running device', () => {
       fireEvent.click(tool('screenshot'))
     })
     await flush()
-    expect(document.querySelector('[data-mobile-notice]')?.textContent).toMatch(/^Saved \/w\/docs\/\.k2\/sim\/shots\/s1-0001\.png/)
+    expect(document.querySelector('[data-mobile-notice]')?.textContent).toBe('Saved /w/docs/.k2/sim/shots/s1-0001.png')
+    expect(document.querySelector('[data-mobile-notice-tone]')?.getAttribute('data-mobile-notice-tone')).toBe('success')
+    // Attach to Thread: the Thread's message box beside the device gets the
+    // shot the way a file drop gives it one.
+    const got: unknown[] = []
+    document.querySelector('[data-mobile-chat] [data-compose-bar]')?.addEventListener('k2so:compose-insert', (e) => {
+      got.push((e as CustomEvent).detail)
+    })
+    fireEvent.click(document.querySelector('[data-mobile-notice-action="attach"]') as HTMLButtonElement)
+    expect(got).toEqual([{ data: '/w/docs/.k2/sim/shots/s1-0001.png', paths: ['/w/docs/.k2/sim/shots/s1-0001.png'], uploaded: true }])
+    expect(document.querySelector('[data-mobile-notice]')?.textContent).toBe('Attached to your Thread message.')
+    fireEvent.click(document.querySelector('[data-mobile-notice-dismiss]') as HTMLButtonElement)
+    expect(document.querySelector('[data-mobile-notice]')).toBeNull()
     openMore()
     await act(async () => {
       fireEvent.click(tool('stop'))
@@ -695,6 +714,31 @@ describe('watching and visibility', () => {
     await flush()
     expect(document.querySelector('[data-mobile-stream-note]')).toBeNull()
     expect((document.querySelector('[data-mobile-frame-screen]') as HTMLElement).style.filter).toBe('')
+  })
+
+  it('a narrow pane switches Thread | Device instead of splitting', async () => {
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute('data-mobile-pane') ? 600 : 0
+      },
+    })
+    try {
+      renderMobile(createStubSimStream())
+      await flush()
+      expect(document.querySelector('[data-mobile-narrow]')).not.toBeNull()
+      expect(document.querySelector('[data-mobile-split]')).toBeNull()
+      const chat = document.querySelector('[data-mobile-chat]') as HTMLElement
+      const deviceCol = (document.querySelector('[data-testid="mobile-device"]') as HTMLElement).parentElement as HTMLElement
+      expect(chat.classList.contains('hidden')).toBe(true)
+      expect(deviceCol.classList.contains('hidden')).toBe(false)
+      fireEvent.click(document.querySelector('[data-mobile-narrow-view="thread"]') as HTMLButtonElement)
+      expect(chat.classList.contains('hidden')).toBe(false)
+      expect(deviceCol.classList.contains('hidden')).toBe(true)
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'clientWidth', width)
+    }
   })
 
   it('a hidden tab opens no socket; showing it connects; hiding it closes it', async () => {

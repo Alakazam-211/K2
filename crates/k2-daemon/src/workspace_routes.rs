@@ -742,6 +742,7 @@ pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
 
     let mut actions: Vec<serde_json::Value> = Vec::with_capacity(pending.len());
     let mut changed = false;
+    let mut changed_fields: Vec<String> = Vec::new();
     for (field, value) in &pending {
         // The stored form of the requested value (agent_mode's CLI
         // spelling `k2` normalizes to the stored `k2so` — B2).
@@ -763,7 +764,13 @@ pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
             )
             .unwrap_or(None)
         };
-        if current.as_deref() == Some(stored_target.as_str()) {
+        // `mobile_tab_enabled: auto` is stored as NULL (0250).
+        let already = if field == "mobile_tab_enabled" && value == "auto" {
+            current.is_none()
+        } else {
+            current.as_deref() == Some(stored_target.as_str())
+        };
+        if already {
             actions.push(serde_json::json!({
                 "field": field,
                 "status": "skipped",
@@ -775,6 +782,7 @@ pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
         match k2_core::workspace::settings::update_project_setting(&path, field, value) {
             Ok(()) => {
                 changed = true;
+                changed_fields.push(field.clone());
                 actions.push(serde_json::json!({
                     "field": field,
                     "status": "done",
@@ -806,9 +814,11 @@ pub fn handle_workspace_set(body: &[u8]) -> CliResponse {
     }
 
     if changed {
+        // Mirrored as `projects_changed` to every connected client (events.rs);
+        // the payload names what changed for this computer's listeners.
         k2_core::agent_hooks::emit(
             k2_core::agent_hooks::HookEvent::SyncProjects,
-            serde_json::Value::Null,
+            serde_json::json!({ "path": path, "fields": changed_fields }),
         );
     }
 
@@ -1144,6 +1154,77 @@ mod tests {
             serde_json::json!({ "force_model_on_resume": "2" }),
         ));
         assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+    }
+
+    /// The `sync:projects` frames emitted for `path` since `mark` (the
+    /// shared capture sink; other tests' frames carry other paths).
+    fn sync_frames_for(mark: usize, path: &str) -> Vec<serde_json::Value> {
+        crate::test_support::events_since(mark)
+            .into_iter()
+            .filter(|(name, payload)| name == "sync:projects" && payload["path"] == path)
+            .map(|(_, payload)| payload)
+            .collect()
+    }
+
+    /// "Show the Mobile tab" (0250) and "Show the Design tab" (0179) on
+    /// `/cli/workspace/set`: Mobile defaults to auto (NULL), takes 0 / 1 /
+    /// auto, each change emits one `sync:projects` naming the field (the
+    /// sink mirrors it as `projects_changed` to every client), a no-op
+    /// emits nothing, and a bad word is refused without a write.
+    #[test]
+    fn workspace_set_pinned_tab_switches_round_trip_and_emit() {
+        crate::test_support::install_capture_sink();
+        let (name, path) = unique("pinned-tabs");
+        insert_project(&name, &path);
+        assert_eq!(stored_value(&path, "mobile_tab_enabled"), None, "default is auto (NULL)");
+        assert_eq!(stored_value(&path, "design_mode_enabled").as_deref(), Some("1"), "Design tab default on");
+
+        let mark = crate::test_support::event_mark();
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "mobile_tab_enabled": "0" })));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(stored_value(&path, "mobile_tab_enabled").as_deref(), Some("0"));
+        let frames = sync_frames_for(mark, &path);
+        assert_eq!(frames.len(), 1, "one event per change: {frames:?}");
+        assert_eq!(frames[0]["fields"], serde_json::json!(["mobile_tab_enabled"]));
+
+        // Same value again: skipped, no event.
+        let mark = crate::test_support::event_mark();
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "mobile_tab_enabled": "0" })));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(body["changed"], false);
+        assert_eq!(body["actions"][0]["status"], "skipped");
+        assert!(sync_frames_for(mark, &path).is_empty(), "a no-op tells no one");
+
+        // Back to auto clears to NULL; auto again is a no-op.
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "mobile_tab_enabled": "auto" })));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(stored_value(&path, "mobile_tab_enabled"), None, "auto is NULL");
+        let mark = crate::test_support::event_mark();
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "mobile_tab_enabled": "auto" })));
+        let body: serde_json::Value = serde_json::from_str(&resp.body).expect("json");
+        assert_eq!(body["changed"], false, "auto on auto is skipped: {body}");
+        assert!(sync_frames_for(mark, &path).is_empty());
+
+        // A boolean maps to 0/1 like every other switch.
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "mobile_tab_enabled": true })));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(stored_value(&path, "mobile_tab_enabled").as_deref(), Some("1"));
+
+        // The Design tab switch rides the same route and event.
+        let mark = crate::test_support::event_mark();
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "design_mode_enabled": "0" })));
+        assert_eq!(resp.status, "200 OK", "body={}", resp.body);
+        assert_eq!(stored_value(&path, "design_mode_enabled").as_deref(), Some("0"));
+        let frames = sync_frames_for(mark, &path);
+        assert_eq!(frames.len(), 1, "{frames:?}");
+        assert_eq!(frames[0]["fields"], serde_json::json!(["design_mode_enabled"]));
+
+        // A bad word is refused loudly and nothing is written.
+        let resp = handle_workspace_set(&set_body(&path, serde_json::json!({ "mobile_tab_enabled": "maybe" })));
+        assert_eq!(resp.status, "400 Bad Request", "body={}", resp.body);
+        assert!(resp.body.contains("mobile_tab_enabled"), "body={}", resp.body);
+        assert_eq!(stored_value(&path, "mobile_tab_enabled").as_deref(), Some("1"));
     }
 
     /// GET on the POST-only route answers an explicit 405 through the

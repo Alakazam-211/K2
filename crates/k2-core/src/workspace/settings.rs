@@ -141,10 +141,15 @@ pub fn allowed_project_setting_fields() -> &'static [&'static str] {
         "default_model",
         // 0106 — splice workspace default on dead resume. Values: '0' | '1'.
         "force_model_on_resume",
-        // 0179 — Design mode (prd-browser-design-mode-v1): the pinned
-        // Design tab + the + menu's Design entry. Values: '0' | '1'
+        // 0179 — "Show the Design tab" (was Design mode,
+        // prd-browser-design-mode-v1): the pinned Design tab only; + →
+        // Design is always there (Rosson 2026-10-29). Values: '0' | '1'
         // (default 1 / ON). See `get_design_mode_enabled`.
         "design_mode_enabled",
+        // 0250 — "Show the Mobile tab": the pinned Mobile tab. Values:
+        // '0' | '1' | 'auto' (stored NULL, the default: shown while this
+        // server can run a phone). See `get_mobile_tab_setting`.
+        "mobile_tab_enabled",
     ]
 }
 
@@ -169,6 +174,9 @@ those lines reach the caller.";
 
 /// The valid `mail_agent_send` gating modes (PRD §8.4 / D4).
 pub const MAIL_AGENT_SEND_MODES: [&str; 3] = ["off", "approval", "on"];
+
+/// The values `mobile_tab_enabled` takes on a write: `auto` stores NULL.
+pub const MOBILE_TAB_VALUES: [&str; 3] = ["0", "1", "auto"];
 
 /// The valid `db_agent_access` passport modes (prd-workspace-data-sidecar-v1 D21).
 pub const DB_AGENT_ACCESS_MODES: [&str; 3] = ["off", "read", "write"];
@@ -269,6 +277,11 @@ pub fn update_project_setting(
     if field == "design_mode_enabled" && value != "0" && value != "1" {
         return Err(format!(
             "design_mode_enabled must be '0' or '1', got {value:?}"
+        ));
+    }
+    if field == "mobile_tab_enabled" && !MOBILE_TAB_VALUES.contains(&value) {
+        return Err(format!(
+            "mobile_tab_enabled must be '0', '1' or 'auto', got {value:?}"
         ));
     }
     if field == "force_model_on_resume" && value != "0" && value != "1" {
@@ -374,6 +387,13 @@ pub fn update_project_setting(
             )
             .map_err(|e| format!("DB update failed: {}", e))?
         }
+    } else if field == "mobile_tab_enabled" && value == "auto" {
+        // Auto (the default) is SQL NULL, not a stored word.
+        conn.execute(
+            "UPDATE projects SET mobile_tab_enabled = NULL WHERE path = ?1",
+            rusqlite::params![project_path],
+        )
+        .map_err(|e| format!("DB update failed: {}", e))?
     } else if field == "default_model" {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -441,7 +461,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 dns_manage_enabled, agents_can_create_connections, \
                 api_guest_policy, wiki_public_chat, api_skip_permissions, \
                 host_session_cell_cap, hide_api_sessions, completion_sound_enabled, \
-                default_model, force_model_on_resume, design_mode_enabled \
+                default_model, force_model_on_resume, design_mode_enabled, \
+                mobile_tab_enabled \
          FROM projects WHERE path = ?1",
         rusqlite::params![project_path],
         |row| {
@@ -488,6 +509,8 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 });
             let force_model_on_resume = row.get::<_, i64>(17).unwrap_or(0) != 0;
             let design_mode = row.get::<_, i64>(18).unwrap_or(1) != 0;
+            // 0250: NULL (or a database before 0250) = auto.
+            let mobile_tab = row.get::<_, Option<i64>>(19).unwrap_or(None).map(|v| v != 0);
             Ok(serde_json::json!({
                 "mode": row.get::<_, String>(0).unwrap_or_else(|_| "off".to_string()),
                 "worktreeMode": row.get::<_, i64>(1).unwrap_or(0) == 1,
@@ -517,8 +540,12 @@ pub fn get_project_settings(project_path: &str) -> Result<serde_json::Value, Str
                 "completionSoundEnabled": completion_sound,
                 "defaultModel": default_model,
                 "forceModelOnResume": force_model_on_resume,
-                // Design mode: pinned Design tab + Design in the + menu (default ON).
+                // "Show the Design tab": the pinned Design tab (default ON).
                 "designModeEnabled": design_mode,
+                // "Show the Mobile tab": "auto" | "on" | "off" (default auto),
+                // and whether the room shows it on this server right now.
+                "mobileTab": mobile_tab_word(mobile_tab),
+                "mobileTabShown": mobile_tab_shown(mobile_tab, server_can_run_phone()),
             }))
         },
     )
@@ -976,8 +1003,8 @@ pub fn get_completion_sound_enabled(project_path: &str) -> bool {
     .unwrap_or(true)
 }
 
-/// Design mode for this workspace (migration 0179): the pinned Design tab
-/// and the + menu's Design entry. Default ON. Unknown path → true (same
+/// "Show the Design tab" for this workspace (migration 0179, once "Design
+/// mode"): the pinned Design tab. Default ON. Unknown path → true (same
 /// as a missing column / pre-migration row).
 pub fn get_design_mode_enabled(project_path: &str) -> bool {
     let db = crate::db::shared();
@@ -990,6 +1017,45 @@ pub fn get_design_mode_enabled(project_path: &str) -> bool {
     .ok()
     .map(|v| v != 0)
     .unwrap_or(true)
+}
+
+/// "Show the Mobile tab" for this workspace (migration 0250): `None` =
+/// auto (the default; also an unknown path or a database before 0250),
+/// `Some(false)` = off, `Some(true)` = on.
+pub fn get_mobile_tab_setting(project_path: &str) -> Option<bool> {
+    let db = crate::db::shared();
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT mobile_tab_enabled FROM projects WHERE path = ?1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+    .map(|v| v != 0)
+}
+
+/// The setting as the CLI and Settings say it: `auto`, `on` or `off`.
+pub fn mobile_tab_word(setting: Option<bool>) -> &'static str {
+    match setting {
+        None => "auto",
+        Some(true) => "on",
+        Some(false) => "off",
+    }
+}
+
+/// True while this server can run a phone: at least one usable sim lane
+/// (the cached lane probe behind the `mobile-sim-v1` boot-status key).
+pub fn server_can_run_phone() -> bool {
+    crate::sim::manager::manager().any_lane_usable()
+}
+
+/// Whether the room pins the Mobile tab. A server that can't run a phone
+/// never shows one (prd-mobile-dev-v1 M-A13), whatever the setting; on such
+/// a server `on` and `auto` both read as not shown. Otherwise only `off`
+/// hides it. Clients apply the same rule with the `mobile-sim-v1` key.
+pub fn mobile_tab_shown(setting: Option<bool>, server_can_run_phone: bool) -> bool {
+    server_can_run_phone && setting != Some(false)
 }
 
 /// The EFFECTIVE address cap for `project_path` (D6): number of
@@ -2089,6 +2155,73 @@ mod tests {
         let err = update_project_setting(&path, "design_mode_enabled", "on")
             .expect_err("non 0/1 must fail loudly");
         assert!(err.contains("design_mode_enabled"), "error must name the field, got {err}");
+    }
+
+    /// "Show the Mobile tab" (0250): defaults to auto (NULL), round-trips
+    /// off / on / auto, and refuses any other word loudly.
+    #[test]
+    fn mobile_tab_enabled_defaults_auto_and_round_trips() {
+        let path = unique_path("mobile-tab");
+        let _pid = insert_project(&path);
+        let stored = |p: &str| -> Option<i64> {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            conn.query_row("SELECT mobile_tab_enabled FROM projects WHERE path = ?1", rusqlite::params![p], |r| r.get(0))
+                .expect("row")
+        };
+
+        assert_eq!(get_mobile_tab_setting(&path), None, "default is auto");
+        assert_eq!(stored(&path), None, "auto is SQL NULL");
+        let settings = get_project_settings(&path).expect("read default");
+        assert_eq!(settings["mobileTab"], "auto");
+        assert!(settings["mobileTabShown"].is_boolean(), "{settings}");
+
+        update_project_setting(&path, "mobile_tab_enabled", "0").expect("off");
+        assert_eq!(get_mobile_tab_setting(&path), Some(false));
+        assert_eq!(stored(&path), Some(0));
+        let settings = get_project_settings(&path).expect("read off");
+        assert_eq!(settings["mobileTab"], "off");
+        assert_eq!(settings["mobileTabShown"], false, "off is never shown");
+        let row = {
+            let db = crate::db::shared();
+            let conn = db.lock();
+            crate::db::schema::Project::list(&conn)
+                .expect("list")
+                .into_iter()
+                .find(|p| p.path == path)
+                .expect("row")
+        };
+        assert_eq!(row.mobile_tab_enabled, Some(0), "the projects list carries it for every client");
+
+        update_project_setting(&path, "mobile_tab_enabled", "1").expect("on");
+        assert_eq!(get_mobile_tab_setting(&path), Some(true));
+        assert_eq!(get_project_settings(&path).expect("read on")["mobileTab"], "on");
+
+        update_project_setting(&path, "mobile_tab_enabled", "auto").expect("back to auto");
+        assert_eq!(get_mobile_tab_setting(&path), None);
+        assert_eq!(stored(&path), None, "auto clears to NULL");
+
+        for bad in ["on", "true", "", "2"] {
+            let err = update_project_setting(&path, "mobile_tab_enabled", bad)
+                .expect_err("only 0, 1 or auto");
+            assert!(err.contains("mobile_tab_enabled"), "error must name the field, got {err}");
+        }
+        assert_eq!(get_mobile_tab_setting(&path), None, "a refused write changes nothing");
+    }
+
+    /// The pinned Mobile tab shows only where a phone can run (M-A13), and
+    /// there only `off` hides it.
+    #[test]
+    fn mobile_tab_shown_follows_the_server_and_the_setting() {
+        assert!(mobile_tab_shown(None, true), "auto on a server that runs a phone");
+        assert!(mobile_tab_shown(Some(true), true));
+        assert!(!mobile_tab_shown(Some(false), true), "off hides it");
+        assert!(!mobile_tab_shown(None, false), "auto with no usable lane");
+        assert!(!mobile_tab_shown(Some(true), false), "no phone, no Mobile tab");
+        assert!(!mobile_tab_shown(Some(false), false));
+        assert_eq!(mobile_tab_word(None), "auto");
+        assert_eq!(mobile_tab_word(Some(true)), "on");
+        assert_eq!(mobile_tab_word(Some(false)), "off");
     }
 
     /// A fresh workspace row defaults to DNS-manage OFF (fail-closed),

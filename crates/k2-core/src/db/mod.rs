@@ -1701,6 +1701,10 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // New table only; renumber freely on a slip (and edit the
         // migration-order tests).
         ("0248_email_notify_queue", include_str!("../../drizzle_sql/0248_email_notify_queue.sql")),
+        // 0250 — the pinned Mobile tab switch (Rosson 2026-10-29, 0.46.7):
+        // `projects.mobile_tab_enabled`, nullable (NULL = auto). ADD COLUMN
+        // only; renumber freely on a slip (and edit the migration-order tests).
+        ("0250_workspace_mobile_tab", include_str!("../../drizzle_sql/0250_workspace_mobile_tab.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2364,7 +2368,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0248_email_notify_queue",
+            last_name, "0250_workspace_mobile_tab",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2464,6 +2468,8 @@ mod tests {
                 "0247_email_agent_notices",
                 // 0.46.6: the delivery webhook's queue link (email notifications part 2, N6).
                 "0248_email_notify_queue",
+                // 0.46.7: the pinned Mobile tab switch.
+                "0250_workspace_mobile_tab",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2571,6 +2577,8 @@ mod tests {
                 "0247_email_agent_notices",
                 // 0.46.6: the delivery webhook's queue link (email notifications part 2, N6).
                 "0248_email_notify_queue",
+                // 0.46.7: the pinned Mobile tab switch.
+                "0250_workspace_mobile_tab",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2798,7 +2806,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0248_email_notify_queue", "0248 (0.46.6) runs last");
+        assert_eq!(top, "0250_workspace_mobile_tab", "0250 (0.46.7) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();
@@ -2834,9 +2842,10 @@ mod tests {
                 "0245_email_notify_outcomes",
                 "0246_email_sender_envelope",
                 "0247_email_agent_notices",
-                "0248_email_notify_queue"
+                "0248_email_notify_queue",
+                "0250_workspace_mobile_tab"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, and 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247 then 0248)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3678,6 +3687,9 @@ mod tests {
             // (verified addresses), 0.46.6, are the newest: their records go
             // (their tables and indexes are IF NOT EXISTS; 0246's column
             // re-add is skipped as a duplicate).
+            // 0250 (the Mobile tab switch, 0.46.7) is newest: its record
+            // goes (its column re-add is skipped as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0250_workspace_mobile_tab'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0248_email_notify_queue'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0247_email_agent_notices'", []).unwrap();
             conn.execute("DELETE FROM _migrations WHERE name = '0246_email_sender_envelope'", []).unwrap();

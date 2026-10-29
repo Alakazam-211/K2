@@ -241,6 +241,27 @@ pub struct Project {
     /// before 0225 (the upgrade tests read one) still reads as off.
     #[serde(default)]
     pub agents_can_manage_app_users: i64,
+    /// "Show the Mobile tab" (migration 0250, Rosson 2026-10-29). NULL
+    /// (`None`) = auto: the room pins the Mobile tab while this server can
+    /// run a phone (at least one usable sim lane, the `mobile-sim-v1`
+    /// boot-status key). `Some(0)` = off, `Some(1)` = on. Written via
+    /// `/cli/workspace/set {mobile_tab_enabled}` / `k2 workspace mobile-tab`.
+    /// Read by its own query ([`mobile_tab_switches`]), never in the main
+    /// SELECT, so a database before 0250 reads as auto.
+    #[serde(default)]
+    pub mobile_tab_enabled: Option<i64>,
+}
+
+/// Every workspace's "Show the Mobile tab" (0250), by id: `None` = auto.
+/// A database before 0250 (no column) or a read error: empty, so every
+/// workspace reads as auto (today's default).
+fn mobile_tab_switches(conn: &Connection) -> std::collections::HashMap<String, Option<i64>> {
+    let Ok(mut stmt) = conn.prepare("SELECT id, mobile_tab_enabled FROM projects") else {
+        return std::collections::HashMap::new();
+    };
+    stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<i64>>(1)?)))
+        .map(|rows| rows.filter_map(std::result::Result::ok).collect())
+        .unwrap_or_default()
 }
 
 /// Every workspace's "Let this agent manage its Apps' users" (0225), by id.
@@ -334,12 +355,15 @@ impl Project {
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
                 agents_can_manage_app_users: 0,
+                mobile_tab_enabled: None,
             })
         })?;
         let mut out: Vec<Project> = rows.collect::<Result<_>>()?;
         let users = app_users_switches(conn);
+        let mobile_tabs = mobile_tab_switches(conn);
         for p in out.iter_mut() {
             p.agents_can_manage_app_users = users.get(&p.id).copied().unwrap_or(0);
+            p.mobile_tab_enabled = mobile_tabs.get(&p.id).copied().flatten();
         }
         Ok(out)
     }
@@ -407,6 +431,7 @@ impl Project {
                 app_cores: row.get::<_, Option<String>>(42).ok().flatten().unwrap_or_else(|| "[]".to_string()),
                 agents_can_upgrade_postgres: row.get(43).unwrap_or(0),
                 agents_can_manage_app_users: 0,
+                mobile_tab_enabled: None,
                 })
             },
         )
@@ -415,6 +440,10 @@ impl Project {
             p.agents_can_manage_app_users = conn
                 .query_row("SELECT agents_can_manage_app_users FROM projects WHERE id = ?1", params![p.id], |r| r.get(0))
                 .unwrap_or(0);
+            // Its own query too: a database before 0250 reads as auto.
+            p.mobile_tab_enabled = conn
+                .query_row("SELECT mobile_tab_enabled FROM projects WHERE id = ?1", params![p.id], |r| r.get::<_, Option<i64>>(0))
+                .unwrap_or(None);
             p
         })
     }
@@ -5218,6 +5247,26 @@ mod unit_tests {
         conn.execute_batch("ALTER TABLE projects DROP COLUMN agents_can_manage_app_users").unwrap();
         assert_eq!(Project::get(&conn, &id).unwrap().agents_can_manage_app_users, 0);
         assert_eq!(Project::list(&conn).unwrap().iter().find(|x| x.id == id).expect("listed").agents_can_manage_app_users, 0);
+    }
+
+    #[test]
+    fn project_mobile_tab_enabled_defaults_auto_reads_on_its_own_and_serializes_null() {
+        let conn = fresh();
+        let id = make_project_row(&conn, "/tmp/proj-mobile-tab");
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.mobile_tab_enabled, None, "0250 default is auto (NULL)");
+        assert!(serde_json::to_value(&p).unwrap()["mobileTabEnabled"].is_null(), "auto is JSON null on the wire");
+        conn.execute("UPDATE projects SET mobile_tab_enabled = 0 WHERE id = ?1", params![id]).unwrap();
+        let p = Project::get(&conn, &id).unwrap();
+        assert_eq!(p.mobile_tab_enabled, Some(0));
+        assert_eq!(p.design_mode_enabled, 1, "a neighbouring switch is untouched");
+        let listed = Project::list(&conn).unwrap();
+        assert_eq!(listed.iter().find(|x| x.id == id).expect("listed").mobile_tab_enabled, Some(0));
+        assert_eq!(serde_json::to_value(&p).unwrap()["mobileTabEnabled"], 0);
+        // A database before 0250 (no column) reads it as auto, never fails.
+        conn.execute_batch("ALTER TABLE projects DROP COLUMN mobile_tab_enabled").unwrap();
+        assert_eq!(Project::get(&conn, &id).unwrap().mobile_tab_enabled, None);
+        assert_eq!(Project::list(&conn).unwrap().iter().find(|x| x.id == id).expect("listed").mobile_tab_enabled, None);
     }
 
     #[test]

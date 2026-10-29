@@ -285,9 +285,9 @@ fn rollback_accept_data_loss(env: &Env, who: &Who, v: &Value, req: &sup::Rollbac
         let mut f = no(
             ROLLBACK_NEEDS_PERSON,
             403,
-            "a person rolls Sew back across a schema change (chat written since the upgrade leaves the live chat; K2 backs \
-             it up first): the owner runs k2 hostchat rollback --accept-data-loss from a terminal outside K2, or answers \
-             your permission card",
+            "nothing changed: only the owner can roll Sew back across a schema change (chat written since the upgrade \
+             leaves the live chat; K2 backs it up first). Ask the owner on a permission card; the owner may instead run \
+             k2 hostchat rollback --accept-data-loss in a terminal outside K2",
         );
         f.extra = plan.map(|p| json!({"to": p["to"], "since": p["since"], "bundle": p["bundle"]}));
         return Err(f);

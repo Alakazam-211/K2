@@ -2786,6 +2786,7 @@ mod tests {
             &["engine", "sew", "upgrade"],
             &["engine", "sew", "upgrade", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"],
             &["engine", "sew", "rollback"],
+            &["engine", "sew", "rollback", "accept-data-loss", "20261028T230805Z"],
             &["engine", "sew", "uninstall"],
             &["engine", "sew", "purge", "48831765147549701"],
             &["engine", "sew", "purge", "none", "keep-backups"],

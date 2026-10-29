@@ -86,7 +86,7 @@ PUBHEX="$(openssl ec -in /opt/jwks/key.pem -pubout -outform DER 2>/dev/null | ta
 X="$(printf '%s' "${PUBHEX:0:64}" | xxd -r -p | b64u)"
 Y="$(printf '%s' "${PUBHEX:64:64}" | xxd -r -p | b64u)"
 printf '{"keys":[{"kty":"EC","crv":"P-256","x":"%s","y":"%s","kid":"k2it-1","alg":"ES256","use":"sig"}]}\n' "$X" "$Y" >/opt/jwks/v1/chat/jwks
-cat >/etc/systemd/system/k2-jwks.service <<UNIT
+cat >/etc/systemd/system/it-jwks.service <<UNIT
 [Unit]
 Description=loopback JWKS for the Sew upgrade test
 [Service]
@@ -94,7 +94,7 @@ Type=simple
 ExecStart=/usr/bin/python3 -m http.server $PORT --bind 127.0.0.1 --directory /opt/jwks
 UNIT
 systemctl daemon-reload
-systemctl restart k2-daemon.service k2-jwks.service
+systemctl restart k2-daemon.service it-jwks.service
 sleep 1
 systemctl is-active --quiet k2-daemon.service || fail "fake daemon did not start"
 curl -fsS "$JWKS_URL" | grep -q '"kty":"EC"' || fail "the loopback JWKS does not answer"
@@ -356,7 +356,7 @@ mg GET "/mgmt/v1/principals?external_id=$P1&limit=1"
 mg GET "/mgmt/v1/principals?external_id=$A&limit=1"
 [ "$(jq -r '.items | length' <<<"$MB")" = 0 ] || fail "the agent written on 0.5.0 is gone from the live chat: $MB"
 ok "pre-upgrade data back; what was written on 0.5.0 (the agent, its Space and message) is gone from the live chat"
-[ -d "/var/lib/sew/backups/$KEPT" ] || fail "the 0.5.0 backup $KEPT is kept on disk: $(ls /var/lib/sew/backups)"
+[ -e "/var/lib/sew/backups/sew-backup-$KEPT" ] || fail "the 0.5.0 backup $KEPT is kept on disk: $(ls /var/lib/sew/backups)"
 mg GET /mgmt/v1/backups
 echo "    0.3.1 lists the kept bundle: $(jq -c --arg k "$KEPT" '[.items[] | select(.id == $k) | {id, sew_version, kind}]' <<<"$MB")"
 ok "the 0.5.0 backup $KEPT is kept (restorable onto 0.5.x later)"

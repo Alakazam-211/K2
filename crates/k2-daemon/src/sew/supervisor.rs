@@ -2629,10 +2629,10 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
 
 /// What a refused rollback across a schema change says next (Rosson
 /// 2026-10-28): the person-only emergency rollback.
-pub const ROLLBACK_ACROSS_SCHEMA_HINT: &str = "Sew keeps everything written since the upgrade, so a plain rollback stops here. \
-     A person can still roll back, losing that chat from the live server (K2 backs it up first): \
-     k2 hostchat rollback --accept-data-loss, from a terminal outside K2. An agent asks on a permission card \
-     (k2 permission request sew.rollback-data-loss)";
+pub const ROLLBACK_ACROSS_SCHEMA_HINT: &str = "Nothing changed. The upgrade changed how Sew stores chat, so a plain rollback \
+     would lose everything written since the upgrade, and it refuses to go back past it. To go back anyway (that chat \
+     leaves the live chat; K2 backs it up first), the owner runs k2 hostchat rollback --accept-data-loss in a terminal \
+     outside K2. An agent asks the owner on a card: k2 permission request sew.rollback-data-loss --why \"<why>\"";
 
 /// Sew's verdict on the core's rollback is in (`v`, exit 0): K2's health
 /// check of the old core, the row, then (voice) the OLD core reinstalls its
@@ -2714,14 +2714,6 @@ pub const ROLLBACK_POINT_RECORD: &str = "rollback-point";
 /// The vault confirm this rollback takes (`secretId` = `<install
 /// id>:<bundle>`; the card binds its own to the request id).
 pub const CONFIRM_ROLLBACK_DATA_LOSS: &str = "sew-rollback-data-loss";
-
-/// What the person is told before they confirm, and what the card says.
-pub fn data_loss_words(since: &str, to: &str) -> String {
-    format!(
-        "Sew goes back to {to}. Chat written since {since} will be lost from the live chat; a backup of it is kept \
-         (K2 takes it first)."
-    )
-}
 
 /// `20261028T230805Z` → `2026-10-28 23:08 UTC` (a bundle id is its time).
 pub fn bundle_time_text(bundle: &str) -> String {
@@ -2868,7 +2860,8 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
             body["result"] = json!(if healthy && clean { "rolled_back" } else { "rolled_back_unhealthy" });
             body["message"] = json!(if healthy && clean {
                 format!(
-                    "Sew is back on {to} with its chat from {}. Sew {from}'s chat is kept in backup {kept_id} (restorable onto Sew {from}).",
+                    "Sew is back on {to} with its chat from {}. Sew {from}'s chat is kept in backup {kept_id}; to bring it back \
+                     later: k2 hostchat upgrade, then k2 hostchat restore {kept_id} --confirm.",
                     bundle_time_text(bundle)
                 )
             } else {

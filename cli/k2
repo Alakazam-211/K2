@@ -59506,13 +59506,18 @@ Server:
                                              box doesn't keep it; the old core puts that engine back, then
                                              sew doctor's media checks are shown; exit 3 unless all is well)
   k2 hostchat rollback --accept-data-loss [--media-tarball FILE] [--json]
-                                            (the owner, from a terminal outside K2, with a confirm: after an
-                                             upgrade that changed Sew's data, the plain rollback refuses. This
-                                             one goes back anyway: chat written since the upgrade is lost from
-                                             the live chat. K2 first backs up the current chat (restorable onto
-                                             the newer Sew later), then rolls back to the backup taken just
-                                             before the upgrade, then checks Sew is healthy. It names both
-                                             backups. An agent asks the owner on a card instead:
+                                            (after an upgrade that changed how Sew stores chat, the plain
+                                             rollback refuses. This one goes back anyway: chat written since the
+                                             upgrade is lost from the live chat and stays only in a backup.
+                                             Run it as the owner, in a terminal outside K2; it shows what will
+                                             happen and asks you to confirm (Touch ID or the vault password).
+                                             K2 backs up the current chat, rolls back to the backup taken just
+                                             before the upgrade, then checks Sew is healthy, and names both
+                                             backups. Chat is offline for a few minutes while it runs. To bring
+                                             the newer chat back later: k2 hostchat upgrade, then
+                                             k2 hostchat restore <kept backup> --confirm. --media-tarball: as
+                                             for the plain rollback, with voice on. An agent asks the owner on
+                                             a card instead:
                                                k2 permission request sew.rollback-data-loss --why "<why>")
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
                                             (--media-tarball: the sew-media release, needed when voice is on;
@@ -59904,9 +59909,13 @@ _hostchat_rollback_data_loss() {
     since="$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("since") or "")')"
     [ -n "$bundle" ] || { echo '{"error":"no_rollback_point","hint":"K2 found no backup to roll back to (k2 hostchat backups)"}' >&2; exit 3; }
     {
-        echo "Roll Sew back from $from to $to."
-        echo "Chat written since $since will be lost from the live chat; a backup of it is kept."
-        echo "K2 first backs up Sew $from (restorable onto Sew $from later), then rolls back to backup $bundle (taken just before the upgrade)."
+        echo "Nothing has changed yet. Confirming will:"
+        echo "  roll this server's chat (Sew) back from $from to $to, for everyone on it."
+        echo "  Chat written since $since will be lost from the live chat; a backup of it is kept."
+        echo "  K2 first backs up Sew $from's chat, then rolls back to backup $bundle (taken just before the upgrade)."
+        echo "  Chat is offline for a few minutes while it runs."
+        echo "Backups are listed by k2 hostchat backups. To bring the newer chat back later:"
+        echo "  k2 hostchat upgrade, then k2 hostchat restore <kept backup> --confirm."
     } >&2
     local id tok; id="$(_hostchat_install_id)"
     tok="$(_vault_confirm_token sew-rollback-data-loss "$id:$bundle" "Roll Sew back to $to: chat written since $since leaves the live chat (a backup of it is kept)")" || exit 3

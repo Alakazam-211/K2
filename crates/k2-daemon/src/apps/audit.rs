@@ -11,7 +11,8 @@
 //! on SQLite.
 //!
 //! **Alerts** (to the App's owning workspace agent, a `k2 msg` wake):
-//! - a denial spike: more than 20 refused calls in 5 minutes;
+//! - a denial spike: more than 20 refused calls in 5 minutes (401, 403,
+//!   423, 429 and `pass_wrong_link` only: [`counts_toward_spike`]);
 //! - the first successful use of each write verb, gathered into one wake
 //!   per App per [`DIGEST_WINDOW`] (0.46.4, NSI C: a test run's login,
 //!   logout and upload were three wakes), and none at all for what one of
@@ -54,7 +55,8 @@ use super::routes::{app_for, need_credential, no, Who, R};
 
 pub const ROUTES: &[&str] = &["/cli/app/audit"];
 
-/// A denial spike: more than this many refusals …
+/// A denial spike: more than this many security refusals
+/// ([`counts_toward_spike`]) …
 pub const SPIKE_DENIALS: usize = 20;
 /// … within this window.
 pub const SPIKE_WINDOW: Duration = Duration::from_secs(300);
@@ -478,7 +480,7 @@ fn observe(ws: &str, call: &Call) {
             );
         }
     }
-    if call.result >= 400 {
+    if counts_toward_spike(call.result, call.code.as_deref()) {
         let spike = {
             let mut a = alerts().lock().unwrap_or_else(|e| e.into_inner());
             let v = a.denials.entry(app.to_string()).or_default();
@@ -495,6 +497,16 @@ fn observe(ws: &str, call: &Call) {
             );
         }
     }
+}
+
+/// Does a finished call count toward the refused-calls alert? Only the
+/// refusals that say something about who is calling: 401 (no or a bad
+/// pass, a wrong password), 403 (not allowed, a pass for another link),
+/// 423 (a locked guest), 429 (too many), and `pass_wrong_link` whatever
+/// its status. 0.46.6: it counted every status of 400 or more, so a test
+/// run of missing folders (400/404) and bad requests woke the agent.
+pub fn counts_toward_spike(result: u16, code: Option<&str>) -> bool {
+    matches!(result, 401 | 403 | 423 | 429) || code == Some("pass_wrong_link")
 }
 
 /// First successful use of each write verb (checked by the writer against
@@ -707,6 +719,65 @@ mod tests {
         assert!(l.starts_with("[k2] refused [redacted] SPOOF: pass_invalid") || l.starts_with("[k2] refused GET [redacted] SPOOF: pass_invalid"), "{l}");
         let l = refused_line(&format!("GET /{}", "p/".repeat(200)), "not_found", None);
         assert!(l.chars().count() <= "[k2] refused : not_found".len() + VERB_MAX + 1, "{l}");
+    }
+
+    /// 0.46.6 (App guest login lockout report, fix 3b): the refused-calls
+    /// alert counts 401, 403, 423, 429 and `pass_wrong_link` only.
+    #[test]
+    fn only_security_refusals_count_toward_the_spike() {
+        for (status, code) in [(401, None), (403, Some("cap_not_granted")), (423, Some("locked")), (429, Some("rate_limited")), (403, Some("pass_wrong_link"))] {
+            assert!(counts_toward_spike(status, code), "{status} {code:?}");
+        }
+        for (status, code) in [(400, None), (404, Some("not_found")), (405, None), (409, Some("conflict")), (413, Some("too_large")), (415, None), (500, None), (503, None), (200, None), (0, None)] {
+            assert!(!counts_toward_spike(status, code), "{status} {code:?}");
+        }
+    }
+
+    fn call(app: &str, result: u16, code: Option<&str>) -> Call {
+        Call {
+            at_ms: 0,
+            app_id: app.to_string(),
+            seed: None,
+            actor: "app".to_string(),
+            on_behalf_of: None,
+            verb: "GET /cli/fs/read-dir".to_string(),
+            room: None,
+            result,
+            code: code.map(str::to_string),
+            bytes_in: 0,
+            bytes_out: 0,
+            latency_ms: 0,
+        }
+    }
+
+    fn spiked(app: &str) -> bool {
+        alerts().lock().unwrap_or_else(|e| e.into_inner()).said.contains_key(&(app.to_string(), "denial_spike".to_string()))
+    }
+
+    /// 25 missing folders (404) and 25 bad requests (400) raise no alert;
+    /// 21 wrong passwords (401) do.
+    #[test]
+    fn missing_folders_never_raise_the_refused_calls_alert() {
+        let said: std::sync::Arc<Mutex<Vec<String>>> = Default::default();
+        let s = said.clone();
+        super::super::alerts::set_sink(Some(Box::new(move |_: &str, text: &str| s.lock().unwrap().push(text.to_string()))));
+        let quiet = format!("spike-quiet-{}", uuid::Uuid::new_v4());
+        for _ in 0..25 {
+            observe("ws-spike", &call(&quiet, 404, Some("not_found")));
+            observe("ws-spike", &call(&quiet, 400, None));
+        }
+        assert!(!spiked(&quiet), "50 missing folders and bad requests are no spike");
+        let loud = format!("spike-loud-{}", uuid::Uuid::new_v4());
+        for _ in 0..SPIKE_DENIALS {
+            observe("ws-spike", &call(&loud, 401, None));
+        }
+        assert!(!spiked(&loud), "{SPIKE_DENIALS} is not more than {SPIKE_DENIALS}");
+        observe("ws-spike", &call(&loud, 401, None));
+        assert!(spiked(&loud), "the 21st wrong password is");
+        let texts = said.lock().unwrap().clone();
+        assert!(texts.iter().any(|t| t.contains(&loud) && t.contains("refused calls in 5 minutes")), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains(&quiet)), "{texts:?}");
+        super::super::alerts::set_sink(None);
     }
 
     #[test]

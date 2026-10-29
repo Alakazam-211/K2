@@ -116,9 +116,14 @@ approver key (it lives in `~/.k2-release-approve`, not in the app).
 
 **Order against landing.** The lane stays held until the public keys exist,
 because it changes what installs trust and `release.sh` refuses to start
-without them. **Both Macs' sittings 1 and 2 come before the public keys
-land**, so one pubkeys commit carries U2, U2b and U3 and there is only one
-updater-key rollout:
+without them. **Plan (Rosson 2026-10-28): 0.46.6 ships U2 + U3 only;** z3mbp's
+sitting 2 (U2b) happens after 0.46.6, and U2b joins the key list in a later
+release (`pubkeys <U2> <U2b> <U3>`). That release must be made on z3mbpZ
+(installs trust only U2/U3 until then), and z3mbp should not release until
+the fleet has taken it: an install that hasn't would refuse a release signed
+with U2b alone. Until then z3mbp's signer has no key and refuses to sign.
+(Doing both Macs' sitting 2 before the landing would have needed one rollout;
+the steps below show that order.)
 1. From the **lane's commit** (K2 pushes it as a branch and names the commit):
    z3mbpZ `0`, `1 --key U2` (done 2026-10-28 at 87b27c2dc), `reenrol --key U2`,
    `2 --key U2`; z3mbp `1 --key U2b`, `2 --key U2b`. The two Macs' sittings

@@ -544,7 +544,7 @@ pub fn skin_may_see_frame(frame: &OverlayFrame, conversation: &str, skin: bool) 
     }
 }
 
-fn skin_overlay_gate(
+pub(crate) fn skin_overlay_gate(
     pass: &SkinPass,
     conversation: &str,
 ) -> Result<String, crate::cli_response::CliResponse> {

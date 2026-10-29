@@ -5,7 +5,16 @@
 //! POST /cli/skin/push/unregister {deviceId}
 //! GET  /cli/skin/push/device     ?deviceId=
 //! POST /cli/skin/push/prefs      {deviceId, previews?, mutedTopics?}
+//! POST /cli/skin/push/viewing    {conversation, visible}     (0.46.7, TC-24)
 //! ```
+//!
+//! `push.viewing` is the App server saying its signed-in person has a
+//! Thread open (`visible: true`, repeated every 30 s) or closed it
+//! (`false`). It sets that guest's own viewing state for 90 s, the Thread
+//! push rule, so agent-reply pushes stay quiet while they look. The same
+//! state a guest's own overlay socket sets with `{"t":"viewing"}` frames.
+//! Only the caller's own state; the conversation is a pinned Chat the pass
+//! reads (`thread:read` in its room), else `skin_room`.
 //!
 //! And the App's own verbs on its link (its link pass, `push:send`, §8):
 //!
@@ -48,16 +57,25 @@ pub const PREFS: &str = "/cli/skin/push/prefs";
 pub const SEND: &str = "/cli/skin/push/send";
 pub const STATUS: &str = "/cli/skin/push/status";
 pub const DEVICES: &str = "/cli/skin/push/devices";
+pub const VIEWING: &str = "/cli/skin/push/viewing";
 
 /// The routes a pass calls (the dispatcher resolves the pass).
-pub const PASS_ROUTES: &[&str] = &[REGISTER, UNREGISTER, DEVICE, PREFS, SEND, STATUS, DEVICES];
+pub const PASS_ROUTES: &[&str] = &[REGISTER, UNREGISTER, DEVICE, PREFS, SEND, STATUS, DEVICES, VIEWING];
 /// The POST ones (the dispatcher's method guard).
-pub const POST_ROUTES: &[&str] = &[REGISTER, UNREGISTER, PREFS, SEND];
+pub const POST_ROUTES: &[&str] = &[REGISTER, UNREGISTER, PREFS, SEND, VIEWING];
 
 /// Registers per pass an hour (CP8).
 pub const REGISTERS_PER_HOUR: usize = 30;
+/// `push.viewing` calls per pass an hour: one every 10 s, three times the
+/// 30 s repeat an open screen needs.
+pub const VIEWINGS_PER_HOUR: usize = 360;
 
 fn registers() -> &'static Limiter {
+    static L: OnceLock<Limiter> = OnceLock::new();
+    L.get_or_init(|| Limiter::new(Duration::from_secs(3600)))
+}
+
+fn viewings() -> &'static Limiter {
     static L: OnceLock<Limiter> = OnceLock::new();
     L.get_or_init(|| Limiter::new(Duration::from_secs(3600)))
 }
@@ -221,6 +239,43 @@ pub fn handle_prefs(pass: &SkinPass, body: &[u8]) -> CliResponse {
     })())
 }
 
+/// `POST /cli/skin/push/viewing {conversation, visible}` (TC-24): the
+/// guest's own viewing state for one pinned Chat it reads, for
+/// [`crate::thread_viewers::VIEW_TTL`] (90 s) from now; `false` ends it.
+/// Any App (the box login too: viewing quiets, it never sends).
+pub fn handle_viewing(pass: &SkinPass, body: &[u8]) -> CliResponse {
+    answer((|| {
+        guest(pass)?;
+        let reader = crate::read_routes::pass_reader(pass);
+        if !reader.person {
+            return Err(guest_required());
+        }
+        let v = json_body(body)?;
+        let conversation = v.get("conversation").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty() && s.len() <= 200);
+        let (Some(conversation), Some(visible)) = (conversation, v.get("visible").and_then(Value::as_bool)) else {
+            return Err(usage("send {conversation, visible} (conversation: the Thread's id from thread.*; visible: true or false)"));
+        };
+        if let Some(extra) = v.as_object().and_then(|o| o.keys().find(|k| *k != "conversation" && *k != "visible")) {
+            return Err(usage(&format!("unknown field {extra}: send {{conversation, visible}}")));
+        }
+        crate::overlay_ws::skin_overlay_gate(pass, conversation)?;
+        if let Err(wait) = viewings().take(&pass.id, VIEWINGS_PER_HOUR) {
+            let mut extra = serde_json::Map::new();
+            extra.insert("retryAfterMs".into(), json!(wait));
+            extra.insert("limit".into(), json!(VIEWINGS_PER_HOUR));
+            return Err(refusal_with(
+                "429 Too Many Requests",
+                "rate_limited",
+                "too many push.viewing calls from this pass this hour; repeat every 30 s while the screen is open",
+                extra,
+            ));
+        }
+        crate::thread_viewers::on_guest_frame(crate::thread_viewers::verb_socket(&pass.id), &reader.key, conversation, visible);
+        let ttl = if visible { crate::thread_viewers::VIEW_TTL.as_secs() } else { 0 };
+        Ok(json!({ "ok": true, "conversation": conversation, "visible": visible, "ttlSecs": ttl }))
+    })())
+}
+
 // ── the App's own verbs on its link ──────────────────────────────────
 
 /// The App a link pass sends for: this link's own App pass (never a guest
@@ -309,6 +364,7 @@ pub fn handle_pass(path: &str, pass: &SkinPass, link_app: Option<&str>, is_post:
         (SEND, true) => handle_send(pass, link_app, body),
         (STATUS, false) => handle_status(pass, link_app, params),
         (DEVICES, false) => handle_devices(pass, link_app),
+        (VIEWING, true) => handle_viewing(pass, body),
         _ => CliResponse::method_not_allowed(),
     }
 }

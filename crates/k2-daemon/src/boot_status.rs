@@ -747,6 +747,10 @@ pub const FEATURE_APP_WALLET: &str = "app-wallet-v1";
 /// `/v1/apps/<id>/push/*` (App key scope `push`) and `/cli/app/push/*`.
 /// skin.db tables only, no SQL migration.
 pub const FEATURE_APP_PUSH: &str = "custom-app-push-v1";
+/// `push.viewing` (prd-tauri-core-0467-v1 TC-24, 0.46.7): an App's server
+/// says its signed-in person has a Thread open, so agent-reply pushes stay
+/// quiet for 90 s; a guest's own overlay `viewing` frames count too (TA-23).
+pub const FEATURE_APP_PUSH_VIEWING: &str = "app-push-viewing-v1";
 /// Phone pairing for custom Apps (prd-app-phone-pairing-v1, 0.46.5):
 /// `pairing.start|status|cancel` (a guest's own web session pass),
 /// `pairing.check|redeem` (Public), the link files on the App's own
@@ -1058,6 +1062,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_MOBILE_ACCESS);
     out.push(FEATURE_APP_WALLET);
     out.push(FEATURE_APP_PUSH);
+    out.push(FEATURE_APP_PUSH_VIEWING);
     out.push(FEATURE_APP_PAIRING);
     out.push(FEATURE_APP_USER_PROFILE);
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
@@ -1213,6 +1218,7 @@ mod tests {
                 "app-mobile-access-v1",
                 "app-wallet-v1",
                 "custom-app-push-v1",
+                "app-push-viewing-v1",
                 "app-phone-pairing-v1",
                 "app-user-profile-v1",
                 "email-notifications-v1",

@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 40,
+  "catalogVersion": 41,
   "caps": [
     {
       "name": "agents:read",
@@ -10330,6 +10330,82 @@
       ],
       "doc": "Change one device's notification choices (previews, muted topics) without its token.",
       "example": "await k2.asGuest(pass).push.prefs({deviceId, mutedTopics: ['marketing']})"
+    },
+    {
+      "verb": "push.viewing",
+      "cap": null,
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-push-viewing-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/skin/push/viewing"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "conversation": {
+              "type": "string",
+              "description": "The Thread's id (a room's pinned Chat this guest reads, from thread.*)."
+            },
+            "visible": {
+              "type": "boolean",
+              "description": "true while the person has that Thread on screen (repeat every 30 s); false when they leave it."
+            }
+          },
+          "required": [
+            "conversation",
+            "visible"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppPushViewing",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "conversation": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "ttlSecs": {
+            "type": "integer",
+            "description": "How long this call counts, in seconds (a duration): 90 for visible:true, 0 for false."
+          }
+        },
+        "required": [
+          "ok",
+          "conversation",
+          "visible",
+          "ttlSecs"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "guest_required",
+        "skin_room",
+        "rate_limited",
+        "usage",
+        "failed"
+      ],
+      "doc": "Say this guest has a Thread open (or closed it): agent-reply pushes for that Thread stay quiet for 90 s after each visible:true. The App's server calls it with the person's own pass while their screen shows the Thread; only that guest's own state changes.",
+      "example": "await k2.asGuest(pass).push.viewing({conversation, visible: true})"
     },
     {
       "verb": "push.send",

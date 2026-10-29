@@ -1684,6 +1684,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/push/send", NoLogin),
     get("/cli/skin/push/status", NoLogin),
     post("/cli/skin/push/unregister", NoLogin),
+    post("/cli/skin/push/viewing", NoLogin),
     post("/cli/skin/refresh", Public),
     both("/cli/skin/roles", Owner),
     post("/cli/skin/roles/assign", Owner),

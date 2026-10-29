@@ -158,3 +158,55 @@ fn previews_come_from_the_redacted_stored_text() {
     assert!(!p.contains(VAL) && p.contains("[k2v:PUSH_PREVIEW_KEY]"), "a choice card's question too: {p}");
     assert_eq!(crate::overlay_routes::push_preview_text(ThreadMsgKind::Secret, &text), "", "a secret card never previews");
 }
+
+/// TC-24 / TA-23: a guest viewing the Thread (push.viewing or its own
+/// overlay frames, both under `guest:<principalId>`) gets no agent-reply
+/// push; the first post after the 90 s view lapses pushes again.
+#[test]
+fn a_viewing_guest_gets_no_agent_reply_push_until_the_view_lapses() {
+    let home = crate::test_support::TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    crate::vault::ensure_test_vault();
+    let ws = "ws-agentview".to_string();
+    let app = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        let path = home.path().join(&ws);
+        std::fs::create_dir_all(&path).expect("dir");
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, ?1, ?2, ?1)", params![ws, path.to_string_lossy()]).expect("project");
+        k2_core::published_services::insert(&conn, &ws, "view", "node s.js", "/tmp", 4351, "local", "running", "cmd", "").expect("svc").id
+    };
+    let fake = Arc::new(Fake::default());
+    install_test_transport(&app, fake.clone());
+    store::set_switches(&app, store::Switches { owner_on: Some(true), agent_replies: Some(true), ..Default::default() }, "owner").expect("on");
+    let k = super::super::creds::validate_apns(EC_P256_P8, "ABC123DEFG", "TEAM123456", "com.example.app").expect("apns");
+    super::super::creds::store_apns(&app, &k, "owner").expect("store");
+    let mut reader = skin::RoomPolicy::new();
+    reader.insert(ws.clone(), vec!["thread:read".into()]);
+    skin::create_role_for_app("viewers", &reader, Some(&app)).expect("role");
+    skin::add_principal_for_app("vera", None, &app, Some("viewers"), "test").expect("vera");
+    let vera = skin::list_principals().expect("p").into_iter().find(|p| p.username == "vera").expect("vera").id;
+    let s = skin::create_app_session_token("vera", &app).expect("session");
+    let reg = store::parse_registration(&json!({"deviceId": "v1", "platform": "apns", "pushToken": "v1".repeat(32)})).expect("reg");
+    store::register(&app, &vera, &s.meta.id, &reg).expect("register");
+    let conv = format!("conv-view-{}", uuid::Uuid::new_v4());
+    let p = |seq| Post { room: ws.clone(), room_handle: ws.clone(), conversation: conv.clone(), agent_name: "Jobs agent".into(), seq, preview: "Done".into() };
+    let sent = || {
+        assert!(worker::wait_app(&app, Duration::from_secs(20)));
+        fake.seen.lock().expect("lock").len()
+    };
+
+    let t0 = Instant::now();
+    let socket = crate::thread_viewers::verb_socket(&s.meta.id);
+    crate::thread_viewers::on_guest_frame(socket, &guest_key(&vera), &conv, true);
+    guest_post(&app, &vera, &p(1), t0);
+    assert_eq!(sent(), 0, "viewing: the leading post is quiet");
+    // 60 s on: the first window closed, but the view (90 s) still holds.
+    guest_post(&app, &vera, &p(2), t0 + Duration::from_secs(60));
+    assert_eq!(sent(), 0, "still viewing at 60 s");
+    // 106 s on: the view lapsed 16 s ago and the window from 60 s closed.
+    guest_post(&app, &vera, &p(3), t0 + Duration::from_secs(106));
+    assert_eq!(sent(), 1, "the first post after the view lapses pushes");
+    assert_eq!(fake.seen.lock().expect("lock")[0]["k2Seq"], "3");
+    crate::thread_viewers::on_guest_frame(socket, &guest_key(&vera), &conv, false);
+}

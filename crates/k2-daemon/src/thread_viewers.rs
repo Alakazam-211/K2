@@ -169,6 +169,18 @@ pub fn on_frame(socket: u64, login: &str, conversation: &str, visible: bool) {
     }
 }
 
+/// The registry slot of one pass's `push.viewing` calls (TC-24): stable
+/// per pass, so a repeat refreshes it and `visible:false` clears it, and
+/// never one of the sequential socket ids ([`next_socket_id`]: the top bit
+/// is set).
+pub fn verb_socket(pass_id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    "push.viewing".hash(&mut h);
+    pass_id.hash(&mut h);
+    h.finish() | (1 << 63)
+}
+
 /// Apply one `viewing` frame from an App guest's socket, under its person
 /// key `guest:<principalId>` (TA-23). A key that is not a guest person key
 /// (an App's own pass, a K2 login) is ignored: those never use this path.

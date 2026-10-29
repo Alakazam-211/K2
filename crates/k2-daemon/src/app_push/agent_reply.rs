@@ -144,8 +144,11 @@ fn muted(pid: &str, conversation: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn viewing(pid: &str, conversation: &str) -> bool {
-    crate::thread_viewers::global().is_viewing(&guest_key(pid), conversation, Instant::now())
+/// The guest has `conversation` open at `now`: its own overlay socket's
+/// `viewing` frames or `push.viewing` from its App's server (TA-23, TC-24),
+/// both under `guest:<principalId>`.
+fn viewing_at(pid: &str, conversation: &str, now: Instant) -> bool {
+    crate::thread_viewers::global().is_viewing(&guest_key(pid), conversation, now)
 }
 
 /// One agent post, queued for the fan-out thread.
@@ -242,14 +245,21 @@ fn fan_out(conversation: &str, room: &str, agent_name: &str, seq: i64, preview: 
         };
         let now = Instant::now();
         for pid in guests {
-            if muted(&pid, conversation) {
-                continue;
-            }
-            let act = windows().lock().unwrap_or_else(|e| e.into_inner()).post((app.clone(), conversation.to_string(), pid.clone()), &post, now);
-            if act == Act::Now && !viewing(&pid, conversation) {
-                deliver(&app, &pid, &post, 1);
-            }
+            guest_post(&app, &pid, &post, now);
         }
+    }
+}
+
+/// One guest's share of one agent post at `now`: muted → nothing; the
+/// leading edge of a window pushes unless the guest is viewing the Thread;
+/// a post in an open window is held for the trailing push.
+fn guest_post(app: &str, pid: &str, post: &Post, now: Instant) {
+    if muted(pid, &post.conversation) {
+        return;
+    }
+    let act = windows().lock().unwrap_or_else(|e| e.into_inner()).post((app.to_string(), post.conversation.clone(), pid.to_string()), post, now);
+    if act == Act::Now && !viewing_at(pid, &post.conversation, now) {
+        deliver(app, pid, post, 1);
     }
 }
 
@@ -257,7 +267,7 @@ fn fan_out(conversation: &str, room: &str, agent_name: &str, seq: i64, preview: 
 pub fn flush(now: Instant) {
     let due = windows().lock().unwrap_or_else(|e| e.into_inner()).due(now);
     for ((app, conversation, pid), held, post) in due {
-        if super::state(&app).is_err() || muted(&pid, &conversation) || viewing(&pid, &conversation) {
+        if super::state(&app).is_err() || muted(&pid, &conversation) || viewing_at(&pid, &conversation, now) {
             continue;
         }
         deliver(&app, &pid, &post, held);

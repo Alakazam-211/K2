@@ -39,6 +39,7 @@ features:
   app-mobile-access-v1
   app-wallet-v1
   custom-app-push-v1
+  app-push-viewing-v1
   app-phone-pairing-v1
   app-user-profile-v1
   email-notifications-v1

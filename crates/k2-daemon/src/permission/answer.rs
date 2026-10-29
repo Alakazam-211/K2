@@ -1,6 +1,9 @@
 //! A1 — The `permission` / `permission.batch` arms behind
 //! `overlay_routes::answer_action_card` (signature frozen; `confirmToken`,
-//! `item`, `reason` and `client` come from `params`): the catalog floor,
+//! `item`, `reason` and `client` come from `params`, and since 0.46.6
+//! `reveal` and `mode` for a card that hands its approver a secret once,
+//! `apps.user-password-reset`: `reveal: 1` says this client can show it,
+//! `mode` picks one of the card's modes): the catalog floor,
 //! the locked apply with the current-state check (`already_done` /
 //! `stale`), single use (§4.1, §4.5, §6.1, §6.2; C12, Rosson Q1).
 //!
@@ -44,6 +47,27 @@ thread_local! {
     /// | `app-link`), tagged by the dispatcher on `/cli/thread/*`. `None`
     /// off the dispatcher: an action that cares refuses.
     static ANSWER_INGRESS: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// The answer's `reveal` / `mode` while `apply` runs (0.46.6,
+    /// `apps.user-password-reset`), checked by the action's gate first.
+    static ANSWER_OPTS: std::cell::RefCell<AnswerOpts> = const { std::cell::RefCell::new(AnswerOpts { reveal: false, mode: None }) };
+}
+
+/// What an Allow carried beyond its label (0.46.6): `reveal` (this client
+/// can show a secret to the person who answered) and the `mode` picked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AnswerOpts {
+    pub reveal: bool,
+    pub mode: Option<String>,
+}
+
+/// The answer `apply` is running for: `reveal` and the mode the action's
+/// gate settled. Off the answer path (a test calling `apply`): nothing.
+pub(crate) fn current_answer() -> AnswerOpts {
+    ANSWER_OPTS.with(|c| c.borrow().clone())
+}
+
+fn truthy(v: Option<&String>) -> bool {
+    v.is_some_and(|s| matches!(s.trim(), "1" | "true" | "yes"))
 }
 
 /// Run `f` with the answering request's ingress tagged (the dispatcher
@@ -63,6 +87,10 @@ pub(crate) fn answer_ingress() -> Option<String> {
 /// A refusal that decides nothing: the request goes back to its open state
 /// and the person can answer again (from the right place, or confirmed).
 pub(crate) const LOOPBACK_ONLY: &str = "loopback_only";
+
+/// The same kind of refusal for a secret the answering client can't show
+/// (`apps.user-password-reset`).
+pub(crate) use super::actions::password_reset::REVEAL_NEEDS_SCREEN;
 
 /// The display id of the request being applied on this thread.
 pub(crate) fn current_request() -> Option<String> {
@@ -212,6 +240,10 @@ pub(crate) fn answer(
     }
     let token = params.get("confirmToken").or_else(|| params.get("confirm_token")).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
     let via = via_of(params, who);
+    let opts = AnswerOpts {
+        reveal: truthy(params.get("reveal")),
+        mode: params.get("mode").map(|m| m.trim().to_string()).filter(|m| !m.is_empty()),
+    };
 
     // What to decide: (request, decision).
     let mut targets: Vec<(PermissionRequest, Decision)> = Vec::new();
@@ -225,10 +257,11 @@ pub(crate) fn answer(
             }
         }
         for r in reqs.iter().filter(|r| r.is_answerable()) {
-            let confirm = present::find_action(&r.action).is_some_and(|a| !a.spec.proof.batchable());
+            let confirm = present::find_action(&r.action).is_some_and(|a| !present::batchable(&a));
             if answer == label::ALLOW_ALL {
-                // "Allow all" covers click items only; confirm items are
-                // answered one by one, as Settings does.
+                // "Allow all" covers click items only; confirm items (and
+                // a card that shows its approver a secret) are answered one
+                // by one, as Settings does.
                 if !confirm {
                     targets.push((r.clone(), Decision::Allow));
                 }
@@ -267,7 +300,7 @@ pub(crate) fn answer(
     let single = !batch;
     let mut decided: Vec<PermissionRequest> = Vec::new();
     for (req, d) in targets {
-        match decide_one(&req, d, who, &via, token.as_deref(), reason.as_deref(), single.then_some(&card)) {
+        match decide_one(&req, d, who, &via, token.as_deref(), reason.as_deref(), &opts, single.then_some(&card)) {
             Ok(done) => decided.push(done),
             // One item of an "Allow all"/"Deny all" lost a race: skip it.
             Err(_) if all_label => {}
@@ -312,6 +345,7 @@ pub(crate) fn answer(
 /// Decide one request: the compare-and-set, the current-state check, the
 /// apply, the stored decision. Returns the request as decided. `single`:
 /// the card is this request's alone, so the "applying" view is drawn.
+#[allow(clippy::too_many_arguments)]
 fn decide_one(
     req: &PermissionRequest,
     d: Decision,
@@ -319,6 +353,7 @@ fn decide_one(
     via: &str,
     token: Option<&str>,
     reason: Option<&str>,
+    opts: &AnswerOpts,
     single: Option<&CardRef<'_>>,
 ) -> Result<PermissionRequest, CliResponse> {
     let now = k2_core::overlay::now_secs();
@@ -350,6 +385,14 @@ fn decide_one(
     let confirm = registered.as_ref().is_some_and(|r| matches!(r.spec.proof, Proof::SettingsConfirm { .. }));
     if matches!(d, Decision::Allow | Decision::Always) && confirm && token.is_none() {
         return Err(err(403, code::VAULT_CONFIRM_REQUIRED, "this action takes the same confirm as Settings: confirm, then answer with confirmToken"));
+    }
+    // A card that shows its approver a secret (0.46.6): the mode must be
+    // one it offers now, and a password or a link needs a client that can
+    // show it. Refused here, before anything is decided.
+    let mut applied_opts = AnswerOpts::default();
+    if matches!(d, Decision::Allow | Decision::Always) && super::actions::password_reset::is_reveal(&req.action) {
+        let mode = super::actions::password_reset::gate_answer(req, opts.mode.as_deref(), opts.reveal, via)?;
+        applied_opts = AnswerOpts { reveal: opts.reveal, mode: Some(mode) };
     }
 
     // 1. The compare-and-set, before any apply (C12).
@@ -397,7 +440,9 @@ fn decide_one(
 
     // 3. The apply, through the route's own entry, as the answerer.
     CURRENT_REQUEST.with(|c| *c.borrow_mut() = Some(req.display_id().to_string()));
+    ANSWER_OPTS.with(|c| *c.borrow_mut() = applied_opts);
     let applied = (registered.apply)(&ctx, who, token);
+    ANSWER_OPTS.with(|c| *c.borrow_mut() = AnswerOpts::default());
     CURRENT_REQUEST.with(|c| *c.borrow_mut() = None);
     match applied {
         Applied::Done { message } => {
@@ -421,7 +466,9 @@ fn decide_one(
             }
             record(RequestState::Approved, Some(&msg), None)
         }
-        Applied::Refused { code: c, message } if c == code::VAULT_CONFIRM_REQUIRED || c == "rate_limited" || c == LOOPBACK_ONLY => {
+        Applied::Refused { code: c, message }
+            if c == code::VAULT_CONFIRM_REQUIRED || c == "rate_limited" || c == LOOPBACK_ONLY || c == REVEAL_NEEDS_SCREEN =>
+        {
             store::revert_applying(req.id.as_str(), prior).map_err(|e| err(500, "db", e))?;
             let status = if c == "rate_limited" { 429 } else { 403 };
             Err(err(status, &c, message))

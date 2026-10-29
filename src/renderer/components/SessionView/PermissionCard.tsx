@@ -18,14 +18,16 @@
 // Every state line is the phone contract's (§17.2.4). The daemon re-checks
 // the floor and the confirm at the click; nothing here decides who may.
 
-import { useState, type CSSProperties, type JSX, type ReactNode } from 'react'
+import { useCallback, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
 import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
 import { cardExpiryLabel } from './overlayThread'
+import { PermissionReveal } from './PermissionReveal'
 import {
   APP_USERS_SWITCH_COVERS,
   approverWord,
   DENY_REASON_MAX,
+  forYouSecret,
   noteProblem,
   PERMISSION_LABEL,
   permissionAgent,
@@ -40,6 +42,8 @@ import {
   type PermissionCardView,
   type PermissionItem,
   type PermissionViewer,
+  type RevealedSecret,
+  type RevealMode,
 } from './permissionCardView'
 
 const EDGE = 'var(--thread-card-border,var(--color-border))'
@@ -267,6 +271,13 @@ type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: str
 
 type CardConfirmAction = 'app-approve' | 'node-admin' | 'vault-move' | 'chat-owner-handoff' | 'sew-rollback-data-loss'
 
+/** The password-reset card's Allow, by the mode the agent asked for. */
+const REVEAL_ALLOW_LABEL: Record<RevealMode, string> = {
+  password: 'Allow: show me a password',
+  link: 'Allow: show me a link',
+  email: 'Allow: email them a link',
+}
+
 /** The vault confirm actions a permission card may ask for (§17.4). */
 function confirmActionOf(action: string | undefined): CardConfirmAction | null {
   return action === 'app-approve' ||
@@ -285,12 +296,15 @@ function AnswerControls({
   actions,
   batchItem,
   always = false,
+  onReveal,
 }: {
   item: PermissionItem
   actions: PermissionCardActions
   batchItem: boolean
   /** The daemon offers `PERMISSION_LABEL.always` on this card. */
   always?: boolean
+  /** A card that shows its approver a secret: hand it to the card. */
+  onReveal?: (r: RevealedSecret) => void
 }): JSX.Element {
   const [step, setStep] = useState<Step>({ kind: 'idle' })
   const [reason, setReason] = useState('')
@@ -301,7 +315,9 @@ function AnswerControls({
     setBusy(true)
     setError(null)
     try {
-      await actions.answer(batchItem ? { ...a, item: item.requestId } : a)
+      const r = await actions.answer(batchItem ? { ...a, item: item.requestId } : a)
+      const secret = forYouSecret(r)
+      if (secret && onReveal) onReveal(secret)
       setStep({ kind: 'idle' })
     } catch (e) {
       setError(permissionErrorText(e))
@@ -359,6 +375,25 @@ function AnswerControls({
     )
   }
   const canConfirmHere = !!actions.confirmScope && !!confirmAction && !!item.proof.secretId
+  if (item.reveal && onReveal) {
+    const mode = item.reveal.mode
+    // Only a client that shows the secret says `reveal`; email needs none.
+    const allowWith = (m: RevealMode): PermissionAnswer =>
+      m === 'email' ? { answer: PERMISSION_LABEL.allow, mode: m } : { answer: PERMISSION_LABEL.allow, mode: m, reveal: true }
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap gap-1.5">
+          <CardButton label={REVEAL_ALLOW_LABEL[mode]} testId="permission-allow" primary disabled={busy} onClick={() => void send(allowWith(mode))} />
+          {item.reveal.emailOffered && mode !== 'email' && (
+            <CardButton label="Email them a link instead" testId="permission-allow-email" disabled={busy} onClick={() => void send(allowWith('email'))} />
+          )}
+          <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
+        </div>
+        {mode !== 'email' && <Muted testId="permission-reveal-note">Shown here once, only to you. The agent never sees it.</Muted>}
+        <ErrorLine text={error} />
+      </div>
+    )
+  }
   return (
     <div className="flex flex-col gap-1">
       <div className="flex flex-wrap gap-1.5">
@@ -462,8 +497,10 @@ function ItemOutcome({
   batchItem,
   offered = true,
   always = false,
+  onReveal,
 }: {
   always?: boolean
+  onReveal?: (r: RevealedSecret) => void
   item: PermissionItem
   viewer: PermissionViewer
   agent: string
@@ -494,7 +531,7 @@ function ItemOutcome({
     }
     if (!offered) return null
     return actions ? (
-      <AnswerControls item={item} actions={actions} batchItem={batchItem} always={always} />
+      <AnswerControls item={item} actions={actions} batchItem={batchItem} always={always} onReveal={onReveal} />
     ) : (
       <Muted testId="permission-answer-elsewhere">Answer this in the agent’s Thread.</Muted>
     )
@@ -564,6 +601,9 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
   const approver = view.viewer.mode === 'approve' && view.viewer.canAnswer
   // Open = still waiting on someone (an "Already on" card until its Close).
   const expiry = expiryOf(view.answer ? 'answered' : view.state, view.expiresAt, now)
+  // A password or link this person allowed: in this card's state only.
+  const [revealed, setRevealed] = useState<RevealedSecret | null>(null)
+  const forget = useCallback(() => setRevealed(null), [])
   return (
     <CardFrame testId="permission-card" attrs={{ 'data-state': view.state, 'data-mode': view.viewer.mode }}>
       <div className="flex items-center gap-1.5">
@@ -591,7 +631,9 @@ export function PermissionCard({ view, resultMessage, from, actions, options, no
         batchItem={false}
         offered={offered}
         always={options?.some((o) => o.label === PERMISSION_LABEL.always) ?? false}
+        onReveal={view.reveal ? setRevealed : undefined}
       />
+      {revealed && <PermissionReveal secret={revealed} onGone={forget} />}
       {expiry && <Muted testId="permission-expiry">{expiry}</Muted>}
       {approver && <SettingsLink item={view} actions={actions} />}
     </CardFrame>

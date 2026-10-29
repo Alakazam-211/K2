@@ -156,6 +156,13 @@ pub enum ParamKind {
     /// A heartbeat, by name, of the workspace another param names:
     /// `heartbeat.pause-other target= heartbeat=` (0.46.6).
     Heartbeat,
+    /// An App user (a skin principal), by username, never an email:
+    /// `apps.user-password-reset user=` (0.46.6). Checked to hold a grant
+    /// on an App of the asking workspace.
+    AppUser,
+    /// An App of the asking workspace (its id, name or `<ws>/<name>`):
+    /// `apps.user-password-reset app=` (0.46.6).
+    App,
 }
 
 /// One value an action takes (`key=value` on the CLI).
@@ -653,6 +660,19 @@ mod tests {
         let mut s = USE;
         s.params = &[ParamSpec { key: "garden", kind: ParamKind::Garden, required: true, list: false, choices: &[] }];
         validate(&s).expect("a Garden param");
+    }
+
+    /// 0.46.6: the password-reset card's two value kinds.
+    #[test]
+    fn app_user_and_app_values_are_their_own_kinds() {
+        assert_eq!(serde_json::to_value(ParamKind::AppUser).unwrap(), serde_json::json!("app-user"));
+        assert_eq!(serde_json::to_value(ParamKind::App).unwrap(), serde_json::json!("app"));
+        let mut s = USE;
+        s.params = &[
+            ParamSpec { key: "user", kind: ParamKind::AppUser, required: true, list: false, choices: &[] },
+            ParamSpec { key: "app", kind: ParamKind::App, required: false, list: false, choices: &[] },
+        ];
+        validate(&s).expect("AppUser and App params");
     }
 
     #[test]

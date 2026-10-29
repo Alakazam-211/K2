@@ -116,6 +116,25 @@ export interface PermissionItem {
   noteBox: { allowed: boolean; max: number; mine: string | null }
   answer: { decision: string; by: string; via: string; at: number; reason: string | null } | null
   undo: { label: string; until: number } | null
+  /** 0.46.6, `apps.user-password-reset` only: Allow makes a password or a
+   *  one-time link and hands it to THIS client in the answer (`forYou`),
+   *  never on the card. `emailOffered`: "Email them a link instead" works
+   *  now (no screen needed). Null on every other card. */
+  reveal: PermissionReveal | null
+}
+
+/** The modes of a card that shows its approver a secret once. */
+export type RevealMode = 'password' | 'link' | 'email'
+
+export interface PermissionReveal {
+  mode: RevealMode
+  emailOffered: boolean
+}
+
+function readReveal(raw: unknown): PermissionReveal | null {
+  if (!isObj(raw)) return null
+  const mode = raw.mode === 'password' || raw.mode === 'link' || raw.mode === 'email' ? raw.mode : null
+  return mode ? { mode, emailOffered: raw.emailOffered === true } : null
 }
 
 /** `view` for `action.id = "permission"`. */
@@ -230,6 +249,7 @@ function readItem(raw: unknown): PermissionItem | null {
         }
       : null,
     undo: undo ? { label: str(undo.label) || 'Turn off again', until: num(undo.until) as number } : null,
+    reveal: readReveal(raw.reveal),
   }
 }
 
@@ -368,6 +388,7 @@ export function settingsSectionFor(page: string): string | null {
     'connections',
     'access-audit',
     'permissions',
+    'people',
   ])
   return known.has(head) ? head : null
 }
@@ -393,6 +414,8 @@ export function permissionErrorText(e: unknown): string {
       return 'You can’t leave a note on this card.'
     case 'bad_note':
       return info.hint || 'That note can’t be sent: one line, no links, nothing secret.'
+    case 'reveal_needs_screen':
+      return info.hint || 'Open this card in K2 on your computer or the web to see it.'
     default:
       return info.hint || info.code
   }
@@ -417,6 +440,11 @@ export interface PermissionAnswer {
   reason?: string
   /** Confirm actions: the vault confirm token (single use, 60 s). */
   confirmToken?: string
+  /** A card that shows its approver a secret (`view.reveal`): this client
+   *  shows it (sent as `reveal: "1"`). Never on any other card. */
+  reveal?: boolean
+  /** That card's mode, or `email` for "Email them a link instead". */
+  mode?: RevealMode
 }
 
 /** What a card can do. Every call resolves when the daemon took it and
@@ -446,7 +474,37 @@ export function permissionAnswerBody(addr: string, id: string, a: PermissionAnsw
   if (a.item) body.item = a.item
   if (a.reason && a.reason.trim()) body.reason = a.reason.trim().slice(0, DENY_REASON_MAX)
   if (a.confirmToken) body.confirmToken = a.confirmToken
+  if (a.reveal) body.reveal = '1'
+  if (a.mode) body.mode = a.mode
   return body
+}
+
+/** What a password-reset answer hands back to the person who answered,
+ *  once (`forYou`, `apps.user-password-reset`): a password, a one-time link
+ *  or (no front door) a code. Kept in the card's component state only:
+ *  never a store, storage or a log. */
+export interface RevealedSecret {
+  mode: 'password' | 'link'
+  username: string
+  app: string
+  /** The password, the link or the code. */
+  value: string
+  /** `code`: the box has no front door page, so the person enters a code. */
+  kind: 'password' | 'link' | 'code'
+  /** How long the card shows it (seconds). */
+  secs: number
+}
+
+/** The answer's `forYou` for a password reset, or null. */
+export function forYouSecret(answer: unknown): RevealedSecret | null {
+  const f = (answer as { forYou?: unknown } | null)?.forYou
+  if (!isObj(f) || f.kind !== 'apps.user-password-reset') return null
+  const secs = Math.max(5, Math.min(300, num(f.revealSecs) ?? 60))
+  const base = { username: str(f.username), app: str(f.app), secs }
+  if (f.mode === 'password' && str(f.secret)) return { ...base, mode: 'password', kind: 'password', value: str(f.secret) }
+  if (f.mode === 'link' && /^https?:\/\//.test(str(f.link))) return { ...base, mode: 'link', kind: 'link', value: str(f.link) }
+  if (f.mode === 'link' && str(f.code)) return { ...base, mode: 'link', kind: 'code', value: str(f.code) }
+  return null
 }
 
 /** What an answer hands back to the person who answered only

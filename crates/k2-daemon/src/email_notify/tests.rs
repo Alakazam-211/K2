@@ -192,14 +192,15 @@ impl RelayTransport for PlainRelay {
 
 pub(crate) const DOMAIN: &str = "notify.brand.test";
 
-struct Fx {
+/// Shared with other modules' tests (the password-reset card's email mode).
+pub(crate) struct Fx {
     _db: k2_core::db::TestDbGuard,
     _home: crate::test_support::TempHome,
     ws: String,
     other_ws: String,
     app: String,
     other_app: String,
-    engine: Arc<FakeEngine>,
+    pub(crate) engine: Arc<FakeEngine>,
     dns: Arc<FakeDns>,
     creds: Arc<MemCreds>,
     relay: Arc<FakeRelay>,
@@ -216,7 +217,7 @@ impl Drop for Fx {
     }
 }
 
-fn fx(tag: &str) -> Fx {
+pub(crate) fn fx(tag: &str) -> Fx {
     let home = crate::test_support::TempHome::new();
     let db = k2_core::db::scoped_for_test();
     crate::vault::ensure_test_vault();
@@ -1696,7 +1697,7 @@ fn token_in_last_mail(f: &Fx, prefix: &str) -> String {
     text[at..].chars().take(prefix.len() + 43).collect()
 }
 
-fn system_sender_on() -> store::Sender {
+pub(crate) fn system_sender_on() -> store::Sender {
     let sys = add_hosted("system@notify.brand.test");
     senders::set_system(&sys.id, "owner", now()).expect("system");
     senders::find_live(&sys.id).expect("live")

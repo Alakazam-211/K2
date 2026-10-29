@@ -7982,7 +7982,12 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         extra access that waits for a reset (an agent set this person
                                         up) starts. --code: you get the link. Mailing it needs --from
                                         <an address no agent reads>; a tied person's stored email
-                                        (or one from before 0.46.4 you haven't set) needs --to
+                                        (or one from before 0.46.4 you haven't set) needs --to.
+                                        Agents can't run this: ask a person on a card instead,
+                                        k2 permission request apps.user-password-reset user=<username>
+                                        [app=<app>] [mode=password|link|email] --why "<why>". The
+                                        person who allows it sees the new password (or a one-time
+                                        link) once, on their own screen; you never see it
   k2 app login settings <app> [--invite-ttl 72h] [--reset-ttl 24h] [--set-password-url <url>] …
                                         The App's link lives, set-password page and own mail text
   k2 app profile settings <app> [--names on|off] [--image on|off]
@@ -70714,6 +70719,7 @@ A hold (exit 2) already made a request the approvers can see in Settings. Asking
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
 - Role or room changes for guests are not cards: talk to the agent that manages the role.
+- Someone can't sign in to one of your Apps (locked out, lost their password): `k2 permission request apps.user-password-reset user=<username> --why "..."`. The person who allows it sees a new password once, on their own screen; you never do. `mode=link` gives them a one-time link to choose their own; `mode=email` mails that link to their address on file.
 
 ## The answer
 

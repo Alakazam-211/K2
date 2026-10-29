@@ -144,9 +144,12 @@ pub(crate) fn text_hash_of(spec: &ActionSpec, ctx: &Ctx) -> String {
 
 /// The words with every value as stored, plus the values K2 computes for
 /// an action itself (`zen.sign`'s `{changes}`: the version's manifest
-/// changes in K2's words, never the agent's; `zen_sign_cards`).
+/// changes in K2's words, never the agent's; `zen_sign_cards`; the
+/// password-reset card's `{made}` / `{effects}` for its mode).
 fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
-    let computed = crate::zen_sign_cards::with_computed(spec.id, ctx).or_else(|| super::actions::sew::with_computed(spec.id, ctx));
+    let computed = crate::zen_sign_cards::with_computed(spec.id, ctx)
+        .or_else(|| super::actions::sew::with_computed(spec.id, ctx))
+        .or_else(|| super::actions::password_reset::with_computed(spec.id, ctx));
     let ctx = computed.as_ref().unwrap_or(ctx);
     let what = fill(spec.words.what_changes, ctx);
     let what_trim = what.trim().trim_end_matches('.').to_string();
@@ -355,7 +358,14 @@ pub(crate) fn item_view(req: &PermissionRequest, spec: &ActionSpec) -> ItemView 
         note_box: NoteBox { allowed: false, max: limits::NOTE_MAX_CHARS, mine: None },
         answer,
         undo,
+        reveal: super::actions::password_reset::reveal_view(req),
     }
+}
+
+/// May "Allow all" cover this action? Click items only, and never one that
+/// shows its approver a secret (one `forYou` per answer; PR-A4).
+pub(crate) fn batchable(r: &Registered) -> bool {
+    r.spec.proof.batchable() && !super::actions::password_reset::is_reveal(r.spec.id)
 }
 
 /// The `view` JSON for the requests on one card: a `permission` view for
@@ -377,7 +387,7 @@ pub(crate) fn view_for(reqs: &[PermissionRequest], batch: bool, viewer: Option<&
     let mut confirm_pending = false;
     for req in reqs {
         let Some(r) = find_action(&req.action) else { continue };
-        if req.is_answerable() && !r.spec.proof.batchable() {
+        if req.is_answerable() && !batchable(&r) {
             confirm_pending = true;
         }
         items.push(item_view(req, r.spec));

@@ -74,6 +74,11 @@ pub(crate) struct Row {
     pub params: &'static [(&'static str, &'static [ParamFrom])],
     /// Values fixed by the wall itself (`db.agent-access level=write`).
     pub fixed: &'static [(&'static str, &'static str)],
+    /// `(pointer, present)`: the refused request's JSON body must (or
+    /// must not) have a value there (`reset-link` with `to` is the email
+    /// mode, without it the link mode). Read for a match only, never as a
+    /// value.
+    pub body_has: Option<(&'static str, bool)>,
 }
 
 const fn ask(action: &'static str, floor: Floor) -> Target {
@@ -88,7 +93,7 @@ const ANY: WallMethod = WallMethod::Any;
 const POST: WallMethod = WallMethod::Post;
 
 const fn row(target: Target, matches: WallMatch, prefix: &'static str, method: WallMethod) -> Row {
-    Row { target, matches, prefix, method, when: &[], needs: None, params: &[], fixed: &[] }
+    Row { target, matches, prefix, method, when: &[], needs: None, params: &[], fixed: &[], body_has: None }
 }
 
 /// "a person does this in Settings" for never / dropped walls a broad row
@@ -109,7 +114,7 @@ const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over S
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 38] = [
+pub(crate) const V1_ACTIONS: [&str; 39] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -163,6 +168,9 @@ pub(crate) const V1_ACTIONS: [&str; 38] = [
     // schema change, for the owner (chat since the upgrade leaves the
     // live chat; K2 backs it up first).
     "sew.rollback-data-loss",
+    // 0.46.6 (Rosson 2026-10-29): reset one of the agent's Apps' users'
+    // password; the approver alone sees the password or link.
+    "apps.user-password-reset",
 ];
 
 /// `heartbeat.pause-other` / `-resume-other`: the workspace and heartbeat
@@ -171,6 +179,17 @@ const HEARTBEAT_OTHER_PARAMS: &[(&str, &[ParamFrom])] = &[
     ("target", &[ParamFrom::Response("/error/workspace"), ParamFrom::Query("workspace")]),
     ("heartbeat", &[ParamFrom::Response("/error/heartbeat"), ParamFrom::Query("name")]),
 ];
+
+/// `apps.user-password-reset`'s values from a refused reset: the person
+/// (never the body's password) and, on a reset link, the App.
+const PASSWORD_RESET_LINK_PARAMS: &[(&str, &[ParamFrom])] = &[
+    ("user", &[ParamFrom::Body("/username"), ParamFrom::Body("/name")]),
+    ("app", &[ParamFrom::Body("/app"), ParamFrom::Body("/appId")]),
+];
+const PASSWORD_RESET_SET_PARAMS: &[(&str, &[ParamFrom])] = &[("user", &[ParamFrom::Body("/username")])];
+
+/// The password-reset card's floor, from its one constant (PR-A2).
+const PASSWORD_RESET_FLOOR: Floor = super::actions::password_reset::FLOOR;
 
 /// The walls map (PRD §5.2 walls column, Appendix A, checked against the
 /// off-goldens' captured refusals).
@@ -235,6 +254,27 @@ pub(crate) const ROWS: &[Row] = &[
     row(ask("apps.build", Floor::Owner), code(403, "apps_manage_off"), "/cli/", ANY),
     // App users (0225): the skin-manage door's refusal on a user route.
     row(ask("apps.manage-users", Floor::Owner), code(403, "app_users_off"), "/cli/", ANY),
+    // 0.46.6: an agent's own `k2 app user reset` (the owner's route) or a
+    // `k2 app user password` it may not do (a box login, a guest outside
+    // its workspace): ask the owner to reset it on a card. `to` in the
+    // body is the email mode. Never reads the body's password.
+    Row {
+        body_has: Some(("/to", true)),
+        fixed: &[("mode", "email")],
+        params: PASSWORD_RESET_LINK_PARAMS,
+        ..row(ask("apps.user-password-reset", PASSWORD_RESET_FLOOR), code(403, "owner_only"), "/cli/skin/users/reset-link", POST)
+    },
+    Row {
+        body_has: Some(("/to", false)),
+        fixed: &[("mode", "link")],
+        params: PASSWORD_RESET_LINK_PARAMS,
+        ..row(ask("apps.user-password-reset", PASSWORD_RESET_FLOOR), code(403, "owner_only"), "/cli/skin/users/reset-link", POST)
+    },
+    Row {
+        fixed: &[("mode", "password")],
+        params: PASSWORD_RESET_SET_PARAMS,
+        ..row(ask("apps.user-password-reset", PASSWORD_RESET_FLOOR), code(403, "owner_only"), "/cli/skin/users/password", POST)
+    },
     // Every App hold (switch 2 off, a core not ticked, new caps, a --cmd
     // service…) already made a held request: asking attaches a card to that
     // same id (§3.2, the agent sheet's HELD rule).
@@ -468,6 +508,16 @@ fn row_matches(r: &Row, req: &Refused<'_>, code: Option<&str>) -> bool {
         && method_ok(r.method, req.method)
         && r.when.iter().all(|(k, v)| req.params.get(*k).map(String::as_str) == Some(*v))
         && r.needs.is_none_or(|p| req.response.pointer(p).is_some())
+        && r.body_has.is_none_or(|(p, present)| body_value(req.body, p) == present)
+}
+
+/// The request body has a non-empty value at `pointer`.
+fn body_value(body: Option<&Value>, pointer: &str) -> bool {
+    match body.and_then(|b| b.pointer(pointer)) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(_) => true,
+    }
 }
 
 /// The row that names this refusal: the longest matching prefix.
@@ -804,6 +854,10 @@ mod tests {
             // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "false"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":false}}), "heartbeat.pause-other"),
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "true"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":true}}), "heartbeat.resume-other"),
+            // 0.46.6: an agent's own reset (the owner's route) and a password
+            // it may not set (a box login).
+            (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.nsi","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),
+            (403, "POST", "/cli/skin/users/password", vec![], Some(json!({"username":"adam","password":"hunter2-not-real"})), json!({"ok":false,"error":{"code":"owner_only","hint":"'adam' has a box login"}}), "apps.user-password-reset"),
         ];
         let mut asked: Vec<&str> = Vec::new();
         for (status, m, path, q, body, resp, want) in cases {
@@ -903,6 +957,50 @@ mod tests {
         // `other_workspace` from heartbeat show is no card's wall.
         let p = teach_of(403, "GET", "/cli/heartbeat/show", &[("name", "triage")], None, json!({"error":{"code":"other_workspace","hint":"x"}})).unwrap();
         assert_eq!(p["requestable"], false, "{p}");
+    }
+
+    /// 0.46.6: the password-reset card's walls. A reset link teaches
+    /// `mode=link` (or `email` when the agent gave `to`) with the person and
+    /// App; a refused password set teaches `mode=password` with the person
+    /// only, and never reads the body's password; the off switch's code
+    /// still teaches `apps.manage-users`; the approvers are the card's floor.
+    #[test]
+    fn the_password_reset_walls_name_the_person_and_the_mode_never_the_password() {
+        let owner_only = || json!({"ok":false,"error":{"code":"owner_only","hint":"x"}});
+        let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","app":"agents.nsi","code":true})), owner_only()).unwrap();
+        assert_eq!(action_of(&p), "apps.user-password-reset", "{p}");
+        assert_eq!(p["params"], json!({"user":"adam","app":"agents.nsi","mode":"link"}), "{p}");
+        assert_eq!(p["approvers"], "owner");
+        let cmd = p["command"].as_str().unwrap();
+        assert!(cmd.starts_with("k2 permission request apps.user-password-reset ") && cmd.contains(" user=adam") && cmd.contains(" app=agents.nsi") && cmd.contains(" mode=link"), "{cmd}");
+        let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","to":"adam@example.test"})), owner_only()).unwrap();
+        assert_eq!(p["params"]["mode"], "email", "{p}");
+        assert_eq!(p["params"]["app"], Value::Null, "no App named: the agent fills it in: {p}");
+        assert!(!p.to_string().contains("adam@example.test"), "the address never goes in the ask: {p}");
+        // An empty `to` is no address.
+        let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","to":""})), owner_only()).unwrap();
+        assert_eq!(p["params"]["mode"], "link", "{p}");
+
+        let secret = "correct-horse-not-real-9";
+        let p = teach_of(403, "POST", "/cli/skin/users/password", &[], Some(json!({"username":"adam","password":secret})), owner_only()).unwrap();
+        assert_eq!(action_of(&p), "apps.user-password-reset", "{p}");
+        assert_eq!(p["params"], json!({"user":"adam","mode":"password"}), "{p}");
+        assert!(!p.to_string().contains(secret), "the wall never reads the password: {p}");
+        // The switch-off refusal on the same route still teaches the switch.
+        let p = teach_of(403, "POST", "/cli/skin/users/password", &[], Some(json!({"username":"adam","password":secret})), json!({"ok":false,"error":{"code":"app_users_off"}})).unwrap();
+        assert_eq!(action_of(&p), "apps.manage-users", "{p}");
+        // No wall of this card reads a password anywhere.
+        for r in ROWS.iter().filter(|r| matches!(r.target, Target::Ask { action: "apps.user-password-reset", .. })) {
+            for (_, sources) in r.params {
+                for f in *sources {
+                    let key = match f {
+                        ParamFrom::Body(k) | ParamFrom::Query(k) | ParamFrom::Response(k) => *k,
+                    };
+                    assert!(!key.to_ascii_lowercase().contains("password"), "{key}");
+                }
+            }
+            assert_eq!(r.target, ask("apps.user-password-reset", super::super::actions::password_reset::FLOOR));
+        }
     }
 
     /// `sources.approve` teaches the source the agent tried (`name`) and
@@ -1058,7 +1156,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 38);
+        assert_eq!(V1_ACTIONS.len(), 39);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {
@@ -1067,7 +1165,8 @@ mod tests {
                     && a.prefix == b.prefix
                     && a.method == b.method
                     && a.when == b.when
-                    && a.needs == b.needs;
+                    && a.needs == b.needs
+                    && a.body_has == b.body_has;
                 assert!(!same, "two rows claim {:?} on {}", a.matches, a.prefix);
             }
         }

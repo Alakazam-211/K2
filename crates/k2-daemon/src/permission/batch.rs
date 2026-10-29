@@ -7,6 +7,8 @@
 //! "Allow all" is offered only when the viewer meets every item's floor and
 //! no pending item needs a confirm (`viewer.canAnswerAll`, computed by
 //! [`super::present::view_for`]); confirm items are answered one by one.
+//! A card that shows its approver a secret (`apps.user-password-reset`)
+//! never batches.
 
 use k2_core::overlay;
 use k2_core::permission::request::{limits, PermissionRequest};
@@ -28,6 +30,11 @@ pub(crate) struct Placed {
 /// conversation), same floor, its first request asked within the batch
 /// window, still pending, fewer than [`limits::BATCH_MAX_ITEMS`] items.
 fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<(String, Vec<PermissionRequest>)> {
+    // A card that shows its approver a secret is always its own card, and
+    // nothing joins it (one `forYou` per answer; PR-A4).
+    if super::actions::password_reset::is_reveal(&req.action) {
+        return None;
+    }
     let open = store::open(Some(&req.workspace_id)).ok()?;
     let mut seen: Vec<String> = Vec::new();
     for r in open.iter().rev() {
@@ -40,6 +47,9 @@ fn joinable(req: &PermissionRequest, conversation_id: &str, now: i64) -> Option<
             continue;
         }
         let items = store::for_card(conv, card).ok()?;
+        if items.iter().any(|i| super::actions::password_reset::is_reveal(&i.action)) {
+            continue;
+        }
         let first = items.first()?;
         if now - first.created_at > limits::BATCH_WINDOW_SECS || items.len() >= limits::BATCH_MAX_ITEMS {
             continue;

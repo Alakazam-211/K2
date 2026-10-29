@@ -188,6 +188,28 @@ pub struct ItemView {
     pub note_box: NoteBox,
     pub answer: Option<AnswerView>,
     pub undo: Option<UndoView>,
+    /// Only on a card whose Allow shows a secret once to the person who
+    /// allowed it (`apps.user-password-reset`, 0.46.6); absent on every
+    /// other card, so their views are byte for byte as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<RevealView>,
+}
+
+/// `view.reveal` (0.46.6, `apps.user-password-reset`): Allow makes a
+/// password or a one-time link and hands it back in the answer to the
+/// person who allowed it only (`forYou`), never on the card. A client that
+/// can show it sends `reveal: 1` with its Allow; one that can't (an older
+/// build, the phone, a terminal) is refused `reveal_needs_screen` and
+/// nothing is decided.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RevealView {
+    /// The mode the agent asked for: `password`, `link` or `email`.
+    pub mode: String,
+    /// `email` works now (a trusted stored email, K2's own page, a sender
+    /// no agent reads): the card offers "Email them a link instead", sent
+    /// as `mode: "email"` with the Allow. Needs no screen.
+    pub email_offered: bool,
 }
 
 /// `view` for `action.id = "permission"`: `{v, kind:"permission", viewer,
@@ -254,6 +276,7 @@ mod tests {
             note_box: NoteBox { allowed: false, max: 500, mine: None },
             answer: None,
             undo: None,
+            reveal: None,
         }
     }
 
@@ -291,6 +314,20 @@ mod tests {
         assert_eq!(w["noteBox"], json!({"allowed": false, "max": 500, "mine": null}));
         let back: PermissionView = serde_json::from_value(w).unwrap();
         assert_eq!(back, v);
+    }
+
+    /// 0.46.6: `reveal` is on the password-reset card only; every other
+    /// view keeps its exact keys (checked above with `reveal: None`).
+    #[test]
+    fn reveal_is_only_on_a_reveal_card() {
+        let mut i = item();
+        i.reveal = Some(RevealView { mode: "password".into(), email_offered: true });
+        let w = serde_json::to_value(&i).unwrap();
+        assert_eq!(w["reveal"], json!({"mode": "password", "emailOffered": true}));
+        let back: ItemView = serde_json::from_value(w).unwrap();
+        assert_eq!(back, i);
+        let plain: ItemView = serde_json::from_value(serde_json::to_value(item()).unwrap()).unwrap();
+        assert_eq!(plain.reveal, None, "an older view (no key) reads as no reveal");
     }
 
     #[test]

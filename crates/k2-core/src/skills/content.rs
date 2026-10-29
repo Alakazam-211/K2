@@ -1397,6 +1397,7 @@ A hold (exit 2) already made a request the approvers can see in Settings. Asking
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.
 - Role or room changes for guests are not cards: talk to the agent that manages the role.
+- Someone can't sign in to one of your Apps (locked out, lost their password): `k2 permission request apps.user-password-reset user=<username> --why "..."`. The person who allows it sees a new password once, on their own screen; you never do. `mode=link` gives them a one-time link to choose their own; `mode=email` mails that link to their address on file.
 
 ## The answer
 

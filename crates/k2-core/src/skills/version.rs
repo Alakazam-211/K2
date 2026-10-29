@@ -294,7 +294,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 42;
 /// `_ZEN` stay byte-identical in every switch state. Written only while
 /// both permission-card switches are on for the workspace.
 /// v1 = 0.46.3, the first release.
-pub const SKILL_VERSION_PERMISSIONS: u32 = 1;
+/// v2 = 0.46.6: Apps gain the password-reset card (`apps.user-password-reset`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 2;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

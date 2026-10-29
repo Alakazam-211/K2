@@ -59,7 +59,7 @@ pub mod verify;
 pub mod webhook;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use serde_json::{json, Value as J};
 

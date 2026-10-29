@@ -277,11 +277,22 @@ fn short(oid: &str) -> String {
 }
 
 /// The snapshot as a widget sees it (GitStatus): relative paths only.
+/// Two reads: the plain snapshot gives the uncommitted groups (staged,
+/// unstaged, untracked, conflicted); the base view gives `base` (the
+/// branch vs its base, committed and uncommitted tracked edits) and
+/// ahead / behind.
 fn status_json(t: &Target, base: &str) -> Result<J, CliResponse> {
-    let snap = k2_core::git_changes::snapshot(&t.dir, Some(base)).map_err(changes_refusal)?;
-    let Some(s) = snap.repo() else {
-        return Err(no(400, "not_a_repo", format!("{} isn't in a git repository", t.thread())));
-    };
+    let not_repo = || no(400, "not_a_repo", format!("{} isn't in a git repository", t.thread()));
+    let local = k2_core::git_changes::snapshot(&t.dir, None).map_err(changes_refusal)?.repo().ok_or_else(not_repo)?;
+    let based = k2_core::git_changes::snapshot(&t.dir, Some(base)).map_err(changes_refusal)?.repo().ok_or_else(not_repo)?;
+    let mut s = local;
+    let base_rows: Vec<_> = based.files.iter().filter(|f| f.group == "base").cloned().collect();
+    s.counts.base = based.counts.base;
+    s.counts.total += based.counts.base;
+    s.files.extend(base_rows);
+    s.truncated = s.truncated || based.truncated;
+    s.base = based.base.clone();
+    s.rev = format!("{}+{}", s.rev, based.rev);
     let files: Vec<J> = s
         .files
         .iter()
@@ -330,6 +341,19 @@ fn log_commits(dir: &str, base: &str, limit: usize) -> Result<Vec<J>, CliRespons
         .collect())
 }
 
+/// Files the branch's commits change since it left `base`, with +/−.
+fn committed_files(dir: &str, base: &str) -> Vec<J> {
+    git_out(dir, &["diff", "--numstat", "--no-renames", format!("{base}...HEAD").as_str(), "--"])
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let mut p = l.splitn(3, '\t');
+            let (add, del, file) = (p.next()?, p.next()?, p.next()?);
+            Some(json!({ "file": file, "additions": add.parse::<i64>().ok(), "deletions": del.parse::<i64>().ok() }))
+        })
+        .collect()
+}
+
 fn ahead_count(dir: &str, base: &str) -> Option<i64> {
     git_out(dir, &["rev-list", "--count", format!("{base}..HEAD").as_str(), "--"]).and_then(|s| s.parse().ok())
 }
@@ -347,10 +371,11 @@ fn work_row(t: &Target, with_git: bool) -> J {
     let (branch, base, head, ahead, behind, dirty) = match worktree.as_ref().filter(|_| with_git) {
         Some(_) => {
             let base = default_base(t);
-            match k2_core::git_changes::snapshot(&t.dir, Some(&base)).ok().and_then(|r| r.repo()) {
+            match k2_core::git_changes::snapshot(&t.dir, None).ok().and_then(|r| r.repo()) {
                 Some(snap) => {
-                    let (ahead, behind) = snap.base.as_ref().map(|b| (b.ahead as i64, b.behind as i64)).unzip();
-                    let dirty = (snap.counts.staged + snap.counts.unstaged + snap.counts.untracked + snap.counts.conflicted) as i64;
+                    let ahead = ahead_count(&t.dir, &base);
+                    let behind = git_out(&t.dir, &["rev-list", "--count", format!("HEAD..{base}").as_str(), "--"]).and_then(|s| s.parse().ok());
+                    let dirty = snap.counts.total as i64;
                     (snap.branch.clone(), Some(base), snap.head_oid.as_deref().map(short), ahead, behind, Some(dirty))
                 }
                 None => (None, Some(base), None, None, None, None),
@@ -618,7 +643,8 @@ fn land(w: &Placed, args: &Map<String, J>, b: &CallBody) -> Result<J, CliRespons
                 return Err(no(409, "conflict", format!("{} has no commits that {base} doesn't have: nothing to land", t.thread())));
             }
             let status = status_json(&t, &base)?;
-            let files: Vec<J> = status["files"].as_array().into_iter().flatten().filter(|f| f["group"] == "base").cloned().collect();
+            // What Land carries: the committed files only (base...HEAD).
+            let files = committed_files(&t.dir, &base);
             let onto = git_out(&t.ws_path, &["rev-parse", base.as_str()]).unwrap_or_default();
             let tip = git_out(&t.dir, &["rev-parse", "HEAD"]).unwrap_or_default();
             let dirty = status["counts"]["total"].as_i64().unwrap_or(0) - status["counts"]["base"].as_i64().unwrap_or(0);

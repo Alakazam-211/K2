@@ -1039,6 +1039,10 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_GARDEN_BLOBS);
     out.push(FEATURE_ZEN_FILES);
     out.push(FEATURE_GARDEN_HISTORY);
+    // 0.46.7 Workbench (catalog v40): work.list, git.*, compute.jobs,
+    // git.note, the sheet-gated start / land / settle, and
+    // GET /cli/workbench/agents (sidecars in a Garden's reach).
+    out.push("workbench-v1");
     out.push(crate::zen_remote_routes::FEATURE);
     out.push(FEATURE_GROKBOTS);
     out.push(FEATURE_APP_API);

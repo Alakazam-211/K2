@@ -25358,7 +25358,7 @@
                 },
                 "group": {
                   "type": "string",
-                  "description": "staged, unstaged, untracked, conflicted or base (committed on the branch, not on the base)."
+                  "description": "staged, unstaged, untracked or conflicted (not committed yet), or base (the whole branch vs its base: its commits plus uncommitted edits to tracked files; a file can be listed in both)."
                 },
                 "status": {
                   "type": "string"

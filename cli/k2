@@ -24768,6 +24768,8 @@ cmd_compute() {
                     --limit) q="$q&limit=$(urlencode "${2:-}")"; shift 2 ;;
                     --workspace) q="$q&workspace=$(urlencode "${2:-}")"; shift 2 ;;
                     --mine) q="$q&mine=1"; shift ;;
+                    # 0.46.7 (CE-9): the job's own --tag.
+                    --tag) q="$q&tag=$(urlencode "${2:-}")"; shift 2 ;;
                     --tier)
                         case "${2:-}" in
                             ci|priority|normal|batch) q="$q&tier=$(urlencode "${2:-}")" ;;
@@ -24776,7 +24778,7 @@ cmd_compute() {
                         esac
                         shift 2 ;;
                     --json) shift ;;
-                    *) echo "usage: k2 compute jobs [--node N] [--mine] [--state S] [--tier T] [--limit N]" >&2; exit 2 ;;
+                    *) echo "usage: k2 compute jobs [--node N] [--mine] [--state S] [--tier T] [--tag T] [--limit N]" >&2; exit 2 ;;
                 esac
             done
             n="${q#&}"

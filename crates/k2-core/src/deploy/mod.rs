@@ -340,6 +340,8 @@ pub const RESERVED_APP_IDS: &[&str] = &[
     "resources",
     // 0.46.7 (prd-tauri-core-0467-v1, vs-live §8): `k2 app links`.
     "links",
+    // 0.46.7: `k2 app updates` (the update feed).
+    "updates",
 ];
 
 /// Core `k2` nouns an App id can't take either (§8.4).

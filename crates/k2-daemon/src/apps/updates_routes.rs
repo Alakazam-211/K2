@@ -79,6 +79,8 @@ pub const ROLLBACK_WARNING: &str = "Tauri's updater installs only a NEWER versio
      This rollback protects new installs and people still below it. To fix people on the bad version, ship a higher version (for example x.y.z+1) with the fix.";
 
 pub(crate) fn handle(path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> R<J> {
+    // A push a restart interrupted reads `failed` before anything else.
+    super::updates_serve::ensure_loaded();
     match path {
         LIST => list(who, params),
         KEY => key_show(who, params),

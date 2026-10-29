@@ -37,7 +37,7 @@ fn snapshot() -> &'static RwLock<HashMap<String, Arc<feed::Feed>>> {
 }
 
 /// Load every App's feed once (and fail pushes a restart interrupted).
-fn ensure_loaded() {
+pub(crate) fn ensure_loaded() {
     static ONCE: OnceLock<()> = OnceLock::new();
     ONCE.get_or_init(|| {
         let apps = {

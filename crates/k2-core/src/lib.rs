@@ -75,6 +75,8 @@ pub mod connect_db;
 pub mod runtime_dir;
 /// Redaction of known secret values in K2-stored text (K2 vault KV33).
 pub mod redaction;
+/// App refusal ids, their fixes and `k2 explain` (prd-tauri-core-0467-v1 TC-18).
+pub mod refusals;
 /// K2 vault references for LLM keys kept in the main DB (0148).
 pub mod secret_refs;
 pub mod chat_history;

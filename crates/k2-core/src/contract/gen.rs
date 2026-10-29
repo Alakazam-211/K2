@@ -123,6 +123,9 @@ pub fn render(c: &Catalog, runtime: Option<&str>) -> Result<Vec<Output>, String>
         Output { path: super::live::LIVE_KEY, text: super::live::live_block(c) },
         // 0.46.6 Gardens on the phone: the Companion's verb table.
         Output { path: super::phone::PHONE_VERBS_JSON, text: super::phone::phone_verbs_json(c) },
+        // 0.46.7 (prd-tauri-core-0467-v1 TC-18): the App refusal registry
+        // for `k2 explain`, the refusal printer and `k2 study app-errors`.
+        Output { path: crate::refusals::CLI_KEY, text: crate::refusals::cli_block(REGEN, CLI_END) },
     ];
     let snapshot = snapshot_json(c, runtime, &out);
     out.push(Output { path: SNAPSHOT_JSON, text: snapshot });
@@ -140,6 +143,8 @@ pub fn file_of(path: &str) -> (&str, Option<&'static str>) {
         (CLI, Some(super::libs::LIBS_BEGIN))
     } else if path == super::live::LIVE_KEY {
         (CLI, Some(super::live::LIVE_BEGIN))
+    } else if path == crate::refusals::CLI_KEY {
+        (CLI, Some(crate::refusals::CLI_BEGIN))
     } else {
         (path, None)
     }

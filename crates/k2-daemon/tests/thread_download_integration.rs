@@ -58,7 +58,7 @@ async fn guest(port: u16, ws: &Ws, name: &str, caps: &[&str]) -> String {
     owner_ok(port, "/cli/skin/roles", json!({ "name": role })).await;
     owner_ok(port, "/cli/skin/roles/room", json!({ "name": role, "handle": ws.handle, "caps": caps })).await;
     owner_ok(port, "/cli/skin/users", json!({ "username": name })).await;
-    owner_ok(port, "/cli/skin/users/password", json!({ "username": name, "password": PW })).await;
+    k2_daemon::test_harness::guest_with_own_password(&name, PW);
     owner_ok(port, "/cli/skin/roles/assign", json!({ "username": name, "role": role })).await;
     let body = json!({ "username": name, "password": PW }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body)))

@@ -462,6 +462,19 @@ pub mod test_harness {
         _daemon_port_reg: crate::splice_guard::DaemonPortReg,
     }
 
+    /// A guest who chose `password` themselves (the person's own path,
+    /// must-change off), for tests that need a guest who simply signs in.
+    /// 0.46.6: a password the Owner, an Admin, an agent or K2 sets on the
+    /// users routes asks for a new one at the next sign-in (a 403 with a
+    /// change token, never a pass), so setup that only wants a signed-in
+    /// guest uses this. Tests about that set path call the route and
+    /// assert the 403. Panics on a store error.
+    pub fn guest_with_own_password(username: &str, password: &str) {
+        let p = k2_core::skin::set_principal_password(username, Some(password))
+            .unwrap_or_else(|e| panic!("guest_with_own_password {username}: {e}"));
+        assert!(!k2_core::skin::must_change::is_flagged(&p.id).expect("flag read"), "{username}: must-change stays off");
+    }
+
     /// Bind an ephemeral `127.0.0.1:0` listener, mark boot-status
     /// `ready` (so the dispatcher's readiness gate lets real routes
     /// through), and spawn the accept loop calling the REAL

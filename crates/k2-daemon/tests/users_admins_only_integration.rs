@@ -149,8 +149,9 @@ async fn t1_1_no_agent_credential_reaches_any_users_arm() {
             .id
     };
     let guest = format!("g{tag}");
-    let r = post(port, "/cli/skin/users", OWNER, json!({ "username": guest, "password": "s3cret-horse" })).await;
+    let r = post(port, "/cli/skin/users", OWNER, json!({ "username": guest })).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    k2_daemon::test_harness::guest_with_own_password(&guest, "s3cret-horse");
     let login = {
         let b = json!({ "username": guest, "password": "s3cret-horse" }).to_string();
         tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(b))).await.unwrap()

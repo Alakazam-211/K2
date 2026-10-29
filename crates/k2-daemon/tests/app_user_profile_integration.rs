@@ -103,7 +103,7 @@ async fn app_guest(port: u16, username: &str, app: &str) {
     let r = owner_post(port, "/cli/skin/roles/from-template", json!({ "template": "client", "app": app, "name": format!("{username}-role") })).await;
     let role = r["role"]["name"].as_str().unwrap().to_string();
     owner_post(port, "/cli/skin/users", json!({ "username": username, "app": app, "role": role, "email": format!("{username}@example.test") })).await;
-    owner_post(port, "/cli/skin/users/password", json!({ "username": username, "password": "s3cret-horse" })).await;
+    k2_daemon::test_harness::guest_with_own_password(&username, "s3cret-horse");
 }
 
 fn png(w: u32, h: u32) -> String {

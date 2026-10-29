@@ -203,7 +203,7 @@ async fn download_entries_never_change_a_pre_0464_files_door() {
             }
             let user = format!("u{i}{}{tag}", if scoped { "s" } else { "u" });
             owner_ok(port, "/cli/skin/users", json!({ "username": user })).await;
-            owner_ok(port, "/cli/skin/users/password", json!({ "username": user, "password": PW })).await;
+            k2_daemon::test_harness::guest_with_own_password(&user, PW);
             owner_ok(port, "/cli/skin/roles/assign", json!({ "username": user, "role": role })).await;
             let body = json!({ "username": user, "password": PW }).to_string();
             let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();

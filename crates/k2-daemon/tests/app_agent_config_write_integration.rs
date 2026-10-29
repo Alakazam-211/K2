@@ -204,11 +204,7 @@ fn owner_ok(port: u16, path: &str, body: serde_json::Value) -> Resp {
 /// An app login whose role `r-<username>` has `caps` on `room`; returns its pass.
 fn guest(port: u16, username: &str, room: &Room, caps: &[&str]) -> String {
     owner_ok(port, "/cli/skin/users", serde_json::json!({"username": username}));
-    owner_ok(
-        port,
-        "/cli/skin/users/password",
-        serde_json::json!({"username": username, "password": "s3cret-horse"}),
-    );
+    k2_daemon::test_harness::guest_with_own_password(username, "s3cret-horse");
     let role = format!("r-{username}");
     owner_ok(port, "/cli/skin/roles", serde_json::json!({"name": role}));
     owner_ok(

@@ -199,11 +199,7 @@ fn owner_post(port: u16, path: &str, body: &str) {
 /// An app login whose role has `caps` on each room; returns its pass.
 fn guest(port: u16, username: &str, rooms: &[(&Room, &[&str])]) -> String {
     owner_post(port, "/cli/skin/users", &format!(r#"{{"username":"{username}"}}"#));
-    owner_post(
-        port,
-        "/cli/skin/users/password",
-        &format!(r#"{{"username":"{username}","password":"s3cret-horse"}}"#),
-    );
+    k2_daemon::test_harness::guest_with_own_password(username, "s3cret-horse");
     let role = format!("r-{username}");
     owner_post(port, "/cli/skin/roles", &format!(r#"{{"name":"{role}"}}"#));
     for (room, caps) in rooms {

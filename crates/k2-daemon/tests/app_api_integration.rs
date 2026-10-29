@@ -97,7 +97,7 @@ async fn owner_post(port: u16, path: &str, body: Value) {
 /// A guest login whose role holds `caps` in each room; returns its pass.
 async fn guest(port: u16, username: &str, rooms: &[(&Ws, &[&str])]) -> String {
     owner_post(port, "/cli/skin/users", json!({ "username": username })).await;
-    owner_post(port, "/cli/skin/users/password", json!({ "username": username, "password": "s3cret-horse" })).await;
+    k2_daemon::test_harness::guest_with_own_password(&username, "s3cret-horse");
     let role = format!("r-{username}");
     owner_post(port, "/cli/skin/roles", json!({ "name": role })).await;
     for (ws, caps) in rooms {

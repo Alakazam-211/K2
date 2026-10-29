@@ -162,7 +162,7 @@ fn app_pass(port: u16) -> String {
         assert_eq!(r.status, 200, "{path}: {}", r.body);
     };
     owner("/cli/skin/users", serde_json::json!({"username": "bsvguest"}));
-    owner("/cli/skin/users/password", serde_json::json!({"username": "bsvguest", "password": "s3cret-horse"}));
+    k2_daemon::test_harness::guest_with_own_password("bsvguest", "s3cret-horse");
     let login = http(
         port,
         "POST",

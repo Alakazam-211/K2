@@ -256,6 +256,8 @@ async fn app_unlock_deletes_only_the_login_row() {
             Some(r#"{"username":"baden","password":"s3cret-horse"}"#),
         );
         assert_eq!(pw.status, 200, "set password; {}", pw.body);
+        // 0.46.6: an owner-typed password asks for a new one; the person keeps it.
+        test_harness::guest_with_own_password("baden", "s3cret-horse");
         let login = http(
             port,
             "POST",
@@ -435,6 +437,8 @@ async fn principal_lock_covers_username_and_email() {
             Some(r#"{"username":"cara","password":"s3cret-horse"}"#),
         );
         assert_eq!(pw.status, 200, "set password; {}", pw.body);
+        // 0.46.6: an owner-typed password asks for a new one; the person keeps it.
+        test_harness::guest_with_own_password("cara", "s3cret-horse");
 
         // (a) lock via the username; the email with the right password is 423.
         for _ in 0..3 {

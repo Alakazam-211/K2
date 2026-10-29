@@ -234,7 +234,7 @@ async fn an_app_guest_marks_its_own_rooms_thread_read_and_nothing_else() {
     owner_ok(port, "/cli/skin/roles/room", json!({ "name": rn, "handle": no_read.handle, "caps": ["tickets:read"] })).await;
     let guest = format!("pat{tag}");
     owner_ok(port, "/cli/skin/users", json!({ "username": guest })).await;
-    owner_ok(port, "/cli/skin/users/password", json!({ "username": guest, "password": PW })).await;
+    k2_daemon::test_harness::guest_with_own_password(&guest, PW);
     owner_ok(port, "/cli/skin/roles/assign", json!({ "username": guest, "role": rn })).await;
     let body = json!({ "username": guest, "password": PW }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();

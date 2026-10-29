@@ -31,9 +31,23 @@ async fn ok_post(port: u16, path: &str, token: &str, body: Value) -> Value {
     r.json()
 }
 
+/// Must-change (0.46.6): a password someone else set gets no pass. The
+/// login answers 403 with a change token, which sets the person's own
+/// `new_pw`.
+async fn person_changes(port: u16, username: &str, temp: &str, app: &str, new_pw: &str) {
+    let body = json!({ "username": username, "password": temp, "app": app }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
+    assert_eq!((r.status, r.code()), (403, "password_change_required".to_string()), "no pass on a password someone else set: {}", r.body);
+    assert!(!r.body.contains("k2skn_"), "{}", r.body);
+    let tok = r.json()["changeToken"].as_str().expect("change token").to_string();
+    let body = json!({ "token": tok, "password": new_pw }).to_string();
+    let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/password/reset", Some(body))).await.unwrap();
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
 async fn guest(port: u16, username: &str, ws: &Ws, caps: &[&str]) -> String {
     ok_post(port, "/cli/skin/users", OWNER, json!({ "username": username })).await;
-    ok_post(port, "/cli/skin/users/password", OWNER, json!({ "username": username, "password": "s3cret-horse" })).await;
+    k2_daemon::test_harness::guest_with_own_password(username, "s3cret-horse");
     let role = format!("r-{username}");
     ok_post(port, "/cli/skin/roles", OWNER, json!({ "name": role })).await;
     ok_post(port, "/cli/skin/roles/room", OWNER, json!({ "name": role, "handle": ws.handle, "caps": caps })).await;
@@ -171,9 +185,12 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     assert_eq!(r.status, 200, "an agent with manage Apps adds a guest: {}", r.body);
     let r = post(port, "/cli/skin/users/password", &agent, json!({ "username": sock, "password": "s3cret-horse" })).await;
     assert_eq!(r.status, 200, "and sets its password: {}", r.body);
+    // 0.46.6: the person chooses their own at the first sign-in; the
+    // change keeps the tie (only the owner's reset ends it).
+    person_changes(port, &sock, "s3cret-horse", &app, "socks-own-pw-1").await;
     // Thread rights come with the role on its App grant (nothing here
     // clears the tie).
-    let body = json!({ "username": sock, "password": "s3cret-horse", "app": app }).to_string();
+    let body = json!({ "username": sock, "password": "socks-own-pw-1", "app": app }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "{}", r.body);
     let sock_pass = r.json()["token"].as_str().expect("token").to_string();
@@ -227,7 +244,8 @@ async fn a_guest_its_agent_added_cant_answer_that_agents_cards() {
     let r = post(port, "/cli/thread/answer", &sock_pass, json!({ "addr": ws.handle, "id": id2, "answer": "Stop" })).await;
     assert_eq!(r.status, 401, "the claim ends every old session: {}", r.body);
     // The owner gives the person a new password: now it answers.
-    ok_post(port, "/cli/skin/users/password", OWNER, json!({ "username": sock, "password": "persons-own-pw-1" })).await;
+    ok_post(port, "/cli/skin/users/password", OWNER, json!({ "username": sock, "password": "owner-temp-pw-1" })).await;
+    person_changes(port, &sock, "owner-temp-pw-1", &app, "persons-own-pw-1").await;
     let body = json!({ "username": sock, "password": "persons-own-pw-1", "app": app }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
     assert_eq!(r.status, 200, "{}", r.body);

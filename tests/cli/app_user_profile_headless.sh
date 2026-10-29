@@ -46,11 +46,19 @@ print(json.dumps(v) if not isinstance(v, str) else v)' "$BODY" "$1"; }
 
 echo "== setup: a box-login guest with a password and an email"
 owner POST /cli/skin/users '{"username":"dana"}'
-owner POST /cli/skin/users/password '{"username":"dana","password":"s3cret-horse"}'
+owner POST /cli/skin/users/password '{"username":"dana","password":"owner-temp-1"}'
 owner POST /cli/skin/users/email '{"username":"dana","email":"dana@example.test"}'
 owner POST /cli/skin/roles '{"name":"staff"}'
 owner POST /cli/skin/roles/assign '{"username":"dana","role":"staff"}'
 login() { req POST /cli/skin/login "" "{\"username\":\"dana\",\"password\":\"$1\"}" "${2:-}"; }
+# 0.46.6: the owner typed it, so the first sign-in gets a change token, no pass.
+login owner-temp-1
+expect "owner-set password: must change" "$CODE" 403
+expect "must-change code" "$(field error.code)" password_change_required
+CHG="$(field changeToken)"
+case "$CHG" in k2chg_*) ok "a change token" ;; *) bad "a change token ($BODY)" ;; esac
+req POST /cli/skin/password/reset "" "{\"token\":\"$CHG\",\"password\":\"s3cret-horse\"}"
+expect "dana chooses her own" "$CODE" 200
 login s3cret-horse 'User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15'
 expect "login A" "$CODE" 200
 A="$(field token)"

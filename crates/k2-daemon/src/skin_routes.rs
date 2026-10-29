@@ -274,6 +274,11 @@ pub fn handle_users_get() -> CliResponse {
                 Ok(m) => m,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            // Must change their password at next sign-in (0.46.6).
+            let must_change = match skin::must_change::flagged() {
+                Ok(m) => m,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             let users: Vec<serde_json::Value> = users
                 .iter()
                 .map(|u| {
@@ -299,6 +304,7 @@ pub fn handle_users_get() -> CliResponse {
                         Some(until) => serde_json::json!(until),
                         None => serde_json::Value::Null,
                     };
+                    v["passwordMustChange"] = serde_json::json!(must_change.contains(&u.id));
                     v["storedEmailRefused"] = match email_refused.get(&u.id) {
                         Some(why) => serde_json::json!(why),
                         None => serde_json::Value::Null,
@@ -820,6 +826,31 @@ pub(crate) fn agent_test_guest_refused(actor: &str, username: &str) -> Option<Cl
     }
 }
 
+/// Is `username` a test guest that `actor`, an agent, made itself (the
+/// same "own" test as [`agent_test_guest_refused`])? `false` for anyone
+/// else, and on a store error.
+fn agent_owns_test_guest(actor: &str, username: &str) -> bool {
+    if !actor_is_agent(actor) {
+        return false;
+    }
+    let Ok(Some(p)) = principal_named(username) else { return false };
+    let Ok(Some(t)) = skin::test_guests::get(&p.id) else { return false };
+    let made_by = skin::creators::workspace_of(&p.id).ok().flatten();
+    made_by.as_deref() == Some(t.workspace_id.as_str())
+        && actor == format!("agent:{}", crate::apps::routes::ws_handle(&t.workspace_id))
+}
+
+/// Must-change at next sign-in (0.46.6, Rosson 2026-10-29): does a
+/// password `actor` sets for `username` on the users routes turn the
+/// person's flag on? These routes are always someone else choosing it (a
+/// person's own password goes through `password.change` or a link), so
+/// yes: K2-generated, Owner- or Admin-typed, an agent's for anyone. The
+/// one exception is an agent's own test guest (it signs in as them to
+/// test).
+pub(crate) fn password_sets_must_change(actor: &str, username: &str) -> bool {
+    !agent_owns_test_guest(actor, username)
+}
+
 /// GH#72 (Rosson 2026-10-14): [`skin::CAP_FILES_AGENT_CONFIG`] — letting
 /// App guests write the agent's own `.k2/` folder — is owner tooling. An
 /// agent with "manage Apps" may not add it to a role's room, mint it on a
@@ -1084,7 +1115,8 @@ fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
             let password = generated.as_deref().or(typed);
             if password.is_some() {
                 let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_PASSWORD });
-                match skin::set_principal_password_tied(&p.username, password, tie) {
+                let must_change = password_sets_must_change(actor, &p.username);
+                match skin::set_principal_password_tied(&p.username, password, tie, must_change) {
                     Ok(p) => return principal_json_with_generated(&p, generated.as_deref()),
                     Err(e) => return CliResponse::bad_request(e),
                 }
@@ -1284,7 +1316,8 @@ fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliRespon
     };
     let password = generated.as_deref().or(typed);
     let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_PASSWORD });
-    match skin::set_principal_password_tied(username, password, tie) {
+    let must_change = password_sets_must_change(actor, username);
+    match skin::set_principal_password_tied(username, password, tie, must_change) {
         Ok(p) => {
             k2_core::log_debug!(
                 "[skin] actor={actor} set password for {} has_password={} generated={}",
@@ -1316,11 +1349,18 @@ fn generate_flag(v: &serde_json::Value, typed: bool) -> Result<Option<String>, C
 }
 
 /// The principal as JSON, plus the generated password once when there is
-/// one (the only time K2 ever shows it; it is never stored or logged).
+/// one (the only time K2 ever shows it; it is never stored or logged),
+/// and `passwordMustChange` (0.46.6): whether their next sign-in asks for
+/// a new password.
 fn principal_json_with_generated(p: &skin::SkinPrincipal, generated: Option<&str>) -> CliResponse {
     let mut v = serde_json::to_value(p).unwrap_or_else(|_| serde_json::json!({}));
     if let Some(pw) = generated {
         v["generatedPassword"] = serde_json::json!(pw);
+    }
+    // The password is already set: a read error only leaves the field out
+    // (never a 500 that would lose the generated password).
+    if let Ok(on) = skin::must_change::is_flagged(&p.id) {
+        v["passwordMustChange"] = serde_json::json!(on);
     }
     CliResponse::ok_json(v.to_string())
 }
@@ -3226,6 +3266,9 @@ fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>, label: O
     }
     let principal = match skin::check_and_record_login(&username, &password) {
         skin::SkinLoginOutcome::Ok(p) => p,
+        // 0.46.6: a right password someone else chose. No pass, no
+        // session, on every path (form, JSON, device): a change token.
+        skin::SkinLoginOutcome::MustChange(p) => return must_change_reply(form, &p, app.as_deref()),
         skin::SkinLoginOutcome::LockedOut { retry_after_secs } => {
             return login_locked(form, retry_after_secs);
         }
@@ -3360,6 +3403,93 @@ fn login_inner(body: &[u8], content_type: &str, link_app: Option<&str>, label: O
         retry_after: None,
     }
 }
+
+/// The refusal code a flagged login gets (0.46.6). An App's server on an
+/// older `@k2/server` sees it as a failed login with this code and hint.
+pub const PASSWORD_CHANGE_REQUIRED: &str = "password_change_required";
+
+/// A right password with must-change on (0.46.6, [`skin::must_change`]):
+/// never a pass or a session.
+///
+/// - JSON (and a device sign-in): `403` with `error.code`
+///   [`PASSWORD_CHANGE_REQUIRED`], `mustChangePassword: true`,
+///   `changeToken` (`k2chg_…`, 15 minutes, one use, only on
+///   `POST /cli/skin/password/reset`), `changeExpiresAt`, `changePath`
+///   (K2's set-password page on this door) and `changeUrl` (the App's
+///   set-password page, or K2's, with the token in the `#fragment`) when
+///   there is one. A non-2xx so a server that doesn't know the shape fails
+///   closed.
+/// - Form: `303` to K2's set-password page with the token in the fragment.
+///
+/// A login that would be refused anyway (no grant, an App that isn't
+/// live, a test guest off its link) is the same generic refusal as a bad
+/// password: the token is minted only where a session would be.
+fn must_change_reply(form: bool, p: &skin::SkinPrincipal, app: Option<&str>) -> SkinLoginReply {
+    let failed = || SkinLoginReply {
+        response: if form { login_failed_html() } else { login_failed_json() },
+        token: None,
+        location: None,
+        retry_after: None,
+    };
+    let app = skin::normalize_app_target(app);
+    if !login_app_is_live(&app) {
+        return failed();
+    }
+    let started = match skin::must_change::start(&p.username, &app) {
+        Ok(s) => s,
+        Err(e) if e == skin::HOST_LOGIN_DENIED => return failed(),
+        Err(e) => return SkinLoginReply { response: CliResponse::internal_error(e), token: None, location: None, retry_after: None },
+    };
+    let path = crate::skin_gateway::SET_PASSWORD_PATH;
+    k2_core::log_debug!("[skin] login for {} on {app}: must change password (change token issued)", p.username);
+    if form {
+        return SkinLoginReply {
+            response: CliResponse {
+                status: "303 See Other",
+                content_type: "text/html; charset=utf-8",
+                body: "<!DOCTYPE html><html><body>Choose a new password.</body></html>".to_string(),
+            },
+            token: None,
+            location: Some(format!("{path}#{}", started.token)),
+            retry_after: None,
+        };
+    }
+    // The App's own set-password page when it has one, else K2's on the
+    // box's front door (never an App's host); none: changePath only.
+    let page = skin::invites::settings(&app)
+        .ok()
+        .and_then(|st| st.set_password_url)
+        .or_else(|| crate::app_user_invites::k2_set_password_page().ok().flatten());
+    let change_url = page.map(|page| skin::invites::link_for(&page, &started.token));
+    let body = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": PASSWORD_CHANGE_REQUIRED,
+            "hint": PASSWORD_CHANGE_REQUIRED_HINT,
+        },
+        "mustChangePassword": true,
+        "changeToken": started.token,
+        "changeExpiresAt": started.expires_at,
+        "changePath": path,
+        "changeUrl": change_url,
+        "username": p.username,
+        "app": app,
+    })
+    .to_string();
+    debug_assert!(!body.contains("k2skn_"), "a must-change answer carries no pass");
+    SkinLoginReply {
+        response: CliResponse { status: "403 Forbidden", content_type: "application/json", body },
+        token: None,
+        location: None,
+        retry_after: None,
+    }
+}
+
+/// The hint on [`PASSWORD_CHANGE_REQUIRED`]: what the App's server does.
+pub const PASSWORD_CHANGE_REQUIRED_HINT: &str = "this person must choose a new password before signing in (someone else set this one): \
+send their browser to changeUrl; with no changeUrl, your own form posts {token: changeToken, password} to POST /cli/skin/password/reset. \
+Then they sign in with the new password (the token works once, for 15 minutes; signing in again gets a new one). \
+An App on an older @k2/server sees a failed login: update it (k2 app sdk add <app-folder>, then npm install).";
 
 /// Session `k2skn_` only. Static partner key → 403, not revoked.
 pub fn handle_logout(presented: Option<&str>) -> CliResponse {
@@ -3593,6 +3723,10 @@ pub fn password_too_long_response() -> CliResponse {
     CliResponse::bad_request(skin::PASSWORD_TOO_LONG)
 }
 
+/// The refusal when a change token's new password is the temporary one
+/// (0.46.6); the token stays usable.
+pub const PASSWORD_UNCHANGED: &str = "password_unchanged";
+
 /// Public `POST /cli/skin/password/reset` `{token, password}`. Ignore
 /// presented auth. Empty or `<8` → 400. Bad/expired/used → 401 + dummy.
 /// Does not mint a session. Caller adds the 500 ms 401 delay.
@@ -3610,6 +3744,25 @@ pub fn handle_password_reset(body: &[u8]) -> CliResponse {
     }
     if skin::password_too_long(password.trim()) {
         return password_too_long_response();
+    }
+    // Must-change (0.46.6): the change token a flagged login got.
+    if token.trim().starts_with(skin::must_change::CHANGE_PREFIX) {
+        return match skin::must_change::consume(token, password) {
+            Ok(skin::must_change::ChangeConsume::Ok) => CliResponse::ok_json(r#"{"ok":true}"#.to_string()),
+            Ok(skin::must_change::ChangeConsume::SamePassword) => CliResponse {
+                status: "400 Bad Request",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "error": {
+                        "code": PASSWORD_UNCHANGED,
+                        "hint": "choose a new password, not the temporary one you were given",
+                    }
+                })
+                .to_string(),
+            },
+            Ok(skin::must_change::ChangeConsume::BadToken) => reset_failed(),
+            Err(e) => CliResponse::internal_error(e),
+        };
     }
     // agent-app-users §5.4: an invite / owner-reset / App reset link.
     if token.trim().starts_with(skin::invites::INVITE_PREFIX) {
@@ -3828,18 +3981,22 @@ mod tests {
         let first = v["generatedPassword"].as_str().expect("generatedPassword").to_string();
         assert_eq!(first.len(), skin::GENERATED_PASSWORD_CHARS + 3, "{first}");
         assert_eq!(v["hasPassword"], true, "{v}");
-        assert!(matches!(skin::check_and_record_login("gina", &first), skin::SkinLoginOutcome::Ok(_)));
+        // 0.46.6: K2 chose it, so the person chooses their own at sign-in.
+        assert_eq!(v["passwordMustChange"], true, "{v}");
+        assert!(matches!(skin::check_and_record_login("gina", &first), skin::SkinLoginOutcome::MustChange(_)));
         // A plain add and a typed set never carry one.
         let v = ok(handle_users_post(br#"{"username":"hal","password":"typed-one-here"}"#, "owner-token"));
         assert!(v.get("generatedPassword").is_none(), "{v}");
+        assert_eq!(v["passwordMustChange"], true, "the owner typed it for someone else: {v}");
         let v = ok(handle_users_password(br#"{"username":"hal","password":"typed-two-here"}"#, "owner-token"));
         assert!(v.get("generatedPassword").is_none(), "{v}");
+        assert_eq!(v["passwordMustChange"], true, "{v}");
         // Set with generate: a new one, and the old one stops working (the
         // set is the same `set_principal_password_tied` that ends sessions).
         let v = ok(handle_users_password(br#"{"username":"gina","generate":true}"#, "owner-token"));
         let second = v["generatedPassword"].as_str().expect("generatedPassword").to_string();
         assert_ne!(first, second);
-        assert!(matches!(skin::check_and_record_login("gina", &second), skin::SkinLoginOutcome::Ok(_)));
+        assert!(matches!(skin::check_and_record_login("gina", &second), skin::SkinLoginOutcome::MustChange(_)));
         assert!(matches!(skin::check_and_record_login("gina", &first), skin::SkinLoginOutcome::BadCreds));
         // One or the other, and only a boolean.
         for (body, why) in [

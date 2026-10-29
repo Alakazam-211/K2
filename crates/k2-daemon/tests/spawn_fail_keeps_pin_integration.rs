@@ -64,7 +64,7 @@ async fn ok_get(port: u16, path: &str, token: &str, query: &str) -> Value {
 /// A guest whose role reads the room's Thread; returns its pass.
 async fn guest(port: u16, username: &str, ws: &Ws) -> String {
     ok_post(port, "/cli/skin/users", OWNER, json!({ "username": username })).await;
-    ok_post(port, "/cli/skin/users/password", OWNER, json!({ "username": username, "password": "s3cret-horse" })).await;
+    k2_daemon::test_harness::guest_with_own_password(&username, "s3cret-horse");
     let role = format!("r-{username}");
     ok_post(port, "/cli/skin/roles", OWNER, json!({ "name": role })).await;
     ok_post(port, "/cli/skin/roles/room", OWNER, json!({ "name": role, "handle": ws.handle, "caps": ["thread:read"] })).await;

@@ -91,7 +91,7 @@ async fn s0_a_pass_never_gets_a_reset_token_and_reaches_only_its_own_guests() {
     // A guest wholly inside sales (its rooms), password and email set.
     let own = format!("own{tag}");
     owner_post(port, "/cli/skin/users", json!({ "username": own, "email": format!("{own}@example.test") })).await;
-    owner_post(port, "/cli/skin/users/password", json!({ "username": own, "password": "s3cret-horse" })).await;
+    k2_daemon::test_harness::guest_with_own_password(&own, "s3cret-horse");
     owner_post(port, "/cli/skin/users/rooms", json!({ "username": own, "rooms": [sales.handle] })).await;
 
     let pass = agent_pass(port, &sales, &agent, &format!("p{tag}")).await;
@@ -329,6 +329,7 @@ async fn s3_a_tied_user_stays_at_the_agents_workspace_until_their_own_reset() {
     allow_manage(&sales, true);
     let agent = passport(&sales);
     let pw = "s3cret-horse";
+    let temp = "set-by-someone-1";
 
     // A role of the agent's workspace: Thread in sales.
     let role = format!("desk{tag}");
@@ -336,7 +337,7 @@ async fn s3_a_tied_user_stays_at_the_agents_workspace_until_their_own_reset() {
 
     // u1: made by the agent on its App, with a password it chose.
     let u1 = format!("u1{tag}");
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "role": role, "password": pw, "email": format!("{u1}@example.test") })).await;
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "role": role, "password": temp, "email": format!("{u1}@example.test") })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let t = tie_of(&u1).expect("tied");
     assert_eq!((t.workspace_id.as_str(), t.host_ok), (sales.id.as_str(), false));
@@ -345,8 +346,13 @@ async fn s3_a_tied_user_stays_at_the_agents_workspace_until_their_own_reset() {
 
     // u2: the owner's untied control with the same role on the same App.
     let u2 = format!("u2{tag}");
-    owner_post(port, "/cli/skin/users", json!({ "username": u2, "app": shop, "role": role, "password": pw })).await;
+    owner_post(port, "/cli/skin/users", json!({ "username": u2, "app": shop, "role": role, "password": temp })).await;
     assert!(tie_of(&u2).is_none(), "the owner's add ties nobody");
+    // 0.46.6: both passwords were someone else's: each person chooses one.
+    person_changes(port, &u1, temp, &shop, pw).await;
+    person_changes(port, &u2, temp, &shop, pw).await;
+    assert_eq!(tie_of(&u1).expect("the change keeps the tie").reasons, vec!["created".to_string(), "password".to_string()]);
+    assert!(tie_of(&u2).is_none());
 
     // T3.8 before any widening: tied, not pending.
     let row = user_row(port, &u1).await;
@@ -599,6 +605,27 @@ async fn reset_with(port: u16, token: &str, password: &str) -> Resp {
 }
 
 const RESET_FAILED: &str = r#"{"error":"invalid or expired reset token"}"#;
+
+/// Must-change (0.46.6): a password an agent, the owner or an App key set
+/// for someone gets no pass at sign-in. The login answers 403
+/// `password_change_required` with a change token; the token refuses the
+/// temporary password and sets `new_pw`. The person then signs in normally.
+async fn person_changes(port: u16, username: &str, temp: &str, app: &str, new_pw: &str) {
+    let r = login(port, json!({ "username": username, "password": temp, "app": app })).await;
+    assert_eq!(r.status, 403, "{username}: a password someone else set gets no pass: {}", r.body);
+    let v = r.json();
+    assert_eq!(v["error"]["code"], "password_change_required", "{v}");
+    assert_eq!(v["mustChangePassword"], json!(true), "{v}");
+    assert!(v.get("token").is_none() && !r.body.contains("k2skn_"), "no pass: {v}");
+    let tok = v["changeToken"].as_str().expect("a change token").to_string();
+    assert!(tok.starts_with("k2chg_"), "{tok}");
+    let r = reset_with(port, &tok, temp).await;
+    assert_eq!((r.status, r.code()), (400, "password_unchanged".to_string()), "never the temporary one: {}", r.body);
+    let r = reset_with(port, &tok, new_pw).await;
+    assert_eq!(r.status, 200, "{username}: the change token sets the new password: {}", r.body);
+    let r = reset_with(port, &tok, "third-pass-123").await;
+    assert_eq!((r.status, r.body.as_str()), (401, RESET_FAILED), "one use");
+}
 
 /// The box's front door URL (direct mode, not applied: no Caddy).
 async fn set_front_door(port: u16, url: &str) {
@@ -909,10 +936,11 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     // u1: the agent made it, set its password and its email.
     let u1 = format!("u1{tag}");
     let e1 = format!("{u1}@example.test");
-    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "role": role, "password": pw })).await;
+    let r = post(port, "/cli/skin/users", &agent, json!({ "username": u1, "app": shop, "role": role, "password": "agent-temp-1" })).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let r = post(port, "/cli/skin/users/email", &agent, json!({ "username": u1, "email": e1 })).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    person_changes(port, &u1, "agent-temp-1", &shop, pw).await;
     let s_old = login(port, json!({ "username": u1, "password": pw, "app": shop })).await.json()["token"].as_str().unwrap().to_string();
 
     // No front door yet: K2 has no page of its own; only --code works, and
@@ -1016,6 +1044,10 @@ async fn s4_the_owners_reset_link_drops_the_tie_and_nothing_else_does() {
     let t2 = tie_of(&u2).expect("an App key's person is tied (Q3)");
     assert_eq!((t2.workspace_id.as_str(), t2.reasons.clone()), (sales.id.as_str(), vec!["app_key".to_string()]));
     assert!(t2.set_by.starts_with("app-key:"), "{t2:?}");
+    // 0.46.6: the App key chose that password, so the person must change it.
+    assert!(k2_core::skin::must_change::is_flagged(&principal_id(&u2)).unwrap(), "an App key's password");
+    let r = login(port, json!({ "username": u2, "password": "app-key-pass-1", "app": shop })).await;
+    assert_eq!((r.status, r.code()), (403, "password_change_required".to_string()), "{}", r.body);
     // An owner reset waiting for u2 is never voided by the App's own reset;
     // while it is live the App's reset waits for it (app-user-profile
     // §5.4): nothing tied anew, minted or mailed.

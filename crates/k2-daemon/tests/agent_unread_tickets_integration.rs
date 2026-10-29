@@ -180,7 +180,7 @@ async fn summary_counts_are_per_caller_and_list_idle_agents_with_something_waiti
     owner_ok(port, "/cli/skin/roles/room", json!({ "name": format!("r{tag}"), "handle": a.handle, "caps": ["thread:read"] })).await;
     let guest = format!("g{tag}");
     owner_ok(port, "/cli/skin/users", json!({ "username": guest })).await;
-    owner_ok(port, "/cli/skin/users/password", json!({ "username": guest, "password": PW })).await;
+    k2_daemon::test_harness::guest_with_own_password(&guest, PW);
     owner_ok(port, "/cli/skin/roles/assign", json!({ "username": guest, "role": format!("r{tag}") })).await;
     let body = json!({ "username": guest, "password": PW }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();
@@ -217,7 +217,7 @@ async fn app_agent_rows_carry_counts_only_where_the_caps_allow_and_never_for_oth
     }
     let guest = format!("pat{tag}");
     owner_ok(port, "/cli/skin/users", json!({ "username": guest })).await;
-    owner_ok(port, "/cli/skin/users/password", json!({ "username": guest, "password": PW })).await;
+    k2_daemon::test_harness::guest_with_own_password(&guest, PW);
     owner_ok(port, "/cli/skin/roles/assign", json!({ "username": guest, "role": rn })).await;
     let body = json!({ "username": guest, "password": PW }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();

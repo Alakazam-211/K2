@@ -20,6 +20,17 @@
   </main>
   <script>
     const err = document.getElementById("err");
+    // A login answer that asks for a new password: its change token
+    // (k2chg_…), else null.
+    function mustChange(text) {
+      try {
+        const j = JSON.parse(text);
+        const tok = j && j.mustChangePassword === true ? j.changeToken : null;
+        return typeof tok === "string" && /^k2chg_[0-9a-f]+$/.test(tok) ? tok : null;
+      } catch (_) {
+        return null;
+      }
+    }
     document.getElementById("f").addEventListener("submit", async (e) => {
       e.preventDefault();
       err.hidden = true;
@@ -35,6 +46,13 @@
         credentials: "same-origin",
       });
       const t = await r.text();
+      // Someone else set this password: K2's set-password page, with the
+      // one-time change token in the #fragment (never sent to a server).
+      const change = mustChange(t);
+      if (change) {
+        location.href = "/cli/skin/password/set#" + encodeURIComponent(change);
+        return;
+      }
       if (!r.ok) {
         err.textContent = "invalid username or password";
         err.hidden = false;

@@ -423,7 +423,8 @@ fn create_user(c: &Ctx, v: &J) -> R {
     }
     if let Some(pw) = field(v, "password") {
         let tie = skin::ties::TieWrite { workspace_id: &ws, set_by: &actor, reason: skin::ties::REASON_APP_KEY };
-        skin::set_principal_password_tied(&user, Some(pw), Some(tie)).map_err(|e| err(400, "bad_password", e))?;
+        // Must-change (0.46.6): the App key chose it, not the person.
+        skin::set_principal_password_tied(&user, Some(pw), Some(tie), true).map_err(|e| err(400, "bad_password", e))?;
     }
     let (_, g) = app_grant(c, &p.username)?;
     let p = skin::list_principals().map_err(|e| err(500, "store", e))?.into_iter().find(|x| x.id == p.id).unwrap_or(p);

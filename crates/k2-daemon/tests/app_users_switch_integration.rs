@@ -124,6 +124,7 @@ async fn an_agent_sets_up_a_fresh_app_and_a_test_guest_that_signs_in_with_only_i
     assert!(k2_core::skin::guest_rooms::get_grant(&svc).unwrap().is_some());
     let p = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == "usw-tester").expect("made");
     assert_eq!(k2_core::skin::creators::agent_tie(&p.id).unwrap().as_deref(), Some(ws.id.as_str()), "tied to the agent's workspace");
+    assert!(!k2_core::skin::must_change::is_flagged(&p.id).unwrap(), "0.46.6: an agent's own test guest never has to change it");
 
     // The guest signs in through the App's link with the agent's password.
     let (pass, port) = open_link("uswapp", &svc, &ws);

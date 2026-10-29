@@ -102,8 +102,15 @@ owner /cli/skin/roles '{"name":"contract"}' >/dev/null
 owner /cli/skin/roles/room "{\"name\":\"contract\",\"handle\":\"$ROOM_HANDLE\",\"caps\":[\"thread:read\",\"thread:post\",\"files:read\",\"files:write\",\"store:read\",\"store:write\"]}" >/dev/null
 for u in dana locky; do
 	owner /cli/skin/users "{\"username\":\"$u\",\"email\":\"$u@contract.test\"}" >/dev/null || { echo "FAIL: guest $u" >&2; exit 1; }
-	owner /cli/skin/users/password "{\"username\":\"$u\",\"password\":\"$PW\"}" >/dev/null
+	# 0.46.6: an owner-typed password is temporary. The person takes it
+	# over at the first sign-in (403 + change token), keeping $PW.
+	owner /cli/skin/users/password "{\"username\":\"$u\",\"password\":\"$PW-temp\"}" >/dev/null
 	owner /cli/skin/roles/assign "{\"username\":\"$u\",\"role\":\"contract\"}" >/dev/null
+	chg="$(curl -s -X POST -H 'Content-Type: application/json' -d "{\"username\":\"$u\",\"password\":\"$PW-temp\"}" "http://127.0.0.1:$PORT/cli/skin/login" \
+		| python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["changeToken"] if v.get("mustChangePassword") else "")')"
+	[ -n "$chg" ] || { echo "FAIL: guest $u: an owner-set password must ask for a new one" >&2; exit 1; }
+	curl -sf -X POST -H 'Content-Type: application/json' -d "{\"token\":\"$chg\",\"password\":\"$PW\"}" "http://127.0.0.1:$PORT/cli/skin/password/reset" >/dev/null \
+		|| { echo "FAIL: guest $u: the change token" >&2; exit 1; }
 done
 CARD="$(owner /cli/thread/ask "{\"addr\":\"$ROOM_HANDLE\",\"prompt\":\"Ship it?\",\"options\":\"Yes,No\"}" \
 	| python3 -c 'import json,sys; v=json.load(sys.stdin); print(v.get("id") or v["card"]["id"])')"

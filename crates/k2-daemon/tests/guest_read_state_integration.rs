@@ -65,7 +65,7 @@ async fn role(port: u16, name: &str, rooms: &[&Ws], caps: &[&str]) {
 /// A guest on the box login with `role`: its session pass.
 async fn guest_login(port: u16, username: &str, role: &str) -> String {
     owner_ok(port, "/cli/skin/users", json!({ "username": username })).await;
-    owner_ok(port, "/cli/skin/users/password", json!({ "username": username, "password": PW })).await;
+    k2_daemon::test_harness::guest_with_own_password(&username, PW);
     owner_ok(port, "/cli/skin/roles/assign", json!({ "username": username, "role": role })).await;
     let body = json!({ "username": username, "password": PW }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body))).await.unwrap();

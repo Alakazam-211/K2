@@ -72,7 +72,11 @@ pub const HOST_LOGIN_DENIED: &str = "invalid username or password";
 ///   6 = `principal_agent_ties` + `app_user_invites` (agent-app-users,
 ///       0.46.4, [`ties`]). A K2 older than this refuses the file, so a
 ///       downgrade can never ignore a tie and mint an uncapped session.
-pub const SKIN_SCHEMA_VERSION: i64 = 6;
+///   7 = `principals.password_must_change` + `password_change_tokens`
+///       (must-change at next sign-in, 0.46.6, [`must_change`]). A K2
+///       older than this refuses the file, so a downgrade can never sign a
+///       person in on a temporary password someone else chose.
+pub const SKIN_SCHEMA_VERSION: i64 = 7;
 
 /// Agent ties and the tied user's ceiling (agent-app-users, 0.46.4).
 #[path = "skin_ties.rs"]
@@ -81,6 +85,10 @@ pub mod ties;
 /// (agent-app-users, 0.46.4).
 #[path = "skin_invites.rs"]
 pub mod invites;
+/// Must-change-password at next sign-in (0.46.6): the flag and the
+/// one-time change token a flagged login gets instead of a pass.
+#[path = "skin_must_change.rs"]
+pub mod must_change;
 
 #[path = "skin_link.rs"]
 pub mod link;
@@ -1892,6 +1900,11 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
     if (1..6).contains(&v) {
         backup_before_step(conn, 6)?;
     }
+    // Must-change (0.46.6): a 0.46.5 K2 refuses a version-7 file, so a
+    // version-6 file is copied first too (`skin.db.pre-7.bak`).
+    if v == 6 {
+        backup_before_step(conn, 7)?;
+    }
     while v < SKIN_SCHEMA_VERSION {
         let next = v + 1;
         let tx = conn
@@ -1925,6 +1938,10 @@ fn run_schema_steps(conn: &mut Connection) -> Result<(), String> {
             }
             6 => {
                 ties::step6_ties_and_invites(&tx)?;
+                Vec::new()
+            }
+            7 => {
+                must_change::step7_must_change(&tx)?;
                 Vec::new()
             }
             other => return Err(format!("skin.db: no schema step {other}")),
@@ -2923,17 +2940,24 @@ pub fn set_principal_password(
     username: &str,
     password: Option<&str>,
 ) -> Result<SkinPrincipal, String> {
-    set_principal_password_tied(username, password, None)
+    set_principal_password_tied(username, password, None, false)
 }
 
 /// [`set_principal_password`] that also ties the guest (`tie`: an agent or
 /// an App key set it, agent-app-users R2) in the same transaction.
+///
+/// `must_change` (0.46.6, [`must_change`]): `true` turns the person's
+/// must-change-at-next-sign-in flag on in the same transaction (someone
+/// else chose this password: K2 generated it, the Owner or an Admin typed
+/// it, an agent set it for anyone but its own test guest, an App key set
+/// it); `false` clears it. A cleared password (`None`) never sets it.
 pub fn set_principal_password_tied(
     username: &str,
     password: Option<&str>,
     tie: Option<ties::TieWrite<'_>>,
+    must_change: bool,
 ) -> Result<SkinPrincipal, String> {
-    set_principal_password_inner(username, password, tie, None)
+    set_principal_password_inner(username, password, tie, None, must_change)
 }
 
 /// A person changes their own password and stays signed in where they
@@ -2941,7 +2965,7 @@ pub fn set_principal_password_tied(
 /// other login session and device sign-in of theirs ends, on every App;
 /// the pass `keep_token_id` and the device sign-in it belongs to stay.
 pub fn set_principal_password_staying(username: &str, password: &str, keep_token_id: &str) -> Result<SkinPrincipal, String> {
-    set_principal_password_inner(username, Some(password), None, Some(keep_token_id))
+    set_principal_password_inner(username, Some(password), None, Some(keep_token_id), false)
 }
 
 fn set_principal_password_inner(
@@ -2949,6 +2973,7 @@ fn set_principal_password_inner(
     password: Option<&str>,
     tie: Option<ties::TieWrite<'_>>,
     keep_token_id: Option<&str>,
+    must_change: bool,
 ) -> Result<SkinPrincipal, String> {
     let username = normalize_username(username)?;
     if password.is_some_and(|pw| password_too_long(pw.trim())) {
@@ -2972,6 +2997,9 @@ fn set_principal_password_inner(
             params![hash, p.id],
         )
         .map_err(|e| format!("skin password update: {e}"))?;
+        // Must-change (0.46.6): on only for a password someone else chose,
+        // never for a cleared one. Unused change tokens go either way.
+        must_change::set_flag_conn(&tx, &p.id, must_change && has_password)?;
         match keep_token_id {
             Some(keep) => {
                 revoke_sessions_for_principal_except(&tx, &p.id, keep, None)?;
@@ -3651,6 +3679,8 @@ pub fn consume_password_reset(token: &str, password: &str) -> Result<SkinResetCo
         }
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("skin password update: {e}"))?;
+        // The person chose this password: must-change ends (0.46.6).
+        must_change::set_flag_conn(&tx, &principal_id, false)?;
         revoke_sessions_for_principal(&tx, &principal_id)?;
         // U4 / U7: the other unused links go, and the person proved their
         // mailbox, so their login lockout ends, in this same transaction
@@ -3732,6 +3762,10 @@ pub fn verify_principal_password(username: &str, password: &str) -> bool {
 #[derive(Debug)]
 pub enum SkinLoginOutcome {
     Ok(SkinPrincipal),
+    /// The password is right but someone else chose it (0.46.6,
+    /// [`must_change`]): no pass and no session. The caller answers with a
+    /// change token ([`must_change::start`]), never a login.
+    MustChange(SkinPrincipal),
     BadCreds,
     /// The login is locked (3 bad tries → 15 min). A name that resolves to
     /// a principal (by username OR email) is locked per principal, so the
@@ -3760,6 +3794,8 @@ struct LoginPrincipalRow {
     username: String,
     email: Option<String>,
     password_hash: Option<String>,
+    /// `principals.password_must_change` (0.46.6).
+    must_change: bool,
 }
 
 /// Which `login_lockouts` rows one login attempt reads and writes.
@@ -3982,6 +4018,7 @@ pub fn check_and_record_login(username: &str, password: &str) -> SkinLoginOutcom
         return SkinLoginOutcome::BadCreds;
     };
     match with_conn(|conn| principal_by_username(conn, &principal.username)) {
+        Ok(Some(p)) if principal.must_change => SkinLoginOutcome::MustChange(attach_principal_handles(p)),
         Ok(Some(p)) => SkinLoginOutcome::Ok(attach_principal_handles(p)),
         _ => SkinLoginOutcome::BadCreds,
     }
@@ -3995,34 +4032,35 @@ fn lookup_login_principal(
     conn: &Connection,
     presented: &str,
 ) -> Result<Option<LoginPrincipalRow>, String> {
-    let row: Option<(String, Option<String>, Option<String>)> =
+    let row: Option<(String, Option<String>, Option<String>, i64)> =
         if presented_looks_like_email(presented) {
             let Ok(Some(email)) = normalize_email(presented) else {
                 return Ok(None);
             };
             conn.query_row(
-                "SELECT username, email, password_hash FROM principals
+                "SELECT username, email, password_hash, password_must_change FROM principals
                  WHERE email = ?1 COLLATE NOCASE
                    AND email IS NOT NULL AND trim(email) != ''",
                 params![email],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()
             .map_err(|e| format!("skin password lookup: {e}"))?
         } else {
             let key = normalize_username(presented).unwrap_or_else(|_| presented.to_string());
             conn.query_row(
-                "SELECT username, email, password_hash FROM principals WHERE username = ?1",
+                "SELECT username, email, password_hash, password_must_change FROM principals WHERE username = ?1",
                 params![key],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional()
             .map_err(|e| format!("skin password lookup: {e}"))?
         };
-    Ok(row.map(|(username, email, hash)| LoginPrincipalRow {
+    Ok(row.map(|(username, email, hash, must_change)| LoginPrincipalRow {
         username,
         email,
         password_hash: hash.filter(|s| !s.trim().is_empty()),
+        must_change: must_change != 0,
     }))
 }
 
@@ -8791,7 +8829,7 @@ mod tests {
     #[test]
     fn step6_adds_ties_and_invites_to_a_v5_file() {
         with_temp_home(|| {
-            assert_eq!(SKIN_SCHEMA_VERSION, 6);
+            assert_eq!(SKIN_SCHEMA_VERSION, 7);
             add_principal("ada").unwrap();
             let path = store_path();
             *db().lock() = None;
@@ -8801,7 +8839,7 @@ mod tests {
                     .unwrap();
             }
             assert!(principal_exists("ada").unwrap(), "the v5 file opens and keeps its rows");
-            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 6);
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 7, "steps 6 and 7 ran");
             let tables: Vec<String> = with_conn(|c| {
                 let mut st = c
                     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('principal_agent_ties','app_user_invites') ORDER BY name")
@@ -8812,15 +8850,15 @@ mod tests {
             .unwrap();
             assert_eq!(tables, vec!["app_user_invites".to_string(), "principal_agent_ties".to_string()]);
             // A file from a newer K2 than this one: refused, exact text.
-            with_conn(|c| c.execute_batch("PRAGMA user_version = 7;").map_err(|e| e.to_string())).unwrap();
+            with_conn(|c| c.execute_batch("PRAGMA user_version = 8;").map_err(|e| e.to_string())).unwrap();
             *db().lock() = None;
             let err = open_db(&path).expect_err("newer schema must refuse");
             assert_eq!(
                 err,
-                "skin.db schema version 7 is newer than this K2 understands (6). Refusing to open it: update K2, or restore the skin.db backup taken before the downgrade."
+                "skin.db schema version 8 is newer than this K2 understands (7). Refusing to open it: update K2, or restore the skin.db backup taken before the downgrade."
             );
             let conn = Connection::open(&path).unwrap();
-            conn.execute_batch("PRAGMA user_version = 6;").unwrap();
+            conn.execute_batch("PRAGMA user_version = 7;").unwrap();
         });
     }
 
@@ -8854,7 +8892,7 @@ mod tests {
             }
             let _ = std::fs::remove_file(path.with_file_name("skin.db.pre-6.bak"));
             assert!(principal_exists("tied").unwrap(), "the file opens");
-            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 6);
+            assert_eq!(with_conn(|c| schema_version(c)).unwrap(), 7);
             assert!(path.with_file_name("skin.db.pre-6.bak").exists(), "backed up before step 6");
             let t = ties::get(&tied.id).unwrap().expect("moved");
             assert_eq!((t.workspace_id.as_str(), t.reasons.clone()), ("ws-t", vec!["upgrade".to_string()]));
@@ -8956,7 +8994,7 @@ mod tests {
             assign_role("gina", "wide").unwrap();
             let (_, before) = create_session_token("gina").unwrap();
             let t = ties::TieWrite { workspace_id: &ws, set_by: "agent:sales", reason: ties::REASON_PASSWORD };
-            set_principal_password_tied("gina", Some("s3cret-horse"), Some(t)).unwrap();
+            set_principal_password_tied("gina", Some("s3cret-horse"), Some(t), false).unwrap();
             assert!(resolve_skin_token(&before).is_none(), "a password set ends the old sessions");
             let tie = ties::get(&host_login_detail("gina").unwrap().principal_id).unwrap().expect("tied");
             assert!(tie.host_ok, "she held the box login when the agent set her password");
@@ -11993,7 +12031,7 @@ mod tests {
     #[test]
     fn r3_step5_adds_room_paths_to_a_v4_file() {
         with_temp_home(|| {
-            assert_eq!(SKIN_SCHEMA_VERSION, 6);
+            assert_eq!(SKIN_SCHEMA_VERSION, 7);
             let room = uuid::Uuid::new_v4().to_string();
             create_role("staff", &one_room_policy(&room, &[CAP_FILES_READ])).unwrap();
             add_principal("ada").unwrap();

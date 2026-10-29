@@ -142,7 +142,7 @@ async fn resolve_links_answers_only_paths_inside_the_threads_workspace() {
     post_ok("/cli/skin/roles/room", json!({ "name": role, "handle": ws.handle, "caps": ["files:read"] })).await;
     let user = format!("guest{tag}");
     post_ok("/cli/skin/users", json!({ "username": user })).await;
-    post_ok("/cli/skin/users/password", json!({ "username": user, "password": PW })).await;
+    k2_daemon::test_harness::guest_with_own_password(&user, PW);
     post_ok("/cli/skin/roles/assign", json!({ "username": user, "role": role })).await;
     let body = json!({ "username": user, "password": PW }).to_string();
     let r = tokio::task::spawn_blocking(move || req_blocking(port, "POST", "/cli/skin/login", Some(body)))

@@ -835,6 +835,9 @@ async fn test_guests_are_one_apps_short_lived_and_sign_in_only_on_its_link() {
     allow_manage(&ws, true);
     let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "qa-agent", "password": "agent-chosen-pw-1"})).await;
     assert_eq!(r.status, 200, "its own test guest: {}", r.body);
+    // 0.46.6: the agent signs in as its own test guest to test: no must-change.
+    assert_eq!(r.json()["passwordMustChange"], json!(false), "{}", r.body);
+    assert!(!k2_core::skin::must_change::is_flagged(&qa_agent.id).unwrap(), "an agent's own test guest");
     let ws_handle = ws.handle.clone();
     for (path, body) in [
         ("/cli/skin/users/password", json!({"username": "qa1", "password": "agent-chosen-pw-1"})),
@@ -1010,6 +1013,9 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     let r = post(d.port, "/cli/skin/users/password", &agent, json!({"username": "scope-ga", "password": "agent-chosen-pw-2"})).await;
     assert_eq!(r.status, 200, "its own App's guest: {}", r.body);
     assert!(user("scope-ga").has_password);
+    // 0.46.6: an agent's password for a person: they choose their own at sign-in.
+    assert_eq!(r.json()["passwordMustChange"], json!(true), "{}", r.body);
+    assert!(k2_core::skin::must_change::is_flagged(&user("scope-ga").id).unwrap());
 
     // A box guest it may not add (agent-app-users S2: App users only).
     let r = post(d.port, "/cli/skin/users", &agent, json!({"username": "scope-fresh"})).await;
@@ -1034,6 +1040,9 @@ async fn an_agent_manages_only_its_own_workspaces_guests() {
     // The owner is unchanged.
     let r = post(d.port, "/cli/skin/users/password", OWNER, json!({"username": "scope-gb", "password": "owner-chosen-pw-1"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
+    // 0.46.6: the owner typed it for someone else: must change at sign-in.
+    assert_eq!(r.json()["passwordMustChange"], json!(true), "{}", r.body);
+    assert!(k2_core::skin::must_change::is_flagged(&user("scope-gb").id).unwrap());
     let r = post(d.port, "/cli/skin/roles/assign", OWNER, json!({"username": "scope-fresh", "role": "scope-rb"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     k2_daemon::apps::alerts::set_sink(None);

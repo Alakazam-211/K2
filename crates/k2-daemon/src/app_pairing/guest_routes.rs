@@ -227,6 +227,14 @@ fn start(pass: &SkinPass, body: &[u8], ctx: &Ctx) -> Result<Value, CliResponse> 
         };
         match skin::check_and_record_login(&info.username, password) {
             skin::SkinLoginOutcome::Ok(p) if p.id == pid => {}
+            // 0.46.6: a temporary password someone else chose pairs nothing.
+            skin::SkinLoginOutcome::MustChange(_) => {
+                return Err(refusal(
+                    "403 Forbidden",
+                    crate::skin_routes::PASSWORD_CHANGE_REQUIRED,
+                    "this password was set by someone else: sign in on the web and choose a new one first",
+                ))
+            }
             skin::SkinLoginOutcome::LockedOut { retry_after_secs } => {
                 let mut extra = serde_json::Map::new();
                 extra.insert("retryAfterSecs".into(), json!(retry_after_secs));

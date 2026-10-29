@@ -100,8 +100,16 @@ PY
 		|| fail "apps_e2e_sdk: role room"
 	local PW="contract-horse-$RANDOM-staple" u
 	for u in sdk-dana sdk-lock-out sdk-lock-in; do
-		printf '%s' "$PW" | K2 app user add "$u" --app "$APP" --role sdk-guest --email "$u@contract.test" --password-stdin >/dev/null \
+		printf '%s' "$PW-temp" | K2 app user add "$u" --app "$APP" --role sdk-guest --email "$u@contract.test" --password-stdin >/dev/null \
 			|| fail "apps_e2e_sdk: guest $u"
+		# 0.46.6: an owner-set password is temporary; the person takes it
+		# over at the first sign-in (403 + change token), keeping $PW.
+		local chg
+		chg="$(curl -s -X POST -H 'Content-Type: application/json' -d "{\"username\":\"$u\",\"password\":\"$PW-temp\",\"app\":\"$SVC\"}" "http://127.0.0.1:$DPORT/cli/skin/login" \
+			| python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["changeToken"] if v.get("mustChangePassword") else "")')"
+		[ -n "$chg" ] || fail "apps_e2e_sdk: guest $u: an owner-set password must ask for a new one"
+		curl -sf -X POST -H 'Content-Type: application/json' -d "{\"token\":\"$chg\",\"password\":\"$PW\"}" "http://127.0.0.1:$DPORT/cli/skin/password/reset" >/dev/null \
+			|| fail "apps_e2e_sdk: guest $u: the change token"
 	done
 	ok "lane 4: the room, the App $APP ($SVC), a guest role and three guests"
 

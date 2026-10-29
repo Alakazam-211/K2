@@ -826,6 +826,8 @@ pub fn consume(token: &str, password: &str) -> Result<Consume, String> {
         }
         tx.execute("UPDATE principals SET password_hash = ?1 WHERE id = ?2", params![pw_hash, principal_id])
             .map_err(|e| format!("invite password: {e}"))?;
+        // The person chose this password: must-change ends (0.46.6).
+        super::must_change::set_flag_conn(&tx, &principal_id, false)?;
         revoke_sessions_for_principal(&tx, &principal_id)?;
         // U6 / U4: using a link voids the person's other unused links (an
         // owner reset: every one, on every App, the older store's too, so

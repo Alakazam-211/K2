@@ -1727,6 +1727,10 @@ fn set_password(port: u16, username: &str, password: &str) {
         "hash must not be on the wire: {}",
         r.body
     );
+    // 0.46.6: the owner typed it, so the next sign-in would ask for a new
+    // one; these tests want a guest who signs in, so the person keeps it.
+    assert_eq!(json(&r.body)["passwordMustChange"], true, "{}", r.body);
+    test_harness::guest_with_own_password(username, password);
 }
 
 fn set_email(port: u16, username: &str, email: &str) {

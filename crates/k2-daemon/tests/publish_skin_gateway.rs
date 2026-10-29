@@ -301,6 +301,9 @@ fn set_password(port: u16, username: &str, password: &str) {
         )),
     );
     assert_eq!(r.status, 200, "password; {}", r.body);
+    // 0.46.6: an owner-typed password asks for a new one at sign-in; these
+    // tests want a guest who signs in, so the person keeps it.
+    k2_daemon::test_harness::guest_with_own_password(username, password);
 }
 
 fn set_rooms(port: u16, username: &str, handle: &str) {
@@ -3343,6 +3346,72 @@ async fn publish_run_skin_gateway_password_reset_and_change() {
             "change requires cookie; {}",
             change_nocookie.body
         );
+
+        stop_skin(dport, &path);
+        let _ = std::fs::remove_dir_all(&path);
+    });
+}
+
+/// Must-change (0.46.6), end to end on K2's own App gateway: a password the
+/// owner typed gets no session at the gateway's `/login` (the 403 with the
+/// change token passes through, no cookie); the gateway serves K2's
+/// set-password page and its login page knows to go there; the change goes
+/// through the gateway (never the temporary password, once); then a normal
+/// sign-in gets the cookie.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn publish_run_skin_gateway_must_change_end_to_end() {
+    let _g = lock();
+    with_temp_home(|| {
+        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let dport = daemon.port;
+        let handle = format!("mcgw{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let (_id, _conv, path) = seed_workspace(&handle);
+        add_user(dport, "gail");
+        set_rooms(dport, "gail", &handle);
+        let pw = http(
+            dport,
+            "POST",
+            &format!("/cli/skin/users/password?token={OWNER_TOKEN}"),
+            Some(r#"{"username":"gail","password":"owner-temp-1"}"#),
+        );
+        assert_eq!(pw.status, 200, "{}", pw.body);
+        assert_eq!(json(&pw.body)["passwordMustChange"], true, "{}", pw.body);
+
+        let gport = free_port();
+        publish_skin(dport, &path, gport, None);
+
+        let login = http(gport, "POST", "/login", Some(r#"{"username":"gail","password":"owner-temp-1"}"#));
+        assert_eq!(login.status, 403, "{}", login.body);
+        assert!(header_value(&login.headers, "set-cookie").is_none(), "no session: {}", login.headers);
+        assert!(!login.body.contains("k2skn_"), "{}", login.body);
+        let v = json(&login.body);
+        assert_eq!(v["mustChangePassword"], true, "{v}");
+        assert_eq!(v["error"]["code"], "password_change_required", "{v}");
+        let tok = v["changeToken"].as_str().expect("changeToken").to_string();
+        assert!(tok.starts_with("k2chg_"), "{tok}");
+
+        // The gateway's own pages: its login page goes to K2's
+        // set-password page with the token; that page is served here.
+        let page = http(gport, "GET", "/login", None);
+        assert_eq!(page.status, 200, "{}", page.body);
+        assert!(page.body.contains("/cli/skin/password/set#") && page.body.contains("mustChangePassword"), "{}", page.body);
+        let set = http(gport, "GET", "/cli/skin/password/set", None);
+        assert_eq!(set.status, 200, "{}", set.body);
+        assert!(set.body.contains("Set your password") && set.body.contains("password_unchanged"), "{}", set.body);
+
+        let same = http(gport, "POST", "/cli/skin/password/reset", Some(&format!(r#"{{"token":"{tok}","password":"owner-temp-1"}}"#)));
+        assert_eq!(same.status, 400, "{}", same.body);
+        assert_eq!(json(&same.body)["error"]["code"], "password_unchanged", "{}", same.body);
+        let done = http(gport, "POST", "/cli/skin/password/reset", Some(&format!(r#"{{"token":"{tok}","password":"gails-own-pw-1"}}"#)));
+        assert_eq!(done.status, 200, "{}", done.body);
+        assert!(!done.body.contains("k2skn_"), "{}", done.body);
+        let again = http(gport, "POST", "/cli/skin/password/reset", Some(&format!(r#"{{"token":"{tok}","password":"gails-own-pw-2"}}"#)));
+        assert_eq!(again.status, 401, "one use: {}", again.body);
+
+        let login = http(gport, "POST", "/login", Some(r#"{"username":"gail","password":"gails-own-pw-1"}"#));
+        assert_eq!(login.status, 200, "{}", login.body);
+        let set_cookie = header_value(&login.headers, "set-cookie").expect("Set-Cookie");
+        assert!(cookie_k2_skin_ui(&set_cookie).is_some(), "{set_cookie}");
 
         stop_skin(dport, &path);
         let _ = std::fs::remove_dir_all(&path);

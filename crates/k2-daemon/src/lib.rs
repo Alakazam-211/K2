@@ -20,6 +20,8 @@ pub mod agent_name_repair_migrate;
 pub mod agent_retire;
 pub mod awareness_ws;
 pub mod boot_status;
+/// `k2 capabilities` (prd-tauri-core-0467-v1 TC-17).
+pub mod capabilities;
 pub mod ptyd_status;
 pub mod ptyd_adopt;
 pub mod daemon_stop;

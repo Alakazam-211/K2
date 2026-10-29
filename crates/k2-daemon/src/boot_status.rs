@@ -751,6 +751,12 @@ pub const FEATURE_APP_PUSH: &str = "custom-app-push-v1";
 /// says its signed-in person has a Thread open, so agent-reply pushes stay
 /// quiet for 90 s; a guest's own overlay `viewing` frames count too (TA-23).
 pub const FEATURE_APP_PUSH_VIEWING: &str = "app-push-viewing-v1";
+/// `k2 app status` (prd-tauri-core-0467-v1 TC-15, TC-16, TC-28):
+/// `GET /cli/app/status`, and an App's `host.checks` run after each switch.
+pub const FEATURE_APP_STATUS: &str = "app-status-v1";
+/// `k2 capabilities` and the App refusal registry (TC-17, TC-18, TC-28):
+/// `GET /cli/capabilities`.
+pub const FEATURE_CAPABILITIES: &str = "capabilities-v1";
 /// Phone pairing for custom Apps (prd-app-phone-pairing-v1, 0.46.5):
 /// `pairing.start|status|cancel` (a guest's own web session pass),
 /// `pairing.check|redeem` (Public), the link files on the App's own
@@ -1063,6 +1069,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_APP_WALLET);
     out.push(FEATURE_APP_PUSH);
     out.push(FEATURE_APP_PUSH_VIEWING);
+    out.push(FEATURE_APP_STATUS);
+    out.push(FEATURE_CAPABILITIES);
     out.push(FEATURE_APP_PAIRING);
     out.push(FEATURE_APP_USER_PROFILE);
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
@@ -1219,6 +1227,8 @@ mod tests {
                 "app-wallet-v1",
                 "custom-app-push-v1",
                 "app-push-viewing-v1",
+                "app-status-v1",
+                "capabilities-v1",
                 "app-phone-pairing-v1",
                 "app-user-profile-v1",
                 "email-notifications-v1",

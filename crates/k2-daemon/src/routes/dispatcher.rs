@@ -8022,6 +8022,24 @@ async fn handle_one_request(
                 .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // 0.46.7 (prd-tauri-core-0467-v1 TC-17): what this server can do
+        // for Apps. A read for any credential but an App pass; a passport
+        // sees its own workspace's Apps and compute nodes. Answers while
+        // Apps are off (that is one of its rows).
+        p if p == crate::capabilities::ROUTE => {
+            let _ = stream.read(&mut buf).await;
+            if is_post {
+                let r = crate::cli_response::CliResponse::method_not_allowed();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let who = crate::compute_routes::who_from_tcp(&query, bearer_token.as_deref(), state.token.as_str());
+            let params = super::http::parse_params(&path, &query);
+            let r = tokio::task::spawn_blocking(move || crate::capabilities::handle(who, &params))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(format!("worker join: {e}")));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         // App runtime stage 1 (prd-k2-app-runtime-v1 §8.5). Dark (404) until
         // Apps (beta) (`apps`, default on) or K2_APPS is on. Passport rules live in the handler.
         p if crate::apps::routes::is_route(p) => {

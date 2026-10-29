@@ -900,6 +900,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sew/app-chat",
         "/cli/sew/app-spaces/governance",
         "/cli/app/box",
+        // 0.46.7 (TC-15): k2 app status, its own workspace's Apps.
+        "/cli/app/status",
+        // 0.46.7 (TC-17): k2 capabilities, its own workspace's Apps and nodes.
+        "/cli/capabilities",
         "/cli/app/box/prepare",
         "/cli/app/build",
         // 0.46.3: data in, and the label from its own legacy service.

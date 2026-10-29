@@ -63,6 +63,8 @@ pub mod box_prep;
 pub mod box_unprep;
 /// `host.checks`, an App's own probes (prd-tauri-core-0467-v1 TC-16).
 pub mod checks;
+/// `k2 app status` (prd-tauri-core-0467-v1 TC-15).
+pub mod status;
 pub mod egress_proxy;
 pub mod egress_routes;
 pub mod box_service_routes;

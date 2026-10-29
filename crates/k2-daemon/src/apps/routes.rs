@@ -113,6 +113,8 @@ pub fn is_route(p: &str) -> bool {
         || super::link_files::ROUTES.contains(&p)
         || super::init::ROUTES.contains(&p)
         || super::updates_routes::ROUTES.contains(&p)
+        // 0.46.7 (prd-tauri-core-0467-v1 TC-15): k2 app status.
+        || super::status::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -443,6 +445,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         // Box prep (S10): the doctor for anyone with a credential, prepare
         // for the owner only.
         "/cli/app/box" => super::box_prep::box_route(&who),
+        // 0.46.7 (TC-15): how is my App, in one answer.
+        "/cli/app/status" => super::status::route(&who, params),
         "/cli/app/box/prepare" => json_body(body).and_then(|v| super::box_prep::prepare_route(&who, &v)),
         // Lane P: the owner removes K2's Podman bundle.
         "/cli/app/box/podman/uninstall" => json_body(body).and_then(|v| super::podman_install::uninstall_route(&who, &v)),
@@ -1970,7 +1974,7 @@ pub(crate) fn label(app: &AppRow) -> String {
     super::open::label_of(app).text
 }
 
-fn url_for(app: &AppRow) -> Option<String> {
+pub(crate) fn url_for(app: &AppRow) -> Option<String> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row = k2_core::published_services::get_by_id(&conn, &app.service_id).ok().flatten()?;

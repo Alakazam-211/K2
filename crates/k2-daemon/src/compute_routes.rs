@@ -2767,8 +2767,10 @@ fn warm_key(ws: &Ws, v: &serde_json::Value) -> Option<(String, Option<String>)> 
 /// The node a job goes to, and the record of why
 /// (prd-compute-auto-placement-v1). A named node pins it (an ungranted
 /// one is refused by the caller with a teaching `not_granted`, except for
-/// the owner or an Admin). No node named (or `--any`): auto-placement over
-/// the nodes this workspace is granted, for every caller (D1).
+/// the owner or an Admin); so does `--same-node-as <job>` (CE-6). No node
+/// named (or `--any`): auto-placement over the nodes this workspace is
+/// granted, for every caller (D1), where `--cache NAME` prefers the node
+/// that holds it (CE-6).
 fn pick_node(
     who: &Who,
     v: &serde_json::Value,
@@ -2780,13 +2782,28 @@ fn pick_node(
 ) -> R<(store::NodeRow, store::Placement)> {
     use crate::compute_place::{self as place, Tier};
     let now = compute::now();
+    let same = same_node_as(ws, v)?;
     if let Some(name) = s(v, "node") {
         // The full name, or a unique prefix of a node it may see (CE-11).
         let n = resolve_node_for(who, Some(name), Some(&ws.id))?;
         if n.state != "active" {
             return Err(no(codes::NODE_NOT_FOUND, 404, format!("'{}' is waiting for its code to be confirmed", n.name)));
         }
+        if let Some((other, job)) = same.as_ref().filter(|(o, _)| o.id != n.id) {
+            return Err(no(
+                codes::BAD_REQUEST,
+                400,
+                format!("--same-node-as {job} ran on {}, not {}: drop the node name or --same-node-as", other.name, n.name),
+            ));
+        }
         let rec = place::pinned_record(&n.name, now);
+        return Ok((n, rec));
+    }
+    if let Some((n, job)) = same {
+        // CE-6: resume on the node that ran the earlier job (its checkpoint
+        // and caches are there). Pinned: it waits for that node.
+        let mut rec = place::pinned_record(&n.name, now);
+        rec.why = format!("same node as job {job} (--same-node-as)");
         return Ok((n, rec));
     }
     let report = place::candidates_report(want, &[], now);
@@ -2810,7 +2827,8 @@ fn pick_node(
     }
     let (pk, commit) = warm_key(ws, v).map(|(p, c)| (Some(p), c)).unwrap_or((None, None));
     let policy = compute::placement_policy();
-    let Some((c, tier)) = place::choose_by(policy, &report.cands, want, prefer_not, pk.as_deref(), commit.as_deref()) else {
+    let ranked = place::rank(policy, &report.cands, want, prefer_not, pk.as_deref(), commit.as_deref());
+    let Some(&(first, first_tier)) = ranked.first() else {
         return Err(no(
             codes::NO_NODE_FITS,
             404,
@@ -2821,6 +2839,61 @@ fn pick_node(
             ),
         ));
     };
+    let (mut c, mut tier) = (first, first_tier);
+    // CE-6 (v2): `--cache NAME` — the node that ran this workspace's last
+    // job with it ranks first when it starts now (warmth 3); when it is
+    // busy, the job waits there if that wait is under 15 min, else it goes
+    // elsewhere and the record says where the cache was.
+    let mut cache_why: Option<String> = None;
+    let mut for_cache = false;
+    if let Some(name) = want.cache.as_deref() {
+        let at = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            place::cache_node(&conn, &ws.id, name).and_then(|id| store::node_by_id(&conn, &id))
+        };
+        match at {
+            None => {
+                cache_why = Some(format!("cache {name} starts empty here (no earlier job of this workspace used it)"));
+            }
+            Some(n) if n.id == c.node.id => {
+                if tier != Tier::Now {
+                    cache_why = Some(format!("cache {name} was here"));
+                }
+            }
+            Some(n) if policy == compute::PlacementPolicy::V1 => {
+                let note = format!("cache {name} was on {} (placement v1 doesn't follow caches; name the node to reuse it)", n.name);
+                warnings.push(format!("--cache {name}: it was on {}; this job runs on {} with an empty cache there. Name the node (or --same-node-as <job>) to reuse it", n.name, c.node.name));
+                cache_why = Some(note);
+            }
+            Some(n) => {
+                let there = ranked.iter().find(|(x, _)| x.node.id == n.id).copied();
+                match there {
+                    Some((x, Tier::Busy)) if x.wait_eta(want).is_some_and(|(e, _)| e <= place::CACHE_QUEUE_SECS) => {
+                        c = x;
+                        tier = Tier::Busy;
+                        for_cache = true;
+                    }
+                    other => {
+                        let state = match other {
+                            Some((x, Tier::Busy)) => match x.wait_eta(want) {
+                                Some((e, basis)) => format!("busy {} ({})", place::wait_words(e), if basis == "quote" { "quoted" } else { basis }),
+                                None => "busy, wait unknown".to_string(),
+                            },
+                            Some((_, Tier::Offline)) => "offline".to_string(),
+                            Some((_, Tier::Now)) => "free".to_string(),
+                            None => "it can't take this job now".to_string(),
+                        };
+                        cache_why = Some(format!("cache {name} isn't on this node (it was on {}, {state})", n.name));
+                        warnings.push(format!(
+                            "--cache {name}: it was on {} ({state}); this job runs on {} with an empty cache there. To wait for it: --same-node-as <job> or name the node",
+                            n.name, c.node.name
+                        ));
+                    }
+                }
+            }
+        }
+    }
     if tier == Tier::Offline {
         warnings.push(format!(
             "no matching node is online: queued on {} (offline); it moves to the first matching node that comes online{}",
@@ -2830,17 +2903,40 @@ fn pick_node(
     }
     let ex = place::Explain { policy, cands: &report.cands, skipped: &report.skipped, project_key: pk.as_deref(), commit: commit.as_deref() };
     let mut rec = place::placement_record(c, tier, want, &ex, now);
-    // P1 doesn't look for the node that holds a --cache yet (0.46.7): say
-    // so, so a resume never silently starts from an empty cache.
-    if let Some(name) = s(v, "cache") {
-        let note = format!(
-            "--cache {name}: K2 doesn't yet pick the node that already holds this cache, so it may be empty on {}; name the node to reuse it",
-            c.node.name
-        );
-        rec.why.push_str(&format!(" · cache {name} may be empty here (name the node to reuse it)"));
-        warnings.push(note);
+    if for_cache {
+        let name = want.cache.as_deref().unwrap_or_default();
+        let wait = c.wait_eta(want).map(|(e, basis)| format!("{} ({})", place::wait_words(e), if basis == "quote" { "quoted" } else { basis })).unwrap_or_default();
+        rec.code = place::QUEUED_FOR_CACHE.into();
+        rec.why = format!("waits for its cache: cache {name} was on this node · about {wait} · it moves elsewhere only if the wait passes 15 min");
+    } else if let Some(w) = cache_why {
+        rec.why.push_str(&format!(" · {w}"));
     }
     Ok((c.node.clone(), rec))
+}
+
+/// `--same-node-as <job>` (CE-6): one of this workspace's jobs, and the
+/// node it ran on. Another workspace's job is `job_not_found` (no leak).
+fn same_node_as(ws: &Ws, v: &serde_json::Value) -> R<Option<(store::NodeRow, String)>> {
+    let Some(t) = s(v, "sameNodeAs") else { return Ok(None) };
+    let (job, node) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let j = store::find_job(&conn, t).filter(|j| j.workspace_id == ws.id);
+        let n = j.as_ref().and_then(|j| store::node_by_id(&conn, &j.node_id));
+        (j, n)
+    };
+    let Some(j) = job else {
+        return Err(no(codes::JOB_NOT_FOUND, 404, format!("--same-node-as: no job '{t}' in workspace {} (k2 compute jobs)", ws.handle)));
+    };
+    let short: String = j.id.chars().take(8).collect();
+    match node.filter(|n| n.state == "active") {
+        Some(n) => Ok(Some((n, short))),
+        None => Err(no(
+            codes::NODE_NOT_FOUND,
+            404,
+            format!("--same-node-as {short}: the node that ran it is no longer active (k2 compute nodes)"),
+        )),
+    }
 }
 
 /// `no_node_fits`: why no granted node can take the job, by count

@@ -821,6 +821,20 @@ pub fn cache_node(conn: &rusqlite::Connection, ws_id: &str, name: &str) -> Optio
     .ok()
 }
 
+/// CE-6: a `--cache` job waits on the busy node that holds its cache when
+/// that wait is at most this long (else it goes elsewhere), and the
+/// sweeper doesn't move it for being busy until it has waited this long.
+pub const CACHE_QUEUE_SECS: u64 = 900;
+
+/// The placement code of a job queued on the node that holds its cache.
+pub const QUEUED_FOR_CACHE: &str = "queued_for_cache";
+
+/// Queued for its cache, and still inside [`CACHE_QUEUE_SECS`]: only a
+/// hard reason (offline, paused, refused) moves it.
+fn held_for_cache(j: &JobRow, since: i64, now: i64) -> bool {
+    j.ctl.placement.as_ref().is_some_and(|p| p.code == QUEUED_FOR_CACHE) && now - since < CACHE_QUEUE_SECS as i64
+}
+
 /// A job's estimate when it has none (P2: 15 min per unknown).
 pub const UNKNOWN_EST_SECS: u64 = 900;
 
@@ -1657,6 +1671,10 @@ pub fn sweep(now: i64) {
             continue;
         }
         if let Some((why, hard)) = leave_reason(&j, nodes.get(&j.node_id), &mut decisions, now) {
+            // CE-6: a job waiting for its cache stays while only busy.
+            if !hard && held_for_cache(&j, since, now) {
+                continue;
+            }
             if try_move(&j, &[], hard, why).is_some() {
                 decisions.clear();
                 changed = true;
@@ -1765,7 +1783,7 @@ fn sweep_node_queued(now: i64, awake: i64, nodes: &HashMap<String, NodeRow>) {
                 continue;
             }
         }
-        if j.ctl.any.is_none() || !online || !share::may_withdraw(j.withdraws, j.withdrawn_at, now) {
+        if j.ctl.any.is_none() || !online || !share::may_withdraw(j.withdraws, j.withdrawn_at, now) || held_for_cache(&j, since, now) {
             continue;
         }
         let Some(plan) = j.plan() else { continue };
@@ -2366,6 +2384,33 @@ mod tests {
         assert_eq!(pick(V2, &[mac], &s).0, "a-mac", "alone it is still a candidate");
         // v1 ignores tools: its order is unchanged (the list order breaks the tie).
         assert_eq!(pick(V1, &[bare, ready], &w).0, "a-bare");
+    }
+
+    /// CE-6: the node that holds this workspace's `--cache` ranks first
+    /// among nodes that start now (warmth 3), even over an idle one; the
+    /// record says so; v1 ignores it.
+    #[test]
+    fn the_node_that_holds_the_cache_ranks_first() {
+        let mut w = want(2);
+        w.cache = Some("fz".into());
+        let idle = cand("a-idle", 32, 32, 0, 4);
+        let mut held = cand("b-held", 20, 32, 2, 4);
+        held.holds_cache = true;
+        assert_eq!(pick(V2, &[idle.clone(), held.clone()], &w), ("b-held".into(), Tier::Now));
+        assert_eq!(warmth_v2(&held, &w, None, None), 3);
+        let cands = [idle.clone(), held.clone()];
+        let ex = Explain { policy: V2, cands: &cands, skipped: &BTreeMap::new(), project_key: None, commit: None };
+        let rec = placement_record(&held, Tier::Now, &w, &ex, 1);
+        assert_eq!(rec.code, "starts_now_cache");
+        assert!(rec.why.starts_with("starts now · cache fz was here · "), "{}", rec.why);
+        assert_eq!(pick(V1, &[idle.clone(), held.clone()], &w).0, "a-idle", "v1: the 0.46.5 order");
+        // Without --cache, holding one means nothing.
+        assert_eq!(pick(V2, &[idle, held], &want(2)).0, "a-idle");
+        // The sweeper keeps a job queued for its cache for 15 min.
+        let mut j = JobRow::default();
+        j.ctl.placement = Some(store::Placement { code: QUEUED_FOR_CACHE.into(), ..Default::default() });
+        assert!(held_for_cache(&j, 1000, 1000 + CACHE_QUEUE_SECS as i64 - 1));
+        assert!(!held_for_cache(&j, 1000, 1000 + CACHE_QUEUE_SECS as i64));
     }
 
     /// P2: the solo-node wait estimate, and busy nodes ranked by it.

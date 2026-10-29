@@ -300,6 +300,22 @@ pub fn handle_git_create_worktree(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // A registered workspace, and the new row goes under that workspace.
+    match registered_workspace(&b.project_path) {
+        Ok(id) if id == b.project_id => {}
+        Ok(id) => {
+            return CliResponse {
+                status: "400 Bad Request",
+                content_type: "application/json",
+                body: serde_json::json!({
+                    "error": format!("projectId {} is not the workspace at {} ({id})", b.project_id, b.project_path),
+                    "code": "project_mismatch",
+                })
+                .to_string(),
+            }
+        }
+        Err(r) => return r,
+    }
 
     let result = if b.existing_branch.unwrap_or(false) {
         git::checkout_worktree(&b.project_path, &b.branch)
@@ -656,6 +672,9 @@ pub fn handle_git_delete_branch(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    if let Err(r) = registered_workspace(&b.path) {
+        return r;
+    }
     unit_ok(git::delete_branch(&b.path, &b.branch))
 }
 

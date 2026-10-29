@@ -489,3 +489,62 @@ fn resolve_route_needs_a_workspace_and_a_conflicted_file() {
     assert_eq!(code(&r), "not_in_conflict");
     assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "unsaved work\n");
 }
+
+// ── delete-branch and create-worktree need a workspace ──────────────
+
+fn has_branch(d: &Path, branch: &str) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")])
+        .current_dir(d)
+        .status()
+        .expect("spawn git")
+        .success()
+}
+
+#[test]
+fn delete_branch_route_needs_a_workspace() {
+    let other = repo("delbranch-unregistered");
+    git(&other, &["branch", "keep-me"]);
+    let r = post("/cli/git/delete-branch", serde_json::json!({ "path": s(&other), "branch": "keep-me" }));
+    assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    assert_eq!(code(&r), "not_found");
+    assert!(has_branch(&other, "keep-me"), "branch kept");
+
+    let d = repo("delbranch-ws");
+    register(&d);
+    git(&d, &["branch", "done-work"]);
+    let r = post("/cli/git/delete-branch", serde_json::json!({ "path": s(&d), "branch": "done-work" }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(!has_branch(&d, "done-work"), "branch deleted on a workspace");
+}
+
+#[test]
+fn create_worktree_route_needs_its_own_workspace() {
+    let other = repo("mkwt-unregistered");
+    let other_id = format!("p-{}", uuid::Uuid::new_v4().simple());
+    let r = post(
+        "/cli/git/create-worktree",
+        serde_json::json!({ "projectPath": s(&other), "branch": "feature/x", "projectId": other_id }),
+    );
+    assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    assert_eq!(code(&r), "not_found");
+    assert!(!other.join(".worktrees").exists() && !other.join(".gitignore").exists(), "nothing created");
+
+    let d = repo("mkwt-ws");
+    let id = register(&d);
+    let elsewhere = repo("mkwt-elsewhere");
+    let elsewhere_id = register(&elsewhere);
+    // The row would land under another workspace: refused.
+    let r = post(
+        "/cli/git/create-worktree",
+        serde_json::json!({ "projectPath": s(&d), "branch": "feature/y", "projectId": elsewhere_id }),
+    );
+    assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    assert_eq!(code(&r), "project_mismatch");
+    assert!(!d.join(".worktrees").exists(), "nothing created");
+
+    let ok = post("/cli/git/create-worktree", serde_json::json!({ "projectPath": s(&d), "branch": "feature/y", "projectId": id }));
+    assert_eq!(ok.status, "200 OK", "{}", ok.body);
+    let path = json(&ok)["path"].as_str().expect("path").to_string();
+    assert!(Path::new(&path).join("a.txt").is_file(), "worktree checked out");
+}

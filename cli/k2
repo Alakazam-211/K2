@@ -46007,10 +46007,13 @@ EVENTS (0.46.7)
 
 CODES (0.46.7)
   Refusals (nothing is queued):
-    node_ambiguous         a node prefix matches more than one node: name it
-                           in full (exit 2). A unique prefix works (k2n12).
-    not_now                --now and no node can start it at once; the
-                           error names the shortest wait (exit 3).
+    node_ambiguous         the node name you gave is the start of several
+                           nodes' names (k2n1: k2n10-vin and k2n12-vin):
+                           give more of it, or the full name (exit 2). A
+                           start that fits one node works (k2n12).
+    not_now                you passed --now (start at once or refuse) and no
+                           node can start it now; the error names the
+                           shortest wait (exit 3).
     exclusive_needs_why    --exclusive without --why "<reason>" (exit 2).
     exclusive_needs_grant  --exclusive needs the owner, an Admin or a grant
                            with --ci (exit 3; ask: k2 permission request
@@ -46023,9 +46026,10 @@ CODES (0.46.7)
                            (exit 2).
   Placement codes (get's "placed on …" line, placement.code in JSON):
     starts_now_cache       it starts now on the node where its --cache was.
-    queued_for_cache       it waits on the busy node that holds its --cache
-                           (when that wait looks short), rather than starting
-                           elsewhere without it.
+    queued_for_cache       it waits on the busy node that holds its --cache,
+                           because that wait is estimated under 15 min, rather
+                           than starting cold elsewhere; after 15 min it may
+                           move like any other queued job.
     queued_est_wait        nothing free: it waits where the estimated wait
                            (earlier runs' durations) is shortest, and moves
                            if another node frees up first.

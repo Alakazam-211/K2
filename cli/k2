@@ -22882,6 +22882,15 @@ def dur(s):
     if s is None: return None
     s = int(s)
     return "%dh" % (s // 3600) if s >= 3600 and s % 3600 == 0 else ("%dm" % (s // 60) if s >= 60 and s % 60 == 0 else "%ds" % s)
+src = v.get("source")
+if isinstance(src, dict):
+    where = src.get("checkout") or "workspace"
+    if src.get("repo") and src.get("checkout") != "worktree": where = "repo"
+    if src.get("path"): where += " " + src["path"]
+    s = "[k2 compute] source: %s @ %s" % (where, (src.get("commit") or "")[:8])
+    if isinstance(src.get("dirty"), dict):
+        s += " +dirty (%s changed, %s untracked)" % (src["dirty"].get("changed"), src["dirty"].get("untracked"))
+    sys.stderr.write(s + "\n")
 if v.get("toolsLine"):
     sys.stderr.write("[k2 compute] tools on %s: %s\n" % (v["node"], v["toolsLine"]))
 lim = v.get("limits") or {}

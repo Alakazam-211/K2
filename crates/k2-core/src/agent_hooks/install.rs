@@ -1708,11 +1708,23 @@ mod tests {
             assert!(!s.contains(needle), "hook script must not reference {needle}");
         }
         assert!(s.contains("heartbeat.port"), "the TCP retry still reads the port");
+        #[cfg(not(windows))]
         assert_eq!(
             s.matches("Authorization: Bearer $SCOPED").count(),
             2,
             "both arms carry only the session passport"
         );
+        // Windows: one config line carries the passport and both arms
+        // send through it.
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                s.matches(r#"printf 'header = "Authorization: Bearer %s"\ndata-raw = "%s"\n' "$SCOPED" "$b""#).count(),
+                1,
+                "k2_cfg writes only the session passport"
+            );
+            assert_eq!(s.matches("k2_cfg | curl").count(), 2, "both arms send through k2_cfg");
+        }
     }
 
     /// The daemon down: exit 0 fast, nothing printed. No pane: no post.

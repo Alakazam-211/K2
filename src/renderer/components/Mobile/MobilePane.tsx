@@ -23,7 +23,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
-import { readText as readClipboardText } from '@tauri-apps/plugin-clipboard-manager'
+import { readText as readClipboardText, writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-manager'
+import { useToastStore } from '@/stores/toast'
+import { DevicePicker, type DevicePickerGroup } from './DevicePicker'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { DesignThreadColumn } from '@/components/Design/DesignThreadColumn'
@@ -219,7 +221,7 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
   if (!lane.ready) {
     const licence = lane.needs.find((n) => n.kind === 'licence')
     if (licence && licence.kind === 'licence') {
-      return `The owner of this server must accept the ${licence.title} first (on its card in Settings).`
+      return `The owner of this server must accept the ${licence.title} first.`
     }
     const step = lane.needs.find((n) => n.kind === 'owner-step')
     if (step && step.kind === 'owner-step') return `The owner of this server must ${step.what} first: ${step.command}`
@@ -257,12 +259,11 @@ function MobileDevice({
   const canControl = useSimCanControl(scope, status?.canControl ?? null)
   const running = session?.state === 'running'
 
-  // ── Device profiles (the chooser) ─────────────────────────────────────
-  const [devices, setDevices] = useState<SimDeviceProfile[]>([])
-  const [devicesLane, setDevicesLane] = useState<SimLaneId | null>(null)
-  // The platform picker lists only the lanes the daemon reports as usable
-  // here (a Linux box: Android only), so a lane it lacks is never sent.
+  // ── Device profiles (the device list, grouped by platform) ────────────
+  // The list shows only the platforms the daemon reports as usable here (a
+  // Linux box: Android only), so a lane it lacks is never sent.
   const platforms = useMemo(() => (status ? offeredPlatforms(status.lanes) : []), [status])
+  const [devicesBy, setDevicesBy] = useState<Partial<Record<SimPlatform, { lane: SimLaneId; devices: SimDeviceProfile[] }>>>({})
   const [pickedPlatform, setPickedPlatform] = useState<SimPlatform | null>(null)
   const firstLane = status ? firstUsableLane(status.lanes) : null
   const platform: SimPlatform | null =
@@ -276,20 +277,24 @@ function MobileDevice({
   // No iOS lane at all on this server (a Mac's own lane that isn't usable
   // yet explains itself in the lane's detail instead).
   const iphoneNote = status && !status.lanes.some((l) => lanePlatform(l.lane) === 'ios') ? IPHONE_NEEDS_A_MAC : null
+  const platformsKey = platforms.join(',')
   useEffect(() => {
-    if (!workspaceRef || !visible || !canControl || !platform) return
+    if (!workspaceRef || !visible || !canControl || !platformsKey) return
     let cancelled = false
-    fetchSimDevices(scope, workspaceRef, platform)
-      .then((r) => {
-        if (cancelled) return
-        setDevices(r.devices)
-        setDevicesLane(r.lane)
-      })
-      .catch((err: unknown) => console.warn('[mobile] sim/devices:', err))
+    for (const p of platformsKey.split(',') as SimPlatform[]) {
+      fetchSimDevices(scope, workspaceRef, p)
+        .then((r) => {
+          if (cancelled) return
+          setDevicesBy((prev) => ({ ...prev, [p]: r }))
+        })
+        .catch((err: unknown) => console.warn(`[mobile] sim/devices (${p}):`, err))
+    }
     return () => {
       cancelled = true
     }
-  }, [scope, workspaceRef, visible, canControl, platform])
+  }, [scope, workspaceRef, visible, canControl, platformsKey])
+  const devices = (platform && devicesBy[platform]?.devices) || []
+  const devicesLane = (platform && devicesBy[platform]?.lane) || null
   const [picked, setPicked] = useState<string>(data.deviceType ?? '')
   const fallbackDevice = devices.find((d) => d.default)?.id ?? devices[0]?.id ?? ''
   const pickedHere = devices.some((d) => d.id === picked) ? picked : ''
@@ -324,16 +329,18 @@ function MobileDevice({
     },
     [room, tabId, paneGroupId, itemId],
   )
+  const [bootingId, setBootingId] = useState<string | null>(null)
   const boot = useCallback(
-    (which: string) => {
+    (which: string, on: SimPlatform | null = platform) => {
       if (!workspaceRef) return
       remember(which)
+      setBootingId(which)
       setBootPending(true)
       void act('boot', async () => {
         // The platform (android | ios), never a lane name: the daemon picks
         // the lane, and the tab only offers platforms it reported.
         try {
-          const view = await bootSim(scope, workspaceRef, { device: which, ...(platform ? { platform } : {}) })
+          const view = await bootSim(scope, workspaceRef, { device: which, ...(on ? { platform: on } : {}) })
           if (!simIsUp(view)) setBootPending(false)
         } catch (err) {
           setBootPending(false)
@@ -343,15 +350,40 @@ function MobileDevice({
     },
     [act, platform, remember, scope, workspaceRef],
   )
-  const onDevice = useCallback(
-    (which: string) => {
+  // A row's Start: that device on its platform (a running device is
+  // replaced; the daemon shuts the old one).
+  const onStart = useCallback(
+    (on: SimPlatform, which: string) => {
+      setPickedPlatform(on)
       setPicked(which)
-      // Changing the device boots a new one; the daemon shuts the old one.
-      if (session && (session.state === 'running' || session.state === 'failed')) boot(which)
-      else remember(which)
+      boot(which, on)
     },
-    [boot, remember, session],
+    [boot],
   )
+  // "Show the licence": a boot that needs it makes the daemon put the
+  // owner's Accept card on this workspace's Thread (beside the device).
+  const onShowLicence = useCallback(
+    (on: SimPlatform) => {
+      const list = devicesBy[on]?.devices ?? []
+      const which = list.find((d) => d.default)?.id ?? list[0]?.id
+      if (!workspaceRef) return
+      void act('licence', async () => {
+        try {
+          await bootSim(scope, workspaceRef, { ...(which ? { device: which } : {}), platform: on })
+        } catch (err) {
+          throw new Error(
+            `${err instanceof Error ? err.message : String(err)} The licence card is on this workspace's Thread.`,
+          )
+        }
+      })
+    },
+    [act, devicesBy, scope, workspaceRef],
+  )
+  const onCopy = useCallback((text: string) => {
+    writeClipboardText(text)
+      .then(() => useToastStore.getState().addToast('Copied', 'success', 2000))
+      .catch((err: unknown) => useToastStore.getState().addToast(`Couldn't copy: ${String(err)}`, 'error'))
+  }, [])
   const onStop = useCallback(() => {
     if (!workspaceRef) return
     void act('stop', async () => {
@@ -605,9 +637,32 @@ function MobileDevice({
 
   const blocked = deviceNotice(status, statusError)
   const laneReady = !!status && status.lanes.some((l) => l.usable && l.ready)
-  // Stopped (or failed) on a ready lane: offer Start right there, not only
-  // in the toolbar.
+  // Stopped (or failed) on a ready lane: Start is offered (the boot
+  // screen's Try again uses it).
   const canStart = canControl && laneReady && !!device && !simIsUp(session)
+  const pickerGroups: DevicePickerGroup[] = platforms.map((p) => {
+    const lanes = status?.lanes.filter((l) => l.usable && lanePlatform(l.lane) === p) ?? []
+    const readyLane = lanes.find((l) => l.ready)
+    return {
+      platform: p,
+      devices: devicesBy[p]?.devices ?? [],
+      ready: !!readyLane,
+      needs: (readyLane ?? lanes[0])?.needs ?? [],
+      loading: !devicesBy[p],
+    }
+  })
+  const pickerProps = {
+    groups: pickerGroups,
+    up: session && simIsUp(session) && session.profile ? { id: session.profile.id, state: session.state } : null,
+    selected: device,
+    pending: bootPending ? bootingId : null,
+    canControl,
+    busy,
+    onStart,
+    onShowLicence,
+    onCopy,
+  }
+  const pickedProfile = devices.find((d) => d.id === device)
   const shape = resolveDeviceShape(session?.lane ?? devicesLane, session?.profile?.name ?? '', screen)
   const showRail = canControl && running
   const frame = frameLayout(shape, screen ?? { widthPt: 9, heightPt: 19.5 }, stageSize, {
@@ -645,17 +700,11 @@ function MobileDevice({
     <div className="flex h-full min-h-0 w-full flex-col" data-testid="mobile-device">
       <MobileToolbar
         session={session}
-        lane={devicesLane}
-        platforms={platforms}
-        platform={platform}
-        onPlatform={setPickedPlatform}
-        devices={devices}
-        device={device}
+        picked={pickedProfile ? { name: pickedProfile.name, os: pickedProfile.os } : null}
+        picker={pickerProps}
         canControl={canControl}
-        busy={busy}
         live={live}
         tookOver={tookOver}
-        onDevice={onDevice}
         onTakeOver={() => {
           stream.send({ t: 'take-over' })
           setTookOver(true)
@@ -750,21 +799,11 @@ function MobileDevice({
           </div>
         ) : null}
         {running ? null : bootScreen ? null : (
-          <div className="flex max-w-sm flex-col items-center gap-3">
+          <div className="flex max-h-full w-full max-w-sm flex-col items-center gap-4 overflow-y-auto" data-mobile-empty="">
             <div className="text-center text-xs text-[var(--color-text-muted)]" data-mobile-blocked="">
               {blocked}
             </div>
-            {canStart ? (
-              <button
-                type="button"
-                className="h-7 cursor-pointer border border-[var(--color-border)] px-3 text-xs text-[var(--color-text)] hover:border-[var(--color-accent)] disabled:cursor-default disabled:opacity-50"
-                disabled={busy}
-                onClick={() => boot(device)}
-                data-mobile-start=""
-              >
-                Start {devices.find((d) => d.id === device)?.name ?? device}
-              </button>
-            ) : null}
+            {canControl && pickerGroups.length > 0 ? <DevicePicker {...pickerProps} /> : null}
           </div>
         )}
         {bootScreen ? (

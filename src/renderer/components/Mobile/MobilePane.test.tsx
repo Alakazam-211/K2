@@ -180,26 +180,17 @@ function openMore(): HTMLElement {
   return menu
 }
 
-/** The toolbar's menus are K2 dropdowns: open one and read its item labels. */
-function openMenu(trigger: string): HTMLElement {
-  const el = document.querySelector(trigger) as HTMLButtonElement | null
-  if (!el) throw new Error(`no ${trigger} trigger`)
-  fireEvent.click(el)
-  const menu = document.querySelector('[data-testid="setting-dropdown-menu"]') as HTMLElement | null
-  if (!menu) throw new Error(`${trigger} did not open a menu`)
-  return menu
+/** The empty state's device list: names per platform group. */
+function listed(platform: string): string[] {
+  return Array.from(document.querySelectorAll(`[data-mobile-empty] [data-mobile-group="${platform}"] [data-mobile-device-name]`)).map(
+    (n) => n.textContent ?? '',
+  )
 }
 
-function menuLabels(trigger: string): string[] {
-  const labels = Array.from(openMenu(trigger).querySelectorAll('button')).map((b) => b.textContent ?? '')
-  fireEvent.click(document.querySelector(trigger) as HTMLElement)
-  return labels
-}
-
-function pickMenu(trigger: string, label: string): void {
-  const item = Array.from(openMenu(trigger).querySelectorAll('button')).find((b) => b.textContent === label)
-  if (!item) throw new Error(`no ${label} in ${trigger}`)
-  fireEvent.click(item)
+function startRow(id: string): HTMLButtonElement {
+  const el = document.querySelector(`[data-mobile-empty] [data-mobile-start="${id}"]`) as HTMLButtonElement | null
+  if (!el) throw new Error(`no Start for ${id}`)
+  return el
 }
 
 beforeEach(() => {
@@ -327,17 +318,16 @@ describe('no device running', () => {
     expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('booting')
   })
 
-  it('shows the chooser and Start; Start boots the picked device with noTab and remembers it', async () => {
+  it('shows the device list; a row’s Start boots that device with noTab and remembers it', async () => {
     daemon.status = status({ sim: STOPPED })
     renderMobile(createStubSimStream())
     await flush()
     expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe('No device is running.')
-    expect(document.querySelector('[data-mobile-start]')?.textContent).toBe('Start Pixel 9')
-    expect(menuLabels('[data-mobile-device]')).toEqual(['Pixel 9', 'Pixel 8a'])
-    pickMenu('[data-mobile-device]', 'Pixel 8a')
+    expect(listed('android')).toEqual(['Pixel 9', 'Pixel 8a'])
+    expect(document.querySelector('[data-mobile-device-label]')?.textContent).toBe('Pixel 9')
     expect(daemon.posts).toEqual([])
     await act(async () => {
-      fireEvent.click(start())
+      fireEvent.click(startRow('pixel_8a'))
     })
     await flush()
     expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'pixel_8a', platform: 'android', noTab: true } }])
@@ -353,10 +343,16 @@ describe('no device running', () => {
     renderMobile(createStubSimStream())
     await flush()
     expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe(
-      'The owner of this server must accept the Android SDK licence first (on its card in Settings).',
+      'The owner of this server must accept the Android SDK licence first.',
     )
-    expect(document.querySelector('[data-mobile-start]')).toBeNull()
+    expect(startRow('pixel_9').disabled).toBe(true)
     expect(document.querySelector('[data-mobile-rail]')).toBeNull()
+    // One click asks the daemon, which puts the owner's card on the Thread.
+    await act(async () => {
+      fireEvent.click(document.querySelector('[data-mobile-need-action="licence"]') as HTMLButtonElement)
+    })
+    await flush()
+    expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'pixel_9', platform: 'android', noTab: true } }])
     cleanup()
     daemon.status = status({ sim: null, lanes: [{ lane: 'android', usable: false, ready: false, detail: '/dev/kvm: permission denied for user k2.' }] })
     renderMobile(createStubSimStream())
@@ -381,7 +377,7 @@ describe('no device running', () => {
     expect(daemon.posts.map((p) => (p.body as { platform?: string }).platform)).toEqual(['android'])
   })
 
-  it('the platform picker lists only usable lanes; an iPhone boots as platform ios, never the lane name', async () => {
+  it('the list groups only usable platforms; an iPhone boots as platform ios, never the lane name', async () => {
     const IPHONE = { id: 'iphone_16', name: 'iPhone 16', widthPt: 393, heightPt: 852, scale: 3, os: 'ios-18', default: true }
     daemon.whoami = { owner: true, role: 'owner' }
     daemon.status = status({
@@ -396,13 +392,14 @@ describe('no device running', () => {
     renderMobile(createStubSimStream())
     await flush()
     expect(document.querySelector('[data-mobile-iphone-note]')).toBeNull()
-    expect(menuLabels('[data-mobile-platform]')).toEqual(['Android', 'iPhone'])
-    pickMenu('[data-mobile-platform]', 'iPhone')
-    await flush()
+    expect(Array.from(document.querySelectorAll('[data-mobile-empty] [data-mobile-group]')).map((g) => g.getAttribute('data-mobile-group'))).toEqual([
+      'android',
+      'ios',
+    ])
     expect(daemon.devicesAsked).toEqual(['android', 'ios'])
-    expect(menuLabels('[data-mobile-device]')).toEqual(['iPhone 16'])
+    expect(listed('ios')).toEqual(['iPhone 16'])
     await act(async () => {
-      fireEvent.click(start())
+      fireEvent.click(startRow('iphone_16'))
     })
     await flush()
     expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'iphone_16', platform: 'ios', noTab: true } }])

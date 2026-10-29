@@ -1,80 +1,107 @@
 // The Mobile tab's top bar (prd-mobile-dev-v1 §2.2; slimmed by
-// research-mobile-pane-polish-v1 §4 item 2):
-//   [platform ▾] [device ▾] ………… [Take over | Hand back]  /  [Watching]
-// The device's own controls live on the rail beside the phone
-// (MobileControlRail); Start is on the empty state, Stop in the rail's ⋯.
-// Every control is a gesture to the daemon; the bar keeps no device state.
-// A watch-only viewer (remote Connect Members, Rosson 2026-10-27) sees the
-// device and "Watching" only.
+// research-mobile-pane-polish-v1 §4 items 2 and 4):
+//   [● iPhone 16 · ios-18 ▾] ……………… [Take over | Hand back]  /  [Watching]
+// The chip opens the device list (DevicePicker, grouped by platform). The
+// device's own controls live on the rail beside the phone
+// (MobileControlRail); Stop is in the rail's ⋯. Every control is a gesture
+// to the daemon; the bar keeps no device state. A watch-only viewer (remote
+// Connect Members, Rosson 2026-10-27) sees the device and "Watching" only.
 
-import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
+import { useState } from 'react'
+import { useAnchoredMenu } from '@/hooks/useAnchoredMenu'
+import { DevicePicker, type DevicePickerProps } from './DevicePicker'
 import { THEME_PILL_RADIUS } from './MobileControlRail'
-import type { SimDeviceProfile, SimLaneId, SimPlatform, SimView } from './simApi'
-
-const PLATFORM_NAME: Record<SimPlatform, string> = { android: 'Android', ios: 'iPhone' }
+import type { SimView } from './simApi'
 
 export interface MobileToolbarProps {
   session: SimView | null
-  /** The lane the chooser's devices boot on (before any device runs). */
-  lane: SimLaneId | null
-  /** The platforms this server can run (from the daemon's usable lanes);
-   *  a chooser shows only when there are two. */
-  platforms?: readonly SimPlatform[]
-  platform?: SimPlatform | null
-  onPlatform?(platform: SimPlatform): void
-  devices: SimDeviceProfile[]
-  /** The chooser's value (the running device, else this tab's last pick). */
-  device: string
+  /** The chip's device when nothing is up (the tab's pick). */
+  picked: { name: string; os?: string } | null
+  /** The device list in the chip's menu. */
+  picker: Omit<DevicePickerProps, 'compact'>
   canControl: boolean
-  /** A boot / stop / screenshot request is in flight. */
-  busy: boolean
   /** The stream is open and drawing (Take over needs it). */
   live: boolean
   /** This viewer holds the device with Take over. */
   tookOver: boolean
-  onDevice(device: string): void
   onTakeOver(): void
   onHandBack(): void
 }
 
 export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
-  const { session, devices, device, canControl, busy, live, tookOver } = props
+  const { session, canControl, live, tookOver } = props
   const running = session?.state === 'running'
   const changing = session?.state === 'installing' || session?.state === 'booting' || session?.state === 'stopping'
-  const on = running || changing
-  const profile = session?.profile
-  const choices: Array<{ id: string; name: string }> =
-    devices.length > 0 ? devices : profile ? [{ id: profile.id, name: profile.name }] : []
+  const up = running || changing
+  const shown = up && session?.profile ? { name: session.profile.name, os: session.profile.os } : props.picked
+  const [open, setOpen] = useState(false)
+  const menu = useAnchoredMenu<HTMLDivElement>({ open, onClose: () => setOpen(false), width: 'min', minWidth: 300, gap: 4 })
+  const dot = running
+    ? 'bg-[var(--color-status-ok)]'
+    : changing
+      ? 'animate-pulse bg-[var(--color-status-working)]'
+      : 'bg-[var(--color-text-muted)]'
   return (
     <div
       className="flex h-10 flex-shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] px-2 text-xs"
       data-testid="mobile-toolbar"
     >
-      {props.platforms && props.platforms.length > 1 ? (
-        <SettingDropdown
-          ariaLabel="Platform"
-          compact
-          menuAlign="left"
-          className="flex-shrink-0"
-          value={props.platform ?? props.platforms[0]}
-          options={props.platforms.map((p) => ({ value: p, label: PLATFORM_NAME[p] }))}
-          disabled={!canControl || busy || on}
-          onChange={(v) => props.onPlatform?.(v as SimPlatform)}
-          triggerData={{ 'data-mobile-platform': '' }}
-        />
-      ) : null}
-      <SettingDropdown
-        ariaLabel="Device"
-        compact
-        menuAlign="left"
-        className="min-w-0 max-w-[12rem]"
-        value={device}
-        options={choices.map((d) => ({ value: d.id, label: d.name }))}
-        placeholder={choices.length === 0 ? 'No devices' : undefined}
-        disabled={!canControl || busy || changing || choices.length === 0}
-        onChange={(v) => props.onDevice(v)}
-        triggerData={{ 'data-mobile-device': '' }}
-      />
+      <div ref={menu.anchorRef} className="min-w-0">
+        <button
+          type="button"
+          aria-label="Device"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          disabled={!canControl}
+          onClick={() => setOpen(!open)}
+          title={canControl ? 'Choose a device' : "Your login can't change the device"}
+          className="flex h-7 min-w-0 max-w-[18rem] cursor-pointer items-center gap-2 border border-[var(--color-border)] bg-[var(--color-bg)] pl-2.5 pr-2 text-xs text-[var(--color-text-primary)] transition-colors enabled:hover:border-[var(--color-text-muted)] disabled:cursor-default"
+          style={{ borderRadius: THEME_PILL_RADIUS }}
+          data-mobile-device=""
+        >
+          <span className={`h-2 w-2 flex-shrink-0 rounded-full ${dot}`} aria-hidden data-mobile-device-state={session?.state ?? 'none'} />
+          <span className="truncate" data-mobile-device-label="">
+            {shown ? shown.name : 'No devices'}
+          </span>
+          {shown?.os ? <span className="flex-shrink-0 text-[var(--color-text-muted)]">{shown.os}</span> : null}
+          {canControl ? (
+            <svg
+              className={`h-3 w-3 flex-shrink-0 text-[var(--color-text-muted)] transition-transform ${open ? 'rotate-180' : ''}`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+              aria-hidden
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
+          ) : null}
+        </button>
+      </div>
+      {open
+        ? menu.portal(
+            <div
+              ref={menu.menuRef}
+              style={menu.style}
+              className="max-h-[70vh] overflow-y-auto border border-[var(--color-border)] bg-[var(--color-bg)] p-2 shadow-xl"
+              role="menu"
+              data-mobile-device-menu=""
+            >
+              <DevicePicker
+                {...props.picker}
+                compact
+                onStart={(platform, id) => {
+                  setOpen(false)
+                  props.picker.onStart(platform, id)
+                }}
+                onShowLicence={(platform) => {
+                  setOpen(false)
+                  props.picker.onShowLicence(platform)
+                }}
+              />
+            </div>,
+          )
+        : null}
       <span className="flex-1" />
       {canControl && running ? (
         <button

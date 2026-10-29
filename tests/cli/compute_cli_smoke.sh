@@ -465,7 +465,10 @@ JLONG="$(k2 compute run mini --detach -- sh -c "true $long" 2>/dev/null)"
 expect_has "get summarizes a long argv" "$(k2 compute get "$JLONG")" "--full for all of it"
 expect_has "get --full prints all of it" "$(k2 compute get "$JLONG" --full)" "$long"
 # events: the job stream, NDJSON with --json.
-eout="$(k2 compute events --json --limit 50 2>/dev/null)"
+set +e
+eout="$(k2 compute events --json --limit 50 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "events exits 0 (stderr: $(head -c 400 "$SANDBOX/err"))" "$rc" "0"
 expect_has "events lists a queued event" "$eout" "\"event\":\"queued\""
 expect_has "and a finished one with its exit" "$eout" "\"event\":\"finished\""
 k2 compute cancel "$JIQ" --force >/dev/null

@@ -25130,9 +25130,7 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
             ews="$(_compute_ws "")"
             [ -n "$ews" ] && eq="$eq&workspace=$(urlencode "$ews")"
             [ -n "$emax" ] && edeadline=$(( $(date +%s) + $(_compute_secs "$emax") ))
-            local cursor="$esince" first=1 cfile
-            cfile="$(mktemp -t k2-compute-events-XXXXXX)"
-            trap 'rm -f "$cfile"' EXIT
+            local cursor="$esince" first=1 eout
             while :; do
                 local q="$eq" w=0
                 if [ -n "$cursor" ]; then
@@ -25150,7 +25148,8 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
                     q="$q&wait=$w"
                 fi
                 _compute_call GET /cli/compute/jobs "$q"
-                printf '%s' "$_CP_BODY" | K2_CP_JSON="$as_json" K2_CP_CURSOR_FILE="$cfile" python3 -c '
+                # The events, then the next cursor as the last line.
+                eout="$(printf '%s' "$_CP_BODY" | K2_CP_JSON="$as_json" python3 -c '
 import json, os, sys, time
 v = json.load(sys.stdin)
 for e in v.get("events") or []:
@@ -25165,9 +25164,9 @@ for e in v.get("events") or []:
             if e.get("reason"):
                 tail += " (%s)" % e["reason"]
         print("%s  %s  %-9s on %s%s" % (time.strftime("%H:%M:%S", time.localtime(e.get("at") or 0)), e.get("short"), e.get("event"), e.get("node") or "?", tail))
-    sys.stdout.flush()
-open(os.environ["K2_CP_CURSOR_FILE"], "w").write(str(v.get("cursor")))'
-                cursor="$(cat "$cfile")"
+print(v.get("cursor"))')"
+                cursor="${eout##*$'\n'}"
+                [ "$cursor" = "$eout" ] || printf '%s\n' "${eout%$'\n'*}"
                 first=0
                 [ "$efollow" = "1" ] || break
                 if [ -n "$edeadline" ] && [ "$(date +%s)" -ge "$edeadline" ]; then

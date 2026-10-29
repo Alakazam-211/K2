@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # k2sign_fixture.sh — sourced by tests/release/k2sign-*.sh (not a test itself).
 # A test install of the signing user under a temp K2SIGN_TEST_ROOT, from a
 # fixture copy of this tree whose U1/U2/U3 are THROWAWAY keys made here.

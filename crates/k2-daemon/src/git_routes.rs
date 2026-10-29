@@ -349,13 +349,17 @@ struct RemoveWorktreeBody {
 }
 
 /// A `k2_core::git` error → `{"error", "code"}` when it carries a
-/// [`git::refusal`] code (409 for uncommitted changes, else 400); a plain
-/// 400 otherwise, exactly as before.
+/// [`git::refusal`] code (400 for a bad path, 409 for the repository's
+/// state); a plain 400 otherwise, exactly as before.
 fn git_error(e: String) -> CliResponse {
     let Some(code) = git::refusal::code_of(&e) else {
         return CliResponse::bad_request(e);
     };
-    let status = if code == git::refusal::MAIN_HAS_UNCOMMITTED_CHANGES { "409 Conflict" } else { "400 Bad Request" };
+    let status = if code == git::refusal::NOT_A_REPO || code == git::refusal::NOT_A_WORKTREE_OF_PROJECT {
+        "400 Bad Request"
+    } else {
+        "409 Conflict"
+    };
     CliResponse {
         status,
         content_type: "application/json",
@@ -363,21 +367,35 @@ fn git_error(e: String) -> CliResponse {
     }
 }
 
+/// The id of the registered K2 workspace (projects row) whose root is
+/// `path`, compared as canonical paths; else 404 `not_found`. The git
+/// routes that change a repository only act on a registered workspace.
+fn registered_workspace(path: &str) -> Result<String, CliResponse> {
+    let not_found = || {
+        changes_error(git_changes::ChangesError::new(
+            git_changes::codes::NOT_FOUND,
+            format!("{path} is not a K2 workspace on this server"),
+        ))
+    };
+    let want = dunce::canonicalize(path.trim()).map_err(|_| not_found())?;
+    let projects = k2_core::projects_ops::projects_list().map_err(CliResponse::internal_error)?;
+    projects
+        .into_iter()
+        .find(|p| !p.path.is_empty() && dunce::canonicalize(&p.path).is_ok_and(|r| r == want))
+        .map(|p| p.id)
+        .ok_or_else(not_found)
+}
+
 /// `POST /cli/git/remove-worktree`: `projectPath` must be a registered K2
-/// workspace root (canonical compare, like the clone pull-pack), and core
-/// only trashes a linked worktree of that workspace's repository.
+/// workspace root, and core only trashes a linked worktree of that
+/// workspace's repository.
 pub fn handle_git_remove_worktree(body: &[u8]) -> CliResponse {
     let b: RemoveWorktreeBody = match parse_body(body) {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let registered = dunce::canonicalize(b.project_path.trim())
-        .is_ok_and(|p| crate::clone_routes::is_registered_workspace(&p));
-    if !registered {
-        return changes_error(git_changes::ChangesError::new(
-            git_changes::codes::NOT_FOUND,
-            format!("{} is not a K2 workspace on this server", b.project_path),
-        ));
+    if let Err(r) = registered_workspace(&b.project_path) {
+        return r;
     }
     if let Err(e) = git::remove_worktree(&b.project_path, &b.worktree_path, b.force.unwrap_or(false)) {
         return git_error(e);
@@ -594,7 +612,14 @@ pub fn handle_git_abort_merge(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    unit_ok(git::abort_merge(&b.path))
+    if let Err(r) = registered_workspace(&b.path) {
+        return r;
+    }
+    // No merge in progress → 409 `no_merge_in_progress`; nothing is reset.
+    match git::abort_merge(&b.path) {
+        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Err(e) => git_error(e),
+    }
 }
 
 #[derive(Deserialize)]

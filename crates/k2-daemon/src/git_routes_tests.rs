@@ -446,3 +446,25 @@ fn merge_branch_route_refuses_a_fast_forward_over_uncommitted_changes() {
     assert_eq!(json(&ok)["success"], true);
     assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "from feature\n");
 }
+
+// ── abort-merge only aborts a merge, on a workspace ─────────────────
+
+#[test]
+fn abort_merge_route_needs_a_workspace_and_a_merge_in_progress() {
+    // Not a registered workspace: refused, nothing reset.
+    let other = repo("abort-unregistered");
+    std::fs::write(other.join("a.txt"), "unsaved work\n").expect("dirty");
+    let r = post("/cli/git/abort-merge", serde_json::json!({ "path": s(&other) }));
+    assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    assert_eq!(code(&r), "not_found");
+    assert_eq!(std::fs::read_to_string(other.join("a.txt")).expect("a"), "unsaved work\n");
+
+    // A workspace with no merge in progress: refused, nothing reset.
+    let d = repo("abort-nomerge");
+    register(&d);
+    std::fs::write(d.join("a.txt"), "unsaved work\n").expect("dirty");
+    let r = post("/cli/git/abort-merge", serde_json::json!({ "path": s(&d) }));
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert_eq!(code(&r), "no_merge_in_progress");
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "unsaved work\n");
+}

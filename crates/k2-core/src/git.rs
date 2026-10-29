@@ -423,8 +423,10 @@ pub mod refusal {
     pub const NOT_A_WORKTREE_OF_PROJECT: &str = "not_a_worktree_of_project";
     /// A fast-forward would overwrite uncommitted changes on the target.
     pub const MAIN_HAS_UNCOMMITTED_CHANGES: &str = "main_has_uncommitted_changes";
+    /// Abort asked for, but the repository has no merge in progress.
+    pub const NO_MERGE_IN_PROGRESS: &str = "no_merge_in_progress";
 
-    const ALL: [&str; 3] = [NOT_A_REPO, NOT_A_WORKTREE_OF_PROJECT, MAIN_HAS_UNCOMMITTED_CHANGES];
+    const ALL: [&str; 4] = [NOT_A_REPO, NOT_A_WORKTREE_OF_PROJECT, MAIN_HAS_UNCOMMITTED_CHANGES, NO_MERGE_IN_PROGRESS];
 
     /// The refusal code an error from this module starts with, if any.
     pub fn code_of(err: &str) -> Option<&'static str> {
@@ -1259,9 +1261,17 @@ pub fn merge_status(repo_path: &str) -> Result<MergeStatus, String> {
     })
 }
 
-/// Abort an in-progress merge.
+/// Abort an in-progress merge. Refused (`no_merge_in_progress`) when the
+/// repository has no merge in progress: the reset below would otherwise
+/// throw away ordinary uncommitted work.
 pub fn abort_merge(repo_path: &str) -> Result<(), String> {
     let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
+    if repo.state() != git2::RepositoryState::Merge {
+        return Err(format!(
+            "{}: there is no merge in progress in {repo_path}; nothing to abort",
+            refusal::NO_MERGE_IN_PROGRESS
+        ));
+    }
 
     repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
         .map_err(|e| format!("Failed to reset working tree: {e}"))?;

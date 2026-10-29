@@ -133,3 +133,41 @@ fn fast_forward_keeps_uncommitted_changes_it_does_not_touch() {
     status.sort();
     assert_eq!(status, vec![" M b.txt".to_string(), "M  c.txt".to_string()]);
 }
+
+// ── abort only aborts a merge in progress ───────────────────────────
+
+/// `ff_repo`, then main also changes a.txt: merging `feature` conflicts.
+/// Returns the repo with the merge in progress (a.txt conflicted).
+fn conflicted_repo(tag: &str) -> PathBuf {
+    let (d, _, _) = ff_repo(tag);
+    git(&d, &["config", "user.name", "K2 Test"]);
+    git(&d, &["config", "user.email", "k2-test@example.com"]);
+    std::fs::write(d.join("a.txt"), "a2 from main\n").expect("main a");
+    git(&d, &["commit", "-q", "-am", "main work"]);
+    let r = merge_branch(&s(&d), "feature").expect("merge runs");
+    assert!(!r.success, "the merge conflicts");
+    assert_eq!(r.conflicts, vec!["a.txt".to_string()]);
+    d
+}
+
+#[test]
+fn abort_refuses_when_no_merge_is_in_progress() {
+    let (d, main, _) = ff_repo("abort-none");
+    std::fs::write(d.join("b.txt"), "b unsaved\n").expect("dirty b");
+    std::fs::write(d.join("c.txt"), "c staged\n").expect("dirty c");
+    git(&d, &["add", "c.txt"]);
+    let e = abort_merge(&s(&d)).expect_err("no merge → refused");
+    assert!(e.starts_with("no_merge_in_progress:"), "got: {e}");
+    assert_eq!(read(&d.join("b.txt")), "b unsaved\n", "unstaged change kept");
+    assert_eq!(read(&d.join("c.txt")), "c staged\n", "staged change kept");
+    assert_eq!(head(&d), main);
+}
+
+#[test]
+fn abort_still_aborts_a_real_merge() {
+    let d = conflicted_repo("abort-real");
+    abort_merge(&s(&d)).expect("abort a merge in progress");
+    assert_eq!(read(&d.join("a.txt")), "a2 from main\n", "back to main's version");
+    assert!(!merge_status(&s(&d)).expect("status").in_progress, "no merge in progress after abort");
+    assert!(!d.join(".git/MERGE_HEAD").exists(), "merge state cleared");
+}

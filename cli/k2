@@ -31322,28 +31322,34 @@ k2 publish secret — vault secrets a published service gets when it starts
 
   <service>        the name you gave k2 publish run
   NAME             the secret's name in the vault (k2 vault list)
-  --scope <s>      where NAME lives: ws:<workspace>, server or session:<id>.
-                   Default: an agent's own workspace (the owner token: server).
+  --scope <s>      where NAME lives: ws:<workspace> or server.
+                   Default: your own workspace if you're an agent; the server
+                   scope if the owner runs it from their own terminal.
                    If NAME isn't there, the error names the scope that has it.
   --as env|file    env: an environment variable; file: a 0600 file in
-                   $K2_SECRETS_DIR. Default: the secret's own delivery; never
-                   above its ceiling (k2 vault show NAME shows both).
+                   $K2_SECRETS_DIR. Default: how the secret was saved to be
+                   delivered. You can't pick a delivery the secret doesn't
+                   allow (k2 vault show NAME shows both).
   --env-name X     the variable's name (default: NAME in capitals, - and . as _).
                    --env-name alone means --as env.
   --file-name F    the file's name in $K2_SECRETS_DIR (default: NAME).
                    --file-name alone means --as file.
 
-The service gets it at its next start: k2 publish stop <service>, then
-k2 publish start <service>.
+The service gets it the next time it starts. Running: k2 publish stop
+<service>, then k2 publish start <service>. Exited: k2 publish start
+<service>. remove works the same way: the running process keeps what it got.
 
 An agent can add the secrets its own workspace created. A secret a person
-gave (a Thread secret card, Settings → Vault) is the owner's to share: the
-refusal prints the exact command for the owner to run in their own
-terminal (it asks for Touch ID or the vault password).
+gave (a Thread secret card, Settings → Vault) only the owner or an Admin
+can share with a service: the refusal prints the exact command for them to
+run in their own terminal (Terminal or iTerm, not a K2 terminal; it asks
+for Touch ID or the vault password). Don't retry it yourself.
 
 Example: a status page that won't start without MPC_PROGRESS_PIN
-  k2 publish secret add mpc-progress MPC_PROGRESS_PIN --scope ws:k2-cores --as env --env-name MPC_PROGRESS_PIN
-  k2 publish stop mpc-progress; k2 publish start mpc-progress
+  k2 publish secret add mpc-progress MPC_PROGRESS_PIN --as env
+  k2 publish start mpc-progress
+  (A person gave the secret? The owner runs the first line in their own
+  terminal with --scope ws:k2-cores added.)
 More: k2 vault grant --help, k2 study vault
 EOF
 }
@@ -31760,7 +31766,7 @@ if mode == "list":
         print("warning: %s: %s" % (n, w))
     # Why a service isn't serving (its exit code and last log line).
     for n, st, why in reasons:
-        print("%s is %s (%s); more: k2 publish logs %s" % (n, st, why, n))
+        print("%s is not serving (%s): %s. More: k2 publish logs %s" % (n, st, why, n))
     if legacy:
         print("warning: %d service%s still inherit%s the daemon environment (%s)%s. "
               "Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)."

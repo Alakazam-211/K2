@@ -808,7 +808,7 @@ fn last_log_line(project_id: &str, name: &str) -> Option<String> {
 pub(crate) fn down_reason(row: &ps::PublishedService, status: &str) -> Option<String> {
     let failed_start = status == STATUS_STOPPED && row.error.is_some();
     let head = if status == STATUS_UNHEALTHY {
-        format!("not answering on port {}", row.port)
+        format!("it runs but doesn't answer on port {}", row.port)
     } else if status == STATUS_EXITED || failed_start {
         // An exit code from before the last start is an older run's.
         let this_run = match (row.last_exited_at, row.last_started_at) {
@@ -817,14 +817,14 @@ pub(crate) fn down_reason(row: &ps::PublishedService, status: &str) -> Option<St
             _ => false,
         };
         match row.last_exit_code.filter(|_| this_run) {
-            Some(c) => format!("exit {c}"),
+            Some(c) => format!("its process exited with code {c}"),
             None => row.error.clone().unwrap_or_else(|| "not running".to_string()),
         }
     } else {
         return None;
     };
     Some(match last_log_line(&row.project_id, &row.name) {
-        Some(l) => format!("{head}: {l}"),
+        Some(l) => format!("{head}; its last log line: {l}"),
         None => head,
     })
 }
@@ -2488,21 +2488,21 @@ mod tests {
                 hostname_pending: false,
             };
             // No log yet: the exit alone.
-            assert_eq!(down_reason(&row(None, Some(2), Some(101)), STATUS_EXITED).as_deref(), Some("exit 2"));
+            assert_eq!(down_reason(&row(None, Some(2), Some(101)), STATUS_EXITED).as_deref(), Some("its process exited with code 2"));
             let path = log_path("ws-cores", "mpc-progress");
             fs::create_dir_all(path.parent().expect("parent")).expect("log dir");
             fs::write(&path, "starting\nMPC_PROGRESS_PIN is not set\n\n").expect("log");
-            let want = Some("exit 2: MPC_PROGRESS_PIN is not set");
+            let want = Some("its process exited with code 2; its last log line: MPC_PROGRESS_PIN is not set");
             assert_eq!(down_reason(&row(None, Some(2), Some(101)), STATUS_EXITED).as_deref(), want);
             // A start that failed (probe) and was rolled back: stopped + error.
             let failed = row(Some("probe failed: the process exited before 127.0.0.1:8791 accepted"), Some(2), Some(101));
             assert_eq!(down_reason(&failed, STATUS_STOPPED).as_deref(), want);
             // The exit code is an older run's: the error, not "exit 2".
             let stale = row(Some("pro_required"), Some(2), Some(50));
-            assert_eq!(down_reason(&stale, STATUS_STOPPED).as_deref(), Some("pro_required: MPC_PROGRESS_PIN is not set"));
+            assert_eq!(down_reason(&stale, STATUS_STOPPED).as_deref(), Some("pro_required; its last log line: MPC_PROGRESS_PIN is not set"));
             assert_eq!(
                 down_reason(&row(None, None, None), STATUS_UNHEALTHY).as_deref(),
-                Some("not answering on port 8791: MPC_PROGRESS_PIN is not set")
+                Some("it runs but doesn't answer on port 8791; its last log line: MPC_PROGRESS_PIN is not set")
             );
             // Serving, starting, or stopped by someone: no reason.
             for st in [STATUS_RUNNING, STATUS_STARTING, STATUS_STOPPED] {
@@ -2511,7 +2511,7 @@ mod tests {
             // A long last line is cut.
             fs::write(&path, format!("{}\n", "x".repeat(1000))).expect("log");
             let r = down_reason(&row(None, Some(1), Some(101)), STATUS_EXITED).expect("reason");
-            assert_eq!(r.chars().count(), "exit 1: ".len() + REASON_MAX_CHARS + 1, "{r}");
+            assert_eq!(r.chars().count(), "its process exited with code 1; its last log line: ".len() + REASON_MAX_CHARS + 1, "{r}");
         });
     }
 

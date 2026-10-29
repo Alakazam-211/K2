@@ -601,7 +601,7 @@ pub(crate) fn not_found_elsewhere(vault: &LocalVault, c: &VaultCaller, s: &Sel, 
     found.sort();
     found.dedup();
     let Some(first) = found.first() else { return e };
-    let asked = scope_flag(&asked).unwrap_or_else(|| "this scope".into());
+    let asked = scope_flag(&asked).map(|s| format!("the {s} scope")).unwrap_or_else(|| "this scope".into());
     let how = if found.len() == 1 { format!("pass --scope {first}") } else { "pass --scope with one of them".to_string() };
     VaultError::not_found(format!("no such secret {name} in {asked}; found in {}: {how}", found.join(", ")))
 }
@@ -1615,7 +1615,7 @@ fn service_share_refusal(
         e.code,
         e.status,
         format!(
-            "{reason}. Settings → Vault can't share with a service, so ask the owner to run this in their own terminal outside K2 (it asks for Touch ID or the vault password): k2 publish secret add {service} {} --scope {scope} --as {}{env}",
+            "{reason}. Settings → Vault can't share with a service, so ask the owner or an Admin to run this in their own terminal (Terminal or iTerm, not a K2 terminal; it asks for Touch ID or the vault password; --scope is there because their default scope is server): k2 publish secret add {service} {} --scope {scope} --as {}{env}",
             m.name,
             delivery.as_str()
         ),

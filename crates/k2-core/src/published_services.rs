@@ -287,7 +287,8 @@ pub struct ServiceJson {
     pub env_refused: Vec<String>,
     /// Why the service isn't serving, for its owner (`k2 publish ps`): its
     /// exit code (or "not answering on port N") and the last line it
-    /// logged, redacted, e.g. `exit 2: MPC_PROGRESS_PIN is not set`. Only
+    /// logged, redacted, e.g. `its process exited with code 2; its last log
+    /// line: MPC_PROGRESS_PIN is not set`. Only
     /// while it has exited, failed to start, or runs without answering;
     /// omitted otherwise (a service someone stopped has none). K2 Cores
     /// field report 2026-10-28.

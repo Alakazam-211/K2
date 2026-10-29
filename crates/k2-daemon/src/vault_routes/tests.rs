@@ -1420,11 +1420,12 @@ fn a_person_given_secret_reaches_a_service_only_through_a_person() {
         assert!(hint.starts_with("a person gave this secret, so an agent can't widen"), "{hint}");
         assert!(
             hint.ends_with(&format!(
-                "in their own terminal outside K2 (it asks for Touch ID or the vault password): k2 publish secret add mpc-progress MPC_PROGRESS_PIN --scope ws:{label} --as env --env-name MPC_PROGRESS_PIN"
+                "default scope is server): k2 publish secret add mpc-progress MPC_PROGRESS_PIN --scope ws:{label} --as env --env-name MPC_PROGRESS_PIN"
             )),
             "{hint}"
         );
         assert!(!hint.contains("change it in Settings → Vault"), "a service share can't be made there: {hint}");
+        assert!(hint.contains("ask the owner or an Admin to run this in their own terminal (Terminal or iTerm, not a K2 terminal"), "{hint}");
 
         // #3: the same share with an explicit --scope, from the agent.
         let (s, v) = share(&a, true);
@@ -1439,7 +1440,7 @@ fn a_person_given_secret_reaches_a_service_only_through_a_person() {
         assert!(t.v.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "nothing was shared");
 
         // #2: the owner token with no --scope looks in server scope.
-        let want = format!("no such secret MPC_PROGRESS_PIN in server; found in ws:{label}: pass --scope ws:{label}");
+        let want = format!("no such secret MPC_PROGRESS_PIN in the server scope; found in ws:{label}: pass --scope ws:{label}");
         let (s, v) = share(&owner(), false);
         assert_eq!((s, code(&v)), (404, "not_found"), "{v}");
         assert_eq!(v["error"]["hint"].as_str(), Some(want.as_str()), "{v}");
@@ -1473,7 +1474,7 @@ fn not_found_names_only_scopes_the_caller_can_see() {
         let (s, v) = call_p(&t, SHOW, &a, Value::Null, q.clone());
         assert_eq!(
             (s, v["error"]["hint"].as_str()),
-            (404, Some("no such secret SHARED_KEY in ws:ws1; found in server: pass --scope server")),
+            (404, Some("no such secret SHARED_KEY in the ws:ws1 scope; found in server: pass --scope server")),
             "{v}"
         );
         q.insert("scope".to_string(), "server".to_string());

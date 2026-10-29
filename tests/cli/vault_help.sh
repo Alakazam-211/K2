@@ -64,7 +64,7 @@ for args in "publish secret --help" "publish secret add --help" "publish secret 
     out="$(k2n $args 2>&1)" || fail "$args exited non-zero: $out"
     printf '%s\n' "$out" | head -1 | grep -Fq "k2 publish secret — vault secrets a published service gets" || fail "$args: $out"
     for want in "--scope <s>" "--as env|file" "--env-name X" "--file-name F" \
-        "k2 publish secret add mpc-progress MPC_PROGRESS_PIN --scope ws:k2-cores --as env --env-name MPC_PROGRESS_PIN"; do
+        "k2 publish secret add mpc-progress MPC_PROGRESS_PIN --as env" "with --scope ws:k2-cores added"; do
         printf '%s' "$out" | grep -Fq -- "$want" || fail "$args lacks '$want': $out"
     done
 done

@@ -2196,6 +2196,7 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
         if store::assign_if_queued(&conn, &job.id, now) != Ok(true) {
             continue;
         }
+        let (ask_mem, ask_cpu) = (plan.limits.mem_bytes, plan.limits.cpu_millis);
         if tx.send(Out::Frame(Box::new(Frame::Assign(Assign { fence, plan })))).is_err() {
             let _ = store::set_job_state(&conn, &job.id, JobState::Queued, Some("node_offline"), None, now);
             return;
@@ -2210,6 +2211,8 @@ fn kick_shared(node_id: &str, tx: &mpsc::UnboundedSender<Out>, offer: &Offer) {
             serde_json::json!({"generation": job.generation, "shared": true, "class": job.class}),
         );
         drop(conn);
+        // Until the node's next offer shows it (CP-A7).
+        crate::compute_place::note_pending(node_id, &job.id, ask_mem, ask_cpu, offer.revision, now);
         note_turn(node_id, &job);
         sent_any = true;
     }
@@ -2299,12 +2302,15 @@ pub fn kick(node_id: &str) {
     if store::assign_if_queued(&conn, &job.id, compute::now()) != Ok(true) {
         return;
     }
+    // Until the node's next offer shows it (CP-A7).
+    let (ask_mem, ask_cpu) = (plan.limits.mem_bytes, plan.limits.cpu_millis);
     if tx.send(Out::Frame(Box::new(Frame::Assign(Assign { fence, plan })))).is_err() {
         let _ = store::set_job_state(&conn, &job.id, JobState::Queued, Some("node_offline"), None, compute::now());
         return;
     }
     store::record_event(&conn, "controller", "assign", Some(node_id), Some(&job.workspace_id), Some(&job.id), serde_json::json!({"generation": job.generation}));
     drop(conn);
+    crate::compute_place::note_pending(node_id, &job.id, ask_mem, ask_cpu, offer.as_ref().map(|o| o.revision).unwrap_or(0), compute::now());
     note_turn(node_id, &job);
     notify_change();
 }

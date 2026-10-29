@@ -480,6 +480,13 @@ pub struct AppSettings {
     /// set. Owner-only to change. Default MUST stay OFF.
     #[serde(default)]
     pub compute_preview: bool,
+    /// How compute auto-placement ranks the nodes that fit (no node named,
+    /// prd-compute-auto-placement-v1 §8, CP-A18): `v2` (the default: load
+    /// bands, a warm slot worth one band, bursts spread) or `v1` (the
+    /// 0.46.5 order, kept until v2 is proven). Owner-only to change
+    /// (`k2 compute placement v1|v2`); [`update`] refuses anything else.
+    #[serde(default = "default_compute_placement")]
+    pub compute_placement: String,
     /// Permission cards (Beta), Settings → Access → Permission Cards
     /// (prd-agent-settings-cards-v1 §2.1): the global switch. Persisted
     /// mirror of `K2_PERMISSION_CARDS` (force-on);
@@ -890,6 +897,10 @@ impl Default for TicketSettings {
     }
 }
 
+fn default_compute_placement() -> String {
+    crate::compute::PlacementPolicy::V2.as_wire().to_string()
+}
+
 /// Heartbeat S6 — Keep awake: Off / While agents are working / Always.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeepAwakeMode {
@@ -1209,6 +1220,7 @@ impl Default for AppSettings {
             agents_can_create_connections: false,
             federation_enabled: false,
             compute_preview: false,
+            compute_placement: default_compute_placement(),
             permission_cards: false,
             garden_access: true,
             apps: true,
@@ -1579,6 +1591,9 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
         if BootStatusPublic::from_wire(mode).is_none() {
             return Err(format!("bootStatusPublic must be one of compat|ghost (got {mode:?})"));
         }
+    }
+    if crate::compute::PlacementPolicy::from_wire(&merged.compute_placement).is_none() {
+        return Err(format!("computePlacement must be one of v1|v2 (got {:?})", merged.compute_placement));
     }
     if KeepAwakeMode::from_wire(&merged.keep_awake.mode).is_none() {
         return Err(format!(
@@ -2290,6 +2305,28 @@ mod tests {
     /// Heartbeat S6 — Keep awake defaults Off, takes the three modes
     /// through the generic update, refuses anything else loudly, and a
     /// declined lid dialog is remembered.
+    /// Compute auto-placement's ranking switch (prd-compute-auto-placement-v1
+    /// CP-A18): v2 by default, also for a settings file written before it
+    /// existed; v1 and v2 round-trip; anything else is refused and keeps
+    /// what was there.
+    #[test]
+    fn compute_placement_defaults_to_v2_and_refuses_other_values() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        assert_eq!(AppSettings::default().compute_placement, "v2");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"computePreview": true}"#).unwrap();
+        assert_eq!(load().compute_placement, "v2", "an older file reads as v2");
+        for wire in ["v1", "v2", "v1"] {
+            let merged = update(serde_json::json!({ "computePlacement": wire })).expect("update");
+            assert_eq!(merged.compute_placement, wire);
+            assert_eq!(load().compute_placement, wire, "{wire} must persist");
+        }
+        let err = update(serde_json::json!({ "computePlacement": "v3" })).expect_err("v3 must be refused");
+        assert!(err.contains("v1|v2"), "{err}");
+        assert_eq!(load().compute_placement, "v1", "a refused write changes nothing");
+    }
+
     #[test]
     fn keep_awake_modes_round_trip_and_bad_mode_is_refused() {
         let _g = TEST_LOCK.lock();

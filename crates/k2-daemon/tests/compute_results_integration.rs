@@ -257,6 +257,12 @@ async fn submit(port: u16, ws: &Ws, n: &mut u32, mut body: Value) -> String {
     j(&r)["job"]["id"].as_str().unwrap().to_string()
 }
 
+/// The owner grants `node` to `ws` (default limits).
+async fn grant_ws(port: u16, node: &str, ws: &Ws) {
+    let r = post(port, "/cli/compute/grants/set", OWNER, json!({"node": node, "workspace": ws.id})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
 async fn cancel(port: u16, id: &str) {
     let r = post(port, "/cli/compute/jobs/cancel", OWNER, json!({"job": id})).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -521,6 +527,9 @@ async fn never_stuck_timeouts_moves_lost_nodes_retries_and_set_aside() {
     let ws = seed_ws(&env, "ns", &[]);
     let (mut na, na_id) = online_node(&env, port, "na", 1).await;
     let (mut nb, nb_id) = online_node(&env, port, "nb", 1).await;
+    // Auto-placement uses granted nodes only, the owner too (D1).
+    grant_ws(port, "na", &ws).await;
+    grant_ws(port, "nb", &ws).await;
     let mut n = 0u32;
 
     // 1. A queue timeout fails loudly with the reason it waited.
@@ -712,6 +721,10 @@ async fn split_runs_spread_shards_merge_junit_and_give_one_result() {
     let (_a, a_id) = online_node(&env, port, "sa", 1).await;
     let (_b, b_id) = online_node(&env, port, "sb", 1).await;
     let (_c, c_id) = online_node(&env, port, "sc", 1).await;
+    // Auto-placement uses granted nodes only, the owner too (D1).
+    for node in ["sa", "sb", "sc"] {
+        grant_ws(port, node, &ws).await;
+    }
 
     // Usage errors first (exit 2): shards need --any and the placeholders.
     let (rc, _, err) = k2(&env, port, &ws.path, &["compute", "run", "sa", "--shards", "2", "--", "true"]);

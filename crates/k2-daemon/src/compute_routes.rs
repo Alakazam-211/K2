@@ -1621,7 +1621,7 @@ struct Submitted {
 fn submitted_json(who: &Who, sub: &Submitted) -> serde_json::Value {
     let Some(job) = sub.job.as_ref() else { return sub.preview.clone().unwrap_or_default() };
     let mut out = serde_json::json!({ "job": job_summary(job), "existing": false, "warnings": sub.warnings, "source": sub.source,
-        "notices": sub.notices, "replaced": sub.replaced });
+        "notices": sub.notices, "replaced": sub.replaced, "placement": job.ctl.placement });
     if job.state == "queued" {
         if let Some(q) = queue_view(who, job, &compute_ws::decision_for(&job.node_id)) {
             out["queue"] = q;
@@ -1639,7 +1639,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
         .unwrap_or_default();
     if argv.is_empty() || argv.len() > 256 || argv.iter().map(String::len).sum::<usize>() > 128 * 1024 || argv.iter().any(|a| a.contains('\0')) {
-        return Err(no(codes::BAD_REQUEST, 400, "pass the command after --: k2 compute run <node> -- <command…>"));
+        return Err(no(codes::BAD_REQUEST, 400, "pass the command after --: k2 compute run [<node>] -- <command…>"));
     }
     let env: BTreeMap<String, String> = v
         .get("env")
@@ -1704,7 +1704,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         Some(x) if (1..=7 * 86_400).contains(&x) => Some(x),
         Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--stall-timeout is between 1s and 7d, or off")),
     };
-    let any = s(&v, "node").is_none() && b(&v, "any") == Some(true);
+    // No node named = auto-placement, with or without `any` (CP-A2): K2
+    // picks a granted node; `--any` is the same thing.
+    let any = s(&v, "node").is_none();
     let filter = store::AnyFilter {
         os: s(&v, "os").map(str::to_string),
         arch: s(&v, "arch").map(str::to_string),
@@ -1717,6 +1719,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let want = crate::compute_place::Want {
         ws_id: ws.id.clone(),
         admin: who.is_admin(),
+        auto: any,
         filter: filter.clone(),
         needs: needs.clone(),
         artifacts: !artifacts.is_empty(),
@@ -1724,15 +1727,17 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         needs_git: b(&v, "noSource") != Some(true),
         cpu_millis,
         mem_bytes,
+        mem_defaulted,
+        timeout_secs: n(&v, "timeoutSecs"),
         stall: stall.is_some_and(|x| x > 0),
         secret_ids: secrets_found.iter().map(|f| f.secret_id.clone()).collect(),
         tier: tier_ask,
         cache: cache.is_some(),
         multi_repo: !with_asks(v)?.is_empty(),
     };
-    // Node: by name, or --any.
+    // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = Vec::new();
-    let node = pick_node(v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
+    let (node, placement) = pick_node(v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
     // The default `--mem` never asks more than a small node has, nor more
     // than this server's share on a shared node allows per job.
     let mem_bytes = match (mem_defaulted, compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone())) {
@@ -1998,6 +2003,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             notices: &notices,
             shared: shared_view.as_ref(),
             secrets: &secret_envs,
+            placement: &placement,
         });
         return Ok(Submitted { job: None, warnings, source: None, preview: Some(preview), notices: Vec::new(), replaced: Vec::new() });
     }
@@ -2030,6 +2036,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         repo,
         why: why.clone(),
         mem_defaulted,
+        placement: Some(placement.clone()),
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
@@ -2119,10 +2126,12 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
                 "source": source.as_ref().map(SourceInfo::json), "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout,
                 "shard": opts.shard, "secrets": plan.secret_env, "tier": tier.as_str(), "tierAsked": asked, "submitter": submitter,
-                "supersede": supersede_key}),
+                "supersede": supersede_key, "placement": placement}),
         );
         j
     };
+    // A burst spreads: this controller's recent placements count (§4.1).
+    crate::compute_place::note_placed(&node.id, compute::now());
     // `--supersede KEY`: this workspace's older jobs with the key that are
     // still queued end `cancelled/replaced`; a started one runs on (R3).
     let replaced = match supersede_key.as_deref() {
@@ -2542,6 +2551,8 @@ struct PlanFacts<'a> {
     shared: Option<&'a pshare::ShareView>,
     /// `--secret`s: (found, env name, covered on this node) (SE7).
     secrets: &'a [(crate::compute_secrets::Found, String, bool)],
+    /// Where it would be placed and why (prd-compute-auto-placement-v1 §7).
+    placement: &'a store::Placement,
 }
 
 /// `--plan`: the node it would pick and whether it starts now, the queue
@@ -2564,12 +2575,8 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
     };
     let running_ws = load.running_by_workspace.get(&f.ws.id).copied().unwrap_or(0);
     // Warm slot: the commit this run would use, against the node's slots.
-    let warm = (b(f.v, "noSource") != Some(true))
-        .then(|| repo_pick(f.ws, f.v).ok())
-        .flatten()
-        .map(|pick| {
-            let pk = pick.project_key(f.ws);
-            let commit = compute::sync::resolve_commit(pick.named.as_ref().unwrap_or(&pick.home), s(f.v, "sha").unwrap_or("HEAD")).ok();
+    let warm = warm_key(f.ws, f.v)
+        .map(|(pk, commit)| {
             let slots: Vec<_> = offer.as_ref().map(|o| o.slots.iter().filter(|x| x.project_key == pk).cloned().collect()).unwrap_or_default();
             if commit.is_some() && slots.iter().any(|x| x.last_sha == commit) {
                 "warm (a slot built this commit)"
@@ -2616,6 +2623,7 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
         // Names and coverage only, never a value (SE7).
         out["secrets"] = crate::compute_secrets::plan_view(f.secrets);
     }
+    out["placement"] = serde_json::to_value(f.placement).unwrap_or_default();
     out["tier"] = f.tier.as_str().into();
     if let Some(a) = f.tier_asked {
         out["tierAsked"] = a.as_str().into();
@@ -2678,6 +2686,24 @@ fn grant_line(g: &store::GrantRow) -> String {
     )
 }
 
+/// The project key and commit this run would build, for warm-slot
+/// matching (CP-A9): `--sha`, else HEAD (`--dirty` is HEAD plus changes).
+/// `None` for `--no-source`.
+fn warm_key(ws: &Ws, v: &serde_json::Value) -> Option<(String, Option<String>)> {
+    if b(v, "noSource") == Some(true) {
+        return None;
+    }
+    let pick = repo_pick(ws, v).ok()?;
+    let pk = pick.project_key(ws);
+    let commit = compute::sync::resolve_commit(pick.named.as_ref().unwrap_or(&pick.home), s(v, "sha").unwrap_or("HEAD")).ok();
+    Some((pk, commit))
+}
+
+/// The node a job goes to, and the record of why
+/// (prd-compute-auto-placement-v1). A named node pins it (an ungranted
+/// one is refused by the caller with a teaching `not_granted`, except for
+/// the owner or an Admin). No node named (or `--any`): auto-placement over
+/// the nodes this workspace is granted, for every caller (D1).
 fn pick_node(
     v: &serde_json::Value,
     ws: &Ws,
@@ -2685,57 +2711,47 @@ fn pick_node(
     queue_timeout: Option<i64>,
     prefer_not: &[String],
     warnings: &mut Vec<String>,
-) -> R<store::NodeRow> {
+) -> R<(store::NodeRow, store::Placement)> {
+    use crate::compute_place::{self as place, Tier};
+    let now = compute::now();
     if let Some(name) = s(v, "node") {
         let n = node_or_404(Some(name))?;
         if n.state != "active" {
             return Err(no(codes::NODE_NOT_FOUND, 404, format!("'{}' is waiting for its code to be confirmed", n.name)));
         }
-        // An ungranted node is refused by the caller with a teaching `not_granted`.
-        return Ok(n);
+        let rec = place::pinned_record(&n.name, now);
+        return Ok((n, rec));
     }
-    if b(v, "any") != Some(true) {
-        return Err(no(codes::BAD_REQUEST, 400, "name a node, or pass --any"));
-    }
-    use crate::compute_place::{candidates, choose, Tier};
-    let cands = candidates(want, &[], compute::now());
-    // `--any --tier ci`: candidates keep only nodes where this workspace
-    // may send CI; refused only when that rules out every one (T12).
-    if cands.is_empty() && want.tier == tiers::Tier::Ci {
-        let any_tier = crate::compute_place::Want { tier: tiers::Tier::Normal, ..want.clone() };
-        if !candidates(&any_tier, &[], compute::now()).is_empty() {
+    let report = place::candidates_report(want, &[], now);
+    // `--tier ci`: candidates keep only nodes where this workspace may
+    // send CI; refused only when that rules out every one (T12).
+    if report.cands.is_empty() && want.tier == tiers::Tier::Ci {
+        let any_tier = place::Want { tier: tiers::Tier::Normal, ..want.clone() };
+        if !place::candidates(&any_tier, &[], now).is_empty() {
             return Err(no(
                 tiers::codes::CI_NOT_ALLOWED,
                 403,
                 format!(
-                    "--any --tier ci: no node granted to workspace {} allows CI for it (a grant with --ci, and the node's share allows gate). The owner or an Admin: k2 compute grant <node> --workspace {} --ci",
+                    "--tier ci: no node granted to workspace {} allows CI for it (a grant with --ci, and the node's share allows gate). The owner or an Admin: k2 compute grant <node> --workspace {} --ci",
                     ws.handle, ws.handle
                 ),
             ));
         }
     }
-    if cands.is_empty() {
-        // Slice A's teaching refusal when only --mem/--cpus rule nodes out.
-        let uncapped = crate::compute_place::Want { cpu_millis: None, mem_bytes: None, ..want.clone() };
-        if (want.cpu_millis.is_some() || want.mem_bytes.is_some()) && !candidates(&uncapped, &[], compute::now()).is_empty() {
-            return Err(no(
-                codes::NO_NODE_FITS,
-                404,
-                "no node granted to this workspace allows that much --mem/--cpus; ask for less (k2 compute nodes shows each node's caps)",
-            ));
-        }
-        return Err(no(
-            codes::NO_NODE_FITS,
-            404,
-            "no node granted to this workspace matches --any (os/arch/labels, --needs/--artifact support, queue room); k2 compute nodes",
-        ));
+    if report.cands.is_empty() {
+        return Err(no(codes::NO_NODE_FITS, 404, no_fit_hint(ws, want, &report)));
     }
-    let pk = (b(v, "noSource") != Some(true)).then(|| repo_pick(ws, v).ok()).flatten().map(|pick| pick.project_key(ws));
-    let Some((c, tier)) = choose(&cands, want, prefer_not, pk.as_deref(), None) else {
+    let (pk, commit) = warm_key(ws, v).map(|(p, c)| (Some(p), c)).unwrap_or((None, None));
+    let policy = compute::placement_policy();
+    let Some((c, tier)) = place::choose_by(policy, &report.cands, want, prefer_not, pk.as_deref(), commit.as_deref()) else {
         return Err(no(
             codes::NO_NODE_FITS,
             404,
-            "every node that matches --any is paused, draining or unavailable right now; k2 compute nodes says why",
+            format!(
+                "every node granted to workspace {} that fits is paused, draining or unavailable right now ({}); k2 compute nodes says why",
+                ws.handle,
+                place::skip_words(place::skip::UNAVAILABLE, report.cands.len() as u32, want)
+            ),
         ));
     };
     if tier == Tier::Offline {
@@ -2745,7 +2761,31 @@ fn pick_node(
             queue_timeout.map(|t| format!(", or fails with queue_timeout after {}", compute::message::duration(t))).unwrap_or_default()
         ));
     }
-    Ok(c.node.clone())
+    let ex = place::Explain { policy, cands: &report.cands, skipped: &report.skipped, project_key: pk.as_deref(), commit: commit.as_deref() };
+    let rec = place::placement_record(c, tier, want, &ex, now);
+    Ok((c.node.clone(), rec))
+}
+
+/// `no_node_fits`: why no granted node can take the job, by count
+/// (granted nodes only: an agent never learns of another).
+fn no_fit_hint(ws: &Ws, want: &crate::compute_place::Want, report: &crate::compute_place::CandReport) -> String {
+    use crate::compute_place as place;
+    if report.visible == 0 {
+        return format!(
+            "no compute node is granted to workspace {}: K2 places jobs only on granted nodes (the owner's too; the owner may still name a node to pin a job there). Ask your owner: k2 compute grant <node> --workspace {} (k2 compute nodes)",
+            ws.handle, ws.handle
+        );
+    }
+    let parts: Vec<String> = report.skipped.iter().map(|(k, n)| place::skip_words(k, *n, want)).collect();
+    let mut hint = format!("no node granted to workspace {} can take this job: {}", ws.handle, parts.join(", "));
+    if report.skipped.keys().all(|k| *k == place::skip::TOO_SMALL) {
+        hint.push_str("; ask for less --mem/--cpus (k2 compute nodes shows each node's caps)");
+    } else if report.skipped.contains_key(place::skip::TIMEOUT_OVER_GRANT) {
+        hint.push_str(&format!("; ask for a shorter --timeout, or your owner: k2 compute grant <node> --workspace {} --max-time <D>", ws.handle));
+    } else {
+        hint.push_str("; k2 compute nodes says why");
+    }
+    hint
 }
 
 /// `--cpus` (as millicores) and `--mem` (bytes) from a run request.
@@ -2988,6 +3028,10 @@ fn job_summary(j: &store::JobRow) -> serde_json::Value {
         v["queue"] = node_queue_json(j, node.as_deref());
     }
     v["node"] = node.into();
+    // Where it was placed and why (prd-compute-auto-placement-v1 §7).
+    if let Some(p) = j.ctl.placement.as_ref() {
+        v["placement"] = serde_json::to_value(p).unwrap_or_default();
+    }
     // Secret-env (SE8): the env names the job gets from the vault. Names
     // only; absent for every other job, so their JSON is unchanged.
     let secrets = crate::compute_secrets::job_secret_names(j);
@@ -3512,8 +3556,9 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
     let count = n(v, "shards").filter(|x| (2..=shards::MAX_SHARDS as i64).contains(x)).ok_or_else(|| {
         no(codes::BAD_REQUEST, 400, format!("--shards is 2–{} (one job per shard, each on its own node when it can)", shards::MAX_SHARDS))
     })? as u32;
-    if s(v, "node").is_some() || b(v, "any") != Some(true) {
-        return Err(no(codes::BAD_REQUEST, 400, "--shards needs --any: each shard goes to whichever node can take it"));
+    // Each shard is auto-placed (CP-A11): no `any` needed, a node refused.
+    if s(v, "node").is_some() {
+        return Err(no(codes::BAD_REQUEST, 400, "--shards picks a node for each shard itself: drop the node name"));
     }
     let argv: Vec<String> = v
         .get("argv")

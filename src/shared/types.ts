@@ -147,6 +147,9 @@ export interface AppSettingsResponse {
   // While off every /cli/compute/* route 404s `compute_disabled`. Optional:
   // older snapshots omit it → readers treat absent as false.
   computePreview?: boolean
+  // How compute auto-placement ranks nodes (prd-compute-auto-placement-v1):
+  // `v2` (default) or `v1`. Owner-only; `k2 compute placement v1|v2`.
+  computePlacement?: 'v1' | 'v2'
   // Apps (beta) — the App runtime switch (Settings → Apps → This server),
   // Owner-only, default ON since 0.46.3. 0.46.2 and older daemons answered
   // `appsPreview` instead (default off). See `appsSwitchFrom`.

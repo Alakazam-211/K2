@@ -102,6 +102,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // K2 compute nodes preview (CN30): lets agents run programs on paired
     // machines once grants exist, so only the Owner turns it on.
     "computePreview",
+    // How compute auto-placement ranks nodes (prd-compute-auto-placement-v1
+    // CP-A18): `k2 compute placement v1|v2`, the owner's switch.
+    "computePlacement",
     // Permission cards (Beta, prd-agent-settings-cards-v1 §2.1): the global
     // switch that lets agents ask people for setting changes.
     "permissionCards",
@@ -458,6 +461,7 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             // Connect toggle changes it. Env-var force-on still wins in enabled().
             k2_core::federation::set_enabled(merged.federation_enabled);
             k2_core::compute::set_enabled(merged.compute_preview);
+            k2_core::compute::set_placement_policy(placement_policy_of(&merged.compute_placement));
             sync_permission_cards(merged.permission_cards, actor.audit_user());
             sync_garden_access(merged.garden_access, actor.audit_user());
             k2_core::deploy::set_enabled(merged.apps);
@@ -522,6 +526,7 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
             // Reset returns federation to its default (OFF) — sync it.
             k2_core::federation::set_enabled(defaults.federation_enabled);
             k2_core::compute::set_enabled(defaults.compute_preview);
+            k2_core::compute::set_placement_policy(placement_policy_of(&defaults.compute_placement));
             sync_permission_cards(defaults.permission_cards, actor.audit_user());
             sync_garden_access(defaults.garden_access, actor.audit_user());
             k2_core::deploy::set_enabled(defaults.apps);
@@ -544,6 +549,12 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
         }
         Err(e) => CliResponse::bad_request(e),
     }
+}
+
+/// The stored `computePlacement` as the ranking it names (anything but
+/// `v1` is v2; `app_settings::update` refuses other values).
+pub(crate) fn placement_policy_of(wire: &str) -> k2_core::compute::PlacementPolicy {
+    k2_core::compute::PlacementPolicy::from_wire(wire).unwrap_or(k2_core::compute::PlacementPolicy::V2)
 }
 
 #[cfg(test)]

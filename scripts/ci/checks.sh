@@ -122,7 +122,7 @@ part_rust_test() {
     step "cargo nextest compute nodes"
     cargo nextest run --profile ci -p k2-node-proto -p k2-node -p k2-redact
     cargo nextest run --profile ci -p k2-core --lib compute::
-    cargo nextest run --profile ci -p k2-daemon --lib --test compute_integration --test compute_results_integration --test compute_secret_integration -E 'kind(test) | test(compute_) | test(route_policy)'
+    cargo nextest run --profile ci -p k2-daemon --lib --test compute_integration --test compute_results_integration --test compute_secret_integration --test compute_place_integration -E 'kind(test) | test(compute_) | test(route_policy)'
     cargo nextest run --profile ci -p k2-vault --test compute_grant --test redact_pin
 
     step "cargo nextest App runtime"

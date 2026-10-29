@@ -412,6 +412,7 @@ async fn async_main() {
     // wins in federation::enabled()).
     k2_core::federation::set_enabled(k2_core::app_settings::load().federation_enabled);
     k2_core::compute::set_enabled(k2_core::app_settings::load().compute_preview);
+    k2_core::compute::set_placement_policy(crate::settings_routes::placement_policy_of(&k2_core::app_settings::load().compute_placement));
     // Permission cards (Beta): the persisted global switch, so a daemon that
     // boots with it on serves the family at once (K2_PERMISSION_CARDS=1
     // still forces it on).

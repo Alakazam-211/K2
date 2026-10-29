@@ -57,6 +57,52 @@ pub fn enabled() -> bool {
     SETTING_ENABLED.load(Ordering::Relaxed)
 }
 
+/// How auto-placement ranks the nodes that fit (`computePlacement`,
+/// prd-compute-auto-placement-v1 §8, CP-A18). `V2` (the default): load
+/// bands, a warm slot worth one band, bursts spread. `V1`: the 0.46.5
+/// order (warm slot first, then free CPU), kept until v2 is proven
+/// (`feedback_keep_old_path_until_proven`). Only the ranking switches:
+/// no node named = auto and the placement record hold either way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacementPolicy {
+    V1,
+    V2,
+}
+
+impl PlacementPolicy {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            PlacementPolicy::V1 => "v1",
+            PlacementPolicy::V2 => "v2",
+        }
+    }
+
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "v1" => Some(PlacementPolicy::V1),
+            "v2" => Some(PlacementPolicy::V2),
+            _ => None,
+        }
+    }
+}
+
+static PLACEMENT_V1: AtomicBool = AtomicBool::new(false);
+
+/// Sync the persisted `computePlacement` setting into this process (boot
+/// and every settings update/reset). Anything but `v1` is v2.
+pub fn set_placement_policy(p: PlacementPolicy) {
+    PLACEMENT_V1.store(p == PlacementPolicy::V1, Ordering::Relaxed);
+}
+
+/// The ranking auto-placement uses right now.
+pub fn placement_policy() -> PlacementPolicy {
+    if PLACEMENT_V1.load(Ordering::Relaxed) {
+        PlacementPolicy::V1
+    } else {
+        PlacementPolicy::V2
+    }
+}
+
 /// Unix seconds.
 pub fn now() -> i64 {
     chrono::Utc::now().timestamp()

@@ -656,6 +656,47 @@ pub struct JobCtl {
     /// stops the job above it). Shown in the `mem_cap` hint.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mem_defaulted: bool,
+    /// Where the job was placed and why (prd-compute-auto-placement-v1 §7,
+    /// CP-A10): written at submit, rewritten by a move. Controller-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<Placement>,
+}
+
+/// Where a job was placed and why (prd-compute-auto-placement-v1 §7).
+/// Built only from node names this workspace is granted, node-wide numbers
+/// `k2 compute nodes` already shows, and this workspace's own slots and
+/// jobs: never another workspace's or server's job, argv or handle (S2).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Placement {
+    /// `auto` (no node named, or `--any`) or `pinned` (a node named).
+    pub mode: String,
+    /// The ranking that picked it: `v2` or `v1` (`computePlacement`).
+    pub policy: String,
+    /// The node's name.
+    pub node: String,
+    /// `starts_now_warm` | `starts_now_idle` | `starts_now_least_loaded` |
+    /// `starts_now_spread` | `queued_quoted_eta` | `queued_least_busy` |
+    /// `queued_offline_only` | `moved_<why>` | `pinned`.
+    pub code: String,
+    /// One line: why this node.
+    pub why: String,
+    /// "6 nodes fit, 2 skipped (1 offline, 1 too small for --mem 24G)".
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fits: String,
+    /// Starts now (as far as the last offer says); `None` when pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starts_now: Option<bool>,
+    /// The node's quoted wait, when it queued on a shared node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eta_secs: Option<u64>,
+    /// Granted nodes that could take it.
+    #[serde(default)]
+    pub considered: u32,
+    /// Granted nodes left out, by reason code.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub skipped: BTreeMap<String, u32>,
+    pub at: i64,
 }
 
 /// One secret a compute job gets (SE4): what was asked, the vault id it

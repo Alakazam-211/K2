@@ -21650,7 +21650,21 @@ Agents:
                  No node: K2 picks one of the nodes granted to you that can
                  start the job now (a warm one if it isn't busier), else the
                  one with the shortest wait, and prints where and why
-                 ("placed on …"). Name a node only to pin the job there.
+                 ("placed on …"). Name a node only to pin the job there
+                 (its full name, or a start of it that fits only one: k2n12).
+                 It prefers a node that already has the --needs tools.
+                 [--preset NAME] defaults from .k2/compute.toml (in your checkout,
+                                else the workspace folder; .k2/ isn't committed, so
+                                the file stays on this machine): [defaults] apply
+                                to every run, [presets.NAME] on top; flags win.
+                                Keys: os arch mem cpus needs env timeout
+                                stall_timeout tier cache. --plan shows what came
+                                from where
+                 [--now]        start at once or fail (exit 3 not_now, naming the
+                                shortest wait); nothing is queued
+                 [--same-node-as JOB]  run on the node that ran one of your jobs
+                                (a resume that needs that node's files)
+                 [--tag NAME]   your own label for the job (e.g. fuzz:p3)
                  [--detach] [--sha REV] [--no-source]
                  [--dirty]      ship your uncommitted changes too (no commit needed;
                                 HEAD + the diff + untracked, not-ignored files;
@@ -21677,7 +21691,10 @@ Agents:
                                 workspace and NAME: $K2_JOB_CACHE (fuzz corpora,
                                 installs, a cargo target). With --no-source too.
                                 Evicted when idle and the node needs the disk;
-                                never with --secret. k2 compute cache lists them
+                                never with --secret. k2 compute cache lists them.
+                                With no node named, K2 picks the node your last
+                                job with this cache ran on, and waits for it up to
+                                15 min; else it says the cache isn't there
                  --mem 16G      always pass it: the memory the job needs (a cargo
                                 build, check or test of a big workspace like K2:
                                 24G; a smaller crate: 8G; a script: 1-2G). Left
@@ -21690,7 +21707,9 @@ Agents:
                  [--secret NAME[=ENVNAME]]...  a vault secret as env, sealed to the
                                 node at spawn; names only in the plan (k2 study compute)
                  [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
-                 [--exclusive] [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
+                 [--exclusive --why "<one line>"]  the whole node to itself; needs
+                                a reason and a grant with --ci (or the owner)
+                 [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--wait [--failures] [--max-wait 9m] [--quiet]]
                                 print the job id, then stream its output and exit
                                 with its code (--quiet: no output, only the exit).
@@ -21725,16 +21744,27 @@ Agents:
                  [--submitter NAME]  your own turn in the queue (builders sharing a session: pass it),
                                 the per-submitter cap, and the views (not security)
                  [--plan]     dry run: the node it would pick and why, queue, warm
-                                slot, estimate from earlier runs, grant left (JSON)
+                                slot, estimate from earlier runs, grant left, each
+                                need ready or to install there, the next nodes,
+                                the limits that end it, the settings and where each
+                                came from (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
-                  rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
+                  rust@<ch> (components with +: rust@stable+clippy+rustfmt;
+                  clippy rustfmt rust-src llvm-tools rust-analyzer miri),
+                  cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
                   anything else is refused: tool_unsupported, exit 2)
                  -- <command…>
   k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]
                  a cargo-nextest suite split across nodes (nextest --partition),
                  JUnit kept and parsed, one combined result; --profile P to use
                  the repo's own nextest profile, --runner to replace cargo nextest run
+                 (--preset NAME is the .k2/compute.toml preset, as for run)
+  k2 compute prewarm [--preset NAME | --needs …] [--os …] [--arch …] [--node N]...
+                 [--plan] [--wait] [--json]
+                 install the tools ahead of time: one idle-time (Batch) job on
+                 each node granted to you that matches and lacks one of them;
+                 a node that has them all is only reported
   k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--limit N] [--workspace WS] [--json]
                  From a git worktree inside the workspace (.claude/worktrees/x) the
                  workspace is found for you, and run takes HEAD and --dirty from
@@ -22560,10 +22590,27 @@ cmd_compute_run() {
     local node="" any=0 os="" arch="" detach=0 dirty=0 sha="" nosrc=0 cpus="" mem="" timeout="" exclusive=0
     local retry="" raw=0 workspace="" wait=0 wait_failures=0 wait_quiet=0 max_wait="" as_json=0 qtimeout="" retries="" stall="" nshards="" plan=0
     local gate="" tier="" supersede="" submitter="" repo="" cache="" why=""
+    local preset="" now=0 tag="" same_node=""
     local -a labels=() envs=() needs=() artifacts=() secrets=() withs=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --) shift; break ;;
+            # --preset NAME: [presets.NAME] from .k2/compute.toml (0.46.7;
+            # the daemon reads the file, flags still win).
+            --preset) preset="${2:-}"; shift 2
+                if ! [[ "$preset" =~ ^[a-z0-9][a-z0-9._-]{0,39}$ ]]; then
+                    echo "usage: --preset NAME (a [presets.NAME] in .k2/compute.toml: 1–40 of a-z 0-9 . _ -)" >&2; exit 2
+                fi ;;
+            # --now: start at once or fail (exit 3 not_now), nothing queued.
+            --now) now=1; shift ;;
+            # --tag NAME: your own label for the job (jobs --tag filters).
+            --tag) tag="${2:-}"; shift 2
+                if ! [[ "$tag" =~ ^[A-Za-z0-9._:/-]{1,64}$ ]]; then
+                    echo "usage: --tag NAME (1–64 of A-Z a-z 0-9 . _ : / -, e.g. fuzz:p3)" >&2; exit 2
+                fi ;;
+            # --same-node-as JOB: run on the node that ran one of your jobs.
+            --same-node-as) same_node="${2:-}"; shift 2
+                [ -n "$same_node" ] || { echo "usage: --same-node-as <job> (one of this workspace's jobs)" >&2; exit 2; } ;;
             # --repo <folder>: a git repo (or a worktree of one) inside the
             # workspace, shipped instead of the workspace's own (0.46.6).
             --repo) repo="${2:-}"; shift 2
@@ -22671,6 +22718,15 @@ sys.exit(0 if ok else 1)'; then
         echo "usage: --priority needs a one-line reason: --priority --why \"release gate for 0.46.6\" (it shows in the queue and k2 compute status; Priority is for the critical path only)" >&2
         exit 2
     fi
+    # 0.46.7: --exclusive holds a whole node, so it needs a reason too.
+    if [ "$exclusive" = "1" ] && [ -z "$why" ]; then
+        echo "usage: --exclusive needs a one-line reason: --exclusive --why \"benchmark needs the whole node\" (it shows in the queue; it also needs a grant with --ci)" >&2
+        exit 2
+    fi
+    if [ "$now" = "1" ] && { [ "$tier" = "batch" ] || [ -n "$nshards" ]; }; then
+        echo "usage: --now doesn't mix with --tier batch (it waits for an idle node) or --shards (each shard is placed itself)" >&2
+        exit 2
+    fi
     if [ "$tier" = "batch" ]; then
         if [ "$wait" = "1" ]; then
             echo "usage: --tier batch doesn't mix with --wait: a Batch job starts only when the node is idle (maybe hours). It is detached; k2 compute wait <id> later" >&2
@@ -22772,7 +22828,8 @@ print(json.dumps(out))' "${withs[@]}")" || exit 2
         K2_CJ_exclusive_b="$exclusive" K2_CJ_retryInterrupted_b="$retry" K2_CJ_cwd="$cwd" \
         K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$ws_name" K2_CJ_clientJobId="$client" K2_CJ_gate_b="$gate" \
         K2_CJ_tier="$tier" K2_CJ_why="$why" K2_CJ_supersede="$supersede" K2_CJ_submitter="$submitter" \
-        K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json")"
+        K2_CJ_repo="$repo" K2_CJ_cache="$cache" K2_CJ_with_j="$with_json" \
+        K2_CJ_preset="$preset" K2_CJ_now_b="${now#0}" K2_CJ_tag="$tag" K2_CJ_sameNodeAs="$same_node")"
     [ "$any" = "0" ] && body="$(printf '%s' "$body" | python3 -c 'import json,sys; v=json.load(sys.stdin); v.pop("any", None); print(json.dumps(v))')"
     # The same clientJobId makes a retried POST idempotent.
     local raw_resp attempt=0
@@ -22803,6 +22860,49 @@ sys.stderr.write(line + "\n")
 p = v.get("placement") or {}
 if p.get("mode") == "auto":
     sys.stderr.write("[k2 compute] would place on %s (auto): %s%s\n" % (p.get("node"), p.get("why"), (" · " + p["fits"]) if p.get("fits") else ""))
+elif p.get("why") and p.get("why") != "you named this node":
+    sys.stderr.write("[k2 compute] pinned to %s: %s\n" % (p.get("node"), p.get("why")))
+# 0.46.7: tools on that node, the limits that can end it, the settings
+# .k2/compute.toml / --preset filled in, and the runners-up.
+def dur(s):
+    if s is None: return None
+    s = int(s)
+    return "%dh" % (s // 3600) if s >= 3600 and s % 3600 == 0 else ("%dm" % (s // 60) if s >= 60 and s % 60 == 0 else "%ds" % s)
+if v.get("toolsLine"):
+    sys.stderr.write("[k2 compute] tools on %s: %s\n" % (v["node"], v["toolsLine"]))
+lim = v.get("limits") or {}
+ends = []
+if lim.get("stallSecs"):
+    ends.append("ends after %s with no output (--stall-timeout)" % dur(lim["stallSecs"]))
+if lim.get("queueTimeoutSecs"):
+    ends.append("fails if not started within %s (--queue-timeout)" % dur(lim["queueTimeoutSecs"]))
+if lim.get("timeoutSecs"):
+    ends.append("stops after %s running (--timeout)" % dur(lim["timeoutSecs"]))
+if ends:
+    sys.stderr.write("[k2 compute] limits: %s\n" % " · ".join(ends))
+eff = v.get("effective") or {}
+parts = []
+for k in ("os", "arch", "mem", "cpus", "needs", "env", "timeout", "stall", "tier", "cache"):
+    e = eff.get(k)
+    if not isinstance(e, dict) or e.get("from") in (None, "flag"):
+        continue
+    val = e.get("value")
+    if isinstance(val, list): val = ", ".join(str(x) for x in val)
+    parts.append("%s %s (%s)" % (k, val, e["from"]))
+if parts:
+    src = eff.get("source") or ""
+    if eff.get("preset"): src += (", " if src else "") + "preset " + eff["preset"]
+    sys.stderr.write("[k2 compute] from %s: %s\n" % (src, "; ".join(parts)))
+hints = ((eff.get("env") or {}).get("cpuHints")) or {}
+if hints:
+    sys.stderr.write("[k2 compute] CPU hints: %s (the job'"'"'s CPUs; --env NAME=… overrides)\n" % " ".join("%s=%s" % kv for kv in hints.items()))
+rk = v.get("ranking") or []
+if len(rk) > 1:
+    def one(r):
+        s = r["node"] + " (" + r["state"]
+        if r.get("etaSecs") is not None: s += ", ~%s %s" % (dur(r["etaSecs"]), r.get("etaBasis"))
+        return s + ")"
+    sys.stderr.write("[k2 compute] ranking: %s\n" % " · ".join(one(r) for r in rk))
 print(json.dumps(v, indent=2))'
         exit 0
     fi
@@ -23052,9 +23152,9 @@ cmd_compute_test() {
             --needs|--need)
                 case "${2:-}" in *cargo-nextest*) has_nextest_need=1 ;; esac
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with)
+            --os|--arch|--label|--env|--secret|--cpus|--mem|--timeout|--sha|--workspace|--artifact|--artifacts|--queue-timeout|--retries|--stall-timeout|--tier|--why|--supersede|--submitter|--repo|--cache|--with|--preset|--tag|--same-node-as)
                 pass+=("$1" "${2:-}"); shift 2 ;;
-            --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical) pass+=("$1"); shift ;;
+            --detach|-d|--dirty|--exclusive|--raw|--json|--no-retry|--retry-interrupted|--no-source|--gate|--critical|--now|--plan) pass+=("$1"); shift ;;
             -*) echo "usage: unknown flag '$1' (k2 compute test --help)" >&2; exit 2 ;;
             *) if [ -z "$node" ]; then node="$1"; shift; else echo "usage: put nextest's own arguments after --" >&2; exit 2; fi ;;
         esac
@@ -23098,6 +23198,93 @@ print("\n".join(lines))' "${targs[@]+"${targs[@]}"}")" || exit 2
     fi
     run_args+=(--artifact 'target/nextest/**/*.xml')
     cmd_compute_run "${run_args[@]}" "${pass[@]+"${pass[@]}"}" -- sh -c "$script"
+}
+
+# k2 compute prewarm [--preset P | --needs …] [--os …] [--arch …] [--label k=v]
+# [--node N]... [--tag T] [--plan] [--wait] [--json] (0.46.7, CE-18): the
+# daemon submits one Batch `sh -c true` job with the needs to each granted
+# matching node where a need isn't ready, and reports the ready ones.
+cmd_compute_prewarm() {
+    local preset="" os="" arch="" tag="" workspace="" plan=0 wait=0 as_json=0
+    local -a needs=() nodes=() labels=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --preset) preset="${2:-}"; shift 2 ;;
+            --needs|--need) needs+=("${2:-}"); shift 2 ;;
+            --os) os="${2:-}"; shift 2 ;;
+            --arch) arch="${2:-}"; shift 2 ;;
+            --label) labels+=("${2:-}"); shift 2 ;;
+            --node) nodes+=("${2:-}"); shift 2 ;;
+            --tag) tag="${2:-}"; shift 2 ;;
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --plan|--dry-run) plan=1; shift ;;
+            --wait) wait=1; shift ;;
+            --json) as_json=1; shift ;;
+            *) echo "usage: k2 compute prewarm [--preset NAME | --needs rust@stable,cmake@3] [--os linux|macos] [--arch A] [--label k=v] [--node N]... [--tag T] [--plan] [--wait] [--json] (unknown '$1')" >&2; exit 2 ;;
+        esac
+    done
+    # No --preset or --needs: the needs come from .k2/compute.toml's
+    # [defaults] (the daemon says so when there are none).
+    if [ "$plan" = "1" ] && [ "$wait" = "1" ]; then
+        echo "usage: --plan submits nothing, so there is nothing to --wait for" >&2; exit 2
+    fi
+    local needs_json="" nodes_json="" labels_json="" repo_dir=""
+    if [ "${#needs[@]}" -gt 0 ]; then
+        needs_json="$(python3 -c '
+import json, sys
+out = []
+for a in sys.argv[1:]:
+    out += [x.strip() for x in a.split(",") if x.strip()]
+print(json.dumps(out))' "${needs[@]}")"
+    fi
+    [ "${#nodes[@]}" -gt 0 ] && nodes_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "${nodes[@]}")"
+    if [ "${#labels[@]}" -gt 0 ]; then
+        labels_json="$(python3 -c '
+import json, sys
+out = {}
+for l in sys.argv[1:]:
+    if "=" not in l:
+        sys.stderr.write("usage: --label key=value\n"); sys.exit(2)
+    k, v = l.split("=", 1); out[k] = v
+print(json.dumps(out))' "${labels[@]}")" || exit 2
+    fi
+    # The daemon reads .k2/compute.toml from this checkout (or the workspace).
+    _k2_git_usable && repo_dir="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    local body
+    body="$(_compute_json K2_CJ_preset="$preset" K2_CJ_needs_j="$needs_json" K2_CJ_os="$os" K2_CJ_arch="$arch" \
+        K2_CJ_labels_j="$labels_json" K2_CJ_nodes_j="$nodes_json" K2_CJ_tag="$tag" K2_CJ_plan_b="${plan#0}" \
+        K2_CJ_repoDir="$repo_dir" K2_CJ_workspace="$(_compute_ws "$workspace")")"
+    _compute_call POST /cli/compute/prewarm "$body"
+    if [ "$as_json" = "1" ] && [ "$wait" = "0" ]; then
+        printf '%s\n' "$_CP_BODY"; exit 0
+    fi
+    local ids
+    ids="$(printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+for r in v.get("nodes") or []:
+    st = r.get("state")
+    if st == "ready":
+        s = "ready already"
+    elif st == "installing":
+        s = "installing %s (job %s)" % (", ".join(r.get("installs") or []), r.get("short"))
+    elif st == "would_install":
+        s = "would install %s" % ", ".join(r.get("installs") or [])
+    else:
+        e = r.get("error") or {}
+        s = "refused: %s: %s" % (e.get("code"), e.get("hint"))
+    if r.get("note"): s += " · " + r["note"]
+    sys.stderr.write("[k2 compute] %s: %s\n" % (r.get("node"), s))
+if v.get("fits"): sys.stderr.write("[k2 compute] %s\n" % v["fits"])
+print(" ".join(v.get("jobs") or []))')"
+    if [ "$wait" = "1" ] && [ -n "$ids" ]; then
+        local -a wargs=()
+        read -r -a wargs <<< "$ids"
+        [ "$as_json" = "1" ] && wargs+=(--json)
+        cmd_compute_wait "${wargs[@]}"
+    fi
+    [ "$as_json" = "1" ] && printf '%s\n' "$_CP_BODY"
+    exit 0
 }
 
 # k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]:
@@ -24409,6 +24596,7 @@ cmd_compute() {
             ;;
         fetch) cmd_compute_fetch "$@" ;;
         test) cmd_compute_test "$@" ;;
+        prewarm) cmd_compute_prewarm "$@" ;;
         attach)
             local job="" since="" raw=0
             while [ $# -gt 0 ]; do

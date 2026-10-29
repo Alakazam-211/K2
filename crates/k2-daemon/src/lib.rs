@@ -503,6 +503,11 @@ pub mod test_harness {
         let local_addr = std_listener.local_addr().expect("local_addr");
         let port = local_addr.port();
         crate::publish_runtime::set_loopback_port(port);
+        // Windows has no per-cell socket: a K2 terminal reaches the daemon
+        // only over TCP, through the K2_PORT its spawn env carries (the
+        // daemon sets this at boot). Unix terminals use the cell socket.
+        #[cfg(windows)]
+        k2_core::hook_config::set_port(port);
         let daemon_port_reg = crate::splice_guard::register_daemon_port(port);
         k2_core::listen::set_lan_bound(local_addr.ip().is_unspecified());
         std_listener

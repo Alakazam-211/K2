@@ -82,7 +82,12 @@ fn setup() -> TestEnv {
         .expect("clock after epoch")
         .as_nanos();
     // Short: the per-cell socket path must fit SUN_LEN.
+    // Windows: "/tmp" has no drive there (unlike the cwd the PTY and the
+    // harness record), so it uses the temp folder.
+    #[cfg(not(windows))]
     let home = PathBuf::from(format!("/tmp/k2ta-{:x}", nanos % 0xffff_ffff));
+    #[cfg(windows)]
+    let home = std::env::temp_dir().join(format!("k2ta-{:x}", nanos % 0xffff_ffff));
     let shim_dir = home.join("shim");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
     for name in ["claude", "grok", "codex", "hermes", "cat"] {

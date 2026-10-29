@@ -82,7 +82,12 @@ fn setup() -> TestEnv {
         .expect("clock after epoch")
         .as_nanos();
     // Short: per-cell socket paths must fit SUN_LEN.
+    // Windows: "/tmp" has no drive there (unlike the cwd the PTY and the
+    // harness record), so it uses the temp folder.
+    #[cfg(not(windows))]
     let home = PathBuf::from(format!("/tmp/k2cp-{:x}", nanos % 0xffff_ffff));
+    #[cfg(windows)]
+    let home = std::env::temp_dir().join(format!("k2cp-{:x}", nanos % 0xffff_ffff));
     let shim_dir = home.join("shim");
     std::fs::create_dir_all(home.join(".k2")).expect("k2 home");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
@@ -167,6 +172,10 @@ fn wait_file_contains(path: &Path, needle: &str, secs: u64) -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn custom_preset_gets_a_thread_and_reports_its_lifecycle() {
     let env = setup();
+    // Windows has no per-cell socket: the program's `k2 hooks emit` reaches
+    // the daemon over TCP (K2_PORT in its spawn env), as on a real install.
+    #[cfg(windows)]
+    let _tcp = k2_daemon::test_harness::start("owner-token-custom-preset-win").await;
     let ws = seed_custom_ws(&env.home, "board-keeper");
 
     // (1) Before any launch (the field case right after the upgrade): the
@@ -194,14 +203,22 @@ async fn custom_preset_gets_a_thread_and_reports_its_lifecycle() {
     assert!(e2.contains("hooks emit: UserPromptSubmit accepted") && e2.contains("rc=0"), "{e2}");
     let status = k2_daemon::hook_ingest::status_json();
     let pane = &status["sessions"][&out.session_id];
-    assert_eq!(pane["owner"]["via"], "pty_child", "{status}");
+    // Unix proves the sender is the PTY child by process ancestry; Windows
+    // claims by conversation (agent_hooks::owner, OwnerCheckMode).
+    let via = if cfg!(windows) { "conversation" } else { "pty_child" };
+    assert_eq!(pane["owner"]["via"], via, "{status}");
     assert_eq!(pane["source"], "custom", "{status}");
     assert_eq!(pane["lastEvent"], "UserPromptSubmit", "{status}");
     assert_eq!(pane["counters"]["accepted"], 2, "{status}");
     assert_eq!(pane["counters"]["foreign"], 0, "{status}");
 
     // The same passport from a process OUTSIDE the PTY (this test) is not
-    // counted, and the CLI says so (exit 1).
+    // counted, and the CLI says so (exit 1). Unix only: it needs process
+    // ancestry. Windows claims by conversation, so there the session
+    // passport itself is the boundary (a known limit; ancestry through
+    // Git Bash's /proc/<pid>/winpid is the follow-up).
+    #[cfg(not(windows))]
+    {
     let token = k2_daemon::session_token::mint_session_token(
         &k2_core::session::SessionId::parse(&out.session_id).expect("session id"),
         &out.session_id,
@@ -231,6 +248,7 @@ async fn custom_preset_gets_a_thread_and_reports_its_lifecycle() {
     let status = k2_daemon::hook_ingest::status_json();
     assert_eq!(status["sessions"][&out.session_id]["counters"]["foreign"], 1, "{status}");
     assert_eq!(status["sessions"][&out.session_id]["lastEvent"], "UserPromptSubmit", "{status}");
+    }
 
     // (4) A Thread post reaches the program's stdin as the envelope, and
     // reads back on the same conversation.

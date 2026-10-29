@@ -128,6 +128,9 @@ export function SettingDropdown({
   disabled = false,
   ariaLabel,
   triggerLabel,
+  title,
+  compact = false,
+  triggerData,
 }: {
   value: string
   /** `group` starts a heading row when it differs from the previous
@@ -174,6 +177,13 @@ export function SettingDropdown({
   /** Fixed text on the closed trigger instead of the selected option's
    *  label (the open menu still marks the selected one). */
   triggerLabel?: string
+  /** Hover text on the trigger. */
+  title?: string
+  /** A toolbar-height trigger (h-6) that truncates inside the container's
+   *  max width (the Mobile toolbar). Omitted callers are unchanged. */
+  compact?: boolean
+  /** `data-*` attributes for the trigger button (tests, automation). */
+  triggerData?: Record<`data-${string}`, string>
 }): React.JSX.Element {
   const [isOpen, setIsOpen] = useState(false)
   const [menuBox, setMenuBox] = useState<{
@@ -272,7 +282,9 @@ export function SettingDropdown({
         onClick={toggleOpen}
         disabled={disabled}
         aria-label={ariaLabel}
-        className={`flex items-center gap-2 px-2 py-1 text-xs bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] transition-colors ${
+        title={title}
+        {...triggerData}
+        className={`flex items-center text-xs ${compact ? 'h-6 max-w-full gap-1 px-1.5' : 'gap-2 px-2 py-1'} bg-[var(--color-bg)] border border-[var(--color-border)] text-[var(--color-text-primary)] transition-colors ${
           disabled
             ? 'opacity-50 cursor-not-allowed'
             : 'hover:border-[var(--color-text-muted)] cursor-pointer'

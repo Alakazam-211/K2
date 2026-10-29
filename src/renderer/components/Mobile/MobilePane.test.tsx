@@ -161,6 +161,28 @@ function tool(name: string): HTMLButtonElement {
   return el
 }
 
+/** The toolbar's menus are K2 dropdowns: open one and read its item labels. */
+function openMenu(trigger: string): HTMLElement {
+  const el = document.querySelector(trigger) as HTMLButtonElement | null
+  if (!el) throw new Error(`no ${trigger} trigger`)
+  fireEvent.click(el)
+  const menu = document.querySelector('[data-testid="setting-dropdown-menu"]') as HTMLElement | null
+  if (!menu) throw new Error(`${trigger} did not open a menu`)
+  return menu
+}
+
+function menuLabels(trigger: string): string[] {
+  const labels = Array.from(openMenu(trigger).querySelectorAll('button')).map((b) => b.textContent ?? '')
+  fireEvent.click(document.querySelector(trigger) as HTMLElement)
+  return labels
+}
+
+function pickMenu(trigger: string, label: string): void {
+  const item = Array.from(openMenu(trigger).querySelectorAll('button')).find((b) => b.textContent === label)
+  if (!item) throw new Error(`no ${label} in ${trigger}`)
+  fireEvent.click(item)
+}
+
 beforeEach(() => {
   daemon.status = status()
   daemon.devices = { lane: 'android', devices: [PIXEL_9, PIXEL_8A] }
@@ -233,9 +255,8 @@ describe('no device running', () => {
     await flush()
     expect(document.querySelector('[data-mobile-blocked]')?.textContent).toBe('No device is running.')
     expect(document.querySelector('[data-mobile-start]')?.textContent).toBe('Start Pixel 9')
-    const chooser = document.querySelector('[data-mobile-device]') as HTMLSelectElement
-    expect(Array.from(chooser.options).map((o) => o.textContent)).toEqual(['Pixel 9', 'Pixel 8a'])
-    fireEvent.change(chooser, { target: { value: 'pixel_8a' } })
+    expect(menuLabels('[data-mobile-device]')).toEqual(['Pixel 9', 'Pixel 8a'])
+    pickMenu('[data-mobile-device]', 'Pixel 8a')
     expect(daemon.posts).toEqual([])
     await act(async () => {
       fireEvent.click(tool('boot'))
@@ -297,17 +318,11 @@ describe('no device running', () => {
     renderMobile(createStubSimStream())
     await flush()
     expect(document.querySelector('[data-mobile-iphone-note]')).toBeNull()
-    const picker = document.querySelector('[data-mobile-platform]') as HTMLSelectElement
-    expect(Array.from(picker.options).map((o) => [o.value, o.textContent])).toEqual([
-      ['android', 'Android'],
-      ['ios', 'iPhone'],
-    ])
-    await act(async () => {
-      fireEvent.change(picker, { target: { value: 'ios' } })
-    })
+    expect(menuLabels('[data-mobile-platform]')).toEqual(['Android', 'iPhone'])
+    pickMenu('[data-mobile-platform]', 'iPhone')
     await flush()
     expect(daemon.devicesAsked).toEqual(['android', 'ios'])
-    expect(Array.from((document.querySelector('[data-mobile-device]') as HTMLSelectElement).options).map((o) => o.textContent)).toEqual(['iPhone 16'])
+    expect(menuLabels('[data-mobile-device]')).toEqual(['iPhone 16'])
     await act(async () => {
       fireEvent.click(tool('boot'))
     })

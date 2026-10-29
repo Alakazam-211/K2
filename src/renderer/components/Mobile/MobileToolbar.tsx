@@ -16,6 +16,7 @@ import {
   PowerIcon,
   RotateIcon,
 } from '@/components/icons/K2Icons'
+import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
 import type { SimDeviceProfile, SimLaneId, SimPlatform, SimView } from './simApi'
 
 const PLATFORM_NAME: Record<SimPlatform, string> = { android: 'Android', ios: 'iPhone' }
@@ -110,36 +111,30 @@ export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
       data-testid="mobile-toolbar"
     >
       {props.platforms && props.platforms.length > 1 ? (
-        <select
-          aria-label="Platform"
-          className="h-6 cursor-pointer rounded-none border border-[var(--color-border)] bg-[var(--color-bg)] px-1 text-xs text-[var(--color-text)] disabled:cursor-default disabled:opacity-60"
+        <SettingDropdown
+          ariaLabel="Platform"
+          compact
+          menuAlign="left"
+          className="flex-shrink-0"
           value={props.platform ?? props.platforms[0]}
+          options={props.platforms.map((p) => ({ value: p, label: PLATFORM_NAME[p] }))}
           disabled={!canControl || busy || on}
-          onChange={(e) => props.onPlatform?.(e.target.value as SimPlatform)}
-          data-mobile-platform=""
-        >
-          {props.platforms.map((p) => (
-            <option key={p} value={p}>
-              {PLATFORM_NAME[p]}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => props.onPlatform?.(v as SimPlatform)}
+          triggerData={{ 'data-mobile-platform': '' }}
+        />
       ) : null}
-      <select
-        aria-label="Device"
-        className="h-6 min-w-0 max-w-[12rem] cursor-pointer rounded-none border border-[var(--color-border)] bg-[var(--color-bg)] px-1 text-xs text-[var(--color-text)] disabled:cursor-default disabled:opacity-60"
+      <SettingDropdown
+        ariaLabel="Device"
+        compact
+        menuAlign="left"
+        className="min-w-0 max-w-[12rem]"
         value={device}
+        options={choices.map((d) => ({ value: d.id, label: d.name }))}
+        placeholder={choices.length === 0 ? 'No devices' : undefined}
         disabled={!canControl || busy || changing || choices.length === 0}
-        onChange={(e) => props.onDevice(e.target.value)}
-        data-mobile-device=""
-      >
-        {choices.length === 0 ? <option value="">No devices</option> : null}
-        {choices.map((d) => (
-          <option key={d.id} value={d.id}>
-            {d.name}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => props.onDevice(v)}
+        triggerData={{ 'data-mobile-device': '' }}
+      />
       {canControl ? (
         <ToolButton
           label={on ? 'Stop the device' : 'Start the device'}
@@ -202,20 +197,16 @@ export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
       ) : null}
       <span className="flex-1" />
       {fps !== null ? (
-        <select
-          aria-label="Frame rate"
-          className="h-6 cursor-pointer rounded-none border border-[var(--color-border)] bg-[var(--color-bg)] px-1 text-xs text-[var(--color-text-secondary)]"
-          value={fps}
-          onChange={(e) => props.onFps(Number(e.target.value))}
+        <SettingDropdown
+          ariaLabel="Frame rate"
+          compact
+          className="flex-shrink-0"
+          value={String(fps)}
+          options={REMOTE_FPS_CHOICES.map((n) => ({ value: String(n), label: `${n} fps` }))}
+          onChange={(v) => props.onFps(Number(v))}
           title="Frames per second over Connect"
-          data-mobile-fps=""
-        >
-          {REMOTE_FPS_CHOICES.map((n) => (
-            <option key={n} value={n}>
-              {n} fps
-            </option>
-          ))}
-        </select>
+          triggerData={{ 'data-mobile-fps': '' }}
+        />
       ) : null}
       {!canControl ? (
         <span className="flex-shrink-0 text-[var(--color-text-muted)]" data-mobile-watching="" title="You can watch this device; your login can't control it">

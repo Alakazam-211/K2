@@ -436,8 +436,9 @@ fn a_pull_reaches_a_new_host_and_an_old_one_says_not_supported() {
     host.lock().supports_pull = true;
     assert_eq!(c.pull_version(ID, "1.0.0").expect("new host"), dl_client::Pulled::Done);
     assert_eq!(host.lock().pulled, vec![(ID.to_string(), "1.0.0".to_string())]);
+    // Another id with this App's token: the host's 403 wrong_app.
     match c.pull_version("dev.k2.box.other", "1.0.0") {
-        Err(DlError::Refused { status: 401, .. }) => {}
+        Err(DlError::Refused { status: 403, ref code, .. }) if code == "wrong_app" => {}
         other => panic!("{other:?}"),
     }
 }

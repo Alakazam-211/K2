@@ -70,9 +70,12 @@ echo "sudo $*" >> "$STUB_LOG"
 [ "${STUB_RESTART_FAIL:-0}" = "1" ] && exit 1
 exit 0
 EOF
+# minisign "verifies" and, like `minisign -V -Q`, prints the signed trusted
+# comment: this asset and version (k2 daemon install checks both).
 cat > "$STUBS/minisign" <<'EOF'
 #!/usr/bin/env bash
 echo "minisign $*" >> "$STUB_LOG"
+printf 'timestamp:1\tfile:k2-daemon-linux-x86_64\tversion:0.46.6\n'
 exit 0
 EOF
 chmod +x "$STUBS"/*
@@ -86,15 +89,19 @@ if command -v sha256sum >/dev/null 2>&1; then
 else
     SHA="$(shasum -a 256 "$FIX/k2-daemon-linux-x86_64" | awk '{print $1}')"
 fi
+# A 0.46.6+ manifest: k2 daemon install reads only `sig2` (the update keys,
+# prehashed "RUQ…"); `sig` is the retired key's, for older installs.
 printf 'untrusted comment: test signature\nRWQ-test\n' > "$FIX/k2-daemon.sig"
+printf 'untrusted comment: test signature\nRUQ-test\n' > "$FIX/k2-daemon.sig2"
 cat > "$FIX/daemon-latest.json" <<EOF
 {
-  "version": "0.46.4",
+  "version": "0.46.6",
   "platforms": {
     "linux-x86_64": {
       "url": "file://$FIX/k2-daemon-linux-x86_64",
       "sig": "file://$FIX/k2-daemon.sig",
-      "sha256": "$SHA"
+      "sha256": "$SHA",
+      "sig2": "file://$FIX/k2-daemon.sig2"
     }
   }
 }

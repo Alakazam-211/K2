@@ -528,7 +528,7 @@ export function PeopleSection(): React.JSX.Element {
                       </span>
                     ) : null}
                     {row.lockedUntil ? (
-                      <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-error)]/15 text-[var(--color-text-secondary)]">
+                      <span title="Locked after too many wrong passwords" className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-error)]/15 text-[var(--color-text-secondary)]">
                         Locked
                       </span>
                     ) : null}

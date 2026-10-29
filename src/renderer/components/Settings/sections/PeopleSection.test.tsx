@@ -235,7 +235,7 @@ describe('PeopleSection', () => {
     fireEvent.click(screen.getByRole('radio', { name: /Email them the link/ }))
     const to = screen.getByLabelText('Email for tina') as HTMLInputElement
     expect(to.value).toBe('')
-    expect(dialog.textContent).toContain('K2 won’t use the email on file (tina@example.test)')
+    expect(dialog.textContent).toContain('The email on file (tina@example.test) may have been entered by an agent')
     fireEvent.change(to, { target: { value: 'tina@home.test' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send link' }))
     await waitFor(() => {
@@ -342,14 +342,14 @@ describe('PeopleSection', () => {
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/password', { username: 'ada', password: 'typed-test-password' })
     })
-    expect(await screen.findByText('Password set. ada is signed out everywhere.')).toBeTruthy()
+    expect(await screen.findByText(/Password set. Give it to ada yourself./)).toBeTruthy()
     expect(screen.queryByTestId('one-time-secret')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
 
     h.daemonCliPost.mockResolvedValue({ username: 'ada', hasPassword: true, generatedPassword: 'Test1-Only2-Fake3-Value' })
     fireEvent.click(screen.getByRole('button', { name: 'Password actions for ada' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Set password…' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Generate one and sign them out' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Generate a password and set it' }))
     await waitFor(() => {
       expect(h.daemonCliPost).toHaveBeenCalledWith('skin/users/password', { username: 'ada', generate: true })
     })
@@ -368,7 +368,7 @@ describe('PeopleSection', () => {
     render(<PeopleSection />)
     fireEvent.click(await screen.findByRole('button', { name: 'Password actions for tina' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Set password…' }))
-    expect(screen.getByTestId('set-password-dialog').textContent).toContain('doesn’t remove that agent’s hold')
+    expect(screen.getByTestId('set-password-dialog').textContent).toContain('doesn’t lift that limit')
     fireEvent.click(screen.getByRole('button', { name: 'Reset password instead…' }))
     expect(screen.queryByTestId('set-password-dialog')).toBeNull()
     expect(screen.getByTestId('reset-password-dialog')).toBeTruthy()

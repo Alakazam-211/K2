@@ -148,8 +148,8 @@ function ErrorLine({ text }: { text: string | null }): React.JSX.Element | null 
 function tieLine(person: PersonRow): string | null {
   if (!person.tiedTo) return null
   return person.pendingReset
-    ? `${person.tiedTo}’s agent set ${person.username} up. The extra access you gave them starts only after they reset their password with a link from you.`
-    : `${person.tiedTo}’s agent set ${person.username} up. A reset link from you, once they use it, removes that agent’s hold on them.`
+    ? `${person.tiedTo}’s agent set ${person.username} up, so the extra access you gave them starts only after they use a reset link from you.`
+    : `${person.tiedTo}’s agent set ${person.username} up, so their access is limited to what ${person.tiedTo} gives. A reset link from you, once they use it, lifts that limit.`
 }
 
 type ResetResult =
@@ -216,7 +216,7 @@ export function ResetPasswordDialog({
             />
           ) : result.kind === 'code' ? (
             <OneTimeSecret
-              label={`This server has no web address yet, so there is no link: give ${person.username} this one-time code instead.`}
+              label={`This server has no public web address yet, so there’s no link: give ${person.username} this one-time code instead.`}
               value={result.value}
               expiry={result.expiry}
               copyLabel="Copy reset code"
@@ -238,15 +238,15 @@ export function ResetPasswordDialog({
       ) : (
         <>
           <p className={NOTE}>
-            {person.username} chooses a new password on K2’s own page. When they do, they are signed out
-            everywhere and any lock from wrong passwords is cleared.
+            When {person.username} uses the link, they choose a new password on a K2 page (not inside the App).
+            Then they’re signed out of every App and device, and any lock from wrong passwords clears.
           </p>
           {tie ? <p className={NOTE}>{tie}</p> : null}
           <div role="radiogroup" aria-label="How to reset" className="space-y-1.5">
             <label className="flex items-start gap-2 text-xs text-[var(--color-text-primary)] cursor-pointer">
               <SquareRadio name="reset-mode" checked={mode === 'link'} onChange={() => setMode('link')} />
               <span>
-                Get a one-time link (recommended)
+                Get a one-time link (recommended: no email involved)
                 <span className={`block ${MUTED}`}>You give it to them yourself. K2 shows it once.</span>
               </span>
             </label>
@@ -262,8 +262,8 @@ export function ResetPasswordDialog({
             <div className="space-y-2">
               {person.email && !storedOk ? (
                 <p className={MUTED}>
-                  K2 won’t use the email on file ({person.email}): an agent could have set it. Enter an address you
-                  know is theirs.
+                  The email on file ({person.email}) may have been entered by an agent, so K2 won’t send a reset
+                  there. Enter an address you know is theirs.
                 </p>
               ) : null}
               <label className="block space-y-1">
@@ -281,7 +281,8 @@ export function ResetPasswordDialog({
               </label>
               <label className="block space-y-1">
                 <span className={MUTED}>
-                  Send from (optional). Use an address no agent reads, so no agent can see the link.
+                  Send from (optional): the address the email comes from. Pick one no agent can read, so no agent
+                  sees the link. Leave it blank to use K2’s own sender, if this server has one.
                 </span>
                 <input
                   type="email"
@@ -367,7 +368,9 @@ export function SetPasswordDialog({
               copyLabel="Copy password"
             />
           ) : (
-            <p className={NOTE}>Password set. {person.username} is signed out everywhere.</p>
+            <p className={NOTE}>
+              Password set. Give it to {person.username} yourself. They’re signed out of every App and device.
+            </p>
           )}
           <div className="flex justify-end">
             <button type="button" className={BTN_PRIMARY} onClick={onClose}>
@@ -383,8 +386,8 @@ export function SetPasswordDialog({
           </p>
           {person.tiedTo ? (
             <p className={NOTE}>
-              {person.tiedTo}’s agent set {person.username} up. Setting a password here doesn’t remove that
-              agent’s hold on them; a reset link they use does.{' '}
+              {person.tiedTo}’s agent set {person.username} up, so their access is limited to what {person.tiedTo}{' '}
+              gives. Setting a password here doesn’t lift that limit; only a reset link they use does.{' '}
               <button type="button" className={LINK_BTN} onClick={onReset}>
                 Reset password instead…
               </button>
@@ -416,7 +419,7 @@ export function SetPasswordDialog({
                 Cancel
               </button>
               <button type="button" className={BTN_PLAIN} disabled={busy} onClick={() => void submit(true)}>
-                Generate one and sign them out
+                Generate a password and set it
               </button>
               <button type="submit" className={BTN_PRIMARY} disabled={busy || !password.trim()}>
                 Set password and sign them out
@@ -557,7 +560,7 @@ export function AddUserDialog({
           />
         </label>
         <label className="block space-y-1">
-          <span className={MUTED}>Full name</span>
+          <span className={MUTED}>Full name (optional)</span>
           <input className={FIELD_CLS} aria-label="New user’s full name" value={fullName} onChange={(e) => setFullName(e.target.value)} />
         </label>
         <label className="block space-y-1">
@@ -628,7 +631,7 @@ export function AddUserDialog({
               </select>
             </label>
             <label className="block space-y-1">
-              <span className={MUTED}>Role (optional)</span>
+              <span className={MUTED}>Role in this App (optional)</span>
               <select className={FIELD_CLS} aria-label="Role in the App" value={role} onChange={(e) => setRole(e.target.value)}>
                 <option value="">No role</option>
                 {appRoles.map((r) => (
@@ -639,7 +642,9 @@ export function AddUserDialog({
               </select>
             </label>
             <label className="block space-y-1">
-              <span className={MUTED}>Send from (optional): one of the App’s email addresses</span>
+              <span className={MUTED}>
+                Send from (optional): a sender address set up for this App. Leave it blank to use the App’s default.
+              </span>
               <input
                 type="email"
                 className={FIELD_CLS}
@@ -676,7 +681,7 @@ export function AddedUserDialog({ added, onClose }: { added: AddedUser; onClose:
           label={
             added.secret.kind === 'password'
               ? `${added.username}’s password. Give it to them yourself.`
-              : `There’s no way to email from this App yet, so give ${added.username} this link yourself. It works once: they open it and choose their password.`
+              : `K2 couldn’t email this link, so give it to ${added.username} yourself. It works once: they open it and choose their password.`
           }
           value={added.secret.value}
           expiry={added.secret.expiry}

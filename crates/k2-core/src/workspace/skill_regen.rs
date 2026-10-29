@@ -669,15 +669,18 @@ Run `k2 heartbeat --help` for the full surface.
 Builds and tests on your owner's other machines. Read `k2 study compute` first.
 ```
 k2 compute nodes                                       # what you may use, and who is on the critical path
-k2 compute run <node> --mem 24G --dirty -- cargo nextest run -p <crate>   # your uncommitted work too; no commit needed
-k2 compute run <node> --mem 8G --wait -- <command>     # prints the id, then streams; exits with its code
-k2 compute run --any --mem 8G --detach -- <command>    # any granted node; prints a job id
-k2 compute run <node> --repo <dir> --with <sibling> --dirty -- <command>   # multi-repo workspace; siblings side by side
-k2 compute run <node> --cache <name> -- <command>      # $K2_JOB_CACHE survives between runs on that node
-k2 compute run <node> --priority --why "<what waits on it>" -- <command>   # only when you are the critical path
-k2 compute run <node> --tier batch --mem 24G -- <command>   # overnight/soak: starts when the node is idle
+k2 compute run --mem 24G --dirty -- cargo nextest run -p <crate>   # K2 picks the node; your uncommitted work too
+k2 compute run --mem 8G --wait -- <command>            # prints the id, then streams; exits with its code
+k2 compute run --mem 8G --detach -- <command>          # prints a job id
+k2 compute run --os macos --mem 8G -- <command>        # macOS only (an Xcode build)
+k2 compute run --repo <dir> --with <sibling> --dirty -- <command>   # multi-repo workspace; siblings side by side
+k2 compute run <node> --cache <name> -- <command>      # pinned: $K2_JOB_CACHE survives between runs on that node
+k2 compute run --priority --why "<what waits on it>" -- <command>   # only when you are the critical path
+k2 compute run --tier batch --mem 24G -- <command>     # overnight/soak: starts when a node is idle
 k2 compute wait <job> --follow | logs <job> --failures | get <job> | queue <node>
 ```
+**Don't name a node** unless you must pin one: K2 picks a granted node that can start the job now (a warm one if it isn't busier), else the shortest wait, and prints `placed on <node> (auto): <why>`.
+
 **Always pass `--mem`** with what the job needs: without it the job reserves 4 GB and is stopped above it.
 
 **Priority = the critical path.** Use `--tier priority` only when one result is blocking others (the next builder, an integration pass, a release). One submitter on this server at a time: if `k2 compute nodes` shows someone else on the critical path, use Normal unless the coordinator named you. Priority is optional: if work is independent, leave everything Normal. It all still runs, in parallel, just more slowly.
@@ -2178,6 +2181,13 @@ mod tests {
         for flag in ["Always pass `--mem`", "--priority --why", "--tier batch", "--wait -- <command>", "--submitter <name>"] {
             assert!(body.contains(flag), "k2-cli skill's Compute nodes block must show {flag}");
         }
+        // 0.46.6 auto-placement (SKILL_VERSION_WORKSPACE 42→43): no node
+        // named, K2 picks and says why; --any is no longer taught; one
+        // pinned example (--cache) stays.
+        for want in ["**Don't name a node**", "placed on <node> (auto)", "k2 compute run --mem 24G --dirty", "--os macos", "k2 compute run <node> --cache"] {
+            assert!(body.contains(want), "k2-cli skill's Compute nodes block must show {want}");
+        }
+        assert!(!body.contains("--any"), "k2-cli skill no longer teaches --any");
         // W6 (0.40.30): the agent-preset surface + custom-agent contract
         // pointer (SKILL_VERSION_WORKSPACE bumped 7→8 for this section).
         assert!(

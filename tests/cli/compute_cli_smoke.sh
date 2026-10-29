@@ -145,8 +145,44 @@ k2 compute run mini --workspace "$WS" -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e
 # The owner token may run without a grant; agents can't (headless test).
 expect_eq "owner run works before a grant" "$rc" "0"
+# Auto-placement (0.46.6, D1): no node named uses granted nodes only, the
+# owner's runs too.
+set +e
+k2 compute run --no-source -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "no node and no grant: exit 3" "$rc" "3"
+expect_has "no_node_fits says no node is granted" "$(cat "$SANDBOX/err")" "no compute node is granted to workspace"
 out="$(k2 compute grant mini --workspace "$WS" --max-parallel 2)"
 expect_has "granted" "$out" "granted mini"
+set +e
+k2 compute run --no-source -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "run with no node named exits with the job's code" "$rc" "0"
+expect_has "it prints where K2 placed it and why" "$(cat "$SANDBOX/err")" "[k2 compute] placed on mini (auto): starts now · idle · "
+expect_has "and how many nodes fit" "$(cat "$SANDBOX/err")" " · 1 node fits"
+set +e
+k2 compute run mini --no-source -- true >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+case "$(cat "$SANDBOX/err")" in *"placed on"*) bad "a pinned run prints no placement line" ;; *) ok "a pinned run prints no placement line" ;; esac
+JP="$(k2 compute run --any --no-source --detach -- true 2>/dev/null)"
+jp="$(curl -sf "http://127.0.0.1:$PORT/cli/compute/jobs/get?job=$JP&token=$OWNER_TOKEN")"
+expect_eq "--any = auto: the job record says so" "$(printf '%s' "$jp" | python3 -c 'import json,sys; p=json.load(sys.stdin)["placement"]; print(p["mode"], p["node"], p["policy"])')" "auto mini v2"
+for _ in $(seq 1 100); do
+    k2 compute get "$JP" | grep -q ": done" && break
+    sleep 0.2
+done
+expect_has "get shows the placement" "$(k2 compute get "$JP")" "placed on mini (auto, v2): starts now"
+plan_err="$(k2 compute run --plan --no-source -- true 2>&1 >/dev/null)"
+expect_has "--plan says where it would go" "$plan_err" "[k2 compute] would place on mini (auto): starts now"
+expect_has "placement status (v2 by default)" "$(k2 compute placement status)" "Compute placement: v2 on this server"
+expect_has "placement v1" "$(k2 compute placement v1)" "Compute placement: v1 on this server"
+expect_has "placement back to v2" "$(k2 compute placement v2)" "Compute placement: v2"
+set +e
+k2 compute placement v3 >/dev/null 2>&1; rc=$?
+set -e
+expect_eq "placement v3 is a usage error" "$rc" "2"
+expect_has "--help: no node, K2 picks" "$(k2 compute --help)" "No node: K2 picks one of the nodes granted to you"
+expect_has "study compute: WHERE IT RUNS" "$(k2 study compute)" "WHERE IT RUNS (0.46.6)"
 out="$(k2 compute nodes)"
 expect_has "nodes shows unreserved CPU" "$out" "unreserved"
 expect_has "nodes shows this workspace's grant in human units" "$out" "grant 2h/job 2 parallel 10 queued"

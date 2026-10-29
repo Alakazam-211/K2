@@ -52,10 +52,11 @@ THE QUEUE (the node decides, one queue for every server)
   per-job limits is refused at submit (exit 3).
 
 YOUR JOBS
-  Same verbs as ever: run, --any, --shards, test, wait, logs, cancel.
-  Named runs go into the node's queue at once. --any waits up to 60 s on
-  this server for a node that can start it now, then goes to the node with
-  the lowest ETA. It may move later, but only after the node confirms the
+  Same verbs as ever: run, --shards, test, wait, logs, cancel.
+  Named runs go into the node's queue at once. A run with no node named
+  (K2 places it; --any is the same) waits up to 60 s on this server for a
+  node that can start it now, then goes to the node with the lowest ETA.
+  It may move later, but only after the node confirms the
   job hadn't started (never more than twice). Your server's queued jobs
   start only while it's connected; running ones carry on regardless.
   cancel without --force on a queued job: it ends cancelled, or keeps

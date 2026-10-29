@@ -21590,7 +21590,11 @@ Agents:
                  long-runners need node reporting, which nodes don't send yet.
                  (k2 compute status <job> is get)
   k2 compute info <node> [--json]
-  k2 compute run <node>|--any [--os linux] [--arch x86_64] [--label k=v]
+  k2 compute run [<node>] [--os linux|macos] [--arch x86_64] [--label k=v]
+                 No node: K2 picks one of the nodes granted to you that can
+                 start the job now (a warm one if it isn't busier), else the
+                 one with the shortest wait, and prints where and why
+                 ("placed on …"). Name a node only to pin the job there.
                  [--detach] [--sha REV] [--no-source]
                  [--dirty]      ship your uncommitted changes too (no commit needed;
                                 HEAD + the diff + untracked, not-ignored files;
@@ -21643,7 +21647,8 @@ Agents:
                                 48h --tier batch. Stall: a job that prints nothing
                                 that long ends; use --stall-timeout off for a job
                                 that goes quiet (a soak)
-                 [--shards N]   (with --any: N jobs, {shard}/{shards} in the command)
+                 [--shards N]   N jobs, {shard}/{shards} in the command, each on its
+                                own node when it can (no node named)
                  Which line (queue order only; never stops a running job; k2 study compute: TIERS)?
                       (no flag)  Standard: a normal build or test
                       --priority --why "<one line>"
@@ -21663,14 +21668,14 @@ Agents:
                  [--supersede KEY]   cancel your older QUEUED jobs with the same KEY (never a running one)
                  [--submitter NAME]  your own turn in the queue (builders sharing a session: pass it),
                                 the per-submitter cap, and the views (not security)
-                 [--plan]     dry run: the node it would pick, queue, warm slot,
-                                estimate from earlier runs, grant left (JSON)
+                 [--plan]     dry run: the node it would pick and why, queue, warm
+                                slot, estimate from earlier runs, grant left (JSON)
                  [--needs node@22,python@3.12,rust@stable,cargo-nextest,cmake@3,sys:pkg-config]
                  (tools: node python go java bun deno zig cmake ninja protoc uv pnpm,
                   rust@<ch>, cargo-nextest, sys:<pkg>, or aqua:owner/repo@v;
                   anything else is refused: tool_unsupported, exit 2)
                  -- <command…>
-  k2 compute test [<node>|--any] [--shards N] [run flags] [-- <nextest args>]
+  k2 compute test [<node>] [--shards N] [run flags] [-- <nextest args>]
                  a cargo-nextest suite split across nodes (nextest --partition),
                  JUnit kept and parsed, one combined result; --profile P to use
                  the repo's own nextest profile, --runner to replace cargo nextest run
@@ -21718,6 +21723,9 @@ Agents:
 Owner / admin (refused for agents and inside K2 terminals, except where
 "Allow managing compute nodes" is on for that agent: see k2 compute manage):
   k2 compute preview on|off|status             turn the preview on for this server (owner)
+  k2 compute placement v1|v2|status           how K2 ranks nodes when no node is
+                   named (owner): v2 (default) = load first, a warm slot worth
+                   one load step, bursts spread; v1 = the 0.46.5 order
   k2 compute node add <name> [--url URL] [--json]   mint a 10-minute enroll code (CODE.FP);
                    --json: {code, expiresAt, name, controller} for scripts
   k2 compute node confirm <name> <code>        the 6 digits the node shows
@@ -21851,9 +21859,10 @@ This computer (its owner):
 
 Never stuck: a job that can't start within --queue-timeout (default 2h
 attached or --wait, 24h --detach, 48h --tier batch) fails with queue_timeout, naming the last
-thing it waited on; --any jobs move off a node
+thing it waited on; jobs K2 placed (no node named) move off a node
 that sleeps or is paused; infrastructure failures (node lost, sync, spawn)
-retry --retries times (default 1) with backoff, on another node when --any.
+retry --retries times (default 1) with backoff, on another node when K2
+placed the job.
 A job that prints nothing for --stall-timeout (default 30m) ends as
 timeout/stalled. A non-zero exit, a timeout, a stall or a cancel is a
 result and never retried.
@@ -22172,6 +22181,12 @@ elif verb == "get":
     if j.get("secrets"):
         # Secret-env: the env names it gets from the vault, never values.
         print("  secrets (env names): %s" % ", ".join(j["secrets"]))
+    pl = j.get("placement") or ctl.get("placement") or {}
+    if pl.get("mode") == "auto":
+        # Auto-placement (0.46.6): where K2 put it and why (a move says so).
+        code = pl.get("code") or ""
+        how = ("moved: " + code[len("moved_"):]) if code.startswith("moved_") else "auto"
+        print("  placed on %s (%s, %s): %s%s" % (pl.get("node"), how, pl.get("policy"), pl.get("why"), (" · " + pl["fits"]) if pl.get("fits") else ""))
     print("  commit: %s  tree: %s" % (j.get("srcCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
     if j.get("queue") and j["queue"].get("onNode"):
@@ -22578,18 +22593,18 @@ sys.exit(0 if ok else 1)'; then
             -*) echo "usage: unknown flag '$1' (k2 compute --help)" >&2; exit 2 ;;
             *)
                 if [ -z "$node" ] && [ "$any" = "0" ]; then node="$1"; shift
-                else echo "usage: put the command after --: k2 compute run <node> -- <command…>" >&2; exit 2
+                else echo "usage: put the command after --: k2 compute run [<node>] -- <command…>" >&2; exit 2
                 fi ;;
         esac
     done
     if [ $# -eq 0 ]; then
-        echo "usage: k2 compute run <node>|--any [flags] -- <command…>" >&2
+        echo "usage: k2 compute run [<node>] [flags] -- <command…>  (no node: K2 picks one)" >&2
         exit 2
     fi
-    if [ -z "$node" ] && [ "$any" = "0" ]; then
-        echo "usage: name a node or pass --any (k2 compute nodes)" >&2
-        exit 2
-    fi
+    # No node named: K2 picks a granted node (auto-placement, 0.46.6).
+    # `any` rides in the body so an older daemon still accepts it; --any
+    # is the same thing, kept for scripts.
+    [ -z "$node" ] && any=1
     if [ "$wait" = "1" ] && [ "$detach" = "1" ]; then
         echo "usage: --wait and --detach don't mix (--wait blocks until the end; --detach returns at once)" >&2
         exit 2
@@ -22729,6 +22744,9 @@ line += (" · ~%s (p90 %s, %d runs: %s)" % (d(e["medianSecs"]), d(e["p90Secs"]),
 for w in v.get("warnings") or []:
     sys.stderr.write("[k2 compute] note: %s\n" % w)
 sys.stderr.write(line + "\n")
+p = v.get("placement") or {}
+if p.get("mode") == "auto":
+    sys.stderr.write("[k2 compute] would place on %s (auto): %s%s\n" % (p.get("node"), p.get("why"), (" · " + p["fits"]) if p.get("fits") else ""))
 print(json.dumps(v, indent=2))'
         exit 0
     fi
@@ -22768,10 +22786,20 @@ if isinstance(src, dict):
     if isinstance(d, dict):
         s += " +dirty (%s changed, %s untracked)" % (d.get("changed"), d.get("untracked"))
     sys.stderr.write(s + "\n")
-print(j["id"] + "\t" + ("set" if v.get("shards") else "one") + "\t" + line)')"
+# Auto-placement (0.46.6): where K2 put it and why, one line. A pinned job
+# (a node named) prints none.
+p = v.get("placement") or j.get("placement") or {}
+placed = ""
+if p.get("mode") == "auto":
+    placed = "[k2 compute] placed on %s (auto): %s" % (p.get("node"), p.get("why"))
+    if p.get("fits"): placed += " · " + p["fits"]
+clean = lambda x: x.replace("\t", " ").replace("\n", " ")
+print(j["id"] + "\t" + ("set" if v.get("shards") else "one") + "\t" + clean(line) + "\t" + clean(placed))')"
     local job_id="${info%%$'\t'*}" rest="${info#*$'\t'}"
-    local kind="${rest%%$'\t'*}" line="${rest#*$'\t'}"
+    local kind="${rest%%$'\t'*}" rest2="${rest#*$'\t'}"
+    local line="${rest2%%$'\t'*}" placed="${rest2#*$'\t'}"
     echo "$line" >&2
+    if [ -n "$placed" ]; then echo "$placed" >&2; fi
     if [ "$detach" = "1" ]; then
         if [ "$as_json" = "1" ]; then
             _compute_print_result "$job_id"
@@ -22950,7 +22978,7 @@ print("|".join(["1" if term else "0", s(v.get("state")), s(r.get("exit")), s(r.g
     done
 }
 
-# k2 compute test [<node>|--any] [--shards N] [--partition hash|count]
+# k2 compute test [<node>] [--shards N] [--partition hash|count]
 #   [--profile P] [--runner "cargo nextest run"] [run flags] [-- nextest args]
 # One command for a cargo-nextest suite: a nextest partition per shard,
 # JUnit kept and parsed, one combined pass/fail.
@@ -22978,7 +23006,7 @@ cmd_compute_test() {
     case "$nshards" in ''|*[!0-9]*) echo "usage: --shards N (1–16)" >&2; exit 2 ;; esac
     case "$partition" in hash|count) ;; *) echo "usage: --partition hash|count" >&2; exit 2 ;; esac
     if [ "$nshards" -gt 1 ] && [ -n "$node" ]; then
-        echo "usage: --shards runs on --any (each shard takes whichever node is free); drop the node name" >&2
+        echo "usage: --shards picks a node for each shard itself (no node: K2 picks); drop the node name" >&2
         exit 2
     fi
     [ -z "$node" ] && any=1
@@ -24435,6 +24463,22 @@ else: print(v.get("state", "ok"))'
                 *) echo "usage: k2 compute preview on|off|status" >&2; exit 2 ;;
             esac
             printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; v=json.load(sys.stdin); print("Compute nodes (preview): %s on this server" % ("on" if v.get("computePreview") else "off"))'
+            ;;
+        placement)
+            # How auto-placement ranks nodes (0.46.6, `computePlacement`):
+            # v2 (default) or v1 (the 0.46.5 order). The owner's switch,
+            # like preview: a plain terminal, not a K2 tab.
+            local action="${1:-status}"
+            case "$action" in
+                v1|v2) _compute_call POST /cli/settings/update "{\"computePlacement\":\"$action\"}" tcp ;;
+                status) _compute_call GET /cli/settings/get "" tcp ;;
+                *) echo "usage: k2 compute placement v1|v2|status" >&2; exit 2 ;;
+            esac
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+p = json.load(sys.stdin).get("computePlacement") or "v2"
+what = {"v2": "load bands, a warm slot worth one band, bursts spread", "v1": "the 0.46.5 order: warm slot first, then free CPU"}.get(p, p)
+print("Compute placement: %s on this server (%s)" % (p, what))'
             ;;
         access)
             local action="${1:-status}" workspace="" all=""
@@ -45075,10 +45119,29 @@ k2 study compute — run builds and tests on your owner's other machines
 
 WHEN
   Slow builds/tests, or another OS/arch:
-    k2 compute run <node> --dirty -- cargo nextest run -p k2-core
+    k2 compute run --mem 24G --dirty -- cargo nextest run -p k2-core
+  (the tools it needs go in --needs: MEMORY below has a whole K2 line)
   --dirty sends your uncommitted changes too: no commit needed to check
   work in progress. Iterate there, not on this machine.
   Not for work that needs your logins, keychain or this machine's files.
+
+WHERE IT RUNS (0.46.6)
+  Don't name a node: K2 picks one. It looks at every node granted to you
+  (this server's and nodes other servers share with it), keeps the ones
+  that can run the job (online, your grant, --os/--arch/--label, --needs,
+  room for --mem/--cpus, --timeout within the grant), and picks one that
+  starts it now: a warm one (it built this repo before) unless it is
+  busier, else the least loaded. A burst of jobs spreads across nodes.
+  Nothing free: it queues where the wait looks shortest and moves if
+  another node frees up first. Every run (attached, --wait or --detach)
+  prints where and why, right after its job line:
+    [k2 compute] placed on k2n10-vin (auto): starts now · warm slot (this commit) · 46/110 GB, 8/12 CPUs free · 6 nodes fit, 2 skipped (1 offline, 1 too small for --mem 24G)
+  k2 compute get <job> shows the same line later; --plan shows it first.
+  macOS only (an Xcode build): --os macos. A Linux box: --os linux.
+  Name a node only to pin the job there (k2 compute run k2n2-m1 -- …).
+  --any is the same as naming no node (kept for scripts).
+  No node fits: no_node_fits (exit 3) with the counts (2 too small for
+  --mem 24G, 1 offline, …). You only ever see nodes granted to you.
 
 FIRST
   k2 compute nodes      what this workspace may use, and why one waits.
@@ -45096,10 +45159,9 @@ RUN
   new session: k2 compute jobs --mine (or --state done), then get/logs.
   Failing test names come back from JUnit: run cargo nextest (or
   k2 compute test, which adds it); plain cargo test gives the log lines.
-  --any: whichever granted node fits (warm slot first, then free CPU).
   Longer than your shell tool's timeout? Use --detach. (If an attached
   run gets killed, the job keeps going and you still get that line.)
-  WAIT: k2 compute run <node> --wait -- cargo test prints the job id,
+  WAIT: k2 compute run --wait -- cargo test prints the job id,
   then where it waits ("queued on k2n9-vin: 2 of 5 — why"), then streams
   the job's output and exits with the job's exit code (0.46.6).
   --wait --quiet: no output, only the wait lines and the exit code.
@@ -45124,13 +45186,13 @@ RUN
 REPOS (0.46.6)
   The code is your workspace's repo, or the worktree you run from. A
   workspace whose folder isn't a repo (several repos side by side):
-    k2 compute run <node> --repo k2-multiplayer-base --dirty -- cargo test
+    k2 compute run --repo k2-multiplayer-base --dirty -- cargo test
   --repo DIR: a git repo inside the workspace, or a worktree of one (its
   own HEAD). Run from inside one and K2 picks it for you. Never a folder
   outside the workspace, through a link, or in .k2/ (repo_invalid, exit 2).
   Path dependencies on a sibling repo: ship it too, laid out as in the
   workspace, so ../k2-multiplayer-base works:
-    k2 compute run <node> --repo k2-multiplayer-markdown \
+    k2 compute run --repo k2-multiplayer-markdown \
         --with k2-multiplayer-base --dirty -- cargo test
   --with DIR[@SHA] (repeatable, up to 8): a repo or a worktree of one,
   relative to the workspace folder, each at its own HEAD or SHA.
@@ -45140,6 +45202,7 @@ REPOS (0.46.6)
 CACHES (0.46.6)
   --cache NAME gives the job a folder that is still there next run on the
   same node: $K2_JOB_CACHE. Per workspace and NAME; works with --no-source.
+  Pin the node (name it) so the next run finds the cache there:
     k2 compute run <node> --no-source --cache fuzz -- sh -c \
       'cargo fuzz run parse -- -max_total_time=3600 "$K2_JOB_CACHE/corpus"'
   For a cargo target dir you choose: CARGO_TARGET_DIR="$K2_JOB_CACHE/target"
@@ -45229,7 +45292,7 @@ MEMORY (--mem, required; 0.46.6)
   which still builds its dependencies): 24G with --env CARGO_BUILD_JOBS=8;
   a small standalone crate: 8G; a shell or Python script: 1-2G; anything
   else: what it uses at its peak, plus a margin. A K2 cargo job, whole:
-    k2 compute run <node> --dirty --needs rust@stable,cmake@3,sys:pkg-config \
+    k2 compute run --dirty --needs rust@stable,cmake@3,sys:pkg-config \
         --mem 24G --env CARGO_BUILD_JOBS=8 -- cargo nextest run -p k2-core Without --mem the job reserves
   4 GB (a note says so) and is stopped above it: failed/mem_cap, "stopped:
   the job used more than its memory limit of 4.0 GB". The node starts a
@@ -45238,8 +45301,8 @@ MEMORY (--mem, required; 0.46.6)
   k2 compute nodes shows each node's free memory and cap.
 
 SECRETS (vault values as env, 0.46.4, Linux nodes)
-  k2 compute run <node> --secret GMAIL_CLIENT_SECRET -- make release
-  k2 compute run <node> --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test
+  k2 compute run --secret GMAIL_CLIENT_SECRET -- make release
+  k2 compute run --secret STRIPE_KEY=STRIPE_TEST_KEY -- cargo test
     NAME is a secret in your workspace's vault (or k2v://server/NAME);
     =ENVNAME picks the variable (default: the grant's, else NAME in
     capitals). K2_*, the node's own names and loader names (LD_*, PATH…)
@@ -45263,8 +45326,8 @@ SECRETS (vault values as env, 0.46.4, Linux nodes)
   write it to a file or an artifact, or send it over the network. Child
   processes inherit it. Only give a job what it needs.
   The node must be Linux with the job wall, k2-node 0.46.4, and treat
-  this server as its own (trust own); --any skips nodes that aren't or
-  that no grant covers.
+  this server as its own (trust own); with no node named, K2 skips nodes
+  that aren't or that no grant covers.
   Who can read it on the node: root and the k2-node user, always. On a
   node another K2 server owns (shared with you), that is someone else's
   machine: compute:<you>/* never covers it, and a grant naming it warns.
@@ -45293,8 +45356,8 @@ CANCEL
   meant for a waiting job never kills one that just began. The event log
   and k2 compute get record who asked for the cancel.
 KNOW BEFORE YOU RUN
-  k2 compute run --any --plan -- cargo nextest run -p k2-core
-    nothing runs; JSON: node it would pick and why it waits (startsNow,
+  k2 compute run --plan -- cargo nextest run -p k2-core
+    nothing runs; JSON: node it would pick (placement: why) and why it waits (startsNow,
     queue.ahead, queue.blockedBy), warmSlot (warm/slot/cold at this commit),
     estimate {medianSecs, p90Secs, samples} from earlier runs of the same
     command, grant left (parallel, queued), the limits that apply. The same
@@ -45303,7 +45366,7 @@ KNOW BEFORE YOU RUN
 TOOLCHAINS (what the job needs installed)
   Say it, and the node installs it into its own home before the job
   starts (cached for the next job; no root):
-    k2 compute run <node> --needs node@22,python@3.12 -- npm test
+    k2 compute run --needs node@22,python@3.12 -- npm test
     --needs rust@stable | rust@1.99 | cargo-nextest | go@1.23 | bun@1.2 | java@21
     --needs cmake@3,ninja,protoc   (C/C++ builds: llama.cpp, prost-build, …)
   Supported tools: node python go java bun deno zig cmake ninja protoc uv
@@ -45346,18 +45409,18 @@ NEVER STUCK
   --queue-timeout 2h|off    not started in time → failed/queue_timeout (exit 3,
                             with what it waited on). Default 2h attached or
                             --wait, 24h --detach, 48h --tier batch.
-  --any jobs move: off a node that sleeps (60 s), is paused or set aside, and
-  off a busy node onto one that can start them now.
+  Jobs K2 placed (no node named) move: off a node that sleeps (60 s), is
+  paused or set aside, and off a busy node onto one that can start them now.
   A node offline 10 min while running your job: that attempt ends
   interrupted/node_lost (the node is told to stop it if it comes back).
   --retries N (0–5, default 1): infrastructure failures (node_lost, node
   reboot, sync/spawn failures, unknown) run again after a backoff (30 s,
-  doubling), on another node with --any. Your command's own results are
+  doubling), on another node when K2 placed it. Your command's own results are
   never retried: a non-zero exit, a timeout, a stall, a cancel, mem_cap.
   An attached run follows the new attempt ("retrying as attempt 2 on …").
   --stall-timeout 30m|off   no output for that long → timeout/stalled.
-  A node with 3 infra failures in a row is set aside 30 min (--any skips
-  it; `k2 compute nodes` shows setAsideUntil; the owner's
+  A node with 3 infra failures in a row is set aside 30 min (K2 skips it
+  when placing; `k2 compute nodes` shows setAsideUntil; the owner's
   `k2 compute node resume <node>` puts it back at once).
   Delivery: a job starts at most once per attempt; a retry is a new
   attempt. Make side effects (uploads, deploys) idempotent.
@@ -45370,7 +45433,7 @@ SPLIT RUNS (a test suite across nodes)
     one [compute] message. Adds --needs cargo-nextest; uses a generated
     nextest profile (--profile P for the repo's own); --runner replaces
     `cargo nextest run`. Each job: own HOME/TMPDIR/XDG_RUNTIME_DIR, no K2_*.
-  Any command: k2 compute run --any --shards 3 -- sh -c 'make test PART={shard}/{shards}'
+  Any command: k2 compute run --shards 3 -- sh -c 'make test PART={shard}/{shards}'
   get/logs/fetch/cancel/retry work on the run id: logs prints each shard
   under a header, fetch writes shard-<i>/…, retry re-runs the shards that
   didn't pass. K2's own suites: scripts/test-on-nodes.sh [--shards N].
@@ -45623,10 +45686,11 @@ THE QUEUE (the node decides, one queue for every server)
   per-job limits is refused at submit (exit 3).
 
 YOUR JOBS
-  Same verbs as ever: run, --any, --shards, test, wait, logs, cancel.
-  Named runs go into the node's queue at once. --any waits up to 60 s on
-  this server for a node that can start it now, then goes to the node with
-  the lowest ETA. It may move later, but only after the node confirms the
+  Same verbs as ever: run, --shards, test, wait, logs, cancel.
+  Named runs go into the node's queue at once. A run with no node named
+  (K2 places it; --any is the same) waits up to 60 s on this server for a
+  node that can start it now, then goes to the node with the lowest ETA.
+  It may move later, but only after the node confirms the
   job hadn't started (never more than twice). Your server's queued jobs
   start only while it's connected; running ones carry on regardless.
   cancel without --force on a queued job: it ends cancelled, or keeps

@@ -287,7 +287,9 @@ pub const SKILL_VERSION_ZEN: u32 = 45;
 /// Bumped to 41 (0.46.6, compute job tiers v2): `--mem` always, `--priority
 /// --why`, `--tier batch`, `--wait` streams, submitter turns.
 /// Bumped to 42 (0.46.6, Sew for Apps): the Study topics gain `app-chat`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 42;
+/// Bumped to 43 (0.46.6, compute auto-placement): `k2 compute run` with no
+/// node named; K2 picks the node and prints why.
+pub const SKILL_VERSION_WORKSPACE: u32 = 43;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

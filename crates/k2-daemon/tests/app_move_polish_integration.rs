@@ -175,7 +175,11 @@ async fn warnings_mark_the_apps_own_env_expected_not_breaking() {
         "const pass = readFileSync(process.env.K2_PASS_FILE);\nconst data = process.env.K2_APP_DATA;\nconst tok = process.env.K2_OWNER_TOKEN;\n",
     )
     .unwrap();
-    let svc = service(&ws, "warnagents", "python3 -m http.server", &code, 47_101);
+    // A program found on both the inherited and the clean PATH, so only
+    // the owner-token read breaks (Windows' clean PATH is System32 and
+    // friends: cmd, not Python). The row is scanned, never started.
+    let program = if cfg!(windows) { "cmd /c echo serving" } else { "python3 -m http.server" };
+    let svc = service(&ws, "warnagents", program, &code, 47_101);
     k2_daemon::vault::publish_env::set(&svc, Some("clean"), None).unwrap();
 
     let r = get(d.port, "/cli/app/warnings", OWNER, "app=warnagents").await;

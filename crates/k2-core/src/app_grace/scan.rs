@@ -124,7 +124,10 @@ pub fn scan_folder(root: &Path, cmd: &str) -> ScanReport {
         }
         let Some(text) = read_bounded_no_follow(p) else { continue };
         rep.files_scanned += 1;
+        // A finding's file reads with '/' on every OS (Windows: '\' → '/';
+        // on Unix a '\' is part of a file name and stays).
         let rel = p.strip_prefix(root).unwrap_or(p).to_string_lossy().to_string();
+        let rel = if cfg!(windows) { rel.replace('\\', "/") } else { rel };
         scan_text(&mut rep, &rel, &ext, is_pkg, &text);
     }
     rep
@@ -452,13 +455,35 @@ const RUNNERS: &[&str] = &["npm", "pnpm", "yarn", "bun"];
 
 /// Resolve `program` on a `PATH` string (executable files only).
 pub fn which(program: &str, path: &str) -> Option<PathBuf> {
-    for dir in path.split(':').filter(|d| !d.is_empty()) {
-        let p = Path::new(dir).join(program);
-        if is_executable(&p) {
-            return Some(p);
+    // Windows: PATH is ';'-separated (':' is part of a drive) and a program
+    // runs as name.exe / .cmd / .bat / .com, as CreateProcess and cmd.exe
+    // look it up.
+    #[cfg(windows)]
+    {
+        for dir in std::env::split_paths(path).filter(|d| !d.as_os_str().is_empty()) {
+            let exact = dir.join(program);
+            if is_executable(&exact) {
+                return Some(exact);
+            }
+            for ext in [".exe", ".cmd", ".bat", ".com"] {
+                let p = dir.join(format!("{program}{ext}"));
+                if is_executable(&p) {
+                    return Some(p);
+                }
+            }
         }
+        None
     }
-    None
+    #[cfg(not(windows))]
+    {
+        for dir in path.split(':').filter(|d| !d.is_empty()) {
+            let p = Path::new(dir).join(program);
+            if is_executable(&p) {
+                return Some(p);
+            }
+        }
+        None
+    }
 }
 
 fn is_executable(p: &Path) -> bool {

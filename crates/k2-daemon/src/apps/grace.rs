@@ -541,7 +541,10 @@ pub(crate) fn report(t: &Target) -> J {
     warnings.extend(form_post_warnings(name, &scan.form_posts));
     warnings.extend(link_warnings(t));
     let now_path = k2_core::terminal::login_path::augmented_path(&std::env::var("PATH").unwrap_or_default());
-    let lookups = if t.is_cmd() { scan::path_lookups(&t.cmd, &cwd, if se.clean_mode { scan::CLEAN_PATH } else { &now_path }, scan::CLEAN_PATH) } else { vec![] };
+    // The clean PATH a service really gets (Windows: System32 and friends;
+    // Unix: scan::CLEAN_PATH).
+    let clean = crate::vault::publish_env::clean_path();
+    let lookups = if t.is_cmd() { scan::path_lookups(&t.cmd, &cwd, if se.clean_mode { &clean } else { &now_path }, &clean) } else { vec![] };
     for l in &lookups {
         if l.breaks() {
             warnings.push(warning(
@@ -552,7 +555,7 @@ pub(crate) fn report(t: &Target) -> J {
                     l.program,
                     l.via,
                     l.now.as_deref().unwrap_or("?"),
-                    scan::CLEAN_PATH
+                    clean
                 ),
                 format!("use the absolute path ({}) or install {} system-wide", l.now.as_deref().unwrap_or("?"), l.program),
             ));

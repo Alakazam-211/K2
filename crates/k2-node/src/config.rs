@@ -69,6 +69,16 @@ pub struct PolicyFile {
     /// valid; `policy.show` notes it and `policy.set` refuses a value
     /// (`deprecated_key`), but may remove it.
     pub gate_reserved_slots: Option<u32>,
+    /// 0.46.7 (CE-18): the most disk the node's installed tool versions
+    /// (mise installs, Rust toolchains) may use, in GB. Default 15% of
+    /// `disk_budget_gb`, at most 60. Over it after an install, the least
+    /// recently used versions no running or queued job needs go.
+    pub toolchain_budget_gb: Option<u64>,
+}
+
+/// The default tool-cache cap: 15% of the disk budget, 1–60 GB.
+pub fn default_toolchain_budget_bytes(disk_budget_bytes: u64) -> u64 {
+    (disk_budget_bytes * 15 / 100).clamp(GIB, 60 * GIB)
 }
 
 /// `policy.show`'s note for a file that still sets `gate_reserved_slots`.
@@ -100,6 +110,8 @@ pub struct Policy {
     pub write_smoke_lock: Option<String>,
     pub network: String,
     pub repo_toolchains: bool,
+    /// CE-18: the tool-cache cap in bytes.
+    pub toolchain_budget_bytes: u64,
 }
 
 impl Policy {
@@ -139,6 +151,9 @@ impl Policy {
                 vec!["/home/sew-ci/sew-build/.job.lock".to_string()]
             }
         });
+        if f.toolchain_budget_gb == Some(0) {
+            return Err("toolchain_budget_gb must be at least 1".into());
+        }
         let write_smoke_lock = match &f.write_smoke_lock {
             Some(s) if s.is_empty() => None,
             Some(s) => Some(s.clone()),
@@ -158,6 +173,10 @@ impl Policy {
             write_smoke_lock,
             network,
             repo_toolchains: f.repo_toolchains.unwrap_or(true),
+            toolchain_budget_bytes: match f.toolchain_budget_gb {
+                Some(g) => g * GIB,
+                None => default_toolchain_budget_bytes(f.disk_budget_gb.unwrap_or(150) * GIB),
+            },
         })
     }
 
@@ -327,6 +346,8 @@ pub fn default_policy_toml() -> String {
 #                               # it takes no jobs under "none" (network_none_not_enforced_yet)
 # repo_toolchains = true        # install what a job's repo declares (mise.toml, .tool-versions,
 #                               # .nvmrc, rust-toolchain.toml); --needs are installed either way
+# toolchain_budget_gb = 22      # disk for installed tool versions (default: 15% of
+#                               # disk_budget_gb, at most 60); the least recently used go first
 #
 # [[window]]
 # days = "mon-fri"

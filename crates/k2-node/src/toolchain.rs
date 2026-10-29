@@ -337,7 +337,10 @@ impl Toolchains {
     }
 
     /// `rustup toolchain install <channel>` (+ components / targets).
-    /// Returns true when something was installed.
+    /// Returns true when something was installed. A toolchain that's
+    /// already there only gets its missing components and targets
+    /// (`rustup component add` / `target add`, CE-A10): never a reinstall,
+    /// which would also move `stable` to a newer release under the jobs.
     pub async fn ensure_rust(&self, rt: &RustToolchain, log: &mut (dyn FnMut(&str) + Send)) -> Result<bool, String> {
         self.ensure_rustup(log).await?;
         let rustup = self.rustup().display().to_string();
@@ -349,12 +352,41 @@ impl Toolchains {
         if have && rt.components.is_empty() && rt.targets.is_empty() {
             return Ok(false);
         }
+        if have {
+            let dir = self.toolchain_dir(&rt.channel);
+            let installed = dir.as_deref().map(toolchain_components).unwrap_or_default();
+            let missing_c: Vec<&String> = rt.components.iter().filter(|c| !installed.iter().any(|i| i == needs::canonical_component(c))).collect();
+            let missing_t: Vec<&String> = rt.targets.iter().filter(|t| !dir.as_ref().is_some_and(|d| d.join("lib/rustlib").join(t.as_str()).is_dir())).collect();
+            if missing_c.is_empty() && missing_t.is_empty() {
+                return Ok(false);
+            }
+            if !missing_c.is_empty() {
+                let names: Vec<String> = missing_c.iter().map(|c| rustup_component_name(c).to_string()).collect();
+                log(&format!("adding Rust components {} to {} (rustup)", names.join(", "), rt.channel));
+                let mut args: Vec<&str> = vec!["component", "add", "--toolchain", &rt.channel];
+                args.extend(names.iter().map(String::as_str));
+                let o = self.run(&rustup, &args, INSTALL_LIMIT).await?;
+                if !o.ok {
+                    return Err(format!("rustup component add {} failed: {}", names.join(" "), last_lines(&o.stderr, 6)));
+                }
+            }
+            if !missing_t.is_empty() {
+                log(&format!("adding Rust targets {} to {} (rustup)", missing_t.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(", "), rt.channel));
+                let mut args: Vec<&str> = vec!["target", "add", "--toolchain", &rt.channel];
+                args.extend(missing_t.iter().map(|t| t.as_str()));
+                let o = self.run(&rustup, &args, INSTALL_LIMIT).await?;
+                if !o.ok {
+                    return Err(format!("rustup target add failed: {}", last_lines(&o.stderr, 6)));
+                }
+            }
+            return Ok(true);
+        }
         log(&format!("installing Rust {} (rustup)", rt.channel));
         let mut args: Vec<String> =
             vec!["toolchain".into(), "install".into(), rt.channel.clone(), "--profile".into(), "minimal".into(), "--no-self-update".into()];
         for c in &rt.components {
             args.push("--component".into());
-            args.push(c.clone());
+            args.push(rustup_component_name(c).to_string());
         }
         for t in &rt.targets {
             args.push("--target".into());
@@ -366,6 +398,16 @@ impl Toolchains {
             return Err(format!("rustup toolchain install {} failed: {}", rt.channel, last_lines(&o.stderr, 6)));
         }
         Ok(!have)
+    }
+
+    /// The installed toolchain dir a channel names (`stable` →
+    /// `toolchains/rustup/toolchains/stable-aarch64-apple-darwin`).
+    pub fn toolchain_dir(&self, channel: &str) -> Option<PathBuf> {
+        let rd = std::fs::read_dir(self.rustup_home().join("toolchains")).ok()?;
+        let mut names: Vec<String> = rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        let name = names.into_iter().find(|n| n == channel || n.starts_with(&format!("{channel}-")))?;
+        Some(self.rustup_home().join("toolchains").join(name))
     }
 
     /// The prebuilt `cargo-nextest` into `toolchains/cargo/bin`.
@@ -445,11 +487,27 @@ impl Toolchains {
                     }
                     Err(e) => Err(e),
                 },
-                Need::Rust { channel } => {
-                    let rt = RustToolchain { channel: channel.clone(), components: vec![], targets: vec![] };
+                Need::Rust { channel, components } => {
+                    let rt = RustToolchain { channel: channel.clone(), components: components.clone(), targets: vec![] };
                     let r = self.ensure_rust(&rt, log).await;
                     if r.is_ok() && required {
                         rust_env = Some(channel.clone());
+                    }
+                    // CE-16: llvm-symbolizer, llvm-profdata, llvm-cov on
+                    // the job's PATH, and the sanitizers' symbolizer.
+                    if r.is_ok() && components.iter().any(|c| c == "llvm-tools") {
+                        match self.toolchain_dir(channel).and_then(|d| llvm_bin_dir(&d)) {
+                            Some(bin) => {
+                                let sym = bin.join("llvm-symbolizer");
+                                if is_executable(&sym) {
+                                    out.env.push(("ASAN_SYMBOLIZER_PATH".into(), sym.display().to_string()));
+                                }
+                                if !out.path_prepend.contains(&bin) {
+                                    out.path_prepend.push(bin);
+                                }
+                            }
+                            None => out.notes.push(format!("rust@{channel}+llvm-tools: no LLVM tools folder in the toolchain")),
+                        }
                     }
                     r
                 }
@@ -475,6 +533,14 @@ impl Toolchains {
                 }
             }
         }
+        // CE-18: what this job used, for the tool-cache cap's LRU.
+        let mut used: Vec<String> = out.path_prepend.iter().filter_map(|p| self.mise_key(p)).collect();
+        for ch in rust_env.iter().chain(rust_file.map(|r| &r.channel)) {
+            if let Some(name) = self.toolchain_dir(ch).and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned())) {
+                used.push(format!("rust:{name}"));
+            }
+        }
+        self.mark_used(&used, unix_now());
         if let Some(c) = rust_env {
             out.env.push(("RUSTUP_TOOLCHAIN".into(), c));
         }
@@ -486,6 +552,117 @@ impl Toolchains {
             out.env.extend(self.mise_env());
         }
         Ok(out)
+    }
+
+    // ── the tool-cache cap (CE-18) ───────────────────────────────────
+
+    fn last_used_path(&self) -> PathBuf {
+        self.root.join(LAST_USED_FILE)
+    }
+
+    fn read_last_used(&self) -> BTreeMap<String, i64> {
+        small_read(&self.last_used_path()).and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+    }
+
+    /// Note that a job used these versions now (the LRU's clock).
+    pub fn mark_used(&self, keys: &[String], now: i64) {
+        if keys.is_empty() {
+            return;
+        }
+        let mut m = self.read_last_used();
+        for k in keys {
+            m.insert(k.clone(), now);
+        }
+        // Forget versions that are gone (the file stays small).
+        let have: Vec<String> = self.installed_versions_shallow().into_iter().map(|(k, _)| k).collect();
+        m.retain(|k, _| have.contains(k) || keys.contains(k));
+        if let Ok(text) = serde_json::to_string(&m) {
+            let tmp = self.root.join(format!(".{LAST_USED_FILE}.{}", std::process::id()));
+            if std::fs::write(&tmp, text).is_ok() {
+                let _ = std::fs::rename(&tmp, self.last_used_path());
+            }
+        }
+    }
+
+    /// `mise:node@22.23.4` for a path inside a mise install.
+    fn mise_key(&self, p: &Path) -> Option<String> {
+        let rel = p.strip_prefix(self.mise_data().join("installs")).ok()?;
+        let mut it = rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned());
+        let (tool, ver) = (it.next()?, it.next()?);
+        Some(format!("mise:{tool}@{ver}"))
+    }
+
+    /// Every installed version's key and folder (no sizes): mise's
+    /// `installs/<tool>/<version>` (real dirs, not its alias links) and
+    /// rustup's `toolchains/<name>`.
+    fn installed_versions_shallow(&self) -> Vec<(String, PathBuf)> {
+        let mut out = Vec::new();
+        let real_dirs = |p: &Path| -> Vec<(String, PathBuf)> {
+            std::fs::read_dir(p)
+                .map(|rd| {
+                    rd.flatten()
+                        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()))
+                        .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+                        .filter(|(n, _)| !n.starts_with('.'))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        for (tool, tdir) in real_dirs(&self.mise_data().join("installs")) {
+            for (ver, vdir) in real_dirs(&tdir) {
+                out.push((format!("mise:{tool}@{ver}"), vdir));
+            }
+        }
+        for (tc, dir) in real_dirs(&self.rustup_home().join("toolchains")) {
+            out.push((format!("rust:{tc}"), dir));
+        }
+        out.sort();
+        out
+    }
+
+    /// Every installed version with its size and last use (blocking: walks
+    /// the folders).
+    pub fn installed_versions(&self) -> Vec<ToolVersion> {
+        let used = self.read_last_used();
+        self.installed_versions_shallow()
+            .into_iter()
+            .map(|(key, path)| {
+                let last_used = used.get(&key).copied().unwrap_or_else(|| mtime_secs(&path));
+                ToolVersion { bytes: tree_bytes(&path), key, path, last_used }
+            })
+            .collect()
+    }
+
+    /// rustup's default toolchain (jobs without a Rust need use it).
+    fn default_rust(&self) -> Option<String> {
+        let s = small_read(&self.rustup_home().join("settings.toml"))?;
+        let t: toml::Table = s.parse().ok()?;
+        t.get("default_toolchain").and_then(|v| v.as_str()).map(str::to_string)
+    }
+
+    /// CE-18: over `budget`, remove the least recently used versions that
+    /// no need in `in_use` (running and queued jobs') asks for, that aren't
+    /// rustup's default toolchain, and that weren't used in the last hour.
+    /// Returns what went (blocking).
+    pub fn gc_to_budget(&self, budget: u64, in_use: &[Need], now: i64) -> Vec<ToolVersion> {
+        let versions = self.installed_versions();
+        let default_rust = self.default_rust();
+        let keep = |v: &ToolVersion| {
+            now - v.last_used < 3600
+                || version_needed(&v.key, in_use)
+                || default_rust.as_deref().is_some_and(|d| v.key == format!("rust:{d}") || v.key.starts_with(&format!("rust:{d}-")))
+        };
+        let mut removed = Vec::new();
+        for i in lru_victims(&versions, budget, keep) {
+            let v = &versions[i];
+            if std::fs::remove_dir_all(&v.path).is_ok() {
+                if let Some(tc) = v.key.strip_prefix("rust:") {
+                    let _ = std::fs::remove_file(self.rustup_home().join("update-hashes").join(tc));
+                }
+                removed.push(v.clone());
+            }
+        }
+        removed
     }
 
     /// Installed mise tools for the offer (`mise:node` → `22.23.3`).
@@ -519,9 +696,262 @@ impl Toolchains {
             if !tcs.is_empty() {
                 out.insert("rust-toolchains".into(), tcs.join(","));
             }
+            // CE-A10 / CE-1: per toolchain, its components (the ones a need
+            // may name) and its rustc version, read from the toolchain's
+            // own files (no rustup run).
+            for tc in &tcs {
+                let dir = self.rustup_home().join("toolchains").join(tc);
+                let comps = toolchain_components(&dir);
+                if !comps.is_empty() {
+                    out.insert(format!("rust-components:{tc}"), comps.join(","));
+                }
+                if let Some(v) = toolchain_rustc_version(&dir) {
+                    out.insert(format!("rustc:{tc}"), v);
+                }
+            }
         }
         out
     }
+}
+
+/// The name rustup installs a need's component under: `llvm-tools` is
+/// `llvm-tools-preview` (rustup renames it on newer toolchains, and older
+/// ones know only that name).
+pub fn rustup_component_name(c: &str) -> &str {
+    match c {
+        "llvm-tools" => "llvm-tools-preview",
+        other => other,
+    }
+}
+
+/// The components a toolchain has installed, as a need names them
+/// ([`needs::RUST_COMPONENTS`] only, sorted), from its
+/// `lib/rustlib/components` list (`clippy-preview-x86_64-unknown-linux-gnu`
+/// → `clippy`).
+pub fn toolchain_components(dir: &Path) -> Vec<String> {
+    let Some(text) = small_read(&dir.join("lib/rustlib/components")) else { return Vec::new() };
+    components_from_list(&text)
+}
+
+/// [`toolchain_components`] on the file's text.
+pub fn components_from_list(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    // The host triple: `rustc-<host>` is in every toolchain.
+    let host = lines.iter().find_map(|l| l.strip_prefix("rustc-")).unwrap_or("");
+    let mut out: Vec<String> = Vec::new();
+    for l in lines {
+        let base = if host.is_empty() { l } else { l.strip_suffix(&format!("-{host}")).unwrap_or(l) };
+        let c = needs::canonical_component(base);
+        if needs::RUST_COMPONENTS.contains(&c) && !out.iter().any(|o| o == c) {
+            out.push(c.to_string());
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `1.99.1` from a toolchain's channel manifest (`[pkg.rustc]` `version =
+/// "1.99.1 (abc 2026-09-01)"`); a text scan, the file is large.
+pub fn toolchain_rustc_version(dir: &Path) -> Option<String> {
+    let p = dir.join("lib/rustlib/multirust-channel-manifest.toml");
+    let m = std::fs::symlink_metadata(&p).ok()?;
+    if !m.is_file() || m.len() > 8 << 20 {
+        return None;
+    }
+    rustc_version_from_manifest(&std::fs::read_to_string(p).ok()?)
+}
+
+/// [`toolchain_rustc_version`] on the manifest's text.
+pub fn rustc_version_from_manifest(text: &str) -> Option<String> {
+    let mut in_rustc = false;
+    for l in text.lines() {
+        let l = l.trim();
+        if l.starts_with('[') {
+            in_rustc = l == "[pkg.rustc]";
+            continue;
+        }
+        if in_rustc {
+            if let Some(v) = l.strip_prefix("version = \"") {
+                let v = v.split([' ', '"']).next()?;
+                return plain_word(v).then(|| v.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// The toolchain's LLVM tools folder (`lib/rustlib/<host>/bin`), if any.
+pub fn llvm_bin_dir(dir: &Path) -> Option<PathBuf> {
+    let rd = std::fs::read_dir(dir.join("lib/rustlib")).ok()?;
+    let mut found: Vec<PathBuf> = rd
+        .flatten()
+        .map(|e| e.path().join("bin"))
+        .filter(|b| b.join("llvm-profdata").is_file() || b.join("llvm-cov").is_file() || b.join("llvm-symbolizer").is_file())
+        .collect();
+    found.sort();
+    found.into_iter().next()
+}
+
+/// What one probe needs: the program, its args, how to read the version.
+struct Probe {
+    key: String,
+    prog: String,
+    args: Vec<&'static str>,
+}
+
+/// CE-4: what the job's PATH really resolves to, run with the job's env in
+/// its working directory (so a `rust-toolchain.toml` override counts),
+/// 5 s per tool, after the toolchains are resolved and before the command
+/// starts. Never installs anything (`RUSTUP_AUTO_INSTALL=0`). A tool not on
+/// the PATH, or one whose probe fails, is absent.
+pub async fn tools_used(env: &[(String, String)], cwd: &Path, explicit: &[Need]) -> BTreeMap<String, String> {
+    let limit = Duration::from_secs(5);
+    let mut env: Vec<(String, String)> = env.to_vec();
+    env.retain(|(k, _)| k != "RUSTUP_AUTO_INSTALL");
+    env.push(("RUSTUP_AUTO_INSTALL".into(), "0".into()));
+    let cwd = cwd.is_dir().then_some(cwd);
+    let mut probes = vec![
+        Probe { key: "rustc".into(), prog: "rustc".into(), args: vec!["-V"] },
+        Probe { key: "cargo".into(), prog: "cargo".into(), args: vec!["-V"] },
+    ];
+    if crate::sysinfo::which("cargo-nextest", &env).is_some() {
+        probes.push(Probe { key: "cargo-nextest".into(), prog: "cargo".into(), args: vec!["nextest", "--version"] });
+    }
+    for n in explicit {
+        if let Need::Tool { tool, .. } = n {
+            if let Some(bin) = needs::expected_bins(tool).first() {
+                let args = if *tool == "go" { vec!["version"] } else { vec!["--version"] };
+                probes.push(Probe { key: tool.clone(), prog: bin.to_string(), args });
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for p in probes {
+        let Some(path) = crate::sysinfo::which(&p.prog, &env) else { continue };
+        if let Ok(o) = run_cmd(&path, &p.args, &env, cwd, limit).await {
+            if o.ok {
+                if let Some(v) = tool_version(&o.stdout).or_else(|| tool_version(&o.stderr)) {
+                    out.insert(p.key, v);
+                }
+            }
+        }
+    }
+    // The active Rust toolchain and its components.
+    if let Some(rustup) = crate::sysinfo::which("rustup", &env) {
+        if let Ok(o) = run_cmd(&rustup, &["show", "active-toolchain"], &env, cwd, limit).await {
+            if let Some(tc) = o.stdout.split_whitespace().next().filter(|t| o.ok && plain_word(t)) {
+                out.insert("rust-toolchain".into(), tc.to_string());
+                if let Some(home) = env.iter().rev().find(|(k, _)| k == "RUSTUP_HOME").map(|(_, v)| PathBuf::from(v)) {
+                    let comps = toolchain_components(&home.join("toolchains").join(tc));
+                    if !comps.is_empty() {
+                        out.insert("rust-components".into(), comps.join(","));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `rustc 1.99.0 (abc 2026-09-01)` → `1.99.0`; `go version go1.23.1 linux/amd64`
+/// → `1.23.1`; `Python 3.12.1` → `3.12.1`; else the first line, short.
+pub fn tool_version(s: &str) -> Option<String> {
+    for w in s.split_whitespace() {
+        let w = w.trim_start_matches("go").trim_start_matches('v').trim_end_matches(',');
+        if w.chars().next().is_some_and(|c| c.is_ascii_digit()) && w.contains('.') {
+            return Some(w.chars().take(64).collect());
+        }
+    }
+    s.lines().map(str::trim).find(|l| !l.is_empty()).map(|l| l.chars().take(80).collect())
+}
+
+/// One line for the job log: `tools: rustc 1.99.0, cargo 1.99.0, …`.
+pub fn tools_line(t: &BTreeMap<String, String>) -> String {
+    let order = ["rustc", "cargo", "cargo-nextest", "rust-toolchain", "rust-components"];
+    let mut parts: Vec<String> = order.iter().filter_map(|k| t.get(*k).map(|v| format!("{k} {v}"))).collect();
+    parts.extend(t.iter().filter(|(k, _)| !order.contains(&k.as_str())).map(|(k, v)| format!("{k} {v}")));
+    if parts.is_empty() {
+        "tools: none found on the job's PATH".into()
+    } else {
+        format!("tools: {}", parts.join(", "))
+    }
+}
+
+/// The LRU clock of the tool-cache cap, in the toolchains root.
+const LAST_USED_FILE: &str = "k2-last-used.json";
+
+/// One installed tool version (CE-18).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolVersion {
+    /// `mise:node@22.23.4` or `rust:stable-x86_64-unknown-linux-gnu`.
+    pub key: String,
+    pub path: PathBuf,
+    pub bytes: u64,
+    /// Unix seconds (a job's last use, else the folder's mtime).
+    pub last_used: i64,
+}
+
+/// Does a need ask for this version? `node@22` keeps `node@22.23.4`;
+/// `latest`/`lts`, a backend tool and an unknown form keep every version
+/// of that tool (doubt keeps); `rust@stable` keeps `stable-<host>`.
+pub fn version_needed(key: &str, needs: &[Need]) -> bool {
+    needs.iter().any(|n| match n {
+        Need::Rust { channel, .. } => key.strip_prefix("rust:").is_some_and(|tc| tc == channel || tc.starts_with(&format!("{channel}-"))),
+        Need::Tool { tool, version } => {
+            let Some(rest) = key.strip_prefix("mise:") else { return false };
+            let Some((t, v)) = rest.split_once('@') else { return false };
+            if tool.contains(':') {
+                // Backend tools' folder names aren't the need's: keep any
+                // folder that could be it.
+                let flat: String = tool.chars().map(|c| if c == ':' || c == '/' { '-' } else { c }).collect();
+                return t == flat || t.ends_with(tool.rsplit('/').next().unwrap_or(tool));
+            }
+            t == tool && (matches!(version.as_str(), "latest" | "lts") || v == version || v.starts_with(&format!("{version}.")))
+        }
+        _ => false,
+    })
+}
+
+/// Which versions go (indexes, oldest use first) to get `versions` under
+/// `budget`, never one `keep` says to keep.
+pub fn lru_victims(versions: &[ToolVersion], budget: u64, keep: impl Fn(&ToolVersion) -> bool) -> Vec<usize> {
+    let mut total: u64 = versions.iter().map(|v| v.bytes).sum();
+    if total <= budget {
+        return Vec::new();
+    }
+    let mut order: Vec<usize> = (0..versions.len()).filter(|i| !keep(&versions[*i])).collect();
+    order.sort_by_key(|i| (versions[*i].last_used, versions[*i].key.clone()));
+    let mut out = Vec::new();
+    for i in order {
+        if total <= budget {
+            break;
+        }
+        total = total.saturating_sub(versions[i].bytes);
+        out.push(i);
+    }
+    out
+}
+
+/// Bytes under `p` (files' lengths, no link followed).
+fn tree_bytes(p: &Path) -> u64 {
+    let Ok(m) = std::fs::symlink_metadata(p) else { return 0 };
+    if !m.is_dir() {
+        return m.len();
+    }
+    std::fs::read_dir(p).map(|rd| rd.flatten().map(|e| tree_bytes(&e.path())).sum()).unwrap_or(0)
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+fn mtime_secs(p: &Path) -> i64 {
+    std::fs::metadata(p)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 async fn download(tc: &Toolchains, url: &str, dest: &Path) -> Result<(), String> {
@@ -773,6 +1203,126 @@ mod tests {
         assert_eq!(rt.channel, "nightly-2026-09-01");
         assert_eq!(rt.components, vec!["clippy", "rustfmt"]);
         assert_eq!(rt.targets, vec!["wasm32-unknown-unknown"]);
+    }
+
+    /// CE-A10: a toolchain's `components` list → the names a need uses
+    /// (`-preview` and the host suffix gone, only the ones a need may name).
+    #[test]
+    fn toolchain_components_read_like_needs() {
+        let list = "cargo-x86_64-unknown-linux-gnu\nclippy-preview-x86_64-unknown-linux-gnu\nrust-std-x86_64-unknown-linux-gnu\nrustc-x86_64-unknown-linux-gnu\nrustfmt-preview-x86_64-unknown-linux-gnu\nllvm-tools-preview-x86_64-unknown-linux-gnu\nrust-src\n";
+        assert_eq!(components_from_list(list), vec!["clippy", "llvm-tools", "rust-src", "rustfmt"]);
+        // Newer names, macOS host.
+        let mac = "rustc-aarch64-apple-darwin\nclippy-aarch64-apple-darwin\nllvm-tools-aarch64-apple-darwin\nrust-std-aarch64-apple-darwin\n";
+        assert_eq!(components_from_list(mac), vec!["clippy", "llvm-tools"]);
+        assert!(components_from_list("").is_empty());
+        let d = crate::util::temp_dir("tc-comps");
+        write(&d, "lib/rustlib/components", mac);
+        assert_eq!(toolchain_components(&d), vec!["clippy", "llvm-tools"]);
+        assert_eq!(rustup_component_name("llvm-tools"), "llvm-tools-preview");
+        assert_eq!(rustup_component_name("clippy"), "clippy");
+    }
+
+    #[test]
+    fn rustc_version_from_the_channel_manifest() {
+        let m = "manifest-version = \"2\"\n[pkg.cargo]\nversion = \"1.99.0 (aaa 2026-09-01)\"\n[pkg.rustc]\nversion = \"1.99.1 (bbb 2026-09-20)\"\n[pkg.rustc.target.x]\nversion = \"9\"\n";
+        assert_eq!(rustc_version_from_manifest(m).as_deref(), Some("1.99.1"));
+        let nightly = "[pkg.rustc]\nversion = \"1.101.0-nightly (ccc 2026-10-01)\"\n";
+        assert_eq!(rustc_version_from_manifest(nightly).as_deref(), Some("1.101.0-nightly"));
+        assert_eq!(rustc_version_from_manifest("[pkg.cargo]\nversion = \"1\"\n"), None);
+        let d = crate::util::temp_dir("tc-ver");
+        write(&d, "lib/rustlib/multirust-channel-manifest.toml", m);
+        assert_eq!(toolchain_rustc_version(&d).as_deref(), Some("1.99.1"));
+    }
+
+    #[test]
+    fn tool_versions_parse() {
+        assert_eq!(tool_version("rustc 1.99.0 (59807616e 2026-09-14)").as_deref(), Some("1.99.0"));
+        assert_eq!(tool_version("cargo-nextest 0.9.150 (abc 2026-10-01)").as_deref(), Some("0.9.150"));
+        assert_eq!(tool_version("go version go1.23.1 linux/amd64").as_deref(), Some("1.23.1"));
+        assert_eq!(tool_version("v22.23.4\n").as_deref(), Some("22.23.4"));
+        assert_eq!(tool_version("Python 3.12.1").as_deref(), Some("3.12.1"));
+        assert_eq!(tool_version("openjdk 21.0.1 2023-10-17").as_deref(), Some("21.0.1"));
+        assert_eq!(tool_version("weird tool\n").as_deref(), Some("weird tool"));
+        assert_eq!(tool_version("  \n"), None);
+        let mut t = BTreeMap::new();
+        t.insert("node".to_string(), "22.23.4".to_string());
+        t.insert("rustc".to_string(), "1.99.0".to_string());
+        assert_eq!(tools_line(&t), "tools: rustc 1.99.0, node 22.23.4");
+        assert_eq!(tools_line(&BTreeMap::new()), "tools: none found on the job's PATH");
+    }
+
+    /// CE-4: the probe runs the job's PATH in its env (a fake `rustc`
+    /// and `node` first on PATH win), never installs, skips what's absent.
+    #[tokio::test]
+    async fn tools_used_reads_the_jobs_own_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = crate::util::temp_dir("tc-used");
+        let bin = d.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for (name, body) in [
+            ("rustc", "#!/bin/sh\n[ \"$RUSTUP_AUTO_INSTALL\" = 0 ] || exit 3\necho \"rustc 1.99.0 (abc 2026-09-01)\"\n"),
+            ("node", "#!/bin/sh\necho v22.23.4\n"),
+            ("python3", "#!/bin/sh\nexit 1\n"),
+        ] {
+            let p = bin.join(name);
+            std::fs::write(&p, body).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let env = vec![("PATH".to_string(), format!("{}:/usr/bin:/bin", bin.display()))];
+        let explicit = needs::parse_all(&["node@22", "python@3.12"]).unwrap();
+        let t = tools_used(&env, &d, &explicit).await;
+        assert_eq!(t.get("rustc").map(String::as_str), Some("1.99.0"), "{t:?}");
+        assert_eq!(t.get("node").map(String::as_str), Some("22.23.4"), "{t:?}");
+        assert!(!t.contains_key("python"), "a failing probe is absent: {t:?}");
+        assert!(!t.contains_key("cargo-nextest"), "{t:?}");
+    }
+
+    /// CE-18: over the cap, the least recently used versions no job needs
+    /// go first, until under it; needed, default and fresh ones stay.
+    #[test]
+    fn the_tool_cache_cap_removes_the_least_recently_used() {
+        let v = |key: &str, bytes: u64, last_used: i64| ToolVersion { key: key.into(), path: PathBuf::from(key), bytes, last_used };
+        let gb = 1u64 << 30;
+        let vs = vec![v("mise:node@20.1.0", gb, 100), v("mise:node@22.23.4", gb, 300), v("mise:node@18.0.0", gb, 200)];
+        // Cap 1 GB, two versions in, a third pushed it over: the LRU goes.
+        assert_eq!(lru_victims(&vs[..2], gb * 2, |_| false), Vec::<usize>::new());
+        assert_eq!(lru_victims(&vs, gb * 2, |_| false), vec![0], "node 20 (oldest use) goes; 2 GB fits");
+        assert_eq!(lru_victims(&vs, gb, |_| false), vec![0, 2]);
+        let needs = needs::parse_all(&["node@20"]).unwrap();
+        assert_eq!(lru_victims(&vs, gb * 2, |x| version_needed(&x.key, &needs)), vec![2], "a needed version stays");
+        assert!(version_needed("mise:node@22.23.4", &needs::parse_all(&["node@22"]).unwrap()));
+        assert!(!version_needed("mise:node@220.1", &needs::parse_all(&["node@22"]).unwrap()));
+        assert!(version_needed("mise:node@18.0.0", &needs::parse_all(&["node@lts"]).unwrap()));
+        assert!(version_needed("rust:stable-x86_64-unknown-linux-gnu", &needs::parse_all(&["rust@stable+clippy"]).unwrap()));
+        assert!(!version_needed("rust:1.99.0-x86_64-unknown-linux-gnu", &needs::parse_all(&["rust@stable"]).unwrap()));
+        assert!(version_needed("mise:aqua-cli-cli@2.1.0", &needs::parse_all(&["aqua:cli/cli@2"]).unwrap()));
+    }
+
+    /// The fixture of CE-18 acceptance 3 on disk: three installs over a
+    /// 1-byte cap; the one used longest ago goes, the default toolchain
+    /// and a needed one stay; the LRU clock comes from `mark_used`.
+    #[test]
+    fn gc_to_budget_on_disk() {
+        let home = crate::util::temp_dir("tc-gc");
+        let tc = Toolchains::new(&home, vec![]);
+        let inst = tc.mise_data().join("installs");
+        write(&inst, "node/20.1.0/bin/node", "x".repeat(100).as_str());
+        write(&inst, "node/22.23.4/bin/node", "x".repeat(100).as_str());
+        write(&inst, "python/3.12.1/bin/python3", "x".repeat(100).as_str());
+        write(&tc.rustup_home(), "toolchains/stable-x/lib/x", "x".repeat(100).as_str());
+        write(&tc.rustup_home(), "settings.toml", "default_toolchain = \"stable-x\"\n");
+        tc.mark_used(&["mise:node@20.1.0".into()], 1_000);
+        tc.mark_used(&["mise:python@3.12.1".into()], 2_000);
+        tc.mark_used(&["mise:node@22.23.4".into()], 3_000);
+        let all = tc.installed_versions();
+        assert_eq!(all.iter().map(|v| v.key.as_str()).collect::<Vec<_>>(), vec!["mise:node@20.1.0", "mise:node@22.23.4", "mise:python@3.12.1", "rust:stable-x"]);
+        assert!(all.iter().all(|v| v.bytes >= 100), "{all:?}");
+        let gone = tc.gc_to_budget(250, &needs::parse_all(&["python@3.12"]).unwrap(), 10_000);
+        assert_eq!(gone.iter().map(|v| v.key.as_str()).collect::<Vec<_>>(), vec!["mise:node@20.1.0", "mise:node@22.23.4"]);
+        assert!(!inst.join("node/20.1.0").exists() && inst.join("python/3.12.1").exists());
+        assert!(tc.rustup_home().join("toolchains/stable-x").exists(), "the default toolchain stays");
+        // Under the cap: nothing more goes.
+        assert!(tc.gc_to_budget(1 << 30, &[], 10_000).is_empty());
     }
 
     #[test]

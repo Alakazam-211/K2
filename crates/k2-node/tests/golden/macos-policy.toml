@@ -19,6 +19,8 @@
 #                               # it takes no jobs under "none" (network_none_not_enforced_yet)
 # repo_toolchains = true        # install what a job's repo declares (mise.toml, .tool-versions,
 #                               # .nvmrc, rust-toolchain.toml); --needs are installed either way
+# toolchain_budget_gb = 22      # disk for installed tool versions (default: 15% of
+#                               # disk_budget_gb, at most 60); the least recently used go first
 #
 # [[window]]
 # days = "mon-fri"

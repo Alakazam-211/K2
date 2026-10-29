@@ -550,9 +550,12 @@ pub const POLICY_KEYS: &[&str] = &[
     "network",
     "repo_toolchains",
     "gate_reserved_slots",
+    // 0.46.7 (CE-18): k2-node's tool-cache cap. An older node refuses it
+    // (`unknown policy field`).
+    "toolchain_budget_gb",
 ];
 /// Policy keys where a bigger number gives jobs more.
-pub const POLICY_BIGGER_IS_WIDER: &[&str] = &["cpu_cap_percent", "mem_cap_gb", "disk_budget_gb", "max_parallel"];
+pub const POLICY_BIGGER_IS_WIDER: &[&str] = &["cpu_cap_percent", "mem_cap_gb", "disk_budget_gb", "max_parallel", "toolchain_budget_gb"];
 /// Policy keys where a smaller number gives jobs more. (`gate_reserved_slots`
 /// stays until 0.47 so removing it from a 0.46.4 node is classified right;
 /// retirement ledger.)

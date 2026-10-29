@@ -35,6 +35,7 @@ pub const FIELDS: &[&str] = &[
     "network",
     "repo_toolchains",
     "gate_reserved_slots",
+    "toolchain_budget_gb",
 ];
 
 fn bad(m: impl Into<String>) -> AdminRefusal {
@@ -147,6 +148,9 @@ pub fn widened(old: &Policy, new: &Policy) -> Vec<&'static str> {
     }
     if new.disk_budget_bytes > old.disk_budget_bytes {
         w.push("disk_budget_gb");
+    }
+    if new.toolchain_budget_bytes > old.toolchain_budget_bytes {
+        w.push("toolchain_budget_gb");
     }
     if new.disk_floor_bytes < old.disk_floor_bytes {
         w.push("disk_floor_gb");

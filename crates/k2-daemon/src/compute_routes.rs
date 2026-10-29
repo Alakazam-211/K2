@@ -3123,6 +3123,7 @@ fn pick_node(
         match at {
             None => {
                 cache_why = Some(format!("cache {name} starts empty here (no earlier job of this workspace used it)"));
+                warnings.push(format!("--cache {name}: no earlier job of this workspace used it, so it starts empty on {}", c.node.name));
             }
             Some(n) if n.id == c.node.id => {
                 if tier != Tier::Now {

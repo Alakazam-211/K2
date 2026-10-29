@@ -437,12 +437,13 @@ async fn a_timeout_over_a_grant_skips_that_node() {
     let r = run(d.port, OWNER, &me, json!({"timeoutSecs": 5 * 3600})).await;
     assert_eq!((r.status, code(&r)), (404, "no_node_fits".to_string()), "{}", r.body);
     assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("2 with a grant shorter than --timeout 5h00m"), "{}", r.body);
-    // --cache with no node named: P1 says the cache may be empty there.
+    // --cache with no node named and no earlier job with it (CE-6): it
+    // starts empty there, and the record and a note say so.
     let r = run(d.port, OWNER, &me, json!({"cache": "cp24"})).await;
     assert_eq!(r.status, 200, "{}", r.body);
     let v = j(&r);
-    assert!(v["placement"]["why"].as_str().unwrap().ends_with("· cache cp24 may be empty here (name the node to reuse it)"), "{v}");
-    assert!(v["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap().starts_with("--cache cp24: K2 doesn't yet pick the node")), "{v}");
+    assert!(v["placement"]["why"].as_str().unwrap().ends_with("· cache cp24 starts empty here (no earlier job of this workspace used it)"), "{v}");
+    assert!(v["warnings"].as_array().unwrap().iter().any(|w| w.as_str().unwrap() == format!("--cache cp24: no earlier job of this workspace used it, so it starts empty on {}", node_of(&r))), "{v}");
     // --os spellings fold (the nodes say `linux`): `Linux` fits; `darwin`
     // (= macos) skips both with the os/arch count.
     let r = run(d.port, OWNER, &me, json!({"os": "Linux"})).await;
@@ -589,4 +590,289 @@ async fn a_shared_nodes_other_server_counts_and_a_move_rewrites_the_record() {
     let g = get(d.port, "/cli/compute/jobs/get", OWNER, &format!("job={auto}")).await;
     assert_eq!(j(&g)["placement"]["code"], "moved_node_offline", "{}", g.body);
     compute_ws::test_detach("s-mini");
+}
+
+// ── compute easy mode, Lane A (prd-compute-easy-mode-0467) ───────────
+
+/// A node with `needs`, and the tools named (`rust-toolchains`, `cargo-nextest`, `mise:<tool>`).
+fn tooled(rev: u64, free_gb: u64, tools: &[(&str, &str)]) -> Offer {
+    let mut o = offer(rev, free_gb, 32, 0);
+    o.features.push("needs".into());
+    for (k, v) in tools {
+        o.tools.insert(k.to_string(), v.to_string());
+    }
+    o
+}
+
+const RUST_READY: &[(&str, &str)] = &[("rust-toolchains", "stable-x86_64-unknown-linux-gnu"), ("cargo-nextest", "0.9.100")];
+
+fn job_count() -> i64 {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT COUNT(*) FROM compute_jobs", [], |r| r.get(0)).unwrap()
+}
+
+/// CE-11 prefixes, CE-17 --now, CE-13 --exclusive, CE-1/CE-2 tools in
+/// --plan.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prefixes_now_exclusive_and_tools() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "easy");
+    let other = seed_ws(&env, "easyother");
+    for n in ["k2n12-vin", "k2n1-m4", "k2n10-vin", "k2n99-x"] {
+        active_node(n);
+    }
+    for n in ["k2n12-vin", "k2n1-m4", "k2n10-vin"] {
+        grant(n, &me, None, 2);
+    }
+    grant("k2n99-x", &other, None, 2);
+    // All three of mine have 1 GB free: a 2 GB job starts nowhere now.
+    let _a = compute_ws::test_attach("k2n12-vin", tooled(1, 1, RUST_READY));
+    let _b = compute_ws::test_attach("k2n1-m4", tooled(1, 1, &[]));
+    let _c = compute_ws::test_attach("k2n10-vin", tooled(1, 1, &[]));
+    let _x = compute_ws::test_attach("k2n99-x", tooled(1, 30, &[]));
+    let agent = passport(&me);
+
+    // CE-11: a unique prefix finds the node; an ambiguous one lists them;
+    // an agent's prefix never reaches an ungranted node; owner verbs need
+    // the full name.
+    let r = run(d.port, &agent, &me, json!({"node": "k2n12", "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["node"], "k2n12-vin");
+    let r = run(d.port, &agent, &me, json!({"node": "k2n1", "plan": true})).await;
+    assert_eq!((r.status, code(&r)), (400, "node_ambiguous".to_string()), "{}", r.body);
+    let hint = j(&r)["error"]["hint"].as_str().unwrap().to_string();
+    assert!(hint.contains("k2n1-m4") && hint.contains("k2n10-vin") && !hint.contains("k2n99"), "{hint}");
+    let r = run(d.port, &agent, &me, json!({"node": "k2n9", "plan": true})).await;
+    assert_eq!((r.status, code(&r)), (404, "node_not_found".to_string()), "an ungranted node never matches: {}", r.body);
+    let r = post(d.port, "/cli/compute/nodes/remove", OWNER, json!({"node": "k2n12"})).await;
+    assert_eq!((r.status, code(&r)), (404, "node_not_found".to_string()), "{}", r.body);
+
+    // CE-1/CE-2: --plan's needs on the picked node, the tools line, the
+    // ranking (top 3, never an ungranted node).
+    let r = run(d.port, &agent, &me, json!({"node": "k2n12-vin", "needs": ["rust@stable", "cmake@3"], "plan": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let p = j(&r);
+    assert_eq!(p["needs"], json!([{"need": "rust@stable", "state": "ready", "have": "stable-x86_64-unknown-linux-gnu"}, {"need": "cmake@3", "state": "install", "have": null}]));
+    assert_eq!(p["toolsLine"], "installs cmake@3 first (~minutes)");
+    let rk = p["ranking"].as_array().unwrap();
+    assert_eq!(rk.len(), 3, "{p}");
+    assert!(rk.iter().all(|x| x["node"] != "k2n99-x"), "{p}");
+
+    // CE-17: nothing starts now → not_now (exit 3), nothing stored.
+    let before = job_count();
+    let r = run(d.port, &agent, &me, json!({"now": true})).await;
+    assert_eq!((r.status, code(&r)), (409, "not_now".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("the shortest wait is "), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"now": true, "node": "k2n12"})).await;
+    assert_eq!((r.status, code(&r)), (409, "not_now".to_string()), "a named node must start it now: {}", r.body);
+    assert_eq!(job_count(), before, "--now stored nothing");
+    let r = run(d.port, &agent, &me, json!({"now": true, "tier": "batch"})).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    compute_ws::test_frame("k2n1-m4", Frame::Offer(tooled(2, 30, &[])));
+    let r = run(d.port, &agent, &me, json!({"now": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "k2n1-m4");
+
+    // CE-13: --exclusive needs --why (exit 2) and the grant's CI right
+    // (exit 3 + the compute.ci card); the owner may.
+    let r = run(d.port, &agent, &me, json!({"exclusive": true, "node": "k2n1-m4"})).await;
+    assert_eq!((r.status, code(&r)), (400, "exclusive_needs_why".to_string()), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"exclusive": true, "why": "a benchmark", "node": "k2n1-m4"})).await;
+    assert_eq!((r.status, code(&r)), (403, "exclusive_needs_grant".to_string()), "{}", r.body);
+    let r = run(d.port, &agent, &me, json!({"exclusive": true, "why": "a benchmark"})).await;
+    assert_eq!((r.status, code(&r)), (403, "exclusive_needs_grant".to_string()), "auto too: {}", r.body);
+    let r = run(d.port, OWNER, &me, json!({"exclusive": true, "why": "a benchmark", "node": "k2n10-vin"})).await;
+    assert_eq!(r.status, 200, "the owner may: {}", r.body);
+    assert_eq!(row(j(&r)["job"]["id"].as_str().unwrap()).ctl.why.as_deref(), Some("a benchmark"));
+    for n in ["k2n12-vin", "k2n1-m4", "k2n10-vin", "k2n99-x"] {
+        compute_ws::test_detach(n);
+    }
+}
+
+/// CE-3 (with CE-15, D2): .k2/compute.toml defaults and presets, read by
+/// the daemon from the workspace folder; flags win; a bad file refuses
+/// with its line; the effective settings ride on the job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn presets_fill_the_run_and_ride_on_the_job() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "presets");
+    let dir = env.home.join("ws-presets");
+    std::fs::create_dir_all(dir.join(".k2")).unwrap();
+    std::fs::write(
+        dir.join(".k2/compute.toml"),
+        "[defaults]\nos = \"linux\"\nmem = \"8G\"\nneeds = [\"rust@stable\", \"cmake@3\"]\n\n[presets.daemon]\nmem = \"7G\"\nneeds = [\"rust@stable\", \"cmake@3\", \"sys:pkg-config\"]\nenv = { CARGO_BUILD_JOBS = \"2\" }\n",
+    )
+    .unwrap();
+    active_node("pr-a");
+    grant("pr-a", &me, None, 2);
+    let _a = compute_ws::test_attach("pr-a", tooled(1, 30, RUST_READY));
+    let plan_body = |extra: Value| {
+        let mut b = json!({"workspace": me.id, "argv": ["true"], "noSource": true, "plan": true});
+        for (k, v) in extra.as_object().unwrap() {
+            b[k] = v.clone();
+        }
+        b
+    };
+    // Acceptance 1: defaults, each from: defaults.
+    let r = post(d.port, "/cli/compute/run", OWNER, plan_body(json!({}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let e = j(&r)["effective"].clone();
+    assert_eq!(e["source"], ".k2/compute.toml");
+    assert_eq!(e["os"], json!({"value": "linux", "from": "defaults"}));
+    assert_eq!((e["mem"]["value"].as_str(), e["mem"]["from"].as_str()), (Some("8G"), Some("defaults")));
+    assert_eq!(e["needs"], json!({"value": ["rust@stable", "cmake@3"], "from": "defaults"}));
+    // CE-15: no --cpus on an 8-CPU node with 4 slots: hints = 2.
+    assert_eq!(e["env"]["cpuHints"]["CARGO_BUILD_JOBS"], "2", "{e}");
+    // Acceptance 2: --preset daemon --mem 24G.
+    let r = post(d.port, "/cli/compute/run", OWNER, plan_body(json!({"preset": "daemon", "memBytes": 24 * GB}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let e = j(&r)["effective"].clone();
+    assert_eq!((e["mem"]["from"].as_str(), e["needs"]["from"].as_str(), e["preset"].as_str()), (Some("flag"), Some("preset"), Some("daemon")));
+    assert_eq!(e["env"]["value"], json!(["CARGO_BUILD_JOBS"]));
+    assert!(e["env"]["cpuHints"].get("CARGO_BUILD_JOBS").is_none(), "the preset's own CARGO_BUILD_JOBS wins: {e}");
+    // An unknown preset lists the ones there are.
+    let r = post(d.port, "/cli/compute/run", OWNER, plan_body(json!({"preset": "mac"}))).await;
+    assert_eq!((r.status, code(&r)), (400, "preset_not_found".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("presets daemon"), "{}", r.body);
+    // Acceptance 5: a real run keeps the same object on the job.
+    let r = run(d.port, OWNER, &me, json!({"preset": "daemon", "tag": "fuzz:p3"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = row(j(&r)["job"]["id"].as_str().unwrap());
+    let eff = job.ctl.effective.clone().expect("effective on the job");
+    assert_eq!((eff["preset"].as_str(), eff["mem"]["from"].as_str()), (Some("daemon"), Some("flag")));
+    assert_eq!(job.ctl.tag.as_deref(), Some("fuzz:p3"));
+    let plan_v = job.plan().expect("plan");
+    assert_eq!(plan_v.needs, vec!["rust@stable", "cmake@3", "sys:pkg-config"], "the file's needs are explicit needs");
+    assert_eq!(plan_v.env.get("CARGO_BUILD_JOBS").map(String::as_str), Some("2"));
+    let r = run(d.port, OWNER, &me, json!({"tag": "bad tag"})).await;
+    assert_eq!((r.status, code(&r)), (400, "tag_invalid".to_string()), "{}", r.body);
+    // Acceptance 3: a bad file names its line; nothing is queued.
+    std::fs::write(dir.join(".k2/compute.toml"), "[defaults]\nos = \"linux\"\nmem = \"lots\"\n").unwrap();
+    let before = job_count();
+    let r = run(d.port, OWNER, &me, json!({})).await;
+    assert_eq!((r.status, code(&r)), (400, "compute_toml_invalid".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().starts_with(".k2/compute.toml line 3: [defaults] mem"), "{}", r.body);
+    assert_eq!(job_count(), before);
+    compute_ws::test_detach("pr-a");
+}
+
+/// CE-6: --cache prefers the node that ran this workspace's last job with
+/// it; busy for long → elsewhere and the record says where it was; busy
+/// for under 15 min → it waits there; --same-node-as pins (another
+/// workspace's job: 404).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cache_affinity_and_same_node_as() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "aff");
+    let other = seed_ws(&env, "affother");
+    for n in ["ca", "cb", "cz"] {
+        active_node(n);
+    }
+    grant("ca", &me, None, 2);
+    grant("cb", &me, None, 2);
+    grant("cz", &other, None, 2);
+    let _a = compute_ws::test_attach("ca", offer(1, 30, 32, 0));
+    let _b = compute_ws::test_attach("cb", offer(1, 20, 32, 0));
+    let _z = compute_ws::test_attach("cz", offer(1, 20, 32, 0));
+    let started = |node: &str, est: i64| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("UPDATE compute_jobs SET started_at = ?2, est_secs = ?3 WHERE node_id = ?1", params![node, k2_core::compute::now(), est]).unwrap();
+    };
+    // Job A ran on cb with cache fz.
+    let r = run(d.port, OWNER, &me, json!({"node": "cb", "cache": "fz"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job_a = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    started("cb", 3600);
+    // Acceptance 1: B with --cache fz, no node: cb (it starts now there),
+    // though ca is roomier.
+    let r = run(d.port, OWNER, &me, json!({"cache": "fz"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "cb");
+    assert_eq!(j(&r)["placement"]["code"], "starts_now_cache", "{}", r.body);
+    started("cb", 3600);
+    // Acceptance 2: cb is busy (1 GB free) for about an hour: B2 goes to
+    // ca, and the record names cb and the wait.
+    compute_ws::test_frame("cb", Frame::Offer(offer(2, 1, 32, 0)));
+    let r = run(d.port, OWNER, &me, json!({"cache": "fz"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "ca");
+    let why = j(&r)["placement"]["why"].as_str().unwrap().to_string();
+    assert!(why.contains("cache fz isn't on this node (it was on cb, busy ~"), "{why}");
+    // The wait there is short now: B3 waits on cb for its cache.
+    started("cb", 300);
+    let r = run(d.port, OWNER, &me, json!({"cache": "fz"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "cb");
+    assert_eq!(j(&r)["placement"]["code"], "queued_for_cache", "{}", r.body);
+    // Acceptance 3: --same-node-as A pins to cb; another workspace's job
+    // is not found.
+    let r = run(d.port, OWNER, &me, json!({"sameNodeAs": &job_a[..8]})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(node_of(&r), "cb");
+    let v = j(&r);
+    assert_eq!(v["placement"]["mode"], "pinned");
+    assert!(v["placement"]["why"].as_str().unwrap().starts_with("same node as job "), "{v}");
+    assert!(row(v["job"]["id"].as_str().unwrap()).ctl.any.is_none(), "a --same-node-as job never moves");
+    let r = run(d.port, OWNER, &other, json!({"node": "cz"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let theirs = j(&r)["job"]["id"].as_str().unwrap().to_string();
+    let agent = passport(&me);
+    let r = run(d.port, &agent, &me, json!({"sameNodeAs": theirs})).await;
+    assert_eq!((r.status, code(&r)), (404, "job_not_found".to_string()), "{}", r.body);
+    assert!(!r.body.contains("cz"), "no leak: {}", r.body);
+    for n in ["ca", "cb", "cz"] {
+        compute_ws::test_detach(n);
+    }
+}
+
+/// CE-18: prewarm sends a Batch job only where a need isn't ready; a
+/// second prewarm (tools now there) sends nothing; POST only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prewarm_only_where_tools_are_missing() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "warmup");
+    for n in ["pw1", "pw2", "pw3"] {
+        active_node(n);
+        grant(n, &me, None, 2);
+    }
+    let _1 = compute_ws::test_attach("pw1", tooled(1, 30, RUST_READY));
+    let _2 = compute_ws::test_attach("pw2", tooled(1, 30, &[]));
+    let _3 = compute_ws::test_attach("pw3", tooled(1, 30, &[]));
+    let body = json!({"workspace": me.id, "needs": ["rust@stable", "cargo-nextest"]});
+    let r = get(d.port, "/cli/compute/prewarm", OWNER, &format!("workspace={}", me.id)).await;
+    assert_eq!(r.status, 405, "POST only: {}", r.body);
+    let mut p = body.clone();
+    p["plan"] = json!(true);
+    let r = post(d.port, "/cli/compute/prewarm", OWNER, p).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let v = j(&r);
+    assert_eq!(v["jobs"], json!([]), "--plan submits nothing");
+    assert_eq!((v["nodes"][0]["node"].as_str(), v["nodes"][0]["state"].as_str()), (Some("pw1"), Some("ready")));
+    assert_eq!(v["nodes"][0]["note"], "no tool-cache cap on this node (older k2-node)");
+    assert_eq!(v["nodes"][1]["state"], "would_install");
+    let before = job_count();
+    let r = post(d.port, "/cli/compute/prewarm", &passport(&me), body.clone()).await;
+    assert_eq!(r.status, 200, "an agent verb: {}", r.body);
+    let v = j(&r);
+    assert_eq!(v["jobs"].as_array().unwrap().len(), 2, "{v}");
+    assert_eq!(job_count(), before + 2);
+    let states: Vec<&str> = v["nodes"].as_array().unwrap().iter().map(|n| n["state"].as_str().unwrap()).collect();
+    assert_eq!(states, vec!["ready", "installing", "installing"]);
+    let job = row(v["jobs"][0].as_str().unwrap());
+    assert_eq!((job.tier.as_str(), job.plan().unwrap().argv), ("batch", vec!["sh".to_string(), "-c".into(), "true".into()]));
+    // The tools arrive: a second prewarm sends nothing.
+    compute_ws::test_frame("pw2", Frame::Offer(tooled(2, 30, RUST_READY)));
+    compute_ws::test_frame("pw3", Frame::Offer(tooled(2, 30, RUST_READY)));
+    let r = post(d.port, "/cli/compute/prewarm", OWNER, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["jobs"], json!([]), "{}", r.body);
+    for n in ["pw1", "pw2", "pw3"] {
+        compute_ws::test_detach(n);
+    }
 }

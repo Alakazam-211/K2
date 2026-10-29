@@ -690,11 +690,10 @@ fn validate(who: &Who, body: &[u8]) -> R<J> {
     let opts = validate_opts(&v);
     // TC-3: `manifest` with a folder validates the folder as it would be
     // packed (the staged copy, removed when this returns).
-    let mut _staged: Option<Staged> = None;
-    let (root, hash) = if let Some(f) = s(&v, "folder") {
+    let (root, hash, _staged) = if let Some(f) = s(&v, "folder") {
         let folder = resolve_folder(who, f)?;
-        _staged = stage_manifest(who, &folder, &v)?;
-        (_staged.as_ref().map(|st| st.path().to_path_buf()).unwrap_or(folder), None)
+        let staged = stage_manifest(who, &folder, &v)?;
+        (staged.as_ref().map(|st| st.path().to_path_buf()).unwrap_or(folder), None, staged)
     } else if let Some(t) = s(&v, "seed") {
         let row = {
             let db = k2_core::db::shared();
@@ -703,7 +702,7 @@ fn validate(who: &Who, body: &[u8]) -> R<J> {
         }
         .ok_or_else(|| no(codes::SEED_NOT_FOUND, 404, format!("no Seed '{t}' (k2 app build prints the hash)")))?;
         deploy::seed::verify(&row.hash).map_err(|e| no(e.code, 409, e.message))?;
-        (deploy::seed::seed_path(&row.hash), Some(row.hash))
+        (deploy::seed::seed_path(&row.hash), Some(row.hash), None)
     } else {
         return Err(no(codes::BAD_REQUEST, 400, "give a folder or a seed"));
     };

@@ -158,7 +158,7 @@ fn members(b: &[u8], open: usize) -> Option<Vec<Member>> {
         let ve = value_end(b, vs)?;
         out.push((i, ke, vs, ve));
         let next = skip_ws(b, ve);
-        match b.get(next)? {
+        match *b.get(next)? {
             b',' => i = skip_ws(b, next + 1),
             b'}' => return Some(out),
             _ => return None,

@@ -1,5 +1,53 @@
 # Changelog
 
+## v0.7.5 (2026-10-29)
+
+**Requires `k2-mpc-base` v0.9.5** (a hotfix). No pack code change: `Cargo.lock` and the crate
+version only. Nothing to do for this pack; no store format change. The kit's changes:
+- **Outside saves:** v0.9.4 narrowed the window in which an outside edit could be corrupted
+  after a change that moved no byte; v0.9.5 closes it.
+  - A plain-editor save that arrived within the write delay after such a change and an edit
+    not yet written back could still land beside the restored text (`LINE three3`).
+  - An outside save is now a three-way merge onto the live doc: `write --base`'s merge when
+    clean.
+  - Where the save overlaps an unwritten change, both are kept, as before, now as whole
+    lines and in a deterministic order (the live side first).
+- **Echo detection:** a person's save that recreated the bytes of an earlier kit write is no
+  longer discarded once they have saved in between. Suppressed echoes are reported
+  (`AuditEvent::EchoSuppressed`).
+- **Hardening:** client updates carrying subdocuments are refused (the kit never uses them),
+  with `DocError::Unaccepted`. A stored doc holding one is quarantined
+  (`DocError::Quarantined`). The vendored engine is updated to k2-yrs k2.2.2.
+- K-AUD-1 gains `SyncDrift::Pending`.
+
+## v0.7.4 (2026-10-29)
+
+**Requires `k2-mpc-base` v0.9.4** (a hotfix). No pack code change: `Cargo.lock` and the crate
+version only. The kit fixes an outside edit that could be corrupted after a change that moved
+no byte (since v0.1.0): an edit and its undo, a delete and a retype, or a rewrite and back,
+then a plain-editor edit of the same text, could land beside the restored copy (`LINE
+three3`) while the doc reported clean. The kit now keeps its disk replica on the doc's own
+elements, and adds `Session::audit_disk_sync()` (K-AUD-1's sync check). Nothing to do for
+this pack; no store format change.
+
+## v0.7.3 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.9.3.** No pack code change: `Cargo.lock` and the crate version
+only. The kit now makes every edit on the doc itself, as the participant's client (no
+throwaway replica per edit: byte-identical results, far cheaper as history grows), with a
+sampled runtime check against the old path (`Config::edit_check_every`, two new
+`AuditEvent` variants). It builds its engine from `vendor/yrs` (Yrs v0.28.0 plus the fork's
+patches, MIT) by path, so the lock's `yrs` entry loses its registry source; nothing else
+changes for this pack. No store format change.
+
+## v0.7.2 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.9.2** (additive: tier 0 → text promotion keeping history,
+`approvals --all`, claims that never overlap at a shared edge, the engine's text cache; no
+store format change). No pack code change: the P30 row picks up the kit's `--all` cases with
+no list change. `scripts/check.sh` now checks this crate's formatting only (`cargo fmt -p
+k2-mpc-markdown`), so the kit's own style and its vendored model don't fail the pack's check.
+
 ## v0.7.1 (2026-10-28)
 
 **Requires `k2-mpc-base` v0.9.1** (additive: `edit_with_options`, the `run_tool` flag, the

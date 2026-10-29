@@ -118,7 +118,7 @@ const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over S
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 39] = [
+pub(crate) const V1_ACTIONS: [&str; 41] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -175,6 +175,22 @@ pub(crate) const V1_ACTIONS: [&str; 39] = [
     // 0.46.6 (Rosson 2026-10-29): reset one of the agent's Apps' users'
     // password; the approver alone sees the password or link.
     "apps.user-password-reset",
+    // 0.46.7 Workbench W1 (Rosson 2026-10-29): a person lands an agent's
+    // worktree sidecar on main, or retires it.
+    "git.land",
+    "sidecar.retire",
+];
+
+/// `git.land`: the sidecar and its branch tip the refusal names.
+const GIT_LAND_PARAMS: &[(&str, &[ParamFrom])] = &[
+    ("sidecar", &[ParamFrom::Response("/error/sidecar"), ParamFrom::Body("/name")]),
+    ("tip", &[ParamFrom::Response("/error/tip"), ParamFrom::Body("/expectTip")]),
+];
+
+/// `sidecar.retire`: the sidecar and the discard choice the refusal names.
+const SIDECAR_RETIRE_PARAMS: &[(&str, &[ParamFrom])] = &[
+    ("sidecar", &[ParamFrom::Response("/error/sidecar"), ParamFrom::Body("/name")]),
+    ("discard", &[ParamFrom::Response("/error/discard")]),
 ];
 
 /// `heartbeat.pause-other` / `-resume-other`: the workspace and heartbeat
@@ -230,6 +246,16 @@ pub(crate) const ROWS: &[Row] = &[
     row(ask("sew.rollback-data-loss", Floor::Owner), code(403, "rollback_needs_person"), "/cli/sew/server/rollback", POST),
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
+    // Workbench W1 (0.46.7): an agent's `k2 sidecar land` / `retire`; the
+    // refusal names the sidecar, its tip and the discard choice.
+    Row {
+        params: GIT_LAND_PARAMS,
+        ..row(ask("git.land", Floor::Admin), code(403, "land_needs_person"), "/cli/sidecar/land", POST)
+    },
+    Row {
+        params: SIDECAR_RETIRE_PARAMS,
+        ..row(ask("sidecar.retire", Floor::Admin), code(403, "retire_needs_person"), "/cli/sidecar/retire", POST)
+    },
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
     // `k2 agent harness` / `k2 workspace swap-canonical` on the agent's own
     // workspace (0.46.6): the refusal carries the normalized harness.
@@ -1017,6 +1043,41 @@ mod tests {
         }
     }
 
+    /// Workbench W1 (0.46.7): an agent's Land / Retire. The sidecar and the
+    /// tip come from the refusal (not the agent's `ws/name` spelling); the
+    /// retire choice too. `gated` on the same routes is still agents.manage.
+    #[test]
+    fn workbench_land_and_retire_teach_the_sidecar_and_tip_they_were_refused_on() {
+        let tip = "0123456789abcdef0123456789abcdef01234567";
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/sidecar/land",
+            &[],
+            Some(json!({"workspace": "/Users/x/k2", "name": "k2/fix", "expectTip": tip})),
+            json!({"error":{"code":"land_needs_person","hint":"x","sidecar":"fix","address":"k2/fix","tip":tip}}),
+        )
+        .unwrap();
+        assert_eq!(action_of(&p), "git.land", "{p}");
+        assert_eq!(p["params"], json!({"sidecar": "fix", "tip": tip}), "{p}");
+        assert_eq!(p["approvers"], "owner or admin");
+        let cmd = p["command"].as_str().unwrap();
+        assert!(cmd.starts_with("k2 permission request git.land ") && cmd.contains(" sidecar=fix"), "{cmd}");
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/sidecar/retire",
+            &[],
+            Some(json!({"name": "fix", "discard": true})),
+            json!({"error":{"code":"retire_needs_person","hint":"x","sidecar":"fix","discard":"yes"}}),
+        )
+        .unwrap();
+        assert_eq!(action_of(&p), "sidecar.retire", "{p}");
+        assert_eq!(p["params"], json!({"sidecar": "fix", "discard": "yes"}), "{p}");
+        let p = teach_of(403, "POST", "/cli/sidecar/land", &[], None, json!({"error":{"code":"gated","hint":"x"}})).unwrap();
+        assert_eq!(action_of(&p), "agents.manage", "{p}");
+    }
+
     /// `sources.approve` teaches the source the agent tried (`name`) and
     /// the spec it reviewed (`specHash`); a batch teaches one ask with the
     /// values left for the agent to fill in. The area's switch still
@@ -1170,7 +1231,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 39);
+        assert_eq!(V1_ACTIONS.len(), 41);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

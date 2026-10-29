@@ -18,6 +18,7 @@
 //! | `vault.rs` | 0.46.6 | `vault.delivery` (let the agent read one of its secrets as file or env) |
 //! | `heartbeats.rs` | 0.46.6 | `heartbeat.pause-other`, `heartbeat.resume-other` (another workspace's heartbeat) |
 //! | `password_reset.rs` | 0.46.6 | `apps.user-password-reset` (reset an App user's password; the secret goes to the approver only) |
+//! | `workbench.rs` | 0.46.7 | `git.land`, `sidecar.retire` (a person lands / retires an agent's worktree sidecar) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -37,6 +38,7 @@ pub(crate) mod password_reset;
 pub(crate) mod sew;
 pub(crate) mod switches;
 pub(crate) mod vault;
+pub(crate) mod workbench;
 
 /// The asking side, fixed at request time.
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +119,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(vault::actions());
     out.extend(heartbeats::actions());
     out.extend(password_reset::actions());
+    out.extend(workbench::actions());
     out
 }
 
@@ -133,6 +136,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(vault::not_cardable());
     out.extend(heartbeats::not_cardable());
     out.extend(password_reset::not_cardable());
+    out.extend(workbench::not_cardable());
     out
 }
 

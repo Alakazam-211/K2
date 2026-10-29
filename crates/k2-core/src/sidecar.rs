@@ -662,6 +662,13 @@ pub fn write_brief(project_path: &Path, slug: &str, text: &str) -> Result<BriefI
             opts.mode(0o600);
         }
         let mut f = opts.open(&tmp).map_err(|e| format!("write brief: {e}"))?;
+        // Windows has no mode bits: owner-only DACL while it is still empty
+        // (the rename below keeps it), as 0600 does on Unix.
+        #[cfg(windows)]
+        crate::private_fs::make_private_file(&tmp).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            format!("write brief: {e}")
+        })?;
         f.write_all(text.as_bytes()).map_err(|e| {
             let _ = std::fs::remove_file(&tmp);
             format!("write brief: {e}")

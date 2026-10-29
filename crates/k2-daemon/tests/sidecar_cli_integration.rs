@@ -1710,12 +1710,17 @@ async fn http_shape_member_405_413_and_cap() {
         r.body
     );
     // The binary must resolve where spawns look (here: the shim dir).
-    let shim = env.home.join("shim").join("hermes");
-    let parked = env.home.join("hermes.parked");
-    std::fs::rename(&shim, &parked).expect("park hermes shim");
+    // Windows: the shim is `hermes` plus its `hermes.exe` runner (the file
+    // a spawn resolves); both go.
+    let names: &[&str] = if cfg!(windows) { &["hermes", "hermes.exe"] } else { &["hermes"] };
+    for n in names {
+        std::fs::rename(env.home.join("shim").join(n), env.home.join(format!("{n}.parked"))).expect("park hermes shim");
+    }
     let ws2 = seed_ws(&env, &unique("mi"));
     let r = new_sidecar(d.port, OWNER, &ws2, "missing", "hermes", None);
-    std::fs::rename(&parked, &shim).expect("restore hermes shim");
+    for n in names {
+        std::fs::rename(env.home.join(format!("{n}.parked")), env.home.join("shim").join(n)).expect("restore hermes shim");
+    }
     assert_eq!(
         (r.status, error_code(&r).as_str()),
         (409, "harness_not_installed"),

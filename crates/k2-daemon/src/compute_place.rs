@@ -423,7 +423,9 @@ impl Cand {
 /// Offer feature (k2-node 0.46.7): the node installs the Rust components a
 /// need names (`rust@stable+clippy+rustfmt`). An older node is not a
 /// candidate for such a need (`node_too_old`), so the token never reaches
-/// a node that would refuse it.
+/// a node that would refuse it. Same string as
+/// `k2_node_proto::needs::FEATURE_RUST_COMPONENTS` (a test pins it; k2-node-proto
+/// is only a dev-dependency of the daemon).
 pub const FEATURE_RUST_COMPONENTS: &str = "rust-components";
 
 /// The components `rust@<channel>+<component>` may name.
@@ -494,7 +496,8 @@ pub fn wants_components(needs: &[String]) -> bool {
 
 /// Offer feature (k2-node 0.46.7, CE-18 cap): the node keeps its tool
 /// cache under `toolchain_budget_gb`. `k2 compute prewarm` says when a
-/// node has no cap (an older k2-node).
+/// node has no cap (an older k2-node). Same string as
+/// `k2_node_proto::needs::FEATURE_TOOLCHAIN_BUDGET` (a test pins it).
 pub const FEATURE_TOOLCHAIN_BUDGET: &str = "toolchain-budget";
 
 // ── the tools a node has (CE-1, CE-2) ────────────────────────────────
@@ -1932,6 +1935,14 @@ pub fn sweep_shares(now: i64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The offer features the controller reads are the strings k2-node
+    /// writes (Lane A and Lane C each name them; one must not drift).
+    #[test]
+    fn offer_feature_names_match_the_node_protocol() {
+        assert_eq!(FEATURE_RUST_COMPONENTS, k2_node_proto::needs::FEATURE_RUST_COMPONENTS);
+        assert_eq!(FEATURE_TOOLCHAIN_BUDGET, k2_node_proto::needs::FEATURE_TOOLCHAIN_BUDGET);
+    }
 
     // ── auto-placement fixtures (prd-compute-auto-placement-v1 §10) ──
 

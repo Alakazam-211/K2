@@ -61,6 +61,8 @@ pub mod attribution;
 pub mod box_prep;
 /// Undo box setup: the owner's `k2 app box unprep` (0.46.3 F8).
 pub mod box_unprep;
+/// `host.checks`, an App's own probes (prd-tauri-core-0467-v1 TC-16).
+pub mod checks;
 pub mod egress_proxy;
 pub mod egress_routes;
 pub mod box_service_routes;

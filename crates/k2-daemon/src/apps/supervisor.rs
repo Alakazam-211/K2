@@ -1235,6 +1235,9 @@ fn go_live(app: &AppRow, dep: &str, inst: Instance, kind: &str, t: &Timings) {
         json!({ "deployment": dep, "kind": kind, "seed": inst.seed, "port": inst.handle.port, "warm": prev_live.as_ref().map(|p| p.handle.deployment_id.clone()) }),
     );
     super::surfaces::emit_deployed(&app.app_id, kind);
+    // TC-16: the live Seed's host.checks, once, recorded on this deployment
+    // (never a gate; a failure wakes the App's agent). Its own thread.
+    super::checks::after_switch(app, &inst.seed, dep, inst.handle.port);
     // Old connections drain in the background; the old instance stays up
     // (a relaunch stops it once they have drained).
     let drain = prev_live.as_ref().map(|p| p.drain_secs).unwrap_or(t.drain_secs);

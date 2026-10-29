@@ -10,6 +10,11 @@
 // right after its workspace's row in the reach. Rows on other computers are
 // their Homes' rows as before (read only in the Workbench: a Thread runs
 // where its agent runs).
+//
+// This file is the renderer's only read of that list. When the shared
+// workspace-sessions route lands (`.k2/prds/workspace-sessions-contract.md`,
+// lane k2/workspace-sessions), switch `requestZenSidecarReach` to it; the
+// daemon side switches in `garden_data/workbench_sessions.rs`.
 
 import { create } from 'zustand'
 import type { HomeRow } from '@/stores/homes'

@@ -49,6 +49,7 @@ use k2_core::contract::{catalog, Effect, VerbRow};
 use super::budget::{self, BudgetKey, Spend};
 use super::call::{resolve, CallBody, Placed};
 use super::person_rows::{args_of, no, passthrough, project};
+use super::workbench_sessions as sessions;
 use super::workbench_w1 as w1;
 use crate::cli_response::CliResponse;
 
@@ -206,11 +207,7 @@ pub(crate) fn target(address: &str) -> Result<Target, CliResponse> {
         dir: ws.path.clone(),
     };
     if let Some(name) = name {
-        let rows = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            k2_core::sidecar::list_rows(&conn, &ws.project_id).map_err(|e| no(500, "failed", e))?
-        };
+        let rows = sessions::sidecars(&ws.project_id).map_err(|e| no(500, "failed", e))?;
         let row = rows.into_iter().find(|r| r.handle.as_deref() == Some(name.as_str())).ok_or_else(|| not_bound(&raw))?;
         t.dir = sidecar_dir(&row, &ws.path);
         t.sidecar = Some(row);
@@ -386,17 +383,16 @@ fn work_row(t: &Target, with_git: bool) -> J {
 }
 
 fn work_list(with_git: bool) -> Result<J, CliResponse> {
-    let projects = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::db::schema::Project::list(&conn).map_err(|e| no(500, "failed", e.to_string()))?
-    };
+    let projects = sessions::workspaces().map_err(|e| no(500, "failed", e))?;
     let mut out = Vec::new();
     for p in projects {
-        let rows = {
-            let db = k2_core::db::shared();
-            let conn = db.lock();
-            k2_core::sidecar::list_rows(&conn, &p.id).unwrap_or_default()
+        let rows = match sessions::sidecars(&p.id) {
+            Ok(r) => r,
+            Err(e) => {
+                // One unreadable workspace doesn't hide the others' tasks.
+                k2_core::log_debug!("[workbench] sidecars of {} unreadable: {e}", p.id);
+                continue;
+            }
         };
         if rows.is_empty() {
             continue;

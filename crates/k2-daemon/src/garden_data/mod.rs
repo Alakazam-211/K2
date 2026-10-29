@@ -34,6 +34,7 @@ pub mod history_routes;
 pub mod person_rows;
 pub mod tx_routes;
 pub mod workbench_rows;
+pub mod workbench_sessions;
 pub mod workbench_w1;
 
 /// `~/.k2/stores/` (0700): `gardens.sqlite` and `.snapshots/`.

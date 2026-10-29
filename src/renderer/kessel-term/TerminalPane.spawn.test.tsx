@@ -413,6 +413,24 @@ describe('session_owned_elsewhere', () => {
     expect(tabsApi.releasePaneOwnedElsewhere).toHaveBeenCalledTimes(1)
   })
 
+  // One conversation, one writer: a tab resuming the agent's own Chat is
+  // refused. The pane shows the daemon's sentence (not a blank pane, not
+  // raw JSON), keeps the tab, and does not retry.
+  it('409 conversation_is_canonical shows the refusal sentence and does not retry', async () => {
+    const sentence = "This is the agent's own conversation, so open it from the agent's Chat tab instead of a new tab."
+    const { urls } = installStatus(
+      409,
+      JSON.stringify({ error: 'conversation_is_canonical', message: sentence, agent_name: 'tab-pg-test', conversationId: 'c-1' }),
+    )
+    renderInRoom(room, pane(true))
+    await waitFor(() => expect(document.body.textContent ?? '').toContain(sentence))
+    expect(document.body.textContent ?? '').not.toContain('spawn 409')
+    expect(document.body.textContent ?? '').not.toContain('conversation_is_canonical')
+    expect(tabsApi.releasePaneOwnedElsewhere).not.toHaveBeenCalled()
+    await settle()
+    expect(urls().filter((url) => url.includes('/cli/sessions/v2/spawn'))).toHaveLength(1)
+  })
+
   it('other 4xx still surfaces the spawn error and does not drop the pane', async () => {
     installStatus(400, '{"error":"bad request"}')
     renderInRoom(room, pane(true))

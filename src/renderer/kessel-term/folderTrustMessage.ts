@@ -22,3 +22,25 @@ export function folderTrustMessage(status: number, body: string): string | null 
     ? `K2 won't start programs in this folder: the owner chose "Don't trust".${decide ? ` ${decide}` : ''}`
     : `Waiting for the owner to trust this folder.${decide ? ` Decide: ${decide}` : ''}`
 }
+
+/**
+ * One conversation, one writer: a spawn the daemon refuses with 409
+ * `conversation_is_canonical` (a tab resuming the agent's own Chat, or a
+ * conversation another live tab already runs) shows the daemon's sentence
+ * in the pane, never a blank pane or the raw JSON. `null` for any other
+ * body.
+ */
+export function duplicateConversationMessage(status: number, body: string): string | null {
+  if (status !== 409) return null
+  let v: unknown
+  try {
+    v = JSON.parse(body)
+  } catch {
+    return null
+  }
+  if (!v || typeof v !== 'object') return null
+  const r = v as { error?: unknown; message?: unknown }
+  if (r.error !== 'conversation_is_canonical') return null
+  const message = typeof r.message === 'string' && r.message.trim() ? r.message.trim() : null
+  return message ?? "This is the agent's own conversation, so open it from the agent's Chat tab instead of a new tab."
+}

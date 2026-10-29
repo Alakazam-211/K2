@@ -163,7 +163,7 @@ fn only_an_agent_of_the_apps_workspace_asks_for_its_own_apps_users() {
 #[test]
 fn password_mode_shows_the_approver_a_password_once_and_nothing_else_ever_holds_it() {
     let e = env("prpw");
-    let (u, _pid) = person(&e.app, "ben", Some("ben@x.test"));
+    let (u, pid) = person(&e.app, "ben", Some("ben@x.test"));
     // Locked out (three wrong tries) and signed in somewhere.
     let session = skin::create_app_session_token(&u, &e.app).expect("session").raw;
     for _ in 0..3 {
@@ -213,7 +213,11 @@ fn password_mode_shows_the_approver_a_password_once_and_nothing_else_ever_holds_
         assert_eq!(r.state, RequestState::Approved);
         let msg = r.result_message.clone().unwrap_or_default();
         assert!(msg.starts_with("Password reset by the owner at ") && msg.contains("(shown to the owner once)"), "{msg}");
-        assert!(matches!(skin::check_and_record_login(&u, &secret), skin::SkinLoginOutcome::Ok(_)), "signs in: the lock is cleared");
+        // 0.46.6 must-change: the password is right and the lock is
+        // cleared, but it is temporary (the approver chose it), so the
+        // person gets no session until they choose their own.
+        assert!(matches!(skin::check_and_record_login(&u, &secret), skin::SkinLoginOutcome::MustChange(_)), "right password, lock cleared, must change");
+        assert!(skin::must_change::is_flagged(&pid).expect("flag read"), "the card's password is temporary");
         assert!(!skin::verify_principal_password(&u, OLD_PW));
         assert!(skin::resolve_skin_token(&session).is_none(), "every session ended");
         let turn = last_turn(&e.ws);
@@ -223,7 +227,7 @@ fn password_mode_shows_the_approver_a_password_once_and_nothing_else_ever_holds_
         let (s, again) = answer_as("owner", &e.ws, &card, allow(json!({ "reveal": 1, "client": "desktop" })));
         assert_ne!(s, "200 OK", "{again}");
         assert!(again.get("forYou").is_none() && !again.to_string().contains(&secret), "{again}");
-        assert!(matches!(skin::check_and_record_login(&u, &secret), skin::SkinLoginOutcome::Ok(_)), "the password stands");
+        assert!(matches!(skin::check_and_record_login(&u, &secret), skin::SkinLoginOutcome::MustChange(_)), "the password stands");
 
         // Nothing stored holds it; the audit names who, never what.
         let places = stored_text(&e.ws, &card, &id);
@@ -350,7 +354,7 @@ fn an_admin_resets_app_only_users_and_the_owner_hears_but_box_logins_stay_the_ow
     let (s, a) = answer_as(&admin, &e.ws, &card, allow(json!({ "reveal": 1, "client": "web" })));
     assert_eq!(s, "200 OK", "{a}");
     let secret = a["forYou"]["secret"].as_str().expect("secret").to_string();
-    assert!(matches!(skin::check_and_record_login(&u, &secret), skin::SkinLoginOutcome::Ok(_)));
+    assert!(matches!(skin::check_and_record_login(&u, &secret), skin::SkinLoginOutcome::MustChange(_)), "an Admin's reset is temporary too");
     let msg = row(&id).result_message.unwrap_or_default();
     assert!(msg.starts_with(&format!("Password reset by {admin} at ")), "{msg}");
     let notes = k2_core::feedback::list_for_project(k2_core::db::AUDIT_SENTINEL_IDS[0], &k2_core::feedback::ListFilter::Open).expect("notes");
@@ -395,6 +399,8 @@ fn an_admin_resets_app_only_users_and_the_owner_hears_but_box_logins_stay_the_ow
     let (u2, _) = person(&e.app, "jo", None);
     let r = crate::skin_routes::handle_users_password(json!({ "username": u2, "password": "typed-by-admin-1" }).to_string().as_bytes(), &as_admin);
     assert_eq!(r.status, "200 OK", "{}", r.body);
+    let v: Value = serde_json::from_str(&r.body).expect("json");
+    assert_eq!(v["passwordMustChange"], json!(true), "an Admin-typed password is temporary: {}", r.body);
     let notes = k2_core::feedback::list_for_project(k2_core::db::AUDIT_SENTINEL_IDS[0], &k2_core::feedback::ListFilter::Open).expect("notes");
     assert!(notes.iter().any(|n| n.title == format!("{admin} (admin) reset {u2}'s password")), "{notes:?}");
 }

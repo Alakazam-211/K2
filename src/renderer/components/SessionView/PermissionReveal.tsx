@@ -36,7 +36,7 @@ function title(r: RevealedSecret): string {
 }
 
 function hint(r: RevealedSecret): string {
-  if (r.kind === 'password') return `Give it to ${r.username} yourself. They can change it after signing in.`
+  if (r.kind === 'password') return `Give it to ${r.username} yourself. The next time they sign in, K2 asks them to choose a new password.`
   if (r.kind === 'code') return `This box has no web address for K2's set-password page yet: give ${r.username} this code with the password they should set.`
   return `Give it to ${r.username} yourself. It works once, for 24 hours; they choose their own password.`
 }

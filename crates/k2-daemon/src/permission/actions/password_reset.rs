@@ -274,7 +274,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
         // password (the default)
         _ => (
             format!("K2 makes a new password for {who} and shows it to you once"),
-            format!("{who} is signed out everywhere and their sign-in lock is cleared. Their old password stops working at once. Tell or send {who} the new one yourself; they can change it after signing in."),
+            format!("{who} is signed out everywhere and their sign-in lock is cleared. Their old password stops working at once. Tell or send {who} the new one yourself. The next time they sign in, K2 asks them to choose a new password."),
         ),
     };
     out.params.insert("made".into(), Value::String(made));

@@ -331,11 +331,20 @@ pub fn item_write_options() -> crate::macos_keychain::WriteOptions {
 /// prompt-on-every-visit regression.
 #[cfg(target_os = "macos")]
 pub fn write_account_session(sess: &AccountSession) {
+    let _ = try_write_account_session(sess);
+}
+
+/// [`write_account_session`] that says whether the write landed (the
+/// keychain write reads the item back). The daemon's lease loop uses it to
+/// know when a rotated refresh token is only in memory, so it never
+/// presents the spent one still in the keychain (0.46.6 refresh-loop fix).
+#[cfg(target_os = "macos")]
+pub fn try_write_account_session(sess: &AccountSession) -> bool {
     write_token_with_acl(
         ACCOUNT_KEYCHAIN_SERVICE,
         ACCOUNT_SESSION_BLOB_KEY,
         &session_blob_json(sess),
-    );
+    )
 }
 
 /// Remove the persisted account session entirely (sign-out): the current
@@ -396,9 +405,13 @@ pub fn purge_legacy_session_items() {
 /// failure is logged + swallowed (the in-memory token is still good for
 /// this run).
 #[cfg(target_os = "macos")]
-fn write_token_with_acl(service: &str, account: &str, token: &str) {
-    if let Err(e) = crate::macos_keychain::write(service, account, token.as_bytes(), &item_write_options()) {
-        crate::log_debug!("[tunnel/lease] WARN: failed to persist refresh token with ACL (service={service}): {e}");
+fn write_token_with_acl(service: &str, account: &str, token: &str) -> bool {
+    match crate::macos_keychain::write(service, account, token.as_bytes(), &item_write_options()) {
+        Ok(()) => true,
+        Err(e) => {
+            crate::log_debug!("[tunnel/lease] WARN: failed to persist refresh token with ACL (service={service}): {e}");
+            false
+        }
     }
 }
 
@@ -416,6 +429,12 @@ pub fn read_account_session() -> Option<AccountSession> {
 
 #[cfg(not(target_os = "macos"))]
 pub fn write_account_session(_sess: &AccountSession) {}
+
+/// Non-macOS: nothing is written (see [`write_account_session`]).
+#[cfg(not(target_os = "macos"))]
+pub fn try_write_account_session(_sess: &AccountSession) -> bool {
+    false
+}
 
 /// Non-macOS: the renderer owns the account session via the keyring crate
 /// (see [`read_account_session`]'s note); nothing for the daemon to clear.

@@ -47,16 +47,6 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-/// Supabase project that backs the k2.dev account (mirrors the renderer's
-/// `k2-account.ts` — same project, same RPC). Kept in lockstep with the
-/// client so the daemon hits the identical control-plane contract.
-const SUPABASE_URL: &str = "https://ttgcalfrzzgkxnfepkiu.supabase.co";
-
-/// Public `anon` key for the project. Safe to embed in a client (it only
-/// authorizes the unauthenticated role; row access is RLS-scoped to the
-/// signed-in caller via the bearer access token). Identical to the value
-/// shipped in the renderer.
-const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z2NhbGZyenpna3huZmVwa2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDIyMzksImV4cCI6MjA5NjA3ODIzOX0.L28xgtYkPEj5eCNDGO5Zf5xxhdKQLxKD8c1CJRHNqI8";
 
 // The account-session keychain item (constants, read/write/clear, the
 // trusted-app ACL) lives in `k2_client::account_session` so the thin client
@@ -64,7 +54,7 @@ const SUPABASE_ANON_KEY: &str = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOi
 // `tunnel::lease::*` path keeps working.
 pub use k2_client::account_session::{
     bundle_peer_binaries, clear_account_session, read_account_session, resolve_account_session,
-    session_blob_json, write_account_session, AccountSession,
+    session_blob_json, try_write_account_session, write_account_session, AccountSession,
 };
 #[cfg(target_os = "macos")]
 pub use k2_client::account_session::{
@@ -292,11 +282,24 @@ pub fn migrate_account_keychain() -> bool {
 
 
 // ── Control-plane calls (identical wire to the renderer) ────────────────
+//
+// 0.46.6 refresh-loop fix. Before this, EVERY 60 s tick exchanged the
+// refresh token for a new access token (`grant_type=refresh_token`) even
+// though the access token lives an hour: ~1,440 new refresh tokens a day per
+// signed-in Mac, from a client that sent no User-Agent. Now the access token
+// is kept in memory ([`TokenKeeper`], one per process) and refreshed only
+// when it is within [`REFRESH_MARGIN`] of expiry; a failed refresh backs off
+// (doubling from [`RENEW_INTERVAL`] to [`REFRESH_BACKOFF_MAX`]); the rotated
+// refresh token is persisted BEFORE it is used, and if that write fails the
+// keeper keeps presenting the rotated token from memory instead of the
+// spent one still in the keychain (a spent token must never be sent again).
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
     access_token: Option<String>,
     refresh_token: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -305,16 +308,189 @@ struct ClaimRow {
     claimed: bool,
 }
 
-/// Exchange a refresh token for a fresh `(access_token, refresh_token)`.
-/// Mirrors `refreshSession` in the renderer. The refresh token may rotate
-/// — the caller MUST persist the returned one.
-fn refresh_access_token(refresh_token: &str) -> Result<(String, String), String> {
+/// Refresh the access token when it has less than this left.
+pub const REFRESH_MARGIN: Duration = Duration::from_secs(5 * 60);
+
+/// Longest wait between refresh attempts after repeated failures.
+pub const REFRESH_BACKOFF_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// Access-token lifetime assumed when the server's answer has no
+/// `expires_in` (GoTrue always sends it; this is the cautious floor).
+const DEFAULT_ACCESS_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// How many superseded refresh tokens the keeper remembers, so a keychain
+/// still holding one of them (its rotation write failed) is recognised as
+/// stale rather than as a new sign-in.
+const SUPERSEDED_KEEP: usize = 8;
+
+/// A successful `grant_type=refresh_token` answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refreshed {
+    pub access: String,
+    pub refresh: String,
+    /// Seconds until the access token expires, as the server said.
+    pub expires_in: Option<u64>,
+}
+
+/// The wait after `failures` consecutive failed refreshes: RENEW_INTERVAL,
+/// then doubling, capped at [`REFRESH_BACKOFF_MAX`].
+pub fn refresh_backoff(failures: u32) -> Duration {
+    let shift = failures.saturating_sub(1).min(16);
+    RENEW_INTERVAL
+        .checked_mul(1u32 << shift)
+        .unwrap_or(REFRESH_BACKOFF_MAX)
+        .min(REFRESH_BACKOFF_MAX)
+}
+
+#[derive(Debug, Clone)]
+struct Held {
+    access: String,
+    expires_at: std::time::Instant,
+    /// The newest refresh token (the one to present next time).
+    refresh: String,
+    /// False when writing `refresh` to the keychain failed; retried on
+    /// every tick until it lands.
+    persisted: bool,
+}
+
+/// The process's access token for the account server, and when (not) to
+/// refresh it. Pure apart from the two closures, so the whole policy is
+/// unit-tested with fakes and synthetic clocks.
+#[derive(Debug, Default)]
+pub struct TokenKeeper {
+    held: Option<Held>,
+    /// Refresh tokens this keeper already exchanged (newest last).
+    superseded: Vec<String>,
+    failures: u32,
+    retry_at: Option<std::time::Instant>,
+    /// The refresh token the counted failures were for; new material
+    /// (a fresh sign-in) starts over without waiting.
+    failed_for: Option<String>,
+}
+
+impl TokenKeeper {
+    /// An access token for the session whose stored refresh token is
+    /// `stored`, refreshing only when needed.
+    ///
+    /// * `refresh(token)` performs the network exchange;
+    /// * `persist(rotated)` writes the rotated refresh token to the
+    ///   keychain and says whether it landed.
+    pub fn access_token(
+        &mut self,
+        stored: &str,
+        now: std::time::Instant,
+        refresh: impl FnOnce(&str) -> Result<Refreshed, String>,
+        mut persist: impl FnMut(&str) -> bool,
+    ) -> Result<String, String> {
+        // Which refresh token is current?
+        let current = match self.held.as_ref().map(|h| h.refresh.clone()) {
+            Some(ours) if ours == stored => ours,
+            Some(ours) if self.superseded.iter().any(|s| s == stored) => {
+                // The keychain still holds a token we already spent: our
+                // rotation write did not land. Never present the spent one;
+                // retry the write.
+                if let Some(h) = self.held.as_mut() {
+                    if !h.persisted {
+                        h.persisted = persist(&h.refresh);
+                    }
+                }
+                ours
+            }
+            Some(_) => {
+                // Someone else wrote new material (the desktop client signed
+                // in again or refreshed): start over from it.
+                self.held = None;
+                self.superseded.clear();
+                stored.to_string()
+            }
+            None => stored.to_string(),
+        };
+        if let Some(h) = &self.held {
+            if now + REFRESH_MARGIN < h.expires_at {
+                return Ok(h.access.clone());
+            }
+        }
+        if self.failed_for.as_deref() != Some(current.as_str()) {
+            self.failures = 0;
+            self.retry_at = None;
+            self.failed_for = None;
+        }
+        if let Some(at) = self.retry_at {
+            if now < at {
+                // Still inside the backoff: use the old access token while it
+                // is valid at all, else wait.
+                if let Some(h) = self.held.as_ref().filter(|h| now < h.expires_at) {
+                    return Ok(h.access.clone());
+                }
+                return Err(format!(
+                    "token refresh backing off for {}s after {} failure(s)",
+                    at.saturating_duration_since(now).as_secs(),
+                    self.failures
+                ));
+            }
+        }
+        match refresh(&current) {
+            Ok(r) => {
+                // Persist BEFORE use: once the server rotated, `current` is
+                // spent.
+                let persisted = r.refresh == current || persist(&r.refresh);
+                if r.refresh != current {
+                    self.superseded.push(current);
+                    let extra = self.superseded.len().saturating_sub(SUPERSEDED_KEEP);
+                    self.superseded.drain(..extra);
+                }
+                let ttl = r
+                    .expires_in
+                    .map(Duration::from_secs)
+                    .unwrap_or(DEFAULT_ACCESS_TTL);
+                self.held = Some(Held {
+                    access: r.access.clone(),
+                    expires_at: now + ttl,
+                    refresh: r.refresh,
+                    persisted,
+                });
+                self.failures = 0;
+                self.retry_at = None;
+                self.failed_for = None;
+                Ok(r.access)
+            }
+            Err(e) => {
+                self.failures = self.failures.saturating_add(1);
+                self.retry_at = Some(now + refresh_backoff(self.failures));
+                self.failed_for = Some(current);
+                if let Some(h) = self.held.as_ref().filter(|h| now < h.expires_at) {
+                    return Ok(h.access.clone());
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// The server refused the access token (401): refresh on the next
+    /// tick instead of reusing it until its stated expiry.
+    pub fn expire_access(&mut self, now: std::time::Instant) {
+        if let Some(h) = self.held.as_mut() {
+            h.expires_at = now;
+        }
+    }
+}
+
+fn keeper() -> std::sync::MutexGuard<'static, TokenKeeper> {
+    static KEEPER: std::sync::OnceLock<std::sync::Mutex<TokenKeeper>> = std::sync::OnceLock::new();
+    KEEPER
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+}
+
+/// Exchange a refresh token for a fresh access token at `base`. Mirrors
+/// `refreshSession` in the renderer. The refresh token rotates; the
+/// caller ([`TokenKeeper`]) persists the returned one.
+fn refresh_access_token(base: &str, refresh_token: &str) -> Result<Refreshed, String> {
     let client = http_client()?;
     let resp = client
-        .post(format!(
-            "{SUPABASE_URL}/auth/v1/token?grant_type=refresh_token"
-        ))
-        .header("apikey", SUPABASE_ANON_KEY)
+        .post(format!("{base}/auth/v1/token?grant_type=refresh_token"))
+        .header("apikey", crate::connect_db::ANON_KEY)
         .header("Content-Type", "application/json")
         .body(serde_json::json!({ "refresh_token": refresh_token }).to_string())
         .send()
@@ -328,11 +504,19 @@ fn refresh_access_token(refresh_token: &str) -> Result<(String, String), String>
         .text()
         .map_err(|e| format!("refresh response read failed: {e}"))?;
     let body: TokenResponse = serde_json::from_str(&text)
-        .map_err(|e| format!("refresh response parse failed: {e}"))?;
+        .map_err(|_| "refresh response parse failed".to_string())?;
     match (body.access_token, body.refresh_token) {
-        (Some(a), Some(r)) => Ok((a, r)),
+        (Some(access), Some(refresh)) if !access.is_empty() && !refresh.is_empty() => {
+            Ok(Refreshed { access, refresh, expires_in: body.expires_in })
+        }
         _ => Err("refresh response missing access/refresh token".to_string()),
     }
+}
+
+/// A failed claim: the HTTP status when the server answered.
+struct ClaimFailure {
+    status: Option<u16>,
+    msg: String,
 }
 
 /// Re-POST the `claim_subdomain` RPC — the heartbeat. Mirrors
@@ -341,15 +525,17 @@ fn refresh_access_token(refresh_token: &str) -> Result<(String, String), String>
 /// the call (the heartbeat landed), `Ok(false)` when another device holds
 /// a fresh claim, `Err` on transport/HTTP failure.
 fn claim_subdomain(
+    base: &str,
     access_token: &str,
     label: &str,
     device_id: &str,
     device_label: Option<&str>,
-) -> Result<bool, String> {
-    let client = http_client()?;
+) -> Result<bool, ClaimFailure> {
+    let fail = |status: Option<u16>, msg: String| ClaimFailure { status, msg };
+    let client = http_client().map_err(|e| fail(None, e))?;
     let resp = client
-        .post(format!("{SUPABASE_URL}/rest/v1/rpc/claim_subdomain"))
-        .header("apikey", SUPABASE_ANON_KEY)
+        .post(format!("{base}/rest/v1/rpc/claim_subdomain"))
+        .header("apikey", crate::connect_db::ANON_KEY)
         .header("Authorization", format!("Bearer {access_token}"))
         .header("Content-Type", "application/json")
         .body(
@@ -361,55 +547,68 @@ fn claim_subdomain(
             .to_string(),
         )
         .send()
-        .map_err(|e| format!("claim request failed: {e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("claim rejected (HTTP {})", resp.status()));
+        .map_err(|e| fail(None, format!("claim request failed: {e}")))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(fail(Some(status.as_u16()), format!("claim rejected (HTTP {status})")));
     }
     let text = resp
         .text()
-        .map_err(|e| format!("claim response read failed: {e}"))?;
+        .map_err(|e| fail(None, format!("claim response read failed: {e}")))?;
     let rows: Vec<ClaimRow> = serde_json::from_str(&text)
-        .map_err(|e| format!("claim response parse failed: {e}"))?;
+        .map_err(|_| fail(None, "claim response parse failed".to_string()))?;
     Ok(rows.first().map(|r| r.claimed).unwrap_or(false))
 }
 
 fn http_client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
+        .user_agent(crate::connect_db::USER_AGENT)
         .build()
         .map_err(|e| format!("http client build failed: {e}"))
 }
 
-/// Perform one full renewal cycle for `target`: read the keychain session,
-/// refresh its token to an access token (persisting any rotation), and
-/// re-claim the subdomain. Returns `Ok(true)` when the lease was renewed
-/// (this device holds it), `Ok(false)` when another device now holds it
-/// (caller may choose to log/stop), `Err` on a transport/auth failure (a
-/// transient error — the next tick retries).
+/// Perform one renewal cycle for `target`: read the keychain session, get
+/// an access token from the process's [`TokenKeeper`] (a network refresh
+/// only near expiry, persisting any rotation first), and re-claim the
+/// subdomain at the account server ([`crate::connect_db::base_url`]).
+/// Returns `Ok(true)` when the lease was renewed (this device holds it),
+/// `Ok(false)` when another device now holds it, `Err` on a transport/auth
+/// failure (the next tick retries; refreshes back off).
 ///
-/// This is the network-touching entry point; it is NEVER exercised by unit
-/// tests (those cover the pure seams: [`cadence_is_safe`],
-/// [`LeaseTarget::from_config`], [`resolve_account_session`],
-/// [`decide_renewal_mode`]).
+/// This is the network-touching entry point; unit tests cover its pure
+/// seams ([`TokenKeeper`], [`refresh_backoff`], [`cadence_is_safe`],
+/// [`LeaseTarget::from_config`], [`decide_renewal_mode`]).
 pub fn renew_once(target: &LeaseTarget) -> Result<bool, String> {
     let sess = read_account_session()
         .ok_or_else(|| "no account session in keychain (signed out?)".to_string())?;
-    let (access, rotated) = refresh_access_token(&sess.refresh_token)?;
-    // Persist the rotated refresh token back into the SAME single-blob
-    // layout the renderer reads first — preserving the email field — so
-    // neither side presents a spent token on its next refresh.
-    if rotated != sess.refresh_token {
-        write_account_session(&AccountSession {
-            refresh_token: rotated,
-            email: sess.email.clone(),
-        });
-    }
-    claim_subdomain(
+    let base = crate::connect_db::base_url();
+    let access = keeper().access_token(
+        &sess.refresh_token,
+        std::time::Instant::now(),
+        |rt| refresh_access_token(&base, rt),
+        |rotated| {
+            try_write_account_session(&AccountSession {
+                refresh_token: rotated.to_string(),
+                email: sess.email.clone(),
+            })
+        },
+    )?;
+    match claim_subdomain(
+        &base,
         &access,
         &target.label,
         &target.device_id,
         target.device_label.as_deref(),
-    )
+    ) {
+        Ok(held) => Ok(held),
+        Err(f) => {
+            if f.status == Some(401) {
+                keeper().expire_access(std::time::Instant::now());
+            }
+            Err(f.msg)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -633,5 +832,202 @@ mod tests {
     fn renewal_mode_enabled_with_session_and_no_kill_switch() {
         assert_eq!(decide_renewal_mode(None, true), RenewalMode::Enabled);
         assert_eq!(decide_renewal_mode(Some("on"), true), RenewalMode::Enabled);
+    }
+
+    // ── TokenKeeper: the refresh-loop fix (0.46.6) ──────────────────────
+
+    use std::cell::{Cell, RefCell};
+    use std::time::Instant;
+
+    /// A fake account server: each refresh hands out `rt-<n>` / `at-<n>`
+    /// with a one-hour access token, and records what it was given.
+    struct FakeServer {
+        calls: RefCell<Vec<String>>,
+        fail: Cell<bool>,
+    }
+
+    impl FakeServer {
+        fn new() -> Self {
+            Self { calls: RefCell::new(Vec::new()), fail: Cell::new(false) }
+        }
+        fn refresh(&self, rt: &str) -> Result<Refreshed, String> {
+            self.calls.borrow_mut().push(rt.to_string());
+            if self.fail.get() {
+                return Err("refresh request failed: connection refused".to_string());
+            }
+            let n = self.calls.borrow().len();
+            Ok(Refreshed {
+                access: format!("at-{n}"),
+                refresh: format!("rt-{n}"),
+                expires_in: Some(3600),
+            })
+        }
+        fn count(&self) -> usize {
+            self.calls.borrow().len()
+        }
+    }
+
+    #[test]
+    fn a_valid_access_token_is_reused_for_an_hour_of_ticks() {
+        let server = FakeServer::new();
+        let mut keeper = TokenKeeper::default();
+        let mut stored = "rt-0".to_string();
+        let t0 = Instant::now();
+        // 60 ticks, one per RENEW_INTERVAL: the old code refreshed 60 times.
+        for i in 0..60u32 {
+            let now = t0 + RENEW_INTERVAL * i;
+            let at = keeper
+                .access_token(&stored.clone(), now, |rt| server.refresh(rt), |rt| {
+                    stored = rt.to_string();
+                    true
+                })
+                .expect("access token");
+            assert!(at.starts_with("at-"), "{at}");
+        }
+        // One refresh at the start, one when the first token neared expiry
+        // (55 min in), never one per tick.
+        assert_eq!(server.count(), 2, "calls: {:?}", server.calls.borrow());
+        assert_eq!(*server.calls.borrow(), vec!["rt-0".to_string(), "rt-1".to_string()]);
+        assert_eq!(stored, "rt-2", "every rotation was persisted");
+    }
+
+    #[test]
+    fn refresh_happens_only_inside_the_margin() {
+        let server = FakeServer::new();
+        let mut keeper = TokenKeeper::default();
+        let t0 = Instant::now();
+        let ok = |_: &str| true;
+        keeper.access_token("rt-0", t0, |rt| server.refresh(rt), ok).unwrap();
+        // Just outside the margin: no refresh.
+        let before = t0 + Duration::from_secs(3600) - REFRESH_MARGIN - Duration::from_secs(1);
+        keeper.access_token("rt-1", before, |rt| server.refresh(rt), ok).unwrap();
+        assert_eq!(server.count(), 1);
+        // Inside it: refresh with the newest token.
+        let inside = t0 + Duration::from_secs(3600) - REFRESH_MARGIN + Duration::from_secs(1);
+        let at = keeper.access_token("rt-1", inside, |rt| server.refresh(rt), ok).unwrap();
+        assert_eq!(at, "at-2");
+        assert_eq!(server.calls.borrow().last().map(String::as_str), Some("rt-1"));
+    }
+
+    #[test]
+    fn failed_refreshes_back_off_and_do_not_retry_every_tick() {
+        let server = FakeServer::new();
+        server.fail.set(true);
+        let mut keeper = TokenKeeper::default();
+        let t0 = Instant::now();
+        let ok = |_: &str| true;
+        // Two hours of 60 s ticks against a dead server.
+        let mut errors = 0;
+        for i in 0..120u32 {
+            let now = t0 + RENEW_INTERVAL * i;
+            if keeper.access_token("rt-0", now, |rt| server.refresh(rt), ok).is_err() {
+                errors += 1;
+            }
+        }
+        assert_eq!(errors, 120, "no access token without a successful refresh");
+        // Attempts at 0, 1, 3, 7, 15, 31, 61 and 91 minutes (doubling to the
+        // 30-minute cap), not 120.
+        assert_eq!(server.count(), 8, "attempts: {}", server.count());
+        // Recovery: the next attempt after the backoff succeeds and resets it.
+        server.fail.set(false);
+        let later = t0 + Duration::from_secs(121 * 60);
+        assert!(keeper.access_token("rt-0", later, |rt| server.refresh(rt), ok).is_ok());
+        assert_eq!(keeper.failures, 0);
+    }
+
+    #[test]
+    fn backoff_doubles_and_caps() {
+        assert_eq!(refresh_backoff(1), RENEW_INTERVAL);
+        assert_eq!(refresh_backoff(2), RENEW_INTERVAL * 2);
+        assert_eq!(refresh_backoff(3), RENEW_INTERVAL * 4);
+        assert_eq!(refresh_backoff(6), REFRESH_BACKOFF_MAX);
+        assert_eq!(refresh_backoff(u32::MAX), REFRESH_BACKOFF_MAX);
+    }
+
+    #[test]
+    fn a_failed_refresh_keeps_using_a_still_valid_token() {
+        let server = FakeServer::new();
+        let mut keeper = TokenKeeper::default();
+        let t0 = Instant::now();
+        let ok = |_: &str| true;
+        keeper.access_token("rt-0", t0, |rt| server.refresh(rt), ok).unwrap();
+        server.fail.set(true);
+        let inside = t0 + Duration::from_secs(3600) - REFRESH_MARGIN + Duration::from_secs(1);
+        let at = keeper.access_token("rt-1", inside, |rt| server.refresh(rt), ok).unwrap();
+        assert_eq!(at, "at-1", "the old token is still valid for ~5 minutes");
+        // And the very next tick does not hammer the server again.
+        let next = inside + Duration::from_secs(10);
+        keeper.access_token("rt-1", next, |rt| server.refresh(rt), ok).unwrap();
+        assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn a_failed_keychain_write_never_resends_the_spent_token() {
+        let server = FakeServer::new();
+        let mut keeper = TokenKeeper::default();
+        let t0 = Instant::now();
+        let writes = RefCell::new(0u32);
+        let failing = |_: &str| {
+            *writes.borrow_mut() += 1;
+            false
+        };
+        keeper.access_token("rt-0", t0, |rt| server.refresh(rt), failing).unwrap();
+        // The keychain still says rt-0 (spent). Near expiry the keeper must
+        // present rt-1 from memory, and keep retrying the write.
+        let inside = t0 + Duration::from_secs(3600) - REFRESH_MARGIN + Duration::from_secs(1);
+        keeper.access_token("rt-0", inside, |rt| server.refresh(rt), failing).unwrap();
+        assert_eq!(*server.calls.borrow(), vec!["rt-0".to_string(), "rt-1".to_string()]);
+        // Two rotations later the keychain STILL holds rt-0: still recognised.
+        let inside2 = inside + Duration::from_secs(3600);
+        keeper.access_token("rt-0", inside2, |rt| server.refresh(rt), failing).unwrap();
+        assert_eq!(server.calls.borrow().last().map(String::as_str), Some("rt-2"));
+        assert!(!server.calls.borrow()[1..].iter().any(|t| t == "rt-0"), "spent token resent");
+        assert!(*writes.borrow() >= 3, "the write is retried, got {}", writes.borrow());
+    }
+
+    #[test]
+    fn new_material_in_the_keychain_starts_over() {
+        let server = FakeServer::new();
+        let mut keeper = TokenKeeper::default();
+        let t0 = Instant::now();
+        let ok = |_: &str| true;
+        keeper.access_token("rt-0", t0, |rt| server.refresh(rt), ok).unwrap();
+        // The desktop client signed in again: a token this keeper never saw.
+        let at = keeper
+            .access_token("fresh-sign-in", t0 + RENEW_INTERVAL, |rt| server.refresh(rt), ok)
+            .unwrap();
+        assert_eq!(at, "at-2");
+        assert_eq!(server.calls.borrow().last().map(String::as_str), Some("fresh-sign-in"));
+    }
+
+    #[test]
+    fn new_material_skips_the_backoff() {
+        let server = FakeServer::new();
+        server.fail.set(true);
+        let mut keeper = TokenKeeper::default();
+        let t0 = Instant::now();
+        let ok = |_: &str| true;
+        assert!(keeper.access_token("dead", t0, |rt| server.refresh(rt), ok).is_err());
+        server.fail.set(false);
+        // Backing off for "dead", but a new sign-in is tried at once.
+        assert!(keeper.access_token("dead", t0 + Duration::from_secs(5), |rt| server.refresh(rt), ok).is_err());
+        assert_eq!(server.count(), 1);
+        assert!(keeper.access_token("new", t0 + Duration::from_secs(6), |rt| server.refresh(rt), ok).is_ok());
+        assert_eq!(server.count(), 2);
+    }
+
+    #[test]
+    fn a_401_on_the_claim_forces_one_refresh_next_tick() {
+        let server = FakeServer::new();
+        let mut keeper = TokenKeeper::default();
+        let t0 = Instant::now();
+        let ok = |_: &str| true;
+        keeper.access_token("rt-0", t0, |rt| server.refresh(rt), ok).unwrap();
+        keeper.expire_access(t0 + RENEW_INTERVAL);
+        let at = keeper
+            .access_token("rt-1", t0 + RENEW_INTERVAL * 2, |rt| server.refresh(rt), ok)
+            .unwrap();
+        assert_eq!(at, "at-2");
+        assert_eq!(server.count(), 2);
     }
 }

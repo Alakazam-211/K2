@@ -11,7 +11,44 @@
 
 import { AIRGAP_TEACHING, isAirgap } from '@/lib/airgap'
 
-const SUPABASE_URL = 'https://ttgcalfrzzgkxnfepkiu.supabase.co'
+/** The built-in account server (the Supabase project behind k2.dev
+ *  accounts). Same value as `k2_core::connect_db::DEFAULT_URL`. */
+export const DEFAULT_ACCOUNT_DB_URL = 'https://ttgcalfrzzgkxnfepkiu.supabase.co'
+
+// 0.46.6: the account server address can be set (the `connectDbUrl`
+// setting, or K2_CONNECT_DB_URL in the daemon's environment); the default is
+// unchanged. The DAEMON resolves it in one place (`k2_core::connect_db`) and
+// reports it as `accountDbUrl` on GET /cli/tunnel/config; the Tunnel panel
+// registers a loader for that below, so this client and the daemon's lease
+// loop always talk to the same server. There is no automatic fallback
+// between hosts: a failed lookup is an error, never a silent switch.
+type AccountDbBaseLoader = () => Promise<string | null>
+let accountDbBaseLoader: AccountDbBaseLoader | null = null
+
+/** Register how to ask the local daemon for the account server address
+ *  (K2ConnectSection does, at module load). `null` unregisters. */
+export function setAccountDbBaseLoader(loader: AccountDbBaseLoader | null): void {
+  accountDbBaseLoader = loader
+}
+
+/** The account server base URL (no trailing slash). No loader registered
+ *  (tests, a bare web build) → the built-in default. A loader that answers
+ *  null (an older daemon without the field) → the built-in default too:
+ *  that daemon has no override to honour. A loader that THROWS is an error
+ *  for the caller — the request is not sent anywhere else. */
+export async function accountDbBase(): Promise<string> {
+  if (!accountDbBaseLoader) return DEFAULT_ACCOUNT_DB_URL
+  let url: string | null
+  try {
+    url = await accountDbBaseLoader()
+  } catch (err) {
+    throw new Error(
+      `Couldn't read the account server address from K2: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const t = (url ?? '').trim().replace(/\/+$/, '')
+  return t || DEFAULT_ACCOUNT_DB_URL
+}
 
 function refuseAirgap(): void {
   if (isAirgap()) throw new Error(AIRGAP_TEACHING)
@@ -108,7 +145,7 @@ function toSession(body: SupabaseTokenResponse, status: number): K2Session {
 /** Sign in with an email + password against Supabase Auth. */
 export async function signIn(email: string, password: string): Promise<K2Session> {
   refuseAirgap()
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+  const res = await fetch(`${await accountDbBase()}/auth/v1/token?grant_type=password`, {
     method: 'POST',
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -125,7 +162,7 @@ export async function signIn(email: string, password: string): Promise<K2Session
  *  rotate — callers MUST persist the returned `refreshToken`. */
 export async function refreshSession(refreshToken: string): Promise<K2Session> {
   refuseAirgap()
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+  const res = await fetch(`${await accountDbBase()}/auth/v1/token?grant_type=refresh_token`, {
     method: 'POST',
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -145,9 +182,9 @@ export async function refreshSession(refreshToken: string): Promise<K2Session> {
 /** GET a PostgREST path (e.g. `compute_machines?select=…`) as the
  *  signed-in user; rows are scoped by RLS. The raw response: callers read
  *  the status (a table the project doesn't have yet answers 404). */
-export function supabaseRestGet(pathAndQuery: string, accessToken: string): Promise<Response> {
+export async function supabaseRestGet(pathAndQuery: string, accessToken: string): Promise<Response> {
   refuseAirgap()
-  return fetch(`${SUPABASE_URL}/rest/v1/${pathAndQuery}`, {
+  return fetch(`${await accountDbBase()}/rest/v1/${pathAndQuery}`, {
     method: 'GET',
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -159,7 +196,7 @@ export function supabaseRestGet(pathAndQuery: string, accessToken: string): Prom
 export async function listSubdomains(accessToken: string): Promise<K2Subdomain[]> {
   refuseAirgap()
   const res = await fetch(
-    `${SUPABASE_URL}/rest/v1/subdomains?select=label,status,tunnel_token,claimed_by,claimed_at,claimed_label`,
+    `${await accountDbBase()}/rest/v1/subdomains?select=label,status,tunnel_token,claimed_by,claimed_at,claimed_label`,
     {
       method: 'GET',
       headers: {
@@ -194,7 +231,7 @@ export async function claimSubdomain(
       'Only apex subdomains can be claimed as tunnels (e.g. rosson → rosson.k2.dev). Nested names are not tunnel roots.',
     )
   }
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/claim_subdomain`, {
+  const res = await fetch(`${await accountDbBase()}/rest/v1/rpc/claim_subdomain`, {
     method: 'POST',
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -223,7 +260,7 @@ export async function releaseSubdomain(
   deviceId: string,
 ): Promise<void> {
   refuseAirgap()
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/release_subdomain`, {
+  const res = await fetch(`${await accountDbBase()}/rest/v1/rpc/release_subdomain`, {
     method: 'POST',
     headers: {
       apikey: SUPABASE_ANON_KEY,
@@ -253,7 +290,7 @@ export function freshClaim(claimedAt: string | null | undefined): boolean {
 export async function signOut(accessToken: string): Promise<void> {
   if (isAirgap()) return
   try {
-    await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+    await fetch(`${await accountDbBase()}/auth/v1/logout`, {
       method: 'POST',
       headers: {
         apikey: SUPABASE_ANON_KEY,

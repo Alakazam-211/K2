@@ -115,6 +115,12 @@ pub struct TunnelConfigView {
     /// §2B): the identity was deleted + tombstoned. The UI's tunnel card
     /// tri-state (Connected / Disabled / Released) reads this.
     pub released: bool,
+    /// 0.46.6: the K2 Connect account server base URL this daemon resolved
+    /// ([`crate::connect_db::base`]: `K2_CONNECT_DB_URL`, then the
+    /// `connectDbUrl` setting, then the built-in default). The desktop
+    /// client sends its account calls here, so it and the daemon's lease
+    /// loop always talk to the same server.
+    pub account_db_url: String,
 }
 
 impl From<&TunnelConfig> for TunnelConfigView {
@@ -134,6 +140,7 @@ impl From<&TunnelConfig> for TunnelConfigView {
             // Disk read (tombstone), like e2e_effective's env read: the
             // view reports the EFFECTIVE device state, not just the file.
             released: unpair::released_state(c),
+            account_db_url: crate::connect_db::base_url(),
         }
     }
 }

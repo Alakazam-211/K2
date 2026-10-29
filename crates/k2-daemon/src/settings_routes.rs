@@ -122,6 +122,9 @@ const OWNER_ONLY_KEYS: &[&str] = &[
     // Clone permissions (prd-clone-carries-threads-and-vault-v1 CL22): the
     // master switch for cloning agents to people's personal computers.
     "allowClonePersonalComputers",
+    // 0.46.6: the K2 Connect account server address. It decides where
+    // k2.dev account passwords and refresh tokens are sent.
+    "connectDbUrl",
 ];
 
 /// Who is writing settings, resolved by the dispatcher from the request
@@ -840,6 +843,37 @@ mod tests {
             // An Admin still manages the remote-access keys.
             let r = handle_settings_update(br#"{"federationEnabled":false}"#, admin);
             assert_eq!(r.status, "200 OK", "Admin keeps its tier: {}", r.body);
+        });
+    }
+
+    /// 0.46.6: the K2 Connect account server address decides where account
+    /// passwords go: Owner only, validated, stored normalized, cleared by "".
+    #[test]
+    fn connect_db_url_is_owner_only_and_validated() {
+        with_temp_home(|| {
+            let admin = session_actor("admindb", connect_users::Role::Admin);
+            let member = session_actor("memberdb", connect_users::Role::Member);
+            for actor in [admin, member] {
+                let r = handle_settings_update(br#"{"connectDbUrl":"https://evil.example"}"#, actor);
+                assert_eq!(r.status, "403 Forbidden", "{actor:?}: got {}", r.body);
+            }
+            assert_eq!(k2_core::app_settings::load().connect_db_url, "");
+            for bad in [
+                br#"{"connectDbUrl":"http://db.example.test"}"#.as_slice(),
+                br#"{"connectDbUrl":"https://u:p@db.example.test"}"#.as_slice(),
+                br#"{"connectDbUrl":42}"#.as_slice(),
+            ] {
+                let r = handle_settings_update(bad, SettingsActor::Owner);
+                assert_eq!(r.status, "400 Bad Request", "got {}", r.body);
+            }
+            let r = handle_settings_update(br#"{"connectDbUrl":"https://db.example.test/"}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(k2_core::app_settings::load().connect_db_url, "https://db.example.test");
+            let r = handle_settings_update(br#"{"connectDbUrl":""}"#, SettingsActor::Owner);
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert_eq!(k2_core::app_settings::load().connect_db_url, "");
+            // Never written while empty: settings.json stays as before.
+            assert!(!r.body.contains("connectDbUrl"), "{}", r.body);
         });
     }
 

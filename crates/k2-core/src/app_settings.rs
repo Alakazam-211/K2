@@ -621,6 +621,16 @@ pub struct AppSettings {
     /// rejected by [`update`]. Wire name `connectLoginIngress`.
     #[serde(default = "default_connect_login_ingress")]
     pub connect_login_ingress: String,
+    /// 0.46.6: the K2 Connect account server's base URL (k2.dev sign-in,
+    /// purchased subdomains, the subdomain lease). Empty (the default, and
+    /// never written while empty) = the built-in server
+    /// ([`crate::connect_db::DEFAULT_URL`]). `K2_CONNECT_DB_URL` in the
+    /// env wins. Owner-only: it decides where account passwords go.
+    /// Resolved in ONE place, [`crate::connect_db::base`]; [`update`]
+    /// refuses a value [`crate::connect_db::normalize`] refuses and
+    /// stores the normalized form. Wire name `connectDbUrl`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub connect_db_url: String,
     /// PRD boot-status-ghost §2.3 — the public `/boot-status` view:
     /// `"compat"` | `"ghost"`. `None` = never set → the release default
     /// ([`BootStatusPublic::DEFAULT`]), kept absent on disk so a later
@@ -1214,6 +1224,7 @@ impl Default for AppSettings {
             web_client_enabled: true,
             agent_hooks: true,
             connect_login_ingress: default_connect_login_ingress(),
+            connect_db_url: String::new(),
             boot_status_public: None,
             use_llm_hitl_detection: false,
             completion_sound_enabled: true,
@@ -1539,6 +1550,16 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
                 COMPLETION_SOUNDS.join("|")
             ));
         }
+    }
+    // 0.46.6: the account server address. Empty clears it (back to the
+    // built-in server); anything else must pass `connect_db::normalize`
+    // and is stored normalized.
+    if let Some(v) = partial.get_mut(crate::connect_db::SETTING_KEY) {
+        let raw = v
+            .as_str()
+            .ok_or_else(|| format!("{} must be a string (got {v})", crate::connect_db::SETTING_KEY))?;
+        let stored = if raw.trim().is_empty() { String::new() } else { crate::connect_db::normalize(raw)? };
+        *v = serde_json::Value::String(stored);
     }
     let current = load();
     let mut current_val = serde_json::to_value(&current)

@@ -63,6 +63,8 @@ pub mod app_audit;
 /// kit, vendored into an App folder.
 pub mod app_sdk;
 pub mod app_settings;
+/// The K2 Connect account server base URL: env, setting, default (0.46.6).
+pub mod connect_db;
 /// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).
 pub mod runtime_dir;
 /// Redaction of known secret values in K2-stored text (K2 vault KV33).

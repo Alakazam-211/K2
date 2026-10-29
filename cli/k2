@@ -34712,6 +34712,67 @@ print("Unpaired phone %s (%s). It must pair again to sign in." % (safe(d.get("re
 _K2_SUPABASE_URL="https://ttgcalfrzzgkxnfepkiu.supabase.co"
 _K2_SUPABASE_ANON_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0Z2NhbGZyenpna3huZmVwa2l1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA1MDIyMzksImV4cCI6MjA5NjA3ODIzOX0.L28xgtYkPEj5eCNDGO5Zf5xxhdKQLxKD8c1CJRHNqI8"
 
+# 0.46.6: the account server address can be set; the default is unchanged.
+# Same order as the daemon (k2_core::connect_db): K2_CONNECT_DB_URL, then
+# the `connectDbUrl` setting in ~/.k2/settings.json, then the Supabase
+# project above. Read here, not asked of the daemon, because `k2 connect
+# login` signs in before a daemon has to be running. No automatic fallback
+# between hosts. An invalid value is skipped with a warning (the daemon does
+# the same). Prints the base URL; says which one on stderr when it is not
+# the default. Never prints the anon key.
+_connect_db_resolve() {
+    K2_SETTINGS_FILE="${K2_HOME}/settings.json" DEFAULT_URL="$_K2_SUPABASE_URL" python3 -c '
+import json, os, sys
+
+def normalize(raw):
+    t = raw.strip()
+    if any(c.isspace() or ord(c) < 32 for c in t):
+        return None, "must not contain spaces"
+    if t.startswith("https://"):
+        rest = t[len("https://"):]
+    elif t.startswith("http://"):
+        rest = t[len("http://"):]
+        auth = rest.split("/")[0].split("?")[0].split("#")[0]
+        host = auth[1:].split("]")[0] if auth.startswith("[") else auth.split(":")[0]
+        if host not in ("127.0.0.1", "localhost", "::1"):
+            return None, "must be an https:// URL (plain http:// only to localhost)"
+    else:
+        return None, "must be an https:// URL"
+    auth = rest.split("/")[0].split("?")[0].split("#")[0]
+    if not auth:
+        return None, "has no host"
+    if "@" in auth:
+        return None, "must not carry a user name or password"
+    if "?" in rest or "#" in rest:
+        return None, "must not carry a query or fragment"
+    return t.rstrip("/"), None
+
+env = (os.environ.get("K2_CONNECT_DB_URL") or "").strip()
+if env:
+    url, err = normalize(env)
+    if url:
+        sys.stderr.write("k2 connect: account server %s (from K2_CONNECT_DB_URL)\n" % url)
+        print(url); sys.exit(0)
+    sys.stderr.write("k2 connect: K2_CONNECT_DB_URL ignored: %s\n" % err)
+try:
+    with open(os.environ["K2_SETTINGS_FILE"]) as f:
+        setting = json.load(f).get("connectDbUrl") or ""
+except Exception:
+    setting = ""
+if isinstance(setting, str) and setting.strip():
+    url, err = normalize(setting)
+    if url:
+        sys.stderr.write("k2 connect: account server %s (from the connectDbUrl setting)\n" % url)
+        print(url); sys.exit(0)
+    sys.stderr.write("k2 connect: setting connectDbUrl ignored: %s\n" % err)
+print(os.environ["DEFAULT_URL"])
+'
+}
+
+# The resolved base for this `k2 connect` run (set once by cmd_connect).
+_K2_CONNECT_DB_URL_RESOLVED=""
+_K2_CONNECT_UA="k2-cli/${K2_CLI_VERSION:-unknown}"
+
 _connect_account_file() { echo "${K2_HOME}/connect-account.json"; }
 
 _connect_usage() {
@@ -34739,6 +34800,13 @@ FLAGS (login)
 Nested Pro subdomains / plan status live under `k2 publish` (not here).
 Which relay the tunnel dials (relay.k2.dev by default) and how to restore
 the old built-in relay: k2 tunnel --help (RELAYS) and k2 tunnel status.
+
+ACCOUNT SERVER
+  login and logout talk to the k2.dev account server. To use another one
+  (rarely needed), set K2_CONNECT_DB_URL=https://... for this command, or
+  the Owner-only connectDbUrl setting (~/.k2/settings.json; the daemon and
+  the desktop app use it too). The env var wins; otherwise the default.
+  There is no automatic switch between servers.
 
 EXIT CODES
   0 ok · 1 error · 2 bad usage
@@ -34848,12 +34916,13 @@ _connect_device_label() {
 _connect_supabase_sign_in() {
     local email="$1" password="$2"
     EMAIL="$email" PASSWORD="$password" \
-    SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+    SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import json, os, sys, urllib.request, urllib.error
 url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/token?grant_type=password"
 body = json.dumps({"email": os.environ["EMAIL"], "password": os.environ["PASSWORD"]}).encode()
 req = urllib.request.Request(url, data=body, method="POST", headers={
     "apikey": os.environ["SUPA_KEY"],
+    "User-Agent": os.environ.get("K2_UA") or "k2-cli",
     "Content-Type": "application/json",
 })
 try:
@@ -34889,7 +34958,7 @@ print(email)
 # List purchased subdomains for the access token. Prints JSON array.
 _connect_list_subdomains() {
     local access="$1"
-    ACCESS="$access" SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+    ACCESS="$access" SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import json, os, sys, urllib.request, urllib.error
 url = (
     os.environ["SUPA_URL"].rstrip("/")
@@ -34897,6 +34966,7 @@ url = (
 )
 req = urllib.request.Request(url, method="GET", headers={
     "apikey": os.environ["SUPA_KEY"],
+    "User-Agent": os.environ.get("K2_UA") or "k2-cli",
     "Authorization": "Bearer " + os.environ["ACCESS"],
 })
 try:
@@ -34932,7 +35002,7 @@ print(json.dumps(rows))
 _connect_claim_subdomain() {
     local access="$1" label="$2" device_id="$3" device_label="$4"
     ACCESS="$access" LABEL="$label" DID="$device_id" DLBL="$device_label" \
-    SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+    SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import json, os, sys, urllib.request, urllib.error
 url = os.environ["SUPA_URL"].rstrip("/") + "/rest/v1/rpc/claim_subdomain"
 body = json.dumps({
@@ -34942,6 +35012,7 @@ body = json.dumps({
 }).encode()
 req = urllib.request.Request(url, data=body, method="POST", headers={
     "apikey": os.environ["SUPA_KEY"],
+    "User-Agent": os.environ.get("K2_UA") or "k2-cli",
     "Authorization": "Bearer " + os.environ["ACCESS"],
     "Content-Type": "application/json",
 })
@@ -35298,11 +35369,12 @@ cmd_connect_logout() {
     loaded="$(_connect_account_load)"
     access="$(printf '%s\n' "$loaded" | sed -n '1p')"
     if [ -n "$access" ]; then
-        ACCESS="$access" SUPA_URL="$_K2_SUPABASE_URL" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" python3 -c '
+        ACCESS="$access" SUPA_URL="${_K2_CONNECT_DB_URL_RESOLVED:-$_K2_SUPABASE_URL}" SUPA_KEY="$_K2_SUPABASE_ANON_KEY" K2_UA="$_K2_CONNECT_UA" python3 -c '
 import os, urllib.request
 url = os.environ["SUPA_URL"].rstrip("/") + "/auth/v1/logout"
 req = urllib.request.Request(url, data=b"", method="POST", headers={
     "apikey": os.environ["SUPA_KEY"],
+    "User-Agent": os.environ.get("K2_UA") or "k2-cli",
     "Authorization": "Bearer " + os.environ["ACCESS"],
 })
 try:
@@ -35319,6 +35391,13 @@ except Exception:
 cmd_connect() {
     local sub="${1:-}"
     shift 2>/dev/null || true
+    case "$sub" in
+        login|logout)
+            case " $* " in *" --help "*|*" -h "*) ;; *)
+                _K2_CONNECT_DB_URL_RESOLVED="$(_connect_db_resolve)" || return 1 ;;
+            esac
+            ;;
+    esac
     case "$sub" in
         login)
             cmd_connect_login "$@"

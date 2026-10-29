@@ -16,12 +16,34 @@ fn counter(job: &str, cache: &str) -> frames::Plan {
     p
 }
 
+/// Runs the job to its receipt, then waits until the node has given its
+/// cache back. The node reports the end first and gives the cache back
+/// last (it measures it once the job's unit is gone, `run.rs`), so the
+/// next job, or a test that edits the cache's meta, would otherwise race
+/// that hand-back (seen on a Mac mini: the next run found the cache still
+/// held, and the late meta write undid the test's edit).
 async fn run(c: &mut Conn, p: frames::Plan) -> (Vec<Frame>, String, String) {
     let job = p.job_id.clone();
+    let cache = p.cache.clone().map(|name| (p.workspace_id.clone(), name));
     c.send(Frame::Assign(assign(p, 1)));
     let fr = run_to_receipt(c, &job).await;
+    if let Some((ws, name)) = cache {
+        wait_cache_given_back(c, &job, &ws, &name).await;
+    }
     let logs = logs_of(&fr, &job);
     (fr.clone(), text(&logs, LogStream::Out), text(&logs, LogStream::Sys))
+}
+
+async fn wait_cache_given_back(c: &mut Conn, job: &str, ws: &str, name: &str) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    for i in 0u32.. {
+        let v = view(c, CacheGet { request_id: format!("idle-{job}-{i}"), workspace_id: Some(ws.into()), clear: false, name: Some(name.into()) }).await;
+        if v.caches.iter().all(|e| !e.busy) {
+            return;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "job {job}'s cache {name} is still held 20 s after its receipt: {v:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 async fn view(c: &mut Conn, ask: CacheGet) -> pcache::CacheView {

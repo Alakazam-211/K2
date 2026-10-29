@@ -29,13 +29,20 @@ struct Fx {
 }
 
 fn fx(tag: &str) -> Fx {
+    let app_id = format!("upd{tag}");
+    let host = FakeHost::start(&[(&format!("dev.k2.box.{app_id}"), TOKEN_A)]);
+    let base = host.base.clone();
+    fx_on(tag, "box", app_id, host, &base)
+}
+
+/// A runtime App `app_id` on box `sub`, the download host at `base`.
+fn fx_on(tag: &str, sub: &str, app_id: String, host: FakeHost, base: &str) -> Fx {
     let env = k2_core::test_env::lock();
     let home = crate::test_support::TempHome::new();
     let db = k2_core::db::scoped_for_test();
     crate::vault::ensure_test_vault();
-    let cfg = k2_core::tunnel::config::TunnelConfig { subdomain: "box".into(), ..Default::default() };
+    let cfg = k2_core::tunnel::config::TunnelConfig { subdomain: sub.into(), ..Default::default() };
     k2_core::tunnel::config::save(&cfg).expect("tunnel config");
-    let app_id = format!("upd{tag}");
     let (ws, other_ws) = (format!("ws-{tag}"), format!("ot-{tag}"));
     let ws_path = home.path().join(&ws);
     {
@@ -66,8 +73,7 @@ fn fx(tag: &str) -> Fx {
         )
         .expect("runtime app");
     }
-    let host = FakeHost::start(&[(&format!("dev.k2.box.{app_id}"), TOKEN_A)]);
-    let dl_base = k2_core::test_env::EnvVar::set("K2_DL_BASE", &host.base);
+    let dl_base = k2_core::test_env::EnvVar::set("K2_DL_BASE", base);
     super::super::updates_serve::reset_for_test();
     Fx { _db: db, _home: home, _env: env, _dl_base: dl_base, app_id, ws, ws_path, other_ws, host }
 }
@@ -389,15 +395,20 @@ fn promote_rollback_and_pull_move_channels_and_say_what_clients_do() {
     push_live(&f, "0.5.0", "nightly", json!([{ "platform": "darwin-aarch64", "path": c }]));
     let (st, v) = call(ROLLBACK, &agent(&f.ws), json!({ "app": f.app_id, "channel": "stable", "to": "0.5.0" }), &[]);
     assert_eq!((st, code(&v)), (409, "release_not_live"), "{v}");
-    // Pull 1.1.0: beta falls back to nothing older on beta → empty.
+    // Pull 1.1.0: beta falls back to nothing older on beta → empty. This
+    // stand-in is a k2dl 1.3.0 host: no pull call, the files stay.
     let (st, v) = call(PULL, &agent(&f.ws), json!({ "app": f.app_id, "version": "1.1.0" }), &[]);
     assert_eq!(st, 200, "{v}");
+    assert_eq!(v["host"], "not_supported", "{v}");
+    assert!(v["note"].as_str().expect("note").contains("can't pull"), "{v}");
     let (status, _) = serve(&f, "/_k2/updates/beta/latest.json");
     assert_eq!(status, "HTTP/1.1 404 Not Found", "beta is empty now");
-    // Pull 1.0.0: stable falls back to nothing → the App has no feed left
-    // but nightly; stable answers 404.
+    // Pull 1.0.0 on a k2dl 1.4.0 host: it stops serving the files too.
+    f.host.lock().supports_pull = true;
     let (st, v) = call(PULL, &agent(&f.ws), json!({ "app": f.app_id, "version": "1.0.0" }), &[]);
     assert_eq!(st, 200, "{v}");
+    assert_eq!(v["host"], "pulled", "{v}");
+    assert_eq!(f.host.lock().pulled, vec![(format!("dev.k2.box.{}", f.app_id), "1.0.0".to_string())]);
     let (status, _) = serve(&f, "/_k2/updates/stable/latest.json");
     assert_eq!(status, "HTTP/1.1 404 Not Found");
     // A Member can't change channels; audit has the moves.
@@ -466,4 +477,106 @@ fn removing_the_app_forgets_its_feed_and_token() {
     let conn = h.lock();
     assert!(store::key(&conn, &f.app_id).expect("q").is_none());
     assert!(store::releases(&conn, &f.app_id).expect("q").is_empty());
+}
+
+// ── the real download host (run on purpose only) ─────────────────────
+
+/// ONE push against the live download host with K2 Web's test id
+/// `dev.k2.rosson.k2test` (box `rosson`, App `k2test`), its token in
+/// `K2DL_TOKEN` (a compute job's `--secret`, never argv). Ignored in normal
+/// runs; run with `--run-ignored only -E 'test(real_download_host)'`. It
+/// fails loudly without the token. Prints what the real host answered.
+#[test]
+#[ignore = "talks to the live download host; needs K2DL_TOKEN (K2 Web's test id)"]
+fn real_download_host_push_download_manifest_pull() {
+    use sha2::Digest as _;
+    let token = std::env::var("K2DL_TOKEN").expect("K2DL_TOKEN (k2 compute run --secret K2DL_TOKEN_K2TEST=K2DL_TOKEN)");
+    let token = token.trim().to_string();
+    assert!(k2_core::app_updates::valid_dl_token(&token), "K2DL_TOKEN isn't a k2dl_ token");
+    let base = std::env::var("K2_REAL_DL_BASE").unwrap_or_else(|_| "https://dl.k2.dev".into());
+    // An idle stand-in (never called): the fixture wants one.
+    let idle = FakeHost::start(&[]);
+    let f = fx_on("real", "rosson", "k2test".into(), idle, &base);
+    let id = "dev.k2.rosson.k2test";
+    let (st, v) = call(KEY_SET, &agent(&f.ws), json!({ "app": f.app_id, "pubkey": test_key_line() }), &[]);
+    assert_eq!(st, 200, "{v}");
+    let (st, v) = call(TOKEN_SET, &agent(&f.ws), json!({ "app": f.app_id, "token": token }), &[]);
+    assert_eq!(st, 200, "{v}");
+    assert!(!v.to_string().contains(&token));
+    assert_eq!(v["dlId"], id);
+    // A version newer than any earlier run's: 0.1.<unix seconds>.
+    let now = k2_core::deploy::now();
+    let version = format!("0.1.{now}");
+    let mut bytes = format!("K2 real-host test archive {version}\n").into_bytes();
+    bytes.extend((0..4096u32).map(|i| (i % 251) as u8));
+    let want_sha: String = sha2::Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect();
+    let p = artifact(&f, "K2Test.app.tar.gz", &bytes);
+    let started = Instant::now();
+    let (st, v) = push(&f, &version, "stable", json!([{ "platform": "darwin-aarch64", "path": p }]));
+    assert_eq!(st, 200, "push: {v}");
+    let r = wait_state(&f, v["release"].as_str().expect("release"));
+    println!("[real] push {version}: {} in {:?}", r.state, started.elapsed());
+    assert_eq!(r.state, store::STATE_LIVE, "{r:?}");
+    let arts = {
+        let h = k2_core::db::shared();
+        let conn = h.lock();
+        store::artifacts(&conn, &r.id).expect("artifacts")
+    };
+    let url = arts[0].url.clone().expect("url");
+    println!("[real] immutable URL: {url}");
+    assert!(url.starts_with(&format!("{base}/{id}/{version}/{want_sha}/")), "{url}");
+    // The immutable URL serves the same bytes, with the host's headers.
+    let http = reqwest::blocking::Client::new();
+    let resp = http.get(&url).send().expect("download");
+    let status = resp.status().as_u16();
+    let headers: Vec<String> = ["content-type", "cache-control", "etag", "accept-ranges", "x-content-sha256", "content-length"]
+        .iter()
+        .map(|h| format!("{h}: {}", resp.headers().get(*h).and_then(|v| v.to_str().ok()).unwrap_or("-")))
+        .collect();
+    let got = resp.bytes().expect("body");
+    let got_sha: String = sha2::Sha256::digest(&got).iter().map(|b| format!("{b:02x}")).collect();
+    println!("[real] GET immutable: {status}; {}", headers.join("; "));
+    assert_eq!(status, 200);
+    assert_eq!(got_sha, want_sha, "the download host served other bytes");
+    // A ranged request from 0 (Tauri doesn't need it; the host promises it).
+    let ranged = http.get(&url).header("Range", "bytes=0-15").send().expect("range");
+    println!("[real] GET Range 0-15: {}", ranged.status().as_u16());
+    // The host's latest.json (the fallback K2 published) points at it.
+    let latest_url = format!("{base}/{id}/stable/latest.json");
+    let lr = http.get(&latest_url).send().expect("latest.json");
+    let lst = lr.status().as_u16();
+    let cc = lr.headers().get("cache-control").and_then(|v| v.to_str().ok()).unwrap_or("-").to_string();
+    let latest: J = lr.json().expect("latest.json is JSON");
+    println!("[real] GET {latest_url}: {lst}; cache-control: {cc}; body: {latest}");
+    assert_eq!(lst, 200);
+    assert_eq!(latest["version"], version.as_str());
+    assert_eq!(latest["platforms"]["darwin-aarch64"]["url"], url.as_str());
+    // K2's own answers on the App's host point at the same URL.
+    let (status, body) = serve(&f, "/_k2/updates/stable/darwin/aarch64/0.0.1");
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    let d: J = serde_json::from_str(&body).expect("json");
+    assert_eq!(d["url"], url.as_str());
+    // The same bytes again: the host says it already has them (idempotent).
+    let c = k2_core::app_updates::dl_client::Client::new(&base, &token).expect("client");
+    let staged = f.ws_path.join("K2Test.app.tar.gz");
+    let again = c.upload(id, &version, &arts[0].file_name, &staged, &want_sha, bytes.len() as u64, "application/gzip").expect("idempotent re-upload");
+    println!("[real] re-upload same bytes: created={} url-same={}", again.created, again.url == url);
+    assert!(!again.created);
+    // Stats answer for this id.
+    match c.stats(id, &k2_core::app_updates::day_of(now - 86_400), &k2_core::app_updates::day_of(now)) {
+        Ok(s) => println!("[real] stats: {}", s.to_string().chars().take(400).collect::<String>()),
+        Err(e) => println!("[real] stats: {}", e.line()),
+    }
+    // Pull: K2 stops offering it; the host stops serving it if it can (1.4.0).
+    let (st, v) = call(PULL, &agent(&f.ws), json!({ "app": f.app_id, "version": version }), &[]);
+    assert_eq!(st, 200, "pull: {v}");
+    println!("[real] pull: host={} channels={}", v["host"], v["channels"]);
+    let after = http.get(&url).send().expect("download after pull").status().as_u16();
+    let latest_after = http.get(&latest_url).send().map(|r| r.status().as_u16()).unwrap_or(0);
+    println!("[real] after pull: immutable URL {after}; latest.json {latest_after}");
+    let (status, _) = serve(&f, "/_k2/updates/stable/latest.json");
+    assert_eq!(status, "HTTP/1.1 404 Not Found", "K2's own answers stop offering it");
+    if v["host"] == "pulled" {
+        assert_ne!(after, 200, "a host that says pulled still serves the file");
+    }
 }

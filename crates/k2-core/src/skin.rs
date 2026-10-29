@@ -409,7 +409,7 @@ fn now_secs() -> i64 {
 
 /// The alphabet of a generated App-user password: no look-alikes (0/O/o,
 /// 1/l/I/i), so it can be read out loud or typed from a screen.
-const GENERATED_PASSWORD_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+pub const GENERATED_PASSWORD_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
 /// Characters in a generated password (four groups of five, joined by
 /// `-`): 20 × log2(55) ≈ 115 bits.
 pub const GENERATED_PASSWORD_CHARS: usize = 20;

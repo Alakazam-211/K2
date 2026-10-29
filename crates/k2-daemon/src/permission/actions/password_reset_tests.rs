@@ -203,8 +203,9 @@ fn password_mode_shows_the_approver_a_password_once_and_nothing_else_ever_holds_
         let secret = f["secret"].as_str().expect("secret").to_string();
         // The shared generator's shape (k2-core `generate_password`).
         assert_eq!(secret.chars().filter(|c| *c != '-').count(), skin::GENERATED_PASSWORD_CHARS, "{secret}");
-        assert!(secret.chars().all(|c| c == '-' || c.is_ascii_alphanumeric()), "{secret}");
-        assert!(!secret.contains(['0', 'O', '1', 'l', 'I']), "no look-alikes: {secret}");
+        assert!(secret.bytes().all(|b| b == b'-' || skin::GENERATED_PASSWORD_ALPHABET.contains(&b)), "the shared alphabet: {secret}");
+        assert_eq!(secret.split('-').count(), 4, "{secret}");
+        assert!(!secret.contains(['0', 'O', 'o', '1', 'l', 'I', 'i']), "no look-alikes: {secret}");
 
         // Approved; the person signs in with it (the lock is cleared), the
         // old password and the old session are gone.

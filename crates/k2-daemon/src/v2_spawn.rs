@@ -601,6 +601,69 @@ pub(crate) fn conversation_id_for_agent(
     None
 }
 
+/// The sentence a refused duplicate of the pinned Chat shows in its pane.
+pub(crate) const CONVERSATION_IS_CANONICAL_MESSAGE: &str =
+    "This is the agent's own conversation, so open it from the agent's Chat tab instead of a new tab.";
+/// The sentence when another (non-canonical) live tab already resumes it.
+pub(crate) const CONVERSATION_ALREADY_OPEN_MESSAGE: &str =
+    "This conversation is already running in another tab, so switch to that tab instead of opening a second copy.";
+
+/// 409 `conversation_is_canonical` when a non-canonical spawn would resume
+/// `conversation_id` while the workspace's pinned Chat owns it
+/// (`workspace_sessions.session_id`) or another live session already
+/// resumes it. `None` lets the spawn proceed.
+fn conversation_owned_refusal(
+    agent_name: &str,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Option<HandlerResult> {
+    let id = conversation_id.map(str::trim).filter(|s| !s.is_empty())?;
+    let canonical_id = project_id.and_then(|pid| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::db::schema::WorkspaceSession::get(&conn, pid)
+            .ok()
+            .flatten()
+            .and_then(|row| row.session_id)
+    });
+    let owned_by_canonical = canonical_id.as_deref().map(str::trim) == Some(id);
+    let live_owner = if owned_by_canonical {
+        None
+    } else {
+        v2_session_map::snapshot().into_iter().find_map(|(name, session)| {
+            if name == agent_name || !session.is_child_alive() {
+                return None;
+            }
+            let live_id = conversation_id_from_args(session.program.as_deref(), &session.args)?;
+            (live_id == id).then_some(name)
+        })
+    };
+    if !owned_by_canonical && live_owner.is_none() {
+        return None;
+    }
+    log_debug!(
+        "[v2-spawn] refusing duplicate of conversation {id}: agent={agent_name} \
+         canonical_row={owned_by_canonical} live_owner={live_owner:?}"
+    );
+    let canonical_owns = owned_by_canonical
+        || matches!((live_owner.as_deref(), project_id), (Some(owner), Some(pid)) if owner == pid);
+    let message = if canonical_owns {
+        CONVERSATION_IS_CANONICAL_MESSAGE
+    } else {
+        CONVERSATION_ALREADY_OPEN_MESSAGE
+    };
+    Some(HandlerResult {
+        status: "409 Conflict",
+        body: serde_json::json!({
+            "error": "conversation_is_canonical",
+            "message": message,
+            "agent_name": agent_name,
+            "conversationId": id,
+        })
+        .to_string(),
+    })
+}
+
 fn put_conversation_id(out: &mut serde_json::Value, conversation_id: Option<String>) {
     if let Some(id) = conversation_id {
         out["conversationId"] = serde_json::Value::String(id);
@@ -1113,6 +1176,22 @@ fn spawn_session_locked(req: SpawnRequest) -> HandlerResult {
 
     let conversation_id =
         conversation_id_for_agent(&req.agent_name, &req.cwd, command.as_deref(), &args);
+
+    // One conversation, one writer. A non-canonical spawn (an extra tab, a
+    // saved tab row, a sidecar refresh) must not resume the conversation
+    // the workspace's pinned Chat owns, or one another live session
+    // already resumes: two harness processes would write one transcript,
+    // and messages would route to the duplicate. Argv only — a shell tab
+    // with a stale row id is not a resume.
+    if !is_canonical {
+        if let Some(refused) = conversation_owned_refusal(
+            &req.agent_name,
+            project_id.as_deref(),
+            conversation_id_from_args(command.as_deref(), &args).as_deref(),
+        ) {
+            return refused;
+        }
+    }
 
     // Ephemeral exec argv: launch-param path attaches the request-scoped
     // prompt here only. Recovery above rewrites identity `args` when
@@ -3572,6 +3651,155 @@ mod tests {
         assert!(still.is_child_alive());
         assert!(unregister_if_same_session(&agent, current_id));
         assert!(crate::v2_session_map::lookup_by_agent_name(&agent).is_none());
+    }
+
+    // ── One conversation, one writer (duplicate canonical tab) ───────────
+
+    fn assert_duplicate_refused(result: &HandlerResult, agent: &str, conversation: &str, message: &str) {
+        assert_eq!(result.status, "409 Conflict", "{}", result.body);
+        let body = json_body(&result.body);
+        assert_eq!(body["error"].as_str(), Some("conversation_is_canonical"), "{}", result.body);
+        assert_eq!(body["message"].as_str(), Some(message), "{}", result.body);
+        assert_eq!(body["conversationId"].as_str(), Some(conversation), "{}", result.body);
+        assert!(
+            crate::v2_session_map::lookup_by_agent_name(agent).is_none(),
+            "a refused duplicate must register no {agent} entry"
+        );
+    }
+
+    /// Chat history opened the agent's own conversation as an extra tab:
+    /// a `tab-*` resuming `workspace_sessions.session_id` ran a second
+    /// claude on the canonical's transcript. Both the saved bad tab row
+    /// (empty-command recovery) and an explicit `--resume X` are refused;
+    /// the canonical spawn and a tab on another conversation still work,
+    /// and a tab duplicating another live tab's conversation is refused.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawn_refuses_a_tab_that_resumes_the_canonical_conversation() {
+        k2_core::db::init_for_tests();
+        // Declared first so it drops last: the stubs are killed (ReapAgent)
+        // before $HOME is restored.
+        let _home = StubHome::new();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let pid = format!("dup-canonical-{n}");
+        let cwd = format!("/tmp/{pid}");
+        let tab = format!("tab-{pid}");
+        let other_tab = format!("tab-{pid}-other");
+        let third_tab = format!("tab-{pid}-third");
+        let _reap_tab = ReapAgent(tab.clone());
+        let _reap_canonical = ReapAgent(pid.clone());
+        let _reap_other = ReapAgent(other_tab.clone());
+        let _reap_third = ReapAgent(third_tab.clone());
+        let stub = write_agent_stub("claude");
+        let stub_s = stub.to_string_lossy().into_owned();
+        let canonical_sid = uuid::Uuid::new_v4().to_string();
+        let other_sid = uuid::Uuid::new_v4().to_string();
+
+        // The saved bad tab: claude, session = the canonical's conversation.
+        seed_project_and_tab_row(
+            &pid,
+            &cwd,
+            &tab,
+            Some(stub_s.as_str()),
+            Some(canonical_sid.as_str()),
+            &["--dangerously-skip-permissions"],
+        );
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, ?3, 'claude', 'user', 'sleeping', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid, canonical_sid],
+            )
+            .expect("insert workspace_sessions");
+        }
+        let recovered = recovered_launch(&tab, &cwd).expect("the bad tab row recovers a resume");
+        assert!(
+            recovered.1.windows(2).any(|w| w[0] == "--resume" && w[1] == canonical_sid),
+            "precondition: the saved row resumes the canonical id, got {:?}",
+            recovered.1
+        );
+
+        // Empty-command spawn (the saved tab coming back on visit).
+        let empty = handle_v2_spawn(
+            serde_json::json!({ "agent_name": tab, "cwd": cwd }).to_string().as_bytes(),
+        );
+        assert_duplicate_refused(&empty, &tab, &canonical_sid, CONVERSATION_IS_CANONICAL_MESSAGE);
+
+        // Explicit `claude --resume X` (Chat history's resume tab).
+        let explicit_body = serde_json::json!({
+            "agent_name": tab,
+            "cwd": cwd,
+            "command": stub_s,
+            "args": ["--dangerously-skip-permissions", "--resume", canonical_sid],
+        })
+        .to_string();
+        let explicit = handle_v2_spawn(explicit_body.as_bytes());
+        assert_duplicate_refused(&explicit, &tab, &canonical_sid, CONVERSATION_IS_CANONICAL_MESSAGE);
+
+        // Control: the canonical itself still resumes its conversation.
+        let canonical = handle_v2_spawn(
+            serde_json::json!({
+                "agent_name": pid,
+                "cwd": cwd,
+                "command": stub_s,
+                "args": ["--dangerously-skip-permissions", "--resume", canonical_sid],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(canonical.status, "200 OK", "{}", canonical.body);
+        assert_eq!(
+            json_body(&canonical.body)["conversationId"].as_str(),
+            Some(canonical_sid.as_str())
+        );
+        let live_canonical =
+            crate::v2_session_map::lookup_by_agent_name(&pid).expect("canonical registered");
+        assert!(live_canonical.is_child_alive());
+
+        // Still refused while the canonical is live.
+        let again = handle_v2_spawn(explicit_body.as_bytes());
+        assert_duplicate_refused(&again, &tab, &canonical_sid, CONVERSATION_IS_CANONICAL_MESSAGE);
+
+        // Control: a tab resuming a different conversation still works.
+        let other = handle_v2_spawn(
+            serde_json::json!({
+                "agent_name": other_tab,
+                "cwd": cwd,
+                "command": stub_s,
+                "args": ["--dangerously-skip-permissions", "--resume", other_sid],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_eq!(other.status, "200 OK", "{}", other.body);
+        assert_eq!(
+            json_body(&other.body)["conversationId"].as_str(),
+            Some(other_sid.as_str())
+        );
+        let live_other =
+            crate::v2_session_map::lookup_by_agent_name(&other_tab).expect("other tab registered");
+        assert!(live_other.is_child_alive());
+
+        // A second tab on a conversation another live tab resumes.
+        let third = handle_v2_spawn(
+            serde_json::json!({
+                "agent_name": third_tab,
+                "cwd": cwd,
+                "command": stub_s,
+                "args": ["--dangerously-skip-permissions", "--resume", other_sid],
+            })
+            .to_string()
+            .as_bytes(),
+        );
+        assert_duplicate_refused(&third, &third_tab, &other_sid, CONVERSATION_ALREADY_OPEN_MESSAGE);
+        assert!(
+            crate::v2_session_map::lookup_by_agent_name(&other_tab)
+                .expect("the first tab stays")
+                .is_child_alive(),
+            "refusing the duplicate must not touch the live tab"
+        );
+        let _ = std::fs::remove_dir_all(stub.parent().expect("stub dir"));
     }
 
     // ── Split-view V23: closed-tab guard ─────────────────────────────────

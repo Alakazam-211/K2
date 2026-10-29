@@ -234,6 +234,8 @@ owner GET /cli/docs/versions "" "workspace=$A&path=notes/plan.md"; want 200 "ver
 VID="$(jq_ "$BODY" 'j["versions"][-1]["id"]')"
 VSEQ="$(jq_ "$BODY" 'j["versions"][-1]["version"]')"
 owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"notes/plan.md","edits":[{"after":3,"text":"two"}]}))')" "workspace=$A"; want 200 "edit"
+# Written back now, so later checks can compare "now" exports with the file on disk.
+owner POST /cli/docs/flush '{"path":"notes/plan.md"}' "workspace=$A"; want 200 "flush after the edit"
 owner POST /cli/docs/export "$(body workspace "$A" path notes/plan.md target as-is version "@int:$VID")"; want 200 "export --version"
 # (The import's doc version may equal DV0, whose names the exports above took: then " (n)".)
 jok "$BODY" "j['version'] == $VID and j['docVersion'] == $VSEQ and j['placed']['path'].startswith('notes/plan.v$VSEQ') and j['placed']['path'].endswith('.md') and j['codec'] in ('exact', 'current')" "version id $VID exports doc version $VSEQ, named after the doc version"

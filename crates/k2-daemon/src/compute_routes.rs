@@ -1756,6 +1756,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let detach = b(&v, "detach") == Some(true) || tier_ask == Tier::Batch;
     let supersede_key = supersede_from(v)?;
     let submitter_name = submitter_name_from(v)?;
+    let tag = tag_from(v)?;
     // Never stuck (G3/G4): queue timeout, infra retries. Batch: 48 h.
     let tun = compute::retry::tuning();
     let queue_timeout = match n(&v, "queueTimeoutSecs") {
@@ -2154,6 +2155,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         placement: Some(placement.clone()),
         effective: effective.clone(),
         cpu_hints,
+        tag: tag.clone(),
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
@@ -2243,7 +2245,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
                 "source": source.as_ref().map(SourceInfo::json), "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout,
                 "shard": opts.shard, "secrets": plan.secret_env, "tier": tier.as_str(), "tierAsked": asked, "submitter": submitter,
-                "supersede": supersede_key, "placement": placement, "effective": effective}),
+                "supersede": supersede_key, "placement": placement, "effective": effective, "tag": tag}),
         );
         j
     };
@@ -2504,6 +2506,25 @@ fn supersede_from(v: &serde_json::Value) -> R<Option<String>> {
         None => Ok(None),
         Some(k) if tiers::valid_supersede(k) => Ok(Some(k.to_string())),
         Some(_) => Err(no(codes::BAD_REQUEST, 400, format!("--supersede is 1–{} printable characters", tiers::SUPERSEDE_MAX))),
+    }
+}
+
+/// A `--tag` outside its charset or length (exit 2).
+pub(crate) const TAG_INVALID: &str = "tag_invalid";
+/// Longest `--tag`.
+pub(crate) const TAG_MAX: usize = 64;
+
+/// `--tag NAME` (CE-9, D2): the job's own label, 1–64 of
+/// `A-Za-z0-9 . _ : / -` (`--label k=v` is the node-label filter).
+pub(crate) fn valid_tag(t: &str) -> bool {
+    (1..=TAG_MAX).contains(&t.len()) && t.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '/' | '-'))
+}
+
+fn tag_from(v: &serde_json::Value) -> R<Option<String>> {
+    match v.get("tag") {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(t)) if valid_tag(t) => Ok(Some(t.clone())),
+        Some(_) => Err(no(TAG_INVALID, 400, format!("--tag is 1–{TAG_MAX} of A-Z a-z 0-9 . _ : / - (e.g. fuzz:p3)"))),
     }
 }
 
@@ -3950,7 +3971,7 @@ fn run_sharded(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reque
                 request_sha256: request_sha,
                 detach,
                 retry_interrupted: false,
-                ctl: store::JobCtl { admin: who.is_admin(), queued_at: now, ..Default::default() },
+                ctl: store::JobCtl { admin: who.is_admin(), queued_at: now, tag: tag_from(v)?, effective: v.get("effective").filter(|e| e.is_object()).cloned(), ..Default::default() },
             },
         )
         .map_err(|e| no("internal", 500, e))?;

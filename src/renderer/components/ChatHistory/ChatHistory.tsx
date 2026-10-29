@@ -26,6 +26,7 @@ import {
   collectStoreTabs,
   chatDisplayName,
   findChatSessionInTab,
+  findPinnedChatTab,
   rememberChatCustomNames,
   restampListedChatTabs,
   restampSessionTabs,
@@ -338,12 +339,20 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     }
   }, [projectPath, heartbeatLoadedFor, refreshHeartbeats])
 
+  // The pinned Chat's conversation id is read for pinned heartbeats and
+  // whenever this workspace has its Chat tab (that tab already resolved
+  // the same route, so the read assigns nothing new). Clicking that
+  // conversation in history focuses the Chat tab instead of opening a
+  // second copy of it.
+  const hasPinnedChatTab = useRoomTabs((s) => findPinnedChatTab(s.tabs, projectPath ?? '') != null)
+
   useEffect(() => {
     if (!projectPath) {
       setPinnedWorkspaceSessionId(null)
       return
     }
-    const needsPinned = heartbeatEntries.some((e) => e.row.useWorkspaceSession)
+    const needsPinned =
+      hasPinnedChatTab || heartbeatEntries.some((e) => e.row.useWorkspaceSession)
     if (!needsPinned) {
       setPinnedWorkspaceSessionId(null)
       return
@@ -364,7 +373,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
     return () => {
       cancelled = true
     }
-  }, [projectPath, heartbeatEntries])
+  }, [projectPath, heartbeatEntries, hasPinnedChatTab])
 
   const heartbeatSessionIds = useMemo(
     () =>
@@ -972,6 +981,24 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         // One is a worktree, the other is main repo
         || (sessionFromWorktree !== isCurrentlyInWorktree)
 
+      // The agent's own conversation lives in its pinned Chat tab. A
+      // second `--resume` tab would run two harnesses on one transcript
+      // (and the daemon refuses it), so focus Chat instead. The daemon's
+      // id wins; the Chat pane's stamped id covers it before that read
+      // lands. A cross-worktree fork is a new conversation and may open.
+      if (!isCrossWorktree) {
+        const pinnedChat = findPinnedChatTab(tabsStore.tabs, projectPath)
+        const canonicalId = pinnedWorkspaceSessionId ?? pinnedChat?.sessionId ?? null
+        if (canonicalId && canonicalId === session.sessionId) {
+          if (pinnedChat) {
+            tabsStore.setActiveTab(pinnedChat.tab.id)
+          } else {
+            showToast("This is the agent's own conversation. Open it from the agent's Chat tab.")
+          }
+          return
+        }
+      }
+
       // Build resume args. Two shapes depending on provider:
       //   - Flag-style (Claude/Cursor/Gemini/Pi): `<preset-args> <flag> <uuid>`.
       //   - Subcommand-style (Codex): `<preset-args> <subcommand> <uuid>`
@@ -1041,7 +1068,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
         st.setTabTitle,
       )
     },
-    [projectPath, customNames, activeWorkspace, showToast]
+    [projectPath, customNames, activeWorkspace, showToast, pinnedWorkspaceSessionId]
   )
 
   const handleSearchKeyDown = useCallback(

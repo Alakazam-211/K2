@@ -1,5 +1,5 @@
 import { daemonCliGet, daemonCliPost } from '@/lib/daemon-cli'
-import type { Tab, TerminalItemData } from '@/stores/tabs'
+import type { AgentItemData, Tab, TerminalItemData } from '@/stores/tabs'
 import { primaryScope, scopedKey, type ServerScope } from '@/kessel/server-scope'
 
 /** SSOT display: non-empty trimmed customName, else provider title. */
@@ -136,6 +136,29 @@ export function findChatSessionInTab(
       if (!sessionIds) {
         const fromArgs = conversationIdFromArgs(td.command, td.args)
         if (fromArgs) return { sessionId: fromArgs, provider }
+      }
+    }
+  }
+  return null
+}
+
+/** The workspace's pinned Chat tab (system agent tab, `chat` section) for
+ *  `projectPath`, and the conversation id its pane last stamped. The
+ *  daemon's `workspace_sessions.session_id` is the authority; this is the
+ *  store's copy. `findChatSessionInTab` skips system tabs on purpose. */
+export function findPinnedChatTab<T extends Pick<Tab, 'id' | 'isSystemAgent' | 'paneGroups'>>(
+  tabs: Iterable<T>,
+  projectPath: string,
+): { tab: T; sessionId: string | null } | null {
+  for (const tab of tabs) {
+    if (!tab.isSystemAgent) continue
+    for (const [, pg] of tab.paneGroups) {
+      for (const item of pg.items) {
+        if (item.type !== 'agent') continue
+        const d = item.data as AgentItemData
+        if (d.section !== 'chat') continue
+        if (d.projectPath && projectPath && d.projectPath !== projectPath) continue
+        return { tab, sessionId: d.sessionId?.trim() || null }
       }
     }
   }

@@ -2240,6 +2240,26 @@ async fn handle_one_request(
         // token or a live Connect login (Member). An app pass gets the
         // guest projection of one room with `activity:read` there (S8,
         // AP3). GET-only.
+        // 0.46.7 Workbench (W2): this computer's sidecars for the Garden's
+        // reach (`zen-sidecar-reach.ts`). GET, the owner token or a login.
+        "/cli/workbench/agents" => {
+            if is_post {
+                let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
+                super::http::send_response(&mut *stream, "405 Method Not Allowed", "application/json", r#"{"error":"GET required"}"#)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let _ = stream.read(&mut buf).await;
+            if !super::http::token_ok(&query, state.token.as_str()) {
+                super::http::send_response(&mut *stream, "403 Forbidden", "application/json", r#"{"error":"invalid or missing token"}"#)
+                    .await;
+                return DispatchOutcome::Done;
+            }
+            let r = tokio::task::spawn_blocking(crate::garden_data::workbench_rows::agents_route)
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         "/cli/activity/snapshot" => {
             if is_post {
                 let _ = super::http::read_post_body(&mut *stream, &mut buf).await;

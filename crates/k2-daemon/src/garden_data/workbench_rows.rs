@@ -340,14 +340,14 @@ fn ahead_count(dir: &str, base: &str) -> Option<i64> {
 // ── reads ─────────────────────────────────────────────────────────────
 
 /// One sidecar as a Workbench task row (WorkRow).
-fn work_row(t: &Target) -> J {
+fn work_row(t: &Target, with_git: bool) -> J {
     let s = t.sidecar.as_ref().expect("a sidecar");
     let facts = w1::task_facts(&t.project_id, &s.pane_group_id);
     let live = crate::v2_session_map::lookup_by_agent_name(&s.agent_name).is_some_and(|x| x.is_child_alive());
     let worktree = t.worktree();
     // Git facts only for an agent in its own worktree: a sidecar at the
     // workspace root shares the main checkout, so its "changes" aren't its own.
-    let (branch, base, head, ahead, behind, dirty) = match worktree {
+    let (branch, base, head, ahead, behind, dirty) = match worktree.as_ref().filter(|_| with_git) {
         Some(_) => {
             let base = default_base(t);
             match k2_core::git_changes::snapshot(&t.dir, Some(&base)).ok().and_then(|r| r.repo()) {
@@ -382,7 +382,7 @@ fn work_row(t: &Target) -> J {
     })
 }
 
-fn work_list() -> Result<J, CliResponse> {
+fn work_list(with_git: bool) -> Result<J, CliResponse> {
     let projects = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -411,7 +411,7 @@ fn work_list() -> Result<J, CliResponse> {
                 dir: sidecar_dir(&r, &p.path),
                 sidecar: Some(r),
             };
-            out.push(work_row(&t));
+            out.push(work_row(&t, with_git));
         }
     }
     Ok(J::Array(out))
@@ -524,6 +524,17 @@ fn compute_jobs(t: &Target, args: &Map<String, J>) -> Result<J, CliResponse> {
         }
     }
     Ok(J::Array(out))
+}
+
+/// `GET /cli/workbench/agents` (Member): this computer's sidecars as Garden
+/// rows, without git facts (cheap: the Garden's reach reads it to let a
+/// widget and the Conversation widget reach `ws/name::local`, 0.46.7).
+/// Agents: `k2 sidecar list` per workspace.
+pub fn agents_route() -> CliResponse {
+    match work_list(false) {
+        Ok(v) => CliResponse::ok_json(json!({ "ok": true, "agents": v }).to_string()),
+        Err(r) => r,
+    }
 }
 
 // ── K2's sheet: one-time confirms bound to the call ───────────────────
@@ -766,7 +777,7 @@ fn note(t: &Target, args: &Map<String, J>) -> Result<J, CliResponse> {
 
 fn answer(row: &VerbRow, w: &Placed, args: &Map<String, J>, b: &CallBody) -> Result<J, CliResponse> {
     match row.verb.as_str() {
-        "work.list" => work_list(),
+        "work.list" => work_list(true),
         "git.snapshot" => {
             let t = target(str_arg(args, "address"))?;
             let base = base_of(&t, args)?;

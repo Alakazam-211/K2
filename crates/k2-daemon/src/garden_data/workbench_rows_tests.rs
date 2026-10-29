@@ -314,3 +314,15 @@ fn notes_land_on_the_worktree_and_go_to_the_sidecars_own_thread() {
     assert_eq!(r.status, "200 OK", "{}", r.body);
     assert_eq!(*seen.lock().expect("lock"), vec!["wb-room/fix".to_string()]);
 }
+
+#[test]
+fn the_reach_route_lists_sidecars_without_git_or_paths() {
+    let b = bench(&ALL);
+    let r = crate::garden_data::workbench_rows::agents_route();
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(!r.body.contains(&*b.repo.to_string_lossy()), "no host path: {}", r.body);
+    let v: Value = serde_json::from_str(&r.body).expect("json");
+    let row = v["agents"].as_array().expect("agents").iter().find(|x| x["address"] == SIDECAR).cloned().unwrap_or_else(|| panic!("{v}"));
+    assert_eq!(row["worktree"], ".worktrees/k2-fix");
+    assert_eq!(row["branch"], Value::Null, "no git work on the reach path");
+}

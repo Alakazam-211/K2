@@ -1498,6 +1498,8 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sidecar/interrupt", Member),
     post("/cli/sidecar/land", Admin),
     get("/cli/sidecar/list", Member),
+    // 0.46.7 Workbench (W2): this computer's sidecars as Garden rows.
+    get("/cli/workbench/agents", Member),
     post("/cli/sidecar/new", Admin),
     post("/cli/sidecar/retire", Admin),
     get("/cli/sidecar/review", Member),

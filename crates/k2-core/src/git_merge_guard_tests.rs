@@ -171,3 +171,27 @@ fn abort_still_aborts_a_real_merge() {
     assert!(!merge_status(&s(&d)).expect("status").in_progress, "no merge in progress after abort");
     assert!(!d.join(".git/MERGE_HEAD").exists(), "merge state cleared");
 }
+
+// ── resolve only touches a file in conflict ─────────────────────────
+
+#[test]
+fn resolve_refuses_a_file_that_is_not_in_conflict() {
+    let d = conflicted_repo("resolve-refuse");
+    std::fs::write(d.join("b.txt"), "b unsaved\n").expect("dirty b");
+    for f in ["b.txt", "*", "*.txt", "nope.txt"] {
+        let e = resolve_conflict(&s(&d), f, "theirs").expect_err("not in conflict → refused");
+        assert!(e.starts_with("not_in_conflict:"), "{f}: got {e}");
+    }
+    assert_eq!(read(&d.join("b.txt")), "b unsaved\n", "unrelated change kept");
+    assert!(merge_status(&s(&d)).expect("status").conflicts.contains(&"a.txt".to_string()), "a.txt still in conflict");
+}
+
+#[test]
+fn resolve_still_resolves_a_conflicted_file() {
+    let d = conflicted_repo("resolve-real");
+    std::fs::write(d.join("b.txt"), "b unsaved\n").expect("dirty b");
+    resolve_conflict(&s(&d), "a.txt", "theirs").expect("resolve a.txt");
+    assert_eq!(read(&d.join("a.txt")), "a2 from feature\n", "took theirs");
+    assert!(merge_status(&s(&d)).expect("status").conflicts.is_empty(), "no conflicts left");
+    assert_eq!(read(&d.join("b.txt")), "b unsaved\n", "unrelated change kept");
+}

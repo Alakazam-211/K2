@@ -635,7 +635,14 @@ pub fn handle_git_resolve_conflict(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    unit_ok(git::resolve_conflict(&b.path, &b.file_path, &b.resolution))
+    if let Err(r) = registered_workspace(&b.path) {
+        return r;
+    }
+    // A file that isn't in conflict → 409 `not_in_conflict`; nothing touched.
+    match git::resolve_conflict(&b.path, &b.file_path, &b.resolution) {
+        Ok(()) => CliResponse::ok_json(r#"{"success":true}"#.to_string()),
+        Err(e) => git_error(e),
+    }
 }
 
 #[derive(Deserialize)]

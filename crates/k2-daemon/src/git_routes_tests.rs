@@ -468,3 +468,24 @@ fn abort_merge_route_needs_a_workspace_and_a_merge_in_progress() {
     assert_eq!(code(&r), "no_merge_in_progress");
     assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "unsaved work\n");
 }
+
+// ── resolve only touches a conflicted file, on a workspace ──────────
+
+#[test]
+fn resolve_route_needs_a_workspace_and_a_conflicted_file() {
+    let other = repo("resolve-unregistered");
+    std::fs::write(other.join("a.txt"), "unsaved work\n").expect("dirty");
+    let body = |d: &Path| serde_json::json!({ "path": s(d), "filePath": "a.txt", "resolution": "theirs" });
+    let r = post("/cli/git/resolve", body(&other));
+    assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    assert_eq!(code(&r), "not_found");
+    assert_eq!(std::fs::read_to_string(other.join("a.txt")).expect("a"), "unsaved work\n");
+
+    let d = repo("resolve-noconflict");
+    register(&d);
+    std::fs::write(d.join("a.txt"), "unsaved work\n").expect("dirty");
+    let r = post("/cli/git/resolve", body(&d));
+    assert_eq!(r.status, "409 Conflict", "{}", r.body);
+    assert_eq!(code(&r), "not_in_conflict");
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).expect("a"), "unsaved work\n");
+}

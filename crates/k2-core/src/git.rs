@@ -425,8 +425,11 @@ pub mod refusal {
     pub const MAIN_HAS_UNCOMMITTED_CHANGES: &str = "main_has_uncommitted_changes";
     /// Abort asked for, but the repository has no merge in progress.
     pub const NO_MERGE_IN_PROGRESS: &str = "no_merge_in_progress";
+    /// Resolve asked for a file that is not in conflict.
+    pub const NOT_IN_CONFLICT: &str = "not_in_conflict";
 
-    const ALL: [&str; 4] = [NOT_A_REPO, NOT_A_WORKTREE_OF_PROJECT, MAIN_HAS_UNCOMMITTED_CHANGES, NO_MERGE_IN_PROGRESS];
+    const ALL: [&str; 5] =
+        [NOT_A_REPO, NOT_A_WORKTREE_OF_PROJECT, MAIN_HAS_UNCOMMITTED_CHANGES, NO_MERGE_IN_PROGRESS, NOT_IN_CONFLICT];
 
     /// The refusal code an error from this module starts with, if any.
     pub fn code_of(err: &str) -> Option<&'static str> {
@@ -1279,10 +1282,31 @@ pub fn abort_merge(repo_path: &str) -> Result<(), String> {
     repo.cleanup_state().map_err(|e| format!("Failed to cleanup merge state: {e}"))
 }
 
-/// Resolve a conflict by choosing "ours" or "theirs".
+/// Resolve a conflict by choosing "ours" or "theirs". `file_path` must be
+/// a file in conflict right now (its exact repo-relative path, so a
+/// pattern never matches); anything else is refused (`not_in_conflict`)
+/// and untouched.
 pub fn resolve_conflict(repo_path: &str, file_path: &str, resolution: &str) -> Result<(), String> {
     let repo = Repository::discover(repo_path).map_err(|e| format!("Not a git repository: {e}"))?;
     let workdir = repo.workdir().ok_or("No working directory")?;
+
+    let in_conflict = {
+        let index = repo.index().map_err(|e| format!("Failed to get index: {e}"))?;
+        let found = index
+            .conflicts()
+            .map_err(|e| format!("Failed to check conflicts: {e}"))?
+            .filter_map(|c| c.ok())
+            .any(|c| {
+                [c.ancestor, c.our, c.their]
+                    .iter()
+                    .flatten()
+                    .any(|entry| entry.path.as_slice() == file_path.as_bytes())
+            });
+        found
+    };
+    if !in_conflict {
+        return Err(format!("{}: {file_path} is not in conflict; nothing to resolve", refusal::NOT_IN_CONFLICT));
+    }
 
     match resolution {
         "ours" => {

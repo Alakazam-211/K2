@@ -34,8 +34,43 @@ pub fn resolve_root_project_path(path: &str) -> &str {
 /// Does `session_project` belong to the `root` project family — the
 /// root itself OR any worktree under it?
 pub fn matches_project_family(session_project: &str, root: &str) -> bool {
+    if cfg!(windows) {
+        let (s, r) = (windows_cwd_key(session_project), windows_cwd_key(root));
+        return s == r || s.starts_with(&format!("{r}/.worktrees/"));
+    }
     session_project == root
         || session_project.starts_with(&format!("{}/.worktrees/", root))
+}
+
+/// Windows: one spelling of a folder, so a harness's cwd matches K2's
+/// whichever way each wrote it (`D:\x`, `D:/x`, `d:\x\`, `\\?\D:\x` are
+/// one folder): '\' becomes '/', the `\\?\` prefix and a trailing '/' go,
+/// and ASCII letters are lower-cased (Windows paths ignore case; ASCII, as
+/// SQLite's lower() in [`hermes_cwd_col`]). Unix never calls it.
+pub fn windows_cwd_key(path: &str) -> String {
+    let slashed = path.replace('\\', "/");
+    let no_prefix = slashed.strip_prefix("//?/").unwrap_or(&slashed);
+    no_prefix.trim_end_matches('/').to_ascii_lowercase()
+}
+
+/// The hermes `sessions.cwd` column as compared: as stored on Unix; on
+/// Windows the SQL form of [`windows_cwd_key`] (hermes writes `D:\x`).
+pub fn hermes_cwd_col(col: &str) -> String {
+    if cfg!(windows) {
+        format!("lower(replace({col}, char(92), '/'))")
+    } else {
+        col.to_string()
+    }
+}
+
+/// A harness transcript's cwd is exactly `cwd` (Unix: as written, less a
+/// trailing '/'; Windows: [`windows_cwd_key`] on both).
+pub fn same_cwd(transcript_cwd: &str, cwd: &str) -> bool {
+    if cfg!(windows) {
+        windows_cwd_key(transcript_cwd) == windows_cwd_key(cwd)
+    } else {
+        transcript_cwd.trim_end_matches('/') == cwd
+    }
 }
 
 /// `~/.claude/history.jsonl` — where Claude Code appends one JSON
@@ -1188,6 +1223,9 @@ fn open_hermes_db_ro(db_path: &Path) -> Option<rusqlite::Connection> {
 /// `/x/my_proj` can't match `/x/my-proj/…`.
 fn hermes_family_params(project_path: &str) -> (String, String) {
     let root = resolve_root_project_path(project_path);
+    // Windows: compared against hermes_cwd_col's key form.
+    let key = if cfg!(windows) { windows_cwd_key(root) } else { root.to_string() };
+    let root = key.as_str();
     let escaped = root
         .replace('\\', "\\\\")
         .replace('%', "\\%")
@@ -1207,11 +1245,14 @@ pub fn detect_hermes_session(project_path: &str) -> Option<String> {
 fn detect_hermes_session_in_db(db_path: &Path, project_path: &str) -> Option<String> {
     let conn = open_hermes_db_ro(db_path)?;
     let (root, like) = hermes_family_params(project_path);
+    let cwd = hermes_cwd_col("cwd");
     conn.query_row(
-        "SELECT id FROM sessions \
-         WHERE source = 'cli' AND archived = 0 \
-           AND (cwd = ?1 OR cwd LIKE ?2 ESCAPE '\\') \
-         ORDER BY started_at DESC LIMIT 1",
+        &format!(
+            "SELECT id FROM sessions \
+             WHERE source = 'cli' AND archived = 0 \
+               AND ({cwd} = ?1 OR {cwd} LIKE ?2 ESCAPE '\\') \
+             ORDER BY started_at DESC LIMIT 1"
+        ),
         rusqlite::params![root, like],
         |row| row.get::<_, String>(0),
     )
@@ -2659,7 +2700,8 @@ fn parse_hermes_sessions_in_db(
     );
     let family = project_filter.map(hermes_family_params);
     if family.is_some() {
-        sql.push_str(" AND (s.cwd = ?1 OR s.cwd LIKE ?2 ESCAPE '\\')");
+        let cwd = hermes_cwd_col("s.cwd");
+        sql.push_str(&format!(" AND ({cwd} = ?1 OR {cwd} LIKE ?2 ESCAPE '\\')"));
     }
     let mut stmt = match conn.prepare(&sql) {
         Ok(s) => s,
@@ -4155,6 +4197,21 @@ mod tests {
         assert!(!matches_project_family("/other", "/r"));
         // Must start with the separator — `/r2` shouldn't match `/r`.
         assert!(!matches_project_family("/r2", "/r"));
+    }
+
+    /// Windows: a harness's cwd matches K2's whichever spelling each used.
+    #[cfg(windows)]
+    #[test]
+    fn windows_cwds_match_across_spellings() {
+        let k2 = "D:/work/sales";
+        for harness in [r"D:\work\sales", r"d:\work\sales\", r"\\?\D:\work\sales", "D:/Work/Sales/"] {
+            assert!(matches_project_family(harness, k2), "{harness}");
+            assert!(same_cwd(harness, k2), "{harness}");
+        }
+        assert!(matches_project_family(r"D:\work\sales\.worktrees\a", k2));
+        assert!(!matches_project_family(r"D:\work\sales2", k2));
+        assert!(!same_cwd(r"D:\work\sales\sub", k2));
+        assert_eq!(hermes_family_params(r"D:\Work\Sales").0, "d:/work/sales");
     }
 
     #[test]

@@ -87,8 +87,13 @@ fn setup() -> TestEnv {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock after epoch")
         .as_nanos();
-    // Short: the per-cell socket path must fit SUN_LEN.
+    // Short: the per-cell socket path must fit SUN_LEN. Windows has no
+    // socket path, and "/tmp" there has no drive (unlike the cwd the PTY
+    // and the harness record), so it uses the temp folder.
+    #[cfg(not(windows))]
     let home = PathBuf::from(format!("/tmp/k2sc-{:x}", nanos % 0xffff_ffff));
+    #[cfg(windows)]
+    let home = std::env::temp_dir().join(format!("k2sc-{:x}", nanos % 0xffff_ffff));
     let shim_dir = home.join("shim");
     let shim_log = home.join("shim-log");
     std::fs::create_dir_all(&shim_dir).expect("shim dir");
@@ -102,7 +107,7 @@ fn setup() -> TestEnv {
     let script = format!(
         "#!/bin/sh\n\
          n=$(/usr/bin/basename \"$0\")\n\
-         if [ \"$1\" = \"create-chat\" ]; then /usr/bin/uuidgen | /usr/bin/tr 'A-Z' 'a-z'; exit 0; fi\n\
+         if [ \"$1\" = \"create-chat\" ]; then {{ /usr/bin/uuidgen 2>/dev/null || od -An -N16 -tx1 /dev/urandom | tr -d ' \\n' | sed 's/^\\(........\\)\\(....\\)\\(....\\)\\(....\\)\\(............\\)$/\\1-\\2-\\3-\\4-\\5/'; }} | /usr/bin/tr 'A-Z' 'a-z'; exit 0; fi\n\
          if [ \"$1\" = \"--help\" ]; then printf '      --no-daemon\\n          Run without the shared background server\\n'; exit 0; fi\n\
          f=\"{log}/$n-$(/bin/date +%s)-$$\"\n\
          printf 'K2_CELL=%s\\nK2_SIDECAR_NAME=%s\\n' \"$K2_CELL\" \"$K2_SIDECAR_NAME\" > \"$f.env\"\n\

@@ -766,7 +766,7 @@ fn adopt_codex(home: &Path, cwd: &str, since_ms: i64) -> Vec<AdoptCandidate> {
                 continue;
             };
             let header_cwd = payload.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
-            if header_cwd.trim_end_matches('/') != cwd {
+            if !crate::chat_history::same_cwd(header_cwd, cwd) {
                 continue;
             }
             let Some(id) = payload.get("id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) else {
@@ -1094,9 +1094,9 @@ fn hermes_rows(session_id: &str, project_path: &str) -> Result<Vec<(String, Stri
     let conn = open_hermes_ro(&db_path).ok_or_else(|| "no readable transcript".to_string())?;
     if !project_path.is_empty() {
         let (root, like) = hermes_family(project_path);
+        let cwd = crate::chat_history::hermes_cwd_col("cwd");
         let found: rusqlite::Result<String> = conn.query_row(
-            "SELECT COALESCE(cwd, '') FROM sessions \
-             WHERE id = ?1 AND (cwd = ?2 OR cwd LIKE ?3 ESCAPE '\\')",
+            &format!("SELECT COALESCE(cwd, '') FROM sessions WHERE id = ?1 AND ({cwd} = ?2 OR {cwd} LIKE ?3 ESCAPE '\\')"),
             rusqlite::params![session_id, root, like],
             |row| row.get(0),
         );
@@ -1129,6 +1129,9 @@ fn hermes_rows(session_id: &str, project_path: &str) -> Result<Vec<(String, Stri
 
 fn hermes_family(project_path: &str) -> (String, String) {
     let root = resolve_root_project_path(project_path);
+    // Windows: compared against hermes_cwd_col's key form.
+    let key = if cfg!(windows) { crate::chat_history::windows_cwd_key(root) } else { root.to_string() };
+    let root = key.as_str();
     let escaped = root
         .replace('\\', "\\\\")
         .replace('%', "\\%")

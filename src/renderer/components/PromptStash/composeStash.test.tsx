@@ -301,3 +301,15 @@ describe('per person on this device', () => {
     expect(drawer.querySelector('[data-stash-preview]')?.textContent).toBe('from the box')
   })
 })
+
+describe('closing the drawer', () => {
+  it('a press outside the bar closes it and the activity bar comes back', async () => {
+    renderThreadBar(primaryScope(), true)
+    fireEvent.click(screen.getByTestId('stash-button'))
+    await screen.findByTestId('stash-drawer')
+    expect(activityPhase()).toBe('out')
+    fireEvent.mouseDown(document.body)
+    expect(screen.queryByTestId('stash-drawer')).toBeNull()
+    expect(activityPhase()).toBe('in')
+  })
+})

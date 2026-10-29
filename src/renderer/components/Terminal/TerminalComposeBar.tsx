@@ -672,6 +672,20 @@ export function TerminalComposeBar({
     else setStashOpen(true)
   }, [closeStash, stashOpen])
 
+  // A press outside the bar closes the stash (the activity bar comes back).
+  useEffect(() => {
+    if (!stashOpen) return
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node | null
+      if (t && barRef.current?.contains(t)) return
+      // The cap question and the context menu sit outside the bar.
+      if (t instanceof Element && t.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return
+      setStashOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [stashOpen])
+
   const send = useCallback(async () => {
     const text = draft.trim()
     const command = slashCommand

@@ -63,7 +63,10 @@ pub const PAIR_KEY_PREFIX: &str = "apppair:";
 /// client address (edge-attested Connect, a real LAN peer, a configured
 /// trusted proxy) and local logins are never counted and never refused by
 /// it — they keep their per-IP bucket and the per-username lockout. The
-/// dispatcher decides which is which.
+/// dispatcher decides which is which. A guest login through an App's link
+/// is not under this ceiling: it has its App's own
+/// (`apps::gateway::LINK_LOGIN_FAILS_PER_APP`, 0.46.6), so one App's
+/// public page can't close sign-in on every App.
 pub const GLOBAL_FAIL_LIMIT: usize = 60;
 
 /// Which login door a global-ceiling call is about. Connect and app

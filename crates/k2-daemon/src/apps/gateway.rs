@@ -584,30 +584,63 @@ fn ensure_ticker() {
 
 // ── guest logins through the link ────────────────────────────────────
 
-/// Guest logins (`POST /cli/skin/login`) through one App's link per
-/// window ([`crate::login_throttle::WINDOW_SECS`]): an App's BFF logs
-/// every one of its guests in from the same loopback socket.
-pub const LINK_LOGINS_PER_APP: usize = 60;
-/// Failed logins per (App, username) per window, like the main login.
+/// Failed guest logins (a wrong password, a locked guest) through one
+/// App's link per window ([`crate::login_throttle::WINDOW_SECS`]): the
+/// App's own failed-login ceiling. An App's server signs every one of its
+/// guests in from the same loopback socket, so the link has no client
+/// address to key on.
+///
+/// 0.46.6 (App guest login lockout, fixes 1a and 1b): a login through a
+/// link counts toward, and is refused by, this ceiling and never the
+/// box-wide ceiling of anonymous App logins (LM4, `Door::Skin`), so a
+/// flood of made-up names on one App's public page can't close sign-in on
+/// another App or on the box. Only failures count: a busy App's guests
+/// signing in never use it up.
+pub const LINK_LOGIN_FAILS_PER_APP: usize = 60;
+/// Failed logins per (App, guest) per window, like the main login.
 pub const LINK_LOGIN_FAILS_PER_USER: usize = crate::login_throttle::LIMIT;
-/// Guest logins through every App's link together per window.
-pub const LINK_LOGINS_ALL_APPS: usize = 300;
+/// Failed guest logins through every App's link together per window.
+pub const LINK_LOGIN_FAILS_ALL_APPS: usize = 300;
+/// Flood breaker: every guest login (successes too) through one App's
+/// link per window. High on purpose: it only stops a flood, never a busy
+/// App (0.46.6; it was 60 and was the only per-App limit).
+pub const LINK_LOGINS_PER_APP: usize = 600;
+/// Flood breaker: every guest login through every App's link together
+/// per window (0.46.6; it was 300).
+pub const LINK_LOGINS_ALL_APPS: usize = 3000;
 
-/// The limiter keys of a login on `app`'s link (the skin table).
-pub fn link_login_keys(app_service_id: &str, username: &str) -> (String, String, String) {
+/// The limiter keys of a guest login on one App's link (the skin table).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkLoginKeys {
+    /// Every attempt through this App's link (the flood breaker).
+    pub per_app: String,
+    /// Failures for this (App, guest).
+    pub per_user: String,
+    /// Failures through this App's link (its own failed-login ceiling).
+    pub app_fails: String,
+    /// Every attempt through every App's link.
+    pub all: String,
+    /// Failures through every App's link.
+    pub all_fails: String,
+}
+
+/// The limiter keys of a login on `app`'s link for `username`.
+pub fn link_login_keys(app_service_id: &str, username: &str) -> LinkLoginKeys {
     let p = crate::login_throttle::SKIN_KEY_PREFIX;
-    (
-        format!("{p}app-link:{app_service_id}"),
-        format!("{p}app-link:{app_service_id}:user:{}", username.trim().to_ascii_lowercase()),
-        format!("{p}app-link:*"),
-    )
+    LinkLoginKeys {
+        per_app: format!("{p}app-link:{app_service_id}"),
+        per_user: format!("{p}app-link:{app_service_id}:user:{}", username.trim().to_ascii_lowercase()),
+        app_fails: format!("{p}app-link-fails:{app_service_id}"),
+        all: format!("{p}app-link:*"),
+        all_fails: format!("{p}app-link-fails:*"),
+    }
 }
 
 /// What the dispatcher does with a guest login on a link.
 pub enum LinkLogin {
     /// Go on with this body (bound to the link's App) and remember the
-    /// username key for [`link_login_refused`].
-    Proceed { body: Vec<u8>, user_key: String },
+    /// keys a refusal counts on ([`link_login_refused`]).
+    Proceed { body: Vec<u8>, keys: LinkLoginKeys },
     /// Answer this and close.
     Refuse { status: &'static str, body: String },
 }
@@ -684,24 +717,35 @@ pub fn link_login(limiter: &crate::login_throttle::LoginLimiter, body: &[u8], co
     // counted against the guest it signs in as: `ada`, `ADA` and ada's
     // email are one budget, as they are one lockout (0.46.5 review nit).
     let subject = k2_core::skin::login_throttle_subject(&crate::skin_routes::login_username(&body, content_type));
-    let (per_app, per_user, all) = link_login_keys(svc, &subject);
+    let keys = link_login_keys(svc, &subject);
     let now = limiter.now();
-    if limiter.is_limited(&per_user, LINK_LOGIN_FAILS_PER_USER, now) {
+    // The failure ceilings first (they record nothing), then the flood
+    // breakers (they record every attempt that gets this far).
+    if limiter.is_limited(&keys.per_user, LINK_LOGIN_FAILS_PER_USER, now) {
         return Some(refuse("429 Too Many Requests", "rate_limited", "too many failed logins for this guest on this App; wait 5 minutes"));
     }
-    if limiter.check_and_record_with_limit(&per_app, LINK_LOGINS_PER_APP, now) == crate::login_throttle::Verdict::Limited {
+    if limiter.is_limited(&keys.app_fails, LINK_LOGIN_FAILS_PER_APP, now) {
+        return Some(refuse("429 Too Many Requests", "rate_limited", "too many failed guest logins through this App's link; wait a few minutes"));
+    }
+    if limiter.is_limited(&keys.all_fails, LINK_LOGIN_FAILS_ALL_APPS, now) {
+        return Some(refuse("429 Too Many Requests", "rate_limited", "too many failed guest logins through App links on this server; wait a few minutes"));
+    }
+    if limiter.check_and_record_with_limit(&keys.per_app, LINK_LOGINS_PER_APP, now) == crate::login_throttle::Verdict::Limited {
         return Some(refuse("429 Too Many Requests", "rate_limited", "too many guest logins through this App's link; wait a few minutes"));
     }
-    if limiter.check_and_record_with_limit(&all, LINK_LOGINS_ALL_APPS, now) == crate::login_throttle::Verdict::Limited {
+    if limiter.check_and_record_with_limit(&keys.all, LINK_LOGINS_ALL_APPS, now) == crate::login_throttle::Verdict::Limited {
         return Some(refuse("429 Too Many Requests", "rate_limited", "too many guest logins through App links on this server; wait a few minutes"));
     }
-    Some(LinkLogin::Proceed { body, user_key: per_user })
+    Some(LinkLogin::Proceed { body, keys })
 }
 
 /// A login on a link was refused (bad password, locked): count it for
-/// that (App, username).
-pub fn link_login_refused(limiter: &crate::login_throttle::LoginLimiter, user_key: &str) {
-    limiter.record_with_limit(user_key, LINK_LOGIN_FAILS_PER_USER, limiter.now());
+/// that (App, guest), for the App, and for every App's link together.
+pub fn link_login_refused(limiter: &crate::login_throttle::LoginLimiter, keys: &LinkLoginKeys) {
+    let now = limiter.now();
+    limiter.record_with_limit(&keys.per_user, LINK_LOGIN_FAILS_PER_USER, now);
+    limiter.record_with_limit(&keys.app_fails, LINK_LOGIN_FAILS_PER_APP, now);
+    limiter.record_with_limit(&keys.all_fails, LINK_LOGIN_FAILS_ALL_APPS, now);
 }
 
 // ── the gate ─────────────────────────────────────────────────────────
@@ -1190,16 +1234,33 @@ mod tests {
         LINK.sync_scope(ctx(&format!("app-{svc}"), svc), || link_login(l, body.as_bytes(), ct)).expect("on a link")
     }
 
-    fn proceed(r: LinkLogin) -> (Vec<u8>, String) {
+    fn proceed_keys(r: LinkLogin) -> (Vec<u8>, LinkLoginKeys) {
         match r {
-            LinkLogin::Proceed { body, user_key } => (body, user_key),
+            LinkLogin::Proceed { body, keys } => (body, keys),
             LinkLogin::Refuse { status, body } => panic!("refused {status}: {body}"),
         }
     }
 
+    /// The body and the per-guest failure key.
+    fn proceed(r: LinkLogin) -> (Vec<u8>, String) {
+        let (body, keys) = proceed_keys(r);
+        (body, keys.per_user)
+    }
+
     fn refused(r: LinkLogin) -> (&'static str, String) {
+        let (status, code, _) = refused_hint(r);
+        (status, code)
+    }
+
+    /// (status, code, hint) of a refusal.
+    fn refused_hint(r: LinkLogin) -> (&'static str, String, String) {
         match r {
-            LinkLogin::Refuse { status, body } => (status, serde_json::from_str::<Value>(&body).unwrap()["error"]["code"].as_str().unwrap().to_string()),
+            LinkLogin::Refuse { status, body } => {
+                let v: Value = serde_json::from_str(&body).unwrap_or_else(|e| panic!("JSON ({e}): {body}"));
+                let code = v["error"]["code"].as_str().unwrap_or_else(|| panic!("no code: {body}")).to_string();
+                let hint = v["error"]["hint"].as_str().unwrap_or_else(|| panic!("no hint: {body}")).to_string();
+                (status, code, hint)
+            }
             LinkLogin::Proceed { .. } => panic!("expected a refusal"),
         }
     }
@@ -1307,8 +1368,8 @@ mod tests {
             .take(LINK_LOGIN_FAILS_PER_USER)
             .enumerate()
         {
-            let (_, k) = proceed(login(&l, "svc-b", b, "application/json"));
-            assert!(k.ends_with(":user:ada"), "try {i}: {k}");
+            let (_, k) = proceed_keys(login(&l, "svc-b", b, "application/json"));
+            assert!(k.per_user.ends_with(":user:ada"), "try {i}: {k:?}");
             link_login_refused(&l, &k);
         }
         assert_eq!(
@@ -1317,49 +1378,91 @@ mod tests {
         );
     }
 
-    /// Per App (not one bucket for every App), per (App, username)
-    /// failures, and a link-wide cap.
+    /// 0.46.6 (App guest login lockout, fixes 1a and 1b): failures per
+    /// (App, guest), the App's own failure ceiling and every App's
+    /// failures together. Successes never use up a failure ceiling, and
+    /// one App's flood of made-up names never reaches another App.
     #[test]
     fn link_logins_are_throttled_per_app_per_user_and_overall() {
         // The per-guest key reads skin.db (who the name signs in as).
         let _home = k2_core::test_env::TempHome::new();
         let l = crate::login_throttle::LoginLimiter::new();
+        const JSON: &str = "application/json";
         let body = |u: &str| format!(r#"{{"username":"{u}","password":"x"}}"#);
-        // Lane 4's in-wall suite: six logins through one App are fine.
-        for i in 0..6 {
-            proceed(login(&l, "svc-a", &body(&format!("g{i}")), "application/json"));
-        }
-        // Failures count per (App, username): the 6th try after 5 refusals waits.
-        for _ in 0..LINK_LOGIN_FAILS_PER_USER {
-            let (_, k) = proceed(login(&l, "svc-a", &body("mallory"), "application/json"));
+        let fail = |svc: &str, u: &str| {
+            let (_, k) = proceed_keys(login(&l, svc, &body(u), JSON));
             link_login_refused(&l, &k);
+        };
+        // A busy App: well past the old 60-a-window bucket, every guest
+        // that signs in goes on (successes are never refused failures).
+        for i in 0..(LINK_LOGIN_FAILS_PER_APP + 40) {
+            proceed(login(&l, "svc-a", &body(&format!("g{i}")), JSON));
         }
-        assert_eq!(refused(login(&l, "svc-a", &body("Mallory"), "application/json")), ("429 Too Many Requests", "rate_limited".to_string()));
-        proceed(login(&l, "svc-a", &body("alice"), "application/json"));
-        proceed(login(&l, "svc-b", &body("mallory"), "application/json"));
-        // Per App: this App's bucket fills; another App's doesn't. So far
-        // svc-a took 6 + 5 + 1 logins and svc-b 1 (a refusal before the
-        // App bucket records nothing).
-        let mut a = 6 + LINK_LOGIN_FAILS_PER_USER + 1;
-        let mut all = a + 1;
-        while a < LINK_LOGINS_PER_APP {
-            proceed(login(&l, "svc-a", &body(&format!("u{a}")), "application/json"));
-            a += 1;
-            all += 1;
+        // Failures count per (App, guest): the 6th try after 5 refusals waits.
+        for _ in 0..LINK_LOGIN_FAILS_PER_USER {
+            fail("svc-a", "mallory");
         }
-        assert_eq!(refused(login(&l, "svc-a", &body("late"), "application/json")).1, "rate_limited");
-        proceed(login(&l, "svc-b", &body("late"), "application/json"));
-        all += 1;
-        // Link-wide: every App together.
-        let mut app = 0;
-        while all < LINK_LOGINS_ALL_APPS {
-            proceed(login(&l, &format!("svc-x{app}"), &body("u"), "application/json"));
-            all += 1;
-            app += 1;
+        assert_eq!(refused(login(&l, "svc-a", &body("Mallory"), JSON)), ("429 Too Many Requests", "rate_limited".to_string()));
+        proceed(login(&l, "svc-a", &body("alice"), JSON));
+        proceed(login(&l, "svc-b", &body("mallory"), JSON));
+        // A flood of made-up names, one failure each, up to the App's own
+        // ceiling: until then a real guest still goes on.
+        let mut a_fails = LINK_LOGIN_FAILS_PER_USER;
+        while a_fails < LINK_LOGIN_FAILS_PER_APP {
+            proceed(login(&l, "svc-a", &body("alice"), JSON));
+            fail("svc-a", &format!("nobody{a_fails}"));
+            a_fails += 1;
         }
-        assert_eq!(refused(login(&l, "svc-fresh", &body("u"), "application/json")).1, "rate_limited", "the link-wide cap");
+        // At the ceiling the App's link waits (whoever signs in) …
+        let (status, code, hint) = refused_hint(login(&l, "svc-a", &body("alice"), JSON));
+        assert_eq!((status, code.as_str()), ("429 Too Many Requests", "rate_limited"));
+        assert_eq!(hint, "too many failed guest logins through this App's link; wait a few minutes");
+        // … and another App's link never notices.
+        proceed(login(&l, "svc-b", &body("bob"), JSON));
+        // Every App's failures together, each App under its own ceiling.
+        let mut all_fails = a_fails;
+        let mut n = 0;
+        while all_fails < LINK_LOGIN_FAILS_ALL_APPS {
+            fail(&format!("svc-x{}", n / (LINK_LOGIN_FAILS_PER_APP - 1)), &format!("n{n}"));
+            all_fails += 1;
+            n += 1;
+        }
+        let (status, code, hint) = refused_hint(login(&l, "svc-fresh", &body("u"), JSON));
+        assert_eq!((status, code.as_str()), ("429 Too Many Requests", "rate_limited"), "every App's failures together");
+        assert_eq!(hint, "too many failed guest logins through App links on this server; wait a few minutes");
         // The window passes.
         l.advance_clock_for_tests(crate::login_throttle::WINDOW_SECS + 1);
-        proceed(login(&l, "svc-a", &body("mallory"), "application/json"));
+        proceed(login(&l, "svc-a", &body("mallory"), JSON));
+        proceed(login(&l, "svc-a", &body("alice"), JSON));
+    }
+
+    /// 0.46.6: the flood breakers count every attempt, successes too, at
+    /// high limits: per App, then every App's link together.
+    #[test]
+    fn link_login_flood_breakers_count_every_attempt() {
+        let _home = k2_core::test_env::TempHome::new();
+        let l = crate::login_throttle::LoginLimiter::new();
+        const JSON: &str = "application/json";
+        let body = |u: &str| format!(r#"{{"username":"{u}","password":"x"}}"#);
+        for i in 0..LINK_LOGINS_PER_APP {
+            proceed(login(&l, "svc-a", &body(&format!("g{i}")), JSON));
+        }
+        let (status, code, hint) = refused_hint(login(&l, "svc-a", &body("late"), JSON));
+        assert_eq!((status, code.as_str()), ("429 Too Many Requests", "rate_limited"));
+        assert_eq!(hint, "too many guest logins through this App's link; wait a few minutes");
+        proceed(login(&l, "svc-b", &body("late"), JSON));
+        // svc-a's refused attempt was counted on its own bucket only.
+        let mut all = LINK_LOGINS_PER_APP + 1;
+        let mut n = 0;
+        while all < LINK_LOGINS_ALL_APPS {
+            proceed(login(&l, &format!("svc-x{}", n / (LINK_LOGINS_PER_APP - 1)), &body("u"), JSON));
+            all += 1;
+            n += 1;
+        }
+        let (_, code, hint) = refused_hint(login(&l, "svc-fresh", &body("u"), JSON));
+        assert_eq!(code, "rate_limited", "the link-wide breaker");
+        assert_eq!(hint, "too many guest logins through App links on this server; wait a few minutes");
+        l.advance_clock_for_tests(crate::login_throttle::WINDOW_SECS + 1);
+        proceed(login(&l, "svc-a", &body("late"), JSON));
     }
 }

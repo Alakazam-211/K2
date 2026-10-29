@@ -804,6 +804,17 @@ fn skin_login_client_trust(
     }
 }
 
+/// LM4 — does this app login count toward (and is it refused by) the
+/// box-wide ceiling of anonymous app logins (`Door::Skin`)? Only an
+/// anonymous login that did NOT come through an App's link: a link login
+/// counts on its App's own failure ceiling (`apps::gateway::link_login`,
+/// 0.46.6), so made-up names on one App's public page can't close sign-in
+/// on every App and on the box. An `Ingress::App` connection with no link
+/// bound stays anonymous.
+fn skin_login_under_box_ceiling(trust: ClientTrust, on_link: bool) -> bool {
+    !on_link && trust.under_global_ceiling()
+}
+
 /// app-user-profile P0 (vs-live U5 d, U21): may this public reset POST go
 /// on to the token lookup (and, for a live token, argon2)? Its own door in
 /// the limiter: a client address the daemon can vouch for gets
@@ -964,6 +975,23 @@ mod login_throttle_key_tests {
             "an App link login keeps its own buckets"
         );
         assert_eq!(skin_login_client_trust(Ingress::App, lo, h, &[], relay), ClientTrust::Anonymous);
+    }
+
+    /// 0.46.6 (App guest login lockout, fix 1a): a login through an App's
+    /// link never counts toward, or is refused by, the box-wide ceiling of
+    /// anonymous app logins; it has its App's own. An App-ingress login
+    /// with no link bound and an unattested tunnel login still do.
+    #[test]
+    fn a_link_login_is_never_under_the_box_wide_app_ceiling() {
+        let lo = Some(ip(LO));
+        let app = skin_login_client_trust(Ingress::App, lo, "", &[], None);
+        assert_eq!(app, ClientTrust::Anonymous, "the link carries no client address");
+        assert!(!skin_login_under_box_ceiling(app, true), "on a link: the App's own ceiling");
+        assert!(skin_login_under_box_ceiling(app, false), "no link bound: the box's");
+        let tunnel = skin_login_client_trust(Ingress::Tunnel, lo, "", &[], None);
+        assert!(skin_login_under_box_ceiling(tunnel, false), "an unattested tunnel login");
+        let local = skin_login_client_trust(Ingress::Loopback, lo, "", &[], None);
+        assert!(!skin_login_under_box_ceiling(local, false), "a local login never is");
     }
 
     #[test]
@@ -4802,14 +4830,15 @@ async fn handle_one_request(
                 .unwrap_or_default();
             let mut body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
             // Runtime 0.46.1 door: a guest login through an App's link is
-            // bound to that App and throttled per App, per (App, username)
-            // failure and link-wide (`apps::gateway::link_login`).
-            let mut link_user_key = None;
+            // bound to that App and throttled per (App, guest) failure, by
+            // the App's own failure ceiling and link-wide
+            // (`apps::gateway::link_login`).
+            let mut link_keys = None;
             if ingress == Ingress::App {
                 match crate::apps::gateway::link_login(&state.login_limiter, &body_bytes, &content_type) {
-                    Some(crate::apps::gateway::LinkLogin::Proceed { body, user_key }) => {
+                    Some(crate::apps::gateway::LinkLogin::Proceed { body, keys }) => {
                         body_bytes = body;
-                        link_user_key = Some(user_key);
+                        link_keys = Some(keys);
                     }
                     Some(crate::apps::gateway::LinkLogin::Refuse { status, body }) => {
                         super::http::send_response(&mut *stream, status, "application/json", &body).await;
@@ -4843,10 +4872,13 @@ async fn handle_one_request(
             }
             // LM4 — global failed-login ceiling for anonymous app logins
             // only (no trustworthy client address), its own budget so an
-            // app-login spray cannot close Connect.
-            let anonymous =
-                skin_login_client_trust(ingress, peer_ip(stream), &headers_blob, &trusted_proxies, relay_ip)
-                    .under_global_ceiling();
+            // app-login spray cannot close Connect. A login through an
+            // App's link has that App's own failure ceiling instead
+            // (0.46.6), so one App's flood never closes the others.
+            let anonymous = skin_login_under_box_ceiling(
+                skin_login_client_trust(ingress, peer_ip(stream), &headers_blob, &trusted_proxies, relay_ip),
+                link_keys.is_some(),
+            );
             if anonymous
                 && limiter.global_ceiling_reached(crate::login_throttle::Door::Skin, limiter.now())
             {
@@ -4880,7 +4912,7 @@ async fn handle_one_request(
             if anonymous && refused {
                 limiter.record_global_failure(crate::login_throttle::Door::Skin, limiter.now());
             }
-            if let (true, Some(k)) = (refused, link_user_key.as_deref()) {
+            if let (true, Some(k)) = (refused, link_keys.as_ref()) {
                 crate::apps::gateway::link_login_refused(limiter, k);
             }
             if refused {

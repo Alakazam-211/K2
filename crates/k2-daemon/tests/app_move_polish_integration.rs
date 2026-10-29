@@ -1363,3 +1363,96 @@ async fn first_write_verbs_fold_into_one_digest_and_skip_the_agents_own_tests() 
     gateway::close("digapp2", None, true);
     k2_daemon::apps::alerts::set_sink(None);
 }
+
+/// A guest login on `port`'s link (`Connection: close`).
+fn link_login(port: u16, pass: &str, user: &str, password: &str) -> (u16, String) {
+    on_link(port, &link_post("/cli/skin/login", Some(pass), &json!({"username": user, "password": password})))
+}
+
+/// `n` failed logins under made-up names on one link, ten at a time.
+async fn made_up_name_flood(port: u16, pass: &str, from: usize, n: usize) {
+    let pass = pass.to_string();
+    let got = blocking(move || {
+        let mut out = Vec::new();
+        for chunk in (from..from + n).collect::<Vec<_>>().chunks(10) {
+            let threads: Vec<_> = chunk
+                .iter()
+                .map(|i| {
+                    let (p, user) = (pass.clone(), format!("nobody-{i}"));
+                    std::thread::spawn(move || link_login(port, &p, &user, "made-up-pw"))
+                })
+                .collect();
+            out.extend(threads.into_iter().map(|t| t.join().expect("login thread")));
+        }
+        out
+    })
+    .await;
+    for (i, (status, body)) in got.iter().enumerate() {
+        assert_eq!(*status, 401, "made-up name {}: {body}", from + i);
+    }
+}
+
+/// 0.46.6 (App guest login lockout, fixes 1a and 1b), through the REAL
+/// dispatcher: a flood of failed logins under made-up names on App A's
+/// link fills only A's own failure ceiling. Until the ceiling a real
+/// guest of A still signs in (a success never counts); at it A's link
+/// waits; App B's link and a direct App login on the box (an anonymous
+/// tunnel login, the box-wide ceiling's door) never notice. Before the
+/// fix every link failure fed that box-wide ceiling and every attempt
+/// filled a 60-a-window App bucket, so this flood closed every App.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_made_up_name_flood_on_one_apps_link_never_closes_another_app_or_the_box() {
+    let env = setup(&[]);
+    let _seen = quiet_alerts();
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let ws_a = seed_ws(&env, "floodwsa");
+    let ws_b = seed_ws(&env, "floodwsb");
+    let svc_a = app_row(&ws_a, "floodappa");
+    let svc_b = app_row(&ws_b, "floodappb");
+    const PW: &str = "flood-guest-pw-1";
+    for (who, svc) in [("flood-ga", &svc_a), ("flood-gb", &svc_b)] {
+        k2_core::skin::add_principal_for_app(who, None, svc, None, "owner").unwrap();
+        k2_daemon::test_harness::guest_with_own_password(who, PW);
+    }
+    let (pass_a, port_a) = open_link("floodappa", &svc_a, &ws_a);
+    let (pass_b, port_b) = open_link("floodappb", &svc_b, &ws_b);
+    let ceiling = gateway::LINK_LOGIN_FAILS_PER_APP;
+    let half = ceiling / 2;
+
+    made_up_name_flood(port_a, &pass_a, 0, half).await;
+    let p = pass_a.clone();
+    let r = blocking(move || link_login(port_a, &p, "flood-ga", PW)).await;
+    assert_eq!(r.0, 200, "a real guest of A, under A's ceiling: {r:?}");
+    made_up_name_flood(port_a, &pass_a, half, ceiling - half).await;
+
+    let limiter = d.login_limiter.clone();
+    assert!(
+        !limiter.global_ceiling_reached(k2_daemon::login_throttle::Door::Skin, limiter.now()),
+        "{ceiling} failures on A's link never reach the box-wide ceiling"
+    );
+    // A's own ceiling: its link waits now.
+    let p = pass_a.clone();
+    let r = blocking(move || link_login(port_a, &p, "flood-ga", PW)).await;
+    assert_eq!(r.0, 429, "{r:?}");
+    let e = err(&r.1);
+    assert_eq!((e["code"].as_str(), e["app"].as_str()), (Some("rate_limited"), Some("floodappa")), "{e}");
+    assert_eq!(e["hint"], "too many failed guest logins through this App's link; wait a few minutes", "{e}");
+    // App B's link never noticed.
+    let p = pass_b.clone();
+    let r = blocking(move || link_login(port_b, &p, "flood-gb", PW)).await;
+    assert_eq!(r.0, 200, "B's guest on B's link: {r:?}");
+    // Nor did a direct App login on the box with no client address (the
+    // logins the box-wide ceiling guards).
+    let tunnel = d.tunnel_port;
+    let body = json!({"username": "flood-gb", "password": PW, "app": svc_b}).to_string();
+    let r = blocking(move || req_blocking(tunnel, "POST", "/cli/skin/login", Some(body))).await;
+    assert_eq!(r.status, 200, "an anonymous direct App login on the box: {}", r.body);
+    // The window passes: A's guests sign in again.
+    limiter.advance_clock_for_tests(k2_daemon::login_throttle::WINDOW_SECS + 1);
+    let p = pass_a.clone();
+    let r = blocking(move || link_login(port_a, &p, "flood-ga", PW)).await;
+    assert_eq!(r.0, 200, "after the window: {r:?}");
+    gateway::close("floodappa", None, true);
+    gateway::close("floodappb", None, true);
+    k2_daemon::apps::alerts::set_sink(None);
+}

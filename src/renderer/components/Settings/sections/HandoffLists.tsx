@@ -14,7 +14,7 @@ import {
   splitPeer,
   type HandoffView,
 } from './handoff-api'
-import { primaryScope } from '@/kessel/server-scope'
+import type { ServerScope } from '@/kessel/server-scope'
 
 const btn =
   'px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)] cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed'
@@ -34,7 +34,15 @@ function peerWords(peer: string): string {
   return host ? `${agent} on ${host}` : agent
 }
 
-function IncomingRow({ row, onChanged }: { row: HandoffView; onChanged: () => void }): React.JSX.Element {
+function IncomingRow({
+  row,
+  scope,
+  onChanged,
+}: {
+  row: HandoffView
+  scope: ServerScope
+  onChanged: () => void
+}): React.JSX.Element {
   const [renaming, setRenaming] = useState(false)
   const [clash, setClash] = useState(row.reason === 'clash')
   const [name, setName] = useState('')
@@ -45,8 +53,8 @@ function IncomingRow({ row, onChanged }: { row: HandoffView; onChanged: () => vo
     setBusy(true)
     setError(null)
     try {
-      // Settings → Vault lists this window's server's handoffs.
-      await handoffApi.decide({ id: row.deliveryId, ...body }, primaryScope())
+      // Settings → Vault lists this window's server's handoffs (Settings passes its scope).
+      await handoffApi.decide({ id: row.deliveryId, ...body }, scope)
       onChanged()
     } catch (e) {
       const info = daemonErrorOf(e)
@@ -153,8 +161,8 @@ function useRows(load: () => Promise<HandoffView[]>): {
   return { rows, error, refresh }
 }
 
-export function IncomingList(): React.JSX.Element {
-  const load = useCallback(() => handoffApi.incoming(), [])
+export function IncomingList({ scope }: { scope: ServerScope }): React.JSX.Element {
+  const load = useCallback(() => handoffApi.incoming(undefined, scope), [scope])
   const { rows, error, refresh } = useRows(load)
   return (
     <div className="space-y-1" data-testid="vault-incoming">
@@ -172,7 +180,7 @@ export function IncomingList(): React.JSX.Element {
       {rows !== null && rows.length > 0 && (
         <div className="border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
           {rows.map((r) => (
-            <IncomingRow key={r.deliveryId} row={r} onChanged={refresh} />
+            <IncomingRow key={r.deliveryId} row={r} scope={scope} onChanged={refresh} />
           ))}
         </div>
       )}
@@ -180,8 +188,8 @@ export function IncomingList(): React.JSX.Element {
   )
 }
 
-export function SentList(): React.JSX.Element {
-  const load = useCallback(() => handoffApi.sent(), [])
+export function SentList({ scope }: { scope: ServerScope }): React.JSX.Element {
+  const load = useCallback(() => handoffApi.sent(undefined, scope), [scope])
   const { rows, error } = useRows(load)
   return (
     <div className="space-y-1" data-testid="vault-sent">

@@ -40,6 +40,7 @@ import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { useServerSupports } from '@/lib/server-capabilities'
 import { handoffOriginText, takeRequestedVaultTab } from './handoff-api'
 import { IncomingList, SentList } from './HandoffLists'
+import type { ServerScope } from '@/kessel/server-scope'
 
 export const VAULT_MANIFEST: SettingEntry[] = [
   {
@@ -1378,7 +1379,8 @@ const TAB_SETTINGS_ID: Record<VaultTab, string> = {
   requests: 'vault.requests',
 }
 
-export function VaultSection(): React.JSX.Element {
+/** `scope`: this window's server, from Settings (Incoming/Sent list and decide there). */
+export function VaultSection({ scope }: { scope: ServerScope }): React.JSX.Element {
   const handoff = useServerSupports('vault-handoff')
   const [tab, setTab] = useState<VaultTab>(() => {
     const want = takeRequestedVaultTab()
@@ -1454,8 +1456,8 @@ export function VaultSection(): React.JSX.Element {
       </div>
 
       {tab === 'requests' && <RequestsList />}
-      {handoff && tab === 'incoming' && <IncomingList />}
-      {handoff && tab === 'sent' && <SentList />}
+      {handoff && tab === 'incoming' && <IncomingList scope={scope} />}
+      {handoff && tab === 'sent' && <SentList scope={scope} />}
 
       {tab === 'secrets' && (
         <div className="space-y-3">

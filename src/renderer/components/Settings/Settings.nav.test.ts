@@ -69,7 +69,7 @@ describe('Settings nav Apps', () => {
     // prd-k2-vault-v1 KV39: Settings → Access → Vault.
     expect(SECTION_LABELS.vault).toBe('Vault')
     expect(src).toContain("activeSection === 'vault'")
-    expect(src).toContain('<VaultSection />')
+    expect(src).toContain('<VaultSection scope={settingsPrimaryScope()} />')
     expect(src).toContain('...VAULT_MANIFEST,')
     // contract-sources-v1 §8: Settings → Gardens → External Data.
     expect(SECTION_LABELS['data-sources']).toBe('External Data')

@@ -13,6 +13,7 @@ vi.mock('@/stores/projects', () => ({
     sel({ projects: [{ id: 'p-sales', name: 'sales', handle: 'sales', path: '/w/sales' }] }),
 }))
 
+import { primaryScope } from '@/kessel/server-scope'
 import { VaultSection, groupSecrets, originLabel, REVEAL_SHOW_MS } from './VaultSection'
 import { requestVaultTab, type HandoffView } from './handoff-api'
 import { toBase64, type VaultSecret, type VaultStatus } from './vault-api'
@@ -107,7 +108,7 @@ afterEach(() => {
 })
 
 async function renderPage() {
-  const r = render(<VaultSection />)
+  const r = render(<VaultSection scope={primaryScope()} />)
   await screen.findAllByTestId('vault-secret-row')
   return r
 }
@@ -578,7 +579,7 @@ describe('Vault → Incoming / Sent (prd-agent-secret-handoff-v1 §10.3)', () =>
 
   it('the Sent tab lists what this server sent, and a requested tab opens first', async () => {
     requestVaultTab('sent')
-    render(<VaultSection />)
+    render(<VaultSection scope={primaryScope()} />)
     const rows = await screen.findAllByTestId('vault-sent-row')
     expect(rows[0]!.textContent).toContain('from sales to ops')
     expect(rows[0]!.textContent).toContain('in the vault')

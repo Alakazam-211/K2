@@ -668,7 +668,7 @@ export default function Settings(): React.JSX.Element {
         )}
         {activeSection === 'vault' && (
           <SectionErrorBoundary>
-            <VaultSection />
+            <VaultSection scope={settingsPrimaryScope()} />
           </SectionErrorBoundary>
         )}
         {activeSection === 'permission-cards' && (

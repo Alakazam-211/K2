@@ -474,17 +474,26 @@ mod tests {
     }
 
     /// The group reader sees a real busy group (this process's own: its
-    /// CPU only grows, its RSS is above zero).
+    /// CPU grows while it spins, its RSS is above zero). Spins until the
+    /// reader sees 100 ms more CPU (a loaded node gives less CPU than wall
+    /// time), at most 20 s of wall time.
     #[test]
     fn the_group_reader_sees_this_process() {
         let me = unsafe { libc::getpgrp() };
-        let spin = std::time::Instant::now();
-        while spin.elapsed() < Duration::from_millis(300) {
-            std::hint::black_box(0u64);
+        let pid = std::process::id() as i32;
+        let read = || ps_group(me).expect("readable").into_iter().find(|p| p.pid == pid).expect("this process is in its group");
+        let first = read();
+        assert!(first.rss_bytes > 0, "{first:?}");
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        let mut now = first;
+        while now.cpu_ms < first.cpu_ms + 100 && std::time::Instant::now() < deadline {
+            let spin = std::time::Instant::now();
+            while spin.elapsed() < Duration::from_millis(50) {
+                std::hint::black_box(0u64);
+            }
+            now = read();
         }
-        let g = ps_group(me).expect("readable");
-        let mine = g.iter().find(|p| p.pid == std::process::id() as i32).expect("this process is in its group");
-        assert!(mine.rss_bytes > 0 && mine.cpu_ms >= 200, "{mine:?}");
+        assert!(now.cpu_ms >= first.cpu_ms + 100, "the reader saw this process's CPU grow: {first:?} → {now:?}");
     }
 
     #[test]

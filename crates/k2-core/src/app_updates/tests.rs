@@ -428,6 +428,21 @@ fn busy_answers_are_retried_and_refusals_mapped() {
 }
 
 #[test]
+fn a_pull_reaches_a_new_host_and_an_old_one_says_not_supported() {
+    let host = FakeHost::start(&[(ID, TOKEN)]);
+    let mut c = Client::new(&host.base, TOKEN).expect("client");
+    quick(&mut c);
+    assert_eq!(c.pull_version(ID, "1.0.0").expect("old host"), dl_client::Pulled::NotSupported, "k2dl < 1.4.0: 404");
+    host.lock().supports_pull = true;
+    assert_eq!(c.pull_version(ID, "1.0.0").expect("new host"), dl_client::Pulled::Done);
+    assert_eq!(host.lock().pulled, vec![(ID.to_string(), "1.0.0".to_string())]);
+    match c.pull_version("dev.k2.box.other", "1.0.0") {
+        Err(DlError::Refused { status: 401, .. }) => {}
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
 fn an_unreachable_host_is_unavailable_not_zero() {
     let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let base = format!("http://{}", l.local_addr().expect("addr"));

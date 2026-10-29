@@ -33,6 +33,10 @@ pub struct State {
     pub lie_sha: bool,
     /// Answer this many upload PUTs with 503 (other requests are served).
     pub fail_uploads: u32,
+    /// k2dl 1.4.0's pull call (`false`: an older host, 404 for the path).
+    pub supports_pull: bool,
+    /// (id, version) the host was asked to pull.
+    pub pulled: Vec<(String, String)>,
 }
 
 pub struct FakeHost {
@@ -208,6 +212,15 @@ fn serve(mut s: TcpStream, st: &Arc<Mutex<State>>, base: &str) {
             g.manifests.insert((id.to_string(), channel.to_string()), m);
             drop(g);
             respond(&mut s, 200, "", "application/json", json!({ "url": format!("{base}/{id}/{channel}/latest.json") }).to_string().as_bytes());
+        }
+        ("POST", ["api", "v1", "apps", id, "versions", version, "pull"]) if g.supports_pull => {
+            if let Err((c, e)) = auth(&g, id) {
+                drop(g);
+                return err(&mut s, c, e);
+            }
+            g.pulled.push((id.to_string(), version.to_string()));
+            drop(g);
+            respond(&mut s, 200, "", "application/json", br#"{"ok":true}"#);
         }
         ("GET", ["api", "v1", "apps", id, "stats"]) => {
             if let Err((c, e)) = auth(&g, id) {

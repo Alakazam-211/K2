@@ -1018,13 +1018,29 @@ fn pull(who: &Who, body: &[u8]) -> R<J> {
         };
         out_ch.push(json!({ "channel": ch, "now": best.as_ref().map(|b| b.version.clone()), "fallback": fallback }));
     }
-    audit(&app, "updates_pull", &by, json!({ "version": version, "release": rel.id, "channels": out_ch }));
+    // k2dl 1.4.0+ stops serving the files too; an older host (404) keeps
+    // them up and K2 says so.
+    let host = match (dl_id_of(&app), client(&app)) {
+        (Ok(id), Ok(c)) => match c.pull_version(&id, &version) {
+            Ok(dl_client::Pulled::Done) => "pulled".to_string(),
+            Ok(dl_client::Pulled::NotSupported) => "not_supported".to_string(),
+            Err(e) => e.line(),
+        },
+        (Err(e), _) | (_, Err(e)) => format!("skipped: {}", e.hint),
+    };
+    audit(&app, "updates_pull", &by, json!({ "version": version, "release": rel.id, "channels": out_ch, "host": host }));
+    let note = if host == "pulled" {
+        "K2's answers no longer offer it, and the download host stopped serving its files."
+    } else {
+        "K2's answers no longer offer it. Its files stay at their download-host URLs (this host can't pull them; an installer someone saved keeps working); ask K2 Web to quarantine them if they must stop."
+    };
     Ok(json!({
         "ok": true,
         "app": app.app_id,
         "version": version,
         "channels": out_ch,
-        "note": "K2's answers no longer offer it. Its files stay at their download-host URLs (an installer someone saved keeps working); ask K2 Web to quarantine them if they must stop.",
+        "host": host,
+        "note": note,
     }))
 }
 

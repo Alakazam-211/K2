@@ -12642,8 +12642,9 @@ Releases:
         version with the fix.
   k2 app updates pull <app> --version <version> [--json]
         Stop offering a release on every channel (each channel falls back to
-        its newest older release, or goes empty). Its files stay at their
-        download URLs.
+        its newest older release, or goes empty). A download host that can
+        (k2dl 1.4.0+) stops serving its files too; an older one keeps them
+        at their URLs, and the answer says which.
   k2 app updates stats <app> [--days 30] [--json]
         Downloads per version (from the download host) and version checks
         per day, platform and version (from this box). "unavailable" means
@@ -43532,7 +43533,7 @@ cmd_schema() {
     {
       "name": "app updates pull",
       "usage": "k2 app updates pull <app> --version <version> [--json]",
-      "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). Its files stay at their download URLs. POST /cli/app/updates/pull.",
+      "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). A download host that can (k2dl 1.4.0+) stops serving its files too; an older one keeps them. POST /cli/app/updates/pull.",
       "args": [{"name": "app", "required": true}],
       "flags": [
         {"name": "--version", "arg": "version", "description": "The release to pull."},

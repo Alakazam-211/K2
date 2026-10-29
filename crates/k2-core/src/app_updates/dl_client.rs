@@ -9,6 +9,10 @@
 //!   fallback manifest (after every file it names is up).
 //! - `GET /api/v1/apps/{id}/stats?from&to`: downloads per version, file
 //!   and day, plus `latest.json` fetches.
+//! - `POST /api/v1/apps/{id}/versions/{version}/pull` (k2dl 1.4.0+): the
+//!   host stops serving a pulled version's files. An older host answers 404
+//!   for the path: [`Pulled::NotSupported`], the caller keeps today's
+//!   behaviour (K2 stops offering it; the files stay up).
 //! - `GET /healthz`.
 //!
 //! Auth is the App's own `k2dl_` token (`Authorization: Bearer`). The
@@ -52,6 +56,15 @@ pub struct Uploaded {
     pub url: String,
     /// `true` = a new file (201), `false` = the same bytes were there (200).
     pub created: bool,
+}
+
+/// What the host did with a pull.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pulled {
+    /// The host stops serving the version's files (k2dl 1.4.0+).
+    Done,
+    /// The host has no pull call (404: k2dl before 1.4.0).
+    NotSupported,
 }
 
 /// The client. `backoff` is the first retry's wait (doubled each time).
@@ -198,6 +211,19 @@ impl Client {
             return Err(Self::refused(status, &text));
         }
         serde_json::from_str(&text).map_err(|e| DlError::Bad(format!("stats aren't JSON: {e}")))
+    }
+
+    /// Ask the host to stop serving `version`'s files (k2dl 1.4.0+).
+    pub fn pull_version(&self, id: &str, version: &str) -> Result<Pulled, DlError> {
+        let url = format!("{}/api/v1/apps/{id}/versions/{version}/pull", self.base);
+        let (status, text) = self.with_retries(|| {
+            self.http.post(&url).bearer_auth(&self.token).header("Content-Type", "application/json").timeout(Duration::from_secs(60)).body("{}").send()
+        })?;
+        match status {
+            200..=299 => Ok(Pulled::Done),
+            404 => Ok(Pulled::NotSupported),
+            _ => Err(Self::refused(status, &text)),
+        }
     }
 
     /// `GET /healthz` (no token needed; sent anyway, it's the same host).

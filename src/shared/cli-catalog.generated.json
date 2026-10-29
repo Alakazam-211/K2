@@ -1656,7 +1656,7 @@
    {
     "name": "app updates pull",
     "usage": "k2 app updates pull <app> --version <version> [--json]",
-    "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). Its files stay at their download URLs. POST /cli/app/updates/pull."
+    "description": "Stop offering a release on every channel (each falls back to its newest older release, or goes empty). A download host that can (k2dl 1.4.0+) stops serving its files too; an older one keeps them. POST /cli/app/updates/pull."
    },
    {
     "name": "app updates stats",

@@ -882,3 +882,55 @@ async fn prewarm_only_where_tools_are_missing() {
         compute_ws::test_detach(n);
     }
 }
+
+/// K2 Engine 10-29: in a workspace whose root isn't a repo, a worktree
+/// under a nested clone (k2-mpc-engine/.claude/worktrees/x) is found from
+/// the caller's folder (its git common dir) without --repo; and --plan
+/// checks the source exactly as run does (not_a_repo there too).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plan_checks_the_source_like_run_and_finds_a_nested_worktree() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "engine");
+    let dir = env.home.join("ws-engine");
+    std::fs::remove_dir_all(dir.join(".git")).unwrap();
+    let clone = dir.join("k2-mpc-engine");
+    std::fs::create_dir_all(&clone).unwrap();
+    git(&clone, &["init", "-q"]);
+    std::fs::write(clone.join("m.rs"), "x\n").unwrap();
+    git(&clone, &["add", "."]);
+    git(&clone, &["commit", "-q", "-m", "one"]);
+    let wt = clone.join(".claude/worktrees/x");
+    git(&clone, &["worktree", "add", "-q", "-b", "x", wt.to_str().unwrap()]);
+    std::fs::write(wt.join("m.rs"), "y\n").unwrap();
+    git(&wt, &["commit", "-q", "-am", "two"]);
+    let out = Command::new("git").arg("-C").arg(&wt).args(["rev-parse", "HEAD"]).output().unwrap();
+    let wt_head = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    active_node("eng-a");
+    grant("eng-a", &me, None, 2);
+    let _a = compute_ws::test_attach("eng-a", offer(1, 30, 32, 0));
+    let body = |extra: Value| {
+        let mut b = json!({"workspace": me.id, "argv": ["true"], "memBytes": GB, "plan": true});
+        for (k, v) in extra.as_object().unwrap() {
+            b[k] = v.clone();
+        }
+        b
+    };
+    // No --repo, no caller folder: --plan refuses as run does.
+    let r = post(d.port, "/cli/compute/run", OWNER, body(json!({}))).await;
+    assert_eq!((r.status, code(&r)), (400, "not_a_repo".to_string()), "{}", r.body);
+    let mut real = body(json!({}));
+    real.as_object_mut().unwrap().remove("plan");
+    real["clientJobId"] = json!(uuid::Uuid::new_v4().simple().to_string());
+    let r = post(d.port, "/cli/compute/run", OWNER, real).await;
+    assert_eq!((r.status, code(&r)), (400, "not_a_repo".to_string()), "run refuses the same: {}", r.body);
+    // From the worktree under the nested clone: found, its own HEAD.
+    let r = post(d.port, "/cli/compute/run", OWNER, body(json!({"repoDir": wt.to_str().unwrap()}))).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let src = j(&r)["source"].clone();
+    assert_eq!((src["repo"].as_str(), src["checkout"].as_str(), src["commit"].as_str()), (Some("k2-mpc-engine"), Some("worktree"), Some(wt_head.as_str())), "{src}");
+    // A bad --sha is refused by --plan too.
+    let r = post(d.port, "/cli/compute/run", OWNER, body(json!({"repoDir": wt.to_str().unwrap(), "sha": "no-such-rev"}))).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    compute_ws::test_detach("eng-a");
+}

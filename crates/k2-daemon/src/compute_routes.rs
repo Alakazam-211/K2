@@ -2232,8 +2232,25 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     };
     let disk_gb = grant.as_ref().map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
     if opts.dry {
+        // `--plan` checks the source exactly as `run` does (K2 Engine
+        // 10-29): the repo (`--repo`, or found from your worktree), the
+        // commit, `--dirty` (its size too: the blob is built, then
+        // dropped) and `--with`. A source `run` would refuse fails here.
+        let plan_source = if b(&v, "noSource") == Some(true) {
+            if s(&v, "repo").is_some_and(|r| !r.is_empty()) || !with_asks(&v)?.is_empty() {
+                return Err(no(codes::BAD_REQUEST, 400, "--repo/--with pick the code to ship; --no-source ships none (drop one)"));
+            }
+            None
+        } else {
+            let tmp = compute_ws::dirty_blob_path(&format!("plan-{}", crypto::random_id().map_err(|e| no("internal", 500, e))?));
+            let r = source_for(ws, v, &tmp, &mut warnings);
+            let _ = std::fs::remove_file(&tmp);
+            let (_, info) = r?;
+            with_for(ws, v, info.repo.as_deref().unwrap_or(""), &mut warnings)?;
+            Some(info.json())
+        };
         let probe_ctl = store::JobCtl { stall_secs: stall, ..Default::default() };
-        let preview = plan_preview(&PlanFacts {
+        let mut preview = plan_preview(&PlanFacts {
             ws,
             v,
             node: &node,
@@ -2257,6 +2274,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             placement: &placement,
             effective: effective.as_ref(),
         });
+        preview["source"] = plan_source.unwrap_or_default();
         return Ok(Submitted { job: None, warnings, source: None, preview: Some(preview), notices: Vec::new(), replaced: Vec::new() });
     }
     // Source: the workspace's own repo only (never a path the client names

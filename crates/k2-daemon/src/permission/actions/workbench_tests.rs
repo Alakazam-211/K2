@@ -139,7 +139,7 @@ fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_lands_and_retires() {
     let e: serde_json::Value = serde_json::from_str(&r.body).expect("json");
     assert_eq!(
         (&e["error"]["code"], &e["error"]["sidecar"], &e["error"]["tip"]),
-        (&json!(LAND_NEEDS_PERSON), &json!("fix"), &json!(tip)),
+        (&json!(LAND_NEEDS_PERSON), &json!("fix"), &json!(&tip[..12])),
         "{e}"
     );
     assert_eq!(sh(&root, &["rev-parse", "main"]), main_before, "an agent never lands");
@@ -148,7 +148,7 @@ fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_lands_and_retires() {
     let hint = ask_refused(&ws, LAND_ACTION, json!({ "sidecar": "fix", "tip": "0000000000" }));
     assert!(hint.contains("moved since the ask"), "{hint}");
 
-    let v = ask_ok(&ws, LAND_ACTION, json!({ "sidecar": "fix", "tip": tip }));
+    let v = ask_ok(&ws, LAND_ACTION, json!({ "sidecar": "fix", "tip": &tip[..12] }));
     let card = card_of(&v);
 
     // A Member is below the floor; nothing changes.
@@ -176,7 +176,7 @@ fn the_agent_asks_a_member_cant_answer_and_an_admin_allow_lands_and_retires() {
     assert!(audit.contains("sidecar-land") && audit.contains(&format!("login:{admin}")), "{audit}");
 
     // Asking again: the sidecar is retired, so the ask is refused.
-    let hint = ask_refused(&ws, LAND_ACTION, json!({ "sidecar": "fix", "tip": tip }));
+    let hint = ask_refused(&ws, LAND_ACTION, json!({ "sidecar": "fix", "tip": &tip[..12] }));
     assert!(hint.contains("retired"), "{hint}");
 }
 

@@ -1066,6 +1066,9 @@ fn handle_new(
         })?;
     // The sidecar runs: its worktree stays whatever happens below.
     let worktree_out = new_wt.take().map(|w| w.keep());
+    if run_dir != ws.path {
+        crate::sidecar_worktree::ensure_tab_row(&ws, &pg, &agent_name, &run_dir)?;
+    }
 
     // Tab-row sidecar columns (SC38).
     {

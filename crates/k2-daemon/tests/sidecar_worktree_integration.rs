@@ -538,7 +538,7 @@ async fn agents_ask_a_person_to_land_and_retire_and_people_need_the_floor() {
     let r = post(d.port, "/cli/sidecar/land", &agent, &json!({ "workspace": ws.handle, "name": "task", "expectTip": tip }));
     assert_eq!((r.status, code(&r)), (403, "land_needs_person".to_string()), "{}", r.body);
     let e = json_of(&r.body);
-    assert_eq!((e["error"]["sidecar"].clone(), e["error"]["tip"].clone()), (json!("task"), json!(tip)), "{e}");
+    assert_eq!((e["error"]["sidecar"].clone(), e["error"]["tip"].clone()), (json!("task"), json!(&tip[..12])), "{e}");
     assert!(e["error"]["hint"].as_str().unwrap_or("").contains("k2 thread ask"), "{e}");
     let r = post(d.port, "/cli/sidecar/retire", &agent, &json!({ "workspace": ws.handle, "name": "task", "discard": true }));
     assert_eq!((r.status, code(&r)), (403, "retire_needs_person".to_string()), "{}", r.body);

@@ -479,10 +479,50 @@ pub(crate) fn retire_entry(caller: &Caller, body: &Value) -> CliResponse {
     respond(r)
 }
 
-/// The current tip of a worktree sidecar's branch (for the card), or "".
+/// The current tip of a worktree sidecar's branch, short (12 hex: a card
+/// value never carries a 40-character token, and Land takes any prefix of
+/// at least 7), or "".
 fn tip_of(ws: &Workspace, meta: &store::WorktreeMeta) -> String {
     let onto = meta.base_ref.clone().or_else(|| wt::default_branch(Path::new(&ws.path))).unwrap_or_default();
-    wt::review(Path::new(&ws.path), None, &onto, &meta.branch).ok().and_then(|r| r.tip).unwrap_or_default()
+    let tip = wt::review(Path::new(&ws.path), None, &onto, &meta.branch).ok().and_then(|r| r.tip).unwrap_or_default();
+    tip[..tip.len().min(12)].to_string()
+}
+
+/// The tab row of a sidecar that runs outside the workspace root (a
+/// worktree): `v2_session_map::register` only stamps rows for a cwd that
+/// is a registered workspace root, so the route writes it, the same shape,
+/// from the live session (cwd = the worktree: the `k2 msg` wake and
+/// `sidecar new` resume read it back).
+pub(crate) fn ensure_tab_row(ws: &Workspace, pane_group_id: &str, agent_name: &str, run_dir: &str) -> Result<(), SidecarError> {
+    let session = crate::v2_session_map::lookup_by_agent_name(agent_name)
+        .ok_or_else(|| err("spawn_failed", 500, format!("{agent_name} is not live after its spawn")))?;
+    let program = session.program.clone();
+    let claimed = k2_core::workspace::provider_resume::session_id_from_spawn_argv(program.as_deref().unwrap_or(""), &session.args);
+    let row = k2_core::db::schema::WorkspaceTabSession {
+        project_id: ws.id.clone(),
+        pane_group_id: pane_group_id.to_string(),
+        agent_name: agent_name.to_string(),
+        session_id: claimed.clone(),
+        command: program.clone(),
+        args_json: serde_json::to_string(&session.args).ok(),
+        cwd: Some(run_dir.to_string()),
+        last_seen_at: 0,
+        pinned_cols: None,
+        pinned_rows: None,
+        pinned_set_by: None,
+    };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceTabSession::upsert(&conn, &row).map_err(|e| err("spawn_failed", 500, format!("tab row: {e}")))?;
+    let _ = k2_core::workspace_session_handles::ensure_sidecar_handle(
+        &conn,
+        &ws.id,
+        agent_name,
+        program.as_deref(),
+        claimed.as_deref(),
+        pane_group_id,
+    );
+    Ok(())
 }
 
 const ASK_A_PERSON: &str = "only a person lands work on the workspace's main branch. Ask your human: they press Land in \

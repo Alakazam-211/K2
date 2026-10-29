@@ -45740,16 +45740,14 @@ HISTORY (needs the history right)
   k2 doc blame notes.md               restored text shows "(restored by <who> in <change>)"
 
 UNDO, REDO AND REVERT
-  Undo, redo and revert only ever remove text that the change they reverse put
-  there. Your undo never removes text someone else wrote, even if it is
-  identical to yours, and someone else's undo never stands in the way of
-  yours. Text put back by an undo or redo keeps its original author: blame
-  shows who wrote it and who restored it, and later undos and reverts treat it
-  as the original author's. If someone else has since changed the same lines,
-  a plain undo applies nothing and reports the conflict; with --partial it
-  applies the parts it cleanly can and reports the rest. It never overwrites
-  their change. Nothing is lost: undone text stays in history and can be
-  restored. This holds across restarts.
+  Undo reverses your own changes. One known exception, being fixed: if someone
+  else rewrote a line after you changed it, undoing your change can put your
+  old text back inside their line. Check that line after an undo, and use
+  history or blame to see who wrote what. Text put back by an undo or redo
+  keeps its original author: blame shows who wrote it and who restored it, and
+  later undos and reverts treat it as the original author's. Nothing is lost:
+  undone text stays in history and can be restored. This holds across
+  restarts.
   Conflicts exit 1 (the error lists them). Undo, redo and revert aren't checked
   against your last read.
   k2 doc blame --json: restoredBy / restoredIn on each line; --porcelain: the
@@ -83786,16 +83784,14 @@ names the version yourself.
   k2 doc write --base V|live <f> < whole-file   three-way merge from version V
   k2 doc undo [--steps N] [--partial|--drop] [--for <person>] <f> · redo [--steps N] <f>
   k2 doc revert <change> [--partial] <f>   reverse one change from the log, days later
-  Undo, redo and revert only ever remove text that the change they reverse put
-  there. Your undo never removes text someone else wrote, even if it is
-  identical to yours, and someone else's undo never stands in the way of
-  yours. Text put back by an undo or redo keeps its original author: blame
-  shows who wrote it and who restored it, and later undos and reverts treat it
-  as the original author's. If someone else has since changed the same lines,
-  a plain undo applies nothing and reports the conflict; with --partial it
-  applies the parts it cleanly can and reports the rest. It never overwrites
-  their change. Nothing is lost: undone text stays in history and can be
-  restored. This holds across restarts.
+  Undo reverses your own changes. One known exception, being fixed: if someone
+  else rewrote a line after you changed it, undoing your change can put your
+  old text back inside their line. Check that line after an undo, and use
+  history or blame to see who wrote what. Text put back by an undo or redo
+  keeps its original author: blame shows who wrote it and who restored it, and
+  later undos and reverts treat it as the original author's. Nothing is lost:
+  undone text stays in history and can be restored. This holds across
+  restarts.
   Conflicts exit 1 (the error lists them). Undo, redo and revert aren't checked
   against your last read.
   undo --drop removes your top step without applying it; --for <person> undoes

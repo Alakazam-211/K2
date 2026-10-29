@@ -2051,11 +2051,16 @@ mod tests {
         assert!(handle("GET", "/cli/docs/nope", &params, b"", &caller).status.starts_with("404"));
     }
 
-    /// The undo promise, as the kit's v0.9.1 CHANGELOG corrected it, is in
-    /// `k2 doc --help` and `k2 study docs` word for word (line breaks aside).
+    /// Undo, until the kit's undo fix (v0.9.7): K2 Cores' interim wording
+    /// (10-29) is in `k2 doc --help` and `k2 study docs` word for word (line
+    /// breaks aside), and the old promise (kit v0.9.1) is in neither. The
+    /// vendored kit must still list the gap as a known issue fixed in v0.9.7;
+    /// once the kit is v0.9.7 this fails, and the help takes the post-fix
+    /// wording.
     #[test]
-    fn the_undo_promise_is_in_the_help_and_the_study_page_verbatim() {
-        const PROMISE: &str = "Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, a plain undo applies nothing and reports the conflict; with --partial it applies the parts it cleanly can and reports the rest. It never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.";
+    fn the_interim_undo_wording_is_in_the_help_and_the_study_page_verbatim() {
+        const INTERIM: &str = "Undo reverses your own changes. One known exception, being fixed: if someone else rewrote a line after you changed it, undoing your change can put your old text back inside their line. Check that line after an undo, and use history or blame to see who wrote what.";
+        const OLD_PROMISE: &str = "Your undo never removes text someone else wrote";
         let cli = include_str!("../../../../cli/k2");
         let page = |start: &str| {
             let s = cli.find(start).unwrap_or_else(|| panic!("{start} in cli/k2"));
@@ -2063,13 +2068,16 @@ mod tests {
             body.split_whitespace().collect::<Vec<_>>().join(" ")
         };
         for start in ["\n_doc_usage() {", "\n_study_page_docs() {"] {
-            assert!(page(start).contains(PROMISE), "the promise isn't verbatim in {start}");
+            let p = page(start);
+            assert!(p.contains(INTERIM), "the interim undo wording isn't verbatim in {start}");
+            assert!(!p.contains(OLD_PROMISE), "the old undo promise is still in {start}");
         }
-        // The kit's own wording: its v0.9.1 CHANGELOG states it on one line.
         let changelog = include_str!("../../../../vendor/k2-mpc-base/CHANGELOG.md");
-        let from = changelog.find("## v0.9.1").expect("v0.9.1 in the kit's CHANGELOG");
-        let to = changelog[from + 1..].find("\n## v").expect("the section after v0.9.1") + from + 1;
-        assert!(changelog[from..to].lines().any(|l| l == PROMISE), "the promise isn't the kit's v0.9.1 wording");
+        assert!(!changelog.contains("\n## v0.9.7"), "the kit is v0.9.7: use K2 Cores' post-fix undo wording");
+        assert!(
+            changelog.contains("**The D1 gap (amendment approved; fixed in v0.9.7).**"),
+            "the vendored kit no longer lists the undo gap as a known issue"
+        );
     }
 
     /// Provenance is kit-stamped only (spec U23, `sec.client_provenance_refused`):

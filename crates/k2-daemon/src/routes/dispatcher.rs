@@ -2573,7 +2573,9 @@ async fn handle_one_request(
             };
             let params = super::http::parse_params(&path, &query);
             // Thread push S4 (TP16): the login behind this socket, so its
-            // `viewing` frames quiet that person's pushes. App guests: none.
+            // `viewing` frames quiet that person's pushes. App guests: none
+            // here; the overlay handler keys their frames by the pass's
+            // person key, `guest:<principalId>` (TA-23).
             let viewer_login = if skin_ws.is_some() {
                 None
             } else if super::http::token_is_owner(&query, state.token.as_str()) {

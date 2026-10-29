@@ -16,8 +16,17 @@
 //!
 //! Identity: the dispatcher resolves the socket's login (owner token →
 //! `owner`, a Connect session → its username); the person key is computed
-//! per frame, so a role change or a new owner link applies at once. App
-//! guests never register (they are never recipients, TP13).
+//! per frame, so a role change or a new owner link applies at once.
+//!
+//! **App guests** (prd-tauri-core-0467-v1 TC-24, vs-live TA-23) register
+//! under their read-state person key, `guest:<principalId>`
+//! ([`on_guest_frame`]): from their own overlay socket's `viewing` frames,
+//! and from `push.viewing` (an App server says its signed-in person is
+//! looking). The App agent-reply push (`app_push::agent_reply`) asks this
+//! registry under that key, so a guest who has the Thread open gets no
+//! agent-reply push. They are never K2 Thread push recipients (TP13), so
+//! the K2 person coalescer (`thread_push::note_view`) is not touched. An
+//! App's own pass (`app:<serviceId>`) is not a person and never registers.
 //!
 //! **Last visible** (prd-agent-settings-cards-v1 rev 3.1 §6.7, C28): beside
 //! the live views, the registry remembers when each (person, conversation)
@@ -160,6 +169,21 @@ pub fn on_frame(socket: u64, login: &str, conversation: &str, visible: bool) {
     }
 }
 
+/// Apply one `viewing` frame from an App guest's socket, under its person
+/// key `guest:<principalId>` (TA-23). A key that is not a guest person key
+/// (an App's own pass, a K2 login) is ignored: those never use this path.
+pub fn on_guest_frame(socket: u64, guest_key: &str, conversation: &str, visible: bool) {
+    if !is_guest_person_key(guest_key) {
+        return;
+    }
+    global().set(socket, guest_key, conversation, visible, Instant::now());
+}
+
+/// `guest:<principalId>`, with a non-empty principal id.
+pub fn is_guest_person_key(key: &str) -> bool {
+    key.strip_prefix(crate::read_routes::GUEST_KEY_PREFIX).is_some_and(|p| !p.trim().is_empty())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +257,26 @@ mod tests {
         v.close_socket(3);
         assert!(!v.is_viewing("lee", &conv, Instant::now()));
         assert!(v.visible_within("lee", &conv, ten, Instant::now()), "seen just now");
+    }
+
+    /// TA-23: a guest frame lands under the guest's own person key, the
+    /// key `app_push::agent_reply` asks; anything else is ignored.
+    #[test]
+    fn guest_frames_register_under_the_guest_person_key_only() {
+        let conv = format!("gview-{}", uuid::Uuid::new_v4());
+        let key = crate::read_routes::guest_key_of_principal("3f0c-pid");
+        let socket = next_socket_id();
+        on_guest_frame(socket, &key, &conv, true);
+        assert!(global().is_viewing("guest:3f0c-pid", &conv, Instant::now()));
+        assert!(!global().is_viewing("owner", &conv, Instant::now()), "never the owner");
+        for bad in ["app:svc-1", "owner", "guest:", "guest:  "] {
+            let s = next_socket_id();
+            on_guest_frame(s, bad, &conv, true);
+            assert!(!global().is_viewing(bad, &conv, Instant::now()), "{bad} is not a guest person key");
+        }
+        on_guest_frame(socket, &key, &conv, false);
+        assert!(!global().is_viewing(&key, &conv, Instant::now()));
+        global().close_socket(socket);
     }
 
     /// A frame from a linked login lands on the owner person, and resets

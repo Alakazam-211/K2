@@ -594,7 +594,9 @@ pub(crate) fn guest_read_wire(mut body: serde_json::Map<String, serde_json::Valu
 /// dispatcher resolved it (owner token → `owner`, a Connect session → its
 /// username; `None` for app guests). Its `{"t":"viewing","visible":bool}`
 /// text frames feed `thread_viewers` (state with a 90 s TTL, no ack); the
-/// socket closing clears them.
+/// socket closing clears them. An App guest's frames register under its
+/// person key `guest:<principalId>` instead (TA-23), so the App
+/// agent-reply push stays quiet while that guest looks.
 /// `skin_raw` (0.46.3): the guest's raw pass, re-resolved on every guest
 /// turn frame ([`guest_ear_check`]); `None` for owner/Connect. A guest
 /// gets ear frames only with `?ear=1` ([`ear_opted_in`]).
@@ -667,6 +669,13 @@ pub async fn serve_overlay_events_connection(
     // app-read-state-v1 (0.46.3): a guest socket hears its own reader's
     // cursor or mute moving in this Thread, on any surface.
     let guest_key = skin_pass.as_ref().map(crate::read_routes::guest_person_key);
+    // TA-23: a guest PERSON's `viewing` frames register under that key
+    // (an App's own pass is not a person and never views).
+    let guest_viewer_key = skin_pass
+        .as_ref()
+        .map(crate::read_routes::pass_reader)
+        .filter(|r| r.person)
+        .map(|r| r.key);
     let mut guest_rx = crate::read_live::subscribe_guest();
     let mut keepalive = tokio::time::interval(ping_interval());
     keepalive.tick().await; // burn the immediate first tick
@@ -706,14 +715,25 @@ pub async fn serve_overlay_events_connection(
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(Message::Text(text))) => {
                         // Thread push S4: `viewing` frames (fire-and-forget).
-                        if let (Some(login), Some(visible)) =
-                            (viewer_login.clone(), crate::thread_viewers::parse_viewing(&text))
-                        {
+                        if let Some(visible) = crate::thread_viewers::parse_viewing(&text) {
                             let conv = conversation.clone();
-                            let _ = tokio::task::spawn_blocking(move || {
-                                crate::thread_viewers::on_frame(socket_id, &login, &conv, visible)
-                            })
-                            .await;
+                            if let Some(login) = viewer_login.clone() {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    crate::thread_viewers::on_frame(socket_id, &login, &conv, visible)
+                                })
+                                .await;
+                            } else if let (Some(key), Some(raw)) = (guest_viewer_key.clone(), skin_raw.clone()) {
+                                // TA-23: an App guest, under its person key.
+                                // The pass is re-resolved per frame (as the
+                                // ear is): a revoked pass registers nothing.
+                                let link2 = link.clone();
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    if crate::apps::gateway::resolve_pass_on(link2.as_deref(), &raw).is_some() {
+                                        crate::thread_viewers::on_guest_frame(socket_id, &key, &conv, visible)
+                                    }
+                                })
+                                .await;
+                            }
                         }
                     }
                     Some(Ok(Message::Pong(_)))

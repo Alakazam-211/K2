@@ -268,6 +268,12 @@ pub fn handle_users_get() -> CliResponse {
                 Ok(m) => m,
                 Err(e) => return CliResponse::internal_error(e),
             };
+            // A login locked right now (too many wrong passwords): when the
+            // lock ends, for the list's Unlock action (0.46.6).
+            let locks = match skin::active_login_locks() {
+                Ok(m) => m,
+                Err(e) => return CliResponse::internal_error(e),
+            };
             let users: Vec<serde_json::Value> = users
                 .iter()
                 .map(|u| {
@@ -289,6 +295,10 @@ pub fn handle_users_get() -> CliResponse {
                         }
                     }
                     v["appGrants"] = serde_json::json!(app_grants.get(&u.id).cloned().unwrap_or_default());
+                    v["lockedUntil"] = match locks.get(&u.id) {
+                        Some(until) => serde_json::json!(until),
+                        None => serde_json::Value::Null,
+                    };
                     v["storedEmailRefused"] = match email_refused.get(&u.id) {
                         Some(why) => serde_json::json!(why),
                         None => serde_json::Value::Null,
@@ -3685,6 +3695,37 @@ mod tests {
         assert_eq!(v["error"]["hint"], AGENT_ADD_NEEDS_APP_HINT, "{v}");
         let r = handle_users_post(br#"{"username":"eve","role":"x"}"#, "owner-token");
         assert!(r.status.starts_with("400"), "role needs app: {}", r.body);
+    }
+
+    /// 0.46.6 (App users list Unlock): the users list says whose login is
+    /// locked right now (`lockedUntil`, epoch seconds) and nobody else's;
+    /// the owner's unlock clears it.
+    #[test]
+    fn users_list_says_who_is_locked_and_unlock_clears_it() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        skin::add_principal("lena").expect("lena");
+        skin::set_principal_password("lena", Some("right-password")).expect("lena pw");
+        skin::add_principal("otto").expect("otto");
+        for _ in 0..3 {
+            assert!(matches!(skin::check_and_record_login("lena", "wrong"), skin::SkinLoginOutcome::BadCreds));
+        }
+        let list = |who: &str| -> serde_json::Value {
+            let r = handle_users_get();
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            v["users"].as_array().expect("users").iter().find(|u| u["username"] == who).cloned().unwrap_or_else(|| panic!("no {who}: {v}"))
+        };
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs() as i64;
+        let lena = list("lena");
+        assert!(lena["lockedUntil"].as_i64().expect("lena is locked") > now, "{lena}");
+        assert!(list("otto")["lockedUntil"].is_null(), "otto is not locked");
+
+        let r = handle_users_unlock(br#"{"username":"lena"}"#, "owner-token");
+        assert_eq!(r.status, "200 OK", "{}", r.body);
+        let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+        assert_eq!(v["cleared"], true, "{v}");
+        assert!(list("lena")["lockedUntil"].is_null(), "unlock clears the lock");
     }
 
     /// GH#72: an agent can't mint the `.k2/` write opt-in on a platform

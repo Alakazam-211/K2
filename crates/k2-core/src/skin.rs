@@ -3811,6 +3811,31 @@ pub fn clear_login_lockout(username: &str) -> Result<(String, bool), String> {
     Ok((key, deleted > 0))
 }
 
+/// Every principal whose login is locked right now, by principal id, with
+/// when the lock ends (epoch seconds). The same rows and test the login
+/// check reads ([`LoginLockSlot`]): the principal's username row and its
+/// email row, `locked_until` in the future. A failed count with no lock
+/// is not a lock. For the owner's App users list (its Unlock action).
+pub fn active_login_locks() -> Result<std::collections::HashMap<String, i64>, String> {
+    let now = now_secs();
+    with_conn(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "SELECT p.id, MAX(l.locked_until) FROM principals p
+                 JOIN login_lockouts l
+                   ON l.username = p.username
+                   OR (p.email IS NOT NULL AND TRIM(p.email) <> '' AND l.username = LOWER(TRIM(p.email)))
+                 WHERE l.locked_until > ?1
+                 GROUP BY p.id",
+            )
+            .map_err(|e| format!("skin lockout list: {e}"))?;
+        let rows = stmt
+            .query_map(params![now], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(|e| format!("skin lockout list: {e}"))?;
+        rows.collect::<Result<_, _>>().map_err(|e| format!("skin lockout list: {e}"))
+    })
+}
+
 /// Who a login name counts against, for a throttle in front of
 /// [`check_and_record_login`]: the principal it signs in as (its
 /// username, whether the name was the username or the email, in any case),
@@ -10648,6 +10673,60 @@ mod tests {
                 SkinLoginOutcome::BadCreds => {}
                 other => panic!("empty still clears, got {other:?}"),
             }
+        });
+    }
+
+    /// The App users list's Unlock: exactly the principals the login check
+    /// would refuse right now (three failures on the username, or a lock on
+    /// the email row), nobody with only failures or an expired lock, and
+    /// gone after unlock.
+    #[test]
+    fn active_login_locks_lists_exactly_the_locked_principals() {
+        with_temp_home(|| {
+            let eve = add_principal("eve").unwrap();
+            set_principal_password("eve", Some("right-password")).unwrap();
+            let jane = add_principal_with_email("jane", Some("Jane@Clinic.com")).unwrap();
+            let bob = add_principal("bob").unwrap();
+            set_principal_password("bob", Some("right-password")).unwrap();
+            let old = add_principal("old").unwrap();
+            for _ in 0..3 {
+                match check_and_record_login("eve", "wrong") {
+                    SkinLoginOutcome::BadCreds => {}
+                    other => panic!("pre-lockout must be BadCreds, got {other:?}"),
+                }
+            }
+            match check_and_record_login("bob", "wrong") {
+                SkinLoginOutcome::BadCreds => {}
+                other => panic!("one failure is not a lock, got {other:?}"),
+            }
+            let now = now_secs();
+            with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO login_lockouts (username, failed_count, locked_until)
+                     VALUES ('jane@clinic.com', 3, ?1), ('old', 3, ?2)",
+                    params![now + 900, now - 5],
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(())
+            })
+            .expect("seed lock rows");
+
+            let locks = active_login_locks().expect("locks");
+            let mut ids: Vec<&String> = locks.keys().collect();
+            ids.sort();
+            let mut want = vec![&eve.id, &jane.id];
+            want.sort();
+            assert_eq!(ids, want, "only eve (username row) and jane (email row) are locked");
+            assert!(!locks.contains_key(&bob.id), "failures without a lock are not a lock");
+            assert!(!locks.contains_key(&old.id), "an expired lock is not a lock");
+            assert!(locks[&eve.id] > now, "eve's lock ends in the future: {}", locks[&eve.id]);
+            assert_eq!(locks[&jane.id], now + 900);
+
+            let (_, cleared) = clear_login_lockout("jane").expect("unlock jane");
+            assert!(cleared, "jane's email row was cleared through her username");
+            let locks = active_login_locks().expect("locks after unlock");
+            assert!(!locks.contains_key(&jane.id), "jane unlocked");
+            assert!(locks.contains_key(&eve.id), "eve still locked");
         });
     }
 

@@ -5570,7 +5570,7 @@ async fn skin_guest_upload_chunk_jailed_resumable_and_bound_to_the_guest() {
         let v0 = json(&c0.body);
         assert_eq!(v0["received"].as_u64(), Some(4), "{}", c0.body);
         assert_eq!(v0["done"].as_bool(), Some(false), "{}", c0.body);
-        let box_dir = docs_root.join("in/box");
+        let box_dir = docs_root.join("in").join("box"); // the native spelling the ledger records
         assert!(box_dir.is_dir(), "dir created inside the room");
         assert!(!box_dir.join("big.bin").exists(), "not published mid-upload");
         let parts = guest_parts_in(&box_dir);

@@ -307,18 +307,37 @@ async fn app_unlock_deletes_only_the_login_row() {
         assert_eq!(get.status, 405, "{}", get.body);
         assert_eq!(get.body.trim(), r#"{"error":"POST required"}"#);
 
-        bad_skin_login(port, "held");
-        assert!(lock_row("held").is_some(), "held row before refused token");
+        // 0.46.6 (Rosson 2026-10-29): an Admin login unlocks App users, but
+        // never a box login (`baden` was added with the box login): 403
+        // owner_only from the handlers' shared rule, and the row stays.
         connect_users::add_user("deputy", "password123").expect("add admin");
         connect_users::set_role("deputy", Role::Admin).expect("admin role");
         let deputy = connect_users::create_session("deputy");
-        let refused = post_unlock_skin(port, &deputy, "held");
+        bad_skin_login(port, "baden");
+        assert!(lock_row("baden").is_some(), "baden row before the admin's try");
+        let refused = post_unlock_skin(port, &deputy, "baden");
         assert_eq!(refused.status, 403, "{}", refused.body);
-        // An Admin login is below the Owner floor of the route policy
-        // table (prd-remove-viewer-role-v1.md RV11).
+        let v: serde_json::Value = serde_json::from_str(&refused.body).expect("json body");
+        assert_eq!(v["error"]["code"], "owner_only", "{}", refused.body);
+        assert!(refused.body.contains("box login"), "{}", refused.body);
+        assert!(lock_row("baden").is_some(), "403 must leave the row");
+        let cleared = post_unlock_skin(port, OWNER_TOKEN, "baden");
+        assert_eq!(cleared.status, 200, "{}", cleared.body);
+        // A lock on a name that is no box login: the Admin clears it.
+        bad_skin_login(port, "held");
+        assert!(lock_row("held").is_some(), "held row before the admin's unlock");
+        let ok = post_unlock_skin(port, &deputy, "held");
+        assert_eq!(ok.status, 200, "{}", ok.body);
+        assert!(lock_row("held").is_none(), "the admin cleared it");
+        // A Member login is still below the route's Admin floor.
+        connect_users::add_user("helper", "password123").expect("add member");
+        let helper = connect_users::create_session("helper");
+        bad_skin_login(port, "held");
+        let refused = post_unlock_skin(port, &helper, "held");
+        assert_eq!(refused.status, 403, "{}", refused.body);
         let v: serde_json::Value = serde_json::from_str(&refused.body).expect("json body");
         assert_eq!(v["error"], "role_required", "{}", refused.body);
-        assert_eq!(v["required"], "owner", "{}", refused.body);
+        assert_eq!(v["required"], "admin", "{}", refused.body);
         assert!(lock_row("held").is_some(), "403 must leave the row");
 
         let principals_before = {

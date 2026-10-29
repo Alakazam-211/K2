@@ -845,6 +845,11 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
         Err(r) => return r,
     };
     let Some(username) = text(&v, &["username", "name"]) else { return usage("missing username") };
+    // 0.46.6: an Admin resets App-only users, never a box login.
+    let admin = match crate::skin_routes::owner_or_admin_for(actor, username) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
     let person = match principal(username) {
         Ok(Some(p)) => p,
         Ok(None) => return refusal("404 Not Found", "not_found", &format!("no App user {username:?}")),
@@ -969,10 +974,14 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
         Err(invites::MintError::Store(e)) => return CliResponse::internal_error(e),
     };
     let Some(sender) = sender else {
-        return match page {
+        let r = match page {
             Some(page) => returned_link(&minted, &page, &person, &app, actor, "reset"),
             None => returned_code(&minted, &person, &app, actor),
         };
+        if let (Some(a), true) = (&admin, r.status.starts_with("200")) {
+            crate::skin_routes::notify_owner_of_admin_reset(a, &person.username, "a one-time link to set their own");
+        }
+        return r;
     };
     let page = page.unwrap_or_default();
     let to_addr = recipient.unwrap_or_default();
@@ -980,6 +989,9 @@ pub fn handle_reset_link(body: &[u8], actor: &str, is_post: bool) -> CliResponse
     match dispatch(&mail, &minted) {
         Ok(d) => {
             audit("app_user_reset_link", actor, &format!("{} app={app} to={to_addr}", person.username));
+            if let Some(a) = &admin {
+                crate::skin_routes::notify_owner_of_admin_reset(a, &person.username, "a one-time link emailed to them");
+            }
             delivered_json(d, &person, &app, &to_addr, &sender, minted.ttl_secs, "Reset link")
         }
         Err(r) => r,

@@ -410,7 +410,8 @@ fn request(workspace_id: &str, session_id: &str, body: &Map<String, Value>) -> C
         }
         return CliResponse { status: answer_status(l.status), content_type: "application/json", body: v.to_string() };
     }
-    let floor = spec.floor;
+    // A password reset for a box login is the owner's alone (0.46.6).
+    let floor = super::actions::password_reset::floor_for(spec.id, &ctx).unwrap_or(spec.floor);
     let routed = routed_to(floor);
     let expires_at = now + spec.expiry.default_secs;
     if bool_field(body, "dryRun") || bool_field(body, "dry_run") {

@@ -1636,16 +1636,19 @@ pub const ROUTES: &[Route] = &[
     post("/cli/skin/templates/lines/update", Owner),
     post("/cli/skin/templates/update", Owner),
     get("/cli/skin/usage", NoLogin),
-    both("/cli/skin/users", Owner),
+    // 0.46.6 (Rosson 2026-10-29): an Admin lists App users and resets,
+    // sets or unlocks App-only users' passwords; box logins stay the
+    // owner's (`skin_routes::owner_or_admin_for`). Adding stays Owner.
+    split("/cli/skin/users", Admin, Owner),
     post("/cli/skin/users/agent", Owner),
     post("/cli/skin/users/email", Owner),
     post("/cli/skin/users/full-name", Owner),
     post("/cli/skin/users/invite", Owner),
-    post("/cli/skin/users/password", Owner),
+    post("/cli/skin/users/password", Admin),
     post("/cli/skin/users/remove", Owner),
-    post("/cli/skin/users/reset-link", Owner),
+    post("/cli/skin/users/reset-link", Admin),
     post("/cli/skin/users/rooms", Owner),
-    post("/cli/skin/users/unlock", Owner),
+    post("/cli/skin/users/unlock", Admin),
     // App users' personal wallets (0.46.3): an App user's OWN session
     // pass only (`person_pass_required` for anything else); no Connect
     // login (Rosson #9: Connect members have no wallet).

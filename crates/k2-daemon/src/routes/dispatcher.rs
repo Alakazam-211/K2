@@ -11282,12 +11282,12 @@ async fn handle_one_request(
                 }
                 "/cli/skin/users" => {
                     let _ = stream.read(&mut buf).await;
-                    let (ok, _) = owner_or_scoped_hook_auth(
-                        p,
-                        &query,
-                        bearer_token.as_deref(),
-                        state.token.as_str(),
-                    );
+                    // 0.46.6: an Admin login lists App users too (read only).
+                    let (ok, _) = if super::http::owner_or_admin_role_identity(&query, state.token.as_str()).is_some() {
+                        (true, None)
+                    } else {
+                        owner_or_scoped_hook_auth(p, &query, bearer_token.as_deref(), state.token.as_str())
+                    };
                     if !ok {
                         skin_dual_auth_failure(&query, bearer_token.as_deref())
                     } else {
@@ -11327,7 +11327,9 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let Some(actor) = super::http::owner_role_identity(&query, state.token.as_str()) else {
+                    // 0.46.6: the owner or an Admin (never on a box login:
+                    // the handler's `owner_or_admin_for`).
+                    let Some(actor) = super::http::owner_or_admin_role_identity(&query, state.token.as_str()) else {
                         let _ = super::http::read_post_body(&mut *stream, &mut buf).await;
                         let f = skin_dual_auth_failure(&query, bearer_token.as_deref());
                         super::http::send_response(&mut *stream, f.status, f.content_type, &f.body).await;
@@ -11389,7 +11391,7 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(
+                    let (actor, agent_ws) = match owner_admin_or_app_users_hook_scoped(
                         p,
                         &query,
                         bearer_token.as_deref(),
@@ -11422,7 +11424,7 @@ async fn handle_one_request(
                     if !super::http::require_post(&mut *stream, &mut buf, is_post).await {
                         return DispatchOutcome::Done;
                     }
-                    let (actor, agent_ws) = match owner_or_skin_manage_hook_scoped(
+                    let (actor, agent_ws) = match owner_admin_or_app_users_hook_scoped(
                         p,
                         &query,
                         bearer_token.as_deref(),
@@ -14930,6 +14932,21 @@ fn owner_or_skin_manage_hook_scoped(
         return Err(crate::skin_routes::app_users_off_response());
     }
     Err(crate::skin_routes::owner_only_manage_response())
+}
+
+/// [`owner_or_skin_manage_hook_scoped`] that also admits an **Admin**
+/// login (0.46.6): an App user's password set and unlock. The handlers
+/// keep box logins the owner's (`skin_routes::owner_or_admin_for`).
+fn owner_admin_or_app_users_hook_scoped(
+    path: &str,
+    query: &str,
+    bearer: Option<&str>,
+    owner_token: &str,
+) -> Result<(String, Option<String>), crate::cli_response::CliResponse> {
+    if let Some(actor) = super::http::owner_or_admin_role_identity(query, owner_token) {
+        return Ok((actor, None));
+    }
+    owner_or_skin_manage_hook_scoped(path, query, bearer, owner_token)
 }
 
 /// PR1 federation dual-auth: **owner-or-admin** OR a scoped passport on an

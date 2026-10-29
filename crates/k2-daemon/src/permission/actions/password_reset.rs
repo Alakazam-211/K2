@@ -9,10 +9,12 @@
 //!   test guest (its agent sets its password itself). Asking needs no
 //!   switch: the approver decides.
 //! - **Who answers:** [`FLOOR`], the same floor as every route the card
-//!   calls (`/cli/skin/users/password`, `/unlock` and `/reset-link` are
-//!   `Owner` in the route policy; PR-A2). Widening it to Admins (Q1) is this
-//!   constant, those three route rows and the "an Admin never resets a box
-//!   login" handler rule, in one commit.
+//!   calls (`/cli/skin/users/password`, `/unlock` and `/reset-link`; PR-A2).
+//!   Admins since Rosson's Q1 (2026-10-29), for App-only users: a person
+//!   with a box login stays the owner's, so their request is stored with
+//!   the Owner floor ([`floor_for`]) and the routes' shared rule
+//!   (`skin_routes::owner_or_admin_for`) refuses an Admin at the click too.
+//!   An Admin's reset files the owner one Inbox line (that same rule).
 //! - **Modes** (`mode=`, default `password`, Rosson 2026-10-29):
 //!   - `password`: the route's own `generate: true` (one generator, in
 //!     k2-core, shared with Settings → User Access), then its unlock. Every
@@ -50,12 +52,10 @@ use crate::cli_response::CliResponse;
 /// The card's id (PR-A1: the catalog allows only `a-z 0-9 . -`).
 pub(crate) const ACTION: &str = "apps.user-password-reset";
 
-/// Who answers: the floor of every route the card calls (PR-A2). Owner
-/// only in 0.46.6. To let Admins approve (Q1): change this, the three
-/// route rows (`/cli/skin/users/password`, `/unlock`, `/reset-link`) and
-/// add "an Admin never resets a box login" (`skin_routes::has_box_login`),
-/// in one commit; the walls map reads this constant.
-pub(crate) const FLOOR: Floor = Floor::Owner;
+/// Who answers: the floor of every route the card calls (PR-A2): the
+/// owner or an Admin (Rosson Q1, 2026-10-29), for App-only users; a box
+/// login's request is Owner ([`floor_for`]). The walls map reads this.
+pub(crate) const FLOOR: Floor = Floor::Admin;
 
 /// A client that can't show a secret answered Allow on a password or a
 /// link: nothing is decided, and the request stays open.
@@ -146,6 +146,8 @@ struct Target {
     app: String,
     /// The App's name, for people.
     app_name: String,
+    /// The person holds a box login (a `host` grant): the owner's alone.
+    box_login: bool,
 }
 
 fn app_name(app: &str) -> String {
@@ -199,7 +201,8 @@ fn target(ctx: &Ctx) -> Result<Target, String> {
         return Err(format!("{} has no access to {}", person.username, app_name(&app)));
     }
     let app_name = app_name(&app);
-    Ok(Target { person, app, app_name })
+    let box_login = crate::skin_routes::has_box_login(&person.id, &grants);
+    Ok(Target { person, app, app_name, box_login })
 }
 
 /// Why the reset-link route wouldn't mail this person a link right now
@@ -274,6 +277,16 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
     out.params.insert("made".into(), Value::String(made));
     out.params.insert("effects".into(), Value::String(effects));
     Some(out)
+}
+
+/// The floor a request is stored with, where it isn't the catalog's: a
+/// person with a box login is the owner's alone (Rosson Q1). `None`: the
+/// catalog's floor.
+pub(crate) fn floor_for(action: &str, ctx: &Ctx) -> Option<Floor> {
+    if action != ACTION {
+        return None;
+    }
+    target(ctx).ok().filter(|t| t.box_login).map(|_| Floor::Owner)
 }
 
 /// `view.reveal` for this action's card (`None` for every other action).

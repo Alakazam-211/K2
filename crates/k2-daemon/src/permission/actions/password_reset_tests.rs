@@ -178,11 +178,9 @@ fn password_mode_shows_the_approver_a_password_once_and_nothing_else_ever_holds_
         assert_eq!(vw["reveal"], json!({ "mode": "password", "emailOffered": true }), "{vw}");
         assert!(vw["whatChanges"].as_str().unwrap().contains("never sees it"), "{vw}");
 
-        // An Admin can't approve while the floor is Owner.
-        if FLOOR == k2_core::permission::catalog::Floor::Owner {
-            let admin = login("pradm", Role::Admin);
-            below_floor(answer_as(&admin, &e.ws, &card, allow(json!({ "reveal": 1, "client": "desktop" }))), "owner");
-        }
+        // A Member can't approve.
+        let member = login("prmem", Role::Member);
+        below_floor(answer_as(&member, &e.ws, &card, allow(json!({ "reveal": 1, "client": "desktop" }))), FLOOR.as_str());
         // An old client (no `reveal`), the phone and a terminal: refused,
         // nothing decided, nothing changed.
         for body in [json!({}), json!({ "reveal": 1, "client": "phone" }), json!({ "reveal": "1", "client": "terminal" }), json!({ "client": "desktop" })] {
@@ -334,4 +332,68 @@ fn the_list_finds_the_card_by_password() {
     let found = v["actions"].as_array().expect("actions").iter().find(|a| a["id"] == ACTION).cloned().unwrap_or_else(|| panic!("{v}"));
     assert_eq!(found["setting"], "Reset the person's password (their App)", "{found}");
     assert!(!found["whatChanges"].as_str().unwrap().contains('{'), "no raw placeholders: {found}");
+}
+
+/// Rosson Q1 (2026-10-29): an Admin resets App-only users from the card,
+/// and the owner gets one Inbox line saying so (never the password). A
+/// person with a box login is the owner's alone: their card asks the owner,
+/// and an Admin can't answer it.
+#[test]
+fn an_admin_resets_app_only_users_and_the_owner_hears_but_box_logins_stay_the_owners() {
+    let e = env("pradmin");
+    let admin = login("pradm", Role::Admin);
+    let (u, _) = person(&e.app, "ivy", Some("ivy@x.test"));
+    let v = ask_ok(&e.ws, ACTION, json!({ "user": u }));
+    let (id, card) = (id_of(&v), card_of(&v));
+    assert_eq!(view(&e.ws, &card)["approvers"]["floor"], "admin");
+    let (s, a) = answer_as(&admin, &e.ws, &card, allow(json!({ "reveal": 1, "client": "web" })));
+    assert_eq!(s, "200 OK", "{a}");
+    let secret = a["forYou"]["secret"].as_str().expect("secret").to_string();
+    assert!(matches!(skin::check_and_record_login(&u, &secret), skin::SkinLoginOutcome::Ok(_)));
+    let msg = row(&id).result_message.unwrap_or_default();
+    assert!(msg.starts_with(&format!("Password reset by {admin} at ")), "{msg}");
+    let notes = k2_core::feedback::list_for_project(k2_core::db::AUDIT_SENTINEL_IDS[0], &k2_core::feedback::ListFilter::Open).expect("notes");
+    let note = notes.iter().find(|n| n.title == format!("{admin} (admin) reset {u}'s password")).unwrap_or_else(|| panic!("no owner notice: {notes:?}"));
+    let body = note.body.clone().unwrap_or_default();
+    assert!(body.contains("a password K2 made") && !body.contains(&secret), "{body}");
+
+    // A box login (a `host` grant) with an App grant: the owner's alone.
+    let boxer = format!("adam{}", uniq());
+    let p = skin::add_principal_with_email(&boxer, Some("adam@x.test")).expect("box login");
+    skin::create_grant(&skin::SkinGrantWrite {
+        subject_kind: "principal".into(),
+        subject_id: p.id.clone(),
+        kind: "app".into(),
+        target_id: e.app.clone(),
+        role: None,
+        scope: Some("[]".into()),
+        created_by: Some("owner-token".into()),
+    })
+    .expect("App grant");
+    skin::set_principal_password(&boxer, Some(OLD_PW)).expect("password");
+    let v = ask_ok(&e.ws, ACTION, json!({ "user": boxer }));
+    let (id, card) = (id_of(&v), card_of(&v));
+    assert_eq!(view(&e.ws, &card)["approvers"]["floor"], "owner", "a box login's card asks the owner");
+    below_floor(answer_as(&admin, &e.ws, &card, allow(json!({ "reveal": 1, "client": "web" }))), "owner");
+    assert!(row(&id).is_answerable());
+    // The routes' own rule (Settings' door, and the card's apply): an
+    // Admin is refused on a box login.
+    let as_admin = format!("user:{admin}");
+    let r = crate::skin_routes::handle_users_password(json!({ "username": boxer, "generate": true }).to_string().as_bytes(), &as_admin);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(r.body.contains("box login"), "{}", r.body);
+    let r = crate::app_user_invites::handle_reset_link(json!({ "username": boxer, "code": true }).to_string().as_bytes(), &as_admin, true);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    let r = crate::skin_routes::handle_users_unlock(json!({ "username": boxer }).to_string().as_bytes(), &as_admin);
+    assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+    assert!(skin::verify_principal_password(&boxer, OLD_PW), "nothing changed");
+    // The owner resets it.
+    let (s, a) = answer_as("owner", &e.ws, &card, allow(json!({ "reveal": 1, "client": "desktop" })));
+    assert_eq!(s, "200 OK", "{a}");
+    // An Admin on an App-only user through the route: allowed, one notice.
+    let (u2, _) = person(&e.app, "jo", None);
+    let r = crate::skin_routes::handle_users_password(json!({ "username": u2, "password": "typed-by-admin-1" }).to_string().as_bytes(), &as_admin);
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    let notes = k2_core::feedback::list_for_project(k2_core::db::AUDIT_SENTINEL_IDS[0], &k2_core::feedback::ListFilter::Open).expect("notes");
+    assert!(notes.iter().any(|n| n.title == format!("{admin} (admin) reset {u2}'s password")), "{notes:?}");
 }

@@ -874,6 +874,21 @@ pub(crate) fn api_key_manager_identity(query: &str, owner_token: &str) -> Option
     owner_role_identity(query, owner_token)
 }
 
+/// [`owner_role_identity`] that also admits an **Admin** login (0.46.6,
+/// Rosson 2026-10-29): the App users list and an App user's password
+/// set, reset link and unlock. The handlers add the one rule this gate
+/// can't see: an Admin never touches a box login
+/// (`skin_routes::owner_or_admin_for`).
+pub(crate) fn owner_or_admin_role_identity(query: &str, owner_token: &str) -> Option<String> {
+    if let Some(a) = owner_role_identity(query, owner_token) {
+        return Some(a);
+    }
+    let tok = extract_token(query).filter(|t| !t.is_empty())?;
+    let username = k2_core::connect_users::validate_session(tok)?;
+    let role = k2_core::connect_users::role_for_user(&username)?;
+    (role >= k2_core::connect_users::Role::Admin).then(|| format!("user:{username}"))
+}
+
 /// OWNERSHIP-TIER gate + acting-identity resolver (the 8ca53aa F4 shape,
 /// generalized): authorizes the owner TOKEN (`Some("owner-token")`) OR a
 /// live connect-user session whose role passes `can_change_roles` — Owner

@@ -970,7 +970,7 @@ mod tests {
         let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","app":"agents.nsi","code":true})), owner_only()).unwrap();
         assert_eq!(action_of(&p), "apps.user-password-reset", "{p}");
         assert_eq!(p["params"], json!({"user":"adam","app":"agents.nsi","mode":"link"}), "{p}");
-        assert_eq!(p["approvers"], "owner");
+        assert_eq!(p["approvers"], super::super::actions::password_reset::FLOOR.label());
         let cmd = p["command"].as_str().unwrap();
         assert!(cmd.starts_with("k2 permission request apps.user-password-reset ") && cmd.contains(" user=adam") && cmd.contains(" app=agents.nsi") && cmd.contains(" mode=link"), "{cmd}");
         let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","to":"adam@example.test"})), owner_only()).unwrap();

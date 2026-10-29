@@ -7978,7 +7978,8 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         for its own workspace's Apps (from its workspace's address,
                                         under its email sending mode). Links expire (k2 app login settings)
   k2 app user reset <username> [--app <app>] [--to <email> | --code] [--from <address>] [--json]
-                                        Owner only. A one-time reset link on K2's own page: when used,
+                                        The owner, or an admin for App-only users (box logins stay
+                                        the owner's). A one-time reset link on K2's own page: when used,
                                         extra access that waits for a reset (an agent set this person
                                         up) starts. --code: you get the link. Mailing it needs --from
                                         <an address no agent reads>; a tied person's stored email

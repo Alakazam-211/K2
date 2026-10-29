@@ -489,6 +489,45 @@ pub(crate) fn has_box_login(principal_id: &str, grants: &[skin::SkinGrant]) -> b
         .any(|g| g.subject_kind == "principal" && g.subject_id == principal_id && g.kind == "app" && g.target_id == skin::HOST_APP_ID)
 }
 
+/// 0.46.6 (Rosson 2026-10-29): the one rule for who resets App users. The
+/// owner (token or Owner login) resets anyone; an **Admin** login resets,
+/// sets and unlocks App-only users, never a box login (a person with a
+/// `host` grant stays the owner's), and the owner hears of each reset
+/// ([`notify_owner_of_admin_reset`]). Shared by `/cli/skin/users/password`,
+/// `/unlock`, `/reset-link` (Settings → User Access) and the
+/// `apps.user-password-reset` card, which calls those entries as its
+/// approver. `Ok(Some(admin))`: an Admin may go on; `Ok(None)`: not an
+/// Admin login (the owner, an agent: their own gates apply).
+pub fn owner_or_admin_for(actor: &str, username: &str) -> Result<Option<String>, CliResponse> {
+    let Some(login) = actor.strip_prefix("user:") else { return Ok(None) };
+    match k2_core::connect_users::role_for_user(login) {
+        Some(k2_core::connect_users::Role::Owner) => return Ok(None),
+        Some(k2_core::connect_users::Role::Admin) => {}
+        _ => return Err(owner_only_with_hint("only the owner or an admin resets App users")),
+    }
+    let Some(p) = principal_named(username)? else { return Ok(Some(login.to_string())) };
+    let grants = skin::list_grants().map_err(CliResponse::internal_error)?;
+    if has_box_login(&p.id, &grants) {
+        return Err(owner_only_with_hint(&format!(
+            "'{}' has a box login: only the owner resets, sets or unlocks a box login (admins manage App-only users)",
+            p.username
+        )));
+    }
+    Ok(Some(login.to_string()))
+}
+
+/// The owner's one Inbox line when an Admin reset someone (0.46.6): who,
+/// whom and how. Never the password, the link or an address.
+pub fn notify_owner_of_admin_reset(admin: &str, username: &str, how: &str) {
+    let title = format!("{admin} (admin) reset {username}'s password");
+    let body = format!(
+        "{admin}, an admin on this server, reset the App user {username}'s password ({how}). Admins may reset App-only users; box logins stay yours. Settings → User Access."
+    );
+    if let Err(e) = crate::feedback_routes::file_owners_only_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2", &title, &body) {
+        k2_core::log_debug!("[skin] admin reset notice for {username}: {e}");
+    }
+}
+
 /// The refusal for an agent on a guest that holds a box login.
 pub(crate) fn box_login_refused(username: &str) -> CliResponse {
     owner_only_with_hint(&format!(
@@ -1228,6 +1267,10 @@ fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliRespon
     if let Some(r) = agent_test_guest_refused(actor, username) {
         return r;
     }
+    let admin = match owner_or_admin_for(actor, username) {
+        Ok(a) => a,
+        Err(r) => return r,
+    };
     let typed = v
         .get("password")
         .and_then(|x| x.as_str())
@@ -1249,6 +1292,9 @@ fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliRespon
                 p.has_password,
                 generated.is_some()
             );
+            if let Some(a) = &admin {
+                notify_owner_of_admin_reset(a, &p.username, if generated.is_some() { "a password K2 made" } else { "a password they typed" });
+            }
             principal_json_with_generated(&p, generated.as_deref())
         }
         Err(e) => CliResponse::bad_request(e),
@@ -1289,6 +1335,9 @@ pub fn handle_users_unlock(body: &[u8], actor: &str) -> CliResponse {
         return CliResponse::bad_request("missing username");
     };
     if let Some(r) = agent_test_guest_refused(actor, username) {
+        return r;
+    }
+    if let Err(r) = owner_or_admin_for(actor, username) {
         return r;
     }
     match skin::clear_login_lockout(username) {

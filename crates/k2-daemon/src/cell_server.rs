@@ -789,6 +789,16 @@ mod unix_impl {
                     crate::permission::routes::Transport::Cell,
                 ))
             }
+            // 0.46.7 (prd-tauri-core-0467-v1 TC-17): `k2 capabilities` from
+            // a K2 terminal: this cell's passport (its own workspace's Apps
+            // and compute nodes). A read: GET only.
+            p if p == crate::capabilities::ROUTE => {
+                if is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                let who = crate::compute_routes::who_from_cell(this_session_id, principal);
+                from_cli(crate::capabilities::handle(who, params))
+            }
             // 0.46.6: the firewall view (any passport reads it) and the
             // owner's options (a passport's change is `owner_only`, except
             // tightening its own App's guard).

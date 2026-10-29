@@ -235,6 +235,10 @@ fn last_served() -> &'static std::sync::Mutex<std::collections::HashMap<String, 
 /// longer can (a deploy turned its client-IP front off, V6), its
 /// workspace gets an inbox note.
 pub fn refresh_links(service_id: &str) {
+    // 0.46.7 (TC-22): the App's link-file setting, the other part of the
+    // same per-App snapshot (a deploy may turn its front raw or change
+    // its hosts too).
+    crate::apps::link_files::refresh(service_id);
     let Some(app) = runtime_app(service_id) else { return };
     // Most Apps never pair: one skin.db read and nothing else (each read
     // stands alone, never one store's lock inside the other's: A21).
@@ -274,8 +278,10 @@ pub fn refresh_links(service_id: &str) {
     }
 }
 
-/// Rebuild every App's snapshot (boot).
+/// Rebuild every App's snapshot (boot): pairing's part and the link-file
+/// setting's (0.46.7).
 pub fn refresh_all_links() {
+    crate::apps::link_files::refresh_all();
     match store::all_configs() {
         Ok(all) => {
             for c in all {
@@ -291,6 +297,7 @@ pub fn refresh_all_links() {
 pub fn forget_app(service_id: &str, app_id: Option<&str>) {
     if let Some(a) = app_id {
         links::set(a, None);
+        links::set_files(a, None);
     }
     match store::purge_app(service_id) {
         Ok(n) if n > 0 => k2_core::log_debug!("[app-pairing] {service_id} removed: its pairing config went"),

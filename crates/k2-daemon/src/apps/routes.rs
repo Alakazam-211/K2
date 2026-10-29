@@ -110,6 +110,8 @@ pub fn is_route(p: &str) -> bool {
         || super::handover::ROUTES.contains(&p)
         || super::sdk::ROUTES.contains(&p)
         || super::expose::ROUTES.contains(&p)
+        || super::link_files::ROUTES.contains(&p)
+        || super::init::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -135,6 +137,10 @@ pub fn is_post_route(p: &str) -> bool {
         || super::sdk::POST_ROUTES.contains(&p)
         // 0.46.7: a public URL for an installed App (expose.rs).
         || super::expose::POST_ROUTES.contains(&p)
+        // 0.46.7: link files as an App setting (link_files.rs).
+        || super::link_files::POST_ROUTES.contains(&p)
+        // 0.46.7: k2 app init --template (init.rs).
+        || super::init::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -468,6 +474,10 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         p if super::labels::ROUTES.contains(&p) => super::labels::handle(p, &who, body),
         // 0.46.6: @k2/server and Sew's App kit into an App folder (sdk.rs).
         p if super::sdk::ROUTES.contains(&p) => super::sdk::handle(p, &who, body, params),
+        // 0.46.7: k2 app links (link_files.rs).
+        p if super::link_files::ROUTES.contains(&p) => super::link_files::handle(p, &who, body, params),
+        // 0.46.7: k2 app init --template tauri|static|node-api (init.rs).
+        super::init::ROUTE => super::init::route(&who, body),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),
         "/cli/app/deploy" => deploy_route(&who, body),
@@ -774,7 +784,7 @@ pub(crate) fn mirror(app_id: &str) {
     }
 }
 
-fn audit_human(app_id: &str, event: &str, who: &Who, payload: J) {
+pub(crate) fn audit_human(app_id: &str, event: &str, who: &Who, payload: J) {
     let db = k2_core::db::shared();
     let conn = db.lock();
     if let Err(e) = deploy::audit::append(&conn, deploy::audit::SUBJECT_APP, app_id, event, &actor(who), None, &payload) {

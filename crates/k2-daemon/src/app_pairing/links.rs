@@ -56,7 +56,27 @@ pub struct LinkSet {
     pub store_android: Option<String>,
 }
 
-type Snapshot = HashMap<String, Arc<LinkSet>>;
+/// The link-file setting's part (`k2 app links`, 0.46.7 TC-20…TC-22):
+/// served with or without pairing, on every host of the App.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkFiles {
+    pub ios: Vec<String>,
+    pub android: Vec<AndroidApp>,
+    pub paths: Vec<k2_core::skin::app_pairing::LinkPath>,
+    /// The hosts it answers on (lowercase, no port).
+    pub hosts: Vec<String>,
+}
+
+/// One App's entry in the snapshot: pairing's part and the link-file
+/// setting's part, merged at answer time (TC-22: one snapshot, one
+/// answerer).
+#[derive(Debug, Clone, Default)]
+struct Entry {
+    pairing: Option<Arc<LinkSet>>,
+    files: Option<Arc<LinkFiles>>,
+}
+
+type Snapshot = HashMap<String, Arc<Entry>>;
 
 fn snapshot() -> &'static ArcSwap<Snapshot> {
     static S: OnceLock<ArcSwap<Snapshot>> = OnceLock::new();
@@ -68,26 +88,39 @@ fn write_lock() -> &'static std::sync::Mutex<()> {
     &L
 }
 
-/// Set (or clear) the runtime App `app_id`'s link files.
-pub fn set(app_id: &str, links: Option<LinkSet>) {
+fn update(app_id: &str, f: impl FnOnce(&mut Entry)) {
     let _g = write_lock().lock().unwrap_or_else(|e| e.into_inner());
     let cur = snapshot().load_full();
     let mut next: Snapshot = (*cur).clone();
-    match links {
-        Some(l) => {
-            next.insert(app_id.to_string(), Arc::new(l));
-        }
-        None => {
-            next.remove(app_id);
-        }
+    let mut e = next.get(app_id).map(|e| (**e).clone()).unwrap_or_default();
+    f(&mut e);
+    if e.pairing.is_none() && e.files.is_none() {
+        next.remove(app_id);
+    } else {
+        next.insert(app_id.to_string(), Arc::new(e));
     }
     snapshot().store(Arc::new(next));
 }
 
-/// The runtime App `app_id`'s link files, when its pairing is on (one
-/// atomic load).
+/// Set (or clear) the runtime App `app_id`'s pairing link files.
+pub fn set(app_id: &str, links: Option<LinkSet>) {
+    update(app_id, |e| e.pairing = links.map(Arc::new));
+}
+
+/// Set (or clear) the runtime App `app_id`'s link-file setting (0.46.7).
+pub fn set_files(app_id: &str, files: Option<LinkFiles>) {
+    update(app_id, |e| e.files = files.map(Arc::new));
+}
+
+/// The runtime App `app_id`'s pairing link files, when its pairing is on
+/// (one atomic load).
 pub fn get(app_id: &str) -> Option<Arc<LinkSet>> {
-    snapshot().load().get(app_id).cloned()
+    snapshot().load().get(app_id).and_then(|e| e.pairing.clone())
+}
+
+/// The runtime App `app_id`'s link-file setting, when it is on.
+pub fn get_files(app_id: &str) -> Option<Arc<LinkFiles>> {
+    snapshot().load().get(app_id).and_then(|e| e.files.clone())
 }
 
 /// Is `path` (query ignored) one of the three paths? One string compare
@@ -117,6 +150,80 @@ pub fn aasa_body(l: &LinkSet) -> String {
     let details: Vec<serde_json::Value> =
         l.ios.iter().map(|id| json!({ "appID": id, "paths": paths, "appIDs": [id], "components": components })).collect();
     json!({ "applinks": { "apps": [], "details": details } }).to_string()
+}
+
+/// The AASA K2 serves for an App's two parts: pairing's (`pair`, when it
+/// is on and answers this host) and the link-file setting's (`files`).
+/// With no setting it is pairing's own body byte for byte (TA-22). Every
+/// iOS app id gets every path; a path with a query pattern goes into
+/// `components` with `"?"` and into the classic `paths` form as the path
+/// alone (TA-21: older iOS ignores the query). `None`: no iOS app named.
+pub fn aasa_merged(pair: Option<&LinkSet>, files: Option<&LinkFiles>) -> Option<String> {
+    let Some(files) = files else { return pair.filter(|l| !l.ios.is_empty()).map(aasa_body) };
+    let mut ids: Vec<String> = pair.map(|l| l.ios.clone()).unwrap_or_default();
+    for id in &files.ios {
+        if !ids.contains(id) {
+            ids.push(id.clone());
+        }
+    }
+    if ids.is_empty() {
+        return None;
+    }
+    let mut paths: Vec<String> = Vec::new();
+    let mut components: Vec<serde_json::Value> = Vec::new();
+    if let Some(l) = pair {
+        paths.push(PAIR_PATH.to_string());
+        paths.extend(l.link_paths.iter().cloned());
+        components = paths.iter().map(|p| json!({ "/": p })).collect();
+    }
+    for lp in &files.paths {
+        if !paths.contains(&lp.path) {
+            paths.push(lp.path.clone());
+        }
+        let mut c = json!({ "/": lp.path });
+        if !lp.query.is_empty() {
+            c["?"] = json!(lp.query);
+        }
+        if !components.contains(&c) {
+            components.push(c);
+        }
+    }
+    let details: Vec<serde_json::Value> =
+        ids.iter().map(|id| json!({ "appID": id, "paths": paths, "appIDs": [id], "components": components })).collect();
+    Some(json!({ "applinks": { "apps": [], "details": details } }).to_string())
+}
+
+/// The assetlinks.json K2 serves for an App's two parts (packages merged,
+/// their fingerprints joined). Pairing's own body byte for byte with no
+/// setting. `None`: no Android app named.
+pub fn assetlinks_merged(pair: Option<&LinkSet>, files: Option<&LinkFiles>) -> Option<String> {
+    let Some(files) = files else { return pair.filter(|l| !l.android.is_empty()).map(assetlinks_body) };
+    let mut android: Vec<AndroidApp> = pair.map(|l| l.android.clone()).unwrap_or_default();
+    for a in &files.android {
+        match android.iter_mut().find(|x| x.package == a.package) {
+            Some(x) => {
+                for f in &a.sha256 {
+                    if !x.sha256.contains(f) {
+                        x.sha256.push(f.clone());
+                    }
+                }
+            }
+            None => android.push(a.clone()),
+        }
+    }
+    if android.is_empty() {
+        return None;
+    }
+    let statements: Vec<serde_json::Value> = android
+        .iter()
+        .map(|a| {
+            json!({
+                "relation": ["delegate_permission/common.handle_all_urls"],
+                "target": { "namespace": "android_app", "package_name": a.package, "sha256_cert_fingerprints": a.sha256 },
+            })
+        })
+        .collect();
+    Some(serde_json::Value::Array(statements).to_string())
 }
 
 /// The assetlinks.json body: one statement per Android app.
@@ -285,35 +392,38 @@ fn answer_on(box_on: bool, app_id: &str, method: &str, path_and_query: &str, hos
     if !head_only && !method.eq_ignore_ascii_case("GET") {
         return None;
     }
-    if !box_on {
-        return None;
-    }
-    let l = get(app_id)?;
+    let e = snapshot().load().get(app_id).cloned()?;
     let host = host_name(host?);
-    if !l.hosts.iter().any(|h| *h == host) {
+    // Pairing's part needs the box switch and one of its hosts; the
+    // link-file setting's part (0.46.7) one of its own hosts.
+    let pair = e.pairing.as_deref().filter(|l| box_on && l.hosts.iter().any(|h| *h == host));
+    let files = e.files.as_deref().filter(|f| f.hosts.iter().any(|h| *h == host));
+    if pair.is_none() && files.is_none() {
         return None;
     }
     let path = path_and_query.split('?').next().unwrap_or(path_and_query);
     let static_headers = "Cache-Control: public, max-age=300\r\n";
     Some(match path {
-        AASA if !l.ios.is_empty() => response(head_only, "application/json", static_headers, &aasa_body(&l)),
-        ASSETLINKS if !l.android.is_empty() => response(head_only, "application/json", static_headers, &assetlinks_body(&l)),
+        AASA => response(head_only, "application/json", static_headers, &aasa_merged(pair, files)?),
+        ASSETLINKS => response(head_only, "application/json", static_headers, &assetlinks_merged(pair, files)?),
         PAIR_PATH => {
+            let l = pair?;
             let n = nonce();
             let extra = format!(
                 "Content-Security-Policy: {}\r\nReferrer-Policy: no-referrer\r\nCache-Control: no-store\r\n",
                 page_csp(&n)
             );
-            response(head_only, "text/html; charset=utf-8", &extra, &page_html(&l, &n))
+            response(head_only, "text/html; charset=utf-8", &extra, &page_html(l, &n))
         }
         _ => return None,
     })
 }
 
 /// A [`crate::client_ip::LocalAnswer`] for the runtime App `app_id` when
-/// its pairing is on now (`None`: no peek, no local answers).
+/// its pairing or its link-file setting is on now (`None`: no peek, no
+/// local answers).
 pub fn local_for(app_id: &str) -> Option<crate::client_ip::LocalAnswer> {
-    get(app_id)?;
+    snapshot().load().get(app_id)?;
     let id = app_id.to_string();
     Some(Arc::new(move |method: &str, path: &str, host: Option<&str>| answer(&id, method, path, host)))
 }
@@ -368,23 +478,40 @@ fn verdict(f: Fetched, want: &str) -> &'static str {
 /// Fetch both files from each host over the public internet (and Apple's
 /// CDN copy of the AASA) and compare them with what K2 serves now.
 pub fn check_hosts(fetcher: &dyn Fetcher, l: &LinkSet) -> Vec<HostCheck> {
-    let aasa = aasa_body(l);
-    let assets = assetlinks_body(l);
-    l.hosts
+    check_merged(fetcher, Some(l), None)
+}
+
+/// [`check_hosts`] for what K2 serves from both parts now: pairing's
+/// (`pair`) and the link-file setting's (`files`, 0.46.7), on every host
+/// either answers.
+pub fn check_merged(fetcher: &dyn Fetcher, pair: Option<&LinkSet>, files: Option<&LinkFiles>) -> Vec<HostCheck> {
+    let aasa = aasa_merged(pair, files);
+    let assets = assetlinks_merged(pair, files);
+    let mut hosts: Vec<String> = pair.map(|l| l.hosts.clone()).unwrap_or_default();
+    for h in files.map(|f| f.hosts.as_slice()).unwrap_or(&[]) {
+        if !hosts.contains(h) {
+            hosts.push(h.clone());
+        }
+    }
+    hosts
         .iter()
         .map(|h| {
-            let (a, cdn) = if l.ios.is_empty() {
-                ("none", "none")
-            } else {
-                let a = verdict(fetcher.get(&format!("https://{h}{AASA}")), &aasa);
-                let cdn = match verdict(fetcher.get(&format!("https://app-site-association.cdn-apple.com/a/v1/{h}")), &aasa) {
-                    "ok" => "ok",
-                    "stale" => "stale",
-                    _ => "not_served",
-                };
-                (a, cdn)
+            let (a, cdn) = match &aasa {
+                None => ("none", "none"),
+                Some(aasa) => {
+                    let a = verdict(fetcher.get(&format!("https://{h}{AASA}")), aasa);
+                    let cdn = match verdict(fetcher.get(&format!("https://app-site-association.cdn-apple.com/a/v1/{h}")), aasa) {
+                        "ok" => "ok",
+                        "stale" => "stale",
+                        _ => "not_served",
+                    };
+                    (a, cdn)
+                }
             };
-            let al = if l.android.is_empty() { "none" } else { verdict(fetcher.get(&format!("https://{h}{ASSETLINKS}")), &assets) };
+            let al = match &assets {
+                None => "none",
+                Some(assets) => verdict(fetcher.get(&format!("https://{h}{ASSETLINKS}")), assets),
+            };
             HostCheck { host: h.clone(), aasa: a, assetlinks: al, apple_cdn: cdn }
         })
         .collect()

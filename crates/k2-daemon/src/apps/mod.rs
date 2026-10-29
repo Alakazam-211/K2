@@ -123,6 +123,10 @@ pub mod sdk;
 mod sdk_tests;
 /// Static Apps (0.46.7, prd-tauri-core-0467-v1 TC-2): K2 serves the files.
 pub mod static_engine;
+/// Link files as an App setting (0.46.7, TC-20…TC-22): `k2 app links`.
+pub mod link_files;
+/// `k2 app init --template` (0.46.7, TC-13).
+pub mod init;
 pub mod supervisor;
 pub mod surfaces;
 pub mod suspend;

@@ -956,10 +956,18 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/exception",
         "/cli/app/exec",
         "/cli/app/history",
+        // 0.46.7: k2 app init --template (switch 1, own workspace's
+        // folders; the handler).
+        "/cli/app/init",
         "/cli/app/inspect",
         "/cli/app/install",
         "/cli/app/link",
         "/cli/app/link/rotate",
+        // 0.46.7: k2 app links (its own App, "Build and run Apps"; the
+        // handler). The check is the owner's.
+        "/cli/app/links",
+        "/cli/app/links/off",
+        "/cli/app/links/set",
         "/cli/app/list",
         "/cli/app/logs",
         // 0.46.3 box usage (the view: no folder paths for passports), its

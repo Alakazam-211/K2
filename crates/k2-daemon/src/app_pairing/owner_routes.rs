@@ -253,11 +253,13 @@ fn check(who: &Who, body: &[u8]) -> R<J> {
     let Some(set) = super::links::get(&app_id) else {
         return Err(no("pairing_off", 409, "this App's pairing is off, so K2 serves no link files to check (k2 app pairing setup)"));
     };
+    // What K2 serves now, with the App's link-file setting merged in (0.46.7).
+    let files = super::links::get_files(&app_id);
     let results = {
         let mut f = fetcher().lock().unwrap_or_else(|e| e.into_inner());
         match f.as_mut() {
-            Some(fake) => super::links::check_hosts(fake.as_ref(), &set),
-            None => super::links::check_hosts(&super::links::NetFetcher, &set),
+            Some(fake) => super::links::check_merged(fake.as_ref(), Some(&set), files.as_deref()),
+            None => super::links::check_merged(&super::links::NetFetcher, Some(&set), files.as_deref()),
         }
     };
     let hosts: Vec<J> = results

@@ -8694,6 +8694,10 @@ Phone notifications for a custom App's own phone app: k2 app push
 
 Pairing a custom App's own phone app by QR from its web page: k2 app pairing
 (k2 app pairing --help, k2 study app-pairing).
+"Open in app" links (iOS and Android link files) for any App, with or without
+pairing: k2 app links (k2 app links --help).
+A starter for a Tauri, static or Node backend repo: k2 app init
+(k2 app init --help, k2 study tauri).
 Email from the App's own sender: k2 app email (k2 app email --help,
 k2 study email-notifications).
 
@@ -13435,6 +13439,229 @@ for k in ks:
 # on the phone. The owner names the phone apps here; K2 serves their link
 # files on the App's own k2.dev labels and the App's web page shows the QR
 # (pairing.start). Nothing here prints a code.
+# ── k2 app init (0.46.7, prd-tauri-core-0467-v1 TC-13) ─────────────
+_app_init_usage() {
+    cat <<'EOF'
+k2 app init — write the K2 side of an App into a repo. Never overwrites a
+file: one that is already there is listed as skipped and left as it is.
+
+  k2 app init --template tauri [<folder>] [--name <name>] [--dry-run] [--json]
+      In a Tauri v2 app's repo root (default: this folder):
+        k2/web.manifest.json    the web build as a static App, <name>-web
+        src-tauri/tauri.conf.json
+                                gains the updater wiring: plugins.updater
+                                (endpoints on the App's URL, an empty pubkey
+                                to fill in) and bundle.createUpdaterArtifacts.
+                                Only missing keys are added; tauri.conf.json5
+                                and Tauri.toml are not edited (the lines to
+                                add are printed).
+        k2/README.md            the next commands, and where the signing
+                                keys live (your own Mac, never K2)
+        .k2/compute.toml        a tauri-linux preset, if the file already
+                                has presets
+  k2 app init --template static [<folder>] [--name <name>]
+      k2/web.manifest.json only, for any built site (docs, a PWA).
+  k2 app init --template node-api [<folder>] [--name <name>]
+      k2/api/: a small server for the App (<name>-api): a health route and an
+      upload route that takes a phone's file in parts of at most 16 MiB.
+
+  <name>        the App name (default: the folder's name), used as <name>-web
+                or <name>-api. Lower-case letters, digits and -.
+  --dry-run     print every file and change; write nothing.
+
+Then: the commands it prints (Next:), and k2 study tauri.
+EOF
+}
+
+cmd_app_init() {
+    local template="" folder="" name="" dry=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --template) template="${2:-}"; shift 2 ;;
+            --template=*) template="${1#--template=}"; shift ;;
+            --name) name="${2:-}"; shift 2 ;;
+            --name=*) name="${1#--name=}"; shift ;;
+            --dry-run) dry=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_init_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app init --help)" >&2; exit 2 ;;
+            *) if [ -z "$folder" ]; then folder="$1"; shift; else echo "Unexpected argument: $1 (k2 app init --help)" >&2; exit 2; fi ;;
+        esac
+    done
+    case "$template" in
+        tauri|static|node-api) ;;
+        "") echo "k2 app init: --template is required: tauri, static or node-api (k2 app init --help)" >&2; exit 2 ;;
+        *) echo "k2 app init: --template is tauri, static or node-api, not '$template'" >&2; exit 2 ;;
+    esac
+    [ -n "$folder" ] || folder="."
+    [ -d "$folder" ] || { echo "k2 app init: $folder is not a folder" >&2; exit 2; }
+    local dryb=""
+    [ "$dry" = 1 ] && dryb=1
+    _app_rt_post /cli/app/init "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_template="$template" K2_CJ_name="$name" K2_CJ_dryRun_b="$dryb")"
+    [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+dry = v.get("dryRun")
+words = {"write": "would write" if dry else "wrote", "edit": "would edit" if dry else "edited", "skipped": "skipped", "snippet": "add by hand"}
+for f in v.get("files") or []:
+    print("%-12s %s  (%s)" % (words.get(f.get("action"), f.get("action")), f.get("path"), f.get("note")))
+    if f.get("content") and (dry or f.get("action") == "snippet"):
+        for line in f["content"].rstrip("\n").split("\n"):
+            print("    | " + line)
+for n in v.get("notes") or []:
+    print("note: " + n)
+if dry:
+    print("Nothing was written (--dry-run).")
+nxt = v.get("next") or []
+if nxt:
+    print("Next:")
+    for i, c in enumerate(nxt, 1):
+        print("  %d. %s" % (i, c))'
+}
+
+# ── k2 app links (0.46.7, prd-tauri-core-0467-v1 TC-20…TC-22) ───────
+_app_links_usage() {
+    cat <<'EOF'
+k2 app links — "open in app" links for an App's own iOS and Android apps.
+K2 serves the two link files (/.well-known/apple-app-site-association and
+/.well-known/assetlinks.json) on every host of the App, with or without phone
+pairing (k2 app pairing). With pairing on, both are served as one file.
+
+  k2 app links <app> [--json]          The phone apps, the paths (each with the
+                                       date it first shipped), the hosts, on/off.
+  k2 app links set <app> [--ios TEAMID.com.you.app]…
+                 [--android com.you.app:AB:CD:…[,AB:CD:…]]…
+                 [--path '/tickets/*']… [--path '/messages?addr=*']…
+                 [--drop '<path>']… [--json]
+                                       Name the phone apps and the paths they
+                                       open. Every set replaces the last one,
+                                       except that a path already set is never
+                                       removed by leaving it out: name it with
+                                       --drop to remove it on purpose (phones
+                                       and Apple's CDN keep the old file for
+                                       days). Quote paths so the shell keeps *
+                                       and ?.
+  k2 app links off <app>               Stop serving them (the paths stay set).
+  k2 app links check <app> [--json]    Fetch both files from each host over the
+                                       internet (and Apple's CDN copy) and
+                                       compare them with what K2 serves. The
+                                       owner only.
+
+Paths: a path (A-Z a-z 0-9 . _ ~ * / -, never under /.well-known/), and an
+optional query pattern after ?: name=value pairs joined by &, where * in a
+value matches anything. /messages?addr=* opens /messages?addr=… links in the
+app (iOS 14 and newer; older iOS matches the path alone). At most 20 paths.
+
+In your app, list each host exactly (applinks:jobs.you.k2.dev), never a
+wildcard. The App must be one K2 fronts: an App whose manifest says
+host.clientIp: false (needs_k2_front) can't have them.
+
+Who: the owner, an Admin, or the App's own agent ("Build and run Apps"); the
+check is the owner's. Every change is recorded in the App's deploy audit.
+EOF
+}
+
+cmd_app_links() {
+    local sub="${1:-}"
+    case "$sub" in
+        ""|-h|--help|help) _app_links_usage; return 0 ;;
+        set|off|check|status) shift ;;
+        -*) echo "usage: k2 app links <app> | set|off|check <app> (k2 app links --help)" >&2; exit 2 ;;
+        *) sub=status ;;
+    esac
+    local app="" json_out=0 ios="" android="" paths="" drops=""
+    local nl='
+'
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --ios) [ "$sub" = set ] || { echo "--ios goes with k2 app links set" >&2; exit 2; }; ios="$ios${2:-}$nl"; shift 2 ;;
+            --android) [ "$sub" = set ] || { echo "--android goes with k2 app links set" >&2; exit 2; }; android="$android${2:-}$nl"; shift 2 ;;
+            --path) [ "$sub" = set ] || { echo "--path goes with k2 app links set" >&2; exit 2; }; paths="$paths${2:-}$nl"; shift 2 ;;
+            --drop) [ "$sub" = set ] || { echo "--drop goes with k2 app links set" >&2; exit 2; }; drops="$drops${2:-}$nl"; shift 2 ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_links_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app links --help)" >&2; exit 2 ;;
+            *) if [ -z "$app" ]; then app="$1"; shift; else echo "Unexpected argument: $1 (k2 app links --help)" >&2; exit 2; fi ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app links $sub <app> (k2 app links --help)" >&2; exit 2; }
+    case "$sub" in
+        status)
+            _compute_call GET /cli/app/links "app=$(urlencode "$app")"
+            ;;
+        set)
+            { [ -z "$ios" ] && [ -z "$android" ]; } && { echo "name at least one phone app: --ios and/or --android (k2 app links --help)" >&2; exit 2; }
+            local body
+            body="$(K2_AL_APP="$app" K2_AL_IOS="$ios" K2_AL_ANDROID="$android" K2_AL_PATHS="$paths" K2_AL_DROPS="$drops" python3 -c '
+import json, os, sys
+e = os.environ
+lines = lambda k: [x.strip() for x in e.get(k, "").split("\n") if x.strip()]
+b = {"app": e["K2_AL_APP"], "paths": lines("K2_AL_PATHS")}
+if lines("K2_AL_IOS"):
+    b["ios"] = lines("K2_AL_IOS")
+android = []
+for spec in lines("K2_AL_ANDROID"):
+    if ":" not in spec:
+        sys.stderr.write("--android is <package>:<SHA-256 fingerprint>[,<fingerprint>…]\n")
+        sys.exit(2)
+    pkg, fprs = spec.split(":", 1)
+    android.append({"package": pkg, "sha256": [f.strip() for f in fprs.split(",") if f.strip()]})
+if android:
+    b["android"] = android
+if lines("K2_AL_DROPS"):
+    b["drop"] = lines("K2_AL_DROPS")
+print(json.dumps(b))')" || exit 2
+            _app_rt_post /cli/app/links/set "$body"
+            [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            ;;
+        off)
+            _compute_call POST /cli/app/links/off "$(_compute_json K2_CJ_app="$app")"
+            ;;
+        check)
+            _compute_call POST /cli/app/links/check "$(_compute_json K2_CJ_app="$app")" tcp
+            if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+            printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+bad = 0
+words = {"ok": "ok", "none": "not used", "stale": "another file is served there (DNS or a proxy elsewhere, or a cached copy)",
+         "not_served": "not served", "tls_error": "TLS error"}
+for h in v.get("hosts") or []:
+    print(h.get("host"))
+    for k, n in (("aasa", "iOS file"), ("assetlinks", "Android file"), ("appleCdn", "Apple CDN copy")):
+        s = h.get(k)
+        if s not in ("ok", "none") and k != "appleCdn":
+            bad = 1
+        print("  %-15s %s" % (n + ":", words.get(s, s)))
+sys.exit(1 if bad else 0)'
+            return
+            ;;
+    esac
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys, time
+v = json.load(sys.stdin)
+print("%s: link files %s%s" % (v.get("name") or v.get("app"), v.get("state"), "" if v.get("served", True) else " (" + (v.get("notServed") or "not served") + ")"))
+if v.get("pairing"):
+    print("  phone pairing is on too: K2 serves one file for both")
+ios = v.get("ios") or []
+android = [a.get("package") for a in v.get("android") or []]
+print("  iOS apps:     " + (", ".join(ios) if ios else "-"))
+print("  Android apps: " + (", ".join(android) if android else "-"))
+paths = v.get("paths") or []
+if paths:
+    print("  paths (first shipped):")
+    for p in paths:
+        print("    %-40s %s" % (p.get("spec"), time.strftime("%Y-%m-%d", time.localtime(p.get("since") or 0))))
+else:
+    print("  paths: -")
+print("  hosts:        " + (", ".join(v.get("hosts") or []) or "- (the App has no public host yet)"))
+for w in v.get("warnings") or []:
+    print("note: " + w)'
+}
+
 _app_pairing_usage() {
     cat <<'EOF'
 k2 app pairing — let people pair a custom App's own phone app by QR from
@@ -16546,6 +16773,7 @@ for r in rows:
 
 cmd_app() {
     case "${1:-}" in
+        init) shift; cmd_app_init "$@" ;;
         validate) shift; cmd_app_validate "$@" ;;
         build) shift; cmd_app_build "$@" ;;
         install) shift; cmd_app_install "$@" ;;
@@ -16587,6 +16815,7 @@ cmd_app() {
         keys) shift; cmd_app_keys "$@" ;;
         push) shift; cmd_app_push "$@" ;;
         pairing) shift; cmd_app_pairing "$@" ;;
+        links) shift; cmd_app_links "$@" ;;
         email) shift; cmd_app_email "$@" ;;
         approvals) shift; cmd_app_approvals "$@" ;;
         approve) shift; cmd_app_approve "$@" ;;

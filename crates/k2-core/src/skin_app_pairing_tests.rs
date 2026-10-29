@@ -506,3 +506,54 @@ fn set_off_and_purge_round_trip() {
     assert!(config(&f.app).expect("read").is_none());
     assert!(set_config(HOST_APP_ID, &ConfigInput { ios: vec!["ABCDE12345.com.you.app".into()], ..Default::default() }, "owner").is_err());
 }
+
+// ── 0.46.7: link files as an App setting (TC-20, TC-21) ──────────────
+
+#[test]
+fn link_specs_parse_with_query_patterns() {
+    let (p, q) = parse_link_spec("/messages?addr=*").expect("a query pattern (TA-21)");
+    assert_eq!(p, "/messages");
+    assert_eq!(q.get("addr").map(String::as_str), Some("*"));
+    let (_, q) = parse_link_spec("/m?b=x-1&a=*").expect("two pairs");
+    assert_eq!(spec_of("/m", &q), "/m?a=*&b=x-1", "sorted, so a spec reads one way");
+    assert_eq!(parse_link_spec("/tickets/*").map(|(p, q)| (p, q.len())), Some(("/tickets/*".to_string(), 0)));
+    for bad in ["/m?", "/m?addr", "/m?a=1&a=2", "/m?a=<x>", "/m?=x", "messages", "/.well-known/x?a=1", "/m?a=1?b=2"] {
+        assert!(parse_link_spec(bad).is_none(), "{bad}");
+    }
+}
+
+#[test]
+fn links_set_keeps_since_freezes_shipped_paths_and_turns_off() {
+    use serde_json::json;
+    let f = fx("links");
+    let input = |paths: serde_json::Value, drop: serde_json::Value| {
+        parse_links_input(&json!({"app": f.app, "ios": ["ABCDE12345.com.you.app"], "paths": paths, "drop": drop})).expect("valid")
+    };
+    let c = set_links(&f.app, &input(json!(["/messages?addr=*", "/tickets/*"]), json!([])), "owner", 100).expect("set");
+    assert!(c.is_on());
+    assert_eq!(c.paths.iter().map(LinkPath::spec).collect::<Vec<_>>(), ["/messages?addr=*", "/tickets/*"]);
+    assert!(c.paths.iter().all(|p| p.since == 100));
+    // Adding a path keeps the others' dates.
+    let c = set_links(&f.app, &input(json!(["/messages?addr=*", "/tickets/*", "/files/*"]), json!([])), "owner", 200).expect("add");
+    assert_eq!(c.paths.iter().map(|p| p.since).collect::<Vec<_>>(), [100, 100, 200]);
+    // Dropping a shipped path is refused unless it is named.
+    let e = set_links(&f.app, &input(json!(["/files/*"]), json!([])), "owner", 300).unwrap_err();
+    assert_eq!(e, LinksError::Dropped(vec!["/messages?addr=*".into(), "/tickets/*".into()]));
+    assert_eq!(links_config(&f.app).unwrap().unwrap().paths.len(), 3, "nothing changed");
+    let c = set_links(&f.app, &input(json!(["/files/*"]), json!(["/messages?addr=*", "/tickets/*"])), "owner", 300).expect("drop on purpose");
+    assert_eq!(c.paths.iter().map(LinkPath::spec).collect::<Vec<_>>(), ["/files/*"]);
+    // Off keeps the paths (still frozen); purge removes the setting.
+    assert!(links_off(&f.app, "agent:jobs", 400).expect("off"));
+    let c = links_config(&f.app).unwrap().unwrap();
+    assert!(!c.is_on() && c.paths.len() == 1);
+    assert!(all_links_configs().unwrap().iter().any(|c| c.app == f.app));
+    purge_app(&f.app).expect("purge");
+    assert!(links_config(&f.app).unwrap().is_none());
+    // The field checks.
+    assert!(parse_links_input(&json!({"paths": ["/a"]})).unwrap_err().starts_with("ios and/or android"));
+    let many: Vec<String> = (0..21).map(|i| format!("/p{i}")).collect();
+    assert!(parse_links_input(&json!({"ios": ["ABCDE12345.com.you.app"], "paths": many})).unwrap_err().contains("at most 20"), "the 20-path cap");
+    assert!(parse_links_input(&json!({"ios": ["ABCDE12345.com.you.app"], "paths": ["/m?a"]})).unwrap_err().starts_with("paths"));
+    assert!(parse_links_input(&json!({"ios": ["ABCDE12345.com.you.app"], "hosts": []})).unwrap_err().starts_with("unknown field"));
+    assert!(set_links(HOST_APP_ID, &LinksInput { ios: vec!["ABCDE12345.com.you.app".into()], ..Default::default() }, "owner", 1).is_err());
+}

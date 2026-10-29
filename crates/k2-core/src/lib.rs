@@ -63,6 +63,9 @@ pub mod app_audit;
 /// kit, vendored into an App folder.
 pub mod app_sdk;
 pub mod app_settings;
+/// `k2 app init --template tauri|static|node-api` (0.46.7, TC-13): the K2
+/// side of an App written into a repo, never overwriting a file.
+pub mod app_templates;
 /// The K2 Connect account server base URL: env, setting, default (0.46.6).
 pub mod connect_db;
 /// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).

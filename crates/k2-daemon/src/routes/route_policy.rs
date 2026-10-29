@@ -325,6 +325,9 @@ pub const ROUTES: &[Route] = &[
     get("/cli/app/handover/status", Member),
     post("/cli/app/handover/undo", Owner),
     get("/cli/app/history", Member),
+    // 0.46.7 (TC-13): k2 app init --template writes into a folder, as
+    // sdk add (handler: switch 1 for passports, their own workspace).
+    post("/cli/app/init", Admin),
     get("/cli/app/inspect", Member),
     post("/cli/app/install", Admin),
     // 0.46.0 grace: App-scoped keys. Minting needs the owner's confirm
@@ -340,6 +343,13 @@ pub const ROUTES: &[Route] = &[
     // S14: the App's gateway link (status; rotate the App pass now).
     get("/cli/app/link", Member),
     post("/cli/app/link/rotate", Admin),
+    // 0.46.7 (prd-tauri-core-0467-v1 TC-20): link files as an App setting;
+    // the handler lets the App's own agent ("Build and run Apps") in too.
+    // The check fetches over the internet: the owner's.
+    get("/cli/app/links", Admin),
+    post("/cli/app/links/check", Owner),
+    post("/cli/app/links/off", Admin),
+    post("/cli/app/links/set", Admin),
     get("/cli/app/list", Member),
     get("/cli/app/logs", Member),
     // Room-scope R9 (0.46.1): who holds a grant on a room (owner/admin any

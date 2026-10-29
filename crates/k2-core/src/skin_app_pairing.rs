@@ -524,7 +524,9 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<(), String> {
          );
          CREATE INDEX IF NOT EXISTS device_login_pairings_app ON device_login_pairings(app_id, paired_at);",
     )
-    .map_err(|e| format!("skin.db app pairing: {e}"))
+    .map_err(|e| format!("skin.db app pairing: {e}"))?;
+    // 0.46.7 (TC-20): link files as an App setting, in their own table.
+    links_schema(conn)
 }
 
 /// One Android app the App's links open (assetlinks.json).
@@ -686,7 +688,11 @@ pub fn set_off(app: &str, actor: &str) -> Result<bool, String> {
 pub fn purge_app(app: &str) -> Result<usize, String> {
     let app = normalize_app_target(Some(app));
     drop_app(&app);
-    with_conn(|conn| conn.execute("DELETE FROM app_pairing_config WHERE app_id = ?1", params![app]).map_err(|e| format!("app pairing purge: {e}")))
+    with_conn(|conn| {
+        // 0.46.7: the App's link-file setting goes with it.
+        conn.execute("DELETE FROM app_link_files WHERE app_id = ?1", params![app]).map_err(|e| format!("app link files purge: {e}"))?;
+        conn.execute("DELETE FROM app_pairing_config WHERE app_id = ?1", params![app]).map_err(|e| format!("app pairing purge: {e}"))
+    })
 }
 
 // ── validation (§5.1, V11) ───────────────────────────────────────────
@@ -913,6 +919,258 @@ pub fn parse_input(v: &serde_json::Value) -> Result<ConfigInput, String> {
         Some(_) => return Err("store: {ios?, android?}".into()),
     }
     Ok(ConfigInput { ios, android, hosts, native_origins, link_paths, store_ios, store_android })
+}
+
+// ── link files as an App setting (prd-tauri-core-0467-v1 TC-20…TC-22) ──
+//
+// `k2 app links set`: the App's iOS and Android app ids and its universal
+// link paths, served by the daemon on the App's hosts **with or without
+// pairing**. Its own table (`app_link_files`, skin.db, additive, created
+// at open, no numbered step); pairing's config stays as it is, and the
+// daemon merges both into one per-App snapshot.
+//
+// A path may carry a query pattern (`/messages?addr=*`, TA-21): it is kept
+// parsed (`{path, query}`) because the classic AASA `paths` form takes the
+// path only and the `components` form takes `"/"` and `"?"`. A path that
+// shipped is frozen: a set that drops one is refused (`link_path_dropped`)
+// unless the set names it to drop (installed apps and Apple's CDN keep the
+// old file for days). Each path keeps the date it first shipped (`since`).
+
+/// One universal-link path an App's link files name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
+pub struct LinkPath {
+    /// `/messages`, `/tickets/*` (no query).
+    pub path: String,
+    /// Query patterns (`addr` → `*`), matched by iOS 14+ through the
+    /// `components` form; older iOS matches the path alone.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub query: std::collections::BTreeMap<String, String>,
+    /// When it first shipped (unix seconds).
+    pub since: i64,
+}
+
+impl LinkPath {
+    /// The spec as written: `/messages?addr=*`.
+    pub fn spec(&self) -> String {
+        spec_of(&self.path, &self.query)
+    }
+}
+
+fn spec_of(path: &str, query: &std::collections::BTreeMap<String, String>) -> String {
+    if query.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", query.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&"))
+    }
+}
+
+/// Parse a link spec: a path ([`valid_link_path`]) and an optional query of
+/// `name=pattern` pairs joined by `&` (names of `A-Za-z0-9._~-`, up to 64;
+/// patterns of `A-Za-z0-9._~*-`, up to 128; at most 8 pairs). `None` when
+/// it isn't one.
+pub fn parse_link_spec(s: &str) -> Option<(String, std::collections::BTreeMap<String, String>)> {
+    let s = s.trim();
+    let (path, q) = match s.split_once('?') {
+        Some((p, q)) => (p, Some(q)),
+        None => (s, None),
+    };
+    if !valid_link_path(path) {
+        return None;
+    }
+    let mut query = std::collections::BTreeMap::new();
+    if let Some(q) = q {
+        if q.is_empty() {
+            return None;
+        }
+        for pair in q.split('&') {
+            let (k, v) = pair.split_once('=')?;
+            let k_ok = (1..=64).contains(&k.len()) && k.bytes().all(|b| b.is_ascii_alphanumeric() || b"._~-".contains(&b));
+            let v_ok = (1..=128).contains(&v.len()) && v.bytes().all(|b| b.is_ascii_alphanumeric() || b"._~*-".contains(&b));
+            if !k_ok || !v_ok || query.insert(k.to_string(), v.to_string()).is_some() {
+                return None;
+            }
+        }
+        if query.len() > 8 {
+            return None;
+        }
+    }
+    Some((path.to_string(), query))
+}
+
+/// One App's link-file setting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinksConfig {
+    pub app: String,
+    /// `false` = turned off (`k2 app links off`); its paths stay frozen.
+    pub enabled: bool,
+    pub ios: Vec<String>,
+    pub android: Vec<AndroidApp>,
+    pub paths: Vec<LinkPath>,
+    pub updated_at: i64,
+    pub updated_by: Option<String>,
+}
+
+impl LinksConfig {
+    /// Served: not turned off, and at least one phone app named.
+    pub fn is_on(&self) -> bool {
+        self.enabled && (!self.ios.is_empty() || !self.android.is_empty())
+    }
+}
+
+/// What `k2 app links set` sends (checked by [`parse_links_input`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LinksInput {
+    pub ios: Vec<String>,
+    pub android: Vec<AndroidApp>,
+    /// Parsed specs, in the order given.
+    pub paths: Vec<(String, std::collections::BTreeMap<String, String>)>,
+    /// Specs the set drops on purpose (`--drop`).
+    pub drop: Vec<String>,
+}
+
+/// Why a links set was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinksError {
+    /// The set leaves out paths that shipped (and `drop` doesn't name them).
+    Dropped(Vec<String>),
+    Store(String),
+}
+
+fn links_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_link_files (
+            app_id TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            ios_apps TEXT NOT NULL DEFAULT '[]',
+            android_apps TEXT NOT NULL DEFAULT '[]',
+            paths TEXT NOT NULL DEFAULT '[]',
+            updated_at INTEGER NOT NULL,
+            updated_by TEXT
+         );",
+    )
+    .map_err(|e| format!("skin.db app link files: {e}"))
+}
+
+fn map_links(r: &rusqlite::Row<'_>) -> rusqlite::Result<LinksConfig> {
+    Ok(LinksConfig {
+        app: r.get(0)?,
+        enabled: r.get::<_, i64>(1)? != 0,
+        ios: json_list(&r.get::<_, String>(2)?),
+        android: json_list(&r.get::<_, String>(3)?),
+        paths: json_list(&r.get::<_, String>(4)?),
+        updated_at: r.get(5)?,
+        updated_by: r.get(6)?,
+    })
+}
+
+const LINKS_COLS: &str = "app_id, enabled, ios_apps, android_apps, paths, updated_at, updated_by";
+
+fn links_conn(conn: &Connection, app: &str) -> Result<Option<LinksConfig>, String> {
+    conn.query_row(&format!("SELECT {LINKS_COLS} FROM app_link_files WHERE app_id = ?1"), params![app], map_links)
+        .optional()
+        .map_err(|e| format!("app link files: {e}"))
+}
+
+/// One App's link-file setting, if it was ever set.
+pub fn links_config(app: &str) -> Result<Option<LinksConfig>, String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| links_conn(conn, &app))
+}
+
+/// Every App's link-file setting (the daemon's snapshot at boot).
+pub fn all_links_configs() -> Result<Vec<LinksConfig>, String> {
+    with_conn(|conn| {
+        let mut stmt = conn.prepare(&format!("SELECT {LINKS_COLS} FROM app_link_files ORDER BY app_id")).map_err(|e| format!("app link files: {e}"))?;
+        let rows = stmt.query_map([], map_links).map_err(|e| format!("app link files: {e}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| format!("app link files: {e}"))
+    })
+}
+
+/// Set an App's link files (on). Paths that shipped keep their `since`; a
+/// path left out must be named in `drop` (TC-21), else
+/// [`LinksError::Dropped`] lists them and nothing changes.
+pub fn set_links(app: &str, input: &LinksInput, actor: &str, now: i64) -> Result<LinksConfig, LinksError> {
+    let app = normalize_app_target(Some(app));
+    if app == HOST_APP_ID {
+        return Err(LinksError::Store("link files are per published App, never the box login".into()));
+    }
+    with_conn(|conn| {
+        let before = links_conn(conn, &app)?;
+        let old: Vec<LinkPath> = before.map(|b| b.paths).unwrap_or_default();
+        let mut paths: Vec<LinkPath> = Vec::new();
+        for (p, q) in &input.paths {
+            let since = old.iter().find(|o| o.path == *p && o.query == *q).map(|o| o.since).unwrap_or(now);
+            paths.push(LinkPath { path: p.clone(), query: q.clone(), since });
+        }
+        let dropped: Vec<String> = old
+            .iter()
+            .filter(|o| !paths.iter().any(|n| n.path == o.path && n.query == o.query))
+            .map(LinkPath::spec)
+            .filter(|spec| !input.drop.contains(spec))
+            .collect();
+        if !dropped.is_empty() {
+            return Ok(Err(LinksError::Dropped(dropped)));
+        }
+        conn.execute(
+            "INSERT INTO app_link_files (app_id, enabled, ios_apps, android_apps, paths, updated_at, updated_by)
+             VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(app_id) DO UPDATE SET enabled = 1, ios_apps = ?2, android_apps = ?3, paths = ?4, updated_at = ?5, updated_by = ?6",
+            params![app, j(&input.ios), j(&input.android), j(&paths), now, actor],
+        )
+        .map_err(|e| format!("app link files write: {e}"))?;
+        Ok(links_conn(conn, &app)?.ok_or_else(|| "app link files vanished".to_string()).map_err(LinksError::Store))
+    })
+    .map_err(LinksError::Store)?
+}
+
+/// Turn an App's link files off (they stop answering; the paths stay
+/// frozen for a later set). `Ok(true)` when they were on.
+pub fn links_off(app: &str, actor: &str, now: i64) -> Result<bool, String> {
+    let app = normalize_app_target(Some(app));
+    with_conn(|conn| {
+        let before = links_conn(conn, &app)?;
+        conn.execute("UPDATE app_link_files SET enabled = 0, updated_at = ?2, updated_by = ?3 WHERE app_id = ?1", params![app, now, actor])
+            .map_err(|e| format!("app link files off: {e}"))?;
+        Ok(before.is_some_and(|c| c.is_on()))
+    })
+}
+
+/// The set body (`POST /cli/app/links/set`), checked: `ios`, `android`
+/// (pairing's forms), `paths` (link specs, at most [`MAX_LINK_PATHS`]),
+/// `drop` (specs). Errors name the field.
+pub fn parse_links_input(v: &serde_json::Value) -> Result<LinksInput, String> {
+    let Some(o) = v.as_object() else { return Err("send a JSON object".into()) };
+    const KNOWN: &[&str] = &["app", "ios", "android", "paths", "drop"];
+    if let Some(k) = o.keys().find(|k| !KNOWN.contains(&k.as_str())) {
+        let shown: String = k.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(32).collect();
+        return Err(format!("unknown field {shown}"));
+    }
+    // The phone apps: pairing's own checks, so both settings read alike.
+    let mut probe = serde_json::Map::new();
+    for k in ["ios", "android"] {
+        if let Some(x) = o.get(k) {
+            probe.insert(k.to_string(), x.clone());
+        }
+    }
+    let apps = parse_input(&serde_json::Value::Object(probe))?;
+    let mut paths: Vec<(String, std::collections::BTreeMap<String, String>)> = Vec::new();
+    for s in str_list(v, "paths", MAX_LINK_PATHS)? {
+        let p = parse_link_spec(&s).ok_or_else(|| {
+            "paths: each is a path like /tickets/* or /messages?addr=* (path: A-Z a-z 0-9 . _ ~ * / -, never under /.well-known/; \
+             query: name=pattern pairs joined by &, * matches any value)"
+                .to_string()
+        })?;
+        if !paths.contains(&p) {
+            paths.push(p);
+        }
+    }
+    let mut drop = Vec::new();
+    for s in str_list(v, "drop", MAX_LINK_PATHS)? {
+        let (p, q) = parse_link_spec(&s).ok_or_else(|| "drop: each is a path spec as it was set (k2 app links shows them)".to_string())?;
+        drop.push(spec_of(&p, &q));
+    }
+    Ok(LinksInput { ios: apps.ios, android: apps.android, paths, drop })
 }
 
 // ── the minting pass ─────────────────────────────────────────────────

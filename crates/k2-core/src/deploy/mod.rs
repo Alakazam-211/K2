@@ -338,6 +338,8 @@ pub const RESERVED_APP_IDS: &[&str] = &[
     "token", "tokens", "hydra", "front-door", "help", "verbs", "box", "deployment", "status", "engine", "link",
     // 0.46.3: `k2 app resources` (box usage).
     "resources",
+    // 0.46.7 (prd-tauri-core-0467-v1, vs-live §8): `k2 app links`.
+    "links",
 ];
 
 /// Core `k2` nouns an App id can't take either (§8.4).

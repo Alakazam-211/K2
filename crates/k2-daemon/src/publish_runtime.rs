@@ -396,12 +396,21 @@ fn kill_tree(entry: &LiveChild) {
         if let Some(job) = entry.job.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
             job.terminate();
         } else {
-            let _ = entry
+            let killed_child = entry
                 .child
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .as_mut()
-                .map(|c| c.kill());
+                .map(|c| c.kill())
+                .is_some();
+            // A service adopted at boot (reattach) has neither a job nor a
+            // child handle: end it and its children by pid, or it keeps
+            // its port and a restart fails ("still in use").
+            if !killed_child {
+                if let Ok(pid) = u32::try_from(entry.pid) {
+                    k2_core::win_proc::terminate_tree(pid);
+                }
+            }
         }
     }
     if let Some(mut child) = entry
@@ -1608,9 +1617,13 @@ fn kill_pid_tree(pid: i32) {
             let _ = libc::kill(pid, libc::SIGKILL);
         }
     }
+    // Windows: the process and its descendants (cmd.exe and the service it
+    // runs), as killpg on Unix.
     #[cfg(windows)]
     {
-        win_job::kill_pid(pid as u32);
+        if let Ok(pid) = u32::try_from(pid) {
+            k2_core::win_proc::terminate_tree(pid);
+        }
     }
 }
 
@@ -2396,17 +2409,6 @@ pub(crate) mod win_job {
             let ok = GetExitCodeProcess(h, &mut code);
             CloseHandle(h);
             ok != 0 && code == STILL_ACTIVE
-        }
-    }
-
-    pub fn kill_pid(pid: u32) {
-        const PROCESS_TERMINATE: u32 = 0x0001;
-        unsafe {
-            let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
-            if !h.is_null() {
-                TerminateProcess(h, 1);
-                CloseHandle(h);
-            }
         }
     }
 }

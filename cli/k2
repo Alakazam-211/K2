@@ -21671,8 +21671,10 @@ Agents:
                  [--same-node-as JOB]  run on the node that ran one of your jobs and
                                 wait for it there however long (a resume that needs
                                 that node's files)
-                 [--tag NAME]   a name you give the job (e.g. fuzz:p3), shown in
-                                listings; not --label, which picks nodes
+                 [--tag NAME]   a name you give the job (e.g. fuzz:p3; 1 to 64
+                                characters, each one of A-Z a-z 0-9 . _ : / -):
+                                k2 compute jobs --tag NAME, cancel --all-mine --tag
+                                NAME. (--label k=v is different: it picks nodes)
                  [--detach] [--sha REV] [--no-source]
                  [--dirty]      ship your uncommitted changes too (no commit needed;
                                 HEAD + the diff + untracked, not-ignored files;
@@ -21726,8 +21728,13 @@ Agents:
                                 with its code (--quiet: no output, only the exit).
                                 --max-wait counts from submit, queue time included;
                                 when it passes: exit 3 still_running and the line to
-                                resume with (k2 compute wait <id> --follow)
+                                resume with (k2 compute wait <id> --follow). K2 has
+                                no cap: 9m is an example for a shell tool that is
+                                killed at ~10 minutes (your shell's limit, not K2's)
                  [--artifact GLOB]... [--json]
+                                GLOB is relative to the job's working directory
+                                (the repo root, or where you ran k2 from inside it),
+                                not to a folder you cd into inside the command
                  [--queue-timeout 2h|off] [--retries N] [--stall-timeout 30m|off]
                                 queue timeout: 2h attached or --wait, 24h --detach,
                                 48h --tier batch. Stall: a job that prints nothing
@@ -21779,20 +21786,32 @@ Agents:
                  of them; a node that has them all is only reported. The jobs
                  are detached and wait for an idle node; --wait waits for them
                  (exit as k2 compute wait)
-  k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--limit N] [--workspace WS] [--json]
+  k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--tag T] [--limit N] [--workspace WS] [--json]
+                 TAG and WHO columns: the job's --tag, and who sent it
+                 ("(owner token)" when a shell had no passport: it ran as the owner)
                  From a git worktree inside the workspace (.claude/worktrees/x) the
                  workspace is found for you, and run takes HEAD and --dirty from
                  that worktree; from anywhere else pass --workspace <handle>.
   k2 compute get <job> [--json]              --json: the result (exit, duration, node,
-                                             artifacts + sha256, tests, receipt id)
+                                             artifacts + sha256, tests, receipt id,
+                                             wait while unfinished: where, position,
+                                             of, reason, words, etaSecs, etaBasis,
+                                             holdsQueue, since; k2 study compute RESULTS)
   k2 compute fetch <job> [NAME...] [--out DIR] [--json] [--over-relay]
                                              copy kept artifacts here (all, or NAMEs);
                                              --over-relay: files over 100 MB through
                                              the relay too (up to 500 MB)
-  k2 compute wait <job>... [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]
+  k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]
                  block until the jobs end, no log text; exit = the job's exit
-                 code (first failing job for several), 3 for cancelled/failed/
-                 timeout, 3 + still_running when --max-wait passes first.
+                 code (first failing job for several); 3 = a job was cancelled,
+                 failed or timed out, OR --max-wait passed first (still_running),
+                 OR a job's own command exited 3: the stderr JSON says which.
+                 --any: return when the FIRST of them ends (exit = its code)
+                 and name the ones still running.
+                 --max-wait counts from this call and has no K2 cap; 9m suits
+                 a shell tool killed at ~10 minutes: call it again while it
+                 exits 3 still_running. A command that itself exited 3 also
+                 gives 3: the stderr JSON (or --json) says which.
                  --follow (one job): stream its output too (resume a run --wait
                  whose shell timed out). While queued it prints where it waits,
                  "N of M" and why.
@@ -21806,6 +21825,13 @@ Agents:
                  (or was just assigned) needs --force (else job_started, exit 3).
                  On a shared node, a job in the node's queue is asked to cancel
                  only if it hasn't started: it ends cancelled, or job_started
+  k2 compute cancel --all-mine [--tag T] [--state queued|running|any] [--node N] [--force]
+                 every job THIS session sent (this terminal's passport; an
+                 earlier session's jobs need --workspace-all) that matches:
+                 queued ones by default; started ones only with --force
+                 (else listed as skipped). --workspace-all instead of
+                 --all-mine: every job of the workspace (other sessions'
+                 too). Prints how many and their ids
   k2 compute cache [list] [--node N] [--workspace WS] [--name NAME] [--json]
   k2 compute cache clear (--workspace WS | --all) [--name NAME] [--node N]
                  this server's --cache folders on its nodes: size, last use,
@@ -45625,6 +45651,16 @@ RUN
   <id>... (no --follow) blocks without log text for jobs already submitted.
   --max-wait 9m stops waiting first (exit 3, still_running, with the
   wait line to run next), so a shell tool capped at 10 minutes can loop.
+  K2 has no cap on --max-wait: the 9m is for your shell tool, not K2.
+  (In wait, --max-wait counts from that call.) A command that itself
+  exited 3 also gives exit 3: the stderr JSON (or --json) tells them apart.
+  A long job: run --detach (or let a run --wait be killed) and wait for
+  the [compute] message, which arrives whenever nobody follows the job;
+  or call k2 compute wait <id> --max-wait 9m again while it exits 3
+  still_running.
+  k2 compute wait <a> <b> <c> --any returns when the FIRST of them ends
+  (exit = its code) and names the ones still running: for your own
+  scheduler (start the next part when one finishes).
   --failures prints the failure lines of a job that ended non-zero.
   run --wait sends no [compute] message while it waits; once your CLI
   stops waiting (--max-wait passed, Ctrl-C, a killed shell) the job keeps
@@ -45811,6 +45847,63 @@ CANCEL
   the line to stop it: k2 compute cancel <job> --force. So a cancel you
   meant for a waiting job never kills one that just began. The event log
   and k2 compute get record who asked for the cancel.
+  Many at once (0.46.7): k2 compute cancel --all-mine [--tag T]
+  [--state queued|running|any] [--node N] [--force] cancels the jobs THIS
+  session sent (this terminal's passport; jobs from an earlier session
+  need --workspace-all) that match: queued only by default; a started
+  one only with --force (else it is listed as skipped). --workspace-all
+  instead of --all-mine: every job of your workspace, other sessions' too.
+  On a shared node, a job in the node's queue is asked to cancel only if
+  it hasn't started (as for one job).
+
+WHOSE JOB, AND WHICH (0.46.7)
+  --tag NAME on run/test labels the job (1 to 64 characters, each one of
+  A-Z a-z 0-9 . _ : / -):
+    k2 compute run --detach --tag fuzz:p3 -- …
+    k2 compute jobs --tag fuzz:p3       k2 compute cancel --all-mine --tag fuzz:p3
+  (--label k=v is something else: it picks nodes by their labels.)
+  k2 compute jobs shows TAG and WHO columns; JSON has tag, submittedBy
+  (agent:<ws>, shell:<ws>, owner, login:<name>), submitter (--submitter)
+  and sessionId. via: "owner_token" (text: "(owner token)") marks a job
+  sent with the owner token: an agent shell whose K2_* passport variables
+  were missing. It ran as the owner, outside your grants; the CLI warns
+  on stderr when that happens inside a K2 terminal. Keep K2_* set.
+  get shows submitCommit (the commit chosen at submit) until the node
+  reports the one that ran (srcCommit).
+
+WHY HASN'T IT STARTED? (0.46.7)
+  k2 compute get <job> (and --json's wait.words) says where it waits and
+  why, in the node's own terms. The usual messages, each followed by what
+  it means:
+    "the node runs at most 3 jobs at once (its policy); 3 are running"
+        every slot is busy. Idle CPU doesn't add slots, and --cpus
+        doesn't help with this one: the job starts when a slot frees.
+    "jobs without --cpus reserve 4 of 12 CPUs each and 0 of 12 CPUs
+     unreserved: pass --cpus 2 (or fewer) so more fit"
+        a job without --cpus holds the node's CPUs divided by its slots.
+        Pass --cpus with what your command really uses.
+    "asks 24 GB; 8 GB of 52 GB free"
+        its --mem doesn't fit beside what runs yet.
+    "your workspace runs 3 of 3 here (its grant)"
+        your grant's --max-parallel.
+  A message can name more than one of these at once.
+  "unreserved" CPU (k2 compute nodes: cpu 0/12 unreserved · idle ~8) is
+  what running K2 jobs haven't reserved; "idle" is what the OS sees unused.
+  8 idle and 0 unreserved means reserved CPU that isn't busy: smaller
+  --cpus on your jobs lets more run.
+  Counts, whose they are: run 3/3 (yours 2) · queued 2 (yours 1) · node
+  runs 5 = 3 jobs from this server running there (of 3 slots), 2 of them
+  your workspace's; 2 waiting (1 yours); the node runs 5 in all (other
+  servers' jobs too). k2 compute status shows the same numbers.
+
+TIMES (0.46.7)
+  startedAt, endedAt and durationSecs are the NODE's own times when its
+  clock agrees with this server's (result clock: "node"). If this server
+  slept or the node was cut off, the end is heard late: reportedLateSecs
+  and heardAt say by how much ("the node finished at 02:14; this server
+  heard at 05:10"), and the duration still uses the node's times. For a
+  node whose clock is off, K2 uses this server's times instead (clock:
+  "server"). queueSecs runs from submit (this server's clock) to the start.
 KNOW BEFORE YOU RUN
   k2 compute run --plan -- cargo nextest run -p k2-core
     nothing runs; JSON: node it would pick (placement: why) and why it waits (startsNow,
@@ -45850,11 +45943,37 @@ RESULTS (one object, artifacts, test lists)
     {job, short, node, state, ok, exit, signal, reason, detail, attempt,
      durationSecs, queueSecs, commit, artifacts[{name,sha256,bytes}],
      tests{total,passed,failed,errors,skipped,failing[{name,classname,
-     message,shard}]}, receipt{id,verified}, next[], shards[] (split runs)}
+     message,shard}]}, receipt{id,verified}, next[], shards[] (split runs),
+     wait, tag, submittedBy, via, clock, reportedLateSecs, heardAt,
+     effective, tools, resources, host, stall}
   ok = ran, exited 0, and no JUnit test failed.
+  state is the same everywhere (a job in a node's queue is "queued" in
+  get, get --json and jobs alike).
+  wait: null once the job has ended. While it is unfinished, wait is an
+  object with all of these keys, each null when unknown:
+    {where: "server"|"node", position, of, reason (a code), words (the
+     reason in plain words), etaSecs, etaBasis: "quote" (the node's own) |
+     "estimate" (earlier runs of the same command) | "unknown",
+     holdsQueue (false: jobs behind it may start first), since (unix
+     seconds it has waited or run since)}
+  Newer fields are null from an older node or when unknown:
+    tools      {basis: "job" (what the job's PATH ran) | "node-probe" (an
+               older node: what the node had), versions{rustc, cargo, …}}
+    resources  {peakMemBytes, cpuSecs, memSource}; a mem_cap end's hint
+               says "used 25.3G of --mem 24G"
+    host       the node's load at the job's start and end:
+               {start: {load1: 0.8, cpus: 12, steal: 0.3, jobs: 2}, end: …}
+               (steal is null on macOS; jobs = other K2 jobs running there)
+    effective  the settings the job ran with and where each came from, e.g.
+               {mem: {value: "24G", from: "flag"}, needs: {…, from: "preset"}}
+    stall      a running job's stall watch: {stallSecs (the limit), warned,
+               lastOutputAt}
+  memSource says how the peak was measured (the cgroup's memory.peak on
+  Linux, else the highest sampled RSS of the job's processes).
   --artifact GLOB (repeatable): files kept after the command exits, relative
-    to the job's working dir; target/… also reads the node's cargo target
-    dir. Kept 7 days on the node; 500 MB a file (100 MB over the relay
+    to the job's working dir (the repo root, or where you ran k2 from inside
+    it), not to a folder you cd into inside the command; target/… also reads
+    the node's cargo target dir. Kept 7 days on the node; 500 MB a file (100 MB over the relay
     unless you fetch with --over-relay).
     k2 compute fetch <job> [NAME…] [--out DIR] [--over-relay]   (sha256-checked)
   JUnit among the artifacts (nextest, vitest, pytest, surefire) becomes the
@@ -45875,6 +45994,19 @@ NEVER STUCK
   never retried: a non-zero exit, a timeout, a stall, a cancel, mem_cap.
   An attached run follows the new attempt ("retrying as attempt 2 on …").
   --stall-timeout 30m|off   no output for that long → timeout/stalled.
+                            5 minutes before the limit (for a limit under 10
+                            minutes: once half of it has passed with no output,
+                            4m for an 8m limit) you get one [compute]
+                            message: "printed nothing for about 25m; it ends
+                            at 30m". A quiet job that is still working (a
+                            fuzzer, a soak): --stall-timeout off.
+                            A stalled job's --artifact files are kept like any
+                            end's; anything else in the job dir goes, so state
+                            that must outlive a job goes in --cache.
+  A queue timeout always tells someone, even under run --wait: the
+  [compute] message goes to the job's session, else to your workspace's
+  inbox, with what it waited on and the next step: k2 compute retry <id>
+  (the same limits), or submit again with a longer --queue-timeout.
   A node with 3 infra failures in a row is set aside 30 min (K2 skips it
   when placing; `k2 compute nodes` shows setAsideUntil; the owner's
   `k2 compute node resume <node>` puts it back at once).

@@ -424,6 +424,29 @@ set +e
 k2 compute wait nosuchjob >/dev/null 2>"$SANDBOX/err"; rc=$?
 set -e
 expect_eq "wait on a missing job exits 4" "$rc" "4"
+
+echo "== --tag, wait --any, cancel --workspace-all (0.46.7, CE-9/20/21) =="
+set +e
+k2 compute run mini --detach --tag "no spaces" -- true >/dev/null 2>&1; rc=$?
+set -e
+expect_eq "a bad --tag is a usage error" "$rc" "2"
+JT_SLOW="$(k2 compute run mini --detach --tag smoke:any -- sleep 20 2>/dev/null)"
+JT_FAST="$(k2 compute run mini --detach --tag smoke:any -- sh -c 'exit 7' 2>/dev/null)"
+expect_has "jobs --tag lists the tagged job" "$(k2 compute jobs --tag smoke:any)" "$JT_FAST"
+expect_has "and its TAG column" "$(k2 compute jobs --tag smoke:any)" "smoke:any"
+set +e
+k2 compute wait "$JT_SLOW" "$JT_FAST" --any >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "wait --any exits with the first job's code" "$rc" "7"
+expect_has "and names it" "$(cat "$SANDBOX/err")" "job $JT_FAST on mini ended first: exit 7"
+expect_has "and the one still running" "$(cat "$SANDBOX/err")" "still running: $JT_SLOW"
+set +e
+k2 compute cancel --all-mine >/dev/null 2>"$SANDBOX/err"; rc=$?
+set -e
+expect_eq "--all-mine without a session (the owner token) is refused" "$rc" "2"
+expect_has "and teaches --workspace-all" "$(cat "$SANDBOX/err")" "--workspace-all"
+cout="$(k2 compute cancel --workspace-all --tag smoke:any --state any --force)"
+expect_has "cancel --workspace-all --tag stops the tagged running job" "$cout" "$JT_SLOW"
 # 0.46.6 (compute tiers v2, L8): run --wait prints the job id first on
 # stdout (so a timed-out shell can resume with `k2 compute wait <id>
 # --follow`), then streams the job's output, and exits with its code.

@@ -480,7 +480,52 @@ pub struct OverlayDoc {
     /// `sender` | `derived`.
     #[serde(default, rename = "summarySource", skip_serializing_if = "Option::is_none")]
     pub summary_source: Option<String>,
+    /// Kind `changes` only (workbench-v1 B7, 0.46.7): K2's changed-files
+    /// card for one agent turn, read from git at the turn's start and end
+    /// (never the agent's transcript). `body` carries the plain summary for
+    /// renderers that don't draw the card. None on every other doc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<ThreadChanges>,
 }
+
+/// One file in a [`ThreadChanges`] card: relative to the agent's worktree.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadChangedFile {
+    pub file: String,
+    #[serde(default)]
+    pub old_file: Option<String>,
+    /// `added` | `modified` | `deleted` | `renamed` | `untracked`.
+    pub status: String,
+    #[serde(default)]
+    pub additions: Option<u32>,
+    #[serde(default)]
+    pub deletions: Option<u32>,
+}
+
+/// The catalog's `ThreadChanges` (workbench-v1): what one turn changed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadChanges {
+    /// At most [`THREAD_CHANGES_MAX_FILES`], by path; `truncated` past it.
+    pub files: Vec<ThreadChangedFile>,
+    /// Every file the turn changed.
+    pub total: u32,
+    pub additions: u32,
+    pub deletions: u32,
+    /// Commits the agent made during the turn.
+    pub commits: u32,
+    #[serde(default)]
+    pub from: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub branch: Option<String>,
+    pub truncated: bool,
+}
+
+/// The most files one changes card lists.
+pub const THREAD_CHANGES_MAX_FILES: usize = 50;
 
 /// The body of a `handoff` card. `body` on the doc carries a plain line
 /// for renderers that don't draw the card (H18).
@@ -645,6 +690,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            changes: None,
         }
     }
 
@@ -691,6 +737,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            changes: None,
         }
     }
 
@@ -739,6 +786,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            changes: None,
         }
     }
 
@@ -772,10 +820,19 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            changes: None,
         }
     }
 
     /// A `handoff` card (H18). `body` is the plain line older renderers show.
+    /// K2's changed-files card for one turn (workbench-v1 B7).
+    pub fn changes_card(id: String, from: String, to: String, body: String, changes: ThreadChanges) -> Self {
+        let mut doc = Self::text(id, from, to, body, "k2");
+        doc.kind = "changes".to_string();
+        doc.changes = Some(changes);
+        doc
+    }
+
     pub fn handoff_card(id: String, from: String, to: String, body: String, card: HandoffCardBody) -> Self {
         Self {
             id,
@@ -799,6 +856,7 @@ impl OverlayDoc {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            changes: None,
         }
     }
 

@@ -18,7 +18,7 @@ pub mod vault;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadContext, WidgetOrigin, WidgetPlacementClaim};
+pub use doc::{CardAction, ChoiceBody, ChoiceOption, CollectedMeta, DesignOrigin, HandoffCardBody, ImportedMeta, OverlayDoc, OverlayItem, OverlayLink, PostAuthor, SecretBody, SecretInject, SecretProposal, ThreadChangedFile, ThreadChanges, ThreadContext, THREAD_CHANGES_MAX_FILES, WidgetOrigin, WidgetPlacementClaim};
 pub use attachments::ThreadAttachment;
 pub use options::{check_ask_caps, parse_options_value, split_options_csv};
 pub use store::{ExtTxn, OverlayPage, SeqRemap, ThreadDelta};
@@ -510,6 +510,26 @@ pub fn post_handoff(
     let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
     let id = uuid::Uuid::new_v4().to_string();
     let doc = OverlayDoc::handoff_card(id.clone(), from.trim().to_string(), to.trim().to_string(), body.to_string(), card);
+    store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
+    Ok(item_and_thread_link(conversation_id, seq, id, doc))
+}
+
+/// Post K2's changed-files card for one turn onto Thread (workbench-v1
+/// B7): kind `changes`, `body` the plain summary. No inject, no wake, no
+/// push (the caller posts nothing else).
+pub fn post_changes(
+    conn: &Connection,
+    conversation_id: &str,
+    project_id: &str,
+    from: &str,
+    to: &str,
+    body: &str,
+    changes: ThreadChanges,
+) -> Result<(OverlayItem, Vec<OverlayLink>), String> {
+    let _guard = WRITE.lock();
+    let seq = catalog::next_thread_seq(conn, conversation_id, project_id)?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let doc = OverlayDoc::changes_card(id.clone(), from.trim().to_string(), to.trim().to_string(), body.to_string(), changes);
     store::commit_write(&doc, Some((conversation_id, seq)), &[], None)?;
     Ok(item_and_thread_link(conversation_id, seq, id, doc))
 }
@@ -1164,6 +1184,48 @@ mod tests {
         assert_eq!(project, project_id, "catalog project_id");
         assert_eq!(last_thread, 1);
         assert_eq!(last_chatter, 0, "thread write must not bump chatter seq");
+    }
+
+    /// workbench-v1 B7: a changes card is a Thread item that keeps its
+    /// `changes` through the store, the read and the delta.
+    #[test]
+    fn changes_card_round_trips_through_the_thread_store() {
+        let project_id = seed_project("ovl-changes");
+        let conv = uuid::Uuid::new_v4().to_string();
+        let dbh = conn();
+        let c = dbh.lock();
+        let changes = ThreadChanges {
+            files: vec![ThreadChangedFile {
+                file: "src/a.rs".into(),
+                old_file: None,
+                status: "modified".into(),
+                additions: Some(3),
+                deletions: Some(1),
+            }],
+            total: 1,
+            additions: 3,
+            deletions: 1,
+            commits: 1,
+            from: Some("aaaaaaa".into()),
+            to: Some("bbbbbbb".into()),
+            branch: Some("k2/fix".into()),
+            truncated: false,
+        };
+        let (item, links) = post_changes(&c, &conv, &project_id, "k2", "ovl-changes/fix", "Changed 1 file", changes.clone())
+            .expect("post_changes");
+        assert_eq!(links.len(), 1, "Thread only: {links:?}");
+        assert_eq!(item.doc.kind, "changes");
+        assert_eq!(item.doc.from, "k2");
+        let items = read_thread(&conv, 0).expect("read_thread");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].doc.kind, "changes");
+        assert_eq!(items[0].doc.body.as_deref(), Some("Changed 1 file"));
+        assert_eq!(items[0].doc.changes.as_ref(), Some(&changes));
+        let delta = read_thread_delta(&conv, 0, 50).expect("delta");
+        assert_eq!(delta.items.len(), 1);
+        assert_eq!(delta.items[0].doc.changes.as_ref(), Some(&changes));
+        let s = serde_json::to_value(&delta.items[0]).expect("json").to_string();
+        assert!(s.contains("\"changes\"") && s.contains("src/a.rs"), "{s}");
     }
 
     #[test]

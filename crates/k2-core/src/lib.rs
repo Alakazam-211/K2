@@ -238,6 +238,8 @@ pub mod git_changes;
 pub mod git_notes;
 /// The one builder for K2-run `git`: no hooks, fsmonitor, ext diff or textconv (SS15).
 pub mod git_safe;
+/// What one agent turn changed, from git (workbench-v1 B7): the changes card.
+pub mod turn_changes;
 /// Ensure global git user.name / user.email when missing (init-git path).
 pub mod git_identity;
 /// First run without git: deferred git steps, the CLT install, agents' note (0.46.4).

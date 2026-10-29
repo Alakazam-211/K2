@@ -894,6 +894,7 @@ impl Rewrite<'_> {
             attachments: Vec::new(),
             summary: None,
             summary_source: None,
+            changes: None,
         };
         let key = import_key(
             project_id,

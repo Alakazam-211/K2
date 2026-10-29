@@ -513,6 +513,42 @@ pub fn verify(hash: &str) -> Result<TreeHash, SeedError> {
     Ok(th)
 }
 
+/// TC-3 (0.46.7, vs-live TA-7): `folder` (minus `exclude` and its
+/// `.k2appignore`) copied to a staging folder in the store
+/// (`.tmp-stage-<id>`, which [`clean_tmp`] removes after a crash), with
+/// `manifest_text` written as its `manifest.json`. A build of the staged
+/// folder hashes the written manifest, so the same folder with another
+/// manifest is another Seed. The caller removes it ([`unstage`]).
+pub fn stage_with_manifest(folder: &Path, exclude: &BTreeSet<String>, manifest_text: &str) -> Result<PathBuf, SeedError> {
+    let ignore = folder_ignore(folder)?;
+    let root = super::seeds_dir();
+    fs::create_dir_all(&root).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("mkdir {}: {e}", root.display())))?;
+    let tmp = root.join(format!(".tmp-stage-{}", uuid::Uuid::new_v4().simple()));
+    let res = copy_tree(folder, &tmp, exclude, ignore.as_ref()).and_then(|_| {
+        let mp = tmp.join(super::manifest::MANIFEST_FILE);
+        if mp.exists() {
+            // The folder's own copy is replaced (the caller checked it
+            // matches); a read-only copy is made writable first.
+            unseal(&mp);
+            fs::remove_file(&mp).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("replace manifest.json: {e}")))?;
+        }
+        fs::write(&mp, manifest_text).map_err(|e| SeedError::new(codes::SEED_INVALID, format!("write manifest.json: {e}")))
+    });
+    match res {
+        Ok(()) => Ok(tmp),
+        Err(e) => {
+            unstage(&tmp);
+            Err(e)
+        }
+    }
+}
+
+/// Remove a [`stage_with_manifest`] folder.
+pub fn unstage(staged: &Path) {
+    unseal(staged);
+    let _ = fs::remove_dir_all(staged);
+}
+
 /// Remove `.tmp-*` leftovers of builds interrupted by a daemon restart.
 pub fn clean_tmp() {
     let Ok(rd) = fs::read_dir(super::seeds_dir()) else { return };
@@ -541,6 +577,31 @@ mod tests {
         write(&f.join("lib/a.js"), "a");
         write(&f.join(".git/HEAD"), "ref");
         f
+    }
+
+    /// TA-7: a manifest written in from outside is part of the Seed's hash;
+    /// the staged copy leaves the folder untouched and is removed after.
+    #[test]
+    fn a_staged_manifest_is_in_the_hash() {
+        let home = TempHome::new();
+        let f = home.path().join("dist");
+        write(&f.join("index.html"), "<p>hi</p>");
+        let ex = build_excludes(&[]);
+        let a = stage_with_manifest(&f, &ex, r#"{"v":1}"#).expect("stage");
+        assert_eq!(fs::read_to_string(a.join("manifest.json")).unwrap(), r#"{"v":1}"#);
+        assert!(!f.join("manifest.json").exists(), "the folder itself is never written");
+        let sa = store_folder(&a, &ex).unwrap();
+        let b = stage_with_manifest(&f, &ex, r#"{"v":2}"#).expect("stage");
+        let sb = store_folder(&b, &ex).unwrap();
+        assert_ne!(sa.hash, sb.hash, "another manifest, another Seed");
+        unstage(&a);
+        unstage(&b);
+        assert!(!a.exists() && !b.exists());
+        // A folder's own manifest.json is replaced in the staged copy.
+        write(&f.join("manifest.json"), r#"{"v":2}"#);
+        let c = stage_with_manifest(&f, &ex, r#"{"v":2}"#).expect("stage");
+        assert_eq!(store_folder(&c, &ex).unwrap().hash, sb.hash, "the same bytes, the same Seed");
+        unstage(&c);
     }
 
     #[test]

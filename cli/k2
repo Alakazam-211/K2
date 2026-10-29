@@ -8011,8 +8011,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
 
   Guests, roles, and tokens for apps on this box, and (Apps beta) hosting
   server Apps: k2 app deploy (k2 app validate --help, k2 study app-deploys).
-  A site already on k2 publish run --skin keeps working; a new static UI is an
-  App (k2 app init --template static).
+  A built static site (a web build, docs, a PWA) deploys as an App
+  (host.mode "static"; k2 app init --template static). A site already on
+  k2 publish run --skin keeps working; new static sites are Apps.
   Desktop binary updates are k2 update --app. See k2 study apps (leftover: k2 study skins).
 
   Leftover aliases (still work): k2 skin …    k2 skin-token …
@@ -8294,11 +8295,13 @@ _app_validate_code() {
 #   a plain folder (--dir or a path)        -> the code pass only;
 #   a published App name, or nothing       -> the code pass on its folder.
 cmd_app_validate() {
-    local name="" dir="" target="" as_json=false types=0
+    local name="" dir="" target="" as_json=false types=0 manifest=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --dir) dir="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
             --dir=*) dir="${1#--dir=}"; shift ;;
+            --manifest) manifest="${2-}"; [ $# -ge 2 ] && shift 2 || shift ;;
+            --manifest=*) manifest="${1#--manifest=}"; shift ;;
             --types) types=1; shift ;;
             --json) as_json=true; shift ;;
             --help|-h)
@@ -8310,6 +8313,9 @@ USAGE
   k2 app validate <seed>          a stored Seed (k2 app build prints its hash)
   k2 app validate <name>          a published App (k2 publish ps): its --skin dir or --cwd
   k2 app validate                 this workspace's folder
+  k2 app validate <folder> --manifest <file>
+                                  check the folder as k2 app deploy --manifest
+                                  packs it: <file> becomes its manifest.json
   ... --types                     also run the TypeScript checker (Seeds and
                                   manifest folders; its errors block)
   ... --json                      the report as JSON
@@ -8337,7 +8343,7 @@ EXIT CODES
   3 the daemon refused (JSON with a code on stderr)
 EOF
                 exit 0 ;;
-            -*) echo "Error: unknown flag '$1' — usage: k2 app validate [<folder|seed|name>] [--dir <path>] [--types] [--json]" >&2; exit 2 ;;
+            -*) echo "Error: unknown flag '$1' — usage: k2 app validate [<folder|seed|name>] [--dir <path>] [--manifest <file>] [--types] [--json]" >&2; exit 2 ;;
             *)
                 if [ -z "$target" ]; then target="$1"; shift
                 else echo "Error: unexpected argument '$1'" >&2; exit 2; fi ;;
@@ -8352,11 +8358,16 @@ EOF
     if [ -n "$target" ] && [ -d "$target" ]; then
         dir="$(_app_rt_abs "$target")"; target=""
     fi
+    if [ -n "$manifest" ]; then
+        [ -f "$manifest" ] || { echo "Error: --manifest $manifest is not a file" >&2; exit 2; }
+        [ -n "$dir" ] || { echo "Error: --manifest goes with a folder (k2 app validate <folder> --manifest <file>)" >&2; exit 2; }
+        manifest="$(_app_rt_abs_file "$manifest")"
+    fi
     if [ -n "$dir" ]; then
         local abs="$dir"
         [ "${dir#/}" = "$dir" ] && abs="${PROJECT%/}/$dir"
-        if [ -f "$abs/manifest.json" ]; then
-            _app_validate_seed folder "$abs" "$types" "$as_json" && return 0
+        if [ -f "$abs/manifest.json" ] || [ -n "$manifest" ]; then
+            _app_validate_seed folder "$abs" "$types" "$as_json" "$manifest" && return 0
             # 10 = Apps (beta) are off: the code pass still runs.
             [ "$?" = 10 ] || exit 1
             echo "note: Apps (beta) are off on this server (Settings → Apps → This server), so manifest.json and the contract were not checked; code checks only" >&2
@@ -8404,9 +8415,14 @@ Make and ship:
                                        the code (parse + leak lints). --types
                                        also runs the TypeScript checker (its
                                        errors block). k2 app validate --help.
-  k2 app build <folder> [--types] [--json]
+  k2 app build <folder> [--manifest <file>] [--types] [--json]
                                        Store the folder as an immutable Seed
                                        and print its hash. Deploys nothing.
+                                       --manifest <file>: that file becomes
+                                       the Seed's manifest.json (the folder's
+                                       own copy must match or be absent), so
+                                       a build output like dist/ deploys as
+                                       it comes out, manifest kept in the repo.
   k2 app install <app-id> [--workspace WS] [--tunnel [--transfer]] [--memory 8G|none]
                  [--engine guarded|process] [--seed S | --folder F]
                  [--pg-major 16|17]
@@ -8433,11 +8449,17 @@ Make and ship:
   k2 app data ls|get|rm|mv <app-id> …  Read back what the App wrote to /data
                                        (answers, uploads), list, remove,
                                        rename. k2 app data --help.
-  k2 app deploy <app-id> <folder|seed> [--engine guarded|process]
+  k2 app deploy <app-id> <folder|seed> [--manifest <file>] [--engine guarded|process]
                  [--reason TEXT] [--no-wait] [--types]
                                        Health gate, switch, drain; the old version
                                        stays warm for the watch window and K2 rolls
                                        back on its own if the new one crashes.
+                                       --manifest <file> (with a folder): as for
+                                       build, e.g. k2 app deploy myapp-web dist
+                                       --manifest k2/web.manifest.json.
+                                       A static App (host.mode "static" in the
+                                       manifest): K2 serves the folder itself, no
+                                       server runs (k2 study app-deploys).
                                        --engine guarded runs it walled: rootless
                                        container as k2app (Linux, engine installed);
                                        the choice sticks for later deploys.
@@ -9208,13 +9230,20 @@ _app_rt_abs() {
     if [ -d "$p" ]; then (cd "$p" && pwd -P); else printf '%s' "$p"; fi
 }
 
+# A file's absolute path (its folder resolved; the file need not exist).
+_app_rt_abs_file() {
+    local p="$1" d b
+    d="$(dirname -- "$p")"; b="$(basename -- "$p")"
+    if [ -d "$d" ]; then printf '%s/%s' "$(cd "$d" && pwd -P)" "$b"; else printf '%s' "$p"; fi
+}
+
 # App runtime S6: POST /cli/app/validate {folder|seed, types}. Returns 0 ok,
 # 1 errors in the report, 10 when Apps (beta) are off (the caller
 # decides); any other refusal prints its JSON and exits 2/3.
 _app_validate_seed() {
-    local kind="$1" target="$2" types="$3" as_json="$4" body
+    local kind="$1" target="$2" types="$3" as_json="$4" manifest="${5-}" body
     if [ "$kind" = folder ]; then
-        body="$(_compute_json K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_types_b="$types")"
+        body="$(_compute_json K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_types_b="$types" K2_CJ_manifest="$manifest")"
     else
         body="$(_compute_json K2_CJ_seed="$target" K2_CJ_types_b="$types")"
     fi
@@ -9232,9 +9261,11 @@ _app_validate_seed() {
 }
 
 cmd_app_build() {
-    local folder="" types=0 json_out=0 dov=""
+    local folder="" types=0 json_out=0 dov="" manifest=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --manifest) manifest="${2:-}"; shift 2 ;;
+            --manifest=*) manifest="${1#--manifest=}"; shift ;;
             --types) types=1; shift ;;
             --disk-override) dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
@@ -9244,9 +9275,13 @@ cmd_app_build() {
             *) folder="$1"; shift ;;
         esac
     done
-    [ -z "$folder" ] && { echo "usage: k2 app build <folder> [--types] [--disk-override REASON] [--json]" >&2; exit 2; }
+    [ -z "$folder" ] && { echo "usage: k2 app build <folder> [--manifest <file>] [--types] [--disk-override REASON] [--json]" >&2; exit 2; }
     [ -d "$folder" ] || { echo "k2 app build: $folder is not a folder" >&2; exit 2; }
-    _app_rt_post /cli/app/build "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_types_b="$types" K2_CJ_diskOverride="$dov")"
+    if [ -n "$manifest" ]; then
+        [ -f "$manifest" ] || { echo "k2 app build: --manifest $manifest is not a file" >&2; exit 2; }
+        manifest="$(_app_rt_abs_file "$manifest")"
+    fi
+    _app_rt_post /cli/app/build "$(_compute_json K2_CJ_folder="$(_app_rt_abs "$folder")" K2_CJ_types_b="$types" K2_CJ_diskOverride="$dov" K2_CJ_manifest="$manifest")"
     if [ "$_CP_STATUS" = "422" ]; then
         if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; else printf '%s' "$_CP_BODY" | _app_rt_report >&2; fi
         exit 1
@@ -9371,11 +9406,13 @@ else:
 
 # k2 app deploy <app-id> <folder|seed> [--reason TEXT] [--no-wait] [--types] [--json]
 cmd_app_deploy() {
-    local app="" target="" reason="" wait=150 types=0 json_out=0 engine="" dov=""
+    local app="" target="" reason="" wait=150 types=0 json_out=0 engine="" dov="" manifest=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --disk-override) dov="${2:-}"; shift 2 ;;
             --disk-override=*) dov="${1#--disk-override=}"; shift ;;
+            --manifest) manifest="${2:-}"; shift 2 ;;
+            --manifest=*) manifest="${1#--manifest=}"; shift ;;
             --engine) engine="${2:-}"; shift 2 ;;
             --engine=*) engine="${1#--engine=}"; shift ;;
             --reason) reason="${2:-}"; shift 2 ;;
@@ -9387,11 +9424,16 @@ cmd_app_deploy() {
             *) if [ -z "$app" ]; then app="$1"; else target="$1"; fi; shift ;;
         esac
     done
-    { [ -z "$app" ] || [ -z "$target" ]; } && { echo "usage: k2 app deploy <app-id> <folder|seed> [--engine guarded|process] [--reason TEXT] [--no-wait] [--disk-override REASON]" >&2; exit 2; }
+    { [ -z "$app" ] || [ -z "$target" ]; } && { echo "usage: k2 app deploy <app-id> <folder|seed> [--manifest <file>] [--engine guarded|process] [--reason TEXT] [--no-wait] [--disk-override REASON]" >&2; exit 2; }
     case "$engine" in ""|guarded|process) ;; *) echo "--engine is guarded or process" >&2; exit 2 ;; esac
+    if [ -n "$manifest" ]; then
+        [ -d "$target" ] || { echo "k2 app deploy: --manifest goes with a folder (a stored Seed already has its manifest)" >&2; exit 2; }
+        [ -f "$manifest" ] || { echo "k2 app deploy: --manifest $manifest is not a file" >&2; exit 2; }
+        manifest="$(_app_rt_abs_file "$manifest")"
+    fi
     local body
     if [ -d "$target" ]; then
-        body="$(_compute_json K2_CJ_app="$app" K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_types_b="$types" K2_CJ_engine="$engine" K2_CJ_diskOverride="$dov")"
+        body="$(_compute_json K2_CJ_app="$app" K2_CJ_folder="$(_app_rt_abs "$target")" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_types_b="$types" K2_CJ_engine="$engine" K2_CJ_diskOverride="$dov" K2_CJ_manifest="$manifest")"
     else
         body="$(_compute_json K2_CJ_app="$app" K2_CJ_seed="$target" K2_CJ_reason="$reason" K2_CJ_wait_n="$wait" K2_CJ_engine="$engine" K2_CJ_diskOverride="$dov")"
     fi

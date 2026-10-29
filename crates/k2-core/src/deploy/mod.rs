@@ -218,6 +218,9 @@ pub mod codes {
     pub const SEED_CORRUPT: &str = "seed_corrupt";
     pub const SEED_INVALID: &str = "seed_invalid";
     pub const MANIFEST_INVALID: &str = "manifest_invalid";
+    /// 0.46.7 (TC-3): `--manifest <file>` given, and the folder has its own
+    /// `manifest.json` that differs.
+    pub const MANIFEST_CONFLICT: &str = "manifest_conflict";
     pub const FOLDER_OUTSIDE_WORKSPACE: &str = "folder_outside_workspace";
     pub const OWNER_ONLY: &str = "owner_only";
     pub const APPS_MANAGE_OFF: &str = "apps_manage_off";

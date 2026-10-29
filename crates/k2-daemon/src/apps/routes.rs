@@ -528,7 +528,7 @@ fn build(who: &Who, body: &[u8]) -> R<J> {
         super::resources::Gate::Go(x) => x,
         super::resources::Gate::Held(h) => return Ok(h),
     };
-    let (built, wall) = build_seed(who, &folder, &v, super::wall_build::BUILD_SLOT, false)?;
+    let (built, wall) = build_seed_with_manifest(who, &folder, &v, super::wall_build::BUILD_SLOT, false)?;
     let size = seed_size(&built.seed.hash);
     let mut out = json!({ "ok": true, "seed": built.seed, "reused": built.reused, "entries": built.entries, "build": wall, "seedSize": size });
     super::resources::decorate(&mut out, extra);
@@ -545,6 +545,102 @@ fn folder_ws(who: &Who, folder: &Path) -> String {
         .and_then(|p| ws_by_token(&p))
         .map(|w| w.id)
         .unwrap_or_default()
+}
+
+/// Largest `--manifest` file read.
+const MANIFEST_FILE_CAP: u64 = 256 * 1024;
+
+/// A folder staged with an outside manifest (removed on drop).
+pub(crate) struct Staged(PathBuf);
+
+impl Staged {
+    pub(crate) fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Staged {
+    fn drop(&mut self) {
+        deploy::seed::unstage(&self.0);
+    }
+}
+
+/// TC-3 (0.46.7): `manifest` in the body is a file in the caller's
+/// workspace (the folder's jail) packed into `folder`'s Seed as its
+/// `manifest.json` (TA-7: in the staged copy, so the Seed hash covers it).
+/// A folder whose own `manifest.json` differs is refused
+/// (`manifest_conflict`). `None` without `manifest`.
+fn stage_manifest(who: &Who, folder: &Path, v: &J) -> R<Option<Staged>> {
+    let Some(raw) = s(v, "manifest") else { return Ok(None) };
+    let file = resolve_folder(who, raw)?;
+    let meta = std::fs::metadata(&file).map_err(|e| no(codes::BAD_REQUEST, 400, format!("--manifest {}: {e}", file.display())))?;
+    if !meta.is_file() || meta.len() > MANIFEST_FILE_CAP {
+        return Err(no(codes::BAD_REQUEST, 400, format!("--manifest {}: a manifest file up to 256 KiB", file.display())));
+    }
+    let text = std::fs::read_to_string(&file).map_err(|e| no(codes::BAD_REQUEST, 400, format!("--manifest {}: {e}", file.display())))?;
+    let m = deploy::manifest::parse(&text).map_err(|e| {
+        let at = format!("{}:{}:{}", file.display(), e.line, e.column);
+        let mut r = no(codes::MANIFEST_INVALID, 422, format!("--manifest {at}: {}", e.message));
+        // The validate report's shape, so the CLI prints the line.
+        r.extra = Some(json!({ "report": {
+            "ok": false,
+            "errors": [{ "code": codes::MANIFEST_INVALID, "message": e.message, "at": at }],
+            "warnings": [],
+            "checks": ["manifest"],
+        }}));
+        r
+    })?;
+    let own = folder.join(deploy::manifest::MANIFEST_FILE);
+    if own.is_file() {
+        let same = std::fs::read_to_string(&own)
+            .ok()
+            .and_then(|t| serde_json::from_str::<J>(&t).ok())
+            .zip(serde_json::from_str::<J>(&text).ok())
+            .is_some_and(|(a, b)| a == b);
+        if !same {
+            return Err(no(
+                codes::MANIFEST_CONFLICT,
+                409,
+                format!(
+                    "{} has its own manifest.json that differs from --manifest {}: K2 reads manifest.json at the Seed's top as the App's \
+                     manifest. Remove or rename the folder's copy (a web app manifest belongs in manifest.webmanifest), or deploy without --manifest",
+                    folder.display(),
+                    file.display()
+                ),
+            ));
+        }
+    }
+    let staged = deploy::seed::stage_with_manifest(folder, &deploy::seed::build_excludes(&m.exclude), &text).map_err(|e| no(e.code, 422, e.message))?;
+    Ok(Some(Staged(staged)))
+}
+
+/// A Seed built from a staged copy records the original folder's commit.
+fn keep_source_ref(built: &mut deploy::build::Built, folder: &Path) {
+    if built.seed.source_ref.is_some() {
+        return;
+    }
+    let Some(head) = deploy::build::git_head(folder) else { return };
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if conn
+        .execute("UPDATE seeds SET source_ref = COALESCE(source_ref, ?2) WHERE hash = ?1", rusqlite::params![built.seed.hash, head])
+        .is_ok()
+    {
+        built.seed.source_ref = Some(head);
+    }
+}
+
+/// [`build_seed`] for `folder`, packed with the body's `manifest` when it
+/// names one (TC-3).
+fn build_seed_with_manifest(who: &Who, folder: &Path, v: &J, slot: &str, scripts: bool) -> R<(deploy::build::Built, J)> {
+    match stage_manifest(who, folder, v)? {
+        None => build_seed(who, folder, v, slot, scripts),
+        Some(staged) => {
+            let (mut b, wall) = build_seed(who, staged.path(), v, slot, scripts)?;
+            keep_source_ref(&mut b, folder);
+            Ok((b, wall))
+        }
+    }
 }
 
 /// The Seed for a folder: built in the wall when the manifest declares a
@@ -582,8 +678,13 @@ fn validate(who: &Who, body: &[u8]) -> R<J> {
     need_credential(who)?;
     let v = json_body(body)?;
     let opts = validate_opts(&v);
+    // TC-3: `manifest` with a folder validates the folder as it would be
+    // packed (the staged copy, removed when this returns).
+    let mut _staged: Option<Staged> = None;
     let (root, hash) = if let Some(f) = s(&v, "folder") {
-        (resolve_folder(who, f)?, None)
+        let folder = resolve_folder(who, f)?;
+        _staged = stage_manifest(who, &folder, &v)?;
+        (_staged.as_ref().map(|st| st.path().to_path_buf()).unwrap_or(folder), None)
     } else if let Some(t) = s(&v, "seed") {
         let row = {
             let db = k2_core::db::shared();
@@ -953,7 +1054,7 @@ fn seed_for_deploy(who: &Who, app: &AppRow, v: &J) -> R<String> {
         let folder = resolve_folder(who, f)?;
         let scripts = app.path == "open";
         let slot = if k2_root_proto::apps::AppId::parse(&app.app_id).is_some() { app.app_id.as_str() } else { super::wall_build::BUILD_SLOT };
-        return build_seed(who, &folder, v, slot, scripts).map(|(b, _)| b.seed.hash).map_err(|r| {
+        return build_seed_with_manifest(who, &folder, v, slot, scripts).map(|(b, _)| b.seed.hash).map_err(|r| {
             // The failure history, and the App's agent hears (0.46.3).
             let extra = r.extra.as_ref();
             super::failures::build_failed(&super::failures::BuildFail {

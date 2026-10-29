@@ -184,6 +184,33 @@ fn code_of(r: &admin::AdminResult) -> &str {
     r.code.as_deref().unwrap_or("")
 }
 
+/// CE-24: `packages.allow` is operate at `policy` (a controller signature,
+/// no owner approval); one validated name lands on the approved list
+/// (Linux); a Mac refuses it with its own code; `off` refuses it.
+#[test]
+fn packages_allow_adds_one_name_on_linux() {
+    let r = Rig::new("policy");
+    let res = r.run(&r.sign(&r.cmd("packages.allow", json!({"package": "pkg-config"}))));
+    let file = r.exec.paths.config_dir.join("k2-node-packages.toml");
+    if cfg!(target_os = "linux") {
+        assert_eq!(res.state, "done", "{res:?}");
+        assert_eq!(crate::packages::read_approved(&file).unwrap(), vec!["pkg-config"]);
+        let again = r.run(&r.sign(&r.cmd("packages.allow", json!({"package": "libssl-dev"}))));
+        assert_eq!(again.state, "done", "{again:?}");
+        assert_eq!(crate::packages::read_approved(&file).unwrap(), vec!["libssl-dev", "pkg-config"]);
+    } else {
+        assert_eq!(code_of(&res), k2_node_proto::admin::PACKAGES_LINUX_ONLY, "{res:?}");
+        assert!(!file.exists());
+    }
+    for bad in [json!({"package": "-y"}), json!({"package": "a b"}), json!({"package": "x", "more": 1}), json!({})] {
+        let res = r.run(&r.sign(&r.cmd("packages.allow", bad.clone())));
+        assert_eq!(code_of(&res), code::BAD_ARGS, "{bad}: {res:?}");
+    }
+    let off = Rig::new("off");
+    let res = off.run(&off.sign(&off.cmd("packages.allow", json!({"package": "pkg-config"}))));
+    assert_eq!(code_of(&res), code::REMOTE_ADMIN_OFF, "{res:?}");
+}
+
 #[test]
 fn signed_operate_command_runs_and_is_audited_twice() {
     let r = Rig::new("policy");

@@ -723,6 +723,7 @@ impl Executor {
                 Ok(json!({"restarted": unit}))
             }
             "homes.private" => self.homes_private(args),
+            k2_node_proto::admin::VERB_PACKAGES_ALLOW => self.packages_allow(args),
             "wall.enable" => self.wall_enable(args, &c.opened.cmd.cmd_id, c.class == Class::Privileged && c.approval_key.is_some()),
             "policy.set" => super::policy::apply_set(&self.paths.layout(), args),
             "policy.narrow" => super::policy::apply_narrow(&self.paths.config_dir, args),
@@ -747,6 +748,32 @@ impl Executor {
             }
             _ => Err(AdminRefusal::new(code::VERB_NOT_ALLOWED, "verb is not built on this node yet")),
         }
+    }
+
+    /// CE-24 `packages.allow {package}`: one validated name onto the
+    /// machine owner's approved list (root's file); the job's next run
+    /// installs it as today. The executor of a real node edits
+    /// `/etc/k2-node-packages.toml`; a scratch one (another config dir)
+    /// its own file beside it.
+    fn packages_allow(&self, args: &Value) -> Result<Value, AdminRefusal> {
+        only_keys(args, &["package"])?;
+        let p = str_arg(args, "package")?;
+        if !k2_node_proto::needs::valid_package(&p) {
+            return Err(AdminRefusal::new(code::BAD_ARGS, "package must be a plain package name (a-z 0-9 . _ + -)"));
+        }
+        if !cfg!(target_os = "linux") {
+            return Err(AdminRefusal::new(
+                k2_node_proto::admin::PACKAGES_LINUX_ONLY,
+                "macOS nodes don't install system packages; at the Mac: brew install <name>",
+            ));
+        }
+        let (file, root_checks) = if self.paths.config_dir == Path::new("/etc/k2-node") {
+            (PathBuf::from(crate::packages::APPROVED_FILE), true)
+        } else {
+            (self.paths.config_dir.join("k2-node-packages.toml"), false)
+        };
+        let list = crate::packages::edit_approved(&file, std::slice::from_ref(&p), true, root_checks).map_err(|e| AdminRefusal::new(code::FAILED, e))?;
+        Ok(json!({"package": p, "approved": list}))
     }
 
     fn level_lower(&self, _c: &Checked, args: &Value) -> Result<Value, AdminRefusal> {

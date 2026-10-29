@@ -426,13 +426,22 @@ pub fn cmd_edit(names: &[String], allow: bool) -> Result<Vec<String>, String> {
     if !is_root() {
         return Err(format!("run as root: sudo k2-node packages {} …", if allow { "allow" } else { "disallow" }));
     }
+    edit_approved(Path::new(APPROVED_FILE), names, allow, true)
+}
+
+/// Add or remove names on an approved list, atomically. `root_checks`:
+/// the file and its folder must be root's and writable only by root (the
+/// real list; off only for a test executor's own file).
+pub fn edit_approved(path: &Path, names: &[String], allow: bool, root_checks: bool) -> Result<Vec<String>, String> {
     for n in names {
         if !valid_package(n) {
             return Err(format!("{n:?} isn't a package name"));
         }
     }
-    let path = PathBuf::from(APPROVED_FILE);
-    trusted_owner_only(&path)?;
+    let path = path.to_path_buf();
+    if root_checks {
+        trusted_owner_only(&path)?;
+    }
     let mut list = read_approved(&path)?;
     if allow {
         for n in names {

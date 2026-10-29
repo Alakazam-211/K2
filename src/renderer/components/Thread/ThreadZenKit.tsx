@@ -20,8 +20,9 @@ import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
 import { HandoffCard } from '@/components/SessionView/HandoffCard'
+import { ChangesCard } from '@/components/SessionView/ChangesCard'
 import type { HandoffDecideBody, HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
-import { coerceHandoff, sameThreadItem, type OverlayStashOffer, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
+import { coerceChanges, coerceHandoff, sameThreadItem, type OverlayStashOffer, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
@@ -310,6 +311,8 @@ export function threadBubbleText(item: OverlayThreadItem): string {
   // A stash offer from an agent draws its own card; `body` is the fallback
   // for old clients, and what a person's (refused) offer shows.
   if (d.kind === 'stash.offer') return threadStashOffer(item) ? '' : d.body || ''
+  // A changes card (workbench-v1 B7) draws itself; `body` is for old renderers.
+  if (d.kind === 'changes') return coerceChanges(d.changes) ? '' : d.body || ''
   return d.body || ''
 }
 
@@ -430,6 +433,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   // A handoff doc as it arrived (a live frame, another server's row) is
   // coerced here like a snapshot row: no `hosts` must never crash a bubble.
   const handoff = useMemo(() => (kind === 'handoff' ? coerceHandoff(item.doc.handoff) : null), [kind, item.doc.handoff])
+  const changes = useMemo(() => (kind === 'changes' ? coerceChanges(item.doc.changes) : null), [kind, item.doc.changes])
   const text = threadBubbleText(item)
   const files = item.doc.attachments ?? []
   // A post that is only files (`k2 thread <addr> --file …`) has no bubble.
@@ -534,6 +538,7 @@ export const ThreadBubble = memo(function ThreadBubble({
         {offer && (
           <StashOfferCard docId={item.id} offer={offer} scope={source?.scope ?? null} agent={item.doc.from || null} agentName={author} />
         )}
+        {changes && <ChangesCard changes={changes} />}
         {handoff && (
           <div style={{ marginTop: 6 }}>
             <HandoffCard

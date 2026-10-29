@@ -30,7 +30,8 @@
 //   - a Thread turn (`thread.onActivity`, 0.46.5): `{address, turn, live,
 //     source, fresh}`, where `turn` is the App guest's turn, key for key.
 
-import type { OverlayChoice, OverlayThreadItem, ThreadFileObject, ThreadTurn } from '@/components/SessionView/overlayThread'
+import type { OverlayChoice, OverlayThreadItem, ThreadChangesDoc, ThreadFileObject, ThreadTurn } from '@/components/SessionView/overlayThread'
+import { coerceChanges } from '@/components/SessionView/overlayThread'
 import type { UserWidgetCap } from '../k2-caps.generated'
 import { agentLookColor, agentLookImage } from '../agent-look'
 import type { ZenAgentRow, ZenPerson, ZenPreview, ZenThreadView } from './zen-data'
@@ -210,7 +211,7 @@ export interface ZenWidgetThreadItem {
   doc:
     | {
         id: string
-        kind: 'text' | 'choice'
+        kind: 'text' | 'choice' | 'changes'
         from: string
         to: string | null
         created_at?: number
@@ -221,6 +222,9 @@ export interface ZenWidgetThreadItem {
         /** thread-context-v1: the Board context that rode the person's post
          *  (a widget's line, never theirs). Absent on every other item. */
         context?: ZenWidgetThreadContext
+        /** workbench-v1 B7: K2's changed-files card (kind `changes`, from
+         *  `k2`), read from git. Absent on every other item. */
+        changes?: ThreadChangesDoc
       }
     | { id: string; kind: 'secret' }
 }
@@ -271,8 +275,10 @@ function projectAnswerer(raw: unknown): ZenWidgetCardAnswerer | null {
 export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadItem | null {
   const d = item.doc
   if (d.kind === 'secret') return { seq: item.seq, id: item.id, doc: { id: d.id, kind: 'secret' } }
-  if (d.kind !== 'text' && d.kind !== 'choice') return null
+  if (d.kind !== 'text' && d.kind !== 'choice' && d.kind !== 'changes') return null
   const context = d.kind === 'text' ? projectContext(d.context) : null
+  // Re-read into the closed ThreadChanges shape: never the doc's own object.
+  const changes = d.kind === 'changes' ? coerceChanges(d.changes) : null
   return {
     seq: item.seq,
     id: item.id,
@@ -289,6 +295,7 @@ export function projectZenThreadItem(item: OverlayThreadItem): ZenWidgetThreadIt
         ? { attachments: d.attachments.map(projectZenThreadFile) }
         : {}),
       ...(context ? { context } : {}),
+      ...(changes ? { changes } : {}),
     },
   }
 }

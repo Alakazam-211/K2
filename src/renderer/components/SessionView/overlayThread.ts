@@ -348,12 +348,76 @@ export interface OverlayDoc {
    *  their own device. Nothing goes back to the daemon. `body` carries the
    *  readable fallback (title, blank line, text). */
   stash?: OverlayStashOffer | null
+  /** Kind `changes` only (workbench-v1 B7, 0.46.7): K2's changed-files card
+   *  for one agent turn, read from git at the turn's start and end (never
+   *  the transcript). `body` is the plain line for older renderers. */
+  changes?: ThreadChangesDoc | null
 }
 
 /** `doc.stash` on a `stash.offer` card. */
 export interface OverlayStashOffer {
   text: string
   title?: string
+}
+
+/** One file on a changes card (`k2_core::overlay::doc::ThreadChangedFile`). */
+export interface ThreadChangedFileDoc {
+  /** Relative to the agent's worktree. */
+  file: string
+  oldFile: string | null
+  /** added | modified | deleted | renamed | untracked */
+  status: string
+  additions: number | null
+  deletions: number | null
+}
+
+/** A doc's `changes` (the catalog's ThreadChanges). */
+export interface ThreadChangesDoc {
+  files: ThreadChangedFileDoc[]
+  total: number
+  additions: number
+  deletions: number
+  commits: number
+  from: string | null
+  to: string | null
+  branch: string | null
+  truncated: boolean
+}
+
+const intOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : null)
+const strOrNull = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
+
+/** A `changes` doc as it arrived (a live frame, another server's row),
+ *  read into the closed shape; null when it isn't one. Never throws. */
+export function coerceChanges(raw: unknown): ThreadChangesDoc | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const c = raw as Record<string, unknown>
+  if (!Array.isArray(c.files)) return null
+  const files: ThreadChangedFileDoc[] = []
+  for (const f of c.files) {
+    if (!f || typeof f !== 'object') continue
+    const r = f as Record<string, unknown>
+    if (typeof r.file !== 'string' || !r.file) continue
+    files.push({
+      file: r.file,
+      oldFile: strOrNull(r.oldFile),
+      status: typeof r.status === 'string' && r.status ? r.status : 'modified',
+      additions: intOrNull(r.additions),
+      deletions: intOrNull(r.deletions),
+    })
+  }
+  const total = intOrNull(c.total) ?? files.length
+  return {
+    files,
+    total,
+    additions: intOrNull(c.additions) ?? 0,
+    deletions: intOrNull(c.deletions) ?? 0,
+    commits: intOrNull(c.commits) ?? 0,
+    from: strOrNull(c.from),
+    to: strOrNull(c.to),
+    branch: strOrNull(c.branch),
+    truncated: c.truncated === true || total > files.length,
+  }
 }
 
 /** A doc's `context` (`k2_core::overlay::doc::ThreadContext`). */
@@ -1117,6 +1181,8 @@ function coerceItem(row: unknown): OverlayThreadItem | null {
       choice: coerceChoice(d.choice),
       secret: coerceSecret(d.secret),
       ...(d.handoff ? { handoff: coerceHandoff(d.handoff) } : {}),
+      // workbench-v1 B7: K2's changed-files card.
+      ...(d.changes ? { changes: coerceChanges(d.changes) } : {}),
       ...docExtras(d),
     },
   }

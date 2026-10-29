@@ -21980,9 +21980,30 @@ EOF
 
 # _compute_send METHOD PATH [payload] [tcp] → `<body>\n<status>` on stdout.
 # GET payload = urlencoded query; POST payload = JSON body.
+# Is this shell inside a K2 terminal (a k2-ptyd or k2-daemon ancestor)?
+# CE-9: an agent there whose K2_* passport vars went missing falls back to
+# the owner token silently; the submit says so (a warning, never a refusal).
+_compute_in_k2_tree() {
+    local pid="$PPID" i=0 line comm
+    while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null && [ "$i" -lt 40 ]; do
+        line="$(ps -o ppid=,comm= -p "$pid" 2>/dev/null)" || return 1
+        [ -n "$line" ] || return 1
+        comm="${line#"${line%%[![:space:]]*}"}"
+        comm="${comm#*[[:space:]]}"
+        case "$comm" in *k2-ptyd*|*k2-daemon*) return 0 ;; esac
+        pid="$(printf '%s' "$line" | awk '{print $1}')"
+        i=$((i + 1))
+    done
+    return 1
+}
+
 _compute_send() {
     local method="$1" path="$2" payload="${3:-}" force_tcp="${4:-}"
     local sock out="" _K2_CFG=""
+    if [ "$method" = "POST" ] && [ "$path" = "/cli/compute/run" ] && [ -z "${_CP_OWNER_WARNED:-}" ] && ! _compute_in_session && _compute_in_k2_tree; then
+        _CP_OWNER_WARNED=1
+        echo "[k2 compute] no passport in this shell: this job is submitted as the owner (its jobs show via: owner_token). Keep K2_* set in agent shells." >&2
+    fi
     sock="$(_hook_sock)"
     if [ "$force_tcp" != "tcp" ] && [ -n "$sock" ] && [ -S "$sock" ] && ! _cli_skip_uds && [ -n "${SCOPED_TOKEN:-}" ]; then
         _k2_cfg_add header "Authorization: Bearer ${SCOPED_TOKEN}"
@@ -22166,14 +22187,23 @@ def node_line(n):
     free = o.get("free") or {}
     # free CPU = the cap minus what running K2 jobs reserved (not idle CPU);
     # free memory = the smaller of cap minus reserved and what the OS has.
-    res = ("cpu %s/%s unreserved  mem %.1f/%s free  disk %s" % (
-        cores(free.get("cpu_millis")), cores(caps.get("cpu_millis")),
+    # 0.46.7 (CE-8): idle CPU (what the OS sees free) beside unreserved.
+    idle = (" · idle ~%s" % cores(n["idleCpuMillis"])) if n.get("idleCpuMillis") is not None else ""
+    res = ("cpu %s/%s unreserved%s  mem %.1f/%s free  disk %s" % (
+        cores(free.get("cpu_millis")), cores(caps.get("cpu_millis")), idle,
         (free.get("mem_bytes") or 0) / (1 << 30), gb(caps.get("mem_bytes")), gb(free.get("disk_free_bytes")))) if o else "-"
     par = o.get("parallelMax")
-    run = "run %d/%s" % (n.get("running", 0), par if par is not None else "?")
+    # 0.46.7 (CE-7): whose each count is. run/queued = jobs of this server
+    # there (every workspace); yours = this workspace only; node runs = the
+    # count of the node itself (other servers included).
+    mine = n.get("mine") if isinstance(n.get("mine"), dict) else None
+    run = "run %d/%s%s" % (n.get("running", 0), par if par is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else "")
+    queued = "queued %d%s" % (n.get("queued", 0), (" (yours %d)" % mine.get("queued", 0)) if mine else "")
+    nr = n.get("nodeRunning")
+    node_runs = (" · node runs %d" % nr) if nr is not None and nr != n.get("running", 0) else ""
     g = n.get("grant")
     grant = ("  grant %s/job %s parallel %s queued%s" % (dur(g.get("maxJobSecs")), g.get("maxParallel"), g.get("maxQueued"), " ci" if g.get("allowCi") else "")) if isinstance(g, dict) else ""
-    return "%-14s %-16s %-24s %-52s %s  queue %d%s%s  seen %s" % (n["name"], os_arch, status[:24], res, run, n.get("queued", 0), tier_counts(n.get("queueTiers")), grant, ago(n.get("lastSeen")))
+    return "%-14s %-16s %-24s %-64s %s · %s%s%s%s  seen %s" % (n["name"], os_arch, status[:24], res, run, queued, tier_counts(n.get("queueTiers")), node_runs, grant, ago(n.get("lastSeen")))
 def tier_counts(t, bare=False):
     # Tiers (0.46.5): `CI 1 · P 0 · N 3`; nothing when none are queued.
     if not isinstance(t, dict) or not any(t.get(k) for k in ("ci", "priority", "normal", "batch")):
@@ -22259,7 +22289,12 @@ elif verb == "jobs":
     for j in rows:
         # 0.46.1: the full reason (it was cut to 10 characters).
         # Tiers (0.46.5): the TIER column (CI, P, blank for Normal).
-        print("%s  %-2s %-12s %-11s exit %-4s %-22s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", " ".join(j.get("argv") or [])[:60]))
+        # 0.46.7 (CE-9): the --tag of the job and who sent it ("(owner token)"
+        # when the passport of an agent was missing and the owner token went).
+        who = j.get("submitter") or j.get("submittedBy") or "-"
+        if j.get("via") == "owner_token":
+            who += " (owner token)"
+        print("%s  %-2s %-12s %-11s exit %-4s %-22s %-16s %-24s %s" % (j["short"], tier_tag(j.get("tier")), (j.get("node") or "?")[:12], j["state"], "-" if j.get("exitCode") is None else j["exitCode"], j.get("reason") or "", (j.get("tag") or "-")[:16], who[:24], " ".join(j.get("argv") or [])[:60]))
 elif verb == "get":
     j = v
     print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
@@ -22274,8 +22309,12 @@ elif verb == "get":
         print("  why (Priority): %s" % ctl["why"])
     if ctl.get("memDefaulted"):
         print("  memory: the default reservation (no --mem); set --mem next time")
-    if j.get("submitter"):
-        print("  submitter: %s" % j["submitter"])
+    if j.get("tag"):
+        print("  tag: %s" % j["tag"])
+    # 0.46.7 (CE-9): who sent it; the owner token said so.
+    by = j.get("submittedBy")
+    if by or j.get("submitter"):
+        print("  submitted by: %s%s%s" % (by or "-", (" as %s" % j["submitter"]) if j.get("submitter") else "", " (owner token: no passport in that shell)" if j.get("via") == "owner_token" else ""))
     if j.get("supersedeKey"):
         print("  supersede key: %s" % j["supersedeKey"])
     if j.get("secrets"):
@@ -22287,7 +22326,7 @@ elif verb == "get":
         code = pl.get("code") or ""
         how = ("moved: " + code[len("moved_"):]) if code.startswith("moved_") else "auto"
         print("  placed on %s (%s, %s): %s%s" % (pl.get("node"), how, pl.get("policy"), pl.get("why"), (" · " + pl["fits"]) if pl.get("fits") else ""))
-    print("  commit: %s  tree: %s" % (j.get("srcCommit") or "-", j.get("srcTree") or "-"))
+    print("  commit: %s  tree: %s" % (j.get("srcCommit") or j.get("submitCommit") or "-", j.get("srcTree") or "-"))
     print("  exit: %s  signal: %s  attempt %s (generation %s)" % (j.get("exitCode"), j.get("signal"), j.get("attempt"), j.get("generation")))
     if j.get("queue") and j["queue"].get("onNode"):
         # In the queue of a shared node: its place and ETA (0.46.3).
@@ -22313,6 +22352,21 @@ elif verb == "get":
                 a.get("short") or "-", a.get("state"), a.get("workspace") or "(other)",
                 ("%dm%02ds" % (age // 60, age % 60)) if age is not None else "-",
                 a.get("argv") or "", "  (" + a["reason"] + ")" if a.get("reason") else ""))
+    wt = j.get("wait") or {}
+    if wt and not j.get("queue") and wt.get("words"):
+        # 0.46.7 (CE-7): every unfinished job says where it is.
+        print("  %s%s" % (wt["words"], (", ~%s left (%s)" % (dur(wt["etaSecs"]), wt.get("etaBasis"))) if wt.get("etaSecs") is not None else ""))
+    elif wt.get("etaSecs") is not None and j.get("queue") and not j["queue"].get("onNode"):
+        print("  ETA ~%s (estimate from earlier runs)" % dur(wt["etaSecs"]))
+    stl = j.get("stall") or {}
+    if "stallSecs" in stl:
+        # CE-10: the stall watch of a running job.
+        print("  stall watch: %s" % (("ends after %s of silence (--stall-timeout)%s" % (dur(stl["stallSecs"]), "; warned" if stl.get("warned") else "")) if stl.get("stallSecs") else "off"))
+    rl = j.get("reportedLate") or {}
+    if rl.get("secs"):
+        # CE-5: the end time of the node itself; this server heard of it late.
+        hm = lambda t: time.strftime("%H:%M", time.localtime(t)) if t else "?"
+        print("  the node finished at %s; this server heard at %s (%s late: it was asleep, or the node was cut off). Durations use the times of the node." % (hm(rl.get("nodeEndedAt")), hm(rl.get("heardAt")), ("%dh%02dm" % (rl["secs"] // 3600, (rl["secs"] % 3600) // 60)) if rl["secs"] >= 3600 else ("%dm" % (rl["secs"] // 60))))
     if j.get("hint"):
         print("  hint: %s" % j["hint"])
     cb = j.get("cancelledBy")
@@ -22326,6 +22380,20 @@ elif verb == "get":
         print("  artifact: %s  %d bytes  sha256 %s…" % (a["name"], a["bytes"], a["sha256"][:12]))
     if r.get("receipt"):
         print("  receipt: %s (%s)" % (r["receipt"].get("id"), "verified" if r["receipt"].get("verified") else "NOT verified"))
+    tl = r.get("tools") or {}
+    if tl.get("versions"):
+        # CE-4: exact versions (what the job used; node-probe = an older
+        # node-wide probe of an older node, not necessarily what the job used).
+        print("  tools%s: %s" % (" (node-wide probe, older k2-node)" if tl.get("basis") == "node-probe" else "", ", ".join("%s %s" % kv for kv in sorted(tl["versions"].items()))))
+    rs = r.get("resources") or {}
+    if rs:
+        # CE-14: peak memory and CPU time.
+        pk = rs.get("peakMemBytes")
+        print("  resources: peak memory %s, CPU time %s" % ("-" if pk is None else "%.1fG" % (pk / (1 << 30)), "-" if rs.get("cpuSecs") is None else "%ss" % round(rs["cpuSecs"])))
+    eff = r.get("effective")
+    if isinstance(eff, dict) and eff:
+        # CE-3: the effective config (each setting and where it came from).
+        print("  effective: %s" % json.dumps(eff, separators=(",", ":"))[:300])
     for x in r.get("shards") or []:
         t = x.get("tests")
         print("  shard %s/%d: job %s on %s · %s%s%s" % (x["index"], len(r["shards"]), x["short"], x.get("node") or "?", x["state"],
@@ -23487,7 +23555,7 @@ sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))' "$tmp"
 # exit code, 128+signal, or 3 for cancelled/failed/timeout/interrupted/
 # unknown). --max-wait: exit 3 + still_running when D passes first.
 cmd_compute_wait() {
-    local failures=0 quiet=0 max_wait="" as_json=0 follow=0
+    local failures=0 quiet=0 max_wait="" as_json=0 follow=0 any=0
     local -a jobs=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -23496,11 +23564,12 @@ cmd_compute_wait() {
             --json) as_json=1; shift ;;
             --follow|-f) follow=1; shift ;;
             --max-wait) max_wait="${2:-}"; shift 2 ;;
-            -*) echo "usage: k2 compute wait <job>... [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2 ;;
+            --any) any=1; shift ;;
+            -*) echo "usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2 ;;
             *) jobs+=("$1"); shift ;;
         esac
     done
-    [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
+    [ "${#jobs[@]}" -gt 0 ] || { echo "usage: k2 compute wait <job>... [--any] [--follow] [--failures] [--max-wait 9m] [--quiet] [--json]" >&2; exit 2; }
     local deadline=""
     if [ -n "$max_wait" ]; then
         deadline=$(( $(date +%s) + $(_compute_secs "$max_wait") ))
@@ -23514,6 +23583,12 @@ cmd_compute_wait() {
         _CP_DEADLINE="$deadline"
         _CP_FAILURES="$failures"
         _compute_follow "${jobs[0]}" 0 0 0
+    fi
+    # --any (0.46.7, CE-21): return when the FIRST of the jobs ends, with
+    # its exit code (for schedulers); the others keep running.
+    if [ "$any" = "1" ]; then
+        [ "$follow" = "1" ] && { echo "usage: k2 compute wait <job>... --any (not with --follow)" >&2; exit 2; }
+        _compute_wait_any "$deadline" "$quiet" "$as_json" "$failures" "${jobs[@]}"
     fi
     local dir n=0 j
     dir="$(mktemp -d -t k2-compute-wait-XXXXXX)"
@@ -23551,11 +23626,14 @@ cmd_compute_wait() {
 import json, sys
 j = json.load(open(sys.argv[1]))
 q = j.get("queue") or {}
+wt = j.get("wait") or {}
 st = j.get("state") or "?"
 key = "%s|%s|%s" % (st, q.get("position"), q.get("waitReason") or q.get("reason"))
 term = st in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown")
 if st == "queued" and q.get("line"):
     line = "%s %s" % (j.get("short"), q["line"])
+elif st == "queued" and wt.get("words"):
+    line = "%s queued: %s" % (j.get("short"), wt["words"])
 elif st == "queued" and q:
     line = "%s queued on %s: position %s%s (%s)" % (j.get("short"), j.get("node"), q.get("position"),
         (" of %s" % q["of"]) if q.get("of") else "", q.get("reason"))
@@ -23591,6 +23669,10 @@ for j in bodies:
         continue
     a, b = j.get("startedAt") or j.get("assignedAt"), j.get("endedAt")
     took = (" after %dm%02ds" % ((b - a) // 60, (b - a) % 60)) if a and b else ""
+    rl = j.get("reportedLate") or {}
+    if rl.get("secs"):
+        # CE-5: the times of the node itself; this server heard of the end late.
+        took += " (node time; this server heard %dm late)" % (rl["secs"] // 60)
     if st == "done" and j.get("exitCode") is not None:
         code, what = int(j["exitCode"]), "exit %s" % j["exitCode"]
     elif st == "done":
@@ -23624,6 +23706,70 @@ print("RC %d %s" % (rc or 0, " ".join(i for i in failed_ids if i)))' "$dir")"
         done
     fi
     exit "${rc:-3}"
+}
+
+# wait --any (CE-21): one short poll per job per round (wait=1, so the
+# daemon counts each as followed: no duplicate [compute] line), until the
+# first ends. Prints that job's line (JSON: its get body) and exits with
+# its code; --max-wait past: still_running, exit 3.
+_compute_wait_any() {
+    local deadline="$1" quiet="$2" as_json="$3" failures="$4"
+    shift 4
+    local j resp fails=0 last=""
+    while :; do
+        for j in "$@"; do
+            resp="$(_compute_send GET /cli/compute/jobs/get "job=$(urlencode "$j")&wait=1")"
+            _compute_split "$resp"
+            if [ "$_CP_STATUS" = "000" ]; then
+                fails=$((fails + 1))
+                [ "$fails" -eq 1 ] && echo "[k2 compute] lost the K2 server; retrying (the jobs keep running on the nodes)" >&2
+                [ "$fails" -gt 60 ] && { echo '{"error":"lost_contact","hint":"no answer from the K2 server for 10 minutes; the jobs may still be running"}' >&2; exit 3; }
+                sleep 10
+                continue 2
+            fi
+            [ "$_CP_STATUS" = "200" ] || _CP_404_EXIT=4 _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            fails=0
+            local out
+            out="$(printf '%s' "$_CP_BODY" | K2_CP_JSON="$as_json" python3 -c '
+import json, os, sys
+j = json.load(sys.stdin)
+st = j.get("state")
+if st not in ("done", "failed", "cancelled", "timeout", "interrupted", "unknown"):
+    print("RUNNING"); sys.exit(0)
+a, b = j.get("startedAt") or j.get("assignedAt"), j.get("endedAt")
+took = (" after %dm%02ds" % ((b - a) // 60, (b - a) % 60)) if a and b else ""
+if st == "done" and j.get("exitCode") is not None:
+    code, what = int(j["exitCode"]), "exit %s" % j["exitCode"]
+elif st == "done":
+    code, what = 128 + int(j.get("signal") or 0), "killed by signal %s" % j.get("signal")
+else:
+    code, what = 3, st + ((" (%s)" % j["reason"]) if j.get("reason") else "")
+sys.stderr.write("[k2 compute] job %s on %s ended first: %s%s\n" % (j.get("short"), j.get("node"), what, took))
+if os.environ.get("K2_CP_JSON") == "1":
+    print(json.dumps(j))
+print("RC %d %s" % (code, j.get("id") or ""))')"
+            [ "$out" = "RUNNING" ] && continue
+            local tail_line="${out##*$'\n'}"
+            [ "$tail_line" != "$out" ] && printf '%s\n' "${out%$'\n'*}"
+            local rc fid
+            rc="$(printf '%s' "$tail_line" | cut -d' ' -f2)"
+            fid="$(printf '%s' "$tail_line" | cut -d' ' -f3)"
+            local others=()
+            local o
+            for o in "$@"; do [ "$o" = "$j" ] || others+=("$o"); done
+            [ "${#others[@]}" -gt 0 ] && [ "$quiet" = "0" ] && echo "[k2 compute] still running: ${others[*]} (k2 compute wait ${others[*]} --any)" >&2
+            if [ "$failures" = "1" ] && [ "${rc:-0}" != "0" ] && [ -n "$fid" ]; then
+                echo "── failures in ${fid:0:8} (k2 compute logs ${fid:0:8} --failures --tail 60) ──"
+                ( cmd_compute_logs "$fid" --failures --tail 60 ) || true
+            fi
+            exit "${rc:-3}"
+        done
+        if [ -n "$deadline" ] && [ "$(date +%s)" -ge "$deadline" ]; then
+            echo "{\"error\":\"still_running\",\"jobs\":\"$*\",\"hint\":\"none ended yet: k2 compute wait $* --any\"}" >&2
+            exit 3
+        fi
+        [ "$quiet" = "0" ] && [ -z "$last" ] && { echo "[k2 compute] waiting for the first of $# job(s) to end" >&2; last=1; }
+    done
 }
 
 # k2 compute status [--json]: one block per node (state, waits such as a
@@ -23667,11 +23813,17 @@ for n in rows:
         parts.append("held: %s (%s)" % (w.get("code"), w.get("message")))
     if st.get("unavailable"):
         parts.append("unavailable: " + ",".join(st["unavailable"]))
-    parts.append("run %d/%s" % (len(st.get("running") or []), st.get("parallelMax") if st.get("parallelMax") is not None else "?"))
-    parts.append("queue %d" % len(st.get("queued") or []))
+    # 0.46.7 (CE-7): the same counts as `nodes`, and whose they are.
+    mine = n.get("mine") if isinstance(n.get("mine"), dict) else None
+    parts.append("run %d/%s%s" % (len(st.get("running") or []), st.get("parallelMax") if st.get("parallelMax") is not None else "?", (" (yours %d)" % mine.get("running", 0)) if mine else ""))
+    parts.append("queued %d%s" % (len(st.get("queued") or []), (" (yours %d)" % mine.get("queued", 0)) if mine else ""))
+    if n.get("nodeRunning") is not None and n["nodeRunning"] != len(st.get("running") or []):
+        parts.append("node runs %d" % n["nodeRunning"])
     f, c = st.get("free") or {}, st.get("caps") or {}
     if f:
-        parts.append("cpu %s/%s free" % (cores(f.get("cpuMillis")), cores(c.get("cpuMillis"))))
+        # CE-8: unreserved (not reserved by K2 jobs) beside idle.
+        idle = (" · idle ~%s" % cores(st["idleCpuMillis"])) if st.get("idleCpuMillis") is not None else ""
+        parts.append("cpu %s/%s unreserved%s" % (cores(f.get("cpuMillis")), cores(c.get("cpuMillis")), idle))
         parts.append("mem %.1f/%s free" % ((f.get("memBytes") or 0) / (1 << 30), gb(c.get("memBytes"))))
     if st.get("load"):
         parts.append("load " + " ".join("%.1f" % x for x in st["load"]))
@@ -24640,18 +24792,55 @@ cmd_compute() {
             # 0.46.1: a job that already left the queue is stopped only with
             # --force (the CLI sends ifState: queued without it; 409
             # job_started → exit 3). --force goes before or after the id.
-            local cjob="" force=0
+            # 0.46.7 (CE-20): --all-mine cancels this session's jobs that
+            # match (--workspace-all: every job of the workspace); queued
+            # only unless --force.
+            local cjob="" force=0 scope="" ctag="" cstate="" cnode="" cws=""
+            local cusage="usage: k2 compute cancel <job> [--force]  |  k2 compute cancel --all-mine|--workspace-all [--tag T] [--state queued|running|any] [--node N] [--force]"
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --force|-f) force=1; shift ;;
+                    --all-mine) scope="session"; shift ;;
+                    --workspace-all) scope="workspace"; shift ;;
+                    --tag) ctag="${2:-}"; shift 2 ;;
+                    --state) cstate="${2:-}"; shift 2 ;;
+                    --node) cnode="${2:-}"; shift 2 ;;
+                    --workspace) cws="${2:-}"; shift 2 ;;
                     --json) shift ;;
-                    -*) echo "usage: k2 compute cancel <job> [--force] (unknown flag '$1')" >&2; exit 2 ;;
+                    -*) echo "$cusage (unknown flag '$1')" >&2; exit 2 ;;
                     *)
-                        [ -z "$cjob" ] || { echo "usage: k2 compute cancel <job> [--force] (one job)" >&2; exit 2; }
+                        [ -z "$cjob" ] || { echo "$cusage (one job)" >&2; exit 2; }
                         cjob="$1"; shift ;;
                 esac
             done
-            [ -n "$cjob" ] || { echo "usage: k2 compute cancel <job> [--force]" >&2; exit 2; }
+            if [ -n "$scope" ]; then
+                [ -z "$cjob" ] || { echo "$cusage (a job id or --all-mine, not both)" >&2; exit 2; }
+                case "${cstate:-queued}" in queued|running|any) ;; *) echo "$cusage (--state is queued, running or any)" >&2; exit 2 ;; esac
+                if [ "${cstate:-queued}" != "queued" ] && [ "$force" != "1" ]; then
+                    echo "[k2 compute] --state ${cstate} stops started jobs only with --force; without it they are listed as skipped" >&2
+                fi
+                local filt
+                filt="$(K2_CF_SCOPE="$scope" K2_CF_TAG="$ctag" K2_CF_STATE="$cstate" K2_CF_NODE="$cnode" K2_CF_WS="$(_compute_ws "$cws")" python3 -c '
+import json, os
+f = {"scope": os.environ["K2_CF_SCOPE"]}
+for k, e in (("tag", "K2_CF_TAG"), ("state", "K2_CF_STATE"), ("node", "K2_CF_NODE"), ("workspace", "K2_CF_WS")):
+    if os.environ.get(e):
+        f[k] = os.environ[e]
+print(json.dumps(f))')"
+                local fb=0
+                [ "$force" = "1" ] && fb=1
+                _compute_call POST /cli/compute/jobs/cancel "$(_compute_json K2_CJ_filter_j="$filt" K2_CJ_force_b="$fb")"
+                [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+                printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+c = v.get("cancelled") or []
+print("cancelled %d of %d matching job(s)%s" % (len(c), v.get("matched", 0), (": " + " ".join(x["job"] for x in c)) if c else ""))
+for s in v.get("skipped") or []:
+    print("  skipped %s: %s (%s)" % (s.get("job"), s.get("code"), s.get("hint")))'
+                exit 0
+            fi
+            [ -n "$cjob" ] || { echo "$cusage" >&2; exit 2; }
             local if_state="queued"
             [ "$force" = "1" ] && if_state=""
             _compute_call POST /cli/compute/jobs/cancel "$(_compute_json K2_CJ_job="$cjob" K2_CJ_ifState="$if_state")"

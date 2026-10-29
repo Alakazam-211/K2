@@ -48518,23 +48518,13 @@ IN THE PHONE APP (the guest's own session pass, Authorization: Bearer)
     k2Topic and k2Who (match it to register's who to tell accounts apart).
   6 Sensitive content: send a short line and an id; fetch the rest on open.
 
-THROUGH THE APP'S SERVER (the usual way; the phone talks only to it)
-  The phone sends its token to your App's server; the server calls K2 on
-  its link with that person's own pass:
-    await k2.asGuest(pass).push.register({deviceId, platform, pushToken})
-  Another App's pass is refused on this App's link (pass_wrong_link).
-  While the person has a Thread (their chat with an agent) on screen, the
-  server says so every 30 s; conversation is the Thread's id from thread.*:
-    await k2.asGuest(pass).push.viewing({conversation, visible: true})
-  Each call holds that Thread's agent-reply pushes for 90 s from the call
-  (a missed repeat or two is fine); visible: false when they leave it ends
-  it at once. Only that person's own state changes.
-  A guest's own Thread socket can send {"t":"viewing","visible":true}.
-
-A TAURI APP
-  Tauri has no push plugin of its own: add a native one that hands you the
-  APNs or FCM token, send it to your App's server, and register from there
-  as above. Signing and the update feed: k2 study tauri.
+VIA THE APP'S SERVER (phone → your server → K2, with the person's own pass)
+  await k2.asGuest(pass).push.register({deviceId, platform, pushToken})
+  While they read a Thread, every 30 s (conversation: its id from thread.*):
+  await k2.asGuest(pass).push.viewing({conversation, visible: true})
+  Each call quiets that Thread's agent-reply pushes for 90 s; visible: false
+  ends it. A guest's own Thread socket can send {"t":"viewing","visible":true}.
+  Tauri has no push plugin: a native one hands you the APNs or FCM token.
 
 FROM THE APP
   On its link (push:send):  await k2.push.send({to: {guest}, title, body,
@@ -48560,8 +48550,7 @@ REFUSALS
   channel_unavailable (k2-companion isn't ready)  too_many_recipients
   outside_app_rooms  rate_limited (retryAfterMs)  too_large (4,096 bytes)
   airgap  vault_closed  app_pass_required / cap_not_granted (push.send)
-  skin_room (push.viewing: not a Thread this pass reads)
-  Any id: k2 explain <id>.
+  skin_room / pass_wrong_link (push.viewing, register)  Any id: k2 explain <id>
 
 WHEN APPLE OR GOOGLE SAY NO
   A gone token removes that device. A token "from another app" before the

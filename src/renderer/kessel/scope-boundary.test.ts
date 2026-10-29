@@ -77,6 +77,7 @@ const RAW_TRANSPORT_ALLOWLIST: Record<string, string> = {
   'lib/app-update-driver.ts': 'local app-update driver',
   // Not daemon calls.
   'components/Settings/lib/k2-account.ts': 'Supabase account API, not a daemon',
+  'components/Settings/lib/account-db-daemon.ts': 'raw /cli/tunnel/config fetch via getLocalDaemonWs() (the account session is this machine\'s, like the Tunnel panel)',
   // 0.45.4 compute: the K2 account's enroll-ticket endpoint (k2.dev), not a daemon.
   'components/Settings/lib/compute-account.ts': 'K2 account enroll-ticket API, not a daemon',
   'components/Settings/CustomThemeCreator.tsx': 'example code inside a prompt string',

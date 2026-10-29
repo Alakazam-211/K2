@@ -294,7 +294,7 @@ impl Executor {
         crate::wall::open_root_owned_dir(&above).map_err(|e| refuse(code::NOT_CONFIGURED, e))?;
         if cfg!(target_os = "macos") {
             if entry.trust == Trust::Team {
-                return Err(refuse(codes::TEAM_NEEDS_TENANT_WALL, "Macs take only your own servers (per-tenant users aren't built for macOS yet)"));
+                return Err(refuse(codes::TEAM_NEEDS_TENANT_WALL, "a Mac node runs jobs only for servers you own (--trust own); per-tenant users for other people's servers aren't built for macOS yet, so use a Linux node for this server"));
             }
             if !crate::wall::seatbelt_available() {
                 return Err(refuse(codes::TENANT_NEEDS_JOB_WALL, "sandbox-exec is missing: no Seatbelt wall"));

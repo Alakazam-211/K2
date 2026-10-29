@@ -508,7 +508,7 @@ pub fn add(ctx: &Ctx, a: &AddArgs) -> Result<Value, AdminRefusal> {
     if a.trust == Trust::Team && ctx.macos && !ctx.tenant_wall {
         return Err(refuse(
             codes::TEAM_NEEDS_TENANT_WALL,
-            "other people's servers need per-tenant users, which aren't built for macOS nodes yet; add your own servers with --trust own",
+            "a Mac node can't keep other people's servers apart yet (per-tenant users aren't built for macOS); add only servers you own here (--trust own), and use a Linux node for team servers",
         ));
     }
     if a.trust == Trust::Team {

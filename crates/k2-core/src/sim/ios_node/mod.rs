@@ -234,7 +234,7 @@ fn progress(workspace_id: &str, step: &str) {
 
 /// The teaching line when no Mac node offers iPhones to this server.
 pub fn no_mac_node_line() -> String {
-    "No Mac can run an iPhone for this server yet. Add a Mac mini as a compute node (on this server: `k2 compute node add <name>`; on the Mac: install the node, Xcode and an iOS runtime, then `sudo k2-node setup --sim`). Steps: `k2 study sim`.".into()
+    "No Mac can run an iPhone for this server yet. The server's owner adds one (a Mac mini is fine) as a compute node: on this server, `k2 compute node add <name>` prints an enroll code (setting up the Mac: `k2 study compute`, ADDING A MACHINE); then, on the Mac, the owner installs Xcode and an iOS runtime and runs `sudo k2-node setup --sim`.".into()
 }
 
 /// The profile id a person sees: `<node>:<device type id>`.
@@ -254,7 +254,7 @@ fn outdated_line(n: &NodeInfo) -> String {
     } else {
         // IR-13: remote admin is off on that node, so the update command
         // would fail; say what works.
-        format!("Update k2-node on {0}. On {0}: `sudo k2-node setup …` with the new build, or let its owner allow remote updates (`sudo k2-node admin level policy`).", n.name)
+        format!("Update k2-node on {0}. Remote updates are off there, so the Mac's owner either copies the new k2-node build to {0} and runs `sudo k2-node setup` on it, or turns remote updates on at {0} (`sudo k2-node admin level policy`, which sets remote admin to policy) so this server's owner can run `k2 compute node update {0}`.", n.name)
     }
 }
 
@@ -635,7 +635,7 @@ pub fn url_guard(url: &str, node: &str) -> Result<(), LaneError> {
     if local {
         return Err(LaneError::node(
             NodeReason::UrlUnreachable,
-            format!("The iPhone runs on {node}, which can't reach this server's localhost or LAN. Open the App's public URL (`k2 app inspect <app>` prints it), or publish it first."),
+            format!("The iPhone runs on {node}, which can't reach this server's localhost or LAN. Open the App's public URL (the url line of `k2 app inspect <app-id>`). If that says local only, the App has no public URL yet: publish it first (`k2 publish --help`)."),
         ));
     }
     Ok(())

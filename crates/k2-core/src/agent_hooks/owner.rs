@@ -389,6 +389,13 @@ fn check_conversation(
         if sender.session_id.is_some() && sender.session_id == state.conversation_id.as_deref() {
             return CheckOutcome::new(Verdict::Owner);
         }
+        // A program that names no conversation (a custom preset's
+        // `k2 hooks emit`) claimed with none: its later emits on the same
+        // session passport, naming none either, are that owner. A sender
+        // that names a conversation (a nested `claude -p`) still must match.
+        if state.conversation_id.is_none() && sender.session_id.is_none() && sender.agent_id.is_none() {
+            return CheckOutcome::new(Verdict::Owner);
+        }
         // A `/clear` or resume moves the owner to a new conversation; a
         // nested `claude -p` starts with `source: startup`, never these.
         if sender.agent_id.is_none() && sender.is_conversation_switch() {
@@ -759,6 +766,31 @@ mod tests {
         let nested = sender(0, "SessionStart", Some("conv-n"));
         assert_eq!(
             check(&mut st, Some(&facts), &nested, &procs, c, 4).verdict,
+            Verdict::Foreign(ForeignReason::ConversationMismatch)
+        );
+    }
+
+    /// Conversation mode: a program that names no conversation (a custom
+    /// preset's `k2 hooks emit`) keeps owning its pane on later emits; a
+    /// sender that names one, or a subagent, is still foreign.
+    #[test]
+    fn conversation_mode_keeps_an_owner_that_names_no_conversation() {
+        let procs = FakeProcs::default();
+        let mut st = PaneOwner::default();
+        let facts = PaneFacts { child_pid: None, known_conversation_id: None };
+        let c = OwnerCheckMode::Conversation;
+        let out = check(&mut st, Some(&facts), &sender(0, "SessionStart", None), &procs, c, 1);
+        assert!(out.claimed_now);
+        assert_eq!(st.conversation_id, None);
+        assert_eq!(check(&mut st, Some(&facts), &sender(0, "UserPromptSubmit", None), &procs, c, 2).verdict, Verdict::Owner);
+        assert_eq!(
+            check(&mut st, Some(&facts), &sender(0, "UserPromptSubmit", Some("conv-n")), &procs, c, 3).verdict,
+            Verdict::Foreign(ForeignReason::ConversationMismatch)
+        );
+        let mut sub = sender(0, "PostToolUse", None);
+        sub.agent_id = Some("sub-1");
+        assert_eq!(
+            check(&mut st, Some(&facts), &sub, &procs, c, 4).verdict,
             Verdict::Foreign(ForeignReason::ConversationMismatch)
         );
     }

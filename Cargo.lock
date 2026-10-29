@@ -4259,6 +4259,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
+ "toml 0.8.2",
  "url",
  "uuid",
  "vte",

@@ -660,6 +660,21 @@ pub struct JobCtl {
     /// CP-A10): written at submit, rewritten by a move. Controller-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<Placement>,
+    /// The run's effective settings and where each came from (`flag`,
+    /// `preset`, `defaults`): `.k2/compute.toml` and `--preset`
+    /// (prd-compute-easy-mode-0467 CE-3), plus the CPU hints K2 added
+    /// (CE-15). Env names only, never a value. Controller-only; `get
+    /// --json` shows it as `result.effective`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective: Option<serde_json::Value>,
+    /// `--tag NAME` (CE-9, D2): the job's own label (≤ 64 of
+    /// `A-Za-z0-9._:/-`). `jobs --tag` filters on `$.k2ctl.tag`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// CE-15: the env names K2 set to the job's CPUs (the caller set none
+    /// of them), so a move recomputes them for the new node.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cpu_hints: Vec<String>,
 }
 
 /// Where a job was placed and why (prd-compute-auto-placement-v1 §7).

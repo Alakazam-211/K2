@@ -1595,8 +1595,12 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     need_credential(who)?;
     // The workspace switch (`compute_off`) for passports.
     passport_gate(who)?;
-    let v = json_body(body)?;
+    let mut v = json_body(body)?;
     let ws = target_ws(who, s(&v, "workspace"))?;
+    // Idempotency is over the body as sent; `.k2/compute.toml` and
+    // `--preset` then fill what no flag set (CE-3).
+    let sent = v.clone();
+    apply_presets(&ws, &mut v)?;
     // `--plan` (dry run): every check `run` makes, nothing stored or sent.
     if b(&v, "plan") == Some(true) {
         if v.get("shards").is_some_and(|x| !x.is_null()) {
@@ -1609,7 +1613,7 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     if !valid_client_id(client_id) {
         return Err(no(codes::BAD_REQUEST, 400, "clientJobId must be 16–64 of A-Z a-z 0-9 - _"));
     }
-    let request_sha = crypto::sha256_hex(&k2_core::compute::proto::canonical::to_vec(&v).map_err(|e| no(codes::BAD_REQUEST, 400, e))?);
+    let request_sha = crypto::sha256_hex(&k2_core::compute::proto::canonical::to_vec(&sent).map_err(|e| no(codes::BAD_REQUEST, 400, e))?);
     // Idempotency (§9.1): same key + same body → the same job.
     {
         let db = k2_core::db::shared();
@@ -1631,6 +1635,27 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let sub = submit_one(who, &v, &ws, client_id, &request_sha, &SubmitOpts { session, ..Default::default() })?;
     Ok(submitted_json(who, &sub))
+}
+
+/// `.k2/compute.toml` and `--preset NAME` (CE-3, CE-A1): the daemon finds
+/// the file under the workspace jail (the caller's checkout, the `--repo`
+/// folder, the workspace folder), fills the run body where no flag set a
+/// value, and records the effective settings in the body's `effective`
+/// (always set here, so a client can't send its own).
+fn apply_presets(ws: &Ws, v: &mut serde_json::Value) -> R<()> {
+    use crate::compute_preset as preset;
+    let name = s(v, "preset").map(str::to_string);
+    if let Some(p) = name.as_deref().filter(|p| !preset::valid_preset_name(p)) {
+        return Err(no(preset::codes::PRESET_NOT_FOUND, 400, format!("--preset {p}: a preset name is 1–40 of a-z 0-9 . _ -")));
+    }
+    let extra: Vec<PathBuf> = match s(v, "repo") {
+        Some(_) => repo_pick(ws, v).map(|p| [p.named, Some(p.home)].into_iter().flatten().collect()).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let loaded = preset::load(&ws.path, v, &extra).map_err(|e| no(preset::codes::COMPUTE_TOML_INVALID, 400, e))?;
+    let eff = preset::apply(v, loaded.as_ref(), name.as_deref()).map_err(|(c, m)| no(c, 400, m))?;
+    v["effective"] = eff;
+    Ok(())
 }
 
 /// How one job is submitted (a plain run, or one shard of a split run).
@@ -1783,6 +1808,9 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = Vec::new();
     let (node, placement) = pick_node(who, v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
+    // What `.k2/compute.toml` and `--preset` set, and from where (CE-3;
+    // `run` always writes it).
+    let effective: Option<serde_json::Value> = v.get("effective").filter(|e| e.is_object()).cloned();
     // The default `--mem` never asks more than a small node has, nor more
     // than this server's share on a shared node allows per job.
     let mem_bytes = match (mem_defaulted, compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone())) {
@@ -2059,6 +2087,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             shared: shared_view.as_ref(),
             secrets: &secret_envs,
             placement: &placement,
+            effective: effective.as_ref(),
         });
         return Ok(Submitted { job: None, warnings, source: None, preview: Some(preview), notices: Vec::new(), replaced: Vec::new() });
     }
@@ -2092,6 +2121,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         why: why.clone(),
         mem_defaulted,
         placement: Some(placement.clone()),
+        effective: effective.clone(),
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);
@@ -2181,7 +2211,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
             serde_json::json!({"argv": plan.argv, "commit": plan.src.as_ref().map(|s| s.commit.clone()), "detach": detach, "needs": plan.needs,
                 "source": source.as_ref().map(SourceInfo::json), "any": any, "retries": retries, "queueTimeoutSecs": queue_timeout,
                 "shard": opts.shard, "secrets": plan.secret_env, "tier": tier.as_str(), "tierAsked": asked, "submitter": submitter,
-                "supersede": supersede_key, "placement": placement}),
+                "supersede": supersede_key, "placement": placement, "effective": effective}),
         );
         j
     };
@@ -2610,6 +2640,8 @@ struct PlanFacts<'a> {
     secrets: &'a [(crate::compute_secrets::Found, String, bool)],
     /// Where it would be placed and why (prd-compute-auto-placement-v1 §7).
     placement: &'a store::Placement,
+    /// The effective settings (CE-3) and the CPU hints (CE-15).
+    effective: Option<&'a serde_json::Value>,
 }
 
 /// `--plan`: the node it would pick and whether it starts now, the queue
@@ -2698,6 +2730,7 @@ fn plan_preview(f: &PlanFacts<'_>) -> serde_json::Value {
         out["secrets"] = crate::compute_secrets::plan_view(f.secrets);
     }
     out["placement"] = serde_json::to_value(f.placement).unwrap_or_default();
+    out["effective"] = f.effective.cloned().unwrap_or_default();
     out["tier"] = f.tier.as_str().into();
     if let Some(a) = f.tier_asked {
         out["tierAsked"] = a.as_str().into();

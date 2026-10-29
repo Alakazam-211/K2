@@ -998,6 +998,11 @@ fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
         Err(r) => return r,
     };
     let role = str_field(&v, &["role", "roleId", "role_id"]);
+    // Checked before anything is created: a bad flag adds nobody.
+    let generated = match generate_flag(&v, str_field(&v, &["password"]).is_some()) {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
     if actor_is_agent(actor) && agent_ws.is_none() {
         return if app_field(&v).is_some() { agent_app_refused() } else { owner_only_with_hint(AGENT_ADD_NEEDS_APP_HINT) };
     }
@@ -1036,15 +1041,12 @@ fn users_post(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliResponse {
     match added {
         Ok(p) => {
             k2_core::log_debug!("[skin] actor={actor} added principal {}", p.username);
-            let password = str_field(&v, &["password"]);
+            let typed = str_field(&v, &["password"]);
+            let password = generated.as_deref().or(typed);
             if password.is_some() {
                 let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_PASSWORD });
                 match skin::set_principal_password_tied(&p.username, password, tie) {
-                    Ok(p) => {
-                        return CliResponse::ok_json(
-                            serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()),
-                        )
-                    }
+                    Ok(p) => return principal_json_with_generated(&p, generated.as_deref()),
                     Err(e) => return CliResponse::bad_request(e),
                 }
             }
@@ -1226,23 +1228,55 @@ fn users_password(body: &[u8], actor: &str, agent_ws: Option<&str>) -> CliRespon
     if let Some(r) = agent_test_guest_refused(actor, username) {
         return r;
     }
-    let password = v
+    let typed = v
         .get("password")
         .and_then(|x| x.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    // 0.46.6: `generate: true` — the daemon makes the password (CSPRNG)
+    // and hands it back once as `generatedPassword`; never with `password`.
+    let generated = match generate_flag(&v, typed.is_some()) {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
+    let password = generated.as_deref().or(typed);
     let tie = agent_ws.map(|ws| skin::ties::TieWrite { workspace_id: ws, set_by: actor, reason: skin::ties::REASON_PASSWORD });
     match skin::set_principal_password_tied(username, password, tie) {
         Ok(p) => {
             k2_core::log_debug!(
-                "[skin] actor={actor} set password for {} has_password={}",
+                "[skin] actor={actor} set password for {} has_password={} generated={}",
                 p.username,
-                p.has_password
+                p.has_password,
+                generated.is_some()
             );
-            CliResponse::ok_json(serde_json::to_string(&p).unwrap_or_else(|_| "{}".into()))
+            principal_json_with_generated(&p, generated.as_deref())
         }
         Err(e) => CliResponse::bad_request(e),
     }
+}
+
+/// `generate: true` on a password set or a user add (0.46.6): a fresh
+/// password from [`skin::generate_password`]. `Ok(None)`: not asked.
+/// Refused with a typed `password` (one or the other) or a non-boolean.
+fn generate_flag(v: &serde_json::Value, typed: bool) -> Result<Option<String>, CliResponse> {
+    match v.get("generate") {
+        None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false)) => Ok(None),
+        Some(serde_json::Value::Bool(true)) if typed => {
+            Err(CliResponse::bad_request("pass password or generate, not both"))
+        }
+        Some(serde_json::Value::Bool(true)) => Ok(Some(skin::generate_password())),
+        Some(_) => Err(CliResponse::bad_request("generate must be true or false")),
+    }
+}
+
+/// The principal as JSON, plus the generated password once when there is
+/// one (the only time K2 ever shows it; it is never stored or logged).
+fn principal_json_with_generated(p: &skin::SkinPrincipal, generated: Option<&str>) -> CliResponse {
+    let mut v = serde_json::to_value(p).unwrap_or_else(|_| serde_json::json!({}));
+    if let Some(pw) = generated {
+        v["generatedPassword"] = serde_json::json!(pw);
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 /// Delete one `login_lockouts` row. Body is only `ok`, `username`, `cleared`.
@@ -3726,6 +3760,52 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
         assert_eq!(v["cleared"], true, "{v}");
         assert!(list("lena")["lockedUntil"].is_null(), "unlock clears the lock");
+    }
+
+    /// 0.46.6: `generate: true` on a password set and on a user add — the
+    /// daemon makes the password, returns it once, and it signs in. Never
+    /// with a typed
+    /// password; a non-boolean is refused before anyone is added.
+    #[test]
+    fn generate_sets_a_daemon_made_password_and_returns_it_once() {
+        let _home = crate::test_support::TempHome::new();
+        let _db = k2_core::db::scoped_for_test();
+        let ok = |r: CliResponse| -> serde_json::Value {
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            serde_json::from_str(&r.body).expect("json")
+        };
+        // Add with generate.
+        let v = ok(handle_users_post(br#"{"username":"gina","generate":true}"#, "owner-token"));
+        let first = v["generatedPassword"].as_str().expect("generatedPassword").to_string();
+        assert_eq!(first.len(), skin::GENERATED_PASSWORD_CHARS + 3, "{first}");
+        assert_eq!(v["hasPassword"], true, "{v}");
+        assert!(matches!(skin::check_and_record_login("gina", &first), skin::SkinLoginOutcome::Ok(_)));
+        // A plain add and a typed set never carry one.
+        let v = ok(handle_users_post(br#"{"username":"hal","password":"typed-one-here"}"#, "owner-token"));
+        assert!(v.get("generatedPassword").is_none(), "{v}");
+        let v = ok(handle_users_password(br#"{"username":"hal","password":"typed-two-here"}"#, "owner-token"));
+        assert!(v.get("generatedPassword").is_none(), "{v}");
+        // Set with generate: a new one, and the old one stops working (the
+        // set is the same `set_principal_password_tied` that ends sessions).
+        let v = ok(handle_users_password(br#"{"username":"gina","generate":true}"#, "owner-token"));
+        let second = v["generatedPassword"].as_str().expect("generatedPassword").to_string();
+        assert_ne!(first, second);
+        assert!(matches!(skin::check_and_record_login("gina", &second), skin::SkinLoginOutcome::Ok(_)));
+        assert!(matches!(skin::check_and_record_login("gina", &first), skin::SkinLoginOutcome::BadCreds));
+        // One or the other, and only a boolean.
+        for (body, why) in [
+            (&br#"{"username":"gina","generate":true,"password":"typed-one-here"}"#[..], "both"),
+            (br#"{"username":"gina","generate":"yes"}"#, "not a boolean"),
+        ] {
+            let r = handle_users_password(body, "owner-token");
+            assert!(r.status.starts_with("400"), "{why}: {} {}", r.status, r.body);
+        }
+        let r = handle_users_post(br#"{"username":"ivan","generate":1}"#, "owner-token");
+        assert!(r.status.starts_with("400"), "{}", r.body);
+        assert!(
+            skin::list_principals().expect("list").iter().all(|p| p.username != "ivan"),
+            "a refused generate adds nobody"
+        );
     }
 
     /// GH#72: an agent can't mint the `.k2/` write opt-in on a platform

@@ -407,6 +407,40 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// The alphabet of a generated App-user password: no look-alikes (0/O,
+/// 1/l/I), so it can be read out or typed from a screen.
+const GENERATED_PASSWORD_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+/// Characters in a generated password (four groups of five, joined by
+/// `-`): 20 × log2(57) ≈ 116 bits.
+pub const GENERATED_PASSWORD_CHARS: usize = 20;
+
+/// A new App-user password from the OS CSPRNG (0.46.6: the owner's Set
+/// password → Generate, Add user → Generate, and the agent reset card).
+/// Unbiased (rejection sampling), `xxxxx-xxxxx-xxxxx-xxxxx`. The daemon
+/// makes it; no client ever does.
+pub fn generate_password() -> String {
+    use argon2::password_hash::rand_core::{OsRng, RngCore};
+    let n = GENERATED_PASSWORD_ALPHABET.len();
+    // The largest multiple of n that fits in a byte: bytes at or above it
+    // would skew the low letters, so they are thrown away.
+    let reject_at = (256 / n * n) as u16;
+    let mut chars: Vec<u8> = Vec::with_capacity(GENERATED_PASSWORD_CHARS);
+    let mut buf = [0u8; 64];
+    while chars.len() < GENERATED_PASSWORD_CHARS {
+        OsRng.fill_bytes(&mut buf);
+        for &b in &buf {
+            if (b as u16) < reject_at && chars.len() < GENERATED_PASSWORD_CHARS {
+                chars.push(GENERATED_PASSWORD_ALPHABET[b as usize % n]);
+            }
+        }
+    }
+    chars
+        .chunks(5)
+        .map(|c| String::from_utf8_lossy(c).into_owned())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 /// Opaque CSPRNG hex (64 chars). Never a `k2skn_` / `k2sk_` pass.
 fn generate_reset_raw() -> String {
     use argon2::password_hash::rand_core::{OsRng, RngCore};
@@ -10674,6 +10708,31 @@ mod tests {
                 other => panic!("empty still clears, got {other:?}"),
             }
         });
+    }
+
+    /// 0.46.6: a generated password is four groups of five from the
+    /// look-alike-free alphabet, different every time, and every letter of
+    /// the alphabet turns up (no letter is unreachable).
+    #[test]
+    fn generated_passwords_have_the_shape_and_spread() {
+        let mut seen = HashSet::new();
+        let mut letters = HashSet::new();
+        for _ in 0..400 {
+            let pw = generate_password();
+            let groups: Vec<&str> = pw.split('-').collect();
+            assert_eq!(groups.len(), 4, "{pw}");
+            assert!(groups.iter().all(|g| g.len() == 5), "{pw}");
+            for b in pw.bytes().filter(|b| *b != b'-') {
+                assert!(GENERATED_PASSWORD_ALPHABET.contains(&b), "{pw}: {}", b as char);
+                letters.insert(b);
+            }
+            assert!(!password_too_long(&pw));
+            assert!(seen.insert(pw.clone()), "repeated password {pw}");
+        }
+        assert_eq!(letters.len(), GENERATED_PASSWORD_ALPHABET.len(), "every letter reachable");
+        for bad in [b'0', b'O', b'1', b'l', b'I'] {
+            assert!(!letters.contains(&bad), "look-alike {}", bad as char);
+        }
     }
 
     /// The App users list's Unlock: exactly the principals the login check

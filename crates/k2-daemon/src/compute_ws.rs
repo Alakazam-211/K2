@@ -1321,7 +1321,7 @@ pub fn finalize(job_id: &str) {
     let rust_need = job.plan().is_some_and(|p| p.needs.iter().any(|n| n.starts_with("rust@") || n == "rust"));
     let rustc = rust_need
         .then(|| compute::result::tools(&job))
-        .and_then(|t| t.get("versions").and_then(|v| v.get("rustc")).and_then(|r| r.as_str()).map(str::to_string));
+        .and_then(|t| t.get("versions").and_then(|v| v.get("rustc")).and_then(|r| r.as_str()).map(|r| if r.starts_with("rustc") { r.to_string() } else { format!("rustc {r}") }));
     let extra = compute::message::Extra {
         // Only the controller's own words for a queue timeout's wait.
         detail: job.detail.as_deref().filter(|_| job.reason.as_deref() == Some("queue_timeout")),

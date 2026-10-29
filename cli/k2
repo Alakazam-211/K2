@@ -22414,8 +22414,17 @@ elif verb == "get":
     rs = r.get("resources") or {}
     if rs:
         # CE-14: peak memory and CPU time.
-        pk = rs.get("peakMemBytes")
-        print("  resources: peak memory %s, CPU time %s" % ("-" if pk is None else "%.1fG" % (pk / (1 << 30)), "-" if rs.get("cpuSecs") is None else "%ss" % round(rs["cpuSecs"])))
+        pk, lim = rs.get("peakMemBytes"), rs.get("memLimitBytes")
+        print("  resources: peak memory %s%s (%s), CPU time %s (%s)" % (
+            "-" if pk is None else "%.1fG" % (pk / (1 << 30)), "" if lim is None else " of %.1fG" % (lim / (1 << 30)), rs.get("memSource") or "-",
+            "-" if rs.get("cpuSecs") is None else "%ss" % round(rs["cpuSecs"]), rs.get("cpuSource") or "-"))
+    hs = r.get("host") or {}
+    if hs:
+        # CE-19: the load of the node at the start and end (other K2 jobs, steal).
+        def stamp(s):
+            if not s: return "-"
+            return "load %s of %s CPUs, %s other job(s)%s" % (s.get("load1"), s.get("cpus"), s.get("jobs"), (", steal %s%%" % s["steal"]) if s.get("steal") is not None else "")
+        print("  node at start: %s · at end: %s" % (stamp(hs.get("start")), stamp(hs.get("end"))))
     eff = r.get("effective")
     if isinstance(eff, dict) and eff:
         # CE-3: the effective config (each setting and where it came from).
@@ -45961,17 +45970,19 @@ RESULTS (one object, artifacts, test lists)
   Newer fields are null from an older node or when unknown:
     tools      {basis: "job" (what the job's PATH ran) | "node-probe" (an
                older node: what the node had), versions{rustc, cargo, …}}
-    resources  {peakMemBytes, cpuSecs, memSource}; a mem_cap end's hint
-               says "used 25.3G of --mem 24G"
+    resources  {peakMemBytes, memSource, cpuSecs, cpuSource, memLimitBytes};
+               a mem_cap end's hint says "used 25.3G of --mem 24G"
     host       the node's load at the job's start and end:
-               {start: {load1: 0.8, cpus: 12, steal: 0.3, jobs: 2}, end: …}
-               (steal is null on macOS; jobs = other K2 jobs running there)
+               {start: {at, load1: 0.8, cpus: 12, steal: 0.3, jobs: 2}, end: …}
+               (steal: CPU steal in percent, null on macOS; jobs = other K2
+               jobs running there, every server's)
     effective  the settings the job ran with and where each came from, e.g.
                {mem: {value: "24G", from: "flag"}, needs: {…, from: "preset"}}
     stall      a running job's stall watch: {stallSecs (the limit), warned,
                lastOutputAt}
-  memSource says how the peak was measured (the cgroup's memory.peak on
-  Linux, else the highest sampled RSS of the job's processes).
+  memSource says how the peak was measured: memory.peak (exact, Linux),
+  cgroup-sampled, or rss-sampled (the highest sampled RSS: a floor);
+  cpuSource: cpu.stat (exact) or ps-sampled.
   --artifact GLOB (repeatable): files kept after the command exits, relative
     to the job's working dir (the repo root, or where you ran k2 from inside
     it), not to a folder you cd into inside the command; target/… also reads

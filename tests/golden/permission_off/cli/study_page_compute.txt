@@ -363,17 +363,19 @@ RESULTS (one object, artifacts, test lists)
   Newer fields are null from an older node or when unknown:
     tools      {basis: "job" (what the job's PATH ran) | "node-probe" (an
                older node: what the node had), versions{rustc, cargo, …}}
-    resources  {peakMemBytes, cpuSecs, memSource}; a mem_cap end's hint
-               says "used 25.3G of --mem 24G"
+    resources  {peakMemBytes, memSource, cpuSecs, cpuSource, memLimitBytes};
+               a mem_cap end's hint says "used 25.3G of --mem 24G"
     host       the node's load at the job's start and end:
-               {start: {load1: 0.8, cpus: 12, steal: 0.3, jobs: 2}, end: …}
-               (steal is null on macOS; jobs = other K2 jobs running there)
+               {start: {at, load1: 0.8, cpus: 12, steal: 0.3, jobs: 2}, end: …}
+               (steal: CPU steal in percent, null on macOS; jobs = other K2
+               jobs running there, every server's)
     effective  the settings the job ran with and where each came from, e.g.
                {mem: {value: "24G", from: "flag"}, needs: {…, from: "preset"}}
     stall      a running job's stall watch: {stallSecs (the limit), warned,
                lastOutputAt}
-  memSource says how the peak was measured (the cgroup's memory.peak on
-  Linux, else the highest sampled RSS of the job's processes).
+  memSource says how the peak was measured: memory.peak (exact, Linux),
+  cgroup-sampled, or rss-sampled (the highest sampled RSS: a floor);
+  cpuSource: cpu.stat (exact) or ps-sampled.
   --artifact GLOB (repeatable): files kept after the command exits, relative
     to the job's working dir (the repo root, or where you ran k2 from inside
     it), not to a folder you cd into inside the command; target/… also reads

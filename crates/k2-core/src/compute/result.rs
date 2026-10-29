@@ -36,34 +36,6 @@ fn outputs_raw(j: &JobRow) -> Option<Value> {
     j.summary_json.as_deref().and_then(|s| serde_json::from_str(s).ok())
 }
 
-/// `snake_case` object keys to `camelCase`, all the way down (the node's
-/// outputs are snake_case; the result envelope is camelCase).
-fn camel(v: &Value) -> Value {
-    match v {
-        Value::Object(m) => Value::Object(
-            m.iter()
-                .map(|(k, v)| {
-                    let mut out = String::new();
-                    let mut up = false;
-                    for c in k.chars() {
-                        if c == '_' {
-                            up = true;
-                        } else if up {
-                            out.extend(c.to_uppercase());
-                            up = false;
-                        } else {
-                            out.push(c);
-                        }
-                    }
-                    (out, camel(v))
-                })
-                .collect(),
-        ),
-        Value::Array(a) => Value::Array(a.iter().map(camel).collect()),
-        other => other.clone(),
-    }
-}
-
 /// `result.tools` (CE-4): the exact tool versions. A node with the
 /// `tools-used` feature reports what the job's own PATH resolved
 /// (`basis: "job"`); for an older node, the node-wide probe from the
@@ -88,14 +60,43 @@ pub fn tools(j: &JobRow) -> Value {
 
 /// `result.resources` (CE-14): `{peakMemBytes, cpuSecs, memSource}` from a
 /// node with `job-resources`; null from an older node.
+///
+/// From the node's `Outputs.resources` (`k2-node-proto` `JobResources`:
+/// `peak_mem_bytes`, `mem_source`, `cpu_ms`, `cpu_source`,
+/// `mem_limit_bytes`): `{peakMemBytes, memSource, cpuSecs, cpuSource,
+/// memLimitBytes}`, `cpuSecs` in seconds (3 decimals).
 pub fn resources(j: &JobRow) -> Value {
-    outputs_raw(j).and_then(|o| o.get("resources").filter(|r| r.is_object()).map(camel)).unwrap_or(Value::Null)
+    let Some(r) = outputs_raw(j).and_then(|o| o.get("resources").filter(|r| r.is_object()).cloned()) else { return Value::Null };
+    let cpu_secs = r.get("cpu_ms").and_then(Value::as_u64).map(|ms| (ms as f64 / 1000.0 * 1000.0).round() / 1000.0);
+    json!({
+        "peakMemBytes": r.get("peak_mem_bytes").and_then(Value::as_u64),
+        "memSource": r.get("mem_source"),
+        "cpuSecs": cpu_secs,
+        "cpuSource": r.get("cpu_source"),
+        "memLimitBytes": r.get("mem_limit_bytes").and_then(Value::as_u64),
+    })
+}
+
+/// One `HostSample` (`at`, `load1_milli`, `cpus`, `steal_permille`,
+/// `other_jobs`) as the result shows it: `{at, load1, cpus, steal (%),
+/// jobs}`.
+fn host_sample(s: Option<&Value>) -> Value {
+    let Some(s) = s.filter(|s| s.is_object()) else { return Value::Null };
+    json!({
+        "at": s.get("at"),
+        "load1": s.get("load1_milli").and_then(Value::as_u64).map(|l| l as f64 / 1000.0),
+        "cpus": s.get("cpus"),
+        "steal": s.get("steal_permille").and_then(Value::as_u64).map(|p| p as f64 / 10.0),
+        "jobs": s.get("other_jobs"),
+    })
 }
 
 /// `result.host` (CE-19): the node's load stamp at job start and end
-/// (`{start: {load1, cpus, steal, jobs}, end: …}`); null from an older node.
+/// (`{start: {at, load1, cpus, steal, jobs}, end: …}`; `steal` in percent,
+/// null on macOS); null from an older node.
 pub fn host(j: &JobRow) -> Value {
-    outputs_raw(j).and_then(|o| o.get("host").filter(|h| h.is_object()).map(camel)).unwrap_or(Value::Null)
+    let Some(h) = outputs_raw(j).and_then(|o| o.get("host").filter(|h| h.is_object()).cloned()) else { return Value::Null };
+    json!({"start": host_sample(h.get("start")), "end": host_sample(h.get("end"))})
 }
 
 /// The peak memory a job used, when its node reported it (CE-14).
@@ -379,16 +380,21 @@ mod tests {
         j.receipt_json = Some(serde_json::to_string(&SignedReceipt { body, sig: "x".into() }).unwrap());
         assert_eq!(tools(&j), json!({"basis": "node-probe", "versions": {"rustc": "1.99.1"}}));
         // A `tools-used` / `job-resources` node: what the job used.
+        // The shape k2-node 0.46.7 sends (k2-node-proto `Outputs`).
         j.summary_json = Some(
-            json!({"artifacts": [], "notes": [], "tools_used": {"rustc": "1.99.0"},
-                   "resources": {"peak_mem_bytes": 1u64 << 30, "cpu_secs": 12.5, "mem_source": "memory.peak"},
-                   "host": {"start": {"load1": 0.5, "cpus": 12, "steal": null}}})
+            json!({"artifacts": [], "notes": [], "tools_used": {"rustc": "1.99.0", "cargo-nextest": "0.9.150"},
+                   "resources": {"peak_mem_bytes": 1u64 << 30, "mem_source": "memory.peak", "cpu_ms": 12_500, "cpu_source": "cpu.stat", "mem_limit_bytes": 2u64 << 30},
+                   "host": {"start": {"at": 100, "load1_milli": 500, "cpus": 12, "steal_permille": 3, "other_jobs": 2},
+                            "end": {"at": 160, "load1_milli": 1250, "cpus": 12, "other_jobs": 0}}})
             .to_string(),
         );
-        assert_eq!(tools(&j), json!({"basis": "job", "versions": {"rustc": "1.99.0"}}));
-        assert_eq!(resources(&j), json!({"peakMemBytes": 1u64 << 30, "cpuSecs": 12.5, "memSource": "memory.peak"}));
+        assert_eq!(tools(&j), json!({"basis": "job", "versions": {"rustc": "1.99.0", "cargo-nextest": "0.9.150"}}));
+        assert_eq!(
+            resources(&j),
+            json!({"peakMemBytes": 1u64 << 30, "memSource": "memory.peak", "cpuSecs": 12.5, "cpuSource": "cpu.stat", "memLimitBytes": 2u64 << 30})
+        );
         assert_eq!(peak_mem_bytes(&j), Some(1 << 30));
-        assert_eq!(host(&j)["start"]["load1"], 0.5);
+        assert_eq!(host(&j), json!({"start": {"at": 100, "load1": 0.5, "cpus": 12, "steal": 0.3, "jobs": 2}, "end": {"at": 160, "load1": 1.25, "cpus": 12, "steal": null, "jobs": 0}}));
         j.requested_by = "owner".into();
         j.ctl.tag = Some("fuzz:p3".into());
         let v = envelope(&j, None);

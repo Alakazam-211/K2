@@ -18416,8 +18416,15 @@ cmd_msg() {
     local wake_timeout=""
     local secret_name=""
     local summary=""
+    local session_id=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --session)
+                # prd-workspace-sessions-cli-v1 WS-M2: a conversation by id
+                # (k2 sessions --past shows the short ids). Whoever holds it
+                # gets the message; a past one is reopened, then delivered.
+                [[ -n "${2:-}" ]] || { echo "usage: k2 msg --session <id> \"text\"  (ids: k2 sessions --past)" >&2; exit 2; }
+                session_id="$2"; shift 2 ;;
             --summary)
                 # 0.46.3: one line for people (Chatter, the Projects view,
                 # phone clients). Never injected into the recipient's PTY.
@@ -18455,6 +18462,19 @@ cmd_msg() {
         esac
     done
 
+    if [[ -n "$session_id" ]]; then
+        # `k2 msg --session <id> "text"`: the one positional is the text;
+        # the conversation is in this workspace (the owner names another
+        # with K2_PROJECT_PATH / --workspace on k2 sessions).
+        if [[ -n "$target" && -z "$text" ]]; then
+            text="$target"
+        elif [[ -n "$target" && -n "$text" ]]; then
+            echo "usage: k2 msg --session <id> \"text\"  (no address with --session)" >&2
+            exit 2
+        fi
+        target="${PROJECT:-$PWD}"
+    fi
+
     [[ -z "$target" ]] && {
         echo "Error: workspace required" >&2
         echo "Usage: k2 msg <workspace> \"text\" [--from <name>] [--command \"<text>\"]" >&2
@@ -18469,6 +18489,10 @@ cmd_msg() {
     # 0.46.3: long messages should say in one line what they want; a hint,
     # never an error (the daemon derives a first-line summary otherwise).
     _msg_summary_hint "$text" "$summary"
+    if [[ -n "$session_id" && -n "$secret_name" ]]; then
+        echo "usage: --secret goes to an address, not --session (k2 sessions shows addresses)" >&2
+        exit 2
+    fi
 
     # --secret: one handoff; the text rides as its note. If the send fails
     # no message goes either, so the text never arrives without its secret.
@@ -18483,7 +18507,9 @@ cmd_msg() {
     # Local-workspace path below is untouched when _REMOTE_HOST is empty.
     # (cmd_talk's @host is a different, owner-remote path and is
     # intentionally NOT unified here.)
-    _split_remote_target "$target"
+    _REMOTE_HOST=""
+    _IS_WIRE_FORM=0
+    [[ -z "$session_id" ]] && _split_remote_target "$target"
     if [ "${_IS_WIRE_FORM:-0}" = "1" ]; then
         echo "k2 msg: '${target}' looks like federation wire form (<fp>::<workspace>::<agent>)." >&2
         echo "  For agents use the user form:  k2 msg <agent>::<host> \"text\"" >&2
@@ -18578,6 +18604,7 @@ except Exception:
     [[ -n "$wake_timeout" ]] && params="${params}&wake_timeout=$(urlencode "$wake_timeout")"
     [[ -n "$explicit_via" ]] && params="${params}&via=$(urlencode "$explicit_via")"
     [[ -n "$summary" ]] && params="${params}&summary=$(urlencode "$summary")"
+    [[ -n "$session_id" ]] && params="${params}&session=$(urlencode "$session_id")"
 
     local response
     # #58 Phase-1 close: prefer the scoped per-cell UDS for msg (the daemon
@@ -18600,6 +18627,8 @@ try:
         ms = d.get("wake_ms")
         secs = " (%.1fs)" % (ms/1000.0) if isinstance(ms,(int,float)) else ""
         sys.stderr.write("note: peer was dormant — woke canonical session%s — delivered\n" % secs)
+    if d.get("revived"):
+        sys.stderr.write("note: reopened a past conversation as %s; your message is its first turn. Reply arrives as [from %s].\n" % (d.get("addr"), d.get("addr")))
 except Exception:
     pass' 2>/dev/null
 
@@ -19993,7 +20022,7 @@ PY
 # `k2 sessions spawn` posted to /cli/sessions/spawn, a route removed in
 # 0.39.0 (prd-k2-sidecar-cli-v1 SC28). It now only says where it moved.
 cmd_sessions_spawn() {
-    echo "k2 sessions spawn moved to: k2 sidecar new <name> --harness <preset> (see k2 sidecar --help)" >&2
+    echo "k2 sessions spawn moved to: k2 sessions new <name> [--cli <cli>] (see k2 sessions --help)" >&2
     exit 2
 }
 
@@ -20225,7 +20254,7 @@ if not isinstance(data, list):
         or any(w in (code + " " + msg).lower() for w in ("owner", "forbidden", "credential", "token", "person", "not allowed"))
     )
     if refused:
-        print("Live sessions are a person'"'"'s view: run this from a terminal outside K2 (an agent sees its own session with k2 whoami).", file=sys.stderr)
+        print("This is the owner'"'"'s raw PTY view. To see who is working in your workspace, run: k2 sessions", file=sys.stderr)
     sys.exit(3 if refused else 1)
 def matches(cwd):
     if not cwd:
@@ -20277,22 +20306,402 @@ for s in sessions:
 # `sessions *` verbs.
 cmd_sessions() {
     local sub="${1:-}"
-    shift 2>/dev/null || true
     case "$sub" in
+        help|--help|-h) _sessions_usage; return 0 ;;
+        ""|-*) cmd_sessions_roster "$@"; return ;;
+    esac
+    shift
+    case "$sub" in
+        list|ls|past|show|open|new|stop)
+            if _wants_help "$@"; then
+                _sessions_usage
+                return 0
+            fi ;;
+    esac
+    case "$sub" in
+        list|ls)   cmd_sessions_roster "$@" ;;
+        past)      cmd_sessions_roster --past "$@" ;;
+        show)      cmd_sessions_show "$@" ;;
+        open)      cmd_sessions_open "$@" ;;
+        new)       cmd_sessions_new "$@" ;;
+        stop)      cmd_sessions_stop "$@" ;;
+        archives)  cmd_sessions_list "$@" ;;
         spawn)     cmd_sessions_spawn "$@" ;;
-        list)      cmd_sessions_list "$@" ;;
         live)      cmd_sessions_live "$@" ;;
         compact)   cmd_sessions_compact "$@" ;;
         set-label) cmd_sessions_set_label "$@" ;;
         *)
-            echo "Usage:" >&2
-            echo "  k2 sessions list [--json]                     # on-disk archives" >&2
-            echo "  k2 sessions live <workspace> [--json|--count] # live daemon sessions" >&2
-            echo "  k2 sessions compact <session-id>" >&2
-            echo "  k2 sessions set-label <session-id> <label> [--no-lock]" >&2
-            exit 1
+            echo "usage: unknown sessions verb '$sub' (k2 sessions --help)" >&2
+            exit 2
             ;;
     esac
+}
+
+# ── k2 sessions (prd-workspace-sessions-cli-v1) ──────────────────────
+# Who is working in this workspace, past conversations to reopen, and
+# helpers to start or stop. The daemon owns the list (GET
+# /cli/sessions/roster|past|show, POST /cli/sessions/open) and the one-
+# runner rule; `new`/`stop` are `k2 sidecar new|stop`. An `id` tool: inside
+# a K2 terminal the request carries this session's passport.
+
+_sessions_usage() {
+    cat <<'EOF'
+k2 sessions — who is working in this workspace, and past conversations to reopen
+
+  k2 sessions [--all] [--json]                 live sessions here (you, the main agent, sidecars, chats)
+  k2 sessions --past [--search <text>] [--days N] [--cli <cli>] [--limit N] [--json]
+                                               past conversations in this workspace, newest first
+  k2 sessions show <id|address> [--tail N] [--json]
+                                               what it was about and its last messages
+  k2 sessions open <id> [--name <name>] [--brief <file>|-] [--brief-text "…"] [--force] [--json]
+                                               reopen a past conversation as a sidecar, same history
+  k2 sessions new <name> [--cli <cli>] [--brief <file>|-] [--brief-text "…"] [--json]
+                                               start a new sidecar (same as k2 sidecar new)
+  k2 sessions stop <name|address> [--force]    stop a sidecar; its history stays (open or msg wakes it)
+
+Talk to any of them: k2 msg <address> "…"      (a sleeping one wakes)
+                     k2 msg --session <id> "…" (reopens a past one, then delivers)
+One conversation never runs twice: opening a live one prints its address.
+<id> is the short id from --past (6+ characters), the full id, or an address.
+Agents see their own workspace only. Opening, starting and stopping follow
+"Allow hiring and managing agents" and the main-session rule (k2 study sessions).
+CLIs: claude, codex, grok, gemini, cursor (cursor-agent), pi, hermes.
+Owner: --workspace <ws> on every verb. Also: archives (on-disk archives),
+live <ws> (the owner's raw PTY view), compact, set-label.
+More: k2 study sessions
+EOF
+}
+
+# Render a `k2 sessions` answer (`<body>\n<status>`), then exit.
+_sessions_render() {
+    local verb="$1" as_json="${2:-0}"
+    _sidecar_split "${3:-}"
+    if [ "$_SC_STATUS" != "200" ]; then
+        if [ "$_SC_STATUS" = "404" ] && [[ "$_SC_BODY" == *"route not found"* || "$_SC_BODY" == *"Not Found"* ]]; then
+            echo "daemon_too_old: this K2 daemon has no k2 sessions routes yet (update K2: k2 update --app)" >&2
+            exit 1
+        fi
+        _sidecar_fail "$_SC_STATUS" "$_SC_BODY"
+    fi
+    if [ "$as_json" = "1" ]; then
+        printf '%s\n' "$_SC_BODY"
+        exit 0
+    fi
+    printf '%s' "$_SC_BODY" | K2_SS_VERB="$verb" python3 -c '
+import json, os, sys, time
+verb = os.environ["K2_SS_VERB"]
+v = json.load(sys.stdin)
+now = time.time()
+def ago(t):
+    if not t:
+        return "-"
+    d = max(0, int(now - t))
+    if d < 60: return "now"
+    if d < 3600: return "%dm" % (d // 60)
+    if d < 86400: return "%dh" % (d // 3600)
+    return "%dd" % (d // 86400)
+def cut(s, n):
+    s = (s or "").replace("\n", " ").strip()
+    return s if len(s) <= n else s[: n - 1] + "…"
+if verb == "roster":
+    rows = v.get("sessions", [])
+    sc = v.get("sidecars") or {}
+    ws = (v.get("workspace") or {}).get("handle") or "?"
+    live = [r for r in rows if r.get("state") != "asleep"]
+    print("%s — %d live (cap %d sidecars; %d in use)" % (ws, len(live), sc.get("cap", 0), sc.get("live", 0)))
+    if rows:
+        fmt = "%s %-16s %-9s %-7s %-8s %-7s %s"
+        print(fmt % (" ", "ADDRESS", "ROLE", "CLI", "STATE", "ACTIVE", "TITLE / BRIEF"))
+        for r in rows:
+            addr = r.get("address") or r.get("handle") or "-"
+            title = cut(r.get("title"), 60)
+            print(fmt % ("*" if r.get("you") else " ", addr, r.get("role") or "-", r.get("cli") or "-",
+                         r.get("state") or "-", ago(r.get("lastActiveAt")), title))
+        example = next((r.get("address") for r in rows if r.get("address") and not r.get("you")), None)
+        hint = ("Message one: k2 msg %s \"…\"" % example) if example else "Message one: k2 msg <address> \"…\""
+        print(("* = you.  " if any(r.get("you") for r in rows) else "") + hint)
+    else:
+        print("(nobody is running here)")
+    asleep = v.get("asleep", 0)
+    tail = []
+    if asleep and not any(r.get("state") == "asleep" for r in rows):
+        tail.append("%d asleep (k2 sessions --all)" % asleep)
+    tail.append("past conversations: k2 sessions --past")
+    print(" · ".join(tail))
+elif verb == "past":
+    rows = v.get("conversations", [])
+    ws = v.get("workspace") or "?"
+    what = "last %d days" % v.get("days", 14)
+    if v.get("search"):
+        what += ", matching \"%s\"" % v["search"]
+    if v.get("cli"):
+        what += ", %s only" % v["cli"]
+    print("Past conversations in %s (%s):" % (ws, what))
+    if not rows:
+        print("  (none found; try --days 90, or another --search)")
+    else:
+        fmt = "  %-10s %-7s %-5s %-24s %-34s %s"
+        print(fmt % ("ID", "CLI", "LAST", "WHERE", "TITLE", "NOW"))
+        for r in rows:
+            run = r.get("runner") or {}
+            if run:
+                now_s = "%s as %s" % (run.get("state") or "live", run.get("address") or "-")
+            else:
+                now_s = "-"
+            title = r.get("customName") or r.get("title")
+            print(fmt % (r.get("id"), r.get("cli"), ago(r.get("lastActiveAt")), cut(r.get("worktree") or "(root)", 24), cut(title, 34), now_s))
+            if r.get("match"):
+                print("             match: %s" % cut(r["match"], 110))
+        first = next((r for r in rows if not r.get("runner")), None)
+        if first:
+            print("Open one: k2 sessions open %s --name <name>   ·   Read first: k2 sessions show %s" % (first["id"], first["id"]))
+        else:
+            print("Every one listed is held already: k2 msg its address (NOW column).")
+    if v.get("truncated"):
+        sc = v.get("scanned") or {}
+        print("(search stopped after %d files; narrow with --days or --cli)" % sc.get("files", 0))
+    for u in v.get("unsupported") or []:
+        print("note: %s: %s" % (u.get("cli"), u.get("why")), file=sys.stderr)
+elif verb == "show":
+    c = v.get("conversation") or {}
+    where = c.get("worktree") or "root"
+    head = "%s  %s  \"%s\"   last active %s ago" % (c.get("id"), c.get("cli"), cut(c.get("customName") or c.get("title"), 60), ago(c.get("lastActiveAt")))
+    if v.get("messageCount") is not None:
+        head += " · %d messages" % v["messageCount"]
+    head += " · %s" % where
+    if c.get("branch"):
+        head += " · branch %s" % c["branch"]
+    print(head)
+    run = c.get("runner")
+    if v.get("unsupported"):
+        print("(%s)" % v["unsupported"])
+    else:
+        if v.get("firstAsk"):
+            print("Asked first: \"%s\"" % cut(v["firstAsk"], 200))
+        msgs = v.get("messages") or []
+        print("--- last %d messages ---" % len(msgs))
+        for m in msgs:
+            print("[%s %s]  %s" % (m.get("role"), ago(m.get("at")) if m.get("at") else "", m.get("text", "")))
+        if v.get("toolCalls"):
+            print("(%d tool calls not shown)" % v["toolCalls"])
+    if run and run.get("address"):
+        print("It is %s as %s. Message it: k2 msg %s \"…\"" % (run.get("state"), run["address"], run["address"]))
+    else:
+        print("Reopen: k2 sessions open %s   (or k2 msg --session %s \"…\")" % (c.get("id"), c.get("id")))
+elif verb == "open":
+    print(v.get("address"))
+    if v.get("opened"):
+        what = "resumed its tab" if v.get("outcome") == "resumed_row" else "reopened"
+        sys.stderr.write("%s %s (%s, same conversation). Message it: k2 msg %s \"…\"\n" % (what, v["address"], v.get("cli"), v["address"]))
+    elif v.get("alreadyLive"):
+        sys.stderr.write("already running as %s. Message it: k2 msg %s \"…\"\n" % (v["address"], v["address"]))
+    else:
+        sys.stderr.write("%s is the main session (asleep). Wake it: %s\n" % (v["address"], v.get("wakeWith") or ("k2 msg %s \"…\"" % v["address"])))
+'
+    exit 0
+}
+
+cmd_sessions_roster() {
+    local workspace="" as_json=0 all=0 past=0 search="" days="" cli="" limit="" archived=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --all|-a) all=1; shift ;;
+            --json) as_json=1; shift ;;
+            --past) past=1; shift ;;
+            --search) search="${2:-}"; past=1; shift 2 ;;
+            --days) days="${2:-}"; past=1; shift 2 ;;
+            --cli) cli="${2:-}"; past=1; shift 2 ;;
+            --limit) limit="${2:-}"; past=1; shift 2 ;;
+            --archived) archived=1; past=1; shift ;;
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            -h|--help) _sessions_usage; exit 0 ;;
+            *) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
+        esac
+    done
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local q raw
+    if [ "$past" = "1" ]; then
+        q="workspace=$(urlencode "$workspace")"
+        [ -n "$search" ] && q="${q}&search=$(urlencode "$search")"
+        [ -n "$days" ] && q="${q}&days=$(urlencode "$days")"
+        [ -n "$cli" ] && q="${q}&cli=$(urlencode "$cli")"
+        [ -n "$limit" ] && q="${q}&limit=$(urlencode "$limit")"
+        [ "$archived" = "1" ] && q="${q}&archived=1"
+        raw="$(_sidecar_send GET /cli/sessions/past "$q")" || true
+        _sessions_render past "$as_json" "$raw"
+    fi
+    q="workspace=$(urlencode "$workspace")"
+    [ "$all" = "1" ] && q="${q}&all=1"
+    raw="$(_sidecar_send GET /cli/sessions/roster "$q")" || true
+    _sessions_render roster "$as_json" "$raw"
+}
+
+cmd_sessions_show() {
+    local id="" workspace="" tail="" as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tail) tail="${2:-}"; shift 2 ;;
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --json) as_json=1; shift ;;
+            -*) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"; else
+                    echo "usage: k2 sessions show <id|address> [--tail N] [--json]" >&2; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        echo "usage: k2 sessions show <id|address> [--tail N] [--json]  (ids: k2 sessions --past)" >&2
+        exit 2
+    fi
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local q="workspace=$(urlencode "$workspace")&id=$(urlencode "$id")"
+    [ -n "$tail" ] && q="${q}&tail=$(urlencode "$tail")"
+    local raw
+    raw="$(_sidecar_send GET /cli/sessions/show "$q")" || true
+    _sessions_render show "$as_json" "$raw"
+}
+
+# Read --brief <file>|- / --brief-text into a temp file path ($_SS_BRIEF_SRC)
+# for the JSON builder. Exit 2 on a usage error.
+_sessions_brief_src() {
+    local brief_file="$1" have_text="$2"
+    _SS_BRIEF_SRC=""
+    if [ -n "$brief_file" ] && [ "$have_text" = "1" ]; then
+        echo "usage: pass --brief or --brief-text, not both" >&2
+        exit 2
+    fi
+    if [ -n "$brief_file" ]; then
+        if [ "$brief_file" = "-" ]; then
+            _SS_BRIEF_SRC="$(mktemp -t k2-sessions-brief-XXXXXX)"
+            cat > "$_SS_BRIEF_SRC"
+        elif [ -f "$brief_file" ]; then
+            _SS_BRIEF_SRC="$brief_file"
+        else
+            echo "usage: brief file not found: $brief_file" >&2
+            exit 2
+        fi
+    fi
+}
+
+cmd_sessions_open() {
+    local id="" name="" brief_file="" brief_text="" have_text=0 workspace="" harness="" model="" force=0 as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --name) name="${2:-}"; shift 2 ;;
+            --brief) brief_file="${2:-}"; shift 2 ;;
+            --brief-text) brief_text="${2:-}"; have_text=1; shift 2 ;;
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --harness) harness="${2:-}"; shift 2 ;;
+            --model) model="${2:-}"; shift 2 ;;
+            --force) force=1; shift ;;
+            --json) as_json=1; shift ;;
+            -*) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
+            *)
+                if [ -z "$id" ]; then id="$1"; else
+                    echo "usage: k2 sessions open <id> [--name <name>] [--brief <file>|-] [--force]" >&2; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$id" ]; then
+        echo "usage: k2 sessions open <id> [--name <name>] [--brief <file>|-] [--force]  (ids: k2 sessions --past)" >&2
+        exit 2
+    fi
+    _sessions_brief_src "$brief_file" "$have_text"
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local body rc=0
+    body="$(K2_SS_ID="$id" K2_SS_NAME="$name" K2_SS_WS="$workspace" K2_SS_HARNESS="$harness" K2_SS_MODEL="$model" \
+        K2_SS_FORCE="$force" K2_SS_BRIEF_FILE="$_SS_BRIEF_SRC" K2_SS_BRIEF_TEXT="$brief_text" K2_SS_HAVE_TEXT="$have_text" python3 -c '
+import json, os, sys
+b = {"workspace": os.environ["K2_SS_WS"], "id": os.environ["K2_SS_ID"], "force": os.environ["K2_SS_FORCE"] == "1"}
+for k, e in (("name", "K2_SS_NAME"), ("harness", "K2_SS_HARNESS"), ("model", "K2_SS_MODEL")):
+    if os.environ.get(e):
+        b[k] = os.environ[e]
+path = os.environ.get("K2_SS_BRIEF_FILE")
+if path:
+    try:
+        b["brief"] = open(path, "rb").read().decode("utf-8")
+    except UnicodeDecodeError:
+        sys.stderr.write("brief_not_text: the brief is not UTF-8 text\n"); sys.exit(2)
+elif os.environ.get("K2_SS_HAVE_TEXT") == "1":
+    b["brief"] = os.environ.get("K2_SS_BRIEF_TEXT", "")
+print(json.dumps(b))
+')" || rc=$?
+    [ "$brief_file" = "-" ] && rm -f "$_SS_BRIEF_SRC"
+    [ "$rc" -ne 0 ] && exit 2
+    local raw
+    raw="$(_sidecar_send POST /cli/sessions/open "$body")" || true
+    _sessions_render open "$as_json" "$raw"
+}
+
+cmd_sessions_new() {
+    local name="" cli="" harness="" brief_file="" brief_text="" have_text=0 workspace="" model="" as_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --cli) cli="${2:-}"; shift 2 ;;
+            --harness) harness="${2:-}"; shift 2 ;;
+            --brief) brief_file="${2:-}"; shift 2 ;;
+            --brief-text) brief_text="${2:-}"; have_text=1; shift 2 ;;
+            --workspace) workspace="${2:-}"; shift 2 ;;
+            --model) model="${2:-}"; shift 2 ;;
+            --worktree|--base)
+                echo "usage: --worktree needs K2 0.46.7 Workbench (not in this K2 yet); start it without --worktree" >&2
+                exit 2 ;;
+            --json) as_json=1; shift ;;
+            -*) echo "usage: unknown flag '$1' (k2 sessions --help)" >&2; exit 2 ;;
+            *)
+                if [ -z "$name" ]; then name="$1"; else
+                    echo "usage: one name only; quote names with spaces (k2 sessions --help)" >&2; exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ -z "$name" ]; then
+        echo "usage: k2 sessions new <name> [--cli <cli>] [--brief <file>|-] [--brief-text \"…\"]" >&2
+        exit 2
+    fi
+    if [ -n "$cli" ] && [ -n "$harness" ]; then
+        echo "usage: pass --cli or --harness, not both" >&2
+        exit 2
+    fi
+    # --cli names the CLI (cursor runs cursor-agent); --harness names a preset.
+    case "$cli" in
+        "") ;;
+        cursor) harness="cursor-agent" ;;
+        claude|codex|grok|gemini|cursor-agent|pi|hermes) harness="$cli" ;;
+        *) echo "usage: unknown --cli '$cli' (claude, codex, grok, gemini, cursor, pi, hermes)" >&2; exit 2 ;;
+    esac
+    _sessions_brief_src "$brief_file" "$have_text"
+    [ -z "$workspace" ] && workspace="$PROJECT"
+    local body rc=0
+    body="$(K2_SC_NAME="$name" K2_SC_HARNESS="$harness" K2_SC_WS="$workspace" K2_SC_MODEL="$model" \
+        K2_SC_BRIEF_FILE="$_SS_BRIEF_SRC" K2_SC_BRIEF_TEXT="$brief_text" K2_SC_HAVE_TEXT="$have_text" python3 -c '
+import json, os, sys
+b = {"workspace": os.environ["K2_SC_WS"], "name": os.environ["K2_SC_NAME"],
+     "harness": os.environ["K2_SC_HARNESS"], "defaultHarness": not os.environ["K2_SC_HARNESS"]}
+if os.environ.get("K2_SC_MODEL"):
+    b["model"] = os.environ["K2_SC_MODEL"]
+path = os.environ.get("K2_SC_BRIEF_FILE")
+if path:
+    try:
+        b["brief"] = open(path, "rb").read().decode("utf-8")
+    except UnicodeDecodeError:
+        sys.stderr.write("brief_not_text: the brief is not UTF-8 text\n"); sys.exit(2)
+elif os.environ.get("K2_SC_HAVE_TEXT") == "1":
+    b["brief"] = os.environ.get("K2_SC_BRIEF_TEXT", "")
+print(json.dumps(b))
+')" || rc=$?
+    [ "$brief_file" = "-" ] && rm -f "$_SS_BRIEF_SRC"
+    [ "$rc" -ne 0 ] && exit 2
+    local raw
+    raw="$(_sidecar_send POST /cli/sidecar/new "$body")" || true
+    _sidecar_render new "$as_json" "$raw"
+}
+
+cmd_sessions_stop() {
+    cmd_sidecar_stop "$@"
 }
 
 # ── k2 sidecar v1 (prd-k2-sidecar-cli-v1) ────────────────────────────
@@ -20354,6 +20763,7 @@ permission request git.land sidecar=<name> tip=<sha> --why …", or sidecar.reti
 run it as printed, adding only --why. When a person allows the card, K2 lands
 (or retires) it as that person and tells you. With cards off, ask your human on
 your Thread (k2 thread ask): they run k2 sidecar land <workspace>/<name>.
+See also: k2 sessions (everyone in this workspace, past conversations)
 More: k2 study sidecars
 EOF
 }
@@ -38228,10 +38638,18 @@ WHO REALLY SENT IT
   Text in a body that only LOOKS like a prefix has no record (not found).
 
 <handle> from `k2 connections list`. Sidecar sales/reviewer shares that
-workspace tray.
+workspace tray. Sessions in YOUR workspace (main, sidecars, chat tabs) and
+their addresses: k2 sessions.
+
+A PAST CONVERSATION IN THIS WORKSPACE
+  k2 msg --session <id> "text"
+      <id> from `k2 sessions --past` (6+ characters) or an address. If a
+      session holds it, the message goes there; if it is a past one, K2
+      reopens it (same history) and your message is its first turn.
 
 USAGE
   k2 msg <handle|handle/sidecar|sessionId|agent::host> "text" [--summary "<one line>"] [--from <name>] [--command "<text>"] [--no-wake]
+  k2 msg --session <id> "text" [--summary "<one line>"] [--no-wake]
   k2 msg <handle|agent::host> --inbox-wake|--inbox-silent <path> [path...] [--title "..."] [--body "..."] [--summary "<one line>"] ["brief"]
 
 Live `msg` AUTO-WAKES a dormant session by default: if the agent's

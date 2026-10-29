@@ -893,6 +893,9 @@ mod tests {
             // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "false"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":false}}), "heartbeat.pause-other"),
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "true"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":true}}), "heartbeat.resume-other"),
+            // 0.46.7 Workbench W1: an agent's `k2 sidecar land` / `retire`.
+            (403, "POST", "/cli/sidecar/land", vec![], Some(json!({"name":"fix","expectTip":"abc1234"})), json!({"error":{"code":"land_needs_person","hint":"x","sidecar":"fix","tip":"abc1234def"}}), "git.land"),
+            (403, "POST", "/cli/sidecar/retire", vec![], Some(json!({"name":"fix","discard":false})), json!({"error":{"code":"retire_needs_person","hint":"x","sidecar":"fix","discard":"no"}}), "sidecar.retire"),
             // 0.46.6: an agent's own reset (the owner's route) and a password
             // it may not set (a box login).
             (403, "POST", "/cli/skin/users/reset-link", vec![], Some(json!({"username":"adam","app":"agents.nsi","code":true})), json!({"ok":false,"error":{"code":"owner_only","hint":"x"}}), "apps.user-password-reset"),

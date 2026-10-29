@@ -5,33 +5,33 @@
 //     saves it on this device. Agents never write the stash themselves,
 //     and the tap sends nothing back to the daemon.
 
-import { useState, type JSX } from 'react'
+import { useRef, useState, type JSX } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { OverlayStashOffer } from '@/components/SessionView/overlayThread'
 import { stashSourceFor } from '@/lib/prompt-stash/compose'
-import type { StashSource } from '@/lib/prompt-stash/record'
+import { orNull, stashOfferView, type StashSource } from '@/lib/prompt-stash/record'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { saveToStash } from '@/stores/prompt-stash'
 import { useToastStore } from '@/stores/toast'
 import { StashGlyph } from './PromptStash'
 
-function sourceFor(scope: ServerScope | null, agent: string, agentName: string): StashSource {
+function sourceFor(scope: ServerScope | null, agent: string | null, agentName: string | null): Promise<StashSource> {
   if (scope) return stashSourceFor(scope, agent, agentName)
-  return { server_id: '', server_label: '', user: '', agent, agent_name: agentName }
+  return Promise.resolve({ server_id: null, server_label: null, user: null, agent: orNull(agent), agent_name: orNull(agentName) })
 }
 
 /** Save an agent's message text to the stash; true when it was saved. */
 export async function stashThreadText(args: {
   scope: ServerScope | null
   text: string
-  /** The agent's address (the message's `from`). */
-  agent: string
-  agentName: string
+  /** The sender's address (the message's `from`, group chats too). */
+  agent: string | null
+  agentName: string | null
 }): Promise<boolean> {
   const text = args.text.trim()
   if (!text) return false
   try {
-    const r = await saveToStash({ text, source: sourceFor(args.scope, args.agent, args.agentName) })
+    const r = await saveToStash({ text, source: await sourceFor(args.scope, args.agent, args.agentName) })
     if (r.status !== 'saved') return false
     useToastStore.getState().addToast('Saved to your stash', 'success', 2500)
     return true
@@ -45,7 +45,7 @@ export async function stashThreadText(args: {
 export async function openThreadMessageMenu(
   x: number,
   y: number,
-  args: { scope: ServerScope | null; text: string; agent: string; agentName: string },
+  args: { scope: ServerScope | null; text: string; agent: string | null; agentName: string | null },
 ): Promise<void> {
   const picked = await useContextMenuStore.getState().show(x, y, [
     { id: 'stash', label: 'Save to stash', icon: <StashGlyph size={12} />, enabled: args.text.trim().length > 0 },
@@ -82,23 +82,43 @@ export function ThreadMessageMoreButton({
   )
 }
 
-/** The `stash.offer` card inside an agent's bubble. */
+/** Offers saved in this window, by Thread message id: one tap is one
+ *  save, and the card still says "Saved" when it is drawn again. */
+const savedOffers = new Set<string>()
+
+/** Tests: forget which offers were saved. */
+export function resetSavedOffersForTests(): void {
+  savedOffers.clear()
+}
+
+/** The `stash.offer` card inside an agent's bubble (field rules: title
+ *  ≤ 200 and text ≤ 20,000 characters, cut with a note; a tap saves
+ *  exactly what the card shows, title, blank line, text). */
 export function StashOfferCard({
+  docId,
   offer,
   scope,
   agent,
   agentName,
 }: {
+  /** The Thread message's id. */
+  docId: string
   offer: OverlayStashOffer
   scope: ServerScope | null
-  agent: string
-  agentName: string
+  agent: string | null
+  agentName: string | null
 }): JSX.Element {
-  const [state, setState] = useState<'idle' | 'saving' | 'saved'>('idle')
+  const view = stashOfferView(offer)
+  const [state, setState] = useState<'idle' | 'saving' | 'saved'>(() => (savedOffers.has(docId) ? 'saved' : 'idle'))
+  // A second tap before the first re-renders must not save again.
+  const busy = useRef(false)
   const save = async (): Promise<void> => {
-    if (state !== 'idle') return
+    if (busy.current || savedOffers.has(docId)) return
+    busy.current = true
     setState('saving')
-    const ok = await stashThreadText({ scope, text: offer.text, agent, agentName })
+    const ok = await stashThreadText({ scope, text: view.saved, agent, agentName })
+    if (ok) savedOffers.add(docId)
+    else busy.current = false
     setState(ok ? 'saved' : 'idle')
   }
   return (
@@ -112,9 +132,9 @@ export function StashOfferCard({
         color: 'var(--thread-card-text, var(--color-text-primary))',
       }}
     >
-      {offer.title ? (
-        <div data-stash-offer-title="" style={{ fontWeight: 600, fontSize: '0.92em' }}>
-          {offer.title}
+      {view.title ? (
+        <div data-stash-offer-title="" style={{ fontWeight: 600, fontSize: '0.92em', overflowWrap: 'anywhere' }}>
+          {view.title}
         </div>
       ) : null}
       <div
@@ -122,8 +142,13 @@ export function StashOfferCard({
         className="selectable-copy"
         style={{ whiteSpace: 'pre-wrap', fontSize: '0.88em', maxHeight: '9em', overflowY: 'auto', overflowWrap: 'anywhere' }}
       >
-        {offer.text}
+        {view.text}
       </div>
+      {view.truncated ? (
+        <div data-stash-offer-truncated="" style={{ fontSize: '0.78em', color: 'var(--thread-card-muted, var(--color-text-muted))' }}>
+          This offer was too long and was shortened. Saving keeps what you see here.
+        </div>
+      ) : null}
       <button
         type="button"
         data-testid="stash-offer-save"
@@ -139,7 +164,7 @@ export function StashOfferCard({
         }}
       >
         <StashGlyph size={11} />
-        {state === 'saved' ? 'Saved to your stash' : 'Save to stash'}
+        {state === 'saved' ? 'Saved' : 'Save to stash'}
       </button>
     </div>
   )

@@ -9,6 +9,11 @@
 // Every change is one transaction over both, and a write only counts once
 // the transaction completes (`oncomplete`), so the composer clears only
 // after the stash is on disk.
+//
+// A connection the webview drops (storage pressure, a cleared site, a
+// version change from another window) is opened again: `onclose` forgets
+// it, and a request that finds it closing is retried once on a fresh one.
+// Any other failure throws, so the caller shows it and keeps the draft.
 
 import { coerceStashRecord, type StashRecord } from './record'
 
@@ -60,7 +65,11 @@ export function openStashDb(): Promise<IDBDatabase> {
       // Another window upgrading later: let it.
       db.onversionchange = () => {
         db.close()
-        opening = null
+        if (opening === p) opening = null
+      }
+      // The browser closed it under us: the next use opens a new one.
+      db.onclose = () => {
+        if (opening === p) opening = null
       }
       resolve(db)
     }
@@ -81,10 +90,32 @@ export async function closeStashDbForTests(): Promise<void> {
   if (p) (await p).close()
 }
 
-export async function readAllStashRecords(): Promise<StashRecord[]> {
+/** The connection is closed or closing (`transaction()` refuses). */
+function isClosedConnection(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name
+  return name === 'InvalidStateError'
+}
+
+/** Run `fn` on the open connection; on a dropped one, open again and run
+ *  it once more. */
+async function withDb<T>(fn: (db: IDBDatabase) => Promise<T>): Promise<T> {
   const db = await openStashDb()
-  const tx = db.transaction(ITEMS, 'readonly')
-  const rows = await req(tx.objectStore(ITEMS).getAll())
+  try {
+    return await fn(db)
+  } catch (err) {
+    if (!isClosedConnection(err)) throw err
+    if (opening) {
+      const cur = await opening.catch(() => null)
+      if (cur === db) opening = null
+    }
+    return fn(await openStashDb())
+  }
+}
+
+/** Every v1 record. A row of another version (a newer client's) is left
+ *  out here and never written back (field rules: unknown `v`). */
+export async function readAllStashRecords(): Promise<StashRecord[]> {
+  const rows = await withDb((db) => req(db.transaction(ITEMS, 'readonly').objectStore(ITEMS).getAll()))
   return rows.flatMap((row) => {
     const rec = coerceStashRecord(row)
     return rec ? [rec] : []
@@ -92,8 +123,11 @@ export async function readAllStashRecords(): Promise<StashRecord[]> {
 }
 
 /** Apply `w` in one transaction; resolves once it is committed. */
-export async function writeStash(w: StashWrite): Promise<void> {
-  const db = await openStashDb()
+export function writeStash(w: StashWrite): Promise<void> {
+  return withDb((db) => writeOn(db, w))
+}
+
+async function writeOn(db: IDBDatabase, w: StashWrite): Promise<void> {
   const tx = db.transaction([ITEMS, BLOBS], 'readwrite')
   const done = new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve()
@@ -110,8 +144,24 @@ export async function writeStash(w: StashWrite): Promise<void> {
 }
 
 export async function readStashBlob(id: string): Promise<StashBlobRow | null> {
-  const db = await openStashDb()
-  const tx = db.transaction(BLOBS, 'readonly')
-  const row = (await req(tx.objectStore(BLOBS).get(id))) as StashBlobRow | undefined
+  const row = (await withDb((db) => req(db.transaction(BLOBS, 'readonly').objectStore(BLOBS).get(id)))) as StashBlobRow | undefined
   return row && row.data ? row : null
+}
+
+/** A row exactly as stored (tests: an unknown-`v` record stays untouched). */
+export async function readRawStashRowForTests(id: string): Promise<unknown> {
+  return withDb((db) => req(db.transaction(ITEMS, 'readonly').objectStore(ITEMS).get(id)))
+}
+
+/** Store a raw row (tests: a newer client's record). */
+export async function putRawStashRowForTests(row: unknown): Promise<void> {
+  await withDb(
+    (db) =>
+      new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(ITEMS, 'readwrite')
+        tx.objectStore(ITEMS).put(row)
+        tx.oncomplete = () => resolve()
+        tx.onerror = () => reject(tx.error ?? new Error('write failed'))
+      }),
+  )
 }

@@ -29,21 +29,40 @@ export interface StashAttachment {
 
 export interface StashQuote {
   text: string
-  /** Who said it (an agent's address, "Inbox"). */
-  from?: string
+  /** Who said it (an agent's address, "Inbox"); null when nobody. */
+  from: string | null
 }
 
 /** Where a stash was written. For display only; a stash can be sent to
- *  any agent on any server. */
+ *  any agent on any server. Field rules settled after the Companion 4.1.4
+ *  review: an absent value is null, never "". */
 export interface StashSource {
-  /** The server's host key (`local`, `<sub>.k2.dev`, `ip:port`). */
-  server_id: string
-  server_label: string
-  /** The person on that server (`owner`, a Connect username). */
-  user: string
-  /** The agent's address it was written to (or came from). */
-  agent: string
-  agent_name: string
+  /** The server's host key (`rosson.k2.dev`, `ip:port`): the same on every
+   *  device, never this device's `local`. Null when it isn't known. */
+  server_id: string | null
+  server_label: string | null
+  /** The login the server reports for this person (the owner's real
+   *  username where known, else `owner`). */
+  user: string | null
+  /** The agent's address: the one it was written to, or the sender's
+   *  (`doc.from`, group chats too). Null only when there's no sender. */
+  agent: string | null
+  agent_name: string | null
+}
+
+/** "" and non-strings are absent: null. */
+export function orNull(v: unknown): string | null {
+  return typeof v === 'string' && v !== '' ? v : null
+}
+
+function cleanSource(src: Partial<Record<keyof StashSource, unknown>>): StashSource {
+  return {
+    server_id: orNull(src.server_id),
+    server_label: orNull(src.server_label),
+    user: orNull(src.user),
+    agent: orNull(src.agent),
+    agent_name: orNull(src.agent_name),
+  }
 }
 
 export interface StashRecord {
@@ -59,11 +78,12 @@ export interface StashRecord {
   deleted_at: number | null
 }
 
-/** What a save hands in: the record's content, without ids or clocks. */
+/** What a save hands in: the record's content, without ids or clocks.
+ *  Absent source fields may be left out or "": they are stored as null. */
 export interface StashDraft {
   text: string
-  quotes?: StashQuote[]
-  source: StashSource
+  quotes?: Array<{ text: string; from?: string | null }>
+  source: Partial<StashSource>
 }
 
 /** An attachment to save: its metadata plus the bytes. */
@@ -97,8 +117,8 @@ export function buildStashRecord(
     id,
     text: draft.text,
     attachments,
-    quotes: (draft.quotes ?? []).filter((q) => q.text.trim().length > 0).map((q) => (q.from ? { text: q.text, from: q.from } : { text: q.text })),
-    source: { ...draft.source },
+    quotes: (draft.quotes ?? []).filter((q) => q.text.trim().length > 0).map((q) => ({ text: q.text, from: orNull(q.from) })),
+    source: cleanSource(draft.source),
     created_at: now,
     updated_at: now,
     deleted_at: null,
@@ -130,7 +150,9 @@ export function expiredTombstones(all: readonly StashRecord[], now: number): Sta
   return all.filter((r) => r.deleted_at !== null && now - r.deleted_at > STASH_TOMBSTONE_TTL_MS)
 }
 
-/** A record read back from storage, or null when it isn't one of ours. */
+/** A record read back from storage, or null when it isn't one of ours. A
+ *  record of another version (`v` other than 1, a newer client's) is null
+ *  too: it is hidden from the list and never rewritten (field rules). */
 export function coerceStashRecord(raw: unknown): StashRecord | null {
   if (!raw || typeof raw !== 'object') return null
   const r = raw as Record<string, unknown>
@@ -152,7 +174,7 @@ export function coerceStashRecord(raw: unknown): StashRecord | null {
         if (!q || typeof q !== 'object') return []
         const o = q as Record<string, unknown>
         if (typeof o.text !== 'string') return []
-        return [typeof o.from === 'string' && o.from ? { text: o.text, from: o.from } : { text: o.text }]
+        return [{ text: o.text, from: orNull(o.from) }]
       })
     : []
   return {
@@ -161,13 +183,7 @@ export function coerceStashRecord(raw: unknown): StashRecord | null {
     text: str(r.text),
     attachments,
     quotes,
-    source: {
-      server_id: str(src.server_id),
-      server_label: str(src.server_label),
-      user: str(src.user),
-      agent: str(src.agent),
-      agent_name: str(src.agent_name),
-    },
+    source: cleanSource(src),
     created_at: r.created_at,
     updated_at: r.updated_at,
     deleted_at: deleted,
@@ -196,6 +212,42 @@ export function insertStashBelow(draft: string, body: string): string {
   const head = draft.replace(/\s+$/, '')
   if (!head) return body
   return `${head}\n\n${body}`
+}
+
+// ── An agent's offer (`stash.offer` card) ──────────────────────────────
+
+/** Offer limits (field rules): longer is cut, with a note on the card. */
+export const STASH_OFFER_TITLE_MAX = 200
+export const STASH_OFFER_TEXT_MAX = 20_000
+
+/** `s` cut to at most `max` characters (code points, so an emoji is never
+ *  split), the last one an ellipsis. */
+function cutChars(s: string, max: number): { out: string; cut: boolean } {
+  const chars = Array.from(s)
+  if (chars.length <= max) return { out: s, cut: false }
+  return { out: `${chars.slice(0, max - 1).join('')}…`, cut: true }
+}
+
+export interface StashOfferView {
+  title: string | null
+  text: string
+  /** Something was cut: the card says so. */
+  truncated: boolean
+  /** What a tap saves: exactly what the card shows (title, blank line,
+   *  text), no hidden content. */
+  saved: string
+}
+
+export function stashOfferView(offer: { text: string; title?: string | null }): StashOfferView {
+  const t = offer.title?.trim() ? cutChars(offer.title.trim(), STASH_OFFER_TITLE_MAX) : null
+  const x = cutChars(offer.text, STASH_OFFER_TEXT_MAX)
+  const title = t ? t.out : null
+  return {
+    title,
+    text: x.out,
+    truncated: x.cut || (t?.cut ?? false),
+    saved: title ? `${title}\n\n${x.out}` : x.out,
+  }
 }
 
 // ── The drawer's words ─────────────────────────────────────────────────

@@ -603,7 +603,7 @@ export function TerminalComposeBar({
       const files = await readComposeFiles(scope, paths)
       const agent = threadAddr || agentName || workspacePath.split('/').pop() || ''
       const result = await saveToStash(
-        { text, source: stashSourceFor(scope, agent, sessionChrome?.displayName || agentName) },
+        { text, source: await stashSourceFor(scope, agent, sessionChrome?.displayName || agentName) },
         files,
       )
       if (result.status !== 'saved') return

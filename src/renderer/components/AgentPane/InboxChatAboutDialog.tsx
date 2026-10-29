@@ -36,7 +36,7 @@ export async function saveInboxChatAboutForLater(args: {
   const r = await saveToStash({
     text: args.note.trim(),
     quotes: [{ text: `${chatAboutStampLine(args.stamp)}\n${chatAboutOpenLine(args.stamp)}`, from: 'Inbox' }],
-    source: stashSourceFor(args.scope, agent, agent),
+    source: await stashSourceFor(args.scope, agent, agent),
   })
   return r.status === 'saved'
 }

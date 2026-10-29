@@ -37,6 +37,7 @@ import { openSettingsPage } from '@/lib/open-settings-page'
 import type { SettingsSection } from '@/stores/settings'
 import { threadBubbleMaxWidth, useThreadColumnNarrow } from './ThreadColumn'
 import { StashOfferCard, ThreadMessageMoreButton, openThreadMessageMenu } from '@/components/PromptStash/StashFromThread'
+import { stashOfferView } from '@/lib/prompt-stash/record'
 
 import {
   CHAMFER_CUT,
@@ -429,9 +430,9 @@ export const ThreadBubble = memo(function ThreadBubble({
   // Thread knows its server (the desktop Thread).
   const source = useThreadAttachmentSource()
   const offer = kind === 'stash.offer' ? item.doc.stash ?? null : null
-  const stashText = offer ? offer.text : text
+  const stashText = offer ? stashOfferView(offer).saved : text
   const menuOn = !mine && !!source && isAgentPost(item) && stashText.trim().length > 0
-  const menuArgs = { scope: source?.scope ?? null, text: stashText, agent: item.doc.from || '', agentName: author }
+  const menuArgs = { scope: source?.scope ?? null, text: stashText, agent: item.doc.from || null, agentName: author }
   return (
     <div
       data-zen-message={item.id}
@@ -520,7 +521,7 @@ export const ThreadBubble = memo(function ThreadBubble({
           </div>
         )}
         {offer && (
-          <StashOfferCard offer={offer} scope={source?.scope ?? null} agent={item.doc.from || ''} agentName={author} />
+          <StashOfferCard docId={item.id} offer={offer} scope={source?.scope ?? null} agent={item.doc.from || null} agentName={author} />
         )}
         {handoff && (
           <div style={{ marginTop: 6 }}>

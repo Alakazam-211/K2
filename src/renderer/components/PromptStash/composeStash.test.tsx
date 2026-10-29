@@ -13,6 +13,8 @@ import type { ServerScope } from '@/kessel/server-scope'
 const h = vi.hoisted(() => {
   const daemonCliGet = vi.fn(async (_scope: unknown, route: string) => {
     if (route === 'terminal/compose-history') return { items: [] }
+    // This computer's Connect host: its stable `server_id`.
+    if (route === 'tunnel/status') return { public_url: 'https://rosson.k2.dev' }
     return []
   })
   const daemonCliPost = vi.fn(async () => ({ ok: true }))
@@ -29,6 +31,7 @@ import { SessionViewChromeContext, type SessionViewChromeValue } from '@/compone
 import { ThreadComposeDrawerContext } from '@/components/SessionView/threadComposeDrawer'
 import { coerceThreadTurn, type ThreadTurn } from '@/components/SessionView/overlayThread'
 import { closeStashDbForTests } from '@/lib/prompt-stash/idb'
+import { resetStashServerIdsForTests } from '@/lib/prompt-stash/compose'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { primaryScope } from '@/kessel/server-scope'
 import { fakeScope } from '@/test-utils/fake-scope'
@@ -105,6 +108,7 @@ beforeEach(async () => {
   await closeStashDbForTests()
   ;(globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory()
   localStorage.clear()
+  resetStashServerIdsForTests()
   usePromptStashStore.setState({ items: [], loaded: false, removeAfterUse: false, save: realSave })
 })
 afterEach(async () => {
@@ -135,7 +139,7 @@ describe('Cmd+S with text', () => {
     await waitFor(() => expect(box().value).toBe(''))
     expect(save.mock.calls[0][0]).toMatchObject({
       text: 'remember this prompt',
-      source: { server_id: 'local', agent: 'sales', agent_name: 'Sales', user: 'owner' },
+      source: { server_id: 'rosson.k2.dev', server_label: 'rosson.k2.dev', agent: 'sales', agent_name: 'Sales', user: 'owner' },
     })
     await reloadStore()
     expect(usePromptStashStore.getState().items.map((r) => r.text)).toEqual(['remember this prompt'])

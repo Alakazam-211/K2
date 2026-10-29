@@ -9,7 +9,11 @@ import { cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
-  daemonCliGet: vi.fn(async () => ({})),
+  daemonCliGet: vi.fn(async (_scope: unknown, route: string): Promise<unknown> => {
+    // This computer's Connect host: its stable `server_id`.
+    if (route === 'tunnel/status') return { public_url: 'https://rosson.k2.dev' }
+    return {}
+  }),
   daemonCliPost: vi.fn(async () => ({ ok: true })),
 }))
 vi.mock('@/lib/daemon-cli', () => ({ daemonCliGet: h.daemonCliGet, daemonCliPost: h.daemonCliPost }))
@@ -19,6 +23,8 @@ import { ThreadAttachmentSourceProvider } from '@/components/Thread/ThreadImageO
 import { coerceStashOffer, type OverlayThreadItem } from '@/components/SessionView/overlayThread'
 import { InboxChatAboutDialog } from '@/components/AgentPane/InboxChatAboutDialog'
 import { closeStashDbForTests } from '@/lib/prompt-stash/idb'
+import { resetStashServerIdsForTests } from '@/lib/prompt-stash/compose'
+import { resetSavedOffersForTests } from './StashFromThread'
 import { primaryScope } from '@/kessel/server-scope'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { useContextMenuStore } from '@/stores/context-menu'
@@ -46,6 +52,8 @@ beforeEach(async () => {
   await closeStashDbForTests()
   ;(globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory()
   localStorage.clear()
+  resetStashServerIdsForTests()
+  resetSavedOffersForTests()
   usePromptStashStore.setState({ items: [], loaded: false, removeAfterUse: false })
   useContextMenuStore.getState().close()
   h.daemonCliPost.mockClear()
@@ -67,7 +75,7 @@ describe('"Save to stash" on an agent message', () => {
     await waitFor(() => expect(usePromptStashStore.getState().items).toHaveLength(1))
     const rec = usePromptStashStore.getState().items[0]
     expect(rec.text).toBe('Try: refactor the parser')
-    expect(rec.source).toMatchObject({ server_id: 'local', agent: 'k2', agent_name: 'k2', user: 'owner' })
+    expect(rec.source).toMatchObject({ server_id: 'rosson.k2.dev', agent: 'k2', agent_name: 'k2', user: 'owner' })
     expect(h.daemonCliPost).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Message menu' }))
@@ -110,9 +118,10 @@ describe('the stash.offer card', () => {
     // The fallback body isn't drawn twice.
     expect(document.querySelector('[data-zen-bubble]')?.textContent).not.toContain('Weekly report\n\n')
     fireEvent.click(screen.getByTestId('stash-offer-save'))
-    await waitFor(() => expect(screen.getByTestId('stash-offer-save').textContent).toBe('Saved to your stash'))
+    await waitFor(() => expect(screen.getByTestId('stash-offer-save').textContent).toBe('Saved'))
     const items = usePromptStashStore.getState().items
-    expect(items.map((r) => [r.text, r.source.agent])).toEqual([['Write the weekly report from the tickets board.', 'k2']])
+    // Field rules: title, blank line, text.
+    expect(items.map((r) => [r.text, r.source.agent])).toEqual([['Weekly report\n\nWrite the weekly report from the tickets board.', 'k2']])
     expect(h.daemonCliPost).not.toHaveBeenCalled()
   })
 
@@ -136,7 +145,7 @@ describe('"Save for later" in the Inbox "Chat about this" dialog', () => {
     const rec = usePromptStashStore.getState().items[0]
     expect(rec.text).toBe('look at this tomorrow')
     expect(rec.quotes).toEqual([{ text: '[k2 inboxID:pkg-1] Build failed\nOpen: k2 inbox read pkg-1', from: 'Inbox' }])
-    expect(rec.source).toMatchObject({ server_id: 'local', agent: 'sales' })
+    expect(rec.source).toMatchObject({ server_id: 'rosson.k2.dev', agent: 'sales' })
     expect(h.daemonCliPost).not.toHaveBeenCalled()
   })
 })

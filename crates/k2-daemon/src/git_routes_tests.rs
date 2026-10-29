@@ -548,3 +548,81 @@ fn create_worktree_route_needs_its_own_workspace() {
     let path = json(&ok)["path"].as_str().expect("path").to_string();
     assert!(Path::new(&path).join("a.txt").is_file(), "worktree checked out");
 }
+
+// ── workspace rows: only this workspace's worktree rows ─────────────
+
+/// A worktree row for `project_id` at `path` (which need not exist).
+fn worktree_row(project_id: &str, path: &str) -> String {
+    let id = format!("w-{}", uuid::Uuid::new_v4().simple());
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    Workspace::create(&conn, &id, project_id, None, "worktree", Some("b"), "b", 1, Some(path)).expect("workspace row");
+    id
+}
+
+fn row_exists(id: &str) -> bool {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    Workspace::get(&conn, id).is_ok()
+}
+
+#[test]
+fn remove_worktree_route_only_drops_its_own_worktree_row() {
+    let d = repo("rm-row");
+    let project_id = register(&d);
+    let wt = git::create_worktree(&s(&d), "feature/row").expect("worktree");
+    let own_row = worktree_row(&project_id, &wt.path);
+
+    // Another workspace's row, and this workspace's row for another checkout.
+    let other = repo("rm-row-other");
+    let other_id = register(&other);
+    let foreign_row = worktree_row(&other_id, &s(&other.join(".worktrees/x")));
+    let sibling_row = worktree_row(&project_id, &s(&d.join(".worktrees/other")));
+    for row in [&foreign_row, &sibling_row] {
+        let r = post(
+            "/cli/git/remove-worktree",
+            serde_json::json!({ "projectPath": s(&d), "worktreePath": wt.path, "workspaceId": row }),
+        );
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        assert_eq!(code(&r), "workspace_mismatch");
+        assert!(row_exists(row), "row kept");
+        assert!(Path::new(&wt.path).join("a.txt").is_file(), "worktree left in place");
+    }
+
+    let r = post(
+        "/cli/git/remove-worktree",
+        serde_json::json!({ "projectPath": s(&d), "worktreePath": wt.path, "workspaceId": own_row }),
+    );
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(!row_exists(&own_row), "its own row dropped");
+    assert!(row_exists(&foreign_row) && row_exists(&sibling_row), "other rows kept");
+}
+
+#[test]
+fn prune_worktrees_route_only_prunes_that_workspaces_rows() {
+    let d = repo("prune-ws");
+    let project_id = register(&d);
+    let other = repo("prune-other");
+    let other_id = register(&other);
+    let other_stale = worktree_row(&other_id, &s(&other.join(".worktrees/gone")));
+
+    // Unregistered folder, then a registered folder with another projectId.
+    let loose = repo("prune-loose");
+    let r = post("/cli/git/prune-worktrees", serde_json::json!({ "projectPath": s(&loose), "projectId": other_id }));
+    assert_eq!(r.status, "404 Not Found", "{}", r.body);
+    assert_eq!(code(&r), "not_found");
+    let r = post("/cli/git/prune-worktrees", serde_json::json!({ "projectPath": s(&d), "projectId": other_id }));
+    assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    assert_eq!(code(&r), "project_mismatch");
+    assert!(row_exists(&other_stale), "other workspace's row kept");
+
+    // Its own workspace: stale rows go, live ones stay.
+    let wt = git::create_worktree(&s(&d), "feature/live").expect("worktree");
+    let live = worktree_row(&project_id, &wt.path);
+    let stale = worktree_row(&project_id, &s(&d.join(".worktrees/gone")));
+    let r = post("/cli/git/prune-worktrees", serde_json::json!({ "projectPath": s(&d), "projectId": project_id }));
+    assert_eq!(r.status, "200 OK", "{}", r.body);
+    assert!(!row_exists(&stale), "stale row pruned");
+    assert!(row_exists(&live), "live row kept");
+    assert!(row_exists(&other_stale), "other workspace's row still kept");
+}

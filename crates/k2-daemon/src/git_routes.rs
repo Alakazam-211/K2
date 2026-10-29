@@ -301,20 +301,8 @@ pub fn handle_git_create_worktree(body: &[u8]) -> CliResponse {
         Err(r) => return r,
     };
     // A registered workspace, and the new row goes under that workspace.
-    match registered_workspace(&b.project_path) {
-        Ok(id) if id == b.project_id => {}
-        Ok(id) => {
-            return CliResponse {
-                status: "400 Bad Request",
-                content_type: "application/json",
-                body: serde_json::json!({
-                    "error": format!("projectId {} is not the workspace at {} ({id})", b.project_id, b.project_path),
-                    "code": "project_mismatch",
-                })
-                .to_string(),
-            }
-        }
-        Err(r) => return r,
+    if let Err(r) = registered_workspace_id(&b.project_path, &b.project_id) {
+        return r;
     }
 
     let result = if b.existing_branch.unwrap_or(false) {
@@ -402,6 +390,55 @@ fn registered_workspace(path: &str) -> Result<String, CliResponse> {
         .ok_or_else(not_found)
 }
 
+/// [`registered_workspace`], and `project_id` must be that workspace
+/// (400 `project_mismatch`), so workspace rows a route writes or deletes
+/// stay under the workspace whose folder it acts on.
+fn registered_workspace_id(path: &str, project_id: &str) -> Result<(), CliResponse> {
+    let id = registered_workspace(path)?;
+    if id == project_id {
+        return Ok(());
+    }
+    Err(CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": format!("projectId {project_id} is not the workspace at {path}"),
+            "code": "project_mismatch",
+        })
+        .to_string(),
+    })
+}
+
+/// `ws_id` is a worktree row of `project_id` for the checkout at
+/// `worktree_path` (canonical compare, else the literal path); else 400
+/// `workspace_mismatch`.
+fn own_worktree_row(ws_id: &str, project_id: &str, worktree_path: &str) -> Result<(), CliResponse> {
+    let row = {
+        let db = db::shared();
+        let conn = db.lock();
+        Workspace::get(&conn, ws_id).ok()
+    };
+    let same_path = |p: &str| match (dunce::canonicalize(p), dunce::canonicalize(worktree_path)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => p.trim_end_matches('/') == worktree_path.trim_end_matches('/'),
+    };
+    let ok = row.is_some_and(|w| {
+        w.project_id == project_id && w.type_ == "worktree" && w.worktree_path.as_deref().is_some_and(same_path)
+    });
+    if ok {
+        return Ok(());
+    }
+    Err(CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "error": format!("workspace {ws_id} is not this workspace's worktree at {worktree_path}"),
+            "code": "workspace_mismatch",
+        })
+        .to_string(),
+    })
+}
+
 /// `POST /cli/git/remove-worktree`: `projectPath` must be a registered K2
 /// workspace root, and core only trashes a linked worktree of that
 /// workspace's repository.
@@ -410,8 +447,16 @@ pub fn handle_git_remove_worktree(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    if let Err(r) = registered_workspace(&b.project_path) {
-        return r;
+    let project_id = match registered_workspace(&b.project_path) {
+        Ok(id) => id,
+        Err(r) => return r,
+    };
+    // The row to drop must be this workspace's row for this worktree;
+    // checked before anything is removed.
+    if let Some(ws_id) = b.workspace_id.as_deref() {
+        if let Err(r) = own_worktree_row(ws_id, &project_id, &b.worktree_path) {
+            return r;
+        }
     }
     if let Err(e) = git::remove_worktree(&b.project_path, &b.worktree_path, b.force.unwrap_or(false)) {
         return git_error(e);
@@ -690,6 +735,10 @@ pub fn handle_git_prune_worktrees(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
+    // Only the worktree rows of the workspace at `projectPath`.
+    if let Err(r) = registered_workspace_id(&b.project_path, &b.project_id) {
+        return r;
+    }
     let _ = k2_core::git_safe::git(&b.project_path)
         .args(["worktree", "prune"])
         .output();

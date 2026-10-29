@@ -934,3 +934,39 @@ async fn plan_checks_the_source_like_run_and_finds_a_nested_worktree() {
     assert_eq!(r.status, 400, "{}", r.body);
     compute_ws::test_detach("eng-a");
 }
+
+/// CE-12 (CE-A9, prd-compute-easy-mode-0467): a job with no session (the
+/// owner token, a script) that times out in the queue still reaches
+/// someone: its workspace's inbox, with what it waited on and the retry
+/// line. Before 0.46.7 such a timeout was silent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_queue_timeout_without_a_session_reaches_the_inbox() {
+    let env = setup();
+    let d = test_harness::start(OWNER).await;
+    let me = seed_ws(&env, "qt");
+    // Never attached: offline, so the pinned job waits.
+    active_node("qt-node");
+    grant("qt-node", &me, None, 1);
+    let r = run(d.port, OWNER, &me, json!({"node": "qt-node", "queueTimeoutSecs": 60})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().expect("job id").to_string();
+    assert!(row(&job).session_id.is_none(), "an owner-token submit has no session");
+    k2_daemon::compute_place::sweep(k2_core::compute::now() + 120);
+    let ended = row(&job);
+    assert_eq!((ended.state.as_str(), ended.reason.as_deref()), ("failed", Some("queue_timeout")), "{ended:?}");
+    let ws_path = env.home.join("ws-qt");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    let items = loop {
+        let items = k2_core::inbox::list_all(&ws_path);
+        if !items.is_empty() {
+            break items;
+        }
+        assert!(std::time::Instant::now() < deadline, "no inbox message for the queue timeout");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(items.len(), 1, "one message: {items:?}");
+    let body = k2_core::inbox::read_by_id(&ws_path, &items[0].id).expect("read the inbox item");
+    let short = &job[..8];
+    assert!(body.contains(&format!("[compute] job {short} on qt-node: failed (queue_timeout): not started within")), "{body}");
+    assert!(body.contains(&format!("k2 compute retry {short}")) && body.contains("--queue-timeout"), "{body}");
+}

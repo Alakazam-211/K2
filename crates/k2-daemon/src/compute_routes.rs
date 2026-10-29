@@ -1623,6 +1623,9 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         }
     }
     if v.get("shards").is_some_and(|x| !x.is_null()) {
+        if b(&v, "now") == Some(true) || s(&v, "sameNodeAs").is_some() {
+            return Err(no(codes::BAD_REQUEST, 400, "--shards places each shard itself: drop --now and --same-node-as"));
+        }
         return run_sharded(who, &v, &ws, client_id, &request_sha);
     }
     let session = who.passport().map(|(_, sid)| sid.to_string());
@@ -1741,8 +1744,14 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         Some(_) => return Err(no(codes::BAD_REQUEST, 400, "--stall-timeout is between 1s and 7d, or off")),
     };
     // No node named = auto-placement, with or without `any` (CP-A2): K2
-    // picks a granted node; `--any` is the same thing.
-    let any = s(&v, "node").is_none();
+    // picks a granted node; `--any` is the same thing. `--same-node-as`
+    // pins like a name (CE-6): the job never moves off that node.
+    let any = s(&v, "node").is_none() && s(&v, "sameNodeAs").is_none();
+    // `--now` (CE-17): start now or refuse; a Batch job waits for an idle
+    // node by design.
+    if b(&v, "now") == Some(true) && tier_ask == Tier::Batch {
+        return Err(no(codes::BAD_REQUEST, 400, "--now and --tier batch don't mix: a Batch job waits for an idle node"));
+    }
     let filter = store::AnyFilter {
         os: s(&v, "os").map(str::to_string),
         arch: s(&v, "arch").map(str::to_string),
@@ -2796,10 +2805,16 @@ fn pick_node(
                 format!("--same-node-as {job} ran on {}, not {}: drop the node name or --same-node-as", other.name, n.name),
             ));
         }
+        if b(v, "now") == Some(true) {
+            pinned_now(who, ws, want, &n, now)?;
+        }
         let rec = place::pinned_record(&n.name, now);
         return Ok((n, rec));
     }
     if let Some((n, job)) = same {
+        if b(v, "now") == Some(true) {
+            pinned_now(who, ws, want, &n, now)?;
+        }
         // CE-6: resume on the node that ran the earlier job (its checkpoint
         // and caches are there). Pinned: it waits for that node.
         let mut rec = place::pinned_record(&n.name, now);
@@ -2869,7 +2884,7 @@ fn pick_node(
             Some(n) => {
                 let there = ranked.iter().find(|(x, _)| x.node.id == n.id).copied();
                 match there {
-                    Some((x, Tier::Busy)) if x.wait_eta(want).is_some_and(|(e, _)| e <= place::CACHE_QUEUE_SECS) => {
+                    Some((x, Tier::Busy)) if b(v, "now") != Some(true) && x.wait_eta(want).is_some_and(|(e, _)| e <= place::CACHE_QUEUE_SECS) => {
                         c = x;
                         tier = Tier::Busy;
                         for_cache = true;
@@ -2894,6 +2909,19 @@ fn pick_node(
             }
         }
     }
+    // `--now` (CE-17): start now or refuse, with the best queue choice;
+    // nothing is stored.
+    if b(v, "now") == Some(true) && tier != Tier::Now {
+        return Err(no(
+            NOT_NOW,
+            409,
+            format!(
+                "--now: no node granted to workspace {} can start it now; the shortest wait is {}. Run without --now to queue there (it moves if another frees up first)",
+                ws.handle,
+                wait_line(c, tier, want)
+            ),
+        ));
+    }
     if tier == Tier::Offline {
         warnings.push(format!(
             "no matching node is online: queued on {} (offline); it moves to the first matching node that comes online{}",
@@ -2912,6 +2940,44 @@ fn pick_node(
         rec.why.push_str(&format!(" · {w}"));
     }
     Ok((c.node.clone(), rec))
+}
+
+/// `--now` refused: nothing could start the job at once (CE-17; exit 3).
+pub(crate) const NOT_NOW: &str = "not_now";
+
+/// "k2n10-vin, ~6 min (quoted)" · "k2n2-m1 (wait unknown)" · "k2n3-m1 (offline)".
+fn wait_line(c: &crate::compute_place::Cand, tier: crate::compute_place::Tier, want: &crate::compute_place::Want) -> String {
+    use crate::compute_place::{self as place, Tier};
+    match (tier, c.wait_eta(want)) {
+        (Tier::Offline, _) => format!("{} (offline)", c.node.name),
+        (_, Some((e, basis))) => format!("{}, {} ({})", c.node.name, place::wait_words(e), if basis == "quote" { "quoted" } else { basis }),
+        (_, None) => format!("{} (wait unknown)", c.node.name),
+    }
+}
+
+/// `--now` on a named node (or `--same-node-as`): refused unless that node
+/// starts the job now (CE-17). A node this workspace has no grant on is
+/// left to the grant check (`not_granted` teaches the fix).
+fn pinned_now(who: &Who, ws: &Ws, want: &crate::compute_place::Want, n: &store::NodeRow, now: i64) -> R<()> {
+    use crate::compute_place::{self as place, Tier};
+    let pinned = place::Want { auto: false, ..want.clone() };
+    let report = place::candidates_report(&pinned, &[], now);
+    let Some(c) = report.cands.iter().find(|c| c.node.id == n.id) else {
+        let granted = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::grant(&conn, &n.id, &ws.id).is_some()
+        };
+        if !granted && !who.is_admin() {
+            return Ok(());
+        }
+        return Err(no(NOT_NOW, 409, format!("--now: {} can't take this job now (k2 compute nodes says why). Run without --now to queue there", n.name)));
+    };
+    match c.tier(&pinned) {
+        Some(Tier::Now) => Ok(()),
+        Some(t) => Err(no(NOT_NOW, 409, format!("--now: {} can't start it now; its wait: {}. Run without --now to queue there", n.name, wait_line(c, t, &pinned)))),
+        None => Err(no(NOT_NOW, 409, format!("--now: {} is paused, draining or unavailable right now. Run without --now to queue there", n.name))),
+    }
 }
 
 /// `--same-node-as <job>` (CE-6): one of this workspace's jobs, and the

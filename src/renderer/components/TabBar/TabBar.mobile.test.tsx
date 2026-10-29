@@ -121,7 +121,7 @@ describe('+ menu Mobile row', () => {
     noteServerVersion('local', '0.46.6', ['mobile-sim-v1'])
     renderBar()
     await openPlus()
-    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'mobile', 'changes'])
+    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'design', 'mobile', 'changes'])
     const row = useContextMenuStore.getState().items.find((i) => i.id === 'mobile')
     if (!row) throw new Error('no Mobile row')
     expect(row.label).toBe('Mobile')
@@ -132,7 +132,7 @@ describe('+ menu Mobile row', () => {
     noteServerVersion('local', '0.46.6', ['tickets-list-all'])
     renderBar()
     await openPlus()
-    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'changes'])
+    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'design', 'changes'])
   })
 
   it('a rebound chord shows its own label; an empty override falls back to ⌘⇧M', async () => {

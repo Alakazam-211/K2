@@ -50,9 +50,13 @@ import { BrowserTabGlyph } from '@/components/TabBar/BrowserTabGlyph'
 import { ChangesTabIcon } from '@/components/TabBar/ChangesTabIcon'
 import { cachedChangesMenuState, probeChangesMenuState, type ChangesMenuState } from '@/stores/git-changes'
 import { PinnedTabMark } from '@/components/TabBar/TabPin'
-import { clampTabDropIndex, isPinnedDesignTab, isPinnedTab } from '@/lib/pinned-tabs'
+import { clampTabDropIndex, isPinnedFeatureTab, isPinnedMobileTab, isPinnedTab } from '@/lib/pinned-tabs'
 import { PaletteIcon, SmartphoneIcon } from '@/components/icons/K2Icons'
 import { isDesignModeEnabled } from '@/components/Design/design-mode-setting'
+import { mobileTabSetting, type PinnedTabKind } from '@/lib/workspace-tab-settings'
+import { writePinnedTab } from '@/components/Settings/pinned-tab-settings'
+import { openTabsSettings } from '@/components/Settings/open-tabs-settings'
+import { patchWindowProjects } from '@/components/Settings/PinnedTabSettingRows'
 import { useToastStore } from '@/stores/toast'
 import { metaChordLabel } from '@/lib/shortcut-label'
 import { effectiveKeybinding } from '@shared/hotkeys'
@@ -100,17 +104,16 @@ export function changesMenuItem(state: ChangesMenuState): ContextMenuItemDef {
   return item
 }
 
-/** Terminal, New File, Browser, Design (while the workspace's Design mode
- *  is on; D-A5, Q-F2), Mobile (while the server can run a device;
- *  prd-mobile-dev-v1 M-A7, M-A13), Changes (always; greyed until there are
- *  changes), then enabled presets in store order. No separator when none
- *  are enabled. */
+/** Terminal, New File, Browser, Design (always; D-A5 — "Show the Design
+ *  tab" only pins one since 2026-10-29), Mobile (while the server can run a
+ *  device; prd-mobile-dev-v1 M-A7, M-A13), Changes (always; greyed until
+ *  there are changes), then enabled presets in store order. No separator
+ *  when none are enabled. */
 export function buildPlusMenuItems(
   presets: AgentPreset[],
   defaultPresetId: string | null,
   sandboxHint: boolean,
   changes: ChangesMenuState = 'checking',
-  designMode = false,
   mobile = false,
 ): ContextMenuItemDef[] {
   const enabled = presets.filter((p) => p.enabled !== 0)
@@ -119,7 +122,7 @@ export function buildPlusMenuItems(
     { id: 'new-file', label: 'New File', shortcut: metaChordLabel('Meta+N') ?? undefined },
     { id: 'browser', label: 'Browser' },
   ]
-  if (designMode) items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
+  items.push({ id: 'design', label: 'Design', icon: <PaletteIcon size={14} /> })
   if (mobile) {
     const combo = effectiveKeybinding(useSettingsStore.getState().keybindings, 'openMobile', isMacPlatform())
     items.push({
@@ -284,6 +287,64 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     room.tabs.getState().ensurePinnedDesignTab(designProjectPath, designModeOn)
   }, [room, groupIndex, designProjectPath, designModeOn])
 
+  // Same for "Show the Mobile tab" (auto / on / off). The store's ensure
+  // reads the room's server (auto = shown where it can run a phone).
+  const mobileTabWord = useRoomProjects((projects) => {
+    const p = projects.find((x) => x.path === cwd || x.workspaces?.some((w) => w.worktreePath === cwd))
+    return p ? mobileTabSetting(p) : null
+  })
+  const lastMobileTabRef = useRef<{ path: string | null; word: string | null }>({ path: designProjectPath, word: mobileTabWord })
+  useEffect(() => {
+    const last = lastMobileTabRef.current
+    lastMobileTabRef.current = { path: designProjectPath, word: mobileTabWord }
+    if (groupIndex !== 0 || designProjectPath === null || mobileTabWord === null) return
+    if (last.path !== designProjectPath || last.word === null || last.word === mobileTabWord) return
+    room.tabs.getState().ensurePinnedMobileTab(designProjectPath)
+  }, [room, groupIndex, designProjectPath, mobileTabWord])
+
+  // Right-click on the pinned Design or Mobile tab: "Remove from this
+  // workspace's tabs" turns that workspace setting off on the room's server
+  // (every client follows), then says where to bring it back.
+  const designProjectId = useRoomProjects(
+    (projects) => projects.find((p) => p.path === cwd || p.workspaces?.some((w) => w.worktreePath === cwd))?.id ?? null,
+  )
+  const handlePinnedFeatureContextMenu = useCallback(
+    async (e: React.MouseEvent, kind: PinnedTabKind) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (designProjectPath === null || designProjectId === null) return
+      const clickedId = await showContextMenu([{ id: 'remove-pinned-tab', label: "Remove from this workspace's tabs" }])
+      if (clickedId !== 'remove-pinned-tab') return
+      const project = { id: designProjectId, path: designProjectPath }
+      const ensure = (on: boolean): void => {
+        if (kind === 'design') room.tabs.getState().ensurePinnedDesignTab(project.path, on)
+        else room.tabs.getState().ensurePinnedMobileTab(project.path, on)
+      }
+      // Gone at once here; the write brings every other client along.
+      ensure(false)
+      try {
+        // The window's projects store mirrors the primary room's server; a
+        // pinned room's list follows the daemon's projects_changed.
+        await writePinnedTab(room.scope, project, kind, false, room.isPrimary ? patchWindowProjects : null)
+      } catch (err) {
+        ensure(true)
+        useToastStore.getState().addToast(errorText(err), 'error')
+        return
+      }
+      // Settings shows the window's own server, so the link is offered only
+      // for a workspace on it.
+      useToastStore
+        .getState()
+        .addToast(
+          'Bring it back in Workspace settings → Tabs',
+          'info',
+          8000,
+          room.scope.isPrimary ? { label: 'Open', onClick: () => openTabsSettings(project.id) } : undefined,
+        )
+    },
+    [room, designProjectPath, designProjectId],
+  )
+
   // ── Pin-to-size, right-click entry (PRD presence-multiplayer §5.5) ─────
   //
   // The pushpin icon-button (v0.40.27) is gone: pinning lives in the
@@ -399,10 +460,6 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
     // Home M5: open in sandbox takes the owner daemon token on the server
     // (`sandbox/open`), so a Home room on another server never offers it.
     const canSandbox = scopeMayWrite(room.scope, 'sandbox/open')
-    // Design shows only for a workspace this room knows whose Design mode
-    // is on (Q-F2), read from the room's own project list (no fetch).
-    const designProject = roomProjectForCwd(room, barCwd) ?? roomActiveProject(room)
-    const designMode = designProject !== null && isDesignModeEnabled(designProject)
     // Mobile shows only when the room's server can run a device (M-A13):
     // a box with no lane never shows a dead tab.
     const mobile = room.scope.serverSupports('mobile-sim-v1')
@@ -423,7 +480,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       shown = optionHeld
       shownChanges = changesState
       useContextMenuStore.getState().replaceItems(
-        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode, mobile),
+        buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile),
       )
     }
     probeChangesMenuState(room.scope, barCwd).then(
@@ -477,7 +534,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
       window.removeEventListener('blur', onBlur)
     }
     try {
-      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, designMode, mobile)
+      const items = buildPlusMenuItems(presets, defaultId, optionHeld && canSandbox, changesState, mobile)
       const picked = await useContextMenuStore.getState().show(rect.left, rect.bottom, items)
       if (!picked) return
       if (picked === 'terminal') {
@@ -1044,17 +1101,20 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
             ? resolvePinSessionId(pinItem, pinSessions, projects)
             : null
 
-          // The pinned Design tab (DD3): compact like Chat and Inbox, right
-          // after them, with the palette. No close, no drag, no menu; the
-          // workspace's Design mode setting owns it.
-          if (isPinnedDesignTab(tab)) {
-            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent || isPinnedDesignTab(t)).length
+          // The pinned Design (DD3) and Mobile tabs: compact like Chat and
+          // Inbox, right after them, with the palette / phone. No close, no
+          // drag; the workspace's "Show the Design / Mobile tab" setting owns
+          // each, and right-click removes it (turns that setting off).
+          if (isPinnedFeatureTab(tab)) {
+            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent || isPinnedFeatureTab(t)).length
+            const kind: PinnedTabKind = isPinnedMobileTab(tab) ? 'mobile' : 'design'
             return (
               <div
                 key={tab.id}
                 data-tab-id={tab.id}
                 data-tab-rail=""
-                data-tab-pinned-design=""
+                data-tab-pinned-design={kind === 'design' ? '' : undefined}
+                data-tab-pinned-mobile={kind === 'mobile' ? '' : undefined}
                 className={`group sticky z-20 flex h-full w-9 flex-shrink-0 items-center justify-center border-r border-[var(--color-border)] transition-colors select-none cursor-pointer ${
                   isActive
                     ? 'text-[var(--color-text-primary)]'
@@ -1067,9 +1127,10 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
                     : 'var(--color-bg-surface)',
                 }}
                 onClick={() => setActiveTabInGroup(groupIndex, tab.id)}
-                title="Design"
+                onContextMenu={(e) => void handlePinnedFeatureContextMenu(e, kind)}
+                title={kind === 'design' ? 'Design' : 'Mobile'}
               >
-                <PaletteIcon />
+                {kind === 'design' ? <PaletteIcon /> : <SmartphoneIcon />}
               </div>
             )
           }
@@ -1138,7 +1199,7 @@ export function TabBar({ cwd, groupIndex = 0 }: TabBarProps): React.JSX.Element 
               )
             })()
 
-            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent || isPinnedDesignTab(t)).length
+            const railIndex = tabs.slice(0, index).filter((t) => t.isSystemAgent || isPinnedFeatureTab(t)).length
             return (
               <div
                 key={tab.id}

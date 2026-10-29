@@ -264,6 +264,7 @@ describe('tab bar plus menu', () => {
       'Terminal',
       'New File',
       'Browser',
+      'Design',
       'Mobile',
       'Changes',
       '',
@@ -298,7 +299,7 @@ describe('tab bar plus menu', () => {
     renderBar(0)
     await openPlus()
     const items = useContextMenuStore.getState().items
-    expect(items.map((item) => item.label)).toEqual(['Terminal', 'New File', 'Browser', 'Mobile', 'Changes'])
+    expect(items.map((item) => item.label)).toEqual(['Terminal', 'New File', 'Browser', 'Design', 'Mobile', 'Changes'])
     expect(items.some((item) => item.type === 'separator')).toBe(false)
     expect(screen.queryByRole('button', { name: 'Off' })).toBeNull()
   })

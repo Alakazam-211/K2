@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 // Design tab in the tab strip (prd-browser-design-mode-v1 DD2/DD3, D-A1,
-// D-A5, Q-F2): the + menu offers "Design" right after Browser only while
-// the workspace's Design mode is on, picking it opens a NEW Design tab
-// every time, the pinned Design tab is a compact palette rail next to Chat
-// and Inbox, and flipping the setting adds or removes it.
+// D-A5, Q-F2): the + menu always offers "Design" right after Browser (since
+// 2026-10-29 "Show the Design tab" only pins one), picking it opens a NEW
+// Design tab every time, the pinned Design tab is a compact palette rail
+// next to Chat and Inbox, and flipping the setting adds or removes it.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent } from '@testing-library/react'
@@ -94,7 +94,7 @@ describe('+ menu Design row', () => {
     usePresetsStore.setState({ presets: [], fetchPresets: realFetch })
   })
 
-  it('Design mode on (or missing): Design right after Browser, with the palette', async () => {
+  it('Show the Design tab on (or missing): Design right after Browser, with the palette', async () => {
     setProject()
     renderBar()
     await openPlus()
@@ -104,18 +104,18 @@ describe('+ menu Design row', () => {
     expect(row.label).toBe('Design')
   })
 
-  it('Design mode off: no Design row', async () => {
+  it('Show the Design tab off: the + menu still offers Design', async () => {
     setProject(0)
     renderBar()
     await openPlus()
-    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'mobile', 'changes'])
+    expect(menuIds()).toEqual(['terminal', 'new-file', 'browser', 'design', 'mobile', 'changes'])
   })
 
-  it('a workspace the room does not know gets no Design row', async () => {
+  it('a workspace the room does not know still gets the Design row', async () => {
     useProjectsStore.setState({ projects: [] })
     renderBar()
     await openPlus()
-    expect(menuIds()).not.toContain('design')
+    expect(menuIds()).toContain('design')
   })
 
   it('picking Design opens a NEW Design tab every time', async () => {
@@ -139,7 +139,7 @@ describe('+ menu Design row', () => {
   })
 })
 
-describe('pinned Design rail and the Design mode switch', () => {
+describe('pinned Design rail and the Show the Design tab switch', () => {
   beforeEach(() => {
     resetTabs()
     usePresetsStore.setState({ presets: [], fetchPresets: vi.fn(async () => {}) })
@@ -177,7 +177,7 @@ describe('pinned Design rail and the Design mode switch', () => {
     expect(tab.hasAttribute('data-tab-pinned-design')).toBe(false)
   })
 
-  it('turning Design mode off removes the pinned Design tab; on brings it back', () => {
+  it('turning Show the Design tab off removes the pinned Design tab; on brings it back', () => {
     setProject(1)
     useTabsStore.setState({ tabs: withPinnedDesignTab([], true, true) })
     renderBar()

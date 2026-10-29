@@ -78,8 +78,9 @@ import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 
 const realFetch = usePresetsStore.getState().fetchPresets
 // This computer's daemon is taken to report every feature, so Mobile
-// (mobile-sim-v1, prd-mobile-dev-v1 M-A13) is listed before Changes.
-const EXPECTED_IDS = ['terminal', 'new-file', 'browser', 'mobile', 'changes']
+// (mobile-sim-v1, prd-mobile-dev-v1 M-A13) is listed before Changes; Design
+// is always listed after Browser (2026-10-29).
+const EXPECTED_IDS = ['terminal', 'new-file', 'browser', 'design', 'mobile', 'changes']
 
 function resetTabs(): void {
   useTabsStore.setState({ tabs: [], activeTabId: null, splitCount: 1, extraGroups: [], activeGroupIndex: 0, activeWorkspaceKey: null })

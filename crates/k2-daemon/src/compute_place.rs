@@ -429,6 +429,12 @@ pub const FEATURE_RUST_COMPONENTS: &str = "rust-components";
 /// The components `rust@<channel>+<component>` may name.
 pub const RUST_COMPONENTS: &[&str] = &["clippy", "rustfmt", "rust-src", "llvm-tools", "rust-analyzer", "miri"];
 
+/// rustup's older names fold to the ones a need uses (`llvm-tools-preview`
+/// → `llvm-tools`, `clippy-preview` → `clippy`), as k2-node folds them.
+pub fn fold_component(c: &str) -> &str {
+    c.strip_suffix("-preview").filter(|b| RUST_COMPONENTS.contains(b)).unwrap_or(c)
+}
+
 /// One need token split into its base and its Rust components:
 /// `rust@stable+clippy+rustfmt` → (`rust@stable`, [clippy, rustfmt]);
 /// `llvm-tools-preview` reads as `llvm-tools`; a component named twice
@@ -443,7 +449,7 @@ pub fn split_rust_components(token: &str) -> Result<(String, Vec<String>), Strin
     }
     let mut comps: Vec<String> = Vec::new();
     for c in tail.split('+') {
-        let c = if c == "llvm-tools-preview" { "llvm-tools" } else { c };
+        let c = fold_component(c);
         if !RUST_COMPONENTS.contains(&c) {
             return Err(format!(
                 "{t:?}: Rust components are {} joined to the channel with + (e.g. rust@stable+clippy+rustfmt); {c:?} isn't one",
@@ -454,6 +460,8 @@ pub fn split_rust_components(token: &str) -> Result<(String, Vec<String>), Strin
             comps.push(c.to_string());
         }
     }
+    // Sorted, as k2-node's `Need::token()` writes them: one canonical token.
+    comps.sort();
     Ok((head.to_string(), comps))
 }
 
@@ -580,7 +588,7 @@ pub fn need_states(offer: &Offer, needs: &[String]) -> Vec<NeedStatus> {
                         .tools
                         .iter()
                         .find(|(k, _)| k.strip_prefix("rust-components:").is_some_and(|x| x == tc || toolchain_is(x, &channel)))
-                        .map(|(_, v)| v.split(',').map(|c| if c.trim() == "llvm-tools-preview" { "llvm-tools".to_string() } else { c.trim().to_string() }).collect())
+                        .map(|(_, v)| v.split(',').map(|c| fold_component(c.trim()).to_string()).collect())
                         .unwrap_or_default();
                     if comps.iter().all(|c| have_comps.contains(c)) {
                         st(NeedState::Ready, Some(tc))
@@ -2535,7 +2543,7 @@ mod tests {
     #[test]
     fn rust_components_ride_on_the_rust_need() {
         assert_eq!(check_needs(&["rust@stable+clippy+rustfmt", "cmake@3"]).unwrap(), vec!["rust@stable+clippy+rustfmt", "cmake@3"]);
-        assert_eq!(check_needs(&["rust+llvm-tools-preview+clippy+clippy"]).unwrap(), vec!["rust@stable+llvm-tools+clippy"], "alias, default channel, dedupe");
+        assert_eq!(check_needs(&["rust+llvm-tools-preview+clippy+clippy"]).unwrap(), vec!["rust@stable+clippy+llvm-tools"], "alias, default channel, dedupe, sorted as k2-node writes it");
         assert_eq!(check_needs(&["rust@nightly"]).unwrap(), vec!["rust@nightly"]);
         let e = check_needs(&["rust@stable+cargo-fmt"]).unwrap_err();
         assert_eq!(e.code, needs::NEED_INVALID);

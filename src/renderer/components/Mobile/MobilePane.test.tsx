@@ -226,6 +226,8 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  vi.useRealTimers()
+  localStorage.removeItem('k2.mobile.liveTouch')
   vi.restoreAllMocks()
   useTabsStore.setState({ tabs: [], activeTabId: null, extraGroups: [], backgroundWorkspaces: {} })
 })
@@ -269,8 +271,10 @@ describe('no device running', () => {
       fireEvent.click(document.querySelector('[data-mobile-start]') as HTMLButtonElement)
     })
     await flush()
-    // The status still says stopped: the screen covers the gap.
+    // The status still says stopped: the screen covers the gap, inside
+    // the phone's outline.
     expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('booting')
+    expect(document.querySelector('[data-mobile-frame] [data-mobile-boot]')).not.toBeNull()
     expect(document.querySelector('[data-mobile-boot-title]')?.textContent).toBe('Starting Pixel 9')
     expect(document.querySelector('[data-mobile-blocked]')).toBeNull()
     const step = (s: string): string | null =>
@@ -289,12 +293,15 @@ describe('no device running', () => {
     expect(document.querySelector('[data-mobile-boot]')?.getAttribute('data-mobile-boot')).toBe('connecting')
     expect(step('booting')).toBe('done')
     expect(step('connecting')).toBe('now')
-    expect(document.querySelector('[data-mobile-canvas]')).not.toBeNull()
+    // The same outline now holds the canvas, hidden until its first frame.
+    expect(document.querySelector('[data-mobile-frame-screen] [data-mobile-boot]')).not.toBeNull()
+    expect((document.querySelector('[data-mobile-canvas]') as HTMLElement).style.opacity).toBe('0')
     await act(async () => {
       stub.pushFrame()
     })
     await flush()
     expect(document.querySelector('[data-mobile-boot]')).toBeNull()
+    expect((document.querySelector('[data-mobile-canvas]') as HTMLElement).style.opacity).toBe('1')
   })
 
   it('a start that fails keeps the screen with the error and Try again boots again', async () => {
@@ -655,6 +662,39 @@ describe('watching and visibility', () => {
       expect(document.querySelector(`[data-mobile-tool="${name}"]`)).toBeNull()
     }
     expect(document.querySelector('[data-mobile-watching]')?.textContent).toBe('Watching')
+  })
+
+  it('a reconnect keeps the last frame, dimmed, and says Reconnecting only after 2 s', async () => {
+    const stub = createStubSimStream()
+    const view = renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    await flush()
+    const screenBox = document.querySelector('[data-mobile-frame-screen]') as HTMLElement
+    expect(screenBox.style.filter).toBe('')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    view.rerender(pane(stub, false))
+    await flush()
+    view.rerender(pane(stub, true))
+    await flush()
+    // No boot screen, no blank: the last frame stays, dimmed.
+    expect(document.querySelector('[data-mobile-boot]')).toBeNull()
+    expect((document.querySelector('[data-mobile-canvas]') as HTMLElement).style.opacity).toBe('1')
+    expect((document.querySelector('[data-mobile-frame-screen]') as HTMLElement).style.filter).not.toBe('')
+    expect(document.querySelector('[data-mobile-stream-note]')).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    expect(document.querySelector('[data-mobile-stream-note]')?.textContent).toBe('Reconnecting…')
+    vi.useRealTimers()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    await flush()
+    expect(document.querySelector('[data-mobile-stream-note]')).toBeNull()
+    expect((document.querySelector('[data-mobile-frame-screen]') as HTMLElement).style.filter).toBe('')
   })
 
   it('a hidden tab opens no socket; showing it connects; hiding it closes it', async () => {

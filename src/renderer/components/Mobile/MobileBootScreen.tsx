@@ -1,7 +1,9 @@
 // The Mobile tab's loading screen while a device starts (Rosson 2026-10-29).
 // A first start on a Mac takes 20–60 s (the device is created, iOS boots for
 // the first time, K2 builds its Simulator screen helper once), so the pane
-// shows where it is instead of one line of text.
+// shows where it is instead of one line of text. It draws inside the phone
+// outline (the pane puts it in the frame's screen), so nothing jumps when the
+// first frame arrives: the canvas fades in under it.
 //
 // Built only from what the daemon already reports: the session state
 // (installing → booting → running) and the stream's first frame. The daemon
@@ -70,28 +72,28 @@ export function MobileBootScreen({
 
   return (
     <div
-      className="flex w-full max-w-xs flex-col gap-3 border border-[var(--color-border)] bg-[var(--color-bg)] p-4 text-xs"
+      className="flex h-full w-full flex-col items-center justify-center gap-3 overflow-hidden px-[9%] text-center text-[11px] leading-snug text-white/80"
       role="status"
       aria-live="polite"
       data-mobile-boot={failed ? 'failed' : phase}
     >
-      <div className="flex items-center gap-2">
-        {failed ? null : (
-          <div
-            className="h-3 w-3 flex-shrink-0 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent"
-            aria-hidden
-          />
-        )}
-        <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]" data-mobile-boot-title="">
+      {failed ? null : (
+        <div
+          className="h-6 w-6 flex-shrink-0 animate-spin rounded-full border-2 border-white/15 border-t-[var(--color-accent)]"
+          aria-hidden
+        />
+      )}
+      <div className="flex min-w-0 max-w-full flex-col items-center gap-0.5">
+        <span className="max-w-full truncate text-[13px] font-medium text-white" data-mobile-boot-title="">
           {failed ? `${deviceName} didn't start` : `Starting ${deviceName}`}
         </span>
         {failed ? null : (
-          <span className="flex-shrink-0 tabular-nums text-[var(--color-text-muted)]" data-mobile-boot-elapsed="">
+          <span className="tabular-nums text-white/45" data-mobile-boot-elapsed="">
             {formatElapsed(elapsed)}
           </span>
         )}
       </div>
-      <ol className="flex flex-col gap-1.5">
+      <ol className="flex flex-col gap-1.5 text-left">
         {steps.map((s, i) => {
           const state = i < at ? 'done' : i === at ? (failed ? 'failed' : 'now') : 'next'
           return (
@@ -102,24 +104,20 @@ export function MobileBootScreen({
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
                 ) : state === 'failed' ? (
-                  <svg className="h-3 w-3 text-[var(--color-text-secondary)]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <svg className="h-3 w-3 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 6l12 12M18 6L6 18" />
                   </svg>
                 ) : (
                   <span
                     className={`h-1.5 w-1.5 rounded-full ${
-                      state === 'now' ? 'animate-pulse bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+                      state === 'now' ? 'animate-pulse bg-[var(--color-accent)]' : 'bg-white/25'
                     }`}
                   />
                 )}
               </span>
               <span
                 className={
-                  state === 'next'
-                    ? 'text-[var(--color-text-muted)]'
-                    : state === 'done'
-                      ? 'text-[var(--color-text-secondary)]'
-                      : 'text-[var(--color-text-primary)]'
+                  state === 'next' ? 'text-white/40' : state === 'done' ? 'text-white/60' : 'text-white'
                 }
               >
                 {stepLabel(s, deviceName)}
@@ -129,18 +127,18 @@ export function MobileBootScreen({
         })}
       </ol>
       {failed ? (
-        <div className="text-[var(--color-text-secondary)]" data-mobile-boot-error="">
+        <div className="max-w-full break-words text-white/75" data-mobile-boot-error="">
           {error}
         </div>
       ) : elapsed >= BOOT_HINT_AFTER_MS ? (
-        <div className="text-[var(--color-text-muted)]" data-mobile-boot-hint="">
+        <div className="max-w-[26ch] text-[10.5px] text-white/50 animate-[context-menu-fade-in_300ms_ease-out]" data-mobile-boot-hint="">
           {BOOT_HINT}
         </div>
       ) : null}
       {failed && onRetry ? (
         <button
           type="button"
-          className="h-7 cursor-pointer self-start border border-[var(--color-border)] px-3 text-xs text-[var(--color-text-primary)] hover:border-[var(--color-accent)] disabled:cursor-default disabled:opacity-50"
+          className="h-7 cursor-pointer rounded-full border border-white/30 px-4 text-xs text-white hover:border-white/60 hover:bg-white/10 disabled:cursor-default disabled:opacity-50"
           disabled={retryDisabled}
           onClick={onRetry}
           data-mobile-boot-retry=""

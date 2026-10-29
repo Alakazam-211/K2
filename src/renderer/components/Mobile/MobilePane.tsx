@@ -75,6 +75,9 @@ import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
 
+/** A reconnect says so only once it has taken this long. */
+const RECONNECT_NOTE_AFTER_MS = 2000
+
 /** Smallest share either side of the split keeps (flex units of 100). */
 const MIN_SPLIT_SHARE = 15
 
@@ -602,17 +605,37 @@ function MobileDevice({
     if (sessionState === 'installing' || sessionState === 'booting' || sessionState === 'running') setBootPending(false)
   }, [sessionState])
   const streamClosed = stream.conn === 'error' || stream.conn === 'closed'
+  // Once this device has drawn, a reconnect (a hidden tab shown again, a
+  // network blip) keeps the last frame, dimmed, instead of a blank or the
+  // boot screen; "Reconnecting…" shows only after 2 s.
+  const [hadFrame, setHadFrame] = useState(false)
+  useEffect(() => {
+    if (stream.hasFrame) setHadFrame(true)
+  }, [stream.hasFrame])
+  useEffect(() => {
+    if (!running) setHadFrame(false)
+  }, [running, simId])
+  const reconnecting = running && hadFrame && !stream.hasFrame
+  const [slowReconnect, setSlowReconnect] = useState(false)
+  useEffect(() => {
+    if (!reconnecting) {
+      setSlowReconnect(false)
+      return
+    }
+    const t = window.setTimeout(() => setSlowReconnect(true), RECONNECT_NOTE_AFTER_MS)
+    return () => window.clearTimeout(t)
+  }, [reconnecting])
   const bootPhase: MobileBootPhase | null =
     sessionState === 'installing'
       ? 'installing'
       : sessionState === 'booting'
         ? 'booting'
-        : running && !stream.hasFrame && !streamClosed
+        : running && !stream.hasFrame && !streamClosed && !hadFrame
           ? 'connecting'
           : bootPending
             ? 'booting'
             : null
-  const bootFailed = sessionState === 'failed' || (running && !stream.hasFrame && streamClosed)
+  const bootFailed = sessionState === 'failed' || (running && !stream.hasFrame && streamClosed && !hadFrame)
   const [bootRun, setBootRun] = useState<{
     startedAt: number
     phase: MobileBootPhase
@@ -663,15 +686,22 @@ function MobileDevice({
     onCopy,
   }
   const pickedProfile = devices.find((d) => d.id === device)
-  const shape = resolveDeviceShape(session?.lane ?? devicesLane, session?.profile?.name ?? '', screen)
+  // The phone the frame draws: the running device, else (while it starts)
+  // the one being started, so the outline doesn't jump at the first frame.
+  const frameProfile = session?.profile ?? pickedProfile ?? null
+  const frameScreen: ScreenPt =
+    screen ?? (frameProfile ? { widthPt: frameProfile.widthPt, heightPt: frameProfile.heightPt } : { widthPt: 393, heightPt: 852 })
+  const shape = resolveDeviceShape(session?.lane ?? devicesLane, frameProfile?.name ?? '', frameScreen)
   const showRail = canControl && running
-  const frame = frameLayout(shape, screen ?? { widthPt: 9, heightPt: 19.5 }, stageSize, {
-    rightInset: showRail ? RAIL_INSET_PX : 0,
-    screenOnly,
-  })
   const overlayBox = renderOverlay && screen && live ? box() : null
   const banner = holdBanner(hold, tookOver)
   const shownNotice = notice ?? stream.inputError
+  // Room for the rail from the first boot step, so the phone doesn't shift
+  // when the rail appears.
+  const frame = frameLayout(shape, frameScreen, stageSize, {
+    rightInset: canControl && (running || bootPhase !== null) ? RAIL_INSET_PX : 0,
+    screenOnly,
+  })
   const bootDevice = session?.profile?.name ?? devices.find((d) => d.id === device)?.name ?? (device || 'the device')
   const bootScreen = bootPhase ? (
     <MobileBootScreen
@@ -726,7 +756,7 @@ function MobileDevice({
       ) : null}
       <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6" data-mobile-stage="">
         {running ? (
-          <DeviceFrame shape={shape} layout={frame} screenOnly={screenOnly}>
+          <DeviceFrame shape={shape} layout={frame} screenOnly={screenOnly} dimmed={reconnecting}>
             <div
               ref={screenRef}
               tabIndex={interactive ? 0 : -1}
@@ -742,12 +772,28 @@ function MobileDevice({
               onPaste={onPaste}
               data-mobile-screen={interactive ? 'interactive' : 'watching'}
             >
-              <canvas ref={canvasRef} className="block h-full w-full" data-mobile-canvas="" />
-              {!stream.hasFrame ? (
-                <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-[var(--color-text-muted)]" data-mobile-stream-note="">
-                  {stream.conn === 'error' || stream.conn === 'closed'
-                    ? stream.reason ?? 'The device stream closed. Reopen the tab to try again.'
-                    : 'Connecting to the device…'}
+              <canvas
+                ref={canvasRef}
+                className="block h-full w-full transition-opacity duration-150"
+                style={{ opacity: stream.hasFrame || hadFrame ? 1 : 0 }}
+                data-mobile-canvas=""
+              />
+              {bootScreen ? (
+                <div className="absolute inset-0 bg-black" data-mobile-boot-overlay="">
+                  {bootScreen}
+                </div>
+              ) : !stream.hasFrame && (streamClosed || slowReconnect || !hadFrame) ? (
+                <div className="pointer-events-none absolute inset-x-0 top-[12%] flex justify-center px-3">
+                  <span
+                    className="max-w-full rounded-full bg-black/70 px-3 py-1 text-center text-[11px] text-white/85 backdrop-blur"
+                    data-mobile-stream-note=""
+                  >
+                    {streamClosed
+                      ? stream.reason ?? 'The device stream closed. Reopen the tab to try again.'
+                      : hadFrame
+                        ? 'Reconnecting…'
+                        : 'Connecting to the device…'}
+                  </span>
                 </div>
               ) : null}
               {overlayBox && screen && renderOverlay ? renderOverlay({ box: overlayBox, screen }) : null}
@@ -764,6 +810,12 @@ function MobileDevice({
                   data-mobile-touch-dot={dot.down ? 'down' : 'up'}
                 />
               ) : null}
+            </div>
+          </DeviceFrame>
+        ) : bootScreen ? (
+          <DeviceFrame shape={shape} layout={frame} screenOnly={screenOnly}>
+            <div className="absolute inset-0" data-mobile-boot-overlay="">
+              {bootScreen}
             </div>
           </DeviceFrame>
         ) : null}
@@ -806,11 +858,6 @@ function MobileDevice({
             {canControl && pickerGroups.length > 0 ? <DevicePicker {...pickerProps} /> : null}
           </div>
         )}
-        {bootScreen ? (
-          <div className="absolute inset-0 flex items-center justify-center bg-[var(--color-bg)] p-4" data-mobile-boot-overlay="">
-            {bootScreen}
-          </div>
-        ) : null}
         {banner ? (
           <div
             className="absolute bottom-2 left-1/2 -translate-x-1/2 border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-0.5 text-xs text-[var(--color-text-secondary)]"

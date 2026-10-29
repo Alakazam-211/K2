@@ -72,8 +72,23 @@ fn assert_no_host_path(what: &str, body: &str, ws_path: &str, home: &str) {
     for needle in [ws_path, home, "/home/", "/Users/", "/tmp/", "/private/", "/var/folders/", "/root/"] {
         assert!(!body.contains(needle), "{what}: {needle:?} reached an App guest: {body}");
     }
-    let escaped = ws_path.replace('/', "\\/");
-    assert!(!body.contains(&escaped), "{what}: escaped folder in {body}");
+    // Every spelling a folder can take in a JSON body: `\/`-escaped, and on
+    // Windows `\\`-escaped or with '/' (K2 stores workspace paths with '/').
+    for p in [ws_path, home] {
+        let slashed = p.replace('\\', "/");
+        for needle in [p.replace('/', "\\/"), p.replace('\\', "\\\\"), slashed.clone(), slashed.replace('/', "\\/")] {
+            assert!(!body.contains(&needle), "{what}: {needle:?} (a spelling of {p:?}) reached an App guest: {body}");
+        }
+    }
+    // Any Windows drive path at all (`D:\`, `D:\\` escaped, `D:/`), whoever's
+    // folder it is. A drive letter stands alone: "http://" is not one.
+    let b = body.as_bytes();
+    for i in 0..b.len().saturating_sub(2) {
+        let lone = i == 0 || !b[i - 1].is_ascii_alphanumeric();
+        if lone && b[i].is_ascii_alphabetic() && b[i + 1] == b':' && (b[i + 2] == b'\\' || b[i + 2] == b'/') {
+            panic!("{what}: a drive path reached an App guest at byte {i}: {body}");
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -87,7 +102,7 @@ async fn app_guests_never_see_a_host_path_in_a_rooms_thread() {
     let addr = ws.handle.clone();
     let ws_path = ws.path.to_string_lossy().into_owned();
     let home = env.path().to_string_lossy().into_owned();
-    assert!(ws_path.starts_with('/') && ws_path.len() > 5, "{ws_path}");
+    assert!(std::path::Path::new(&ws_path).is_absolute() && ws_path.len() > 5, "{ws_path}");
 
     // ── A system line stored the old way (before the source fix) ──────
     let legacy_id = {

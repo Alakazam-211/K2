@@ -198,10 +198,10 @@ pub struct Project {
     /// `POST /cli/agent-access/set {toggle: "chat_manage"}` (Owner/Admin).
     #[serde(default)]
     pub agents_can_manage_chat: i64,
-    /// Design mode (migration 0179). DEFAULT 1 (on): the room shows the
-    /// pinned Design tab and the + menu's Design entry. 0 hides both for
-    /// this workspace (every client). Written via `/cli/workspace/set
-    /// {design_mode_enabled}` / `k2 workspace set <ws> design-mode on|off`.
+    /// "Show the Design tab" (migration 0179, once "Design mode"). DEFAULT 1
+    /// (on): the room shows the pinned Design tab. 0 removes it for this
+    /// workspace (every client); + → Design still opens one. Written via
+    /// `/cli/workspace/set {design_mode_enabled}` / `k2 workspace design-tab`.
     #[serde(default = "project_switch_default_on")]
     pub design_mode_enabled: i64,
     /// Agents run Gardens end to end (migration 0181) — "Manage Gardens and

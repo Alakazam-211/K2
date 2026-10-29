@@ -18813,31 +18813,71 @@ cmd_browser_redeliver() {
     _browser_notes_reply "$json" "$raw"
 }
 
-# Design mode per workspace (migration 0179): the pinned Design tab and the
-# + menu's Design entry. Default on. `k2 workspace design-mode get|set`.
-cmd_workspace_design_mode() {
+# The workspace's pinned Design and Mobile tabs (Workspace settings → Tabs):
+#   k2 workspace design-tab get|set <ws> [on|off]        (0179; alias design-mode)
+#   k2 workspace mobile-tab get|set <ws> [on|off|auto]   (0250; NULL = auto)
+# Both write `/cli/workspace/set`; every client of the room follows.
+_workspace_pinned_tab_help() {
+    case "$1" in
+        design)
+            cat <<'EOF'
+Usage: k2 workspace design-tab get <workspace>
+       k2 workspace design-tab set <workspace> on|off
+
+"Show the Design tab": keeps the workspace's Design tab pinned next to
+Chat and Inbox, for every person and window on this server. Default on.
+Off removes the pinned tab. A Design tab can still be opened from the
++ menu while it is off (an ordinary tab you can close).
+`design-mode` is the old name of this command and still works.
+
+Examples:
+  k2 workspace design-tab get my-site
+  k2 workspace design-tab set my-site off
+EOF
+            ;;
+        mobile)
+            cat <<'EOF'
+Usage: k2 workspace mobile-tab get <workspace>
+       k2 workspace mobile-tab set <workspace> on|off|auto
+
+"Show the Mobile tab": keeps the workspace's Mobile tab (its phone) pinned
+next to Chat and Inbox, for every person and window on this server.
+  auto  the default: pinned whenever this server can run a phone
+  on    pinned (still only where this server can run a phone)
+  off   not pinned; the Mobile tab still opens from + or Cmd+Shift+M
+        as an ordinary tab you can close
+`get` prints the setting, then whether the tab shows on this server.
+
+Examples:
+  k2 workspace mobile-tab get my-app
+  k2 workspace mobile-tab set my-app off
+  k2 workspace mobile-tab set my-app auto
+EOF
+            ;;
+    esac
+}
+
+cmd_workspace_pinned_tab() {
+    local kind="$1" name="$2"
+    shift 2
     local sub="${1:-}"
     shift || true
     local target="${1:-}"
+    local words="on|off"
+    [ "$kind" = "mobile" ] && words="on|off|auto"
     case "$sub" in
         get|set)
             if [ -z "$target" ]; then
-                echo "Usage: k2 workspace design-mode get|set <workspace> [on|off]" >&2
+                echo "Usage: k2 workspace $name get|set <workspace> [$words]" >&2
                 exit 2
             fi
             ;;
         ""|-h|--help|help)
-            cat <<'EOF' >&2
-Usage: k2 workspace design-mode get|set <workspace> [on|off]
-
-Design mode shows the workspace's pinned Design tab (next to Inbox) and
-Design in the + menu, for every client of the room. Default on. Off hides
-both; it does not stop `k2 browser note`.
-EOF
+            _workspace_pinned_tab_help "$kind" >&2
             [ -z "$sub" ] && exit 2
             return 0
             ;;
-        *) echo "Usage: k2 workspace design-mode get|set <workspace> [on|off]" >&2; exit 2 ;;
+        *) echo "Usage: k2 workspace $name get|set <workspace> [$words]" >&2; exit 2 ;;
     esac
     local resolved_path
     resolved_path=$(cli_request "/cli/workspace/resolve" "q=$(urlencode "$target")" 2>/dev/null \
@@ -18850,6 +18890,7 @@ except Exception:
     if [ "$sub" = "get" ]; then
         cli_request "/cli/settings" "project=$(urlencode "$resolved_path")" | python3 -c '
 import json, sys
+kind = sys.argv[1]
 raw = sys.stdin.read()
 try:
     d = json.loads(raw)
@@ -18860,24 +18901,45 @@ if isinstance(d, dict) and d.get("error"):
     err = d["error"]
     print("Error: %s" % (err.get("hint") or err.get("code") or err if isinstance(err, dict) else err), file=sys.stderr)
     sys.exit(1)
-if "designModeEnabled" not in d:
-    print("Error: this daemon does not know Design mode (update it)", file=sys.stderr)
+if kind == "design":
+    if "designModeEnabled" not in d:
+        print("Error: this daemon does not know the Design tab setting (update it)", file=sys.stderr)
+        sys.exit(1)
+    print("on" if d["designModeEnabled"] else "off")
+    sys.exit(0)
+if "mobileTab" not in d or "mobileTabShown" not in d:
+    print("Error: this daemon does not know the Mobile tab setting (update it)", file=sys.stderr)
     sys.exit(1)
-print("on" if d["designModeEnabled"] else "off")
-'
+word = d["mobileTab"]
+if d["mobileTabShown"]:
+    print("%s (shown)" % word)
+elif word == "off":
+    print("off (not shown)")
+else:
+    print("%s (not shown: this server cannot run a phone)" % word)
+' "$kind"
         return
     fi
     local mode="${2:-}" val=""
     case "$(printf '%s' "$mode" | tr '[:upper:]' '[:lower:]')" in
         on|1|true|yes)  val="1" ;;
         off|0|false|no) val="0" ;;
-        *) echo "Error: expected on|off, got: ${mode:-<nothing>}" >&2; exit 2 ;;
+        auto|default)
+            if [ "$kind" = "mobile" ]; then val="auto"; fi
+            ;;
     esac
+    if [ -z "$val" ]; then
+        echo "Error: expected $words, got: ${mode:-<nothing>}" >&2
+        exit 2
+    fi
+    local field="design_mode_enabled" label="Design tab"
+    if [ "$kind" = "mobile" ]; then field="mobile_tab_enabled"; label="Mobile tab"; fi
     local body
     body=$(python3 -c 'import json,sys
-print(json.dumps({"project": sys.argv[1], "fields": {"design_mode_enabled": sys.argv[2]}}))' "$resolved_path" "$val")
+print(json.dumps({"project": sys.argv[1], "fields": {sys.argv[2]: sys.argv[3]}}))' "$resolved_path" "$field" "$val")
     cli_post_json "/cli/workspace/set" "$body" | python3 -c '
 import json, sys
+field, val, label = sys.argv[1], sys.argv[2], sys.argv[3]
 raw = sys.stdin.read()
 try:
     d = json.loads(raw)
@@ -18890,13 +18952,13 @@ if d.get("error") or d.get("ok") is False:
         err = err.get("hint") or err.get("code") or err
     print("Error: %s" % (err or raw[:200]), file=sys.stderr)
     sys.exit(1)
-state = "on" if sys.argv[1] == "1" else "off"
+state = {"1": "on", "0": "off", "auto": "auto"}[val]
 for a in d.get("actions") or []:
-    if a.get("field") == "design_mode_enabled" and a.get("status") == "skipped":
-        print("Design mode already %s (unchanged)." % state)
+    if a.get("field") == field and a.get("status") == "skipped":
+        print("%s already %s (unchanged)." % (label, state))
         sys.exit(0)
-print("Design mode %s." % state)
-' "$val"
+print("%s %s." % (label, state))
+' "$field" "$val" "$label"
 }
 
 # k2 thread export|import|imports (prd-clone-carries-threads-and-vault-v1
@@ -47410,6 +47472,12 @@ API / HOST-SESSIONS
   default-model set <ws> <model|clear>   Set or clear workspace default model
   force-model-on-resume get <ws>    Show if resume also splices the default model
   force-model-on-resume set <ws> on|off  Pass default model on dead resume (new PTY)
+
+TABS (Workspace settings → Tabs; every window and person on this server)
+  design-tab get <ws>               Show if the Design tab is pinned (default on)
+  design-tab set <ws> on|off        Pin or remove the Design tab (old name: design-mode)
+  mobile-tab get <ws>               Show the Mobile tab setting and if it shows here
+  mobile-tab set <ws> on|off|auto   Pin, remove, or auto (pinned where a phone can run)
 
 CANONICAL CHAT
   swap-canonical <ws> --agent <harness>
@@ -79225,7 +79293,11 @@ EOF
         # (`k2 workspace create --help` used to create a workspace named
         # `--help`).
         if _wants_help "${@:2}"; then
-            cmd_help_workspace
+            case "${2:-}" in
+                design-tab|design-mode) _workspace_pinned_tab_help design ;;
+                mobile-tab)             _workspace_pinned_tab_help mobile ;;
+                *)                      cmd_help_workspace ;;
+            esac
             exit 0
         fi
         case "${2:-}" in
@@ -79260,8 +79332,9 @@ EOF
             host-session-cell-cap|api-host-session-cap) shift 2; cmd_workspace_host_session_cell_cap "$@" ;;
             default-model)     shift 2; cmd_workspace_default_model "$@" ;;
             force-model-on-resume) shift 2; cmd_workspace_force_model_on_resume "$@" ;;
-            design-mode)       shift 2; cmd_workspace_design_mode "$@" ;;
-            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|resources|trust|triage|set-agent-name|set-agent-identity|set-handle|resume-chat-args|swap-canonical|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|design-mode|...> [args]" >&2; exit 1 ;;
+            design-tab|design-mode) shift; cmd_workspace_pinned_tab design "$@" ;;
+            mobile-tab)        shift; cmd_workspace_pinned_tab mobile "$@" ;;
+            *)                 echo "Usage: k2 workspace <list|launch|profile|update|create|open|remove|resources|trust|triage|set-agent-name|set-agent-identity|set-handle|resume-chat-args|swap-canonical|api-key|api-guest-policy|api-skip-permissions|api-host-session-cap|host-session-cell-cap|default-model|force-model-on-resume|design-tab|mobile-tab|...> [args]" >&2; exit 1 ;;
         esac
         ;;
     onboarding)

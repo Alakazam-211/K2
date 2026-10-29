@@ -1247,14 +1247,55 @@ pub fn pinned_record(node_name: &str, now: i64) -> store::Placement {
     }
 }
 
+// ── CPU-count hints (CE-15) ──────────────────────────────────────────
+
+/// Env names K2 sets to the job's CPUs, unless the caller set them
+/// (CE-15). GNU `nproc` honours `OMP_NUM_THREADS`. The PRD's
+/// `K2_JOB_CPUS` needs k2-node: a node refuses any `K2_` name in a plan's
+/// env, so the controller can't send it.
+pub const CPU_HINT_VARS: &[&str] = &["CARGO_BUILD_JOBS", "RUST_TEST_THREADS", "NEXTEST_TEST_THREADS", "OMP_NUM_THREADS"];
+
+/// The job's CPUs: `--cpus` rounded up, else the node's default
+/// reservation (its CPUs ÷ its parallel slots, as k2-node reserves for a
+/// job without `--cpus`), at least 1. `None`: no offer to read.
+pub fn job_cpus(cpu_millis: Option<u64>, offer: Option<&Offer>) -> Option<u64> {
+    match cpu_millis {
+        Some(m) => Some(m.div_ceil(1000).max(1)),
+        None => offer.filter(|o| o.caps.cpu_millis > 0).map(|o| (o.caps.cpu_millis / u64::from(o.parallel_max.max(1))).div_ceil(1000).max(1)),
+    }
+}
+
+/// Set the hints in `env`: first drop `prev` (hints set for another
+/// node), then each [`CPU_HINT_VARS`] name `env` and `skip` don't have.
+/// Returns the names set.
+pub fn set_cpu_hints(env: &mut BTreeMap<String, String>, prev: &[String], skip: &[String], cpus: Option<u64>) -> Vec<String> {
+    for n in prev {
+        env.remove(n);
+    }
+    let Some(c) = cpus else { return Vec::new() };
+    let mut set = Vec::new();
+    for n in CPU_HINT_VARS {
+        if !env.contains_key(*n) && !skip.iter().any(|s| s == n) {
+            env.insert(n.to_string(), c.to_string());
+            set.push(n.to_string());
+        }
+    }
+    set
+}
+
 /// The plan for `node`: the base plan's argv/env/source/needs/artifacts,
-/// with this node's id, this node's grant limits and (when it enforces
-/// one) the stall timeout.
-pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&GrantRow>, features: &[String]) -> Plan {
+/// with this node's id, this node's grant limits, (when it enforces one)
+/// the stall timeout, and the CPU hints for this node (CE-15, CE-A14).
+pub fn plan_for_node(base: &Plan, ctl: &JobCtl, node: &NodeRow, grant: Option<&GrantRow>, offer: &Offer) -> Plan {
+    let features = &offer.features;
     let max_secs = grant.map(|g| g.max_job_secs).unwrap_or(compute::DEFAULT_MAX_JOB_SECS);
     let disk_gb = grant.map(|g| g.max_disk_gb).unwrap_or(compute::DEFAULT_MAX_DISK_GB);
     let mut p = base.clone();
     p.node_id = node.id.clone();
+    if !ctl.cpu_hints.is_empty() {
+        let cpus = job_cpus(p.limits.cpu_millis, Some(offer));
+        set_cpu_hints(&mut p.env, &ctl.cpu_hints, &p.secret_env, cpus);
+    }
     p.limits.max_secs = ctl.timeout_secs.unwrap_or(max_secs).clamp(1, max_secs.max(1)) as u64;
     p.limits.disk_bytes = (disk_gb.max(1) as u64) << 30;
     p.stall_secs = stall_for(ctl, features, p.limits.max_secs);
@@ -1445,7 +1486,7 @@ pub fn try_move(j: &JobRow, avoid: &[String], hard: bool, why: &str) -> Option<S
     if !ok {
         return None;
     }
-    let mut new_plan = plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref(), &c.offer.features);
+    let mut new_plan = plan_for_node(&plan, &j.ctl, &c.node, c.grant.as_ref(), &c.offer);
     if share::queue_on(&c.offer) {
         set_queue_fields(&mut new_plan, j);
     }
@@ -2411,6 +2452,36 @@ mod tests {
         j.ctl.placement = Some(store::Placement { code: QUEUED_FOR_CACHE.into(), ..Default::default() });
         assert!(held_for_cache(&j, 1000, 1000 + CACHE_QUEUE_SECS as i64 - 1));
         assert!(!held_for_cache(&j, 1000, 1000 + CACHE_QUEUE_SECS as i64));
+    }
+
+    /// CE-15: the hints follow --cpus (rounded up), else the node's default
+    /// reservation (12 CPUs, 3 slots → 4); a caller's own value wins; a
+    /// move recomputes them for the new node.
+    #[test]
+    fn cpu_hints_follow_the_jobs_cpus() {
+        let mut node = cand("n", 32, 32, 0, 3).offer;
+        node.caps.cpu_millis = 12_000;
+        assert_eq!(job_cpus(Some(3500), Some(&node)), Some(4), "--cpus 3.5 → 4");
+        assert_eq!(job_cpus(None, Some(&node)), Some(4), "12 CPUs / 3 slots");
+        assert_eq!(job_cpus(None, None), None);
+        let mut env = BTreeMap::from([("CARGO_BUILD_JOBS".to_string(), "2".to_string())]);
+        let set = set_cpu_hints(&mut env, &[], &[], Some(4));
+        assert_eq!(set, vec!["RUST_TEST_THREADS", "NEXTEST_TEST_THREADS", "OMP_NUM_THREADS"]);
+        assert_eq!((env["CARGO_BUILD_JOBS"].as_str(), env["OMP_NUM_THREADS"].as_str()), ("2", "4"), "--env CARGO_BUILD_JOBS=2 wins");
+        assert!(set_cpu_hints(&mut BTreeMap::new(), &[], &["OMP_NUM_THREADS".to_string()], Some(2)).iter().all(|n| n != "OMP_NUM_THREADS"), "a secret's name is left alone");
+        // A move to a 16-CPU node with 2 slots: 8 each.
+        let plan: Plan = serde_json::from_value(serde_json::json!({
+            "job_id": "j1", "node_id": "n1", "workspace_id": "w1", "workspace_label": "k2", "requested_by": "owner",
+            "argv": ["true"], "env": {"CARGO_BUILD_JOBS": "4", "RUST_TEST_THREADS": "4", "NEXTEST_TEST_THREADS": "4", "OMP_NUM_THREADS": "4", "MINE": "x"}, "cwd": null,
+            "limits": {"max_secs": 60, "cpu_millis": null, "mem_bytes": null, "disk_bytes": 1, "log_cap_bytes": 1},
+            "src": null, "exclusive": false, "created_at": 1
+        }))
+        .expect("a plan");
+        let ctl = JobCtl { cpu_hints: CPU_HINT_VARS.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+        let mut big = cand("big", 64, 64, 0, 2).offer;
+        big.caps.cpu_millis = 16_000;
+        let moved = plan_for_node(&plan, &ctl, &node_row("big"), None, &big);
+        assert_eq!((moved.env["CARGO_BUILD_JOBS"].as_str(), moved.env["OMP_NUM_THREADS"].as_str(), moved.env["MINE"].as_str()), ("8", "8", "x"));
     }
 
     /// P2: the solo-node wait estimate, and busy nodes ranked by it.

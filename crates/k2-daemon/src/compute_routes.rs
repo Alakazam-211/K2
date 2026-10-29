@@ -1810,7 +1810,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     let (node, placement) = pick_node(who, v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
     // What `.k2/compute.toml` and `--preset` set, and from where (CE-3;
     // `run` always writes it).
-    let effective: Option<serde_json::Value> = v.get("effective").filter(|e| e.is_object()).cloned();
+    let mut effective: Option<serde_json::Value> = v.get("effective").filter(|e| e.is_object()).cloned();
     // The default `--mem` never asks more than a small node has, nor more
     // than this server's share on a shared node allows per job.
     let mem_bytes = match (mem_defaulted, compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone())) {
@@ -1843,6 +1843,23 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     if !opts.dry {
         if let Some(r) = crate::compute_secrets::not_granted(&secret_envs, &ws.handle, &node) {
             return Err(r);
+        }
+    }
+    // CE-15: CARGO_BUILD_JOBS & co. = the job's CPUs (--cpus, else the
+    // node's default reservation), unless the caller set one (or a secret
+    // uses the name). Listed under `effective.env.cpuHints`.
+    let mut env = env;
+    let cpu_hints = {
+        let offer = compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone());
+        let secret_names: Vec<String> = secret_envs.iter().map(|(_, name, _)| name.clone()).collect();
+        crate::compute_place::set_cpu_hints(&mut env, &[], &secret_names, crate::compute_place::job_cpus(cpu_millis, offer.as_ref()))
+    };
+    if let Some(e) = effective.as_mut() {
+        if !cpu_hints.is_empty() {
+            if e["env"].is_null() {
+                e["env"] = serde_json::json!({"value": [], "from": null});
+            }
+            e["env"]["cpuHints"] = cpu_hints.iter().map(|n| (n.clone(), serde_json::Value::String(env[n].clone()))).collect::<serde_json::Map<_, _>>().into();
         }
     }
     if cache.is_some() && !node_features(&node).iter().any(|f| f == pcache::FEATURE_JOB_CACHE) {
@@ -2122,6 +2139,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
         mem_defaulted,
         placement: Some(placement.clone()),
         effective: effective.clone(),
+        cpu_hints,
         ..Default::default()
     };
     let stall_secs = crate::compute_place::stall_for(&ctl, &node_features(&node), timeout as u64);

@@ -5,6 +5,9 @@
   "entry": "index.html",
   "caps": ["agents:read", "git:read", "git:notes", "compute:read", "agents:start", "store:read", "store:write"],
   "reads": ["k2:work-inbox"],
+  "requires": {
+    "libs": ["k2-diff@1", "highlight.js@11"]
+  },
   "reasons": {
     "agents:read": "to open the task's terminal in K2 when you press Terminal",
     "git:read": "to show the task's branch, changed files, diffs and commits",

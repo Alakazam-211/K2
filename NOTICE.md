@@ -243,7 +243,7 @@ viewer above).
 | **License** | **MIT** (Copyright (c) 2017-2024 Vasco Asturiano; Brian Hough and Maximilian Stoiber; Sebastian McKenzie and other contributors; Tween.js authors; Andrei Kashcha for ngraph.merge) and **BSD-3-Clause** for ngraph.forcelayout, ngraph.graph, ngraph.events and ngraph.random (Copyright (c) Andrei Kashcha) — full texts in `src/renderer/components/Wiki/THIRD_PARTY_NOTICES.txt` |
 | **K2 code** | Remains **FSL-1.1-Apache-2.0**. These packages do **not** relicense the product. |
 
-## Multiplayer kit: k2-mpc-base v0.9.1 (vendored)
+## Multiplayer kit: k2-mpc-base v0.9.5 (vendored)
 
 Live docs (Markdown, plain text and any file) run on Alakazam Labs' multiplayer kit,
 vendored with `git subtree`.
@@ -251,14 +251,14 @@ vendored with `git subtree`.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-base` (sessions, presence, store, disk sync, history, blame, erasure, text tools, parity), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.9.1` (`cd57689`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-base`, tag `v0.9.5` (`8ae359d`) |
 | **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
 
 Its Rust dependencies, in K2's `Cargo.lock`:
 
 | Crate | Version | Licence | Used for |
 |---|---|---|---|
-| [yrs](https://github.com/y-crdt/y-crdt) | 0.28.0 | MIT | The CRDT engine (Yjs-compatible), private to the kit |
+| [yrs](https://github.com/y-crdt/y-crdt) | 0.28.0 | MIT | The CRDT engine (Yjs-compatible), private to the kit; a modified copy vendored inside the kit (`vendor/k2-mpc-base/vendor/yrs`, a path dependency since kit v0.9.3), with its licence and the changes listed in the kit's `NOTICE.md` |
 | [regex-automata](https://github.com/rust-lang/regex) | 0.4 | MIT OR Apache-2.0 | Linear-time regexes for the text tools (`grep`, `sed`); already in the tree |
 | [redb](https://github.com/cberner/redb) | 2 | MIT OR Apache-2.0 | The docs store (`~/.k2/docs.redb`); the copy k2-core already links |
 | thiserror | 2 | MIT OR Apache-2.0 | Error types |
@@ -268,7 +268,7 @@ Its Rust dependencies, in K2's `Cargo.lock`:
 `unicode-ident` is `(MIT OR Apache-2.0) AND Unicode-3.0`, used only at build
 time by procedural macros; Unicode-3.0 is OSI-approved and permissive.
 
-## Multiplayer kit: k2-mpc-markdown v0.7.1 (vendored)
+## Multiplayer kit: k2-mpc-markdown v0.7.5 (vendored)
 
 The Markdown type pack for the kit (schema, file codec, its own verbs such as
 `replace-section`, the parity list), vendored beside it.
@@ -276,11 +276,11 @@ The Markdown type pack for the kit (schema, file codec, its own verbs such as
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-markdown` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.1` (`e1af17e`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-markdown`, tag `v0.7.5` (`3131c73`) |
 | **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
 | **Dependencies** | k2-mpc-base only (above): yrs (MIT), regex-automata, redb and thiserror (MIT OR Apache-2.0), and `unicode-ident` (build time only, Unicode-3.0) |
 
-## Multiplayer kit: k2-mpc-text v0.2.1 (vendored)
+## Multiplayer kit: k2-mpc-text v0.2.6 (vendored)
 
 The plain-text type pack for the kit (code, config, markup, diagram sources,
 `.txt`, and `.csv`/`.tsv` as text: a per-extension file-type table, a
@@ -289,7 +289,7 @@ byte-exact codec, the text tier's parity list), vendored beside it.
 | | |
 |--|--|
 | **What** | `vendor/k2-mpc-text` (depends on `../k2-mpc-base/crates/base`), with its own `NOTICE.md` and `CHANGELOG.md` |
-| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.1` (`c2847ae`) |
+| **Upstream** | Alakazam Labs (K2 Cores), `Alakazam-211/k2-mpc-text`, tag `v0.2.6` (`876be5d`) |
 | **License** | Alakazam Labs code, under K2's licence while vendored here (the repo's own licence is not chosen yet) |
 | **Dependencies** | k2-mpc-base only (above); its tests use proptest (MIT OR Apache-2.0) |
 

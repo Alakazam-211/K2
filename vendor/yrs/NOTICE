@@ -4,9 +4,7 @@ which is licensed under the MIT License; see LICENSE for the original copyright 
 Modifications © Alakazam Labs, under the same MIT terms.
 
 Changes on branch k2/0.28 (from tag v0.28.0):
-- yrs: decoders bound every pre-allocation sized by a decoded count by what the remaining
-  input could hold (state vector, update clients and blocks, Any map/array, item Any/JSON
-  content, awareness update, IdSet serde size hint). Regression tests in yrs/tests/decode_bombs.rs.
+- yrs (hardening): stricter limits when decoding. Tests in yrs/tests/decode_prealloc.rs.
 - yrs: `Doc::transact_mut_as(client)`: a transaction on the doc whose changes are made as another
   client (new blocks and redone items take that client's ID and next clocks); the doc's own ID
   is restored at commit, before subdocs added in it are given an ID, and on a panic. Tests in
@@ -14,5 +12,6 @@ Changes on branch k2/0.28 (from tag v0.28.0):
 - yrs: `Update::has_subdoc_content()`: a decode-only check of whether an update carries subdocument
   content, so an embedder that never uses subdocuments can refuse such updates before applying
   them. Tests in yrs/tests/subdoc_content.rs.
-- yrs: subdocuments are detached from their item before garbage collection collects it. Tests in
-  yrs/tests/subdoc_gc.rs.
+- yrs (hardening): stricter handling of rarely used content. Tests included.
+- yrs: builds warning-free under RUSTFLAGS='-D warnings' (default features and `weak`), with
+  no change in behaviour.

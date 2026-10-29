@@ -10,7 +10,7 @@
 **Yrs, modified.** `vendor/yrs` is Yrs v0.28.0 with changes by Alakazam Labs, under the same
 MIT terms: Yrs's licence and copyright are in `vendor/yrs/LICENSE`, and what was changed is in
 `vendor/yrs/NOTICE` (bounded decoder reservations; `Doc::transact_mut_as`;
-`Update::has_subdoc_content`; subdocuments detached before collection). See
+`Update::has_subdoc_content`; hardening for content the kit never uses; warning-free). See
 `docs/YRS-FORK.md`.
 
 Transitive dependencies are all MIT, Apache-2.0, BSD, ISC or Zlib (checked by

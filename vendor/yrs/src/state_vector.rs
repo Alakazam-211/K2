@@ -90,7 +90,7 @@ impl StateVector {
 
     /// Returns an iterator which enables to traverse over all clients and their known clock values
     /// described by a current state vector.
-    pub fn iter(&self) -> std::collections::hash_map::Iter<ClientID, u32> {
+    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, ClientID, u32> {
         self.0.iter()
     }
 
@@ -117,9 +117,8 @@ impl FromIterator<(ClientID, u32)> for StateVector {
 impl Decode for StateVector {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let len = decoder.read_var::<u32>()? as usize;
-        // `len` is attacker-controlled: 7 bytes can claim 2^32-1 entries, and even a
-        // *successful* reservation of that size costs seconds and gigabytes. Each entry is at
-        // least 2 bytes (client and clock varints), so reserve only what the input could hold.
+        // `len` comes from the input (hardening): each entry is at least 2 bytes (client and
+        // clock varints), so reserve only what the input could hold.
         let mut sv = HashMap::with_hasher(BuildHasherDefault::default());
         sv.try_reserve(bounded_capacity(len, decoder.remaining(), 2))?;
         let mut i = 0;

@@ -29,8 +29,8 @@
    decoder decodes strictly, bounds every count, rejects overlapping block ranges, validates,
    and **re-encodes canonical bytes** before the engine or any other client sees them. The
    daemon never relays raw client bytes. Until then, every byte the engine decodes was made
-   by this kit (agents send text). Today's shape pre-checks plus `catch_unwind` don't cover
-   memory-safety bugs, so they are not enough on their own.
+   by this kit (agents send text). Today's shape pre-checks plus `catch_unwind` are not
+   enough on their own.
 
    **The client-ID rule** (`check_client_update`), for an update from the connection that
    owns client `A`:

@@ -4,18 +4,16 @@ The kit's engine is **Yrs v0.28.0 plus the k2 patches**, from the private repo `
 and reviewed by the engine's maintainers), vendored at a tag into `vendor/yrs`. The kit depends
 on it by path; nothing else in the kit sees an engine type (ARCHITECTURE rule 1).
 
-## What the fork changes (tag `k2-yrs-0.28.0-k2.2.2`)
+## What the fork changes (tag `k2-yrs-0.28.0-k2.2.4`)
 
 | Patch | Why | Tests (in k2-yrs) |
 |---|---|---|
-| Decoders bound every pre-allocation sized by a decoded count by what the remaining input could hold (`k2.1`) | decode bombs: a few bytes asked for gigabytes | `yrs/tests/decode_bombs.rs` (not vendored) |
+| Decoders bound every pre-allocation sized by a decoded count by what the remaining input could hold (`k2.1`) | hardening: what decoding allocates follows the input's size | `yrs/tests/decode_prealloc.rs` (not vendored; `decode_bombs.rs` before k2.2.3) |
 | `Doc::transact_mut_as(client)` (`k2.2`) | the kit makes each participant's edit on the doc itself, as the participant's client (ARCHITECTURE rule 6), instead of on a throwaway replica of the whole doc (O(history) per edit) | `yrs/tests/transact_mut_as.rs`, the undo manager's unit tests |
-| `Update::has_subdoc_content()` (`k2.2.1`) | a decode-only check: the kit never uses subdocuments, so it refuses client updates that carry them before applying anything, and quarantines a stored doc holding one (v0.9.5) | `yrs/tests/subdoc_content.rs` |
-| Subdocuments are detached from their item before garbage collection collects it (`k2.2.2`) | subdocument lifetimes follow their item's; the kit never uses subdocuments, and keeps refusing them at ingress | `yrs/tests/subdoc_gc.rs` |
-
-Informational (the kit never uses subdocuments): if an embedder holds a write transaction on
-a subdocument, the parent's commit waits for it (the same lock order as insertion: it waits,
-not deadlocks).
+| `Update::has_subdoc_content()` (`k2.2.1`) | hardening, a decode-only check: the kit refuses client updates carrying content it never uses (subdocuments) before applying anything, and quarantines a stored doc holding such content (v0.9.5) | `yrs/tests/subdoc_content.rs` |
+| Hardening (`k2.2.2`) | engine-side hardening for content the kit never uses; the kit keeps refusing that content at ingress | in k2-yrs |
+| Warning-free (`k2.2.3`) | hardening; the engine builds warning-free under `RUSTFLAGS='-D warnings'` (default features and `weak`), with no change in behaviour | the whole suite |
+| NOTICE wording (`k2.2.4`) | hardening entries in the fork's NOTICE; no other change | – |
 
 `transact_mut_as` swaps the store's client ID for the transaction's life; new blocks and redone
 items take that client's ID and next clocks. The doc's own ID is restored at commit, before
@@ -43,7 +41,7 @@ HashMap. The kit uses plain text only.
 `tools/vendor-yrs.sh <k2-yrs clone> <tag>` writes it; `--check` rebuilds it and compares. It
 holds the tag's `yrs/` crate, the repo's `LICENSE` (Yrs's MIT licence) and `NOTICE` (what the
 fork changed), and `VENDORED`: the tag, its commit, the tree hash of its `yrs/`, the left-out
-file (`yrs/tests/decode_bombs.rs`: it runs in k2-yrs), the upstream tag and crate
+folder (`yrs/tests/`, the engine's own tests: they run in k2-yrs), the upstream tag and crate
 (`yrs-0.28.0` on crates.io and its sha256), `K2.patch` (the fork's diff of `src/` from the
 upstream tag), and sha256s of `src/` and of every file. Never edit files there by hand.
 

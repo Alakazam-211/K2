@@ -130,7 +130,7 @@ where
     pub fn with_options(mut options: Options<M>) -> Self {
         let undo_stack = UndoStack(std::mem::take(&mut options.init_undo_stack));
         let redo_stack = UndoStack(std::mem::take(&mut options.init_redo_stack));
-        let mut state = Arc::new(Inner {
+        let state = Arc::new(Inner {
             scope: HashSet::new(),
             options,
             undo_stack,
@@ -376,7 +376,8 @@ where
         self.clear_internal(true, true)
     }
 
-    fn clear_internal(&mut self, clear_undo: bool, clear_redo: bool) {
+    // both stacks are cleared whatever the flags say (upstream behaviour, kept as is)
+    fn clear_internal(&mut self, _clear_undo: bool, _clear_redo: bool) {
         let inner = Arc::get_mut(&mut self.state).unwrap();
 
         let undo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
@@ -1344,9 +1345,9 @@ mod test {
             let mut m1: UndoManager<Metadata> = UndoManager::new();
             m1.expand_scope(&d1, &txt);
 
-            let txt_clone = txt.clone();
+            let _txt_clone = txt.clone();
             m1.observe_item_added("sub", move |_, e| {
-                let e = e.meta_mut().entry("test".to_string()).or_default();
+                let _e = e.meta_mut().entry("test".to_string()).or_default();
             });
 
             txt.insert(&mut d1.transact_mut(), 0, "c");

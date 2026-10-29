@@ -1280,8 +1280,8 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `NotFound` | no doc and no bytes | 4 |
 | `PackMismatch` | stored doc belongs to another pack | 4 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
-| `Doc(DocError::Unaccepted)` | a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_UNACCEPTED`) | 3 |
-| `Doc(DocError::Quarantined)` | a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_QUARANTINED`) | 3 |
+| `Doc(DocError::Unaccepted)` | hardening: a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_UNACCEPTED`; MPC-E152 on main's registry) | 3 |
+| `Doc(DocError::Quarantined)` | hardening: a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_QUARANTINED`; MPC-E518 on main's registry) | 3 |
 | `NoApproval { seq }` | no approval to settle (the change wasn't made on anyone's behalf, or doesn't exist) | 4 |
 | `BadApproval` | already settled the other way | 2 |
 | `BadPath` | `open_file` / `file_moved`: not a regular file inside the root | 2 |

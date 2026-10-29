@@ -9,7 +9,7 @@
 //! `purge_at_scale_leaves_no_bytes_behind`: CI size here, full size on a compute node:
 //!
 //! ```text
-//! k2 compute run k2n7-vin --sha <sha> --needs rust@stable,cmake@3 --mem 24G -- \
+//! k2 compute run "$NODE" --sha <sha> --needs rust@stable,cmake@3 --mem 24G -- \
 //!   env MPC_ERASURE_SCALE=200 cargo test -p k2-mpc-base --release --test erasure
 //! ```
 

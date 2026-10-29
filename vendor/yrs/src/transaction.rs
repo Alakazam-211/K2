@@ -1,6 +1,4 @@
-use crate::block::{
-    Block, BlockRange, ClientID, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID,
-};
+use crate::block::{ClientID, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
 use crate::branch::{Branch, BranchPtr};
 use crate::doc::DocAddr;
 use crate::error::{Error, UpdateError};
@@ -167,20 +165,20 @@ pub trait ReadTxn: Sized {
     }
 
     /// Returns an iterator over top level (root) shared types available in current [Doc].
-    fn root_refs(&self) -> RootRefs {
+    fn root_refs(&self) -> RootRefs<'_> {
         let store = self.store();
         RootRefs(store.types.iter())
     }
 
     /// Returns a collection of globally unique identifiers of sub documents linked within
     /// the structures of this document store.
-    fn subdoc_guids(&self) -> SubdocGuids {
+    fn subdoc_guids(&self) -> SubdocGuids<'_> {
         let store = self.store();
         store.subdoc_guids()
     }
 
     /// Returns a collection of sub documents linked within the structures of this document store.
-    fn subdocs(&self) -> SubdocsIter {
+    fn subdocs(&self) -> SubdocsIter<'_> {
         let store = self.store();
         store.subdocs()
     }
@@ -803,7 +801,6 @@ impl<'doc> TransactionMut<'doc> {
         let mut recurse = Vec::new();
         let mut result = false;
 
-        let ptr = item.clone();
         let store = self.store.deref();
         if !item.is_deleted() {
             if item.parent_sub.is_none() && item.is_countable() {
@@ -983,7 +980,7 @@ impl<'doc> TransactionMut<'doc> {
         } else {
             None
         };
-        let mut block = Item::new(
+        let block = Item::new(
             id,
             left,
             origin,

@@ -62,7 +62,7 @@ impl Any {
             // CASE 118: Map<string,Any>
             118 => {
                 let len: usize = decoder.read_var()?;
-                // `len` is attacker-controlled; reserve only what the input could hold
+                // `len` comes from the input; reserve only what the input could hold
                 // (an entry is at least a 1-byte key length and a 1-byte value tag).
                 let mut map = HashMap::new();
                 map.try_reserve(bounded_capacity(len, decoder.remaining(), 2))?;
@@ -75,7 +75,7 @@ impl Any {
             // CASE 117: Array<Any>
             117 => {
                 let len: usize = decoder.read_var()?;
-                // `len` is attacker-controlled; reserve only what the input could hold
+                // `len` comes from the input; reserve only what the input could hold
                 // (each value is at least its 1-byte tag).
                 let mut arr = Vec::new();
                 arr.try_reserve(bounded_capacity(len, decoder.remaining(), 1))?;

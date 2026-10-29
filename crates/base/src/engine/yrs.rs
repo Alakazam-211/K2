@@ -93,8 +93,8 @@ fn guarded<T>(f: impl FnOnce() -> Result<T, DocError>) -> Result<T, DocError> {
 }
 
 /// The one way the kit decodes update bytes that come from outside it (v0.9.5): v1 only (the
-/// fork bounds what decoding allocates), then refused when any block carries subdocument
-/// content, which the kit never uses ([`DocError::Unaccepted`]). Decode-only: nothing is
+/// fork bounds what decoding allocates), then refused (hardening) when any block carries
+/// content the kit never uses, subdocuments ([`DocError::Unaccepted`]). Decode-only: nothing is
 /// applied before the check, and the caller applies the update returned (decoded once).
 fn decode_accepted(update: &[u8]) -> Result<Update, DocError> {
     let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
@@ -104,8 +104,8 @@ fn decode_accepted(update: &[u8]) -> Result<Update, DocError> {
     Ok(u)
 }
 
-/// The store-load scan (v0.9.5): a stored state or log entry holding subdocument content is
-/// never loaded as live ([`DocError::Quarantined`]). Expected never to fire: the kit never
+/// The store-load scan (hardening, v0.9.5): a stored state or log entry holding content the
+/// kit never uses (subdocuments) is never loaded as live ([`DocError::Quarantined`]). Expected never to fire: the kit never
 /// writes such content, and refuses it at every ingress.
 fn stored_accepted(u: &Update) -> Result<(), DocError> {
     if u.has_subdoc_content() {
@@ -156,7 +156,7 @@ fn state_vector_well_formed(b: &[u8]) -> bool {
 }
 
 /// Shape check of a client's v1 update before decoding. Keeps work on hostile input bounded
-/// by its size (no reservation bombs): the client count can't exceed the bytes left divided
+/// by its size (no outsized reservations): the client count can't exceed the bytes left divided
 /// by 3 (each client section is at least its block count, client ID and clock), and the
 /// first client's block count can't exceed the bytes left. More than one client is allowed
 /// here; [`EngineDoc::check_update`] decides what other clients' blocks may be.
@@ -1183,11 +1183,11 @@ mod tests {
         c.0.transact().encode_state_as_update_v1(&sv)
     }
 
-    /// v0.9.5: the store-load scan. A stored state, or a log entry replayed from the store,
-    /// holding subdocument content is never loaded (quarantined); ordinary ones load. (The
-    /// in-process delivery between the kit's docs, `deliver_local`, exists only with the
-    /// test-only `conformance` feature and refuses it as client updates are refused.) Built
-    /// through Yrs's normal API.
+    /// v0.9.5 hardening: the store-load scan. A stored state, or a log entry replayed from
+    /// the store, holding subdocument content is never loaded (quarantined); ordinary ones
+    /// load. (The in-process delivery between the kit's docs, `deliver_local`, exists only
+    /// with the test-only `conformance` feature and refuses it as client updates are
+    /// refused.) Built through Yrs's normal API.
     #[test]
     fn stored_subdocument_content_is_quarantined() {
         use yrs::Map;
@@ -1295,7 +1295,7 @@ mod tests {
             worst = worst.max(t.elapsed());
         }
         assert_eq!(e.text("source").unwrap(), "seed text\n");
-        // Bounded work on hostile input. This catches the decode bombs (0.7-11 s per input
+        // Bounded work on hostile input. This catches outsized decoder pre-allocations (0.7-11 s per input
         // before the shape checks), not the machine's speed: 500 ms leaves room for a debug
         // build on a loaded box. The precise "rejected in O(1)" bound is in `shape_checks`.
         assert!(

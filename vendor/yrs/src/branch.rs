@@ -395,6 +395,7 @@ impl Branch {
     }
     /// Removes up to a `len` of countable elements from current branch sequence, starting at the
     /// given `index`. Returns number of removed elements.
+    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
     pub(crate) fn remove_at(&self, txn: &mut TransactionMut, index: u32, len: u32) -> u32 {
         let mut remaining = len;
         let start = { self.start };

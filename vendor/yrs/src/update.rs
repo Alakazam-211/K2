@@ -45,6 +45,7 @@ impl BlockSet {
         IntoBlocks::new(self, ignore_skip)
     }
 
+    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
     pub fn as_id_set(&self) -> IdSet {
         let mut inserts = IdSet::default();
 
@@ -514,6 +515,7 @@ impl Update {
         Ok(None)
     }
 
+    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
     fn next_target<'a, 'b>(
         client_block_ref_ids: &'a mut Vec<ClientID>,
         blocks: &'b mut BlockSet,
@@ -537,6 +539,7 @@ impl Update {
         None
     }
 
+    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
     fn return_stack(stack: Vec<Block>, refs: &mut BlockSet, remaining: &mut BlockSet) {
         for item in stack.into_iter() {
             let client = item.id().client;
@@ -840,10 +843,9 @@ impl Decode for Update {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
-        // Counts below are attacker-controlled; a successful reservation of 2^32 slots is
-        // itself the DoS (10 bytes -> ~3 GB). Bound each by what the remaining input could
-        // hold: a client section is at least 3 bytes (blocks_len, client, clock), a block at
-        // least 1 (its info byte).
+        // Counts below come from the input (hardening): bound each pre-allocation by what the
+        // remaining input could hold: a client section is at least 3 bytes (blocks_len, client,
+        // clock), a block at least 1 (its info byte).
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
         clients.try_reserve(bounded_capacity(
             clients_len as usize,

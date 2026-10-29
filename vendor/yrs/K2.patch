@@ -1,5 +1,5 @@
 diff --git a/yrs/src/any.rs b/yrs/src/any.rs
-index 45f9027..c31113b 100644
+index 45f9027..371ccb3 100644
 --- a/yrs/src/any.rs
 +++ b/yrs/src/any.rs
 @@ -1,4 +1,4 @@
@@ -14,7 +14,7 @@ index 45f9027..c31113b 100644
                  let len: usize = decoder.read_var()?;
 -                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
 -                // (see `Update::decode`'s `try_reserve`).
-+                // `len` is attacker-controlled; reserve only what the input could hold
++                // `len` comes from the input; reserve only what the input could hold
 +                // (an entry is at least a 1-byte key length and a 1-byte value tag).
                  let mut map = HashMap::new();
 -                map.try_reserve(len)?;
@@ -28,7 +28,7 @@ index 45f9027..c31113b 100644
                  let len: usize = decoder.read_var()?;
 -                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
 -                // (see `Update::decode`'s `try_reserve`).
-+                // `len` is attacker-controlled; reserve only what the input could hold
++                // `len` comes from the input; reserve only what the input could hold
 +                // (each value is at least its 1-byte tag).
                  let mut arr = Vec::new();
 -                arr.try_reserve(len)?;
@@ -37,7 +37,7 @@ index 45f9027..c31113b 100644
                      arr.push(Any::decode(decoder)?);
                  }
 diff --git a/yrs/src/block.rs b/yrs/src/block.rs
-index a56f7c5..ef085a5 100644
+index a56f7c5..0e3faa6 100644
 --- a/yrs/src/block.rs
 +++ b/yrs/src/block.rs
 @@ -1,7 +1,7 @@
@@ -49,12 +49,107 @@ index a56f7c5..ef085a5 100644
  use crate::gc::GCCollector;
  use crate::slice::{BlockSlice, ItemSlice};
  use crate::store::Store;
-@@ -1555,6 +1555,15 @@ impl Item {
+@@ -195,6 +195,7 @@ impl<'a> BlockRef<'a> {
+         unsafe { &mut *self.cell.get() }
+     }
+ 
++    #[cfg(test)]
+     pub fn as_item(&self) -> Option<&'a Item> {
+         if let Block::Item(item) = self.as_ref() {
+             Some(item)
+@@ -261,14 +262,6 @@ impl Block {
+         }
+     }
+ 
+-    pub fn last_id(&self) -> ID {
+-        match self {
+-            Block::Item(x) => x.last_id(),
+-            Block::Skip(x) => x.last_id(),
+-            Block::GC(x) => x.last_id(),
+-        }
+-    }
+-
+     pub fn range(&self) -> BlockRange {
+         match self {
+             Block::Item(item) => BlockRange::new(item.id, item.len),
+@@ -277,21 +270,12 @@ impl Block {
+         }
+     }
+ 
+-    #[inline]
+-    pub fn is_item(&self) -> bool {
+-        matches!(self, Block::Item(_))
+-    }
+-
+     #[inline]
+     pub fn is_skip(&self) -> bool {
+         matches!(self, Block::Skip(_))
+     }
+ 
+     #[inline]
+-    pub fn is_gc(&self) -> bool {
+-        matches!(self, Block::GC(_))
+-    }
+-
+     pub fn is_deleted(&self) -> bool {
+         match self {
+             Block::Item(item) => item.is_deleted(),
+@@ -491,7 +475,7 @@ impl ItemPtr {
+             item.parent.as_branch().unwrap()
+         });
+ 
+-        let mut left = None;
++        let mut left;
+         let mut right = None;
+         if let Some(sub) = item.parent_sub.as_ref() {
+             if item.right.is_some() {
+@@ -629,13 +613,6 @@ impl ItemPtr {
+         }
+     }
+ 
+-    pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
+-        txn.delete(*self);
+-        if is_local {
+-            txn.delete_set.insert(*self.id(), self.len());
+-        }
+-    }
+-
+     pub(crate) fn splice(&mut self, offset: u32, encoding: OffsetKind) -> Option<Box<Item>> {
+         let self_ptr = self.clone();
+         if offset == 0 {
+@@ -882,9 +859,9 @@ impl Item {
+                 let mut parent = *self.parent.as_branch().unwrap();
+                 parent.has_formatting = true;
+             }
++            #[cfg(feature = "weak")]
+             ItemContent::Type(branch) => {
+                 let ptr = BranchPtr::from(branch);
+-                #[cfg(feature = "weak")]
+                 if let TypeRef::WeakLink(source) = &ptr.type_ref {
+                     source.materialize(txn, ptr);
+                 }
+@@ -1412,15 +1389,6 @@ impl BlockRange {
+         next
+     }
+ 
+-    pub(crate) fn integrate(&mut self, pivot: u32) -> bool {
+-        if pivot > 0 {
+-            self.clock += pivot;
+-            self.len -= pivot;
+-        }
+-
+-        false
+-    }
+-
+     #[inline]
+     pub(crate) fn merge(&mut self, other: &Self) {
+         self.len += other.len;
+@@ -1555,6 +1523,15 @@ impl Item {
  
      pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
          if self.is_deleted() && !self.info.is_keep() {
-+            // k2: a subdocument is detached from this item first: GC drops the item's content
-+            // here, and the item itself may go (`parent_gc`, or a later squash).
++            // k2 (hardening): a subdocument is detached from this item first: GC drops the item's
++            // content here, and the item itself may go (`parent_gc`, or a later squash).
 +            if let ItemContent::Doc(_, doc) = &self.content {
 +                let this = NonNull::from(&*self);
 +                let mut store = doc.store().write_blocking();
@@ -65,7 +160,7 @@ index a56f7c5..ef085a5 100644
              self.content.gc(collector);
              let len = self.len();
              if parent_gc {
-@@ -1960,9 +1969,11 @@ impl ItemContent {
+@@ -1960,9 +1937,11 @@ impl ItemContent {
          match ref_num & 0b1111 {
              BLOCK_ITEM_DELETED_REF_NUMBER => Ok(ItemContent::Deleted(decoder.read_len()?)),
              BLOCK_ITEM_JSON_REF_NUMBER => {
@@ -74,26 +169,136 @@ index a56f7c5..ef085a5 100644
 +                let mut remaining = len as i32;
                  let mut buf = Vec::new();
 -                buf.try_reserve(remaining as usize)?;
-+                // `len` is attacker-controlled; each string is at least its 1-byte length.
++                // `len` comes from the input; each string is at least its 1-byte length.
 +                buf.try_reserve(bounded_capacity(len as usize, decoder.remaining(), 1))?;
  
                  while remaining >= 0 {
                      buf.push(decoder.read_string()?.to_owned());
-@@ -1985,7 +1996,8 @@ impl ItemContent {
+@@ -1985,7 +1964,8 @@ impl ItemContent {
              BLOCK_ITEM_ANY_REF_NUMBER => {
                  let len = decoder.read_len()? as usize;
                  let mut values = Vec::new();
 -                values.try_reserve(len)?;
-+                // `len` is attacker-controlled; each value is at least its 1-byte tag.
++                // `len` comes from the input; each value is at least its 1-byte tag.
 +                values.try_reserve(bounded_capacity(len, decoder.remaining(), 1))?;
  
                  let mut i = 0;
                  while i < len {
+diff --git a/yrs/src/block_iter.rs b/yrs/src/block_iter.rs
+index 5b1c379..76ce4b3 100644
+--- a/yrs/src/block_iter.rs
++++ b/yrs/src/block_iter.rs
+@@ -1,4 +1,4 @@
+-use crate::block::{Block, Item, ItemContent, ItemPtr, Prelim};
++use crate::block::{Item, ItemContent, ItemPtr, Prelim};
+ use crate::branch::BranchPtr;
+ use crate::transaction::{ReadTxn, TransactionMut};
+ use crate::types::TypePtr;
+@@ -73,12 +73,6 @@ impl BlockIter {
+         false
+     }
+ 
+-    pub fn forward<T: ReadTxn>(&mut self, txn: &T, len: u32) {
+-        if !self.try_forward(txn, len) {
+-            panic!("Length exceeded")
+-        }
+-    }
+-
+     pub fn try_forward<T: ReadTxn>(&mut self, txn: &T, mut len: u32) -> bool {
+         if len == 0 && self.next_item.is_none() {
+             return true;
+@@ -127,6 +121,7 @@ impl BlockIter {
+         true
+     }
+ 
++    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
+     pub fn backward<T: ReadTxn>(&mut self, txn: &mut T, mut len: u32) {
+         if self.index < len {
+             panic!("Length exceeded");
+@@ -365,39 +360,4 @@ impl BlockIter {
+ 
+         block_ptr
+     }
+-
+-    pub fn values<'a, 'txn, T: ReadTxn>(
+-        &'a mut self,
+-        txn: &'txn mut TransactionMut<'txn>,
+-    ) -> Values<'a, 'txn> {
+-        Values::new(self, txn)
+-    }
+-}
+-
+-pub struct Values<'a, 'txn> {
+-    iter: &'a mut BlockIter,
+-    txn: &'txn mut TransactionMut<'txn>,
+-}
+-
+-impl<'a, 'txn> Values<'a, 'txn> {
+-    fn new(iter: &'a mut BlockIter, txn: &'txn mut TransactionMut<'txn>) -> Self {
+-        Values { iter, txn }
+-    }
+-}
+-
+-impl<'a, 'txn> Iterator for Values<'a, 'txn> {
+-    type Item = Out;
+-
+-    fn next(&mut self) -> Option<Self::Item> {
+-        if self.iter.reached_end || self.iter.index == self.iter.branch.content_len() {
+-            None
+-        } else {
+-            let mut buf = [Out::default()];
+-            if self.iter.slice(self.txn, &mut buf) != 0 {
+-                Some(std::mem::replace(&mut buf[0], Out::default()))
+-            } else {
+-                None
+-            }
+-        }
+-    }
+ }
+diff --git a/yrs/src/block_store.rs b/yrs/src/block_store.rs
+index c434c83..078f4c7 100644
+--- a/yrs/src/block_store.rs
++++ b/yrs/src/block_store.rs
+@@ -297,14 +297,6 @@ impl BlockStore {
+         id.clock >= self.get_clock(&id.client) || self.skips.contains(id)
+     }
+ 
+-    pub fn contains(&self, id: &ID) -> bool {
+-        if let Some(clients) = self.clients.get(&id.client) {
+-            id.clock < clients.clock()
+-        } else {
+-            false
+-        }
+-    }
+-
+     pub fn push(&mut self, block: Block) {
+         let id = block.id();
+         match self.clients.entry(id.client) {
+diff --git a/yrs/src/branch.rs b/yrs/src/branch.rs
+index 9a5cf96..4806e59 100644
+--- a/yrs/src/branch.rs
++++ b/yrs/src/branch.rs
+@@ -395,6 +395,7 @@ impl Branch {
+     }
+     /// Removes up to a `len` of countable elements from current branch sequence, starting at the
+     /// given `index`. Returns number of removed elements.
++    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
+     pub(crate) fn remove_at(&self, txn: &mut TransactionMut, index: u32, len: u32) -> u32 {
+         let mut remaining = len;
+         let start = { self.start };
 diff --git a/yrs/src/doc.rs b/yrs/src/doc.rs
-index 356d885..75b8669 100644
+index 356d885..124a913 100644
 --- a/yrs/src/doc.rs
 +++ b/yrs/src/doc.rs
-@@ -160,6 +160,22 @@ impl Doc {
+@@ -7,7 +7,6 @@ use crate::transaction::{Origin, TransactionMut};
+ use crate::types::{RootRef, ToJson};
+ use crate::updates::decoder::{Decode, Decoder};
+ use crate::updates::encoder::{Encode, Encoder};
+-use crate::utils::OptionExt;
+ use crate::Any;
+ use crate::{
+     uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Number, Out, ReadTxn, TextRef, Transact,
+@@ -160,6 +159,22 @@ impl Doc {
          &self.store
      }
  
@@ -116,11 +321,47 @@ index 356d885..75b8669 100644
      /// A unique client identifier, that's also a unique identifier of current document replica
      /// and it's subdocuments.
      ///
+@@ -1020,7 +1035,7 @@ mod test {
+         let a = acc.clone();
+         d1.observe_update_v1("sub", move |_: &TransactionMut, e| {
+             let u = Update::decode_v1(&e.update).unwrap();
+-            for mut block in u.blocks.into_blocks(false) {
++            for block in u.blocks.into_blocks(false) {
+                 if let Block::Item(item) = block {
+                     if let ItemContent::String(s) = &item.content {
+                         // each character is appended in individual transaction 1-by-1,
+@@ -2078,7 +2093,7 @@ mod test {
+             skip_gc: true,
+             ..Default::default()
+         });
+-        let m0 = doc.get_or_insert_map("map");
++        let _m0 = doc.get_or_insert_map("map");
+         let s1 = {
+             let mut tx = doc.transact_mut();
+             let t1 = init_test_data(&mut tx, ["c", "b", "a"]); // <1#1..3>
+@@ -2093,7 +2108,7 @@ mod test {
+             tx.snapshot()
+         };
+ 
+-        let s3 = {
++        let _s3 = {
+             let mut tx = doc.transact_mut();
+             let t3 = init_test_data(&mut tx, ["i", "h", "g"]); // <1#9..11>
+             assert_eq!(t3.get_string(&tx), "ghi");
+@@ -2238,7 +2253,7 @@ mod test {
+         let notify = Arc::new(AtomicU32::new(0));
+         let doc = Doc::new();
+         let notify_clone = notify.clone();
+-        doc.observe_update_v2("sub", move |tx, e| {
++        doc.observe_update_v2("sub", move |tx, _e| {
+             notify_clone.store(1, Ordering::SeqCst);
+             tx.unobserve_update_v2("sub");
+         })
 diff --git a/yrs/src/encoding/read.rs b/yrs/src/encoding/read.rs
-index 1de1fa0..0d57877 100644
+index 1de1fa0..2a76ee5 100644
 --- a/yrs/src/encoding/read.rs
 +++ b/yrs/src/encoding/read.rs
-@@ -49,6 +49,20 @@ impl<'a> Cursor<'a> {
+@@ -49,6 +49,19 @@ impl<'a> Cursor<'a> {
      }
  }
  
@@ -129,9 +370,8 @@ index 1de1fa0..0d57877 100644
 +///
 +/// Every entry costs at least `min_entry_bytes` of input, so a decoder with `remaining` bytes
 +/// left cannot hold more than `remaining / min_entry_bytes` entries. Capping by that keeps
-+/// pre-allocation proportional to the input instead of to an attacker-chosen count (a 7-byte
-+/// state vector used to reserve ~2.5 GB). The collection still grows on push if the hint is
-+/// low, so this never rejects valid input.
++/// pre-allocation proportional to the input rather than to the decoded count (hardening). The
++/// collection still grows on push if the hint is low, so this never rejects valid input.
 +#[inline]
 +pub(crate) fn bounded_capacity(count: usize, remaining: usize, min_entry_bytes: usize) -> usize {
 +    debug_assert!(min_entry_bytes > 0);
@@ -141,7 +381,7 @@ index 1de1fa0..0d57877 100644
  impl<'a, R> From<&'a R> for Cursor<'a>
  where
      R: AsRef<[u8]>,
-@@ -59,6 +73,11 @@ where
+@@ -59,6 +72,11 @@ where
  }
  
  impl<'a> Read for Cursor<'a> {
@@ -153,7 +393,7 @@ index 1de1fa0..0d57877 100644
      /// Take a slice of the next `len` bytes and advance the position by `len`.
      fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
          if self.next + len > self.buf.len() {
-@@ -84,6 +103,16 @@ impl<'a> Read for Cursor<'a> {
+@@ -84,6 +102,16 @@ impl<'a> Read for Cursor<'a> {
  pub trait Read: Sized {
      fn read_exact(&mut self, len: usize) -> Result<&[u8], Error>;
  
@@ -170,6 +410,46 @@ index 1de1fa0..0d57877 100644
      /// Read a single byte.
      fn read_u8(&mut self) -> Result<u8, Error> {
          let buf = self.read_exact(1)?;
+diff --git a/yrs/src/event.rs b/yrs/src/event.rs
+index 476dc10..92087f4 100644
+--- a/yrs/src/event.rs
++++ b/yrs/src/event.rs
+@@ -60,19 +60,19 @@ impl SubdocsEvent {
+ 
+     /// Returns an iterator over all sub-documents added to a current document within a scope of
+     /// committed transaction.
+-    pub fn added(&self) -> SubdocsEventIter {
++    pub fn added(&self) -> SubdocsEventIter<'_> {
+         SubdocsEventIter(self.added.values())
+     }
+ 
+     /// Returns an iterator over all sub-documents removed from a current document within a scope of
+     /// committed transaction.
+-    pub fn removed(&self) -> SubdocsEventIter {
++    pub fn removed(&self) -> SubdocsEventIter<'_> {
+         SubdocsEventIter(self.removed.values())
+     }
+ 
+     /// Returns an iterator over all sub-documents living in a parent document, that have requested
+     /// to be loaded within a scope of committed transaction.
+-    pub fn loaded(&self) -> SubdocsEventIter {
++    pub fn loaded(&self) -> SubdocsEventIter<'_> {
+         SubdocsEventIter(self.loaded.values())
+     }
+ }
+diff --git a/yrs/src/id_map.rs b/yrs/src/id_map.rs
+index 6f539bb..8e685d5 100644
+--- a/yrs/src/id_map.rs
++++ b/yrs/src/id_map.rs
+@@ -670,7 +670,7 @@ mod test {
+         let mut id_map_1 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
+         let mut id_map_2 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
+         let id_exclude = random_id_set(CLIENTS, CLOCK_RANGE);
+-        let mut merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
++        let merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
+         let mut merge_excluded = merged.clone();
+         merge_excluded.diff_with(&id_exclude);
+ 
 diff --git a/yrs/src/id_set.rs b/yrs/src/id_set.rs
 index 9d3318d..8bab63e 100644
 --- a/yrs/src/id_set.rs
@@ -188,8 +468,212 @@ index 9d3318d..8bab63e 100644
                  while let Some(x) = seq.next_element()? {
                      bytes.push(x);
                  }
+diff --git a/yrs/src/ids.rs b/yrs/src/ids.rs
+index d95af53..21c521c 100644
+--- a/yrs/src/ids.rs
++++ b/yrs/src/ids.rs
+@@ -543,12 +543,6 @@ impl<T: Merge> IdRanges<T> {
+         &self.0
+     }
+ 
+-    /// Direct mutable access to the inner SmallVec (crate-internal).
+-    #[inline]
+-    pub(crate) fn inner_mut(&mut self) -> &mut SmallVec<[(Range<u32>, T); 1]> {
+-        &mut self.0
+-    }
+-
+     /// Construct from raw SmallVec (crate-internal, assumes sorted/non-overlapping).
+     #[inline]
+     pub(crate) fn from_raw(raw: SmallVec<[(Range<u32>, T); 1]>) -> Self {
+@@ -1419,7 +1413,7 @@ mod test {
+         exchange_updates(&[&d1, &d2]);
+ 
+         let txn = d1.transact();
+-        let mut map = IdSet::from_iter([
++        let map = IdSet::from_iter([
+             (ClientID::new(1), vec![2..5, 8..20]), // client=1: two partial ranges into the 10-char block
+             (ClientID::new(2), vec![3..6]), // client=2: one partial range into the 8-char block
+         ]);
+diff --git a/yrs/src/iter.rs b/yrs/src/iter.rs
+index ea912f2..ac6e775 100644
+--- a/yrs/src/iter.rs
++++ b/yrs/src/iter.rs
+@@ -1,9 +1,9 @@
+-use crate::block::{ItemContent, ItemPtr};
++use crate::block::ItemPtr;
+ use crate::slice::ItemSlice;
+ use crate::{Assoc, Out, ReadTxn, StickyIndex};
+-use smallvec::{smallvec, SmallVec};
+ use std::ops::Deref;
+ 
++#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
+ pub(crate) trait BlockIterator: Iterator<Item = ItemPtr> + Sized {
+     #[inline]
+     fn within_range(self, from: StickyIndex, to: StickyIndex) -> RangeIter<Self> {
+@@ -13,6 +13,7 @@ pub(crate) trait BlockIterator: Iterator<Item = ItemPtr> + Sized {
+ 
+ impl<T> BlockIterator for T where T: Iterator<Item = ItemPtr> + Sized {}
+ 
++#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
+ pub(crate) trait BlockSliceIterator: Iterator<Item = ItemSlice> + Sized {
+     #[inline]
+     fn values(self) -> Values<Self> {
+@@ -102,6 +103,7 @@ pub trait TxnDoubleEndedIterator: TxnIterator {
+ }
+ 
+ /// Iterator over a slice of a continuous sequence of blocks.
++#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
+ #[derive(Debug)]
+ pub(crate) struct RangeIter<I> {
+     iter: I,
+@@ -110,6 +112,7 @@ pub(crate) struct RangeIter<I> {
+     state: RangeIterState,
+ }
+ 
++#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
+ impl<I> RangeIter<I>
+ where
+     I: Iterator<Item = ItemPtr>,
+@@ -230,6 +233,7 @@ where
+     }
+ }
+ 
++#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
+ #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+ enum RangeIterState {
+     /// Ranged iterator position hasn't reach chosen ID range yet.
+@@ -241,12 +245,14 @@ enum RangeIterState {
+ }
+ 
+ /// Iterator over particular, non-deleted values of a block sequence.
++#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
+ #[derive(Debug)]
+ pub(crate) struct Values<I> {
+     iter: I,
+     current: Option<ItemSlice>,
+ }
+ 
++#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
+ impl<I> Values<I> {
+     fn new(iter: I) -> Self {
+         Values {
+@@ -284,6 +290,7 @@ where
+ 
+ #[derive(Debug)]
+ pub struct AsIter<'a, T, I> {
++    #[allow(dead_code)] // never read: holds the transaction borrow while iterating
+     txn: &'a T,
+     iter: I,
+ }
+@@ -313,8 +320,7 @@ where
+ #[cfg(test)]
+ mod test {
+     use crate::block::ClientID;
+-    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnIterator};
+-    use crate::test_utils::exchange_updates;
++    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter};
+     use crate::{Array, Assoc, Doc, StickyIndex, Transact, ID};
+ 
+     #[test]
+@@ -326,7 +332,7 @@ mod test {
+         array.insert_range(&mut doc.transact_mut(), 0, [1]);
+         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+ 
+-        let txn = doc.transact();
++        let _txn = doc.transact();
+         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
+         let res: Vec<_> = array
+@@ -348,7 +354,7 @@ mod test {
+         array.insert_range(&mut doc.transact_mut(), 0, [1]);
+         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+ 
+-        let txn = doc.transact();
++        let _txn = doc.transact();
+         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::After);
+         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
+         let res: Vec<_> = array
+@@ -370,7 +376,7 @@ mod test {
+         array.insert_range(&mut doc.transact_mut(), 0, [1]);
+         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+ 
+-        let txn = doc.transact();
++        let _txn = doc.transact();
+         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 2), Assoc::After);
+         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
+         let res: Vec<_> = array
+@@ -392,7 +398,7 @@ mod test {
+         array.insert_range(&mut doc.transact_mut(), 0, [1]);
+         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+ 
+-        let txn = doc.transact();
++        let _txn = doc.transact();
+         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 5), Assoc::Before);
+         let res: Vec<_> = array
+@@ -414,7 +420,7 @@ mod test {
+         array.insert_range(&mut doc.transact_mut(), 0, [1]);
+         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+ 
+-        let txn = doc.transact();
++        let _txn = doc.transact();
+         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::Before);
+         let res: Vec<_> = array
+@@ -505,7 +511,7 @@ mod test {
+         array.insert_range(&mut doc.transact_mut(), 0, [1]);
+         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
+ 
+-        let txn = doc.transact();
++        let _txn = doc.transact();
+         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
+         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::After);
+         let res: Vec<_> = array
+diff --git a/yrs/src/slice.rs b/yrs/src/slice.rs
+index 7305c3d..b8f2497 100644
+--- a/yrs/src/slice.rs
++++ b/yrs/src/slice.rs
+@@ -161,6 +161,7 @@ impl ItemSlice {
+ 
+     /// Returns true when boundaries marked by the current [ItemSlice] match the boundaries
+     /// of the underlying [ItemPtr].
++    #[cfg(feature = "weak")]
+     pub fn adjacent(&self) -> bool {
+         self.adjacent_left() && self.adjacent_right()
+     }
+@@ -175,14 +176,6 @@ impl ItemSlice {
+         self.ptr.is_countable()
+     }
+ 
+-    /// Checks if provided `id` exists within the bounds described by current [ItemSlice].
+-    pub fn contains_id(&self, id: &ID) -> bool {
+-        let myself = self.ptr.id();
+-        myself.client == id.client
+-            && id.clock >= myself.clock + self.start
+-            && id.clock <= myself.clock + self.end
+-    }
+-
+     pub fn encode<E: Encoder>(&self, encoder: &mut E) {
+         let item = self.ptr.deref();
+         let mut info = item.info();
+@@ -246,6 +239,7 @@ impl ItemSlice {
+     ///
+     /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
+     /// then right slice returned by this method will be [8..10).
++    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
+     pub fn right(&self) -> Option<ItemSlice> {
+         let last_clock = self.ptr.len() - 1;
+         if self.end == last_clock {
+@@ -266,6 +260,7 @@ impl ItemSlice {
+     ///
+     /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
+     /// then right slice returned by this method will be [0..2).
++    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
+     pub fn left(&self) -> Option<ItemSlice> {
+         if self.start == 0 {
+             let item = self.ptr.deref();
 diff --git a/yrs/src/state_vector.rs b/yrs/src/state_vector.rs
-index d40b438..9e9782d 100644
+index d40b438..ad58ed8 100644
 --- a/yrs/src/state_vector.rs
 +++ b/yrs/src/state_vector.rs
 @@ -1,5 +1,5 @@
@@ -199,7 +683,16 @@ index d40b438..9e9782d 100644
  use crate::updates::decoder::{Decode, Decoder};
  use crate::updates::encoder::{Encode, Encoder};
  use crate::utils::client_hasher::ClientHasher;
-@@ -117,12 +117,11 @@ impl FromIterator<(ClientID, u32)> for StateVector {
+@@ -90,7 +90,7 @@ impl StateVector {
+ 
+     /// Returns an iterator which enables to traverse over all clients and their known clock values
+     /// described by a current state vector.
+-    pub fn iter(&self) -> std::collections::hash_map::Iter<ClientID, u32> {
++    pub fn iter(&self) -> std::collections::hash_map::Iter<'_, ClientID, u32> {
+         self.0.iter()
+     }
+ 
+@@ -117,12 +117,10 @@ impl FromIterator<(ClientID, u32)> for StateVector {
  impl Decode for StateVector {
      fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
          let len = decoder.read_var::<u32>()? as usize;
@@ -207,17 +700,119 @@ index d40b438..9e9782d 100644
 -        // (a few bytes can declare a huge count), so a fallible reservation turns an
 -        // allocation bomb into a recoverable decode error instead of an abort. Mirrors the
 -        // `try_reserve` pattern already used for blocks in `Update::decode`.
-+        // `len` is attacker-controlled: 7 bytes can claim 2^32-1 entries, and even a
-+        // *successful* reservation of that size costs seconds and gigabytes. Each entry is at
-+        // least 2 bytes (client and clock varints), so reserve only what the input could hold.
++        // `len` comes from the input (hardening): each entry is at least 2 bytes (client and
++        // clock varints), so reserve only what the input could hold.
          let mut sv = HashMap::with_hasher(BuildHasherDefault::default());
 -        sv.try_reserve(len)?;
 +        sv.try_reserve(bounded_capacity(len, decoder.remaining(), 2))?;
          let mut i = 0;
          while i < len {
              let client: u64 = decoder.read_var()?;
+diff --git a/yrs/src/sticky_index.rs b/yrs/src/sticky_index.rs
+index 6971724..11d2bc4 100644
+--- a/yrs/src/sticky_index.rs
++++ b/yrs/src/sticky_index.rs
+@@ -1,4 +1,6 @@
+-use crate::block::{ItemContent, ItemPtr};
++use crate::block::ItemContent;
++#[cfg(feature = "weak")]
++use crate::block::ItemPtr;
+ use crate::block_iter::BlockIter;
+ use crate::branch::{Branch, BranchPtr};
+ use crate::encoding::read::Error;
+@@ -269,21 +271,7 @@ impl StickyIndex {
+         }
+     }
+ 
+-    pub(crate) fn within_range(&self, ptr: Option<ItemPtr>) -> bool {
+-        if self.assoc == Assoc::Before {
+-            return false;
+-        } else if let Some(item) = ptr.as_deref() {
+-            if let Some(ptr) = item.left {
+-                if let Some(pos) = self.id() {
+-                    return ptr.last_id() != *pos;
+-                }
+-            }
+-            false
+-        } else {
+-            true
+-        }
+-    }
+-
++    #[cfg(feature = "weak")]
+     pub(crate) fn get_item<T: ReadTxn>(&self, txn: &T) -> Option<ItemPtr> {
+         let branch = match &self.scope {
+             IndexScope::Relative(id) => {
+diff --git a/yrs/src/store.rs b/yrs/src/store.rs
+index 2e42dd4..a11c103 100644
+--- a/yrs/src/store.rs
++++ b/yrs/src/store.rs
+@@ -355,13 +355,13 @@ impl Store {
+     }
+ 
+     /// Returns a collection of sub documents linked within the structures of this document store.
+-    pub fn subdocs(&self) -> SubdocsIter {
++    pub fn subdocs(&self) -> SubdocsIter<'_> {
+         SubdocsIter(self.subdocs.values())
+     }
+ 
+     /// Returns a collection of globally unique identifiers of sub documents linked within
+     /// the structures of this document store.
+-    pub fn subdoc_guids(&self) -> SubdocGuids {
++    pub fn subdoc_guids(&self) -> SubdocGuids<'_> {
+         SubdocGuids(self.subdocs.values())
+     }
+ 
+@@ -441,39 +441,39 @@ impl DocStore {
+         }))
+     }
+ 
+-    pub(crate) fn try_read(&self) -> Option<RwLockReadGuard<Store>> {
++    pub(crate) fn try_read(&self) -> Option<RwLockReadGuard<'_, Store>> {
+         self.0.store.try_read()
+     }
+ 
+     #[cfg(not(target_family = "wasm"))]
+-    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
++    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<'_, Store> {
+         self.0.store.read_blocking()
+     }
+ 
+     #[cfg(target_family = "wasm")]
+-    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<Store> {
++    pub(crate) fn read_blocking(&self) -> RwLockReadGuard<'_, Store> {
+         self.0.store.try_read().unwrap()
+     }
+ 
+-    pub(crate) fn read_async(&self) -> Read<Store> {
++    pub(crate) fn read_async(&self) -> Read<'_, Store> {
+         self.0.store.read()
+     }
+ 
+-    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<Store>> {
++    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<'_, Store>> {
+         self.0.store.try_write()
+     }
+ 
+     #[cfg(not(target_family = "wasm"))]
+-    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
++    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<'_, Store> {
+         self.0.store.write_blocking()
+     }
+ 
+     #[cfg(target_family = "wasm")]
+-    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<Store> {
++    pub(crate) fn write_blocking(&self) -> RwLockWriteGuard<'_, Store> {
+         self.0.store.try_write().unwrap()
+     }
+ 
+-    pub(crate) fn write_async(&self) -> Write<Store> {
++    pub(crate) fn write_async(&self) -> Write<'_, Store> {
+         self.0.store.write()
+     }
+ 
 diff --git a/yrs/src/sync/awareness.rs b/yrs/src/sync/awareness.rs
-index 0cea150..d2327bf 100644
+index 0cea150..43af81d 100644
 --- a/yrs/src/sync/awareness.rs
 +++ b/yrs/src/sync/awareness.rs
 @@ -7,6 +7,7 @@ use std::sync::Arc;
@@ -228,33 +823,86 @@ index 0cea150..d2327bf 100644
  use crate::sync::{Clock, Timestamp};
  use crate::updates::decoder::{Decode, Decoder};
  use crate::updates::encoder::{Encode, Encoder};
+@@ -138,7 +139,7 @@ impl Awareness {
+     /// Returns a state map of all the clients tracked by current [Awareness] instance. Those
+     /// states are identified by their corresponding [ClientID]s. The associated state is
+     /// represented and replicated to other clients as a JSON string.
+-    pub fn iter(&self) -> AwarenessIter {
++    pub fn iter(&self) -> AwarenessIter<'_> {
+         AwarenessIter(self.states.iter())
+     }
+ 
 @@ -525,10 +526,10 @@ impl Encode for AwarenessUpdate {
  impl Decode for AwarenessUpdate {
      fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, crate::encoding::read::Error> {
          let len: usize = decoder.read_var()?;
 -        // `len` is attacker-controlled (awareness updates arrive over the network); a fallible
 -        // reservation avoids an allocation bomb (see `Update::decode`'s `try_reserve`).
-+        // `len` is attacker-controlled (awareness updates arrive over the network). Reserve only
-+        // what the input could hold: an entry is at least 3 bytes (client, clock, JSON length).
++        // `len` comes from the input (hardening). Reserve only what the input could hold: an
++        // entry is at least 3 bytes (client, clock, JSON length).
          let mut clients = HashMap::new();
 -        clients.try_reserve(len)?;
 +        clients.try_reserve(bounded_capacity(len, decoder.remaining(), 3))?;
          for _ in 0..len {
              let client_id = ClientID::new(decoder.read_var::<u64>()?);
              let clock: u32 = decoder.read_var()?;
+diff --git a/yrs/src/test_utils.rs b/yrs/src/test_utils.rs
+index ee9a538..f1a5faf 100644
+--- a/yrs/src/test_utils.rs
++++ b/yrs/src/test_utils.rs
+@@ -469,7 +469,7 @@ impl TestConnector {
+         }
+     }
+ 
+-    pub fn peers(&self) -> Peers {
++    pub fn peers(&self) -> Peers<'_> {
+         let inner = self.0.lock().unwrap();
+         Peers::new(inner)
+     }
+@@ -525,7 +525,7 @@ impl TestPeer {
+         }
+     }
+ 
+-    fn state(&self) -> MutexGuard<TestPeerState> {
++    fn state(&self) -> MutexGuard<'_, TestPeerState> {
+         self.state.lock().unwrap()
+     }
+ 
 diff --git a/yrs/src/transaction.rs b/yrs/src/transaction.rs
-index ec591d7..d2e1b02 100644
+index ec591d7..f637a12 100644
 --- a/yrs/src/transaction.rs
 +++ b/yrs/src/transaction.rs
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,4 @@
 -use crate::block::{Block, BlockRange, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
-+use crate::block::{
-+    Block, BlockRange, ClientID, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID,
-+};
++use crate::block::{ClientID, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
  use crate::branch::{Branch, BranchPtr};
  use crate::doc::DocAddr;
  use crate::error::{Error, UpdateError};
-@@ -507,6 +509,10 @@ pub struct TransactionMut<'doc> {
+@@ -165,20 +165,20 @@ pub trait ReadTxn: Sized {
+     }
+ 
+     /// Returns an iterator over top level (root) shared types available in current [Doc].
+-    fn root_refs(&self) -> RootRefs {
++    fn root_refs(&self) -> RootRefs<'_> {
+         let store = self.store();
+         RootRefs(store.types.iter())
+     }
+ 
+     /// Returns a collection of globally unique identifiers of sub documents linked within
+     /// the structures of this document store.
+-    fn subdoc_guids(&self) -> SubdocGuids {
++    fn subdoc_guids(&self) -> SubdocGuids<'_> {
+         let store = self.store();
+         store.subdoc_guids()
+     }
+ 
+     /// Returns a collection of sub documents linked within the structures of this document store.
+-    fn subdocs(&self) -> SubdocsIter {
++    fn subdocs(&self) -> SubdocsIter<'_> {
+         let store = self.store();
+         store.subdocs()
+     }
+@@ -507,6 +507,10 @@ pub struct TransactionMut<'doc> {
      local: bool,
      committed: bool,
      needs_cleanup: bool,
@@ -265,7 +913,7 @@ index ec591d7..d2e1b02 100644
  }
  
  impl<'doc> ReadTxn for TransactionMut<'doc> {
-@@ -555,6 +561,28 @@ impl<'doc> TransactionMut<'doc> {
+@@ -555,6 +559,28 @@ impl<'doc> TransactionMut<'doc> {
              local: true,
              committed: false,
              needs_cleanup: false,
@@ -294,7 +942,24 @@ index ec591d7..d2e1b02 100644
          }
      }
  
-@@ -1070,10 +1098,25 @@ impl<'doc> TransactionMut<'doc> {
+@@ -775,7 +801,6 @@ impl<'doc> TransactionMut<'doc> {
+         let mut recurse = Vec::new();
+         let mut result = false;
+ 
+-        let ptr = item.clone();
+         let store = self.store.deref();
+         if !item.is_deleted() {
+             if item.parent_sub.is_none() && item.is_countable() {
+@@ -955,7 +980,7 @@ impl<'doc> TransactionMut<'doc> {
+         } else {
+             None
+         };
+-        let mut block = Item::new(
++        let block = Item::new(
+             id,
+             left,
+             origin,
+@@ -1070,10 +1095,25 @@ impl<'doc> TransactionMut<'doc> {
      ///
      /// This step is performed automatically when a transaction is about to be dropped (its life
      /// scope comes to an end).
@@ -320,7 +985,7 @@ index ec591d7..d2e1b02 100644
          self.committed = true;
  
          // 2. emit 'beforeObserverCalls'
-@@ -1138,6 +1181,10 @@ impl<'doc> TransactionMut<'doc> {
+@@ -1138,6 +1178,10 @@ impl<'doc> TransactionMut<'doc> {
              self.store.events = Some(events);
          }
  
@@ -331,11 +996,134 @@ index ec591d7..d2e1b02 100644
          // 10. add and remove subdocs
          if let Some(mut subdocs) = self.subdocs.take() {
              let client_id = self.store.client_id;
+diff --git a/yrs/src/types/mod.rs b/yrs/src/types/mod.rs
+index f4301cd..f7fd8d6 100644
+--- a/yrs/src/types/mod.rs
++++ b/yrs/src/types/mod.rs
+@@ -136,7 +136,7 @@ impl TypeRef {
+                 encoder.write_var(id.client.get());
+                 encoder.write_var(id.clock);
+             }
+-            IndexScope::Relative(id) => {
++            IndexScope::Relative(_) => {
+                 // for single element id is the same as start so we can infer it
+             }
+             IndexScope::Nested(id) => {
+@@ -227,16 +227,22 @@ impl std::fmt::Display for TypeRef {
+ }
+ 
+ /// Marks is weak ref is quotation spanning over multiple elements.
++#[cfg(feature = "weak")]
+ const WEAK_REF_FLAGS_QUOTE: u8 = 0b0000_0001;
+ /// Marks is start boundary of weak ref is [Assoc::After].
++#[cfg(feature = "weak")]
+ const WEAK_REF_FLAGS_START_ASSOC: u8 = 0b0000_0010;
+ /// Marks is end boundary of weak ref is [Assoc::After].
++#[cfg(feature = "weak")]
+ const WEAK_REF_FLAGS_END_ASSOC: u8 = 0b0000_0100;
+ /// Marks if start boundary of weak ref is unbounded.
++#[cfg(feature = "weak")]
+ const WEAK_REF_FLAGS_START_UNBOUNDED: u8 = 0b0000_1000;
+ /// Marks if end boundary of weak ref is unbounded.
++#[cfg(feature = "weak")]
+ const WEAK_REF_FLAGS_END_UNBOUNDED: u8 = 0b0001_0000;
+ /// Marks if weak ref references a root type. Only needed for both sides unbounded elements.
++#[cfg(feature = "weak")]
+ const WEAK_REF_FLAGS_PARENT_ROOT: u8 = 0b0010_0000;
+ 
+ impl Encode for TypeRef {
+@@ -535,6 +541,7 @@ impl std::fmt::Display for Branch {
+ #[derive(Debug)]
+ pub(crate) struct Entries<'a, B, T> {
+     iter: std::collections::hash_map::Iter<'a, Arc<str>, ItemPtr>,
++    #[allow(dead_code)] // never read: holds the transaction (or its borrow) while iterating
+     txn: B,
+     _marker: PhantomData<T>,
+ }
+@@ -908,7 +915,7 @@ impl<'a> Events<'a> {
+         Events(events)
+     }
+ 
+-    pub fn iter(&self) -> EventsIter {
++    pub fn iter(&self) -> EventsIter<'_> {
+         EventsIter(self.0.iter())
+     }
+ }
+diff --git a/yrs/src/types/weak.rs b/yrs/src/types/weak.rs
+index 6875139..6361885 100644
+--- a/yrs/src/types/weak.rs
++++ b/yrs/src/types/weak.rs
+@@ -705,7 +705,7 @@ pub trait Quotable: AsRef<Branch> + Sized {
+         let encoding = txn.store().offset_kind;
+         let mut start_index = 0;
+         let mut remaining = start_index;
+-        let mut curr = None;
++        let mut curr;
+         let mut i = this.start.to_iter();
+ 
+         let start = if let Some((start_i, assoc_start)) = start {
+@@ -791,7 +791,6 @@ pub enum QuoteError {
+ }
+ 
+ pub(crate) fn join_linked_range(mut block: ItemPtr, txn: &mut TransactionMut) {
+-    let block_copy = block.clone();
+     let item = block.deref_mut();
+     // this item may exists within a quoted range
+     item.info.set_linked();
+@@ -2122,7 +2121,7 @@ mod test {
+         exchange_updates(&[&d1, &d2]);
+ 
+         let mut txn = d2.transact_mut();
+-        let txt2 = txn.get_or_insert_text("text");
++        let _txt2 = txn.get_or_insert_text("text");
+         let arr2 = txn.get_or_insert_array("array");
+ 
+         let link2 = arr2
+@@ -2191,7 +2190,7 @@ mod test {
+         exchange_updates(&[&d1, &d2]);
+ 
+         let mut txn = d2.transact_mut();
+-        let txt2 = txn.get_or_insert_text("text");
++        let _txt2 = txn.get_or_insert_text("text");
+         let arr2 = txn.get_or_insert_array("array");
+ 
+         let link2 = arr2
 diff --git a/yrs/src/undo.rs b/yrs/src/undo.rs
-index e4a9549..b523408 100644
+index e4a9549..ffde2ff 100644
 --- a/yrs/src/undo.rs
 +++ b/yrs/src/undo.rs
-@@ -2222,4 +2222,55 @@ mod test {
+@@ -130,7 +130,7 @@ where
+     pub fn with_options(mut options: Options<M>) -> Self {
+         let undo_stack = UndoStack(std::mem::take(&mut options.init_undo_stack));
+         let redo_stack = UndoStack(std::mem::take(&mut options.init_redo_stack));
+-        let mut state = Arc::new(Inner {
++        let state = Arc::new(Inner {
+             scope: HashSet::new(),
+             options,
+             undo_stack,
+@@ -376,7 +376,8 @@ where
+         self.clear_internal(true, true)
+     }
+ 
+-    fn clear_internal(&mut self, clear_undo: bool, clear_redo: bool) {
++    // both stacks are cleared whatever the flags say (upstream behaviour, kept as is)
++    fn clear_internal(&mut self, _clear_undo: bool, _clear_redo: bool) {
+         let inner = Arc::get_mut(&mut self.state).unwrap();
+ 
+         let undo_cleared = Self::clear_stack(&inner.scope, &inner.docs, &mut inner.undo_stack);
+@@ -1344,9 +1345,9 @@ mod test {
+             let mut m1: UndoManager<Metadata> = UndoManager::new();
+             m1.expand_scope(&d1, &txt);
+ 
+-            let txt_clone = txt.clone();
++            let _txt_clone = txt.clone();
+             m1.observe_item_added("sub", move |_, e| {
+-                let e = e.meta_mut().entry("test".to_string()).or_default();
++                let _e = e.meta_mut().entry("test".to_string()).or_default();
+             });
+ 
+             txt.insert(&mut d1.transact_mut(), 0, "c");
+@@ -2222,4 +2223,55 @@ mod test {
        um.destroy()
      }
           */
@@ -392,7 +1180,7 @@ index e4a9549..b523408 100644
 +    }
  }
 diff --git a/yrs/src/update.rs b/yrs/src/update.rs
-index 9404b2a..6839a02 100644
+index 9404b2a..fd5ff84 100644
 --- a/yrs/src/update.rs
 +++ b/yrs/src/update.rs
 @@ -3,7 +3,7 @@ use crate::block::{
@@ -404,7 +1192,15 @@ index 9404b2a..6839a02 100644
  use crate::error::UpdateError;
  use crate::id_set::IdSet;
  use crate::store::Store;
-@@ -264,6 +264,20 @@ impl Update {
+@@ -45,6 +45,7 @@ impl BlockSet {
+         IntoBlocks::new(self, ignore_skip)
+     }
+ 
++    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
+     pub fn as_id_set(&self) -> IdSet {
+         let mut inserts = IdSet::default();
+ 
+@@ -264,6 +265,20 @@ impl Update {
      }
  
      /// Returns a delete set associated with current update.
@@ -425,14 +1221,29 @@ index 9404b2a..6839a02 100644
      pub fn delete_set(&self) -> &IdSet {
          &self.delete_set
      }
-@@ -826,8 +840,16 @@ impl Decode for Update {
+@@ -500,6 +515,7 @@ impl Update {
+         Ok(None)
+     }
+ 
++    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
+     fn next_target<'a, 'b>(
+         client_block_ref_ids: &'a mut Vec<ClientID>,
+         blocks: &'b mut BlockSet,
+@@ -523,6 +539,7 @@ impl Update {
+         None
+     }
+ 
++    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
+     fn return_stack(stack: Vec<Block>, refs: &mut BlockSet, remaining: &mut BlockSet) {
+         for item in stack.into_iter() {
+             let client = item.id().client;
+@@ -826,8 +843,15 @@ impl Decode for Update {
      fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
          // read blocks
          let clients_len: u32 = decoder.read_var()?;
-+        // Counts below are attacker-controlled; a successful reservation of 2^32 slots is
-+        // itself the DoS (10 bytes -> ~3 GB). Bound each by what the remaining input could
-+        // hold: a client section is at least 3 bytes (blocks_len, client, clock), a block at
-+        // least 1 (its info byte).
++        // Counts below come from the input (hardening): bound each pre-allocation by what the
++        // remaining input could hold: a client section is at least 3 bytes (blocks_len, client,
++        // clock), a block at least 1 (its info byte).
          let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
 -        clients.try_reserve(clients_len as usize)?;
 +        clients.try_reserve(bounded_capacity(
@@ -443,7 +1254,7 @@ index 9404b2a..6839a02 100644
  
          let mut blocks = BlockSet { clients };
          for _ in 0..clients_len {
-@@ -839,9 +861,7 @@ impl Decode for Update {
+@@ -839,9 +863,7 @@ impl Decode for Update {
                  .clients
                  .entry(client)
                  .or_insert_with(|| VecDeque::new());

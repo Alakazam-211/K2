@@ -1,0 +1,3 @@
+# tools/check-private.sh's allowlist: matches that name no internal host.
+# PATH (the whole file) or PATH:TEXT (a matching line of PATH containing TEXT), paths from the
+# repo root. The script and this file are always skipped.

@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.9.5"
+version = "0.9.6"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -8,8 +8,7 @@ description = "Multiplayer kit for file-type packs: docs on K2-defined primitive
 
 [features]
 # Decoding bytes from remote clients (sync step 1/2, updates). Off by default, and a host must
-# not enable it until the strict decoder lands: yrs 0.28 has open decode bugs, including a
-# use-after-free reachable from a crafted update, which catch_unwind cannot contain.
+# not enable it until the strict decoder lands (docs/ARCHITECTURE.md, rule 4).
 # The kit's own tests enable it (self dev-dependency below).
 untrusted-wire = []
 # Test-only hooks for the engine-generic conformance suite (`crates/conformance`): an

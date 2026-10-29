@@ -297,14 +297,6 @@ impl BlockStore {
         id.clock >= self.get_clock(&id.client) || self.skips.contains(id)
     }
 
-    pub fn contains(&self, id: &ID) -> bool {
-        if let Some(clients) = self.clients.get(&id.client) {
-            id.clock < clients.clock()
-        } else {
-            false
-        }
-    }
-
     pub fn push(&mut self, block: Block) {
         let id = block.id();
         match self.clients.entry(id.client) {

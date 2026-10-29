@@ -1,4 +1,5 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion, SamplingMode};
+use criterion::{criterion_group, criterion_main, Criterion, SamplingMode};
+use std::hint::black_box;
 use yrs::encoding::read::{Cursor, Read};
 use yrs::encoding::write::Write;
 use yrs::Any;
@@ -153,7 +154,7 @@ fn bench_serialization(c: &mut Criterion) {
             let mut roundtrip = String::new();
             any.to_json(&mut roundtrip);
 
-            black_box(Any::from_json(&roundtrip));
+            let _ = black_box(Any::from_json(&roundtrip));
         })
     });
 
@@ -166,7 +167,7 @@ fn bench_serialization(c: &mut Criterion) {
 
     custom_group.bench_function("Any deserialize", |b| {
         b.iter(|| {
-            black_box(Any::from_json(&any_json));
+            let _ = black_box(Any::from_json(&any_json));
         })
     });
 

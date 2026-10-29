@@ -543,12 +543,6 @@ impl<T: Merge> IdRanges<T> {
         &self.0
     }
 
-    /// Direct mutable access to the inner SmallVec (crate-internal).
-    #[inline]
-    pub(crate) fn inner_mut(&mut self) -> &mut SmallVec<[(Range<u32>, T); 1]> {
-        &mut self.0
-    }
-
     /// Construct from raw SmallVec (crate-internal, assumes sorted/non-overlapping).
     #[inline]
     pub(crate) fn from_raw(raw: SmallVec<[(Range<u32>, T); 1]>) -> Self {
@@ -1419,7 +1413,7 @@ mod test {
         exchange_updates(&[&d1, &d2]);
 
         let txn = d1.transact();
-        let mut map = IdSet::from_iter([
+        let map = IdSet::from_iter([
             (ClientID::new(1), vec![2..5, 8..20]), // client=1: two partial ranges into the 10-char block
             (ClientID::new(2), vec![3..6]), // client=2: one partial range into the 8-char block
         ]);

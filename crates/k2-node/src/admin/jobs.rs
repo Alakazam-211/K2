@@ -341,6 +341,11 @@ pub struct UnitStatus {
     pub main_status: i32,
     /// `oom_kill` from the unit's `memory.events`.
     pub oom_kills: u64,
+    /// The unit's cgroup (`ControlGroup=`, `/system.slice/…`): the node
+    /// reads its `cpu.stat` and `memory.peak` (CE-14, the CE-10 stall
+    /// rule). Absent from an older executor (then neither is read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_group: Option<String>,
 }
 
 impl UnitStatus {
@@ -378,6 +383,9 @@ pub fn parse_show(text: &str) -> UnitStatus {
             "Result" => s.result = v.to_string(),
             "ExecMainCode" => s.main_code = v.parse().unwrap_or(0),
             "ExecMainStatus" => s.main_status = v.parse().unwrap_or(0),
+            // A plain absolute cgroup path only (it's joined under
+            // /sys/fs/cgroup by the node).
+            "ControlGroup" if v.starts_with('/') && !v.split('/').any(|c| c == "..") && !v.contains('\0') => s.control_group = Some(v.to_string()),
             _ => {}
         }
     }

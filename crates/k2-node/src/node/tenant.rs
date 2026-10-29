@@ -350,6 +350,12 @@ impl Tenant {
         self.protocol() >= k2_node_proto::frames::PROTOCOL_TIERS2
     }
 
+    /// Does this session get the easy-mode job work and features
+    /// ([`k2_node_proto::frames::PROTOCOL_EASY`])?
+    pub fn speaks_easy(&self) -> bool {
+        self.protocol() >= k2_node_proto::frames::PROTOCOL_EASY
+    }
+
     pub fn share(&self) -> Option<ShareInfo> {
         self.share.lock().unwrap().clone()
     }

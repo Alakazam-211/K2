@@ -40,7 +40,16 @@ async fn artifacts_and_junit_come_back_with_the_result() {
     assert_eq!((t.total, t.passed, t.failed, t.skipped), (3, 1, 1, 1));
     assert_eq!(t.failing[0].name, "bad_one");
     assert!(t.failing[0].message.contains("panicked at src/x.rs"), "{}", t.failing[0].message);
-    assert!(o.notes.iter().any(|n| n == "missing/* matched nothing"), "{:?}", o.notes);
+    // CE-23: the note names the folder searched (the job's cwd, as a
+    // job-relative path) and that globs are relative to it.
+    assert!(
+        o.notes.iter().any(|n| n.starts_with("missing/* matched nothing under <job>/src") || n.starts_with("missing/* matched nothing under <job> (")),
+        "{:?}",
+        o.notes
+    );
+    // CE-4, CE-14, CE-19: every result carries the tools, usage and host.
+    assert!(o.resources.is_some() && o.host.as_ref().is_some_and(|h| h.start.is_some() && h.end.is_some()), "{:?} {:?}", o.resources, o.host);
+
     let Frame::Receipt(r) = fr.last().unwrap() else { unreachable!() };
     let receipt = r.receipt.verify(n.node.key.spki_der()).unwrap();
     assert_eq!(receipt.artifacts, o.artifacts, "the signed receipt lists the same files");
@@ -93,5 +102,82 @@ async fn a_silent_job_stalls_out_and_a_chatty_one_does_not() {
     let fr = run_to_receipt(&mut c, "s2").await;
     let end = states_of(&fr, "s2").into_iter().last().unwrap();
     assert_eq!((end.state, end.exit.and_then(|e| e.code)), (JobState::Done, Some(0)), "output kept it alive for over 2 s");
+    drop(n);
+}
+
+/// CE-10 (D4, `stall-cpu`): a job that prints nothing but burns CPU isn't
+/// stalled; it runs to its wall clock (`timeout`, not `stalled`), and the
+/// log says it's quiet but busy. Its CPU time is in the result (CE-14).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_silent_busy_job_is_not_stalled() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-busy", "", |_| {}).await;
+    let mut c = fake.next_conn().await;
+    let offer = c.until(|f| matches!(f, Frame::Offer(_))).await;
+    let Some(Frame::Offer(o)) = offer.last() else { unreachable!() };
+    for f in [
+        k2_node_proto::frames::FEATURE_STALL_CPU,
+        results::FEATURE_TOOLS_USED,
+        results::FEATURE_JOB_RESOURCES,
+        k2_node_proto::needs::FEATURE_RUST_COMPONENTS,
+        k2_node_proto::needs::FEATURE_TOOLCHAIN_BUDGET,
+        k2_node_proto::env::FEATURE_CPU_HINTS,
+        k2_node_proto::env::FEATURE_JOB_PORTS,
+    ] {
+        assert!(o.features.iter().any(|x| x == f), "the offer says {f}: {:?}", o.features);
+    }
+
+    let mut p = plan("b1", &["/bin/sh", "-c", "echo start; while :; do :; done"]);
+    p.stall_secs = Some(1);
+    p.limits.max_secs = 4;
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "b1").await;
+    let end = states_of(&fr, "b1").into_iter().last().unwrap();
+    assert_eq!((end.state, end.reason.as_deref()), (JobState::Timeout, Some("timeout")), "busy: the wall clock ended it, not the stall watch");
+    let sys = text(&logs_of(&fr, "b1"), k2_node_proto::frames::LogStream::Sys);
+    assert!(sys.contains("[k2-node] quiet but busy: no output for"), "{sys}");
+    assert_eq!(sys.matches("quiet but busy").count(), 1, "once per 30 min, not every tick: {sys}");
+    let r = end.outputs.as_ref().and_then(|o| o.resources.clone()).expect("resources on every end");
+    assert!(r.cpu_ms.is_some_and(|c| c >= 1_000), "about 4 s of one CPU: {r:?}");
+    assert_ne!(r.cpu_source, "none", "{r:?}");
+    drop(n);
+}
+
+/// CE-15 + loopback ports: the job's CPUs as thread hints unless its env
+/// sets them, `K2_JOB_CPUS`, and its own port block; CE-4 the tools line
+/// and the signed `tools_used`; CE-14 a peak memory; CE-19 the host stamps.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_gets_its_cpus_ports_tools_usage_and_host_stamp() {
+    let mut fake = Fake::start().await;
+    let n = start_node(&fake, "e2e-hints", "", |_| {}).await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let script = "echo cpus=$K2_JOB_CPUS cargo=$CARGO_BUILD_JOBS omp=$OMP_NUM_THREADS nextest=$NEXTEST_TEST_THREADS rtt=$RUST_TEST_THREADS base=$K2_JOB_PORT_BASE count=$K2_JOB_PORT_COUNT; \
+                  x=$(head -c 120000000 /dev/zero | tr '\\0' a); sleep 2; echo ${#x}";
+    let mut p = plan("h1", &["/bin/sh", "-c", script]);
+    p.limits.cpu_millis = Some(2500);
+    p.env.insert("RUST_TEST_THREADS".into(), "7".into());
+    c.send(Frame::Assign(assign(p, 1)));
+    let fr = run_to_receipt(&mut c, "h1").await;
+    let out = text(&logs_of(&fr, "h1"), k2_node_proto::frames::LogStream::Out);
+    assert!(out.starts_with("cpus=3 cargo=3 omp=3 nextest=3 rtt=7 base=20000 count=100\n"), "--cpus 2.5 rounds up; the job's own env wins: {out}");
+    assert!(out.contains("120000000"), "{out}");
+    let sys = text(&logs_of(&fr, "h1"), k2_node_proto::frames::LogStream::Sys);
+    assert!(sys.contains("[k2-node] cpus: 3 (K2_JOB_CPUS;") && sys.contains("ports 20000-20099"), "{sys}");
+    assert!(sys.contains("[k2-node] tools: "), "{sys}");
+    assert!(sys.contains("[k2-node] host at start: load ") && sys.contains("[k2-node] host at end: load "), "{sys}");
+    assert!(sys.contains("[k2-node] used: peak memory "), "{sys}");
+    let end = states_of(&fr, "h1").into_iter().last().unwrap();
+    assert_eq!((end.state, end.exit.as_ref().and_then(|e| e.code)), (JobState::Done, Some(0)));
+    let o = end.outputs.expect("outputs on every end, artifacts or not");
+    let r = o.resources.clone().expect("resources");
+    assert!(r.peak_mem_bytes.is_some_and(|m| m >= 100_000_000), "a 120 MB string: {r:?}");
+    let h = o.host.clone().expect("host stamps");
+    let (s, e) = (h.start.expect("start"), h.end.expect("end"));
+    assert!(s.cpus >= 1 && e.at >= s.at, "{s:?} {e:?}");
+    assert_eq!(s.steal_permille.is_some(), cfg!(target_os = "linux"), "steal on Linux, null on macOS: {s:?}");
+    let Frame::Receipt(rf) = fr.last().unwrap() else { unreachable!() };
+    let receipt = rf.receipt.verify(n.node.key.spki_der()).unwrap();
+    assert_eq!(receipt.tools_used, o.tools_used, "the signed receipt carries the same tools");
     drop(n);
 }

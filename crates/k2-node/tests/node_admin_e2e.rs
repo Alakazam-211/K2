@@ -146,7 +146,7 @@ async fn node_answered_verbs_ps_kill_gc_show_and_levels() {
     admin_toml(&n.layout, &fake.key, "policy");
     // A running job shows in ps and can be killed.
     c.send(Frame::Assign(assign(plan("k1", &["/bin/sh", "-c", "echo up; sleep 1000"]), 1)));
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "k1")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "k1" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     let r = ask(&mut c, cmd(&fake.key, &fp, "ps", json!({}))).await;
     assert_eq!(r.state, "done", "{r:?}");
     assert_eq!(r.result["jobs"][0]["job_id"], "k1");

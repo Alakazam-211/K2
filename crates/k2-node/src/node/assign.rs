@@ -164,7 +164,9 @@ impl Node {
     /// the queue's accounting, the job task.
     fn launch(self: &Arc<Self>, t: &Arc<Tenant>, a: Assign) {
         let (stop_tx, stop_rx) = watch::channel(None);
-        self.jobs.lock().unwrap().insert(
+        let mut jobs = self.jobs.lock().unwrap();
+        let port_block = super::free_port_block(&jobs);
+        jobs.insert(
             (t.slot, a.fence.job_id.clone()),
             RunningJob {
                 generation: a.fence.generation,
@@ -179,8 +181,10 @@ impl Node {
                 gate: a.plan.tier_or_class() == k2_node_proto::tiers::Tier::Ci,
                 workspace: a.plan.workspace_id.clone(),
                 secret: !a.plan.secret_env.is_empty(),
+                port_block,
             },
         );
+        drop(jobs);
         let caps = self.queue_caps();
         self.fairq.started(t.slot, &a, self.now(), &caps);
         self.jobs_changed();
@@ -449,6 +453,7 @@ impl Node {
             log: ReceiptLog { sha256: crypto::sha256_hex(b""), bytes: 0, truncated: false },
             artifacts: Vec::new(),
             secret_env: Vec::new(),
+            tools_used: Default::default(),
         };
         SignedReceipt::sign(&self.key, &receipt)
     }
@@ -563,6 +568,7 @@ impl Node {
                     gate: false,
                     workspace: String::new(),
                     secret: false,
+                    port_block: None,
                 },
             );
         }

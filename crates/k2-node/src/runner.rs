@@ -154,6 +154,13 @@ fn tool_path(first: &[PathBuf], base: &str) -> String {
 /// Group RSS in bytes (macOS soft cap).
 pub trait RssSampler: Send + Sync {
     fn group_rss(&self, pgid: i32) -> Option<u64>;
+
+    /// The group's processes with their RSS and CPU (CE-14, the CE-10
+    /// stall rule). `None`: this sampler can't say; the job's memory then
+    /// comes from [`Self::group_rss`] and its CPU is unknown.
+    fn group_procs(&self, _pgid: i32) -> Option<Vec<crate::jobstat::ProcUse>> {
+        None
+    }
 }
 
 /// `ps -axo pgid=,rss=` summed for one group.
@@ -173,6 +180,10 @@ impl RssSampler for PsSampler {
             }
         }
         Some(kb * 1024)
+    }
+
+    fn group_procs(&self, pgid: i32) -> Option<Vec<crate::jobstat::ProcUse>> {
+        crate::jobstat::ps_group(pgid)
     }
 }
 

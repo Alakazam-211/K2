@@ -16,6 +16,7 @@ pub mod enroll;
 pub mod fairq;
 pub mod identity;
 pub mod install;
+pub mod jobstat;
 pub mod journal;
 pub mod ledger;
 pub mod locks;

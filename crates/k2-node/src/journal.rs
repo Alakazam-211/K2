@@ -30,14 +30,25 @@ fn stream_of(b: u8) -> Option<LogStream> {
     }
 }
 
+/// Node-written lines (`[k2-node] …`) a journal keeps beside the job's
+/// own capped output (0.46.7: the job's `--log` cap counts its stdout and
+/// stderr only, so the node's preamble never crowds out a small cap).
+pub const SYS_ALLOWANCE: u64 = 64 * 1024;
+
 /// Appends records with the job's log cap applied.
 pub struct JournalWriter {
     file: File,
     pub seq: u64,
     /// Payload bytes kept (what the receipt hashes).
     pub bytes: u64,
+    /// The job's output dropped over its cap.
     pub dropped: u64,
     cap: u64,
+    /// The job's output kept (stdout + stderr): what the cap counts.
+    out_bytes: u64,
+    /// Node lines kept, and dropped over [`SYS_ALLOWANCE`].
+    sys_bytes: u64,
+    sys_dropped: u64,
     hash: Option<Sha256Stream>,
     /// Secret-env (SE23): every append is redacted before it is written
     /// (the stdout/stderr pumps also stream-redact first, so a value split
@@ -52,7 +63,7 @@ impl JournalWriter {
             .append(true)
             .open(path)
             .map_err(|e| format!("open journal {}: {e}", path.display()))?;
-        Ok(Self { file, seq: 0, bytes: 0, dropped: 0, cap, hash: Some(Sha256Stream::default()), redactor: None })
+        Ok(Self { file, seq: 0, bytes: 0, dropped: 0, cap, out_bytes: 0, sys_bytes: 0, sys_dropped: 0, hash: Some(Sha256Stream::default()), redactor: None })
     }
 
     /// From now on, redact every append with `r` (a secret job, SE23).
@@ -79,6 +90,10 @@ impl JournalWriter {
             for rec in recs {
                 w.seq = rec.seq;
                 w.bytes += rec.data.len() as u64;
+                match rec.stream {
+                    LogStream::Sys => w.sys_bytes += rec.data.len() as u64,
+                    _ => w.out_bytes += rec.data.len() as u64,
+                }
                 if let Some(h) = w.hash.as_mut() {
                     h.update(&rec.data);
                 }
@@ -116,9 +131,16 @@ impl JournalWriter {
             }
             None => data,
         };
-        let room = self.cap.saturating_sub(self.bytes) as usize;
+        let sys = stream == LogStream::Sys;
+        let room = if sys { SYS_ALLOWANCE.saturating_sub(self.sys_bytes) } else { self.cap.saturating_sub(self.out_bytes) } as usize;
         let keep = data.len().min(room);
-        self.dropped += (data.len() - keep) as u64;
+        if sys {
+            self.sys_bytes += keep as u64;
+            self.sys_dropped += (data.len() - keep) as u64;
+        } else {
+            self.out_bytes += keep as u64;
+            self.dropped += (data.len() - keep) as u64;
+        }
         let mut n = 0;
         for chunk in data[..keep].chunks(MAX_LOG_CHUNK) {
             self.record(stream, chunk)?;
@@ -130,9 +152,13 @@ impl JournalWriter {
     /// Close out: the truncation marker (if anything was dropped), then
     /// `(sha256 hex, bytes, truncated)`.
     pub fn finish(&mut self) -> Result<(String, u64, bool), String> {
-        let truncated = self.dropped > 0;
-        if truncated {
+        let truncated = self.dropped > 0 || self.sys_dropped > 0;
+        if self.dropped > 0 {
             let msg = format!("[k2-node] log truncated at {} bytes; {} bytes dropped\n", self.cap, self.dropped);
+            self.record(LogStream::Sys, msg.as_bytes())?;
+        }
+        if self.sys_dropped > 0 {
+            let msg = format!("[k2-node] node lines over {} KB dropped ({} bytes)\n", SYS_ALLOWANCE / 1024, self.sys_dropped);
             self.record(LogStream::Sys, msg.as_bytes())?;
         }
         self.file.sync_all().map_err(|e| format!("sync journal: {e}"))?;

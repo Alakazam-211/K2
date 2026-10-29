@@ -274,7 +274,7 @@ async fn a_jobs_tmp_is_in_its_slot_and_its_own() {
         plan("t1", &["/bin/sh", "-c", "head -c 1048576 /dev/zero > /tmp/big && head -c 1048576 /dev/zero > /var/tmp/big2 && echo written && exec sleep 1000"]),
         1,
     )));
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "t1")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "t1" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     let dir = n.layout.job_dir("t1", 1);
     let size = |p: std::path::PathBuf| std::fs::metadata(&p).map(|m| m.len()).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
     assert_eq!(size(dir.join("tmp/big")), 1 << 20, "/tmp is the job's tmp folder");
@@ -321,7 +321,7 @@ async fn exit_logs_cancel_and_the_jobs_own_dirs() {
     assert!(out.contains("refused") && out.trim_end().ends_with("log"), "the journal stays the node's: {out}");
     // Cancel: SIGTERM through the unit, then gone.
     c.send(Frame::Assign(assign(plan("ex3", &["/bin/sh", "-c", "echo up; exec sleep 1000"]), 1)));
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "ex3")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "ex3" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     assert!(unit_loaded("k2job-ex3-g1.service"));
     c.send(Frame::Cancel(Cancel { job_id: "ex3".into(), generation: 1, reason: "test".into() }));
     let fr = run_to_receipt(&mut c, "ex3").await;
@@ -427,7 +427,7 @@ async fn a_secret_job_gets_its_env_on_stdin_and_nothing_keeps_the_value() {
     p.secret_env = vec!["K2T_SECRET".into()];
     c.send(Frame::Assign(assign(p, 1)));
     answer_need(&mut c, &fake, &n, "sec2").await;
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "sec2")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "sec2" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     let show = std::process::Command::new("systemctl").args(["show", "k2job-sec2-g1.service"]).output().unwrap();
     let show = String::from_utf8_lossy(&show.stdout);
     assert!(!show.contains(SECRET), "the unit's properties carry the value");

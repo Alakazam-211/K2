@@ -223,6 +223,14 @@ struct RunningJob {
     /// a secret job never shares a uid with another workspace's job).
     workspace: String,
     secret: bool,
+    /// Its loopback port block (`K2_JOB_PORT_BASE`), unique among running
+    /// jobs; none for a stand-in.
+    port_block: Option<u16>,
+}
+
+/// The lowest port block no running job holds (`None`: all taken).
+fn free_port_block(jobs: &HashMap<(Slot, String), RunningJob>) -> Option<u16> {
+    (0..k2_node_proto::env::JOB_PORT_BLOCKS).find(|b| !jobs.values().any(|j| j.port_block == Some(*b)))
 }
 
 /// The machine owner's side, refreshed every poll.
@@ -305,6 +313,18 @@ pub struct Linger {
     /// A secret attempt's job folder still to delete (all but its 0600 log).
     pub tree: Option<PathBuf>,
 }
+
+/// The easy-mode features (prd-compute-easy-mode-0467 §3.2), offered only
+/// to a server that speaks protocol 6 ([`Tenant::speaks_easy`]).
+pub const EASY_FEATURES: &[&str] = &[
+    results::FEATURE_TOOLS_USED,
+    results::FEATURE_JOB_RESOURCES,
+    k2_node_proto::frames::FEATURE_STALL_CPU,
+    k2_node_proto::needs::FEATURE_RUST_COMPONENTS,
+    k2_node_proto::needs::FEATURE_TOOLCHAIN_BUDGET,
+    k2_node_proto::env::FEATURE_CPU_HINTS,
+    k2_node_proto::env::FEATURE_JOB_PORTS,
+];
 
 /// What this node understands beyond protocol 1 (the offer says it).
 pub fn node_features() -> Vec<String> {
@@ -495,6 +515,7 @@ impl Node {
                         gate: false,
                         workspace: LINGER_WORKSPACE.to_string(),
                         secret: true,
+                        port_block: None,
                     },
                 );
                 self.fairq.set_lingering(slot, &it.key, true);

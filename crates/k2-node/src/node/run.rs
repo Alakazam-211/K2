@@ -37,7 +37,9 @@ type OutPipe = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
 /// A running job: our child (no wall / Seatbelt) or a unit (Linux wall).
 enum Proc {
     Local { child: tokio::process::Child, pgid: i32, leaf: Option<Leaf> },
-    Unit { unit: String, last: Option<crate::admin::jobs::UnitStatus> },
+    /// `cg`: the unit's cgroup dir under `/sys/fs/cgroup`, once the
+    /// executor said it (CE-14, the CE-10 stall rule).
+    Unit { unit: String, last: Option<crate::admin::jobs::UnitStatus>, cg: Option<PathBuf> },
 }
 
 impl Proc {
@@ -51,6 +53,17 @@ impl Proc {
 
     fn needs_rss_sampler(&self) -> bool {
         matches!(self, Proc::Local { leaf: None, .. })
+    }
+
+    /// Where the job's memory and CPU are read.
+    fn usage_source(&self) -> crate::jobstat::Source {
+        use crate::jobstat::Source;
+        match self {
+            Proc::Local { leaf: Some(l), .. } => Source::Cgroup(l.dir.clone()),
+            Proc::Local { leaf: None, pgid, .. } => Source::Group(*pgid),
+            Proc::Unit { cg: Some(c), .. } => Source::Cgroup(c.clone()),
+            Proc::Unit { cg: None, .. } => Source::None,
+        }
     }
 
     /// Was anything in the job OOM-killed? (V24.) Read before the leaf or
@@ -76,6 +89,95 @@ impl Proc {
 pub fn mem_cap_detail(cap: u64) -> String {
     let gb = cap as f64 / (1u64 << 30) as f64;
     format!("stopped: the job used more than its memory limit of {gb:.1} GB ({} MiB, its --mem or the node's share); ask for more with --mem", cap >> 20)
+}
+
+/// [`mem_cap_detail`] with the peak the node measured (CE-14): "… used
+/// 25.3G of 24.0G at its peak".
+pub fn mem_cap_detail_used(cap: u64, peak: Option<u64>) -> String {
+    match peak {
+        Some(p) => format!("{} (used {} of {} at its peak)", mem_cap_detail(cap), crate::jobstat::gib(p), crate::jobstat::gib(cap)),
+        None => mem_cap_detail(cap),
+    }
+}
+
+/// CE-15 + loopback ports (0.46.7): the job's CPUs as thread-count hints
+/// (each only when the plan's env doesn't set it: a caller's `--env` or a
+/// controller's hint wins), `K2_JOB_CPUS`, and its own port block.
+pub fn with_job_hints(
+    mut env: Vec<(String, String)>,
+    plan_env: &std::collections::BTreeMap<String, String>,
+    cpus: u64,
+    port_block: Option<u16>,
+) -> Vec<(String, String)> {
+    use k2_node_proto::env as e;
+    let cpus = cpus.max(1).to_string();
+    env.retain(|(k, _)| k != e::ENV_JOB_CPUS && k != e::ENV_JOB_PORT_BASE && k != e::ENV_JOB_PORT_COUNT);
+    env.push((e::ENV_JOB_CPUS.into(), cpus.clone()));
+    for v in e::CPU_HINT_VARS {
+        if !plan_env.contains_key(*v) {
+            env.retain(|(k, _)| k != v);
+            env.push((v.to_string(), cpus.clone()));
+        }
+    }
+    if let Some(b) = port_block {
+        let base = e::JOB_PORT_FIRST + b * e::JOB_PORT_BLOCK;
+        env.push((e::ENV_JOB_PORT_BASE.into(), base.to_string()));
+        env.push((e::ENV_JOB_PORT_COUNT.into(), e::JOB_PORT_BLOCK.to_string()));
+    }
+    env
+}
+
+/// A partial line goes to the journal after this long without more bytes
+/// (a prompt or a progress bar still shows).
+pub const LINE_IDLE: Duration = Duration::from_millis(200);
+/// A line this long goes to the journal without its newline.
+pub const LINE_MAX: usize = 64 * 1024;
+
+/// One stream's bytes held to a line end (0.46.7: line-atomic logs, so a
+/// machine-readable line is never split by the other stream's bytes).
+#[derive(Default)]
+pub struct LineBuf {
+    held: Vec<u8>,
+}
+
+impl LineBuf {
+    /// Add bytes; returns what may go to the journal now: everything up
+    /// to the last newline, or all of it once [`LINE_MAX`] is held.
+    pub fn push(&mut self, data: &[u8]) -> Vec<u8> {
+        self.held.extend_from_slice(data);
+        if self.held.len() >= LINE_MAX {
+            return self.take_all();
+        }
+        match self.held.iter().rposition(|b| *b == b'\n') {
+            Some(i) => {
+                let rest = self.held.split_off(i + 1);
+                std::mem::replace(&mut self.held, rest)
+            }
+            None => Vec::new(),
+        }
+    }
+
+    pub fn pending(&self) -> bool {
+        !self.held.is_empty()
+    }
+
+    pub fn take_all(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.held)
+    }
+
+    /// Zero what's held (a secret job's buffer, SE23).
+    pub fn wipe(&mut self) {
+        k2_redact::wipe(&mut self.held);
+    }
+}
+
+/// `35m`, `2h05m`, `40s` for log lines.
+fn human_secs(s: u64) -> String {
+    match s {
+        0..=59 => format!("{s}s"),
+        60..=3599 => format!("{}m", s / 60),
+        _ => format!("{}h{:02}m", s / 3600, (s % 3600) / 60),
+    }
 }
 
 /// Linux wall, before a job: the dirs it writes get the node's group
@@ -504,6 +606,27 @@ impl Node {
                 return;
             }
         };
+        // The easy-mode job work (protocol 6) only for a server that speaks it:
+        // an older one gets its own release's job, frames and log.
+        let easy = t.speaks_easy();
+        // CE-15 + its own loopback ports.
+        let job_cpus = self.job_cpus(&t, &a);
+        let port_block = self.jobs.lock().unwrap().get(&(t.slot, job.clone())).and_then(|j| j.port_block);
+        let env = if easy { with_job_hints(env, &a.plan.env, job_cpus, port_block) } else { env };
+        if easy {
+            let ports = port_block.map(|b| {
+                let base = k2_node_proto::env::JOB_PORT_FIRST + b * k2_node_proto::env::JOB_PORT_BLOCK;
+                format!("; ports {base}-{} (K2_JOB_PORT_BASE, K2_JOB_PORT_COUNT)", base + k2_node_proto::env::JOB_PORT_BLOCK - 1)
+            });
+            sys(&mut journal, &format!("cpus: {job_cpus} (K2_JOB_CPUS; CARGO_BUILD_JOBS and the other thread counts unless its env sets them){}", ports.unwrap_or_default()));
+        }
+        // CE-4: what the job's PATH really resolves to, before it starts.
+        let mut tools_used = std::collections::BTreeMap::new();
+        if easy {
+            let explicit_needs = k2_node_proto::needs::parse_all(&a.plan.needs).unwrap_or_default();
+            tools_used = crate::toolchain::tools_used(&env, &cwd, &explicit_needs).await;
+            sys(&mut journal, &crate::toolchain::tools_line(&tools_used));
+        }
         if stop.borrow().is_some() {
             let s = stop.borrow().clone().unwrap_or(StopReason { state: JobState::Cancelled, reason: "cancelled".into() });
             self.finish_job(&t, &a, Some(&dirs), s.state, Some(&s.reason), None, src_ran, None, Some(journal), lease, None).await;
@@ -572,6 +695,11 @@ impl Node {
             let _ = l.set_running(&job, gen, pgid.max(0) as u32, src_ran.as_ref(), self.now());
         }
         t.ship.notify_one();
+        if let Proc::Unit { unit, cg, .. } = &mut proc {
+            *cg = self.unit_status(unit).await.and_then(|s| s.control_group).map(|c| PathBuf::from("/sys/fs/cgroup").join(c.trim_start_matches('/')));
+        }
+        let mut usage = crate::jobstat::ResWatch::new(proc.usage_source());
+        let watch_usage = usage.source != crate::jobstat::Source::None;
 
         // Pump output into the journal. `last_out` = ms after `t0` of the
         // last stdout/stderr bytes (the stall watch reads it).
@@ -591,51 +719,77 @@ impl Node {
                     // SE23: a secret job's output is stream-redacted before
                     // the journal (a value split across reads is caught).
                     let mut sr = red.as_ref().map(|r| r.stream());
+                    // Line-atomic journal (0.46.7): whole lines only, so
+                    // stdout and stderr never interleave mid-line; a partial
+                    // line goes after LINE_IDLE quiet or at LINE_MAX bytes.
+                    let mut lines = LineBuf::default();
+                    let flush = |b: &[u8]| {
+                        if !b.is_empty() {
+                            let _ = j.lock().unwrap().append(stream, b);
+                            tenant.ship.notify_one();
+                        }
+                    };
                     loop {
-                        match pipe.read(&mut buf).await {
-                            Ok(0) | Err(_) => break,
-                            Ok(n) => {
-                                match sr.as_mut() {
-                                    Some(s) => {
-                                        let out = s.push(&buf[..n]);
-                                        if !out.is_empty() {
-                                            let _ = j.lock().unwrap().append(stream, &out);
-                                        }
-                                    }
-                                    None => {
-                                        let _ = j.lock().unwrap().append(stream, &buf[..n]);
-                                    }
-                                }
+                        let read = if lines.pending() { tokio::time::timeout(LINE_IDLE, pipe.read(&mut buf)).await } else { Ok(pipe.read(&mut buf).await) };
+                        match read {
+                            Err(_) => flush(&lines.take_all()),
+                            Ok(Ok(0)) | Ok(Err(_)) => break,
+                            Ok(Ok(n)) => {
+                                let out: std::borrow::Cow<[u8]> = match sr.as_mut() {
+                                    Some(s) => std::borrow::Cow::Owned(s.push(&buf[..n])),
+                                    None => std::borrow::Cow::Borrowed(&buf[..n]),
+                                };
+                                flush(&lines.push(&out));
                                 last.store(t0.elapsed().as_millis() as u64, Ordering::Relaxed);
-                                tenant.ship.notify_one();
                             }
                         }
                     }
                     if let Some(s) = sr.as_mut() {
                         let rest = s.finish();
-                        if !rest.is_empty() {
-                            let _ = j.lock().unwrap().append(stream, &rest);
-                            tenant.ship.notify_one();
-                        }
+                        flush(&lines.push(&rest));
                     }
+                    flush(&lines.take_all());
                     drop(sr);
+                    lines.wipe();
                     k2_redact::wipe(&mut buf);
                 }));
             }
         }
 
+        // CE-19: the host at the start, off the job's path (the steal
+        // window); its line lands in the log when it's read.
+        let host_start = easy.then(|| {
+            let (j, at, cpus, others) = (journal.clone(), self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32);
+            tokio::spawn(async move {
+                let h = tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, Duration::from_secs(1))).await.ok()?;
+                let _ = j.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {}\n", crate::jobstat::host_line("start", &h)).as_bytes());
+                Some(h)
+            })
+        });
+
         // Wait: exit, stop, timeout, memory.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(a.plan.limits.max_secs.max(1));
-        // Only a plain process without a cgroup leaf needs the RSS sampler
+        // Only a plain process without a cgroup leaf needs the RSS cap
         // (macOS); a leaf or a job unit has a hard `memory.max`.
         let mem_cap = proc.needs_rss_sampler().then_some(mem_limit);
-        let mut rss_tick = tokio::time::interval(self.opts.rss_every);
-        rss_tick.tick().await;
-        // Stall watch: no output for `stall_secs` ends the job (a hung test
-        // shouldn't hold the slot until the wall clock).
+        // Stall watch: no output for `stall_secs` and (D4, `stall-cpu`)
+        // under 1% of one CPU as long ends the job (a hung test shouldn't
+        // hold the slot until the wall clock; a silent fuzzer that works
+        // keeps running).
         let stall_ms = a.plan.stall_secs.filter(|s| *s > 0).map(|s| s.saturating_mul(1000));
         let mut stall_tick = tokio::time::interval(Duration::from_millis(stall_ms.map(|m| (m / 4).clamp(50, 1000)).unwrap_or(1000)));
         stall_tick.tick().await;
+        // The usage tick (CE-14, the stall rule's CPU, the macOS cap):
+        // every `rss_every`, or a quarter of the stall window when shorter.
+        let usage_every = stall_ms.map_or(self.opts.rss_every, |m| self.opts.rss_every.min(Duration::from_millis((m / 4).max(50))));
+        let mut usage_tick = tokio::time::interval(usage_every);
+        if easy && stall_ms.is_some() && !watch_usage {
+            let _ = journal.lock().unwrap().append(
+                k2_node_proto::frames::LogStream::Sys,
+                b"[k2-node] stall watch for this job: silence alone ends it (this node can't read this job's CPU; its root executor may be older than k2-node)\n",
+            );
+        }
+        let mut next_busy_note_ms = 0u64;
         let mut ended_by: Option<StopReason> = None;
         let mut status = None;
         loop {
@@ -651,17 +805,36 @@ impl Node {
                     break;
                 }
                 _ = stall_tick.tick(), if stall_ms.is_some() => {
-                    let quiet = (t0.elapsed().as_millis() as u64).saturating_sub(last_out.load(Ordering::Relaxed));
-                    if stall_ms.is_some_and(|m| quiet >= m) {
+                    let now_ms = t0.elapsed().as_millis() as u64;
+                    let quiet = now_ms.saturating_sub(last_out.load(Ordering::Relaxed));
+                    let m = stall_ms.unwrap_or(u64::MAX);
+                    // An older server's job keeps the output-only rule.
+                    if if easy { usage.stalled(quiet, now_ms, m) } else { quiet >= m } {
                         ended_by = Some(StopReason { state: JobState::Timeout, reason: "stalled".into() });
                         break;
                     }
+                    if !easy || quiet < m {
+                        next_busy_note_ms = 0;
+                    } else if now_ms >= next_busy_note_ms {
+                        // Silent but working (D4): it keeps running; say so
+                        // now and every 30 min.
+                        let line = format!(
+                            "[k2-node] quiet but busy: no output for {}, but the job is using CPU ({}.{}% of one CPU just now); a silent job is stopped only when it is also idle\n",
+                            human_secs(quiet / 1000),
+                            usage.last_rate_permille / 10,
+                            usage.last_rate_permille % 10
+                        );
+                        let _ = journal.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, line.as_bytes());
+                        t.ship.notify_one();
+                        next_busy_note_ms = now_ms.saturating_add(k2_node_proto::frames::QUIET_BUSY_NOTE_SECS * 1000);
+                    }
                 }
-                _ = rss_tick.tick(), if mem_cap.is_some() => {
-                    let sampler = self.opts.rss.clone();
-                    let rss = tokio::task::spawn_blocking(move || sampler.group_rss(pgid)).await.ok().flatten();
-                    if let (Some(r), Some(cap)) = (rss, mem_cap) {
-                        if r > cap {
+                _ = usage_tick.tick(), if watch_usage || mem_cap.is_some() => {
+                    let (src, sampler) = (usage.source.clone(), self.opts.rss.clone());
+                    let r = tokio::task::spawn_blocking(move || crate::jobstat::read_usage(&src, sampler.as_ref())).await.ok();
+                    let now = r.and_then(|r| usage.fold(t0.elapsed().as_millis() as u64, &r));
+                    if let (Some(m), Some(cap)) = (now, mem_cap) {
+                        if m > cap {
                             ended_by = Some(StopReason { state: JobState::Failed, reason: "mem_cap".into() });
                             break;
                         }
@@ -677,6 +850,22 @@ impl Node {
             self.proc_stop(&mut proc).await;
             status = self.proc_after_stop(&mut proc).await;
         }
+        // CE-14: the last reading, before the leaf or the unit goes (its
+        // `memory.peak` and `cpu.stat` go with it).
+        if watch_usage {
+            let (src, sampler) = (usage.source.clone(), self.opts.rss.clone());
+            if let Ok(r) = tokio::task::spawn_blocking(move || crate::jobstat::read_usage(&src, sampler.as_ref())).await {
+                usage.fold(t0.elapsed().as_millis() as u64, &r);
+            }
+        }
+        let used = usage.resources(Some(mem_limit));
+        // CE-19: the host at the end (the steal window runs beside the
+        // reap and the artifacts).
+        let host_end = easy.then(|| {
+            let (at, cpus, others) = (self.now(), self.facts.cores as u32, self.jobs.lock().unwrap().len().saturating_sub(1) as u32);
+            tokio::task::spawn_blocking(move || crate::jobstat::host_sample(at, cpus, others, Duration::from_secs(1)))
+        });
+        let peak_shown = if easy { used.peak_mem_bytes } else { None };
         let _ = t.ledger.lock().unwrap().set_state(&job, gen, JobState::Finishing, None, None);
         t.ship.notify_one();
         // V24: an OOM kill is `mem_cap` on every platform (the leaf's or
@@ -692,6 +881,12 @@ impl Node {
         }
         proc.cleanup();
         let exit = status;
+        // The start stamp's task holds a journal handle: done before the
+        // journal is ours alone again.
+        let host_start = match host_start {
+            Some(h) => h.await.ok().flatten(),
+            None => None,
+        };
         let mut journal = Arc::try_unwrap(journal).ok().map(|m| m.into_inner().unwrap_or_else(|e| e.into_inner()));
         let (state, reason) = match ended_by {
             Some(s) => (s.state, Some(s.reason)),
@@ -700,17 +895,23 @@ impl Node {
         };
         if reason.as_deref() == Some("mem_cap") {
             if let Some(j) = journal.as_mut() {
-                let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {}\n", mem_cap_detail(mem_limit)).as_bytes());
+                let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {}\n", mem_cap_detail_used(mem_limit, peak_shown)).as_bytes());
             }
         }
         // Artifacts and test results: after the command (and its group)
         // are gone, before the warm slot goes back to the pool.
-        let outputs = if a.plan.artifacts.is_empty() {
+        let collected = if a.plan.artifacts.is_empty() {
             None
         } else {
+            // CE-23: the note names the job's cwd as a job-relative path.
+            let label = match cwd.strip_prefix(&dirs.root) {
+                Ok(r) if r.as_os_str().is_empty() => "<job>".to_string(),
+                Ok(r) => format!("<job>/{}", r.display()),
+                Err(_) => "the job's working directory".to_string(),
+            };
             let (globs, cwd, target, keep) = (a.plan.artifacts.clone(), cwd.clone(), target.clone(), crate::artifacts::dir(&t.paths.artifacts(), &job, gen));
             let o = tokio::task::spawn_blocking(move || {
-                crate::artifacts::collect(&globs, &crate::artifacts::Roots { cwd: &cwd, target: Some(&target) }, &keep)
+                crate::artifacts::collect(&globs, &crate::artifacts::Roots { cwd: &cwd, target: Some(&target), cwd_label: easy.then_some(label.as_str()) }, &keep)
             })
             .await
             .ok();
@@ -729,9 +930,35 @@ impl Node {
             }
             o
         };
+        // CE-4, CE-14, CE-19: every end that ran carries what ran, what it
+        // used and the host around it (not only `--artifact` jobs).
+        let host_end = match host_end {
+            Some(h) => h.await.ok(),
+            None => None,
+        };
+        if let Some(j) = journal.as_mut().filter(|_| easy) {
+            let mut line = |m: String| {
+                let _ = j.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] {m}\n").as_bytes());
+            };
+            if let Some(h) = &host_end {
+                line(crate::jobstat::host_line("end", h));
+            }
+            let mem = used.peak_mem_bytes.map(|p| format!("peak memory {} ({})", crate::jobstat::gib(p), used.mem_source)).unwrap_or_else(|| "peak memory unknown".into());
+            let cpu = used.cpu_ms.map(|c| format!("CPU {}.{} s ({})", c / 1000, (c % 1000) / 100, used.cpu_source)).unwrap_or_else(|| "CPU unknown".into());
+            line(format!("used: {mem}, {cpu}"));
+        }
+        let outputs = if easy {
+            let mut o = collected.unwrap_or_default();
+            o.tools_used = tools_used;
+            o.resources = Some(used.clone());
+            o.host = Some(k2_node_proto::results::HostStamps { start: host_start, end: host_end });
+            Some(o.capped())
+        } else {
+            collected
+        };
         let detail = match reason.as_deref() {
             Some("stalled") => Some(format!("no output for {}s", a.plan.stall_secs.unwrap_or(0))),
-            Some("mem_cap") => Some(mem_cap_detail(mem_limit)),
+            Some("mem_cap") => Some(mem_cap_detail_used(mem_limit, peak_shown)),
             Some(refusal::DISK_LOW) => {
                 let d = super::disk::disk_low_detail(self.disk_free_bytes(), self.local.lock().unwrap().policy.disk_floor_bytes);
                 if let Some(j) = journal.as_mut() {
@@ -842,7 +1069,7 @@ impl Node {
         let rx = |r: std::io::PipeReader| -> Option<OutPipe> {
             tokio::net::unix::pipe::Receiver::from_owned_fd(std::os::fd::OwnedFd::from(r)).ok().map(|p| Box::new(p) as OutPipe)
         };
-        Ok((Proc::Unit { unit, last: None }, rx(out_r), rx(err_r)))
+        Ok((Proc::Unit { unit, last: None, cg: None }, rx(out_r), rx(err_r)))
     }
 
     /// The command ended: its exit (code or signal).
@@ -852,7 +1079,7 @@ impl Node {
                 use std::os::unix::process::ExitStatusExt;
                 ExitInfo { code: s.code(), signal: s.signal() }
             }),
-            Proc::Unit { unit, last } => {
+            Proc::Unit { unit, last, .. } => {
                 let s = self.unit_wait_end(unit).await;
                 let e = s.exit().map(|(code, signal)| ExitInfo { code, signal });
                 *last = Some(s);
@@ -975,8 +1202,12 @@ impl Node {
                     log(&format!("toolchains: {n}"));
                 }
                 if res.installed_any {
+                    // CE-18: back under the tool-cache cap, then re-probe.
                     let node = self.clone();
-                    tokio::spawn(async move { node.probe_tools().await });
+                    tokio::spawn(async move {
+                        node.toolchain_gc().await;
+                        node.probe_tools().await
+                    });
                 }
                 Ok(res)
             }
@@ -1077,6 +1308,51 @@ impl Node {
         let plain = key.open(&env_msg.epk, &env_msg.ct, &binding).map_err(|e| failed(codes::PAYLOAD_MISMATCH, e))?;
         check_secret_names(&plain, &a.plan.secret_env, env).map_err(|e| failed(codes::PAYLOAD_MISMATCH, e))?;
         Ok(plain)
+    }
+
+    /// The CPUs a job may use (CE-15): its `--cpus` rounded up, else the
+    /// node's default share for its server (`caps.cpu ÷ parallel_max`, the
+    /// reservation `used` counts), at least 1.
+    fn job_cpus(&self, t: &Tenant, a: &Assign) -> u64 {
+        if let Some(m) = a.plan.limits.cpu_millis.filter(|m| *m > 0) {
+            return m.div_ceil(1000).max(1);
+        }
+        let l = self.local.lock().unwrap();
+        let (cpu, _, par) = self.caps(t, &l);
+        (cpu / u64::from(par.max(1)) / 1000).max(1)
+    }
+
+    /// Every need of a running or queued job on this node (every
+    /// server's): the tool-cache cap never removes one of them.
+    fn needs_in_use(&self) -> Vec<k2_node_proto::needs::Need> {
+        let running = self.running_by_tenant();
+        let mut out = Vec::new();
+        for t in self.tenants() {
+            let l = t.ledger.lock().unwrap();
+            let mut rows = l.queued().unwrap_or_default();
+            for id in running.get(&t.slot).into_iter().flatten() {
+                rows.extend(l.latest(id).ok().flatten());
+            }
+            for r in rows {
+                // A need list that doesn't parse protects nothing more than
+                // its job (which fails anyway); the parse is the job's own.
+                out.extend(k2_node_proto::needs::parse_all(&r.plan.needs).unwrap_or_default());
+            }
+        }
+        out
+    }
+
+    /// CE-18: over the policy's `toolchain_budget_gb`, remove the least
+    /// recently used tool versions nothing running or queued needs, each
+    /// logged. One at a time with installs (the tool lock).
+    pub async fn toolchain_gc(&self) {
+        let _guard = self.tool_lock.lock().await;
+        let budget = self.local.lock().unwrap().policy.toolchain_budget_bytes;
+        let (tc, needs, now) = (self.toolchains(), self.needs_in_use(), self.now());
+        let gone = tokio::task::spawn_blocking(move || tc.gc_to_budget(budget, &needs, now)).await.unwrap_or_default();
+        for v in &gone {
+            crate::nlog!("toolchain cap ({} GB): removed {} ({} MB, last used at {})", budget >> 30, v.key, v.bytes >> 20, v.last_used);
+        }
     }
 
     fn take_smoke_lock(&self, job: &str) {
@@ -1189,6 +1465,7 @@ impl Node {
             artifacts: outputs.as_ref().map(|o| o.artifacts.clone()).unwrap_or_default(),
             // SE29: names only.
             secret_env: a.plan.secret_env.clone(),
+            tools_used: outputs.as_ref().map(|o| o.tools_used.clone()).unwrap_or_default(),
         };
         let signed = SignedReceipt::sign(&self.key, &receipt);
         if let Err(e) = &signed {
@@ -1362,6 +1639,9 @@ pub fn redact_outputs(r: &k2_redact::Redactor, mut o: Outputs) -> Outputs {
     }
     for n in &mut o.notes {
         *n = r.redact_str(n);
+    }
+    for v in o.tools_used.values_mut() {
+        *v = r.redact_str(v);
     }
     o
 }
@@ -1555,8 +1835,63 @@ pub(super) mod tests {
         let unit = Proc::Unit {
             unit: "k2job-j-g1.service".into(),
             last: Some(crate::admin::jobs::parse_show("LoadState=loaded\nActiveState=failed\nResult=oom-kill\n")),
+            cg: None,
         };
         assert!(unit.oom() && unit.pgid() == 0 && !unit.needs_rss_sampler());
+        // CE-14: a unit's usage is read from its cgroup once the executor
+        // said it; a leaf's from the leaf; a plain group from ps.
+        assert_eq!(unit.usage_source(), crate::jobstat::Source::None);
+        let with_cg = Proc::Unit { unit: "u".into(), last: None, cg: Some("/sys/fs/cgroup/system.slice/u".into()) };
+        assert_eq!(with_cg.usage_source(), crate::jobstat::Source::Cgroup("/sys/fs/cgroup/system.slice/u".into()));
+        assert_eq!(p.usage_source(), crate::jobstat::Source::Cgroup(l.dir.clone()));
+        let s = crate::admin::jobs::parse_show("LoadState=loaded\nControlGroup=/system.slice/k2job-j-g1.service\n");
+        assert_eq!(s.control_group.as_deref(), Some("/system.slice/k2job-j-g1.service"));
+        assert_eq!(crate::admin::jobs::parse_show("ControlGroup=/a/../b\n").control_group, None, "never a path out");
+        assert_eq!(crate::admin::jobs::parse_show("ControlGroup=\n").control_group, None);
         assert!(mem_cap_detail(64 << 20).contains("64 MiB") && mem_cap_detail(64 << 20).contains("--mem"));
+        // CE-14: a mem_cap end names the peak beside the limit.
+        let d = mem_cap_detail_used(24 << 30, Some((25 << 30) + (3 << 30) / 10));
+        assert!(d.ends_with("(used 25.3G of 24.0G at its peak)"), "{d}");
+        assert_eq!(mem_cap_detail_used(1 << 30, None), mem_cap_detail(1 << 30));
+    }
+
+    /// Line-atomic logs: whole lines pass, a partial line waits for its
+    /// newline (or the size cap), nothing is lost or reordered.
+    #[test]
+    fn line_buffer_passes_whole_lines_only() {
+        let mut b = LineBuf::default();
+        assert_eq!(b.push(b"{\"a\":"), b"");
+        assert!(b.pending());
+        assert_eq!(b.push(b"1}\n{\"b\""), b"{\"a\":1}\n");
+        assert_eq!(b.push(b":2}\nx\ny"), b"{\"b\":2}\nx\n");
+        assert_eq!(b.take_all(), b"y");
+        assert!(!b.pending());
+        let big = vec![b'z'; LINE_MAX + 1];
+        assert_eq!(b.push(&big).len(), LINE_MAX + 1, "an endless line still goes, at the cap");
+        assert_eq!(b.push(b"\n"), b"\n");
+    }
+
+    /// CE-15 + ports: the hints fill only what the plan's env doesn't set;
+    /// `K2_JOB_CPUS` and the port pair are the node's alone.
+    #[test]
+    fn job_hints_fill_only_unset_names() {
+        let mut plan_env = std::collections::BTreeMap::new();
+        plan_env.insert("CARGO_BUILD_JOBS".to_string(), "2".to_string());
+        let base = vec![("CARGO_BUILD_JOBS".to_string(), "2".to_string()), ("PATH".to_string(), "/bin".to_string())];
+        let env = with_job_hints(base, &plan_env, 4, Some(3));
+        let get = |k: &str| env.iter().filter(|(ek, _)| ek == k).map(|(_, v)| v.as_str()).collect::<Vec<_>>();
+        assert_eq!(get("CARGO_BUILD_JOBS"), vec!["2"], "the caller's --env wins");
+        for k in ["RUST_TEST_THREADS", "NEXTEST_TEST_THREADS", "OMP_NUM_THREADS", "K2_JOB_CPUS"] {
+            assert_eq!(get(k), vec!["4"], "{k}");
+        }
+        assert_eq!((get("K2_JOB_PORT_BASE"), get("K2_JOB_PORT_COUNT")), (vec!["20300"], vec!["100"]));
+        let none = with_job_hints(vec![], &Default::default(), 0, None);
+        assert!(none.iter().any(|(k, v)| k == "K2_JOB_CPUS" && v == "1") && !none.iter().any(|(k, _)| k == "K2_JOB_PORT_BASE"));
+        // The pool stays below Linux's ephemeral ports.
+        let last = u32::from(k2_node_proto::env::JOB_PORT_FIRST) + u32::from(k2_node_proto::env::JOB_PORT_BLOCKS) * u32::from(k2_node_proto::env::JOB_PORT_BLOCK);
+        assert!(last <= 32768, "{last}");
+        assert_eq!(human_secs(40), "40s");
+        assert_eq!(human_secs(35 * 60), "35m");
+        assert_eq!(human_secs(2 * 3600 + 5 * 60), "2h05m");
     }
 }

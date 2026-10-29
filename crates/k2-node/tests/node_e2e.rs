@@ -194,7 +194,10 @@ async fn assign_runs_and_reports_logs_exit_and_a_verified_receipt() {
     assert_eq!(receipt.controller_fp, fake.key.fingerprint());
     assert_eq!(receipt.argv_sha256, frames::argv_sha256(&["/bin/sh".into(), "-c".into(), "echo hi; echo err >&2; exit 3".into()]));
     assert!(!receipt.log.truncated);
-    assert_eq!(receipt.log.bytes, 7);
+    // Every kept byte, the node's own lines (cpus, tools, host, used) too.
+    let kept: u64 = logs.iter().map(|l| l.2.len() as u64).sum();
+    assert_eq!(receipt.log.bytes, kept);
+    assert!(kept > 7, "the job's 7 bytes plus the node's lines");
 }
 
 /// Found by the daemon's results test on a busy Linux node: a job over
@@ -257,7 +260,8 @@ async fn job_env_is_scrubbed_and_home_is_the_job_home() {
         assert!(!env.contains_key(*v), "{v} leaked into the job");
     }
     let k2: Vec<&String> = env.keys().filter(|k| k.starts_with("K2")).collect();
-    assert_eq!(k2, vec!["K2_COMPUTE_JOB"]);
+    // 0.46.7: the job's CPUs and its own port range (node-set, never --env).
+    assert_eq!(k2, vec!["K2_COMPUTE_JOB", "K2_JOB_CPUS", "K2_JOB_PORT_BASE", "K2_JOB_PORT_COUNT"]);
     assert_eq!(env["K2_COMPUTE_JOB"], "env1");
     assert_eq!(env["RUST_LOG"], "debug");
     assert_eq!(env["HOME"], n.layout.job_dir("env1", 1).join("home").display().to_string());
@@ -289,6 +293,37 @@ async fn timeout_kills_the_whole_group_including_a_grandchild() {
     assert_ne!(unsafe { libc::kill(gc, 0) }, 0, "grandchild {gc} outlived the job");
 }
 
+/// Line-atomic logs (0.46.7): stdout and stderr lines written in tight
+/// alternation, each in two writes, never interleave mid-line; each stream
+/// stays its own (`LogChunk.stream`).
+#[tokio::test(flavor = "multi_thread")]
+async fn stdout_and_stderr_lines_never_split_each_other() {
+    let mut fake = Fake::start().await;
+    let _n = start_node(&fake, "e2e-lines", "", |_| {}).await;
+    let mut c = fake.next_conn().await;
+    ready(&mut c).await;
+    let script = "i=0; while [ $i -lt 200 ]; do printf 'out-%d-' $i; printf 'err-%d-' $i >&2; printf 'end\\n'; printf 'end\\n' >&2; i=$((i+1)); done";
+    c.send(Frame::Assign(assign(plan("lines1", &["/bin/sh", "-c", script]), 1)));
+    let fr = run_to_receipt(&mut c, "lines1").await;
+    let logs = logs_of(&fr, "lines1");
+    let mut n = 0;
+    for (_, stream, data) in &logs {
+        let t = String::from_utf8_lossy(data);
+        let want = match stream {
+            LogStream::Out => "out-",
+            LogStream::Err => "err-",
+            LogStream::Sys => continue,
+        };
+        assert!(t.ends_with('\n'), "a chunk ends at a line end: {t:?}");
+        for l in t.lines() {
+            assert!(l.starts_with(want) && l.ends_with("-end"), "{stream:?} line split or mixed: {l:?}");
+            n += 1;
+        }
+    }
+    assert_eq!(n, 400, "every line kept, once");
+    assert_eq!(text(&logs, LogStream::Out).lines().count(), 200);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_waits_the_grace_then_kills() {
     let mut fake = Fake::start().await;
@@ -296,7 +331,7 @@ async fn cancel_waits_the_grace_then_kills() {
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
     c.send(Frame::Assign(assign(plan("c1", &["/bin/sh", "-c", "trap '' TERM; echo up; sleep 1000"]), 1)));
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "c1")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "c1" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     let t0 = Instant::now();
     c.send(Frame::Cancel(Cancel { job_id: "c1".into(), generation: 1, reason: "cancelled".into() }));
     let fr = run_to_receipt(&mut c, "c1").await;
@@ -313,7 +348,7 @@ async fn log_sequence_is_continuous_across_a_forced_reconnect() {
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
     c.send(Frame::Assign(assign(plan("r1", &["/bin/sh", "-c", "for i in 1 2 3 4 5 6; do echo line$i; sleep 0.25; done"]), 1)));
-    let fr = c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "r1")).await;
+    let fr = c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "r1" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     let mut got = logs_of(&fr, "r1");
     let last = got.last().unwrap().0;
     fake.resume.lock().unwrap().push(ResumeHint { job_id: "r1".into(), generation: 1, since_seq: last });
@@ -423,7 +458,7 @@ async fn a_paused_node_returns_assigns_to_the_queue() {
     k2_node::config::write_control(&n.layout.control(), frames::Control::Active, "rosson", 6).unwrap();
     c.until(|f| matches!(f, Frame::Offer(o) if o.control == frames::Control::Active)).await;
     c.send(Frame::Assign(assign(plan("p2", &["/bin/sh", "-c", "echo up; sleep 1000"]), 1)));
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "p2")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "p2" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     k2_node::config::write_control(&n.layout.control(), frames::Control::Stopped, "rosson", 7).unwrap();
     let fr = run_to_receipt(&mut c, "p2").await;
     let s = states_of(&fr, "p2").pop().unwrap();
@@ -469,7 +504,7 @@ async fn young_foreign_lock_holds_old_one_does_not_and_smoke_lock_comes_and_goes
     }
     assert_eq!(stale, vec![foreign.display().to_string()], "status reports the old lock");
     c.send(Frame::Assign(assign(plan("l2", &["/bin/sh", "-c", "echo up; sleep 0.5"]), 1)));
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "l2")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "l2" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     let body = std::fs::read_to_string(&smoke).expect("smoke lock written while the job runs");
     assert!(body.contains("job=l2"), "{body}");
     run_to_receipt(&mut c, "l2").await;
@@ -484,7 +519,7 @@ async fn revoked_cancels_jobs_and_the_node_stops_dialing() {
     let mut c = fake.next_conn().await;
     ready(&mut c).await;
     c.send(Frame::Assign(assign(plan("v1", &["/bin/sh", "-c", "echo up; sleep 1000"]), 1)));
-    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "v1")).await;
+    c.until(|f| matches!(f, Frame::Log(l) if l.job_id == "v1" && l.stream != k2_node_proto::frames::LogStream::Sys)).await;
     let before = fake.attaches.load(std::sync::atomic::Ordering::SeqCst);
     c.send(Frame::Revoked(Revoked { reason: "removed by rosson".into() }));
     assert!(c.wait_closed(Duration::from_secs(5)).await);

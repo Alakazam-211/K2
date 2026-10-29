@@ -174,6 +174,15 @@ impl Node {
         if t.speaks_tiers2() && !f.iter().any(|x| x == k2_node_proto::tiers::FEATURE_TIERS2) {
             f.push(k2_node_proto::tiers::FEATURE_TIERS2.to_string());
         }
+        // Compute easy mode (protocol 6, same release): only to a server
+        // that speaks it, the only one the node does that work for.
+        if t.speaks_easy() {
+            for feat in super::EASY_FEATURES {
+                if !f.iter().any(|x| x == feat) {
+                    f.push(feat.to_string());
+                }
+            }
+        }
         f
     }
 

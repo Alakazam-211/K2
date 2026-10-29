@@ -701,6 +701,7 @@ pub mod tests {
             artifacts: vec![k2_node_proto::results::ArtifactInfo { name: "a".into(), sha256: "s".into(), bytes: 1 }],
             tests: None,
             notes: vec!["n".into()],
+            ..Default::default()
         };
         l.set_outputs("j", 1, &o).unwrap();
         assert_eq!(l.get("j", 1).unwrap().unwrap().outputs, Some(o));

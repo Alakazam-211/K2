@@ -26,6 +26,22 @@ pub struct Roots<'a> {
     pub cwd: &'a Path,
     /// The job's `CARGO_TARGET_DIR` (warm slot or job-private).
     pub target: Option<&'a Path>,
+    /// How the job's working directory reads in a note (`<job>/src/sub`,
+    /// CE-23); `None`: the note names no folder (older wording).
+    pub cwd_label: Option<&'a str>,
+}
+
+/// CE-23: the no-match note names the folders searched, and that a glob
+/// is relative to the job's working directory, not a folder its command
+/// `cd`s into.
+pub fn no_match_note(glob: &str, cwd_label: Option<&str>, target_too: bool) -> String {
+    match cwd_label {
+        None => format!("{glob} matched nothing"),
+        Some(l) => {
+            let also = if target_too { " or in the node's cargo target dir" } else { "" };
+            format!("{glob} matched nothing under {l}{also} (globs are relative to the job's working directory, not a folder its command cd's into)")
+        }
+    }
 }
 
 /// One matched file before it is kept.
@@ -117,7 +133,8 @@ fn matches(globs: &[String], roots: &Roots<'_>, notes: &mut Vec<String>) -> Vec<
             notes.push(format!("{g}: stopped after {} directory entries", results::MAX_VISITS));
         }
         if hits.is_empty() {
-            notes.push(format!("{g} matched nothing"));
+            let target_too = segs.first() == Some(&"target") && roots.target.is_some();
+            notes.push(no_match_note(g, roots.cwd_label, target_too));
         }
         for h in hits {
             if !out.iter().any(|o| o.name == h.name) {
@@ -211,7 +228,7 @@ pub fn collect(globs: &[String], roots: &Roots<'_>, keep: &Path) -> Outputs {
             Err(e) => notes.push(e),
         }
     }
-    Outputs { artifacts, tests, notes }.capped()
+    Outputs { artifacts, tests, notes, ..Default::default() }.capped()
 }
 
 /// Remove artifact dirs under `root` older than [`results::KEEP_SECS`].
@@ -321,7 +338,7 @@ mod tests {
         let keep = d.join("keep");
         let o = collect(
             &["dist/*.tar.gz".into(), "target/nextest/**/junit.xml".into(), "nothing/*".into(), "../escape".into()],
-            &Roots { cwd: &cwd, target: Some(&target) },
+            &Roots { cwd: &cwd, target: Some(&target), cwd_label: None },
             &keep,
         );
         let names: Vec<&str> = o.artifacts.iter().map(|a| a.name.as_str()).collect();
@@ -334,6 +351,16 @@ mod tests {
         assert_eq!(t.failing[0].name, "bad");
         assert!(o.notes.iter().any(|n| n == "nothing/* matched nothing"), "{:?}", o.notes);
         assert!(o.notes.iter().any(|n| n.starts_with("artifact_glob_escapes")), "{:?}", o.notes);
+        // CE-23: with a label the note says where it looked.
+        let o2 = collect(&["out/*.json".into(), "target/x/*.xml".into()], &Roots { cwd: &cwd, target: Some(&target), cwd_label: Some("<job>/src/sub") }, &d.join("keep2"));
+        assert_eq!(
+            o2.notes,
+            vec![
+                "out/*.json matched nothing under <job>/src/sub (globs are relative to the job's working directory, not a folder its command cd's into)".to_string(),
+                "target/x/*.xml matched nothing under <job>/src/sub or in the node's cargo target dir (globs are relative to the job's working directory, not a folder its command cd's into)".to_string(),
+            ]
+        );
+        assert!(o2.notes.iter().all(|n| n.chars().count() <= 300), "fits the note cap");
         // Review B-H1: kept files are the node's alone.
         use std::os::unix::fs::PermissionsExt;
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;

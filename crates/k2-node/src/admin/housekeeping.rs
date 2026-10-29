@@ -107,7 +107,9 @@ pub fn stuck_jobs(node: &Node) -> Vec<StuckJob> {
         }
         let last_out = mtime(&t.paths.journal(&r.job_id, r.generation)).or(r.started_at).unwrap_or(now);
         let quiet = now - last_out.max(entry.1);
-        if now - last_out >= STUCK_SECS && now - entry.1 >= STUCK_SECS {
+        // The one "silent and idle" rule (the run loop's stall arm uses it
+        // too, with the job's own CPU: CE-10, D4).
+        if crate::jobstat::silent_and_idle((now - last_out).max(0) as u64, (now - entry.1).max(0) as u64, STUCK_SECS as u64) {
             out.push(StuckJob { job_id: r.job_id.clone(), generation: r.generation, quiet_secs: quiet.max(0) as u64 });
         }
     }

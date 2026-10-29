@@ -184,6 +184,7 @@ pub fn folder_manifest(label: &str, cmd: &str) -> super::manifest::Manifest {
             client_ip: Some(false),
             sessions: None,
             overlap: None,
+            ..Default::default()
         },
         entry: None,
         roles: Default::default(),

@@ -4,8 +4,14 @@
 //! and refused by name.
 //!
 //! Stage 1 runs `host.mode = "cmd"` (a server started from `host.start`
-//! argv) on the process engine. `static` and `next` parse and validate;
-//! `static` Apps wait until the runtime hosts them (`--skin` makes no new sites).
+//! argv) on the process engine. `next` parses and validates.
+//!
+//! 0.46.7 (prd-tauri-core-0467-v1 TC-1): `host.mode = "static"` runs on the
+//! runtime too: the daemon serves the Seed's `host.root` folder itself (no
+//! App code). Its keys (`root`, `spa`, `notFound`, `headers`, `immutable`)
+//! and `host.checks` (TC-16, any mode) **need K2 0.46.7**: `Host` is
+//! `deny_unknown_fields`, so older daemons refuse a manifest carrying them
+//! (vs-live TA-2), and `validate` says so.
 
 use std::collections::BTreeMap;
 
@@ -268,7 +274,7 @@ pub struct Requires {
     pub postgres: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Host {
     /// `static` | `cmd` | `next`.
@@ -302,6 +308,75 @@ pub struct Host {
     /// per-App policy wins. Needs K2 0.46.4.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overlap: Option<Overlap>,
+    /// 0.46.7 (TC-1), `static` only: the folder inside the Seed to serve
+    /// (default `.`). Needs K2 0.46.7.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// 0.46.7, `static` only: unknown paths with no file extension answer
+    /// `index.html` (default: on when `<root>/index.html` exists).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spa: Option<bool>,
+    /// 0.46.7, `static` only: a file under `root` sent for a 404 (default:
+    /// K2's plain 404).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_found: Option<String>,
+    /// 0.46.7, `static` only: extra response headers, names from
+    /// [`super::static_site::ALLOWED_HEADERS`] only. A CSP naming
+    /// `frame-ancestors` is refused (framing is K2's: the App's frame
+    /// policy).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    /// 0.46.7, `static` only: path globs (`*`, `**`, `?`) served as
+    /// `Cache-Control: public, max-age=31536000, immutable`. Empty: files
+    /// under `assets/` whose name holds an 8+ character hash segment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub immutable: Vec<String>,
+    /// 0.46.7 (TC-16), any mode: the App's own probes, run by `k2 app
+    /// status` and once after every switch to live. Never a deploy gate.
+    /// Needs K2 0.46.7.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<Check>,
+}
+
+/// Most `host.checks` entries (TC-16).
+pub const MAX_CHECKS: usize = 10;
+/// Most characters in a check's `bodyContains`.
+pub const MAX_BODY_CONTAINS: usize = 200;
+
+/// One `host.checks` entry (TC-16): `GET <path>` must answer `expect`, and
+/// optionally carry a header holding `contains`, or a body holding
+/// `bodyContains` in its first 64 KiB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Check {
+    pub name: String,
+    pub path: String,
+    /// One HTTP status (`200`, `401` …).
+    pub expect: u16,
+    /// Who the probe is (default `anonymous`).
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub as_: Option<CheckAs>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<HeaderCheck>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_contains: Option<String>,
+}
+
+/// `host.checks[].as`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CheckAs {
+    Anonymous,
+    TestGuest,
+}
+
+/// `host.checks[].header`: the response carries `name` and its value holds
+/// `contains`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HeaderCheck {
+    pub name: String,
+    pub contains: String,
 }
 
 /// `host.sessions` (0.46.4).
@@ -370,9 +445,52 @@ impl Manifest {
         self.host.client_ip.unwrap_or(true)
     }
 
-    /// The health check is a TCP accept (K5's folder manifests).
+    /// The health check is a TCP accept (K5's folder manifests). A static
+    /// App's is too unless it names a `host.health.path`: K2's own file
+    /// server answers, and a folder with no `index.html` may 404 on `/`.
     pub fn tcp_health(&self) -> bool {
-        self.host.health.as_ref().is_some_and(|h| h.tcp)
+        let h = self.host.health.as_ref();
+        h.is_some_and(|h| h.tcp) || (self.is_static() && h.and_then(|h| h.path.as_deref()).is_none_or(|p| p.trim().is_empty()))
+    }
+
+    /// `host.mode: "static"`: the daemon serves the files (0.46.7).
+    pub fn is_static(&self) -> bool {
+        self.host.mode == "static"
+    }
+
+    /// What a daemon before 0.46.7 refuses or can't run (TA-2): the static
+    /// keys, `host.checks`, and `host.mode: "static"` itself (older daemons
+    /// answer `static_not_on_runtime` at deploy).
+    pub fn keys_needing_0467(&self) -> Vec<&'static str> {
+        let h = &self.host;
+        let mut v = Vec::new();
+        if self.is_static() {
+            v.push("host.mode: static");
+        }
+        if h.root.is_some() {
+            v.push("host.root");
+        }
+        if h.spa.is_some() {
+            v.push("host.spa");
+        }
+        if h.not_found.is_some() {
+            v.push("host.notFound");
+        }
+        if !h.headers.is_empty() {
+            v.push("host.headers");
+        }
+        if !h.immutable.is_empty() {
+            v.push("host.immutable");
+        }
+        if !h.checks.is_empty() {
+            v.push("host.checks");
+        }
+        v
+    }
+
+    /// The static-only keys this manifest sets (refused on `cmd`/`next`).
+    pub fn static_keys_set(&self) -> Vec<&'static str> {
+        self.keys_needing_0467().into_iter().filter(|k| !matches!(*k, "host.mode: static" | "host.checks")).collect()
     }
 
     /// `host.health.readyPath` (0.46.4), when set.
@@ -544,6 +662,51 @@ mod tests {
         assert_eq!(m.keys_needing_0464(), vec!["host.sessions", "host.overlap", "host.health.readyPath"]);
         assert!(parse(&OK.replace("\"mode\": \"cmd\",", "\"mode\": \"cmd\", \"sessions\": \"disk\",")).is_err());
         assert!(parse(&OK.replace("\"mode\": \"cmd\",", "\"mode\": \"cmd\", \"overlap\": \"never\",")).is_err());
+    }
+
+    pub const STATIC: &str = r#"{
+  "schema": 1, "kind": "app", "id": "docs", "name": "Docs", "version": "1.0.0",
+  "host": { "mode": "static", "root": "dist", "spa": true, "notFound": "404.html",
+            "headers": { "Content-Security-Policy": "default-src 'self'" },
+            "immutable": ["assets/**"],
+            "checks": [ { "name": "home", "path": "/", "expect": 200, "bodyContains": "<div id=\"app\">" },
+                        { "name": "csp", "path": "/", "expect": 200, "as": "testGuest",
+                          "header": { "name": "Content-Security-Policy", "contains": "self" } } ] }
+}"#;
+
+    /// 0.46.7 (TC-1, TC-16): the static keys and `host.checks` parse, are
+    /// named as needing 0.46.7, and refuse unknown fields.
+    #[test]
+    fn the_0467_static_keys_and_checks_parse() {
+        let m = parse(STATIC).expect("static manifest parses");
+        assert!(m.is_static());
+        assert_eq!(m.host.root.as_deref(), Some("dist"));
+        assert_eq!(m.host.spa, Some(true));
+        assert_eq!(m.host.not_found.as_deref(), Some("404.html"));
+        assert_eq!(m.host.headers.get("Content-Security-Policy").map(String::as_str), Some("default-src 'self'"));
+        assert_eq!(m.host.immutable, vec!["assets/**"]);
+        assert_eq!(m.host.checks.len(), 2);
+        assert_eq!(m.host.checks[0].as_, None);
+        assert_eq!(m.host.checks[0].body_contains.as_deref(), Some("<div id=\"app\">"));
+        assert_eq!(m.host.checks[1].as_, Some(CheckAs::TestGuest));
+        assert_eq!(m.host.checks[1].header, Some(HeaderCheck { name: "Content-Security-Policy".into(), contains: "self".into() }));
+        assert_eq!(
+            m.keys_needing_0467(),
+            vec!["host.mode: static", "host.root", "host.spa", "host.notFound", "host.headers", "host.immutable", "host.checks"]
+        );
+        assert_eq!(m.static_keys_set(), vec!["host.root", "host.spa", "host.notFound", "host.headers", "host.immutable"]);
+        assert!(m.tcp_health(), "a static App with no health path is checked by its listener");
+        // Round trip keeps `as` spelled as in the file.
+        let back = serde_json::to_value(&m.host.checks[1]).unwrap();
+        assert_eq!(back["as"], "testGuest");
+        assert!(parse(OK).unwrap().keys_needing_0467().is_empty());
+        assert!(!parse(OK).unwrap().tcp_health());
+        let e = parse(&STATIC.replace("\"expect\": 200, \"bodyContains\"", "\"expect\": 200, \"timeout\": 5, \"bodyContains\"")).unwrap_err();
+        assert!(e.message.contains("timeout"), "unknown check fields fail: {e:?}");
+        let e = parse(&STATIC.replace("\"as\": \"testGuest\"", "\"as\": \"admin\"")).unwrap_err();
+        assert!(e.message.contains("admin"), "{e:?}");
+        let with_path = STATIC.replace("\"mode\": \"static\",", "\"mode\": \"static\", \"health\": {\"path\": \"/index.html\"},");
+        assert!(!parse(&with_path).unwrap().tcp_health(), "a named health path is an HTTP check");
     }
 
     #[test]

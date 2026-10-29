@@ -85,6 +85,12 @@ pub fn validate_tree(root: &Path, opts: &Options) -> (Report, Option<Manifest>) 
         }
     };
     check_manifest(&m, &mut errors, &mut warnings);
+    if m.is_static() {
+        // 0.46.7 (TC-1): the static keys against the Seed folder itself.
+        for (code, message, key) in super::static_site::check_tree(&m, root) {
+            errors.push(issue(code, message, Some(format!("{MANIFEST_FILE} {key}"))));
+        }
+    }
     checks.push("contract".into());
     check_contract(&m, &mut errors, &mut warnings);
     checks.push("code".into());
@@ -154,6 +160,20 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
             }
         }
     }
+    // TA-2 (0.46.7): the static keys and host.checks, likewise.
+    for k in m.keys_needing_0467() {
+        warnings.push(issue(
+            "needs_k2_0467",
+            format!("{k} needs K2 0.46.7 or newer: K2 0.46.6 and older refuse this Seed (after a K2 rollback it won't start)"),
+            at(k.split(':').next().unwrap_or(k)),
+        ));
+    }
+    if !m.is_static() {
+        for k in m.static_keys_set() {
+            errors.push(issue("manifest_invalid", format!("{k} is for static Apps only (host.mode: \"static\")"), at(k)));
+        }
+    }
+    check_checks(m, errors);
     if m.schema != manifest::SCHEMA {
         errors.push(issue("manifest_invalid", format!("schema {} is not supported; this K2 reads schema 1", m.schema), at("schema")));
     }
@@ -291,6 +311,52 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
             "build: the build runs inside the App's wall in a later 0.46 release; this release stores the folder as you built it",
             at("build"),
         ));
+    }
+}
+
+/// `host.checks` (TC-16): at most 10, unique names, a path, one status,
+/// `bodyContains` up to 200 characters, a header name that is a token.
+fn check_checks(m: &Manifest, errors: &mut Vec<Issue>) {
+    let at = Some(format!("{MANIFEST_FILE} host.checks"));
+    let checks = &m.host.checks;
+    if checks.len() > manifest::MAX_CHECKS {
+        errors.push(issue("manifest_invalid", format!("host.checks: at most {}", manifest::MAX_CHECKS), at.clone()));
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for c in checks {
+        let name = c.name.trim();
+        let name_ok = (1..=40).contains(&name.len()) && name.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_. ".contains(&b));
+        if !name_ok {
+            errors.push(issue("manifest_invalid", format!("host.checks: name \"{name}\": 1 to 40 of letters, digits, space, - _ ."), at.clone()));
+        } else if seen.contains(&name) {
+            errors.push(issue("manifest_invalid", format!("host.checks: two checks are named \"{name}\""), at.clone()));
+        }
+        seen.push(name);
+        if !c.path.starts_with('/') || c.path.len() > 512 || c.path.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+            errors.push(issue("manifest_invalid", format!("host.checks.{name}: path starts with / and holds no spaces"), at.clone()));
+        }
+        if !(100..=599).contains(&c.expect) {
+            errors.push(issue("manifest_invalid", format!("host.checks.{name}: expect is one HTTP status, 100 to 599"), at.clone()));
+        }
+        if let Some(b) = &c.body_contains {
+            if b.is_empty() || b.chars().count() > manifest::MAX_BODY_CONTAINS {
+                errors.push(issue(
+                    "manifest_invalid",
+                    format!("host.checks.{name}: bodyContains is 1 to {} characters", manifest::MAX_BODY_CONTAINS),
+                    at.clone(),
+                ));
+            }
+        }
+        if let Some(h) = &c.header {
+            let token = !h.name.is_empty() && h.name.len() <= 64 && h.name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+            if !token || h.contains.is_empty() || h.contains.chars().count() > manifest::MAX_BODY_CONTAINS {
+                errors.push(issue(
+                    "manifest_invalid",
+                    format!("host.checks.{name}: header is {{name, contains}}: a header name and 1 to {} characters", manifest::MAX_BODY_CONTAINS),
+                    at.clone(),
+                ));
+            }
+        }
     }
 }
 
@@ -722,6 +788,65 @@ mod tests {
         let (r, _) = validate_tree(&app(h.path(), "{\"schema\":1,"), &Options::default());
         assert_eq!(r.errors[0].code, "manifest_invalid");
         assert!(r.errors[0].at.as_deref().unwrap().starts_with("manifest.json:"), "{r:?}");
+    }
+
+    const STATIC: &str = r#"{"schema":1,"kind":"app","id":"docs","name":"Docs","version":"1.0.0",
+      "host":{"mode":"static","root":"dist","notFound":"404.html",
+              "checks":[{"name":"home","path":"/","expect":200}]}}"#;
+
+    fn static_app(home: &Path, manifest: &str) -> PathBuf {
+        let f = app(home, manifest);
+        std::fs::create_dir_all(f.join("dist/assets")).unwrap();
+        std::fs::write(f.join("dist/index.html"), "<!doctype html><div id=app></div>").unwrap();
+        std::fs::write(f.join("dist/404.html"), "gone").unwrap();
+        f
+    }
+
+    /// 0.46.7 (TC-1, TA-2): a static Seed validates; its keys and
+    /// `host.checks` are named as needing 0.46.7; the tree is checked.
+    #[test]
+    fn a_static_seed_validates_and_names_0467() {
+        let h = TempHome::new();
+        let (r, m) = validate_tree(&static_app(h.path(), STATIC), &Options::default());
+        assert!(r.ok, "{r:?}");
+        assert!(m.unwrap().is_static());
+        let need: Vec<&str> = r.warnings.iter().filter(|w| w.code == "needs_k2_0467").map(|w| w.message.as_str()).collect();
+        assert_eq!(need.len(), 4, "mode, root, notFound, checks: {need:?}");
+        assert!(need[0].starts_with("host.mode: static needs K2 0.46.7"), "{need:?}");
+        // The root must be a folder of the Seed.
+        let (r, _) = validate_tree(&app(h.path(), &STATIC.replace("\"dist\"", "\"build\"")), &Options::default());
+        assert!(!r.ok);
+        assert_eq!(r.errors.iter().map(|e| e.code.as_str()).collect::<Vec<_>>(), vec!["static_root_missing"], "{r:?}");
+        // A CSP that frames is K2's to set.
+        let framed = STATIC.replace("\"notFound\"", "\"headers\":{\"Content-Security-Policy\":\"frame-ancestors *\"},\"notFound\"");
+        let (r, _) = validate_tree(&static_app(h.path(), &framed), &Options::default());
+        assert!(r.errors.iter().any(|e| e.message.contains("frame-ancestors")), "{r:?}");
+    }
+
+    /// Static keys belong to static Apps; `host.checks` are checked on any.
+    #[test]
+    fn static_keys_on_a_cmd_app_and_bad_checks_are_errors() {
+        let h = TempHome::new();
+        let cmd = GOOD.replace("\"start\":[\"node\",\"server.js\"]", "\"start\":[\"node\",\"server.js\"],\"spa\":true");
+        let (r, _) = validate_tree(&app(h.path(), &cmd), &Options::default());
+        let e = r.errors.iter().find(|e| e.message.contains("host.spa is for static Apps only")).unwrap_or_else(|| panic!("{r:?}"));
+        assert_eq!(e.code, "manifest_invalid");
+        let checks = |c: &str| GOOD.replace("\"start\":[\"node\",\"server.js\"]", &format!("\"start\":[\"node\",\"server.js\"],\"checks\":{c}"));
+        let (r, _) = validate_tree(&app(h.path(), &checks(r#"[{"name":"api","path":"/healthz","expect":200}]"#)), &Options::default());
+        assert!(r.ok, "a cmd App may have checks: {r:?}");
+        for (bad, needle) in [
+            (r#"[{"name":"a","path":"healthz","expect":200}]"#, "path starts with /"),
+            (r#"[{"name":"a","path":"/","expect":42}]"#, "expect is one HTTP status"),
+            (r#"[{"name":"a","path":"/","expect":200},{"name":"a","path":"/x","expect":200}]"#, "two checks are named"),
+            (r#"[{"name":"","path":"/","expect":200}]"#, "1 to 40"),
+            (r#"[{"name":"a","path":"/","expect":200,"header":{"name":"bad header","contains":"x"}}]"#, "header is"),
+        ] {
+            let (r, _) = validate_tree(&app(h.path(), &checks(bad)), &Options::default());
+            assert!(r.errors.iter().any(|e| e.message.contains(needle)), "{bad}: {r:?}");
+        }
+        let many = format!("[{}]", (0..11).map(|i| format!(r#"{{"name":"c{i}","path":"/","expect":200}}"#)).collect::<Vec<_>>().join(","));
+        let (r, _) = validate_tree(&app(h.path(), &checks(&many)), &Options::default());
+        assert!(r.errors.iter().any(|e| e.message.contains("at most 10")), "{r:?}");
     }
 
     #[test]

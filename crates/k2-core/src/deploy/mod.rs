@@ -43,6 +43,8 @@ pub mod manifest;
 /// Re-host on a K2 update, the pure parts (update continuity S2, 0.46.4).
 pub mod rehost;
 pub mod seed;
+/// Static mode's rules (0.46.7, prd-tauri-core-0467-v1 TC-1/TC-2).
+pub mod static_site;
 pub mod store;
 pub mod validate;
 pub mod widget_events;

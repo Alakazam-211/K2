@@ -8316,6 +8316,7 @@ USAGE
   k2 app validate <folder> --manifest <file>
                                   check the folder as k2 app deploy --manifest
                                   packs it: <file> becomes its manifest.json
+                                  (a build output like dist/ is checked too)
   ... --types                     also run the TypeScript checker (Seeds and
                                   manifest folders; its errors block)
   ... --json                      the report as JSON
@@ -8331,8 +8332,8 @@ WHAT IT CHECKS (it never runs your code)
     This server, on by default): also manifest.json and the K2 contract (caps,
     bindings, roles, requires). With Apps off a folder gets the code
     checks only (said on stderr).
-  Skipped: node_modules, dist, build, .next and other build/hidden folders,
-  symlinks, files over 2 MB; anything skipped is listed.
+  Skipped inside the folder: node_modules, dist, build, .next and other
+  build/hidden folders, symlinks, files over 2 MB; anything skipped is listed.
 
   A path that exists as a folder wins over a published App with that name.
 
@@ -8410,7 +8411,7 @@ Make and ship:
                                        and import { fromEnv } from '@k2/server'.
                                        --sew adds Sew's client packages (chat,
                                        voice, video). k2 app sdk --help.
-  k2 app validate <folder|seed> [--types] [--json]
+  k2 app validate <folder|seed> [--manifest <file>] [--types] [--json]
                                        Check manifest.json, the K2 contract and
                                        the code (parse + leak lints). --types
                                        also runs the TypeScript checker (its
@@ -11269,6 +11270,18 @@ MANIFEST (manifest.json at the folder root, schema 1)
   Unknown keys are errors. net and secrets are refused: secrets come from
   the vault. dataRevision + dataDown guard rollbacks across migrations.
 
+STATIC APPS (0.46.7: a built site, no server)
+  "host":{"mode":"static","root":"."} and K2 serves the folder itself: no
+  App code runs, so no wall and no engine are needed (macOS dev boxes too);
+  k2 app list and inspect say static, isolation none. Deploys, rollback,
+  labels and custom domains work as for any App. Keys: root, spa, notFound,
+  headers (an allow-list; no frame-ancestors), immutable (cache globs).
+  k2 app deploy <app-id> dist --manifest k2/web.manifest.json packs that
+  file as the Seed's manifest.json, so the build output deploys as it is.
+  host.checks (any mode): your own probes, run by k2 app status and after
+  each deploy; never a gate. The static keys and host.checks need K2 0.46.7.
+  A starter: k2 app init --template static|tauri; k2 study tauri.
+
 PUBLIC ORIGINS (CSRF and WebSocket Origin checks)
   Every App process gets the https origins people reach it on:
     K2_APP_ORIGIN    the primary one: the custom domain you picked with
@@ -13527,39 +13540,53 @@ _app_links_usage() {
 k2 app links — "open in app" links for an App's own iOS and Android apps.
 K2 serves the two link files (/.well-known/apple-app-site-association and
 /.well-known/assetlinks.json) on every host of the App, with or without phone
-pairing (k2 app pairing). With pairing on, both are served as one file.
+pairing (k2 app pairing). With pairing on too, its apps and paths and these
+are served in the same two files.
 
   k2 app links <app> [--json]          The phone apps, the paths (each with the
-                                       date it first shipped), the hosts, on/off.
+                                       date K2 first served it), the hosts,
+                                       on/off.
   k2 app links set <app> [--ios TEAMID.com.you.app]…
                  [--android com.you.app:AB:CD:…[,AB:CD:…]]…
                  [--path '/tickets/*']… [--path '/messages?addr=*']…
                  [--drop '<path>']… [--json]
                                        Name the phone apps and the paths they
-                                       open. Every set replaces the last one,
-                                       except that a path already set is never
-                                       removed by leaving it out: name it with
-                                       --drop to remove it on purpose (phones
-                                       and Apple's CDN keep the old file for
-                                       days). Quote paths so the shell keeps *
-                                       and ?.
-  k2 app links off <app>               Stop serving them (the paths stay set).
+                                       open, and turn the files on. Each set
+                                       replaces the whole list: give every
+                                       --ios, --android and --path again. A set
+                                       that leaves out a path already set is
+                                       refused (link_path_dropped) unless
+                                       --drop names it, written as k2 app links
+                                       shows it: phones and Apple's CDN keep
+                                       the old file for days. Quote paths so
+                                       the shell keeps * and ?.
+  k2 app links off <app>               Stop serving them (the apps and paths
+                                       stay; set turns them on again).
   k2 app links check <app> [--json]    Fetch both files from each host over the
                                        internet (and Apple's CDN copy) and
                                        compare them with what K2 serves. The
-                                       owner only.
+                                       owner only; the last result shows in
+                                       k2 app links <app>.
 
 Paths: a path (A-Z a-z 0-9 . _ ~ * / -, never under /.well-known/), and an
 optional query pattern after ?: name=value pairs joined by &, where * in a
 value matches anything. /messages?addr=* opens /messages?addr=… links in the
 app (iOS 14 and newer; older iOS matches the path alone). At most 20 paths.
 
-In your app, list each host exactly (applinks:jobs.you.k2.dev), never a
-wildcard. The App must be one K2 fronts: an App whose manifest says
-host.clientIp: false (needs_k2_front) can't have them.
+--android takes the package, a colon, then the full SHA-256 fingerprint of
+the certificate that signs the app as installed (from Play: the app signing
+key), colons and all; several fingerprints are comma separated.
 
-Who: the owner, an Admin, or the App's own agent ("Build and run Apps"); the
-check is the owner's. Every change is recorded in the App's deploy audit.
+In your app, list each host exactly (applinks:jobs.you.k2.dev, and each
+custom domain you add), never a wildcard. K2 answers those two paths in
+front of the App, so an App whose manifest says host.clientIp: false (its
+connections reach it raw) can't have them: refused with needs_k2_front.
+
+Who: every form needs the owner, an Admin, or the App's own agent with the
+workspace's "Build and run Apps" switch (Settings → Apps); check is the
+owner's. Every change is recorded in the App's deploy audit. Exit codes: 0
+ok, 2 bad usage, 3 refused (JSON with a code on stderr); check exits 1 when a
+host serves a different file.
 EOF
 }
 
@@ -13658,6 +13685,11 @@ if paths:
 else:
     print("  paths: -")
 print("  hosts:        " + (", ".join(v.get("hosts") or []) or "- (the App has no public host yet)"))
+lc = v.get("lastCheck")
+if lc:
+    print("  last check (%s):" % time.strftime("%Y-%m-%d %H:%M", time.localtime(lc.get("at") or 0)))
+    for h in lc.get("hosts") or []:
+        print("    %s: iOS file %s, Android file %s, Apple CDN %s" % (h.get("host"), h.get("aasa"), h.get("assetlinks"), h.get("appleCdn")))
 for w in v.get("warnings") or []:
     print("note: " + w)'
 }
@@ -42861,6 +42893,31 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "{version, sha256, packages[]}."}]
     },
     {
+      "name": "app init",
+      "usage": "k2 app init --template tauri|static|node-api [<folder>] [--name <name>] [--dry-run] [--json]",
+      "description": "Write the K2 side of an App into a repo; never overwrites a file (an existing one is listed as skipped). tauri: k2/web.manifest.json (the web build as a static App <name>-web), the updater wiring added to src-tauri/tauri.conf.json (only missing keys; .json5 and Tauri.toml get the lines printed), k2/README.md, a tauri-linux compute preset when .k2/compute.toml has presets. static: k2/web.manifest.json. node-api: k2/api/ (<name>-api: a health route and an upload route for parts of at most 16 MiB). POST /cli/app/init {folder, template, name, dryRun}. Owner, Admin, a K2 terminal, or an agent with Build and run Apps (its own workspace's folders).",
+      "args": [{"name": "folder", "required": false, "description": "The repo root (default: this folder)."}],
+      "flags": [
+        {"name": "--template", "arg": "tauri|static|node-api", "description": "What to write."},
+        {"name": "--name", "arg": "name", "description": "The App name (default: the folder's name)."},
+        {"name": "--dry-run", "arg": null, "description": "Print every file and change; write nothing."},
+        {"name": "--json", "arg": null, "description": "{template, folder, name, files[{path, action, note, content?}], next[], notes[], applied?}."}
+      ]
+    },
+    {
+      "name": "app links",
+      "usage": "k2 app links <app> | k2 app links set <app> [--ios ID]… [--android PKG:SHA256[,…]]… [--path P]… [--drop P]… | off <app> | check <app> [--json]",
+      "description": "Open-in-app links for an App's own iOS and Android apps: K2 serves the AASA and assetlinks.json on the App's hosts, with or without phone pairing. A path may carry a query pattern (/messages?addr=*). A path already set is removed only with --drop (refused link_path_dropped otherwise). Apps K2 doesn't front (host.clientIp: false) are refused needs_k2_front. GET /cli/app/links?app=, POST /cli/app/links/set|off|check {app, ios, android, paths, drop}. The owner, an Admin or the App's agent with Build and run Apps; check is the owner's.",
+      "args": [{"name": "app", "required": true}],
+      "flags": [
+        {"name": "--ios", "arg": "TEAMID.bundle.id", "description": "An iOS app id (repeat)."},
+        {"name": "--android", "arg": "package:SHA256[,SHA256]", "description": "An Android package and its signing fingerprints (repeat)."},
+        {"name": "--path", "arg": "path", "description": "A path the apps open, optionally ?name=pattern (repeat; at most 20)."},
+        {"name": "--drop", "arg": "path", "description": "Remove a path that was set before, on purpose (repeat)."},
+        {"name": "--json", "arg": null, "description": "{app, appId, name, state, served, hosts[], ios[], android[], paths[{spec, path, query, since}], pairing, warnings?}."}
+      ]
+    },
+    {
       "name": "app user add",
       "usage": "k2 app user add <username> [--email e] [--password-stdin] [--app <app> [--role R]]",
       "description": "Add an app principal (not a Connect user / not a /v1 API key). Optional email and password from stdin for K2 app login. Without --app the person gets the box login (host; owner only). With --app the person is a guest of that one App: its grant (the role, or no rooms) and no box login. An agent with \"manage Apps\" adds App users of its own workspace's Apps only.",
@@ -43986,7 +44043,7 @@ EOF
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms tauri skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
 
 _study_usage() {
     cat <<'EOF'
@@ -44004,7 +44061,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
-  app-chat  chat-voice  chat-voice-rooms
+  app-chat  chat-voice  chat-voice-rooms  tauri
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
@@ -44047,6 +44104,7 @@ _study_title() {
         app-chat) echo "Chat, voice and calls in your App (Chat / Voice Hosting)" ;;
         chat-voice) echo "Voice rooms and channels in your App: the setup" ;;
         chat-voice-rooms) echo "Rooms and channels in your App Space" ;;
+        tauri) echo "The K2 side of a Tauri app, end to end" ;;
         skins) echo "Apps" ;;
         feedback-loop) echo "Changing this box" ;;
         ticket-brief) echo "Ticket HTML brief" ;;
@@ -44158,6 +44216,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
   chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
   chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
+  tauri               A Tauri app on K2: web build, server, updates, signing, links, push, uploads
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries
@@ -44226,6 +44285,7 @@ _study_page() {
         app-chat) _study_page_app_chat ;;
         chat-voice) _study_page_chat_voice ;;
         chat-voice-rooms) _study_page_chat_voice_rooms ;;
+        tauri) _study_page_tauri ;;
         email-notifications) _study_page_email_notifications ;;
         skins)
             echo "k2 study skins is now k2 study apps — this page still works."
@@ -46643,6 +46703,130 @@ TRENDS:
 
 ELSEWHERE: Settings → Apps → This server → Box usage shows the same, with
 bars. A Garden can show it with the built-in card k2:box-disk@1.
+EOF
+}
+
+_study_page_tauri() {
+    cat <<'EOF'
+k2 study tauri — the K2 side of a Tauri app, end to end
+
+THE SHAPE
+  A Tauri app is a desktop or phone shell around a web build. K2 runs the
+  parts around it: the web build (a static App), the app's own server (a
+  server App), its users, the update feed, its "open in app" links and push.
+  The phone and desktop apps talk only to the App's server; the App's server
+  talks to K2.
+
+START
+  In the Tauri repo's root:
+    k2 app init --template tauri --dry-run    see every file and change
+    k2 app init --template tauri              write them (never overwrites)
+  It writes k2/web.manifest.json and k2/README.md, and adds the updater
+  lines to src-tauri/tauri.conf.json (only keys it lacks; order and spacing
+  kept). tauri.conf.json5 and Tauri.toml are not edited: it prints the lines
+  to add. <name> is --name, else the folder's name in lower case. The web
+  build's App is <name>-web; the server is <name>-api, written by a second
+  run with --template node-api. The first k2 app deploy of a name creates
+  the App.
+
+1. THE WEB BUILD: A STATIC APP
+  host.mode "static": K2 serves the folder itself, no server runs, nothing
+  of yours executes on the box. Deploys, rollback, labels and custom domains
+  work as for any App.
+    npm run build
+    k2 app deploy <name>-web dist --manifest k2/web.manifest.json
+  --manifest packs that file as the Seed's manifest.json, so dist/ deploys as
+  the build wrote it. If dist/ has its own manifest.json with other content
+  (a web app manifest), the deploy stops with manifest_conflict: name that
+  file manifest.webmanifest (and its <link rel="manifest">). Check first:
+  k2 app validate dist --manifest k2/web.manifest.json.
+  Static keys (host.*): root (the folder to serve, default .), spa (unknown
+  paths without an extension answer index.html), notFound (a 404 page),
+  headers (CSP, Permissions-Policy, Referrer-Policy, COOP/COEP/CORP, HSTS;
+  framing stays K2's: no frame-ancestors), immutable (globs cached for a
+  year; default: hashed files under assets/). HTML and JSON are always
+  revalidated. They need K2 0.46.7: k2 app validate says so.
+
+2. THE APP'S SERVER
+  k2 app init --template node-api writes k2/api/: a small @k2/server server
+  with a health route and an upload route (below). Then:
+    cd k2/api && npm install && cd -
+    k2 app sdk add k2/api
+    k2 app deploy <name>-api k2/api
+
+3. UPDATES (k2 app updates)
+  Tauri's updater asks the App's own host for new versions:
+    https://<name>-web.<box>.k2.dev/_k2/updates/<channel>/{{target}}/{{arch}}/{{current_version}}
+  (<box>: this server's K2 Connect name.) init writes the stable channel;
+  a tester build whose endpoint says beta gets beta. The archives come from
+  K2's download host, never from your box.
+  The updater's PUBLIC key goes in two places: tauri.conf.json
+  plugins.updater.pubkey (the app checks updates with it) and K2 (K2 checks
+  archives with it before anything is uploaded):
+    k2 app updates key <name>-web --set "$(cat ~/.tauri/myapp.key.pub)"
+    k2 app updates push <name>-web --channel beta --version 1.5.0 \
+        --artifact darwin-aarch64=out/MyApp.app.tar.gz \
+        --artifact linux-x86_64=out/MyApp.AppImage
+    k2 app updates promote <name>-web --from beta --to stable
+  Each archive's signature is <file>.sig beside it (tauri signer sign writes
+  it). --artifact repeats, one per platform (<os>-<arch>: darwin, linux,
+  windows; x86_64, aarch64). promote moves the beta's current release.
+  A bad release: k2 app updates rollback <name>-web --channel stable --to
+  1.4.2 points the channel back (k2 app rollback is the web build, not
+  this). Tauri installs only a newer version, so people already on the bad
+  one stay on it: push a higher version (1.5.1).
+
+4. SIGNING: ON YOUR OWN MAC
+  The private updater key and your Apple Developer ID stay yours: never on
+  the box K2 runs on, never on a node someone else owns.
+  - Interactive: the keys stay in your login Keychain (or a key file on your
+    Mac); you, or your agent in your own terminal, run
+      codesign …  and  npx tauri signer sign …
+    then k2 app updates push.
+  - Unattended: your own Mac enrolled as your K2 compute node; you put the
+    key in your K2 vault, and it is handed to that one job on that Mac as a
+    file (k2 compute run --secret NAME …; k2 study vault).
+  K2's App records hold only the public key; a private key is refused.
+
+5. "OPEN IN APP" LINKS (k2 app links)
+    k2 app links set <name>-web --ios TEAMID.com.you.app \
+        --android com.you.app:AB:CD:… --path '/tickets/*' --path '/messages?addr=*'
+  K2 serves /.well-known/apple-app-site-association and assetlinks.json on
+  the App's hosts, with or without phone pairing. In the app, list each host
+  exactly (applinks:<name>-web.<box>.k2.dev), never a wildcard. Each set
+  gives every app and path again; one that leaves out a path already set is
+  refused (link_path_dropped) unless --drop '<path>' names it (phones and
+  Apple's CDN keep the old file for days). k2 app links check <name>-web
+  (the owner) compares what the internet sees.
+
+6. PUSH: THROUGH THE APP'S SERVER
+  Tauri has no first-party push plugin: the app needs a native plugin that
+  gets the device token. The phone sends the token to YOUR server; your
+  server registers it with K2 as that person:
+    await k2.asGuest(pass).push.register({ … })
+  (pass = the person's session pass). Keys and sending: k2 study app-push.
+
+7. BIG UPLOADS FROM THE PHONE
+  Tauri's HTTP plugin holds a whole request body in memory (about 50 MB is
+  the practical ceiling). Send files in parts of at most 16 MiB (raw bytes)
+  to your server; it hands each part to K2 as that person:
+    PUT /upload/<uploadId>?room=<room>&filename=<name>&offset=<bytes>[&last=1]
+    → k2.asGuest(pass).files.uploadChunk({ workspace: room, dir: 'uploads',
+        filename, uploadId, offset, base64, isLast })
+  The phone picks <uploadId> (any new id per file); <room> is a room the
+  person may write to; offset = bytes already sent. The node-api template
+  has this route. After an error, resend from the end of the last part that
+  answered 200.
+
+8. HOW IS IT DOING
+    k2 app status <name>-web       health, checks, errors, channels
+    k2 app list                    each App, static or server, and its URL
+  host.checks in a manifest (up to 10: {name, path, expect, as?, header?,
+  bodyContains?}) are your own probes: run after each deploy and by
+  k2 app status; they never block a deploy.
+
+MORE: k2 study app-deploys, k2 study app-push, k2 study app-api,
+k2 app init --help, k2 app links --help.
 EOF
 }
 
@@ -82304,6 +82488,10 @@ EOF
             # domain` (its custom-domain help, not the App family's) and
             # `k2 app sdk` (add|status|kit).
             validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk)
+                shift; cmd_app "$@"
+                ;;
+            # 0.46.7: `k2 app init` and `k2 app links` own their --help.
+            init|links)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

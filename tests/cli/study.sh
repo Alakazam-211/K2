@@ -751,6 +751,18 @@ done
 pp_lines="$(printf '%s\n' "$pp_out" | wc -l | tr -d ' ')"
 if [ "$pp_lines" -le 80 ]; then echo "  PASS: app-pairing is bounded ($pp_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: app-pairing is $pp_lines lines (max 80)" >&2; fail=$((fail + 1)); fi
 assert_contains "catalog: app-pairing row" "$("$K2" study)" "  app-pairing         Your App's own phone app signs in by QR"
+echo "== k2 study tauri (prd-tauri-core-0467-v1 TC-14, 0.46.7) =="
+ta_out="$("$K2" study tauri)"
+assert_contains "title" "$ta_out" "k2 study tauri — the K2 side of a Tauri app, end to end"
+for needle in "k2 app init --template tauri" "k2 app deploy <name>-web dist --manifest k2/web.manifest.json" "manifest_conflict" \
+    "k2 app updates key" "k2 app updates promote" "installs only a" "your login Keychain" "k2 compute run --secret" \
+    "k2 app links set" "--drop" "k2.asGuest(pass).push.register" "at most 16 MiB" "files.uploadChunk" "k2 app status"; do
+    assert_contains "tauri: $needle" "$ta_out" "$needle"
+done
+ta_lines="$(printf '%s\n' "$ta_out" | wc -l | tr -d ' ')"
+if [ "$ta_lines" -le 180 ]; then echo "  PASS: tauri is bounded ($ta_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: tauri is $ta_lines lines (max 180)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: tauri row" "$("$K2" study)" "  tauri               A Tauri app on K2"
+assert_contains "app-deploys: static Apps" "$("$K2" study app-deploys)" "STATIC APPS (0.46.7: a built site, no server)"
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"
 assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$K2_CLI" || true)" "k2 study app-runtime"
 

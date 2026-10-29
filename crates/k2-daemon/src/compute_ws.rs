@@ -1123,6 +1123,10 @@ fn apply_observation(
     if ctl != job.ctl {
         let _ = store::set_job_ctl(&conn, job_id, &ctl);
     }
+    // The job's own event stream (`k2 compute events`): its first start.
+    if state == JobState::Running && job.started_at.is_none() {
+        store::record_event(&conn, "node", "job_start", Some(node_id), Some(&job.workspace_id), Some(job_id), serde_json::json!({"attempt": job.attempt, "at": stamp}));
+    }
     if let Some(s) = src {
         store::set_job_src(&conn, job_id, &s.commit, &s.tree);
     }

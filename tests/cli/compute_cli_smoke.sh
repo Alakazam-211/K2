@@ -447,6 +447,28 @@ expect_eq "--all-mine without a session (the owner token) is refused" "$rc" "2"
 expect_has "and teaches --workspace-all" "$(cat "$SANDBOX/err")" "--workspace-all"
 cout="$(k2 compute cancel --workspace-all --tag smoke:any --state any --force)"
 expect_has "cancel --workspace-all --tag stops the tagged running job" "$cout" "$JT_SLOW"
+# cancel --if-queued: a started job is reported and left running, exit 0.
+JIQ="$(k2 compute run mini --detach -- sleep 20 2>/dev/null)"
+for _ in $(seq 1 100); do
+    k2 compute get "$JIQ" | grep -q ": running" && break
+    sleep 0.2
+done
+set +e
+iout="$(k2 compute cancel "$JIQ" --if-queued 2>"$SANDBOX/err")"; rc=$?
+set -e
+expect_eq "cancel --if-queued on a started job exits 0" "$rc" "0"
+expect_has "and says it was left running" "$iout" "already started; left running"
+expect_has "the job still runs" "$(k2 compute get "$JIQ")" ": running"
+# get: a long command is summarized; --full prints it.
+long="$(printf 'x%.0s' $(seq 1 400))"
+JLONG="$(k2 compute run mini --detach -- sh -c "true $long" 2>/dev/null)"
+expect_has "get summarizes a long argv" "$(k2 compute get "$JLONG")" "--full for all of it"
+expect_has "get --full prints all of it" "$(k2 compute get "$JLONG" --full)" "$long"
+# events: the job stream, NDJSON with --json.
+eout="$(k2 compute events --json --limit 50 2>/dev/null)"
+expect_has "events lists a queued event" "$eout" "\"event\":\"queued\""
+expect_has "and a finished one with its exit" "$eout" "\"event\":\"finished\""
+k2 compute cancel "$JIQ" --force >/dev/null
 # 0.46.6 (compute tiers v2, L8): run --wait prints the job id first on
 # stdout (so a timed-out shell can resume with `k2 compute wait <id>
 # --follow`), then streams the job's output, and exits with its code.

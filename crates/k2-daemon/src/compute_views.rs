@@ -883,6 +883,9 @@ fn queued_tier_counts<'a>(tiers_of: impl Iterator<Item = &'a str>) -> serde_json
 }
 
 pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    if params.get("events").is_some_and(|v| v == "1" || v == "true") {
+        return job_events(who, params);
+    }
     need_credential(who)?;
     let gate = passport_gate(who)?;
     let node = match params.get("node").map(String::as_str).filter(|s| !s.is_empty()) {
@@ -928,6 +931,103 @@ pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_
         })
         .collect();
     Ok(serde_json::json!({ "jobs": jobs }))
+}
+
+/// How long `jobs?events=1&wait=N` may block (the same cap as `get?wait`).
+const EVENTS_WAIT_MAX: u64 = 25;
+
+/// One stream event in agent words: `queued`, `started`, `finished` (with
+/// state, exit and reason), `requeued`, `moved`.
+fn job_event_json(e: &store::EventRow) -> Option<serde_json::Value> {
+    let d = &e.detail;
+    let s = |k: &str| d.get(k).and_then(|x| x.as_str());
+    let (event, state, reason): (&str, Option<&str>, Option<&str>) = match e.kind.as_str() {
+        "job_submit" => ("queued", Some("queued"), None),
+        "job_start" => ("started", Some("running"), None),
+        "job_end" => ("finished", s("state"), s("reason")),
+        "job_queue_timeout" => ("finished", Some("failed"), Some("queue_timeout")),
+        "job_unknown" => ("finished", Some("unknown"), Some("not_on_node")),
+        "job_lost" => ("finished", Some("interrupted"), Some("node_lost")),
+        // A queued job's cancel ends it at once; a started one's end comes
+        // as job_end.
+        "job_cancel" if s("state") == Some("queued") && d.get("onNode").is_none() => ("finished", Some("cancelled"), Some("cancelled")),
+        "job_retry" | "job_requeue" => ("requeued", Some("queued"), s("why").or(s("reason"))),
+        "job_move" => ("moved", Some("queued"), s("why")),
+        _ => return None,
+    };
+    let job = e.job_id.as_deref()?;
+    let node = e.node_id.as_deref().map(node_name_of);
+    Some(serde_json::json!({
+        "cursor": e.id,
+        "at": e.at,
+        "event": event,
+        "job": job,
+        "short": compute::message::short(job),
+        "node": node,
+        "state": state,
+        "exit": d.get("exit").cloned().unwrap_or_default(),
+        "reason": reason,
+    }))
+}
+
+/// `GET /cli/compute/jobs?events=1[&after=N|&last=N][&wait=S][&mine=1][&tag=T]`
+/// (`k2 compute events [--follow] [--json]`, compute feedback part 2,
+/// item 4): the caller's jobs' events after cursor `after` (an event id;
+/// absent = from now, nothing old), oldest first, so an agent follows its
+/// jobs without polling logs. A passport sees only its workspace's jobs
+/// (`mine`: only this session's). `wait=S` (≤ 25 s) blocks until an event
+/// arrives. Returns `{events, cursor}`: pass `cursor` as the next `after`.
+fn job_events(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
+    need_credential(who)?;
+    let gate = passport_gate(who)?;
+    let ws = match gate {
+        Some(own) => Some(own),
+        None => match params.get("workspace").map(String::as_str).filter(|s| !s.is_empty()) {
+            Some(t) => Some(ws_by_token_or_worktree(t).ok_or_else(|| no_workspace(t))?.id),
+            None => None,
+        },
+    };
+    let mine = params.get("mine").is_some_and(|v| v == "1" || v == "true");
+    let session = if mine { who.passport().map(|(_, s)| s.to_string()) } else { None };
+    let tag = tag_param(params.get("tag").map(String::as_str))?;
+    let last = params.get("last").and_then(|l| l.parse::<i64>().ok()).filter(|l| *l > 0);
+    let after = match params.get("after").map(String::as_str).filter(|s| !s.is_empty()) {
+        // `last=N`: the newest N events, no waiting.
+        None if last.is_some() => -1,
+        None => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::last_event_id(&conn)
+        }
+        Some(a) => a.parse::<i64>().map_err(|_| no(codes::BAD_REQUEST, 400, "after is the cursor a previous answer gave (a number)"))?,
+    };
+    let wait = params.get("wait").and_then(|w| w.parse::<u64>().ok()).unwrap_or(0).min(EVENTS_WAIT_MAX);
+    let deadline = Instant::now() + Duration::from_secs(wait);
+    loop {
+        let seen = compute_ws::change_counter();
+        let rows = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            store::job_events_after(&conn, ws.as_deref(), session.as_deref(), tag, after, last.unwrap_or(200))
+        };
+        if after < 0 {
+            // Continue from the newest event of all (none of these again).
+            let cursor = {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                store::last_event_id(&conn)
+            };
+            let events: Vec<serde_json::Value> = rows.iter().filter_map(job_event_json).collect();
+            return Ok(serde_json::json!({"events": events, "cursor": cursor}));
+        }
+        let cursor = rows.last().map(|r| r.id).unwrap_or(after);
+        let events: Vec<serde_json::Value> = rows.iter().filter_map(job_event_json).collect();
+        let now = Instant::now();
+        if !events.is_empty() || cursor > after || now >= deadline {
+            return Ok(serde_json::json!({"events": events, "cursor": cursor}));
+        }
+        compute_ws::wait_change(seen, (deadline - now).min(Duration::from_secs(2)));
+    }
 }
 
 /// A `tag` parameter (CE-9): absent, or a valid tag (else 400, never

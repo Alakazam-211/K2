@@ -251,6 +251,25 @@ CANCEL
   the line to stop it: k2 compute cancel <job> --force. So a cancel you
   meant for a waiting job never kills one that just began. The event log
   and k2 compute get record who asked for the cancel.
+  k2 compute cancel <job> --if-queued cancels it only while it waits; a
+  job that already started is reported ("already started; left running")
+  and the exit is 0, so a script can call it without checking first.
+
+EVENTS (0.46.7)
+  k2 compute events --follow --json prints one line per event of every
+  job of your workspace as it happens, instead of polling logs:
+    {"cursor":812,"at":…,"event":"finished","job":"…","short":"ab12cd34",
+     "node":"k2n7-vin","state":"done","exit":0,"reason":null}
+  event: queued, started, finished, requeued (an infrastructure retry),
+  moved (to another node). A finished job: state done with its exit code
+  (non-zero = the command failed), or failed / timeout / cancelled /
+  interrupted with a reason (mem_cap, stalled, queue_timeout, …).
+  --mine: only the jobs this session sent; --tag T: one tag's. Without
+  --follow: the newest 20 (--limit N). --follow prints only events after
+  now (or after --since CURSOR) and never exits on its own, so in a shell
+  with a time limit: --max-wait 9m (exit 0 when it passes, with the line to
+  continue), then again with --since <the last cursor you saw>.
+  (k2 compute events used to be the audit log: that is events --audit.)
   Many at once (0.46.7): k2 compute cancel --all-mine [--tag T]
   [--state queued|running|any] [--node N] [--force] cancels the jobs THIS
   session sent (this terminal's passport; jobs from an earlier session

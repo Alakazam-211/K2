@@ -1914,6 +1914,19 @@ async fn easy_mode_records_and_views() {
     let other_entry = s["status"]["queued"].as_array().expect("queued").iter().find(|e| e["workspace"].is_null()).cloned().expect("other ws entry");
     assert!(other_entry.get("short").is_none() && other_entry.get("argv").is_none(), "{other_entry}");
 
+    // The job event stream (`k2 compute events`): this workspace's jobs
+    // only; `last=N` = the newest, with a cursor to follow from.
+    let r = get(port, "/cli/compute/jobs", &agent, "events=1&last=20").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let ev = j(&r);
+    let queued: Vec<&str> = ev["events"].as_array().expect("events").iter().filter(|e| e["event"] == "queued").map(|e| e["job"].as_str().expect("job")).collect();
+    assert!(queued.contains(&tagged.as_str()) && queued.contains(&sibling.as_str()), "{ev}");
+    assert!(!queued.contains(&foreign.as_str()), "never another workspace's: {ev}");
+    let cursor = ev["cursor"].as_i64().expect("cursor");
+    let r = get(port, "/cli/compute/jobs", &agent, "events=1&mine=1&tag=fuzz%3Ap3&after=0").await;
+    let mine: Vec<String> = j(&r)["events"].as_array().expect("events").iter().map(|e| e["job"].as_str().expect("job").to_string()).collect();
+    assert!(mine.contains(&tagged) && !mine.contains(&sibling) && !mine.contains(&plain), "mine + tag: {mine:?}");
+
     // CE-20: --all-mine cancels this session's matching jobs only.
     let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"filter": {"scope": "session", "tag": "fuzz:p3"}})).await;
     assert_eq!(r.status, 200, "{}", r.body);
@@ -1923,6 +1936,12 @@ async fn easy_mode_records_and_views() {
     assert_eq!(job_json(port, &agent, &plain).await["state"], "queued", "untagged: untouched");
     assert_eq!(job_json(port, &agent2, &sibling).await["state"], "queued", "another session: untouched");
     assert_eq!(job_json(port, &outsider, &foreign).await["state"], "queued", "another workspace: untouched");
+    // The stream says it finished, cancelled, after the cursor.
+    let r = get(port, "/cli/compute/jobs", &agent, &format!("events=1&after={cursor}&wait=5")).await;
+    let ev = j(&r);
+    let fin = ev["events"].as_array().expect("events").iter().find(|e| e["job"] == tagged.as_str()).cloned().unwrap_or_else(|| panic!("no event for the cancel: {ev}"));
+    assert_eq!((fin["event"].as_str(), fin["state"].as_str()), (Some("finished"), Some("cancelled")), "{fin}");
+    assert!(ev["cursor"].as_i64().expect("cursor") > cursor, "{ev}");
     // --workspace-all: every job of the workspace, never another's.
     let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"filter": {"scope": "workspace"}})).await;
     assert_eq!(r.status, 200, "{}", r.body);

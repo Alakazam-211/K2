@@ -21792,7 +21792,10 @@ Agents:
                  From a git worktree inside the workspace (.claude/worktrees/x) the
                  workspace is found for you, and run takes HEAD and --dirty from
                  that worktree; from anywhere else pass --workspace <handle>.
-  k2 compute get <job> [--json]              --json: the result (exit, duration, node,
+  k2 compute get <job> [--full] [--json]     a long command shows its first 120 characters
+                                             (--full: all of it). k2 compute status <job>
+                                             is the same.
+                                             --json: the result (exit, duration, node,
                                              artifacts + sha256, tests, receipt id,
                                              wait while unfinished: where, position,
                                              of, reason, words, etaSecs, etaBasis,
@@ -21825,6 +21828,18 @@ Agents:
                  (or was just assigned) needs --force (else job_started, exit 3).
                  On a shared node, a job in the node's queue is asked to cancel
                  only if it hasn't started: it ends cancelled, or job_started
+  k2 compute cancel <job> --if-queued
+                 cancel only if it is still queued; if it already started (or
+                 ended), say so, leave it alone and exit 0 (for scripts)
+  k2 compute events [--follow] [--mine] [--tag T] [--since CURSOR] [--limit N] [--max-wait D] [--json]
+                 events of every job of this workspace (--mine: only the jobs
+                 this session sent), instead of polling logs: queued, started,
+                 finished (state, exit, reason), requeued, moved. No --follow:
+                 the newest N (default 20). --follow: only events after now
+                 (or after --since CURSOR), as they happen; it never exits on
+                 its own unless --max-wait passes (then exit 0 and the line to
+                 continue). --json: one JSON object per line (NDJSON), each
+                 with its cursor. (The audit log moved to events --audit.)
   k2 compute cancel --all-mine [--tag T] [--state queued|running|any] [--node N] [--force]
                  every job THIS session sent (this terminal's passport; an
                  earlier session's jobs need --workspace-all) that matches:
@@ -21926,7 +21941,8 @@ Sharing a node with other K2 servers (the node's owner server; 0.46.3):
                    the Agent tab's "Allow compute nodes" (Settings → Workspaces →
                    <agent> → Agent): on = a grant on every machine switched on,
                    default limits (and ones added later); off removes them all
-  k2 compute usage [--days N]    k2 compute events [--limit N]
+  k2 compute usage [--days N]    k2 compute events --audit [--limit N]
+                   the audit log (plain `events` shows job events since 0.46.7)
 Node admin (agents need "Allow this agent to operate compute nodes"):
   k2 compute node health <node> [--json]       uptime, disk, RAM, FileVault, update state
   k2 compute node policy <node> show
@@ -22324,7 +22340,13 @@ elif verb == "jobs":
 elif verb == "get":
     j = v
     print("job %s on %s: %s%s" % (j["short"], j.get("node"), j["state"], (" (%s)" % j["reason"]) if j.get("reason") else ""))
-    print("  argv: %s" % " ".join(j.get("argv") or []))
+    # 0.46.7: a long command (an inline base64 script) is summarized;
+    # --full prints all of it.
+    argv = " ".join(j.get("argv") or [])
+    if os.environ.get("K2_CP_FULL") == "1" or len(argv) <= 160:
+        print("  argv: %s" % argv)
+    else:
+        print("  argv: %s… (%d chars; --full for all of it)" % (argv[:120], len(argv)))
     # Tiers (0.46.5): shown when not Normal, or when the server lowered it.
     ctl = j.get("ctl") or {}
     if j.get("tierAsked") and j.get("tierAsked") != j.get("tier"):
@@ -24800,11 +24822,13 @@ cmd_compute() {
             if [ "$sub" = "status" ] && { [ -z "${1:-}" ] || [ "${1#-}" != "$1" ]; }; then
                 cmd_compute_status "$@"
             fi
-            [ -n "${1:-}" ] || { echo "usage: k2 compute get <job> [--json]" >&2; exit 2; }
+            [ -n "${1:-}" ] || { echo "usage: k2 compute get <job> [--full] [--json]" >&2; exit 2; }
+            local gfull=0 ga
+            for ga in "$@"; do [ "$ga" = "--full" ] && gfull=1; done
             _CP_404_EXIT=4 _compute_call GET /cli/compute/jobs/get "job=$(urlencode "$1")"
             # --json: the one result object (compute B), as run --json prints.
             [ "$as_json" = "1" ] && { printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin).get("result"), indent=2))'; exit 0; }
-            _compute_render get
+            K2_CP_FULL="$gfull" _compute_render get
             ;;
         fetch) cmd_compute_fetch "$@" ;;
         test) cmd_compute_test "$@" ;;
@@ -24832,11 +24856,14 @@ cmd_compute() {
             # 0.46.7 (CE-20): --all-mine cancels this session's jobs that
             # match (--workspace-all: every job of the workspace); queued
             # only unless --force.
-            local cjob="" force=0 scope="" ctag="" cstate="" cnode="" cws=""
-            local cusage="usage: k2 compute cancel <job> [--force]  |  k2 compute cancel --all-mine|--workspace-all [--tag T] [--state queued|running|any] [--node N] [--force]"
+            local cjob="" force=0 scope="" ctag="" cstate="" cnode="" cws="" ifq=0
+            local cusage="usage: k2 compute cancel <job> [--force|--if-queued]  |  k2 compute cancel --all-mine|--workspace-all [--tag T] [--state queued|running|any] [--node N] [--force]"
             while [ $# -gt 0 ]; do
                 case "$1" in
                     --force|-f) force=1; shift ;;
+                    # 0.46.7: cancel only while queued; a started job is
+                    # reported and left running, exit 0 (for scripts).
+                    --if-queued) ifq=1; shift ;;
                     --all-mine) scope="session"; shift ;;
                     --workspace-all) scope="workspace"; shift ;;
                     --tag) ctag="${2:-}"; shift 2 ;;
@@ -24878,9 +24905,29 @@ for s in v.get("skipped") or []:
                 exit 0
             fi
             [ -n "$cjob" ] || { echo "$cusage" >&2; exit 2; }
+            [ "$ifq" = "1" ] && [ "$force" = "1" ] && { echo "$cusage (--if-queued or --force, not both)" >&2; exit 2; }
             local if_state="queued"
             [ "$force" = "1" ] && if_state=""
-            _compute_call POST /cli/compute/jobs/cancel "$(_compute_json K2_CJ_job="$cjob" K2_CJ_ifState="$if_state")"
+            if [ "$ifq" = "1" ]; then
+                local craw
+                craw="$(_compute_send POST /cli/compute/jobs/cancel "$(_compute_json K2_CJ_job="$cjob" K2_CJ_ifState=queued)")"
+                _compute_split "$craw"
+                if [ "$_CP_STATUS" = "409" ] && printf '%s' "$_CP_BODY" | grep -Eq '"code":"(job_started|already_ended)"'; then
+                    [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+                    printf '%s' "$_CP_BODY" | K2_CP_JOB="$cjob" python3 -c '
+import json, os, sys
+e = (json.load(sys.stdin).get("error") or {})
+job = os.environ["K2_CP_JOB"][:8]
+if e.get("code") == "already_ended":
+    print("not cancelled: %s already ended (%s)" % (job, e.get("hint")))
+else:
+    print("not cancelled: %s already started; left running (k2 compute cancel %s --force stops it)" % (job, job))'
+                    exit 0
+                fi
+                [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
+            else
+                _compute_call POST /cli/compute/jobs/cancel "$(_compute_json K2_CJ_job="$cjob" K2_CJ_ifState="$if_state")"
+            fi
             [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
             printf '%s' "$_CP_BODY" | K2_CP_JOB="$cjob" python3 -c '
 import json, os, sys
@@ -25053,11 +25100,82 @@ print("Allow managing compute nodes: %s for %s%s" % ("on" if on else "off", v["w
             _compute_render usage
             ;;
         events)
-            local limit=50
-            [ "${1:-}" = "--limit" ] && limit="${2:-50}"
-            _compute_call GET /cli/compute/events "limit=$(urlencode "$limit")" tcp
-            [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
-            _compute_render events
+            # 0.46.7 (compute feedback part 2, item 4): your jobs' events
+            # (queued, started, finished with exit, requeued, moved), so an
+            # agent follows them without polling logs. --json = NDJSON.
+            # --audit: the owner's audit log (what `events` was before).
+            local limit="" audit=0 efollow=0 emine=0 etag="" esince="" emax=""
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --audit) audit=1; shift ;;
+                    --limit) limit="${2:-}"; shift 2 ;;
+                    --follow|-f) efollow=1; shift ;;
+                    --mine) emine=1; shift ;;
+                    --tag) etag="${2:-}"; shift 2 ;;
+                    --since) esince="${2:-}"; shift 2 ;;
+                    --max-wait) emax="${2:-}"; shift 2 ;;
+                    --json) shift ;;
+                    *) echo "usage: k2 compute events [--follow] [--mine] [--tag T] [--since CURSOR] [--limit N] [--max-wait D] [--json]  |  k2 compute events --audit [--limit N]" >&2; exit 2 ;;
+                esac
+            done
+            if [ "$audit" = "1" ]; then
+                _compute_call GET /cli/compute/events "limit=$(urlencode "${limit:-50}")" tcp
+                [ "$as_json" = "1" ] && { printf '%s\n' "$_CP_BODY"; exit 0; }
+                _compute_render events
+                exit 0
+            fi
+            local eq="events=1" ews edeadline=""
+            [ "$emine" = "1" ] && eq="$eq&mine=1"
+            [ -n "$etag" ] && eq="$eq&tag=$(urlencode "$etag")"
+            ews="$(_compute_ws "")"
+            [ -n "$ews" ] && eq="$eq&workspace=$(urlencode "$ews")"
+            [ -n "$emax" ] && edeadline=$(( $(date +%s) + $(_compute_secs "$emax") ))
+            local cursor="$esince" first=1 cfile
+            cfile="$(mktemp -t k2-compute-events-XXXXXX)"
+            trap 'rm -f "$cfile"' EXIT
+            while :; do
+                local q="$eq" w=0
+                if [ -n "$cursor" ]; then
+                    q="$q&after=$(urlencode "$cursor")"
+                elif [ "$first" = "1" ] && [ "$efollow" = "0" ]; then
+                    q="$q&last=$(urlencode "${limit:-20}")"
+                fi
+                if [ "$efollow" = "1" ]; then
+                    w=20
+                    if [ -n "$edeadline" ]; then
+                        local left=$(( edeadline - $(date +%s) ))
+                        [ "$left" -lt 0 ] && left=0
+                        [ "$left" -lt "$w" ] && w="$left"
+                    fi
+                    q="$q&wait=$w"
+                fi
+                _compute_call GET /cli/compute/jobs "$q"
+                printf '%s' "$_CP_BODY" | K2_CP_JSON="$as_json" K2_CP_CURSOR_FILE="$cfile" python3 -c '
+import json, os, sys, time
+v = json.load(sys.stdin)
+for e in v.get("events") or []:
+    if os.environ.get("K2_CP_JSON") == "1":
+        print(json.dumps(e, separators=(",", ":")))
+    else:
+        tail = ""
+        if e.get("event") == "finished":
+            tail = ": %s" % e.get("state")
+            if e.get("exit") is not None:
+                tail += " exit %s" % e["exit"]
+            if e.get("reason"):
+                tail += " (%s)" % e["reason"]
+        print("%s  %s  %-9s on %s%s" % (time.strftime("%H:%M:%S", time.localtime(e.get("at") or 0)), e.get("short"), e.get("event"), e.get("node") or "?", tail))
+    sys.stdout.flush()
+open(os.environ["K2_CP_CURSOR_FILE"], "w").write(str(v.get("cursor")))'
+                cursor="$(cat "$cfile")"
+                first=0
+                [ "$efollow" = "1" ] || break
+                if [ -n "$edeadline" ] && [ "$(date +%s)" -ge "$edeadline" ]; then
+                    echo "[k2 compute] --max-wait passed; continue with: k2 compute events --follow --since $cursor" >&2
+                    exit 0
+                fi
+            done
+            echo "[k2 compute] next: k2 compute events --follow --since $cursor" >&2
             ;;
         local) cmd_compute_local "$@" ;;
         *)
@@ -45858,6 +45976,25 @@ CANCEL
   the line to stop it: k2 compute cancel <job> --force. So a cancel you
   meant for a waiting job never kills one that just began. The event log
   and k2 compute get record who asked for the cancel.
+  k2 compute cancel <job> --if-queued cancels it only while it waits; a
+  job that already started is reported ("already started; left running")
+  and the exit is 0, so a script can call it without checking first.
+
+EVENTS (0.46.7)
+  k2 compute events --follow --json prints one line per event of every
+  job of your workspace as it happens, instead of polling logs:
+    {"cursor":812,"at":…,"event":"finished","job":"…","short":"ab12cd34",
+     "node":"k2n7-vin","state":"done","exit":0,"reason":null}
+  event: queued, started, finished, requeued (an infrastructure retry),
+  moved (to another node). A finished job: state done with its exit code
+  (non-zero = the command failed), or failed / timeout / cancelled /
+  interrupted with a reason (mem_cap, stalled, queue_timeout, …).
+  --mine: only the jobs this session sent; --tag T: one tag's. Without
+  --follow: the newest 20 (--limit N). --follow prints only events after
+  now (or after --since CURSOR) and never exits on its own, so in a shell
+  with a time limit: --max-wait 9m (exit 0 when it passes, with the line to
+  continue), then again with --since <the last cursor you saw>.
+  (k2 compute events used to be the audit log: that is events --audit.)
   Many at once (0.46.7): k2 compute cancel --all-mine [--tag T]
   [--state queued|running|any] [--node N] [--force] cancels the jobs THIS
   session sent (this terminal's passport; jobs from an earlier session

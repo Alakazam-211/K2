@@ -1569,6 +1569,70 @@ pub fn last_job_event(conn: &Connection, job_id: &str, kind: &str) -> Option<(St
     .ok()
 }
 
+/// The event kinds a job's own stream shows (`k2 compute events`,
+/// prd-compute-easy-mode-0467 feedback part 2 item 4).
+pub const JOB_STREAM_KINDS: &[&str] = &[
+    "job_submit",
+    "job_start",
+    "job_end",
+    "job_queue_timeout",
+    "job_unknown",
+    "job_lost",
+    "job_cancel",
+    "job_retry",
+    "job_requeue",
+    "job_move",
+];
+
+/// Job events after `after` (an event id; negative = the newest `limit`),
+/// oldest first: only the kinds in
+/// [`JOB_STREAM_KINDS`], only jobs of `workspace_id` (when given), of
+/// `session_id` (when given) and with `tag` (when given). Joined with the
+/// job row, so a job deleted since drops out.
+pub fn job_events_after(
+    conn: &Connection,
+    workspace_id: Option<&str>,
+    session_id: Option<&str>,
+    tag: Option<&str>,
+    after: i64,
+    limit: i64,
+) -> Vec<EventRow> {
+    let kinds = JOB_STREAM_KINDS.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(",");
+    let Ok(mut stmt) = conn.prepare(&format!(
+        "SELECT e.id, e.at, e.actor, e.kind, e.node_id, j.workspace_id, e.job_id, e.detail_json FROM compute_events e \
+         JOIN compute_jobs j ON j.id = e.job_id WHERE e.id > ?1 AND e.kind IN ({kinds}) \
+         AND (?2 IS NULL OR j.workspace_id = ?2) AND (?3 IS NULL OR j.session_id = ?3) \
+         AND (?4 IS NULL OR json_extract(j.plan_json, '$.k2ctl.tag') = ?4) ORDER BY e.id {} LIMIT ?5",
+        if after < 0 { "DESC" } else { "ASC" }
+    )) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![after, workspace_id, session_id, tag, limit.clamp(1, 500)], |r| {
+        let d: String = r.get(7)?;
+        Ok(EventRow {
+            id: r.get(0)?,
+            at: r.get(1)?,
+            actor: r.get(2)?,
+            kind: r.get(3)?,
+            node_id: r.get(4)?,
+            workspace_id: r.get(5)?,
+            job_id: r.get(6)?,
+            detail: serde_json::from_str(&d).unwrap_or(serde_json::Value::Null),
+        })
+    });
+    let mut out: Vec<EventRow> = rows.map(|rows| rows.filter_map(Result::ok).collect()).unwrap_or_default();
+    if after < 0 {
+        out.reverse();
+    }
+    out
+}
+
+/// The newest event id (0 when none): where a stream that starts "now"
+/// begins.
+pub fn last_event_id(conn: &Connection) -> i64 {
+    conn.query_row("SELECT COALESCE(MAX(id), 0) FROM compute_events", [], |r| r.get(0)).unwrap_or(0)
+}
+
 pub fn events(conn: &Connection, limit: i64) -> Vec<EventRow> {
     let Ok(mut stmt) = conn.prepare(
         "SELECT id, at, actor, kind, node_id, workspace_id, job_id, detail_json FROM compute_events \

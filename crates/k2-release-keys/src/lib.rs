@@ -46,9 +46,22 @@ pub struct TrustedKey {
 }
 
 // BEGIN UPDATER_KEYS (written by scripts/updater-key-ceremony.sh pubkeys)
-/// The update keys: U2 (primary) then U3 (backup). Empty until the SS5 key
-/// ceremony lands; an empty list refuses every update.
-pub const UPDATER_KEYS: &[TrustedKey] = &[];
+/// The update keys: one primary per signing Mac, each made inside that Mac's
+/// `_k2sign` user (U2 on z3mbpZ, U2b on z3mbp; a lost Mac is revoked by
+/// dropping its key alone), then U3 (offline backup, in Rosson's password
+/// manager), from the update-key ceremony.
+pub const UPDATER_KEYS: &[TrustedKey] = &[
+    TrustedKey {
+        role: "primary",
+        key_id: "76CA14D3B7EE2B69",
+        public_key_b64: "RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv",
+    },
+    TrustedKey {
+        role: "backup",
+        key_id: "5101A5781A5102A4",
+        public_key_b64: "RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y",
+    },
+];
 // END UPDATER_KEYS
 
 /// U1, the retired update key `E9111446F65EBB05` (the minisign key line).

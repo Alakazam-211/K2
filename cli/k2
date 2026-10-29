@@ -4389,7 +4389,7 @@ cmd_daemon_uninstall() {
 # the copies drift (also scripts/install-daemon.sh). Written only by
 # scripts/updater-key-ceremony.sh pubkeys. Empty until the key ceremony
 # lands: then `k2 daemon install` refuses every binary.
-_DAEMON_UPDATE_PUBKEYS=""
+_DAEMON_UPDATE_PUBKEYS="RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y"
 # Releases before this carry no .sig2 (signed with the retired key only).
 _DAEMON_FIRST_U2_VERSION="0.46.6"
 

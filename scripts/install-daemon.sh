@@ -28,7 +28,7 @@ set -eu
 # the copies drift. Written only by scripts/updater-key-ceremony.sh pubkeys.
 # Empty until the key ceremony lands: then this installer refuses every
 # binary. Not overridable from the environment.
-K2_DAEMON_PUBKEYS=""
+K2_DAEMON_PUBKEYS="RWRpK+630xTKdopKvlpWVqvnEwqyK1CZ+F5deeRjpGA2ywyWS8NnOrpv RWSkAlEaeKUBUZhQA52GoMLa0rt8KLdEoto26gLHRpm9QIC5ColsvG/Y"
 # Releases before this carry no .sig2 (signed with the retired key only).
 K2_FIRST_U2_VERSION="0.46.6"
 

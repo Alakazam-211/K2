@@ -239,8 +239,12 @@ fn a_push_uploads_once_moves_the_channel_and_k2_answers_tauri() {
         let conn = h.lock();
         store::checkins(&conn, &f.app_id, "2000-01-01").expect("rows")
     };
-    let dyn_row = rows.iter().find(|r| r.platform == "darwin-aarch64").expect("dynamic row");
-    assert_eq!((dyn_row.checks, dyn_row.installs), (2, 1), "{rows:?}");
+    // Two dynamic checks (one per caller version), one install (the same
+    // id on the same day counts once, whatever version it was on).
+    let mac: Vec<_> = rows.iter().filter(|r| r.platform == "darwin-aarch64").collect();
+    assert_eq!(mac.iter().map(|r| r.checks).sum::<i64>(), 2, "{rows:?}");
+    assert_eq!(mac.iter().map(|r| r.installs).sum::<i64>(), 1, "{rows:?}");
+    assert!(mac.iter().any(|r| r.version == "1.3.0") && mac.iter().any(|r| r.version == "1.4.0"), "counted by version: {rows:?}");
     // The same version again is refused; an older one too.
     let (st, v) = push(&f, "1.4.0", "stable", json!([{ "platform": "darwin-aarch64", "path": mac }, { "platform": "windows-x86_64", "path": win }]));
     assert_eq!((st, code(&v)), (409, "version_exists"));

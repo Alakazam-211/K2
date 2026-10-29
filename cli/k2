@@ -438,7 +438,9 @@ _cli_tool_id_for_verb() {
         daemon) echo "daemon-admin" ;;
         users) echo "users-admin" ;;
         api-key) echo "api-key" ;;
-        app|skin|skin-token) echo "skin" ;;
+        # 0.46.7: `k2 capabilities` reads App and compute facts as the
+        # caller (a passport: its own workspace's nodes and Apps).
+        app|skin|skin-token|capabilities) echo "skin" ;;
         # Remote Session owner/admin surface (Layer 0 + grants + shell PTY).
         # Locked id: cannot Open; needs owner/admin or grant token server-side.
         remote-session) echo "remote-session" ;;
@@ -8480,6 +8482,18 @@ Make and ship:
                                        k2 app updates --help.
 
 See and run it:
+  k2 app status <app-id> [--no-checks] [--public] [--json]
+                                       How the App is doing, in one answer:
+                                       deploy, health, its host.checks, errors,
+                                       resources, door, hosts, phone, and the
+                                       next command for each problem. Exit 0
+                                       green, 1 red, 2 yellow (k2 app status
+                                       --help).
+  k2 explain <id>                      What a refusal id means and its fix
+                                       (k2 explain lists them; no daemon).
+  k2 capabilities [--node N] [--json]  What this server can do for Apps
+                                       before you try (each "no" names the
+                                       fix and the refusal id).
   k2 app list [--workspace WS]         Apps, state, live Seed, URL, and the
                                        engine each went live on ([re-host
                                        due] after a K2 update).
@@ -17343,9 +17357,12 @@ for r in rows:
 }
 
 cmd_app() {
+    # TC-19: App refusals carry the registry's fix (`_compute_fail`).
+    _K2_REFUSAL_AREA=app
     case "${1:-}" in
         init) shift; cmd_app_init "$@" ;;
         validate) shift; cmd_app_validate "$@" ;;
+        status) shift; cmd_app_status "$@" ;;
         build) shift; cmd_app_build "$@" ;;
         install) shift; cmd_app_install "$@" ;;
         deploy) shift; cmd_app_deploy "$@" ;;
@@ -24271,11 +24288,17 @@ _compute_split() {
 
 # Print the refusal and exit: 2 for a bad request, 3 for everything else
 # (infra and permission problems; a test failure is never exit 3).
+# 0.46.7 (prd-tauri-core-0467-v1 TC-19): an App refusal (`_K2_REFUSAL_AREA`
+# app) whose id is in the registry also carries `next` (the fix) and
+# `explain` ("k2 explain <id>"), and, unless the command asked for --json,
+# a `fix: <next>` line follows (before K2's own Ask with: line). Exit codes
+# are unchanged.
 _compute_fail() {
-    local status="$1" body="$2" line=""
+    local status="$1" body="$2" line="" rows=""
+    [ "${_K2_REFUSAL_AREA:-}" = app ] && rows="$(_k2_refusals_json 2>/dev/null)"
     if [ -n "$body" ]; then
-        line="$(printf '%s' "$body" | python3 -c '
-import json, sys
+        line="$(printf '%s' "$body" | K2_RF_ROWS="$rows" K2_RF_JSON="${_K2_ARGS_JSON:-0}" python3 -c '
+import json, os, sys
 raw = sys.stdin.read()
 try:
     v = json.loads(raw)
@@ -24283,9 +24306,23 @@ except Exception:
     print("daemon_error: " + raw[:200]); sys.exit(0)
 e = v.get("error") if isinstance(v, dict) else None
 if isinstance(e, dict):
-    print(json.dumps({"error": e.get("code", "error"), "hint": e.get("hint", "")}))
+    out = {"error": e.get("code", "error"), "hint": e.get("hint", "")}
 else:
-    print(json.dumps({"error": "error", "hint": str(e)}))
+    out = {"error": "error", "hint": str(e)}
+row = None
+try:
+    reg = json.loads(os.environ.get("K2_RF_ROWS") or "null")
+except Exception:
+    reg = None
+if isinstance(reg, dict) and out["error"] != "error":
+    code = out["error"]
+    row = next((r for r in reg.get("rows", []) if r["id"] == code), None) or next((r for r in reg.get("rows", []) if code in r.get("aliases", [])), None)
+if row:
+    out["next"] = row["fix"]
+    out["explain"] = "k2 explain " + row["id"]
+print(json.dumps(out))
+if row and os.environ.get("K2_RF_JSON") != "1":
+    print("fix: " + row["fix"])
 ' 2>/dev/null)"
     fi
     [ -z "$line" ] && line="{\"error\":\"daemon_unreachable\",\"hint\":\"no answer from the K2 daemon (status ${status:-none})\"}"
@@ -40511,6 +40548,8 @@ cmd_help() {
         users)                    _users_usage ;;
         remote-session)           cmd_help_remote_session ;;
         study)                    _study_usage ;;
+        explain)                  _explain_usage ;;
+        capabilities)             _capabilities_usage ;;
         deprecated|--deprecated)  cmd_help_deprecated ;;
         '')                       cmd_help_v2_daily ;;
         *)                        cmd_help_v2_daily ;;
@@ -43409,6 +43448,36 @@ cmd_schema() {
       ]
     },
     {
+      "name": "app status",
+      "usage": "k2 app status <app-id> [--no-checks] [--public] [--json]",
+      "description": "How an App is doing in one answer: deploy, health, its host.checks, errors in the last hour, resources, door, hosts, phone, the update feed, and next: one exact command per red or yellow item. Exit 0 green, 1 red, 2 yellow, 3 refused. App output is never printed.",
+      "args": [{"name": "app-id", "required": true}],
+      "flags": [
+        {"name": "--no-checks", "arg": null, "description": "Show the host.checks run recorded when the live deploy switched in; run none now."},
+        {"name": "--public", "arg": null, "description": "Run host.checks through the App's public URL (TLS and the relay), not on this machine."},
+        {"name": "--json", "arg": null, "description": "{schema: 1, verdict, deploy, health, checks, errors, resources, door, hosts, phone, updates, next}."}
+      ]
+    },
+    {
+      "name": "explain",
+      "usage": "k2 explain [<id>] [--json]",
+      "description": "What an App refusal id means (the error field a refused k2 app command prints), the fix, who fixes it, the exit code. With no id: every id by area. No daemon. Exit 4 for an unknown id.",
+      "args": [{"name": "id", "required": false}],
+      "flags": [
+        {"name": "--json", "arg": null, "description": "{id, area, http, exit, what, fix, who, askable, status, aliases}."}
+      ]
+    },
+    {
+      "name": "capabilities",
+      "usage": "k2 capabilities [--node <name>] [--json]",
+      "description": "What this server can do for Apps before you try: engines, protocols, ports, domains, simulators, Postgres, mail, push keys (set or not), the update feed, limits, and the compute nodes your workspace may use. Each no row names the reason, the fix and the refusal id.",
+      "args": [],
+      "flags": [
+        {"name": "--node", "arg": "name", "description": "Only that compute node's row."},
+        {"name": "--json", "arg": null, "description": "{schema: 1, box: [...], compute: [...], doctor}; a row is {cap, ok, detail, missing?: {reason, fix, code}}."}
+      ]
+    },
+    {
       "name": "app sdk add",
       "usage": "k2 app sdk add <app-folder> [--sew] [--json]",
       "description": "Copy @k2/server (this K2's version) into <app-folder>/vendor/ and add \"@k2/server\": \"file:vendor/k2-server-<version>.tgz\" to its package.json (made when missing); then npm install and import { fromEnv } from '@k2/server'. --sew also copies @sew/client, voice, channel, e2ee and bff (Sew 0.5.0+ on this box), pins their links in npm overrides and prints the npm i line for their registry deps and peers. Idempotent; never runs npm or uses the network; writes only vendor/ and package.json. POST /cli/app/sdk/add {folder, sew}. Owner, Admin, a K2 terminal, or the App's agent with Build and run Apps (its own workspace's folders).",
@@ -44681,11 +44750,322 @@ cmd_schema() {
 EOF
 }
 
+# ── App refusal ids, `k2 explain`, `k2 capabilities`, `k2 app status` ──
+# (prd-tauri-core-0467-v1 TC-15, TC-17, TC-18, TC-19, 0.46.7). The rows
+# live in k2-core (`refusals`); contract-gen writes them into this file as
+# `_k2_refusals_json` (and `_study_page_app_errors`), so `k2 explain` and
+# the refusal printer work with no daemon.
+
+# TC-19: set by `cmd_app` and `cmd_capabilities` so `_compute_fail` adds
+# the registry's `next` and `explain` to an App refusal (never to another
+# family's: the generic ids' fixes are written for Apps).
+_K2_REFUSAL_AREA=""
+
+# `k2 explain [<id>] [--json]`.
+_explain_usage() {
+    cat <<'EOF'
+k2 explain [<id>] [--json]
+
+What an App refusal id means and how to fix it. Every App route refuses
+with a stable id: the "error" field of the JSON line a refused k2 app
+command prints (with a "fix:" line after it). Look the id up here.
+
+  k2 explain                 every id, by area
+  k2 explain <id>            what happened, the fix, who fixes it
+  k2 explain <id> --json     the same, one JSON object:
+                             {id, area, http, exit, what, fix, who,
+                              askable, status, aliases}
+
+Ids are lowercase with underscores (apps_manage_off). In a row: "exit" is
+the code the refused command exits with; "who" is who can fix it (you,
+the owner, an Admin, the person signed in, or K2 itself); "askable" means
+k2 permission request can ask for it (the refusal ends with an Ask with:
+line to run). "retired" ids are ones only older K2 servers send; they
+still explain. Works with the daemon down. All of them on one page:
+k2 study app-errors.
+This command's own exit codes: 0 found, 4 unknown id, 2 bad usage.
+EOF
+}
+
+cmd_explain() {
+    local id="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _explain_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; echo "usage: k2 explain [<id>] [--json]" >&2; exit 2 ;;
+            *) [ -z "$id" ] || { echo "usage: k2 explain [<id>] [--json]" >&2; exit 2; }; id="$1"; shift ;;
+        esac
+    done
+    # The Markdown kit's ids (MPC-Ennn, MPCE-Ennn) are the kit's registry:
+    # `k2 doc explain`, once Markdown tier 0 is on this K2 (kit-HOST-ERRORS).
+    case "$(printf '%s' "$id" | tr '[:lower:]' '[:upper:]')" in
+        MPC-*|MPCE-*)
+            if declare -F cmd_doc >/dev/null 2>&1; then
+                if [ "$json_out" = 1 ]; then cmd_doc explain "$id" --json; else cmd_doc explain "$id"; fi
+                return $?
+            fi
+            echo "k2 explain: $id is a Markdown kit id; this K2 has no k2 doc yet (it arrives with Markdown files)" >&2
+            exit 4
+            ;;
+    esac
+    _k2_refusals_json | K2_EX_ID="$id" K2_EX_JSON="$json_out" python3 -c '
+import json, os, sys, textwrap
+reg = json.load(sys.stdin)
+want = os.environ.get("K2_EX_ID", "").strip().lower()
+as_json = os.environ.get("K2_EX_JSON") == "1"
+rows = reg["rows"]
+if not want:
+    if as_json:
+        print(json.dumps({"schema": reg["schema"], "areas": reg["areas"], "rows": rows}))
+        sys.exit(0)
+    print("Refusal ids by area. k2 explain <id> prints what happened and the fix.")
+    for a in reg["areas"]:
+        ids = [r["id"] + (" (retired)" if r["status"] == "retired" else "") for r in rows if r["area"] == a["area"]]
+        if not ids:
+            continue
+        print()
+        print("%s (%s):" % (a["area"], a["about"]))
+        print(textwrap.fill(", ".join(ids), width=76, initial_indent="  ", subsequent_indent="  ", break_on_hyphens=False))
+    sys.exit(0)
+row = next((r for r in rows if r["id"] == want), None) or next((r for r in rows if want in r.get("aliases", [])), None)
+if row is None:
+    if as_json:
+        print(json.dumps({"error": "unknown_id", "id": want, "hint": "no App refusal by that id: k2 explain lists them"}))
+    else:
+        print("k2 explain: no App refusal id %r (k2 explain lists them; k2 study app-errors has all of them)" % want, file=sys.stderr)
+    sys.exit(4)
+if as_json:
+    print(json.dumps(row))
+    sys.exit(0)
+who = {"agent": "you (the caller)", "owner": "the server'"'"'s owner", "admin": "the owner or an Admin",
+       "person": "the person signed in", "k2": "K2 (wait, retry or update)"}.get(row["who"], row["who"])
+print("%s  (%s · HTTP %s · exit %s)" % (row["id"], row["area"], row["http"], row["exit"]))
+if row["status"] == "retired":
+    print("retired: this K2 no longer sends it; older K2 servers may.")
+print(textwrap.fill(row["what"], width=76))
+print(textwrap.fill("fix: " + row["fix"], width=76, subsequent_indent="     "))
+print("who fixes it: " + who)
+if row.get("askable"):
+    print("can be asked for: yes (the error ends with Ask with: k2 permission request …; run it as printed)")
+if row.get("aliases"):
+    print("also sent as: " + ", ".join(row["aliases"]))
+'
+}
+
+# `k2 capabilities [--json] [--node <n>]` (TC-17).
+_capabilities_usage() {
+    cat <<'EOF'
+k2 capabilities [--json] [--node <name>]
+
+What this K2 server can do for Apps, before you try: one row per
+capability, "ok" or "no". A "no" row names the reason, the fix and the
+refusal id you would hit (k2 explain <id>).
+
+  this box   Apps on, engines (walled, open, static), protocols, public
+             ports, custom domains, phone simulators, Postgres versions,
+             mail, push keys per App (set or not, never the keys), the
+             update feed, limits (Seed, archive, upload part, disk guard)
+  compute    each node your workspace may use: OS, CPU type, free slots,
+             Xcode, Android SDK, tools
+
+  --node <name>  only that compute node's row (k2 compute nodes)
+  --json         {schema: 1, box: [...], compute: [...], doctor: {...}};
+                 a row is {cap, ok, detail, missing?: {reason, fix, code}}
+
+Rows to look for: protocols.other (HTTP/2 to the App, gRPC, UDP),
+ports.public, engine.static, updates, push.<app> (one per App you see:
+its APNs and FCM keys set or not), node.<name>.
+Reasons: not_built (K2 doesn't do it yet), owner_disabled (the owner
+turned it off), level (your access doesn't reach it: ask the owner),
+not_prepared (the box isn't set up for it yet), hardware (this machine
+can't).
+k2 app doctor stays the box's setup check; its result is in "doctor".
+Exit codes: 0, 3 refused, 2 bad usage.
+EOF
+}
+
+cmd_capabilities() {
+    local json_out=0 node=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --node) [ $# -ge 2 ] || { echo "usage: k2 capabilities [--json] [--node <name>]" >&2; exit 2; }; node="$2"; shift 2 ;;
+            -h|--help) _capabilities_usage; return 0 ;;
+            *) echo "usage: k2 capabilities [--json] [--node <name>]" >&2; exit 2 ;;
+        esac
+    done
+    _K2_REFUSAL_AREA=app
+    local q=""
+    [ -n "$node" ] && q="node=$(urlencode "$node")"
+    _compute_call GET /cli/capabilities "$q"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+def row(r):
+    mark = "ok" if r.get("ok") else "no"
+    print("  %-2s  %-22s %s" % (mark, r.get("cap", ""), r.get("detail") or ""))
+    m = r.get("missing")
+    if m:
+        code = (" (k2 explain %s)" % m["code"]) if m.get("code") else ""
+        print("        %s: %s%s" % (m.get("reason", ""), m.get("fix", ""), code))
+print("This box")
+for r in v.get("box") or []:
+    row(r)
+comp = v.get("compute") or []
+print()
+print("Compute nodes your workspace may use" + ("" if comp else ": none (k2 study compute)"))
+for r in comp:
+    row(r)
+d = v.get("doctor") or {}
+if d:
+    print()
+    bad = ", ".join(d.get("failing") or [])
+    print("Box setup (k2 app doctor): %s%s" % ("ready" if d.get("ready") else "not ready", (" — failing: " + bad) if bad else ""))
+'
+}
+
+# `k2 app status <app-id> [--json] [--no-checks] [--public]` (TC-15).
+_app_status_usage() {
+    cat <<'EOF'
+k2 app status <app-id> [--json] [--no-checks] [--public]
+
+How an App is doing, in one answer: everything you would otherwise check
+one command at a time after a deploy.
+
+  deploy     the live Seed (version, commit, who, when) and the last deploy's result
+  health     a health check now (status and time), uptime, restarts
+  checks     the App's own host.checks from its manifest, run now
+  errors     failures in the last hour, by kind (crash, health, build, deploy)
+  resources  the App's disk and memory, and the box's disk level
+  door       outside hosts refused in the last hour; requests waiting for the owner
+  hosts      its label, URL and custom domains
+  phone      phone pairing, push keys (set or not) and devices
+  updates    the App's desktop update feed (on servers that have one)
+  next       one exact command for each red or yellow item
+
+  --no-checks  don't run host.checks; show the run recorded when the live
+               deploy switched in (it may be old)
+  --public     run host.checks through the App's public URL (proves TLS
+               and the relay), not on this machine. Not with --no-checks.
+  --json       {schema: 1, verdict, deploy, health, checks, errors,
+                resources, door, hosts, phone, updates, next: [{level,
+                part, what, run}]}
+
+Exit codes: 0 green (all good); 1 red (the health check failing, a
+host.check failed, crash looping, nothing live after a deploy); 2 yellow
+and nothing red (a deploy in progress, nothing deployed yet, the last
+deploy failed while the previous version still serves, requests waiting
+for the owner, failures in the last hour); 3 refused (no such App, or not
+yours: k2 explain <id>). A usage mistake also exits 2, with a usage: line.
+Text the App itself produced is never printed: checks say only whether
+the status, header and body matched.
+EOF
+}
+
+cmd_app_status() {
+    local app="" json_out=0 nochecks=0 public=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            --no-checks) nochecks=1; shift ;;
+            --public) public=1; shift ;;
+            -h|--help) _app_status_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; echo "usage: k2 app status <app-id> [--json] [--no-checks] [--public]" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app status <app-id> [--json] [--no-checks] [--public]" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app status <app-id> [--json] [--no-checks] [--public]" >&2; exit 2; }
+    [ "$nochecks" = 1 ] && [ "$public" = 1 ] && { echo "k2 app status: --public runs the checks; it can't go with --no-checks" >&2; exit 2; }
+    local q="app=$(urlencode "$app")"
+    [ "$nochecks" = 1 ] && q="$q&noChecks=1"
+    [ "$public" = 1 ] && q="$q&public=1"
+    _compute_call GET /cli/app/status "$q"
+    local verdict
+    verdict="$(printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("verdict",""))')"
+    if [ "$json_out" = 1 ]; then
+        printf '%s\n' "$_CP_BODY"
+    else
+        printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+d, h, c = v.get("deploy") or {}, v.get("health") or {}, v.get("checks") or {}
+print("%s  %s  (%s)" % (v["app"], v.get("verdict", "").upper(), d.get("state", "")))
+seed, live, last = d.get("seed") or {}, d.get("live") or {}, d.get("last") or {}
+if seed:
+    print("  deploy     Seed %s%s, live since %s by %s, commit %s" % ((seed.get("hash") or "")[:12], (" v" + seed["version"]) if seed.get("version") else "",
+          live.get("liveAt") or "-", live.get("actor") or "-", (live.get("commit") or "-")[:12]))
+else:
+    print("  deploy     nothing deployed yet")
+if last:
+    err = (": " + last["error"]) if last.get("error") else ""
+    print("             last: %s %s %s%s" % (last.get("kind", ""), last.get("id", ""), last.get("result", ""), err[:160]))
+p = h.get("probe")
+if p:
+    st = p.get("status") if p.get("status") is not None else "no answer"
+    print("  health     GET %s: %s in %s ms; up %ss; restarts %s" % (h.get("path"), st, p.get("ms"), h.get("uptimeSecs"), h.get("recentRestarts")))
+else:
+    print("  health     nothing live to probe")
+if c.get("results"):
+    print("  checks     %s of %s failed (%s)" % (c.get("failed", 0), c.get("declared"), c.get("source", "")))
+    for r in c["results"]:
+        got = r.get("status") if r.get("status") is not None else "no answer"
+        extra = "" if r.get("ok") else ("  ✗ %s" % r.get("why"))
+        print("             %-16s GET %s: expect %s, got %s%s" % (r["name"], r["path"], r["expect"], got, extra))
+elif c.get("recorded"):
+    rec = c["recorded"].get("results") or []
+    print("  checks     recorded at the switch: %s of %s failed" % (c.get("failed"), len(rec)))
+elif c.get("error"):
+    print("  checks     %s" % c["error"])
+else:
+    print("  checks     none declared (host.checks in the manifest)")
+e = v.get("errors") or {}
+if "unavailable" in e:
+    print("  errors     unavailable (%s)" % e["unavailable"])
+else:
+    by = ", ".join("%s %s" % (k, n) for k, n in (e.get("byKind") or {}).items()) or "none"
+    print("  errors     last hour: %s" % by)
+r = v.get("resources") or {}
+if "unavailable" in r:
+    print("  resources  unavailable (%s)" % r["unavailable"])
+else:
+    a = r.get("app") or {}
+    disk = a.get("diskBytes")
+    print("  resources  disk %s; box disk level %s" % ("%.1f MB" % (disk / 1e6) if isinstance(disk, (int, float)) else "not measured yet", r.get("level")))
+dr = v.get("door") or {}
+print("  door       egress refused last hour: %s; waiting for the owner: %s" % (dr.get("egressDenied"), dr.get("heldApprovals")))
+ho = v.get("hosts") or {}
+doms = ho.get("domains") or {}
+nd = len(doms.get("domains") or []) if isinstance(doms, dict) else 0
+print("  hosts      %s%s" % (ho.get("url") or ho.get("label") or "-", ("; %s custom domain(s)" % nd) if nd else ""))
+ph = v.get("phone") or {}
+pu, pa = ph.get("push") or {}, ph.get("pairing") or {}
+keys = pu.get("keys") or {}
+print("  phone      pairing %s; push %s (APNs key %s, FCM key %s, %s device(s))" % ("on" if pa.get("on") else "off", "on" if pu.get("on") else "off",
+      "set" if keys.get("apns") else "not set", "set" if keys.get("fcm") else "not set", pu.get("devices", 0)))
+u = v.get("updates") or {}
+print("  updates    feed %s" % (u.get("feed") or "-"))
+nx = v.get("next") or []
+if nx:
+    print("next")
+    for n in nx:
+        print("  [%s] %s: %s" % (n["level"], n["what"], n["run"]))
+'
+    fi
+    case "$verdict" in
+        green) return 0 ;;
+        yellow) exit 2 ;;
+        red) exit 1 ;;
+        *) echo "k2 app status: the daemon gave no verdict" >&2; exit 1 ;;
+    esac
+}
+
 # ── `k2 study` — bounded teaching pages (daemon-optional) ────────────
 # Static in-CLI copy. Not --help. Not a crawl of .k2/wiki or .k2/prds.
 # Runtime cannot cat sibling markdown after install — pages live here.
 
-_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms tauri skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
+_STUDY_TOPIC_IDS="what source map identity send human people auth errors context db mail connect-boundary apps app-deploys app-move app-api app-errors live app-heartbeats app-tickets app-identity app-surfaces app-resources app-runtime app-handover app-push app-pairing app-profile app-chat chat-voice chat-voice-rooms tauri skins feedback-loop ticket-brief zen sidecars sessions llm-tokens llm-accounts publish-framing publish-visibility publish-dev compute compute-shared vault notifications data-sources projects hooks agent-hire garden-data garden-access garden-changes changes sim design db-upgrade jobs folder-trust email-notifications box-move"
 
 _study_usage() {
     cat <<'EOF'
@@ -44703,7 +45083,7 @@ Topics:
   what  source  map  identity  send  human  people  auth  errors
   context  db  mail  connect-boundary  apps  app-deploys  app-move  app-api  live  app-heartbeats  app-tickets
   app-identity  app-surfaces  app-resources  app-runtime  app-handover  app-push  app-pairing  app-profile
-  app-chat  chat-voice  chat-voice-rooms  tauri
+  app-chat  chat-voice  chat-voice-rooms  tauri  app-errors
   skins  feedback-loop  ticket-brief  zen  sidecars  sessions  llm-tokens  llm-accounts  publish-framing
   publish-visibility  publish-dev  compute  compute-shared  vault
   notifications  data-sources  projects  hooks  agent-hire
@@ -44732,6 +45112,7 @@ _study_title() {
         app-deploys) echo "Deploying Apps" ;;
         app-move) echo "Moving your --cmd service to an App" ;;
         app-api) echo "The App API: server SDK and gateway routes" ;;
+        app-errors) echo "App refusals: every id, its fix and who fixes it" ;;
         live) echo "Live surfaces: what an App or a Garden widget can show live" ;;
         app-heartbeats) echo "Heartbeats in an app" ;;
         app-tickets) echo "Tickets in an app" ;;
@@ -44844,6 +45225,7 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-deploys         Host a server App: Seeds, deploys, rollback (beta)
   app-move            Move your --cmd service to an App when ready, step by step
   app-api             An App's server calls: the SDK, every route, passes, refusals
+  app-errors          Every App refusal id: what happened, the fix, who fixes it (k2 explain)
   live                Live surfaces (turns, counts, unread, files…): caps, read + live, never infer
   app-heartbeats      App heartbeats: routes, caps, wait reasons, contract
   app-tickets         App tickets: routes, live ticket_changed frames, contract
@@ -44913,6 +45295,7 @@ _study_page() {
         app-deploys) _study_page_app_deploys ;;
         app-move) _study_page_app_move ;;
         app-api) _study_page_app_api ;;
+        app-errors) _study_page_app_errors ;;
         live) _study_page_live ;;
         app-heartbeats) _study_page_app_heartbeats ;;
         app-tickets) _study_page_app_tickets ;;
@@ -45501,6 +45884,13 @@ RULES: one guest's pass per guest request; send it as Authorization:
   and walls: k2 study app-deploys. Guests and roles: k2 study apps.
 EOF
 }
+# <<< generated
+# The App refusal registry (prd-tauri-core-0467-v1 TC-18), generated from
+# crates/k2-core/src/refusals by contract-gen: `k2 explain`, the refusal
+# printer's `next`/`fix:` and `k2 study app-errors`.
+# >>> generated by contract-gen: refusals (do not edit; run `cargo run -p k2-core --bin contract-gen`)
+_k2_refusals_json() { echo '{"schema":1,"areas":[],"rows":[]}'; }
+_study_page_app_errors() { echo "run contract-gen"; }
 # <<< generated
 
 _study_page_projects() {
@@ -47645,6 +48035,24 @@ IN THE PHONE APP (the guest's own session pass, Authorization: Bearer)
     k2Topic and k2Who (match it to register's who to tell accounts apart).
   6 Sensitive content: send a short line and an id; fetch the rest on open.
 
+THROUGH THE APP'S SERVER (the usual way; the phone talks only to it)
+  The phone sends its token to your App's server; the server calls K2 on
+  its link with that person's own pass:
+    await k2.asGuest(pass).push.register({deviceId, platform, pushToken})
+  Another App's pass is refused on this App's link (401).
+  While the person has a Thread (their chat with an agent) on screen, the
+  server says so every 30 s; conversation is the Thread's id from thread.*:
+    await k2.asGuest(pass).push.viewing({conversation, visible: true})
+  Each call holds that Thread's agent-reply pushes for 90 s from the call
+  (a missed repeat or two is fine); visible: false when they leave it ends
+  it at once. Only that person's own state changes.
+  A guest's own Thread socket can send {"t":"viewing","visible":true}.
+
+A TAURI APP
+  Tauri has no push plugin of its own: add a native one that hands you the
+  APNs or FCM token, send it to your App's server, and register from there
+  as above. Signing and the update feed: k2 study tauri.
+
 FROM THE APP
   On its link (push:send):  await k2.push.send({to: {guest}, title, body,
     data, topic})  then k2.push.status({sendId}); k2.push.devices().
@@ -47669,6 +48077,8 @@ REFUSALS
   channel_unavailable (k2-companion isn't ready)  too_many_recipients
   outside_app_rooms  rate_limited (retryAfterMs)  too_large (4,096 bytes)
   airgap  vault_closed  app_pass_required / cap_not_granted (push.send)
+  skin_room (push.viewing: not a Thread this pass reads)
+  Any id: k2 explain <id>.
 
 WHEN APPLE OR GOOGLE SAY NO
   A gone token removes that device. A token "from another app" before the
@@ -82361,6 +82771,12 @@ _cli_apply_auth_for_verb "${1:-help}" "${2:-}"
 if [ -e "$_K2_PERMISSION_NOTE" ]; then rm -f "$_K2_PERMISSION_NOTE" 2>/dev/null || true; fi
 trap _permission_note_flush EXIT
 
+# TC-19: a refused App command that asked for --json gets the JSON error
+# object only (with next and explain), no plain "fix:" line.
+_K2_ARGS_JSON=0
+for _k2_arg in "$@"; do [ "$_k2_arg" = "--json" ] && _K2_ARGS_JSON=1; done
+unset _k2_arg
+
 case "${1:-help}" in
     fed)
         # Federation V1 (cross-server agent comms). Dark by default.
@@ -83135,8 +83551,8 @@ EOF
             # App runtime verbs (prd-k2-app-runtime-v1 stage 1) own their --help.
             # 0.46.4: `k2 app data` too (put|ls|get|rm|mv). 0.46.6: `k2 app
             # domain` (its custom-domain help, not the App family's) and
-            # `k2 app sdk` (add|status|kit). 0.46.7: `k2 app updates`.
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk|updates)
+            # `k2 app sdk` (add|status|kit). 0.46.7: `k2 app updates`, `k2 app status`.
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk|updates|status)
                 shift; cmd_app "$@"
                 ;;
             # 0.46.7: `k2 app init` and `k2 app links` own their --help.
@@ -83297,6 +83713,15 @@ EOF
         ;;
     study)
         shift; cmd_study "$@"
+        ;;
+    explain)
+        # 0.46.7 (prd-tauri-core-0467-v1 TC-18): an App refusal id → what
+        # happened, the fix, who fixes it. No daemon.
+        shift; cmd_explain "$@"
+        ;;
+    capabilities)
+        # 0.46.7 (TC-17): what this server can do for Apps, before trying.
+        shift; cmd_capabilities "$@"
         ;;
     permission)
         # Permission cards (Beta): unknown, exactly as today, unless the

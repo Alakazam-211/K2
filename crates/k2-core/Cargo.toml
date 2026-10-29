@@ -56,6 +56,9 @@ sim-live-ios = []
 # `db`" error and have to discover the `--features test-util` workaround.
 [dev-dependencies]
 k2-core = { path = ".", features = ["test-util"] }
+# The TEST minisign signer for the update feed's tests (app_updates, TA-16);
+# k2-root-proto never depends on k2-core, so no cycle.
+k2-root-proto = { path = "../k2-root-proto", features = ["test-signer"] }
 # Cert-broker tests mint a real-shaped leaf-first chain with rcgen and set an
 # explicit validity window to drive the renewal-window logic; rcgen's
 # `CertificateParams::not_after` is a `time::OffsetDateTime`. `time` is already
@@ -230,6 +233,11 @@ sha2 = "0.10"
 # OS RNG. Already in the lock tree (the daemon and the shell use the same
 # 0.2).
 getrandom = "0.2"
+# An App's update feed (0.46.7, app_updates): strict SemVer 2.0.0 versions
+# and minisign verify (Tauri's updater signatures). Both already in the
+# lock tree (the daemon uses minisign-verify 0.2; semver via cargo deps).
+semver = "1"
+minisign-verify = "0.2"
 # End-to-end encrypted pushes (prd-e2e-push-v1 rev 2 §3): HPKE RFC 9180 PSK
 # mode, DHKEM(P-256, HKDF-SHA256) / HKDF-SHA256 / AES-256-GCM. rust-hpke 0.12
 # is MIT/Apache-2.0 and pulls only RustCrypto crates already in the tree

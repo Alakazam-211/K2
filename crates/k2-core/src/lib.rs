@@ -66,6 +66,9 @@ pub mod app_settings;
 /// `k2 app init --template tauri|static|node-api` (0.46.7, TC-13): the K2
 /// side of an App written into a repo, never overwriting a file.
 pub mod app_templates;
+/// An App's update feed (0.46.7, prd-tauri-core TC-6 … TC-12): keys,
+/// releases, channels, Tauri's answers and the download host's client.
+pub mod app_updates;
 /// The K2 Connect account server base URL: env, setting, default (0.46.6).
 pub mod connect_db;
 /// Private memory-backed runtime dir (rendered frpc config; K2 vault §10.4).

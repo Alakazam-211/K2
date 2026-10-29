@@ -1160,7 +1160,7 @@ fn manual_rollback_never_passes_a_data_loss_flag_and_explains_a_schema_refusal()
     // Rosson 2026-10-28: the refusal points at the person-only emergency
     // rollback (and an agent's card), never at an invented verb.
     assert!(f.hint.contains("k2 hostchat rollback --accept-data-loss") && f.hint.contains("sew.rollback-data-loss"), "{}", f.hint);
-    assert!(f.hint.contains("from a terminal outside K2"), "{}", f.hint);
+    assert!(f.hint.contains("in a terminal outside K2"), "{}", f.hint);
     assert!(!f.hint.contains("backup list") && !f.hint.contains("backup restore"), "no invented verbs: {}", f.hint);
     assert!(t.ops.argvs().iter().all(|a| !a.contains("accept-data-loss")));
     // Success: the version Sew reports is recorded.

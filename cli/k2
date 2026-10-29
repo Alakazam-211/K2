@@ -18828,6 +18828,7 @@ Usage: k2 workspace design-tab get <workspace>
 Chat and Inbox, for every person and window on this server. Default on.
 Off removes the pinned tab. A Design tab can still be opened from the
 + menu while it is off (an ordinary tab you can close).
+`get` prints `on` or `off` (`on` when nobody has set it).
 `design-mode` is the old name of this command and still works.
 
 Examples:
@@ -18843,10 +18844,14 @@ Usage: k2 workspace mobile-tab get <workspace>
 "Show the Mobile tab": keeps the workspace's Mobile tab (its phone) pinned
 next to Chat and Inbox, for every person and window on this server.
   auto  the default: pinned whenever this server can run a phone
-  on    pinned (still only where this server can run a phone)
+  on    pinned (still only where this server can run a phone); today it
+        acts like auto, it just records that someone chose it
   off   not pinned; the Mobile tab still opens from + or Cmd+Shift+M
         as an ordinary tab you can close
-`get` prints the setting, then whether the tab shows on this server.
+`get` prints the setting, then whether the tab shows on this server:
+  auto (shown)
+  off (not shown)
+  on (not shown: this server cannot run a phone)
 
 Examples:
   k2 workspace mobile-tab get my-app

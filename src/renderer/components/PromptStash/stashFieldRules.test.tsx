@@ -307,3 +307,87 @@ describe('IndexedDB failure: an error, the draft stays; a dropped connection reo
     expect(usePromptStashStore.getState().items.map((x) => x.text)).toEqual(['after', 'before'])
   })
 })
+
+describe('the offer title is one line', () => {
+  it('newlines and whitespace runs collapse to one space before the 200 cap', () => {
+    expect(stashOfferView({ title: '  Weekly\n\nreport \t for\r\nops  ', text: 'x' }).title).toBe('Weekly report for ops')
+    expect(stashOfferView({ title: '\n \t', text: 'x' }).title).toBeNull()
+    // Collapsing comes first: 150 words of "a\n\n" fit once collapsed.
+    const v = stashOfferView({ title: Array.from({ length: 150 }, () => 'a').join('\n\n\n'), text: 'x' })
+    expect(v.title).toBe(Array.from({ length: 150 }, () => 'a').join(' ').slice(0, STASH_OFFER_TITLE_MAX - 1) + '…')
+    expect(Array.from(v.title ?? '').length).toBe(STASH_OFFER_TITLE_MAX)
+  })
+
+  it('the card shows the one line and saves exactly it', async () => {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 1,
+      id: 'offer-title',
+      doc: { id: 'offer-title', kind: 'stash.offer', from: 'k2', body: 'fb', stash: { title: 'Weekly\nreport', text: 'Do it.' }, created_at: 1 },
+    }
+    renderInRoom(
+      room,
+      <ThreadAttachmentSourceProvider value={{ scope: primaryScope(), addr: 'k2' }}>
+        <ThreadBubble item={item} mine={false} author="k2" timeLabel="now" viewer={{ principal: 'owner', aliases: [] }} />
+      </ThreadAttachmentSourceProvider>,
+    )
+    expect(document.querySelector('[data-stash-offer-title]')?.textContent).toBe('Weekly report')
+    fireEvent.click(screen.getByTestId('stash-offer-save'))
+    await waitFor(() => expect(usePromptStashStore.getState().items).toHaveLength(1))
+    expect(usePromptStashStore.getState().items[0].text).toBe('Weekly report\n\nDo it.')
+  })
+})
+
+describe('stash.offer is accepted only from agents', () => {
+  function renderPost(doc: Partial<OverlayThreadItem['doc']>, mine = false): void {
+    const item: OverlayThreadItem = {
+      collection: 'thread',
+      seq: 1,
+      id: 'p1',
+      doc: {
+        id: 'p1',
+        kind: 'stash.offer',
+        from: 'k2',
+        body: 'Plan\n\nDraft the plan.',
+        stash: { title: 'Plan', text: 'Draft the plan.' },
+        created_at: 1,
+        ...doc,
+      },
+    }
+    renderInRoom(
+      room,
+      <ThreadAttachmentSourceProvider value={{ scope: primaryScope(), addr: 'k2' }}>
+        <ThreadBubble item={item} mine={mine} author="someone" timeLabel="now" viewer={{ principal: 'owner', aliases: [] }} />
+      </ThreadAttachmentSourceProvider>,
+    )
+  }
+
+  function expectPlainMessage(): void {
+    expect(screen.queryByTestId('stash-offer-card')).toBeNull()
+    expect(screen.queryByTestId('stash-offer-save')).toBeNull()
+    expect(document.querySelector('[data-zen-bubble]')?.textContent).toContain('Draft the plan.')
+  }
+
+  it('an agent\'s post gets the card', () => {
+    renderPost({})
+    expect(screen.getByTestId('stash-offer-save')).toBeTruthy()
+  })
+
+  it('a person\'s post (author stamp) is a plain message, no button', () => {
+    renderPost({ author: { kind: 'user', login: 'ana' }, from: 'ana' })
+    expectPlainMessage()
+  })
+
+  it('a composed post (via compose) is a plain message, no button, even my own', () => {
+    renderPost({ via: 'compose' })
+    expectPlainMessage()
+    cleanup()
+    renderPost({ via: 'compose', author: { kind: 'owner', login: 'owner' } }, true)
+    expectPlainMessage()
+  })
+
+  it('a post with no sender is a plain message, no button', () => {
+    renderPost({ from: '' })
+    expectPlainMessage()
+  })
+})

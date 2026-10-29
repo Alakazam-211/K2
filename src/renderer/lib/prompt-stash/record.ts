@@ -239,7 +239,10 @@ export interface StashOfferView {
 }
 
 export function stashOfferView(offer: { text: string; title?: string | null }): StashOfferView {
-  const t = offer.title?.trim() ? cutChars(offer.title.trim(), STASH_OFFER_TITLE_MAX) : null
+  // The title is one line: newlines and runs of whitespace become one
+  // space before the cap (K2 Companion's rule).
+  const oneLine = (offer.title ?? '').replace(/\s+/g, ' ').trim()
+  const t = oneLine ? cutChars(oneLine, STASH_OFFER_TITLE_MAX) : null
   const x = cutChars(offer.text, STASH_OFFER_TEXT_MAX)
   const title = t ? t.out : null
   return {

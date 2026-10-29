@@ -21,7 +21,7 @@ import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
 import { HandoffCard } from '@/components/SessionView/HandoffCard'
 import type { HandoffDecideBody, HandoffDecideResult } from '@/components/Settings/sections/handoff-api'
-import { coerceHandoff, sameThreadItem, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
+import { coerceHandoff, sameThreadItem, type OverlayStashOffer, type OverlayThreadItem, type ThreadAnswerPayload } from '@/components/SessionView/overlayThread'
 import { cardAnswererLabel, type ThreadViewer } from '@/lib/thread-viewer'
 import { zenBubbleShield } from '@/lib/zen/zen-style-shield'
 import { ZEN_SOLID_PROPS, ZEN_TILE_RAISED_PROPS } from '@/lib/zen/zen-materials'
@@ -307,9 +307,20 @@ export function threadBubbleText(item: OverlayThreadItem): string {
   if (d.kind === 'secret') return d.secret ? '' : d.body || ''
   // A handoff card draws itself; `body` is the plain line for old renderers.
   if (d.kind === 'handoff') return d.handoff ? '' : d.body || ''
-  // A stash offer draws its own card; `body` is the fallback for old clients.
-  if (d.kind === 'stash.offer') return d.stash ? '' : d.body || ''
+  // A stash offer from an agent draws its own card; `body` is the fallback
+  // for old clients, and what a person's (refused) offer shows.
+  if (d.kind === 'stash.offer') return threadStashOffer(item) ? '' : d.body || ''
   return d.body || ''
+}
+
+/** A `stash.offer` card's payload, only when an agent sent it (a sender
+ *  address, no person's author stamp, not composed by a person; K2
+ *  Companion's rule). Anything else draws as a plain message, no button. */
+export function threadStashOffer(item: OverlayThreadItem): OverlayStashOffer | null {
+  const d = item.doc
+  if (d.kind !== 'stash.offer' || !d.stash) return null
+  if (!d.from?.trim() || !isAgentPost(item)) return null
+  return d.stash
 }
 
 /** An agent's post (not a person's: no daemon author stamp, not compose). */
@@ -429,7 +440,7 @@ export const ThreadBubble = memo(function ThreadBubble({
   // "Save to stash" (spec-prompt-stash-v1) on an agent's message, where the
   // Thread knows its server (the desktop Thread).
   const source = useThreadAttachmentSource()
-  const offer = kind === 'stash.offer' ? item.doc.stash ?? null : null
+  const offer = threadStashOffer(item)
   const stashText = offer ? stashOfferView(offer).saved : text
   const menuOn = !mine && !!source && isAgentPost(item) && stashText.trim().length > 0
   const menuArgs = { scope: source?.scope ?? null, text: stashText, agent: item.doc.from || null, agentName: author }

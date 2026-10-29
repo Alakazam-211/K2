@@ -300,9 +300,10 @@ fn notes_land_on_the_worktree_and_go_to_the_sidecars_own_thread() {
 
     // `/cli/git/notes/send` with `to`: the sidecar's address, never another workspace's.
     let wt = b.repo.join(".worktrees/k2-fix");
-    let seen: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    let deliver = |req: &crate::git_notes_routes::DeliverRequest<'_>| {
-        seen.lock().expect("lock").push(req.target.to_string());
+    let seen: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let heard = seen.clone();
+    let deliver = move |req: &crate::git_notes_routes::DeliverRequest<'_>| {
+        heard.lock().expect("lock").push(req.target.to_string());
         crate::git_notes_routes::DeliverResult { success: true, delivery_id: Some("m_1".into()), reason: None, hint: None }
     };
     let caller = crate::git_notes_routes::human_caller(None, None);

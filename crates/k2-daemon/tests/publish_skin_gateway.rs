@@ -232,6 +232,12 @@ fn with_temp_home<F: FnOnce()>(f: F) {
 /// A gateway port the daemon binds later: unique, outside the ephemeral
 /// range (not `bind(:0)`-then-drop, which another test can be handed
 /// meanwhile — "bind clash", 0.46.3).
+/// The Python 3 these tests serve with: `python3` on Unix, `python` on
+/// Windows (where `python3` is usually the Microsoft Store stub).
+fn python() -> &'static str {
+    if cfg!(windows) { "python" } else { "python3" }
+}
+
 fn free_port() -> u16 {
     k2_core::test_env::loopback_test_port()
 }
@@ -4529,9 +4535,16 @@ async fn publish_cmd_app_without_frame_header_is_warned() {
             dport,
             "POST",
             &format!("/cli/publish/run?token={OWNER_TOKEN}"),
-            Some(&format!(
-                r#"{{"name":"agents","cmd":"python3 -m http.server {port} --bind 127.0.0.1","port":{port},"project":"{path}","noTunnel":true}}"#
-            )),
+            Some(
+                &serde_json::json!({
+                    "name": "agents",
+                    "cmd": format!("{} -m http.server {port} --bind 127.0.0.1", python()),
+                    "port": port,
+                    "project": path,
+                    "noTunnel": true,
+                })
+                .to_string(),
+            ),
         );
         assert_eq!(run.status, 200, "run cmd; {}", run.body);
         assert!(wait_port(port, 8000), "python http.server must listen on {port}");
@@ -4577,7 +4590,7 @@ async fn boot_reattach_restarts_a_helper_without_frame_headers() {
         std::fs::write(format!("{old_root}/login"), "<!doctype html><title>old</title>")
             .expect("old login");
         let gport = free_port();
-        let mut old = std::process::Command::new("python3")
+        let mut old = std::process::Command::new(python())
             .args(["-m", "http.server", &gport.to_string(), "--bind", "127.0.0.1", "--directory", &old_root])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -5186,8 +5199,15 @@ async fn publish_cmd_service_gets_app_id_env() {
         let handle = format!("s24c{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
         let port = free_port();
+        // --cmd runs in sh on Unix and in cmd.exe on Windows: there Python
+        // writes the env file itself.
+        #[cfg(not(windows))]
         let cmd = format!(
             "printf '%s|%s|%s' \"$K2_APP_ID\" \"$K2_HOST\" \"$K2_PORT\" > app_env.txt; exec python3 -m http.server {port} --bind 127.0.0.1"
+        );
+        #[cfg(windows)]
+        let cmd = format!(
+            "python -c \"import os; open('app_env.txt', 'w').write('|'.join(os.environ.get(k, '') for k in ('K2_APP_ID', 'K2_HOST', 'K2_PORT')))\" && python -m http.server {port} --bind 127.0.0.1"
         );
         let body = serde_json::json!({
             "name": "bff",

@@ -104,7 +104,10 @@ fn held_folder_spawn_waits_for_the_owner_then_starts() {
     assert_eq!(body["error"], "folder_trust_pending");
     assert_eq!(body["findings"][0]["file"], ".claude/settings.json");
     assert!(body["ticket"].as_str().is_some_and(|t| !t.is_empty()), "no Thread → owner ticket: {body}");
-    assert_eq!(body["decide"], format!("k2 workspace trust {key} --yes|--always|--no (owner)"));
+    // A Windows folder (backslashes) is single-quoted, so Git Bash keeps
+    // its '\'; a plain Unix temp path is shown as is.
+    let shown = if key.contains('\\') { format!("'{key}'") } else { key.to_string() };
+    assert_eq!(body["decide"], format!("k2 workspace trust {shown} --yes|--always|--no (owner)"));
     assert!(v2_session_map::lookup_by_agent_name(&pid).is_none(), "nothing started");
     assert!(!claude_trusted(&home, &key), "no grant while held");
     let scope = body["scope"].as_str().unwrap().to_string();

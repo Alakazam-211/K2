@@ -229,7 +229,7 @@ fn register_shim_dir_first(dir: &std::path::Path) {
     let list = if prev.is_empty() {
         dir.display().to_string()
     } else {
-        format!("{}:{}", dir.display(), prev)
+        k2_core::test_env::path_list_prepend(&dir, &prev)
     };
     std::env::set_var("K2_TEST_AGENT_SHIM_DIR", list);
 }
@@ -579,17 +579,12 @@ async fn preset_env_reaches_spawned_child_environment() {
     std::fs::create_dir_all(&dump_dir).expect("create env shim dir");
     register_shim_dir_first(&dump_dir);
     let dump_shim = dump_dir.join("claude");
-    std::fs::write(
+    // write_executable: 0755 on Unix; the script plus its .exe runner on
+    // Windows (a bare script isn't a program there).
+    k2_core::test_env::write_executable(
         &dump_shim,
         "#!/bin/sh\necho \"PRESET_ENV_SEEN=${ZZ_PRESET_ONLY_VAR:-unset}\"\nexec cat\n",
-    )
-    .expect("write env shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dump_shim, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod env shim");
-    }
+    );
     let dump_shim_path = dump_shim.to_string_lossy().into_owned();
 
     // Preset row WITH migration-0070 env metadata, wired as the
@@ -678,21 +673,14 @@ async fn provider_mapped_principal_key_reaches_child_environment() {
     std::fs::create_dir_all(&dump_dir).expect("create provider shim dir");
     register_shim_dir_first(&dump_dir);
     let dump_shim = dump_dir.join("claude");
-    std::fs::write(
+    k2_core::test_env::write_executable(
         &dump_shim,
         "#!/bin/sh\n\
          echo \"OAI_KEY_SEEN=${OPENAI_API_KEY:-unset}\"\n\
          echo \"OAI_URL_SEEN=${OPENAI_BASE_URL:-unset}\"\n\
          echo \"ANTH_KEY_SEEN=${ANTHROPIC_API_KEY:-unset}\"\n\
          exec cat\n",
-    )
-    .expect("write provider shim");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dump_shim, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod provider shim");
-    }
+    );
     configure_ws_agent("hs-provider-env", &dump_shim.to_string_lossy());
 
     // Mint the openai-provider key through the REAL route (W5 additive body).

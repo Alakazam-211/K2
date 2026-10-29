@@ -247,6 +247,19 @@ pub fn unique_temp_path(tag: &str) -> PathBuf {
     std::env::temp_dir().join(format!("k2-{tag}-{}", uuid::Uuid::new_v4().simple()))
 }
 
+/// `first` ahead of the path list `rest` (PATH, K2_TEST_AGENT_SHIM_DIR),
+/// joined with this OS's separator: `first:rest` on Unix, `first;rest` on
+/// Windows (where ':' is part of a drive path). An empty `rest` is `first`.
+pub fn path_list_prepend(first: impl AsRef<Path>, rest: impl AsRef<std::ffi::OsStr>) -> String {
+    let rest = rest.as_ref();
+    if rest.is_empty() {
+        return first.as_ref().display().to_string();
+    }
+    let mut parts = vec![first.as_ref().to_path_buf()];
+    parts.extend(std::env::split_paths(rest));
+    std::env::join_paths(parts).expect("a path in the list holds the separator").to_string_lossy().into_owned()
+}
+
 /// A cheap long-lived program for a test PTY, one that just waits for
 /// input: `unix` (`cat` or `/bin/cat`) on Unix. Windows has no `cat`;
 /// System32's `cmd.exe` stays open the same way and echoes what is typed,

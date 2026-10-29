@@ -192,7 +192,7 @@ fn install_agent_shim(binary: &str) -> PathBuf {
     let shim = shim_dir.join(binary);
     k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let prev = std::env::var("PATH").unwrap_or_default();
-    std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
+    std::env::set_var("PATH", k2_core::test_env::path_list_prepend(&shim_dir, &prev));
     // Spawn guard (2026-09-12): the daemon resolves agent basenames ONLY
     // inside `K2_TEST_AGENT_SHIM_DIR` — the login-shell PATH used to beat
     // the PATH prepend above and exec the REAL `~/.local/bin/claude`.
@@ -200,7 +200,7 @@ fn install_agent_shim(binary: &str) -> PathBuf {
     let shim_list = if prev_shim.is_empty() {
         shim_dir.display().to_string()
     } else {
-        format!("{}:{}", shim_dir.display(), prev_shim)
+        k2_core::test_env::path_list_prepend(&shim_dir, &prev_shim)
     };
     std::env::set_var("K2_TEST_AGENT_SHIM_DIR", shim_list);
     shim_dir

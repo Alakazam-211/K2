@@ -415,7 +415,7 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
 
     let log_path = home.join("daemon.log");
     let log = std::fs::File::create(&log_path).unwrap();
-    let path_env = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let path_env = k2_core::test_env::path_list_prepend(&bin, std::env::var("PATH").unwrap());
     let mut reaper = Reaper::default();
     reaper.child = Some(
         Command::new(env!("CARGO_BIN_EXE_k2-daemon"))
@@ -478,7 +478,7 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
         dport,
         "POST",
         &format!("/cli/projects/add-without-git?token={token}"),
-        Some(&format!(r#"{{"path":"{wsp}","seedWiki":false,"seedAgentsMd":false}}"#)),
+        Some(&serde_json::json!({ "path": wsp, "seedWiki": false, "seedAgentsMd": false }).to_string()),
     );
     assert_eq!(st, 200, "{}", dump(&format!("workspace add: {body}")));
     let cmd = format!(

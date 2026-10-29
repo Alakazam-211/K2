@@ -54,7 +54,7 @@ fn install_claude_shim() -> PathBuf {
     k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
 
     let prev = std::env::var("PATH").unwrap_or_default();
-    std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
+    std::env::set_var("PATH", k2_core::test_env::path_list_prepend(&shim_dir, &prev));
     register_shim_dir(&shim_dir);
     shim_dir
 }
@@ -68,7 +68,7 @@ fn register_shim_dir(shim_dir: &std::path::Path) {
     let shim_list = if prev_shim.is_empty() {
         shim_dir.display().to_string()
     } else {
-        format!("{}:{}", shim_dir.display(), prev_shim)
+        k2_core::test_env::path_list_prepend(&shim_dir, &prev_shim)
     };
     std::env::set_var("K2_TEST_AGENT_SHIM_DIR", shim_list);
 }
@@ -899,7 +899,7 @@ fn install_agent_shim(binary: &str) -> PathBuf {
     let shim = shim_dir.join(binary);
     k2_core::test_env::write_executable(&shim, "#!/bin/sh\nexec cat\n");
     let prev = std::env::var("PATH").unwrap_or_default();
-    std::env::set_var("PATH", format!("{}:{}", shim_dir.display(), prev));
+    std::env::set_var("PATH", k2_core::test_env::path_list_prepend(&shim_dir, &prev));
     register_shim_dir(&shim_dir);
     shim_dir
 }

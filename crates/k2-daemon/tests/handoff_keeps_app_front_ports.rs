@@ -147,7 +147,7 @@ fn handoff_keeps_the_app_front_port_and_its_connections() {
         dport,
         "POST",
         &format!("/cli/projects/add-without-git?token={token}"),
-        Some(&format!(r#"{{"path":"{wsp}","seedWiki":false,"seedAgentsMd":false}}"#)),
+        Some(&serde_json::json!({ "path": wsp, "seedWiki": false, "seedAgentsMd": false }).to_string()),
     );
     assert_eq!(st, 200, "{}", dump(&format!("workspace add: {body}")));
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();

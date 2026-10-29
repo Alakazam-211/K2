@@ -121,7 +121,8 @@ fn boot_reaches_ready_when_the_trash_never_answers() {
             "-H",
             "Content-Type: application/json",
             "--data",
-            &format!(r#"{{"path":"{ws_s}","seedWiki":false,"seedAgentsMd":false}}"#),
+            // serde_json: a Windows path's backslashes must be escaped.
+            &serde_json::json!({ "path": ws_s, "seedWiki": false, "seedAgentsMd": false }).to_string(),
             &format!("http://127.0.0.1:{port}/cli/projects/add-without-git?token={token}"),
         ]);
         assert_eq!(code, "200", "workspace add: {body}");

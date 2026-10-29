@@ -201,8 +201,11 @@ async fn launch_fresh_agent_registers_in_session_map() {
     // Override command to `true` so the child exits immediately
     // instead of pulling in `claude`. PTY still opens; session_map
     // still gets the entry.
+    // Windows has no `true`: System32's cmd.exe stands in (the spawn belt
+    // allows System32; the test needs a PTY, not a quick exit).
+    let command = k2_core::test_env::pty_idle_program("true");
     let resp = agents_routes::handle_agents_launch(
-        &params(&[("agent", "alpha"), ("command", "true")]),
+        &params(&[("agent", "alpha"), ("command", command.as_str())]),
         &proj_str,
     );
     assert_eq!(resp.status, "200 OK", "body={}", resp.body);

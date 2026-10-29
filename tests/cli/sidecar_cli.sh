@@ -9,6 +9,10 @@
 #      the owner token; stdout is exactly the address; --json is the
 #      route's JSON unchanged; `--brief -` reads stdin; refusals map to exit
 #      codes (409 → 1, 403 → 3, 404 → 4, 413 → 2).
+#      Workbench W1 (0.46.7): `new --worktree [--base]` bodies; review /
+#      land / retire / interrupt request shapes; land and retire --discard
+#      never act without a terminal or --yes; a refusal ends with the
+#      permission card's Ask-with line when the daemon sends one.
 #   3. A real headless daemon (temp HOME, claude shim): new / list / stop /
 #      access end to end; BRIEF.md is 0600; the brief text never reaches
 #      the daemon log.
@@ -99,6 +103,22 @@ capture_nod sidecar access maybe
 assert_eq "access bad action exit 2" "$rc" "2"
 capture_nod sidecar frobnicate
 assert_eq "unknown verb exit 2" "$rc" "2"
+# Workbench W1: the worktree verbs.
+capture_nod sidecar --help
+assert_contains "help: --worktree" "$out" "[--worktree [--base <ref>]]"
+assert_contains "help: review" "$out" "k2 sidecar review <name>"
+assert_contains "help: land" "$out" "k2 sidecar land <name> [--keep] [--yes]"
+assert_contains "help: retire" "$out" "k2 sidecar retire <name> [--discard] [--keep-branch]"
+assert_contains "help: interrupt" "$out" "k2 sidecar interrupt <name>"
+assert_contains "help: agents ask" "$out" "permission request git.land sidecar=<name> tip=<sha>"
+capture_nod sidecar new Fix --harness claude --base main
+assert_eq "--base without --worktree exit 2" "$rc" "2"
+capture_nod sidecar land
+assert_eq "land without a name exit 2" "$rc" "2"
+capture_nod sidecar retire fix --bogus
+assert_eq "retire unknown flag exit 2" "$rc" "2"
+capture_nod sidecar review a b
+assert_eq "review with two names exit 2" "$rc" "2"
 
 set +e
 out="$(env HOME="$HOME1" "$K2_CLI" sessions spawn --agent foo 2>&1)"; rc=$?
@@ -163,9 +183,28 @@ class H(BaseHTTPRequestHandler):
         status, out = 200, {}
         b = json.loads(body) if body else {}
         name = (b.get("name") or "").lower()
+        qname = (q.get("name") or [""])[0].lower()
         if name in REFUSE:
             status, code = REFUSE[name]
             out = {"error": {"code": code, "hint": "stub says " + code}}
+        elif parsed.path == "/cli/sidecar/review":
+            out = {"ok": True, "address": "k2/" + qname, "branch": "k2/" + qname, "dir": ".worktrees/k2-" + qname,
+                   "onto": "main", "ontoHead": "0123456789abcdef", "tip": "abc1234def5678",
+                   "commits": [{"sha": "abc1234def5678", "subject": "fix: it"}], "files": [{"status": "M", "path": "a.txt"}],
+                   "dirty": [], "mainBranch": "main", "mainDirty": [], "canLand": True, "blocked": None, "taskState": "review"}
+        elif parsed.path == "/cli/sidecar/land" and name == "asker":
+            status = 403
+            out = {"error": {"code": "land_needs_person", "hint": "only a person lands", "sidecar": "asker", "tip": "abc1234def5678"},
+                   "permission": {"action": "git.land", "command": "k2 permission request git.land sidecar=asker tip=abc1234def5678 --why \"<what you need it for>\""}}
+        elif parsed.path == "/cli/sidecar/land":
+            out = {"ok": True, "address": "k2/" + name, "onto": "main", "from": "0123456789abcdef", "to": "fedcba9876543210",
+                   "landed": [{"sha": "abc1234def5678", "subject": "fix: it"}], "count": 1,
+                   "retired": {"ok": True, "how": "landed", "branchDeleted": True} if b.get("retire") else None, "retireError": None}
+        elif parsed.path == "/cli/sidecar/retire":
+            out = {"ok": True, "address": "k2/" + name, "retired": True, "how": "discarded" if b.get("discard") else "landed",
+                   "branchDeleted": not b.get("keepBranch"), "discardedCommits": [], "discardedFiles": []}
+        elif parsed.path == "/cli/sidecar/interrupt":
+            out = {"ok": True, "address": "k2/" + name, "interrupted": True, "state": "live", "key": "esc"}
         elif parsed.path == "/cli/sidecar/new":
             out = {"ok": True, "address": "k2/" + name, "workspace": "k2", "handle": name,
                    "name": b.get("name"), "harness": "claude", "resumed": False,
@@ -261,6 +300,59 @@ set +e
 err="$(cell sidecar new live --harness claude 2>&1 >/dev/null)"
 set -e
 assert_contains "refusal prints code: hint" "$err" "sidecar_live: stub says sidecar_live"
+
+echo "== Workbench W1 verbs (stub) =="
+body_is() {
+    python3 -c '
+import json, sys
+b = json.loads(json.load(open(sys.argv[1]))["body"])
+want = json.loads(sys.argv[2])
+assert b == want, (b, want)
+' "$WORK/last_req.json" "$2" && ok "$1" || bad "$1 ($(last body))"
+}
+cell sidecar new Fix --harness claude --worktree --base develop >/dev/null 2>&1
+body_is "new --worktree --base body" "{\"workspace\": \"$WORK/proj\", \"name\": \"Fix\", \"harness\": \"claude\", \"worktree\": true, \"base\": \"develop\"}"
+cell sidecar new --worktree Fix2 --harness claude >/dev/null 2>&1
+body_is "--worktree <name> names it" "{\"workspace\": \"$WORK/proj\", \"name\": \"Fix2\", \"harness\": \"claude\", \"worktree\": true}"
+
+out="$(cell sidecar review fix)"
+assert_eq "review GET path" "$(last path)" "/cli/sidecar/review"
+assert_contains "review lists the commit" "$out" "abc1234def fix: it"
+assert_contains "review says land is ready" "$out" "land: ready"
+
+set +e
+out="$(cell sidecar land fix </dev/null 2>&1)"; rc=$?
+set -e
+assert_eq "land with no terminal and no --yes exit 2" "$rc" "2"
+assert_eq "land with no terminal only reviewed" "$(last path)" "/cli/sidecar/review"
+assert_contains "land shows what would land" "$out" "abc1234def fix: it"
+out="$(cell sidecar land fix --yes </dev/null 2>/dev/null)"
+assert_eq "land POST path" "$(last path)" "/cli/sidecar/land"
+body_is "land sends the reviewed tip and base" "{\"workspace\": \"$WORK/proj\", \"name\": \"fix\", \"expectTip\": \"abc1234def5678\", \"retire\": true, \"expectOnto\": \"0123456789abcdef\"}"
+assert_contains "land prints what landed" "$out" "landed 1 commit from k2/fix on main"
+assert_contains "land prints the retire" "$out" "retired k2/fix"
+cell sidecar land fix --yes --keep </dev/null >/dev/null 2>&1
+body_is "land --keep does not retire" "{\"workspace\": \"$WORK/proj\", \"name\": \"fix\", \"expectTip\": \"abc1234def5678\", \"retire\": false, \"expectOnto\": \"0123456789abcdef\"}"
+set +e
+err="$(cell sidecar land asker --yes </dev/null 2>&1 >/dev/null)"; rc=$?
+set -e
+assert_eq "land refused for an agent exit 3" "$rc" "3"
+assert_contains "the refusal's code" "$err" "land_needs_person: only a person lands"
+assert_contains "the refusal ends with the Ask-with line" "$err" "Ask with: k2 permission request git.land sidecar=asker tip=abc1234def5678"
+
+cell sidecar retire fix >/dev/null 2>&1
+body_is "retire body" "{\"workspace\": \"$WORK/proj\", \"name\": \"fix\", \"discard\": false, \"keepBranch\": false}"
+set +e
+cell sidecar retire fix --discard </dev/null >/dev/null 2>&1; rc=$?
+set -e
+assert_eq "retire --discard with no terminal and no --yes exit 2" "$rc" "2"
+assert_eq "retire --discard with no terminal only reviewed" "$(last path)" "/cli/sidecar/review"
+cell sidecar retire fix --discard --keep-branch --yes </dev/null >/dev/null 2>&1
+body_is "retire --discard --keep-branch body" "{\"workspace\": \"$WORK/proj\", \"name\": \"fix\", \"discard\": true, \"keepBranch\": true}"
+
+out="$(cell sidecar interrupt fix)"
+body_is "interrupt body" "{\"workspace\": \"$WORK/proj\", \"name\": \"fix\"}"
+assert_contains "interrupt prints it" "$out" "interrupted k2/fix (sent esc)"
 
 # ── 3. real headless daemon ──────────────────────────────────────────
 echo "== real daemon: new / list / stop / access =="

@@ -73561,6 +73561,7 @@ WHICH TO PICK
   your own charts     d3@7             274 KB
   markdown (safe)     k2-markdown@1    7 KB
   code highlighting   highlight.js@11  129 KB
+  diffs               k2-diff@1        23 KB
   maths               katex@0.18       630 KB
   3D                  three@0.186      959 KB
   2D games            kaplay@3001      185 KB
@@ -73608,6 +73609,7 @@ EVERY LIBRARY: request, global, licence, size
   k2-thread@1           K2Thread         FSL-1.1-Apache-2.0    53 KB
   k2-markdown@1         K2Markdown       FSL-1.1-Apache-2.0     7 KB
   k2-png@1              K2Png            FSL-1.1-Apache-2.0     4 KB
+  k2-diff@1             K2Diff           FSL-1.1-Apache-2.0    23 KB
 
 "download": fetched once by this computer's K2 on first use, checked, then
 kept (refused when the computer is air-gapped). Notes on each library are in

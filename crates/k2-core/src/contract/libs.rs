@@ -27,6 +27,7 @@ pub const PICKS: &[(&str, &str)] = &[
     ("markdown (safe)", "k2-markdown"),
     ("tables", "k2-table"),
     ("code highlighting", "highlight.js"),
+    ("diffs", "k2-diff"),
     ("maths", "katex"),
     ("3D", "three"),
     ("2D games", "kaplay"),

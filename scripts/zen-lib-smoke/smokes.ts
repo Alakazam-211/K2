@@ -231,4 +231,15 @@ export const SMOKES: Record<string, string> = {
       && !el.querySelector('img, a, script') && !Array.from(el.querySelectorAll('*')).some((n) => Array.from(n.attributes).some((a) => /^on/i.test(a.name)));
     done(ok && K2Markdown.available(), 'h1, list, code, table; no img, a or on* attributes');
   `,
+  // 0.46.7 Workbench (B6): a split diff and a files tree under the sealed
+  // CSP (its own <style>), text only (the cases are in zen-lib-diff.test.ts).
+  'k2-diff': `
+    const el = document.createElement('div'); root.appendChild(el);
+    K2Diff.render(el, { file: 'a.ts', old: { exists: true, text: 'one\\ntwo\\n' }, new: { exists: true, text: 'one\\n<img src=x onerror=alert(1)>\\n' } }, { view: 'split' });
+    const t = document.createElement('div'); root.appendChild(t);
+    K2Diff.tree(t, [{ file: 'src/a.ts', status: 'modified', additions: 1, deletions: 1 }]);
+    const styled = getComputedStyle(el.querySelector('.k2d-row')).display === 'grid';
+    const ok = el.querySelectorAll('.k2d-row').length === 2 && !el.querySelector('img') && !!t.querySelector('.k2d-t');
+    done(ok && styled, 'split rows (grid), tree; the HTML line stays text');
+  `,
 }

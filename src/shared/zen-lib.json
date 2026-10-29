@@ -746,6 +746,28 @@
         }
       ],
       "notes": "K2's own: canvas pixels to a PNG without toDataURL or toBlob, which come back empty in a sealed frame on WebKit (the Mac app, iPhone, iPad). K2Png.toBlob(canvas), K2Png.toDataURL(canvas) and K2Png.encode(canvas or ImageData) read the pixels with getImageData and write an 8-bit RGBA PNG with the browser's CompressionStream; each answers a Promise. Hand the Blob to k2.blobs.put or k2.download."
+    },
+    {
+      "id": "k2-diff",
+      "version": "1.0.0",
+      "line": "1",
+      "fingerprints": [
+        "/*! k2-diff "
+      ],
+      "title": "K2 diff view (widget kit)",
+      "global": "K2Diff",
+      "license": "FSL-1.1-Apache-2.0",
+      "licenseFile": "LICENSE.txt",
+      "copyright": "Copyright 2025-2026 Alakazam Labs",
+      "source": "bundled",
+      "files": [
+        {
+          "name": "k2-diff.js",
+          "bytes": 23279,
+          "sha256": "6c94e1c2be17dbd0efa7ea5d077f5d08d4f6a5abd9fec5b39577db845b7efbe2"
+        }
+      ],
+      "notes": "K2's own: diffs for the Workbench and your own review widgets. K2Diff.render(el, await k2.git.diffFile(address, {file}), {view: 'unified' or 'split', wrap, ignoreWhitespace, context: 3, onLine(info)}) draws a file's change (binary, too large, new and deleted files in plain words; long unchanged runs fold behind Expand N lines; onLine puts a + on each line for a note: {file, side, line, text}). K2Diff.tree(el, files, {selected, onSelect(file)}) draws the changed files as a folder tree with status letters and +/− counts. K2Diff.lines(oldText, newText, {ignoreWhitespace}), K2Diff.hunks(lines, {context}) and K2Diff.stats(lines) give the diff as data. Add highlight.js@11 to your libs for colours (from the file's extension). Text is only ever text (no innerHTML); colours follow the Garden (--zen-*)."
     }
   ]
 }

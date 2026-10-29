@@ -148,6 +148,10 @@ const D3_GLUE = `/* K2 glue: d3.csvParse / d3.tsvParse without new Function (sea
 export const K2_MARKDOWN_NOTES =
   "K2's own: markdown, safe by default. K2Markdown.into(el, text, opts) fills el; K2Markdown.render(text, opts) returns a DocumentFragment (never a string, so no innerHTML). Raw HTML is escaped; links show as text with the URL visible, or with opts.links = 'open' and the links:open cap as buttons that call k2.open; images show as text, or with opts.images = 'data' as data: PNG, JPEG, GIF and WebP only. It loads marked and DOMPurify for you (its own DOMPurify instance: your settings never change its rules). Colours follow the Garden (--zen-*)."
 
+/** The notes `k2-diff`'s row carries (the k2-zen skill shows them). */
+export const K2_DIFF_NOTES =
+  "K2's own: diffs for the Workbench and your own review widgets. K2Diff.render(el, await k2.git.diffFile(address, {file}), {view: 'unified' or 'split', wrap, ignoreWhitespace, context: 3, onLine(info)}) draws a file's change (binary, too large, new and deleted files in plain words; long unchanged runs fold behind Expand N lines; onLine puts a + on each line for a note: {file, side, line, text}). K2Diff.tree(el, files, {selected, onSelect(file)}) draws the changed files as a folder tree with status letters and +/− counts. K2Diff.lines(oldText, newText, {ignoreWhitespace}), K2Diff.hunks(lines, {context}) and K2Diff.stats(lines) give the diff as data. Add highlight.js@11 to your libs for colours (from the file's extension). Text is only ever text (no innerHTML); colours follow the Garden (--zen-*)."
+
 /** The notes `k2-activity`'s row carries (the k2-zen skill shows them). */
 export const K2_ACTIVITY_NOTES =
   "K2's own: the activity bar K2's Conversation shows, for one agent. K2Activity.mount(el, {address: 'handle::host', look: 'chamfer', 'glass' or 'plain'}) then bar.setAddress(address), bar.setLook(look), bar.destroy(). It listens with k2.thread.onActivity (caps thread:read and activity:read): the turn an App guest gets, counts and step kinds, never text. Working pulses; monitoring, needs-you and a quiet turn never do (no typing dots); an end shows Done, Stopped or Failed briefly. K2Activity.describe(K2Activity.coerce(state.turn, Date.now()), Date.now()) gives {tone, headline, animate, counters, clock, aria, detail} for your own drawing. No turn means no bar: never guess from messages. Colours follow the Garden (--zen-*, or --k2a-*)."
@@ -660,5 +664,20 @@ export const LIBS: LibSpec[] = [
     files: [{ name: 'k2-png.js', own: true }],
     notes:
       "K2's own: canvas pixels to a PNG without toDataURL or toBlob, which come back empty in a sealed frame on WebKit (the Mac app, iPhone, iPad). K2Png.toBlob(canvas), K2Png.toDataURL(canvas) and K2Png.encode(canvas or ImageData) read the pixels with getImageData and write an 8-bit RGBA PNG with the browser's CompressionStream; each answers a Promise. Hand the Blob to k2.blobs.put or k2.download.",
+  },  {
+    // 0.46.7 Workbench (B6, catalog v40): the Review column's diff and
+    // changed-files tree, for git.diffFile / git.snapshot answers.
+    id: 'k2-diff',
+    version: '1.0.0',
+    fingerprints: ['/*! k2-diff '],
+    title: 'K2 diff view (widget kit)',
+    global: 'K2Diff',
+    license: 'FSL-1.1-Apache-2.0',
+    copyright: 'Copyright 2025-2026 Alakazam Labs',
+    source: 'bundled',
+    own: true,
+    licenses: ['k2:LICENSE.md'],
+    files: [{ name: 'k2-diff.js', own: true }],
+    notes: K2_DIFF_NOTES,
   },
 ]

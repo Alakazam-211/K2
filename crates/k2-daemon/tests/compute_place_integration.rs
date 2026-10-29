@@ -437,6 +437,13 @@ async fn a_timeout_over_a_grant_skips_that_node() {
     let r = run(d.port, OWNER, &me, json!({"timeoutSecs": 5 * 3600})).await;
     assert_eq!((r.status, code(&r)), (404, "no_node_fits".to_string()), "{}", r.body);
     assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("2 with a grant shorter than --timeout 5h00m"), "{}", r.body);
+    // --os spellings fold (the nodes say `linux`): `Linux` fits; `darwin`
+    // (= macos) skips both with the os/arch count.
+    let r = run(d.port, OWNER, &me, json!({"os": "Linux"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let r = run(d.port, OWNER, &me, json!({"os": "darwin"})).await;
+    assert_eq!((r.status, code(&r)), (404, "no_node_fits".to_string()), "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().unwrap().contains("2 of another --os/--arch/--label"), "{}", r.body);
     // A named node keeps today's refusal (timeout_over_grant, 400).
     let r = run(d.port, OWNER, &me, json!({"node": "t-short", "timeoutSecs": 3 * 3600})).await;
     assert_eq!((r.status, code(&r)), (400, "timeout_over_grant".to_string()), "{}", r.body);

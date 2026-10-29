@@ -448,6 +448,27 @@ pub mod skip {
     pub const UNAVAILABLE: &str = "unavailable";
 }
 
+/// One spelling per OS and arch, so `--arch aarch64` finds a Mac that
+/// reports `arm64` and `--os darwin` a node that says `macos`. Nodes report
+/// `macos`/`linux` and `arm64` (Macs), `aarch64` (Linux ARM) or `x86_64`.
+fn canon<'a>(key: &str, v: &'a str) -> std::borrow::Cow<'a, str> {
+    let lower = v.trim().to_ascii_lowercase();
+    let c = match (key, lower.as_str()) {
+        ("arch", "aarch64" | "arm64") => "arm64",
+        ("arch", "x86_64" | "amd64" | "x64" | "x86-64") => "x86_64",
+        ("os", "macos" | "darwin" | "mac" | "osx") => "macos",
+        ("os", "linux") => "linux",
+        _ => return std::borrow::Cow::Borrowed(v),
+    };
+    std::borrow::Cow::Borrowed(c)
+}
+
+/// An `--os`/`--arch`/`--label` ask against a node's label, aliases folded
+/// for `os` and `arch` (other labels match exactly).
+pub fn label_matches(key: &str, want: &str, have: Option<&str>) -> bool {
+    have.is_some_and(|h| canon(key, want) == canon(key, h))
+}
+
 /// The candidate list and what was left out.
 #[derive(Debug, Clone, Default)]
 pub struct CandReport {
@@ -515,9 +536,9 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
             continue;
         }
         let label = |k: &str| offer.labels.get(k).map(String::as_str);
-        if w.filter.os.as_deref().is_some_and(|o| label("os") != Some(o))
-            || w.filter.arch.as_deref().is_some_and(|a| label("arch") != Some(a))
-            || w.filter.labels.iter().any(|(k, x)| label(k) != Some(x.as_str()))
+        if w.filter.os.as_deref().is_some_and(|o| !label_matches("os", o, label("os")))
+            || w.filter.arch.as_deref().is_some_and(|a| !label_matches("arch", a, label("arch")))
+            || w.filter.labels.iter().any(|(k, x)| !label_matches(k, x, label(k)))
         {
             skipped(&mut out, skip::OS_ARCH_LABEL);
             continue;
@@ -1858,6 +1879,30 @@ mod tests {
         let p = pinned_record("k2n2-m1", 5);
         assert_eq!((p.mode.as_str(), p.code.as_str(), p.starts_now), ("pinned", "pinned", None));
         assert_eq!(mem_words(3 * GB / 2), "1.5G");
+    }
+
+    /// `--os`/`--arch` spellings: every alias matches what nodes report
+    /// (Macs `macos`/`arm64`, Linux `linux`/`x86_64` or `aarch64`); other
+    /// labels match exactly; a missing label never matches.
+    #[test]
+    fn os_and_arch_aliases_match_what_nodes_report() {
+        for want in ["arm64", "aarch64", "ARM64", "AArch64"] {
+            assert!(label_matches("arch", want, Some("arm64")), "{want} vs a Mac's arm64");
+            assert!(label_matches("arch", want, Some("aarch64")), "{want} vs Linux ARM's aarch64");
+            assert!(!label_matches("arch", want, Some("x86_64")), "{want} vs x86_64");
+        }
+        for want in ["x86_64", "amd64", "x64", "x86-64", "AMD64"] {
+            assert!(label_matches("arch", want, Some("x86_64")), "{want}");
+            assert!(!label_matches("arch", want, Some("arm64")), "{want}");
+        }
+        for want in ["macos", "darwin", "mac", "osx", "Darwin"] {
+            assert!(label_matches("os", want, Some("macos")), "{want}");
+            assert!(!label_matches("os", want, Some("linux")), "{want}");
+        }
+        assert!(label_matches("os", "Linux", Some("linux")) && !label_matches("os", "linux", Some("macos")));
+        assert!(!label_matches("arch", "arm64", None), "no label: no match");
+        assert!(label_matches("gpu", "nvidia", Some("nvidia")) && !label_matches("gpu", "NVIDIA", Some("nvidia")), "other labels are exact");
+        assert!(!label_matches("gpu", "darwin", Some("macos")), "aliases only for os and arch");
     }
 
     #[test]

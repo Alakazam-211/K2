@@ -407,11 +407,11 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// The alphabet of a generated App-user password: no look-alikes (0/O,
-/// 1/l/I), so it can be read out or typed from a screen.
-const GENERATED_PASSWORD_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+/// The alphabet of a generated App-user password: no look-alikes (0/O/o,
+/// 1/l/I/i), so it can be read out loud or typed from a screen.
+const GENERATED_PASSWORD_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
 /// Characters in a generated password (four groups of five, joined by
-/// `-`): 20 × log2(57) ≈ 116 bits.
+/// `-`): 20 × log2(55) ≈ 115 bits.
 pub const GENERATED_PASSWORD_CHARS: usize = 20;
 
 /// A new App-user password from the OS CSPRNG (0.46.6: the owner's Set
@@ -10730,7 +10730,7 @@ mod tests {
             assert!(seen.insert(pw.clone()), "repeated password {pw}");
         }
         assert_eq!(letters.len(), GENERATED_PASSWORD_ALPHABET.len(), "every letter reachable");
-        for bad in [b'0', b'O', b'1', b'l', b'I'] {
+        for bad in [b'0', b'O', b'o', b'1', b'l', b'I', b'i'] {
             assert!(!letters.contains(&bad), "look-alike {}", bad as char);
         }
     }

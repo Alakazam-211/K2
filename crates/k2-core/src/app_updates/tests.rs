@@ -4,7 +4,6 @@
 
 use std::time::Duration;
 
-use base64::Engine as _;
 use k2_root_proto::testsign;
 
 use super::dl_client::{Client, DlError};

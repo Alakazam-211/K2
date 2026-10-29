@@ -78,8 +78,9 @@ fn tables_come_at_open_with_no_schema_step_of_their_own() {
     }
     let v: i64 = with_conn(|conn| conn.query_row("PRAGMA user_version", [], |r| r.get(0)).map_err(|e| e.to_string())).unwrap();
     assert_eq!(v, crate::skin::SKIN_SCHEMA_VERSION);
-    // 6 when they shipped (0.46.5); 7 is must-change (0.46.6), not them.
-    assert_eq!(v, 7, "no numbered step for the profile tables");
+    // 6 when they shipped (0.46.5); 7 is must-change and 8 the login
+    // failure time (both 0.46.6), not them.
+    assert_eq!(v, 8, "no numbered step for the profile tables");
     with_conn(|conn| ensure_schema(conn)).expect("a second run is a no-op");
 }
 

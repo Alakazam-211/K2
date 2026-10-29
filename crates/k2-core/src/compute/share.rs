@@ -318,6 +318,10 @@ pub struct WaitFacts {
     /// The submitter's running jobs here, and the per-submitter cap.
     pub submitter_running: Option<u32>,
     pub submitter_cap: Option<u32>,
+    /// CE-8: CPU the OS sees idle (the node's caps minus its 1-minute load,
+    /// from the last health frame). Reserved CPU isn't busy CPU: three
+    /// jobs without `--cpus` can reserve all of it while the load is ~1.
+    pub idle_cpu_millis: Option<u64>,
 }
 
 fn gb1(b: u64) -> String {
@@ -350,28 +354,70 @@ pub fn wait_words(code: &str, f: &WaitFacts) -> String {
             Some((r, c)) => format!("you run {r} of {c} here (per-submitter cap)"),
             None => blocked_words(code),
         },
-        share::blocked::WAITING_FOR_ROOM | crate::compute::proto::refusal::LOCAL_RESOURCE_LIMIT | crate::compute::proto::refusal::PARALLEL_FULL => {
-            let mut parts = Vec::new();
-            let asks: Vec<String> = [f.asks_cpu_millis.map(cpus1), f.asks_mem_bytes.map(gb1)].into_iter().flatten().collect();
-            if !asks.is_empty() {
-                parts.push(format!("asks {}", asks.join(", ")));
-            }
-            let free: Vec<String> = [f.free_cpu_millis.map(cpus1), f.free_mem_bytes.map(gb1)].into_iter().flatten().collect();
-            if !free.is_empty() {
-                let of = f.cap_mem_bytes.map(|c| format!(" of {}", gb1(c))).unwrap_or_default();
-                parts.push(format!("{}{of} free", free.join(", ")));
-            }
-            if let Some((r, p)) = n_of(f.running, f.parallel) {
-                parts.push(format!("{r} of {p} running"));
-            }
-            if parts.is_empty() {
-                blocked_words(share::blocked::WAITING_FOR_ROOM)
-            } else {
-                format!("waiting for room: {}", parts.join("; "))
-            }
-        },
+        share::blocked::WAITING_FOR_ROOM | crate::compute::proto::refusal::LOCAL_RESOURCE_LIMIT | crate::compute::proto::refusal::PARALLEL_FULL => room_words(f),
         other => blocked_words(other),
     }
+}
+
+/// CE-8: why a job waits for room on a node, naming the real limit in the
+/// node's own terms: its slots ("runs at most 3 jobs at once"), the CPU
+/// a job without `--cpus` reserves (the cap ÷ slots, `k2-node`'s rule),
+/// or memory. Idle CPU is shown beside unreserved CPU, so "8 idle, 0
+/// unreserved" reads as what it is.
+pub fn room_words(f: &WaitFacts) -> String {
+    let mut parts = Vec::new();
+    if let Some((r, p)) = f.running.zip(f.parallel).filter(|(r, p)| *p > 0 && r >= p) {
+        parts.push(format!("the node runs at most {p} job{} at once (its policy); {r} {} running", if p == 1 { "" } else { "s" }, if r == 1 { "is" } else { "are" }));
+    }
+    // What this job holds once it starts: its --cpus, else the default share.
+    let default_cpu = f.cap_cpu_millis.zip(f.parallel).filter(|(c, p)| *c > 0 && *p > 0).map(|(c, p)| c / p as u64);
+    let wants_cpu = f.asks_cpu_millis.or(default_cpu);
+    if let (Some(want), Some(free)) = (wants_cpu, f.free_cpu_millis) {
+        if want > free {
+            let of = |n: u64| match f.cap_cpu_millis {
+                Some(c) => format!("{} of {}", cpun(n), cpus1(c)),
+                None => cpus1(n),
+            };
+            parts.push(match (f.asks_cpu_millis, default_cpu) {
+                (None, Some(d)) => {
+                    let hint = if d > 1000 { format!("pass --cpus {} (or fewer) so more fit", (d / 2000).max(1)) } else { "pass a smaller --cpus so more fit".to_string() };
+                    format!("jobs without --cpus reserve {} each and {} unreserved: {hint}", of(d), of(free))
+                }
+                _ => format!("asks {}; {} unreserved", cpus1(want), of(free)),
+            });
+        }
+    }
+    let default_mem = f.cap_mem_bytes.zip(f.parallel).filter(|(c, p)| *c > 0 && *p > 0).map(|(c, p)| c / p as u64);
+    if let (Some(want), Some(free)) = (f.asks_mem_bytes.or(default_mem), f.free_mem_bytes) {
+        if want > free {
+            let of = f.cap_mem_bytes.map(|c| format!(" of {}", gb1(c))).unwrap_or_default();
+            let what = if f.asks_mem_bytes.is_some() { format!("asks {}", gb1(want)) } else { format!("jobs without --mem reserve {}", gb1(want)) };
+            parts.push(format!("{what}; {}{of} free", gb1(free)));
+        }
+    }
+    if parts.is_empty() {
+        // Nothing short by our numbers: say what we know.
+        let free: Vec<String> = [f.free_cpu_millis.map(cpus1), f.free_mem_bytes.map(gb1)].into_iter().flatten().collect();
+        if !free.is_empty() {
+            parts.push(format!("{} free", free.join(", ")));
+        }
+        if let Some((r, p)) = f.running.zip(f.parallel) {
+            parts.push(format!("{r} of {p} running"));
+        }
+    }
+    if let Some(i) = f.idle_cpu_millis.filter(|i| f.free_cpu_millis.is_some_and(|free| *i > free)) {
+        parts.push(format!("idle CPU ~{} (reserved isn't busy)", cpun(i)));
+    }
+    if parts.is_empty() {
+        blocked_words(share::blocked::WAITING_FOR_ROOM)
+    } else {
+        format!("waiting for room: {}", parts.join("; "))
+    }
+}
+
+/// CPUs from millicores, the number only ("4", "1.5").
+fn cpun(m: u64) -> String {
+    cpus1(m).trim_end_matches(" CPUs").to_string()
 }
 
 // ── the owner's mirror of a node's servers (0216) ────────────────────
@@ -455,6 +501,37 @@ mod tests {
     use super::*;
     use serde_json::json;
     use crate::compute::proto::share::Trust;
+
+    #[test]
+    fn room_words_name_the_slot_limit_and_the_default_reservation() {
+        // CE-8 acceptance 1 (k2n7-vin, 10-29): parallel 3, three jobs
+        // without --cpus hold all 12 CPUs, load ~1 (idle ~8).
+        let f = WaitFacts {
+            free_cpu_millis: Some(0),
+            free_mem_bytes: Some(28 << 30),
+            cap_cpu_millis: Some(12_000),
+            cap_mem_bytes: Some(52 << 30),
+            running: Some(3),
+            parallel: Some(3),
+            idle_cpu_millis: Some(8_000),
+            ..Default::default()
+        };
+        let w = wait_words(crate::compute::proto::refusal::PARALLEL_FULL, &f);
+        assert_eq!(
+            w,
+            "waiting for room: the node runs at most 3 jobs at once (its policy); 3 are running; \
+             jobs without --cpus reserve 4 of 12 CPUs each and 0 of 12 CPUs unreserved: pass --cpus 2 (or fewer) so more fit; \
+             idle CPU ~8 (reserved isn't busy)"
+        );
+        // A job asking for its own CPUs, a free slot: the CPU, not the slots.
+        let f = WaitFacts { asks_cpu_millis: Some(6_000), free_cpu_millis: Some(4_000), cap_cpu_millis: Some(12_000), running: Some(2), parallel: Some(3), ..Default::default() };
+        assert_eq!(wait_words(share::blocked::WAITING_FOR_ROOM, &f), "waiting for room: asks 6 CPUs; 4 of 12 CPUs unreserved");
+        // Memory.
+        let f = WaitFacts { asks_mem_bytes: Some(24 << 30), free_mem_bytes: Some(8 << 30), cap_mem_bytes: Some(52 << 30), running: Some(1), parallel: Some(3), ..Default::default() };
+        assert_eq!(wait_words(share::blocked::WAITING_FOR_ROOM, &f), "waiting for room: asks 24 GB; 8 GB of 52 GB free");
+        // Nothing known: the plain words.
+        assert_eq!(wait_words(share::blocked::WAITING_FOR_ROOM, &WaitFacts::default()), blocked_words(share::blocked::WAITING_FOR_ROOM));
+    }
 
     fn limits() -> ShareLimits {
         ShareLimits::new_server(Trust::Team, false)

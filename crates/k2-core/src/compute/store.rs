@@ -675,6 +675,35 @@ pub struct JobCtl {
     /// of them), so a move recomputes them for the new node.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cpu_hints: Vec<String>,
+    /// Whose clock the job's start and end times are (CE-5): `node` (the
+    /// node's own time; its clock agrees with this server's) or `server`
+    /// (the node's clock is off, or couldn't be checked: this server's
+    /// arrival time). Set at the first observation that carries a time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock: Option<String>,
+    /// CE-5: this server heard of the job's end this many seconds after the
+    /// node's own end time (only when more than [`REPORTED_LATE_SECS`]),
+    /// and when it heard (`heardAt`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_late_secs: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heard_at: Option<i64>,
+    /// CE-10: the stall warning went out for this attempt (its generation),
+    /// so it is sent once per attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stall_warned_gen: Option<i64>,
+}
+
+/// CE-5: an end heard more than this long after the node's own time is
+/// "reported late"; a node clock off by more than this isn't trusted.
+pub const REPORTED_LATE_SECS: i64 = 120;
+
+/// Longest `--tag`.
+pub const TAG_MAX: usize = 64;
+
+/// A job tag (`--tag`, CE-9): 1–64 of `A-Z a-z 0-9 . _ : / -`.
+pub fn valid_tag(t: &str) -> bool {
+    !t.is_empty() && t.len() <= TAG_MAX && t.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '/' | '-'))
 }
 
 /// Where a job was placed and why (prd-compute-auto-placement-v1 §7).
@@ -1037,6 +1066,8 @@ pub struct JobFilter<'a> {
     pub limit: i64,
     /// `ci` | `priority` | `normal` (0230).
     pub tier: Option<&'a str>,
+    /// `--tag` (CE-9): in SQL, so `limit` counts only matching jobs.
+    pub tag: Option<&'a str>,
 }
 
 pub fn list_jobs(conn: &Connection, f: &JobFilter<'_>) -> Vec<JobRow> {
@@ -1044,11 +1075,12 @@ pub fn list_jobs(conn: &Connection, f: &JobFilter<'_>) -> Vec<JobRow> {
     let Ok(mut stmt) = conn.prepare(&format!(
         "SELECT {JOB_COLS} FROM compute_jobs WHERE (?1 IS NULL OR node_id = ?1) AND (?2 IS NULL OR workspace_id = ?2) \
          AND (?3 IS NULL OR state = ?3 OR (?3 = 'queued' AND state = 'assigned' AND node_queued = 1)) AND (?4 IS NULL OR session_id = ?4) \
-         AND (?6 IS NULL OR tier = ?6) ORDER BY created_at DESC, id DESC LIMIT ?5"
+         AND (?6 IS NULL OR tier = ?6) AND (?7 IS NULL OR json_extract(plan_json, '$.k2ctl.tag') = ?7) \
+         ORDER BY created_at DESC, id DESC LIMIT ?5"
     )) else {
         return Vec::new();
     };
-    stmt.query_map(params![f.node_id, f.workspace_id, f.state, f.session_id, limit, f.tier], job_from_row)
+    stmt.query_map(params![f.node_id, f.workspace_id, f.state, f.session_id, limit, f.tier, f.tag], job_from_row)
         .map(|rows| rows.filter_map(Result::ok).collect())
         .unwrap_or_default()
 }
@@ -1140,6 +1172,16 @@ pub fn set_job_reason(conn: &Connection, id: &str, reason: Option<&str>, detail:
     let _ = conn.execute(
         "UPDATE compute_jobs SET reason = ?2, detail = ?3 WHERE id = ?1",
         params![id, reason, detail],
+    );
+}
+
+/// CE-5: put the node's own start and/or end time on a job (already
+/// clamped by the caller: ended >= started >= assigned). `None` leaves a
+/// time as it is.
+pub fn set_job_times(conn: &Connection, id: &str, started_at: Option<i64>, ended_at: Option<i64>) {
+    let _ = conn.execute(
+        "UPDATE compute_jobs SET started_at = COALESCE(?2, started_at), ended_at = COALESCE(?3, ended_at) WHERE id = ?1",
+        params![id, started_at, ended_at],
     );
 }
 

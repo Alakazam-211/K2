@@ -38,8 +38,17 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
     let mut v = serde_json::to_value(n).unwrap_or_default();
     v["online"] = online.into();
     v["liveRoute"] = route.into();
+    // Whose each count is (CE-7): `running`/`queued` = this server's jobs
+    // there (every workspace); `mine` (set by the caller that knows the
+    // workspace) = that workspace's; `nodeRunning` = node-wide, from the
+    // offer (other servers included); `nodeQueued` = node-wide queued, null
+    // until a node reports it in its offer.
     v["queued"] = queued.into();
     v["running"] = active.into();
+    v["nodeRunning"] = offer.as_ref().map(|o| o.running).into();
+    v["nodeQueued"] = serde_json::Value::Null;
+    // CE-8: idle CPU beside unreserved CPU ("8 idle, 0 unreserved").
+    v["idleCpuMillis"] = idle_cpu_millis(&n.id, offer.as_ref()).into();
     if let Some(o) = offer {
         v["offer"] = serde_json::json!({
             "control": o.control.as_str(),
@@ -71,6 +80,40 @@ fn node_json(n: &store::NodeRow, show_sas: bool) -> serde_json::Value {
         v["role"] = n.role.clone().into();
     }
     v
+}
+
+/// CE-8: CPU the OS sees idle on a node: its cores minus the 1-minute load
+/// from the last health frame (no older than 15 min), within K2's CPU cap.
+/// `None` when unknown.
+pub(crate) fn idle_cpu_millis(node_id: &str, offer: Option<&k2_core::compute::proto::frames::Offer>) -> Option<u64> {
+    let health = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        compute::admin::health(&conn, node_id)
+    };
+    let (at, h) = health?;
+    if compute::now() - at > 900 {
+        return None;
+    }
+    let load1 = h.load_milli?[0];
+    let idle = (h.cores * 1000).saturating_sub(load1);
+    Some(match offer.map(|o| o.caps.cpu_millis).filter(|c| *c > 0) {
+        Some(cap) => idle.min(cap),
+        None => idle,
+    })
+}
+
+/// This workspace's jobs on a node (CE-7 `mine`): started, and waiting
+/// (here or in the node's queue).
+fn mine_counts(node_id: &str, ws: &str) -> serde_json::Value {
+    let (active, queued) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (store::jobs_in_states(&conn, node_id, store::ACTIVE_STATES), store::jobs_in_states(&conn, node_id, &["queued"]))
+    };
+    let running = active.iter().filter(|r| r.workspace_id == ws && !r.node_queued).count();
+    let waiting = active.iter().filter(|r| r.workspace_id == ws && r.node_queued).count() + queued.iter().filter(|r| r.workspace_id == ws).count();
+    serde_json::json!({"running": running, "queued": waiting})
 }
 
 /// What `nodes`/`info` show about a shared node (§4.2, §9): who shares it,
@@ -174,6 +217,7 @@ pub(crate) fn nodes_list(who: &Who, params: &HashMap<String, String>, mgr: Optio
         .map(|n| {
             let mut v = node_json(n, show_sas);
             if let Some(ws) = &ws {
+                v["mine"] = mine_counts(&n.id, ws);
                 let db = k2_core::db::shared();
                 let conn = db.lock();
                 v["grant"] = serde_json::to_value(store::grant(&conn, &n.id, ws)).unwrap_or_default();
@@ -286,6 +330,8 @@ fn node_status(who: &Who, n: &store::NodeRow) -> serde_json::Value {
         "caps": offer.as_ref().map(|o| serde_json::json!({"cpuMillis": o.caps.cpu_millis, "memBytes": o.caps.mem_bytes, "hard": o.caps.hard})),
         "parallelMax": offer.as_ref().map(|o| o.parallel_max),
         "load": health.as_ref().and_then(|(_, h)| h.load_milli).map(|l| l.map(|x| x as f64 / 1000.0)),
+        // CE-8: idle CPU (cores minus load) beside `free` (unreserved).
+        "idleCpuMillis": idle_cpu_millis(&n.id, offer.as_ref()),
         "memAvailableBytes": health.as_ref().and_then(|(_, h)| h.mem_available_bytes),
         "healthAt": health.as_ref().map(|(at, _)| *at),
         "running": running,
@@ -333,6 +379,9 @@ pub(crate) fn node_info(who: &Who, params: &HashMap<String, String>, mgr: Option
         node_visible(who, &n)?;
     }
     let mut v = node_json(&n, who.is_owner());
+    if let Some((ws, _)) = who.passport() {
+        v["mine"] = mine_counts(&n.id, ws);
+    }
     let (grants, jobs) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -358,13 +407,24 @@ pub(crate) fn job_summary(j: &store::JobRow) -> serde_json::Value {
     let mut v = serde_json::to_value(j).unwrap_or_default();
     v["short"] = compute::message::short(&j.id).into();
     v["workspace"] = ws_handle(&j.workspace_id).into();
+    // One state everywhere (CE-A7): `result.state` uses the same helper.
+    v["state"] = compute::result::shown_state(j).into();
     if j.node_queued {
         // In a shared node's queue: shown as queued, at the node's place.
-        v["state"] = "queued".into();
         v["nodeQueued"] = true.into();
         v["class"] = j.class.clone().into();
         v["queue"] = node_queue_json(j, node.as_deref());
     }
+    // CE-9: the job's own tag, who sent it, and an owner-token mark.
+    v["tag"] = j.ctl.tag.clone().into();
+    v["submittedBy"] = compute::result::submitted_by(j).into();
+    v["via"] = compute::result::via(j).into();
+    // CE-9: the commit chosen at submit, so a sourced job never shows a
+    // null commit before the node reports what ran (`srcCommit`).
+    v["submitCommit"] = j.plan().and_then(|p| p.src.map(|s| s.commit)).or_else(|| j.src_commit.clone()).into();
+    // CE-7: the stable wait (a server-queued job's is completed by
+    // [`with_queue`], which knows the scheduler's place).
+    v["wait"] = wait_json(j, v.get("queue"), node.as_deref());
     v["node"] = node.into();
     // Where it was placed and why (prd-compute-auto-placement-v1 §7).
     if let Some(p) = j.ctl.placement.as_ref() {
@@ -444,7 +504,106 @@ fn node_wait_facts(j: &store::JobRow) -> share::WaitFacts {
         server_cap: offer.as_ref().and_then(|o| o.share.as_ref()).map(|v| v.limits.max_running),
         submitter_running: None,
         submitter_cap: None,
+        idle_cpu_millis: idle_cpu_millis(&j.node_id, offer.as_ref()),
     }
+}
+
+/// CE-7 (CE-A19): the one machine-readable wait of a job, built here for
+/// `get`, `jobs` and `wait` alike. Every key is always present (null when
+/// unknown): `where` (`server` | `node`), `position`, `of`, `reason` (a
+/// code), `words`, `etaSecs`, `etaBasis` (`quote` = the node's own quote,
+/// `estimate` = earlier runs' durations, `unknown`), `holdsQueue`, `since`
+/// (unix seconds it has waited or run since). Null for an ended job.
+pub(crate) fn wait_json(j: &store::JobRow, queue: Option<&serde_json::Value>, node: Option<&str>) -> serde_json::Value {
+    if j.is_terminal() {
+        return serde_json::Value::Null;
+    }
+    let now = compute::now();
+    let node = node.unwrap_or("the node");
+    let queued_since = if j.ctl.queued_at > 0 { j.ctl.queued_at } else { j.created_at };
+    #[allow(clippy::too_many_arguments)]
+    fn w(
+        at: &str,
+        position: serde_json::Value,
+        of: serde_json::Value,
+        reason: &str,
+        words: String,
+        eta: Option<i64>,
+        basis: &str,
+        holds: bool,
+        since: Option<i64>,
+    ) -> serde_json::Value {
+        let basis = if eta.is_some() { basis } else { "unknown" };
+        serde_json::json!({"where": at, "position": position, "of": of, "reason": reason, "words": words,
+            "etaSecs": eta, "etaBasis": basis, "holdsQueue": holds, "since": since})
+    }
+    let state = compute::result::shown_state(j);
+    if let Some(q) = queue.filter(|_| state == "queued") {
+        let reason = q.get("waitReason").and_then(|r| r.as_str()).or_else(|| q.get("reason").and_then(|r| r.as_str())).unwrap_or("queued");
+        let words = q.get("waitWords").and_then(|r| r.as_str()).map(str::to_string).unwrap_or_else(|| {
+            if j.node_queued {
+                format!("in {node}'s queue")
+            } else {
+                share::blocked_words(reason)
+            }
+        });
+        let eta = q.get("etaSecs").and_then(|e| e.as_i64());
+        let basis = if j.node_queued { "quote" } else { q.get("etaBasis").and_then(|b| b.as_str()).unwrap_or("estimate") };
+        return w(
+            q.get("where").and_then(|x| x.as_str()).unwrap_or(if j.node_queued { "node" } else { "server" }),
+            q.get("position").cloned().unwrap_or_default(),
+            q.get("of").cloned().unwrap_or_default(),
+            reason,
+            words,
+            eta,
+            basis,
+            q.get("holdsQueue").and_then(|h| h.as_bool()).unwrap_or(true),
+            Some(queued_since),
+        );
+    }
+    match state {
+        "queued" => {
+            // Not placed in a node's line yet: a retry's backoff, or the
+            // next placement pass.
+            let (reason, words) = match j.ctl.not_before.filter(|t| *t > now) {
+                Some(t) => ("retry_backoff", format!("retry backoff: placed again in about {}", compute::message::duration(t - now))),
+                None => match j.reason.as_deref() {
+                    Some(r) => (r, share::blocked_words(r)),
+                    None => ("placing", "waiting for the next placement pass (seconds)".to_string()),
+                },
+            };
+            w("server", serde_json::Value::Null, serde_json::Value::Null, reason, words, None, "unknown", true, Some(queued_since))
+        }
+        "assigned" | "preparing" => w(
+            "node",
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            state,
+            format!("sent to {node}; {}", if state == "assigned" { "starting" } else { "preparing (source, tools)" }),
+            None,
+            "unknown",
+            false,
+            j.assigned_at,
+        ),
+        _ => {
+            // Running (or finishing): the time left by earlier runs.
+            let left = j.est_secs.zip(j.started_at).map(|(e, s)| (e - (now - s)).max(0));
+            w("node", serde_json::Value::Null, serde_json::Value::Null, state, format!("{state} on {node}"), left, "estimate", false, j.started_at.or(j.assigned_at))
+        }
+    }
+}
+
+/// Put a server-queued job's queue view (its place in this server's line)
+/// and the matching `wait` on its JSON (`get`, `jobs`).
+pub(crate) fn with_queue(who: &Who, j: &store::JobRow, v: &mut serde_json::Value, decision: &scheduler::Decision) {
+    if j.state != "queued" {
+        return;
+    }
+    if let Some(q) = queue_view(who, j, decision) {
+        v["queue"] = q;
+    }
+    let node = v.get("node").and_then(|n| n.as_str()).map(str::to_string);
+    v["wait"] = wait_json(j, v.get("queue"), node.as_deref());
 }
 
 /// One job as another job's queue view (or `status`) shows it. `viewer` =
@@ -543,11 +702,33 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
         parallel: offer.as_ref().map(|o| o.parallel_max),
         ws_running: Some(ws_running),
         ws_cap: Some(grant_parallel),
+        idle_cpu_millis: idle_cpu_millis(&j.node_id, offer.as_ref()),
         ..Default::default()
     };
     // The scheduler's own message already carries its numbers; the grant
-    // cap gets the PRD's words.
-    let words = if why.code == scheduler::GRANT_PARALLEL_FULL { share::wait_words(&why.code, &facts) } else { why.message.clone() };
+    // cap and a wait for room (CE-8: the slot limit, the default CPU
+    // reservation, idle beside unreserved) get the PRD's words.
+    let room = [
+        k2_core::compute::proto::refusal::PARALLEL_FULL,
+        k2_core::compute::proto::refusal::LOCAL_RESOURCE_LIMIT,
+        pshare::blocked::WAITING_FOR_ROOM,
+    ];
+    let words = if why.code == scheduler::GRANT_PARALLEL_FULL || room.contains(&why.code.as_str()) { share::wait_words(&why.code, &facts) } else { why.message.clone() };
+    // CE-7: a solo node's ETA, estimated from earlier runs' durations (the
+    // time left of the running jobs and the queued ones ahead, over the
+    // node's slots). Unknown when any of them has no earlier run.
+    let eta = if on_shared {
+        None
+    } else {
+        let left: Option<i64> = active
+            .iter()
+            .filter(|r| !r.node_queued)
+            .map(|r| r.est_secs.map(|e| (e - (now - r.started_at.or(r.assigned_at).unwrap_or(now))).max(0)))
+            .chain(before.iter().map(|(_, q)| q.est_secs))
+            .sum();
+        let slots = offer.as_ref().map(|o| o.parallel_max.max(1)).unwrap_or(1) as i64;
+        left.map(|l| l / slots)
+    };
     let passes = why.code == scheduler::GRANT_PARALLEL_FULL || pshare::blocked::lets_others_pass(&why.code);
     let tail = if passes { "; jobs behind it may start first" } else { "" };
     let line = if on_shared {
@@ -564,6 +745,8 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
         "waitReason": why.code,
         "waitWords": words,
         "holdsQueue": !passes,
+        "etaSecs": eta,
+        "etaBasis": if eta.is_some() { "estimate" } else { "unknown" },
         "line": line,
         "ahead": ahead,
         "parallel": parallel,
@@ -721,10 +904,15 @@ pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_
         None => None,
         Some(t) => Some(Tier::parse(t).ok_or_else(|| no(codes::BAD_REQUEST, 400, "--tier is ci, priority or normal"))?.as_str()),
     };
+    // CE-9: `jobs --tag NAME` (in SQL, so --limit counts matching jobs).
+    let tag = tag_param(params.get("tag").map(String::as_str))?;
     let rows = {
         let db = k2_core::db::shared();
         let conn = db.lock();
-        store::list_jobs(&conn, &store::JobFilter { node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit, tier })
+        store::list_jobs(
+            &conn,
+            &store::JobFilter { node_id: node.as_deref(), workspace_id: ws.as_deref(), state, session_id: session.as_deref(), limit, tier, tag },
+        )
     };
     // Queued rows carry the queue view (one scheduler pass per node).
     let mut decisions: HashMap<String, scheduler::Decision> = HashMap::new();
@@ -734,9 +922,7 @@ pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_
             let mut v = job_summary(r);
             if r.state == "queued" {
                 let d = decisions.entry(r.node_id.clone()).or_insert_with(|| compute_ws::decision_for(&r.node_id));
-                if let Some(q) = queue_view(who, r, d) {
-                    v["queue"] = q;
-                }
+                with_queue(who, r, &mut v, d);
             }
             v
         })
@@ -744,23 +930,63 @@ pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_
     Ok(serde_json::json!({ "jobs": jobs }))
 }
 
+/// A `tag` parameter (CE-9): absent, or a valid tag (else 400, never
+/// silently ignored).
+pub(crate) fn tag_param(t: Option<&str>) -> R<Option<&str>> {
+    match t.map(str::trim).filter(|t| !t.is_empty()) {
+        None => Ok(None),
+        Some(t) if store::valid_tag(t) => Ok(Some(t)),
+        Some(t) => Err(no(
+            crate::compute_routes::TAG_INVALID,
+            400,
+            format!("{t:?} isn't a tag: 1–{} of A-Z a-z 0-9 . _ : / -", store::TAG_MAX),
+        )),
+    }
+}
+
+/// `24G` / `1.5G` for a byte count.
+fn gib_shown(b: u64) -> String {
+    let g = b as f64 / (1u64 << 30) as f64;
+    if (g - g.round()).abs() < 0.05 {
+        format!("{}G", g.round() as u64)
+    } else {
+        format!("{g:.1}G")
+    }
+}
+
 /// A job the node killed at its memory cap (`failed`/`mem_cap`, no exit
-/// code): what to try next.
+/// code): what to try next. CE-14: with the peak the node reported, "used
+/// 25.3G of --mem 24G".
 fn mem_cap_hint(j: &store::JobRow) -> Option<String> {
     if j.state != "failed" || j.reason.as_deref() != Some("mem_cap") {
         return None;
     }
+    let peak = compute::result::peak_mem_bytes(j);
     Some(match j.plan().and_then(|p| p.limits.mem_bytes) {
         Some(m) => {
-            let g = m as f64 / (1u64 << 30) as f64;
-            let shown = if (g - g.round()).abs() < 0.05 { format!("{}G", g.round() as u64) } else { format!("{g:.1}G") };
+            let shown = gib_shown(m);
+            let used = peak.map(|p| format!(" (used {} of {})", gib_shown(p), if j.ctl.mem_defaulted { format!("the default {shown}") } else { format!("--mem {shown}") })).unwrap_or_default();
             if j.ctl.mem_defaulted {
-                format!("stopped: it used more than the default {shown} memory reservation (no --mem was given). Pass --mem with what it needs (e.g. --mem 24G for a cargo build), or CARGO_BUILD_JOBS=2")
+                format!("stopped: it used more than the default {shown} memory reservation (no --mem was given){used}. Pass --mem with what it needs (e.g. --mem 24G for a cargo build), or CARGO_BUILD_JOBS=2")
             } else {
-                format!("stopped: it used more than its --mem {shown}. Try a bigger --mem or CARGO_BUILD_JOBS=2")
+                format!("stopped: it used more than its --mem {shown}{used}. Try a bigger --mem or CARGO_BUILD_JOBS=2")
             }
         }
-        None => "killed at the node's memory cap: pass a bigger --mem (k2 compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2".into(),
+        None => match peak {
+            Some(p) => format!("killed at the node's memory cap (used {}): pass a bigger --mem (k2 compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2", gib_shown(p)),
+            None => "killed at the node's memory cap: pass a bigger --mem (k2 compute nodes shows each node's cap) or CARGO_BUILD_JOBS=2".into(),
+        },
+    })
+}
+
+/// CE-10: a running job's stall watch, as `get` shows it: the limit the
+/// node enforces (`stallSecs`, null = off) and when the warning went out.
+fn stall_json(j: &store::JobRow) -> serde_json::Value {
+    let secs = j.plan().and_then(|p| p.stall_secs);
+    serde_json::json!({
+        "stallSecs": secs,
+        "warned": j.ctl.stall_warned_gen == Some(j.generation),
+        "lastOutputAt": crate::compute_ws::last_output_at(j),
     })
 }
 
@@ -851,9 +1077,14 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
         }
     }
     if j.state == "queued" {
-        if let Some(q) = queue_view(who, &j, &compute_ws::decision_for(&j.node_id)) {
-            v["queue"] = q;
-        }
+        with_queue(who, &j, &mut v, &compute_ws::decision_for(&j.node_id));
+    }
+    if matches!(j.state.as_str(), "running" | "finishing") {
+        v["stall"] = stall_json(&j);
+    }
+    // CE-5: the end came late (this server was asleep, or the node cut off).
+    if let (Some(late), Some(heard)) = (j.ctl.reported_late_secs, j.ctl.heard_at) {
+        v["reportedLate"] = serde_json::json!({"secs": late, "nodeEndedAt": j.ended_at, "heardAt": heard});
     }
     v["nodeOnline"] = compute_ws::is_online(&j.node_id).into();
     let node = v["node"].as_str().map(str::to_string);
@@ -865,6 +1096,12 @@ pub(crate) fn job_get(who: &Who, params: &HashMap<String, String>) -> R<serde_js
     if let Some(s) = v.get("secrets").cloned() {
         v["result"]["secrets"] = s;
     }
+    // CE-7: `get --json` prints the result object: the wait rides there too
+    // (null once the job ended), and a running job's stall watch.
+    v["result"]["wait"] = v.get("wait").cloned().unwrap_or_default();
+    if let Some(s) = v.get("stall").cloned() {
+        v["result"]["stall"] = s;
+    }
     Ok(v)
 }
 
@@ -874,6 +1111,9 @@ pub(crate) const JOB_STARTED: &str = "job_started";
 
 pub(crate) fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let v = json_body(body)?;
+    if let Some(f) = v.get("filter") {
+        return cancel_matching(who, &v, f);
+    }
     let queued_only = match s(&v, "ifState") {
         None => false,
         Some("queued") => true,
@@ -907,6 +1147,89 @@ pub(crate) fn job_cancel(who: &Who, body: &[u8]) -> R<serde_json::Value> {
         return Ok(serde_json::json!({"ok": true, "state": seen.state, "cancel": format!("sent to {n} shard(s)")}));
     }
     cancel_one(who, &seen, queued_only)
+}
+
+/// CE-20: `k2 compute cancel --all-mine [--tag T] [--state queued|running|any]
+/// [--node N] [--force] [--workspace-all]`: cancel this session's matching
+/// jobs (`scope: "workspace"`: every job of the workspace). Body:
+/// `{filter: {scope, tag, state, node}, force}`. Each goes through
+/// [`cancel_one`] (same audit and node messages as one cancel). Queued only
+/// by default; a started job is stopped only with `force`, else listed as
+/// skipped. A split run's parent is never touched: its shards are.
+fn cancel_matching(who: &Who, v: &serde_json::Value, f: &serde_json::Value) -> R<serde_json::Value> {
+    need_credential(who)?;
+    let gate = passport_gate(who)?;
+    let fs = |k: &str| f.get(k).and_then(|x| x.as_str()).map(str::trim).filter(|x| !x.is_empty());
+    let force = v.get("force").and_then(|x| x.as_bool()) == Some(true);
+    let scope = fs("scope").unwrap_or("session");
+    let (ws, session) = match (scope, gate) {
+        ("session", Some(ws)) => (ws, who.passport().map(|(_, s)| s.to_string())),
+        ("workspace", Some(ws)) => (ws, None),
+        ("session", None) => {
+            return Err(no(
+                codes::BAD_REQUEST,
+                400,
+                "--all-mine means this agent session's jobs, and this caller has no session (the owner token): pass --workspace-all from the workspace's folder",
+            ))
+        }
+        ("workspace", None) => {
+            let t = fs("workspace").ok_or_else(|| no("workspace_not_found", 404, "pass --workspace <workspace>"))?;
+            (ws_by_token_or_worktree(t).ok_or_else(|| no_workspace(t))?.id, None)
+        }
+        _ => return Err(no(codes::BAD_REQUEST, 400, "filter.scope is \"session\" (--all-mine) or \"workspace\" (--workspace-all)")),
+    };
+    let states: &[&str] = match fs("state").unwrap_or("queued") {
+        "queued" => &["queued"],
+        "running" => &["assigned", "preparing", "running", "finishing"],
+        "any" => &["queued", "assigned", "preparing", "running", "finishing"],
+        _ => return Err(no(codes::BAD_REQUEST, 400, "--state is queued, running or any")),
+    };
+    let tag = tag_param(fs("tag"))?;
+    let node = match fs("node") {
+        Some(t) => Some(node_or_404(Some(t))?.id),
+        None => None,
+    };
+    let mut rows: Vec<store::JobRow> = Vec::new();
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for st in ["queued", "assigned", "preparing", "running", "finishing"] {
+            let list = store::list_jobs(
+                &conn,
+                &store::JobFilter { node_id: node.as_deref(), workspace_id: Some(&ws), state: Some(st), session_id: session.as_deref(), limit: 500, tier: None, tag },
+            );
+            for r in list {
+                // A node-queued row is `assigned` in the table but queued in
+                // every view (and in the `queued` listing above).
+                let shown = compute::result::shown_state(&r).to_string();
+                if states.contains(&shown.as_str()) && r.ctl.shards.is_empty() && !rows.iter().any(|x| x.id == r.id) {
+                    rows.push(r);
+                }
+            }
+        }
+    }
+    rows.sort_by(|a, b| a.created_at.cmp(&b.created_at).then_with(|| a.id.cmp(&b.id)));
+    let mut cancelled = Vec::new();
+    let mut skipped = Vec::new();
+    for r in &rows {
+        let short = compute::message::short(&r.id).to_string();
+        match cancel_one(who, r, !force) {
+            Ok(out) => cancelled.push(serde_json::json!({"job": short, "state": out.get("state").cloned().unwrap_or_default(), "node": out.get("node").cloned().unwrap_or_default()})),
+            Err(e) => skipped.push(serde_json::json!({"job": short, "code": e.code, "hint": e.hint})),
+        }
+    }
+    if !cancelled.is_empty() {
+        compute_ws::notify_change();
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "matched": rows.len(),
+        "count": cancelled.len(),
+        "cancelled": cancelled,
+        "skipped": skipped,
+        "scope": scope,
+        "force": force,
+    }))
 }
 
 /// Cancel one job: queued, at once (compare-and-set); on a node, the node

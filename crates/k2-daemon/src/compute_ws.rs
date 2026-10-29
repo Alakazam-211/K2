@@ -943,6 +943,28 @@ fn on_log(tallies: &mut HashMap<(String, u32), LogTally>, l: LogChunk) {
     }
 }
 
+/// The node's own times for one observation (CE-5, CE-A6): `at` = when the
+/// node says the state changed (a live `state` frame's `at`; a snapshot
+/// row's `ended_at` or `started_at`), `started_at` = the node's start time
+/// when the observation carries it (a snapshot row).
+#[derive(Debug, Clone, Copy, Default)]
+struct NodeTimes {
+    at: Option<i64>,
+    started_at: Option<i64>,
+}
+
+/// CE-5: the node's clock minus this server's, when known: a shared node's
+/// share view, else its last health frame (sent as soon as it is taken, so
+/// the node's `at` minus the time it arrived), no older than an hour.
+fn node_skew(conn: &rusqlite::Connection, node_id: &str) -> Option<i64> {
+    let n = store::node_by_id(conn, node_id)?;
+    if let Some(s) = n.share.as_ref().and_then(|v| v.skew_secs) {
+        return Some(s);
+    }
+    let (at, h) = compute::admin::health(conn, node_id)?;
+    (h.at > 0 && compute::now() - at <= 3600).then_some(h.at - at)
+}
+
 /// Apply one node observation of a job (live `state` or a snapshot row).
 /// `queue`: the node's position for a job in its queue (protocol 3).
 #[allow(clippy::too_many_arguments)]
@@ -956,6 +978,7 @@ fn apply_observation(
     exit: Option<&frames::ExitInfo>,
     src: Option<&frames::SrcRan>,
     queue: Option<&pshare::QueuePos>,
+    times: NodeTimes,
 ) {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -1065,7 +1088,41 @@ fn apply_observation(
     } else {
         (state, reason, detail)
     };
-    let _ = store::set_job_state(&conn, job_id, state, reason, detail, now);
+    // CE-5: a start or an end is stamped with the node's own time when its
+    // clock can be trusted (one clock per job), so a job that ended while
+    // this server slept doesn't gain the sleep. Clamped: ended >= started
+    // >= assigned.
+    let mut stamp = now;
+    let mut ctl = job.ctl.clone();
+    if let Some(at) = times.at.filter(|_| state == JobState::Running || state.is_terminal()) {
+        let (t, clock, late) = compute::result::node_time(at, now, node_skew(&conn, node_id));
+        let clock = match ctl.clock.as_deref() {
+            Some("server") => "server",
+            _ => clock,
+        };
+        if clock == "node" {
+            let floor = if state == JobState::Running { job.assigned_at } else { job.started_at.or(job.assigned_at) };
+            stamp = t.max(floor.unwrap_or(i64::MIN));
+            if state.is_terminal() {
+                // A snapshot that only now says it started: the node's start.
+                if job.started_at.is_none() {
+                    if let Some(s) = times.started_at {
+                        let s = compute::result::node_time(s, now, Some(0)).0.max(job.assigned_at.unwrap_or(i64::MIN)).min(stamp);
+                        store::set_job_times(&conn, job_id, Some(s), None);
+                    }
+                }
+                if let Some(l) = late {
+                    ctl.reported_late_secs = Some(l);
+                    ctl.heard_at = Some(now);
+                }
+            }
+        }
+        ctl.clock = Some(clock.to_string());
+    }
+    let _ = store::set_job_state(&conn, job_id, state, reason, detail, stamp);
+    if ctl != job.ctl {
+        let _ = store::set_job_ctl(&conn, job_id, &ctl);
+    }
     if let Some(s) = src {
         store::set_job_src(&conn, job_id, &s.commit, &s.tree);
     }
@@ -1240,8 +1297,11 @@ pub fn finalize(job_id: &str) {
         // Detached jobs always get a message. An attached job gets one too
         // when nobody is following its logs any more (the agent's shell
         // tool timed out and killed `k2 compute run`): otherwise its result
-        // would only ever be found by polling.
-        let wants = job.detach || (job.session_id.is_some() && !follower_recent(&job.id));
+        // would only ever be found by polling. A queue timeout always
+        // reaches someone (CE-12, CE-A9): its session, else the workspace's
+        // inbox (owner-token and script submits have no session).
+        let queue_timeout = job.state == "failed" && job.reason.as_deref() == Some("queue_timeout");
+        let wants = job.detach || queue_timeout || (job.session_id.is_some() && !follower_recent(&job.id));
         // A job its requester cancelled: they know how it ended.
         let wants = wants && !(job.state == "cancelled" && job.ctl.cancelled_by_requester);
         if !job.is_terminal() || !wants || job.notified_at.is_some() {
@@ -1257,8 +1317,19 @@ pub fn finalize(job_id: &str) {
         _ => None,
     };
     let tests = compute::result::outputs(&job).and_then(|o| o.tests);
+    // CE-4: the Rust version the job ran, when Rust was a need.
+    let rust_need = job.plan().is_some_and(|p| p.needs.iter().any(|n| n.starts_with("rust@") || n == "rust"));
+    let rustc = rust_need
+        .then(|| compute::result::tools(&job))
+        .and_then(|t| t.get("versions").and_then(|v| v.get("rustc")).and_then(|r| r.as_str()).map(str::to_string));
+    let extra = compute::message::Extra {
+        // Only the controller's own words for a queue timeout's wait.
+        detail: job.detail.as_deref().filter(|_| job.reason.as_deref() == Some("queue_timeout")),
+        late_secs: job.ctl.reported_late_secs,
+        rustc: rustc.as_deref(),
+    };
     let text = if job.ctl.shards.is_empty() {
-        compute::message::completion_text(&job.id, &node_name, &job.state, job.exit_code, job.signal, job.reason.as_deref(), secs, tests.as_ref())
+        compute::message::completion_text(&job.id, &node_name, &job.state, job.exit_code, job.signal, job.reason.as_deref(), secs, tests.as_ref(), &extra)
     } else {
         compute::message::shards_completion_text(
             &job.id,
@@ -1282,6 +1353,11 @@ pub fn finalize(job_id: &str) {
 
 /// Live message to the requesting session, else the workspace inbox.
 fn deliver_completion(job_id: &str, session: Option<&str>, ws_path: Option<&str>, text: &str) {
+    deliver(&format!("compute job {} ended", compute::message::short(job_id)), job_id, session, ws_path, text)
+}
+
+/// Live message to a job's session, else the workspace inbox (`title`).
+fn deliver(title: &str, job_id: &str, session: Option<&str>, ws_path: Option<&str>, text: &str) {
     if let Some(sid) = session.filter(|s| !s.is_empty()) {
         if test_sink(sid, text) {
             return;
@@ -1292,9 +1368,107 @@ fn deliver_completion(job_id: &str, session: Option<&str>, ws_path: Option<&str>
         }
     }
     if let Some(p) = ws_path {
-        let title = format!("compute job {} ended", compute::message::short(job_id));
-        if let Err(e) = k2_core::inbox::compose(std::path::Path::new(p), &title, text, None, Some("compute"), Some("compute")) {
+        if let Err(e) = k2_core::inbox::compose(std::path::Path::new(p), title, text, None, Some("compute"), Some("compute")) {
             log_debug!("[compute] inbox fallback for {job_id}: {e}");
+        }
+    }
+}
+
+// ── the stall warning (CE-10, CE-A21) ────────────────────────────────
+
+/// When this server last saw a job attempt print (its log file's last
+/// write; the start when it printed nothing), unix seconds.
+pub fn last_output_at(j: &store::JobRow) -> Option<i64> {
+    let written = std::fs::metadata(logs::path(&j.id, j.generation))
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    match (written, j.started_at) {
+        (Some(w), Some(s)) => Some(w.max(s)),
+        (w, s) => w.or(s),
+    }
+}
+
+/// When the warning goes out: 5 minutes before the stall limit, or at
+/// half of it when that is shorter.
+pub fn stall_warn_after(stall_secs: i64) -> i64 {
+    stall_secs - 300.min(stall_secs / 2)
+}
+
+/// The warning's words (controller-made; no log text).
+pub fn stall_warning_text(job_id: &str, quiet_secs: i64, stall_secs: i64, cpu_rule: bool) -> String {
+    let id = compute::message::short(job_id);
+    let ends = if cpu_rule {
+        format!("it ends at {} of silence unless it is using CPU", compute::message::duration(stall_secs))
+    } else {
+        format!("it ends at {} of silence", compute::message::duration(stall_secs))
+    };
+    format!(
+        "[compute] job {id} has printed nothing for about {}; {ends}. A quiet job that is still working: pass --stall-timeout off (or a longer one) next time. k2 compute get {id}",
+        compute::message::duration(quiet_secs)
+    )
+}
+
+/// This server's own awake clock for the stall watch: a gap of over a
+/// minute between sweeps means it slept, and no output could arrive.
+static STALL_AWAKE: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static STALL_LAST: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// One `[compute]` warning per attempt before a quiet job's stall limit
+/// ends it (to its session, else the workspace inbox). Works with every
+/// node: the node enforces the limit (`plan.stall_secs`), this server only
+/// watches the log it relays. Silence is counted from the later of the
+/// last output, the start and this server waking, and only while the node
+/// is attached, so a sleep or a cut-off never warns.
+pub fn sweep_stalls(now: i64) {
+    // Every 15 s is plenty for a warning minutes ahead.
+    let last = STALL_LAST.load(Ordering::Relaxed);
+    if last != 0 && (0..15).contains(&(now - last)) {
+        return;
+    }
+    STALL_LAST.store(now, Ordering::Relaxed);
+    if last == 0 || now - last > 60 {
+        STALL_AWAKE.store(now, Ordering::Relaxed);
+    }
+    let awake = STALL_AWAKE.load(Ordering::Relaxed);
+    let running = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        store::list_jobs(&conn, &store::JobFilter { state: Some("running"), limit: 500, ..Default::default() })
+    };
+    for j in running {
+        let Some(stall) = j.plan().and_then(|p| p.stall_secs).map(|s| s as i64).filter(|s| *s > 0) else { continue };
+        if j.ctl.stall_warned_gen == Some(j.generation) || !is_online(&j.node_id) {
+            continue;
+        }
+        let Some(since) = last_output_at(&j) else { continue };
+        let quiet = now - since.max(awake);
+        if quiet < stall_warn_after(stall) || quiet >= stall {
+            continue;
+        }
+        let cpu_rule = live_view(&j.node_id).2.is_some_and(|o| o.features.iter().any(|f| f == "stall-cpu"));
+        let (session, ws_path) = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            // Once per attempt, decided under the lock on a fresh row.
+            let Some(row) = store::job_by_id(&conn, &j.id) else { continue };
+            if row.generation != j.generation || row.state != "running" || row.ctl.stall_warned_gen == Some(row.generation) {
+                continue;
+            }
+            let mut ctl = row.ctl.clone();
+            ctl.stall_warned_gen = Some(row.generation);
+            if store::set_job_ctl(&conn, &row.id, &ctl).is_err() {
+                continue;
+            }
+            store::record_event(&conn, "controller", "job_stall_warning", Some(&row.node_id), Some(&row.workspace_id), Some(&row.id), serde_json::json!({"quietSecs": quiet, "stallSecs": stall}));
+            (row.session_id.clone(), k2_core::db::schema::Project::get(&conn, &row.workspace_id).ok().map(|p| p.path))
+        };
+        let text = stall_warning_text(&j.id, quiet, stall, cpu_rule);
+        let id = j.id.clone();
+        let title = format!("compute job {} is quiet", compute::message::short(&j.id));
+        if let Err(e) = crate::rt::spawn("compute-stall", move || deliver(&title, &id, session.as_deref(), ws_path.as_deref(), &text)) {
+            log_debug!("[compute] stall warning for {} not delivered: {e}", j.id);
         }
     }
 }
@@ -1359,7 +1533,18 @@ fn on_state(node_id: &str, s: StateUpdate) {
     if let Some(o) = s.outputs.clone().filter(|_| s.state.is_terminal()) {
         store_outputs(node_id, &s.job_id, s.generation, o);
     }
-    apply_observation(node_id, &s.job_id, s.generation, s.state, s.reason.as_deref(), s.detail.as_deref(), s.exit.as_ref(), s.src.as_ref(), s.queue.as_ref());
+    apply_observation(
+        node_id,
+        &s.job_id,
+        s.generation,
+        s.state,
+        s.reason.as_deref(),
+        s.detail.as_deref(),
+        s.exit.as_ref(),
+        s.src.as_ref(),
+        s.queue.as_ref(),
+        NodeTimes { at: Some(s.at), started_at: None },
+    );
     if s.state.is_terminal() {
         crate::compute_secrets::belt_disarm(&s.job_id, s.generation);
         kick(node_id);
@@ -1371,7 +1556,10 @@ fn on_snapshot(node_id: &str, s: JobsSnapshot, seen: &mut HashSet<String>) {
     for j in &s.jobs {
         seen.insert(format!("{}#{}", j.job_id, j.generation));
         stop_stale(node_id, j);
-        apply_observation(node_id, &j.job_id, j.generation, j.state, j.reason.as_deref(), None, j.exit.as_ref(), None, None);
+        // The node's ledger times (CE-5): a job that ended while this
+        // server slept is heard here, with its real end.
+        let at = if j.state.is_terminal() { j.ended_at } else { j.started_at };
+        apply_observation(node_id, &j.job_id, j.generation, j.state, j.reason.as_deref(), None, j.exit.as_ref(), None, None, NodeTimes { at, started_at: j.started_at });
     }
     if !s.last {
         return;
@@ -2509,6 +2697,8 @@ fn ensure_ticker() {
                     crate::compute_place::sweep(now);
                     // Shared nodes: expiry notes, the owner's server lists.
                     crate::compute_place::sweep_shares(now);
+                    // CE-10: warn a quiet job's session before its stall limit.
+                    sweep_stalls(now);
                 })
                 .await;
             }
@@ -2651,10 +2841,10 @@ mod tests {
             store::insert_pending_node(&conn, "n1", "n1", "fp", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
         }
         let job = mk("cccccccc0123456789abcdef01234567", true);
-        apply_observation("n1", &job.id, job.generation as u32, JobState::Running, None, None, None, None, None);
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Running, None, None, None, None, None, NodeTimes::default());
         let row = store::job_by_id(&db.lock(), &job.id).expect("row");
         assert_eq!((row.state.as_str(), row.reason.as_deref()), ("running", Some("cancel_requested")), "the cancel stays owed while it runs");
-        apply_observation("n1", &job.id, job.generation as u32, JobState::Interrupted, Some("node_restart"), None, None, None, None);
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Interrupted, Some("node_restart"), None, None, None, None, NodeTimes::default());
         let row = store::job_by_id(&db.lock(), &job.id).expect("row");
         assert_eq!((row.state.as_str(), row.reason.as_deref()), ("cancelled", Some("cancelled")), "{row:?}");
         assert_eq!(row.generation, job.generation, "not re-dispatched");
@@ -2662,10 +2852,66 @@ mod tests {
         assert!(row.ended_at.is_some());
         // The control: no cancel owed, the interruption is retried.
         let other = mk("dddddddd0123456789abcdef01234567", false);
-        apply_observation("n1", &other.id, other.generation as u32, JobState::Interrupted, Some("node_restart"), None, None, None, None);
+        apply_observation("n1", &other.id, other.generation as u32, JobState::Interrupted, Some("node_restart"), None, None, None, None, NodeTimes::default());
         let row = store::job_by_id(&db.lock(), &other.id).expect("row");
         assert_eq!(row.state.as_str(), "queued", "retried: {row:?}");
         assert!(row.attempt > other.attempt, "a new attempt: {row:?}");
+    }
+
+    /// CE-5 acceptance 1: an end the node stamped at T, heard at T + 3 h,
+    /// keeps T: the duration is the node's, and the job is reported late
+    /// by ~10800 s. A node whose clock is off keeps this server's time.
+    #[test]
+    fn node_times_keep_a_late_end_at_the_nodes_time() {
+        let _db = k2_core::db::scoped_for_test();
+        let db = k2_core::db::shared();
+        let now = compute::now();
+        let mk = |id: &str, node: &str, skew: i64| {
+            let conn = db.lock();
+            if store::node_by_id(&conn, node).is_none() {
+                store::insert_pending_node(&conn, node, node, "fp", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+                // A health frame taken at the node's `at`, heard now: the skew.
+                let h = k2_core::compute::proto::health::Health { at: now + skew, boot_id: "b".into(), ..Default::default() };
+                compute::admin::store_health(&conn, node, now, &h).expect("health");
+            }
+            let j = job_on(&conn, id, node);
+            assert!(store::assign_if_queued(&conn, &j.id, now - 12_000).expect("assign"));
+            store::job_by_id(&conn, &j.id).expect("row")
+        };
+        let job = mk("eeeeeeee0123456789abcdef01234567", "n1", 2);
+        let t = now - 10_800;
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Running, None, None, None, None, None, NodeTimes { at: Some(t - 600), started_at: None });
+        let ex = frames::ExitInfo { code: Some(0), signal: None };
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Done, None, None, Some(&ex), None, None, NodeTimes { at: Some(t), started_at: None });
+        let row = store::job_by_id(&db.lock(), &job.id).expect("row");
+        assert_eq!((row.started_at, row.ended_at), (Some(t - 600), Some(t)), "the node's times: {row:?}");
+        assert_eq!(row.ctl.clock.as_deref(), Some("node"));
+        let late = row.ctl.reported_late_secs.expect("reported late");
+        assert!((10_800..=10_805).contains(&late), "late {late}");
+        let env = compute::result::envelope(&row, Some("n1"));
+        assert_eq!(env["durationSecs"], 600, "the node's duration, not the sleep: {env}");
+        assert_eq!(env["clock"], "node");
+
+        // A node whose clock is 10 min off: this server's time, said so.
+        let skewed = mk("ffffffff0123456789abcdef01234567", "n2", 600);
+        apply_observation("n2", &skewed.id, skewed.generation as u32, JobState::Running, None, None, None, None, None, NodeTimes { at: Some(t), started_at: None });
+        let row = store::job_by_id(&db.lock(), &skewed.id).expect("row");
+        assert_eq!(row.ctl.clock.as_deref(), Some("server"));
+        assert!(row.started_at.is_some_and(|s| s >= now), "server time: {row:?}");
+        assert_eq!(row.ctl.reported_late_secs, None);
+    }
+
+    /// CE-10: the warning goes out 5 min before the limit (half of a
+    /// short one), once, in words that teach the flag.
+    #[test]
+    fn stall_warning_timing_and_words() {
+        assert_eq!(stall_warn_after(1800), 1500);
+        assert_eq!(stall_warn_after(240), 120);
+        assert_eq!(
+            stall_warning_text("ab12cd34ffff", 1560, 1800, false),
+            "[compute] job ab12cd34 has printed nothing for about 26m00s; it ends at 30m00s of silence. A quiet job that is still working: pass --stall-timeout off (or a longer one) next time. k2 compute get ab12cd34"
+        );
+        assert!(stall_warning_text("ab12cd34ffff", 1560, 1800, true).contains("unless it is using CPU"));
     }
 
     /// C11: a job whose cancel was asked for while assigned, and that the
@@ -2683,7 +2929,7 @@ mod tests {
             store::set_job_reason(&conn, &j.id, Some("cancel_requested"), None);
             j
         };
-        apply_observation("n1", &job.id, job.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None, None);
+        apply_observation("n1", &job.id, job.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None, None, NodeTimes::default());
         let row = store::job_by_id(&db.lock(), &job.id).expect("row");
         assert_eq!((row.state.as_str(), row.reason.as_deref()), ("cancelled", Some("cancelled")));
         assert!(row.ended_at.is_some());
@@ -2694,7 +2940,7 @@ mod tests {
             assert!(store::assign_if_queued(&conn, &j.id, 20).expect("assign"));
             j
         };
-        apply_observation("n1", &other.id, other.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None, None);
+        apply_observation("n1", &other.id, other.generation as u32, JobState::Queued, Some("parallel_full"), None, None, None, None, NodeTimes::default());
         let row = store::job_by_id(&db.lock(), &other.id).expect("row");
         assert_eq!((row.state.as_str(), row.reason.as_deref()), ("queued", Some("parallel_full")));
     }

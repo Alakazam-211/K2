@@ -94,7 +94,7 @@ pub(crate) static ROLLBACK_DATA_LOSS: ActionSpec = ActionSpec {
         setting: "Roll Sew back",
         what_changes: "Roll this server's chat (Sew) back from {from} to {to}",
         consequences: "Chat written since {since} will be lost from the live chat; a backup of it is kept. Approving runs \
-            it now: K2 backs up Sew {from}'s chat, then everyone's chat goes back to how it was at {since}. Chat is offline \
+            it now: K2 backs up the chat on Sew {from}, then everyone's chat goes back to how it was at {since}. Chat is offline \
             for a few minutes while it runs. To bring the newer chat back later: k2 hostchat upgrade, then k2 hostchat \
             restore <the kept backup> --confirm.",
         scope: "this server's chat, for everyone",

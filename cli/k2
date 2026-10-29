@@ -59912,7 +59912,7 @@ _hostchat_rollback_data_loss() {
         echo "Nothing has changed yet. Confirming will:"
         echo "  roll this server's chat (Sew) back from $from to $to, for everyone on it."
         echo "  Chat written since $since will be lost from the live chat; a backup of it is kept."
-        echo "  K2 first backs up Sew $from's chat, then rolls back to backup $bundle (taken just before the upgrade)."
+        echo "  K2 first backs up the chat on Sew $from, then rolls back to backup $bundle (taken just before the upgrade)."
         echo "  Chat is offline for a few minutes while it runs."
         echo "Backups are listed by k2 hostchat backups. To bring the newer chat back later:"
         echo "  k2 hostchat upgrade, then k2 hostchat restore <kept backup> --confirm."

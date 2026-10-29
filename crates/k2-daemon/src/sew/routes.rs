@@ -286,7 +286,8 @@ fn rollback_accept_data_loss(env: &Env, who: &Who, v: &Value, req: &sup::Rollbac
             ROLLBACK_NEEDS_PERSON,
             403,
             "nothing changed: only the owner can roll Sew back across a schema change (chat written since the upgrade \
-             leaves the live chat; K2 backs it up first). Ask the owner on a permission card; the owner may instead run \
+             leaves the live chat; K2 backs it up first). Ask the owner on a permission card: k2 permission request \
+             sew.rollback-data-loss --why \"<why>\". The owner may instead run \
              k2 hostchat rollback --accept-data-loss in a terminal outside K2",
         );
         f.extra = plan.map(|p| json!({"to": p["to"], "since": p["since"], "bundle": p["bundle"]}));

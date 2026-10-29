@@ -2860,7 +2860,7 @@ pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str)
             body["result"] = json!(if healthy && clean { "rolled_back" } else { "rolled_back_unhealthy" });
             body["message"] = json!(if healthy && clean {
                 format!(
-                    "Sew is back on {to} with its chat from {}. Sew {from}'s chat is kept in backup {kept_id}; to bring it back \
+                    "Sew is back on {to} with its chat from {}. The chat from Sew {from} is kept in backup {kept_id}; to bring it back \
                      later: k2 hostchat upgrade, then k2 hostchat restore {kept_id} --confirm.",
                     bundle_time_text(bundle)
                 )

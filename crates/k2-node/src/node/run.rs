@@ -171,6 +171,12 @@ impl LineBuf {
     }
 }
 
+/// When the stall warning goes (ms): 5 min before the stall, or at half
+/// the window when that's shorter.
+pub fn stall_warn_at(stall_ms: u64) -> u64 {
+    stall_ms - (5 * 60 * 1000).min(stall_ms / 2)
+}
+
 /// `35m`, `2h05m`, `40s` for log lines.
 fn human_secs(s: u64) -> String {
     match s {
@@ -790,6 +796,10 @@ impl Node {
             );
         }
         let mut next_busy_note_ms = 0u64;
+        // CE-10: one log line before a stall ends the job (at stall − 5 min,
+        // or half the window when that's shorter), again only after it
+        // printed or worked in between.
+        let mut stall_warned = false;
         let mut ended_by: Option<StopReason> = None;
         let mut status = None;
         loop {
@@ -812,6 +822,20 @@ impl Node {
                     if if easy { usage.stalled(quiet, now_ms, m) } else { quiet >= m } {
                         ended_by = Some(StopReason { state: JobState::Timeout, reason: "stalled".into() });
                         break;
+                    }
+                    let warn_at = stall_warn_at(m);
+                    let idle = if usage.cpu_known { now_ms.saturating_sub(usage.last_busy_ms) } else { quiet };
+                    if !easy || quiet < warn_at || idle < warn_at {
+                        stall_warned = false;
+                    } else if !stall_warned {
+                        stall_warned = true;
+                        let line = format!(
+                            "[k2-node] stall warning: no output and no CPU for {}; this job ends at {} of both (its --stall-timeout; --stall-timeout off for a quiet job)\n",
+                            human_secs(quiet.min(idle) / 1000),
+                            human_secs(m / 1000)
+                        );
+                        let _ = journal.lock().unwrap().append(k2_node_proto::frames::LogStream::Sys, line.as_bytes());
+                        t.ship.notify_one();
                     }
                     if !easy || quiet < m {
                         next_busy_note_ms = 0;
@@ -1890,6 +1914,9 @@ pub(super) mod tests {
         // The pool stays below Linux's ephemeral ports.
         let last = u32::from(k2_node_proto::env::JOB_PORT_FIRST) + u32::from(k2_node_proto::env::JOB_PORT_BLOCKS) * u32::from(k2_node_proto::env::JOB_PORT_BLOCK);
         assert!(last <= 32768, "{last}");
+        assert_eq!(stall_warn_at(30 * 60 * 1000), 25 * 60 * 1000);
+        assert_eq!(stall_warn_at(4 * 60 * 1000), 2 * 60 * 1000);
+        assert_eq!(stall_warn_at(1000), 500);
         assert_eq!(human_secs(40), "40s");
         assert_eq!(human_secs(35 * 60), "35m");
         assert_eq!(human_secs(2 * 3600 + 5 * 60), "2h05m");

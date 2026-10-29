@@ -85,8 +85,9 @@ async fn a_silent_job_stalls_out_and_a_chatty_one_does_not() {
     let Some(Frame::Offer(o)) = offer.last() else { unreachable!() };
     assert!(o.features.iter().any(|f| f == k2_node_proto::frames::FEATURE_STALL), "{:?}", o.features);
 
-    let mut p = plan("s1", &["/bin/sh", "-c", "echo hi; sleep 30"]);
+    let mut p = plan("s1", &["/bin/sh", "-c", "echo kept > out.txt; echo hi; sleep 30"]);
     p.stall_secs = Some(1);
+    p.artifacts = vec!["out.txt".into()];
     let t = std::time::Instant::now();
     c.send(Frame::Assign(assign(p, 1)));
     let fr = run_to_receipt(&mut c, "s1").await;
@@ -95,6 +96,11 @@ async fn a_silent_job_stalls_out_and_a_chatty_one_does_not() {
     assert!(t.elapsed() < std::time::Duration::from_secs(10), "stopped long before the 30 s sleep: {:?}", t.elapsed());
     let sys = text(&logs_of(&fr, "s1"), k2_node_proto::frames::LogStream::Sys);
     assert!(sys.contains("[k2-node] stopping job: stalled"), "{sys}");
+    // CE-10: warned once before the end; CE-A4: a stalled job keeps its
+    // artifacts like any other end.
+    assert_eq!(sys.matches("[k2-node] stall warning: no output and no CPU for").count(), 1, "{sys}");
+    let kept: Vec<String> = end.outputs.as_ref().map(|o| o.artifacts.iter().map(|a| a.name.clone()).collect()).unwrap_or_default();
+    assert_eq!(kept, vec!["out.txt".to_string()], "a stalled job's artifacts are kept");
 
     let mut p = plan("s2", &["/bin/sh", "-c", "for i in 1 2 3 4 5 6 7; do echo $i; sleep 0.3; done"]);
     p.stall_secs = Some(1);

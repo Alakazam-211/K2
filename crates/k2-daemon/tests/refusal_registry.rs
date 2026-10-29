@@ -200,7 +200,7 @@ fn route_codes() -> BTreeMap<String, BTreeSet<String>> {
 fn every_app_route_refusal_code_has_a_registry_row() {
     let codes = route_codes();
     assert!(codes.len() >= 120, "the scan finds the App codes ({})", codes.len());
-    for known in ["apps_manage_off", "app_not_found", "push_off", "pairing_off", "pass_invalid", "egress_self", "box_service_invalid", "handover_vault_closed"] {
+    for known in ["apps_manage_off", "app_not_found", "token_in_use", "pairing_off", "pass_invalid", "egress_self", "box_service_invalid", "handover_vault_closed"] {
         assert!(codes.contains_key(known), "the scan sees {known}: {:?}", codes.keys().collect::<Vec<_>>());
     }
     let missing: Vec<String> = codes

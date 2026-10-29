@@ -281,9 +281,14 @@ pub fn study_page() -> String {
         "  k2 explain               every id, by area",
         "An App command that is refused prints fix: <the fix> before K2's own",
         "Ask with: line, and its --json error object carries next (the fix) and",
-        "explain (\"k2 explain <id>\"). Exit codes: 3 refused, 2 a bad request",
-        "or still pending, 1 a deployment that failed, 4 an unknown id here.",
-        "\"retired\" ids are ones older K2 servers send.",
+        "explain (\"k2 explain <id>\"). The exit code each id gives is beside it:",
+        "3 refused; 2 a bad request (fix the call); 1 a build or deploy that",
+        "failed (read its report or the deployment's error). k2 explain itself",
+        "exits 4 for an id it doesn't know.",
+        "When the fix is the owner's or an Admin's: if the refusal ended with an",
+        "Ask with: line, run it as printed (a permission card); otherwise tell",
+        "your human what the fix says. \"retired\" ids are ones older K2 servers",
+        "send; they still explain.",
     ] {
         s.push_str(line);
         s.push('\n');

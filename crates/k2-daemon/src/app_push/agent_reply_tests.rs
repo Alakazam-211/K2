@@ -187,7 +187,7 @@ fn a_viewing_guest_gets_no_agent_reply_push_until_the_view_lapses() {
     skin::add_principal_for_app("vera", None, &app, Some("viewers"), "test").expect("vera");
     let vera = skin::list_principals().expect("p").into_iter().find(|p| p.username == "vera").expect("vera").id;
     let s = skin::create_app_session_token("vera", &app).expect("session");
-    let reg = store::parse_registration(&json!({"deviceId": "v1", "platform": "apns", "pushToken": "v1".repeat(32)})).expect("reg");
+    let reg = store::parse_registration(&json!({"deviceId": "v1", "platform": "apns", "pushToken": "a1".repeat(32)})).expect("reg");
     store::register(&app, &vera, &s.meta.id, &reg).expect("register");
     let conv = format!("conv-view-{}", uuid::Uuid::new_v4());
     let p = |seq| Post { room: ws.clone(), room_handle: ws.clone(), conversation: conv.clone(), agent_name: "Jobs agent".into(), seq, preview: "Done".into() };

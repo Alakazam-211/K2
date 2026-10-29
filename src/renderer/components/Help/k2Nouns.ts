@@ -181,6 +181,11 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
         blurb: 'Guests, roles, grants and passes for apps on this box. Host the UI with `k2 publish`.',
         example: 'k2 app user list',
       },
+      {
+        noun: 'capabilities',
+        blurb: 'What this server can do for Apps before you try; each "no" names the fix.',
+        example: 'k2 capabilities',
+      },
       { noun: 'publish', blurb: 'Expose a local process, optionally on a nested URL.', example: 'k2 publish ps' },
       { noun: 'zen', blurb: 'Zen Gardens: gardens, themes, widgets and their data.', example: 'k2 zen guide' },
       { noun: 'store', blurb: "A Garden widget's own data (granted keys only)." },
@@ -225,6 +230,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
     title: 'Help & docs',
     items: [
       { noun: 'study', blurb: 'Bounded teaching pages (Pages in this window).', example: 'k2 study errors' },
+      { noun: 'explain', blurb: 'What an App refusal id means, its fix and who fixes it.', example: 'k2 explain apps_manage_off' },
       { noun: 'glossary', blurb: 'Define a K2 term.', example: 'k2 glossary inbox' },
       { noun: 'help', blurb: 'Daily verbs; `--advanced` for the power-user ones.', example: 'k2 help --advanced' },
       { noun: 'whats-new', blurb: 'Release notes.' },

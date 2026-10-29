@@ -23,6 +23,9 @@ fn fx(tag: &str) -> Fx {
     let db = k2_core::db::scoped_for_test();
     k2_core::deploy::set_enabled(true);
     let (ws_a, ws_b) = (format!("st-a-{tag}"), format!("st-b-{tag}"));
+    // The supervisor's once-per-process start marks unfinished deploys
+    // stalled: let it run before this test's rows exist.
+    super::super::supervisor::ensure_started();
     let h = k2_core::db::shared();
     let conn = h.lock();
     for ws in [&ws_a, &ws_b] {

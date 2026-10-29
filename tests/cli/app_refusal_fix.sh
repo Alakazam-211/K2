@@ -4,7 +4,7 @@
 #
 # A stub daemon on loopback answers three App routes with fixed refusals:
 #   GET /cli/app/inspect   → 404 app_not_found      (exit 3)
-#   GET /cli/app/logs      → 403 apps_manage_off    (exit 3)
+#   GET /cli/app/errors    → 403 apps_manage_off    (exit 3)
 #   GET /cli/app/status    → 400 bad_request        (exit 2)
 #   GET /cli/compute/nodes → 403 owner_only         (another family: unchanged)
 # For each App refusal, the plain form is the JSON line with `next` and
@@ -51,7 +51,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 ANSWERS = {
     "/cli/app/inspect": (404, "app_not_found", "no App 'nope' on this box (k2 app list)"),
-    "/cli/app/logs": (403, "apps_manage_off", "\"Build and run Apps\" is off for this agent"),
+    "/cli/app/errors": (403, "apps_manage_off", "\"Build and run Apps\" is off for this agent"),
     "/cli/app/status": (400, "bad_request", "app is required"),
     "/cli/compute/nodes": (403, "owner_only", "only the server's owner may do this"),
 }
@@ -108,15 +108,15 @@ expect_eq "inspect --json: exit 3" "$rc" "3"
 expect_eq "inspect --json: the JSON line only" "$(cat "$SANDBOX/err")" \
 '{"error": "app_not_found", "hint": "no App '"'"'nope'"'"' on this box (k2 app list)", "next": "List the Apps you can see: k2 app list", "explain": "k2 explain app_not_found"}'
 
-rc="$(rc_of app logs jobs)"
-expect_eq "logs: exit 3" "$rc" "3"
+rc="$(rc_of app errors jobs)"
+expect_eq "errors: exit 3" "$rc" "3"
 err="$(cat "$SANDBOX/err")"
 fix="$(K2_PORT=1 "$K2" explain apps_manage_off --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["fix"])')"
-expect_eq "logs: two lines" "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" "2"
-expect_eq "logs: the fix line is the registry's" "$(printf '%s\n' "$err" | sed -n 2p)" "fix: $fix"
-expect_has "logs: explain names the id" "$err" '"explain": "k2 explain apps_manage_off"'
-rc="$(rc_of app logs jobs --json)"
-expect_eq "logs --json: exit 3, one line" "$rc:$(wc -l < "$SANDBOX/err" | tr -d ' ')" "3:1"
+expect_eq "errors: two lines" "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" "2"
+expect_eq "errors: the fix line is the registry's" "$(printf '%s\n' "$err" | sed -n 2p)" "fix: $fix"
+expect_has "errors: explain names the id" "$err" '"explain": "k2 explain apps_manage_off"'
+rc="$(rc_of app errors jobs --json)"
+expect_eq "errors --json: exit 3, one line" "$rc:$(wc -l < "$SANDBOX/err" | tr -d ' ')" "3:1"
 
 rc="$(rc_of app status jobs)"
 expect_eq "status: a bad request exits 2" "$rc" "2"

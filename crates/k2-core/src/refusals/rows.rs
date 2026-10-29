@@ -78,7 +78,7 @@ pub(super) const ROWS: &[Refusal] = &[
     r("apps_disabled", "access", 404, Who::Owner, "Apps (beta) are off on this server.",
         "The owner turns them on in Settings → Apps → This server."),
     r("apps_manage_off", "access", 403, Who::Owner, "\"Build and run Apps\" (or \"…and manage them end to end\") is off for this agent.",
-        "Ask your owner: Workspace settings → Agent → Apps, or k2 app access <workspace> --build on (a terminal outside K2).")
+        "Ask your owner: Workspace settings → Agent → Apps, or k2 app access <workspace> --build on (the owner's own terminal, outside K2).")
         .ask(),
     r("bad_password", "access", 400, Who::Agent, "The test guest's password is too short.",
         "Send a longer password (the refusal says the minimum)."),
@@ -93,7 +93,7 @@ pub(super) const ROWS: &[Refusal] = &[
     r("owner_only", "access", 403, Who::Owner, "Only the server's owner can do this (in person, from Settings or a terminal outside K2).",
         "Ask the owner. The refusal names where they do it."),
     r("parent_switch_off", "access", 409, Who::Owner, "\"…and manage them end to end\" sits under \"Build and run Apps\", which is off.",
-        "The owner turns both on: k2 app access <workspace> --build on --manage on (a terminal outside K2)."),
+        "The owner turns both on: k2 app access <workspace> --build on --manage on (the owner's own terminal, outside K2)."),
     r("role_not_this_apps", "access", 400, Who::Agent, "A test guest gets one of this App's own roles (or none), and that role isn't one.",
         "Use one of the App's roles, or create one: k2 app role create <name> --app <app-id>"),
     r("too_many_test_guests", "access", 409, Who::Agent, "The App already has as many test guests as it may.",
@@ -142,6 +142,10 @@ pub(super) const ROWS: &[Refusal] = &[
         "Sign in again to get a new pass."),
     r("pass_required", "door", 401, Who::Agent, "No pass came with the request.",
         "Send the person's session pass (Authorization: Bearer k2skn_…)."),
+    // The App's gateway link: a pass that is neither the link's own nor a
+    // session of that same App (another App's guest, say).
+    r("pass_wrong_link", "door", 403, Who::Agent, "This pass belongs to another App or link, so this App's link refuses it.",
+        "Send this App's own pass, or a session pass of a person signed in to this App (each App's server uses its own link)."),
     r("signout_confirm_required", "door", 409, Who::Agent, "Rotating the seal key signs everyone out, so it needs a yes.",
         "Run it with the yes: k2 app seal rotate <app-id> --yes"),
     r("skin_token", "door", 403, Who::Agent, "This route answers only a live App pass or a guest pass (k2skn_).",
@@ -213,7 +217,7 @@ pub(super) const ROWS: &[Refusal] = &[
     r("invalid_domain", "domains", 400, Who::Agent, "That isn't a valid hostname.",
         "Check the spelling: k2 app domain add <app-id> <subdomain|host>"),
     r("label_exists_elsewhere", "domains", 403, Who::Owner, "The label already serves something on this box that isn't your workspace's; an agent never repoints it.",
-        "Pick a new label, or ask the owner to move it deliberately (--transfer, from a terminal outside K2)."),
+        "Pick a new label, or ask the owner to move it deliberately (--transfer, from the owner's own terminal, outside K2)."),
     r("label_move_failed", "domains", 409, Who::K2, "K2 couldn't move the label; it still serves what it served before. The refusal says why.",
         "Read the reason and run the command again. See the App's names: k2 app domains <app-id>"),
     r("label_not_taken", "domains", 404, Who::Agent, "The App doesn't serve that label, so there is nothing to return.",
@@ -237,6 +241,8 @@ pub(super) const ROWS: &[Refusal] = &[
         "The owner gives it to a workspace: k2 app unpark <app-id> --to <workspace>"),
     r("copy_host_failed", "handover", 409, Who::K2, "Copying the box logins' grants to the App failed. The refusal says why.",
         "Read the reason, then run the move step again: k2 app move-plan <service> --app <app-id>"),
+    r("handoff_needs_v1", "handover", 409, Who::Agent, "The App has something a hand-over wouldn't carry yet (guests tied to the old workspace, its own labels or domains…). The refusal lists each blocker.",
+        "Clear what it lists, or move the App by hand: the refusal's manual steps (a new App id, its data, labels and domains)."),
     r("handover_vault_closed", "handover", 503, Who::K2, "The vault isn't open, so the hand-over can't move the App's keys.",
         "Wait until K2 has finished starting (k2 vault status), then run it again."),
     r("move_step_failed", "handover", 409, Who::Agent, "A step of the move failed; the rest didn't run. The refusal names the step and why.",

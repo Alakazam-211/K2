@@ -206,12 +206,6 @@ pub const ROUTES: &[Route] = &[
     // workspace's Apps).
     get("/cli/app/audit", Member),
     get("/cli/app/box", Admin),
-    // 0.46.7 (TC-17): what this server can do for Apps (any login; a
-    // passport sees its own workspace's Apps and nodes).
-    get("/cli/capabilities", Member),
-    // 0.46.7 (TC-15): k2 app status (a passport: its own workspace's Apps;
-    // each part keeps its own route's rule).
-    get("/cli/app/status", Member),
     // Box services (0.46.0): read, propose and revoke are Member (a
     // passport sees its own workspace's Apps); a new one is always a held
     // request (approve is the owner's above); revoking is immediate.
@@ -444,6 +438,9 @@ pub const ROUTES: &[Route] = &[
     // S28 `k2 app shell` (WebSocket; same rules as exec).
     get("/cli/app/shell", Admin),
     post("/cli/app/start", Admin),
+    // 0.46.7 (TC-15): k2 app status (a passport: its own workspace's Apps;
+    // each part keeps its own route's rule).
+    get("/cli/app/status", Member),
     post("/cli/app/stop", Admin),
     // S19: suspend narrows: any Member (a passport: its own workspace's Apps).
     post("/cli/app/suspend", Admin),
@@ -508,6 +505,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/browser/notes/redeliver", Member),
     post("/cli/browser/open-url", Member),
     post("/cli/canonical/detect-state", Member),
+    // 0.46.7 (TC-17): what this server can do for Apps (any login; a
+    // passport sees its own workspace's Apps and nodes).
+    get("/cli/capabilities", Member),
     get("/cli/certs", Member),
     both("/cli/certs/config", Admin),
     post("/cli/certs/issue", Member),

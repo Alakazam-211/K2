@@ -282,7 +282,7 @@ async fn push_register_over_the_link_with_the_persons_own_session() {
     assert_eq!(r.status, 200, "{}", r.body);
     // Another App's guest session never registers on this App's link.
     let r = bearer(lport, "POST", "/cli/skin/push/register", &crm_phone, Some(reg.clone())).await;
-    assert_eq!(r.status, 401, "another App's pass on this link: {}", r.body);
+    assert_eq!((r.status, r.code()), (403, "pass_wrong_link".to_string()), "another App's pass on this link: {}", r.body);
     // The App's own pass is not a guest.
     let r = bearer(lport, "POST", "/cli/skin/push/register", &app_pass, Some(reg)).await;
     assert_eq!((r.status, r.code()), (403, "guest_required".to_string()), "{}", r.body);

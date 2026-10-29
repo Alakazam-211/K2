@@ -71,14 +71,16 @@ async fn resolve_links_answers_only_paths_inside_the_threads_workspace() {
     let links = v["links"].as_array().expect("links");
     assert_eq!(links.len(), paths.len(), "one answer per candidate, in order");
 
+    // The path to open, in this OS's spelling (Windows: `root\src\a.ts`).
+    let native = |rel: &str| rel.split('/').fold(std::path::PathBuf::from(&root), |p, s| p.join(s)).to_string_lossy().into_owned();
     let file = |input: &str, rel: &str| {
-        json!({ "input": input, "linkable": true, "kind": "file", "rel": rel, "path": format!("{root}/{rel}") })
+        json!({ "input": input, "linkable": true, "kind": "file", "rel": rel, "path": native(rel) })
     };
     assert_eq!(links[0], file("src/a.ts", "src/a.ts"));
     assert_eq!(links[1], file(&abs_inside, "src/a.ts"));
     assert_eq!(
         links[2],
-        json!({ "input": "docs/", "linkable": true, "kind": "directory", "rel": "docs", "path": format!("{root}/docs") })
+        json!({ "input": "docs/", "linkable": true, "kind": "directory", "rel": "docs", "path": native("docs") })
     );
     assert_eq!(links[3], file("docs/../src/a.ts", "src/a.ts"));
     // A symlink inside the workspace links to its target.

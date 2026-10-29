@@ -97,7 +97,9 @@ pub fn resolve_link(root: &Path, home: Option<&Path>, input: &str) -> LinkAnswer
         .map(|c| c.as_os_str().to_string_lossy().into_owned())
         .collect::<Vec<_>>()
         .join("/");
-    let open_path = if rel_str.is_empty() { root.to_path_buf() } else { root.join(&rel_str) };
+    // Joined part by part: one spelling of the file per OS (on Windows,
+    // `root\src\a.ts`, never `root\src/a.ts`). `rel` stays '/'-separated.
+    let open_path: PathBuf = std::iter::once(root.as_os_str()).chain(rel.components().map(|c| c.as_os_str())).collect();
     LinkAnswer {
         input: input.to_string(),
         linkable: true,
@@ -192,7 +194,7 @@ mod tests {
         assert!(a.linkable);
         assert_eq!(a.kind, Some("file"));
         assert_eq!(a.rel.as_deref(), Some("src/a.ts"));
-        assert_eq!(a.path.as_deref(), Some(ws.join("src/a.ts").to_str().unwrap()));
+        assert_eq!(a.path.as_deref(), Some(ws.join("src").join("a.ts").to_str().unwrap()));
     }
 
     #[test]
@@ -273,7 +275,7 @@ mod tests {
         assert!(a.linkable);
         assert_eq!(a.rel.as_deref(), Some("src/a.ts"));
         // The path to open is under the root AS REGISTERED.
-        assert_eq!(a.path.as_deref(), Some(link_root.join("src/a.ts").to_str().unwrap()));
+        assert_eq!(a.path.as_deref(), Some(link_root.join("src").join("a.ts").to_str().unwrap()));
     }
 
     #[test]

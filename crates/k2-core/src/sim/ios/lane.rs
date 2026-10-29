@@ -668,7 +668,7 @@ impl SimLane for IosLane {
             Ok(v) => v,
             Err(e) => {
                 p.detail = Some(e.message);
-                p.needs.push(LaneNeed::OwnerStep { what: "Install Xcode from the App Store and open it once".into(), command: "xcode-select --install".into() });
+                p.needs.push(LaneNeed::OwnerStep { what: "Install Xcode from the App Store, open it once, then point the developer tools at it (the command-line tools alone have no Simulator)".into(), command: "sudo xcode-select -s /Applications/Xcode.app".into() });
                 return p;
             }
         };

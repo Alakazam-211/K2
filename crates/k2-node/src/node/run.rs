@@ -414,7 +414,7 @@ impl Node {
             Wall::None { why } => Err(missing(format!("this node has no job wall ({why}); it serves only its owner"))),
             Wall::Seatbelt => {
                 if entry.trust == Trust::Team {
-                    return Err((codes::TEAM_NEEDS_TENANT_WALL.into(), "Macs take only your own servers until per-tenant users (0.46.4)".into()));
+                    return Err((codes::TEAM_NEEDS_TENANT_WALL.into(), "Macs take only your own servers (per-tenant users aren't built for macOS yet)".into()));
                 }
                 if !t.paths.root().is_dir() {
                     return Err(missing(format!("{} isn't prepared (tenant.prepare)", t.paths.root().display())));

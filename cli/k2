@@ -896,6 +896,14 @@ if [ "${1:-}" = "vault" ]; then
         *) for _a in "${@:2}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
     esac
 fi
+# `k2 publish secret [<verb>] --help` (and bare `k2 publish secret`) only
+# print help (no daemon needed).
+if [ "${1:-}" = "publish" ] && { [ "${2:-}" = "secret" ] || [ "${2:-}" = "secrets" ]; }; then
+    case "${3:-}" in
+        ""|help|--help|-h) _skip_conn_gate=1 ;;
+        *) for _a in "${@:3}"; do case "$_a" in -h|--help) _skip_conn_gate=1 ;; esac; done ;;
+    esac
+fi
 # `k2 migrate` / `k2 migrate <verb> --help` only print help (no daemon needed).
 if [ "${1:-}" = "migrate" ]; then
     case "${2:-}" in
@@ -26974,6 +26982,12 @@ try:
 except Exception:
     print(raw[:300] or "the daemon did not answer", file=sys.stderr)
 '
+    # Permission cards on: the refusal's closing line ("Ask with: …" or
+    # "It can't be requested."), printed after the line above by the EXIT
+    # trap. The vault family talks through _sidecar_send, which never
+    # noted it (K2 Cores field report 2026-10-28). Cards off: no
+    # `permission` object, nothing printed.
+    _permission_note "$body"
     exit "$(_vault_exit_for "$status")"
 }
 
@@ -31296,6 +31310,44 @@ _connect_curl() {
     printf '%s\n%s' "$code" "$resp"
 }
 
+# `k2 publish secret --help` (K2 Cores field report 2026-10-28: the flags
+# lived only in `k2 vault grant --help`).
+_publish_secret_usage() {
+    cat <<'EOF'
+k2 publish secret — vault secrets a published service gets when it starts
+
+  k2 publish secret add <service> NAME [--scope <s>] [--as env|file] [--env-name X] [--file-name F]
+  k2 publish secret remove <service> NAME [--scope <s>]
+  k2 publish secret list <service>
+
+  <service>        the name you gave k2 publish run
+  NAME             the secret's name in the vault (k2 vault list)
+  --scope <s>      where NAME lives: ws:<workspace>, server or session:<id>.
+                   Default: an agent's own workspace (the owner token: server).
+                   If NAME isn't there, the error names the scope that has it.
+  --as env|file    env: an environment variable; file: a 0600 file in
+                   $K2_SECRETS_DIR. Default: the secret's own delivery; never
+                   above its ceiling (k2 vault show NAME shows both).
+  --env-name X     the variable's name (default: NAME in capitals, - and . as _).
+                   --env-name alone means --as env.
+  --file-name F    the file's name in $K2_SECRETS_DIR (default: NAME).
+                   --file-name alone means --as file.
+
+The service gets it at its next start: k2 publish stop <service>, then
+k2 publish start <service>.
+
+An agent can add the secrets its own workspace created. A secret a person
+gave (a Thread secret card, Settings → Vault) is the owner's to share: the
+refusal prints the exact command for the owner to run in their own
+terminal (it asks for Touch ID or the vault password).
+
+Example: a status page that won't start without MPC_PROGRESS_PIN
+  k2 publish secret add mpc-progress MPC_PROGRESS_PIN --scope ws:k2-cores --as env --env-name MPC_PROGRESS_PIN
+  k2 publish stop mpc-progress; k2 publish start mpc-progress
+More: k2 vault grant --help, k2 study vault
+EOF
+}
+
 _publish_usage() {
     cat <<'EOF' >&2
 k2 publish — host a process on this machine, optionally on a nested URL
@@ -31657,6 +31709,7 @@ if mode == "list":
         services = []
     rows = []
     warnings = []
+    reasons = []
     legacy = []
     unwalled = []
     hint = "k2 study app-move"
@@ -31688,6 +31741,8 @@ if mode == "list":
         ))
         if s.get("frameWarning"):
             warnings.append((str(s.get("name") or "?"), str(s.get("frameWarning"))))
+        if s.get("reason"):
+            reasons.append((str(s.get("name") or "?"), str(s.get("status") or "down"), str(s.get("reason"))))
         if s.get("reservedLabel"):
             warnings.append((str(s.get("name") or "?"),
                 "this name is now reserved for a K2 box door; it keeps working, but pick another name for anything new"))
@@ -31703,6 +31758,9 @@ if mode == "list":
         print("%-*s  %-*s  %-*s  %-*s  %s" % (nw, n, sw, st, pw, p, fw, f, u))
     for n, w in warnings:
         print("warning: %s: %s" % (n, w))
+    # Why a service isn't serving (its exit code and last log line).
+    for n, st, why in reasons:
+        print("%s is %s (%s); more: k2 publish logs %s" % (n, st, why, n))
     if legacy:
         print("warning: %d service%s still inherit%s the daemon environment (%s)%s. "
               "Switch each with: k2 publish env <service> clean (grant secrets with k2 publish secret add <service> NAME)."
@@ -31820,6 +31878,14 @@ cmd_publish() {
         # K2 vault (§10.5): secrets a published service gets at start.
         secret|secrets)
             local act="${1:-}" label="${2:-}" sname="${3:-}"
+            if [ -z "$act" ]; then
+                _publish_secret_usage >&2
+                exit 2
+            fi
+            if [ "$act" = "help" ] || _wants_help "$@"; then
+                _publish_secret_usage
+                exit 0
+            fi
             case "$act" in
                 add)
                     [ -n "$label" ] && [ -n "$sname" ] || { echo "usage: k2 publish secret add <service> NAME [--as file|env] [--env-name X] [--scope …]" >&2; exit 2; }
@@ -31961,6 +32027,14 @@ cmd_publish_run() {
         fi
     fi
     [ -z "$cwd" ] && [ "$skin" != 1 ] && cwd="$PROJECT"
+    # A relative --cwd is the caller's: resolve it against where k2 runs
+    # (the daemon would read it against its own folder). K2 Cores field
+    # report 2026-10-28.
+    case "$cwd" in
+        ''|/*|[A-Za-z]:[\\/]*) ;;
+        '~'|'~/'*) cwd="${HOME}${cwd#\~}" ;;
+        *) cwd="$(P_REL="$cwd" python3 -c 'import os; print(os.path.abspath(os.environ["P_REL"]))')" ;;
+    esac
     local body RESP
     body=$(P_NAME="$name" P_CMD="$cmd" P_PORT="$port" P_CWD="$cwd" \
            P_PROJECT="$PROJECT" P_NO_TUNNEL="$no_tunnel" P_TRANSFER="$transfer" \

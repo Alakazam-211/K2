@@ -285,6 +285,14 @@ pub struct ServiceJson {
     /// granted to this service. Omitted when none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_refused: Vec<String>,
+    /// Why the service isn't serving, for its owner (`k2 publish ps`): its
+    /// exit code (or "not answering on port N") and the last line it
+    /// logged, redacted, e.g. `exit 2: MPC_PROGRESS_PIN is not set`. Only
+    /// while it has exited, failed to start, or runs without answering;
+    /// omitted otherwise (a service someone stopped has none). K2 Cores
+    /// field report 2026-10-28.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl ServiceJson {
@@ -348,6 +356,7 @@ impl ServiceJson {
             legacy_hint: None,
             label_moved_to: None,
             env_refused: vec![],
+            reason: None,
         }
     }
 }

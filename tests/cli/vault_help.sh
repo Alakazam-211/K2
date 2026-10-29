@@ -57,6 +57,23 @@ for verb in status list show set rotate hosts delivery grant revoke disable enab
 done
 ok "every k2 vault verb has its own --help with an example"
 
+# K2 Cores field report (2026-10-28): `k2 publish secret --help` is its own
+# page with the flags and an example (it used to be a usage error).
+for args in "publish secret --help" "publish secret add --help" "publish secret help" "publish secret add mpc NAME -h"; do
+    # shellcheck disable=SC2086
+    out="$(k2n $args 2>&1)" || fail "$args exited non-zero: $out"
+    printf '%s\n' "$out" | head -1 | grep -Fq "k2 publish secret — vault secrets a published service gets" || fail "$args: $out"
+    for want in "--scope <s>" "--as env|file" "--env-name X" "--file-name F" \
+        "k2 publish secret add mpc-progress MPC_PROGRESS_PIN --scope ws:k2-cores --as env --env-name MPC_PROGRESS_PIN"; do
+        printf '%s' "$out" | grep -Fq -- "$want" || fail "$args lacks '$want': $out"
+    done
+done
+set +e
+out="$(k2n publish secret 2>&1)"; rc=$?
+set -e
+[ "$rc" = 2 ] && printf '%s' "$out" | grep -Fq -- "--env-name X" || fail "bare publish secret: exit $rc ($out)"
+ok "k2 publish secret --help lists --scope, --as, --env-name, --file-name with an example"
+
 out="$(k2n vault set NAME --kind ssh_key --help)" || fail "set --help after flags"
 printf '%s\n' "$out" | head -1 | grep -Fq "k2 vault set NAME [options] < value" || fail "help after flags: $out"
 ok "--help anywhere in the args prints the verb's help"
@@ -185,6 +202,19 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(n).decode()
         with open(LOG, "a") as f:
             f.write(self.path.split("?")[0] + " " + body + "\n")
+        if self.path.startswith("/cli/vault/grant"):
+            b = json.loads(body or "{}")
+            if b.get("name") in ("REFUSED_ON", "REFUSED_OFF"):
+                err = {"error": {"code": "vault_owner_confirm_required", "hint": "a person gave this secret, so an agent can't widen where it goes or who can read it. Settings → Vault can't share with a service, so ask the owner to run this in their own terminal outside K2 (it asks for Touch ID or the vault password): k2 publish secret add svc " + b["name"] + " --scope ws:w --as env"}}
+                if b["name"] == "REFUSED_ON":
+                    err["permission"] = {"requestable": False, "where": "a person does this, in Settings or from a terminal outside K2"}
+                data = json.dumps(err).encode()
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
         if self.path.startswith("/cli/vault/file"):
             b = json.loads(body or "{}")
             if b.get("done"):
@@ -308,5 +338,28 @@ set -e
 [ "$rc2" = 2 ] || fail "--ttl soon: exit $rc2 ($err2)"
 [ "$rc3" = 2 ] || fail "no secret: exit $rc3 ($err3)"
 ok "file posts one secret by name (--ttl, --done) and prints only the path"
+
+# K2 Cores field report (2026-10-28): a vault refusal ends with the
+# permission closing line when the daemon sends one (cards on), and with
+# nothing extra when it doesn't (cards off: today's text).
+set +e
+err_on="$(k2s publish secret add svc REFUSED_ON --as env 2>&1)"; rc_on=$?
+err_off="$(k2s publish secret add svc REFUSED_OFF --as env 2>&1)"; rc_off=$?
+set -e
+[ "$rc_on" = 3 ] && [ "$rc_off" = 3 ] || fail "refused grant exits 3 (on $rc_on, off $rc_off): $err_on / $err_off"
+[ "$(printf '%s\n' "$err_on" | tail -1)" = "It can't be requested." ] || fail "cards on: no closing line: $err_on"
+[ "$(printf '%s\n' "$err_on" | grep -c "It can't be requested.")" = 1 ] || fail "cards on: closing line printed more than once: $err_on"
+printf '%s\n' "$err_on" | head -1 | grep -Fq "vault_owner_confirm_required: a person gave this secret" || fail "cards on: hint first: $err_on"
+[ "$(printf '%s\n' "$err_off" | wc -l | tr -d ' ')" = 1 ] || fail "cards off: one line, as before: $err_off"
+printf '%s' "$err_off" | grep -Fq "k2 publish secret add svc REFUSED_OFF --scope ws:w --as env" || fail "cards off: hint: $err_off"
+grep -F '/cli/vault/grant {' "$WORK/posts.log" | grep -F '"REFUSED_ON"' | grep -Fq '"to": "service:svc"' || fail "publish secret add posts a service grant: $(cat "$WORK/posts.log")"
+ok "a refused vault grant ends with It can't be requested. (cards on) and stays one line (cards off)"
+
+# --cwd relative to where k2 runs, not the daemon's folder.
+mkdir -p "$WORK/site"
+(cd "$WORK" && k2s publish run demo --cmd 'true' --port 4321 --no-tunnel --cwd site >/dev/null 2>&1) || true
+want_cwd="$(cd "$WORK/site" && pwd -P)"
+grep -F '/cli/publish/run' "$WORK/posts.log" | grep -Fq "\"cwd\": \"$want_cwd\"" || fail "--cwd site → $want_cwd: $(grep -F '/cli/publish/run' "$WORK/posts.log")"
+ok "publish run --cwd site resolves against the caller's folder"
 
 echo "PASS: vault help ($pass checks)"

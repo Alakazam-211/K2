@@ -1361,3 +1361,123 @@ fn a_readable_grant_from_the_owner_token_needs_a_confirm() {
     assert!(!grant_needs_confirm(&Actor::Owner, k2_vault::Namespace::System, k2_vault::Delivery::Env), "K2's own: never granted by people");
     assert!(!grant_needs_confirm(&Actor::System("adopt".into()), k2_vault::Namespace::User, k2_vault::Delivery::Env));
 }
+
+/// K2 Cores field report (2026-10-28). A person gave MPC_PROGRESS_PIN
+/// (a Thread secret card: its workspace's scope, person-given) and the
+/// agent asked K2 to hand it to its own `--cmd` service.
+///
+/// - #1: the agent's share is refused (`can_loosen`: a person gave it), and
+///   the hint names the command the owner runs (Settings → Vault can't
+///   share with a service).
+/// - #3, the security check: an explicit `--scope` skips nothing for an
+///   agent; only the owner token got through, and that now needs a
+///   person's confirm (VC-B2). Nothing is shared on the way.
+/// - #2: with no `--scope` the owner token looks in server scope; the
+///   "no such secret" names the scope that has it, to callers who can see
+///   it only.
+#[test]
+fn a_person_given_secret_reaches_a_service_only_through_a_person() {
+    use k2_vault::{Kind, Namespace, PutRequest, Scope, SecretBytes, SecretStore, Selector};
+    crate::test_support::with_temp_home(|| {
+        let root = TestDir::new("svc-share");
+        let folder = format!("k2c-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let p = root.path().join(&folder);
+        std::fs::create_dir_all(&p).expect("mkdir");
+        let canon = dunce::canonicalize(&p).expect("canon").to_string_lossy().to_string();
+        let ws = k2_core::projects_ops::projects_add_without_git(&canon).expect("register");
+        let label = crate::vault::workspace_label(&ws.id);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO published_services (id, project_id, name, cmd, cwd, port, expose, desired) VALUES ('svc-mpc', ?1, 'mpc-progress', 'node s.js', '/', 8791, 'local', 'running')",
+                rusqlite::params![ws.id],
+            )
+            .expect("service");
+        }
+        let t = vault();
+        let mut r = PutRequest::new(Namespace::User, Scope::workspace(ws.id.clone()), "MPC_PROGRESS_PIN", Kind::Password);
+        r.default_delivery = Some(Delivery::Env);
+        r.delivery_ceiling = Some(Delivery::Env);
+        r.human_given_override = Some(true);
+        r.origin = "thread:card-1".into();
+        t.v.put(r, SecretBytes::from_slice(b"4242"), &Actor::Login { username: "rosson".into(), role: Role::Owner }).expect("put");
+        let sel = Selector::user(Scope::workspace(ws.id.clone()), "MPC_PROGRESS_PIN");
+        let share = |c: &VaultCaller, scoped: bool| {
+            let mut b = json!({ "name": "MPC_PROGRESS_PIN", "to": "service:mpc-progress", "as": "env", "envName": "MPC_PROGRESS_PIN" });
+            if scoped {
+                b["scope"] = json!("workspace");
+                b["workspace"] = json!(label.clone());
+            }
+            call(&t, GRANT, c, b)
+        };
+        let a = agent(&ws.id, false);
+
+        // #1
+        let (s, v) = share(&a, false);
+        assert_eq!((s, code(&v)), (403, "vault_owner_confirm_required"), "{v}");
+        let hint = v["error"]["hint"].as_str().expect("hint");
+        assert!(hint.starts_with("a person gave this secret, so an agent can't widen"), "{hint}");
+        assert!(
+            hint.ends_with(&format!(
+                "in their own terminal outside K2 (it asks for Touch ID or the vault password): k2 publish secret add mpc-progress MPC_PROGRESS_PIN --scope ws:{label} --as env --env-name MPC_PROGRESS_PIN"
+            )),
+            "{hint}"
+        );
+        assert!(!hint.contains("change it in Settings → Vault"), "a service share can't be made there: {hint}");
+
+        // #3: the same share with an explicit --scope, from the agent.
+        let (s, v) = share(&a, true);
+        assert_eq!((s, code(&v)), (403, "vault_owner_confirm_required"), "an explicit scope skips nothing: {v}");
+        // An agent of another workspace can't name it at all.
+        let (s, v) = share(&agent("ws-other", false), true);
+        assert_eq!(s / 100, 4, "{v}");
+        // The owner token (what `k2` falls back to with no K2 session in
+        // its environment): a person confirms first (VC-B2).
+        let (s, v) = share(&owner(), true);
+        assert_eq!((s, code(&v)), (403, "vault_confirm_required"), "{v}");
+        assert!(t.v.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "nothing was shared");
+
+        // #2: the owner token with no --scope looks in server scope.
+        let want = format!("no such secret MPC_PROGRESS_PIN in server; found in ws:{label}: pass --scope ws:{label}");
+        let (s, v) = share(&owner(), false);
+        assert_eq!((s, code(&v)), (404, "not_found"), "{v}");
+        assert_eq!(v["error"]["hint"].as_str(), Some(want.as_str()), "{v}");
+        let mut q = HashMap::new();
+        q.insert("name".to_string(), "MPC_PROGRESS_PIN".to_string());
+        let (s, v) = call_p(&t, SHOW, &owner(), Value::Null, q.clone());
+        assert_eq!((s, v["error"]["hint"].as_str()), (404, Some(want.as_str())), "{v}");
+        // The agent finds it with no --scope (its own workspace).
+        let (s, v) = call_p(&t, SHOW, &a, Value::Null, q.clone());
+        assert_eq!(s, 200, "{v}");
+        // Another workspace's agent: a plain not_found, never the scope.
+        let (s, v) = call_p(&t, SHOW, &agent("ws-other", false), Value::Null, q);
+        assert_eq!((s, v["error"]["hint"].as_str()), (404, Some("no such secret")), "{v}");
+    });
+}
+
+/// "no such secret" names another scope only when the caller can see the
+/// secret there: an agent sees a server secret once it's granted to it.
+#[test]
+fn not_found_names_only_scopes_the_caller_can_see() {
+    crate::test_support::with_temp_home(|| {
+        let t = vault();
+        set_server(&t, "SHARED_KEY", SENTINEL);
+        let a = agent("ws1", false);
+        let mut q = HashMap::new();
+        q.insert("name".to_string(), "SHARED_KEY".to_string());
+        let (s, v) = call_p(&t, SHOW, &a, Value::Null, q.clone());
+        assert_eq!((s, v["error"]["hint"].as_str()), (404, Some("no such secret")), "not granted: {v}");
+        let (s, v) = call(&t, GRANT, &owner(), json!({ "name": "SHARED_KEY", "scope": "server", "to": "ws:*", "as": "fetch" }));
+        assert_eq!(s, 200, "{v}");
+        let (s, v) = call_p(&t, SHOW, &a, Value::Null, q.clone());
+        assert_eq!(
+            (s, v["error"]["hint"].as_str()),
+            (404, Some("no such secret SHARED_KEY in ws:ws1; found in server: pass --scope server")),
+            "{v}"
+        );
+        q.insert("scope".to_string(), "server".to_string());
+        let (s, v) = call_p(&t, SHOW, &a, Value::Null, q);
+        assert_eq!(s, 200, "{v}");
+    });
+}

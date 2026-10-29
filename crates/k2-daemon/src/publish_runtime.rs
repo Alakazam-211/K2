@@ -747,6 +747,9 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
             }
         }
     }
+    if row.cmd != ps::CMD_APP_SENTINEL {
+        json.reason = down_reason(row, status);
+    }
     if row.kind == KIND_SKIN && status == STATUS_RUNNING {
         json.helper_needs_restart = helper_needs_restart(&row.id);
     }
@@ -773,6 +776,57 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
         }
     }
     json
+}
+
+/// The longest reason line `k2 publish ps` shows.
+const REASON_MAX_CHARS: usize = 240;
+
+/// The last non-empty line a service logged, redacted (vault values never
+/// leave), at most [`REASON_MAX_CHARS`]. Reads only the log's last 8 KiB.
+fn last_log_line(project_id: &str, name: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(log_path(project_id, name)).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(8 * 1024))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    let line = crate::vault::redact_str(line);
+    Some(if line.chars().count() > REASON_MAX_CHARS {
+        format!("{}…", line.chars().take(REASON_MAX_CHARS).collect::<String>())
+    } else {
+        line
+    })
+}
+
+/// Why a service isn't serving (K2 Cores field report 2026-10-28: a
+/// service that exited at start showed only "stopped", and its public
+/// address only "not accepting connections"): `exit 2: <its last log
+/// line>`, or `not answering on port N: …` while it runs without
+/// answering. `None` while it serves, starts, or after someone stopped it.
+pub(crate) fn down_reason(row: &ps::PublishedService, status: &str) -> Option<String> {
+    let failed_start = status == STATUS_STOPPED && row.error.is_some();
+    let head = if status == STATUS_UNHEALTHY {
+        format!("not answering on port {}", row.port)
+    } else if status == STATUS_EXITED || failed_start {
+        // An exit code from before the last start is an older run's.
+        let this_run = match (row.last_exited_at, row.last_started_at) {
+            (Some(x), Some(s)) => x >= s,
+            (Some(_), None) => true,
+            _ => false,
+        };
+        match row.last_exit_code.filter(|_| this_run) {
+            Some(c) => format!("exit {c}"),
+            None => row.error.clone().unwrap_or_else(|| "not running".to_string()),
+        }
+    } else {
+        return None;
+    };
+    Some(match last_log_line(&row.project_id, &row.name) {
+        Some(l) => format!("{head}: {l}"),
+        None => head,
+    })
 }
 
 fn load_row(project_id: &str, name: &str) -> Option<ps::PublishedService> {
@@ -2403,6 +2457,63 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::atomic::{AtomicUsize, Ordering as AtomOrd};
     use std::sync::Arc as StdArc;
+
+    /// K2 Cores field report (2026-10-28): a service that exits at start
+    /// says why in `k2 publish ps` (its exit code and last log line); one
+    /// someone stopped, or that serves, says nothing; an exit code from an
+    /// older run isn't this start's.
+    #[test]
+    fn down_reason_names_the_exit_and_the_last_log_line() {
+        crate::test_support::with_temp_home(|| {
+            let row = |status_err: Option<&str>, code: Option<i64>, exited: Option<i64>| ps::PublishedService {
+                id: "svc-mpc".into(),
+                project_id: "ws-cores".into(),
+                name: "mpc-progress".into(),
+                cmd: "node server.js".into(),
+                cwd: "/".into(),
+                port: 8791,
+                expose: "tunnel".into(),
+                desired: "running".into(),
+                pid: None,
+                last_exit_code: code,
+                last_started_at: Some(100),
+                last_exited_at: exited,
+                error: status_err.map(str::to_string),
+                created_at: 1,
+                updated_at: 1,
+                kind: KIND_CMD.into(),
+                skin_root: String::new(),
+                frame_ancestors: String::new(),
+                probe_timeout_ms: None,
+                hostname_pending: false,
+            };
+            // No log yet: the exit alone.
+            assert_eq!(down_reason(&row(None, Some(2), Some(101)), STATUS_EXITED).as_deref(), Some("exit 2"));
+            let path = log_path("ws-cores", "mpc-progress");
+            fs::create_dir_all(path.parent().expect("parent")).expect("log dir");
+            fs::write(&path, "starting\nMPC_PROGRESS_PIN is not set\n\n").expect("log");
+            let want = Some("exit 2: MPC_PROGRESS_PIN is not set");
+            assert_eq!(down_reason(&row(None, Some(2), Some(101)), STATUS_EXITED).as_deref(), want);
+            // A start that failed (probe) and was rolled back: stopped + error.
+            let failed = row(Some("probe failed: the process exited before 127.0.0.1:8791 accepted"), Some(2), Some(101));
+            assert_eq!(down_reason(&failed, STATUS_STOPPED).as_deref(), want);
+            // The exit code is an older run's: the error, not "exit 2".
+            let stale = row(Some("pro_required"), Some(2), Some(50));
+            assert_eq!(down_reason(&stale, STATUS_STOPPED).as_deref(), Some("pro_required: MPC_PROGRESS_PIN is not set"));
+            assert_eq!(
+                down_reason(&row(None, None, None), STATUS_UNHEALTHY).as_deref(),
+                Some("not answering on port 8791: MPC_PROGRESS_PIN is not set")
+            );
+            // Serving, starting, or stopped by someone: no reason.
+            for st in [STATUS_RUNNING, STATUS_STARTING, STATUS_STOPPED] {
+                assert_eq!(down_reason(&row(None, Some(143), Some(101)), st), None, "{st}");
+            }
+            // A long last line is cut.
+            fs::write(&path, format!("{}\n", "x".repeat(1000))).expect("log");
+            let r = down_reason(&row(None, Some(1), Some(101)), STATUS_EXITED).expect("reason");
+            assert_eq!(r.chars().count(), "exit 1: ".len() + REASON_MAX_CHARS + 1, "{r}");
+        });
+    }
 
     /// S24-8: the boot check recognises a helper bound to its App and one
     /// from before per-App logins (no `--app`, or another App's id).

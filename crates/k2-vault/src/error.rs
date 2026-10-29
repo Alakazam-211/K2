@@ -15,6 +15,11 @@ pub type Result<T> = std::result::Result<T, VaultError>;
 /// Code of [`VaultError::needs_newer`].
 pub const NEEDS_NEWER: &str = "vault_needs_newer_k2";
 
+/// The person step [`VaultError::owner_confirm_required`] ends its hint
+/// with. A route that knows a better step (a share with a service, which
+/// Settings → Vault can't make) swaps it.
+pub const OWNER_CONFIRM_SUFFIX: &str = "; ask the owner to change it in Settings → Vault";
+
 impl VaultError {
     pub fn new(code: &'static str, status: u16, hint: impl Into<String>) -> Self {
         Self { code, status, hint: hint.into() }
@@ -62,7 +67,7 @@ impl VaultError {
         Self::new(
             "vault_owner_confirm_required",
             403,
-            format!("{}; ask the owner to change it in Settings → Vault", hint.into()),
+            format!("{}{OWNER_CONFIRM_SUFFIX}", hint.into()),
         )
     }
 }

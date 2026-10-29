@@ -506,7 +506,7 @@ pub fn handle_on(
     if path == POLICY {
         return match policy(vault, &c, body) {
             Ok(v) => ok(v),
-            Err(e) => refuse_policy(&e, &c, body),
+            Err(e) => refuse_policy(&not_found_elsewhere(vault, &c, &requested_sel(body, params), e), &c, body),
         };
     }
     let r = match path {
@@ -546,8 +546,64 @@ pub fn handle_on(
     };
     match r {
         Ok(v) => ok(v),
+        Err(e) if NAMED_ROUTES.contains(&path) => refuse(&not_found_elsewhere(vault, &c, &requested_sel(body, params), e)),
         Err(e) => refuse(&e),
     }
+}
+
+/// Routes that name one secret (`name` and an optional scope), whose "no
+/// such secret" can say where that name does exist.
+const NAMED_ROUTES: &[&str] = &[SHOW, PUBLIC_KEY, ROTATE, GRANT, REVOKE, DISABLE, ENABLE, DESTROY, GET];
+
+/// The secret a request names: the JSON body (POST), else the query.
+fn requested_sel(body: &[u8], params: &HashMap<String, String>) -> Sel {
+    match serde_json::from_slice::<Sel>(body) {
+        Ok(s) if s.name.is_some() || s.id.is_some() || s.reference.is_some() => s,
+        _ => sel_from_params(params),
+    }
+}
+
+/// How `--scope` names a secret's scope (`ws:sales`, `server`,
+/// `session:<id>`).
+fn scope_flag(s: &Scope) -> Option<String> {
+    match s.kind {
+        ScopeKind::Workspace => Some(format!("ws:{}", crate::vault::workspace_label(&s.id))),
+        ScopeKind::Server => Some("server".into()),
+        ScopeKind::Session => Some(format!("session:{}", s.id)),
+        _ => None,
+    }
+}
+
+/// K2 Cores field report (2026-10-28): `k2 publish secret add` and
+/// `k2 vault show` said only "no such secret" when the name lives in
+/// another scope (with no `--scope`, the owner token looks in server scope
+/// and an agent in its own workspace). A by-name "no such secret" now names
+/// the other scopes that hold that name, among the secrets this caller can
+/// see (`list`, so `policy::can_see`), and the `--scope` that reaches it.
+/// It never names a scope the caller can't see. Every other error, and a
+/// name found nowhere else, is unchanged.
+pub(crate) fn not_found_elsewhere(vault: &LocalVault, c: &VaultCaller, s: &Sel, e: VaultError) -> VaultError {
+    if e.code != "not_found" || e.hint != "no such secret" {
+        return e;
+    }
+    if s.id.as_deref().is_some_and(|x| !x.is_empty()) || s.reference.as_deref().is_some_and(|x| !x.is_empty()) {
+        return e;
+    }
+    let Some(name) = s.name.as_deref().filter(|n| !n.is_empty()) else { return e };
+    let Ok(Selector::Name { namespace, scope: asked, .. }) = selector(c, s) else { return e };
+    let filter = ListFilter { include_system: namespace == Namespace::System, scope: None, include_destroyed: false };
+    let Ok(items) = vault.list(&filter, &c.actor) else { return e };
+    let mut found: Vec<String> = items
+        .iter()
+        .filter(|m| m.name == name && m.namespace == namespace && m.scope != asked)
+        .filter_map(|m| scope_flag(&m.scope))
+        .collect();
+    found.sort();
+    found.dedup();
+    let Some(first) = found.first() else { return e };
+    let asked = scope_flag(&asked).unwrap_or_else(|| "this scope".into());
+    let how = if found.len() == 1 { format!("pass --scope {first}") } else { "pass --scope with one of them".to_string() };
+    VaultError::not_found(format!("no such secret {name} in {asked}; found in {}: {how}", found.join(", ")))
 }
 
 // ── reads ───────────────────────────────────────────────────────────
@@ -1496,19 +1552,25 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
             crate::vault::auth_audit("vault-grant-read", &stamp, &format!("ok {} as {}", m.name, delivery.as_str()), "-");
         }
     }
-    let g = vault.grant(
-        GrantRequest {
-            selector: sel,
-            consumer,
-            delivery,
-            env_name: b.env_name.clone(),
-            file_name: b.file_name.clone(),
-            hosts_narrowed: b.hosts.clone(),
-            expires_at: b.expires_at.clone(),
-            version: b.version,
-        },
-        &c.actor,
-    )?;
+    let service = (consumer.kind == ConsumerKind::PublishedService).then(|| to.split_once(':').map(|x| x.1).unwrap_or(to).to_string());
+    let g = vault
+        .grant(
+            GrantRequest {
+                selector: sel.clone(),
+                consumer,
+                delivery,
+                env_name: b.env_name.clone(),
+                file_name: b.file_name.clone(),
+                hosts_narrowed: b.hosts.clone(),
+                expires_at: b.expires_at.clone(),
+                version: b.version,
+            },
+            &c.actor,
+        )
+        .map_err(|e| match &service {
+            Some(label) => service_share_refusal(vault, c, &sel, label, delivery, b.env_name.as_deref(), e),
+            None => e,
+        })?;
     if delivery == Delivery::Api {
         crate::vault::auth_audit("vault-api-grant", &c.actor.stamp(), &format!("ok {}", g.secret_id), "-");
     }
@@ -1524,6 +1586,40 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
         out["warning"] = w.into();
     }
     Ok(out)
+}
+
+/// K2 Cores field report (2026-10-28): an agent's share with its own
+/// published service, refused because a person gave the secret
+/// (`vault_owner_confirm_required`), ended "ask the owner to change it in
+/// Settings → Vault", and Settings → Vault can't share with a service. The
+/// refusal keeps its code and reason and names the command the owner runs
+/// instead, from their own terminal (that grant asks for a person's
+/// confirm, VC-B2). Only for a passport; any other refusal is unchanged.
+fn service_share_refusal(
+    vault: &LocalVault,
+    c: &VaultCaller,
+    sel: &Selector,
+    service: &str,
+    delivery: Delivery,
+    env_name: Option<&str>,
+    e: VaultError,
+) -> VaultError {
+    if e.code != "vault_owner_confirm_required" || !c.is_passport() {
+        return e;
+    }
+    let Ok(m) = vault.meta(sel, &c.actor) else { return e };
+    let Some(scope) = scope_flag(&m.scope) else { return e };
+    let reason = e.hint.strip_suffix(k2_vault::error::OWNER_CONFIRM_SUFFIX).unwrap_or(&e.hint);
+    let env = env_name.map(|n| format!(" --env-name {n}")).unwrap_or_default();
+    VaultError::new(
+        e.code,
+        e.status,
+        format!(
+            "{reason}. Settings → Vault can't share with a service, so ask the owner to run this in their own terminal outside K2 (it asks for Touch ID or the vault password): k2 publish secret add {service} {} --scope {scope} --as {}{env}",
+            m.name,
+            delivery.as_str()
+        ),
+    )
 }
 
 /// Papercut 8: what a grant to agent sessions means for the ones already

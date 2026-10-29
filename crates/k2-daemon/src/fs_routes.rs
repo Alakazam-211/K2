@@ -31,12 +31,57 @@ pub fn handle_read_dir(params: &HashMap<String, String>) -> CliResponse {
         params.get("show_hidden").map(|v| v.as_str()),
         Some("1") | Some("true") | Some("on")
     );
-    match fsc::read_dir(&path, show_hidden) {
+    match fsc::read_dir_coded(&path, show_hidden) {
         Ok(entries) => CliResponse::ok_json(
             serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string()),
         ),
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => read_dir_refusal(e),
     }
+}
+
+/// `fs/read-dir`'s refusal: a folder that isn't there is a 404
+/// `not_found` (0.46.6: it was a 400, which read as a bad request and
+/// counted toward an App's refused-calls alert); anything else stays the
+/// old 400. Both keep the old `{"error": "<text>"}` and add the `code`
+/// (see `fsc::ReadFileError`).
+fn read_dir_refusal(e: fsc::ReadFileError) -> CliResponse {
+    if e.code == "not_found" {
+        return read_dir_not_found();
+    }
+    CliResponse {
+        status: "400 Bad Request",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": e.message, "code": e.code }).to_string(),
+    }
+}
+
+/// The 404 for a folder that isn't there. The text never names a host
+/// path (an App's guest sees it too).
+fn read_dir_not_found() -> CliResponse {
+    CliResponse {
+        status: "404 Not Found",
+        content_type: "application/json",
+        body: serde_json::json!({ "error": "No such folder", "code": "not_found" }).to_string(),
+    }
+}
+
+/// 0.46.6: `rel` names nothing in the room, and the part of it that does
+/// exist resolves inside the room. Returns the path it would have (for the
+/// path-scope check). `None` when something is there (a dangling or
+/// looping link, say) or the existing part leads out of the room: the
+/// jail's own 400 stands.
+fn missing_in_room(ws_root: &str, rel: &str) -> Option<PathBuf> {
+    let rel = Path::new(rel.trim());
+    if !rel.components().all(|c| matches!(c, Component::Normal(_) | Component::CurDir)) {
+        return None;
+    }
+    let root = dunce::canonicalize(Path::new(ws_root)).ok()?;
+    let target = root.join(rel);
+    if std::fs::symlink_metadata(&target).is_ok() {
+        return None;
+    }
+    let landed = resolve_existing_prefix(&target)?;
+    landed.starts_with(&root).then_some(target)
 }
 
 pub fn handle_read_file(params: &HashMap<String, String>) -> CliResponse {
@@ -616,7 +661,18 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
     };
     let jailed = match jail_rel_path(&resolved.path, &rel, false) {
         Ok(p) => p,
-        Err(e) => return CliResponse::bad_request(e),
+        Err(e) => {
+            // 0.46.6: a folder that isn't there is a 404 — after the
+            // path-scope check on where it would land, so a guest never
+            // learns what is (or isn't) in a folder it can't list.
+            let Some(would_be) = missing_in_room(&resolved.path, &rel) else {
+                return CliResponse::bad_request(e);
+            };
+            if let Some(r) = scope_gate_landed(&scope, &resolved, &would_be, PathNeed::List, true) {
+                return r;
+            }
+            return read_dir_not_found();
+        }
     };
     if let Some(r) = scope_gate_landed(&scope, &resolved, &jailed, PathNeed::List, true) {
         return r;
@@ -626,7 +682,7 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
         Some("1") | Some("true") | Some("on")
     );
     let abs = jailed.to_string_lossy().to_string();
-    match fsc::read_dir(&abs, show_hidden) {
+    match fsc::read_dir_coded(&abs, show_hidden) {
         Ok(mut entries) => {
             let root = dunce::canonicalize(&Path::new(&resolved.path))
                 .unwrap_or_else(|_| PathBuf::from(&resolved.path));
@@ -644,7 +700,7 @@ fn handle_skin_read_dir(params: &HashMap<String, String>, pass: &SkinPass) -> Cl
                 serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string()),
             )
         }
-        Err(e) => CliResponse::bad_request(e),
+        Err(e) => read_dir_refusal(e),
     }
 }
 
@@ -3071,6 +3127,73 @@ mod tests {
         assert!(v.get("code").is_none(), "a good read has no code: {v}");
 
         std::fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    /// 0.46.6 (App guest login lockout report, fix 3a): `fs/read-dir` on a
+    /// folder that isn't there is a 404 `not_found` (it was a 400 with the
+    /// OS text), its parent missing too; a file where a folder was asked
+    /// for stays a 400 (`read_failed`). Both keep `error` as text.
+    #[test]
+    fn read_dir_on_a_missing_folder_is_a_404_not_found() {
+        let dir = std::env::temp_dir().join(format!("k2-fs-routes-read-dir-{}-{}", std::process::id(), uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("here")).expect("temp dir");
+        std::fs::write(dir.join("file.txt"), "x").expect("write file");
+        let read = |p: &Path| {
+            let mut params = HashMap::new();
+            params.insert("path".to_string(), p.to_string_lossy().to_string());
+            handle_read_dir(&params)
+        };
+        let body = |r: &CliResponse| -> serde_json::Value { serde_json::from_str(&r.body).expect("JSON body") };
+        for missing in [dir.join("gone"), dir.join("gone/deeper")] {
+            let r = read(&missing);
+            assert_eq!(r.status, "404 Not Found", "{}: {}", missing.display(), r.body);
+            assert_eq!(body(&r), serde_json::json!({ "error": "No such folder", "code": "not_found" }), "{}", missing.display());
+        }
+        let r = read(&dir.join("file.txt"));
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        let v = body(&r);
+        assert_eq!(v["code"], "read_failed", "{v}");
+        assert!(v["error"].as_str().is_some_and(|e| !e.is_empty()), "{v}");
+        let ok = read(&dir);
+        assert_eq!(ok.status, "200 OK", "{}", ok.body);
+        let names: Vec<String> = body(&ok).as_array().expect("entries").iter().map(|e| e["name"].as_str().expect("name").to_string()).collect();
+        assert!(names.contains(&"here".to_string()) && names.contains(&"file.txt".to_string()), "{names:?}");
+        std::fs::remove_dir_all(&dir).expect("clean temp dir");
+    }
+
+    /// 3a on an App's (guest's) path: a missing folder in the room is a
+    /// 404 that names no host path; a missing name behind a link that
+    /// leads out of the room stays the jail's 400.
+    #[test]
+    fn skin_read_dir_on_a_missing_folder_is_a_404_not_found() {
+        let dir = std::env::temp_dir().join(format!("k2-skin-read-dir-{}", uuid::Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("k2-skin-read-dir-out-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("docs")).expect("mkdir");
+        std::fs::create_dir_all(&outside).expect("mkdir outside");
+        k2_core::test_env::symlink(&outside, dir.join("docs/out")).expect("symlink out");
+        let canon = dunce::canonicalize(&dir).expect("canon");
+        let handle = format!("rd{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let id = insert_handled_project(&canon.to_string_lossy(), &handle);
+        let pass = session_pass(&id, &[k2_core::skin::CAP_FILES_READ]);
+        let read = |rel: &str| {
+            let mut params = HashMap::new();
+            params.insert("workspace".to_string(), handle.clone());
+            params.insert("path".to_string(), rel.to_string());
+            handle_skin_read_dir(&params, &pass)
+        };
+        for rel in ["docs/gone", "gone/deeper"] {
+            let r = read(rel);
+            assert_eq!(r.status, "404 Not Found", "{rel}: {}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("JSON body");
+            assert_eq!(v, serde_json::json!({ "error": "No such folder", "code": "not_found" }), "{rel}");
+        }
+        assert_eq!(read("docs").status, "200 OK");
+        let r = read("docs/out/gone");
+        assert_eq!(r.status, "400 Bad Request", "out of the room stays the jail's 400: {}", r.body);
+        let r = read("docs/../gone");
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+        std::fs::remove_dir_all(&dir).expect("clean");
+        std::fs::remove_dir_all(&outside).expect("clean outside");
     }
 
     /// 0.40.34 viewer-aware open-external: with ≥1 live events-bus

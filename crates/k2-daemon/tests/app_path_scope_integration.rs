@@ -174,6 +174,12 @@ async fn rs_a1_a2_a3_scoped_logins_see_only_their_folders_in_any_room() {
             ("/cli/fs/stat", "jobs/J2/missing"),
             ("/cli/fs/read-file", "jobs/J1/to-j2/secret.txt"),
             ("/cli/fs/read-dir", "jobs/J1/to-j2"),
+            // 0.46.6: a missing folder is a 404 only where the line can
+            // list; through the link into J2, or outside the line, it is
+            // the same 403 as an existing one (no oracle).
+            ("/cli/fs/read-dir", "jobs/J1/to-j2/no-such-folder"),
+            ("/cli/fs/read-dir", "jobs/J2/no-such-folder"),
+            ("/cli/fs/read-dir", "jobs/J9/nothing-here"),
         ] {
             let r = guest_get(port, route, pass, &docs, rel).await;
             assert_missing_cap(&r, "files:read", &format!("{who} {route} {rel}"));
@@ -193,6 +199,17 @@ async fn rs_a1_a2_a3_scoped_logins_see_only_their_folders_in_any_room() {
         let r = guest_get(port, "/cli/fs/read-file", pass, &docs, "jobs/J1/../J2/secret.txt").await;
         assert_eq!(r.status, 400, "{who}: {}", r.body);
         assert!(r.body.contains("'..'"), "{who}: {}", r.body);
+        let r = guest_get(port, "/cli/fs/read-dir", pass, &docs, "jobs/J1/../J1/missing").await;
+        assert_eq!(r.status, 400, "{who}: a '..' path stays the jail's 400, missing or not: {}", r.body);
+
+        // 0.46.6: a folder that isn't there, inside a folder the line can
+        // list, is a 404 `not_found` (it was a 400); a file where a folder
+        // was asked for stays a 400.
+        let r = guest_get(port, "/cli/fs/read-dir", pass, &docs, "jobs/J1/no-such-folder").await;
+        assert_eq!((r.status, r.json()["code"].as_str()), (404, Some("not_found")), "{who}: {}", r.body);
+        assert!(!r.body.contains(&docs.path.to_string_lossy().to_string()), "{who}: no host path: {}", r.body);
+        let r = guest_get(port, "/cli/fs/read-dir", pass, &docs, "jobs/J3/notes.txt").await;
+        assert_eq!(r.status, 400, "{who}: a file is not a folder: {}", r.body);
 
         // skin/me names the folders on that line only.
         let me = get(port, "/cli/skin/me", pass, "").await.json();

@@ -222,8 +222,33 @@ pub struct DirEntryInfo {
 }
 
 pub fn read_dir(path: &str, show_hidden: bool) -> Result<Vec<DirEntryInfo>, String> {
-    let path = validate_path(path)?.to_string_lossy().to_string();
-    let entries = fs::read_dir(&path).map_err(|e| e.to_string())?;
+    read_dir_coded(path, show_hidden).map_err(|e| e.message)
+}
+
+/// [`read_dir`] with the refusal's code (the codes of [`ReadFileError`]):
+/// `not_found` when there is no folder at the path or its parent is
+/// missing (0.46.6: the `/cli/fs/read-dir` routes answer it 404, not 400),
+/// `permission_denied`, `invalid_path`, and `read_failed` for anything
+/// else (a file where a folder was asked for, …). The messages are the
+/// ones `read_dir` returned before the codes existed.
+pub fn read_dir_coded(path: &str, show_hidden: bool) -> Result<Vec<DirEntryInfo>, ReadFileError> {
+    if path.is_empty() {
+        return Err(ReadFileError::new("invalid_path", "Path is empty"));
+    }
+    let path = match validate_path(path) {
+        Ok(p) => p.to_string_lossy().to_string(),
+        // Only a missing parent fails validation for a missing path.
+        Err(msg) if fs::symlink_metadata(path).is_err() => return Err(ReadFileError::new("not_found", msg)),
+        Err(msg) => return Err(ReadFileError::new("invalid_path", msg)),
+    };
+    let entries = fs::read_dir(&path).map_err(|e| {
+        let code = match e.kind() {
+            std::io::ErrorKind::NotFound => "not_found",
+            std::io::ErrorKind::PermissionDenied => "permission_denied",
+            _ => "read_failed",
+        };
+        ReadFileError::new(code, e.to_string())
+    })?;
     let mut items: Vec<DirEntryInfo> = entries
         .filter_map(|entry| {
             let entry = entry.ok()?;

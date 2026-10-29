@@ -417,3 +417,43 @@ export function PowerIcon(props: K2IconProps = {}): React.JSX.Element {
     </svg>
   )
 }
+
+/** The device's Recents (Android app switcher): Lucide `copy`, squared. */
+export function RecentsIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('copy', props)}>
+      <rect width="14" height="14" x="8" y="8" />
+      <path d="M4 16V4h12" />
+    </svg>
+  )
+}
+
+/** Light appearance: Lucide `sun` (the disc stays a true circle). */
+export function SunIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('sun', props)}>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+    </svg>
+  )
+}
+
+/** Dark appearance: Lucide `moon` (an arc, kept round). */
+export function MoonIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('moon', props, 'round')}>
+      <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+    </svg>
+  )
+}
+
+/** More actions: Lucide `ellipsis` (three true dots). */
+export function MoreIcon(props: K2IconProps = {}): React.JSX.Element {
+  return (
+    <svg {...iconProps('ellipsis', props, 'round')}>
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </svg>
+  )
+}

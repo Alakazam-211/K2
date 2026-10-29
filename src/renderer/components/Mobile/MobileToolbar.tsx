@@ -1,26 +1,17 @@
-// The Mobile tab's device toolbar (prd-mobile-dev-v1 §2.2):
-//   [device ▾] [Boot|Stop] · [Rotate] [Home] [Back] [Screenshot] · [Take over]
-// Back is Android only. Every control is a gesture to the daemon; the tab
-// keeps no device state of its own. A watch-only viewer (remote Connect
-// Members, Rosson 2026-10-27) sees the device name and "Watching" only.
-//
-// Not in this slice: the ⋯ menu extras (the PRD's first cut, §9.3) and
-// Select (S5 pick → note → Send, undecided). `extra` is the slot S5's
-// Select toggle goes in.
+// The Mobile tab's top bar (prd-mobile-dev-v1 §2.2; slimmed by
+// research-mobile-pane-polish-v1 §4 item 2):
+//   [platform ▾] [device ▾] ………… [Take over | Hand back]  /  [Watching]
+// The device's own controls live on the rail beside the phone
+// (MobileControlRail); Start is on the empty state, Stop in the rail's ⋯.
+// Every control is a gesture to the daemon; the bar keeps no device state.
+// A watch-only viewer (remote Connect Members, Rosson 2026-10-27) sees the
+// device and "Watching" only.
 
-import {
-  ArrowLeftIcon,
-  CameraIcon,
-  HomeIcon,
-  K2_ICON_PX,
-  PowerIcon,
-  RotateIcon,
-} from '@/components/icons/K2Icons'
 import { SettingDropdown } from '@/components/Settings/controls/SettingControls'
+import { THEME_PILL_RADIUS } from './MobileControlRail'
 import type { SimDeviceProfile, SimLaneId, SimPlatform, SimView } from './simApi'
 
 const PLATFORM_NAME: Record<SimPlatform, string> = { android: 'Android', ios: 'iPhone' }
-import { REMOTE_FPS_CHOICES } from './sim-stream'
 
 export interface MobileToolbarProps {
   session: SimView | null
@@ -37,77 +28,26 @@ export interface MobileToolbarProps {
   canControl: boolean
   /** A boot / stop / screenshot request is in flight. */
   busy: boolean
-  /** A lane can boot now (not waiting on the owner's licence or step). */
-  canBoot: boolean
-  /** The stream is open and drawing (rotate / Home / Back need it). */
+  /** The stream is open and drawing (Take over needs it). */
   live: boolean
   /** This viewer holds the device with Take over. */
   tookOver: boolean
-  /** Remote viewers pick their frame rate (M-A19); null = local. */
-  fps: number | null
   onDevice(device: string): void
-  onBoot(): void
-  onStop(): void
-  onRotate(): void
-  onHome(): void
-  onBack(): void
-  onScreenshot(): void
   onTakeOver(): void
   onHandBack(): void
-  onFps(fps: number): void
-  /** S5: the Select toggle. */
-  extra?: React.ReactNode
 }
-
-function ToolButton({
-  label,
-  title,
-  onClick,
-  disabled,
-  pressed,
-  children,
-  testId,
-}: {
-  label: string
-  title?: string
-  onClick(): void
-  disabled?: boolean
-  pressed?: boolean
-  children: React.ReactNode
-  testId: string
-}): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={title ?? label}
-      disabled={disabled}
-      onClick={onClick}
-      {...(pressed !== undefined ? { 'aria-pressed': pressed } : {})}
-      data-mobile-tool={testId}
-      className={`flex h-6 w-6 flex-shrink-0 items-center justify-center cursor-pointer disabled:cursor-default disabled:opacity-30 ${
-        pressed ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
-
-const Sep = (): React.JSX.Element => <span className="mx-1 h-4 w-px flex-shrink-0 bg-[var(--color-border)]" aria-hidden />
 
 export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
-  const { session, devices, device, canControl, busy, live, tookOver, fps } = props
+  const { session, devices, device, canControl, busy, live, tookOver } = props
   const running = session?.state === 'running'
   const changing = session?.state === 'installing' || session?.state === 'booting' || session?.state === 'stopping'
   const on = running || changing
-  const lane = session?.lane ?? props.lane
   const profile = session?.profile
   const choices: Array<{ id: string; name: string }> =
     devices.length > 0 ? devices : profile ? [{ id: profile.id, name: profile.name }] : []
   return (
     <div
-      className="flex h-9 flex-shrink-0 items-center gap-1 border-b border-[var(--color-border)] px-2 text-xs"
+      className="flex h-10 flex-shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] px-2 text-xs"
       data-testid="mobile-toolbar"
     >
       {props.platforms && props.platforms.length > 1 ? (
@@ -135,81 +75,35 @@ export function MobileToolbar(props: MobileToolbarProps): React.JSX.Element {
         onChange={(v) => props.onDevice(v)}
         triggerData={{ 'data-mobile-device': '' }}
       />
-      {canControl ? (
-        <ToolButton
-          label={on ? 'Stop the device' : 'Start the device'}
-          onClick={on ? props.onStop : props.onBoot}
-          disabled={busy || changing || (!on && (!device || !props.canBoot))}
-          pressed={on}
-          testId={on ? 'stop' : 'boot'}
-        >
-          <PowerIcon size={K2_ICON_PX} />
-        </ToolButton>
-      ) : null}
-      {canControl ? (
-        <>
-          <Sep />
-          <ToolButton label="Rotate" onClick={props.onRotate} disabled={!live} testId="rotate">
-            <RotateIcon size={K2_ICON_PX} />
-          </ToolButton>
-          <ToolButton label="Home" title="Home (⌘⇧H on the device)" onClick={props.onHome} disabled={!live} testId="home">
-            <HomeIcon size={K2_ICON_PX} />
-          </ToolButton>
-          {lane === 'android' ? (
-            <ToolButton label="Back" onClick={props.onBack} disabled={!live} testId="back">
-              <ArrowLeftIcon size={K2_ICON_PX} />
-            </ToolButton>
-          ) : null}
-        </>
-      ) : null}
-      <ToolButton
-        label="Screenshot"
-        title="Save a screenshot to .k2/sim/shots/ and copy its path"
-        onClick={props.onScreenshot}
-        disabled={!running || busy || !canControl}
-        testId="screenshot"
-      >
-        <CameraIcon size={K2_ICON_PX} />
-      </ToolButton>
-      {props.extra}
-      {canControl && running ? (
-        <>
-          <Sep />
-          <button
-            type="button"
-            className={`h-6 flex-shrink-0 cursor-pointer border px-2 text-xs ${
-              tookOver
-                ? 'border-[var(--color-accent)] text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text)]'
-            }`}
-            onClick={tookOver ? props.onHandBack : props.onTakeOver}
-            disabled={!live}
-            title={
-              tookOver
-                ? 'Give the device back to the agent'
-                : 'Hold the device: the agent waits until you hand it back (or 10 minutes with no input)'
-            }
-            data-mobile-tool={tookOver ? 'hand-back' : 'take-over'}
-          >
-            {tookOver ? 'Hand back' : 'Take over'}
-          </button>
-        </>
-      ) : null}
       <span className="flex-1" />
-      {fps !== null ? (
-        <SettingDropdown
-          ariaLabel="Frame rate"
-          compact
-          className="flex-shrink-0"
-          value={String(fps)}
-          options={REMOTE_FPS_CHOICES.map((n) => ({ value: String(n), label: `${n} fps` }))}
-          onChange={(v) => props.onFps(Number(v))}
-          title="Frames per second over Connect"
-          triggerData={{ 'data-mobile-fps': '' }}
-        />
+      {canControl && running ? (
+        <button
+          type="button"
+          className={`h-6 flex-shrink-0 cursor-pointer border px-3 text-xs transition-colors disabled:cursor-default disabled:opacity-50 ${
+            tookOver
+              ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+              : 'border-[var(--color-border)] text-[var(--color-text-secondary)] enabled:hover:text-[var(--color-text-primary)]'
+          }`}
+          style={{ borderRadius: THEME_PILL_RADIUS }}
+          onClick={tookOver ? props.onHandBack : props.onTakeOver}
+          disabled={!live}
+          title={
+            tookOver
+              ? 'Give the device back to the agent'
+              : 'Hold the device: the agent waits until you hand it back (or 10 minutes with no input)'
+          }
+          data-mobile-tool={tookOver ? 'hand-back' : 'take-over'}
+        >
+          {tookOver ? 'Hand back' : 'Take over'}
+        </button>
       ) : null}
       {!canControl ? (
-        <span className="flex-shrink-0 text-[var(--color-text-muted)]" data-mobile-watching="" title="You can watch this device; your login can't control it">
+        <span
+          className="flex-shrink-0 border border-[var(--color-border)] px-2.5 py-0.5 text-[var(--color-text-muted)]"
+          style={{ borderRadius: THEME_PILL_RADIUS }}
+          data-mobile-watching=""
+          title="You can watch this device; your login can't control it"
+        >
           Watching
         </span>
       ) : null}

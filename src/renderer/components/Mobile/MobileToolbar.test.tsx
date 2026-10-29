@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-// The Mobile toolbar's platform, device and frame-rate menus are K2's
-// standard dropdown (SettingDropdown), not native <select>s (Rosson
-// 2026-10-29), fail loud:
-//  - the trigger shows the current value and keeps its data-mobile-* hook,
-//    aria-label and title;
+// The Mobile top bar (research-mobile-pane-polish-v1 §4 item 2): the
+// platform and device menus are K2's standard dropdown (SettingDropdown),
+// then Take over / Hand back, or "Watching" for a watcher. Fail loud:
+//  - the trigger shows the current value and keeps its data-mobile-* hook
+//    and aria-label;
 //  - picking an item calls the callback with the same value as before;
 //  - the disabled conditions block opening;
-//  - an empty device list reads "No devices".
+//  - an empty device list reads "No devices";
+//  - Take over shows only for a controller with a running device.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render } from '@testing-library/react'
@@ -24,6 +25,8 @@ const DEVICES = [
   { id: 'pixel_8a', name: 'Pixel 8a' },
 ] as unknown as SimDeviceProfile[]
 
+const RUNNING = { state: 'running', lane: 'android' } as unknown as SimView
+
 function props(over: Partial<MobileToolbarProps> = {}): MobileToolbarProps {
   return {
     session: null,
@@ -35,20 +38,11 @@ function props(over: Partial<MobileToolbarProps> = {}): MobileToolbarProps {
     device: 'pixel_9',
     canControl: true,
     busy: false,
-    canBoot: true,
-    live: false,
+    live: true,
     tookOver: false,
-    fps: 8,
     onDevice: vi.fn(),
-    onBoot: vi.fn(),
-    onStop: vi.fn(),
-    onRotate: vi.fn(),
-    onHome: vi.fn(),
-    onBack: vi.fn(),
-    onScreenshot: vi.fn(),
     onTakeOver: vi.fn(),
     onHandBack: vi.fn(),
-    onFps: vi.fn(),
     ...over,
   }
 }
@@ -82,25 +76,16 @@ describe('MobileToolbar menus', () => {
     expect(trigger('data-mobile-platform').getAttribute('aria-label')).toBe('Platform')
     expect(trigger('data-mobile-device').textContent).toBe('Pixel 9')
     expect(trigger('data-mobile-device').getAttribute('aria-label')).toBe('Device')
-    expect(trigger('data-mobile-fps').textContent).toBe('8 fps')
-    expect(trigger('data-mobile-fps').getAttribute('aria-label')).toBe('Frame rate')
-    expect(trigger('data-mobile-fps').title).toBe('Frames per second over Connect')
   })
 
   it('the open menu marks the current item and lists the same labels', () => {
     render(<MobileToolbar {...props()} />)
-    fireEvent.click(trigger('data-mobile-fps'))
+    fireEvent.click(trigger('data-mobile-device'))
     const open = menu()
-    if (!open) throw new Error('fps menu did not open')
-    expect(Array.from(open.querySelectorAll('button')).map((b) => b.textContent)).toEqual([
-      '2 fps',
-      '4 fps',
-      '8 fps',
-      '12 fps',
-      '15 fps',
-    ])
+    if (!open) throw new Error('device menu did not open')
+    expect(Array.from(open.querySelectorAll('button')).map((b) => b.textContent)).toEqual(['Pixel 9', 'Pixel 8a'])
     const current = Array.from(open.querySelectorAll('button')).filter((b) => b.querySelector('svg'))
-    expect(current.map((b) => b.textContent)).toEqual(['8 fps'])
+    expect(current.map((b) => b.textContent)).toEqual(['Pixel 9'])
   })
 
   it('picking an item calls the callback with the value and closes the menu', () => {
@@ -111,13 +96,10 @@ describe('MobileToolbar menus', () => {
     expect(menu()).toBeNull()
     pick('data-mobile-device', 'Pixel 8a')
     expect(p.onDevice).toHaveBeenCalledWith('pixel_8a')
-    pick('data-mobile-fps', '12 fps')
-    expect(p.onFps).toHaveBeenCalledWith(12)
   })
 
   it('a running device locks the platform; busy locks the device; neither opens', () => {
-    const p = props({ session: { state: 'running', lane: 'android' } as unknown as SimView })
-    render(<MobileToolbar {...p} />)
+    render(<MobileToolbar {...props({ session: RUNNING })} />)
     expect(trigger('data-mobile-platform').disabled).toBe(true)
     fireEvent.click(trigger('data-mobile-platform'))
     expect(menu()).toBeNull()
@@ -140,10 +122,30 @@ describe('MobileToolbar menus', () => {
     expect(trigger('data-mobile-device').disabled).toBe(true)
   })
 
-  it('one platform shows no platform menu; a local viewer has no frame-rate menu', () => {
-    render(<MobileToolbar {...props({ platforms: ['android'], fps: null })} />)
+  it('one platform shows no platform menu', () => {
+    render(<MobileToolbar {...props({ platforms: ['android'] })} />)
     expect(document.querySelector('[data-mobile-platform]')).toBeNull()
-    expect(document.querySelector('[data-mobile-fps]')).toBeNull()
     expect(trigger('data-mobile-device').textContent).toBe('Pixel 9')
+  })
+})
+
+describe('MobileToolbar take over', () => {
+  it('shows for a controller with a running device; Hand back once taken', () => {
+    const p = props({ session: RUNNING })
+    const view = render(<MobileToolbar {...p} />)
+    fireEvent.click(document.querySelector('[data-mobile-tool="take-over"]') as HTMLButtonElement)
+    expect(p.onTakeOver).toHaveBeenCalledTimes(1)
+    view.rerender(<MobileToolbar {...p} tookOver />)
+    fireEvent.click(document.querySelector('[data-mobile-tool="hand-back"]') as HTMLButtonElement)
+    expect(p.onHandBack).toHaveBeenCalledTimes(1)
+  })
+
+  it('no device running: no Take over; a watcher sees Watching instead', () => {
+    render(<MobileToolbar {...props()} />)
+    expect(document.querySelector('[data-mobile-tool="take-over"]')).toBeNull()
+    cleanup()
+    render(<MobileToolbar {...props({ session: RUNNING, canControl: false })} />)
+    expect(document.querySelector('[data-mobile-tool="take-over"]')).toBeNull()
+    expect(document.querySelector('[data-mobile-watching]')?.textContent).toBe('Watching')
   })
 })

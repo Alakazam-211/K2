@@ -32,6 +32,8 @@ import { roomProjectForCwd } from '@/stores/room'
 import { DeviceFrame, useElementSize } from './DeviceFrame'
 import { frameLayout, resolveDeviceShape } from './device-frame'
 import { MobileBootScreen, type MobileBootPhase } from './MobileBootScreen'
+import { MobileControlRail, RAIL_INSET_PX } from './MobileControlRail'
+import { readMobileScreenOnly, writeMobileScreenOnly } from './mobile-view-prefs'
 import { MobileToolbar } from './MobileToolbar'
 import { readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
 import {
@@ -51,7 +53,7 @@ import {
   type SimStatus,
 } from './simApi'
 import { type BoxRect, gestureFor, keyToSimInput, nextOrientation, type PointerSample, type ScreenPt } from './sim-input'
-import { defaultFps, type SimStreamConnector, wsSimStream } from './sim-stream'
+import { defaultFps, type SimAppearance, type SimStreamConnector, wsSimStream } from './sim-stream'
 import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
@@ -386,6 +388,18 @@ function MobileDevice({
 
   // ── The stage the phone fits in (both ways, measured) ─────────────────
   const [stageRef, stageSize] = useElementSize<HTMLDivElement>()
+  const [screenOnly, setScreenOnlyState] = useState(readMobileScreenOnly)
+  const setScreenOnly = useCallback((on: boolean) => {
+    setScreenOnlyState(on)
+    writeMobileScreenOnly(on)
+  }, [])
+  // What this tab last set; the daemon takes appearance but doesn't report
+  // it, so a new device starts from light.
+  const [appearance, setAppearance] = useState<SimAppearance>('light')
+  const simId = session?.sim ?? null
+  useEffect(() => {
+    setAppearance('light')
+  }, [simId])
 
   // ── Pointer and keys on the device ────────────────────────────────────
   const screenRef = useRef<HTMLDivElement | null>(null)
@@ -471,7 +485,11 @@ function MobileDevice({
   // in the toolbar.
   const canStart = canControl && laneReady && !!device && !simIsUp(session)
   const shape = resolveDeviceShape(session?.lane ?? devicesLane, session?.profile?.name ?? '', screen)
-  const frame = frameLayout(shape, screen ?? { widthPt: 9, heightPt: 19.5 }, stageSize)
+  const showRail = canControl && running
+  const frame = frameLayout(shape, screen ?? { widthPt: 9, heightPt: 19.5 }, stageSize, {
+    rightInset: showRail ? RAIL_INSET_PX : 0,
+    screenOnly,
+  })
   const overlayBox = renderOverlay && screen && live ? box() : null
   const banner = holdBanner(hold, tookOver)
   const shownNotice = notice ?? stream.inputError
@@ -511,17 +529,9 @@ function MobileDevice({
         device={device}
         canControl={canControl}
         busy={busy}
-        canBoot={laneReady}
         live={live}
         tookOver={tookOver}
-        fps={scope.isRemote ? stream.fps ?? fps : null}
         onDevice={onDevice}
-        onBoot={() => boot(device)}
-        onStop={onStop}
-        onRotate={() => screen && stream.send({ t: 'rotate', orientation: nextOrientation(screen) })}
-        onHome={() => stream.send({ t: 'button', button: 'home' })}
-        onBack={() => stream.send({ t: 'button', button: 'back' })}
-        onScreenshot={onScreenshot}
         onTakeOver={() => {
           stream.send({ t: 'take-over' })
           setTookOver(true)
@@ -530,8 +540,6 @@ function MobileDevice({
           stream.send({ t: 'hand-back' })
           setTookOver(false)
         }}
-        onFps={onFps}
-        extra={toolbarExtra}
       />
       {iphoneNote && canControl ? (
         <div className="flex-shrink-0 border-b border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-text-muted)]" data-mobile-iphone-note="">
@@ -545,7 +553,7 @@ function MobileDevice({
       ) : null}
       <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6" data-mobile-stage="">
         {running ? (
-          <DeviceFrame shape={shape} layout={frame}>
+          <DeviceFrame shape={shape} layout={frame} screenOnly={screenOnly}>
             <div
               ref={screenRef}
               tabIndex={interactive ? 0 : -1}
@@ -572,7 +580,37 @@ function MobileDevice({
               {overlayBox && screen && renderOverlay ? renderOverlay({ box: overlayBox, screen }) : null}
             </div>
           </DeviceFrame>
-        ) : bootScreen ? null : (
+        ) : null}
+        {showRail ? (
+          <div className="absolute right-3 top-1/2 -translate-y-1/2">
+            <MobileControlRail
+              lane={session?.lane ?? null}
+              live={live}
+              busy={busy}
+              appearance={appearance}
+              screenOnly={screenOnly}
+              fps={scope.isRemote ? stream.fps ?? fps : null}
+              deviceName={session?.profile?.name ?? 'Device'}
+              deviceOs={session?.profile?.os}
+              isolation={stream.isolation}
+              onHome={() => stream.send({ t: 'button', button: 'home' })}
+              onBack={() => stream.send({ t: 'button', button: 'back' })}
+              onRecents={() => stream.send({ t: 'button', button: 'app-switch' })}
+              onRotate={() => screen && stream.send({ t: 'rotate', orientation: nextOrientation(screen) })}
+              onAppearance={(next) => {
+                stream.send({ t: 'appearance', appearance: next })
+                setAppearance(next)
+              }}
+              onScreenshot={onScreenshot}
+              onStop={onStop}
+              onOpenUrl={(url) => stream.send({ t: 'open-url', url })}
+              onScreenOnly={setScreenOnly}
+              onFps={onFps}
+              extra={toolbarExtra}
+            />
+          </div>
+        ) : null}
+        {running ? null : bootScreen ? null : (
           <div className="flex max-w-sm flex-col items-center gap-3">
             <div className="text-center text-xs text-[var(--color-text-muted)]" data-mobile-blocked="">
               {blocked}
@@ -604,11 +642,6 @@ function MobileDevice({
           </div>
         ) : null}
       </div>
-      {running && stream.isolation ? (
-        <div className="flex-shrink-0 px-3 pb-2 text-center text-[11px] text-[var(--color-text-muted)]" data-mobile-isolation="">
-          {stream.isolation}
-        </div>
-      ) : null}
     </div>
   )
 }

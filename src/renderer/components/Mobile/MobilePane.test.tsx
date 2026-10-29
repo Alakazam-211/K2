@@ -161,6 +161,21 @@ function tool(name: string): HTMLButtonElement {
   return el
 }
 
+/** Start lives on the empty state (the top bar has no power toggle). */
+function start(): HTMLButtonElement {
+  const el = document.querySelector('[data-mobile-start]') as HTMLButtonElement | null
+  if (!el) throw new Error('no Start button')
+  return el
+}
+
+/** Open the rail's ⋯ menu. */
+function openMore(): HTMLElement {
+  fireEvent.click(tool('more'))
+  const menu = document.querySelector('[data-mobile-more]') as HTMLElement | null
+  if (!menu) throw new Error('the ⋯ menu did not open')
+  return menu
+}
+
 /** The toolbar's menus are K2 dropdowns: open one and read its item labels. */
 function openMenu(trigger: string): HTMLElement {
   const el = document.querySelector(trigger) as HTMLButtonElement | null
@@ -318,7 +333,7 @@ describe('no device running', () => {
     pickMenu('[data-mobile-device]', 'Pixel 8a')
     expect(daemon.posts).toEqual([])
     await act(async () => {
-      fireEvent.click(tool('boot'))
+      fireEvent.click(start())
     })
     await flush()
     expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'pixel_8a', platform: 'android', noTab: true } }])
@@ -337,7 +352,7 @@ describe('no device running', () => {
       'The owner of this server must accept the Android SDK licence first (on its card in Settings).',
     )
     expect(document.querySelector('[data-mobile-start]')).toBeNull()
-    expect(tool('boot').disabled).toBe(true)
+    expect(document.querySelector('[data-mobile-rail]')).toBeNull()
     cleanup()
     daemon.status = status({ sim: null, lanes: [{ lane: 'android', usable: false, ready: false, detail: '/dev/kvm: permission denied for user k2.' }] })
     renderMobile(createStubSimStream())
@@ -356,7 +371,7 @@ describe('no device running', () => {
     expect(document.querySelector('[data-mobile-iphone-note]')?.textContent).toBe('iPhone needs a Mac (this computer or a Mac compute node)')
     expect(daemon.devicesAsked).toEqual(['android'])
     await act(async () => {
-      fireEvent.click(tool('boot'))
+      fireEvent.click(start())
     })
     await flush()
     expect(daemon.posts.map((p) => (p.body as { platform?: string }).platform)).toEqual(['android'])
@@ -383,7 +398,7 @@ describe('no device running', () => {
     expect(daemon.devicesAsked).toEqual(['android', 'ios'])
     expect(menuLabels('[data-mobile-device]')).toEqual(['iPhone 16'])
     await act(async () => {
-      fireEvent.click(tool('boot'))
+      fireEvent.click(start())
     })
     await flush()
     expect(daemon.posts).toEqual([{ route: 'sim/boot', body: { workspace: '/w/docs', device: 'iphone_16', platform: 'ios', noTab: true } }])
@@ -434,7 +449,8 @@ describe('the running device', () => {
     expect(stub.acks).toEqual([1])
     expect(painted).toEqual(['fill:824x1830'])
     expect(document.querySelector('[data-mobile-bezel]')?.getAttribute('data-mobile-bezel')).toBe('portrait')
-    expect(document.querySelector('[data-mobile-isolation]')?.textContent).toMatch(/^Separate, not sealed/)
+    expect(openMore().querySelector('[data-mobile-about]')?.textContent).toMatch(/Separate, not sealed/)
+    fireEvent.click(tool('more'))
     // S5 hook: hold the frame — still acked, not painted.
     view.rerender(pane(stub, true, true))
     await act(async () => {
@@ -484,7 +500,7 @@ describe('the running device', () => {
     expect(stub.inputs).toHaveLength(3)
   })
 
-  it('Rotate, Home, Back and Take over / Hand back send stream messages', async () => {
+  it('the rail (Rotate, Home, Back, Recents, Dark mode) and Take over / Hand back send stream messages', async () => {
     const stub = createStubSimStream()
     renderMobile(stub)
     await flush()
@@ -500,6 +516,8 @@ describe('the running device', () => {
     fireEvent.click(tool('rotate'))
     fireEvent.click(tool('home'))
     fireEvent.click(tool('back'))
+    fireEvent.click(tool('recents'))
+    fireEvent.click(tool('appearance'))
     fireEvent.click(tool('take-over'))
     await act(async () => {
       stub.pushServer({ t: 'hold', hold: { kind: 'takeover', by: 'rosson', idleMs: 600000 } })
@@ -512,6 +530,8 @@ describe('the running device', () => {
       { t: 'rotate', orientation: 'portrait' },
       { t: 'button', button: 'home' },
       { t: 'button', button: 'back' },
+      { t: 'button', button: 'app-switch' },
+      { t: 'appearance', appearance: 'dark' },
       { t: 'take-over' },
       { t: 'hand-back' },
     ])
@@ -527,6 +547,7 @@ describe('the running device', () => {
     })
     await flush()
     expect(document.querySelector('[data-mobile-notice]')?.textContent).toMatch(/^Saved \/w\/docs\/\.k2\/sim\/shots\/s1-0001\.png/)
+    openMore()
     await act(async () => {
       fireEvent.click(tool('stop'))
     })
@@ -567,10 +588,11 @@ describe('watching and visibility', () => {
     fireEvent.pointerUp(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
     fireEvent.keyDown(el, { key: 'a' })
     expect(stub.inputs).toEqual([])
-    for (const name of ['rotate', 'home', 'back', 'take-over', 'stop']) {
+    // No rail for a watcher: no device buttons, no screenshot, no Stop.
+    expect(document.querySelector('[data-mobile-rail]')).toBeNull()
+    for (const name of ['rotate', 'home', 'back', 'take-over', 'stop', 'screenshot', 'more']) {
       expect(document.querySelector(`[data-mobile-tool="${name}"]`)).toBeNull()
     }
-    expect(tool('screenshot').disabled).toBe(true)
     expect(document.querySelector('[data-mobile-watching]')?.textContent).toBe('Watching')
   })
 

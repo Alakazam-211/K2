@@ -866,6 +866,12 @@ mod tests {
             "guests:rooms",
             "activity:read",
             "room:members",
+            // 0.46.7 Workbench: this computer's agents only.
+            "git:read",
+            "git:notes",
+            "compute:read",
+            "agents:start",
+            "agents:stop",
         ];
         for name in c.widget_caps() {
             let s = c.cap(name).and_then(|r| r.sentence.as_deref());

@@ -861,8 +861,8 @@ mod tests {
         );
         assert_eq!(
             catalog().verbs_exposed_to(Exposure::Widget).len(),
-            44,
-            "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open; 0.46.5's thread.onActivity, blobs.put/get and downloads.begin/save; 0.46.6's uploads.pick and uploads.dropped)"
+            45,
+            "the bridge's own rows (thread.inbox joined in 0.46.3; catalog v20's six rows; catalog v21's links.open; 0.46.5's thread.onActivity, blobs.put/get and downloads.begin/save; 0.46.6's uploads.pick and uploads.dropped; catalog v40's agents.openTerminal)"
         );
         for never in ["zen.exit", "controls.bind", "homes.list", "agents.local", "agents.add", "agents.home", "agents.setHome",
             "thread.void", "gardens.create", "gardens.rename", "gardens.delete", "app.open"]

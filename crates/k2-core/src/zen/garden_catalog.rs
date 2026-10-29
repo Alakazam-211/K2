@@ -371,7 +371,9 @@ kind = "columns"
                 ("texting", TemplateSection::Start),
                 ("blank", TemplateSection::Start),
                 ("diary", TemplateSection::Catalog),
-                ("kanban", TemplateSection::Catalog)
+                ("kanban", TemplateSection::Catalog),
+                // 0.46.7: the Workbench (offered, not preinstalled).
+                ("workbench", TemplateSection::Catalog)
             ]
         );
         let row = list.iter().find(|t| t.short == "kanban").expect("listed");

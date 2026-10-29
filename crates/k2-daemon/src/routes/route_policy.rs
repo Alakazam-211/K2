@@ -604,9 +604,10 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/update", Admin),
     // Q5 (0.46.4): an operator turns the Linux job wall on (handler: operator()).
     post("/cli/compute/nodes/wall", Admin),
+    // 0.46.7 (CE-18): Batch jobs that install --needs on granted nodes.
+    post("/cli/compute/prewarm", Member),
     // A node's queue, redacted per §7 (an agent verb: its own workspace).
     get("/cli/compute/queue", Member),
-    post("/cli/compute/prewarm", Member),
     post("/cli/compute/run", Member),
     get("/cli/compute/usage", Admin),
     // 0.45.7: the CLI's K2 Connect control-plane calls, made with the

@@ -573,8 +573,14 @@ async fn a_shared_nodes_other_server_counts_and_a_move_rewrites_the_record() {
     assert_eq!(r.status, 200, "{}", r.body);
     let auto = j(&r)["job"]["id"].as_str().unwrap().to_string();
     let first = j(&r)["placement"].clone();
-    assert_eq!((node_of(&r).as_str(), first["code"].as_str(), first["startsNow"].as_bool()), ("s-solo", Some("queued_least_busy"), Some(false)), "{first}");
-    assert!(first["why"].as_str().unwrap().starts_with("no node free now; least busy"), "{first}");
+    // P2 (0.46.7): a solo node's wait is estimated: the pinned job ahead
+    // and the running one, 15 min each with no history.
+    assert_eq!(
+        (node_of(&r).as_str(), first["code"].as_str(), first["startsNow"].as_bool(), first["etaSecs"].as_u64()),
+        ("s-solo", Some("queued_est_wait"), Some(false), Some(1800)),
+        "{first}"
+    );
+    assert!(first["why"].as_str().unwrap().starts_with("no node free now; shortest wait ~30 min (estimate)"), "{first}");
     assert_eq!((row(&auto).state.as_str(), row(&pinned).state.as_str()), ("queued", "queued"));
     compute_ws::test_detach("s-solo");
     let mut back = roomy.clone();

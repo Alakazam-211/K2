@@ -340,6 +340,9 @@ sha2 = "0.10"
 k2-core = { path = "../k2-core", features = ["test-util"] }
 # Vault route tests run on a temp vault with the fake key store.
 k2-vault = { path = "../k2-vault", features = ["test-util"] }
+# The changes card's tests (workbench-v1 B7) build temp repos. Same git2
+# version/features k2-core uses: the one crate already in the lock tree.
+git2 = { version = "0.19", features = ["vendored-openssl"] }
 # Federation route tests mint a fresh "peer" keypair to pin (distinct from
 # the daemon's own tunnel key). Same rcgen version/features k2-core uses, so
 # it resolves to the one crate already in the lock tree — no new dep.

@@ -1493,6 +1493,8 @@ async fn async_main() {
     activity_events::spawn();
     // S6: Thread turns follow the store and the transcripts.
     thread_activity::spawn();
+    // workbench-v1 B7: a changed-files card on a worktree agent's Thread per turn.
+    turn_changes::spawn();
     // Thread cards past their time frame turn `expired` (0.45.5).
     overlay_routes::spawn_card_expiry();
     // A Thread that moves on Codex/Hermes adoption (pane key -> provider

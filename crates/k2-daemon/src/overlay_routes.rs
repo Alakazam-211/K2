@@ -2168,6 +2168,24 @@ pub(crate) fn post_workspace_note(workspace: &str, body: &str, via: &str) -> Res
     Ok(())
 }
 
+/// K2's changed-files card for one turn on a worktree agent's Thread
+/// (workbench-v1 B7, `crate::turn_changes`). From `k2`, kind `changes`.
+/// No inject, no wake, no push: like [`post_workspace_note`], it is a
+/// record for the person reading that Thread (it counts as unread there).
+/// Returns the doc id.
+pub(crate) fn post_changes_card(addr: &str, changes: overlay::ThreadChanges) -> Result<String, String> {
+    let resolved = resolve_addr(addr).map_err(|r| r.body)?;
+    let body = k2_core::turn_changes::summary_line(&changes);
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let (item, links) =
+        overlay::post_changes(&conn, &resolved.conversation_id, &resolved.project_id, "k2", &resolved.addr, &body, changes)?;
+    // Publish under the write's lock (bus order = commit order, 0.46.3).
+    crate::overlay_ws::emit_links(&links, &item.doc);
+    drop(conn);
+    Ok(item.id)
+}
+
 /// The card's proposal from `--scope/--for/--delivery/--kind` (KV9).
 fn secret_proposal(params: &HashMap<String, String>) -> Result<overlay::SecretProposal, k2_vault::VaultError> {
     let scope = opt_param(params, "scope").map(|s| s.trim().to_string()).filter(|s| !s.is_empty());

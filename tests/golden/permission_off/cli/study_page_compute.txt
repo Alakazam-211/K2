@@ -255,6 +255,15 @@ CANCEL
   job that already started is reported ("already started; left running")
   and the exit is 0, so a script can call it without checking first.
 
+  Many at once (0.46.7): k2 compute cancel --all-mine [--tag T]
+  [--state queued|running|any] [--node N] [--force] cancels the jobs THIS
+  session sent (this terminal's passport; jobs from an earlier session
+  need --workspace-all) that match: queued only by default; a started
+  one only with --force (else it is listed as skipped). --workspace-all
+  instead of --all-mine: every job of your workspace, other sessions' too.
+  On a shared node, a job in the node's queue is asked to cancel only if
+  it hasn't started (as for one job).
+
 EVENTS (0.46.7)
   k2 compute events --follow --json prints one line per event of every
   job of your workspace as it happens, instead of polling logs:
@@ -270,14 +279,31 @@ EVENTS (0.46.7)
   with a time limit: --max-wait 9m (exit 0 when it passes, with the line to
   continue), then again with --since <the last cursor you saw>.
   (k2 compute events used to be the audit log: that is events --audit.)
-  Many at once (0.46.7): k2 compute cancel --all-mine [--tag T]
-  [--state queued|running|any] [--node N] [--force] cancels the jobs THIS
-  session sent (this terminal's passport; jobs from an earlier session
-  need --workspace-all) that match: queued only by default; a started
-  one only with --force (else it is listed as skipped). --workspace-all
-  instead of --all-mine: every job of your workspace, other sessions' too.
-  On a shared node, a job in the node's queue is asked to cancel only if
-  it hasn't started (as for one job).
+
+CODES (0.46.7)
+  Refusals (nothing is queued):
+    node_ambiguous         a node prefix matches more than one node: name it
+                           in full (exit 2). A unique prefix works (k2n12).
+    not_now                --now and no node can start it at once; the
+                           error names the shortest wait (exit 3).
+    exclusive_needs_why    --exclusive without --why "<reason>" (exit 2).
+    exclusive_needs_grant  --exclusive needs the owner, an Admin or a grant
+                           with --ci (exit 3; ask: k2 permission request
+                           compute.ci node=<node> --why "…").
+    compute_toml_invalid   .k2/compute.toml doesn't parse; the error names
+                           the line (exit 2).
+    preset_not_found       --preset NAME isn't in .k2/compute.toml (or there
+                           is no such file); the error says which (exit 2).
+    tag_invalid            --tag isn't 1 to 64 of A-Z a-z 0-9 . _ : / -
+                           (exit 2).
+  Placement codes (get's "placed on …" line, placement.code in JSON):
+    starts_now_cache       it starts now on the node where its --cache was.
+    queued_for_cache       it waits on the busy node that holds its --cache
+                           (when that wait looks short), rather than starting
+                           elsewhere without it.
+    queued_est_wait        nothing free: it waits where the estimated wait
+                           (earlier runs' durations) is shortest, and moves
+                           if another node frees up first.
 
 WHOSE JOB, AND WHICH (0.46.7)
   --tag NAME on run/test labels the job (1 to 64 characters, each one of

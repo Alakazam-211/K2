@@ -17,7 +17,7 @@ use k2_core::compute::{self as compute, codes, scheduler, store};
 
 use crate::compute_manage::Manager;
 use crate::compute_routes::{
-    job_for, json_body, need_credential, no, no_workspace, node_or_404, passport_gate, resolve_node_for, s, sweep_retiring, ws_by_token_or_worktree,
+    job_for, json_body, need_credential, no, no_workspace, passport_gate, resolve_node_for, s, sweep_retiring, ws_by_token_or_worktree,
     ws_handle, Who, R,
 };
 use crate::compute_ws;
@@ -720,14 +720,18 @@ pub(crate) fn queue_view(who: &Who, j: &store::JobRow, decision: &scheduler::Dec
     let eta = if on_shared {
         None
     } else {
-        let left: Option<i64> = active
+        // One rule with placement (P2): the estimates ahead ÷ the slots,
+        // plus the least time left on a running job; an unknown estimate
+        // counts 15 min.
+        let est = |r: &store::JobRow| r.est_secs.filter(|e| *e > 0).map(|e| e as u64);
+        let ahead: Vec<Option<u64>> = before.iter().map(|(_, q)| est(q)).collect();
+        let left: Vec<Option<u64>> = active
             .iter()
             .filter(|r| !r.node_queued)
-            .map(|r| r.est_secs.map(|e| (e - (now - r.started_at.or(r.assigned_at).unwrap_or(now))).max(0)))
-            .chain(before.iter().map(|(_, q)| q.est_secs))
-            .sum();
-        let slots = offer.as_ref().map(|o| o.parallel_max.max(1)).unwrap_or(1) as i64;
-        left.map(|l| l / slots)
+            .map(|r| est(r).map(|e| e.saturating_sub((now - r.started_at.or(r.assigned_at).unwrap_or(now)).max(0) as u64)))
+            .collect();
+        let slots = offer.as_ref().map(|o| o.parallel_max).unwrap_or(1);
+        Some(crate::compute_place::solo_eta(&ahead, &left, slots) as i64)
     };
     let passes = why.code == scheduler::GRANT_PARALLEL_FULL || pshare::blocked::lets_others_pass(&why.code);
     let tail = if passes { "; jobs behind it may start first" } else { "" };
@@ -774,7 +778,7 @@ const QUEUE_WAIT: Duration = Duration::from_secs(10);
 /// server's own running and queued jobs there, as today.
 pub(crate) fn queue(who: &Who, params: &HashMap<String, String>) -> R<serde_json::Value> {
     need_credential(who)?;
-    let n = node_or_404(params.get("node").map(String::as_str))?;
+    let n = resolve_node_for(who, params.get("node").map(String::as_str), who.passport().map(|(ws, _)| ws))?;
     node_visible(who, &n)?;
     let viewer = who.passport();
     let now = compute::now();
@@ -889,7 +893,7 @@ pub(crate) fn jobs_list(who: &Who, params: &HashMap<String, String>) -> R<serde_
     need_credential(who)?;
     let gate = passport_gate(who)?;
     let node = match params.get("node").map(String::as_str).filter(|s| !s.is_empty()) {
-        Some(t) => Some(node_or_404(Some(t))?.id),
+        Some(t) => Some(resolve_node_for(who, Some(t), gate.as_deref())?.id),
         None => None,
     };
     let ws = match gate {
@@ -1286,7 +1290,7 @@ fn cancel_matching(who: &Who, v: &serde_json::Value, f: &serde_json::Value) -> R
     };
     let tag = tag_param(fs("tag"))?;
     let node = match fs("node") {
-        Some(t) => Some(node_or_404(Some(t))?.id),
+        Some(t) => Some(resolve_node_for(who, Some(t), Some(&ws))?.id),
         None => None,
     };
     let mut rows: Vec<store::JobRow> = Vec::new();

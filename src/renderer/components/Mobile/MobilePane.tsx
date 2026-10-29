@@ -5,7 +5,8 @@
 //    (`DesignThreadColumn`, Rosson 2026-10-27). Never the pinned Chat's
 //    retained terminal.
 //  - The split width is this window's, per room (`k2.windowChrome.mobile.`).
-//  - Right: the device toolbar, then the device in a plain drawn bezel with
+//  - Right: the device toolbar, then the device in its phone frame
+//    (DeviceFrame: island or punch-hole, proportional corners) with
 //    the live stream on a <canvas>. The canvas is ordinary DOM (M-A3): no
 //    native child, no overlay arbiter, no freeze code, and the hosted web
 //    client shows it too (no web stub).
@@ -28,6 +29,8 @@ import { DesignThreadColumn } from '@/components/Design/DesignThreadColumn'
 import { pinnedChatItem } from '@/components/Design/pinned-chat-item'
 import type { MobileItemData } from '@/stores/tabs'
 import { roomProjectForCwd } from '@/stores/room'
+import { DeviceFrame, useElementSize } from './DeviceFrame'
+import { frameLayout, resolveDeviceShape } from './device-frame'
 import { MobileBootScreen, type MobileBootPhase } from './MobileBootScreen'
 import { MobileToolbar } from './MobileToolbar'
 import { readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
@@ -381,6 +384,9 @@ function MobileDevice({
     [stream],
   )
 
+  // ── The stage the phone fits in (both ways, measured) ─────────────────
+  const [stageRef, stageSize] = useElementSize<HTMLDivElement>()
+
   // ── Pointer and keys on the device ────────────────────────────────────
   const screenRef = useRef<HTMLDivElement | null>(null)
   const downRef = useRef<PointerSample | null>(null)
@@ -464,8 +470,8 @@ function MobileDevice({
   // Stopped (or failed) on a ready lane: offer Start right there, not only
   // in the toolbar.
   const canStart = canControl && laneReady && !!device && !simIsUp(session)
-  const portrait = !screen || screen.heightPt >= screen.widthPt
-  const aspect = screen ? `${screen.widthPt} / ${screen.heightPt}` : '9 / 19.5'
+  const shape = resolveDeviceShape(session?.lane ?? devicesLane, session?.profile?.name ?? '', screen)
+  const frame = frameLayout(shape, screen ?? { widthPt: 9, heightPt: 19.5 }, stageSize)
   const overlayBox = renderOverlay && screen && live ? box() : null
   const banner = holdBanner(hold, tookOver)
   const shownNotice = notice ?? stream.inputError
@@ -537,25 +543,16 @@ function MobileDevice({
           {shownNotice}
         </div>
       ) : null}
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-4">
+      <div ref={stageRef} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden p-6" data-mobile-stage="">
         {running ? (
-          <div
-            className="relative flex max-h-full max-w-full items-center justify-center border-[10px] border-[var(--color-text-muted)] bg-black"
-            style={{
-              aspectRatio: aspect,
-              height: portrait ? '100%' : 'auto',
-              width: portrait ? 'auto' : '100%',
-              borderRadius: 28,
-            }}
-            data-mobile-bezel={portrait ? 'portrait' : 'landscape'}
-          >
+          <DeviceFrame shape={shape} layout={frame}>
             <div
               ref={screenRef}
               tabIndex={interactive ? 0 : -1}
               role="application"
               aria-label={`${session?.profile?.name ?? 'Device'} screen${interactive ? '' : ' (watching)'}`}
-              className="relative h-full w-full overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
-              style={{ borderRadius: 18, cursor: interactive ? 'pointer' : 'default', touchAction: 'none' }}
+              className="relative h-full w-full overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
+              style={{ cursor: interactive ? 'pointer' : 'default', touchAction: 'none' }}
               onPointerDown={onPointerDown}
               onPointerUp={onPointerUp}
               onPointerCancel={() => {
@@ -574,7 +571,7 @@ function MobileDevice({
               ) : null}
               {overlayBox && screen && renderOverlay ? renderOverlay({ box: overlayBox, screen }) : null}
             </div>
-          </div>
+          </DeviceFrame>
         ) : bootScreen ? null : (
           <div className="flex max-w-sm flex-col items-center gap-3">
             <div className="text-center text-xs text-[var(--color-text-muted)]" data-mobile-blocked="">

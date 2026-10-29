@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 37,
+  "catalogVersion": 38,
   "caps": [
     {
       "name": "agents:read",
@@ -303,7 +303,9 @@
     {"code": "idempotency_conflict", "doc": "This idempotencyKey was used in the last 24 h for a different email."},
     {"code": "no_mail_path", "doc": "This server has no way to send email (no hosted mail and no relay sender)."},
     {"code": "email_paused", "doc": "This App's sender is paused: too many recipients hard-bounced or reported spam in 24 hours. Only the owner resumes it (k2 notifications email sender resume); check who the App mails."},
-    {"code": "all_suppressed", "doc": "Every recipient is suppressed (a hard bounce, a spam complaint or an unsubscribe), so nothing was sent."}
+    {"code": "all_suppressed", "doc": "Every recipient is suppressed (a hard bounce, a spam complaint or an unsubscribe), so nothing was sent."},
+    {"code": "password_change_required", "doc": "The password is right, but someone else set it (the owner, an admin, an agent, an App key, or K2 made it): no pass. The answer (403) carries mustChangePassword, changeToken (one use, 15 minutes), changeUrl and changePath. Send the person's browser to changeUrl; they choose a new password, then sign in with it."},
+    {"code": "password_unchanged", "doc": "The new password is the temporary one the person was given: they choose another. The change token still works."}
   ],
   "bannedFields": [
     "projectPath",
@@ -6759,10 +6761,11 @@
         "pass_wrong_link",
         "bad_login",
         "locked",
+        "password_change_required",
         "rate_limited",
         "failed"
       ],
-      "doc": "Log a guest in through this App; the answer carries the guest's session pass.",
+      "doc": "Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.",
       "example": "const {pass} = await k2.login({username, password})"
     },
     {
@@ -11990,10 +11993,11 @@
       },
       "errors": [
         "bad_login",
+        "password_unchanged",
         "usage",
         "failed"
       ],
-      "doc": "Public: finish a password reset with the emailed token (ends every session of that guest).",
+      "doc": "Public: finish a password reset with the emailed token, or a must-change with the login's change token (ends every session of that guest).",
       "example": "await fetch('/cli/skin/password/reset', {method: 'POST', body})"
     },
     {

@@ -16,6 +16,33 @@ export interface K2Config {
     fetch?: typeof fetch;
     WebSocket?: WebSocketCtor;
 }
+/**
+ * A login whose password someone else set (K2 0.46.6: the owner, an
+ * admin, an agent, an App key, or K2 generated it): no pass and no
+ * session. Send the person's browser to `changeUrl` (from a fetch-based
+ * login, hand it to your page and set `location.href`). With no
+ * `changeUrl`, your own form posts `{token: changeToken, password}` to
+ * `POST /cli/skin/password/reset` through your link. They choose a new
+ * password (it must differ from the temporary one: else 400
+ * `password_unchanged`, and the token still works), then sign in with it.
+ * The change token works once, for 15 minutes; signing in again with the
+ * temporary password gets a new one. Never log it. A person's own
+ * password (a reset link, password.change) never asks for this.
+ */
+export interface AppGuestMustChange {
+    ok: false;
+    mustChangePassword: true;
+    /** One-time token (`k2chg_…`) for `POST /cli/skin/password/reset` `{token, password}`. */
+    changeToken: string;
+    /** The App's own set-password page (`k2 app login settings <app> --set-password-url`), else K2's on the box's front door, with the token in the `#fragment`; null when there is neither. */
+    changeUrl: string | null;
+    /** K2's set-password page path on any K2 door (`/cli/skin/password/set`). */
+    changePath: string;
+    /** When the change token ends, seconds since the epoch. */
+    changeExpiresAt: number;
+    username: string;
+    app: string;
+}
 /** `subscribe`'s options (0.46.5). */
 export interface SubscribeOptions {
     /** The socket is open (first time and after every reconnect): catch up
@@ -77,7 +104,7 @@ export declare class K2App {
     login(args: {
         username: string;
         password: string;
-    }): Promise<AppGuestLogin>;
+    }): Promise<AppGuestLogin | AppGuestMustChange>;
     readonly users: {
         list: () => Promise<AppKeyUsers>;
         create: (body: {

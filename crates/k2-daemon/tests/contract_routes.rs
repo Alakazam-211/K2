@@ -203,7 +203,10 @@ fn exposure_counts_are_pinned() {
     // Catalog v37 (0.46.6, secret cards that say how a secret is sent): the
     // secret card's inject/envName/replaces and thread.answerCard's inject
     // echo, no new rows.
-    assert_eq!(c.catalog_version, 37);
+    // Catalog v38 (0.46.6, must-change at next sign-in): errors
+    // password_change_required (guests.login) and password_unchanged
+    // (password.reset); no new rows.
+    assert_eq!(c.catalog_version, 38);
     assert_eq!(
         c.verbs.len(),
         226,

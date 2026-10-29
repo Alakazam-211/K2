@@ -24,6 +24,29 @@ import { watchThreadActivity } from "./activity.js";
 import { buildRequest, project } from "./wire.js";
 /** The verbs a call needs no pass's identity for, beyond reaching the link. */
 const LOGIN_VERB = 'guests.login';
+/** The must-change answer inside a `password_change_required` refusal, or
+ *  null for any other error. A malformed one is rethrown (never a login). */
+function mustChangeOf(e) {
+    if (!(e instanceof K2Error) || e.code !== 'password_change_required')
+        return null;
+    const b = e.body;
+    if (typeof b !== 'object' || b === null)
+        throw e;
+    const v = b;
+    const tok = v.changeToken;
+    if (v.mustChangePassword !== true || typeof tok !== 'string' || !/^k2chg_[0-9a-f]+$/.test(tok))
+        throw e;
+    return {
+        ok: false,
+        mustChangePassword: true,
+        changeToken: tok,
+        changeUrl: typeof v.changeUrl === 'string' ? v.changeUrl : null,
+        changePath: typeof v.changePath === 'string' ? v.changePath : '/cli/skin/password/set',
+        changeExpiresAt: typeof v.changeExpiresAt === 'number' ? v.changeExpiresAt : 0,
+        username: typeof v.username === 'string' ? v.username : '',
+        app: typeof v.app === 'string' ? v.app : '',
+    };
+}
 function isGuestPass(p) {
     return /^k2skn_[A-Za-z0-9._-]+$/.test(p);
 }
@@ -121,8 +144,24 @@ export class K2App {
      * id). Through a wall's link the App pass opens the door; the answer's
      * `pass` is the guest's session pass.
      */
-    login(args) {
-        return this.actor({ kind: 'default' }).call(LOGIN_VERB, args);
+    //
+    // Must-change (K2 0.46.6, catalog v37): when someone else set this
+    // person's password (the owner, an admin, an agent, an App key, or K2
+    // generated it), the right password gets NO pass. The answer is then
+    // {ok: false, mustChangePassword: true, changeToken, changeUrl, ...}
+    // (AppGuestMustChange): send the person's browser to changeUrl, where
+    // they choose a new password; then they sign in with it. Check
+    // `'mustChangePassword' in s` before using `s.pass`.
+    async login(args) {
+        try {
+            return await this.actor({ kind: 'default' }).call(LOGIN_VERB, args);
+        }
+        catch (e) {
+            const changed = mustChangeOf(e);
+            if (changed)
+                return changed;
+            throw e;
+        }
     }
     // ── users and rooms (the App key) ──────────────────────────────────
     users = {

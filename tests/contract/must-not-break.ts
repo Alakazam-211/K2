@@ -77,6 +77,8 @@ export async function runMustNotBreak(k2: K2App, fx: Fixture, env: Record<string
   let pass = ''
   await check('login: POST /cli/skin/login answers the token JSON', async () => {
     const s = await k2.login({ username: fx.guest.username, password: fx.guest.password })
+    // 0.46.6: a password someone else set answers mustChangePassword, no pass.
+    assert(!('mustChangePassword' in s), `the fixture guest must have chosen its own password: ${JSON.stringify(s)}`)
     assert(/^k2skn_/.test(s.pass), `pass ${JSON.stringify(s.pass)}`)
     assert(s.username === fx.guest.username, `username ${s.username}`)
     assert(typeof s.principalId === 'string' && s.principalId.length > 0, 'principalId')
@@ -90,6 +92,7 @@ export async function runMustNotBreak(k2: K2App, fx: Fixture, env: Record<string
   })
   await check('login: by email (AR40)', async () => {
     const s = await k2.login({ username: fx.guest.email, password: fx.guest.password })
+    assert(!('mustChangePassword' in s), `must change: ${JSON.stringify(s)}`)
     assert(s.username === fx.guest.username, `email login answered ${s.username}`)
   })
   await check('login: 423 locked with retryAfterSecs and Retry-After, per person (AR40)', async () => {

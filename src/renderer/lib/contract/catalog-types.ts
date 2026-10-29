@@ -228,6 +228,9 @@ export const CATALOG_ERROR_CODES = [
   // Catalog v35 (email notifications part 2, N6).
   'email_paused',
   'all_suppressed',
+  // Catalog v38 (must-change at next sign-in, 0.46.6).
+  'password_change_required',
+  'password_unchanged',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

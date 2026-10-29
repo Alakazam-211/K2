@@ -2,7 +2,9 @@
 //
 //   import { fromEnv } from '@k2/server'
 //   const k2 = fromEnv()
-//   const { pass } = await k2.login({ username, password })
+//   const s = await k2.login({ username, password })
+//   if ('mustChangePassword' in s) return redirect(s.changeUrl)  // someone else set it
+//   const { pass } = s
 //   await k2.asGuest(pass).thread.send({ addr: 'sales', text: 'Hi' })
 //
 // The verb table and every answer type are generated from K2's verb
@@ -14,7 +16,7 @@ import { join } from 'node:path'
 import { K2App, type K2Config } from './client.ts'
 import { K2Error } from './errors.ts'
 
-export { K2App, type K2Actor, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts'
+export { K2App, type AppGuestMustChange, type K2Actor, type K2Config, type RequestLike, type SubscribeOptions } from './client.ts'
 // 0.46.5 activity SDK: thread.watchActivity's types, and @k2/activity's
 // words for drawing a turn the way K2 does.
 export type { ActivityState, Turn, WatchActivityOptions, WatchActivityTarget } from './activity.ts'

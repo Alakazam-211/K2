@@ -46,6 +46,55 @@ type Cred = { kind: 'guest'; pass: string } | { kind: 'app' } | { kind: 'default
 /** The verbs a call needs no pass's identity for, beyond reaching the link. */
 const LOGIN_VERB = 'guests.login' as const
 
+/**
+ * A login whose password someone else set (K2 0.46.6: the owner, an
+ * admin, an agent, an App key, or K2 generated it): no pass and no
+ * session. Send the person's browser to `changeUrl` (from a fetch-based
+ * login, hand it to your page and set `location.href`). With no
+ * `changeUrl`, your own form posts `{token: changeToken, password}` to
+ * `POST /cli/skin/password/reset` through your link. They choose a new
+ * password (it must differ from the temporary one: else 400
+ * `password_unchanged`, and the token still works), then sign in with it.
+ * The change token works once, for 15 minutes; signing in again with the
+ * temporary password gets a new one. Never log it. A person's own
+ * password (a reset link, password.change) never asks for this.
+ */
+export interface AppGuestMustChange {
+  ok: false
+  mustChangePassword: true
+  /** One-time token (`k2chg_…`) for `POST /cli/skin/password/reset` `{token, password}`. */
+  changeToken: string
+  /** The App's own set-password page (`k2 app login settings <app> --set-password-url`), else K2's on the box's front door, with the token in the `#fragment`; null when there is neither. */
+  changeUrl: string | null
+  /** K2's set-password page path on any K2 door (`/cli/skin/password/set`). */
+  changePath: string
+  /** When the change token ends, seconds since the epoch. */
+  changeExpiresAt: number
+  username: string
+  app: string
+}
+
+/** The must-change answer inside a `password_change_required` refusal, or
+ *  null for any other error. A malformed one is rethrown (never a login). */
+function mustChangeOf(e: unknown): AppGuestMustChange | null {
+  if (!(e instanceof K2Error) || e.code !== 'password_change_required') return null
+  const b = e.body
+  if (typeof b !== 'object' || b === null) throw e
+  const v = b as Record<string, unknown>
+  const tok = v.changeToken
+  if (v.mustChangePassword !== true || typeof tok !== 'string' || !/^k2chg_[0-9a-f]+$/.test(tok)) throw e
+  return {
+    ok: false,
+    mustChangePassword: true,
+    changeToken: tok,
+    changeUrl: typeof v.changeUrl === 'string' ? v.changeUrl : null,
+    changePath: typeof v.changePath === 'string' ? v.changePath : '/cli/skin/password/set',
+    changeExpiresAt: typeof v.changeExpiresAt === 'number' ? v.changeExpiresAt : 0,
+    username: typeof v.username === 'string' ? v.username : '',
+    app: typeof v.app === 'string' ? v.app : '',
+  }
+}
+
 function isGuestPass(p: string): boolean {
   return /^k2skn_[A-Za-z0-9._-]+$/.test(p)
 }
@@ -182,8 +231,22 @@ export class K2App {
    * id). Through a wall's link the App pass opens the door; the answer's
    * `pass` is the guest's session pass.
    */
-  login(args: { username: string; password: string }): Promise<AppGuestLogin> {
-    return this.actor({ kind: 'default' }).call(LOGIN_VERB, args)
+  //
+  // Must-change (K2 0.46.6, catalog v38): when someone else set this
+  // person's password (the owner, an admin, an agent, an App key, or K2
+  // generated it), the right password gets NO pass. The answer is then
+  // {ok: false, mustChangePassword: true, changeToken, changeUrl, ...}
+  // (AppGuestMustChange): send the person's browser to changeUrl, where
+  // they choose a new password; then they sign in with it. Check
+  // `'mustChangePassword' in s` before using `s.pass`.
+  async login(args: { username: string; password: string }): Promise<AppGuestLogin | AppGuestMustChange> {
+    try {
+      return await this.actor({ kind: 'default' }).call(LOGIN_VERB, args)
+    } catch (e) {
+      const changed = mustChangeOf(e)
+      if (changed) return changed
+      throw e
+    }
   }
 
   // ── users and rooms (the App key) ──────────────────────────────────

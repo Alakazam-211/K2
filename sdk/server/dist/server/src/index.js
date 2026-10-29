@@ -2,7 +2,9 @@
 //
 //   import { fromEnv } from '@k2/server'
 //   const k2 = fromEnv()
-//   const { pass } = await k2.login({ username, password })
+//   const s = await k2.login({ username, password })
+//   if ('mustChangePassword' in s) return redirect(s.changeUrl)  // someone else set it
+//   const { pass } = s
 //   await k2.asGuest(pass).thread.send({ addr: 'sales', text: 'Hi' })
 //
 // The verb table and every answer type are generated from K2's verb

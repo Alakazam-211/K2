@@ -8008,7 +8008,9 @@ Usage: k2 app <user|role|grant|token|validate|hydra|front-door> ...
                                         Owner only. Mark this login as that workspace's agent
                                         (db actor kind agent, not guest); --clear = a person again
   k2 app user password <username> --password-stdin
-                                        Set/reset K2-login password (empty stdin clears)
+                                        Set/reset K2-login password (empty stdin clears). They must
+                                        choose a new one at their next sign-in (no session until then),
+                                        except an agent's own test guest (k2 app user add <app> <name> --test)
   k2 app user unlock <username> [--json]
                                         Clear an app guest login lock (does not change the password)
   k2 app user chat <username> [member|guest|none] [--app <app>] [--json]
@@ -16272,7 +16274,9 @@ print(json.dumps({"username": os.environ["K2_SKIN_USER"], "password": os.environ
                     printf '%s' "$raw" | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
-print("Skin password %s for %s" % ("set" if d.get("hasPassword") else "cleared", d.get("username","")))'
+print("Skin password %s for %s" % ("set" if d.get("hasPassword") else "cleared", d.get("username","")))
+if d.get("passwordMustChange"):
+    print("At their next sign-in they choose a new password (no session until then).")'
                     ;;
                 chat)
                     # Sew for Apps A2 (0.46.6): a person's chat (their Sew
@@ -41690,6 +41694,7 @@ THE SERVER SDK (@k2/server: Node 22+, no dependencies, typed)
   import { fromEnv } from '@k2/server'
   const k2 = fromEnv()          // K2_GATEWAY_URL, K2_PASS_FILE, K2_APP_ID
   const s = await k2.login({ username, password })   // App pass on; a guest: s.pass
+  if ('mustChangePassword' in s) send the browser to s.changeUrl // someone else set it
   await k2.asGuest(s.pass).thread.send({ addr, text }) // as that guest
   await k2.withGuest(s.pass, () => handler(req))  // calls in it act as the guest
   await k2.asApp().files.list({ workspace })       // as the App: written out
@@ -41703,7 +41708,7 @@ EVERY VERB, BY CAP (helper, method and route, what it does)
 no cap (your own rooms)
   me.get                   GET  /cli/skin/me                                  Who this pass is: guest or App, its agents (identity, caps, what they allow, folders, unread and waiting tickets where the caps allow), this server's ids and features.
   roomAgents.list          GET  /cli/skin/agents                              The agents in the pass's rooms: handle, name, color and picture, plus unread and waiting (thread:read) and waiting tickets (tickets:read) where the caps allow.
-  guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass.
+  guests.login             POST /cli/skin/login (server only)                 Log a guest in through this App; the answer carries the guest's session pass, or mustChangePassword and a change token when someone else set the password.
   app.rooms                GET  /cli/skin/app-rooms (server only)             This App's own room, the owner's guests-rooms grant and the rooms it may hand its guests (the App's own pass; no grant needed to read it).
   password.change          POST /cli/skin/password/change                     A guest changes their own password (5 wrong current passwords per 15 minutes, then rate_limited); stay: true keeps this pass signed in.
   guests.logout            POST /cli/skin/logout (server only)                Sign this guest's pass out; a device sign-in ends with it (its refresh token stops working).
@@ -41728,7 +41733,7 @@ no cap (your own rooms)
   pairing.redeem           POST /cli/skin/pair (server only)                  Public: trade a pairing code for this App's device sign-in (a pass and a refresh token), once; optionally register push in the same call.
   app.info                 GET  /cli/skin/app-info (server only)              Public: this one App's name and how to sign in, only when the owner listed it; anything else answers like a route that doesn't exist.
   password.forgot          POST /cli/skin/password/forgot (server only)       Start a guest's password reset (a platform pass; the guest gets the reset link by email).
-  password.reset           POST /cli/skin/password/reset (server only)        Public: finish a password reset with the emailed token (ends every session of that guest).
+  password.reset           POST /cli/skin/password/reset (server only)        Public: finish a password reset with the emailed token, or a must-change with the login's change token (ends every session of that guest).
   agentIdentity.get        GET  /cli/agent/identity                           The room's agent: name, color, picture, handle, and what the pass may change.
   app.self                 GET  /cli/skin/self (server only)                  This App: its id, live Seed hash, health and when it was deployed (its own App only; the App pass, never a guest).
   app.usage                GET  /cli/skin/usage (server only)                 This App's quotas, live use and per-call counts from its own audit (its own App only; the App pass, never a guest).
@@ -41864,7 +41869,13 @@ REFUSALS are JSON {error:{code,hint}} (some routes: {ok:false,error}).
   Content-Type: application/json; guests.login, thread.send,
   thread.answerCard, thread.voidCard and resources.add/remove also
   take application/x-www-form-urlencoded); 423 locked on login
-  (Retry-After).
+  (Retry-After); 403 password_change_required on login: the owner, an
+  admin, an agent, an App key or K2 set that password, so no pass: send
+  the person to changeUrl (token in the #fragment; null: your own form
+  posts {token: changeToken, password} to password.reset), where they
+  choose a new one, then sign in again. k2.login returns this as
+  {mustChangePassword, changeToken, changeUrl}; an older @k2/server
+  throws it: update it (k2 app sdk add <app-folder>, npm install).
 
 RULES: one guest's pass per guest request; send it as Authorization:
   Bearer (a pass in ?token= still works but lands in your own logs, and

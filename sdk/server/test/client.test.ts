@@ -410,6 +410,7 @@ describe('login (must-not-break: the BFF logs its guests in)', () => {
       body: { ok: true, token: GUEST, username: 'dana', principalId: 'p1', rooms: ['r1'], roomHandles: ['sales'], caps: ['thread:read'], role: null, roomAccess: [{ handle: 'sales', caps: ['thread:read'] }], app: 'svc-jobs-1' },
     })
     const s = await k2.login({ username: 'dana', password: 'pw' })
+    if ('mustChangePassword' in s) throw new Error(`a normal login answered must-change: ${JSON.stringify(s)}`)
     expect(s.pass).toBe(GUEST)
     expect(s).not.toHaveProperty('token')
     expect(gw.seen[0]?.url).toBe('/cli/skin/login')
@@ -424,6 +425,76 @@ describe('login (must-not-break: the BFF logs its guests in)', () => {
     expect(err.code).toBe('locked')
     expect(err.retryAfterSecs).toBe(900)
     expect(gw.seen[0]?.headers.authorization).toBeUndefined()
+  })
+})
+
+describe('login: must change password (K2 0.46.6, catalog v37)', () => {
+  const TOKEN = 'k2chg_' + 'ab12'.repeat(16)
+  const mustChange = (extra: Record<string, unknown> = {}): Answer => ({
+    status: 403,
+    body: {
+      ok: false,
+      error: { code: 'password_change_required', hint: 'this person must choose a new password before signing in' },
+      mustChangePassword: true,
+      changeToken: TOKEN,
+      changeExpiresAt: 1_900_000_000,
+      changePath: '/cli/skin/password/set',
+      changeUrl: `https://box.example/cli/skin/password/set#${TOKEN}`,
+      username: 'dana',
+      app: 'svc-jobs-1',
+      ...extra,
+    },
+  })
+
+  it('returns mustChangePassword with the change token, never a pass', async () => {
+    const k2 = client()
+    answer = () => mustChange()
+    const s = await k2.login({ username: 'dana', password: 'temp-pw' })
+    if (!('mustChangePassword' in s)) throw new Error(`expected must-change, got ${JSON.stringify(s)}`)
+    expect(s).toEqual({
+      ok: false,
+      mustChangePassword: true,
+      changeToken: TOKEN,
+      changeUrl: `https://box.example/cli/skin/password/set#${TOKEN}`,
+      changePath: '/cli/skin/password/set',
+      changeExpiresAt: 1_900_000_000,
+      username: 'dana',
+      app: 'svc-jobs-1',
+    })
+    expect(s).not.toHaveProperty('pass')
+    // The guest pass is never something a caller could bind from it.
+    expect(() => k2.asGuest((s as unknown as { pass: string }).pass)).toThrowError(/asGuest takes a guest session pass/)
+  })
+
+  it('changeUrl is null when the box has no front door', async () => {
+    const k2 = client()
+    answer = () => mustChange({ changeUrl: null })
+    const s = await k2.login({ username: 'dana', password: 'temp-pw' })
+    if (!('mustChangePassword' in s)) throw new Error('expected must-change')
+    expect(s.changeUrl).toBeNull()
+    expect(s.changePath).toBe('/cli/skin/password/set')
+  })
+
+  it('a malformed must-change answer is a thrown error, never a login', async () => {
+    const k2 = client()
+    for (const bad of [{ changeToken: 'k2skn_notachangetoken' }, { changeToken: 42 }, { mustChangePassword: false }]) {
+      answer = () => mustChange(bad)
+      const err = (await k2.login({ username: 'dana', password: 'temp-pw' }).catch((e: unknown) => e)) as K2Error
+      expect(err).toBeInstanceOf(K2Error)
+      expect(err.code).toBe('password_change_required')
+    }
+  })
+
+  it('an older server SDK (login = the plain guests.login call) fails closed with the code and the hint', async () => {
+    // Before 0.46.6, k2.login was exactly the plain guests.login call:
+    // a non-2xx is thrown, so an older BFF never sees a session.
+    const k2 = client()
+    answer = () => mustChange()
+    const err = (await k2.asApp().call('guests.login', { username: 'dana', password: 'temp-pw' }).catch((e: unknown) => e)) as K2Error
+    expect(err).toBeInstanceOf(K2Error)
+    expect(err.code).toBe('password_change_required')
+    expect(err.status).toBe(403)
+    expect(err.hint).toMatch(/new password/)
   })
 })
 

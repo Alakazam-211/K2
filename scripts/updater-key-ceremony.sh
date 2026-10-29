@@ -76,13 +76,18 @@ if len(set(ids)) != len(ids):
 if u1 in lines:
     sys.exit("that is U1, the retired key; it must never be a trusted update key")
 
-def edit(rel, fn):
+# All four copies are computed first and written together, so a refusal
+# never leaves the tree half-written. The Tauri config carries only the first
+# primary, so adding a second Mac's key (U2b) later leaves it unchanged; the
+# key list itself must change.
+pending = []
+def edit(rel, fn, may_stay=False):
     p = "%s/%s" % (root, rel)
     s = open(p).read()
     t = fn(s)
-    if t == s:
+    if t == s and not may_stay:
         sys.exit("no change made to %s (already done?)" % rel)
-    open(p, "w").write(t)
+    pending.append((p, t))
 
 def rust(s):
     a, b = s.index("// BEGIN UPDATER_KEYS"), s.index("// END UPDATER_KEYS")
@@ -121,7 +126,9 @@ def conf(s):
 edit("crates/k2-release-keys/src/lib.rs", rust)
 edit("cli/k2", shell("_DAEMON_UPDATE_PUBKEYS"))
 edit("scripts/install-daemon.sh", shell("K2_DAEMON_PUBKEYS"))
-edit("src-tauri/tauri.conf.json", conf)
+edit("src-tauri/tauri.conf.json", conf, may_stay=True)
+for p, t in pending:
+    open(p, "w").write(t)
 print("wrote %s (primary) and %s (backup) into the four verifier copies under %s"
       % (" and ".join(ids[:-1]), ids[-1], root))
 PY

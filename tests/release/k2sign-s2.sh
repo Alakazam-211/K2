@@ -202,6 +202,17 @@ for f, var in (("cli/k2", "_DAEMON_UPDATE_PUBKEYS"), ("scripts/install-daemon.sh
 pk = json.load(open(root + "/src-tauri/tauri.conf.json"))["plugins"]["updater"]["pubkey"]
 assert base64.b64decode(pk).decode().splitlines()[1] == u2
 PY
+# The 0.46.6 plan: U2 + U3 first, U2b added in a later release on the same tree.
+pk2="$tmp/pkroot2"; mkdir -p "$pk2/crates/k2-release-keys/src" "$pk2/scripts" "$pk2/src-tauri" "$pk2/cli"
+cp "$REPO/crates/k2-release-keys/src/lib.rs" "$pk2/crates/k2-release-keys/src/lib.rs"
+cp "$REPO/cli/k2" "$pk2/cli/k2"; cp "$REPO/scripts/install-daemon.sh" "$pk2/scripts/"; cp "$REPO/src-tauri/tauri.conf.json" "$pk2/src-tauri/"
+check "pubkeys <U2> <U3> (one Mac first)" 0 "(primary) and" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$pk2" "$U2_LINE" "$U3_LINE"
+check "later: pubkeys <U2> <U2b> <U3> on that tree (the Tauri key stays U2)" 0 "(primary) and" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$pk2" "$U2_LINE" "$U2B_LINE" "$U3_LINE"
+grep -q "\"$U2B_LINE\"" "$pk2/crates/k2-release-keys/src/lib.rs" && grep -q "^K2_DAEMON_PUBKEYS=\"$U2_LINE $U2B_LINE $U3_LINE\"\$" "$pk2/scripts/install-daemon.sh" \
+    && pass "the U2b step lands in every verifier copy" || fail "two-step pubkeys"
+cp "$pk2/cli/k2" "$tmp/cli.before"
+check "an identical run is still refused (and writes nothing)" 1 "already done?" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$pk2" "$U2_LINE" "$U2B_LINE" "$U3_LINE"
+cmp -s "$tmp/cli.before" "$pk2/cli/k2" && pass "a refused run left the copies untouched" || fail "partial write"
 check "pubkeys refuses a repeated key" 1 "every key must be a different key" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$tmp/pkroot" "$U2_LINE" "$U2_LINE" "$U3_LINE"
 REAL_U1="$(sed -n 's/^pub const LEGACY_UPDATER_KEY_B64: &str = "\(.*\)";/\1/p' "$REPO/crates/k2-release-keys/src/lib.rs")"
 check "pubkeys refuses U1 (the real retired key) as a key" 1 "retired key" bash "$REPO/scripts/updater-key-ceremony.sh" pubkeys --root "$tmp/pkroot" "$REAL_U1" "$U2B_LINE" "$U3_LINE"

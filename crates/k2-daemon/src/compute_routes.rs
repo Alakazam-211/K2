@@ -1743,6 +1743,15 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     // submitter's own name. The node decides below.
     let tier_ask = tier_from(v)?;
     let why = why_from(v, tier_ask)?;
+    // `--exclusive` holds a whole node: it needs a one-line reason, shown
+    // in the queue and `status` like Priority's (CE-13, D3; exit 2).
+    if b(&v, "exclusive") == Some(true) && why.is_none() {
+        return Err(no(
+            EXCLUSIVE_NEEDS_WHY,
+            400,
+            "--exclusive needs a one-line reason: --exclusive --why \"benchmark needs the whole node\" (it shows in the queue; the job holds the whole node while it runs)",
+        ));
+    }
     // Batch is always detached (it waits for an idle node: hours, maybe).
     let detach = b(&v, "detach") == Some(true) || tier_ask == Tier::Batch;
     let supersede_key = supersede_from(v)?;
@@ -1953,6 +1962,11 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     }
     if tier_ask == Tier::Priority && want.exclusive && !grant_ci {
         return Err(ci_not_allowed(&node.name, &ws.handle, "--tier priority with --exclusive (it would drain the whole node)"));
+    }
+    // `--exclusive` needs the right CI needs: the owner, an Admin, or a
+    // grant with CI allowed (CE-13, D3: no new grant flag yet).
+    if want.exclusive && !grant_ci {
+        return Err(exclusive_needs_grant(&node.name, &ws.handle));
     }
     // Limits first, before any source is read or bundled (A8): each
     // refusal names the whole grant and the owner's command.
@@ -2554,6 +2568,25 @@ fn ci_not_allowed(node: &str, ws: &str, what: &str) -> Refusal {
     )
 }
 
+/// `--exclusive` without a reason (CE-13; exit 2).
+pub(crate) const EXCLUSIVE_NEEDS_WHY: &str = "exclusive_needs_why";
+/// `--exclusive` without the right (CE-13, CE-A13; exit 3). Not the share
+/// code `exclusive_not_allowed`, which means the node owner's share
+/// forbids it.
+pub(crate) const EXCLUSIVE_NEEDS_GRANT: &str = "exclusive_needs_grant";
+
+/// `exclusive_needs_grant` (exit 3), naming the human fix. The permission
+/// card is `compute.ci node=<node>` (the grant's CI right, D3).
+fn exclusive_needs_grant(node: &str, ws: &str) -> Refusal {
+    no(
+        EXCLUSIVE_NEEDS_GRANT,
+        403,
+        format!(
+            "--exclusive on '{node}' needs a grant with CI allowed: an exclusive job holds the whole node while it runs. The owner or an Admin turns it on: k2 compute grant {node} --workspace {ws} --ci. Otherwise run it without --exclusive (--cpus/--mem reserve what it needs)"
+        ),
+    )
+}
+
 /// `--supersede KEY`: end this workspace's older jobs with the same key
 /// while they are still queued, `cancelled/replaced` (in a shared node's
 /// queue: an "only if not started" cancel, V57). A started job is never
@@ -2887,6 +2920,18 @@ fn pick_node(
                 ),
             ));
         }
+    }
+    // `--exclusive` (CE-13): only nodes whose grant allows CI; refused
+    // with the fix when that rules out every one.
+    if report.cands.is_empty() && want.exclusive && report.skipped.contains_key(place::skip::EXCLUSIVE_NEEDS_GRANT) {
+        return Err(no(
+            EXCLUSIVE_NEEDS_GRANT,
+            403,
+            format!(
+                "--exclusive: no node granted to workspace {} allows CI for it, which an exclusive job needs (it holds the whole node). The owner or an Admin: k2 compute grant <node> --workspace {} --ci. Otherwise run it without --exclusive",
+                ws.handle, ws.handle
+            ),
+        ));
     }
     if report.cands.is_empty() {
         return Err(no(codes::NO_NODE_FITS, 404, no_fit_hint(ws, want, &report)));

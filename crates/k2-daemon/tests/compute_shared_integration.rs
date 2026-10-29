@@ -367,7 +367,7 @@ async fn a_named_run_goes_into_a_shared_nodes_queue() {
     assert_eq!((r.status, code(&r).as_str()), (409, "exceeds_share_caps"), "{}", r.body);
     let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "gate": true})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "gate_not_allowed"), "{}", r.body);
-    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "exclusive": true})).await;
+    let r = run(d.port, OWNER, json!({"node": "k2n2-m1", "workspace": ws.id, "exclusive": true, "why": "needs the whole node"})).await;
     assert_eq!((r.status, code(&r).as_str()), (409, "exclusive_not_allowed"), "{}", r.body);
     assert!(assigns(&node.frames()).is_empty());
 

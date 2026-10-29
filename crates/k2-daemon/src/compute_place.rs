@@ -672,6 +672,8 @@ pub mod skip {
     pub const CI_NOT_ALLOWED: &str = "ci_not_allowed";
     pub const TIMEOUT_OVER_GRANT: &str = "timeout_over_grant";
     pub const SHARE_LIMIT: &str = "share_limit";
+    /// `--exclusive` where the grant doesn't allow CI (CE-13).
+    pub const EXCLUSIVE_NEEDS_GRANT: &str = "exclusive_needs_grant";
     /// Online but paused, draining, outside its window, disk low, locked.
     pub const UNAVAILABLE: &str = "unavailable";
 }
@@ -787,6 +789,12 @@ pub fn candidates_report(w: &Want, exclude: &[String], now: i64) -> CandReport {
         // `--any --tier ci`: only where this workspace may send CI (T12).
         if w.tier == JobTier::Ci && !ci_allowed(w.admin, grant.as_ref(), Some(&offer)) {
             skipped(&mut out, skip::CI_NOT_ALLOWED);
+            continue;
+        }
+        // `--exclusive` (CE-13, D3): only where the grant allows CI (or
+        // the caller is the owner or an Admin).
+        if w.exclusive && !(w.admin || grant.as_ref().is_some_and(|g| g.allow_ci)) {
+            skipped(&mut out, skip::EXCLUSIVE_NEEDS_GRANT);
             continue;
         }
         if !timeout_fits(w, grant.as_ref()) {
@@ -1130,6 +1138,7 @@ pub fn skip_words(code: &str, n: u32, w: &Want) -> String {
             format!("with a grant shorter than --timeout {}", w.timeout_secs.map(compute::message::duration).unwrap_or_default())
         }
         skip::SHARE_LIMIT => "over this server's share limits".to_string(),
+        skip::EXCLUSIVE_NEEDS_GRANT => "without CI (which --exclusive needs) for you".to_string(),
         skip::UNAVAILABLE => "unavailable now (paused, draining, window, disk or lock)".to_string(),
         other => other.to_string(),
     };

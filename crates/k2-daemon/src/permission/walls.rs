@@ -219,6 +219,8 @@ pub(crate) const ROWS: &[Row] = &[
     // Job tiers (0.46.5): `--tier ci` / `--gate` without a grant that
     // allows CI, and a compute manager setting `allowCi` on a grant.
     Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "ci_not_allowed"), "/cli/compute/", ANY) },
+    // `--exclusive` reuses the grant's CI right (0.46.7, CE-13, D3).
+    Row { params: &[("node", &[ParamFrom::Body("/node")])], ..row(ask("compute.ci", Floor::Admin), code(403, "exclusive_needs_grant"), "/cli/compute/run", POST) },
     // ── Sew (0.46.6) ───────────────────────────────────────────────────
     // An agent's own call to the owner handoff: agents never become Sew's
     // install owner; the owner opens it for themselves on a card.
@@ -853,6 +855,8 @@ mod tests {
             (403, "POST", "/cli/zen/widget/sign", vec![], Some(json!({"widget":"board"})), json!({"ok":false,"error":"sign_needs_person","widget":"board","version":"ab".repeat(32),"card":null}), "zen.sign"),
             // Job tiers (prd-compute-job-tiers-v1 T13).
             (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","tier":"ci"})), json!({"error":{"code":"ci_not_allowed","hint":"x"}}), "compute.ci"),
+            // 0.46.7 (CE-13): --exclusive without the grant's CI right.
+            (403, "POST", "/cli/compute/run", vec![], Some(json!({"node":"k2n4","exclusive":true,"why":"bench"})), json!({"error":{"code":"exclusive_needs_grant","hint":"x"}}), "compute.ci"),
             // Mobile dev (0.46.6): `k2 sim boot` with "Allow mobile devices" off.
             (403, "POST", "/cli/sim/boot", vec![], Some(json!({})), json!({"error":{"code":"sim_switch_off","hint":"x"},"code":"sim_switch_off"}), "sim.use"),
             // 0.46.6: an agent moving its own pinned chat (both doors).

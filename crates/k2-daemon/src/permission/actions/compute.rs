@@ -156,12 +156,21 @@ pub(crate) static CI: ActionSpec = ActionSpec {
     },
     undo: Undo::Twin { action: "compute.ci-off" },
     settings: CI_SETTINGS,
-    walls: &[Wall {
-        matches: WallMatch::Code { status: 403, code: "ci_not_allowed" },
-        route_prefix: "/cli/compute/",
-        method: WallMethod::Any,
-        params: &[("node", ParamFrom::Body("/node"))],
-    }],
+    walls: &[
+        Wall {
+            matches: WallMatch::Code { status: 403, code: "ci_not_allowed" },
+            route_prefix: "/cli/compute/",
+            method: WallMethod::Any,
+            params: &[("node", ParamFrom::Body("/node"))],
+        },
+        // `--exclusive` needs the same right (0.46.7, CE-13, D3).
+        Wall {
+            matches: WallMatch::Code { status: 403, code: "exclusive_needs_grant" },
+            route_prefix: "/cli/compute/run",
+            method: WallMethod::Post,
+            params: &[("node", ParamFrom::Body("/node"))],
+        },
+    ],
     coverage: WallCoverage::Code,
     machine_hints: &[],
 };

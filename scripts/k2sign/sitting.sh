@@ -83,7 +83,7 @@ must_say() {
         fi
     fi
 }
-agents_running() { /usr/bin/pgrep -u "$(id -un)" -f 'claude|grok|codex|k2-ptyd' 2>/dev/null | wc -l | tr -d ' '; }
+agents_running() { { /usr/bin/pgrep -u "$(id -un)" -f 'claude|grok|codex|k2-ptyd' 2>/dev/null || true; } | wc -l | tr -d ' '; }
 # The approval app must close its own sheet (--timeout): Step 0.46 refuses an
 # older build, so the sittings rebuild it and check before going on.
 app_check() {

@@ -2609,6 +2609,25 @@ impl DaemonPtySession {
         #[cfg(windows)]
         if let Ok(p) = u32::try_from(pid) {
             crate::win_proc::terminate_tree(p);
+            // Let the exit reach the event loop before it is shut down
+            // below: ChildExit is what the daemon's exit observer cleans up
+            // on (quota, tokens, the session map). Unix gets the same
+            // window from its SIGHUP grace. Done when the observer marks the
+            // exit, or 150 ms after the process is gone (a session nobody
+            // observes); never more than 1 s.
+            let start = std::time::Instant::now();
+            let mut gone_at: Option<std::time::Instant> = None;
+            while !self.child_exited.load(std::sync::atomic::Ordering::Acquire)
+                && start.elapsed() < std::time::Duration::from_secs(1)
+            {
+                if gone_at.is_none() && !crate::win_proc::pid_alive(p) {
+                    gone_at = Some(std::time::Instant::now());
+                }
+                if gone_at.is_some_and(|t| t.elapsed() >= std::time::Duration::from_millis(150)) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
         }
 
         // 2026-07-02 PTY-master leak fix — release the master fd NOW.

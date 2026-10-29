@@ -124,7 +124,7 @@ start_daemon() { # $1 = log name; rest = extra env
         HOME="$SB" K2_TEST_AGENT_SHIM_DIR="$SB/shim" K2SO_WATCHDOG_DISABLED=1 \
         K2_HEARTBEAT_NO_SELF_HEAL=1 K2_SUBSCRIPTION_PROBE=deny \
         K2_EXPORT_BIN="$WORKER_BIN" K2_EXPORT_WALL_MS=4000 K2_EXPORT_MAX_OUTPUT_BYTES=$((2 * 1024 * 1024)) \
-        K2_EXPORT_MEMORY_MIB=256 "$@" \
+        K2_EXPORT_MEMORY_MIB=256 env "$@" \
         "$DAEMON_BIN" >"$log" 2>&1 &
     DAEMON_PID=$!
     DLOG="$log"

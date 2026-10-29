@@ -12572,15 +12572,21 @@ _app_updates_usage() {
     cat <<'EOF'
 k2 app updates — signed desktop updates for an App (Tauri's updater)
 
+<app> is the App's id on this K2 box (k2 app list).
+
 How it works: you sign each build with the App's OWN updater key on your
-own Mac (tauri signer sign); K2 keeps only the public key. A push checks
-every signature, uploads each file ONCE to K2's download host (dl.k2.dev),
-and then the App's own hosts answer Tauri's updater at
+own Mac (tauri signer sign writes <file>.sig next to each file; a push
+needs it); K2 keeps only the public key. A push checks every signature,
+uploads each file ONCE to K2's download host (dl.k2.dev), and then the
+App's own hosts answer Tauri's updater at
   https://<app host>/_k2/updates/<channel>/{{target}}/{{arch}}/{{current_version}}
   https://<app host>/_k2/updates/<channel>/latest.json
-with small JSON that points at the download host. Installers never stream
-from this box. Put the first URL in tauri.conf.json plugins.updater.endpoints
-(k2 app updates ls <app> prints it for your App's host).
+with small JSON that points at the download host. Installers are never
+downloaded from your K2 box. Put the first URL in tauri.conf.json
+plugins.updater.endpoints, with <channel> = the channel that build follows
+(stable for normal builds, beta for beta builds). Type the {{target}},
+{{arch}} and {{current_version}} parts literally: Tauri fills them in.
+k2 app updates ls <app> prints the URL with your App's host.
 
 First, once per App:
   k2 app updates key <app> --set <pubkey>
@@ -12606,8 +12612,10 @@ Releases:
         (os darwin|linux|windows; arch x86_64|aarch64|i686|armv7; installer
         app|appimage|deb|rpm|msi|nsis), e.g. darwin-aarch64, linux-x86_64,
         windows-x86_64. Files: .app.tar.gz, .AppImage, .AppImage.tar.gz,
-        .deb, .rpm, .msi, .exe, .nsis.zip, .msi.zip, at most 512 MiB, inside
-        the App's workspace folder. The signature defaults to <file>.sig.
+        .deb, .rpm, .msi, .exe, .nsis.zip, .msi.zip, at most 512 MiB. A
+        <file> path is relative to where you run the command (or absolute)
+        and must be inside the App's workspace folder. The signature
+        defaults to <file>.sig (tauri signer sign writes it).
         --version is strict SemVer 2.0.0 (1.4.1, 1.4.0-build.42; not 1.0 or
         v1.0.0) and must be newer than the channel's current one. A channel
         is stable, beta or your own name ([a-z][a-z0-9-], up to 20).
@@ -12622,9 +12630,12 @@ Releases:
         sizes, upload state), active users, and the updater URLs.
   k2 app updates promote <app> --from beta --to stable [--version <v>] [--drop-platform] [--json]
         Point --to at a release that is already uploaded (default: --from's
-        current one). No re-upload. Forward only.
+        current one). No re-upload. Only to a HIGHER version than --to
+        serves now (to go back, use rollback). --drop-platform (no value
+        here) allows the release to have fewer platforms than --to serves.
   k2 app updates rollback <app> --channel <name> --to <version> [--json]
-        Point a channel back at an older release it served before.
+        Point a channel back at an older release it served before (not one
+        you pulled).
         Tauri installs only NEWER versions by default, so people already on
         the bad version STAY on it: a rollback protects new installs and
         people still below. To fix people on the bad version, push a higher
@@ -12641,8 +12652,8 @@ Releases:
         Every App's channels, release counts and check-ins, aggregate only
         (owner and Admins).
 
-Active users: each update check counts once for its day, platform and
-version. If your app adds ?install=<random id, 8-64 of A-Z a-z 0-9 -> to
+Active users (shown by ls and stats): each update check counts once for
+its day, platform and version. If your app adds ?install=<random id, 8-64 of A-Z a-z 0-9 -> to
 its endpoint URL, distinct installs are counted too; only a hash of that
 id is kept, for two days. No addresses are kept.
 

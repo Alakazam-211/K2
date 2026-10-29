@@ -312,6 +312,15 @@ pub const USER_WIDGET_CAPS: &[&str] = &[
     "guests:rooms",
     "activity:read",
     "room:members",
+    // 0.46.7 Workbench (catalog v40, workbench-v1): git reads, review notes,
+    // compute jobs, and starting / stopping / landing / settling worktree
+    // agents, all `garden-local` (this computer's daemon through
+    // `/cli/zen/call`). Land, settle and start wait for K2's sheet.
+    "git:read",
+    "git:notes",
+    "compute:read",
+    "agents:start",
+    "agents:stop",
 ];
 
 /// The caps K2 grants each built-in widget kind (`source: "builtin"`). A

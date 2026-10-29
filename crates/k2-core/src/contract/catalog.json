@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 38,
+  "catalogVersion": 40,
   "caps": [
     {
       "name": "agents:read",
@@ -169,6 +169,36 @@
       "name": "chat:channels",
       "exposure": ["app"],
       "label": "Make chat channels in its own Space and add its users to them"
+    },
+    {
+      "name": "git:read",
+      "exposure": ["garden-local"],
+      "label": "See the Workbench's git",
+      "sentence": "See the branches, changed files, diffs and commits of the agents' worktrees on this computer (never their folders' paths)."
+    },
+    {
+      "name": "git:notes",
+      "exposure": ["garden-local"],
+      "label": "Ask an agent for changes",
+      "sentence": "Leave review notes on an agent's changed files and send them to that agent, only after you press a button in the widget."
+    },
+    {
+      "name": "compute:read",
+      "exposure": ["garden-local"],
+      "label": "See test runs on compute",
+      "sentence": "See the compute jobs the agents on this computer ran for their branches: node, state, exit code and commit (never their environment)."
+    },
+    {
+      "name": "agents:start",
+      "exposure": ["garden-local"],
+      "label": "Start, land and discard worktree agents",
+      "sentence": "Start an agent in a new git worktree, and ask to land or discard one. Each one asks you first, on K2's own sheet outside the widget."
+    },
+    {
+      "name": "agents:stop",
+      "exposure": ["garden-local"],
+      "label": "Stop an agent's turn",
+      "sentence": "Stop what an agent on this computer is doing right now (like pressing Esc in its terminal), only after you press a button in the widget."
     }
   ],
   "errors": [
@@ -305,7 +335,8 @@
     {"code": "email_paused", "doc": "This App's sender is paused: too many recipients hard-bounced or reported spam in 24 hours. Only the owner resumes it (k2 notifications email sender resume); check who the App mails."},
     {"code": "all_suppressed", "doc": "Every recipient is suppressed (a hard bounce, a spam complaint or an unsubscribe), so nothing was sent."},
     {"code": "password_change_required", "doc": "The password is right, but someone else set it (the owner, an admin, an agent, an App key, or K2 made it): no pass. The answer (403) carries mustChangePassword, changeToken (one use, 15 minutes), changeUrl and changePath. Send the person's browser to changeUrl; they choose a new password, then sign in with it."},
-    {"code": "password_unchanged", "doc": "The new password is the temporary one the person was given: they choose another. The change token still works."}
+    {"code": "password_unchanged", "doc": "The new password is the temporary one the person was given: they choose another. The change token still works."},
+    {"code": "not_a_repo", "doc": "The agent's folder isn't in a git repository, so there is no branch, diff or log to show."}
   ],
   "bannedFields": [
     "projectPath",
@@ -787,6 +818,7 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
                     "context": {
                       "title": "ThreadContext",
                       "type": "object",
@@ -912,6 +944,7 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
                     "context": {
                       "title": "ThreadContext",
                       "type": "object",
@@ -1073,6 +1106,7 @@
                     },
                     "body": {"type": ["string", "null"]},
                     "via": {"type": ["string", "null"]},
+                    "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
                     "context": {
                       "title": "ThreadContext",
                       "type": "object",
@@ -1502,6 +1536,7 @@
               },
               "body": {"type": ["string", "null"]},
               "via": {"type": ["string", "null"]},
+              "changes": {"title": "ThreadChanges", "type": "object", "properties": {"files": {"type": "array", "items": {"title": "ThreadChangedFile", "type": "object", "properties": {"file": {"type": "string", "description": "Relative to the agent's worktree."}, "oldFile": {"type": ["string", "null"], "description": "The name before a rename."}, "status": {"type": "string", "description": "added, modified, deleted, renamed or untracked."}, "additions": {"type": ["integer", "null"]}, "deletions": {"type": ["integer", "null"]}}, "required": ["file", "status"], "additionalProperties": false}}, "total": {"type": "integer", "description": "Files changed in the turn (files may list fewer: truncated)."}, "additions": {"type": "integer"}, "deletions": {"type": "integer"}, "commits": {"type": "integer", "description": "Commits the agent made during the turn."}, "from": {"type": ["string", "null"], "description": "Short commit at the turn's start."}, "to": {"type": ["string", "null"], "description": "Short commit at the turn's end."}, "branch": {"type": ["string", "null"]}, "truncated": {"type": "boolean"}}, "required": ["files", "total", "additions", "deletions", "commits", "truncated"], "additionalProperties": false, "description": "K2's changed-files card for one turn (doc.kind changes, from k2), read from git at the turn's start and end, never the agent's transcript (workbench-v1). Absent on every other item."},
               "context": {
                 "title": "ThreadContext",
                 "type": "object",
@@ -25021,6 +25056,1250 @@
       ],
       "doc": "Turn off again: undo an approved standing grant from its permission card (people only; Admin floor). Family errors: request_not_pending (409), action_card_person_only (403).",
       "example": "POST /cli/thread/permission-undo {addr, id}"
+    },
+    {
+      "verb": "work.list",
+      "cap": "agents:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "door",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "WorkRow",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "The Garden row address: ws/name::local (agents.show, conversation.open, thread.* take it)."
+            },
+            "thread": {
+              "type": "string",
+              "description": "The Thread address, ws/name (k2 thread ws/name ...)."
+            },
+            "workspace": {
+              "type": "string",
+              "description": "The parent workspace's handle."
+            },
+            "workspaceLabel": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string",
+              "description": "The sidecar's name."
+            },
+            "harness": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "live": {
+              "type": "boolean",
+              "description": "Its terminal is running now."
+            },
+            "worktree": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Its worktree folder relative to the workspace (.worktrees/k2-name), or null when it works at the workspace root."
+            },
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "base": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The branch it is compared with (the workspace's default branch)."
+            },
+            "head": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Short commit."
+            },
+            "ahead": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Commits on its branch that the base doesn't have."
+            },
+            "behind": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "dirty": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Files changed and not committed."
+            },
+            "taskState": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "K2's own state when the daemon has it: needs-you, working, ready, landed or retired; null until then (the widget derives one)."
+            },
+            "landedAt": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Seconds since the epoch."
+            },
+            "retiredAt": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "Seconds since the epoch."
+            }
+          },
+          "required": [
+            "address",
+            "thread",
+            "workspace",
+            "workspaceLabel",
+            "name",
+            "harness",
+            "live",
+            "worktree",
+            "branch",
+            "base",
+            "head",
+            "ahead",
+            "behind",
+            "dirty",
+            "taskState",
+            "landedAt",
+            "retiredAt"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": [
+        "cap_not_granted",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Every sidecar on this computer (the Workbench's tasks), with its worktree, branch and how far it is from its base. Pair with thread.onActivity for working / needs you.",
+      "example": "const tasks = await k2.work.list()"
+    },
+    {
+      "verb": "git.snapshot",
+      "cap": "git:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "door",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            },
+            "base": {
+              "type": "string",
+              "description": "Compare with this branch (default: the workspace's default branch)."
+            }
+          },
+          "required": [
+            "address"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "GitStatus",
+        "type": "object",
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short commit."
+          },
+          "state": {
+            "type": "string",
+            "description": "clean, merging, rebasing, cherry-picking, …"
+          },
+          "base": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "ref": {
+                "type": "string"
+              },
+              "ahead": {
+                "type": "integer"
+              },
+              "behind": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "ref",
+              "ahead",
+              "behind"
+            ],
+            "additionalProperties": false
+          },
+          "counts": {
+            "title": "GitCounts",
+            "type": "object",
+            "properties": {
+              "staged": {
+                "type": "integer"
+              },
+              "unstaged": {
+                "type": "integer"
+              },
+              "untracked": {
+                "type": "integer"
+              },
+              "conflicted": {
+                "type": "integer"
+              },
+              "base": {
+                "type": "integer"
+              },
+              "total": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "staged",
+              "unstaged",
+              "untracked",
+              "conflicted",
+              "base",
+              "total"
+            ],
+            "additionalProperties": false
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "rev": {
+            "type": "string",
+            "description": "Changes whenever the files change: poll and compare."
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "title": "GitChangedFile",
+              "type": "object",
+              "properties": {
+                "file": {
+                  "type": "string",
+                  "description": "Relative to the agent's worktree."
+                },
+                "oldFile": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "group": {
+                  "type": "string",
+                  "description": "staged, unstaged, untracked, conflicted or base (committed on the branch, not on the base)."
+                },
+                "status": {
+                  "type": "string"
+                },
+                "additions": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "deletions": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "binary": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "file",
+                "oldFile",
+                "group",
+                "status",
+                "additions",
+                "deletions",
+                "binary"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "branch",
+          "head",
+          "state",
+          "base",
+          "counts",
+          "truncated",
+          "rev",
+          "files"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "not_a_repo",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "An agent's git status: its branch, changed files (uncommitted, and committed on the branch vs its base) with +/− counts. Paths are relative to its worktree.",
+      "example": "const s = await k2.git.snapshot(row.address)"
+    },
+    {
+      "verb": "git.diffFile",
+      "cap": "git:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "door",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            },
+            "file": {
+              "type": "string"
+            },
+            "oldFile": {
+              "type": "string"
+            },
+            "base": {
+              "type": "string",
+              "description": "Diff against the merge base with this branch (the whole branch), instead of the last commit."
+            }
+          },
+          "required": [
+            "address",
+            "file"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "GitFileDiff",
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "oldFile": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "binary": {
+            "type": "boolean"
+          },
+          "tooLarge": {
+            "type": "boolean"
+          },
+          "additions": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "deletions": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "old": {
+            "title": "GitDiffSide",
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "type": "integer"
+              },
+              "binary": {
+                "type": "boolean"
+              },
+              "tooLarge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "exists",
+              "text",
+              "size",
+              "binary",
+              "tooLarge"
+            ],
+            "additionalProperties": false
+          },
+          "new": {
+            "title": "GitDiffSide",
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "size": {
+                "type": "integer"
+              },
+              "binary": {
+                "type": "boolean"
+              },
+              "tooLarge": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "exists",
+              "text",
+              "size",
+              "binary",
+              "tooLarge"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "file",
+          "oldFile",
+          "base",
+          "binary",
+          "tooLarge",
+          "additions",
+          "deletions",
+          "old",
+          "new"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "not_a_repo",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed",
+        "not_found"
+      ],
+      "doc": "One file's two sides (before and now) for a diff: draw it with the k2-diff kit (K2Diff.render).",
+      "example": "const d = await k2.git.diffFile(row.address, {file: 'src/app.ts', base: 'main'})"
+    },
+    {
+      "verb": "git.log",
+      "cap": "git:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "door",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            },
+            "base": {
+              "type": "string"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          "required": [
+            "address"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "GitLog",
+        "type": "object",
+        "properties": {
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ahead": {
+            "type": "integer"
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "title": "GitCommit",
+              "type": "object",
+              "properties": {
+                "sha": {
+                  "type": "string"
+                },
+                "short": {
+                  "type": "string"
+                },
+                "subject": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "string"
+                },
+                "at": {
+                  "type": "integer",
+                  "description": "Seconds since the epoch."
+                }
+              },
+              "required": [
+                "sha",
+                "short",
+                "subject",
+                "author",
+                "at"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "branch",
+          "base",
+          "ahead",
+          "commits"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "not_a_repo",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "The commits on an agent's branch that its base doesn't have, newest first (what Land would put on the base).",
+      "example": "const {commits} = await k2.git.log(row.address)"
+    },
+    {
+      "verb": "compute.jobs",
+      "cap": "compute:read",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "door",
+      "reach": "local",
+      "effect": "read",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            }
+          },
+          "required": [
+            "address"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "type": "array",
+        "items": {
+          "title": "WorkJob",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Short job id (k2 compute get <id>)."
+            },
+            "node": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "exitCode": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "commit": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "Short commit it ran."
+            },
+            "command": {
+              "type": "string",
+              "description": "What it ran (up to 200 characters)."
+            },
+            "tag": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "createdAt": {
+              "type": "integer"
+            },
+            "startedAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "endedAt": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "secs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "description": "How long it ran."
+            }
+          },
+          "required": [
+            "id",
+            "node",
+            "state",
+            "exitCode",
+            "commit",
+            "command",
+            "tag",
+            "createdAt",
+            "startedAt",
+            "endedAt",
+            "secs"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "not_a_repo",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Recent compute jobs (k2 compute run) for an agent's branch: jobs its session sent, or that ran one of its branch's commits. Newest first.",
+      "example": "const jobs = await k2.compute.jobs(row.address)"
+    },
+    {
+      "verb": "agents.start",
+      "cap": "agents:start",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "workspace": {
+              "type": "string",
+              "description": "The workspace's row address (ws::local) or handle."
+            },
+            "name": {
+              "type": "string",
+              "description": "The new sidecar's name (lower case, digits, -)."
+            },
+            "brief": {
+              "type": "string",
+              "description": "What to do (markdown, up to 20,000 characters)."
+            },
+            "harness": {
+              "type": "string",
+              "description": "A harness preset (default: the workspace's)."
+            },
+            "base": {
+              "type": "string",
+              "description": "Branch to start from (default: the workspace's default branch)."
+            }
+          },
+          "required": [
+            "workspace",
+            "name",
+            "brief"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WorkStarted",
+        "type": "object",
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "thread": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "address",
+          "thread",
+          "branch",
+          "worktree"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "paused",
+        "declined",
+        "verb_unavailable",
+        "failed",
+        "confirm_required"
+      ],
+      "doc": "Start an agent in a new git worktree on its own branch (k2 sidecar new --worktree), only just after a press in the widget; K2's sheet asks the person first.",
+      "example": "const t = await k2.agents.start({workspace: 'k2::local', name: 'fix-login', brief})"
+    },
+    {
+      "verb": "agents.stop",
+      "cap": "agents:stop",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            }
+          },
+          "required": [
+            "address"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WorkStopped",
+        "type": "object",
+        "properties": {
+          "stopped": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "stopped"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "paused",
+        "declined",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Stop the agent's current turn (its harness's own interrupt key), only just after a press in the widget.",
+      "example": "await k2.agents.stop(row.address)"
+    },
+    {
+      "verb": "git.land",
+      "cap": "agents:start",
+      "alsoCaps": [
+        "git:read"
+      ],
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            }
+          },
+          "required": [
+            "address"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WorkLanded",
+        "type": "object",
+        "properties": {
+          "landed": {
+            "type": "boolean"
+          },
+          "commits": {
+            "type": "integer"
+          },
+          "head": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "conflict": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Files in conflict: nothing landed, the agent was told."
+          }
+        },
+        "required": [
+          "landed",
+          "commits",
+          "head",
+          "conflict"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "paused",
+        "declined",
+        "verb_unavailable",
+        "failed",
+        "conflict",
+        "confirm_required"
+      ],
+      "doc": "Ask to land an agent's branch on its base (cherry-pick its commits). K2's sheet shows the commits and files; only the person's Land there lands it. The widget hears landed, declined or conflict.",
+      "example": "const r = await k2.git.land(row.address)"
+    },
+    {
+      "verb": "agents.settle",
+      "cap": "agents:start",
+      "alsoCaps": [
+        "git:read"
+      ],
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            },
+            "discard": {
+              "type": "boolean",
+              "description": "Throw away commits that aren't landed (uncommitted files go to the Trash)."
+            }
+          },
+          "required": [
+            "address"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WorkSettled",
+        "type": "object",
+        "properties": {
+          "settled": {
+            "type": "boolean"
+          },
+          "discarded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "settled",
+          "discarded"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "paused",
+        "declined",
+        "verb_unavailable",
+        "failed",
+        "conflict",
+        "confirm_required"
+      ],
+      "doc": "Retire an agent: stop it, remove its worktree, delete its branch once landed (or with discard). K2's sheet asks the person first; its Thread stays.",
+      "example": "await k2.agents.settle(row.address, {discard: true})"
+    },
+    {
+      "verb": "git.note",
+      "cap": "git:notes",
+      "exposure": [
+        "garden-local"
+      ],
+      "phone": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/zen/call"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "address": {
+              "type": "string",
+              "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
+            },
+            "notes": {
+              "type": "array",
+              "maxItems": 50,
+              "items": {
+                "title": "GitNoteIn",
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Up to 4,000 characters."
+                  }
+                },
+                "required": [
+                  "file",
+                  "body"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "send": {
+              "type": "boolean",
+              "description": "Send the notes to the agent now (default true)."
+            }
+          },
+          "required": [
+            "address",
+            "notes"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "WorkNoted",
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer"
+          },
+          "sent": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "added",
+          "sent"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "author_unknown",
+        "needs_editor",
+        "stale_widget",
+        "rate_limited",
+        "paused",
+        "declined",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Ask for changes: review notes on the agent's files (K2's Changes tab shows them too), sent to that agent's Thread, only just after a press in the widget.",
+      "example": "await k2.git.note(row.address, [{file: 'src/a.ts', line: 12, body: 'Keep the old cookie'}])"
+    },
+    {
+      "verb": "agents.openTerminal",
+      "cap": "agents:read",
+      "exposure": [
+        "widget"
+      ],
+      "phone": "later",
+      "reach": "local",
+      "effect": "write",
+      "kind": "call",
+      "feature": "workbench-v1",
+      "bindings": {
+        "renderer": {
+          "impl": "frame"
+        }
+      },
+      "request": [
+        {
+          "type": "string",
+          "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local.",
+          "title": "address"
+        }
+      ],
+      "response": {
+        "title": "TerminalOpened",
+        "type": "object",
+        "properties": {
+          "opened": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "cap_not_granted",
+        "not_bound",
+        "bad_args",
+        "rate_limited",
+        "verb_unavailable",
+        "failed"
+      ],
+      "doc": "Leave the Garden for the agent's own terminal in K2 (its pane, in Terminal view), only just after a press in the widget.",
+      "example": "await k2.agents.openTerminal(row.address)"
     }
   ]
 }

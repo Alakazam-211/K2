@@ -1,6 +1,6 @@
 import type { K2Error } from '../errors.ts';
 /** The catalog version this table was generated from. */
-export declare const CATALOG_VERSION = 36;
+export declare const CATALOG_VERSION = 37;
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = {
     readonly [key: string]: unknown;
@@ -3011,6 +3011,9 @@ export declare const APP_VERBS: {
                                             readonly delivery: {
                                                 readonly type: "string";
                                             };
+                                            readonly envName: {
+                                                readonly type: "string";
+                                            };
                                             readonly expiresAt: {
                                                 readonly type: "integer";
                                             };
@@ -3020,6 +3023,18 @@ export declare const APP_VERBS: {
                                                 };
                                                 readonly type: "array";
                                             };
+                                            readonly inject: {
+                                                readonly additionalProperties: false;
+                                                readonly properties: {
+                                                    readonly dst: {
+                                                        readonly type: "string";
+                                                    };
+                                                    readonly fmt: {
+                                                        readonly type: "string";
+                                                    };
+                                                };
+                                                readonly type: "object";
+                                            };
                                             readonly name: {
                                                 readonly type: "string";
                                             };
@@ -3028,6 +3043,9 @@ export declare const APP_VERBS: {
                                             };
                                             readonly ref: {
                                                 readonly type: "string";
+                                            };
+                                            readonly replaces: {
+                                                readonly type: "boolean";
                                             };
                                             readonly scope: {
                                                 readonly type: "string";
@@ -3233,6 +3251,9 @@ export declare const APP_VERBS: {
                                             readonly delivery: {
                                                 readonly type: "string";
                                             };
+                                            readonly envName: {
+                                                readonly type: "string";
+                                            };
                                             readonly expiresAt: {
                                                 readonly type: "integer";
                                             };
@@ -3242,6 +3263,18 @@ export declare const APP_VERBS: {
                                                 };
                                                 readonly type: "array";
                                             };
+                                            readonly inject: {
+                                                readonly additionalProperties: false;
+                                                readonly properties: {
+                                                    readonly dst: {
+                                                        readonly type: "string";
+                                                    };
+                                                    readonly fmt: {
+                                                        readonly type: "string";
+                                                    };
+                                                };
+                                                readonly type: "object";
+                                            };
                                             readonly name: {
                                                 readonly type: "string";
                                             };
@@ -3250,6 +3283,9 @@ export declare const APP_VERBS: {
                                             };
                                             readonly ref: {
                                                 readonly type: "string";
+                                            };
+                                            readonly replaces: {
+                                                readonly type: "boolean";
                                             };
                                             readonly scope: {
                                                 readonly type: "string";
@@ -3913,6 +3949,9 @@ export declare const APP_VERBS: {
                                 readonly delivery: {
                                     readonly type: "string";
                                 };
+                                readonly envName: {
+                                    readonly type: "string";
+                                };
                                 readonly expiresAt: {
                                     readonly type: "integer";
                                 };
@@ -3922,6 +3961,18 @@ export declare const APP_VERBS: {
                                     };
                                     readonly type: "array";
                                 };
+                                readonly inject: {
+                                    readonly additionalProperties: false;
+                                    readonly properties: {
+                                        readonly dst: {
+                                            readonly type: "string";
+                                        };
+                                        readonly fmt: {
+                                            readonly type: "string";
+                                        };
+                                    };
+                                    readonly type: "object";
+                                };
                                 readonly name: {
                                     readonly type: "string";
                                 };
@@ -3930,6 +3981,9 @@ export declare const APP_VERBS: {
                                 };
                                 readonly ref: {
                                     readonly type: "string";
+                                };
+                                readonly replaces: {
+                                    readonly type: "boolean";
                                 };
                                 readonly scope: {
                                     readonly type: "string";
@@ -4258,6 +4312,9 @@ export declare const APP_VERBS: {
                                 readonly delivery: {
                                     readonly type: "string";
                                 };
+                                readonly envName: {
+                                    readonly type: "string";
+                                };
                                 readonly expiresAt: {
                                     readonly type: "integer";
                                 };
@@ -4267,6 +4324,18 @@ export declare const APP_VERBS: {
                                     };
                                     readonly type: "array";
                                 };
+                                readonly inject: {
+                                    readonly additionalProperties: false;
+                                    readonly properties: {
+                                        readonly dst: {
+                                            readonly type: "string";
+                                        };
+                                        readonly fmt: {
+                                            readonly type: "string";
+                                        };
+                                    };
+                                    readonly type: "object";
+                                };
                                 readonly name: {
                                     readonly type: "string";
                                 };
@@ -4275,6 +4344,9 @@ export declare const APP_VERBS: {
                                 };
                                 readonly ref: {
                                     readonly type: "string";
+                                };
+                                readonly replaces: {
+                                    readonly type: "boolean";
                                 };
                                 readonly scope: {
                                     readonly type: "string";
@@ -4625,6 +4697,9 @@ export declare const APP_VERBS: {
                                                         readonly delivery: {
                                                             readonly type: "string";
                                                         };
+                                                        readonly envName: {
+                                                            readonly type: "string";
+                                                        };
                                                         readonly expiresAt: {
                                                             readonly type: "integer";
                                                         };
@@ -4634,6 +4709,18 @@ export declare const APP_VERBS: {
                                                             };
                                                             readonly type: "array";
                                                         };
+                                                        readonly inject: {
+                                                            readonly additionalProperties: false;
+                                                            readonly properties: {
+                                                                readonly dst: {
+                                                                    readonly type: "string";
+                                                                };
+                                                                readonly fmt: {
+                                                                    readonly type: "string";
+                                                                };
+                                                            };
+                                                            readonly type: "object";
+                                                        };
                                                         readonly name: {
                                                             readonly type: "string";
                                                         };
@@ -4642,6 +4729,9 @@ export declare const APP_VERBS: {
                                                         };
                                                         readonly ref: {
                                                             readonly type: "string";
+                                                        };
+                                                        readonly replaces: {
+                                                            readonly type: "boolean";
                                                         };
                                                         readonly scope: {
                                                             readonly type: "string";
@@ -4859,6 +4949,9 @@ export declare const APP_VERBS: {
                                                         readonly delivery: {
                                                             readonly type: "string";
                                                         };
+                                                        readonly envName: {
+                                                            readonly type: "string";
+                                                        };
                                                         readonly expiresAt: {
                                                             readonly type: "integer";
                                                         };
@@ -4868,6 +4961,18 @@ export declare const APP_VERBS: {
                                                             };
                                                             readonly type: "array";
                                                         };
+                                                        readonly inject: {
+                                                            readonly additionalProperties: false;
+                                                            readonly properties: {
+                                                                readonly dst: {
+                                                                    readonly type: "string";
+                                                                };
+                                                                readonly fmt: {
+                                                                    readonly type: "string";
+                                                                };
+                                                            };
+                                                            readonly type: "object";
+                                                        };
                                                         readonly name: {
                                                             readonly type: "string";
                                                         };
@@ -4876,6 +4981,9 @@ export declare const APP_VERBS: {
                                                         };
                                                         readonly ref: {
                                                             readonly type: "string";
+                                                        };
+                                                        readonly replaces: {
+                                                            readonly type: "boolean";
                                                         };
                                                         readonly scope: {
                                                             readonly type: "string";
@@ -9538,13 +9646,22 @@ export interface AppSecretCard {
     readonly answeredBy?: AppPostAuthor;
     /** fetch, file or env. */
     readonly delivery?: string;
+    /** The environment variable an env delivery uses. */
+    readonly envName?: string;
     /** Seconds since the epoch, when a pending card expires. */
     readonly expiresAt?: number;
     readonly hosts?: string[];
+    /** How K2 sends it: dst is basic, header:<Name> or query:<param>; fmt holds one {} where the value goes. Echo it back as inject when answering. */
+    readonly inject?: {
+        dst: string;
+        fmt: string;
+    };
     readonly name: string;
     readonly prompt?: string;
     /** A k2v:// reference to the stored secret (never its value). */
     readonly ref?: string;
+    /** A secret by this name already exists; Save replaces it. */
+    readonly replaces?: boolean;
     /** workspace, server or session. */
     readonly scope?: string;
     readonly secretKind?: string;
@@ -11060,6 +11177,10 @@ export interface AppVerbs {
             confirm?: boolean;
             delivery?: string;
             hosts?: string[];
+            inject?: {
+                dst: string;
+                fmt: string;
+            };
             scope?: string;
             secret?: string;
         };
@@ -11914,6 +12035,10 @@ export interface AppSurfaces {
             confirm?: boolean;
             delivery?: string;
             hosts?: string[];
+            inject?: {
+                dst: string;
+                fmt: string;
+            };
             scope?: string;
             secret?: string;
         }): Promise<AppCardAnswered>;

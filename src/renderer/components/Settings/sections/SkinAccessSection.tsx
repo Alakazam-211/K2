@@ -16,6 +16,7 @@ import { AppsBoxSection } from './AppsBoxSection'
 import { AppsResourcesSection } from './AppsResourcesSection'
 import { AppPeopleAccess } from './AppPeopleAccess'
 import { AppPhonePairing } from './AppPhonePairing'
+import { AppReleases } from './AppReleases'
 
 export const SKIN_ACCESS_MANIFEST: SettingEntry[] = [
   {
@@ -1624,6 +1625,8 @@ export function SkinAccessSection(): React.JSX.Element {
             {selectedApp && selectedApp !== 'host' && phonePairing ? (
               <AppPhonePairing key={`phones-${selectedApp}`} app={selectedApp} />
             ) : null}
+
+            {selectedApp && selectedApp !== 'host' ? <AppReleases key={`releases-${selectedApp}`} app={selectedApp} /> : null}
 
             {selectedApp === 'host' ? (
               <>

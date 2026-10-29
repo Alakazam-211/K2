@@ -71,6 +71,37 @@ pub fn change_stamp(p: &Path) -> Option<ChangeStamp> {
     }
 }
 
+/// What a disk walk needs to count a file once (Unix: dev, ino, nlink).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    pub volume: u32,
+    pub file_index: u64,
+    pub links: u32,
+}
+
+/// The identity of `p` itself (a link is not followed). `None` when it
+/// can't be opened for its attributes.
+pub fn file_identity(p: &Path) -> Option<FileIdentity> {
+    let f = OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(p)
+        .ok()?;
+    // SAFETY: a live handle opened above and a zeroed out-struct.
+    unsafe {
+        let mut by: BY_HANDLE_FILE_INFORMATION = std::mem::zeroed();
+        if GetFileInformationByHandle(f.as_raw_handle(), &mut by) == 0 {
+            return None;
+        }
+        Some(FileIdentity {
+            volume: by.dwVolumeSerialNumber,
+            file_index: (u64::from(by.nFileIndexHigh) << 32) | u64::from(by.nFileIndexLow),
+            links: by.nNumberOfLinks,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

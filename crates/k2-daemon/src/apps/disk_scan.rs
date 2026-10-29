@@ -257,7 +257,61 @@ pub fn walk(root: &Path, opts: &WalkOpts<'_>, now: i64) -> Option<FolderScan> {
         }
         Some(out)
     }
-    #[cfg(not(unix))]
+    // Windows: the same walk with what NTFS gives. Sizes are logical
+    // (`len`, the "about" a person reads); a link (symlink or junction) is
+    // counted as itself and never entered; a hard link counts once and a
+    // folder on another volume is not entered (file index + volume serial,
+    // as dev/ino on Unix).
+    #[cfg(windows)]
+    {
+        use k2_core::win_fs::file_identity;
+        let meta = std::fs::symlink_metadata(root).ok()?;
+        let size = |m: &std::fs::Metadata| if m.is_file() { m.len() } else { 0 };
+        let mut out = FolderScan { bytes: size(&meta), scanned_at: now, ..FolderScan::default() };
+        if !meta.is_dir() {
+            return Some(out);
+        }
+        let volume = file_identity(root).map(|i| i.volume);
+        let skip: BTreeSet<&Path> = opts.skip.iter().map(PathBuf::as_path).collect();
+        let mut seen: std::collections::HashSet<(u32, u64)> = std::collections::HashSet::new();
+        let mut stack: Vec<(PathBuf, Option<String>)> = vec![(root.to_path_buf(), None)];
+        while let Some((dir, part)) = stack.pop() {
+            if Instant::now() >= opts.deadline {
+                out.partial = true;
+                break;
+            }
+            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            for e in rd.flatten() {
+                let p = e.path();
+                if skip.contains(p.as_path()) {
+                    continue;
+                }
+                let Ok(m) = std::fs::symlink_metadata(&p) else { continue };
+                let link = m.file_type().is_symlink();
+                if m.is_dir() && !link {
+                    // Another volume mounted in a folder: not ours (du -x).
+                    if file_identity(&p).map(|i| i.volume) != volume {
+                        continue;
+                    }
+                } else if m.is_file() {
+                    if let Some(i) = file_identity(&p) {
+                        if i.links > 1 && !seen.insert((i.volume, i.file_index)) {
+                            continue;
+                        }
+                    }
+                }
+                let b = size(&m);
+                let part = part.clone().unwrap_or_else(|| e.file_name().to_string_lossy().to_string());
+                out.bytes = out.bytes.saturating_add(b);
+                *out.parts.entry(part.clone()).or_insert(0) += b;
+                if m.is_dir() && !link {
+                    stack.push((p, Some(part)));
+                }
+            }
+        }
+        Some(out)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (root, opts, now);
         None

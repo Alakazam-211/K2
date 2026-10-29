@@ -142,7 +142,10 @@ fn alloc(p: &Path) -> Option<u64> {
 
 fn rel(p: &Path) -> String {
     let home = k2_core::paths::k2_home();
-    p.strip_prefix(&home).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
+    let r = p.strip_prefix(&home).map(|r| r.to_string_lossy().to_string()).unwrap_or_else(|_| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
+    // An item's id reads with '/' on every OS (Windows: '\' → '/'; on Unix
+    // a '\' is part of a file name and stays).
+    if cfg!(windows) { r.replace('\\', "/") } else { r }
 }
 
 fn older_than(p: &Path, secs: i64, now: i64) -> bool {

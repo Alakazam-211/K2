@@ -118,6 +118,17 @@ describe('MobileControlRail', () => {
     expect(p.onFps).toHaveBeenCalledWith(12)
   })
 
+  it('⋯: Live touch (beta) toggles when the pane offers it', () => {
+    const p = props({ liveTouch: false, onLiveTouch: vi.fn() })
+    const view = render(<MobileControlRail {...p} />)
+    const m = more()
+    expect(m.querySelector('[data-mobile-menu="live-touch"]')?.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(m.querySelector('[data-mobile-menu="live-touch"]') as HTMLElement)
+    expect(p.onLiveTouch).toHaveBeenCalledWith(true)
+    view.rerender(<MobileControlRail {...props()} />)
+    expect(more().querySelector('[data-mobile-menu="live-touch"]')).toBeNull()
+  })
+
   it('⋯: Open URL sends the trimmed URL on Enter', () => {
     const p = props()
     render(<MobileControlRail {...p} />)

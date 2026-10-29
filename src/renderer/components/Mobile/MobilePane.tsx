@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from 'zustand'
+import { readText as readClipboardText } from '@tauri-apps/plugin-clipboard-manager'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
 import { DesignThreadColumn } from '@/components/Design/DesignThreadColumn'
@@ -33,7 +34,7 @@ import { DeviceFrame, useElementSize } from './DeviceFrame'
 import { frameLayout, resolveDeviceShape } from './device-frame'
 import { MobileBootScreen, type MobileBootPhase } from './MobileBootScreen'
 import { MobileControlRail, RAIL_INSET_PX } from './MobileControlRail'
-import { readMobileScreenOnly, writeMobileScreenOnly } from './mobile-view-prefs'
+import { readMobileLiveTouch, readMobileScreenOnly, writeMobileLiveTouch, writeMobileScreenOnly } from './mobile-view-prefs'
 import { MobileToolbar } from './MobileToolbar'
 import { readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
 import {
@@ -52,7 +53,21 @@ import {
   type SimPlatform,
   type SimStatus,
 } from './simApi'
-import { type BoxRect, gestureFor, keyToSimInput, nextOrientation, type PointerSample, type ScreenPt } from './sim-input'
+import {
+  type BoxRect,
+  gestureFor,
+  isPasteChord,
+  keyToSimInput,
+  type LiveTouch,
+  liveTouchEnd,
+  liveTouchHold,
+  liveTouchMove,
+  liveTouchStart,
+  nextOrientation,
+  type PointerSample,
+  type ScreenPt,
+  TAP_MAX_MS,
+} from './sim-input'
 import { defaultFps, type SimAppearance, type SimStreamConnector, wsSimStream } from './sim-stream'
 import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
@@ -409,26 +424,135 @@ function MobileDevice({
     const r = canvasRef.current?.getBoundingClientRect()
     return r ? { left: r.left, top: r.top, width: r.width, height: r.height } : null
   }
+  // Live touch is behind a switch until the iOS round-trip is measured
+  // (mobile-view-prefs); off, a drag is one swipe on release as before.
+  const [liveTouchOn, setLiveTouchState] = useState(readMobileLiveTouch)
+  const setLiveTouch = useCallback((on: boolean) => {
+    setLiveTouchState(on)
+    writeMobileLiveTouch(on)
+  }, [])
+  const touchRef = useRef<LiveTouch | null>(null)
+  const holdTimerRef = useRef<number | null>(null)
+  const pendingMoveRef = useRef<PointerSample | null>(null)
+  const moveFrameRef = useRef<number | null>(null)
+  // The touch dot: where the person's finger is, fading on release.
+  const [dot, setDot] = useState<{ x: number; y: number; down: boolean } | null>(null)
+  const dotTimerRef = useRef<number | null>(null)
+  const sample = (e: { clientX: number; clientY: number }): PointerSample => ({ clientX: e.clientX, clientY: e.clientY, at: performance.now() })
+  const placeDot = (e: { clientX: number; clientY: number }, down: boolean): void => {
+    const r = screenRef.current?.getBoundingClientRect()
+    if (!r) return
+    if (dotTimerRef.current !== null) window.clearTimeout(dotTimerRef.current)
+    dotTimerRef.current = null
+    setDot({ x: e.clientX - r.left, y: e.clientY - r.top, down })
+    if (!down) dotTimerRef.current = window.setTimeout(() => setDot(null), 200)
+  }
+  const clearHold = (): void => {
+    if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current)
+    holdTimerRef.current = null
+  }
+  const flushMove = (): void => {
+    if (moveFrameRef.current !== null) cancelAnimationFrame(moveFrameRef.current)
+    moveFrameRef.current = null
+    const at = pendingMoveRef.current
+    pendingMoveRef.current = null
+    const t = touchRef.current
+    const b = box()
+    if (!at || !t || !b || !screen) return
+    const r = liveTouchMove(t, at, b, screen)
+    touchRef.current = r.touch
+    if (r.touch.started) clearHold()
+    for (const m of r.send) stream.send(m)
+  }
+  useEffect(
+    () => () => {
+      if (holdTimerRef.current !== null) window.clearTimeout(holdTimerRef.current)
+      if (dotTimerRef.current !== null) window.clearTimeout(dotTimerRef.current)
+      if (moveFrameRef.current !== null) cancelAnimationFrame(moveFrameRef.current)
+    },
+    [],
+  )
   const onPointerDown = (e: React.PointerEvent): void => {
     if (!interactive || e.button !== 0) return
     screenRef.current?.focus()
-    downRef.current = { clientX: e.clientX, clientY: e.clientY, at: performance.now() }
+    const down = sample(e)
+    downRef.current = down
+    placeDot(e, true)
+    if (liveTouchOn) {
+      touchRef.current = liveTouchStart(down)
+      clearHold()
+      holdTimerRef.current = window.setTimeout(() => {
+        holdTimerRef.current = null
+        const t = touchRef.current
+        const b = box()
+        if (!t || !b || !screen) return
+        const r = liveTouchHold(t, b, screen)
+        touchRef.current = r.touch
+        for (const m of r.send) stream.send(m)
+      }, TAP_MAX_MS)
+    }
     try {
       ;(e.target as Element).setPointerCapture?.(e.pointerId)
     } catch {
       // jsdom / a pointer that already ended.
     }
   }
+  const onPointerMove = (e: React.PointerEvent): void => {
+    if (!interactive || !downRef.current) return
+    placeDot(e, true)
+    if (!liveTouchOn || !touchRef.current) return
+    pendingMoveRef.current = sample(e)
+    if (moveFrameRef.current === null) moveFrameRef.current = requestAnimationFrame(flushMove)
+  }
   const onPointerUp = (e: React.PointerEvent): void => {
     const down = downRef.current
     downRef.current = null
+    if (down) placeDot(e, false)
+    clearHold()
+    if (touchRef.current) flushMove()
+    const track = touchRef.current
+    touchRef.current = null
     if (!interactive || !down || !screen) return
     const b = box()
     if (!b) return
-    stream.send(gestureFor(down, { clientX: e.clientX, clientY: e.clientY, at: performance.now() }, b, screen))
+    if (track) {
+      for (const m of liveTouchEnd(track, sample(e), b, screen)) stream.send(m)
+      return
+    }
+    stream.send(gestureFor(down, sample(e), b, screen))
+  }
+  const onPointerCancel = (e: React.PointerEvent): void => {
+    const down = downRef.current
+    downRef.current = null
+    clearHold()
+    pendingMoveRef.current = null
+    const t = touchRef.current
+    touchRef.current = null
+    if (down) placeDot(e, false)
+    // A drag the device already follows must lift, or the finger sticks.
+    const b = box()
+    if (t?.started && b && screen) for (const m of liveTouchEnd(t, sample(e), b, screen)) stream.send(m)
+  }
+  const pasteText = (text: string): void => {
+    if (!interactive || !text) return
+    stream.send({ t: 'text', text })
+  }
+  const onPaste = (e: React.ClipboardEvent): void => {
+    if (!interactive) return
+    e.preventDefault()
+    pasteText(e.clipboardData.getData('text/plain') || e.clipboardData.getData('text'))
   }
   const onKeyDown = (e: React.KeyboardEvent): void => {
     if (!interactive) return
+    if (isPasteChord(e)) {
+      // ⌘V types the clipboard into the device (one `text`, not key by key).
+      e.preventDefault()
+      e.stopPropagation()
+      readClipboardText()
+        .then((text) => pasteText(text ?? ''))
+        .catch((err: unknown) => console.warn('[mobile] paste:', err))
+      return
+    }
     const r = keyToSimInput(e)
     if (r === 'pass') return
     e.preventDefault()
@@ -562,11 +686,11 @@ function MobileDevice({
               className="relative h-full w-full overflow-hidden outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-accent)]"
               style={{ cursor: interactive ? 'pointer' : 'default', touchAction: 'none' }}
               onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
               onPointerUp={onPointerUp}
-              onPointerCancel={() => {
-                downRef.current = null
-              }}
+              onPointerCancel={onPointerCancel}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               data-mobile-screen={interactive ? 'interactive' : 'watching'}
             >
               <canvas ref={canvasRef} className="block h-full w-full" data-mobile-canvas="" />
@@ -578,6 +702,19 @@ function MobileDevice({
                 </div>
               ) : null}
               {overlayBox && screen && renderOverlay ? renderOverlay({ box: overlayBox, screen }) : null}
+              {dot && interactive ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute h-7 w-7 rounded-full border border-white/70 bg-white/35 shadow-[0_0_0_1px_rgba(0,0,0,.25)] transition-[opacity,transform] duration-200 ease-out"
+                  style={{
+                    left: dot.x,
+                    top: dot.y,
+                    opacity: dot.down ? 1 : 0,
+                    transform: `translate(-50%, -50%) scale(${dot.down ? 1 : 1.5})`,
+                  }}
+                  data-mobile-touch-dot={dot.down ? 'down' : 'up'}
+                />
+              ) : null}
             </div>
           </DeviceFrame>
         ) : null}
@@ -605,6 +742,8 @@ function MobileDevice({
               onStop={onStop}
               onOpenUrl={(url) => stream.send({ t: 'open-url', url })}
               onScreenOnly={setScreenOnly}
+              liveTouch={liveTouchOn}
+              onLiveTouch={setLiveTouch}
               onFps={onFps}
               extra={toolbarExtra}
             />

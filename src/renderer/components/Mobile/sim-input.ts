@@ -116,3 +116,61 @@ export function keyToSimInput(e: KeyLike): { send: SimInput } | 'blur' | 'pass' 
   if ([...e.key].length === 1) return { send: { t: 'text', text: e.key } }
   return 'pass'
 }
+
+// ── Live touch (research-mobile-pane-polish-v1 §4 item 3) ───────────────
+// While the finger drags, the device follows: `touch` down, move…, up
+// (stream::ViewerMsg::Touch; both lanes take it). A clean tap still goes as
+// one `tap`, so `down` waits until the press moves past the slop or is
+// held past TAP_MAX_MS (a long press). The pane coalesces moves to one per
+// animation frame.
+
+export interface LiveTouch {
+  down: PointerSample
+  /** `down` has gone to the device. */
+  started: boolean
+}
+
+export function liveTouchStart(down: PointerSample): LiveTouch {
+  return { down, started: false }
+}
+
+/** The pointer moved: start the drag once past the slop, then follow. */
+export function liveTouchMove(
+  t: LiveTouch,
+  at: PointerSample,
+  box: BoxRect,
+  screen: ScreenPt,
+): { touch: LiveTouch; send: SimInput[] } {
+  const p = canvasPointToDevice(at.clientX, at.clientY, box, screen)
+  if (t.started) return { touch: t, send: [{ t: 'touch', phase: 'move', x: p.x, y: p.y }] }
+  if (Math.hypot(at.clientX - t.down.clientX, at.clientY - t.down.clientY) < TAP_SLOP_PX) return { touch: t, send: [] }
+  const d = canvasPointToDevice(t.down.clientX, t.down.clientY, box, screen)
+  return {
+    touch: { ...t, started: true },
+    send: [
+      { t: 'touch', phase: 'down', x: d.x, y: d.y },
+      { t: 'touch', phase: 'move', x: p.x, y: p.y },
+    ],
+  }
+}
+
+/** Held still past TAP_MAX_MS: a long press starts where it pressed. */
+export function liveTouchHold(t: LiveTouch, box: BoxRect, screen: ScreenPt): { touch: LiveTouch; send: SimInput[] } {
+  if (t.started) return { touch: t, send: [] }
+  const d = canvasPointToDevice(t.down.clientX, t.down.clientY, box, screen)
+  return { touch: { ...t, started: true }, send: [{ t: 'touch', phase: 'down', x: d.x, y: d.y }] }
+}
+
+/** Released: lift the finger, or a tap when nothing started. */
+export function liveTouchEnd(t: LiveTouch, up: PointerSample, box: BoxRect, screen: ScreenPt): SimInput[] {
+  if (!t.started) return [gestureFor(t.down, up, box, screen)]
+  const p = canvasPointToDevice(up.clientX, up.clientY, box, screen)
+  return [{ t: 'touch', phase: 'up', x: p.x, y: p.y }]
+}
+
+/** ⌘V (Ctrl+V off the Mac) while the device has focus: paste as text. */
+export function isPasteChord(e: KeyLike): boolean {
+  const lower = e.key.length === 1 ? e.key.toLowerCase() : e.key
+  if (lower !== 'v' || e.shiftKey || e.altKey) return false
+  return e.metaKey !== e.ctrlKey
+}

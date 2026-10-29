@@ -22,7 +22,19 @@ import { designSplitKey, readDesignSplit, writeDesignSplit } from '@/components/
 import { isSerializedDesign } from '@/components/Design/design-serialize'
 import { isSerializedMobile, mobileDataFromSerializedBrowser, serializeMobileItem } from './mobile-serialize'
 import { DEFAULT_MOBILE_SPLIT, mobileSplitKey, readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
-import { canvasPointToDevice, deviceRectToCanvas, gestureFor, keyToSimInput, nextOrientation, type KeyLike } from './sim-input'
+import {
+  canvasPointToDevice,
+  deviceRectToCanvas,
+  gestureFor,
+  isPasteChord,
+  keyToSimInput,
+  liveTouchEnd,
+  liveTouchHold,
+  liveTouchMove,
+  liveTouchStart,
+  nextOrientation,
+  type KeyLike,
+} from './sim-input'
 import { simControlFor } from './useSimCanControl'
 
 beforeEach(() => mem.clear())
@@ -90,6 +102,45 @@ describe('gestures → device input (§2.4, §5; stream::ViewerMsg)', () => {
     expect(swipe).toEqual({ t: 'swipe', x1: 200, y1: 700, x2: 200, y2: 200, durationMs: 300 })
     const longPress = gestureFor({ clientX: 150, clientY: 100, at: 0 }, { clientX: 150, clientY: 100, at: 900 }, box, screen)
     expect(longPress).toEqual({ t: 'swipe', x1: 100, y1: 100, x2: 100, y2: 100, durationMs: 900 })
+  })
+
+  it('live touch: down waits past the slop, then down + move…, up; a clean tap stays a tap', () => {
+    const t0 = liveTouchStart({ clientX: 150, clientY: 100, at: 0 })
+    const still = liveTouchMove(t0, { clientX: 153, clientY: 102, at: 10 }, box, screen)
+    expect(still.send).toEqual([])
+    expect(liveTouchEnd(still.touch, { clientX: 153, clientY: 102, at: 80 }, box, screen)).toEqual([{ t: 'tap', x: 100, y: 100 }])
+    const drag = liveTouchMove(t0, { clientX: 150, clientY: 130, at: 30 }, box, screen)
+    expect(drag.send).toEqual([
+      { t: 'touch', phase: 'down', x: 100, y: 100 },
+      { t: 'touch', phase: 'move', x: 100, y: 160 },
+    ])
+    const more = liveTouchMove(drag.touch, { clientX: 150, clientY: 160, at: 50 }, box, screen)
+    expect(more.send).toEqual([{ t: 'touch', phase: 'move', x: 100, y: 220 }])
+    expect(liveTouchEnd(more.touch, { clientX: 150, clientY: 200, at: 90 }, box, screen)).toEqual([
+      { t: 'touch', phase: 'up', x: 100, y: 300 },
+    ])
+  })
+
+  it('live touch: a long press starts in place, once', () => {
+    const t0 = liveTouchStart({ clientX: 150, clientY: 100, at: 0 })
+    const held = liveTouchHold(t0, box, screen)
+    expect(held.send).toEqual([{ t: 'touch', phase: 'down', x: 100, y: 100 }])
+    expect(liveTouchHold(held.touch, box, screen).send).toEqual([])
+    expect(liveTouchEnd(held.touch, { clientX: 150, clientY: 100, at: 900 }, box, screen)).toEqual([
+      { t: 'touch', phase: 'up', x: 100, y: 100 },
+    ])
+  })
+
+  it('⌘V (or Ctrl+V) is the paste chord; other V chords are not', () => {
+    const k = (mods: Partial<KeyLike>, key = 'v'): boolean =>
+      isPasteChord({ key, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, ...mods })
+    expect(k({ metaKey: true })).toBe(true)
+    expect(k({ metaKey: true }, 'V')).toBe(true)
+    expect(k({ ctrlKey: true })).toBe(true)
+    expect(k({})).toBe(false)
+    expect(k({ metaKey: true, shiftKey: true })).toBe(false)
+    expect(k({ metaKey: true, ctrlKey: true })).toBe(false)
+    expect(k({ metaKey: true }, 'c')).toBe(false)
   })
 
   it('rotate turns a quarter from what the frames show', () => {

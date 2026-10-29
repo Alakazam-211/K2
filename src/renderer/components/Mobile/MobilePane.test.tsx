@@ -22,6 +22,10 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: vi.fn(async () => {}),
   listen: vi.fn(async () => () => {}),
 }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  readText: vi.fn(async () => 'hello from the clipboard'),
+  writeText: vi.fn(async () => {}),
+}))
 
 const daemon = vi.hoisted(() => ({
   status: null as unknown,
@@ -476,6 +480,66 @@ describe('the running device', () => {
     fireEvent.pointerDown(el, { clientX: 200, clientY: 400, button: 0, pointerId: 1 })
     fireEvent.pointerUp(el, { clientX: 200, clientY: 150, button: 0, pointerId: 1 })
     expect(stub.inputs[1]).toMatchObject({ t: 'swipe', x1: 200, y1: 700, x2: 200, y2: 200 })
+  })
+
+  it('live touch (switch on): a drag follows the finger as touch down / move / up; a clean tap stays a tap', async () => {
+    localStorage.setItem('k2.mobile.liveTouch', '1')
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    const el = screenEl()
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
+    expect(document.querySelector('[data-mobile-touch-dot]')?.getAttribute('data-mobile-touch-dot')).toBe('down')
+    fireEvent.pointerMove(el, { clientX: 150, clientY: 130, pointerId: 1 })
+    fireEvent.pointerMove(el, { clientX: 150, clientY: 160, pointerId: 1 })
+    fireEvent.pointerUp(el, { clientX: 150, clientY: 200, button: 0, pointerId: 1 })
+    expect(stub.inputs).toEqual([
+      { t: 'touch', phase: 'down', x: 100, y: 100 },
+      { t: 'touch', phase: 'move', x: 100, y: 220 },
+      { t: 'touch', phase: 'up', x: 100, y: 300 },
+    ])
+    expect(document.querySelector('[data-mobile-touch-dot]')?.getAttribute('data-mobile-touch-dot')).toBe('up')
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
+    fireEvent.pointerUp(el, { clientX: 151, clientY: 101, button: 0, pointerId: 1 })
+    expect(stub.inputs[3]).toEqual({ t: 'tap', x: 100, y: 100 })
+    localStorage.removeItem('k2.mobile.liveTouch')
+  })
+
+  it('live touch off (the default): a drag is one swipe on release; the touch dot still shows', async () => {
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    const el = screenEl()
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(el, { clientX: 150, clientY: 160, pointerId: 1 })
+    expect(document.querySelector('[data-mobile-touch-dot]')?.getAttribute('data-mobile-touch-dot')).toBe('down')
+    expect(stub.inputs).toEqual([])
+    fireEvent.pointerUp(el, { clientX: 150, clientY: 200, button: 0, pointerId: 1 })
+    expect(stub.inputs).toHaveLength(1)
+    expect(stub.inputs[0]).toMatchObject({ t: 'swipe', x1: 100, y1: 100, x2: 100, y2: 300 })
+  })
+
+  it('⌘V and a paste event type the clipboard into the device as one text', async () => {
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    const el = screenEl()
+    el.focus()
+    const cmdV = fireEvent.keyDown(el, { key: 'v', metaKey: true })
+    expect(cmdV).toBe(false)
+    await flush()
+    expect(stub.inputs).toEqual([{ t: 'text', text: 'hello from the clipboard' }])
+    fireEvent.paste(el, { clipboardData: { getData: (type: string) => (type === 'text/plain' ? 'pasted text' : '') } })
+    expect(stub.inputs[1]).toEqual({ t: 'text', text: 'pasted text' })
   })
 
   it('keys go to the device; ⌘W stays with K2; Esc leaves the device', async () => {

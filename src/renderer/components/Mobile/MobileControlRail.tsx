@@ -1,9 +1,9 @@
 // The control rail beside the device (research-mobile-pane-polish-v1 §4
 // item 2): a vertical pill to the right of the phone, top to bottom:
 //   Home · Back + Recents (Android) │ Rotate · Light/Dark · Screenshot │ ⋯
-// ⋯ holds the rare and destructive ones: Open URL…, Frame on/off, the
-// frame rate (remote), About this device (with the isolation note), and
-// Stop the device in red.
+// ⋯ holds the rare and destructive ones: Open URL…, Frame on/off, Live
+// touch (beta), the frame rate (remote), About this device (with the
+// isolation note), and Stop the device in red.
 //
 // Every control is a gesture the daemon already takes (stream::ViewerMsg:
 // button, rotate, appearance, open-url; sim/stop, sim/screenshot). The rail
@@ -57,6 +57,9 @@ export interface MobileControlRailProps {
   onStop(): void
   onOpenUrl(url: string): void
   onScreenOnly(on: boolean): void
+  /** Live touch (beta): drags follow the finger. Off by default. */
+  liveTouch?: boolean
+  onLiveTouch?(on: boolean): void
   onFps(fps: number): void
   /** S5: the Select toggle. */
   extra?: React.ReactNode
@@ -231,6 +234,23 @@ export function MobileControlRail(props: MobileControlRailProps): React.JSX.Elem
                 <span className="flex-1">Show the phone frame</span>
                 {!props.screenOnly ? <Check /> : null}
               </button>
+              {props.onLiveTouch ? (
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={props.liveTouch === true}
+                  className={item}
+                  title="Drags and long presses follow your pointer on the device (beta)"
+                  onClick={() => {
+                    props.onLiveTouch?.(!props.liveTouch)
+                    close()
+                  }}
+                  data-mobile-menu="live-touch"
+                >
+                  <span className="flex-1">Live touch (beta)</span>
+                  {props.liveTouch ? <Check /> : null}
+                </button>
+              ) : null}
               {props.fps !== null ? (
                 <div className="border-t border-[var(--color-border)] pt-1 mt-1" data-mobile-fps="">
                   <div className="px-3 pb-0.5 pt-1 text-[9px] uppercase tracking-wider text-[var(--color-text-muted)]">Frame rate over Connect</div>

@@ -3775,6 +3775,112 @@ mod tests {
         let _ = std::fs::remove_dir_all(stub.parent().expect("stub dir"));
     }
 
+    /// prd-workspace-sessions-cli-v1 WS-O13 / WS-T4: the in-process doors
+    /// (`k2 sidecar new`, `k2 sessions open`, the `k2 msg` sidecar wake all
+    /// spawn `tab-*` through `spawn_agent_session_v2_blocking`) ask the same
+    /// seam as this route: the pinned chat's conversation and one another
+    /// live runner holds are refused (409 `conversation_live` for the
+    /// sidecar/open doors), the holder is untouched, and the one roster
+    /// shows who holds what.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn in_process_tab_spawns_ask_the_one_runner_seam() {
+        k2_core::db::init_for_tests();
+        let _home = StubHome::new();
+        let n = NEXT_ID.fetch_add(1, Ordering::SeqCst);
+        let pid = format!("seam-doors-{n}");
+        let cwd = format!("/tmp/{pid}");
+        let tab_a = format!("tab-{pid}-a");
+        let tab_b = format!("tab-{pid}-b");
+        let tab_c = format!("tab-{pid}-c");
+        let _reap_a = ReapAgent(tab_a.clone());
+        let _reap_b = ReapAgent(tab_b.clone());
+        let _reap_c = ReapAgent(tab_c.clone());
+        let stub = write_agent_stub("claude");
+        let stub_s = stub.to_string_lossy().into_owned();
+        let canonical_sid = uuid::Uuid::new_v4().to_string();
+        let other_sid = uuid::Uuid::new_v4().to_string();
+        seed_project_and_tab_row(&pid, &cwd, &tab_a, Some(stub_s.as_str()), None, &[]);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute(
+                "INSERT INTO workspace_sessions (id, project_id, session_id, harness, owner, status, created_at) \
+                 VALUES (?1, ?2, ?3, 'claude', 'user', 'sleeping', unixepoch())",
+                rusqlite::params![uuid::Uuid::new_v4().to_string(), pid, canonical_sid],
+            )
+            .expect("insert workspace_sessions");
+        }
+        let spawn_tab = |key: &str, sid: &str| {
+            crate::spawn::spawn_agent_session_v2_blocking(crate::spawn::SpawnWorkspaceSessionRequest {
+                agent_name: key.to_string(),
+                project_id: Some(pid.clone()),
+                cwd: cwd.clone(),
+                command: Some(stub_s.clone()),
+                args: Some(vec!["--resume".to_string(), sid.to_string()]),
+                cols: 80,
+                rows: 24,
+                canonical_key: Some(key.to_string()),
+                ..Default::default()
+            })
+        };
+
+        // The pinned chat's conversation (asleep): refused, nothing registered.
+        let err = spawn_tab(&tab_a, &canonical_sid).expect_err("a tab may not resume the main chat");
+        let sentence = crate::conversation_owner::spawn_refusal_in(&err).expect("the seam's refusal");
+        assert!(sentence.contains("the workspace's main chat"), "{err}");
+        assert!(crate::v2_session_map::lookup_by_agent_name(&tab_a).is_none());
+        let mapped = crate::sidecar_routes::spawn_error(&err);
+        assert_eq!((mapped.code, mapped.status), ("conversation_live", 409), "{}", mapped.hint);
+
+        // A live tab holds another conversation; a second tab on it is refused.
+        let first = spawn_tab(&tab_b, &other_sid).expect("the first runner starts");
+        assert!(!first.reused);
+        let err = spawn_tab(&tab_c, &other_sid).expect_err("one conversation never runs twice");
+        assert!(err.contains(&format!("another live session ({tab_b})")), "{err}");
+        assert!(crate::v2_session_map::lookup_by_agent_name(&tab_c).is_none());
+        assert!(
+            crate::v2_session_map::lookup_by_agent_name(&tab_b).expect("holder stays").is_child_alive(),
+            "refusing the duplicate must not touch the holder"
+        );
+        // Respawning the holder's own key is not a duplicate (reuse).
+        let again = spawn_tab(&tab_b, &other_sid).expect("same key reuses");
+        assert!(again.reused);
+
+        // The seam's answer for each.
+        let owner = crate::conversation_owner::conversation_owner(&other_sid, Some(&pid), None).expect("held");
+        assert!(owner.live);
+        assert_eq!(owner.agent_name.as_deref(), Some(tab_b.as_str()));
+        let main = crate::conversation_owner::conversation_owner(&canonical_sid, Some(&pid), None).expect("main");
+        assert_eq!((main.role, main.live), ("main", false));
+        assert!(crate::conversation_owner::conversation_owner(&uuid::Uuid::new_v4().to_string(), Some(&pid), None).is_none());
+
+        // The one roster (WS-R4): main asleep, the live tab as a chat (no
+        // created_by), `you` marks the caller; asleep only with `all`.
+        let roster = crate::workspace_roster::workspace_roster(
+            &pid,
+            &crate::workspace_roster::RosterOpts { all: true, include_api: false, caller_map_key: Some(tab_b.clone()) },
+        )
+        .expect("roster");
+        let main_row = roster.rows.iter().find(|r| r.role == "main").expect("main row");
+        assert_eq!(main_row.state, "asleep");
+        assert_eq!(main_row.address.as_deref(), Some(roster.workspace_handle.as_str()));
+        let live_tab = roster
+            .rows
+            .iter()
+            .find(|r| r.agent_name.as_deref() == Some(tab_b.as_str()))
+            .expect("live tab row");
+        assert_eq!(live_tab.role, "chat");
+        assert!(live_tab.you);
+        assert_ne!(live_tab.state, "asleep");
+        assert_eq!(live_tab.conversation_id.as_deref(), Some(other_sid.as_str()));
+        assert!(live_tab.address.is_some(), "every live session has an address (ordinal)");
+        assert_eq!(roster.you, live_tab.address);
+        let live_only = crate::workspace_roster::workspace_roster(&pid, &Default::default()).expect("roster");
+        assert!(live_only.rows.iter().all(|r| r.state != "asleep"), "asleep rows only with all");
+        assert!(live_only.asleep >= 1, "asleep rows are still counted");
+        let _ = std::fs::remove_dir_all(stub.parent().expect("stub dir"));
+    }
+
     // ── Split-view V23: closed-tab guard ─────────────────────────────────
 
     fn closed_tab_name() -> String {

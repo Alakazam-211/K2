@@ -415,6 +415,108 @@ mod tests {
         assert_eq!(excerpt("nothing here", "snaps"), None);
     }
 
+    fn write(path: &Path, lines: &[serde_json::Value]) {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        let body: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        std::fs::write(path, body.join("\n") + "\n").expect("write transcript");
+    }
+
+    fn claude_lines(cwd: &str, ask: &str, answer: &str) -> Vec<serde_json::Value> {
+        vec![
+            serde_json::json!({"type": "user", "cwd": cwd, "timestamp": "2026-10-28T10:00:00Z", "message": {"role": "user", "content": ask}}),
+            serde_json::json!({"type": "assistant", "cwd": cwd, "timestamp": "2026-10-28T10:01:00Z", "message": {"role": "assistant", "content": [{"type": "text", "text": answer}, {"type": "tool_use", "name": "Bash"}]}}),
+        ]
+    }
+
+    /// WS-T2: fake HOME, one workspace with a root chat, a worktree chat, a
+    /// sibling folder's chat (must not appear), a nested project's chat
+    /// (must not appear), a codex conversation, and a corrupt codex file
+    /// (reported, not dropped). Filters and the search budget.
+    #[test]
+    fn past_rows_belong_to_the_workspace_only() {
+        crate::db::init_for_tests();
+        crate::test_env::with_temp_home(|home| {
+            let root = home.join("x").join("K2");
+            let root_s = root.to_string_lossy().to_string();
+            let sibling = format!("{root_s}-other");
+            let worktree = format!("{root_s}/.worktrees/k2-fix");
+            let nested = format!("{root_s}/apps/nested");
+            for d in [&root_s, &sibling, &worktree, &nested] {
+                std::fs::create_dir_all(d).expect("mkdir ws");
+            }
+            let projects = home.join(".claude").join("projects");
+            let slug = chat_history::claude_project_hash(&root_s);
+            let id_root = "11111111-1111-4111-8111-111111111111";
+            let id_wt = "22222222-2222-4222-8222-222222222222";
+            let id_sib = "33333333-3333-4333-8333-333333333333";
+            write(&projects.join(&slug).join(format!("{id_root}.jsonl")), &claude_lines(&root_s, "Fix the Thread scroll restore", "Done: flag threadScrollRestore"));
+            write(
+                &projects.join(chat_history::claude_project_hash(&worktree)).join(format!("{id_wt}.jsonl")),
+                &claude_lines(&worktree, "Worktree work", "ok"),
+            );
+            write(
+                &projects.join(chat_history::claude_project_hash(&sibling)).join(format!("{id_sib}.jsonl")),
+                &claude_lines(&sibling, "Sibling folder chat", "no"),
+            );
+            // Codex: one good rollout in the workspace, one corrupt file.
+            let day = home.join(".codex").join("sessions").join("2026").join("10").join("28");
+            write(
+                &day.join("rollout-a.jsonl"),
+                &[
+                    serde_json::json!({"type": "session_meta", "payload": {"id": "44444444-4444-4444-8444-444444444444", "cwd": root_s, "timestamp": "2026-10-28T09:00:00Z"}}),
+                    serde_json::json!({"type": "response_item", "payload": {"role": "user", "content": [{"type": "input_text", "text": "codex scroll question"}]}}),
+                ],
+            );
+            std::fs::write(day.join("rollout-bad.jsonl"), "not json at all\n").expect("corrupt");
+
+            let q = PastQuery {
+                root: root_s.clone(),
+                project_paths: vec![root_s.clone(), sibling.clone(), nested.clone()],
+                days: 365,
+                cli: None,
+                limit: 50,
+                search: None,
+                include_archived: false,
+                budget: Budget::default(),
+                now: chrono::Utc::now().timestamp(),
+            };
+            let r = list_past(&q);
+            let ids: Vec<&str> = r.rows.iter().map(|x| x.conversation_id.as_str()).collect();
+            assert!(ids.contains(&id_root), "root chat listed: {ids:?}");
+            assert!(ids.contains(&id_wt), "worktree chat listed: {ids:?}");
+            assert!(ids.contains(&"44444444-4444-4444-8444-444444444444"), "codex listed: {ids:?}");
+            assert!(!ids.contains(&id_sib), "a sibling folder's chat must not appear: {ids:?}");
+            let wt = r.rows.iter().find(|x| x.conversation_id == id_wt).expect("worktree row");
+            assert_eq!(wt.worktree.as_deref(), Some(".worktrees/k2-fix"));
+            assert!(
+                r.unsupported.iter().any(|(c, why)| c == "codex" && why.contains("1 codex rollout file")),
+                "the corrupt codex file is reported: {:?}",
+                r.unsupported
+            );
+
+            // cli filter
+            let only_codex = list_past(&PastQuery { cli: Some("codex".into()), ..q.clone() });
+            assert!(only_codex.rows.iter().all(|x| x.cli == "codex"), "{:?}", only_codex.rows);
+            assert_eq!(only_codex.rows.len(), 1);
+
+            // limit
+            let one = list_past(&PastQuery { limit: 1, ..q.clone() });
+            assert_eq!(one.rows.len(), 1);
+
+            // search: message text, with an excerpt
+            let hit = list_past(&PastQuery { search: Some("threadScrollRestore".into()), ..q.clone() });
+            assert_eq!(hit.rows.len(), 1, "{:?}", hit.rows);
+            assert_eq!(hit.rows[0].conversation_id, id_root);
+            assert!(hit.rows[0].excerpt.as_deref().is_some_and(|e| e.contains("threadScrollRestore")));
+            assert!(!hit.truncated);
+
+            // search over budget: truncated, said so
+            let tiny = Budget { max_files: 0, ..Budget::default() };
+            let cut = list_past(&PastQuery { search: Some("nothing-matches-this".into()), budget: tiny, ..q.clone() });
+            assert!(cut.truncated, "a search past its budget says truncated");
+        });
+    }
+
     #[test]
     fn worktree_names_relative_to_root() {
         assert_eq!(worktree_of("/x/K2", "/x/K2"), None);

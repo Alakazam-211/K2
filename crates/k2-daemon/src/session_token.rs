@@ -1016,6 +1016,19 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/sdk/add",
         "/cli/app/sdk/kit",
         "/cli/app/sdk/status",
+        // 0.46.7: k2 app updates (switch 1 for changes, own workspace's
+        // Apps; a key change after releases is held; the handler). The
+        // fleet view is not here: the owner's and Admins'.
+        "/cli/app/updates",
+        "/cli/app/updates/key",
+        "/cli/app/updates/key/set",
+        "/cli/app/updates/token",
+        "/cli/app/updates/token/set",
+        "/cli/app/updates/push",
+        "/cli/app/updates/promote",
+        "/cli/app/updates/rollback",
+        "/cli/app/updates/pull",
+        "/cli/app/updates/stats",
         // Held requests: list own, withdraw own through deny.
         // `/cli/app/approve` is NOT here: the owner's, in person, with a
         // vault confirm.

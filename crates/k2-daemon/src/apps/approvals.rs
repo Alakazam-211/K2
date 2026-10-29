@@ -785,6 +785,9 @@ pub(crate) const MANAGE_HELD: &[&str] = &[
     "/cli/app/domain/external",
     // 0.46.7: a public URL for an installed App (expose.rs).
     "/cli/app/expose",
+    // 0.46.7: changing an App's updater key after it has releases (and any
+    // key set from an agent without the switch).
+    "/cli/app/updates/key/set",
 ];
 
 thread_local! {

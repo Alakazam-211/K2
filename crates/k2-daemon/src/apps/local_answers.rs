@@ -26,7 +26,7 @@ pub fn compose(parts: Vec<LocalAnswer>) -> Option<LocalAnswer> {
 
 /// K2's own answers for the runtime App `app_id` (its label), or `None`.
 pub fn for_app(app_id: &str) -> Option<LocalAnswer> {
-    compose([crate::app_pairing::links::local_for(app_id)].into_iter().flatten().collect())
+    compose([crate::app_pairing::links::local_for(app_id), super::updates_serve::local_for(app_id)].into_iter().flatten().collect())
 }
 
 #[cfg(test)]

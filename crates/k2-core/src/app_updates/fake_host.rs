@@ -31,6 +31,8 @@ pub struct State {
     pub uploads: u32,
     /// Lie about the stored sha256 in upload answers (the client must catch it).
     pub lie_sha: bool,
+    /// Answer this many upload PUTs with 503 (other requests are served).
+    pub fail_uploads: u32,
 }
 
 pub struct FakeHost {
@@ -141,6 +143,11 @@ fn serve(mut s: TcpStream, st: &Arc<Mutex<State>>, base: &str) {
                 return err(&mut s, c, e);
             }
             g.uploads += 1;
+            if g.fail_uploads > 0 {
+                g.fail_uploads -= 1;
+                drop(g);
+                return respond(&mut s, 503, "Retry-After: 0\r\n", "application/json", br#"{"error":"busy","message":"busy"}"#);
+            }
             if semver::Version::parse(version).is_err() {
                 drop(g);
                 return err(&mut s, 400, "bad_name");

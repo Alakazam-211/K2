@@ -112,6 +112,7 @@ pub fn is_route(p: &str) -> bool {
         || super::expose::ROUTES.contains(&p)
         || super::link_files::ROUTES.contains(&p)
         || super::init::ROUTES.contains(&p)
+        || super::updates_routes::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -141,6 +142,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::link_files::POST_ROUTES.contains(&p)
         // 0.46.7: k2 app init --template (init.rs).
         || super::init::POST_ROUTES.contains(&p)
+        // 0.46.7: k2 app updates key|token set, push, promote, rollback, pull.
+        || super::updates_routes::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -478,6 +481,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         p if super::link_files::ROUTES.contains(&p) => super::link_files::handle(p, &who, body, params),
         // 0.46.7: k2 app init --template tauri|static|node-api (init.rs).
         super::init::ROUTE => super::init::route(&who, body),
+        // 0.46.7: the update feed, k2 app updates … (updates_routes.rs).
+        p if super::updates_routes::ROUTES.contains(&p) => super::updates_routes::handle(p, &who, body, params),
         "/cli/app/validate" => validate(&who, body),
         "/cli/app/install" => install(&who, body),
         "/cli/app/deploy" => deploy_route(&who, body),
@@ -2492,6 +2497,8 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     crate::app_push::forget_app(&app.service_id);
     // prd-app-phone-pairing-v1: its pairing config, codes and link files go.
     crate::app_pairing::forget_app(&app.service_id, Some(&app.app_id));
+    // 0.46.7: its update feed (key, releases, counts, token, staging).
+    super::updates_routes::forget_app(&app.app_id, &app.service_id);
     crate::email_notify::forget_app(&app.service_id);
     // Sew for Apps A6 (Q12): people whose only App this was lose chat
     // (deactivated, never deleted); its guests-chat grant goes.

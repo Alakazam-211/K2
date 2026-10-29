@@ -452,6 +452,20 @@ pub const ROUTES: &[Route] = &[
     post("/cli/app/uninstall", Admin),
     // Q8: the owner gives a parked App to a workspace.
     post("/cli/app/unpark", Owner),
+    // 0.46.7: k2 app updates (the update feed). Reads Member; changes
+    // Admin (the handler: switch 1 for agents, a key change after releases
+    // held for the owner); the fleet view Admin.
+    get("/cli/app/updates", Member),
+    get("/cli/app/updates/fleet", Admin),
+    get("/cli/app/updates/key", Member),
+    post("/cli/app/updates/key/set", Admin),
+    post("/cli/app/updates/promote", Admin),
+    post("/cli/app/updates/pull", Admin),
+    post("/cli/app/updates/push", Admin),
+    post("/cli/app/updates/rollback", Admin),
+    get("/cli/app/updates/stats", Member),
+    get("/cli/app/updates/token", Admin),
+    post("/cli/app/updates/token/set", Admin),
     // Room-scope R16: an App's quotas and per-call counts from its audit.
     get("/cli/app/usage", Member),
     post("/cli/app/validate", Admin),

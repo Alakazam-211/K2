@@ -18,6 +18,7 @@
 //! | `rotatedLog` | `*.log.1` beside an App's or a `--cmd` service's log | an old copy of a capped log (never `egress.log.1`, an audit trail) |
 //! | `deploymentLog` | the log of an old deployment: not live, not in the App's last 10, ended over 30 days ago | its Seed is past rollback too |
 //! | `buildTemp` | `~/.k2/apps/tmp/*` and `~/.k2/apps/images/.fetch-*`, over an hour old | temp files of a build or fetch that ended |
+//! | `updateStaging` | an update push's staging copy (`~/.k2/apps/<app>/updates/staging/<release>`) whose release isn't uploading, over a day old | the archive was signed and pushed from the workspace; push again |
 //! | `imageArchive` | a base-image archive in `~/.k2/apps/images` for a base K2 no longer pins (not on an air-gapped box) | K2 fetches the current one by digest |
 //!
 //! **Never:** App data, databases, mail, uploads, workspace folders,
@@ -265,6 +266,11 @@ fn local_items(scope: &Scope, p: &Picked, now: i64) -> Vec<LocalItem> {
         let logs = k2_core::deploy::app_dir(&a.app_id).join("logs");
         for f in rotated_in(&logs) {
             out.push(local("rotatedLog", Some(&a.app_id), f));
+        }
+        // 0.46.7: an update push's staging copy whose release ended (failed
+        // or a stopped upload) over a day ago.
+        for f in super::updates_routes::stale_staging(&a.app_id, now) {
+            out.push(local("updateStaging", Some(&a.app_id), f));
         }
     }
     for (app, dep) in &p.old_deployments {

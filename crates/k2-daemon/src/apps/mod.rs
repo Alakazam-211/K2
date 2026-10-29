@@ -96,6 +96,10 @@ pub mod chat_key_routes;
 pub mod limits;
 /// K2's own answers on an App's hosts, one answerer per App (0.46.7, TA-9).
 pub mod local_answers;
+/// `k2 app updates …`: the update feed's routes (0.46.7, TC-6 … TC-11).
+pub mod updates_routes;
+/// `/_k2/updates/…` on an App's hosts and the check-in counts (0.46.7, TC-9).
+pub mod updates_serve;
 pub mod open;
 /// The delete guard, hand over / park / unpark, the orphan sweep (Q8).
 pub mod ownership;

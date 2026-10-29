@@ -724,8 +724,8 @@ Tooling. Prefer short standing orders; load skills for depth.
 not a crawl of wiki or PRDs. `k2 study <topic>` prints one page. Daemon-optional.
 
 Topics: what, source, map, identity, send, human, people, auth, errors, context,
-db, mail, connect-boundary, apps, app-deploys, app-move, app-api, live,
-app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
+db, mail, connect-boundary, apps, app-deploys, app-move, app-api, app-errors,
+live, app-heartbeats, app-tickets, app-identity, app-surfaces, app-resources,
 app-runtime, app-handover, app-push, app-pairing, app-profile, app-chat,
 chat-voice, chat-voice-rooms, tauri, skins, feedback-loop, ticket-brief, zen,
 sidecars, sessions, llm-tokens, llm-accounts, publish-framing,
@@ -737,6 +737,9 @@ Building an App or widget that shows live state (an agent working, counts,
 unread) → `k2 study live`: every surface, its caps, read + live verbs, and
 what never to infer.
 `k2 study apps` is canonical; `k2 study skins` is a leftover alias.
+Apps: `k2 app status <app-id>` (how it is, with the next command for each
+problem); a refused App command's id → `k2 explain <id>` (the fix, who fixes
+it; no daemon); what this server can do → `k2 capabilities`.
 Guests/roles/tokens: `k2 app` (leftover `k2 skin` / `k2 skin-token`). Pass prefix `k2skn_`.
 
 K2 is source-available Fair Source (FSL-1.1-Apache-2.0), not MIT. Connect is a

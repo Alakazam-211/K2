@@ -291,7 +291,11 @@ pub const SKILL_VERSION_ZEN: u32 = 45;
 /// node named; K2 picks the node and prints why.
 /// Bumped to 44 (0.46.7, Chat / Voice Hosting guide): the Study topics gain
 /// `chat-voice` and `chat-voice-rooms`.
-pub const SKILL_VERSION_WORKSPACE: u32 = 44;
+/// Bumped to 45 (0.46.7, merge batch B, one bump for all of it): the Study
+/// topics gain `publish-visibility` and `publish-dev` (publish visibility),
+/// `tauri` and `app-errors` (Tauri core TC-29); `k2 app status`,
+/// `k2 explain` and `k2 capabilities`.
+pub const SKILL_VERSION_WORKSPACE: u32 = 45;
 
 /// The `k2-permissions` skill (permission cards, Beta; PRD rev 3.1 §11.4,
 /// vs-live C8): its own constant, so the k2-cli skill (`_WORKSPACE`) and

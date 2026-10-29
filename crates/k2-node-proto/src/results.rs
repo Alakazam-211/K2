@@ -15,6 +15,21 @@ use serde::{Deserialize, Serialize};
 /// its digest changes, so the controller never sends one there).
 pub const FEATURE_ARTIFACTS: &str = "artifacts";
 
+/// Offer feature (0.46.7, CE-4): every result carries
+/// [`Outputs::tools_used`], the versions the job's own PATH resolved to
+/// (and the receipt carries them too). An older node sends none; its
+/// receipt's node-wide `tools` map is all there is (`basis: node-probe`).
+pub const FEATURE_TOOLS_USED: &str = "tools-used";
+/// Offer feature (0.46.7, CE-14 + CE-19): every result carries
+/// [`Outputs::resources`] (peak memory, CPU time) and [`Outputs::host`]
+/// (load, CPUs, steal and other jobs at start and end). Older node: both
+/// absent.
+pub const FEATURE_JOB_RESOURCES: &str = "job-resources";
+
+/// Most entries in [`Outputs::tools_used`], and the longest value.
+pub const MAX_TOOLS_USED: usize = 48;
+pub const MAX_TOOL_VALUE: usize = 160;
+
 pub const MAX_GLOBS: usize = 32;
 pub const MAX_GLOB_LEN: usize = 512;
 /// Files one job may keep as artifacts.
@@ -114,6 +129,11 @@ impl TestSummary {
 
 /// What a job produced besides its log (stored on the node ledger, sent
 /// in the terminal `state`, kept on the controller's job row).
+///
+/// From 0.46.7 a node with [`FEATURE_TOOLS_USED`] / [`FEATURE_JOB_RESOURCES`]
+/// sends `Outputs` for every end (not only with `--artifact`); the new
+/// fields are absent when empty, so an older controller reads the same
+/// object it always did (no `deny_unknown_fields`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Outputs {
     pub artifacts: Vec<ArtifactInfo>,
@@ -122,6 +142,89 @@ pub struct Outputs {
     /// Short node-written notes ("target/x/*.xml matched nothing").
     #[serde(default)]
     pub notes: Vec<String>,
+    /// CE-4: what the job's PATH really resolved to, probed with the job's
+    /// env and working directory after its toolchains were resolved and
+    /// before the command started. Keys: `rustc`, `cargo`,
+    /// `cargo-nextest` (the version, e.g. `1.99.0`), `rust-toolchain`
+    /// (the active toolchain, e.g. `1.99.0-x86_64-unknown-linux-gnu`),
+    /// `rust-components` (comma list of [`crate::needs::RUST_COMPONENTS`]
+    /// installed in it), and one key per mise need (`node` → `22.23.4`,
+    /// the tool name as the need names it). A tool not on PATH is absent.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub tools_used: std::collections::BTreeMap<String, String>,
+    /// CE-14: peak memory and CPU time of the whole job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<JobResources>,
+    /// CE-19: the node's load at the job's start and end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostStamps>,
+}
+
+/// CE-14: what one job used, all processes together.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobResources {
+    /// Peak memory in bytes (`None`: nothing could be read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_mem_bytes: Option<u64>,
+    /// [`mem_source`] codes: how `peak_mem_bytes` was measured.
+    pub mem_source: String,
+    /// CPU time in milliseconds, user + system, every process of the job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_ms: Option<u64>,
+    /// [`cpu_source`] codes.
+    pub cpu_source: String,
+    /// The memory limit the job ran under (its `--mem` or the node's
+    /// share), so `mem_cap` ends can say "used 25.3G of 24G".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mem_limit_bytes: Option<u64>,
+}
+
+/// How [`JobResources::peak_mem_bytes`] was measured.
+pub mod mem_source {
+    /// cgroup v2 `memory.peak` (Linux ≥ 5.19): exact.
+    pub const MEMORY_PEAK: &str = "memory.peak";
+    /// The highest `memory.current` the node sampled (older kernels).
+    pub const CGROUP_SAMPLED: &str = "cgroup-sampled";
+    /// The highest summed RSS of the job's process group the node sampled
+    /// (macOS, or Linux without a cgroup): a floor, not exact.
+    pub const RSS_SAMPLED: &str = "rss-sampled";
+    pub const NONE: &str = "none";
+}
+
+/// How [`JobResources::cpu_ms`] was measured.
+pub mod cpu_source {
+    /// cgroup v2 `cpu.stat` `usage_usec`: exact.
+    pub const CPU_STAT: &str = "cpu.stat";
+    /// The last CPU time of the job's process group the node sampled
+    /// (`ps`, once a second): misses at most the final second.
+    pub const PS_SAMPLED: &str = "ps-sampled";
+    pub const NONE: &str = "none";
+}
+
+/// CE-19: the node at one moment of a job's life.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostSample {
+    /// Node clock, unix seconds.
+    pub at: i64,
+    /// The 1-minute load average × 1000.
+    pub load1_milli: u64,
+    /// CPUs the node has.
+    pub cpus: u32,
+    /// CPU steal over about one second, in tenths of a percent (Linux
+    /// `/proc/stat`; `None` on macOS or when unreadable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steal_permille: Option<u32>,
+    /// Other K2 jobs running on the node then (every server's; count only).
+    pub other_jobs: u32,
+}
+
+/// CE-19: [`HostSample`]s at the job's start and end.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostStamps {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<HostSample>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<HostSample>,
 }
 
 impl Outputs {
@@ -129,6 +232,12 @@ impl Outputs {
     pub fn capped(mut self) -> Self {
         self.artifacts.truncate(MAX_FILES);
         self.notes.truncate(MAX_NOTES);
+        while self.tools_used.len() > MAX_TOOLS_USED {
+            self.tools_used.pop_last();
+        }
+        for v in self.tools_used.values_mut() {
+            *v = clip(v, MAX_TOOL_VALUE);
+        }
         for n in &mut self.notes {
             *n = clip(n, 300);
         }
@@ -561,8 +670,12 @@ more2</failure>
                 ..Default::default()
             }),
             notes: vec!["n".into(); MAX_NOTES + 4],
+            tools_used: (0..MAX_TOOLS_USED + 5).map(|i| (format!("t{i:02}"), "v".repeat(MAX_TOOL_VALUE + 9))).collect(),
+            ..Default::default()
         }
         .capped();
+        assert_eq!(o.tools_used.len(), MAX_TOOLS_USED);
+        assert!(o.tools_used.values().all(|v| v.chars().count() == MAX_TOOL_VALUE));
         assert_eq!(o.artifacts.len(), MAX_FILES);
         assert_eq!(o.notes.len(), MAX_NOTES);
         let t = o.tests.unwrap();

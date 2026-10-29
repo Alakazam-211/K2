@@ -234,7 +234,20 @@ pub const VERBS: &[VerbSpec] = &[
     // node (prd-macos-tenant-compute-v1 §6): root admin changes hands, so
     // always the owner's approval and `full` (at `policy`: at the machine).
     VerbSpec { name: "servers.owner", base: Class::Privileged, min_level: Level::Full, runs: Runs::Executor },
+    // 0.46.7 (CE-24, the `compute.package-allow` card): add one system
+    // package to the node's approved list (`/etc/k2-node-packages.toml`),
+    // so a job's `--needs sys:<name>` installs it. Operate at `policy`:
+    // the owner or an Admin taps the card (Rosson 2026-10-29: a click, not
+    // Touch ID). Linux only; argument `{package}` checked with
+    // `needs::valid_package`. An older executor answers `verb_not_allowed`.
+    VerbSpec { name: VERB_PACKAGES_ALLOW, base: Class::Operate, min_level: Level::Policy, runs: Runs::Executor },
 ];
+
+/// The CE-24 verb.
+pub const VERB_PACKAGES_ALLOW: &str = "packages.allow";
+/// A `packages.allow` on a Mac: nothing to approve there (the job's owner
+/// installs it with brew at the machine).
+pub const PACKAGES_LINUX_ONLY: &str = "packages_linux_only";
 
 /// Verbs that restart `k2-node`. On a node with two or more active
 /// servers they drain first: no new starts, running jobs finish (up to

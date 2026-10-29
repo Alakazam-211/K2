@@ -182,6 +182,7 @@ mod tests {
                 ..Default::default()
             }),
             notes: vec![],
+            ..Default::default()
         };
         j.summary_json = Some(serde_json::to_string(&o).unwrap());
         let signed = SignedReceipt { body: "{\"v\":1}".into(), sig: "x".into() };

@@ -48,6 +48,40 @@ pub const NODE_SET_VARS: &[&str] = &[
     "RUSTUP_TOOLCHAIN",
 ];
 
+/// 0.46.7 (CE-15): the CPUs a job may use, as the node reserved them
+/// (`--cpus` rounded up, else the node's default share `caps.cpu ÷
+/// parallel_max`). Node-set (the `K2_` prefix is refused in `--env`).
+pub const ENV_JOB_CPUS: &str = "K2_JOB_CPUS";
+/// 0.46.7: the first of this job's own loopback ports, and how many. Two
+/// jobs on one node never get overlapping ranges while both run, so a job
+/// that starts a local server on `$K2_JOB_PORT_BASE` never meets another
+/// job's server on a fixed port. Advisory: nothing stops a job binding
+/// another port. Node-set.
+pub const ENV_JOB_PORT_BASE: &str = "K2_JOB_PORT_BASE";
+pub const ENV_JOB_PORT_COUNT: &str = "K2_JOB_PORT_COUNT";
+
+/// Thread-count variables the node sets to the job's CPUs (CE-15) unless
+/// the plan's env already sets them (a caller's `--env`, or a controller's
+/// hint, wins). `OMP_NUM_THREADS` is also what GNU `nproc` honours.
+pub const CPU_HINT_VARS: &[&str] = &["CARGO_BUILD_JOBS", "RUST_TEST_THREADS", "NEXTEST_TEST_THREADS", "OMP_NUM_THREADS"];
+
+/// Offer feature (0.46.7): the node sets [`ENV_JOB_CPUS`] and fills
+/// [`CPU_HINT_VARS`] the plan didn't set. An older node sets none of them
+/// itself (only what the plan's env carries).
+pub const FEATURE_CPU_HINTS: &str = "cpu-hints";
+/// Offer feature (0.46.7): the node gives every job its own loopback port
+/// range ([`ENV_JOB_PORT_BASE`], [`ENV_JOB_PORT_COUNT`]). An older node
+/// sets neither.
+pub const FEATURE_JOB_PORTS: &str = "job-ports";
+
+/// The port pool: `JOB_PORT_FIRST + n × JOB_PORT_BLOCK`, `n <
+/// JOB_PORT_BLOCKS`. Below the Linux ephemeral range (32768+) and above
+/// the usual development ports, so a job's server rarely meets a client's
+/// outgoing port.
+pub const JOB_PORT_FIRST: u16 = 20000;
+pub const JOB_PORT_BLOCK: u16 = 100;
+pub const JOB_PORT_BLOCKS: u16 = 120;
+
 /// The sccache server's address: the node sets `SCCACHE_SERVER_UDS` to
 /// the job's own server's socket (V63), so an agent can't point a build at
 /// another server's sccache or back at the shared TCP port. Reserved like

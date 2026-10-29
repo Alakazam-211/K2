@@ -7,6 +7,10 @@
 //!   mise (no root). `tool` alone means `tool@latest`.
 //! - `rust@stable`, `rust@1.99`, `rust@nightly-2026-09-01` — Rust through
 //!   rustup in the node home (mise delegates Rust to rustup anyway).
+//!   Components ride on the same token, joined with `+` (a comma would
+//!   split the needs list): `rust@stable+clippy+rustfmt`,
+//!   `rust@nightly+llvm-tools` ([`RUST_COMPONENTS`]; nodes offering
+//!   [`FEATURE_RUST_COMPONENTS`] only).
 //! - `cargo-nextest` (or `nextest`) — the prebuilt nextest binary.
 //! - `sys:<package>` — a system package (`libssl-dev`, `pkg-config`).
 //!   Needs root: the node installs it only when the machine's owner put
@@ -66,7 +70,7 @@ pub fn expected_bins(tool: &str) -> &'static [&'static str] {
 /// What `--needs` takes, for help text and refusals.
 pub fn supported_list() -> String {
     let mut v: Vec<String> = SUPPORTED_TOOLS.iter().map(|(t, _)| format!("{t}@<v>")).collect();
-    v.extend(["rust@<channel>", "cargo-nextest", "sys:<package>"].map(String::from));
+    v.extend(["rust@<channel>[+<component>…]", "cargo-nextest", "sys:<package>"].map(String::from));
     v.join(", ")
 }
 
@@ -117,6 +121,41 @@ impl From<NeedError> for String {
 pub const FEATURE_NEEDS: &str = "needs";
 /// Offer feature: the node installs approved system packages itself.
 pub const FEATURE_SYSTEM_PACKAGES: &str = "system-packages";
+/// Offer feature (0.46.7, CE-16): the node installs Rust components named
+/// on a `rust@<channel>+<component>…` need, puts the LLVM tools on the
+/// job's PATH, and lists each toolchain's components in `offer.tools`
+/// (`rust-components:<toolchain>`). An older node reads `stable+clippy`
+/// as a channel name and fails the install, so the controller places such
+/// a need only on a node offering this.
+pub const FEATURE_RUST_COMPONENTS: &str = "rust-components";
+
+/// Offer feature (0.46.7, CE-18): the node keeps its installed tool
+/// versions (mise installs, Rust toolchains) under a disk cap, the policy
+/// key `toolchain_budget_gb` (default 15% of the node's disk budget, at
+/// most 60 GB): over it after an install, it removes the least recently
+/// used versions no running or queued job needs. An older node has no cap.
+pub const FEATURE_TOOLCHAIN_BUDGET: &str = "toolchain-budget";
+
+/// Rust components a need may name (`rust@stable+clippy`). `llvm-tools`
+/// is rustup's `llvm-tools-preview` on older toolchains (rustup renames
+/// it); with it the job's PATH gains the toolchain's LLVM bin dir.
+pub const RUST_COMPONENTS: &[&str] = &["clippy", "rustfmt", "rust-src", "llvm-tools", "rust-analyzer", "miri"];
+
+/// Most components on one Rust need.
+pub const MAX_RUST_COMPONENTS: usize = 8;
+
+/// `llvm-tools-preview` → `llvm-tools`, `clippy-preview` → `clippy`: the
+/// name a need uses for a component rustup may list under an older name.
+pub fn canonical_component(c: &str) -> &str {
+    match c {
+        "llvm-tools-preview" => "llvm-tools",
+        "clippy-preview" => "clippy",
+        "rustfmt-preview" => "rustfmt",
+        "rust-analyzer-preview" => "rust-analyzer",
+        "miri-preview" => "miri",
+        other => other,
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -124,7 +163,13 @@ pub enum Need {
     /// A mise-managed tool.
     Tool { tool: String, version: String },
     /// Rust through rustup; `channel` is `stable`, `1.99`, `nightly-…`.
-    Rust { channel: String },
+    /// `components` (sorted, unique, [`RUST_COMPONENTS`]) from the `+`
+    /// form; empty (and absent on the wire) otherwise.
+    Rust {
+        channel: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        components: Vec<String>,
+    },
     /// The prebuilt `cargo-nextest`.
     Nextest,
     /// A distro package; root, owner-approved.
@@ -136,7 +181,8 @@ impl Need {
     pub fn token(&self) -> String {
         match self {
             Need::Tool { tool, version } => format!("{tool}@{version}"),
-            Need::Rust { channel } => format!("rust@{channel}"),
+            Need::Rust { channel, components } if components.is_empty() => format!("rust@{channel}"),
+            Need::Rust { channel, components } => format!("rust@{channel}+{}", components.join("+")),
             Need::Nextest => "cargo-nextest".into(),
             Need::System { package } => format!("sys:{package}"),
         }
@@ -221,10 +267,37 @@ pub fn parse(token: &str) -> Result<Need, String> {
         return Err(format!("{t:?}: versions use a-z A-Z 0-9 . _ + - (e.g. 22, 3.12.1, lts, stable)"));
     }
     if tool == "rust" || tool == "rustup" {
-        let channel = if version == "latest" { "stable" } else { version };
-        return Ok(Need::Rust { channel: channel.to_string() });
+        return parse_rust(t, version);
     }
     Ok(Need::Tool { tool: tool.to_string(), version: version.to_string() })
+}
+
+/// `stable`, `1.99+clippy+rustfmt`, `nightly-2026-09-01+llvm-tools`.
+fn parse_rust(t: &str, version: &str) -> Result<Need, String> {
+    let mut parts = version.split('+');
+    let channel = parts.next().unwrap_or("");
+    if channel.is_empty() {
+        return Err(format!("{t:?}: a Rust need is rust@<channel>[+<component>…] (e.g. rust@stable+clippy+rustfmt)"));
+    }
+    let channel = if channel == "latest" { "stable" } else { channel };
+    let mut components: Vec<String> = Vec::new();
+    for c in parts {
+        let c = canonical_component(c);
+        if !RUST_COMPONENTS.contains(&c) {
+            return Err(format!(
+                "{t:?}: {c:?} isn't a Rust component K2 installs (one of {}; join them with +, e.g. rust@stable+clippy+rustfmt)",
+                RUST_COMPONENTS.join(", ")
+            ));
+        }
+        if !components.iter().any(|x| x == c) {
+            components.push(c.to_string());
+        }
+    }
+    if components.len() > MAX_RUST_COMPONENTS {
+        return Err(format!("{t:?}: at most {MAX_RUST_COMPONENTS} components"));
+    }
+    components.sort();
+    Ok(Need::Rust { channel: channel.to_string(), components })
 }
 
 /// Parse an explicit list (the CLI's comma list arrives split already):
@@ -258,12 +331,40 @@ mod tests {
         assert_eq!(parse("nodejs@v20.1.0").unwrap().token(), "node@20.1.0");
         assert_eq!(parse("python").unwrap().token(), "python@latest");
         assert_eq!(parse("golang@1.23").unwrap().token(), "go@1.23");
-        assert_eq!(parse("rust").unwrap(), Need::Rust { channel: "stable".into() });
+        assert_eq!(parse("rust").unwrap(), Need::Rust { channel: "stable".into(), components: vec![] });
         assert_eq!(parse("rust@1.99").unwrap().token(), "rust@1.99");
         assert_eq!(parse("rust@nightly-2026-09-01").unwrap().token(), "rust@nightly-2026-09-01");
         assert_eq!(parse("nextest").unwrap(), Need::Nextest);
         assert_eq!(parse("sys:libssl-dev").unwrap(), Need::System { package: "libssl-dev".into() });
         assert_eq!(parse("aqua:cli/cli@2").unwrap().token(), "aqua:cli/cli@2");
+    }
+
+    /// CE-16 / CE-A10: components ride on the token with `+` (needs are
+    /// comma-split), sorted and unique; an unknown one is `need_invalid`
+    /// before anything queues; the plain token (and its wire form) is the
+    /// same as before, so older plans and digests don't change.
+    #[test]
+    fn rust_components_parse() {
+        let n = parse("rust@stable+rustfmt+clippy").unwrap();
+        assert_eq!(n, Need::Rust { channel: "stable".into(), components: vec!["clippy".into(), "rustfmt".into()] });
+        assert_eq!(n.token(), "rust@stable+clippy+rustfmt");
+        assert_eq!(n.key(), "rust");
+        assert_eq!(parse("rust@nightly-2026-09-01+llvm-tools-preview").unwrap().token(), "rust@nightly-2026-09-01+llvm-tools");
+        assert_eq!(parse("rust@1.99+clippy+clippy").unwrap().token(), "rust@1.99+clippy");
+        assert_eq!(parse("rust@latest+miri").unwrap().token(), "rust@stable+miri");
+        let e = parse_all(&["rust@stable+bogus"]).unwrap_err();
+        assert_eq!(e.code, NEED_INVALID);
+        assert!(e.message.contains("isn't a Rust component") && e.message.contains("clippy"), "{e}");
+        for bad in ["rust@+clippy", "rust@stable+", "rust@stable++clippy", "rust@stable+Clippy"] {
+            assert!(parse(bad).is_err(), "{bad:?} must be refused");
+        }
+        // Wire form: no `components` key without components.
+        let plain = serde_json::to_string(&parse("rust@stable").unwrap()).unwrap();
+        assert_eq!(plain, r#"{"kind":"rust","channel":"stable"}"#);
+        let old: Need = serde_json::from_str(r#"{"kind":"rust","channel":"1.99"}"#).unwrap();
+        assert_eq!(old, Need::Rust { channel: "1.99".into(), components: vec![] });
+        assert_eq!(canonical_component("llvm-tools-preview"), "llvm-tools");
+        assert!(supported_list().contains("rust@<channel>[+<component>…]"));
     }
 
     #[test]

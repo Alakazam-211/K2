@@ -58,8 +58,19 @@ use crate::crypto::{self, SigningKey};
 /// prd-compute-job-tiers-v2): `Tier::Batch`, `Plan.submitter`,
 /// `Plan.submitter_max_running`; a node offers `tiers2` only to a server
 /// that said protocol ≥ 6 and never shows an older one a Batch tier, and a
-/// server writes them only to a node offering it.
+/// server writes them only to a node offering it. Also 6 (same release,
+/// compute easy mode, prd-compute-easy-mode-0467 §3.2): no new frame and
+/// no plan field; a node does the easy-mode job work (CPU hints and a port
+/// range in the job's env, the CPU-aware stall rule, `Outputs` on every
+/// end with `tools_used` / `resources` / `host`, `Receipt.tools_used`, the
+/// new `[k2-node]` log lines) and offers its features (`tools-used`,
+/// `job-resources`, `stall-cpu`, `rust-components`, `toolchain-budget`,
+/// `cpu-hints`, `job-ports`) only for a server that said protocol ≥ 6
+/// ([`PROTOCOL_EASY`]). An older server sees its own release's frames.
 pub const PROTOCOL: u32 = 6;
+
+/// The first server protocol that gets the easy-mode job work and features.
+pub const PROTOCOL_EASY: u32 = 6;
 
 /// The first server protocol that gets the `job-cache` feature.
 pub const PROTOCOL_CACHE: u32 = 6;
@@ -669,6 +680,17 @@ pub struct SecretRefused {
 /// `Plan::stall_secs`.
 pub const FEATURE_STALL: &str = "stall";
 
+/// Offer feature (0.46.7, CE-10, D4): a stall is silent **and** CPU-idle.
+/// The node ends a job as `timeout/stalled` only when it printed nothing
+/// for `Plan::stall_secs` and its processes together used under 1% of one
+/// CPU over that window; a silent job that burns CPU keeps running and
+/// gets a `[k2-node] quiet but busy` log line every [`QUIET_BUSY_NOTE_SECS`].
+/// An older node ends on silence alone. No plan field changes.
+pub const FEATURE_STALL_CPU: &str = "stall-cpu";
+
+/// How often a quiet-but-busy job gets its log line (CE-10).
+pub const QUIET_BUSY_NOTE_SECS: u64 = 30 * 60;
+
 /// Offer feature: jobs run behind the job wall (Linux: the `k2job` user in
 /// a sandboxed systemd unit; macOS: a Seatbelt profile). A job can't read
 /// the node's key or state, or other people's home folders (0.46.3).
@@ -1255,6 +1277,12 @@ pub struct Receipt {
     /// only; absent when none, so other receipts are byte-identical.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secret_env: Vec<String>,
+    /// 0.46.7 (CE-4, `tools-used`): the versions the job's own PATH
+    /// resolved to ([`crate::results::Outputs::tools_used`]), signed.
+    /// `tools` above stays the node-wide probe. Absent when empty, so an
+    /// older node's receipts are byte-identical.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools_used: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1502,9 +1530,19 @@ mod tests {
             log: ReceiptLog { sha256: "s".into(), bytes: 3, truncated: false },
             artifacts: Vec::new(),
             secret_env: Vec::new(),
+            tools_used: BTreeMap::new(),
         };
         // Without secrets: byte-identical to a 0.46.3 receipt (SE29).
         assert!(!crate::canonical::to_string(&r).unwrap().contains("secret_env"));
+        // Without tools_used: byte-identical to a 0.46.6 receipt (CE-4);
+        // with it, signed like every other field.
+        assert!(!crate::canonical::to_string(&r).unwrap().contains("tools_used"));
+        let mut rt = r.clone();
+        rt.tools_used.insert("rustc".into(), "1.99.0".into());
+        let st = SignedReceipt::sign(&k, &rt).unwrap();
+        assert_eq!(st.verify(k.spki_der()).unwrap().tools_used.get("rustc").map(String::as_str), Some("1.99.0"));
+        let forged = SignedReceipt { body: st.body.replace("1.99.0", "1.99.1"), sig: st.sig.clone() };
+        assert!(forged.verify(k.spki_der()).is_none());
         let s = SignedReceipt::sign(&k, &r).unwrap();
         assert_eq!(s.verify(k.spki_der()).unwrap(), r);
         let tampered = SignedReceipt { body: s.body.replace("\"code\":1", "\"code\":0"), sig: s.sig.clone() };

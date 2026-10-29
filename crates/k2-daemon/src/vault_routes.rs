@@ -1937,6 +1937,11 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // item 12 (0.46.5): upgrading Sew FROM a binary K2 doesn't know,
     // accepted by its sha256 (`secretId` = `<install id>:<sha256>`).
     crate::sew::routes::CONFIRM_ACCEPT_BINARY,
+    // The emergency Sew rollback across a schema change (Rosson
+    // 2026-10-28): chat written since the upgrade leaves the live chat
+    // (`secretId` = `<install id>:<bundle>`; the card binds its own to the
+    // request id).
+    crate::sew::supervisor::CONFIRM_ROLLBACK_DATA_LOSS,
     // Clone carries vault secrets (prd-clone-carries-threads-and-vault-v1
     // §6.4, CL14): copying secrets (or sending .env files) to a clone;
     // `secretId` = `clone:<sha256(plan)>`, reason written by the daemon.

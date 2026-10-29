@@ -59505,6 +59505,15 @@ Server:
                                             (with voice: the previous release's sew-media tarball when the
                                              box doesn't keep it; the old core puts that engine back, then
                                              sew doctor's media checks are shown; exit 3 unless all is well)
+  k2 hostchat rollback --accept-data-loss [--media-tarball FILE] [--json]
+                                            (the owner, from a terminal outside K2, with a confirm: after an
+                                             upgrade that changed Sew's data, the plain rollback refuses. This
+                                             one goes back anyway: chat written since the upgrade is lost from
+                                             the live chat. K2 first backs up the current chat (restorable onto
+                                             the newer Sew later), then rolls back to the backup taken just
+                                             before the upgrade, then checks Sew is healthy. It names both
+                                             backups. An agent asks the owner on a card instead:
+                                               k2 permission request sew.rollback-data-loss --why "<why>")
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
                                             (--media-tarball: the sew-media release, needed when voice is on;
                                              waits for the result; exit 3 unless it is done)
@@ -59876,6 +59885,52 @@ _hostchat_install_id() {
     printf '%s' "$_CP_BODY" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("installId") or "none")'
 }
 
+# k2 hostchat rollback --accept-data-loss (Rosson 2026-10-28): the
+# emergency rollback across a schema change. In a K2 terminal (an agent),
+# the daemon refuses with rollback_needs_person and its Ask-with line (the
+# owner answers on a card). Outside K2: the plan, the words, the owner's
+# confirm bound to this install and that bundle, then the rollback.
+_hostchat_rollback_data_loss() {
+    local media="$1" as_json="$2"
+    if _compute_in_session; then
+        _hostchat_call POST /cli/sew/server/rollback "$(_compute_json K2_CJ_acceptDataLoss_b=1)"
+        return 0
+    fi
+    _hostchat_call POST /cli/sew/server/rollback "$(_compute_json K2_CJ_acceptDataLoss_b=1 K2_CJ_plan_b=1)"
+    local plan="$_CP_BODY" bundle to from since
+    bundle="$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("bundle") or "")')"
+    to="$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("to") or "")')"
+    from="$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("from") or "")')"
+    since="$(printf '%s' "$plan" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("since") or "")')"
+    [ -n "$bundle" ] || { echo '{"error":"no_rollback_point","hint":"K2 found no backup to roll back to (k2 hostchat backups)"}' >&2; exit 3; }
+    {
+        echo "Roll Sew back from $from to $to."
+        echo "Chat written since $since will be lost from the live chat; a backup of it is kept."
+        echo "K2 first backs up Sew $from (restorable onto Sew $from later), then rolls back to backup $bundle (taken just before the upgrade)."
+    } >&2
+    local id tok; id="$(_hostchat_install_id)"
+    tok="$(_vault_confirm_token sew-rollback-data-loss "$id:$bundle" "Roll Sew back to $to: chat written since $since leaves the live chat (a backup of it is kept)")" || exit 3
+    K2_CP_MAX_TIME=3600 _hostchat_call POST /cli/sew/server/rollback "$(_compute_json K2_CJ_acceptDataLoss_b=1 K2_CJ_bundleId="$bundle" \
+        K2_CJ_confirmToken="$tok" K2_CJ_mediaTarballPath="$media")" tcp
+    if [ "$as_json" = "1" ]; then printf '%s\n' "$_CP_BODY"; fi
+    printf '%s' "$_CP_BODY" | K2_HC_JSON="$as_json" python3 -c '
+import json, os, sys
+v = json.load(sys.stdin)
+r = v.get("result")
+if os.environ.get("K2_HC_JSON") != "1":
+    print(v.get("message") or r or json.dumps(v))
+    for k, lbl in (("keptBackup", "kept backup"), ("bundle", "rolled back to"), ("version", "Sew now")):
+        if v.get(k):
+            print("%-16s %s" % (lbl + ":", v[k]))
+    if v.get("doctorFails"):
+        print("doctor fails:    " + ", ".join(v["doctorFails"]))
+codes = {"rolled_back": 0}
+if r not in codes:
+    print(json.dumps({"error": r or "rollback_incomplete", "hint": v.get("message") or "see the answer above"}), file=sys.stderr)
+    sys.exit(3)
+'
+}
+
 _hostchat_person() {
     if _compute_in_session; then
         echo '{"error":"person_only","hint":"a person does this from a terminal outside K2 (Touch ID or the vault password), never an agent"}' >&2
@@ -59906,7 +59961,7 @@ cmd_hostchat() {
             cmd_chat access "$_a" "$@"; return ;;
     esac
     local as_json=0 tarball="" recovery="" identity="" voice=0 voice_flag=0 voice_url="" media_tarball="" node_ip="" wait=1
-    local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" accept_binary="" print_only=0 pos=()
+    local health=0 dry=0 confirm=0 drop_grants=0 drop_prev=0 keep_backups=0 host="" public_url="" accept_binary="" print_only=0 accept_loss=0 pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=1; shift ;;
@@ -59924,6 +59979,7 @@ cmd_hostchat() {
             --drop-grants) drop_grants=1; shift ;;
             --drop-prev) drop_prev=1; shift ;;
             --accept-binary) accept_binary="${2:?--accept-binary SHA256}"; shift 2 ;;
+            --accept-data-loss) accept_loss=1; shift ;;
             --keep-backups) keep_backups=1; shift ;;
             --confirm-hostname) host="${2:?--confirm-hostname HOST}"; shift 2 ;;
             --public-url) public_url="${2:?--public-url https://HOST}"; shift 2 ;;
@@ -59953,6 +60009,10 @@ cmd_hostchat() {
                 exit 2 ;;
         esac
     fi
+    if [ "$accept_loss" = "1" ] && [ "$sub" != "rollback" ]; then
+        echo '{"error":"usage","hint":"--accept-data-loss only applies to k2 hostchat rollback"}' >&2
+        exit 2
+    fi
     abs() { case "$1" in ""|/*) printf '%s' "$1" ;; *) printf '%s/%s' "$PWD" "$1" ;; esac; }
     case "$sub" in
         status)
@@ -59980,6 +60040,10 @@ cmd_hostchat() {
             _hostchat_print enable "$as_json" ;;
         disable) _hostchat_call POST /cli/sew/server/disable "{}"; _hostchat_print disable "$as_json" ;;
         rollback)
+            if [ "$accept_loss" = "1" ]; then
+                _hostchat_rollback_data_loss "$(abs "$media_tarball")" "$as_json"
+                return $?
+            fi
             _hostchat_call POST /cli/sew/server/rollback "$(_compute_json K2_CJ_mediaTarballPath="$(abs "$media_tarball")")"
             _hostchat_print rollback "$as_json"
             printf '%s' "$_CP_BODY" | python3 -c '

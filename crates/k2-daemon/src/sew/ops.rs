@@ -950,6 +950,9 @@ pub mod fake {
             );
         }
 
+        /// The bundle the fake `engine sew upgrade` says it took first.
+        pub const FAKE_PRE_BUNDLE: &str = "20251231T120000Z";
+
         fn sew_exit(code: i64, sew: Value) -> Value {
             json!({"sewExit": code, "sew": sew, "stderrTail": ""})
         }
@@ -1089,7 +1092,8 @@ pub mod fake {
                         return Ok(Self::sew_exit(0, json!({"state": "upgraded", "from": upgrade_only_builds()[0].version, "to": pin})));
                     }
                     *self.on_disk.lock().unwrap() = Some(pin.into());
-                    Self::sew_exit(0, json!({"state": "upgraded", "from": from, "to": pin}))
+                    // Sew names the bundle it took before the swap.
+                    Self::sew_exit(0, json!({"state": "upgraded", "from": from, "to": pin, "pre_bundle": Self::FAKE_PRE_BUNDLE}))
                 }
                 a if a.starts_with("engine sew upgrade accept-binary ") => {
                     if *self.helper_no_accept.lock().unwrap() {
@@ -1109,6 +1113,16 @@ pub mod fake {
                     Self::sew_exit(0, json!({"state": "upgraded", "to": pin}))
                 }
                 "engine sew rollback" => Self::sew_exit(0, json!({"state": "rolled_back", "from": pin, "to": "0.0.1"})),
+                // The emergency rollback across a schema change: back on
+                // the previous release, Sew's upgrade-state beside it.
+                a if a.starts_with("engine sew rollback accept-data-loss ") => {
+                    let bundle = a.rsplit(' ').next().unwrap_or("").to_string();
+                    *self.on_disk.lock().unwrap() = Some("0.0.1".into());
+                    let mut v = Self::sew_exit(0, json!({"state": "rolled_back", "from": pin, "to": "0.0.1"}));
+                    v["bundle"] = json!(bundle);
+                    v["upgradeState"] = json!({"state": "rolled_back", "to": "0.0.1"});
+                    v
+                }
                 "engine sew uninstall" => {
                     // The real helper never runs an unrecognised binary.
                     if self.on_disk.lock().unwrap().as_deref() == Some("unknown") {

@@ -668,3 +668,66 @@ fn accept_binary_is_the_owners_with_a_confirm_bound_to_that_sha() {
     let _ = up(&Who::Owner, Some(UNKNOWN_SHA), Some(tok.clone()));
     assert_eq!(code(&up(&Who::Owner, Some(UNKNOWN_SHA), Some(tok)).1), "owner_confirm_required");
 }
+
+/// Rosson 2026-10-28: the emergency rollback across a schema change is the
+/// owner's, with a confirm bound to this install and the plan's bundle.
+/// An agent (or a K2 terminal) is refused with `rollback_needs_person`
+/// (the card's wall) and told where it would go; the plan is a read.
+#[test]
+fn the_emergency_rollback_is_the_owners_with_a_confirm_bound_to_the_bundle() {
+    use crate::sew::ops::SewOps;
+    let t = t();
+    t.enable();
+    // As after an upgrade from 0.0.1: the previous version and the point.
+    crate::sew::store::update(1, |r| r.previous_version = Some("0.0.1".into())).unwrap();
+    let bundle = "20251231T120000Z";
+    t.ops
+        .record_save(
+            crate::sew::supervisor::ROLLBACK_POINT_RECORD,
+            Some(&json!({"from": "0.0.1", "to": k2_root_proto::sew::pinned().version, "bundle": bundle, "at": 1})),
+        )
+        .unwrap();
+    let mut st = crate::sew::ops::fake::helper_ok(11, true, k2_root_proto::sew::pinned().version);
+    st.version_json.as_mut().unwrap()["namespaces"]["sewrbloss"] = json!(true);
+    *t.ops.helper.lock().unwrap() = st;
+    t.ops.clear();
+    let ran = || t.ops.effects().iter().any(|e| e.contains("accept-data-loss"));
+    let rb = |who: &Who, b: Value| t.call(who, "/cli/sew/server/rollback", b);
+    assert!(is_post_route("/cli/sew/server/rollback"), "POST only (405 on GET before auth)");
+
+    // The plan: a read for whoever manages Sew; nothing runs.
+    let (st, v) = rb(&agent("w-it"), json!({"acceptDataLoss": true, "plan": true}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!((v["bundle"].as_str(), v["to"].as_str(), v["since"].as_str()), (Some(bundle), Some("0.0.1"), Some("2025-12-31 12:00 UTC")));
+    // An agent with Manage Sew, a K2 terminal: the card's wall, with where.
+    for who in [agent("w-it"), shell("w-it")] {
+        let (st, v) = rb(&who, json!({"acceptDataLoss": true, "bundleId": bundle, "confirmToken": "k2vc_x"}));
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "rollback_needs_person"), "{who:?}: {v}");
+        assert_eq!((v["error"]["to"].as_str(), v["error"]["bundle"].as_str()), (Some("0.0.1"), Some(bundle)), "{v}");
+        assert!(v["error"]["hint"].as_str().unwrap().contains("k2 hostchat rollback --accept-data-loss"), "{v}");
+    }
+    // Without Manage Sew: the switch first.
+    assert_eq!(code(&rb(&agent("w-plain"), json!({"acceptDataLoss": true})).1), "chat_manage_off");
+    let vault = crate::vault::ensure_test_vault();
+    let tok = |b: &str, stamp: &str| {
+        vault.confirm.mint(crate::sew::supervisor::CONFIRM_ROLLBACK_DATA_LOSS, Some(&rollback_secret_id(b)), stamp, "vault-password")
+    };
+    // An admin login with its own confirm: the owner's alone.
+    let (st, v) = rb(&login(Role::Admin), json!({"acceptDataLoss": true, "bundleId": bundle, "confirmToken": tok(bundle, "connect:ana")}));
+    assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "owner_only"), "{v}");
+    // The owner: no bundle (400), no confirm, a confirm for another bundle.
+    assert_eq!(code(&rb(&Who::Owner, json!({"acceptDataLoss": true})).1), "bad_request");
+    assert_eq!(code(&rb(&Who::Owner, json!({"acceptDataLoss": true, "bundleId": bundle})).1), "owner_confirm_required");
+    let other = tok("20200101T000000Z", "owner");
+    assert_eq!(code(&rb(&Who::Owner, json!({"acceptDataLoss": true, "bundleId": bundle, "confirmToken": other})).1), "owner_confirm_required");
+    // Confirmed for another bundle than the plan's: the point moved.
+    let (st, v) = rb(&Who::Owner, json!({"acceptDataLoss": true, "bundleId": "20200101T000000Z", "confirmToken": tok("20200101T000000Z", "owner")}));
+    assert_eq!((st.as_str(), code(&v)), ("409 Conflict", "rollback_point_changed"), "{v}");
+    assert!(!ran(), "{:?}", t.ops.effects());
+    // The owner, confirmed for exactly that bundle: rolled back.
+    let (st, v) = rb(&Who::Owner, json!({"acceptDataLoss": true, "bundleId": bundle, "confirmToken": tok(bundle, "owner")}));
+    assert_eq!(st, "200 OK", "{v}");
+    assert_eq!((v["result"].as_str(), v["confirmedBy"].as_str()), (Some("rolled_back"), Some("vault-password")), "{v}");
+    assert!(ran());
+    assert!(v["keptBackup"].as_str().is_some_and(|k| !k.is_empty()), "{v}");
+}

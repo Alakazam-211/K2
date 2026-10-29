@@ -244,11 +244,21 @@ pub enum ConfirmAction {
     /// card `sew.owner-handoff`); bound to the request id.
     #[serde(rename = "chat-owner-handoff")]
     ChatOwnerHandoff,
+    /// The emergency Sew rollback across a schema change (Rosson
+    /// 2026-10-28, the card `sew.rollback-data-loss`); bound to the request
+    /// id.
+    #[serde(rename = "sew-rollback-data-loss")]
+    SewRollbackDataLoss,
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 4] =
-        [ConfirmAction::AppApprove, ConfirmAction::NodeAdmin, ConfirmAction::VaultMove, ConfirmAction::ChatOwnerHandoff];
+    pub const ALL: [ConfirmAction; 5] = [
+        ConfirmAction::AppApprove,
+        ConfirmAction::NodeAdmin,
+        ConfirmAction::VaultMove,
+        ConfirmAction::ChatOwnerHandoff,
+        ConfirmAction::SewRollbackDataLoss,
+    ];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
     pub fn as_str(self) -> &'static str {
@@ -257,6 +267,7 @@ impl ConfirmAction {
             ConfirmAction::NodeAdmin => "node-admin",
             ConfirmAction::VaultMove => "vault-move",
             ConfirmAction::ChatOwnerHandoff => "chat-owner-handoff",
+            ConfirmAction::SewRollbackDataLoss => "sew-rollback-data-loss",
         }
     }
 }
@@ -626,9 +637,9 @@ mod tests {
     }
 
     #[test]
-    fn the_card_confirms_are_app_approve_node_admin_vault_move_and_the_sew_owner_handoff() {
+    fn the_card_confirms_are_app_approve_node_admin_vault_move_and_the_two_sew_ones() {
         let names: Vec<&str> = ConfirmAction::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names, ["app-approve", "node-admin", "vault-move", "chat-owner-handoff"]);
+        assert_eq!(names, ["app-approve", "node-admin", "vault-move", "chat-owner-handoff", "sew-rollback-data-loss"]);
         for c in ConfirmAction::ALL {
             assert_eq!(serde_json::to_value(c).unwrap(), serde_json::Value::String(c.as_str().to_string()));
         }

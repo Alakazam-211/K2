@@ -13,7 +13,7 @@
 //! | `gardens.rs` | E1, Garden access A4 | `garden.keep-mine`; `garden.access` (+ `-off`), `garden.delete` |
 //! | `held.rs` | E2 | `apps.approve`, `mail.approve`, `garden.proposal.approve`, `sources.approve` |
 //! | `compute.rs` | E2 | `compute.admin-approve` (cut if late) |
-//! | `sew.rs` | Sew (Rosson 2026-10-28) | `sew.owner-handoff` |
+//! | `sew.rs` | Sew (Rosson 2026-10-28) | `sew.owner-handoff`, `sew.rollback-data-loss` |
 //! | `harness.rs` | 0.46.6 | `agent.harness-switch` (move the pinned chat to another harness) |
 //! | `vault.rs` | 0.46.6 | `vault.delivery` (let the agent read one of its secrets as file or env) |
 //! | `heartbeats.rs` | 0.46.6 | `heartbeat.pause-other`, `heartbeat.resume-other` (another workspace's heartbeat) |

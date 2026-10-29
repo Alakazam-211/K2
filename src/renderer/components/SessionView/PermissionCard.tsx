@@ -265,9 +265,15 @@ export function PermissionNoteBox({
 
 type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string }
 
+type CardConfirmAction = 'app-approve' | 'node-admin' | 'vault-move' | 'chat-owner-handoff' | 'sew-rollback-data-loss'
+
 /** The vault confirm actions a permission card may ask for (§17.4). */
-function confirmActionOf(action: string | undefined): 'app-approve' | 'node-admin' | 'vault-move' | 'chat-owner-handoff' | null {
-  return action === 'app-approve' || action === 'node-admin' || action === 'vault-move' || action === 'chat-owner-handoff'
+function confirmActionOf(action: string | undefined): CardConfirmAction | null {
+  return action === 'app-approve' ||
+    action === 'node-admin' ||
+    action === 'vault-move' ||
+    action === 'chat-owner-handoff' ||
+    action === 'sew-rollback-data-loss'
     ? action
     : null
 }

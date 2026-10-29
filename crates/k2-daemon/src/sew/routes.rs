@@ -256,6 +256,61 @@ pub fn need_person(who: &Who, body: &Value, action: &str, secret_id: &str, floor
     }
 }
 
+/// An agent's refusal of the emergency rollback: the card's wall
+/// (`sew.rollback-data-loss`), with where it would go.
+pub const ROLLBACK_NEEDS_PERSON: &str = "rollback_needs_person";
+
+/// The confirm a person's emergency rollback is bound to: this install and
+/// that bundle.
+pub fn rollback_secret_id(bundle: &str) -> String {
+    format!("{}:{bundle}", confirm_secret_id())
+}
+
+/// `POST /cli/sew/server/rollback {acceptDataLoss: true, …}` (Rosson
+/// 2026-10-28): the emergency rollback across a schema change.
+/// - `plan: true`: where it would go (`{from, to, bundle, since}`), for
+///   whoever may roll back (Manage Sew); nothing changes.
+/// - an agent (or a K2 terminal): 403 [`ROLLBACK_NEEDS_PERSON`], whose
+///   error ends with the card's Ask-with line; the owner answers there.
+/// - the owner (token or Owner login) with `bundleId` (the plan's) and a
+///   fresh vault confirm bound to `<install id>:<bundle>`: runs it.
+fn rollback_accept_data_loss(env: &Env, who: &Who, v: &Value, req: &sup::RollbackRequest) -> R<Value> {
+    if b(v, "plan") {
+        need_manage(who)?;
+        return sup::rollback_plan(env);
+    }
+    if who.passport().is_some() {
+        need_manage(who)?;
+        let plan = sup::rollback_plan(env).ok();
+        let mut f = no(
+            ROLLBACK_NEEDS_PERSON,
+            403,
+            "a person rolls Sew back across a schema change (chat written since the upgrade leaves the live chat; K2 backs \
+             it up first): the owner runs k2 hostchat rollback --accept-data-loss from a terminal outside K2, or answers \
+             your permission card",
+        );
+        f.extra = plan.map(|p| json!({"to": p["to"], "since": p["since"], "bundle": p["bundle"]}));
+        return Err(f);
+    }
+    let bundle = s(v, "bundleId")
+        .filter(|x| k2_root_proto::sew::bundle_id_ok(x))
+        .ok_or_else(|| no("bad_request", 400, "name the rollback point: bundleId from the plan (acceptDataLoss + plan: true)"))?;
+    let audit = |outcome: &str| {
+        crate::vault::auth_audit(sup::CONFIRM_ROLLBACK_DATA_LOSS, &who.label(), &format!("{outcome} bundle={bundle}"), "cli")
+    };
+    let method = match need_person(who, v, sup::CONFIRM_ROLLBACK_DATA_LOSS, &rollback_secret_id(bundle), PersonFloor::Owner) {
+        Ok(m) => m,
+        Err(f) => {
+            audit(&format!("refused {}", f.code));
+            return Err(f);
+        }
+    };
+    audit(&format!("confirmed via {method}"));
+    let mut r = sup::rollback_accept_data_loss(env, req, bundle)?;
+    r["confirmedBy"] = json!(method);
+    Ok(r)
+}
+
 fn vault() -> Result<std::sync::Arc<k2_vault::LocalVault>, String> {
     #[cfg(test)]
     return Ok(crate::vault::ensure_test_vault());
@@ -625,9 +680,13 @@ fn route(env: Env<'static>, path: &str, who: &Who, body: &[u8], params: &HashMap
             }
         }
         "/cli/sew/server/rollback" => {
-            need_manage(who)?;
             let v = json_body(body)?;
-            sup::rollback_with(&env, &sup::RollbackRequest { media_tarball_path: abs_path(&v, "mediaTarballPath")? })
+            let req = sup::RollbackRequest { media_tarball_path: abs_path(&v, "mediaTarballPath")? };
+            if !b(&v, "acceptDataLoss") {
+                need_manage(who)?;
+                return sup::rollback_with(&env, &req);
+            }
+            rollback_accept_data_loss(&env, who, &v, &req)
         }
         "/cli/sew/server/backup" => {
             need_manage(who)?;

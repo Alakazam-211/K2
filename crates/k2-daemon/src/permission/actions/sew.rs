@@ -70,6 +70,47 @@ pub(crate) static OWNER_HANDOFF: ActionSpec = ActionSpec {
     machine_hints: &[],
 };
 
+/// The card's route wall: an agent's call to the emergency rollback.
+pub(crate) const ROLLBACK_ROUTE: &str = "/cli/sew/server/rollback";
+
+/// `sew.rollback-data-loss` (Rosson 2026-10-28): a "Manage Sew" agent asks
+/// for Sew to be rolled back across a schema change (after an upgrade that
+/// changed Sew's data, e.g. 0.3.1 → 0.5.0). Only the Owner answers, with a
+/// confirm bound to this request. On Allow K2 runs the same steps as
+/// `k2 hostchat rollback --accept-data-loss`: a backup of today's chat
+/// first, then Sew's rollback to the pre-upgrade backup, then K2's checks.
+/// `{to}`, `{since}` and `{from}` are K2's own values ([`with_computed`]),
+/// never the agent's.
+pub(crate) static ROLLBACK_DATA_LOSS: ActionSpec = ActionSpec {
+    id: "sew.rollback-data-loss",
+    area: Area::Sew,
+    params: &[],
+    floor: Floor::Owner,
+    direction: Direction::Loosen,
+    grant: Grant::OneTime,
+    proof: Proof::SettingsConfirm { action: ConfirmAction::SewRollbackDataLoss },
+    expiry: Expiry { default_secs: 24 * 3600, max_secs: MAX_EXPIRY_SECS },
+    words: Words {
+        setting: "Roll Sew back",
+        what_changes: "Roll this server's chat (Sew) back from {from} to {to}",
+        consequences: "Chat written since {since} will be lost from the live chat; a backup of it is kept. K2 backs up Sew \
+            first (restorable onto Sew {from} later), then everyone's chat is as it was at {since}.",
+        scope: "this server's chat, for everyone",
+        duration: "once",
+        retry: "",
+    },
+    undo: Undo::None,
+    settings: SettingsRef { page: "sew", path: "k2 hostchat rollback --accept-data-loss (a terminal outside K2)" },
+    walls: &[Wall {
+        matches: WallMatch::Code { status: 403, code: crate::sew::routes::ROLLBACK_NEEDS_PERSON },
+        route_prefix: ROLLBACK_ROUTE,
+        method: WallMethod::Post,
+        params: &[],
+    }],
+    coverage: WallCoverage::Code,
+    machine_hints: &[],
+};
+
 #[cfg(test)]
 pub(crate) mod test_seams {
     use std::cell::RefCell;
@@ -79,6 +120,124 @@ pub(crate) mod test_seams {
         pub(crate) static APP_URL: RefCell<Option<String>> = const { RefCell::new(None) };
         /// The one confirm a test minted: `(token, secret, stamp)`.
         pub(crate) static CONFIRM: RefCell<Option<(String, String, String)>> = const { RefCell::new(None) };
+        /// `Some(plan)`: the rollback plan for this thread (no Sew install).
+        pub(crate) static PLAN: RefCell<Option<Result<serde_json::Value, String>>> = const { RefCell::new(None) };
+        /// The bundles a test's Allow rolled back to (instead of running it).
+        pub(crate) static RAN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+}
+
+/// Where the emergency rollback would go (`crate::sew::supervisor::rollback_plan`).
+fn rollback_plan() -> Result<serde_json::Value, String> {
+    #[cfg(test)]
+    if let Some(p) = test_seams::PLAN.with(|c| c.borrow().clone()) {
+        return p;
+    }
+    crate::sew::supervisor::rollback_plan(&crate::sew::supervisor::live()).map_err(|f| f.hint)
+}
+
+/// The words hook (`permission::present`): K2's `{from}`, `{to}` and
+/// `{since}` for this card (the rollback plan now), never the agent's.
+pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
+    if action != ROLLBACK_DATA_LOSS.id {
+        return None;
+    }
+    let plan = rollback_plan().ok();
+    let get = |k: &str, dflt: &str| plan.as_ref().and_then(|p| p[k].as_str()).unwrap_or(dflt).to_string();
+    let mut out = ctx.clone();
+    out.params.insert("from".into(), json!(get("from", "the current version")));
+    out.params.insert("to".into(), json!(get("to", "the previous version")));
+    out.params.insert("since".into(), json!(get("since", "the last Sew upgrade")));
+    Some(out)
+}
+
+/// Still wanted: the asking workspace has "Manage Sew" and there is a
+/// rollback point.
+fn check_rollback(ctx: &Ctx) -> Check {
+    if !k2_core::workspace::settings::agents_can_manage_chat(&ctx.workspace_id) {
+        return Check::Unavailable {
+            code: "chat_manage_off",
+            why: format!("\"Manage Sew\" is off for {}: only an agent that manages Sew may ask", ctx.workspace_handle),
+        };
+    }
+    match rollback_plan() {
+        Ok(_) => Check::Needed,
+        Err(why) => Check::Moved(why),
+    }
+}
+
+/// Take the card's confirm (`sew-rollback-data-loss`, bound to this
+/// request) as the person who answered.
+fn take_rollback(token: &str, secret: &str, stamp: &str) -> Result<String, k2_vault::VaultError> {
+    #[cfg(test)]
+    {
+        let ok = test_seams::CONFIRM.with(|c| c.borrow_mut().take()).is_some_and(|(t, s, st)| t == token && s == secret && st == stamp);
+        return if ok { Ok("local-auth".into()) } else { Err(k2_vault::VaultError::forbidden("vault_confirm_required", "confirm again")) };
+    }
+    #[cfg(not(test))]
+    {
+        let v = crate::vault::get()?;
+        match v.confirm.take(token, crate::sew::supervisor::CONFIRM_ROLLBACK_DATA_LOSS, Some(secret), stamp)? {
+            k2_vault::HumanProof::Confirmed { method } => Ok(method),
+            k2_vault::HumanProof::None => Err(k2_vault::VaultError::forbidden("vault_confirm_required", "confirm again")),
+        }
+    }
+}
+
+/// Start the rollback (it takes minutes: a backup, Sew's rollback, K2's
+/// checks); `k2 hostchat status` shows how it ended.
+fn start_rollback(bundle: &str, who: &str) {
+    #[cfg(test)]
+    {
+        let _ = who;
+        test_seams::RAN.with(|c| c.borrow_mut().push(bundle.to_string()));
+    }
+    #[cfg(not(test))]
+    {
+        let (bundle, who) = (bundle.to_string(), who.to_string());
+        let spawned = std::thread::Builder::new().name("sew-rollback".into()).spawn(move || {
+            let env = crate::sew::supervisor::live();
+            let req = crate::sew::supervisor::RollbackRequest { media_tarball_path: None };
+            match crate::sew::supervisor::rollback_accept_data_loss(&env, &req, &bundle) {
+                Ok(r) => k2_core::log_debug!("[sew] card rollback by {who}: {}", r["result"]),
+                Err(f) => k2_core::log_debug!("[sew] card rollback by {who} refused: {} {}", f.code, f.hint),
+            }
+        });
+        if let Err(e) = spawned {
+            k2_core::log_debug!("[sew] card rollback: could not start: {e}");
+        }
+    }
+}
+
+/// On Allow: the confirm for this request, then the same steps as
+/// `k2 hostchat rollback --accept-data-loss`, as the owner who answered.
+fn apply_rollback(_ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
+    let Some(token) = token else {
+        return Applied::Refused { code: "vault_confirm_required".into(), message: "confirm it's you first".into() };
+    };
+    let Some(secret) = super::super::answer::current_request() else {
+        return Applied::Refused { code: "failed".into(), message: "no request is being answered".into() };
+    };
+    let stamp = who.stamp();
+    if let Err(e) = take_rollback(token, &secret, &stamp) {
+        return Applied::Refused { code: e.code.to_string(), message: e.hint };
+    }
+    let plan = match rollback_plan() {
+        Ok(p) => p,
+        Err(why) => return Applied::Refused { code: "no_rollback_point".into(), message: why },
+    };
+    let Some(bundle) = plan["bundle"].as_str().filter(|b| k2_root_proto::sew::bundle_id_ok(b)) else {
+        return Applied::Refused { code: "no_rollback_point".into(), message: "K2 has no rollback point for Sew".into() };
+    };
+    crate::vault::auth_audit(crate::sew::supervisor::CONFIRM_ROLLBACK_DATA_LOSS, &stamp, &format!("card confirmed bundle={bundle}"), "card");
+    start_rollback(bundle, &stamp);
+    Applied::Done {
+        message: format!(
+            "Sew is rolling back to {} (chat written since {} leaves the live chat; K2 backs it up first). k2 hostchat status \
+             shows when it's done.",
+            plan["to"].as_str().unwrap_or("the previous version"),
+            plan["since"].as_str().unwrap_or("the last upgrade")
+        ),
     }
 }
 
@@ -205,7 +364,10 @@ fn apply(ctx: &Ctx, who: &Answerer, token: Option<&str>) -> Applied {
 }
 
 pub(crate) fn actions() -> Vec<Registered> {
-    vec![Registered { spec: &OWNER_HANDOFF, check, apply }]
+    vec![
+        Registered { spec: &OWNER_HANDOFF, check, apply },
+        Registered { spec: &ROLLBACK_DATA_LOSS, check: check_rollback, apply: apply_rollback },
+    ]
 }
 
 pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {

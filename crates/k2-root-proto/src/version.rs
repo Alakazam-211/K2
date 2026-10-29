@@ -66,7 +66,9 @@
 //!   `engine sew install reconfigure` (`sew install --reconfigure` after an
 //!   upgrade from Sew 0.3.0, Sew 2026-10-27) and `engine sew systemctl
 //!   reset-failed` (`k2 hostchat restart`), both under
-//!   `namespaces.sewreconf`, [`SEW_RECONFIGURE_MIN_PROTOCOL`]. Another 0.46.6 lane that needs a
+//!   `namespaces.sewreconf`, [`SEW_RECONFIGURE_MIN_PROTOCOL`]; and `engine sew rollback
+//!   accept-data-loss <bundle>` (the person-only emergency rollback across a schema change,
+//!   Rosson 2026-10-28) under `namespaces.sewrbloss`. Another 0.46.6 lane that needs a
 //!   helper change (e.g. App custom domains' :80 listener) joins 11 here
 //!   with its own namespace flag; never 12 before 11 ships.
 //!

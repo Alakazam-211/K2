@@ -109,7 +109,7 @@ const FRONT_WHERE: &str = "the owner or an admin does this, with k2 front over S
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 37] = [
+pub(crate) const V1_ACTIONS: [&str; 38] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -159,6 +159,10 @@ pub(crate) const V1_ACTIONS: [&str; 37] = [
     // 0.46.6: pause / resume another workspace's heartbeat.
     "heartbeat.pause-other",
     "heartbeat.resume-other",
+    // 0.46.6 (Rosson 2026-10-28): the emergency Sew rollback across a
+    // schema change, for the owner (chat since the upgrade leaves the
+    // live chat; K2 backs it up first).
+    "sew.rollback-data-loss",
 ];
 
 /// `heartbeat.pause-other` / `-resume-other`: the workspace and heartbeat
@@ -196,6 +200,9 @@ pub(crate) const ROWS: &[Row] = &[
     // An agent's own call to the owner handoff: agents never become Sew's
     // install owner; the owner opens it for themselves on a card.
     row(ask("sew.owner-handoff", Floor::Owner), code(403, "owner_only"), "/cli/sew/owner-handoff", POST),
+    // An agent's (or a K2 terminal's) emergency rollback: a person rolls
+    // Sew back across a schema change; the owner answers on a card.
+    row(ask("sew.rollback-data-loss", Floor::Owner), code(403, "rollback_needs_person"), "/cli/sew/server/rollback", POST),
     // ── agents, projects ───────────────────────────────────────────────
     row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sidecar/", ANY),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
@@ -776,6 +783,7 @@ mod tests {
             // A box-move step an agent ran, held for the owner (0.46.6).
             (202, "POST", "/cli/migrate/secrets/export", vec![], None, json!({"ok":false,"status":"held","request":{"id":"mv_0123456789ab","step":"export"}}), "vault.move-approve"),
             (403, "POST", "/cli/sew/owner-handoff", vec![], None, json!({"ok":false,"error":{"code":"owner_only","hint":"agents never get Sew's install owner; ask a person to open Sew as owner"}}), "sew.owner-handoff"),
+            (403, "POST", "/cli/sew/server/rollback", vec![], Some(json!({"acceptDataLoss":true})), json!({"ok":false,"error":{"code":"rollback_needs_person","hint":"a person rolls Sew back","to":"0.3.1","since":"2026-10-28 23:08 UTC","bundle":"20261028T230805Z"}}), "sew.rollback-data-loss"),
             // App users (0225): the skin-manage door's refusal on a user route.
             (403, "POST", "/cli/skin/users/password", vec![], None, json!({"ok":false,"error":{"code":"app_users_off"}}), "apps.manage-users"),
             // Garden access (A2's refusals, prd-garden-access-v1 G11–G12).
@@ -1050,7 +1058,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 37);
+        assert_eq!(V1_ACTIONS.len(), 38);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

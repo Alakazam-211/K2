@@ -20,11 +20,14 @@
 #      them (option a);
 #   4. `engine sew install reconfigure` (protocol 11) runs over the 0.5.0
 #      install and Sew comes back healthy;
-#   5. `engine sew rollback` (`sew upgrade --rollback`, never
-#      `--accept-data-loss-since`): either Sew rolls back to a healthy 0.3.1
-#      with the member, and the NEW helper upgrades it again; or Sew refuses
-#      for the schema change and 0.5.0 stays healthy with its data. The run
-#      prints which; anything else fails.
+#   5. the plain `engine sew rollback` (never `--accept-data-loss-since`) is
+#      refused across the schema change (exit 3) and 0.5.0 stays healthy;
+#   6. an agent writes a message on 0.5.0 (act-as on the mgmt socket);
+#   7. the emergency rollback, in K2's order (Rosson 2026-10-28): a mgmt
+#      backup of 0.5.0 first, then `engine sew rollback accept-data-loss
+#      <the pre-upgrade bundle Sew named at upgrade>`, then 0.3.1 healthy,
+#      doctor 0 fail, the pre-upgrade data back, what was written on 0.5.0
+#      gone from the live chat, and the 0.5.0 backup kept.
 # A fake daemon (bash, user k2, k2-daemon.service) runs every helper call as
 # the daemon would (`sudo -n …` from its main process). A loopback JWKS
 # (an EC P-256 key, as K2's chat-pass keyring) stands in for the daemon's
@@ -204,6 +207,9 @@ must "stage 0.5.0" "@$T050" engine sew stage
 must "upgrade" engine sew upgrade
 echo "    upgrade: $(jq -c '{sewExit, from, to, source, sew}' "$OUT" | head -c 600)"
 [ "$(jq -r .from "$OUT")" = 0.3.1 ] && [ "$(jq -r .to "$OUT")" = 0.5.0 ] || fail "upgrade from/to: $(cat "$OUT")"
+# What K2 records as the rollback point (supervisor::ROLLBACK_POINT_RECORD).
+PRE_BUNDLE="$(jq -r '.sew.pre_bundle // empty' "$OUT")"
+[ -n "$PRE_BUNDLE" ] || fail "Sew's upgrade answer names its pre-upgrade bundle (pre_bundle): $(cat "$OUT")"
 wait_version 0.5.0
 mg GET /mgmt/v1/status; ST="$MB"
 [ "$(jq -r .install_id <<<"$ST")" = "$INSTALL_ID" ] || fail "same install after the upgrade: $ST"
@@ -286,26 +292,73 @@ must "doctor" engine sew doctor
 echo "    doctor: $(jq -c '.sew.summary // .summary // {sewExit}' "$OUT" | head -c 300)"
 ok "reconfigured; healthy; data kept"
 
-echo "== 5. engine sew rollback (K2 never passes --accept-data-loss-since) =="
+echo "== 5. the plain rollback refuses across the schema change =="
 req engine sew rollback
-echo "    rollback: rc $RC $(jq -c '{sewExit, sew, stderrTail}' "$OUT" 2>/dev/null | head -c 1200) $ERR"
-SE="$(jq -r '.sewExit // "none"' "$OUT" 2>/dev/null || echo none)"
-if [ "$RC" = 0 ] && [ "$SE" = 0 ]; then
-	wait_version 0.3.1
-	mg GET "/mgmt/v1/principals?external_id=$P1&limit=1"; LIST="$MB"
-	[ "$(jq -r '.items[0].member_id' <<<"$LIST")" = "$M1" ] || fail "member after rollback: $LIST"
-	ok "ROLLBACK: Sew is back on a healthy 0.3.1 with the member"
-	must "stage 0.5.0 again" "@$T050" engine sew stage
-	must "re-upgrade" engine sew upgrade
-	wait_version 0.5.0
-	ok "re-upgraded to 0.5.0"
-	echo "RESULT rollback=rolled_back"
-else
-	# Sew refused (the schema moved 930003 → 951201): nothing may change.
-	wait_version 0.5.0
-	mg GET "/mgmt/v1/principals?external_id=$P1&limit=1"; LIST="$MB"
-	[ "$(jq -r '.items[0].member_id' <<<"$LIST")" = "$M1" ] || fail "member after a refused rollback: $LIST"
-	ok "ROLLBACK REFUSED by Sew (exit $SE); 0.5.0 still healthy with its data"
-	echo "RESULT rollback=refused sewExit=$SE"
-fi
+echo "    rollback: rc $RC $(jq -c '{sewExit, sew}' "$OUT" 2>/dev/null | head -c 600) $ERR"
+[ "$RC" = 0 ] && [ "$(jq -r .sewExit "$OUT")" = 3 ] || fail "the plain rollback is refused (exit 3): rc $RC $(head -c 800 "$OUT")"
+jq -r '.sew.error.message // ""' "$OUT" | grep -q "accept-data-loss-since" || fail "Sew's refusal names --accept-data-loss-since: $(cat "$OUT")"
+wait_version 0.5.0
+mg GET "/mgmt/v1/principals?external_id=$P1&limit=1"
+[ "$(jq -r '.items[0].member_id' <<<"$MB")" = "$M1" ] || fail "member after a refused rollback: $MB"
+ok "a plain rollback is refused (exit 3) and 0.5.0 stays healthy with its data"
+
+echo "== 6. a message written on 0.5.0 =="
+AID="$(cat /proc/sys/kernel/random/uuid)"
+A="k2:workspace:$AID"
+mg POST /mgmt/v1/principals/provision "$(printf '{"external_id":"%s","kind":"agent","agent_kind":"coworker","guest":false,"profile":{"display_name":"K2 IT bot","username":"k2itbot"}}' "$A")"
+[ "$MS" = 200 ] || fail "provision the writing agent: $MS $MB"
+mg POST /mgmt/v1/spaces/create "$(printf '{"slug":"k2it-msgs","name":"K2 IT messages","owner":"k2:owner","managers":["%s"],"app_id":"k2it-msg"}' "$A")"
+case "$MS" in 200|201) ;; *) fail "a Space for the message: $MS $MB" ;; esac
+MSPACE="$(jq -r '.space_id' <<<"$MB")"
+mg POST /mgmt/v1/channels/create "$(printf '{"space_id":"%s","app_id":"k2it-msg","slug":"general","name":"General","private":false,"members":["%s"]}' "$MSPACE" "$A")"
+[ "$MS" = 200 ] || fail "a channel for the message: $MS $MB"
+CH="$(jq -r .channel_id <<<"$MB")"
+VIA="k2; agent=$AID; k2_session=k2it-1"
+OUTM="$(runuser -u k2 -- curl -sS --unix-socket "$SOCK" -H "Authorization: Bearer $TOK" -H "Sew-Act-As: $A" -H "Sew-Via: $VIA" \
+	-H "Idempotency-Key: k2it-msg-1" -H 'Content-Type: application/json' -X POST -d '{"body":"written on 0.5.0, lost by the rollback"}' \
+	-w '\n%{http_code}' "http://sew/api/v1/channels/$CH/messages" 2>&1 || true)"
+[ "${OUTM##*$'\n'}" = 200 ] || [ "${OUTM##*$'\n'}" = 201 ] || fail "post a message as the agent: $OUTM"
+MID="$(jq -r .id <<<"${OUTM%$'\n'*}")"
+ok "message $MID written on 0.5.0 (channel $CH)"
+
+echo "== 7. the emergency rollback, in K2's order =="
+must "helper version (rollback verb)" helper version
+[ "$(jq -r .namespaces.sewrbloss "$OUT")" = true ] || fail "the new helper serves the emergency rollback: $(cat "$OUT")"
+# 1. Back up 0.5.0 first (the mgmt backup job, as the daemon does).
+mg POST /mgmt/v1/backup '{}'
+[ "$MS" = 200 ] || [ "$MS" = 202 ] || fail "start the backup: $MS $MB"
+JOB="$(jq -r .job_id <<<"$MB")"
+KEPT=""
+for _ in $(seq 1 600); do
+	mg GET "/mgmt/v1/jobs/$JOB"
+	case "$(jq -r .state <<<"$MB")" in
+		succeeded) KEPT="$(jq -r .result.id <<<"$MB")"; break ;;
+		failed|dead) fail "the backup job failed: $MB" ;;
+	esac
+	sleep 1
+done
+[ -n "$KEPT" ] || fail "the backup job never finished: $MB"
+ok "0.5.0 backed up first: $KEPT"
+# 2.-3. Back to the pre-upgrade bundle, accepting the loss since it.
+req engine sew rollback accept-data-loss "$PRE_BUNDLE"
+echo "    emergency rollback: rc $RC $(jq -c '{sewExit, bundle, upgradeState, sew}' "$OUT" 2>/dev/null | head -c 1200) $ERR"
+[ "$RC" = 0 ] && [ "$(jq -r .sewExit "$OUT")" = 0 ] || fail "the emergency rollback: rc $RC $(head -c 1500 "$OUT")"
+[ "$(jq -r .bundle "$OUT")" = "$PRE_BUNDLE" ] || fail "it rolled back to the recorded bundle: $(cat "$OUT")"
+# 4. K2's checks: healthy on 0.3.1, doctor 0 fail.
+wait_version 0.3.1
+must "doctor after the rollback" engine sew doctor
+FAILS="$(jq -r '[.sew.checks[]? | select(.status == "fail") | .id] | join(",")' "$OUT")"
+[ -z "$FAILS" ] || fail "sew doctor reports failures after the rollback: $FAILS"
+ok "Sew is back on a healthy 0.3.1; doctor 0 fail"
+mg GET "/mgmt/v1/principals?external_id=$P1&limit=1"
+[ "$(jq -r '.items[0].member_id' <<<"$MB")" = "$M1" ] || fail "the pre-upgrade member is back: $MB"
+[ "$(jq -r '.items[0].install_role' <<<"$MB")" != guest ] || fail "its pre-upgrade role (not the guest flip made on 0.5.0): $MB"
+mg GET "/mgmt/v1/principals?external_id=$A&limit=1"
+[ "$(jq -r '.items | length' <<<"$MB")" = 0 ] || fail "the agent written on 0.5.0 is gone from the live chat: $MB"
+ok "pre-upgrade data back; what was written on 0.5.0 (the agent, its Space and message) is gone from the live chat"
+[ -d "/var/lib/sew/backups/$KEPT" ] || fail "the 0.5.0 backup $KEPT is kept on disk: $(ls /var/lib/sew/backups)"
+mg GET /mgmt/v1/backups
+echo "    0.3.1 lists the kept bundle: $(jq -c --arg k "$KEPT" '[.items[] | select(.id == $k) | {id, sew_version, kind}]' <<<"$MB")"
+ok "the 0.5.0 backup $KEPT is kept (restorable onto 0.5.x later)"
+echo "RESULT rollback=emergency_rolled_back kept=$KEPT bundle=$PRE_BUNDLE"
 echo "sew upgrade (real): $pass checks passed"

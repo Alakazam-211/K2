@@ -107,6 +107,7 @@ pub fn run(ctx: &Ctx, verb: &SewVerb, stdin: &[u8], who: &Caller) -> HResult<J> 
             }
             Ok(out)
         }
+        SewVerb::RollbackAcceptDataLoss(bundle) => rollback_accept_data_loss(ctx, bundle),
         SewVerb::Uninstall => {
             require_known(ctx)?;
             run_sew(ctx, &["uninstall"], None)
@@ -528,6 +529,43 @@ fn binary_sha(ctx: &Ctx, abs: &str) -> HResult<Option<String>> {
 
 /// Sew's kept previous binary (`sew upgrade --rollback` swaps it in).
 pub(crate) const SEW_PREV_BIN: &str = "/usr/local/lib/sew/sew.prev";
+
+/// The person-only emergency rollback across a schema change (Rosson
+/// 2026-10-28; Sew's order): `sew upgrade --rollback
+/// --accept-data-loss-since=<bundle>`, where `bundle` is the pre-upgrade
+/// bundle the daemon recorded. The daemon took a fresh backup and a
+/// person's confirm first; the helper only runs it, over a release K2
+/// pinned (never onto an unknown `sew.prev`). Sew answers 0 (rolled back),
+/// 1 (its rollback failed and it put the install back) or 2 (ROLLBACK
+/// FAILED); the answer carries Sew's `upgrade-state.json` when there is one.
+fn rollback_accept_data_loss(ctx: &Ctx, bundle: &str) -> HResult<J> {
+    if !bundle_id_ok(bundle) {
+        return Err(Fail::argv("rollback accept-data-loss: a bundle id from k2 hostchat backups"));
+    }
+    require_known(ctx)?;
+    refuse_rollback_onto_a_non_release(ctx)?;
+    let reset = reset_start_limits(ctx)?;
+    let flag = format!("--accept-data-loss-since={bundle}");
+    let mut out = run_sew(ctx, &["upgrade", "--rollback", &flag], None)?;
+    out["resetFailed"] = reset;
+    out["bundle"] = json!(bundle);
+    if out["sewExit"] == 0 {
+        out["notices"] = notices_or_error(rollback_notices(ctx));
+    }
+    out["upgradeState"] = upgrade_state(ctx);
+    Ok(out)
+}
+
+/// Sew's `/usr/local/lib/sew/upgrade-state.json`, parsed (`null` when it
+/// is absent; `{error}` when it can't be read as JSON).
+fn upgrade_state(ctx: &Ctx) -> J {
+    let Ok(Some((d, n))) = open_parent(ctx, SEW_UPGRADE_STATE) else { return J::Null };
+    match d.read_file(OsStr::new(&n), 64 * 1024) {
+        Ok(Some(b)) => serde_json::from_slice(&b).unwrap_or_else(|e| json!({"error": format!("upgrade-state.json: {e}")})),
+        Ok(None) => J::Null,
+        Err(e) => json!({"error": format!("upgrade-state.json: {e}")}),
+    }
+}
 
 /// item 12 (0.46.5): K2 never rolls Sew back onto a binary that is not a
 /// release it pinned: an upgrade-only test build or an owner-accepted

@@ -146,7 +146,7 @@ pub(crate) fn text_hash_of(spec: &ActionSpec, ctx: &Ctx) -> String {
 /// an action itself (`zen.sign`'s `{changes}`: the version's manifest
 /// changes in K2's words, never the agent's; `zen_sign_cards`).
 fn words_raw(spec: &ActionSpec, ctx: &Ctx) -> Words {
-    let computed = crate::zen_sign_cards::with_computed(spec.id, ctx);
+    let computed = crate::zen_sign_cards::with_computed(spec.id, ctx).or_else(|| super::actions::sew::with_computed(spec.id, ctx));
     let ctx = computed.as_ref().unwrap_or(ctx);
     let what = fill(spec.words.what_changes, ctx);
     let what_trim = what.trim().trim_end_matches('.').to_string();

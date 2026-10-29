@@ -111,6 +111,7 @@ live under [`docs/changelog/`](docs/changelog/) (`release-notes-X.Y.Z.md`).
 
 ### Chat (Sew)
 - **K2 now installs and upgrades to Sew 0.5.0, "Sew for Apps".** Upgrade an existing chat server with `k2 hostchat upgrade`. It keeps each App's users to that App's own Spaces, can hide an App from the home client, lets K2 hand out the App kit (`k2 app sdk add --sew`), and gives video its own permission: a role without it joins calls with audio only. A person's chat name and picture now come from their K2 profile, so they change them in K2, not in Sew. Titles and pronouns already set in Sew are kept but can't be edited there for now.
+- **An emergency way back after a Sew upgrade.** An upgrade that changes Sew's data (0.3.1 to 0.5.0 does) can't be undone with a plain `k2 hostchat rollback`, because that would lose the chat written since. The owner can now choose to anyway, from a terminal outside K2: `k2 hostchat rollback --accept-data-loss`. K2 first backs up today's chat (restorable onto the newer Sew later), rolls back to the backup Sew took just before the upgrade, and checks Sew is healthy. An agent asks the owner on a permission card, which says plainly what is lost.
 - **Unbinding an App's Space, or removing the App, now makes that Space read-only in Sew.** Its members and history stay, and it can still be exported. Bind the same App again to make it writable. Another App can use it only after the Sew install owner releases it in Sew.
 
 ### Fixes

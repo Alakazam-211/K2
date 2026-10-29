@@ -2335,6 +2335,16 @@ pub fn upgrade_machine(env: &Env, req: &UpgradeRequest, from: &str) -> Value {
                 "refused"
             }
             Some(0) => {
+                // The rollback point (Rosson 2026-10-28): Sew's pre-upgrade
+                // bundle, for a person's emergency rollback across a schema
+                // change (`rollback_plan`). Recorded before K2's own check.
+                let point = json!({
+                    "from": from, "to": to, "at": env.ops.now(),
+                    "bundle": v.pointer("/sew/pre_bundle").and_then(Value::as_str).filter(|b| pin::bundle_id_ok(b)),
+                });
+                if let Err(e) = env.ops.record_save(ROLLBACK_POINT_RECORD, Some(&point)) {
+                    k2_core::log_debug!("[sew] upgrade to {to}: rollback point not recorded: {e}");
+                }
                 upgrade_note(env, Some("health"), None);
                 match health_check(env, to) {
                     Ok(_) => {
@@ -2455,7 +2465,8 @@ fn auto_rollback(env: &Env, from: &str, to: &str, why: &str) -> &'static str {
     } else {
         let m = format!(
             "upgrade to {to} failed K2's health check ({why}) and the automatic rollback failed ({}). A person must act: \
-             read {SEW_UPGRADE_STATE}; k2 hostchat rollback, or a restore",
+             read {SEW_UPGRADE_STATE}; k2 hostchat rollback (k2 hostchat rollback --accept-data-loss when Sew's schema \
+             changed), or a restore",
             rb.err().unwrap_or_else(|| "Sew still unhealthy after rollback".into())
         );
         save_enable(env, |r| {
@@ -2606,25 +2617,29 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
     let v = helper(env, &["rollback"], None).map_err(|e| no("helper_error", 500, e))?;
     match sew_exit(&v).unwrap_or(0) {
         0 => {}
-        3 => {
-            return Err(no(
-                "rollback_refused",
-                409,
-                format!(
-                    "{}. A rollback across a schema change needs a restore: list the backups with k2 hostchat backups, \
-                     then k2 hostchat restore <bundle-id> --confirm",
-                    sew_message(&v)
-                ),
-            ))
-        }
+        3 => return Err(no("rollback_refused", 409, format!("{}. {ROLLBACK_ACROSS_SCHEMA_HINT}", sew_message(&v)))),
         n => {
             let m = format!("rollback: exit {n}: {}", sew_message(&v));
             fail_row(env, &m);
             return Err(no("rollback_failed", 500, m));
         }
     }
+    Ok(after_rollback(env, row.previous_version.clone(), &v, media_to))
+}
+
+/// What a refused rollback across a schema change says next (Rosson
+/// 2026-10-28): the person-only emergency rollback.
+pub const ROLLBACK_ACROSS_SCHEMA_HINT: &str = "Sew keeps everything written since the upgrade, so a plain rollback stops here. \
+     A person can still roll back, losing that chat from the live server (K2 backs it up first): \
+     k2 hostchat rollback --accept-data-loss, from a terminal outside K2. An agent asks on a permission card \
+     (k2 permission request sew.rollback-data-loss)";
+
+/// Sew's verdict on the core's rollback is in (`v`, exit 0): K2's health
+/// check of the old core, the row, then (voice) the OLD core reinstalls its
+/// own voice engine and `sew doctor`'s media checks go in the answer.
+fn after_rollback(env: &Env, previous: Option<String>, v: &Value, media_to: Option<String>) -> Value {
     let to = v.pointer("/sew/to").and_then(Value::as_str).filter(|s| k2_root_proto::version::Semver::parse(s).is_some()).map(str::to_string);
-    let want = to.clone().or(row.previous_version.clone()).unwrap_or_default();
+    let want = to.clone().or(previous).unwrap_or_default();
     let healthy = health_check(env, &want);
     let ok = healthy.is_ok();
     let health_err = healthy.err();
@@ -2637,11 +2652,11 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
         r.last_error = health_err.clone().map(|e| format!("rolled back, but Sew is unhealthy: {e}"));
     });
     let mut body = json!({"ok": ok, "state": if ok { "running" } else { "error" }, "version": to, "sew": v["sew"], "error": health_err});
-    let Some(mv) = media_to else { return Ok(body) };
+    let Some(mv) = media_to else { return body };
     if !ok {
         // The old core is not healthy: its engine is not touched.
         body["media"] = json!({"result": "skipped", "to": mv, "error": "the old core failed K2's health check"});
-        return Ok(body);
+        return body;
     }
     let media = match helper(env, &["media", "rollback"], None) {
         Err(e) => Err(format!("the helper refused the voice engine rollback: {e}")),
@@ -2675,7 +2690,232 @@ pub fn rollback_with(env: &Env, req: &RollbackRequest) -> R<Value> {
         body["error"] = json!(e);
         save_enable(env, |r| r.last_error = Some(e));
     }
-    Ok(body)
+    body
+}
+
+// ── the person-only emergency rollback across a schema change ────────────
+//
+// Rosson 2026-10-28 (Sew's order): after an upgrade that changed Sew's
+// schema (0.3.1 → 0.5.0), `sew upgrade --rollback` refuses unless told it
+// may lose what was written since. A person may say so:
+// 1. `sew backup now` (the mgmt backup job): the new version's state is
+//    kept, restorable onto that version later;
+// 2. the pre-upgrade bundle: the one K2 recorded when it upgraded
+//    ([`ROLLBACK_POINT_RECORD`]), else the newest backup of the previous
+//    version taken before the upgrade;
+// 3. `sew upgrade --rollback --accept-data-loss-since=<that bundle>`;
+// 4. K2's health check of the old core and `sew doctor` (0 fail); with
+//    voice, the old core reinstalls its own sew-media.
+
+/// `~/.k2/sew/rollback-point.json`: `{from, to, bundle, at}`, written when
+/// an upgrade lands (`bundle` = Sew's `pre_bundle`). The rollback point.
+pub const ROLLBACK_POINT_RECORD: &str = "rollback-point";
+
+/// The vault confirm this rollback takes (`secretId` = `<install
+/// id>:<bundle>`; the card binds its own to the request id).
+pub const CONFIRM_ROLLBACK_DATA_LOSS: &str = "sew-rollback-data-loss";
+
+/// What the person is told before they confirm, and what the card says.
+pub fn data_loss_words(since: &str, to: &str) -> String {
+    format!(
+        "Sew goes back to {to}. Chat written since {since} will be lost from the live chat; a backup of it is kept \
+         (K2 takes it first)."
+    )
+}
+
+/// `20261028T230805Z` → `2026-10-28 23:08 UTC` (a bundle id is its time).
+pub fn bundle_time_text(bundle: &str) -> String {
+    chrono::NaiveDateTime::parse_from_str(bundle, "%Y%m%dT%H%M%SZ")
+        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
+        .unwrap_or_else(|_| format!("backup {bundle}"))
+}
+
+/// Where a rollback across a schema change would go: `{from, to, bundle,
+/// since, sinceText, source}`. Read-only.
+pub fn rollback_plan(env: &Env) -> R<Value> {
+    if !env.ops.linux() {
+        return Err(unsupported());
+    }
+    let row = need_row(false)?;
+    if !matches!(row.status.as_str(), "running" | "degraded" | "stopped" | "error") {
+        return Err(no("not_running", 409, format!("Sew is '{}'", row.status)));
+    }
+    let from = row.installed_version.clone().unwrap_or_default();
+    let Some(to) = row.previous_version.clone() else {
+        return Err(no(
+            "no_previous_version",
+            409,
+            "K2 has no record of a Sew version before this one, so there is nothing to roll back to (k2 hostchat backups lists the backups)",
+        ));
+    };
+    if !is_release(&to) {
+        return Err(no(
+            "rollback_refused",
+            409,
+            format!("Sew's previous binary ({to}) is not a release K2 pinned, so K2 never rolls back onto it (k2 hostchat backups)"),
+        ));
+    }
+    let point = env.ops.record_load(ROLLBACK_POINT_RECORD);
+    let recorded = point.as_ref().filter(|p| p["from"] == to.as_str() && p["to"] == from.as_str());
+    if let Some(b) = recorded.and_then(|p| p["bundle"].as_str()).filter(|b| pin::bundle_id_ok(b)) {
+        return Ok(json!({
+            "ok": true, "from": from, "to": to, "bundle": b, "source": "recorded",
+            "since": bundle_time_text(b), "upgradedAt": recorded.and_then(|p| p["at"].as_i64()),
+        }));
+    }
+    // Fallback: the newest backup of the previous version from before the
+    // upgrade (ids are their own UTC times, so they sort).
+    let upgraded_at = recorded.and_then(|p| p["at"].as_i64());
+    let cutoff = upgraded_at
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .map(|t| t.format("%Y%m%dT%H%M%SZ").to_string());
+    let list = backup_list(env)?;
+    let pick = list
+        .iter()
+        .filter(|b| b.sew_version.split('+').next() == Some(to.as_str()) && pin::bundle_id_ok(&b.id))
+        .filter(|b| cutoff.as_deref().is_none_or(|c| b.id.as_str() <= c))
+        .max_by(|a, b| a.id.cmp(&b.id));
+    match pick {
+        Some(b) => Ok(json!({
+            "ok": true, "from": from, "to": to, "bundle": b.id, "source": "backups",
+            "since": bundle_time_text(&b.id), "upgradedAt": upgraded_at,
+        })),
+        None => Err(no(
+            "no_rollback_point",
+            409,
+            format!(
+                "K2 has no backup of Sew {to} from before the upgrade to roll back to (k2 hostchat backups); a restore of \
+                 another backup is the way back"
+            ),
+        )),
+    }
+}
+
+/// The helper serves `engine sew rollback accept-data-loss`: protocol 11
+/// AND `namespaces.sewrbloss`.
+pub fn helper_rolls_back_with_loss(env: &Env) -> bool {
+    let st = env.ops.helper_state();
+    st.usable(k2_root_proto::version::SEW_RECONFIGURE_MIN_PROTOCOL)
+        && st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/sewrbloss")).and_then(Value::as_bool) == Some(true)
+}
+
+/// `sew doctor`'s checks that failed (`None` = doctor didn't answer).
+fn doctor_fails(env: &Env) -> (Option<Vec<String>>, Value) {
+    let v = match helper(env, &["doctor"], None) {
+        Ok(v) => v,
+        Err(e) => return (None, json!({"error": e})),
+    };
+    let fails = v.pointer("/sew/checks").and_then(Value::as_array).map(|a| {
+        a.iter().filter(|c| c["status"] == "fail").filter_map(|c| c["id"].as_str().map(str::to_string)).collect::<Vec<_>>()
+    });
+    (fails, json!({"sewExit": sew_exit(&v)}))
+}
+
+/// The emergency rollback (a person said yes, with a confirm bound to
+/// `bundle`; the route checked that). See the section note for the order.
+pub fn rollback_accept_data_loss(env: &Env, req: &RollbackRequest, bundle: &str) -> R<Value> {
+    let plan = rollback_plan(env)?;
+    if plan["bundle"] != bundle {
+        return Err(no(
+            "rollback_point_changed",
+            409,
+            format!("the rollback point is now {} (Sew {}); check it again and confirm that one", plan["bundle"], plan["to"]),
+        ));
+    }
+    let (from, to) = (plan["from"].as_str().unwrap_or_default().to_string(), plan["to"].as_str().unwrap_or_default().to_string());
+    helper_check(env)?;
+    if !helper_rolls_back_with_loss(env) {
+        return Err(no(
+            "helper_update_needed",
+            409,
+            "this box's root helper can't do this rollback yet: k2 root-helper update, then try again (nothing was changed)",
+        ));
+    }
+    let _l = begin(env)?;
+    let voice = super::voice::load(env).installed;
+    let media_to = if voice { rollback_media_source(env, Some(&to), req)? } else { None };
+    // 1. Keep the new version's state first: no backup, no rollback.
+    let (_, kept) = backup_job(env).map_err(|f| {
+        no(
+            "backup_first_failed",
+            f.status,
+            format!("K2 backs up Sew {from} before it rolls back, and that backup failed: {}. Nothing was changed", f.hint),
+        )
+    })?;
+    let kept_id = kept.id.clone();
+    k2_core::log_debug!("[sew] emergency rollback {from} -> {to}: kept {kept_id}, rolling back to {bundle}");
+    // 3. The rollback, accepting the loss since the pre-upgrade bundle.
+    let v = helper(env, &["rollback", "accept-data-loss", bundle], None).map_err(|e| no("helper_error", 500, e))?;
+    let base = json!({"from": from, "to": to, "bundle": bundle, "keptBackup": kept_id, "upgradeState": v.get("upgradeState")});
+    let merge = |mut b: Value| {
+        for (k, x) in base.as_object().into_iter().flatten() {
+            b[k] = x.clone();
+        }
+        b
+    };
+    match sew_exit(&v) {
+        Some(0) => {
+            // 4. K2's check of the old core, the row, voice; then doctor.
+            let mut body = merge(after_rollback(env, Some(to.clone()), &v, media_to));
+            let (fails, doc) = doctor_fails(env);
+            body["doctorFails"] = json!(fails);
+            body["doctorRun"] = doc;
+            let healthy = body["ok"] == true;
+            let clean = fails.as_ref().is_some_and(Vec::is_empty);
+            if healthy {
+                let _ = env.ops.record_save(ROLLBACK_POINT_RECORD, None);
+            }
+            body["result"] = json!(if healthy && clean { "rolled_back" } else { "rolled_back_unhealthy" });
+            body["message"] = json!(if healthy && clean {
+                format!(
+                    "Sew is back on {to} with its chat from {}. Sew {from}'s chat is kept in backup {kept_id} (restorable onto Sew {from}).",
+                    bundle_time_text(bundle)
+                )
+            } else {
+                let why = match &fails {
+                    Some(f) if !f.is_empty() => format!("sew doctor reports failures: {}", f.join(", ")),
+                    None => "sew doctor didn't answer".to_string(),
+                    _ => body["error"].as_str().unwrap_or("K2's health check failed").to_string(),
+                };
+                format!("Sew went back to {to}, but it isn't healthy: {why}. Backups {kept_id} and {bundle} are kept; k2 hostchat doctor")
+            });
+            if !(healthy && clean) {
+                body["ok"] = json!(false);
+                save_enable(env, |r| r.last_error = Some(body["message"].as_str().unwrap_or_default().to_string()));
+            }
+            Ok(body)
+        }
+        Some(1) => {
+            // Sew's rollback didn't complete and it put the install back.
+            let healthy = health_of(env, &from).is_ok();
+            let m = format!(
+                "Sew couldn't roll back to {to} and put Sew {from} back as it was (exit 1): {}. Nothing was lost; backup \
+                 {kept_id} is kept. Details: {SEW_UPGRADE_STATE}",
+                sew_message(&v)
+            );
+            save_enable(env, |r| {
+                r.status = if healthy { "running".into() } else { "error".into() };
+                r.last_error = Some(m.clone());
+            });
+            Ok(merge(json!({"ok": false, "result": "put_back", "sewExit": 1, "healthy": healthy, "message": m})))
+        }
+        Some(2) => {
+            let m = format!(
+                "ROLLBACK FAILED: Sew could neither roll back to {to} nor put Sew {from} back (exit 2): {}. A person must act \
+                 now: read {SEW_UPGRADE_STATE} (upgradeState here) and k2 hostchat doctor. Both backups are kept: {kept_id} \
+                 (Sew {from}, taken just now) and {bundle} (Sew {to}, from before the upgrade)",
+                sew_message(&v)
+            );
+            fail_row(env, &m);
+            Ok(merge(json!({"ok": false, "result": "rollback_failed", "sewExit": 2, "message": m})))
+        }
+        Some(n) => Err(no(
+            "rollback_refused",
+            409,
+            format!("Sew refused the rollback (exit {n}): {}. Nothing was changed; backup {kept_id} is kept", sew_message(&v)),
+        )),
+        None => Err(no("helper_error", 500, format!("the helper answered the rollback without Sew's exit: {}", short(&v)))),
+    }
 }
 
 // ── backups / restore ────────────────────────────────────────────────────

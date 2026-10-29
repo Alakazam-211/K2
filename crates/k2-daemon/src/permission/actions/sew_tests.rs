@@ -130,3 +130,97 @@ fn the_owner_allows_and_the_link_goes_to_them_never_to_the_agent() {
     assert!(crate::chat_pass::handoff::CODES.redeem(&code, now).is_ok());
     assert!(crate::chat_pass::handoff::CODES.redeem(&code, now).is_err(), "single use");
 }
+
+// ── sew.rollback-data-loss (Rosson 2026-10-28) ───────────────────────
+
+use super::test_seams::{PLAN, RAN};
+
+/// The rollback plan for this thread; cleared (with the runs) on drop.
+struct Plan;
+impl Plan {
+    fn set() -> Plan {
+        PLAN.with(|c| {
+            *c.borrow_mut() = Some(Ok(json!({"from": "0.5.0", "to": "0.3.1", "bundle": "20261028T230805Z", "since": "2026-10-28 23:08 UTC"})))
+        });
+        RAN.with(|c| c.borrow_mut().clear());
+        Plan
+    }
+}
+impl Drop for Plan {
+    fn drop(&mut self) {
+        PLAN.with(|c| *c.borrow_mut() = None);
+        RAN.with(|c| c.borrow_mut().clear());
+        CONFIRM.with(|c| *c.borrow_mut() = None);
+    }
+}
+
+#[test]
+fn the_rollback_card_is_owner_only_with_its_own_confirm_and_says_what_is_lost() {
+    let r = super::super::find("sew.rollback-data-loss").expect("registered");
+    k2_core::permission::catalog::validate(r.spec).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(r.spec.floor, Floor::Owner);
+    assert_eq!(r.spec.proof, Proof::SettingsConfirm { action: ConfirmAction::SewRollbackDataLoss });
+    assert_eq!(ConfirmAction::SewRollbackDataLoss.as_str(), crate::sew::supervisor::CONFIRM_ROLLBACK_DATA_LOSS);
+    assert!(r.spec.words.consequences.starts_with("Chat written since {since} will be lost from the live chat; a backup of it is kept."));
+    assert_eq!(
+        r.spec.walls[0].matches,
+        WallMatch::Code { status: 403, code: crate::sew::routes::ROLLBACK_NEEDS_PERSON }
+    );
+    assert!(crate::routes::route_policy::lookup(ROLLBACK_ROUTE).and_then(|x| x.post).is_some(), "{ROLLBACK_ROUTE} has a POST row");
+}
+
+#[test]
+fn a_manage_sew_agent_asks_and_the_owner_rolls_back_with_k2s_words() {
+    let _home = crate::test_support::TempHome::new();
+    let _plan = Plan::set();
+    let ws = seed("sewrb");
+    let (s, v) = ask(&ws, "sew.rollback-data-loss", json!({}));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("409 Conflict", &json!("chat_manage_off")), "{v}");
+    k2_core::workspace::settings::set_agents_can_manage_chat(&ws.id, true).unwrap();
+    // Values are K2's: an agent can't put its own words on the card.
+    let (s, v) = ask(&ws, "sew.rollback-data-loss", json!({"since": "nothing"}));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{v}");
+    let v = ask_ok(&ws, "sew.rollback-data-loss", json!({}));
+    let id = v["id"].as_str().expect("id").to_string();
+    let card = card_of(&v);
+    let vw = view(&ws, &card);
+    assert_eq!(vw["proof"], json!({ "kind": "confirm", "action": "sew-rollback-data-loss", "secretId": id }));
+    let text = vw.to_string();
+    assert!(
+        text.contains("Chat written since 2026-10-28 23:08 UTC will be lost from the live chat; a backup of it is kept."),
+        "{text}"
+    );
+    assert!(text.contains("from 0.5.0 to 0.3.1"), "{text}");
+
+    // An Admin is below the floor; the owner without a confirm, or with one
+    // for another request: nothing runs.
+    let admin = login("sewrbad", Role::Admin);
+    below_floor(answer_as(&admin, &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_a" })), "owner");
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow" }));
+    assert_eq!((s.as_str(), &a["error"]["code"]), ("403 Forbidden", &json!("vault_confirm_required")), "{a}");
+    confirm("k2vc_o", "perm_other", "owner");
+    let (s, _) = answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_o" }));
+    assert_eq!(s, "403 Forbidden");
+    assert!(RAN.with(|c| c.borrow().is_empty()), "nothing ran");
+    assert!(row(&id).is_answerable());
+
+    // The owner, confirmed for this request: it rolls back to the plan's bundle.
+    confirm("k2vc_o2", &id, "owner");
+    let (s, a) = answer_as("owner", &ws, &card, json!({ "answer": "Allow", "confirmToken": "k2vc_o2" }));
+    assert_eq!(s, "200 OK", "{a}");
+    assert_eq!(row(&id).state, RequestState::Approved);
+    assert_eq!(RAN.with(|c| c.borrow().clone()), vec!["20261028T230805Z".to_string()]);
+    let turn = last_turn(&ws);
+    assert!(turn.contains("rolling back to 0.3.1") && turn.contains("K2 backs it up first"), "{turn}");
+}
+
+#[test]
+fn without_a_rollback_point_the_card_is_not_offered() {
+    let _home = crate::test_support::TempHome::new();
+    let _plan = Plan::set();
+    PLAN.with(|c| *c.borrow_mut() = Some(Err("K2 has no backup of Sew 0.3.1 from before the upgrade".into())));
+    let ws = seed("sewrbx");
+    k2_core::workspace::settings::set_agents_can_manage_chat(&ws.id, true).unwrap();
+    let (s, v) = ask(&ws, "sew.rollback-data-loss", json!({}));
+    assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{v}");
+}

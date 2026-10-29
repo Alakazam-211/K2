@@ -849,6 +849,45 @@ fn rollback_purge_and_uninstall_argv_never_widen() {
     assert!(!argvs.concat().iter().any(|a| a.contains("accept-data-loss")));
 }
 
+/// The person-only emergency rollback (Rosson 2026-10-28): exactly
+/// `sew upgrade --rollback --accept-data-loss-since=<bundle>`, Sew's exit
+/// as data, the bundle and Sew's `upgrade-state.json` in the answer; a
+/// malformed bundle never runs; it is a daemon verb; the version says so.
+#[test]
+fn rollback_accept_data_loss_names_the_bundle_and_reads_the_upgrade_state() {
+    let t = box_root();
+    with_pin_installed(&t);
+    write(&t, SEW_UPGRADE_STATE, r#"{"state":"rolled_back","from":"0.5.0","to":"0.3.1"}"#);
+    sew_answers(&t, 0, r#"{"state":"rolled_back","to":"0.3.1"}"#);
+    let o = t.call(&["engine", "sew", "rollback", "accept-data-loss", "20261028T230805Z"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["sewExit"], 0);
+    assert_eq!(v["bundle"], "20261028T230805Z");
+    assert_eq!(v["upgradeState"]["state"], "rolled_back");
+    assert_eq!(
+        sew_calls(&t)[0].0,
+        vec!["upgrade", "--rollback", "--accept-data-loss-since=20261028T230805Z", "--json"]
+    );
+    // ROLLBACK FAILED is data too (a person reads upgradeState).
+    sew_answers(&t, 2, r#"{"ok":false,"error":{"exit":2,"message":"ROLLBACK FAILED"}}"#);
+    let v = json(&t.call(&["engine", "sew", "rollback", "accept-data-loss", "20261028T230805Z"]));
+    assert_eq!(v["sewExit"], 2);
+    assert_eq!(v["upgradeState"]["to"], "0.3.1");
+    // No state file: null, not an error.
+    std::fs::remove_file(t.p(SEW_UPGRADE_STATE)).unwrap();
+    sew_answers(&t, 1, r#"{"ok":false,"error":{"exit":1,"message":"rolled back"}}"#);
+    let v = json(&t.call(&["engine", "sew", "rollback", "accept-data-loss", "20261028T230805Z"]));
+    assert_eq!((v["sewExit"].clone(), v["upgradeState"].clone()), (serde_json::json!(1), serde_json::Value::Null));
+    // A bundle that isn't an id never parses (nothing runs).
+    let before = sew_calls(&t).len();
+    assert_ne!(t.call(&["engine", "sew", "rollback", "accept-data-loss", "../x"]).code, 0);
+    assert_eq!(sew_calls(&t).len(), before);
+    assert_eq!(Verb::parse(&["engine", "sew", "rollback", "accept-data-loss", "20261028T230805Z"]).map(|v| v.class()).ok(), Some(Class::Daemon));
+    let hv = json(&t.call(&["helper", "version"]));
+    assert_eq!(hv["namespaces"]["sewrbloss"], true);
+}
+
 /// A known binary: purge is still Sew's own `uninstall --purge`, nothing
 /// of K2's teardown runs (Sew's layout is Sew's to remove).
 #[test]

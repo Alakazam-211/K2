@@ -1157,7 +1157,10 @@ fn manual_rollback_never_passes_a_data_loss_flag_and_explains_a_schema_refusal()
     t.ops.queue("engine sew rollback", Ok(json!({"sewExit": 3, "sew": {"error": {"message": "schema changed since 0.0.1"}}})));
     let f = rollback(&t.env()).unwrap_err();
     assert_eq!(f.code, "rollback_refused");
-    assert!(f.hint.contains("k2 hostchat backups") && f.hint.contains("k2 hostchat restore <bundle-id> --confirm"), "{}", f.hint);
+    // Rosson 2026-10-28: the refusal points at the person-only emergency
+    // rollback (and an agent's card), never at an invented verb.
+    assert!(f.hint.contains("k2 hostchat rollback --accept-data-loss") && f.hint.contains("sew.rollback-data-loss"), "{}", f.hint);
+    assert!(f.hint.contains("from a terminal outside K2"), "{}", f.hint);
     assert!(!f.hint.contains("backup list") && !f.hint.contains("backup restore"), "no invented verbs: {}", f.hint);
     assert!(t.ops.argvs().iter().all(|a| !a.contains("accept-data-loss")));
     // Success: the version Sew reports is recorded.
@@ -1166,6 +1169,121 @@ fn manual_rollback_never_passes_a_data_loss_flag_and_explains_a_schema_refusal()
     let r = rollback(&t.env()).unwrap();
     assert_eq!(r["state"], "running");
     assert_eq!(t.row().installed_version.as_deref(), Some("0.0.1"));
+}
+
+/// A helper that serves the emergency rollback (protocol 11 +
+/// `namespaces.sewrbloss`).
+fn helper_with_rbloss(t: &T) {
+    let mut st = helper_ok(11, true, pinned().version);
+    st.version_json.as_mut().unwrap()["namespaces"]["sewrbloss"] = json!(true);
+    *t.ops.helper.lock().unwrap() = st;
+}
+
+/// Rosson 2026-10-28 (Sew's order): the upgrade records the rollback
+/// point; the emergency rollback backs up first, then rolls back to that
+/// bundle accepting the loss, then K2's checks; the point is spent.
+#[test]
+fn the_emergency_rollback_records_the_point_backs_up_first_and_rolls_back_to_it() {
+    let t = t();
+    on_old_release(&t);
+    assert_eq!(upgrade(&t)["result"], "done");
+    let point = t.ops.record_load(ROLLBACK_POINT_RECORD).expect("the upgrade recorded the rollback point");
+    assert_eq!((point["from"].as_str(), point["to"].as_str()), (Some("0.0.1"), Some(pinned().version)));
+    assert_eq!(point["bundle"], crate::sew::ops::fake::FakeOps::FAKE_PRE_BUNDLE);
+    assert!(point["at"].as_i64().is_some());
+    let plan = rollback_plan(&t.env()).unwrap();
+    assert_eq!(
+        (plan["from"].as_str(), plan["to"].as_str(), plan["bundle"].as_str(), plan["source"].as_str()),
+        (Some(pinned().version), Some("0.0.1"), Some("20251231T120000Z"), Some("recorded"))
+    );
+    assert_eq!(plan["since"], "2025-12-31 12:00 UTC");
+    t.ops.clear();
+    let req = RollbackRequest { media_tarball_path: None };
+
+    // An older helper: nothing runs, nothing is backed up.
+    let f = rollback_accept_data_loss(&t.env(), &req, "20251231T120000Z").unwrap_err();
+    assert_eq!(f.code, "helper_update_needed", "{}", f.hint);
+    assert!(t.ops.mgmt_calls.lock().unwrap().iter().all(|c| c != "POST /mgmt/v1/backup"));
+    helper_with_rbloss(&t);
+    // Not the plan's bundle (it moved): refused, nothing runs.
+    let f = rollback_accept_data_loss(&t.env(), &req, "20200101T000000Z").unwrap_err();
+    assert_eq!(f.code, "rollback_point_changed", "{}", f.hint);
+    assert!(t.ops.effects().iter().all(|e| !e.contains("accept-data-loss")), "{:?}", t.ops.effects());
+
+    // The backup comes first: when it fails, nothing rolls back.
+    queue_mgmt(&t, "POST /mgmt/v1/backup", Err(crate::sew::ops::MgmtError::Status(503, r#"{"error":{"reason":"backups_unavailable"}}"#.into())));
+    let f = rollback_accept_data_loss(&t.env(), &req, "20251231T120000Z").unwrap_err();
+    assert_eq!(f.code, "backup_first_failed", "{}", f.hint);
+    assert!(f.hint.contains("Nothing was changed"), "{}", f.hint);
+    assert!(t.ops.effects().iter().all(|e| !e.contains("accept-data-loss")), "{:?}", t.ops.effects());
+
+    // Done: backup, then the rollback to that bundle, then the checks.
+    let before = t.ops.mgmt_backups.lock().unwrap().len();
+    let r = rollback_accept_data_loss(&t.env(), &req, "20251231T120000Z").unwrap();
+    assert_eq!(r["result"], "rolled_back", "{r}");
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(t.ops.mgmt_backups.lock().unwrap().len(), before + 1, "a fresh backup of the new version first");
+    let kept = t.ops.mgmt_backups.lock().unwrap()[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(r["keptBackup"], kept.as_str());
+    assert!(t.ops.effects().iter().any(|e| e == "engine sew rollback accept-data-loss 20251231T120000Z"), "{:?}", t.ops.effects());
+    assert_eq!(r["upgradeState"]["state"], "rolled_back");
+    assert_eq!(r["doctorFails"], json!([]));
+    assert!(r["message"].as_str().unwrap().contains(&format!("kept in backup {kept}")), "{r}");
+    let row = t.row();
+    assert_eq!((row.installed_version.as_deref(), row.previous_version.as_deref(), row.status.as_str()), (Some("0.0.1"), None, "running"));
+    assert!(t.ops.record_load(ROLLBACK_POINT_RECORD).is_none(), "the rollback point is spent");
+    assert!(t.ops.effects().iter().all(|e| e != "engine sew rollback"), "never the plain rollback");
+}
+
+/// Sew's other answers each say plainly what happened; nothing is lost on
+/// 1, a person must act on 2.
+#[test]
+fn the_emergency_rollback_says_what_each_sew_exit_means() {
+    let t = t();
+    on_old_release(&t);
+    upgrade(&t);
+    helper_with_rbloss(&t);
+    let req = RollbackRequest { media_tarball_path: None };
+    let b = "20251231T120000Z";
+    let argv = format!("engine sew rollback accept-data-loss {b}");
+    t.ops.queue(&argv, Ok(json!({"sewExit": 1, "sew": {"error": {"message": "migrate down failed; put back"}}, "upgradeState": {"state": "restored"}})));
+    let r = rollback_accept_data_loss(&t.env(), &req, b).unwrap();
+    assert_eq!((r["result"].as_str(), r["ok"].as_bool()), (Some("put_back"), Some(false)), "{r}");
+    assert!(r["message"].as_str().unwrap().contains("Nothing was lost"), "{r}");
+    assert_eq!(t.row().installed_version.as_deref(), Some(pinned().version), "still the new version");
+    t.ops.queue(&argv, Ok(json!({"sewExit": 2, "sew": {"error": {"message": "ROLLBACK FAILED"}}, "upgradeState": {"state": "failed"}})));
+    let r = rollback_accept_data_loss(&t.env(), &req, b).unwrap();
+    assert_eq!(r["result"], "rollback_failed", "{r}");
+    let m = r["message"].as_str().unwrap();
+    assert!(m.starts_with("ROLLBACK FAILED") && m.contains("A person must act") && m.contains(SEW_UPGRADE_STATE), "{m}");
+    assert_eq!(r["upgradeState"]["state"], "failed");
+    assert_eq!(t.row().status, "error");
+    t.ops.queue(&argv, Ok(json!({"sewExit": 4, "sew": {"error": {"message": "no such bundle"}}})));
+    let f = rollback_accept_data_loss(&t.env(), &req, b).unwrap_err();
+    assert_eq!(f.code, "rollback_refused");
+    assert!(f.hint.contains("Nothing was changed"), "{}", f.hint);
+}
+
+/// No recorded point (an upgrade from before 0.46.6): the newest backup of
+/// the previous version is the rollback point; none at all is a refusal.
+#[test]
+fn without_a_recorded_point_the_plan_takes_the_newest_backup_of_the_previous_version() {
+    let t = t();
+    on_old_release(&t);
+    upgrade(&t);
+    t.ops.record_save(ROLLBACK_POINT_RECORD, None).unwrap();
+    let f = rollback_plan(&t.env()).unwrap_err();
+    assert_eq!(f.code, "no_rollback_point", "the fake's backups are all the new version: {}", f.hint);
+    {
+        let mut list = t.ops.mgmt_backups.lock().unwrap();
+        list.push(json!({"id": "20251230T031500Z", "kind": "scheduled", "created_at": "x", "bytes": 1, "schema_version": 1, "sew_version": "0.0.1"}));
+        list.push(json!({"id": "20251229T031500Z", "kind": "scheduled", "created_at": "x", "bytes": 1, "schema_version": 1, "sew_version": "0.0.1"}));
+    }
+    let plan = rollback_plan(&t.env()).unwrap();
+    assert_eq!((plan["bundle"].as_str(), plan["source"].as_str()), (Some("20251230T031500Z"), Some("backups")));
+    // Nothing to go back to without a previous version.
+    store::update(1, |r| r.previous_version = None).unwrap();
+    assert_eq!(rollback_plan(&t.env()).unwrap_err().code, "no_previous_version");
 }
 
 // ── backups / restore ────────────────────────────────────────────────────

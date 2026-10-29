@@ -291,6 +291,14 @@ pub enum SewVerb {
     UpgradeAcceptBinary(String),
     /// `sew upgrade --rollback` (never `--accept-data-loss-since`).
     Rollback,
+    /// `engine sew rollback accept-data-loss <bundle-id>` (protocol 11,
+    /// `namespaces.sewrbloss`, Rosson 2026-10-28): the person-only emergency
+    /// rollback across a schema change, `sew upgrade --rollback
+    /// --accept-data-loss-since=<bundle-id>` (the pre-upgrade bundle the
+    /// daemon recorded). The daemon takes a fresh backup first and asks a
+    /// person with a confirm; the helper only runs it. Additive argv: an
+    /// older helper refuses it (exit 2) before anything runs.
+    RollbackAcceptDataLoss(String),
     /// `sew uninstall` (data, config and secrets kept).
     Uninstall,
     /// `sew uninstall --purge --yes-delete-all-data=<id>` [`--keep-backups`].
@@ -365,6 +373,7 @@ impl SewVerb {
             ["upgrade"] => Self::Upgrade,
             ["upgrade", "accept-binary", sha] if crate::sew::accept_sha_ok(sha) => Self::UpgradeAcceptBinary(sha.to_string()),
             ["rollback"] => Self::Rollback,
+            ["rollback", "accept-data-loss", id] if crate::sew::bundle_id_ok(id) => Self::RollbackAcceptDataLoss(id.to_string()),
             ["uninstall"] => Self::Uninstall,
             ["purge", id] if crate::sew::install_id_ok(id) => {
                 Self::Purge { install_id: id.to_string(), keep_backups: false }
@@ -411,6 +420,7 @@ impl SewVerb {
             Self::Upgrade => s(&["upgrade"]),
             Self::UpgradeAcceptBinary(sha) => s(&["upgrade", "accept-binary", sha]),
             Self::Rollback => s(&["rollback"]),
+            Self::RollbackAcceptDataLoss(id) => s(&["rollback", "accept-data-loss", id]),
             Self::Uninstall => s(&["uninstall"]),
             Self::Purge { install_id, keep_backups: false } => s(&["purge", install_id]),
             Self::Purge { install_id, keep_backups: true } => s(&["purge", install_id, "keep-backups"]),
@@ -458,6 +468,7 @@ impl SewVerb {
             | Self::Upgrade
             | Self::UpgradeAcceptBinary(_)
             | Self::Rollback
+            | Self::RollbackAcceptDataLoss(_)
             | Self::Uninstall
             | Self::Purge { .. }
             | Self::RotateMaster
@@ -510,6 +521,7 @@ impl SewVerb {
             Self::Upgrade,
             Self::UpgradeAcceptBinary("7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385".into()),
             Self::Rollback,
+            Self::RollbackAcceptDataLoss("20261028T230805Z".into()),
             Self::Uninstall,
             Self::Purge { install_id: "48831765147549701".into(), keep_backups: false },
             Self::Purge { install_id: "none".into(), keep_backups: true },
@@ -2844,6 +2856,10 @@ mod tests {
             &["engine", "sew", "upgrade", "accept-binary", "/usr/local/bin/sew"],
             &["engine", "sew", "rollback", "accept-binary", "7ed8031efba4497131f09609b33a386401e910f992672499bd0d410c63952385"],
             &["engine", "sew", "rollback", "--accept-data-loss-since=20260927T031512Z"],
+            &["engine", "sew", "rollback", "accept-data-loss"],
+            &["engine", "sew", "rollback", "accept-data-loss", "../etc"],
+            &["engine", "sew", "rollback", "accept-data-loss", "x20261028T230805Z"],
+            &["engine", "sew", "rollback", "accept-data-loss", "20261028T230805Z", "now"],
             &["engine", "sew", "uninstall", "--purge"],
             &["engine", "sew", "purge"],
             &["engine", "sew", "purge", "0"],

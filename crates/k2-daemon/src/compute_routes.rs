@@ -505,6 +505,42 @@ pub(crate) fn node_or_404(token: Option<&str>) -> R<store::NodeRow> {
         .ok_or_else(|| no(codes::NODE_NOT_FOUND, 404, format!("no compute node '{t}' (k2 compute nodes)")))
 }
 
+/// A node-name prefix that matches more than one node the caller may see
+/// (CE-11; exit 2).
+pub(crate) const NODE_AMBIGUOUS: &str = "node_ambiguous";
+
+/// A node for a read or run path (CE-11, CE-A11): the exact name or id, as
+/// [`node_or_404`], else a prefix that matches exactly one node the caller
+/// may see (`k2n12` → `k2n12-vin`). Visible = granted to `ws_id`, except
+/// for the owner and Admins, who see every node. Owner and destructive
+/// verbs (node remove/retire/rename/pause, grant, revoke) keep
+/// [`node_or_404`]: they need the full name.
+pub(crate) fn resolve_node_for(who: &Who, token: Option<&str>, ws_id: Option<&str>) -> R<store::NodeRow> {
+    let t = token.map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| no(codes::BAD_REQUEST, 400, "name a node"))?;
+    let (exact, all) = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        (store::find_node(&conn, t).filter(|n| n.state != "revoked"), store::list_nodes(&conn, false))
+    };
+    if let Some(n) = exact {
+        return Ok(n);
+    }
+    let granted: Option<Vec<String>> = (!who.is_admin()).then(|| ws_id.map(granted_node_ids).unwrap_or_default());
+    let mut hits: Vec<store::NodeRow> = all
+        .into_iter()
+        .filter(|n| n.state != "revoked" && n.name.starts_with(t) && granted.as_ref().is_none_or(|g| g.contains(&n.id)))
+        .collect();
+    hits.sort_by(|a, b| a.name.cmp(&b.name));
+    match hits.len() {
+        1 => Ok(hits.remove(0)),
+        0 => Err(no(codes::NODE_NOT_FOUND, 404, format!("no compute node '{t}' (k2 compute nodes)"))),
+        _ => {
+            let names: Vec<&str> = hits.iter().map(|n| n.name.as_str()).collect();
+            Err(no(NODE_AMBIGUOUS, 400, format!("'{t}' matches {} nodes ({}): name one of them in full", names.len(), names.join(", "))))
+        }
+    }
+}
+
 pub(crate) fn audit(who: &Who, kind: &str, node: Option<&str>, ws: Option<&str>, job: Option<&str>, detail: serde_json::Value) {
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -889,7 +925,7 @@ fn node_visible(who: &Who, n: &store::NodeRow) -> R<()> {
 
 fn node_info(who: &Who, params: &HashMap<String, String>, mgr: Option<&Manager>) -> R<serde_json::Value> {
     need_credential(who)?;
-    let n = node_or_404(params.get("node").map(String::as_str))?;
+    let n = resolve_node_for(who, params.get("node").map(String::as_str), who.passport().map(|(ws, _)| ws))?;
     if mgr.is_none() {
         node_visible(who, &n)?;
     }
@@ -1737,7 +1773,7 @@ fn submit_one(who: &Who, v: &serde_json::Value, ws: &Ws, client_id: &str, reques
     };
     // Node: by name (pinned), or auto (no node named, or --any).
     let mut warnings: Vec<String> = Vec::new();
-    let (node, placement) = pick_node(v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
+    let (node, placement) = pick_node(who, v, ws, &want, queue_timeout, &opts.prefer_not, &mut warnings)?;
     // The default `--mem` never asks more than a small node has, nor more
     // than this server's share on a shared node allows per job.
     let mem_bytes = match (mem_defaulted, compute_ws::live_view(&node.id).2.or_else(|| node.last_offer.clone())) {
@@ -2164,6 +2200,8 @@ fn cache_op(who: &Who, node: Option<&str>, workspace: Option<&str>, name: Option
     }
     let ws = workspace.map(|w| ws_by_token_or_worktree(w).ok_or_else(|| no_workspace(w))).transpose()?;
     let nodes: Vec<store::NodeRow> = match node {
+        // A prefix reads (CE-11); clearing needs the full name.
+        Some(n) if !clear => vec![resolve_node_for(who, Some(n), who.passport().map(|(ws, _)| ws))?],
         Some(n) => vec![node_or_404(Some(n))?],
         None => {
             let db = k2_core::db::shared();
@@ -2705,6 +2743,7 @@ fn warm_key(ws: &Ws, v: &serde_json::Value) -> Option<(String, Option<String>)> 
 /// the owner or an Admin). No node named (or `--any`): auto-placement over
 /// the nodes this workspace is granted, for every caller (D1).
 fn pick_node(
+    who: &Who,
     v: &serde_json::Value,
     ws: &Ws,
     want: &crate::compute_place::Want,
@@ -2715,7 +2754,8 @@ fn pick_node(
     use crate::compute_place::{self as place, Tier};
     let now = compute::now();
     if let Some(name) = s(v, "node") {
-        let n = node_or_404(Some(name))?;
+        // The full name, or a unique prefix of a node it may see (CE-11).
+        let n = resolve_node_for(who, Some(name), Some(&ws.id))?;
         if n.state != "active" {
             return Err(no(codes::NODE_NOT_FOUND, 404, format!("'{}' is waiting for its code to be confirmed", n.name)));
         }

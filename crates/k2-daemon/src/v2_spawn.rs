@@ -611,43 +611,16 @@ pub(crate) const CONVERSATION_ALREADY_OPEN_MESSAGE: &str =
 /// 409 `conversation_is_canonical` when a non-canonical spawn would resume
 /// `conversation_id` while the workspace's pinned Chat owns it
 /// (`workspace_sessions.session_id`) or another live session already
-/// resumes it. `None` lets the spawn proceed.
+/// resumes it. `None` lets the spawn proceed. The question is the one
+/// shared seam every door asks (`conversation_owner`, WS-O13).
 fn conversation_owned_refusal(
     agent_name: &str,
     project_id: Option<&str>,
     conversation_id: Option<&str>,
 ) -> Option<HandlerResult> {
-    let id = conversation_id.map(str::trim).filter(|s| !s.is_empty())?;
-    let canonical_id = project_id.and_then(|pid| {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::db::schema::WorkspaceSession::get(&conn, pid)
-            .ok()
-            .flatten()
-            .and_then(|row| row.session_id)
-    });
-    let owned_by_canonical = canonical_id.as_deref().map(str::trim) == Some(id);
-    let live_owner = if owned_by_canonical {
-        None
-    } else {
-        v2_session_map::snapshot().into_iter().find_map(|(name, session)| {
-            if name == agent_name || !session.is_child_alive() {
-                return None;
-            }
-            let live_id = conversation_id_from_args(session.program.as_deref(), &session.args)?;
-            (live_id == id).then_some(name)
-        })
-    };
-    if !owned_by_canonical && live_owner.is_none() {
-        return None;
-    }
-    log_debug!(
-        "[v2-spawn] refusing duplicate of conversation {id}: agent={agent_name} \
-         canonical_row={owned_by_canonical} live_owner={live_owner:?}"
-    );
-    let canonical_owns = owned_by_canonical
-        || matches!((live_owner.as_deref(), project_id), (Some(owner), Some(pid)) if owner == pid);
-    let message = if canonical_owns {
+    let refused = crate::conversation_owner::duplicate_refusal(agent_name, project_id, conversation_id)?;
+    let id = refused.conversation_id;
+    let message = if refused.canonical_owns {
         CONVERSATION_IS_CANONICAL_MESSAGE
     } else {
         CONVERSATION_ALREADY_OPEN_MESSAGE

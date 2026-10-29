@@ -313,6 +313,25 @@ pub(crate) fn spawn_agent_session_v2_blocking_inner(
         existing.kill();
     }
 
+    // One runner per conversation (prd-workspace-sessions-cli-v1 WS-O13):
+    // a `tab-*` spawn (k2 sidecar new, k2 sessions open, the k2 msg
+    // sidecar wake) never resumes a conversation the workspace's pinned
+    // chat owns or another live runner already holds. The same seam
+    // `/cli/sessions/v2/spawn` asks; the doors map the prefix to a 409.
+    if k2_core::workspace_session_handles::is_tab_agent_name(&canonical_key) {
+        let resumes = crate::v2_spawn::conversation_id_from_args(
+            req.command.as_deref(),
+            req.args.as_deref().unwrap_or(&[]),
+        );
+        if let Some(refused) = crate::conversation_owner::duplicate_refusal(
+            &canonical_key,
+            req.project_id.as_deref(),
+            resumes.as_deref(),
+        ) {
+            return Err(crate::conversation_owner::spawn_refusal_text(&refused));
+        }
+    }
+
     // Folder-trust gate (prd-security-sweep-0464-v1 SS11). Every spawn but
     // a plain shell (canonical, heartbeat, wake, sidecar, agents launch,
     // terminal; `claude -p`, wrappers and launch-block commands included,

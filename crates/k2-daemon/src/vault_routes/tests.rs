@@ -1007,7 +1007,7 @@ fn the_doctor_reads_one_level_of_subfolders_and_skips_build_folders() {
     k2_core::test_env::symlink(ws.join("clone"), ws.join("linked")).expect("symlink");
     let scan = scan_env_files(&[ws.clone()]);
     assert_eq!(scan.stopped_after, None);
-    let mut paths: Vec<String> = scan.files.iter().map(|f| f.path.trim_start_matches(&ws.display().to_string()).to_string()).collect();
+    let mut paths: Vec<String> = scan.files.iter().map(|f| f.path.trim_start_matches(&ws.display().to_string()).replace('\\', "/")).collect();
     paths.sort();
     assert_eq!(paths, vec!["/.env".to_string(), "/clone/.env.local".to_string()], "{scan:?}");
 }
@@ -1059,7 +1059,7 @@ fn the_doctor_lists_cli_credential_files() {
     write(&home.join(".ssh/id_ed25519"), "-----BEGIN OPENSSH PRIVATE KEY-----\nk2test\n-----END OPENSSH PRIVATE KEY-----\n");
     write(&home.join(".ssh/id_ed25519.pub"), "ssh-ed25519 AAAA k2test\n");
     let found = cli_credential_files(&home, &[ws.clone()]);
-    let ends: Vec<String> = found.iter().map(|f| f.path.rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/")).collect();
+    let ends: Vec<String> = found.iter().map(|f| f.path.replace('\\', "/").rsplit('/').take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("/")).collect();
     assert_eq!(ends, vec!["gh/hosts.yml", "com.vercel.cli/auth.json", "home/.npmrc", "ws/ovh.conf", ".ssh/id_ed25519"], "{found:?}");
     for f in &found {
         assert!(!f.message.contains("k2test"), "never the value: {}", f.message);

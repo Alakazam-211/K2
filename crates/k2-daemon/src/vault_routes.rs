@@ -1052,14 +1052,27 @@ pub fn cli_credential_files(home: &std::path::Path, roots: &[std::path::PathBuf]
     let mut push = |p: std::path::PathBuf, what: &str, recipe: &str| {
         out.push(CliCredFinding { path: p.display().to_string(), message: format!("{} {what}; {recipe}", p.display()) });
     };
-    let gh = home.join(".config/gh/hosts.yml");
-    if read_small(&gh).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with("oauth_token:"))) {
-        push(gh, "holds a gh login token", "use env delivery instead (GH_TOKEN): k2 study vault, CLI TOOLS");
+    // Paths are joined part by part, so each reads in this OS's spelling.
+    let under = |parts: &[&str]| parts.iter().fold(home.to_path_buf(), |p, s| p.join(s));
+    // Windows keeps both tools' logins under %APPDATA% (home\AppData\Roaming).
+    let mut gh_files = vec![under(&[".config", "gh", "hosts.yml"])];
+    if cfg!(windows) {
+        gh_files.push(under(&["AppData", "Roaming", "GitHub CLI", "hosts.yml"]));
     }
-    for v in [
-        home.join(".local/share/com.vercel.cli/auth.json"),
-        home.join("Library/Application Support/com.vercel.cli/auth.json"),
-    ] {
+    for gh in gh_files {
+        if read_small(&gh).is_some_and(|t| t.lines().any(|l| l.trim_start().starts_with("oauth_token:"))) {
+            push(gh, "holds a gh login token", "use env delivery instead (GH_TOKEN): k2 study vault, CLI TOOLS");
+        }
+    }
+    let mut vercel_files = vec![
+        under(&[".local", "share", "com.vercel.cli", "auth.json"]),
+        under(&["Library", "Application Support", "com.vercel.cli", "auth.json"]),
+    ];
+    if cfg!(windows) {
+        vercel_files.push(under(&["AppData", "Roaming", "com.vercel.cli", "Data", "auth.json"]));
+        vercel_files.push(under(&["AppData", "Roaming", "com.vercel.cli", "auth.json"]));
+    }
+    for v in vercel_files {
         if read_small(&v).is_some_and(|t| t.contains("\"token\"")) {
             push(v, "holds a vercel login token", "use env delivery instead (VERCEL_TOKEN): k2 study vault, CLI TOOLS");
         }

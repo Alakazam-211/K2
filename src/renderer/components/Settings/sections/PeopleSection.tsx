@@ -10,6 +10,15 @@ import { primaryScope } from '@/kessel/server-scope'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
 import { SewPersonAccess } from './SewAccessParts'
 import type { ChatGrant } from './sew-api'
+import { fetchViewerRole } from '@/components/Presence/PresenceKickButton'
+import { daemonErrorText } from '@/lib/daemon-error'
+import {
+  AddUserDialog,
+  AddedUserDialog,
+  ResetPasswordDialog,
+  SetPasswordDialog,
+  type AddedUser,
+} from './AppUserDialogs'
 
 export const PEOPLE_MANIFEST: SettingEntry[] = [
   {
@@ -37,6 +46,10 @@ export type PersonRow = {
   pendingReset: boolean
   /** Why the tie exists: created | password | email | invite | app_key | app_reset. */
   tiedReasons: string[]
+  /** Why an owner reset won't mail the stored email (any tie, or unconfirmed). */
+  storedEmailRefused: string | null
+  /** The login is locked (wrong passwords) until then, epoch seconds. */
+  lockedUntil: number | null
 }
 
 type RoomAccess = { handle: string; caps: string[] }
@@ -121,6 +134,8 @@ export function parsePeople(raw: unknown): PersonRow[] {
       tiedTo: asString(rec.tiedTo),
       pendingReset: rec.pendingReset === true,
       tiedReasons: parseStringList(rec.tiedReasons),
+      storedEmailRefused: asString(rec.storedEmailRefused),
+      lockedUntil: typeof rec.lockedUntil === 'number' ? rec.lockedUntil : null,
     }]
   })
 }
@@ -241,10 +256,25 @@ export function PeopleSection(): React.JSX.Element {
   const [grantApp, setGrantApp] = useState('')
   const [grantTarget, setGrantTarget] = useState('')
   const [grantScope, setGrantScope] = useState('')
-  const [newUsername, setNewUsername] = useState('')
-  const [newFullName, setNewFullName] = useState('')
-  const [newPassword, setNewPassword] = useState('')
-  const [newEmail, setNewEmail] = useState('')
+  // Owner only (0.46.6): the daemon lets only the Owner manage App users,
+  // so nobody else sees actions that would fail.
+  const [isOwner, setIsOwner] = useState(false)
+  const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [dialog, setDialog] = useState<{ kind: 'reset' | 'set'; username: string } | null>(null)
+  const [adding, setAdding] = useState(false)
+  // The one-time result of Add user; dropped when its sheet closes.
+  const [added, setAdded] = useState<AddedUser | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    let live = true
+    void fetchViewerRole().then((role) => {
+      if (live) setIsOwner(role === 'owner')
+    })
+    return () => {
+      live = false
+    }
+  }, [])
 
   const refresh = useCallback(async () => {
     setError(null)
@@ -414,32 +444,23 @@ export function PeopleSection(): React.JSX.Element {
     }
   }, [person, grantKind, grantApp, grantTarget, grantRole, grantScope, refresh])
 
-  const addPerson = useCallback(async () => {
-    const username = newUsername.trim().toLowerCase()
-    const password = newPassword.trim()
-    if (!username || !password) return
-    const email = newEmail.trim()
-    const fullName = newFullName.trim()
-    setBusy('add-person')
-    setError(null)
-    try {
-      const body: { username: string; password: string; email?: string } = { username, password }
-      if (email) body.email = email
-      await daemonCliPost(primaryScope(), 'skin/users', body)
-      if (fullName) {
-        await daemonCliPost(primaryScope(), 'skin/users/full-name', { username, fullName })
+  const unlock = useCallback(
+    async (username: string) => {
+      setBusy(`unlock:${username}`)
+      setError(null)
+      setNotice(null)
+      try {
+        const r = asRecord(await daemonCliPost(primaryScope(), 'skin/users/unlock', { username }))
+        setNotice(r.cleared === true ? `${username} is unlocked and can sign in again.` : `${username} wasn’t locked.`)
+        await refresh()
+      } catch (e) {
+        setError(daemonErrorText(e))
+      } finally {
+        setBusy(null)
       }
-      setNewUsername('')
-      setNewFullName('')
-      setNewPassword('')
-      setNewEmail('')
-      await refresh()
-    } catch (e) {
-      setError(errText(e))
-    } finally {
-      setBusy(null)
-    }
-  }, [newUsername, newFullName, newPassword, newEmail, refresh])
+    },
+    [refresh],
+  )
 
   // Chat (Sew) grants have their own row (SewPersonAccess), not the
   // generic list.
@@ -459,6 +480,15 @@ export function PeopleSection(): React.JSX.Element {
     label: `${app.name} (${app.kind === 'skin' ? 'app' : app.kind})`,
   }))
   const roleChoices = roles.map((role) => ({ value: role.id, label: role.name }))
+  const dialogPerson = dialog ? people.find((p) => p.username === dialog.username) ?? null : null
+  // Closing a sheet drops whatever it showed once, and re-reads the list
+  // (a reset or set can change the lock and the tie).
+  const postHere = (route: string, body: Record<string, unknown>): Promise<unknown> =>
+    daemonCliPost(primaryScope(), route, body)
+  const closeDialog = (): void => {
+    setDialog(null)
+    void refresh()
+  }
 
   return (
     <div className="flex h-full min-h-0">
@@ -483,87 +513,107 @@ export function PeopleSection(): React.JSX.Element {
             <p className="px-3 text-[10px] text-[var(--color-text-muted)]">No app users yet.</p>
           ) : (
             people.map((row) => (
-              <button
-                key={row.username}
-                type="button"
-                aria-label={`Open ${row.username}`}
-                className={listButtonClass(selection === row.username)}
-                onClick={() => setSelection(row.username)}
-              >
-                <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
-                  {row.username}
-                  {row.pendingReset ? (
-                    <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warning-soft,#b7791f)]/20 text-[var(--color-text-secondary)]">
-                      Waiting for reset
+              <div key={row.username} className="relative flex items-stretch">
+                <button
+                  type="button"
+                  aria-label={`Open ${row.username}`}
+                  className={`${listButtonClass(selection === row.username)} min-w-0`}
+                  onClick={() => setSelection(row.username)}
+                >
+                  <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
+                    {row.username}
+                    {row.pendingReset ? (
+                      <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warning-soft,#b7791f)]/20 text-[var(--color-text-secondary)]">
+                        Waiting for reset
+                      </span>
+                    ) : null}
+                    {row.lockedUntil ? (
+                      <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-error)]/15 text-[var(--color-text-secondary)]">
+                        Locked
+                      </span>
+                    ) : null}
+                  </span>
+                  {row.fullName ? (
+                    <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
+                      {row.fullName}
                     </span>
                   ) : null}
-                </span>
-                {row.fullName ? (
-                  <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
-                    {row.fullName}
-                  </span>
+                  {sewGrantOf(row.id) ? (
+                    <span data-testid={`sew-tag-${row.username}`} className="block text-[9px] text-[var(--color-text-muted)] truncate">
+                      Sew {sewGrantOf(row.id)?.scope === 'guest' ? 'guest' : 'member'}
+                    </span>
+                  ) : null}
+                </button>
+                {isOwner ? (
+                  <button
+                    type="button"
+                    aria-label={`Password actions for ${row.username}`}
+                    aria-haspopup="menu"
+                    aria-expanded={menuFor === row.username}
+                    className="px-2 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] no-drag cursor-pointer flex-shrink-0"
+                    onClick={() => setMenuFor((m) => (m === row.username ? null : row.username))}
+                  >
+                    ⋯
+                  </button>
                 ) : null}
-                {sewGrantOf(row.id) ? (
-                  <span data-testid={`sew-tag-${row.username}`} className="block text-[9px] text-[var(--color-text-muted)] truncate">
-                    Sew {sewGrantOf(row.id)?.scope === 'guest' ? 'guest' : 'member'}
-                  </span>
+                {isOwner && menuFor === row.username ? (
+                  <div
+                    role="menu"
+                    aria-label={`Password actions for ${row.username}`}
+                    className="absolute right-1 top-full z-20 min-w-[10rem] py-1 bg-[var(--color-bg-elevated)] border border-[var(--color-border)] shadow-lg"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') setMenuFor(null)
+                    }}
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer"
+                      onClick={() => {
+                        setMenuFor(null)
+                        setDialog({ kind: 'reset', username: row.username })
+                      }}
+                    >
+                      Reset password…
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer"
+                      onClick={() => {
+                        setMenuFor(null)
+                        setDialog({ kind: 'set', username: row.username })
+                      }}
+                    >
+                      Set password…
+                    </button>
+                    {row.lockedUntil ? (
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={busy === `unlock:${row.username}`}
+                        className="block w-full text-left px-3 py-1 text-[11px] text-[var(--color-text-primary)] hover:bg-white/[0.05] no-drag cursor-pointer disabled:opacity-40"
+                        onClick={() => {
+                          setMenuFor(null)
+                          void unlock(row.username)
+                        }}
+                      >
+                        Unlock
+                      </button>
+                    ) : null}
+                  </div>
                 ) : null}
-              </button>
+              </div>
             ))
           )}
         </div>
-        <form
-          className="border-t border-[var(--color-border)] px-3 py-2 space-y-1.5"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void addPerson()
-          }}
-        >
-          <input
-            className={`${INPUT_CLS} w-full`}
-            aria-label="New app username"
-            placeholder="username"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            value={newUsername}
-            onChange={(e) => setNewUsername(e.target.value)}
-          />
-          <input
-            className={`${INPUT_CLS} w-full`}
-            aria-label="New app full name"
-            placeholder="full name"
-            value={newFullName}
-            onChange={(e) => setNewFullName(e.target.value)}
-          />
-          <input
-            type="password"
-            className={`${INPUT_CLS} w-full`}
-            aria-label="New app password"
-            placeholder="password"
-            autoComplete="new-password"
-            value={newPassword}
-            onChange={(e) => setNewPassword(e.target.value)}
-          />
-          <input
-            type="email"
-            className={`${INPUT_CLS} w-full`}
-            aria-label="New app email"
-            placeholder="email (optional)"
-            autoCapitalize="none"
-            autoCorrect="off"
-            spellCheck={false}
-            value={newEmail}
-            onChange={(e) => setNewEmail(e.target.value)}
-          />
-          <button
-            type="submit"
-            className={BTN_ACCENT}
-            disabled={busy === 'add-person' || !newUsername.trim() || !newPassword.trim()}
-          >
-            Add user
-          </button>
-        </form>
+        {isOwner ? (
+          <div className="border-t border-[var(--color-border)] px-3 py-2">
+            <button type="button" className={BTN_ACCENT} onClick={() => setAdding(true)}>
+              Add user
+            </button>
+          </div>
+        ) : null}
       </div>
       <div className="flex-1 overflow-y-auto p-6 min-h-0">
         {error && (
@@ -571,6 +621,7 @@ export function PeopleSection(): React.JSX.Element {
             {error}
           </p>
         )}
+        {notice && <p className="text-[10px] text-[var(--color-text-secondary)] mb-3">{notice}</p>}
         {person ? (
           <PersonDetail
             person={person}
@@ -604,11 +655,40 @@ export function PeopleSection(): React.JSX.Element {
             onGrantTarget={setGrantTarget}
             onGrantScope={setGrantScope}
             onAddGrant={() => void addGrant()}
+            onReset={isOwner ? () => setDialog({ kind: 'reset', username: person.username }) : null}
           />
         ) : (
           <p className="text-[10px] text-[var(--color-text-muted)]">Select a person.</p>
         )}
       </div>
+      {dialogPerson && dialog?.kind === 'reset' ? (
+        <ResetPasswordDialog key={`reset:${dialogPerson.username}`} person={dialogPerson} onClose={closeDialog} post={postHere} />
+      ) : null}
+      {dialogPerson && dialog?.kind === 'set' ? (
+        <SetPasswordDialog
+          key={`set:${dialogPerson.username}`}
+          person={dialogPerson}
+          onClose={closeDialog}
+          post={postHere}
+          onReset={() => setDialog({ kind: 'reset', username: dialogPerson.username })}
+        />
+      ) : null}
+      {adding ? (
+        <AddUserDialog
+          onClose={() => setAdding(false)}
+          apps={appChoices}
+          roles={roles.map((r) => ({ value: r.id, label: r.name, appId: r.appId }))}
+          loadApps={loadApps}
+          post={postHere}
+          onAdded={(result) => {
+            setAdding(false)
+            setSelection(result.username)
+            if (result.secret || result.note) setAdded(result)
+            void refresh()
+          }}
+        />
+      ) : null}
+      {added ? <AddedUserDialog added={added} onClose={() => setAdded(null)} /> : null}
     </div>
   )
 }
@@ -649,93 +729,34 @@ function roleBits(role: RoleRow | null, fallbackHandles: string[]): React.JSX.El
 
 /**
  * agent-app-users §5.5: a person an agent set up is tied to that agent's
- * workspace. When you gave them more, the extra waits for their own reset:
- * send a reset link to an email you give, or show a one-time link here.
- * The stored email is never used: an agent could have chosen it (when it
- * made them, invited them, set the email, or through an App key).
- * Nothing for an untied person.
+ * workspace. When you gave them more, the extra waits for their own reset.
+ * The owner's Reset password (a one-time link, or mailed to an address
+ * you give) is what lifts the tie. The stored email is never used: an
+ * agent could have chosen it. Nothing for an untied person. `onReset`:
+ * opens the Reset password sheet (the owner only; null hides it).
  */
-export function ResetPanel({ person }: { person: PersonRow }): React.JSX.Element | null {
-  const [busy, setBusy] = useState(false)
-  const [other, setOther] = useState('')
-  const [askOther, setAskOther] = useState(false)
-  const [note, setNote] = useState<string | null>(null)
-  const [link, setLink] = useState<string | null>(null)
-  const [from, setFrom] = useState('')
+export function ResetPanel({ person, onReset }: { person: PersonRow; onReset: (() => void) | null }): React.JSX.Element | null {
   if (!person.tiedTo) return null
-  const send = async (body: Record<string, unknown>) => {
-    setBusy(true)
-    setNote(null)
-    setLink(null)
-    try {
-      const withFrom = body.code || !from.trim() ? body : { ...body, from: from.trim() }
-      const r = asRecord(await daemonCliPost(primaryScope(), 'skin/users/reset-link', { username: person.username, ...withFrom }))
-      if (r.delivered === 'returned' && typeof r.link === 'string') {
-        setLink(r.link)
-        setNote('One-time link (shown once; give it to them yourself):')
-      } else if (r.delivered === 'held') {
-        setNote(asString(r.hint) ?? 'Held for approval.')
-      } else {
-        setNote(`Reset link sent to ${asString(r.sentTo) ?? 'their email'}.`)
-      }
-    } catch (e) {
-      setNote(errText(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-  const btn = 'text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer disabled:opacity-40'
   return (
     <SettingsGroup title={person.pendingReset ? 'Waiting for reset' : 'Set up by an agent'}>
       <p className="text-[10px] text-[var(--color-text-muted)]">
         {person.pendingReset
           ? `${person.tiedTo}'s agent set ${person.username} up, so the extra access you gave starts only after ${person.username} resets their password. Until then they keep ${person.tiedTo}'s access.`
           : `${person.tiedTo}'s agent set ${person.username} up. More access you give waits for their password reset.`}
-        {` ${person.tiedTo}'s agent could have chosen the stored email${person.email ? ` (${person.email})` : ''}, so a reset never goes there: send it to an email you know is theirs, or show a one-time link.`}
-        {' '}Mail leaves from an address no agent reads; links open K2's own page.
+        {` ${person.tiedTo}'s agent could have chosen the stored email${person.email ? ` (${person.email})` : ''}, so a reset never goes there: send it to an email you know is theirs, or get a one-time link.`}
+        {' '}Links open K2's own page.
       </p>
-      {person.pendingReset ? (
-        <div className="flex flex-wrap items-center gap-3 pt-1">
-          <button type="button" className={btn} disabled={busy} onClick={() => setAskOther(true)}>
-            Send to an email…
-          </button>
-          <button type="button" className={btn} disabled={busy} onClick={() => void send({ code: true })}>
-            Show a one-time link
+      {onReset ? (
+        <div className="pt-1">
+          <button
+            type="button"
+            className="text-[10px] text-[var(--color-accent)] hover:underline no-drag cursor-pointer"
+            onClick={onReset}
+          >
+            Reset password…
           </button>
         </div>
       ) : null}
-      {person.pendingReset ? (
-        <input
-          className={INPUT_CLS}
-          aria-label={`Reset mail sender for ${person.username}`}
-          placeholder="send from (an address no agent reads)"
-          value={from}
-          onChange={(e) => setFrom(e.target.value)}
-        />
-      ) : null}
-      {askOther ? (
-        <form
-          className="flex items-center gap-2 pt-1"
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (other.trim()) void send({ to: other.trim() })
-          }}
-        >
-          <input
-            type="email"
-            className={INPUT_CLS}
-            aria-label={`Reset link email for ${person.username}`}
-            placeholder="email"
-            value={other}
-            onChange={(e) => setOther(e.target.value)}
-          />
-          <button type="submit" className={btn} disabled={busy || !other.trim()}>
-            Send
-          </button>
-        </form>
-      ) : null}
-      {note ? <p className="text-[10px] text-[var(--color-text-secondary)] pt-1">{note}</p> : null}
-      {link ? <p className="text-[10px] font-mono break-all select-all text-[var(--color-text-primary)]">{link}</p> : null}
     </SettingsGroup>
   )
 }
@@ -772,6 +793,7 @@ function PersonDetail({
   onGrantTarget,
   onGrantScope,
   onAddGrant,
+  onReset,
 }: {
   person: PersonRow
   sewGrant: ChatGrant | null
@@ -804,6 +826,7 @@ function PersonDetail({
   onGrantTarget: (value: string) => void
   onGrantScope: (value: string) => void
   onAddGrant: () => void
+  onReset: (() => void) | null
 }): React.JSX.Element {
   const value = drafts[person.username] ?? person.fullName ?? ''
   const grantRoles = roleChoices.filter((choice) => {
@@ -852,7 +875,7 @@ function PersonDetail({
         ) : null}
       </form>
 
-      <ResetPanel key={person.username} person={person} />
+      <ResetPanel key={person.username} person={person} onReset={onReset} />
 
       <SewPersonAccess principalId={person.id} username={person.username} grant={sewGrant} onChanged={onSewChanged} />
 

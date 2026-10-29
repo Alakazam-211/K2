@@ -1050,6 +1050,20 @@ mod unix_impl {
                 let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
                 from_cli(crate::person_wallet_routes::handle_owner(p, caller, is_post, body, params, "cell"))
             }
+            // `k2 sessions` (prd-workspace-sessions-cli-v1 WS-R7): this
+            // cell's own workspace. Agents ask this socket first, so a
+            // route served only over TCP would fall back with the scoped
+            // token. Same POST rule and body cap as TCP.
+            p if crate::workspace_sessions_routes::is_route(p) => {
+                if crate::workspace_sessions_routes::is_post_route(p) && !is_post {
+                    return from_cli(crate::cli_response::CliResponse::method_not_allowed());
+                }
+                if body.len() > crate::workspace_sessions_routes::body_cap(p) {
+                    return from_cli(crate::workspace_sessions_routes::too_large(p));
+                }
+                let caller = crate::sidecar_routes::caller_from_session(this_session_id, principal);
+                from_cli(crate::workspace_sessions_routes::handle(p, caller, body, params, "cell"))
+            }
             p if p.starts_with("/cli/sidecar/") && crate::sidecar_routes::is_route(p) => {
                 if crate::sidecar_routes::is_post_route(p) && !is_post {
                     return from_cli(crate::cli_response::CliResponse::method_not_allowed());

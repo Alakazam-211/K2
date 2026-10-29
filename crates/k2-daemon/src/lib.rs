@@ -262,6 +262,11 @@ pub mod settings_routes;
 pub mod sidecar_routes;
 /// Workbench W1 (0.46.7): worktree sidecars (review, interrupt, land, retire).
 pub mod sidecar_worktree;
+// prd-workspace-sessions-cli-v1 (0.46.7): one runner per conversation (the
+// shared seam), the one workspace session list, and the `k2 sessions` routes.
+pub mod conversation_owner;
+pub mod workspace_roster;
+pub mod workspace_sessions_routes;
 pub mod ticket_settings_routes;
 // K2 compute nodes (prd-k2-compute-nodes-v1): routes + the live engine.
 pub mod compute_admin;

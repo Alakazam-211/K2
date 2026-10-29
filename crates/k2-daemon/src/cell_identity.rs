@@ -205,9 +205,20 @@ pub fn resolve_spawn_identity(
 /// Missing identity → teaching error (run inside a workspace session).
 pub fn handle_whoami(params: &HashMap<String, String>) -> CliResponse {
     match resolve_whoami(params) {
-        Ok(info) => CliResponse::ok_json(
-            serde_json::to_string(&info).unwrap_or_else(|_| "{}".into()),
-        ),
+        Ok(info) => {
+            let mut v = serde_json::to_value(&info).unwrap_or_else(|_| serde_json::json!({}));
+            // WS-D1: who else is here (the one roster), additive.
+            let project_id = info.path.as_deref().and_then(|path| {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                k2_core::workspace::agent_identity::resolve_project_id(&conn, path)
+            });
+            if let Some(pid) = project_id {
+                let session = param(params, "cell_session_id").or(Some(info.session.as_str()));
+                v["siblings"] = crate::workspace_roster::siblings(&pid, session);
+            }
+            CliResponse::ok_json(v.to_string())
+        }
         Err(hint) => CliResponse {
             status: "400 Bad Request",
             content_type: "application/json",

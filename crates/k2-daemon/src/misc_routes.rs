@@ -685,6 +685,14 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                                 Ok(with_users) => CliResponse::ok_json(with_users),
                                 Err(e) => CliResponse::bad_request(e),
                             }
+                        } else if action == "list" {
+                            // WS-C1: "This workspace" first — the one roster's
+                            // live rows. Additive; a failed read is `{error}`,
+                            // never an empty list.
+                            let session = params
+                                .get(crate::caller_workspace::CELL_SESSION_KEY)
+                                .map(String::as_str);
+                            CliResponse::ok_json(crate::workspace_roster::attach_this_workspace(&body, &p, session))
                         } else {
                             CliResponse::ok_json(body)
                         }

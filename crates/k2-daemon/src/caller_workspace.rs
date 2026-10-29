@@ -199,6 +199,7 @@ pub fn strip_request_stamps(params: &mut std::collections::HashMap<String, Strin
     params.remove(PRINCIPAL_BOUND_KEY);
     params.remove(CELL_SESSION_KEY);
     params.remove(CLIENT_PROJECT_KEY);
+    params.remove(crate::workspace_sessions_routes::CALLER_KIND_KEY);
 }
 
 /// The params key a passport's own `project=` claim is kept in before

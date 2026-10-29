@@ -370,11 +370,29 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
                 .filter(|s| *s > 0)
                 .map(std::time::Duration::from_secs)
                 .unwrap_or(crate::workspace_msg::DEFAULT_WAKE_TIMEOUT);
-            if workspace.is_empty() {
+            // prd-workspace-sessions-cli-v1 WS-M2: `k2 msg --session <id>`
+            // names a conversation by id (a unique prefix, or an address).
+            // Whoever holds it gets the message as today; a past-only one is
+            // reopened with the message as its first turn.
+            let session = opt_param(params, "session").filter(|s| !s.trim().is_empty());
+            if workspace.is_empty() && session.is_none() {
                 return Some(CliResponse::bad_request("Missing workspace"));
             }
             if text.is_empty() {
                 return Some(CliResponse::bad_request("Missing text"));
+            }
+            let workspace = match session.as_deref() {
+                Some(token) => match crate::workspace_sessions_routes::msg_session(
+                    params, token, &text, &from, &command, wake,
+                ) {
+                    crate::workspace_sessions_routes::SessionTarget::Deliver(addr) => addr,
+                    crate::workspace_sessions_routes::SessionTarget::Done(r) => return Some(r),
+                },
+                None => workspace,
+            };
+            // WS-M5: a session never messages itself.
+            if let Some(r) = crate::workspace_sessions_routes::self_message_refusal(params, &workspace) {
+                return Some(r);
             }
             // C2: scoped principal → require local connection to target.
             // Owner ambient (no principal) bypasses (Phase 2 residual).

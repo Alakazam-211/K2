@@ -84,7 +84,7 @@ impl Caller {
         }
     }
 
-    fn passport_project(&self) -> Option<&str> {
+    pub(crate) fn passport_project(&self) -> Option<&str> {
         match self {
             Caller::Shell { project_id } => Some(project_id),
             Caller::Agent(a) => Some(&a.project_id),
@@ -458,7 +458,7 @@ pub(crate) fn require_credential(caller: &Caller) -> Result<(), SidecarError> {
     }
 }
 
-const GATED_HINT: &str = "Ask your human to turn on 'Allow hiring and managing agents' in Settings → Workspaces / Agents → {ws} → Agent (or run k2 sidecar access on --workspace {ws} as the owner).";
+pub(crate) const GATED_HINT: &str = "Ask your human to turn on 'Allow hiring and managing agents' in Settings → Workspaces / Agents → {ws} → Agent (or run k2 sidecar access on --workspace {ws} as the owner).";
 
 /// The interim agent gate (§7.3 rules 1–3). Rule 5 (no more power) is
 /// checked once the preset is known.
@@ -509,7 +509,7 @@ pub(crate) fn live_session(agent_name: &str) -> Option<Arc<k2_core::terminal::Da
 }
 
 /// Live sidecars in a workspace (app-made included) — the cap count.
-fn live_sidecar_count(ws: &Workspace) -> usize {
+pub(crate) fn live_sidecar_count(ws: &Workspace) -> usize {
     let snapshot = v2_session_map::snapshot();
     let db = k2_core::db::shared();
     let conn = db.lock();
@@ -588,7 +588,14 @@ fn handle_new(
     agent_gate(caller, &ws)?;
 
     let name = str_field(&v, "name").unwrap_or("").trim().to_string();
-    let harness = str_field(&v, "harness").unwrap_or("").trim().to_string();
+    let mut harness = str_field(&v, "harness").unwrap_or("").trim().to_string();
+    // `k2 sessions new` with neither --cli nor --harness (WS-N1): an agent
+    // gets its own CLI; a person the workspace main chat's CLI.
+    if harness.is_empty() && v.get("defaultHarness").and_then(|d| d.as_bool()) == Some(true) {
+        harness = default_harness(caller, &ws).ok_or_else(|| {
+            err("harness_unknown", 400, "pass --cli <cli> (claude, codex, grok, gemini, cursor, pi, hermes)")
+        })?;
+    }
     let model = str_field(&v, "model")
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -1058,12 +1065,9 @@ fn handle_new(
             label: Some(display_name.clone()),
         })
         // Folder trust (SS11): held/denied is its own 409, with the message
-        // that says how the owner decides.
-        .map_err(|e| match k2_core::cli_folder_trust::gate::refusal_in_text(&e) {
-            Some(r) if r.error == k2_core::cli_folder_trust::gate::DENIED => err("folder_trust_denied", 409, r.message),
-            Some(r) => err("folder_trust_pending", 409, r.message),
-            None => err("spawn_failed", 500, e),
-        })?;
+        // that says how the owner decides. One runner per conversation
+        // (WS-O13): a conversation another live session holds is a 409.
+        .map_err(|e| spawn_error(&e))?;
     // The sidecar runs: its worktree stays whatever happens below.
     let worktree_out = new_wt.take().map(|w| w.keep());
     if run_dir != ws.path {
@@ -1194,8 +1198,44 @@ fn handle_new(
     Ok((body, resumed, format!("ok {address}{brief_audit}{wt_audit}")))
 }
 
+/// The CLI a `k2 sessions new` without --cli runs: the calling agent's
+/// own CLI, else the workspace main chat's.
+fn default_harness(caller: &Caller, ws: &Workspace) -> Option<String> {
+    if let Caller::Agent(a) = caller {
+        let own = a
+            .map_key
+            .as_deref()
+            .and_then(v2_session_map::lookup_by_agent_name)
+            .and_then(|s| s.program.clone())
+            .and_then(|p| core::supported_provider(&p).map(|r| r.provider.to_string()));
+        if own.is_some() {
+            return own;
+        }
+    }
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    k2_core::db::schema::WorkspaceSession::get(&conn, &ws.id)
+        .ok()
+        .flatten()
+        .map(|r| r.harness.trim().to_string())
+        .filter(|h| !h.is_empty())
+}
+
+/// A spawn error as its refusal: folder trust held/denied and the
+/// one-runner rule are 409s; anything else is `spawn_failed`.
+pub(crate) fn spawn_error(e: &str) -> SidecarError {
+    if let Some(sentence) = crate::conversation_owner::spawn_refusal_in(e) {
+        return err("conversation_live", 409, sentence.to_string());
+    }
+    match k2_core::cli_folder_trust::gate::refusal_in_text(e) {
+        Some(r) if r.error == k2_core::cli_folder_trust::gate::DENIED => err("folder_trust_denied", 409, r.message),
+        Some(r) => err("folder_trust_pending", 409, r.message),
+        None => err("spawn_failed", 500, e.to_string()),
+    }
+}
+
 /// The stored brief path for a pane group, when the file still exists.
-fn existing_brief(ws: &Workspace, pg: &str) -> Option<String> {
+pub(crate) fn existing_brief(ws: &Workspace, pg: &str) -> Option<String> {
     let rel = {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1207,7 +1247,7 @@ fn existing_brief(ws: &Workspace, pg: &str) -> Option<String> {
         .then_some(rel)
 }
 
-fn write_layout_and_title(ws: &Workspace, pg: &str, title: &str, program: &str, cid: Option<&str>) {
+pub(crate) fn write_layout_and_title(ws: &Workspace, pg: &str, title: &str, program: &str, cid: Option<&str>) {
     match core::ensure_layout_tab(&ws.id, pg, title, Some(program), cid) {
         Ok(core::LayoutWrite::Wrote {
             workspace_id,
@@ -1312,9 +1352,28 @@ fn handle_stop(caller: &Caller, body: &[u8]) -> Result<(serde_json::Value, Strin
     if force && matches!(caller, Caller::Agent(_)) {
         return Err(err("forbidden", 403, "agents may not use --force"));
     }
-    let raw = str_field(&v, "name").unwrap_or("").trim().to_string();
+    let mut raw = str_field(&v, "name").unwrap_or("").trim().to_string();
     if raw.is_empty() {
         return Err(err("no_such_sidecar", 404, "name the sidecar to stop"));
+    }
+    // An address `<ws>/<name>` (WS-N3, `k2 sessions stop k2/x`): the
+    // workspace half must be this workspace.
+    if let Some((ws_part, handle)) = k2_core::workspace_session_handles::split_workspace_handle(&raw) {
+        if !k2_core::workspace_session_handles::address_tokens_match(ws_part, &ws.handle) {
+            return Err(err(
+                "forbidden",
+                403,
+                format!("{raw} is not in {}; an agent may act only on its own workspace", ws.handle),
+            ));
+        }
+        raw = handle.to_string();
+    }
+    if raw == ws.handle {
+        return Err(err(
+            "forbidden",
+            403,
+            format!("{raw} is the main session; stop only sidecars (k2 sessions shows them)"),
+        ));
     }
     let token = k2_core::workspace_session_handles::slugify_custom_name(&raw)
         .unwrap_or_else(|_| raw.to_lowercase());

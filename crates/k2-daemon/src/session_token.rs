@@ -1083,6 +1083,15 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sidecar/interrupt",
         "/cli/sidecar/land",
         "/cli/sidecar/retire",
+        // `k2 sessions` (prd-workspace-sessions-cli-v1 WS-R7): the roster,
+        // past conversations, show and open. The handler keeps an agent
+        // to its own workspace, refuses a sandboxed one past/show, and
+        // gates open like `sidecar new`. `/cli/sessions/list-for-workspace`
+        // (the raw PTY view) stays off this list.
+        "/cli/sessions/roster",
+        "/cli/sessions/past",
+        "/cli/sessions/show",
+        "/cli/sessions/open",
         // Root helper status (read-only): agents see whether the helper is
         // there and what to ask their human for. update/rollback are NOT
         // here (owner/admin steps).
@@ -2517,6 +2526,16 @@ mod tests {
             is_agent_verb("/cli/terminal/read"),
             "C2 admits k2 read <ws> for scoped principals (peer-gated)"
         );
+        // `k2 sessions` (prd-workspace-sessions-cli-v1 WS-R7, WS-T6): the
+        // four routes agents use instead of the raw PTY view.
+        for p in [
+            "/cli/sessions/roster",
+            "/cli/sessions/past",
+            "/cli/sessions/show",
+            "/cli/sessions/open",
+        ] {
+            assert!(is_agent_verb(p), "{p} must be an agent verb");
+        }
         // The deliberate this-release DENIALS (PRD §B SCOPE HONESTY): these
         // stay owner/connect-user over TCP (write still denied).
         for p in [

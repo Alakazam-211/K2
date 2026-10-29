@@ -8341,6 +8341,52 @@ async fn handle_one_request(
                 super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
             }
         }
+        // `k2 sessions` (prd-workspace-sessions-cli-v1 §5): roster, past,
+        // show, open. Classified like `k2 sidecar` (the handler's caller
+        // rules); open is POST-only with the capped reader (413 closes).
+        p if crate::workspace_sessions_routes::is_route(p) => {
+            let post_row = crate::workspace_sessions_routes::is_post_route(p);
+            if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
+                return DispatchOutcome::Done;
+            }
+            let body_bytes = if is_post {
+                match super::http::read_post_body_capped(
+                    &mut *stream,
+                    &mut buf,
+                    crate::workspace_sessions_routes::body_cap(p),
+                )
+                .await
+                {
+                    Ok(b) => b,
+                    Err(refused) => {
+                        let r = crate::workspace_sessions_routes::too_large(p);
+                        super::http::refuse_body_too_large(&mut *stream, &refused, r.status, r.content_type, &r.body)
+                            .await;
+                        return DispatchOutcome::Done;
+                    }
+                }
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let caller = crate::sidecar_routes::caller_from_tcp(
+                p,
+                &query,
+                bearer_token.as_deref(),
+                state.token.as_str(),
+            );
+            let params = super::http::parse_params(&path, &query);
+            let p_owned = p.to_string();
+            let ingress_label = ingress.as_str().to_string();
+            let r = tokio::task::spawn_blocking(move || {
+                crate::workspace_sessions_routes::handle(&p_owned, caller, &body_bytes, &params, &ingress_label)
+            })
+            .await
+            .unwrap_or_else(|e| {
+                crate::cli_response::CliResponse::internal_error(format!("worker join: {e}"))
+            });
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if crate::sidecar_routes::is_route(p) => {
             let post_row = crate::sidecar_routes::is_post_route(p);
             if post_row && !super::http::require_post(&mut *stream, &mut buf, is_post).await {
@@ -10181,6 +10227,21 @@ async fn handle_one_request(
             }
             if let Some(ref principal) = scoped_principal {
                 crate::caller_workspace::stamp_principal(&mut params, principal);
+            } else {
+                // `k2 msg --session` reopens a past conversation for the
+                // owner token or an Admin login (WS-X5): the handler reads
+                // who called from this server-only key.
+                let kind = match crate::sidecar_routes::caller_from_tcp(
+                    p,
+                    &query,
+                    bearer_token.as_deref(),
+                    state.token.as_str(),
+                ) {
+                    crate::sidecar_routes::Caller::Login { username } => format!("login:{username}"),
+                    crate::sidecar_routes::Caller::Owner => "owner".to_string(),
+                    _ => "other".to_string(),
+                };
+                params.insert(crate::workspace_sessions_routes::CALLER_KIND_KEY.to_string(), kind);
             }
             let p_owned = p.to_string();
             let resp = tokio::task::spawn_blocking(move || {

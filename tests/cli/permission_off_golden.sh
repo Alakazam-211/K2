@@ -251,6 +251,12 @@ capture refused_connections_add  passport -- connections add billing
 capture refused_compute_node_rm  passport -- compute node remove mini-9
 capture refused_dns_record_add   passport -- dns record add example.com A www 192.0.2.1
 capture refused_sidecar_new      passport -- sidecar new reviewer --harness claude
+# k2 sessions (prd-workspace-sessions-cli-v1 WS-T8): open (switch off, and a
+# sidecar refused by the main-only rule) prints the daemon's refusal as is,
+# no `Ask with:` line while off; the roster read sends the passport.
+capture refused_sessions_open          passport -- sessions open 4e9a77c2 --name scroll-notes
+capture refused_sessions_open_sidecar  passport -- sessions open 8c1f2a9e
+capture sessions_roster_passport       passport -- sessions
 capture refused_app_approve      passport -- app approve ar_22
 capture refused_project_create   passport -- project create demo
 capture refused_vault_reveal     passport -- vault reveal STRIPE_KEY

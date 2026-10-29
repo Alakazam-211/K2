@@ -343,7 +343,7 @@ pub(crate) static SWITCHES: [Switch; 17] = [
             "Allow hiring and managing agents",
             "Let {ws} open and stop sidecar agents",
             "Sidecars work in {ws}'s workspace with its settings. It doesn't cover hiring new agents.",
-            &[code_wall("gated", "/cli/sidecar/")],
+            &[code_wall("gated", "/cli/sidecar/"), code_wall("gated", "/cli/sessions/open")],
             WallCoverage::PrefixOnly,
         ),
         off: off_spec(

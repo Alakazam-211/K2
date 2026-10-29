@@ -656,6 +656,9 @@ const WALLS: &[Wall] = &[
     },
     Wall { id: "a1_projects_manage", action: "projects.manage", method: "POST", path_q: "/cli/project-group/create", body: Some(r#"{"name":"pog-demo"}"#) },
     Wall { id: "a1_agents_manage", action: "agents.manage", method: "POST", path_q: "/cli/sidecar/new", body: Some("{}") },
+    // `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-T8): the same
+    // switch-off refusal as sidecar new, no `permission` object while off.
+    Wall { id: "a1_agents_manage_open", action: "agents.manage", method: "POST", path_q: "/cli/sessions/open", body: Some("{}") },
     Wall { id: "a1_mail_manage", action: "mail.manage", method: "GET", path_q: "/cli/mail/doctor", body: None },
     Wall { id: "a1_dns_manage", action: "dns.manage", method: "GET", path_q: "/cli/dns/records", body: None },
     Wall { id: "a1_db_agent_access", action: "db.agent-access level=", method: "POST", path_q: "/cli/db/create", body: Some("{}") },

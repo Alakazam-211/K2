@@ -256,6 +256,10 @@ pub(crate) const ROWS: &[Row] = &[
         params: SIDECAR_RETIRE_PARAMS,
         ..row(ask("sidecar.retire", Floor::Admin), code(403, "retire_needs_person"), "/cli/sidecar/retire", POST)
     },
+    // `k2 sessions open` (prd-workspace-sessions-cli-v1 WS-X4): the same
+    // switch as sidecar new. Its main-only refusal (`main_only`) can't be
+    // requested.
+    row(ask("agents.manage", Floor::Admin), code(403, "gated"), "/cli/sessions/open", POST),
     row(ask("projects.manage", Floor::Admin), code(403, "agent_permission_off"), "/cli/", ANY),
     // `k2 agent harness` / `k2 workspace swap-canonical` on the agent's own
     // workspace (0.46.6): the refusal carries the normalized harness.
@@ -844,6 +848,7 @@ mod tests {
             (403, "POST", "/cli/compute/nodes/retire", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.manage"),
             (403, "POST", "/cli/compute/grants/set", vec![], None, json!({"error":{"code":"owner_only"}}), "compute.use"),
             (403, "POST", "/cli/sidecar/new", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
+            (403, "POST", "/cli/sessions/open", vec![], None, json!({"error":{"code":"gated"}}), "agents.manage"),
             (403, "POST", "/cli/project-group/create", vec![], None, json!({"error":{"code":"agent_permission_off"},"ok":false}), "projects.manage"),
             (403, "POST", "/cli/app/exception", vec![], None, json!({"error":{"code":"apps_manage_off"}}), "apps.build"),
             (202, "POST", "/cli/app/build", vec![], None, json!({"status":"held","request":{"id":"w_1"}}), "apps.approve"),

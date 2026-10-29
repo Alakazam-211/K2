@@ -94,43 +94,53 @@ must_say() {
 # Agent processes of this user (sitting 2 needs them stopped). Tests narrow
 # the pattern with K2SIGN_SITTING_AGENT_RE (printed loudly when set).
 AGENT_RE="${K2SIGN_SITTING_AGENT_RE:-claude|grok|codex|k2-ptyd}"
+# Only pgrep (not the setuid /bin/ps, which sandboxes may refuse): -lf gives
+# "pid args", -P gives a process's children.
 descendants() { # <pid>: it and every process below it
-    /bin/ps -axo pid=,ppid= | awk -v root="$1" '{kids[$2]=kids[$2] " " $1} END{q=root; out=root; while (q != "") { split(q, a, " "); q=""; for (i in a) if (a[i] != "") { n=split(kids[a[i]], c, " "); for (j=1;j<=n;j++) { out=out " " c[j]; q=q " " c[j] } } } print out}'
-}
-ancestors() { # <pid>: it and every process above it
-    local p="$1" out=""
-    while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do out="$out $p"; p="$(/bin/ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"; done
+    local q="$1" out="$1" nq p c
+    while [ -n "$q" ]; do
+        nq=""
+        for p in $q; do
+            for c in $({ /usr/bin/pgrep -P "$p" 2>/dev/null || true; }); do out="$out $c"; nq="$nq $c"; done
+        done
+        q="$nq"
+    done
     printf '%s' "$out"
+}
+proc_args() { # <pid>: its argument list, if it is one of this user's processes
+    { /usr/bin/pgrep -u "$(id -un)" -lf . 2>/dev/null || true; } | awk -v p="$1" '$1==p {sub(/^[0-9]+ /, ""); print; exit}'
 }
 # agents_check: refuse while any agent of this user runs, except the one
 # --allow-agent pid (a live claude process of this user) and what it started,
 # and this sitting's own process tree. Lists everything it found.
 agents_check() {
-    local me pids skip others="" p line allowed=""
+    local me pids skip others="" p args allowed=""
     me="$(id -un)"
     [ "$AGENT_RE" = "claude|grok|codex|k2-ptyd" ] || printf '  \033[1;33mTEST: agent pattern overridden: %s\033[0m\n' "$AGENT_RE"
     if [ -n "$ALLOW_PID" ]; then
-        line=""
-        [[ "$ALLOW_PID" =~ ^[0-9]+$ ]] && line="$(/bin/ps -o user=,args= -p "$ALLOW_PID" 2>/dev/null || true)"
-        if [ -z "$line" ] || [ "$(awk '{print $1}' <<<"$line")" != "$me" ] || [ "$(awk '{n=split($2,a,"/"); print a[n]}' <<<"$line")" != claude ]; then
-            printf '  \033[1;31mNO\033[0m  --allow-agent %s is not a live claude process of %s%s\n' "$ALLOW_PID" "$me" "${line:+ (it is: $(cut -c1-80 <<<"$line"))}"
+        args=""
+        [[ "$ALLOW_PID" =~ ^[0-9]+$ ]] && args="$(proc_args "$ALLOW_PID")"
+        if [ -z "$args" ] || [ "$(awk '{n=split($1,a,"/"); print a[n]}' <<<"$args")" != claude ]; then
+            printf '  \033[1;31mNO\033[0m  --allow-agent %s is not a live claude process of %s%s\n' "$ALLOW_PID" "$me" "${args:+ (it is: $(cut -c1-80 <<<"$args"))}"
             return 1
         fi
         allowed="$(descendants "$ALLOW_PID")"
     fi
-    skip=" $allowed $(ancestors $$) $(descendants $$) "
+    skip=" $allowed $(descendants $$) "
     pids="$({ /usr/bin/pgrep -u "$me" -f "$AGENT_RE" 2>/dev/null || true; } | tr '\n' ' ')"
     for p in $pids; do
         case "$skip" in *" $p "*) continue ;; esac
+        # An ancestor of this sitting (the shell or agent that started it).
+        case " $(descendants "$p") " in *" $$ "*) continue ;; esac
         others="$others $p"
     done
     if [ -n "$ALLOW_PID" ]; then
         printf '  \033[1;33mALLOWED\033[0m  one agent keeps running at Rosson'"'"'s request: pid %s (%s) and the %s processes it started. Every other agent must be stopped.\n' \
-            "$ALLOW_PID" "$(/bin/ps -o args= -p "$ALLOW_PID" | cut -c1-60)" "$(( $(wc -w <<<"$allowed") - 1 ))"
+            "$ALLOW_PID" "$(proc_args "$ALLOW_PID" | cut -c1-60)" "$(( $(wc -w <<<"$allowed") - 1 ))"
     fi
     if [ -n "$others" ]; then
         printf '  \033[1;31mNO\033[0m  %s other agent process(es) still run as %s:\n' "$(wc -w <<<"$others" | tr -d ' ')" "$me"
-        for p in $others; do printf '        %s  %s\n' "$p" "$(/bin/ps -o args= -p "$p" 2>/dev/null | cut -c1-90)"; done
+        for p in $others; do printf '        %s  %s\n' "$p" "$(proc_args "$p" | cut -c1-90)"; done
         echo "      Stop them, then run again."
         return 1
     fi

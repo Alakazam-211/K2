@@ -145,7 +145,7 @@ export class K2App {
      * `pass` is the guest's session pass.
      */
     //
-    // Must-change (K2 0.46.6, catalog v37): when someone else set this
+    // Must-change (K2 0.46.6, catalog v38): when someone else set this
     // person's password (the owner, an admin, an agent, an App key, or K2
     // generated it), the right password gets NO pass. The answer is then
     // {ok: false, mustChangePassword: true, changeToken, changeUrl, ...}

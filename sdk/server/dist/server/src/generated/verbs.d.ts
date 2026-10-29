@@ -1,6 +1,6 @@
 import type { K2Error } from '../errors.ts';
 /** The catalog version this table was generated from. */
-export declare const CATALOG_VERSION = 37;
+export declare const CATALOG_VERSION = 38;
 /** A JSON Schema from the catalog's subset, reduced for projection. */
 export type Schema = {
     readonly [key: string]: unknown;

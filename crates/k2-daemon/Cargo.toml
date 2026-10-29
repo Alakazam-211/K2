@@ -381,6 +381,9 @@ k2-ptyd = { path = "../k2-ptyd" }
 # the header back with mail-parser. Test-only, no transitive deps
 # (gethostname feature off).
 mail-builder = { version = "1.0", default-features = false }
+# Docs test (kit v0.9.5 rollback): writes a newer kit's table into a temp
+# docs store, as that kit would. The redb k2-core and the kit already link.
+redb = "2"
 
 # K2 compute nodes: the headless contract test drives the REAL node runtime
 # (a separate crate that never links k2-core) against the in-process daemon.

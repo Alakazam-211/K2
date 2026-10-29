@@ -231,7 +231,10 @@ pub fn start() {
 
 /// What a failed store open says. A store written by a newer K2 (a newer
 /// store format) can't be opened by this one, and there is no way back:
-/// say exactly that (0.46.7 moved stores to format 5).
+/// say exactly that (0.46.7 moved stores to format 5; kit v0.9.5 keeps it).
+/// A newer kit may also add a table without a new format (v0.9.7's
+/// `authored`): that store still opens, reads and edits here, and only a
+/// purge or rewrite is refused (`store_newer`, `routes::session_error`).
 pub fn store_open_error(e: &k2_mpc_base::store::StoreError) -> String {
     match e {
         k2_mpc_base::store::StoreError::Newer { found } => format!(

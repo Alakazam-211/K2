@@ -247,6 +247,21 @@ impl Host for K2Host {
                 audit(AUDIT_FILE, EXTERNAL, format!("{} declined code={code}", key_label(key)))
             }
             AuditEvent::FileRestored { key } => audit(AUDIT_FILE, EXTERNAL, format!("{} restored", key_label(key))),
+            // Kit v0.9.5: the file came back holding one of the kit's own
+            // recent writes (a stale editor buffer), so it wasn't an edit.
+            AuditEvent::EchoSuppressed { key } => {
+                log_debug!("[docs] {}: a save of the kit's own earlier write was not taken as an edit", key_label(key))
+            }
+            // Kit v0.9.3's sampled edit check: never served, but a kit bug
+            // to report (the doc takes the slow path until reloaded).
+            AuditEvent::EditPathMismatch { key, client, change } => log_debug!(
+                "[docs] WARN: kit edit check failed on {} (client {client}, change {change}); slow path until reloaded, report it to K2 Cores",
+                key_label(key)
+            ),
+            AuditEvent::TextCacheMismatch { key, root, change } => log_debug!(
+                "[docs] WARN: kit text cache check failed on {} (root {root}, change {change}); fresh reads until reloaded, report it to K2 Cores",
+                key_label(key)
+            ),
             AuditEvent::DiskError { key, error } => {
                 log_debug!("[docs] WARN: disk error on {}: {error}", key_label(key));
                 audit(AUDIT_FILE, EXTERNAL, format!("{} disk_error", key_label(key)))

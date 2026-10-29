@@ -40,8 +40,11 @@
 //! the permission-card wrapper can teach them (`not_connected` →
 //! `k2 connections add`). Status codes, for the CLI's exit codes: 400 bad
 //! input or path (exit 2), 403 refused (3), 404 no such file or doc (4),
-//! 409 stale or conflicts (1), 422 declined (4), 429 rate-limited (2),
-//! 500 disk error (1), 503 docs unavailable.
+//! 409 stale or conflicts (1), 422 declined (4), 423 a quarantined doc
+//! (`doc_quarantined`, 3), 429 rate-limited (2), 500 disk error (1), 503
+//! docs unavailable. A kit error also names its own exit (`error.exit`,
+//! the kit's K-EXIT-1 table), which the CLI prefers: a store holding a
+//! newer kit's data answers 409 `store_newer` with exit 6.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,7 +62,7 @@ use k2_mpc_base::blob::BlobError;
 use k2_mpc_base::store::{DocKey, DocStore, StoreError};
 use k2_mpc_base::text::merge::Conflict;
 use k2_mpc_base::text::Hunk;
-use k2_mpc_base::ParticipantKind;
+use k2_mpc_base::{DocError, ParticipantKind};
 
 use super::caller::{refusal, DocCaller};
 use super::host::{self, CrossRefusal, DocRights, Principal};
@@ -576,7 +579,11 @@ fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, SessionErr
         target::Tier::Text(_) => Arc::new(k2_mpc_text::TextPack::for_path(&t.rel).unwrap_or(k2_mpc_text::PACK)),
         _ => Arc::new(k2_mpc_markdown::PACK),
     };
-    rt.open(&key, &t.abs, &t.root, pack)
+    let opened = rt.open(&key, &t.abs, &t.root, pack);
+    if let Err(SessionError::Doc(DocError::Quarantined)) = &opened {
+        log_debug!("[docs] WARN: {} is quarantined (kit v0.9.5): its stored history holds content the kit refuses; not loaded", host::key_label(&key));
+    }
+    opened
 }
 
 pub(super) enum VerbError {
@@ -615,6 +622,27 @@ pub(super) fn with_exit(mut r: CliResponse, exit: u8) -> CliResponse {
 /// code (`error.exit`).
 pub fn session_error(e: &SessionError) -> CliResponse {
     with_exit(session_error_body(e), k2_mpc_base::tools::session_exit(e))
+}
+
+/// A quarantined doc (kit v0.9.5): what every verb on it answers.
+pub const QUARANTINED_HINT: &str = "quarantined: this doc's stored history holds content K2 doesn't accept, so it isn't \
+     opened as a live doc. Nothing was changed, and the file itself is as it was: edit it outside k2 doc for now, and \
+     report it (the daemon log names the doc)";
+
+/// The kit's `MPC-E502` `store_newer` (v0.9.5): the store holds a newer
+/// kit's data (`table`), so a purge or rewrite is refused before anything
+/// changed. The hint is the kit's message word for word (it says which K2
+/// to upgrade to); exit 6 comes from `session_exit`.
+fn store_newer(err: &StoreError, table: &str) -> CliResponse {
+    CliResponse {
+        status: "409 Conflict",
+        content_type: "application/json",
+        body: json!({
+            "ok": false,
+            "error": { "code": "store_newer", "id": "MPC-E502", "hint": err.to_string(), "table": table },
+        })
+        .to_string(),
+    }
 }
 
 /// `4m 10s`, `35s`.
@@ -706,6 +734,11 @@ fn session_error_body(e: &SessionError) -> CliResponse {
             "any_file_off",
             "any-file docs are off on this server (their store didn't open; see the daemon log)",
         ),
+        // Kit v0.9.5 (rollback onto a newer kit's store): a purge or rewrite
+        // is refused before anything changes. The registry's MPC-E502
+        // `store_newer`; the kit's message is the guidance, passed on as is.
+        SessionError::Store(err @ StoreError::NewerData { table })
+        | SessionError::Blob(BlobError::Store(err @ StoreError::NewerData { table })) => store_newer(err, table),
         SessionError::Blob(BlobError::TooLarge { limit }) => refusal(
             "422 Unprocessable Entity",
             "too_large",
@@ -782,6 +815,18 @@ fn session_error_body(e: &SessionError) -> CliResponse {
             refusal("409 Conflict", "pack_mismatch", format!("this doc was stored as {stored}, not {pack}"))
         }
         SessionError::BadParticipant(m) | SessionError::BadPosition(m) | SessionError::BadEdit(m) => bad(m.clone()),
+        // Kit v0.9.5 (hardening): an update with content the kit never uses
+        // (subdocument updates are refused), unapplied; and a stored doc
+        // holding such content, quarantined (never loaded as live). Both are
+        // plain refusals (exit 3), never a 500.
+        SessionError::Doc(DocError::Unaccepted) => refusal(
+            "422 Unprocessable Entity",
+            "update_unaccepted",
+            "that update holds content K2 doesn't accept: nothing was applied",
+        ),
+        SessionError::Doc(DocError::Quarantined) => refusal("423 Locked", "doc_quarantined", QUARANTINED_HINT),
+        // `DocError` is `#[non_exhaustive]` (kit v0.9.5): any other engine
+        // error, today's and a later kit's, is the caller's bad input.
         SessionError::Doc(d) => bad(d.to_string()),
         SessionError::Released | SessionError::Unloaded => {
             refusal("503 Service Unavailable", "docs_unavailable", "live docs are restarting; run the command again")
@@ -2071,6 +2116,122 @@ mod tests {
         let person = super::super::caller::owner();
         let resp = handle("GET", READ, &params, br#"{"path":"a.md","onBehalfOf":"owner"}"#, &person);
         assert!(resp.status.starts_with("400"), "{}", resp.status);
+    }
+
+    fn error_of(r: &CliResponse) -> serde_json::Map<String, Value> {
+        let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.body));
+        assert_eq!(v["ok"], json!(false), "{}", r.body);
+        v["error"].as_object().unwrap_or_else(|| panic!("no error object: {}", r.body)).clone()
+    }
+
+    /// The kit's guidance for v0.9.7's `authored` table, word for word.
+    const STORE_NEWER_AUTHORED: &str = "This store holds data from a newer kit (table \"authored\"). Upgrade K2 to a \
+         version with kit ≥ v0.9.7 to purge or rewrite it; reading and editing still work.";
+
+    /// Kit v0.9.5: the two new `DocError`s are plain refusals with their
+    /// own codes and exit 3 (never a 500, never `bad_request`); any other
+    /// engine error still answers `bad_request`; `store_newer` passes the
+    /// kit's message on verbatim with exit 6, from either store.
+    #[test]
+    fn the_kits_v0_9_5_refusals_have_their_own_codes_and_exits() {
+        let unaccepted = session_error(&SessionError::Doc(DocError::Unaccepted));
+        assert_eq!(unaccepted.status, "422 Unprocessable Entity");
+        let e = error_of(&unaccepted);
+        assert_eq!(e["code"], json!("update_unaccepted"));
+        assert_eq!(e["exit"], json!(3));
+        assert_eq!(e["hint"], json!("that update holds content K2 doesn't accept: nothing was applied"));
+
+        let quarantined = session_error(&SessionError::Doc(DocError::Quarantined));
+        assert_eq!(quarantined.status, "423 Locked");
+        let e = error_of(&quarantined);
+        assert_eq!(e["code"], json!("doc_quarantined"));
+        assert_eq!(e["exit"], json!(3));
+        assert_eq!(e["hint"], json!(QUARANTINED_HINT));
+
+        let other = session_error(&SessionError::Doc(DocError::Pending));
+        assert_eq!(other.status, "400 Bad Request");
+        let e = error_of(&other);
+        assert_eq!(e["code"], json!("bad_request"));
+        assert_eq!(e["exit"], json!(2));
+
+        let newer = StoreError::NewerData { table: "authored".into() };
+        for err in [SessionError::Store(newer.clone()), SessionError::Blob(BlobError::Store(newer.clone()))] {
+            let r = session_error(&err);
+            assert_eq!(r.status, "409 Conflict", "{err:?}");
+            let e = error_of(&r);
+            assert_eq!(e["code"], json!("store_newer"), "{err:?}");
+            assert_eq!(e["id"], json!("MPC-E502"), "{err:?}");
+            assert_eq!(e["table"], json!("authored"), "{err:?}");
+            assert_eq!(e["hint"], json!(STORE_NEWER_AUTHORED), "{err:?}");
+            assert_eq!(e["exit"], json!(6), "{err:?}");
+        }
+        // Another table a newer kit adds names no version.
+        let e = error_of(&session_error(&SessionError::Store(StoreError::NewerData { table: "later".into() })));
+        assert_eq!(
+            e["hint"],
+            json!("This store holds data from a newer kit (table \"later\"). Upgrade K2 to a version with a newer kit to purge or rewrite it; reading and editing still work.")
+        );
+    }
+
+    /// Kit v0.9.5, end to end through the kit: a docs store holding a newer
+    /// kit's table (v0.9.7's `authored`, written with redb as that kit
+    /// would) still opens, reads and edits; a purge is refused before
+    /// anything changes, and K2 answers `store_newer` with the kit's
+    /// guidance verbatim, exit 6.
+    #[test]
+    fn a_purge_on_a_newer_kits_store_answers_store_newer_verbatim() {
+        use k2_mpc_base::session::{AuditEvent, Config, Host, Participant, PurgeRequest, PurgeScope, Rights, SessionManager};
+
+        struct OwnerHost;
+        impl Host for OwnerHost {
+            fn rights(&self, _: &Participant, _: &DocKey) -> Rights {
+                Rights::full().with_owner(true)
+            }
+            fn now_ms(&self) -> u64 {
+                1_000
+            }
+            fn on_event(&self, _: &AuditEvent) {}
+        }
+        let owner = || Participant::new("person:owner", "Owner", "#123456", ParticipantKind::Person, "cli");
+        let dir = std::env::temp_dir().join(format!("k2-store-newer-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("docs.redb");
+        let key = DocKey { space: "ws".into(), path: "notes.md".into() };
+        {
+            let store = Arc::new(DocStore::open(&path).expect("open a temp docs store"));
+            let mgr = SessionManager::new(store, Arc::new(OwnerHost), Config::default());
+            let s = mgr.open(Arc::new(k2_mpc_markdown::PACK), &key, Some(b"# notes\n\nkeep this line\n")).expect("import");
+            drop(s);
+            mgr.release().expect("release");
+        }
+        {
+            let db = redb::Database::open(&path).expect("the store, through redb");
+            let w = db.begin_write().expect("write txn");
+            {
+                let mut t = w.open_table(redb::TableDefinition::<u64, &[u8]>::new("authored")).expect("a newer kit's table");
+                t.insert(1, b"a newer kit's row".as_slice()).expect("row");
+            }
+            w.commit().expect("commit");
+        }
+        let store = Arc::new(DocStore::open(&path).expect("a newer kit's store still opens"));
+        let mgr = SessionManager::new(store, Arc::new(OwnerHost), Config::default());
+        let s = mgr.open(Arc::new(k2_mpc_markdown::PACK), &key, None).expect("and loads");
+        let conn = s.join(owner(), Stay::Held).expect("join").conn;
+        s.replace_text(conn, k2_mpc_markdown::ROOT, "# notes\n\nkeep this line\nand one more\n").expect("editing still works");
+        let before = std::fs::read(&path).expect("read the store file");
+        let err = s.purge(conn, PurgeRequest::new(PurgeScope::History)).expect_err("a purge is refused");
+        assert_eq!(err, SessionError::Store(StoreError::NewerData { table: "authored".into() }));
+        assert_eq!(std::fs::read(&path).expect("read the store file"), before, "nothing changed");
+        let r = session_error(&err);
+        assert_eq!(r.status, "409 Conflict");
+        let e = error_of(&r);
+        assert_eq!(e["code"], json!("store_newer"));
+        assert_eq!(e["hint"], json!(STORE_NEWER_AUTHORED));
+        assert_eq!(e["exit"], json!(6));
+        drop(s);
+        mgr.release().expect("release");
+        drop(mgr);
+        std::fs::remove_dir_all(&dir).expect("remove the temp store");
     }
 
     /// K-PAR-5: every verb of the kit's registry for the Markdown pack is a

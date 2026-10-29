@@ -107,10 +107,13 @@ pub fn local_for(app_id: &str) -> Option<crate::client_ip::LocalAnswer> {
 fn resp(status: &str, body: Option<&J>, head_only: bool) -> Vec<u8> {
     let common = "Cache-Control: no-cache\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n";
     match body {
-        None => format!("HTTP/1.1 {status}\r\n{common}\r\n").into_bytes(),
+        // JSON, never a document; framing refused anyway (the frame walk).
+        None => format!("HTTP/1.1 {status}\r\nX-Frame-Options: DENY\r\n{common}\r\n").into_bytes(),
         Some(b) => {
             let text = b.to_string();
-            let mut out = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{common}\r\n", text.len()).into_bytes();
+            let mut out =
+                format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nX-Frame-Options: DENY\r\n{common}\r\n", text.len())
+                    .into_bytes();
             if !head_only {
                 out.extend_from_slice(text.as_bytes());
             }

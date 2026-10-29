@@ -20,6 +20,7 @@ struct Fx {
     _db: k2_core::db::TestDbGuard,
     _home: crate::test_support::TempHome,
     _env: k2_core::test_env::EnvLock,
+    _dl_base: k2_core::test_env::EnvVar,
     app_id: String,
     ws: String,
     ws_path: std::path::PathBuf,
@@ -66,9 +67,9 @@ fn fx(tag: &str) -> Fx {
         .expect("runtime app");
     }
     let host = FakeHost::start(&[(&format!("dev.k2.box.{app_id}"), TOKEN_A)]);
-    std::env::set_var("K2_DL_BASE", &host.base);
+    let dl_base = k2_core::test_env::EnvVar::set("K2_DL_BASE", &host.base);
     super::super::updates_serve::reset_for_test();
-    Fx { _db: db, _home: home, _env: env, app_id, ws, ws_path, other_ws, host }
+    Fx { _db: db, _home: home, _env: env, _dl_base: dl_base, app_id, ws, ws_path, other_ws, host }
 }
 
 fn agent(ws: &str) -> Who {
@@ -241,10 +242,10 @@ fn a_push_uploads_once_moves_the_channel_and_k2_answers_tauri() {
     };
     // Two dynamic checks (one per caller version), one install (the same
     // id on the same day counts once, whatever version it was on).
-    let mac: Vec<_> = rows.iter().filter(|r| r.platform == "darwin-aarch64").collect();
-    assert_eq!(mac.iter().map(|r| r.checks).sum::<i64>(), 2, "{rows:?}");
-    assert_eq!(mac.iter().map(|r| r.installs).sum::<i64>(), 1, "{rows:?}");
-    assert!(mac.iter().any(|r| r.version == "1.3.0") && mac.iter().any(|r| r.version == "1.4.0"), "counted by version: {rows:?}");
+    let mac_rows: Vec<_> = rows.iter().filter(|r| r.platform == "darwin-aarch64").collect();
+    assert_eq!(mac_rows.iter().map(|r| r.checks).sum::<i64>(), 2, "{rows:?}");
+    assert_eq!(mac_rows.iter().map(|r| r.installs).sum::<i64>(), 1, "{rows:?}");
+    assert!(mac_rows.iter().any(|r| r.version == "1.3.0") && mac_rows.iter().any(|r| r.version == "1.4.0"), "counted by version: {rows:?}");
     // The same version again is refused; an older one too.
     let (st, v) = push(&f, "1.4.0", "stable", json!([{ "platform": "darwin-aarch64", "path": mac }, { "platform": "windows-x86_64", "path": win }]));
     assert_eq!((st, code(&v)), (409, "version_exists"));

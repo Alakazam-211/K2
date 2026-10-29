@@ -54,6 +54,18 @@ pub const SUPPORTED_PROVIDERS: &[&str] = &[
     "claude", "grok", "codex", "gemini", "cursor", "pi", "hermes",
 ];
 
+/// The key that stops a harness's current turn without quitting it
+/// (Workbench W1 B2, `POST /cli/sidecar/interrupt`): the bytes the desktop's
+/// Esc / Ctrl+C send (`terminalCompose.ts`). Esc for claude, grok, gemini,
+/// codex and pi; Ctrl+C (once) for cursor-agent and hermes, whose TUIs stop
+/// a turn on it and quit only on a second one.
+pub fn interrupt_bytes(provider: &str) -> &'static [u8] {
+    match provider {
+        "cursor" | "hermes" => b"\x03",
+        _ => b"\x1b",
+    }
+}
+
 /// Effective live cap.
 pub fn cap() -> usize {
     std::env::var("K2_SIDECAR_CAP")

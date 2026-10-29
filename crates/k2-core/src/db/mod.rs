@@ -1705,6 +1705,12 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // `projects.mobile_tab_enabled`, nullable (NULL = auto). ADD COLUMN
         // only; renumber freely on a slip (and edit the migration-order tests).
         ("0250_workspace_mobile_tab", include_str!("../../drizzle_sql/0250_workspace_mobile_tab.sql")),
+        // 0251 — Workbench W1, worktree sidecars (research-t3code-ui-as-
+        // garden-v1-vs-live E1/E5/E6/E9, 0.46.7): the worktree, base, land
+        // and retire columns on `workspace_tab_sessions`. ADD COLUMN only;
+        // renumber freely on a slip (and edit the migration-order tests).
+        // The store is `crate::worktree_task::store`.
+        ("0251_sidecar_worktrees", include_str!("../../drizzle_sql/0251_sidecar_worktrees.sql")),
         // 0252 — bigger sealed push buckets (push-e2e-v2, 0.46.7, K2):
         // `push_device_keys.v` (the format a phone can open) and
         // `push_relay_caps.s2`. Additive columns; renumber freely on a slip
@@ -2475,6 +2481,8 @@ mod tests {
                 "0248_email_notify_queue",
                 // 0.46.7: the pinned Mobile tab switch.
                 "0250_workspace_mobile_tab",
+                // 0.46.7: worktree sidecars (Workbench W1).
+                "0251_sidecar_worktrees",
                 // 0.46.7: bigger sealed push buckets (push-e2e-v2, K2).
                 "0252_push_e2e_v2",
             ],
@@ -2586,6 +2594,8 @@ mod tests {
                 "0248_email_notify_queue",
                 // 0.46.7: the pinned Mobile tab switch.
                 "0250_workspace_mobile_tab",
+                // 0.46.7: worktree sidecars (Workbench W1).
+                "0251_sidecar_worktrees",
                 // 0.46.7: bigger sealed push buckets (push-e2e-v2, K2).
                 "0252_push_e2e_v2",
             ],
@@ -2853,9 +2863,10 @@ mod tests {
                 "0247_email_agent_notices",
                 "0248_email_notify_queue",
                 "0250_workspace_mobile_tab",
+                "0251_sidecar_worktrees",
                 "0252_push_e2e_v2"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250 and 0252)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251 and 0252)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3700,6 +3711,9 @@ mod tests {
             // 0252 (push-e2e-v2, 0.46.7) is newer still: its record goes
             // (re-adding its two columns is skipped as duplicates).
             conn.execute("DELETE FROM _migrations WHERE name = '0252_push_e2e_v2'", []).unwrap();
+            // 0251 (worktree sidecars, 0.46.7) came before it: its record
+            // goes (its column re-adds are skipped as duplicates).
+            conn.execute("DELETE FROM _migrations WHERE name = '0251_sidecar_worktrees'", []).unwrap();
             // 0250 (the Mobile tab switch, 0.46.7) came before it: its record
             // goes (its column re-add is skipped as a duplicate).
             conn.execute("DELETE FROM _migrations WHERE name = '0250_workspace_mobile_tab'", []).unwrap();

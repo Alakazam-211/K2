@@ -163,6 +163,12 @@ pub enum ParamKind {
     /// An App of the asking workspace (its id, name or `<ws>/<name>`):
     /// `apps.user-password-reset app=` (0.46.6).
     App,
+    /// A worktree sidecar of the asking workspace, by handle (its
+    /// `<ws>/<name>` address's name): `git.land sidecar=` (0.46.7).
+    Sidecar,
+    /// A git commit, its full sha or a prefix of at least 7: `git.land
+    /// tip=`, the branch tip the person lands (0.46.7).
+    Commit,
 }
 
 /// One value an action takes (`key=value` on the CLI).

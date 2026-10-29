@@ -279,6 +279,20 @@ pub fn create_worktree(
     project_path: &str,
     branch_name: &str,
 ) -> Result<WorktreeCreateResult, String> {
+    create_worktree_from(project_path, branch_name, "HEAD")
+}
+
+/// [`create_worktree`] with the new branch cut from `base` (a ref or a
+/// commit the caller has resolved; Workbench W1 passes the base commit,
+/// never whatever HEAD happens to be). `base` must not start with `-`.
+pub fn create_worktree_from(
+    project_path: &str,
+    branch_name: &str,
+    base: &str,
+) -> Result<WorktreeCreateResult, String> {
+    if base.is_empty() || base.starts_with('-') || branch_name.is_empty() || branch_name.starts_with('-') {
+        return Err(format!("git worktree add refused: bad branch '{branch_name}' or base '{base}'"));
+    }
     let worktrees_dir = Path::new(project_path).join(".worktrees");
 
     // Create worktrees directory if needed
@@ -322,9 +336,9 @@ pub fn create_worktree(
     let worktree_path = worktrees_dir.join(&safe_branch);
     let wt_path_str = worktree_path.to_string_lossy().to_string();
 
-    // Always create a new branch from HEAD
+    // Always create a new branch, from `base` (HEAD for the legacy route).
     let output = crate::git_safe::git(project_path)
-        .args(["worktree", "add", "-b", branch_name, &wt_path_str, "HEAD"])
+        .args(["worktree", "add", "-b", branch_name, &wt_path_str, base])
         .output()
         .map_err(|e| format!("Failed to run git worktree add: {}", e))?;
 

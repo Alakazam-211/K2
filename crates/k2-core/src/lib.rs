@@ -263,6 +263,9 @@ pub mod workspace_compose_history;
 pub mod workspace_session_handles;
 /// k2 sidecar v1 — names, brief, per-harness resume, layout, discovery.
 pub mod sidecar;
+/// Workbench W1 (0.46.7): worktree sidecars' git half (create, review,
+/// Land, retire) and their durable columns (migration 0251).
+pub mod worktree_task;
 /// Overlay threads + chatter (prd-overlay-threads-v1 S1).
 pub mod overlay;
 pub mod hook_config;

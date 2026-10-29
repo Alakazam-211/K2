@@ -136,7 +136,7 @@ fn only_an_agent_of_the_apps_workspace_asks_for_its_own_apps_users() {
     let other = seed("prother");
     let (s, v) = ask(&other, ACTION, json!({ "user": u }));
     assert_eq!((s.as_str(), &v["error"]["code"]), ("400 Bad Request", &json!("bad_params")), "{v}");
-    assert!(v["error"]["hint"].as_str().unwrap().contains("holds no App of"), "{v}");
+    assert!(v["error"]["hint"].as_str().unwrap().contains("doesn't use any App of"), "{v}");
     let (s, v) = ask(&other, ACTION, json!({ "user": u, "app": e.app }));
     assert_eq!(s, "400 Bad Request", "{v}");
     assert!(v["error"]["hint"].as_str().unwrap().contains("isn't an App of"), "{v}");

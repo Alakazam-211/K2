@@ -155,7 +155,7 @@ export function PermissionReveal({
       </div>
       <div data-testid="permission-reveal-clock" className="text-[10px]" style={{ color: MUTED }}>
         Shown once, only to you. Gone in {clock(left)}, or when you close it{copied ? '' : ' or 10 s after you copy it'}. Your clipboard
-        may keep a copy.
+        may keep a copy. Lost it? Reset them again in Settings → User Access.
       </div>
     </div>
   )

@@ -62,7 +62,7 @@ pub(crate) const FLOOR: Floor = Floor::Admin;
 pub(crate) const REVEAL_NEEDS_SCREEN: &str = "reveal_needs_screen";
 
 /// What that refusal says.
-pub(crate) const REVEAL_HINT: &str = "Open this card in K2 on your computer or the web to see the password or link (shown there once, to you only). From here, Email them a link instead works when the card offers it.";
+pub(crate) const REVEAL_HINT: &str = "From here you can only email them a link (when the card offers it). To see a new password or link, open this card in K2 on your computer or the web: it is shown there once, only to you.";
 
 /// How long the card shows the secret before wiping it.
 pub(crate) const REVEAL_SECS: i64 = 60;
@@ -167,7 +167,10 @@ fn target(ctx: &Ctx) -> Result<Target, String> {
     };
     let Some(person) = person else { return Err(format!("no App user {user:?} (k2 app user list)")) };
     if skin::test_guests::get(&person.id)?.is_some() {
-        return Err(format!("'{}' is a test guest: set its password yourself (k2 app user password {} --password-stdin)", person.username, person.username));
+        return Err(format!(
+            "'{}' is a test guest (a short-lived user for testing an App): set its password yourself (k2 app user password {} --password-stdin)",
+            person.username, person.username
+        ));
     }
     let grants = skin::list_grants()?;
     let apps: Vec<String> = grants
@@ -190,7 +193,7 @@ fn target(ctx: &Ctx) -> Result<Target, String> {
                 .or_else(|| apps.iter().find(|a| mine(a)));
             match pick {
                 Some(a) => a.clone(),
-                None => return Err(format!("{} holds no App of {}: only the owner resets them (Settings → User Access)", person.username, ctx.workspace_handle)),
+                None => return Err(format!("{} doesn't use any App of {}: only the owner resets them (Settings → User Access)", person.username, ctx.workspace_handle)),
             }
         }
     };
@@ -212,27 +215,27 @@ fn email_blocker(t: &Target) -> Option<(&'static str, String)> {
     let u = &t.person.username;
     match crate::app_user_invites::k2_set_password_page() {
         Ok(Some(_)) => {}
-        Ok(None) => return Some(("no_front_door", "this box has no front door, so K2 has no set-password page to email: use a password or a link instead".into())),
-        Err(why) => return Some(("front_door_unsafe", format!("{why}: use a password or a link instead"))),
+        Ok(None) => return Some(("no_front_door", "this box has no front door, so K2 has no set-password page to email: ask again with mode=password or mode=link".into())),
+        Err(why) => return Some(("front_door_unsafe", format!("{why}: ask again with mode=password or mode=link"))),
     }
     match skin::ties::stored_email_refused(&t.person.id) {
         Ok(None) => {}
         Ok(Some(_)) => {
             return Some((
                 "email_unconfirmed",
-                format!("{u}'s stored email isn't one the owner confirmed (an agent could have chosen it), so K2 won't mail a reset there: use a password or a link instead"),
+                format!("{u}'s stored email isn't one the owner confirmed (an agent could have chosen it), so K2 won't mail a reset there: ask again with mode=password or mode=link"),
             ))
         }
         Err(e) => return Some(("failed", e)),
     }
     if t.person.email.as_deref().is_none_or(|e| e.trim().is_empty()) {
-        return Some(("no_email", format!("{u} has no email on file: use a password or a link instead")));
+        return Some(("no_email", format!("{u} has no email on file: ask again with mode=password or mode=link")));
     }
     match crate::app_user_invites::owner_reset_sender(&t.app, None) {
         Ok(Some(_)) => None,
         _ => Some((
             "owner_sender_required",
-            "this box has no sender no agent reads (Settings → Email Notifications): use a password or a link instead".into(),
+            "this box has no sender no agent reads (Settings → Email Notifications): ask again with mode=password or mode=link".into(),
         )),
     }
 }
@@ -271,7 +274,7 @@ pub(crate) fn with_computed(action: &str, ctx: &Ctx) -> Option<Ctx> {
         // password (the default)
         _ => (
             format!("K2 makes a new password for {who} and shows it to you once"),
-            format!("{who} is signed out everywhere and their sign-in lock is cleared. Read or send them the password yourself; they can change it after signing in."),
+            format!("{who} is signed out everywhere and their sign-in lock is cleared. Their old password stops working at once. Tell or send {who} the new one yourself; they can change it after signing in."),
         ),
     };
     out.params.insert("made".into(), Value::String(made));

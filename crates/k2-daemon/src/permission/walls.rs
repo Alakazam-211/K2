@@ -79,6 +79,10 @@ pub(crate) struct Row {
     /// mode, without it the link mode). Read for a match only, never as a
     /// value.
     pub body_has: Option<(&'static str, bool)>,
+    /// Keys left out of the ask when no source has a value (the action
+    /// picks one itself: `apps.user-password-reset app=`), instead of a
+    /// `key=<key>` placeholder for the agent to fill in.
+    pub optional: &'static [&'static str],
 }
 
 const fn ask(action: &'static str, floor: Floor) -> Target {
@@ -93,7 +97,7 @@ const ANY: WallMethod = WallMethod::Any;
 const POST: WallMethod = WallMethod::Post;
 
 const fn row(target: Target, matches: WallMatch, prefix: &'static str, method: WallMethod) -> Row {
-    Row { target, matches, prefix, method, when: &[], needs: None, params: &[], fixed: &[], body_has: None }
+    Row { target, matches, prefix, method, when: &[], needs: None, params: &[], fixed: &[], body_has: None, optional: &[] }
 }
 
 /// "a person does this in Settings" for never / dropped walls a broad row
@@ -262,12 +266,14 @@ pub(crate) const ROWS: &[Row] = &[
         body_has: Some(("/to", true)),
         fixed: &[("mode", "email")],
         params: PASSWORD_RESET_LINK_PARAMS,
+        optional: &["app"],
         ..row(ask("apps.user-password-reset", PASSWORD_RESET_FLOOR), code(403, "owner_only"), "/cli/skin/users/reset-link", POST)
     },
     Row {
         body_has: Some(("/to", false)),
         fixed: &[("mode", "link")],
         params: PASSWORD_RESET_LINK_PARAMS,
+        optional: &["app"],
         ..row(ask("apps.user-password-reset", PASSWORD_RESET_FLOOR), code(403, "owner_only"), "/cli/skin/users/reset-link", POST)
     },
     Row {
@@ -578,6 +584,9 @@ pub(crate) fn permission_for(req: &Refused<'_>) -> Option<Value> {
                 }
                 for (k, sources) in r.params {
                     let v = sources.iter().find_map(|f| param_value(f, req));
+                    if v.is_none() && r.optional.contains(k) {
+                        continue;
+                    }
                     // An unknown value stays visible as `key=<key>` in the
                     // command; the params object carries null for it.
                     params.insert((*k).to_string(), v.map(Value::String).unwrap_or(Value::Null));
@@ -975,7 +984,8 @@ mod tests {
         assert!(cmd.starts_with("k2 permission request apps.user-password-reset ") && cmd.contains(" user=adam") && cmd.contains(" app=agents.nsi") && cmd.contains(" mode=link"), "{cmd}");
         let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","to":"adam@example.test"})), owner_only()).unwrap();
         assert_eq!(p["params"]["mode"], "email", "{p}");
-        assert_eq!(p["params"]["app"], Value::Null, "no App named: the agent fills it in: {p}");
+        assert!(p["params"].get("app").is_none(), "no App named: K2 picks it, so no placeholder: {p}");
+        assert!(!p["command"].as_str().unwrap().contains("app="), "{p}");
         assert!(!p.to_string().contains("adam@example.test"), "the address never goes in the ask: {p}");
         // An empty `to` is no address.
         let p = teach_of(403, "POST", "/cli/skin/users/reset-link", &[], Some(json!({"username":"adam","to":""})), owner_only()).unwrap();

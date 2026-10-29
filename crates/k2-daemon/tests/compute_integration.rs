@@ -1827,3 +1827,132 @@ async fn job_tiers_v2_on_a_solo_node() {
     stop_node(port, "tiers2", running).await;
     drop(env);
 }
+
+/// prd-compute-easy-mode-0467, records and views (Lane B): one state
+/// everywhere (CE-A7), the stable `wait` (CE-7), `--tag` and who sent it
+/// (CE-9), whose counts (CE-7), and `cancel --all-mine` (CE-20), with
+/// another workspace's jobs never seen or touched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn easy_mode_records_and_views() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "ce-views");
+    let other_ws = seed_ws(&env, "ce-views-b");
+    let (agent, _) = passport(&ws);
+    let (agent2, _) = passport(&ws);
+    let (outsider, _) = passport(&other_ws);
+    let (running, _) = online_node_for(&env, port, "ce-views", &ws).await;
+    let r = post(port, "/cli/agent-access/set", OWNER, json!({"workspace": other_ws.id, "toggle": "compute", "value": true})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    node_pause(port, "ce-views", "pause").await;
+    let submit = |tok: String, client: &'static str, extra: Value| async move {
+        let mut body = run_body("ce-views", &["true"], client);
+        body["noSource"] = json!(true);
+        body["memBytes"] = json!(1u64 << 30);
+        for (k, v) in extra.as_object().expect("extra").clone() {
+            body[k] = v;
+        }
+        post(port, "/cli/compute/run", &tok, body).await
+    };
+
+    // CE-9: a bad tag is refused before anything is stored.
+    let r = submit(agent.clone(), "client-ce-views-00000", json!({"tag": "no spaces"})).await;
+    assert_eq!((r.status, code(&r)), (400, "tag_invalid".to_string()), "{}", r.body);
+    let r = submit(agent.clone(), "client-ce-views-00001", json!({"tag": "fuzz:p3"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let tagged = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let r = submit(agent.clone(), "client-ce-views-00002", json!({})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let plain = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    // Another session of the same workspace, and another workspace.
+    let r = submit(agent2.clone(), "client-ce-views-00003", json!({"tag": "fuzz:p3"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let sibling = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let r = submit(outsider.clone(), "client-ce-views-00004", json!({"tag": "fuzz:p3"})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let foreign = j(&r)["job"]["id"].as_str().expect("id").to_string();
+
+    // `jobs --tag`: this workspace's tagged jobs only, with who sent them.
+    let r = get(port, "/cli/compute/jobs", &agent, "tag=fuzz%3Ap3").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let rows = j(&r)["jobs"].as_array().expect("jobs").clone();
+    let ids: Vec<&str> = rows.iter().map(|r| r["id"].as_str().expect("id")).collect();
+    assert!(ids.contains(&tagged.as_str()) && ids.contains(&sibling.as_str()), "{ids:?}");
+    assert!(!ids.contains(&plain.as_str()) && !ids.contains(&foreign.as_str()), "{ids:?}");
+    let row = rows.iter().find(|r| r["id"] == tagged.as_str()).expect("tagged row");
+    assert_eq!((row["tag"].as_str(), row["submittedBy"].as_str()), (Some("fuzz:p3"), Some("agent:ce-views")), "{row}");
+    assert!(row["via"].is_null(), "a passport submit isn't marked: {row}");
+    let r = get(port, "/cli/compute/jobs", &agent, "tag=no%20spaces").await;
+    assert_eq!(r.status, 400, "a bad filter is refused, never ignored: {}", r.body);
+
+    // CE-7: a queued job's wait has every key; the result says the same state.
+    let v = job_json(port, &agent, &tagged).await;
+    let w = &v["wait"];
+    for k in ["where", "position", "of", "reason", "words", "etaSecs", "etaBasis", "holdsQueue", "since"] {
+        assert!(w.get(k).is_some(), "wait.{k} missing: {v}");
+    }
+    assert_eq!((v["state"].as_str(), v["result"]["state"].as_str()), (Some("queued"), Some("queued")), "{v}");
+    assert_eq!(v["result"]["wait"], v["wait"], "get --json carries the wait");
+    assert!(w["etaBasis"].as_str().is_some_and(|b| ["quote", "estimate", "unknown"].contains(&b)), "{w}");
+    assert_eq!(v["result"]["tag"], "fuzz:p3");
+
+    // CE-7: whose counts. The agent's nodes row says what is its own, and
+    // `status` (detail) gives the same numbers.
+    let r = get(port, "/cli/compute/nodes", &agent, "").await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let n = j(&r)["nodes"].as_array().expect("nodes").iter().find(|n| n["name"] == "ce-views").cloned().expect("row");
+    assert_eq!(n["queued"], 4, "this server's queued jobs there: {n}");
+    assert_eq!(n["mine"]["queued"], 3, "this workspace's: {n}");
+    assert!(n.get("nodeRunning").is_some() && n.get("idleCpuMillis").is_some(), "{n}");
+    let r = get(port, "/cli/compute/nodes", &agent, "detail=1").await;
+    let s = j(&r)["nodes"].as_array().expect("nodes").iter().find(|n| n["name"] == "ce-views").cloned().expect("row");
+    assert_eq!(s["status"]["queued"].as_array().map(|a| a.len()), Some(4), "status agrees with nodes: {s}");
+    assert_eq!(s["status"]["running"].as_array().map(|a| a.len() as u64), n["running"].as_u64(), "{s}");
+    // Another workspace's queued job shows only as a count, never its id.
+    let other_entry = s["status"]["queued"].as_array().expect("queued").iter().find(|e| e["workspace"].is_null()).cloned().expect("other ws entry");
+    assert!(other_entry.get("short").is_none() && other_entry.get("argv").is_none(), "{other_entry}");
+
+    // CE-20: --all-mine cancels this session's matching jobs only.
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"filter": {"scope": "session", "tag": "fuzz:p3"}})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let c = j(&r);
+    assert_eq!((c["matched"].as_u64(), c["count"].as_u64()), (Some(1), Some(1)), "{c}");
+    assert_eq!(c["cancelled"][0]["job"], &tagged[..8]);
+    assert_eq!(job_json(port, &agent, &plain).await["state"], "queued", "untagged: untouched");
+    assert_eq!(job_json(port, &agent2, &sibling).await["state"], "queued", "another session: untouched");
+    assert_eq!(job_json(port, &outsider, &foreign).await["state"], "queued", "another workspace: untouched");
+    // --workspace-all: every job of the workspace, never another's.
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"filter": {"scope": "workspace"}})).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(j(&r)["count"], 2, "{}", r.body);
+    assert_eq!(job_json(port, &outsider, &foreign).await["state"], "queued", "another workspace: untouched");
+    // The owner token has no session: --all-mine is refused, with the way out.
+    let r = post(port, "/cli/compute/jobs/cancel", OWNER, json!({"filter": {"scope": "session"}})).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    assert!(j(&r)["error"]["hint"].as_str().is_some_and(|h| h.contains("--workspace-all")), "{}", r.body);
+    let r = post(port, "/cli/compute/jobs/cancel", &agent, json!({"filter": {"scope": "session", "state": "soon"}})).await;
+    assert_eq!(r.status, 400, "{}", r.body);
+    let r = get(port, "/cli/compute/jobs/cancel", &agent, "").await;
+    assert_eq!(r.status, 405, "POST only: {}", r.body);
+
+    // CE-9: an owner-token submit is marked.
+    let mut body = run_body("ce-views", &["true"], "client-ce-views-00005");
+    body["noSource"] = json!(true);
+    body["memBytes"] = json!(1u64 << 30);
+    body["workspace"] = json!(ws.path.to_string_lossy());
+    let r = post(port, "/cli/compute/run", OWNER, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let owned = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let v = job_json(port, OWNER, &owned).await;
+    assert_eq!((v["via"].as_str(), v["submittedBy"].as_str(), v["result"]["via"].as_str()), (Some("owner_token"), Some("owner"), Some("owner_token")), "{v}");
+
+    for id in [&owned, &foreign] {
+        let r = post(port, "/cli/compute/jobs/cancel", OWNER, json!({"job": id})).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+    node_pause(port, "ce-views", "resume").await;
+    stop_node(port, "ce-views", running).await;
+    drop(env);
+}

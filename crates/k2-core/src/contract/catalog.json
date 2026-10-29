@@ -25215,7 +25215,7 @@
         "verb_unavailable",
         "failed"
       ],
-      "doc": "Every sidecar on this computer (the Workbench's tasks), with its worktree, branch and how far it is from its base. Pair with thread.onActivity for working / needs you.",
+      "doc": "Every sidecar on this computer (the Workbench's tasks): each row's address (pass it to the git.*, compute.jobs and agents.* rows), worktree, branch, ahead (commits not on its base yet) and dirty (uncommitted files). Pair with thread.onActivity for working / needs you.",
       "example": "const tasks = await k2.work.list()"
     },
     {
@@ -25449,11 +25449,12 @@
               "type": "string"
             },
             "oldFile": {
-              "type": "string"
+              "type": "string",
+              "description": "A renamed file's old name (from git.snapshot)."
             },
             "base": {
               "type": "string",
-              "description": "Diff against the merge base with this branch (the whole branch), instead of the last commit."
+              "description": "A branch name: diff against where the task's branch left it (the whole branch). Absent: the last commit vs the files now (uncommitted changes)."
             }
           },
           "required": [
@@ -25621,12 +25622,14 @@
               "description": "A row's address from agents.list() or work.list(): ws::local, or a sidecar's ws/name::local."
             },
             "base": {
-              "type": "string"
+              "type": "string",
+              "description": "A branch name (default: the workspace's default branch, usually main)."
             },
             "limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 200
+              "maximum": 200,
+              "description": "At most this many commits (default 50)."
             }
           },
           "required": [
@@ -25944,7 +25947,7 @@
         "failed",
         "confirm_required"
       ],
-      "doc": "Start an agent in a new git worktree on its own branch (k2 sidecar new --worktree), only just after a press in the widget; K2's sheet asks the person first.",
+      "doc": "Start an agent in a new git worktree on branch k2/<name> (k2 sidecar new --worktree), within 5 s of a press in the widget. K2's sheet asks the person first; Cancel there answers declined.",
       "example": "const t = await k2.agents.start({workspace: 'k2::local', name: 'fix-login', brief})"
     },
     {
@@ -26007,7 +26010,7 @@
         "verb_unavailable",
         "failed"
       ],
-      "doc": "Stop the agent's current turn (its harness's own interrupt key), only just after a press in the widget.",
+      "doc": "Stop the agent's current turn (its harness's own interrupt key, never the process), within 5 s of a press in the widget.",
       "example": "await k2.agents.stop({address: row.address})"
     },
     {
@@ -26099,7 +26102,7 @@
         "conflict",
         "confirm_required"
       ],
-      "doc": "Ask to land an agent's branch on its base (cherry-pick its commits). K2's sheet shows the commits and files; only the person's Land there lands it. The widget hears landed, declined or conflict.",
+      "doc": "Ask to land an agent's branch on its base (cherry-pick its commits), within 5 s of a press in the widget. K2's sheet shows the commits and files; only the person's Land there lands it. Answers {landed, commits, head, conflict, cancelled}: cancelled when the person pressed Cancel, conflict lists files when nothing could land.",
       "example": "const r = await k2.git.land({address: row.address})"
     },
     {
@@ -26180,7 +26183,7 @@
         "conflict",
         "confirm_required"
       ],
-      "doc": "Retire an agent: stop it, remove its worktree, delete its branch once landed (or with discard). K2's sheet asks the person first; its Thread stays.",
+      "doc": "Retire an agent (within 5 s of a press): stop it, remove its worktree, delete its branch. Refused (conflict) while it has commits that aren't landed, unless discard. K2's sheet asks the person first; answers {settled, discarded, cancelled}. Its Thread stays.",
       "example": "await k2.agents.settle({address: row.address, discard: true})"
     },
     {
@@ -26218,11 +26221,13 @@
                 "type": "object",
                 "properties": {
                   "file": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Relative to the agent's worktree (as git.snapshot names it)."
                   },
                   "line": {
                     "type": "integer",
-                    "minimum": 1
+                    "minimum": 1,
+                    "description": "The line in the file now, from 1 (absent: the file as a whole)."
                   },
                   "body": {
                     "type": "string",
@@ -26278,7 +26283,7 @@
         "verb_unavailable",
         "failed"
       ],
-      "doc": "Ask for changes: review notes on the agent's files (K2's Changes tab shows them too), sent to that agent's Thread, only just after a press in the widget.",
+      "doc": "Ask for changes (within 5 s of a press): review notes on the agent's files (line is the file's line now, from 1; K2's Changes tab shows them too), sent to that agent's own Thread unless send is false.",
       "example": "await k2.git.note({address: row.address, notes: [{file: 'src/a.ts', line: 12, body: 'Keep the old cookie'}]})"
     },
     {
@@ -26326,7 +26331,7 @@
         "verb_unavailable",
         "failed"
       ],
-      "doc": "Leave the Garden for the agent's terminal in K2 (its workspace on the Agents page, where a sidecar's tab is), only just after a press in the widget. K2's desktop only: guard it with k2.can.",
+      "doc": "Leave the Garden for the agent's terminal in K2 (its workspace on the Agents page, where a sidecar's tab is), within 5 s of a press in the widget. Takes the address itself (not an object). K2's desktop only: check k2.can('agents.openTerminal') first.",
       "example": "await k2.agents.openTerminal(row.address)"
     }
   ]

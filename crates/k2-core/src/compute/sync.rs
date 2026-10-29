@@ -636,16 +636,16 @@ mod tests {
         assert!(nested_repo(&ws, "k2-multiplayer-base/src").unwrap_err().contains("inside the git repo"));
         // A repo hidden under .k2/: refused even through a link.
         nested(&ws.join(".k2/notes/repo"), "n.md");
-        std::os::unix::fs::symlink(ws.join(".k2/notes/repo"), ws.join("notes-link")).unwrap();
+        crate::test_env::symlink(ws.join(".k2/notes/repo"), ws.join("notes-link")).unwrap();
         assert!(nested_repo(&ws, ".k2/notes/repo").is_err());
         assert!(nested_repo(&ws, "notes-link").is_err(), "a link into .k2/");
         // A link out of the workspace to a real repo: refused.
         let outside = d.join("private-repo");
         nested(&outside, "secret.txt");
-        std::os::unix::fs::symlink(&outside, ws.join("escape")).unwrap();
+        crate::test_env::symlink(&outside, ws.join("escape")).unwrap();
         assert!(nested_repo(&ws, "escape").unwrap_err().contains("outside the workspace"));
         // A link inside the workspace to a nested repo: fine, by its real name.
-        std::os::unix::fs::symlink(ws.join("k2-multiplayer-base"), ws.join("base-link")).unwrap();
+        crate::test_env::symlink(ws.join("k2-multiplayer-base"), ws.join("base-link")).unwrap();
         assert_eq!(nested_repo(&ws, "base-link").unwrap().rel, "k2-multiplayer-base");
         // A worktree, inside the workspace, of a repo outside it: refused.
         let foreign = ws.join("foreign-wt");

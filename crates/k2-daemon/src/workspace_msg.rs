@@ -2049,6 +2049,17 @@ fn wake_sidecar_and_fire(
         );
         return MsgResponse::fail(MsgReason::WorkspaceNotFound);
     };
+    // Workbench W1: a retired worktree sidecar keeps its Thread, read-only;
+    // its worktree is in the Trash, so it never wakes again.
+    let retired = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::worktree_task::store::get(&conn, project_id, &tab.pane_group_id).is_some_and(|m| m.retired_at.is_some())
+    };
+    if retired {
+        log_debug!("[msg/wake_sidecar] key={conversation_key} is a retired worktree sidecar; not waking it");
+        return MsgResponse::fail(MsgReason::NoAgentMode);
+    }
 
     let saved_cmd = tab.command.clone().filter(|s| !s.is_empty());
     let Some(spawn_command) = saved_cmd else {

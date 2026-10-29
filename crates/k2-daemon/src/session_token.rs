@@ -1075,6 +1075,14 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sidecar/new",
         "/cli/sidecar/list",
         "/cli/sidecar/stop",
+        // Workbench W1 (0.46.7): review and interrupt are agent verbs
+        // (the handler applies the sidecar rules); land and retire reach
+        // the handler so an agent gets `land_needs_person` /
+        // `retire_needs_person` (a permission card), never the action.
+        "/cli/sidecar/review",
+        "/cli/sidecar/interrupt",
+        "/cli/sidecar/land",
+        "/cli/sidecar/retire",
         // Root helper status (read-only): agents see whether the helper is
         // there and what to ask their human for. update/rollback are NOT
         // here (owner/admin steps).

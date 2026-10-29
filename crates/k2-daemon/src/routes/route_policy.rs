@@ -1490,9 +1490,17 @@ pub const ROUTES: &[Route] = &[
     post("/cli/sew/users/reset", Admin),
     post("/cli/sew/users/revoke", Admin),
     post("/cli/sew/users/role", Admin),
-    // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1).
+    // k2 sidecar v1 (prd-k2-sidecar-cli-v1 §5.1), and Workbench W1
+    // (0.46.7): interrupt is a keystroke (Member, like terminal write);
+    // land and retire change the workspace's main branch / delete a
+    // worktree (Admin, like new/stop; agents ask with a card); review is a
+    // read.
+    post("/cli/sidecar/interrupt", Member),
+    post("/cli/sidecar/land", Admin),
     get("/cli/sidecar/list", Member),
     post("/cli/sidecar/new", Admin),
+    post("/cli/sidecar/retire", Admin),
+    get("/cli/sidecar/review", Member),
     post("/cli/sidecar/stop", Admin),
     // Mobile dev (prd-mobile-dev-v1 §8, 0.46.6): Members drive devices for
     // workspaces they can open (remote Members watch only applies to the

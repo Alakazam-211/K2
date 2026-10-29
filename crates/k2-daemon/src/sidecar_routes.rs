@@ -74,7 +74,7 @@ impl Caller {
 
     /// Human form for `createdBy` / the pointer line. The owner token is
     /// stamped by the 0.46.0 rule (linked username, else `owner`).
-    fn display(&self) -> String {
+    pub(crate) fn display(&self) -> String {
         match self {
             Caller::Owner => k2_core::person_name::sender_identity_now(k2_core::person_name::Sender::OwnerToken),
             Caller::Login { username } => username.clone(),
@@ -192,7 +192,7 @@ pub fn caller_from_tcp(path: &str, query: &str, bearer: Option<&str>, owner_toke
 
 // ── Responses ─────────────────────────────────────────────────────────
 
-fn status_line(code: u16) -> &'static str {
+pub(crate) fn status_line(code: u16) -> &'static str {
     match code {
         200 => "200 OK",
         400 => "400 Bad Request",
@@ -206,7 +206,7 @@ fn status_line(code: u16) -> &'static str {
     }
 }
 
-fn refusal(e: &SidecarError) -> CliResponse {
+pub(crate) fn refusal(e: &SidecarError) -> CliResponse {
     CliResponse {
         status: status_line(e.status),
         content_type: "application/json",
@@ -214,7 +214,7 @@ fn refusal(e: &SidecarError) -> CliResponse {
     }
 }
 
-fn err(code: &'static str, status: u16, hint: impl Into<String>) -> SidecarError {
+pub(crate) fn err(code: &'static str, status: u16, hint: impl Into<String>) -> SidecarError {
     SidecarError::new(code, status, hint)
 }
 
@@ -241,11 +241,19 @@ pub fn body_cap(path: &str) -> usize {
     }
 }
 
-/// Is this one of the four routes?
+/// Is this one of the sidecar routes? (Workbench W1, 0.46.7, adds
+/// review, interrupt, land and retire: `crate::sidecar_worktree`.)
 pub fn is_route(path: &str) -> bool {
     matches!(
         path,
-        "/cli/sidecar/new" | "/cli/sidecar/list" | "/cli/sidecar/stop" | "/cli/agent-access/set"
+        "/cli/sidecar/new"
+            | "/cli/sidecar/list"
+            | "/cli/sidecar/stop"
+            | "/cli/agent-access/set"
+            | "/cli/sidecar/review"
+            | "/cli/sidecar/interrupt"
+            | "/cli/sidecar/land"
+            | "/cli/sidecar/retire"
     )
 }
 
@@ -253,13 +261,18 @@ pub fn is_route(path: &str) -> bool {
 pub fn is_post_route(path: &str) -> bool {
     matches!(
         path,
-        "/cli/sidecar/new" | "/cli/sidecar/stop" | "/cli/agent-access/set"
+        "/cli/sidecar/new"
+            | "/cli/sidecar/stop"
+            | "/cli/agent-access/set"
+            | "/cli/sidecar/interrupt"
+            | "/cli/sidecar/land"
+            | "/cli/sidecar/retire"
     )
 }
 
 // ── Audit (§7.6, SC46) ───────────────────────────────────────────────
 
-fn audit(event: &str, caller: &Caller, outcome: &str, ingress: &str) {
+pub(crate) fn audit(event: &str, caller: &Caller, outcome: &str, ingress: &str) {
     k2_core::auth_audit::record(&k2_core::auth_audit::AuditEvent::new(
         event,
         &caller.audit_user(),
@@ -311,6 +324,10 @@ pub fn handle(
             Ok(v) => CliResponse::ok_json(v.to_string()),
             Err(e) => refusal(&e),
         },
+        // Workbench W1 (0.46.7): worktree sidecars.
+        "/cli/sidecar/review" | "/cli/sidecar/interrupt" | "/cli/sidecar/land" | "/cli/sidecar/retire" => {
+            crate::sidecar_worktree::handle(path, &caller, body, params, ingress)
+        }
         "/cli/agent-access/set" => {
             let (resp, outcome) = match handle_access(&caller, body) {
                 Ok((v, outcome)) => (CliResponse::ok_json(v.to_string()), outcome),
@@ -342,13 +359,14 @@ pub(crate) fn access_entry(who: &crate::permission::actions::Answerer, body: &se
 
 // ── Shared resolution ────────────────────────────────────────────────
 
-struct Workspace {
-    id: String,
-    path: String,
-    handle: String,
+#[derive(Debug, Clone)]
+pub(crate) struct Workspace {
+    pub(crate) id: String,
+    pub(crate) path: String,
+    pub(crate) handle: String,
 }
 
-fn workspace_by_id(id: &str) -> Option<Workspace> {
+pub(crate) fn workspace_by_id(id: &str) -> Option<Workspace> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let p = k2_core::db::schema::Project::get(&conn, id).ok()?;
@@ -389,7 +407,7 @@ fn workspace_by_token(token: &str) -> Option<Workspace> {
 /// The target workspace. A passport's workspace always comes from the
 /// passport; naming a different one is `forbidden` (§5.2 step 1). Owners
 /// and logins must name one.
-fn target_workspace(caller: &Caller, requested: Option<&str>) -> Result<Workspace, SidecarError> {
+pub(crate) fn target_workspace(caller: &Caller, requested: Option<&str>) -> Result<Workspace, SidecarError> {
     let requested = requested.map(str::trim).filter(|s| !s.is_empty());
     match caller {
         Caller::Agent(_) | Caller::Shell { .. } => {
@@ -428,7 +446,7 @@ fn target_workspace(caller: &Caller, requested: Option<&str>) -> Result<Workspac
     }
 }
 
-fn require_credential(caller: &Caller) -> Result<(), SidecarError> {
+pub(crate) fn require_credential(caller: &Caller) -> Result<(), SidecarError> {
     match caller {
         Caller::WrongCredential => Err(err(
             "wrong_credential",
@@ -444,7 +462,7 @@ const GATED_HINT: &str = "Ask your human to turn on 'Allow hiring and managing a
 
 /// The interim agent gate (§7.3 rules 1–3). Rule 5 (no more power) is
 /// checked once the preset is known.
-fn agent_gate(caller: &Caller, ws: &Workspace) -> Result<(), SidecarError> {
+pub(crate) fn agent_gate(caller: &Caller, ws: &Workspace) -> Result<(), SidecarError> {
     let Caller::Agent(a) = caller else {
         return Ok(());
     };
@@ -477,7 +495,7 @@ fn agent_gate(caller: &Caller, ws: &Workspace) -> Result<(), SidecarError> {
 
 static WORKSPACE_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
 
-fn workspace_lock(project_id: &str) -> Arc<Mutex<()>> {
+pub(crate) fn workspace_lock(project_id: &str) -> Arc<Mutex<()>> {
     let map = WORKSPACE_LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
     map.lock()
         .entry(format!("sidecar:{project_id}"))
@@ -486,7 +504,7 @@ fn workspace_lock(project_id: &str) -> Arc<Mutex<()>> {
 }
 
 /// A live `tab-*` map entry.
-fn live_session(agent_name: &str) -> Option<Arc<k2_core::terminal::DaemonPtySession>> {
+pub(crate) fn live_session(agent_name: &str) -> Option<Arc<k2_core::terminal::DaemonPtySession>> {
     v2_session_map::lookup_by_agent_name(agent_name).filter(|s| s.is_child_alive())
 }
 
@@ -517,7 +535,7 @@ fn live_sidecar_count(ws: &Workspace) -> usize {
 }
 
 /// Parse a JSON body (`{}` for an empty one).
-fn json_body(body: &[u8]) -> Result<serde_json::Value, SidecarError> {
+pub(crate) fn json_body(body: &[u8]) -> Result<serde_json::Value, SidecarError> {
     let text = std::str::from_utf8(body)
         .map_err(|_| err("brief_not_text", 400, "the request is not UTF-8 text"))?;
     if text.trim().is_empty() {
@@ -527,12 +545,12 @@ fn json_body(body: &[u8]) -> Result<serde_json::Value, SidecarError> {
         .map_err(|e| err("bad_request", 400, format!("request body is not JSON: {e}")))
 }
 
-fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+pub(crate) fn str_field<'a>(v: &'a serde_json::Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(|x| x.as_str())
 }
 
 /// The durable tab row for a conversation key in a workspace.
-fn tab_row_for_key(
+pub(crate) fn tab_row_for_key(
     project_id: &str,
     key: &str,
 ) -> Option<k2_core::db::schema::WorkspaceTabSession> {
@@ -584,6 +602,18 @@ fn handle_new(
         core::check_brief(b)?;
     }
     let brief = brief.filter(|b| !b.trim().is_empty());
+    // Workbench W1 (0.46.7): `worktree: true` runs the sidecar in its own
+    // git worktree (`.worktrees/k2-<name>`, branch `k2/<name>`), cut from
+    // `base` (default: the workspace's default branch).
+    let want_worktree = match v.get("worktree") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(_) => return Err(err("bad_request", 400, "worktree must be true or false")),
+    };
+    let base = str_field(&v, "base").map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+    if base.is_some() && !want_worktree {
+        return Err(err("bad_request", 400, "--base goes with --worktree (the commit a new worktree starts from)"));
+    }
 
     let lock = workspace_lock(&ws.id);
     let _guard = lock.lock();
@@ -753,6 +783,56 @@ fn handle_new(
         }
     };
 
+    // Worktree sidecars (Workbench W1): a sleeping one resumes in its own
+    // worktree, a retired one keeps its name with its Thread, and an
+    // existing plain sidecar is never moved into a worktree (vs-live C2).
+    let existing_wt = match &plan {
+        Plan::Asleep(row) => {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::worktree_task::store::get(&conn, &ws.id, &row.pane_group_id)
+        }
+        _ => None,
+    };
+    if let Some(m) = &existing_wt {
+        if m.retired_at.is_some() {
+            return Err(err(
+                "sidecar_retired",
+                409,
+                format!(
+                    "{address} was retired ({}); its name stays with its Thread. Pick another name",
+                    m.retired_how.as_deref().unwrap_or("retired")
+                ),
+            ));
+        }
+    }
+    if want_worktree && !matches!(plan, Plan::New) && existing_wt.is_none() {
+        return Err(err(
+            "name_taken",
+            409,
+            format!("'{slug}' is a sidecar without a worktree; K2 does not move a sidecar into a worktree. Pick another name"),
+        ));
+    }
+    let make_worktree = want_worktree && matches!(plan, Plan::New);
+    if make_worktree {
+        let open = {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            k2_core::worktree_task::store::open_count(&conn, &ws.id)
+        };
+        let cap = core::cap();
+        if open >= cap {
+            return Err(err(
+                "worktree_cap",
+                409,
+                format!(
+                    "{} already has {open} worktree sidecars (the cap is {cap}; stopped ones count until retired); retire one first (k2 sidecar retire <name>)",
+                    ws.handle
+                ),
+            ));
+        }
+    }
+
     // Cap (§8.1).
     let cap = core::cap();
     if live_sidecar_count(&ws) >= cap {
@@ -775,6 +855,41 @@ fn handle_new(
         ));
     }
 
+    // The worktree (Workbench W1), made after every refusal that needs no
+    // git. Rolled back (worktree to the Trash, branch, row and name gone)
+    // if anything fails before the sidecar runs.
+    let mut new_wt = if make_worktree {
+        Some(crate::sidecar_worktree::NewWorktree::create(&ws, &slug, base.as_deref())?)
+    } else {
+        None
+    };
+    // Where the harness runs: the new or existing worktree, else the root.
+    let run_dir: String = match (&new_wt, &plan) {
+        (Some(w), _) => w.created.path.clone(),
+        (None, Plan::Asleep(row)) if existing_wt.is_some() => {
+            let dir = row.cwd.clone().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| ws.path.clone());
+            if !std::path::Path::new(&dir).is_dir() {
+                return Err(err(
+                    "worktree_missing",
+                    409,
+                    format!("{address}'s worktree {dir} is gone; retire it (k2 sidecar retire {slug} --discard)"),
+                ));
+            }
+            dir
+        }
+        _ => ws.path.clone(),
+    };
+    let run_ws = Workspace { path: run_dir.clone(), ..ws.clone() };
+    // A worktree sidecar runs outside the root, where its brief lives: it
+    // gets the brief's absolute path (vs-live C4).
+    let brief_ref = |rel: &str| -> String {
+        if run_dir == ws.path {
+            rel.to_string()
+        } else {
+            std::path::Path::new(&ws.path).join(rel).to_string_lossy().into_owned()
+        }
+    };
+
     let started_by = caller.display();
     let created_by_raw = caller.audit_user();
     let resumed = !matches!(plan, Plan::New);
@@ -787,7 +902,7 @@ fn handle_new(
                 preset.provider,
                 &preset.program,
                 &preset.args,
-                &ws.path,
+                &run_dir,
                 &preset.env,
             )
             .map_err(|e| err("harness_not_installed", 409, e))?;
@@ -807,7 +922,7 @@ fn handle_new(
             let sid = match sid {
                 Some(s) => Some(s),
                 None => try_adopt_now(
-                    &ws,
+                    &run_ws,
                     &row.pane_group_id,
                     preset.provider,
                     &address,
@@ -817,7 +932,7 @@ fn handle_new(
             match sid {
                 Some(sid) => (
                     row.pane_group_id.clone(),
-                    core::resume_argv(&preset.program, &saved, &sid, &ws.path),
+                    core::resume_argv(&preset.program, &saved, &sid, &run_dir),
                     Some(sid),
                 ),
                 None => (
@@ -831,7 +946,7 @@ fn handle_new(
             let pg = uuid::Uuid::new_v4().to_string();
             (
                 pg,
-                core::resume_argv(&preset.program, &preset.args, key, &ws.path),
+                core::resume_argv(&preset.program, &preset.args, key, &run_dir),
                 Some(key.clone()),
             )
         }
@@ -876,6 +991,9 @@ fn handle_new(
             }
         }
         core::bind_name(&conn, &ws.id, preset.provider, &key, &slug, &name)?;
+        if let Some(w) = new_wt.as_mut() {
+            w.name_key = Some(key);
+        }
     }
     let display_name = {
         let db = k2_core::db::shared();
@@ -900,13 +1018,13 @@ fn handle_new(
             &address,
             &ws.handle,
             &started_by,
-            &b.rel_path,
+            &brief_ref(&b.rel_path),
         )),
-        (Some(b), true, true) => Some(core::brief_changed_message(&address, &b.rel_path)),
+        (Some(b), true, true) => Some(core::brief_changed_message(&address, &brief_ref(&b.rel_path))),
         // A resume that could not find the old conversation starts fresh.
-        (Some(b), true, false) => Some(core::restarted_message(&address, &ws.handle, &b.rel_path)),
+        (Some(b), true, false) => Some(core::restarted_message(&address, &ws.handle, &brief_ref(&b.rel_path))),
         (None, true, false) => {
-            existing_brief(&ws, &pg).map(|rel| core::restarted_message(&address, &ws.handle, &rel))
+            existing_brief(&ws, &pg).map(|rel| core::restarted_message(&address, &ws.handle, &brief_ref(&rel)))
         }
         (None, _, _) => None,
     };
@@ -915,7 +1033,7 @@ fn handle_new(
     let discover = cid.is_none()
         && core::identity_style(preset.provider) == Some(core::IdentityStyle::Discover);
     let exclude = if discover {
-        core::existing_conversation_ids(preset.provider, &ws.path)
+        core::existing_conversation_ids(preset.provider, &run_dir)
     } else {
         HashSet::new()
     };
@@ -927,7 +1045,7 @@ fn handle_new(
         crate::spawn::spawn_agent_session_v2_blocking(crate::spawn::SpawnWorkspaceSessionRequest {
             agent_name: agent_name.clone(),
             project_id: Some(ws.id.clone()),
-            cwd: ws.path.clone(),
+            cwd: run_dir.clone(),
             command: Some(program.clone()),
             args: Some(args.clone()),
             cols: 120,
@@ -946,6 +1064,8 @@ fn handle_new(
             Some(r) => err("folder_trust_pending", 409, r.message),
             None => err("spawn_failed", 500, e),
         })?;
+    // The sidecar runs: its worktree stays whatever happens below.
+    let worktree_out = new_wt.take().map(|w| w.keep());
 
     // Tab-row sidecar columns (SC38).
     {
@@ -964,11 +1084,24 @@ fn handle_new(
             discover.then_some(since),
         )
         .map_err(|e| err("spawn_failed", 500, e))?;
+        // Worktree columns (migration 0251).
+        if let Some(w) = &worktree_out {
+            k2_core::worktree_task::store::stamp_new(
+                &conn,
+                &ws.id,
+                &pg,
+                &w.ws_row_id,
+                &w.created.branch,
+                &w.created.dir,
+                w.created.base.onto.as_deref(),
+            )
+            .map_err(|e| err("spawn_failed", 500, e))?;
+        }
     }
     if discover {
         spawn_adoption_watch(AdoptWatch {
             project_id: ws.id.clone(),
-            project_path: ws.path.clone(),
+            project_path: run_dir.clone(),
             pane_group_id: pg.clone(),
             provider: preset.provider,
             address: address.clone(),
@@ -1040,7 +1173,22 @@ fn handle_new(
         "resumed": resumed,
         "createdBy": created_by_out.as_deref().map(created_by_display),
     });
-    Ok((body, resumed, format!("ok {address}{brief_audit}")))
+    // Workbench W1: where a worktree sidecar runs (never on a plain one).
+    let mut body = body;
+    let mut wt_audit = String::new();
+    if let Some(w) = &worktree_out {
+        body["worktree"] = serde_json::json!({
+            "branch": w.created.branch,
+            "dir": w.created.dir,
+            "base": w.created.base.name,
+            "baseSha": w.created.base.sha,
+            "onto": w.created.base.onto,
+        });
+        wt_audit = format!(" worktree={} base={}", w.created.branch, &w.created.base.sha[..12.min(w.created.base.sha.len())]);
+    } else if let (Some(m), Plan::Asleep(_)) = (&existing_wt, &plan) {
+        body["worktree"] = serde_json::json!({ "branch": m.branch, "dir": m.dir, "onto": m.base_ref });
+    }
+    Ok((body, resumed, format!("ok {address}{brief_audit}{wt_audit}")))
 }
 
 /// The stored brief path for a pane group, when the file still exists.
@@ -1111,7 +1259,10 @@ fn handle_list(
                 live += 1;
             }
             let handle = r.handle.clone();
-            serde_json::json!({
+            // Workbench W1: a worktree sidecar's worktree, git state and
+            // inbox state (`worktree`, `taskState`, `activity`).
+            let extras = crate::sidecar_worktree::list_extras(&ws, &r.pane_group_id, session.as_deref());
+            let mut row = serde_json::json!({
                 "address": handle.as_deref().map(|h| k2_core::workspace_session_handles::format_address(&ws.handle, Some(h))),
                 "handle": handle,
                 "name": r.name,
@@ -1124,15 +1275,25 @@ fn handle_list(
                 "createdBy": r.created_by.as_deref().map(created_by_display),
                 "brief": r.brief_path,
                 "lastSeenAt": r.last_seen_at,
-            })
+            });
+            if let (Some(obj), Some(serde_json::Value::Object(more))) = (row.as_object_mut(), extras) {
+                obj.extend(more);
+            }
+            row
         })
         .collect();
+    let open_worktrees = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::worktree_task::store::open_count(&conn, &ws.id)
+    };
     Ok(serde_json::json!({
         "ok": true,
         "workspace": ws.handle,
         "cap": core::cap(),
         "live": live,
         "agentsCanManage": k2_core::workspace::settings::agents_can_manage_agents(&ws.id),
+        "worktrees": { "open": open_worktrees, "cap": core::cap() },
         "sidecars": sidecars,
     }))
 }
@@ -1237,8 +1398,13 @@ fn handle_stop(caller: &Caller, body: &[u8]) -> Result<(serde_json::Value, Strin
             .and_then(core::supported_provider)
             .map(|p| p.provider)
         {
+            // A worktree sidecar's conversation lives under its worktree.
+            let run_ws = Workspace {
+                path: row.cwd.clone().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| ws.path.clone()),
+                ..ws.clone()
+            };
             let _ = try_adopt_now(
-                &ws,
+                &run_ws,
                 &row.pane_group_id,
                 provider,
                 &address,
@@ -1938,8 +2104,11 @@ pub fn relaunch_plan(
         core::handle_read_only(&conn, project_id, pane_group_id)
     };
     let address = k2_core::workspace_session_handles::format_address(&ws.handle, handle.as_deref());
+    // Discovery looks where the harness runs (a worktree sidecar's own
+    // folder); the brief stays under the workspace root.
+    let run_ws = Workspace { path: cwd.to_string(), ..ws.clone() };
     if let Some(cid) = try_adopt_now(
-        &ws,
+        &run_ws,
         pane_group_id,
         provider,
         &address,
@@ -1952,7 +2121,7 @@ pub fn relaunch_plan(
     }
     // Fresh restart: a new conversation of the same harness.
     let since = chrono::Utc::now().timestamp();
-    let exclude = core::existing_conversation_ids(provider, &ws.path);
+    let exclude = core::existing_conversation_ids(provider, cwd);
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
@@ -1961,11 +2130,17 @@ pub fn relaunch_plan(
             rusqlite::params![project_id, pane_group_id, since],
         );
     }
-    let launch_prompt = existing_brief(&ws, pane_group_id)
-        .map(|rel| core::restarted_message(&address, &ws.handle, &rel));
+    let launch_prompt = existing_brief(&ws, pane_group_id).map(|rel| {
+        let shown = if cwd == ws.path {
+            rel
+        } else {
+            std::path::Path::new(&ws.path).join(&rel).to_string_lossy().into_owned()
+        };
+        core::restarted_message(&address, &ws.handle, &shown)
+    });
     spawn_adoption_watch(AdoptWatch {
         project_id: project_id.to_string(),
-        project_path: ws.path.clone(),
+        project_path: cwd.to_string(),
         pane_group_id: pane_group_id.to_string(),
         provider,
         address,

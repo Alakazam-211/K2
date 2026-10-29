@@ -258,6 +258,8 @@ pub mod sessions_grid_ws;
 pub mod sessions_ws;
 pub mod settings_routes;
 pub mod sidecar_routes;
+/// Workbench W1 (0.46.7): worktree sidecars (review, interrupt, land, retire).
+pub mod sidecar_worktree;
 pub mod ticket_settings_routes;
 // K2 compute nodes (prd-k2-compute-nodes-v1): routes + the live engine.
 pub mod compute_admin;

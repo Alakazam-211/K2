@@ -963,6 +963,47 @@ pub fn render_live_layer_body(project_path: &str, layer: &ContextLayer) -> Optio
     }
 }
 
+/// "This workspace" (prd-workspace-sessions-cli-v1 WS-D2): a pointer to
+/// `k2 sessions` plus the workspace's **named** sidecars, which are
+/// durable. Live state never goes in AGENTS.md (it is read once, at
+/// start): `k2 sessions` and `k2 whoami` carry it.
+pub fn render_this_workspace_paragraph(project_path: &str) -> String {
+    let mut out = String::from("### This workspace\n\n");
+    out.push_str(
+        "Other sessions may be working in this workspace (the main agent, sidecars, \
+         chat tabs). `k2 sessions` lists them with addresses you can `k2 msg`; \
+         `k2 sessions --past` finds older conversations to reopen.",
+    );
+    let named: Vec<String> = {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        match crate::workspace::agent_identity::resolve_project_id(&conn, project_path) {
+            Some(pid) => {
+                let ws = crate::workspace_session_handles::workspace_address_name(&conn, &pid)
+                    .unwrap_or_default();
+                let mut v: Vec<String> = crate::sidecar::list_rows(&conn, &pid)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|r| r.name.as_deref().is_some_and(|n| !n.trim().is_empty()))
+                    .filter_map(|r| r.handle)
+                    .filter(|h| !h.chars().all(|c| c.is_ascii_digit()))
+                    .map(|h| crate::workspace_session_handles::format_address(&ws, Some(&h)))
+                    .collect();
+                v.sort();
+                v.dedup();
+                v
+            }
+            None => Vec::new(),
+        }
+    };
+    if !named.is_empty() {
+        let list: Vec<String> = named.iter().map(|a| format!("`{a}`")).collect();
+        out.push_str(&format!(" Named sidecars: {}.", list.join(", ")));
+    }
+    out.push_str("\n\n");
+    out
+}
+
 /// Markdown body for the connections roster (no leading H1 — compose adds `## label`).
 pub fn render_connections_roster_body(project_path: &str) -> String {
     let mut out = String::new();
@@ -980,6 +1021,7 @@ pub fn render_connections_roster_body(project_path: &str) -> String {
     out.push_str("    k2 msg <workspace-name> --inbox-wake <path> [path…]\n");
     out.push_str("    k2 read <workspace-name>\n");
     out.push_str("    k2 connections list\n\n");
+    out.push_str(&render_this_workspace_paragraph(project_path));
 
     let local = crate::connections::list_peers(project_path).unwrap_or_default();
     let remotes = list_remote_connection_summaries(project_path);

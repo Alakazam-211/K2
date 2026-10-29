@@ -411,6 +411,7 @@ role:      sidecar        # or canonical
 address:   sales/reviewer # how others reach THIS session
 primary:   sales          # the workspace agent's address
 session:   <id>
+others:    2 live here    # k2 sessions lists them
 ```
 
 `canonical` is the workspace agent. `sidecar` is an extra chat in the
@@ -466,10 +467,16 @@ the recipient isn't running — use `--inbox-wake` / `--inbox-silent` to
 land a durable tray package the recipient opens with `k2 inbox read <id>`
 on their own schedule. Not `k2 mail`.
 
-## Sidecars
-`k2 sidecar new <name> --harness <preset> --brief <file>` opens `<workspace>/<name>` and prints it; `k2 sidecar list`, `k2 sidecar stop <name>` (stop is sleep; `new` on a stopped name resumes).
-Only the main session may open or stop sidecars, and only when "Allow hiring and managing agents" is on (`k2 sidecar access status`).
-Put the handback in the brief: "when done, `k2 msg <primary>` with a summary". No secrets in a brief. `k2 study sidecars`.
+## Sessions in this workspace (sidecars, past conversations)
+```
+Others in this workspace: k2 sessions            (address, CLI, state, what it's on)
+Older conversations:      k2 sessions --past --search "<words>" ; k2 sessions show <id>
+Talk to one:              k2 msg <ws>/<handle> "…"   or   k2 msg --session <id> "…" (reopens it)
+Reopen without a message: k2 sessions open <id> [--name <name>]  — prints its address
+Start a helper:           k2 sessions new <name> --brief <file>   ; stop: k2 sessions stop <name>
+One conversation never runs twice; opening a live one prints its address.
+```
+Only the main session may open, start or stop sessions, and only when "Allow hiring and managing agents" is on. Put the handback in the brief: "when done, `k2 msg <primary>` with a summary". No secrets in a brief. `k2 study sessions`.
 
 ## Overlay thread (side channel with the human)
 Not PTY inject — that is `k2 msg`. Write and read the user-agent overlay

@@ -53,7 +53,7 @@ done
 
 WORK="$(pwd -P)/.k2-sign-$$"
 KC="$WORK/sign.keychain-db"
-KC_PW="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+KC_PW="$(openssl rand -hex 16)"
 RESULTS=()
 
 pass() { RESULTS+=("PASS $1"); echo "PASS $1"; }

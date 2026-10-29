@@ -79,22 +79,28 @@ HISTORY (needs the history right)
   k2 doc blame notes.md               restored text shows "(restored by <who> in <change>)"
 
 EXPORT (a copy of a doc, now or at a version, as a new file)
-  k2 doc export --list notes.md               the targets this file can be exported to
+  k2 doc export --list notes.md               the targets and their options
   k2 doc export --to as-is notes.md           the doc now, as notes.v42.md beside it
-                                              (42 = its doc version; "notes.v42 (2).md"
-                                              if that name is taken). Prints the path.
-  k2 doc export --to as-is --version 3 notes.md   version id 3 (k2 doc versions; needs
-                                              history); stderr says "version 3, doc
-                                              version 17" and the file is notes.v17.md
-  --out FILE writes exactly FILE: never over an existing file (exit 2). In a
-  workspace you need edit there (exit 3, export_place_forbidden: use --out
-  in your own workspace or a local path); outside every workspace the CLI
-  writes it. --option NAME=VALUE passes a target's option (--list shows them).
-  An export never changes the doc. The daemon runs it: as-is in the daemon,
-  other targets in a separate worker with memory, time and size limits
-  (export_limit, exit 2). Ctrl-C cancels (exit 1). A past version of a live
-  doc is written with today's line endings and BOM (a note says so).
-  Files over 32 MiB aren't docs, so they can't be exported.
+                                              (42 = the doc version now; "notes.v42 (2).md"
+                                              if that name is taken). stdout: its path.
+  k2 doc export --to as-is --version 3 notes.md   version id 3 (the first column of
+                                              k2 doc versions; needs history). Its "at
+                                              change" is 17, so the file is notes.v17.md
+                                              and stderr says "version 3, doc version 17"
+  The name is <stem>.v<N>.<ext> (a.tar.gz -> a.tar.v42.gz, Makefile ->
+  Makefile.v42; a taken name: notes.v42 (2).md). Any-file docs have one
+  number (the id is the doc version). --out FILE writes exactly FILE, never over an existing
+  file (exit 2); relative = from where you stand (with -w: in that
+  workspace). Writing into a workspace (beside the source or --out) needs
+  edit there: exit 3 export_place_forbidden otherwise, so --out into your
+  own workspace or a local path. Outside every workspace the CLI writes it.
+  --option NAME=VALUE passes a target's option. --json: the whole answer.
+  An export never changes the doc, its versions, log or your last read.
+  as-is runs in the daemon; other targets in a separate worker (5 min,
+  1 GiB, 512 MiB output by default: export_limit, exit 2). Ctrl-C or SIGTERM
+  cancels (exit 1). Any-file docs export the exact stored bytes; a live doc's
+  past version gets today's line endings and BOM (a note says so). Files
+  over 32 MiB aren't docs, so they can't be exported (exit 4).
 
 UNDO, REDO AND REVERT
   Undo only reverses your own changes and never alters a word someone else
@@ -150,7 +156,9 @@ EXITS
   2 bad usage / unsupported flag / too many edits (retry) · 3 refused ·
   4 no such file or change, or it can't be a live doc · 5 someone else
   holds it for now (a lease, or a claim on those lines) ·
-  6 the docs store failed · 8 too old. Errors end with a JSON line
+  6 the docs store failed · 8 too old. Exports: 1 cancelled or failed,
+  2 a target, option or limit, or an --out that exists (exists),
+  3 export_place_forbidden or history_forbidden. Errors end with a JSON line
   {"error":{"code","hint","status"}} on stderr.
 --- stderr
 --- requests

@@ -45744,22 +45744,28 @@ HISTORY (needs the history right)
   k2 doc blame notes.md               restored text shows "(restored by <who> in <change>)"
 
 EXPORT (a copy of a doc, now or at a version, as a new file)
-  k2 doc export --list notes.md               the targets this file can be exported to
+  k2 doc export --list notes.md               the targets and their options
   k2 doc export --to as-is notes.md           the doc now, as notes.v42.md beside it
-                                              (42 = its doc version; "notes.v42 (2).md"
-                                              if that name is taken). Prints the path.
-  k2 doc export --to as-is --version 3 notes.md   version id 3 (k2 doc versions; needs
-                                              history); stderr says "version 3, doc
-                                              version 17" and the file is notes.v17.md
-  --out FILE writes exactly FILE: never over an existing file (exit 2). In a
-  workspace you need edit there (exit 3, export_place_forbidden: use --out
-  in your own workspace or a local path); outside every workspace the CLI
-  writes it. --option NAME=VALUE passes a target's option (--list shows them).
-  An export never changes the doc. The daemon runs it: as-is in the daemon,
-  other targets in a separate worker with memory, time and size limits
-  (export_limit, exit 2). Ctrl-C cancels (exit 1). A past version of a live
-  doc is written with today's line endings and BOM (a note says so).
-  Files over 32 MiB aren't docs, so they can't be exported.
+                                              (42 = the doc version now; "notes.v42 (2).md"
+                                              if that name is taken). stdout: its path.
+  k2 doc export --to as-is --version 3 notes.md   version id 3 (the first column of
+                                              k2 doc versions; needs history). Its "at
+                                              change" is 17, so the file is notes.v17.md
+                                              and stderr says "version 3, doc version 17"
+  The name is <stem>.v<N>.<ext> (a.tar.gz -> a.tar.v42.gz, Makefile ->
+  Makefile.v42; a taken name: notes.v42 (2).md). Any-file docs have one
+  number (the id is the doc version). --out FILE writes exactly FILE, never over an existing
+  file (exit 2); relative = from where you stand (with -w: in that
+  workspace). Writing into a workspace (beside the source or --out) needs
+  edit there: exit 3 export_place_forbidden otherwise, so --out into your
+  own workspace or a local path. Outside every workspace the CLI writes it.
+  --option NAME=VALUE passes a target's option. --json: the whole answer.
+  An export never changes the doc, its versions, log or your last read.
+  as-is runs in the daemon; other targets in a separate worker (5 min,
+  1 GiB, 512 MiB output by default: export_limit, exit 2). Ctrl-C or SIGTERM
+  cancels (exit 1). Any-file docs export the exact stored bytes; a live doc's
+  past version gets today's line endings and BOM (a note says so). Files
+  over 32 MiB aren't docs, so they can't be exported (exit 4).
 
 UNDO, REDO AND REVERT
   Undo only reverses your own changes and never alters a word someone else
@@ -45815,7 +45821,9 @@ EXITS
   2 bad usage / unsupported flag / too many edits (retry) · 3 refused ·
   4 no such file or change, or it can't be a live doc · 5 someone else
   holds it for now (a lease, or a claim on those lines) ·
-  6 the docs store failed · 8 too old. Errors end with a JSON line
+  6 the docs store failed · 8 too old. Exports: 1 cancelled or failed,
+  2 a target, option or limit, or an --out that exists (exists),
+  3 export_place_forbidden or history_forbidden. Errors end with a JSON line
   {"error":{"code","hint","status"}} on stderr.
 EOF
 }
@@ -83843,20 +83851,42 @@ History (needs the history right):
   k2 doc version --name "before launch" [--version V] <f>
   k2 doc approvals [--pending] [--mine|--for P|me] <f> · approve|decline <change> <f>
 Export (a copy of the doc, now or at a version, as a new file; any doc):
-  k2 doc export --list <f>            the targets this file can be exported to
+  k2 doc export --list <f>            the targets for this file, with each
+                                      target's options (as-is: every file)
   k2 doc export --to as-is <f>        the file now, written beside it as
-                                      <name>.v<N>.<ext> (N = the doc version;
-                                      " (2)" if that name is taken; never
-                                      overwrites). Prints the new file's path.
-  k2 doc export --to T --version V <f>   version V (an id from k2 doc versions;
-                                      needs the history right). The name carries
-                                      that version's doc version; both are printed
-  --option NAME=VALUE (repeat it) · --out FILE: exactly FILE (exit 2 if it
-  exists). In a workspace you need edit there (else exit 3,
-  export_place_forbidden); outside every workspace this CLI writes it.
-  Exit 2: a target or option the file doesn't have, or an export limit.
-  Files over 32 MiB aren't docs, so they can't be exported (exit 4). On a
-  terminal a long export shows progress; Ctrl-C cancels it (exit 1).
+                                      <stem>.v<N>.<ext>: notes.md -> notes.v42.md,
+                                      a.tar.gz -> a.tar.v42.gz, Makefile ->
+                                      Makefile.v42. N = the doc version at export
+                                      time (the version k2 doc status shows). A
+                                      taken name gets " (2)", " (3)" … before the
+                                      extension (notes.v42 (2).md, a.tar.v42 (2).gz);
+                                      nothing is overwritten.
+  k2 doc export --to T --version V <f>   version V: the version id, the FIRST
+                                      column of k2 doc versions (needs the history
+                                      right). The name carries that version's doc
+                                      version (its "at change" column): --version 3
+                                      at change 17 writes notes.v17.md. Any-file
+                                      docs: the id is the doc version (one number)
+  Output: stdout is the new file's absolute path, one line, never fenced;
+  stderr says "exported … (version V, doc version N, …)" (or "now");
+  --json prints the whole answer (job, placed.path, version, docVersion,
+  codec, report). The new file is an ordinary file in the workspace.
+  --option NAME=VALUE (repeat it) · --out FILE: exactly that name, never over
+  an existing file (exit 2, exists). A relative --out is from where you stand, or
+  inside the -w workspace when you pass -w. Writing into a workspace (beside
+  the source, or --out there) needs edit there, else exit 3
+  export_place_forbidden: --out into your own workspace or a local path
+  instead. Outside every workspace (and with --host) this CLI writes the
+  file itself, with your own permissions.
+  An export never changes the doc, its versions or log, or your last read;
+  you show in who while it runs. Any-file docs export the stored bytes
+  exactly; a live text doc's past version gets today's line endings and BOM
+  (a "note:" line on stderr says so when that applies).
+  Targets other than as-is run in a separate worker: 5 min, 1 GiB memory and
+  512 MiB output by default (export_limit, exit 2). A long export shows
+  progress on a terminal; Ctrl-C or SIGTERM cancels it (exit 1,
+  export_cancelled). Only docs export: files over 32 MiB, secrets, the vault
+  and K2's own files aren't docs (exit 4).
 Any-file docs (tier 0: files that aren't text, and refused text): presence, a
 lease, versions and restore, no live merging. The text verbs above (grep, sed,
 undo, claim …) refuse with not_a_text_doc and say why the file isn't live text.
@@ -83886,11 +83916,13 @@ default: the file you name, from where you stand) · --on-behalf-of <person>
 terminal) · --host <server> [--token T].
 
 Exit: 0 ok · 1 the tool's "no" (grep found nothing, diff differs, a patch
-or write conflicted, the doc moved) or the daemon is unreachable · 2 bad
+or write conflicted, the doc moved), a cancelled or failed export, or the
+daemon is unreachable (the JSON error line's code says which) · 2 bad
 usage, unsupported flag, rate limited, a text verb on an any-file doc
-(not_a_text_doc), no lease to renew · 3 refused (not_connected,
-doc_not_shared, doc_forbidden, history_forbidden …; the last line says how
-to ask) · 4 no such file or change, or it can't be a live doc (declined:
+(not_a_text_doc), no lease to renew, an export target or option the file
+doesn't have, an export limit, an --out that exists · 3 refused
+(not_connected, doc_not_shared, doc_forbidden, history_forbidden,
+export_place_forbidden …; the last line says how to ask) · 4 no such file or change, or it can't be a live doc (declined:
 a secret, the vault, too large) · 5 someone else holds it for now: a lease,
 or (agents) a claim on those lines; the error names who and for how long ·
 6 the docs store failed ·
@@ -84665,7 +84697,8 @@ if not w.get("available"):
     python3 - "$_DOC_WS" "$_DOC_OB" "$path" "$to" "$ver" "$send_out" "$([ "$remote" = 1 ] && [ -n "$out" ] && echo 1 || echo 0)" "${opts[@]}" >"$_DOC_TMPD/export.json" <<'PY' || _doc_die usage "couldn't build the request"
 import json, sys
 ws, ob, path, to, ver, out, fetch, opts = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7] == "1", sys.argv[8:]
-d = {"path": path, "target": to, "options": opts}
+# A short first wait: the poll loop (where Ctrl-C / SIGTERM cancel) takes over.
+d = {"path": path, "target": to, "options": opts, "waitMs": 2000}
 if ws:
     d["workspace"] = ws
 if ob:
@@ -84687,7 +84720,7 @@ PY
     if [ "$state" != "done" ]; then
         local _doc_export_cancel=0 tty=0
         [ -t 2 ] && tty=1
-        trap '_doc_export_cancel=1' INT
+        trap '_doc_export_cancel=1' INT TERM
         while [ "$state" != "done" ]; do
             if [ "$_doc_export_cancel" = 1 ]; then
                 _doc_call POST /cli/docs/export/cancel "$(_doc_body "" job "$job")" >/dev/null
@@ -84706,7 +84739,7 @@ sys.stderr.flush()
 '
             fi
         done
-        trap - INT
+        trap - INT TERM
         [ "$tty" = 1 ] && printf '\r\033[K' >&2
     fi
     # Outside every workspace (or --host): the CLI writes the bytes itself,

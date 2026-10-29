@@ -2554,12 +2554,19 @@ mod tests {
         // `spawn` returns as soon as the child's exec has swapped its memory
         // (the vfork release), before the kernel has set the new argv
         // bounds: `/proc/<pid>/cmdline` reads empty for a few ms (seen on
-        // every Linux soak run, 2026-10-14). Production only reads helpers
+        // every Linux soak run, 2026-10-14). Before exec it can also read as
+        // the forked copy of this test binary's own argv (seen in the 0.46.6
+        // gates), so poll until it is neither. Production only reads helpers
         // reattached from an earlier daemon life, long past that window.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let own: Vec<String> = std::env::args().collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut last = None;
         let argv = loop {
             if let Some(argv) = process_argv(child.id() as i32) {
-                break Some(argv);
+                if argv != own {
+                    break Some(argv);
+                }
+                last = Some(argv);
             }
             if std::time::Instant::now() >= deadline {
                 break None;
@@ -2568,7 +2575,7 @@ mod tests {
         };
         let _ = child.kill();
         let _ = child.wait();
-        let argv = argv.expect("argv of a live child within 2 s");
+        let argv = argv.unwrap_or_else(|| panic!("the child's own argv within 5 s; last read: {last:?}"));
         assert!(argv.iter().any(|a| a == "30"), "{argv:?}");
     }
 

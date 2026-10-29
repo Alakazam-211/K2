@@ -2869,7 +2869,7 @@ mod tests {
         let mk = |id: &str, node: &str, skew: i64| {
             let conn = db.lock();
             if store::node_by_id(&conn, node).is_none() {
-                store::insert_pending_node(&conn, node, node, "fp", "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
+                store::insert_pending_node(&conn, node, node, &format!("fp-{node}"), "pem", &BTreeMap::new(), "owner", "123456", 1).expect("node");
                 // A health frame taken at the node's `at`, heard now: the skew.
                 let h = k2_core::compute::proto::health::Health { at: now + skew, boot_id: "b".into(), ..Default::default() };
                 compute::admin::store_health(&conn, node, now, &h).expect("health");

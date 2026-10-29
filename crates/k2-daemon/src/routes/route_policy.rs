@@ -606,6 +606,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/compute/nodes/wall", Admin),
     // A node's queue, redacted per §7 (an agent verb: its own workspace).
     get("/cli/compute/queue", Member),
+    post("/cli/compute/prewarm", Member),
     post("/cli/compute/run", Member),
     get("/cli/compute/usage", Admin),
     // 0.45.7: the CLI's K2 Connect control-plane calls, made with the

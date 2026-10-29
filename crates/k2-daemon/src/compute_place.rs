@@ -484,6 +484,11 @@ pub fn wants_components(needs: &[String]) -> bool {
     needs.iter().any(|t| !need_components(t).is_empty())
 }
 
+/// Offer feature (k2-node 0.46.7, CE-18 cap): the node keeps its tool
+/// cache under `toolchain_budget_gb`. `k2 compute prewarm` says when a
+/// node has no cap (an older k2-node).
+pub const FEATURE_TOOLCHAIN_BUDGET: &str = "toolchain-budget";
+
 // ── the tools a node has (CE-1, CE-2) ────────────────────────────────
 
 /// What a node has for one need, from its offer's `tools` map (re-probed

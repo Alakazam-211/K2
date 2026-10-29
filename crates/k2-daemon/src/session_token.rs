@@ -815,6 +815,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/compute/nodes",
         "/cli/compute/nodes/info",
         "/cli/compute/run",
+        // 0.46.7 (CE-18): Batch jobs that install --needs on granted nodes.
+        "/cli/compute/prewarm",
         "/cli/compute/jobs",
         "/cli/compute/jobs/get",
         "/cli/compute/jobs/logs",

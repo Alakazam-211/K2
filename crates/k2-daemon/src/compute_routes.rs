@@ -97,6 +97,7 @@ pub const ROUTES: &[&str] = &[
     "/cli/compute/nodes/take-owner",
     "/cli/compute/nodes/update",
     "/cli/compute/nodes/wall",
+    "/cli/compute/prewarm",
     "/cli/compute/queue",
     "/cli/compute/run",
     "/cli/compute/usage",
@@ -140,6 +141,7 @@ pub const POST_ROUTES: &[&str] = &[
     "/cli/compute/nodes/take-owner",
     "/cli/compute/nodes/update",
     "/cli/compute/nodes/wall",
+    "/cli/compute/prewarm",
     "/cli/compute/run",
 ];
 
@@ -585,6 +587,8 @@ pub fn handle_from(path: &str, who: Who, body: &[u8], params: &HashMap<String, S
         "/cli/compute/agents" => agents_list(&who),
         "/cli/compute/agents/set" => agents_set(&who, body),
         "/cli/compute/run" => run(&who, body),
+        // `k2 compute prewarm` (CE-18): tools onto matching granted nodes.
+        "/cli/compute/prewarm" => prewarm(&who, body),
         "/cli/compute/jobs" => jobs_list(&who, params),
         "/cli/compute/jobs/get" => job_get(&who, params),
         "/cli/compute/jobs/logs" => job_logs(&who, params),
@@ -1635,6 +1639,138 @@ fn run(who: &Who, body: &[u8]) -> R<serde_json::Value> {
     let session = who.passport().map(|(_, sid)| sid.to_string());
     let sub = submit_one(who, &v, &ws, client_id, &request_sha, &SubmitOpts { session, ..Default::default() })?;
     Ok(submitted_json(who, &sub))
+}
+
+/// What a prewarm job reserves (it runs `sh -c true` after the install).
+const PREWARM_MEM: u64 = 512 << 20;
+
+/// `POST /cli/compute/prewarm` (`k2 compute prewarm`, CE-18, CE-A22):
+/// for each granted node matching `--os/--arch/--label` (and `nodes`, when
+/// named) where any need isn't ready, one `--no-source --tier batch -- sh
+/// -c true` job with those needs, so the node installs them while idle.
+/// The caller's grant and the Batch tier: it never holds anyone up. A node
+/// that already has everything is reported, not sent a job; a second
+/// prewarm therefore submits nothing. `plan: true` says what it would do.
+fn prewarm(who: &Who, body: &[u8]) -> R<serde_json::Value> {
+    use crate::compute_place as place;
+    need_credential(who)?;
+    passport_gate(who)?;
+    let mut v = json_body(body)?;
+    let ws = target_ws(who, s(&v, "workspace"))?;
+    apply_presets(&ws, &mut v)?;
+    let needs = needs_from(&v)?;
+    if needs.is_empty() {
+        return Err(no(codes::BAD_REQUEST, 400, "prewarm installs --needs: pass --needs rust@stable,cmake@3, or a --preset (or [defaults]) in .k2/compute.toml that lists needs"));
+    }
+    let tag = tag_from(&v)?;
+    let dry = b(&v, "plan") == Some(true);
+    let filter = store::AnyFilter {
+        os: s(&v, "os").map(str::to_string),
+        arch: s(&v, "arch").map(str::to_string),
+        labels: v
+            .get("labels")
+            .and_then(|l| l.as_object())
+            .map(|m| m.iter().filter_map(|(k, x)| x.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+            .unwrap_or_default(),
+    };
+    // `--node N` (repeatable): only these (full name or a unique prefix).
+    let named: Option<Vec<String>> = match v.get("nodes").and_then(|n| n.as_array()) {
+        Some(a) if !a.is_empty() => {
+            let mut ids = Vec::new();
+            for x in a {
+                let t = x.as_str().ok_or_else(|| no(codes::BAD_REQUEST, 400, "nodes is a list of node names"))?;
+                ids.push(resolve_node_for(who, Some(t), Some(&ws.id))?.id);
+            }
+            Some(ids)
+        }
+        _ => None,
+    };
+    let want = place::Want {
+        ws_id: ws.id.clone(),
+        admin: who.is_admin(),
+        auto: true,
+        filter: filter.clone(),
+        needs: needs.clone(),
+        artifacts: false,
+        exclusive: false,
+        needs_git: false,
+        cpu_millis: None,
+        mem_bytes: Some(PREWARM_MEM),
+        mem_defaulted: false,
+        timeout_secs: None,
+        stall: false,
+        secret_ids: Vec::new(),
+        tier: Tier::Batch,
+        cache: None,
+        multi_repo: false,
+    };
+    let report = place::candidates_report(&want, &[], compute::now());
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    let mut jobs: Vec<String> = Vec::new();
+    let mut cands: Vec<&place::Cand> = report.cands.iter().filter(|c| named.as_ref().is_none_or(|ids| ids.contains(&c.node.id))).collect();
+    cands.sort_by(|a, b| a.node.name.cmp(&b.node.name));
+    for c in cands {
+        let states = c.needs(&want);
+        let installs: Vec<&str> = states.iter().filter(|x| x.state != place::NeedState::Ready).map(|x| x.need.as_str()).collect();
+        let mut row = serde_json::json!({
+            "node": c.node.name,
+            "needs": states.iter().map(place::NeedStatus::json).collect::<Vec<_>>(),
+        });
+        if !c.offer.features.iter().any(|f| f == place::FEATURE_TOOLCHAIN_BUDGET) {
+            row["note"] = "no tool-cache cap on this node (older k2-node)".into();
+        }
+        if installs.is_empty() {
+            row["state"] = "ready".into();
+            rows.push(row);
+            continue;
+        }
+        row["installs"] = installs.clone().into();
+        if dry {
+            row["state"] = "would_install".into();
+            rows.push(row);
+            continue;
+        }
+        let client_id = crypto::random_id().map_err(|e| no("internal", 500, e))?;
+        let mut job_body = serde_json::json!({
+            "node": c.node.name,
+            "argv": ["sh", "-c", "true"],
+            "needs": needs,
+            "noSource": true,
+            "tier": "batch",
+            "detach": true,
+            "memBytes": PREWARM_MEM,
+            "tag": tag,
+        });
+        job_body["effective"] = v.get("effective").cloned().unwrap_or_default();
+        let request_sha = crypto::sha256_hex(&k2_core::compute::proto::canonical::to_vec(&job_body).map_err(|e| no(codes::BAD_REQUEST, 400, e))?);
+        let session = who.passport().map(|(_, sid)| sid.to_string());
+        match submit_one(who, &job_body, &ws, &client_id, &request_sha, &SubmitOpts { session, ..Default::default() }) {
+            Ok(Submitted { job: Some(j), .. }) => {
+                row["state"] = "installing".into();
+                row["job"] = j.id.clone().into();
+                row["short"] = j.id.chars().take(8).collect::<String>().into();
+                jobs.push(j.id);
+            }
+            Ok(_) => row["state"] = "ready".into(),
+            Err(r) => {
+                row["state"] = "refused".into();
+                row["error"] = serde_json::json!({"code": r.code, "hint": r.hint});
+            }
+        }
+        rows.push(row);
+    }
+    if rows.is_empty() {
+        return Err(no(codes::NO_NODE_FITS, 404, no_fit_hint(&ws, &want, &report)));
+    }
+    let skipped: BTreeMap<String, u32> = report.skipped.iter().map(|(k, n)| (k.to_string(), *n)).collect();
+    Ok(serde_json::json!({
+        "plan": dry,
+        "needs": needs,
+        "nodes": rows,
+        "jobs": jobs,
+        "fits": place::fits_words(report.cands.len() as u32, &skipped, &want),
+        "effective": v.get("effective").cloned().unwrap_or_default(),
+    }))
 }
 
 /// `.k2/compute.toml` and `--preset NAME` (CE-3, CE-A1): the daemon finds

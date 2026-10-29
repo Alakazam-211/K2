@@ -2368,7 +2368,7 @@ mod tests {
                 .map(|s| s.to_string())
                 .collect();
         let got: Vec<(String, &str, Option<String>)> = need_states(&c.offer, &toks).into_iter().map(|s| (s.need, s.state.as_str(), s.have)).collect();
-        let want = |n: &str, st: &str, h: Option<&str>| (n.to_string(), st, h.map(str::to_string));
+        let want = |n: &str, st: &'static str, h: Option<&str>| (n.to_string(), st, h.map(str::to_string));
         assert_eq!(
             got,
             vec![

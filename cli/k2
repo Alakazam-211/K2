@@ -21651,20 +21651,26 @@ Agents:
                  start the job now (a warm one if it isn't busier), else the
                  one with the shortest wait, and prints where and why
                  ("placed on …"). Name a node only to pin the job there
-                 (its full name, or a start of it that fits only one: k2n12).
+                 (its full name, or a start of it that fits only one: k2n12;
+                 a start that fits two or more: node_ambiguous, exit 2).
                  It prefers a node that already has the --needs tools.
-                 [--preset NAME] defaults from .k2/compute.toml (in your checkout,
-                                else the workspace folder; .k2/ isn't committed, so
-                                the file stays on this machine): [defaults] apply
-                                to every run, [presets.NAME] on top; flags win.
-                                Keys: os arch mem cpus needs env timeout
-                                stall_timeout tier cache. --plan shows what came
-                                from where
+                 --label k=v picks nodes by a label the node has.
+                 [--preset NAME] settings from .k2/compute.toml, a TOML file in
+                                the folder or git worktree you run from (else the
+                                --repo folder, else the workspace folder; .k2/ isn't
+                                committed, so it stays on this machine). [defaults]
+                                apply to every run, [presets.NAME] on top, and a
+                                flag beats both; --needs and --env add to the
+                                file's per tool and per name. Keys: os arch mem
+                                cpus needs env timeout stall_timeout tier cache.
+                                --plan shows what came from where
                  [--now]        start at once or fail (exit 3 not_now, naming the
                                 shortest wait); nothing is queued
-                 [--same-node-as JOB]  run on the node that ran one of your jobs
-                                (a resume that needs that node's files)
-                 [--tag NAME]   your own label for the job (e.g. fuzz:p3)
+                 [--same-node-as JOB]  run on the node that ran one of your jobs and
+                                wait for it there however long (a resume that needs
+                                that node's files)
+                 [--tag NAME]   a name you give the job (e.g. fuzz:p3), shown in
+                                listings; not --label, which picks nodes
                  [--detach] [--sha REV] [--no-source]
                  [--dirty]      ship your uncommitted changes too (no commit needed;
                                 HEAD + the diff + untracked, not-ignored files;
@@ -21693,8 +21699,10 @@ Agents:
                                 Evicted when idle and the node needs the disk;
                                 never with --secret. k2 compute cache lists them.
                                 With no node named, K2 picks the node your last
-                                job with this cache ran on, and waits for it up to
-                                15 min; else it says the cache isn't there
+                                job with this cache ran on; when that node is busy
+                                it waits there if the wait is under 15 min, else
+                                it runs elsewhere with an empty cache and says so
+                                (--same-node-as JOB always waits)
                  --mem 16G      always pass it: the memory the job needs (a cargo
                                 build, check or test of a big workspace like K2:
                                 24G; a smaller crate: 8G; a script: 1-2G). Left
@@ -21708,7 +21716,8 @@ Agents:
                                 node at spawn; names only in the plan (k2 study compute)
                  [--timeout D (≤ the grant's max, default 2h; k2 compute nodes shows it)]
                  [--exclusive --why "<one line>"]  the whole node to itself; needs
-                                a reason and a grant with --ci (or the owner)
+                                a reason (else exit 2) and a grant with --ci, or the
+                                owner or an Admin (else exit 3 exclusive_needs_grant)
                  [--retry-interrupted|--no-retry] [--raw] [--workspace WS]
                  [--wait [--failures] [--max-wait 9m] [--quiet]]
                                 print the job id, then stream its output and exit
@@ -21763,8 +21772,10 @@ Agents:
   k2 compute prewarm [--preset NAME | --needs …] [--os …] [--arch …] [--node N]...
                  [--plan] [--wait] [--json]
                  install the tools ahead of time: one idle-time (Batch) job on
-                 each node granted to you that matches and lacks one of them;
-                 a node that has them all is only reported
+                 each node granted to you that matches (--os/--arch/--node, or
+                 the preset's os/arch) and lacks one of them; a node that has
+                 them all is only reported. The jobs are detached; --wait
+                 waits for them to end
   k2 compute jobs [--node N] [--mine] [--state S] [--tier ci|priority|standard|batch] [--limit N] [--workspace WS] [--json]
                  From a git worktree inside the workspace (.claude/worktrees/x) the
                  workspace is found for you, and run takes HEAD and --dirty from

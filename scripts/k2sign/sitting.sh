@@ -11,6 +11,10 @@
 #   bash scripts/k2sign/sitting.sh 2 --key U2|U2b --commit <sha> [--run]     the keys (agents stopped)        ~30 min (U2b ~15)
 #   bash scripts/k2sign/sitting.sh 3 --key U2|U2b --commit <sha> [--run]     after the public keys land       ~15 min
 #   bash scripts/k2sign/sitting.sh reenrol --key U2|U2b --commit <sha> [--run]  replace the approver key        ~10 min
+#   bash scripts/k2sign/sitting.sh agents [--allow-agent <pid>]              read-only: which agents would block sitting 2
+# Sitting 2 and `agents` take --allow-agent <pid>: ONE claude session of yours
+# that keeps running (Rosson 2026-10-28: K2's coordinator drives the terminal);
+# every other agent must still be stopped.
 # --key: U2 = z3mbpZ, U2b = z3mbp (the script refuses the wrong Mac).
 #
 # Without --run it only PRINTS the steps (read them first). With --run it
@@ -29,19 +33,23 @@ APP="$HOME/Applications/K2 Release Approve.app"
 APPBIN="$APP/Contents/MacOS/K2 Release Approve"
 U1_KEY="$HOME/.tauri/k2so-updater.key"
 WHICH="${1:-}"; shift || true
-RUN=0 COMMIT="" KEY=""
+RUN=0 COMMIT="" KEY="" ALLOW_PID=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --run) RUN=1 ;;
         --commit) COMMIT="${2:-}"; shift ;;
         --key) KEY="${2:-}"; shift ;;
+        --allow-agent) ALLOW_PID="${2:-<none>}"; [ -n "${2:-}" ] || ALLOW_PID="<empty>"; shift ;;
         *) echo "sitting.sh: unknown argument $1" >&2; exit 2 ;;
     esac
     shift
 done
 
+if [ -n "$ALLOW_PID" ]; then
+    case "$WHICH" in 2|agents) ;; *) echo "sitting.sh $WHICH: --allow-agent is only for sitting 2 (and 'agents')" >&2; exit 2 ;; esac
+fi
 case "$WHICH:$KEY" in
-    check:|0:) KEY="${KEY:-U2}" ;;
+    check:|0:|agents:) KEY="${KEY:-U2}" ;;
     *:U2|*:U2b) ;;
     1:*|2:*|3:*|reenrol:*) echo "sitting.sh $WHICH: add --key U2 (on z3mbpZ) or --key U2b (on z3mbp)" >&2; exit 2 ;;
 esac
@@ -83,7 +91,52 @@ must_say() {
         fi
     fi
 }
-agents_running() { { /usr/bin/pgrep -u "$(id -un)" -f 'claude|grok|codex|k2-ptyd' 2>/dev/null || true; } | wc -l | tr -d ' '; }
+# Agent processes of this user (sitting 2 needs them stopped). Tests narrow
+# the pattern with K2SIGN_SITTING_AGENT_RE (printed loudly when set).
+AGENT_RE="${K2SIGN_SITTING_AGENT_RE:-claude|grok|codex|k2-ptyd}"
+descendants() { # <pid>: it and every process below it
+    /bin/ps -axo pid=,ppid= | awk -v root="$1" '{kids[$2]=kids[$2] " " $1} END{q=root; out=root; while (q != "") { split(q, a, " "); q=""; for (i in a) if (a[i] != "") { n=split(kids[a[i]], c, " "); for (j=1;j<=n;j++) { out=out " " c[j]; q=q " " c[j] } } } print out}'
+}
+ancestors() { # <pid>: it and every process above it
+    local p="$1" out=""
+    while [ -n "$p" ] && [ "$p" -gt 1 ] 2>/dev/null; do out="$out $p"; p="$(/bin/ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"; done
+    printf '%s' "$out"
+}
+# agents_check: refuse while any agent of this user runs, except the one
+# --allow-agent pid (a live claude process of this user) and what it started,
+# and this sitting's own process tree. Lists everything it found.
+agents_check() {
+    local me pids skip others="" p line allowed=""
+    me="$(id -un)"
+    [ "$AGENT_RE" = "claude|grok|codex|k2-ptyd" ] || printf '  \033[1;33mTEST: agent pattern overridden: %s\033[0m\n' "$AGENT_RE"
+    if [ -n "$ALLOW_PID" ]; then
+        line=""
+        [[ "$ALLOW_PID" =~ ^[0-9]+$ ]] && line="$(/bin/ps -o user=,args= -p "$ALLOW_PID" 2>/dev/null || true)"
+        if [ -z "$line" ] || [ "$(awk '{print $1}' <<<"$line")" != "$me" ] || [ "$(awk '{n=split($2,a,"/"); print a[n]}' <<<"$line")" != claude ]; then
+            printf '  \033[1;31mNO\033[0m  --allow-agent %s is not a live claude process of %s%s\n' "$ALLOW_PID" "$me" "${line:+ (it is: $(cut -c1-80 <<<"$line"))}"
+            return 1
+        fi
+        allowed="$(descendants "$ALLOW_PID")"
+    fi
+    skip=" $allowed $(ancestors $$) $(descendants $$) "
+    pids="$({ /usr/bin/pgrep -u "$me" -f "$AGENT_RE" 2>/dev/null || true; } | tr '\n' ' ')"
+    for p in $pids; do
+        case "$skip" in *" $p "*) continue ;; esac
+        others="$others $p"
+    done
+    if [ -n "$ALLOW_PID" ]; then
+        printf '  \033[1;33mALLOWED\033[0m  one agent keeps running at Rosson'"'"'s request: pid %s (%s) and the %s processes it started. Every other agent must be stopped.\n' \
+            "$ALLOW_PID" "$(/bin/ps -o args= -p "$ALLOW_PID" | cut -c1-60)" "$(( $(wc -w <<<"$allowed") - 1 ))"
+    fi
+    if [ -n "$others" ]; then
+        printf '  \033[1;31mNO\033[0m  %s other agent process(es) still run as %s:\n' "$(wc -w <<<"$others" | tr -d ' ')" "$me"
+        for p in $others; do printf '        %s  %s\n' "$p" "$(/bin/ps -o args= -p "$p" 2>/dev/null | cut -c1-90)"; done
+        echo "      Stop them, then run again."
+        return 1
+    fi
+    ok "no other agent runs as $me"
+}
+agents_running() { { /usr/bin/pgrep -u "$(id -un)" -f "$AGENT_RE" 2>/dev/null || true; } | wc -l | tr -d ' '; }
 # The approval app must close its own sheet (--timeout): Step 0.46 refuses an
 # older build, so the sittings rebuild it and check before going on.
 app_check() {
@@ -126,6 +179,11 @@ signer_check() {
             exit 1
         fi
     fi
+}
+# Re-check right before a password step (a heartbeat could have woken an agent).
+agents_gate() {
+    printf '\n\033[1m▶ check: still no other agent running (before a password step)\033[0m\n'
+    if [ "$RUN" = 1 ]; then agents_check || exit 1; fi
 }
 need_host() {
     local h
@@ -185,6 +243,7 @@ check() {
 
 case "$WHICH" in
 check) check ;;
+agents) agents_check ;;
 0)
     echo "Sitting 0 — S0 spike (a)(b)(c): does Touch ID approval work on this Mac? A THROWAWAY Secure Enclave key"
     echo "in a temp folder; nothing is installed or kept. Touch ID: 4 times. Wait for K2's go before sitting 1."
@@ -251,26 +310,35 @@ check) check ;;
     echo "  - U1's password must be in your password manager. Today it's the value on the TAURI_SIGNING_PRIVATE_KEY_PASSWORD line in the K2"
     echo "    checkout's .env: open .env in an editor (don't cat it), copy the value into a password-manager entry 'K2 update key U1'."
     [ "$KEY" = U2 ] && echo "  - Make a NEW long password for U3 in your password manager (entry 'K2 update key U3 - password')."
-    echo "  - Stop every agent: quit K2 from its menu-bar icon, then run 'k2 daemon stop' (it ends agent sessions), and close every"
-    echo "    Claude/Grok/Codex terminal. The script checks none is left."
+    if [ -n "$ALLOW_PID" ]; then
+        echo "  - ONE agent stays (--allow-agent $ALLOW_PID, at your request: it drives this terminal). Every OTHER agent must stop:"
+        echo "    end their sessions in K2 (keep the K2 daemon running: 'k2 daemon stop' would end the allowed one too) and pause"
+        echo "    their heartbeats; close every other Claude/Grok/Codex terminal. The script checks before it starts and again"
+        echo "    right before each password step. The allowed agent runs as you and can read what you can, so: type passwords"
+        echo "    ONLY at the hidden prompts in this iTerm window (turn on iTerm → Secure Keyboard Entry), never in a K2 tab or"
+        echo "    the K2 compose bar."
+    else
+        echo "  - Stop every agent: quit K2 from its menu-bar icon, then run 'k2 daemon stop' (it ends agent sessions), and close every"
+        echo "    Claude/Grok/Codex terminal. The script checks none is left."
+    fi
     if [ "$KEY" = U2 ]; then echo "You'll type: your Mac admin password (1-2 times), U3's new password (twice), 'saved', U1's password (once)."
     else echo "You'll type: your Mac admin password (1-2 times) and U1's password (once)."; fi
     echo "After pasting a password, copy any other text so it isn't left on the clipboard."
     need_host
     need_commit
     if [ "$RUN" = 1 ]; then
-        a="$(agents_running)"
-        [ "$a" = 0 ] || { echo "  $a Claude/Grok/Codex/k2-ptyd processes still run as $(id -un) (pgrep -fl 'claude|grok|codex|k2-ptyd' lists them). Stop them, then run again."; exit 1; }
+        agents_check || exit 1
         [ -f "$U1_KEY" ] || { echo "  no $U1_KEY: tell K2 where U1's key file is."; exit 1; }
         base64 -D < "$U1_KEY.pub" 2>/dev/null | head -1 | grep -q E9111446F65EBB05 \
             || { echo "  $U1_KEY.pub is not U1 (E9111446F65EBB05): tell K2."; exit 1; }
-        ok "agents stopped; U1's key file is $U1_KEY (id E9111446F65EBB05)"
+        ok "U1's key file is $U1_KEY (id E9111446F65EBB05)"
     fi
     signer_check
     step "Rebuild K2 Release Approve from this commit (keeps your approver key; adds --timeout)" bash "$HERE/approve/build.sh"
     app_check
     step "$KEY inside _k2sign (random password, never shown); prints its PUBLIC line (Password: = Mac admin password)" sudo "$LIBEXEC/k2sign-admin" generate-u2
     if [ "$KEY" = U2 ]; then
+        agents_gate
         step "U3: type U3's new password twice at minisign's prompts; attach the key file to a password-manager entry; type 'saved'" \
             bash "$TREE/scripts/updater-key-ceremony.sh" generate --signer k2sign --key-name U2
         note "The PUBLIC lines (U2, U3) are saved in ~/k2-update-pubkeys-U2.txt (safe to share). If the U3 step stopped, re-run with --run and press s for the U2 step."
@@ -278,6 +346,7 @@ check) check ;;
         step "Save U2b's PUBLIC line to a file (no U3 here)" bash "$TREE/scripts/updater-key-ceremony.sh" generate --signer k2sign --key-name U2b --skip-u3
         note "U2b's PUBLIC line is saved in ~/k2-update-pubkeys-U2b.txt (safe to share)."
     fi
+    agents_gate
     step "U1 into _k2sign: 'Password:' = Mac admin password, then 'U1's password (not shown):' = U1's password" sudo "$LIBEXEC/k2sign-admin" import u1 "$U1_KEY"
     step "Forget the cached admin password" sudo -k
     echo
@@ -294,7 +363,12 @@ check) check ;;
     echo "  gh secret delete TAURI_SIGNING_PRIVATE_KEY -R Alakazam-211/K2; gh secret delete TAURI_SIGNING_PRIVATE_KEY_PASSWORD -R Alakazam-211/K2"
     echo "  # 5. App Store Connect key: keep one AuthKey_*.p8 in one folder, chmod 700 the folder and 600 the file,"
     echo "  #    and point ASC_API_KEY_P8= in the K2 checkout's .env at it"
-    echo "Then start K2 again (open it from Applications) and send K2 the file ~/k2-update-pubkeys-$KEY.txt."
+    if [ -n "$ALLOW_PID" ]; then
+        echo "Then let the other agents resume, and send K2 the file ~/k2-update-pubkeys-$KEY.txt."
+        printf '\033[1;33mSummary: one agent was allowed to keep running (pid %s, at your request: it drives this terminal); every other agent was stopped.\033[0m\n' "$ALLOW_PID"
+    else
+        echo "Then start K2 again (open it from Applications) and send K2 the file ~/k2-update-pubkeys-$KEY.txt."
+    fi
     echo "(On z3mbp, separately: once both entries are in the password manager, rm -P ~/k2-root-helper-keys-SAVE-THEN-DELETE.txt)"
     [ "$RUN" = 1 ] || how_to_run
     ;;

@@ -200,6 +200,49 @@ if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 1 --key U2 --commit 0
 if HOME="$tmp/home" bash "$REPO/scripts/k2sign/sitting.sh" 1 --key U2 --run < /dev/null > "$tmp/sit.out" 2>&1; then fail "sitting 1 --run without --commit" "ran"; else
     grep -qE "Add --commit <sha>|belongs to" "$tmp/sit.out" && pass "sitting 1 --run refuses without --commit (or on another Mac)" || fail "commit gate" "$(cat "$tmp/sit.out")"; fi
 
+echo "== sitting 2's agent check: zero agents passes; one allowed claude; every other agent refuses =="
+# Fake agents whose command lines are unique to this run ("claude 3517",
+# "grok 3517"); the pattern is narrowed to them so real agents on the test
+# machine don't count.
+SIT="$REPO/scripts/k2sign/sitting.sh"
+export K2SIGN_SITTING_AGENT_RE="(claude|grok) 3517"
+ag() { HOME="$tmp/home" bash "$SIT" agents "$@" > "$tmp/ag.out" 2>&1; }
+if ag; then grep -q "no other agent runs as" "$tmp/ag.out" && pass "zero agents: the check passes and says so (not a silent exit)" || fail "zero agents msg" "$(cat "$tmp/ag.out")"
+else fail "zero agents" "rc!=0: $(cat "$tmp/ag.out")"; fi
+bash -c 'exec -a claude sleep 3517' & A_PID=$!
+bash -c 'exec -a grok sleep 3517' & G_PID=$!
+sleep 0.5
+if ag; then fail "an agent running, none allowed" "passed"; else
+    grep -q "2 other agent process(es)" "$tmp/ag.out" && grep -q "$A_PID" "$tmp/ag.out" && grep -q "$G_PID" "$tmp/ag.out" \
+        && pass "two agents, none allowed: refused, and both are listed" || fail "list" "$(cat "$tmp/ag.out")"; fi
+if ag --allow-agent "$A_PID"; then fail "allowed claude + another agent" "passed"; else
+    grep -q "ALLOWED.*pid $A_PID" "$tmp/ag.out" && grep -q "1 other agent process(es)" "$tmp/ag.out" && grep -q "$G_PID.*grok 3517" "$tmp/ag.out" \
+        && pass "the allowed claude is excused; another agent still refuses (and is listed)" || fail "allow + other" "$(cat "$tmp/ag.out")"; fi
+if ag --allow-agent "$G_PID"; then fail "a grok as the allowed agent" "passed"; else
+    grep -q "is not a live claude process" "$tmp/ag.out" && pass "--allow-agent refuses a pid that isn't claude" || fail "non-claude" "$(cat "$tmp/ag.out")"; fi
+kill "$G_PID" 2>/dev/null; wait "$G_PID" 2>/dev/null || true
+if ag --allow-agent "$A_PID"; then
+    grep -q "ALLOWED.*pid $A_PID" "$tmp/ag.out" && grep -q "no other agent runs as" "$tmp/ag.out" \
+        && pass "only the allowed claude left: passes, and says one agent was allowed" || fail "allowed only" "$(cat "$tmp/ag.out")"
+else fail "allowed only" "$(cat "$tmp/ag.out")"; fi
+kill "$A_PID" 2>/dev/null; wait "$A_PID" 2>/dev/null || true
+for bogus in "$A_PID" 99999999 abc ""; do
+    if ag --allow-agent "$bogus"; then fail "--allow-agent '$bogus'" "passed"; else
+        grep -q "is not a live claude process" "$tmp/ag.out" && pass "--allow-agent '${bogus:-<empty>}' (dead, bogus or empty) refuses" || fail "bogus $bogus" "$(cat "$tmp/ag.out")"; fi
+done
+if HOME="$tmp/home" bash "$SIT" 1 --key U2 --allow-agent 1 > "$tmp/ag.out" 2>&1; then fail "--allow-agent on sitting 1" "accepted"; else
+    grep -q "only for sitting 2" "$tmp/ag.out" && pass "--allow-agent is refused outside sitting 2" || fail "allow scope" "$(cat "$tmp/ag.out")"; fi
+HOME="$tmp/home" bash "$SIT" 2 --key U2b --commit 0123456 --allow-agent 4242 > "$tmp/sit.out" 2>&1
+grep -q "ONE agent stays (--allow-agent 4242" "$tmp/sit.out" && grep -q "Secure Keyboard Entry" "$tmp/sit.out" && ! grep -q "run 'k2 daemon stop'" "$tmp/sit.out" \
+    && grep -q "Summary: one agent was allowed" "$tmp/sit.out" && grep -q "copy any other text so it isn't left on the clipboard" "$tmp/sit.out" \
+    && [ "$(grep -c 'still no other agent running (before a password step)' "$tmp/sit.out")" = 1 ] \
+    && pass "sitting 2 --allow-agent: says so at the start and in the summary, keeps the daemon, re-checks before the password step, keeps the clipboard advice" \
+    || fail "sitting 2 allow text" "$(head -30 "$tmp/sit.out")"
+unset K2SIGN_SITTING_AGENT_RE
+# agents_running (check's count) under pipefail with NO match: a count, not a silent exit (e283277cc).
+out="$(bash -c 'set -euo pipefail; AGENT_RE="k2sign-no-such-process-$$"; eval "$(sed -n "/^agents_running()/p" "$1")"; n="$(agents_running)"; echo "n=$n"' _ "$SIT" 2>&1)" && rc=0 || rc=$?
+[ "$rc" = 0 ] && [ "$out" = "n=0" ] && pass "agents_running with no match under pipefail: prints 0 and goes on" || fail "agents_running zero" "rc=$rc out=$out"
+
 echo "== K2 Release Approve: Touch ID OR the login password, asked every time =="
 SW="$REPO/scripts/k2sign/approve/main.swift"
 code="$(grep -v '^[[:space:]]*//' "$SW")"

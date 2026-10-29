@@ -109,6 +109,18 @@ checkout's `.env`: open the file in an editor, don't `cat` it). After pasting
 any password or a token, copy other text so it isn't left on the clipboard.
 Sitting 2 on z3mbp stops every agent on z3mbp too, including the K2 workspace
 agents that build this code.
+**One allowed agent (Rosson's request, 2026-10-28).** On z3mbp, K2's
+coordinator session drives the terminal, so sitting 2 there can run with
+`--allow-agent <pid>`: that one claude process of Rosson's (and what it
+started) keeps running; every other agent must still be stopped, checked at
+the start and again right before each password step, and the sitting says at
+the start and in its summary that one agent was allowed. This trades some
+isolation for convenience, at his request: the allowed agent runs as his user
+and can read what he can (the screen, his files, `$TMPDIR`). Passwords go only
+into hidden prompts in an iTerm window (Secure Keyboard Entry on), never a K2
+tab or the compose bar; U2b's own password is random inside `_k2sign` and
+never typed; no U3 is made on z3mbp. Check first with
+`bash scripts/k2sign/sitting.sh agents --allow-agent <pid>`.
 Sitting 2 (both Macs) first rebuilds K2 Release Approve from its commit and
 checks it lists `timeout` (`--capabilities`); sitting 3 checks again, and
 `release.sh` Step 0.46 refuses an app without it. Rebuilding keeps the

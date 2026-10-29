@@ -513,10 +513,21 @@ pub fn classify_install_kind(exe: Option<&std::path::Path>) -> &'static str {
     if s.contains(".app/Contents/") {
         return "bundled-app";
     }
+    // Windows: the installer puts the daemon beside the app (`k2.exe`).
+    // That install updates through the app's own updater (latest.json has
+    // windows-x86_64); daemon-latest.json carries no Windows daemon.
+    if cfg!(windows) && is_beside_windows_app(exe) {
+        return "bundled-app";
+    }
     if is_package_path(&s) {
         return INSTALL_KIND_PACKAGE;
     }
     "standalone"
+}
+
+/// The K2 app (`k2.exe`) sits in the same folder as `exe`.
+fn is_beside_windows_app(exe: &std::path::Path) -> bool {
+    exe.parent().is_some_and(|dir| dir.join("k2.exe").is_file())
 }
 
 /// `installKind` of a package-manager install (0.46.3).
@@ -1351,6 +1362,21 @@ mod tests {
             classify_install_kind(Some(Path::new("/home/u/.k2so/bin/k2so-daemon"))),
             "standalone"
         );
+    }
+
+    /// Windows: the installer's daemon sits beside `k2.exe` and updates
+    /// through the app (bundled-app); a daemon on its own stays standalone.
+    #[cfg(windows)]
+    #[test]
+    fn classify_install_kind_reads_a_windows_app_install() {
+        let dir = k2_core::test_env::unique_temp_path("install-kind");
+        std::fs::create_dir_all(&dir).expect("dir");
+        let daemon = dir.join("k2-daemon.exe");
+        std::fs::write(&daemon, b"").expect("daemon");
+        assert_eq!(classify_install_kind(Some(&daemon)), "standalone", "no app beside it");
+        std::fs::write(dir.join("k2.exe"), b"").expect("app");
+        assert_eq!(classify_install_kind(Some(&daemon)), "bundled-app", "beside the app");
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]

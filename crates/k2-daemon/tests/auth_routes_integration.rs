@@ -1278,7 +1278,7 @@ fn start_stub_manifest_server(body: &'static str) -> String {
     format!("http://127.0.0.1:{port}/")
 }
 
-const STUB_MANIFEST: &str = r#"{"version":"999.0.0","pub_date":"2026-06-05T00:00:00Z","notes":"stub","artifacts":{"macos-aarch64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"},"macos-x86_64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"},"linux-x86_64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"},"linux-aarch64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"}}}"#;
+const STUB_MANIFEST: &str = r#"{"version":"999.0.0","pub_date":"2026-06-05T00:00:00Z","notes":"stub","artifacts":{"macos-aarch64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"},"macos-x86_64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"},"linux-x86_64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"},"linux-aarch64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"},"windows-x86_64":{"url":"PLACEHOLDER","sig":"PLACEHOLDER","sha256":"00"}}}"#;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn update_check_get_is_405() {

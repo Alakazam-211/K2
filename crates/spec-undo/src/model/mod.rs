@@ -2,9 +2,9 @@
 //! over plain strings and hunks. No engine, no store, no clock.
 //!
 //! **What it calls from the kit:** only the diff pipeline, D1–D2, where the spec still uses
-//! it: `diff::hunks` for `write --base` ([`merge::merge3_window`]) and
-//! `align_insertions(diff::hunks(..))` for edits given as a new text (`replace`,
-//! `restore`). Undo, redo and revert merge **exact edit sets** (U10, v1.7): ours, the
+//! it: `diff::whole_line_hunks` on the closed texts for `write --base`'s sides
+//! ([`merge::sides`], v0.9.7.1) and `lines::edit_hunks` for edits given as a new text
+//! (`replace`, `restore`, a clean `write --base`'s edits). Undo, redo and revert merge **exact edit sets** (U10, v1.7): ours, the
 //! inverse of the change's own edits, and theirs, the later edits inside the region's
 //! window at element identity ([`window`]); nothing there is diffed. Everything else is
 //! written from the spec text: the merge's pair rules (O1–O5) and its placement of ours on
@@ -1551,7 +1551,8 @@ fn canonical_hunks(v: Vec<diff::Hunk>) -> Vec<diff::Hunk> {
 }
 
 fn pipeline(old: &str, new: &str) -> Vec<Edit> {
-    lines::align_insertions(old, diff::hunks(old, new))
+    // the kit's edit pipeline: lines paired first (v0.9.7.1, `lines::edit_hunks`)
+    lines::edit_hunks(old, new)
         .into_iter()
         .map(Edit::from)
         .collect()

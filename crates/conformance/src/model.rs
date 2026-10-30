@@ -42,7 +42,7 @@ use crate::caps::{
     HistoryPurge, Purge, Side, SpanIds, Versions,
 };
 use crate::{Deviation, Hunk, Refused, TextReplica, SEED_AGENT};
-use k2_mpc_base::text::{diff, lines::align_insertions};
+use k2_mpc_base::text::lines::edit_hunks;
 
 /// One replica of the reference model, editing as one agent.
 #[derive(Clone)]
@@ -437,7 +437,7 @@ impl Versions for ModelHistory {
     ) -> Result<Option<(Change, Vec<Hunk>)>, Refused> {
         let target = self.show(v)?;
         let live = self.doc.text();
-        let hunks = align_insertions(&live, diff::hunks(&live, &target));
+        let hunks = edit_hunks(&live, &target);
         if hunks.is_empty() {
             return Ok(None);
         }

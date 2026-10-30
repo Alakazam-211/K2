@@ -152,12 +152,17 @@ STALE = e("MPC-E110", "stale", Session, 1, "A14 (--if-version), K-T0-5",
 
 WRITE_CONFLICT = e("MPC-E111", "write_conflict", Session, 1, "K-BR-2, K-BR-3 (O1–O5)",
     &["write"],
-    "your write overlaps changes made since version {base}: {count} region(s) at {where}; \
-     nothing applied",
-    "Others changed the same lines after the version you read. Nothing was applied. Read \
-     again (cat), redo your change on the new text, and write again with the new --base; \
-     or change only the lines you need with replace --lines / patch. details.conflicts has \
-     each region's base, ours and theirs.");
+    "your write touches lines someone else changed since version {base}: {count} \
+     region(s), your {lines} (now {lines} of version {current}); nothing applied. To retry: \
+     read the current text again (cat; it is version {current}), redo your change on it, \
+     then write --base {current}",
+    "Someone else changed the same lines after the version you read (or added lines at \
+     the same place), so nothing was applied; a write never merges inside a line. Run cat \
+     to read the current text (the message and details.current give its version), make \
+     your change again on that text, and write it with write --base <that version>. Or \
+     change only the lines you need with replace --lines or patch. details.conflicts has \
+     each region's your_lines (in your text), current_lines (in the current text), base, \
+     ours and theirs.");
 
 BASE_EXPIRED = e("MPC-E112", "base_expired", Session, 8, "K-BR-4, K-EXIT-1",
     &["write"],

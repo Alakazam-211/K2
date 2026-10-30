@@ -402,6 +402,20 @@ write --base V, undo, redo, log, approvals, who, status, claim. See capabilities
                         .map_err(|_| SessionError::BadEdit("setup".into()))?;
                 }
             }
+            "write-conflict" => {
+                // the agent read version 1; Sam then rewrote the Status line (v0.9.7.1's
+                // blind check of the write --base conflict)
+                write(
+                    w,
+                    "notes.md",
+                    b"# Launch notes\n\nStatus: draft\nOwner: tbd\nDate: 2026-11-02\n",
+                );
+                let (s, sam) = w.conn_as("notes.md", &sam)?;
+                s.edit_with(sam, ROOT, |t| {
+                    Ok::<_, ()>(t.replace("Status: draft", "Status: in review (Sam)"))
+                })
+                .map_err(|_| SessionError::BadEdit("setup".into()))?;
+            }
             "rate" => write(w, "todo.md", b"# TODO\n"),
             "declined" => write(w, "data.csv", b"name,age\r\nalice,31\r\nbob,27\n"),
             "claimed" => {
@@ -575,7 +589,7 @@ write --base V, undo, redo, log, approvals, who, status, claim. See capabilities
                 };
                 let text = String::from_utf8_lossy(stdin);
                 let o = s.write_base(me, ROOT, base, &text)?;
-                match o.refusal(base) {
+                match o.refusal_at(base, s.status()?.version) {
                     Some(r) => refuse(r, json),
                     None => ok(
                         Vec::new(),

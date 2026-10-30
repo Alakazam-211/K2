@@ -8,14 +8,14 @@
 //!   shows what it did); restoring the version the doc is at changes nothing; a restore is
 //!   undone by restoring the version before it.
 //! - `hist.restore_minimal` (K-HIST-8; undo spec D1): a restore is the kit's operation on
-//!   every engine, an edit of the kit's pipeline (`align_insertions(diff::hunks(live,
-//!   target))`). Restoring a version whose text the doc has (the current one, or one the
+//!   every engine, an edit of the kit's pipeline (`lines::edit_hunks(live, target)`: lines
+//!   paired first, v0.9.7.1). Restoring a version whose text the doc has (the current one, or one the
 //!   doc came back to) emits no events; otherwise the hunks the engine applied are exactly
 //!   the pipeline's, as it reports them (one change by the restorer).
 //!
 //! Purged content in versions is `erase.versions` ([`crate::erasure`]).
 
-use k2_mpc_base::text::{diff, lines::align_insertions};
+use k2_mpc_base::text::{diff, lines::edit_hunks};
 
 use crate::caps::{Change, Versions};
 use crate::{del, ins, rep, Hunk};
@@ -204,9 +204,9 @@ fn restored<V: Versions>(d: &mut V, v: &V::VersionId) -> Option<(Change, Vec<Hun
         .unwrap_or_else(|e| panic!("{}: restore {v:?}: {e:?}", engine::<V>()))
 }
 
-/// The kit's edit pipeline (undo spec D1).
+/// The kit's edit pipeline (undo spec D1; lines paired first, v0.9.7.1).
 fn pipeline(live: &str, target: &str) -> Vec<Hunk> {
-    align_insertions(live, diff::hunks(live, target))
+    edit_hunks(live, target)
 }
 
 /// `hist.restore_minimal`

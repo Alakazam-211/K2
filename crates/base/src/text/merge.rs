@@ -3,11 +3,21 @@
 //! A writer read version `base`, produced `ours`, and meanwhile the live doc moved to
 //! `theirs`. [`merge3`] applies only what the writer changed (base -> ours) on top of the
 //! live text, and refuses with the overlapping regions when the two sides touched the
-//! same text. There is no last-writer-wins path. `undo` uses the same function with
-//! base = after the edit, ours = before it, theirs = live.
+//! same lines. There is no last-writer-wins path. Undo, redo and revert merge exact hunk
+//! sets with the same pair rules ([`merge3_hunks`]).
 //!
-//! Granularity is the character (via [`diff::hunks`]): a writer changing one word and
-//! someone typing elsewhere in the same line both survive.
+//! **Whole lines (v0.9.7.1).** `write --base` merges by line, as an outside save does
+//! (diff3 by line): the texts are [`closed`] (a final "\n" added when one has text and lacks
+//! it) and each side is [`write_base_sides`], a diff from the closed base at whole lines
+//! ([`diff::whole_line_hunks`]): every hunk starts at a line start and covers and writes
+//! whole lines. So two changes to one line, or to overlapping lines, always overlap: a
+//! conflict, and the write is refused. Nothing is ever merged inside a line, so a clean
+//! merge never holds a line no one wrote (v0.1.0 to v0.9.7 diffed the sides to the
+//! character: lines sharing their first characters could pair one line off, and two lines
+//! could merge "cleanly" into one garbled line). The final "\n" is decided on its own, as
+//! the outside save's merge does ([`end_is_open`]). The clean result's hunks are the
+//! verb edits' diff from the live text to the merged text ([`lines::edit_hunks`]), so a
+//! write names the characters it changed, as any edit given as a new text does.
 //!
 //! Overlap rules (undo spec O1–O5), on half-open byte ranges of `base`:
 //! - O1: two non-empty ranges that intersect conflict;
@@ -21,9 +31,9 @@
 //! O5 makes the merge asymmetric in one place: with both sides appending, swapping ours
 //! and theirs swaps the order of the two appends. Everything else is symmetric.
 //!
-//! "Identical" is hunk equality, which is sound because [`diff::hunks`] is a pure function
-//! (counted work bounds, no clock) and canonical (touching hunks are coalesced): the same
-//! change from `base` gives the same hunks on both sides.
+//! "Identical" is hunk equality, which is sound because [`diff::whole_line_hunks`] is a pure
+//! function (counted work bounds, no clock): the same change from `base` gives the same hunks
+//! on both sides.
 
 use std::ops::Range;
 
@@ -48,6 +58,11 @@ pub struct Conflict {
     pub base_text: String,
     pub ours: String,
     pub theirs: String,
+    /// The region's 1-based line range in ours' text (the writer's; v0.9.7.1), as `lines`
+    /// (a region ours deleted gives one line: where it was).
+    pub ours_lines: (usize, usize),
+    /// The region's 1-based line range in theirs' text (the live text; v0.9.7.1).
+    pub theirs_lines: (usize, usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,20 +72,66 @@ pub enum Merge {
 }
 
 /// Merge whole texts: the end of `base` is the end of the text, so O5 applies there when
-/// `base` is non-empty (two writes to an empty doc conflict).
+/// `base` is non-empty (two writes to an empty doc conflict). `write --base`'s merge.
 pub fn merge3(base: &str, ours: &str, theirs: &str) -> Merge {
     merge3_window(base, ours, theirs, !base.is_empty())
 }
 
-/// Merge a window of a longer text (undo merges one region of the doc). `at_end` says
-/// whether the window ends where the whole text ends **and** the whole text was non-empty
-/// before the merge (the caller folds that in; the window's own base may be empty): only
-/// then do same-point insertions at the window's end both land (O5); elsewhere they
-/// conflict as anywhere else.
+/// [`merge3`] with O5's end of the text given: `at_end` says whether the window ends where
+/// the whole text ends **and** the whole text was non-empty before the merge (the caller
+/// folds that in; the window's own base may be empty): only then do same-point insertions
+/// at the window's end both land (O5); elsewhere they conflict as anywhere else.
+///
+/// **By whole lines (v0.9.7.1):** the sides are [`write_base_sides`] on the [`closed`]
+/// texts; the pair rules O1–O5 decide on them; the final "\n" of a clean merge follows the
+/// side that wrote its last line ([`end_is_open`]). A conflict's ranges are on `base`, its
+/// line numbers in `base`, ours and theirs ([`Conflict`]).
 pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merge {
-    let a = diff::hunks(base, ours);
-    let b = diff::hunks(base, theirs);
-    merge_sets(base, &a, &b, theirs, at_end, |i, j| a[i] == b[j])
+    let (cb, ct) = (closed(base), closed(theirs));
+    let (a, b) = write_base_sides(base, ours, theirs);
+    match merge_sets(&cb, &a, &b, &ct, at_end, |i, j| a[i] == b[j]) {
+        Merge::Conflicts(cs) => Merge::Conflicts(
+            cs.into_iter()
+                .map(|c| on_open_texts(c, base, ours, theirs))
+                .collect(),
+        ),
+        Merge::Clean(c) => {
+            let open = end_is_open(base, ours, theirs, &a, &b, &c.hunks, &c.text);
+            let mut text = c.text;
+            if open {
+                text.pop();
+            }
+            Merge::Clean(Clean {
+                hunks: lines::edit_hunks(theirs, &text),
+                text,
+            })
+        }
+    }
+}
+
+/// `write --base`'s two sides (undo spec O0, v0.9.7.1): [`closed`] `base` to closed `ours`
+/// and to closed `theirs`, each [`diff::whole_line_hunks`] (hunks on the closed base that
+/// start at line starts and cover and write whole lines). The same sides as an outside
+/// save's ([`outside_sides`]): two changes touching one line always overlap.
+pub fn write_base_sides(base: &str, ours: &str, theirs: &str) -> (Vec<Hunk>, Vec<Hunk>) {
+    outside_sides(base, ours, theirs)
+}
+
+/// A conflict found on the [`closed`] texts, on the texts themselves: a range that reached
+/// the closing "\n" of an open base ends at the base's end, and a side's text there loses
+/// the "\n" its own text doesn't have. Line numbers don't change (closing adds no line).
+fn on_open_texts(mut c: Conflict, base: &str, ours: &str, theirs: &str) -> Conflict {
+    if c.base.end > base.len() {
+        c.base.end = base.len();
+        c.base.start = c.base.start.min(base.len());
+        c.base_text = base[c.base.clone()].to_owned();
+        for (side, text) in [(&mut c.ours, ours), (&mut c.theirs, theirs)] {
+            if is_open(text) && side.ends_with('\n') {
+                side.pop();
+            }
+        }
+    }
+    c
 }
 
 /// Merge an outside save onto the live text (disk sync, v0.9.5): `base` is the text the file
@@ -550,17 +611,36 @@ fn conflicts(base: &str, a: &[Hunk], b: &[Hunk], clash: &[(usize, usize)]) -> Ve
                     .collect();
                 diff::apply(&base[r.clone()], &local)
             };
-            let start_line = base[..r.start].matches('\n').count() + 1;
-            let inner = &base[r.clone()];
-            let spans = inner
-                .matches('\n')
-                .count()
-                .saturating_sub(inner.ends_with('\n') as usize);
+            let span = |start: usize, inner: &str| {
+                let spans = inner
+                    .matches('\n')
+                    .count()
+                    .saturating_sub(inner.ends_with('\n') as usize);
+                (start, start + spans)
+            };
+            let before = base[..r.start].matches('\n').count();
+            // the region's first line in a side's text: the base's lines before it, plus
+            // what that side's hunks before it (not the region's) added or removed
+            let side_start = |hs: &[Hunk], idx: &[usize]| -> usize {
+                let delta: isize = hs
+                    .iter()
+                    .enumerate()
+                    .filter(|(k, h)| !idx.contains(k) && h.end <= r.start && h.start <= r.start)
+                    .map(|(_, h)| {
+                        h.insert.matches('\n').count() as isize
+                            - base[h.start..h.end].matches('\n').count() as isize
+                    })
+                    .sum();
+                (before as isize + delta) as usize + 1
+            };
+            let (ours, theirs) = (side(a, &ai), side(b, &bj));
             Conflict {
-                lines: (start_line, start_line + spans),
+                lines: span(before + 1, &base[r.clone()]),
+                ours_lines: span(side_start(a, &ai), &ours),
+                theirs_lines: span(side_start(b, &bj), &theirs),
                 base_text: base[r.clone()].to_owned(),
-                ours: side(a, &ai),
-                theirs: side(b, &bj),
+                ours,
+                theirs,
                 base: r,
             }
         })
@@ -582,12 +662,29 @@ mod tests {
         }
     }
 
+    /// v0.9.7.1: nothing is merged inside a line. An agent's word change and a person's
+    /// typing in the same line conflict (before, both landed); on different lines both land.
     #[test]
-    fn agent_word_change_survives_concurrent_typing_in_same_line() {
+    fn agent_word_change_and_typing_in_the_same_line_conflict() {
         let base = "The quick brown fox.\n";
         let ours = "The quick red fox.\n"; // agent
         let theirs = "The quick brown fox jumps.\n"; // a person typed at the end
-        assert_eq!(clean(base, ours, theirs), "The quick red fox jumps.\n");
+        let Merge::Conflicts(c) = merge3(base, ours, theirs) else {
+            panic!("one line changed by both sides conflicts")
+        };
+        assert_eq!(
+            (c[0].lines, c[0].ours_lines, c[0].theirs_lines),
+            ((1, 1), (1, 1), (1, 1))
+        );
+        let base = "The quick brown fox.\nIt ran.\n";
+        assert_eq!(
+            clean(
+                base,
+                "The quick red fox.\nIt ran.\n",
+                "The quick brown fox.\nIt jumped.\n"
+            ),
+            "The quick red fox.\nIt jumped.\n"
+        );
     }
 
     #[test]
@@ -617,31 +714,60 @@ mod tests {
         );
     }
 
+    /// v0.9.7.1: different lines changed by each side merge, adjacent ones too, and at an
+    /// open end; one line changed by both conflicts.
     #[test]
-    fn typing_right_after_a_changed_word_is_not_a_conflict() {
-        let base = "shared line\n";
+    fn adjacent_lines_changed_by_each_side_merge() {
+        assert_eq!(clean("a\nb\n", "A\nb\n", "a\nB\n"), "A\nB\n");
+        assert_eq!(clean("a\nb\n", "a\nB\n", "A\nb\n"), "A\nB\n");
+        assert_eq!(clean("a\nb", "A\nb", "a\nB"), "A\nB");
         assert_eq!(
-            clean(
+            clean("a\nb\nc\n", "a\nX\nY\nc\n", "A\nb\nC\n"),
+            "A\nX\nY\nC\n"
+        );
+        // a deletion next to the other side's rewrite
+        assert_eq!(clean("a\nb\nc\n", "a\nc\n", "a\nb\nC\n"), "a\nC\n");
+        assert!(matches!(
+            merge3("a\nb\n", "A\nb\n", "a2\nb\n"),
+            Merge::Conflicts(_)
+        ));
+    }
+
+    /// v0.9.7.1: typing into a line the writer changed is a conflict (before, both landed).
+    #[test]
+    fn typing_into_a_line_the_writer_changed_conflicts() {
+        let base = "shared line\n";
+        assert!(matches!(
+            merge3(
                 base,
                 "shared LINE by agent\n",
                 "shared line edited by Sam\n"
             ),
-            "shared LINE by agent edited by Sam\n"
-        );
+            Merge::Conflicts(_)
+        ));
     }
 
     #[test]
     fn same_point_insertions_conflict_unless_identical() {
-        assert!(matches!(merge3("ab", "aXb", "aYb"), Merge::Conflicts(_)));
-        assert!(matches!(merge3("ab", "Xab", "Yab"), Merge::Conflicts(_)));
-        assert_eq!(clean("ab", "aXb", "aXb"), "aXb");
-        // at the end of the text the two land instead (O5)
-        assert_eq!(clean("ab", "abX", "abY"), "abYX");
-        // ... but not at the end of a window that isn't the end of the text
+        let base = "a\nb\n";
         assert!(matches!(
-            merge3_window("ab", "abX", "abY", false),
+            merge3(base, "a\nX\nb\n", "a\nY\nb\n"),
             Merge::Conflicts(_)
         ));
+        assert!(matches!(
+            merge3(base, "X\na\nb\n", "Y\na\nb\n"),
+            Merge::Conflicts(_)
+        ));
+        assert_eq!(clean(base, "a\nX\nb\n", "a\nX\nb\n"), "a\nX\nb\n");
+        // at the end of the text the two land instead (O5)
+        assert_eq!(clean(base, "a\nb\nX\n", "a\nb\nY\n"), "a\nb\nY\nX\n");
+        // ... but not at the end of a window that isn't the end of the text
+        assert!(matches!(
+            merge3_window(base, "a\nb\nX\n", "a\nb\nY\n", false),
+            Merge::Conflicts(_)
+        ));
+        // inside one line, two insertions are two changes of that line: a conflict (v0.9.7.1)
+        assert!(matches!(merge3("ab", "abX", "abY"), Merge::Conflicts(_)));
     }
 
     /// The keep-both rule character by character (the model of [`merge3_keep_both`]'s
@@ -1024,8 +1150,16 @@ mod tests {
 
     #[test]
     fn boundary_touch_does_not_conflict() {
-        // ours replaces "bc", theirs inserts right before it and right after it
-        assert_eq!(clean("abcd", "aXd", "a1bc2d"), "a1X2d");
+        // ours replaces line "bc", theirs inserts lines right before it and right after it
+        assert_eq!(
+            clean("a\nbc\nd\n", "a\nX\nd\n", "a\n1\nbc\n2\nd\n"),
+            "a\n1\nX\n2\nd\n"
+        );
+        // inside a line the same edits are one line changed twice: a conflict (v0.9.7.1)
+        assert!(matches!(
+            merge3("abcd", "aXd", "a1bc2d"),
+            Merge::Conflicts(_)
+        ));
     }
 
     #[test]
@@ -1126,11 +1260,12 @@ mod tests {
 
         #[test]
         fn disjoint_edits_both_land(left in text(), mid in text(), right in text(), l2 in text(), r2 in text()) {
-            // ours edits only the left part, theirs only the right; a fixed separator keeps them apart
-            let base = format!("{left}|{mid}|{right}");
-            let ours = format!("{l2}|{mid}|{right}");
-            let theirs = format!("{left}|{mid}|{r2}");
-            prop_assert_eq!(clean(&base, &ours, &theirs), format!("{l2}|{mid}|{r2}"));
+            // ours edits only the left lines, theirs only the right ones; a fixed separator
+            // line keeps them apart (v0.9.7.1: whole lines)
+            let base = format!("{left}\n|{mid}|\n{right}");
+            let ours = format!("{l2}\n|{mid}|\n{right}");
+            let theirs = format!("{left}\n|{mid}|\n{r2}");
+            prop_assert_eq!(clean(&base, &ours, &theirs), format!("{l2}\n|{mid}|\n{r2}"));
         }
 
         /// Symmetric up to O5: when both sides append different text at the end, swapping
@@ -1138,18 +1273,21 @@ mod tests {
         #[test]
         fn clean_merges_are_symmetric_up_to_eof_order(base in text(), o in text(), t in text()) {
             if let (Merge::Clean(x), Merge::Clean(y)) = (merge3(&base, &o, &t), merge3(&base, &t, &o)) {
+                // on the closed texts (v0.9.7.1: the sides are whole lines of those)
+                let cb = closed(&base);
                 let eof = |new: &str| {
-                    diff::hunks(&base, new)
+                    diff::whole_line_hunks(&cb, &closed(new))
                         .pop()
-                        .filter(|h| h.is_insertion() && h.start == base.len())
+                        .filter(|h| h.is_insertion() && h.start == cb.len())
                         .map(|h| h.insert)
                 };
+                let (xt, yt) = (closed(&x.text).into_owned(), closed(&y.text).into_owned());
                 match (eof(&o), eof(&t)) {
                     (Some(eo), Some(et)) if eo != et => {
                         let tail = eo.len() + et.len();
-                        prop_assert!(x.text.ends_with(&format!("{et}{eo}")), "{:?}", x.text);
-                        prop_assert!(y.text.ends_with(&format!("{eo}{et}")), "{:?}", y.text);
-                        prop_assert_eq!(&x.text[..x.text.len() - tail], &y.text[..y.text.len() - tail]);
+                        prop_assert!(xt.ends_with(&format!("{et}{eo}")), "{:?}", x.text);
+                        prop_assert!(yt.ends_with(&format!("{eo}{et}")), "{:?}", y.text);
+                        prop_assert_eq!(&xt[..xt.len() - tail], &yt[..yt.len() - tail]);
                     }
                     _ => prop_assert_eq!(x.text, y.text),
                 }
@@ -1282,6 +1420,143 @@ mod tests {
         fn eof_rule_only_adds_clean_merges(base in text(), o in text(), t in text()) {
             if let Merge::Clean(w) = merge3_window(&base, &o, &t, false) {
                 prop_assert_eq!(clean(&base, &o, &t), w.text);
+            }
+        }
+    }
+
+    // ---------- write --base's sides, by line then by character ----------
+
+    /// The false conflict the line-aligned sides remove: three lines sharing their first
+    /// character; ours deletes the last, theirs the middle one and appends two.
+    /// `diff::hunks`' character trim read theirs' deletion one line off (its common prefix ran
+    /// into the next line's shared "p"), so the character-trimmed sides overlapped ours'; the
+    /// line-aligned sides don't.
+    #[test]
+    fn lines_sharing_a_start_never_pair_one_line_off() {
+        let base = "p05:2216\np22:2150\np10:2205\n";
+        let ours = "p05:2216\np22:2150\n";
+        let theirs = "p05:2216\np10:2205\np23:2229\np25:2184\n";
+        assert_eq!(clean(base, ours, theirs), "p05:2216\np23:2229\np25:2184\n");
+        let h = |start, end, insert: &str| Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        };
+        let (a, b) = write_base_sides(base, ours, theirs);
+        assert_eq!(a, vec![h(18, 27, "")]);
+        assert_eq!(b, vec![h(9, 18, ""), h(27, 27, "p23:2229\np25:2184\n")]);
+        // the control: the character-trimmed sides conflict on the same texts
+        let (a0, b0) = (diff::hunks(base, ours), diff::hunks(base, theirs));
+        assert!(matches!(
+            merge_sets(base, &a0, &b0, theirs, true, |i, j| a0[i] == b0[j]),
+            Merge::Conflicts(_)
+        ));
+        // the sides swapped: the same text
+        assert_eq!(clean(base, theirs, ours), "p05:2216\np23:2229\np25:2184\n");
+        // still conflict-refusing: both deleting the same line is O4, one deleting a line the
+        // other rewrote is a conflict
+        assert_eq!(clean(base, ours, ours), ours);
+        assert!(matches!(
+            merge3(base, ours, "p05:2216\np22:2150\np10:9999\n"),
+            Merge::Conflicts(_)
+        ));
+    }
+
+    /// The splice the line-aligned sides remove (soak_32 seed 1, call 7836, trimmed): ours
+    /// inserts a line, theirs rewrites the lines around it into one. The character-trimmed
+    /// theirs side kept single characters of the old lines ("p" "2" "0" ":90") and ours'
+    /// insertion landed between two of them, cleanly, splicing two lines into "p213:102" and
+    /// "p0:90". The line-aligned sides overlap there: a conflict, nothing spliced.
+    #[test]
+    fn an_insertion_never_lands_inside_another_sides_rewritten_line() {
+        let base = "p26:95\np05:90\n";
+        let ours = "p26:95\np13:102\np05:90\n";
+        let theirs = "p20:90\n";
+        // the control: the character-trimmed sides merge "cleanly" into a splice
+        let (a0, b0) = (diff::hunks(base, ours), diff::hunks(base, theirs));
+        let Merge::Clean(c) = merge_sets(base, &a0, &b0, theirs, true, |i, j| a0[i] == b0[j])
+        else {
+            panic!("the control merged clean before")
+        };
+        assert_eq!(c.text, "p213:102\np0:90\n");
+        let Merge::Conflicts(c) = merge3(base, ours, theirs) else {
+            panic!("ours' line lands inside theirs' rewritten lines: a conflict")
+        };
+        assert_eq!(c[0].lines, (1, 2));
+        assert!(matches!(merge3(base, theirs, ours), Merge::Conflicts(_)));
+    }
+
+    /// v0.9.7.1: nothing is merged inside a line. Two writers changing different words of
+    /// one line conflict (before, both landed); changes to different lines merge, on lines
+    /// sharing their start too.
+    #[test]
+    fn different_words_of_one_line_conflict_and_different_lines_merge() {
+        let base = "alpha beta gamma\n";
+        let Merge::Conflicts(c) = merge3(base, "alpha BETA gamma\n", "alpha beta GAMMA\n") else {
+            panic!("two words of one line conflict")
+        };
+        assert_eq!(c[0].lines, (1, 1));
+        let base = "p05 2216 a\np05 2150 b\n";
+        assert_eq!(
+            clean(base, "p05 2216 A\np05 2150 b\n", "p05 2216 a\np05 9999 b\n"),
+            "p05 2216 A\np05 9999 b\n"
+        );
+        assert!(matches!(
+            merge3(base, "p05 2216 A\np05 2150 b\n", "p05 7777 a\np05 2150 b\n"),
+            Merge::Conflicts(_)
+        ));
+    }
+
+    /// Distinct lines of the form `pNN:NNNN`, sharing their first characters (many share
+    /// "p0" or "p1"), shuffled.
+    fn shared_start_lines() -> impl Strategy<Value = Vec<String>> {
+        prop::collection::btree_set(0u32..40, 2..9)
+            .prop_map(|s| {
+                s.into_iter()
+                    .map(|n| format!("p{n:02}:{:04}\n", (n * 7919 + 2150) % 10_000))
+                    .collect::<Vec<_>>()
+            })
+            .prop_shuffle()
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(cases(3000)))]
+
+        /// Lines sharing their first characters: ours and theirs delete different lines of a
+        /// base of distinct `pNN:NNNN` lines, and theirs may append new ones; the merge is
+        /// always clean, and is the base without both sides' lines, theirs' new lines last.
+        /// (The character-trimmed sides read some of these one line off and conflicted.)
+        #[test]
+        fn deleting_different_lines_that_share_a_start_merges(
+            base in shared_start_lines(),
+            del in prop::collection::vec(0u8..3, 9),
+            add in prop::collection::btree_set(50u32..90, 0..3),
+        ) {
+            let add: String = add
+                .into_iter()
+                .map(|n| format!("p{n:02}:{:04}\n", (n * 104_729) % 10_000))
+                .collect();
+            // per line: 0 kept, 1 ours deletes it, 2 theirs deletes it
+            let keep = |side: u8| -> String {
+                base.iter()
+                    .zip(&del)
+                    .filter(|(_, d)| **d != side)
+                    .map(|(l, _)| l.as_str())
+                    .collect()
+            };
+            let b: String = base.concat();
+            let ours = keep(1);
+            let theirs = format!("{}{add}", keep(2));
+            let want: String = base
+                .iter()
+                .zip(&del)
+                .filter(|(_, d)| **d == 0)
+                .map(|(l, _)| l.as_str())
+                .collect::<String>()
+                + &add;
+            match merge3(&b, &ours, &theirs) {
+                Merge::Clean(c) => prop_assert_eq!(c.text, want, "B {:?} O {:?} T {:?}", b, ours, theirs),
+                Merge::Conflicts(c) => prop_assert!(false, "a false conflict: B {:?} O {:?} T {:?}: {:?}", b, ours, theirs, c),
             }
         }
     }

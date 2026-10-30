@@ -435,6 +435,8 @@ fn write_conflicts(cs: &[Conflict]) -> Value {
             .map(|c| {
                 Value::obj([
                     ("lines", Value::from(c.lines)),
+                    ("your_lines", Value::from(c.ours_lines)),
+                    ("current_lines", Value::from(c.theirs_lines)),
                     ("base", Value::from(&c.base_text)),
                     ("ours", Value::from(&c.ours)),
                     ("theirs", Value::from(&c.theirs)),
@@ -446,21 +448,55 @@ fn write_conflicts(cs: &[Conflict]) -> Value {
 
 impl WriteOutcome {
     /// The refusal this outcome is (`write --base` from version `base`): a conflict (exit 1)
-    /// or an expired base (exit 8). `None` when it applied. Conflict lines are the base's.
+    /// or an expired base (exit 8). `None` when it applied. A conflict names its lines in
+    /// the writer's text and in the current text; [`WriteOutcome::refusal_at`] also names
+    /// the current version, for the retry.
     pub fn refusal(&self, base: crate::store::Seq) -> Option<ErrorReport> {
+        self.refusal_with(base, None)
+    }
+
+    /// [`WriteOutcome::refusal`] with the doc's current version (v0.9.7.1): a conflict says
+    /// to read that version and write again with it as `--base`, and `details.current` has
+    /// it.
+    pub fn refusal_at(
+        &self,
+        base: crate::store::Seq,
+        current: crate::store::Seq,
+    ) -> Option<ErrorReport> {
+        self.refusal_with(base, Some(current))
+    }
+
+    fn refusal_with(
+        &self,
+        base: crate::store::Seq,
+        current: Option<crate::store::Seq>,
+    ) -> Option<ErrorReport> {
         Some(match self {
             WriteOutcome::Applied(_) => return None,
             WriteOutcome::Conflicts(cs) => {
-                let w = where_lines(cs.iter().map(|c| c.lines));
+                let yours = where_lines(cs.iter().map(|c| c.ours_lines));
+                let now = where_lines(cs.iter().map(|c| c.theirs_lines));
+                let retry = match current {
+                    Some(v) => format!(
+                        "read the current text again (cat; it is version {v}), redo your \
+                         change on it, then write --base {v}"
+                    ),
+                    None => "read the current text again (cat), redo your change on it, then \
+                             write --base with the version cat reports"
+                        .to_owned(),
+                };
+                let at = current.map_or(String::new(), |v| format!(" of version {v}"));
                 rep(
                     &r::WRITE_CONFLICT,
                     format!(
-                        "your write overlaps changes made since version {base}: {} region(s) \
-                         at {w}; nothing applied",
+                        "your write touches lines someone else changed since version {base}: \
+                         {} region(s), your {yours} (now {now}{at}); nothing applied. To \
+                         retry: {retry}",
                         cs.len()
                     ),
                 )
                 .with("base", base)
+                .with("current", current)
                 .with("conflicts", write_conflicts(cs))
             }
             WriteOutcome::BaseExpired => rep(

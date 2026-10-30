@@ -1,16 +1,21 @@
 //! The three-way merge of the spec (§4, O1–O5), written from `docs/SPEC-UNDO.md`.
 //!
 //! Undo, redo and revert merge **exact edit sets** ([`merge_edits`], v1.7): no diff. Only
-//! `write --base` (and the mutant that re-diffs) finds its sides with the kit's
-//! deterministic diff (D1–D2), `diff::hunks(base, side)` ([`merge3_window`]). Classifying
-//! pairs of hunks (O1–O5) and placing ours into theirs' coordinates are this module's own.
+//! `write --base` finds its sides with the kit's deterministic diff (D1–D2, O0), **by whole
+//! lines** (v0.9.7.1): the texts closed (a final "\n" added when one has text and lacks
+//! it), each side `diff::whole_line_hunks(closed base, closed side)` ([`sides`]), so two
+//! changes touching one line always overlap; the final "\n" of a clean merge follows the
+//! side that wrote its last line ([`ends_open`], this module's own); the clean result's
+//! edits are the verb edits' diff from the live text (`lines::edit_hunks`). (The mutant that
+//! re-diffs undo's windows keeps `diff::hunks`.) Classifying pairs of hunks (O1–O5) and
+//! placing ours into theirs' coordinates are this module's own.
 //!
 //! **O4 (v1.8)** is judged on (position, root) for undo, redo and revert ([`Same::Root`]):
 //! each side's edits come with the provenance roots of what they insert. `write --base` has
 //! no history and keeps hunk equality ([`Same::Hunk`]). O4a (a root put back at most once)
 //! reads the live text, so it is the caller's (`Model::merge_regions`).
 
-use k2_mpc_base::text::diff;
+use k2_mpc_base::text::{diff, lines};
 
 use super::hunk::{self, Edit, Prov};
 
@@ -62,18 +67,99 @@ pub struct Rules {
 /// `merge3_window(base, ours, theirs, at_end)` (§4, U10): apply what ours changed from
 /// `base` on top of `theirs`. `at_end` is the caller's: the window ends at the live doc's end
 /// **and** the whole doc was non-empty in the merge's base (U10). Only then do two
-/// different insertions at the window's end both land (O5).
+/// different insertions at the window's end both land (O5). `write --base`'s merge: by whole
+/// lines on the closed texts (v0.9.7.1).
 pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> (Merged, Rules) {
-    let a: Vec<Edit> = diff::hunks(base, ours)
-        .into_iter()
-        .map(Edit::from)
-        .collect();
-    let b: Vec<Edit> = diff::hunks(base, theirs)
-        .into_iter()
-        .map(Edit::from)
-        .collect();
+    let (cb, ct) = (closed(base), closed(theirs));
+    let (a, b) = (sides(base, ours), sides(base, theirs));
     let (ap, bp) = (vec![Vec::new(); a.len()], vec![Vec::new(); b.len()]);
-    merge_edits(base, &a, &ap, &b, &bp, at_end, Same::Hunk)
+    match merge_edits(&cb, &a, &ap, &b, &bp, at_end, Same::Hunk) {
+        (Merged::Clean { text, edits, .. }, rules) => {
+            let mut text = text;
+            if ends_open(base, ours, theirs, &a, &b, &edits, &text) {
+                text.pop();
+            }
+            debug_assert_eq!(hunk::apply(&ct, &edits), closed(&text));
+            let edits: Vec<Edit> = lines::edit_hunks(theirs, &text)
+                .into_iter()
+                .map(Edit::from)
+                .collect();
+            let provs = vec![Vec::new(); edits.len()];
+            (Merged::Clean { text, edits, provs }, rules)
+        }
+        conflict => conflict,
+    }
+}
+
+/// `t` with a final "\n" when it has text and lacks one.
+fn closed(t: &str) -> String {
+    if t.is_empty() || t.ends_with('\n') {
+        t.to_owned()
+    } else {
+        format!("{t}\n")
+    }
+}
+
+fn is_open(t: &str) -> bool {
+    !t.is_empty() && !t.ends_with('\n')
+}
+
+/// One of `write --base`'s sides (O0, v0.9.7.1): the closed `base` -> the closed `side`, by
+/// whole lines (`diff::whole_line_hunks`): every edit starts at a line start and covers and
+/// writes whole lines.
+pub fn sides(base: &str, side: &str) -> Vec<Edit> {
+    diff::whole_line_hunks(&closed(base), &closed(side))
+        .into_iter()
+        .map(Edit::from)
+        .collect()
+}
+
+/// Whether a clean whole-line merge ends without its final "\n": its last line's author
+/// decides. `placed` are ours' edits on the closed theirs, giving `merged`; `a` and `b` the
+/// sides on the closed base. The last "\n" written by ours: as ours' text ends; written by
+/// theirs: as theirs' does; a base line, or a change both made (O4): the side that changed
+/// the base's ending (ours when it did, else theirs). An empty last line is never left open.
+fn ends_open(
+    base: &str,
+    ours: &str,
+    theirs: &str,
+    a: &[Edit],
+    b: &[Edit],
+    placed: &[Edit],
+    merged: &str,
+) -> bool {
+    if merged.is_empty() || merged == "\n" || merged.ends_with("\n\n") {
+        return false;
+    }
+    let both = if is_open(ours) != is_open(base) {
+        is_open(ours)
+    } else {
+        is_open(theirs)
+    };
+    // the edit that wrote character `p` of the text `es` give, or where it was copied from
+    let source = |es: &[Edit], p: usize| -> Result<usize, usize> {
+        let (mut out, mut at) = (0usize, 0usize);
+        for (k, e) in es.iter().enumerate() {
+            if p < out + (e.start - at) {
+                return Err(at + (p - out));
+            }
+            out += e.start - at;
+            if p < out + e.insert.len() {
+                return Ok(k);
+            }
+            out += e.insert.len();
+            at = e.end;
+        }
+        Err(at + (p - out))
+    };
+    match source(placed, merged.len() - 1) {
+        Ok(_) => is_open(ours),
+        Err(q) => match source(b, q) {
+            Ok(k) if a.contains(&b[k]) => both,
+            Ok(_) => is_open(theirs),
+            Err(_) => both,
+        },
+    }
 }
 
 /// The merge of two **exact edit sets** on `base` (v1.7, U10): `a` (ours) and `b` (theirs)
@@ -197,10 +283,19 @@ mod tests {
 
     #[test]
     fn rules() {
-        // O3: touching does not conflict
-        assert_eq!(text(merge3("abc", "Xabc", "abcY")), Some("XabcY".into()));
+        // O3: touching does not conflict (whole lines, v0.9.7.1)
+        assert_eq!(
+            text(merge3("a\nb\n", "X\na\nb\n", "a\nb\nY\n")),
+            Some("X\na\nb\nY\n".into())
+        );
+        assert_eq!(
+            text(merge3("a\nb\n", "A\nb\n", "a\nB\n")),
+            Some("A\nB\n".into())
+        );
         // O1
-        assert_eq!(text(merge3("abcd", "aXd", "abYd")), None);
+        assert_eq!(text(merge3("a\nb\nc\n", "a\nX\n", "a\nb\nY\n")), None);
+        // one line changed by both: a conflict, even in different words (v0.9.7.1)
+        assert_eq!(text(merge3("abc", "Xabc", "abcY")), None);
         // O4
         assert_eq!(text(merge3("ab", "aXb", "aXb")), Some("aXb".into()));
         // O5: both appends land, theirs first; not on an empty base
@@ -210,11 +305,56 @@ mod tests {
         );
         assert_eq!(text(merge3("", "x", "y")), None);
         // not at a window's end that isn't the doc's
-        assert_eq!(text(merge3_window("a", "ax", "ay", false)), None);
+        assert_eq!(text(merge3_window("a\n", "a\nx\n", "a\ny\n", false)), None);
         // U12's worked case: the window's own base may be empty
         assert_eq!(
             text(merge3_window("", "x\n", "y\n", true)),
             Some("y\nx\n".into())
+        );
+        // the final "\n" follows the side that wrote the last line
+        assert_eq!(text(merge3("a\nb", "A\nb", "a\nB")), Some("A\nB".into()));
+        assert_eq!(
+            text(merge3("a\nb\n", "a\nb\n", "a\nB")),
+            Some("a\nB".into())
+        );
+    }
+
+    /// `write --base`'s sides by whole lines (v0.9.7.1): lines sharing their start never pair
+    /// one line off (the false conflict), an insertion never lands inside the other side's
+    /// rewritten lines (the splice), and two changes in one line conflict.
+    #[test]
+    fn sides_by_whole_lines() {
+        assert_eq!(
+            text(merge3(
+                "p05:2216\np22:2150\np10:2205\n",
+                "p05:2216\np22:2150\n",
+                "p05:2216\np10:2205\np23:2229\np25:2184\n",
+            )),
+            Some("p05:2216\np23:2229\np25:2184\n".into())
+        );
+        assert_eq!(
+            text(merge3(
+                "p26:95\np05:90\n",
+                "p26:95\np13:102\np05:90\n",
+                "p20:90\n"
+            )),
+            None
+        );
+        assert_eq!(
+            text(merge3(
+                "alpha beta gamma\n",
+                "alpha BETA gamma\n",
+                "alpha beta GAMMA\n"
+            )),
+            None
+        );
+        assert_eq!(
+            text(merge3(
+                "p01:2\n",
+                "p01:3 w0 w0\np00:3 w0 w3\n",
+                "p00:0 w1 w0\np00:0\np02:3\n"
+            )),
+            None
         );
     }
 }

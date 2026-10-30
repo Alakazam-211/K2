@@ -2189,7 +2189,7 @@ impl Session {
                 }
             };
             let new_text = self.pack.normalize_input(root, &computed);
-            lines::align_insertions(live, diff::hunks(live, &new_text))
+            lines::edit_hunks(live, &new_text)
         };
         if hunks.is_empty() {
             return Ok((None, Notes::default()));
@@ -2246,7 +2246,7 @@ impl Session {
             .pack
             .normalize_input(root, self.write_body(&st, root, new_text));
         let live = self.text_of(&st, root)?.1;
-        let hunks = lines::align_insertions(live, diff::hunks(live, &new_text));
+        let hunks = lines::edit_hunks(live, &new_text);
         self.check_claims(&mut st, i, root, &hunks, policy, now)?;
         let edits = vec![Edit::Text {
             root: root.to_owned(),
@@ -2310,12 +2310,15 @@ impl Session {
         match merge::merge3(&base_text, &ours, &live) {
             Merge::Conflicts(c) => {
                 self.expire_claims(st, now);
-                // each conflict's base range, carried onto the live text
-                let since = diff::hunks(&base_text, &live);
+                // each conflict's base range, carried onto the live text (through the
+                // merge's own theirs side, merge::write_base_sides: whole lines on the
+                // closed texts, so a span may end one past an open live text's end)
+                let since = merge::write_base_sides(&base_text, &ours, &live).1;
                 let pid = st.members[i].p.pid.clone();
                 let mut who = Vec::new();
                 for (k, cf) in c.iter().enumerate() {
-                    let span = awareness::carry_span(cf.base.start, cf.base.end, &since);
+                    let (s0, e0) = awareness::carry_span(cf.base.start, cf.base.end, &since);
+                    let span = (s0.min(live.len()), e0.min(live.len()));
                     for n in self.collect_notes(st, &pid, root, span, None, now) {
                         if matches!(
                             n.kind,

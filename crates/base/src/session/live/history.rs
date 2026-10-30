@@ -12,7 +12,6 @@ use super::*;
 use crate::store::{
     window_plan, Carry, Retention, RevertWindow, StoreError, VersionId, VersionInfo,
 };
-use crate::text::diff;
 
 /// `log` filters (K-HIST-9, -18). `Default` lists everything, newest first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -379,7 +378,7 @@ impl Session {
                 continue;
             };
             let t = self.pack.normalize_input(root, t);
-            let hunks = lines::align_insertions(live, diff::hunks(live, &t));
+            let hunks = lines::edit_hunks(live, &t);
             if !hunks.is_empty() {
                 edits.push(Edit::Text {
                     root: (*root).to_owned(),

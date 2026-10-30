@@ -1,5 +1,88 @@
 # Changelog
 
+## v0.9.7.1 (2026-10-30)
+
+A hotfix on v0.9.7: two fixes, one to `write --base` (possible text corruption, every
+release from v0.1.0) and one to blame, and a clearer `write --base` conflict. No store or
+wire format change, no new dependency.
+
+The crate version is `0.9.7+1` (Cargo takes three numbers; the build metadata resolves as
+0.9.7); the git tag is v0.9.7.1.
+
+**Fixed**
+- **An agent's `write --base` could splice two different lines that start alike into one
+  garbled line** (possible text corruption; affected: **v0.1.0 through v0.9.7**). No text
+  was deleted, but the merged line was wrong. `write --base` merged the agent's text and the
+  live text through sides diffed to the character, which pairs lines that share their first
+  characters one line off: when one side inserted a line between two lines the other
+  rewrote into one (`p26:95` / `p05:90` became `p20:90`), the merge came out "clean" as
+  `p213:102` / `p0:90`, lines nobody wrote (found by the 32-participant soak, seed 1). The
+  write now pairs whole lines first and merges **by whole lines** (`merge::write_base_sides`:
+  the outside save's whole-line sides): two changes to the same line are a conflict, and
+  nothing is ever merged inside a line, so a clean merge holds only lines someone wrote.
+  Changes to different lines, adjacent or not, still merge; two different appends at the end
+  of the text still both land. The final line break follows whoever wrote the last line, so
+  the v0.9.7 limitation where `write --base` could join two lines at the end of a text is
+  gone. **Correction:** the v0.9.7 known-issue note ("can be refused with a conflict it
+  didn't cause when nearby lines start with the same characters") understated this as a
+  refusal; the same pairing could also give a clean merge with a spliced line.
+- **Blame could credit a person who deleted a line with the neighbouring line when lines
+  start alike; no text was ever changed.** Edits given as a new text applied a diff trimmed
+  to the character: deleting `seed:2` from `seed:1` / `seed:2` / `seed:3` deleted
+  `2\nseed:` instead of the line, the next line's `3` joined text of the deleted line, and
+  D1 made the joined word `seed:3` the deleter's, so blame named a person who never wrote
+  it. Verb edits (`edit_with` and the verbs through it), `replace_text`, restore and tier
+  0's promotion now pair lines first (`lines::edit_hunks`: `diff::line_hunks`, then the
+  character or word diff inside each changed group of lines). The text of every edit is
+  unchanged; only which characters an edit names can differ, next to lines with the same
+  start. The undo spec's oracle and the conformance suite's restore use the same function.
+
+**Behaviour**
+- **Agent writes that touch a line someone else changed since the agent's version are
+  refused as a conflict; re-read and retry.** Two agents (or an agent and a person) editing
+  different words of one line now conflict instead of merging: nothing is applied, and the
+  second one reads the current version and writes again.
+- **The conflict says what to do** (`MPC-E111 write_conflict`: same id, exit code 1; the
+  message, details and `next` changed). It names the conflicting lines in the agent's text
+  and in the current text, the current version, and the retry: read it again with `cat`,
+  redo the change on it, then `write --base <that version>`. `details.current`, and each
+  conflict's `your_lines` and `current_lines`. A fresh agent given only the refusal
+  re-read and retried correctly (`docs/evidence/write-conflict-blind.md`).
+- A clean `write --base` applies the verb edits' diff from the live text to the merged text
+  (`lines::edit_hunks`), so it names only the characters it changed; blame and undo of a
+  write are as for `replace_text`.
+
+**Added**
+- `lines::edit_hunks` (public: the hunks an edit given as a new text applies).
+- `merge::Conflict::ours_lines` and `theirs_lines` (the region's lines in the writer's text
+  and in the live text). A host that builds a `Conflict` by hand adds them.
+- `WriteOutcome::refusal_at(base, current)`: the refusal with the current version
+  (`refusal(base)` stays).
+- The reference host (`examples/mpc.rs`) prints `refusal_at` and has a `write-conflict`
+  scenario.
+
+**Tests**
+- `tests/write_base_lines.rs` (new): an independent judge of `write --base`'s merge on
+  random lines that share a start (`pNN:N`, some with words): each base line kept, deleted
+  or rewritten by one side, rewritten by both, or both changing different words of it; new
+  lines in the gaps. Every line of a clean merge must be a whole line of base, ours or
+  theirs, and the merge must pass the line-LCS rule over every alignment (no deleted line
+  back, no line lost; as the outside-save fuzz oracle's `check_lcs`); a refusal passes.
+  Both ways round, 2,048 cases by default (`WRITE_BASE_CASES`). It fails on v0.9.7 and
+  passes here. Pinned: the soak's splice, two sides rewriting one line into several lines,
+  different words of one line (a conflict) and different lines (clean).
+- `text::merge`: `adjacent_lines_changed_by_each_side_merge` (new); six tests that relied
+  on merging inside a line now assert the conflict, each with the same edits on separate
+  lines still merging; the symmetry property reads the merge's own sides. The undo spec's
+  oracle merges by whole lines too (`sides_by_whole_lines`), and the fuzz merge checks
+  include "every clean line is a whole line".
+- D1 class (b) (`undo_foreign_tokens`, `d1_authored_ranges`): the three writers' words are
+  on adjacent lines (they still merge, and each undo removes only its own word); the same
+  words in one line are a conflict (`class_b_in_one_line_the_write_conflicts`).
+- `tests/blame.rs`: `deleting_a_line_next_to_one_with_the_same_start_keeps_its_neighbour_its_authors`
+  (a verb delete, the deleter's undo, a verb insert and `replace_text` on `seed:0`…`seed:4`:
+  every line keeps its author); `lines::edit_hunks_pair_lines_first`.
+
 ## v0.9.7 (2026-10-29)
 
 The Live-tab release: the kit's live typing APIs, D1, the speed work, outside saves merged

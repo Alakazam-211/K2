@@ -3775,6 +3775,18 @@ impl LocalVault {
         Ok(load_header(&conn)?.map(|(h, _)| (h.vault_id, h.gen, h.audit_seq, hex(&h.audit_mac))))
     }
 
+    /// Close this vault's database file so the files in its folder can be
+    /// moved aside: a restore, a box-move import or its undo replaces them.
+    /// Windows won't rename a file another handle holds open, and the
+    /// served vault holds vault.db open. Afterwards this vault reads an
+    /// empty in-memory database, so the caller serves the new vault, or
+    /// opens the old file again when the replace fails.
+    pub fn release_files(&self) -> Result<()> {
+        let empty = Connection::open_in_memory()?;
+        let old = std::mem::replace(&mut *self.conn.lock(), empty);
+        old.close().map_err(|(_, e)| VaultError::from(e))
+    }
+
     /// How many active `user` secrets this vault holds.
     pub fn user_secret_count(&self) -> u64 {
         let conn = self.conn.lock();

@@ -321,6 +321,32 @@ fn undo_restores_an_open_vault_and_its_anchor() {
     assert_eq!(value(&back, "frpc", "tunnel.token"), "new-box-own-token");
 }
 
+/// The daemon's served vault holds vault.db open while an import moves it
+/// aside. release_files closes it first (the daemon does that on Windows,
+/// where an open file can't be renamed); the files then move on every OS,
+/// and the released vault no longer reads the old file.
+#[test]
+fn a_served_vault_released_first_is_replaced_by_the_import() {
+    let t = TestDir::new("move-served");
+    let (old, _) = old_box(&t);
+    let key = Identity::generate();
+    let exp = old.move_export(&key.recipient(), src(), &Actor::Owner, &ok()).expect("export");
+    let new_dir = t.path().join("new");
+    let ks = Arc::new(FakeKeyStore::new());
+    let served = open(&new_dir, &ks);
+    put_system(&served, "frpc", "tunnel.token", "new-box-own-token");
+    served.release_files().expect("release");
+    assert_eq!(served.user_secret_count(), 0, "a released vault reads nothing");
+    let mf = open_move_file(&key, &exp.file).expect("open");
+    let imported = apply_move(&new_dir, ks.clone() as Arc<dyn KeyStore>, &key, &mf, opts()).expect("import over a released vault");
+    assert_eq!(imported.vault.active_counts(), old.active_counts());
+    assert_eq!(value(&imported.vault, "frpc", "tunnel.token"), "k2tok_moved_with_the_vault");
+    assert!(new_dir.join(&imported.record.aside).join("vault.db").exists(), "the served file was moved aside");
+    drop(imported);
+    undo_import(&new_dir, &(ks.clone() as Arc<dyn KeyStore>)).expect("undo");
+    assert_eq!(value(&open(&new_dir, &ks), "frpc", "tunnel.token"), "new-box-own-token");
+}
+
 #[test]
 fn a_second_export_while_frozen_replaces_the_move_key() {
     let t = TestDir::new("move-reexport");

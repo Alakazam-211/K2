@@ -488,10 +488,50 @@ pub fn move_import_apply(
 ) -> Result<(Arc<LocalVault>, k2_vault::boxmove::ImportRecord), VaultError> {
     let dir = vault_dir(home);
     let ks = select_key_store(home);
-    let imported = k2_vault::boxmove::apply_move(&dir, ks, identity, mf, k2_vault::OpenOptions::default())?;
+    let released = release_for_replace(get().ok().as_deref())?;
+    let imported = match k2_vault::boxmove::apply_move(&dir, ks.clone(), identity, mf, k2_vault::OpenOptions::default()) {
+        Ok(i) => i,
+        Err(e) => {
+            if released {
+                reopen_after_failed_replace(&dir, ks);
+            }
+            return Err(e);
+        }
+    };
     let v = Arc::new(imported.vault);
     serve_replaced(&v);
     Ok((v, imported.record))
+}
+
+/// Windows: close the served vault's vault.db before a restore, an import
+/// or an undo moves it aside (Windows won't rename an open file). Returns
+/// whether it closed one, so a failed replace opens the old files again
+/// ([`reopen_after_failed_replace`]). Elsewhere nothing is closed: the old
+/// handle reads the moved file until the new vault is served, as before.
+pub(crate) fn release_for_replace(v: Option<&LocalVault>) -> Result<bool, VaultError> {
+    #[cfg(windows)]
+    {
+        if let Some(v) = v {
+            v.release_files()?;
+            return Ok(true);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = v;
+    Ok(false)
+}
+
+/// A replace failed after [`release_for_replace`] closed the served vault
+/// and its files are back: open them again and serve that vault (or
+/// record why it won't open, as at boot).
+pub(crate) fn reopen_after_failed_replace(dir: &Path, ks: Arc<dyn KeyStore>) {
+    match LocalVault::open(dir, ks, k2_vault::OpenOptions::default()) {
+        Ok(v) => serve_replaced(&Arc::new(v)),
+        Err(e) => {
+            k2_core::tunnel::config::set_vault_closed(Some(e.code));
+            *cell().write() = Err(e);
+        }
+    }
 }
 
 /// `--undo` on the new box: put the replaced vault back and open it again
@@ -501,7 +541,16 @@ pub fn move_import_apply(
 pub fn move_import_undo(home: &Path, actor: &k2_vault::Actor, proof: Option<&k2_vault::HumanProof>) -> Result<k2_vault::boxmove::ImportRecord, VaultError> {
     let dir = vault_dir(home);
     let ks = select_key_store(home);
-    let rec = k2_vault::boxmove::undo_import(&dir, &ks)?;
+    let released = release_for_replace(get().ok().as_deref())?;
+    let rec = match k2_vault::boxmove::undo_import(&dir, &ks) {
+        Ok(r) => r,
+        Err(e) => {
+            if released {
+                reopen_after_failed_replace(&dir, ks);
+            }
+            return Err(e);
+        }
+    };
     match LocalVault::open(&dir, ks, k2_vault::OpenOptions::default()) {
         Ok(v) => {
             if v.in_rollback() {

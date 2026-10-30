@@ -46,6 +46,13 @@ impl TestBox {
         (r.status.to_string(), v)
     }
 
+    /// What `Live` does before moving vault.db aside
+    /// ([`crate::vault::release_for_replace`]).
+    fn release_served(&self) -> Result<bool, VaultError> {
+        let served = self.cell.lock().clone().ok();
+        crate::vault::release_for_replace(served.as_deref())
+    }
+
     /// A confirm token for `binding`, as `k2 vault confirm` would mint it.
     fn token(&self, c: &VaultCaller, binding: &str) -> String {
         self.v().confirm.mint(CONFIRM_ACTION, Some(binding), &c.actor.stamp(), "vault-password")
@@ -58,6 +65,8 @@ impl MoveEnv for TestBox {
     }
     fn apply(&self, home: &Path, identity: &Identity, mf: &MoveFile) -> Result<(Arc<LocalVault>, boxmove::ImportRecord), VaultError> {
         let ks = self.ks.clone() as Arc<dyn KeyStore>;
+        // As the daemon's: on Windows the served vault lets go of its file.
+        self.release_served()?;
         let i = boxmove::apply_move(&crate::vault::vault_dir(home), ks, identity, mf, opts())?;
         let v = Arc::new(i.vault);
         *self.cell.lock() = Ok(v.clone());
@@ -66,6 +75,7 @@ impl MoveEnv for TestBox {
     fn undo(&self, home: &Path, actor: &Actor, proof: Option<&HumanProof>) -> Result<boxmove::ImportRecord, VaultError> {
         let dir = crate::vault::vault_dir(home);
         let ks = self.ks.clone() as Arc<dyn KeyStore>;
+        self.release_served()?;
         let rec = boxmove::undo_import(&dir, &ks)?;
         let r = LocalVault::open(&dir, ks, opts()).map(Arc::new);
         if let (Ok(v), Some(p)) = (&r, proof) {

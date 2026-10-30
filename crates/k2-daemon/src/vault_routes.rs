@@ -2486,22 +2486,37 @@ fn restore_from(vault: &LocalVault, c: &VaultCaller, b: &RestoreBody, ingress: &
     let stamp = chrono::Utc::now().format("%Y%m%d%H%M%S").to_string();
     let aside = dir.join(format!("replaced-{stamp}"));
     k2_vault::fsutil::ensure_private_dir(&aside)?;
-    for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
-        let p = dir.join(f);
-        if p.exists() {
-            std::fs::rename(&p, aside.join(f)).map_err(|e| err("restore_failed", 500, format!("move aside: {}", e.kind())))?;
-        }
-    }
     let put_back = || {
         for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
             let _ = std::fs::rename(aside.join(f), dir.join(f));
         }
     };
+    // Windows: the served vault (this one) lets go of vault.db first; any
+    // failure below puts the files back and opens them again.
+    let released = crate::vault::release_for_replace(Some(vault))?;
+    let reopen = || {
+        if released {
+            crate::vault::reopen_after_failed_replace(&dir, ks.clone());
+        }
+    };
+    for f in ["vault.db", "vault.db-wal", "vault.db-shm"] {
+        let p = dir.join(f);
+        if p.exists() {
+            if let Err(e) = std::fs::rename(&p, aside.join(f)) {
+                if released {
+                    put_back();
+                    reopen();
+                }
+                return Err(err("restore_failed", 500, format!("move aside: {}", e.kind())));
+            }
+        }
+    }
     if let Err(e) = std::fs::copy(from.join("vault.db"), dir.join("vault.db")) {
         put_back();
+        reopen();
         return Err(err("restore_failed", 500, format!("copy: {}", e.kind())));
     }
-    match LocalVault::adopt_with_identity(&dir, ks, &identity, holder, k2_vault::OpenOptions::default()) {
+    match LocalVault::adopt_with_identity(&dir, ks.clone(), &identity, holder, k2_vault::OpenOptions::default()) {
         Ok(v) => {
             crate::vault::replace(std::sync::Arc::new(v));
             // Saved logins: forget what the old file held; the next read
@@ -2513,6 +2528,7 @@ fn restore_from(vault: &LocalVault, c: &VaultCaller, b: &RestoreBody, ingress: &
         Err(e) => {
             let _ = std::fs::remove_file(dir.join("vault.db"));
             put_back();
+            reopen();
             Err(e)
         }
     }

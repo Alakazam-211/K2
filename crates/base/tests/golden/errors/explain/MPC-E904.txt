@@ -1,0 +1,21 @@
+MPC-E904 claims_participant_cap (limits)
+exit:     2
+message:  bad claim: you hold {count} claims here (the most); release one
+next:     You hold as many claims on this doc as you may. Release one you no longer need (claim --release --id ID), then claim again.
+rule:     A13 (claims_per_participant)
+verbs:    claim
+status:   live
+--- json
+{
+  "id": "MPC-E904",
+  "name": "claims_participant_cap",
+  "area": "limits",
+  "exit": 2,
+  "message": "bad claim: you hold {count} claims here (the most); release one",
+  "next": "You hold as many claims on this doc as you may. Release one you no longer need (claim --release --id ID), then claim again.",
+  "rule": "A13 (claims_per_participant)",
+  "verbs": ["claim"],
+  "returned_by": ["claim"],
+  "status": "live",
+  "since_or_until": null
+}

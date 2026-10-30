@@ -1,0 +1,21 @@
+MPC-E201 undo_conflict (history and undo)
+exit:     1
+message:  step {step} conflicts in {count} region(s) at {where}; nothing applied
+next:     Someone else changed text your change touched, so undoing it whole would overwrite their work. Nothing was applied. Either run undo --partial (undoes the regions nobody touched and reports the rest; revert --partial for revert), or read the lines in details.conflicts (cat -n) and fix them by hand with replace.
+rule:     U13, U11, hist.undo_atomic
+verbs:    undo; redo; revert
+status:   live
+--- json
+{
+  "id": "MPC-E201",
+  "name": "undo_conflict",
+  "area": "history and undo",
+  "exit": 1,
+  "message": "step {step} conflicts in {count} region(s) at {where}; nothing applied",
+  "next": "Someone else changed text your change touched, so undoing it whole would overwrite their work. Nothing was applied. Either run undo --partial (undoes the regions nobody touched and reports the rest; revert --partial for revert), or read the lines in details.conflicts (cat -n) and fix them by hand with replace.",
+  "rule": "U13, U11, hist.undo_atomic",
+  "verbs": ["undo", "redo", "revert"],
+  "returned_by": ["undo", "redo", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E144 apply_failed (sessions and edits)
+exit:     2
+message:  update could not be applied: {reason}
+next:     The engine refused the update; nothing was applied. The editor should resync.
+rule:     K-SEC-2
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E144",
+  "name": "apply_failed",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "update could not be applied: {reason}",
+  "next": "The engine refused the update; nothing was applied. The editor should resync.",
+  "rule": "K-SEC-2",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E141 foreign_client (sessions and edits)
+exit:     2
+message:  update inserts as client {found}, but this connection is client {allowed}
+next:     An update inserted under another participant's client id and was refused whole. The editor should reload; it can't author as someone else.
+rule:     K-ID-5
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E141",
+  "name": "foreign_client",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "update inserts as client {found}, but this connection is client {allowed}",
+  "next": "An update inserted under another participant's client id and was refused whole. The editor should reload; it can't author as someone else.",
+  "rule": "K-ID-5",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

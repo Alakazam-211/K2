@@ -194,6 +194,8 @@ impl BlobSession {
         // the text history, built through the engine as any change is
         let mut doc = Doc::new(schema)?;
         doc.set_edit_check_every(self.config.edit_check_every);
+        doc.set_edit_check_scale(self.config.edit_check_scale_units);
+        doc.set_position_check_every(self.config.position_check_every);
         let mut clients: Vec<(ClientId, String)> = Vec::new();
         let mut entries: Vec<LogEntry> = Vec::new();
         let mut changes: Vec<NewChange> = Vec::new();
@@ -222,14 +224,45 @@ impl BlobSession {
                 .map(|(r, _)| Ok((r.clone(), doc.text(r)?)))
                 .collect::<Result<_>>()?;
             let mut edits = Vec::new();
+            // the roots D1 widened, with their widened hunks (the change as the engine
+            // makes it)
+            let mut widened: Vec<(String, Vec<diff::Hunk>)> = Vec::new();
             for ((root, Neutral::Text(t)), (_, old)) in roots.iter().zip(&before) {
                 let hunks = lines::align_insertions(old, diff::hunks(old, t));
-                if !hunks.is_empty() {
-                    edits.push(Edit::Text {
-                        root: root.clone(),
-                        hunks,
-                    });
+                if hunks.is_empty() {
+                    continue;
                 }
+                // D1 (undo spec v1.10, the authored-ranges amendment): a version's change
+                // is never built from someone else's text. Inside the tokens of the new text
+                // its hunks touch, only the version's author's own characters are kept. The
+                // promoted doc has no restored text, so an element's root is itself and its
+                // owner its client's author.
+                let runs = doc.blame_runs(root)?;
+                let mut spans = Vec::with_capacity(runs.len());
+                let mut at = 0;
+                for r in &runs {
+                    spans.push((at, at + r.bytes, r.client == client));
+                    at += r.bytes;
+                }
+                let owned = |b: usize| -> bool {
+                    let k = spans.partition_point(|s| s.1 <= b);
+                    spans.get(k).is_some_and(|s| s.0 <= b && s.2)
+                };
+                let hunks = diff::coalesce(hunks);
+                #[allow(unused_mut)]
+                let mut wide = lines::authored_hunks(old, &hunks, pack.tokens(), &owned);
+                // the test-only reuse mutant: D1 before the amendment (no widening)
+                #[cfg(any(test, feature = "differential"))]
+                if crate::differential::d1_mutant() == crate::differential::D1Mutant::ReuseForeign {
+                    wide = hunks.clone();
+                }
+                if wide != hunks {
+                    widened.push((root.clone(), wide.clone()));
+                }
+                edits.push(Edit::Text {
+                    root: root.clone(),
+                    hunks: wide,
+                });
             }
             let clock_before = doc.clock_of(client);
             let change = match doc.edit_as(client, &edits)? {
@@ -251,6 +284,7 @@ impl BlobSession {
                     info.of = of.filter(|_| kind == ChangeKind::Restore);
                     info.on_behalf_of = v.on_behalf_of.clone();
                     let mut record = Vec::new();
+                    let mut authored = Vec::new();
                     for ((root, Neutral::Text(t)), (_, old)) in roots.iter().zip(&before) {
                         let new = doc.text(root)?;
                         if new != *t {
@@ -265,8 +299,15 @@ impl BlobSession {
                         let (a, r) = summary::line_counts(old, &new, &hunks);
                         info.lines_added += a as u64;
                         info.lines_removed += r as u64;
-                        // a diff of the texts, as an outside edit's record: no roots
-                        record.push(record_root(root, old, new.is_empty(), &hunks, None));
+                        // a diff of the texts, as an outside edit's record: no roots; where
+                        // D1 widened the root, the widened hunks (the elements), and the
+                        // diff's beside them as the authored ones (v0.9.7)
+                        let elems = widened
+                            .iter()
+                            .find(|(r, _)| r == root)
+                            .map_or(&hunks, |(_, w)| w);
+                        record.push(record_root(root, old, new.is_empty(), elems, None));
+                        authored.push((root.clone(), hunks));
                     }
                     changes.push(NewChange {
                         info,
@@ -282,6 +323,7 @@ impl BlobSession {
                             end: doc.clock_of(client),
                         }),
                         provenance: Vec::new(),
+                        authored: (!widened.is_empty()).then_some(authored),
                     });
                     entries.push(LogEntry {
                         author: v.author.clone(),

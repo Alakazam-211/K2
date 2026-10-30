@@ -59,6 +59,11 @@ pub struct Config {
     /// Bytes of retained region text per participant per doc, undo and redo stacks
     /// together; that participant's oldest batches go first. Default 4 MiB (spec U6).
     pub undo_max_bytes: usize,
+    /// Person undo grouping (spec U3 (a), K4): an edit with an
+    /// [`super::EditOptions::group`] token joins its connection's open group only if the
+    /// group's last edit is less than this old on the host clock. 0: groups never merge.
+    /// Default 1 s.
+    pub undo_group_idle_ms: u64,
 
     // --- versions and history (K-HIST-4, -7, -22, -23) ---
     /// Cut a version after this much quiet following edits. Default 2 min.
@@ -100,6 +105,20 @@ pub struct Config {
     pub edit_burst: u64,
     /// Events queued per subscriber before it is cut off. Default 1024.
     pub subscriber_queue: usize,
+    /// Roster pushes ([`super::Session::subscribe_roster`]) are coalesced over this
+    /// interval: at most one delivery per interval per doc, a caret moved many times in it
+    /// is one event. The host drives it ([`super::SessionManager::flush_rosters`] or `tick`
+    /// at least this often). Default 250 ms.
+    pub roster_interval_ms: u64,
+    /// Roster events queued per subscriber (and recorded between two flushes). A
+    /// subscriber that falls this far behind gets a fresh snapshot instead of the deltas it
+    /// missed. Default 256.
+    pub roster_queue: usize,
+    /// Participants (distinct pids) a doc admits with presence (K11). A join past it is a
+    /// **watcher**: read-only whatever its rights, no caret, view or claims, shown in the
+    /// roster only as a `watching` count. A slot that frees is not filled by itself: the host
+    /// promotes the earliest watcher ([`super::Session::promote_watcher`]). Default 32.
+    pub participants_max: usize,
 
     // --- store ---
     /// Compact when the log since the snapshot reaches this many entries... Default 1,000.
@@ -116,8 +135,84 @@ pub struct Config {
     /// applied), is reported ([`super::AuditEvent::EditPathMismatch`],
     /// [`super::AuditEvent::TextCacheMismatch`]), and the doc uses the replica path (or reads
     /// its texts afresh) until it is reloaded. A sampled edit costs O(doc), as every edit did
-    /// before v0.9.3. 0: never. Default 1,000 ([`crate::doc::DEFAULT_EDIT_CHECK_EVERY`]).
+    /// before v0.9.3. The same rate samples outside saves: one in this many also computes its
+    /// change at element identity in full and compares it with the merge's hunks
+    /// ([`super::AuditEvent::IdentityMismatch`]). 0: never. Default 1,000
+    /// ([`crate::doc::DEFAULT_EDIT_CHECK_EVERY`]). Past [`Config::edit_check_scale_units`] of
+    /// history the edit path's interval grows with the doc (adaptive, v0.9.7).
     pub edit_check_every: u32,
+    /// The edit path's runtime check on a large doc (v0.9.7): past this much history (UTF-16
+    /// units, the sum of the doc's state vector's clocks: every unit ever inserted, deleted
+    /// or not), the interval between sampled edits grows in proportion to it, `every x
+    /// history / this` edits and never fewer than [`Config::edit_check_every`]. A sampled
+    /// edit's full encode and throwaway replica grow with the history, so a fixed rate's cost
+    /// per edit does too; this keeps the check's amortised cost per edit bounded. A doc below
+    /// it is checked one edit in [`Config::edit_check_every`]. The doc's first sample after a
+    /// load is placed from its history alone (`every` edits in below this; past it at a
+    /// phase spread over the interval), so the long-run rate does not depend on how often
+    /// the doc is reloaded. Outside saves keep the fixed rate. 0: a fixed rate. Default
+    /// 50,000 ([`crate::doc::DEFAULT_EDIT_CHECK_SCALE_UNITS`]): about the history at version
+    /// 10,000 in the 32-participant soak, so past it the check's amortised cost per edit
+    /// stays about what it is there.
+    pub edit_check_scale_units: u64,
+    /// Blame's runtime check (v0.9.7): blame reads the provenance map, which every change
+    /// keeps up to date as it applies; one blame in this many also rebuilds the map from the
+    /// engine and the store (the cold path: O(doc)) and compares the two. The rebuild runs
+    /// **off the session's lock**, on a copy of the doc taken with the blame (an encode under
+    /// the lock), so participants keep editing meanwhile; the sampled blame's caller waits
+    /// for it. A mismatch is never served: that blame is computed again from a sound map; the
+    /// kept map is replaced by the rebuild if nothing changed since, else dropped (rebuilt on
+    /// next need); and it is reported ([`super::AuditEvent::ProvenanceMismatch`]). A map whose
+    /// length isn't the text's is rebuilt (under the lock) and reported on every blame,
+    /// sampled or not (O(roots x chunks)). 0: never sampled. Default 100
+    /// ([`DEFAULT_BLAME_CHECK_EVERY`]). From [`Config::blame_check_large_at`] changes on, the
+    /// rate is [`Config::blame_check_every_large`] instead (adaptive, v0.9.7).
+    pub blame_check_every: u32,
+    /// Blame's runtime check on a doc with a long history (v0.9.7): from this many changes
+    /// (the doc's version) on, one blame in [`Config::blame_check_every_large`] is checked, not
+    /// one in [`Config::blame_check_every`]: a sampled blame's rebuild and the state it
+    /// copies under the lock grow with the history. Default 20,000
+    /// ([`DEFAULT_BLAME_CHECK_LARGE_AT`]).
+    pub blame_check_large_at: u64,
+    /// The check's rate from [`Config::blame_check_large_at`] changes on. 0: never sampled
+    /// there. Default 1,000 ([`DEFAULT_BLAME_CHECK_EVERY_LARGE`]).
+    pub blame_check_every_large: u32,
+
+    /// The engine's position index check (v0.9.7): the index finds a text position from a
+    /// recent one instead of walking the text from its start, and one marker lookup in this
+    /// many also walks and compares. A mismatch is never served (the walk's position is
+    /// used, the text's markers dropped) and is reported
+    /// ([`super::AuditEvent::PositionIndexMismatch`]). A sampled lookup costs one walk, as
+    /// every lookup did before v0.9.7. 0: never. Default 1,000
+    /// ([`crate::doc::DEFAULT_POSITION_CHECK_EVERY`]).
+    pub position_check_every: u32,
+
+    /// Reuse an agent's client ID across its connections (v0.9.7): an agent's join takes a
+    /// client ID it used before in this doc, when no present connection holds it, instead of
+    /// minting one. Every client ID stays in the doc's state for good, and the engine's
+    /// per-transaction work grows with their number, so a long-lived doc many agent
+    /// sessions join kept getting slower. Only agents ([`super::ParticipantKind::Agent`])
+    /// that edit through the session alone; never a participant with
+    /// [`super::Participant::own_replica`], whose stale replica could write as an old ID.
+    /// Default true.
+    pub reuse_agent_clients: bool,
+
+    /// The file write-back's sampled check (v0.9.7): the disk replica is kept in step by
+    /// applying the changes since the last write-back; every sync compares its state vector
+    /// with the live doc's (O(clients)), and one in this many also its deletions and texts
+    /// (O(the doc); not the encodings, which may differ for equal content). A mismatch is
+    /// reported ([`super::AuditEvent::DiskReplicaMismatch`]) and the replica reloaded from
+    /// the doc. 0: never (the state vectors are still compared). Default 100.
+    pub writeback_check_every: u32,
+
+    // --- live edits (E-LIVE, v0.9.7) ---
+    /// The live window ([`super::Session::events_since`], [`super::Session::edit_at_base`]):
+    /// at most this many changes after a base. An older base is `MPC-E112 base_expired`
+    /// (the client reloads). Default 1,000.
+    pub live_window_events: u64,
+    /// ... and at most this many bytes of their events (inserted text plus 64 bytes per
+    /// event). Default 4 MiB.
+    pub live_window_bytes: u64,
 
     // --- pool ---
     /// Memory budget for loaded sessions; idle sessions unload, least recently used first,
@@ -165,7 +260,164 @@ pub struct Config {
     pub conflict_copy_keep_ms: u64,
 }
 
+impl Config {
+    /// Every setting in effect, by field name, as numbers (milliseconds, bytes, counts as the
+    /// fields say): what `capabilities` prints. Lists every field: a new one doesn't compile
+    /// until it is added here.
+    pub fn limits(&self) -> Vec<(&'static str, u64)> {
+        let Config {
+            editor_window_ms,
+            idle_leave_ms,
+            away_after_ms,
+            claim_default_ms,
+            claim_max_ms,
+            for_edit_ms,
+            claims_max,
+            claims_per_participant,
+            claim_waiters_max,
+            claim_handoff_ms,
+            note_edit_window_ms,
+            note_repeat_ms,
+            note_interval_ms,
+            note_batch_max,
+            activity_max,
+            read_bases_max,
+            read_base_ttl_ms,
+            read_bases_max_bytes,
+            undo_depth,
+            undo_max_bytes,
+            undo_group_idle_ms,
+            idle_version_ms,
+            agent_version_lines,
+            agent_version_percent,
+            version_keep_all_ms,
+            version_hourly_until_ms,
+            version_max_count,
+            version_max_bytes,
+            revert_keep_ms,
+            revert_keep_changes,
+            revert_max_bytes,
+            pending_max_records,
+            pending_max_bytes,
+            history_tick_ms,
+            edit_rate_per_s,
+            edit_burst,
+            subscriber_queue,
+            roster_interval_ms,
+            roster_queue,
+            participants_max,
+            compact_entries,
+            compact_bytes,
+            unload_compact_entries,
+            edit_check_every,
+            edit_check_scale_units,
+            position_check_every,
+            writeback_check_every,
+            reuse_agent_clients,
+            blame_check_every,
+            blame_check_large_at,
+            blame_check_every_large,
+            live_window_events,
+            live_window_bytes,
+            memory_budget_bytes,
+            memory_factor,
+            idle_unload_ms,
+            write_quiet_ms,
+            write_max_delay_ms,
+            disk_poll_ms,
+            disk_read_max_bytes,
+            own_write_ttl_ms,
+            lease_default_ms,
+            lease_max_ms,
+            lease_auto_ms,
+            blob_merge_max_bytes,
+            conflict_copy_keep_ms,
+        } = self;
+        vec![
+            ("editor_window_ms", *editor_window_ms),
+            ("idle_leave_ms", *idle_leave_ms),
+            ("away_after_ms", *away_after_ms),
+            ("claim_default_ms", *claim_default_ms),
+            ("claim_max_ms", *claim_max_ms),
+            ("for_edit_ms", *for_edit_ms),
+            ("claims_max", *claims_max as u64),
+            ("claims_per_participant", *claims_per_participant as u64),
+            ("claim_waiters_max", *claim_waiters_max as u64),
+            ("claim_handoff_ms", *claim_handoff_ms),
+            ("note_edit_window_ms", *note_edit_window_ms),
+            ("note_repeat_ms", *note_repeat_ms),
+            ("note_interval_ms", *note_interval_ms),
+            ("note_batch_max", *note_batch_max as u64),
+            ("activity_max", *activity_max as u64),
+            ("read_bases_max", *read_bases_max as u64),
+            ("read_base_ttl_ms", *read_base_ttl_ms),
+            ("read_bases_max_bytes", *read_bases_max_bytes as u64),
+            ("undo_depth", *undo_depth as u64),
+            ("undo_max_bytes", *undo_max_bytes as u64),
+            ("undo_group_idle_ms", *undo_group_idle_ms),
+            ("idle_version_ms", *idle_version_ms),
+            ("agent_version_lines", *agent_version_lines as u64),
+            ("agent_version_percent", *agent_version_percent as u64),
+            ("version_keep_all_ms", *version_keep_all_ms),
+            ("version_hourly_until_ms", *version_hourly_until_ms),
+            ("version_max_count", *version_max_count as u64),
+            ("version_max_bytes", *version_max_bytes),
+            ("revert_keep_ms", *revert_keep_ms),
+            ("revert_keep_changes", *revert_keep_changes),
+            ("revert_max_bytes", *revert_max_bytes),
+            ("pending_max_records", *pending_max_records),
+            ("pending_max_bytes", *pending_max_bytes),
+            ("history_tick_ms", *history_tick_ms),
+            ("edit_rate_per_s", *edit_rate_per_s),
+            ("edit_burst", *edit_burst),
+            ("subscriber_queue", *subscriber_queue as u64),
+            ("roster_interval_ms", *roster_interval_ms),
+            ("roster_queue", *roster_queue as u64),
+            ("participants_max", *participants_max as u64),
+            ("compact_entries", *compact_entries),
+            ("compact_bytes", *compact_bytes),
+            ("unload_compact_entries", *unload_compact_entries),
+            ("edit_check_every", u64::from(*edit_check_every)),
+            ("edit_check_scale_units", *edit_check_scale_units),
+            ("position_check_every", u64::from(*position_check_every)),
+            ("writeback_check_every", u64::from(*writeback_check_every)),
+            ("reuse_agent_clients", u64::from(*reuse_agent_clients)),
+            ("blame_check_every", u64::from(*blame_check_every)),
+            ("blame_check_large_at", *blame_check_large_at),
+            (
+                "blame_check_every_large",
+                u64::from(*blame_check_every_large),
+            ),
+            ("live_window_events", *live_window_events),
+            ("live_window_bytes", *live_window_bytes),
+            ("memory_budget_bytes", *memory_budget_bytes),
+            ("memory_factor", *memory_factor),
+            ("idle_unload_ms", *idle_unload_ms),
+            ("write_quiet_ms", *write_quiet_ms),
+            ("write_max_delay_ms", *write_max_delay_ms),
+            ("disk_poll_ms", *disk_poll_ms),
+            ("disk_read_max_bytes", *disk_read_max_bytes),
+            ("own_write_ttl_ms", *own_write_ttl_ms),
+            ("lease_default_ms", *lease_default_ms),
+            ("lease_max_ms", *lease_max_ms),
+            ("lease_auto_ms", *lease_auto_ms),
+            ("blob_merge_max_bytes", *blob_merge_max_bytes),
+            ("conflict_copy_keep_ms", *conflict_copy_keep_ms),
+        ]
+    }
+}
+
 const DAY: u64 = 24 * 60 * 60_000;
+
+/// The default of [`Config::blame_check_every`]: one blame in 100 is checked against a
+/// rebuild of the provenance map.
+pub const DEFAULT_BLAME_CHECK_EVERY: u32 = 100;
+
+/// The default of [`Config::blame_check_large_at`]: a doc counts as long from 20,000 changes.
+pub const DEFAULT_BLAME_CHECK_LARGE_AT: u64 = 20_000;
+
+/// The default of [`Config::blame_check_every_large`]: one blame in 1,000 on a long doc.
+pub const DEFAULT_BLAME_CHECK_EVERY_LARGE: u32 = 1_000;
 
 impl Default for Config {
     fn default() -> Self {
@@ -190,6 +442,7 @@ impl Default for Config {
             read_bases_max_bytes: 16 << 20,
             undo_depth: 100,
             undo_max_bytes: 4 << 20,
+            undo_group_idle_ms: 1_000,
             idle_version_ms: 2 * 60_000,
             agent_version_lines: 20,
             agent_version_percent: 10,
@@ -206,10 +459,22 @@ impl Default for Config {
             edit_rate_per_s: 10,
             edit_burst: 10,
             subscriber_queue: 1024,
+            roster_interval_ms: 250,
+            roster_queue: 256,
+            participants_max: 32,
             compact_entries: 1_000,
             compact_bytes: 2 << 20,
             unload_compact_entries: 100,
             edit_check_every: crate::doc::DEFAULT_EDIT_CHECK_EVERY,
+            edit_check_scale_units: crate::doc::DEFAULT_EDIT_CHECK_SCALE_UNITS,
+            position_check_every: crate::doc::DEFAULT_POSITION_CHECK_EVERY,
+            reuse_agent_clients: true,
+            writeback_check_every: 100,
+            blame_check_every: DEFAULT_BLAME_CHECK_EVERY,
+            blame_check_large_at: DEFAULT_BLAME_CHECK_LARGE_AT,
+            blame_check_every_large: DEFAULT_BLAME_CHECK_EVERY_LARGE,
+            live_window_events: 1_000,
+            live_window_bytes: 4 << 20,
             memory_budget_bytes: 256 << 20,
             memory_factor: 20,
             idle_unload_ms: 10 * 60_000,

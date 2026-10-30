@@ -879,6 +879,7 @@ mod tests {
                 record: rec,
                 span: None,
                 provenance: Vec::new(),
+                authored: None,
             };
             let seqs = store.commit_changes(id, &[entry], &[change], &[]).unwrap();
             live.bind(&seqs);

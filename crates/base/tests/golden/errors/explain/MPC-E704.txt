@@ -1,0 +1,21 @@
+MPC-E704 blob_not_found (tier 0 and blobs)
+exit:     4
+message:  no blob {blob} in this space
+next:     The bytes of that version are gone (collected, or the space was purged). Pick another version (log).
+rule:     K-T0-1
+verbs:    cat; show --version; restore
+status:   live
+--- json
+{
+  "id": "MPC-E704",
+  "name": "blob_not_found",
+  "area": "tier 0 and blobs",
+  "exit": 4,
+  "message": "no blob {blob} in this space",
+  "next": "The bytes of that version are gone (collected, or the space was purged). Pick another version (log).",
+  "rule": "K-T0-1",
+  "verbs": ["cat", "show --version", "restore"],
+  "returned_by": ["cat", "show --version", "restore"],
+  "status": "live",
+  "since_or_until": null
+}

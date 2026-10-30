@@ -62,8 +62,7 @@ impl Any {
             // CASE 118: Map<string,Any>
             118 => {
                 let len: usize = decoder.read_var()?;
-                // `len` comes from the input; reserve only what the input could hold
-                // (an entry is at least a 1-byte key length and a 1-byte value tag).
+                // k2 (hardening)
                 let mut map = HashMap::new();
                 map.try_reserve(bounded_capacity(len, decoder.remaining(), 2))?;
                 for _ in 0..len {
@@ -75,8 +74,7 @@ impl Any {
             // CASE 117: Array<Any>
             117 => {
                 let len: usize = decoder.read_var()?;
-                // `len` comes from the input; reserve only what the input could hold
-                // (each value is at least its 1-byte tag).
+                // k2 (hardening)
                 let mut arr = Vec::new();
                 arr.try_reserve(bounded_capacity(len, decoder.remaining(), 1))?;
                 for _ in 0..len {
@@ -188,7 +186,10 @@ impl Any {
                 // TYPE 118: Map
                 encoder.write_u8(118);
                 encoder.write_var(map.len() as u64);
-                for (key, value) in map.as_ref() {
+                // k2: in key order, not the map's hash order, so equal maps write equal bytes
+                let mut entries: Vec<_> = map.iter().collect();
+                entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+                for (key, value) in entries {
                     encoder.write_string(&key);
                     value.encode(encoder);
                 }

@@ -649,7 +649,12 @@ where
         undoing: bool,
         origin: Origin,
     ) -> bool {
+        // k2: the items to bring back, in the order the deletions list them (as Yjs's
+        // insertion-ordered Set iterates them); the set is only for membership. Iterating the
+        // HashSet instead redid them in an order set by pointer hashes, so two identical docs
+        // could give the same undo different clocks and different update bytes.
         let mut to_redo = HashSet::<ItemPtr>::new();
+        let mut to_redo_order = Vec::<ItemPtr>::new();
         let mut to_delete = Vec::<ItemPtr>::new();
         let mut change_performed = false;
 
@@ -679,12 +684,14 @@ where
                     && !item.insertions.contains(ptr.id())
                 // Never redo structs in stackItem.insertions because they were created and deleted in the same capture interval.
                 {
-                    to_redo.insert(ptr);
+                    if to_redo.insert(ptr) {
+                        to_redo_order.push(ptr);
+                    }
                 }
             }
         }
 
-        for &ptr in to_redo.iter() {
+        for &ptr in to_redo_order.iter() {
             let mut ptr = ptr;
             change_performed |= ptr
                 .redo(&mut txn, &to_redo, &item.insertions, stack, other)
@@ -2273,5 +2280,42 @@ mod test {
         txt.remove_range(&mut doc.transact_mut(), 0, 3);
         assert!(mgr.undo_blocking());
         assert_eq!(doc.transact().state_vector().get(&ClientID::new(1)), 6);
+    }
+
+    /// k2: an undo that brings back several deleted items creates them in the order its
+    /// deletions list them (as Yjs does), not in a hash set's order: identical docs make
+    /// byte-identical undo updates.
+    #[test]
+    fn undo_brings_items_back_in_a_deterministic_order() {
+        let run = || {
+            let doc = Doc::with_client_id(1);
+            let txt = doc.get_or_insert_text("t");
+            // eight separate blocks: each inserted at the start, so none squash
+            for c in "hgfedcba".chars() {
+                txt.insert(&mut doc.transact_mut(), 0, &c.to_string());
+            }
+            let mut mgr: UndoManager = UndoManager::with_options({
+                let mut o = Options::default();
+                o.capture_timeout_millis = 0;
+                o
+            });
+            mgr.expand_scope(&doc, &txt);
+            {
+                let mut txn = doc.transact_mut();
+                for at in [1, 2, 3, 4] {
+                    txt.remove_range(&mut txn, at, 1); // b, d, f, h
+                }
+            }
+            assert_eq!(txt.get_string(&doc.transact()), "aceg");
+            let before = doc.transact().state_vector();
+            assert!(mgr.undo_blocking());
+            assert_eq!(txt.get_string(&doc.transact()), "abcdefgh");
+            let update = doc.transact().encode_diff_v1(&before);
+            update
+        };
+        let first = run();
+        for _ in 0..16 {
+            assert_eq!(run(), first, "an identical doc's undo made different bytes");
+        }
     }
 }

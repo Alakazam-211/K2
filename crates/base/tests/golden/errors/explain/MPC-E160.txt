@@ -1,0 +1,21 @@
+MPC-E160 unknown_error_id (sessions and edits)
+exit:     4
+message:  no error id {id}
+next:     That id isn't in this build's catalog. Run explain with no id to list every id, or check the id you copied (MPC-E and three digits).
+rule:     the catalog (docs/ERRORS.md)
+verbs:    explain
+status:   live
+--- json
+{
+  "id": "MPC-E160",
+  "name": "unknown_error_id",
+  "area": "sessions and edits",
+  "exit": 4,
+  "message": "no error id {id}",
+  "next": "That id isn't in this build's catalog. Run explain with no id to list every id, or check the id you copied (MPC-E and three digits).",
+  "rule": "the catalog (docs/ERRORS.md)",
+  "verbs": ["explain"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

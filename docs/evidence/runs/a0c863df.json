@@ -1,0 +1,88 @@
+{
+ "job": "a0c863df",
+ "collected": "2026-10-28",
+ "from": "log command (k2 compute logs), each RUNREC moved onto its own line: the node interleaved stdout and stderr mid-line",
+ "runs": [
+  {
+   "job": "a0c863df",
+   "run": "blame_mutant_diff_miss_deletion",
+   "tool": "blame_diff",
+   "status": "CAUGHT",
+   "cases": 256,
+   "found": 256,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a0c863df",
+   "run": "blame_mutant_runtime_miss_deletion",
+   "tool": "blame_diff",
+   "status": "CAUGHT",
+   "cases": 256,
+   "reported": 4673,
+   "lines_served": 41281,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a0c863df",
+   "run": "blame_mutant_diff_miss_deletion_in_index",
+   "tool": "blame_diff",
+   "status": "CAUGHT",
+   "cases": 256,
+   "found": 194,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a0c863df",
+   "run": "blame_mutant_diff_restored_as_restorer",
+   "tool": "blame_diff",
+   "status": "CAUGHT",
+   "cases": 256,
+   "found": 201,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a0c863df",
+   "run": "blame_mutant_runtime_miss_deletion_in_index",
+   "tool": "blame_diff",
+   "status": "CAUGHT",
+   "cases": 256,
+   "reported": 706,
+   "lines_served": 41234,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "a0c863df",
+   "run": "blame_mutant_runtime_restored_as_restorer",
+   "tool": "blame_diff",
+   "status": "CAUGHT",
+   "cases": 256,
+   "reported": 415,
+   "lines_served": 41252,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

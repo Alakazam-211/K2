@@ -1,0 +1,21 @@
+MPC-E401 declined_too_large (disk and outside edits)
+exit:     4
+message:  live editing is off: {reason} (too_large)
+next:     The file is over the size limit for live editing (capabilities shows the limits). It opens the ordinary way: edit it with ordinary file tools, without live merging. Don't retry the live verb.
+rule:     K-PACK-4, K-DISK-8
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E401",
+  "name": "declined_too_large",
+  "area": "disk and outside edits",
+  "exit": 4,
+  "message": "live editing is off: {reason} (too_large)",
+  "next": "The file is over the size limit for live editing (capabilities shows the limits). It opens the ordinary way: edit it with ordinary file tools, without live merging. Don't retry the live verb.",
+  "rule": "K-PACK-4, K-DISK-8",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

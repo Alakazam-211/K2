@@ -76,8 +76,9 @@ impl BlockSlice {
                 encoder.write_len(s.len);
             }
             BlockSlice::Skip(s) => {
+                // k2 (hardening)
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(s.len);
+                encoder.write_var(s.len);
             }
         }
     }
@@ -200,9 +201,9 @@ impl ItemSlice {
         if cant_copy_parent_info {
             match &item.parent {
                 TypePtr::Branch(branch) => {
-                    if let Some(block) = branch.item {
+                    if let Some(id) = branch.nested_id() {
                         encoder.write_parent_info(false);
-                        encoder.write_left_id(block.id());
+                        encoder.write_left_id(&id);
                     } else if let Some(name) = branch.name.as_deref() {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);

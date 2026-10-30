@@ -1,0 +1,21 @@
+MPC-E143 pending_deps (sessions and edits)
+exit:     2
+message:  update left unresolved dependencies after apply; the doc needs a reload or resync
+next:     The in-memory doc refused the update and reloads from the store on its own. Retry after a moment; the editor should resync.
+rule:     K-SEC-15
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E143",
+  "name": "pending_deps",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "update left unresolved dependencies after apply; the doc needs a reload or resync",
+  "next": "The in-memory doc refused the update and reloads from the store on its own. Retry after a moment; the editor should resync.",
+  "rule": "K-SEC-15",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

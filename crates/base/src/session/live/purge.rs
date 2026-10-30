@@ -345,10 +345,14 @@ impl Session {
                 .filter(|e| matches!(e, Edit::Text { hunks, .. } if !hunks.is_empty()))
                 .collect();
             if !edits.is_empty() {
-                removed = Some(self.commit_edit(
+                // a purge's removal is no authorship: roots given (none put back), so D1
+                // leaves it as it is (v0.9.7)
+                let none = vec![None; edits.len()];
+                removed = Some(self.commit_edit_restoring(
                     st,
                     i,
                     edits,
+                    Some(none),
                     ChangeKind::Edit,
                     None,
                     now,
@@ -410,6 +414,7 @@ impl Session {
             self.remove_pid(st, pid, LeaveReason::Kicked);
             // the presence extras keep no trace of them either (activity, note dedupe)
             st.aware.forget(pid);
+            st.handles.forget(pid);
         }
         // the new state: re-encoded from the live doc (GC on: no deleted content)
         let state = match st.doc.encode_state() {
@@ -488,6 +493,9 @@ impl Session {
         st.reverts = None;
         // the re-encoded doc keeps every live element's ID; rebuilt on next need anyway
         st.prov = None;
+        // a participant purge renames client owners: they are read again (D1's owners and
+        // the agent client IDs reused from them)
+        st.owners = None;
         st.log_entries = 0;
         st.log_bytes = 0;
         st.state_bytes = state.len() as u64;
@@ -497,6 +505,8 @@ impl Session {
             d.synced_hash = s.hash.clone();
             d.synced_seq = s.seq;
             d.own.clear();
+            // it held the purged text: gone; the next write-back reloads the replica
+            d.catch_up = None;
             d.echoed = None;
         }
         // a doc promoted from tier 0 (v0.9.2): the tier-0 versions it kept are history too

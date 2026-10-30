@@ -1,0 +1,21 @@
+MPC-E512 store_no_approval (store)
+exit:     4
+message:  no approval for change {seq} of doc {doc}
+next:     That change has no approval record. List pending ones with log --pending.
+rule:     K-ID-11
+verbs:    approve; decline
+status:   live
+--- json
+{
+  "id": "MPC-E512",
+  "name": "store_no_approval",
+  "area": "store",
+  "exit": 4,
+  "message": "no approval for change {seq} of doc {doc}",
+  "next": "That change has no approval record. List pending ones with log --pending.",
+  "rule": "K-ID-11",
+  "verbs": ["approve", "decline"],
+  "returned_by": ["approve", "decline"],
+  "status": "live",
+  "since_or_until": null
+}

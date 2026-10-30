@@ -1,0 +1,21 @@
+MPC-E114 bad_position (sessions and edits)
+exit:     2
+message:  bad position: {reason}
+next:     A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.
+rule:     K-PRES-6
+verbs:    cursor; view; claim; blame
+status:   live
+--- json
+{
+  "id": "MPC-E114",
+  "name": "bad_position",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "bad position: {reason}",
+  "next": "A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.",
+  "rule": "K-PRES-6",
+  "verbs": ["cursor", "view", "claim", "blame"],
+  "returned_by": ["view", "claim", "cursor", "blame"],
+  "status": "live",
+  "since_or_until": null
+}

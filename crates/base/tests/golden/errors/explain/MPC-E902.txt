@@ -1,0 +1,21 @@
+MPC-E902 tool_limit (limits)
+exit:     2
+message:  limit: {reason}
+next:     The call would go over a bound (output size, pattern size or work). Nothing was applied. Narrow it: fewer lines (head, view --lines), a simpler pattern, smaller edits.
+rule:     K-PAR-7, K-SEC-4
+verbs:    cat, wc, head, tail, sed, view, grep, insert, replace, delete, sed -i, patch, apply, append, diff (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E902",
+  "name": "tool_limit",
+  "area": "limits",
+  "exit": 2,
+  "message": "limit: {reason}",
+  "next": "The call would go over a bound (output size, pattern size or work). Nothing was applied. Narrow it: fewer lines (head, view --lines), a simpler pattern, smaller edits.",
+  "rule": "K-PAR-7, K-SEC-4",
+  "verbs": ["@run_tool"],
+  "returned_by": ["cat", "wc", "head", "tail", "sed", "view", "grep", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "diff"],
+  "status": "live",
+  "since_or_until": null
+}

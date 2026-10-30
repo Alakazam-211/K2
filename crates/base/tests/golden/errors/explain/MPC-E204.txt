@@ -1,0 +1,21 @@
+MPC-E204 revert_too_old (history and undo)
+exit:     8
+message:  change {seq} is too old to revert (revert_too_old); use restore --version
+next:     The change is outside the revert window. Never retry the same request. Find a version from before it (log) and restore --version that version, or edit the text by hand.
+rule:     K-HIST-23, K-EXIT-1
+verbs:    revert
+status:   live
+--- json
+{
+  "id": "MPC-E204",
+  "name": "revert_too_old",
+  "area": "history and undo",
+  "exit": 8,
+  "message": "change {seq} is too old to revert (revert_too_old); use restore --version",
+  "next": "The change is outside the revert window. Never retry the same request. Find a version from before it (log) and restore --version that version, or edit the text by hand.",
+  "rule": "K-HIST-23, K-EXIT-1",
+  "verbs": ["revert"],
+  "returned_by": ["revert"],
+  "status": "live",
+  "since_or_until": null
+}

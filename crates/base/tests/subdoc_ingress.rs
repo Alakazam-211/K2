@@ -13,6 +13,7 @@ use yrs::{
     Doc as YDoc, Map, OffsetKind, Options, ReadTxn, StateVector, Text, TextRef, Transact, Update,
 };
 
+use k2_mpc_base::errors::Refusal;
 use k2_mpc_base::session::{
     AuditEvent, Config, Host, Pack, Participant, Rights, SessionError, SessionManager, TextFilePack,
 };
@@ -124,7 +125,17 @@ fn a_client_update_carrying_a_subdocument_is_refused_unapplied() {
         session_exit(&SessionError::Doc(DocError::Unaccepted)),
         exit::REFUSED
     );
-    assert_eq!(k2_mpc_base::doc::RESERVED_ERROR_ID_UNACCEPTED, None);
+    // its registry id (merged into the error surface): MPC-E152, exit 3, wherever it surfaces
+    let r = DocError::Unaccepted.report();
+    assert_eq!((r.id(), r.exit()), ("MPC-E152", exit::REFUSED));
+    assert_eq!(
+        SessionError::Doc(DocError::Unaccepted).report().id(),
+        "MPC-E152"
+    );
+    assert_eq!(
+        k2_mpc_base::doc::RESERVED_ERROR_ID_UNACCEPTED,
+        Some("MPC-E152")
+    );
 }
 
 #[test]
@@ -243,6 +254,13 @@ fn a_stored_doc_holding_a_subdocument_is_quarantined_at_load() {
         assert_eq!(
             session_exit(&SessionError::Doc(DocError::Quarantined)),
             exit::REFUSED
+        );
+        // its registry id (merged into the error surface): MPC-E518, exit 3
+        let r = SessionError::Doc(DocError::Quarantined).report();
+        assert_eq!((r.id(), r.exit()), ("MPC-E518", exit::REFUSED));
+        assert_eq!(
+            k2_mpc_base::doc::RESERVED_ERROR_ID_QUARANTINED,
+            Some("MPC-E518")
         );
         drop(mgr);
         let _ = std::fs::remove_dir_all(&dir);

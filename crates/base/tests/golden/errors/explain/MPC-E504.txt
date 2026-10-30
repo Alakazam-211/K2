@@ -1,0 +1,21 @@
+MPC-E504 path_taken (store)
+exit:     6
+message:  path already has a doc: {key}
+next:     Another live doc already has that path. Pick a path no doc uses, or move that doc first.
+rule:     K-DISK-14
+verbs:    mv
+status:   live
+--- json
+{
+  "id": "MPC-E504",
+  "name": "path_taken",
+  "area": "store",
+  "exit": 6,
+  "message": "path already has a doc: {key}",
+  "next": "Another live doc already has that path. Pick a path no doc uses, or move that doc first.",
+  "rule": "K-DISK-14",
+  "verbs": ["mv"],
+  "returned_by": ["mv"],
+  "status": "live",
+  "since_or_until": null
+}

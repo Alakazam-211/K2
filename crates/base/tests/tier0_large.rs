@@ -1,5 +1,5 @@
-//! Tier 0 streams: a 50 MB file is imported, read, replaced and written back without ever
-//! sitting in memory. Its own test binary, so the counting allocator sees only this test.
+//! Tier 0 streams: a 50 MB file is imported, read, replaced, written back and copied out
+//! for an export (`file_at_to`, `file_now_to`) without ever sitting in memory. Its own test binary, so the counting allocator sees only this test.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fs::{self, File};
@@ -174,7 +174,56 @@ fn a_50_mb_file_streams_in_bounded_memory() {
         }
     }
     assert_eq!(want.left, 0);
+
+    // exports: each version copied out as it streams, verified at the end, in bounded memory
+    for (what, vid, x) in [("file_at_to v1", Some(1), 1), ("file_now_to", None, 2)] {
+        let mut cmp = Same::new(Gen { left: SIZE, x });
+        let base = mark();
+        let copy = match vid {
+            Some(v) => s.file_at_to(c, v, &mut cmp).unwrap(),
+            None => s.file_now_to(c, &mut cmp).unwrap(),
+        };
+        eprintln!("{what}: peak {} bytes above the baseline", peak_since(base));
+        assert!(
+            peak_since(base) < BOUND,
+            "{what} peaked at {} bytes",
+            peak_since(base)
+        );
+        assert_eq!(copy.bytes, SIZE, "{what}");
+        assert_eq!(cmp.want.left, 0, "{what}: every byte, in order");
+        assert!(cmp.largest <= 256 << 10, "{what}: written in chunks");
+    }
     drop(s);
     mgr.release().unwrap();
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// A writer that checks each byte against a generator (no copy of the file is kept).
+struct Same {
+    want: Gen,
+    buf: Vec<u8>,
+    largest: usize,
+}
+
+impl Same {
+    fn new(want: Gen) -> Self {
+        Same {
+            want,
+            buf: vec![0u8; 1 << 20],
+            largest: 0,
+        }
+    }
+}
+
+impl Write for Same {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        let n = b.len().min(self.buf.len());
+        self.want.read_exact(&mut self.buf[..n])?;
+        assert_eq!(&b[..n], &self.buf[..n], "the copy's bytes");
+        self.largest = self.largest.max(n);
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }

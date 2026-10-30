@@ -378,8 +378,9 @@ impl Encode for Block {
         match self {
             Block::Item(block) => block.encode(encoder),
             Block::Skip(skip) => {
+                // k2 (hardening)
                 encoder.write_info(BLOCK_SKIP_REF_NUMBER);
-                encoder.write_len(skip.len)
+                encoder.write_var(skip.len)
             }
             Block::GC(gc) => {
                 encoder.write_info(BLOCK_GC_REF_NUMBER);
@@ -441,6 +442,10 @@ impl ItemPtr {
             return Some(txn.store.materialize(slice));
         }
 
+        // k2 (hardening)
+        if item.parent.as_branch().map_or(false, |b| b.is_collected()) {
+            return None;
+        }
         let mut parent_block = item.parent.as_branch().and_then(|b| b.item);
         // make sure that parent is redone
         if let Some(mut parent) = parent_block.clone() {
@@ -767,9 +772,9 @@ impl Item {
         if cant_copy_parent_info {
             match &self.parent {
                 TypePtr::Branch(branch) => {
-                    if let Some(block) = branch.item {
+                    if let Some(id) = branch.nested_id() {
                         encoder.write_parent_info(false);
-                        encoder.write_left_id(block.id());
+                        encoder.write_left_id(&id);
                     } else if let Some(name) = branch.name.as_deref() {
                         encoder.write_parent_info(true);
                         encoder.write_string(name);
@@ -823,11 +828,9 @@ impl Item {
     }
 
     fn needs_deletion(&self, parent: BranchPtr) -> bool {
-        // delete current item if its parent was deleted
-        if let Some(item) = parent.item {
-            if item.is_deleted() {
-                return true;
-            }
+        // delete current item if its parent was deleted (k2 (hardening))
+        if parent.is_deleted() {
+            return true;
         }
 
         // delete current item if it's a Map entry and it's not the right most one entry
@@ -1004,6 +1007,11 @@ impl<'doc> TransactionMut<'doc> {
             }
         };
 
+        // k2: an item the text's own local edits don't account for drops its markers
+        if !store.position_index.keeps_markers_on_integrate() {
+            crate::position_index::drop_markers(parent);
+        }
+
         if item.detect_conflict() {
             item.resolve_conflict(&mut store.blocks);
         }
@@ -1059,8 +1067,12 @@ impl<'doc> TransactionMut<'doc> {
                 }
             }
         }
+        let client = item.id.client;
+        self.touch(client);
         self.insert_set.insert(item.id, item.len);
         self.store.blocks.push(Block::Item(item));
+        #[cfg(feature = "planted-touched-bug")]
+        self.touch_planted(client);
         let item = &mut *item_ptr;
 
         item.integrate_content(self);
@@ -1088,9 +1100,12 @@ impl<'doc> TransactionMut<'doc> {
             gc.clock += offset;
             gc.len -= offset;
         }
+        self.touch(gc.client);
         self.delete_set.insert(gc.id(), gc.len);
         self.insert_set.insert(gc.id(), gc.len);
         self.store.blocks.push(Block::GC(gc));
+        #[cfg(feature = "planted-touched-bug")]
+        self.touch_planted(gc.client);
     }
 
     pub(crate) fn integrate_skip(&mut self, mut skip: BlockRange, offset: u32) {
@@ -1098,9 +1113,12 @@ impl<'doc> TransactionMut<'doc> {
             skip.clock += offset;
             skip.len -= offset;
         }
+        self.touch(skip.client);
         let blocks = &mut self.store.blocks;
         blocks.skips.insert(skip.id(), skip.len);
         blocks.push(Block::Skip(skip));
+        #[cfg(feature = "planted-touched-bug")]
+        self.touch_planted(skip.client);
     }
 }
 
@@ -1523,8 +1541,7 @@ impl Item {
 
     pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
         if self.is_deleted() && !self.info.is_keep() {
-            // k2 (hardening): a subdocument is detached from this item first: GC drops the item's
-            // content here, and the item itself may go (`parent_gc`, or a later squash).
+            // k2 (hardening)
             if let ItemContent::Doc(_, doc) = &self.content {
                 let this = NonNull::from(&*self);
                 let mut store = doc.store().write_blocking();
@@ -1534,6 +1551,16 @@ impl Item {
             }
             self.content.gc(collector);
             let len = self.len();
+            // k2 (hardening)
+            if let ItemContent::Type(_) = &self.content {
+                if let ItemContent::Type(mut branch) =
+                    std::mem::replace(&mut self.content, ItemContent::Deleted(len))
+                {
+                    branch.park(self.id);
+                    collector.park(branch);
+                }
+                self.info.clear_countable();
+            }
             if parent_gc {
                 collector.mark(&self.id);
             } else {
@@ -1940,7 +1967,7 @@ impl ItemContent {
                 let len = decoder.read_len()?;
                 let mut remaining = len as i32;
                 let mut buf = Vec::new();
-                // `len` comes from the input; each string is at least its 1-byte length.
+                // k2 (hardening)
                 buf.try_reserve(bounded_capacity(len as usize, decoder.remaining(), 1))?;
 
                 while remaining >= 0 {
@@ -1964,7 +1991,7 @@ impl ItemContent {
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len()? as usize;
                 let mut values = Vec::new();
-                // `len` comes from the input; each value is at least its 1-byte tag.
+                // k2 (hardening)
                 values.try_reserve(bounded_capacity(len, decoder.remaining(), 1))?;
 
                 let mut i = 0;

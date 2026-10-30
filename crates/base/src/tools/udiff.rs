@@ -718,6 +718,31 @@ fn parse_patch(diff: &str) -> Result<Vec<PHunk>, ToolError> {
     Ok(hunks)
 }
 
+/// The refusal a patch's "no" is, from its own summary line (`N out of T hunk(s) FAILED`):
+/// nothing applied ([`crate::errors`] `patch_failed`), or `--partial` applied the rest
+/// (`patch_rejects`).
+pub(crate) fn refusal(msg: &str, applied: bool) -> crate::errors::ErrorReport {
+    use crate::errors::{ids, ErrorReport};
+    let line = msg
+        .lines()
+        .find(|l| l.contains(" out of ") && l.contains(" FAILED"))
+        .unwrap_or("patch FAILED");
+    let mut nums = line
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse::<u64>().ok());
+    let (failed, hunks) = (nums.next(), nums.next());
+    let entry = if applied {
+        &ids::PATCH_REJECTS
+    } else {
+        &ids::PATCH_FAILED
+    };
+    ErrorReport::new(entry, line)
+        .with("failed", failed)
+        .with("hunks", hunks)
+        .with("dry_run", msg.starts_with("checking file "))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,21 @@
+MPC-E005 export_decode (exports)
+exit:     1
+message:  could not read the source
+next:     The source version couldn't be read in its format (damaged, or a variant the exporter doesn't read). Nothing was written. Export as-is to get the bytes, or try another version.
+rule:     X-ERR-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E005",
+  "name": "export_decode",
+  "area": "exports",
+  "exit": 1,
+  "message": "could not read the source",
+  "next": "The source version couldn't be read in its format (damaged, or a variant the exporter doesn't read). Nothing was written. Export as-is to get the bytes, or try another version.",
+  "rule": "X-ERR-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E120 tool_unsupported (sessions and edits)
+exit:     2
+message:  {flag}: not supported ({hint})
+next:     That verb, flag or syntax is outside the supported subset; nothing is approximated. Use what the hint says, or see capabilities for each verb's flags. Nothing was applied.
+rule:     K-PAR-7
+verbs:    cat, wc, head, tail, sed, view, grep, insert, replace, delete, sed -i, patch, apply, append, diff (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E120",
+  "name": "tool_unsupported",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{flag}: not supported ({hint})",
+  "next": "That verb, flag or syntax is outside the supported subset; nothing is approximated. Use what the hint says, or see capabilities for each verb's flags. Nothing was applied.",
+  "rule": "K-PAR-7",
+  "verbs": ["@run_tool"],
+  "returned_by": ["cat", "wc", "head", "tail", "sed", "view", "grep", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "diff"],
+  "status": "live",
+  "since_or_until": null
+}

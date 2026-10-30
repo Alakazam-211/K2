@@ -23,6 +23,14 @@ Bold (`**`) around the number is fine. It fails when:
   * a count-like number (1,000 or more: `12,345` or `12345`, not followed by a unit) sits in
     an evidence table cell with no citation. A cell marked `[estimate]`, `[derived]` or
     `[unverified: <reason>]` is exempt, as are columns headed Job / Commit.
+  * a VIOLATION run backs a least depth but is not a strict BFS. A least-depth context is a
+    section whose heading, a table whose header row, or a prose line that says "least depth"
+    (or "least violating / failing depth", "shortest trace / counterexample"). There a
+    VIOLATION citation (its trace length or depth) must point at a TLC run with `workers: 1`
+    or an enumerator run with BFS levels (`depth` not null). TLC with several workers is not
+    level-synchronous, so its first violation need not be a shortest one. A citation labelled
+    `-workers auto` (in its cell, its column header, or in prose since the previous citation)
+    is a comparison, not a least-depth claim, and is exempt.
 Exit status: 0 clean, 1 findings, 2 usage or a broken record file. Python 3 stdlib only.
 """
 import glob
@@ -40,6 +48,9 @@ VALUE = re.compile(
 COUNT = re.compile(r"(?<![\w.,/#^×·-])(\d{1,3}(?:,\d{3})+|\d{4,})(?![\w,]|\.\d|-\d)")
 UNIT = re.compile(r"^\s*(?:s|ms|min|h|%|B|KB|MB|GB|KiB|MiB|GiB|G|M|k|/s|×|x\b)\b|^\s*(?:%|×|/s)")
 EXEMPT = re.compile(r"\[(?:estimate|derived|unverified:[^\]]*)\]")
+LEAST = re.compile(r"\bleast\s+(?:violating\s+|failing\s+)?depths?\b|\bshortest\s+(?:traces?|counterexamples?)\b", re.I)
+AUTO = re.compile(r"workers\s+auto", re.I)
+HEADING = re.compile(r"^(#{1,6})\s")
 
 
 def load_runs(d):
@@ -114,6 +125,24 @@ def check_citation(text_before, job, run, field, runs):
     return "%s/%s has status %s: it backs no number" % (job, run, st)
 
 
+def check_least(job, run, field, runs):
+    """the problem with citing JOB/RUN for a least violating depth, or None"""
+    rec = runs.get(job, {}).get(run)
+    if rec is None or rec.get("status") != "VIOLATION" or field not in (None, "trace_states", "depth"):
+        return None
+    if rec.get("tool") == "enumerator":
+        if rec.get("depth") is None:
+            return ("%s/%s backs a least depth, but it is an enumerator %s search without BFS levels: "
+                    "cite a BFS run" % (job, run, rec.get("mode") or "non-BFS"))
+        return None
+    w = rec.get("workers")
+    if w == 1:
+        return None
+    return ("%s/%s backs a least depth, but it is TLC with %s: several workers are not a strict BFS, "
+            "so cite a run with workers: 1 (TLC_WORKERS=1) or the enumerator's BFS, or label it -workers auto"
+            % (job, run, "%s workers" % w if w is not None else "an unrecorded worker count"))
+
+
 def cells(line):
     s = line.strip()
     if s.startswith("|"):
@@ -127,6 +156,8 @@ def check_file(path, runs):
     probs = []
     lines = open(path).read().split("\n")
     header = None
+    table_least = False
+    sections = []  # (level, says least depth) for the headings above this line
     in_code = False
     for i, line in enumerate(lines, 1):
         if line.strip().startswith("```"):
@@ -134,14 +165,21 @@ def check_file(path, runs):
             continue
         if in_code:
             continue
+        h = HEADING.match(line)
+        if h:
+            lvl = len(h.group(1))
+            sections = [x for x in sections if x[0] < lvl] + [(lvl, bool(LEAST.search(line)))]
+        section_least = any(x[1] for x in sections)
         is_row = line.strip().startswith("|")
         if not is_row:
             header = None
+            table_least = False
         segments = []
         if is_row:
             cs = cells(line)
             if header is None:
                 header = [c.strip().lower() for c in cs]
+                table_least = bool(LEAST.search(line))
                 continue
             if all(re.fullmatch(r"\s*:?-+:?\s*", c) for c in cs):
                 continue
@@ -153,11 +191,17 @@ def check_file(path, runs):
         for text, head, in_table in segments:
             masked = text
             pos = 0
+            least = section_least or (table_least if in_table else bool(LEAST.search(text)))
             for m in CITE.finditer(text):
                 before = text[pos:m.start()]
                 p = check_citation(before, m.group(1), m.group(2), m.group(3), runs)
                 if p:
                     probs.append("%s:%d: %s" % (path, i, p))
+                labelled = AUTO.search(head) or AUTO.search(text if in_table else before)
+                if least and not labelled:
+                    p = check_least(m.group(1), m.group(2), m.group(3), runs)
+                    if p:
+                        probs.append("%s:%d: %s" % (path, i, p))
                 # mask the cited value and the citation
                 v = VALUE.search(before.replace("**", "  ").rstrip())
                 start = pos + (v.start() if v else len(before))

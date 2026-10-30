@@ -1,4 +1,4 @@
-//! Undo, redo and revert over text, to the undo spec v1.9 (`docs/SPEC-UNDO.md`).
+//! Undo, redo and revert over text, to the undo spec v1.10 (`docs/SPEC-UNDO.md`).
 //!
 //! Undo is a three-way merge per **region** (U8): a region is one **canonical hunk** of a
 //! change (sorted, non-overlapping, coalesced when touching), kept as its text before and
@@ -618,6 +618,10 @@ pub(crate) struct Batch {
     pub on_behalf_of: Option<String>,
     /// Ordered by root, then start.
     pub regions: Vec<Region>,
+    /// A later change landed inside one of its regions or touching one (U3 (g), K4): set by
+    /// [`Batch::transform`], read only for a person's open undo group, which such a change
+    /// closes. False when pushed.
+    pub touched: bool,
 }
 
 impl Batch {
@@ -628,6 +632,10 @@ impl Batch {
     pub fn transform(&mut self, root: &str, hunks: &[Hunk]) {
         let mut any = false;
         for r in self.regions.iter_mut().filter(|r| r.root == root) {
+            // inside or touching, in the coordinates before the change (U3 (g))
+            if hunks.iter().any(|h| h.start <= r.end && h.end >= r.start) {
+                self.touched = true;
+            }
             r.transform(hunks);
             any = true;
         }
@@ -635,6 +643,90 @@ impl Batch {
             clamp_shared_edges(&mut self.regions);
         }
     }
+}
+
+/// Person grouping (U3, K4): the open group's region `prev`, at bounds `a..b` in the text
+/// just before the next edit, and that edit's only region `next` (made on that text), as
+/// **one region**: what turns the text after `next` back into the text before the group,
+/// over the union of their windows. Its ours is one hunk over the whole window, as a fresh
+/// change's; its roots compose exactly (the window's elements before the group, and after
+/// `next`), so the group undoes element for element what its edits did.
+///
+/// `None` (the group closes) when the two don't overlap or touch (a non-contiguous edit,
+/// U3 (b)), are on different roots, or either is not a plain change's region with known
+/// roots. The caller checks that nothing else touched `prev` since it was pushed (U3 (g)):
+/// its window must still be exactly its `after`.
+pub(crate) fn compose_group(prev: &Region, a: usize, b: usize, next: &Region) -> Option<Region> {
+    let plain = |r: &Region| {
+        !r.tainted
+            && !r.erased
+            && r.theirs.is_empty()
+            && r.ours.len() == 1
+            && r.ours[0].start == 0
+            && r.ours[0].end == r.after.len()
+            && r.ours[0].insert == r.before
+    };
+    // `next` was carried through nothing yet; `prev` has been carried through `next` (its
+    // theirs holds it, and `next` may have tainted it by deleting across an edge), so only
+    // its own texts and roots are read: the caller checked its window before `next` landed
+    if prev.root != next.root || !plain(next) {
+        return None;
+    }
+    if prev.ours.len() != 1 || prev.ours[0].insert != prev.before || b - a != prev.after.len() {
+        return None;
+    }
+    let (pr, nr) = (prev.roots.as_ref()?, next.roots.as_ref()?);
+    // `next` replaced `c..d` of the text before it (one region: its start is the hunk's)
+    let (c, d) = (next.start, next.start + next.before.len());
+    if c > b || a > d {
+        return None;
+    }
+    let s = a.min(c);
+    // the window before `next`: `prev`'s after, and what `next` took on either side of it
+    let lo = &next.before[..a.saturating_sub(c)];
+    let hi = if d > b { &next.before[b - c..] } else { "" };
+    let w = format!("{lo}{}{hi}", prev.after);
+    let mut wroots = nr.before.slice(&next.before, 0, lo.len());
+    wroots.extend(&pr.after);
+    if d > b {
+        wroots.extend(&nr.before.slice(&next.before, b - c, next.before.len()));
+    }
+    debug_assert_eq!(wroots.bytes(), w.len());
+    let fwd = Hunk {
+        start: c - s,
+        end: d - s,
+        insert: next.after.clone(),
+    };
+    let back = Hunk {
+        start: a - s,
+        end: b - s,
+        insert: prev.before.clone(),
+    };
+    let after = diff::apply(&w, std::slice::from_ref(&fwd));
+    let before = diff::apply(&w, std::slice::from_ref(&back));
+    let after_roots = wroots.apply(&w, &[fwd], std::slice::from_ref(&nr.after));
+    let before_roots = wroots.apply(&w, &[back], std::slice::from_ref(&pr.before));
+    Some(Region {
+        root: next.root.clone(),
+        start: s,
+        end: s + after.len(),
+        ours: vec![Hunk {
+            start: 0,
+            end: after.len(),
+            insert: before.clone(),
+        }],
+        theirs: Vec::new(),
+        before,
+        after,
+        tainted: false,
+        base_doc_empty: next.base_doc_empty,
+        erased: false,
+        roots: Some(RegionRoots {
+            after: after_roots,
+            ours: vec![before_roots.clone()],
+            before: before_roots,
+        }),
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -898,6 +990,7 @@ mod tests {
             seq: 1,
             on_behalf_of: None,
             regions: Region::of_change(R, before, &hs, None),
+            touched: false,
         }
     }
 
@@ -1015,6 +1108,7 @@ mod tests {
             seq: 2,
             on_behalf_of: None,
             regions: steps[0].inverse.clone(),
+            touched: false,
         };
         let Plan::Steps { steps, .. } = plan_v17(&texts(&undone), vec![redo], Mode::All) else {
             panic!()
@@ -1075,6 +1169,7 @@ mod tests {
             seq: 1,
             on_behalf_of: None,
             regions,
+            touched: false,
         };
         (
             b,
@@ -1128,6 +1223,7 @@ mod tests {
             seq: 1,
             on_behalf_of: None,
             regions: revert_regions(&rv.rec, carried),
+            touched: false,
         }
     }
 

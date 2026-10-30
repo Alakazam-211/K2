@@ -1,0 +1,21 @@
+MPC-E506 named_version (store)
+exit:     6
+message:  version {version} of doc {doc} is named; retention never deletes named versions
+next:     Named versions are never deleted by retention. Nothing changed.
+rule:     K-HIST-6
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E506",
+  "name": "named_version",
+  "area": "store",
+  "exit": 6,
+  "message": "version {version} of doc {doc} is named; retention never deletes named versions",
+  "next": "Named versions are never deleted by retention. Nothing changed.",
+  "rule": "K-HIST-6",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

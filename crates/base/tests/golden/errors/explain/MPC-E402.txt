@@ -1,0 +1,21 @@
+MPC-E402 declined_not_utf8 (disk and outside edits)
+exit:     4
+message:  live editing is off: {reason} (not_utf8)
+next:     The file isn't UTF-8 text, so it can't be a live doc. Edit it with ordinary file tools, or convert it to UTF-8 and open it again. Don't retry the live verb as is.
+rule:     K-PACK-4, K-COD-6
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E402",
+  "name": "declined_not_utf8",
+  "area": "disk and outside edits",
+  "exit": 4,
+  "message": "live editing is off: {reason} (not_utf8)",
+  "next": "The file isn't UTF-8 text, so it can't be a live doc. Edit it with ordinary file tools, or convert it to UTF-8 and open it again. Don't retry the live verb as is.",
+  "rule": "K-PACK-4, K-COD-6",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

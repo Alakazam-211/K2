@@ -1,0 +1,21 @@
+MPC-E132 bad_approval (sessions and edits)
+exit:     2
+message:  bad approval: {reason}
+next:     An approval is settled once: pending → approved or declined. This one is already settled (the message says how). To reverse a declined change, use revert or restore --version.
+rule:     K-ID-11
+verbs:    approve; decline
+status:   live
+--- json
+{
+  "id": "MPC-E132",
+  "name": "bad_approval",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "bad approval: {reason}",
+  "next": "An approval is settled once: pending → approved or declined. This one is already settled (the message says how). To reverse a declined change, use revert or restore --version.",
+  "rule": "K-ID-11",
+  "verbs": ["approve", "decline"],
+  "returned_by": ["approve", "decline"],
+  "status": "live",
+  "since_or_until": null
+}

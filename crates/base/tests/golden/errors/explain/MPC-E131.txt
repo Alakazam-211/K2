@@ -1,0 +1,21 @@
+MPC-E131 no_approval (sessions and edits)
+exit:     4
+message:  change {seq} has no approval (it wasn't made on anyone's behalf)
+next:     That change isn't waiting for anyone's approval (it wasn't made on someone's behalf, or doesn't exist). List the pending ones with log --pending and use one of those.
+rule:     K-ID-11
+verbs:    approve; decline
+status:   live
+--- json
+{
+  "id": "MPC-E131",
+  "name": "no_approval",
+  "area": "sessions and edits",
+  "exit": 4,
+  "message": "change {seq} has no approval (it wasn't made on anyone's behalf)",
+  "next": "That change isn't waiting for anyone's approval (it wasn't made on someone's behalf, or doesn't exist). List the pending ones with log --pending and use one of those.",
+  "rule": "K-ID-11",
+  "verbs": ["approve", "decline"],
+  "returned_by": ["approve", "decline"],
+  "status": "live",
+  "since_or_until": null
+}

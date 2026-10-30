@@ -1,0 +1,21 @@
+MPC-E802 at_limit (structured and CSV)
+exit:     2
+message:  this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted`
+next:     The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.
+rule:     K-CSV-7 (KC4)
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   reserved for CSV grids (C1c); nothing returns it yet
+--- json
+{
+  "id": "MPC-E802",
+  "name": "at_limit",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "this table is at its size limit ({limit} {what}, deleted rows included); the owner can free space with `rows drop-deleted`",
+  "next": "The table can't grow past its limit (details.what: cells or columns); nothing was applied and nothing was dropped. Remove rows or columns first, or ask an owner to run rows drop-deleted to free the space deleted rows still hold.",
+  "rule": "K-CSV-7 (KC4)",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "reserved",
+  "since_or_until": "CSV grids (C1c)"
+}

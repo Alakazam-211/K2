@@ -319,6 +319,9 @@ impl BlockIter {
         txn: &mut TransactionMut,
         value: V,
     ) -> Option<ItemPtr> {
+        if self.branch.refuse_write() {
+            return None; // k2 (hardening)
+        }
         self.split_rel(txn);
         let id = {
             let store = txn.store();

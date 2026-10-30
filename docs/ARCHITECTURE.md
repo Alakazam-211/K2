@@ -74,6 +74,13 @@
    last synced state (kept in the store, so restarts merge correctly too). It never writes
    CRDT metadata into the file, never rewrites an untouched file, and never replaces the
    session with the file's content.
+8. **The kit holds only root shared-type handles** (v0.9.7): a handle on a doc comes from
+   the doc's root (`get_or_insert_*`), never from a nested shared type, and the kit never
+   keeps a handle across an apply other than a root's. *Why:* a nested handle can outlive
+   its type after a remote delete; a root's never does. *Checked:* the engine module takes
+   handles in one place, which asserts a root in debug builds, and a test fails if the
+   module names a nested type or any doc it makes keeps a non-root handle
+   (`engine/yrs.rs`, `root_handles`).
 
 ## Tiers
 

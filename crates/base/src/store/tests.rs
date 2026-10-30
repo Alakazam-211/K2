@@ -706,6 +706,7 @@ fn a_format_4_store_is_upgraded_in_place_with_provenance() {
             end: 5,
             root: (3, 10),
         }],
+        authored: None,
     };
     s.commit_changes(id, &[entry], &[change], &[]).unwrap();
     let got = s
@@ -811,18 +812,15 @@ fn host_table_is_opaque_and_transactional() {
     );
 }
 
-/// v0.9.5 (rollback): a store holding a table this kit doesn't know (v0.9.7's `authored`,
-/// added without a format bump, or any other) is refused for a rewrite with
-/// `StoreError::NewerData` (the registry's `MPC-E502 store_newer`), its message naming the
-/// table and the kit to upgrade to, and the store file is left exactly as it was. Both
-/// branches: an unknown table and an unknown multimap table. Made through redb's normal API.
+/// v0.9.5 (rollback): a store holding a table this kit doesn't know (one a newer kit added
+/// without a format bump) is refused for a rewrite with `StoreError::NewerData` (the
+/// registry's `MPC-E502 store_newer`), its message naming the table and the kit to upgrade
+/// to, and the store file is left exactly as it was. Both branches: an unknown table and an
+/// unknown multimap table. Made through redb's normal API. (v0.9.7's `authored` is the
+/// kit's own table now: `authored_hunks_side_table` rewrites a store holding it.)
 #[test]
 fn a_newer_kits_table_refuses_the_rewrite_and_changes_nothing() {
-    for (name, multimap) in [
-        ("authored", false),
-        ("later_kit", false),
-        ("authored_mm", true),
-    ] {
+    for (name, multimap) in [("later_kit", false), ("later_kit_mm", true)] {
         let d = TmpDir::new(&format!("newer-table-{name}"));
         let s = DocStore::open(d.db()).unwrap();
         s.create(&meta("a.md")).unwrap();
@@ -833,11 +831,7 @@ fn a_newer_kits_table_refuses_the_rewrite_and_changes_nothing() {
         };
         assert_eq!(s.check_rewritable(), Err(want.clone()), "{name}");
         assert_eq!(s.rewrite_file().err(), Some(want.clone()), "{name}");
-        let kit = if name == "authored" {
-            "kit ≥ v0.9.7"
-        } else {
-            "a newer kit"
-        };
+        let kit = "a newer kit";
         assert_eq!(
             want.to_string(),
             format!(
@@ -857,4 +851,357 @@ fn a_newer_kits_table_refuses_the_rewrite_and_changes_nothing() {
         // reading still works
         assert!(s.find(&key("a.md")).unwrap().is_some());
     }
+}
+
+/// Every table a fresh store has is in exactly one of the kit's lists (v0.9.7): the
+/// per-doc tables a delete erases and a rewrite copies ([`DOC_TABLES`]) or the shared ones
+/// ([`SHARED_TABLES`]); and every listed table exists, but `authored`, which only the first
+/// widened change creates (lazily: a store without one stays purgeable by a kit <= v0.9.6).
+/// A table added to `open` but to neither list fails here, not in a purge's rewrite.
+#[test]
+fn every_table_is_listed_once() {
+    use redb::TableHandle;
+    let d = TmpDir::new("tables");
+    let s = DocStore::open(d.db()).unwrap();
+    let tables = |s: &DocStore| -> Vec<String> {
+        let r = s.begin_read().unwrap();
+        let mut v: Vec<String> = r
+            .list_tables()
+            .unwrap()
+            .map(|t| t.name().to_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let found = tables(&s);
+    let mut listed: Vec<String> = SHARED_TABLES
+        .iter()
+        .map(|n| (*n).to_owned())
+        .chain(DOC_TABLES.iter().map(|(t, _)| t.name().to_owned()))
+        .collect();
+    listed.sort();
+    let n = listed.len();
+    listed.dedup();
+    assert_eq!(listed.len(), n, "a table is listed twice");
+    let lazy = ["authored".to_owned()];
+    let eager: Vec<String> = listed
+        .iter()
+        .filter(|t| !lazy.contains(t))
+        .cloned()
+        .collect();
+    assert_eq!(
+        found, eager,
+        "a fresh store: every listed table but the lazy ones"
+    );
+    assert!(listed.contains(&lazy[0]));
+    // nothing but a widened change creates it: not a delete, a window prune, a purge, a
+    // rewrite or a reopen
+    let id = s.create(&meta("a.md")).unwrap();
+    s.prune_reverts(id, &[1], &[]).unwrap();
+    let needles = Needles::new([&b"nothing-here"[..]], false);
+    s.purge_doc(
+        id,
+        &DocPurge {
+            head: 0,
+            state: &[],
+            changes: Pick::None,
+            versions: Pick::None,
+            needles: &needles,
+            sync: None,
+            key: [7; 32],
+            erase: None,
+        },
+    )
+    .unwrap();
+    s.delete_doc(id, 1).unwrap();
+    s.rewrite_file().unwrap();
+    drop(s);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(tables(&s), eager);
+}
+
+/// A downgrade to a kit <= v0.9.6 and back (v0.9.7, no format bump): the older kit drops a
+/// record (a delete, its window) and redacts one (a purge) without touching the authored
+/// rows. The next open deletes the rows whose record is gone, blanks the inserts their
+/// redacted record no longer holds, and rewrites the file: no byte of them is left.
+#[test]
+fn an_open_sweeps_what_an_older_kit_left_in_the_authored_table() {
+    use super::history::{dec_record, enc_record, AUTHORED, REVERTS};
+    use super::{NewChange, RecordHunk, RecordRoot, RevertRecord};
+    use crate::text::Hunk;
+
+    let d = TmpDir::new("authored-sweep");
+    let s = DocStore::open(d.db()).unwrap();
+    let a = s.create(&meta("a.md")).unwrap();
+    let b = s.create(&meta("b.md")).unwrap();
+    let hunk = |start: usize, end: usize, insert: &str| Hunk {
+        start,
+        end,
+        insert: insert.into(),
+    };
+    let widened = |secret: &str| NewChange {
+        info: ChangeInfo::new(ChangeKind::Edit, "ag", "cli", 5),
+        record: RevertRecord {
+            author: "ag".into(),
+            on_behalf_of: None,
+            at_ms: 5,
+            roots: vec![RecordRoot {
+                root: "source".into(),
+                empty_after: false,
+                hunks: vec![
+                    RecordHunk {
+                        start: 0,
+                        end: 5,
+                        insert: format!("wo{secret}"),
+                        deleted: "wordX".into(),
+                        redacted: false,
+                        roots: None,
+                    },
+                    RecordHunk {
+                        start: 6,
+                        end: 10,
+                        insert: "SEED".into(),
+                        deleted: "seed".into(),
+                        redacted: false,
+                        roots: None,
+                    },
+                ],
+            }],
+        },
+        span: None,
+        provenance: Vec::new(),
+        authored: Some(vec![(
+            "source".into(),
+            vec![hunk(2, 5, secret), hunk(6, 10, "SEED")],
+        )]),
+    };
+    let (sa, sb) = ("ALPHA-SECRET-QXJZ", "BRAVO-SECRET-VKWP");
+    for (id, secret) in [(a, sa), (b, sb)] {
+        s.commit_changes(id, &[entry("ag", 7, vec![1])], &[widened(secret)], &[])
+            .unwrap();
+        assert!(s.authored_hunks(id, 1).unwrap().is_some());
+    }
+    // the older kit: deletes doc `a` (every table it knows, so not `authored`) and purges
+    // doc `b` by its secret (the record's hunk redacted, its rewrite refused: the
+    // authored row and the freed pages keep the text)
+    let w = s.begin_write().unwrap();
+    for (t, how) in DOC_TABLES {
+        if *how == Erase::Range && t.name() != "authored" {
+            t.erase(&w, a).unwrap();
+        }
+    }
+    w.open_table(PATHS)
+        .unwrap()
+        .remove(key("a.md").index().as_str())
+        .unwrap();
+    {
+        let mut rt = w.open_table(REVERTS).unwrap();
+        let mut rec = dec_record(rt.get((b, 1)).unwrap().unwrap().value()).unwrap();
+        let h = &mut rec.roots[0].hunks[0];
+        h.redacted = true;
+        h.insert.clear();
+        h.deleted.clear();
+        rt.insert((b, 1), enc_record(&rec).as_slice()).unwrap();
+    }
+    w.commit().unwrap();
+    let rows = |s: &DocStore| -> Vec<(u64, u64)> {
+        let r = s.begin_read().unwrap();
+        let t = r.open_table(AUTHORED).unwrap();
+        let v = redb::ReadableTable::iter(&t)
+            .unwrap()
+            .map(|kv| kv.unwrap().0.value())
+            .collect();
+        v
+    };
+    assert_eq!(rows(&s), vec![(a, 1), (b, 1)]);
+    let needles = [sa.as_bytes(), sb.as_bytes()];
+    assert!(
+        !s.scan_for(&needles).unwrap().is_empty(),
+        "the older kit left both"
+    );
+    drop(s);
+
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(rows(&s), vec![(b, 1)], "a's row went with its record");
+    assert_eq!(
+        s.authored_hunks(b, 1).unwrap(),
+        Some(vec![(
+            "source".into(),
+            vec![hunk(2, 5, ""), hunk(6, 10, "SEED")]
+        )]),
+        "the insert its redacted hunk held is blank; the other stays"
+    );
+    assert_eq!(
+        s.scan_for(&needles).unwrap(),
+        Vec::new(),
+        "the byte scan is clean"
+    );
+    {
+        let r = s.begin_read().unwrap();
+        assert!(r
+            .open_table(META)
+            .unwrap()
+            .get(REWRITE_PENDING)
+            .unwrap()
+            .is_none());
+    }
+    // nothing left to sweep: the next open changes nothing
+    drop(s);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(rows(&s), vec![(b, 1)]);
+}
+
+/// The authored hunks of a change D1 widened (v0.9.7): written in the change's own
+/// transaction only when they differ from the record's, read back as written, and the
+/// record's hunks otherwise; they leave the window with the record, a rewrite keeps them,
+/// a delete erases them, and a purge blanks every insert its record lost.
+#[test]
+fn authored_hunks_side_table() {
+    use super::history::{AUTHORED, REVERTS};
+    use super::{NewChange, RecordHunk, RecordRoot, RevertRecord};
+    use crate::text::Hunk;
+
+    let d = TmpDir::new("authored");
+    let s = DocStore::open(d.db()).unwrap();
+    let id = s.create(&meta("a.md")).unwrap();
+    let hunk = |start: usize, end: usize, insert: &str| Hunk {
+        start,
+        end,
+        insert: insert.into(),
+    };
+    // `wordX` (someone else's) and `seed`; the change makes them `woRD-SECRET1` and `SEED`
+    let record = |hunks: &[(u64, u64, &str, &str)]| RevertRecord {
+        author: "ag".into(),
+        on_behalf_of: None,
+        at_ms: 5,
+        roots: vec![RecordRoot {
+            root: "source".into(),
+            empty_after: false,
+            hunks: hunks
+                .iter()
+                .map(|&(start, end, insert, deleted)| RecordHunk {
+                    start,
+                    end,
+                    insert: insert.into(),
+                    deleted: deleted.into(),
+                    redacted: false,
+                    roots: None,
+                })
+                .collect(),
+        }],
+    };
+    let change = |rec: RevertRecord, authored: Option<RootHunks>| NewChange {
+        info: ChangeInfo::new(ChangeKind::Edit, "ag", "cli", 5),
+        record: rec,
+        span: None,
+        provenance: Vec::new(),
+        authored,
+    };
+    let widened = record(&[(0, 5, "woRD-SECRET1", "wordX"), (6, 10, "SEED", "seed")]);
+    let authored: RootHunks = vec![(
+        "source".into(),
+        vec![hunk(2, 5, "RD-SECRET1"), hunk(6, 10, "SEED")],
+    )];
+    let plain = record(&[(0, 0, "new ", "")]);
+    let plain_hunks: RootHunks = vec![("source".into(), vec![hunk(0, 0, "new ")])];
+    let seqs = s
+        .commit_changes(
+            id,
+            &[
+                entry("ag", 7, vec![1]),
+                entry("ag", 7, vec![2]),
+                entry("ag", 7, vec![3]),
+            ],
+            &[
+                change(widened.clone(), Some(authored.clone())),
+                // a session that names the record's own hunks writes no row either
+                change(plain.clone(), Some(plain_hunks.clone())),
+                change(plain, None),
+            ],
+            &[],
+        )
+        .unwrap();
+    assert_eq!(seqs, vec![1, 2, 3]);
+    assert_eq!(s.authored_hunks(id, 1).unwrap(), Some(authored.clone()));
+    assert_eq!(s.authored_hunks(id, 2).unwrap(), None);
+    assert_eq!(s.authored_hunks(id, 3).unwrap(), None);
+    assert_eq!(s.change_hunks(id, 1).unwrap(), Some(authored.clone()));
+    assert_eq!(s.change_hunks(id, 2).unwrap(), Some(plain_hunks.clone()));
+    assert_eq!(s.change_hunks(id, 3).unwrap(), Some(plain_hunks));
+    assert_eq!(s.change_hunks(id, 9).unwrap(), None);
+    // the encoding: canonical, strict
+    let b = history::enc_authored(&authored);
+    assert_eq!(history::dec_authored(&b).unwrap(), authored);
+    let mut long = b.clone();
+    long.push(0);
+    assert!(history::dec_authored(&long).is_err());
+    let mut v2 = b;
+    v2[0] = 2;
+    assert!(history::dec_authored(&v2).is_err());
+
+    // a rewrite copies the row; leaving the window drops it with its record
+    s.rewrite_file().unwrap();
+    assert_eq!(s.authored_hunks(id, 1).unwrap(), Some(authored.clone()));
+    let w2 = s.begin_write().unwrap();
+    history::put_changes(
+        &w2,
+        id,
+        &[4],
+        &[change(widened.clone(), Some(authored.clone()))],
+    )
+    .unwrap();
+    w2.commit().unwrap();
+    s.prune_reverts(id, &[4], &[]).unwrap();
+    assert_eq!(s.authored_hunks(id, 4).unwrap(), None);
+    assert_eq!(s.change_hunks(id, 4).unwrap(), None);
+
+    // a purge by needle: the record's first hunk is redacted, so the authored hunk inside it
+    // is blanked; the second (not matched) keeps its insert and every position stays
+    let needles = Needles::new([&b"SECRET1"[..], &b"woRD-SECRET1"[..]], false);
+    let purge = |changes: Pick| DocPurge {
+        head: 3,
+        state: &[],
+        changes,
+        versions: Pick::None,
+        needles: &needles,
+        sync: None,
+        key: [7; 32],
+        erase: None,
+    };
+    s.purge_doc(id, &purge(Pick::None)).unwrap();
+    let rec = s.revert_record(id, 1).unwrap().unwrap();
+    assert!(rec.roots[0].hunks[0].redacted && !rec.roots[0].hunks[1].redacted);
+    let blanked: RootHunks = vec![("source".into(), vec![hunk(2, 5, ""), hunk(6, 10, "SEED")])];
+    assert_eq!(s.authored_hunks(id, 1).unwrap(), Some(blanked.clone()));
+    assert_eq!(s.change_hunks(id, 1).unwrap(), Some(blanked));
+    // taken whole: every insert goes
+    s.purge_doc(id, &purge(Pick::Set([1].into()))).unwrap();
+    assert_eq!(
+        s.authored_hunks(id, 1).unwrap(),
+        Some(vec![(
+            "source".into(),
+            vec![hunk(2, 5, ""), hunk(6, 10, "")]
+        )])
+    );
+    // an authored row whose record is gone is deleted by a purge
+    let w3 = s.begin_write().unwrap();
+    w3.open_table(REVERTS).unwrap().remove((id, 1)).unwrap();
+    w3.commit().unwrap();
+    s.purge_doc(id, &purge(Pick::None)).unwrap();
+    assert!(s
+        .begin_read()
+        .unwrap()
+        .open_table(AUTHORED)
+        .unwrap()
+        .get((id, 1))
+        .unwrap()
+        .is_none());
+
+    // a delete erases the table's rows (tables_holding lists every per-doc table)
+    let w4 = s.begin_write().unwrap();
+    history::put_changes(&w4, id, &[5], &[change(widened, Some(authored))]).unwrap();
+    w4.commit().unwrap();
+    assert!(s.tables_holding(id).unwrap().contains(&"authored"));
+    s.delete_doc(id, 100).unwrap();
+    assert!(s.tables_holding(id).unwrap().is_empty());
 }

@@ -160,6 +160,11 @@ pub const RULES: &[Rule] = &[
         "E-HIST-5, undo spec U10, U10a (by root, v1.8), U18a, U23",
         &[Undo, Blame],
     ),
+    r(
+        "hist.undo_own_only_tokens",
+        "undo spec v1.10, D1 (authored ranges, by token)",
+        &[Undo, Blame],
+    ),
     r("hist.version_stable", "E-HIST-1", &[Versions]),
     r("hist.restore_forward", "E-HIST-2, K-HIST-8", &[Versions]),
     r(
@@ -356,6 +361,7 @@ pub const NEVER: &[Never] = &[
     nv("hist.undo_partial", M, UNDO_NEVER),
     nv("hist.redo", M, UNDO_NEVER),
     nv("hist.undo_own_only", M, UNDO_NEVER),
+    nv("hist.undo_own_only_tokens", M, UNDO_NEVER),
     nv(
         "hist.blame_grain",
         K,
@@ -405,8 +411,10 @@ pub const LATER: &[(&str, &str)] = &[
         "native engine, G2a / G3",
     ),
     (
-        "Person grouping (U3, the daemon-side (g) split) and its case class; \
-         `hist.undo_group_person`, `hist.ctrl_z_unacked`.",
+        "Person grouping (U3) in the oracle's trace test (the kit's closers and the \
+         host-side (g) split are in v0.9.7, `hist.undo_group_person` in \
+         `crates/base/tests/history.rs` with its trace class) and Ctrl+Z with unacked ops; \
+         `hist.ctrl_z_unacked`.",
         "native tab, G3",
     ),
 ];

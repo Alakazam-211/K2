@@ -25,6 +25,13 @@
 //!   has its roots live again, so its revert applies (regression (a)); when another agent
 //!   edits inside a region and undoes it, what it put back has the region's roots, so the
 //!   region's own undo applies (regression (b)).
+//! - `hist.undo_own_only_tokens` (undo spec v1.10, D1: a change is never built from
+//!   someone else's text), on words: a replace over another agent's recent edit inside a
+//!   word rewrites the word, so the other agent's undo conflicts and never changes the
+//!   replacer's text (class (a)); concurrent edits of different words merged by `write
+//!   --base` and a one-word edit in a co-written line leave everyone's own undo clean
+//!   (classes (b), (c)). The rules above run on single letters, one token each, where D1 is
+//!   the identity.
 
 use std::collections::BTreeSet;
 
@@ -37,6 +44,7 @@ pub const RULES: &[&str] = &[
     "hist.undo_partial",
     "hist.redo",
     "hist.undo_own_only",
+    "hist.undo_own_only_tokens",
 ];
 
 /// Run rule `id` on engine `U`. An unknown id panics.
@@ -46,6 +54,7 @@ pub fn run<U: Undo>(id: &str) {
         "hist.undo_partial" => undo_partial::<U>(),
         "hist.redo" => redo::<U>(),
         "hist.undo_own_only" => undo_own_only::<U>(),
+        "hist.undo_own_only_tokens" => undo_own_only_tokens::<U>(),
         _ => panic!("no undo rule {id:?}"),
     }
 }
@@ -499,4 +508,44 @@ pub fn undo_own_only<U: Undo>() {
     );
     own_only(&mut d, A, "undo", |d| d.undo(A, 1));
     assert_eq!(d.texts()[0], "x\n", "{e}");
+}
+
+/// `hist.undo_own_only_tokens` (D1, undo spec v1.10)
+pub fn undo_own_only_tokens<U: Undo>() {
+    use k2_mpc_base::text::lines::Tokens;
+    let e = engine::<U>();
+    // (a) A writes a word and changes one character of it; B replaces the word. A's undo
+    // of its one-character change conflicts: B's replace rewrote the word, A's character
+    // with it, and B's word is never changed by A's undo.
+    let mut d = U::open_tokens(["seed\n", "x\n"], Tokens::Words);
+    edit(&mut d, A, &[(0, vec![ins(5, "p16:3027\n")])]);
+    edit(&mut d, A, &[(0, vec![rep(12, 13, "9")])]);
+    assert_eq!(d.texts()[0], "seed\np16:3029\n", "{e}");
+    edit(&mut d, B, &[(0, vec![rep(6, 12, "14:316")])]);
+    assert_eq!(d.texts()[0], "seed\np14:3169\n", "{e}");
+    assert!(
+        matches!(d.undo(A, 1), Err(UndoRefusal::Conflicts { .. })),
+        "{e}: A's undo of its 9 inside B's word conflicts"
+    );
+    assert_eq!(
+        d.texts()[0],
+        "seed\np14:3169\n",
+        "{e}: B's word is untouched"
+    );
+    // (c) one word changed in a line A and B wrote: each undoes their own, cleanly
+    let mut d = U::open_tokens(["", "x\n"], Tokens::Words);
+    edit(&mut d, A, &[(0, vec![ins(0, "The quick fox")])]);
+    edit(&mut d, B, &[(0, vec![ins(13, " jumps over\n")])]);
+    edit(&mut d, A, &[(0, vec![rep(10, 13, "cat")])]);
+    assert_eq!(d.texts()[0], "The quick cat jumps over\n", "{e}");
+    own_only(&mut d, B, "undo", |d| d.undo(B, 1));
+    assert_eq!(d.texts()[0], "The quick cat", "{e}");
+    // (b) different words, edited by A and B: each undoes their own
+    let mut d = U::open_tokens(["alpha beta gamma\n", "x\n"], Tokens::Words);
+    edit(&mut d, A, &[(0, vec![rep(6, 10, "BETA")])]);
+    edit(&mut d, B, &[(0, vec![rep(11, 16, "GAMMA")])]);
+    own_only(&mut d, A, "undo", |d| d.undo(A, 1));
+    assert_eq!(d.texts()[0], "alpha beta GAMMA\n", "{e}");
+    own_only(&mut d, B, "undo", |d| d.undo(B, 1));
+    assert_eq!(d.texts()[0], "alpha beta gamma\n", "{e}");
 }

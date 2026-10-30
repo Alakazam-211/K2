@@ -45,8 +45,20 @@ pub(crate) struct BlameRun {
 /// was used; the cache is off until reload).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EngineCheck {
-    EditPath { client: ClientId },
-    TextCache { root: &'static str },
+    EditPath {
+        client: ClientId,
+    },
+    TextCache {
+        root: &'static str,
+    },
+    /// The engine's position index (v0.9.7): a shadow check found the marker path and the
+    /// full walk disagree on text `root` (`None`: a nested text) at `index`, from the marker
+    /// at `marker`. The walk's result was used and the text's markers dropped.
+    Position {
+        root: Option<String>,
+        index: u32,
+        marker: u32,
+    },
 }
 
 #[allow(dead_code)] // the trait documents the seam; one implementation today

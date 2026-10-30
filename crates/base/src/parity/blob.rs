@@ -624,6 +624,31 @@ impl BlobAgent<'_> {
                 }
                 v(VerbValue::BlobLog(log))
             }
+            "export" | "export --version" => {
+                let to = arg_after(args, "--to").unwrap_or_else(|| "as-is".to_owned());
+                let c = self.join(Stay::UntilIdle, used)?;
+                let mut file = Vec::new();
+                let copy = if form == "export --version" {
+                    let Some(vid) = arg_after(args, "--version") else {
+                        return Ok(usage("export --version V"));
+                    };
+                    let vid = num(&vid)?;
+                    used.push(Api::FileAt);
+                    s.file_at_to(c, vid, &mut file)?
+                } else {
+                    used.push(Api::FileNow);
+                    s.file_now_to(c, &mut file)?
+                };
+                let name = s.key()?.path;
+                match super::harness::export_through_registry(&name, &file, &to) {
+                    Ok(bytes) => v(VerbValue::Export {
+                        bytes,
+                        version: copy.version,
+                        codec: copy.codec,
+                    }),
+                    Err(e) => Ok(Bound::Refused(e.to_string(), e.exit())),
+                }
+            }
             "show --version" => {
                 let Some(vid) = arg_after(args, "--version") else {
                     return Ok(usage("show --version V"));

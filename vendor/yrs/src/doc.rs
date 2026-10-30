@@ -175,6 +175,84 @@ impl Doc {
         TransactionMut::new_as(self.clone(), lock, None, client)
     }
 
+    /// k2: sets (or, with `None`, clears) the hook the text position index calls when a
+    /// shadow check finds its marker path and the full walk disagree. The walk's result is used
+    /// and the text's markers are dropped either way; the hook is for the embedder's audit log.
+    /// It gets IDs and indices only ([crate::PositionMismatch]), never content. It runs inside
+    /// the transaction that made the lookup, with the doc locked: it must not use this doc.
+    /// Default: no hook.
+    ///
+    /// Takes the doc's write lock, so it waits for (or, on the thread that holds it, deadlocks
+    /// with) an open transaction.
+    pub fn set_position_audit_hook(
+        &self,
+        hook: Option<Box<dyn Fn(&crate::PositionMismatch) + Send + Sync + 'static>>,
+    ) {
+        self.store.write_blocking().position_index.hook = hook;
+    }
+
+    /// k2: how often the text position index checks itself: one marker lookup in `every` also
+    /// runs the full walk from the text's start and compares (the **shadow check**; a mismatch
+    /// uses the walk, drops the text's markers and calls the audit hook). The sample is
+    /// deterministic: the `every`-th, `2 × every`-th, ... marker lookup of this doc. A shadowed
+    /// lookup costs one old-style walk on top of the marker path, so the default, 1000, adds
+    /// about a thousandth of the old lookup cost; 1 checks every lookup (for tests); 0 never.
+    pub fn set_position_shadow_rate(&self, every: u32) {
+        self.store.write_blocking().position_index.shadow_every = every;
+    }
+
+    /// k2: turns the text position index on (the default) or off. Off, every lookup walks from
+    /// the text's start, exactly as upstream does, and no markers are kept.
+    pub fn set_position_index(&self, enabled: bool) {
+        let mut store = self.store.write_blocking();
+        store.position_index.enabled = enabled;
+    }
+
+    /// k2: counters of the text position index: lookups, marker hits, walks, shadow checks,
+    /// mismatches.
+    pub fn position_index_stats(&self) -> crate::PositionIndexStats {
+        self.store.read_blocking().position_index.stats
+    }
+
+    /// k2, test-only: plants a bug in this doc's position index, to prove the tests catch it.
+    /// Exists only with the `planted-position-bugs` feature, which no build should enable.
+    #[cfg(feature = "planted-position-bugs")]
+    #[doc(hidden)]
+    pub fn plant_position_bug(&self, bug: Option<crate::PlantedPositionBug>) {
+        self.store.write_blocking().position_index.planted = bug;
+    }
+
+    /// k2, test-only: the oracle for the touched-clients path. On, this doc's transactions build
+    /// their full before and after state vectors wherever upstream did, as upstream did (work
+    /// proportional to every client the doc has seen); off (the default), they work from the
+    /// clients the transaction touched. Both give the same results; the differential test in
+    /// `tests/touched_clients.rs` runs twin docs, one each way, and compares.
+    ///
+    /// Takes the doc's write lock, so it waits for (or, on the thread that holds it, deadlocks
+    /// with) an open transaction.
+    #[doc(hidden)]
+    pub fn set_full_state_vectors(&self, on: bool) {
+        self.store.write_blocking().full_state_vectors = on;
+    }
+
+    /// k2, test-only: plants a bug in this doc's touched-clients record (a touched client's
+    /// starting clock read just after its first block instead of before), to prove the tests
+    /// catch it. Exists only with the `planted-touched-bug` feature, which no build should enable.
+    #[cfg(feature = "planted-touched-bug")]
+    #[doc(hidden)]
+    pub fn plant_touched_bug(&self, on: bool) {
+        self.store.write_blocking().planted_touched_bug = on;
+    }
+
+    /// k2, test-only (hardening): plants a bug in this doc's transaction updates, to prove the
+    /// tests catch it. Exists only with the `planted-relay-bug` feature, which no build should
+    /// enable.
+    #[cfg(feature = "planted-relay-bug")]
+    #[doc(hidden)]
+    pub fn plant_relay_bug(&self, on: bool) {
+        self.store.write_blocking().planted_relay_bug = on;
+    }
+
     /// A unique client identifier, that's also a unique identifier of current document replica
     /// and it's subdocuments.
     ///

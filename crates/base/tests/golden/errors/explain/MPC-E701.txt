@@ -1,0 +1,21 @@
+MPC-E701 leased (tier 0 and blobs)
+exit:     5
+message:  leased by {name} ({holder}) until {expires_ms}
+next:     Someone else holds the file's lease (a lock while they change it). Nothing was written. Retry after it expires (details.expires_ms, host clock), or ask them to release it; only an owner can break it (lease --break).
+rule:     K-T0-2
+verbs:    lease; write; restore
+status:   live
+--- json
+{
+  "id": "MPC-E701",
+  "name": "leased",
+  "area": "tier 0 and blobs",
+  "exit": 5,
+  "message": "leased by {name} ({holder}) until {expires_ms}",
+  "next": "Someone else holds the file's lease (a lock while they change it). Nothing was written. Retry after it expires (details.expires_ms, host clock), or ask them to release it; only an owner can break it (lease --break).",
+  "rule": "K-T0-2",
+  "verbs": ["lease", "write", "restore"],
+  "returned_by": ["write", "restore", "lease"],
+  "status": "live",
+  "since_or_until": null
+}

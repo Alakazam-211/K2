@@ -1,0 +1,21 @@
+MPC-E903 claims_doc_cap (limits)
+exit:     2
+message:  bad claim: this doc has {count} live claims (the most)
+next:     This doc has as many live claims as it allows. Wait for some to end (activity and who show them), or edit without a claim.
+rule:     A13 (claims_max)
+verbs:    claim
+status:   live
+--- json
+{
+  "id": "MPC-E903",
+  "name": "claims_doc_cap",
+  "area": "limits",
+  "exit": 2,
+  "message": "bad claim: this doc has {count} live claims (the most)",
+  "next": "This doc has as many live claims as it allows. Wait for some to end (activity and who show them), or edit without a claim.",
+  "rule": "A13 (claims_max)",
+  "verbs": ["claim"],
+  "returned_by": ["claim"],
+  "status": "live",
+  "since_or_until": null
+}

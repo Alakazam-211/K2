@@ -8,12 +8,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+mod at_base;
 mod blame;
 mod claims;
+mod group;
 mod history;
 mod purge;
 mod tier0_history;
 
+pub use at_base::EditAtBase;
 #[cfg(feature = "conformance")]
 pub use blame::CharBlame;
 pub use blame::{Blame, BlameLine};
@@ -25,6 +28,7 @@ use super::carry::RevertIndex;
 use super::config::Config;
 use super::disk::{self, DiskCheck, DiskState, FlushOutcome, Probe, ReadFile};
 use super::error::{EditWithError, Result, SessionError};
+use super::handles::Handles;
 use super::host::{Action, AuditEvent, Host, LeaveReason, Need, PurgedScope, Rights};
 use super::pack::{Declined, Pack, PackError};
 use super::participant::{
@@ -35,6 +39,7 @@ use super::position::{self, At, Bias, Cursor, LineRange};
 use super::presence::{self, Presence};
 use super::prov::{coalesce_with, ElemId, Ids, Inserted, Prov};
 use super::ratelimit::Bucket;
+use super::roster::{self, RosterEvent, RosterHub, Who};
 use super::summary;
 use super::undo::{self, Batch, ConflictRegion, Mode, Plan, Region};
 use crate::doc::{ClientId, Doc, DocError, Edit, Neutral, MAX_CLIENT_ID};
@@ -56,11 +61,62 @@ use crate::text::merge::{self, Conflict, Merge};
 pub struct Joined {
     /// The connection: pass it to every call.
     pub conn: ConnId,
-    /// This connection's client ID in this doc (each connection has its own; a new
-    /// connection gets a fresh one). Every change made through it is attributed to it, and
-    /// the store maps it to the pid.
+    /// This connection's client ID in this doc. No two present connections share one. A
+    /// new connection gets a fresh one, except an agent's, which takes back a client ID it
+    /// used before when no present connection holds it (v0.9.7,
+    /// [`Config::reuse_agent_clients`]). Every change made through it is attributed to it,
+    /// and the store maps it to the pid.
     pub client: ClientId,
     pub version: Seq,
+}
+
+/// A file's bytes at a version, for exports ([`Session::file_at`], [`Session::file_now`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FileBytes {
+    /// The file's bytes: the pack's rendering, as a write-back writes it.
+    pub bytes: Vec<u8>,
+    /// The doc version they are (the number `log` and `show` give): for a stored version, the
+    /// log position it reflects. Name an export after this, never an internal version id.
+    pub version: Seq,
+    /// How the codec settings (line endings, BOM, final newline) were applied.
+    pub codec: FileCodec,
+}
+
+/// What [`Session::file_at_to`] / [`Session::file_now_to`] and
+/// [`super::BlobSession::file_at_to`] / [`super::BlobSession::file_now_to`] copied.
+///
+/// **Only an `Ok` means the copy is good.** On an error the caller must discard everything
+/// already written to the writer: for a tier-0 file the bytes are verified as they stream,
+/// and the check (the blob's HMAC and size) completes only at the clean end, so a damaged
+/// blob's bytes may have reached the writer before the error. Copy to a temporary file and
+/// rename it into place only after `Ok`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FileCopy {
+    /// The version copied: a live doc's doc version ([`FileBytes::version`]); a tier-0 file's
+    /// version id (the number its `log` shows).
+    pub version: u64,
+    /// Bytes written.
+    pub bytes: u64,
+    /// How the codec was applied (tier 0: `Exact`, the stored bytes themselves).
+    pub codec: FileCodec,
+}
+
+/// How [`FileBytes`] applied the codec settings. Versions store content only, not the
+/// codec settings in effect then, so a past version is rendered with today's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FileCodec {
+    /// The current doc, rendered as the write-back writes it: exact.
+    Exact,
+    /// Rendered with today's line endings, BOM and final newline: exact unless an outside
+    /// save changed them since that version.
+    Current,
+    /// Rendered with today's settings, and the doc's log shows a settings change since that
+    /// version: the bytes differ from the file then in those settings (warn). Not returned
+    /// by this build (it records no settings changes in the log).
+    ChangedSince,
 }
 
 /// Returned by [`Session::read`].
@@ -111,9 +167,10 @@ impl WriteOutcome {
     }
 }
 
-/// The host's choices for one [`Session::edit_with_options`] call: the claim policy and the
-/// caller's version guard, both checked under the session lock (as
-/// [`crate::tools::ToolOptions`] and `--if-version` are for `run_tool_with`).
+/// The host's choices for one [`Session::edit_with_options`] (or
+/// [`Session::edit_at_base`]) call: the claim policy and the caller's version guard, both
+/// checked under the session lock (as [`crate::tools::ToolOptions`] and `--if-version` are
+/// for `run_tool_with`), and a person's undo group token ([`EditOptions::group`]).
 /// `#[non_exhaustive]`: start from [`EditOptions::default`] (or `new`) and use the setters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -122,6 +179,8 @@ pub struct EditOptions {
     pub policy: ClaimPolicy,
     /// Apply only if the doc is still at this version (default `None`: no guard).
     pub if_version: Option<Seq>,
+    /// The undo group token's hash ([`EditOptions::group`]; default `None`: its own step).
+    pub(crate) group: Option<u64>,
 }
 
 impl EditOptions {
@@ -139,6 +198,32 @@ impl EditOptions {
     /// Apply only if the doc is at version `v` ([`SessionError::Stale`] otherwise).
     pub fn if_version(mut self, v: Seq) -> Self {
         self.if_version = Some(v);
+        self
+    }
+
+    /// **Undo grouping** (undo spec U3, K4): consecutive edits from one connection with the
+    /// same `token` merge into **one undo step**. The editor proposes the token (the JS
+    /// client sends one per edit, a new one when the kind of edit changes); the session
+    /// closes the group, so the next edit starts a new step, on:
+    /// - **idle**: the group's last edit is [`Config::undo_group_idle_ms`] old or more on the
+    ///   host clock (U3 (a));
+    /// - a **non-contiguous** edit: one not overlapping or touching the group's span, or of
+    ///   more than one hunk (U3 (b));
+    /// - a **word boundary**: a space, tab or punctuation typed after a word character
+    ///   starts the next step (U3 (c));
+    /// - a **newline** typed: a step of its own (U3 (d));
+    /// - **another token**, an edit without one, or any other change by the same person
+    ///   (another connection, a verb, a write, a revert), and any **undo or redo** by them
+    ///   (U3 (e), (f));
+    /// - **anyone else's change** landing inside the group's span or touching it, in the
+    ///   order the session applies changes (U3 (g)).
+    ///
+    /// Agents never group (one verb = one step): the token is ignored for them.
+    pub fn group(mut self, token: &str) -> Self {
+        use std::hash::{DefaultHasher, Hash};
+        let mut h = DefaultHasher::new();
+        token.hash(&mut h);
+        self.group = Some(h.finish());
         self
     }
 }
@@ -412,6 +497,19 @@ struct History {
     cleared: bool,
     bucket: Option<Bucket>,
     last_read: Option<Seq>,
+    /// The person's open undo group (U3, K4): the top of `undo` while edits may still join
+    /// it. Any other push, and any undo or redo, closes it.
+    open: Option<OpenGroup>,
+}
+
+/// An open undo group (U3, K4): whose edits may join it, and its newest change.
+struct OpenGroup {
+    conn: ConnId,
+    token: u64,
+    /// The host time of its last edit (U3 (a)).
+    last_ms: u64,
+    /// Its batch's change (the top of the undo stack while it is open).
+    seq: Seq,
 }
 
 impl History {
@@ -447,6 +545,13 @@ struct State {
     state_bytes: u64,
     members: Vec<Member>,
     joins: u64,
+    /// Each client ID's owner (pid), from the store's client table: read in one place
+    /// ([`Self::owners`]) for D1 (whose text a change touches, v0.9.7) and for agent client-ID
+    /// reuse ([`Config::reuse_agent_clients`], v0.9.7). Built on first need, kept as clients
+    /// join; `None` after a purge, which renames owners.
+    owners: Option<HashMap<ClientId, String>>,
+    /// Client IDs a participant with its own replica held in this load: never reused.
+    replica_clients: std::collections::HashSet<ClientId>,
     hist: HashMap<String, History>,
     /// The version the session loaded (or reloaded) at: undo history before it was lost.
     loaded_seq: Seq,
@@ -461,11 +566,24 @@ struct State {
     /// restored elements by root. Built from the engine and the store on first need (`None`:
     /// not built, or dropped by a path that changed the text without keeping it exact).
     prov: Option<Prov>,
+    /// Blames served since load: one in [`Config::blame_check_every`] is checked against a
+    /// rebuild of `prov` (v0.9.5).
+    blames: u64,
+    /// Of those, the ones sampled for the check.
+    blame_checks: u64,
     read_bases: VecDeque<ReadBase>,
     read_base_bytes: usize,
+    /// Outside saves ingested, for the sampled identity check ([`Config::edit_check_every`]).
+    outside_saves: u64,
     /// Recent change authors, for "contributors since last read".
     authors: VecDeque<(Seq, String)>,
-    subs: Vec<(ConnId, SyncSender<ChangeEvent>)>,
+    /// Change subscribers: the connection, an App viewer's pid (its events go through its
+    /// handles), the queue.
+    subs: Vec<(ConnId, Option<String>, SyncSender<ChangeEvent>)>,
+    /// Every App viewer's handles in this doc (K5).
+    handles: Handles,
+    /// Roster subscribers and what they were last told ([`Session::subscribe_roster`]).
+    roster: RosterHub,
     disk: Option<Disk>,
     /// The doc's hash key (in the store; a purge replaces it): every file hash is keyed by
     /// it, so none is a plain content hash, and a purge makes the old ones meaningless.
@@ -474,9 +592,45 @@ struct State {
     aware: Aware,
     /// The verb the change being committed came from (`sed -i`), for the activity ring.
     verb_hint: Option<String>,
+    /// The undo group token of the edit being committed ([`EditOptions::group`]).
+    group_hint: Option<u64>,
 }
 
 const AUTHORS_KEPT: usize = 1024;
+
+/// `hunks` (on `text`) in the form the change at element identity takes: touching hunks
+/// joined (an element kept between two changes is what separates them), and no hunk that
+/// changes nothing, whether empty or a replace of text by the same text (which would only
+/// delete elements and type them again). The outside save's merge is made canonical before
+/// the engine applies it (v0.9.7), so the hunks it is handed are exactly its change at
+/// identity.
+fn canonical_hunks(text: &str, hunks: &[Hunk]) -> Vec<Hunk> {
+    let mut out: Vec<Hunk> = Vec::with_capacity(hunks.len());
+    for h in hunks {
+        if h.start == h.end && h.insert.is_empty() {
+            continue;
+        }
+        match out.last_mut() {
+            Some(last) if last.end == h.start => {
+                last.end = h.end;
+                last.insert.push_str(&h.insert);
+            }
+            _ => out.push(h.clone()),
+        }
+    }
+    // joining first: a deletion and the same text typed again beside it are one such hunk
+    out.retain(|h| text.get(h.start..h.end) != Some(h.insert.as_str()));
+    out
+}
+
+/// A watcher's rights (K11): read at most, whatever the host grants.
+fn watched(rights: Rights, watcher: bool) -> Rights {
+    match (watcher, rights.read) {
+        (false, _) => rights,
+        (true, true) => Rights::read_only(),
+        (true, false) => Rights::none(),
+    }
+}
 /// Hashes of the kit's own recent writes kept for echo suppression (and at most
 /// [`Config::own_write_ttl_ms`] old).
 const OWN_WRITES_KEPT: usize = 8;
@@ -514,7 +668,24 @@ struct Disk {
     last_change_ms: u64,
     last_check_ms: u64,
     external_client: Option<ClientId>,
+    /// Every update the live doc took since `replica` was last the live doc's state, in
+    /// order (v0.9.7): the next write-back applies them to the replica instead of reloading
+    /// it from a whole encode of the doc. `None`: not known (after a load that left the
+    /// replica behind, a recovery, a purge); the next write-back reloads it as before.
+    /// Holds text: a purge clears it.
+    catch_up: Option<Vec<Vec<u8>>>,
+    /// Write-backs so far, and outside saves that made the replica the doc (the sampled
+    /// check's count).
+    writebacks: u64,
+    /// Times the replica was brought forward by the catch-up list and passed the check (no
+    /// reload), for the tests.
+    caught_up: u64,
 }
+
+/// Tests only: (the live doc's state, the disk replica's, whether it is in step, the stored
+/// synced state).
+#[cfg(test)]
+pub(crate) type WritebackState = (Vec<u8>, Option<Vec<u8>>, bool, Option<Vec<u8>>);
 
 /// One loaded doc: its live text, the participants in it, their carets, undo history and
 /// rate limits, and the subscribers to its changes. Thread-safe (`Send + Sync`): every call
@@ -566,6 +737,72 @@ pub(super) fn fresh_client(
             return Ok(c);
         }
     }
+}
+
+/// D1 for one root (v1.10): `hunks` widened to the tokens they touch, keeping inside only
+/// the characters whose provenance root `pid` wrote ([`crate::text::lines::authored_hunks`]).
+/// Ownership is read off the provenance map over the lines the hunks touch (a token never
+/// spans a line break); an unknown client or the import's is someone else's. `extra`: live
+/// ranges the test-only `rewrite-merged-ranges` mutant also takes.
+#[allow(clippy::too_many_arguments)]
+fn d1_hunks(
+    text: &str,
+    hunks: &[Hunk],
+    tokens: crate::text::lines::Tokens,
+    prov: &Prov,
+    root: &str,
+    owners: &HashMap<ClientId, String>,
+    pid: &str,
+    extra: &[(usize, usize)],
+) -> Vec<Hunk> {
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::d1_mutant() == crate::differential::D1Mutant::ReuseForeign {
+        return hunks.to_vec();
+    }
+    let mut hs: Vec<Hunk> = hunks.to_vec();
+    for &(lo, hi) in extra {
+        if lo < hi && hi <= text.len() && !hs.iter().any(|h| h.start < hi && lo < h.end) {
+            hs.push(Hunk {
+                start: lo,
+                end: hi,
+                insert: text[lo..hi].to_owned(),
+            });
+        }
+    }
+    hs.sort_by_key(|h| (h.start, h.end));
+    let hs = diff::coalesce(hs);
+    let (Some(first), Some(last)) = (hs.first(), hs.last()) else {
+        return hs;
+    };
+    // the lines the hunks touch: no token reaches past them
+    let lo = text[..first.start].rfind('\n').map_or(0, |k| k + 1);
+    let hi = text[last.end..]
+        .find('\n')
+        .map_or(text.len(), |k| last.end + k + 1);
+    let mut runs: Vec<(usize, usize, bool)> = Vec::new();
+    let mut at = lo;
+    for r in prov.query(root, text, lo, hi) {
+        let owner = owners.get(&r.root.unwrap_or(r.id).client);
+        let end = at + r.bytes as usize;
+        runs.push((at, end, owner.is_some_and(|o| o == pid)));
+        at = end;
+    }
+    let owned = |b: usize| -> bool {
+        let k = runs.partition_point(|r| r.1 <= b);
+        runs.get(k).is_some_and(|r| r.0 <= b && r.2)
+    };
+    crate::text::lines::authored_hunks(text, &hs, tokens, &owned)
+}
+
+/// The test-only `rewrite-merged-ranges` mutant's extra ranges, set by `write --base`.
+#[cfg(any(test, feature = "differential"))]
+fn take_d1_extra() -> Vec<(usize, usize)> {
+    crate::differential::take_d1_extra()
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+fn take_d1_extra() -> Vec<(usize, usize)> {
+    Vec::new()
 }
 
 fn texts_of(doc: &Doc, schema: &Schema) -> Result<Vec<(&'static str, String)>> {
@@ -673,6 +910,8 @@ impl Session {
                 state_bytes,
                 members: Vec::new(),
                 joins: 0,
+                owners: None,
+                replica_clients: std::collections::HashSet::new(),
                 hist: HashMap::new(),
                 loaded_seq: loaded_version,
                 last_version_seq,
@@ -680,14 +919,20 @@ impl Session {
                 next_history_ms: now,
                 reverts: None,
                 prov: None,
+                blames: 0,
+                blame_checks: 0,
                 read_bases: VecDeque::new(),
                 read_base_bytes: 0,
                 authors,
+                outside_saves: 0,
                 subs: Vec::new(),
+                handles: Handles::default(),
+                roster: RosterHub::default(),
                 disk: None,
                 hash_key,
                 aware: Aware::default(),
                 verb_hint: None,
+                group_hint: None,
             }),
         })
     }
@@ -711,6 +956,8 @@ impl Session {
         let loaded = store.load(doc_id)?;
         let mut doc = Doc::from_store(schema, &loaded)?;
         doc.set_edit_check_every(config.edit_check_every);
+        doc.set_edit_check_scale(config.edit_check_scale_units);
+        doc.set_position_check_every(config.position_check_every);
         let snap_seq = loaded.snapshot.as_ref().map_or(0, |(s, _)| *s);
         let version = loaded.updates.last().map_or(snap_seq, |(s, _)| *s);
         let log_bytes: u64 = loaded
@@ -756,6 +1003,8 @@ impl Session {
         let ordered = ordered_roots(&schema, content.roots)?;
         let mut doc = Doc::new(schema)?;
         doc.set_edit_check_every(config.edit_check_every);
+        doc.set_edit_check_scale(config.edit_check_scale_units);
+        doc.set_position_check_every(config.position_check_every);
         let client = loop {
             let c = random_client();
             if c > 1 {
@@ -852,6 +1101,7 @@ impl Session {
                 end: doc.clock_of(client),
             }),
             provenance: Vec::new(),
+            authored: None,
         };
         let (doc_id, seq, _) = store.create_imported_synced(
             &meta,
@@ -913,6 +1163,8 @@ impl Session {
     /// A doc this session edits through, with the configured runtime check.
     fn checked(&self, mut doc: Doc) -> Doc {
         doc.set_edit_check_every(self.config.edit_check_every);
+        doc.set_edit_check_scale(self.config.edit_check_scale_units);
+        doc.set_position_check_every(self.config.position_check_every);
         doc
     }
 
@@ -935,6 +1187,17 @@ impl Session {
                     root: root.to_owned(),
                     change,
                 },
+                crate::engine::EngineCheck::Position {
+                    root,
+                    index,
+                    marker,
+                } => AuditEvent::PositionIndexMismatch {
+                    key: st.key.clone(),
+                    root,
+                    index,
+                    marker,
+                    change,
+                },
             });
         }
     }
@@ -948,8 +1211,18 @@ impl Session {
 
     fn remove_member(&self, st: &mut State, i: usize, reason: LeaveReason) {
         let m = st.members.remove(i);
-        st.subs.retain(|(c, _)| *c != m.conn);
+        st.subs.retain(|(c, _, _)| *c != m.conn);
+        st.roster.drop_conn(m.conn);
         self.conn_gone(st, m.pres.conn);
+        if !m.pres.watcher && !st.members.iter().any(|o| o.p.pid == m.pres.p.pid) {
+            st.roster.record(
+                RosterEvent::Left {
+                    who: Who::of(&m.pres.p.pid),
+                    reason,
+                },
+                self.config.roster_queue,
+            );
+        }
         self.emit(AuditEvent::Left {
             key: st.key.clone(),
             pid: m.pres.p.pid,
@@ -978,13 +1251,27 @@ impl Session {
         action: Action,
         now: u64,
     ) -> Result<usize> {
+        self.roster_flush(st, now, false);
         let i = Self::member(st, conn)?;
-        let rights = self.host.rights(&st.members[i].p, &st.key);
+        let watcher = st.members[i].watcher;
+        let rights = watched(self.host.rights(&st.members[i].p, &st.key), watcher);
         let pid = st.members[i].p.pid.clone();
         for m in st.members.iter_mut().filter(|m| m.p.pid == pid) {
             m.rights = rights;
         }
         if let Some(n) = presence::refusal(rights, need) {
+            if watcher && n != Need::Read {
+                // past participants_max: read-only until the host promotes it (K11)
+                self.emit(AuditEvent::Refused {
+                    key: st.key.clone(),
+                    pid: pid.clone(),
+                    action,
+                    need: n,
+                });
+                return Err(SessionError::Watching {
+                    max: self.config.participants_max,
+                });
+            }
             self.emit(AuditEvent::Refused {
                 key: st.key.clone(),
                 pid: pid.clone(),
@@ -1067,7 +1354,7 @@ impl Session {
             return Err(SessionError::Forbidden { need: Need::Read });
         }
         for m in st.members.iter_mut().filter(|m| m.p.pid == p.pid) {
-            m.rights = rights;
+            m.rights = watched(rights, m.watcher);
         }
         if shared {
             if let Some(m) = st.members.iter_mut().find(|m| m.shares_with(&p)) {
@@ -1083,16 +1370,35 @@ impl Session {
                 });
             }
         }
-        let client = {
-            let store = self.store(st)?;
-            let c = fresh_client(store, self.doc_id, |c| {
-                st.members.iter().any(|m| m.client == c)
-            })?;
-            store.set_client(self.doc_id, c, &p.pid)?;
-            c
+        let client = match self.reusable_client(st, &p)? {
+            Some(c) => c,
+            None => {
+                let store = self.store(st)?;
+                let c = fresh_client(store, self.doc_id, |c| {
+                    st.members.iter().any(|m| m.client == c)
+                })?;
+                store.set_client(self.doc_id, c, &p.pid)?;
+                if p.own_replica {
+                    st.replica_clients.insert(c);
+                }
+                if let Some(o) = st.owners.as_mut() {
+                    o.insert(c, p.pid.clone());
+                }
+                c
+            }
         };
         st.joins += 1;
-        let pres = Presence::new(p, shared, rights, stay, st.joins, now);
+        // K11: a new pid past participants_max watches (read-only, no presence detail); a pid
+        // already here keeps what it is
+        let here = |w: bool| {
+            st.members
+                .iter()
+                .any(|m| m.p.pid == p.pid && m.watcher == w)
+        };
+        let watcher = here(true)
+            || (!here(false) && Self::participant_count(st) >= self.config.participants_max);
+        let mut pres = Presence::new(p, shared, watched(rights, watcher), stay, st.joins, now);
+        pres.watcher = watcher;
         let conn = pres.conn;
         self.emit(AuditEvent::Joined {
             key: st.key.clone(),
@@ -1104,6 +1410,16 @@ impl Session {
             // a stat check on join (errors are reported as events)
             let _ = self.disk_check(st, now, false);
         }
+        if !watcher && !st.members.iter().any(|m| m.p.pid == pres.p.pid) {
+            st.roster.record(
+                RosterEvent::Joined {
+                    who: Who::of(&pres.p.pid),
+                    participant: pres.p.clone(),
+                    rights,
+                },
+                self.config.roster_queue,
+            );
+        }
         st.members.push(Member {
             pres,
             client,
@@ -1112,11 +1428,32 @@ impl Session {
             view_ms: None,
             edited: None,
         });
+        self.roster_flush(st, now, false);
         Ok(Joined {
             conn,
             client,
             version: st.version,
         })
+    }
+
+    /// A client ID agent `p` used before in this doc that no present connection holds
+    /// (v0.9.7, [`Config::reuse_agent_clients`]): the lowest such, or `None` (mint one). The
+    /// doc holds everything that client wrote (only this doc's sessions ever write as it,
+    /// one connection at a time), so its edits continue its history: the one-writer
+    /// invariant holds as for a fresh ID.
+    fn reusable_client(&self, st: &mut State, p: &Participant) -> Result<Option<ClientId>> {
+        if !self.config.reuse_agent_clients || p.own_replica || p.kind != ParticipantKind::Agent {
+            return Ok(None);
+        }
+        // the owners are read in one place (`owners`, shared with D1)
+        self.owners(st)?;
+        let owners = st.owners.as_ref().expect("built above");
+        let held = |c: &ClientId| st.members.iter().any(|m| m.client == *c);
+        Ok(owners
+            .iter()
+            .filter(|(c, owner)| **owner == p.pid && !st.replica_clients.contains(c) && !held(c))
+            .map(|(c, _)| *c)
+            .min())
     }
 
     /// Close one connection now. Returns false when it wasn't present. The pid stays present
@@ -1164,7 +1501,9 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::View, now)?;
-        st.members[i].set_visible(visible, now);
+        if !st.members[i].watcher {
+            st.members[i].set_visible(visible, now);
+        }
         Ok(())
     }
 
@@ -1210,8 +1549,11 @@ impl Session {
             text,
             position::line_start(text, last).expect("line checked"),
         );
-        st.members[i].view = Some((range.root.clone(), s, e));
-        st.members[i].view_ms = Some(now);
+        // a watcher (K11) shows no presence: its view is not kept
+        if !st.members[i].watcher {
+            st.members[i].view = Some((range.root.clone(), s, e));
+            st.members[i].view_ms = Some(now);
+        }
         Ok(LineRange { last, ..range })
     }
 
@@ -1220,8 +1562,25 @@ impl Session {
     pub fn roster(&self, conn: ConnId) -> Result<Vec<RosterEntry>> {
         let now = self.now();
         let mut st = self.lock()?;
-        self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
         self.expire_claims(&mut st, now);
+        let rows: Vec<RosterEntry> = self
+            .roster_rows(&st, now)
+            .into_iter()
+            .map(|r| r.entry)
+            .collect();
+        Ok(match Self::app_viewer(&st, i) {
+            Some(v) => {
+                let mut lens = st.handles.lens(&v);
+                rows.into_iter().map(|e| lens.entry(e)).collect()
+            }
+            None => rows,
+        })
+    }
+
+    /// The roster rows from presence now (claims already expired), in roster order, each with
+    /// its participant's rights: what [`Session::roster`] returns and the roster push reads.
+    fn roster_rows(&self, st: &State, now: u64) -> Vec<roster::Row> {
         let text = |root: &str| {
             st.texts
                 .iter()
@@ -1260,7 +1619,127 @@ impl Session {
                 .filter_map(|c| Some(c.info(text(&c.root)?, now)))
                 .collect();
         }
-        Ok(presence::sort_roster(rows))
+        let rows = rows
+            .into_iter()
+            .map(|(conns, entry, joined)| (conns[0].rights, entry, joined))
+            .collect();
+        presence::sort_roster_with(rows)
+            .into_iter()
+            .map(|(rights, entry)| roster::Row { entry, rights })
+            .collect()
+    }
+
+    /// Push this doc's roster to `conn` from now on: a full [`RosterEvent::Snapshot`] first,
+    /// then deltas (joins, leaves, rights, role, away and back, carets, claim starts and ends,
+    /// heads-up notes), coalesced over [`Config::roster_interval_ms`]. Needs read; closes when
+    /// the connection leaves, or its participant is kicked or loses read; drop the receiver
+    /// to unsubscribe.
+    ///
+    /// Deliveries happen when the host drives them: [`SessionManager::flush_rosters`] (or
+    /// `tick`, or [`Session::flush_roster`]) at least every `roster_interval_ms`; any call on
+    /// the doc also delivers what is due. A receiver that falls [`Config::roster_queue`]
+    /// events behind gets a fresh `Snapshot` once it has room, instead of what it missed.
+    ///
+    /// [`SessionManager::flush_rosters`]: super::SessionManager::flush_rosters
+    pub fn subscribe_roster(&self, conn: ConnId) -> Result<Receiver<RosterEvent>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
+        let app = Self::app_viewer(&st, i);
+        // the others get what is pending first, so the new subscriber starts where they are
+        self.roster_flush(&mut st, now, true);
+        self.expire_claims(&mut st, now);
+        let rows = self.roster_rows(&st, now);
+        let (tx, rx) = sync_channel(self.config.roster_queue.max(1));
+        let version = st.version;
+        let watching = Self::watching_count(&st);
+        let st = &mut *st;
+        st.roster
+            .subscribe(conn, app, tx, now, version, rows, watching, &mut st.handles);
+        Ok(rx)
+    }
+
+    /// Deliver this doc's roster events if [`Config::roster_interval_ms`] has passed since
+    /// the last delivery ([`SessionManager::flush_rosters`] does this for every loaded doc).
+    ///
+    /// [`SessionManager::flush_rosters`]: super::SessionManager::flush_rosters
+    pub fn flush_roster(&self) -> Result<()> {
+        // the host's clock, not `now()`: a delivery is not a use (an idle doc still unloads)
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        self.roster_flush(&mut st, now, false);
+        Ok(())
+    }
+
+    /// Whether this connection is in this doc.
+    pub(crate) fn has_conn(&self, conn: ConnId) -> bool {
+        self.lock()
+            .is_ok_and(|st| st.members.iter().any(|m| m.conn == conn))
+    }
+
+    /// Deliver the roster's pending events and presence changes when due (or now, `force`).
+    fn roster_flush(&self, st: &mut State, now: u64, force: bool) {
+        if st.roster.is_empty() || !(force || st.roster.due(now, self.config.roster_interval_ms)) {
+            return;
+        }
+        self.expire_claims(st, now);
+        let rows = self.roster_rows(st, now);
+        let version = st.version;
+        let watching = Self::watching_count(st);
+        st.roster
+            .flush(now, version, rows, watching, &mut st.handles);
+    }
+
+    /// Let the earliest watcher in (K11), when a slot is free: a participant left since it
+    /// joined past [`Config::participants_max`]. **Only on the host's say-so**: a slot that
+    /// frees never promotes anyone by itself. Its connections get presence, and their rights
+    /// are the host's again from the next call. Returns the pid let in, or `None` (no slot
+    /// free, or nobody watching).
+    pub fn promote_watcher(&self) -> Result<Option<String>> {
+        let now = self.host.now_ms();
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        if Self::participant_count(st) >= self.config.participants_max {
+            return Ok(None);
+        }
+        // members are in join order: the first watcher joined earliest
+        let Some(pid) = st
+            .members
+            .iter()
+            .find(|m| m.watcher)
+            .map(|m| m.p.pid.clone())
+        else {
+            return Ok(None);
+        };
+        let k = st
+            .members
+            .iter()
+            .position(|m| m.p.pid == pid)
+            .expect("found");
+        let rights = self.host.rights(&st.members[k].p, &st.key);
+        for m in st.members.iter_mut().filter(|m| m.p.pid == pid) {
+            m.watcher = false;
+            m.rights = rights;
+        }
+        st.roster.record(
+            RosterEvent::Joined {
+                who: Who::of(&pid),
+                participant: st.members[k].p.clone(),
+                rights,
+            },
+            self.config.roster_queue,
+        );
+        self.roster_flush(st, now, false);
+        Ok(Some(pid))
+    }
+
+    /// How many participants are watching past [`Config::participants_max`] (K11): the
+    /// roster's `watching: N`. Needs read.
+    pub fn watching(&self, conn: ConnId) -> Result<usize> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
+        Ok(Self::watching_count(&st))
     }
 
     /// Close connections without a hold that have been idle past [`Config::idle_leave_ms`],
@@ -1286,13 +1765,16 @@ impl Session {
                 i += 1;
             }
         }
-        // forget full rate buckets of absent participants with no history
+        self.roster_flush(&mut st, now, false);
+        // forget full rate buckets of absent participants with no history; a purge notice
+        // still owed is history (U19: said on the holder's next undo or redo, present or not)
         let c = &self.config;
         let present: Vec<String> = st.members.iter().map(|m| m.p.pid.clone()).collect();
         st.hist.retain(|pid, h| {
             present.contains(pid)
                 || !h.undo.is_empty()
                 || !h.redo.is_empty()
+                || h.cleared
                 || h.last_read.is_some()
                 || !h
                     .bucket
@@ -1334,6 +1816,8 @@ impl Session {
                 i += 1;
             }
         }
+        let now = self.host.now_ms();
+        self.roster_flush(st, now, false);
         Ok(out)
     }
 
@@ -1346,9 +1830,10 @@ impl Session {
     pub fn subscribe(&self, conn: ConnId) -> Result<Receiver<ChangeEvent>> {
         let now = self.now();
         let mut st = self.lock()?;
-        self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::Subscribe, now)?;
         let (tx, rx) = sync_channel(self.config.subscriber_queue.max(1));
-        st.subs.push((conn, tx));
+        let app = Self::app_viewer(&st, i);
+        st.subs.push((conn, app, tx));
         Ok(rx)
     }
 
@@ -1360,6 +1845,17 @@ impl Session {
     ///
     /// "Contributors since last read" is per participant (pid), across their connections.
     pub fn read(&self, conn: ConnId) -> Result<ReadResult> {
+        let out = self.read_inner(conn);
+        self.for_viewer(conn, out, |l, mut r| {
+            r.contributors_since_last_read = std::mem::take(&mut r.contributors_since_last_read)
+                .into_iter()
+                .map(|p| l.pid(&p))
+                .collect();
+            r
+        })
+    }
+
+    fn read_inner(&self, conn: ConnId) -> Result<ReadResult> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
@@ -1566,6 +2062,7 @@ impl Session {
         edits: Vec<Edit>,
         if_version: Option<Seq>,
     ) -> Result<EditResult> {
+        prof!("session.edit");
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
@@ -1604,7 +2101,7 @@ impl Session {
         policy: ClaimPolicy,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_with_impl(conn, root, policy, None, None, f)
+        self.edit_with_impl(conn, root, policy, None, None, None, f)
             .map(|(r, _)| r)
     }
 
@@ -1626,8 +2123,16 @@ impl Session {
         opts: &EditOptions,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
-        self.edit_with_impl(conn, root, opts.policy, opts.if_version, None, f)
-            .map(|(r, _)| r)
+        self.edit_with_impl(
+            conn,
+            root,
+            opts.policy,
+            opts.if_version,
+            None,
+            opts.group,
+            f,
+        )
+        .map(|(r, _)| r)
     }
 
     /// `if_version: Some(V)` and the doc is not at V: [`SessionError::Stale`]. Called with
@@ -1645,8 +2150,9 @@ impl Session {
     }
 
     /// `edit_with` with a policy, an `if_version` guard (as [`Session::edit`]'s, amendment
-    /// 14: `run_tool`'s `--if-version`), the verb for the activity ring, and the heads-up
-    /// notes on the lines it changed.
+    /// 14: `run_tool`'s `--if-version`), the verb for the activity ring, a person's undo
+    /// group token ([`EditOptions::group`]), and the heads-up notes on the lines it changed.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn edit_with_impl<E>(
         &self,
         conn: ConnId,
@@ -1654,14 +2160,26 @@ impl Session {
         policy: ClaimPolicy,
         if_version: Option<Seq>,
         verb: Option<&str>,
+        group: Option<u64>,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
+        prof!("session.edit_with");
         let now = self.now();
-        let mut st = self.lock()?;
-        let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
+        let mut st = {
+            prof!("session.lock");
+            self.lock()?
+        };
+        let i = {
+            prof!("session.admit");
+            self.admit_edit(&mut st, conn, Action::Edit, now)?
+        };
         Self::check_version(&st, if_version)?;
-        self.check_backlog(&st, i)?;
+        {
+            prof!("session.backlog");
+            self.check_backlog(&st, i)?;
+        }
         let hunks = {
+            prof!("session.compute_diff");
             let live = self.text_of(&st, root)?.1;
             let computed = match catch_unwind(AssertUnwindSafe(|| f(live))) {
                 Ok(r) => r.map_err(EditWithError::Compute)?,
@@ -1676,14 +2194,21 @@ impl Session {
         if hunks.is_empty() {
             return Ok((None, Notes::default()));
         }
-        self.check_claims(&mut st, i, root, &hunks, policy, now)?;
+        {
+            prof!("session.check_claims");
+            self.check_claims(&mut st, i, root, &hunks, policy, now)?;
+        }
         let edits = vec![Edit::Text {
             root: root.to_owned(),
             hunks,
         }];
         st.verb_hint = verb.map(str::to_owned);
+        st.group_hint = group;
         let res = self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
-        let notes = self.edit_notes(&mut st, i, &res, now);
+        let notes = {
+            prof!("session.notes");
+            self.edit_notes(&mut st, i, &res, now)
+        };
         Ok((Some(res), notes))
     }
 
@@ -1800,6 +2325,13 @@ impl Session {
                         }
                     }
                 }
+                let who = match Self::app_viewer(st, i) {
+                    Some(v) => {
+                        let mut l = st.handles.lens(&v);
+                        who.into_iter().map(|(k, n)| (k, l.note(n))).collect()
+                    }
+                    None => who,
+                };
                 Ok(WriteReport {
                     outcome: WriteOutcome::Conflicts(c),
                     conflict_notes: who,
@@ -1808,6 +2340,23 @@ impl Session {
             }
             Merge::Clean(c) => {
                 self.check_claims(st, i, root, &c.hunks, policy, now)?;
+                // the test-only rewrite-merged-ranges mutant: theirs' ranges (what the live
+                // text changed since the base) become authored too
+                #[cfg(any(test, feature = "differential"))]
+                if crate::differential::d1_mutant()
+                    == crate::differential::D1Mutant::RewriteMergedRanges
+                {
+                    let mut shift: isize = 0;
+                    let theirs: Vec<(usize, usize)> = diff::hunks(&base_text, &live)
+                        .into_iter()
+                        .map(|h| {
+                            let at = (h.start as isize + shift) as usize;
+                            shift += h.insert.len() as isize - (h.end - h.start) as isize;
+                            (at, at + h.insert.len())
+                        })
+                        .collect();
+                    crate::differential::set_d1_extra(theirs);
+                }
                 let edits = vec![Edit::Text {
                     root: root.to_owned(),
                     hunks: c.hunks,
@@ -1863,6 +2412,8 @@ impl Session {
         let st = &mut *st;
         let pid = st.members[i].p.pid.clone();
         let h = st.hist.entry(pid.clone()).or_default();
+        // an undo or redo closes the person's open group (U3 (f))
+        h.open = None;
         let stack = if origin == Origin::Undo {
             &h.undo
         } else {
@@ -1945,6 +2496,7 @@ impl Session {
                 seq: d.map_or(st.version, |x| x.0),
                 on_behalf_of: b.on_behalf_of,
                 regions: inv,
+                touched: false,
             };
             self.push_batch(st, &pid, batch, origin);
         }
@@ -2109,6 +2661,13 @@ impl Session {
         now: u64,
         versions: Vec<Version>,
     ) -> Result<EditResult> {
+        // a person's grouped edit (U3, K4): what it may join, read before it lands
+        let group = st
+            .group_hint
+            .take()
+            .filter(|_| kind == ChangeKind::Edit && restores.is_none())
+            .filter(|_| st.members[i].p.kind != ParticipantKind::Agent)
+            .map(|token| (token, self.group_join(st, i, token, &edits, now)));
         let step = Step {
             edits,
             kind,
@@ -2122,8 +2681,12 @@ impl Session {
                 seq,
                 on_behalf_of: st.members[i].p.on_behalf_of.clone(),
                 regions,
+                touched: false,
             };
-            self.push_batch(st, &pid, batch, Origin::Edit);
+            match group {
+                Some((token, join)) => self.push_grouped(st, i, token, join, batch, now),
+                None => self.push_batch(st, &pid, batch, Origin::Edit),
+            }
         }
         Ok(res)
     }
@@ -2172,6 +2735,7 @@ impl Session {
         now: u64,
         mut versions: Vec<Version>,
     ) -> Result<(EditResult, Vec<Option<(Seq, Vec<Region>)>>)> {
+        prof!("session.commit");
         let n_steps = steps.len();
         let verb = st.verb_hint.take().unwrap_or_else(|| {
             kind_verb(steps.first().map_or(ChangeKind::Edit, |s| s.kind)).to_owned()
@@ -2262,11 +2826,15 @@ impl Session {
                 },
                 span: a.span.map(|(start, end)| ClockSpan { client, start, end }),
                 provenance: std::mem::take(&mut a.prov_rows),
+                // D1 widened it: the store keeps what the channel reports (v0.9.7)
+                authored: a.widened.then(|| a.roots.clone()),
             });
         }
-        let appended = self
-            .store(st)
-            .and_then(|s| Ok(s.commit_changes(self.doc_id, &entries, &changes, &versions)?));
+        let appended = {
+            prof!("commit.store");
+            self.store(st)
+                .and_then(|s| Ok(s.commit_changes(self.doc_id, &entries, &changes, &versions)?))
+        };
         let seqs = match appended {
             Ok(s) => s,
             Err(e) => {
@@ -2275,7 +2843,11 @@ impl Session {
             }
         };
         if let Some(ix) = st.reverts.as_mut() {
+            prof!("commit.bind_reverts");
             ix.bind(&seqs);
+        }
+        if let Some(c) = st.disk.as_mut().and_then(|d| d.catch_up.as_mut()) {
+            c.extend(entries.iter().map(|e| e.update.clone()));
         }
         if let Some(v) = versions.iter().map(|v| v.seq).max() {
             st.last_version_seq = st.last_version_seq.max(v);
@@ -2287,6 +2859,7 @@ impl Session {
         let mut last_end = None;
         let mut regions_of = Vec::with_capacity(applied.len());
         for ((a, seq), e) in applied.into_iter().zip(&seqs).zip(&entries) {
+            prof!("commit.bookkeeping");
             st.log_entries += 1;
             st.log_bytes += e.update.len() as u64;
             st.state_bytes += e.update.len() as u64;
@@ -2346,9 +2919,18 @@ impl Session {
                 head: at,
             });
         }
-        self.end_edited_claims(st, now);
-        self.log_activity(st, i, ActivityKind::Edit, &verb, span, now, None);
-        self.maybe_compact(st);
+        {
+            prof!("commit.end_claims");
+            self.end_edited_claims(st, now);
+        }
+        {
+            prof!("commit.activity");
+            self.log_activity(st, i, ActivityKind::Edit, &verb, span, now, None);
+        }
+        {
+            prof!("commit.compact");
+            self.maybe_compact(st);
+        }
         let done = which
             .into_iter()
             .map(|w| w.and_then(|k| regions_of[k].take()))
@@ -2399,6 +2981,8 @@ impl Session {
             *bytes -= s.pop_front().map_or(0, |b| b.bytes());
         }
         h.cleared = false;
+        // any push closes the open group; a grouped edit opens it again (U3 (e), K4)
+        h.open = None;
     }
 
     /// Apply one change to the in-memory doc and carry every stored position through it.
@@ -2417,12 +3001,17 @@ impl Session {
         edits: Vec<Edit>,
         restores: Option<Vec<Option<Vec<Ids>>>>,
     ) -> Result<Option<Applied>> {
+        prof!("session.apply_local");
         let client = st.members[i].client;
         let pid = st.members[i].p.pid.clone();
+        // D1 applies to a fresh change: no roots given (undo, redo and revert put back
+        // exact elements and are left as they are)
+        let fresh = restores.is_none();
         let mut canon = Vec::with_capacity(edits.len());
         let mut roots_of: Vec<Option<Vec<Ids>>> = Vec::with_capacity(edits.len());
         let mut restores = restores.map(Vec::into_iter);
         for e in edits {
+            prof!("session.validate");
             let Edit::Text { root, hunks } = e;
             let (_, text) = self.text_of(st, &root)?;
             diff::validate(text, &hunks).map_err(DocError::from)?;
@@ -2442,12 +3031,42 @@ impl Session {
             roots_of.push(r);
         }
         // the map is needed to name what the change deletes (built once per load)
-        self.prov(st)?;
+        {
+            prof!("session.prov_build");
+            self.prov(st)?;
+        }
+        // D1 (undo spec v1.10, the authored-ranges amendment): a fresh change is never
+        // built from someone else's text. Inside the tokens its hunks touch, the characters
+        // others wrote are rewritten (deleted and inserted afresh) with it. The engine, the
+        // provenance map, undo regions and the revert record take the widened hunks; the
+        // hunk channel takes the authored ones (E-LIVE r2.1), which give the same text.
+        let mut channel: Vec<Option<Vec<Hunk>>> = vec![None; canon.len()];
+        if fresh {
+            self.owners(st)?;
+            let tokens = self.d1_tokens();
+            let extra = take_d1_extra();
+            for (k, e) in canon.iter_mut().enumerate() {
+                let Edit::Text { root, hunks } = e;
+                if hunks.is_empty() {
+                    continue;
+                }
+                let text = self.text_of(st, root)?.1;
+                let prov = st.prov.as_ref().expect("built above");
+                let owners = st.owners.as_ref().expect("built above");
+                let wide = d1_hunks(text, hunks, tokens, prov, root, owners, &pid, &extra);
+                if wide != *hunks {
+                    channel[k] = Some(std::mem::replace(hunks, wide));
+                }
+            }
+        }
         let clock_before = st.doc.clock_of(client);
         let Some(update) = st.doc.edit_as(client, &canon)? else {
             return Ok(None);
         };
-        self.report_engine_checks(st, st.version + 1);
+        {
+            prof!("session.engine_checks");
+            self.report_engine_checks(st, st.version + 1);
+        }
         let firsts = crate::engine::insert_clocks(clock_before, &canon);
         let mut a = Applied {
             span: Some((clock_before, st.doc.clock_of(client))),
@@ -2456,6 +3075,7 @@ impl Session {
             regions: Vec::new(),
             record: Vec::new(),
             prov_rows: Vec::new(),
+            widened: false,
             kind: ChangeKind::Edit,
             of: None,
             changed: Vec::new(),
@@ -2464,11 +3084,16 @@ impl Session {
             last_end: None,
         };
         let mut prov = st.prov.take().expect("built above");
-        for ((e, restored), firsts) in canon.into_iter().zip(roots_of).zip(firsts) {
+        for (((e, restored), firsts), authored) in
+            canon.into_iter().zip(roots_of).zip(firsts).zip(channel)
+        {
             let Edit::Text { root, hunks } = e;
             if hunks.is_empty() {
                 continue;
             }
+            // what the channel and the summaries report: the authored hunks (D1)
+            a.widened |= authored.is_some();
+            let told = authored.unwrap_or_else(|| hunks.clone());
             let (ti, _) = self.text_of(st, &root)?;
             let before = std::mem::take(&mut st.texts[ti].1);
             let after = diff::apply(&before, &hunks);
@@ -2478,6 +3103,7 @@ impl Session {
             let mut pairs = Vec::with_capacity(hunks.len());
             let mut ins = Vec::with_capacity(hunks.len());
             for (k, h) in hunks.iter().enumerate() {
+                prof!("session.prov_roots");
                 let id = ElemId::new(client, firsts[k]);
                 let deleted = prov.roots(&root, &before, h.start, h.end);
                 let put_back = restored
@@ -2506,45 +3132,59 @@ impl Session {
                     roots: put_back,
                 });
             }
-            prov.apply(&root, &before, &hunks, &ins);
-            a.record.push(record_root(
-                &root,
-                &before,
-                after.is_empty(),
-                &hunks,
-                Some(&pairs),
-            ));
-            a.regions
-                .extend(Region::of_change(&root, &before, &hunks, Some(pairs)));
-            // the owner's own edit touching a claim ends it once durable (unless held)
-            let fates = awareness::claim_fates(&st.aware.claims, &root, &hunks, &pid);
-            for (c, f) in st.aware.claims.iter_mut().zip(&fates) {
-                if c.pid == pid && !c.hold && f.touched {
-                    c.edited = true;
+            {
+                prof!("session.prov_apply");
+                prov.apply(&root, &before, &hunks, &ins);
+            }
+            {
+                prof!("session.record");
+                a.record.push(record_root(
+                    &root,
+                    &before,
+                    after.is_empty(),
+                    &hunks,
+                    Some(&pairs),
+                ));
+                a.regions
+                    .extend(Region::of_change(&root, &before, &hunks, Some(pairs)));
+            }
+            {
+                prof!("session.claims");
+                // the owner's own edit touching a claim ends it once durable (unless held)
+                let fates = awareness::claim_fates(&st.aware.claims, &root, &told, &pid);
+                for (c, f) in st.aware.claims.iter_mut().zip(&fates) {
+                    if c.pid == pid && !c.hold && f.touched {
+                        c.edited = true;
+                    }
+                }
+                // ... and the reserved waiter's own edit there uses its reservation
+                for r in st.aware.reservations.iter_mut() {
+                    if r.pid == pid && r.touched_by(&root, &told) {
+                        r.edited = true;
+                    }
                 }
             }
-            // ... and the reserved waiter's own edit there uses its reservation
-            for r in st.aware.reservations.iter_mut() {
-                if r.pid == pid && r.touched_by(&root, &hunks) {
-                    r.edited = true;
-                }
+            {
+                prof!("session.carry");
+                Self::carry(st, &root, &told, &hunks, &pid);
             }
-            Self::carry(st, &root, &hunks, &pid);
+            prof!("session.summary");
             a.changed
-                .extend(summary::changed_lines(&root, &after, &hunks));
-            let (ad, rm) = summary::line_counts(&before, &after, &hunks);
+                .extend(summary::changed_lines(&root, &after, &told));
+            let (ad, rm) = summary::line_counts(&before, &after, &told);
             a.added += ad;
             a.removed += rm;
-            let delta: isize = hunks
+            let delta: isize = told
                 .iter()
                 .map(|h| h.insert.len() as isize - (h.end - h.start) as isize)
                 .sum();
-            let last = hunks.last().expect("non-empty");
+            let last = told.last().expect("non-empty");
             a.last_end = Some((root.clone(), (last.end as isize + delta) as usize));
             st.texts[ti].1 = after;
-            a.roots.push((root, hunks));
+            a.roots.push((root, told));
         }
         st.prov = Some(prov);
+        prof!("session.revert_stage");
         // the revert index has been carried past this change: add its own regions
         if let Some(ix) = st.reverts.as_mut() {
             let r: Vec<(String, usize, usize)> = a
@@ -2557,46 +3197,92 @@ impl Session {
         Ok(Some(a))
     }
 
-    /// The provenance map, built on first need from the engine's blame runs (each live
-    /// element's ID) and the store's provenance rows (the roots of restored elements):
-    /// O(doc) once per load, then kept exact by every change the session applies.
+    /// Each client ID's owner, from the store's client table, built on first need: the one
+    /// place the session reads ownership from (D1, and agent client-ID reuse).
+    fn owners(&self, st: &mut State) -> Result<()> {
+        if st.owners.is_none() {
+            let o = self
+                .store(st)?
+                .clients_of(self.doc_id)?
+                .into_iter()
+                .collect();
+            st.owners = Some(o);
+        }
+        Ok(())
+    }
+
+    /// The pack's token rule for D1, or the test-only mutant's.
+    fn d1_tokens(&self) -> crate::text::lines::Tokens {
+        #[cfg(any(test, feature = "differential"))]
+        if crate::differential::d1_mutant() == crate::differential::D1Mutant::RewriteWholeLine {
+            return crate::text::lines::Tokens::Lines;
+        }
+        self.pack.tokens()
+    }
+
+    /// The provenance map, built on first need ([`Self::rebuild_prov`]): O(doc) once per
+    /// load (and after a purge or a recovery), then kept exact by every change the session
+    /// applies, its own and outside edits alike.
     fn prov<'a>(&self, st: &'a mut State) -> Result<&'a mut Prov> {
         if st.prov.is_none() {
-            let store = self.store(st)?.clone();
-            let broken =
-                |why: &str| SessionError::Doc(DocError::Apply(format!("provenance: {why}")));
-            let mut built = Vec::with_capacity(st.texts.len());
-            for (root, text) in &st.texts {
-                let runs = st.doc.blame_runs(root)?;
-                let mut q = Vec::with_capacity(runs.len());
-                let mut at = 0usize;
-                for r in &runs {
-                    let e = at + r.bytes;
-                    let t = text
-                        .get(at..e)
-                        .ok_or_else(|| broken("the engine's runs don't fit the text"))?;
-                    q.push((r.client, r.clock, r.clock + t.encode_utf16().count() as u32));
-                    at = e;
-                }
-                if at != text.len() {
-                    return Err(broken("the engine's runs don't cover the text"));
-                }
-                let rows = store.provenance_rows(self.doc_id, &q)?;
-                built.push((
-                    *root,
-                    text.as_str(),
-                    super::prov::live_runs(text, &runs, &rows),
-                ));
-            }
-            st.prov = Some(Prov::build(built));
+            st.prov = Some(self.rebuild_prov(st)?);
         }
         Ok(st.prov.as_mut().expect("just built"))
     }
 
-    /// Carry every stored position (carets, views, claims, undo regions, revert records)
-    /// through a change to `root` by `typist` (who takes text typed where two participants'
+    /// The provenance map from scratch, from the engine's blame runs (each live element's
+    /// ID: a throwaway replica, O(doc)) and the store's provenance rows (the roots of
+    /// restored elements). The cold path, and the oracle blame's runtime check and the
+    /// differential test compare the kept map with. Changes nothing.
+    fn rebuild_prov(&self, st: &State) -> Result<Prov> {
+        let store = self.store(st)?.clone();
+        Self::prov_from(self.doc_id, &st.doc, &st.texts, &store)
+    }
+
+    /// [`Self::rebuild_prov`] from a doc and its texts that needn't be the session's (blame's
+    /// off-lock check builds from a copy of the doc, v0.9.7). Provenance rows are written
+    /// once, with the change that inserts their elements, and only deleted with the doc, so
+    /// the store answers the same for a doc's elements whenever it is read after the doc's
+    /// changes were committed.
+    pub(super) fn prov_from(
+        doc_id: DocId,
+        doc: &Doc,
+        texts: &[(&'static str, String)],
+        store: &DocStore,
+    ) -> Result<Prov> {
+        let broken = |why: &str| SessionError::Doc(DocError::Apply(format!("provenance: {why}")));
+        let mut built = Vec::with_capacity(texts.len());
+        for (root, text) in texts {
+            let runs = doc.blame_runs(root)?;
+            let mut q = Vec::with_capacity(runs.len());
+            let mut at = 0usize;
+            for r in &runs {
+                let e = at + r.bytes;
+                let t = text
+                    .get(at..e)
+                    .ok_or_else(|| broken("the engine's runs don't fit the text"))?;
+                q.push((r.client, r.clock, r.clock + t.encode_utf16().count() as u32));
+                at = e;
+            }
+            if at != text.len() {
+                return Err(broken("the engine's runs don't cover the text"));
+            }
+            let rows = store.provenance_rows(doc_id, &q)?;
+            built.push((
+                *root,
+                text.as_str(),
+                super::prov::live_runs(text, &runs, &rows),
+            ));
+        }
+        Ok(Prov::build(built))
+    }
+
+    /// Carry every stored position through a change to `root` by `typist`: carets, views,
+    /// claims and reservations through its text hunks (`hunks`, the authored ones, as the
+    /// channel reports them), undo regions and revert records through its element hunks
+    /// (`elems`: D1's widened hunks, v0.9.7) (who takes text typed where two participants'
     /// claims meet: [`awareness::claim_fates`]).
-    fn carry(st: &mut State, root: &str, hunks: &[Hunk], typist: &str) {
+    fn carry(st: &mut State, root: &str, hunks: &[Hunk], elems: &[Hunk], typist: &str) {
         for m in &mut st.members {
             if let Some(c) = m.cursor.as_mut().filter(|c| c.root == root) {
                 c.anchor = position::transform(c.anchor, hunks, Bias::After);
@@ -2625,22 +3311,147 @@ impl Session {
         for r in st.aware.reservations.iter_mut().filter(|r| r.root == root) {
             r.carry(hunks);
         }
+        // undo regions and revert records are carried at element identity: through the
+        // change as the engine made it (D1's widened hunks), so a region whose elements
+        // were rewritten sees them go
         for h in st.hist.values_mut() {
             for b in h.undo.iter_mut().chain(h.redo.iter_mut()) {
-                b.transform(root, hunks);
+                b.transform(root, elems);
             }
         }
         if let Some(ix) = st.reverts.as_mut() {
-            ix.carry(root, hunks);
+            ix.carry(root, elems);
         }
     }
 
     /// Send an event to every subscriber; one that is full or gone is cut off.
     fn broadcast(st: &mut State, ev: &ChangeEvent) {
-        st.subs.retain(|(_, tx)| match tx.try_send(ev.clone()) {
-            Ok(()) => true,
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+        let handles = &mut st.handles;
+        st.subs.retain(|(_, app, tx)| {
+            let ev = match app {
+                Some(v) => handles.lens(v).change(ev.clone()),
+                None => ev.clone(),
+            };
+            match tx.try_send(ev) {
+                Ok(()) => true,
+                Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => false,
+            }
         });
+    }
+
+    /// `out` as `conn` may see it: an App viewer's (K5) goes through its handles (`f` for the
+    /// value; a refusal naming someone else, by handle). Anyone else's is unchanged.
+    pub(super) fn for_viewer<T>(
+        &self,
+        conn: ConnId,
+        out: Result<T>,
+        f: impl FnOnce(&mut super::handles::Lens<'_>, T) -> T,
+    ) -> Result<T> {
+        let Ok(mut st) = self.lock() else {
+            return out;
+        };
+        let Some(i) = st.members.iter().position(|m| m.conn == conn) else {
+            return out;
+        };
+        let Some(v) = Self::app_viewer(&st, i) else {
+            return out;
+        };
+        let mut lens = st.handles.lens(&v);
+        match out {
+            Ok(t) => Ok(f(&mut lens, t)),
+            Err(e) => Err(lens.error(e)),
+        }
+    }
+
+    /// A tool run's output (`run_tool_with`) as `conn` may see it: an App viewer's (K5) names
+    /// the others by handle. Its notes are lensed where they are made; the rest here.
+    pub(crate) fn tool_output_as_seen(
+        &self,
+        conn: ConnId,
+        out: std::result::Result<crate::tools::ToolOutput, crate::tools::ToolRunError>,
+    ) -> std::result::Result<crate::tools::ToolOutput, crate::tools::ToolRunError> {
+        use crate::tools::ToolRunError;
+        let Ok(mut st) = self.lock() else {
+            return out;
+        };
+        let Some(i) = st.members.iter().position(|m| m.conn == conn) else {
+            return out;
+        };
+        let Some(v) = Self::app_viewer(&st, i) else {
+            return out;
+        };
+        let mut l = st.handles.lens(&v);
+        match out {
+            Ok(mut o) => {
+                if let Some(f) = o.fence.as_mut() {
+                    f.contributors = std::mem::take(&mut f.contributors)
+                        .into_iter()
+                        .map(|p| l.pid(&p))
+                        .collect();
+                }
+                if let Some(fe) = o.for_edit.take() {
+                    o.for_edit = Some(Box::new(match *fe {
+                        awareness::ForEdit::Claimed(c) => awareness::ForEdit::Claimed(l.claim(c)),
+                        awareness::ForEdit::Conflict(c) => awareness::ForEdit::Conflict(l.claim(c)),
+                        awareness::ForEdit::NotTaken(e) => awareness::ForEdit::NotTaken(l.error(e)),
+                    }));
+                }
+                Ok(o)
+            }
+            Err(ToolRunError::Session(e)) => Err(ToolRunError::Session(l.error(e))),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// `q` with an App viewer's handles (`--by p2`, `--on-behalf-of p1`) turned back into
+    /// pids (K5); anyone else's unchanged.
+    pub(super) fn unhandle_query(&self, conn: ConnId, q: &LogQuery) -> LogQuery {
+        let mut q = q.clone();
+        let Ok(mut st) = self.lock() else {
+            return q;
+        };
+        let Some(i) = st.members.iter().position(|m| m.conn == conn) else {
+            return q;
+        };
+        let Some(v) = Self::app_viewer(&st, i) else {
+            return q;
+        };
+        let l = st.handles.lens(&v);
+        q.by = q.by.map(|b| l.unpid(&b));
+        q.on_behalf_of = q.on_behalf_of.map(|b| l.unpid(&b));
+        q
+    }
+
+    /// Member `i`'s pid when it is an App viewer (it sees handles, never pids: K5).
+    fn app_viewer(st: &State, i: usize) -> Option<String> {
+        let m = &st.members[i];
+        (m.p.kind == ParticipantKind::App).then(|| m.p.pid.clone())
+    }
+
+    /// Distinct pids with presence (not watching).
+    fn participant_count(st: &State) -> usize {
+        let mut p: Vec<&str> = st
+            .members
+            .iter()
+            .filter(|m| !m.watcher)
+            .map(|m| m.p.pid.as_str())
+            .collect();
+        p.sort_unstable();
+        p.dedup();
+        p.len()
+    }
+
+    /// Distinct pids watching past `participants_max` (K11).
+    fn watching_count(st: &State) -> usize {
+        let mut p: Vec<&str> = st
+            .members
+            .iter()
+            .filter(|m| m.watcher)
+            .map(|m| m.p.pid.as_str())
+            .collect();
+        p.sort_unstable();
+        p.dedup();
+        p.len()
     }
 
     /// After a failed store write: rebuild from the store so memory matches what is durable.
@@ -2652,6 +3463,8 @@ impl Session {
             let loaded = store.load(self.doc_id)?;
             let mut doc = Doc::from_store(self.schema, &loaded)?;
             doc.set_edit_check_every(self.config.edit_check_every);
+            doc.set_edit_check_scale(self.config.edit_check_scale_units);
+            doc.set_position_check_every(self.config.position_check_every);
             let texts = texts_of(&doc, &self.schema)?;
             let snap = loaded.snapshot.as_ref().map_or(0, |(s, _)| *s);
             let version = loaded.updates.last().map_or(snap, |(s, _)| *s);
@@ -2694,6 +3507,7 @@ impl Session {
                 )));
                 st.store = None;
                 st.subs.clear();
+                st.roster.close();
             }
         }
     }
@@ -2746,6 +3560,11 @@ impl Session {
     /// [`SessionError::BadApproval`] for `Pending`, or for a change already settled the other
     /// way. Settling it again the same way returns the record unchanged.
     pub fn set_approval(&self, conn: ConnId, seq: Seq, state: ApprovalState) -> Result<Approval> {
+        let out = self.set_approval_inner(conn, seq, state);
+        self.for_viewer(conn, out, |l, a| l.approval(a))
+    }
+
+    fn set_approval_inner(&self, conn: ConnId, seq: Seq, state: ApprovalState) -> Result<Approval> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Approve, now)?;
@@ -2794,6 +3613,11 @@ impl Session {
     /// Needs read; and [`Rights::history`] unless the caller is the change's author or the
     /// person it was made for.
     pub fn approval(&self, conn: ConnId, seq: Seq) -> Result<Option<Approval>> {
+        let out = self.approval_inner(conn, seq);
+        self.for_viewer(conn, out, |l, v| v.map(|a| l.approval(a)))
+    }
+
+    fn approval_inner(&self, conn: ConnId, seq: Seq) -> Result<Option<Approval>> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
@@ -2812,6 +3636,13 @@ impl Session {
     /// [`Rights::history`], all of them; without, only those where the caller is the author
     /// or the person the change was made for. Needs read.
     pub fn approvals(&self, conn: ConnId) -> Result<Vec<(Seq, Approval)>> {
+        let out = self.approvals_inner(conn);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter().map(|(id, a)| (id, l.approval(a))).collect()
+        })
+    }
+
+    fn approvals_inner(&self, conn: ConnId) -> Result<Vec<(Seq, Approval)>> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
@@ -2850,6 +3681,60 @@ impl Session {
         })
     }
 
+    /// Test builds only (the `differential` feature): the disk sync state the session holds in
+    /// memory, as bytes: the disk replica's encoded state, then each update it is still to
+    /// catch up with (v0.9.7). Empty without a file. The erasure tests scan it.
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn disk_memory_for_tests(&self) -> Result<Vec<Vec<u8>>> {
+        let st = self.lock()?;
+        let Some(d) = st.disk.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let mut out = vec![d.replica.encode_state()?];
+        out.extend(d.catch_up.iter().flatten().cloned());
+        Ok(out)
+    }
+
+    /// Tests only: lose the last update the disk replica is to catch up with (a bug the
+    /// write-back's check must catch).
+    #[cfg(test)]
+    pub(crate) fn lose_catch_up_for_tests(&self) -> Result<bool> {
+        let mut st = self.lock()?;
+        Ok(st
+            .disk
+            .as_mut()
+            .and_then(|d| d.catch_up.as_mut())
+            .and_then(|c| c.pop())
+            .is_some())
+    }
+
+    /// Tests only: the live doc's encoded state, the disk replica's, whether the replica is
+    /// in step (its catch-up list known), and the stored synced state.
+    #[cfg(test)]
+    pub(crate) fn writeback_state_for_tests(&self) -> Result<WritebackState> {
+        let st = self.lock()?;
+        let live = st.doc.encode_state()?;
+        let replica = match st.disk.as_ref() {
+            Some(d) => Some(d.replica.encode_state()?),
+            None => None,
+        };
+        let known = st.disk.as_ref().is_some_and(|d| d.catch_up.is_some());
+        let stored = self
+            .store(&st)?
+            .sync_states(self.doc_id)?
+            .0
+            .map(|s| s.state);
+        Ok((live, replica, known, stored))
+    }
+
+    /// Tests only: how many times the disk replica was brought forward by its catch-up list
+    /// (no reload), write-backs and outside saves alike.
+    #[cfg(test)]
+    pub(crate) fn replica_caught_up_for_tests(&self) -> Result<u64> {
+        Ok(self.lock()?.disk.as_ref().map_or(0, |d| d.caught_up))
+    }
+
     /// Tests only: make the live doc's engine cache hold a wrong text for `root`.
     #[cfg(test)]
     pub(crate) fn corrupt_text_cache_for_tests(&self, root: &str, text: &str) -> Result<()> {
@@ -2862,6 +3747,9 @@ impl Session {
     pub(crate) fn apply_raw_for_tests(&self, update: &[u8]) -> Result<()> {
         let mut st = self.lock()?;
         st.prov = None;
+        if let Some(d) = st.disk.as_mut() {
+            d.catch_up = None;
+        }
         Ok(st.doc.apply_trusted(update)?)
     }
 
@@ -2919,6 +3807,7 @@ impl Session {
         st.closed = Some(SessionError::Deleted);
         st.store = None;
         st.subs.clear();
+        st.roster.close();
         st.members.clear();
     }
 
@@ -2949,6 +3838,7 @@ impl Session {
         st.closed = Some(reason);
         st.store = None;
         st.subs.clear();
+        st.roster.close();
         st.members.clear();
     }
 }
@@ -2969,6 +3859,11 @@ impl Session {
     /// version) and after it ([`VersionReason::External`]). Edits not yet written back are
     /// kept: the next write-back writes the merged doc.
     pub fn file_changed(&self) -> Result<DiskCheck> {
+        let r = self.file_changed_in();
+        self.shown(r)
+    }
+
+    fn file_changed_in(&self) -> Result<DiskCheck> {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         self.disk_check(&mut st, now, true)
@@ -2979,6 +3874,11 @@ impl Session {
     /// inside the file's mtime tick (git's racy rule: an equal stat can't vouch for a save
     /// made within the filesystem's mtime granularity of it).
     pub fn check_disk(&self) -> Result<DiskCheck> {
+        let r = self.check_disk_in();
+        self.shown(r)
+    }
+
+    fn check_disk_in(&self) -> Result<DiskCheck> {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         self.disk_check(&mut st, now, false)
@@ -2989,6 +3889,11 @@ impl Session {
     /// checks it like [`Session::file_changed`]. Rename the doc's key with
     /// [`super::SessionManager::rekey`].
     pub fn file_moved(&self, new_path: &Path) -> Result<DiskCheck> {
+        let r = self.file_moved_in(new_path);
+        self.shown(r)
+    }
+
+    fn file_moved_in(&self, new_path: &Path) -> Result<DiskCheck> {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -3009,6 +3914,11 @@ impl Session {
     /// outside edit first). Needs read. `written` is false when there was nothing to write,
     /// or nothing could be written (`disk` says why: missing or declined).
     pub fn flush(&self, conn: ConnId) -> Result<FlushOutcome> {
+        let r = self.flush_in(conn);
+        self.shown(r)
+    }
+
+    fn flush_in(&self, conn: ConnId) -> Result<FlushOutcome> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Flush, now)?;
@@ -3018,6 +3928,29 @@ impl Session {
             hash: hex(&hmac(&st.hash_key, &self.render(&st)?)),
             disk: Self::disk_state(&st),
         })
+    }
+
+    /// `r` as the host may show it: an error's paths made safe (K7): inside this file's
+    /// root, relative; elsewhere, `<outside>`.
+    fn shown<T>(&self, r: Result<T>) -> Result<T> {
+        r.map_err(|e| {
+            let root = self
+                .lock_any()
+                .ok()
+                .and_then(|st| st.disk.as_ref().map(|d| d.root.clone()));
+            match root {
+                Some(root) => e.redacted(&root),
+                None => e,
+            }
+        })
+    }
+
+    /// The identity (device and inode) of the file this session syncs with (K9, K-DISK-14):
+    /// a host keys sessions by it as well as by the path. `None` without a file, when the
+    /// file is gone, or where the platform has none.
+    pub fn file_identity(&self) -> Result<Option<super::disk::FileIdentity>> {
+        let path = self.lock()?.disk.as_ref().map(|d| d.path.clone());
+        Ok(path.and_then(|p| super::disk::file_identity(&p).ok().flatten()))
     }
 
     /// The file this session syncs with, as the host gave it.
@@ -3073,9 +4006,8 @@ impl Session {
         Ok(out)
     }
 
-    /// Test-only (the soak's diagnosis; from v0.9.6's replay tooling): the live doc's texts
-    /// read afresh from the engine, against the session's cached texts: `(root, engine,
-    /// cached)`.
+    /// Test-only (the soak's diagnosis, v0.9.7): the live doc's texts read afresh from the
+    /// engine, against the session's cached texts: `(root, engine, cached)`.
     #[cfg(any(test, feature = "differential"))]
     #[doc(hidden)]
     pub fn engine_and_cached_texts_for_tests(&self) -> Result<Vec<(String, String, String)>> {
@@ -3095,8 +4027,8 @@ impl Session {
             .collect())
     }
 
-    /// Test-only (the soak's diagnosis): `pid`'s last `last` undo and redo batches (seq,
-    /// regions), most recent first.
+    /// Test-only (the soak's diagnosis, v0.9.7): `pid`'s last `last` undo and redo batches
+    /// (seq, regions), most recent first.
     #[cfg(any(test, feature = "differential"))]
     #[doc(hidden)]
     pub fn undo_stacks_for_tests(&self, pid: &str, last: usize) -> Result<(String, String)> {
@@ -3113,6 +4045,37 @@ impl Session {
                 .join("\n")
         };
         Ok((show(&h.undo), show(&h.redo)))
+    }
+
+    /// Test-only: the live doc's history in UTF-16 units (the sum of its state vector's
+    /// clocks), the measure the edit path's canary scales its interval by
+    /// ([`Config::edit_check_scale_units`]; the soak prints it at each milestone, v0.9.7).
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn history_units_for_tests(&self) -> Result<u64> {
+        Ok(self.lock()?.doc.history_units_for_tests())
+    }
+
+    /// Test-only: the live doc's position index counters since it was loaded (v0.9.7).
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn position_index_stats_for_tests(
+        &self,
+    ) -> Result<crate::differential::PositionIndexStats> {
+        Ok(self.lock()?.doc.position_index_stats())
+    }
+
+    /// Test-only: plant a bug in the live doc's position index (v0.9.7), to prove the kit
+    /// reports what the index's shadow check finds ([`AuditEvent::PositionIndexMismatch`]).
+    /// Lasts until the doc is reloaded.
+    #[cfg(feature = "planted-position-bugs")]
+    #[doc(hidden)]
+    pub fn plant_position_bug_for_tests(
+        &self,
+        bug: crate::differential::PlantedPositionBug,
+    ) -> Result<()> {
+        self.lock()?.doc.plant_position_bug(bug);
+        Ok(())
     }
 
     /// Test-only (the soak's D1 check): the `(before, after)` texts of every region of
@@ -3242,6 +4205,10 @@ impl Session {
             last_change_ms: now,
             last_check_ms: now,
             external_client: None,
+            // in step only if the file's state is the live doc's
+            catch_up: (seq == st.version).then(Vec::new),
+            writebacks: 0,
+            caught_up: 0,
         };
         let on_disk = match disk::probe(path, root) {
             Ok(Probe::File { real, .. }) => {
@@ -3271,6 +4238,7 @@ impl Session {
                 d.replica_bytes = p.state.len() as u64;
                 d.synced_hash = p.hash;
                 d.synced_seq = p.seq;
+                d.catch_up = (p.seq == st.version).then(Vec::new);
             } else {
                 store.clear_pending_sync(self.doc_id)?;
             }
@@ -3365,7 +4333,7 @@ impl Session {
         d.last_check_ms = now;
         let (path, root) = (d.path.clone(), d.root.clone());
         let (real, stat) = match disk::probe(&path, &root) {
-            Ok(Probe::File { real, stat }) => (real, stat),
+            Ok(Probe::File { real, stat, .. }) => (real, stat),
             Ok(_) => return Ok(self.set_missing(st)),
             Err(e) => return Err(self.disk_error(st, &path.display().to_string(), e)),
         };
@@ -3485,7 +4453,42 @@ impl Session {
         if let Some(d) = st.disk.as_mut() {
             d.external_client = Some(c);
         }
+        // D1's owners: the external participant's own text is its own
+        if let Some(o) = st.owners.as_mut() {
+            o.insert(c, EXTERNAL_PID.to_owned());
+        }
         Ok(c)
+    }
+
+    /// D1 for an outside save (undo spec v1.10; v0.9.7): each of `edits` (the merge's hunks
+    /// on the live text, as the external participant's) widened in place to the tokens of
+    /// the new text they lie in, keeping only the external participant's own characters
+    /// inside. Returns, per root D1 widened, its authored hunks (canonical), which the
+    /// channel reports.
+    fn d1_outside(&self, st: &mut State, edits: &mut [Edit]) -> Result<Vec<(String, Vec<Hunk>)>> {
+        let mut authored = Vec::new();
+        if edits.is_empty() {
+            return Ok(authored);
+        }
+        self.prov(st)?;
+        self.owners(st)?;
+        let tokens = self.d1_tokens();
+        for e in edits.iter_mut() {
+            let Edit::Text { root, hunks } = e;
+            if hunks.is_empty() {
+                continue;
+            }
+            let text = self.text_of(st, root)?.1;
+            let prov = st.prov.as_ref().expect("built above");
+            let owners = st.owners.as_ref().expect("built above");
+            let told = diff::coalesce(hunks.clone());
+            let wide = d1_hunks(text, &told, tokens, prov, root, owners, EXTERNAL_PID, &[]);
+            if wide != told {
+                *hunks = wide;
+                authored.push((root.clone(), told));
+            }
+        }
+        Ok(authored)
     }
 
     /// Merge the file's new content (`bytes`, hash `h`) into the live doc.
@@ -3522,10 +4525,20 @@ impl Session {
             }
             let live = &st.texts.iter().find(|(r, _)| r == root).expect("a root").1;
             let merged = merge::merge3_keep_both(&synced, t, live);
-            if !merged.hunks.is_empty() {
+            // trimmed to the characters that change (v0.9.7): the merge's sides are whole
+            // lines (Option B), a guarantee about the merged text; the change applied to the
+            // doc is only what differs, so the elements a save keeps keep their authors (D1
+            // then widens it to tokens, as for any diff-based change), and the text is the
+            // same byte for byte
+            let trimmed = diff::trim_hunks(live, &merged.hunks);
+            // canonical (v0.9.7): what the engine is handed is exactly the change at element
+            // identity, and a root is part of the change iff its hunks are non-empty (its
+            // text may still read as before: text deleted and typed again elsewhere)
+            let hunks = canonical_hunks(live, &lines::align_insertions(live, trimmed));
+            if !hunks.is_empty() {
                 edits.push(Edit::Text {
                     root: root.clone(),
-                    hunks: lines::align_insertions(live, merged.hunks),
+                    hunks,
                 });
             }
             file_edits.push(Edit::Text {
@@ -3535,7 +4548,8 @@ impl Session {
         }
         if edits.is_empty() {
             // the same text in other bytes (line endings, BOM), or a save the doc already
-            // holds: adopt the file's format; the doc doesn't change
+            // holds: adopt the file's format; the doc doesn't change. No update to add to the
+            // catch-up list: a replica that becomes the doc takes the ones it has (v0.9.7)
             let (state, held) = match self.replica_to_file(st, &roots, &file_edits) {
                 Ok(s) => s,
                 Err(e) => {
@@ -3571,12 +4585,25 @@ impl Session {
             return Ok(DiskCheck::Unchanged);
         }
         let client = self.external_client(st)?;
+        // D1 (undo spec v1.10, the authored-ranges amendment): an outside save is a
+        // diff-based change, never built from someone else's text. Its authored hunks (the
+        // merge's, on the live text) are widened to the tokens of the new text they lie in;
+        // inside, only the external participant's own characters are kept. The channel,
+        // carets, claims and the change summary take the authored hunks; the engine, the
+        // record, undo regions and the revert index the widened ones (v0.9.7).
+        let authored = self.d1_outside(st, &mut edits)?;
         let before = st.texts.clone();
         let clock_before = st.doc.clock_of(client);
-        // each edited root's element IDs before the merge: the change is reported at element
-        // identity (below), never as a diff of the texts (v0.9.3)
+        // the change is reported at element identity (v0.9.3), never as a diff of the texts:
+        // the merge's own hunks, which the engine applies to the live doc as given. One save in
+        // `edit_check_every` also computes it in full from the engine (each edited root's
+        // element IDs before and after) and compares (`AuditEvent::IdentityMismatch`).
+        let every = u64::from(self.config.edit_check_every);
+        st.outside_saves += 1;
+        let check = every > 0 && (st.outside_saves - 1) % every == 0;
         let ids_before: Vec<(&'static str, Option<Vec<ElemId>>)> = before
             .iter()
+            .filter(|_| check)
             .filter(|(root, _)| {
                 edits
                     .iter()
@@ -3591,15 +4618,44 @@ impl Session {
                 (*root, ids)
             })
             .collect();
+        // the provenance map follows the outside edit (below). On a sampled save the engine's
+        // IDs just read also check the map's (v0.9.7); a map that differs (or isn't as long as
+        // the text) is reported and dropped (the cold path rebuilds it on next need)
+        let mut prov = st.prov.take();
+        if let Some(p) = &prov {
+            let wrong = if !p.aligned(&st.texts) {
+                Some("outside edit: the map's length isn't the text's".to_owned())
+            } else {
+                ids_before.iter().find_map(|(root, ids)| {
+                    let ids = ids.as_ref()?;
+                    let text = &before.iter().find(|(r, _)| r == root)?.1;
+                    let kept = Ids::from_runs(p.query(root, text, 0, text.len()).iter().map(|r| {
+                        super::prov::IdRun {
+                            bytes: r.bytes,
+                            units: r.units,
+                            start: r.id,
+                        }
+                    }));
+                    (kept.chars(text) != *ids).then(|| {
+                        format!("outside edit: root {root:?}: element IDs other than the engine's")
+                    })
+                })
+            };
+            if let Some(what) = wrong {
+                self.emit(AuditEvent::ProvenanceMismatch {
+                    key: st.key.clone(),
+                    version: st.version,
+                    what,
+                });
+                prov = None;
+            }
+        }
         // the merge is made on the live doc itself, as the external participant: changes made
         // since the last write-back are kept, and nothing is merged in from the replica
         let made = st
             .doc
             .edit_as(client, &edits)
             .map(|u| u.expect("non-empty edits change the doc"));
-        // the provenance map is rebuilt on next need (the outside edit's inserted elements
-        // are fresh, their own roots)
-        st.prov = None;
         let update = match made {
             Ok(u) => u,
             Err(e) => {
@@ -3609,6 +4665,13 @@ impl Session {
         };
         self.report_engine_checks(st, st.version + 1);
         let after = texts_of(&st.doc, &self.schema)?;
+        // the merged change is one of the updates the replica is to catch up with (v0.9.7):
+        // when the doc now holds the file's text, `replica_to_file` brings the replica
+        // forward with them, this one included. If the store commit below fails, `recover`
+        // reloads the doc and the replica and forgets the list (`reload_disk`)
+        if let Some(c) = st.disk.as_mut().and_then(|d| d.catch_up.as_mut()) {
+            c.push(update.clone());
+        }
         let (replica_state, _) = match self.replica_to_file(st, &roots, &file_edits) {
             Ok(s) => s,
             Err(e) => {
@@ -3629,40 +4692,110 @@ impl Session {
             ));
         }
         // the change as applied to the live doc, at element identity (SPEC-UNDO, preamble):
-        // the merge puts the outside edit's elements where the engine orders them, and in
-        // repeated text a diff of the texts would name other elements (a region carried onto
-        // a copy of its own line; v0.9.3, `tests/outside_edit_undo.rs`). Canonical hunks.
-        let root_hunks: Vec<(&'static str, Vec<Hunk>)> = before
+        // the merge puts the outside edit's elements where its hunks say, on the live doc
+        // itself (`edit_as` deletes exactly the elements in each range and inserts new ones at
+        // its start), so the merge's canonical hunks are that change (v0.9.7). Not a diff of
+        // the texts: in repeated text that would name other elements (a region carried onto a
+        // copy of its own line; v0.9.3, `tests/outside_edit_undo.rs`). Every root with hunks
+        // is part of the change, its text changed or not.
+        let mut mismatched = Vec::new();
+        let mut map_wrong = false;
+        let root_hunks: Vec<(&'static str, Vec<Hunk>)> = edits
             .iter()
-            .zip(&after)
-            .filter(|((_, old), (_, new))| old != new)
-            .map(|((root, old), (_, new))| {
-                let old_ids = ids_before
+            .map(|e| {
+                let Edit::Text { root, hunks: given } = e;
+                let (root, old) = before
                     .iter()
                     .find(|(r, _)| r == root)
-                    .and_then(|(_, ids)| ids.as_deref());
-                let at_identity = old_ids.and_then(|old_ids| {
-                    let runs = st.doc.blame_runs(root).ok()?;
-                    let new_ids = super::prov::elem_ids(new, &runs)?;
-                    super::prov::identity_hunks(old, old_ids, new, &new_ids)
-                });
-                debug_assert!(
-                    at_identity.is_some(),
-                    "an outside edit's change at element identity on {root}"
-                );
-                // never on a correct stream; a diff of the texts keeps the text right
-                (*root, at_identity.unwrap_or_else(|| diff::hunks(old, new)))
+                    .expect("an edited root");
+                let new = &after.iter().find(|(r, _)| r == root).expect("a root").1;
+                // the full computation from the engine's element IDs (on a sampled save, when
+                // the IDs before the merge were taken)
+                let full = |st: &State| {
+                    let old_ids = ids_before
+                        .iter()
+                        .find(|(r, _)| r == root)
+                        .and_then(|(_, ids)| ids.as_deref());
+                    old_ids.and_then(|old_ids| {
+                        let runs = st.doc.blame_runs(root).ok()?;
+                        let new_ids = super::prov::elem_ids(new, &runs)?;
+                        super::prov::identity_hunks(old, old_ids, new, &new_ids)
+                    })
+                };
+                let hunks = if diff::apply(old, given) == *new {
+                    // a sampled save: a difference is reported; the given hunks, which the
+                    // engine applied, stay the record's, and the map (which would follow
+                    // them) is dropped
+                    if check && full(st).is_some_and(|f| f != *given) {
+                        mismatched.push(*root);
+                        map_wrong = true;
+                    }
+                    given.clone()
+                } else {
+                    // never on a correct merge: the full computation on a sampled save, else
+                    // a diff of the texts (which keeps the text right); the map is dropped
+                    mismatched.push(*root);
+                    map_wrong = true;
+                    full(st).unwrap_or_else(|| diff::hunks(old, new))
+                };
+                (*root, hunks)
             })
             .collect();
+        for root in mismatched {
+            self.emit(AuditEvent::IdentityMismatch {
+                key: st.key.clone(),
+                root: root.to_owned(),
+                change: st.version + 1,
+            });
+        }
+        // the provenance map follows the change as local edits do (`apply_local`), in
+        // O(the change): each hunk's inserted elements are the external client's next clocks
+        // in the engine's order, fresh (their own roots: an outside edit restores nothing)
+        if map_wrong {
+            prov = None;
+        }
+        if let Some(p) = prov.as_mut() {
+            let firsts = crate::engine::insert_clocks(clock_before, &edits);
+            // the hunks the engine was handed are canonical: its clocks are the predicted ones
+            debug_assert_eq!(
+                st.doc.clock_of(client) - clock_before,
+                edits
+                    .iter()
+                    .flat_map(|e| {
+                        let Edit::Text { hunks, .. } = e;
+                        hunks.iter().map(|h| h.insert.encode_utf16().count() as u32)
+                    })
+                    .sum::<u32>(),
+                "the outside edit's insert clocks"
+            );
+            for (e, firsts) in edits.iter().zip(&firsts) {
+                let Edit::Text { root, hunks } = e;
+                let old = &before.iter().find(|(r, _)| r == root).expect("a root").1;
+                let ins: Vec<Inserted> = firsts
+                    .iter()
+                    .map(|&clock| Inserted {
+                        id: ElemId::new(client, clock),
+                        roots: None,
+                    })
+                    .collect();
+                p.apply(root, old, hunks, &ins);
+            }
+        }
+        st.prov = prov;
+        // per root, what the channel reports: the authored hunks where D1 widened the save
+        // (the same text), else the change at element identity, as before
+        let told_of = |root: &str, hunks: &[Hunk]| -> Vec<Hunk> {
+            authored
+                .iter()
+                .find(|(r, _)| r == root)
+                .map_or_else(|| hunks.to_vec(), |(_, h)| h.clone())
+        };
         let mut info = ChangeInfo::new(ChangeKind::External, EXTERNAL_PID, "disk", now);
         let mut record = Vec::new();
-        for ((root, hunks), ((_, old), (_, new))) in root_hunks.iter().zip(
-            before
-                .iter()
-                .zip(&after)
-                .filter(|((_, old), (_, new))| old != new),
-        ) {
-            let (a, r) = summary::line_counts(old, new, hunks);
+        for (root, hunks) in &root_hunks {
+            let old = &before.iter().find(|(r, _)| r == root).expect("a root").1;
+            let new = &after.iter().find(|(r, _)| r == root).expect("a root").1;
+            let (a, r) = summary::line_counts(old, new, &told_of(root, hunks));
             info.lines_added += a as u64;
             info.lines_removed += r as u64;
             // its hunks are at element identity (v0.9.3), but its record keeps no roots, as
@@ -3683,6 +4816,13 @@ impl Session {
                 end: st.doc.clock_of(client),
             }),
             provenance: Vec::new(),
+            // D1 widened it: the store keeps what the channel reports (v0.9.7)
+            authored: (!authored.is_empty()).then(|| {
+                root_hunks
+                    .iter()
+                    .map(|(root, hunks)| ((*root).to_owned(), told_of(root, hunks)))
+                    .collect()
+            }),
         };
         versions.push(Version {
             seq,
@@ -3721,7 +4861,8 @@ impl Session {
         // bookkeeping, as for any change
         let mut regions = Vec::new();
         for (root, hunks) in root_hunks {
-            Self::carry(st, root, &hunks, EXTERNAL_PID);
+            let told = told_of(root, &hunks);
+            Self::carry(st, root, &told, &hunks, EXTERNAL_PID);
             let mut delta: isize = 0;
             for h in &hunks {
                 let s0 = (h.start as isize + delta) as usize;
@@ -3736,7 +4877,7 @@ impl Session {
                     client,
                     via: "disk".to_owned(),
                     root: root.to_owned(),
-                    hunks,
+                    hunks: told,
                     at_ms: now,
                     on_behalf_of: None,
                 },
@@ -3822,7 +4963,8 @@ impl Session {
     /// included. v0.9.4 compared state vectors, which a delete-only change leaves equal: for
     /// text such a change can't leave the bytes as they were, but in a structured doc
     /// deleting an empty or absent cell can, and the stale replica stayed. So this is O(1)
-    /// when nothing changed, one full encode and load when something did. The re-synced
+    /// when nothing changed, one full encode when something did; the replica takes the
+    /// changes since ([`Session::replica_to`], v0.9.7) instead of a reload. The re-synced
     /// replica is stored as the synced state (the write-back's two calls), so a restart
     /// can't bring the old one back; if storing fails it is reported, and the next load,
     /// which runs this again, heals it.
@@ -3845,9 +4987,10 @@ impl Session {
                 return Err(e.into());
             }
         };
-        let replica = self.checked(Doc::load(self.schema, &state)?);
+        // the replica follows the doc as at a write-back (v0.9.7): the changes since
+        // applied to it, or reloaded from `state` when those aren't known
+        self.replica_to(st, &state)?;
         let d = st.disk.as_mut().expect("has disk");
-        d.replica = replica;
         d.replica_bytes = state.len() as u64;
         d.synced_seq = st.version;
         let sync = SyncState {
@@ -3872,7 +5015,9 @@ impl Session {
     /// After an outside save is merged into the doc (v0.9.5): the disk replica takes the
     /// file's text (`file`, every root; `file_edits` the save on the replica's text). Returns
     /// its state, to be stored as the synced state, and whether it is the doc.
-    /// - When the doc now holds the file's text, the replica is the doc: the same elements.
+    /// - When the doc now holds the file's text, the replica is the doc: the same elements,
+    ///   brought forward by the updates since its last sync ([`Session::replica_to`],
+    ///   v0.9.7; the caller has added the merged save's), not reloaded from the encoding.
     /// - Otherwise (the doc holds changes the file doesn't have yet; the write-back follows)
     ///   the save is made on the replica as a client of its own, one the doc never holds.
     ///   The doc doesn't render the synced bytes until it changes again (which moves its
@@ -3896,12 +5041,18 @@ impl Session {
             held &= st.doc.text(root)? == *t;
         }
         if held {
+            // the stored synced state is the doc's
             let state = st.doc.encode_state()?;
-            let replica = self.checked(Doc::load(self.schema, &state)?);
-            st.disk.as_mut().expect("has disk").replica = replica;
+            // the replica becomes the doc as a write-back makes it (v0.9.7): brought forward
+            // by the updates the doc took since its last sync (the merged save's included),
+            // reloaded from `state` only when those aren't known. Then in step
+            self.replica_to(st, &state)?;
             return Ok((state, true));
         }
         let d = st.disk.as_mut().expect("has disk");
+        // the replica takes a save the doc never holds (a client of its own, below): the next
+        // write-back replaces it whole (v0.9.7), never brings it forward
+        d.catch_up = None;
         if !file_edits.is_empty() {
             let own = loop {
                 let c = random_client();
@@ -3955,7 +5106,6 @@ impl Session {
                 return Err(e.into());
             }
         };
-        let replica = self.checked(Doc::load(self.schema, &state)?);
         let store = self.store(st)?.clone();
         let pending = SyncState {
             hash: h.clone(),
@@ -3985,8 +5135,9 @@ impl Session {
         if let Err(e) = promoted {
             self.disk_error(st, "recording the write-back", e);
         }
+        // the file and the store are done: memory follows them, then any failure is reported
+        let replica = self.replica_to(st, &pending.state);
         let d = st.disk.as_mut().expect("has disk");
-        d.replica = replica;
         d.replica_bytes = pending.state.len() as u64;
         d.synced_hash = h.clone();
         d.synced_seq = st.version;
@@ -3997,11 +5148,76 @@ impl Session {
         }
         d.stat = Some(disk::Seen::now(stat));
         d.dirty_since = None;
+        replica?;
         Ok(true)
+    }
+
+    /// The disk replica becomes the live doc's state (`state`, its encoding), as a write-back
+    /// or an outside save the doc now holds leaves it (v0.9.7). In step: the updates the live doc took since are applied to it,
+    /// O(those changes). Otherwise (not known, an apply that fails, or the test-only switch
+    /// to the old path) it is reloaded from `state`, O(the doc). Every time, the result's
+    /// state vector is compared with the doc's (O(clients): an insert lost or foreign); one
+    /// time in [`Config::writeback_check_every`] its deletions and texts are too (a lost
+    /// delete; not the encodings, which may differ for equal content). A mismatch is
+    /// reported ([`AuditEvent::DiskReplicaMismatch`]) and the replica reloaded. Fails only if
+    /// `state` doesn't load (never on a correct stream: it was just encoded from the live
+    /// doc); the changes since are then not known.
+    fn replica_to(&self, st: &mut State, state: &[u8]) -> Result<()> {
+        let key = st.key.clone();
+        let version = st.version;
+        let every = u64::from(self.config.writeback_check_every);
+        let d = st.disk.as_mut().expect("has disk");
+        d.writebacks += 1;
+        #[cfg(any(test, feature = "differential"))]
+        let old_path = crate::differential::full_writeback();
+        #[cfg(not(any(test, feature = "differential")))]
+        let old_path = false;
+        let caught_up = match d.catch_up.take() {
+            Some(updates) if !old_path => updates
+                .iter()
+                .try_for_each(|u| d.replica.apply_trusted(u))
+                .is_ok(),
+            _ => false,
+        };
+        let mut reload = !caught_up;
+        // every time, O(clients): the replica holds exactly the doc's inserts (a lost or
+        // foreign insert shows); one in `every`, O(doc): the same deletions and texts too (a
+        // lost delete). Not the encodings: upstream may split equal content into blocks
+        // differently on the two docs.
+        if caught_up
+            && (!d.replica.same_state_vector(&st.doc)
+                || (every != 0 && d.writebacks % every == 0 && !d.replica.same_content(&st.doc)))
+        {
+            reload = true;
+            self.emit(AuditEvent::DiskReplicaMismatch { key, version });
+        }
+        if !reload {
+            st.disk.as_mut().expect("has disk").caught_up += 1;
+        }
+        if reload {
+            match Doc::load(self.schema, state) {
+                Ok(r) => {
+                    let d = st.disk.as_mut().expect("has disk");
+                    d.replica = self.checked(r);
+                }
+                // never on a correct stream; the next sync tries again from scratch
+                Err(e) => {
+                    st.disk.as_mut().expect("has disk").catch_up = None;
+                    return Err(e.into());
+                }
+            }
+        }
+        st.disk.as_mut().expect("has disk").catch_up = Some(Vec::new());
+        Ok(())
     }
 
     /// After a store failure: the disk replica and format back to what the store holds.
     fn reload_disk(&self, st: &mut State) {
+        // the live doc was reloaded: the replica is not known to be in step with it, whatever
+        // follows (an update already applied to the replica may not have been stored)
+        if let Some(d) = st.disk.as_mut() {
+            d.catch_up = None;
+        }
         let Some(store) = st.store.clone() else {
             return;
         };
@@ -4107,6 +5323,9 @@ struct Applied {
     record: Vec<RecordRoot>,
     /// The provenance rows of the elements it put back (U23).
     prov_rows: Vec<ProvRow>,
+    /// D1 widened a root's hunks: `roots` (authored) differ from `record` (widened), so the
+    /// store keeps `roots` beside the record (v0.9.7).
+    widened: bool,
     kind: ChangeKind,
     of: Option<u64>,
     changed: Vec<LineRange>,

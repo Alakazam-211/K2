@@ -26,6 +26,7 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 | `hist.undo_partial` | K-HIST-13, K-CT-4 | Undo | pass | never |
 | `hist.redo` | E-HIST-6, K-HIST-2 | Undo | pass | never |
 | `hist.undo_own_only` | E-HIST-5, undo spec U10, U10a (by root, v1.8), U18a, U23 | Undo + Blame | pass | never |
+| `hist.undo_own_only_tokens` | undo spec v1.10, D1 (authored ranges, by token) | Undo + Blame | pass | never |
 | `hist.version_stable` | E-HIST-1 | Versions | pass | pass |
 | `hist.restore_forward` | E-HIST-2, K-HIST-8 | Versions | pass | pass |
 | `hist.restore_minimal` | K-HIST-8, undo spec D1 | Versions | pass | pass |
@@ -71,6 +72,7 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 - `hist.undo_partial` on mpce-model (FugueMax): undo is the kit's, over a session (undo spec); the model has no sessions.
 - `hist.redo` on mpce-model (FugueMax): undo is the kit's, over a session (undo spec); the model has no sessions.
 - `hist.undo_own_only` on mpce-model (FugueMax): undo is the kit's, over a session (undo spec); the model has no sessions.
+- `hist.undo_own_only_tokens` on mpce-model (FugueMax): undo is the kit's, over a session (undo spec); the model has no sessions.
 - `hist.blame_grain` on kit Doc (yrs): blame at a version needs that version's items with their IDs. Yrs keeps no engine state of a past version: garbage collection is on (K-PURGE-11), so deleted items keep no content, and the kit's versions are engine-neutral text (K-HIST-5) with no attribution. The kit blames the live doc (text.blame_char; erase.purge checks a purge moves no other character's blame).
 - `hist.merge_any_base` on kit Doc (yrs): a branch from a past version needs that version's engine state. Yrs keeps none: garbage collection is on (K-PURGE-11), and the kit's versions are engine-neutral text (K-HIST-5) over a log that is compacted and, at a purge, replaced. The kit has no branch verb (K-BR-6 is the native engine's, G2a); a branch from the current state runs (hist.branch_merge).
 
@@ -82,4 +84,4 @@ Later (not in this suite yet):
 
 - The **concurrency class** of the trace test: concurrent thin-client batches integrated between undo steps, the oracle consuming the daemon's applied hunks; equal wherever the merged texts agree, other differences classified by the Def. 4 checker; Ctrl+Z with unacked ops (U21). Target: G3.
 - The trace test's **native leg** (oracle vs the kit on the native engine), and the **positions PT**: each engine's reported hunk positions against `k2e-model`'s element positions on the alphabet `{a, \n}`, with a text-diffing mutant adapter that must fail (N4, E-HIST-5). Target: native engine, G2a / G3.
-- Person grouping (U3, the daemon-side (g) split) and its case class; `hist.undo_group_person`, `hist.ctrl_z_unacked`. Target: native tab, G3.
+- Person grouping (U3) in the oracle's trace test (the kit's closers and the host-side (g) split are in v0.9.7, `hist.undo_group_person` in `crates/base/tests/history.rs` with its trace class) and Ctrl+Z with unacked ops; `hist.ctrl_z_unacked`. Target: native tab, G3.

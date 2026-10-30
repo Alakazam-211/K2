@@ -1,0 +1,21 @@
+MPC-E142 missing_deps (sessions and edits)
+exit:     2
+message:  update depends on changes this doc doesn't have (client {client} from clock {from}, doc has {have}); resync
+next:     The update builds on changes this doc never received. The editor should resync (send its state vector, then the missing changes).
+rule:     K-SEC-17
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E142",
+  "name": "missing_deps",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "update depends on changes this doc doesn't have (client {client} from clock {from}, doc has {have}); resync",
+  "next": "The update builds on changes this doc never received. The editor should resync (send its state vector, then the missing changes).",
+  "rule": "K-SEC-17",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

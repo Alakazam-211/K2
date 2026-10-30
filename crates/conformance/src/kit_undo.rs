@@ -8,6 +8,7 @@ use std::sync::Arc;
 use k2_mpc_base::session::{
     ConflictRegion, Declined, Pack, PackContent, PackError, UndoMode, UndoOutcome, UndoRequest,
 };
+use k2_mpc_base::text::lines::Tokens;
 use k2_mpc_base::{Edit, Kind, Neutral, Schema};
 
 use crate::caps::{Applied, ElemBlame, PartialUndo, Region, Undo, UndoRefusal};
@@ -19,8 +20,9 @@ const ROOTS: [&str; 2] = ["r0", "r1"];
 /// Separates the two roots in the pack's file bytes.
 const SEP: char = '\u{1e}';
 
-/// A pack with two text roots (the file is the two texts joined by `SEP`).
-struct TwoRoots;
+/// A pack with two text roots (the file is the two texts joined by `SEP`), with a token
+/// rule for D1 (undo spec v1.10).
+struct TwoRoots(Tokens);
 
 impl Pack for TwoRoots {
     fn schema(&self) -> Schema {
@@ -55,6 +57,10 @@ impl Pack for TwoRoots {
                 .ok_or_else(|| PackError(format!("no root {name}")))
         };
         Ok(format!("{}{SEP}{}", text(ROOTS[0])?, text(ROOTS[1])?).into_bytes())
+    }
+
+    fn tokens(&self) -> Tokens {
+        self.0
     }
 
     fn normalize_input<'a>(&self, _root: &str, text: &'a str) -> Cow<'a, str> {
@@ -128,10 +134,15 @@ impl KitUndo {
 impl Undo for KitUndo {
     type Engine = YrsText;
 
-    fn open(seeds: [&str; 2]) -> Self {
+    fn open_tokens(seeds: [&str; 2], tokens: Tokens) -> Self {
         let bytes = format!("{}{SEP}{}", seeds[0], seeds[1]);
         KitUndo {
-            doc: KitDoc::open(Arc::new(TwoRoots), "undo.txt", bytes.as_bytes(), &ROOTS),
+            doc: KitDoc::open(
+                Arc::new(TwoRoots(tokens)),
+                "undo.txt",
+                bytes.as_bytes(),
+                &ROOTS,
+            ),
         }
     }
 

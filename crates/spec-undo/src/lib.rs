@@ -11,3 +11,19 @@
 pub mod bounded;
 pub mod itf;
 pub mod model;
+
+/// The run record's `job` field (`tools/evidence/`): the job id K2 Compute's nodes set in
+/// `K2_COMPUTE_JOB`, as a JSON string, or `null` off a node (then `collect.py` fills it in).
+/// Only `[A-Za-z0-9_-]` is taken, so the record stays valid JSON.
+pub fn runrec_job() -> String {
+    match std::env::var("K2_COMPUTE_JOB") {
+        Ok(j)
+            if !j.is_empty()
+                && j.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') =>
+        {
+            format!("\"{j}\"")
+        }
+        _ => "null".to_owned(),
+    }
+}

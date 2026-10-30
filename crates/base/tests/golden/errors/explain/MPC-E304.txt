@@ -1,0 +1,21 @@
+MPC-E304 bad_claim (presence and claims)
+exit:     2
+message:  bad claim: {reason}
+next:     The claim call isn't valid as given (the message says why: not your claim, a zero ttl, several claims and no --id...). Fix the arguments; claim --release with no id releases all of yours.
+rule:     A13 (claims)
+verbs:    claim; claim --renew; claim --release
+status:   live
+--- json
+{
+  "id": "MPC-E304",
+  "name": "bad_claim",
+  "area": "presence and claims",
+  "exit": 2,
+  "message": "bad claim: {reason}",
+  "next": "The claim call isn't valid as given (the message says why: not your claim, a zero ttl, several claims and no --id...). Fix the arguments; claim --release with no id releases all of yours.",
+  "rule": "A13 (claims)",
+  "verbs": ["claim", "claim --renew", "claim --release"],
+  "returned_by": ["claim", "claim --renew", "claim --release"],
+  "status": "live",
+  "since_or_until": null
+}

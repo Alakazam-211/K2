@@ -1,0 +1,21 @@
+MPC-E705 blob_damaged (tier 0 and blobs)
+exit:     1
+message:  blob {blob} is damaged (its bytes don't match its id)
+next:     The stored bytes of that version are damaged and are never served. Pick another version (log), and report it.
+rule:     K-T0-4
+verbs:    cat; show --version; restore
+status:   live
+--- json
+{
+  "id": "MPC-E705",
+  "name": "blob_damaged",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "blob {blob} is damaged (its bytes don't match its id)",
+  "next": "The stored bytes of that version are damaged and are never served. Pick another version (log), and report it.",
+  "rule": "K-T0-4",
+  "verbs": ["cat", "show --version", "restore"],
+  "returned_by": ["cat", "show --version", "restore"],
+  "status": "live",
+  "since_or_until": null
+}

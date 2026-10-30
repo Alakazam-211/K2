@@ -410,8 +410,7 @@ impl<'de> Deserialize<'de> for IdSet {
             where
                 A: SeqAccess<'de>,
             {
-                // `size_hint` comes from the (possibly untrusted) serialized input, so cap the
-                // pre-allocation the way serde's own impls do; the Vec grows past it if needed.
+                // k2 (hardening)
                 let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
                 while let Some(x) = seq.next_element()? {
                     bytes.push(x);

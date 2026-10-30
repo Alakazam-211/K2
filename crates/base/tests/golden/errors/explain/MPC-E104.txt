@@ -1,0 +1,21 @@
+MPC-E104 forbidden_approver (sessions and edits)
+exit:     3
+message:  refused: needs Approver rights
+next:     Only the person a change was made for can approve or decline it; an agent never can, even the one that made it. Ask that person to run approve or decline (list the pending changes with log --pending). Don't retry.
+rule:     K-ID-11
+verbs:    approve; decline
+status:   live
+--- json
+{
+  "id": "MPC-E104",
+  "name": "forbidden_approver",
+  "area": "sessions and edits",
+  "exit": 3,
+  "message": "refused: needs Approver rights",
+  "next": "Only the person a change was made for can approve or decline it; an agent never can, even the one that made it. Ask that person to run approve or decline (list the pending changes with log --pending). Don't retry.",
+  "rule": "K-ID-11",
+  "verbs": ["approve", "decline"],
+  "returned_by": ["approve", "decline"],
+  "status": "live",
+  "since_or_until": null
+}

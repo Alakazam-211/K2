@@ -1,4 +1,7 @@
 use crate::block::{Block, EmbedPrelim, Item, ItemContent, ItemPosition, ItemPtr, Prelim, Unused};
+use crate::position_index::{
+    resolve, scan, scan_from, Located, Marker, Markers, PositionMismatch, Stop, MAX_MARKERS,
+};
 use crate::transaction::TransactionMut;
 use crate::types::{
     AsPrelim, Attrs, Branch, BranchPtr, DefaultPrelim, Delta, Out, Path, RootRef, SharedRef,
@@ -168,6 +171,9 @@ pub trait Text: AsRef<Branch> + Sized {
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
     ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
+    ///
     /// # Examples
     ///
     /// By default Document uses byte offset:
@@ -210,11 +216,12 @@ pub trait Text: AsRef<Branch> + Sized {
     /// ```
     ///
     fn insert(&self, txn: &mut TransactionMut, index: u32, chunk: &str) {
-        if chunk.is_empty() {
-            return;
+        if chunk.is_empty() || self.as_ref().refuse_write() {
+            return; // k2 (hardening)
         }
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
+            let markers = take_markers(this);
             let value = crate::block::PrelimString(chunk.into());
             while let Some(right) = pos.right.as_ref() {
                 if right.is_deleted() {
@@ -224,18 +231,24 @@ pub trait Text: AsRef<Branch> + Sized {
                     break;
                 }
             }
-            txn.create_item(&pos, value, None);
+            let item = txn.create_item(&pos, value, None);
+            restore_after_insert(this, txn, markers, index, item);
         } else {
             panic!("The type or the position doesn't exist!");
         }
     }
 
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn apply_delta<D, P>(&self, txn: &mut TransactionMut, delta: D)
     where
         D: IntoIterator<Item = Delta<P>>,
         P: Prelim,
     {
         let branch = BranchPtr::from(self.as_ref());
+        if branch.refuse_write() {
+            return; // k2
+        }
         let mut pos = ItemPosition {
             parent: TypePtr::Branch(branch),
             left: None,
@@ -272,6 +285,9 @@ pub trait Text: AsRef<Branch> + Sized {
     /// formatting blocks.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn insert_with_attributes(
         &self,
         txn: &mut TransactionMut,
@@ -279,13 +295,15 @@ pub trait Text: AsRef<Branch> + Sized {
         chunk: &str,
         attributes: Attrs,
     ) {
-        if chunk.is_empty() {
-            return;
+        if chunk.is_empty() || self.as_ref().refuse_write() {
+            return; // k2 (hardening)
         }
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
+            let markers = take_markers(this);
             let value = block::PrelimString(chunk.into());
-            insert(this, txn, &mut pos, value, attributes);
+            let item = insert(this, txn, &mut pos, value, attributes);
+            restore_after_insert(this, txn, markers, index, item);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -298,15 +316,24 @@ pub trait Text: AsRef<Branch> + Sized {
     /// the end of it.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn insert_embed<V>(&self, txn: &mut TransactionMut, index: u32, content: V) -> V::Return
     where
         V: Into<EmbedPrelim<V>> + Prelim,
     {
+        self.as_ref().assert_writable(); // k2
         let this = BranchPtr::from(self.as_ref());
         if let Some(pos) = find_position(this, txn, index) {
+            let markers = take_markers(this);
             let ptr = txn
                 .create_item(&pos, content.into(), None)
                 .expect("cannot insert empty value");
+            restore_after_insert(this, txn, markers, index, Some(ptr));
             if let Ok(integrated) = ptr.try_into() {
                 integrated
             } else {
@@ -325,6 +352,12 @@ pub trait Text: AsRef<Branch> + Sized {
     /// a formatting blocks.
     ///
     /// This method will panic if provided `index` is greater than the length of a current text.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn insert_embed_with_attributes<V>(
         &self,
         txn: &mut TransactionMut,
@@ -335,10 +368,13 @@ pub trait Text: AsRef<Branch> + Sized {
     where
         V: Into<EmbedPrelim<V>> + Prelim,
     {
+        self.as_ref().assert_writable(); // k2
         let this = BranchPtr::from(self.as_ref());
         if let Some(mut pos) = find_position(this, txn, index) {
+            let markers = take_markers(this);
             let item = insert(this, txn, &mut pos, embed.into(), attributes)
                 .expect("cannot insert empty value");
+            restore_after_insert(this, txn, markers, index, Some(item));
             if let Ok(integrated) = item.try_into() {
                 integrated
             } else {
@@ -350,6 +386,9 @@ pub trait Text: AsRef<Branch> + Sized {
     }
 
     /// Appends a given `chunk` of text at the end of a current text structure.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn push(&self, txn: &mut TransactionMut, chunk: &str) {
         let idx = self.len(txn);
         self.insert(txn, idx, chunk)
@@ -358,10 +397,18 @@ pub trait Text: AsRef<Branch> + Sized {
     /// Removes up to a `len` characters from a current text structure, starting at given `index`.
     /// This method panics in case when not all expected characters were removed (due to
     /// insufficient number of characters to remove) or `index` is outside of the bounds of text.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
         let this = BranchPtr::from(self.as_ref());
+        if this.refuse_write() {
+            return; // k2
+        }
         if let Some(mut pos) = find_position(this, txn, index) {
-            remove(txn, &mut pos, len)
+            let markers = take_markers(this);
+            remove(txn, &mut pos, len);
+            restore_markers(this, txn, markers, index, 0, len);
         } else {
             panic!("The type or the position doesn't exist!");
         }
@@ -369,8 +416,14 @@ pub trait Text: AsRef<Branch> + Sized {
 
     /// Wraps an existing piece of text within a range described by `index`-`len` parameters with
     /// formatting blocks containing provided `attributes` metadata.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn format(&self, txn: &mut TransactionMut, index: u32, len: u32, attributes: Attrs) {
         let this = BranchPtr::from(self.as_ref());
+        if this.refuse_write() {
+            return; // k2
+        }
         if let Some(mut pos) = find_position(this, txn, index) {
             insert_format(this, txn, &mut pos, len, attributes)
         } else {
@@ -731,7 +784,212 @@ pub(crate) fn update_current_attributes(attrs: &mut Attrs, key: &str, value: &An
     }
 }
 
+/// k2: finds `index` in a text. A text without formatting starts from its nearest position
+/// marker ([crate::position_index]); a formatted text, or any text when the index is off, walks
+/// from its start ([find_position_walk]).
 fn find_position(this: BranchPtr, txn: &mut TransactionMut, index: u32) -> Option<ItemPosition> {
+    let store = txn.store_mut();
+    store.position_index.stats.lookups += 1;
+    if !store.position_index.enabled || this.has_formatting {
+        store.position_index.stats.walks += 1;
+        return find_position_walk(this, txn, index);
+    }
+    let encoding = store.offset_kind;
+    let mut this = this;
+
+    // the marker path
+    let mut from: Option<(usize, Marker)> = None;
+    let mut found: Option<Located> = None;
+    if index > 0 {
+        if let Some(markers) = this.markers.as_deref() {
+            if let Some(i) = markers.nearest(index) {
+                let m = markers.get(i);
+                // the start is nearer (in content units) than any marker: walk from there
+                if index > m.index.abs_diff(index) {
+                    // every marker lookup is checked before its result is used: the marker
+                    // resolves to a live unit of this branch, its start is <= its index, and
+                    // the scan from it adds up (checked arithmetic, a split inside the block on
+                    // a character boundary); else it is stale, and the lookup walks
+                    let resolved = resolve(&store.blocks, this, &m, encoding)
+                        .ok_or(Stop::Invalid)
+                        .and_then(|(anchor, start)| scan_from(anchor, start, index, encoding));
+                    match resolved {
+                        Ok(l) => {
+                            found = Some(l);
+                            from = Some((i, m));
+                        }
+                        // a live format item without the branch's formatting flag: walk the
+                        // formatting-aware way
+                        Err(Stop::Format) => {
+                            this.markers = None;
+                            store.position_index.stats.walks += 1;
+                            return find_position_walk(this, txn, index);
+                        }
+                        Err(Stop::Invalid) => {
+                            store.position_index.stats.stale_markers += 1;
+                            this.markers = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let located = match (found, from) {
+        (Some(l), Some((i, m))) => {
+            let pi = &mut store.position_index;
+            pi.stats.marker_hits += 1;
+            if pi.sample() {
+                pi.stats.shadow_checks += 1;
+                let walk = scan(None, this.start, index, 0, encoding);
+                match walk {
+                    Ok(w) if w.same_place(&l) => {
+                        if let Some(markers) = this.markers.as_deref_mut() {
+                            markers.touch(i);
+                        }
+                        Some((l, Some(i), true))
+                    }
+                    Ok(w) => {
+                        pi.stats.mismatches += 1;
+                        if let Some(hook) = pi.hook.as_ref() {
+                            hook(&PositionMismatch {
+                                branch: this.id(),
+                                index,
+                                marker: (m.index, m.id),
+                                marker_result: l.position(),
+                                walk_result: w.position(),
+                            });
+                        }
+                        this.markers = None;
+                        Some((w, None, false))
+                    }
+                    // the walk itself stopped (a format item, or an index the old walk must
+                    // handle, as it always has)
+                    Err(_) => {
+                        this.markers = None;
+                        None
+                    }
+                }
+            } else {
+                if let Some(markers) = this.markers.as_deref_mut() {
+                    markers.touch(i);
+                }
+                Some((l, Some(i), true))
+            }
+        }
+        _ => {
+            store.position_index.stats.walks += 1;
+            if index == 0 {
+                return find_position_walk(this, txn, index);
+            }
+            match scan(None, this.start, index, 0, encoding) {
+                Ok(w) => Some((w, None, true)),
+                Err(_) => None,
+            }
+        }
+    };
+    let (located, reuse, seed) = match located {
+        Some(l) => l,
+        None => return find_position_walk(this, txn, index),
+    };
+
+    // leave a marker where the lookup landed: move the one it started from if that one was
+    // near (as Yjs does), else add one
+    // (not after a mismatch: the branch's markers stay dropped until the next lookup)
+    if let Some((at, id)) = located.seed().filter(|_| seed) {
+        let near = this.content_len / MAX_MARKERS as u32;
+        let reuse = reuse.filter(|&i| {
+            this.markers.as_deref().map_or(false, |ms| {
+                i < ms.len() && ms.get(i).index.abs_diff(at) < near
+            })
+        });
+        this.markers
+            .get_or_insert_with(Box::default)
+            .put(at, id, reuse);
+    }
+
+    // the walk's split, at the same place
+    let mut pos = ItemPosition {
+        parent: this.into(),
+        left: located.left,
+        right: located.right,
+        index: located.index,
+        current_attrs: None,
+    };
+    if located.split > 0 {
+        let left = located.left.unwrap();
+        let right = txn
+            .store_mut()
+            .blocks
+            .split_block(left, located.split, OffsetKind::Utf16)
+            .unwrap();
+        pos.right = Some(right);
+    }
+    Some(pos)
+}
+
+/// k2: takes a text's markers out for a local edit to keep (see [restore_markers]): if the edit
+/// fails part way, they stay out, dropped.
+fn take_markers(mut this: BranchPtr) -> Option<Box<Markers>> {
+    this.markers.take()
+}
+
+/// k2: puts back the markers [take_markers] took, after a local edit that inserted
+/// `inserted` units at `at`, or removed `removed` units from `at`. They stay dropped if the
+/// branch now has formatting or the index is off.
+fn restore_markers(
+    mut this: BranchPtr,
+    txn: &TransactionMut,
+    markers: Option<Box<Markers>>,
+    at: u32,
+    inserted: u32,
+    removed: u32,
+) {
+    let pi = &txn.store().position_index;
+    if let Some(mut markers) = markers {
+        if !pi.enabled || this.has_formatting || this.markers.is_some() {
+            // something looked this text up during the edit: drop both
+            this.markers = None;
+            return;
+        }
+        if inserted > 0 {
+            markers.shift_insert(at, inserted);
+        }
+        if removed > 0 {
+            markers.shift_remove(at, removed, pi.planted);
+        }
+        this.markers = Some(markers);
+    }
+}
+
+/// k2: [restore_markers] after a local insert at `at` that made `item`: only when the item is
+/// a plain chunk or embed, live in this text (an embedded shared type runs its prelim's code,
+/// which could change anything, so the markers stay dropped).
+fn restore_after_insert(
+    mut this: BranchPtr,
+    txn: &TransactionMut,
+    markers: Option<Box<Markers>>,
+    at: u32,
+    item: Option<ItemPtr>,
+) {
+    let inserted = item.and_then(|item| {
+        let plain = matches!(item.content, ItemContent::String(_) | ItemContent::Embed(_));
+        let here = matches!(item.parent, TypePtr::Branch(p) if p == this);
+        (plain && here && !item.is_deleted()).then(|| item.content_len(txn.store().offset_kind))
+    });
+    match inserted {
+        Some(n) => restore_markers(this, txn, markers, at, n, 0),
+        None => this.markers = None,
+    }
+}
+
+/// The walk from the text's start, as upstream has it: what formatted texts use, and every text
+/// when the position index is off ([Doc::set_position_index]).
+fn find_position_walk(
+    this: BranchPtr,
+    txn: &mut TransactionMut,
+    index: u32,
+) -> Option<ItemPosition> {
     let mut pos = {
         ItemPosition {
             parent: this.into(),
@@ -962,6 +1220,13 @@ fn minimize_attr_changes(pos: &mut ItemPosition, attrs: &Attrs) {
     }
 }
 
+/// k2: `attrs` in key order.
+fn sorted_attrs(attrs: Attrs) -> Vec<(std::sync::Arc<str>, Any)> {
+    let mut attrs: Vec<_> = attrs.into_iter().collect();
+    attrs.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    attrs
+}
+
 fn insert_attributes(
     this: BranchPtr,
     txn: &mut TransactionMut,
@@ -970,7 +1235,8 @@ fn insert_attributes(
 ) -> Attrs {
     let mut negated_attrs = HashMap::with_capacity(attrs.len());
     let mut store = txn.store_mut();
-    for (k, v) in attrs {
+    // k2: format items in key order, not the attributes' hash order
+    for (k, v) in sorted_attrs(attrs) {
         let current_value = pos
             .current_attrs
             .as_ref()
@@ -1027,7 +1293,8 @@ fn insert_negated_attributes(
     }
 
     let mut store = txn.store_mut();
-    for (k, v) in attrs {
+    // k2: format items in key order, not the attributes' hash order
+    for (k, v) in sorted_attrs(attrs) {
         let client_id = store.client_id;
         let parent = this.into();
         let item = Item::new(

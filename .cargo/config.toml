@@ -1,0 +1,10 @@
+# Builds run inside this repo (the kit's own tests, tools, nodes' bundles) acknowledge the
+# `untrusted-wire` guard (crates/base/src/lib.rs, K10): the kit's tests enable the feature to
+# test the wire code. Cargo reads this file only for builds started inside this repo: a host
+# that depends on the kit (vendored or by path) never gets it, and must set the cfg itself,
+# deliberately, once the gates in docs/HOST-WIRE.md hold. A RUSTFLAGS (RUSTDOCFLAGS) in the
+# environment replaces this; tools/tests/wire-guard.sh relies on that to show the guard firing.
+[build]
+rustflags = ["--cfg", "k2_mpc_untrusted_wire_ack"]
+# rustdoc (doctests, cargo doc) doesn't take rustflags
+rustdocflags = ["--cfg", "k2_mpc_untrusted_wire_ack"]

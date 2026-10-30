@@ -1,0 +1,21 @@
+MPC-E106 forbidden_owner (sessions and edits)
+exit:     3
+message:  refused: needs Owner rights
+next:     Only an owner of the doc can do this (break someone else's lease, purge). Don't retry: ask an owner. To wait for a lease instead, retry after it expires (status shows the holder and expiry).
+rule:     K-PURGE-1, K-T0-2
+verbs:    lease --break; purge
+status:   live
+--- json
+{
+  "id": "MPC-E106",
+  "name": "forbidden_owner",
+  "area": "sessions and edits",
+  "exit": 3,
+  "message": "refused: needs Owner rights",
+  "next": "Only an owner of the doc can do this (break someone else's lease, purge). Don't retry: ask an owner. To wait for a lease instead, retry after it expires (status shows the holder and expiry).",
+  "rule": "K-PURGE-1, K-T0-2",
+  "verbs": ["lease --break", "purge"],
+  "returned_by": ["lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

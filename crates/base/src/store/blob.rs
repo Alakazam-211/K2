@@ -973,3 +973,16 @@ impl DocStore {
         Ok(())
     }
 }
+
+/// [`super::fuzz_record`] for the blob store's records (feature `fuzzing`).
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
+    use super::enc::fuzz_fixpoint as fx;
+    Some(match name {
+        "blob space" => fx(name, b, true, dec_space, enc_space),
+        "blob row" => fx(name, b, true, dec_row, enc_row),
+        "blob version" => fx(name, b, false, dec_version, enc_version),
+        "blob sync" => fx(name, b, true, dec_sync, enc_sync),
+        _ => return None,
+    })
+}

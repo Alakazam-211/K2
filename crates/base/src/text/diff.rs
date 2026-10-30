@@ -58,10 +58,24 @@ pub fn hunks(old: &str, new: &str) -> Vec<Hunk> {
 }
 
 /// [`hunks`], with the line diff made on whole lines: the common prefix and suffix are
-/// trimmed to line boundaries before it (each changed group is still trimmed to the
-/// character), so lines that share a start or an end are never paired one shifted.
+/// trimmed to line boundaries of both texts before it (each changed group is still trimmed
+/// to the character), so lines that share a start or an end are never paired one shifted.
 pub fn line_hunks(old: &str, new: &str) -> Vec<Hunk> {
     hunks_with(old, new, true)
+}
+
+/// The outside-save merge's sides (v0.9.7): [`line_hunks`], its pure line insertions and
+/// deletions slid to line boundaries where they can be ([`super::lines::align_insertions`],
+/// [`super::lines::align_deletions`]), then every hunk grown to whole lines
+/// ([`super::lines::to_whole_lines`]): it starts at a line start, ends at a line start or at
+/// the end of the text, and writes whole lines (its text ends with "\n" unless it runs to the
+/// end). Two changes in one line are one hunk; changes of different lines stay apart where
+/// they only meet at a line start. Deterministic, valid, and gives `new`; [`hunks`] and
+/// [`line_hunks`] are unchanged.
+pub fn whole_line_hunks(old: &str, new: &str) -> Vec<Hunk> {
+    use super::lines;
+    let h = lines::align_deletions(old, lines::align_insertions(old, line_hunks(old, new)));
+    lines::to_whole_lines(old, &h)
 }
 
 fn hunks_with(old: &str, new: &str, whole_lines: bool) -> Vec<Hunk> {
@@ -73,16 +87,25 @@ fn hunks_with(old: &str, new: &str, whole_lines: bool) -> Vec<Hunk> {
     let (om, nm) = (&old[pre..old.len() - suf], &new[pre..new.len() - suf]);
     let mut out = Vec::new();
     let mut budget = Budget::for_input(old.len() + new.len());
-    if om.is_empty() || nm.is_empty() || (!om.contains('\n') && !nm.contains('\n')) {
+    if !whole_lines
+        && (om.is_empty() || nm.is_empty() || (!om.contains('\n') && !nm.contains('\n')))
+    {
         region_hunks(om, nm, pre, &mut out, &mut budget);
     } else if whole_lines {
+        // (v0.9.7: whole_lines always trims to line starts first, even when the changed
+        // middle is one-sided or within a line: a text kept after the change stays kept)
         let lpre = old[..pre].rfind('\n').map_or(0, |k| k + 1);
-        let s = old.len() - suf;
-        let lsuf = if s == 0 || old.as_bytes()[s - 1] == b'\n' {
-            suf
-        } else {
-            old[s..].find('\n').map_or(0, |k| suf - (k + 1))
-        };
+        // the suffix from a line start of **both** texts (v0.9.7): a boundary that starts a
+        // line of `old` but not of `new` would leave the middle's new text ending inside a
+        // line, kept text then read as part of a change; past the first "\n" inside the
+        // suffix both texts agree
+        let line_start = |t: &str, p: usize| p == 0 || t.as_bytes()[p - 1] == b'\n';
+        let mut lsuf = suf;
+        while lsuf > 0 && !(line_start(old, old.len() - lsuf) && line_start(new, new.len() - lsuf))
+        {
+            let s = old.len() - lsuf;
+            lsuf = old[s..].find('\n').map_or(0, |k| lsuf - (k + 1));
+        }
         let (om, nm) = (&old[lpre..old.len() - lsuf], &new[lpre..new.len() - lsuf]);
         line_then_words(om, nm, lpre, &mut out, &mut budget);
     } else {
@@ -250,6 +273,41 @@ fn region_hunks(o: &str, n: &str, base: usize, out: &mut Vec<Hunk>, budget: &mut
         end: base + ostart[old.end],
         insert: n[nstart[new.start]..nstart[new.end]].to_owned(),
     }));
+}
+
+/// `h` (on `old`) trimmed to the characters it changes: the common prefix and suffix of the
+/// text it deletes and the text it inserts are left out (prefix first, never past a character
+/// boundary). `None` when nothing is left (it would write what is already there). Applying
+/// the result gives the same text; its range lies within `h`'s.
+pub fn trim_hunk(old: &str, h: &Hunk) -> Option<Hunk> {
+    let del = &old[h.start..h.end];
+    let ins = h.insert.as_str();
+    let pre: usize = del
+        .chars()
+        .zip(ins.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    let (del, ins) = (&del[pre..], &ins[pre..]);
+    let suf: usize = del
+        .chars()
+        .rev()
+        .zip(ins.chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum();
+    let (start, end) = (h.start + pre, h.end - suf);
+    let insert = &ins[..ins.len() - suf];
+    (start != end || !insert.is_empty()).then(|| Hunk {
+        start,
+        end,
+        insert: insert.to_owned(),
+    })
+}
+
+/// Every hunk of `hunks` (on `old`) [`trim_hunk`]ed; the ones that change nothing dropped.
+pub fn trim_hunks(old: &str, hunks: &[Hunk]) -> Vec<Hunk> {
+    hunks.iter().filter_map(|h| trim_hunk(old, h)).collect()
 }
 
 /// Merge hunks that touch, so the result is canonical.
@@ -464,6 +522,20 @@ mod tests {
             prop_assert_eq!(&line_hunks(&old, &new), &h);
             for w in h.windows(2) {
                 prop_assert!(w[0].end < w[1].start, "touching hunks {:?}", w);
+            }
+        }
+
+        /// `whole_line_hunks` (the outside-save merge's sides, v0.9.7): valid, a round trip,
+        /// deterministic; every hunk whole lines (starts at a line start, ends at one or at
+        /// the end, writes whole lines), none overlapping, no two insertions at one point.
+        #[test]
+        fn whole_line_hunks_are_whole_lines(old in text(), new in text()) {
+            let h = whole_line_hunks(&old, &new);
+            prop_assert!(validate(&old, &h).is_ok(), "{:?}", h);
+            prop_assert_eq!(apply(&old, &h), new.clone());
+            prop_assert_eq!(&whole_line_hunks(&old, &new), &h);
+            for x in &h {
+                prop_assert!(super::super::lines::is_whole_lines(&old, x), "{:?} of {:?}", x, h);
             }
         }
 

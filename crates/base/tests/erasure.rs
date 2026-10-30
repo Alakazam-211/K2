@@ -195,6 +195,20 @@ fn in_file(p: &Path, needles: &[&str]) -> Vec<usize> {
     hit_needles(&scan_file(p, &b).unwrap())
 }
 
+/// Which of `needles` the session's in-memory disk sync state holds (v0.9.7: the disk replica
+/// and the updates it is still to catch up with), whole or by any 8-byte window.
+fn in_disk_memory(s: &Session, needles: &[&str]) -> Vec<usize> {
+    let blobs = s.disk_memory_for_tests().unwrap();
+    (0..needles.len())
+        .filter(|&i| {
+            needles[i]
+                .as_bytes()
+                .windows(8)
+                .any(|w| blobs.iter().any(|b| b.windows(8).any(|x| x == w)))
+        })
+        .collect()
+}
+
 fn hit_needles(f: &[Finding]) -> Vec<usize> {
     let mut v: Vec<usize> = f.iter().map(|f| f.needle).collect();
     v.sort_unstable();
@@ -211,7 +225,8 @@ fn purge(s: &Session, c: ConnId, scope: PurgeScope) -> k2_mpc_base::session::Pur
 /// K-PURGE-3 `purge::byte_scan`: secrets planted in every place the kit keeps content (the
 /// log, versions, revert records, an undo stack, the read-base cache, the sync replica and
 /// the file, an outside edit), one of them typed in two halves (two records); a history
-/// purge; the store file, the doc's file and the live text then hold none of them. Before
+/// purge; the store file, the doc's file, the session's disk sync memory (v0.9.7: the replica
+/// and the updates it is to catch up with) and the live text then hold none of them. Before
 /// the purge the same scan finds every one (the negative control).
 #[test]
 fn history_purge_leaves_no_bytes_behind() {
@@ -261,6 +276,11 @@ fn history_purge_leaves_no_bytes_behind() {
     // the negative control: every secret is in the store file, s4 in the file too
     assert_eq!(in_store(&f.store, &all), vec![0, 1, 2, 3, 4, 5]);
     assert_eq!(in_file(&f.path("notes.md"), &all), vec![3, 4]);
+    // and the session's disk sync memory: the replica (s4 as written, s5 as the file had it).
+    // The doc had unsaved changes at s5's save, so the replica took it as a client of its own
+    // and keeps no list of updates to catch up with (the next write-back replaces it whole;
+    // v0.9.5's ingest): s6 typed since isn't there
+    assert_eq!(in_disk_memory(&s, &all), vec![3, 4]);
 
     let out = purge(&s, own, PurgeScope::History);
     assert_eq!(out.live_matches, 0);
@@ -282,6 +302,11 @@ fn history_purge_leaves_no_bytes_behind() {
         Vec::<usize>::new(),
         "the file"
     );
+    assert_eq!(
+        in_disk_memory(&s, &all),
+        Vec::<usize>::new(),
+        "the disk replica and its catch-up updates"
+    );
     // live text and what's kept is untouched; the kept line is still in the store
     assert_eq!(text(&s, ed), base);
     assert_eq!(in_store(&f.store, &["keep this line"]), vec![0]);
@@ -296,6 +321,65 @@ fn history_purge_leaves_no_bytes_behind() {
         .unwrap();
     assert!(!named.redacted.is_empty());
     assert!(!s.show(own, named.id).unwrap()[0].1.contains(&s3[..8]));
+}
+
+/// A change D1 widened keeps its authored hunks beside its record (v0.9.7, the `authored`
+/// rows), and those hold inserted text: a secret an agent appended to someone else's word
+/// is in the row (the widened record has the whole token). A history purge blanks the row
+/// as it blanks the record, and the store file holds no byte of the secret after it. The
+/// negative control: the row, the file and the scan hold it before.
+#[test]
+fn purge_reaches_the_authored_hunks_of_a_widened_change() {
+    let f = fx("authored");
+    let s = f.open("w.md", "keep this line\n");
+    let own = join(&s, person("own"));
+    let ed = join(&s, person("ed"));
+    let ag = join(&s, agent("bob-the-agent-0042"));
+    let base = text(&s, ed);
+    let sec = secret();
+    // ed's word, then the agent appends the secret to it: D1 widens the change to the token
+    s.replace_text(ed, ROOT, &format!("{base}wordX\n")).unwrap();
+    let rx = s.subscribe(ag).unwrap();
+    let seq = s
+        .replace_text(ag, ROOT, &format!("{base}wordX{sec}\n"))
+        .unwrap()
+        .version;
+    let ev = rx.try_recv().unwrap();
+    assert_eq!(ev.hunks.len(), 1);
+    assert_eq!(
+        ev.hunks[0].insert, sec,
+        "the authored hunk is the secret alone"
+    );
+    // then it is deleted, so only history holds it
+    s.replace_text(ed, ROOT, &base).unwrap();
+    let id = f.id("w.md");
+    let row = f
+        .store
+        .authored_hunks(id, seq)
+        .unwrap()
+        .expect("widened: a row");
+    assert_eq!(row, vec![(ROOT.to_owned(), ev.hunks.clone())]);
+    // the negative control: the store file holds it
+    assert_eq!(in_store(&f.store, &[&sec]), vec![0]);
+
+    let out = purge(&s, own, PurgeScope::History);
+    assert_eq!(out.live_matches, 0);
+    assert!(out.rewrite.is_some());
+    assert_eq!(
+        in_store(&f.store, &[&sec]),
+        Vec::<usize>::new(),
+        "store file"
+    );
+    assert_eq!(in_file(&f.path("w.md"), &[&sec]), Vec::<usize>::new());
+    // the row keeps its positions, without the text
+    let row = f.store.authored_hunks(id, seq).unwrap().unwrap();
+    assert_eq!(
+        (row[0].1[0].start, row[0].1[0].end),
+        (ev.hunks[0].start, ev.hunks[0].end)
+    );
+    assert!(row[0].1[0].insert.is_empty());
+    assert_eq!(f.store.change_hunks(id, seq).unwrap(), Some(row));
+    assert_eq!(text(&s, ed), base);
 }
 
 /// Without the rewrite, a deleted row's bytes stay in the store file: what the rewrite is
@@ -1140,8 +1224,8 @@ fn purge_at_scale_leaves_no_bytes_behind() {
     }
 }
 
-/// v0.9.5 (rollback): a store holding a newer kit's table (v0.9.7's `authored`, added
-/// without a format bump) refuses a purge before anything changes, with
+/// v0.9.5 (rollback): a store holding a newer kit's table (one added without a format bump;
+/// v0.9.7's `authored` is the kit's own now) refuses a purge before anything changes, with
 /// `StoreError::NewerData` (the registry's `MPC-E502 store_newer`) naming the table and the
 /// kit to upgrade to, exit 6. The store file is byte for byte as it was, and the doc still
 /// reads and edits.
@@ -1154,7 +1238,7 @@ fn a_purge_of_a_store_holding_a_newer_kits_table_is_refused_unchanged() {
     s.replace_text(own, ROOT, &format!("{base}a line to purge\n"))
         .unwrap();
     s.flush(own).unwrap();
-    f.store.add_table_for_tests("authored", false).unwrap();
+    f.store.add_table_for_tests("later_kit", false).unwrap();
     let id = f.id("notes.md");
     let versions = f.store.versions(id).unwrap().len();
     let before = fs::read(f.store.path()).unwrap();
@@ -1162,13 +1246,13 @@ fn a_purge_of_a_store_holding_a_newer_kits_table_is_refused_unchanged() {
         .purge(own, PurgeRequest::new(PurgeScope::History))
         .expect_err("refused");
     let want = StoreError::NewerData {
-        table: "authored".into(),
+        table: "later_kit".into(),
     };
     assert_eq!(err, SessionError::Store(want.clone()));
     assert!(
         err.to_string().contains(
-            "This store holds data from a newer kit (table \"authored\"). Upgrade K2 to a \
-             version with kit ≥ v0.9.7 to purge or rewrite it; reading and editing still work."
+            "This store holds data from a newer kit (table \"later_kit\"). Upgrade K2 to a \
+             version with a newer kit to purge or rewrite it; reading and editing still work."
         ),
         "{err}"
     );

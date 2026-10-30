@@ -12,13 +12,24 @@
 //! compaction can drop log entries and revert still works (K-HIST-20, -22).
 //!
 //! **Purge reach (K-PURGE-3).** Content lives only in `REVERTS` rows (`RecordHunk::insert`
-//! / `deleted`). A purge redacts those (sets `redacted`, blanks the text; a revert then
-//! reports the region as `erased`); `CHANGES` (which keeps every change's id, author, time
+//! / `deleted`) and, since v0.9.7, `AUTHORED` rows (their inserts). A purge redacts those
+//! (sets `redacted`, blanks the text; a revert then reports the region as `erased`; an
+//! authored insert inside a blanked hunk is blanked too); `CHANGES` (which keeps every change's id, author, time
 //! and hunk lengths), `CHANGE_CLOCKS` (client IDs, clocks and change ids), `PROVENANCE`
 //! (element IDs only: a restored run's client and clocks and the root it restores),
 //! `REVERT_INDEX`, `REVERT_CARRY` and `REVERT_STATS` hold positions, sizes and metadata
 //! only, and a record's roots (version 2) are element IDs and lengths, never content. A
 //! purge has nothing more to redact in them, and leaves them as they are.
+//!
+//! **Authored hunks (v0.9.7).** A change D1 widened (undo spec v1.10, the authored-ranges
+//! amendment) also has an `AUTHORED` row: the hunks the participant wrote, per root, which
+//! the hunk channel reported. The revert record keeps the widened hunks (element truth),
+//! so this is the only place the authored ones survive a restart. A side table, not a new
+//! record version: the record decoder stays as it is, and the store format stays 5. The
+//! row is written in the change's own transaction, leaves the window with its record, and
+//! holds inserted text, so a purge reaches it (`purge.rs`). No row means the authored
+//! hunks are the record's: exact for every change D1 didn't widen, and for changes made
+//! before v0.9.7.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -29,6 +40,7 @@ use super::{
     dec_redactions, dec_version, DocId, DocStore, Seq, StoreError, Version, VersionId,
     VersionReason,
 };
+use crate::text::diff::Hunk;
 
 pub(super) const CHANGES: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("changes");
 pub(super) const REVERTS: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("reverts");
@@ -51,6 +63,89 @@ pub(super) const CHANGE_CLOCKS: TableDefinition<(u64, u64, u64), &[u8]> =
 /// purge (element IDs only).
 pub(super) const PROVENANCE: TableDefinition<(u64, u64, u64), &[u8]> =
     TableDefinition::new("provenance");
+/// `(doc, seq)` → the hunks the change's author wrote, per root ([`enc_authored`]), for a
+/// change D1 widened (v0.9.7; module docs). Only widened changes have a row. Written with
+/// the change's revert record and dropped with it; holds inserted text, so a purge blanks
+/// it where it blanks the record.
+///
+/// **Created lazily**, by the first widened change (no store format bump): a store no
+/// widened change reached has no such table, so a kit ≤ v0.9.6 (whose rewrite refuses a
+/// table it doesn't know) can still purge it. Every reader takes a missing table as empty;
+/// every writer but [`put_changes`] leaves a missing table missing. Rows a kit ≤ v0.9.6
+/// left behind (it neither drops nor redacts them) are swept at every open
+/// ([`sweep_authored`]).
+pub(super) const AUTHORED: TableDefinition<(u64, u64), &[u8]> = TableDefinition::new("authored");
+
+/// Whether `w`'s store has table `name` (without creating it, as `open_table` would).
+pub(super) fn has_table(w: &redb::WriteTransaction, name: &str) -> Result<bool, StoreError> {
+    use redb::TableHandle;
+    Ok(w.list_tables()?.any(|t| t.name() == name))
+}
+
+/// The [`AUTHORED`] table, open for writing.
+pub(super) type AuthoredTable<'t> = redb::Table<'t, (u64, u64), &'static [u8]>;
+/// The [`AUTHORED`] table, open for reading.
+type AuthoredRead = redb::ReadOnlyTable<(u64, u64), &'static [u8]>;
+
+/// [`AUTHORED`] in a write transaction, `None` when the store has none (never created).
+pub(super) fn authored_table(
+    w: &redb::WriteTransaction,
+) -> Result<Option<AuthoredTable<'_>>, StoreError> {
+    use redb::TableHandle;
+    if !has_table(w, AUTHORED.name())? {
+        return Ok(None);
+    }
+    Ok(Some(w.open_table(AUTHORED)?))
+}
+
+/// [`AUTHORED`] in a read transaction, `None` when the store has none.
+fn authored_read(r: &redb::ReadTransaction) -> Result<Option<AuthoredRead>, StoreError> {
+    match r.open_table(AUTHORED) {
+        Ok(t) => Ok(Some(t)),
+        Err(redb::TableError::TableDoesNotExist(_)) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// The open-time sweep of [`AUTHORED`] (v0.9.7): a kit ≤ v0.9.6 drops a record (its window,
+/// a doc delete) without its authored row, and redacts a record (a purge) without blanking
+/// it. Every row whose record is gone is deleted; in every other row, an insert no
+/// unredacted hunk of its record holds is blanked (the purge's own rule,
+/// [`super::purge`]). Returns whether anything changed (the caller then rewrites the file,
+/// so no freed page keeps the bytes).
+pub(super) fn sweep_authored(w: &redb::WriteTransaction) -> Result<bool, StoreError> {
+    let Some(mut at) = authored_table(w)? else {
+        return Ok(false);
+    };
+    let rt = w.open_table(REVERTS)?;
+    let rows: Vec<((u64, u64), Vec<u8>)> = at
+        .iter()?
+        .map(|kv| kv.map(|(k, v)| (k.value(), v.value().to_vec())))
+        .collect::<Result<_, _>>()?;
+    let mut changed = false;
+    for (key, b) in rows {
+        let Some(rec) = rt.get(key)?.map(|v| dec_record(v.value())).transpose()? else {
+            at.remove(key)?;
+            changed = true;
+            continue;
+        };
+        let mut roots = dec_authored(&b)?;
+        let mut blanked = false;
+        for (root, hunks) in &mut roots {
+            for h in hunks.iter_mut().filter(|h| !h.insert.is_empty()) {
+                if !super::purge::kept_by(&rec, root, h.start as u64, h.end as u64) {
+                    h.insert.clear();
+                    blanked = true;
+                }
+            }
+        }
+        if blanked {
+            at.insert(key, enc_authored(&roots).as_slice())?;
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
 
 pub(super) fn create_tables(w: &redb::WriteTransaction) -> Result<(), StoreError> {
     w.open_table(CHANGES)?;
@@ -60,6 +155,7 @@ pub(super) fn create_tables(w: &redb::WriteTransaction) -> Result<(), StoreError
     w.open_table(REVERT_STATS)?;
     w.open_table(CHANGE_CLOCKS)?;
     w.open_table(PROVENANCE)?;
+    // AUTHORED: created by the first widened change (lazily; its docs)
     Ok(())
 }
 
@@ -184,6 +280,18 @@ pub(crate) struct RecordRoot {
     pub hunks: Vec<RecordHunk>,
 }
 
+/// One change of the live window ([`super::DocStore::window_rows`]).
+#[derive(Debug, Clone)]
+pub(crate) struct WindowRow {
+    pub seq: Seq,
+    pub info: Option<ChangeInfo>,
+    pub record: Option<RevertRecord>,
+    /// The hunks the change's author wrote, per root, when D1 widened it (v0.9.7, the
+    /// `authored` row): what the hunk channel broadcast. `None`: the record's own hunks.
+    pub authored: Option<RootHunks>,
+    pub client: Option<crate::doc::ClientId>,
+}
+
 /// The persisted revert record of one change (undo spec U22, K-HIST-22).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RevertRecord {
@@ -232,14 +340,22 @@ pub(crate) struct ProvRow {
     pub root: (u64, u32),
 }
 
+/// A change's hunks per root, in record order: what [`DocStore::change_hunks`] returns.
+pub type RootHunks = Vec<(String, Vec<Hunk>)>;
+
 /// A change as appended: its summary, its revert record, when it inserted anything, its
-/// clock span, and the provenance of the elements it restored (an undo, redo or revert).
+/// clock span, the provenance of the elements it restored (an undo, redo or revert), and
+/// the hunks its author wrote when D1 widened them.
 #[derive(Debug, Clone)]
 pub(crate) struct NewChange {
     pub info: ChangeInfo,
     pub record: RevertRecord,
     pub span: Option<ClockSpan>,
     pub provenance: Vec<ProvRow>,
+    /// The authored hunks per root (the hunk channel's), when D1 widened the change: then
+    /// they differ from the record's (v0.9.7). `None` (or the record's own hunks) writes no
+    /// row.
+    pub authored: Option<RootHunks>,
 }
 
 /// The carried bounds of one record, as of log position `carried_to`.
@@ -512,6 +628,70 @@ pub(super) fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
     })
 }
 
+/// The record's hunks per root, as [`Hunk`]s (a redacted hunk's insert is blank).
+pub(super) fn record_hunks(rec: &RevertRecord) -> RootHunks {
+    rec.roots
+        .iter()
+        .map(|r| {
+            let hunks = r
+                .hunks
+                .iter()
+                .map(|h| Hunk {
+                    start: h.start as usize,
+                    end: h.end as usize,
+                    insert: h.insert.clone(),
+                })
+                .collect();
+            (r.root.clone(), hunks)
+        })
+        .collect()
+}
+
+/// An authored-hunks row, version 1: per root its name, then its hunks `(start, end,
+/// insert)`, in the coordinates before the change (canonical, as the channel sent them).
+pub(super) fn enc_authored(roots: &[(String, Vec<Hunk>)]) -> Vec<u8> {
+    let mut w = W::default();
+    w.u8(1).u32(roots.len() as u32);
+    for (root, hunks) in roots {
+        w.str(root).u32(hunks.len() as u32);
+        for h in hunks {
+            w.u64(h.start as u64).u64(h.end as u64).str(&h.insert);
+        }
+    }
+    w.0
+}
+
+pub(super) fn dec_authored(b: &[u8]) -> Result<RootHunks, StoreError> {
+    let mut r = R::new(b, "authored hunks");
+    if r.u8()? != 1 {
+        return Err(StoreError::Corrupt("authored hunks version"));
+    }
+    let pos = |v: u64| usize::try_from(v).map_err(|_| StoreError::Corrupt("authored hunks"));
+    let n = r.u32()? as usize;
+    if n > b.len() {
+        return Err(StoreError::Corrupt("authored hunks roots"));
+    }
+    let mut roots = Vec::with_capacity(n);
+    for _ in 0..n {
+        let root = r.str()?;
+        let k = r.u32()? as usize;
+        if k > b.len() {
+            return Err(StoreError::Corrupt("authored hunks"));
+        }
+        let mut hunks = Vec::with_capacity(k);
+        for _ in 0..k {
+            hunks.push(Hunk {
+                start: pos(r.u64()?)?,
+                end: pos(r.u64()?)?,
+                insert: r.str()?,
+            });
+        }
+        roots.push((root, hunks));
+    }
+    r.end()?;
+    Ok(roots)
+}
+
 /// A provenance row's value: `(end clock, root client, root first clock)`.
 fn enc_prov(end: u32, root: (u64, u32)) -> [u8; 24] {
     let mut out = [0u8; 24];
@@ -658,6 +838,8 @@ pub(super) fn put_changes(
     let mut st = w.open_table(REVERT_STATS)?;
     let mut kt = w.open_table(CHANGE_CLOCKS)?;
     let mut pt = w.open_table(PROVENANCE)?;
+    // opened (so created) only for a widened change's row
+    let mut at = None;
     let mut stats = stats_in(&st, id)?;
     for (&seq, c) in seqs.iter().zip(changes) {
         let shape = c.record.shape();
@@ -674,6 +856,19 @@ pub(super) fn put_changes(
                 enc_prov(p.end, p.root).as_slice(),
             )?;
         }
+        // only a widened change: absent means the record's hunks
+        if let Some(a) = c
+            .authored
+            .as_ref()
+            .filter(|a| **a != record_hunks(&c.record))
+        {
+            if at.is_none() {
+                at = Some(w.open_table(AUTHORED)?);
+            }
+            if let Some(t) = at.as_mut() {
+                t.insert((id, seq), enc_authored(a).as_slice())?;
+            }
+        }
         let rec = enc_record(&c.record);
         let n = rec.len() as u64;
         rt.insert((id, seq), rec.as_slice())?;
@@ -686,20 +881,6 @@ pub(super) fn put_changes(
         }
     }
     st.insert(id, enc_stats(&stats).as_slice())?;
-    Ok(())
-}
-
-/// Erase every history row of doc `id` in `w` (deleting the doc).
-pub(super) fn delete_rows(w: &redb::WriteTransaction, id: DocId) -> Result<(), StoreError> {
-    for t in [CHANGES, REVERTS, REVERT_INDEX, REVERT_CARRY] {
-        w.open_table(t)?
-            .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
-    }
-    w.open_table(REVERT_STATS)?.remove(id)?;
-    for t in [CHANGE_CLOCKS, PROVENANCE] {
-        w.open_table(t)?
-            .retain_in((id, 0, 0)..=(id, u64::MAX, u64::MAX), |_, _| false)?;
-    }
     Ok(())
 }
 
@@ -977,6 +1158,55 @@ impl DocStore {
         Ok(out)
     }
 
+    /// The live window (K3, `events_since`, `edit_at_base`), changes `from + 1..=to`, in one
+    /// read: each one's summary, its revert record (`None`: out of the revert window), its
+    /// authored hunks when D1 widened it (v0.9.7) and its log entry's client (`None`:
+    /// compacted into the snapshot).
+    pub(crate) fn window_rows(
+        &self,
+        id: DocId,
+        from: Seq,
+        to: Seq,
+    ) -> Result<Vec<WindowRow>, StoreError> {
+        let r = self.begin_read()?;
+        let (ct, rt, ut) = (
+            r.open_table(CHANGES)?,
+            r.open_table(REVERTS)?,
+            r.open_table(super::UPDATES)?,
+        );
+        let at = authored_read(&r)?;
+        let mut out = Vec::new();
+        for seq in from.saturating_add(1)..=to {
+            let info = ct
+                .get((id, seq))?
+                .map(|v| dec_change(seq, v.value(), false).map(|x| x.0))
+                .transpose()?;
+            let record = rt
+                .get((id, seq))?
+                .map(|v| dec_record(v.value()))
+                .transpose()?;
+            let authored = match (&at, &record) {
+                (Some(t), Some(_)) => t
+                    .get((id, seq))?
+                    .map(|v| dec_authored(v.value()))
+                    .transpose()?,
+                _ => None,
+            };
+            let client = ut
+                .get((id, seq))?
+                .map(|v| super::dec_entry_full(v.value()).map(|x| x.0.client))
+                .transpose()?;
+            out.push(WindowRow {
+                seq,
+                info,
+                record,
+                authored,
+                client,
+            });
+        }
+        Ok(out)
+    }
+
     /// The revert record of change `seq`, while it is in the window.
     pub(crate) fn revert_record(
         &self,
@@ -987,6 +1217,39 @@ impl DocStore {
         let t = r.open_table(REVERTS)?;
         let v = t.get((id, seq))?;
         v.map(|v| dec_record(v.value())).transpose()
+    }
+
+    /// The hunks change `seq`'s author wrote, per root, when D1 widened the change (v0.9.7):
+    /// what the hunk channel reported. `None` when the change has no row: D1 didn't widen
+    /// it (or it was made before v0.9.7), so the authored hunks are its record's, or its
+    /// record left the window (the row goes with it). After a purge that reached the
+    /// change, the inserts it blanked are empty.
+    pub fn authored_hunks(&self, id: DocId, seq: Seq) -> Result<Option<RootHunks>, StoreError> {
+        let r = self.begin_read()?;
+        let Some(t) = authored_read(&r)? else {
+            return Ok(None);
+        };
+        let v = t.get((id, seq))?;
+        v.map(|v| dec_authored(v.value())).transpose()
+    }
+
+    /// Change `seq`'s hunks as its author wrote them, per root, while its revert record is
+    /// in the window (v0.9.7): the authored row when D1 widened the change, else the
+    /// record's own hunks (a pre-D1 change, or one D1 left as it was, wrote exactly those).
+    /// `None` once the record left the window (a row an older build left behind when it
+    /// dropped the record is not read). A purged hunk's insert is empty. One read.
+    pub fn change_hunks(&self, id: DocId, seq: Seq) -> Result<Option<RootHunks>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(REVERTS)?;
+        let Some(rec) = t.get((id, seq))? else {
+            return Ok(None);
+        };
+        if let Some(t) = authored_read(&r)? {
+            if let Some(v) = t.get((id, seq))? {
+                return dec_authored(v.value()).map(Some);
+            }
+        }
+        dec_record(rec.value()).map(|rec| Some(record_hunks(&rec)))
     }
 
     /// Every revert record of a doc, oldest first (purge reads the targeted ones' text).
@@ -1046,6 +1309,7 @@ impl DocStore {
             let mut rt = w.open_table(REVERTS)?;
             let mut it = w.open_table(REVERT_INDEX)?;
             let mut ct = w.open_table(REVERT_CARRY)?;
+            let mut at = authored_table(&w)?;
             for &seq in drop {
                 if let Some(v) = it.remove((id, seq))? {
                     bytes += dec_pair(v.value())?.1;
@@ -1053,6 +1317,10 @@ impl DocStore {
                 }
                 rt.remove((id, seq))?;
                 ct.remove((id, seq))?;
+                // the authored hunks leave the window with their record (v0.9.7)
+                if let Some(t) = at.as_mut() {
+                    t.remove((id, seq))?;
+                }
             }
             for (seq, c) in carries {
                 ct.insert((id, *seq), enc_carry(c).as_slice())?;
@@ -1111,6 +1379,58 @@ impl DocStore {
         w.commit()?;
         Ok(plan)
     }
+}
+
+/// [`super::fuzz_record`] for this module's records (feature `fuzzing`).
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
+    use super::enc::fuzz_fixpoint as fx;
+    Some(match name {
+        "change" => fx(
+            name,
+            b,
+            false,
+            |b| dec_change(7, b, true),
+            |(c, shape)| enc_change(c, shape),
+        ),
+        "change head" => fx(
+            name,
+            b,
+            false,
+            |b| dec_change(7, b, false),
+            |(c, _)| enc_change(c, &[]),
+        ),
+        "revert record" => fx(name, b, false, dec_record, enc_record),
+        "authored hunks" => fx(name, b, true, dec_authored, |a| enc_authored(a)),
+        "provenance row" => fx(name, b, true, dec_prov, |&(end, root)| {
+            enc_prov(end, root).to_vec()
+        }),
+        "revert index" => fx(name, b, true, dec_pair, |&(a, c)| enc_pair(a, c).to_vec()),
+        "revert carry" => fx(name, b, false, dec_carry, enc_carry),
+        "revert stats" => fx(name, b, true, dec_stats, enc_stats),
+        "carry taint" => fx(
+            name,
+            b,
+            false,
+            |b| match b {
+                [x] => dec_taint(*x),
+                _ => Err(StoreError::Corrupt("carry taint")),
+            },
+            |&(s, e)| vec![enc_taint(s, e)],
+        ),
+        "version head" => match fuzz_version_head(b) {
+            Ok(_) => true,
+            Err(StoreError::Corrupt(_)) => false,
+            Err(e) => panic!("version head: refused with an error other than Corrupt: {e:?}"),
+        },
+        _ => return None,
+    })
+}
+
+/// A version record's head (feature `fuzzing`).
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_version_head(b: &[u8]) -> Result<VersionInfo, StoreError> {
+    dec_version_head(1, b)
 }
 
 #[cfg(test)]
@@ -1294,6 +1614,7 @@ mod tests {
                     record,
                     span,
                     provenance: Vec::new(),
+                    authored: None,
                 },
             )
         };

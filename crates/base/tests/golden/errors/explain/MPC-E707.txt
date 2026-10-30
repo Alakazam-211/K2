@@ -1,0 +1,21 @@
+MPC-E707 blob_no_random (tier 0 and blobs)
+exit:     1
+message:  no randomness source: {reason}
+next:     No randomness source for a space key. Report it to the host's operator.
+rule:     K-T0-4
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E707",
+  "name": "blob_no_random",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "no randomness source: {reason}",
+  "next": "No randomness source for a space key. Report it to the host's operator.",
+  "rule": "K-T0-4",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

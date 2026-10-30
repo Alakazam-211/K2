@@ -1,0 +1,21 @@
+MPC-E151 bad_hunk (sessions and edits)
+exit:     2
+message:  {reason}
+next:     An edit's ranges are out of order, out of range, off a character boundary or empty. The host computes ranges from the text it read: read again and recompute.
+rule:     K-SCH-2
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E151",
+  "name": "bad_hunk",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{reason}",
+  "next": "An edit's ranges are out of order, out of range, off a character boundary or empty. The host computes ranges from the text it read: read again and recompute.",
+  "rule": "K-SCH-2",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

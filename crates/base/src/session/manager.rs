@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use super::config::Config;
@@ -13,6 +14,7 @@ use super::host::{AuditEvent, Host};
 use super::live::{probe_error, RightsChange, Session};
 use super::pack::{Declined, Pack};
 use super::participant::ConnId;
+use super::roster::RosterEvent;
 use super::tier0::{AnyFile, BlobPack, BlobSession, Promotion};
 use crate::blob::{BlobError, BlobInfo, BlobStore};
 use crate::store::{DocKey, DocStore, Seq, VersionId, BLOB_DOC_PACK};
@@ -198,6 +200,18 @@ impl SessionManager {
         path: &Path,
         root: &Path,
     ) -> Result<Arc<Session>> {
+        // K7: an error's paths, as the host may show them (inside the root, relative)
+        self.open_file_in(pack, key, path, root)
+            .map_err(|e| e.redacted(root))
+    }
+
+    fn open_file_in(
+        &self,
+        pack: Arc<dyn Pack>,
+        key: &DocKey,
+        path: &Path,
+        root: &Path,
+    ) -> Result<Arc<Session>> {
         let root = std::fs::canonicalize(root)
             .ok()
             .filter(|r| r.is_dir())
@@ -209,6 +223,7 @@ impl SessionManager {
         if matches!(probed, Probe::NotFile | Probe::Outside(_)) {
             return Err(probe_error(path, &probed));
         }
+        hard_linked(&probed)?;
         let s = {
             let pool = self.pool()?;
             let store = pool.store.clone().ok_or(SessionError::Released)?;
@@ -249,6 +264,7 @@ impl SessionManager {
             left: self.expire_idle()?,
             ..TickReport::default()
         };
+        self.flush_rosters();
         for (k, s) in self.loaded()? {
             match s.history_tick() {
                 Ok(h) => {
@@ -410,6 +426,18 @@ impl SessionManager {
         path: &Path,
         root: &Path,
     ) -> Result<Arc<BlobSession>> {
+        // K7: an error's paths, as the host may show them (inside the root, relative)
+        self.open_blob_file_in(pack, key, path, root)
+            .map_err(|e| e.redacted(root))
+    }
+
+    fn open_blob_file_in(
+        &self,
+        pack: Arc<dyn BlobPack>,
+        key: &DocKey,
+        path: &Path,
+        root: &Path,
+    ) -> Result<Arc<BlobSession>> {
         let blobs = self.blobs()?;
         let root = std::fs::canonicalize(root)
             .ok()
@@ -422,6 +450,7 @@ impl SessionManager {
         if matches!(probed, Probe::NotFile | Probe::Outside(_)) {
             return Err(probe_error(path, &probed));
         }
+        hard_linked(&probed)?;
         let s = match self.loaded_or_stored_blob(&pack, key)? {
             Some(s) => s,
             None => {
@@ -559,6 +588,33 @@ impl SessionManager {
             .iter()
             .map(|(k, s)| (k.clone(), s.clone()))
             .collect())
+    }
+
+    /// Push the roster of the doc `conn` is in to it ([`Session::subscribe_roster`]): a full
+    /// snapshot first, then deltas. [`SessionError::NotJoined`] when no loaded doc has it.
+    pub fn subscribe_roster(&self, conn: ConnId) -> Result<Receiver<RosterEvent>> {
+        let s = self
+            .loaded()?
+            .into_iter()
+            .map(|(_, s)| s)
+            .find(|s| s.has_conn(conn))
+            .ok_or(SessionError::NotJoined { conn })?;
+        s.subscribe_roster(conn)
+    }
+
+    /// Deliver every loaded doc's roster events that are due
+    /// ([`super::Config::roster_interval_ms`]). Cheap when nobody subscribes: call it on a
+    /// timer at least that often (`tick` calls it too). Returns how many docs it looked at.
+    pub fn flush_rosters(&self) -> usize {
+        let Ok(sessions) = self.loaded() else {
+            return 0;
+        };
+        let n = sessions.len();
+        for (_, s) in sessions {
+            // an unloaded or closed session has no subscribers left
+            let _ = s.flush_roster();
+        }
+        n
     }
 
     /// The loaded session for `key`, if any (never loads).
@@ -831,5 +887,21 @@ impl SessionManager {
                 None => return, // over budget, but everything loaded is in use
             }
         }
+    }
+}
+
+/// K9 (K-DISK-14): a file with more than one name (a hard link) isn't opened live: edits
+/// through one name would change the others unseen. [`Declined`] `hard_linked`
+/// (`MPC-E412`).
+fn hard_linked(p: &Probe) -> Result<()> {
+    match p {
+        Probe::File { links, .. } if *links > 1 => Err(SessionError::Declined(Declined {
+            code: "hard_linked",
+            message: format!(
+                "the file has {links} names (hard links); live edits through one would change \
+                 the others unseen"
+            ),
+        })),
+        _ => Ok(()),
     }
 }

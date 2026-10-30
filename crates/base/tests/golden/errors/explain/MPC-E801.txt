@@ -1,0 +1,21 @@
+MPC-E801 needs_base (structured and CSV)
+exit:     2
+message:  an agent's grid edit needs a base: read first and pass --base
+next:     Agents edit tables against what they read. Read the table first (it prints the version), then run the edit again with --base <version>.
+rule:     K-BR-12
+verbs:    cell set; insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   reserved for CSV grids (C1c); nothing returns it yet
+--- json
+{
+  "id": "MPC-E801",
+  "name": "needs_base",
+  "area": "structured and CSV",
+  "exit": 2,
+  "message": "an agent's grid edit needs a base: read first and pass --base",
+  "next": "Agents edit tables against what they read. Read the table first (it prints the version), then run the edit again with --base <version>.",
+  "rule": "K-BR-12",
+  "verbs": ["cell set", "@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "reserved",
+  "since_or_until": "CSV grids (C1c)"
+}

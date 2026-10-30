@@ -1,0 +1,21 @@
+MPC-E507 key_change (store)
+exit:     6
+message:  put_meta can't change a doc's key; use rekey
+next:     A host call tried to change a doc's path the wrong way; nothing changed. Hosts use rekey (mv).
+rule:     K-DISK-14
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E507",
+  "name": "key_change",
+  "area": "store",
+  "exit": 6,
+  "message": "put_meta can't change a doc's key; use rekey",
+  "next": "A host call tried to change a doc's path the wrong way; nothing changed. Hosts use rekey (mv).",
+  "rule": "K-DISK-14",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

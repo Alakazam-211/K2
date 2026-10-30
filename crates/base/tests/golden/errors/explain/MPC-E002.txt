@@ -1,0 +1,21 @@
+MPC-E002 export_declined (exports)
+exit:     2
+message:  the exporter declined ({code})
+next:     The exporter refused this input or these options (details.code says which; bad_option: an option the target doesn't have, or a value it doesn't take). Fix the options, or export to another target. Nothing was written.
+rule:     X-ERR-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E002",
+  "name": "export_declined",
+  "area": "exports",
+  "exit": 2,
+  "message": "the exporter declined ({code})",
+  "next": "The exporter refused this input or these options (details.code says which; bad_option: an option the target doesn't have, or a value it doesn't take). Fix the options, or export to another target. Nothing was written.",
+  "rule": "X-ERR-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -14,7 +14,7 @@ mutants that must fail in both.
 | ITF replay | `crates/spec-undo/src/itf.rs`, `src/bin/undo_itf_replay.rs` |
 | The enumerator | `crates/spec-undo/src/bin/undo_enum.rs` |
 | Mutants | `crates/spec-undo/src/model/mutant.rs` (feature `mutants`), `MUTANT` in `undo.qnt` |
-| Node jobs | `tools/undo-quint-job.sh`, `tools/undo-enum-job.sh`, `tools/undo/*.sh` (`tools/README.md`) |
+| Node jobs | `tools/undo/job.sh` (a `--repo` job), `tools/undo/*.sh`; the env-chunk fallback `tools/undo-quint-job.sh`, `tools/undo-enum-job.sh` (`tools/README.md`) |
 
 ## One abstraction, two implementations
 
@@ -67,7 +67,7 @@ state `st` is exactly a `bounded::View`, so:
 | **Records dropped** once the revert budget is spent (and `head`) | nothing reads a record again | `bounded::tests::dropping_spent_records_is_exact`: with and without it, the same states (minus records) and the same violations |
 | **Fields no rule reads** are not state: a record's original hunks, a batch's `after_partial` and `on_behalf_of`, the authors sets | no rule or outcome reads them | the ITF replay compares every state field the model has |
 | **The view** (v1.8): roots as labels, the carried theirs and a reduced head left out | the rules compare roots only for equality; theirs is read by root from the live window; nothing reads a head once the records are dropped | `bounded::tests::the_view_is_exact`: oracle states found with one view (4,000 pairs at 2 × 1 + 2 undos + 1 revert, 1,780 of them under other root names) have the same actions, outcomes and next views |
-| **Pid symmetry** (enumerator, `--sym`; not in TLC) | pids have the same budgets and rights | `bounded::tests::pid_symmetry_is_exact`: the canonical forms of the plain enumeration's states are exactly the symmetric enumeration's states, same violations |
+| **Pid symmetry** (enumerator, `--sym`; not in TLC) | pids have the same budgets and rights | `bounded::tests::pid_symmetry_is_exact_*` (one test per bound): the canonical forms of the plain enumeration's states are exactly the symmetric enumeration's states, same violations |
 
 ### The diff (D1–D2)
 
@@ -476,11 +476,13 @@ scale the same way (not measured there).
 cargo; launched only after review). An M-series node (the grant there allows long jobs):
 
 ```sh
-tools/undo-enum-job.sh tools/undo/g1.sh /tmp/undo-g1
-k2 compute run "$NODE" --no-source --needs rust@stable --cpus 6 --mem 4G \
+k2 compute run "$NODE" --repo k2-mpc-base --needs rust@stable --cpus 6 --mem 4G \
   --env CARGO_BUILD_JOBS=6 --env THREADS=6 --env PART=exhaustive --timeout 3h --tier batch \
-  --detach $(cat /tmp/undo-g1/env-args) -- sh -ec "$(cat /tmp/undo-g1/job.sh)"
+  --detach -- sh tools/undo/job.sh enum tools/undo/g1.sh
 ```
+
+(`--repo` ships the commit; run from a worktree, `--repo` names it, or is found for you
+when you run from inside it. The env-chunk fallback is `tools/undo-enum-job.sh`, `tools/README.md`.)
 
 Then the same with `--env PART=walks` (`--timeout 1h`), and, if wanted, `--env PART=long`
 (`--timeout 72h`). On a 12-core x86 node: `--cpus 12 --env THREADS=12`, and twice the

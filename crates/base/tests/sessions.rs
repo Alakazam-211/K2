@@ -382,8 +382,11 @@ fn one_pid_many_connections() {
     assert_eq!(s.read(a2), Err(SessionError::NotJoined { conn: a2 }));
 }
 
+/// Shared joins reuse a connection; client IDs (v0.9.7): an agent's new connection takes back
+/// an ID of its own that no present connection holds, two present connections never share
+/// one, and a person's are never reused.
 #[test]
-fn shared_joins_reuse_a_connection_and_fresh_ones_never_reuse_clients() {
+fn shared_joins_reuse_a_connection_and_live_connections_never_share_clients() {
     let f = fx("shared");
     let s = f.open("a.md", b"x\n");
     f.host.grant("a", Rights::editor());
@@ -401,9 +404,25 @@ fn shared_joins_reuse_a_connection_and_fresh_ones_never_reuse_clients() {
     assert_ne!(j1.conn, j3.conn, "another surface is another connection");
     let j4 = s.join(agent("a"), Stay::UntilIdle).unwrap();
     assert_ne!(j1.conn, j4.conn, "join always opens a new one");
+    let live = [j1.client, j3.client, j4.client];
+    assert!(
+        live[0] != live[1] && live[1] != live[2] && live[0] != live[2],
+        "present connections never share a client ID"
+    );
     s.leave(j1.conn).unwrap();
     let j5 = s.join_shared(agent("a"), Stay::UntilIdle).unwrap();
-    assert_ne!(j1.client, j5.client, "fresh after leaving");
+    assert_eq!(
+        j1.client, j5.client,
+        "an agent takes back its own ID once no present connection holds it"
+    );
+    assert!(j5.client != j3.client && j5.client != j4.client);
+    // a person's IDs are never reused
+    f.host.grant("p", Rights::editor());
+    let person = || who("p", ParticipantKind::Person);
+    let p1 = s.join(person(), Stay::UntilIdle).unwrap();
+    s.leave(p1.conn).unwrap();
+    let p2 = s.join(person(), Stay::UntilIdle).unwrap();
+    assert_ne!(p1.client, p2.client, "a person's ID is never reused");
     let id = f.store.find(&key("a.md")).unwrap().unwrap();
     for j in [j1, j3, j4, j5] {
         assert_eq!(

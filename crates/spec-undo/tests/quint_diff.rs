@@ -85,7 +85,7 @@ fn texts(max: usize) -> Vec<Vec<u8>> {
     let mut out = vec![Vec::new()];
     let mut k = 0;
     while out.len() < (1 << (max + 1)) - 1 {
-        for c in [b'a', b'b'] {
+        for c in *b"ab" {
             let mut w = out[k].clone();
             w.push(c);
             out.push(w);

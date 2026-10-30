@@ -22,7 +22,9 @@ use super::error::{Result, SessionError};
 use super::host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope};
 use super::live::{probe_error, Joined, NotReached, PurgeOutcome};
 use super::pack::Declined;
-use super::participant::{ConnId, Participant, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID};
+use super::participant::{
+    ConnId, Participant, ParticipantKind, RosterEntry, Stay, EXTERNAL_PID, IMPORT_PID,
+};
 use super::presence::{self, Presence};
 use super::ratelimit::Bucket;
 
@@ -367,6 +369,8 @@ struct BDisk {
 
 struct BState {
     key: DocKey,
+    /// Every App viewer's handles in this doc (K5).
+    handles: super::handles::Handles,
     store: Option<Arc<DocStore>>,
     closed: Option<SessionError>,
     vid: VersionId,
@@ -484,6 +488,31 @@ pub struct BlobSession {
     last_used_ms: AtomicU64,
 }
 
+/// Copy a verified read to `out`, to its clean end (where the blob's check completes).
+fn copy_verified(mut r: BlobRead, out: &mut dyn io::Write) -> Result<super::FileCopy> {
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut n: u64 = 0;
+    loop {
+        let k = match r.reader.read(&mut buf) {
+            Ok(k) => k,
+            Err(e) => return Err(r.reader.error(e).into()),
+        };
+        if k == 0 {
+            break;
+        }
+        out.write_all(&buf[..k])
+            .map_err(|e| BlobError::Io(format!("writing the copy: {e}")))?;
+        n += k as u64;
+    }
+    out.flush()
+        .map_err(|e| BlobError::Io(format!("writing the copy: {e}")))?;
+    Ok(super::FileCopy {
+        version: r.version,
+        bytes: n,
+        codec: super::FileCodec::Exact,
+    })
+}
+
 fn blob_io(e: BlobError) -> io::Error {
     io::Error::other(e.to_string())
 }
@@ -523,6 +552,7 @@ impl BlobSession {
                 disk: None,
                 copies: None,
                 copies_edited: HashMap::new(),
+                handles: Default::default(),
                 last_cleanup_ms: None,
             }),
         }
@@ -848,10 +878,44 @@ impl BlobSession {
         Ok(())
     }
 
+    /// `out` as `conn` may see it: an App viewer's (K5) goes through its handles (`f` for the
+    /// value; a refusal naming someone else, as `Leased`'s holder, by handle). Anyone
+    /// else's is unchanged.
+    fn for_viewer<T>(
+        &self,
+        conn: ConnId,
+        out: Result<T>,
+        f: impl FnOnce(&mut super::handles::Lens<'_>, T) -> T,
+    ) -> Result<T> {
+        let Ok(mut st) = self.lock() else {
+            return out;
+        };
+        let Some(v) = st
+            .members
+            .iter()
+            .find(|m| m.conn == conn && m.p.kind == ParticipantKind::App)
+            .map(|m| m.p.pid.clone())
+        else {
+            return out;
+        };
+        let mut lens = st.handles.lens(&v);
+        match out {
+            Ok(t) => Ok(f(&mut lens, t)),
+            Err(e) => Err(lens.error(e)),
+        }
+    }
+
     /// Who is here, as for text docs: one entry per pid, editors (the lease holder among
     /// them) first, then viewers, then away. `region` and `holds_lease` are filled; there
     /// are no carets. Alone, it lists only the caller. Needs read.
     pub fn roster(&self, conn: ConnId) -> Result<Vec<RosterEntry>> {
+        let out = self.roster_inner(conn);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter().map(|e| l.entry(e)).collect()
+        })
+    }
+
+    fn roster_inner(&self, conn: ConnId) -> Result<Vec<RosterEntry>> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
@@ -990,6 +1054,11 @@ impl BlobSession {
     /// edit. Someone else holding it gives [`SessionError::Leased`] (exit 5) with the holder
     /// and expiry. Leases never block reads.
     pub fn acquire_lease(&self, conn: ConnId, ttl_ms: Option<u64>) -> Result<LeaseInfo> {
+        let out = self.acquire_lease_inner(conn, ttl_ms);
+        self.for_viewer(conn, out, |l, v| l.lease(v))
+    }
+
+    fn acquire_lease_inner(&self, conn: ConnId, ttl_ms: Option<u64>) -> Result<LeaseInfo> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Edit, Action::Lease, now)?;
@@ -1002,6 +1071,11 @@ impl BlobSession {
     /// Extend the caller's lease. [`SessionError::NoLease`] when nobody holds it,
     /// [`SessionError::Leased`] when someone else does.
     pub fn renew_lease(&self, conn: ConnId, ttl_ms: Option<u64>) -> Result<LeaseInfo> {
+        let out = self.renew_lease_inner(conn, ttl_ms);
+        self.for_viewer(conn, out, |l, v| l.lease(v))
+    }
+
+    fn renew_lease_inner(&self, conn: ConnId, ttl_ms: Option<u64>) -> Result<LeaseInfo> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Edit, Action::Lease, now)?;
@@ -1017,6 +1091,11 @@ impl BlobSession {
     /// Release the caller's lease. Needs read (someone who lost edit can still let go).
     /// Returns false when the caller's pid didn't hold it.
     pub fn release_lease(&self, conn: ConnId) -> Result<bool> {
+        let out = self.release_lease_inner(conn);
+        self.for_viewer(conn, out, |_, v| v)
+    }
+
+    fn release_lease_inner(&self, conn: ConnId) -> Result<bool> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Lease, now)?;
@@ -1036,6 +1115,11 @@ impl BlobSession {
     /// and is checked as usual). Needs [`super::Rights::owner`]; audited as
     /// [`AuditEvent::LeaseBroken`]. Returns the lease that was broken, if one was held.
     pub fn break_lease(&self, conn: ConnId) -> Result<Option<LeaseInfo>> {
+        let out = self.break_lease_inner(conn);
+        self.for_viewer(conn, out, |l, v| v.map(|x| l.lease(x)))
+    }
+
+    fn break_lease_inner(&self, conn: ConnId) -> Result<Option<LeaseInfo>> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Owner, Action::BreakLease, now)?;
@@ -1065,6 +1149,14 @@ impl BlobSession {
 
     /// The current content, streaming and verified. Needs read; never blocked by a lease.
     pub fn read(&self, conn: ConnId) -> Result<BlobRead> {
+        let out = self.read_inner(conn);
+        self.for_viewer(conn, out, |l, mut r| {
+            r.info = l.blob_version(r.info);
+            r
+        })
+    }
+
+    fn read_inner(&self, conn: ConnId) -> Result<BlobRead> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
@@ -1078,6 +1170,15 @@ impl BlobSession {
 
     /// Every version, oldest first (the pointer's history). Needs history.
     pub fn versions(&self, conn: ConnId) -> Result<Vec<(VersionId, BlobVersion)>> {
+        let out = self.versions_inner(conn);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter()
+                .map(|(id, b)| (id, l.blob_version(b)))
+                .collect()
+        })
+    }
+
+    fn versions_inner(&self, conn: ConnId) -> Result<Vec<(VersionId, BlobVersion)>> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::History, Action::Versions, now)?;
@@ -1090,6 +1191,13 @@ impl BlobSession {
     /// conflict copy. Built from the stored versions. Needs history, as
     /// [`BlobSession::versions`].
     pub fn log(&self, conn: ConnId) -> Result<Vec<BlobLogEntry>> {
+        let out = self.log_inner(conn);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter().map(|e| l.blob_log_entry(e)).collect()
+        })
+    }
+
+    fn log_inner(&self, conn: ConnId) -> Result<Vec<BlobLogEntry>> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::History, Action::History, now)?;
@@ -1102,6 +1210,11 @@ impl BlobSession {
     /// the version history (how many versions, who set them, most recent first). Needs read
     /// and history (K-PERM-9).
     pub fn blame(&self, conn: ConnId) -> Result<BlobBlame> {
+        let out = self.blame_inner(conn);
+        self.for_viewer(conn, out, |l, b| l.blob_blame(b))
+    }
+
+    fn blame_inner(&self, conn: ConnId) -> Result<BlobBlame> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
@@ -1131,6 +1244,14 @@ impl BlobSession {
 
     /// One version's content, streaming and verified. Needs history.
     pub fn read_version(&self, conn: ConnId, vid: VersionId) -> Result<BlobRead> {
+        let out = self.read_version_inner(conn, vid);
+        self.for_viewer(conn, out, |l, mut r| {
+            r.info = l.blob_version(r.info);
+            r
+        })
+    }
+
+    fn read_version_inner(&self, conn: ConnId, vid: VersionId) -> Result<BlobRead> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::History, Action::Versions, now)?;
@@ -1146,9 +1267,36 @@ impl BlobSession {
         })
     }
 
+    /// **The file at version `vid`, copied to `out`** as it streams from the blob store, in
+    /// bounded memory (exports and derivatives of big files). Needs history, as
+    /// [`BlobSession::read_version`]. The bytes are verified as they stream and the check
+    /// completes at the clean end: only `Ok` means the copy is good. On an error (a damaged
+    /// blob: [`BlobError::Damaged`], exit 1; a failed write: [`BlobError::Io`]) the caller
+    /// **must discard what was written** ([`super::FileCopy`]). The session lock is not held
+    /// while copying.
+    pub fn file_at_to(
+        &self,
+        conn: ConnId,
+        vid: VersionId,
+        out: &mut dyn io::Write,
+    ) -> Result<super::FileCopy> {
+        copy_verified(self.read_version(conn, vid)?, out)
+    }
+
+    /// The current file, copied to `out` as [`BlobSession::file_at_to`] copies a version.
+    /// Needs read.
+    pub fn file_now_to(&self, conn: ConnId, out: &mut dyn io::Write) -> Result<super::FileCopy> {
+        copy_verified(self.read(conn)?, out)
+    }
+
     /// Name (or rename) a version (`version --name`). Named versions are never removed by
     /// retention. Needs edit.
     pub fn name_version(&self, conn: ConnId, vid: VersionId, name: &str) -> Result<()> {
+        let out = self.name_version_inner(conn, vid, name);
+        self.for_viewer(conn, out, |_, v| v)
+    }
+
+    fn name_version_inner(&self, conn: ConnId, vid: VersionId, name: &str) -> Result<()> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Edit, Action::Versions, now)?;
@@ -1198,6 +1346,16 @@ impl BlobSession {
         src: &mut dyn Read,
         base: VersionId,
     ) -> Result<BlobWriteResult> {
+        let out = self.write_inner(conn, src, base);
+        self.for_viewer(conn, out, |_, v| v)
+    }
+
+    fn write_inner(
+        &self,
+        conn: ConnId,
+        src: &mut dyn Read,
+        base: VersionId,
+    ) -> Result<BlobWriteResult> {
         let now = self.now();
         let (space, pid, auto) = {
             let mut st = self.lock()?;
@@ -1229,6 +1387,16 @@ impl BlobSession {
 
     /// [`BlobSession::write`] from memory.
     pub fn write_bytes(
+        &self,
+        conn: ConnId,
+        bytes: &[u8],
+        base: VersionId,
+    ) -> Result<BlobWriteResult> {
+        let out = self.write_bytes_inner(conn, bytes, base);
+        self.for_viewer(conn, out, |_, v| v)
+    }
+
+    fn write_bytes_inner(
         &self,
         conn: ConnId,
         bytes: &[u8],
@@ -1314,6 +1482,11 @@ impl BlobSession {
     /// [`BlobReason::Restore`]. Needs edit and history; the lease rule applies as for a
     /// write (deliberate, so no base).
     pub fn restore(&self, conn: ConnId, vid: VersionId) -> Result<BlobWriteResult> {
+        let out = self.restore_inner(conn, vid);
+        self.for_viewer(conn, out, |_, v| v)
+    }
+
+    fn restore_inner(&self, conn: ConnId, vid: VersionId) -> Result<BlobWriteResult> {
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -1372,6 +1545,16 @@ impl BlobSession {
     /// for a version already settled the other way. Settling it again the same way returns
     /// the record unchanged. Emits [`AuditEvent::Approval`] (`seq` is the version).
     pub fn set_approval(
+        &self,
+        conn: ConnId,
+        vid: VersionId,
+        state: ApprovalState,
+    ) -> Result<BlobApproval> {
+        let out = self.set_approval_inner(conn, vid, state);
+        self.for_viewer(conn, out, |l, a| l.blob_approval(a))
+    }
+
+    fn set_approval_inner(
         &self,
         conn: ConnId,
         vid: VersionId,
@@ -1455,6 +1638,11 @@ impl BlobSession {
     /// that wrote it or the person it was written for (the text doc's rule,
     /// [`super::Session::approval`]).
     pub fn approval(&self, conn: ConnId, vid: VersionId) -> Result<Option<Approval>> {
+        let out = self.approval_inner(conn, vid);
+        self.for_viewer(conn, out, |l, v| v.map(|a| l.approval(a)))
+    }
+
+    fn approval_inner(&self, conn: ConnId, vid: VersionId) -> Result<Option<Approval>> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
@@ -1474,6 +1662,13 @@ impl BlobSession {
     /// --on-behalf-of me` on the agent side). With [`super::Rights::history`], all of them;
     /// without, only those where the caller is the agent or the person. Needs read.
     pub fn approvals(&self, conn: ConnId) -> Result<Vec<(VersionId, Approval)>> {
+        let out = self.approvals_inner(conn);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter().map(|(id, a)| (id, l.approval(a))).collect()
+        })
+    }
+
+    fn approvals_inner(&self, conn: ConnId) -> Result<Vec<(VersionId, Approval)>> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
@@ -1864,6 +2059,11 @@ impl BlobSession {
     /// one (see [`BlobSession::check_disk`] for what happens then). Never writes the file,
     /// except a conflict copy beside it.
     pub fn file_changed(&self) -> Result<DiskCheck> {
+        let r = self.file_changed_in();
+        self.shown(r)
+    }
+
+    fn file_changed_in(&self) -> Result<DiskCheck> {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         self.disk_check(&mut st, now, true)
@@ -1879,6 +2079,11 @@ impl BlobSession {
     /// a conflict copy of it is written beside the file ([`DiskCheck::Conflict`],
     /// [`AuditEvent::BlobConflict`]).
     pub fn check_disk(&self) -> Result<DiskCheck> {
+        let r = self.check_disk_in();
+        self.shown(r)
+    }
+
+    fn check_disk_in(&self) -> Result<DiskCheck> {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         self.disk_check(&mut st, now, false)
@@ -1886,6 +2091,11 @@ impl BlobSession {
 
     /// The host paired a rename of the file (same root). Then checks it.
     pub fn file_moved(&self, new_path: &Path) -> Result<DiskCheck> {
+        let r = self.file_moved_in(new_path);
+        self.shown(r)
+    }
+
+    fn file_moved_in(&self, new_path: &Path) -> Result<DiskCheck> {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -1904,6 +2114,11 @@ impl BlobSession {
 
     /// Write the current version to the file now if it doesn't hold it. Needs read.
     pub fn flush(&self, conn: ConnId) -> Result<FlushOutcome> {
+        let r = self.flush_in(conn);
+        self.shown(r)
+    }
+
+    fn flush_in(&self, conn: ConnId) -> Result<FlushOutcome> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Flush, now)?;
@@ -1913,6 +2128,29 @@ impl BlobSession {
             hash: st.cur.blob.to_hex(),
             disk: Self::disk_state(&st),
         })
+    }
+
+    /// `r` as the host may show it: an error's paths made safe (K7): inside this file's
+    /// root, relative; elsewhere, `<outside>`.
+    fn shown<T>(&self, r: Result<T>) -> Result<T> {
+        r.map_err(|e| {
+            let root = self
+                .lock_any()
+                .ok()
+                .and_then(|st| st.disk.as_ref().map(|d| d.root.clone()));
+            match root {
+                Some(root) => e.redacted(&root),
+                None => e,
+            }
+        })
+    }
+
+    /// The identity (device and inode) of the file this session syncs with (K9, K-DISK-14):
+    /// a host keys sessions by it as well as by the path. `None` without a file, when the
+    /// file is gone, or where the platform has none.
+    pub fn file_identity(&self) -> Result<Option<super::disk::FileIdentity>> {
+        let path = self.lock()?.disk.as_ref().map(|d| d.path.clone());
+        Ok(path.and_then(|p| super::disk::file_identity(&p).ok().flatten()))
     }
 
     pub fn file_path(&self) -> Result<Option<PathBuf>> {
@@ -2063,7 +2301,7 @@ impl BlobSession {
         d.last_check_ms = now;
         let (path, root) = (d.path.clone(), d.root.clone());
         let (real, stat) = match disk::probe(&path, &root) {
-            Ok(Probe::File { real, stat }) => (real, stat),
+            Ok(Probe::File { real, stat, .. }) => (real, stat),
             Ok(_) => return Ok(self.set_missing(st)),
             Err(e) => return Err(self.disk_error(st, &path.display().to_string(), e)),
         };

@@ -120,6 +120,10 @@ impl BlockSet {
         let block = &mut blocks[index];
         let block_clock = block.clock_start();
         if let Some(right) = block.splice(clock - block_clock) {
+            // k2 (hardening)
+            if let Block::GC(left) | Block::Skip(left) = block {
+                left.len = clock - block_clock;
+            }
             index += 1;
             blocks.insert(index, right);
         }
@@ -358,8 +362,7 @@ impl Update {
                     if let Some(missing) =
                         Self::missing_dependency(&mut stack_head, &mut txn.store)?
                     {
-                        next =
-                            picker.switch(stack_head, &missing, |c| txn.store.blocks.get_clock(c));
+                        next = picker.switch(stack_head, missing);
                         continue;
                     } else {
                         // block has no missing dependencies, therefore we can integrate it right away
@@ -381,7 +384,9 @@ impl Update {
                 }
                 next = picker.next();
             }
-            picker.pending()
+            picker
+                .pending()
+                .map(|pending| pending.with_missing_from(&txn.store.blocks))
         };
 
         let remaining_ds = txn.apply_delete(&self.delete_set).map(|ds| {
@@ -393,61 +398,42 @@ impl Update {
         Ok((remaining_blocks, remaining_ds))
     }
 
-    fn missing_dependency(
-        block: &mut Block,
-        store: &mut Store,
-    ) -> Result<Option<ClientID>, UpdateError> {
+    /// k2 (hardening)
+    fn dependencies(item: &Item) -> SmallVec<[ID; 4]> {
+        let mut deps = SmallVec::new();
+        deps.extend(item.origin);
+        deps.extend(item.right_origin);
+        match &item.parent {
+            TypePtr::Branch(parent) => {
+                if let Some(block) = &parent.item {
+                    deps.push(*block.id());
+                }
+            }
+            TypePtr::ID(parent_id) => deps.push(*parent_id),
+            _ => {}
+        }
+        #[cfg(feature = "weak")]
+        if let ItemContent::Type(branch) = &item.content {
+            if let crate::types::TypeRef::WeakLink(source) = &branch.type_ref {
+                let start = source.quote_start.id();
+                let end = source.quote_end.id();
+                deps.extend(start.copied());
+                if start != end {
+                    deps.extend(end.copied());
+                }
+            }
+        }
+        deps
+    }
+
+    /// k2 (hardening)
+    fn missing_dependency(block: &mut Block, store: &mut Store) -> Result<Option<ID>, UpdateError> {
         if let Block::Item(item) = block {
-            if let Some(origin_left) = &item.origin {
-                if store.blocks.is_missing(origin_left) {
-                    return Ok(Some(origin_left.client));
-                }
-            }
-
-            if let Some(origin_right) = &item.right_origin {
-                if store.blocks.is_missing(origin_right) {
-                    return Ok(Some(origin_right.client));
-                }
-            }
-
-            match &item.parent {
-                TypePtr::Branch(parent) => {
-                    if let Some(block) = &parent.item {
-                        let parent_id = block.id();
-                        if store.blocks.is_missing(parent_id) {
-                            return Ok(Some(parent_id.client));
-                        }
-                    }
-                }
-                TypePtr::ID(parent_id) => {
-                    if store.blocks.is_missing(parent_id) {
-                        return Ok(Some(parent_id.client));
-                    }
-                }
-                _ => {}
-            }
-
-            #[cfg(feature = "weak")]
-            match &item.content {
-                ItemContent::Type(branch) => {
-                    if let crate::types::TypeRef::WeakLink(source) = &branch.type_ref {
-                        let start = source.quote_start.id();
-                        let end = source.quote_end.id();
-                        if let Some(start) = start {
-                            if store.blocks.is_missing(start) {
-                                return Ok(Some(start.client));
-                            }
-                        }
-                        if start != end {
-                            if let Some(end) = &source.quote_end.id() {
-                                if store.blocks.is_missing(end) {
-                                    return Ok(Some(end.client));
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => { /* do nothing */ }
+            let missing = Self::dependencies(item)
+                .into_iter()
+                .find(|id| store.blocks.is_missing(id));
+            if missing.is_some() {
+                return Ok(missing);
             }
 
             // We have all missing ids, now find the items
@@ -843,9 +829,7 @@ impl Decode for Update {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         // read blocks
         let clients_len: u32 = decoder.read_var()?;
-        // Counts below come from the input (hardening): bound each pre-allocation by what the
-        // remaining input could hold: a client section is at least 3 bytes (blocks_len, client,
-        // clock), a block at least 1 (its info byte).
+        // k2 (hardening)
         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
         clients.try_reserve(bounded_capacity(
             clients_len as usize,
@@ -922,12 +906,11 @@ impl<'a> BlockPicker<'a> {
     }
 
     /// Switch iterator to blocks belonging to `missing` client.
-    fn switch(
-        &mut self,
-        stack_head: Block,
-        missing: &ClientID,
-        missing_clock: impl Fn(&ClientID) -> u32,
-    ) -> Option<Block> {
+    fn switch(&mut self, stack_head: Block, missing: ID) -> Option<Block> {
+        let ID {
+            client: ref missing,
+            clock: missing_clock,
+        } = missing;
         self.stack.push(stack_head);
         match self.store.clients.get_mut(missing) {
             Some(struct_refs)
@@ -937,8 +920,9 @@ impl<'a> BlockPicker<'a> {
                 stack_head
             }
             _ => {
-                // This update message causally depends on another update message that doesn't exist yet
-                self.missing.set_min(*missing, missing_clock(missing));
+                // This update message causally depends on another one that doesn't exist yet.
+                // k2 (hardening)
+                self.missing.set_min(*missing, missing_clock);
                 for item in self.stack.drain(..) {
                     let client = *item.client();
                     let mut unapplicable_blocks = match self.store.clients.remove(&client) {
@@ -1019,8 +1003,37 @@ pub struct PendingUpdate {
     /// Collection of unapplied blocks.
     pub update: Update,
     /// A state vector that informs about minimal client clock values that need to be satisfied
-    /// in order to successfully apply corresponding `update`.
+    /// in order to successfully apply corresponding `update`: per client, the clock of the lowest
+    /// missing ID a pending block depends on.
     pub missing: StateVector,
+}
+
+impl PendingUpdate {
+    /// k2 (hardening)
+    pub(crate) fn with_missing_from(mut self, blocks: &crate::block_store::BlockStore) -> Self {
+        let mut held = IdSet::new();
+        for list in self.update.blocks.clients.values() {
+            for block in list.iter().filter(|b| !b.is_skip()) {
+                held.insert(block.id(), block.len());
+            }
+        }
+        let mut missing = StateVector::default();
+        for list in self.update.blocks.clients.values() {
+            for block in list.iter() {
+                if let Block::Item(item) = block {
+                    for dep in Update::dependencies(item) {
+                        if blocks.is_missing(&dep) && !held.contains(&dep) {
+                            missing.set_min(dep.client, dep.clock);
+                        }
+                    }
+                }
+            }
+        }
+        if !missing.is_empty() {
+            self.missing = missing;
+        }
+        self
+    }
 }
 
 impl std::fmt::Debug for Update {

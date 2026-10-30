@@ -39,13 +39,27 @@
 //! SOAK_SECS=600 cargo test -p k2-mpc-base --release --test soak -- --ignored --nocapture
 //! ```
 //!
-//! It prints a progress line every `SOAK_PROGRESS_SECS` (default 30) and a summary.
+//! It prints a progress line every `SOAK_PROGRESS_SECS` (default 30) and a summary. The
+//! summary also gives the cost **at equal history** (v0.9.7): at every multiple of
+//! `SOAK_MILESTONE` versions (default 10,000), the mean wall time per call and per `tick` over
+//! the `SOAK_MILESTONE_CALLS` calls before it (default 1,000; a run record each), and the
+//! least-squares slope of the per-call cost against the version. A run that gets further in
+//! its time isn't penalised for it, as the first-window/last-150-s ratio is; the node's load
+//! still scales every figure.
 //!
 //! **Shadow mode** (`SOAK_SHADOW=1`, v0.9.3): every engine edit the run makes (every verb,
 //! undo, redo, outside edit) is also made through today's throwaway replica on a twin of the
 //! doc, and any difference in the update, state, state vector or text fails the run
 //! ([`k2_mpc_base::differential`]). It costs a full copy of the doc per edit, so the
 //! throughput check is skipped in this mode.
+//!
+//! **The old write-back** (`SOAK_FULL_WRITEBACK=1`, v0.9.7): every file write-back re-encodes
+//! the doc and reloads the disk replica from it, as before v0.9.7, instead of keeping the
+//! replica in step. A control for the incremental write-back's effect on the soak.
+//!
+//! `SOAK_EDIT_CHECK_EVERY=N` sets the runtime checks' rate (default the kit's): with 1, every
+//! outside save also computes its change at element identity in full, and a difference from
+//! the merge's hunks (`AuditEvent::IdentityMismatch`) fails the run (as it does at any rate).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
@@ -76,6 +90,8 @@ const MIN_LINES: usize = 8;
 
 struct SoakHost {
     now: AtomicU64,
+    /// Every runtime check's mismatch the kit reported (v0.9.7): any fails the run.
+    mismatches: std::sync::Mutex<Vec<String>>,
 }
 
 impl Host for SoakHost {
@@ -85,7 +101,18 @@ impl Host for SoakHost {
     fn now_ms(&self) -> u64 {
         self.now.load(Ordering::SeqCst)
     }
-    fn on_event(&self, _ev: &AuditEvent) {}
+    fn on_event(&self, ev: &AuditEvent) {
+        if matches!(
+            ev,
+            AuditEvent::EditPathMismatch { .. }
+                | AuditEvent::TextCacheMismatch { .. }
+                | AuditEvent::PositionIndexMismatch { .. }
+                | AuditEvent::DiskReplicaMismatch { .. }
+                | AuditEvent::IdentityMismatch { .. }
+        ) {
+            self.mismatches.lock().unwrap().push(format!("{ev:?}"));
+        }
+    }
 }
 
 // ---------- the world ----------
@@ -101,6 +128,7 @@ struct Part {
 }
 
 /// What a call may have done to the lines (checked against what it did).
+#[derive(Debug)]
 enum Expect {
     /// Refused, failed, or not an edit: nothing changes.
     Nothing,
@@ -151,6 +179,99 @@ struct Counts {
     dups: usize,
     /// Per progress window: (seconds since start at its end, calls, wall seconds).
     windows: Vec<(f64, u64, f64)>,
+    /// The last calls' wall seconds (and the call's own seconds when it was a tick), for the
+    /// milestones (v0.9.7).
+    recent: std::collections::VecDeque<(f64, Option<f64>)>,
+    next_milestone: u64,
+    /// At each version milestone: the cost of the calls just before it.
+    milestones: Vec<Milestone>,
+    /// The kit's profile (its scopes' entries and seconds) between consecutive milestones,
+    /// one per milestone (v0.9.7).
+    profiles: Vec<Vec<(&'static str, u64, f64)>>,
+    /// The engine's position index counters, summed over the session's loads.
+    index: k2_mpc_base::differential::PositionIndexStats,
+    /// The last calls, for a failure's dump (v0.9.7): (op number, version after, what).
+    last_ops: std::collections::VecDeque<(u64, u64, String)>,
+}
+
+/// The soak's cost at a version milestone (v0.9.7): over the `SOAK_MILESTONE_CALLS` calls
+/// (default 1,000) before the doc's version first reached it, the mean wall time per call
+/// (every phase: the call, the audit, presence, blame, restarts) and per `tick` call (where
+/// the file write-back runs). Measured at equal history, not equal time, so a run that gets
+/// further in its 600 s isn't penalised for it; the node's load still scales every figure.
+#[derive(Debug, Clone, Copy)]
+struct Milestone {
+    at: u64,
+    version: u64,
+    us_per_call: f64,
+    us_per_tick: f64,
+    ticks: usize,
+    /// The doc's history in UTF-16 units when the version reached it (the canary's measure
+    /// of its size, `Config::edit_check_scale_units`).
+    history_units: u64,
+}
+
+impl Counts {
+    /// Count a call (its wall seconds, and its own seconds if it was a tick) at `version`,
+    /// recording every milestone (multiples of `every`) the version passed, with the doc's
+    /// history (`units`, read only when a milestone is recorded).
+    fn track(
+        &mut self,
+        wall: f64,
+        tick: Option<f64>,
+        version: u64,
+        every: u64,
+        keep: usize,
+        units: impl Fn() -> u64,
+    ) {
+        self.recent.push_back((wall, tick));
+        if self.recent.len() > keep {
+            self.recent.pop_front();
+        }
+        if self.next_milestone == 0 {
+            self.next_milestone = every;
+        }
+        while version >= self.next_milestone {
+            if self.recent.len() == keep {
+                let n = self.recent.len() as f64;
+                let wall: f64 = self.recent.iter().map(|r| r.0).sum();
+                let ticks: Vec<f64> = self.recent.iter().filter_map(|r| r.1).collect();
+                self.milestones.push(Milestone {
+                    at: self.next_milestone,
+                    version,
+                    us_per_call: wall / n * 1e6,
+                    us_per_tick: if ticks.is_empty() {
+                        0.0
+                    } else {
+                        ticks.iter().sum::<f64>() / ticks.len() as f64 * 1e6
+                    },
+                    ticks: ticks.len(),
+                    history_units: units(),
+                });
+                self.profiles
+                    .push(k2_mpc_base::differential::profile_take());
+            }
+            self.next_milestone += every;
+        }
+    }
+}
+
+/// The least-squares slope of µs per call against the version, in µs per 1,000 versions.
+fn milestone_slope(m: &[Milestone]) -> Option<f64> {
+    if m.len() < 2 {
+        return None;
+    }
+    let n = m.len() as f64;
+    let xs: Vec<f64> = m.iter().map(|x| x.at as f64 / 1000.0).collect();
+    let mx = xs.iter().sum::<f64>() / n;
+    let my = m.iter().map(|x| x.us_per_call).sum::<f64>() / n;
+    let sxx: f64 = xs.iter().map(|x| (x - mx) * (x - mx)).sum();
+    let sxy: f64 = xs
+        .iter()
+        .zip(m)
+        .map(|(x, y)| (x - mx) * (y.us_per_call - my))
+        .sum();
+    (sxx > 0.0).then(|| sxy / sxx)
 }
 
 /// Where one progress window's time went: per phase of the loop (the harness's own work
@@ -275,6 +396,15 @@ fn soak_config() -> Config {
     c.edit_rate_per_s = 1_000_000;
     c.edit_burst = 1_000_000;
     c.idle_leave_ms = u64::MAX / 4;
+    // diagnosis (v0.9.7): the position index's shadow check rate
+    if let Ok(v) = std::env::var("SOAK_POSITION_CHECK_EVERY") {
+        c.position_check_every = v.parse().expect("SOAK_POSITION_CHECK_EVERY: a number");
+    }
+    // SOAK_EDIT_CHECK_EVERY: the runtime checks' rate (edits and outside saves; default the
+    // kit's, 1 in 1,000). 1 checks every outside save's change at identity in full.
+    if let Ok(v) = std::env::var("SOAK_EDIT_CHECK_EVERY") {
+        c.edit_check_every = v.parse().expect("SOAK_EDIT_CHECK_EVERY: a number");
+    }
     c
 }
 
@@ -293,6 +423,7 @@ impl Soak {
         std::fs::write(&file, &seed_text).unwrap();
         let host = Arc::new(SoakHost {
             now: AtomicU64::new(1_000_000),
+            mismatches: std::sync::Mutex::new(Vec::new()),
         });
         let key = DocKey {
             space: "ws".into(),
@@ -943,40 +1074,6 @@ impl Soak {
         }
     }
 
-    /// A failure's dump (the replay tooling): the last calls, the engine's text against the
-    /// session's cached one, `pid`'s undo and redo stacks, and the lines written twice with
-    /// their blame.
-    fn dump(&self, why: &str, pid: &str) {
-        eprintln!("[soak dump] {why}: call {}, v{}", self.n.ops, self.version);
-        for (n, v, what) in &self.last_ops {
-            eprintln!("[soak dump]   #{n} v{v}: {what}");
-        }
-        if let Ok(t) = self.s.engine_and_cached_texts_for_tests() {
-            for (root, engine, cached) in t {
-                eprintln!(
-                    "[soak dump] {root}: engine and cache {}",
-                    if engine == cached { "agree" } else { "DIFFER" }
-                );
-            }
-        }
-        if let Ok((undo, redo)) = self.s.undo_stacks_for_tests(pid, 4) {
-            eprintln!(
-                "[soak dump] {pid} undo (newest first):\n{undo}\n[soak dump] {pid} redo:\n{redo}"
-            );
-        }
-        let text = self.s.read(self.obs()).unwrap().text_by_root[0].1.clone();
-        let mut seen = HashSet::new();
-        for l in lines_of(&text) {
-            if !seen.insert(l.clone()) {
-                if let Ok(b) = self.s.blame(self.obs(), ROOT, None) {
-                    for bl in b.lines.iter().filter(|bl| bl.text == l) {
-                        eprintln!("[soak dump] twice: {bl:?}");
-                    }
-                }
-            }
-        }
-    }
-
     /// The claims as they stand: (pid, conn, first, last, start, end).
     fn claims(&self) -> Vec<(String, ConnId, usize, usize, usize, usize)> {
         self.s
@@ -1271,6 +1368,7 @@ impl Soak {
 
     /// Release everything, reopen the store: the same text and version; everyone rejoins.
     fn restart(&mut self) {
+        self.n.index += self.s.position_index_stats_for_tests().unwrap();
         let (text, version) = (self.s.read(self.obs()).unwrap().bytes, self.version);
         self.mgr.release().unwrap();
         let (mgr, s) = Self::open(&self.dir, &self.file, &self.key, &self.host, &self.config);
@@ -1307,6 +1405,85 @@ impl Soak {
         self.n.rss_samples.push((elapsed, rss));
     }
 
+    /// What a failure needs for its analysis (v0.9.7): the last calls, the engine's text
+    /// against the session's cached one (where they first differ, with the lines around),
+    /// and participant `i`'s (and every participant's, when `i` is `None`) undo and redo
+    /// stacks' top batches. The soak's own synthetic text only.
+    fn dump(&self, label: &str, why: &str, i: Option<usize>) {
+        eprintln!(
+            "[soak {label}] DUMP ({why}) at op {}, v{}; the last calls (op, version after, call):",
+            self.n.ops, self.version
+        );
+        for (n, v, w) in &self.n.last_ops {
+            eprintln!("[soak {label}]   {n} v{v}: {w}");
+        }
+        // the audit's view of the same calls: the lines each added and removed (v0.9.5)
+        for (n, v, what) in &self.last_ops {
+            eprintln!("[soak {label}]   lines {n} v{v}: {what}");
+        }
+        match self.s.engine_and_cached_texts_for_tests() {
+            Ok(texts) => {
+                for (root, engine, cached) in texts {
+                    if engine == cached {
+                        eprintln!(
+                            "[soak {label}] {root}: the engine's text equals the cached text ({} lines)",
+                            engine.lines().count()
+                        );
+                        continue;
+                    }
+                    let (e, c): (Vec<&str>, Vec<&str>) =
+                        (engine.lines().collect(), cached.lines().collect());
+                    let k = e.iter().zip(&c).take_while(|(a, b)| a == b).count();
+                    eprintln!(
+                        "[soak {label}] {root}: the ENGINE'S TEXT DIFFERS from the cached text from line {k} ({} vs {} lines)",
+                        e.len(),
+                        c.len()
+                    );
+                    let lo = k.saturating_sub(3);
+                    eprintln!(
+                        "[soak {label}]   engine {lo}..: {:?}",
+                        &e[lo..e.len().min(k + 6)]
+                    );
+                    eprintln!(
+                        "[soak {label}]   cached {lo}..: {:?}",
+                        &c[lo..c.len().min(k + 6)]
+                    );
+                }
+            }
+            Err(e) => eprintln!("[soak {label}] texts: {e}"),
+        }
+        let who: Vec<usize> = match i {
+            Some(i) => vec![i],
+            None => (0..self.parts.len()).collect(),
+        };
+        for i in who {
+            let pid = &self.parts[i].pid;
+            if let Ok((undo, redo)) = self.s.undo_stacks_for_tests(pid, 3) {
+                eprintln!("[soak {label}] {pid}'s undo stack, top 3:\n{undo}");
+                eprintln!("[soak {label}] {pid}'s redo stack, top 3:\n{redo}");
+            }
+        }
+        // the lines written twice, with their blame (v0.9.5)
+        if let Ok(r) = self.s.read(self.obs()) {
+            let mut seen = HashSet::new();
+            for l in lines_of(&r.text_by_root[0].1) {
+                if !seen.insert(l.clone()) {
+                    if let Ok(b) = self.s.blame(self.obs(), ROOT, None) {
+                        for bl in b.lines.iter().filter(|bl| bl.text == l) {
+                            eprintln!("[soak {label}] twice: {bl:?}");
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(b) = self.s.blame(self.obs(), ROOT, None) {
+            eprintln!(
+                "[soak {label}] blame now: {:?}",
+                format!("{b:?}").chars().take(4000).collect::<String>()
+            );
+        }
+    }
+
     fn run(&mut self, secs: u64, label: &str) {
         let progress = std::env::var("SOAK_PROGRESS_SECS")
             .ok()
@@ -1317,43 +1494,69 @@ impl Soak {
         let mut next_progress = start + Duration::from_secs(progress);
         let restart_every = if secs <= 30 { 300 } else { 3_000 };
         let mut win = Window::default();
-        // replay: stop after this many calls (0: no limit)
+        let milestone_every = env_u64("SOAK_MILESTONE", 10_000).max(1);
+        let milestone_calls = env_u64("SOAK_MILESTONE_CALLS", 1_000).max(1) as usize;
+        // replay and diagnosis: stop after this many calls (`SOAK_MAX_OPS`, or the replay
+        // regression's own; 0: no limit); dump the state before this call (1-based)
         let max_ops = self.max_ops;
-        // replay: dump every participant's undo and redo stacks before this call (1-based)
         let dump_at = env_u64("SOAK_DUMP_AT_OP", 0);
+        // how many of the last calls a dump lists (default 64)
+        let dump_calls = env_u64("SOAK_DUMP_CALLS", 64).max(1) as usize;
         while Instant::now() < end && (max_ops == 0 || self.n.ops < max_ops) {
             let t0 = Instant::now();
             self.advance();
-            if dump_at != 0 && self.n.ops + 1 == dump_at {
-                for p in &self.parts {
-                    if let Ok((undo, redo)) = self.s.undo_stacks_for_tests(&p.pid, 3) {
-                        if !undo.is_empty() || !redo.is_empty() {
-                            eprintln!(
-                                "[soak dump-at] {} undo:\n{undo}\n[soak dump-at] {} redo:\n{redo}",
-                                p.pid, p.pid
-                            );
-                        }
-                    }
-                }
-                let text = self.s.read(self.obs()).unwrap().text_by_root[0].1.clone();
-                eprintln!("[soak dump-at] text before call {dump_at}:\n{text}");
-            }
             let claims_before = self.claims();
             let t1 = Instant::now();
-            let (op, i, policy, expect) = self.step();
+            if max_ops != 0 && self.n.ops >= max_ops {
+                eprintln!("[soak {label}] stopped at SOAK_MAX_OPS={max_ops}");
+                break;
+            }
+            if dump_at != 0 && self.n.ops + 1 == dump_at {
+                self.dump(
+                    label,
+                    &format!("before op {dump_at} (SOAK_DUMP_AT_OP)"),
+                    None,
+                );
+            }
+            let stepped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.step()));
+            let (op, i, policy, expect) = match stepped {
+                Ok(s) => s,
+                Err(e) => {
+                    self.dump(label, "a panic in the call", None);
+                    std::panic::resume_unwind(e);
+                }
+            };
             let t2 = Instant::now();
             *self.n.by_op.entry(op).or_default() += 1;
             self.n.ops += 1;
-            let pid = self
+            // the outside editor's calls are made by no participant (v0.9.5)
+            let who = self
                 .actor
                 .clone()
                 .unwrap_or_else(|| self.parts[i].pid.clone());
+            let what = format!("{op} by {who} {:?} {policy:?}", expect);
+            let what: String = what.chars().take(240).collect();
             let audited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.audit(op, i, policy, expect, &claims_before)
             }));
+            self.n.last_ops.push_back((self.n.ops, self.version, what));
+            if self.n.last_ops.len() > dump_calls {
+                self.n.last_ops.pop_front();
+            }
             if let Err(e) = audited {
-                self.dump(op, &pid);
+                self.dump(label, "an invariant failed", Some(i));
                 std::panic::resume_unwind(e);
+            }
+            let found = std::mem::take(&mut *self.host.mismatches.lock().unwrap());
+            if !found.is_empty() {
+                self.dump(label, "a runtime check reported a mismatch", Some(i));
+                panic!(
+                    "op {} (v{}): the kit reported {} mismatch(es): {:?}",
+                    self.n.ops,
+                    self.version,
+                    found.len(),
+                    found
+                );
             }
             let t3 = Instant::now();
             self.presence();
@@ -1369,6 +1572,17 @@ impl Soak {
             self.note_kit_write();
             let t6 = Instant::now();
             win.add(op, [t0, t1, t2, t3, t4, t5, t6]);
+            let tick = (op == "tick").then(|| (t2 - t1).as_secs_f64());
+            let version = self.version;
+            let s = &self.s;
+            self.n.track(
+                (t6 - t0).as_secs_f64(),
+                tick,
+                version,
+                milestone_every,
+                milestone_calls,
+                || s.history_units_for_tests().unwrap(),
+            );
             if Instant::now() >= next_progress {
                 next_progress += Duration::from_secs(progress);
                 let at = start.elapsed().as_secs_f64();
@@ -1432,6 +1646,64 @@ impl Soak {
             .map(|(at, c, w)| (*at as u64, (*c as f64 / w.max(1e-9)) as u64))
             .collect();
         eprintln!("[soak {label}] calls/s by window (s, calls/s): {rates:?}");
+        // the cost at equal history (v0.9.7): one record per milestone, and the slope
+        let job = k2_mpc_base::differential::runrec_job();
+        for m in &n.milestones {
+            eprintln!(
+                "[soak {label}] at v{}: {:.0} µs per call, {:.0} µs per tick ({} ticks) over the {milestone_calls} calls before it; history {} units",
+                m.at, m.us_per_call, m.us_per_tick, m.ticks, m.history_units
+            );
+            eprintln!(
+                "RUNREC {{\"job\":{job},\"run\":\"soak_{label}_v{}\",\"tool\":\"soak\",\"status\":\"COMPLETE\",\"milestone\":{},\"version\":{},\"calls\":{milestone_calls},\"us_per_call\":{},\"us_per_tick\":{},\"ticks\":{},\"history_units\":{},\"full_writeback\":{}}}",
+                m.at,
+                m.at,
+                m.version,
+                m.us_per_call.round() as u64,
+                m.us_per_tick.round() as u64,
+                m.ticks,
+                m.history_units,
+                full_writeback_on()
+            );
+        }
+        // the profile between milestones (v0.9.7): each scope's mean time per entry, the
+        // largest first, with its entries per call (how often it runs)
+        for (m, prof) in n.milestones.iter().zip(&n.profiles) {
+            let mut v: Vec<&(&str, u64, f64)> = prof.iter().collect();
+            v.sort_by(|a, b| b.2.total_cmp(&a.2));
+            let parts: Vec<String> = v
+                .iter()
+                .map(|(k, c, secs)| format!("{k} {:.0}µs x{c}", secs / (*c).max(1) as f64 * 1e6))
+                .collect();
+            eprintln!(
+                "[soak {label}] profile up to v{} (scope, µs per entry, entries): {}",
+                m.at,
+                parts.join(", ")
+            );
+        }
+        let ix = n.index;
+        eprintln!(
+            "[soak {label}] position index: {} lookups, {} from a marker ({:.1}%), {} walks, {} shadow checks, {} mismatches, {} stale markers (summed over every load of the doc in the run)",
+            ix.lookups,
+            ix.marker_hits,
+            ix.marker_hits as f64 * 100.0 / ix.lookups.max(1) as f64,
+            ix.walks,
+            ix.shadow_checks,
+            ix.mismatches,
+            ix.stale_markers
+        );
+        let slope = milestone_slope(&n.milestones);
+        let growth = match (n.milestones.first(), n.milestones.last()) {
+            (Some(a), Some(b)) if n.milestones.len() >= 2 && a.us_per_call > 0.0 => {
+                Some(b.us_per_call / a.us_per_call)
+            }
+            _ => None,
+        };
+        if let (Some(sl), Some(g)) = (slope, growth) {
+            eprintln!(
+                "[soak {label}] cost per call grows {sl:.1} µs per 1,000 versions (least squares over {} milestones); last milestone / first: {g:.2}x",
+                n.milestones.len()
+            );
+        }
         // throughput over time: the first window against the last 150 s (G-gate evidence:
         // a call must not cost more as history grows; SOAK_MAX_SLOWDOWN, default 2)
         // the run's record (tools/evidence/), before the checks below can fail it
@@ -1442,8 +1714,11 @@ impl Soak {
             .unwrap_or(2.0);
         let ratio = first / tail.max(1e-9);
         let checked = !shadow_on() && tail > 0.0;
+        let opt = |v: Option<f64>, k: f64| {
+            v.map_or("null".to_owned(), |x| format!("{}", (x * k).round() as i64))
+        };
         eprintln!(
-            "RUNREC {{\"job\":null,\"run\":\"soak_{label}\",\"tool\":\"soak\",\"status\":\"{}\",\"secs\":{secs},\"calls\":{},\"applied\":{},\"version\":{},\"restarts\":{},\"first_calls_per_s\":{},\"tail_calls_per_s\":{},\"slowdown_percent\":{},\"max_slowdown_percent\":{},\"peak_rss_kb\":{},\"peak_estimate_bytes\":{},\"shadow\":{}}}",
+            "RUNREC {{\"job\":{job},\"run\":\"soak_{label}\",\"tool\":\"soak\",\"status\":\"{}\",\"secs\":{secs},\"calls\":{},\"applied\":{},\"version\":{},\"restarts\":{},\"first_calls_per_s\":{},\"tail_calls_per_s\":{},\"slowdown_percent\":{},\"max_slowdown_percent\":{},\"peak_rss_kb\":{},\"peak_estimate_bytes\":{},\"shadow\":{},\"full_writeback\":{},\"milestones\":{},\"slope_ns_per_call_per_kversion\":{},\"milestone_growth_percent\":{},\"index_lookups\":{},\"index_marker_hits\":{},\"index_walks\":{},\"index_mismatches\":{}}}",
             if !checked || ratio <= max_x { "COMPLETE" } else { "VIOLATION" },
             n.ops,
             n.applied,
@@ -1455,7 +1730,15 @@ impl Soak {
             (max_x * 100.0).round() as u64,
             n.peak_rss_kb,
             n.peak_estimate,
-            shadow_on()
+            shadow_on(),
+            full_writeback_on(),
+            n.milestones.len(),
+            opt(slope, 1000.0),
+            opt(growth, 100.0),
+            ix.lookups,
+            ix.marker_hits,
+            ix.walks,
+            ix.mismatches
         );
         if shadow_on() {
             eprintln!("[soak {label}] throughput check skipped: shadow mode");
@@ -1562,6 +1845,10 @@ fn shadow_on() -> bool {
     env_u64("SOAK_SHADOW", 0) != 0
 }
 
+fn full_writeback_on() -> bool {
+    env_u64("SOAK_FULL_WRITEBACK", 0) != 0
+}
+
 /// Run `f` (the whole soak) with its edits through [`SOAK_PATH`]; in shadow mode, each also
 /// checked against the throwaway replica (any difference panics).
 fn soak_side<R>(label: &str, f: impl FnOnce() -> R) -> R {
@@ -1583,7 +1870,15 @@ fn soak_side_with<R>(
     let mut side = Side::new(SOAK_PATH);
     if let Some(seed) = client_seed {
         side = side.with_client_seed(seed);
-        eprintln!("[soak {label}] client IDs seeded from {seed}");
+        eprintln!("[soak {label}] client IDs seeded from {seed}: the run replays exactly");
+    }
+    if env_u64("SOAK_NO_POSINDEX", 0) != 0 {
+        side = side.no_position_index();
+        eprintln!("[soak {label}] the engine's position index is off: every lookup walks");
+    }
+    if full_writeback_on() {
+        side = side.full_writeback();
+        eprintln!("[soak {label}] the old write-back: re-encode and reload the disk replica");
     }
     if shadow {
         side = side.shadowed_by(Path::Throwaway);

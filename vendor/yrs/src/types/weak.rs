@@ -91,8 +91,14 @@ impl<P: AsRef<Branch>> AsRef<Branch> for WeakRef<P> {
 impl<P: AsRef<Branch>> WeakRef<P> {
     /// Returns a [LinkSource] corresponding with current [WeakRef].
     /// Returns `None` if underlying branch reference was not meant to be used as [WeakRef].
+    ///
+    /// k2: also `None` once the link was collected (see [Branch::is_collected]): a collected link
+    /// quotes nothing.
     pub fn try_source(&self) -> Option<&Arc<LinkSource>> {
         let branch = self.as_ref();
+        if branch.is_collected() {
+            return None;
+        }
         if let TypeRef::WeakLink(source) = &branch.type_ref {
             Some(source)
         } else {
@@ -108,8 +114,12 @@ impl<P: AsRef<Branch>> WeakRef<P> {
     /// happen if a different shared type was forcibly casted to [WeakRef]. To avoid panic, use
     /// [WeakRef::try_source] instead.
     pub fn source(&self) -> &Arc<LinkSource> {
-        self.try_source()
-            .expect("Defect: called WeakRef-specific method over non-WeakRef shared type")
+        // k2 (hardening)
+        if let TypeRef::WeakLink(source) = &self.as_ref().type_ref {
+            source
+        } else {
+            panic!("Defect: called WeakRef-specific method over non-WeakRef shared type")
+        }
     }
 
     /// Returns a block [ID] to a beginning of a quoted range.
@@ -192,7 +202,10 @@ impl GetString for WeakRef<TextRef> {
     /// assert_eq!(link.get_string(&txn), "hello ".to_string());
     /// ```
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        self.source().to_string(txn)
+        match self.try_source() {
+            Some(source) => source.to_string(txn),
+            None => String::new(), // k2 (hardening)
+        }
     }
 }
 
@@ -225,7 +238,10 @@ impl GetString for WeakRef<XmlTextRef> {
     /// assert_eq!(link.get_string(&txn), "<b>old</b>, <i>itali</i>".to_string());
     /// ```
     fn get_string<T: ReadTxn>(&self, txn: &T) -> String {
-        self.source().to_xml_string(txn)
+        match self.try_source() {
+            Some(source) => source.to_xml_string(txn),
+            None => String::new(), // k2 (hardening)
+        }
     }
 }
 
@@ -316,8 +332,7 @@ where
     type Prelim = WeakPrelim<V>;
 
     fn as_prelim<T: ReadTxn>(&self, _txn: &T) -> Self::Prelim {
-        let source = self.try_source().unwrap();
-        WeakPrelim::with_source(source.clone())
+        WeakPrelim::with_source(self.source().clone())
     }
 }
 

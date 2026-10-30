@@ -1,0 +1,21 @@
+MPC-E006 export_io (exports)
+exit:     1
+message:  export i/o failed
+next:     Reading the source or writing the output failed. Nothing was placed. Check the destination (space, permissions), then run it again.
+rule:     X-ERR-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E006",
+  "name": "export_io",
+  "area": "exports",
+  "exit": 1,
+  "message": "export i/o failed",
+  "next": "Reading the source or writing the output failed. Nothing was placed. Check the destination (space, permissions), then run it again.",
+  "rule": "X-ERR-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

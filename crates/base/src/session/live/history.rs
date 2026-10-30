@@ -162,6 +162,68 @@ impl Session {
             .collect())
     }
 
+    /// **The file at version `vid`** (exports): the bytes a write-back of that version's
+    /// content would write (the pack's encoding, with the doc's codec settings), its doc
+    /// version ([`FileBytes::version`]) and how the codec was applied ([`FileCodec`]: today's
+    /// settings; exact for the latest content). Reads only: no version, change, lease, claim
+    /// or read base. Needs history, like `show`; an unknown `vid` is
+    /// [`SessionError::NoSuchChange`].
+    pub fn file_at(&self, conn: ConnId, vid: VersionId) -> Result<FileBytes> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit_history(&mut st, conn, now)?;
+        let v = self
+            .store(&st)?
+            .version(self.doc_id, vid)
+            .map_err(no_version(vid))?;
+        let bytes = self.pack.encode(&v.content, &st.codec)?;
+        let current = v.seq == st.version
+            && v.content
+                .iter()
+                .zip(st.texts.iter())
+                .all(|((r, Neutral::Text(t)), (lr, lt))| r == lr && t == lt)
+            && v.content.len() == st.texts.len();
+        Ok(FileBytes {
+            bytes,
+            version: v.seq,
+            codec: if current {
+                FileCodec::Exact
+            } else {
+                FileCodec::Current
+            },
+        })
+    }
+
+    /// **The file now** (exports: "now" resolved first): the current doc's bytes, as a
+    /// write-back writes them, and the doc version they are. Needs read only. Reads only: no
+    /// read base is recorded and "contributors since last read" doesn't move.
+    pub fn file_now(&self, conn: ConnId) -> Result<FileBytes> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
+        Ok(FileBytes {
+            bytes: self.render(&st)?,
+            version: st.version,
+            codec: FileCodec::Exact,
+        })
+    }
+
+    /// [`Session::file_at`], written to `out` ([`FileCopy`]: on an error, discard what was
+    /// written). A live doc is rendered whole first (its size is bounded by the pack).
+    pub fn file_at_to(
+        &self,
+        conn: ConnId,
+        vid: VersionId,
+        out: &mut dyn std::io::Write,
+    ) -> Result<FileCopy> {
+        copy_file(self.file_at(conn, vid)?, out)
+    }
+
+    /// [`Session::file_now`], written to `out` ([`FileCopy`]).
+    pub fn file_now_to(&self, conn: ConnId, out: &mut dyn std::io::Write) -> Result<FileCopy> {
+        copy_file(self.file_now(conn)?, out)
+    }
+
     /// `diff --version V [--to W]`: a unified diff of `root` from version `from` to version
     /// `to` (`None`: the live text), with `context` lines. Exit 0 when the same, 1 when
     /// different ([`DiffOutput::exit`]). Needs history.
@@ -212,6 +274,15 @@ impl Session {
     /// `log`: changes and versions, newest first, filtered by `q` (K-HIST-9, -18). Each
     /// change has its author, via, time, ± lines, kind and approval state. Needs history.
     pub fn log(&self, conn: ConnId, q: &LogQuery) -> Result<Vec<LogItem>> {
+        // an App viewer filters by its handles (`--by p2`): the pid behind each
+        let q = self.unhandle_query(conn, q);
+        let out = self.log_inner(conn, &q);
+        self.for_viewer(conn, out, |l, items| {
+            items.into_iter().map(|i| l.log_item(i)).collect()
+        })
+    }
+
+    fn log_inner(&self, conn: ConnId, q: &LogQuery) -> Result<Vec<LogItem>> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit_history(&mut st, conn, now)?;
@@ -422,6 +493,7 @@ impl Session {
             seq: change,
             on_behalf_of: None,
             regions: undo::revert_regions(&rec, carried),
+            touched: false,
         };
         let mode = if partial { Mode::Partial } else { Mode::All };
         self.prov(st)?;
@@ -555,4 +627,17 @@ impl Session {
         ix.remove(&drop);
         Ok(n)
     }
+}
+
+fn copy_file(f: FileBytes, out: &mut dyn std::io::Write) -> Result<FileCopy> {
+    out.write_all(&f.bytes)
+        .and_then(|()| out.flush())
+        .map_err(|e| {
+            SessionError::Blob(crate::blob::BlobError::Io(format!("writing the copy: {e}")))
+        })?;
+    Ok(FileCopy {
+        version: f.version,
+        bytes: f.bytes.len() as u64,
+        codec: f.codec,
+    })
 }

@@ -227,12 +227,22 @@ fn edit_cost_at_sizes() {
         }
         assert_eq!(kit.text(ROOT).unwrap(), b.text);
         assert_eq!(kit.state_vector().len(), b.doc().state_vector().len());
-        assert_eq!(
-            kit.encode_state().unwrap(),
-            b.doc().encode_state().unwrap(),
+        // state equality across two docs is content equality: upstream may split equal
+        // content into blocks differently (k2-yrs k2.4's note)
+        let built = b.doc();
+        let bytes = kit.encode_state().unwrap() == built.encode_state().unwrap();
+        assert!(
+            bytes || kit.same_content(&built),
             "the builder's history must be the kit's"
         );
-        eprintln!("[edit cost] the builder's history at {n} changes is the kit's, byte for byte");
+        eprintln!(
+            "[edit cost] the builder's history at {n} changes is the kit's: {}",
+            if bytes {
+                "byte for byte"
+            } else {
+                "the same content (state vector, delete set, text), the bytes differ"
+            }
+        );
     }
     for &n in &sizes {
         let t0 = Instant::now();
@@ -259,8 +269,9 @@ fn edit_cost_at_sizes() {
                 state.len(),
                 b.text.len()
             );
+            let job = k2_mpc_base::differential::runrec_job();
             eprintln!(
-                "RUNREC {{\"job\":null,\"run\":\"edit_cost_{n}_{}\",\"tool\":\"edit_cost\",\
+                "RUNREC {{\"job\":{job},\"run\":\"edit_cost_{n}_{}\",\"tool\":\"edit_cost\",\
                  \"status\":\"COMPLETE\",\"changes\":{n},\"edits\":200,\"warmup_steps\":10,\
                  \"per_edit_us\":{},\"state_bytes\":{},\"text_bytes\":{},\"build_s\":{}}}",
                 format!("{path:?}").to_lowercase(),
@@ -296,8 +307,9 @@ fn edit_cost_at_sizes() {
             times.sort_by(f64::total_cmp);
             let q = |p: f64| times[((times.len() as f64 * p) as usize).min(times.len() - 1)];
             let mean = times.iter().sum::<f64>() / times.len() as f64;
+            let job = k2_mpc_base::differential::runrec_job();
             eprintln!(
-                "RUNREC {{\"job\":null,\"run\":\"canary_{n}_{}\",\"tool\":\"edit_cost\",\
+                "RUNREC {{\"job\":{job},\"run\":\"canary_{n}_{}\",\"tool\":\"edit_cost\",\
                  \"status\":\"COMPLETE\",\"changes\":{n},\"edits\":{},\"check_every\":{every},\
                  \"median_us\":{},\"ninety_ninth_us\":{},\"three_nines_us\":{},\"max_us\":{},\"mean_ns\":{}}}",
                 if every == 0 {

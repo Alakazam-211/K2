@@ -25,3 +25,20 @@ SUMMARY mode=cp states=1592820 levels=15 violations=no_false_equivocation violat
 === cp mutant x 2x2: exit 1, wall 30s
 SUMMARY mode=undo states=542418 levels=9 violations=[] complete=true wall=12.0s
 === undo_2x2_empty_list: exit 0, wall 12s
+Running breadth-first search Model-Checking with fp 6 and seed 1 with 1 worker on 16 cores with 5461MB heap
+Error: Invariant w1_noag_text_sec_diamond is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+State 2: <a>
+State 3: <b>
+5 states generated, 5 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 3.
+Error: Invariant w1_noag_text_sec_diamond is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+=== tlc w1_noag sec_diamond: exit 12, wall 1s (124 = stopped by timeout)
+mpce-enum bfs agents=3 budget=1 step=stepInsertOnly variant=yata
+level 1: 3 new, total 4
+VIOLATION def4_backward at depth 4 (after 101 states):
+SUMMARY mode=bfs agents=3 budget=1 states=101 levels=5 violations=def4_backward complete=false
+=== yata 3x1 insert (must fail): exit 1, wall 0s

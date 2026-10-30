@@ -42,6 +42,18 @@ impl Session {
         note: Option<String>,
         hold: bool,
     ) -> Result<ClaimInfo> {
+        let out = self.claim_inner(conn, range, ttl_ms, note, hold);
+        self.for_viewer(conn, out, |l, c| l.claim(c))
+    }
+
+    fn claim_inner(
+        &self,
+        conn: ConnId,
+        range: LineRange,
+        ttl_ms: Option<u64>,
+        note: Option<String>,
+        hold: bool,
+    ) -> Result<ClaimInfo> {
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -140,6 +152,13 @@ impl Session {
 
     /// Every live claim in the doc, oldest first, as it is now. Needs read.
     pub fn claims(&self, conn: ConnId) -> Result<Vec<ClaimInfo>> {
+        let out = self.claims_inner(conn);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter().map(|c| l.claim(c)).collect()
+        })
+    }
+
+    fn claims_inner(&self, conn: ConnId) -> Result<Vec<ClaimInfo>> {
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -247,6 +266,13 @@ impl Session {
     /// The live hand-off reservations (see [`Config::claim_handoff_ms`]), oldest first.
     /// Needs read.
     pub fn reservations(&self, conn: ConnId) -> Result<Vec<ReservationInfo>> {
+        let out = self.reservations_inner(conn);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter().map(|r| l.reservation(r)).collect()
+        })
+    }
+
+    fn reservations_inner(&self, conn: ConnId) -> Result<Vec<ReservationInfo>> {
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -264,6 +290,13 @@ impl Session {
     /// The ring holds [`Config::activity_max`] rows, in memory only; it is dropped when the
     /// doc unloads, and a participant erasure drops that pid's rows.
     pub fn activity(&self, conn: ConnId, n: usize) -> Result<Vec<ActivityEntry>> {
+        let out = self.activity_inner(conn, n);
+        self.for_viewer(conn, out, |l, v| {
+            v.into_iter().map(|a| l.activity(a)).collect()
+        })
+    }
+
+    fn activity_inner(&self, conn: ConnId, n: usize) -> Result<Vec<ActivityEntry>> {
         let now = self.now();
         let mut st = self.lock()?;
         let st = &mut *st;
@@ -440,6 +473,19 @@ impl Session {
         };
         let info = claim.info(text, now);
         st.aware.claims.push(claim);
+        st.roster.record(
+            RosterEvent::ClaimStarted {
+                who: Who::of(&pid),
+                claim: info.id,
+                lines: info.lines.clone(),
+                note: info.note.clone(),
+                hold,
+                for_edit,
+                expires_ms: info.expires_ms,
+                version: st.version,
+            },
+            self.config.roster_queue,
+        );
         self.emit(AuditEvent::ClaimTaken {
             key: st.key.clone(),
             claim: info.id,
@@ -468,6 +514,16 @@ impl Session {
         let c = st.aware.claims.remove(k);
         let lines = self.lines_now(st, &c.root, c.s, c.e);
         let waiters: Vec<(ConnId, String)> = c.waiters.into_iter().collect();
+        st.roster.record(
+            RosterEvent::ClaimEnded {
+                who: Who::of(&c.pid),
+                claim: c.id,
+                how,
+                lines: lines.clone(),
+                version: st.version,
+            },
+            self.config.roster_queue,
+        );
         self.emit(AuditEvent::ClaimEnded {
             key: st.key.clone(),
             claim: c.id,
@@ -885,8 +941,26 @@ impl Session {
         }
         for n in &shown {
             st.aware.noted.insert(key(n), now);
+            st.roster.record(
+                RosterEvent::Note {
+                    to: Who::of(&reader),
+                    from: Who::of(&n.pid),
+                    kind: n.kind,
+                    lines: n.lines.clone(),
+                    claim: n.claim,
+                },
+                self.config.roster_queue,
+            );
         }
         st.aware.batches.insert(reader, now);
+        // an App reader (K5) sees the others by handle
+        let shown = match Self::app_viewer(st, i) {
+            Some(v) => {
+                let mut l = st.handles.lens(&v);
+                shown.into_iter().map(|n| l.note(n)).collect()
+            }
+            None => shown,
+        };
         Notes {
             notes: shown,
             more,

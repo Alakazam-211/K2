@@ -1,0 +1,21 @@
+MPC-E113 bad_edit (sessions and edits)
+exit:     2
+message:  bad edit: {reason}
+next:     The edit itself is malformed (the message says how). Fix the arguments and run it again; nothing was applied.
+rule:     K-SCH-2
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E113",
+  "name": "bad_edit",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "bad edit: {reason}",
+  "next": "The edit itself is malformed (the message says how). Fix the arguments and run it again; nothing was applied.",
+  "rule": "K-SCH-2",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

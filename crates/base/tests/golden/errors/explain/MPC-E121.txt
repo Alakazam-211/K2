@@ -1,0 +1,21 @@
+MPC-E121 tool_refused (sessions and edits)
+exit:     2
+message:  {what}: refused ({reason})
+next:     The tools refuse this on purpose (sed commands that touch other files or run programs, backup suffixes, backreferences in a pattern). Do it another way: the reason says which. Nothing was applied.
+rule:     K-PAR-7, K-SEC-6
+verbs:    cat, wc, head, tail, sed, view, grep, insert, replace, delete, sed -i, patch, apply, append, diff (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E121",
+  "name": "tool_refused",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{what}: refused ({reason})",
+  "next": "The tools refuse this on purpose (sed commands that touch other files or run programs, backup suffixes, backreferences in a pattern). Do it another way: the reason says which. Nothing was applied.",
+  "rule": "K-PAR-7, K-SEC-6",
+  "verbs": ["@run_tool"],
+  "returned_by": ["cat", "wc", "head", "tail", "sed", "view", "grep", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "diff"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E302 no_claim (presence and claims)
+exit:     4
+message:  no live claim {claim}
+next:     That claim already ended (it expired, or your edit ended it), or you hold none. Take a new one with claim --lines a,b if you still need it.
+rule:     A13 (claims)
+verbs:    claim --renew; claim --release
+status:   live
+--- json
+{
+  "id": "MPC-E302",
+  "name": "no_claim",
+  "area": "presence and claims",
+  "exit": 4,
+  "message": "no live claim {claim}",
+  "next": "That claim already ended (it expired, or your edit ended it), or you hold none. Take a new one with claim --lines a,b if you still need it.",
+  "rule": "A13 (claims)",
+  "verbs": ["claim --renew", "claim --release"],
+  "returned_by": ["claim --renew", "claim --release"],
+  "status": "live",
+  "since_or_until": null
+}

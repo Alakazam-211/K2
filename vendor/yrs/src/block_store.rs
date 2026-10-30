@@ -363,6 +363,20 @@ impl BlockStore {
         StateVector::new(map)
     }
 
+    /// k2: one client's entry of [BlockStore::get_state_vector], without building the vector:
+    /// the start of the client's lowest skip if it has one, else its clock; `None` for a client
+    /// with no blocks (absent from the state vector).
+    pub(crate) fn get_state(&self, client: &ClientID) -> Option<u32> {
+        if let Some(clock) = self
+            .skips
+            .get(client)
+            .and_then(|ranges| ranges.clock_start())
+        {
+            return Some(clock);
+        }
+        self.clients.get(client).map(|list| list.clock())
+    }
+
     pub(crate) fn known_state(&self, ss: &BlockSet) -> IdSet {
         let mut known_state = IdSet::default();
         for (client, _) in ss.clients.iter() {

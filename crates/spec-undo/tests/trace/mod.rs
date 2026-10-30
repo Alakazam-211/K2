@@ -37,7 +37,8 @@ use k2_mpc_base::text::diff::Hunk;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use spec_undo::model::{
-    Bounds, ChangeId, Edit, Kind, Mode, Model, Notice, Outcome, Prov, Report, Request,
+    Bounds, ChangeId, Closer, Edit, GroupNote, Kind, Mode, Model, Notice, Outcome, Prov, Report,
+    Request,
 };
 
 use kit::{Kit, KitChar, KitId, KitOut, Knobs};
@@ -76,7 +77,32 @@ pub const CLASSES: &[&str] = &[
     "concurrent_restore_o4",
     "concurrent_restore_o4a",
     "concurrent_restore_base_by_root",
+    // D1 (undo spec v1.10): a fresh change whose hunks D1 widened (it touched a token
+    // someone else wrote), and an undo, redo or revert after one on the same root
+    "d1_widened",
+    "d1_widened_then_undone",
 ];
+
+/// The grouping class (U3; spec §8 Volume "grouping with the (g) split"; [`run_group`]): people
+/// typing with group tokens on the hunk channel, interleaved with others' changes, idle gaps,
+/// undos and redos. Each closer is counted where it alone closed a group (so that a kit missing
+/// it would have joined), and a group's undo and redo where the group held two edits or more.
+pub const GROUP_CLASSES: &[&str] = &[
+    "group_joined",
+    "group_closed_idle",
+    "group_closed_noncontiguous",
+    "group_closed_boundary",
+    "group_closed_newline",
+    "group_closed_token",
+    "group_closed_foreign",
+    "group_self_undone",
+    "group_undone",
+    "group_redone",
+    "group_agent_token",
+];
+
+/// What a person types (U3 (c), (d): word characters, boundaries, newlines).
+const TYPED: &[char] = &['a', 'b', 'é', '日', 'a', 'b', ' ', ' ', '.', ',', '\n'];
 
 /// Low entropy on purpose (repeated text is where a wrong position hides), with multi-byte
 /// characters and newlines.
@@ -123,7 +149,8 @@ pub struct TraceResult {
     /// v1.8: undo, redo and revert steps whose removals the kit-side U10a-by-root check
     /// read (`own_only_checked`), the elements they removed (`own_only_removed`), and the
     /// steps it couldn't resolve (`own_only_unresolved`: a reversed entry whose change the
-    /// runner can't name; never expected).
+    /// runner can't name, or a change some of whose inserted elements a later step of the
+    /// same request removed before the runner could read their roots; rare).
     pub own_only: BTreeMap<&'static str, u64>,
 }
 
@@ -147,6 +174,10 @@ enum Made {
 struct Entry {
     obo: Option<String>,
     made: Made,
+    /// A person's undo group (U3): the later changes joined to `made`'s.
+    joined: Vec<ChangeId>,
+    /// It is a group of two edits or more, or the undo or redo of one.
+    group: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -167,6 +198,9 @@ struct ProvTrack {
     author: HashMap<Prov, String>,
     /// Change → the kit roots of the elements it inserted, read right after it.
     inserted: HashMap<ChangeId, BTreeSet<KitId>>,
+    /// Changes some of whose inserted elements were gone by the end of their step (a later
+    /// step of the same undo or redo removed them), so `inserted` can't name all their roots.
+    unseen: BTreeSet<ChangeId>,
     /// pid → its undo and redo stacks as the changes that made them (U1, U6, U7, U13,
     /// U14, U17, U19; restart clears them). Their depths are checked against the oracle's
     /// and the kit's after every step.
@@ -231,6 +265,18 @@ pub enum Step {
     },
     Restart,
     Tick,
+    /// A live edit (the hunk channel) on `root`, with the editor's group token (U3) if any.
+    Type {
+        p: usize,
+        s: usize,
+        root: usize,
+        edits: Vec<Edit>,
+        token: Option<u64>,
+    },
+    /// The host's clock moves on.
+    Wait {
+        ms: u64,
+    },
 }
 
 /// A directed scenario's next move, resolved against the state when it runs.
@@ -331,6 +377,8 @@ struct ReadBase {
 }
 
 pub struct Runner {
+    /// Roots a change D1 widened has touched (for the class `d1_widened_then_undone`).
+    d1_roots: std::collections::BTreeSet<usize>,
     seed: u64,
     rng: SmallRng,
     model: Model,
@@ -374,6 +422,18 @@ pub struct Runner {
     pt: ProvTrack,
     /// The mismatch came from a v1.8 provenance check.
     prov_differs: bool,
+    /// A grouping trace ([`run_group`]).
+    group: bool,
+    /// Per pid: a person (an editor client; the rest are agents).
+    persons: Vec<bool>,
+    /// (pid, slot) → its editor's caret: (root, byte offset).
+    carets: HashMap<(usize, usize), (usize, usize)>,
+    /// (pid, slot) → its editor's current group token.
+    tokens: HashMap<(usize, usize), u64>,
+    /// What the oracle did with the last grouped edit's stack.
+    group_note: Option<GroupNote>,
+    /// The typist's caret after the step being drawn: ((pid, slot), (root, offset)).
+    pending_caret: Option<((usize, usize), (usize, usize))>,
 }
 
 /// The knobs every trace runs with: small, so the bounds, the window and compaction are
@@ -382,6 +442,7 @@ pub const KNOBS: Knobs = Knobs {
     undo_depth: 8,
     keep_changes: 24,
     compact_entries: 16,
+    group_idle_ms: 500,
 };
 
 fn mix(mut z: u64) -> u64 {
@@ -398,26 +459,49 @@ pub fn run(seed: u64) -> TraceResult {
 
 /// [`run`], logging every root's text after each step (`verbose`).
 pub fn run_with(seed: u64, verbose: bool) -> TraceResult {
-    run_mode(seed, verbose, false)
+    run_mode(seed, verbose, false, false)
 }
 
 /// A restart-twin trace (spec U22a v1.6, restart transparency): stack-free, an assistant
 /// always, the directed restart scenario first, and every step also run on a second kit
 /// that never restarts, whose outcomes and texts must equal the restarted kit's.
 pub fn run_twin(seed: u64) -> TraceResult {
-    run_mode(seed, false, true)
+    run_mode(seed, false, true, false)
 }
 
-fn run_mode(seed: u64, verbose: bool, twin: bool) -> TraceResult {
-    let mut rng = SmallRng::seed_from_u64(mix(seed) ^ u64::from(twin));
-    let n_pids = rng.gen_range(2..=5);
+/// A grouping trace (U3, [`GROUP_CLASSES`]): 2–4 pids, the first a person typing on one or
+/// two connections, the second a person half the time, the rest agents; nobody acts for
+/// anyone. `verbose` as [`run_with`].
+pub fn run_group(seed: u64, verbose: bool) -> TraceResult {
+    run_mode(seed, verbose, false, true)
+}
+
+fn run_mode(seed: u64, verbose: bool, twin: bool, group: bool) -> TraceResult {
+    let mut rng = SmallRng::seed_from_u64(mix(seed) ^ u64::from(twin) ^ (u64::from(group) << 1));
+    let n_pids = if group {
+        rng.gen_range(2..=4)
+    } else {
+        rng.gen_range(2..=5)
+    };
     let steps = if twin {
         rng.gen_range(60..=160)
+    } else if group {
+        rng.gen_range(40..=160)
     } else {
         rng.gen_range(20..=200)
     };
     let mut pids = Vec::new();
+    let mut persons = Vec::new();
     for i in 0..n_pids {
+        if group {
+            persons.push(i == 0 || (i == 1 && rng.gen_bool(0.5)));
+            let slots = if i == 0 { rng.gen_range(1..=2) } else { 1 };
+            pids.push(PidSpec {
+                name: format!("p{i}"),
+                obo: vec![None; slots],
+            });
+            continue;
+        }
         let slots = rng.gen_range(1..=3);
         let assistant = i == 0 && (twin || rng.gen_bool(0.6));
         let obo = (0..slots)
@@ -428,7 +512,7 @@ fn run_mode(seed: u64, verbose: bool, twin: bool) -> TraceResult {
             obo,
         });
     }
-    let repeated = rng.gen_bool(0.3);
+    let repeated = !group && rng.gen_bool(0.3);
     let alpha = if repeated { REPEATED } else { ALPHA };
     let seeds = if repeated {
         [repeated_text(&mut rng), repeated_text(&mut rng)]
@@ -438,18 +522,25 @@ fn run_mode(seed: u64, verbose: bool, twin: bool) -> TraceResult {
             rand_text(&mut rng, alpha, 0, 12),
         ]
     };
-    let kit = Kit::open([&seeds[0], &seeds[1]], &KNOBS);
+    let mut kit = Kit::open([&seeds[0], &seeds[1]], &KNOBS);
+    for (p, &person) in pids.iter().zip(&persons) {
+        if person {
+            kit.set_person(&p.name);
+        }
+    }
     let twin_kit = twin.then(|| Kit::open([&seeds[0], &seeds[1]], &KNOBS));
     let head = kit.version();
     let bounds = Bounds {
         depth: KNOBS.undo_depth,
         keep_changes: KNOBS.keep_changes,
+        group_idle_ms: KNOBS.group_idle_ms,
         ..Bounds::default()
     };
     let model = Model::new(kit.texts(), head, bounds);
     assert_eq!(model.texts, seeds, "the seed texts");
     let present = pids.iter().map(|p| vec![false; p.obo.len()]).collect();
     let mut r = Runner {
+        d1_roots: Default::default(),
         seed,
         rng,
         model,
@@ -479,6 +570,12 @@ fn run_mode(seed: u64, verbose: bool, twin: bool) -> TraceResult {
         change_roots: BTreeMap::new(),
         pt: ProvTrack::default(),
         prov_differs: false,
+        persons: if group { persons } else { vec![false; n_pids] },
+        group,
+        carets: HashMap::new(),
+        tokens: HashMap::new(),
+        group_note: None,
+        pending_caret: None,
     };
     if let Err(what) = r.observe_initial() {
         panic!("seed {seed}: the seed text's blame: {what}");
@@ -521,6 +618,7 @@ pub fn script(seeds: [&str; 2], pids: usize, steps: Vec<Step>) -> Option<String>
     let bounds = Bounds {
         depth: KNOBS.undo_depth,
         keep_changes: KNOBS.keep_changes,
+        group_idle_ms: KNOBS.group_idle_ms,
         ..Bounds::default()
     };
     let model = Model::new(kit.texts(), head, bounds);
@@ -532,6 +630,7 @@ pub fn script(seeds: [&str; 2], pids: usize, steps: Vec<Step>) -> Option<String>
         .collect();
     let present = pids.iter().map(|_| vec![false]).collect();
     let mut r = Runner {
+        d1_roots: Default::default(),
         seed: 0,
         rng: SmallRng::seed_from_u64(0),
         model,
@@ -561,6 +660,12 @@ pub fn script(seeds: [&str; 2], pids: usize, steps: Vec<Step>) -> Option<String>
         change_roots: BTreeMap::new(),
         pt: ProvTrack::default(),
         prov_differs: false,
+        persons: Vec::new(),
+        group: false,
+        carets: HashMap::new(),
+        tokens: HashMap::new(),
+        group_note: None,
+        pending_caret: None,
     };
     if let Err(what) = r.observe_initial() {
         return Some(format!("the seed text's blame: {what}"));
@@ -707,6 +812,8 @@ fn normalise(out: KitOut) -> Result<Outcome, String> {
             other => return Err(format!("an unknown outcome {other:?}")),
         },
         KitOut::Undo(Err(SessionError::RevertTooOld { .. })) => Outcome::TooOld,
+        KitOut::Live(Ok(changed)) => Outcome::Changed(changed.then_some(0)),
+        KitOut::Live(Err(e)) => return Err(format!("the kit refused a live edit: {e}")),
         KitOut::Edit(Err(e)) | KitOut::Write(Err(e), _) | KitOut::Undo(Err(e)) => {
             return Err(format!("the kit refused: {e}"))
         }
@@ -769,7 +876,10 @@ fn same(model: &Outcome, kit: &Outcome) -> bool {
 
 impl Runner {
     fn hit(&mut self, class: &'static str) {
-        debug_assert!(CLASSES.contains(&class), "{class}");
+        debug_assert!(
+            CLASSES.contains(&class) || GROUP_CLASSES.contains(&class),
+            "{class}"
+        );
         *self.res.classes.entry(class).or_default() += 1;
     }
 
@@ -886,6 +996,9 @@ impl Runner {
     }
 
     fn draw(&mut self) -> Step {
+        if self.group {
+            return self.draw_group();
+        }
         let step = self.draw_any();
         if !self.stackless {
             return step;
@@ -1654,6 +1767,9 @@ impl Runner {
             Step::Undo { .. } | Step::Name { .. } | Step::Restore { .. } => {
                 unreachable!("stack-free traces have no {step:?}")
             }
+            Step::Type { .. } | Step::Wait { .. } => {
+                unreachable!("grouping traces have no twin: {step:?}")
+            }
         }
     }
 
@@ -1682,10 +1798,17 @@ impl Runner {
     }
 }
 
-/// A change's hunks as its record holds them (as made, per root).
+/// A change's hunks as it reports them (per root): its authored hunks, which the kit's
+/// hunk channel carries (D1 widens a fresh change's hunks at element identity only, E-LIVE
+/// r2.1); the elements are compared by root and I1 below.
 fn record_hunks(m: &Model, id: ChangeId) -> Option<Vec<(usize, Vec<Hunk>)>> {
     let rec = m.records.get(&id)?;
-    Some(rec.hunks.iter().map(|(r, es)| (*r, to_hunks(es))).collect())
+    Some(
+        rec.authored
+            .iter()
+            .map(|(r, es)| (*r, to_hunks(es)))
+            .collect(),
+    )
 }
 
 impl Runner {
@@ -1829,6 +1952,43 @@ impl Runner {
                 self.versions.clear();
                 (mo, Some(self.kit.purge(c, &secret)))
             }
+            Step::Type {
+                p,
+                s,
+                root,
+                edits,
+                token,
+            } => {
+                let c = self.conn(p, s);
+                let name = self.pids[p].name.clone();
+                let agent = !self.persons[p];
+                let now = self.kit.now();
+                let hs = to_hunks(&edits);
+                let mo = match token {
+                    Some(t) => {
+                        let (mo, note) = self.model.edit_grouped(
+                            &name,
+                            agent,
+                            s,
+                            t,
+                            now,
+                            vec![(root, edits.clone())],
+                        );
+                        self.group_note = Some(note);
+                        mo
+                    }
+                    None => {
+                        self.group_note = None;
+                        self.model.edit(&name, None, vec![(root, edits.clone())])
+                    }
+                };
+                let tok = token.map(|t| format!("g{t}"));
+                (mo, Some(self.kit.live(c, root, hs, tok.as_deref())))
+            }
+            Step::Wait { ms } => {
+                self.kit.advance_by(ms);
+                (Outcome::Changed(None), None)
+            }
             Step::Leave { p, s } => {
                 let name = self.pids[p].name.clone();
                 self.kit.leave(&name, s);
@@ -1937,6 +2097,19 @@ impl Runner {
                 self.model.head
             ));
         }
+        // ---- D1's classes: a change it widened, and a history step after one ----
+        for id in head_before + 1..=self.model.head {
+            if let Some(rec) = self.model.records.get(&id) {
+                if rec.authored != rec.hunks {
+                    self.d1_roots.extend(rec.hunks.iter().map(|(r, _)| *r));
+                    self.hit("d1_widened");
+                } else if matches!(step, Step::Undo { .. } | Step::Revert { .. })
+                    && rec.hunks.iter().any(|(r, _)| self.d1_roots.contains(r))
+                {
+                    self.hit("d1_widened_then_undone");
+                }
+            }
+        }
         // ---- the applied hunks: the same elements on both sides (U10 v1.7; a mismatch) ----
         let applied = self.kit.applied();
         for id in head_before + 1..=self.model.head {
@@ -1975,9 +2148,13 @@ impl Runner {
             self.prov_differs = true;
             return Err("I1: the oracle has two live elements with one root".into());
         }
+        let reversed_group = reversed.iter().any(|e| e.group);
         if let Some(before) = &chars_before {
             self.own_only_kit(&step, &mo, &hits, reversed, before, &chars)
                 .inspect_err(|_| self.prov_differs = true)?;
+        }
+        if self.group {
+            self.group_classes(&step, &mo, reversed_group, head_before);
         }
         if self.verbose {
             self.log.push(format!("    texts {:?}", self.model.texts));
@@ -2198,12 +2375,32 @@ impl Runner {
             }
         }
         for id in head_before + 1..=self.model.head {
-            let roots = chars
+            let mut roots: BTreeSet<KitId> = chars
                 .iter()
                 .flatten()
                 .filter(|k| k.change == Some(id))
                 .map(|k| k.root)
                 .collect();
+            // a step of several changes (a multi-step undo or redo) can delete what an
+            // earlier one of them put back before anything is read: those roots come from
+            // the oracle's record of the change (each was seen live, so it maps to the kit)
+            if let Some(rec) = self.model.records.get(&id) {
+                for p in rec.regions.iter().flat_map(|r| &r.after_roots) {
+                    if let Some(k) = self.pt.corr.get(p) {
+                        roots.insert(*k);
+                    }
+                }
+            }
+            let made: usize = self.model.records.get(&id).map_or(0, |rec| {
+                rec.hunks
+                    .iter()
+                    .flat_map(|(_, es)| es)
+                    .map(|e| e.insert.chars().count())
+                    .sum()
+            });
+            if roots.len() < made {
+                self.pt.unseen.insert(id);
+            }
             self.pt.inserted.insert(id, roots);
         }
         Ok(chars)
@@ -2240,8 +2437,40 @@ impl Runner {
                     st.undo.push(Entry {
                         obo: self.pids[*p].obo[*s].clone(),
                         made: Made::Id(id),
+                        joined: Vec::new(),
+                        group: false,
                     });
                     bound(st);
+                }
+            }
+            Step::Type { p, s, .. } => {
+                if let Some(&id) = new_ids.first() {
+                    let note = self.group_note.clone();
+                    let st = self
+                        .pt
+                        .shadow
+                        .entry(self.pids[*p].name.clone())
+                        .or_default();
+                    match note {
+                        Some(GroupNote::Joined) => {
+                            let top = st.undo.last_mut().expect("the open group");
+                            top.joined.push(id);
+                            top.group = true;
+                        }
+                        Some(GroupNote::SelfUndone) => {
+                            st.undo.pop();
+                        }
+                        _ => {
+                            st.redo.clear();
+                            st.undo.push(Entry {
+                                obo: self.pids[*p].obo[*s].clone(),
+                                made: Made::Id(id),
+                                joined: Vec::new(),
+                                group: false,
+                            });
+                            bound(st);
+                        }
+                    }
                 }
             }
             Step::Purge { .. } | Step::Restart => self.pt.shadow.clear(),
@@ -2298,6 +2527,8 @@ impl Runner {
                             to.push(Entry {
                                 obo: e.obo.clone(),
                                 made: made[k],
+                                joined: Vec::new(),
+                                group: e.group,
                             });
                             reversed.push(e);
                             bound(st);
@@ -2357,7 +2588,23 @@ impl Runner {
             Step::Revert { change, .. } => vec![Made::Id(*change)],
             _ => reversed.iter().map(|e| e.made).collect(),
         };
+        // a reversed change whose inserted elements weren't all seen live: unresolved
+        let named = changes
+            .iter()
+            .filter_map(|m| match m {
+                Made::Id(c) => Some(*c),
+                _ => None,
+            })
+            .chain(reversed.iter().flat_map(|e| e.joined.iter().copied()));
+        if named.into_iter().any(|c| self.pt.unseen.contains(&c)) {
+            *self.res.own_only.entry("own_only_unresolved").or_default() += 1;
+            return Ok(());
+        }
         let mut own: BTreeSet<KitId> = BTreeSet::new();
+        // a person's group (U3): every change joined into it
+        for c in reversed.iter().flat_map(|e| &e.joined) {
+            own.extend(self.pt.inserted.get(c).into_iter().flatten());
+        }
         for m in &changes {
             match m {
                 Made::Id(c) => own.extend(self.pt.inserted.get(c).into_iter().flatten()),
@@ -2420,4 +2667,320 @@ impl Runner {
             .or_default() += foreign_author;
         Ok(())
     }
+}
+
+/// The grouping class (U3; [`run_group`]): its generator, its classes, the editors' carets.
+impl Runner {
+    fn typed(&mut self) -> String {
+        (0..self.rng.gen_range(1..=2))
+            .map(|_| TYPED[self.rng.gen_range(0..TYPED.len())])
+            .collect()
+    }
+
+    fn draw_group(&mut self) -> Step {
+        let typists: Vec<usize> = (0..self.pids.len()).filter(|&p| self.persons[p]).collect();
+        let agents: Vec<usize> = (0..self.pids.len()).filter(|&p| !self.persons[p]).collect();
+        let idle = KNOBS.group_idle_ms;
+        match self.rng.gen_range(0..100) {
+            0..=49 => {
+                // the first person mostly
+                let p = if self.rng.gen_bool(0.8) {
+                    typists[0]
+                } else {
+                    typists[self.rng.gen_range(0..typists.len())]
+                };
+                self.keystroke(p)
+            }
+            50..=57 => {
+                // around the idle bound (a step itself is 1 ms), or a short pause
+                let ms = match self.rng.gen_range(0..5) {
+                    0 => idle - 3,
+                    1 => idle - 2,
+                    2 => self.rng.gen_range(idle..idle * 2),
+                    _ => self.rng.gen_range(0..idle / 4),
+                };
+                Step::Wait { ms }
+            }
+            58..=77 => self.foreign_near(),
+            78..=80 if !agents.is_empty() => {
+                // an agent's live edit with a token: never grouped
+                let p = agents[self.rng.gen_range(0..agents.len())];
+                let root = self.rng.gen_range(0..2);
+                let t = self.model.texts[root].clone();
+                let at = self.pos(&t);
+                let insert = self.typed();
+                Step::Type {
+                    p,
+                    s: 0,
+                    root,
+                    edits: vec![Edit {
+                        start: at,
+                        end: at,
+                        insert,
+                    }],
+                    token: Some(1),
+                }
+            }
+            81..=94 => {
+                let p = if self.rng.gen_bool(0.8) {
+                    typists[0]
+                } else {
+                    self.pick_pid()
+                };
+                let s = self.rng.gen_range(0..self.pids[p].obo.len());
+                Step::Undo {
+                    p,
+                    s,
+                    steps: if self.rng.gen_bool(0.1) { 2 } else { 1 },
+                    mode: if self.rng.gen_bool(0.15) {
+                        Mode::Partial
+                    } else {
+                        Mode::All
+                    },
+                    for_person: None,
+                    // a redo mostly right after an undo (anything else empties redo, U7)
+                    redo: self
+                        .rng
+                        .gen_bool(if self.model.depths(&self.pids[p].name).1 > 0 {
+                            0.6
+                        } else {
+                            0.1
+                        }),
+                }
+            }
+            95 => Step::Restart,
+            _ => {
+                let p = self.pick_pid();
+                let root = self.rng.gen_range(0..2);
+                let t = self.model.texts[root].clone();
+                let hs = self.random_hunks(&t, 2);
+                Step::Edit {
+                    p,
+                    s: 0,
+                    edits: vec![(root, hs)],
+                }
+            }
+        }
+    }
+
+    /// Person `p` types one keystroke at their caret (now and then elsewhere): characters,
+    /// a backspace, a forward delete, a replacement, or two places at once (U3 (b)).
+    fn keystroke(&mut self, p: usize) -> Step {
+        let s = self.rng.gen_range(0..self.pids[p].obo.len());
+        let key = (p, s);
+        let mut caret = self
+            .carets
+            .get(&key)
+            .copied()
+            .unwrap_or((0, self.model.texts[0].len()));
+        if self.rng.gen_bool(0.05) {
+            caret.0 = 1 - caret.0;
+            caret.1 = self.model.texts[caret.0].len();
+        }
+        let t = self.model.texts[caret.0].clone();
+        if self.rng.gen_bool(0.12) {
+            caret.1 = self.pos(&t);
+        }
+        let mut at = caret.1.min(t.len());
+        while !t.is_char_boundary(at) {
+            at -= 1;
+        }
+        let tok = self.tokens.entry(key).or_insert(1);
+        if self.rng.gen_bool(0.08) {
+            *tok += 1;
+        }
+        let tok = *tok;
+        let token = (!self.rng.gen_bool(0.05)).then_some(tok);
+        let prev = |x: usize| t[..x].char_indices().next_back().map_or(0, |(i, _)| i);
+        let next = |x: usize| t[x..].chars().next().map_or(x, |c| x + c.len_utf8());
+        let e = |start, end, insert: String| Edit { start, end, insert };
+        let k = self.rng.gen_range(0..100);
+        let (edits, new_at) = match k {
+            65..=82 if at > 0 => {
+                let mut s0 = prev(at);
+                if self.rng.gen_bool(0.3) {
+                    s0 = prev(s0);
+                }
+                (vec![e(s0, at, String::new())], s0)
+            }
+            83..=87 if at < t.len() => (vec![e(at, next(at), String::new())], at),
+            88..=93 if at > 0 => {
+                let s0 = prev(at);
+                let ins = self.typed();
+                let n = ins.len();
+                (vec![e(s0, at, ins)], s0 + n)
+            }
+            94..=99 if t.len() > 2 => {
+                let q = self.pos(&t);
+                let (a, b) = (self.typed(), self.typed());
+                let (na, nb) = (a.len(), b.len());
+                if q == at {
+                    (vec![e(at, at, a)], at + na)
+                } else if q < at {
+                    (vec![e(q, q, b), e(at, at, a)], at + na + nb)
+                } else {
+                    (vec![e(at, at, a), e(q, q, b)], at + na)
+                }
+            }
+            _ => {
+                let ins = self.typed();
+                let n = ins.len();
+                (vec![e(at, at, ins)], at + n)
+            }
+        };
+        self.pending_caret = Some((key, (caret.0, new_at)));
+        Step::Type {
+            p,
+            s,
+            root: caret.0,
+            edits,
+            token,
+        }
+    }
+
+    /// Someone other than the first person changes text at, touching, inside or away from
+    /// the first person's open group (U3 (g)), else at their caret.
+    fn foreign_near(&mut self) -> Step {
+        let q = self.rng.gen_range(1..self.pids.len());
+        let name0 = self.pids[0].name.clone();
+        let span = self
+            .model
+            .stacks
+            .get(&name0)
+            .filter(|st| st.open.is_some())
+            .and_then(|st| st.undo.last())
+            .and_then(|b| match b.regions.as_slice() {
+                [r] => Some((r.root, r.start, r.end)),
+                _ => None,
+            });
+        let (root, a, b) = span.unwrap_or_else(|| {
+            let c = self.carets.get(&(0, 0)).copied().unwrap_or((0, 0));
+            (c.0, c.1, c.1)
+        });
+        let t = self.model.texts[root].clone();
+        let fit = |mut x: usize| {
+            x = x.min(t.len());
+            while !t.is_char_boundary(x) {
+                x -= 1;
+            }
+            x
+        };
+        let (a, b) = (fit(a), fit(b.max(a)));
+        let prev = |x: usize| t[..x].char_indices().next_back().map_or(0, |(i, _)| i);
+        let next = |x: usize| t[x..].chars().next().map_or(x, |c| x + c.len_utf8());
+        let w = self.word();
+        let ins = |x: usize, w: String| Edit {
+            start: x,
+            end: x,
+            insert: w,
+        };
+        let e = match self.rng.gen_range(0..7) {
+            0 => ins(a, w),
+            2 if a > 0 => Edit {
+                start: prev(a),
+                end: a,
+                insert: String::new(),
+            },
+            3 if b < t.len() => Edit {
+                start: b,
+                end: next(b),
+                insert: String::new(),
+            },
+            4 if b > a && next(a) < b => ins(next(a), w),
+            5 if prev(a) > 0 => {
+                let x = self.rng.gen_range(0..prev(a));
+                ins(fit(x), w)
+            }
+            6 if next(b) < t.len() => {
+                // a boundary past the character after the span: not touching it
+                let far: Vec<usize> = bounds_of(&t).into_iter().filter(|&x| x > next(b)).collect();
+                ins(far[self.rng.gen_range(0..far.len())], w)
+            }
+            _ => ins(b, w),
+        };
+        Step::Edit {
+            p: q,
+            s: 0,
+            edits: vec![(root, vec![e])],
+        }
+    }
+
+    /// The step's classes ([`GROUP_CLASSES`]), and every editor's caret carried through the
+    /// changes it made (the typist's set where they typed).
+    fn group_classes(&mut self, step: &Step, mo: &Outcome, reversed_group: bool, head: ChangeId) {
+        let applied = matches!(mo, Outcome::Applied { .. });
+        match step {
+            Step::Type { .. } => match self.group_note.clone() {
+                Some(GroupNote::Joined) => self.hit("group_joined"),
+                Some(GroupNote::SelfUndone) => self.hit("group_self_undone"),
+                Some(GroupNote::Agent) => self.hit("group_agent_token"),
+                Some(GroupNote::New(why)) => {
+                    let only = |c: Closer| why == [c];
+                    for (c, class) in [
+                        (Closer::Idle, "group_closed_idle"),
+                        (Closer::NonContiguous, "group_closed_noncontiguous"),
+                        (Closer::Boundary, "group_closed_boundary"),
+                        (Closer::Token, "group_closed_token"),
+                        (Closer::Foreign, "group_closed_foreign"),
+                    ] {
+                        if only(c) {
+                            self.hit(class);
+                        }
+                    }
+                    if why.contains(&Closer::Newline)
+                        && why
+                            .iter()
+                            .all(|c| matches!(c, Closer::Newline | Closer::Boundary))
+                    {
+                        self.hit("group_closed_newline");
+                    }
+                }
+                _ => {}
+            },
+            Step::Undo { redo, .. } if applied && reversed_group => self.hit(if *redo {
+                "group_redone"
+            } else {
+                "group_undone"
+            }),
+            _ => {}
+        }
+        // the carets: the typist's where it typed, everyone else's carried
+        let typist = match step {
+            Step::Type { p, s, .. } => Some((*p, *s)),
+            _ => None,
+        };
+        let changes: Vec<(usize, Vec<Edit>)> = (head + 1..=self.model.head)
+            .filter_map(|id| self.model.records.get(&id))
+            .flat_map(|rec| rec.hunks.clone())
+            .collect();
+        for (k, c) in self.carets.iter_mut() {
+            if Some(*k) == typist {
+                continue;
+            }
+            for (root, es) in &changes {
+                if *root == c.0 {
+                    c.1 = carry_caret(c.1, es);
+                }
+            }
+        }
+        if let Some((k, c)) = self.pending_caret.take() {
+            self.carets.insert(k, c);
+        }
+    }
+}
+
+/// An editor's caret through a change (canonical, in the coordinates before it): moved by
+/// what lands before it, to the end of a range it was inside, and left of an insertion at it.
+fn carry_caret(pos: usize, es: &[Edit]) -> usize {
+    let mut delta: isize = 0;
+    for e in es {
+        if e.end < pos || (e.end == pos && e.start < pos) {
+            delta += e.growth();
+        } else if e.start < pos && pos < e.end {
+            return (e.start as isize + delta) as usize + e.insert.len();
+        } else {
+            break;
+        }
+    }
+    (pos as isize + delta) as usize
 }

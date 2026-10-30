@@ -1,26 +1,27 @@
 //! Deleting docs: every kit row of a doc (or of every doc in a space) in **one** transaction.
 //!
-//! Erased per doc: `paths`, `docs`, `snapshots`, `updates`, `clients`, `versions`,
-//! `approvals`, `sync` (the disk replica), `doc_keys` (its hash key), the history tables (`changes`, `reverts`,
-//! `revert_index`, `revert_carry`, `revert_stats`) and the tier-0 tables (`blob_versions`,
-//! `blob_sync`, `blob_approvals`). A blob doc's versions each held a reference on their blob
-//! in `blobs`: those references are released (the blob's grace starts then), so [`crate::blob::BlobStore::gc`]
-//! removes a blob nothing else references once the grace runs out.
+//! Erased per doc: its `paths` entry and every table in [`super::DOC_TABLES`]: `docs`,
+//! `snapshots`, `updates`, `clients`, `versions`, `approvals`, `sync` (the disk replica),
+//! `doc_keys` (its hash key), the history tables (`changes`, `reverts`, `revert_index`,
+//! `revert_carry`, `revert_stats`, `authored`, `change_clocks`, `provenance`) and the
+//! tier-0 tables (`blob_versions`, `blob_sync`, `blob_approvals`). A blob doc's versions
+//! each held a reference on their blob in `blobs`: those references are released (the
+//! blob's grace starts then), so [`crate::blob::BlobStore::gc`] removes a blob nothing else
+//! references once the grace runs out.
 //!
 //! Left alone: `meta` (doc ids are never reused), the host's table (`host`, opaque to the
 //! kit: erasing a deleted doc's or space's rows there is the host's job), and a space's blob
 //! key (`blob_spaces`; [`crate::blob::BlobStore::purge_space_key`] destroys it and every blob
 //! of the space at once).
 //!
-//! A new per-doc table must be erased here **and** listed in `tables_holding` (tests only),
-//! which panics on a table it doesn't know, so a forgotten one fails the delete tests.
+//! A new per-doc table goes in [`super::DOC_TABLES`] (v0.9.7: one list for the delete, the
+//! rewrite and `tables_holding`). `tables_holding` (tests only) panics on a table in the
+//! file that is in neither that list nor [`super::SHARED_TABLES`], so a forgotten one fails
+//! the delete tests, and a rewrite refuses it.
 
 use redb::{ReadableTable, WriteTransaction};
 
-use super::{
-    blob, dec_meta, history, DocId, DocKey, DocStore, StoreError, APPROVALS, CLIENTS, DOCS,
-    DOC_KEYS, PATHS, SNAPSHOTS, SYNC, UPDATES, VERSIONS,
-};
+use super::{blob, dec_meta, DocId, DocKey, DocStore, Erase, StoreError, DOCS, DOC_TABLES, PATHS};
 
 /// Erase every kit row of doc `id` in `w`; returns its key.
 fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreError> {
@@ -36,18 +37,12 @@ fn delete_in(w: &WriteTransaction, id: DocId, now: u64) -> Result<DocKey, StoreE
             paths.remove(k.as_str())?;
         }
     }
-    w.open_table(DOCS)?.remove(id)?;
-    w.open_table(SNAPSHOTS)?.remove(id)?;
-    w.open_table(DOC_KEYS)?.remove(id)?;
-    for t in [UPDATES, VERSIONS, APPROVALS] {
-        w.open_table(t)?
-            .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
+    for (t, how) in DOC_TABLES {
+        if *how == Erase::Range {
+            t.erase(w, id)?;
+        }
     }
-    w.open_table(CLIENTS)?
-        .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
-    w.open_table(SYNC)?
-        .retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?;
-    history::delete_rows(w, id)?;
+    // the tier-0 tables: their blob references are released first
     blob::delete_rows(w, id, &key.space, now)?;
     Ok(key)
 }
@@ -101,44 +96,13 @@ impl DocStore {
     }
 
     /// Every table holding a row of doc `id` (tests only: after a delete it must be empty).
-    /// Enumerates the store's **actual** tables and panics on one it doesn't classify, so
-    /// a per-doc table added later without being erased by `delete_doc` fails the tests.
-    /// Blob references (`blobs`, per space) are checked by the caller.
+    /// Enumerates the store's **actual** tables and panics on one in neither
+    /// [`super::DOC_TABLES`] nor [`super::SHARED_TABLES`], so a per-doc table added later
+    /// without being listed (and so erased by `delete_doc`) fails the tests. Blob
+    /// references (`blobs`, per space) are checked by the caller.
     #[cfg(test)]
     pub(crate) fn tables_holding(&self, id: DocId) -> Result<Vec<&'static str>, StoreError> {
-        use super::blob::{BLOB_APPROVALS, BLOB_SYNC, BLOB_VERSIONS};
-        use super::history::{
-            CHANGES, CHANGE_CLOCKS, PROVENANCE, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS,
-        };
-        use redb::{MultimapTableHandle, TableDefinition, TableHandle};
-
-        fn pair<V: redb::Value + 'static>(
-            r: &redb::ReadTransaction,
-            t: TableDefinition<(u64, u64), V>,
-            id: DocId,
-        ) -> Result<bool, StoreError> {
-            Ok(r.open_table(t)?
-                .range((id, 0)..=(id, u64::MAX))?
-                .next()
-                .is_some())
-        }
-        fn slot(
-            r: &redb::ReadTransaction,
-            t: TableDefinition<(u64, u8), &[u8]>,
-            id: DocId,
-        ) -> Result<bool, StoreError> {
-            Ok(r.open_table(t)?
-                .range((id, 0)..=(id, u8::MAX))?
-                .next()
-                .is_some())
-        }
-        fn one(
-            r: &redb::ReadTransaction,
-            t: TableDefinition<u64, &[u8]>,
-            id: DocId,
-        ) -> Result<bool, StoreError> {
-            Ok(r.open_table(t)?.get(id)?.is_some())
-        }
+        use redb::{MultimapTableHandle, TableHandle};
 
         let r = self.begin_read()?;
         let multimap: Vec<String> = r
@@ -152,50 +116,21 @@ impl DocStore {
         let names: Vec<String> = r.list_tables()?.map(|t| t.name().to_owned()).collect();
         let mut out = Vec::new();
         for name in names {
-            let (n, held): (&'static str, bool) = match name.as_str() {
-                // not per doc
-                "meta" | "host" | "blob_spaces" | "blobs" => continue,
-                "paths" => {
-                    let mut found = false;
-                    for kv in r.open_table(PATHS)?.iter()? {
-                        found |= kv?.1.value() == id;
-                    }
-                    ("paths", found)
+            let (n, held): (&'static str, bool) = if name == "paths" {
+                let mut found = false;
+                for kv in r.open_table(PATHS)?.iter()? {
+                    found |= kv?.1.value() == id;
                 }
-                "docs" => ("docs", one(&r, DOCS, id)?),
-                "snapshots" => ("snapshots", one(&r, SNAPSHOTS, id)?),
-                "doc_keys" => ("doc_keys", one(&r, DOC_KEYS, id)?),
-                "revert_stats" => ("revert_stats", one(&r, REVERT_STATS, id)?),
-                "updates" => ("updates", pair(&r, UPDATES, id)?),
-                "clients" => ("clients", pair(&r, CLIENTS, id)?),
-                "versions" => ("versions", pair(&r, VERSIONS, id)?),
-                "approvals" => ("approvals", pair(&r, APPROVALS, id)?),
-                "changes" => ("changes", pair(&r, CHANGES, id)?),
-                "reverts" => ("reverts", pair(&r, REVERTS, id)?),
-                "revert_index" => ("revert_index", pair(&r, REVERT_INDEX, id)?),
-                "revert_carry" => ("revert_carry", pair(&r, REVERT_CARRY, id)?),
-                "change_clocks" => (
-                    "change_clocks",
-                    r.open_table(CHANGE_CLOCKS)?
-                        .range((id, 0, 0)..=(id, u64::MAX, u64::MAX))?
-                        .next()
-                        .is_some(),
-                ),
-                "provenance" => (
-                    "provenance",
-                    r.open_table(PROVENANCE)?
-                        .range((id, 0, 0)..=(id, u64::MAX, u64::MAX))?
-                        .next()
-                        .is_some(),
-                ),
-                "blob_versions" => ("blob_versions", pair(&r, BLOB_VERSIONS, id)?),
-                "sync" => ("sync", slot(&r, SYNC, id)?),
-                "blob_sync" => ("blob_sync", slot(&r, BLOB_SYNC, id)?),
-                "blob_approvals" => ("blob_approvals", pair(&r, BLOB_APPROVALS, id)?),
-                other => panic!(
-                    "table {other:?} is not classified: erase it in DocStore::delete_doc and \
-                     list it in tables_holding"
-                ),
+                ("paths", found)
+            } else if super::SHARED_TABLES.contains(&name.as_str()) {
+                continue; // not per doc
+            } else if let Some((t, _)) = DOC_TABLES.iter().find(|(t, _)| t.name() == name) {
+                (t.name(), t.holds(&r, id)?)
+            } else {
+                panic!(
+                    "table {name:?} is not classified: list it in store::DOC_TABLES (erased by \
+                     DocStore::delete_doc) or store::SHARED_TABLES"
+                )
             };
             if held {
                 out.push(n);

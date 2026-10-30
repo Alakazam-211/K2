@@ -1,0 +1,21 @@
+MPC-E301 claimed (presence and claims)
+exit:     5
+message:  {lines} claimed by {name} ({by}); {remaining_ms} ms left
+next:     Someone else is working on those lines right now (a live claim). Nothing was applied. Wait and retry after details.remaining_ms, or work on other lines; activity and who show who is where.
+rule:     A13 (claims), K-PRES-12
+verbs:    claim; insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E301",
+  "name": "claimed",
+  "area": "presence and claims",
+  "exit": 5,
+  "message": "{lines} claimed by {name} ({by}); {remaining_ms} ms left",
+  "next": "Someone else is working on those lines right now (a live claim). Nothing was applied. Wait and retry after details.remaining_ms, or work on other lines; activity and who show who is where.",
+  "rule": "A13 (claims), K-PRES-12",
+  "verbs": ["claim", "@change"],
+  "returned_by": ["claim", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -17,6 +17,11 @@ pub enum SessionError {
     /// or belongs to another session. Join again.
     #[error("{conn} has not joined this doc")]
     NotJoined { conn: ConnId },
+    /// The connection joined past [`super::Config::participants_max`] (K11): it watches,
+    /// read-only, until a slot frees and the host promotes it
+    /// ([`super::Session::promote_watcher`]). Nothing was applied. Exit 3.
+    #[error("watching: the doc has its {max} participants; read-only until the host lets you in")]
+    Watching { max: usize },
     /// `edit(.., if_version: Some(expected))` (or an edit verb's `--if-version`, or a tier 0
     /// write from an old base) but the doc is at `actual`. Nothing applied. One line, no doc
     /// text: `doc changed since 12 (now 14)`. Exit 1.
@@ -146,4 +151,35 @@ pub enum EditWithError<E> {
     Session(#[from] SessionError),
     #[error("{0}")]
     Compute(E),
+}
+
+impl SessionError {
+    /// This error with every absolute path in its text made safe to show (K7, v0.9.8):
+    /// [`crate::errors::redact`] over `root` (inside it, relative; elsewhere, `<outside>`).
+    /// The variant, and with it the id and exit code, doesn't change.
+    pub fn redacted(self, root: &std::path::Path) -> SessionError {
+        use crate::blob::BlobError;
+        use crate::errors::redact as r;
+        use crate::store::StoreError;
+        let store = |e: StoreError| match e {
+            StoreError::Db(m) => StoreError::Db(r(&m, root)),
+            other => other,
+        };
+        match self {
+            SessionError::BadPath(m) => SessionError::BadPath(r(&m, root)),
+            SessionError::Disk(m) => SessionError::Disk(r(&m, root)),
+            SessionError::Broken(m) => SessionError::Broken(r(&m, root)),
+            SessionError::Declined(d) => SessionError::Declined(Declined {
+                message: r(&d.message, root),
+                ..d
+            }),
+            SessionError::Pack(p) => SessionError::Pack(PackError(r(&p.0, root))),
+            SessionError::Store(e) => SessionError::Store(store(e)),
+            SessionError::Blob(BlobError::Io(m)) => SessionError::Blob(BlobError::Io(r(&m, root))),
+            SessionError::Blob(BlobError::Store(e)) => {
+                SessionError::Blob(BlobError::Store(store(e)))
+            }
+            other => other,
+        }
+    }
 }

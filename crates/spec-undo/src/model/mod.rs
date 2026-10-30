@@ -1,4 +1,4 @@
-//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.9),
+//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.10),
 //! over plain strings and hunks. No engine, no store, no clock.
 //!
 //! **What it calls from the kit:** only the diff pipeline, D1–D2, where the spec still uses
@@ -91,10 +91,13 @@
 //! - **R9** (U19, U22): a purge by text redacts a record region whose before or after
 //!   text holds any 8-byte window of the text; `--and-remove` deletes every live copy, left
 //!   to right without overlaps, as one batch by the owner, before the stacks are cleared.
+//! - **R12** (U3, person grouping): a joined group is one region read off the text, and the
+//!   word and boundary characters are the kit's table ([`group`]).
 //! - **R10** (U22 window): a record is outside the window when it is not pending on-behalf
 //!   and its change is older than the last `keep_changes` changes; the window moves when
 //!   [`Model::tick`] says so (time is the caller's).
 
+pub mod group;
 pub mod hunk;
 pub mod merge;
 pub mod mutant;
@@ -104,6 +107,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use k2_mpc_base::text::{diff, lines};
 
+pub use group::{Closer, GroupNote, OpenGroup};
 use hunk::Side;
 pub use hunk::{Edit, Prov};
 use merge::Merged;
@@ -193,6 +197,9 @@ pub struct Stacks {
     /// A purge cleared them; said once, on the next undo or redo that finds nothing, unless a
     /// new batch came first (U19).
     pub cleared: bool,
+    /// The person's open undo group (U3; [`Model::edit_grouped`]): the top of `undo` while it
+    /// is set. Any other batch of the pid, an undo or redo, a purge or a restart closes it.
+    pub open: Option<OpenGroup>,
 }
 
 /// A change's revert record (U22): its regions, carried, and who made it.
@@ -200,8 +207,12 @@ pub struct Stacks {
 pub struct Record {
     pub author: Pid,
     pub on_behalf_of: Option<Pid>,
-    /// The change's hunks as it was made (per root, against the text before it).
+    /// The change's hunks as it was made (per root, against the text before it): at
+    /// element identity, D1's widened hunks for a fresh change (v1.10).
     pub hunks: Vec<(usize, Vec<Edit>)>,
+    /// The hunks its author wrote, before D1 widened them: what the change reports (the
+    /// kit's hunk channel, E-LIVE r2.1). Equal to `hunks` unless D1 widened them.
+    pub authored: Vec<(usize, Vec<Edit>)>,
     /// Its regions as undo carries them (U8, U9: shared-edge clamp after every change,
     /// one taint per region): what undo of the same change would see.
     pub regions: Vec<Region>,
@@ -234,6 +245,12 @@ pub struct Bounds {
     pub max_bytes: usize,
     /// The window's change count (U22: 10,000).
     pub keep_changes: u64,
+    /// U3 (a): a person's group closes after this long with no edit (500 ms).
+    pub group_idle_ms: u64,
+    /// How text splits into tokens for D1 (v1.10): the kit's markdown and text packs use
+    /// words (the default). The model check's single-letter alphabets use characters, under
+    /// which D1 is the identity, so the G1 evidence stands as taken.
+    pub tokens: lines::Tokens,
 }
 
 impl Default for Bounds {
@@ -242,6 +259,8 @@ impl Default for Bounds {
             depth: 100,
             max_bytes: 4 << 20,
             keep_changes: 10_000,
+            group_idle_ms: 500,
+            tokens: lines::Tokens::Words,
         }
     }
 }
@@ -459,6 +478,13 @@ pub struct Model {
     /// Pids that made a change before the last restart (U18).
     pub authors_before_restart: BTreeSet<Pid>,
     pub bounds: Bounds,
+    /// Who made each change (an index into [`Model::who`]): a provenance root's author, for
+    /// D1. Kept only when D1 can widen (`bounds.tokens` isn't characters), so the model
+    /// check's states under single-letter alphabets are as before. Absent: the import (0).
+    pub change_owner: BTreeMap<ChangeId, u16>,
+    /// The authored hunks of the change being made, handed from D1 to its commit (always
+    /// `None` between operations).
+    authored_next: Option<Vec<(usize, Vec<Edit>)>>,
 }
 
 /// A merged clean region: (index in the batch, merged window text, its edits in window
@@ -501,7 +527,55 @@ impl Model {
             authors: BTreeSet::new(),
             authors_before_restart: BTreeSet::new(),
             bounds,
+            change_owner: BTreeMap::new(),
+            authored_next: None,
         }
+    }
+
+    /// D1 (v1.10, the authored-ranges amendment): a diff-based change by `pid` to `root`
+    /// (`es`, canonical, its authored ranges) is never built from someone else's text. Each
+    /// hunk is widened to the tokens it touches; inside, a kept character stays only if its
+    /// provenance root's author is `pid` ([`lines::authored_hunks`], the kit's own function).
+    /// `extra`: ranges of the live text the `rewrite-merged-ranges` mutant also takes.
+    fn d1(&self, pid: &str, root: usize, es: Vec<Edit>, extra: &[(usize, usize)]) -> Vec<Edit> {
+        let m = mutant::active();
+        if es.is_empty() || m == Mutant::D1ReuseForeign {
+            return es;
+        }
+        let tokens = if m == Mutant::D1RewriteWholeLine {
+            lines::Tokens::Lines
+        } else {
+            self.bounds.tokens
+        };
+        let old = &self.texts[root];
+        let me = self.who.iter().position(|w| w == pid).map(|k| k as u16);
+        // byte offset -> the character's provenance root's author
+        let starts: Vec<usize> = old.char_indices().map(|(b, _)| b).collect();
+        let els = &self.elems[root];
+        let owned = |at: usize| -> bool {
+            let Ok(i) = starts.binary_search(&at) else {
+                return false;
+            };
+            let owner = self.change_owner.get(&els[i].prov.0).copied().unwrap_or(0);
+            owner != 0 && Some(owner) == me
+        };
+        let mut hunks: Vec<diff::Hunk> = es.into_iter().map(diff::Hunk::from).collect();
+        // the mutant: theirs' merged ranges join the authored ones, as same-text rewrites
+        for &(lo, hi) in extra {
+            if lo < hi && !hunks.iter().any(|h| h.start < hi && lo < h.end) {
+                hunks.push(diff::Hunk {
+                    start: lo,
+                    end: hi,
+                    insert: old[lo..hi].to_owned(),
+                });
+            }
+        }
+        hunks.sort_by_key(|h| (h.start, h.end));
+        let hunks = canonical_hunks(hunks);
+        lines::authored_hunks(old, &hunks, tokens, &owned)
+            .into_iter()
+            .map(Edit::from)
+            .collect()
     }
 
     /// `(undo, redo)` depths of `pid`.
@@ -520,16 +594,23 @@ impl Model {
         obo: Option<&str>,
         edits: Vec<(usize, Vec<Edit>)>,
     ) -> Outcome {
-        let edits = edits
+        let authored: Vec<(usize, Vec<Edit>)> = edits
             .into_iter()
             .map(|(r, es)| (r, hunk::canonical(es)))
             .collect();
+        let edits = authored
+            .iter()
+            .map(|(r, es)| (*r, self.d1(pid, *r, es.clone(), &[])))
+            .collect();
+        self.authored_next = Some(authored);
         self.new_batch(pid, obo, edits)
     }
 
     /// `replace_text`: the root becomes `new`, through the kit's pipeline (D1).
     pub fn replace(&mut self, pid: &str, obo: Option<&str>, root: usize, new: &str) -> Outcome {
-        let edits = pipeline(&self.texts[root], new);
+        let authored = pipeline(&self.texts[root], new);
+        let edits = self.d1(pid, root, authored.clone(), &[]);
+        self.authored_next = Some(vec![(root, authored)]);
         self.new_batch(pid, obo, vec![(root, edits)])
     }
 
@@ -539,7 +620,13 @@ impl Model {
             .iter()
             .enumerate()
             .map(|(r, t)| (r, pipeline(&self.texts[r], t)))
+            .collect::<Vec<_>>();
+        let authored = edits.clone();
+        let edits = edits
+            .into_iter()
+            .map(|(r, es)| (r, self.d1(pid, r, es, &[])))
             .collect();
+        self.authored_next = Some(authored);
         self.new_batch(pid, obo, edits)
     }
 
@@ -558,7 +645,26 @@ impl Model {
         hits.eof_append_write = rules.o5_landed;
         hits.insert_inside = rules.o2;
         match m {
-            Merged::Clean { edits, .. } => (self.new_batch(pid, obo, vec![(root, edits)]), hits),
+            Merged::Clean { edits, .. } => {
+                // the authored ranges are ours' hunks; the mutant also takes theirs' ranges
+                let theirs = if mutant::active() == Mutant::D1RewriteMergedRanges {
+                    let live = &self.texts[root];
+                    pipeline(base, live)
+                        .into_iter()
+                        .scan(0isize, |shift, e| {
+                            let at = (e.start as isize + *shift) as usize;
+                            *shift += e.growth();
+                            Some((at, at + e.insert.len()))
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let authored = edits.clone();
+                let edits = self.d1(pid, root, edits, &theirs);
+                self.authored_next = Some(vec![(root, authored)]);
+                (self.new_batch(pid, obo, vec![(root, edits)]), hits)
+            }
             Merged::Conflict => {
                 hits.empty_base_double_write = base.is_empty() && rules.same_point_at_window_end;
                 (Outcome::WriteConflict, hits)
@@ -591,6 +697,8 @@ impl Model {
                 let st = self.stacks.entry(pid.to_owned()).or_default();
                 st.redo.clear();
                 st.cleared = false;
+                // any other batch of the person closes their open group (U3 (e))
+                st.open = None;
                 st.undo.push(Batch {
                     on_behalf_of: obo.map(str::to_owned),
                     regions,
@@ -644,6 +752,7 @@ impl Model {
         obo: Option<&str>,
         mut edits: Change,
     ) -> Option<(ChangeId, Vec<Region>, Vec<Elem>)> {
+        let authored_next = self.authored_next.take();
         edits.retain(|(_, es, _)| !es.is_empty());
         edits.sort_by_key(|(r, _, _)| *r);
         if edits.is_empty() {
@@ -725,12 +834,22 @@ impl Model {
             self.texts[root] = after;
         }
         self.head += 1;
+        if self.bounds.tokens != lines::Tokens::Chars {
+            self.change_owner.insert(self.head, me);
+        }
         self.authors.insert(author.to_owned());
         self.records.insert(
             self.head,
             Record {
                 author: author.to_owned(),
                 on_behalf_of: obo.map(str::to_owned),
+                authored: authored_next
+                    .map(|mut a| {
+                        a.retain(|(_, es)| !es.is_empty());
+                        a.sort_by_key(|(r, _)| *r);
+                        a
+                    })
+                    .unwrap_or_else(|| hunks.clone()),
                 hunks,
                 edges: regions
                     .iter()
@@ -751,6 +870,7 @@ impl Model {
     /// Carry every held region through a change to `root` (U8, U9).
     fn carry_all(&mut self, root: usize, es: &[Edit]) {
         for st in self.stacks.values_mut() {
+            group::touch(st, root, es);
             for b in st.undo.iter_mut().chain(st.redo.iter_mut()) {
                 carry_regions(&mut b.regions, root, es);
             }
@@ -800,6 +920,8 @@ impl Model {
     ) -> (Outcome, Hits) {
         let mut hits = Hits::default();
         let st = self.stacks.entry(pid.to_owned()).or_default();
+        // an undo or redo closes the person's open group (U3 (f)), whatever it finds
+        st.open = None;
         let cleared = st.cleared;
         let src = if redo { &st.redo } else { &st.undo };
         let want = if req.mode == Mode::Drop {
@@ -1343,7 +1465,8 @@ impl Model {
                         insert: String::new(),
                     })
                     .collect();
-                (r, es)
+                // copies that touch are one hunk (D2's canonical form), as every change is
+                (r, hunk::canonical(es))
             })
             .collect();
         let out = self.new_batch(owner, obo, edits);
@@ -1355,6 +1478,7 @@ impl Model {
                 }
                 st.undo.clear();
                 st.redo.clear();
+                st.open = None;
             }
         }
         let windows: Vec<&[u8]> = secret.as_bytes().windows(8).collect();
@@ -1411,6 +1535,21 @@ impl Model {
 }
 
 /// D1: the edit pipeline for a new text.
+/// Join hunks that touch (D2's canonical form).
+fn canonical_hunks(v: Vec<diff::Hunk>) -> Vec<diff::Hunk> {
+    let mut out: Vec<diff::Hunk> = Vec::with_capacity(v.len());
+    for h in v {
+        match out.last_mut() {
+            Some(last) if last.end == h.start => {
+                last.end = h.end;
+                last.insert.push_str(&h.insert);
+            }
+            _ => out.push(h),
+        }
+    }
+    out
+}
+
 fn pipeline(old: &str, new: &str) -> Vec<Edit> {
     lines::align_insertions(old, diff::hunks(old, new))
         .into_iter()

@@ -183,10 +183,15 @@ pub trait Array: AsRef<Branch> + Sized {
     /// # Panics
     ///
     /// This method will panic if provided `index` is greater than the current length of an [ArrayRef].
+    ///
+    /// It also panics if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn insert<V>(&self, txn: &mut TransactionMut, index: u32, value: V) -> V::Return
     where
         V: Prelim,
     {
+        self.as_ref().assert_writable(); // k2
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             let ptr = walker
@@ -206,6 +211,9 @@ pub trait Array: AsRef<Branch> + Sized {
     /// prepending current array with given `values`, while inserting at array length is equivalent
     /// to appending that value at the end of it.
     ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
+    ///
     /// # Panics
     ///
     /// This method will panic if provided `index` is greater than the current length of an [ArrayRef].
@@ -214,6 +222,9 @@ pub trait Array: AsRef<Branch> + Sized {
         T: IntoIterator<Item = V>,
         V: Into<Any>,
     {
+        if self.as_ref().refuse_write() {
+            return; // k2
+        }
         let prelim = RangePrelim::new(values);
         if !prelim.is_empty() {
             self.insert(txn, index, prelim);
@@ -223,6 +234,12 @@ pub trait Array: AsRef<Branch> + Sized {
     /// Inserts given `value` at the end of the current array.
     ///
     /// Returns a reference to an integrated preliminary input.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn push_back<V>(&self, txn: &mut TransactionMut, value: V) -> V::Return
     where
         V: Prelim,
@@ -234,6 +251,12 @@ pub trait Array: AsRef<Branch> + Sized {
     /// Inserts given `value` at the beginning of the current array.
     ///
     /// Returns a reference to an integrated preliminary input.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn push_front<V>(&self, txn: &mut TransactionMut, content: V) -> V::Return
     where
         V: Prelim,
@@ -242,6 +265,9 @@ pub trait Array: AsRef<Branch> + Sized {
     }
 
     /// Removes a single element at provided `index`.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn remove(&self, txn: &mut TransactionMut, index: u32) {
         self.remove_range(txn, index, 1)
     }
@@ -250,7 +276,13 @@ pub trait Array: AsRef<Branch> + Sized {
     /// a particular number described by `len` has been deleted. This method panics in case when
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside of the bounds of an array.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
+        if self.as_ref().refuse_write() {
+            return; // k2
+        }
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.delete(txn, len)

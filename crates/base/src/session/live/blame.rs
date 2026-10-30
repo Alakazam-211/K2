@@ -5,7 +5,9 @@
 //! (the client and clock that inserted it, [`crate::doc::Doc::blame_runs`]) and a
 //! **provenance root** (undo spec U23: itself, or for text an undo, redo or revert put back,
 //! the element it restores), both read off the session's provenance map (built from the
-//! engine and the store's provenance rows on first need, O(doc), then kept exact). The
+//! engine and the store's provenance rows on first need, O(doc), then kept exact by every
+//! change as it applies; one blame in [`Config::blame_check_every`] checks it against a
+//! rebuild). The
 //! store maps a client to its participant (the client table) and a clock to its change
 //! (`change_clocks`, written with each change). A character **blames to its root's insert**
 //! (U18a): the change that first inserted the element it restores, and that change's
@@ -244,6 +246,16 @@ pub struct CharBlame {
     pub root_change: Option<Seq>,
 }
 
+/// What blame's sampled check takes from under the lock (v0.9.7): the doc's state and texts,
+/// the kept map, and the store to read provenance rows from.
+struct Check {
+    state: Vec<u8>,
+    texts: Vec<(&'static str, String)>,
+    kept: super::super::prov::Prov,
+    version: Seq,
+    store: Arc<DocStore>,
+}
+
 /// A live character's element and root, with the changes that inserted them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Resolved {
@@ -420,19 +432,164 @@ impl Session {
     /// clamped); `None` blames every line. Needs read and **history** (K-PERM-9). Reads only:
     /// nothing in the doc, the store or presence changes.
     ///
-    /// Cost: the provenance map's range (built once per load, O(doc): the engine walks a
-    /// throwaway copy of the doc), plus one store read for the range's runs; keep it off the
-    /// edit path (a host computes it on demand: the blame gutter, the verb). Works the same
-    /// after a reload: roots are in the store (provenance rows, store format 5).
+    /// Cost (v0.9.5): the provenance map's runs for the lines asked for (the map is kept up
+    /// to date by every change as it applies, the session's own and outside edits alike:
+    /// O(the change) each), a scan of the root's text for its line breaks, and one store
+    /// read per kind of lookup for the range's runs and changes. The map is built from
+    /// scratch (O(doc): the engine walks a throwaway copy of the doc) only on first need
+    /// after a load, a purge or a recovery, and on the sampled check
+    /// ([`Config::blame_check_every`]). Keep blame off the edit path anyway (a host
+    /// computes it on demand: the blame gutter, the verb). Works the same after a reload:
+    /// roots are in the store (provenance rows, store format 5).
     pub fn blame(&self, conn: ConnId, root: &str, lines: Option<LineRange>) -> Result<Blame> {
+        let out = self.blame_inner(conn, root, lines);
+        self.for_viewer(conn, out, |l, b| l.blame(b))
+    }
+
+    fn blame_inner(&self, conn: ConnId, root: &str, lines: Option<LineRange>) -> Result<Blame> {
         let now = self.now();
+        let (out, check) = {
+            let mut st = self.lock()?;
+            self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
+            self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
+            let st = &mut *st;
+            self.text_of(st, root)?;
+            let sampled = self.checked_prov(st)?;
+            st.blame_checks += u64::from(sampled);
+            let prov = st.prov.as_ref().expect("built");
+            let out = self.blame_with(st, prov, root, lines.clone())?;
+            let check = if sampled {
+                Some(Check {
+                    state: st.doc.encode_state()?,
+                    texts: st.texts.clone(),
+                    kept: prov.clone(),
+                    version: st.version,
+                    store: self.store(st)?.clone(),
+                })
+            } else {
+                None
+            };
+            (out, check)
+        };
+        let Some(check) = check else {
+            return Ok(out);
+        };
+        // the sampled check, off the session's lock (v0.9.7): the rebuild walks a copy of
+        // the doc, O(doc), while participants keep editing
+        let copy = Doc::load(self.schema, &check.state)?;
+        let fresh = Self::prov_from(self.doc_id, &copy, &check.texts, &check.store)?;
+        #[cfg(any(test, feature = "differential"))]
+        crate::differential::blame_check_hook();
+        let Some(what) = check.kept.differs(&fresh) else {
+            return Ok(out);
+        };
+        // a mismatch: never served. Back under the lock, the kept map is fixed if it is the
+        // one checked: replaced by the rebuild if nothing changed since, else dropped (wrong
+        // then, so wrong now; the next need rebuilds it). A map replaced or dropped meanwhile
+        // (a purge, a recovery) was another one: nothing to attribute, nothing to fix
         let mut st = self.lock()?;
-        self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
-        self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
         let st = &mut *st;
+        let (lineage, applied) = check.kept.token();
+        match st.prov.as_ref().map(super::super::prov::Prov::token) {
+            Some((l, a)) if l == lineage => {
+                self.emit(AuditEvent::ProvenanceMismatch {
+                    key: st.key.clone(),
+                    version: check.version,
+                    what,
+                });
+                st.prov = (a == applied && st.version == check.version).then_some(fresh);
+            }
+            _ => {}
+        }
+        // blame again, from a sound map, as the doc is now
         self.text_of(st, root)?;
         self.prov(st)?;
         let st = &*st;
+        self.blame_with(st, st.prov.as_ref().expect("built"), root, lines)
+    }
+
+    /// Make sure the provenance map is built, and check it (v0.9.5): on every blame, that
+    /// each root's map is as long as its text (O(roots x chunks)); a map that isn't is
+    /// reported ([`AuditEvent::ProvenanceMismatch`]) and replaced by a rebuild here, under the
+    /// lock, before blame reads it. Returns whether this blame is one in
+    /// [`Config::blame_check_every`], whose map [`Session::blame`] then compares with a
+    /// rebuild off the lock (v0.9.7).
+    fn checked_prov(&self, st: &mut State) -> Result<bool> {
+        st.blames += 1;
+        // adaptive (v0.9.7): a long history samples less often
+        let every = u64::from(if st.version >= self.config.blame_check_large_at {
+            self.config.blame_check_every_large
+        } else {
+            self.config.blame_check_every
+        });
+        let sampled = every != 0 && st.blames % every == 0;
+        let misaligned = match &st.prov {
+            None => {
+                // the cold path: nothing to compare with
+                self.prov(st)?;
+                return Ok(false);
+            }
+            Some(p) => !p.aligned(&st.texts),
+        };
+        if misaligned {
+            let fresh = self.rebuild_prov(st)?;
+            self.emit(AuditEvent::ProvenanceMismatch {
+                key: st.key.clone(),
+                version: st.version,
+                what: "blame: the map's length isn't the text's".to_owned(),
+            });
+            st.prov = Some(fresh);
+            return Ok(false);
+        }
+        Ok(sampled)
+    }
+
+    /// Test-only (feature `differential`): blame `root` as [`Session::blame`] would, from a
+    /// provenance map rebuilt from scratch (the cold path), leaving the kept map, the
+    /// sampling count and everything else as they were. The differential test's oracle.
+    #[cfg(any(test, feature = "differential"))]
+    pub fn blame_rebuilt_for_tests(&self, root: &str, lines: Option<LineRange>) -> Result<Blame> {
+        let st = self.lock()?;
+        self.text_of(&st, root)?;
+        let fresh = self.rebuild_prov(&st)?;
+        self.blame_with(&st, &fresh, root, lines)
+    }
+
+    /// Test-only (feature `differential`): where the kept provenance map differs from a
+    /// rebuild ([`AuditEvent::ProvenanceMismatch`]'s description), or `None` when it is the
+    /// same or not built. Changes nothing.
+    #[cfg(any(test, feature = "differential"))]
+    pub fn prov_differs_for_tests(&self) -> Result<Option<String>> {
+        let st = self.lock()?;
+        let Some(kept) = st.prov.as_ref() else {
+            return Ok(None);
+        };
+        let fresh = self.rebuild_prov(&st)?;
+        Ok(kept.differs(&fresh))
+    }
+
+    /// Test-only (feature `differential`): how many blames were sampled for the runtime
+    /// check since load ([`Config::blame_check_every`], adaptive).
+    #[cfg(any(test, feature = "differential"))]
+    pub fn blame_checks_for_tests(&self) -> Result<u64> {
+        Ok(self.lock()?.blame_checks)
+    }
+
+    /// Test-only (feature `differential`): is the provenance map built (kept since load, or
+    /// since the last path that drops it)?
+    #[cfg(any(test, feature = "differential"))]
+    pub fn prov_built_for_tests(&self) -> Result<bool> {
+        Ok(self.lock()?.prov.is_some())
+    }
+
+    /// Blame `root` from the provenance map `prov` (aligned with the live texts).
+    fn blame_with(
+        &self,
+        st: &State,
+        prov: &super::super::prov::Prov,
+        root: &str,
+        lines: Option<LineRange>,
+    ) -> Result<Blame> {
         let (_, text) = self.text_of(st, root)?;
         // git's lines: each with its `\n`; no empty line after a final `\n`
         let count = text.split_inclusive('\n').count();
@@ -473,7 +630,7 @@ impl Session {
             .take(last - first + 1)
             .collect();
         let (lo, hi) = (spans[0].0, spans[spans.len() - 1].1);
-        let runs = st.prov.as_ref().expect("built").query(root, text, lo, hi);
+        let runs = prov.query(root, text, lo, hi);
         let store = self.store(st)?.clone();
         let pieces = pieces(&store, self.doc_id, text, &runs, lo)?;
         // what the store knows about the changes and clients involved
@@ -484,12 +641,7 @@ impl Session {
             .collect();
         let infos = store.change_infos(self.doc_id, &seqs)?;
         let purged: HashSet<Seq> = store.purged_changes(self.doc_id, &seqs)?;
-        let approvals: HashMap<Seq, ApprovalState> = store
-            .approvals(self.doc_id)?
-            .into_iter()
-            .filter(|(s, _)| seqs.contains(s))
-            .map(|(s, a)| (s, a.state))
-            .collect();
+        let approvals: HashMap<Seq, ApprovalState> = store.approvals_of(self.doc_id, &seqs)?;
         let mut owners: HashMap<ClientId, Option<String>> = HashMap::new();
         for c in pieces
             .iter()
@@ -650,6 +802,36 @@ mod tests {
             "{}",
             b.render(|_| None)
         );
+        // the kept map (v0.9.5) over text no owner is known for: edits around and inside the
+        // unknown line, an undo putting some of it back; blame from the kept map is the
+        // rebuild's at each step, kit:unknown included
+        assert!(s.prov_built_for_tests().unwrap());
+        let steps: [(usize, usize, &str); 3] = [(2, 4, "é\n"), (0, 0, "top\n"), (6, 8, "")];
+        for (a, e, ins) in steps {
+            s.edit(
+                c,
+                vec![Edit::Text {
+                    root: ROOT.into(),
+                    hunks: vec![crate::text::diff::Hunk {
+                        start: a,
+                        end: e,
+                        insert: ins.into(),
+                    }],
+                }],
+                None,
+            )
+            .unwrap();
+            assert_eq!(s.prov_differs_for_tests().unwrap(), None);
+            assert_eq!(
+                s.blame(c, ROOT, None).unwrap(),
+                s.blame_rebuilt_for_tests(ROOT, None).unwrap()
+            );
+        }
+        s.undo(c, 1).unwrap();
+        assert_eq!(s.prov_differs_for_tests().unwrap(), None);
+        let b = s.blame(c, ROOT, None).unwrap();
+        assert_eq!(b, s.blame_rebuilt_for_tests(ROOT, None).unwrap());
+        assert!(b.lines.iter().any(|l| l.author == UNKNOWN_PID), "{b:?}");
         drop(s);
         drop(mgr);
         let _ = std::fs::remove_dir_all(&dir);

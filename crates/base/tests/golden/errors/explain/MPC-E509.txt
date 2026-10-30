@@ -1,0 +1,21 @@
+MPC-E509 no_random (store)
+exit:     6
+message:  no randomness source: {reason}
+next:     The system's randomness source is unavailable, so no key could be made. Report it to the host's operator.
+rule:     K-T0-4, K-PURGE-13
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E509",
+  "name": "no_random",
+  "area": "store",
+  "exit": 6,
+  "message": "no randomness source: {reason}",
+  "next": "The system's randomness source is unavailable, so no key could be made. Report it to the host's operator.",
+  "rule": "K-T0-4, K-PURGE-13",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

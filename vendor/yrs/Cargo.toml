@@ -15,6 +15,15 @@ default = []
 weak = []
 sync = []
 small-client = []
+# k2, test-only: compiles the bugs tests/position_index.rs plants to prove they're caught.
+# Never enable it in a build.
+planted-position-bugs = []
+# k2, test-only: compiles the touched-clients bug tests/touched_clients.rs plants to prove it's
+# caught. Never enable it in a build.
+planted-touched-bug = []
+# k2, test-only (hardening): compiles the relay bug tests/update_event_relay.rs plants, to prove
+# it's caught. Never enable it in a build.
+planted-relay-bug = []
 
 [dependencies]
 thiserror = "2"

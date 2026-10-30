@@ -9,7 +9,8 @@
 //!
 //! This module keeps what belongs to this crate's engine:
 //! - [`KNOWN_DEVIATIONS`], the list for [`crate::Doc`];
-//! - with the off-by-default `conformance` feature, [`replica`]: the two hooks the suite
+//! - with the off-by-default `conformance` feature, `replica` (no link: the module exists only
+//!   with that feature): the two hooks the suite
 //!   needs to drive several replicas of a [`crate::Doc`] in one process. No host enables it.
 //!
 //! Rules that need this crate's own machinery (wire bytes, `untrusted-wire`, the store,
@@ -62,8 +63,8 @@ pub const KNOWN_DEVIATIONS: &[(&str, &str)] = &[
 /// (feature `conformance`, off by default). Not part of the kit's API for hosts.
 ///
 /// Every byte these hooks decode was made by one of this kit's docs in the same process
-/// ([`sync`], [`events_since`]); nothing from outside is decoded, and `untrusted-wire` is not
-/// needed.
+/// ([`replica::sync`], [`replica::events_since`]); nothing from outside is decoded, and
+/// `untrusted-wire` is not needed.
 #[cfg(feature = "conformance")]
 pub mod replica {
     use crate::{ClientId, Doc, DocError};

@@ -1,0 +1,21 @@
+MPC-E202 undo_blocked (history and undo)
+exit:     1
+message:  every region of the top step conflicts ({count} at {where}); nothing applied
+next:     Others changed every region of your newest change, so nothing could be undone and it stays on top of your undo history. Fix those lines by hand (replace --lines), then skip the step with undo --drop to reach older ones.
+rule:     U14, U15, hist.undo_partial
+verbs:    undo --partial; revert
+status:   live
+--- json
+{
+  "id": "MPC-E202",
+  "name": "undo_blocked",
+  "area": "history and undo",
+  "exit": 1,
+  "message": "every region of the top step conflicts ({count} at {where}); nothing applied",
+  "next": "Others changed every region of your newest change, so nothing could be undone and it stays on top of your undo history. Fix those lines by hand (replace --lines), then skip the step with undo --drop to reach older ones.",
+  "rule": "U14, U15, hist.undo_partial",
+  "verbs": ["undo --partial", "revert"],
+  "returned_by": ["undo --partial", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

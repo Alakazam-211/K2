@@ -1,0 +1,21 @@
+MPC-E124 patch_rejects (sessions and edits)
+exit:     1
+message:  {failed} out of {hunks} hunk(s) FAILED; the rest applied (--partial)
+next:     --partial applied the hunks that fit; the failed ones (on stdout) were not applied. Read the lines they were for and make those changes again on the live text.
+rule:     K-PAR-8, K-BR-9
+verbs:    patch; apply
+status:   live
+--- json
+{
+  "id": "MPC-E124",
+  "name": "patch_rejects",
+  "area": "sessions and edits",
+  "exit": 1,
+  "message": "{failed} out of {hunks} hunk(s) FAILED; the rest applied (--partial)",
+  "next": "--partial applied the hunks that fit; the failed ones (on stdout) were not applied. Read the lines they were for and make those changes again on the live text.",
+  "rule": "K-PAR-8, K-BR-9",
+  "verbs": ["patch", "apply"],
+  "returned_by": ["patch", "apply"],
+  "status": "live",
+  "since_or_until": null
+}

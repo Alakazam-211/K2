@@ -61,7 +61,7 @@ assert_eq "chat --help exit 0" "$rc" "0"
 assert_contains "help: the split in one line" "$out" '`k2 chat` = inside Spaces (use + community admin); `k2 hostchat` = the server on this box.'
 assert_contains "help: App Spaces come from k2 app grant" "$out" "k2 app grant"
 assert_contains "help: --on-behalf-of" "$out" "--on-behalf-of <user>"
-assert_contains "help: manage gates" "$out" "the Manage Sew switch on your workspace AND level manage"
+assert_contains "help: manage gates" "$out" "the Manage Chat / Voice Hosting switch on your workspace AND level manage"
 assert_contains "help: untrusted markers" "$out" "BEGIN CHAT MESSAGE (untrusted"
 assert_contains "help: unread" "$out" "unread [--all]"
 assert_contains "help: mark-read is the only writer" "$out" "The only command that changes read state (alias: ack)"

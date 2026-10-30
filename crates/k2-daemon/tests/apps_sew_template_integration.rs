@@ -333,7 +333,7 @@ async fn requires_sew_and_voice_refuse_install_and_deploy_with_the_fix() {
     deploy_folder(d.port, "meetapp", &plain).await;
     let r = post(d.port, "/cli/app/deploy", OWNER, json!({"app": "meetapp", "folder": meet, "wait": 30})).await;
     assert_eq!((r.status, r.code()), (409, "requires_unmet".to_string()), "{}", r.body);
-    assert!(r.json()["error"]["hint"].as_str().unwrap().contains("K2 doesn't turn Sew or voice on by itself"), "{}", r.body);
+    assert!(r.json()["error"]["hint"].as_str().unwrap().contains("K2 doesn't turn chat or voice hosting on by itself"), "{}", r.body);
     assert_eq!(app_get(front, "/").1.trim(), "plain", "the live version still serves");
 
     // A malformed range never reaches the box check: validate and the

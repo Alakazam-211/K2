@@ -118,7 +118,7 @@ impl Refusal {
             | Refusal::Sew(m)
             | Refusal::Store(m) => m.clone(),
             Refusal::FeatureMissing => NEEDS_SEW.into(),
-            Refusal::ChatOff => "chat (Sew) is not enabled on this server: the owner runs k2 hostchat enable".into(),
+            Refusal::ChatOff => "Chat / Voice Hosting is not enabled on this server: the owner runs k2 hostchat enable".into(),
             Refusal::Unreachable(m) => format!("Sew didn't answer ({m}); retry in a moment (k2 hostchat status)"),
             Refusal::RateLimited { retry_after_ms } => {
                 format!("at most {RATE_PER_MIN} channel calls a minute per App; retry after {retry_after_ms} ms")
@@ -408,7 +408,7 @@ fn pick_space(conn: &rusqlite::Connection, app: &str, named: Option<&str>) -> Re
         Some(s) => match app_space::bound_app(conn, s)? {
             Some(_) => Err(Refusal::AppMismatch(format!("Space {s} belongs to another App; an App makes channels in its own Space only"))),
             None => Err(Refusal::SpaceUnbound(format!(
-                "Space {s} isn't bound to this App (the owner or a Manage Sew agent binds it: k2 hostchat app-space bind <app> <space-id>)"
+                "Space {s} isn't bound to this App (the owner or an agent with Manage Chat / Voice Hosting binds it: k2 hostchat app-space bind <app> <space-id>)"
             ))),
         },
         None => match mine.as_slice() {

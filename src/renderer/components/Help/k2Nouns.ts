@@ -46,7 +46,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       },
       {
         noun: 'chat',
-        blurb: 'Sew chat inside Spaces, as the agent: read, post, reply, DM; community admin with Manage Sew.',
+        blurb: 'Chat inside Spaces, as the agent: read, post, reply, DM; community admin with Manage Chat / Voice Hosting.',
         example: 'k2 chat send hearth/general "deploy done"',
       },
       { noun: 'read', blurb: "Peek at another agent's terminal before injecting.", example: 'k2 read sales --lines 40' },
@@ -211,7 +211,7 @@ export const K2_NOUN_GROUPS: K2NounGroup[] = [
       { noun: 'update', blurb: 'Update the K2 app or this CLI.', example: 'k2 update --app' },
       {
         noun: 'hostchat',
-        blurb: 'Sew, the chat and voice server, on this Linux box.',
+        blurb: 'Chat / Voice Hosting on this Linux box: the chat and voice server, powered by Sew.',
         example: 'k2 hostchat status',
         note: 'linux-sidecar',
       },

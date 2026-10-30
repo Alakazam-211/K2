@@ -73,7 +73,7 @@ fn decider(who: &Who) -> R<Decider> {
                 return Err(ChatErr::new(
                     "chat_manage_off",
                     403,
-                    "the chat approval queue needs the Manage Sew switch on this workspace — your owner turns it on \
+                    "the chat approval queue needs the Manage Chat / Voice Hosting switch on this workspace — your owner turns it on \
                      (k2 agent access set <workspace> chat_manage on)",
                 ));
             }
@@ -514,14 +514,14 @@ fn policy_set(who: &Who, body: &[u8]) -> R<Value> {
     let by_actor = match by {
         Some(by) => Some((
             by,
-            policy_actor(who, by == ApprovalsBy::People, "an agent never widens who may approve (it may set people with Manage Sew on)")?,
+            policy_actor(who, by == ApprovalsBy::People, "an agent never widens who may approve (it may set people with Manage Chat / Voice Hosting on)")?,
         )),
         None => None,
     };
     let space_actor = match &space {
         Some(sp) => Some((
             sp.clone(),
-            policy_actor(who, sp.is_none(), "which Space governs DMs widens what agents may do there: a person sets it (an agent with Manage Sew may only clear it)")?,
+            policy_actor(who, sp.is_none(), "which Space governs DMs widens what agents may do there: a person sets it (an agent with Manage Chat / Voice Hosting may only clear it)")?,
         )),
         None => None,
     };

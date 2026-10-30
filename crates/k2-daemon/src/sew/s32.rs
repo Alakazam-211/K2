@@ -75,19 +75,19 @@ pub fn is_post_route(p: &str) -> bool {
 fn need_credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(no("forbidden", 403, "invalid or missing token")),
-        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage Sew")),
+        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage Chat / Voice Hosting")),
         _ => Ok(()),
     }
 }
 
 fn unsupported() -> sup::Fail {
-    no("unsupported", 409, "Sew runs on Linux boxes only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
+    no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
 }
 
 fn need_row() -> R<store::Row> {
-    let r = store::load().ok_or_else(|| no("not_installed", 404, "Sew is not installed on this box (k2 hostchat enable)"))?;
+    let r = store::load().ok_or_else(|| no("not_installed", 404, "Chat / Voice Hosting is not installed on this box (k2 hostchat enable)"))?;
     if r.status == "removed" {
-        return Err(no("not_installed", 409, "Sew was uninstalled (data kept): k2 hostchat enable brings it back"));
+        return Err(no("not_installed", 409, "Chat / Voice Hosting was uninstalled (data kept): k2 hostchat enable brings it back"));
     }
     Ok(r)
 }

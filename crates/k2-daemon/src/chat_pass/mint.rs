@@ -180,7 +180,7 @@ fn connect_gate_refusal(ident: &PassIdentity, d: &Deps<'_>, req: &PassRequest<'_
         Ok(ConnectChatGate::Disabled) => {
             refuse(403, "no_chat_grant", "this login's chat access is switched off (grant kind chat)")
         }
-        Ok(ConnectChatGate::Off) => refuse(503, "chat_unavailable", "Sew is not enabled on this box"),
+        Ok(ConnectChatGate::Off) => refuse(503, "chat_unavailable", "Chat / Voice Hosting is not enabled on this box"),
         Err(e) => {
             super::keyring::klog(format!("pass mint: connect member gate: {e}"));
             refuse(503, "chat_unavailable", "K2 could not check this login's chat account")
@@ -443,7 +443,7 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
         Err(e) => {
             super::keyring::klog(format!("pass mint: no install id: {e}"));
             audit(event, &ident.actor, "chat_unavailable", req.ingress, req.ip);
-            return error(503, "chat_unavailable", "Sew is not enabled or not reachable", None).into();
+            return error(503, "chat_unavailable", "Chat / Voice Hosting is not enabled or not reachable", None).into();
         }
     };
     // Sew 0.3.1 readiness: wait through an upgrade (≤10 s), never through a

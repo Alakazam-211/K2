@@ -61,7 +61,7 @@ pub fn label(core: &str) -> &'static str {
         "files" => "Files and rooms",
         "thread" => "Thread",
         "mail" => "Mail",
-        "sew" => "Sew",
+        "sew" => "Chat / Voice Hosting",
         _ => "?",
     }
 }

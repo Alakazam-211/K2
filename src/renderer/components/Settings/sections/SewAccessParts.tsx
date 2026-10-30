@@ -36,7 +36,7 @@ import {
 const muted = 'text-[var(--color-text-muted)]'
 const PENDING_REFRESH_MS = 5000
 
-export const SEW_ACCESS_TOOLTIP = "Sew access creates the person's Sew account. What they can see is set inside Sew."
+export const SEW_ACCESS_TOOLTIP = "Chat and voice access creates the person's chat account. What they can see is set inside Sew."
 
 type Level = 'none' | 'member' | 'guest'
 
@@ -145,15 +145,15 @@ export function SewPersonAccess({
     const prev = value
     if (grant && next === 'none') {
       const ok = await useConfirmDialogStore.getState().confirm({
-        title: `Remove ${username}'s Sew access?`,
-        message: `Removes ${username}'s Sew account. Their messages stay.`,
+        title: `Remove ${username}'s chat and voice access?`,
+        message: `Removes ${username}'s chat account. Their messages stay.`,
         confirmLabel: 'Remove',
         destructive: true,
       })
       if (!ok) return
     } else if (grant && prev === 'member' && next === 'guest') {
       const ok = await useConfirmDialogStore.getState().confirm({
-        title: `Make ${username} a Sew guest?`,
+        title: `Make ${username} a chat guest?`,
         message: 'Guests see only channels they are added to.',
         confirmLabel: 'Make guest',
       })
@@ -168,7 +168,7 @@ export function SewPersonAccess({
       } else if (next === 'none') {
         const r = await revokeSewGrant(grant.id)
         const n = Array.isArray(r?.cascaded) ? r.cascaded.length : 0
-        if (n > 0) useToastStore.getState().addToast(`Also removed Sew access for ${n} assistant agent${n === 1 ? '' : 's'}.`, 'info')
+        if (n > 0) useToastStore.getState().addToast(`Also removed chat and voice access for ${n} assistant agent${n === 1 ? '' : 's'}.`, 'info')
       } else {
         await updateSewGrantScope(grant.id, next === 'guest' ? 'guest' : 'member')
       }
@@ -195,25 +195,25 @@ export function SewPersonAccess({
   }
 
   return (
-    <SettingsGroup title="Sew">
+    <SettingsGroup title="Chat / Voice Hosting">
     <div className="space-y-1" data-testid="sew-person-access" title={SEW_ACCESS_TOOLTIP}>
       <div className="flex items-center gap-2">
-        <span className="text-xs text-[var(--color-text-primary)] w-28">Sew access</span>
+        <span className="text-xs text-[var(--color-text-primary)] w-28">Chat and voice</span>
         {installed && (targetOn || !grant) ? (
           <SettingDropdown
-            ariaLabel={`Sew access for ${username}`}
+            ariaLabel={`Chat and voice access for ${username}`}
             value={value}
             disabled={disabled || (!targetOn && !grant)}
             options={[
-              { value: 'none', label: 'No Sew access' },
-              { value: 'member', label: 'Sew member', disabled: !targetOn },
-              { value: 'guest', label: 'Sew guest', disabled: !targetOn },
+              { value: 'none', label: 'No access' },
+              { value: 'member', label: 'Member', disabled: !targetOn },
+              { value: 'guest', label: 'Guest', disabled: !targetOn },
             ]}
             onChange={(v) => void change(v as Level)}
           />
         ) : installed ? (
           <span className="flex items-center gap-2 text-[11px] text-[var(--color-text-secondary)]">
-            {value === 'guest' ? 'Sew guest' : 'Sew member'} (Sew is off; read only)
+            {value === 'guest' ? 'Guest' : 'Member'} (Chat / Voice Hosting is off; read only)
             <Button disabled={disabled} onClick={() => void change('none')}>
               Remove
             </Button>
@@ -229,7 +229,7 @@ export function SewPersonAccess({
           className={`text-[10px] underline ${muted}`}
           onClick={() => useSettingsStore.setState({ activeSection: 'sew' })}
         >
-          Enable Sew in Cores → Chat Hosting to give people access.
+          Enable Chat / Voice Hosting in Cores to give people access.
         </button>
       ) : null}
       {!principalId ? <p className={`text-[10px] ${muted}`}>This person has no id yet; update K2 on the server.</p> : null}
@@ -266,9 +266,9 @@ export function SewAdminAccessState({ users }: { users: { id?: string; username:
   const nameOf = (id: string): string => users.find((u) => u.id === id)?.username ?? id
   return (
     <div className="space-y-1 border border-[var(--color-border)] p-2" data-testid="sew-admin-access">
-      <div className="text-[11px] font-medium text-[var(--color-text-primary)]">Sew (read only)</div>
+      <div className="text-[11px] font-medium text-[var(--color-text-primary)]">Chat / Voice Hosting (read only)</div>
       <p className={`text-[10px] ${muted}`}>
-        A login uses Sew only through its own Sew grant, never because of its role here. Admin Access never adds anyone to an App&apos;s
+        A login uses chat and voice only through its own chat grant, never because of its role here. Admin Access never adds anyone to an App&apos;s
         Spaces.
       </p>
       <ul className="space-y-0.5">
@@ -276,7 +276,7 @@ export function SewAdminAccessState({ users }: { users: { id?: string; username:
           <li key={g.id} className="flex items-center gap-2 text-[11px]" data-testid={`sew-admin-row-${nameOf(g.subjectId)}`}>
             <span className="font-mono text-[var(--color-text-primary)]">{nameOf(g.subjectId)}</span>
             <span className="text-[var(--color-text-secondary)]">
-              {g.scope === 'guest' ? 'Sew guest' : 'Sew member'}
+              {g.scope === 'guest' ? 'Chat guest' : 'Chat member'}
               {g.enabled ? '' : ' (off)'}
             </span>
             <HookStatePill grant={g} />

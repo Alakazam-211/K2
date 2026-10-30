@@ -514,7 +514,7 @@ pub fn render(status: Option<&str>, items: &[Delivery]) -> String {
         out.push('\n');
     }
     out.push_str(&format!(
-        "Sew chat — {} new (reply: k2 chat reply msg_… \"…\" · DM: k2 chat dm <user> \"…\" · all unread: k2 chat unread):",
+        "Chat — {} new (reply: k2 chat reply msg_… \"…\" · DM: k2 chat dm <user> \"…\" · all unread: k2 chat unread):",
         items.len()
     ));
     for d in items.iter().take(MAX_PER_INJECT) {
@@ -552,12 +552,12 @@ pub fn reset_reason(wire: &str) -> &'static str {
 pub fn status_line(n: Notice) -> String {
     match n {
         Notice::Restart(k) => format!(
-            "Sew chat: K2 restarted while {k} chat deliver{} held for your batch or quiet hours; K2 keeps no chat text, \
+            "Chat: K2 restarted while {k} chat deliver{} held for your batch or quiet hours; K2 keeps no chat text, \
              so run `k2 chat unread` to catch up.",
             if k == 1 { "y was" } else { "ies were" }
         ),
         Notice::Reset(r) => format!(
-            "Sew chat: your delivery feed was reset ({}); you may have missed messages — run `k2 chat unread`.",
+            "Chat: your delivery feed was reset ({}); you may have missed messages — run `k2 chat unread`.",
             match r {
                 "epoch_changed" => "Sew was restored from a backup",
                 "ahead_of_head" => "Sew's history moved back",
@@ -565,7 +565,7 @@ pub fn status_line(n: Notice) -> String {
             }
         ),
         Notice::Missed(k) => format!(
-            "Sew chat: {k} deliver{} couldn't reach this session; run `k2 chat unread` to see what's new.",
+            "Chat: {k} deliver{} couldn't reach this session; run `k2 chat unread` to see what's new.",
             if k == 1 { "y" } else { "ies" }
         ),
     }

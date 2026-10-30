@@ -303,7 +303,7 @@ fn preflight_hard_stops_refuse_before_any_effect() {
     assert_eq!((f.code, f.status), ("preflight_failed", 409));
     assert_eq!(
         f.hint,
-        "the box is not ready for Sew; nothing was changed. A login user named 'sew' already exists on this box \
+        "the box is not ready for Chat / Voice Hosting; nothing was changed. A login user named 'sew' already exists on this box \
          (shell /bin/bash, SSH keys present). Sew would adopt it as its service account and give that login full \
          Sew admin. Rename or remove that user, then run enable again."
     );

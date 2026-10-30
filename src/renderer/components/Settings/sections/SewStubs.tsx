@@ -41,7 +41,7 @@ export function SewAgentsPanelStub(): React.JSX.Element {
     <Stub
       testId="sew-stub-agents"
       title="Agents"
-      what="Which agents may use Sew, at what level (read, reply, post, manage), and whether their posts wait for approval."
+      what="Which agents may use chat and voice, at what level (read, reply, post, manage), and whether their posts wait for approval."
     />
   )
 }
@@ -63,7 +63,7 @@ export function SewDeliveriesPanelStub(): React.JSX.Element {
     <Stub
       testId="sew-stub-deliveries"
       title="Deliveries"
-      what="How new Sew messages reach each agent: mentions, follows, batching."
+      what="How new chat messages reach each agent: mentions, follows, batching."
     />
   )
 }

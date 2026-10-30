@@ -128,13 +128,13 @@ afterEach(() => {
 const CHIP: Record<string, string> = {
   Running: 'Running',
   Degraded: 'Degraded',
-  'Enable Sew': 'Not installed',
+  'Enable Chat / Voice Hosting': 'Not installed',
   Resume: 'Error',
 }
 
 /** Wait until the preflight answered and Enable is live. */
 async function enableReady(): Promise<HTMLButtonElement> {
-  const b = screen.getByRole('button', { name: 'Enable Sew' }) as HTMLButtonElement
+  const b = screen.getByRole('button', { name: 'Enable Chat / Voice Hosting' }) as HTMLButtonElement
   await waitFor(() => expect(b.disabled).toBe(false))
   return b
 }
@@ -161,7 +161,7 @@ describe('unsupported daemon (Mac sample)', () => {
     expect(await screen.findByText(SEW_MAC_BANNER)).toBeTruthy()
     // Sample is Degraded with alarms; no wizard.
     expect(screen.getAllByTestId('sew-state-chip')[0].textContent).toBe('Degraded')
-    expect((screen.getByRole('button', { name: 'Disable Sew' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Disable Chat / Voice Hosting' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Reveal recovery key' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Open Sew as owner' }) as HTMLButtonElement).disabled).toBe(true)
     for (const panel of ['Backups', 'Off-box copies', 'Public URL', 'App Spaces', 'Alarms']) {
@@ -183,7 +183,7 @@ describe('status read', () => {
   it('a 403 shows the no-permission line and no retry', async () => {
     gets({ 'sew/status': new DaemonHttpError('forbidden', 403, 'forbidden') })
     render(<SewSection />)
-    expect((await screen.findByTestId('sew-forbidden')).textContent).toBe('Only the box owner or an admin can manage Chat Hosting.')
+    expect((await screen.findByTestId('sew-forbidden')).textContent).toBe('Only the box owner or an admin can manage Chat / Voice Hosting.')
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
@@ -222,14 +222,14 @@ describe('enable wizard', () => {
       { id: 'ram', status: 'fail', detail: '1 GiB', hint: 'needs 2 GiB' },
     ]
     gets({ 'sew/status': notInstalled(), 'sew/preflight': () => ({ ready: false, checks }) })
-    await renderReady('Enable Sew')
+    await renderReady('Enable Chat / Voice Hosting')
     await screen.findByTestId('sew-check-ram')
     expect(screen.getByTestId('sew-check-ram').dataset.status).toBe('fail')
-    expect((screen.getByRole('button', { name: 'Enable Sew' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Enable Chat / Voice Hosting' }) as HTMLButtonElement).disabled).toBe(true)
     checks = [{ id: 'source', status: 'fail', detail: 'no release', hint: 'pass --tarball' }]
     fireEvent.click(screen.getByRole('button', { name: 'Re-run preflight' }))
     await screen.findByTestId('sew-check-source')
-    expect((screen.getByRole('button', { name: 'Enable Sew' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Enable Chat / Voice Hosting' }) as HTMLButtonElement).disabled).toBe(false)
     // The source check failing opens the tarball input.
     expect(screen.getByLabelText('Release tarball path')).toBeTruthy()
   })
@@ -238,7 +238,7 @@ describe('enable wizard', () => {
     let state = notInstalled()
     gets({ 'sew/status': () => state, 'sew/preflight': { ready: true, checks: [{ id: 'os', status: 'pass', detail: '', hint: '' }] } })
     posts({ 'sew/server/enable': () => ((state = running({ state: 'installing', enableProgress: { steps: {}, current: 'master-key' } })), { ok: true, state: 'installing' }) })
-    await renderReady('Enable Sew')
+    await renderReady('Enable Chat / Voice Hosting')
     await screen.findByTestId('sew-check-os')
     fireEvent.click(await enableReady())
     await waitFor(() => expect(postBodies('sew/server/enable')).toEqual([{ identity: 'k2' }]))
@@ -248,14 +248,14 @@ describe('enable wizard', () => {
   it('standalone identity and voice go in the body', async () => {
     gets({ 'sew/status': notInstalled(), 'sew/preflight': { ready: true, checks: [] } })
     posts({ 'sew/server/enable': { ok: true, state: 'installing' } })
-    await renderReady('Enable Sew')
+    await renderReady('Enable Chat / Voice Hosting')
     await enableReady()
     fireEvent.click(screen.getByLabelText("Sew's own logins"))
     fireEvent.click(screen.getByLabelText('Also set up voice'))
     fireEvent.change(screen.getByLabelText('Voice URL'), { target: { value: 'wss://hearth.box.k2.dev' } })
     fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
     fireEvent.change(screen.getByLabelText('Release tarball path'), { target: { value: '/tmp/sew.tar.gz' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Enable Sew' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Chat / Voice Hosting' }))
     await waitFor(() =>
       expect(postBodies('sew/server/enable')).toEqual([
         { identity: 'standalone', tarballPath: '/tmp/sew.tar.gz', voice: { publicUrl: 'wss://hearth.box.k2.dev' } },
@@ -284,7 +284,7 @@ describe('enable wizard', () => {
       },
     })
     posts({ 'sew/server/enable': { ok: true, state: 'installing' } })
-    await renderReady('Enable Sew')
+    await renderReady('Enable Chat / Voice Hosting')
     await waitFor(() => expect(screen.getByTestId('sew-check-source').dataset.status).toBe('fail'))
     fireEvent.change(screen.getByLabelText('Release tarball path'), { target: { value: '/home/k2/sew-0.5.0.tar.gz' } })
     fireEvent.click(screen.getByRole('button', { name: 'Re-run preflight' }))
@@ -319,9 +319,9 @@ describe('enable wizard', () => {
   it('a refusal shows the daemon hint', async () => {
     gets({ 'sew/status': notInstalled(), 'sew/preflight': { ready: true, checks: [] } })
     posts({ 'sew/server/enable': new DaemonHttpError('Another Sew action', 409, 'lifecycle_in_progress') })
-    await renderReady('Enable Sew')
+    await renderReady('Enable Chat / Voice Hosting')
     fireEvent.click(await enableReady())
-    expect(await screen.findByText('Another Sew action is running. Wait for it to finish.')).toBeTruthy()
+    expect(await screen.findByText('Another Chat / Voice Hosting action is running. Wait for it to finish.')).toBeTruthy()
   })
 
   it('while installing, status polls every 2 s and stops when it leaves', async () => {
@@ -447,7 +447,7 @@ describe('danger zone', () => {
       'sew/server/uninstall': { ok: true, warning: 'Off-box backups need the recovery key.' },
     })
     await renderReady('Running')
-    fireEvent.click(screen.getByLabelText('Also delete all Sew data'))
+    fireEvent.click(screen.getByLabelText('Also delete all chat and voice data'))
     const go = screen.getByRole('button', { name: 'Uninstall and delete data' }) as HTMLButtonElement
     expect(go.disabled).toBe(true)
     const typed = screen.getByLabelText('Type hearth.box.k2.dev to confirm')
@@ -462,31 +462,31 @@ describe('danger zone', () => {
       ]),
     )
     expect(postBodies('vault/confirm/start')).toEqual([{ action: 'sew-purge', secretId: 'ins_1' }])
-    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ destructive: true, title: 'Delete all Sew data?' }))
+    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ destructive: true, title: 'Delete all chat and voice data?' }))
   })
 
   it('purge is off for a caller who is not the owner', async () => {
     gets({ 'sew/status': running({ you: { ...YOU_OWNER, canPurge: false, isOwner: false } }) })
     await renderReady('Running')
-    expect((screen.getByLabelText('Also delete all Sew data') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Also delete all chat and voice data') as HTMLInputElement).disabled).toBe(true)
   })
 
   it('disable and uninstall confirm first; uninstall can drop grants', async () => {
     gets({ 'sew/status': running() })
     posts({ 'sew/server/disable': { ok: true }, 'sew/server/uninstall': { ok: true } })
     await renderReady('Running')
-    fireEvent.click(screen.getByRole('button', { name: 'Disable Sew' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Disable Chat / Voice Hosting' }))
     await waitFor(() => expect(postBodies('sew/server/disable')).toEqual([{}]))
-    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Disable Sew?', destructive: true }))
-    fireEvent.click(screen.getByLabelText("Also remove everyone's Sew access"))
-    fireEvent.click(screen.getByRole('button', { name: 'Uninstall Sew' }))
+    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 'Disable Chat / Voice Hosting?', destructive: true }))
+    fireEvent.click(screen.getByLabelText("Also remove everyone's chat and voice access"))
+    fireEvent.click(screen.getByRole('button', { name: 'Uninstall Chat / Voice Hosting' }))
     await waitFor(() => expect(postBodies('sew/server/uninstall')).toEqual([{ dropGrants: true }]))
   })
 
   it('canManage false disables every mutation', async () => {
     gets({ 'sew/status': running({ upgradeAvailable: true, pinnedVersion: '0.4.0', you: { ...YOU_OWNER, canManage: false } }) })
     await renderReady('Running')
-    for (const name of ['Disable Sew', 'Uninstall Sew', 'Upgrade to 0.4.0', 'Edit']) {
+    for (const name of ['Disable Chat / Voice Hosting', 'Uninstall Chat / Voice Hosting', 'Upgrade to 0.4.0', 'Edit']) {
       expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled, name).toBe(true)
     }
     fireEvent.click(screen.getByRole('button', { name: 'Backups' }))
@@ -715,7 +715,7 @@ describe('panels', () => {
 
   it('panels other than the server wait for a live install', async () => {
     gets({ 'sew/status': running({ state: 'not-installed', owner: 'none' }), 'sew/preflight': { ready: true, checks: [] } })
-    await renderReady('Enable Sew')
+    await renderReady('Enable Chat / Voice Hosting')
     for (const name of [/^Alarms/, 'Backups', 'Off-box copies', 'Public URL', 'App Spaces']) {
       expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(true)
     }

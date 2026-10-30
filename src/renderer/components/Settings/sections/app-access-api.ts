@@ -39,7 +39,7 @@ export const APP_CORES: readonly AppCoreInfo[] = [
   { id: 'files', label: 'Files and rooms', detail: 'files, wiki, tickets and activity in its own room', later: null },
   { id: 'thread', label: 'Thread', detail: 'Thread with this agent, its heartbeats (read) and its name', later: null },
   { id: 'mail', label: 'Mail', detail: 'mail and calendar for its guests', later: 'Takes effect when App mail lands' },
-  { id: 'sew', label: 'Sew', detail: 'chat, voice and calls for its guests (the chat caps)', later: null },
+  { id: 'sew', label: 'Chat / Voice Hosting', detail: 'chat, voice and calls for its guests (the chat caps)', later: null },
 ]
 
 const CORE_IDS: ReadonlySet<string> = new Set(APP_CORES.map((c) => c.id))

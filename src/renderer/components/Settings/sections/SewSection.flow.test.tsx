@@ -120,7 +120,7 @@ vi.mock('@/stores/session-events', async (orig) => ({
 import { SewSection } from './SewSection'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 
-const OFFBOX_NOTE = 'Every K2 box shows Degraded until Sew has off-box copies. Set them under Off-box copies.'
+const OFFBOX_NOTE = 'Every K2 box shows Degraded until its chat and voice backups have off-box copies. Set them under Off-box copies.'
 const chip = (): string => screen.getByTestId('sew-card-state').textContent ?? ''
 
 async function tick(ms: number): Promise<void> {
@@ -146,7 +146,7 @@ describe('Chat Hosting flow against a fake supervisor', () => {
     expect(chip()).toBe('Not installed')
     expect(screen.getByTestId('sew-check-os').dataset.status).toBe('pass')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Enable Sew' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Chat / Voice Hosting' }))
     await tick(10)
     expect(chip()).toBe('Installing…')
     expect(screen.getByTestId('sew-step-master-key').dataset.step).toBe('done')

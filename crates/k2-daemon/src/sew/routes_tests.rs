@@ -308,7 +308,7 @@ fn every_route_is_classified_post_only_where_it_mutates_and_on_the_agent_list() 
 
 // ── a release build without a Sew pin ───────────────────────────────────
 
-const NOT_RELEASED: &str = "Sew isn't available in this K2 release yet. It will be turned on in a later K2 update.";
+const NOT_RELEASED: &str = "Chat / Voice Hosting isn't available in this K2 release yet. It will be turned on in a later K2 update.";
 
 /// A release build while K2's Sew pins are placeholders: enable, preflight,
 /// upgrade, voice preflight and voice install refuse `sew_not_released`

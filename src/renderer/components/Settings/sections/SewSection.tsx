@@ -80,16 +80,16 @@ import { OnceSecret, SewStatusChip, TypeToConfirm, muted, secondary, typedMatche
 import { SewAgentsPanelStub, SewApprovalsPanelStub, SewDeliveriesPanelStub } from './SewStubs'
 
 export const SEW_MANIFEST: SettingEntry[] = [
-  { id: 'sew.status', section: 'sew', label: 'Chat Hosting', description: 'The Sew chat server on this box: status and alarms', keywords: ['sew', 'chat', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
-  { id: 'sew.enable', section: 'sew', label: 'Enable Sew', description: 'Preflight and install Sew (Linux)', keywords: ['sew', 'chat', 'enable', 'install', 'preflight', 'voice'] },
+  { id: 'sew.status', section: 'sew', label: 'Chat / Voice Hosting', description: 'The chat and voice server on this box, powered by Sew: status and alarms', keywords: ['sew', 'chat', 'voice', 'slack', 'sidecar', 'core', 'hosting', 'hostchat', 'status'] },
+  { id: 'sew.enable', section: 'sew', label: 'Enable Chat / Voice Hosting', description: 'Preflight and install chat and voice hosting (Linux)', keywords: ['sew', 'chat', 'enable', 'install', 'preflight', 'voice'] },
   { id: 'sew.upgrade', section: 'sew', label: 'Upgrade Sew', description: 'Upgrade or roll back the Sew server', keywords: ['sew', 'chat', 'upgrade', 'rollback', 'version'] },
   { id: 'sew.recovery-key', section: 'sew', label: 'Sew recovery key', description: 'Reveal the recovery key once (person confirm)', keywords: ['sew', 'chat', 'recovery', 'key', 'master key'] },
-  { id: 'sew.backup', section: 'sew', label: 'Sew backups', description: 'Back up now and see the bundles', keywords: ['sew', 'chat', 'backup', 'restore', 'drill'] },
+  { id: 'sew.backup', section: 'sew', label: 'Chat and voice backups', description: 'Back up now and see the bundles', keywords: ['sew', 'chat', 'backup', 'restore', 'drill'] },
   { id: 'sew.offbox', section: 'sew', label: 'Off-box copies', description: 'Backup destination and keyring mirror off this machine', keywords: ['sew', 'chat', 'offbox', 'off-box', 'mirror', 'ship', 'backup'] },
   { id: 'sew.public-url', section: 'sew', label: 'Sew public URL', description: "Where Sew's web app lives (setup links)", keywords: ['sew', 'chat', 'public url', 'host', 'setup link'] },
   { id: 'sew.open-as-owner', section: 'sew', label: 'Open Sew as owner', description: "Open Sew's web app as its install owner (person confirm)", keywords: ['sew', 'chat', 'owner', 'handoff', 'open', 'app url'] },
   { id: 'sew.app-spaces', section: 'sew', label: 'App Spaces', description: "Each App's Sew Spaces; members come from App user grants", keywords: ['sew', 'chat', 'space', 'app', 'members', 'hearth'] },
-  { id: 'sew.uninstall', section: 'sew', label: 'Disable or uninstall Sew', description: 'Disable, uninstall or purge Sew', keywords: ['sew', 'chat', 'disable', 'uninstall', 'purge', 'delete'] },
+  { id: 'sew.uninstall', section: 'sew', label: 'Disable or uninstall Chat / Voice Hosting', description: 'Disable, uninstall or purge chat and voice hosting', keywords: ['sew', 'chat', 'disable', 'uninstall', 'purge', 'delete'] },
 ]
 
 type Selection =
@@ -182,7 +182,7 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
   // fixed stops failing: Enable must never drop it silently.
   const showSource = advanced || tarball.trim() !== '' || failing.some((c) => c.id === 'source')
   const showRecovery = advanced || recoveryFile.trim() !== '' || failing.some((c) => c.id === 'existing_data')
-  const label = enableLabel(status.state) ?? 'Enable Sew'
+  const label = enableLabel(status.state) ?? 'Enable Chat / Voice Hosting'
   const disabled = !canMutate || !released || busy || checks === null || blocking.length > 0
 
   const enable = async (): Promise<void> => {
@@ -210,7 +210,8 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
     <div className="space-y-3 border border-[var(--color-border)] p-3" data-settings-id="sew.enable" data-testid="sew-enable-wizard">
       {status.state === 'not-installed' ? (
         <p className={`text-[11px] ${secondary}`}>
-          Sew is Alakazam&apos;s team chat. It runs beside K2 on this box, with its own database and encrypted storage.
+          Chat / Voice Hosting gives this box team chat and voice calls, powered by Sew, Alakazam&apos;s team chat. It runs beside K2, with its own
+          database and encrypted storage.
         </p>
       ) : null}
       {!released ? <Callout tone="warn">{status.notice ?? 'This K2 build pins no published Sew release yet.'}</Callout> : null}
@@ -564,8 +565,8 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
 
   const disable = async (): Promise<void> => {
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Disable Sew?',
-      message: "Sew goes down for everyone. Agents' k2 chat calls fail. New Sew access is refused. Data is kept.",
+      title: 'Disable Chat / Voice Hosting?',
+      message: "Chat and voice go down for everyone. Agents' k2 chat calls fail. New chat access is refused. Data is kept.",
       confirmLabel: 'Disable',
       destructive: true,
     })
@@ -586,7 +587,7 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
     if (purge) {
       if (!typedMatches(typed, expectHost)) return
       const ok = await useConfirmDialogStore.getState().confirm({
-        title: 'Delete all Sew data?',
+        title: 'Delete all chat and voice data?',
         message:
           'Every message, file and key on this box is deleted. Off-box backups cannot be read without the recovery key. K2 does not delete off-box copies.',
         confirmLabel: 'Delete everything',
@@ -596,10 +597,10 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
       setBusy(true)
       setError(null)
       try {
-        const token = await confirm('sew-purge', confirmSecretId('sew-purge', status.installId), 'purge all Sew data')
+        const token = await confirm('sew-purge', confirmSecretId('sew-purge', status.installId), 'purge all chat and voice data')
         if (!token) return
         const r = await purgeSew({ confirmHostname: typed.trim(), keepBackups, dropGrants, confirmToken: token })
-        useToastStore.getState().addToast(r.warning ?? 'Sew data deleted.', 'warning')
+        useToastStore.getState().addToast(r.warning ?? 'Chat and voice data deleted.', 'warning')
         setTyped('')
         setPurge(false)
         await reload()
@@ -611,8 +612,8 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
       return
     }
     const ok = await useConfirmDialogStore.getState().confirm({
-      title: 'Uninstall Sew?',
-      message: 'Sew is removed. Data, the install id and the master key stay. Enable brings it back.',
+      title: 'Uninstall Chat / Voice Hosting?',
+      message: 'Chat / Voice Hosting is removed. Data, the install id and the master key stay. Enable brings it back.',
       confirmLabel: 'Uninstall',
       destructive: true,
     })
@@ -634,16 +635,16 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
       <div className="text-xs font-medium text-[var(--color-status-error-soft)]">Danger zone</div>
       {canDisable ? (
         <Button disabled={!canMutate || busy} onClick={() => void disable()}>
-          Disable Sew
+          Disable Chat / Voice Hosting
         </Button>
       ) : null}
       <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <SquareCheckbox checked={dropGrants} disabled={!canMutate} onChange={(e) => setDropGrants(e.target.checked)} aria-label="Also remove everyone's Sew access" />
-        Also remove everyone&apos;s Sew access
+        <SquareCheckbox checked={dropGrants} disabled={!canMutate} onChange={(e) => setDropGrants(e.target.checked)} aria-label="Also remove everyone's chat and voice access" />
+        Also remove everyone&apos;s chat and voice access
       </label>
       <label className={`flex items-center gap-2 text-[11px] ${secondary}`}>
-        <SquareCheckbox checked={purge} disabled={!canPurge} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all Sew data" />
-        Also delete all Sew data {you.canPurge ? '' : '(the box owner only)'}
+        <SquareCheckbox checked={purge} disabled={!canPurge} onChange={(e) => setPurge(e.target.checked)} aria-label="Also delete all chat and voice data" />
+        Also delete all chat and voice data {you.canPurge ? '' : '(the box owner only)'}
       </label>
       {purge ? (
         <div className="space-y-1 pl-5">
@@ -660,7 +661,7 @@ function DangerZone({ status, sample, canMutate, reload }: PanelProps): React.JS
         disabled={!canMutate || busy || (purge && (!canPurge || !typedMatches(typed, expectHost)))}
         onClick={() => void uninstall()}
       >
-        {purge ? 'Uninstall and delete data' : 'Uninstall Sew'}
+        {purge ? 'Uninstall and delete data' : 'Uninstall Chat / Voice Hosting'}
       </Button>
       {error ? <Callout tone="error">{error}</Callout> : null}
     </div>
@@ -676,12 +677,12 @@ function ServerPanel(props: PanelProps): React.JSX.Element {
   return (
     <div className="max-w-2xl space-y-4" data-settings-id="sew.status">
       <div className="flex items-center gap-2">
-        <Title>Sew</Title>
+        <Title>Chat / Voice Hosting</Title>
         <SewStatusChip state={status.state} />
       </div>
       {status.state !== 'not-installed' ? (
         <div>
-          <Row label="Version">
+          <Row label="Sew version">
             {status.installedVersion ?? '—'}
             {status.pinnedVersion && status.pinnedVersion !== status.installedVersion ? ` (pinned ${status.pinnedVersion})` : ''}
           </Row>
@@ -756,7 +757,7 @@ function AlarmsPanel({ status, select }: PanelProps): React.JSX.Element {
       <Title>Alarms</Title>
       {alarms.length === 0 ? <p className={`text-[11px] ${muted}`}>No alarms.</p> : null}
       {offboxOnly ? (
-        <p className={`text-[11px] ${secondary}`}>Every K2 box shows Degraded until Sew has off-box copies. Set them under Off-box copies.</p>
+        <p className={`text-[11px] ${secondary}`}>Every K2 box shows Degraded until its chat and voice backups have off-box copies. Set them under Off-box copies.</p>
       ) : null}
       <ul className="space-y-2">
         {alarms.map((a) => {
@@ -817,7 +818,7 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
             setJob(null)
             setRunning(false)
             if (j.state === 'dead') setError(j.last_error ?? 'The backup failed.')
-            else useToastStore.getState().addToast('Sew backup done.', 'success')
+            else useToastStore.getState().addToast('Chat and voice backup done.', 'success')
             await Promise.all([reload(), loadList()])
           }
         })
@@ -838,7 +839,7 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
       const r = await runSewBackup()
       if (r.backup) {
         setRunning(false)
-        useToastStore.getState().addToast('Sew backup done.', 'success')
+        useToastStore.getState().addToast('Chat and voice backup done.', 'success')
         await Promise.all([reload(), loadList()])
       } else {
         setJob(r.jobId)
@@ -896,7 +897,7 @@ function BackupsPanel({ status, sample, canMutate, reload }: PanelProps): React.
         </tbody>
       </table>
       <p className={`text-[10px] ${muted}`}>
-        To restore one (it replaces ALL Sew data): <code className="font-mono">{SEW_CLI} restore &lt;id&gt; --confirm</code>
+        To restore one (it replaces ALL chat and voice data): <code className="font-mono">{SEW_CLI} restore &lt;id&gt; --confirm</code>
       </p>
     </div>
   )
@@ -968,7 +969,7 @@ function OffboxPanel({ status, canMutate, reload }: PanelProps): React.JSX.Eleme
     <div className="max-w-2xl space-y-3" data-settings-id="sew.offbox">
       <Title>Off-box copies</Title>
       <p className={`text-[11px] ${secondary}`}>
-        Backups hold encrypted data. The keyring mirror holds the keys that open it. Keep them on a different machine from Sew, and keep
+        Backups hold encrypted data. The keyring mirror holds the keys that open it. Keep them on a different machine from this box, and keep
         the recovery key somewhere else again.
       </p>
       <OffboxBlock
@@ -1203,11 +1204,11 @@ export function SewSection(): React.JSX.Element {
 
   if (loadError && status === null) {
     if (loadError.forbidden) {
-      return <p className={`p-6 text-xs ${muted}`} data-testid="sew-forbidden">Only the box owner or an admin can manage Chat Hosting.</p>
+      return <p className={`p-6 text-xs ${muted}`} data-testid="sew-forbidden">Only the box owner or an admin can manage Chat / Voice Hosting.</p>
     }
     return (
       <div className="p-6 space-y-2">
-        <Callout tone="error">Could not read Sew&apos;s status: {loadError.message}</Callout>
+        <Callout tone="error">Could not read the status of Chat / Voice Hosting: {loadError.message}</Callout>
         <Button onClick={() => void load()}>Retry</Button>
       </div>
     )
@@ -1238,9 +1239,9 @@ export function SewSection(): React.JSX.Element {
           >
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: chip.color }} />
-              <span className="text-xs font-medium text-[var(--color-text-primary)]">Sew</span>
+              <span className="text-xs font-medium text-[var(--color-text-primary)]">Chat / Voice Hosting</span>
               <span className="flex-1" />
-              <span className={`text-[9px] ${muted}`}>{view.installedVersion ? `v${view.installedVersion}` : ''}</span>
+              <span className={`text-[9px] ${muted}`}>{view.installedVersion ? `Sew v${view.installedVersion}` : ''}</span>
             </div>
             <p className={`text-[10px] mt-0.5 truncate ${muted}`}>
               <span data-testid="sew-card-state">{chip.label}</span>
@@ -1275,7 +1276,7 @@ export function SewSection(): React.JSX.Element {
         </div>
         <div className="flex-1 overflow-y-auto p-6 min-h-0">
           {!youOf(status).canManage && !sample ? (
-            <p className={`text-[11px] mb-3 ${muted}`}>You can see Chat Hosting. Only the box owner, an admin or an agent with Manage Sew changes it.</p>
+            <p className={`text-[11px] mb-3 ${muted}`}>You can see Chat / Voice Hosting. Only the box owner, an admin or an agent with Manage Chat / Voice Hosting changes it.</p>
           ) : null}
           {selection === 'server' ? <ServerPanel {...props} /> : null}
           {selection === 'alarms' ? <AlarmsPanel {...props} /> : null}

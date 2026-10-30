@@ -111,7 +111,7 @@ expect_eq "hostchat app-url show" "$out" "(not set)"
 out="$(k2 hostchat app-spaces 2>/dev/null)"
 expect_eq "hostchat app-spaces (none bound)" "$out" "(no App Spaces bound)"
 out="$(k2 hostchat status 2>&1)"
-expect_has "hostchat status prints" "$out" "Sew"
+expect_has "hostchat status prints" "$out" "Chat / Voice Hosting"
 set +e
 out="$(k2 hostchat users invite bob 2>&1)"; rc=$?
 set -e

@@ -166,7 +166,7 @@ pub fn too_large() -> CliResponse {
 fn need_credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(no("forbidden", 403, "invalid or missing token")),
-        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage Sew")),
+        Who::Wrong => Err(no("wrong_credential", 403, "App passes, API keys and API sessions can't manage Chat / Voice Hosting")),
         _ => Ok(()),
     }
 }
@@ -175,7 +175,7 @@ fn owner_only() -> Fail {
     no(
         "owner_only",
         403,
-        "only the server's owner or an admin can do this (or an agent whose workspace has \"Manage Sew\" on)",
+        "only the server's owner or an admin can do this (or an agent whose workspace has \"Manage Chat / Voice Hosting\" on)",
     )
 }
 
@@ -193,7 +193,7 @@ pub fn need_manage(who: &Who) -> R<()> {
                 Err(no(
                     "chat_manage_off",
                     403,
-                    "\"Manage Sew\" is off for this workspace: ask your owner or an admin to run \
+                    "\"Manage Chat / Voice Hosting\" is off for this workspace: ask your owner or an admin to run \
                      k2 agent access set <workspace> chat_manage on",
                 ))
             }
@@ -222,7 +222,7 @@ pub fn need_person(who: &Who, body: &Value, action: &str, secret_id: &str, floor
         return Err(no(
             "person_only",
             403,
-            "a person does this, never an agent or a K2 terminal (Manage Sew does not cover it): Settings → Sew, or \
+            "a person does this, never an agent or a K2 terminal (Manage Chat / Voice Hosting does not cover it): Settings → Chat / Voice Hosting, or \
              k2 hostchat from a terminal outside K2",
         ));
     }

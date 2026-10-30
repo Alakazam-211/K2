@@ -1061,7 +1061,7 @@ pub(crate) fn map_message(m: &PMessage, authors: &HashMap<String, MemberRef>) ->
 /// every chat route stays 503 `chat_unavailable`. Idempotent.
 pub fn install_live(socket: &str) -> Result<(), String> {
     if !crate::sew::sew_supported() {
-        return Err("Sew runs on Linux only".into());
+        return Err("Chat / Voice Hosting runs on Linux boxes only".into());
     }
     let tokens: TokenSource =
         Arc::new(|refresh| crate::sew::supervisor::mgmt_token(&crate::sew::supervisor::live(), refresh));

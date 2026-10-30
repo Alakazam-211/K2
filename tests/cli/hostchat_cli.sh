@@ -122,7 +122,7 @@ class H(BaseHTTPRequestHandler):
         p = parsed.path
         status, out = 200, {"ok": True}
         unreleased = os.path.exists(os.path.join(work, "unreleased"))
-        msg = "Sew isn't available in this K2 release yet. It will be turned on in a later K2 update."
+        msg = "Chat / Voice Hosting isn't available in this K2 release yet. It will be turned on in a later K2 update."
         if unreleased and p == "/cli/sew/status":
             out = {"ok": True, "supported": True, "state": "not-installed", "released": False, "notice": msg}
         elif unreleased and p in ("/cli/sew/server/enable", "/cli/sew/server/upgrade", "/cli/sew/preflight",
@@ -472,10 +472,10 @@ assert_eq "person-only refusals send nothing" "$(nreq)" "$before"
 
 echo "== release without a Sew pin =="
 touch "$WORK/unreleased"
-NR="Sew isn't available in this K2 release yet. It will be turned on in a later K2 update."
+NR="Chat / Voice Hosting isn't available in this K2 release yet. It will be turned on in a later K2 update."
 run owner hostchat status
 assert_eq "unreleased: status exit 0" "$rc" "0"
-assert_eq "unreleased: status says so plainly" "$out" "Sew: $NR"
+assert_eq "unreleased: status says so plainly" "$out" "Chat / Voice Hosting: $NR"
 for verb in "enable --tarball sew.tar.gz" "preflight" "upgrade --tarball sew.tar.gz" "media install --tarball sew-media.tar.gz --no-wait" "media preflight"; do
     # shellcheck disable=SC2086
     run owner hostchat $verb

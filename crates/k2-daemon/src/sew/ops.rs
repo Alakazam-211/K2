@@ -132,7 +132,7 @@ pub trait SewOps: Send + Sync {
     fn record_save(&self, name: &str, v: Option<&Value>) -> Result<(), String>;
     /// One notice for the server's owner (an inbox ticket from "Sew").
     fn owner_notice(&self, title: &str, body: &str) {
-        if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "Sew", title, body) {
+        if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "Chat / Voice Hosting", title, body) {
             k2_core::log_debug!("[sew] owner notice '{title}': {e}");
         }
     }

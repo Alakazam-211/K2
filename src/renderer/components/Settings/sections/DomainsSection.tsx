@@ -748,7 +748,7 @@ export function firewallSourceLabel(source: string): string {
     case 'hostmail':
       return 'K2: hosted mail'
     case 'sew-voice':
-      return 'K2: Sew voice'
+      return 'K2: Chat / Voice Hosting'
     case 'daemon':
       return 'K2: API (LAN)'
     case 'owner':

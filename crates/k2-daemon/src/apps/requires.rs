@@ -76,7 +76,7 @@ pub struct Unmet {
 impl Unmet {
     pub fn message(&self, app: &str) -> String {
         format!(
-            "{app} needs {} on this box. The owner fixes it with: {}. K2 doesn't turn Sew or voice on by itself; \
+            "{app} needs {} on this box. The owner fixes it with: {}. K2 doesn't turn chat or voice hosting on by itself; \
              then install or deploy again.",
             self.missing.join("; "),
             self.fix.join(", then ")
@@ -97,9 +97,9 @@ pub fn check(req: Option<&Requires>, st: &BoxSew) -> Result<(), Unmet> {
     let mut missing = Vec::new();
     let mut fix = Vec::new();
     let voice_flag = if req.voice { " --voice" } else { "" };
-    let want = req.sew.as_deref().map(|r| format!(" {r}")).unwrap_or_default();
+    let want = req.sew.as_deref().map(|r| format!("Sew {r}; ")).unwrap_or_default();
     if !st.supported {
-        missing.push(format!("the Sew chat server{want} (Sew runs on Linux boxes only, not on this one)"));
+        missing.push(format!("Chat / Voice Hosting ({want}it runs on Linux boxes only, not on this one)"));
         if req.voice {
             missing.push("voice (Sew's media engine)".to_string());
         }
@@ -111,7 +111,7 @@ pub fn check(req: Option<&Requires>, st: &BoxSew) -> Result<(), Unmet> {
             None => "not installed".to_string(),
             Some(s) => s.to_string(),
         };
-        missing.push(format!("the Sew chat server{want} (Sew is {state} here)"));
+        missing.push(format!("Chat / Voice Hosting ({want}it is {state} here)"));
         if req.voice {
             missing.push("voice (Sew's media engine)".to_string());
         }

@@ -219,7 +219,7 @@ pub fn check_chat_manage(caller: &HireCaller, requested: Option<bool>) -> Result
         return Err(HireError::new(
             403,
             "owner_only",
-            "An agent can't turn on 'Manage Sew' (chat_manage). Ask a human (owner or admin): Settings → Workspaces → (workspace) → Agent, or `k2 agent access set <workspace> chat_manage on` from a terminal outside a K2 agent session.",
+            "An agent can't turn on 'Manage Chat / Voice Hosting' (chat_manage). Ask a human (owner or admin): Settings → Workspaces → (workspace) → Agent, or `k2 agent access set <workspace> chat_manage on` from a terminal outside a K2 agent session.",
         ));
     }
     Ok(())

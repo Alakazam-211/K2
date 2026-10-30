@@ -306,7 +306,7 @@ impl Refusal {
             Refusal::Limit { max } => format!(
                 "this App already gave chat to {max} people, its ceiling (the owner raises it: k2 app grant <app> --kind guests-chat --max N)"
             ),
-            Refusal::ChatOff => "chat (Sew) is not enabled on this server: k2 hostchat enable".into(),
+            Refusal::ChatOff => "Chat / Voice Hosting is not enabled on this server: k2 hostchat enable".into(),
             Refusal::NotAppScoped => "an App can't give chat yet: this server's Sew doesn't keep an App's sessions to that App's own Spaces \
                  (it needs app_scoped_sessions). Until it does, the owner gives chat: k2 app user chat <user> member --app <app> \
                  (and this App can see all chat that person can)"

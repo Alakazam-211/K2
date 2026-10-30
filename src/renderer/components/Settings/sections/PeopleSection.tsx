@@ -559,7 +559,7 @@ export function PeopleSection(): React.JSX.Element {
                   ) : null}
                   {sewGrantOf(row.id) ? (
                     <span data-testid={`sew-tag-${row.username}`} className="block text-[9px] text-[var(--color-text-muted)] truncate">
-                      Sew {sewGrantOf(row.id)?.scope === 'guest' ? 'guest' : 'member'}
+                      Chat {sewGrantOf(row.id)?.scope === 'guest' ? 'guest' : 'member'}
                     </span>
                   ) : null}
                 </button>

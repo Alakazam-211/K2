@@ -53,10 +53,10 @@ describe('errors', () => {
   })
 
   it('owner_only and a bare 403 read as the no-permission line', () => {
-    expect(sewErrorMessage(new DaemonHttpError('x', 403, 'owner_only'))).toBe('Only the box owner or an admin can manage Chat Hosting.')
-    expect(sewErrorMessage(new DaemonHttpError('x', 403, null))).toBe('Only the box owner or an admin can manage Chat Hosting.')
+    expect(sewErrorMessage(new DaemonHttpError('x', 403, 'owner_only'))).toBe('Only the box owner or an admin can manage Chat / Voice Hosting.')
+    expect(sewErrorMessage(new DaemonHttpError('x', 403, null))).toBe('Only the box owner or an admin can manage Chat / Voice Hosting.')
     expect(sewErrorMessage(new DaemonHttpError('Another Sew action', 409, 'lifecycle_in_progress'))).toBe(
-      'Another Sew action is running. Wait for it to finish.',
+      'Another Chat / Voice Hosting action is running. Wait for it to finish.',
     )
     expect(sewErrorInfo('plain')).toEqual({ code: null, status: null, message: 'plain' })
   })
@@ -104,7 +104,7 @@ describe('tables match the daemon', () => {
   })
 
   it('the wizard label per state', () => {
-    expect(enableLabel('not-installed')).toBe('Enable Sew')
+    expect(enableLabel('not-installed')).toBe('Enable Chat / Voice Hosting')
     expect(enableLabel('error')).toBe('Resume')
     for (const s of ['disabled', 'stopped', 'removed']) expect(enableLabel(s)).toBe('Re-enable')
     for (const s of ['running', 'degraded', 'installing', 'upgrading']) expect(enableLabel(s)).toBeNull()

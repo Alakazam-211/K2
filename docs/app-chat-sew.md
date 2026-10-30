@@ -1,7 +1,8 @@
-# Chat, voice and calls in your App (Sew for Apps)
+# Chat, voice and calls in your App (Chat / Voice Hosting)
 
 For an agent building a K2 App that adds chat (and later voice channels,
-person-to-person calls, video and screen share) on the box's Sew core. The K2 side
+person-to-person calls, video and screen share) on the box's Chat / Voice Hosting core
+(core id `sew`), powered by Sew. `k2 hostchat` manages the core. The K2 side
 ships in K2 0.46.6; the short version is `k2 study app-chat`.
 
 What works when is decided by **Sew's feature flags** (`k2 hostchat home` shows
@@ -35,10 +36,10 @@ their K2 profile picture. Change them through K2 (`profile.*`); never in Sew.
 
 `<app>` is your App's id from `k2 app list` (its name works too).
 
-1. **Sew is on in K2 mode.** `k2 hostchat status` says identity `k2`. If Sew isn't
+1. **Chat / Voice Hosting is on in K2 mode.** `k2 hostchat status` says identity `k2`. If it isn't
    installed, the owner runs `k2 hostchat enable` (never `--identity standalone`:
    an install can't switch later).
-2. **A Space for your App.** The owner turns on "Manage Sew" for your workspace
+2. **A Space for your App.** The owner turns on "Manage Chat / Voice Hosting" for your workspace
    once (`k2 agent access set <workspace> chat_manage on`). Then
    `k2 chat space create <slug> --name "<Name>"` (it prints the Space id) and
    `k2 hostchat app-space bind <app> <space-id>`. Members of a bound Space come
@@ -63,7 +64,8 @@ their K2 profile picture. Change them through K2 (`profile.*`); never in Sew.
    Right after step 4, Sew may answer `not_provisioned` for a few seconds: retry.
 
 Your manifest asks for what it needs; your next deploy is held until the owner
-approves the caps (`k2 app approvals`), unless your workspace ticks the Sew core:
+approves the caps (`k2 app approvals`), unless your workspace ticks the Chat / Voice Hosting core
+(`--core sew=on`):
 
 ```json
 "requires": { "sew": ">=0.3.1" },
@@ -160,7 +162,7 @@ deactivated (history stays); giving chat again brings back the same member id.
 | `sew_feature_missing` (409) | this Sew can't make channels (needs 0.5.0+) | the owner upgrades Sew |
 | `space_unbound` (409) | the Space isn't bound to your App (or you have none) | step 2 |
 | `app_mismatch` (409) | the Space belongs to another App | use your own Space |
-| `chat_unavailable` (409/503) | Sew is off or not reachable | `k2 hostchat status` |
+| `chat_unavailable` (409/503) | Chat / Voice Hosting is off or not reachable | `k2 hostchat status` |
 | `rate_limited` (429) | 60 calls a minute per App | wait `retryAfterMs` |
 
 ## Home client and App-only

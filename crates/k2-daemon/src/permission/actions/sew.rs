@@ -36,7 +36,7 @@ use crate::vault::actor::{Channel, VaultCaller};
 /// The card's route wall: an agent's own call to the owner handoff.
 pub(crate) const HANDOFF_ROUTE: &str = crate::chat_pass::mint::OWNER_HANDOFF;
 /// Why a tunnel answer (Connect, a phone) doesn't open Sew.
-pub(crate) const LOCAL_ONLY: &str = "Open this from K2 on the box's own computer (or Settings → Chat Hosting there): Sew opens as its owner only from the box or its LAN, never through the tunnel";
+pub(crate) const LOCAL_ONLY: &str = "Open this from K2 on the box's own computer (or Settings → Chat / Voice Hosting there): Sew opens as its owner only from the box or its LAN, never through the tunnel";
 
 /// The one-time link lives this long (the handoff code's TTL).
 pub(crate) const LINK_TTL_SECS: i64 = crate::chat_pass::handoff::TTL_SECS;
@@ -59,7 +59,7 @@ pub(crate) static OWNER_HANDOFF: ActionSpec = ActionSpec {
         retry: "",
     },
     undo: Undo::None,
-    settings: SettingsRef { page: "sew", path: "Settings → Cores → Chat Hosting → Open Sew as owner" },
+    settings: SettingsRef { page: "sew", path: "Settings → Cores → Chat / Voice Hosting → Open Sew as owner" },
     walls: &[Wall {
         matches: WallMatch::Code { status: 403, code: "owner_only" },
         route_prefix: HANDOFF_ROUTE,
@@ -159,7 +159,7 @@ fn check_rollback(ctx: &Ctx) -> Check {
     if !k2_core::workspace::settings::agents_can_manage_chat(&ctx.workspace_id) {
         return Check::Unavailable {
             code: "chat_manage_off",
-            why: format!("\"Manage Sew\" is off for {}: only an agent that manages Sew may ask", ctx.workspace_handle),
+            why: format!("\"Manage Chat / Voice Hosting\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
         };
     }
     match rollback_plan() {
@@ -263,7 +263,7 @@ fn check(ctx: &Ctx) -> Check {
     if !k2_core::workspace::settings::agents_can_manage_chat(&ctx.workspace_id) {
         return Check::Unavailable {
             code: "chat_manage_off",
-            why: format!("\"Manage Sew\" is off for {}: only an agent that manages Sew may ask", ctx.workspace_handle),
+            why: format!("\"Manage Chat / Voice Hosting\" is off for {}: only an agent that manages it may ask", ctx.workspace_handle),
         };
     }
     if app_url().is_none() {

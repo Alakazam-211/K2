@@ -287,7 +287,7 @@ pub(crate) fn expire_now(conn: &rusqlite::Connection) -> R<()> {
 }
 
 pub(crate) fn backend() -> R<std::sync::Arc<dyn SewChat>> {
-    sew::backend().ok_or_else(|| ChatErr::new("chat_unavailable", 503, "Sew chat is not enabled on this box"))
+    sew::backend().ok_or_else(|| ChatErr::new("chat_unavailable", 503, "Chat / Voice Hosting is not enabled on this box"))
 }
 
 /// The person this workspace's agent assists in chat (its S27 grant
@@ -345,7 +345,7 @@ impl Caller {
 pub(crate) fn credential(who: &Who) -> R<()> {
     match who {
         Who::Invalid => Err(ChatErr::new("invalid_token", 401, "invalid or missing token")),
-        Who::Wrong => Err(ChatErr::new("wrong_credential", 403, "app passes, API keys and stream tokens can't use Sew chat")),
+        Who::Wrong => Err(ChatErr::new("wrong_credential", 403, "app passes, API keys and stream tokens can't use chat")),
         _ => Ok(()),
     }
 }
@@ -357,8 +357,8 @@ pub(crate) fn caller(who: &Who) -> R<Caller> {
         return Err(ChatErr::new(
             "agent_only",
             403,
-            "k2 chat is for agents (it runs as the agent's Sew member). People use the Sew app; the box's Sew \
-             server is `k2 hostchat`",
+            "k2 chat is for agents (it runs as the agent's Sew member). People use the chat app; the box's Chat / Voice Hosting \
+             is `k2 hostchat`",
         ));
     };
     let ws = crate::compute_routes::ws_by_id(project_id)
@@ -739,7 +739,7 @@ fn wait_hub(c: &Caller, mention: bool, deadline: std::time::Instant) -> R<Value>
         return Err(ChatErr::new(
             "hub_not_running",
             503,
-            "your chat deliveries aren't running yet (they start within 30 s of Sew chat being on and your access); \
+            "your chat deliveries aren't running yet (they start within 30 s of chat being on and your access); \
              retry, or wait on one channel with --in <space>/<channel>",
         ));
     }
@@ -1072,7 +1072,7 @@ fn write_route(c: &Caller, action: Action, body: &[u8]) -> R<Value> {
                 refuse(&base, "not_author")?;
                 let hint = if action == Action::Delete {
                     "you can only delete your own messages — removing someone else's is moderation: it needs the Manage \
-                     Sew switch and level manage in this Space"
+                     Chat / Voice Hosting switch and level manage in this Space"
                 } else {
                     "you can only edit your own messages"
                 };

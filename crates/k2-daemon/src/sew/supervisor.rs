@@ -151,7 +151,7 @@ pub fn need_released(env: &Env) -> R<()> {
 }
 
 fn unsupported() -> Fail {
-    no("unsupported", 409, "Sew runs on Linux boxes only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
+    no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only (Ubuntu 24.04 / Debian 12+, systemd 250 or newer)")
 }
 
 // ── the root helper ──────────────────────────────────────────────────────
@@ -233,7 +233,7 @@ pub fn helper_check(env: &Env) -> R<()> {
     let st = env.ops.helper_state();
     let ns = st.version_json.as_ref().and_then(|v| v.pointer("/namespaces/sew")).and_then(Value::as_bool) == Some(true);
     if !st.usable(SEW_MIN_PROTOCOL) || !ns {
-        return Err(no("helper_needed", 409, crate::root_helper::helper_needed("Sew", SEW_MIN_PROTOCOL, &st)));
+        return Err(no("helper_needed", 409, crate::root_helper::helper_needed("Chat / Voice Hosting", SEW_MIN_PROTOCOL, &st)));
     }
     let theirs = st.version_json.as_ref().and_then(|v| v.get("sewPin")).and_then(Value::as_str).unwrap_or("");
     if theirs != pinned().version {
@@ -382,7 +382,7 @@ fn master_key_present(env: &Env, row: Option<&Row>) -> bool {
 pub fn preflight(env: &Env, req: &EnableRequest) -> Vec<Value> {
     let mut c = Vec::new();
     if !env.ops.linux() {
-        c.push(check("os", "fail", "not Linux", "Sew runs on Linux boxes only"));
+        c.push(check("os", "fail", "not Linux", "Chat / Voice Hosting runs on Linux boxes only"));
         return c;
     }
     c.push(check("os", "ok", "Linux", ""));
@@ -628,7 +628,7 @@ fn refusal_hint(checks: &[Value]) -> String {
             }
         })
         .collect();
-    format!("the box is not ready for Sew; nothing was changed. {}", why.join(" "))
+    format!("the box is not ready for Chat / Voice Hosting; nothing was changed. {}", why.join(" "))
 }
 
 // ── progress ─────────────────────────────────────────────────────────────
@@ -1131,7 +1131,7 @@ pub fn reconfigure_step(env: &Env) -> Result<Value, ReconfErr> {
             k2_root_proto::version::SEW_RECONFIGURE_MIN_PROTOCOL
         )));
     }
-    let row = store::load().ok_or_else(|| failed("Sew is not installed".into()))?;
+    let row = store::load().ok_or_else(|| failed("Chat / Voice Hosting is not installed".into()))?;
     let body = if row_provider(&row) == pin::PROVIDER_STANDALONE {
         json!({"provider": pin::PROVIDER_STANDALONE})
     } else {
@@ -1202,7 +1202,7 @@ pub fn restart(env: &Env) -> R<Value> {
         return Err(no(
             "not_restartable",
             409,
-            format!("Sew is {}: k2 hostchat enable (or wait for the running step)", row.status),
+            format!("Chat / Voice Hosting is {}: k2 hostchat enable (or wait for the running step)", row.status),
         ));
     }
     helper_check(env)?;
@@ -1872,9 +1872,9 @@ pub fn grant_hook_boot(env: &Env) -> Value {
 // ── disable / uninstall / purge ──────────────────────────────────────────
 
 fn need_row(allow_removed: bool) -> R<Row> {
-    let r = store::load().ok_or_else(|| no("not_installed", 404, "Sew is not installed on this box (k2 hostchat enable)"))?;
+    let r = store::load().ok_or_else(|| no("not_installed", 404, "Chat / Voice Hosting is not installed on this box (k2 hostchat enable)"))?;
     if !allow_removed && r.status == "removed" {
-        return Err(no("not_installed", 409, "Sew was uninstalled (data kept): k2 hostchat enable brings it back"));
+        return Err(no("not_installed", 409, "Chat / Voice Hosting was uninstalled (data kept): k2 hostchat enable brings it back"));
     }
     Ok(r)
 }

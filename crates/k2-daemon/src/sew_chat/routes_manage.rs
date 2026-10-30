@@ -91,7 +91,7 @@ fn manager(c: &Caller) -> R<Admin> {
         return Err(ChatErr::new(
             "chat_manage_off",
             403,
-            "community management needs the Manage Sew switch on your workspace — your owner or an admin turns it on \
+            "community management needs the Manage Chat / Voice Hosting switch on your workspace — your owner or an admin turns it on \
              (k2 agent access set <workspace> chat_manage on)",
         ));
     }

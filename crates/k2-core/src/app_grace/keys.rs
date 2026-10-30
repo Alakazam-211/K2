@@ -123,7 +123,7 @@ pub fn parse_scopes(raw: &[String]) -> Result<Vec<String>, String> {
             continue;
         }
         if LATER_SCOPES.contains(&s.as_str()) {
-            return Err(format!("scope {s:?} isn't available yet (Space grants arrive with Sew in K2)"));
+            return Err(format!("scope {s:?} isn't available yet (Space grants arrive with Chat / Voice Hosting in K2)"));
         }
         if !SCOPES.contains(&s.as_str()) {
             return Err(format!("unknown scope {s:?}; App keys take {}", SCOPES.join(", ")));
@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn scopes_parse_and_refuse() {
         assert_eq!(parse_scopes(&["Users,rooms".into(), "users".into()]).unwrap(), vec!["users", "rooms"]);
-        assert!(parse_scopes(&["spaces".into()]).unwrap_err().contains("Sew"));
+        assert!(parse_scopes(&["spaces".into()]).unwrap_err().contains("Chat / Voice Hosting"));
         assert!(parse_scopes(&["admin".into()]).unwrap_err().contains("unknown scope"));
         assert!(parse_scopes(&[]).is_err(), "a key with no scope is refused");
     }

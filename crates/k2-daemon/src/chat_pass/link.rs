@@ -57,10 +57,10 @@ impl SewStatus for SewRow {
 
 /// The install id a row admits a pass for (module doc).
 pub fn install_id_from_row(row: Option<&crate::sew::store::Row>) -> Result<String, String> {
-    let row = row.ok_or("Sew is not installed on this box (k2 hostchat enable)")?;
+    let row = row.ok_or("Chat / Voice Hosting is not installed on this box (k2 hostchat enable)")?;
     match row.status.as_str() {
-        "removed" => return Err("Sew was uninstalled (k2 hostchat enable brings it back)".into()),
-        "disabled" => return Err("Sew is disabled (k2 hostchat enable)".into()),
+        "removed" => return Err("Chat / Voice Hosting was uninstalled (k2 hostchat enable brings it back)".into()),
+        "disabled" => return Err("Chat / Voice Hosting is disabled (k2 hostchat enable)".into()),
         _ => {}
     }
     let provider = crate::sew::supervisor::row_provider(row);

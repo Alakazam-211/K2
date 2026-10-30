@@ -1015,7 +1015,7 @@ pub fn passthrough_unsupported_message(version: &str) -> String {
 /// the daemon's `/cli/sew/*` routes, `k2 hostchat` and the root helper.
 pub const SEW_NOT_RELEASED: &str = "sew_not_released";
 pub const SEW_NOT_RELEASED_MESSAGE: &str =
-    "Sew isn't available in this K2 release yet. It will be turned on in a later K2 update.";
+    "Chat / Voice Hosting isn't available in this K2 release yet. It will be turned on in a later K2 update.";
 
 /// True when `rel` pins at least one real artifact (not every entry is a
 /// placeholder).

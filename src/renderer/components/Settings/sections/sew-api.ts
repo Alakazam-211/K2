@@ -207,9 +207,9 @@ export function sewErrorInfo(e: unknown): SewErrorInfo {
 export function sewErrorMessage(e: unknown): string {
   const info = sewErrorInfo(e)
   if (info.code === 'owner_only' || (info.status === 403 && !info.code)) {
-    return 'Only the box owner or an admin can manage Chat Hosting.'
+    return 'Only the box owner or an admin can manage Chat / Voice Hosting.'
   }
-  if (info.code === 'lifecycle_in_progress') return 'Another Sew action is running. Wait for it to finish.'
+  if (info.code === 'lifecycle_in_progress') return 'Another Chat / Voice Hosting action is running. Wait for it to finish.'
   return info.message
 }
 
@@ -351,7 +351,7 @@ export function sewStateChip(state: string): { label: string; color: string } {
 export function enableLabel(state: string): string | null {
   switch (state) {
     case 'not-installed':
-      return 'Enable Sew'
+      return 'Enable Chat / Voice Hosting'
     case 'error':
       return 'Resume'
     case 'disabled':

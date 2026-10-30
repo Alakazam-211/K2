@@ -372,7 +372,7 @@ assert_contains "user add --app body" "$seen" '{"username": "eve", "app": "docs/
 echo "== Sew S27 chat grants + hooks =="
 assert_contains "list shows chat hook state" "$list_out" "[blocked: validation_failed: bad]"
 assert_eq "chat add exit 0" "$chat_add_rc" "0"
-assert_contains "chat add says queued" "$chat_add_out" "Queued for chat (Sew)"
+assert_contains "chat add says queued" "$chat_add_out" "Queued for chat."
 assert_eq "chat workspace add exit 0" "$chat_ws_rc" "0"
 assert_eq "chat set exit 0" "$chat_set_rc" "0"
 assert_contains "chat set prints scope" "$chat_set_out" "Grant g-chat scope guest"

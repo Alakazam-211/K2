@@ -138,7 +138,7 @@
     {
       "name": "chat:read",
       "exposure": ["app"],
-      "label": "Read chat in this App's Spaces (Sew; a ceiling on the person's chat pass)"
+      "label": "Read chat in this App's Spaces (Chat / Voice Hosting; a ceiling on the person's chat pass)"
     },
     {
       "name": "chat:post",
@@ -266,9 +266,9 @@
     {"code": "guest_required", "doc": "Server SDK: a call with no guest bound; bind one (asGuest, withGuest) or write asApp()."},
     {"code": "no_app_pass", "doc": "Server SDK: asApp() where this App has no pass file (K2_PASS_FILE)."},
     {"code": "no_app_key", "doc": "Server SDK: users and rooms need the App key ($K2_SECRETS_DIR/K2_APP_KEY; the owner mints it with k2 app key mint)."},
-    {"code": "no_chat_grant", "doc": "Sew: this guest has no chat access (a grant of kind chat)."},
-    {"code": "no_chat_caps", "doc": "Sew: the App declares chat caps, and this guest's App role holds none the owner approved for the App (a pass never goes out without its ceiling)."},
-    {"code": "app_claim_invalid", "doc": "Sew: this App's id doesn't fit the pass's app claim, and an App session never gets a pass without one (Sew scopes the session by it)."},
+    {"code": "no_chat_grant", "doc": "Chat: this guest has no chat access (a grant of kind chat)."},
+    {"code": "no_chat_caps", "doc": "Chat: the App declares chat caps, and this guest's App role holds none the owner approved for the App (a pass never goes out without its ceiling)."},
+    {"code": "app_claim_invalid", "doc": "Chat: this App's id doesn't fit the pass's app claim, and an App session never gets a pass without one (Sew scopes the session by it)."},
     {"code": "not_app_granted", "doc": "Guest chat: this person's chat grant was given by the owner (or another App); only the owner changes it."},
     {"code": "chat_off_for_person", "doc": "Guest chat: the owner switched this person's chat off; only the owner turns it back on."},
     {"code": "shared_person", "doc": "Guest chat: this person also signs in to another App or the box, so their chat stays (the owner may remove it)."},
@@ -280,7 +280,7 @@
     {"code": "sew_feature_missing", "doc": "Chat: this server's Sew doesn't have the feature yet (making channels needs Sew 0.5.0+, flag app_channel_create); the owner upgrades Sew."},
     {"code": "space_unbound", "doc": "Chat: the Space isn't bound to this App (or the App has none yet); the owner binds it with k2 hostchat app-space bind <app> <space-id>."},
     {"code": "app_mismatch", "doc": "Chat: the Space belongs to another App; an App makes channels in its own Space only."},
-    {"code": "chat_unavailable", "doc": "Sew is not enabled or not reachable on this server, or its chat-pass keys are unavailable."},
+    {"code": "chat_unavailable", "doc": "Chat / Voice Hosting is not enabled or not reachable on this server, or its chat-pass keys are unavailable."},
     {"code": "app_pass_required", "doc": "Guest rooms: only this App's own pass (its link pass or remote pass) calls this; never a guest's pass, the owner token or a login."},
     {"code": "grant_required", "doc": "Guest rooms: the owner hasn't granted this App guests:rooms (k2 app grant <app> --kind guests-rooms)."},
     {"code": "outside_app_rooms", "doc": "Guest rooms: a room this App may not hand out (or one that doesn't exist: the same answer)."},
@@ -23209,7 +23209,7 @@
                 "guest",
                 "none"
               ],
-              "description": "member or guest gives chat (K2 makes their Sew account); none takes it away."
+              "description": "member or guest gives chat (K2 makes their chat account); none takes it away."
             }
           },
           "required": [

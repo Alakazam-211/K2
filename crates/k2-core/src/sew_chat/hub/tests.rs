@@ -138,7 +138,7 @@ fn render_wraps_bodies_untrusted_on_one_line_and_says_on_behalf() {
     ))
     .unwrap();
     let out = render(None, &[d]);
-    assert!(out.starts_with("Sew chat — 1 new"), "{out}");
+    assert!(out.starts_with("Chat — 1 new"), "{out}");
     assert!(out.contains("@helper (on behalf of Carol) mentioned you in hearth/general (msg_501)"), "{out}");
     let body_line = out.lines().find(|l| l.contains(BEGIN_UNTRUSTED)).unwrap();
     assert!(body_line.ends_with(END_UNTRUSTED), "{out}");
@@ -158,8 +158,8 @@ fn render_caps_a_batch_and_carries_one_status_line() {
         (0..25).map(|i| decode_delivery(&entry(i, "all_messages", msg(json!({"id": i.to_string()})))).unwrap()).collect();
     let status = status_line(Notice::Reset("epoch_changed"));
     let out = render(Some(&status), &items);
-    assert!(out.starts_with("Sew chat: your delivery feed was reset (Sew was restored from a backup)"), "{out}");
-    assert!(out.contains("Sew chat — 25 new"), "{out}");
+    assert!(out.starts_with("Chat: your delivery feed was reset (Sew was restored from a backup)"), "{out}");
+    assert!(out.contains("Chat — 25 new"), "{out}");
     assert_eq!(out.matches("\n• ").count(), MAX_PER_INJECT);
     assert!(out.ends_with("… and 5 more: k2 chat unread"), "{out}");
     assert_eq!(render(Some("x"), &[]), "x");

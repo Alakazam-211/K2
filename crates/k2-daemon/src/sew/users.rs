@@ -127,9 +127,9 @@ fn mgmt_fail(e: MgmtError) -> Fail {
 
 fn need_running(env: &Env) -> R<()> {
     if !env.ops.linux() {
-        return Err(no("unsupported", 409, "Sew runs on Linux boxes only"));
+        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
     }
-    let r = super::store::load().ok_or_else(|| no("not_installed", 404, "Sew is not installed on this box (k2 hostchat enable)"))?;
+    let r = super::store::load().ok_or_else(|| no("not_installed", 404, "Chat / Voice Hosting is not installed on this box (k2 hostchat enable)"))?;
     if !matches!(r.status.as_str(), "running" | "degraded") {
         return Err(no("not_running", 409, format!("Sew is '{}': users need a running server", r.status)));
     }

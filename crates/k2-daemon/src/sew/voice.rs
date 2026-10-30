@@ -252,13 +252,13 @@ pub const PORTS: [(&str, &str, u16, bool); 4] = [
 pub fn preflight(env: &Env) -> Vec<Value> {
     let mut c = Vec::new();
     if !env.ops.linux() {
-        c.push(check("os", "fail", "not Linux", "Sew voice runs on Linux boxes only"));
+        c.push(check("os", "fail", "not Linux", "Chat / Voice Hosting runs on Linux boxes only"));
         return c;
     }
     match store_row() {
-        Some(r) if matches!(r.status.as_str(), "running" | "degraded") => c.push(check("chat", "ok", format!("Sew is {}", r.status), "")),
-        Some(r) => c.push(check("chat", "fail", format!("Sew is {}", r.status), "voice needs a running Sew: k2 hostchat enable")),
-        None => c.push(check("chat", "fail", "Sew is not installed", "k2 hostchat enable first")),
+        Some(r) if matches!(r.status.as_str(), "running" | "degraded") => c.push(check("chat", "ok", format!("Chat / Voice Hosting is {}", r.status), "")),
+        Some(r) => c.push(check("chat", "fail", format!("Chat / Voice Hosting is {}", r.status), "voice needs Chat / Voice Hosting running: k2 hostchat enable")),
+        None => c.push(check("chat", "fail", "Chat / Voice Hosting is not installed", "k2 hostchat enable first")),
     }
     match sup::helper_check(env) {
         Ok(()) => c.push(check("helper", "ok", "k2-root-helper engine sew", "")),
@@ -508,7 +508,7 @@ pub fn check_request(env: &Env, req: &InstallRequest) -> R<()> {
 pub fn install_begin<'a>(env: &Env<'a>, req: &InstallRequest) -> R<sup::Latch<'a>> {
     sup::need_released(env)?;
     if !env.ops.linux() {
-        return Err(no("unsupported", 409, "Sew voice runs on Linux boxes only"));
+        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
     }
     check_request(env, req)?;
     let latch = sup::begin(env)?;
@@ -737,7 +737,7 @@ pub fn served_check(env: &Env, ip: &str, host: &str, ours: Option<&str>, port: u
 /// at start). Moves the nested `voice` label with it.
 pub fn set_url(env: &Env, url: &str) -> R<Value> {
     if !env.ops.linux() {
-        return Err(no("unsupported", 409, "Sew voice runs on Linux boxes only"));
+        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
     }
     let url = check_voice_url(env, url)?;
     let st = load(env);
@@ -1020,7 +1020,7 @@ pub fn call_capacity(total_bytes: u64) -> (u64, u64) {
 /// finished.
 pub fn uninstall(env: &Env) -> R<Value> {
     if !env.ops.linux() {
-        return Err(no("unsupported", 409, "Sew voice runs on Linux boxes only"));
+        return Err(no("unsupported", 409, "Chat / Voice Hosting runs on Linux boxes only"));
     }
     let st = load(env);
     if !st.installed && st.turn_key_ref.is_none() && st.progress.is_none() {

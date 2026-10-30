@@ -114,7 +114,7 @@ export const K2_CAPS = {
     exposure: ['app'],
   },
   'wallet:self': { label: "Use the person's own wallet (an owner setting per App, never a room cap)", exposure: ['app'] },
-  'chat:read': { label: "Read chat in this App's Spaces (Sew; a ceiling on the person's chat pass)", exposure: ['app'] },
+  'chat:read': { label: "Read chat in this App's Spaces (Chat / Voice Hosting; a ceiling on the person's chat pass)", exposure: ['app'] },
   'chat:post': { label: 'Post, react and upload in chat', exposure: ['app'] },
   'chat:respond': { label: 'Answer chat cards', exposure: ['app'] },
   'voice:join': { label: 'Join voice channels and calls', exposure: ['app'] },

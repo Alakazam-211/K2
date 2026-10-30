@@ -317,7 +317,7 @@ pub(crate) fn core_name(c: &str) -> &str {
         "files" => "Files",
         "thread" => "Thread",
         "mail" => "Mail",
-        "sew" => "Sew",
+        "sew" => "Chat / Voice Hosting",
         other => other,
     }
 }
@@ -368,7 +368,7 @@ pub(crate) fn tell_agent(ws_id: &str, handle: &str, by: &str) {
         on_off(now == Level::Full),
         on_off(k2_core::workspace::settings::agents_can_manage_app_users(ws_id)),
         if cores.is_empty() { "none".to_string() } else { cores.join(", ") },
-        if later { " Mail and Sew take effect when App mail and Sew for Apps land." } else { "" },
+        if later { " Mail and Chat / Voice Hosting take effect when App mail and chat for Apps land." } else { "" },
     );
     super::alerts::note(ws_id, "Your App access changed", &text);
 }

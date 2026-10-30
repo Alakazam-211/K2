@@ -81,7 +81,7 @@ async function openAda(): Promise<void> {
 }
 
 function pick(option: string): void {
-  fireEvent.click(screen.getByRole('button', { name: 'Sew access for ada' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Chat and voice access for ada' }))
   fireEvent.click(screen.getByRole('button', { name: option }))
 }
 
@@ -116,8 +116,8 @@ describe('User Access: Sew column', () => {
   it('not installed: no dropdown, a link to Chat Hosting', async () => {
     state.sew = { supported: true, state: 'not-installed' }
     await openAda()
-    const link = await screen.findByRole('button', { name: 'Enable Sew in Cores → Chat Hosting to give people access.' })
-    expect(screen.queryByRole('button', { name: 'Sew access for ada' })).toBeNull()
+    const link = await screen.findByRole('button', { name: 'Enable Chat / Voice Hosting in Cores to give people access.' })
+    expect(screen.queryByRole('button', { name: 'Chat and voice access for ada' })).toBeNull()
     fireEvent.click(link)
     expect(useSettingsStore.getState().activeSection).toBe('sew')
   })
@@ -125,9 +125,9 @@ describe('User Access: Sew column', () => {
   it('No access → Sew member posts a chat grant with the principal id, then refetches', async () => {
     h.daemonCliPost.mockResolvedValue({ id: 'g-new' })
     await openAda()
-    await screen.findByRole('button', { name: 'Sew access for ada' })
+    await screen.findByRole('button', { name: 'Chat and voice access for ada' })
     const grantReads = h.daemonCliGet.mock.calls.filter((c) => c[0] === 'skin/grants').length
-    pick('Sew member')
+    pick('Member')
     await waitFor(() => expect(posts('skin/grants')).toEqual([{ subjectKind: 'principal', subjectId: 'p-ada', kind: 'chat', scope: 'member' }]))
     await waitFor(() => expect(h.daemonCliGet.mock.calls.filter((c) => c[0] === 'skin/grants').length).toBe(grantReads + 1))
     expect(h.daemonCliGet.mock.calls.every((c) => c[0] !== 'projects/list')).toBe(true)
@@ -138,23 +138,23 @@ describe('User Access: Sew column', () => {
     h.daemonCliPost.mockRejectedValueOnce(new DaemonHttpError("remove the assistant grants for 'ada' first", 400, null))
     await openAda()
     expect(await screen.findByTestId('sew-tag-ada')).toBeTruthy()
-    await screen.findByRole('button', { name: 'Sew access for ada' })
-    pick('Sew guest')
+    await screen.findByRole('button', { name: 'Chat and voice access for ada' })
+    pick('Guest')
     expect(await screen.findByText("remove the assistant grants for 'ada' first")).toBeTruthy()
     expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ message: 'Guests see only channels they are added to.' }))
     expect(posts('skin/grants/update')).toEqual([{ id: 'g-ada', scope: 'guest' }])
-    expect(screen.getByRole('button', { name: 'Sew access for ada' }).textContent).toContain('Sew member')
+    expect(screen.getByRole('button', { name: 'Chat and voice access for ada' }).textContent).toContain('Member')
   })
 
   it('remove confirms (destructive), deletes by id, toasts cascaded assistants', async () => {
     state.grants = [chat()]
     h.daemonCliPost.mockResolvedValue({ success: true, cascaded: [{ id: 'a1' }, { id: 'a2' }] })
     await openAda()
-    await screen.findByRole('button', { name: 'Sew access for ada' })
-    pick('No Sew access')
+    await screen.findByRole('button', { name: 'Chat and voice access for ada' })
+    pick('No access')
     await waitFor(() => expect(posts('skin/grants/delete')).toEqual([{ id: 'g-ada' }]))
-    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ destructive: true, message: "Removes ada's Sew account. Their messages stay." }))
-    await waitFor(() => expect(JSON.stringify(useToastStore.getState())).toContain('Also removed Sew access for 2 assistant agents.'))
+    expect(confirmSpy).toHaveBeenCalledWith(expect.objectContaining({ destructive: true, message: "Removes ada's chat account. Their messages stay." }))
+    await waitFor(() => expect(JSON.stringify(useToastStore.getState())).toContain('Also removed chat and voice access for 2 assistant agents.'))
   })
 
   it('a blocked sync shows Failed; Retry uses the blocked row id', async () => {
@@ -204,8 +204,8 @@ describe('User Access: Sew column', () => {
     state.grants = [chat()]
     h.daemonCliPost.mockResolvedValue({ success: true, cascaded: [] })
     await openAda()
-    expect(await screen.findByText('Sew member (Sew is off; read only)')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: 'Sew access for ada' })).toBeNull()
+    expect(await screen.findByText('Member (Chat / Voice Hosting is off; read only)')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Chat and voice access for ada' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
     await waitFor(() => expect(posts('skin/grants/delete')).toEqual([{ id: 'g-ada' }]))
   })
@@ -221,8 +221,8 @@ describe('Admin Access: read-only Sew state', () => {
     ]
     render(<SewAdminAccessState users={[{ id: 'uuid-gina', username: 'gina' }, { id: 'uuid-z3', username: 'z3thon' }]} />)
     const box = await screen.findByTestId('sew-admin-access')
-    expect(screen.getByTestId('sew-admin-row-gina').textContent).toContain('Sew guest')
-    expect(screen.getByTestId('sew-admin-row-uuid-gone').textContent).toContain('Sew member (off)')
+    expect(screen.getByTestId('sew-admin-row-gina').textContent).toContain('Chat guest')
+    expect(screen.getByTestId('sew-admin-row-uuid-gone').textContent).toContain('Chat member (off)')
     expect(screen.queryByTestId('sew-admin-row-z3thon')).toBeNull()
     expect(screen.queryByTestId('sew-admin-row-ada')).toBeNull()
     expect(box.querySelectorAll('button, input, select').length).toBe(0)

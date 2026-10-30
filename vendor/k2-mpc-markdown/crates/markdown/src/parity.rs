@@ -43,12 +43,9 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
             "M5",
             "the kit's annotation layer (K-ANN-1..7)",
         ),
-        P::Export => ParityRow::not_applicable(
-            a,
-            &["cat"],
-            &["export"],
-            "the file is the export: cat gives its exact bytes",
-        ),
+        // kit v0.9.7: the kit exports (`export`, `export --version`: the file through the
+        // export registry; as-is in the kit, format exporters in the host)
+        P::Export => ParityRow::live(a, &["export", "export --version"]),
         P::WhyOff => ParityRow::live(a, &["status"]),
         P::UndoPartial => ParityRow::live(a, &["undo --partial"]),
         P::Mention => ParityRow::deferred(

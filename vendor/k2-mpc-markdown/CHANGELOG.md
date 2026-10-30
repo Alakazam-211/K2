@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.7.6 (2026-10-29): pairs with kit v0.9.7
+
+**Requires `k2-mpc-base` v0.9.7** (it skips v0.9.6, a one-fix release). Pack changes:
+- **Parity row P24 "Export" is live:** `ParityRow::live(a, &["export", "export --version"])`.
+  The kit now exports: `export` (needs read) and `export --version V` (needs history) give the
+  file through the kit's export registry (as-is in the kit; format exporters are the host's).
+  The old N/A row listed `export` as a verb that must not exist, which the kit's registry now
+  has, so the parity check would fail against it. `docs/PARITY.md`'s P24 row (the parity test
+  checks the table names each verb) and the parity test's counts (28 live rows, no N/A) follow.
+- **The demo's golden transcript** (`tests/golden/multiplayer_demo.txt`) changes by one
+  line: agent-b's refused `replace --old TODO` (two matches, exit 1) now ends its stderr
+  summary with the refusal's stable id, `nothing applied to plan.md · v8 (MPC-E126)`. The kit
+  appends the id to an edit verb's "no" since v0.9.7 (`ToolOutput::refusal`); the wording,
+  exit code and everything else the demo prints are unchanged (the whole transcript was
+  diffed on a build node: that line only, edited by hand, not re-blessed).
+- `Cargo.lock`: k2-mpc-base 0.9.7; the crate version. No other pack code change: the kit's
+  other v0.9.7 changes (K5 handles in `run_tool` output for App viewers, D1's undo, outside
+  saves merged line by line) leave this pack's tests and goldens as they were (checked on a
+  build node). No store format change.
+
+The kit's changes since v0.9.5 (its CHANGELOG has the details):
+- **v0.9.6:** an outside save that deleted a line and typed it back could leave the line
+  twice; the outside-save merge now diffs each side on whole lines.
+- **v0.9.7, the Live-tab release:** the live typing APIs (the hunk channel, `edit_at_base`,
+  `events_since`, undo over the channel, handles instead of pids in `run_tool` output for App
+  viewers, roster push, participant overflow); **D1**: an undo never changes a word someone
+  else wrote, and says so instead; speed work (incremental write-back and blame, the
+  engine's position index); outside saves merged line by line; exports P0 (`Session::file_at`,
+  the export contract, the P24 verbs); stable error ids (`MPC-Ennn`, `docs/ERRORS.md`); host
+  guidance per surface, relative paths in refusals and hard-linked files declined (K6, K7,
+  K9); the vendored engine at k2-yrs k2.6.3.
+
 ## v0.7.5 (2026-10-29)
 
 **Requires `k2-mpc-base` v0.9.5** (a hotfix). No pack code change: `Cargo.lock` and the crate

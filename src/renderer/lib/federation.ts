@@ -24,6 +24,7 @@ import { getDaemonWs, daemonHttpBase } from '@/kessel/daemon-ws'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { primaryScope } from '@/kessel/server-scope'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+import { thisMachineLower } from '@/lib/desktop-words'
 
 /** Trust state of a pinned peer (mirrors `federation::PeerTrust`). */
 export type PeerTrust = 'pending' | 'trusted' | 'blocked'
@@ -950,7 +951,7 @@ export async function autoPairWithHost(
   }
   if (remoteIsLan && !localSub && !localLanUrl) {
     throw new Error(
-      `Can't pair as a federated peer with "${host}": this Mac has no advertised LAN URL. ` +
+      `Can't pair as a federated peer with "${host}": ${thisMachineLower()} has no advertised LAN URL. ` +
         `Enable LAN listen, set an advertise URL, or run air-gap Caddy.`,
     )
   }

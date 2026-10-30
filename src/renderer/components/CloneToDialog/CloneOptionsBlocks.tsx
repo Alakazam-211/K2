@@ -14,6 +14,7 @@ import {
   threadSummaryLine,
   type SecretChoice,
 } from '../../lib/clone-options'
+import { touchIdOrVaultPassword } from '@/lib/desktop-words'
 
 // Options-phase blocks of the Clone dialog (prd-clone-carries-threads-and-
 // vault-v1 §4.1): "Bring the Thread" (D3, ticked by default, always shown),
@@ -181,12 +182,12 @@ export function EnvFilesBlock({ pull }: { pull: boolean }): React.JSX.Element {
           data-testid="clone-secret-files-warning"
         >
           {n === 1
-            ? 'This file stays behind; tick to send it (needs Touch ID or your vault password).'
-            : `These ${n} files stay behind; tick to send them (needs Touch ID or your vault password).`}
+            ? `This file stays behind; tick to send it (needs ${touchIdOrVaultPassword()}).`
+            : `These ${n} files stay behind; tick to send them (needs ${touchIdOrVaultPassword()}).`}
         </p>
       )}
       <p className={`${muted} pl-[22px]`}>
-        Their values travel inside the bundle and need your Touch ID or vault password. Unticked, they stay behind and
+        Their values travel inside the bundle and need {touchIdOrVaultPassword()}. Unticked, they stay behind and
         you re-add them on {pull ? 'this computer' : 'the host'}. Move them into the vault first:{' '}
         <span className="font-mono">k2 vault import .env</span>
       </p>

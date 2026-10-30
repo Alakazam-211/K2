@@ -64,6 +64,7 @@ import { AppFontRows } from '../shared/AppFontRows'
 import { ClonePersonalComputersRow } from './ClonePersonalComputersRow'
 import { YourAccountRow } from './YourAccountRow'
 import { GitToolsRow } from '@/components/GitTools/GitToolsNotice'
+import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 
 export const GENERAL_MANIFEST: SettingEntry[] = [
   { id: 'general.start-page', section: 'general', group: 'General', label: 'Start page', description: 'The page K2 opens on: Home or Agents (this computer only)', keywords: ['start', 'startup', 'launch', 'open', 'default page', 'home', 'agents', 'workspaces', 'landing'] },
@@ -215,9 +216,9 @@ export function GeneralSection(): React.JSX.Element {
             {isRemote && (
               <span
                 className="text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[color-mix(in_oklab,var(--color-status-warn)_20%,transparent)] text-[var(--color-status-warn-amber-soft)] flex-shrink-0"
-                title="This is your local Mac's app version — not the connected host's. The host version is shown under the remote-host controls."
+                title={`This is ${thisMachineLower()}'s app version — not the connected host's. The host version is shown under the remote-host controls.`}
               >
-                This Mac
+                {thisMachine()}
               </span>
             )}
           </span>
@@ -1129,7 +1130,7 @@ function RestartHostRow(): React.JSX.Element | null {
             </span>
           </span>
           <span className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Restart the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not this Mac</strong>.
+            Restart the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not {thisMachineLower()}</strong>.
             Active sessions briefly disconnect, then reconnect automatically.
           </span>
         </div>
@@ -1510,7 +1511,7 @@ export function UpdateHostRow(): React.JSX.Element | null {
             </span>
           </span>
           <span className="text-[10px] text-[var(--color-text-muted)] mt-1 leading-relaxed">
-            Update the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not this Mac</strong>.
+            Update the machine you&apos;re connected to — <strong className="text-[var(--color-status-warn-amber-soft)]">not {thisMachineLower()}</strong>.
             It briefly disconnects to install, then reconnects automatically.
           </span>
         </div>

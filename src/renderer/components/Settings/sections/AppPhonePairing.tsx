@@ -24,6 +24,7 @@ import {
   type HostCheck,
   type PairingStatus,
 } from './app-pairing-api'
+import { confirmWays } from '@/lib/desktop-words'
 
 const muted = 'text-[10px] text-[var(--color-text-muted)]'
 const secondary = 'text-[10px] text-[var(--color-text-secondary)]'
@@ -250,8 +251,7 @@ export function AppPhonePairing({ app }: { app: string }): React.JSX.Element {
                 </label>
                 <p className={muted}>
                   While pairing is on, K2 answers this App&apos;s iOS and Android link files on its hosts. In your app, list
-                  each host exactly, never a wildcard. Saving asks you to confirm (Touch ID, your login or the vault
-                  password).
+                  each host exactly, never a wildcard. Saving asks you to confirm ({confirmWays()}).
                 </p>
                 {confirm.step === 'password' ? (
                   <div className="flex gap-2 items-center">

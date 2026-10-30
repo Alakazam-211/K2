@@ -85,6 +85,7 @@ import { listAccountServers, requestEnrollTicket } from '../lib/compute-account'
 import { MachinesPart } from './ComputeAccessParts'
 import { ApprovalsPanel, NodeAdminPanel } from './ComputeAdminParts'
 import { NodeSharingPanel } from './ComputeServersParts'
+import { touchIdOrPassword } from '@/lib/desktop-words'
 
 export const COMPUTE_MANIFEST: SettingEntry[] = [
   { id: 'compute.preview', section: 'compute', label: 'Compute nodes (preview)', description: 'Let this server run jobs on your other machines', keywords: ['compute', 'node', 'nodes', 'preview', 'k2 compute', 'offload', 'build'] },
@@ -1023,7 +1024,7 @@ export function RemoteAdminToggles({
           <div className="flex-1 min-w-0">
             <div className="text-xs text-[var(--color-text-primary)]">Also let K2 run admin scripts as root (remote admin: full)</div>
             <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5">
-              Each root action still waits for your approval (Touch ID or your password).
+              Each root action still waits for your approval ({touchIdOrPassword()}).
             </p>
           </div>
         </div>

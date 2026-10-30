@@ -77,6 +77,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { onTunnelIdentityChanged } from '@/stores/session-events'
 import { runTunnelSwitch, type TunnelSwitchProgress } from '../lib/tunnel-switch'
 import { isAirgap } from '@/lib/airgap'
+import { thisMachine } from '@/lib/desktop-words'
 
 // 0.46.6: no relay address lives here. The daemon owns the default
 // (relay.k2.dev) and the relay list; the form shows what the daemon
@@ -1476,7 +1477,7 @@ export function K2ConnectSection({
             <span className="text-[var(--color-text-secondary)]">
               {activeHost.label}
             </span>
-            . Switch to <span className="text-[var(--color-text-secondary)]">This Mac</span> in
+            . Switch to <span className="text-[var(--color-text-secondary)]">{thisMachine()}</span> in
             the server switcher to configure your own tunnel.
           </div>
         ) : (

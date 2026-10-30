@@ -89,6 +89,7 @@ import {
   type UpdateCheckResult,
   type UpdateStatusResult,
 } from './update-host'
+import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 
 // Shared small-button styles for the per-host tile controls — matching the
 // Save/Add/Cancel buttons in this file and K2ConnectSection.tsx (bordered/
@@ -166,7 +167,7 @@ export function ConnectionsSection(): React.JSX.Element {
   // Device address book = per-CLIENT (this Mac). Federation peer list =
   // per ACTIVE daemon. Right pane (FederationOverview) is always host-aware.
   const isLocalActive = activeHost === 'local'
-  const activeHostLabel = isLocalActive ? 'This Mac' : activeHost.label || activeHost.hostname
+  const activeHostLabel = isLocalActive ? thisMachine() : activeHost.label || activeHost.hostname
 
   const [draft, setDraft] = useState<DraftHost | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -389,13 +390,13 @@ export function ConnectionsSection(): React.JSX.Element {
       <h2 className="text-sm font-medium text-[var(--color-text-primary)] mb-1">Servers</h2>
       <p className="text-[10px] text-[var(--color-text-muted)] mb-4">
         {isLocalActive
-          ? 'K2 servers this Mac connects to. Passwords stay in the OS keychain only when “Remember password” is on. Peer trust on each tile is relative to This Mac.'
+          ? `K2 servers ${thisMachineLower()} connects to. Passwords stay in the OS keychain only when “Remember password” is on. Peer trust on each tile is relative to ${thisMachine()}.`
           : (
             <>
               Federated peers of{' '}
               <span className="text-[var(--color-text-secondary)]">{activeHostLabel}</span>
-              {' '}(this cloud’s server graph). This Mac’s address book stays in the
-              top-bar switcher; use “Pair from this Mac” below to add a new peer.
+              {' '}(this cloud’s server graph). {thisMachine()}’s address book stays in the
+              top-bar switcher; use “Pair from {thisMachineLower()}” below to add a new peer.
             </>
           )}
       </p>
@@ -503,7 +504,7 @@ export function ConnectionsSection(): React.JSX.Element {
         />
         <div className="flex flex-col min-w-0">
           <span className="text-xs text-[var(--color-text-primary)]">Local</span>
-          <span className="text-[10px] text-[var(--color-text-muted)]">This Mac · bundled daemon</span>
+          <span className="text-[10px] text-[var(--color-text-muted)]">{thisMachine()} · bundled daemon</span>
         </div>
         <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">Active</span>
       </div>
@@ -655,7 +656,7 @@ function ActiveHostPeersPanel({
           <span className="text-[10px] text-[var(--color-text-muted)]">Active remote · federation peers</span>
         </div>
         <button onClick={onConnectLocal} className={`ml-auto ${BTN_SECONDARY}`}>
-          This Mac
+          {thisMachine()}
         </button>
       </div>
 
@@ -671,7 +672,7 @@ function ActiveHostPeersPanel({
         </div>
       ) : peers.length === 0 ? (
         <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
-          No federated peers yet. Pair a server from this Mac below.
+          No federated peers yet. Pair a server from {thisMachineLower()} below.
         </div>
       ) : (
         <div className="space-y-2 mb-4">
@@ -717,7 +718,7 @@ function ActiveHostPeersPanel({
 
       <div className="border-t border-[var(--color-border)] pt-3 mt-2">
         <div className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] mb-1 px-1">
-          Pair from this Mac
+          Pair from {thisMachineLower()}
         </div>
         <p className="text-[10px] text-[var(--color-text-muted)] mb-2 px-1 leading-relaxed">
           Mutual trust between {hostLabel} and another server you&apos;re signed into on this client.
@@ -725,7 +726,7 @@ function ActiveHostPeersPanel({
         </p>
         {pairableLocal.length === 0 ? (
           <div className="text-[10px] text-[var(--color-text-muted)] px-3 py-2">
-            No signed-in servers on this Mac. Switch to This Mac to add/sign in, then return here to pair.
+            No signed-in servers on {thisMachineLower()}. Switch to {thisMachine()} to add/sign in, then return here to pair.
           </div>
         ) : (
           <div className="space-y-2">

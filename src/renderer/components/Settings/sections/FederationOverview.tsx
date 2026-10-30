@@ -16,6 +16,7 @@ import {
   type AggregatedRemoteConnection,
 } from '@/lib/federation'
 import { SettingsGroup } from '../controls/SettingControls'
+import { thisMachine } from '@/lib/desktop-words'
 
 const BTN_DANGER =
   'px-2 py-1 text-[11px] text-[var(--color-status-error-soft)] border border-[color-mix(in_srgb,var(--color-status-error-soft)_40%,transparent)] hover:bg-[color-mix(in_srgb,var(--color-status-error-soft)_10%,transparent)] no-drag cursor-pointer disabled:opacity-50 disabled:cursor-default flex-shrink-0'
@@ -29,7 +30,7 @@ export function FederationOverview({
   const activeHost = useConnectHostStore((s) => s.activeHost)
   const isLocal = activeHost === 'local'
   const hostKey = isLocal ? 'local' : activeHost.id
-  const hostLabel = isLocal ? 'This Mac' : activeHost.label || activeHost.hostname
+  const hostLabel = isLocal ? thisMachine() : activeHost.label || activeHost.hostname
 
   const [loading, setLoading] = useState(true)
   const [conns, setConns] = useState<AggregatedRemoteConnection[]>([])

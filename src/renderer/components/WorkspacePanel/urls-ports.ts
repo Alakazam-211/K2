@@ -1,3 +1,4 @@
+import { thisMachine } from '@/lib/desktop-words'
 // Published drawer + K2 Connect settings — pure derivation logic, split
 // from the components so it's unit-testable without React/DOM.
 //
@@ -314,7 +315,7 @@ export function serviceSkinUiLabel(service: PublishedService): string | null {
 export type PublishedHostRef = 'local' | { label?: string | null; hostname?: string | null }
 
 export function publishedHostLabel(activeHost: PublishedHostRef): string {
-  if (activeHost === 'local') return 'This Mac'
+  if (activeHost === 'local') return thisMachine()
   const label = (activeHost.label ?? '').trim()
   if (label) return label
   return (activeHost.hostname ?? '').trim()

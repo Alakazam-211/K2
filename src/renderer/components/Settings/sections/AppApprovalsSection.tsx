@@ -39,6 +39,7 @@ import {
   resultError,
   type AppRequest,
 } from './app-approvals-api'
+import { touchIdOrPassword } from '@/lib/desktop-words'
 
 export const APP_APPROVALS_MANIFEST: SettingEntry[] = [
   {
@@ -103,8 +104,8 @@ export function AppApprovalsSection(): React.JSX.Element {
         </h2>
         <p className={`text-[11px] ${muted} mt-1 leading-relaxed`}>
           Changes to an App that only the server&apos;s owner may allow wait here: new caps on a deploy or install, outside
-          hosts, raised quotas, keys and more. Agents can only ask. You approve each one in person, with Touch ID or your
-          password. Requests expire after 7 days.
+          hosts, raised quotas, keys and more. Agents can only ask. You approve each one in person, with{' '}
+          {touchIdOrPassword()}. Requests expire after 7 days.
           {multi ? ' Every server you own is listed; each one is approved on its own server.' : ''}
         </p>
       </div>

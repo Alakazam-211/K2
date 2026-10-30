@@ -10,6 +10,7 @@ import { K2ConnectSection } from './K2ConnectSection'
 import { ConnectionsSection } from './ConnectionsSection'
 import { SectionErrorBoundary } from '../SectionErrorBoundary'
 import { AccessAuditLink } from '../shared/AccessAuditLink'
+import { thisMachine, thisMachineLower } from '@/lib/desktop-words'
 
 type ConnectTab = 'tunnel' | 'people' | 'servers'
 
@@ -26,7 +27,7 @@ const PAGE: Record<ConnectTab, { title: string; blurb: string }> = {
   servers: {
     title: 'Connected Servers',
     blurb:
-      'On This Mac: your saved servers. On a remote: that host’s federation peers (pair new ones from this Mac’s signed-in servers). External agents on the right are host-aware.',
+      `On ${thisMachine()}: your saved servers. On a remote: that host’s federation peers (pair new ones from ${thisMachineLower()}’s signed-in servers). External agents on the right are host-aware.`,
   },
 }
 

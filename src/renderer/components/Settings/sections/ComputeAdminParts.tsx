@@ -31,6 +31,7 @@ import {
   type AdminRequest,
   type NodeHealthView,
 } from './compute-admin-api'
+import { touchIdOrPassword } from '@/lib/desktop-words'
 
 const POLL_MS = 5000
 const muted = 'text-[var(--color-text-muted)]'
@@ -89,7 +90,7 @@ export function ApprovalsPanel({ onChanged }: { onChanged?: () => void }): React
         Approvals{pending.length > 0 ? ` (${pending.length})` : ''}
       </div>
       <p className={`text-[11px] ${muted}`}>
-        Agents can only ask. Root work on a node waits here until you approve it, with Touch ID or your password, each time.
+        Agents can only ask. Root work on a node waits here until you approve it, with {touchIdOrPassword()}, each time.
       </p>
       {error ? <Callout tone="error">{error}</Callout> : null}
       {rows && pending.length === 0 && inFlight.length === 0 ? (

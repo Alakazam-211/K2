@@ -29,6 +29,7 @@ import { primaryScope } from '@/kessel/server-scope'
 import { renderInRoom, testRoom } from '@/test-utils/room'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { usePromptStashStore } from '@/stores/prompt-stash'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 
 const room = testRoom({ tabs: {}, scope: primaryScope(), projects: [] })
 const OWNER = { principal: 'owner', aliases: [] as string[] }
@@ -157,6 +158,25 @@ describe('"Save for later" in the Inbox "Chat about this" dialog', () => {
     expect(rec.text).toBe('look at this tomorrow')
     expect(rec.quotes).toEqual([{ text: '[k2 inboxID:pkg-1] Build failed\nOpen: k2 inbox read pkg-1', from: 'Inbox' }])
     expect(rec.source).toMatchObject({ server_id: 'rosson.k2.dev', agent: 'sales' })
+    expect(h.daemonCliPost).not.toHaveBeenCalled()
+  })
+
+  it('Cmd+S in the note does the same (the Thread box\'s stash chord); empty, it does nothing', async () => {
+    const onClose = vi.fn()
+    renderInRoom(
+      room,
+      <InboxChatAboutDialog stamp={{ kind: 'tray', id: 'pkg-2', title: 'Deploy done' }} projectPath="/ws/sales" workspaceId={null} onClose={onClose} />,
+    )
+    const note = screen.getByTestId('inbox-chat-about-note')
+    const mac = isMacPlatform()
+    fireEvent.keyDown(note, { key: 's', metaKey: mac, ctrlKey: !mac })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(usePromptStashStore.getState().items).toHaveLength(0)
+    fireEvent.change(note, { target: { value: 'chord save' } })
+    fireEvent.keyDown(note, { key: 's', metaKey: mac, ctrlKey: !mac })
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    expect(usePromptStashStore.getState().items[0].text).toBe('chord save')
     expect(h.daemonCliPost).not.toHaveBeenCalled()
   })
 })

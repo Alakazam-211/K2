@@ -65,7 +65,10 @@ import { hasSelectionWithin } from '@/components/FileViewerPane/FileViewerPane'
 import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer-drafts'
 import { ThreadAttachmentSourceProvider, ticketAttachmentSource } from '@/components/Thread/ThreadImageObjects'
 import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
-import { TicketAttachButton, TicketComposeFileChips, ticketComposeAttach, useTicketComposeFiles } from './TicketComposeFiles'
+import { TicketComposeFileChips, ticketComposeAttach, useTicketComposeFiles } from './TicketComposeFiles'
+import { isComposeStashChord, useComposePlusMenu, useComposeStash } from '@/components/PromptStash/composeStash'
+import { readComposeFiles } from '@/lib/prompt-stash/compose'
+import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { primaryScope } from '@/kessel/server-scope'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import {
@@ -497,6 +500,12 @@ export function ThreadTab({
     [busy, onChanged],
   )
 
+  // Save to stash's hooks (used by the box below, once the ticket loaded).
+  const agentAddr = item?.projectPath ? item.projectPath.split('/').filter(Boolean).pop() ?? null : null
+  const stash = useComposeStash({ scope, agent: agentAddr ?? item?.agentName ?? null, agentName: item?.agentName ?? null })
+  const plusMenu = useComposePlusMenu()
+  const plusRef = useRef<HTMLButtonElement | null>(null)
+
   if (error) {
     return (
       <div className="flex-1 px-4 py-3 text-[11px] text-[var(--color-status-error-soft)] selectable-copy">
@@ -529,6 +538,26 @@ export function ThreadTab({
     // The person's own message: the list lands on it when it shows.
     sentRef.current = true
     setDeliveryMiss(res.delivered === false ? res.deliveryReason ?? 'not delivered' : null)
+  }
+
+  // Save to stash (the "+" menu and Cmd+S, as in the Thread box): the
+  // reply and its files (on the ticket's server), then the box clears.
+  const stashFiles = attach.on ? composeFiles.files : []
+  const stashDraft = async (): Promise<void> => {
+    const text = draftApi.current?.get() ?? ''
+    const held = stashFiles
+    if (!text.trim() && held.length === 0) return
+    const saved = await stash.save({
+      text,
+      files: async () => (held.length > 0 ? readComposeFiles(scope, held.map((f) => f.path)) : []),
+    })
+    if (!saved) return
+    // Clear only what was saved: text typed meanwhile stays.
+    if (draftApi.current?.get() === text) {
+      draftApi.current?.set('')
+      clearTicketDraft(ticketId)
+    }
+    for (const f of held) composeFiles.remove(f.path)
   }
 
   const sendReply = (draft: string): void => {
@@ -589,13 +618,41 @@ export function ThreadTab({
         onSend={sendReply}
         busy={busy}
         canSendEmpty={attach.on && composeFiles.files.length > 0}
+        onKeyDown={(e) => {
+          if (!isComposeStashChord(e)) return
+          e.preventDefault()
+          e.stopPropagation()
+          void stashDraft()
+        }}
         tools={
-          filesOn ? (
-            <>
-              <TicketAttachButton on={attach.on} why={attach.why} busy={busy} onClick={composeFiles.pick} />
-              {composeFiles.fileInput}
-            </>
-          ) : undefined
+          <>
+            {/* "+": attach (when the server takes ticket files), then Save to stash. */}
+            <ThreadRoundButton
+              label={filesOn ? 'Attach or save' : 'Save to stash'}
+              title={filesOn ? 'Attach files (or drop or paste them here), or save to stash' : 'Save to stash'}
+              lightable
+              menuOpen={plusMenu.menuOpen}
+              buttonRef={plusRef}
+              onClick={() =>
+                plusMenu.open(plusRef.current, {
+                  attach: filesOn
+                    ? {
+                        onPick: composeFiles.pick,
+                        enabled: attach.on && !busy,
+                        why: attach.on ? null : attach.why ?? 'Files can’t be attached here',
+                      }
+                    : null,
+                  canStash: !stash.saving && ((draftApi.current?.get() ?? '').trim().length > 0 || stashFiles.length > 0),
+                  chord: stash.chord,
+                  onStash: () => void stashDraft(),
+                })
+              }
+              data={{ 'data-testid': 'ticket-compose-plus', 'aria-haspopup': 'menu', 'aria-expanded': plusMenu.menuOpen }}
+            >
+              +
+            </ThreadRoundButton>
+            {filesOn ? composeFiles.fileInput : null}
+          </>
         }
         onPaste={attach.on ? composeFiles.onPaste : undefined}
         onDropFiles={attach.on ? composeFiles.onDropFiles : undefined}

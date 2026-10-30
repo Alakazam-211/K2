@@ -31,7 +31,7 @@ import {
   type ThreadComposeAttachInput,
   type ThreadComposeFile,
 } from '@/lib/thread-compose-attachments'
-import { ThreadAttachmentChip, ThreadAttachmentChips, ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
+import { ThreadAttachmentChip, ThreadAttachmentChips } from '@/components/Thread/ThreadZenKit'
 import { TICKET_ATTACHMENTS_FEATURE } from './feedback-api'
 
 /** May this ticket's box take files, and if not, why (the "+" title). */
@@ -238,33 +238,6 @@ export function useTicketComposeFiles({
   return { files, add, remove, clear, pick, onPaste, onDropFiles, rootRef: setRoot, fileInput }
 }
 
-/** The "+" in the ticket's box; off with the reason as its title. */
-export function TicketAttachButton({
-  on,
-  why,
-  busy,
-  onClick,
-}: {
-  on: boolean
-  why: string | null
-  busy: boolean
-  onClick: () => void
-}): JSX.Element {
-  return (
-    <ThreadRoundButton
-      label="Attach files"
-      title={on ? 'Attach files (or drop or paste them here)' : why ?? 'Files can’t be attached here'}
-      disabled={!on || busy}
-      lightable
-      onClick={onClick}
-      data={{ 'data-testid': 'ticket-compose-attach', 'data-ticket-attach-off': on ? undefined : '' }}
-    >
-      +
-    </ThreadRoundButton>
-  )
-}
-
-/** The chips above the box. */
 export function TicketComposeFileChips({
   files,
   onRemove,

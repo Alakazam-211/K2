@@ -97,6 +97,33 @@ import {
 } from '@/components/Thread/ThreadImageObjects'
 import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { FileCountBadge } from './badges'
+import { useContextMenuStore } from '@/stores/context-menu'
+import { usePromptStashStore, type StashSaveResult } from '@/stores/prompt-stash'
+import { isMacPlatform } from '@/lib/desktop-chrome'
+
+/** The box's "+" opens its menu (attach, then Save to stash). */
+async function openPlus(c: HTMLElement): Promise<void> {
+  const plus = c.querySelector<HTMLButtonElement>('[data-testid="ticket-compose-plus"]')
+  if (!plus) throw new Error('no "+" in the ticket box')
+  await act(async () => {
+    fireEvent.click(plus)
+  })
+  if (!useContextMenuStore.getState().isOpen) throw new Error('"+" did not open its menu')
+}
+
+function plusRow(id: string) {
+  const r = useContextMenuStore.getState().items.find((i) => i.id === id)
+  if (!r) throw new Error(`the "+" menu has no ${id} row`)
+  return r
+}
+
+async function pickAttach(c: HTMLElement): Promise<void> {
+  await openPlus(c)
+  expect(plusRow('attach').enabled).not.toBe(false)
+  await act(async () => {
+    useContextMenuStore.getState().selectItem('attach')
+  })
+}
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -222,7 +249,10 @@ describe('files under each message', () => {
     expect(seedRow.querySelector('[data-thread-file-download]'), 'no door, no Download').toBeNull()
     await new Promise((r) => setTimeout(r, 20))
     expect(h.gets.filter((g) => g.path === 'feedback/attachment')).toHaveLength(0)
-    expect(c.querySelector('[data-testid="ticket-compose-attach"]')).toBeNull()
+    // The "+" offers only Save to stash: no attach choice.
+    await openPlus(c)
+    expect(useContextMenuStore.getState().items.map((i) => i.id)).toEqual(['stash'])
+    act(() => useContextMenuStore.getState().close())
   })
 
   it('show coerces each comment\'s files (unknown shapes never reach a bubble)', async () => {
@@ -259,13 +289,43 @@ describe('the reader is the source\'s', () => {
   })
 })
 
+describe('Save to stash in the ticket box', () => {
+  const realSave = usePromptStashStore.getState().save
+  afterEach(() => {
+    usePromptStashStore.setState({ save: realSave })
+  })
+
+  it('"+" has Save to stash (dimmed when empty); picking it saves, then clears; Cmd+S too', async () => {
+    const save = vi.fn(async (): Promise<StashSaveResult> => ({ status: 'saved' }) as StashSaveResult)
+    usePromptStashStore.setState({ save })
+    const c = rail()
+    await openPlus(c)
+    expect(plusRow('stash').enabled).toBe(false)
+    act(() => useContextMenuStore.getState().close())
+    const input = c.querySelector<HTMLTextAreaElement>('[data-testid="ticket-compose-input"]')!
+    fireEvent.change(input, { target: { value: 'ask about the build' } })
+    await openPlus(c)
+    expect(plusRow('stash').enabled).toBe(true)
+    await act(async () => {
+      useContextMenuStore.getState().selectItem('stash')
+    })
+    await waitFor(() => expect(input.value).toBe(''))
+    expect(save).toHaveBeenCalledTimes(1)
+    expect((save.mock.calls[0] as unknown[])[0]).toMatchObject({ text: 'ask about the build', source: { agent: 'ws' } })
+    fireEvent.change(input, { target: { value: 'chord' } })
+    const mac = isMacPlatform()
+    fireEvent.keyDown(input, { key: 's', metaKey: mac, ctrlKey: !mac })
+    await waitFor(() => expect(input.value).toBe(''))
+    expect(save).toHaveBeenCalledTimes(2)
+    expect(commentPosts()).toHaveLength(0)
+  })
+})
+
 describe('the message box takes files', () => {
   it('"+" picks, chips show, Send posts them with no text', async () => {
     h.picked = ['/ws/out/shot.png', '/elsewhere/notes.txt']
     const c = rail()
-    const plus = c.querySelector<HTMLButtonElement>('[data-testid="ticket-compose-attach"]')!
-    expect(plus.disabled).toBe(false)
-    fireEvent.click(plus)
+    await pickAttach(c)
     await waitFor(() => expect(c.querySelectorAll('[data-testid="ticket-compose-files"] [data-zen-attachment]')).toHaveLength(2))
     expect(c.querySelector('[data-zen-attachment="shot.png"]')!.getAttribute('title')).toBe('/ws/out/shot.png')
     expect(c.querySelector('[data-zen-attachment="notes.txt"]')!.getAttribute('title')).toBe('/ws/.k2/downloads/notes.txt')
@@ -283,7 +343,7 @@ describe('the message box takes files', () => {
   it('an option pick sends the chips too', async () => {
     h.picked = ['/ws/out/b.png']
     const c = rail()
-    fireEvent.click(c.querySelector('[data-testid="ticket-compose-attach"]')!)
+    await pickAttach(c)
     await waitFor(() => expect(c.querySelector('[data-zen-attachment="b.png"]')).not.toBeNull())
     const pick = [...c.querySelectorAll<HTMLButtonElement>('[data-testid="ticket-quick-answer"]')].find((b) => b.textContent === 'B')!
     fireEvent.click(pick)
@@ -319,11 +379,12 @@ describe('the message box takes files', () => {
     expect(c.querySelector('[data-zen-attachment=".env"]'), 'a refused send keeps the chips').not.toBeNull()
   })
 
-  it('off with the reason when the ticket is unlinked', () => {
+  it('off with the reason when the ticket is unlinked', async () => {
     const c = rail({}, null)
-    const plus = c.querySelector<HTMLButtonElement>('[data-testid="ticket-compose-attach"]')!
-    expect(plus.disabled).toBe(true)
-    expect(plus.getAttribute('title')).toContain('workspace was removed')
+    await openPlus(c)
+    expect(plusRow('attach').enabled).toBe(false)
+    expect(plusRow('attach').tooltip).toContain('workspace was removed')
+    act(() => useContextMenuStore.getState().close())
     expect(c.querySelector('[data-testid="ticket-compose"]')!.hasAttribute('data-compose-bar')).toBe(false)
   })
 

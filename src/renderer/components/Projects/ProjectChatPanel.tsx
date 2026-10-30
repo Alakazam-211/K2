@@ -86,6 +86,8 @@ import {
   setProjectChatDraft,
 } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
+import { isComposeStashChord, useComposePlusMenu, useComposeStash } from '@/components/PromptStash/composeStash'
+import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
 
@@ -361,6 +363,21 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   }, [])
 
   const poc = pocLabel(show.members, show.pocWorkspaceId)
+  // Save to stash (the "+" menu and Cmd+S, as in the Thread box); the
+  // source is the PoC agent the chat's posts land in.
+  const stash = useComposeStash({ scope: primaryScope(), agent: poc, agentName: poc })
+  const plusMenu = useComposePlusMenu()
+  const plusRef = useRef<HTMLButtonElement | null>(null)
+  const stashDraft = useCallback(async () => {
+    const text = draftApi.current?.get() ?? ''
+    if (!text.trim()) return
+    if (!(await stash.save({ text }))) return
+    // Clear only what was saved: text typed meanwhile stays.
+    if (draftApi.current?.get() === text) {
+      draftApi.current?.set('')
+      clearProjectChatDraft(show.id)
+    }
+  }, [show.id, stash])
   // The PoC's working strip: posts land in the PoC workspace's agent
   // (`deliver_live`, its pinned Chat: v2 agent name = project id). From
   // the daemon's activity rows; no PoC, no strip.
@@ -511,7 +528,31 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
               // Keep Esc local — the page-level Esc focuses the
               // dashboard's last-used terminal pane (§6.7.4).
               if (e.key === 'Escape') e.stopPropagation()
+              if (isComposeStashChord(e)) {
+                e.preventDefault()
+                e.stopPropagation()
+                void stashDraft()
+              }
             }}
+            tools={
+              <ThreadRoundButton
+                label="Save to stash"
+                title="Save to stash"
+                lightable
+                menuOpen={plusMenu.menuOpen}
+                buttonRef={plusRef}
+                onClick={() =>
+                  plusMenu.open(plusRef.current, {
+                    canStash: !stash.saving && (draftApi.current?.get() ?? '').trim().length > 0,
+                    chord: stash.chord,
+                    onStash: () => void stashDraft(),
+                  })
+                }
+                data={{ 'data-testid': 'project-chat-plus', 'aria-haspopup': 'menu', 'aria-expanded': plusMenu.menuOpen }}
+              >
+                +
+              </ThreadRoundButton>
+            }
             above={sendError ? <ThreadChatNote error>{sendError}</ThreadChatNote> : undefined}
             // Hide (left) beside the box, across from Send (right, in the
             // box); level with a one-line field (40px) at its bottom.

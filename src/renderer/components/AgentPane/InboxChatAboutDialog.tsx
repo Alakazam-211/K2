@@ -20,8 +20,10 @@ import {
 } from './inbox-browser'
 import type { ServerScope } from '@/kessel/server-scope'
 import { useRoom } from '@/components/Room/RoomContext'
-import { stashSourceFor } from '@/lib/prompt-stash/compose'
+import { stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
 import { saveToStash } from '@/stores/prompt-stash'
+import { isComposeStashChord } from '@/components/PromptStash/composeStash'
+import { isMacPlatform } from '@/lib/desktop-chrome'
 import { useToastStore } from '@/stores/toast'
 
 /** "Save for later" (spec-prompt-stash-v1): the note, with the inbox stamp
@@ -142,6 +144,13 @@ export function InboxChatAboutDialog({
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Cmd+S / Ctrl+S: Save for later (the Thread box's stash chord).
+    if (isComposeStashChord(e)) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (note.trim()) void saveForLater()
+      return
+    }
     if (!shouldSendOnKey({
       key: e.key,
       shiftKey: e.shiftKey,
@@ -241,7 +250,7 @@ export function InboxChatAboutDialog({
             data-testid="inbox-chat-about-save-later"
             onClick={() => { void saveForLater() }}
             disabled={sending}
-            title="Keep this in your stash to send later (on this device)"
+            title={`Keep this in your stash to send later (on this device), ${stashChordLabel(isMacPlatform())}`}
             className="mr-auto px-3 py-1.5 text-xs text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer disabled:opacity-40"
           >
             Save for later

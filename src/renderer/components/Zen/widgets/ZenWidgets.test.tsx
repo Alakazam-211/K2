@@ -424,6 +424,19 @@ import { useTerminalSettingsStore } from '@/stores/terminal-settings'
 import { ZEN_WIDGET_CSS } from './zen-widget-kit'
 import { ZEN_ANCHORED_MENU_LAYER } from '@/hooks/useAnchoredMenu'
 import { useHomeAvatarStore } from '@/lib/home-avatars'
+import { useContextMenuStore } from '@/stores/context-menu'
+
+/** The box's "+" opens its menu (attach, then Save to stash): pick attach. */
+async function pickAttach(plus: Element | null): Promise<void> {
+  if (!(plus instanceof HTMLElement)) throw new Error('no attach button')
+  await act(async () => {
+    fireEvent.click(plus)
+  })
+  if (!useContextMenuStore.getState().items.some((i) => i.id === 'attach')) throw new Error('the "+" menu has no attach row')
+  await act(async () => {
+    useContextMenuStore.getState().selectItem('attach')
+  })
+}
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -2014,11 +2027,7 @@ describe('Conversation widget', () => {
     // .k2/downloads on B, then sent as path text.
     await select(ROWS.sales.address)
     await threadReady(ROWS.sales.address)
-    const attach = document.querySelector('[data-zen-attach]')
-    if (!(attach instanceof HTMLElement)) throw new Error('no attach button')
-    await act(async () => {
-      fireEvent.click(attach)
-    })
+    await pickAttach(document.querySelector('[data-zen-attach]'))
     await waitFor(() => expect(document.querySelector('[data-zen-attachment="shot.png"]')).not.toBeNull())
     await typeAndSend('see this')
     await waitFor(() => expect(h.calls.filter((c) => c.route === 'thread/post').length).toBe(1))
@@ -2034,11 +2043,7 @@ describe('Conversation widget', () => {
     // .k2/downloads first; files alone are a message.
     await select(ROWS.cortana.address)
     await threadReady(ROWS.cortana.address)
-    const attach2 = document.querySelector('[data-zen-attach]')
-    if (!(attach2 instanceof HTMLElement)) throw new Error('no attach button')
-    await act(async () => {
-      fireEvent.click(attach2)
-    })
+    await pickAttach(document.querySelector('[data-zen-attach]'))
     await waitFor(() => expect(document.querySelector('[data-zen-attachment="shot.png"]')).not.toBeNull())
     await act(async () => {
       fireEvent.click(document.querySelector('[data-zen-send]') as HTMLElement)
@@ -2649,9 +2654,7 @@ describe('Zen text follows Zen tokens, never the app Style', () => {
 
       // Compose: box, attachment chip, and the placeholder rule.
       expect(expectNoStyleLeak(composeInput(), 'color')).toBe(zenVar('text'))
-      await act(async () => {
-        fireEvent.click(document.querySelector('[data-zen-attach]') as HTMLElement)
-      })
+      await pickAttach(document.querySelector('[data-zen-attach]'))
       await waitFor(() => expect(document.querySelector('[data-zen-attachment]')).not.toBeNull())
       expect(expectNoStyleLeak(document.querySelector('[data-zen-attachment]') as Element, 'color')).toBe(zenVar('text'))
       expect(root.querySelector('style[data-zen-shield]')?.textContent).toContain(
@@ -3315,8 +3318,9 @@ describe('built-in widgets: modes and layout (G38, answer 5)', () => {
     await mountGarden('k2.blank@1')
     await threadReady(ROWS.cortana.address)
     expect(document.querySelector('[data-zen-agent-row]')).toBeNull()
-    // `attachments: false`: no "+" in the box.
+    // `attachments: false`: the "+" has no attach choice, only Save to stash.
     expect(document.querySelector('[data-zen-attach]')).toBeNull()
+    expect(document.querySelector('[data-zen-plus]')).not.toBeNull()
     expect(composeInput()).toBeTruthy()
   })
 

@@ -15,6 +15,7 @@
 // credential request, a shared template) show as read-only cards: they are
 // answered in Grok Bot itself. K2 never asks for or shows a secret.
 
+import { isComposeStashChord, useComposePlusMenu, useComposeStash } from '@/components/PromptStash/composeStash'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ThreadOverlayPane'
@@ -241,6 +242,16 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
     if (el) el.scrollTop = el.scrollHeight
   }, [messages.length])
 
+  // Save to stash (the "+" menu and Cmd+S, as in the Thread box).
+  const stash = useComposeStash({ scope, agent: agent?.name ?? realId, agentName: agent?.name ?? null })
+  const plusMenu = useComposePlusMenu()
+  const plusRef = useRef<HTMLButtonElement | null>(null)
+  const stashDraft = async (): Promise<void> => {
+    const text = draft
+    if (!text.trim()) return
+    if (await stash.save({ text })) setDraft((cur) => (cur === text ? '' : cur))
+  }
+
   const send = async (): Promise<void> => {
     const text = draft.trim()
     if (!text || sending) return
@@ -316,11 +327,34 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
               <div className={`text-[11px] ${muted}`}>{name} is busy. Your message may wait until it finishes.</div>
             )}
             <div className="flex items-end gap-2">
+              <Button
+                ref={plusRef}
+                data-testid="grokbot-compose-plus"
+                aria-label="Save to stash"
+                title="Save to stash"
+                aria-haspopup="menu"
+                aria-expanded={plusMenu.menuOpen}
+                onClick={() =>
+                  plusMenu.open(plusRef.current, {
+                    canStash: !stash.saving && draft.trim().length > 0,
+                    chord: stash.chord,
+                    onStash: () => void stashDraft(),
+                  })
+                }
+              >
+                +
+              </Button>
               <textarea
                 data-testid="grokbot-compose-input"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
+                  if (isComposeStashChord(e)) {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    void stashDraft()
+                    return
+                  }
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
                     void send()

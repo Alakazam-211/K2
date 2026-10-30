@@ -24,6 +24,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { ZenWidgetBridge } from '@/lib/zen/zen-bridge'
 import { pickLocalComposeFiles } from '@/lib/pick-compose-files'
 import {
+  isComposeStashChord,
+  readLocalComposeFiles,
+  useComposePlusMenu,
+  useComposeStash,
+} from '@/components/PromptStash/composeStash'
+import {
   __resetZenComposeDraftsForTests,
   keepZenComposeDraft,
   onZenComposeDraft,
@@ -197,7 +203,8 @@ export function ZenCompose({
     const width = el.clientWidth
     if (width <= 0) return
     const lines = threadComposeLines({ value: el.value, scrollHeight }, zenComposeLinePx(el), ZEN_COMPOSE_PAD_Y)
-    setStacked((cur) => threadComposeStackNext({ stacked: cur, lines, width, rowChrome: zenComposeRowChrome(allowAttachments) }))
+    // The "+" is always there (its menu has Save to stash).
+    setStacked((cur) => threadComposeStackNext({ stacked: cur, lines, width, rowChrome: zenComposeRowChrome(true) }))
   }, [draft, stacked, stack, allowAttachments])
 
   const send = useCallback(async () => {
@@ -260,6 +267,28 @@ export function ZenCompose({
     setAttachments((cur) => [...cur, ...next])
   }, [allowAttachments])
 
+  // Save to stash (the "+" menu and Cmd+S, as in the Thread box): the
+  // draft and its files, then the box clears. Picked and dropped files are
+  // on this computer. A widget holds no server, so the stamp names the agent.
+  const stash = useComposeStash({ scope: null, agent: address, agentName: label })
+  const plusMenu = useComposePlusMenu()
+  const plusRef = useRef<HTMLButtonElement | null>(null)
+  const canStash = !disabled && !stash.saving && (draft.trim().length > 0 || attachments.length > 0)
+  const stashDraft = useCallback(async () => {
+    const startDraft = draft
+    const held = attachments
+    const paths = held.flatMap((a) => (a.kind === 'path' ? [a.path] : []))
+    const blobs = held.flatMap((a) => (a.kind === 'file' ? [{ name: a.name, type: a.file.type, bytes: a.file as Blob }] : []))
+    const saved = await stash.save({
+      text: startDraft,
+      files: async () => [...(paths.length > 0 ? await readLocalComposeFiles(paths) : []), ...blobs],
+    })
+    if (!saved) return
+    // Clear only what was saved: text typed meanwhile stays.
+    setDraft((cur) => (cur === startDraft ? '' : cur))
+    setAttachments((cur) => cur.filter((a) => !held.includes(a)))
+  }, [attachments, draft, setDraft, stash])
+
   const canSend = !disabled && !sending && (draft.trim().length > 0 || attachments.length > 0)
 
   return (
@@ -271,6 +300,14 @@ export function ZenCompose({
         if (e.dataTransfer?.types?.includes?.('Files')) e.preventDefault()
       }}
       onDrop={onDrop}
+      onKeyDown={(e) => {
+        // Cmd+S / Ctrl+S in the box: save to the stash (the box lets
+        // chords through to here).
+        if (!isComposeStashChord(e)) return
+        e.preventDefault()
+        e.stopPropagation()
+        if (canStash) void stashDraft()
+      }}
     >
       <ThreadComposeBox
         stacked={stacked}
@@ -311,11 +348,31 @@ export function ZenCompose({
           ) : undefined
         }
       >
-        {allowAttachments && (
-          <ThreadRoundButton label="Attach files" disabled={disabled} lightable onClick={pick} data={{ 'data-zen-attach': '' }}>
-            +
-          </ThreadRoundButton>
-        )}
+        <ThreadRoundButton
+          label={allowAttachments ? 'Attach or save' : 'Save to stash'}
+          title={allowAttachments ? 'Attach files, or save to stash' : 'Save to stash'}
+          disabled={disabled}
+          lightable
+          menuOpen={plusMenu.menuOpen}
+          buttonRef={plusRef}
+          onClick={() =>
+            plusMenu.open(plusRef.current, {
+              attach: allowAttachments ? { onPick: pick } : null,
+              canStash,
+              chord: stash.chord,
+              onStash: () => void stashDraft(),
+            })
+          }
+          // `data-zen-attach`: this "+" has an attach choice.
+          data={{
+            'data-zen-plus': '',
+            'data-zen-attach': allowAttachments ? '' : undefined,
+            'aria-haspopup': 'menu',
+            'aria-expanded': plusMenu.menuOpen,
+          }}
+        >
+          +
+        </ThreadRoundButton>
         <textarea
           ref={ref}
           rows={1}

@@ -114,8 +114,12 @@ GIVING A SECRET TO ANOTHER AGENT
   same-named secret is never overwritten; re-sending yours makes a new
   version. A secret a person gave you needs a person to send it to
   another server. Server-wide secrets aren't sent (the owner shares them
-  with k2 vault grant). Your copy keeps the sender's delivery and --ttl (at
-  most env; no sites: file, read with k2 vault file); only a person widens it.
+  with k2 vault grant). The sender picks how it arrives: --delivery file or
+  env for a code or token a tool reads (no sites), fetch for an HTTP key.
+  Your copy keeps that and --ttl (at most env; no sites: a file in
+  $K2_SECRETS_DIR, k2 vault sync). Once a person accepts it, you may take
+  it up to the ceiling the card showed, no owner needed: k2 vault grant
+  NAME --to ws:<you> --as env. Only a person goes past that.
   Exit 3 = a person must act (don't retry); 2 = the other server can't
   (peer_too_old); 4 = no such secret or agent. Every step is logged.
 

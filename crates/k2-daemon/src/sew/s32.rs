@@ -38,7 +38,10 @@
 //! `approvals` arrives with S30's queue.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
+// Unix: only the mgmt-socket archive stream reads (Sew runs on Linux boxes).
+#[cfg(unix)]
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -448,16 +451,17 @@ pub fn prune_dir(dir: &Path, keep: usize) -> Result<usize, String> {
 }
 
 /// Idle read timeout while streaming an archive (no whole-call timeout:
-/// a large bundle takes as long as it takes).
+/// a large bundle takes as long as it takes). Unix: the mgmt socket.
+#[cfg(unix)]
 const ARCHIVE_IDLE: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// `GET /mgmt/v1/backups/{id}/archive` over the mgmt socket, streamed into
 /// `out` (Content-Length, chunked, or to EOF). Returns size and sha256.
 pub fn download_archive(sock: &Path, token: &str, bundle_id: &str, out: &mut dyn Write) -> Result<ShipReceipt, super::ops::MgmtError> {
     use super::ops::MgmtError as E;
-    use sha2::{Digest, Sha256};
     #[cfg(unix)]
     {
+        use sha2::{Digest, Sha256};
         let mut s = std::os::unix::net::UnixStream::connect(sock).map_err(|e| E::Unreachable(e.to_string()))?;
         s.set_read_timeout(Some(ARCHIVE_IDLE)).map_err(|e| E::Unreachable(e.to_string()))?;
         s.set_write_timeout(Some(ARCHIVE_IDLE)).map_err(|e| E::Unreachable(e.to_string()))?;

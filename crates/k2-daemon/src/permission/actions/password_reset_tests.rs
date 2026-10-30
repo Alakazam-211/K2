@@ -11,11 +11,16 @@ use std::collections::HashMap;
 
 use k2_core::connect_users::Role;
 use k2_core::permission::catalog::{Grant, Proof, Undo};
+// Unix: only the unix-gated tests below read the request state.
+#[cfg(unix)]
 use k2_core::permission::request::RequestState;
 use k2_core::skin;
 use serde_json::{json, Value};
 
-use super::super::held::tests::{answer_as, ask, ask_ok, below_floor, card_of, id_of, last_turn, login, row, seed, view, Ws};
+use super::super::held::tests::{answer_as, ask, ask_ok, below_floor, card_of, id_of, login, row, seed, view, Ws};
+// Unix: only the unix-gated tests below read the agent's turn.
+#[cfg(unix)]
+use super::super::held::tests::last_turn;
 use super::*;
 use crate::compute_routes::Who;
 use crate::permission::routes;

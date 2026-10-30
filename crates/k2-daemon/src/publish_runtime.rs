@@ -2273,7 +2273,6 @@ pub(crate) mod win_job {
         fn CloseHandle(h: *mut core::ffi::c_void) -> i32;
         fn OpenProcess(access: u32, inherit: i32, pid: u32) -> *mut core::ffi::c_void;
         fn GetExitCodeProcess(h: *mut core::ffi::c_void, code: *mut u32) -> i32;
-        fn TerminateProcess(h: *mut core::ffi::c_void, code: u32) -> i32;
         fn CreateToolhelp32Snapshot(flags: u32, pid: u32) -> *mut core::ffi::c_void;
         fn Thread32First(snap: *mut core::ffi::c_void, te: *mut ThreadEntry) -> i32;
         fn Thread32Next(snap: *mut core::ffi::c_void, te: *mut ThreadEntry) -> i32;

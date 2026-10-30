@@ -86,6 +86,8 @@ pub const HOLD_FILE: &str = "db-switch-hold";
 /// The owner's choice between two live files (DB-A6).
 pub const CHOICE_FILE: &str = "db-switch-choice.json";
 /// The tmp name the compat link is made under before its atomic rename.
+/// Unix only, like the link itself.
+#[cfg(unix)]
 const LINK_TMP: &str = ".k2so.db.link-tmp";
 
 const SIDECARS: [&str; 3] = ["-wal", "-shm", "-journal"];

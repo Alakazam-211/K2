@@ -208,6 +208,9 @@ pub fn terminate(pid: u32, grace: Duration) {
             }
         }
     }
+    // Windows: the Android lane doesn't run there, so nothing to signal.
+    #[cfg(not(unix))]
+    let _ = (pid, grace);
 }
 
 #[cfg(test)]

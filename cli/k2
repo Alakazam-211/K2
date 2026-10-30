@@ -21029,9 +21029,12 @@ _push_usage() {
     cat <<'EOF'
 k2 push — the phones that get this server's pushes, and encrypted pushes
 
-  k2 push devices [--json]          every phone: platform, login, previews and
+  k2 push devices [--json]          every phone: platform, login, previews,
                                     encryption (Encrypted / Not encrypted
-                                    (override) / Update app …). Never a token.
+                                    (override) / Update app …) and a token
+                                    fingerprint (8 hex). Never the token. Two
+                                    rows with the same fingerprint are one
+                                    phone registered twice.
   k2 push e2e [--json]              the server switch (pushE2E)
   k2 push e2e off|sealed-when-supported|sealed-only
                                     off = today's pushes for every phone (instant
@@ -21043,6 +21046,11 @@ k2 push — the phones that get this server's pushes, and encrypted pushes
                                     one phone's override (testing): off = today's
                                     pushes, sealed = encrypted when it can,
                                     default = follow the server switch
+  k2 push device remove <deviceId>  stop pushing to one phone: removes its
+                                    registration and its push key (a stale or
+                                    duplicate row, a lost phone). Not a block: the
+                                    phone registers again when its app next opens
+                                    (if it is still signed in). Owner or Admin.
   k2 push log [--json] [--device <id>]
                                     the last 200 push attempts, one per phone per
                                     relay call, oldest first: device (8 chars),
@@ -21054,8 +21062,8 @@ k2 push — the phones that get this server's pushes, and encrypted pushes
                                     or tokens. The daemon log has the same lines
                                     ("[push] attempt ...").
 
-Owner only (the owner token or an Owner login). Exit 2 usage, 3 not allowed,
-4 no such device.
+Owner only (the owner token or an Owner login), except `device remove`
+(also an Admin). Exit 2 usage, 3 not allowed, 4 no such device.
 
 These are K2 Companion's phones. A custom App's own phone app (its own
 bundle id and keys) is `k2 app push` (k2 app push --help).
@@ -21124,6 +21132,8 @@ if view == "devices":
         e2e = r.get("e2e") or {}
         bits = [r.get("deviceId", ""), r.get("platform", ""), r.get("username", ""),
                 "previews " + ("on" if r.get("previews") else "off"), r.get("status", "")]
+        if r.get("tokenFingerprint"):
+            bits.append("token " + str(r.get("tokenFingerprint")))
         if e2e:
             bits.append("key " + str(e2e.get("keyId")))
             bits.append("active" if e2e.get("active") else "inactive")
@@ -21138,6 +21148,8 @@ elif view == "mode":
         print("relay           :", "ready (s1)" if d.get("relaySealed") else "not ready: phones get today\x27s pushes")
 elif view == "override":
     print("device", d.get("deviceId"), "override:", d.get("override") or "default (follows the server switch)")
+elif view == "removed":
+    print("removed device", d.get("deviceId"), "(its registration and push key)")
 elif view == "log":
     import datetime
     rows = d.get("attempts") or []
@@ -21195,8 +21207,17 @@ cmd_push() {
             _push_render "$as_json" mode "$raw"
             ;;
         device)
+            if [ "${args[0]:-}" = "remove" ] || [ "${args[0]:-}" = "rm" ]; then
+                [ "${#args[@]}" -eq 2 ] && [ -n "${args[1]}" ] || {
+                    echo "usage: k2 push device remove <deviceId>" >&2; exit 2; }
+                local rbody
+                rbody="$(K2_PD_ID="${args[1]}" python3 -c 'import json,os; print(json.dumps({"deviceId": os.environ["K2_PD_ID"]}))')"
+                raw="$(_push_send POST /cli/push/device/remove "$rbody")"
+                _push_render "$as_json" removed "$raw"
+                return 0
+            fi
             [ "${args[0]:-}" = "e2e" ] && [ "${#args[@]}" -eq 3 ] || {
-                echo "usage: k2 push device e2e <deviceId> off|sealed|default" >&2; exit 2; }
+                echo "usage: k2 push device e2e <deviceId> off|sealed|default | k2 push device remove <deviceId>" >&2; exit 2; }
             case "${args[2]}" in
                 off|sealed|default) ;;
                 *) echo "usage: k2 push device e2e <deviceId> off|sealed|default (got '${args[2]}')" >&2; exit 2 ;;
@@ -21228,7 +21249,7 @@ cmd_push() {
             _push_render "$as_json" log "$raw"
             ;;
         *)
-            echo "usage: unknown push verb '$sub' (devices|e2e|device e2e|log)" >&2
+            echo "usage: unknown push verb '$sub' (devices|e2e|device e2e|device remove|log)" >&2
             exit 2
             ;;
     esac

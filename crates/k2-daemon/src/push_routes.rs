@@ -56,6 +56,10 @@ pub const DEVICE_E2E_PATH: &str = "/cli/push/device/e2e";
 /// read-only, memory only: never content, titles, names, conversation ids
 /// or tokens.
 pub const LOG_PATH: &str = "/cli/push/log";
+/// `POST /cli/push/device/remove {"deviceId"}` — the owner or an Admin
+/// removes one registered phone (0.46.7, K4): a stale row the phone itself
+/// will never unregister (an old id, a lost phone). `k2 push device remove`.
+pub const DEVICE_REMOVE_PATH: &str = "/cli/push/device/remove";
 
 /// Push-domain GET dispatch. The mutations are POST-only — reached
 /// via the GET chain they answer an explicit 405. [`DEVICE_PATH`] needs
@@ -64,7 +68,7 @@ pub const LOG_PATH: &str = "/cli/push/log";
 /// push-domain route.
 pub fn dispatch(path: &str, _params: &HashMap<String, String>) -> Option<CliResponse> {
     match path {
-        "/cli/push/register-device" | "/cli/push/unregister-device" | DEVICE_E2E_PATH => {
+        "/cli/push/register-device" | "/cli/push/unregister-device" | DEVICE_E2E_PATH | DEVICE_REMOVE_PATH => {
             Some(CliResponse::method_not_allowed())
         }
         DEVICES_PATH | E2E_PATH | LOG_PATH => Some(owner_only()),
@@ -127,8 +131,28 @@ pub fn dispatch_post_ctx(path: &str, body: &[u8], username: &str, ctx: &PushCall
         E2E_PATH => handle_set_mode(body),
         DEVICE_E2E_PATH if !ctx.owner => owner_only(),
         DEVICE_E2E_PATH => handle_set_override(body),
+        DEVICE_REMOVE_PATH if !(ctx.owner || is_admin_login(username)) => admin_only(),
+        DEVICE_REMOVE_PATH => handle_owner_remove(body),
         DEVICE_PATH | DEVICES_PATH | LOG_PATH => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
+    }
+}
+
+/// The owner token or an Admin+ Connect login.
+fn is_admin_login(username: &str) -> bool {
+    username == k2_core::notify_prefs::OWNER
+        || k2_core::connect_users::role_for_user(username).is_some_and(|r| r >= k2_core::connect_users::Role::Admin)
+}
+
+fn admin_only() -> CliResponse {
+    CliResponse {
+        status: "403 Forbidden",
+        content_type: "application/json",
+        body: serde_json::json!({
+            "ok": false,
+            "error": { "code": "admin_only", "hint": "removing another phone is for the server owner or an Admin" },
+        })
+        .to_string(),
     }
 }
 
@@ -289,6 +313,11 @@ pub(crate) fn sealed_ready() -> bool {
     current_config().is_some_and(|c| c.sealed_ready(unix_now()))
 }
 
+/// push-e2e-v2: format-2 blobs may go now (sealed ready, relay `s2`).
+fn sealed_v2_ready(now: i64) -> bool {
+    current_config().is_some_and(|c| c.sealed_v2_ready(now))
+}
+
 /// The `e2e` object of a device reply (§7.1), or `null` without a key.
 /// Never the public key or PSK; only `keyId`.
 pub(crate) fn e2e_reply(device_id: &str) -> serde_json::Value {
@@ -314,8 +343,13 @@ fn e2e_reply_with(
     };
     let eff = e2e::effective(mode, st.override_);
     let active = e2e::lane(eff, key.is_active(now), sealed_ok) == e2e::Lane::Sealed;
+    // push-e2e-v2 (0.46.7): the format this phone gets now. `v` echoes
+    // what it registered; `format` and the byte counts are what it will
+    // be sent (2 only for a `v: 2` phone on an `s2` relay).
+    let format = key.format(sealed_ok && sealed_v2_ready(now));
     serde_json::json!({
-        "v": 1,
+        "v": key.v,
+        "format": format.number(),
         "keyId": key.key_id,
         "suite": key.suite,
         "active": active,
@@ -324,8 +358,8 @@ fn e2e_reply_with(
         "override": st.override_.map(|o| o.as_wire()),
         "expiresAt": key.expires_at,
         "rotateAfter": key.rotate_after(),
-        "alertBytes": k2_core::push::seal::ALERT_PAD,
-        "nudgeBytes": k2_core::push::seal::NUDGE_PAD,
+        "alertBytes": format.pad_len(k2_core::push::seal::SealKind::Alert),
+        "nudgeBytes": format.pad_len(k2_core::push::seal::SealKind::Nudge),
     })
 }
 
@@ -380,6 +414,9 @@ pub fn handle_owner_get(path: &str, owner: bool) -> CliResponse {
                         "createdAt": d.created_at,
                         "lastSeenAt": d.last_seen_at,
                         "previews": d.previews,
+                        // K5 (0.46.7): two rows with one fingerprint hold
+                        // one vendor token (a duplicate). Never the token.
+                        "tokenFingerprint": push_devices::token_fingerprint(&d.token),
                         "status": e2e_label(&st, mode, sealed_ok, now),
                         "e2e": e2e_reply_with(&d.device_id, mode, sealed_ok, now),
                     })
@@ -596,6 +633,36 @@ fn handle_unregister(body: &[u8], username: &str) -> CliResponse {
         Ok(removed) => CliResponse::ok_json(
             serde_json::json!({ "ok": true, "removed": removed }).to_string(),
         ),
+        Err(e) => usage_error(e),
+    }
+}
+
+/// Handler for `POST /cli/push/device/remove` (owner or Admin; K4): drop
+/// one phone's registration and its push key. Unlike the phone's own
+/// unregister, an unknown id is a loud 404 (the owner typed it).
+fn handle_owner_remove(body: &[u8]) -> CliResponse {
+    let b: UnregisterBody = match serde_json::from_slice(body) {
+        Ok(b) => b,
+        Err(e) => return usage_error(format!("invalid JSON body: {e}")),
+    };
+    let id = b.device_id.trim();
+    if id.is_empty() {
+        return usage_error("missing 'deviceId'");
+    }
+    match push_devices::remove_device(id) {
+        Ok(true) => {
+            k2_core::log_debug!("[push] device {} removed by the owner/Admin", k2_core::push::attempts::short(id));
+            CliResponse::ok_json(serde_json::json!({ "ok": true, "deviceId": id, "removed": true }).to_string())
+        }
+        Ok(false) => CliResponse {
+            status: "404 Not Found",
+            content_type: "application/json",
+            body: serde_json::json!({
+                "ok": false,
+                "error": { "code": "not_found", "hint": "no such device (k2 push devices lists them)" },
+            })
+            .to_string(),
+        },
         Err(e) => usage_error(e),
     }
 }
@@ -1828,6 +1895,55 @@ mod tests {
         assert_eq!(dispatch_post(DEVICES_PATH, b"{}", "owner").status, "405 Method Not Allowed");
     }
 
+    /// K4 (0.46.7): `POST /cli/push/device/remove` is the owner's or an
+    /// Admin's, POST-only (405 on the GET chain, classified POST/Admin with
+    /// no GET row), refuses a Member without touching the row, removes the
+    /// row and its key for the owner, and 404s an unknown id.
+    #[test]
+    fn device_remove_is_post_only_admin_only_and_loud() {
+        let params = HashMap::new();
+        assert_eq!(dispatch(DEVICE_REMOVE_PATH, &params).expect("claimed").status, "405 Method Not Allowed");
+        let row = crate::routes::route_policy::lookup(DEVICE_REMOVE_PATH).expect("classified");
+        assert_eq!(row.post, Some(crate::routes::route_policy::Floor::Admin));
+        assert_eq!(row.get, None);
+        assert!(crate::routes::route_policy::post_allowed(DEVICE_REMOVE_PATH));
+
+        let id = did("k4-remove");
+        push_devices::upsert_device(&id, "apns", &tok("k4-remove"), "k4member").expect("device");
+        let body = serde_json::json!({ "deviceId": id }).to_string();
+        let member = PushCallCtx { session_sid: None, owner: false, via_web: false };
+        let r = dispatch_post_ctx(DEVICE_REMOVE_PATH, body.as_bytes(), "k4member", &member);
+        assert_eq!(r.status, "403 Forbidden", "{}", r.body);
+        assert!(r.body.contains("admin_only"), "{}", r.body);
+        assert!(push_devices::get_device(&id).expect("get").is_some(), "a refused remove leaves the row");
+
+        let owner = PushCallCtx { session_sid: None, owner: true, via_web: false };
+        let v = ok_json(dispatch_post_ctx(DEVICE_REMOVE_PATH, body.as_bytes(), "owner", &owner));
+        assert_eq!(v["removed"], true);
+        assert_eq!(v["deviceId"], id.as_str());
+        assert!(push_devices::get_device(&id).expect("get").is_none(), "the row is gone");
+        assert!(k2_core::push_device_keys::get_key(&id).expect("key").is_none());
+
+        let r = dispatch_post_ctx(DEVICE_REMOVE_PATH, body.as_bytes(), "owner", &owner);
+        assert_eq!(r.status, "404 Not Found", "an unknown id is loud: {}", r.body);
+        let r = dispatch_post_ctx(DEVICE_REMOVE_PATH, b"{}", "owner", &owner);
+        assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+    }
+
+    /// K5: `k2 push devices --json` shows each row's token fingerprint,
+    /// never the token.
+    #[test]
+    fn device_list_shows_the_token_fingerprint_never_the_token() {
+        let id = did("k5-fp");
+        let t = tok("k5-fp");
+        push_devices::upsert_device(&id, "apns", &t, "owner").expect("device");
+        let list = ok_json(handle_owner_get(DEVICES_PATH, true));
+        let row = list["devices"].as_array().expect("devices").iter().find(|d| d["deviceId"] == id.as_str()).expect("row").clone();
+        assert_eq!(row["tokenFingerprint"], push_devices::token_fingerprint(&t).as_str());
+        assert!(!list.to_string().contains(&t), "the token never appears");
+        push_devices::remove_device(&id).expect("cleanup");
+    }
+
     /// `GET /cli/push/log` is the owner's and GET-only: refused without the
     /// owner (handler, GET chain), 405 on POST, and classified GET/Owner
     /// with no POST row (so the dispatcher 405s a POST before auth).
@@ -1866,6 +1982,7 @@ mod tests {
                 body: serde_json::json!({ "ok": true, "results": results }).to_string(),
                 s0: true,
                 s1: false,
+                s2: false,
             })
         }
     }

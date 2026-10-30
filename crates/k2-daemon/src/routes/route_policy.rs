@@ -1294,6 +1294,8 @@ pub const ROUTES: &[Route] = &[
     // prd-e2e-push-v1 §4a: the E2E switch, the per-device override and
     // the phone list are the owner's (testing and rollback controls).
     post("/cli/push/device/e2e", Owner),
+    // 0.46.7 (K4): the owner or an Admin removes one stale phone.
+    post("/cli/push/device/remove", Admin),
     get("/cli/push/devices", Owner),
     both("/cli/push/e2e", Owner),
     // 0.46.3: the push attempt ring (read-only; no content or tokens).

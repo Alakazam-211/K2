@@ -7,5 +7,6 @@ cargo fmt -p k2-mpc-text -- --check   # own crate only: path deps (the kit, its 
 cargo clippy -q --locked --all-targets -- -D warnings
 cargo test -q --locked --all-targets
 ./scripts/check-licences.sh
+sh scripts/check-private.sh
 ../k2-mpc-base/scripts/pack-checks/engine-free.sh .
 echo "pack checks: ok"

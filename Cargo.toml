@@ -6,3 +6,15 @@ members = ["crates/text"]
 edition = "2021"
 rust-version = "1.80"
 publish = false
+
+# The pack's own dev and test builds, as in k2-mpc-base (its tools/README.md, "Build
+# settings"). Cargo applies a workspace's profiles only when that workspace is the one being
+# built, so a host that vendors the pack keeps its own. Release builds are unchanged.
+# Line tables only: backtraces keep file:line; full variable info is dropped (target/ halves).
+[profile.dev]
+debug = "line-tables-only"
+
+# Every dependency at opt-level 1 (the kit and its vendored engine among them): the tests run
+# several times faster for a slower cold build. Debug assertions and overflow checks stay on.
+[profile.dev.package."*"]
+opt-level = 1

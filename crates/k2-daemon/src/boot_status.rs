@@ -1234,6 +1234,8 @@ mod tests {
                 "email-notifications-v1",
                 "app-chat-v1",
                 "activity-live-busy",
+                "publish-dev-v1",
+                "site-visibility-v1",
                 "thread-push-v1",
                 "push-previews-v1",
                 "push-e2e-v1",

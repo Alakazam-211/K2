@@ -183,7 +183,7 @@ pub fn user_scopes() -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .find(|p| p.exists())
         .ok_or_else(|| "systemd-run isn't on this box".to_string())?;
-    let mut c = std::process::Command::new(&exe);
+    let mut c = k2_core::bg_proc::command(&exe);
     c.args(["--user", "--scope", "--quiet", "--collect", "--", "true"])
         .envs(user_manager_env())
         .stdin(std::process::Stdio::null())
@@ -417,7 +417,7 @@ pub fn listeners(pgid: Option<i32>, port: u16) -> Option<Vec<Listener>> {
     {
         const LSOF: &str = "/usr/sbin/lsof";
         let run = |args: &[String]| -> Option<String> {
-            let o = std::process::Command::new(LSOF).args(args).stdin(std::process::Stdio::null()).output().ok()?;
+            let o = k2_core::bg_proc::command(LSOF).args(args).stdin(std::process::Stdio::null()).output().ok()?;
             // lsof exits 1 when nothing matched: that is an answer, not a failure.
             (o.status.success() || o.status.code() == Some(1)).then(|| String::from_utf8_lossy(&o.stdout).into_owned())
         };

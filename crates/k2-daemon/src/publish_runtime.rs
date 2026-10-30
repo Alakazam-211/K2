@@ -548,7 +548,7 @@ fn shell_command(cmd: &str, name: &str, dev: Option<(i64, f64)>) -> (Command, bo
     if let Some((mem_mb, cpus)) = dev {
         match crate::publish_dev::user_scopes() {
             Ok(exe) => {
-                let mut c = Command::new(exe);
+                let mut c = k2_core::bg_proc::command(exe);
                 c.args(crate::publish_dev::scope_args(&crate::publish_dev::scope_unit(name), mem_mb, cpus, cmd));
                 return (c, true);
             }
@@ -557,7 +557,7 @@ fn shell_command(cmd: &str, name: &str, dev: Option<(i64, f64)>) -> (Command, bo
     }
     #[cfg(not(target_os = "linux"))]
     let _ = (name, dev);
-    let mut c = Command::new("sh");
+    let mut c = k2_core::bg_proc::command("sh");
     c.arg("-c").arg(cmd);
     (c, false)
 }

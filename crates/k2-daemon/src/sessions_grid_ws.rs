@@ -2661,7 +2661,7 @@ mod tests {
             survive: false,
             ptyd_meta: None,
         };
-        DaemonPtySession::spawn(cfg).expect("spawn cat")
+        k2_core::test_env::spawn_plain_pty(cfg).expect("spawn cat")
     }
 
     #[cfg(unix)]

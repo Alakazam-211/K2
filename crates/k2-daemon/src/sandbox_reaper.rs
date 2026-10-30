@@ -688,7 +688,7 @@ mod tests {
     /// runtime (same constraint as other map-teardown tests).
     #[test]
     fn force_teardown_unregisters_map_entry() {
-        use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession};
+        use k2_core::terminal::DaemonPtyConfig;
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -696,7 +696,7 @@ mod tests {
             .expect("tokio test runtime");
         rt.block_on(async {
             k2_core::db::init_for_tests();
-            let session = DaemonPtySession::spawn(DaemonPtyConfig {
+            let session = k2_core::test_env::spawn_plain_pty(DaemonPtyConfig {
                 program: Some(k2_core::test_env::sleep_command(30).0),
                 args: k2_core::test_env::sleep_command(30).1,
                 ..Default::default()

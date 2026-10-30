@@ -124,8 +124,10 @@ mod tests {
         let raw = uuid::Uuid::new_v4().to_string().to_uppercase();
         let parsed = k2_core::session::SessionId::parse(&raw).expect("a uuid").to_string();
         assert!(!is_live(&parsed) && !is_live(&raw));
-        let dir = std::env::temp_dir();
+        let dir = k2_core::test_env::stable_temp_dir();
         {
+            // A shim dir another test has set would refuse `cat`.
+            let _env = k2_core::test_env::lock();
             let m = k2_core::terminal::shared();
             let mut m = m.lock();
             m.create(

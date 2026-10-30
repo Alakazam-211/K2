@@ -614,7 +614,7 @@ mod tests {
             cwd: Some(std::env::temp_dir()),
             ..DaemonPtyConfig::default()
         };
-        DaemonPtySession::spawn(cfg).expect("spawn /bin/cat session")
+        k2_core::test_env::spawn_plain_pty(cfg).expect("spawn /bin/cat session")
     }
 
     /// Start the REAL emitter task (`run`) with a private frames

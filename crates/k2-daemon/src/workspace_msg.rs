@@ -3543,7 +3543,7 @@ mod tests {
 
     #[cfg(unix)]
     fn spawn_cat_live() -> session_lookup::LiveSession {
-        use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
+        use k2_core::terminal::{DaemonPtyConfig, LabelSource};
         use std::path::PathBuf;
         let cfg = DaemonPtyConfig {
             session_id: SessionId::new(),
@@ -3563,7 +3563,7 @@ mod tests {
             survive: false,
             ptyd_meta: None,
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        let s = k2_core::test_env::spawn_plain_pty(cfg).expect("spawn cat");
         session_lookup::LiveSession(s)
     }
 

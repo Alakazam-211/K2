@@ -656,6 +656,22 @@ impl Drop for AgentShim {
     }
 }
 
+/// Spawn a test PTY running a plain program (`cat`, `sh`, `sleep`), holding
+/// [`lock`] while the spawn guard reads the environment.
+///
+/// While a test has `K2_TEST_AGENT_SHIM_DIR` set, the guard resolves every
+/// program in those dirs only, and a plain program isn't there: a spawn with
+/// no lock, in that window, fails with "agent shim \"cat\" not found" (soak
+/// 10-29 `apply_resize_now_same_dims_is_noop`, 10-30
+/// `setactive_claim_cannot_resize_a_pinned_session`). The guard stays strict;
+/// the test waits its turn.
+pub fn spawn_plain_pty(
+    cfg: crate::terminal::DaemonPtyConfig,
+) -> std::io::Result<std::sync::Arc<crate::terminal::DaemonPtySession>> {
+    let _env = lock();
+    crate::terminal::DaemonPtySession::spawn(cfg)
+}
+
 /// A loopback HTTP server that answers every request with one fixed
 /// error status, for tests that need an "unreachable" upstream (control
 /// plane, broker, peer). Use it instead of a well-known dead port such as
@@ -1354,6 +1370,29 @@ mod tests {
         let _ = std::fs::remove_dir(&other);
         assert!(!home.starts_with(&other), "took another test's TMPDIR: {}", home.display());
         assert!(home.starts_with(&tmp_then), "{} is outside the temp dir {}", home.display(), tmp_then.display());
+    }
+
+    /// A plain PTY spawn waits out another test's shim dir instead of being
+    /// refused by it.
+    #[cfg(unix)]
+    #[test]
+    fn a_plain_pty_spawn_waits_out_another_tests_shim_dir() {
+        use crate::terminal::agent_spawn_guard::SHIM_DIR_ENV;
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _shim = EnvVar::set(SHIM_DIR_ENV, "/nonexistent/k2-no-shims-here");
+            held_tx.send(()).expect("send");
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        });
+        held_rx.recv().expect("the holder has the shim dir set");
+        let cfg = crate::terminal::DaemonPtyConfig {
+            program: Some("cat".to_string()),
+            cwd: Some(stable_temp_dir()),
+            ..Default::default()
+        };
+        let s = spawn_plain_pty(cfg).unwrap_or_else(|e| panic!("refused by another test's shim dir: {e}"));
+        s.kill();
+        holder.join().expect("holder");
     }
 
     /// Soak 2026-10-30 (k2-core seed 5): a scratch dir made while another

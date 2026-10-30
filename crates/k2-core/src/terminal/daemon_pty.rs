@@ -3033,6 +3033,8 @@ mod tests {
             label: "path-junk".to_string(),
             label_source: LabelSource::Locked,
         };
+        // Held here, not around the spawn: the 15 s below times the spawn alone.
+        let _env = crate::test_env::lock();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let r = DaemonPtySession::spawn(cfg).map(|s| s.kill()).map_err(|e| e.to_string());
@@ -3118,7 +3120,7 @@ mod tests {
             cwd: Some(PathBuf::from("/tmp")),
             ..Default::default()
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn cat");
 
         // Internal observers: events receivers only — must be invisible
         // to the viewer signal (pre-fix these inflated it forever).
@@ -3178,7 +3180,7 @@ mod tests {
             label: "scout".to_string(),
             label_source: LabelSource::Locked,
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn cat");
         assert_eq!(s.label(), "scout");
         assert_eq!(s.label_source(), LabelSource::Locked);
     }
@@ -3205,7 +3207,7 @@ mod tests {
             label: "scout".to_string(),
             label_source: LabelSource::Locked,
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn cat");
         // PTY would emit "Claude Code" — must be silently dropped.
         let result = s.try_set_label_from_pty("Claude Code".to_string());
         assert!(result.is_none(), "Locked label must reject PTY update");
@@ -3234,7 +3236,7 @@ mod tests {
             label: String::new(),
             label_source: LabelSource::Pty,
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn cat");
         let r1 = s.try_set_label_from_pty("vim README.md".to_string());
         assert_eq!(r1.as_deref(), Some("vim README.md"));
         assert_eq!(s.label(), "vim README.md");
@@ -3262,7 +3264,7 @@ mod tests {
             drain_on_exit: true,
             ..Default::default()
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn cat");
         assert_eq!(s.label_source(), LabelSource::Pty);
         s.set_label("user-named".to_string(), true);
         assert_eq!(s.label(), "user-named");
@@ -3295,7 +3297,7 @@ mod tests {
             label: "seed".to_string(),
             label_source: LabelSource::Seed,
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn cat");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn cat");
         s.set_label("new-seed".to_string(), false);
         assert_eq!(s.label(), "new-seed");
         // Source preserved — PTY still allowed to update.
@@ -3336,7 +3338,7 @@ mod tests {
             label: String::new(),
             label_source: LabelSource::Pty,
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn sleep");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn sleep");
 
         let pid = s
             .child_pid()
@@ -3460,7 +3462,7 @@ mod tests {
             program: Some("cat".to_string()),
             ..Default::default()
         };
-        DaemonPtySession::spawn(cfg).expect("spawn cat")
+        crate::test_env::spawn_plain_pty(cfg).expect("spawn cat")
     }
 
     #[cfg(unix)]
@@ -4173,7 +4175,7 @@ mod tests {
                 survive,
                 ..DaemonPtyConfig::default()
             };
-            let s = DaemonPtySession::spawn(cfg).expect("spawn");
+            let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn");
             assert_eq!(s.backend_name(), "in-process");
             let pid = s.child_pid().expect("pid captured");
             // SAFETY: getpid has no preconditions.
@@ -4355,7 +4357,7 @@ mod tests {
             args: vec!["-c".to_string(), "exit 0".to_string()],
             ..Default::default()
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn sh");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn sh");
         let pid = s.child_pid().expect("pid captured");
 
         // Wait for the child to fully disappear (exit + reap).
@@ -4405,7 +4407,7 @@ mod tests {
             args: vec!["600".to_string()],
             ..Default::default()
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn sleep");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn sleep");
         let retained = Arc::clone(&s); // simulated WS-handler/emitter holder
         let pid = s.child_pid().expect("pid captured");
 
@@ -4479,7 +4481,7 @@ mod tests {
             label: String::new(),
             label_source: LabelSource::Pty,
         };
-        let s = DaemonPtySession::spawn(cfg).expect("spawn sleep");
+        let s = crate::test_env::spawn_plain_pty(cfg).expect("spawn sleep");
         let pid = s.child_pid().expect("pid captured");
 
         s.kill();

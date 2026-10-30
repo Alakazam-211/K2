@@ -5604,7 +5604,7 @@ mod tests {
     #[test]
     fn live_msg_chatter_carries_the_delivery_id() {
         use k2_core::session::SessionId;
-        use k2_core::terminal::{DaemonPtyConfig, DaemonPtySession, LabelSource};
+        use k2_core::terminal::{DaemonPtyConfig, LabelSource};
 
         let handle = format!("ovldlv{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _) = seed(&handle);
@@ -5624,7 +5624,7 @@ mod tests {
             .expect("tokio");
         let _enter = rt.enter();
         let agent_name = format!("tab-pane-{reviewer}");
-        let session = DaemonPtySession::spawn(DaemonPtyConfig {
+        let session = k2_core::test_env::spawn_plain_pty(DaemonPtyConfig {
             session_id: SessionId::new(),
             cols: 80,
             rows: 24,

@@ -1056,6 +1056,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         // guests under the grant (reads).
         "/cli/app/guest/ceiling",
         "/cli/app/guest/list",
+        // Sew for Apps A2: one of its own App's guests' chat. The handler
+        // reads for its own Apps; a set needs "manage its Apps' users" and
+        // the owner's guests-chat grant on that App.
+        "/cli/app/guest/chat",
         // Room-scope R9/R16 (0.46.1): read who holds a grant on the agent's
         // own room, and its own Apps' self and usage. `/cli/app/room-names`
         // is NOT here: hiding guests' names is the owner's.

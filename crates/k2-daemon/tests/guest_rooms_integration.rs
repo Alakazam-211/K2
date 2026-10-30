@@ -147,3 +147,85 @@ async fn an_app_sets_its_own_guests_rooms_without_the_owner_token() {
     assert_eq!(changes[2].actor, format!("app-remote:{svc}"));
     drop(env);
 }
+
+/// `k2 app user chat <u> member --app <own App>` through the real dispatcher,
+/// as an agent: `/cli/app/guest/chat` is an agent verb, and the handler's own
+/// rules decide. Its own App with the owner's guests-chat grant and "Let this
+/// agent manage its Apps' users" works; without the grant, `grant_required`;
+/// another workspace's App is refused; nobody without the owner's rights
+/// changes another workspace's guest.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_sets_its_own_apps_guests_chat_under_the_grant() {
+    const CHAT: &str = "/cli/app/guest/chat";
+    let env = setup(&[]);
+    let d = k2_daemon::test_harness::start(OWNER).await;
+    let port = d.port;
+    let tag = &uuid::Uuid::new_v4().to_string()[..6];
+    let own = seed_ws(&env, &format!("chatown{tag}"));
+    let other = seed_ws(&env, &format!("chatoth{tag}"));
+    let service = |ws: &Ws, name: &str| {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::insert(&conn, &ws.id, name, "node s.mjs", &ws.path.to_string_lossy(), 47_102, "local", "stopped", "cmd", "").expect("service").id
+    };
+    let (jobs, theirs) = (service(&own, &format!("jobs{tag}")), service(&other, &format!("theirs{tag}")));
+    let (dana, erin) = (format!("dana{tag}"), format!("erin{tag}"));
+    k2_core::skin::add_principal_for_app(&dana, None, &jobs, None, "owner").unwrap();
+    k2_core::skin::add_principal_for_app(&erin, None, &theirs, None, "owner").unwrap();
+    k2_core::tool_hook::allow_target_off_linux_for_tests(true);
+    k2_core::tool_hook::set_target(k2_core::tool_hook::CHAT_KIND, true, Some("/tmp/k2-test-sew.sock"), Some("/tmp/k2-test-sew.token"), "owner-token").expect("chat on");
+    k2_core::tool_hook::note_features_for_tests(&["app_scoped_sessions"]).unwrap();
+    let chat_of = |user: &str| -> Option<String> {
+        let p = k2_core::skin::list_principals().unwrap().into_iter().find(|p| p.username == user).expect("the guest");
+        k2_core::skin::list_grants().unwrap().into_iter().find(|g| g.kind == k2_core::tool_hook::CHAT_KIND && g.subject_id == p.id).and_then(|g| g.scope)
+    };
+    let agent = passport(&own);
+    let set = |app: &str, user: &str| json!({ "username": user, "scope": "member", "app": app });
+
+    // Without the users switch: refused, by the handler (it reached it).
+    let r = post(port, CHAT, &agent, set(&jobs, &dana)).await;
+    assert_eq!((r.status, r.code()), (403, "app_users_off".to_string()), "{}", r.body);
+    k2_core::workspace::settings::set_agents_can_manage_app_users(&own.id, true).unwrap();
+
+    // Its own App, no grant yet.
+    let r = post(port, CHAT, &agent, set(&jobs, &dana)).await;
+    assert_eq!((r.status, r.code()), (403, "grant_required".to_string()), "{}", r.body);
+    assert_eq!(chat_of(&dana), None);
+
+    // The owner grants both Apps, so what's left below is the workspace rule.
+    for app in [&jobs, &theirs] {
+        let r = post(port, "/cli/app/grant", OWNER, json!({ "app": app, "kind": "guests-chat" })).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+    }
+
+    // Its own App with the grant: set, then read back.
+    let r = post(port, CHAT, &agent, set(&jobs, &dana)).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!((r.json()["scope"].clone(), r.json()["changed"].clone()), (json!("member"), json!(true)), "{}", r.body);
+    assert_eq!(chat_of(&dana).as_deref(), Some("member"));
+    let r = get(port, CHAT, &agent, &format!("username={dana}&app={jobs}")).await;
+    assert_eq!((r.status, r.json()["scope"].clone()), (200, json!("member")), "{}", r.body);
+
+    // Another workspace's App, its guest named or its own: refused.
+    let r = post(port, CHAT, &agent, set(&theirs, &erin)).await;
+    assert!(matches!(r.status, 403 | 404), "another workspace's App: {} {}", r.status, r.body);
+    let r = get(port, CHAT, &agent, &format!("username={erin}&app={theirs}")).await;
+    assert!(matches!(r.status, 403 | 404), "another workspace's App, read: {} {}", r.status, r.body);
+    // Another workspace's guest through its own App: not a guest of that App.
+    let r = post(port, CHAT, &agent, set(&jobs, &erin)).await;
+    assert_eq!((r.status, r.code()), (404, "not_found".to_string()), "{}", r.body);
+
+    // A person below the owner's rights, on another workspace's guest.
+    let (ada, mem) = (format!("ada{tag}"), format!("mem{tag}"));
+    k2_core::connect_users::add_user(&ada, "correct horse battery 9").unwrap();
+    k2_core::connect_users::set_role(&ada, k2_core::connect_users::Role::Admin).unwrap();
+    k2_core::connect_users::add_user(&mem, "correct horse battery 9").unwrap();
+    let admin = k2_core::connect_users::create_session(&ada);
+    let member = k2_core::connect_users::create_session(&mem);
+    let r = post(port, CHAT, &admin, set(&theirs, &erin)).await;
+    assert_eq!((r.status, r.code()), (403, "owner_only".to_string()), "an Admin: {}", r.body);
+    let r = post(port, CHAT, &member, set(&theirs, &erin)).await;
+    assert_eq!(r.status, 403, "a Member: {}", r.body);
+    assert_eq!(chat_of(&erin), None, "nothing reached another workspace's guest");
+    drop(env);
+}

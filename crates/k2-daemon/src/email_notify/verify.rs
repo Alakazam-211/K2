@@ -32,8 +32,9 @@
 //!
 //! A mailbox forward (the forwarding PRD) uses the same store with purpose
 //! `forward`; Rosson 2026-10-28: on a box with no system sender its
-//! confirm may come from the mailbox itself. That path is built with
-//! forwarding, not here.
+//! confirm may come from the mailbox itself. That path is
+//! `mail::forward_verify`; a confirm or a stop of a `forward` row calls
+//! its hooks (after this module lets go of the db).
 
 use std::collections::HashMap;
 
@@ -62,17 +63,21 @@ pub fn is_public_page(p: &str) -> bool {
 }
 
 /// What an address is for, in the mail and on the page.
-fn why(purpose: &str, subject_ref: &str) -> String {
+pub(crate) fn why(purpose: &str, subject_ref: &str) -> String {
     match purpose {
         store::PURPOSE_FORWARD => format!("copies of the mail that arrives at {subject_ref}"),
         _ => "notices from this server's AI agents (for example \"the nightly build failed\")".to_string(),
     }
 }
 
-/// Who asked, in words (never a token or an id).
-fn who(person: &str, box_label: &str) -> String {
+/// Who asked, in words (never a token or an id). `agent:<name>` is an AI
+/// agent on the box (a mailbox forward set by a mail-manage agent).
+pub(crate) fn who(person: &str, box_label: &str) -> String {
     if person == k2_core::notify_prefs::OWNER {
         format!("The owner of {box_label}")
+    } else if let Some(agent) = person.strip_prefix("agent:") {
+        let clean: String = agent.chars().filter(|c| !c.is_control()).take(64).collect();
+        format!("The AI agent {clean} on {box_label}")
     } else {
         let clean: String = person.chars().filter(|c| !c.is_control()).take(64).collect();
         format!("{clean}, a person on {box_label},")
@@ -401,6 +406,18 @@ pub fn page_get(path: &str, query: &str) -> Page {
 
 /// `POST /cli/email/verify` and `POST /cli/email/stop`.
 pub fn page_post(path: &str, query: &str, body: &[u8]) -> Page {
+    let mut hook: Option<(bool, store::Verified)> = None;
+    let page = page_post_inner(path, query, body, &mut hook);
+    // A mailbox forward follows its address (outside the db lock).
+    match hook {
+        Some((true, v)) if v.purpose == store::PURPOSE_FORWARD => crate::mail::forward_verify::on_confirmed(&v),
+        Some((false, v)) if v.purpose == store::PURPOSE_FORWARD => crate::mail::forward_verify::on_stopped(&v),
+        _ => {}
+    }
+    page
+}
+
+fn page_post_inner(path: &str, query: &str, body: &[u8], hook: &mut Option<(bool, store::Verified)>) -> Page {
     let now = super::now();
     let token = token_from(query, body).unwrap_or_default();
     let db = k2_core::db::shared();
@@ -409,6 +426,7 @@ pub fn page_post(path: &str, query: &str, body: &[u8]) -> Page {
         VERIFY_PATH => match store::confirm(&conn, &token, now) {
             Ok(v) => {
                 super::audit_line("email-verify-confirmed", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
+                *hook = Some((true, v.clone()));
                 Page {
                     status: "200 OK",
                     html: html(
@@ -428,6 +446,7 @@ pub fn page_post(path: &str, query: &str, body: &[u8]) -> Page {
         _ => match store::stop(&conn, &token, now) {
             Ok(Some(v)) => {
                 super::audit_line("email-verify-stopped", "recipient", &format!("row={} purpose={}", v.id, v.purpose));
+                *hook = Some((false, v.clone()));
                 Page {
                     status: "200 OK",
                     html: html("Stopped", &format!("<h1>Stopped</h1><p>K2 sends nothing more to <strong>{}</strong> for this.</p>", esc(&v.address))),

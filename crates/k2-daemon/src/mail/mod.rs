@@ -145,6 +145,10 @@ pub mod external;
 pub mod external_imap;
 pub mod external_smtp;
 pub mod forward;
+/// Outside forwards: rows → Sieve (prd-hostmail-external-forwarding-v1).
+pub mod forward_sync;
+/// Outside forwards: the destination's confirm link.
+pub mod forward_verify;
 pub mod front_listener;
 pub mod graph;
 pub mod hostmail_auth;

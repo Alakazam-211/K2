@@ -1497,6 +1497,12 @@ async fn async_main() {
     // events or the key moved; removed with the box switch off).
     // Linux-only detached thread; idempotent.
     crate::email_notify::webhook::spawn_startup_reconcile();
+    // 0.46.7: hosted mail forwards (prd-hostmail-external-forwarding-v1).
+    // Writes every mailbox's Sieve forward block from `mail_forwards`
+    // (importing same-box forwards that predate the rows), then hourly;
+    // pauses outside forwards under air-gap / receive-only. Linux-only
+    // detached thread; idempotent.
+    mail::forward_sync::spawn_background();
     // K2-issuer boxes (mail host attached + a K2-planted mail cert): make
     // sure Stalwart's own ACME is Manual for the mail host's Domain. One
     // registry write, no restart; never flips back. Linux-only thread.

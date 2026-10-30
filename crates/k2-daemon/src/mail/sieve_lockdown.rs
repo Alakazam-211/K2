@@ -1391,7 +1391,7 @@ mod tests {
         ] {
             let s = sieve_user::UserSieve {
                 ooo: ooo.clone(),
-                forward: fwd.map(|(d, k)| sieve_user::ForwardBlock { dest: d.to_string(), keep: k }),
+                forward: fwd.map(|(d, k)| sieve_user::ForwardBlock { dest: d.to_string(), keep: k, guard: None }),
             };
             let src = sieve_user::compose(&s).expect("script");
             let (owner, targets) = classify("k2", &src, &hosted);
@@ -1406,6 +1406,30 @@ mod tests {
             Owner::K2
         );
         assert_eq!(classify("k2-forward", "redirect \"bob@example.test\";\n", &hosted).0, Owner::K2);
+    }
+
+    /// An outside forward K2 composed (guard + redirect) is K2's: the
+    /// lockdown keeps it, and reports its one outside target.
+    #[test]
+    fn k2_outside_forward_is_k2_and_kept() {
+        for ooo in [None, Some(k2_ooo())] {
+            for keep in [true, false] {
+                let s = sieve_user::UserSieve {
+                    ooo: ooo.clone(),
+                    forward: Some(sieve_user::ForwardBlock {
+                        dest: "me@outside.test".to_string(),
+                        keep,
+                        guard: Some(sieve_user::ForwardGuard { host: "mail.example.test".to_string() }),
+                    }),
+                };
+                let src = sieve_user::compose(&s).expect("script");
+                let (owner, targets) = classify("k2", &src, &hosted);
+                assert_eq!(owner, Owner::K2, "{src}");
+                assert_eq!(targets.len(), 1, "{targets:?}");
+                assert!(targets[0].action == "redirect" && targets[0].external, "{targets:?}");
+                assert!(plan_cleanup(&[view("1", "k2", true, owner)]).is_empty());
+            }
+        }
     }
 
     #[test]
@@ -1625,7 +1649,7 @@ mod tests {
     fn k2_forward_src() -> String {
         sieve_user::compose(&sieve_user::UserSieve {
             ooo: None,
-            forward: Some(sieve_user::ForwardBlock { dest: "carol@example.test".into(), keep: true }),
+            forward: Some(sieve_user::ForwardBlock { dest: "carol@example.test".into(), keep: true, guard: None }),
         })
         .expect("script")
     }
@@ -1868,6 +1892,7 @@ mod tests {
             sieve_user::SievePatch::SetForward(sieve_user::ForwardBlock {
                 dest: "carol@example.test".into(),
                 keep: true,
+                guard: None,
             }),
         )
         .expect("K2 forward write");

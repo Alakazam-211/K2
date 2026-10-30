@@ -1735,6 +1735,14 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // (Built as 0249; renumbered to 0255 at integration so it runs after
         // 0250–0254, never out of order.)
         ("0255_app_updates", include_str!("../../drizzle_sql/0255_app_updates.sql")),
+        // 0256 — hosted mail forwarding to outside addresses
+        // (prd-hostmail-external-forwarding-v1, vs-live FW-A5/FW-A6/FW-A8,
+        // 0.46.7): `mail_forwards`, `mail_forward_events`,
+        // `mail_forward_queue`, `mail_forward_outcomes` and
+        // `mail_addresses.person_principal`. New tables + one ADD COLUMN;
+        // renumber freely on a slip (and edit the migration-order tests).
+        // The store is `crate::mail_forward`.
+        ("0256_mail_forwards", include_str!("../../drizzle_sql/0256_mail_forwards.sql")),
         // 0257 — prompt stash sync between a person's devices (stash-sync-v1,
         // 0.46.7): `stash_items` (per-record last-writer-wins JSON records
         // with tombstones) and `stash_people` (cursor + tombstone floor).
@@ -2517,6 +2525,8 @@ mod tests {
                 "0254_publish_dev_process",
                 // 0.46.7: an App's update feed (Tauri core TC-7).
                 "0255_app_updates",
+                // 0.46.7: hosted mail forwarding to outside addresses.
+                "0256_mail_forwards",
                 // 0.46.7: prompt stash sync (stash-sync-v1).
                 "0257_stash_sync",
             ],
@@ -2638,6 +2648,8 @@ mod tests {
                 "0254_publish_dev_process",
                 // 0.46.7: an App's update feed (Tauri core TC-7).
                 "0255_app_updates",
+                // 0.46.7: hosted mail forwarding to outside addresses.
+                "0256_mail_forwards",
                 // 0.46.7: prompt stash sync (stash-sync-v1).
                 "0257_stash_sync",
             ],
@@ -2910,9 +2922,10 @@ mod tests {
                 "0253_site_visibility",
                 "0254_publish_dev_process",
                 "0255_app_updates",
+                "0256_mail_forwards",
                 "0257_stash_sync"
             ],
-            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255 and 0257)"
+            "0217 runs after 0220 and 0221 on a 0.46.3 database (then 0223, 0222, 0225, 0.46.5's 0226, 0227, 0230 and 0231, 0.46.6's 0233, 0232, 0234, 0240, 0241, 0242, 0244, 0245, 0246, 0247, 0248, then 0.46.7's 0250, 0251, 0252, 0253, 0254, 0255, 0256 and 0257)"
         );
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM app_resource_samples", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 0, "the trends table starts empty");
@@ -3757,6 +3770,10 @@ mod tests {
             // 0257 (stash sync, 0.46.7) is the newest: its record goes (its
             // tables and index are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0257_stash_sync'", []).unwrap();
+            // 0256 (mail forwards, 0.46.7) came before it: its record goes
+            // (its tables are IF NOT EXISTS; its column re-add is skipped
+            // as a duplicate).
+            conn.execute("DELETE FROM _migrations WHERE name = '0256_mail_forwards'", []).unwrap();
             // 0255 (an App's update feed, 0.46.7) came before it: its record
             // goes (its tables and indexes are IF NOT EXISTS).
             conn.execute("DELETE FROM _migrations WHERE name = '0255_app_updates'", []).unwrap();

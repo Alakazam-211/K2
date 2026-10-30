@@ -179,6 +179,7 @@ pub mod db;
 pub mod email_notify;
 pub mod email_outcomes;
 pub mod email_verify;
+pub mod mail_forward;
 // Runtime stage H: the "handed off, drain only" flag the spawn choke
 // points check.
 pub mod handoff_state;

@@ -74,6 +74,10 @@
 //! | GET  /cli/mail/forward            | mail/forward.rs        |
 //! | POST /cli/mail/forward            | mail/forward.rs        |
 //! | POST /cli/mail/forward/unset      | mail/forward.rs        |
+//! | POST /cli/mail/forward/pause      | mail/forward.rs        |
+//! | POST /cli/mail/forward/resume     | mail/forward.rs        |
+//! | GET  /cli/mail/forwards           | mail/forward.rs        |
+//! | POST /cli/mail/address/person-link| mail/forward.rs        |
 //! | GET  /cli/mail/ooo                | mail/ooo.rs            |
 //! | POST /cli/mail/ooo                | mail/ooo.rs            |
 //! | POST /cli/mail/ooo/unset          | mail/ooo.rs            |
@@ -224,6 +228,7 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/mail/catchall" => crate::mail::catchall::handle_catchall_get(params),
         "/cli/mail/alias" => crate::mail::alias::handle_alias_list(params),
         "/cli/mail/forward" => crate::mail::forward::handle_forward_get(params),
+        "/cli/mail/forwards" => crate::mail::forward::handle_forwards_list(params),
         "/cli/mail/ooo" => crate::mail::ooo::handle_ooo_get(params),
         "/cli/mail/footer" => crate::mail::footer::handle_footer_get(params),
         "/cli/mail/list" => crate::mail::lists::handle_list_get(params),
@@ -326,6 +331,9 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/mail/cert/renew"
         | "/cli/mail/alias/remove"
         | "/cli/mail/forward/unset"
+        | "/cli/mail/forward/pause"
+        | "/cli/mail/forward/resume"
+        | "/cli/mail/address/person-link"
         | "/cli/mail/ooo/unset"
         | "/cli/mail/footer/unset"
         | "/cli/mail/list/delete"
@@ -434,6 +442,9 @@ pub fn dispatch_post_at(path: &str, body: &[u8], daemon_port: Option<u16>) -> Cl
         "/cli/mail/alias/remove" => crate::mail::alias::handle_alias_remove(body),
         "/cli/mail/forward" => crate::mail::forward::handle_forward_set(body),
         "/cli/mail/forward/unset" => crate::mail::forward::handle_forward_unset(body),
+        "/cli/mail/forward/pause" => crate::mail::forward::handle_forward_pause(body),
+        "/cli/mail/forward/resume" => crate::mail::forward::handle_forward_resume(body),
+        "/cli/mail/address/person-link" => crate::mail::forward::handle_person_link(body),
         "/cli/mail/ooo" => crate::mail::ooo::handle_ooo_set(body),
         "/cli/mail/ooo/unset" => crate::mail::ooo::handle_ooo_unset(body),
         "/cli/mail/footer" => crate::mail::footer::handle_footer_set(body),
@@ -648,6 +659,8 @@ pub fn is_mail_manage_surface(path: &str) -> bool {
             | "/cli/mail/alias/remove"
             | "/cli/mail/forward"
             | "/cli/mail/forward/unset"
+            | "/cli/mail/forward/pause"
+            | "/cli/mail/forward/resume"
             | "/cli/mail/ooo"
             | "/cli/mail/ooo/unset"
             | "/cli/mail/footer"

@@ -9423,6 +9423,57 @@ async fn handle_one_request(
         // cap, enforced handler-side). Handlers run in spawn_blocking
         // (SQLite writes + blocking Stalwart dials; S5's send/reply
         // `--wait` holds the request up to 900 s).
+        // Outside forwards (prd-hostmail-external-forwarding-v1 §3.3,
+        // 0.46.7): `/cli/mail/self/forward*` is a mailbox's own PERSON. The
+        // person comes from the token (owner token → `owner`; a live Connect
+        // session → its person key), never the body; agent passports, app
+        // passes and API keys fail `validate_session` → 403. The handler
+        // acts only on a mailbox linked to that person. Ahead of the
+        // `/cli/mail/*` arms so a passport never reaches it.
+        p if crate::mail::forward::is_self_route(p) => {
+            let actor = if super::http::token_is_owner(&query, state.token.as_str()) {
+                Some(crate::notify_routes::Actor::owner_token())
+            } else {
+                super::http::extract_token(&query)
+                    .filter(|t| !t.is_empty())
+                    .and_then(k2_core::connect_users::validate_session)
+                    .map(|u| crate::notify_routes::Actor::login(&u))
+            };
+            let person = actor.as_ref().and_then(|a| {
+                let people = k2_core::notify_prefs::People::load().ok()?;
+                crate::notify_routes::actor_person(&people, a)
+            });
+            let Some(person) = person else {
+                let _ = stream.read(&mut buf).await;
+                super::http::send_response(
+                    &mut *stream,
+                    "403 Forbidden",
+                    "application/json",
+                    r#"{"ok":false,"error":{"code":"person_only","hint":"this is a person's own mailbox route (Settings, or k2 mail forward as a box login); agents use k2 hostmail forward with mail-manage on"}}"#,
+                )
+                .await;
+                return DispatchOutcome::Done;
+            };
+            let body_bytes = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let p_owned = p.to_string();
+            let params = super::http::parse_params(p, &query);
+            let result = tokio::task::spawn_blocking(move || {
+                crate::mail::forward::self_route(is_post, &p_owned, &body_bytes, &person, &params)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse {
+                status: "500 Internal Server Error",
+                content_type: "application/json",
+                body: serde_json::json!({ "error": format!("worker join: {e}") }).to_string(),
+            });
+            super::http::send_response(&mut *stream, result.status, result.content_type, &result.body)
+                .await;
+        }
         // 0.44.4: `/cli/mail/attachments` POST (the `out=` write form) goes
         // to the params arm below, not the JSON-body POST table.
         p if is_post && post_allowed && p.starts_with("/cli/mail/") && p != "/cli/mail/attachments" => {

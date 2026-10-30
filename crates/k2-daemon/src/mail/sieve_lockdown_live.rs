@@ -463,6 +463,7 @@ fn live_sieve_lockdown_probe() {
     match sieve_user::patch_user_sieve(&c, &alice, sieve_user::SievePatch::SetForward(sieve_user::ForwardBlock {
         dest: format!("carol@{DOMAIN}"),
         keep: true,
+        guard: None,
     })) {
         Ok(_) => rep.check("6 K2 `k2` forward write (service key)", true, "alice → carol"),
         Err(e) => rep.check("6 K2 `k2` forward write (service key)", false, e),
@@ -758,6 +759,7 @@ fn live_forward_gap_probe() {
     sieve_user::patch_user_sieve(&c, &gina, sieve_user::SievePatch::SetForward(sieve_user::ForwardBlock {
         dest: format!("hank@{DOMAIN}"),
         keep: true,
+        guard: None,
     }))
     .expect("K2 forward gina → hank");
     let inj = "back\"; redirect \"inj@outside.test\"; #";

@@ -815,6 +815,9 @@ describe('SkinAccessSection', () => {
       // app-mobile-access-v1: the App's People section (its own tests in AppPeopleAccess.test.tsx).
       if (route === 'skin/access') return { app: 'host', agents: [], people: [], devices: [], settings: { listed: false, staySignedInDays: 30 } }
       if (route === 'skin/roles/suggest') return { templates: [] }
+      // Tauri core TC-11: the opened App's Releases panel (its own tests in AppReleases.test.tsx).
+      if (route === 'app/updates') return { channels: [], releases: [] }
+      if (route === 'app/updates/stats') return { ok: true, downloads: { available: false, why: 'none' } }
       throw new Error(`unexpected GET ${route}`)
     })
     h.daemonCliPost.mockRejectedValueOnce(new Error("role 'wiki-editor' already exists"))

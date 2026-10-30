@@ -1,0 +1,511 @@
+diff --git a/yrs/src/any.rs b/yrs/src/any.rs
+index 45f9027..c31113b 100644
+--- a/yrs/src/any.rs
++++ b/yrs/src/any.rs
+@@ -1,4 +1,4 @@
+-use crate::encoding::read::{Error, Read};
++use crate::encoding::read::{bounded_capacity, Error, Read};
+ use crate::encoding::write::Write;
+ use serde::de::Visitor;
+ use serde::{Deserialize, Deserializer, Serialize, Serializer};
+@@ -62,10 +62,10 @@ impl Any {
+             // CASE 118: Map<string,Any>
+             118 => {
+                 let len: usize = decoder.read_var()?;
+-                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
+-                // (see `Update::decode`'s `try_reserve`).
++                // `len` is attacker-controlled; reserve only what the input could hold
++                // (an entry is at least a 1-byte key length and a 1-byte value tag).
+                 let mut map = HashMap::new();
+-                map.try_reserve(len)?;
++                map.try_reserve(bounded_capacity(len, decoder.remaining(), 2))?;
+                 for _ in 0..len {
+                     let key = decoder.read_string()?;
+                     map.insert(key.to_owned(), Any::decode(decoder)?);
+@@ -75,10 +75,10 @@ impl Any {
+             // CASE 117: Array<Any>
+             117 => {
+                 let len: usize = decoder.read_var()?;
+-                // `len` is attacker-controlled; a fallible reservation avoids an allocation bomb
+-                // (see `Update::decode`'s `try_reserve`).
++                // `len` is attacker-controlled; reserve only what the input could hold
++                // (each value is at least its 1-byte tag).
+                 let mut arr = Vec::new();
+-                arr.try_reserve(len)?;
++                arr.try_reserve(bounded_capacity(len, decoder.remaining(), 1))?;
+                 for _ in 0..len {
+                     arr.push(Any::decode(decoder)?);
+                 }
+diff --git a/yrs/src/block.rs b/yrs/src/block.rs
+index a56f7c5..ef085a5 100644
+--- a/yrs/src/block.rs
++++ b/yrs/src/block.rs
+@@ -1,7 +1,7 @@
+ use crate::block_store::BlockStore;
+ use crate::branch::{Branch, BranchPtr};
+ use crate::doc::{DocAddr, OffsetKind};
+-use crate::encoding::read::Error;
++use crate::encoding::read::{bounded_capacity, Error};
+ use crate::gc::GCCollector;
+ use crate::slice::{BlockSlice, ItemSlice};
+ use crate::store::Store;
+@@ -1555,6 +1555,15 @@ impl Item {
+ 
+     pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
+         if self.is_deleted() && !self.info.is_keep() {
++            // k2: a subdocument is detached from this item first: GC drops the item's content
++            // here, and the item itself may go (`parent_gc`, or a later squash).
++            if let ItemContent::Doc(_, doc) = &self.content {
++                let this = NonNull::from(&*self);
++                let mut store = doc.store().write_blocking();
++                if store.parent.map(|p| p.0) == Some(this) {
++                    store.parent = None;
++                }
++            }
+             self.content.gc(collector);
+             let len = self.len();
+             if parent_gc {
+@@ -1960,9 +1969,11 @@ impl ItemContent {
+         match ref_num & 0b1111 {
+             BLOCK_ITEM_DELETED_REF_NUMBER => Ok(ItemContent::Deleted(decoder.read_len()?)),
+             BLOCK_ITEM_JSON_REF_NUMBER => {
+-                let mut remaining = decoder.read_len()? as i32;
++                let len = decoder.read_len()?;
++                let mut remaining = len as i32;
+                 let mut buf = Vec::new();
+-                buf.try_reserve(remaining as usize)?;
++                // `len` is attacker-controlled; each string is at least its 1-byte length.
++                buf.try_reserve(bounded_capacity(len as usize, decoder.remaining(), 1))?;
+ 
+                 while remaining >= 0 {
+                     buf.push(decoder.read_string()?.to_owned());
+@@ -1985,7 +1996,8 @@ impl ItemContent {
+             BLOCK_ITEM_ANY_REF_NUMBER => {
+                 let len = decoder.read_len()? as usize;
+                 let mut values = Vec::new();
+-                values.try_reserve(len)?;
++                // `len` is attacker-controlled; each value is at least its 1-byte tag.
++                values.try_reserve(bounded_capacity(len, decoder.remaining(), 1))?;
+ 
+                 let mut i = 0;
+                 while i < len {
+diff --git a/yrs/src/doc.rs b/yrs/src/doc.rs
+index 356d885..75b8669 100644
+--- a/yrs/src/doc.rs
++++ b/yrs/src/doc.rs
+@@ -160,6 +160,22 @@ impl Doc {
+         &self.store
+     }
+ 
++    /// k2: a read-write transaction whose changes are made **as client `client`**, not as this
++    /// doc's own client: every block it creates (and every item an undo manager would redo in
++    /// it) takes `client`'s ID and its next clocks in this doc, so its update is the one a
++    /// replica of this doc with client ID `client` would make. The doc's own client ID is
++    /// restored when the transaction commits (on drop, or a panic), before any subdoc added in
++    /// it is given the doc's ID.
++    ///
++    /// The caller guarantees that this doc holds everything `client` ever wrote and that no
++    /// other replica writes as `client`: blocks are identified by `(client, clock)`, and a
++    /// peer skips a block it already has, so a second writer's changes would be lost.
++    /// Blocks until the store's write lock is free, like [Transact::transact_mut].
++    pub fn transact_mut_as(&self, client: ClientID) -> TransactionMut<'_> {
++        let lock = self.store.write_blocking();
++        TransactionMut::new_as(self.clone(), lock, None, client)
++    }
++
+     /// A unique client identifier, that's also a unique identifier of current document replica
+     /// and it's subdocuments.
+     ///
+diff --git a/yrs/src/encoding/read.rs b/yrs/src/encoding/read.rs
+index 1de1fa0..0d57877 100644
+--- a/yrs/src/encoding/read.rs
++++ b/yrs/src/encoding/read.rs
+@@ -49,6 +49,20 @@ impl<'a> Cursor<'a> {
+     }
+ }
+ 
++/// Upper bound on how many entries to pre-allocate for a collection whose length prefix
++/// (`count`) was just decoded from untrusted input.
++///
++/// Every entry costs at least `min_entry_bytes` of input, so a decoder with `remaining` bytes
++/// left cannot hold more than `remaining / min_entry_bytes` entries. Capping by that keeps
++/// pre-allocation proportional to the input instead of to an attacker-chosen count (a 7-byte
++/// state vector used to reserve ~2.5 GB). The collection still grows on push if the hint is
++/// low, so this never rejects valid input.
++#[inline]
++pub(crate) fn bounded_capacity(count: usize, remaining: usize, min_entry_bytes: usize) -> usize {
++    debug_assert!(min_entry_bytes > 0);
++    count.min(remaining / min_entry_bytes.max(1))
++}
++
+ impl<'a, R> From<&'a R> for Cursor<'a>
+ where
+     R: AsRef<[u8]>,
+@@ -59,6 +73,11 @@ where
+ }
+ 
+ impl<'a> Read for Cursor<'a> {
++    #[inline]
++    fn remaining(&self) -> usize {
++        self.buf.len().saturating_sub(self.next)
++    }
++
+     /// Take a slice of the next `len` bytes and advance the position by `len`.
+     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
+         if self.next + len > self.buf.len() {
+@@ -84,6 +103,16 @@ impl<'a> Read for Cursor<'a> {
+ pub trait Read: Sized {
+     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error>;
+ 
++    /// Upper bound on the number of input bytes this reader can still yield.
++    ///
++    /// Decoders use it only to bound pre-allocation for length-prefixed collections, never
++    /// for correctness. The default of `0` means "unknown": nothing is pre-allocated and
++    /// collections grow as entries are actually read.
++    #[inline]
++    fn remaining(&self) -> usize {
++        0
++    }
++
+     /// Read a single byte.
+     fn read_u8(&mut self) -> Result<u8, Error> {
+         let buf = self.read_exact(1)?;
+diff --git a/yrs/src/id_set.rs b/yrs/src/id_set.rs
+index 9d3318d..8bab63e 100644
+--- a/yrs/src/id_set.rs
++++ b/yrs/src/id_set.rs
+@@ -410,10 +410,9 @@ impl<'de> Deserialize<'de> for IdSet {
+             where
+                 A: SeqAccess<'de>,
+             {
+-                let mut bytes = match seq.size_hint() {
+-                    None => Vec::new(),
+-                    Some(capacity) => Vec::with_capacity(capacity),
+-                };
++                // `size_hint` comes from the (possibly untrusted) serialized input, so cap the
++                // pre-allocation the way serde's own impls do; the Vec grows past it if needed.
++                let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+                 while let Some(x) = seq.next_element()? {
+                     bytes.push(x);
+                 }
+diff --git a/yrs/src/state_vector.rs b/yrs/src/state_vector.rs
+index d40b438..9e9782d 100644
+--- a/yrs/src/state_vector.rs
++++ b/yrs/src/state_vector.rs
+@@ -1,5 +1,5 @@
+ use crate::block::ClientID;
+-use crate::encoding::read::Error;
++use crate::encoding::read::{bounded_capacity, Error};
+ use crate::updates::decoder::{Decode, Decoder};
+ use crate::updates::encoder::{Encode, Encoder};
+ use crate::utils::client_hasher::ClientHasher;
+@@ -117,12 +117,11 @@ impl FromIterator<(ClientID, u32)> for StateVector {
+ impl Decode for StateVector {
+     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+         let len = decoder.read_var::<u32>()? as usize;
+-        // Attempt to pre-allocate memory for the state vector. `len` is attacker-controlled
+-        // (a few bytes can declare a huge count), so a fallible reservation turns an
+-        // allocation bomb into a recoverable decode error instead of an abort. Mirrors the
+-        // `try_reserve` pattern already used for blocks in `Update::decode`.
++        // `len` is attacker-controlled: 7 bytes can claim 2^32-1 entries, and even a
++        // *successful* reservation of that size costs seconds and gigabytes. Each entry is at
++        // least 2 bytes (client and clock varints), so reserve only what the input could hold.
+         let mut sv = HashMap::with_hasher(BuildHasherDefault::default());
+-        sv.try_reserve(len)?;
++        sv.try_reserve(bounded_capacity(len, decoder.remaining(), 2))?;
+         let mut i = 0;
+         while i < len {
+             let client: u64 = decoder.read_var()?;
+diff --git a/yrs/src/sync/awareness.rs b/yrs/src/sync/awareness.rs
+index 0cea150..d2327bf 100644
+--- a/yrs/src/sync/awareness.rs
++++ b/yrs/src/sync/awareness.rs
+@@ -7,6 +7,7 @@ use std::sync::Arc;
+ use thiserror::Error;
+ 
+ use crate::block::ClientID;
++use crate::encoding::read::bounded_capacity;
+ use crate::sync::{Clock, Timestamp};
+ use crate::updates::decoder::{Decode, Decoder};
+ use crate::updates::encoder::{Encode, Encoder};
+@@ -525,10 +526,10 @@ impl Encode for AwarenessUpdate {
+ impl Decode for AwarenessUpdate {
+     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, crate::encoding::read::Error> {
+         let len: usize = decoder.read_var()?;
+-        // `len` is attacker-controlled (awareness updates arrive over the network); a fallible
+-        // reservation avoids an allocation bomb (see `Update::decode`'s `try_reserve`).
++        // `len` is attacker-controlled (awareness updates arrive over the network). Reserve only
++        // what the input could hold: an entry is at least 3 bytes (client, clock, JSON length).
+         let mut clients = HashMap::new();
+-        clients.try_reserve(len)?;
++        clients.try_reserve(bounded_capacity(len, decoder.remaining(), 3))?;
+         for _ in 0..len {
+             let client_id = ClientID::new(decoder.read_var::<u64>()?);
+             let clock: u32 = decoder.read_var()?;
+diff --git a/yrs/src/transaction.rs b/yrs/src/transaction.rs
+index ec591d7..d2e1b02 100644
+--- a/yrs/src/transaction.rs
++++ b/yrs/src/transaction.rs
+@@ -1,4 +1,6 @@
+-use crate::block::{Block, BlockRange, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID};
++use crate::block::{
++    Block, BlockRange, ClientID, Item, ItemContent, ItemPosition, ItemPtr, Prelim, ID,
++};
+ use crate::branch::{Branch, BranchPtr};
+ use crate::doc::DocAddr;
+ use crate::error::{Error, UpdateError};
+@@ -507,6 +509,10 @@ pub struct TransactionMut<'doc> {
+     local: bool,
+     committed: bool,
+     needs_cleanup: bool,
++    /// k2: the store's own client ID while this transaction makes its changes as another
++    /// client ([Doc::transact_mut_as]). Restored at commit, before subdocs are added (step 10),
++    /// and on every other way out of commit, a panic included.
++    client_override: Option<ClientID>,
+ }
+ 
+ impl<'doc> ReadTxn for TransactionMut<'doc> {
+@@ -555,6 +561,28 @@ impl<'doc> TransactionMut<'doc> {
+             local: true,
+             committed: false,
+             needs_cleanup: false,
++            client_override: None,
++        }
++    }
++
++    /// k2: a transaction whose new blocks (and redone items) take `client`'s ID and clocks
++    /// instead of the store's own, until it commits ([Doc::transact_mut_as]).
++    pub(crate) fn new_as(
++        doc: Doc,
++        mut store: RwLockWriteGuard<'doc, Store>,
++        origin: Option<Origin>,
++        client: ClientID,
++    ) -> Self {
++        let own = std::mem::replace(&mut store.client_id, client);
++        let mut txn = Self::new(doc, store, origin);
++        txn.client_override = Some(own);
++        txn
++    }
++
++    /// k2: give the store its own client ID back (a no-op when there is no override).
++    fn restore_client_id(&mut self) {
++        if let Some(own) = self.client_override.take() {
++            self.store.client_id = own;
+         }
+     }
+ 
+@@ -1070,10 +1098,25 @@ impl<'doc> TransactionMut<'doc> {
+     ///
+     /// This step is performed automatically when a transaction is about to be dropped (its life
+     /// scope comes to an end).
++    ///
++    /// k2: a transaction made with [Doc::transact_mut_as] gives the store its own client ID
++    /// back here, before subdocs added in it are given the doc's client ID (step 10), and also
++    /// when a step before that panics (the panic then carries on).
+     pub fn commit(&mut self) {
+         if self.committed {
+             return;
+         }
++        if self.client_override.is_none() {
++            return self.commit_inner();
++        }
++        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.commit_inner()));
++        self.restore_client_id();
++        if let Err(panic) = done {
++            std::panic::resume_unwind(panic);
++        }
++    }
++
++    fn commit_inner(&mut self) {
+         self.committed = true;
+ 
+         // 2. emit 'beforeObserverCalls'
+@@ -1138,6 +1181,10 @@ impl<'doc> TransactionMut<'doc> {
+             self.store.events = Some(events);
+         }
+ 
++        // k2: the override ends before subdocs are added, so a subdoc made in an as-client
++        // transaction shares the doc's own client ID, as in any other transaction
++        self.restore_client_id();
++
+         // 10. add and remove subdocs
+         if let Some(mut subdocs) = self.subdocs.take() {
+             let client_id = self.store.client_id;
+diff --git a/yrs/src/undo.rs b/yrs/src/undo.rs
+index e4a9549..b523408 100644
+--- a/yrs/src/undo.rs
++++ b/yrs/src/undo.rs
+@@ -2222,4 +2222,55 @@ mod test {
+       um.destroy()
+     }
+          */
++
++    /// k2: undoing a deletion redoes its items (`Item::redo`, which takes the store's client
++    /// ID). Run in a `transact_mut_as` transaction, the redone items are that client's, and
++    /// the doc's own ID is back after.
++    #[test]
++    fn redo_in_an_as_client_transaction_creates_items_as_that_client() {
++        use crate::transaction::Origin;
++        let doc = Doc::with_client_id(1);
++        let txt = doc.get_or_insert_text("t");
++        let mut mgr: UndoManager = UndoManager::new();
++        mgr.expand_scope(&doc, &txt);
++        txt.insert(&mut doc.transact_mut(), 0, "abc");
++        mgr.reset();
++        txt.remove_range(&mut doc.transact_mut(), 0, 3);
++        assert_eq!(txt.get_string(&doc.transact()), "");
++        // the undo manager's own pop, with an as-77 transaction
++        let inner = mgr.inner_mut();
++        let item = inner.undo_stack.pop().unwrap();
++        let origin = Origin::from(inner as *mut _ as usize);
++        let txn = doc.transact_mut_as(ClientID::new(77));
++        let changed = UndoManager::try_process(
++            item,
++            txn,
++            &mut inner.undo_stack,
++            &inner.redo_stack,
++            &inner.scope,
++            &mut inner.observer_popped,
++            true,
++            origin,
++        );
++        assert!(changed);
++        assert_eq!(txt.get_string(&doc.transact()), "abc");
++        let sv = doc.transact().state_vector();
++        assert_eq!(sv.get(&ClientID::new(77)), 3, "the redone items are 77's");
++        assert_eq!(sv.get(&ClientID::new(1)), 3);
++        // the doc's own client writes next
++        txt.insert(&mut doc.transact_mut(), 0, "x");
++        let sv = doc.transact().state_vector();
++        assert_eq!(sv.get(&ClientID::new(1)), 4);
++        assert_eq!(sv.get(&ClientID::new(77)), 3);
++        // the control: the same through the manager's own transaction is the doc's
++        let doc = Doc::with_client_id(1);
++        let txt = doc.get_or_insert_text("t");
++        let mut mgr: UndoManager = UndoManager::new();
++        mgr.expand_scope(&doc, &txt);
++        txt.insert(&mut doc.transact_mut(), 0, "abc");
++        mgr.reset();
++        txt.remove_range(&mut doc.transact_mut(), 0, 3);
++        assert!(mgr.undo_blocking());
++        assert_eq!(doc.transact().state_vector().get(&ClientID::new(1)), 6);
++    }
+ }
+diff --git a/yrs/src/update.rs b/yrs/src/update.rs
+index 9404b2a..6839a02 100644
+--- a/yrs/src/update.rs
++++ b/yrs/src/update.rs
+@@ -3,7 +3,7 @@ use crate::block::{
+     HAS_ORIGIN, HAS_PARENT_SUB, HAS_RIGHT_ORIGIN,
+ };
+ use crate::branch::BranchPtr;
+-use crate::encoding::read::Error;
++use crate::encoding::read::{bounded_capacity, Error};
+ use crate::error::UpdateError;
+ use crate::id_set::IdSet;
+ use crate::store::Store;
+@@ -264,6 +264,20 @@ impl Update {
+     }
+ 
+     /// Returns a delete set associated with current update.
++    /// k2: does this update carry subdocument content (`ItemContent::Doc`) in any of its blocks?
++    ///
++    /// Decode-only: it reads the blocks [Update::decode_v1] produced and touches no document, so
++    /// it is safe to call on an update from an untrusted peer before deciding whether to apply
++    /// it. An embedder that never uses subdocuments can refuse such updates at ingress.
++    pub fn has_subdoc_content(&self) -> bool {
++        self.blocks.clients.values().any(|blocks| {
++            blocks.iter().any(|block| match block {
++                Block::Item(item) => matches!(item.content, ItemContent::Doc(_, _)),
++                _ => false,
++            })
++        })
++    }
++
+     pub fn delete_set(&self) -> &IdSet {
+         &self.delete_set
+     }
+@@ -826,8 +840,16 @@ impl Decode for Update {
+     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
+         // read blocks
+         let clients_len: u32 = decoder.read_var()?;
++        // Counts below are attacker-controlled; a successful reservation of 2^32 slots is
++        // itself the DoS (10 bytes -> ~3 GB). Bound each by what the remaining input could
++        // hold: a client section is at least 3 bytes (blocks_len, client, clock), a block at
++        // least 1 (its info byte).
+         let mut clients = HashMap::with_hasher(BuildHasherDefault::default());
+-        clients.try_reserve(clients_len as usize)?;
++        clients.try_reserve(bounded_capacity(
++            clients_len as usize,
++            decoder.remaining(),
++            3,
++        ))?;
+ 
+         let mut blocks = BlockSet { clients };
+         for _ in 0..clients_len {
+@@ -839,9 +861,7 @@ impl Decode for Update {
+                 .clients
+                 .entry(client)
+                 .or_insert_with(|| VecDeque::new());
+-            // Attempt to pre-allocate memory for the blocks. If the capacity overflows and
+-            // allocation fails, return an error.
+-            blocks.try_reserve(blocks_len)?;
++            blocks.try_reserve(bounded_capacity(blocks_len, decoder.remaining(), 1))?;
+ 
+             for _ in 0..blocks_len {
+                 let id = ID::new(client, clock);
+diff --git a/yrs/src/updates/decoder.rs b/yrs/src/updates/decoder.rs
+index b949cd8..99ea9c1 100644
+--- a/yrs/src/updates/decoder.rs
++++ b/yrs/src/updates/decoder.rs
+@@ -105,6 +105,11 @@ impl<'a> From<&'a [u8]> for DecoderV1<'a> {
+ }
+ 
+ impl<'a> Read for DecoderV1<'a> {
++    #[inline]
++    fn remaining(&self) -> usize {
++        self.cursor.remaining()
++    }
++
+     #[inline]
+     fn read_u8(&mut self) -> Result<u8, Error> {
+         self.cursor.read_u8()
+@@ -198,6 +203,9 @@ impl<'a> Decoder for DecoderV1<'a> {
+ /// Version 2 of lib0 decoder.
+ pub struct DecoderV2<'a> {
+     cursor: Cursor<'a>,
++    /// Total size of the column streams that precede the main cursor. Used only as an upper
++    /// bound for [Read::remaining].
++    streams_len: usize,
+     keys: Vec<Arc<str>>,
+     ds_curr_val: u32,
+     key_clock_decoder: IntDiffOptRleDecoder<'a>,
+@@ -229,12 +237,14 @@ impl<'a> DecoderV2<'a> {
+         let parent_info_buf = Self::read_buf(buf, &mut idx)?;
+         let type_ref_buf = Self::read_buf(buf, &mut idx)?;
+         let len_buf = Self::read_buf(buf, &mut idx)?;
++        let streams_len = idx - cursor.next;
+         let cursor = Cursor {
+             buf: &buf[idx..],
+             next: 0,
+         };
+         Ok(DecoderV2 {
+             cursor,
++            streams_len,
+             ds_curr_val: 0,
+             keys: Vec::new(),
+             key_clock_decoder: IntDiffOptRleDecoder::new(Cursor::new(key_clock_buf)),
+@@ -284,6 +294,13 @@ impl<'a> DecoderV2<'a> {
+ }
+ 
+ impl<'a> Read for DecoderV2<'a> {
++    /// In v2 an entry's fields may come from the column streams rather than the main cursor,
++    /// so count both: this stays an upper bound on the input left, which is all callers need.
++    #[inline]
++    fn remaining(&self) -> usize {
++        self.cursor.remaining().saturating_add(self.streams_len)
++    }
++
+     #[inline]
+     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error> {
+         self.cursor.read_exact(len)

@@ -1,4 +1,5 @@
-//! API invariant: an agent edit keeps no replica after it returns.
+//! API invariant: an agent edit keeps no replica after it returns (v0.9.3: it makes none; the
+//! sampled runtime check's throwaway replica is dropped like the old path's).
 //!
 //! Memory for a loaded doc must be the doc, not the doc times the number of agents that
 //! touched it. A kept per-agent replica is a full copy (D0: same heap as the session), so
@@ -77,7 +78,18 @@ fn agent_edits_keep_no_replica() {
     let b2 = live();
     let reloaded = Doc::load(S, &state).unwrap();
     let reloaded_heap = live() - b2;
-    assert_eq!(reloaded.text(ROOT).unwrap(), session.text(ROOT).unwrap());
+    // The engine keeps each root's text as last read or written (v0.9.2): one copy of the
+    // text, not of the doc. Measured on the reloaded doc's first read, and left out of the
+    // session's count (which holds it since its last edit).
+    let b = live();
+    let t = reloaded.text(ROOT).unwrap();
+    let text_cache = live() - b - t.capacity() as isize;
+    assert!(
+        text_cache >= t.len() as isize,
+        "the text is cached: {text_cache} B"
+    );
+    assert_eq!(t, session.text(ROOT).unwrap());
+    let session_heap = session_heap - text_cache;
 
     // Negative control: the check below must fail if even one replica were kept.
     let b3 = live();

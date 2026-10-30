@@ -35,7 +35,7 @@ cd "$ROOT"
 VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' crates/base/Cargo.toml | head -1)
 THISERROR=$(sed -n 's/^thiserror = "\(.*\)"$/\1/p' crates/base/Cargo.toml | head -1)
 FILES="Cargo.toml Cargo.lock crates/base/src/text crates/spec-undo/Cargo.toml crates/spec-undo/src crates/spec-undo/tests/mutants.rs tools/undo $CMDS $*"
-[ "$KIND" = quint ] && FILES="$FILES spec/quint"
+[ "$KIND" = quint ] && FILES="$FILES spec/quint tools/quint"
 COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs --exclude target --exclude '*.itf.json' \
   -czf "$OUT/bundle.tgz" $FILES 2>/dev/null \
   || COPYFILE_DISABLE=1 tar --exclude target --exclude '*.itf.json' -czf "$OUT/bundle.tgz" $FILES
@@ -89,6 +89,41 @@ inst() { printf 'module %s {\n  import undo(%s).* from "./undo"\n}\n' "$1" "$(pa
 # itfinst NAME ...same...: the instance plus `act` and `out` (the ITF wrapper; init winit, step wstep)
 itfinst() { sed -e "s|__NAME__|$1|" -e "s|__PARAMS__|$(params "$@")|" "$ROOT/tools/undo/itf.qnt.in" > "$1.qnt"; }
 cd spec/quint
+# The guard against a Quint -> TLA+ export issue (tools/quint, v0.9.3), before anything else
+# runs on the model: the source lint, then the exact export check of an instance of undo.qnt
+# (its `quint compile --target tlaplus` fetches Apalache, so no TLC run comes first). A
+# finding (exit 1) or a tool error (exit 2) stops the job; tools/undo/tlc.sh refuses to run
+# TLC unless the check passed.
+s=$(date +%s); set +e
+sh "$ROOT/tools/quint/lint.sh" undo.qnt; rc=$?
+set -e; echo "=== quint lint (undo.qnt): exit $rc, wall $(( $(date +%s) - s ))s"
+[ $rc -eq 0 ] || { echo "=== the Quint export guard stopped the job (lint)"; exit 1; }
+inst q_export_check 2 1 1 1 4 "0, 1, 1" true true none 1
+s=$(date +%s); set +e
+quint compile --target tlaplus --main=q_export_check q_export_check.qnt > /dev/null 2> q_export_check.cerr
+# quint's own Apalache server (4 GiB) fails this model's transpile at random ("error:" and
+# nothing else; tools/undo/tlc.sh): run the check against a server with tlc.sh's heap, then
+# stop it so tlc.sh starts its own as before
+APA_JAR=$(ls ~/.quint/apalache-dist-*/apalache/lib/apalache.jar 2>/dev/null | head -1)
+EC_APA=""
+if [ -n "$APA_JAR" ]; then
+  # quint stops the server it started after its compile: wait for the port (as tlc.sh does)
+  i=0; while bash -c 'exec 3<>/dev/tcp/127.0.0.1/8822' 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
+  java -Xmx${APA_HEAP:-6g} -jar "$APA_JAR" server --port=8822 > "$ROOT/apalache-export-check.log" 2>&1 & EC_APA=$!
+  i=0; until grep -q "running on port" "$ROOT/apalache-export-check.log" 2>/dev/null || [ $i -ge 120 ]; do sleep 1; i=$((i + 1)); done
+fi
+# a tool error (exit 2; quint's compile can fail at random on a cold Apalache server, as
+# tools/undo/tlc.sh notes) is retried, up to 3 attempts; a finding (exit 1) is never retried
+k=1
+while :; do
+  sh "$ROOT/tools/quint/lint.sh" --export --quiet q_export_check.qnt q_export_check; rc=$?
+  [ $rc -eq 2 ] && [ $k -lt 3 ] || break
+  echo "=== quint export check: tool error (attempt $k of 3), retrying"; k=$((k + 1)); sleep 5
+done
+if [ -n "$EC_APA" ]; then kill $EC_APA 2>/dev/null; wait $EC_APA 2>/dev/null; fi
+set -e; echo "=== quint export check (undo.qnt): exit $rc, wall $(( $(date +%s) - s ))s"
+[ $rc -eq 0 ] || { echo "=== the Quint export guard stopped the job (export check)"; exit 1; }
+export QUINT_EXPORT_CHECKED=1
 JOB
 else
 echo 'cd "$ROOT"' >> "$OUT/job.sh"

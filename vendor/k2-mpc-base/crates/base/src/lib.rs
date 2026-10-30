@@ -37,6 +37,8 @@
 pub mod blob;
 pub mod codec;
 pub mod conformance;
+#[cfg(any(test, feature = "differential"))]
+pub mod differential;
 pub mod doc;
 mod engine;
 mod hash;

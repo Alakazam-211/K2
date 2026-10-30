@@ -598,8 +598,14 @@ impl BlobAgent<'_> {
                 let c = self.join(Stay::UntilIdle, used)?;
                 used.push(Api::Log);
                 let mut log = s.log(c)?;
+                let all = (form == "log --pending" || form == "approvals")
+                    && args.iter().any(|a| a == "--all");
                 if form == "log --pending" || form == "approvals" {
-                    log.retain(|e| e.approval == Some(ApprovalState::Pending));
+                    if all {
+                        log.retain(|e| e.approval.is_some());
+                    } else {
+                        log.retain(|e| e.approval == Some(ApprovalState::Pending));
+                    }
                 }
                 if let Some(p) = arg_after(args, "--on-behalf-of") {
                     let p = if p == "me" { ACTOR.to_owned() } else { p };
@@ -611,6 +617,10 @@ impl BlobAgent<'_> {
                 if let Some(n) = arg_after(args, "-n") {
                     let n = num(&n)? as usize;
                     log.drain(..log.len().saturating_sub(n));
+                }
+                if all {
+                    // every approval record, newest first (as a text doc's log)
+                    log.reverse();
                 }
                 v(VerbValue::BlobLog(log))
             }

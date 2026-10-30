@@ -151,7 +151,7 @@ fn enc_row(r: &BlobRow) -> Vec<u8> {
     w.0
 }
 
-fn dec_row(b: &[u8]) -> Result<BlobRow, StoreError> {
+pub(super) fn dec_row(b: &[u8]) -> Result<BlobRow, StoreError> {
     let mut r = R::new(b, "blob row");
     if r.u8()? != 1 {
         return Err(StoreError::Corrupt("blob row version"));
@@ -300,7 +300,7 @@ fn enc_version(v: &BlobVersion) -> Vec<u8> {
     w.0
 }
 
-fn dec_version(b: &[u8]) -> Result<BlobVersion, StoreError> {
+pub(super) fn dec_version(b: &[u8]) -> Result<BlobVersion, StoreError> {
     let mut r = R::new(b, "blob version");
     let ver = r.u8()?;
     if ver != 1 && ver != 2 {
@@ -357,14 +357,14 @@ fn dec_sync(b: &[u8]) -> Result<BlobSync, StoreError> {
     Ok(s)
 }
 
-fn space_in(w: &WriteTransaction, space: &str) -> Result<SpaceKey, StoreError> {
+pub(super) fn space_in(w: &WriteTransaction, space: &str) -> Result<SpaceKey, StoreError> {
     let t = w.open_table(BLOB_SPACES)?;
     let v = t.get(space)?.ok_or(StoreError::NoBlobSpace)?;
     dec_space(v.value())
 }
 
 /// Add `delta` references to a blob; the row must exist.
-fn adjust_ref(
+pub(super) fn adjust_ref(
     w: &WriteTransaction,
     no: u64,
     id: &BlobId,
@@ -430,7 +430,7 @@ pub(super) fn delete_rows(
     Ok(())
 }
 
-fn last_vid(w: &WriteTransaction, id: DocId) -> Result<VersionId, StoreError> {
+pub(super) fn last_vid(w: &WriteTransaction, id: DocId) -> Result<VersionId, StoreError> {
     let t = w.open_table(BLOB_VERSIONS)?;
     let last = t.range((id, 0)..=(id, u64::MAX))?.next_back().transpose()?;
     Ok(last.map_or(0, |(k, _)| k.value().1))
@@ -800,7 +800,8 @@ impl DocStore {
     }
 
     /// Purge versions `vids` of blob doc `id` (the current one is refused:
-    /// [`StoreError::CurrentVersion`]), in one transaction: each keeps its entry with
+    /// [`StoreError::CurrentVersion`]; a text doc promoted from tier 0 has no current blob
+    /// version, so any of its kept ones may go), in one transaction: each keeps its entry with
     /// `redacted` set and the zero id (its keyed id is a digest of the content: it goes too),
     /// and releases its reference on its blob at `now`. Returns the blobs released, with the
     /// references each still has, and the approval records of the purged versions (format
@@ -818,17 +819,22 @@ impl DocStore {
     ) -> Result<(Vec<PurgedBlob>, u64), StoreError> {
         let w = self.begin_write()?;
         let out = {
-            let key = {
+            let meta = {
                 let docs = w.open_table(DOCS)?;
                 let m = docs.get(id)?.ok_or(StoreError::NoDoc(id))?;
-                super::dec_meta(m.value())?.key
+                super::dec_meta(m.value())?
             };
-            let last = last_vid(&w, id)?;
+            let key = meta.key;
+            // a blob doc's latest version is its current content; a doc promoted to text
+            // (v0.9.2) keeps only history here, none of it current
+            let current = (meta.pack == BLOB_DOC_PACK)
+                .then(|| last_vid(&w, id))
+                .transpose()?;
             let space = space_in(&w, &key.space).ok();
             let mut released: Vec<(BlobId, u64)> = Vec::new();
             let mut approvals = 0;
             for &vid in vids {
-                if vid == last {
+                if Some(vid) == current {
                     return Err(StoreError::CurrentVersion(id, vid));
                 }
                 let mut v = {

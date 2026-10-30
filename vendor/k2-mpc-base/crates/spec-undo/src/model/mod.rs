@@ -780,6 +780,9 @@ impl Model {
 
     /// `undo` (U13, U14; `--for`, U2).
     pub fn undo(&mut self, pid: &str, obo: Option<&str>, req: &Request) -> (Outcome, Hits) {
+        if mutant::active() == mutant::Mutant::OraclePanics && self.depths(pid).0 > 0 {
+            panic!("harness mutant: the oracle panics on an undo");
+        }
         self.undo_redo(pid, obo, req, false)
     }
 

@@ -584,7 +584,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         NH,
         &[A::Log],
         &[P::Pending],
-        "log --pending [--on-behalf-of me|P]",
+        "log --pending [--all] [--on-behalf-of me|P] (--all: settled ones too, newest first)",
         OK0,
     )
     .on(BOTH),
@@ -595,7 +595,7 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         NH,
         &[A::Log],
         &[P::Pending],
-        "approvals [--on-behalf-of me|P] (the same as log --pending)",
+        "approvals [--all] [--on-behalf-of me|P] (the same as log --pending)",
         OK0,
     )
     .on(BOTH),

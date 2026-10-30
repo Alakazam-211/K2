@@ -6,6 +6,8 @@
 
 mod yrs;
 
+#[cfg(any(test, feature = "differential"))]
+pub(crate) use self::yrs::TextPlan;
 pub(crate) use self::yrs::{insert_clocks, YrsDoc};
 
 /// A relative position in a text root (the conformance suite's anchors only).
@@ -37,6 +39,16 @@ pub(crate) struct BlameRun {
     pub clock: u32,
 }
 
+/// What the engine's sampled runtime check (the canary, v0.9.3) found: an edit whose fast
+/// update differed from the throwaway replica's (the throwaway's was served; the doc uses
+/// that path until reload), or a cached text that differed from a fresh read (the fresh one
+/// was used; the cache is off until reload).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EngineCheck {
+    EditPath { client: ClientId },
+    TextCache { root: &'static str },
+}
+
 #[allow(dead_code)] // the trait documents the seam; one implementation today
 pub(crate) trait EngineDoc: Sized + Send {
     fn new(schema: &Schema) -> Self;
@@ -48,7 +60,9 @@ pub(crate) trait EngineDoc: Sized + Send {
     fn encode_diff(&self, remote_sv: &[u8]) -> Result<Vec<u8>, DocError>;
     fn check_update(&self, update: &[u8], allowed: ClientId) -> Result<UpdateInfo, DocError>;
     fn apply_trusted(&mut self, update: &[u8]) -> Result<(), DocError>;
-    /// Apply already-validated edits as `client` through a throwaway replica; return the update.
+    /// Apply already-validated edits as `client`, as one change on this doc (v0.9.3: on the doc
+    /// itself, as the client, with a sampled check against a throwaway replica); return the
+    /// update.
     fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Vec<u8>, DocError>;
     /// How many clock units `client` has inserted into this doc (0 if none): a change by
     /// `client` occupies the clocks between this before it and this after it.

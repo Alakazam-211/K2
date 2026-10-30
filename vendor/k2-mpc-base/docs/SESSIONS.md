@@ -14,7 +14,7 @@ engine update itself. Nothing here decodes bytes from a client (`untrusted-wire`
 | `Host` | host | `rights(who, key)`, `now_ms()`, `on_event(&AuditEvent)`; tier 0: `conflict_dir(file)` (default: beside the file) |
 | `Pack` | each file type | `schema()`, `decode(bytes)`, `encode(content, codec)`, `normalize_input(root, text)`, `verbs()` (its own edit verbs, default none), `writes_bom(root, codec)` (default: from `encode`; [Writing a BOM file](#writing-a-bom-file)) |
 | `TextFilePack` | kit | a plain-text pack in one line: `TextFilePack::new("markdown", 4 << 20)` (root `source`) |
-| `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob` |
+| `SessionManager` | kit | one per store: `open`, `open_file`, `get`, `loaded_keys`, `rekey`, `tick`, `poll_disk`, `expire_idle`, `unload_idle`, `recheck_rights`, `delete_doc`, `delete_space`, `stats`, `release`; tier 0: `with_blob_store`, `open_blob`, `open_blob_file`, `get_blob`, `promote_blob_file`, `promote_blob` ([Tier 0 → text](#tier-0--text-v092)) |
 | `Session` | kit | one per loaded doc (`Arc<Session>`, `Send + Sync`) |
 | `ConnId` | kit | one connection (a tab, a `watch`, a CLI caller); `Copy`, passed to every call |
 | `Config` | host | every limit below; `Config::default()` then set fields |
@@ -118,6 +118,10 @@ path; it never loads anything.
   New on-behalf edits are held past the pending cap ([Revert](#revert)).
 - `approval(conn, seq) -> Option<Approval>` and `approvals(conn)` (for `log --pending`) need
   read; the author and the person see their own records, everything else needs `history`.
+- **`approvals --all`** (= `log --pending --all`, v0.9.2): every approval record, settled
+  ones too (approved, declined), newest first; `approvals` alone stays pending-only (P30).
+  Bind it to `log(LogQuery::default().with_settled())` (`LogQuery::settled`); tier 0:
+  `BlobSession::log` keeping the entries with an `approval`, newest first.
 - `Approval { state, by, at_ms, author, on_behalf_of }` survives compaction (the log entry may
   not).
 
@@ -540,6 +544,20 @@ near-empty range on the first keystroke at its edge, which a test shows). The ki
 byte offsets as it does for carets, so the engine stays hidden (no Yrs `StickyIndex`);
 the rules are the same.
 
+**Two participants' claims never overlap** (v0.9.2). Claims can come to share an edge: the
+text between them is deleted (or one claim's text is, leaving it a point on the other's
+edge). Text then typed at that edge joins **one** claim, never both:
+- the **typist's own**, if they hold one of the claims meeting there (the first they
+  acquired, if several);
+- otherwise (a person, a third agent, an outside edit from disk) the claim **acquired
+  first** (claim ids are in acquire order), whichever side it is on.
+
+The other claim carries the text outside it (its end stays before the text, its start
+moves past it, a point moves to the side away from the claim that took it), and the text
+doesn't touch it: no `Edited` end for its owner, no `Respect` refusal for it. One
+participant's own claims meeting there (nobody else's) all take it, as before. A
+reservation's range keeps plain expanding anchors.
+
 **Last edits, not expanding** (v0.9.1). A participant's last-edit span (the roster's
 `last_edit`, `Edited` notes) is about text they wrote, so it is carried the other way: its
 start moves past text inserted at or replacing it, its end stays before it. A span that
@@ -571,8 +589,9 @@ ClaimInfo` needs edit. "I'm working on lines 40–60."
     trusted then).
   Someone else's edit, a person's included, never ends a claim.
 - **"Touching"**: a replacement or deletion that changes a character inside the span, or an
-  insertion inside it or at either edge. Deleting only the newline after the last line, or
-  text before the first, doesn't touch it.
+  insertion inside it or at either edge (at an edge shared with another participant's
+  claim, only the claim the text joins, above). Deleting only the newline after the last
+  line, or text before the first, doesn't touch it.
 - `renew_claim(conn, id: Option<ClaimId>, ttl_ms, hold: Option<bool>) -> ClaimInfo` (needs
   edit; `None` id: the caller's only claim here, else `NoClaim(None)` / `BadClaim`): expiry
   becomes `now + ttl`, and `hold` is set or cleared. Someone else's claim: `BadClaim`.
@@ -746,7 +765,15 @@ change, on `flush(conn)`, on unload, and on `release()`. Each write:
    kit never overwrites content it hasn't seen (the window left is between that read and the
    rename);
 2. renders with `pack.encode` (BOM and line endings restored) and skips if the bytes equal
-   what the file holds;
+   what the file holds. A skipped write still brings the **disk replica** (the doc as the
+   file holds it, below) up to the doc when the doc changed since the replica was synced: a
+   change that moved no byte (an edit and its undo, a delete and a retype, a restore or
+   revert to the file's text) puts the same text back on new elements (v0.9.4). Since
+   v0.9.5 an outside edit uses only the replica's text, so this keeps the replica exact for
+   K-AUD-1, not for correctness. The marker is the doc's change counter (v0.9.5; O(1)): the
+   replica was synced at version `synced_seq`, stored with it, and any change moves the
+   version past it, a delete-only one included (v0.9.4's state vectors missed those). A
+   re-sync is one full encode, stored as the synced state;
 3. is **atomic**: a temp file beside it (`.<name>.~mp<pid>-<n>.tmp`; `is_write_temp(name)`
    tells a watcher to ignore it), the old file's permissions, fsync, rename over, fsync the
    folder. Symlinks are resolved, so a link stays a link and its target is written. Temp files
@@ -755,7 +782,8 @@ change, on `flush(conn)`, on unload, and on `release()`. Each write:
    the rename and promoted after it, so a crash in between is recognised on the next open
    (the file matches the write in flight) instead of looking like an outside edit;
 5. remembers the last 8 written hashes for **echo suppression**: keyed, in memory only, each
-   for `own_write_ttl_ms` (60 s), and forgotten by a purge.
+   for `own_write_ttl_ms` (60 s), and forgotten by a purge and by every outside save taken
+   in (v0.9.5).
 
 If the file was deleted, replaced by a folder, or re-pointed outside the root, nothing is
 written: the state is `Missing`, the doc and its edits are kept, `AuditEvent::FileMissing
@@ -765,17 +793,46 @@ file comes back, it is checked like any outside edit.
 **Outside edits (file → doc).** On `file_changed()`, or when `check_disk()` / `tick()` finds
 the size, mtime or inode changed (a rename-save changes the inode):
 - the file holds the last synced content → nothing;
-- it holds an older write of the kit's from the last 60 s (an echo, or an editor saving a
-  stale buffer) → not an edit (`OwnWrite`); the next write-back puts the doc back. An older
-  one (or one from before a purge) is an outside edit;
+- it holds an older write of the kit's from the last 60 s, made **since the last outside
+  save** (an echo, or an editor saving a stale buffer) → not an edit (`OwnWrite`), reported
+  once as `AuditEvent::EchoSuppressed`; the next write-back puts the doc back. An older one,
+  one from before a purge, or one from before an outside save that was taken in, is an
+  outside edit (v0.9.5: before, a person who saved, then saved again the bytes of an earlier
+  kit write, an undo for instance, had that save discarded and overwritten);
 - otherwise: a version "before external edit" is cut (when the doc moved since the last
-  version), the diff from the **last synced text to the new file text** is applied as the
-  reserved participant `kit:external` (`EXTERNAL_PID`, its own client ID per doc,
-  `via: "disk"`, no `on_behalf_of`), and a version "external edit" is cut, all in one store
-  transaction. The diff is made on the doc **as the file held it** and merged into the live
-  doc as a CRDT change, so edits typed since the last write-back are kept, and the next
-  write-back writes the merged result. Subscribers get a `ChangeEvent` from `kit:external`;
-  the host gets `AuditEvent::ExternalEdit { seq }`.
+  version), the save is merged into the live doc as the reserved participant `kit:external`
+  (`EXTERNAL_PID`, its own client ID per doc, `via: "disk"`, no `on_behalf_of`), and a
+  version "external edit" is cut, all in one store transaction. Subscribers get a
+  `ChangeEvent` from `kit:external`; the host gets `AuditEvent::ExternalEdit { seq }`.
+- **The merge (v0.9.5)** is three-way, onto the live doc: base = the **last synced text**
+  (what the file held), ours = the file's new text, theirs = the **live text**, dirty or
+  not (`text::merge::merge3_keep_both`). Both sides are diffed from the base with pure line
+  insertions slid to line starts and pure line deletions to whole lines (`outside_sides`).
+  Its hunks are on the live text and are
+  applied to the live doc as they are, so edits typed since the last write-back are kept,
+  and the next write-back writes the merged result.
+  - **Clean** (no overlap): `write --base`'s merge and pair rules (O1–O5): the save lands
+    exactly as the plain editor made it.
+  - **Overlap** with a change not yet written back: **both are kept**, as the CRDT merge
+    of v0.1.0–v0.9.4 kept them, at **line granularity**: each hunk that meets an overlap is
+    widened to whole lines (`outside_merge_sides`), then every line either side deleted is
+    gone and every line either side wrote lands whole. At one point, pure insertions go
+    before replacements, and the live side first within each. A change made identically
+    on both sides is taken once. It is never refused and makes no conflict copy (those are
+    tier 0's). Two sides' lines are never spliced into one (a text diff of a multi-line
+    change, merged at the character, could: `p12:63ed:95`).
+  - Before v0.9.5 the save was made on the **disk replica** (the doc as the file held it)
+    and the CRDT update merged in. A change that moved no byte puts the text back on new
+    elements, so a replica synced before it held the old ones. The save's deletes then
+    missed and its inserts landed beside the copy (`LINE three3`). v0.9.4 re-synced the
+    replica whenever the doc rendered the synced bytes. That left the write delay open: a
+    change that moved no byte, then an edit not yet written back. Now only the replica's
+    **text** is used, as the base.
+  - The replica then takes the file's text. When the doc holds the file's text, the
+    replica becomes the doc (same elements). Otherwise the save is made on the replica as a
+    client of its own, one the doc never holds. The doc can't render the synced bytes
+    again without a change or a write-back, and either replaces the replica whole. Nothing
+    is ever merged from the replica into the doc.
 - A file that is the same text in other bytes (CRLF ↔ LF, a BOM added) adopts the new format.
 
 The disk is never the merge authority: the session is never replaced with the file's content
@@ -806,6 +863,7 @@ same spot would then land inside it. So the edit paths that diff (`edit_with`,
 | `Session::file_moved(new_path)` | the file now lives at `new_path` |
 | `Session::flush(conn)` | needs read; `FlushOutcome { written, hash (HMAC-SHA256 hex of the doc's bytes under the doc's key: compare only with this doc's hashes; a purge changes it), disk }` |
 | `Session::file_path()` | the path as given |
+| `Session::audit_disk_sync()` | K-AUD-1's sync check (v0.9.4): when the doc is `Clean`, the disk replica must hold the doc's text on the doc's elements; returns `SyncDrift::Text { root }` / `Elements { root }` for each root that doesn't (metadata only), empty otherwise. In any disk state (v0.9.5), `SyncDrift::Pending { replica }` when the doc or the replica holds an update it couldn't integrate (missing dependencies) or is poisoned. Read-only, O(doc) (a blame of each root on both): for a nightly audit or a test, not the edit path |
 
 `DiskState`: `Clean`, `Dirty { since_ms }`, `Missing`, `Declined(reason)`. `DiskCheck`:
 `Unchanged`, `OwnWrite`, `Ingested { version }`, `Missing`, `Declined(Declined)`.
@@ -1155,6 +1213,11 @@ content or a blob id, so nothing in it quotes the content (`counts.approvals`; t
 test checks the content and the blob id, raw and hex, are gone from the store file, the blob
 folder and the workspace).
 
+A text doc **promoted from tier 0** (v0.9.2, [Tier 0 → text](#tier-0--text-v092)) keeps its
+purged blob versions purged and imports nothing of them. Its kept tier-0 versions are purged
+with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other scopes report
+`NotReached::Tier0History(n)`.
+
 ### What purge does not reach (K-PURGE-12)
 
 | Copy | Reached? | How |
@@ -1200,6 +1263,7 @@ folder and the workspace).
 | `note_edit_window_ms` | 60 s | an edit this recent is a heads-up note |
 | `note_repeat_ms` / `note_interval_ms` / `note_batch_max` | 60 s / 5 s / 5 | note dedupe window; one batch per reader per doc per interval; notes per batch |
 | `activity_max` | 256 | activity rows per doc (memory only) |
+| `edit_check_every` | 1,000 | the edit path's runtime check (v0.9.3): one edit in this many is also made through a throwaway replica and the updates compared byte for byte, and the engine's cached texts against a fresh read. A mismatch is never served: `AuditEvent::EditPathMismatch` / `TextCacheMismatch` (metadata only), and the doc takes the replica path (or reads its texts afresh) until reloaded. 0: never |
 
 ## Errors (`SessionError`)
 
@@ -1216,6 +1280,8 @@ folder and the workspace).
 | `NotFound` | no doc and no bytes | 4 |
 | `PackMismatch` | stored doc belongs to another pack | 4 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
+| `Doc(DocError::Unaccepted)` | a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_UNACCEPTED`) | 3 |
+| `Doc(DocError::Quarantined)` | a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_QUARANTINED`) | 3 |
 | `NoApproval { seq }` | no approval to settle (the change wasn't made on anyone's behalf, or doesn't exist) | 4 |
 | `BadApproval` | already settled the other way | 2 |
 | `BadPath` | `open_file` / `file_moved`: not a regular file inside the root | 2 |
@@ -1351,7 +1417,7 @@ editor, an agent can do through a verb, with the same effect.
 | P26 | Ctrl+Z (`undo --partial`) | `undo_with(UndoMode::Partial)` (the native tab's grouping is G3) |
 | P28 | `purge` | later (redaction) |
 | P29 | `approve`, `decline` | `set_approval(conn, seq, Approved \| Declined)` (only the person it was made for); tier 0: `BlobSession::set_approval(conn, version, ..)` |
-| P30 | `log --pending --on-behalf-of me`, or its alias `approvals --on-behalf-of me` | `log(LogQuery::pending().on_behalf_of(pid))`; a tab may use `approvals`; tier 0: `BlobSession::log` (`approval`) / `approvals` |
+| P30 | `log --pending --on-behalf-of me`, or its alias `approvals --on-behalf-of me`; `--all` for settled ones too | `log(LogQuery::pending().on_behalf_of(pid))`; a tab may use `approvals`; tier 0: `BlobSession::log` (`approval`) / `approvals` |
 | P31 | `revert <change>` | `revert(conn, change, partial)` (author, the person, or owner; too old: exit 8) |
 
 ## Not in this slice
@@ -1538,8 +1604,10 @@ when its size, mtime or inode changed (the synced stat is stored, so reopening a
 1 GB file doesn't re-hash it).
 
 - The file holds the current version, or what the kit last synced → `Unchanged`.
-- It holds an older write of the kit's (an app saving a stale buffer, a late echo; the last 8,
-  in memory) → `OwnWrite`; the next write-back puts the current version back.
+- It holds an older write of the kit's made since the last outside save (an app saving a
+  stale buffer, a late echo; the last 8, in memory) → `OwnWrite`, reported as
+  `AuditEvent::EchoSuppressed`; the next write-back puts the current version back. Each
+  outside save taken in forgets them (v0.9.5).
 - Otherwise it is an **outside save**: the file is stored as a version by `kit:external`
   (`via: "disk"`, `External`, the file's mtime) → `Ingested { version }`,
   `AuditEvent::ExternalEdit { seq: version }`.
@@ -1618,6 +1686,89 @@ see amendment 11), participant erasure on blob docs, automatic version retention
 fuzz target, and hashing outside the session lock (a large outside save is hashed under it
 today). Purge is in [Erasure](#erasure).
 
+### Tier 0 → text (v0.9.2)
+
+A file refused as text once (mixed line endings, a NUL byte, too large) lives as a blob doc.
+When it reads as text again, the host **promotes** it: the same key and doc id become a text
+doc of a pack, and its tier-0 history is kept.
+
+`SessionManager::promote_blob_file(pack, &key, path, root) -> (Arc<Session>, Promotion)`
+(`promote_blob(pack, &key)` for a doc without a file). The host calls it when `open_file`
+with a text pack says `PackMismatch { stored: "kit:blob" }` and the file now decodes. It is a
+manager call with no participant, like `delete_doc`: the host checks its own rights first.
+
+1. The blob doc is loaded and reconciled with its file (an outside save, such as the fix, is a
+   version first) and written back, under the blob session's lock.
+2. Every version is read and decoded by the pack, oldest first (a version over
+   `disk_read_max_bytes` isn't read).
+3. **Each version that decodes becomes a text version**, built as an import chain through the
+   engine (no crafted bytes):
+   - one change per version whose text differs from the one before (the first is
+     `ChangeKind::Import`; then `Edit` for a write, `External` for an outside save, `Restore`
+     of the text version for a restore of a version that became text, else `Edit`);
+   - each change is by the version's **author**, at its **time**, with its `via` and
+     `on_behalf_of`; blame, `log` and revert see them like any change (their revert records
+     are diffs of the texts, like an outside edit's);
+   - the version is cut at that change's position, with the blob version's time, author and
+     **name**. Its reason is `Import` for the first, `External` for an outside save or a merge,
+     `Idle` otherwise. A version whose text equals the one before (only its line endings or BOM
+     changed) gets a version and no change;
+   - an on-behalf version's **approval** moves to its change, in the state it was in
+     (approved, declined or pending; a settled one doesn't count against the pending cap).
+4. **Versions that don't decode stay as tier-0 versions, listed as the doc's tier-0
+   history**: same ids, entries, bytes and approvals. So do purged versions (their entries
+   only) and an on-behalf version with no text change (no change can carry its approval).
+   They are not text versions: a text doc can't restore bytes that aren't text, and the
+   text version list stays restorable. Keeping them as they were means nothing is converted
+   or lost, and their ids, approvals and purge state carry over unchanged.
+5. **One store transaction** (`DocStore::promote_blob_doc`) writes the text doc (metadata,
+   clients, log, change summaries, revert records, approvals, versions, the sync state and
+   a fresh hash key) and removes the blob doc's sync state and the rows of the versions that
+   moved, releasing their blobs. A crash before it leaves the blob doc exactly as it was; after
+   it, the doc is text. **No store-format change** (format 5): no new table or record version.
+6. After the commit: the moved versions' blobs that nothing else uses are removed **at once**
+   (`Promotion::blobs_removed`), so a later purge of the text can't miss their bytes. The blob
+   session closes (later calls: `Unloaded`) and `AuditEvent::Promoted { key, connections,
+   text_versions, changes, tier0_kept }` names the connections that were in it: tell those
+   tabs to open the text doc. Then the text session opens on the file.
+
+`Promotion { key, versions, changes, blobs_removed, connections }` lists every tier-0 version
+and what it became (`Promoted`): `Text { version, seq, change, tier0_kept }`, `NonText { code }`
+(the pack's reason: `mixed_line_endings`, `binary`, `not_utf8`, `too_large`; `unreadable` for a
+damaged blob), or `Purged`.
+
+**Errors** (nothing changed): `NotFound`; `PackMismatch` when the doc isn't a blob doc;
+`Leased` while anyone holds the lease (break or wait for it); `Declined` when the current
+version doesn't decode; `Disk` when the file can't be written back first; `NoBlobStore`. An
+error opening the text session after the switch leaves the doc promoted: open it with
+`open_file`.
+
+**Rights** are per key, so they carry over as they are. **Purge** carries over: a purged
+version stays purged (its entry in the tier-0 history) and nothing of it is imported.
+
+**The tier-0 history** on the text `Session` (empty for a doc that was never tier 0):
+
+| Call | Rights | What it does |
+|---|---|---|
+| `tier0_log(conn)` | history | the kept versions as `BlobLogEntry`s, oldest first (as the blob doc's `log`) |
+| `read_tier0_version(conn, v)` | history | one kept version's bytes, streamed and verified (`PurgedVersion` once purged; `NoVersion` for one that became text: read it with `show`) |
+| `set_tier0_approval(conn, v, state)` | the person | settle a kept on-behalf version's approval (the blob rule; `restore_to` is `None`: a text doc can't restore it) |
+| `purge_tier0(conn, Option<v>)` | owner | purge one kept version, or all, as `BlobSession::purge` does (no version is current here) |
+
+A text `purge` with `PurgeScope::History` purges the tier-0 history too. Other scopes don't
+search it and say so with `NotReached::Tier0History(n)`.
+
+**What changes for the history:**
+- text retention (K-HIST-7) applies to the imported versions from now on, by their original
+  times (blob versions had none); named ones are kept;
+- a text version holds the text, not the bytes: restoring one writes it in the doc's
+  current format (line endings and BOM of the current version);
+- conflict copies recorded on versions that moved are no longer tracked: their files stay
+  where they are, and the kit's cleanup won't delete them.
+
+An older build (v0.9.1) reads a promoted doc as a text doc and ignores its tier-0 rows;
+deleting the doc there still releases their blobs (deletion erases every blob row of a doc).
+
 ## Store: history tables
 
 Seven tables beside the log, created on open: `changes` (summary and hunk shape per change;
@@ -1643,6 +1794,38 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Amendment 17 (v0.9.3, additive): edits on the doc itself, the runtime check, outside edits at element identity
+
+- **Edits on the doc itself:** every edit a session makes (verbs, `write --base`, undo, redo,
+  revert, restore, outside edits, import, promotion) is made on the doc as the participant's
+  client (`transact_mut_as`), not on a throwaway replica of the whole doc. Results are
+  byte-identical; the cost no longer follows the doc's history the way the replica's did
+  (`docs/evidence/v0.9.3-edit-path.md`). Nothing changes for hosts.
+- **The runtime check:** `Config::edit_check_every` (default 1,000; [Limits](#limits-config)),
+  `AuditEvent::EditPathMismatch { key, client, change }` and `TextCacheMismatch { key, root,
+  change }` (additive: `AuditEvent` is `#[non_exhaustive]`).
+- **Outside edits** are reported to undo regions and subscribers at element identity (from
+  each element's ID before and after the merge), not as a diff of the live text: in repeated
+  text the diff named other elements, and an undo could conflict on text nobody had touched.
+
+### Amendment 16 (v0.9.2)
+
+- **Claims at a shared edge** ([Agent presence](#agent-presence-amendment-13)): two
+  participants' claims never overlap. Text typed where they meet joins the typist's own
+  claim if they hold one there, otherwise the one acquired first; the other claim carries
+  it outside and isn't touched by it (`Edited`, `Respect`). Was: both took it, and the two
+  claims overlapped (the v0.9.1 soak's finding).
+- **`approvals --all`** (and `log --pending --all`): settled approval records too, newest
+  first; P30 gains a case for each name, both tiers. `LogQuery::settled` /
+  `LogQuery::with_settled()` (additive: `LogQuery` is `#[non_exhaustive]`).
+- **Tier 0 → text promotion keeping history** ([Tier 0 → text](#tier-0--text-v092)):
+  `SessionManager::promote_blob_file` / `promote_blob` turn a blob doc that now reads as text
+  into a text doc with the same key and doc id, in one store transaction (no format change).
+  Versions that decode become text versions (one change each, by the original author at the
+  original time, approvals carried); the rest stay as the doc's tier-0 history
+  (`Session::tier0_log`, `read_tier0_version`, `set_tier0_approval`, `purge_tier0`). New:
+  `Promotion`, `Promoted`, `AuditEvent::Promoted`, `NotReached::Tier0History`.
 
 ### Amendment 15 (v0.9.1, additive): one guarded edit call, a `run_tool` flag, `approvals`, one BOM
 

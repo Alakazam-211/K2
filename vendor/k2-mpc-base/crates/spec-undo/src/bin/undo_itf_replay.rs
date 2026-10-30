@@ -6,7 +6,8 @@
 //! difference is a mismatch, reported with the trace and step, never adjusted.
 //!
 //! Usage: `undo_itf_replay [bound flags as undo_enum] [--mutant NAME] <file or dir>...`.
-//! Ends with one `SUMMARY ...` line; exit 0 with no mismatch, 1 otherwise, 2 on usage.
+//! Ends with one `SUMMARY: ...` line and one `RUNREC` record (`tools/evidence/`; run name
+//! `RUNREC_RUN`, default from the directory); exit 0 with no mismatch, 1 otherwise, 2 on usage.
 
 use std::path::PathBuf;
 
@@ -98,8 +99,15 @@ fn main() {
     }
     println!("actions replayed by kind: {kinds:?}");
     println!(
-        "SUMMARY itf traces={traces} steps={steps} longest={longest} mismatches={bad} viol_seen=[{}]",
+        "SUMMARY: itf traces={traces} steps={steps} longest={longest} mismatches={bad} viol_seen=[{}]",
         viol.into_iter().collect::<Vec<_>>().join(",")
+    );
+    // the run's record (tools/evidence/): one per replay
+    println!(
+        "RUNREC {{\"job\":null,\"run\":{:?},\"tool\":\"itf_replay\",\"status\":{:?},\"traces\":{traces},\"steps\":{steps},\"longest\":{longest},\"mismatches\":{bad},\"exit\":{}}}",
+        std::env::var("RUNREC_RUN").unwrap_or_else(|_| format!("itf_{}", b.describe().replace([' ', '=', '"'], "_"))),
+        if bad == 0 { "COMPLETE" } else { "VIOLATION" },
+        i32::from(bad > 0)
     );
     std::process::exit(i32::from(bad > 0));
 }

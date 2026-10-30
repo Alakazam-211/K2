@@ -1,7 +1,7 @@
 //! The bounded world's reductions, machine-checked at small bounds, and the oracle of record
 //! clean at them.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
@@ -57,12 +57,25 @@ fn concurrent_restores_are_reached() {
         init: "ab".into(),
         ..Bound::small()
     };
-    let mut n = 0;
+    let mut n = BTreeMap::new();
     let c = bfs(&b, false, STOP, false, |s, _| {
-        n += usize::from(s.hit.contains(&"concurrent_restore"));
+        for h in &s.hit {
+            *n.entry(*h).or_insert(0usize) += 1;
+        }
     });
     assert!(c.violations.is_empty(), "{:?}", c.violations);
-    assert!(n > 0, "the class concurrent_restore is never reached");
+    // the class and each of its parts (v0.9.2)
+    for class in [
+        "concurrent_restore",
+        "concurrent_restore_o4",
+        "concurrent_restore_o4a",
+        "concurrent_restore_base_by_root",
+    ] {
+        assert!(
+            n.get(class).copied().unwrap_or(0) > 0,
+            "{class} never reached: {n:?}"
+        );
+    }
 }
 
 /// A restart changes no revert (RT, U22a v1.6) on the oracle of record, and the case

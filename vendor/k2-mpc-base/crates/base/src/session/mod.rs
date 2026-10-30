@@ -56,7 +56,7 @@ pub(crate) use live::Shown;
 pub use live::{
     Blame, BlameLine, ChangeEvent, DiffOutput, EditOptions, EditResult, Joined, LogItem, LogQuery,
     NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange, Session, Status,
-    UndoMode, UndoOutcome, UndoRequest, WriteOutcome, WriteReport,
+    SyncDrift, UndoMode, UndoOutcome, UndoRequest, WriteOutcome, WriteReport,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{Declined, Pack, PackContent, PackError, TextFilePack};
@@ -68,14 +68,20 @@ pub use position::{At, Cursor, LineCol, LineRange};
 pub use tier0::{
     conflict_copy_name, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry, BlobLogKind,
     BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteResult, ConflictCopy,
-    LeaseInfo, MERGE_PID, REGION_MAX_BYTES,
+    LeaseInfo, Promoted, Promotion, MERGE_PID, REGION_MAX_BYTES,
 };
 pub use undo::{ConflictKind, ConflictRegion};
 
 #[cfg(test)]
 mod disk_crash_tests;
 #[cfg(test)]
+mod engine_check_tests;
+#[cfg(test)]
 mod manager_tests;
+#[cfg(test)]
+mod one_writer_tests;
+#[cfg(test)]
+mod promote_crash_tests;
 #[cfg(test)]
 mod tier0_crash_tests;
 

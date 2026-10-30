@@ -674,6 +674,42 @@ fn an_app_saving_an_older_write_of_ours_is_an_echo() {
     let out = s.flush(a).unwrap();
     assert!(out.written);
     assert_eq!(fs::read(&path).unwrap(), b"v3");
+    assert!(f
+        .events()
+        .iter()
+        .any(|e| matches!(e, AuditEvent::EchoSuppressed { .. })));
+}
+
+/// v0.9.5: a save with the bytes of a kit write made before a person's earlier save is that
+/// person's save, never an echo.
+#[test]
+fn a_save_recreating_a_write_of_ours_after_an_outside_save_is_kept() {
+    let f = fx("echo-after-save");
+    let path = f.path("a.bin");
+    fs::write(&path, b"v1").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("a.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    s.write_bytes(a, b"v2", 1).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"v2");
+    // a person saves over it, then saves the old bytes again
+    app_save(&path, b"mine");
+    assert!(matches!(
+        s.file_changed().unwrap(),
+        DiskCheck::Ingested { .. }
+    ));
+    app_save(&path, b"v2");
+    assert!(matches!(
+        s.file_changed().unwrap(),
+        DiskCheck::Ingested { .. }
+    ));
+    assert_eq!(read_all(&s, a), b"v2");
+    s.flush(a).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), b"v2");
+    assert!(!f
+        .events()
+        .iter()
+        .any(|e| matches!(e, AuditEvent::EchoSuppressed { .. })));
 }
 
 // ---------- tier 0.5 hook ----------
@@ -2164,4 +2200,152 @@ fn copy_dir(from: &Path, to: &Path) {
             fs::copy(&p, to.join(e.file_name())).unwrap();
         }
     }
+}
+
+// ---------- racy clean (v0.9.5): an equal stat can't vouch for a file saved inside its mtime tick
+
+/// An in-place save (same inode, same size) that leaves the file's mtime at `mtime`: what a
+/// second save inside one mtime tick looks like, made deterministic.
+fn save_in_place_at(path: &Path, bytes: &[u8], mtime: std::time::SystemTime) {
+    fs::write(path, bytes).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
+/// An mtime the kit can't trust yet (in the future, like a share whose clock runs ahead):
+/// every stat it takes of the file is racy.
+fn racy_mtime() -> std::time::SystemTime {
+    std::time::SystemTime::now() + std::time::Duration::from_secs(3600)
+}
+
+/// A file the kit has synced, its mtime set to `at` before the kit first looks.
+fn racy_file(f: &Fx, name: &str, bytes: &[u8], at: std::time::SystemTime) -> PathBuf {
+    let path = f.path(name);
+    save_in_place_at(&path, bytes, at);
+    path
+}
+
+/// (a) A person's same-size save inside the tick of the kit's last look, then a kit version:
+/// the write-back's check finds the save, which stays current (and on disk); nothing of it
+/// is overwritten.
+#[test]
+fn racy_a_save_inside_the_tick_is_never_overwritten_by_a_write_back() {
+    let f = fx("racy-wb");
+    let at = racy_mtime();
+    let path = racy_file(&f, "sheet.xlsx", b"orig-01", at);
+    f.grant("agent", Rights::full());
+    let s = f.open("sheet.xlsx");
+    let g = f.join(&s, agent("agent"));
+    let v1 = s.status().unwrap().version;
+    save_in_place_at(&path, b"pers-01", at);
+    let w = s.write_bytes(g, b"agent-version", v1).unwrap();
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        b"pers-01",
+        "the person's save is never overwritten"
+    );
+    assert_eq!(read_all(&s, g), b"pers-01", "the save is current");
+    let mut r = s.read_version(g, w.version).unwrap();
+    let mut b = Vec::new();
+    r.reader.read_to_end(&mut b).unwrap();
+    assert_eq!(b, b"agent-version", "the kit's version is kept");
+}
+
+/// (b) The stat poll on tick finds a same-size save inside the tick.
+#[test]
+fn racy_the_poll_finds_a_save_inside_the_tick() {
+    let f = fx("racy-poll");
+    let at = racy_mtime();
+    let path = racy_file(&f, "photo.jpg", b"jpeg-01", at);
+    f.grant("alice", Rights::full());
+    let s = f.open("photo.jpg");
+    let a = f.join(&s, person("alice", "Alice"));
+    save_in_place_at(&path, b"jpeg-02", at);
+    f.advance(3_000);
+    let rep = f.mgr.tick().unwrap();
+    assert_eq!(rep.ingested.len(), 1, "{rep:?}");
+    assert_eq!(read_all(&s, a), b"jpeg-02");
+    assert_eq!(s.status().unwrap().current.author, EXTERNAL_PID);
+}
+
+/// The host's watcher (`file_changed`) always reads and hashes: no stat shortcut.
+#[test]
+fn racy_file_changed_always_hashes() {
+    let f = fx("racy-fc");
+    let at = racy_mtime();
+    let path = racy_file(&f, "photo.jpg", b"jpeg-01", at);
+    f.grant("alice", Rights::full());
+    let s = f.open("photo.jpg");
+    let a = f.join(&s, person("alice", "Alice"));
+    save_in_place_at(&path, b"jpeg-02", at);
+    assert!(matches!(
+        s.file_changed().unwrap(),
+        DiskCheck::Ingested { .. }
+    ));
+    assert_eq!(read_all(&s, a), b"jpeg-02");
+}
+
+/// (e) A stat read back from the store after a reopen: the kit doesn't keep a racy stat,
+/// so a same-size save inside its tick while nobody had the doc open is found on open.
+#[test]
+fn racy_a_save_while_closed_is_found_on_reopen() {
+    let f = fx("racy-reopen");
+    let at = racy_mtime();
+    let path = racy_file(&f, "a.bin", b"blob-01", at);
+    f.grant("alice", Rights::full());
+    {
+        let s = f.open("a.bin");
+        f.join(&s, person("alice", "Alice"));
+    }
+    f.mgr.release().unwrap();
+    save_in_place_at(&path, b"blob-02", at);
+    let h = f.host.clone();
+    let blobs = Arc::new(
+        BlobStore::open(
+            f.store.clone(),
+            f.dir.0.join("blobs"),
+            BlobConfig::default(),
+            Arc::new(move || h.now_ms()),
+        )
+        .unwrap(),
+    );
+    let mgr = SessionManager::new(f.store.clone(), f.host.clone(), Config::default())
+        .with_blob_store(blobs);
+    let s = mgr
+        .open_blob_file(Arc::new(AnyFile), &key("a.bin"), &path, &f.ws)
+        .unwrap();
+    let st = s.status().unwrap();
+    assert_eq!(st.version, 2, "the save while closed is a version");
+    assert_eq!(st.current.author, EXTERNAL_PID);
+}
+
+/// (d) The conflict-copy cleanup: a copy edited, then edited back to its version's bytes
+/// inside the same mtime tick, is the kit's copy again (and goes), not "edited" for good.
+#[test]
+fn racy_a_copy_edited_back_inside_the_tick_is_the_kits_again() {
+    let f = fx("racy-gc");
+    f.conflicts_in(Some("conflicts"));
+    fs::write(f.path("x.bin"), b"base").unwrap();
+    f.grant("alice", Rights::full());
+    let s = f.open("x.bin");
+    let a = f.join(&s, person("alice", "Alice"));
+    let (copy, _, _) = conflict(&f, &s, a, b"alice's", b"desktop");
+    let at = racy_mtime();
+    save_in_place_at(&copy, b"ALICE's", at);
+    f.advance(31 * DAY);
+    assert!(
+        f.mgr.tick().unwrap().conflict_copies_removed.is_empty(),
+        "edited: kept"
+    );
+    save_in_place_at(&copy, b"alice's", at);
+    f.advance(DAY);
+    assert_eq!(
+        f.mgr.tick().unwrap().conflict_copies_removed,
+        [(key("x.bin"), copy.clone())],
+        "edited back to its version: the kit's copy again"
+    );
 }

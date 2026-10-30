@@ -1,0 +1,71 @@
+{
+ "job": "4553f0e6",
+ "collected": "2026-10-28",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "4553f0e6",
+   "run": "after_cell_set_10000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 10000,
+   "median_us": 0,
+   "ninety_ninth_us": 100,
+   "max_us": 100,
+   "peak_extra_heap_kib": 102,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "4553f0e6",
+   "run": "after_cell_set_25000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 25000,
+   "median_us": 100,
+   "ninety_ninth_us": 300,
+   "max_us": 400,
+   "peak_extra_heap_kib": 205,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "4553f0e6",
+   "run": "after_cell_set_50000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 50000,
+   "median_us": 300,
+   "ninety_ninth_us": 700,
+   "max_us": 700,
+   "peak_extra_heap_kib": 410,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "4553f0e6",
+   "run": "after_cell_set_100000",
+   "tool": "structured_mem",
+   "status": "COMPLETE",
+   "cells": 100000,
+   "median_us": 800,
+   "ninety_ninth_us": 1300,
+   "max_us": 1500,
+   "peak_extra_heap_kib": 819,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

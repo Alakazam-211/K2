@@ -17,7 +17,13 @@
 //! - The doc's own client ID never authors content. Every change is attributed to a
 //!   participant's client ID (a connection, an agent, "external edit", "import"...).
 //! - [`Doc::edit_as`] keeps nothing per participant after it returns: memory is the doc,
-//!   not the doc times the number of agents (tested in `tests/ephemeral_replicas.rs`).
+//!   not the doc times the number of agents (tested in `tests/ephemeral_replicas.rs`). Since
+//!   v0.9.3 the edit is made on the doc itself, as the participant's client (the vendored
+//!   engine's `transact_mut_as`): no replica at all. A sampled runtime check (one edit in
+//!   [`DEFAULT_EDIT_CHECK_EVERY`] by default, [`Doc::set_edit_check_every`]) also makes the
+//!   edit the old way, through a throwaway replica, and compares the two updates byte for
+//!   byte; a mismatch is never served (the doc takes the replica's update and uses that path
+//!   until reloaded).
 
 use crate::engine::{BlameRun, EngineDoc, YrsDoc};
 use crate::schema::{Kind, Schema};
@@ -29,6 +35,9 @@ pub type ClientId = u64;
 /// Largest valid client ID (2^53 - 1).
 pub const MAX_CLIENT_ID: ClientId = (1 << 53) - 1;
 
+/// How often [`Doc::edit_as`]'s runtime check samples an edit by default: one in 1,000.
+pub const DEFAULT_EDIT_CHECK_EVERY: u32 = 1000;
+
 /// What a checked client update contains.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UpdateInfo {
@@ -38,7 +47,16 @@ pub struct UpdateInfo {
     pub delete_only: bool,
 }
 
+/// Placeholder for [`DocError::Unaccepted`]'s error id: the slot is reserved, and the id is
+/// assigned when the error-surface registry merges.
+pub const RESERVED_ERROR_ID_UNACCEPTED: Option<&str> = None;
+/// Placeholder for [`DocError::Quarantined`]'s error id (reserved, as above).
+pub const RESERVED_ERROR_ID_QUARANTINED: Option<&str> = None;
+
+/// An engine-level error. `#[non_exhaustive]` since v0.9.5 (which added two variants): match
+/// it with a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum DocError {
     #[error("update could not be decoded: {0}")]
     Decode(String),
@@ -61,6 +79,16 @@ pub enum DocError {
     Panic,
     #[error("state could not be loaded: {0}")]
     Load(String),
+    /// A client update was refused, unapplied (v0.9.5): it carries content the kit never
+    /// uses (subdocuments). Exit 3 (`tools::exit::REFUSED`). Error id: reserved,
+    /// [`RESERVED_ERROR_ID_UNACCEPTED`].
+    #[error("update contains content this host doesn't accept")]
+    Unaccepted,
+    /// A stored doc holds content the kit never uses (subdocuments): it is quarantined, not
+    /// loaded as live (the store-load scan, v0.9.5). Exit 3. Error id: reserved,
+    /// [`RESERVED_ERROR_ID_QUARANTINED`].
+    #[error("stored doc contains content this host doesn't accept; it was not loaded")]
+    Quarantined,
     #[error("invalid client id {0}")]
     BadClient(ClientId),
     #[error("schema {schema:?} has no root {root:?}")]
@@ -227,9 +255,8 @@ impl Doc {
         update: &[u8],
         allowed: ClientId,
     ) -> Result<UpdateInfo, DocError> {
-        let info = self.check_client_update(update, allowed)?;
-        self.inner.apply_trusted(update)?;
-        Ok(info)
+        check_client(allowed)?;
+        self.inner.apply_client(update, allowed)
     }
 
     /// Apply an update this kit made itself (from `edit_as` or its own log). Never client bytes.
@@ -262,10 +289,55 @@ impl Doc {
         self.inner.edit_as(client, edits).map(Some)
     }
 
+    /// Sample one edit in `every` for the runtime check of the edit path and the engine's
+    /// text cache (0: never; default [`DEFAULT_EDIT_CHECK_EVERY`]; tests use 1). A sampled
+    /// edit costs a full encode and a throwaway replica, O(doc), as every edit did before
+    /// v0.9.3.
+    pub fn set_edit_check_every(&mut self, every: u32) {
+        self.inner.set_check_every(every);
+    }
+
+    /// What the runtime check found since the last call (the session reports each).
+    pub(crate) fn take_engine_checks(&mut self) -> Vec<crate::engine::EngineCheck> {
+        self.inner.take_checks()
+    }
+
+    /// Whether the runtime check switched this doc to the throwaway path (until reloaded).
+    pub fn edit_path_fallback(&self) -> bool {
+        self.inner.on_fallback()
+    }
+
+    /// Test-only (the `differential` feature): make the engine's cached text of `root` say
+    /// `text`, as a bug in the cache would.
+    #[cfg(any(test, feature = "differential"))]
+    pub fn corrupt_text_cache_for_tests(&mut self, root: &str, text: &str) {
+        self.inner.corrupt_text_cache(root, text);
+    }
+
     /// How many clock units `client` has inserted into this doc: a change by `client`
     /// occupies the clocks between this before it and this after it (blame's index).
     pub(crate) fn clock_of(&self, client: ClientId) -> u32 {
         self.inner.clock_of(client)
+    }
+
+    /// Test-only: each text root's text read afresh from the engine (not the cache), sorted
+    /// by root (the soak's diagnosis).
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn engine_texts_for_tests(&self) -> Vec<(&'static str, String)> {
+        self.inner.texts_for_tests()
+    }
+
+    /// Whether this doc and `other` have the same state vector (the same inserts; deletes
+    /// aren't in it). O(clients). The disk replica's marker (v0.9.4).
+    pub(crate) fn same_state_vector(&self, other: &Doc) -> bool {
+        self.inner.same_state_vector(&other.inner)
+    }
+
+    /// Whether this doc holds updates it couldn't integrate (missing dependencies) or is
+    /// poisoned: K-AUD-1's no-pending check (v0.9.5). O(1).
+    pub(crate) fn unresolved(&self) -> bool {
+        self.inner.unresolved()
     }
 
     /// Text root `root`'s live text as runs of the client (and clocks) that inserted it, in
@@ -274,6 +346,12 @@ impl Doc {
     pub(crate) fn blame_runs(&self, root: &str) -> Result<Vec<BlameRun>, DocError> {
         self.root(root, Kind::Text)?;
         self.inner.blame_runs(root)
+    }
+
+    /// The state vector as sorted `(client, clock)` pairs. The kit's unit tests only.
+    #[cfg(test)]
+    pub(crate) fn clocks_for_tests(&self) -> Vec<(ClientId, u32)> {
+        self.inner.snapshot_for_tests().1
     }
 
     /// Deliver everything `from` has that this doc lacks. Both docs are this kit's, in one

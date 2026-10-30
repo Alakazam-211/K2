@@ -244,7 +244,12 @@ update, inside the state). `smoke.sh` prints the size.
 - The author-based `own_only` of v1.7 is withdrawn: an undo may now remove another author's
   restoration of its own root (regression (b)).
 - New case class `concurrent_restore`: O4 took a restoration once, O4a fired, or a window
-  character counted as base by root only.
+  character counted as base by root only. Since v0.9.2 the enumerator (`bfs`, `walk`: its
+  progress and `SUMMARY` lines) and the trace test also count each part as its own class:
+  `concurrent_restore_o4`, `concurrent_restore_o4a`, `concurrent_restore_base_by_root` (a
+  transition may hit more than one; the total stays). CI checks each is hit: the trace test
+  (256 traces: 72 / 12 / 102, as v1.8 reported), a tiny `bfs`, and a short walk of the
+  binary (`tests/walk_classes.rs`). No behaviour change.
 
 ### Counts: v1.7 → v1.8
 
@@ -467,11 +472,10 @@ scale the same way (not measured there).
 | `PART=walks` (5 × 10^6 walks + mutants) | ≈ 15 min | ≈ 1 h |
 | `PART=long` (≈ 2.6 × 10^10 states) | ≈ 1–2 days | ≈ 3–5 days |
 
-**Commands** (repo root, `K2_*` unset; launched only after review). An M-series node (the
-grant there allows long jobs):
+**Commands** (repo root, with the `k2` CLI's variables intact: unset `K2_*` only around
+cargo; launched only after review). An M-series node (the grant there allows long jobs):
 
 ```sh
-unset $(env | grep -oE '^K2(SO)?_[A-Za-z0-9_]*')
 tools/undo-enum-job.sh tools/undo/g1.sh /tmp/undo-g1
 k2 compute run k2n1-m4 --no-source --needs rust@stable --cpus 6 --mem 4G \
   --env CARGO_BUILD_JOBS=6 --env THREADS=6 --env PART=exhaustive --timeout 3h --tier batch \

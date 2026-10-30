@@ -1139,3 +1139,47 @@ fn purge_at_scale_leaves_no_bytes_behind() {
         assert_eq!(&text(&o, c), t);
     }
 }
+
+/// v0.9.5 (rollback): a store holding a newer kit's table (v0.9.7's `authored`, added
+/// without a format bump) refuses a purge before anything changes, with
+/// `StoreError::NewerData` (the registry's `MPC-E502 store_newer`) naming the table and the
+/// kit to upgrade to, exit 6. The store file is byte for byte as it was, and the doc still
+/// reads and edits.
+#[test]
+fn a_purge_of_a_store_holding_a_newer_kits_table_is_refused_unchanged() {
+    let f = fx("newer-table");
+    let s = f.open("notes.md", "# notes\n\nkeep this line\n");
+    let own = join(&s, person("own"));
+    let base = text(&s, own);
+    s.replace_text(own, ROOT, &format!("{base}a line to purge\n"))
+        .unwrap();
+    s.flush(own).unwrap();
+    f.store.add_table_for_tests("authored", false).unwrap();
+    let id = f.id("notes.md");
+    let versions = f.store.versions(id).unwrap().len();
+    let before = fs::read(f.store.path()).unwrap();
+    let err = s
+        .purge(own, PurgeRequest::new(PurgeScope::History))
+        .expect_err("refused");
+    let want = StoreError::NewerData {
+        table: "authored".into(),
+    };
+    assert_eq!(err, SessionError::Store(want.clone()));
+    assert!(
+        err.to_string().contains(
+            "This store holds data from a newer kit (table \"authored\"). Upgrade K2 to a \
+             version with kit ≥ v0.9.7 to purge or rewrite it; reading and editing still work."
+        ),
+        "{err}"
+    );
+    assert_eq!(k2_mpc_base::tools::session_exit(&err), 6);
+    assert_eq!(
+        fs::read(f.store.path()).unwrap(),
+        before,
+        "the store unchanged"
+    );
+    assert_eq!(f.store.versions(id).unwrap().len(), versions);
+    // reading and editing still work
+    assert!(text(&s, own).contains("a line to purge"));
+    s.replace_text(own, ROOT, &base).unwrap();
+}

@@ -107,9 +107,9 @@ fn agent_parity_any_file() {
         .iter()
         .filter(|m| matches!(m.0, PersonAction::Approve | PersonAction::Pending))
         .count();
-    // P30 twice: `log --pending` and its alias `approvals`
-    assert_eq!(approvals, 5, "the approval rows' cases (P29, P30)");
-    assert_eq!(report.matched.len(), 32, "{:?}", report.matched);
+    // P30 four times: `log --pending` and its alias `approvals`, each also with `--all`
+    assert_eq!(approvals, 7, "the approval rows' cases (P29, P30)");
+    assert_eq!(report.matched.len(), 34, "{:?}", report.matched);
 }
 
 /// A tier-0 list must have every blob action's row, not the text-only ones.

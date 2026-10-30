@@ -1,7 +1,8 @@
 # vendor/
 
-Copies of other repos, brought in by `git subtree --squash` at a tag. **Test-only:** nothing
-here is shipped, and no crate a host depends on (`crates/base`) depends on anything here.
+Copies of other repos at a tag. `mpce-model` is **test-only** (only `k2-mpc-conformance`
+depends on it). `yrs` is **the kit's engine** (v0.9.3): `crates/base` depends on it by path,
+so it ships with the kit.
 `vendor/` is excluded from the cargo workspace, so the kit's lints, formatting and tests
 don't run on it; format the kit with `cargo fmt -p k2-mpc-base -p k2-mpc-conformance`
 (`cargo fmt --all` would also reformat these copies, which keep their upstream style).
@@ -33,3 +34,17 @@ git subtree pull --prefix vendor/mpce-model <engine clone> <split sha> --squash 
 ```
 
 Then update the tag and shas above, and run `cargo test -p k2-mpc-conformance`.
+
+## yrs
+
+The kit's engine: Yrs v0.28.0 (MIT, https://github.com/y-crdt/y-crdt) plus the k2 patches,
+from the private repo `k2-yrs`.
+
+- Tag: **`k2-yrs-0.28.0-k2.2`** (commit `44922a9`): `Doc::transact_mut_as` and the bounded
+  decoder reservations. Earlier tags were never vendored (the kit used crates.io's 0.28.0).
+- Copied by `tools/vendor-yrs.sh` (not by subtree): the tag's `yrs/` crate, its `LICENSE` and
+  `NOTICE`, without `yrs/tests/decode_bombs.rs`; `VENDORED` records the tag, commit and
+  hashes, and `--check` verifies the copy. `docs/YRS-FORK.md` says how to rebase on a new Yrs
+  release.
+- Upstream's own compile warnings show in the kit's builds (a path dependency's lints aren't
+  capped); they are not the kit's and fail nothing.

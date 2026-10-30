@@ -1,0 +1,27 @@
+=== warm-up: exit 0, wall 3s
+Progress(5) at t: 6,205 states generated, 5,306 distinct states found, 4,822 states left on queue.
+Model checking completed. No error has been found.
+87965 states generated, 66562 distinct states found, 0 states left on queue.
+The depth of the complete state graph search is 7.
+=== tlc g_fm_2x3 core_ok sec: exit 0, wall 29s (124 = stopped by timeout)
+Progress(7) at t: 571,541 states generated (86,310 s/min), 386,626 distinct states found (54,191 ds/min), 365,155 states left on queue.
+=== tlc g_fm_3x2 core_ok sec: exit 124, wall 420s (124 = stopped by timeout)
+Error: Invariant x_m_dup_mlist_move_no_duplicate is violated.
+Error: The behavior up to this point is:
+State 1: <Initial predicate>
+State 2: <a>
+State 3: <b>
+45 states generated, 45 distinct states found, 19 states left on queue.
+The depth of the complete state graph search is 5.
+=== tlc x_m_dup core_ok: exit 12, wall 2s (124 = stopped by timeout)
+trace move-duplicates: 3 states; Error: Invariant x_m_dup_mlist_move_no_duplicate is violated.
+=== tlc m_g_4x1 core_ok: exit 124, wall 180s (124 = stopped by timeout)
+### m_g_4x1 [stepGraph 180s cap]: Progress(5) at t: 108,433 states generated (24,000 s/min), 61,233 distinct states found (12,160 ds/min), 38,383 states left on queue. |
+=== tlc m_s_2x1 core_ok: exit 75, wall 0s (124 = stopped by timeout)
+### m_s_2x1 [step 60s cap]: 1 distinct states found, 1 states left on queue. | The depth of the complete state graph search is 1.
+SUMMARY mode=rs agents=3 budget=3 states=44768326790 levels=10 violations=none complete=true wall=17116.4s
+=== rs 3x3: exit 0, wall 17117s
+SUMMARY mode=cp states=1592820 levels=15 violations=no_false_equivocation violation_depth=14 complete=false
+=== cp mutant x 2x2: exit 1, wall 30s
+SUMMARY mode=undo states=542418 levels=9 violations=[] complete=true wall=12.0s
+=== undo_2x2_empty_list: exit 0, wall 12s

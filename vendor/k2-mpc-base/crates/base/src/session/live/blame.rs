@@ -122,8 +122,8 @@ impl Blame {
     /// label, the date (UTC), the line number and the text:
     ///
     /// ```text
-    /// 3 (Sam                       2023-11-14 22:13:20 1) # Plan
-    /// 5 (Aide for Rosson (pending) 2023-11-14 22:13:25 2) Intro.
+    /// 3 (Sam                      2023-11-14 22:13:20 1) # Plan
+    /// 5 (Aide for Alice (pending) 2023-11-14 22:13:25 2) Intro.
     /// ```
     ///
     /// `label` turns a pid into a display name (the host's lookup; `None` prints the pid).

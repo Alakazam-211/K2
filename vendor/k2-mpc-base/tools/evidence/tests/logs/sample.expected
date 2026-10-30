@@ -1,0 +1,8 @@
+g_fm_2x3 tlc COMPLETE 66562 7 0 None None
+g_fm_3x2 tlc PARTIAL 386626 None 365155 420 None
+x_m_dup tlc VIOLATION 45 5 19 None 3
+m_g_4x1 tlc PARTIAL 61233 None 38383 180 None
+m_s_2x1 tlc ERROR 1 None 1 60 None
+rs_3x3 enumerator COMPLETE 44768326790 10 None None None
+cp_mutant_x_2x2 enumerator VIOLATION 1592820 14 None None None
+undo_2x2_empty_list enumerator COMPLETE 542418 9 None None None

@@ -1,0 +1,41 @@
+{
+ "job": "d810536a",
+ "collected": "2026-10-28",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "d810536a",
+   "run": "walk_3x3_u2_r1_rs1_none",
+   "tool": "enumerator",
+   "mode": "walk",
+   "walks": 1000000,
+   "walks_asked": 1000000,
+   "steps": 13000000,
+   "eof_append": 42272,
+   "edge_insert": 333934,
+   "taint": 96633,
+   "partial": 85204,
+   "redo_after_partial": 242,
+   "identical_reports": 118720,
+   "import_kept": 636841,
+   "purge_drops": 968317,
+   "restart": 779665,
+   "exact_vs_rediff": 68876,
+   "touching_regions": 115253,
+   "revert_extra_conflict": 6279,
+   "concurrent_restore": 52395,
+   "concurrent_restore_o4": 24780,
+   "concurrent_restore_o4a": 3914,
+   "concurrent_restore_base_by_root": 24424,
+   "status": "SAMPLED",
+   "exit": 0,
+   "wall_s": 2012,
+   "bound": "pids=3 events=3 undos=2 reverts=1 restarts=1 maxlen=4 init=\"abb\" multi=true purge=true reduce=true u12=false",
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

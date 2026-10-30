@@ -18,12 +18,15 @@ def ok(expr):
 meta = json.load(sys.stdin)
 bad = []
 for p in meta["packages"]:
-    if p["source"] is None:
-        continue  # our own crates
+    if p["source"] is None and p["name"].startswith(("k2-mpc-", "mpce-")):
+        continue  # our own crates (a vendored copy of another project, vendor/yrs, is checked)
     lic = p.get("license") or "NONE"
     if not ok(lic):
         bad.append(p["name"] + " " + p["version"] + ": " + lic)
 if bad:
     print("Licences outside the allow-list:"); print("\n".join(bad)); sys.exit(1)
-print("licences ok (%d dependencies)" % sum(1 for p in meta["packages"] if p["source"]))
+print("licences ok (%d dependencies, %d of them vendored: %s)" % (
+    sum(1 for p in meta["packages"] if not p["name"].startswith(("k2-mpc-", "mpce-"))),
+    sum(1 for p in meta["packages"] if p["source"] is None and not p["name"].startswith(("k2-mpc-", "mpce-"))),
+    ", ".join(p["name"] + " " + p["version"] + " (" + (p.get("license") or "NONE") + ")" for p in meta["packages"] if p["source"] is None and not p["name"].startswith(("k2-mpc-", "mpce-")))))
 '

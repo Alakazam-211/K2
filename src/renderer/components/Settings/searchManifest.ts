@@ -182,6 +182,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   'skin-access': 'Apps',
   'app-approvals': 'App Approvals',
   compute: 'Compute',
+  multiplayer: 'Multiplayer',
 }
 
 /** Suppress unused-type warning since IndexedEntry is reserved for future optimization. */

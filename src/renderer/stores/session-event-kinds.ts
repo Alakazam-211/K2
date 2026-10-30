@@ -155,6 +155,10 @@ export const SESSION_EVENT_ROUTES = {
   // Local Grok Bots (0.45.7): ids only — the roster/status moved or some
   // agents' chats grew. Refetch `grokbots/list` / `grokbots/thread`.
   grokbots_changed: { class: 'app', app: true },
+  // prd-multiplayer-cores-settings-v1 §3: a multiplayer core was turned on
+  // or off. Settings → Cores → Multiplayer refetches `docs/cores`. Not
+  // carried: the page reads only the window's server.
+  doc_cores_changed: { class: 'app', app: true },
   // prd-daemon-activity-and-thread-working-v1 A11/A27: the daemon's hook
   // installer could not update an agent CLI config. Carried, so a room's
   // server can say so too.

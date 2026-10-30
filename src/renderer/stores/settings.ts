@@ -146,6 +146,10 @@ export type SettingsSection =
   | 'sew'
   /** Settings → Compute (K2 compute nodes preview: this server's nodes + this computer as a node). */
   | 'compute'
+  /** Settings → Cores → Multiplayer (Beta, prd-multiplayer-cores-settings-v1
+   *  §1): one switch per core (Markdown, Text and code, Any other file).
+   *  Needs `docs-cores-v1`. */
+  | 'multiplayer'
 
 export interface TerminalSettings {
   fontFamily: string

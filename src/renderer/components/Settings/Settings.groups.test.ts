@@ -151,7 +151,7 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
   it('Sidecars is now Cores (label only; the Apps, Database and Email Hosting ids stay)', () => {
     const nav = settingsNav({ zenGardens: true })
     expect(titles(nav)).not.toContain('Sidecars')
-    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', 'email-notifications', 'sew', 'compute', 'data', 'skin-access', 'app-approvals'])
+    expect(group(nav, 'Cores').items.map((i) => i.id)).toEqual(['email-hosting', 'email-notifications', 'sew', 'compute', 'data', 'multiplayer', 'skin-access', 'app-approvals'])
     expect(SECTION_LABELS['email-notifications']).toBe('Email Notifications')
     // Chat Hosting is a real page since S32 K27 (was a SOON placeholder).
     const chat = group(nav, 'Cores').items[2]
@@ -163,6 +163,30 @@ describe('Settings: K2 Server becomes Access and Network (0.45.7)', () => {
       '<span className="ml-auto text-[8px] uppercase tracking-wider font-semibold px-1.5 py-0.5 bg-[var(--color-text-muted)]/15 text-[var(--color-text-muted)]">SOON</span>'
     expect(settingsSrc.split(tag).length - 1).toBe(2)
     expect(settingsSrc).not.toContain('>\n                          soon\n')
+  })
+
+  it('Multiplayer (Beta) sits between Database and Apps in Cores, only for a server with docs-cores-v1', () => {
+    let supported = new Set<string>(['docs-cores-v1'])
+    const spy = vi
+      .spyOn(primaryScope(), 'serverSupports')
+      .mockImplementation((f: unknown) => supported.has(String(f)))
+    for (const zenGardens of [true, false]) {
+      const items = group(settingsNav({ zenGardens }), 'Cores').items
+      const data = items.findIndex((i) => i.id === 'data')
+      expect(items[data + 1]).toEqual({ id: 'multiplayer', label: 'Multiplayer', beta: true, hide: false })
+      expect(items[data + 2]?.id).toBe('skin-access')
+      expect(leafIds(settingsNav({ zenGardens })).filter((x) => x === 'multiplayer').length).toBe(1)
+    }
+    // An older server without the key: the leaf is hidden.
+    supported = new Set()
+    const hidden = group(settingsNav({ zenGardens: true }), 'Cores').items.find((i) => i.id === 'multiplayer')
+    expect(hidden).toEqual({ id: 'multiplayer', label: 'Multiplayer', beta: true, hide: true })
+    spy.mockRestore()
+    expect(SECTION_LABELS.multiplayer).toBe('Multiplayer')
+    const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
+    expect(settingsSrc).toContain("multiplayerPageShown && activeSection === 'multiplayer'")
+    expect(settingsSrc).toContain('<MultiplayerSection />')
+    expect(settingsSrc).toContain('...(multiplayerShown() ? MULTIPLAYER_MANIFEST : []),')
   })
 
   it('Key Bindings is under Editors / Fonts and Compute is under Cores; neither is top-level', () => {

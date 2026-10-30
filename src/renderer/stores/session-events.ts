@@ -780,6 +780,18 @@ export interface GrokbotsChangedEvent {
   agents: string[]
 }
 
+/** APP-LEVEL — Settings → Cores → Multiplayer (prd-multiplayer-cores-settings-v1
+ *  §3): an Owner or Admin turned one core on or off. `cores` is every core's
+ *  state after the flip; `by` is the person's display name. Every client
+ *  gets it (K2 Connect and the web client too, unlike `sync:settings`). */
+export interface DocCoresChangedEvent {
+  kind: 'doc_cores_changed'
+  cores: Record<string, boolean>
+  core: string
+  on: boolean
+  by: string
+}
+
 /** APP-LEVEL — the daemon's hook installer could not update an agent CLI
  *  config (it did not parse, so it was left untouched) or hit a write
  *  error (prd-daemon-activity-and-thread-working-v1 A11). At most once per
@@ -920,6 +932,7 @@ export type SessionEventMessage =
   | SourcesChangedEvent
   | GardenDataChangedEvent
   | GrokbotsChangedEvent
+  | DocCoresChangedEvent
   | HooksInstallFailedEvent
   | ActivityChangedEvent
   | ReviewQueueChangedEvent
@@ -1406,6 +1419,7 @@ type ZenAgentsOrderChangedHandler = () => void
 type SourcesChangedHandler = (rev: number) => void
 type GardenDataChangedHandler = (space: string, rev: number) => void
 type GrokbotsChangedHandler = (e: GrokbotsChangedEvent) => void
+type DocCoresChangedHandler = (e: DocCoresChangedEvent) => void
 type HooksInstallFailedHandler = (e: HooksInstallFailedEvent) => void
 type ActivityChangedHandler = (e: ActivityChangedEvent) => void
 type FsChangedHandler = (e: FsChangedEvent) => void
@@ -1498,6 +1512,7 @@ interface AppBusHandlers {
   sourcesChanged: Set<SourcesChangedHandler>
   gardenDataChanged: Set<GardenDataChangedHandler>
   grokbotsChanged: Set<GrokbotsChangedHandler>
+  docCoresChanged: Set<DocCoresChangedHandler>
   hooksInstallFailed: Set<HooksInstallFailedHandler>
   activityChanged: Set<ActivityChangedHandler>
 }
@@ -1558,6 +1573,7 @@ function createBusState(scopeId: string): BusState {
       sourcesChanged: new Set(),
       gardenDataChanged: new Set(),
       grokbotsChanged: new Set(),
+      docCoresChanged: new Set(),
       hooksInstallFailed: new Set(),
       activityChanged: new Set(),
     },
@@ -1809,6 +1825,13 @@ export function onGardenDataChanged(scope: ServerScope, fn: GardenDataChangedHan
  *  server (0.45.7). Ids only; refetch the list / thread. */
 export function onGrokbotsChanged(scope: ServerScope, fn: GrokbotsChangedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.grokbotsChanged, fn)
+}
+
+/** Settings → Cores → Multiplayer — subscribe to APP-LEVEL
+ *  `doc_cores_changed` on `scope`'s server (a core was turned on or off).
+ *  Refetch `GET /cli/docs/cores`. */
+export function onDocCoresChanged(scope: ServerScope, fn: DocCoresChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.docCoresChanged, fn)
 }
 
 /** A11 — subscribe to APP-LEVEL `hooks_install_failed` (the daemon could
@@ -2151,6 +2174,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   grokbots_changed: (h, m) => {
     for (const fn of h.grokbotsChanged) fn(m)
+  },
+  doc_cores_changed: (h, m) => {
+    for (const fn of h.docCoresChanged) fn(m)
   },
   hooks_install_failed: (h, m) => {
     for (const fn of h.hooksInstallFailed) fn(m)

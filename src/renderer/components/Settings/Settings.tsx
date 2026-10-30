@@ -46,6 +46,8 @@ import { EmailNotificationsSection, EMAIL_NOTIFICATIONS_MANIFEST } from './secti
 import { EmailLinkSection, EMAIL_LINK_MANIFEST } from './sections/EmailLinkSection'
 import { DataSection, DATA_MANIFEST } from './sections/DataSection'
 import { ComputeSection, COMPUTE_MANIFEST } from './sections/ComputeSection'
+import { MultiplayerSection, MULTIPLAYER_MANIFEST } from './sections/MultiplayerSection'
+import { multiplayerCoresAvailable } from './sections/multiplayer-cores-api'
 import { SewSection, SEW_MANIFEST } from './sections/SewSection'
 import { SkinAccessSection, SKIN_ACCESS_MANIFEST } from './sections/SkinAccessSection'
 import { AppApprovalsSection, APP_APPROVALS_MANIFEST } from './sections/AppApprovalsSection'
@@ -121,6 +123,17 @@ function thirdPartyBotLeaves(): NavLeaf[] {
   })
   const soon = COMING_SOON_BOTS.map((bot): NavLeaf => ({ id: bot.id, label: bot.name, comingSoon: true }))
   return [...live, ...soon]
+}
+
+/** Settings → Cores → Multiplayer shows only for a server that reports
+ *  `docs-cores-v1` (prd-multiplayer-cores-settings-v1 §1.1); an older server
+ *  has no switches. */
+function multiplayerShown(): boolean {
+  try {
+    return multiplayerCoresAvailable(settingsPrimaryScope())
+  } catch {
+    return false
+  }
 }
 
 /** The sidebar. Top-level pages, then groups: Language Models, Access, Gardens,
@@ -257,6 +270,9 @@ export function settingsNav({
         // Rosson 2026-10-15: Compute is a core (it sits on the runtime), between Chat Hosting and Database.
         { id: 'compute', label: 'Compute', beta: true },
         { id: 'data', label: 'Database' },
+        // prd-multiplayer-cores-settings-v1 §1.1: one switch per multiplayer
+        // core, between Database and Apps; only with `docs-cores-v1`.
+        { id: 'multiplayer', label: 'Multiplayer', beta: true, hide: !multiplayerShown() },
         { id: 'skin-access', label: 'Apps', beta: true },
         // 0.46.1 door: held App requests, right under Apps (Settings → Apps → Approvals).
         { id: 'app-approvals', label: 'App Approvals' },
@@ -293,6 +309,8 @@ export default function Settings(): React.JSX.Element {
   const zenGardensShown = useZenGardensSettingsShown()
   // Thread push (0.45.5): only on a server that reports `thread-push-v1`.
   const notificationsShown = threadPushAvailable()
+  // Multiplayer cores: only on a server that reports `docs-cores-v1`.
+  const multiplayerPageShown = multiplayerShown()
   // Garden access (always on from 0.46.3): pages read the daemon's answer
   // from this store; read it with the Gardens list, once per open.
   useEffect(() => {
@@ -342,6 +360,7 @@ export default function Settings(): React.JSX.Element {
       ...EMAIL_LINK_MANIFEST,
       ...DATA_MANIFEST,
       ...COMPUTE_MANIFEST,
+      ...(multiplayerShown() ? MULTIPLAYER_MANIFEST : []),
       ...APPS_SERVER_MANIFEST,
       ...APPS_RESOURCES_MANIFEST,
       ...SKIN_ACCESS_MANIFEST,
@@ -374,6 +393,10 @@ export default function Settings(): React.JSX.Element {
     if (!notificationsShown && activeSection === 'notifications') {
       setSection('general')
     }
+    // A server without multiplayer cores has no Multiplayer page.
+    if (!multiplayerPageShown && activeSection === 'multiplayer') {
+      setSection('general')
+    }
     // 0.46.3: Local Data and External Data live in Settings → Gardens on a
     // client with Gardens; an old deep link lands there ("Not in a Garden"
     // unless a search result already asked for a Garden).
@@ -382,7 +405,7 @@ export default function Settings(): React.JSX.Element {
       if (landing && !useGardensLandingStore.getState().landing) requestGardensLanding(landing)
       setSection(section)
     }
-  }, [activeSection, setSection, notificationsShown, zenGardensShown])
+  }, [activeSection, setSection, notificationsShown, multiplayerPageShown, zenGardensShown])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent): void => {
@@ -758,6 +781,11 @@ export default function Settings(): React.JSX.Element {
         {activeSection === 'compute' && (
           <SectionErrorBoundary>
             <ComputeSection />
+          </SectionErrorBoundary>
+        )}
+        {multiplayerPageShown && activeSection === 'multiplayer' && (
+          <SectionErrorBoundary>
+            <MultiplayerSection />
           </SectionErrorBoundary>
         )}
         {activeSection === 'skin-access' && (

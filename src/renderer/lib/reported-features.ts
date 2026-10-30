@@ -137,6 +137,11 @@ export const REPORTED_FEATURES = {
    *  tab (K4), which must still fall back on a socket 404 because a local
    *  daemon reads as supporting every key before `/boot-status` lands. */
   'docs-md-v1': 'docs-md-v1',
+  /** prd-multiplayer-cores-settings-v1 §1.1 (0.46.7): the server has the
+   *  per-kind multiplayer switches: `GET /cli/docs/cores`, the
+   *  `multiplayerCores` key on `settings/update` and `doc_cores_changed`.
+   *  Settings → Cores → Multiplayer shows only for a server with it. */
+  'docs-cores-v1': 'docs-cores-v1',
 } as const
 
 export type ReportedFeatureKey = keyof typeof REPORTED_FEATURES

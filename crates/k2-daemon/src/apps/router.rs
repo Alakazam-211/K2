@@ -243,6 +243,8 @@ where
         .await
         .map_err(|_| format!("App {} backend :{} did not accept within 5s", be.app_id, be.port))?
         .map_err(|e| format!("App {} backend :{}: {e}", be.app_id, be.port))?;
+    // A relay hop: no Nagle (see `tunnel_tls_listener::no_nagle`).
+    crate::tunnel_tls_listener::no_nagle(&upstream);
     // 0.46.3: never splice visitors into the daemon's own main listener;
     // any other splice is marked so it can never pass as local.
     crate::splice_guard::refuse_self_dial(&upstream)

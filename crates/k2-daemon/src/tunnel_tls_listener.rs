@@ -879,13 +879,33 @@ async fn cert_renewal_loop(
 // `copy_bidirectional` rather than risk a WS regression. Revisit only with
 // a WS-frame-aware idle accounting (a real proxy), not a blunt byte timer.
 
+/// Turn Nagle off on one side of a tunnel splice (TCP_NODELAY).
+///
+/// Every socket on the K2 Connect path is a relay hop: bytes that reach
+/// us must leave at once. With Nagle on, a small write that follows one
+/// the peer has not ACKed yet waits for that ACK, and the peer (frpc, a
+/// Go program, or the dispatcher) delays its ACK by up to 40 ms on Linux
+/// (more on macOS). On the tunnel that showed up as ~40 ms extra on the
+/// TLS handshake and again on each request (ops, 2026-10-30). frp's own
+/// sockets are TCP_NODELAY already (Go's default); `front443` sets it on
+/// its splice too. A failure is ignored: the splice still works, just
+/// slower.
+pub(crate) fn no_nagle(s: &TcpStream) {
+    if let Err(e) = s.set_nodelay(true) {
+        log_debug!("[daemon/e2e] set TCP_NODELAY: {e}");
+    }
+}
+
 /// Dial a same-host splice backend with the H2 connect timeout applied.
 /// Used for the daemon path (`(host, port)` tuple). Nested targets go
 /// through [`crate::upstream_dial::dial_target`] instead (localhost rule +
 /// per-address error log).
 async fn connect_upstream<A: tokio::net::ToSocketAddrs>(addr: &A) -> Result<TcpStream, String> {
     match tokio::time::timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(addr)).await {
-        Ok(Ok(s)) => Ok(s),
+        Ok(Ok(s)) => {
+            no_nagle(&s);
+            Ok(s)
+        }
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err(format!(
             "upstream connect timed out after {UPSTREAM_CONNECT_TIMEOUT:?}"
@@ -961,6 +981,10 @@ async fn serve_one(
     // `None` = no header, an old relay, or not a loopback peer: Apps then
     // get no client-IP headers at all, never a client's.
     let peer = tcp.peer_addr().map_err(|e| format!("peer address: {e}"))?;
+    // Tunnel latency floor: no Nagle on the frpc-facing socket (see
+    // [`no_nagle`]). Before the first byte, so the handshake flight and
+    // every response record go out at once.
+    no_nagle(&tcp);
     let client_ip = match crate::client_ip::read_tunnel_preamble(&mut tcp, peer, deadline).await {
         Ok(ip) => ip,
         // 0.46.6: a loopback connect-and-close is a liveness probe, not a
@@ -1151,6 +1175,7 @@ where
     }
     let _splice_mark = crate::splice_guard::mark(&upstream);
     log_debug!("[daemon/e2e] routing {sni} → internal endpoint {target}");
+    no_nagle(&upstream);
     // A nested service stays a raw splice (any protocol), as before
     // 0.46.3, unless its label opted in to the client-IP rewrite
     // (`k2 publish client-ip <label> on`). The hop lets an App front

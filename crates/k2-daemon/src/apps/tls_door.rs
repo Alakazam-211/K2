@@ -235,6 +235,8 @@ pub async fn serve_conn(mut tcp: TcpStream, cfg: Arc<ServerConfig>) -> Result<()
     use tokio::io::AsyncWriteExt;
     let deadline = tokio::time::Instant::now() + HANDSHAKE_TIMEOUT;
     let peer = tcp.peer_addr().map_err(|e| format!("peer address: {e}"))?;
+    // A relay hop like the E2E listener: no Nagle on the visitor side.
+    crate::tunnel_tls_listener::no_nagle(&tcp);
     // front443 writes PROXY v2 (Kind::App); only a loopback peer's header
     // is read (CD-A9: the same trust as the E2E listener).
     let client_ip = crate::client_ip::read_tunnel_preamble(&mut tcp, peer, deadline).await?;

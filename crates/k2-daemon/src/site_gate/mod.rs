@@ -691,6 +691,8 @@ where
         return Ok(());
     }
     let _splice_mark = crate::splice_guard::mark(&upstream);
+    // A relay hop: no Nagle (see `tunnel_tls_listener::no_nagle`).
+    crate::tunnel_tls_listener::no_nagle(&upstream);
     let _hop = client_ip::register_hop(&upstream, ip);
 
     let gate_conn = conn.clone();

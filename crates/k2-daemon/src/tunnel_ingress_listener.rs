@@ -133,6 +133,9 @@ async fn accept_loop(listener: std::sync::Arc<TcpListener>, state: crate::Daemon
         };
         match accepted {
             Ok((stream, _peer)) => {
+                // The far end of the E2E listener's splice: answers must
+                // not wait on Nagle (see `tunnel_tls_listener::no_nagle`).
+                crate::tunnel_tls_listener::no_nagle(&stream);
                 let st = state.clone();
                 tokio::spawn(async move {
                     crate::routes::dispatcher::dispatch(stream, st, Ingress::Tunnel).await;

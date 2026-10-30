@@ -57,6 +57,9 @@ set refuses to start; the test panics when its `REALPG_*` vars are missing).
    `gemini`, `cursor-agent`, … through `PATH`. A test that makes the daemon spawn an
    agent (including a workspace's default agent) installs shims:
    `let _agents = test_env::AgentShim::install();` (each name runs `exec cat`).
+   A test that spawns a plain program (`cat`, `sh`, `sleep`) uses
+   `test_env::spawn_plain_pty(cfg)`: while another test's shim dir is set, the guard
+   refuses anything that isn't in it.
 8. **No dead well-known ports.** Never point a client at `127.0.0.1:9` / `:1` as
    "unreachable": where loopback RSTs are dropped, that connect hangs. Use
    `test_env::ErrorHttpServer::start(503)` (a real listener that answers an error),
@@ -69,7 +72,10 @@ set refuses to start; the test panics when its `REALPG_*` vars are missing).
    `connect_users::sessions_store_tmp_path()`.
 10. **Unique temp paths.** `test_env::unique_temp_path(tag)` (uuid) or a fresh
     `TempHome`; never pid + nanos or `ThreadId` (they repeat across the test
-    binaries of one run), never a fixed `/tmp/…` literal.
+    binaries of one run), never a fixed `/tmp/…` literal. For a scratch dir built
+    by hand, join onto `test_env::stable_temp_dir()`, not `std::env::temp_dir()`:
+    that one reads `TMPDIR`, which a test holding the lock may have pointed at its
+    own folder for a moment.
 11. **No process-global config flips.** Code read from env once (spawn queue,
     perf gate) gets a per-thread or guarded test override
     (`spawn_queue::test_override`, `perf`'s gate override); tests never flip the

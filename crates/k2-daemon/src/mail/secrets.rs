@@ -295,7 +295,9 @@ mod tests {
     use super::*;
 
     fn temp_store() -> (FileSecretStore, PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
+        // Not temp_dir(): it reads TMPDIR with no lock, and vault::spawn's
+        // test has TMPDIR on a folder of its own for a moment.
+        let dir = k2_core::test_env::stable_temp_dir().join(format!(
             "k2-mail-secrets-test-{}-{}",
             std::process::id(),
             random_hex_12()

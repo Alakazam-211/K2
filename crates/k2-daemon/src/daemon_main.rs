@@ -91,6 +91,8 @@ pub fn run() {
     if let Some(code) = early_cli_dispatch(&args) {
         std::process::exit(code);
     }
+    #[cfg(windows)]
+    quiet_error_boxes();
     // Windows: launchd's KeepAlive (see keep_alive): supervise the daemon
     // instead of being it.
     #[cfg(windows)]
@@ -133,6 +135,71 @@ pub fn run() {
     // (quit: 0; anything else: start me again).
     #[cfg(windows)]
     std::process::exit(crate::daemon_stop::windows_exit_code());
+}
+
+/// Windows: no modal "unable to start correctly (0xc0000142)" or
+/// "missing DLL / no disk" box from the daemon or anything it starts. The
+/// error mode is inherited, so a helper that fails to load (a powercfg or
+/// a CLI shim under a stressed desktop) ends with its exit code, which K2
+/// already reads, instead of a dialog on the person's screen. Crash boxes
+/// (`SEM_NOGPFAULTERRORBOX`) are left as they are.
+#[cfg(windows)]
+fn quiet_error_boxes() {
+    const SEM_FAILCRITICALERRORS: u32 = 0x0001;
+    const SEM_NOOPENFILEERRORBOX: u32 = 0x8000;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetErrorMode(mode: u32) -> u32;
+    }
+    // SAFETY: plain flag setter; it returns the previous mode, which is
+    // OR-ed back in so nothing already set is dropped.
+    unsafe {
+        let old = SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+        SetErrorMode(old | SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod quiet_error_box_tests {
+    #[test]
+    fn the_error_mode_holds_and_a_child_inherits_it() {
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetErrorMode() -> u32;
+            fn SetErrorMode(mode: u32) -> u32;
+        }
+        const NAME: &str = "daemon_main::quiet_error_box_tests::the_error_mode_holds_and_a_child_inherits_it";
+        // Child mode: report the mode this process started with. (A native
+        // child: PowerShell's runtime sets these bits itself.)
+        if let Ok(out) = std::env::var("QUIET_ERROR_PROBE_OUT") {
+            // SAFETY: a plain getter.
+            std::fs::write(out, unsafe { GetErrorMode() }.to_string()).expect("write the probe result");
+            return;
+        }
+        let child_mode = || -> u32 {
+            let out = std::env::temp_dir().join(format!("k2-error-mode-{}.txt", std::process::id()));
+            let st = k2_core::bg_proc::command(std::env::current_exe().unwrap())
+                .args([NAME, "--exact", "--test-threads=1"])
+                .env("QUIET_ERROR_PROBE_OUT", &out)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .expect("re-run this test as the child");
+            assert!(st.success(), "{st:?}");
+            let v = std::fs::read_to_string(&out).expect("probe result");
+            let _ = std::fs::remove_file(&out);
+            v.trim().parse().unwrap_or_else(|e| panic!("{e}: {v}"))
+        };
+        // SAFETY: plain getter / setter of this test process's own mode.
+        unsafe { SetErrorMode(0) };
+        assert_eq!(child_mode() & 0x8001, 0, "a child of a default-mode parent has the boxes on");
+        super::quiet_error_boxes();
+        // SAFETY: a plain getter.
+        let mode = unsafe { GetErrorMode() };
+        assert_eq!(mode & 0x8001, 0x8001, "{mode:#x}");
+        // A child starts with the same mode (no CREATE_DEFAULT_ERROR_MODE).
+        assert_eq!(child_mode() & 0x8001, 0x8001, "the child inherits the quiet mode");
+    }
 }
 
 /// Pure early-arg dispatch. Returns `Some(exit_code)` when the process

@@ -131,14 +131,16 @@ assert_eq "catalog: sidecar tool id" "$(_cli_tool_id_for_verb sidecar)" "sidecar
 assert_eq "catalog: sidecar is an id tool (SC35)" "$(_cli_tool_default_mode sidecar)" "id"
 
 schema="$(env HOME="$HOME1" "$K2_CLI" --schema)"
-python3 -c '
+# Over stdin, never argv: the whole schema as one argument is past Linux's
+# per-argument limit ("Argument list too long").
+printf '%s' "$schema" | python3 -c '
 import json, sys
-d = json.loads(sys.argv[1])
+d = json.load(sys.stdin)
 names = {c["name"] for c in d["commands"]}
 for n in ("sidecar new", "sidecar list", "sidecar stop", "sidecar access"):
     assert n in names, n
 assert "sessions spawn" not in names, "sessions spawn is retired"
-' "$schema" && ok "schema lists sidecar verbs, not sessions spawn" || bad "schema sidecar verbs"
+' && ok "schema lists sidecar verbs, not sessions spawn" || bad "schema sidecar verbs"
 help_daily="$(sed -n '/^cmd_help_v2_daily() {/,/^}/p' "$K2_CLI")"
 assert_contains "daily help lists sidecar" "$help_daily" "sidecar new <name> --harness <preset>"
 assert_absent "internal help drops sessions spawn" "$(sed -n '/^cmd_help_internal() {/,/^}/p' "$K2_CLI")" "sessions spawn"

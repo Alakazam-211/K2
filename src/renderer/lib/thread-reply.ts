@@ -3,18 +3,20 @@
 //
 // The reply rides the message TEXT, not a new daemon field: every server and
 // every client already carries it, and the agent gets it on its PTY with the
-// rest of the person's words. One fixed format, so agents read it the same way
-// every time and this window can draw it back as a small quote:
+// rest of the person's words. One short fixed format (Rosson: keep it short;
+// agents learn the lookup once, from `k2 study` and the k2-cli skill), so
+// agents read it the same way every time and this window can draw it back:
 //
-//   Replying to Thread message 42 from k2 (id <uuid>; read it whole: k2 thread k2 --before-seq 43 --limit 1):
+//   ↩ #42 sales:
 //   > the quoted words (the whole message up to 600 characters, else its
 //   > first 600 and "…"; a selection: exactly the selection)
 //
 //   the person's own words
 //
-// A reply to a selection says "Replying to part of Thread message …". The
-// read command is the existing `k2 thread <addr> --before-seq N --limit 1`
-// (the newest message below seq N, which is message N-1): no new verb.
+// A reply to a selection says `↩ part of #42 sales:`. `#42` is the message's
+// seq in this Thread; the agent reads it whole with `k2 thread <addr> --seq 42`.
+// The first build's long header (`Replying to Thread message 42 from sales
+// (id …; read it whole: …):`) still reads back.
 
 import { create } from 'zustand'
 import { scopedKey, type ServerScope } from '@/kessel/server-scope'
@@ -22,15 +24,18 @@ import { scopedKey, type ServerScope } from '@/kessel/server-scope'
 /** A whole message is quoted in full up to this many characters. */
 export const THREAD_REPLY_QUOTE_MAX = 600
 
+/** The reply marker that starts a reply's first line. */
+export const THREAD_REPLY_MARK = '↩'
+
 /** What a reply points at. */
 export interface ThreadReplyTarget {
   /** The Thread message's id. */
   id: string
-  /** Its seq in the Thread (0 when unknown: no read command). */
+  /** Its seq in the Thread (0 when unknown: no `#N`). */
   seq: number
   /** Who wrote it, as the agent knows them (an agent's address, a person's login). */
   from: string
-  /** The Thread's address on its server (the read command's `<addr>`). */
+  /** The Thread's address on its server. */
   addr: string
   /** The words quoted: the message's text, or the selected piece. */
   text: string
@@ -49,22 +54,16 @@ export function threadReplyQuote(target: Pick<ThreadReplyTarget, 'text' | 'part'
   return `${chars.slice(0, THREAD_REPLY_QUOTE_MAX).join('').trimEnd()}…`
 }
 
-/** `addr` as one shell word (single-quoted unless it is plainly safe). */
-function shellWord(s: string): string {
-  return /^[A-Za-z0-9_./:@-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`
+/** The marker line (without the quote): `↩ #42 sales:`, `↩ part of #42 sales:`. */
+export function threadReplyHeader(target: Pick<ThreadReplyTarget, 'seq' | 'from' | 'part'>): string {
+  const part = target.part ? 'part of ' : ''
+  const num = target.seq > 0 ? `#${target.seq} ` : ''
+  const from = target.from.trim().replace(/\s+/g, ' ') || 'someone'
+  return `${THREAD_REPLY_MARK} ${part}${num}${from}:`
 }
 
-/** The header line (without the quote). */
-export function threadReplyHeader(target: ThreadReplyTarget): string {
-  const what = target.part ? 'part of Thread message' : 'Thread message'
-  const num = target.seq > 0 ? ` ${target.seq}` : ''
-  const from = target.from.trim() || 'someone'
-  const read = target.seq > 0 ? `; read it whole: k2 thread ${shellWord(target.addr)} --before-seq ${target.seq + 1} --limit 1` : ''
-  return `Replying to ${what}${num} from ${from} (id ${target.id}${read}):`
-}
-
-/** The text a reply sends: the header, the quote as `> ` lines, a blank
- *  line, then the person's words (none: the quote alone). */
+/** The text a reply sends: the marker line, the quote as `> ` lines, a
+ *  blank line, then the person's words (none: the quote alone). */
 export function formatThreadReply(target: ThreadReplyTarget, text: string): string {
   const quote = threadReplyQuote(target)
     .split('\n')
@@ -77,8 +76,10 @@ export function formatThreadReply(target: ThreadReplyTarget, text: string): stri
 /** A reply read back out of a message's text. */
 export interface ParsedThreadReply {
   part: boolean
+  /** 0 when the reply named no `#N`. */
   seq: number
   from: string
+  /** The replied-to message's id: only the first build's long header carried it ('' otherwise). */
   id: string
   /** The quoted words (the `> ` taken off). */
   quote: string
@@ -86,15 +87,26 @@ export interface ParsedThreadReply {
   rest: string
 }
 
-const HEADER =
+/** `↩ [part of ][#N ]<from>:` */
+const MARK_HEADER = /^↩ (part of )?(?:#(\d+) )?(.+):$/
+/** The first build's header (still parsed for messages sent with it). */
+const LONG_HEADER =
   /^Replying to (part of )?Thread message(?: (\d+))? from (.+?) \(id ([^\s;()]+)(?:; read it whole: k2 thread .+? --before-seq \d+ --limit 1)?\):$/
+
+function readHeader(line: string): { part: boolean; seq: number; from: string; id: string } | null {
+  const m = MARK_HEADER.exec(line)
+  if (m) return { part: !!m[1], seq: m[2] ? Number(m[2]) : 0, from: m[3], id: '' }
+  const l = LONG_HEADER.exec(line)
+  if (l) return { part: !!l[1], seq: l[2] ? Number(l[2]) : 0, from: l[3], id: l[4] }
+  return null
+}
 
 /** The reply at the start of `body`, else null (any other message). */
 export function parseThreadReply(body: string): ParsedThreadReply | null {
-  if (!body.startsWith('Replying to ')) return null
+  if (!body.startsWith(`${THREAD_REPLY_MARK} `) && !body.startsWith('Replying to ')) return null
   const lines = body.replace(/\r\n?/g, '\n').split('\n')
-  const m = HEADER.exec(lines[0])
-  if (!m) return null
+  const head = readHeader(lines[0])
+  if (!head) return null
   let i = 1
   const quoted: string[] = []
   while (i < lines.length && (lines[i] === '>' || lines[i].startsWith('> '))) {
@@ -104,15 +116,9 @@ export function parseThreadReply(body: string): ParsedThreadReply | null {
   if (quoted.length === 0) return null
   // One blank line between the quote and the words.
   if (i < lines.length && lines[i] === '') i += 1
-  return {
-    part: !!m[1],
-    seq: m[2] ? Number(m[2]) : 0,
-    from: m[3],
-    id: m[4],
-    quote: quoted.join('\n'),
-    rest: lines.slice(i).join('\n'),
-  }
+  return { ...head, quote: quoted.join('\n'), rest: lines.slice(i).join('\n') }
 }
+
 
 /** The first non-blank line of `text` (the chip's preview). */
 export function threadReplyFirstLine(text: string): string {

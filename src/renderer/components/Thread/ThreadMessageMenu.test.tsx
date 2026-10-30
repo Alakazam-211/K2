@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 // prd-thread-message-menu-v1 (Rosson 2026-10-30): a Thread message's menu.
 //
-//   1. The reply format the agent reads: a whole message (in full when
-//      short, its first 600 characters and "…" when long), a selection
-//      (exactly the selection), each with the id and the read command; and
-//      it reads back for the sent bubble.
+//   1. The reply format the agent reads: `↩ #N <name>:`, then a whole
+//      message (in full when short, its first 600 characters and "…" when
+//      long) or a selection (`↩ part of #N`, exactly the selection); it
+//      reads back for the sent bubble, and so does the first build's long
+//      header. The agent reads message N with `k2 thread <addr> --seq N`
+//      (tests/cli/thread_seq.sh).
 //   2. The menu opens on right-click and on a long press (touch); a press
 //      that moves is a scroll.
 //   3. Reply: the chip shows above the desktop Thread's box, × and Esc
@@ -152,40 +154,49 @@ afterEach(() => {
 describe('the reply format', () => {
   const target: ThreadReplyTarget = { id: ID, seq: 42, from: 'sales', addr: 'sales', text: 'Ship it?\nOr wait for QA.', part: false }
 
-  it('a whole short message: the header with id and read command, the quote, then the words', () => {
-    expect(formatThreadReply(target, '  Ship it.  ')).toBe(
-      `Replying to Thread message 42 from sales (id ${ID}; read it whole: k2 thread sales --before-seq 43 --limit 1):\n` +
-        '> Ship it?\n> Or wait for QA.\n\nShip it.',
-    )
+  it('a whole short message: the short marker line, the quote, then the words (no id, no command)', () => {
+    expect(formatThreadReply(target, '  Ship it.  ')).toBe('↩ #42 sales:\n> Ship it?\n> Or wait for QA.\n\nShip it.')
   })
 
   it('a long message: its first 600 characters and "…"', () => {
     const long = 'a'.repeat(THREAD_REPLY_QUOTE_MAX) + 'b'.repeat(100)
     const sent = formatThreadReply({ ...target, text: long }, 'ok')
     expect(sent.split('\n')[1]).toBe(`> ${'a'.repeat(THREAD_REPLY_QUOTE_MAX)}…`)
-    expect(sent).not.toContain('bbb')
+    expect(sent).not.toContain('b')
     // Exactly 600 is not cut.
     expect(formatThreadReply({ ...target, text: 'a'.repeat(THREAD_REPLY_QUOTE_MAX) }, 'ok')).not.toContain('…')
   })
 
-  it('a selection: exactly the snippet, "part of", the same reference', () => {
-    expect(formatThreadReply({ ...target, text: 'wait for QA', part: true }, 'Why?')).toBe(
-      `Replying to part of Thread message 42 from sales (id ${ID}; read it whole: k2 thread sales --before-seq 43 --limit 1):\n` +
-        '> wait for QA\n\nWhy?',
-    )
+  it('a selection: exactly the snippet, "part of"', () => {
+    expect(formatThreadReply({ ...target, text: 'wait for QA', part: true }, 'Why?')).toBe('↩ part of #42 sales:\n> wait for QA\n\nWhy?')
   })
 
-  it('blank lines in a quote stay quoted; an address with a space is one shell word', () => {
-    const sent = formatThreadReply({ ...target, addr: 'my chat', text: 'one\n\ntwo' }, 'x')
-    expect(sent).toContain("k2 thread 'my chat' --before-seq 43")
-    expect(sent).toContain('> one\n>\n> two\n\nx')
+  it('blank lines in a quote stay quoted; no seq: no #N; a name with spaces stays one line', () => {
+    expect(formatThreadReply({ ...target, text: 'one\n\ntwo' }, 'x')).toBe('↩ #42 sales:\n> one\n>\n> two\n\nx')
+    expect(formatThreadReply({ ...target, seq: 0, from: ' Ana  Lee ' }, 'x').split('\n')[0]).toBe('↩ Ana Lee:')
   })
 
-  it('reads back: quote, words, part, seq, id; anything else is not a reply', () => {
-    const back = parseThreadReply(formatThreadReply({ ...target, text: 'one\n\ntwo', part: true }, 'line 1\nline 2'))
-    expect(back).toEqual({ part: true, seq: 42, from: 'sales', id: ID, quote: 'one\n\ntwo', rest: 'line 1\nline 2' })
+  it('reads back: quote, words, part, seq; anything else is not a reply', () => {
+    expect(parseThreadReply(formatThreadReply({ ...target, text: 'one\n\ntwo', part: true }, 'line 1\nline 2'))).toEqual({
+      part: true,
+      seq: 42,
+      from: 'sales',
+      id: '',
+      quote: 'one\n\ntwo',
+      rest: 'line 1\nline 2',
+    })
+    expect(parseThreadReply(formatThreadReply({ ...target, seq: 0, from: 'Ana Lee' }, 'x'))).toMatchObject({ seq: 0, from: 'Ana Lee' })
+    expect(parseThreadReply('↩ #42 sales:\nno quote')).toBeNull()
+    expect(parseThreadReply('↩ back soon')).toBeNull()
     expect(parseThreadReply('Replying to you later')).toBeNull()
     expect(parseThreadReply('hello')).toBeNull()
+  })
+
+  it('the first build\'s long header still reads back (id and all)', () => {
+    const old =
+      `Replying to part of Thread message 42 from sales (id ${ID}; read it whole: k2 thread sales --before-seq 43 --limit 1):\n` +
+      '> wait for QA\n\nWhy?'
+    expect(parseThreadReply(old)).toEqual({ part: true, seq: 42, from: 'sales', id: ID, quote: 'wait for QA', rest: 'Why?' })
   })
 })
 
@@ -266,7 +277,7 @@ describe('Reply', () => {
       fireEvent.keyDown(box, { key: 'Enter' })
     })
     expect(threadPosts().map((p) => p.text)).toEqual([
-      `Replying to Thread message 42 from sales (id ${ID}; read it whole: k2 thread sales --before-seq 43 --limit 1):\n> Ship it?\n\nYes, ship it.`,
+      '↩ #42 sales:\n> Ship it?\n\nYes, ship it.',
     ])
     await waitFor(() => expect(screen.queryByTestId('thread-reply-chip')).toBeNull())
   })
@@ -285,7 +296,7 @@ describe('Reply', () => {
     const [sent] = threadPosts()
     expect(sent.text.split('\n')[1]).toBe(`> ${'x'.repeat(THREAD_REPLY_QUOTE_MAX)}…`)
     expect(sent.text).not.toContain('TAIL')
-    expect(sent.text).toContain('read it whole: k2 thread sales --before-seq 43 --limit 1')
+    expect(sent.text.split('\n')[0]).toBe('↩ #42 sales:')
   })
 
   it('a refused send keeps the chip and the words', async () => {
@@ -304,14 +315,23 @@ describe('Reply', () => {
     expect(box.value).toBe('Yes')
   })
 
-  it('a sent reply draws its quote above the words, not the reference line', () => {
+  it('a sent reply draws its quote above the words, not the marker line', () => {
     const body = formatThreadReply({ id: ID, seq: 42, from: 'sales', addr: 'sales', text: 'Ship it?', part: false }, 'Yes, ship it.')
     renderThread([item(7, body, { from: 'owner', via: 'compose' })], { box: false })
     const quote = document.querySelector('[data-thread-reply-quote]') as HTMLElement
     expect(quote.textContent).toBe('sales: Ship it?')
     const bubble = bubbles()[0]
     expect(bubble.textContent).toContain('Yes, ship it.')
-    expect(bubble.textContent).not.toContain('read it whole')
+    expect(bubble.textContent).not.toContain('#42')
+  })
+
+  it('a reply sent with the first build\'s long header draws the same', () => {
+    const body =
+      `Replying to Thread message 42 from sales (id ${ID}; read it whole: k2 thread sales --before-seq 43 --limit 1):\n` +
+      '> Ship it?\n\nYes, ship it.'
+    renderThread([item(7, body, { from: 'owner', via: 'compose' })], { box: false })
+    expect((document.querySelector('[data-thread-reply-quote]') as HTMLElement).textContent).toBe('sales: Ship it?')
+    expect(bubbles()[0].textContent).not.toContain('read it whole')
   })
 
   it('no message box for the Thread: no Reply', () => {
@@ -337,7 +357,7 @@ describe('Reply to selection', () => {
       fireEvent.keyDown(box, { key: 'Enter' })
     })
     expect(threadPosts().map((p) => p.text)).toEqual([
-      `Replying to part of Thread message 42 from sales (id ${ID}; read it whole: k2 thread sales --before-seq 43 --limit 1):\n> wait for QA\n\nWhy wait?`,
+      '↩ part of #42 sales:\n> wait for QA\n\nWhy wait?',
     ])
   })
 
@@ -393,7 +413,7 @@ describe('the Zen conversation box', () => {
     expect(call).toHaveBeenCalledWith(
       'thread.post',
       'local|sales',
-      `Replying to Thread message 42 from sales (id ${ID}; read it whole: k2 thread sales --before-seq 43 --limit 1):\n> Ship it?\n\nYes`,
+      '↩ #42 sales:\n> Ship it?\n\nYes',
       {},
     )
     await waitFor(() => expect(screen.queryByTestId('thread-reply-chip')).toBeNull())

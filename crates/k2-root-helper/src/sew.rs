@@ -634,11 +634,20 @@ pub(crate) fn tail_clean(text: &str, n: usize) -> String {
 }
 
 /// Why Sew exited non-zero, never empty: its `--json` error message
-/// (`{"ok":false,"error":{"exit":n,"message":"…"}}`), else its stderr,
-/// else its stdout, else the bare exit code.
+/// (`{"ok":false,"error":{"exit":n,"message":"…"}}`, or the `hint` of a
+/// coded error such as S54's `k2_managed`), else its stderr, else its
+/// stdout, else the bare exit code.
+///
+/// Sew 0.5.1+ on a box with `/etc/k2-root-helper/daemon.toml` (S54's
+/// `daemon_toml` marker) adds `"warnings": ["k2_managed"]` to a guarded
+/// verb's JSON and one `sew: warning: … (k2_managed)` line to stderr. The
+/// JSON is read untyped (an unknown field is kept, never refused) and
+/// stderr is never parsed as JSON: it rides `stderrTail`, and the warnings
+/// reach the daemon inside `sew`, which logs them.
 pub(crate) fn sew_reason(status: i32, parsed: &J, stderr: &str, stdout: &str) -> String {
     let from_json = parsed
         .pointer("/error/message")
+        .or_else(|| parsed.pointer("/error/hint"))
         .or_else(|| parsed.get("message"))
         .and_then(J::as_str)
         .map(|m| tail_clean(m, REASON_MAX))

@@ -163,7 +163,23 @@ fn argv(tail: &[&str]) -> Vec<String> {
 }
 
 fn helper(env: &Env, tail: &[&str], stdin: Option<&[u8]>) -> Result<Value, String> {
-    env.ops.helper(&argv(tail), stdin)
+    let v = env.ops.helper(&argv(tail), stdin)?;
+    let w = sew_warnings(&v);
+    if !w.is_empty() {
+        k2_core::log_debug!("[sew] sew {}: Sew warns {} ({})", tail.join(" "), w.join(","), v["stderrTail"].as_str().unwrap_or(""));
+    }
+    Ok(v)
+}
+
+/// The `warnings` of Sew's `--json` answer inside an `engine sew` answer
+/// (Sew 0.5.1+ on a box with `/etc/k2-root-helper/daemon.toml`:
+/// `["k2_managed"]`, S54). Logged, never an error: the verb ran and keeps
+/// its exit code. Anything that isn't a list of strings reads as none.
+pub fn sew_warnings(v: &Value) -> Vec<String> {
+    v.pointer("/sew/warnings")
+        .and_then(Value::as_array)
+        .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default()
 }
 
 /// Sew's exit code from an `engine sew` answer (`None` = not a Sew run).
@@ -178,6 +194,7 @@ fn sew_message(v: &Value) -> String {
     let field = |p: &str| v.pointer(p).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let m = field("/reason")
         .or_else(|| field("/sew/error/message"))
+        .or_else(|| field("/sew/error/hint"))
         .or_else(|| field("/stderrTail"))
         .or_else(|| field("/stdoutTail"))
         .unwrap_or_else(|| match sew_exit(v) {

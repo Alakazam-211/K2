@@ -2255,3 +2255,31 @@ fn rollback_with_voice_fetches_the_previous_engine_when_not_kept() {
     let back = calls.iter().position(|c| c.argv == "engine sew rollback").expect("rolled back");
     assert!(stage < back, "the engine is in hand before the core moves");
 }
+
+/// Sew 0.5.1+ on a box with `/etc/k2-root-helper/daemon.toml` (S54,
+/// captured shape): a guarded verb's answer carries `"warnings":
+/// ["k2_managed"]` inside `sew` and a warning line in `stderrTail`. The
+/// run is a success and the warnings are read (and logged); a coded
+/// refusal (exit 3 `k2_managed`, a `hint`, no `message`) keeps Sew's words.
+#[test]
+fn k2_managed_warnings_never_fail_a_run_and_a_hint_is_the_reason() {
+    let t = t();
+    let env = t.env();
+    let warn = "sew: warning: this box's chat is run by K2: use k2 hostchat (see k2 hostchat --help), not sew media upgrade (k2_managed)";
+    t.ops.queue(
+        "engine sew media status",
+        Ok(json!({"sewExit": 0, "sew": {"state": "running", "warnings": ["k2_managed"]}, "stderrTail": warn})),
+    );
+    let v = sew_run(&env, &["media", "status"], None).expect("a warning is not a failure");
+    assert_eq!(sew_warnings(&v), ["k2_managed"]);
+    assert_eq!((v["sew"]["state"].as_str(), v["stderrTail"].as_str()), (Some("running"), Some(warn)));
+    assert!(sew_warnings(&json!({"sewExit": 0, "sew": {"warnings": "k2_managed"}})).is_empty(), "not a list: none");
+    assert!(sew_warnings(&json!({"sewExit": 0, "sew": {"state": "x"}})).is_empty());
+
+    t.ops.queue(
+        "engine sew rollback",
+        Ok(json!({"sewExit": 3, "sew": {"ok": false, "error": {"code": "k2_managed", "hint": "this box's chat is run by K2: use k2 hostchat"}}, "stderrTail": ""})),
+    );
+    let e = sew_run(&env, &["rollback"], None).expect_err("exit 3");
+    assert_eq!(e, "sew rollback: exit 3: this box's chat is run by K2: use k2 hostchat", "Sew's hint is the reason");
+}

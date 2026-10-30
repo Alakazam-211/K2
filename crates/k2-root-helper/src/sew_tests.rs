@@ -827,6 +827,56 @@ fn upgrade_runs_the_installed_binary_on_the_staged_pin_and_returns_sews_exit() {
     assert!(sew_calls(&t).is_empty());
 }
 
+/// Sew 0.5.1+ on a box with `/etc/k2-root-helper/daemon.toml` (S54,
+/// `daemon_toml`): a guarded verb runs, its `--json` answer gains
+/// `"warnings": ["k2_managed"]` and stderr gains one warning line (Sew's
+/// docs/cli.md "On a K2 box"). Captured shapes: the answer parses with the
+/// warnings kept under `sew`, the stderr line stays in `stderrTail` and is
+/// never read as JSON, and a success has no `reason`. A `sew.toml`-marked
+/// box's refusal (exit 3, code `k2_managed`, a `hint`, no `message`) keeps
+/// Sew's words as the reason.
+#[test]
+fn k2_managed_warnings_and_their_stderr_line_never_break_the_answer() {
+    const WARN: &str = "sew: warning: this box's chat is run by K2: use k2 hostchat (see k2 hostchat --help), not sew upgrade (k2_managed)";
+    let t = box_root();
+    install_binary(&t, &member(&old_tarball(), "sew"));
+    ok(&t.call_in(&["engine", "sew", "stage"], &pin_tarball()));
+    t.exec.0.borrow_mut().answers.insert(
+        SEW_BIN.into(),
+        ExecOut {
+            status: 0,
+            stdout: br#"{"ok":true,"state":"upgraded","from":"0.5.0","to":"0.6.0","warnings":["k2_managed"]}"#.to_vec(),
+            stderr: format!("{WARN}\n").into_bytes(),
+        },
+    );
+    let o = t.call(&["engine", "sew", "upgrade"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["sewExit"], 0, "{v}");
+    assert_eq!(v["sew"]["state"], "upgraded", "{v}");
+    assert_eq!(v["sew"]["warnings"], serde_json::json!(["k2_managed"]), "an unknown field is kept, never refused: {v}");
+    assert_eq!(v["stderrTail"], WARN, "{v}");
+    assert!(v.get("reason").is_none() && v.get("stdoutTail").is_none(), "a success with a warning is a success: {v}");
+
+    // The sew.toml marker without K2's override: exit 3, Sew's hint.
+    let t = box_root();
+    with_pin_installed(&t);
+    t.exec.0.borrow_mut().answers.insert(
+        SEW_BIN.into(),
+        ExecOut {
+            status: 3,
+            stdout: br#"{"ok": false, "error": {"code": "k2_managed", "hint": "this box's chat is run by K2: use k2 hostchat (see k2 hostchat --help), not sew uninstall", "details": {"verb": "uninstall", "marker": "sew_toml"}}, "warnings": ["k2_managed"]}"#.to_vec(),
+            stderr: Vec::new(),
+        },
+    );
+    let o = t.call(&["engine", "sew", "rollback"]);
+    ok(&o);
+    let v = json(&o);
+    assert_eq!(v["sewExit"], 3, "{v}");
+    assert_eq!(v["reason"], "this box's chat is run by K2: use k2 hostchat (see k2 hostchat --help), not sew uninstall", "{v}");
+    assert_eq!(v["sew"]["error"]["code"], "k2_managed");
+}
+
 #[test]
 fn rollback_purge_and_uninstall_argv_never_widen() {
     let t = box_root();

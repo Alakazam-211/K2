@@ -1,5 +1,5 @@
 {
-  "catalogVersion": 41,
+  "catalogVersion": 42,
   "caps": [
     {
       "name": "agents:read",
@@ -278,6 +278,9 @@
     {"code": "chat_not_app_scoped", "doc": "Guest chat: this server's Sew doesn't keep an App's sessions to its own Spaces yet (app_scoped_sessions), so an App can't give chat; the owner can (k2 app user chat <user> member --app <app>)."},
     {"code": "no_chat_member", "doc": "Chat: this App user has no Sew member yet (give them chat with guests.setChat; it appears within seconds)."},
     {"code": "sew_feature_missing", "doc": "Chat: this server's Sew doesn't have the feature yet (making channels needs Sew 0.5.0+, flag app_channel_create); the owner upgrades Sew."},
+    {"code": "chat_key_required", "doc": "Chat: this App holds no chat key, so it can't govern its Space's channels; the owner gives one with k2 app grant <app> --kind chat-key."},
+    {"code": "sew_unreachable", "doc": "Chat: K2 couldn't reach this server's Sew; try again shortly (k2 hostchat status)."},
+    {"code": "sew_refused", "doc": "Chat: Sew refused the change; the hint carries Sew's own reason."},
     {"code": "space_unbound", "doc": "Chat: the Space isn't bound to this App (or the App has none yet); the owner binds it with k2 hostchat app-space bind <app> <space-id>."},
     {"code": "app_mismatch", "doc": "Chat: the Space belongs to another App; an App makes channels in its own Space only."},
     {"code": "chat_unavailable", "doc": "Chat / Voice Hosting is not enabled or not reachable on this server, or its chat-pass keys are unavailable."},
@@ -23789,6 +23792,332 @@
       ],
       "doc": "Make a text channel in this App's own Sew Space (or find it: the same slug answers created: false) and put listed App users in it, adding them to the Space first. Needs Sew 0.5.0+.",
       "example": "const ch = await k2.asApp().chat.createChannel({slug: 'job-1042', name: 'Job 1042', private: true, members: ['dana', 'eli']})"
+    },
+    {
+      "verb": "chat.channels",
+      "cap": "chat:channels",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-chat-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/sew/app/channels/bulk",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "space": {
+              "type": "string",
+              "description": "The Sew Space id. Absent: the App's own governed Space (name one when it has several).",
+              "default": ""
+            },
+            "ops": {
+              "type": "array",
+              "description": "1 to 200 ops: ensure {slug, name, type?}, rename {slug|channel_id, name}, archive|unarchive {slug|channel_id}, run in order.",
+              "items": {
+                "title": "AppChatChannelOp",
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "enum": [
+                      "ensure",
+                      "rename",
+                      "archive",
+                      "unarchive"
+                    ]
+                  },
+                  "slug": {
+                    "type": "string",
+                    "description": "The channel's slug: a-z 0-9 and -, starting with a letter or digit."
+                  },
+                  "channel_id": {
+                    "type": "string",
+                    "description": "Sew's channel id, instead of the slug."
+                  },
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "description": "ensure: the name a new channel gets; rename: the new name."
+                  },
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "text",
+                      "voice"
+                    ],
+                    "description": "ensure only (default text)."
+                  },
+                  "private": {
+                    "type": "boolean",
+                    "description": "ensure only: a private channel."
+                  },
+                  "user_limit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 99,
+                    "description": "Voice: at most this many people (0: no limit)."
+                  }
+                },
+                "required": [
+                  "op"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "ops"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppChatChannelOps",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array",
+            "description": "One per op, in order.",
+            "items": {
+              "title": "AppChatChannelOpResult",
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string"
+                },
+                "slug": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "channel_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Sew's channel id."
+                },
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The channel's current name (an ensure never renames)."
+                },
+                "created": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "title": "AppChatChannelOpError",
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "hint": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "op",
+                "created"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "spaceId",
+          "results"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "cap_not_granted",
+        "usage",
+        "chat_key_required",
+        "sew_feature_missing",
+        "space_unbound",
+        "app_mismatch",
+        "chat_unavailable",
+        "rate_limited",
+        "sew_unreachable",
+        "sew_refused"
+      ],
+      "doc": "Make, rename, archive or unarchive channels in this App's own App-governed Space, many at once (Sew's bulk channel ops). Needs the App's chat key and Sew 0.6.0+. 60 calls a minute per App with chat.setChannels.",
+      "example": "await k2.asApp().chat.channels({ops: [{op: 'ensure', slug: 'job-1042', name: 'Job 1042', type: 'text', private: true}]})"
+    },
+    {
+      "verb": "chat.setChannels",
+      "cap": "chat:channels",
+      "exposure": [
+        "app"
+      ],
+      "reach": "portable",
+      "effect": "write",
+      "kind": "call",
+      "feature": "app-chat-v1",
+      "bindings": {
+        "http": {
+          "method": "POST",
+          "route": "/cli/sew/app/member-channels",
+          "door": "link"
+        }
+      },
+      "request": [
+        {
+          "title": "args",
+          "type": "object",
+          "properties": {
+            "space": {
+              "type": "string",
+              "description": "The Sew Space id. Absent: the App's own governed Space (name one when it has several).",
+              "default": ""
+            },
+            "items": {
+              "type": "array",
+              "description": "1 to 500 items: each person's App-managed private channels, in full (K2 adds the channels their App role gives).",
+              "items": {
+                "title": "AppChatMemberChannels",
+                "type": "object",
+                "properties": {
+                  "username": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "One of this App's users."
+                  },
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Up to 5000 channel slugs (made with chat.channels). An empty list clears the App's list."
+                  },
+                  "level": {
+                    "type": "string",
+                    "enum": [
+                      "member",
+                      "moderator",
+                      "admin"
+                    ],
+                    "description": "The person's level in those channels, at most the chat key's ceiling."
+                  }
+                },
+                "required": [
+                  "username",
+                  "channels"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "items"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "response": {
+        "title": "AppChatMemberChannelsResult",
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "app": {
+            "type": "string"
+          },
+          "spaceId": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "integer",
+            "description": "People whose list changed (the sync goes out within seconds)."
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "title": "AppChatMemberChannelsItem",
+              "type": "object",
+              "properties": {
+                "username": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "error": {
+                  "type": "string",
+                  "description": "not_found (not this App's user) or agent_subject (an agent's login)."
+                }
+              },
+              "required": [
+                "username",
+                "ok"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "ok",
+          "app",
+          "spaceId",
+          "changed",
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "errors": [
+        "app_pass_required",
+        "pass_required",
+        "pass_invalid",
+        "pass_wrong_link",
+        "cap_not_granted",
+        "usage",
+        "chat_key_required",
+        "sew_feature_missing",
+        "space_unbound",
+        "app_mismatch",
+        "chat_unavailable",
+        "rate_limited",
+        "failed"
+      ],
+      "doc": "Set which of this App's private channels each of its users is in (the App's list, in full), in its own App-governed Space. Needs the App's chat key and Sew 0.6.0+. 60 calls a minute per App with chat.channels.",
+      "example": "await k2.asApp().chat.setChannels({items: [{username: 'dana', channels: ['job-1042', 'job-1043']}]})"
     },
     {
       "verb": "project.list",

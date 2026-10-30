@@ -23,9 +23,10 @@
 //!   so `member-channels` can name it by slug.
 //! - 60 calls a minute per App (both routes).
 //!
-//! Not on the App surface or the SDK yet: `chat.channels` /
-//! `chat.setChannels` join the catalog with S8 (the catalog version is
-//! taken at landing). Off a link, an App's remote pass reaches both now.
+//! Catalog rows (v42, at integration): `chat.channels` (channels/bulk) and
+//! `chat.setChannels` (member-channels), cap `chat:channels`, so the pass
+//! gate admits an App's pass here. S8 does the SDK helpers and the study
+//! page. Off a link, an App's remote pass reaches both.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;

@@ -353,6 +353,11 @@ mod tests {
                 crate::heartbeat_app_routes::READ_PATHS.iter().chain(crate::heartbeat_app_routes::WRITE_PATHS.iter()).copied().collect(),
             ),
             ("crate::app_mobile_routes::PASS_ROUTES", crate::app_mobile_routes::PASS_ROUTES.to_vec()),
+            // App-governed Spaces S4+S5 (0.46.7): chat.channels / chat.setChannels.
+            (
+                "crate::governed_app_routes::is_route",
+                vec![crate::governed_app_routes::MEMBER_CHANNELS, crate::governed_app_routes::CHANNELS_BULK],
+            ),
             ("crate::app_push::guest_routes::PASS_ROUTES", crate::app_push::guest_routes::PASS_ROUTES.to_vec()),
             ("crate::app_pairing::guest_routes::PASS_ROUTES", crate::app_pairing::guest_routes::PASS_ROUTES.to_vec()),
             // app-user-profile (0.46.5): a person's own profile and sessions.

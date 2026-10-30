@@ -138,7 +138,7 @@ fn run_limited(mut cmd: Command, stdin: Option<Vec<u8>>, limit: Duration) -> Res
 }
 
 pub fn binary_version(p: &Path) -> Option<String> {
-    let mut c = Command::new(p);
+    let mut c = k2_core::bg_proc::command(p);
     c.arg("version").env_clear().env("PATH", "/usr/bin:/bin");
     match run_limited(c, None, Duration::from_secs(10)) {
         Ok((true, out)) => out.lines().next().map(|l| l.trim().to_string()),
@@ -263,7 +263,7 @@ pub fn root_helper_node() -> serde_json::Value {
     if !present {
         return serde_json::json!({"present": false, "node": false});
     }
-    let mut c = Command::new(ROOT_HELPER);
+    let mut c = k2_core::bg_proc::command(ROOT_HELPER);
     c.args(["helper", "version"]).env_clear().env("PATH", "/usr/bin:/bin");
     let v: serde_json::Value = match run_limited(c, None, Duration::from_secs(10)) {
         Ok((true, out)) => serde_json::from_str(out.trim()).unwrap_or_default(),
@@ -280,7 +280,7 @@ fn sudo_allows(bin: &Path, verb: &str, args: &[String]) -> bool {
     if !Path::new("/usr/bin/sudo").is_file() {
         return false;
     }
-    let mut c = Command::new("/usr/bin/sudo");
+    let mut c = k2_core::bg_proc::command("/usr/bin/sudo");
     c.arg("-n").arg("-l").arg(bin).arg(verb).args(args);
     matches!(run_limited(c, None, Duration::from_secs(10)), Ok((true, _)))
 }
@@ -372,19 +372,19 @@ fn run_root(el: Elevation, bin: &Path, verb: &str, args: &[String]) -> Result<St
                 v => return Err(format!("the root helper has no node verb for {v}")),
             };
             let bytes = std::fs::read(bin).map_err(|e| format!("read {}: {e}", bin.display()))?;
-            let mut c = Command::new("/usr/bin/sudo");
+            let mut c = k2_core::bg_proc::command("/usr/bin/sudo");
             c.arg("-n").arg(ROOT_HELPER).arg("node").arg(hverb).args(args);
             run_limited(c, Some(bytes), limit)?
         }
         Elevation::Sudo => {
-            let mut c = Command::new("/usr/bin/sudo");
+            let mut c = k2_core::bg_proc::command("/usr/bin/sudo");
             c.arg("-n").arg(bin).arg(verb).args(args);
             run_limited(c, None, limit)?
         }
         Elevation::Prompt => {
             let mut parts = vec![shell_quote(&bin.display().to_string()), verb.to_string()];
             parts.extend(args.iter().map(|a| shell_quote(a)));
-            let mut c = Command::new("/usr/bin/osascript");
+            let mut c = k2_core::bg_proc::command("/usr/bin/osascript");
             c.arg("-e").arg(applescript_for(&parts.join(" ")));
             run_limited(c, None, limit)?
         }

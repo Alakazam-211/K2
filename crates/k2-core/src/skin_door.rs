@@ -11,7 +11,7 @@
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -622,7 +622,7 @@ pub fn caddy_has_proxy_protocol(version: Option<(u32, u32, u32)>) -> bool {
 
 /// The installed Caddy's version (`caddy version`), `None` when it won't say.
 pub fn caddy_version(bin: &Path) -> Option<(u32, u32, u32)> {
-    let out = Command::new(bin).arg("version").stdin(Stdio::null()).output().ok()?;
+    let out = crate::bg_proc::command(bin).arg("version").stdin(Stdio::null()).output().ok()?;
     parse_caddy_version(&String::from_utf8_lossy(&out.stdout))
 }
 
@@ -659,7 +659,7 @@ fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(unix)]
     {
-        Command::new("kill")
+        crate::bg_proc::command("kill")
             .args(["-0", &pid.to_string()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -680,14 +680,14 @@ fn kill_pid(pid: u32) {
     }
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
+        let _ = crate::bg_proc::command("kill")
             .arg(pid.to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
         std::thread::sleep(Duration::from_millis(80));
         if pid_alive(pid) {
-            let _ = Command::new("kill")
+            let _ = crate::bg_proc::command("kill")
                 .args(["-9", &pid.to_string()])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -696,7 +696,7 @@ fn kill_pid(pid: u32) {
     }
     #[cfg(not(unix))]
     {
-        let _ = Command::new("taskkill")
+        let _ = crate::bg_proc::command("taskkill")
             .args(["/PID", &pid.to_string(), "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -711,7 +711,7 @@ fn stray_caddy_pattern(cfg: &Path) -> String {
 
 #[cfg(unix)]
 fn reap_stray_caddy(cfg: &Path) {
-    let _ = Command::new("pkill")
+    let _ = crate::bg_proc::command("pkill")
         .arg("-f")
         .arg(stray_caddy_pattern(cfg))
         .stdout(Stdio::null())
@@ -741,7 +741,7 @@ fn spawn_caddy(bin: &Path, cfg: &Path) -> Result<Child, String> {
     // Daemon child, same uid as k2-daemon. Do not run as user stalwart
     // and do not inherit Stalwart CAP_NET_BIND.
     let log_path = caddy_log_path();
-    let mut cmd = Command::new(bin);
+    let mut cmd = crate::bg_proc::command(bin);
     cmd.arg("run")
         .arg("--config")
         .arg(cfg)

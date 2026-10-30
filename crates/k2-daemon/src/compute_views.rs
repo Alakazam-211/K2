@@ -351,7 +351,7 @@ fn controller_machine() -> serde_json::Value {
         "diskTotalBytes": hw.disk_total_bytes,
     });
     if cfg!(target_os = "macos") {
-        match std::process::Command::new("tmutil").args(["listlocalsnapshots", "/"]).stdin(std::process::Stdio::null()).output() {
+        match k2_core::bg_proc::command("tmutil").args(["listlocalsnapshots", "/"]).stdin(std::process::Stdio::null()).output() {
             Ok(o) if o.status.success() => {
                 let n = String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.contains("com.apple.TimeMachine")).count();
                 v["tmLocalSnapshots"] = n.into();

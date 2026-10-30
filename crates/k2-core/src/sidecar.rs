@@ -402,7 +402,7 @@ pub fn cursor_create_chat(
     env: &HashMap<String, String>,
 ) -> Result<String, String> {
     let bin = resolve_binary(program).ok_or_else(|| install_hint(program))?;
-    let mut cmd = std::process::Command::new(&bin);
+    let mut cmd = crate::bg_proc::command(&bin);
     cmd.arg("create-chat")
         .current_dir(cwd)
         .stdin(std::process::Stdio::null())

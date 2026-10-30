@@ -242,7 +242,7 @@ impl DualOps for HelperDualOps<'_> {
     fn refresh_matviews(&self, m: Major, port: u16, db: &str, role: &str, password: &str, timeout_secs: u64) -> Result<(), String> {
         let psql = PgMajor::new(m).ok_or("unknown major")?.bin("psql");
         let pass = super::helper_ops::PassFile::new(port, db, role, password)?;
-        let mut child = std::process::Command::new(&psql)
+        let mut child = k2_core::bg_proc::command(&psql)
             .args(["-X", "-h", "127.0.0.1", "-p", &port.to_string(), "-U", role, "-d", db, "-v", "ON_ERROR_STOP=1", "-tA", "-w"])
             .env_clear()
             .env("PATH", "/usr/bin:/bin")

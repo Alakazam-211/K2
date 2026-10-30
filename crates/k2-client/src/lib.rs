@@ -38,6 +38,7 @@ pub fn log_timestamp() -> String {
 pub mod account_session;
 pub mod airgap;
 pub mod app_settings_view;
+pub mod bg_proc;
 pub mod browser_notes;
 pub mod daemon_lifecycle;
 pub mod download_file;

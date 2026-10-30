@@ -21,7 +21,7 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -467,7 +467,7 @@ pub fn probe_version_with(
             return None;
         }
     };
-    let mut child = Command::new(&resolved)
+    let mut child = crate::bg_proc::command(&resolved)
         .arg("--version")
         .env("PATH", search_path)
         .stdin(Stdio::null())
@@ -481,6 +481,10 @@ pub fn probe_version_with(
             Ok(Some(_)) => break,
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
             _ => {
+                // Windows: `claude` is often `claude.cmd`, so the child is
+                // cmd.exe with node under it; end the whole tree.
+                #[cfg(windows)]
+                let _ = crate::win_proc::terminate_tree(child.id());
                 let _ = child.kill();
                 let _ = child.wait();
                 return None;
@@ -1502,7 +1506,7 @@ mod tests {
     fn run_script(home: &Path, env: &[(&str, &str)], stdin: &[u8]) -> (i32, Vec<u8>, Duration) {
         use std::io::Write;
         let script = script_path(home);
-        let mut cmd = Command::new("/bin/bash");
+        let mut cmd = crate::bg_proc::command("/bin/bash");
         cmd.arg(&script)
             .env_clear()
             .env("PATH", "/usr/bin:/bin")
@@ -1646,7 +1650,7 @@ mod tests {
             raw
         });
         let payload = "{\"hook_event_name\":\"Stop\",\"m\":\"back\\\\slash \\\"q\\\" tab\there cr\rlf\nh\u{e9}\"}\n\n";
-        let mut child = Command::new(crate::test_env::bash_program())
+        let mut child = crate::bg_proc::command(crate::test_env::bash_program())
             .arg(script_path(home.path()))
             .env("HOME", home.path())
             .env("K2_PANE_ID", "pane-win")
@@ -1916,7 +1920,7 @@ mod tests {
         let tmp = home.path().join("tmp");
         std::fs::create_dir_all(&tmp).expect("tmp");
         let run_it = |payload: &str, pane: &str| -> String {
-            let mut child = Command::new(&script)
+            let mut child = crate::bg_proc::command(&script)
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
                 .env("TMPDIR", &tmp)

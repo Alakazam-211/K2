@@ -287,7 +287,7 @@ pub fn install() -> Result<bool, String> {
         let tmp = dir.join(format!(".k2-handoff.conf.tmp.{}", std::process::id()));
         std::fs::write(&tmp, handoff_dropin()).map_err(|e| format!("write {}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, &path).map_err(|e| format!("rename {}: {e}", path.display()))?;
-        let st = std::process::Command::new("systemctl")
+        let st = k2_core::bg_proc::command("systemctl")
             .args(["--user", "daemon-reload"])
             .status()
             .map_err(|e| format!("systemctl --user daemon-reload: {e}"))?;

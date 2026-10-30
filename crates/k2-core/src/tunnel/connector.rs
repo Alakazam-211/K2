@@ -19,7 +19,7 @@
 //! `frpc` via PATH or common install dirs.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -1572,7 +1572,7 @@ pub fn stop(reason: &str) -> Result<(), String> {
                 "[tunnel] stop: stray frpc still alive after SIGTERM — SIGKILL `{}`",
                 stray_frpc_pattern(&cfg_path)
             );
-            let _ = Command::new("pkill")
+            let _ = crate::bg_proc::command("pkill")
                 .arg("-9")
                 .arg("-f")
                 .arg(stray_frpc_pattern(&cfg_path))
@@ -1745,7 +1745,7 @@ fn stray_frpc_pattern(cfg_path: &Path) -> String {
 /// the normal, healthy case.
 #[cfg(unix)]
 fn reap_stray_frpc(cfg_path: &Path) {
-    let _ = Command::new("pkill")
+    let _ = crate::bg_proc::command("pkill")
         .arg("-f")
         .arg(stray_frpc_pattern(cfg_path))
         .stdout(Stdio::null())
@@ -1766,7 +1766,7 @@ fn reap_stray_frpc(_cfg_path: &Path) {}
 /// SIGKILL. Missing `pgrep` → false (don't escalate blindly).
 #[cfg(unix)]
 fn stray_frpc_alive(cfg_path: &Path) -> bool {
-    Command::new("pgrep")
+    crate::bg_proc::command("pgrep")
         .arg("-f")
         .arg(stray_frpc_pattern(cfg_path))
         .stdout(Stdio::null())
@@ -3054,7 +3054,8 @@ fn spawn_once(
         .try_clone()
         .map_err(|e| format!("clone log handle: {e}"))?;
     let offset = frpc_proc::log_len(&frpc_log_path());
-    let mut cmd = Command::new(frpc);
+    // frpc is a console program: bg_proc keeps it from opening a window.
+    let mut cmd = crate::bg_proc::command(frpc);
     cmd.arg("-c")
         .arg(&cfg_path)
         .stdin(Stdio::null())
@@ -3074,14 +3075,6 @@ fn spawn_once(
                 Ok(())
             });
         }
-    }
-    // frpc is a console-subsystem binary; without this, each tunnel start
-    // flashes (or leaves) a black cmd window on the Windows desktop.
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        cmd.creation_flags(CREATE_NO_WINDOW);
     }
     let child = cmd
         .spawn()
@@ -4906,7 +4899,7 @@ mod tests {
             let frpc = dir.join("frpc");
             crate::test_env::write_executable(&frpc, "#!/bin/sh\nsleep 300\n");
 
-            let mut child = Command::new(&frpc)
+            let mut child = crate::bg_proc::command(&frpc)
                 .arg("-c")
                 .arg(&cfg_path)
                 .stdin(Stdio::null())
@@ -4994,7 +4987,7 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(5);
             let mut clean = false;
             while Instant::now() < deadline {
-                let status = Command::new("pgrep")
+                let status = crate::bg_proc::command("pgrep")
                     .arg("-f")
                     .arg(&pattern)
                     .stdout(Stdio::null())

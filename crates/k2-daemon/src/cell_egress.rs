@@ -242,7 +242,7 @@ fn live_process_uids() -> std::io::Result<std::collections::HashSet<u32>> {
 /// Returns the uids whose tables were removed.
 #[cfg(target_os = "linux")]
 pub(crate) fn sweep_stale_tables() -> std::io::Result<Vec<u32>> {
-    let out = std::process::Command::new("nft")
+    let out = k2_core::bg_proc::command("nft")
         .args(["list", "tables"])
         .stdin(std::process::Stdio::null())
         .output()?;
@@ -276,9 +276,9 @@ pub(crate) fn sweep_stale_tables() -> std::io::Result<Vec<u32>> {
 #[cfg(target_os = "linux")]
 fn run_nft(ruleset: &str) -> std::io::Result<()> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
-    let mut child = Command::new("nft")
+    let mut child = k2_core::bg_proc::command("nft")
         .arg("-f")
         .arg("-")
         .stdin(Stdio::piped())

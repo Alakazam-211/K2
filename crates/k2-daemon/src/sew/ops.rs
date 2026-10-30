@@ -302,7 +302,7 @@ impl SewOps for RealOps {
         serde_json::from_str(text.trim()).map_err(|_| format!("root helper {}: answer is not JSON", argv.join(" ")))
     }
     fn unit(&self, unit: &str) -> UnitInfo {
-        let out = std::process::Command::new("/usr/bin/systemctl")
+        let out = k2_core::bg_proc::command("/usr/bin/systemctl")
             .args(["show", unit, "-p", "ActiveState,Result,ExecMainStatus,NRestarts,MemoryCurrent,MemoryMax"])
             .stdin(std::process::Stdio::null())
             .output();
@@ -338,7 +338,7 @@ impl SewOps for RealOps {
         }
     }
     fn systemd_version(&self) -> Option<u32> {
-        let o = std::process::Command::new("/usr/bin/systemctl").arg("--version").output().ok()?;
+        let o = k2_core::bg_proc::command("/usr/bin/systemctl").arg("--version").output().ok()?;
         parse_systemd_version(&String::from_utf8_lossy(&o.stdout))
     }
     fn pg_majors(&self) -> Vec<u32> {

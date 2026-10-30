@@ -822,7 +822,7 @@ fn active_web_units() -> Vec<String> {
     KNOWN_WEB_UNITS
         .iter()
         .filter(|u| {
-            std::process::Command::new("systemctl")
+            k2_core::bg_proc::command("systemctl")
                 .args(["is-active", "--quiet", &format!("{u}.service")])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())

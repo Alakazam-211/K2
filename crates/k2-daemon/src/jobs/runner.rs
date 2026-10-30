@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -300,7 +300,7 @@ fn spawn(job: &Job, live: &Arc<Live>, log_path: &Path) -> Result<Started, (JobEr
     let (prog, args) = k2_core::terminal::win_cmd::resolve_spawn(&job.argv[0], &job.argv[1..], env.get("PATH").map(String::as_str).unwrap_or(""));
     #[cfg(not(windows))]
     let (prog, args) = (job.argv[0].clone(), job.argv[1..].to_vec());
-    let mut cmd = Command::new(&prog);
+    let mut cmd = k2_core::bg_proc::command(&prog);
     cmd.args(&args)
         .current_dir(&cwd)
         .env_clear()
@@ -494,7 +494,7 @@ pub fn stop_leftover_group(pid: i64, run_id: &str) {
         .map(|env| env.split(|b| *b == 0).any(|kv| kv == want.as_bytes()))
         .unwrap_or(false);
     #[cfg(target_os = "macos")]
-    let ours = Command::new("/bin/ps")
+    let ours = k2_core::bg_proc::command("/bin/ps")
         .args(["-E", "-ww", "-o", "command=", "-p", &pid.to_string()])
         .stdin(Stdio::null())
         .stderr(Stdio::null())

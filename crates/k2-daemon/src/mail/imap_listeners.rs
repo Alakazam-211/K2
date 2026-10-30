@@ -566,7 +566,7 @@ impl RestartDoors for LiveDoors {
     fn plain_sudo_allowed(&mut self) -> bool {
         // `-l <cmd>`: exit 0 iff sudoers lets this user run exactly that
         // command without a password. `-n` never prompts.
-        std::process::Command::new(super::helper::SUDO_PATH)
+        k2_core::bg_proc::command(super::helper::SUDO_PATH)
             .args(["-n", "-l", SYSTEMCTL_PATH, "restart", super::supervisor::STALWART_UNIT])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -583,7 +583,7 @@ impl RestartDoors for LiveDoors {
                 // RH14: kept one train, but reported (root-helper status).
                 crate::root_helper::plain_sudo_restart_used()
                     .store(true, std::sync::atomic::Ordering::SeqCst);
-                let out = std::process::Command::new(super::helper::SUDO_PATH)
+                let out = k2_core::bg_proc::command(super::helper::SUDO_PATH)
                     .args(["-n", SYSTEMCTL_PATH, "restart", supervisor::STALWART_UNIT])
                     .stdin(std::process::Stdio::null())
                     .output()

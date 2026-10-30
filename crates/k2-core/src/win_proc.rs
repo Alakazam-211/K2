@@ -2,7 +2,7 @@
 //! alive, when did it start (so a recycled pid is never mistaken for the
 //! process K2 recorded), and its command line.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HANDLE};
 use windows_sys::Win32::System::Threading::{
@@ -90,14 +90,11 @@ pub fn command_line(pid: u32) -> Option<String> {
 /// The command lines of `pids` in one CIM query (one PowerShell start for
 /// them all). A pid that is gone, or whose line can't be read, is left out.
 pub fn command_lines(pids: &[u32]) -> Vec<(u32, String)> {
-    use std::os::windows::process::CommandExt;
-    /// No console window flashes up from the (windowless) daemon.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     if pids.is_empty() {
         return Vec::new();
     }
     let filter = pids.iter().map(|p| format!("ProcessId={p}")).collect::<Vec<_>>().join(" OR ");
-    let out = Command::new("powershell")
+    let out = crate::bg_proc::command("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -110,7 +107,6 @@ pub fn command_lines(pids: &[u32]) -> Vec<(u32, String)> {
         ])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
-        .creation_flags(CREATE_NO_WINDOW)
         .output();
     let Ok(out) = out else { return Vec::new() };
     String::from_utf8_lossy(&out.stdout)
@@ -246,7 +242,7 @@ mod tests {
     #[test]
     fn a_live_child_is_alive_with_a_start_and_a_command_line_then_gone() {
         let (prog, args) = crate::test_env::sleep_command(30);
-        let mut child = Command::new(&prog).args(&args).stdout(Stdio::null()).spawn().expect("spawn");
+        let mut child = crate::bg_proc::command(&prog).args(&args).stdout(Stdio::null()).spawn().expect("spawn");
         let pid = child.id();
         assert!(pid_alive(pid));
         let start = start_key(pid).expect("start time");

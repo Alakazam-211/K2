@@ -13,7 +13,7 @@
 
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -33,7 +33,7 @@ impl Drop for Inhibitor {
 }
 
 fn spawn_inhibitor(what: &str, why: &str) -> Result<Inhibitor, String> {
-    let mut child = Command::new("systemd-inhibit")
+    let mut child = k2_core::bg_proc::command("systemd-inhibit")
         .args([
             &format!("--what={what}"),
             "--who=K2",

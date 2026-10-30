@@ -49,7 +49,7 @@ fn meminfo_total() -> Option<u64> {
 }
 
 fn sysctl_memsize() -> Option<u64> {
-    let out = std::process::Command::new("/usr/sbin/sysctl").args(["-n", "hw.memsize"]).output().ok()?;
+    let out = crate::bg_proc::command("/usr/sbin/sysctl").args(["-n", "hw.memsize"]).output().ok()?;
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 

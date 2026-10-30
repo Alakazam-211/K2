@@ -599,7 +599,7 @@ fn spawn_child(
     }
     #[cfg(windows)]
     {
-        let mut c = Command::new("cmd.exe");
+        let mut c = k2_core::bg_proc::command("cmd.exe");
         c.current_dir(cwd);
         cmd_exe_line(&mut c, cmd);
         // The same vault rules as Unix: clean env + granted secrets for
@@ -626,7 +626,7 @@ fn spawn_argv(
     project_id: &str,
     name: &str,
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
-    let mut c = Command::new(exe);
+    let mut c = k2_core::bg_proc::command(exe);
     c.args(args).current_dir(cwd);
     spawn_prepared(c, project_id, name, true)
 }
@@ -2552,7 +2552,7 @@ fn process_argv(pid: i32) -> Option<Vec<String>> {
     }
     #[cfg(all(unix, not(target_os = "linux")))]
     {
-        let out = std::process::Command::new("/bin/ps")
+        let out = k2_core::bg_proc::command("/bin/ps")
             .args(["-o", "args=", "-p", &pid.to_string()])
             .env_clear()
             .output()

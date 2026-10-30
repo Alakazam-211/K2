@@ -451,7 +451,7 @@ impl PreflightEnv for RealPreflightEnv {
         // `ss -ltnpH` names the holder when we're privileged; the
         // connect probe is the fallback truth for "is it taken".
         // Never binds anything.
-        if let Ok(out) = std::process::Command::new("ss").args(["-ltnpH"]).output() {
+        if let Ok(out) = k2_core::bg_proc::command("ss").args(["-ltnpH"]).output() {
             if out.status.success() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 if let Some(who) = parse_ss_listener(&text, port) {
@@ -489,7 +489,7 @@ impl PreflightEnv for RealPreflightEnv {
     fn rdns(&self, ip: &str) -> Option<String> {
         // `getent hosts <ip>` does the PTR lookup through NSS on any
         // Linux box; column 2 is the canonical name.
-        let out = std::process::Command::new("getent")
+        let out = k2_core::bg_proc::command("getent")
             .args(["hosts", ip])
             .output()
             .ok()?;

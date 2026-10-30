@@ -241,7 +241,6 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
     use security_framework::os::macos::keychain::SecKeychain;
@@ -327,7 +326,7 @@ mod tests {
             BUILDER.call_once(|| keyring::set_default_credential_builder(Box::new(FileKeychainBuilder)));
             let dir = tempfile::tempdir().expect("tempdir");
             let path = dir.path().join("k2-secrets-test.keychain-db");
-            let out = Command::new("/usr/bin/security")
+            let out = k2_client::bg_proc::command("/usr/bin/security")
                 .args(["create-keychain", "-p", KEYCHAIN_PASSWORD])
                 .arg(&path)
                 .output()
@@ -354,7 +353,7 @@ mod tests {
     impl Drop for TempKeychain {
         fn drop(&mut self) {
             TEST_KEYCHAIN.with(|k| *k.borrow_mut() = None);
-            let out = Command::new("/usr/bin/security")
+            let out = k2_client::bg_proc::command("/usr/bin/security")
                 .arg("delete-keychain")
                 .arg(&self.path)
                 .output()

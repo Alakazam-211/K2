@@ -498,7 +498,7 @@ pub fn apple_installer_running() -> bool {
     if !cfg!(target_os = "macos") {
         return false;
     }
-    std::process::Command::new("/usr/bin/pgrep")
+    crate::bg_proc::command("/usr/bin/pgrep")
         .args(["-f", APPLE_INSTALLER])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -542,7 +542,7 @@ pub fn start_apple_install() -> Result<InstallStart, String> {
     }
     let pair = git_safe::apple_pair().ok_or("Apple's command line tools are macOS only")?;
     let xs = pair.xcode_select;
-    let mut child = std::process::Command::new(&xs)
+    let mut child = crate::bg_proc::command(&xs)
         .arg("--install")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

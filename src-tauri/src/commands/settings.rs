@@ -231,7 +231,7 @@ fn ensure_windows_user_path_has(bin_dir: &Path) -> Result<(), String> {
          [Environment]::SetEnvironmentVariable('Path', $new, 'User');",
         bin_s.replace('\'', "''")
     );
-    let out = std::process::Command::new("powershell")
+    let out = k2_client::bg_proc::command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .output()
         .map_err(|e| format!("PATH update failed: {e}"))?;
@@ -601,7 +601,7 @@ pub fn cli_install() -> Result<String, String> {
         let bin_dir = symlink_path.parent().unwrap();
         if !bin_dir.exists() {
             // Try to create /usr/local/bin via osascript (prompts for password)
-            let output = std::process::Command::new("osascript")
+            let output = k2_client::bg_proc::command("osascript")
                 .args([
                     "-e",
                     &format!(
@@ -639,7 +639,7 @@ pub fn cli_install() -> Result<String, String> {
             CLI_SYMLINK_PATH,
             legacy_ln
         );
-        let output = std::process::Command::new("osascript")
+        let output = k2_client::bg_proc::command("osascript")
             .args(["-e", &script])
             .output()
             .map_err(|e| format!("Failed to create symlink: {}", e))?;
@@ -696,7 +696,7 @@ pub fn cli_uninstall() -> Result<(), String> {
             "do shell script \"rm -f '{}'\" with prompt \"K2 needs to remove its command-line tool from /usr/local/bin.\" with administrator privileges",
             CLI_SYMLINK_PATH
         );
-        let output = std::process::Command::new("osascript")
+        let output = k2_client::bg_proc::command("osascript")
             .args(["-e", &script])
             .output()
             .map_err(|e| format!("Failed to remove symlink: {}", e))?;
@@ -768,7 +768,7 @@ pub fn relaunch_via_open(_app: AppHandle) {
                     );
                     log_debug!("[relaunch] Helper script: {script_path}, waiting for PID {pid}");
                     // Spawn detached — inherits no stdin/stdout, won't be killed with us
-                    let _ = std::process::Command::new("/bin/bash")
+                    let _ = k2_client::bg_proc::command("/bin/bash")
                         .arg(&script_path)
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
@@ -798,7 +798,7 @@ pub fn relaunch_via_open(_app: AppHandle) {
                     "[relaunch] Windows helper {} waiting for PID {pid}",
                     script_path.display()
                 );
-                let _ = std::process::Command::new("cmd")
+                let _ = k2_client::bg_proc::command("cmd")
                     .args(["/C", "start", "", "/MIN", &script_path.display().to_string()])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())

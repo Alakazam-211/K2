@@ -413,7 +413,7 @@ pub fn create_dirty_blob(root: &Path, out: &Path, cap: u64) -> Result<(String, u
         if total > cap {
             return Err(format!("the working-tree changes are over {} MB", cap >> 20));
         }
-        let status = Command::new("tar")
+        let status = crate::bg_proc::command("tar")
             .arg("-cf")
             .arg(out)
             .arg("-C")

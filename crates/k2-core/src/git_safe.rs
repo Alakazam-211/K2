@@ -86,7 +86,7 @@ pub const NO_EXT_DIFF: [&str; 2] = ["--no-ext-diff", "--no-textconv"];
 /// A hardened `git` with no working directory set (global config, or a
 /// caller that passes `-C`/`--git-dir` itself).
 pub fn command() -> Command {
-    let mut c = Command::new(program());
+    let mut c = crate::bg_proc::command(program());
     c.args(harden_args())
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
@@ -105,7 +105,7 @@ pub fn git(dir: impl AsRef<Path>) -> Command {
 /// The resolved git with none of the `-c` hardening: only for a throwaway
 /// bare repo K2 just made itself (compute bundles), never a workspace.
 pub fn plain() -> Command {
-    let mut c = Command::new(program());
+    let mut c = crate::bg_proc::command(program());
     c.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
     c
 }
@@ -239,7 +239,7 @@ pub(crate) fn is_exec_file(p: &Path) -> bool {
 
 /// `<git> --version`: the version line, or what went wrong.
 fn version_of(git: &Path) -> Result<String, String> {
-    let out = Command::new(git)
+    let out = crate::bg_proc::command(git)
         .arg("--version")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
@@ -258,7 +258,7 @@ fn version_of(git: &Path) -> Result<String, String> {
 /// The developer folder `xcode-select -p` names, when it names one.
 /// (`xcode-select -p` never opens the install dialog.)
 pub fn apple_developer_dir(xcode_select: &Path) -> Option<PathBuf> {
-    let out = Command::new(xcode_select).arg("-p").stdin(Stdio::null()).output().ok()?;
+    let out = crate::bg_proc::command(xcode_select).arg("-p").stdin(Stdio::null()).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -352,7 +352,7 @@ pub fn refresh() -> GitProbe {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
 
@@ -668,7 +668,7 @@ mod tests {
     const RAW: &str = concat!("Command::new(", "\"git\")");
     const MARK: &str = "git_safe: allow (";
 
-    fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    pub(crate) fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
         for e in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display())) {
             let p = e.expect("dir entry").path();
             if p.is_dir() {
@@ -682,7 +682,7 @@ mod tests {
         }
     }
 
-    fn is_test_file(p: &Path) -> bool {
+    pub(crate) fn is_test_file(p: &Path) -> bool {
         let name = p.file_name().expect("file name").to_string_lossy();
         name == "tests.rs" || name.ends_with("_tests.rs")
     }
@@ -814,7 +814,7 @@ mod tests {
     /// Lines of `src` outside `#[cfg(test)] mod … { … }` blocks, with their
     /// 1-based numbers. A block that never closes panics, so a lexing miss
     /// can't silently hide production code.
-    fn non_test_lines(file: &Path, src: &str) -> Vec<(usize, String)> {
+    pub(crate) fn non_test_lines(file: &Path, src: &str) -> Vec<(usize, String)> {
         let mut starts = Vec::new();
         let mut off = 0;
         for l in src.split('\n') {

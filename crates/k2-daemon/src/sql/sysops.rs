@@ -128,7 +128,7 @@ pub struct RealSystemOps;
 
 impl RealSystemOps {
     fn run(cmd: &str, args: &[&str]) -> Result<std::process::Output, String> {
-        std::process::Command::new(cmd)
+        k2_core::bg_proc::command(cmd)
             .args(args)
             .output()
             .map_err(|e| format!("{cmd} {}: {e}", args.join(" ")))
@@ -213,7 +213,7 @@ impl SystemOps for RealSystemOps {
             let argv = crate::root_helper::pg_argv(args)?;
             return crate::root_helper::call_text(&argv, stdin);
         }
-        let mut cmd = std::process::Command::new(k2_root_proto::paths::SUDO_PATH);
+        let mut cmd = k2_core::bg_proc::command(k2_root_proto::paths::SUDO_PATH);
         cmd.args(["-n", HELPER_PATH]).args(args);
         let out = if let Some(bytes) = stdin {
             cmd.stdin(std::process::Stdio::piped())
@@ -253,7 +253,7 @@ impl SystemOps for RealSystemOps {
         env: &[(&str, &str)],
         stdin: Option<&[u8]>,
     ) -> Result<Vec<u8>, String> {
-        let mut c = std::process::Command::new(cmd);
+        let mut c = k2_core::bg_proc::command(cmd);
         c.args(args);
         for (k, v) in env {
             c.env(k, v);

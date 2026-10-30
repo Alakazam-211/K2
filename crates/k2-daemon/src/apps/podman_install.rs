@@ -185,9 +185,9 @@ pub struct PackageProbe<'a> {
 /// The real box: the package manager's own read-only query.
 pub fn package_installed(pm: &str, pkg: &str) -> Option<bool> {
     let out = match pm {
-        "apt" => std::process::Command::new("/usr/bin/dpkg-query").args(["-W", "-f=${db:Status-Abbrev}", pkg]).output(),
-        "dnf" => std::process::Command::new("/usr/bin/rpm").args(["-q", pkg]).output(),
-        "pacman" => std::process::Command::new(k2_root_proto::apps::PACMAN).args(["-Q", pkg]).output(),
+        "apt" => k2_core::bg_proc::command("/usr/bin/dpkg-query").args(["-W", "-f=${db:Status-Abbrev}", pkg]).output(),
+        "dnf" => k2_core::bg_proc::command("/usr/bin/rpm").args(["-q", pkg]).output(),
+        "pacman" => k2_core::bg_proc::command(k2_root_proto::apps::PACMAN).args(["-Q", pkg]).output(),
         _ => return None,
     }
     .ok()?;

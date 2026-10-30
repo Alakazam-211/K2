@@ -582,8 +582,8 @@ pub fn true_bin() -> PathBuf {
 #[cfg(unix)]
 fn write_executable_unix(path: &Path, contents: &str) {
     use std::io::Write;
-    use std::process::{Command, Stdio};
-    let mut child = Command::new("/bin/sh")
+    use std::process::Stdio;
+    let mut child = crate::bg_proc::command("/bin/sh")
         .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
         .arg(path)
         .stdin(Stdio::piped())
@@ -1223,7 +1223,7 @@ pub fn reap_frpc_under(root: &Path) {
     let script = format!(
         "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*frpc*-c*' -and $_.CommandLine -like '*{r}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
     );
-    let _ = std::process::Command::new("powershell")
+    let _ = crate::bg_proc::command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -1241,7 +1241,7 @@ pub fn reap_frpc_under(root: &Path) {
         }
     }
     for r in roots {
-        let _ = std::process::Command::new("pkill")
+        let _ = crate::bg_proc::command("pkill")
             .arg("-9")
             .arg("-f")
             .arg(format!("frpc -c {}/", r.display()))

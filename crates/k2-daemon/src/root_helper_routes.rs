@@ -264,7 +264,7 @@ fn on_disk_daemon_version() -> Option<String> {
     if !path.is_file() {
         return None;
     }
-    let mut child = std::process::Command::new(&path)
+    let mut child = k2_core::bg_proc::command(&path)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

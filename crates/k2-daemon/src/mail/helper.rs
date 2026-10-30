@@ -581,7 +581,7 @@ pub fn probe_state() -> HelperState {
     if !Path::new(HELPER_PATH).exists() {
         return HelperState::Missing;
     }
-    match std::process::Command::new(SUDO_PATH)
+    match k2_core::bg_proc::command(SUDO_PATH)
         .args(["-n", "-l", HELPER_PATH])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -709,7 +709,7 @@ mod unix_io {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::io::AsRawFd;
     use std::path::Path;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     pub fn perform(cmd: HelperCommand, stdin: &[u8]) -> Result<(), String> {
         match cmd {
@@ -773,7 +773,7 @@ mod unix_io {
     /// (`inactive` exits 3); no output at all reads as unknown and the
     /// data verbs refuse on it.
     fn unit_state() -> String {
-        Command::new("/usr/bin/systemctl")
+        k2_core::bg_proc::command("/usr/bin/systemctl")
             .args(["is-active", STALWART_UNIT])
             .stdin(Stdio::null())
             .stderr(Stdio::null())
@@ -940,7 +940,7 @@ mod unix_io {
     }
 
     fn ensure_user() -> Result<(), String> {
-        let id = Command::new("/usr/bin/id")
+        let id = k2_core::bg_proc::command("/usr/bin/id")
             .args(["-u", STALWART_USER])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -950,7 +950,7 @@ mod unix_io {
         if id.success() {
             return Ok(());
         }
-        let out = Command::new("/usr/sbin/useradd")
+        let out = k2_core::bg_proc::command("/usr/sbin/useradd")
             .args([
                 "--system",
                 "--no-create-home",
@@ -969,7 +969,7 @@ mod unix_io {
     }
 
     fn systemctl(args: &[&str]) -> Result<(), String> {
-        let out = Command::new("/usr/bin/systemctl")
+        let out = k2_core::bg_proc::command("/usr/bin/systemctl")
             .args(args)
             .stdin(Stdio::null())
             .output()
@@ -2293,7 +2293,7 @@ mod data_ops_tests {
     impl Drop for Tree {
         fn drop(&mut self) {
             // Make anything chmod'ed 000 removable again.
-            let _ = std::process::Command::new("chmod")
+            let _ = k2_core::bg_proc::command("chmod")
                 .args(["-R", "u+rwx"])
                 .arg(&self.root)
                 .status();

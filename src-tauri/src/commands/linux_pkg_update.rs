@@ -428,7 +428,7 @@ pub fn run_install(kind: PackageKind, version: &str) -> Result<LinuxInstallOutco
         return Err(format!("Refusing to install: {e}"));
     }
     log_debug!("[linux-pkg-update] running {}", argv.join(" "));
-    let out = std::process::Command::new(&argv[0])
+    let out = k2_client::bg_proc::command(&argv[0])
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
         .output()
@@ -518,7 +518,7 @@ pub fn relaunch_after_linux_package_update() -> Result<(), String> {
     {
         use std::os::unix::process::CommandExt;
         let argv = relaunch_helper_argv(std::process::id(), kind.launcher());
-        let mut cmd = std::process::Command::new(&argv[0]);
+        let mut cmd = k2_client::bg_proc::command(&argv[0]);
         cmd.args(&argv[1..])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())

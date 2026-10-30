@@ -337,7 +337,7 @@ fn run_worker_subprocess(
     std::fs::write(&tmp, payload.to_string())
         .map_err(|e| GenerateError::Internal(format!("write worker payload: {e}")))?;
 
-    let mut child = std::process::Command::new(&exe)
+    let mut child = k2_core::bg_proc::command(&exe)
         .args(["--llm-worker", tmp.to_string_lossy().as_ref()])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

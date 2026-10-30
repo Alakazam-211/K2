@@ -9,7 +9,6 @@
 //!   synthetic local email — fine for local commits; users can change
 //!   globals later for GitHub etc.
 
-use std::process::Command;
 
 /// Ensure `user.name` and `user.email` resolve for subsequent git commits.
 /// Idempotent and skip-safe when already configured.
@@ -74,7 +73,7 @@ fn detect_user_display_name() -> String {
     // Prefer full display name where cheap; fall back to login.
     #[cfg(target_os = "macos")]
     {
-        if let Ok(out) = Command::new("id").arg("-F").output() {
+        if let Ok(out) = crate::bg_proc::command("id").arg("-F").output() {
             if out.status.success() {
                 let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
                 if !s.is_empty() {
@@ -144,7 +143,7 @@ fn hostname_label() -> String {
             return sanitize_label(&t);
         }
     }
-    if let Ok(out) = Command::new("hostname").output() {
+    if let Ok(out) = crate::bg_proc::command("hostname").output() {
         if out.status.success() {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
             if !s.is_empty() {

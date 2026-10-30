@@ -699,7 +699,7 @@ pub fn add_command(
             _ => None,
         }
     };
-    let mut cmd = Command::new(SECURITY);
+    let mut cmd = crate::bg_proc::command(SECURITY);
     match line {
         Some(line) => {
             cmd.arg("-i").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -883,7 +883,7 @@ pub fn parse_g_password(stderr: &[u8]) -> Option<Vec<u8>> {
 /// The read command (argv carries only names, never data).
 #[doc(hidden)] // pub for k2-core's keychain tests
 pub fn read_command(service: &str, account: &str, keychain: Option<&Path>) -> Command {
-    let mut cmd = Command::new(SECURITY);
+    let mut cmd = crate::bg_proc::command(SECURITY);
     cmd.args(["find-generic-password", "-a", account, "-s", service, "-g"]);
     if let Some(kc) = keychain {
         cmd.arg(kc);

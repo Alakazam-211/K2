@@ -138,19 +138,16 @@ where
 
 #[cfg(windows)]
 fn run_installer_windows(shell_command: &str, child_path: &str) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc;
     use std::thread;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    let child = Command::new("powershell")
+    let child = crate::bg_proc::command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", shell_command])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("PATH", child_path)
-        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|e| format!("installer failed to start: {e}"))?;
     let pid = child.id();
@@ -172,12 +169,11 @@ fn run_installer_windows(shell_command: &str, child_path: &str) -> Result<(), St
         Ok(Err(e)) => Err(format!("installer failed: {e}")),
         Err(mpsc::RecvTimeoutError::Timeout) => {
             // The whole tree: PowerShell, npm and node under it.
-            let _ = Command::new("taskkill")
+            let _ = crate::bg_proc::command("taskkill")
                 .args(["/T", "/F", "/PID", &pid.to_string()])
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW)
                 .status();
             Err(format!("installer timed out after {}s", INSTALL_TIMEOUT.as_secs()))
         }
@@ -238,11 +234,11 @@ fn is_executable(path: &std::path::Path) -> bool {
 #[cfg(unix)]
 fn run_installer(shell_command: &str, child_path: &str) -> Result<(), String> {
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc;
     use std::thread;
 
-    let mut cmd = Command::new("/bin/sh");
+    let mut cmd = crate::bg_proc::command("/bin/sh");
     cmd.args(["-c", shell_command])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

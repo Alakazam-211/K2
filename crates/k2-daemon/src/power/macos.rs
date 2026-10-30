@@ -158,7 +158,7 @@ impl PowerOs for MacPowerOs {
     }
 
     fn power_source(&self) -> PowerSource {
-        match std::process::Command::new(helper::PMSET_PATH).args(["-g", "batt"]).output() {
+        match k2_core::bg_proc::command(helper::PMSET_PATH).args(["-g", "batt"]).output() {
             Ok(o) if o.status.success() => super::parse::pmset_batt(&String::from_utf8_lossy(&o.stdout)),
             _ => PowerSource::default(),
         }
@@ -187,7 +187,7 @@ impl PowerOs for MacPowerOs {
         }
         let user = std::env::var("USER").map_err(|_| "USER is not set".to_string())?;
         let script = helper::install_script(&user, &src.to_string_lossy())?;
-        let mut child = std::process::Command::new("/usr/bin/osascript")
+        let mut child = k2_core::bg_proc::command("/usr/bin/osascript")
             .args(["-e", &helper::install_applescript(&script)])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())

@@ -450,7 +450,7 @@ mod real {
 
     #[cfg(target_os = "macos")]
     fn macos_product_version() -> (i64, i64) {
-        let Ok(out) = std::process::Command::new("sw_vers")
+        let Ok(out) = k2_client::bg_proc::command("sw_vers")
             .arg("-productVersion")
             .output()
         else {

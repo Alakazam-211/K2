@@ -178,8 +178,8 @@ impl CommandRunner for SystemRunner {
     #[cfg(not(test))]
     fn run(&self, program: &str, args: &[&str], stdin: Option<&str>) -> Result<CmdOutput, String> {
         use std::io::Write;
-        use std::process::{Command, Stdio};
-        let mut cmd = Command::new(program);
+        use std::process::Stdio;
+        let mut cmd = crate::bg_proc::command(program);
         cmd.args(args);
         let output = if let Some(input) = stdin {
             let mut child = cmd

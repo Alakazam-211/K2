@@ -693,7 +693,7 @@ fn open_in_system_browser(url: &str) -> Result<(), String> {
     let opener = "open";
     #[cfg(not(target_os = "macos"))]
     let opener = "xdg-open";
-    std::process::Command::new(opener)
+    k2_core::bg_proc::command(opener)
         .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

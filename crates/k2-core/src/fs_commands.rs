@@ -26,7 +26,6 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 10MB max for text reads — matches the legacy Tauri command's cap.
 /// Above this the renderer should switch to binary read or stream the
@@ -1189,7 +1188,7 @@ pub fn duplicate(path: &str) -> Result<String, String> {
 /// only use case and the behavior matches the pre-Phase-2 Tauri
 /// implementation.
 pub fn open_in_finder(path: &str) -> Result<(), String> {
-    Command::new("open")
+    crate::bg_proc::command("open")
         .arg("-R")
         .arg(path)
         .spawn()
@@ -1210,7 +1209,7 @@ pub fn open_external(url: &str) -> Result<String, String> {
     }
     #[cfg(target_os = "macos")]
     {
-        let output = Command::new("/usr/bin/open")
+        let output = crate::bg_proc::command("/usr/bin/open")
             .arg(&clean)
             .output()
             .map_err(|e| format!("Failed to open URL: {e}"))?;
@@ -1223,7 +1222,7 @@ pub fn open_external(url: &str) -> Result<String, String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let _output = Command::new("xdg-open")
+        let _output = crate::bg_proc::command("xdg-open")
             .arg(&clean)
             .output()
             .map_err(|e| format!("Failed to open URL: {e}"))?;

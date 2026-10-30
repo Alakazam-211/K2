@@ -75,9 +75,7 @@ pub fn next(code: Option<i32>, ran: Duration, backoff: &mut Duration) -> Next {
 /// code (0; another supervisor already running is also 0).
 #[cfg(windows)]
 pub fn run() -> i32 {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    use std::process::Stdio;
 
     let Some(_guard) = single_instance() else {
         k2_core::log_debug!("[keep-alive] another supervisor is running for this K2 home; leaving it to that one");
@@ -93,11 +91,11 @@ pub fn run() -> i32 {
     let mut backoff = BACKOFF_MIN;
     loop {
         let started = Instant::now();
-        let mut cmd = Command::new(&exe);
+        let mut cmd = k2_core::bg_proc::command(&exe);
         if let Some(dir) = exe.parent() {
             cmd.current_dir(dir);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(CREATE_NO_WINDOW);
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         let code = match cmd.status() {
             Ok(st) => st.code(),
             Err(e) => {

@@ -158,7 +158,7 @@ pub fn installed() -> bool {
 pub fn call(args: &[&str]) -> Result<String, String> {
     let mut full = vec!["-n", HELPER_PATH];
     full.extend_from_slice(args);
-    let out = std::process::Command::new(SUDO_PATH)
+    let out = k2_core::bg_proc::command(SUDO_PATH)
         .args(&full)
         .output()
         .map_err(|e| format!("run sudo {HELPER_PATH}: {e}"))?;
@@ -398,7 +398,7 @@ mod mac {
     }
 
     fn pmset_disablesleep(on: bool) -> Result<(), String> {
-        let out = std::process::Command::new(PMSET_PATH)
+        let out = k2_core::bg_proc::command(PMSET_PATH)
             .args(["-a", "disablesleep", if on { "1" } else { "0" }])
             .output()
             .map_err(|e| format!("run pmset: {e}"))?;
@@ -426,7 +426,7 @@ mod mac {
             .map_err(|e| format!("write {HOLD_STATE_PATH}: {e}"))?;
         pmset_disablesleep(true)?;
         let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-        let mut cmd = std::process::Command::new(exe);
+        let mut cmd = k2_core::bg_proc::command(exe);
         cmd.args([
             "awake-watch",
             "--pid",

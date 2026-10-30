@@ -618,7 +618,7 @@ pub fn boot_sweep(vault: &LocalVault, kept: &[(String, PathBuf)]) {
 /// start key (what the spawn hook binds). Kill it when done.
 #[cfg(test)]
 pub fn live_child_for_tests() -> (std::process::Child, i64, i64, i64) {
-    let child = std::process::Command::new("sleep").arg("120").spawn().expect("spawn sleep");
+    let child = k2_core::bg_proc::command("sleep").arg("120").spawn().expect("spawn sleep");
     let pid = i64::from(child.id());
     let key = (0..50)
         .find_map(|_| {

@@ -120,7 +120,7 @@ pub fn intent_fresh(raw: &str, now: u64) -> Option<String> {
 fn systemd_job_type() -> Option<String> {
     std::env::var_os("INVOCATION_ID")?;
     let (_user, unit, scope) = crate::root_helper::own_unit();
-    let mut cmd = std::process::Command::new("systemctl");
+    let mut cmd = k2_core::bg_proc::command("systemctl");
     if scope == "user" {
         cmd.arg("--user");
     }
@@ -333,7 +333,7 @@ fn launchd_label() -> Option<String> {
 
 /// Run `prog args` in its own session, stdio to /dev/null, not waited on.
 fn spawn_detached(prog: &str, args: &[&str]) -> bool {
-    let mut cmd = std::process::Command::new(prog);
+    let mut cmd = k2_core::bg_proc::command(prog);
     cmd.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(unix)]
     {

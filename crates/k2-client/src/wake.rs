@@ -26,7 +26,6 @@
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
 
 /// LaunchAgent label for the macOS menu-bar helper. Not `dev.k2.daemon`.
 pub const MENU_BAR_HELPER_LABEL: &str = "dev.k2.menubar";
@@ -170,7 +169,7 @@ impl DaemonPlist {
 /// agent survives login cycles. Returns stderr on non-zero exit for
 /// caller to surface.
 pub fn launchctl_load(plist_path: &PathBuf) -> Result<(), String> {
-    let out = Command::new("launchctl")
+    let out = crate::bg_proc::command("launchctl")
         .arg("load")
         .arg("-w")
         .arg(plist_path)
@@ -223,7 +222,7 @@ pub fn write_stop_intent(k2_home: &std::path::Path, by: &str) -> Result<PathBuf,
 /// `launchctl unload -w <plist>`. Safe to call on a non-loaded plist
 /// (launchctl returns 0 or a harmless "service not found" message).
 pub fn launchctl_unload(plist_path: &PathBuf) -> Result<(), String> {
-    let out = Command::new("launchctl")
+    let out = crate::bg_proc::command("launchctl")
         .arg("unload")
         .arg("-w")
         .arg(plist_path)
@@ -293,7 +292,7 @@ pub fn ensure_loaded(plist: &DaemonPlist) -> Result<LoadOutcome, String> {
     // `launchctl list <label>` exits 0 if the service is loaded (even
     // if not currently running), non-zero otherwise. Cheapest way to
     // check without racing the plist.
-    let out = Command::new("launchctl")
+    let out = crate::bg_proc::command("launchctl")
         .arg("list")
         .arg(&plist.label)
         .output()
@@ -435,7 +434,7 @@ mod tests {
     fn plutil_lints_canonical_plist() {
         // Optional: skip this test if plutil isn't on PATH (unlikely on
         // macOS CI but keeps the suite portable).
-        let plutil_exists = Command::new("which")
+        let plutil_exists = crate::bg_proc::command("which")
             .arg("plutil")
             .output()
             .map(|o| o.status.success())
@@ -452,7 +451,7 @@ mod tests {
         let p = DaemonPlist::canonical(PathBuf::from("/opt/k2so-daemon"));
         fs::write(&tmp_plist, p.to_xml()).expect("write plist");
 
-        let out = Command::new("plutil")
+        let out = crate::bg_proc::command("plutil")
             .arg("-lint")
             .arg(&tmp_plist)
             .output()

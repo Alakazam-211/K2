@@ -30,7 +30,7 @@
 
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -271,7 +271,7 @@ fn heic_to_jpeg(real: &Path, px: u32) -> Result<Vec<u8>, ThumbError> {
     let tmp = std::env::temp_dir().join(format!("k2-heic-{}.jpg", uuid::Uuid::new_v4()));
     let mut cmd = match heic_converter() {
         Some("sips") => {
-            let mut c = Command::new("/usr/bin/sips");
+            let mut c = crate::bg_proc::command("/usr/bin/sips");
             // -Z scales the longest side; sips never upsizes past the source.
             c.args(["-s", "format", "jpeg", "-Z", &px.to_string()]).arg(real).arg("--out").arg(&tmp);
             c
@@ -280,7 +280,7 @@ fn heic_to_jpeg(real: &Path, px: u32) -> Result<Vec<u8>, ThumbError> {
             let Some(bin) = heif_convert_path() else {
                 return Err(ThumbError::Unsupported("HEIC needs heif-convert (libheif) on this server".into()));
             };
-            let mut c = Command::new(bin);
+            let mut c = crate::bg_proc::command(bin);
             c.arg(real).arg(&tmp);
             c
         }
@@ -797,7 +797,7 @@ mod tests {
         let src = d.join("in.png");
         std::fs::write(&src, png(800, 400, false)).unwrap();
         let heic = d.join("photo.heic");
-        let st = Command::new("/usr/bin/sips")
+        let st = crate::bg_proc::command("/usr/bin/sips")
             .args(["-s", "format", "heic"])
             .arg(&src)
             .arg("--out")

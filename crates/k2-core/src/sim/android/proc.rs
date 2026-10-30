@@ -41,7 +41,7 @@ impl Out {
 /// killing it after `timeout`. stdout is capped at `max_out` bytes (the
 /// rest is drained and dropped; `truncated` says so).
 pub fn run(program: &Path, args: &[&str], env: &HashMap<String, String>, timeout: Duration, max_out: usize) -> Result<Out, LaneError> {
-    let mut cmd = Command::new(program);
+    let mut cmd = crate::bg_proc::command(program);
     cmd.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     clean_env(&mut cmd, env);
     let mut child = cmd.spawn().map_err(|e| LaneError::tool(format!("start {}: {e}", program.display())))?;
@@ -152,7 +152,7 @@ pub fn cmdline(pid: u32) -> Option<String> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let o = Command::new("ps").args(["-o", "command=", "-p", &pid.to_string()]).output().ok()?;
+        let o = crate::bg_proc::command("ps").args(["-o", "command=", "-p", &pid.to_string()]).output().ok()?;
         o.status.success().then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
 }
@@ -174,7 +174,7 @@ pub fn pids_matching(needle: &str) -> Vec<u32> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        if let Ok(o) = Command::new("ps").args(["-axo", "pid=,command="]).output() {
+        if let Ok(o) = crate::bg_proc::command("ps").args(["-axo", "pid=,command="]).output() {
             for l in String::from_utf8_lossy(&o.stdout).lines() {
                 let l = l.trim();
                 if let Some((p, c)) = l.split_once(' ') {

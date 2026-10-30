@@ -67,7 +67,7 @@ pub fn login_shell_path() -> Option<&'static str> {
 
 #[cfg(unix)]
 fn capture_login_shell_path() -> Option<String> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -83,7 +83,7 @@ fn capture_login_shell_path() -> Option<String> {
         // `-l -i` so rc files / profile fully run (nvm, asdf, pyenv hooks
         // typically only fire for login + interactive shells). `printf %s`
         // emits the PATH with no trailing-newline noise of its own.
-        let out = Command::new(&shell)
+        let out = crate::bg_proc::command(&shell)
             .args(["-l", "-i", "-c", LOGIN_PATH_PROBE])
             .stdin(Stdio::null())
             .output();
@@ -161,7 +161,7 @@ pub fn extract_login_path(stdout: &str) -> Option<String> {
 /// PATH and known fallback dirs only.
 #[cfg(windows)]
 fn capture_login_shell_path() -> Option<String> {
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -180,11 +180,7 @@ Write-Output ([string][Environment]::GetEnvironmentVariable('Path','User'))
         // Prefer `pwsh` (PowerShell 7+) then fall back to Windows PowerShell 5.
         let shells: &[&str] = &["pwsh", "powershell"];
         for shell in shells {
-            use std::os::windows::process::CommandExt;
-            // No console window flashes up from the windowless daemon.
-            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-            let out = Command::new(shell)
-                .creation_flags(CREATE_NO_WINDOW)
+            let out = crate::bg_proc::command(shell)
                 .args([
                     "-NoProfile",
                     "-NonInteractive",

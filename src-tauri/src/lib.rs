@@ -242,7 +242,7 @@ fn ensure_local_daemon_process() {
         daemon_bin.display()
     );
 
-    let mut cmd = std::process::Command::new(&daemon_bin);
+    let mut cmd = k2_client::bg_proc::command(&daemon_bin);
     if let Some(dir) = daemon_bin.parent() {
         cmd.current_dir(dir);
     }
@@ -257,9 +257,8 @@ fn ensure_local_daemon_process() {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+        cmd.creation_flags(k2_client::bg_proc::CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
     }
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -299,7 +298,7 @@ pub fn stop_bundled_daemon_processes() {
     #[cfg(windows)]
     {
         for image in ["k2-daemon.exe", "frpc.exe"] {
-            let _ = std::process::Command::new("taskkill")
+            let _ = k2_client::bg_proc::command("taskkill")
                 .args(["/IM", image, "/F", "/T"])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -563,11 +562,10 @@ fn heal_daemon_plist_program() -> bool {
 /// swallowed (a non-loaded service makes bootout fail harmlessly).
 #[cfg(target_os = "macos")]
 fn reload_daemon_launch_agent(plist_path: &std::path::Path) {
-    use std::process::Command;
     let uid = unsafe { libc::getuid() };
     let domain = format!("gui/{uid}");
 
-    let bootout = Command::new("launchctl")
+    let bootout = k2_client::bg_proc::command("launchctl")
         .arg("bootout")
         .arg(&domain)
         .arg(plist_path)
@@ -581,7 +579,7 @@ fn reload_daemon_launch_agent(plist_path: &std::path::Path) {
         Err(e) => log_debug!("[plist-heal] bootout spawn failed: {e}"),
     }
 
-    let bootstrap = Command::new("launchctl")
+    let bootstrap = k2_client::bg_proc::command("launchctl")
         .arg("bootstrap")
         .arg(&domain)
         .arg(plist_path)

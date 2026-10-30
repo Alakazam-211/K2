@@ -1052,7 +1052,7 @@ fn app_not_running_msg() -> String {
 /// Best-effort hostname for the app-not-running message. Falls back to
 /// `None` (the caller substitutes "this host") rather than failing.
 fn hostname_best_effort() -> Option<String> {
-    std::process::Command::new("hostname")
+    k2_core::bg_proc::command("hostname")
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -1714,7 +1714,7 @@ fn spawn_swap_helper(plan: &ApplyPlan) -> std::io::Result<()> {
     }
     // Detach: new session, no stdio inherited, so it survives the daemon's
     // exit. `setsid` reparents it to init.
-    let mut cmd = std::process::Command::new("/bin/sh");
+    let mut cmd = k2_core::bg_proc::command("/bin/sh");
     cmd.arg(&helper)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())

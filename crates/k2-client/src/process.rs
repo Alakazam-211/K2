@@ -75,7 +75,7 @@ pub fn enrich_path_from_login_shell() {
 #[cfg(unix)]
 pub fn login_shell_path(shell: &std::path::Path) -> Option<String> {
     use std::process::Stdio;
-    let out = std::process::Command::new(shell)
+    let out = crate::bg_proc::command(shell)
         .args(["-ilc", crate::login_path::LOGIN_PATH_PROBE])
         .stderr(Stdio::null())
         .output()

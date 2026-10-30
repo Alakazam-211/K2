@@ -217,7 +217,7 @@ impl Drop for PassFile {
 pub fn role_login(m: Major, port: u16, db: &str, role: &str, password: &str) -> Result<(), String> {
     let psql = PgMajor::new(m).ok_or("unknown major")?.bin("psql");
     let pass = PassFile::new(port, db, role, password)?;
-    let out = std::process::Command::new(&psql)
+    let out = k2_core::bg_proc::command(&psql)
         .args(["-X", "-h", "127.0.0.1", "-p", &port.to_string(), "-U", role, "-d", db, "-tA", "-w", "-c", "SELECT 1"])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")

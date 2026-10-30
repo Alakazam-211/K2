@@ -414,14 +414,14 @@ pub fn keep_out_of_backups(run: &Path) {
         }
         #[cfg(target_os = "macos")]
         {
-            let excluded = std::process::Command::new("/usr/bin/tmutil")
+            let excluded = crate::bg_proc::command("/usr/bin/tmutil")
                 .arg("isexcluded")
                 .arg(run)
                 .output()
                 .map(|o| String::from_utf8_lossy(&o.stdout).contains("[Excluded]"))
                 .unwrap_or(false);
             if !excluded {
-                match std::process::Command::new("/usr/bin/tmutil").arg("addexclusion").arg(run).status() {
+                match crate::bg_proc::command("/usr/bin/tmutil").arg("addexclusion").arg(run).status() {
                     Ok(s) if s.success() => crate::log_debug!("[ptyd] backups: Time Machine excludes {}", run.display()),
                     Ok(s) => crate::log_debug!("[ptyd] backups: tmutil addexclusion {}: {s}", run.display()),
                     Err(e) => crate::log_debug!("[ptyd] backups: tmutil: {e}"),

@@ -280,7 +280,7 @@ impl AndroidLane {
         }
         #[cfg(target_os = "macos")]
         {
-            let o = std::process::Command::new("sysctl").args(["-n", "kern.hv_support"]).output();
+            let o = crate::bg_proc::command("sysctl").args(["-n", "kern.hv_support"]).output();
             match o {
                 Ok(o) if String::from_utf8_lossy(&o.stdout).trim() == "1" => Ok(()),
                 _ => Err(("this Mac has no Hypervisor.framework support".into(), None)),
@@ -454,7 +454,7 @@ impl SimLane for AndroidLane {
         let _ = std::fs::remove_dir_all(run_dir.join("avd").join("running"));
         let log = std::fs::File::create(req.data_dir.join("emulator.log")).map_err(|e| LaneError::tool(e.to_string()))?;
         let log2 = log.try_clone().map_err(|e| LaneError::tool(e.to_string()))?;
-        let mut cmd = std::process::Command::new(self.sdk.emulator());
+        let mut cmd = crate::bg_proc::command(self.sdk.emulator());
         cmd.args([
             "-avd",
             &name,

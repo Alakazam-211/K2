@@ -10,7 +10,7 @@
 //! `subject` = K2 skin principal id. Login/consent SPA is deferred.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -229,7 +229,7 @@ fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(unix)]
     {
-        Command::new("kill")
+        k2_core::bg_proc::command("kill")
             .args(["-0", &pid.to_string()])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -250,14 +250,14 @@ fn kill_pid(pid: u32) {
     }
     #[cfg(unix)]
     {
-        let _ = Command::new("kill")
+        let _ = k2_core::bg_proc::command("kill")
             .arg(pid.to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
         std::thread::sleep(Duration::from_millis(80));
         if pid_alive(pid) {
-            let _ = Command::new("kill")
+            let _ = k2_core::bg_proc::command("kill")
                 .args(["-9", &pid.to_string()])
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -354,7 +354,7 @@ fn write_config() -> Result<PathBuf, String> {
 
 fn spawn_hydra(bin: &Path, cfg: &Path) -> Result<Child, String> {
     let log = log_path();
-    let mut cmd = Command::new(bin);
+    let mut cmd = k2_core::bg_proc::command(bin);
     cmd.arg("serve")
         .arg("all")
         .arg("--config")

@@ -7,7 +7,7 @@
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -79,7 +79,7 @@ impl Runner for ProcessRunner {
 }
 
 fn run_process(program: &str, args: &[String], input: Option<&[u8]>, timeout: Duration) -> SimResult<Output> {
-    let mut child = Command::new(program)
+    let mut child = crate::bg_proc::command(program)
         .args(args)
         .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())

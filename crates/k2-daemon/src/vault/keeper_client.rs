@@ -10,7 +10,7 @@
 //! to the daemon process (its caller check).
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use k2_vault::keystore::keeper::KeeperTransport;
 use k2_vault::VaultError;
@@ -49,7 +49,7 @@ impl KeeperTransport for SudoHelper {
             self.path.display(),
             args.join(" ")
         );
-        let out = Command::new(SUDO)
+        let out = k2_core::bg_proc::command(SUDO)
             .arg("-n")
             .arg(&self.path)
             .args(args)

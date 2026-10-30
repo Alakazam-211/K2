@@ -4,9 +4,15 @@
 //!   `PowerClearRequest` + `CloseHandle` on drop (and the handle dies
 //!   with the process). The power plan's lid action still wins.
 //! - Wake: one waitable timer set with `fResume = TRUE`. Windows honors
-//!   it only when the plan's "Allow wake timers" is enabled. K2 reads
-//!   that setting (`powercfg /q SCHEME_CURRENT SUB_SLEEP RTCWAKE`) and
-//!   shows the steps; it never changes the plan (D14).
+//!   it only when the plan's "Allow wake timers" (RTCWAKE) is enabled, so
+//!   a scheduled heartbeat can wake a sleeping PC only then. K2 reads that
+//!   setting and, when it is off, reports wake as unavailable with the
+//!   steps; it never changes the plan (D14).
+//! - Plan settings (RTCWAKE, the lid action) are read straight from the
+//!   active power scheme with powrprof (`PowerGetActiveScheme` +
+//!   `PowerReadACValueIndex` / `PowerReadDCValueIndex`): a registry read,
+//!   no child process. The scheduler re-plans every tick, and starting
+//!   `powercfg.exe` that often opened a console window each time.
 
 use std::ffi::c_void;
 
@@ -63,6 +69,57 @@ extern "system" {
     fn CancelWaitableTimer(h: Handle) -> i32;
     fn GetSystemPowerStatus(status: *mut SystemPowerStatus) -> i32;
     fn GetLastError() -> u32;
+    fn LocalFree(mem: *mut c_void) -> *mut c_void;
+}
+
+/// A Win32 `GUID`.
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Guid {
+    data1: u32,
+    data2: u16,
+    data3: u16,
+    data4: [u8; 8],
+}
+
+/// `GUID_SLEEP_SUBGROUP` (powercfg alias SUB_SLEEP).
+const SUB_SLEEP: Guid =
+    Guid { data1: 0x238c_9fa8, data2: 0x0aad, data3: 0x41ed, data4: [0x83, 0xf4, 0x97, 0xbe, 0x24, 0x2c, 0x8f, 0x20] };
+/// "Allow wake timers" (alias RTCWAKE): 0 disable, 1 enable, 2 important only.
+const RTCWAKE: Guid =
+    Guid { data1: 0xbd3b_718a, data2: 0x0680, data3: 0x4d9d, data4: [0x8a, 0xb2, 0xe1, 0xd2, 0xb4, 0xac, 0x80, 0x6d] };
+/// `GUID_SYSTEM_BUTTON_SUBGROUP` (alias SUB_BUTTONS).
+const SUB_BUTTONS: Guid =
+    Guid { data1: 0x4f97_1e89, data2: 0xeebd, data3: 0x4455, data4: [0xa8, 0xde, 0x9e, 0x59, 0x04, 0x0e, 0x73, 0x47] };
+/// "Lid close action" (alias LIDACTION): 0 do nothing, 1 sleep, 2 hibernate, 3 shut down.
+const LIDACTION: Guid =
+    Guid { data1: 0x5ca8_3367, data2: 0x6e45, data3: 0x459f, data4: [0xa2, 0x7b, 0x47, 0x6b, 0x1d, 0x01, 0xc9, 0x36] };
+
+#[link(name = "powrprof")]
+extern "system" {
+    fn PowerGetActiveScheme(user_root: *mut c_void, active: *mut *mut Guid) -> u32;
+    fn PowerReadACValueIndex(root: *mut c_void, scheme: *const Guid, sub: *const Guid, setting: *const Guid, value: *mut u32) -> u32;
+    fn PowerReadDCValueIndex(root: *mut c_void, scheme: *const Guid, sub: *const Guid, setting: *const Guid, value: *mut u32) -> u32;
+}
+
+/// The active power scheme's (plugged in, on battery) index for one
+/// setting, as `powercfg /q SCHEME_CURRENT <sub> <setting>` shows it.
+/// `None` for a side that can't be read.
+fn plan_setting(sub: &Guid, setting: &Guid) -> (Option<u32>, Option<u32>) {
+    let mut scheme: *mut Guid = std::ptr::null_mut();
+    // SAFETY: the API allocates the GUID; it is freed once with LocalFree.
+    if unsafe { PowerGetActiveScheme(std::ptr::null_mut(), &mut scheme) } != 0 || scheme.is_null() {
+        return (None, None);
+    }
+    let read = |f: unsafe extern "system" fn(*mut c_void, *const Guid, *const Guid, *const Guid, *mut u32) -> u32| {
+        let mut v = 0u32;
+        // SAFETY: valid GUID pointers and our own out-param.
+        (unsafe { f(std::ptr::null_mut(), scheme, sub, setting, &mut v) } == 0).then_some(v)
+    };
+    let out = (read(PowerReadACValueIndex), read(PowerReadDCValueIndex));
+    // SAFETY: the block PowerGetActiveScheme returned, freed once.
+    unsafe { LocalFree(scheme.cast()) };
+    out
 }
 
 struct PowerRequest {
@@ -109,14 +166,9 @@ impl WindowsPowerOs {
         Self { timer: Mutex::new(if h.is_null() { None } else { Some(Timer(h)) }) }
     }
 
+    /// "Allow wake timers" (plugged in, on battery).
     fn wake_timers_allowed(&self) -> (Option<u32>, Option<u32>) {
-        match std::process::Command::new("powercfg")
-            .args(["/q", "SCHEME_CURRENT", "SUB_SLEEP", "RTCWAKE"])
-            .output()
-        {
-            Ok(o) if o.status.success() => super::parse::windows_rtcwake(&String::from_utf8_lossy(&o.stdout)),
-            _ => (None, None),
-        }
+        plan_setting(&SUB_SLEEP, &RTCWAKE)
     }
 }
 
@@ -198,13 +250,7 @@ impl PowerOs for WindowsPowerOs {
     /// action for this power source is "Do nothing". K2 reads it and
     /// shows the steps; it never changes it.
     fn lid_facts(&self, src: PowerSource) -> LidFacts {
-        let (ac, dc) = match std::process::Command::new("powercfg")
-            .args(["/q", "SCHEME_CURRENT", "SUB_BUTTONS", "LIDACTION"])
-            .output()
-        {
-            Ok(o) if o.status.success() => super::parse::windows_setting_index(&String::from_utf8_lossy(&o.stdout)),
-            _ => (None, None),
-        };
+        let (ac, dc) = plan_setting(&SUB_BUTTONS, &LIDACTION);
         let current = if src.on_ac == Some(false) { dc } else { ac };
         let access = match current {
             Some(0) => LidAccess::Ready,
@@ -240,5 +286,44 @@ impl PowerOs for WindowsPowerOs {
             "wakeTimers": { "pluggedIn": word(ac), "onBattery": word(dc) },
             "steps": WAKE_TIMER_STEPS,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `powercfg /q` single-setting output -> (AC, DC) current index.
+    fn powercfg_index(text: &str) -> (Option<u32>, Option<u32>) {
+        let read = |label: &str| {
+            text.lines()
+                .find(|l| l.contains(label))
+                .and_then(|l| l.rsplit("0x").next())
+                .and_then(|hex| u32::from_str_radix(hex.trim(), 16).ok())
+        };
+        (read("Current AC Power Setting Index"), read("Current DC Power Setting Index"))
+    }
+
+    fn powercfg(sub: &str, setting: &str) -> (Option<u32>, Option<u32>) {
+        let o = k2_core::bg_proc::command("powercfg").args(["/q", "SCHEME_CURRENT", sub, setting]).output().expect("powercfg runs");
+        assert!(o.status.success(), "{o:?}");
+        powercfg_index(&String::from_utf8_lossy(&o.stdout))
+    }
+
+    #[test]
+    fn powercfg_text_parses() {
+        let text = "    Power Setting GUID: bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d  (Allow wake timers)\n      Possible Setting Index: 000\n    Current AC Power Setting Index: 0x00000001\n    Current DC Power Setting Index: 0x00000000\n";
+        assert_eq!(powercfg_index(text), (Some(1), Some(0)));
+        assert_eq!(powercfg_index("garbage"), (None, None));
+    }
+
+    /// The powrprof reads give what `powercfg /q` prints for the active
+    /// plan (the test is the one place K2 still runs powercfg).
+    #[test]
+    fn plan_reads_match_powercfg() {
+        let rtc = plan_setting(&SUB_SLEEP, &RTCWAKE);
+        assert!(rtc.0.is_some() && rtc.1.is_some(), "{rtc:?}");
+        assert_eq!(rtc, powercfg("SUB_SLEEP", "RTCWAKE"));
+        assert_eq!(plan_setting(&SUB_BUTTONS, &LIDACTION), powercfg("SUB_BUTTONS", "LIDACTION"));
     }
 }

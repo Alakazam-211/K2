@@ -342,7 +342,7 @@ pub fn pid_started_near(pid: i64, started_at: i64) -> bool {
 /// When process `pid` started (unix seconds), from `ps -o etime=`
 /// (`[[dd-]hh:]mm:ss`, on Linux and macOS).
 pub fn process_start_unix(pid: i64) -> Option<i64> {
-    let out = std::process::Command::new("ps").args(["-o", "etime=", "-p", &pid.to_string()]).output().ok()?;
+    let out = k2_core::bg_proc::command("ps").args(["-o", "etime=", "-p", &pid.to_string()]).output().ok()?;
     if !out.status.success() {
         return None;
     }

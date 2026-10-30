@@ -74,7 +74,7 @@ pub struct RealSystemOps;
 
 impl RealSystemOps {
     fn run(cmd: &str, args: &[&str]) -> Result<std::process::Output, String> {
-        std::process::Command::new(cmd)
+        k2_core::bg_proc::command(cmd)
             .args(args)
             .output()
             .map_err(|e| format!("{cmd} {}: {e}", args.join(" ")))

@@ -1618,7 +1618,7 @@ fn codex_exchange(io: &mut dyn CodexTransport) -> Result<CodexParsed, CodexFail>
 }
 
 fn codex_command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
+    let mut cmd = k2_core::bg_proc::command(program);
     cmd.arg("app-server");
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
@@ -1984,7 +1984,7 @@ fn grok_auth_words(text: &str) -> bool {
 }
 
 fn grok_command(program: &str) -> Command {
-    let mut cmd = Command::new(program);
+    let mut cmd = k2_core::bg_proc::command(program);
     cmd.args(["agent", "stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -2271,7 +2271,7 @@ fn live_claude_login() -> ClaudeLogin {
 
 #[cfg(target_os = "macos")]
 fn read_keychain() -> Option<String> {
-    let output = Command::new("security")
+    let output = k2_core::bg_proc::command("security")
         .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -362,7 +362,7 @@ pub fn clear_account_session() {
             ACCOUNT_REFRESH_KEY,
             ACCOUNT_EMAIL_KEY,
         ] {
-            let _ = std::process::Command::new("security")
+            let _ = crate::bg_proc::command("security")
                 .args(["delete-generic-password", "-s", service, "-a", account])
                 .output();
         }
@@ -379,7 +379,7 @@ pub fn purge_legacy_session_items() {
     for service in [ACCOUNT_KEYCHAIN_SERVICE, LEGACY_ACCOUNT_KEYCHAIN_SERVICE] {
         for account in [ACCOUNT_REFRESH_KEY, ACCOUNT_EMAIL_KEY] {
             // Ignore the status: "not found" is the expected common case.
-            let _ = std::process::Command::new("security")
+            let _ = crate::bg_proc::command("security")
                 .args(["delete-generic-password", "-s", service, "-a", account])
                 .output();
         }

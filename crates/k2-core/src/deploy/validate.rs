@@ -18,7 +18,7 @@
 //!   folder.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -589,7 +589,7 @@ fn check_types(root: &Path, opts: &Options, errors: &mut Vec<Issue>, warnings: &
         return "missing".into();
     };
     let label = checker.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "tsc".into());
-    let mut cmd = Command::new(&checker);
+    let mut cmd = crate::bg_proc::command(&checker);
     cmd.arg("--noEmit")
         .arg("-p")
         .arg(&tsconfig)

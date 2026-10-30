@@ -700,7 +700,7 @@ impl Ptyd {
 /// answer like a k2-ptyd.
 pub fn probe_version(exe: &Path) -> Option<String> {
     use std::io::Read;
-    let mut child = std::process::Command::new(exe)
+    let mut child = crate::bg_proc::command(exe)
         .arg("--version")
         .env_clear()
         .stdin(std::process::Stdio::null())

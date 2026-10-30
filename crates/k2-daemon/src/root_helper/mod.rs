@@ -117,7 +117,7 @@ impl Door for RealDoor {
     }
 
     fn sudo_allowed(&self, path: &str) -> bool {
-        std::process::Command::new(SUDO_PATH)
+        k2_core::bg_proc::command(SUDO_PATH)
             .args(["-n", "-l", path])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -128,8 +128,8 @@ impl Door for RealDoor {
 
     fn call(&self, path: &str, argv: &[String], stdin: Option<&[u8]>) -> std::io::Result<CallOut> {
         use std::io::Write;
-        use std::process::{Command, Stdio};
-        let mut cmd = Command::new(SUDO_PATH);
+        use std::process::Stdio;
+        let mut cmd = k2_core::bg_proc::command(SUDO_PATH);
         cmd.arg("-n").arg(path).args(argv);
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         cmd.stdin(if stdin.is_some() {

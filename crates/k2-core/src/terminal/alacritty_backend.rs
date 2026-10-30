@@ -756,7 +756,7 @@ impl TerminalManager {
                 #[cfg(windows)]
                 {
                     // Force-kill process tree; ConPTY teardown also runs on drop.
-                    let _ = std::process::Command::new("taskkill")
+                    let _ = crate::bg_proc::command("taskkill")
                         .args(["/PID", &pid.to_string(), "/T", "/F"])
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())

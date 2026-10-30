@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn a_child_process_chain_reaches_this_process() {
-        let mut child = std::process::Command::new("/bin/sleep")
+        let mut child = crate::bg_proc::command("/bin/sleep")
             .arg("5")
             .spawn()
             .expect("spawn sleep");

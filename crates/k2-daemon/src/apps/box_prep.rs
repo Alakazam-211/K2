@@ -715,7 +715,7 @@ fn version_of(abs: &str) -> Option<String> {
     if !std::path::Path::new(abs).exists() {
         return None;
     }
-    let out = std::process::Command::new(abs)
+    let out = k2_core::bg_proc::command(abs)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -775,7 +775,7 @@ pub fn gather() -> Facts {
     f.agents_leaf = Some(k2_core::agents_leaf::status_json());
     f.kernel = read_trim("/proc/sys/kernel/osrelease");
     f.cgroup2 = read_trim("/sys/fs/cgroup/cgroup.controllers");
-    f.systemd = std::process::Command::new("/usr/bin/systemctl")
+    f.systemd = k2_core::bg_proc::command("/usr/bin/systemctl")
         .arg("--version")
         .output()
         .ok()

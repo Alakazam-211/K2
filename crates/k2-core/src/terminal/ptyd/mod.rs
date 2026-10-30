@@ -285,7 +285,7 @@ pub fn current_killmode() -> Option<String> {
         let cg = std::fs::read_to_string("/proc/self/cgroup").ok()?;
         let unit = cg.lines().find_map(|l| l.rsplit('/').find(|seg| seg.ends_with(".service")).map(str::to_string))?;
         let user = cg.contains("/user@");
-        let mut cmd = std::process::Command::new("systemctl");
+        let mut cmd = crate::bg_proc::command("systemctl");
         if user {
             cmd.arg("--user");
         }

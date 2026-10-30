@@ -1329,7 +1329,7 @@ pub fn handle_projects_open_in_finder(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let r = std::process::Command::new("open")
+    let r = k2_core::bg_proc::command("open")
         .arg("-R")
         .arg(&b.path)
         .spawn()

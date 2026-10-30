@@ -87,7 +87,7 @@ pub fn delete_password_hash() {
     if cfg!(any(test, feature = "test-util")) {
         return;
     }
-    let _ = std::process::Command::new("security")
+    let _ = crate::bg_proc::command("security")
         .args(["delete-generic-password", "-s", SERVICE, "-a", ACCOUNT])
         .output();
 }

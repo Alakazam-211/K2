@@ -14,8 +14,6 @@
 //! there's a single source of truth for what "canonical plist" means.
 
 use std::path::PathBuf;
-#[cfg(target_os = "macos")]
-use std::process::Command;
 
 use serde::Serialize;
 
@@ -199,7 +197,7 @@ fn daemon_uninstall_blocking() -> Result<(), String> {
 pub fn kickstart_daemon() -> Result<(), String> {
     let uid = unsafe { libc::getuid() };
     let args = k2_client::daemon_lifecycle::launchctl_kickstart_args(uid);
-    let out = Command::new("launchctl")
+    let out = k2_client::bg_proc::command("launchctl")
         .args(&args)
         .output()
         .map_err(|e| format!("launchctl kickstart: {e}"))?;

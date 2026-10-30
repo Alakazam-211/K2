@@ -56,7 +56,7 @@ pub fn migrate_launchd_labels() -> Vec<&'static str> {
             }
             // Boot out the old agent (kills the old-labeled process).
             // Failure is fine — it may not be loaded.
-            let _ = std::process::Command::new("launchctl")
+            let _ = crate::bg_proc::command("launchctl")
                 .args(["bootout", &format!("gui/{uid}/{old_label}")])
                 .output();
             match std::fs::remove_file(&plist) {

@@ -322,7 +322,7 @@ pub struct ReconcileReport {
 
 #[cfg(unix)]
 fn run(argv: &[String]) -> Result<std::process::Output, String> {
-    std::process::Command::new(&argv[0])
+    k2_client::bg_proc::command(&argv[0])
         .args(&argv[1..])
         .stdin(std::process::Stdio::null())
         .output()

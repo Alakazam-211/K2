@@ -588,7 +588,7 @@ pub fn fork_layer(ws_slug: &str, src_id: &str, dst_id: &str) -> Result<(), Polic
     assert_contained(&dst_claude, &homes)?;
     if src_claude.is_dir() {
         chown_tree_to_self(&src_claude);
-        let st = std::process::Command::new("cp")
+        let st = k2_core::bg_proc::command("cp")
             .arg("-a")
             .arg(format!("{}/.", src_claude.display()))
             .arg(&dst_claude)
@@ -614,7 +614,7 @@ pub fn fork_layer(ws_slug: &str, src_id: &str, dst_id: &str) -> Result<(), Polic
     assert_contained(&dst_work, &ovr)?;
     if src_work.is_dir() {
         chown_tree_to_self(&src_work);
-        let _ = std::process::Command::new("cp")
+        let _ = k2_core::bg_proc::command("cp")
             .arg("-a")
             .arg(format!("{}/.", src_work.display()))
             .arg(&dst_work)

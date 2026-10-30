@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 
 /// Detect the formatter command for a file extension.
 fn formatter_for_ext(ext: &str) -> Option<(&'static str, Vec<&'static str>)> {
@@ -31,7 +30,7 @@ fn formatter_for_ext(ext: &str) -> Option<(&'static str, Vec<&'static str>)> {
 
 /// Check if a formatter is available on PATH.
 fn is_available(cmd: &str) -> bool {
-    Command::new("which")
+    k2_client::bg_proc::command("which")
         .arg(cmd)
         .output()
         .map(|o| o.status.success())
@@ -65,7 +64,7 @@ pub fn format_file(file_path: String) -> Result<String, String> {
     let mut args = base_args.iter().map(|s| s.to_string()).collect::<Vec<_>>();
     args.push(file_path.clone());
 
-    let mut child = Command::new(cmd)
+    let mut child = k2_client::bg_proc::command(cmd)
         .args(&args)
         .current_dir(parent)
         .stdout(std::process::Stdio::piped())

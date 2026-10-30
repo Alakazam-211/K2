@@ -451,7 +451,7 @@ fn under_launchd() -> bool {
 /// `systemctl [--user] show -p <prop> --value <unit>`.
 fn systemctl_show(prop: &str) -> Option<String> {
     let (_user, unit, scope) = crate::root_helper::own_unit();
-    let mut cmd = std::process::Command::new("systemctl");
+    let mut cmd = k2_core::bg_proc::command("systemctl");
     if scope == "user" {
         cmd.arg("--user");
     }
@@ -804,7 +804,7 @@ fn run_blocking(exe: &std::path::Path) -> Result<u32, Failed> {
     let (ours, theirs) =
         UnixStream::pair().map_err(|e| Failed::Untouched(format!("socketpair: {e}")))?;
     let theirs_fd = theirs.as_raw_fd();
-    let mut cmd = std::process::Command::new(exe);
+    let mut cmd = k2_core::bg_proc::command(exe);
     cmd.args(std::env::args_os().skip(1))
         .env(ENV_FD, CHILD_FD.to_string())
         .stdin(std::process::Stdio::null());

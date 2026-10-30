@@ -1339,7 +1339,7 @@ fn grok_warm(slot: &Path) -> Result<(), String> {
     let search = k2_core::terminal::login_path::augmented_path(&k2_core::terminal::login_path::process_path());
     let guard = k2_core::terminal::agent_spawn_guard::GuardEnv::from_process();
     let program = k2_core::terminal::agent_spawn_guard::resolve_program("grok", &search, &guard)?;
-    let mut child = std::process::Command::new(program)
+    let mut child = k2_core::bg_proc::command(program)
         .arg("models")
         .env("GROK_HOME", slot)
         .env("PATH", &search)

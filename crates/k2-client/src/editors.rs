@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::process::Command;
 use parking_lot::Mutex;
 
 // ── Types ────────────────────────────────────────────────────────────────
@@ -48,7 +47,7 @@ const EDITOR_DEFINITIONS: &[EditorDefinition] = &[
 static EDITOR_CACHE: Mutex<Option<Vec<EditorInfo>>> = Mutex::new(None);
 
 fn mac_app_exists(app_name: &str) -> bool {
-    Command::new("open")
+    crate::bg_proc::command("open")
         .args(["-Ra", app_name])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -61,7 +60,7 @@ fn cli_exists(cmd: &str) -> bool {
     if cmd.is_empty() {
         return false;
     }
-    Command::new("which")
+    crate::bg_proc::command("which")
         .arg(cmd)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -124,7 +123,7 @@ pub fn open_in_editor(editor_id: &str, path: &str) -> Result<(), String> {
 
     // Prefer macOS `open -a` for GUI apps
     if mac_app_exists(&editor.mac_app) {
-        Command::new("open")
+        crate::bg_proc::command("open")
             .args(["-a", &editor.mac_app, path])
             .spawn()
             .map_err(|e| format!("Failed to open editor: {}", e))?;
@@ -133,7 +132,7 @@ pub fn open_in_editor(editor_id: &str, path: &str) -> Result<(), String> {
 
     // Fallback to CLI command
     if !editor.cli_command.is_empty() && cli_exists(&editor.cli_command) {
-        Command::new(&editor.cli_command)
+        crate::bg_proc::command(&editor.cli_command)
             .arg(path)
             .spawn()
             .map_err(|e| format!("Failed to open editor: {}", e))?;
@@ -146,7 +145,7 @@ pub fn open_in_editor(editor_id: &str, path: &str) -> Result<(), String> {
 pub fn open_in_terminal(terminal_app: &str, path: &str) -> Result<(), String> {
     // "Terminal" is the macOS default — use `open` with the path
     if terminal_app == "Terminal" {
-        Command::new("open")
+        crate::bg_proc::command("open")
             .args(["-a", "Terminal", path])
             .spawn()
             .map_err(|e| format!("Failed to open Terminal: {}", e))?;
@@ -161,7 +160,7 @@ pub fn open_in_terminal(terminal_app: &str, path: &str) -> Result<(), String> {
 
     if let Some(term) = terminal {
         if mac_app_exists(&term.mac_app) {
-            Command::new("open")
+            crate::bg_proc::command("open")
                 .args(["-a", &term.mac_app, path])
                 .spawn()
                 .map_err(|e| format!("Failed to open {}: {}", term.label, e))?;
@@ -170,7 +169,7 @@ pub fn open_in_terminal(terminal_app: &str, path: &str) -> Result<(), String> {
     }
 
     // Fallback: try `open -a <name> <path>` directly
-    Command::new("open")
+    crate::bg_proc::command("open")
         .args(["-a", terminal_app, path])
         .spawn()
         .map_err(|e| format!("Failed to open {}: {}", terminal_app, e))?;

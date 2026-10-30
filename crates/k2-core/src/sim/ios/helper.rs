@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
@@ -273,7 +273,7 @@ pub struct HelperProc {
 
 impl HelperProc {
     pub fn spawn(bin: &Path, set: &Path, udid: &str) -> SimResult<Self> {
-        let mut child = Command::new(bin)
+        let mut child = crate::bg_proc::command(bin)
             .arg("--set")
             .arg(set)
             .arg("--udid")

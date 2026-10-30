@@ -102,7 +102,7 @@ fn candidate_locales() -> Vec<String> {
 /// anyway.
 #[cfg(target_os = "macos")]
 fn apple_locale_lang() -> Option<String> {
-    let out = std::process::Command::new("defaults")
+    let out = crate::bg_proc::command("defaults")
         .args(["read", "-g", "AppleLocale"])
         .output()
         .ok()?;

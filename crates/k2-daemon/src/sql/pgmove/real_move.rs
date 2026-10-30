@@ -187,7 +187,7 @@ use helper_ops::HelperOps;
 /// `psql` as a role over TCP: the answer, or the error text.
 fn as_role(m: Major, port: u16, db: &str, role: &str, pw: &str, sql: &str) -> Result<String, String> {
     let psql = format!("/usr/lib/postgresql/{m}/bin/psql");
-    let out = std::process::Command::new(&psql)
+    let out = k2_core::bg_proc::command(&psql)
         .args(["-X", "-q", "-h", "127.0.0.1", "-p", &port.to_string(), "-U", role, "-d", db, "-tA", "-v", "ON_ERROR_STOP=1", "-c", sql])
         .env_clear()
         .env("PGPASSWORD", pw)

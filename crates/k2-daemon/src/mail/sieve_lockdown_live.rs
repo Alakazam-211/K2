@@ -58,7 +58,7 @@ impl Report {
 }
 
 fn sh(cmd: &str) -> Result<String, String> {
-    let out = std::process::Command::new("bash")
+    let out = k2_core::bg_proc::command("bash")
         .args(["-c", cmd])
         .output()
         .map_err(|e| format!("spawn bash: {e}"))?;
@@ -267,7 +267,7 @@ fn start_sink_forwarder() -> (String, u16, std::process::Child) {
         .to_string();
     let port = 2626u16;
     let py = SINK_FORWARDER.replace("SINK_IP", &ip).replace("SINK_PORT", &port.to_string());
-    let child = std::process::Command::new("python3").args(["-c", &py]).spawn().expect("spawn sink forwarder");
+    let child = k2_core::bg_proc::command("python3").args(["-c", &py]).spawn().expect("spawn sink forwarder");
     std::thread::sleep(Duration::from_millis(800));
     (ip, port, child)
 }
@@ -648,7 +648,7 @@ except SystemExit:
 
 /// Run [`MANAGESIEVE_CLIENT`] as `user` (secret via env only).
 fn managesieve(port: u16, user: &str, pass: &str, script: &str) -> String {
-    let out = std::process::Command::new("python3")
+    let out = k2_core::bg_proc::command("python3")
         .args(["-c", MANAGESIEVE_CLIENT])
         .env("MS_PORT", port.to_string())
         .env("MS_USER", user)

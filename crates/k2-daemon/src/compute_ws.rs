@@ -180,7 +180,7 @@ pub fn controller_label() -> String {
 }
 
 fn hostname() -> String {
-    std::process::Command::new("hostname")
+    k2_core::bg_proc::command("hostname")
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())

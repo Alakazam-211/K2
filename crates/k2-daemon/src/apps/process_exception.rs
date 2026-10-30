@@ -70,7 +70,7 @@ pub fn caps_argv(app: &AppId, memory_mib: u64, io: &IoMax, devices: &[String]) -
 /// `ActiveState`, `ExecMainStatus`, `MainPID` of the App's unit (a plain
 /// read: no root).
 fn unit_show(app: &AppId) -> Option<(String, Option<i32>, Option<i32>)> {
-    let out = std::process::Command::new(SYSTEMCTL)
+    let out = k2_core::bg_proc::command(SYSTEMCTL)
         .args(["show", "-p", "ActiveState", "-p", "ExecMainStatus", "-p", "MainPID", &app.process_unit()])
         .env_clear()
         .env("PATH", "/usr/bin:/bin")

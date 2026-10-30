@@ -128,7 +128,7 @@ pub(crate) fn pid_alive(pid: i32) -> bool {
     if unsafe { libc::kill(pid, 0) } != 0 {
         return false;
     }
-    let out = std::process::Command::new("ps")
+    let out = crate::bg_proc::command("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output();
     match out {
@@ -159,7 +159,7 @@ pub(crate) fn proc_identity(pid: i32) -> Option<String> {
 
 #[cfg(all(unix, not(target_os = "linux")))]
 pub(crate) fn proc_identity(pid: i32) -> Option<String> {
-    let out = std::process::Command::new("ps")
+    let out = crate::bg_proc::command("ps")
         .args(["-o", "lstart=", "-p", &pid.to_string()])
         .output()
         .ok()?;
@@ -195,7 +195,7 @@ pub(crate) fn proc_argv(pid: i32) -> Option<Vec<String>> {
     // `ps -o command=` joins argv with spaces; frpc's argv is
     // `<frpc> -c <cfg>` and the config path carries no spaces in practice,
     // but compare on the joined string to stay honest.
-    let out = std::process::Command::new("ps")
+    let out = crate::bg_proc::command("ps")
         .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
         .output()
         .ok()?;

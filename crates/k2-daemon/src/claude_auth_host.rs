@@ -58,8 +58,6 @@
 
 use std::fs;
 use std::path::PathBuf;
-#[cfg(unix)]
-use std::process::Command;
 
 use crate::cli_response::CliResponse;
 
@@ -102,7 +100,7 @@ fn read_credentials() -> Option<RawCredentials> {
 
 #[cfg(target_os = "macos")]
 fn read_keychain_credentials() -> Option<RawCredentials> {
-    let output = Command::new("security")
+    let output = k2_core::bg_proc::command("security")
         .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
         .output()
         .ok()?;
@@ -353,7 +351,7 @@ fn is_scheduler_installed() -> bool {
         if !plist.exists() {
             return false;
         }
-        return Command::new("launchctl")
+        return k2_core::bg_proc::command("launchctl")
             .args(["list", PLIST_LABEL])
             .output()
             .map(|o| o.status.success())
@@ -362,7 +360,7 @@ fn is_scheduler_installed() -> bool {
 
     #[cfg(target_os = "linux")]
     {
-        return Command::new("crontab")
+        return k2_core::bg_proc::command("crontab")
             .args(["-l"])
             .output()
             .ok()
@@ -385,14 +383,14 @@ fn install_launchd() -> Result<(), String> {
     // Best-effort unload of any prior plist so launchctl load -w
     // doesn't fail with "already loaded" on a re-install.
     if plist.exists() {
-        let _ = Command::new("launchctl")
+        let _ = k2_core::bg_proc::command("launchctl")
             .args(["unload", &plist.to_string_lossy()])
             .output();
     }
     let plist_content = generate_plist();
     fs::write(&plist, &plist_content)
         .map_err(|e| format!("Failed to write plist: {}", e))?;
-    let output = Command::new("launchctl")
+    let output = k2_core::bg_proc::command("launchctl")
         .args(["load", &plist.to_string_lossy()])
         .output()
         .map_err(|e| format!("Failed to run launchctl load: {}", e))?;
@@ -408,7 +406,7 @@ fn install_crontab() -> Result<(), String> {
     let script = refresh_script_path();
     let marker = "# k2so-claude-auth-refresh";
     let entry = format!("*/20 * * * * {} {}", script.to_string_lossy(), marker);
-    let existing = Command::new("crontab")
+    let existing = k2_core::bg_proc::command("crontab")
         .args(["-l"])
         .output()
         .ok()
@@ -426,7 +424,7 @@ fn install_crontab() -> Result<(), String> {
         .collect();
     lines.push(&entry);
     let new_crontab = lines.join("\n") + "\n";
-    let mut child = Command::new("crontab")
+    let mut child = k2_core::bg_proc::command("crontab")
         .args(["-"])
         .stdin(std::process::Stdio::piped())
         .spawn()
@@ -449,7 +447,7 @@ fn install_crontab() -> Result<(), String> {
 fn uninstall_launchd() -> Result<(), String> {
     let plist = plist_path();
     if plist.exists() {
-        let _ = Command::new("launchctl")
+        let _ = k2_core::bg_proc::command("launchctl")
             .args(["unload", &plist.to_string_lossy()])
             .output();
         fs::remove_file(&plist)
@@ -460,7 +458,7 @@ fn uninstall_launchd() -> Result<(), String> {
 
 #[cfg(target_os = "linux")]
 fn uninstall_crontab() -> Result<(), String> {
-    let existing = Command::new("crontab")
+    let existing = k2_core::bg_proc::command("crontab")
         .args(["-l"])
         .output()
         .ok()
@@ -478,7 +476,7 @@ fn uninstall_crontab() -> Result<(), String> {
         .collect::<Vec<&str>>()
         .join("\n")
         + "\n";
-    let mut child = Command::new("crontab")
+    let mut child = k2_core::bg_proc::command("crontab")
         .args(["-"])
         .stdin(std::process::Stdio::piped())
         .spawn()

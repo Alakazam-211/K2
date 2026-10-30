@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 #[cfg(unix)]
@@ -365,7 +365,7 @@ impl RuntimeEngine for ProcessEngine {
         let Some((prog, args)) = spec.argv.split_first() else {
             return Err(EngineError::new(codes::MANIFEST_INVALID, "host.start is empty"));
         };
-        let mut cmd = Command::new(prog);
+        let mut cmd = k2_core::bg_proc::command(prog);
         cmd.args(args).current_dir(&p.workdir).env_clear();
         for (k, v) in clean_env(spec, port) {
             cmd.env(k, v);
@@ -443,7 +443,7 @@ impl RuntimeEngine for ProcessEngine {
         let env = clean_env(spec, port);
         let path = env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.clone()).unwrap_or_default();
         let (prog, args) = k2_core::terminal::win_cmd::resolve_spawn(prog, args, &path);
-        let mut cmd = Command::new(&prog);
+        let mut cmd = k2_core::bg_proc::command(&prog);
         cmd.args(&args).current_dir(&p.workdir).env_clear();
         for (k, v) in windows_base_env(spec).into_iter().chain(env) {
             cmd.env(k, v);

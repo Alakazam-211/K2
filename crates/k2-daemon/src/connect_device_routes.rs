@@ -149,7 +149,7 @@ fn clean_server_name(raw: &str) -> Option<String> {
 
 #[cfg(target_os = "macos")]
 fn friendly_computer_name() -> Option<String> {
-    let out = std::process::Command::new("/usr/sbin/scutil").args(["--get", "ComputerName"]).output().ok()?;
+    let out = k2_core::bg_proc::command("/usr/sbin/scutil").args(["--get", "ComputerName"]).output().ok()?;
     if !out.status.success() {
         return None;
     }

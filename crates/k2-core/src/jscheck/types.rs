@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use crate::zen::schema::Diagnostic;
@@ -143,7 +143,7 @@ fn write_project(dir: &Path, scripts: &[(&String, &Vec<u8>)]) -> std::io::Result
 
 /// Run the checker in `dir`; stdout + stderr, or why it failed to run.
 fn run(bin: &Path, dir: &Path) -> Result<String, String> {
-    let mut child = Command::new(bin)
+    let mut child = crate::bg_proc::command(bin)
         .args(["-p", "tsconfig.json", "--pretty", "false"])
         .current_dir(dir)
         .env_clear()

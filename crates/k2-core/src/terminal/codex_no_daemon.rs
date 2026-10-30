@@ -32,7 +32,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -325,7 +325,7 @@ fn probe_help(binary: &Path, search_path: &str) -> Result<String, String> {
     let program = binary.to_string_lossy().into_owned();
     let (prog, args) =
         crate::terminal::win_cmd::resolve_spawn(&program, &["--help".to_string()], search_path);
-    let mut cmd = Command::new(&prog);
+    let mut cmd = crate::bg_proc::command(&prog);
     cmd.args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

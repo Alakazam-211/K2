@@ -114,8 +114,7 @@ pub fn permissions_get_status() -> PermissionStatus {
 /// the requested category.
 #[cfg(target_os = "macos")]
 fn open_settings_pane(scheme_path: &str) -> Result<(), String> {
-    use std::process::Command;
-    Command::new("open")
+    k2_client::bg_proc::command("open")
         .arg(format!("x-apple.systempreferences:{}", scheme_path))
         .spawn()
         .map(|_| ())

@@ -82,7 +82,7 @@ fn box_total() -> Option<i64> {
     *TOTAL.get_or_init(|| {
         let linux = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| k2_core::agents_leaf::mem_total(&m));
         let mac = || {
-            let out = std::process::Command::new("/usr/sbin/sysctl").args(["-n", "hw.memsize"]).output().ok()?;
+            let out = k2_core::bg_proc::command("/usr/sbin/sysctl").args(["-n", "hw.memsize"]).output().ok()?;
             String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().ok()
         };
         linux.or_else(mac).and_then(|b| i64::try_from(b).ok())

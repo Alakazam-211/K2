@@ -685,6 +685,11 @@ mod tests {
                 "no_chat_member",
                 // Sew for Apps A9 (0.46.6): chat.createChannel.
                 "sew_feature_missing",
+                // App-governed Spaces S4+S5 (catalog v42): chat.channels,
+                // chat.setChannels.
+                "chat_key_required",
+                "sew_unreachable",
+                "sew_refused",
                 "space_unbound",
                 "app_mismatch",
                 "chat_unavailable",

@@ -1,0 +1,27 @@
+# Two services sharing defaults through an anchor.
+x-defaults: &defaults
+  restart: unless-stopped
+  environment: &env
+    TZ: UTC
+    LOG_LEVEL: info
+
+services:
+  api:
+    <<: *defaults
+    image: example/api:1.4
+    ports: ["8080:8080"]
+    environment:
+      <<: *env
+      LOG_LEVEL: debug
+  worker:
+    <<: *defaults
+    image: example/worker:1.4
+    command: >
+      worker --queue default
+      --concurrency 4
+---
+# a second document in the same file
+kind: notes
+text: |
+  Multi-line block,
+  kept exactly.

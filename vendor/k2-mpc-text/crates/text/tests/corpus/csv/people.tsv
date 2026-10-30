@@ -1,0 +1,5 @@
+name	email	role	start	notes
+alice	alice@example.org	admin	2024-01-15	
+bob	bob@example.org	viewer		on leave
+carol	carol@example.org	editor	2025-06-01	writes the docs	
+dmitri	dmitri@example.org	viewer	2026-02-29	"quoted, not special in tsv"

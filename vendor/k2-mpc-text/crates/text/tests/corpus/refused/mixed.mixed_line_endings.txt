@@ -1,0 +1,3 @@
+first line CRLF
+second line LF
+third CRLF

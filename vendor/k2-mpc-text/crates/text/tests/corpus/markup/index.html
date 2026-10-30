@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Café — menu</title>
+  <style>
+    body { font: 16px/1.5 system-ui; }
+    .price::after { content: " €"; }
+  </style>
+</head>
+<body>
+  <h1>Menu du jour</h1>
+  <ul>
+    <li>Crème brûlée <span class="price">6</span></li>
+    <li>Thé glacé 🍵 <span class="price">3</span></li>
+  </ul>
+  <script>
+    document.querySelectorAll(".price").forEach((el) => {
+      if (Number(el.textContent) > 5) el.classList.add("high");
+    });
+  </script>
+</body>
+</html>

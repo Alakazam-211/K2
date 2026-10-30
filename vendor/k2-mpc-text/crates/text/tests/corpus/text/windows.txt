@@ -1,0 +1,4 @@
+Line one, written on Windows.
+
+Line three after a blank line.
+Last line has no break

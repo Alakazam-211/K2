@@ -1,0 +1,8 @@
+# Feature flags, CRLF on purpose (edited on Windows).
+features:
+  search: true
+  beta_ui: false
+limits:
+  max_upload_mb: 50
+  allowed: [png, jpg, "pdf"]
+owner: "Zoë"

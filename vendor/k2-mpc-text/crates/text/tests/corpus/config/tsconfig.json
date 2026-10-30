@@ -1,0 +1,13 @@
+{
+  // Strict settings for the web app.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "strict": true,
+    /* paths are relative to baseUrl */
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] },
+    "outDir": "dist",
+  },
+  "include": ["src/**/*.ts"],
+}

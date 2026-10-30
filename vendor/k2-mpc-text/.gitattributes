@@ -1,0 +1,2 @@
+# The fidelity corpus is byte-exact test data: no line-ending conversion, ever.
+crates/text/tests/corpus/** -text

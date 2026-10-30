@@ -1,0 +1,8 @@
+digraph deps {
+    rankdir=LR;
+    node [shape=box, fontname="Helvetica"];
+    "app" -> "core";
+    "app" -> "ui";
+    "ui" -> "core" [style=dashed, label="types"];
+    "core" -> "std";
+}

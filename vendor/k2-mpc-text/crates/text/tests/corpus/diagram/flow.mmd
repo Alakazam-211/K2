@@ -1,0 +1,9 @@
+flowchart TD
+    A[Request] --> B{Cached?}
+    B -- yes --> C[Serve from cache]
+    B -- no --> D[Fetch origin]
+    D --> E[(Store)]
+    E --> C
+    %% a comment line
+    classDef hot fill:#f96,stroke:#333;
+    class C hot

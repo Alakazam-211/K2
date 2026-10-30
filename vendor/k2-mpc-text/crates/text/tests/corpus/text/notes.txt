@@ -1,0 +1,9 @@
+Meeting notes — 28 Oct
+
+* Café, naïve, résumé (precomposed é) vs café (e + combining acute): both kept as typed.
+* Emoji: 🎉 👍🏾 🏳️‍🌈 👩‍💻 and a flag 🇯🇵.
+* Hebrew: שלום. Arabic: سلام. Mixed: version 2 من التطبيق.
+* CJK: 日本語のテキスト、中文文本、한국어 텍스트.
+* Zero-width joiner‍here, a BOM-like char﻿inside, a non-breaking space.
+	Tabbed line.
+Trailing spaces stay.   

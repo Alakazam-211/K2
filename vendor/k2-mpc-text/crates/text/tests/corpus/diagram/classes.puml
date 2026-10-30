@@ -1,0 +1,13 @@
+@startuml
+title Orders
+skinparam monochrome true
+
+class Order {
+  +id: UUID
+  +total(): Money
+}
+class LineItem {
+  +qty: int
+}
+Order "1" *-- "many" LineItem
+@enduml

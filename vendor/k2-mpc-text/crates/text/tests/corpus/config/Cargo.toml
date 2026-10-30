@@ -1,0 +1,15 @@
+[package]
+name = "demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+lto = "thin"      # smaller binaries
+codegen-units = 1
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"

@@ -47,6 +47,8 @@ pub(super) const ROWS: &[Refusal] = &[
         .exit(1),
     r("seed_not_found", "deploy", 404, Who::Agent, "No Seed with that hash (or prefix) on this box.",
         "Build one and use the hash it prints: k2 app build <folder>"),
+    r("uninstall_drops_access", "deploy", 409, Who::Agent, "Uninstalling the App would drop who may use it (logins, roles, chat, shared secrets); a reinstall is a new App and gets none of it back. The refusal lists what.",
+        "To add a public URL, don't reinstall: k2 app expose <app-id> --tunnel. To uninstall anyway: k2 app uninstall <app-id> --drop-access"),
     // ── runtime ──
     // A crashloop is a deployment's result: `_app_rt_deployment_exit` in
     // cli/k2 exits 1 for any result that isn't live, pending or stalled.
@@ -296,6 +298,8 @@ pub(super) const ROWS: &[Refusal] = &[
         "The owner approves the App's chat caps (k2 app approvals; k2 app approve <id>), or name them: k2 app grant <app> --kind chat-key --caps \"chat:read chat:post\""),
     r("provider_is_standalone", "chat", 409, Who::Owner, "This box's Sew is a standalone install: it takes no K2 passes, so an App on it has no chat key.",
         "Run Sew under K2 to use chat keys (k2 study app-chat). Until then the App's chat goes through Sew's own logins."),
+    r("sew_feature_missing", "chat", 409, Who::Owner, "This server's Sew is too old for what the App asked (a chat key and App-governed Spaces need Sew 0.6.0; making channels needs 0.5.0). The refusal names the feature.",
+        "The owner upgrades Sew: k2 hostchat upgrade. Then try again."),
     // ── links ──
     r("link_path_dropped", "links", 409, Who::Agent, "k2 app links set would drop a link path that already shipped in a phone app.",
         "Keep the path, or drop it on purpose: pass --drop <path>."),
@@ -315,8 +319,12 @@ pub(super) const ROWS: &[Refusal] = &[
         "Sign that archive again with the key that matches the App's updater public key, then upload again."),
     r("signing_node_not_owner", "updates", 403, Who::Agent, "A signing job may run only on this server's own node, not a shared one.",
         "Run it on this server's own node (k2 compute nodes lists them)."),
+    r("staging_failed", "updates", 500, Who::K2, "K2 couldn't stage the update archives on this box's disk (the refusal says why).",
+        "Check the box's disk (k2 app resources), then push again."),
     r("updates_host_unavailable", "updates", 503, Who::K2, "K2's download host isn't reachable or isn't live yet, so the update feed is off.",
         "Wait and try again later; nothing to change on the App."),
+    r("upload_spawn_failed", "updates", 500, Who::K2, "K2 couldn't start the upload to the download host.",
+        "Push again in a moment; if it keeps failing, restart K2."),
     r("version_not_newer", "updates", 409, Who::Agent, "The release version isn't semver, or isn't higher than the channel's current one.",
         "Give the release a higher semver version than the channel's current one, then publish again."),
     // ── static ──

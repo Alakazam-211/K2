@@ -754,6 +754,39 @@ assert_contains "catalog: app-pairing row" "$("$K2" study)" "  app-pairing      
 assert_contains "usage lists app-runtime" "$("$K2" study --help)" "app-resources  app-runtime"
 assert_contains "k2 app help points at the page" "$(grep -F 'Re-hosts explained: k2 study app-runtime.' "$K2_CLI" || true)" "k2 study app-runtime"
 
+echo "== k2 study chat-voice + chat-voice-rooms (Sew's embedding guide, K2 0.46.7) =="
+cv_out="$("$K2" study chat-voice)"
+assert_contains "title" "$cv_out" "k2 study chat-voice — Voice rooms and channels in your App: the setup"
+for needle in "k2 app install <app> --tunnel" "re-creating drops its logins" "guests-chat" "Connect login" \
+    "k2 chat space create <slug> --name \"<Name>\" --owner <owner-user>" "k2 hostchat app-space bind <app>" \
+    "k2 app user chat <owner-user> member --app <app>" "tied_pending_reset" "no_chat_caps" \
+    "k2 app approve <id>" "--core sew=on" "chat:channels" "delivered true" "Hearth" "optional" \
+    "k2 study chat-voice-rooms" "Owner" "chat_manage on"; do
+    assert_contains "chat-voice: $needle" "$cv_out" "$needle"
+done
+# K2's own names win over Sew's draft: no proposed cap, no flags this K2 lacks.
+for absent in "chat:structure" "--manager" "--voice" "k2 app grant add --kind chat --subject-kind principal"; do
+    assert_absent "chat-voice: no $absent" "$cv_out" "$absent"
+done
+cv_lines="$(printf '%s\n' "$cv_out" | wc -l | tr -d ' ')"
+if [ "$cv_lines" -le 100 ]; then echo "  PASS: chat-voice is bounded ($cv_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice is $cv_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
+cr_out="$("$K2" study chat-voice-rooms)"
+assert_contains "title" "$cr_out" "k2 study chat-voice-rooms — Rooms and channels in your App Space"
+for needle in "POST /api/v1/spaces/{space_id}/channels" "\"type\":\"voice\"" "NOT idempotent" "409 conflict" \
+    "include_archived=true" "{\"perms\":\"991743\"}" "forward only the" "VoiceChannelMembers" \
+    "controller.join(channelId)" "proj-<id>-voice" "There is NO delete" "TEXT channels only" "Sew 0.5.1"; do
+    assert_contains "chat-voice-rooms: $needle" "$cr_out" "$needle"
+done
+for absent in "chat:structure" "--manager" "--voice"; do
+    assert_absent "chat-voice-rooms: no $absent" "$cr_out" "$absent"
+done
+cr_lines="$(printf '%s\n' "$cr_out" | wc -l | tr -d ' ')"
+if [ "$cr_lines" -le 100 ]; then echo "  PASS: chat-voice-rooms is bounded ($cr_lines lines)"; pass=$((pass + 1)); else echo "  FAIL: chat-voice-rooms is $cr_lines lines (max 100)" >&2; fail=$((fail + 1)); fi
+assert_contains "catalog: chat-voice row" "$("$K2" study)" "  chat-voice          Voice rooms and channels in your App"
+assert_contains "catalog: chat-voice-rooms row" "$("$K2" study)" "  chat-voice-rooms    Your App Space"
+assert_contains "usage lists chat-voice" "$("$K2" study --help)" "app-chat  chat-voice  chat-voice-rooms"
+assert_contains "app-chat points at chat-voice" "$("$K2" study app-chat)" "k2 study chat-voice."
+
 echo "== --help exit 0; bad flag exit 2 =="
 set +e
 help_out="$("$K2" study --help 2>&1)"

@@ -1946,6 +1946,100 @@ mod tests {
         }
     }
 
+    // ── Tunnel latency floor: TCP_NODELAY on every hop ──────────────
+
+    /// One connected TCP socket this test process holds.
+    #[cfg(unix)]
+    #[derive(Debug)]
+    struct OwnSocket {
+        local: std::net::SocketAddr,
+        peer: std::net::SocketAddr,
+        nodelay: bool,
+    }
+
+    /// Every connected TCP socket open in this process, with its
+    /// TCP_NODELAY state. The E2E listener, its upstream and the
+    /// tunnel-ingress listener all run in-process, so their sockets are
+    /// here (found by address; other tests' sockets are filtered out).
+    #[cfg(unix)]
+    fn own_tcp_sockets() -> Vec<OwnSocket> {
+        use std::os::fd::FromRawFd;
+        let fds: Vec<i32> = std::fs::read_dir("/dev/fd")
+            .expect("list /dev/fd")
+            .filter_map(|e| e.ok()?.file_name().to_str()?.parse().ok())
+            .collect();
+        fds.into_iter()
+            .filter_map(|fd| {
+                // Borrowed, never owned: ManuallyDrop never closes the fd.
+                // A non-socket (or non-TCP) fd fails one of the calls.
+                let s = std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(fd) });
+                Some(OwnSocket {
+                    local: s.local_addr().ok()?,
+                    peer: s.peer_addr().ok()?,
+                    nodelay: s.nodelay().ok()?,
+                })
+            })
+            .collect()
+    }
+
+    /// Ops 2026-10-30: through frps → frpc → this listener every round
+    /// trip (the handshake, then each request) cost ~40–100 ms more than
+    /// talking to the listener directly. A K2 socket with Nagle on holds a
+    /// small write behind an un-ACKed one until the peer's delayed ACK
+    /// (~40 ms on Linux). Every socket the daemon owns on that path must
+    /// have TCP_NODELAY: the one frpc dialed, the splice upstream, and the
+    /// tunnel-ingress listener's side of it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn every_daemon_socket_on_the_tunnel_path_has_nagle_off() {
+        use crate::front443::proxy_v2;
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _home = crate::test_support::TempHome::new();
+        let http_port = install_test_ingress_state();
+        crate::boot_status::set_ready();
+        let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
+        let (cert_pem, key_pem) = k2_core::tunnel::tls::load_or_provision_cert("rosson").expect("cert");
+        let shared = Arc::new(ArcSwap::from_pointee(
+            k2_core::tunnel::tls::server_config(&cert_pem, &key_pem).expect("server config"),
+        ));
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind tls");
+        let https_port = l.local_addr().unwrap().port();
+        tokio::spawn(async move { accept_loop(Arc::new(l), shared, http_port).await });
+
+        // As frpc dials it: PROXY v2, then TLS; one keep-alive request so
+        // the whole splice is up while we look.
+        let header = proxy_v2::header("203.0.113.9:5555".parse().unwrap(), "127.0.0.1:443".parse().unwrap());
+        let mut tls = frpc_session(&cert_pem, https_port, "rosson.k2.dev", Some(header))
+            .await
+            .expect("frpc-style TLS session");
+        tls.write_all(b"GET /ping HTTP/1.1\r\nHost: rosson.k2.dev\r\n\r\n").await.expect("write");
+        let mut buf = Vec::new();
+        let (head, _) = next_response(&mut tls, &mut buf).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "the /ping must come back first:\n{head}");
+
+        let client = tls.get_ref().0.local_addr().expect("client addr");
+        let ingress = crate::tunnel_ingress_listener::recorded_port().expect("tunnel-ingress listener up");
+        let socks = own_tcp_sockets();
+        let frpc_side: Vec<&OwnSocket> =
+            socks.iter().filter(|s| s.local.port() == https_port && s.peer == client).collect();
+        let upstream: Vec<&OwnSocket> = socks.iter().filter(|s| s.peer.port() == ingress).collect();
+        let ingress_side: Vec<&OwnSocket> = socks
+            .iter()
+            .filter(|s| s.local.port() == ingress && upstream.iter().any(|u| u.local == s.peer))
+            .collect();
+        assert_eq!(frpc_side.len(), 1, "the E2E listener's socket for this client, in {socks:#?}");
+        assert!(!upstream.is_empty(), "the splice upstream to tunnel-ingress :{ingress}, in {socks:#?}");
+        assert!(!ingress_side.is_empty(), "tunnel-ingress's side of the splice, in {socks:#?}");
+        for (hop, s) in frpc_side
+            .iter()
+            .map(|s| ("E2E listener (frpc side)", s))
+            .chain(upstream.iter().map(|s| ("splice upstream", s)))
+            .chain(ingress_side.iter().map(|s| ("tunnel-ingress accepted", s)))
+        {
+            assert!(s.nodelay, "{hop} socket has Nagle on (TCP_NODELAY off): {s:?}");
+        }
+    }
+
     /// 0.46.3 end to end: a fake frpc writes the relay's PROXY v2 header,
     /// then TLS. The App behind its label (the router override) and an
     /// opted-in nested service get exactly one K2-set client IP on every

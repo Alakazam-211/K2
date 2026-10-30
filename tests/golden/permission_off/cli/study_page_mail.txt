@@ -152,6 +152,40 @@ MAIL_MANAGE AGENTS
   create owner@ "Team" → calendar share owner@ --calendar Team --with
   team --write → --editor for the few who may delete it.
 
+FORWARDING (0.46.7, `k2 hostmail forward`)
+  One destination per mailbox: a mailbox on this server, or an outside
+  address (Gmail, Outlook, any).
+  Outside  K2 emails the destination a confirm link. set answers
+           state pending_verify; nothing is forwarded until someone
+           clicks the link (24 hours; expired → set again for a new one).
+           Only mail arriving after the click is forwarded. Keeps a copy
+           in the mailbox unless --no-keep (same-box forwards: no copy
+           unless --keep).
+  Stays home  spam, mail failing DMARC, bounces, mail K2 already
+           forwarded. 100/hour per mailbox and 1,000/hour per server:
+           above them mail waits in the queue. 500/day per mailbox: K2
+           pauses the forward (daily_cap).
+  Paused   new mail stays in the mailbox; `show` gives the reason and
+           its words, the confirm link's state, last-24h counts, events.
+           manual (someone paused it), dest_gone, refused, daily_cap,
+           revoked (the destination clicked Stop), box_brake (every
+           outside forward: too many of the server's were refused);
+           only air_gap / receive_only lift by themselves.
+  Who      mail-manage agents (the HOSTMAIL TOGGLE below): set, show,
+           unset, pause and resume a manual pause, on any mailbox they
+           manage, outside addresses included, end to end — no card, no
+           owner OK per forward. Without the toggle: exit 3 owner_only.
+           dest_gone / refused / daily_cap: the owner, an Admin or the
+           mailbox's person resumes (an agent gets exit 3 owner_only:
+           tell your human on Thread). box_brake: owner/Admin only.
+           revoked: nobody resumes; set again (a new confirm link).
+           list (every forward on the server): owner/Admin only.
+  People   the owner links a mailbox to its person's box login
+           (`k2 hostmail person link <addr> <login>`); that person then
+           uses `k2 mail forward` or Settings → Email Hosting. An agent
+           running `k2 mail forward` gets exit 3 person_only.
+  Never claim mail was forwarded before `show` says state=active.
+
 HOSTMAIL TOGGLE
   Default off. Owner/Admin: Settings → Workspaces → (this
   workspace) → Allow agents to manage hosted mail on this host.

@@ -1268,6 +1268,19 @@ exit: 0
       ]
     },
     {
+      "name": "mail forward",
+      "usage": "k2 mail forward set --to <dest> [--keep|--no-keep] | show | unset | pause | resume [--address <addr>] [--json]",
+      "description": "A PERSON's own hosted mailbox (a box login the owner linked with k2 hostmail person link, or the owner) forwarded to another address; same rules as k2 hostmail forward (outside: confirm link first, keeps a copy unless --no-keep). The person may resume after K2 paused it, except the server brake (owner/Admin) or a destination that clicked Stop (set again). --address picks one when several are linked. Agent tokens exit 3 person_only: agents use k2 hostmail forward <verb> <address> with mail_manage on.",
+      "args": [],
+      "flags": [
+        {"name": "--to", "arg": "dest", "description": "set: the destination address."},
+        {"name": "--keep", "arg": null, "description": "set: keep a copy in the mailbox."},
+        {"name": "--no-keep", "arg": null, "description": "set: don't keep a copy."},
+        {"name": "--address", "arg": "addr", "description": "Which linked mailbox (when more than one)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "mail access",
       "usage": "k2 mail access grant <address> <workspace> --level read|draft|send | revoke <address> <workspace> | primary <address> <workspace> | level <address> <workspace> --level read|draft|send | manage <address> <workspace> [--on|--off] [--delete|--no-delete]",
       "description": "The ONE access layer over BOTH hosted and linked inboxes (PRIMARY/owner surface; agents exit 3). Levels order read < draft < send; 'send' works on BOTH sources (hosted via the server, linked via SMTP). grant = upsert a workspace's access (default level read). revoke = remove a grant (idempotent; the primary can't be revoked). primary = TRANSFER the managing workspace. level = set a workspace's level. manage = set the MANAGEMENT caps, ORTHOGONAL to level: --on/--off toggles canManage (move/flag/archive/folders); --delete/--no-delete toggles canDelete (delete = move to Trash, never erase; REQUIRES manage). Defaults for manage: --on --no-delete; --off also clears delete. See 'k2 mail inboxes' for primary + grants (with canManage/canDelete).",
@@ -1527,12 +1540,15 @@ exit: 0
     },
     {
       "name": "hostmail forward",
-      "usage": "k2 hostmail forward set <addr> --to <dest> [--keep] | unset <addr> | show <addr> [--json]",
-      "description": "Sieve redirect on a minted mailbox (script name k2-forward). Dest must be minted on this host. --keep keeps a local copy (redirect :copy). Unset destroys that script only. mail_manage.",
+      "usage": "k2 hostmail forward set <addr> --to <dest> [--keep|--no-keep] | show <addr> | unset <addr> | pause <addr> | resume <addr> | list [--paused|--active|--pending] [--external] [--json]",
+      "description": "Forward a hosted mailbox to one address: a mailbox on this server (active at once, no copy unless --keep) or an outside address (K2 emails it a confirm link; set answers state pending_verify and forwarding starts when the link is clicked, 24 h; keeps a copy unless --no-keep). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server (mail waits in the queue); 500/day per mailbox pauses it (daily_cap). Pause reasons (show gives them with words, the confirm-link state, last-24h counts and events): manual, dest_gone, refused, daily_cap, revoked (destination clicked Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only; revoked: set again (a new confirm link). list: owner/Admin. A person's own mailbox: k2 mail forward.",
       "args": [{"name": "addr", "required": true}],
       "flags": [
-        {"name": "--to", "arg": "dest", "description": "Minted dest mailbox on this host."},
-        {"name": "--keep", "arg": null, "description": "Keep a local copy (redirect :copy)."},
+        {"name": "--to", "arg": "dest", "description": "set: a mailbox on this server, or an outside address (confirm link first)."},
+        {"name": "--keep", "arg": null, "description": "set: keep a copy in the mailbox (default for outside destinations)."},
+        {"name": "--no-keep", "arg": null, "description": "set: don't keep a copy (default for same-box destinations)."},
+        {"name": "--paused", "arg": null, "description": "list: paused forwards only (also --active, --pending)."},
+        {"name": "--external", "arg": null, "description": "list: outside destinations only."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -1610,10 +1626,11 @@ exit: 0
     },
     {
       "name": "hostmail person",
-      "usage": "k2 hostmail person <addr> on|off [--json] | k2 hostmail person --all --workspace <ws> on|off [--json]",
-      "description": "Mark a hosted mailbox as a person's (on) or an agent's (off). An IT agent (mail_manage) may set a person's mailbox passwords even when it is bound to its own workspace; its own agent mailboxes stay the owner's call. --all --workspace <ws> marks every mailbox in the workspace at once, never its send identities (addresses its agent sent from, mailboxes its agent minted for itself) — run once by the owner for an IT workspace of imported staff mailboxes. POST /cli/mail/address/person {address|all+workspace, person}. Owner, or an IT agent — except turning it on in its own workspace (exit 3 owner_only). Agents without mail_manage exit 3.",
+      "usage": "k2 hostmail person <addr> on|off [--json] | k2 hostmail person --all --workspace <ws> on|off [--json] | k2 hostmail person link <addr> <login|owner> | <addr> --unlink [--json]",
+      "description": "Mark a hosted mailbox as a person's (on) or an agent's (off). An IT agent (mail_manage) may set a person's mailbox passwords even when it is bound to its own workspace; its own agent mailboxes stay the owner's call. --all --workspace <ws> marks every mailbox in the workspace at once, never its send identities (addresses its agent sent from, mailboxes its agent minted for itself) — run once by the owner for an IT workspace of imported staff mailboxes. POST /cli/mail/address/person {address|all+workspace, person}. Owner, or an IT agent — except turning it on in its own workspace (exit 3 owner_only). Agents without mail_manage exit 3. link <addr> <login|owner> ties the mailbox to its person's box login so they manage its forwarding (k2 mail forward); --unlink removes it; POST /cli/mail/address/person-link; owner/Admin only.",
       "args": [{"name": "addr", "required": false}, {"name": "state", "required": true}],
       "flags": [
+        {"name": "--unlink", "arg": null, "description": "link: remove the mailbox's person link."},
         {"name": "--all", "arg": null, "description": "Every mailbox in --workspace except its send identities."},
         {"name": "--workspace", "arg": "ws", "description": "The workspace for --all (name | path | UUID)."},
         {"name": "--json", "arg": null, "description": "JSON output."}

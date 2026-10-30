@@ -72,11 +72,11 @@ fn the_sew_recovery_key_is_person_revealable_and_agent_proof() {
     assert_eq!(v.reveal(&sel, &Actor::Owner, &proof).expect("owner reveals").expose(), key.as_bytes());
     let admin = Actor::Login { username: "ana".into(), role: Role::Admin };
     assert_eq!(v.reveal(&sel, &admin, &proof).expect("admin reveals").expose(), key.as_bytes());
-    assert_eq!(v.reveal(&sel, &Actor::Owner, &HumanProof::None).expect_err("no confirm").code, "vault_confirm_required");
+    assert_eq!(v.reveal(&sel, &Actor::Owner, &HumanProof::None).err().expect("no confirm").code, "vault_confirm_required");
     let member = Actor::Login { username: "m".into(), role: Role::Member };
     assert!(v.reveal(&sel, &member, &proof).is_err());
     assert_eq!(
-        v.reveal(&Selector::system(Scope::engine("sew"), "db-password"), &Actor::Owner, &proof).expect_err("never").code,
+        v.reveal(&Selector::system(Scope::engine("sew"), "db-password"), &Actor::Owner, &proof).err().expect("never").code,
         "vault_system_namespace"
     );
 

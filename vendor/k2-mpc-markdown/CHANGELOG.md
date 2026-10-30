@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.7.0 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.9.0** (undo, redo and revert never remove another participant's text, and text they put back keeps its provenance: blame names who first wrote it and who put it back; a behaviour change in undo and blame, hence the minor bump). The base's **store format is 5** (an in-place upgrade from 4; an older build refuses it). `Cargo.lock` only; no pack change.
+
 ## v0.6.2 (2026-10-28)
 
 **Requires `k2-mpc-base` v0.8.2** (the revert fix: a revert's conflicts no longer change across a host restart). `Cargo.lock` only; no pack change.

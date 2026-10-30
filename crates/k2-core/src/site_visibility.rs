@@ -369,7 +369,7 @@ pub fn set_dev(conn: &Connection, label: &str, dev: bool, idle_secs: Option<i64>
     refuse_reserved(&label)?;
     if let Some(s) = idle_secs {
         if s != 0 && !(IDLE_MIN_SECS..=IDLE_MAX_SECS).contains(&s) {
-            return Err("idle_range: --idle is 5m to 24h, or off.".into());
+            return Err("idle_range: --idle (how long an unused dev site runs before K2 stops it) is 5m to 24h, or off.".into());
         }
     }
     upsert(conn, &label, by, "dev = ?4, idle_secs = ?5", &[&(dev as i64), &idle_secs])?;
@@ -428,7 +428,7 @@ pub fn door_refusal() -> Option<String> {
         Err(e) => return Some(format!("{DOOR_UNSUPPORTED}: the tunnel config can't be read, so K2 can't promise its gate covers this site ({e}).")),
     };
     (!crate::tunnel::config::e2e_enabled(&cfg)).then(|| {
-        format!("{DOOR_UNSUPPORTED}: E2E is off on this server, so K2's gate can't see this site's traffic. Turn E2E back on, or keep the site public.")
+        format!("{DOOR_UNSUPPORTED}: E2E is off on this server, so K2's gate can't see this site's traffic and can't make it private or add a PIN. Turn E2E back on first; until then this site stays as it is.")
     })
 }
 
@@ -479,7 +479,7 @@ impl std::fmt::Debug for OpenCode {
 pub fn mint_open_code(conn: &Connection, label: &str, path: &str, user: &str) -> R<OpenCode> {
     let label = norm(label)?;
     refuse_reserved(&label)?;
-    let path = safe_path(path).ok_or("bad_path: the path must be local to the site, like /docs.")?;
+    let path = safe_path(path).ok_or("bad_path: the path must be on this site, like / or /some/page.")?;
     let code = random_token();
     let expires_at = now_unix() + OPEN_CODE_SECS;
     conn.execute(

@@ -175,6 +175,19 @@ impl SubdomainMap {
         host.strip_suffix(&suffix).map(str::to_string)
     }
 
+    /// Is `host` under this box's subdomain (`<anything>.<primary>.k2.dev`)?
+    /// Those names are K2's, and reach a site only through the E2E listener's
+    /// gate, never through another door (`k2 publish` visibility, vs-live PA-4).
+    pub fn is_nested_name(&self, host: &str) -> bool {
+        if self.primary.is_empty() {
+            return false;
+        }
+        let host = host.trim().to_ascii_lowercase();
+        let host = host.split(':').next().unwrap_or("").trim_end_matches('.');
+        let suffix = format!(".{}.{SUBDOMAIN_HOST}", self.primary);
+        host.strip_suffix(&suffix).is_some_and(|l| !l.is_empty())
+    }
+
     pub fn route_for_host(&self, host: &str) -> Route {
         let host = host.trim().to_ascii_lowercase();
         // Drop any port suffix (`host:443`).
@@ -444,7 +457,9 @@ fn send_write(
 /// POST `/subdomains` `{ label, target }` — create a nested hostname.
 pub fn create_subdomain(token: &str, label: &str, target: &str) -> Result<(), String> {
     let body = serde_json::json!({ "label": label, "target": target }).to_string();
-    send_write("POST", "/subdomains", token, Some(&body)).map(|_| ())
+    send_write("POST", "/subdomains", token, Some(&body)).map(|_| ())?;
+    label_event(LabelEvent::Created(label));
+    Ok(())
 }
 
 /// PUT `/subdomains/<label>` `{ target }` — repoint an existing hostname.
@@ -464,7 +479,9 @@ pub fn delete_subdomain(token: &str, label: &str) -> Result<(), String> {
         "/subdomains/{}",
         urlencoding_label(label)
     );
-    send_write("DELETE", &path, token, None).map(|_| ())
+    send_write("DELETE", &path, token, None).map(|_| ())?;
+    label_event(LabelEvent::Deleted(label));
+    Ok(())
 }
 
 fn urlencoding_label(label: &str) -> String {
@@ -521,6 +538,7 @@ pub fn refresh_once(primary: &str, token: &str) -> Result<(usize, bool), String>
         }
     }
     let n = map.targets.len();
+    map_event(&map, true);
     persist(&map);
     let changed = store(map);
     Ok((n, changed))
@@ -604,8 +622,52 @@ pub fn load_persisted(primary: &str) -> Option<usize> {
         }
     }
     let n = map.targets.len();
+    map_event(&map, false);
     store(map);
     Some(n)
+}
+
+// ── `k2 publish` visibility's view of the map (0.46.7) ────────────────────
+
+/// A label K2 made or removed on the control plane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabelEvent<'a> {
+    Created(&'a str),
+    Deleted(&'a str),
+}
+
+#[derive(Clone, Copy)]
+struct VisibilityHooks {
+    /// `(map, fetched)`: a map is about to route (`fetched` = from the control
+    /// plane, not the copy on disk). Runs before the map lands, so a site that
+    /// was public before the upgrade is never private for a moment.
+    map: fn(&SubdomainMap, bool),
+    label: fn(LabelEvent<'_>),
+}
+
+fn visibility_hooks() -> &'static std::sync::RwLock<Option<VisibilityHooks>> {
+    static H: std::sync::RwLock<Option<VisibilityHooks>> = std::sync::RwLock::new(None);
+    &H
+}
+
+/// The daemon's gate (`site_gate`) installs these at boot, before the first map
+/// loads. Other users of this crate have none.
+pub fn set_visibility_hooks(map: fn(&SubdomainMap, bool), label: fn(LabelEvent<'_>)) {
+    *visibility_hooks().write().unwrap_or_else(|p| p.into_inner()) = Some(VisibilityHooks { map, label });
+}
+
+fn map_event(map: &SubdomainMap, fetched: bool) {
+    let hooks = *visibility_hooks().read().unwrap_or_else(|p| p.into_inner());
+    if let Some(h) = hooks {
+        (h.map)(map, fetched);
+    }
+}
+
+fn label_event(e: LabelEvent<'_>) {
+    let hooks = *visibility_hooks().read().unwrap_or_else(|p| p.into_inner());
+    if let Some(h) = hooks {
+        (h.label)(e);
+    }
 }
 
 /// The primary label the routing cache must belong to, set by

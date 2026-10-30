@@ -346,6 +346,8 @@ pub mod triage;
 pub mod tunnel_tls_listener;
 // 0.46.3: the real client IP for tunnelled Apps (PROXY v2 from frpc).
 pub mod client_ip;
+// 0.46.7: the gate in front of a published site (private, PIN, public).
+pub mod site_gate;
 pub mod tunnel_autostart;
 pub mod tunnel_ingress_listener;
 // Runtime stage H: front-door hand-off (no-downtime upgrades).

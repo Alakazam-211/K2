@@ -887,6 +887,11 @@ fn passthrough_host(raw: &str) -> Result<String, Refusal> {
 /// `POST /cli/front/passthrough/add {host, to, proxyV2?, label?}`. Owner/Admin.
 pub fn passthrough_add(host: &str, to: &str, proxy_v2: bool, label: &str, by: &str, daemon_port: u16) -> Result<Value, Refusal> {
     let host = passthrough_host(host)?;
+    // `k2 publish` visibility (vs-live PA-4): a nested name stays behind the
+    // site gate, whatever its mode. `*` itself is fine: it skips these names.
+    if k2_core::tunnel::subdomains::current().is_nested_name(&host) {
+        return Err((409, "host_is_k2s", format!("{host} can't be passed through: it is one of this server's published addresses, and K2 serves those itself. Use a name you own.")));
+    }
     let addr: SocketAddr = to.trim().parse().map_err(|_| {
         (400, "bad_upstream", format!("--to must be a loopback address and port, e.g. 127.0.0.1:9443 (got {to:?})"))
     })?;

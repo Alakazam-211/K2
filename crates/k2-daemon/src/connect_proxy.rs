@@ -310,6 +310,33 @@ fn record_after(principal: &HookPrincipal, after: AfterWrite) {
     }
 }
 
+/// `k2 publish` visibility: a label made here starts private, and a removed
+/// one's row goes, so a new label of that name starts private too. Before the
+/// map refresh, so nothing can grandfather a label made here.
+fn note_visibility(method: &str, endpoint: &str, body: Option<&str>) {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let res = match method {
+        "POST" if endpoint == "/subdomains" => {
+            let label = body
+                .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+                .and_then(|v| v.get("label").and_then(|l| l.as_str()).map(str::to_string));
+            match label {
+                Some(l) => k2_core::site_visibility::note_new_label(&conn, &l, "create"),
+                None => Ok(()),
+            }
+        }
+        "DELETE" => match endpoint.strip_prefix("/subdomains/") {
+            Some(l) if !l.is_empty() => k2_core::site_visibility::forget_label(&conn, l),
+            _ => Ok(()),
+        },
+        _ => Ok(()),
+    };
+    if let Err(e) = res {
+        k2_core::log_debug!("[connect/proxy] visibility row: {e}");
+    }
+}
+
 /// The route body. `principal` is `Some` for an agent passport (the
 /// dispatcher authenticated it), `None` for the owner token or an
 /// Owner/Admin login.
@@ -357,6 +384,9 @@ pub fn handle(body: &[u8], principal: Option<&HookPrincipal>) -> CliResponse {
 
     match cp_proxy::forward(method, endpoint, cp_body.as_deref()) {
         Ok(r) => {
+            if (200..300).contains(&r.status) {
+                note_visibility(method, endpoint, cp_body.as_deref());
+            }
             if let (Some(p), Some(a)) = (principal, after) {
                 if (200..300).contains(&r.status) {
                     record_after(p, a);

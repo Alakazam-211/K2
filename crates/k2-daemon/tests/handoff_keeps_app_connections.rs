@@ -472,6 +472,15 @@ async fn handoff_keeps_200_websockets_and_a_stream_and_adopts_frpc() {
     })
     .await;
 
+    // `app` is public: this test is about the splice, not `k2 publish`
+    // visibility (a label with no row is private; `site_visibility_integration`
+    // covers the gate).
+    {
+        let conn = rusqlite::Connection::open(k2.join("k2.db")).expect("open k2.db");
+        conn.busy_timeout(Duration::from_secs(10)).unwrap();
+        k2_core::site_visibility::set_public(&conn, "app", "test", "test").expect("public");
+    }
+
     // The App: a published service the daemon spawned.
     let wsp = ws_dir.to_string_lossy().to_string();
     let (st, body) = http(

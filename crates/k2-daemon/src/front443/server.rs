@@ -309,7 +309,7 @@ async fn serve(f: &Front, mut tcp: TcpStream, peer: SocketAddr, slot: HelloSlot)
     // No SNI: closed, unless the owner set a default passthrough (their own
     // web server answers it, as it did when it held :443 itself).
     let (sni, b) = match hello.sni {
-        Some(sni) => match table.lookup(&sni).cloned() {
+        Some(sni) => match table.route(&sni, |h| k2_core::tunnel::subdomains::current().is_nested_name(h)).cloned() {
             Some(b) => (sni, b),
             None => {
                 Counters::bump(&f.counters.unknown_sni);

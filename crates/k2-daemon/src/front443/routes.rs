@@ -90,6 +90,18 @@ impl RouteTable {
         self.hosts.get(sni).or(self.default.as_ref())
     }
 
+    /// [`Self::lookup`] for a connection: a name under this box's own subdomain
+    /// never falls to the owner's `*` passthrough. A nested site is reached
+    /// through the E2E listener's gate, and that web server has no cert for it
+    /// anyway (`k2 publish` visibility, vs-live PA-4).
+    pub fn route(&self, sni: &str, is_nested: impl Fn(&str) -> bool) -> Option<&Backend> {
+        match self.hosts.get(sni) {
+            Some(b) => Some(b),
+            None if is_nested(sni) => None,
+            None => self.default.as_ref(),
+        }
+    }
+
     /// Set the default route (owner passthrough only). Refuses a
     /// non-loopback backend.
     pub fn set_default(&mut self, b: Backend) -> Result<(), String> {

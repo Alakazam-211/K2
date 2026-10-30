@@ -173,6 +173,11 @@ fn app_domain_of(app: &AppRow, host: &str) -> R<k2_core::domains::AppDomain> {
 fn custom_add(who: &Who, app: &AppRow, v: &J) -> R<J> {
     use super::custom_domains as cd;
     let host = host_arg(v)?;
+    // `k2 publish` visibility: a custom name goes past the site gate.
+    if let Some(why) = crate::site_gate::custom_name_refusal(&app.app_id, &host) {
+        let msg = why.split_once(": ").map_or(why.as_str(), |(_, m)| m).to_string();
+        return Err(no(k2_core::site_visibility::DOOR_UNSUPPORTED, 409, msg));
+    }
     let external = b(v, "external");
     let caller = super::routes::agent_ws(who).map(str::to_string);
     let existing = {

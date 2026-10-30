@@ -1968,7 +1968,11 @@ async fn bring_up_tunnel_listeners(state: &DaemonState, port: u16) {
     crate::front443::start().await;
     // Before the TLS listener accepts: nested App hosts route from the
     // first connection (runtime stage H).
-    if let Ok(cfg) = k2_core::tunnel::config::load() {
+    // The gate's hooks first: the persisted map must not route a label that
+    // was public before 0.46.7 until that label has its `public` row.
+    let tunnel_cfg = k2_core::tunnel::config::load();
+    crate::site_gate::start(tunnel_cfg.as_ref().ok().map(|c| c.subdomain.as_str()));
+    if let Ok(cfg) = tunnel_cfg {
         if let Some(n) = k2_core::tunnel::subdomains::load_persisted(&cfg.subdomain) {
             log_debug!("[daemon/e2e] restored the persisted routing map ({n} nested target(s))");
         }

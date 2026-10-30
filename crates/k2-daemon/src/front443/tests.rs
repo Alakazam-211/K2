@@ -797,3 +797,33 @@ async fn the_default_passthrough_takes_unknown_names_but_never_k2s() {
     assert!(handed.is_empty() && handed.default_route().is_none());
     assert!(t2.fixed_backends_only().is_empty());
 }
+
+/// vs-live PA-4: with a `*` passthrough, a nested name doesn't go to the
+/// owner's web server (it never reaches a site past the gate); other names do.
+#[test]
+fn a_nested_name_never_falls_to_the_default_passthrough() {
+    let mut t = RouteTable::default();
+    t.set_default(Backend {
+        kind: Kind::Passthrough,
+        addr: "127.0.0.1:9443".parse().unwrap(),
+        proxy: false,
+        refuse_loopback_clients: false,
+    })
+    .unwrap();
+    let map = k2_core::tunnel::subdomains::SubdomainMap { primary: "box".into(), targets: Default::default() };
+    let nested = |h: &str| map.is_nested_name(h);
+    assert!(t.route("docs.box.k2.dev", nested).is_none());
+    assert!(t.route("DOCS.box.k2.dev", nested).is_none(), "any case");
+    assert!(t.route("shop.example.com", nested).is_some());
+    assert!(t.route("box.k2.dev", nested).is_some(), "the box's own name isn't nested");
+    assert!(t.route("docs.other.k2.dev", nested).is_some(), "another box's name isn't ours");
+}
+
+#[test]
+fn passthrough_add_refuses_a_nested_name() {
+    let _home = crate::test_support::TempHome::new();
+    k2_core::tunnel::subdomains::store(k2_core::tunnel::subdomains::SubdomainMap { primary: "box".into(), targets: Default::default() });
+    let (status, code, _) = super::passthrough_add("docs.box.k2.dev", "127.0.0.1:9443", false, "", "owner", 1).expect_err("a nested name is K2's");
+    assert_eq!((status, code), (409, "host_is_k2s"));
+    k2_core::tunnel::subdomains::store(Default::default());
+}

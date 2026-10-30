@@ -57,6 +57,14 @@
 //! (`Connection: close`), at any position on a keep-alive connection.
 //! [`peek_head`] reads a connection's first request head before the App
 //! is dialed, so the files are served while the App is down.
+//!
+//! **K2's gate on a published site** (`k2 publish` visibility, 0.46.7):
+//! [`forward_gated`] takes [`GateHooks`]. Unlike the two hooks above, the
+//! gate sees every request on the connection (any method, keep-alive,
+//! pipelined, upgrades) with K2's own cookies, and K2's cookies are taken
+//! out of what the site receives. [`peek_gate_request`] gives `site_gate`
+//! the first request before anything is dialed, so a visitor who fails
+//! never causes a connection to the site.
 
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -447,6 +455,83 @@ struct RequestHead {
     path: String,
     /// The request's `Host` (the last one when sent twice).
     host: Option<String>,
+    /// The cookies [`rewrite_request`] was asked to take out, as `(name,
+    /// value)`. They are not in `bytes`.
+    taken_cookies: Vec<(String, String)>,
+    origin: Option<String>,
+    accept: Option<String>,
+    sec_fetch_dest: Option<String>,
+}
+
+/// One request, as K2's gate sees it ([`GateHooks`]).
+#[derive(Debug, Clone)]
+pub struct GateRequest {
+    pub method: String,
+    /// The path and query, as sent.
+    pub path: String,
+    pub host: Option<String>,
+    /// K2's own cookies on this request (`GateHooks::strip_cookies`).
+    pub cookies: Vec<(String, String)>,
+    pub origin: Option<String>,
+    /// A top-level page view: `Sec-Fetch-Dest: document`, or for a client
+    /// that doesn't send it, `Accept` naming `text/html`.
+    pub is_document: bool,
+    /// An upgrade (a WebSocket): it never comes back to HTTP if allowed.
+    pub upgrade: bool,
+    /// `Some(n)` = a `Content-Length` body.
+    pub content_length: Option<u64>,
+    pub chunked: bool,
+    /// The address K2 vouches for (PROXY v2), never a header's.
+    pub client_ip: Option<IpAddr>,
+}
+
+impl RequestHead {
+    fn gate_request(&self, client_ip: Option<IpAddr>) -> GateRequest {
+        let is_document = match self.sec_fetch_dest.as_deref() {
+            Some(d) => d.trim().eq_ignore_ascii_case("document"),
+            None => self.accept.as_deref().is_some_and(|a| a.to_ascii_lowercase().contains("text/html")),
+        };
+        GateRequest {
+            method: self.method.clone(),
+            path: self.path.clone(),
+            host: self.host.clone(),
+            cookies: self.taken_cookies.clone(),
+            origin: self.origin.clone(),
+            is_document,
+            upgrade: self.upgrade,
+            content_length: match self.body {
+                Body::Length(n) => Some(n),
+                _ => None,
+            },
+            chunked: self.body == Body::Chunked,
+            client_ip,
+        }
+    }
+}
+
+/// What K2's gate says about one request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateVerdict {
+    /// Forward it (without K2's cookies).
+    Allow,
+    /// K2's whole answer, ending the connection (`Connection: close`). The
+    /// site never sees the request.
+    Answer(Vec<u8>),
+}
+
+/// The gate's check. It may reach the database, so it is async.
+pub type AccessGate = std::sync::Arc<
+    dyn Fn(GateRequest) -> std::pin::Pin<Box<dyn std::future::Future<Output = GateVerdict> + Send>> + Send + Sync,
+>;
+
+/// [`forward_gated`]'s hooks.
+pub struct GateHooks {
+    pub gate: AccessGate,
+    /// Cookies (exact names, any case) K2 keeps from the site.
+    pub strip_cookies: &'static [&'static str],
+    /// Complete `\r\n` header lines added to every response, a `101`
+    /// included (dev mode's `X-K2-Mode`). Empty for none.
+    pub response_lines: Vec<u8>,
 }
 
 /// K2's own answer to a request on an App's connection: `(method,
@@ -495,12 +580,41 @@ fn refusal(status: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Split a `Cookie` value: the pairs named in `strip` come out as `(name,
+/// value)`, and the rest stays as the client sent it. Works on bytes: a site's
+/// non-UTF-8 cookie passes through unchanged.
+fn split_cookies(value: &[u8], strip: &[&str]) -> (Vec<u8>, Vec<(String, String)>) {
+    let mut kept: Vec<u8> = Vec::with_capacity(value.len());
+    let mut taken = Vec::new();
+    for part in value.split(|&b| b == b';') {
+        let part = part.trim_ascii();
+        if part.is_empty() {
+            continue;
+        }
+        let (name, val) = match part.iter().position(|&b| b == b'=') {
+            Some(i) => (part[..i].trim_ascii(), part[i + 1..].trim_ascii()),
+            None => (part, &part[..0]),
+        };
+        let name_s = String::from_utf8_lossy(name);
+        if strip.iter().any(|s| s.eq_ignore_ascii_case(&name_s)) {
+            taken.push((name_s.to_string(), String::from_utf8_lossy(val).to_string()));
+        } else {
+            if !kept.is_empty() {
+                kept.extend_from_slice(b"; ");
+            }
+            kept.extend_from_slice(part);
+        }
+    }
+    (kept, taken)
+}
+
 fn comma_tokens(v: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(v).split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect()
 }
 
-/// Rewrite one parsed request. `Err(status)` refuses it.
-fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &'static str> {
+/// Rewrite one parsed request, taking the `strip` cookies out of it.
+/// `Err(status)` refuses it.
+fn rewrite_request(req: &httparse::Request, rule: Rule, strip: &[&str]) -> Result<RequestHead, &'static str> {
     let method = req.method.ok_or("400 Bad Request")?;
     let path = req.path.ok_or("400 Bad Request")?;
     let minor = req.version.ok_or("400 Bad Request")?;
@@ -514,6 +628,10 @@ fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &
     let mut connection: Vec<String> = Vec::new();
     let mut has_upgrade = false;
     let mut host: Option<String> = None;
+    let mut taken_cookies = Vec::new();
+    let mut origin: Option<String> = None;
+    let mut accept: Option<String> = None;
+    let mut sec_fetch_dest: Option<String> = None;
     for h in req.headers.iter() {
         let norm = normalized(h.name);
         let underscored = h.name.contains('_');
@@ -527,12 +645,25 @@ fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &
             "content-length" => cl.push(String::from_utf8_lossy(h.value).trim().to_string()),
             "connection" => connection.extend(comma_tokens(h.value)),
             n if rule.drops(n) => {}
-            n => {
-                if n == "upgrade" {
-                    has_upgrade = true;
+            "cookie" if !strip.is_empty() => {
+                let (kept, taken) = split_cookies(h.value, strip);
+                taken_cookies.extend(taken);
+                if !kept.is_empty() {
+                    out.extend_from_slice(h.name.as_bytes());
+                    out.extend_from_slice(b": ");
+                    out.extend_from_slice(&kept);
+                    out.extend_from_slice(b"\r\n");
                 }
-                if n == "host" {
-                    host = Some(String::from_utf8_lossy(h.value).trim().to_string());
+            }
+            n => {
+                let text = || String::from_utf8_lossy(h.value).trim().to_string();
+                match n {
+                    "upgrade" => has_upgrade = true,
+                    "host" => host = Some(text()),
+                    "origin" => origin = Some(text()),
+                    "accept" => accept = Some(text()),
+                    "sec-fetch-dest" => sec_fetch_dest = Some(text()),
+                    _ => {}
                 }
                 out.extend_from_slice(h.name.as_bytes());
                 out.extend_from_slice(b": ");
@@ -585,10 +716,14 @@ fn rewrite_request(req: &httparse::Request, rule: Rule) -> Result<RequestHead, &
         method: method.to_string(),
         path: path.to_string(),
         host,
+        taken_cookies,
+        origin,
+        accept,
+        sec_fetch_dest,
     })
 }
 
-async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule) -> io::Result<ReadRequest> {
+async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule, strip: &[&str]) -> io::Result<ReadRequest> {
     loop {
         if !rd.data().is_empty() {
             let mut headers = [httparse::EMPTY_HEADER; MAX_REQ_HEADERS];
@@ -599,7 +734,7 @@ async fn read_request<R: AsyncRead + Unpin>(rd: &mut Reader<R>, rule: Rule) -> i
                     return Ok(ReadRequest::Refuse("431 Request Header Fields Too Large"));
                 }
                 Ok(httparse::Status::Complete(n)) => {
-                    let out = rewrite_request(&req, rule);
+                    let out = rewrite_request(&req, rule, strip);
                     rd.consume(n);
                     return Ok(match out {
                         Ok(h) => ReadRequest::Head(h),
@@ -666,11 +801,13 @@ async fn requests<R, W>(
     mut decided: watch::Receiver<Decision>,
     local: Option<&LocalAnswer>,
     gate: Option<&WriteGate>,
+    access: Option<&GateHooks>,
 ) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let strip: &[&str] = access.map_or(&[], |a| a.strip_cookies);
     let mut rule: Option<Rule> = None;
     let mut upgrades = 0u64;
     loop {
@@ -681,7 +818,7 @@ where
             return Ok(());
         }
         let r = *rule.get_or_insert_with(|| resolve(mode));
-        let head = match read_request(&mut rd, r).await? {
+        let head = match read_request(&mut rd, r, strip).await? {
             ReadRequest::Eof => {
                 let _ = up.shutdown().await;
                 return Ok(());
@@ -692,6 +829,14 @@ where
             }
             ReadRequest::Head(h) => h,
         };
+        // K2's gate on a published site: before anything of this request
+        // moves. Every request on the connection comes through here.
+        if let Some(access) = access {
+            if let GateVerdict::Answer(bytes) = (access.gate)(head.gate_request(r.visitor())).await {
+                shared.push(Expect::Own(bytes));
+                return Ok(());
+            }
+        }
         // G2 (0.46.6): a write over the visitor's limit is answered by K2
         // (429 + Retry-After) and never reaches the App. Only where K2
         // knows the visitor (`Rule::Set(Some(ip))`), never from a header.
@@ -793,7 +938,7 @@ fn parse_response(buf: &[u8], to_head: bool) -> io::Result<Option<ResponseHead>>
 
 /// Upstream → client: responses forwarded as they are, framed so a `101`
 /// to an upgrade request is seen.
-async fn responses<R, W>(mut rd: Reader<R>, mut cw: W, shared: &Shared, decide: watch::Sender<Decision>) -> io::Result<()>
+async fn responses<R, W>(mut rd: Reader<R>, mut cw: W, shared: &Shared, decide: watch::Sender<Decision>, lines: &[u8]) -> io::Result<()>
 where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
@@ -848,7 +993,16 @@ where
                 return Ok(());
             }
         };
-        cw.write_all(&rd.data()[..head.len]).await?;
+        // `lines` go on real answers and a `101`, not on interim `1xx`s.
+        if lines.is_empty() || ((100..200).contains(&head.status) && head.status != 101) {
+            cw.write_all(&rd.data()[..head.len]).await?;
+        } else {
+            // A parsed head ends in the blank line: the lines go before it.
+            let (fields, blank) = rd.data()[..head.len].split_at(head.len - 2);
+            cw.write_all(fields).await?;
+            cw.write_all(lines).await?;
+            cw.write_all(blank).await?;
+        }
         rd.consume(head.len);
         if head.status == 101 && upgrade {
             shared.pop();
@@ -906,6 +1060,15 @@ where
     forward_guarded(client, upstream, mode, local, None).await
 }
 
+/// [`forward`] with K2's gate in front of every request ([`GateHooks`]).
+pub async fn forward_gated<C, U>(client: C, upstream: U, mode: Mode, hooks: GateHooks) -> io::Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    run_forward(client, upstream, mode, None, None, Some(&hooks)).await
+}
+
 /// [`forward_with`] plus G2's write gate (`apps::guard::write_gate`).
 pub async fn forward_guarded<C, U>(
     client: C,
@@ -918,12 +1081,28 @@ where
     C: AsyncRead + AsyncWrite + Unpin,
     U: AsyncRead + AsyncWrite + Unpin,
 {
+    run_forward(client, upstream, mode, local, gate, None).await
+}
+
+async fn run_forward<C, U>(
+    client: C,
+    upstream: U,
+    mode: Mode,
+    local: Option<LocalAnswer>,
+    gate: Option<WriteGate>,
+    access: Option<&GateHooks>,
+) -> io::Result<()>
+where
+    C: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
     let (cr, cw) = tokio::io::split(client);
     let (ur, uw) = tokio::io::split(upstream);
     let shared = Shared { queue: Mutex::new(VecDeque::new()), pushed: Notify::new() };
     let (decide, decided) = watch::channel::<Decision>((0, false));
-    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref());
-    let resp = responses(Reader::new(ur), cw, &shared, decide);
+    let req = requests(Reader::new(cr), uw, mode, &shared, decided, local.as_ref(), gate.as_ref(), access);
+    let lines = access.map_or(&[][..], |a| a.response_lines.as_slice());
+    let resp = responses(Reader::new(ur), cw, &shared, decide, lines);
     tokio::pin!(req, resp);
     tokio::select! {
         r = &mut resp => r,
@@ -998,6 +1177,40 @@ pub async fn peek_head<S: AsyncRead + Unpin>(client: &mut S) -> Peeked {
         }
     };
     Peeked { bytes, plain }
+}
+
+/// A connection's first request, read for K2's gate before anything is dialed.
+#[derive(Debug)]
+pub struct PeekedGate {
+    /// Every byte read so far: replay them with [`Replay`] when the request
+    /// goes on to the site.
+    pub bytes: Vec<u8>,
+    /// How many of `bytes` are the head. What follows is body or a pipelined
+    /// request.
+    pub head_len: usize,
+    /// `None`: not a whole, well-formed HTTP/1.x request (nothing is dialed).
+    pub req: Option<GateRequest>,
+}
+
+/// [`peek_head`] for the gate: the same parser and the same refusals the
+/// forwarder uses, so the gate and the site's path can't read a request
+/// differently.
+pub async fn peek_gate_request<S: AsyncRead + Unpin>(client: &mut S, strip: &[&str], client_ip: Option<IpAddr>) -> PeekedGate {
+    let bytes = peek_head(client).await.bytes;
+    let parsed = {
+        let mut headers = [httparse::EMPTY_HEADER; MAX_REQ_HEADERS];
+        let mut req = httparse::Request::new(&mut headers);
+        match req.parse(&bytes) {
+            Ok(httparse::Status::Complete(n)) if n <= MAX_HEAD => {
+                rewrite_request(&req, Rule::Set(client_ip), strip).ok().map(|h| (n, h.gate_request(client_ip)))
+            }
+            _ => None,
+        }
+    };
+    match parsed {
+        Some((head_len, req)) => PeekedGate { bytes, head_len, req: Some(req) },
+        None => PeekedGate { bytes, head_len: 0, req: None },
+    }
 }
 
 /// A stream that first yields bytes already read from it ([`peek_head`]).

@@ -714,3 +714,177 @@ async fn g2_keys_on_the_proxy_address_never_on_a_client_header() {
         assert!(local.response().await.0.starts_with("HTTP/1.1 200"));
     }
 }
+
+// ── K2's gate on a published site (k2 publish visibility, 0.46.7) ────
+
+fn hooks(deny_path: &'static str, lines: &[u8]) -> (GateHooks, std::sync::Arc<Mutex<Vec<GateRequest>>>) {
+    let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let s2 = seen.clone();
+    let gate: AccessGate = std::sync::Arc::new(move |r: GateRequest| {
+        let s = s2.clone();
+        Box::pin(async move {
+            let deny = r.path == deny_path;
+            s.lock().unwrap().push(r);
+            if deny {
+                GateVerdict::Answer(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec())
+            } else {
+                GateVerdict::Allow
+            }
+        })
+    });
+    (GateHooks { gate, strip_cookies: &["__Host-k2_site", "__Host-k2_pin"], response_lines: lines.to_vec() }, seen)
+}
+
+/// Run `req_bytes` through `forward_gated` over a duplex pair; what the
+/// upstream read, and what the client read.
+async fn through_gate(req_bytes: &[u8], upstream_says: &[u8], hooks: GateHooks) -> (Vec<u8>, Vec<u8>) {
+    let (mut client, down) = tokio::io::duplex(64 * 1024);
+    let (mut up_far, up) = tokio::io::duplex(64 * 1024);
+    let f = tokio::spawn(forward_gated(down, up, Mode::Tunnel(Some(ip(CLIENT))), hooks));
+    client.write_all(req_bytes).await.unwrap();
+    let says = upstream_says.to_vec();
+    let far = tokio::spawn(async move {
+        let mut got = Vec::new();
+        let mut b = [0u8; 4096];
+        if !says.is_empty() {
+            let n = up_far.read(&mut b).await.unwrap();
+            got.extend_from_slice(&b[..n]);
+            up_far.write_all(&says).await.unwrap();
+        }
+        let _ = tokio::time::timeout(Duration::from_millis(200), async {
+            loop {
+                match up_far.read(&mut b).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => got.extend_from_slice(&b[..n]),
+                }
+            }
+        })
+        .await;
+        drop(up_far);
+        got
+    });
+    let mut out = Vec::new();
+    let mut b = [0u8; 4096];
+    let _ = tokio::time::timeout(Duration::from_millis(500), async {
+        loop {
+            match client.read(&mut b).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => out.extend_from_slice(&b[..n]),
+            }
+        }
+    })
+    .await;
+    drop(client);
+    let got = far.await.unwrap();
+    let _ = f.await;
+    (got, out)
+}
+
+#[test]
+fn split_cookies_takes_only_the_named_and_keeps_bytes() {
+    let (kept, taken) = split_cookies(b"a=1; __Host-k2_site=abc;b=\xff ;  __HOST-K2_PIN=z", &["__Host-k2_site", "__Host-k2_pin"]);
+    assert_eq!(kept, b"a=1; b=\xff");
+    assert_eq!(taken.len(), 2);
+    assert_eq!(taken[0], ("__Host-k2_site".to_string(), "abc".to_string()));
+    assert_eq!(taken[1].1, "z", "any case: browsers treat the prefix so");
+    let (kept, taken) = split_cookies(b"__Host-k2_site=abc", &["__Host-k2_site"]);
+    assert!(kept.is_empty() && taken.len() == 1);
+    let (kept, taken) = split_cookies(b"__Host-k2_sitex=1; x__Host-k2_site=2", &["__Host-k2_site"]);
+    assert_eq!(kept, b"__Host-k2_sitex=1; x__Host-k2_site=2", "exact names only");
+    assert!(taken.is_empty());
+}
+
+#[tokio::test]
+async fn gate_takes_k2s_cookies_out_of_what_the_site_gets() {
+    let (h, seen) = hooks("/nope", b"");
+    let (got, _) = through_gate(
+        b"GET /x HTTP/1.1\r\nHost: a\r\nCookie: t=1; __Host-k2_site=sec\r\nCookie: __Host-k2_pin=sec2\r\nOrigin: https://a\r\nSec-Fetch-Dest: document\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        h,
+    )
+    .await;
+    let got = String::from_utf8(got).unwrap();
+    assert!(got.contains("Cookie: t=1\r\n"), "{got}");
+    assert!(!got.contains("k2_site") && !got.contains("k2_pin") && !got.contains("sec"), "{got}");
+    assert_eq!(got.matches("Cookie:").count(), 1, "an all-K2 Cookie line is gone: {got}");
+    let r = seen.lock().unwrap()[0].clone();
+    assert_eq!(r.cookies, vec![("__Host-k2_site".to_string(), "sec".to_string()), ("__Host-k2_pin".to_string(), "sec2".to_string())]);
+    assert_eq!(r.origin.as_deref(), Some("https://a"));
+    assert!(r.is_document);
+    assert_eq!(r.client_ip, Some(ip(CLIENT)));
+}
+
+#[tokio::test]
+async fn gate_answer_never_reaches_the_site_at_any_position() {
+    let (h, _) = hooks("/deny", b"");
+    let (got, out) = through_gate(
+        b"GET /ok HTTP/1.1\r\nHost: a\r\n\r\nGET /deny HTTP/1.1\r\nHost: a\r\n\r\nGET /after HTTP/1.1\r\nHost: a\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+        h,
+    )
+    .await;
+    let got = String::from_utf8(got).unwrap();
+    assert!(got.contains("/ok") && !got.contains("/deny") && !got.contains("/after"), "{got}");
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.find("200 OK").unwrap() < out.find("401").unwrap(), "in order: {out}");
+}
+
+#[tokio::test]
+async fn gate_denies_an_upgrade_and_a_body() {
+    let (h, _) = hooks("/hmr", b"");
+    let (got, out) = through_gate(b"GET /hmr HTTP/1.1\r\nHost: a\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", b"", h).await;
+    assert!(got.is_empty(), "{got:?}");
+    assert!(String::from_utf8(out).unwrap().contains("401"));
+    let (h, _) = hooks("/api", b"");
+    let (got, _) = through_gate(b"POST /api HTTP/1.1\r\nHost: a\r\nContent-Length: 5\r\n\r\nhello", b"", h).await;
+    assert!(got.is_empty(), "no byte of a refused body moves: {got:?}");
+}
+
+#[tokio::test]
+async fn gate_response_lines_go_on_every_answer_and_a_101_not_interim() {
+    let (h, _) = hooks("/nope", b"X-K2-Mode: dev\r\n");
+    let (_, out) = through_gate(
+        b"GET /a HTTP/1.1\r\nHost: a\r\n\r\n",
+        b"HTTP/1.1 103 Early Hints\r\nLink: x\r\n\r\nHTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\nno",
+        h,
+    )
+    .await;
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(out, "HTTP/1.1 103 Early Hints\r\nLink: x\r\n\r\nHTTP/1.1 404 Not Found\r\nContent-Length: 2\r\nX-K2-Mode: dev\r\n\r\nno");
+
+    let (h, _) = hooks("/nope", b"X-K2-Mode: dev\r\n");
+    let (_, out) = through_gate(
+        b"GET /ws HTTP/1.1\r\nHost: a\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+        b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\nraw-bytes",
+        h,
+    )
+    .await;
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(out, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nX-K2-Mode: dev\r\n\r\nraw-bytes", "raw bytes after a 101 are untouched");
+}
+
+#[tokio::test]
+async fn peek_for_the_gate_reads_the_same_way_the_forwarder_does() {
+    let strip: &[&str] = &["__Host-k2_site"];
+    let (mut c, mut s) = tokio::io::duplex(4096);
+    c.write_all(b"POST /p?q=1 HTTP/1.1\r\nHost: h\r\nCookie: __Host-k2_site=v\r\nContent-Length: 3\r\n\r\nabc").await.unwrap();
+    let p = peek_gate_request(&mut s, strip, Some(ip(CLIENT))).await;
+    let r = p.req.expect("a whole request");
+    assert_eq!(r.method, "POST");
+    assert_eq!(r.path, "/p?q=1");
+    assert_eq!(r.content_length, Some(3));
+    assert_eq!(r.cookies[0].1, "v");
+    assert_eq!(&p.bytes[p.head_len..], b"abc");
+
+    // What the forwarder refuses, the gate refuses: never dialed.
+    for bad in [
+        &b"GET / HTTP/1.1\r\nHost: h\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n"[..],
+        &b"CONNECT a:1 HTTP/1.1\r\nHost: h\r\n\r\n"[..],
+        &b"\x00\x01garbage\r\n\r\n"[..],
+    ] {
+        let (mut c, mut s) = tokio::io::duplex(4096);
+        c.write_all(bad).await.unwrap();
+        drop(c);
+        assert!(peek_gate_request(&mut s, strip, None).await.req.is_none(), "{bad:?}");
+    }
+}

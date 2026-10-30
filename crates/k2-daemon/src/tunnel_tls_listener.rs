@@ -599,7 +599,7 @@ pub fn register_ensure_hook() {
 /// Reads the CURRENT [`ServerConfig`] from `shared_config` on every accept
 /// so a renewal swap is picked up by the next connection with no listener
 /// restart.
-async fn accept_loop(
+pub(crate) async fn accept_loop(
     listener: Arc<TcpListener>,
     shared_config: Arc<ArcSwap<ServerConfig>>,
     http_port: u16,
@@ -915,16 +915,21 @@ where
             _ => break,
         }
     }
-    let resp = format!(
+    let _ = tls.write_all(&unreachable_502_bytes()).await;
+    let _ = tls.flush().await;
+    let _ = tls.shutdown().await;
+}
+
+/// K2's answer when a site's port doesn't take the connection.
+pub(crate) fn unreachable_502_bytes() -> Vec<u8> {
+    format!(
         "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\n\
          Cache-Control: no-store\r\nContent-Length: {}\r\n{}Connection: close\r\n\r\n{}",
         UNREACHABLE_BODY.len(),
         k2_core::frame_policy::CONNECT_HEADER_LINES,
         UNREACHABLE_BODY
-    );
-    let _ = tls.write_all(resp.as_bytes()).await;
-    let _ = tls.flush().await;
-    let _ = tls.shutdown().await;
+    )
+    .into_bytes()
 }
 
 /// A non-empty SNI that is neither `k2.dev` nor under it (CD-A12).
@@ -1037,82 +1042,30 @@ async fn serve_one(
             res
         }
         Route::Internal(target) => {
-            // App runtime (AR4): a deploy moves an App's backend by the
-            // daemon-local override, never by a control-plane write. Only a
-            // label the control plane already routes here can be overridden.
-            let label = subdomains::current().nested_label(&sni);
-            if let Some((label, be)) =
-                label.and_then(|l| crate::apps::router::live(&l).map(|be| (l, be)))
-            {
-                log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
-                // The one App path (vs-live CD-A8), shared with the App TLS
-                // door: client-IP rewrite, K2's own pairing link-file
-                // answers (App phone pairing V5), then the splice.
-                let mode = crate::client_ip::Mode::Tunnel(client_ip);
-                match crate::apps::router::serve_tls_app(&mut tls, be, &label, mode).await {
-                    crate::apps::router::TlsAppOutcome::Answered => return Ok(()),
-                    crate::apps::router::TlsAppOutcome::Spliced => {}
-                    crate::apps::router::TlsAppOutcome::Failed { why, .. } => {
-                        log_debug!("[daemon/e2e] {sni}: {why} — answering 502");
-                        write_unreachable_502(&mut tls).await;
-                        return Ok(());
+            // `k2 publish` visibility (0.46.7): the gate decides before
+            // anything is dialed. A label it can't name is gated under its
+            // whole host, which has no row: private.
+            let site_label = subdomains::current().nested_label(&sni).unwrap_or_else(|| sni.clone());
+            let (site, changes) = crate::site_gate::classify(&site_label, &target).await;
+            match site {
+                crate::site_gate::Site::Gated(g) => {
+                    let res = crate::site_gate::serve(&mut tls, &sni, &g, client_ip, UPSTREAM_CONNECT_TIMEOUT).await;
+                    let _ = tls.shutdown().await;
+                    res
+                }
+                crate::site_gate::Site::Open => serve_nested_open(&mut tls, &sni, target, client_ip).await,
+                // Public: today's path, cut only if the site stops being public.
+                crate::site_gate::Site::Public { label } => {
+                    tokio::select! {
+                        r = serve_nested_open(&mut tls, &sni, target, client_ip) => r,
+                        _ = crate::site_gate::until_not_public(label, changes) => {
+                            log_debug!("[daemon/e2e] {sni} is no longer public: cutting its open connection");
+                            let _ = tls.shutdown().await;
+                            Ok(())
+                        }
                     }
                 }
-                let _ = tls.shutdown().await;
-                return Ok(());
             }
-            // Configured nested subdomain → proxy the decrypted stream to the
-            // user's chosen internal endpoint on this same machine.
-            // H2: bound the upstream dial. `localhost` targets try 127.0.0.1
-            // then ::1 (never the resolver alone) — an IPv4-only app on a box
-            // whose `localhost` resolves to `::1` was unreachable before.
-            let mut upstream =
-                match crate::upstream_dial::dial_target(&target, UPSTREAM_CONNECT_TIMEOUT).await {
-                    Ok(s) => s,
-                    Err(fail) => {
-                        // Answer the visitor with a 502, not a dropped
-                        // connection (which the edge surfaced as a 404).
-                        log_debug!(
-                            "[daemon/e2e] {sni}: upstream {fail} — answering 502"
-                        );
-                        write_unreachable_502(&mut tls).await;
-                        return Ok(());
-                    }
-                };
-            // 0.46.3: a target on this daemon's own main port (any alias)
-            // would make internet traffic look local. Refuse it before a
-            // byte is forwarded, and mark every other splice so the main
-            // listener still serves it as tunnel ingress if it lands there.
-            if let Err(why) = crate::splice_guard::refuse_self_dial(&upstream) {
-                log_debug!("[daemon/e2e] {sni}: refusing target {target}: {why} — answering 502");
-                drop(upstream);
-                write_unreachable_502(&mut tls).await;
-                return Ok(());
-            }
-            let _splice_mark = crate::splice_guard::mark(&upstream);
-            log_debug!("[daemon/e2e] routing {sni} → internal endpoint {target}");
-            // A nested service stays a raw splice (any protocol), as before
-            // 0.46.3, unless its label opted in to the client-IP rewrite
-            // (`k2 publish client-ip <label> on`). The hop lets an App front
-            // port on the other end keep the address either way.
-            let _hop = crate::client_ip::register_hop(&upstream, client_ip);
-            let opted_in = subdomains::current()
-                .nested_label(&sni)
-                .is_some_and(|label| k2_core::tunnel::client_ip_labels::enabled(&label));
-            let res = if opted_in {
-                let mode = crate::client_ip::Mode::Tunnel(client_ip);
-                crate::client_ip::forward(&mut tls, &mut upstream, mode)
-                    .await
-                    .map_err(|e| format!("splice TLS↔internal {target}: {e}"))
-            } else {
-                tokio::io::copy_bidirectional(&mut tls, &mut upstream)
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| format!("splice TLS↔internal {target}: {e}"))
-            };
-            // H6: clean close_notify after the splice on the nested path too.
-            let _ = tls.shutdown().await;
-            res
         }
         Route::UnknownNested => {
             // A nested label with no configured target. Reply 404 + close —
@@ -1134,6 +1087,92 @@ async fn serve_one(
             Ok(())
         }
     }
+}
+
+/// A nested connection the gate has no say over: an App's path, or the raw
+/// splice (or the client-IP rewrite) to the label's target, as before 0.46.7.
+async fn serve_nested_open<S>(tls: &mut S, sni: &str, target: String, client_ip: Option<std::net::IpAddr>) -> Result<(), String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    use k2_core::tunnel::subdomains;
+    use tokio::io::AsyncWriteExt;
+    // App runtime (AR4): a deploy moves an App's backend by the
+    // daemon-local override, never by a control-plane write. Only a
+    // label the control plane already routes here can be overridden.
+    let label = subdomains::current().nested_label(sni);
+    if let Some((label, be)) =
+        label.and_then(|l| crate::apps::router::live(&l).map(|be| (l, be)))
+    {
+        log_debug!("[daemon/e2e] routing {sni} → App backend :{}", be.port);
+        // The one App path (vs-live CD-A8), shared with the App TLS
+        // door: client-IP rewrite, K2's own pairing link-file
+        // answers (App phone pairing V5), then the splice.
+        let mode = crate::client_ip::Mode::Tunnel(client_ip);
+        match crate::apps::router::serve_tls_app(&mut *tls, be, &label, mode).await {
+            crate::apps::router::TlsAppOutcome::Answered => return Ok(()),
+            crate::apps::router::TlsAppOutcome::Spliced => {}
+            crate::apps::router::TlsAppOutcome::Failed { why, .. } => {
+                log_debug!("[daemon/e2e] {sni}: {why} — answering 502");
+                write_unreachable_502(&mut *tls).await;
+                return Ok(());
+            }
+        }
+        let _ = tls.shutdown().await;
+        return Ok(());
+    }
+    // Configured nested subdomain → proxy the decrypted stream to the
+    // user's chosen internal endpoint on this same machine.
+    // H2: bound the upstream dial. `localhost` targets try 127.0.0.1
+    // then ::1 (never the resolver alone) — an IPv4-only app on a box
+    // whose `localhost` resolves to `::1` was unreachable before.
+    let mut upstream =
+        match crate::upstream_dial::dial_target(&target, UPSTREAM_CONNECT_TIMEOUT).await {
+            Ok(s) => s,
+            Err(fail) => {
+                // Answer the visitor with a 502, not a dropped
+                // connection (which the edge surfaced as a 404).
+                log_debug!(
+                    "[daemon/e2e] {sni}: upstream {fail} — answering 502"
+                );
+                write_unreachable_502(&mut *tls).await;
+                return Ok(());
+            }
+        };
+    // 0.46.3: a target on this daemon's own main port (any alias)
+    // would make internet traffic look local. Refuse it before a
+    // byte is forwarded, and mark every other splice so the main
+    // listener still serves it as tunnel ingress if it lands there.
+    if let Err(why) = crate::splice_guard::refuse_self_dial(&upstream) {
+        log_debug!("[daemon/e2e] {sni}: refusing target {target}: {why} — answering 502");
+        drop(upstream);
+        write_unreachable_502(&mut *tls).await;
+        return Ok(());
+    }
+    let _splice_mark = crate::splice_guard::mark(&upstream);
+    log_debug!("[daemon/e2e] routing {sni} → internal endpoint {target}");
+    // A nested service stays a raw splice (any protocol), as before
+    // 0.46.3, unless its label opted in to the client-IP rewrite
+    // (`k2 publish client-ip <label> on`). The hop lets an App front
+    // port on the other end keep the address either way.
+    let _hop = crate::client_ip::register_hop(&upstream, client_ip);
+    let opted_in = subdomains::current()
+        .nested_label(sni)
+        .is_some_and(|label| k2_core::tunnel::client_ip_labels::enabled(&label));
+    let res = if opted_in {
+        let mode = crate::client_ip::Mode::Tunnel(client_ip);
+        crate::client_ip::forward(&mut *tls, &mut upstream, mode)
+            .await
+            .map_err(|e| format!("splice TLS↔internal {target}: {e}"))
+    } else {
+        tokio::io::copy_bidirectional(&mut *tls, &mut upstream)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("splice TLS↔internal {target}: {e}"))
+    };
+    // H6: clean close_notify after the splice on the nested path too.
+    let _ = tls.shutdown().await;
+    res
 }
 
 #[cfg(test)]
@@ -1378,6 +1417,17 @@ mod tests {
         1
     }
 
+    /// A nested label on these tests' routing map, public: they check what the
+    /// listener does for a site anyone may open (the gate has its own tests in
+    /// `site_gate`; a label with no row is private).
+    fn mark_public(labels: &[&str]) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        for l in labels {
+            k2_core::site_visibility::set_public(&conn, l, "test", "test").expect("mark public");
+        }
+    }
+
     /// SNI Host routing (PRD §7): the primary `<sub>.k2.dev` reaches the
     /// daemon (via the tunnel-ingress listener); a CONFIGURED nested label reaches its internal endpoint;
     /// an UNKNOWN nested label is rejected with a 404 (never the daemon).
@@ -1405,6 +1455,7 @@ mod tests {
         // `staging → internal endpoint`. (`ghost` is intentionally absent.)
         let mut targets = std::collections::HashMap::new();
         targets.insert("staging".to_string(), format!("127.0.0.1:{internal_port}"));
+        mark_public(&["staging"]);
         subdomains::store(SubdomainMap {
             primary: "rosson".to_string(),
             targets,
@@ -1554,6 +1605,7 @@ mod tests {
         let mut targets = std::collections::HashMap::new();
         targets.insert("web".to_string(), format!("localhost:{app_port}"));
         targets.insert("down".to_string(), format!("localhost:{dead_port}"));
+        mark_public(&["web", "down"]);
         subdomains::store(SubdomainMap {
             primary: "example".to_string(),
             targets,
@@ -1663,6 +1715,8 @@ mod tests {
             targets.insert(label.to_string(), t.clone());
         }
         targets.insert("app".to_string(), format!("localhost:{app_port}"));
+        mark_public(&aliases.iter().map(|(l, _, _)| *l).collect::<Vec<_>>());
+        mark_public(&["app"]);
         subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
 
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
@@ -1753,6 +1807,7 @@ mod tests {
         let closed = k2_core::test_env::ClosedPort::dual();
         let mut targets = std::collections::HashMap::new();
         targets.insert("ovr".to_string(), format!("localhost:{}", closed.port()));
+        mark_public(&["ovr"]);
         subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
 
         let _self_signed = k2_core::test_env::EnvVar::set("K2_E2E_SELF_SIGNED", "1");
@@ -1890,6 +1945,7 @@ mod tests {
         targets.insert("shop".to_string(), format!("localhost:{}", closed.port()));
         targets.insert("svc".to_string(), format!("127.0.0.1:{svc}"));
         targets.insert("rawapp".to_string(), format!("localhost:{}", closed.port()));
+        mark_public(&["shop", "svc", "rawapp"]);
         subdomains::store(SubdomainMap { primary: "example".to_string(), targets });
         crate::apps::router::switch("shop", app);
         // `host.clientIp: false`: the escape hatch.

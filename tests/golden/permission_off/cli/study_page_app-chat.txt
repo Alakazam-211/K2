@@ -1,7 +1,10 @@
 $ k2 study app-chat
 exit: 0
 --- stdout
-k2 study app-chat — Chat, voice and calls in your App (Sew for Apps)
+k2 study app-chat — Chat, voice and calls in your App (Chat / Voice Hosting)
+
+Chat / Voice Hosting is this box's chat and voice core (core id sew), powered by
+Sew. k2 hostchat manages it; k2 chat is how agents use it.
 
 ONE IDENTITY. Your App user IS their chat user: K2 makes their Sew member
 k2:principal:<principalId>. No chat sign-up, no link step. Store principal
@@ -9,12 +12,12 @@ ids, never emails. Their name and picture in chat are K2's (profile display
 name, else full name, else username); never edit them in Sew.
 
 GIVE ONE APP USER CHAT (in order; <app> = your App's id or name, k2 app list):
- 1. Sew is on in K2 mode: k2 hostchat status shows "identity: k2". If Sew
-    isn't installed, the owner runs k2 hostchat enable (never --identity
-    standalone: it can't change later).
+ 1. Chat / Voice Hosting is on in K2 mode: k2 hostchat status shows
+    "identity: k2". If it isn't installed, the owner runs k2 hostchat enable
+    (never --identity standalone: it can't change later).
  2. A Space for your App. The owner (or an admin) gives your workspace
-    "Manage Sew" once: k2 agent access set <your workspace> chat_manage on.
-    Then you run:
+    "Manage Chat / Voice Hosting" once:
+    k2 agent access set <your workspace> chat_manage on. Then you run:
       k2 chat space create <slug> --name "<Name>"   (the box owner owns it;
                           you get manage access; the answer shows space.id)
       k2 hostchat app-space bind <app> <space-id>
@@ -47,8 +50,8 @@ GIVE ONE APP USER CHAT (in order; <app> = your App's id or name, k2 app list):
 MANIFEST. requires {sew: ">=0.3.1"}, boxServices sew-api and sew-signal,
 caps chat:read chat:post (K2 gates on Sew's flags, never on this number).
 Your next deploy is held until the owner approves them (k2 app approvals),
-unless the owner ticked your workspace's Sew core (k2 app access <ws>
---core sew=on): then the chat caps go through at once.
+unless the owner ticked your workspace's Chat / Voice Hosting core
+(k2 app access <ws> --core sew=on): then the chat caps go through at once.
 
 CEILING. A person's pass caps = role chat caps ∩ your manifest's (as
 approved), chat:read added. It never grants: Sew's roles decide inside a Space. A
@@ -88,8 +91,9 @@ them). added = listed users in the channel now (new or already).
 notAdded reasons: no_chat or guest (give chat as a member),
 not_provisioned (repeat the same call in a few seconds), not_found (not
 your user). skipped = banned in the Space. Add the cap chat:channels to
-the manifest: the owner approves it once (k2 app approvals; the Sew core
-doesn't cover it; until then 403 cap_not_granted). No requires change: K2
+the manifest: the owner approves it once (k2 app approvals; the
+Chat / Voice Hosting core doesn't cover it; until then 403
+cap_not_granted). No requires change: K2
 checks Sew's app_channel_create flag itself. A bad slug or name is 400
 usage. Chat the owner gave counts; no guests-chat grant is needed.
 

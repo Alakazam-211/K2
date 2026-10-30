@@ -4,10 +4,10 @@
 > body: {"purge":true}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"person_only","hint":"a person does this, never an agent or a K2 terminal (Manage Sew does not cover it): Settings → Sew, or k2 hostchat from a terminal outside K2"},"ok":false}
+{"error":{"code":"person_only","hint":"a person does this, never an agent or a K2 terminal (Manage Chat / Voice Hosting does not cover it): Settings → Chat / Voice Hosting, or k2 hostchat from a terminal outside K2"},"ok":false}
 ## cell socket (same passport)
 > POST /cli/sew/server/uninstall
 > body: {"purge":true}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"person_only","hint":"a person does this, never an agent or a K2 terminal (Manage Sew does not cover it): Settings → Sew, or k2 hostchat from a terminal outside K2"},"ok":false}
+{"error":{"code":"person_only","hint":"a person does this, never an agent or a K2 terminal (Manage Chat / Voice Hosting does not cover it): Settings → Chat / Voice Hosting, or k2 hostchat from a terminal outside K2"},"ok":false}

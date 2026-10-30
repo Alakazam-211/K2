@@ -107,14 +107,15 @@ SEAL KEY (K-M3: sessions that survive restarts)
   A plain uninstall keeps it for a reinstall (like the data); --purge
   destroys it.
 
-REQUIRES (Apps on Sew)
+REQUIRES (Apps on Chat / Voice Hosting)
   "requires": {"sew": ">=0.3.0", "voice": true}
   sew: a version range like requires.k2 (>=0.3.0, >=0.3.0 <0.5.0);
   voice: Sew's media engine must be on. k2 app validate checks the form.
   Install and deploy check this box (k2 hostchat status) and refuse with
   requires_unmet, naming what's missing and the owner's fix (k2 hostchat
   enable --voice, k2 hostchat upgrade, k2 hostchat media install). K2
-  never turns Sew or voice on by itself. Rollbacks and restarts don't check.
+  never turns chat or voice hosting on by itself. Rollbacks and restarts
+  don't check.
 
 REQUIRES (Postgres, 0.46.4)
   "requires": {"k2": ">=0.46.4", "postgres": ">=16 <18"}
@@ -214,8 +215,9 @@ WHO MAY
 
 CORES (what your Apps may use)
   The owner ticks cores for you: Database, Files and rooms, Thread (Mail
-  and Sew take effect when App mail and Sew for Apps land). A deploy or
-  first install whose caps all sit in ticked cores goes on at once; any
+  and Chat / Voice Hosting take effect when App mail and chat for Apps
+  land). A deploy or first install whose caps all sit in ticked cores goes
+  on at once; any
   other cap waits for the owner (exit 2), and the hold names the core to
   tick. Switch 2 never adds a core. heartbeats:write and
   files:agentconfig reach you yourself: always the owner's, in person.

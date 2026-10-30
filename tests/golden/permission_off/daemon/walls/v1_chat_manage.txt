@@ -4,10 +4,10 @@
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"chat_manage_off","hint":"\"Manage Sew\" is off for this workspace: ask your owner or an admin to run k2 agent access set <workspace> chat_manage on"},"ok":false}
+{"error":{"code":"chat_manage_off","hint":"\"Manage Chat / Voice Hosting\" is off for this workspace: ask your owner or an admin to run k2 agent access set <workspace> chat_manage on"},"ok":false}
 ## cell socket (same passport)
 > POST /cli/sew/server/disable
 > body: {}
 HTTP/1.1 403 Forbidden
 content-type: application/json
-{"error":{"code":"chat_manage_off","hint":"\"Manage Sew\" is off for this workspace: ask your owner or an admin to run k2 agent access set <workspace> chat_manage on"},"ok":false}
+{"error":{"code":"chat_manage_off","hint":"\"Manage Chat / Voice Hosting\" is off for this workspace: ask your owner or an admin to run k2 agent access set <workspace> chat_manage on"},"ok":false}

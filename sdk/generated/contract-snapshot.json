@@ -2,7 +2,7 @@
   "generatedBy": "contract-gen",
   "regen": "cargo run -p k2-core --bin contract-gen",
   "catalogVersion": 42,
-  "catalogSha256": "cf0a7885e581fdd517270d4f9c1979833a4caa557807cc55ce9879113a725a5c",
+  "catalogSha256": "9c2b711a2e192698f6051c634528219e69833ec0ab6374dbc6822536c2209d0f",
   "runtimeSha256": "32004c2ec0a00b065688911582e95f49bcdb67a353b328cd3e0e9c608eaa870a",
   "files": {
     "cli/k2": "4d91d3ab5631e035f4ab1d9fca912399ff5033d2c1a018c0e78529bc889faab2",
@@ -11,10 +11,10 @@
     "cli/k2#study live": "9d8f1fbe777a2686adb42d1a3a762a0c9457d1da6236222db7e3d0aa0084f572",
     "cli/k2#zen guide libs": "ea77dde3c861537256ffc9b08b63531755f98ed42296077269edf6cde4a12d93",
     "crates/k2-core/src/app_surface.rs": "7aba3b860317081eb46df369ad11d1773ad5ec8700b16cfce5015409fb9d9477",
-    "sdk/generated/k2-frame.js": "4c7eb15d7dd55590cacfbf957afe6c96c311c42750fdb743c7963539f83bc6e3",
-    "sdk/generated/k2.d.ts": "c1980ff670308ce02290de7bba4a6ab3ac2f0307dab39be949f518532e6933f7",
+    "sdk/generated/k2-frame.js": "9f3d739d228deb6de914618ec40d56117070c538fa368d8dfb5a637a1481545d",
+    "sdk/generated/k2.d.ts": "14c35e69b8a4e9650062bd729037606b0ea42416dbe2dd0175000f9ed25fbbe0",
     "sdk/generated/phone-verbs.json": "c321ec705b51548cb50747513580ef9c54084e5a9c11af98bc9fee1a941bea7f",
-    "sdk/server/src/generated/verbs.ts": "ecddbd1f3380677839345ea7c2cb4cf019e215750c35ea3b74a30208d40968cb",
+    "sdk/server/src/generated/verbs.ts": "a1ee871a6dd3a6062176967285c802176a76799f7a7f6fecc8c149c09e61af7c",
     "src/renderer/lib/k2-caps.generated.ts": "70e2bb2b19c3614b7f58c6d4c4cb2abc1e1b402582953745172f50a021fa6df1",
     "src/renderer/lib/zen/zen-verbs.generated.ts": "d3c32180ade87735246ddf00a8773415b9d4462483d313dabff6ed966c596146"
   }

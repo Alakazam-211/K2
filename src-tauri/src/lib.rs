@@ -1175,7 +1175,17 @@ pub fn run() {
     // No `.manage()` registration needed; the filesystem watcher
     // commands read the static directly.
 
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Windows: one K2 app per person. Starting K2 again (Start menu,
+    // taskbar, a k2:// link) brings the running window back instead of
+    // a second app beside a hidden one. Registered first, as the plugin
+    // asks; its `deep-link` feature hands a k2:// launch to the running
+    // app. macOS (LaunchServices) and Linux are unchanged.
+    #[cfg(windows)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        tray::show_main_window(app);
+    }));
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_deep_link::init())

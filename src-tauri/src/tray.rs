@@ -9,6 +9,8 @@
 //! actually needs to know from the menubar):
 //!
 //! ```text
+//!   Show K2                                  (brings the window back)
+//!   ─────────────────────────────────────
 //!   Server Status: Running  (PID 1234, up 2h 14m)
 //!   Ngrok URL: https://abc.ngrok.app         (click → copy to clipboard)
 //!   ─────────────────────────────────────
@@ -88,6 +90,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 /// Using `&'static str` constants rather than match-arms on dynamic
 /// IDs so typos are caught at compile time.
 mod ids {
+    pub const SHOW: &str = "k2so.tray.show";
     pub const COPY_TUNNEL_URL: &str = "k2so.tray.copy-tunnel-url";
     pub const QUIT: &str = "k2so.tray.quit";
 }
@@ -133,13 +136,21 @@ pub fn install(app: &AppHandle<Wry>) -> Result<(), String> {
     let icon = Image::from_bytes(TRAY_ICON_PNG)
         .map_err(|e| format!("decode tray icon: {e}"))?;
 
+    // Windows: a left click on a tray icon opens the app and the right
+    // click shows the menu (the Windows convention). Linux keeps the
+    // menu on any click.
     let _tray = TrayIconBuilder::with_id("k2so-main")
         .icon(icon)
         .icon_as_template(true)
         .tooltip("K2")
         .menu(&menu)
-        .show_menu_on_left_click(true)
+        .show_menu_on_left_click(!cfg!(windows))
         .on_menu_event(move |app, event| handle_menu_event(app, event.id().as_ref()))
+        .on_tray_icon_event(|tray, event| {
+            if cfg!(windows) && opens_window(&event) {
+                show_main_window(tray.app_handle());
+            }
+        })
         .build(app)
         .map_err(|e| format!("build tray icon: {e}"))?;
 
@@ -247,8 +258,37 @@ pub fn refresh(app: &AppHandle<Wry>) {
     }
 }
 
+/// Bring the main window back: closing it with "keep running" on only
+/// hides it, so the tray (and a second launch, on Windows) is the way
+/// back.
+pub fn show_main_window(app: &AppHandle<Wry>) {
+    use tauri::Manager;
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
+
+/// A left-button click released on the tray icon (Windows opens the app
+/// on that, as other tray apps do).
+fn opens_window(event: &tauri::tray::TrayIconEvent) -> bool {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+    matches!(
+        event,
+        TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }
+    )
+}
+
 fn build_menu(app: &AppHandle<Wry>) -> Result<Menu<Wry>, String> {
     let menu = Menu::new(app).map_err(|e| format!("menu new: {e}"))?;
+
+    // 0. Show K2 — the way back to a window that "keep running" hid.
+    let show = MenuItem::with_id(app, ids::SHOW, "Show K2", true, None::<&str>)
+        .map_err(|e| format!("show: {e}"))?;
+    menu.append(&show).map_err(|e| format!("show: {e}"))?;
+    let sep0 = PredefinedMenuItem::separator(app).map_err(|e| format!("sep0: {e}"))?;
+    menu.append(&sep0).map_err(|e| format!("sep0: {e}"))?;
 
     // 1. Server Status — enabled so macOS renders it in normal white
     // (disabled items render dimmed gray). Uses IconMenuItem so the
@@ -491,6 +531,7 @@ fn format_uptime(secs: u64) -> String {
 
 fn handle_menu_event(app: &AppHandle<Wry>, id: &str) {
     match id {
+        ids::SHOW => show_main_window(app),
         ids::COPY_TUNNEL_URL => {
             // Copy the ngrok URL captured during the last menu build.
             // Using the clipboard plugin the app already registers

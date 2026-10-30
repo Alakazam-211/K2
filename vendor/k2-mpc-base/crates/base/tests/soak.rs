@@ -92,6 +92,10 @@ struct SoakHost {
     now: AtomicU64,
     /// Every runtime check's mismatch the kit reported (v0.9.7): any fails the run.
     mismatches: std::sync::Mutex<Vec<String>>,
+    /// Outside saves' audit rows (v0.9.7.2): text a named author may have lost, and text with
+    /// nobody to tell (`kit:external`, `kit:import`).
+    removal_rows_named: AtomicU64,
+    removal_rows_kit: AtomicU64,
 }
 
 impl Host for SoakHost {
@@ -102,6 +106,14 @@ impl Host for SoakHost {
         self.now.load(Ordering::SeqCst)
     }
     fn on_event(&self, ev: &AuditEvent) {
+        if let AuditEvent::OutsideOverride { by: Some(by), .. } = ev {
+            let row = if by.starts_with("kit:") {
+                &self.removal_rows_kit
+            } else {
+                &self.removal_rows_named
+            };
+            row.fetch_add(1, Ordering::SeqCst);
+        }
         if matches!(
             ev,
             AuditEvent::EditPathMismatch { .. }
@@ -171,6 +183,14 @@ struct Counts {
     /// Outside saves taken in, and older kit writes saved back and suppressed as echoes.
     outside_saves: u64,
     echoes: u64,
+    /// Removal notes (v0.9.7.2) delivered: by a verb's `Notes`, by `take_notes` before a restart
+    /// (a restart loses waiting notes by design), by `take_notes` at the end; roll-ups among them.
+    notes_by_verb: u64,
+    notes_before_restart: u64,
+    notes_at_end: u64,
+    note_rollups: u64,
+    note_places: u64,
+    note_bytes: u64,
     /// Undo and redo calls whose mismatch with the line oracle was the known D1 gap
     /// (tolerated: see `Soak::d1`), and the lines they left written twice.
     d1_tolerated: u64,
@@ -353,12 +373,12 @@ struct Soak {
     /// The last calls, for a failure's dump: (op number, version after, what).
     last_ops: std::collections::VecDeque<(u64, u64, String)>,
     /// The undo or redo being audited had a region that is not whole lines (the known D1
-    /// gap, amendment pending; v0.9.5). Every soak call writes whole lines, so such a region
+    /// gap of v0.9.5 and v0.9.6). Every soak call writes whole lines, so such a region
     /// means the change's character diff reused characters already there, possibly another
-    /// participant's: undoing it can change text someone else wrote. Only then is the undo
-    /// promise's mismatch tolerated: counted and printed with its call number. The mode is
-    /// `SOAK_KNOWN_D1` (default 1 in v0.9.5; 0 fails it); v0.9.7, which closes the gap,
-    /// removes it.
+    /// participant's: undoing it can change text someone else wrote. With the known-D1 mode
+    /// on, only then is the undo promise's mismatch tolerated: counted and printed with its
+    /// call number. The mode is `SOAK_KNOWN_D1`: default 0 since the D1 amendment (v0.9.7)
+    /// closed the gap, so any such mismatch fails; 1 turns the tolerance back on.
     d1: bool,
     /// The run's knobs, from the environment by default (`SOAK_MAX_OPS`, `SOAK_OUTSIDE`,
     /// `SOAK_KNOWN_D1`); the replay regression sets its own, whatever the job's env.
@@ -424,6 +444,8 @@ impl Soak {
         let host = Arc::new(SoakHost {
             now: AtomicU64::new(1_000_000),
             mismatches: std::sync::Mutex::new(Vec::new()),
+            removal_rows_named: AtomicU64::new(0),
+            removal_rows_kit: AtomicU64::new(0),
         });
         let key = DocKey {
             space: "ws".into(),
@@ -476,7 +498,10 @@ impl Soak {
             d1: false,
             max_ops: env_u64("SOAK_MAX_OPS", 0),
             outside: env_u64("SOAK_OUTSIDE", 1) != 0,
-            known_d1: env_u64("SOAK_KNOWN_D1", 1) != 0,
+            // Default 0 (strict): the D1 amendment (v0.9.7) closed the gap, and 600 s soaks
+            // at seeds 1, 3, 4 and 5 with SOAK_KNOWN_D1=0 at 96f5617 saw no D1 violation.
+            // SOAK_KNOWN_D1=1 turns the known-D1 tolerance back on.
+            known_d1: env_u64("SOAK_KNOWN_D1", 0) != 0,
         };
         for i in 0..w.parts.len() {
             w.join(i);
@@ -503,6 +528,55 @@ impl Soak {
             )
             .unwrap();
         (mgr, s)
+    }
+
+    /// What the outside saves left waiting for everyone (v0.9.7.2): every note collected, and
+    /// checked: its words say "may have", and a host's catch-all log wouldn't print its text.
+    /// Returns (notes, roll-ups, places, bytes of text).
+    /// Each note checked (its words say "may have", its Debug holds no text, a soak participant
+    /// has history so it names a version) and counted; returns how many there were.
+    fn check_removal_notes(&mut self, got: &k2_mpc_base::session::Notes) -> u64 {
+        let mut notes = 0;
+        for n in got.notes.iter().filter_map(|n| n.overwrite.as_ref()) {
+            let line = n.to_string();
+            assert!(line.starts_with("An outside save may have"), "{line}");
+            let debug = format!("{n:?}");
+            if n.yours.len() > 8 {
+                assert!(!debug.contains(n.yours.trim()), "{debug}");
+            }
+            assert!(
+                n.version.is_some(),
+                "a soak participant has history: {debug}"
+            );
+            notes += 1;
+            self.n.note_rollups += u64::from(n.is_rollup());
+            self.n.note_places += n.cells() as u64;
+            self.n.note_bytes += n.yours.len() as u64;
+        }
+        assert!(
+            got.notes.len() <= k2_mpc_base::session::OVERWRITE_PENDING_MAX + 5,
+            "the bound per person"
+        );
+        notes
+    }
+
+    /// Everyone's waiting notes, taken (as a client draining them would); returns how many.
+    fn collect_removal_notes(&mut self) -> u64 {
+        let mut notes = 0;
+        for i in 0..self.parts.len() {
+            let joined = self.parts[i].conns.is_empty();
+            if joined {
+                self.join(i);
+            }
+            let conn = self.parts[i].conns[0];
+            let got = self.s.take_notes(conn).unwrap();
+            notes += self.check_removal_notes(&got);
+            if joined {
+                self.s.leave(conn).unwrap();
+                self.parts[i].conns.clear();
+            }
+        }
+        notes
     }
 
     fn join(&mut self, i: usize) {
@@ -535,8 +609,9 @@ impl Soak {
     }
 
     /// The next unique token of participant `i`. A token is never a text the doc already
-    /// has had: a known D1 undo can rebuild characters into a text no one wrote yet (seed 3,
-    /// call 25,877 rebuilt `p16:347` before p16 issued it), so such texts are skipped.
+    /// has had: a known D1 undo could rebuild characters into a text no one wrote yet (before
+    /// v0.9.7, seed 3's call 25,877 rebuilt `p16:347` before p16 issued it), so such texts
+    /// are skipped.
     fn token(&mut self, i: usize) -> String {
         let p = &mut self.parts[i];
         loop {
@@ -614,6 +689,8 @@ impl Soak {
             .run_tool_with(conn, ROOT, argv, stdin.as_bytes(), &opts)
         {
             Ok(out) => {
+                let got = self.check_removal_notes(&out.notes);
+                self.n.notes_by_verb += got;
                 if out.changed.is_some() {
                     self.n.applied += 1;
                 } else if argv[0] != "cat" && argv[0] != "head" && argv[0] != "grep" {
@@ -767,7 +844,10 @@ impl Soak {
                 match base {
                     Some(v) => match self.s.write_base_with(conn, ROOT, v, &body, policy) {
                         Ok(r) => match r.outcome {
-                            WriteOutcome::Applied(_) => self.n.applied += 1,
+                            WriteOutcome::Applied(_) => {
+                                self.n.notes_by_verb += self.check_removal_notes(&r.notes);
+                                self.n.applied += 1
+                            }
                             WriteOutcome::Conflicts(_) => self.refused("write conflict".into()),
                             WriteOutcome::BaseExpired => self.refused("base expired".into()),
                         },
@@ -1368,6 +1448,8 @@ impl Soak {
 
     /// Release everything, reopen the store: the same text and version; everyone rejoins.
     fn restart(&mut self) {
+        let before = self.collect_removal_notes();
+        self.n.notes_before_restart += before;
         self.n.index += self.s.position_index_stats_for_tests().unwrap();
         let (text, version) = (self.s.read(self.obs()).unwrap().bytes, self.version);
         self.mgr.release().unwrap();
@@ -1607,6 +1689,8 @@ impl Soak {
         self.restart();
         self.sample_memory(start.elapsed().as_secs());
         let wall = start.elapsed().as_secs_f64();
+        let at_end = self.collect_removal_notes();
+        self.n.notes_at_end += at_end;
         let n = &self.n;
         eprintln!(
             "[soak {label}] done: {:.0}s, {} ops ({:.0}/s), {} applied, v{}, {} lines now (max {}), \
@@ -1637,7 +1721,7 @@ impl Soak {
             n.outside_saves, n.echoes
         );
         eprintln!(
-            "[soak {label}] undo/redo mismatches with the line oracle tolerated as the known D1 gap (a region that isn't whole lines; amendment pending): {}; lines written twice now: {}",
+            "[soak {label}] undo/redo mismatches with the line oracle tolerated as the known D1 gap (a region that isn't whole lines; SOAK_KNOWN_D1=1 only): {}; lines written twice now: {}",
             n.d1_tolerated, n.dups
         );
         let rates: Vec<(u64, u64)> = n
@@ -1713,6 +1797,27 @@ impl Soak {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(2.0);
         let ratio = first / tail.max(1e-9);
+        let (rows, kit_rows) = (
+            self.host.removal_rows_named.load(Ordering::SeqCst),
+            self.host.removal_rows_kit.load(Ordering::SeqCst),
+        );
+        let (by_verb, before, at_end) = (n.notes_by_verb, n.notes_before_restart, n.notes_at_end);
+        let notes = by_verb + before + at_end;
+        eprintln!(
+            "[soak {label}] removal notes: {rows} audit rows for named authors, {kit_rows} for kit: authors (nobody to tell); notes delivered {notes} ({by_verb} by a verb, {before} taken before a restart, {at_end} taken at the end), {} roll-ups, {} places, {} bytes of text",
+            n.note_rollups, n.note_places, n.note_bytes
+        );
+        eprintln!(
+            "RUNREC {{\"job\":{job},\"run\":\"soak_{label}_notes\",\"tool\":\"soak\",\"status\":\"COMPLETE\",\"saves\":{},\"rows_named\":{rows},\"rows_kit\":{kit_rows},\"notes\":{notes},\"by_verb\":{by_verb},\"before_restart\":{before},\"at_end\":{at_end},\"rollups\":{},\"places\":{},\"note_bytes\":{}}}",
+            n.outside_saves, n.note_rollups, n.note_places, n.note_bytes
+        );
+        // one audit row per (save, named author) and one note each: every row is a note
+        // delivered, unless roll-ups folded some together (then never more notes than rows)
+        if n.note_rollups == 0 {
+            assert_eq!(notes, rows, "every named author's row is a note delivered");
+        } else {
+            assert!(notes <= rows && notes > 0, "{notes} notes, {rows} rows");
+        }
         let checked = !shadow_on() && tail > 0.0;
         let opt = |v: Option<f64>, k: f64| {
             v.map_or("null".to_owned(), |x| format!("{}", (x * k).round() as i64))
@@ -1883,7 +1988,16 @@ fn soak_side_with<R>(
     if shadow {
         side = side.shadowed_by(Path::Throwaway);
     }
-    let r = with_side(&mut side, f);
+    // SOAK_NOTE_MUTANT=edit_with: plant the drain-and-drop fault, which the notes count must catch
+    let r = if std::env::var("SOAK_NOTE_MUTANT").as_deref() == Ok("edit_with") {
+        eprintln!("[soak {label}] planted: the host's edit calls take waiting notes and drop them");
+        k2_mpc_base::differential::with_note_mutant(
+            k2_mpc_base::differential::NoteMutant::EditWithDrains,
+            || with_side(&mut side, f),
+        )
+    } else {
+        with_side(&mut side, f)
+    };
     if shadow {
         eprintln!(
             "[soak {label}] shadow: {} edits made through {:?} and checked against the throwaway replica: byte-identical",
@@ -1921,15 +2035,22 @@ fn soak_32() {
     });
 }
 
-/// The D1 replay regression (v0.9.5): `SOAK_SEED=3`, client IDs from seed 1, the plain editor
-/// on, the known-D1 mode on, 27,000 calls, whatever the job's environment. Call 25,877 is a
-/// known D1 violation: p30's undo rebuilds characters into `p16:347` before p16 issues that
-/// token (p16 does at call 26,450, which once read as a line written twice). The run must see
-/// exactly that one known violation and no other invariant failure (any fails the test).
-/// About two minutes in release: `tools/tests/soak.sh` runs it.
+/// The D1 replay regression: `SOAK_SEED=3`, client IDs from seed 1, the plain editor on, the
+/// known-D1 mode on, 27,000 calls, whatever the job's environment. Up to v0.9.6, call 25,877
+/// was a known D1 violation: p30's undo rebuilt characters into `p16:347` before p16 issued
+/// that token (p16 did at call 26,450, which once read as a line written twice).
+///
+/// Fixed by v0.9.7 (the D1 authored-ranges amendment, kit commit 84ebc1d: a change is never
+/// built from someone else's text): the violation at call 25,877 no longer happens. The
+/// replay now pins that it stays gone: no known D1 violation in the whole run, and no other
+/// invariant failure (any fails the test). The known-D1 mode stays on here so that a
+/// returning violation is reported by its call number instead of the first assertion it
+/// trips. The kit's later changes (v0.9.7.1's line-paired edit hunks among them) change which
+/// calls the seed makes, so call 25,877 is no longer the same call; the run as a whole is the
+/// check. About a minute in release: `tools/tests/soak.sh` runs it.
 #[test]
 #[ignore = "a 27,000-call seeded replay: run in release (tools/tests/soak.sh)"]
-fn soak_replay_seed_3_known_d1() {
+fn soak_replay_seed_3_no_d1() {
     let calls = soak_side_with("replay 3", Some(1), false, || {
         let mut w = Soak::new("replay3", 3);
         w.max_ops = 27_000;
@@ -1941,7 +2062,7 @@ fn soak_replay_seed_3_known_d1() {
     });
     assert_eq!(
         calls,
-        vec![25_877],
-        "exactly the known D1 violation at call 25,877"
+        Vec::<u64>::new(),
+        "no known D1 violation (call 25,877's was fixed by v0.9.7's D1 amendment)"
     );
 }

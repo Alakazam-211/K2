@@ -12,10 +12,11 @@
 //! far behind loses the deltas it can't take and gets a fresh `Snapshot` as soon as it has
 //! room again: its memory is bounded, and it is never left with a stale roster.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::mpsc::{SyncSender, TrySendError};
 
-use super::awareness::{ClaimEnd, ClaimId, NoteKind};
+use super::awareness::{ClaimEnd, ClaimId, NoteKind, Overwrite};
 use super::handles::Handles;
 use super::host::{LeaveReason, Rights};
 use super::participant::{ConnId, CursorAt, Participant, Role, RosterEntry};
@@ -94,6 +95,8 @@ pub enum RosterEvent {
         version: Seq,
         members: Vec<RosterMember>,
         watching: usize,
+        /// This subscriber's own waiting [`Overwrite`] notes (a push doesn't consume one).
+        overwritten: Vec<Overwrite>,
     },
     /// A participant's first connection joined. They start as a viewer, not away, with no
     /// caret; any of those that differ follow as their own events in the same flush.
@@ -152,6 +155,14 @@ pub enum RosterEvent {
         lines: LineRange,
         claim: Option<ClaimId>,
     },
+    /// An outside save may have removed `to`'s text ([`Overwrite`]). Sent only to `to`'s own
+    /// subscriptions, never coalesced. The note waits too, until `take_notes` or a verb delivers
+    /// it, so a slow receiver that gets a fresh `Snapshot` still finds it there.
+    Overwritten { to: Who, overwrite: Overwrite },
+    /// The host closed this doc's live session (`reason`, its code): the last event of every
+    /// subscription, which then ends. Later calls fail with
+    /// [`super::SessionError::Closed`].
+    Closed { reason: &'static str },
     /// The number of participants watching past [`super::Config::participants_max`] changed
     /// (they carry no presence detail; this count is all the roster shows of them).
     Watching { count: usize },
@@ -169,6 +180,8 @@ struct Told {
 
 struct Sub {
     conn: ConnId,
+    /// Whose it is: an `Overwritten` event goes only to its author's subscriptions.
+    pid: String,
     /// An App viewer's pid: its events go through its handle lens.
     app: Option<String>,
     tx: SyncSender<RosterEvent>,
@@ -219,6 +232,8 @@ impl RosterHub {
     pub fn subscribe(
         &mut self,
         conn: ConnId,
+        pid: String,
+        overwritten: Vec<Overwrite>,
         app: Option<String>,
         tx: SyncSender<RosterEvent>,
         now: u64,
@@ -228,6 +243,9 @@ impl RosterHub {
         handles: &mut Handles,
     ) {
         let mut snap = snapshot(version, &rows, watching);
+        if let RosterEvent::Snapshot { overwritten: o, .. } = &mut snap {
+            *o = overwritten;
+        }
         if let Some(v) = &app {
             snap = handles.lens(v).roster_event(snap);
         }
@@ -240,6 +258,7 @@ impl RosterHub {
         let resync = tx.try_send(snap).is_err();
         self.subs.push(Sub {
             conn,
+            pid,
             app,
             tx,
             resync,
@@ -260,6 +279,25 @@ impl RosterHub {
     pub fn close(&mut self) {
         self.subs.clear();
         self.reset();
+    }
+
+    /// Send `ev` to every subscription, as its last event, then end them all. A subscriber whose
+    /// queue is full doesn't get it; its channel still ends.
+    pub fn end_with(&mut self, ev: RosterEvent) {
+        for s in &self.subs {
+            let _ = s.tx.try_send(ev.clone());
+        }
+        self.close();
+    }
+
+    /// The events recorded since the last flush.
+    pub fn pending_mut(&mut self) -> &mut Vec<RosterEvent> {
+        &mut self.pending
+    }
+
+    /// Whether the next flush sends anyone a snapshot.
+    pub fn owes_snapshot(&self) -> bool {
+        self.overflow || self.subs.iter().any(|s| s.resync)
     }
 
     fn reset(&mut self) {
@@ -284,6 +322,7 @@ impl RosterHub {
         rows: Vec<Row>,
         watching: usize,
         handles: &mut Handles,
+        waiting: &HashMap<String, Vec<Overwrite>>,
     ) {
         self.last_flush_ms = now;
         if self.subs.is_empty() {
@@ -380,6 +419,9 @@ impl RosterHub {
                 let mut ev = snap
                     .get_or_insert_with(|| snapshot(version, &rows, watching))
                     .clone();
+                if let RosterEvent::Snapshot { overwritten, .. } = &mut ev {
+                    *overwritten = waiting.get(&s.pid).cloned().unwrap_or_default();
+                }
                 if let Some(l) = lens.as_mut() {
                     ev = l.roster_event(ev);
                 }
@@ -393,6 +435,9 @@ impl RosterHub {
                 };
             }
             for ev in &batch {
+                if matches!(ev, RosterEvent::Overwritten { to, .. } if *to != Who::of(&s.pid)) {
+                    continue;
+                }
                 let ev = match lens.as_mut() {
                     Some(l) => l.roster_event(ev.clone()),
                     None => ev.clone(),
@@ -428,6 +473,7 @@ fn snapshot(version: Seq, rows: &[Row], watching: usize) -> RosterEvent {
     RosterEvent::Snapshot {
         watching,
         version,
+        overwritten: Vec::new(),
         members: rows
             .iter()
             .map(|r| RosterMember {

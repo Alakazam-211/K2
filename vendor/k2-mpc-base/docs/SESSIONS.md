@@ -838,8 +838,68 @@ edits, views, then newest first.
   it byte for byte with and without others present).
 - **JSON** (`--presence json`): the kit has no serde. `Note`, `ClaimInfo` and
   `ActivityEntry` list their fields in a stable order for the host to serialise; enums as
-  `NoteKind::as_str` (`claimed`, `selection`, `caret`, `edited`, `viewing`),
+  `NoteKind::as_str` (`claimed`, `selection`, `caret`, `edited`, `viewing`, `overwritten`),
   `ClaimEnd::as_str`, `ActivityKind::as_str`.
+
+### When an outside save removes someone's text
+
+A save from a stale buffer holds older text plus the saver's change, so the merge reads it as the
+file deleting what others wrote since (an editor, or an agent using its own file tools). The merge
+stays as it is: the save is taken in. Since v0.9.7.2 the person who wrote that text is told what
+may have gone, and the note carries it.
+
+**Who.** **Authors who wrote through the kit**, by provenance: each character's own author on the
+merge's whole lines, plus the person an assistant acted for (only the text made on their behalf).
+Whoever put text back by an undo or revert is told where, without the text. **Text from a file save
+has no author to tell** (`kit:external`), so two file-tool agents overwriting each other get no
+note: an audit row names `kit:external`.
+
+**Which.** A line the merge takes where the trimmed change takes something other than whitespace,
+written since the last outside save, or within `outside_note_window_ms` (24 h; 0: only since the
+last save). The second covers an old buffer saved after a fresher one. A removal the kit can't tell
+from a move, or from the author deleting their own line in another program, is reported too: every
+sentence says "may have".
+
+**What it says.** One note per save per person: `Note { kind: Overwritten, overwrite: Some(..) }`,
+`Overwrite` carrying `yours` (their own characters, exact, at most 16 KiB a note), `file`, `region`,
+`change`, `not_shown`, `version` (the version holding it, **only if this reader has the history
+right**) and `restore_from` (the same version, to tell someone who does). The exact strings:
+
+```text
+An outside save may have removed your text (L2). Version 41 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read "the agent's line\n".
+An outside save may have replaced your text (L2). Version 41 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since. It read "alpha beta\n"; the file now has "alpha gamma".
+An outside save may have removed your text (L2). It read "sam's line\n".
+... N more characters not shown; version 41 has them.
+... N more characters not shown; someone with history access can restore it from version 41.
+An outside save may have removed your text (L2). The text is no longer held here. Version 41 holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since.
+An outside save may have removed your text (L2). The text is no longer held here. Someone with history access can restore it from version 41.
+An outside save may have removed your text (L2). The text is no longer held here. See change 8 in the log.
+An outside save may have removed or replaced your text in 7 more places. See change 90 in the log. Version 41 holds the latest of it.
+```
+
+Text in the line is escaped (`\n`, `\"`, `\\`), so an agent reading stderr can paste it back
+exactly. **The way back is copying:** no single call restores the text and keeps the saver's
+change, and `restore` of the version replaces it.
+
+**Delivery.** `RosterEvent::Overwritten { to, overwrite }` to the author's own subscriptions
+(`Snapshot.overwritten` for a late one); the next verb that returns `Notes`, whatever its lines,
+the interval or the batch size; `Session::take_notes(conn)`. A push doesn't consume a note. No read
+right: nothing, not even a count, until they can read again. `AuditEvent::OutsideOverride { key,
+change, rule, region, by, version }` has line numbers only.
+
+**Bounds.** 16 KiB of text a note (`OVERWRITE_TEXT_MAX`); 32 places (`OVERWRITE_CELLS_MAX`), the rest
+counted; 64 waiting notes per person per doc (`OVERWRITE_PENDING_MAX`), then a roll-up with no text;
+1 MiB of text per doc (`OVERWRITE_DOC_TEXT_MAX`), oldest first; `outside_note_text_keep_ms` (24 h).
+Past the last two the note keeps the fact and says the text is no longer held. A purge takes the
+text and the version from every waiting note; erasing a participant takes their notes.
+
+**Where they live.** In memory. An unload hands them, text included, to the manager for the doc's
+next session (at most 64 MiB of text, 1,024 docs; a doc dropped past that is an audit row,
+`notes_dropped`). **A restart loses them**; the version, the log and the audit row remain.
+
+**Known limits (v0.9.7.2).** Text past 32 places isn't carried. Roll-ups carry no text. Typing in
+flight at the start of a removed line lands on the next line with no signal. Notes are lost on a
+daemon restart. File-tool text has no author to tell.
 
 **`write --base` conflicts.** `write_base_with` returns `WriteReport { outcome,
 conflict_notes: Vec<(usize, Note)>, notes }`. For `WriteOutcome::Conflicts`, each
@@ -1161,6 +1221,28 @@ tool's "no"). `run_tool` looks a verb up there **only when no kit tool has that 
   a file) × `memory_factor` (20). The host exposes `memory_budget_bytes` (256 MiB) as its
   knob.
 
+## Closing a doc's live session (the host)
+
+`SessionManager::close(key, reason)` closes the doc's live session now, text or tier 0, **even
+with members**: a host switching a file type off, for instance. `close_where(reason, |key, pack|
+..)` closes every loaded doc it picks, by key and pack (the text pack's schema name, or
+`BLOB_DOC_PACK` for a tier-0 doc), and returns the keys, sorted. `reason` is the host's code
+(for example `core_off`); the kit's words stay generic, and the host says why in its own.
+
+- **Nothing acknowledged is lost:** a pending write-back is written first, as on an unload.
+- **Everyone is told:** every roster subscription gets `RosterEvent::Closed { reason }` as its
+  last event (after what the roster owed), then ends; the host gets `AuditEvent::SessionClosed {
+  key, connections, reason }`, naming each connection and pid, as `DocDeleted` does.
+- **Every later call** on the closed session, `file_changed` and `check_disk` included, fails with
+  `SessionError::Closed { reason }` (`MPC-E519`, exit 1): "the host closed this doc's live
+  session (core_off)".
+- **Outside saves stop merging:** the session is out of the pool, so `tick` doesn't reach it. A
+  save made while it's closed is taken in by the next open, as any outside save made while a doc
+  wasn't loaded (`kit:external`).
+- **Waiting outside-save notes** are kept for the next open, as on an unload.
+- **The kit doesn't remember the close.** Opening the doc again is the host's decision; the
+  next `open` / `open_file` works as usual.
+
 ## Deleting docs
 
 `SessionManager::delete_doc(&key)` and `delete_space(space)` delete docs (text and tier 0)
@@ -1357,6 +1439,7 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | Field | Default | Effect |
 |---|---|---|
 | `editor_window_ms` | 30 s | editor role window |
+| `outside_note_window_ms` / `outside_note_text_keep_ms` | 24 h / 24 h | [When an outside save removes someone's text](#when-an-outside-save-removes-someones-text): the rule's window, and how long a note holds its text |
 | `idle_leave_ms` | 60 s | connections without a hold close |
 | `away_after_ms` | 60 s | not visible → away |
 | `read_bases_max` / `read_base_ttl_ms` / `read_bases_max_bytes` | 64 / 30 min / 16 MiB | `write_base` bases |

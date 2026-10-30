@@ -14,6 +14,7 @@ mod claims;
 mod group;
 mod history;
 mod purge;
+mod removed;
 mod tier0_history;
 
 pub use at_base::EditAtBase;
@@ -1654,8 +1655,23 @@ impl Session {
         let version = st.version;
         let watching = Self::watching_count(&st);
         let st = &mut *st;
-        st.roster
-            .subscribe(conn, app, tx, now, version, rows, watching, &mut st.handles);
+        let pid = st.members[i].p.pid.clone();
+        let overwritten = self
+            .waiting_for_subscribers(st, now)
+            .remove(&pid)
+            .unwrap_or_default();
+        st.roster.subscribe(
+            conn,
+            pid,
+            overwritten,
+            app,
+            tx,
+            now,
+            version,
+            rows,
+            watching,
+            &mut st.handles,
+        );
         Ok(rx)
     }
 
@@ -1686,8 +1702,14 @@ impl Session {
         let rows = self.roster_rows(st, now);
         let version = st.version;
         let watching = Self::watching_count(st);
+        self.notes_at_flush(st);
+        let waiting = if st.roster.owes_snapshot() && !st.aware.pending.is_empty() {
+            self.waiting_for_subscribers(st, now)
+        } else {
+            HashMap::new()
+        };
         st.roster
-            .flush(now, version, rows, watching, &mut st.handles);
+            .flush(now, version, rows, watching, &mut st.handles, &waiting);
     }
 
     /// Let the earliest watcher in (K11), when a slot is free: a participant left since it
@@ -2205,17 +2227,41 @@ impl Session {
         st.verb_hint = verb.map(str::to_owned);
         st.group_hint = group;
         let res = self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
+        // a verb returns its notes; the host's own edit calls return only the result, so they
+        // leave waiting notes where they are (taken, they'd be lost)
         let notes = {
             prof!("session.notes");
-            self.edit_notes(&mut st, i, &res, now)
+            #[allow(unused_mut)]
+            let mut deliver = verb.is_some();
+            #[cfg(any(test, feature = "differential"))]
+            if crate::differential::note_mutant()
+                == Some(crate::differential::NoteMutant::EditWithDrains)
+            {
+                deliver = true;
+            }
+            self.edit_notes(&mut st, i, &res, now, deliver)
         };
         Ok((Some(res), notes))
     }
 
     /// The heads-up notes on the lines an applied change touched (the first root's).
-    fn edit_notes(&self, st: &mut State, i: usize, res: &EditResult, now: u64) -> Notes {
+    /// `deliver`: also the waiting notes (an outside save's), for a call that returns them.
+    fn edit_notes(
+        &self,
+        st: &mut State,
+        i: usize,
+        res: &EditResult,
+        now: u64,
+        deliver: bool,
+    ) -> Notes {
+        if deliver {
+            return match changed_span(&res.changed) {
+                Some(l) => self.notes_for(st, i, &l.root, Some((l.first, l.last)), now),
+                None => self.notes_for(st, i, self.schema.roots[0].0, None, now),
+            };
+        }
         match changed_span(&res.changed) {
-            Some(l) => self.notes_for(st, i, &l.root, Some((l.first, l.last)), now),
+            Some(l) => self.fresh_notes(st, i, &l.root, Some((l.first, l.last)), now),
             None => Notes::default(),
         }
     }
@@ -2367,7 +2413,7 @@ impl Session {
                 st.verb_hint = Some("write --base".to_owned());
                 let res =
                     self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
-                let notes = self.edit_notes(st, i, &res, now);
+                let notes = self.edit_notes(st, i, &res, now, true);
                 Ok(WriteReport {
                     outcome: WriteOutcome::Applied(res),
                     conflict_notes: Vec::new(),
@@ -3788,6 +3834,39 @@ impl Session {
         Ok(())
     }
 
+    /// The host closes this session ([`super::SessionManager::close`]), members or not: what
+    /// the roster owes is delivered, every subscription gets [`RosterEvent::Closed`] last, the
+    /// audit names the connections, then it closes as an unload does (a pending write-back
+    /// written, claims ended); later calls fail with [`SessionError::Closed`]. Returns the
+    /// notes still waiting, for the manager to keep.
+    pub(crate) fn close_by_host(
+        &self,
+        reason: &'static str,
+    ) -> HashMap<String, Vec<awareness::Note>> {
+        {
+            let Ok(mut st) = self.lock_any() else {
+                return HashMap::new();
+            };
+            if st.closed.is_some() {
+                return HashMap::new();
+            }
+            let now = self.host.now_ms();
+            self.roster_flush(&mut st, now, true);
+            st.roster.end_with(RosterEvent::Closed { reason });
+            let connections = st
+                .members
+                .iter()
+                .map(|m| (m.conn, m.p.pid.clone()))
+                .collect();
+            self.emit(AuditEvent::SessionClosed {
+                key: st.key.clone(),
+                connections,
+                reason,
+            });
+        }
+        self.close(SessionError::Closed { reason }, false)
+    }
+
     /// Close this handle because its doc is being deleted: no write-back, no compaction (the
     /// rows are about to go). Emits [`AuditEvent::DocDeleted`] with the connections that
     /// were in it; later calls fail with [`SessionError::Deleted`].
@@ -3816,12 +3895,19 @@ impl Session {
 
     /// Close this handle: optionally compact a long log first, then drop the store handle
     /// and subscribers. Later calls fail with `reason`.
-    pub(crate) fn close(&self, reason: SessionError, compact_long_log: bool) {
+    ///
+    /// Returns the notes still waiting ([`awareness::NoteKind::Overwritten`]), for the manager
+    /// to hand to the next session of this doc: an unload isn't a reason to lose them.
+    pub(crate) fn close(
+        &self,
+        reason: SessionError,
+        compact_long_log: bool,
+    ) -> HashMap<String, Vec<awareness::Note>> {
         let Ok(mut st) = self.lock_any() else {
-            return; // poisoned: nothing safe to do; it is dropped with the pool entry
+            return HashMap::new(); // poisoned: nothing safe to do; it is dropped with the pool entry
         };
         if st.closed.is_some() {
-            return;
+            return HashMap::new();
         }
         // write back what the file doesn't have yet (an error is reported and kept: the
         // changes are in the log, and the next load writes them)
@@ -3837,12 +3923,14 @@ impl Session {
         }
         // claims end (waiting hosts are told), then the presence extras go with the session
         self.end_all_claims(&mut st, awareness::ClaimEnd::Left);
+        let waiting = std::mem::take(&mut st.aware.pending);
         st.aware = Aware::default();
         st.closed = Some(reason);
         st.store = None;
         st.subs.clear();
         st.roster.close();
         st.members.clear();
+        waiting
     }
 }
 
@@ -4520,6 +4608,8 @@ impl Session {
         // text (for the doc)
         let mut file_edits = Vec::new();
         let mut edits = Vec::new();
+        // the merge's own hunks, whole lines (for the notes: `live/removed.rs`)
+        let mut merge_sides: Vec<(String, Vec<Hunk>)> = Vec::new();
         for (root, Neutral::Text(t)) in &roots {
             let synced = st.disk.as_ref().expect("has disk").replica.text(root)?;
             let saved = diff::hunks(&synced, t);
@@ -4528,6 +4618,7 @@ impl Session {
             }
             let live = &st.texts.iter().find(|(r, _)| r == root).expect("a root").1;
             let merged = merge::merge3_keep_both(&synced, t, live);
+            merge_sides.push((root.clone(), merged.hunks.clone()));
             // trimmed to the characters that change (v0.9.7): the merge's sides are whole
             // lines (Option B), a guarantee about the merged text; the change applied to the
             // doc is only what differs, so the elements a save keeps keep their authors (D1
@@ -4595,6 +4686,8 @@ impl Session {
         // carets, claims and the change summary take the authored hunks; the engine, the
         // record, undo regions and the revert index the widened ones (v0.9.7).
         let authored = self.d1_outside(st, &mut edits)?;
+        // whose text this save may remove (read before it applies; never stops the save)
+        let removed = self.outside_removals(st, &edits, &authored, &merge_sides, now);
         let before = st.texts.clone();
         let clock_before = st.doc.clock_of(client);
         // the change is reported at element identity (v0.9.3), never as a diff of the texts:
@@ -4757,6 +4850,10 @@ impl Session {
         if map_wrong {
             prov = None;
         }
+        // per root and hunk, the roots it deletes and the IDs it inserts, read before the map
+        // moves on: the revert record keeps them as an edit's does (U23, v0.9.7.2; before, an
+        // outside save's record kept no roots, so a revert of it put back fresh text)
+        let mut pairs_of: Vec<(String, Vec<(Ids, Ids)>)> = Vec::new();
         if let Some(p) = prov.as_mut() {
             let firsts = crate::engine::insert_clocks(clock_before, &edits);
             // the hunks the engine was handed are canonical: its clocks are the predicted ones
@@ -4774,6 +4871,17 @@ impl Session {
             for (e, firsts) in edits.iter().zip(&firsts) {
                 let Edit::Text { root, hunks } = e;
                 let old = &before.iter().find(|(r, _)| r == root).expect("a root").1;
+                let pairs: Vec<(Ids, Ids)> = hunks
+                    .iter()
+                    .zip(firsts.iter())
+                    .map(|(h, &clock)| {
+                        (
+                            p.roots(root, old, h.start, h.end),
+                            Ids::fresh(&h.insert, ElemId::new(client, clock)),
+                        )
+                    })
+                    .collect();
+                pairs_of.push((root.clone(), pairs));
                 let ins: Vec<Inserted> = firsts
                     .iter()
                     .map(|&clock| Inserted {
@@ -4801,9 +4909,20 @@ impl Session {
             let (a, r) = summary::line_counts(old, new, &told_of(root, hunks));
             info.lines_added += a as u64;
             info.lines_removed += r as u64;
-            // its hunks are at element identity (v0.9.3), but its record keeps no roots, as
-            // before (reverted as before provenance, U22)
-            record.push(record_root(root, old, new.is_empty(), hunks, None));
+            // its hunks are at element identity (v0.9.3), and its record keeps their roots
+            // (v0.9.7.2). Without a provenance map (an identity mismatch dropped it) it keeps
+            // none, and a revert of it puts back fresh text, as before provenance (U22)
+            let pairs = pairs_of
+                .iter()
+                .find(|(r, _)| r.as_str() == *root)
+                .map(|(_, p)| p.as_slice())
+                .filter(|p| p.len() == hunks.len());
+            #[cfg(feature = "differential")]
+            let pairs = pairs.filter(|_| {
+                crate::differential::prov_mutant()
+                    != Some(crate::differential::ProvMutant::OutsideSaveKeepsNoRoots)
+            });
+            record.push(record_root(root, old, new.is_empty(), hunks, pairs));
         }
         let change = NewChange {
             info,
@@ -4920,6 +5039,7 @@ impl Session {
             key: st.key.clone(),
             seq,
         });
+        self.finish_removals(st, removed, seq - 1, seq, now);
         self.settle_dirty(st, now)?;
         self.maybe_compact(st);
         Ok(DiskCheck::Ingested { version: seq })

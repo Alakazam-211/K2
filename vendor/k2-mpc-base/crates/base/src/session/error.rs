@@ -135,6 +135,11 @@ pub enum SessionError {
     /// this session was loaded. Exit 4.
     #[error("the doc was deleted")]
     Deleted,
+    /// The host closed this doc's live session ([`super::SessionManager::close`]), members or
+    /// not; `reason` is the host's code (for example `core_off`). Nothing acknowledged was lost.
+    /// Whether it opens again is the host's decision. Exit 1.
+    #[error("the host closed this doc's live session ({reason})")]
+    Closed { reason: &'static str },
     /// A store write failed and reloading from the store failed too. The session is closed;
     /// open the doc again once the store is healthy.
     #[error("session failed: {0}")]

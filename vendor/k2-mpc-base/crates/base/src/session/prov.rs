@@ -809,10 +809,12 @@ enum Mutant {
 #[cfg(any(test, feature = "differential"))]
 fn mutant() -> Option<Mutant> {
     use crate::differential::ProvMutant as P;
-    crate::differential::prov_mutant().map(|m| match m {
-        P::MissDeletion => Mutant::MissDeletion,
-        P::MissDeletionInIndex => Mutant::MissDeletionInIndex,
-        P::RestoredAsRestorer => Mutant::RestoredAsRestorer,
+    crate::differential::prov_mutant().and_then(|m| match m {
+        P::MissDeletion => Some(Mutant::MissDeletion),
+        P::MissDeletionInIndex => Some(Mutant::MissDeletionInIndex),
+        P::RestoredAsRestorer => Some(Mutant::RestoredAsRestorer),
+        // planted in the outside save's revert record (session/live.rs), not the map
+        P::OutsideSaveKeepsNoRoots => None,
     })
 }
 

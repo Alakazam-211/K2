@@ -270,10 +270,13 @@ pub enum NoteKind {
     Edited,
     /// Another participant's viewing range.
     Viewing,
+    /// An outside save may have removed text you wrote ([`Note::overwrite`]).
+    Overwritten,
 }
 
 impl NoteKind {
-    /// `claimed`, `selection`, `caret`, `edited`, `viewing` (for a host's JSON).
+    /// `claimed`, `selection`, `caret`, `edited`, `viewing`, `overwritten` (for a host's
+    /// JSON).
     pub fn as_str(self) -> &'static str {
         match self {
             NoteKind::Claimed => "claimed",
@@ -281,6 +284,7 @@ impl NoteKind {
             NoteKind::Caret => "caret",
             NoteKind::Edited => "edited",
             NoteKind::Viewing => "viewing",
+            NoteKind::Overwritten => "overwritten",
         }
     }
 }
@@ -307,6 +311,309 @@ pub struct Note {
     pub claim: Option<ClaimId>,
     pub claim_note: Option<String>,
     pub remaining_ms: Option<u64>,
+    /// For [`NoteKind::Overwritten`]: what the outside save may have removed.
+    pub overwrite: Option<Overwrite>,
+}
+
+/// The most bytes of what the file now has, per place of an [`Overwrite`] (cut at a character
+/// boundary, with `cut` set).
+pub const OVERWRITE_VALUE_MAX: usize = 256;
+/// The most places one [`Overwrite`] lists; the rest are counted in `more`.
+pub const OVERWRITE_CELLS_MAX: usize = 32;
+/// The most notes waiting for one participant on one doc: past it, the last is a roll-up.
+pub const OVERWRITE_PENDING_MAX: usize = 64;
+/// The most text one note carries, all its places together: the author's own removed text and
+/// what the file now has. The rest is counted in [`Overwrite::not_shown`].
+pub const OVERWRITE_TEXT_MAX: usize = 16 * 1024;
+/// The most note text waiting on one doc, everyone's together, loaded or not. Past it the oldest
+/// notes lose their text (the fact stays, and says so). One author's full queue fits
+/// (64 x 16 KiB); so does a 32-participant doc's normal load, whose notes are a few lines.
+pub const OVERWRITE_DOC_TEXT_MAX: usize = 1 << 20;
+
+/// `s` capped to [`OVERWRITE_VALUE_MAX`] bytes, and whether it was cut.
+pub(crate) fn cap_value(s: &str) -> (String, bool) {
+    if s.len() <= OVERWRITE_VALUE_MAX {
+        return (s.to_owned(), false);
+    }
+    let mut end = OVERWRITE_VALUE_MAX;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    (s[..end].to_owned(), true)
+}
+
+/// One more place of an [`Overwrite`]. `Debug` doesn't print the values.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OverwriteCell {
+    pub region: String,
+    pub col: Option<usize>,
+    pub yours: String,
+    pub file: String,
+    /// `yours` or `file` was cut to [`OVERWRITE_VALUE_MAX`].
+    pub cut: bool,
+}
+
+impl fmt::Debug for OverwriteCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OverwriteCell")
+            .field("region", &self.region)
+            .field("col", &self.col)
+            .field("yours", &format_args!("<{} bytes>", self.yours.len()))
+            .field("file", &format_args!("<{} bytes>", self.file.len()))
+            .field("cut", &self.cut)
+            .finish()
+    }
+}
+
+/// What an outside save may have done to text someone wrote through the kit (their own, or an
+/// assistant's on their behalf): one note per change per person, the first place in the fields
+/// here, the others in `also`. "May have": the kit can't tell a removal from a move, or from
+/// the author deleting their own line in another program.
+///
+/// It carries **the person's own removed text**, so they can paste it back: only their own
+/// characters, never someone else's in the same removed block, up to [`OVERWRITE_TEXT_MAX`] for
+/// the whole note (`not_shown` counts the rest). Past the bound per person, a **roll-up**
+/// ([`Overwrite::is_rollup`]) counts the rest in `more`; a note is never dropped silently.
+/// `Debug` doesn't print the values (a host's catch-all log stays free of document text);
+/// `Display` does, for the person it is for.
+#[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Overwrite {
+    /// `removed_text`, `replaced_text`; `rollup` for a roll-up.
+    pub rule: &'static str,
+    /// What did it: `an outside save`.
+    pub source: &'static str,
+    /// Where: `L12` or `L12–L14`, in the text before the change; with more than one root,
+    /// `root:L12`.
+    pub region: String,
+    /// `None` on a text doc (a grid's row key); a client dedupes on `(change, row)`, unique
+    /// here because a change makes one note per person.
+    pub row: Option<String>,
+    /// Its first line (1-based) in the text before the change.
+    pub line: Option<usize>,
+    pub col: Option<usize>,
+    /// This person's own removed text there, exactly as it was (newlines included): what they
+    /// can paste back. Empty for text someone else wrote that this person put back by an undo.
+    pub yours: String,
+    /// Those lines as they read after the change (empty when nothing is left of them).
+    pub file: String,
+    /// `yours` or `file` was cut: see `not_shown`, [`OVERWRITE_VALUE_MAX`].
+    pub cut: bool,
+    /// The change that did it.
+    pub change: crate::store::Seq,
+    /// The version that holds the text as it was, **which this reader can open**
+    /// ([`super::Session::show`]). `None` when they have no history right
+    /// ([`Overwrite::no_history`]), or it can't be named any more (a purge, or retention).
+    pub version: Option<crate::store::VersionId>,
+    /// That version, for telling someone with history access; set whether this reader can open
+    /// it or not. Never link a reader to this one: that's `version`.
+    pub restore_from: Option<crate::store::VersionId>,
+    /// The other places, for this person.
+    pub also: Vec<OverwriteCell>,
+    /// More places not listed (past [`OVERWRITE_CELLS_MAX`], or a roll-up's count).
+    pub more: usize,
+    /// Characters of this person's own removed text the note doesn't carry (past
+    /// [`OVERWRITE_TEXT_MAX`], or in places past [`OVERWRITE_CELLS_MAX`]).
+    pub not_shown: usize,
+    /// The text isn't here any more (a purge, the hold's expiry, or the doc's total cap): `yours`
+    /// and `file` are empty, the fact and the count stay.
+    pub withheld: bool,
+    /// The reader has no history right: `version` is `None`, and they're told who can help.
+    pub no_history: bool,
+    pub(crate) before: crate::store::Seq,
+    pub(crate) at_ms: u64,
+}
+
+impl fmt::Debug for Overwrite {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Overwrite")
+            .field("rule", &self.rule)
+            .field("source", &self.source)
+            .field("region", &self.region)
+            .field("line", &self.line)
+            .field("col", &self.col)
+            .field("yours", &format_args!("<{} bytes>", self.yours.len()))
+            .field("file", &format_args!("<{} bytes>", self.file.len()))
+            .field("cut", &self.cut)
+            .field("change", &self.change)
+            .field("version", &self.version)
+            .field("also", &self.also)
+            .field("more", &self.more)
+            .field("not_shown", &self.not_shown)
+            .field("restore_from", &self.restore_from)
+            .field("withheld", &self.withheld)
+            .field("no_history", &self.no_history)
+            .finish()
+    }
+}
+
+impl Overwrite {
+    /// The roll-up form: no place, `more` counts them.
+    pub fn is_rollup(&self) -> bool {
+        self.rule == "rollup"
+    }
+
+    /// How many places this note speaks for.
+    pub fn cells(&self) -> usize {
+        usize::from(!self.is_rollup()) + self.also.len() + self.more
+    }
+
+    /// How much text it holds.
+    pub(crate) fn text_bytes(&self) -> usize {
+        self.yours.len()
+            + self.file.len()
+            + self
+                .also
+                .iter()
+                .map(|c| c.yours.len() + c.file.len())
+                .sum::<usize>()
+    }
+
+    /// Without its values (the hold's expiry, the doc's total cap): the fact and the count stay,
+    /// and the version is still named.
+    pub(crate) fn strip(&mut self) {
+        self.yours.clear();
+        self.file.clear();
+        self.cut = false;
+        self.withheld = true;
+        for c in &mut self.also {
+            c.yours.clear();
+            c.file.clear();
+            c.cut = false;
+        }
+    }
+
+    /// A purge: the values go, and the version can't be vouched for any more.
+    pub(crate) fn withhold(&mut self) {
+        self.strip();
+        self.version = None;
+        self.restore_from = None;
+    }
+}
+
+/// `s` on one line and exactly recoverable: `\\`, `\"`, `\n`, `\r`, `\t` escaped, so an agent
+/// reading the note on stderr can paste its text back as it was.
+fn escaped(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = fmt::Write::write_fmt(&mut out, format_args!("\\u{{{:x}}}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn value_text(s: &str, cut: bool) -> String {
+    if cut {
+        format!("\"{}…\"", escaped(s))
+    } else {
+        format!("\"{}\"", escaped(s))
+    }
+}
+
+impl fmt::Display for Overwrite {
+    /// The note's sentences, without the `note: ` prefix. "May have" throughout: a moved line
+    /// reads as removed. It never tells someone to open a version they can't. Pinned in
+    /// `tests/outside_removal_notes.rs`.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_rollup() {
+            write!(
+                f,
+                "An outside save may have removed or replaced your text in {} more places. See change {} in the log.",
+                self.more, self.change
+            )?;
+            return match (self.version, self.restore_from) {
+                (Some(v), _) => write!(f, " Version {v} holds the latest of it."),
+                (None, Some(r)) => write!(
+                    f,
+                    " Someone with history access can restore the latest of it from version {r}."
+                ),
+                (None, None) => Ok(()),
+            };
+        }
+        let verb = if self.rule == "replaced_text" {
+            "replaced"
+        } else {
+            "removed"
+        };
+        write!(
+            f,
+            "An outside save may have {verb} your text ({}",
+            one_line(&self.region)
+        )?;
+        for c in &self.also {
+            write!(f, ", {}", one_line(&c.region))?;
+        }
+        if self.more > 0 {
+            write!(f, ", and {} more places", self.more)?;
+        }
+        write!(f, ").")?;
+        if self.withheld {
+            write!(f, " The text is no longer held here.")?;
+        }
+        match (self.version, self.restore_from) {
+            (Some(v), _) => write!(
+                f,
+                " Version {v} holds it. Copy it back from there: restoring that version replaces the outside save's change and everything since."
+            )?,
+            (None, Some(r)) if self.withheld => write!(
+                f,
+                " Someone with history access can restore it from version {r}."
+            )?,
+            (None, Some(_)) => {}
+            (None, None) => write!(f, " See change {} in the log.", self.change)?,
+        }
+        if self.withheld {
+            return Ok(());
+        }
+        let one = |f: &mut fmt::Formatter<'_>, yours: &str, file: &str, cut: bool| {
+            if !yours.is_empty() {
+                write!(f, "It read {}", value_text(yours, cut))?;
+                if !file.is_empty() {
+                    write!(f, "; the file now has {}", value_text(file, false))?;
+                }
+                write!(f, ".")?;
+            }
+            Ok::<(), fmt::Error>(())
+        };
+        if self.also.is_empty() {
+            if !self.yours.is_empty() {
+                write!(f, " ")?;
+            }
+            one(f, &self.yours, &self.file, self.cut)?;
+        } else {
+            if !self.yours.is_empty() {
+                write!(f, " {}: ", one_line(&self.region))?;
+            }
+            one(f, &self.yours, &self.file, self.cut)?;
+            for c in &self.also {
+                if !c.yours.is_empty() {
+                    write!(f, " {}: ", one_line(&c.region))?;
+                }
+                one(f, &c.yours, &c.file, c.cut)?;
+            }
+        }
+        if self.not_shown > 0 {
+            write!(f, " {} more characters not shown", self.not_shown)?;
+            match (self.version, self.restore_from) {
+                (Some(v), _) => write!(f, "; version {v} has them.")?,
+                (None, Some(r)) => write!(
+                    f,
+                    "; someone with history access can restore it from version {r}."
+                )?,
+                (None, None) => write!(f, ".")?,
+            }
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Display for Note {
@@ -330,6 +637,10 @@ impl fmt::Display for Note {
             NoteKind::Caret => write!(f, "note: {w} has a caret at {l} ({age} ago)"),
             NoteKind::Edited => write!(f, "note: {w} edited {l} ({age} ago)"),
             NoteKind::Viewing => write!(f, "note: {w} viewing {l} ({age} ago)"),
+            NoteKind::Overwritten => match &self.overwrite {
+                Some(o) => write!(f, "note: {o}"),
+                None => write!(f, "note: an outside save may have removed your text at {l}"),
+            },
         }
     }
 }
@@ -546,6 +857,10 @@ pub(crate) struct Aware {
     pub noted: HashMap<NoteKey, u64>,
     /// When a reader (pid) last got a non-empty batch.
     pub batches: HashMap<String, u64>,
+    /// The [`NoteKind::Overwritten`] notes waiting for each participant, whether they are here
+    /// or not, until a verb or `take_notes` delivers them. In memory: they survive an unload
+    /// (without their values, through the manager) and not a restart.
+    pub pending: HashMap<String, Vec<Note>>,
 }
 
 /// Most dedupe entries kept per doc (the oldest go first past it).
@@ -580,6 +895,7 @@ impl Aware {
         self.activity.retain(|a| a.pid != pid);
         self.noted.retain(|k, _| k.0 != pid && k.1 != pid);
         self.batches.remove(pid);
+        self.pending.remove(pid);
     }
 }
 
@@ -976,6 +1292,7 @@ mod tests {
             claim: Some(ClaimId::new(3)),
             claim_note: Some("rewriting \"intro\"\n".into()),
             remaining_ms: Some(18_000),
+            overwrite: None,
         };
         let s = n.to_string();
         assert!(s.starts_with("note: "), "{s}");

@@ -650,6 +650,7 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 | `MPC-E516` | `deleted` | 4 | K-PURGE-8 | `*` | live |
 | `MPC-E517` | `pack_error` | 1 | K-COD-2 | `*` | live |
 | `MPC-E518` | `quarantined` | 3 | K-SEC-5 | `*` | live |
+| `MPC-E519` | `closed` | 1 | K-OFF-2 | `*` | live |
 
 ### MPC-E501 `store_failed`
 
@@ -789,6 +790,13 @@ A host prints a refusal as **plain text**, the error's own wording with the id a
 - **Rule:** K-SEC-5
 - **Exit:** 3
 - **Reached by:** a stored doc set aside for review
+
+### MPC-E519 `closed`
+
+- **Message:** `the host closed this doc's live session ({reason})`
+- **Next:** The host closed this doc's live session (its reason code says why: a file type switched off, for instance). Everything acknowledged was kept and written to the file. The host decides when it opens again.
+- **Rule:** K-OFF-2
+- **Exit:** 1
 
 ## 6xx: erasure
 

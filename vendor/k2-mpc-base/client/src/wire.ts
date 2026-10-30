@@ -56,7 +56,14 @@ export interface ParticipantInfo {
  * `who` is the participant's id or opaque handle (`Who::Pid` / `Who::Handle`) as a string.
  */
 export type RosterEvent =
-  | { kind: "snapshot"; version: number; members: RosterEntry[]; watching?: number }
+  | {
+      kind: "snapshot";
+      version: number;
+      members: RosterEntry[];
+      watching?: number;
+      /** This subscriber's own waiting overwritten notes; dedupe on (change, row). */
+      overwritten?: Extract<RosterEvent, { kind: "overwritten" }>[];
+    }
   | { kind: "joined"; who: Handle; participant: ParticipantInfo; rights?: string }
   | { kind: "left"; who: Handle; reason?: string }
   | { kind: "rights"; who: Handle; rights: string }
@@ -66,7 +73,29 @@ export type RosterEvent =
   | { kind: "claim_started"; who: Handle; claim: string; lines: { first: number; last: number }; version: number; [k: string]: unknown }
   | { kind: "claim_ended"; who: Handle; claim: string; how: string; version: number; [k: string]: unknown }
   | { kind: "note"; to: Handle; from: Handle; [k: string]: unknown }
-  | { kind: "watching"; count: number };
+  | {
+      kind: "overwritten";
+      to: Handle;
+      change: number;
+      /** The version holding the text, which this reader can open. Only link from this one. */
+      version: number | null;
+      /** The same version, for telling someone with history access. Never a link for this reader. */
+      restore_from: number | null;
+      source: string;
+      /** "removed_text" | "replaced_text" | "rollup" */
+      rule: string;
+      row: string | null;
+      line: number | null;
+      cells: { region: string; col: number | null; yours: string; file: string; cut: boolean }[];
+      more: number;
+      not_shown: number;
+      withheld: boolean;
+      no_history: boolean;
+      message: string;
+    }
+  | { kind: "watching"; count: number }
+  /** The host closed this doc's live session (`reason`, its code): the last event; the subscription ends. */
+  | { kind: "closed"; reason: string };
 
 /** One participant as the host shows them (from the kit's `RosterEntry`). */
 export interface RosterEntry {

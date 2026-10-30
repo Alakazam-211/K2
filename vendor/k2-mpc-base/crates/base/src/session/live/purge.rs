@@ -416,6 +416,8 @@ impl Session {
             st.aware.forget(pid);
             st.handles.forget(pid);
         }
+        // waiting notes hold capped text: a purge takes it, keeping the fact and the count
+        self.withhold_notes(st);
         // the new state: re-encoded from the live doc (GC on: no deleted content)
         let state = match st.doc.encode_state() {
             Ok(s) => s,

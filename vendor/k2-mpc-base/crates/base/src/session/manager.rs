@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use super::awareness::Note;
 use super::config::Config;
 use super::disk::{self, DiskCheck, Probe, ReadFile};
 use super::error::{Result, SessionError};
@@ -75,7 +76,20 @@ struct Pool {
     sessions: HashMap<DocKey, Arc<Session>>,
     blob_sessions: HashMap<DocKey, Arc<BlobSession>>,
     unloaded_total: u64,
+    /// Notes waiting when a session unloaded, text included, for its next session
+    /// ([`Session::adopt_notes`]: a purge goes through a session, which adopts them first, so it
+    /// reaches them; delivery checks read access and the hold). Bounded: per doc as any waiting
+    /// notes, [`PARKED_TEXT_MAX`] of text in all, [`PARKED_DOCS_MAX`] docs. Gone at a restart.
+    parked: HashMap<DocKey, HashMap<String, Vec<Note>>>,
 }
+
+/// The most docs [`Pool::parked`] keeps notes for; past it the doc whose latest note is oldest
+/// goes, with an [`AuditEvent::OutsideOverride`] (`notes_dropped`).
+const PARKED_DOCS_MAX: usize = 1024;
+/// The most note text [`Pool::parked`] holds, all docs together: a quarter of the default memory
+/// budget, for sessions that are otherwise gone. Past it the oldest notes lose their text (the
+/// fact stays, and says so).
+const PARKED_TEXT_MAX: usize = 64 << 20;
 
 /// Owns the loaded sessions of one store. One per process; thread-safe.
 ///
@@ -99,6 +113,7 @@ impl SessionManager {
             host,
             config: Arc::new(config),
             pool: Mutex::new(Pool {
+                parked: HashMap::new(),
                 store: Some(store),
                 sessions: HashMap::new(),
                 blob_sessions: HashMap::new(),
@@ -177,6 +192,9 @@ impl SessionManager {
             session.set_blob_store(b.clone());
         }
         let s = Arc::new(session);
+        if let Some(notes) = pool.parked.remove(key) {
+            s.adopt_notes(notes);
+        }
         pool.sessions.insert(key.clone(), s.clone());
         self.enforce_budget(&mut pool, Some(key));
         Ok(s)
@@ -638,6 +656,9 @@ impl SessionManager {
             pool.sessions.insert(new, s);
             return Ok(());
         }
+        if let Some(notes) = pool.parked.remove(old) {
+            pool.parked.insert(new.clone(), notes);
+        }
         let id = store
             .find(old)?
             .ok_or_else(|| SessionError::NotFound(old.clone()))?;
@@ -682,7 +703,12 @@ impl SessionManager {
         for (key, r) in done {
             match r {
                 Ok(changes) => out.extend(changes.into_iter().map(|c| (key.clone(), c))),
-                Err(SessionError::Unloaded | SessionError::Released | SessionError::Deleted) => {}
+                Err(
+                    SessionError::Unloaded
+                    | SessionError::Released
+                    | SessionError::Deleted
+                    | SessionError::Closed { .. },
+                ) => {}
                 Err(e) => self.host.on_event(&AuditEvent::RecheckFailed {
                     key,
                     error: e.to_string(),
@@ -690,6 +716,63 @@ impl SessionManager {
             }
         }
         out
+    }
+
+    /// Close the live session of the doc at `key` (text or tier 0) now, **even with members**:
+    /// the host switched its file type off, for instance. Nothing acknowledged is lost: a pending
+    /// write-back is written first. Every roster subscription gets [`RosterEvent::Closed`] as its
+    /// last event, the host gets [`AuditEvent::SessionClosed`] naming the connections, and every
+    /// later call on the closed session, `file_changed` included, fails with
+    /// [`SessionError::Closed`] (`reason`, the host's code). Outside saves are no longer merged:
+    /// the session is out of the pool, so `tick` no longer reaches it; the next open takes a
+    /// save made meanwhile in as an ordinary outside save. Waiting outside-save notes are kept
+    /// for that open, as on an unload. The kit doesn't remember the close: opening again is the
+    /// host's decision. Returns whether a session was loaded.
+    pub fn close(&self, key: &DocKey, reason: &'static str) -> Result<bool> {
+        let mut pool = self.pool()?;
+        if let Some(s) = pool.sessions.remove(key) {
+            let waiting = s.close_by_host(reason);
+            self.park_notes(&mut pool, key, waiting);
+            return Ok(true);
+        }
+        if let Some(s) = pool.blob_sessions.remove(key) {
+            s.close_by_host(reason);
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// [`SessionManager::close`] for every loaded doc `pick` names, given its key and its pack
+    /// (the text pack's schema name, or [`BLOB_DOC_PACK`] for a tier-0 doc). Returns the keys
+    /// closed, sorted by space then path.
+    pub fn close_where(
+        &self,
+        reason: &'static str,
+        pick: impl Fn(&DocKey, &str) -> bool,
+    ) -> Result<Vec<DocKey>> {
+        let mut pool = self.pool()?;
+        let mut keys: Vec<DocKey> = pool
+            .sessions
+            .iter()
+            .filter(|(k, s)| pick(k, s.schema_name()))
+            .map(|(k, _)| k.clone())
+            .chain(
+                pool.blob_sessions
+                    .keys()
+                    .filter(|k| pick(k, BLOB_DOC_PACK))
+                    .cloned(),
+            )
+            .collect();
+        keys.sort_by(|a, b| (&a.space, &a.path).cmp(&(&b.space, &b.path)));
+        for k in &keys {
+            if let Some(s) = pool.sessions.remove(k) {
+                let waiting = s.close_by_host(reason);
+                self.park_notes(&mut pool, k, waiting);
+            } else if let Some(s) = pool.blob_sessions.remove(k) {
+                s.close_by_host(reason);
+            }
+        }
+        Ok(keys)
     }
 
     /// Delete the doc at `key` (text or tier 0) for good: a loaded session is closed first
@@ -706,6 +789,7 @@ impl SessionManager {
         let id = store
             .find(key)?
             .ok_or_else(|| SessionError::NotFound(key.clone()))?;
+        pool.parked.remove(key);
         if let Some(s) = pool.sessions.remove(key) {
             s.close_deleted();
         }
@@ -725,6 +809,7 @@ impl SessionManager {
         let mut pool = self.pool()?;
         let store = pool.store.clone().ok_or(SessionError::Released)?;
         let in_space = |k: &DocKey| k.space == space;
+        pool.parked.retain(|k, _| !in_space(k));
         let text: Vec<DocKey> = pool
             .sessions
             .keys()
@@ -782,6 +867,7 @@ impl SessionManager {
     pub fn unload_idle(&self) -> Result<usize> {
         let now = self.host.now_ms();
         let mut pool = self.pool()?;
+        self.sweep_parked(&mut pool);
         let idle: Vec<DocKey> = pool
             .sessions
             .iter()
@@ -845,6 +931,7 @@ impl SessionManager {
         for (_, s) in pool.sessions.drain() {
             s.close(SessionError::Released, false);
         }
+        pool.parked.clear();
         for (_, s) in pool.blob_sessions.drain() {
             s.close(SessionError::Released);
         }
@@ -859,8 +946,104 @@ impl SessionManager {
 
     fn unload(&self, pool: &mut Pool, key: &DocKey) {
         if let Some(s) = pool.sessions.remove(key) {
-            s.close(SessionError::Unloaded, true);
+            let waiting = s.close(SessionError::Unloaded, true);
             pool.unloaded_total += 1;
+            self.park_notes(pool, key, waiting);
+        }
+    }
+
+    /// The hold and the total: text past [`Config::outside_note_text_keep_ms`] goes, and the
+    /// oldest text past [`PARKED_TEXT_MAX`]; a fact past the revert window goes too.
+    fn sweep_parked(&self, pool: &mut Pool) {
+        let now = self.host.now_ms();
+        let (keep, facts) = (
+            self.config.outside_note_text_keep_ms,
+            self.config.revert_keep_ms,
+        );
+        let mut held: Vec<(u64, usize)> = Vec::new();
+        let mut total = 0usize;
+        for m in pool.parked.values_mut() {
+            for q in m.values_mut() {
+                q.retain(|n| {
+                    n.overwrite
+                        .as_ref()
+                        .map_or(true, |o| now.saturating_sub(o.at_ms) <= facts)
+                });
+                for o in q.iter_mut().filter_map(|n| n.overwrite.as_mut()) {
+                    if !o.withheld && now.saturating_sub(o.at_ms) > keep {
+                        o.strip();
+                    }
+                    let b = o.text_bytes();
+                    if b > 0 {
+                        total += b;
+                        held.push((o.at_ms, b));
+                    }
+                }
+            }
+            m.retain(|_, q| !q.is_empty());
+        }
+        pool.parked.retain(|_, m| !m.is_empty());
+        if total <= PARKED_TEXT_MAX {
+            return;
+        }
+        held.sort_unstable();
+        let mut cutoff = 0;
+        for (at, b) in held {
+            if total <= PARKED_TEXT_MAX {
+                break;
+            }
+            total -= b;
+            cutoff = at;
+        }
+        for o in pool
+            .parked
+            .values_mut()
+            .flat_map(HashMap::values_mut)
+            .flatten()
+            .filter_map(|n| n.overwrite.as_mut())
+            .filter(|o| o.at_ms <= cutoff)
+        {
+            o.strip();
+        }
+    }
+
+    /// Keep `waiting` for this doc's next session. Bounded; a drop is audited, never silent.
+    fn park_notes(&self, pool: &mut Pool, key: &DocKey, mut waiting: HashMap<String, Vec<Note>>) {
+        waiting.retain(|_, q| !q.is_empty());
+        if waiting.is_empty() {
+            return;
+        }
+        pool.parked.insert(key.clone(), waiting);
+        self.sweep_parked(pool);
+        while pool.parked.len() > PARKED_DOCS_MAX {
+            let latest = |m: &HashMap<String, Vec<Note>>| {
+                m.values()
+                    .flatten()
+                    .filter_map(|n| n.overwrite.as_ref())
+                    .map(|o| o.at_ms)
+                    .max()
+                    .unwrap_or(0)
+            };
+            let Some(old) = pool
+                .parked
+                .iter()
+                .min_by_key(|(_, m)| latest(m))
+                .map(|(k, _)| k.clone())
+            else {
+                return;
+            };
+            let gone = pool
+                .parked
+                .remove(&old)
+                .map_or(0, |m| m.values().map(Vec::len).sum::<usize>());
+            self.host.on_event(&AuditEvent::OutsideOverride {
+                key: old,
+                change: 0,
+                rule: "notes_dropped",
+                region: format!("{gone} notes"),
+                by: None,
+                version: None,
+            });
         }
     }
 

@@ -335,16 +335,16 @@ fn walk(
 /// `seq` (`None`: no clock span recorded for it), put back by `restorer` (its client and
 /// change) when it is a restoration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Piece {
-    start: usize,
-    end: usize,
-    client: ClientId,
-    seq: Option<Seq>,
-    restorer: Option<(ClientId, Option<Seq>)>,
+pub(super) struct Piece {
+    pub(super) start: usize,
+    pub(super) end: usize,
+    pub(super) client: ClientId,
+    pub(super) seq: Option<Seq>,
+    pub(super) restorer: Option<(ClientId, Option<Seq>)>,
 }
 
 /// The pieces of `text[lo..hi]`, by root.
-fn pieces(
+pub(super) fn pieces(
     store: &DocStore,
     doc_id: DocId,
     text: &str,

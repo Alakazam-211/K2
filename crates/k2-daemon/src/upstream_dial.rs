@@ -228,11 +228,43 @@ mod tests {
         });
     }
 
+    /// Bounded: the socket on the other end may be someone else's silent
+    /// listener (see [`ipv6_only_listener`]); a test must fail, never hang.
     async fn read_tag(mut s: TcpStream) -> Vec<u8> {
         let mut b = vec![0u8; 16];
-        let n = s.read(&mut b).await.expect("read tag");
+        let peer = s.peer_addr();
+        let n = tokio::time::timeout(Duration::from_secs(10), s.read(&mut b))
+            .await
+            .unwrap_or_else(|_| panic!("no tag from {peer:?} within 10s: that listener is not this test's"))
+            .expect("read tag");
         b.truncate(n);
         b
+    }
+
+    /// A listener on `::1` ONLY, and nothing on `127.0.0.1` at that port for
+    /// the life of the returned guard.
+    ///
+    /// `bind(("::1", 0))` alone is not enough. The kernel picks a port free
+    /// on `::1`, and the same number on `127.0.0.1` is a different socket:
+    /// when a parallel test holds it, `dial_target` connects there first and
+    /// never reaches this listener (10-30 soak: the read then waited for
+    /// 3h20m). A closed port, reserved on `127.0.0.1` from the range below
+    /// every ephemeral range, refuses the v4 dial on every kernel, and no
+    /// other test is handed it. That also rules out a TCP self-connect,
+    /// which needs an ephemeral port.
+    async fn ipv6_only_listener() -> (TcpListener, u16, k2_core::test_env::ClosedPort) {
+        let mut last = None;
+        for _ in 0..64 {
+            let v4 = k2_core::test_env::ClosedPort::new();
+            let port = v4.port();
+            match TcpListener::bind(("::1", port)).await {
+                Ok(l) => return (l, port, v4),
+                // Another test binary holds [::1]:port; take another.
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => last = Some(e),
+                Err(e) => panic!("bind [::1]:{port} (this test needs IPv6 loopback): {e}"),
+            }
+        }
+        panic!("no port free on both loopbacks: {last:?}");
     }
 
     /// The reported bug: app on 127.0.0.1 only, target `localhost:PORT`.
@@ -267,10 +299,7 @@ mod tests {
     /// the Linux CI hosts have; a box without it fails here loudly.
     #[tokio::test]
     async fn localhost_target_reaches_ipv6_only_listener() {
-        let l = TcpListener::bind(("::1", 0))
-            .await
-            .expect("bind [::1]:0 (this test needs IPv6 loopback)");
-        let port = l.local_addr().unwrap().port();
+        let (l, port, _v4_closed) = ipv6_only_listener().await;
         echo_tag(l, b"V6").await;
         let s = dial_target(&format!("localhost:{port}"), Duration::from_secs(5))
             .await

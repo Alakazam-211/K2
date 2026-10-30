@@ -8,13 +8,12 @@
 //! the Workbench shows: roles `sidecar` and `worktree` with a handle.
 //! Unknown roles are ignored (contract §3).
 //!
-//! **The one switch.** [`roster_json`] builds that shape from the sidecar
-//! rows until `crate::workspace_roster` is on this branch; then its body
-//! becomes
-//! `crate::workspace_roster::workspace_roster(project_id, &RosterOpts { all: true, include_api: false, caller_map_key: None }).map(|r| r.to_json())`
-//! and nothing else in the Workbench changes.
+//! **The one switch.** [`roster_json`] is the shared list itself:
+//! `crate::workspace_roster::workspace_roster` with every row (asleep ones
+//! too), no API sessions and no caller. Worktree sidecars come back as role
+//! `worktree` with their folder and branch (W1's columns, migration 0251).
 
-use serde_json::{json, Value as J};
+use serde_json::Value as J;
 
 /// A workspace on this computer.
 pub struct Workspace {
@@ -60,8 +59,8 @@ pub fn workspaces() -> Result<Vec<Workspace>, String> {
 }
 
 /// A workspace's sidecars (its main agent is not one), from the shared list.
-pub fn sidecars(project_id: &str, ws_path: &str) -> Result<Vec<SessionRow>, String> {
-    Ok(rows_from_roster(&roster_json(project_id, ws_path)?))
+pub fn sidecars(project_id: &str) -> Result<Vec<SessionRow>, String> {
+    Ok(rows_from_roster(&roster_json(project_id)?))
 }
 
 /// The shared list's sidecar rows (contract §2): `sidecar` / `worktree`
@@ -92,46 +91,16 @@ pub fn rows_from_roster(v: &J) -> Vec<SessionRow> {
         .collect()
 }
 
-/// The workspace's sessions in the shared list's shape (contract §2), the
-/// sidecar part only, until `workspace_roster` is on this branch.
-fn roster_json(project_id: &str, ws_path: &str) -> Result<J, String> {
-    let rows = {
-        let db = k2_core::db::shared();
-        let conn = db.lock();
-        k2_core::sidecar::list_rows(&conn, project_id)?
-    };
-    let sessions: Vec<J> = rows
-        .into_iter()
-        .map(|r| {
-            let live = crate::v2_session_map::lookup_by_agent_name(&r.agent_name).is_some_and(|x| x.is_child_alive());
-            let worktree = r.cwd.as_deref().and_then(|c| worktree_of(c, ws_path));
-            json!({
-                "handle": r.handle,
-                "role": if worktree.is_some() { "worktree" } else { "sidecar" },
-                "cli": r.provider,
-                "title": r.name,
-                "agentName": r.agent_name,
-                "paneGroupId": r.pane_group_id,
-                "worktree": worktree,
-                "branch": J::Null,
-                "state": if live { "idle" } else { "asleep" },
-            })
-        })
-        .collect();
-    Ok(json!({ "ok": true, "sessions": sessions }))
-}
-
-/// `cwd` relative to the workspace when it is a folder inside it.
-fn worktree_of(cwd: &str, ws_path: &str) -> Option<String> {
-    let c = dunce::canonicalize(cwd).ok()?;
-    let p = dunce::canonicalize(ws_path).unwrap_or_else(|_| ws_path.into());
-    let rel = c.strip_prefix(&p).ok()?.to_string_lossy().replace('\\', "/");
-    (!rel.is_empty() && c.is_dir()).then_some(rel)
+/// The workspace's sessions in the shared list's shape (contract §2).
+fn roster_json(project_id: &str) -> Result<J, String> {
+    let opts = crate::workspace_roster::RosterOpts { all: true, include_api: false, caller_map_key: None };
+    crate::workspace_roster::workspace_roster(project_id, &opts).map(|r| r.to_json())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// The contract's example rows (§2): only sidecar and worktree rows with
     /// a handle are Workbench tasks; unknown roles are ignored.

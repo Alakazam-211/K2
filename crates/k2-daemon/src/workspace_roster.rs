@@ -207,7 +207,7 @@ fn session_in_workspace(
 
 /// Build the list for `project_id`.
 pub fn workspace_roster(project_id: &str, opts: &RosterOpts) -> Result<Roster, String> {
-    let (ws_path, ws_handle, tab_rows, main_row) = {
+    let (ws_path, ws_handle, tab_rows, main_row, worktrees) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let project = k2_core::db::schema::Project::get(&conn, project_id)
@@ -217,7 +217,15 @@ pub fn workspace_roster(project_id: &str, opts: &RosterOpts) -> Result<Roster, S
         let tab_rows = k2_core::sidecar::list_rows(&conn, project_id)?;
         let main_row = k2_core::db::schema::WorkspaceSession::get(&conn, project_id)
             .map_err(|e| format!("workspace_sessions: {e}"))?;
-        (project.path, handle, tab_rows, main_row)
+        // Workbench W1's worktree columns (0251), per tab row.
+        let worktrees: HashMap<String, k2_core::worktree_task::store::WorktreeMeta> = tab_rows
+            .iter()
+            .filter_map(|r| {
+                k2_core::worktree_task::store::get(&conn, project_id, &r.pane_group_id)
+                    .map(|m| (r.pane_group_id.clone(), m))
+            })
+            .collect();
+        (project.path, handle, tab_rows, main_row, worktrees)
     };
     let project_paths = k2_core::projects_ops::projects_list()
         .map_err(|e| format!("projects_list: {e}"))?
@@ -303,7 +311,17 @@ pub fn workspace_roster(project_id: &str, opts: &RosterOpts) -> Result<Roster, S
             .filter(|l| !l.is_empty());
         let brief_line = r.brief_path.as_deref().and_then(|rel| brief_title(&ws_path, rel));
         let title = brief_line.map(|b| format!("brief: {b}")).or(custom).or(label);
-        let role = if r.created_by.is_some() { "sidecar" } else { "chat" };
+        // A worktree sidecar (W1, `k2 sidecar new --worktree`) keeps its
+        // folder and branch after it is retired, so the list can still say
+        // what it was.
+        let wt = worktrees.get(&r.pane_group_id);
+        let role = if wt.is_some() {
+            "worktree"
+        } else if r.created_by.is_some() {
+            "sidecar"
+        } else {
+            "chat"
+        };
         rows.push(RosterRow {
             address: r
                 .handle
@@ -323,8 +341,8 @@ pub fn workspace_roster(project_id: &str, opts: &RosterOpts) -> Result<Roster, S
             agent_name: Some(r.agent_name.clone()),
             pane_group_id: Some(r.pane_group_id.clone()),
             transport: "terminal",
-            worktree: None,
-            branch: None,
+            worktree: wt.map(|m| m.dir.clone()).filter(|d| !d.is_empty()),
+            branch: wt.map(|m| m.branch.clone()).filter(|b| !b.is_empty()),
             opened_by: r.created_by.as_deref().map(crate::sidecar_routes::created_by_display),
             attached: session.as_ref().is_some_and(|s| s.subscriber_count() > 0),
             you: opts.caller_map_key.as_deref() == Some(r.agent_name.as_str()),

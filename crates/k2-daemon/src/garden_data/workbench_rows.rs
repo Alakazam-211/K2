@@ -207,7 +207,7 @@ pub(crate) fn target(address: &str) -> Result<Target, CliResponse> {
         dir: ws.path.clone(),
     };
     if let Some(name) = name {
-        let rows = sessions::sidecars(&ws.project_id, &ws.path).map_err(|e| no(500, "failed", e))?;
+        let rows = sessions::sidecars(&ws.project_id).map_err(|e| no(500, "failed", e))?;
         let row = rows.into_iter().find(|r| r.handle == name).ok_or_else(|| not_bound(&raw))?;
         t.dir = sidecar_dir(&row, &ws.path);
         t.sidecar = Some(row);
@@ -419,7 +419,7 @@ fn work_list(with_git: bool) -> Result<J, CliResponse> {
     let projects = sessions::workspaces().map_err(|e| no(500, "failed", e))?;
     let mut out = Vec::new();
     for p in projects {
-        let rows = match sessions::sidecars(&p.id, &p.path) {
+        let rows = match sessions::sidecars(&p.id) {
             Ok(r) => r,
             Err(e) => {
                 // One unreadable workspace doesn't hide the others' tasks.

@@ -350,9 +350,8 @@ pub fn branch_of(cwd: &str) -> Option<String> {
     if !Path::new(cwd).is_dir() {
         return None;
     }
-    let out = std::process::Command::new("git")
-        .args(["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
-        .stdin(std::process::Stdio::null())
+    let out = crate::git_safe::git(cwd)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .stderr(std::process::Stdio::null())
         .output()
         .ok()?;

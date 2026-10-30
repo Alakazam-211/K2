@@ -815,9 +815,10 @@ pub(crate) fn accept_more(vault: &LocalVault, m: &k2_vault::SecretMeta) -> Optio
         return None;
     }
     Some(format!(
-        "Accepting it lets you take it up to {ceiling} yourself, no owner needed: k2 vault grant {} --to ws:{} --as {ceiling}.",
+        "Accepting it lets you take it up to {ceiling} yourself, no owner needed: k2 vault grant {} --to ws:{} --as {ceiling}{}.",
         m.name,
-        crate::vault::workspace_label(&m.scope.id)
+        crate::vault::workspace_label(&m.scope.id),
+        crate::vault_use_routes::after_grant(ceiling, &m.name)
     ))
 }
 

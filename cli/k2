@@ -29149,14 +29149,17 @@ shares them with k2 vault grant).
 
 The copy keeps the sender's delivery (or --delivery), at most env and
 never api: fetch with sites stays fetch (k2 vault fetch), fetch with no
-sites lands as file, file stays file, env stays env. --delivery can't go
-above your own copy's ceiling. A file copy is $K2_SECRETS_DIR/NAME (not
-there yet? k2 vault sync), or k2 vault file --secret NAME for a 0600 path
-to hand a tool on stdin, never the value on a command line. The accept
-card shows the delivery and the ceiling; once a person accepts it, the
-receiving agent may take it up to that ceiling itself, no owner needed:
-k2 vault grant NAME --to ws:<you> --as env. k2 vault incoming and
-k2 vault show NAME say how to use each one. --replace takes the incoming
+sites lands as file, file stays file, env stays env. Deliveries go
+fetch < file < env (env is the most readable). --delivery can't go above
+your own copy's ceiling (delivery_above_ceiling, exit 3: a person raises
+it). A file copy is $K2_SECRETS_DIR/NAME (not there yet? k2 vault sync; no
+$K2_SECRETS_DIR at all: restart the session), or k2 vault file --secret
+NAME for a 0600 path to hand a tool on stdin, never the value on a command
+line. The accept card shows the delivery and the ceiling; once a person
+accepts it, the receiving agent may take it up to that ceiling itself, no
+owner needed: k2 vault grant NAME --to ws:<you> --as env (then
+k2 vault env-file --secret NAME works at once; $NAME in new sessions).
+k2 vault incoming and k2 vault show NAME say how to use each one. --replace takes the incoming
 delivery (a wider one needs an Owner or Admin). --ttl is kept on the other
 side: the copy (and a pending card) ends that long after it was sent.
 

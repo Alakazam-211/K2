@@ -399,10 +399,24 @@ pub(crate) fn take_yourself(vault: &LocalVault, c: &VaultCaller, m: &k2_vault::S
         return None;
     }
     Some(format!(
-        "a person accepted it into this workspace (at most {ceiling}), so take it yourself, no owner needed: k2 vault grant {} --to ws:{} --as {want}",
+        "a person accepted it into this workspace (at most {ceiling}), so take it yourself, no owner needed: k2 vault grant {} --to ws:{} --as {want}{}",
         m.name,
-        crate::vault::workspace_label(ws)
+        crate::vault::workspace_label(ws),
+        after_grant(want, &m.name)
     ))
+}
+
+/// What a self-grant gives at once (blind check, 2026-10-30: "does
+/// env-file work after the grant?").
+pub(crate) fn after_grant(d: k2_vault::Delivery, name: &str) -> String {
+    match d {
+        k2_vault::Delivery::Env => format!(
+            " (then k2 vault env-file --secret {name} works at once; ${} in new sessions)",
+            k2_vault::delivery::default_env_name(name)
+        ),
+        k2_vault::Delivery::File => " (it arrives in $K2_SECRETS_DIR within a minute; k2 vault sync: now)".to_string(),
+        _ => String::new(),
+    }
 }
 
 /// D (2026-10-30): how this caller CAN use a secret right now, for a

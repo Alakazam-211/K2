@@ -2358,6 +2358,23 @@ async fn handle_one_request(
         // family's HTTP arm. People only (the owner token or a Connect
         // login, `?token=` before the upgrade, as every client socket); an
         // App pass or an agent passport is refused before the upgrade.
+        // The Live transport's auth probe after a failed dial: the socket's
+        // auth and person-only checks over plain HTTP. GET only, no state.
+        p if p == crate::docs::live::LIVE_CHECK_PATH => {
+            let _ = stream.read(&mut buf).await;
+            if !method.eq_ignore_ascii_case("GET") {
+                let r = crate::cli_response::CliResponse::method_not_allowed();
+                super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                return DispatchOutcome::Done;
+            }
+            let app_pass = super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token);
+            let caller = crate::sidecar_routes::caller_from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            match crate::docs::live::person_for(caller, app_pass) {
+                Ok(_) => super::http::send_response(&mut *stream, "204 No Content", "application/json", "").await,
+                Err(r) => super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await,
+            }
+            return DispatchOutcome::Done;
+        }
         p if p == crate::docs::live::LIVE_WS_PATH => {
             let app_pass = super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token);
             let caller = crate::sidecar_routes::caller_from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());

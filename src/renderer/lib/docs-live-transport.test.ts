@@ -57,7 +57,7 @@ class FakeSocket implements LiveSocket {
   }
 }
 
-function harness() {
+function harness(probe?: () => Promise<'auth' | 'ok'>) {
   const sockets: FakeSocket[] = []
   const urls: Array<number | undefined> = []
   const prevs: Array<number | undefined> = []
@@ -75,6 +75,7 @@ function harness() {
       sockets.push(s)
       return s
     },
+    probe,
   })
   const frames: LiveServerFrame[] = []
   const closes: LiveClose[] = []
@@ -135,6 +136,59 @@ describe('LiveTransport', () => {
     h.t.send({ type: 'since', op: 4, version: 7 })
     expect(s.frames()).toHaveLength(1)
     expect(h.t.open).toBe(false)
+  })
+
+  it('a dial that fails before opening asks the probe once: a refused credential is auth, no retry', async () => {
+    let calls = 0
+    const h = harness(async () => {
+      calls += 1
+      return 'auth'
+    })
+    const p = h.t.connect({ signal: new AbortController().signal })
+    await tick()
+    h.sockets[0].drop(1006) // a refused upgrade: the browser sees only this
+    await expect(p).rejects.toMatchObject({ close: { reason: 'auth', retry: false } })
+    expect(calls).toBe(1)
+  })
+
+  it('the probe answering ok (or failing) leaves a failed dial as network, retry', async () => {
+    const h = harness(async () => 'ok')
+    const p = h.t.connect({ signal: new AbortController().signal })
+    await tick()
+    h.sockets[0].onerror?.({})
+    await expect(p).rejects.toMatchObject({ close: { reason: 'network', retry: true } })
+    const h2 = harness(async () => {
+      throw new Error('offline')
+    })
+    const p2 = h2.t.connect({ signal: new AbortController().signal })
+    await tick()
+    h2.sockets[0].drop(1006)
+    await expect(p2).rejects.toMatchObject({ close: { reason: 'network', retry: true } })
+  })
+
+  it('the probe is never asked once the socket opened, nor for a closed frame or a later drop', async () => {
+    let calls = 0
+    const h = harness(async () => {
+      calls += 1
+      return 'auth'
+    })
+    // Opened, then dropped before welcome: the upgrade was accepted, so not auth.
+    const p = h.t.connect({ signal: new AbortController().signal })
+    await tick()
+    h.sockets[0].accept()
+    h.sockets[0].drop(1006)
+    await expect(p).rejects.toMatchObject({ close: { reason: 'network', retry: true } })
+    // A refusal frame.
+    const p2 = h.t.connect({ signal: new AbortController().signal })
+    await tick()
+    h.sockets[1].accept()
+    h.sockets[1].frame({ type: 'closed', reason: 'not_found' })
+    await expect(p2).rejects.toMatchObject({ close: { reason: 'not_found', retry: false } })
+    // A drop after welcome is onClose's network.
+    const { s } = await connected(h)
+    s.drop(1006)
+    expect(h.closes).toEqual([{ reason: 'network', retry: true }])
+    expect(calls).toBe(0)
   })
 
   it('a closed frame first rejects connect with its reason and retry (core off: no retry)', async () => {

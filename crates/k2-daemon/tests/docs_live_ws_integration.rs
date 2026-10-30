@@ -3,7 +3,8 @@
 //! kit, a temp `~/.k2/docs.redb`), driven by WebSocket clients.
 //!
 //! What it pins (the L2 transport spec v0 and its addendum):
-//!   1. Auth before the upgrade: no token and an App pass are 403; the owner
+//!   1. Auth before the upgrade: no token and an App pass are 403 (and the
+//!      `GET /cli/docs/live/check` probe says so over HTTP: 204 for a person); the owner
 //!      token and a Connect login get `welcome` first (text, version, a
 //!      client id per socket, self, rights).
 //!   2. Two sockets on one doc: edits converge (each side's text equals the
@@ -230,13 +231,30 @@ impl Live {
             let left = deadline.saturating_duration_since(tokio::time::Instant::now());
             match timeout(left, self.rx.recv()).await {
                 Err(_) => panic!("timed out waiting for the close: {what} (frame {frame:?})"),
-                Ok(None) => return (frame.unwrap_or_else(|| panic!("{what}: no closed frame")), None),
+                Ok(None) => return (checked(frame.unwrap_or_else(|| panic!("{what}: no closed frame"))), None),
                 Ok(Some(In::Text(j))) if j["type"] == "closed" => frame = Some(j),
                 Ok(Some(In::Text(_))) | Ok(Some(In::Ping)) => {}
-                Ok(Some(In::Close(c))) => return (frame.unwrap_or_else(|| panic!("{what}: close without a closed frame")), c),
+                Ok(Some(In::Close(c))) => {
+                    return (checked(frame.unwrap_or_else(|| panic!("{what}: close without a closed frame"))), c)
+                }
             }
         }
     }
+}
+
+/// Doc text that must never reach a `closed` frame (its message, its error,
+/// its extra fields), whichever refusal path sent it.
+const MARKER: &str = "ZQX-DOC-MARKER-7741";
+
+/// The safety rules every `closed` frame keeps: its `retry` is the wire
+/// table's (only `cut_off` and `network` retry), and nothing in it is doc
+/// text (the docs below all hold [`MARKER`]).
+fn checked(c: J) -> J {
+    let reason = c["reason"].as_str().unwrap_or_else(|| panic!("a closed frame without a reason: {c}"));
+    let want = matches!(reason, "cut_off" | "network");
+    assert_eq!(c["retry"].as_bool(), Some(want), "retry must follow the reason table for {reason}: {c}");
+    assert!(!c.to_string().contains(MARKER), "a closed frame leaked doc text: {c}");
+    c
 }
 
 // ── Text model (the client's side, UTF-8 bytes) ──────────────────────
@@ -299,8 +317,10 @@ async fn the_live_socket_end_to_end() {
     }
     let doc = ws.join("notes.md");
     std::fs::write(&doc, "hello\n").expect("notes");
-    std::fs::write(ws.join("photo.png"), [0x89u8, b'P', b'N', b'G', 0, 1, 2, 3]).expect("png");
-    std::fs::write(ws.join(".env"), "API_KEY=sk-live-0123456789abcdef\n").expect("env");
+    let mut png = vec![0x89u8, b'P', b'N', b'G', 0, 1, 2, 3];
+    png.extend_from_slice(MARKER.as_bytes());
+    std::fs::write(ws.join("photo.png"), png).expect("png");
+    std::fs::write(ws.join(".env"), format!("API_KEY=sk-live-0123456789abcdef\nNOTE={MARKER}\n")).expect("env");
     let doc = doc.to_string_lossy().to_string();
     let member = login_member(port, "pat");
 
@@ -318,6 +338,24 @@ async fn the_live_socket_end_to_end() {
             Ok(_) => panic!("{what}: must not upgrade"),
         }
     }
+
+    // The transport's probe after a failed dial: 204 for a person, the
+    // socket's 403 otherwise (auth, not network: no retry). GET only.
+    let check = |tok: &str| http(port, "GET", &format!("/cli/docs/live/check?token={}&doc={}", enc(tok), enc(&doc)), None);
+    for (who, tok) in [("the owner", OWNER), ("a login", member.as_str())] {
+        let r = check(tok);
+        assert_eq!(r.status, 204, "{who}: {}", r.body);
+        assert!(r.body.is_empty(), "{who}: {}", r.body);
+    }
+    for (who, tok) in [("a wrong token", "nope"), ("an App pass", "k2skn_notarealpass")] {
+        let r = check(tok);
+        assert!(matches!(r.status, 401 | 403), "{who}: {} {}", r.status, r.body);
+        assert!(!r.body.contains(MARKER), "{who}: the probe never reads the doc");
+    }
+    let r = http(port, "GET", &format!("/cli/docs/live/check?doc={}", enc(&doc)), None);
+    assert!(matches!(r.status, 401 | 403), "no token: {} {}", r.status, r.body);
+    let r = http(port, "POST", &format!("/cli/docs/live/check?token={OWNER}"), Some("{}"));
+    assert_eq!(r.status, 405, "GET only: {}", r.body);
 
     let mut a = open(&live_url(port, OWNER, &doc, "")).await;
     let mut b = open(&live_url(port, &member, &doc, "")).await;
@@ -556,7 +594,7 @@ async fn the_live_socket_end_to_end() {
 
     // ── 8b. A text that doesn't fit one frame: closed {declined}, MPC-E401 ──
     let ctrl = ws.join("ctrl.md");
-    std::fs::write(&ctrl, "\u{1}".repeat(1 << 20)).expect("ctrl"); // 1 MiB, 6 MiB as JSON
+    std::fs::write(&ctrl, format!("{MARKER}\n{}", "\u{1}".repeat(1 << 20))).expect("ctrl"); // 1 MiB, 6 MiB as JSON
     let mut s = open(&live_url(port, OWNER, &ctrl.to_string_lossy(), "")).await;
     let (c, _) = s.closed("too large for one frame").await;
     assert_eq!(c["reason"], "declined", "{c}");
@@ -567,7 +605,7 @@ async fn the_live_socket_end_to_end() {
 
     // ── 10. Renamed (k2 doc mv): moved, with the new path ──
     let other = ws.join("other.md");
-    std::fs::write(&other, "o\n").expect("other");
+    std::fs::write(&other, format!("o {MARKER}\n")).expect("other");
     let other = other.to_string_lossy().to_string();
     let mut m = open(&live_url(port, OWNER, &other, "")).await;
     assert_eq!(ty(&m.next("welcome other").await), "welcome");
@@ -647,7 +685,7 @@ async fn the_live_socket_end_to_end() {
 
     // Switching it off ends open sockets (close_core), after the write-back.
     let (vs, ts) = daemon_text(port, &doc);
-    a.send(json!({"type":"edit","op":50,"root":"source","base":vs,"hunks":[{"start":ts.len(),"end":ts.len(),"insert":"last line\n"}]})).await;
+    a.send(json!({"type":"edit","op":50,"root":"source","base":vs,"hunks":[{"start":ts.len(),"end":ts.len(),"insert":format!("last line {MARKER}\n")}]})).await;
     let (ack50, _) = a.until("ack 50", |f| f["op"] == 50).await;
     assert_eq!(ty(&ack50), "ack");
     let v50 = ack50["version"].as_u64().expect("v50");
@@ -666,7 +704,7 @@ async fn the_live_socket_end_to_end() {
         assert_eq!(frame.map(|f| u16::from(f.code)), Some(4010), "{who}");
     }
     let on_disk = std::fs::read_to_string(&doc).expect("file");
-    assert_eq!(on_disk, format!("{ts}last line\n"), "the file holds every acknowledged edit when the sockets close");
+    assert_eq!(on_disk, format!("{ts}last line {MARKER}\n"), "the file holds every acknowledged edit when the sockets close");
     let mut left = k2_daemon::docs::live::open_sockets();
     for _ in 0..40 {
         if left.is_empty() {

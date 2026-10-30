@@ -32,6 +32,10 @@
 //     flight on the dropped socket can't apply after the new `since` (the
 //     reconnect-race rule agreed with K2 Cores for WIRE.md).
 //   - `close()`: the tab is closing; the daemon leaves the doc.
+//   - A dial that fails before the socket opens asks `probe` once (`GET
+//     /cli/docs/live/check`): a refused credential rejects as `auth` (no
+//     retry, the component shows its sign-in message); anything else stays
+//     `network`.
 //   - Keepalive is the daemon's WS Ping (every 20 s); there is no app-level
 //     ping. Visibility rides `{"t":"viewing","visible"}` through `send`.
 //
@@ -194,6 +198,14 @@ export interface LiveTransportOptions {
   url: (resume: number | undefined, prev: number | undefined) => Promise<string>
   /** Opens a socket (default: `new WebSocket(url)`). */
   open?: (url: string, signal: AbortSignal) => Promise<LiveSocket>
+  /**
+   * After a failed dial only (the socket ended before it opened: a refused
+   * upgrade looks exactly like a network failure to a browser), one cheap
+   * HTTP check, `GET /cli/docs/live/check`: `'auth'` when the daemon refuses
+   * the credential (401/403), else `'ok'`. Never per keystroke, never on a
+   * timer. Without it, a failed dial is `network`.
+   */
+  probe?: () => Promise<'auth' | 'ok'>
 }
 
 const OPEN = 1
@@ -407,16 +419,36 @@ export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
           if (f.type === 'welcome') return
           for (const cb of [...frameCbs]) cb(f as unknown as LiveServerFrame)
         }
+        let opened = s.readyState === OPEN
+        s.onopen = () => {
+          opened = true
+        }
+        /** The attempt ended without a welcome: a dial that never opened
+         *  asks the probe once whether it was the credential. */
+        const failedDial = (why: LiveClose): void => {
+          if (settled) return
+          if (opened || !opts.probe) {
+            fail(new LiveConnectError(why))
+            return
+          }
+          const probe = opts.probe
+          detach(s)
+          void probe()
+            .catch(() => 'ok' as const)
+            .then((answer) => {
+              fail(new LiveConnectError(answer === 'auth' ? { reason: 'auth', retry: false } : why))
+            })
+        }
         s.onclose = (ev) => {
           if (!settled) {
-            fail(new LiveConnectError(closeFromCode(ev?.code)))
+            failedDial(closeFromCode(ev?.code))
             return
           }
           ended(s, closeFromCode(ev?.code))
         }
         s.onerror = () => {
           if (!settled) {
-            fail(new LiveConnectError({ reason: 'network', retry: true }))
+            failedDial({ reason: 'network', retry: true })
             return
           }
           ended(s, { reason: 'network', retry: true })

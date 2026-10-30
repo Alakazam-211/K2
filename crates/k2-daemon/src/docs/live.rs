@@ -105,6 +105,14 @@ use crate::cli_response::CliResponse;
 /// before the docs family's HTTP arm.
 pub const LIVE_WS_PATH: &str = "/cli/docs/live";
 
+/// `GET /cli/docs/live/check`: the same auth and person-only checks as the
+/// socket, answered over plain HTTP (204, or the socket's 403). A browser
+/// can't read why an upgrade was refused, so after a failed dial (only then)
+/// the transport asks this once to tell `auth` (no retry) from `network`.
+/// Read-only; it never looks at the doc (`doc=` is accepted and ignored, so
+/// it says nothing about which files exist).
+pub const LIVE_CHECK_PATH: &str = "/cli/docs/live/check";
+
 /// `via` on every change made through the Live view.
 pub const VIA_TAB: &str = "tab";
 

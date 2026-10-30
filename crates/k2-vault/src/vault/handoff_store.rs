@@ -186,7 +186,7 @@ impl LocalVault {
     ///
     /// `None` otherwise (pending, declined, expired, unsent, a tampered
     /// row, a secret the workspace made itself).
-    pub(crate) fn accepted_handoff_ceiling(&self, conn: &Connection, keys: &Keys, m: &SecretMeta) -> Option<Delivery> {
+    pub(super) fn accepted_handoff_ceiling(&self, conn: &Connection, keys: &Keys, m: &SecretMeta) -> Option<Delivery> {
         if m.namespace != Namespace::User || m.scope.kind != ScopeKind::Workspace || m.status != SecretStatus::Active {
             return None;
         }

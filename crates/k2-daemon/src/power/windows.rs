@@ -100,12 +100,22 @@ extern "system" {
     fn PowerGetActiveScheme(user_root: *mut c_void, active: *mut *mut Guid) -> u32;
     fn PowerReadACValueIndex(root: *mut c_void, scheme: *const Guid, sub: *const Guid, setting: *const Guid, value: *mut u32) -> u32;
     fn PowerReadDCValueIndex(root: *mut c_void, scheme: *const Guid, sub: *const Guid, setting: *const Guid, value: *mut u32) -> u32;
+    fn PowerReadSettingAttributes(sub: *const Guid, setting: *const Guid) -> u32;
 }
+
+/// `POWER_ATTRIBUTE_HIDE`: the setting doesn't apply to this machine (the
+/// lid action on a PC with no lid); `powercfg /q` leaves it out.
+const POWER_ATTRIBUTE_HIDE: u32 = 0x1;
 
 /// The active power scheme's (plugged in, on battery) index for one
 /// setting, as `powercfg /q SCHEME_CURRENT <sub> <setting>` shows it.
-/// `None` for a side that can't be read.
+/// `None` for a side that can't be read, and for a hidden setting (which
+/// powercfg doesn't list either).
 fn plan_setting(sub: &Guid, setting: &Guid) -> (Option<u32>, Option<u32>) {
+    // SAFETY: two valid GUID pointers.
+    if unsafe { PowerReadSettingAttributes(sub, setting) } & POWER_ATTRIBUTE_HIDE != 0 {
+        return (None, None);
+    }
     let mut scheme: *mut Guid = std::ptr::null_mut();
     // SAFETY: the API allocates the GUID; it is freed once with LocalFree.
     if unsafe { PowerGetActiveScheme(std::ptr::null_mut(), &mut scheme) } != 0 || scheme.is_null() {
@@ -307,7 +317,10 @@ mod tests {
     fn powercfg(sub: &str, setting: &str) -> (Option<u32>, Option<u32>) {
         let o = k2_core::bg_proc::command("powercfg").args(["/q", "SCHEME_CURRENT", sub, setting]).output().expect("powercfg runs");
         assert!(o.status.success(), "{o:?}");
-        powercfg_index(&String::from_utf8_lossy(&o.stdout))
+        let text = String::from_utf8_lossy(&o.stdout);
+        let got = powercfg_index(&text);
+        eprintln!("powercfg {sub} {setting}: {got:?}");
+        got
     }
 
     #[test]
@@ -318,7 +331,8 @@ mod tests {
     }
 
     /// The powrprof reads give what `powercfg /q` prints for the active
-    /// plan (the test is the one place K2 still runs powercfg).
+    /// plan (the test is the one place K2 still runs powercfg), including
+    /// "nothing" for a hidden setting such as the lid on a PC with no lid.
     #[test]
     fn plan_reads_match_powercfg() {
         let rtc = plan_setting(&SUB_SLEEP, &RTCWAKE);

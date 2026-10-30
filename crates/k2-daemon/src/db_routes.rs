@@ -1329,13 +1329,7 @@ pub fn handle_projects_open_in_finder(body: &[u8]) -> CliResponse {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let r = k2_core::bg_proc::command("open")
-        .arg("-R")
-        .arg(&b.path)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("Failed to open Finder: {}", e));
-    unit_ok(r)
+    unit_ok(k2_core::fs_commands::open_in_finder(&b.path))
 }
 
 #[derive(Deserialize)]

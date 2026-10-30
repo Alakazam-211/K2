@@ -47,12 +47,6 @@ pub fn linux_supply_powers_system(scope: Option<&str>) -> bool {
     scope != Some("Device")
 }
 
-/// Windows `powercfg /q SCHEME_CURRENT SUB_SLEEP RTCWAKE` → (AC, DC)
-/// "Allow wake timers" index: 0 disable, 1 enable, 2 important only.
-pub fn windows_rtcwake(text: &str) -> (Option<u32>, Option<u32>) {
-    windows_setting_index(text)
-}
-
 /// S6 — Windows `LIDACTION` index in words (0 Do nothing, 1 Sleep,
 /// 2 Hibernate, 3 Shut down).
 pub fn windows_lid_action_word(index: u32) -> &'static str {
@@ -63,17 +57,6 @@ pub fn windows_lid_action_word(index: u32) -> &'static str {
         3 => "Shut down",
         _ => "not Do nothing",
     }
-}
-
-/// Any `powercfg /q` single-setting output -> (AC, DC) current index.
-pub fn windows_setting_index(text: &str) -> (Option<u32>, Option<u32>) {
-    let read = |label: &str| {
-        text.lines()
-            .find(|l| l.contains(label))
-            .and_then(|l| l.rsplit("0x").next())
-            .and_then(|hex| u32::from_str_radix(hex.trim(), 16).ok())
-    };
-    (read("Current AC Power Setting Index"), read("Current DC Power Setting Index"))
 }
 
 #[cfg(test)]
@@ -128,18 +111,9 @@ mod tests {
         assert_eq!(linux_supplies(&kept), PowerSource { on_ac: Some(false), battery_percent: Some(64) });
     }
 
+    /// S6 / D14 — the lid action index in words.
     #[test]
-    fn windows_rtcwake_indexes_parse() {
-        let text = "    Power Setting GUID: bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d  (Allow wake timers)\n      Possible Setting Index: 000\n    Current AC Power Setting Index: 0x00000001\n    Current DC Power Setting Index: 0x00000000\n";
-        assert_eq!(windows_rtcwake(text), (Some(1), Some(0)));
-        assert_eq!(windows_rtcwake("garbage"), (None, None));
-    }
-
-    /// S6 / D14 — the lid action reads the same way.
-    #[test]
-    fn windows_lidaction_index_parses() {
-        let text = "    Power Setting GUID: 5ca83367-6e45-459f-a27b-476b1d01c936  (Lid close action)\n    Current AC Power Setting Index: 0x00000000\n    Current DC Power Setting Index: 0x00000001\n";
-        assert_eq!(windows_setting_index(text), (Some(0), Some(1)));
+    fn windows_lid_action_words() {
         assert_eq!(windows_lid_action_word(0), "Do nothing");
         assert_eq!(windows_lid_action_word(1), "Sleep");
     }

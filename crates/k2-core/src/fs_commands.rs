@@ -1188,12 +1188,33 @@ pub fn duplicate(path: &str) -> Result<String, String> {
 /// only use case and the behavior matches the pre-Phase-2 Tauri
 /// implementation.
 pub fn open_in_finder(path: &str) -> Result<(), String> {
-    crate::bg_proc::command("open")
-        .arg("-R")
-        .arg(path)
-        .spawn()
-        .map_err(|e| format!("Failed to open Finder: {e}"))?;
-    Ok(())
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // File Explorer with the item selected. Explorer parses its own
+        // command line, so the switch and the quoted path go in raw.
+        crate::bg_proc::command("explorer.exe")
+            .raw_arg(explorer_select_arg(path))
+            .spawn()
+            .map_err(|e| format!("Failed to open File Explorer: {e}"))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        crate::bg_proc::command("open")
+            .arg("-R")
+            .arg(path)
+            .spawn()
+            .map_err(|e| format!("Failed to open Finder: {e}"))?;
+        Ok(())
+    }
+}
+
+/// `/select,"<path>"` for explorer.exe, with the path in backslashes
+/// (Explorer doesn't select an item named with forward slashes).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn explorer_select_arg(path: &str) -> String {
+    format!("/select,\"{}\"", path.replace('/', "\\").trim_end_matches('\\'))
 }
 
 /// Open a URL in the system default browser. Same K2SO Connect caveat
@@ -1707,6 +1728,13 @@ mod tests {
         let err = delete(&[nonexist.to_string_lossy().to_string()], true)
             .expect_err("missing must fail");
         assert!(err.contains("Does not exist"), "got: {err}");
+    }
+
+    /// Windows "Show in File Explorer": the item selected, any slashes.
+    #[test]
+    fn explorer_select_arg_quotes_a_backslash_path() {
+        assert_eq!(explorer_select_arg(r"C:\Users\a b\x.txt"), r#"/select,"C:\Users\a b\x.txt""#);
+        assert_eq!(explorer_select_arg("D:/k2/ws/"), r#"/select,"D:\k2\ws""#);
     }
 
     // ── open_external (input sanitization only) ────────────────────

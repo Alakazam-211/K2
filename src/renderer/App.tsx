@@ -62,6 +62,7 @@ import { initFeedbackEvents } from './stores/feedback'
 import { initAppApprovalsEvents } from './stores/app-approvals'
 import { initProjectGroupEvents } from './stores/project-groups'
 import { startHomesSync } from './lib/homes-sync'
+import { startStashSync } from './lib/prompt-stash/sync'
 import { PageLiveContext } from './contexts/TabVisibilityContext'
 import { useTerminalSettingsStore } from './stores/terminal-settings'
 import { useAssistantStore } from './stores/assistant'
@@ -428,6 +429,9 @@ function AppRoot(): React.JSX.Element {
   // homes-sync-v1 (0.46.1): sync this computer's Homes with its own daemon
   // (local-first; one runner per app via a Web Lock, every window follows).
   useEffect(() => startHomesSync(), [])
+  // stash-sync-v1 (0.46.7): the prompt stash syncs with this computer's
+  // daemon too (records only; files stay on the device that saved them).
+  useEffect(() => startStashSync(), [])
 
   // #672 — open the single app-level Active-state subscription once at
   // boot, and re-run the snapshot + re-subscribe on a real host switch so

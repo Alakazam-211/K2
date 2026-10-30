@@ -368,6 +368,15 @@ export interface HomesDeviceRemovedEvent {
   deviceId: string
 }
 
+/** APP-LEVEL, PERSON-SCOPED (stash-sync-v1) — this person's prompt stash
+ *  changed on this server (one of their devices pushed). No content. The
+ *  stash sync runner pulls `GET /cli/me/stash?since=` when `cursor`
+ *  differs from its own. */
+export interface StashChangedEvent {
+  kind: 'stash_changed'
+  cursor: number
+}
+
 /** APP-LEVEL, PERSON-SCOPED (0.46.6 pair success) — a Companion pairing
  *  code this person minted finished: a phone `paired`, it `expired` unused,
  *  or it went `void` (a newer code replaced it, or the login changed).
@@ -923,6 +932,7 @@ export type SessionEventMessage =
   | ProjectReadEvent
   | HomesChangedEvent
   | HomesDeviceRemovedEvent
+  | StashChangedEvent
   | PairCodeChangedEvent
   | RemoteSessionAccessDeniedEvent
   | SewChangedEvent
@@ -1421,6 +1431,8 @@ export type ReadStateChangedHandler = (e: ThreadReadEvent | ProjectReadEvent) =>
 // homes-sync-v1 — the Homes sync runner's pull signal and device removal.
 type HomesChangedHandler = (cursor: number) => void
 type HomesDeviceRemovedHandler = (deviceId: string) => void
+// stash-sync-v1 — the stash sync runner's pull signal.
+type StashChangedHandler = (cursor: number) => void
 // 0.46.6 pair success — Pair a phone's success / expiry and the phones list.
 type PairCodeChangedHandler = (e: PairCodeChangedEvent) => void
 
@@ -1478,6 +1490,7 @@ interface AppBusHandlers {
   readStateChanged: Set<ReadStateChangedHandler>
   homesChanged: Set<HomesChangedHandler>
   homesDeviceRemoved: Set<HomesDeviceRemovedHandler>
+  stashChanged: Set<StashChangedHandler>
   pairCodeChanged: Set<PairCodeChangedHandler>
   activeChanged: Set<ActiveChangedHandler>
   zenChanged: Set<ZenChangedHandler>
@@ -1537,6 +1550,7 @@ function createBusState(scopeId: string): BusState {
       readStateChanged: new Set(),
       homesChanged: new Set(),
       homesDeviceRemoved: new Set(),
+      stashChanged: new Set(),
       pairCodeChanged: new Set(),
       activeChanged: new Set(),
       zenChanged: new Set(),
@@ -1906,6 +1920,12 @@ export function onHomesChanged(scope: ServerScope, fn: HomesChangedHandler): Uns
   return addHandler(busFor(scope).handlers.homesChanged, fn)
 }
 
+/** stash-sync-v1 — subscribe to `stash_changed` on `scope`'s server (only
+ *  this person's sockets get it). */
+export function onStashChanged(scope: ServerScope, fn: StashChangedHandler): UnsubscribeFn {
+  return addHandler(busFor(scope).handlers.stashChanged, fn)
+}
+
 /** homes-sync-v1 — subscribe to `homes_device_removed` on `scope`'s server. */
 export function onHomesDeviceRemoved(scope: ServerScope, fn: HomesDeviceRemovedHandler): UnsubscribeFn {
   return addHandler(busFor(scope).handlers.homesDeviceRemoved, fn)
@@ -2110,6 +2130,9 @@ const APP_SOCKET_DISPATCH: DispatchTable<'app', AppBusHandlers> = {
   },
   homes_device_removed: (h, m) => {
     for (const fn of h.homesDeviceRemoved) fn(m.deviceId)
+  },
+  stash_changed: (h, m) => {
+    for (const fn of h.stashChanged) fn(m.cursor)
   },
   pair_code_changed: (h, m) => {
     for (const fn of h.pairCodeChanged) fn(m)

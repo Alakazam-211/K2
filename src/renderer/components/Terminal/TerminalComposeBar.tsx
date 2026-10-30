@@ -107,7 +107,9 @@ import { formatThreadReply, threadReplyKey } from '@/lib/thread-reply'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
 import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
-import { readStashFile, saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
+import { saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
+import { planStashRestore } from '@/lib/prompt-stash/restore'
+import { stashRestoreDeps } from '@/lib/prompt-stash/sync'
 import {
   STASH_DRAWER_OUT_MS,
   StashDrawer,
@@ -192,6 +194,8 @@ export function TerminalComposeBar({
     (sendDestination !== 'pty' && sessionChrome?.viewTab === 'thread')
   const threadAddr = sessionChrome?.overlayAddr ?? ''
   const [threadAddrError, setThreadAddrError] = useState<string | null>(null)
+  // stash-sync-v1: why a chosen stash's files didn't all come back.
+  const [stashNotes, setStashNotes] = useState<string[]>([])
   useEffect(() => {
     // A new address (the chat was renamed, S4) clears a stale send error.
     setThreadAddrError(null)
@@ -710,17 +714,24 @@ export function TerminalComposeBar({
         ta.focus()
         ta.setSelectionRange(ta.value.length, ta.value.length)
       })
+      setStashNotes([])
       try {
         if (rec.attachments.length > 0) {
-          const read = await Promise.all(rec.attachments.map((a) => readStashFile(a)))
-          const files = read.filter((f): f is File => f !== null)
-          if (files.length < rec.attachments.length) {
-            useToastStore.getState().addToast("Some of this stash's files are gone from this computer.", 'warning')
-          }
-          if (files.length > 0) {
-            if (threadFilesOn) await addThreadFiles({ files })
+          // stash-sync-v1: a file comes back only on the device that saved
+          // it, and only while it's still there; the rest get a note.
+          const plan = await planStashRestore(rec, stashRestoreDeps())
+          setStashNotes(plan.notes)
+          if (plan.files.length > 0) {
+            if (threadFilesOn) await addThreadFiles({ files: plan.files })
             else {
-              const payload = await composeAttachPayload(scope, { files, workspacePath })
+              const payload = await composeAttachPayload(scope, { files: plan.files, workspacePath })
+              if (payload) insertPathsText(payload)
+            }
+          }
+          if (plan.paths.length > 0) {
+            if (threadFilesOn) await addThreadFiles({ paths: plan.paths })
+            else {
+              const payload = await composeAttachPayload(scope, { paths: plan.paths, workspacePath })
               if (payload) insertPathsText(payload)
             }
           }
@@ -778,6 +789,7 @@ export function TerminalComposeBar({
 
     setSending(true)
     setDraft('') // optimistic clear (PRD 1b); restored below only on failure
+    setStashNotes([])
     setSlashMenuOpen(false)
     setSlashMenuFromTypeahead(false)
 
@@ -1121,6 +1133,31 @@ export function TerminalComposeBar({
       {threadAddrError}
     </p>
   ) : null
+  const stashNotesEl =
+    stashNotes.length > 0 ? (
+      <div
+        role="status"
+        data-testid="compose-stash-notes"
+        className="flex items-start gap-2 text-[11px] text-[var(--color-text-muted)]"
+      >
+        <ul className="min-w-0 flex-1">
+          {stashNotes.map((n) => (
+            <li key={n} className="break-words">
+              {n}
+            </li>
+          ))}
+        </ul>
+        <button
+          type="button"
+          aria-label="Dismiss"
+          title="Dismiss"
+          className="flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+          onClick={() => setStashNotes([])}
+        >
+          ✕
+        </button>
+      </div>
+    ) : null
   const slashMenu =
     slashMenuOpen && slashMenuPos && slashMatches.length > 0
       ? createPortal(
@@ -1333,6 +1370,7 @@ export function TerminalComposeBar({
         onDrop={handleDrop}
       >
         {addrError ? <div style={{ marginBottom: 6 }}>{addrError}</div> : null}
+        {stashNotesEl ? <div style={{ marginBottom: 6 }}>{stashNotesEl}</div> : null}
         {fileInput}
         <ThreadComposeBox
           stacked={stacked}
@@ -1460,6 +1498,7 @@ export function TerminalComposeBar({
       onDrop={handleDrop}
     >
       {addrError}
+      {stashNotesEl}
       {fileInput}
       {stashOpen ? stashDrawerEl('square') : null}
       {replyChip}

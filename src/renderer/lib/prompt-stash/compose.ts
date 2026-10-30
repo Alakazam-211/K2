@@ -8,6 +8,7 @@ import { daemonCliGet } from '@/lib/daemon-cli'
 import { canonicalHostKey, LOCAL_HOME_HOST } from '@/lib/host-key'
 import { imageMimeFromPath, loadHostBinary } from '@/lib/load-host-binary'
 import { loadThreadViewer, threadViewerNow, type ThreadViewer } from '@/lib/thread-viewer'
+import { isWebClient } from '@/lib/is-web'
 import { orNull, type StashFileInput, type StashSource } from './record'
 
 /** Cmd+S on macOS, Ctrl+S elsewhere; no Shift or Alt. No K2 binding uses
@@ -31,16 +32,25 @@ function baseName(path: string): string {
   return path.split('/').pop()?.split('\\').pop() || path
 }
 
+/** Is the composer's server this computer, so its paths are this
+ *  device's paths? (The desktop app on its own daemon; never the web
+ *  client, whose "local" server is the one serving the page.) */
+export function composePathsAreThisDevice(scope: Pick<ServerScope, 'isRemote'>): boolean {
+  return !scope.isRemote && !isWebClient()
+}
+
 /** A draft's attached files (paths on the composer's server) as bytes for
  *  the stash. Throws when any can't be read: the draft must then stay in
- *  the box, never half-saved. */
+ *  the box, never half-saved. stash-sync-v1: each keeps its path when the
+ *  server is this computer (else null: the file isn't on this device). */
 export async function readComposeFiles(scope: ServerScope, paths: readonly string[]): Promise<StashFileInput[]> {
   const out: StashFileInput[] = []
+  const local = composePathsAreThisDevice(scope)
   for (const path of paths) {
     const bytes = await loadHostBinary(scope, path)
     const mime = imageMimeFromPath(path)
     const type = mime === 'application/octet-stream' ? '' : mime
-    out.push({ name: baseName(path), type, bytes: new Blob([bytes as BlobPart], type ? { type } : undefined) })
+    out.push({ name: baseName(path), type, bytes: new Blob([bytes as BlobPart], type ? { type } : undefined), path: local ? path : null })
   }
   return out
 }

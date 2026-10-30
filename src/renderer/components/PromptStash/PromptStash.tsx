@@ -16,7 +16,8 @@
 // The list itself is `stores/prompt-stash`.
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
-import { stashAge, stashPreview, stashSourceLabel, type StashRecord } from '@/lib/prompt-stash/record'
+import { STASH_CAP, stashAge, stashPreview, stashSourceLabel, type StashRecord } from '@/lib/prompt-stash/record'
+import { useStashSyncStatus } from '@/lib/prompt-stash/sync-runner'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { ZEN_DRAWER_EAR_FILL } from '@/components/Zen/widgets/ZenActivityDrawer'
 import { CHAMFER_CUT, CHAMFER_SCOPE, chamferPolygon, chamferVars } from '@/components/Thread/chamfer'
@@ -222,6 +223,8 @@ export function StashDrawer({
   const [active, setActive] = useState(0)
   const at = Math.min(active, Math.max(0, items.length - 1))
   const clock = now ?? Date.now()
+  // stash-sync-v1: records the server refused at the 50 cap stay here.
+  const heldAtCap = useStashSyncStatus((s) => s.heldAtCap)
 
   useLayoutEffect(() => {
     listRef.current?.focus()
@@ -320,6 +323,12 @@ export function StashDrawer({
           ✕
         </button>
       </div>
+      {heldAtCap > 0 ? (
+        <div data-testid="stash-sync-full" style={{ padding: '0 12px 4px', fontSize: 11, color: muted }}>
+          {heldAtCap === 1 ? '1 stash' : `${heldAtCap} stashes`} on this device didn't sync: your stash is full ({STASH_CAP}). Remove one to sync{' '}
+          {heldAtCap === 1 ? 'it' : 'them'}.
+        </div>
+      ) : null}
       <div
         ref={listRef}
         role="listbox"

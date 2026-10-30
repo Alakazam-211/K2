@@ -25,8 +25,33 @@ import {
   type StashFileInput,
   type StashRecord,
 } from '@/lib/prompt-stash/record'
-import { readAllStashRecords, readStashBlob, writeStash, type StashBlobRow } from '@/lib/prompt-stash/idb'
+import { readAllStashRecords, readStashBlob, writeStash, type StashBlobRow, type StashWrite } from '@/lib/prompt-stash/idb'
+import { stashDeviceId } from '@/lib/prompt-stash/device'
+import { noteLocalStashChange } from '@/lib/prompt-stash/sync-runner'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
+
+function syncKv(): Storage | null {
+  try {
+    return globalThis.localStorage ?? null
+  } catch {
+    return null
+  }
+}
+
+let localChangeListener: (() => void) | null = null
+
+/** stash-sync-v1: the sync runner (in the window that runs it) hears
+ *  about this window's saves and deletes. */
+export function setStashLocalChangeListener(fn: (() => void) | null): void {
+  localChangeListener = fn
+}
+
+/** A local save or delete: queue it for sync (every window shares the
+ *  queue in localStorage; the runner's window also hears `storage`). */
+function noteChanged(records: ReadonlyArray<Pick<StashRecord, 'id' | 'updated_at'>>): void {
+  noteLocalStashChange(syncKv(), records)
+  localChangeListener?.()
+}
 
 /** Device setting: remove an item once it's used. Off by default. */
 export const STASH_REMOVE_AFTER_USE_KEY = 'k2.promptStash.removeAfterUse'
@@ -129,22 +154,27 @@ export const usePromptStashStore = create<PromptStashState>((set, get) => ({
         if (!opts.removeOldest) return { status: 'full', oldest } as const
         evict = oldest
       }
+      // stash-sync-v1: each file records the device that holds it and its
+      // path there; the bytes stay on this device, by attachment id.
+      const deviceId = stashDeviceId()
       const attachments: StashAttachment[] = []
       const blobs: StashBlobRow[] = []
       for (const f of files) {
         const id = newStashId()
         const data = await blobBytes(f.bytes)
-        attachments.push({ id, name: f.name, type: f.type, size: data.byteLength })
+        attachments.push({ id, name: f.name, type: f.type, size: data.byteLength, device_id: deviceId, path: f.path ?? null })
         blobs.push({ id, type: f.type, data })
       }
-      const record = buildStashRecord(draft, attachments, now)
+      const record = buildStashRecord(draft, attachments, now, newStashId(), deviceId)
+      const evicted = evict ? tombstone(evict, now, deviceId) : null
       const expired = expiredTombstones(all, now).map((r) => r.id)
       await writeStash({
-        put: evict ? [record, tombstone(evict, now)] : [record],
+        put: evicted ? [record, evicted] : [record],
         putBlobs: blobs,
         deleteRecords: expired,
         deleteBlobs: evict ? evict.attachments.map((a) => a.id) : [],
       })
+      noteChanged(evicted ? [record, evicted] : [record])
       await get().load()
       announce()
       return { status: 'saved', record } as const
@@ -156,7 +186,9 @@ export const usePromptStashStore = create<PromptStashState>((set, get) => ({
       const all = await readAllStashRecords()
       const rec = all.find((r) => r.id === id)
       if (!rec || rec.deleted_at !== null) return
-      await writeStash({ put: [tombstone(rec, now)], deleteBlobs: rec.attachments.map((a) => a.id) })
+      const t = tombstone(rec, now, stashDeviceId())
+      await writeStash({ put: [t], deleteBlobs: rec.attachments.map((a) => a.id) })
+      noteChanged([t])
       await get().load()
       announce()
     }),
@@ -176,6 +208,19 @@ export const usePromptStashStore = create<PromptStashState>((set, get) => ({
     set({ removeAfterUse: on })
   },
 }))
+
+/** stash-sync-v1: merge what a pull brought, in the same queue as saves
+ *  (the cap check and a merge never interleave). `fn` sees a fresh read of
+ *  every record and returns the write (null: nothing to do). */
+export function applyStashSync(fn: (all: StashRecord[]) => StashWrite | null): Promise<void> {
+  return serial(async () => {
+    const w = fn(await readAllStashRecords())
+    if (!w) return
+    await writeStash(w)
+    await usePromptStashStore.getState().load()
+    announce()
+  })
+}
 
 /** An attachment's bytes as a File (to upload into a composer), or null
  *  when its bytes are gone. */

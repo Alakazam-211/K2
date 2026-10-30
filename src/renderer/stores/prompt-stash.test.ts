@@ -14,6 +14,7 @@ import {
   stashBody,
   type StashDraft,
 } from '@/lib/prompt-stash/record'
+import { stashDeviceId } from '@/lib/prompt-stash/device'
 import { readStashFile, saveToStash, usePromptStashStore } from './prompt-stash'
 
 function draft(text: string, server = 'local'): StashDraft {
@@ -59,11 +60,15 @@ describe('saving', () => {
     expect(rec.updated_at).toBe(2_000)
     expect(rec.deleted_at).toBeNull()
     expect(rec.quotes).toEqual([{ text: 'quoted', from: 'k2' }])
-    expect(rec.source).toEqual({ server_id: 'local', server_label: 'This computer', user: 'owner', agent: 'sales', agent_name: 'Sales' })
-    // Bytes beside the record, never inside it.
+    // stash-sync-v1: a device-local server id ("local") reads as unknown.
+    expect(rec.source).toEqual({ server_id: null, server_label: 'This computer', user: 'owner', agent: 'sales', agent_name: 'Sales' })
+    // Bytes beside the record, never inside it: the record names the
+    // device that holds them (stash-sync-v1) and its path there (none for
+    // a file handed in without one).
     expect(rec.attachments).toHaveLength(1)
-    expect(Object.keys(rec.attachments[0]).sort()).toEqual(['id', 'name', 'size', 'type'])
-    expect(rec.attachments[0]).toMatchObject({ name: 'shot.png', type: 'image/png', size: 3 })
+    expect(Object.keys(rec.attachments[0]).sort()).toEqual(['device_id', 'id', 'name', 'path', 'size', 'type'])
+    expect(rec.attachments[0]).toMatchObject({ name: 'shot.png', type: 'image/png', size: 3, device_id: stashDeviceId(), path: null })
+    expect(rec.updated_by).toBe(stashDeviceId())
     const file = await readStashFile(rec.attachments[0])
     if (!file) throw new Error('attachment bytes were not stored')
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]))
@@ -180,7 +185,8 @@ describe('per person on this device, not per server', () => {
     const items = usePromptStashStore.getState().items
     expect(items.map((x) => [x.text, x.source.server_id])).toEqual([
       ['on remote', 'box.k2.dev'],
-      ['on local', 'local'],
+      // "local" names a different box on every device: unknown (stash-sync-v1).
+      ['on local', null],
     ])
   })
 

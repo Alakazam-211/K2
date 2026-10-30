@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ServerScope } from '@/kessel/server-scope'
 
 const h = vi.hoisted(() => {
-  const daemonCliGet = vi.fn(async (_scope: unknown, route: string) => {
+  const daemonCliGet = vi.fn(async (_scope: unknown, route: string, _params?: Record<string, unknown>): Promise<unknown> => {
     if (route === 'terminal/compose-history') return { items: [] }
     // This computer's Connect host: its stable `server_id`.
     if (route === 'tunnel/status') return { public_url: 'https://rosson.k2.dev' }
@@ -30,7 +30,8 @@ import { TerminalComposeBar } from '@/components/Terminal/TerminalComposeBar'
 import { SessionViewChromeContext, type SessionViewChromeValue } from '@/components/SessionView/sessionViewChrome'
 import { ThreadComposeDrawerContext } from '@/components/SessionView/threadComposeDrawer'
 import { coerceThreadTurn, type ThreadTurn } from '@/components/SessionView/overlayThread'
-import { closeStashDbForTests } from '@/lib/prompt-stash/idb'
+import { closeStashDbForTests, writeStash } from '@/lib/prompt-stash/idb'
+import { stashDeviceId } from '@/lib/prompt-stash/device'
 import { resetStashServerIdsForTests } from '@/lib/prompt-stash/compose'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { primaryScope } from '@/kessel/server-scope'
@@ -458,5 +459,67 @@ describe('the drawer (Rosson 2026-10-30)', () => {
     expect(css).toContain('html[data-style="square"] [data-k2-thread-zen] [data-stash-row] { border-radius: 0 !important; clip-path: polygon(')
     const check = screen.getByTestId('stash-remove-after-use')
     expect(check.className).toContain('k2-square-check')
+  })
+})
+
+describe('restoring files (stash-sync-v1)', () => {
+  it('notes a file on another device (named from the registry) and one no longer at its path', async () => {
+    const me = stashDeviceId()
+    if (!me) throw new Error('no device id')
+    await writeStash({
+      put: [
+        {
+          v: 1,
+          id: '00000000-0000-4000-8000-000000000001',
+          text: 'synced stash',
+          attachments: [
+            { id: 'a-mac', name: 'shot.png', type: 'image/png', size: 3, device_id: 'd-mac', path: '/Users/r/Desktop/shot.png' },
+            { id: 'a-here', name: 'notes.txt', type: 'text/plain', size: 2, device_id: me, path: '/Users/r/notes.txt' },
+          ],
+          quotes: [],
+          source: { server_id: 'rosson.k2.dev', server_label: null, user: 'rosson', agent: null, agent_name: null },
+          created_at: 1_000,
+          updated_at: 1_000,
+          updated_by: 'd-mac',
+          deleted_at: null,
+        },
+      ],
+    })
+    const stat = vi.fn()
+    h.daemonCliGet.mockImplementation(async (_scope: unknown, route: string, params?: Record<string, unknown>) => {
+      if (route === 'terminal/compose-history') return { items: [] }
+      if (route === 'tunnel/status') return { public_url: 'https://rosson.k2.dev' }
+      if (route === 'me/homes/devices') return { ok: true, devices: [{ deviceId: 'd-mac', name: "Rosson's MacBook", platform: 'macos' }] }
+      if (route === 'fs/stat') {
+        stat(params?.path)
+        throw Object.assign(new Error('No such file'), { status: 400 })
+      }
+      return []
+    })
+    try {
+      await reloadStore()
+      renderThreadBar(primaryScope())
+      fireEvent.click(screen.getByTestId('stash-button'))
+      const list = await screen.findByTestId('stash-list')
+      await waitFor(() => expect(list.querySelectorAll('[data-stash-row]')).toHaveLength(1))
+      fireEvent.keyDown(list, { key: 'Enter' })
+      expect(box().value).toBe('synced stash')
+      const notes = await screen.findByTestId('compose-stash-notes')
+      expect(within(notes).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+        "shot.png wasn't restored: it's on Rosson's MacBook",
+        "notes.txt wasn't restored: it's no longer at /Users/r/notes.txt",
+      ])
+      // The other device's file was never looked for here.
+      expect(stat.mock.calls).toEqual([['/Users/r/notes.txt']])
+      fireEvent.click(within(notes).getByRole('button', { name: 'Dismiss' }))
+      expect(screen.queryByTestId('compose-stash-notes')).toBeNull()
+    } finally {
+      h.daemonCliGet.mockReset()
+      h.daemonCliGet.mockImplementation(async (_scope: unknown, route: string) => {
+        if (route === 'terminal/compose-history') return { items: [] }
+        if (route === 'tunnel/status') return { public_url: 'https://rosson.k2.dev' }
+        return []
+      })
+    }
   })
 })

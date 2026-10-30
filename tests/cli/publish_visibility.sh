@@ -269,7 +269,8 @@ class H(http.server.BaseHTTPRequestHandler):
         pass
 class S(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
-S((os.environ["HOST"], int(os.environ["PORT"])), H).serve_forever()
+# HOST comes with --dev only; a plain service gets PORT.
+S((os.environ.get("HOST", "127.0.0.1"), int(os.environ["PORT"])), H).serve_forever()
 PY
 echo first > "$WSP/page.txt"
 # New --skin sites are gone; the words point at what exists.

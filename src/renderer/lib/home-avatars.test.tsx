@@ -26,6 +26,7 @@ import {
   AVATAR_RECHECK_TICK_MS,
   AVATAR_REFRESH_MS,
   avatarEntryStale,
+  parseAgentColors,
   missingRecheckMs,
   avatarQueryBatches,
   createHomeAvatarSync,
@@ -43,6 +44,7 @@ import { useConnectHostStore, __resetConnectHostStoreForTests, type ConnectHost 
 import { hostPool, __resetHostPoolForTests } from '@/lib/host-pool-instance'
 import type { HostEntry } from '@/lib/host-pool'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
+import { agentLookColor } from '@/lib/agent-look'
 import { useProjectsStore } from '@/stores/projects'
 
 const T0 = 1_800_000_000_000
@@ -57,6 +59,7 @@ interface Calls {
   cacheGet: string[][]
   puts: { address: string; dataUrl: string | null }[]
   prunes: string[][]
+  colorSaves: string[]
 }
 
 /** Fake deps over an in-memory "disk" for the local cache. `serve` answers
@@ -66,8 +69,11 @@ function fakeDeps(serve: (host: string, route: string, params?: Record<string, s
   calls: Calls
   disk: Map<string, CachedAvatar>
   clock: { now: number }
+  /** The stored agent colors (raw), as localStorage would hold them. */
+  colorStore: { raw: string | null }
 } {
-  const calls: Calls = { hostGet: [], cacheGet: [], puts: [], prunes: [] }
+  const calls: Calls = { hostGet: [], cacheGet: [], puts: [], prunes: [], colorSaves: [] }
+  const colorStore: { raw: string | null } = { raw: null }
   const disk = new Map<string, CachedAvatar>()
   const clock = { now: T0 }
   const deps: HomeAvatarDeps = {
@@ -95,8 +101,13 @@ function fakeDeps(serve: (host: string, route: string, params?: Record<string, s
       if (r instanceof Error) throw r
       return r as T
     },
+    colorsLoad: () => colorStore.raw,
+    colorsSave: (raw) => {
+      calls.colorSaves.push(raw)
+      colorStore.raw = raw
+    },
   }
-  return { deps, calls, disk, clock }
+  return { deps, calls, disk, clock, colorStore }
 }
 
 const B = 'b.k2.dev'
@@ -105,10 +116,19 @@ const bee: HomeRow = { address: `bee::${B}`, workspaceId: 'pb', label: 'Bee' }
 const ant: HomeRow = { address: `ant::${B}`, workspaceId: 'pa', label: 'Ant' }
 const cat: HomeRow = { address: `cat::${C}`, workspaceId: 'pc', label: 'Cat' }
 
+const BEE_COLOR = '#d97706'
+const ANT_COLOR = '#2563eb'
 const listB: ListedAvatarWorkspace[] = [
-  { id: 'pb', name: 'Bee', handle: 'bee', path: '/srv/bee', iconUrl: PNG_B1 },
-  { id: 'pa', name: 'Ant', handle: 'ant', path: '/srv/ant', iconUrl: PNG_B2 },
+  { id: 'pb', name: 'Bee', handle: 'bee', path: '/srv/bee', color: BEE_COLOR, iconUrl: PNG_B1 },
+  { id: 'pa', name: 'Ant', handle: 'ant', path: '/srv/ant', color: ANT_COLOR, iconUrl: PNG_B2 },
 ]
+
+/** The stored agent colors, as `colorsSave` writes them. Tests about the
+ *  picture rules start with the colors already known, so a row is never
+ *  due for a colors-only listing there. */
+function storedColors(colors: Record<string, string>): string {
+  return JSON.stringify({ version: 1, colors })
+}
 
 function liveEntry(hostKey: string, reach: HostEntry['reach'], auth: HostEntry['auth'] = 'ok'): HostEntry {
   return {
@@ -140,7 +160,7 @@ const boxB: ConnectHost = {
 
 beforeEach(() => {
   web.on = false
-  useHomeAvatarStore.setState({ cached: {}, local: {} })
+  useHomeAvatarStore.setState({ cached: {}, local: {}, colors: {} })
   __resetConnectHostStoreForTests()
   __resetHostPoolForTests()
 })
@@ -293,7 +313,7 @@ describe('the sync engine', () => {
     await sync.putFromListing(B, bee.address, listB[0])
     sync.schedulePrune(() => [bee.address])
     await sync.flushPrune()
-    expect(calls).toEqual({ hostGet: [], cacheGet: [], puts: [], prunes: [] })
+    expect(calls).toEqual({ hostGet: [], cacheGet: [], puts: [], prunes: [], colorSaves: [] })
   })
 
   it('P30: cache reads are split into ≤ 100 addresses and ≤ 8 KiB of query', () => {
@@ -330,6 +350,7 @@ describe('missing rows', () => {
       }
       throw new Error(`unexpected ${host} ${route}`)
     })
+    f.colorStore.raw = storedColors({ [bee.address]: BEE_COLOR })
     return { ...f, pic, sync: createHomeAvatarSync(f.deps) }
   }
   const input = { rows: [bee], connectedKey: 'local', connectedProjects: [], reachable: (k: string) => k === B }
@@ -542,6 +563,157 @@ describe('missing rows', () => {
   })
 })
 
+// ── Agent colors (Rosson 10-30) ─────────────────────────────────────────
+//
+// A row on another server keeps its agent's own color. The color rides the
+// listings this module already reads; only hex survives validation; a row
+// whose color was never seen is listed once per window for colors alone.
+
+describe('agent colors', () => {
+  const input = { rows: [bee, ant], connectedKey: 'local', connectedProjects: [], reachable: (k: string) => k === B }
+  const fresh = (disk: Map<string, CachedAvatar>): void => {
+    disk.set(bee.address, { dataUrl: PNG_B1, missing: false, fetchedAt: T0 - 1000, sha256: 'h' })
+    disk.set(ant.address, { dataUrl: PNG_B2, missing: false, fetchedAt: T0 - 1000, sha256: 'h' })
+  }
+
+  it('the check a listed color passes (agentLookColor) keeps only #rgb / #rrggbb hex', () => {
+    expect(agentLookColor('#D97706')).toBe('#d97706')
+    expect(agentLookColor('d97706')).toBe('#d97706')
+    expect(agentLookColor(' #AbC ')).toBe('#aabbcc')
+    for (const bad of [
+      'red',
+      'rgb(1, 2, 3)',
+      'var(--color-text-muted)',
+      '#12345',
+      '#1234567',
+      '#d97706; background-image: url(https://evil.example/x)',
+      'url(javascript:alert(1))',
+      '',
+      null,
+      undefined,
+    ]) {
+      expect([bad, agentLookColor(bad)]).toEqual([bad, null])
+    }
+  })
+
+  it('parseAgentColors drops junk: wrong version, non-hex colors, non-address keys', () => {
+    expect(parseAgentColors(null)).toEqual({})
+    expect(parseAgentColors('not json')).toEqual({})
+    expect(parseAgentColors(JSON.stringify({ version: 2, colors: { [bee.address]: '#123456' } }))).toEqual({})
+    expect(
+      parseAgentColors(
+        JSON.stringify({
+          version: 1,
+          colors: { [bee.address]: '#ABCDEF', [ant.address]: 'red', 'no-host': '#123456' },
+        }),
+      ),
+    ).toEqual({ [bee.address]: '#abcdef' })
+  })
+
+  it('a row whose color was never seen: its server is listed once for colors only (no get-icon, no put), then never again this window', async () => {
+    const { deps, calls, disk, colorStore } = fakeDeps((host, route) => {
+      if (host === B && route === 'projects/list') return listB
+      throw new Error(`unexpected ${host} ${route}`)
+    })
+    fresh(disk)
+    const sync = createHomeAvatarSync(deps)
+    await sync.refresh(input)
+    expect(calls.hostGet).toEqual([{ host: B, route: 'projects/list' }])
+    expect(calls.puts).toEqual([])
+    expect(useHomeAvatarStore.getState().colors).toEqual({ [bee.address]: BEE_COLOR, [ant.address]: ANT_COLOR })
+    expect(parseAgentColors(colorStore.raw)).toEqual({ [bee.address]: BEE_COLOR, [ant.address]: ANT_COLOR })
+    await sync.refresh(input)
+    expect(calls.hostGet).toEqual([{ host: B, route: 'projects/list' }])
+  })
+
+  it('a stored color is read with the cache and asks nobody; an offline server keeps its row’s stored color', async () => {
+    const { deps, calls, disk, colorStore } = fakeDeps((h, r) => new Error(`no network expected: ${h} ${r}`))
+    fresh(disk)
+    disk.set(cat.address, { dataUrl: PNG_C, missing: false, fetchedAt: T0 - 1000, sha256: 'h' })
+    colorStore.raw = storedColors({ [bee.address]: BEE_COLOR, [ant.address]: ANT_COLOR, [cat.address]: '#0f0' })
+    const sync = createHomeAvatarSync(deps)
+    await sync.refresh({ ...input, rows: [bee, ant, cat] })
+    expect(calls.hostGet).toEqual([])
+    expect(useHomeAvatarStore.getState().colors[cat.address]).toBe('#00ff00')
+    expect(calls.colorSaves).toEqual([])
+  })
+
+  it('a server that lists a non-hex color gets nothing into the store, and is not asked again for it this window', async () => {
+    const { deps, calls, disk } = fakeDeps((host, route) => {
+      if (host === B && route === 'projects/list') {
+        return [
+          { ...listB[0], color: 'red; background-image: url(https://evil.example/x)' },
+          { ...listB[1], color: 'var(--color-accent)' },
+        ]
+      }
+      throw new Error(`unexpected ${host} ${route}`)
+    })
+    fresh(disk)
+    const sync = createHomeAvatarSync(deps)
+    await sync.refresh(input)
+    expect(useHomeAvatarStore.getState().colors).toEqual({})
+    await sync.refresh(input)
+    expect(calls.hostGet.length).toBe(1)
+  })
+
+  it('a stale picture’s listing refreshes the colors too: a recolor there lands here', async () => {
+    const { deps, disk, colorStore } = fakeDeps((host, route) => {
+      if (host === B && route === 'projects/list') return [{ ...listB[0], color: '#FF0000' }, listB[1]]
+      throw new Error(`unexpected ${host} ${route}`)
+    })
+    fresh(disk)
+    disk.set(bee.address, { dataUrl: PNG_B1, missing: false, fetchedAt: T0 - DAY - 1, sha256: 'h' })
+    colorStore.raw = storedColors({ [bee.address]: BEE_COLOR, [ant.address]: ANT_COLOR })
+    const sync = createHomeAvatarSync(deps)
+    await sync.refresh(input)
+    expect(useHomeAvatarStore.getState().colors[bee.address]).toBe('#ff0000')
+    expect(parseAgentColors(colorStore.raw)[bee.address]).toBe('#ff0000')
+  })
+
+  it('the Add Agent picker’s listing records the color on add; an open room’s list records a recolor', async () => {
+    const { deps, calls } = fakeDeps((h, r) => new Error(`no network expected: ${h} ${r}`))
+    const sync = createHomeAvatarSync(deps)
+    await sync.putFromListing(B, bee.address, listB[0])
+    expect(useHomeAvatarStore.getState().colors[bee.address]).toBe(BEE_COLOR)
+    expect(calls.hostGet).toEqual([])
+    // A room on B sees `agent_identity_changed` (color): its list is patched
+    // and handed over; rows on other servers are untouched.
+    sync.noteListColors(B, [{ ...listB[0], color: '#00AA00' }], [bee, cat])
+    expect(useHomeAvatarStore.getState().colors).toEqual({ [bee.address]: '#00aa00' })
+  })
+
+  it('prune drops the colors of rows on no Home', async () => {
+    const { deps, colorStore } = fakeDeps(() => new Error('no network'))
+    colorStore.raw = storedColors({ [bee.address]: BEE_COLOR, [ant.address]: ANT_COLOR })
+    const sync = createHomeAvatarSync(deps)
+    await sync.readCache([bee.address])
+    sync.schedulePrune(() => [bee.address])
+    await sync.flushPrune()
+    expect(useHomeAvatarStore.getState().colors).toEqual({ [bee.address]: BEE_COLOR })
+    expect(parseAgentColors(colorStore.raw)).toEqual({ [bee.address]: BEE_COLOR })
+  })
+
+  it('storage that throws: colors still paint from this window’s listing, nothing breaks', async () => {
+    const { deps, disk } = fakeDeps((host, route) => (host === B && route === 'projects/list' ? listB : new Error(route)))
+    deps.colorsLoad = () => {
+      throw new Error('SecurityError: storage is disabled')
+    }
+    deps.colorsSave = () => {
+      throw new Error('QuotaExceededError')
+    }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    fresh(disk)
+    const sync = createHomeAvatarSync(deps)
+    await sync.refresh(input)
+    expect(useHomeAvatarStore.getState().colors).toEqual({ [bee.address]: BEE_COLOR, [ant.address]: ANT_COLOR })
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+      '[home-avatars] could not read the stored agent colors:',
+      '[home-avatars] could not store the agent colors:',
+    ])
+    warn.mockRestore()
+  })
+})
+
 // ── The hooks ───────────────────────────────────────────────────────────
 
 function Row({ address }: { address: string }): React.JSX.Element {
@@ -583,12 +755,13 @@ describe('the hooks', () => {
   it('rows paint from the cache with no server call on any render, and refresh once after a day', async () => {
     useConnectHostStore.setState({ hosts: [boxB], connectionStatus: 'connected' })
     hostPool.store.setState({ entries: { [B]: liveEntry(B, 'live') } })
-    const { deps, calls, disk, clock } = fakeDeps((host, route) => {
+    const { deps, calls, disk, clock, colorStore } = fakeDeps((host, route) => {
       if (host === B && route === 'projects/list') return listB
       throw new Error(`unexpected ${host} ${route}`)
     })
     disk.set(bee.address, { dataUrl: PNG_B1, missing: false, fetchedAt: T0 - 1000, sha256: 'h' })
     disk.set(ant.address, { dataUrl: null, missing: true, fetchedAt: T0 - 1000, sha256: null })
+    colorStore.raw = storedColors({ [bee.address]: BEE_COLOR, [ant.address]: ANT_COLOR })
     setHome([bee, ant])
     const sync = createHomeAvatarSync(deps)
 
@@ -734,11 +907,12 @@ describe('the hooks', () => {
     vi.useFakeTimers()
     useConnectHostStore.setState({ hosts: [boxB], connectionStatus: 'connected' })
     hostPool.store.setState({ entries: { [B]: liveEntry(B, 'live') } })
-    const { deps, calls, disk, clock } = fakeDeps((host, route) => {
+    const { deps, calls, disk, clock, colorStore } = fakeDeps((host, route) => {
       if (host === B && route === 'projects/list') return listB.slice(0, 1)
       throw new Error(`unexpected ${host} ${route}`)
     })
     disk.set(bee.address, { dataUrl: null, missing: true, fetchedAt: T0, sha256: null })
+    colorStore.raw = storedColors({ [bee.address]: BEE_COLOR })
     setHome([bee])
     const sync = createHomeAvatarSync(deps)
     const view = render(

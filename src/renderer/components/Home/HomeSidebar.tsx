@@ -44,7 +44,7 @@ import { TicketCountBadge, UnreadBadge } from '@/components/common/UnreadBadge'
 import { MachineChip } from './MachineChip'
 import { AgentStatusCluster } from '@/components/AgentStatus/AgentStatusCluster'
 import { openHomeRow } from '@/lib/home-open'
-import { useHomeRowAvatar } from '@/lib/home-avatars'
+import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { useRemoteRoomsPreview } from '@/lib/remote-rooms-preview'
 import { homeRooms, useShownHomeRoom } from '@/stores/home-rooms'
 import { AgentRowButton, ShortcutRangeHint, SingleProjectItem } from '@/components/Sidebar/Sidebar'
@@ -60,7 +60,9 @@ import { useConnectedRowNote, useHomeAddPickerStore, useRoomRowFacts, useRowStat
 import { GrokBotHomeRow } from '@/components/GrokBots/GrokBotRows'
 import { isGrokBotAddress } from '@/lib/grokbots'
 
-/** Avatar color for an agent on another server (its color lives there). */
+/** Avatar color for an agent on another server whose own color this
+ *  computer doesn't know yet (`useHomeRowColor` is null). A known color
+ *  always wins: the machine chip already says which server it is on. */
 export const OTHER_SERVER_AVATAR_COLOR = 'var(--color-text-muted)'
 
 export { MachineChip } from './MachineChip'
@@ -262,11 +264,13 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
   const title = status.note ? `${base} (${status.note})` : base
   // The agent's picture from this computer's cache (data URL), or null.
   const avatarUrl = useHomeRowAvatar(row.address)
+  // Its own color (a validated `#rrggbb` from that server's listing), else muted.
+  const color = useHomeRowColor(row.address) ?? OTHER_SERVER_AVATAR_COLOR
 
   return (
     <AgentRowButton
       isActive={preview && shownRoom === row.address}
-      color={OTHER_SERVER_AVATAR_COLOR}
+      color={color}
       dimmed={status.kind === 'offline' || status.kind === 'not-found'}
       onClick={() => {
         if (canOpen) openHomeRow(row)
@@ -277,7 +281,7 @@ function OtherHomeRow({ home, row, index }: { home: Home; row: HomeRow; index: n
         <ProjectAvatar
           projectPath={`home:${row.address}`}
           projectName={row.label}
-          projectColor={OTHER_SERVER_AVATAR_COLOR}
+          projectColor={color}
           iconUrl={avatarUrl}
           size={32}
           fetchIcon={false}

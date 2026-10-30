@@ -125,7 +125,7 @@ export interface HomeRoomsDeps {
    *  patch): refetch that Home row's cached avatar. Optional. */
   avatarChanged?(hostKey: string, handle: string): void
   /** Rename repair of the Home rows on `hostKey` from that server's fresh
-   *  list (labels follow names). Optional. */
+   *  list (labels follow names, row colors follow agent colors). Optional. */
   repairRows?(hostKey: string, projects: ProjectWithWorkspaces[]): void
   /** Z5/Z42: the server's version once `knowServer` resolved: null while
    *  the pool has not read its `/boot-status` (the room goes on and fails
@@ -468,7 +468,16 @@ export const homeRooms: HomeRooms = createHomeRooms({
   layoutRevisionSupported,
   onProjectsChanged: (scope, fn) => onProjectsChanged(scope, () => fn()),
   onAgentIdentityChanged: (scope, fn) => onAgentIdentityChanged(scope, fn),
-  repairRows: (hostKey, projects) => repairHomeRowsFromList(useHomesStore, hostKey, projects),
+  repairRows: (hostKey, projects) => {
+    repairHomeRowsFromList(useHomesStore, hostKey, projects)
+    // The room's list carries each agent's color (a recolor arrives as an
+    // `agent_identity_changed` patch): the Home rows follow it.
+    homeAvatarSync.noteListColors(
+      hostKey,
+      projects,
+      useHomesStore.getState().homes.flatMap((h) => h.rows),
+    )
+  },
   avatarChanged: (hostKey, handle) => void homeAvatarSync.recheck([homeAddress(handle, hostKey)], 'changed'),
   promote: promoteToPrimary,
   now: () => Date.now(),

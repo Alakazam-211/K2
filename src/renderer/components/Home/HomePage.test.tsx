@@ -184,6 +184,7 @@ import { LS_REMOTE_ROOMS_PREVIEW, readRemoteRoomsPreview, useRemoteRoomsPreviewS
 import { homeRooms } from '@/stores/home-rooms'
 import { otherRowOpenTitle } from './HomeSidebar'
 import { __resetAddPickerListingsForTests } from './HomeAddPanels'
+import { HOME_AGENT_COLORS_KEY, useHomeAvatarStore } from '@/lib/home-avatars'
 
 // jsdom has neither CSS.escape nor scrollIntoView; the picker's list uses
 // both for its keyboard row.
@@ -299,6 +300,8 @@ beforeEach(() => {
   clearHostSelect()
   __resetHostPoolForTests()
   __resetAddPickerListingsForTests()
+  localStorage.removeItem(HOME_AGENT_COLORS_KEY)
+  useHomeAvatarStore.setState({ colors: {} })
   useProjectsStore.setState({ activeProjectId: null, activeWorkspaceId: null })
   useSidebarStore.setState({ isCollapsed: false })
   usePanelsStore.setState({
@@ -873,6 +876,99 @@ describe('Home — the Agents page shell', () => {
     expect(useHomesStore.getState().homes[0].rows.map((r) => r.address)).toContain('quill::b.k2.dev')
     // No request for C's agents: it has no login.
     expect(fetchMock.mock.calls.map((c) => c[0]).filter((u) => u.startsWith('https://c.k2.dev/cli/'))).toEqual([])
+  })
+})
+
+// Rosson 2026-10-30: an agent on another server keeps its own color (the
+// machine chip already says where it lives). The color is data from that
+// server's listing, validated as `#rrggbb`; unknown → the muted color;
+// offline / not-found rows keep their dimming.
+describe('the color of a row on another server', () => {
+  const MUTED = 'var(--color-text-muted)'
+
+  /** The letter avatar's fill (ProjectAvatar's letter square). */
+  function fillOf(el: Element | null): string {
+    const letter = el?.querySelector('span > span[style*="background-color"]')
+    if (!(letter instanceof HTMLElement)) throw new Error('no letter avatar in this row')
+    return letter.style.backgroundColor
+  }
+
+  function railRow(address: string): HTMLElement {
+    const el = document.querySelector(`[data-home-rail-row="${address}"]`)
+    if (!(el instanceof HTMLElement)) throw new Error(`no rail icon for ${address}`)
+    return el
+  }
+
+  beforeEach(() => {
+    // Dee's server is not saved on this computer: its row is offline.
+    useHomesStore.getState().addRow(useHomesStore.getState().homes[0].id, {
+      address: 'dee::d.k2.dev',
+      workspaceId: 'pd',
+      label: 'Dee',
+    })
+    // What earlier listings recorded: Bee and Dee; Cee was never seen.
+    localStorage.setItem(
+      HOME_AGENT_COLORS_KEY,
+      JSON.stringify({ version: 1, colors: { 'bee::b.k2.dev': '#123456', 'dee::d.k2.dev': '#AbC' } }),
+    )
+  })
+
+  it('sidebar: its agent color when known, muted when unknown, dimmed when offline', async () => {
+    render(<Shell />)
+    await waitFor(() => expect(fillOf(rowOf('Bee'))).toBe('rgb(18, 52, 86)'))
+    expect(fillOf(rowOf('Cee'))).toBe(MUTED)
+    // Offline keeps its own color and its dimming.
+    expect(rowOf('Dee').querySelector('[data-row-status]')?.getAttribute('data-row-status')).toBe('offline')
+    expect(fillOf(rowOf('Dee'))).toBe('rgb(170, 187, 204)')
+    expect(rowOf('Dee').className).toContain('opacity-60')
+    expect(rowOf('Bee').className).not.toContain('opacity-60')
+  })
+
+  it('icon rail: the same colors, and the offline icon stays dimmed', async () => {
+    useSidebarStore.setState({ isCollapsed: true })
+    render(<Shell />)
+    await waitFor(() => expect(fillOf(railRow('bee::b.k2.dev'))).toBe('rgb(18, 52, 86)'))
+    expect(fillOf(railRow('cee::c.k2.dev'))).toBe(MUTED)
+    expect(railRow('dee::d.k2.dev').getAttribute('data-row-status')).toBe('offline')
+    expect(fillOf(railRow('dee::d.k2.dev'))).toBe('rgb(170, 187, 204)')
+    expect(railRow('dee::d.k2.dev').className).toContain('opacity-60')
+    expect(railRow('bee::b.k2.dev').className).not.toContain('opacity-60')
+  })
+
+  it('a stored color that is not hex never reaches a style: the row paints muted', async () => {
+    localStorage.setItem(
+      HOME_AGENT_COLORS_KEY,
+      JSON.stringify({
+        version: 1,
+        colors: {
+          'bee::b.k2.dev': 'red; background-image: url(https://evil.example/x)',
+          'cee::c.k2.dev': 'var(--x)',
+          'dee::d.k2.dev': '#abc',
+        },
+      }),
+    )
+    render(<Shell />)
+    await waitFor(() => expect(fillOf(rowOf('Dee'))).toBe('rgb(170, 187, 204)'))
+    expect(fillOf(rowOf('Bee'))).toBe(MUTED)
+    expect(fillOf(rowOf('Cee'))).toBe(MUTED)
+    expect(rowOf('Bee').innerHTML).not.toContain('evil.example')
+  })
+
+  it('Add Agent from a server paints each agent in its listed color, and the added row keeps it', async () => {
+    render(<Shell />)
+    fireEvent.click(screen.getByText('Add Agent'))
+    const picker = screen.getByRole('dialog', { name: 'Add Agent' })
+    fireEvent.click(within(picker).getByText('From a server'))
+    const groups = within(picker).getAllByRole('group')
+    await waitFor(() => expect(within(groups[0]).getAllByRole('option').length).toBe(2))
+    expect(fillOf(within(groups[0]).getByRole('option', { name: /Quill/ }))).toBe('rgb(101, 67, 33)')
+    fireEvent.click(within(groups[0]).getByRole('option', { name: /Quill/ }))
+    await waitFor(() => expect(useHomeAvatarStore.getState().colors['quill::b.k2.dev']).toBe('#654321'))
+    // The picker still lists Quill too: find the Home row by its shell.
+    const quillRow = Array.from(homeSidebar().querySelectorAll('[data-agent-row]')).find((r) =>
+      r.textContent?.includes('Quill'),
+    )
+    expect(fillOf(quillRow ?? null)).toBe('rgb(101, 67, 33)')
   })
 })
 

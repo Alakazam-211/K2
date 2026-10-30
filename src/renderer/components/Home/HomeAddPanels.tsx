@@ -51,6 +51,7 @@ import {
 import { AgentListStatus, agentListStatusClass } from '@/components/ui/AgentListStatus'
 import { isWebClient } from '@/lib/is-web'
 import { addWorkspaceToHome, type ListedWorkspace } from '@/lib/add-to-home'
+import { agentLookColor } from '@/lib/agent-look'
 
 /** A workspace as a server's `projects/list` sends it (lives with the add
  *  helper in lib/add-to-home.ts; re-exported for the picker's callers). */
@@ -60,8 +61,10 @@ export type { ListedWorkspace }
  *  it from the local avatar cache, P8/P19). */
 export type HomeAvatarLookup = (address: string) => string | null
 
-/** Avatar color for an agent on another server (Q6: no per-agent color;
- *  the same muted color as `OTHER_SERVER_AVATAR_COLOR` on Home rows). */
+/** Avatar color for an agent on another server whose listing has no valid
+ *  color (an older or odd server): the same muted color as
+ *  `OTHER_SERVER_AVATAR_COLOR` on Home rows. A valid one is the agent's own
+ *  (`agentLookColor`), as on its Home row. */
 const PICKER_OTHER_SERVER_COLOR = 'var(--color-text-muted)'
 
 /** P8: only a `data:image/` icon from another server paints; anything else
@@ -495,7 +498,7 @@ function FromServerList({
             // means nothing on the connected server.
             path: `home-add:${s.key}:${w.path ?? w.id}`,
             name: w.name,
-            color: PICKER_OTHER_SERVER_COLOR,
+            color: agentLookColor(w.color) ?? PICKER_OTHER_SERVER_COLOR,
             id: w.id,
             iconUrl: listedIconUrl(w.iconUrl) ?? (address && avatarFor ? avatarFor(address) : null),
             fetchIcon: false,

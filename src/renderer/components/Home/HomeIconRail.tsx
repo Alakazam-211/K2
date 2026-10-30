@@ -12,7 +12,7 @@ import { useCommandPaletteStore } from '@/stores/command-palette'
 import { isWebClient } from '@/lib/is-web'
 import { activeHomeHostKey, findWorkspaceForRow, parseHomeAddress } from '@/lib/home-address'
 import { openHomeRow } from '@/lib/home-open'
-import { useHomeRowAvatar } from '@/lib/home-avatars'
+import { useHomeRowAvatar, useHomeRowColor } from '@/lib/home-avatars'
 import { ProjectIcon } from '@/components/Sidebar/IconRail'
 import ProjectAvatar from '@/components/Sidebar/ProjectAvatar'
 import { SidebarCollapseButton } from '@/components/Sidebar/SidebarCollapseButton'
@@ -26,6 +26,7 @@ function OtherRowIcon({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
   const canOpen = !(isWebClient() && !onConnected) && status.kind !== 'not-found'
   const title = [row.label, place, status.label].filter(Boolean).join(' • ')
   const avatarUrl = useHomeRowAvatar(row.address)
+  const color = useHomeRowColor(row.address) ?? OTHER_SERVER_AVATAR_COLOR
   return (
     <button
       className={`no-drag relative flex items-center justify-center w-8 h-8 flex-shrink-0 transition-colors text-[var(--color-text-muted)] hover:bg-white/[0.06] hover:text-[var(--color-text-secondary)]${
@@ -36,11 +37,13 @@ function OtherRowIcon({ home, row }: { home: Home; row: HomeRow }): React.JSX.El
       }}
       onContextMenu={(e) => void homeRowContextMenu(e, home, row)}
       title={title}
+      data-home-rail-row={row.address}
+      data-row-status={status.kind}
     >
       <ProjectAvatar
         projectPath={`home:${row.address}`}
         projectName={row.label}
-        projectColor={OTHER_SERVER_AVATAR_COLOR}
+        projectColor={color}
         iconUrl={avatarUrl}
         size={20}
         fetchIcon={false}

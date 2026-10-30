@@ -35,6 +35,24 @@
 //     cache nothing (P27).
 //   - The web client has no local daemon: everything here is off (P20).
 //
+// Agent colors ride the same listings (Rosson 10-30: a row on another
+// server keeps its agent's own color; the machine chip already says where
+// it lives):
+//   - Every listing this module reads (a stale picture's, the Add Agent
+//     picker's on add, the connected server's store, `local` rows) records
+//     each row's `color`, and an open Home room's list (a rename, a
+//     recolor seen as `agent_identity_changed`) records it too.
+//   - A row whose color this computer has never seen counts as due ONCE per
+//     window: its server is listed for colors only (no `get-icon`).
+//   - Only `#rgb` / `#rrggbb` hex is kept, normalized to lowercase
+//     `#rrggbb` (`agentLookColor`, the client side of the daemon's
+//     `agent_look::normalize_color`): another server never gets a CSS
+//     string into a style.
+//   - Colors are kept in localStorage `k2.homes.agentColors.v1` (every
+//     window shares it; re-read with the cache on mount and focus) and
+//     pruned with the pictures. Storage that throws just means muted until
+//     the next listing.
+//
 // Nothing here runs unless Home is on screen (`HomeShellEffects`), so a
 // headless daemon misses nothing: only a screen uses these pictures.
 
@@ -48,6 +66,7 @@ import { useHomesStore, selectedHome, type HomeRow, type HomesState } from '@/st
 import { useConnectHostStore } from '@/stores/connect-host'
 import { useProjectsStore } from '@/stores/projects'
 import { hostPool } from '@/lib/host-pool-instance'
+import { agentLookColor } from '@/lib/agent-look'
 
 /** A row's image is refreshed at most this often (P12c). */
 export const AVATAR_REFRESH_MS = 24 * 60 * 60 * 1000
@@ -72,6 +91,30 @@ export const AVATAR_GET_MAX_QUERY_CHARS = 8 * 1024
  *  transition) before it is asked again. */
 export const AVATAR_FAILURE_BACKOFF_MS = 60_000
 
+/** localStorage key for the agent colors of Home rows (by row address). */
+export const HOME_AGENT_COLORS_KEY = 'k2.homes.agentColors.v1'
+
+/** Parse the stored color map; any entry that is not a row address with a
+ *  valid color is dropped. */
+export function parseAgentColors(raw: string | null): Record<string, string> {
+  if (!raw) return {}
+  let doc: unknown
+  try {
+    doc = JSON.parse(raw)
+  } catch {
+    return {}
+  }
+  if (!doc || typeof doc !== 'object') return {}
+  const { version, colors } = doc as { version?: unknown; colors?: unknown }
+  if (version !== 1 || !colors || typeof colors !== 'object') return {}
+  const out: Record<string, string> = {}
+  for (const [a, c] of Object.entries(colors as Record<string, unknown>)) {
+    const color = typeof c === 'string' ? agentLookColor(c) : null
+    if (color && parseHomeAddress(a)) out[a] = color
+  }
+  return out
+}
+
 /** One row's cache entry, as `GET /cli/home/avatars` returns it. */
 export interface CachedAvatar {
   dataUrl: string | null
@@ -86,6 +129,8 @@ export interface ListedAvatarWorkspace {
   name: string
   handle?: string | null
   path?: string | null
+  /** `projects.color` there; validated with `agentLookColor` before use. */
+  color?: string | null
   iconUrl?: string | null
 }
 
@@ -94,9 +139,11 @@ interface HomeAvatarState {
   cached: Record<string, CachedAvatar>
   /** P27: `local` rows on a remote window, read live (never cached). */
   local: Record<string, string | null>
+  /** Agent colors (validated `#rrggbb`), by row address. */
+  colors: Record<string, string>
 }
 
-export const useHomeAvatarStore = create<HomeAvatarState>(() => ({ cached: {}, local: {} }))
+export const useHomeAvatarStore = create<HomeAvatarState>(() => ({ cached: {}, local: {}, colors: {} }))
 
 /** How long a `missing` entry lives, after `misses` misses in a row this
  *  window has recorded for it (0: read from the cache, not re-checked yet). */
@@ -165,6 +212,11 @@ export interface HomeAvatarDeps {
   cachePrune: (keep: string[]) => Promise<void>
   /** `GET /cli/<route>` on `hostKey`, with THAT server's own login. */
   hostGet: <T>(hostKey: string, route: string, params?: Record<string, string>) => Promise<T>
+  /** The stored agent colors (`HOME_AGENT_COLORS_KEY`), raw; null = none.
+   *  May throw (a locked-down webview). */
+  colorsLoad: () => string | null
+  /** Store the agent colors (raw JSON). May throw (quota, private mode). */
+  colorsSave: (raw: string) => void
 }
 
 export interface AvatarSyncInput {
@@ -193,6 +245,10 @@ export interface HomeAvatarSync {
   schedulePrune: (keep: () => string[] | null) => void
   /** Run a pending prune now (tests). */
   flushPrune: () => Promise<void>
+  /** Record the agent colors of `rows` on `hostKey` from a list of that
+   *  server's workspaces another surface already holds (an open Home
+   *  room's list). No network. */
+  noteListColors: (hostKey: string, list: readonly ListedAvatarWorkspace[], rows: readonly HomeRow[]) => void
   /** Refetch these rows now (within the last `refresh` input's rows):
    *  `'user'` (an explicit ask) only those whose cache says `missing`,
    *  `'changed'` (the peer says its picture changed) any. Both respect
@@ -222,6 +278,9 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
   let localInflight: Promise<void> | null = null
   let pruneTimer: ReturnType<typeof setTimeout> | null = null
   let pruneKeep: (() => string[] | null) | null = null
+  /** Rows whose server answered a listing this window (found or not): a
+   *  row with no known color is due for a colors-only listing until then. */
+  const colorTried = new Set<string>()
 
   const logOnce = (key: string, msg: string, err: unknown): void => {
     if (logged.has(key)) return
@@ -229,8 +288,56 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     console.warn(`[home-avatars] ${msg}`, err)
   }
 
+  /** Re-read the stored colors (another window may have written them). */
+  const loadColors = (): void => {
+    let raw: string | null
+    try {
+      raw = deps.colorsLoad()
+    } catch (err) {
+      logOnce('colors-load', 'could not read the stored agent colors:', err)
+      return
+    }
+    const colors = parseAgentColors(raw)
+    const prev = store.getState().colors
+    const same =
+      Object.keys(colors).length === Object.keys(prev).length &&
+      Object.entries(colors).every(([a, c]) => prev[a] === c)
+    if (!same) store.setState({ colors })
+  }
+
+  const saveColors = (colors: Record<string, string>): void => {
+    try {
+      deps.colorsSave(JSON.stringify({ version: 1, colors }))
+    } catch (err) {
+      logOnce('colors-save', 'could not store the agent colors:', err)
+    }
+  }
+
+  /** Record each `[address, listed color]`; only what `agentLookColor`
+   *  accepts is kept (the same check as the agent's color on its own
+   *  server), and an invalid color forgets the row's (it paints muted).
+   *  Stores only when something changed. */
+  const noteColors = (found: ReadonlyArray<readonly [string, string | null | undefined]>): void => {
+    const prev = store.getState().colors
+    let next: Record<string, string> | null = null
+    for (const [address, raw] of found) {
+      const color = agentLookColor(raw)
+      if (color === ((next ?? prev)[address] ?? null)) continue
+      next = next ?? { ...prev }
+      if (color) next[address] = color
+      else delete next[address]
+    }
+    if (!next) return
+    store.setState({ colors: next })
+    saveColors(next)
+  }
+
+  const colorDue = (address: string): boolean =>
+    store.getState().colors[address] === undefined && !colorTried.has(address)
+
   const readCache = async (addresses: readonly string[]): Promise<void> => {
     if (deps.isWeb() || addresses.length === 0) return
+    loadColors()
     const uniq = [...new Set(addresses)]
     for (const batch of avatarQueryBatches(uniq)) {
       let got: Record<string, CachedAvatar>
@@ -300,11 +407,15 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
   const stale = (address: string, now: number): boolean =>
     avatarEntryStale(store.getState().cached[address], now, misses.get(address) ?? 0, forced.has(address))
 
+  /** List `hostKey` once and record what it says for `rows`: always their
+   *  colors, and their pictures when `images` (false: the server was
+   *  listed only for colors this window has never seen). */
   const refreshHost = async (
     hostKey: string,
     rows: HomeRow[],
     listing: () => Promise<readonly ListedAvatarWorkspace[]>,
     ask: boolean,
+    images: boolean,
   ): Promise<void> => {
     let list: readonly ListedAvatarWorkspace[]
     try {
@@ -314,6 +425,14 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
       logOnce(`list:${hostKey}`, `could not list agents on ${hostKey} for their pictures:`, err)
       return
     }
+    const found: [string, string | null | undefined][] = []
+    for (const row of rows) {
+      colorTried.add(row.address)
+      const ws = findWorkspaceForRow([...list], row)
+      if (ws) found.push([row.address, ws.color])
+    }
+    noteColors(found)
+    if (!images) return
     const done: string[] = []
     for (const row of rows) {
       // The server answered: a forced ask is spent, whatever comes of it.
@@ -358,17 +477,20 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     if (localFail !== undefined && now - localFail < AVATAR_FAILURE_BACKOFF_MS) return
 
     // A server with at least one stale row is listed once, and that one
-    // listing refreshes every row on it (T4.1).
+    // listing refreshes every row on it (T4.1). A server whose only due
+    // rows are colors never seen is listed for colors alone.
     const staleHosts = new Set<string>()
+    const colorHosts = new Set<string>()
     for (const r of rows) {
       if (pending.has(r.address)) continue
       const host = parseHomeAddress(r.address)!.host
       if (stale(r.address, now) || connectedHasNewImage(r, host, input)) staleHosts.add(host)
+      else if (colorDue(r.address)) colorHosts.add(host)
     }
     const byHost = new Map<string, HomeRow[]>()
     for (const r of rows) {
       const host = parseHomeAddress(r.address)!.host
-      if (!staleHosts.has(host) || pending.has(r.address)) continue
+      if ((!staleHosts.has(host) && !colorHosts.has(host)) || pending.has(r.address)) continue
       byHost.set(host, [...(byHost.get(host) ?? []), r])
     }
     const jobs: Promise<void>[] = []
@@ -378,7 +500,7 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
         const projects = input.connectedProjects
         if (!projects) continue
         // P12a: the connected server's images come from the store.
-        const job = refreshHost(host, hostRows, async () => projects, false)
+        const job = refreshHost(host, hostRows, async () => projects, false, staleHosts.has(host))
         jobs.push(job)
         continue
       }
@@ -393,6 +515,7 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
           return Array.isArray(raw) ? (raw as ListedAvatarWorkspace[]) : []
         },
         true,
+        staleHosts.has(host),
       ).finally(() => inflightHosts.delete(host))
       inflightHosts.set(host, job)
       jobs.push(job)
@@ -452,9 +575,11 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
         return
       }
       const next: Record<string, string | null> = {}
+      const found: [string, string | null | undefined][] = []
       for (const row of localRows) {
         const ws = findWorkspaceForRow(list, row)
         if (!ws) continue
+        found.push([row.address, ws.color])
         try {
           next[row.address] = (await imageFor(LOCAL_HOME_HOST, ws, true)) ?? null
         } catch (err) {
@@ -462,6 +587,7 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
         }
       }
       store.setState((s) => ({ local: { ...s.local, ...next } }))
+      noteColors(found)
     })().finally(() => {
       localInflight = null
     })
@@ -470,6 +596,8 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
 
   const putFromListing = async (hostKey: string, address: string, ws: ListedAvatarWorkspace): Promise<void> => {
     if (deps.isWeb() || hostKey === LOCAL_HOME_HOST) return
+    colorTried.add(address)
+    noteColors([[address, ws.color]])
     pending.add(address)
     try {
       const image = await imageFor(hostKey, ws, true)
@@ -487,6 +615,13 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     pruneKeep = null
     const keep = keepFn?.()
     if (!keep) return
+    const kept = new Set(keep)
+    const colors = store.getState().colors
+    if (Object.keys(colors).some((a) => !kept.has(a))) {
+      const next = Object.fromEntries(Object.entries(colors).filter(([a]) => kept.has(a)))
+      store.setState({ colors: next })
+      saveColors(next)
+    }
     try {
       await deps.cachePrune(keep)
     } catch (err) {
@@ -507,7 +642,32 @@ export function createHomeAvatarSync(deps: HomeAvatarDeps): HomeAvatarSync {
     await runPrune()
   }
 
-  return { readCache, refresh, readLocalRows, putFromListing, schedulePrune, flushPrune, recheck, recheckDue }
+  const noteListColors = (
+    hostKey: string,
+    list: readonly ListedAvatarWorkspace[],
+    rows: readonly HomeRow[],
+  ): void => {
+    if (deps.isWeb()) return
+    const found: [string, string | null | undefined][] = []
+    for (const row of rows) {
+      if (parseHomeAddress(row.address)?.host !== hostKey) continue
+      const ws = findWorkspaceForRow([...list], row)
+      if (ws) found.push([row.address, ws.color])
+    }
+    noteColors(found)
+  }
+
+  return {
+    readCache,
+    refresh,
+    readLocalRows,
+    putFromListing,
+    schedulePrune,
+    flushPrune,
+    recheck,
+    recheckDue,
+    noteListColors,
+  }
 }
 
 // ── The app's instance ───────────────────────────────────────────────────
@@ -530,6 +690,8 @@ const appDeps: HomeAvatarDeps = {
     await daemonCliPost(scopeForHost(LOCAL_HOME_HOST), 'home/avatars/prune', { keep })
   },
   hostGet: (hostKey, route, params) => daemonCliGet(scopeForHost(hostKey), route, params),
+  colorsLoad: () => globalThis.localStorage?.getItem(HOME_AGENT_COLORS_KEY) ?? null,
+  colorsSave: (raw) => globalThis.localStorage?.setItem(HOME_AGENT_COLORS_KEY, raw),
 }
 
 export const homeAvatarSync: HomeAvatarSync = createHomeAvatarSync(appDeps)
@@ -573,6 +735,12 @@ export function useHomeRowAvatar(address: string): string | null {
     cached: entry ? { [address]: entry } : {},
     local: local === undefined ? {} : { [address]: local },
   })
+}
+
+/** The agent's own color for a Home row (validated `#rrggbb`), or null
+ *  when this computer doesn't know it yet (paint the muted color). */
+export function useHomeRowColor(address: string): string | null {
+  return useHomeAvatarStore((s) => s.colors[address] ?? null)
 }
 
 /** Keeps the selected Home's pictures current and prunes the cache.

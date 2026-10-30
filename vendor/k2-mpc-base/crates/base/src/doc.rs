@@ -276,6 +276,75 @@ impl Doc {
         self.inner.blame_runs(root)
     }
 
+    /// Deliver everything `from` has that this doc lacks. Both docs are this kit's, in one
+    /// process: the diff is encoded against this doc's own state vector and applied as
+    /// trusted bytes. Test-only ([`crate::conformance::replica`]).
+    #[cfg(feature = "conformance")]
+    pub(crate) fn sync_from_local(&mut self, from: &Doc) -> Result<(), DocError> {
+        let update = from.inner.encode_diff(&self.inner.state_vector())?;
+        self.inner.apply_trusted(&update)
+    }
+
+    /// The state vector as sorted `(client, clock)` pairs. Test-only.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn state_clocks(&self) -> Vec<(ClientId, u32)> {
+        self.inner.state_clocks()
+    }
+
+    /// What this doc has past `clocks`, a state it has seen. Test-only.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn events_since(&self, clocks: &[(ClientId, u32)]) -> Result<Vec<u8>, DocError> {
+        self.inner.events_since(clocks)
+    }
+
+    /// Deliver an update another of this kit's docs made in this process, refusing one that
+    /// skips ahead of a client's history. Test-only.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn deliver_local(&mut self, update: &[u8]) -> Result<(), DocError> {
+        self.inner.deliver_local(update)
+    }
+
+    /// A relative position at byte offset `at` of text root `root`, stuck to the character
+    /// after it (`right`) or before it. `None` when there is no character on that side.
+    /// Test-only.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn sticky(
+        &self,
+        root: &str,
+        at: usize,
+        right: bool,
+    ) -> Result<Option<crate::engine::Sticky>, DocError> {
+        let text = self.text(root)?;
+        if at > text.len() || !text.is_char_boundary(at) {
+            return Ok(None);
+        }
+        let at16 = text[..at].encode_utf16().count() as u32;
+        Ok(self.inner.sticky(root, at16, right))
+    }
+
+    /// Where `pos` is now, as a byte offset of text root `root`. Test-only.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn resolve_sticky(
+        &self,
+        root: &str,
+        pos: &crate::engine::Sticky,
+    ) -> Result<Option<usize>, DocError> {
+        let text = self.text(root)?;
+        let Some(at16) = self.inner.resolve_sticky(pos) else {
+            return Ok(None);
+        };
+        let (mut n16, mut byte) = (0u32, 0usize);
+        for ch in text.chars() {
+            if n16 >= at16 {
+                break;
+            }
+            n16 += ch.len_utf16() as u32;
+            byte += ch.len_utf8();
+        }
+        // an offset inside a surrogate pair, or past the end, is not a position of the text
+        Ok((n16 == at16).then_some(byte))
+    }
+
     /// Replace a text root with `new` as participant `client`, through a minimal diff.
     pub fn replace_text_as(
         &mut self,

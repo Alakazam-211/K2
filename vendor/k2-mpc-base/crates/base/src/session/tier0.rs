@@ -4,14 +4,15 @@
 //! last-writer-wins, versions and restore. Desktop apps ignore leases, so a save that lands
 //! under a lease (or over a version the file didn't have yet) is merged by a pack that can
 //! (tier 0.5), and otherwise kept: the save becomes current, and what it replaced stays a
-//! version **and** is written to a conflict copy beside the file. Never lost.
+//! version **and** is written to a conflict copy (beside the file, or in the folder the host
+//! chooses, [`Host::conflict_dir`]). Never lost.
 //!
 //! The contract is in `docs/SESSIONS.md`, "Tier 0".
 
 use std::collections::{HashMap, VecDeque};
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -26,8 +27,8 @@ use super::presence::{self, Presence};
 use super::ratelimit::Bucket;
 use crate::blob::{BlobError, BlobId, BlobInfo, BlobReader, BlobStore};
 use crate::store::{
-    BlobReason, BlobSync, BlobVersion, DocId, DocKey, DocMeta, DocStore, PurgeCounts, StoreError,
-    VersionId, BLOB_DOC_PACK,
+    Approval, ApprovalState, BlobReason, BlobSync, BlobVersion, DocId, DocKey, DocMeta, DocStore,
+    PurgeCounts, StoreError, VersionId, BLOB_DOC_PACK,
 };
 
 /// The participant a pack's merge of a conflicting save is attributed to (tier 0.5).
@@ -65,10 +66,11 @@ pub trait BlobPack: Send + Sync {
         BlobMerge::Unsupported
     }
 
-    /// The conflict copy's file name, in the file's folder, for the file `file_name`, made at
-    /// `at_ms` (host clock, ms since the Unix epoch), holding `who`'s content. Default
-    /// [`conflict_copy_name`]. A name with a path separator, or `.`/`..`, falls back to the
-    /// default; an existing file is never overwritten (the kit adds ` 2`, ` 3`...).
+    /// The conflict copy's file name (in the conflict-copy folder: the file's own, or
+    /// [`Host::conflict_dir`]'s) for the file `file_name`, made at `at_ms` (host clock, ms
+    /// since the Unix epoch), holding `who`'s content. Default [`conflict_copy_name`]. A name
+    /// with a path separator, or `.`/`..`, falls back to the default; an existing file is
+    /// never overwritten (the kit adds ` 2`, ` 3`...).
     fn conflict_copy_name(&self, file_name: &str, at_ms: u64, who: &str) -> String {
         conflict_copy_name(file_name, at_ms, who)
     }
@@ -80,8 +82,9 @@ pub struct AnyFile;
 
 impl BlobPack for AnyFile {}
 
-/// `name (conflict YYYY-MM-DD HHMMSS from <who>).ext`, in UTC. `who` is made safe for a file
-/// name (no separators or control characters, at most 64 characters).
+/// `name (conflict <who> YYYY-MM-DD HHMMSS).ext`, in UTC (K-A11Y-5). `who` is made safe for a
+/// file name (no separators or control characters, at most 64 characters; `someone` when
+/// empty).
 pub fn conflict_copy_name(file_name: &str, at_ms: u64, who: &str) -> String {
     let (stem, ext) = split_ext(file_name);
     let secs = at_ms / 1000;
@@ -103,7 +106,7 @@ pub fn conflict_copy_name(file_name: &str, at_ms: u64, who: &str) -> String {
         w => w,
     };
     format!(
-        "{stem} (conflict {y:04}-{mo:02}-{d:02} {:02}{:02}{:02} from {who}){ext}",
+        "{stem} (conflict {who} {y:04}-{mo:02}-{d:02} {:02}{:02}{:02}){ext}",
         t / 3600,
         t / 60 % 60,
         t % 60
@@ -169,6 +172,25 @@ pub struct BlobWriteResult {
     pub written: bool,
 }
 
+/// Returned by [`BlobSession::set_approval`]: the version's approval record and, when it was
+/// declined, the way back (K-HIST-19 for tier 0). A declined version stays: blobs have no
+/// `revert`, so the person reverses it **explicitly** with `restore --version restore_to`;
+/// the kit never restores on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobApproval {
+    /// The version the approval is for.
+    pub version: VersionId,
+    pub approval: Approval,
+    /// Declined: the version before it, whose content `restore` makes current again.
+    /// `None` when approved, or when that version was purged (its content is gone).
+    pub restore_to: Option<VersionId>,
+    /// Declined: the versions written after it, oldest first (empty when approved). Blobs
+    /// don't merge, so restoring `restore_to` also replaces **their** content as the current
+    /// one; they stay versions (restorable), but say so before restoring.
+    pub later: Vec<VersionId>,
+}
+
 /// One author of a blob doc's history, in [`BlobBlame::authors`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -196,6 +218,68 @@ pub struct BlobBlame {
     pub versions: usize,
     /// Everyone who set a version, most recent first.
     pub authors: Vec<BlobAuthor>,
+    /// The approval state of the current version, when an agent wrote it on someone's
+    /// behalf (as text blame's [`super::BlameLine::approval`]).
+    pub approval: Option<ApprovalState>,
+}
+
+/// What a blob version was, in [`BlobLogEntry::kind`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BlobLogKind {
+    /// The doc's first content (`kit:import`).
+    Import,
+    /// A participant's `write --base`.
+    Write,
+    /// A participant restored version [`BlobLogEntry::of`] (a forward change).
+    Restore,
+    /// Another program saved the file (`kit:external`).
+    External,
+    /// Another program's save that conflicted (under a lease, or over a version the file
+    /// didn't have yet): it became current, and what it replaced (the previous version) was
+    /// kept, also as [`BlobLogEntry::conflict_copy`]. A conflict whose copy couldn't be
+    /// written logs as [`BlobLogKind::External`] (the store records the copy, not the
+    /// conflict).
+    ConflictKept,
+    /// Tier 0.5: a pack merged a conflicting save (`kit:merge`; the save is the entry
+    /// before it).
+    Merged,
+}
+
+/// One entry of [`BlobSession::log`]: one version. Field names follow the text log's
+/// (`ChangeInfo`, `VersionInfo`) where they mean the same. Metadata only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct BlobLogEntry {
+    /// The version.
+    pub id: VersionId,
+    pub kind: BlobLogKind,
+    /// For a restore, the version restored.
+    pub of: Option<u64>,
+    /// Who set it: a pid, or the kit's own (`kit:import`, `kit:external`, `kit:merge`).
+    pub author: String,
+    /// Their display name then.
+    pub author_name: String,
+    /// Surface: `"cli"`, `"tab"`, `"disk"`...
+    pub via: String,
+    /// When (host clock, ms).
+    pub at_ms: u64,
+    /// The person an agent wrote it for, as recorded on the version.
+    pub on_behalf_of: Option<String>,
+    /// Its name, if it was named.
+    pub name: Option<String>,
+    /// Purged: the entry stays, its content is gone.
+    pub redacted: bool,
+    /// Its size in bytes.
+    pub size: u64,
+    /// The file's modification time, when the content came from disk.
+    pub mtime_ms: Option<u64>,
+    /// The conflict copy this save made (resolved against the file's folder; the record as
+    /// stored when the session has no file), whether or not it still exists.
+    pub conflict_copy: Option<PathBuf>,
+    /// The approval state of a version an agent wrote on someone's behalf (`log --pending`
+    /// lists the `Pending` ones; [`BlobSession::set_approval`] settles them).
+    pub approval: Option<ApprovalState>,
 }
 
 /// Returned by [`BlobSession::status`]. Metadata only.
@@ -211,6 +295,33 @@ pub struct BlobStatus {
     pub lease: Option<LeaseInfo>,
     /// `None` without a file.
     pub disk: Option<DiskState>,
+    /// The doc's conflict copies that exist now (recorded by the kit; oldest first).
+    pub conflict_copies: Vec<ConflictCopy>,
+}
+
+/// A conflict copy the kit wrote and recorded ([`BlobStatus::conflict_copies`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ConflictCopy {
+    /// Where it is now: the record resolved against the file's folder.
+    pub path: PathBuf,
+    /// The outside save that made it (the version that records it).
+    pub version: VersionId,
+    /// The version whose content it holds (what that save replaced).
+    pub kept: VersionId,
+    /// When it was written (host clock, ms).
+    pub at_ms: u64,
+}
+
+/// A recorded conflict copy (from the versions), cached per session.
+#[derive(Debug, Clone)]
+struct CopyRec {
+    version: VersionId,
+    kept: VersionId,
+    at_ms: u64,
+    /// As recorded: a path relative to the file's folder (a plain file name when beside it,
+    /// as every copy written by v0.3.x and earlier is).
+    rec: String,
 }
 
 /// One connection to a blob doc: the shared presence core plus an opaque view region.
@@ -259,9 +370,48 @@ struct BState {
     lease: Option<LeaseInfo>,
     buckets: HashMap<String, Bucket>,
     disk: Option<BDisk>,
+    /// The doc's recorded conflict copies (loaded from the versions on first use).
+    copies: Option<Vec<CopyRec>>,
+    /// Copies a person edited (their bytes no longer match their version), by path, at the
+    /// stat they had: never deleted, and not re-hashed until they change.
+    copies_edited: HashMap<PathBuf, FileStat>,
+    /// When the conflict-copy cleanup last ran (host clock).
+    last_cleanup_ms: Option<u64>,
 }
 
 const OWN_WRITES_KEPT: usize = 8;
+
+/// `target` relative to `base` (both absolute and canonical): `..` up to their common
+/// prefix, then down.
+fn relative_path(base: &Path, target: &Path) -> PathBuf {
+    let b: Vec<Component<'_>> = base.components().collect();
+    let t: Vec<Component<'_>> = target.components().collect();
+    let common = b.iter().zip(&t).take_while(|(x, y)| x == y).count();
+    let mut out = PathBuf::new();
+    for _ in common..b.len() {
+        out.push("..");
+    }
+    for c in &t[common..] {
+        out.push(c.as_os_str());
+    }
+    out
+}
+
+/// A recorded copy's path: `rec` joined to the file's folder `base`, `..` resolved lexically
+/// (`base` is canonical). An absolute `rec` stands on its own.
+fn resolve_copy(base: &Path, rec: &str) -> PathBuf {
+    let mut out = base.to_path_buf();
+    for c in Path::new(rec).components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
 
 /// A loaded blob doc and the people and agents in it (tier 0). Thread-safe; every call
 /// takes the session's lock, except a write's upload into the blob store. Get one from
@@ -317,6 +467,9 @@ impl BlobSession {
                 lease: None,
                 buckets: HashMap::new(),
                 disk: None,
+                copies: None,
+                copies_edited: HashMap::new(),
+                last_cleanup_ms: None,
             }),
         }
     }
@@ -877,6 +1030,58 @@ impl BlobSession {
         Ok(Self::store(&st)?.blob_versions(self.doc_id)?)
     }
 
+    /// The history as a log (`log` for any file): one entry per version, **oldest first**:
+    /// who and when, what it was (a write, a restore, an outside save, a conflicting save
+    /// kept with a copy, a merge...), for whom, its name, whether it was purged, and its
+    /// conflict copy. Built from the stored versions. Needs history, as
+    /// [`BlobSession::versions`].
+    pub fn log(&self, conn: ConnId) -> Result<Vec<BlobLogEntry>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        self.admit(&mut st, conn, Need::History, Action::History, now)?;
+        let base = Self::copy_base(&st);
+        let store = Self::store(&st)?;
+        let approvals: HashMap<VersionId, ApprovalState> = store
+            .blob_approvals(self.doc_id)?
+            .into_iter()
+            .map(|(v, a)| (v, a.state))
+            .collect();
+        Ok(store
+            .blob_versions(self.doc_id)?
+            .into_iter()
+            .map(|(id, v)| {
+                let kind = match v.reason {
+                    BlobReason::Import => BlobLogKind::Import,
+                    BlobReason::Write => BlobLogKind::Write,
+                    BlobReason::Restore => BlobLogKind::Restore,
+                    BlobReason::External if v.conflict_copy.is_some() => BlobLogKind::ConflictKept,
+                    BlobReason::External => BlobLogKind::External,
+                    BlobReason::Merged => BlobLogKind::Merged,
+                };
+                let conflict_copy = v.conflict_copy.as_deref().map(|c| match &base {
+                    Some(b) => resolve_copy(b, c),
+                    None => PathBuf::from(c),
+                });
+                BlobLogEntry {
+                    id,
+                    kind,
+                    of: v.restored_from,
+                    author: v.author,
+                    author_name: v.author_name,
+                    via: v.via,
+                    at_ms: v.at_ms,
+                    on_behalf_of: v.on_behalf_of,
+                    name: v.name,
+                    redacted: v.redacted,
+                    size: v.size,
+                    mtime_ms: v.mtime_ms,
+                    conflict_copy,
+                    approval: approvals.get(&id).copied(),
+                }
+            })
+            .collect())
+    }
+
     /// **Blame** for any file (tier 0, P22): the current version's setter and a summary of
     /// the version history (how many versions, who set them, most recent first). Needs read
     /// and history (K-PERM-9).
@@ -885,7 +1090,9 @@ impl BlobSession {
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
         self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
-        let all = Self::store(&st)?.blob_versions(self.doc_id)?;
+        let store = Self::store(&st)?;
+        let all = store.blob_versions(self.doc_id)?;
+        let approval = store.blob_approval(self.doc_id, st.vid)?.map(|a| a.state);
         let mut authors: Vec<BlobAuthor> = Vec::new();
         for (_, v) in all.iter().rev() {
             match authors.iter_mut().find(|a| a.pid == v.author) {
@@ -902,6 +1109,7 @@ impl BlobSession {
             current: st.cur.clone(),
             versions: all.len(),
             authors,
+            approval,
         })
     }
 
@@ -936,6 +1144,7 @@ impl BlobSession {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         self.expire_lease(&mut st, now);
+        let conflict_copies = self.existing_copies(&mut st)?;
         Ok(BlobStatus {
             key: st.key.clone(),
             version: st.vid,
@@ -944,6 +1153,7 @@ impl BlobSession {
             connections: st.members.len(),
             lease: st.lease.clone(),
             disk: Self::disk_state(&st),
+            conflict_copies,
         })
     }
 
@@ -1126,6 +1336,139 @@ impl BlobSession {
         self.commit_own(st, i, v, now)
     }
 
+    // ----- approvals of on-behalf writes (K-ID-10, K-ID-11, K-T0-9) -----
+
+    /// Settle the approval of version `vid`, written (or restored) by an assistant agent on
+    /// behalf of a person: `Approved` or `Declined`, once. The rules are the text doc's
+    /// ([`super::Session::set_approval`]): only that person may do it; any other connection
+    /// (the agent itself, another person, an owner) gets [`SessionError::Forbidden`] with
+    /// [`Need::Approver`] and an [`AuditEvent::Refused`]. Needs read; the lease doesn't
+    /// apply (nothing is written but the record). The version itself is never held or
+    /// undone by this.
+    ///
+    /// A **declined** version stays (K-HIST-19 for tier 0): [`BlobApproval::restore_to`] is
+    /// the version before it, which the person restores explicitly if they want it back,
+    /// and [`BlobApproval::later`] lists the versions written since (a restore replaces
+    /// their content too: blobs don't merge). The kit never restores on its own.
+    ///
+    /// Errors: [`SessionError::NoApproval`] (`seq` is the version) when `vid` wasn't written
+    /// on anyone's behalf or doesn't exist; [`SessionError::BadApproval`] for `Pending`, or
+    /// for a version already settled the other way. Settling it again the same way returns
+    /// the record unchanged. Emits [`AuditEvent::Approval`] (`seq` is the version).
+    pub fn set_approval(
+        &self,
+        conn: ConnId,
+        vid: VersionId,
+        state: ApprovalState,
+    ) -> Result<BlobApproval> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::Approve, now)?;
+        let pid = st.members[i].p.pid.clone();
+        let store = Self::store(&st)?;
+        let Some(cur) = store.blob_approval(self.doc_id, vid)? else {
+            return Err(SessionError::NoApproval { seq: vid });
+        };
+        if cur.on_behalf_of != pid {
+            self.emit(AuditEvent::Refused {
+                key: st.key.clone(),
+                pid,
+                action: Action::Approve,
+                need: Need::Approver,
+            });
+            return Err(SessionError::Forbidden {
+                need: Need::Approver,
+            });
+        }
+        if state == ApprovalState::Pending {
+            return Err(SessionError::BadApproval(
+                "an approval can only be settled as approved or declined".into(),
+            ));
+        }
+        match cur.state {
+            ApprovalState::Pending => {}
+            s if s == state => return self.blob_approval_out(&store, vid, cur),
+            s => {
+                return Err(SessionError::BadApproval(format!(
+                    "version {vid} was already settled as {s:?}"
+                )))
+            }
+        }
+        let new = cur.settled(state, pid.clone(), now);
+        store.set_blob_approval(self.doc_id, vid, &new)?;
+        self.emit(AuditEvent::Approval {
+            key: st.key.clone(),
+            seq: vid,
+            pid,
+            state,
+        });
+        self.blob_approval_out(&store, vid, new)
+    }
+
+    /// [`BlobApproval`] for `a`: a declined version's way back.
+    fn blob_approval_out(
+        &self,
+        store: &DocStore,
+        vid: VersionId,
+        a: Approval,
+    ) -> Result<BlobApproval> {
+        let (mut restore_to, mut later) = (None, Vec::new());
+        if a.state == ApprovalState::Declined {
+            let all = store.blob_versions(self.doc_id)?;
+            restore_to = all
+                .iter()
+                .rfind(|(id, _)| *id < vid)
+                .filter(|(_, v)| !v.redacted)
+                .map(|(id, _)| *id);
+            later = all
+                .iter()
+                .filter(|(id, _)| *id > vid)
+                .map(|(id, _)| *id)
+                .collect();
+        }
+        Ok(BlobApproval {
+            version: vid,
+            approval: a,
+            restore_to,
+            later,
+        })
+    }
+
+    /// The approval record of version `vid` (`None` when it wasn't written on anyone's
+    /// behalf). Needs read; and [`super::Rights::history`] unless the caller is the agent
+    /// that wrote it or the person it was written for (the text doc's rule,
+    /// [`super::Session::approval`]).
+    pub fn approval(&self, conn: ConnId, vid: VersionId) -> Result<Option<Approval>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
+        let pid = st.members[i].p.pid.clone();
+        let a = Self::store(&st)?.blob_approval(self.doc_id, vid)?;
+        if a.as_ref()
+            .is_some_and(|a| a.author == pid || a.on_behalf_of == pid)
+        {
+            return Ok(a);
+        }
+        self.admit(&mut st, conn, Need::History, Action::ReadApproval, now)?;
+        Ok(a)
+    }
+
+    /// Approval records of this doc, oldest version first: the tab's "waiting for my
+    /// approval" list is the `Pending` ones whose `on_behalf_of` is me (`log --pending
+    /// --on-behalf-of me` on the agent side). With [`super::Rights::history`], all of them;
+    /// without, only those where the caller is the agent or the person. Needs read.
+    pub fn approvals(&self, conn: ConnId) -> Result<Vec<(VersionId, Approval)>> {
+        let now = self.now();
+        let mut st = self.lock()?;
+        let i = self.admit(&mut st, conn, Need::Read, Action::ReadApproval, now)?;
+        let (pid, history) = (st.members[i].p.pid.clone(), st.members[i].rights.history);
+        let mut all = Self::store(&st)?.blob_approvals(self.doc_id)?;
+        if !history {
+            all.retain(|(_, a)| a.author == pid || a.on_behalf_of == pid);
+        }
+        Ok(all)
+    }
+
     // ----- erasure (K-PURGE, K-T0-9) -----
 
     /// **Purge** blob version `version` (`Some`; the current one is refused with
@@ -1141,9 +1484,12 @@ impl BlobSession {
     /// pack's retain) stays and is counted as [`NotReached::SharedBlobs`]. The doc's
     /// recorded **conflict copies** (beside its file) are scanned: one whose bytes are a
     /// purged blob (compared by keyed id, never a plain hash) is deleted; others are left and
-    /// counted ([`NotReached::ConflictCopies`]). The file is written back first, so it holds
+    /// counted ([`NotReached::ConflictCopies`]); copies in the host's folder
+    /// ([`Host::conflict_dir`]) are found by their record too. The file is written back first, so it holds
     /// the current content; the store file is rewritten after. Audited as
-    /// [`AuditEvent::Purged`]. Approvals of on-behalf blob writes aren't built yet (K-T0-9).
+    /// [`AuditEvent::Purged`]. The approval record of a purged on-behalf version is reached
+    /// and kept, as its entry is: it is metadata only (agent, person, state, settler, time;
+    /// never content or a blob id), counted in [`PurgeCounts::approvals`].
     pub fn purge(&self, conn: ConnId, version: Option<VersionId>) -> Result<PurgeOutcome> {
         let now = self.now();
         let mut st = self.lock()?;
@@ -1176,7 +1522,7 @@ impl BlobSession {
             }
         }
         let space = st.key.space.clone();
-        let released = store.blob_purge_versions(self.doc_id, &vids, now)?;
+        let (released, approvals) = store.blob_purge_versions(self.doc_id, &vids, now)?;
         let purged: Vec<BlobId> = released.iter().map(|r| r.1).collect();
         let free: Vec<(u64, BlobId, u64)> = released
             .iter()
@@ -1188,24 +1534,17 @@ impl BlobSession {
             not_reached.push(NotReached::SharedBlobs(shared));
         }
         let (blobs_removed, _) = self.blobs.remove_unreferenced_now(&free)?;
-        // conflict copies the kit wrote for this doc (recorded on the versions)
+        // conflict copies the kit wrote for this doc (recorded on the versions; beside the
+        // file, or in the host's folder)
         let (mut copies_removed, mut copies_left) = (0, 0);
-        let dir = st
-            .disk
-            .as_ref()
-            .and_then(|d| match disk::probe(&d.path, &d.root) {
-                Ok(Probe::File { real, .. }) => real.parent().map(Path::to_owned),
-                _ => d.path.parent().map(Path::to_owned),
-            });
-        if let Some(dir) = &dir {
-            for name in all.iter().filter_map(|(_, v)| v.conflict_copy.as_deref()) {
-                let p = dir.join(name);
+        if let Some(base) = Self::copy_base(st) {
+            for p in self.copy_paths(st, &base)? {
                 let Ok(mut f) = File::open(&p) else { continue };
                 let id = self.blobs.id_of(&space, &mut f).ok().map(|x| x.0);
                 drop(f);
                 match id {
                     Some(id) if purged.contains(&id) => {
-                        if std::fs::remove_file(&p).is_ok() {
+                        if fs::remove_file(&p).is_ok() {
                             copies_removed += 1;
                         } else {
                             copies_left += 1;
@@ -1228,6 +1567,7 @@ impl BlobSession {
             blob_versions: vids.len() as u64,
             blobs_removed,
             conflict_copies: copies_removed,
+            approvals,
             ..PurgeCounts::default()
         };
         let rewrite = match store.rewrite_file() {
@@ -1247,28 +1587,144 @@ impl BlobSession {
         Ok(PurgeOutcome::of_blobs(counts, not_reached, rewrite))
     }
 
-    /// The doc's recorded conflict copies that exist beside its file now (for a byte scan,
-    /// K-T0-9). Needs history.
+    /// The doc's recorded conflict copies that exist now (beside its file, or in the host's
+    /// folder; for a byte scan, K-T0-9). Needs history.
     pub fn conflict_copies(&self, conn: ConnId) -> Result<Vec<PathBuf>> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::History, Action::Versions, now)?;
-        let Some(d) = st.disk.as_ref() else {
-            return Ok(Vec::new());
-        };
-        let dir = match disk::probe(&d.path, &d.root) {
+        Ok(self
+            .existing_copies(&mut st)?
+            .into_iter()
+            .map(|c| c.path)
+            .collect())
+    }
+
+    // ----- conflict copies -----
+
+    /// The folder recorded copies are relative to: the file's real folder.
+    fn copy_base(st: &BState) -> Option<PathBuf> {
+        let d = st.disk.as_ref()?;
+        match disk::probe(&d.path, &d.root) {
             Ok(Probe::File { real, .. }) => real.parent().map(Path::to_owned),
             _ => d.path.parent().map(Path::to_owned),
-        };
-        let Some(dir) = dir else {
+        }
+    }
+
+    /// The recorded copies (from the versions, once per session; then kept up to date).
+    fn copy_records(&self, st: &mut BState) -> Result<Vec<CopyRec>> {
+        if st.copies.is_none() {
+            let recs = Self::store(st)?
+                .blob_versions(self.doc_id)?
+                .into_iter()
+                .filter_map(|(vid, v)| {
+                    v.conflict_copy.map(|rec| CopyRec {
+                        version: vid,
+                        kept: vid.saturating_sub(1),
+                        at_ms: v.at_ms,
+                        rec,
+                    })
+                })
+                .collect();
+            st.copies = Some(recs);
+        }
+        Ok(st.copies.clone().unwrap_or_default())
+    }
+
+    /// Every recorded copy's path (existing or not).
+    fn copy_paths(&self, st: &mut BState, base: &Path) -> Result<Vec<PathBuf>> {
+        Ok(self
+            .copy_records(st)?
+            .iter()
+            .map(|r| resolve_copy(base, &r.rec))
+            .collect())
+    }
+
+    /// The recorded copies that exist now as regular files, oldest first.
+    fn existing_copies(&self, st: &mut BState) -> Result<Vec<ConflictCopy>> {
+        let Some(base) = Self::copy_base(st) else {
             return Ok(Vec::new());
         };
-        Ok(Self::store(&st)?
-            .blob_versions(self.doc_id)?
+        Ok(self
+            .copy_records(st)?
             .into_iter()
-            .filter_map(|(_, v)| v.conflict_copy.map(|c| dir.join(c)))
-            .filter(|p| p.is_file())
+            .map(|r| ConflictCopy {
+                path: resolve_copy(&base, &r.rec),
+                version: r.version,
+                kept: r.kept,
+                at_ms: r.at_ms,
+            })
+            .filter(|c| fs::symlink_metadata(&c.path).is_ok_and(|m| m.is_file()))
             .collect())
+    }
+
+    /// K-A11Y-5's cleanup (on `tick`, at most every [`Config::history_tick_ms`]): delete a
+    /// recorded copy older than [`Config::conflict_copy_keep_ms`] when it is still a regular
+    /// file holding exactly its version's bytes (compared by keyed id). Kept: a copy whose
+    /// version (the content, or the save that made it) is named; a copy a person edited;
+    /// one whose version was purged (the purge removed it if it still matched). Returns the
+    /// paths removed.
+    fn cleanup_copies(&self, st: &mut BState, now: u64) -> Result<Vec<PathBuf>> {
+        if st
+            .last_cleanup_ms
+            .is_some_and(|t| now.saturating_sub(t) < self.config.history_tick_ms)
+        {
+            return Ok(Vec::new());
+        }
+        st.last_cleanup_ms = Some(now);
+        let Some(base) = Self::copy_base(st) else {
+            return Ok(Vec::new());
+        };
+        let store = Self::store(st)?;
+        let space = st.key.space.clone();
+        let mut removed = Vec::new();
+        for r in self.copy_records(st)? {
+            if now.saturating_sub(r.at_ms) < self.config.conflict_copy_keep_ms {
+                continue;
+            }
+            let path = resolve_copy(&base, &r.rec);
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !meta.is_file() {
+                continue;
+            }
+            let stat = FileStat::of(&meta);
+            if st.copies_edited.get(&path) == Some(&stat) {
+                continue;
+            }
+            let (Ok(kept), Ok(saved)) = (
+                store.blob_version(self.doc_id, r.kept),
+                store.blob_version(self.doc_id, r.version),
+            ) else {
+                continue;
+            };
+            if kept.name.is_some() || saved.name.is_some() || kept.redacted {
+                continue;
+            }
+            if meta.len() != kept.size {
+                st.copies_edited.insert(path, stat);
+                continue;
+            }
+            let hashed = File::open(&path).and_then(|mut f| {
+                let id = self.blobs.id_of(&space, &mut f).map_err(blob_io)?;
+                Ok((id.0, FileStat::of(&f.metadata()?)))
+            });
+            match hashed {
+                // unchanged while it was hashed: delete it
+                Ok((id, after))
+                    if id == kept.blob && after == stat && fs::remove_file(&path).is_ok() =>
+                {
+                    st.copies_edited.remove(&path);
+                    removed.push(path);
+                }
+                Ok((id, _)) if id != kept.blob => {
+                    st.copies_edited.insert(path, stat);
+                }
+                _ => {}
+            }
+        }
+        Ok(removed)
     }
 
     // ----- for the manager -----
@@ -1340,29 +1796,42 @@ impl BlobSession {
         st.lease = None;
     }
 
-    /// The host's clock tick: lease expiry, the stat backup while anyone is present, and a
-    /// write-back that failed before. Returns (what the check found, written, the pid whose
-    /// lease expired).
-    pub(crate) fn tick(&self) -> Result<(Option<DiskCheck>, bool, Option<String>)> {
+    /// The host's clock tick: lease expiry, the stat backup while anyone is present, a
+    /// write-back that failed before, and the conflict-copy cleanup.
+    pub(crate) fn tick(&self) -> Result<BlobTick> {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         let st = &mut *st;
-        let expired = self.expire_lease(st, now);
-        let Some(d) = &st.disk else {
-            return Ok((None, false, expired));
+        let mut out = BlobTick {
+            expired: self.expire_lease(st, now),
+            ..BlobTick::default()
         };
-        let check = if !st.members.is_empty()
-            && now.saturating_sub(d.last_check_ms) >= self.config.disk_poll_ms
+        if st.disk.is_none() {
+            return Ok(out);
+        }
+        let d = st.disk.as_ref().expect("checked above");
+        if !st.members.is_empty() && now.saturating_sub(d.last_check_ms) >= self.config.disk_poll_ms
         {
-            Some(self.disk_check(st, now, false)?)
-        } else {
-            None
-        };
+            out.check = Some(self.disk_check(st, now, false)?);
+        }
         let d = st.disk.as_ref().expect("checked above");
         let due = d.dirty_since.is_some() && !d.missing && d.declined.is_none();
-        let written = due && self.write_back(st, now)?;
-        Ok((check, written, expired))
+        out.written = due && self.write_back(st, now)?;
+        out.copies_removed = self.cleanup_copies(st, now)?;
+        Ok(out)
     }
+}
+
+/// What [`BlobSession::tick`] did.
+#[derive(Debug, Default)]
+pub(crate) struct BlobTick {
+    /// What the stat backup found, when it ran.
+    pub check: Option<DiskCheck>,
+    pub written: bool,
+    /// The pid whose lease ran out.
+    pub expired: Option<String>,
+    /// Conflict copies the cleanup deleted.
+    pub copies_removed: Vec<PathBuf>,
 }
 
 // ----- disk sync -----
@@ -1702,6 +2171,7 @@ impl BlobSession {
         };
         let copy = self.write_conflict_copy(st, real, &file_name, &ours, &who, now);
         theirs.conflict_copy = copy.clone();
+        let at_ms = theirs.at_ms;
         let vid = store.commit_blob_versions(
             self.doc_id,
             &st.key.space,
@@ -1711,6 +2181,14 @@ impl BlobSession {
         )?[0];
         st.vid = vid;
         st.cur = theirs;
+        if let (Some(recs), Some(rec)) = (st.copies.as_mut(), copy.clone()) {
+            recs.push(CopyRec {
+                version: vid,
+                kept,
+                at_ms,
+                rec,
+            });
+        }
         let d = st.disk.as_mut().expect("has disk");
         d.synced = info.id;
         d.stat = Some(stat);
@@ -1726,11 +2204,11 @@ impl BlobSession {
             copy: copy.clone(),
             lease_holder: holder.map(|l| l.pid),
         });
-        let dir = real.parent().map(Path::to_owned);
+        let base = real.parent().map(Path::to_owned);
         Ok(DiskCheck::Conflict {
             version: vid,
             kept,
-            copy: copy.and_then(|c| dir.map(|d| d.join(c))),
+            copy: copy.and_then(|c| base.map(|b| resolve_copy(&b, &c))),
         })
     }
 
@@ -1796,9 +2274,10 @@ impl BlobSession {
         Ok(Some(DiskCheck::Merged { version: vids[1] }))
     }
 
-    /// Write `ours` beside the file as a conflict copy (atomic, never over an existing
-    /// file). Returns its file name, or `None` (reported as a disk error) if that failed:
-    /// the content is a version either way.
+    /// Write `ours` as a conflict copy (atomic, never over an existing file), beside the file
+    /// or in [`Host::conflict_dir`]'s folder (created if missing). Returns its record: its
+    /// path relative to the file's folder (a plain file name when beside it), or `None`
+    /// (reported as a disk error) if that failed: the content is a version either way.
     fn write_conflict_copy(
         &self,
         st: &BState,
@@ -1808,7 +2287,21 @@ impl BlobSession {
         who: &str,
         now: u64,
     ) -> Option<String> {
-        let dir = real.parent()?;
+        let base = real.parent()?;
+        let dir = match self.host.conflict_dir(real) {
+            None => base.to_owned(),
+            Some(d) => {
+                let made = fs::create_dir_all(&d).and_then(|()| fs::canonicalize(&d));
+                match made {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let what = format!("the conflict-copy folder {}", d.display());
+                        self.disk_error(st, &what, e);
+                        return None;
+                    }
+                }
+            }
+        };
         let mut name = self.pack.conflict_copy_name(file_name, now, who);
         if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
             name = conflict_copy_name(file_name, now, who);
@@ -1821,19 +2314,24 @@ impl BlobSession {
             } else {
                 format!("{stem} {n}{ext}")
             };
-            if !dir.join(&candidate).exists() {
+            if fs::symlink_metadata(dir.join(&candidate)).is_err() {
                 chosen = Some(candidate);
                 break;
             }
         }
         let chosen = chosen?;
+        let target = dir.join(&chosen);
+        let Some(rec) = relative_path(base, &target).to_str().map(str::to_owned) else {
+            self.disk_error(st, "the conflict copy's path", "not UTF-8: not written");
+            return None;
+        };
         let space = st.key.space.clone();
-        let written = disk::atomic_write_with(&dir.join(&chosen), |f| {
+        let written = disk::atomic_write_with(&target, |f| {
             self.blobs.copy_to(&space, &ours.blob, f).map_err(blob_io)?;
             Ok(())
         });
         match written {
-            Ok(_) => Some(chosen),
+            Ok(_) => Some(rec),
             Err(e) => {
                 self.disk_error(st, "writing the conflict copy", e);
                 None
@@ -1917,15 +2415,15 @@ mod tests {
         let at = 1_793_111_405_000;
         assert_eq!(
             conflict_copy_name("report.pdf", at, "Alice"),
-            "report (conflict 2026-10-27 143005 from Alice).pdf"
+            "report (conflict Alice 2026-10-27 143005).pdf"
         );
         assert_eq!(
             conflict_copy_name("Makefile", at, "a/b:c"),
-            "Makefile (conflict 2026-10-27 143005 from a_b_c)"
+            "Makefile (conflict a_b_c 2026-10-27 143005)"
         );
         assert_eq!(
             conflict_copy_name(".bashrc", at, "  "),
-            ".bashrc (conflict 2026-10-27 143005 from someone)"
+            ".bashrc (conflict someone 2026-10-27 143005)"
         );
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(11_016), (2000, 2, 29));

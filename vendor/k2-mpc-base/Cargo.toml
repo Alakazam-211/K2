@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/base"]
-exclude = ["spike"]
+members = ["crates/base", "crates/conformance", "crates/spec-undo"]
+# vendor/: copies of other repos by git subtree (vendor/README.md). Excluded so they never
+# become members (no lints, fmt or tests of ours run on them).
+exclude = ["spike", "vendor"]
 
 [workspace.package]
 edition = "2021"

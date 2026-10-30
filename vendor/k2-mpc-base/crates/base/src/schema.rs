@@ -6,7 +6,7 @@
 //! [`crate::Doc::new`], loudly.
 
 /// A primitive a pack can build on. Each kind is defined by K2's merge semantics, written
-/// as a conformance suite every engine must pass (`src/conformance/`), not by what one
+/// as a conformance suite every engine must pass (`crates/conformance`), not by what one
 /// engine happens to offer.
 ///
 /// Not kinds:

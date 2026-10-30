@@ -97,6 +97,10 @@ pub struct PurgeCounts {
     pub blob_versions: u64,
     pub blobs_removed: u64,
     pub conflict_copies: u64,
+    /// Tier 0: approval records of the purged blob versions (on-behalf writes). Reached and
+    /// kept: they are metadata (agent, person, state, settler, time) and hold no content
+    /// or blob id, like the version's entry that stays.
+    pub approvals: u64,
 }
 
 /// Replace `pid` by the pseudonym in `s`; returns whether it did.

@@ -27,10 +27,23 @@ pub fn parity_row(a: PersonAction) -> ParityRow {
         P::Blame => ParityRow::live(a, &["blame"]),
         P::Annotate => ParityRow::deferred(a, &["comment"], "M5", "why it waits"),
         P::Export => ParityRow::not_applicable(a, &["cat"], &["export"], "why it doesn't apply"),
+        // tier 0's rows (the leases): a text pack has no lease
+        P::Lease | P::ReleaseLease | P::BreakLease => {
+            ParityRow::not_applicable(a, &[], &[], "text docs merge; leases are tier 0's")
+        }
         // ... every action, no `_` arm
     }
 }
+
+/// The rows of the pack's tier (a text pack: P1-P31).
+pub fn parity() -> Vec<ParityRow> {
+    PersonAction::for_tier(Tier::Text).map(parity_row).collect()
+}
 ```
+
+Each `PersonAction` applies to text docs, blob docs (tier 0) or both (`tiers()`); the
+check needs a row for every action of the registry's tier (`Registry::for_pack` is the text
+tier) and only checks rows of other tiers if the list has them.
 
 - `live(action, verbs)`: every verb exists and behaves as the person path does;
   `live_but(action, verbs, later)` when some of the row's verbs are still to come;

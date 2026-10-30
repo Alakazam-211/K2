@@ -61,6 +61,10 @@ pub(crate) enum Item {
 
 fn unsupported(spec: &Spec, flag: &str) -> ToolError {
     let name = flag.split('=').next().unwrap_or(flag);
+    if name == "--if-version" {
+        // a read verb (every edit verb's table has it): exit 2 with the reason
+        return super::if_version_on_read(spec.tool);
+    }
     for (f, hint) in spec.unsupported {
         if *f == name {
             return ToolError::unsupported(name, *hint);
@@ -196,6 +200,36 @@ pub(crate) fn parse(args: &[String], spec: &Spec) -> Result<Vec<Item>, ToolError
     Ok(out)
 }
 
+/// A pack verb's `--if-version V` / `--if-version=V`, taken out of its arguments before the
+/// pack parses them (its table is the pack's, so the kit takes the flag first). Options end
+/// at `--`, which stays for the pack. Only that exact spelling: the pack's own flags are
+/// unknown, so no abbreviation is safe.
+pub(crate) fn take_if_version(
+    args: &[String],
+) -> Result<(Option<crate::store::Seq>, Vec<String>), ToolError> {
+    let mut v = super::IfVersionArg::default();
+    let mut rest = Vec::with_capacity(args.len());
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == "--" {
+            rest.push(a.clone());
+            rest.extend(it.cloned());
+            break;
+        }
+        if a == "--if-version" {
+            let val = it
+                .next()
+                .ok_or_else(|| ToolError::usage("option '--if-version' requires an argument"))?;
+            v.set(val)?;
+        } else if let Some(val) = a.strip_prefix("--if-version=") {
+            v.set(val)?;
+        } else {
+            rest.push(a.clone());
+        }
+    }
+    Ok((v.get(), rest))
+}
+
 /// Parse a count: decimal digits with an optional GNU size suffix (`b` 512, `K`/`KiB`
 /// 1024, `kB` 1000, `M`, `MB`, `MiB`, `G`, `GB`, `GiB`). Saturates instead of overflowing,
 /// as huge counts mean "everything".
@@ -280,6 +314,30 @@ mod tests {
         assert!(matches!(p(&["--nope"]), Err(ToolError::Unsupported { .. })));
         assert!(matches!(p(&["-e"]), Err(ToolError::Usage(_))));
         assert!(matches!(p(&["--line-number=3"]), Err(ToolError::Usage(_))));
+    }
+
+    #[test]
+    fn pack_verbs_if_version_is_taken_out() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let (v, rest) = take_if_version(&a(&["--heading", "## A", "--if-version", "7"])).unwrap();
+        assert_eq!((v, rest), (Some(7), a(&["--heading", "## A"])));
+        let (v, rest) = take_if_version(&a(&["--if-version=v8", "--nth", "2"])).unwrap();
+        assert_eq!((v, rest), (Some(8), a(&["--nth", "2"])));
+        // after `--` it is the pack's
+        let (v, rest) = take_if_version(&a(&["--", "--if-version", "3"])).unwrap();
+        assert_eq!((v, rest), (None, a(&["--", "--if-version", "3"])));
+        for bad in [
+            &["--if-version"][..],
+            &["--if-version", "x"],
+            &["--if-version=", "--x"],
+            &["--if-version", "1", "--if-version=1"],
+            &["--if-version", "99999999999999999999999"],
+        ] {
+            assert!(
+                matches!(take_if_version(&a(bad)), Err(ToolError::Usage(_))),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

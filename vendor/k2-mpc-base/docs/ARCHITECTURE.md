@@ -66,7 +66,10 @@
   on save, or keeps a conflict copy when it can't. Leases expire, and an agent blocked by
   one gets a clear exit code.
   **Built** (`BlobSession`, the `blob` module; SESSIONS.md "Tier 0"): a save under someone's
-  lease stays current, and what it replaced is kept as a version and a conflict copy.
+  lease stays current, and what it replaced is kept as a version and a conflict copy (in a
+  folder the host chooses, `Host::conflict_dir`; deleted after 30 days unless named or
+  edited). Its verbs are classified by tier in the registry (`VerbSpec::tiers`,
+  `Registry::for_tier`) and proven by the tier-0 parity harness (`parity::check_blob`).
 - **Tier 0.5, a lossless codec but no live editor:** an **agent branch plus a 3-way merge
   through the type's codec**: import base, ours and theirs into primitives, merge, export,
   then the fidelity check. Agents get document-level merges years before tier 1.

@@ -1,5 +1,6 @@
 //! Session errors.
 
+use super::awareness::ClaimId;
 use super::host::Need;
 use super::pack::{Declined, PackError};
 use super::participant::ConnId;
@@ -16,8 +17,10 @@ pub enum SessionError {
     /// or belongs to another session. Join again.
     #[error("{conn} has not joined this doc")]
     NotJoined { conn: ConnId },
-    /// `edit(.., if_version: Some(expected))` but the doc is at `actual`. Nothing applied.
-    #[error("doc moved: expected version {expected}, it is at {actual}")]
+    /// `edit(.., if_version: Some(expected))` (or an edit verb's `--if-version`, or a tier 0
+    /// write from an old base) but the doc is at `actual`. Nothing applied. One line, no doc
+    /// text: `doc changed since 12 (now 14)`. Exit 1.
+    #[error("doc changed since {expected} (now {actual})")]
     Stale { expected: Seq, actual: Seq },
     #[error("too many edits; retry in {retry_after_ms} ms")]
     RateLimited { retry_after_ms: u64 },
@@ -36,7 +39,8 @@ pub enum SessionError {
     #[error("bad edit: {0}")]
     BadEdit(String),
     /// [`super::Session::set_approval`] / [`super::Session::approval`]: change `seq` was not
-    /// made on anyone's behalf (or doesn't exist).
+    /// made on anyone's behalf (or doesn't exist). From
+    /// [`super::BlobSession::set_approval`], `seq` is the blob version.
     #[error("change {seq} has no approval (it wasn't made on anyone's behalf)")]
     NoApproval { seq: Seq },
     /// An approval can only go from pending to approved or declined, once.
@@ -72,6 +76,38 @@ pub enum SessionError {
     /// Tier 0: renewing a lease the caller doesn't hold (none is held).
     #[error("no lease held")]
     NoLease,
+    /// Another participant (`by`) holds a live claim on these lines (amendment 13): a new
+    /// overlapping claim, or an agent's edit under [`super::ClaimPolicy::Respect`]. Nothing
+    /// was applied. Exit **5**, as `Leased`: someone else holds it for now; retry after
+    /// `remaining_ms`, or wait ([`super::Session::register_waiter`]). `lines` are the
+    /// claim's lines now (1-based, inclusive) in the root the call named.
+    #[error("{} claimed by {name} ({by}){}; {remaining_ms} ms left",
+        crate::session::awareness::pair_text(*.lines),
+        .note.as_deref().map(|n| format!(" \"{}\"", crate::session::awareness::one_line(n))).unwrap_or_default())]
+    Claimed {
+        id: ClaimId,
+        by: String,
+        name: String,
+        lines: (usize, usize),
+        remaining_ms: u64,
+        note: Option<String>,
+    },
+    /// No live claim by that id (it ended, or never existed here), or, with no id, the
+    /// caller holds none. Exit 4.
+    #[error("{}", match .0 { Some(id) => format!("no live claim {id}"), None => "you hold no claim here".to_owned() })]
+    NoClaim(Option<ClaimId>),
+    /// Renewing a claim, or extending it with `hold`, while other participants wait for it
+    /// (anti-starvation): refused; the claim still ends normally. Exit 2.
+    #[error("{id} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)")]
+    ClaimContended {
+        id: ClaimId,
+        waiters: usize,
+        remaining_ms: u64,
+    },
+    /// A claim call the kit refuses: not your claim, waiting on your own claim, a zero TTL,
+    /// too many claims, several claims and no id. Exit 2.
+    #[error("bad claim: {0}")]
+    BadClaim(String),
     /// Tier 0: the blob store failed (or a blob is damaged; it is never served).
     #[error(transparent)]
     Blob(#[from] crate::blob::BlobError),

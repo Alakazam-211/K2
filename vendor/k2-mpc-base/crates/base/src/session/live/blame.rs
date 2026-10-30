@@ -188,6 +188,21 @@ impl Blame {
     }
 }
 
+/// One live character and the element that holds it ([`Session::char_blame`], feature
+/// `conformance`).
+#[cfg(feature = "conformance")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CharBlame {
+    pub ch: char,
+    pub client: ClientId,
+    /// The element's clock (UTF-16 code units).
+    pub clock: u32,
+    /// The pid that owns the client, if the store knows it.
+    pub pid: Option<String>,
+    /// The change that inserted it, if the store recorded one.
+    pub change: Option<Seq>,
+}
+
 /// A span of live text, `start..end` bytes, inserted by `client` in change `seq` (`None`:
 /// no clock span recorded for it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +276,53 @@ fn pieces(
 }
 
 impl Session {
+    /// Test-only (feature `conformance`, off by default): every live character of text root
+    /// `root`, in order, with the element that holds it: `(char, (client, clock), owner pid,
+    /// change)`. Clocks count UTF-16 code units; the change is the log position that
+    /// inserted it, where the store recorded one. For per-element rules (an undo deletes only
+    /// its own batch's elements).
+    #[cfg(feature = "conformance")]
+    pub fn char_blame(&self, root: &str) -> Result<Vec<CharBlame>> {
+        let st = self.lock()?;
+        let st = &*st;
+        let (_, text) = self.text_of(st, root)?;
+        let runs = st.doc.blame_runs(root)?;
+        let store = self.store(st)?.clone();
+        let pieces = pieces(&store, self.doc_id, text, &runs, 0, text.len())?;
+        let mut owners: HashMap<ClientId, Option<String>> = HashMap::new();
+        let mut out = Vec::with_capacity(text.len());
+        let mut at = 0;
+        let mut k = 0;
+        for run in &runs {
+            let owner = match owners.entry(run.client) {
+                std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
+                std::collections::hash_map::Entry::Vacant(e) => e
+                    .insert(store.client_owner(self.doc_id, run.client)?)
+                    .clone(),
+            };
+            let mut clock = run.clock;
+            for ch in text[at..at + run.bytes].chars() {
+                while k < pieces.len() && pieces[k].end <= at {
+                    k += 1;
+                }
+                let seq = pieces
+                    .get(k)
+                    .filter(|p| p.start <= at && at < p.end)
+                    .and_then(|p| p.seq);
+                out.push(CharBlame {
+                    ch,
+                    client: run.client,
+                    clock,
+                    pid: owner.clone(),
+                    change: seq,
+                });
+                clock += ch.len_utf16() as u32;
+                at += ch.len_utf8();
+            }
+        }
+        Ok(out)
+    }
+
     /// **Blame** `root` (K-HIST-11, P22): each line's most recent author, by the rule on
     /// [`BlameLine`], with the change, kind, surface, time, `on_behalf_of` and approval state
     /// (K-HIST-18), and `erased` where a purge reached the change. `lines` is `blame -L a,b`:

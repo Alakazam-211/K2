@@ -18,8 +18,11 @@
 //!   file ([`session::BlobSession`]: presence, a lease, versions and restore, conflict
 //!   copies); purge and participant erasure ([`Session::purge`], `docs/SESSIONS.md`,
 //!   "Erasure"); blame per line at the character's grain ([`Session::blame`],
-//!   `docs/SESSIONS.md`, "Blame").
-//! - [`conformance`]: K2's primitive semantics as tests any engine must pass.
+//!   `docs/SESSIONS.md`, "Blame"); agent presence: anchored claims with FIFO waiters, a
+//!   host-chosen claim policy on edits, heads-up notes and an activity ring, memory only
+//!   (`docs/SESSIONS.md`, "Agent presence").
+//! - [`conformance`]: this engine's known deviations from the primitive rules (the rules
+//!   themselves are the `k2-mpc-conformance` crate, generic over engines).
 //! - [`tools`]: the text verbs agents run on a live doc (`cat`, `grep`, `sed`, `patch`...),
 //!   as pure functions and through [`Session::run_tool`]; packs add their own
 //!   ([`session::Pack::verbs`]).

@@ -1,0 +1,18 @@
+[package]
+name = "k2-mpc-conformance"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+# Never published, never a dependency of anything: it is the suite, run with `cargo test`.
+publish = false
+description = "The kit's primitive conformance rules, generic over engines: run on the kit's Doc (Yrs) and on the reference model mpce-model."
+
+[dependencies]
+# The kit's Doc, with the test-only replica hooks. Nothing else depends on this crate, so the
+# feature is never on in a host's build.
+k2-mpc-base = { path = "../base", features = ["conformance"] }
+# The reference model (oracle), vendored by git subtree: see vendor/README.md. Only this
+# crate depends on it.
+mpce-model = { path = "../../vendor/mpce-model" }
+# Random scripts for `text.converge` (already in the kit's lockfile).
+rand = { version = "0.8", features = ["small_rng"] }

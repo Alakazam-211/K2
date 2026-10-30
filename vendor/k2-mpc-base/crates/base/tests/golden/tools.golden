@@ -2635,6 +2635,368 @@ exit: 2
 err: usage
 gnu: k2
 
+# ---------------------------------------------------------------- replace --old/--new (exact text, K2 verb)
+# Exact bytes on the doc text (\n line breaks, no BOM), unique unless --all; a refusal is
+# exit 1 with the report on stdout (say) and nothing applied (no out).
+
+=== exact-unique
+argv: "replace" "--old" "files" "--new" "docs"
+text: "# Plan\n\n- keep files plain\n"
+out: "# Plan\n\n- keep docs plain\n"
+say: ""
+exit: 0
+gnu: k2
+
+=== exact-new-empty-deletes
+argv: "replace" "--old" " plain" "--new" ""
+text: "keep files plain\n"
+out: "keep files\n"
+exit: 0
+gnu: k2
+
+=== exact-equals-forms-and-dash-values
+argv: "replace" "--old=--lines" "--new=-x"
+text: "use --lines here\n"
+out: "use -x here\n"
+exit: 0
+gnu: k2
+
+=== exact-long-option-prefixes
+argv: "replace" "--o" "a" "--ne" "b" "--al"
+text: "a a\n"
+out: "b b\n"
+say: "replaced 2 matches in notes.md (at lines 1 (×2) before the edit)\n"
+exit: 0
+gnu: k2
+
+=== exact-no-match
+argv: "replace" "--old" "gamma" "--new" "x"
+text: "alpha\nbeta\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\n--old is matched exactly (bytes, case, whitespace, line breaks); read the doc again (cat -n, view --lines a,b) and copy the text from it\n"
+exit: 1
+gnu: k2
+
+=== exact-no-match-case-hint
+argv: "replace" "--old" "keep files" "--new" "x"
+text: "# Plan\n\nKeep Files plain\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\nhint: --old would match once if case is ignored, at line 3; nothing was applied: --old is exact\n"
+exit: 1
+gnu: k2
+
+=== exact-no-match-whitespace-hint
+argv: "replace" "--old" "keep files" "--new" "x"
+text: "a\n  keep   files\nb\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\nhint: --old would match once if whitespace is loosened (runs of spaces, tabs and line breaks as one space; leading and trailing whitespace ignored), at line 2; nothing was applied: --old is exact\n"
+exit: 1
+gnu: k2
+
+=== exact-no-match-whitespace-hint-across-lines
+argv: "replace" "--old" "one two\n" "--new" "x"
+text: "zero\none\n\ttwo\nthree\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\nhint: --old would match once if whitespace is loosened (runs of spaces, tabs and line breaks as one space; leading and trailing whitespace ignored), at lines 2–3; nothing was applied: --old is exact\n"
+exit: 1
+gnu: k2
+
+=== exact-no-match-case-and-whitespace-hint
+argv: "replace" "--old" "keep  FILES" "--new" "x"
+text: "Keep files\nkeep\tfiles\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\nhint: --old would match 2 times if case is ignored and whitespace loosened, at lines 1, 2; nothing was applied: --old is exact\n"
+exit: 1
+gnu: k2
+
+=== exact-two-matches-refused
+argv: "replace" "--old" "x" "--new" "y"
+text: "a x\nb\nc x\nx\n"
+say: "replace: --old matches 3 times in notes.md (at lines 1, 3, 4); nothing applied\nto replace one, add surrounding text to --old until it matches once; to replace every match, add --all\n"
+exit: 1
+gnu: k2
+
+=== exact-two-matches-same-line
+argv: "replace" "--old" "x" "--new" "y"
+text: "x x\ny\n"
+say: "replace: --old matches 2 times in notes.md (at lines 1 (×2)); nothing applied\nto replace one, add surrounding text to --old until it matches once; to replace every match, add --all\n"
+exit: 1
+gnu: k2
+
+=== exact-multiline-matches-refused
+argv: "replace" "--old" "a\nb" "--new" "c"
+text: "a\nb\na\nb\n"
+say: "replace: --old matches 2 times in notes.md (at lines 1–2, 3–4); nothing applied\nto replace one, add surrounding text to --old until it matches once; to replace every match, add --all\n"
+exit: 1
+gnu: k2
+
+=== exact-many-matches-capped
+argv: "replace" "--old" "x" "--new" "y"
+text: "x\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\nx\n"
+say: "replace: --old matches 25 times in notes.md (at lines 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20 and 5 more); nothing applied\nto replace one, add surrounding text to --old until it matches once; to replace every match, add --all\n"
+exit: 1
+gnu: k2
+
+=== exact-overlapping-is-not-unique
+argv: "replace" "--old" "aa" "--new" "b"
+text: "aaa\n"
+say: "replace: --old matches 2 times in notes.md, overlapping itself (at lines 1 (×2)); nothing applied\nto replace one, add surrounding text to --old until it matches once; --all replaces left to right without overlaps (1 match here)\n"
+exit: 1
+gnu: k2
+
+=== exact-all
+argv: "replace" "--old" "x" "--new" "yy" "--all"
+text: "a x\nb\nc x\n"
+out: "a yy\nb\nc yy\n"
+say: "replaced 2 matches in notes.md (at lines 1, 3 before the edit)\n"
+exit: 0
+gnu: k2
+
+=== exact-all-overlapping-left-to-right
+argv: "replace" "--all" "--old" "aa" "--new" "b"
+text: "aaa\naaaa\n"
+out: "ba\nbb\n"
+say: "replaced 3 matches in notes.md (at lines 1, 2 (×2) before the edit)\n"
+exit: 0
+gnu: k2
+
+=== exact-all-one-match
+argv: "replace" "--old" "x" "--new" "y" "--all"
+text: "x\n"
+out: "y\n"
+say: "replaced 1 match in notes.md (at line 1 before the edit)\n"
+exit: 0
+gnu: k2
+
+=== exact-all-no-match
+argv: "replace" "--old" "z" "--new" "y" "--all"
+text: "x\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\n--old is matched exactly (bytes, case, whitespace, line breaks); read the doc again (cat -n, view --lines a,b) and copy the text from it\n"
+exit: 1
+gnu: k2
+
+=== exact-all-old-equals-new
+argv: "replace" "--old" "x" "--new" "x" "--all"
+text: "x x\n"
+out: "x x\n"
+say: ""
+exit: 0
+gnu: k2
+
+=== exact-old-equals-new
+argv: "replace" "--old" "b" "--new" "b"
+text: "a b\n"
+out: "a b\n"
+say: ""
+exit: 0
+gnu: k2
+
+=== exact-multiline-old-and-new
+argv: "replace" "--old" "old one\nold two\n" "--new" "new\n"
+text: "# T\n\nold one\nold two\nend\n"
+out: "# T\n\nnew\nend\n"
+exit: 0
+gnu: k2
+
+=== exact-new-adds-lines
+argv: "replace" "--old" "b" "--new" "b1\nb2"
+text: "a\nb\nc\n"
+out: "a\nb1\nb2\nc\n"
+exit: 0
+gnu: k2
+
+=== exact-no-final-newline
+argv: "replace" "--old" "end" "--new" "END"
+text: "a\nend"
+out: "a\nEND"
+exit: 0
+gnu: k2
+
+=== exact-non-ascii
+argv: "replace" "--old" "café ☕" "--new" "thé 🍵"
+text: "un café ☕ et 👩\u{200d}💻\n"
+out: "un thé 🍵 et 👩\u{200d}💻\n"
+exit: 0
+gnu: k2
+
+=== exact-emoji-zwj-sequence
+argv: "replace" "--old" "👩\u{200d}💻" "--new" "🧑\u{200d}🚀"
+text: "a 👩\u{200d}💻 b\n"
+out: "a 🧑\u{200d}🚀 b\n"
+exit: 0
+gnu: k2
+
+=== exact-combining-mark-is-a-scalar
+argv: "replace" "--old" "\u{301}" "--new" ""
+text: "cafe\u{301}\n"
+out: "cafe\n"
+exit: 0
+gnu: k2
+
+=== exact-non-ascii-two-matches
+argv: "replace" "--old" "é" "--new" "e"
+text: "é\nà\né\n"
+say: "replace: --old matches 2 times in notes.md (at lines 1, 3); nothing applied\nto replace one, add surrounding text to --old until it matches once; to replace every match, add --all\n"
+exit: 1
+gnu: k2
+
+=== exact-crlf-file-sees-text
+argv: "replace" "--old" "old\nb" "--new" "new\nB"
+file: "a\r\nold\r\nb\r\n"
+out: "a\nnew\nB\n"
+exit: 0
+gnu: k2
+
+=== exact-crlf-in-old-hint
+argv: "replace" "--old" "a\r\nb" "--new" "x"
+file: "a\r\nb\r\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\nhint: --old has \\r (CR) characters, but edit verbs see the doc's text with \\n line breaks (a CRLF file's \\r\\n are restored when it is written); with \\n it matches once, at lines 1–2\n"
+exit: 1
+gnu: k2
+
+=== exact-cr-in-old-no-match
+argv: "replace" "--old" "z\r\n" "--new" "x"
+file: "a\r\nb\r\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\nhint: --old has \\r (CR) characters, but edit verbs see the doc's text with \\n line breaks (a CRLF file's \\r\\n are restored when it is written); use \\n\n"
+exit: 1
+gnu: k2
+
+=== exact-bom-file-sees-text
+argv: "replace" "--old" "a" "--new" "x"
+file: "\u{feff}a\nb\n"
+out: "x\nb\n"
+exit: 0
+gnu: k2
+
+=== exact-bom-in-old-hint
+argv: "replace" "--old" "\u{feff}a" "--new" "x"
+file: "\u{feff}a\nb\n"
+say: "replace: no exact match for --old in notes.md; nothing applied\nhint: --old starts with a byte-order mark (U+FEFF), which edit verbs don't see; without it it matches once, at line 1\n"
+exit: 1
+gnu: k2
+
+=== exact-old-from-stdin
+argv: "replace" "--old" "-" "--new" "Z"
+text: "x\ny\nz\n"
+stdin: "x\ny"
+out: "Z\nz\n"
+exit: 0
+gnu: k2
+
+=== exact-old-from-stdin-no-match
+argv: "replace" "--old" "-" "--new" "Z"
+text: "x\n"
+stdin: "q"
+say: "replace: no exact match for --old (stdin) in notes.md; nothing applied\n--old is matched exactly (bytes, case, whitespace, line breaks); read the doc again (cat -n, view --lines a,b) and copy the text from it\n"
+exit: 1
+gnu: k2
+
+=== exact-new-from-stdin
+argv: "replace" "--old" "b" "--new" "-"
+text: "a b c\n"
+stdin: "B1\nB2"
+out: "a B1\nB2 c\n"
+exit: 0
+gnu: k2
+
+=== exact-literal-dash-via-stdin
+argv: "replace" "--old" "-" "--new" "+"
+text: "a-b\n"
+stdin: "-"
+out: "a+b\n"
+exit: 0
+gnu: k2
+
+=== exact-stdin-unread-without-dash
+argv: "replace" "--old" "a" "--new" "b"
+text: "a\n"
+stdin: "ignored"
+out: "b\n"
+exit: 0
+gnu: k2
+
+=== exact-both-stdin-refused
+argv: "replace" "--old" "-" "--new" "-"
+text: "a\n"
+stdin: "a"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-empty-old-refused
+argv: "replace" "--old" "" "--new" "x"
+text: "a\n"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-empty-old-from-stdin-refused
+argv: "replace" "--old" "-" "--new" "x"
+text: "a\n"
+stdin: ""
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-missing-new
+argv: "replace" "--old" "a"
+text: "a\n"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-missing-old
+argv: "replace" "--new" "a"
+text: "a\n"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-all-alone
+argv: "replace" "--all"
+text: "a\n"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-old-twice
+argv: "replace" "--old" "a" "--old" "b" "--new" "c"
+text: "a\n"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-with-lines-refused
+argv: "replace" "--lines" "1" "--old" "a" "--new" "b"
+text: "a\n"
+stdin: "x"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-with-range-refused
+argv: "replace" "--old" "a" "--new" "b" "--range" "1:1-1:2"
+text: "a\n"
+exit: 2
+err: usage
+gnu: k2
+
+=== exact-with-insert-flag-unsupported
+argv: "replace" "--old" "a" "--new" "b" "--at" "1:1"
+text: "a\n"
+exit: 2
+err: unsupported
+gnu: k2
+
+=== exact-operand-unsupported
+argv: "replace" "--old" "a" "--new" "b" "notes.md"
+text: "a\n"
+exit: 2
+err: unsupported
+gnu: k2
+
+=== exact-flags-not-on-other-verbs
+argv: "delete" "--old" "a"
+text: "a\n"
+exit: 2
+err: unsupported
+gnu: k2
+
 # ---------------------------------------------------------------- verbs
 === unknown-verb
 argv: "awk" "{print}"

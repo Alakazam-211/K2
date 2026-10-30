@@ -3,8 +3,8 @@
 //! Erased per doc: `paths`, `docs`, `snapshots`, `updates`, `clients`, `versions`,
 //! `approvals`, `sync` (the disk replica), `doc_keys` (its hash key), the history tables (`changes`, `reverts`,
 //! `revert_index`, `revert_carry`, `revert_stats`) and the tier-0 tables (`blob_versions`,
-//! `blob_sync`). A blob doc's versions each held a reference on their blob in `blobs`: those
-//! references are released (the blob's grace starts then), so [`crate::blob::BlobStore::gc`]
+//! `blob_sync`, `blob_approvals`). A blob doc's versions each held a reference on their blob
+//! in `blobs`: those references are released (the blob's grace starts then), so [`crate::blob::BlobStore::gc`]
 //! removes a blob nothing else references once the grace runs out.
 //!
 //! Left alone: `meta` (doc ids are never reused), the host's table (`host`, opaque to the
@@ -106,7 +106,7 @@ impl DocStore {
     /// Blob references (`blobs`, per space) are checked by the caller.
     #[cfg(test)]
     pub(crate) fn tables_holding(&self, id: DocId) -> Result<Vec<&'static str>, StoreError> {
-        use super::blob::{BLOB_SYNC, BLOB_VERSIONS};
+        use super::blob::{BLOB_APPROVALS, BLOB_SYNC, BLOB_VERSIONS};
         use super::history::{
             CHANGES, CHANGE_CLOCKS, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS,
         };
@@ -184,6 +184,7 @@ impl DocStore {
                 "blob_versions" => ("blob_versions", pair(&r, BLOB_VERSIONS, id)?),
                 "sync" => ("sync", slot(&r, SYNC, id)?),
                 "blob_sync" => ("blob_sync", slot(&r, BLOB_SYNC, id)?),
+                "blob_approvals" => ("blob_approvals", pair(&r, BLOB_APPROVALS, id)?),
                 other => panic!(
                     "table {other:?} is not classified: erase it in DocStore::delete_doc and \
                      list it in tables_holding"

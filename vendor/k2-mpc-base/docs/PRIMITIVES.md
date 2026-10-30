@@ -1,10 +1,11 @@
 # Primitives
 
 A pack's schema is a set of named roots, each one primitive kind. **Kinds are defined by K2's
-merge semantics, written as a conformance suite** (`crates/base/src/conformance/`) that any
+merge semantics, written as a conformance suite** (`crates/conformance`, generic over engines) that any
 engine must pass. They are not the lowest common denominator of the engines. Where today's
 engine falls short, the kit emulates the rule (and the suite proves it), or the deviation is
-listed in `KNOWN_DEVIATIONS` with its reason. A new engine must have an empty list.
+listed in that engine's `KNOWN_DEVIATIONS` with its reason. A new engine must have an empty
+list; the reference model (`mpce-model`, FugueMax) runs every rule with an empty one.
 
 Status: **Text is implemented and has a suite.** The others are specified here and are built,
 each with its suite, when the first pack needs them. Declaring an unimplemented kind fails
@@ -12,7 +13,7 @@ loudly at `Doc::new`.
 
 | Kind | Model | Edits (data) | K2 semantics (conformance rules) | Notes on Yrs today |
 |---|---|---|---|---|
-| **Text** | Unicode string | `Edit::Text { root, hunks }` | converge; no interleaving of concurrent runs typed forward or backward; text inserted into a concurrently deleted range survives; a concurrent double delete deletes once; a multi-hunk edit is atomic | Native. **Deviation:** backward runs by 3+ writers can interleave (YATA, wire-bound) |
+| **Text** | Unicode string | `Edit::Text { root, hunks }` | converge; no interleaving of concurrent runs typed forward or backward; text inserted into a concurrently deleted range survives; a concurrent double delete deletes once; a multi-hunk edit is atomic | Native. **Deviations:** two scripts where YATA's order differs from FugueMax's (`text.yata_separating_case`, `text.yata_paper_a19`; wire-bound) |
 | **RichText** | Text plus marks over ranges, plus embedded blocks | text edits; add/remove a mark over a range; insert/remove/move a block | Peritext: **per-mark expand rules set by the pack's schema** (bold expands, a link doesn't); concurrent formatting never diverges; marks survive concurrent text edits | Emulated in the kit (Yrs attributes inherit from the previous char and can diverge, yjs#291) |
 | **List** | Ordered sequence of values | insert at, delete range, set item | Converge; concurrent inserts both kept, not interleaved | Native |
 | **MovableList** | Ordered sequence with a **true move** | insert, delete, move item, set item | A concurrent move never duplicates or loses an item; the last move wins | Emulated: per-item LWW position (fractional index) on a map, the daemon as authority |

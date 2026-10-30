@@ -32,6 +32,9 @@ pub(crate) struct Sed {
     regexes: Vec<Matcher>,
     quiet: bool,
     pub(crate) in_place: bool,
+    pub(crate) for_edit: Option<Option<u64>>,
+    /// `--if-version V` (with `-i` only).
+    pub(crate) if_version: Option<crate::store::Seq>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +93,9 @@ const OPTS: &[Opt] = &[
     opt("s", Some('s'), Some("separate"), Arity::No),
     opt("sandbox", None, Some("sandbox"), Arity::No),
     opt("i", Some('i'), Some("in-place"), Arity::Opt),
+    super::FOR_EDIT,
+    super::TTL,
+    super::IF_VERSION,
 ];
 
 const SPEC: Spec = Spec {
@@ -142,7 +148,12 @@ impl Sed {
         let mut quiet = false;
         let mut ere = false;
         let mut in_place = false;
+        let mut fe = super::ForEditArg::default();
+        let mut iv = super::IfVersionArg::default();
         for it in args::parse(&v, &SPEC)? {
+            if fe.take(&it)? || iv.take(&it)? {
+                continue;
+            }
             match it {
                 Item::Opt("n", _) => quiet = true,
                 Item::Opt("e", Some(s)) => scripts.push(s),
@@ -169,6 +180,16 @@ impl Sed {
                 "one doc per call; the host passes the doc",
             ));
         }
+        let for_edit = fe.finish()?;
+        if in_place && for_edit.is_some() {
+            return Err(ToolError::usage(
+                "--for-edit is for reading (sed without -i); an edit ends your claim",
+            ));
+        }
+        let if_version = iv.get();
+        if !in_place && if_version.is_some() {
+            return Err(super::if_version_on_read("sed"));
+        }
         let script = scripts.join("\n");
         if script.len() > pattern::MAX_PATTERN_BYTES {
             return Err(ToolError::Limit(format!(
@@ -192,6 +213,8 @@ impl Sed {
             regexes: p.regexes,
             quiet,
             in_place,
+            for_edit,
+            if_version,
         })
     }
 

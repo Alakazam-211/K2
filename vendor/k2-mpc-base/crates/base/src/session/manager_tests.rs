@@ -380,7 +380,14 @@ fn delete_blob_doc_releases_its_blobs_for_gc() {
         .mgr
         .open_blob_file(Arc::new(AnyFile), &kb, &file, &f.dir.join("ws"))
         .unwrap();
-    let w = s.join(person("w"), Stay::Held).unwrap().conn;
+    // an assistant's write on someone's behalf: its version and its approval record
+    let w = s
+        .join(
+            Participant::new("w", "W", "#000000", ParticipantKind::Agent, "cli").on_behalf_of("p"),
+            Stay::Held,
+        )
+        .unwrap()
+        .conn;
     s.write_bytes(w, b"blob two!", 1).unwrap();
     // a second blob doc sharing nothing, and one sharing blob one's bytes
     let kk = key("ws", "keep.bin");
@@ -390,7 +397,13 @@ fn delete_blob_doc_releases_its_blobs_for_gc() {
     let idb = f.id(&kb);
     assert_eq!(
         f.store.tables_holding(idb).unwrap(),
-        vec!["blob_sync", "blob_versions", "docs", "paths"]
+        vec![
+            "blob_approvals",
+            "blob_sync",
+            "blob_versions",
+            "docs",
+            "paths"
+        ]
     );
     let blobs = f.mgr.blob_store().unwrap().clone();
     assert_eq!(blobs.stats().unwrap().unreferenced_bytes, 0);

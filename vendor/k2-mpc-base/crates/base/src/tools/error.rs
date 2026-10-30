@@ -18,7 +18,9 @@ pub mod exit {
     pub const NOT_FOUND: u8 = 4;
     /// Held: a permission card pending or `approvals_backlog` (the same code as usage).
     pub const HELD: u8 = 2;
-    /// Leased by someone else (tier 0).
+    /// Leased by someone else (tier 0), or claimed by someone else (amendment 13: a new
+    /// overlapping claim, or an agent's edit under `ClaimPolicy::Respect`). The same
+    /// meaning: another participant holds it for now; retry after the time left, or wait.
     pub const LEASED: u8 = 5;
     /// The store is unavailable (disk full, fsync failure): nothing acked.
     pub const STORE: u8 = 6;
@@ -99,33 +101,39 @@ impl ToolRunError {
 
 /// The exit code for a session error: the requirements' one table (K-EXIT-1, `docs/SESSIONS.md`).
 /// Total: every variant is listed, so a new one doesn't compile until it is mapped.
+///
+/// Anything that says "the thing you named doesn't exist" (a doc, version, change, approval,
+/// blob or blob space) is **4**, wherever it comes from (the session, the store, the blob
+/// store); real store failures (I/O, a damaged record, a newer format, the lock) are **6**
+/// (`store_exit`).
 pub fn session_exit(e: &SessionError) -> u8 {
     use crate::blob::BlobError;
-    use crate::store::StoreError;
     match e {
         SessionError::Forbidden { .. } => exit::REFUSED,
         SessionError::NotFound(_)
         | SessionError::Declined(_)
         | SessionError::PackMismatch { .. }
         | SessionError::NoSuchChange(_)
+        | SessionError::NoApproval { .. }
         | SessionError::NoBlobStore
         | SessionError::Deleted
-        | SessionError::Store(StoreError::PurgedVersion(..))
-        | SessionError::Blob(BlobError::TooLarge { .. }) => exit::NOT_FOUND,
+        | SessionError::NoClaim(_)
+        | SessionError::Blob(BlobError::NotFound(_) | BlobError::TooLarge { .. }) => {
+            exit::NOT_FOUND
+        }
         SessionError::NotJoined { .. }
         | SessionError::RateLimited { .. }
         | SessionError::BadParticipant(_)
         | SessionError::BadPosition(_)
         | SessionError::BadEdit(_)
-        | SessionError::NoApproval { .. }
         | SessionError::BadApproval(_)
         | SessionError::BadPath(_)
         | SessionError::NoLease
-        | SessionError::Store(StoreError::CurrentVersion(..))
+        | SessionError::BadClaim(_)
         | SessionError::Doc(_) => exit::USAGE,
-        SessionError::Held { .. } => exit::HELD,
-        SessionError::Leased { .. } => exit::LEASED,
-        SessionError::Store(_) => exit::STORE,
+        SessionError::Held { .. } | SessionError::ClaimContended { .. } => exit::HELD,
+        SessionError::Leased { .. } | SessionError::Claimed { .. } => exit::LEASED,
+        SessionError::Store(e) | SessionError::Blob(BlobError::Store(e)) => store_exit(e),
         SessionError::RevertTooOld { .. } => exit::TOO_OLD,
         SessionError::Stale { .. }
         | SessionError::Disk(_)
@@ -134,6 +142,32 @@ pub fn session_exit(e: &SessionError) -> u8 {
         | SessionError::Unloaded
         | SessionError::Released
         | SessionError::Broken(_) => exit::NO,
+    }
+}
+
+/// The exit code for a store error (inside [`SessionError::Store`], or the blob store's
+/// `BlobError::Store`): **4** when the thing named doesn't exist (no doc,
+/// version, approval, blob or blob space; a purged version), **2** for the current blob
+/// version (purge: write or restore another first), **6** for real store failures.
+fn store_exit(e: &crate::store::StoreError) -> u8 {
+    use crate::store::StoreError as S;
+    match e {
+        S::NoDoc(_)
+        | S::NoVersion(..)
+        | S::NoApproval(..)
+        | S::NoBlobSpace
+        | S::NoBlob(_)
+        | S::PurgedVersion(..) => exit::NOT_FOUND,
+        S::CurrentVersion(..) => exit::USAGE,
+        S::Db(_)
+        | S::Newer { .. }
+        | S::Corrupt(_)
+        | S::KeyTaken(_)
+        | S::Locked
+        | S::NamedVersion(..)
+        | S::KeyChange
+        | S::LogMoved(..)
+        | S::NoRandom(_) => exit::STORE,
     }
 }
 
@@ -146,6 +180,8 @@ mod tests {
     /// until mapped); this pins the codes.
     #[test]
     fn exit_code_table_is_total() {
+        use crate::blob::BlobError;
+        use crate::store::StoreError as S;
         let cases: Vec<(SessionError, u8)> = vec![
             (
                 SessionError::Forbidden {
@@ -172,16 +208,10 @@ mod tests {
                 },
                 5,
             ),
-            (SessionError::Store(crate::store::StoreError::Locked), 6),
+            (SessionError::Store(S::Locked), 6),
             // purge: the current blob version is refused (2); a purged one is gone (4)
-            (
-                SessionError::Store(crate::store::StoreError::CurrentVersion(1, 2)),
-                2,
-            ),
-            (
-                SessionError::Store(crate::store::StoreError::PurgedVersion(1, 2)),
-                4,
-            ),
+            (SessionError::Store(S::CurrentVersion(1, 2)), 2),
+            (SessionError::Store(S::PurgedVersion(1, 2)), 4),
             (SessionError::RevertTooOld { seq: 1 }, 8),
             (
                 SessionError::Stale {
@@ -191,10 +221,119 @@ mod tests {
                 1,
             ),
             (SessionError::Unloaded, 1),
+            (SessionError::BadApproval("x".into()), 2),
+            (
+                SessionError::NotJoined {
+                    conn: crate::session::ConnId::fresh(),
+                },
+                2,
+            ),
+            (SessionError::Blob(BlobError::TooLarge { limit: 1 }), 4),
+            (SessionError::Blob(BlobError::Damaged("ab".into())), 1),
+            (SessionError::Blob(BlobError::Io("x".into())), 1),
+            (SessionError::Blob(BlobError::NoRandom("x".into())), 1),
+            // amendment 13: claims
+            (
+                SessionError::Claimed {
+                    id: crate::session::ClaimId::new(1),
+                    by: "b".into(),
+                    name: "B".into(),
+                    lines: (1, 2),
+                    remaining_ms: 5,
+                    note: None,
+                },
+                5,
+            ),
+            (SessionError::NoClaim(None), 4),
+            (
+                SessionError::NoClaim(Some(crate::session::ClaimId::new(3))),
+                4,
+            ),
+            (
+                SessionError::ClaimContended {
+                    id: crate::session::ClaimId::new(1),
+                    waiters: 1,
+                    remaining_ms: 5,
+                },
+                2,
+            ),
+            (SessionError::BadClaim("x".into()), 2),
         ];
         for (e, code) in cases {
             assert_eq!(session_exit(&e), code, "{e:?}");
         }
         assert_eq!(exit::TOO_OLD, 8);
+    }
+
+    /// v0.3.1: everything that means "the thing you named doesn't exist" exits 4 (not 6),
+    /// from the session, the store or the blob store; real store failures stay 6.
+    #[test]
+    fn missing_things_exit_4_and_store_failures_exit_6() {
+        use crate::blob::BlobError;
+        use crate::store::{DocKey, StoreError as S};
+        let missing: Vec<SessionError> = vec![
+            SessionError::NotFound(DocKey {
+                space: "s".into(),
+                path: "p".into(),
+            }),
+            SessionError::NoSuchChange(3),
+            SessionError::NoApproval { seq: 3 },
+            SessionError::NoBlobStore,
+            SessionError::Deleted,
+            SessionError::Blob(BlobError::NotFound("ab".into())),
+        ];
+        let missing_in_store = [
+            S::NoDoc(1),
+            S::NoVersion(1, 2),
+            S::NoApproval(1, 2),
+            S::NoBlobSpace,
+            S::NoBlob("ab".into()),
+            S::PurgedVersion(1, 2),
+        ];
+        let failures = [
+            S::Db("disk full".into()),
+            S::Newer { found: 9 },
+            S::Corrupt("log entry"),
+            S::KeyTaken(DocKey {
+                space: "s".into(),
+                path: "p".into(),
+            }),
+            S::Locked,
+            S::NamedVersion(1, 2),
+            S::KeyChange,
+            S::LogMoved(1, 2, 3),
+            S::NoRandom("x".into()),
+        ];
+        for e in &missing {
+            assert_eq!(session_exit(e), exit::NOT_FOUND, "{e:?}");
+        }
+        for e in missing_in_store {
+            assert_eq!(
+                session_exit(&SessionError::Store(e.clone())),
+                exit::NOT_FOUND,
+                "Store({e:?})"
+            );
+            assert_eq!(
+                session_exit(&SessionError::Blob(BlobError::Store(e.clone()))),
+                exit::NOT_FOUND,
+                "Blob(Store({e:?}))"
+            );
+        }
+        for e in failures {
+            assert_eq!(
+                session_exit(&SessionError::Store(e.clone())),
+                exit::STORE,
+                "Store({e:?})"
+            );
+            assert_eq!(
+                session_exit(&SessionError::Blob(BlobError::Store(e.clone()))),
+                exit::STORE,
+                "Blob(Store({e:?}))"
+            );
+        }
+        assert_eq!(
+            session_exit(&SessionError::Store(S::CurrentVersion(1, 2))),
+            exit::USAGE
+        );
     }
 }

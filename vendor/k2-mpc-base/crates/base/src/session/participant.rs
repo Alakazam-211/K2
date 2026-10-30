@@ -176,4 +176,9 @@ pub struct RosterEntry {
     pub region: Option<String>,
     /// Tier 0: this participant holds the doc's lease (they are shown as an editor).
     pub holds_lease: bool,
+    /// Their live claims in this doc, oldest first (amendment 13). Empty for tier 0.
+    pub claims: Vec<super::awareness::ClaimInfo>,
+    /// The lines their latest change touched (anchored: where those lines are now), from
+    /// the most active connection that has one. `None` for tier 0.
+    pub last_edit: Option<LineRange>,
 }

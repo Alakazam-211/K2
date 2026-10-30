@@ -1,4 +1,4 @@
-//! Undo, redo and revert over text, to the undo spec v1.4 (`.k2/prds/spec-undo-v1.md`).
+//! Undo, redo and revert over text, to the undo spec v1.5 (`docs/SPEC-UNDO.md`).
 //!
 //! Undo is a three-way merge per **region** (U8): a region is one **canonical hunk** of a
 //! change (sorted, non-overlapping, coalesced when touching), kept as its text before and
@@ -14,6 +14,9 @@
 //! at_end)` where `at_end` holds only when the region ends at the root's end **and** the
 //! root was non-empty after the change being undone (the merge's base, U10, v1.4 m11), so the
 //! end-of-text rule O5 fires exactly where a whole-text `merge3` would fire it (U12).
+//! A clean region applies **the merge's own hunks** (offset by `s'`), never a fresh diff of
+//! the window: in repeated text a diff could delete someone else's identical characters
+//! (U10, element identity).
 //!
 //! Within one step, regions are applied **back to front**; the windows are disjoint, so each
 //! region merges against the step's starting text and lower regions keep their bounds
@@ -128,9 +131,11 @@ impl Region {
         self.before.len() + self.after.len() + self.root.len() + 64
     }
 
-    /// The region's text after undoing it, merged with `live` (`Ok(merged window text)`),
-    /// or the conflict (U10, U11).
-    fn revert(&self, live: &str) -> Result<String, Box<ConflictRegion>> {
+    /// The region undone, merged with `live`: the clean merge (its text, and **its own
+    /// hunks** in window coordinates), or the conflict (U10, U11). The merge's hunks are
+    /// what the step applies: they say which elements change (element identity, U10); a
+    /// fresh diff of the window could pick someone else's identical characters.
+    fn revert(&self, live: &str) -> Result<merge::Clean, Box<ConflictRegion>> {
         let theirs = match live.get(self.start..self.end) {
             Some(t) => t,
             None => return Err(self.conflict(live, ConflictKind::Taint).into()),
@@ -143,7 +148,7 @@ impl Region {
         }
         let at_end = self.end == live.len() && !self.base_doc_empty;
         match merge::merge3_window(&self.after, &self.before, theirs, at_end) {
-            Merge::Clean(c) => Ok(c.text),
+            Merge::Clean(c) => Ok(c),
             Merge::Conflicts(_) => Err(self.conflict(live, ConflictKind::Overlap).into()),
         }
     }
@@ -316,7 +321,7 @@ pub(crate) fn plan(texts: &[(&'static str, String)], mut batches: Vec<Batch>, mo
     for k in 0..batches.len() {
         let regions = std::mem::take(&mut batches[k].regions);
         // every region merges against the step's starting text (windows are disjoint)
-        let mut results: Vec<(usize, Result<String, Box<ConflictRegion>>)> = Vec::new();
+        let mut results: Vec<(usize, Result<merge::Clean, Box<ConflictRegion>>)> = Vec::new();
         for (idx, r) in regions.iter().enumerate() {
             let Some((_, live)) = scratch.iter().find(|(n, _)| *n == r.root) else {
                 continue; // a root the schema no longer has: nothing to undo there
@@ -351,7 +356,7 @@ pub(crate) fn plan(texts: &[(&'static str, String)], mut batches: Vec<Batch>, mo
         };
         for (root, live) in scratch.iter_mut() {
             // applied regions of this root, in order (regions are ordered by start)
-            let applied: Vec<(&Region, &String)> = results
+            let applied: Vec<(&Region, &merge::Clean)> = results
                 .iter()
                 .filter_map(|(i, r)| r.as_ref().ok().map(|m| (&regions[*i], m)))
                 .filter(|(g, _)| g.root == *root)
@@ -362,13 +367,15 @@ pub(crate) fn plan(texts: &[(&'static str, String)], mut batches: Vec<Batch>, mo
             let mut hunks = Vec::new();
             let mut shift: isize = 0;
             let mut inverse = Vec::with_capacity(applied.len());
-            for (g, merged) in &applied {
+            for (g, clean) in &applied {
                 let theirs = &live[g.start..g.end];
-                for h in diff::hunks(theirs, merged) {
+                let merged = &clean.text;
+                // the merge's own hunks, never a re-diff of the window (U10)
+                for h in &clean.hunks {
                     hunks.push(Hunk {
                         start: h.start + g.start,
                         end: h.end + g.start,
-                        insert: h.insert,
+                        insert: h.insert.clone(),
                     });
                 }
                 let start = (g.start as isize + shift) as usize;
@@ -377,7 +384,7 @@ pub(crate) fn plan(texts: &[(&'static str, String)], mut batches: Vec<Batch>, mo
                     start,
                     end: start + merged.len(),
                     before: theirs.to_owned(),
-                    after: (*merged).clone(),
+                    after: merged.clone(),
                     tainted: false,
                     base_doc_empty: false, // set below, once the step's text is known
                     erased: false,

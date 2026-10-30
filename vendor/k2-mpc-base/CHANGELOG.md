@@ -1,5 +1,448 @@
 # Changelog
 
+## v0.8.1 (2026-10-28)
+
+A patch: undo, redo and revert remove only their own text. No API change for hosts; no
+store format change (still 4); no new dependency. Undo spec v1.5 (`docs/SPEC-UNDO.md`).
+
+**Fixed**
+- **Undo, redo and revert could remove another participant's identical text.** A clean
+  region applied a fresh diff of its window instead of the merge's own hunks (spec U10):
+  the text was the same, but in repeated text (two identical lines, a run like `aaaa`) the
+  diff could name another participant's identical characters. Now the merge's own hunks
+  are applied (`session/undo.rs`). `write --base` was **not** affected: it already applied
+  the merge's own hunks (there is no `write --base --partial` in the kit).
+- **Stores written by v0.8.0 or earlier:** where an undo, redo or revert removed one of two
+  identical runs of text, it may have removed the wrong one. The text right after it was
+  as reported, but blame on those characters is swapped, and a later undo or revert of the
+  other participant's change there may report a conflict, report nothing to undo, or
+  **apply while leaving that participant's text in place** (two participants append the
+  same line and each undoes their own: one line stays). So the visible text after such a
+  later undo can differ from what the undo should give. No automatic repair: the intended
+  copy can't be recovered from the store.
+
+**Undo spec suite**
+- `docs/SPEC-UNDO.md`: the kit's undo spec, v1.5 (U10 clarified; **U22a**, revert's carried
+  taint, exactly, with its property: revert's conflicts ⊇ undo's on the same state, and the
+  same text wherever both apply; U19's notice: "cleared by purge" is said once and
+  withdrawn by the holder's next batch).
+- `crates/spec-undo` (never published): `spec_undo::model`, the spec's oracle, and the
+  trace-equivalence test against the kit's sessions on Yrs: 256 seeded traces in CI, every
+  case class hit (a repeated-text class among them), 0 mismatches.
+- Conformance: `hist.undo_own_only` (per element, through blame), `hist.restore_minimal`;
+  restore is the kit's operation on every engine; `erase.span_includes_tombstones`
+  declared (awaiting mpce-model v0.4.1).
+
+**Feature `conformance` only** (off by default; no host enables it; the default API is
+unchanged): test hooks for the undo spec's trace test and the per-element rule.
+- `Session::undo_depths(pid)`: a pid's undo and redo stack depths in the doc.
+- `Session::char_blame(root)` and `CharBlame`: every live character with its element
+  (client, clock), owner pid and change.
+- `DocStore::unsynced_for_tests()`: from then on, commit without syncing the store file
+  (in-process test runs; a sync per change was most of the trace test's time).
+
+## v0.8.0 (2026-10-28)
+
+Version guards for agents' edits, and claim ends that say where the range is and what
+version the doc is at. Planned as v0.7.1; it is **v0.8.0** because two event variants gain
+fields (below). No store format change (still 4); no new dependency; no new exit code.
+`docs/SESSIONS.md`, amendment 14.
+
+**What's in it**
+- **`--if-version V` on every edit verb** through `run_tool`: `sed -i`, `patch`/`apply`
+  (`--dry-run` too), `append`, `insert`, `replace` (every mode), `delete`, and every pack
+  verb (e.g. Markdown's `replace-section`, with no pack change). Apply only if the doc is
+  still at version V.
+  - **Checked under the session lock**, in the edit's critical section, by the same check
+    as `Session::edit`'s `if_version`: nothing can land between the check and the apply.
+  - **Stale:** `SessionError::Stale { expected: V, actual: W }`, exit 1, nothing applied, no
+    new version. One line, **`doc changed since V (now W)`**, never any doc text.
+  - **First:** after admission (rights, a declined doc, the edit rate), it wins over every
+    other refusal: the approvals backlog, the verb's own "no" (no match, not unique, a
+    failing patch), a tool error found on the live text, and `Respect` claims. A no-op
+    (`--old` equal to `--new`) still checks it.
+  - **V** is decimal, or `vN` as the summary prints it. Kit verbs parse it as any long
+    option (`--if-version=V`, a unique prefix). For pack verbs, the kit takes out
+    `--if-version V` / `--if-version=V` (exact spelling, before `--`) before the pack parses.
+  - **Read verbs refuse it**, exit 2 (`--if-version is for edit verbs; cat is a read (it
+    prints the version)`), so agents learn where it applies. Twice, missing or bad: exit 2.
+  - `tools::Tool::if_version()`; the parity registry's edit-verb usages name it.
+- **`ClaimEnded` and `ReservationEnded` carry `lines` and `version`**: the range's current
+  lines as it ends (after the edits made while it was live moved its anchors; `LineRange`,
+  as `ClaimTaken`'s) and the doc's version at that moment (after the ending edit, for
+  `Edited`).
+- **`SessionError::Stale` reads `doc changed since {expected} (now {actual})`** everywhere
+  (was `doc moved: expected version …, it is at …`): `edit`'s `if_version`, tier 0's stale
+  base, and `--if-version`.
+
+**For hosts**
+- **Which version to record.** "The version the agent last read" is `ToolOutput::version`
+  from a read verb through `run_tool` (also in `stderr_summary`, `notes.md v1842`, and
+  `Fence::version`), or `ReadResult::version` from `Session::read`. After an edit,
+  `ToolOutput::version` is the version after it. All are the session's one version, the
+  number `--if-version` compares and the events carry. `Status::version` is the same number
+  now, but it is not a read: don't use it as what the agent saw.
+- **Pass `--if-version` through in `argv`**, as given. Map `Stale` (`ToolRunError::Session(
+  SessionError::Stale { expected, actual })`) to exit 1 and print its `Display` on stderr; it
+  is one line and holds no doc text. Re-read and retry is the agent's move.
+- **Telling bounced agents.** On `ClaimEnded` (or `ReservationEnded`), "lines
+  `lines.first`–`lines.last` are free; the doc is at `version`; re-read" uses the same
+  identity: an edit with `--if-version <version>` applies if nothing landed since, and one
+  with an older read's version is refused with `doc changed since V (now W)`, W =
+  `version` when nothing landed since.
+- **Breaking:** `AuditEvent::ClaimEnded { .., lines, version, .. }` and
+  `ReservationEnded { .., lines, version, .. }`. The enum is `#[non_exhaustive]`, but these
+  variants aren't: a pattern that lists their fields without `..`, or code that builds
+  them, must add the two fields.
+- If you show the `Stale` text verbatim or match on it, it changed (above).
+- `sed --i` no longer abbreviates `--in-place` (it is ambiguous with `--if-version`, exit
+  2). `sed -i` and `--in-place` are unchanged.
+
+**For packs**
+- Nothing to change: pack verbs get `--if-version` from the kit. A pack verb can't take a
+  value that is literally `--if-version` (the kit takes it first); `--` still ends options.
+- A pack whose lockfile pins the kit needs the lock bumped to 0.8.0 (path dependency).
+
+## v0.7.0 (2026-10-28)
+
+Agent presence: agents have no cursor, so the kit now tells them (and the people beside
+them) who is looking at, has just edited, or is about to edit the same lines, and lets an
+agent "take a turn" on a range. **Ephemeral awareness, not locking and not history:**
+nothing goes to the store, the log, versions or the engine, and the kit never blocks a
+person. No store format change (still 4); no new dependency. `docs/SESSIONS.md`,
+amendment 13.
+
+**What's in it**
+- **Claims.** `Session::claim(conn, lines, ttl_ms, note, hold)` takes an anchored,
+  expiring claim (default 30 s, at most 10 min; the agent picks its TTL).
+  - **Anchored, expanding.** The range follows concurrent edits. Its start sticks to the
+    character before and its end to the character after, so text typed at an edge lands
+    inside, and it never inverts.
+  - **Ends:** the claimant's own edit touching it (unless `hold`), its time running out,
+    `release_claim`, or the connection leaving. Also `renew_claim`, `claims`, and
+    `claim_remaining_ms` (deterministic on the host's clock).
+  - **Overlap:** another participant's live overlapping claim refuses a new one with
+    `SessionError::Claimed { id, by, name, lines: (first, last), remaining_ms, note }`.
+  - **Waiters:** `register_waiter` / `cancel_waiter` keep a FIFO queue per claim.
+    Anti-starvation: while anyone else waits, the owner can't extend the claim or give it
+    `hold` (`ClaimContended`). It still ends normally.
+  - **Hand-off:** when a claim with waiters ends, its range is reserved for the first
+    waiter for `claim_handoff_ms` (2 s). Meanwhile other agents' overlapping claims and
+    `Respect` edits there are refused (`Claimed`, with the reservation's time left), so
+    the owner can't grab it back. The waiter's first edit there uses it (and passes it on);
+    its first claim there uses it (and the rest of the queue waits for that claim). It
+    lapses at its deadline, or when the waiter cancels or leaves, then passes to the next
+    waiter. `Session::reservations` lists them.
+- **A claim policy on edits, chosen by the host.**
+  - `ClaimPolicy::Ignore` (the default, and what every existing call uses) never refuses.
+  - `ClaimPolicy::Respect` refuses an **agent's** edit into another participant's live claim
+    (or a reservation held for someone else) with `Claimed`, applying nothing.
+  - **Claims coordinate agents; they never block anyone else.** Only
+    `ParticipantKind::Agent` is ever refused or reserved against: a person, an app guest or
+    any other kind never is, whatever the policy.
+- **`--for-edit [--ttl MS]`** on `cat`, `head`, `tail`, `view`, `grep`, `sed` (no `-i`): the
+  read also takes a short implicit claim (30 s) on the lines shown. The claimant's next edit
+  there releases it. Another participant's claim there takes nothing: the read still
+  succeeds and reports the conflict (`ToolOutput::for_edit: Option<Box<ForEdit>>`).
+- **Heads-up notes.** Every read and edit through `run_tool` returns `ToolOutput::notes`:
+  who else is viewing, just edited, has claimed, or (a person) has a caret or selection on
+  the lines it touched.
+  - **Deduped** per (reader, other, kind, lines) for 60 s.
+  - **Rate-limited** per (reader, doc): one batch per 5 s, at most 5 notes, then
+    `note: +N more`.
+  - **One line each**, starting `note: `, for stderr only. `stdout` never changes.
+- **`write --base` conflicts name names.** `write_base_with` returns a `WriteReport` whose
+  `conflict_notes` say who claimed or last edited each conflicting region.
+- **Activity.** `Session::activity(conn, n)`: a per-doc ring (256 rows) of reads, edits and
+  claims (who, verb, lines, when). It is dropped on unload, and erasure drops the pid's rows.
+- **Richer roster rows.** `RosterEntry::claims` and `last_edit` (anchored lines). Agents'
+  carets are at their last edit, as before.
+- **Parity.** New verbs: `claim`, `claim --renew` and `claim --release` serve P8 ("say
+  what I'm working on"); `activity` serves P6. `--for-edit` is a flag on the read verbs. The
+  kit has 61 cases now, and the harness compares the actor's claims (`ClaimObs`).
+
+**For hosts**
+- **The policy parameter.** Pass a `ClaimPolicy` on agent edits: `run_tool_with(conn,
+  root, argv, stdin, &ToolOptions::new().policy(p))`, `edit_with_policy`,
+  `write_base_with`, `replace_text_with`. Map `--respect-claims` (or your default) to
+  `Respect`. The old calls stay `Ignore`. An auto-wait ("agents respect each other's claims
+  with a bounded wait") is yours to build:
+  1. on `Claimed`, call `register_waiter(conn, id)`;
+  2. wait for `AuditEvent::Reserved` naming your `conn` for that claim (or `ClaimEnded`), at
+     most its `remaining_ms` (or your timeout), then `cancel_waiter`;
+  3. retry the edit within the reservation (2 s). Only agents wait: a person or app guest
+     never does.
+- **Events.** `AuditEvent::ClaimTaken { claim, pid, conn, lines, expires_ms, hold, for_edit }`
+  and `ClaimEnded { claim, pid, how, next_waiter, waiters }`. `waiters` is in FIFO order.
+  The hand-off adds `Reserved { claim, pid, conn, lines, until_ms, waiters }` (each grant)
+  and `ReservationEnded { claim, pid, how, next_waiter }`.
+  They come with the session locked: queue the wake-up, and don't call the kit from
+  `on_event`. The claim's note is not in events; read it with `claims`.
+- **Exit codes.**
+  - `Claimed` is **5**, the same code as `Leased` (someone else holds it for now; retry
+    after `remaining_ms`). No new code.
+  - `NoClaim` is 4; `ClaimContended` and `BadClaim` are 2.
+  - `claim --release` exits 1 when you held none.
+- **Notes rendering.**
+  - Print `ToolOutput::notes.to_string()` (and `for_edit`, also a `note: ` line) on
+    **stderr**, never stdout. Nothing is printed for an empty batch.
+  - For `--presence json`, serialise `Note`, `ClaimInfo`, `ActivityEntry` in their field
+    order. Enums go as `as_str()`. The kit has no serde.
+  - `held` counts notes the rate limit kept back; it is useful for JSON only.
+- **CLI verbs.** Route these to the session calls:
+  - `claim --lines a,b [--ttl MS] [--note T] [--hold]` → `claim`;
+  - `claim --renew [--id ID] [--ttl MS] [--hold|--no-hold]` → `renew_claim`;
+  - `claim --release [--id ID]` → `release_claim`;
+  - `activity [-n N]` → `activity`;
+  - `who` → the roster, with its new columns.
+  `ClaimId` displays as `claim-12`, and `ClaimId::parse` reads that or `12`. Pass
+  `--for-edit` through in `argv`.
+- **Idle.** A connection holding or waiting for a live claim doesn't idle out until the
+  claim ends. That stays bounded by `claim_max_ms`.
+- **Conflict notes** name only participants still present; a one-shot editor that has
+  left isn't named (its change is in `log` and `blame`).
+- **Config:** `claim_default_ms` (30 s), `claim_max_ms` (10 min), `for_edit_ms` (30 s),
+  `claims_max` (256), `claims_per_participant` (16), `claim_waiters_max` (64),
+  `claim_handoff_ms` (2 s; 0 turns hand-off off),
+  `note_edit_window_ms` (60 s), `note_repeat_ms` (60 s), `note_interval_ms` (5 s),
+  `note_batch_max` (5), `activity_max` (256).
+
+**For packs**
+- A text pack's parity list changes:
+  - P8 is `live(&["cursor", "claim", "claim --renew", "claim --release"])` (the `intent`
+    placeholder goes);
+  - P6 adds `activity`.
+  Otherwise `check` fails with `VerbNotListed`.
+- `PersonAction` is unchanged; tier 0 is unaffected.
+- `parity::PresenceObs` gains `claims`, which matters only if you build one by hand.
+
+## v0.6.0 (2026-10-27)
+
+Exact-text replace for agents, `replace --old TEXT --new TEXT [--all]`: "replace this exact
+text with that", with no regex to escape. Also the engine-generic conformance suite and its
+test-only hooks (below). No store format change (still 4); no new dependency.
+
+**What's in it**
+- **`replace --old TEXT --new TEXT [--all]`**, a third mode of `replace`, exclusive with
+  `--lines` / `--range`.
+  - **Exact.** `--old` is matched byte for byte (case, whitespace, line breaks), with no
+    regex or escapes, on the doc text the other edit verbs see: `\n` line breaks, no BOM.
+    A CRLF file's `\r\n` and its BOM are restored when it is written.
+  - **Unique by default.** Matches are counted left to right without overlaps. One match
+    applies. None, or more than one, applies nothing and exits 1. An only match that
+    overlaps another occurrence (`aa` in `aaa`) counts as more than one.
+  - **`--all`** replaces every non-overlapping match, left to right (`str::replace`).
+  - **`--old` must be non-empty; `--new` may be empty** (deletes the match). Both are
+    required.
+  - **`-` reads one of them from stdin** (not both). Without `-`, stdin is not read.
+  - One atomic, attributed change (one undo), through `edit_with` on the live text, like
+    every edit verb. `--old` equal to `--new` succeeds with no new version.
+- **Refusals an agent can retry from.** The report goes on `stdout`, the
+  `stderr_summary` says `nothing applied to …`, and the doc's text is never quoted:
+  - **More than one match:** the count and each match's lines, for example
+    `replace: --old matches 3 times in notes.md (at lines 2, 5–6, 9 (×2)); nothing
+    applied`. Up to 20 are listed, then "and N more". It then says to add surrounding text
+    or pass `--all`.
+  - **No match:** says so, with hints that never apply anything:
+    - `--old` has `\r` (and whether it matches with `\n`);
+    - it starts with a BOM;
+    - it would match with whitespace loosened, case ignored, or both (count and lines).
+- `--all` prints `replaced N matches in notes.md (at lines … before the edit)` on stdout.
+  Otherwise a successful replace prints nothing on stdout, like the other edit verbs.
+- **Parity:** `replace` now serves P12 (find and replace) too, with three cases: one
+  match, `--all`, and a two-line `--old` from stdin. Its exits are `0, 1`.
+
+**For hosts**
+- Route `<host> doc replace --old TEXT --new TEXT [--all]` to `run_tool` as given. `argv`
+  is a list, so `--old`/`--new` may hold newlines and start with `-`; no shell quoting is
+  involved.
+- **`--old-file PATH` / `--new-file PATH` are the host's flags.** The kit does no I/O:
+  read the file and pass its text as `--old` / `--new`, so `argv` never names a path.
+  Keep `-` for stdin as is.
+- **Exit codes:** 0 applied (or a no-op); 1 no match or not unique (nothing applied: print
+  `stdout`, the report, as you print `patch`'s); 2 usage. Usage errors are an empty
+  `--old`, a missing `--old` or `--new`, one given twice, both `-`, a mix with
+  `--lines`/`--range`, or stdin that isn't UTF-8. Session refusals (3, 4, 5, 6) as for any
+  edit verb. `tools::exit` is unchanged.
+- `run_tool` has no `if_version` guard for any verb, and this mode adds none. The match is
+  found in the live text, so a replace applies where the text is now.
+- **Parity list:** add `replace` to your P12 row (`["sed -i", "replace"]`), or `check`
+  fails with `VerbNotListed`. Hosts checking their command table against
+  `Registry::kit()` see `replace`'s new usage line and exits.
+
+**For packs:** a text pack's P12 row must list `replace` (above). `PersonAction` is
+unchanged; tier-0 lists are unaffected.
+
+**Conformance suite** (folded from Unreleased):
+- **`conformance` feature (off by default; no host enables it).** Test-only hooks in
+  `conformance::replica` (`sync` between two of the kit's docs in one process, `state` as
+  sorted `(client, clock)` pairs) for the new `crates/conformance` suite. The default API and
+  build are unchanged; `conformance::KNOWN_DEVIATIONS` stays (the kit Doc's list).
+- **`conformance` feature, more hooks** (still test-only, off by default):
+  `conformance::replica::{events_since, deliver}` (an update past a state the doc has seen;
+  delivery with the per-client continuity check client updates get, then a trusted apply),
+  `blame` (the blame runs per text root) and `anchor` / `resolve` (relative positions, with
+  `Anchor` and `Stick`). The client-update check's continuity loop is now one private
+  function shared by both paths (no behaviour change). `conformance::KNOWN_DEVIATIONS` gains
+  three pinned entries: `core.causal`, `core.no_equivocation`, `hist.undo_atomic`.
+- The conformance suite gains capabilities (Events, Blame, Anchors, Undo), the rules
+  `core.idempotent`, `core.causal`, `core.no_equivocation`, `text.scalar_safe`,
+  `text.cursor_stable`, `text.blame_char`, `text.edit_atomic_split`, `hist.undo_atomic`,
+  and a coverage matrix enforced by a test (`docs/CONFORMANCE.md`).
+- `vendor/mpce-model` bumped to **mpce-model-v0.2.1**; its adapter uses the model's native
+  `edit_as`, `diff_events` / `deliver_all`, `blame` and anchors (deviation list still empty).
+- The text conformance rules moved from `crates/base/src/conformance/text.rs` to
+  `k2-mpc-conformance` (never published), generic over engines: they run on the kit's `Doc`
+  and on the vendored reference model `mpce-model` (empty deviation list, asserted).
+
+**Tests (new):** 49 golden cases (`exact-*` in `tests/golden/tools.golden`). These cover
+unique, no match with and without each hint, 2+ matches (same line, multi-line, capped),
+`--all` (overlapping `aa` in `aaa`), empty and missing flags, multi-line, non-ASCII and
+emoji (ZWJ, combining mark), CRLF and BOM, stdin for either side, both `-`, `old == new`,
+and the exclusion with `--lines`/`--range`. `tools_session`: `exact_replace_*`
+(attribution, caret, undo, `--all` as one change, refusals apply nothing, the no-op,
+stdin, a CRLF+BOM file round trip, the doc changing between read and replace, rights) and
+`concurrent_threads_exact_replace_and_typing_lose_nothing`. Parity: P12's three `replace`
+cases on both paths.
+
+## v0.5.0 (2026-10-27)
+
+Approvals for on-behalf blob writes (K-T0-9), on its own because it changes the store
+format and decides who may settle an approval. The API contract is `docs/SESSIONS.md`
+(amendment 11). **Store format 4**; no new dependency.
+
+**What's in it**
+- **On-behalf blob writes get a pending approval.** A `write` or `restore` by an assistant
+  whose participant has `on_behalf_of` applies at once (never held) and records
+  `Approval { Pending, by: None, at_ms: None, author, on_behalf_of }` for that version in the
+  same transaction: the text doc's record and rules (K-ID-10).
+- **Only the named person settles it** (K-ID-11): `BlobSession::set_approval(conn, version,
+  Approved | Declined)`. The agent, another person or an owner get
+  `Forbidden { need: Approver }` and an `AuditEvent::Refused`; `Pending` is no target; once
+  settled it can't flip (`BadApproval`), the same way again is a no-op; no approval is
+  `NoApproval` (exit 4). `approval` and `approvals` with text's read rules.
+- **Decline keeps history** (K-HIST-19 for tier 0): the result, `BlobApproval`, names the
+  version to restore (`restore_to`) and the versions after it (`later`, which a restore also
+  replaces: blobs don't merge). Nothing is restored automatically.
+- **Surfaced:** `BlobLogEntry::approval`, `BlobBlame::approval` (current version); `who`
+  shows the agent for the person, as before.
+- **Parity:** `approve`, `decline`, `log --pending` on both tiers; tier-0 cases for P29 and
+  P30 (31 cases over 16 live rows); the blob observation compares approval records.
+- **Purge reaches it** (K-PURGE-3): a purged version's approval record is kept as metadata
+  (no content, no blob id) and counted (`PurgeCounts::approvals`); delete and the file
+  rewrite cover the new table.
+
+**Store format 4 (no downgrade).** New table `blob_approvals` keyed `(doc, version)`, apart
+from the text `approvals` keyed `(doc, seq)`, so no text reader can take a blob version for
+a change. Opening a format-3 store **upgrades it in place** (one transaction: the table, a
+`Pending` approval for every on-behalf blob version it already holds, the stamp). **A v0.4.x
+build refuses a format-4 store** (`StoreError::Newer { found: 4 }`, checked against the real
+v0.4.0 code): to roll back, restore the store from a backup taken before the upgrade.
+
+**For hosts**
+- Route `<host> doc approve|decline <version>` on a blob doc to `BlobSession::set_approval`;
+  on a decline print the way back from `restore_to` / `later` ("restore version N to undo it;
+  versions M... came after it and would be replaced too"). Don't restore for the person.
+- `log --pending --on-behalf-of me` on a blob doc: `BlobSession::log` filtered to
+  `approval == Some(Pending)` (and `on_behalf_of`); a tab's list: `approvals`.
+  `AuditEvent::Approval { seq }` and `NoApproval { seq }` carry the version for a blob doc.
+- Tier-0 parity list: make P29 (`approve`, `decline`) and P30 (`log --pending`) live; a
+  deferred row now fails as stale. Exit codes are unchanged (`tools::session_exit`).
+- Back up the store before the first open with v0.5.0 if you may need to roll back.
+
+**For packs:** nothing changes for text packs (their registry and list are the same).
+
+**Not built:** a pending cap for blob docs (text's `approvals_backlog`); proposed in
+amendment 11.
+
+**Tests (new):** `tier0::on_behalf_blob_write_pending_approval`,
+`on_behalf_blob_approval_only_by_person` (incl. after a restart),
+`decline_then_restore_after_restart`, `a_v040_store_upgrades_to_format_4_in_place` (a
+store written by v0.4.0, `tests/fixtures/store-format3-v040`);
+`erasure::tier0_purge_reaches_on_behalf_versions_and_approvals_no_bytes_behind` (byte scan);
+`store::tests::on_behalf_blob_versions_get_a_pending_approval_in_the_same_commit`,
+`a_format_3_store_is_upgraded_in_place_with_its_approvals`;
+`parity_blob::an_approval_verb_missing_or_different_fails_loudly`.
+
+## v0.4.0 (2026-10-27)
+
+Tier-0 kit asks from the first host. The API contract is `docs/SESSIONS.md` (amendment 10). **Store format
+stays 3**, no store change; no new dependency.
+
+**What's in it**
+- **Per-verb tiers.** `parity::Tier { Text, Blob }`; `VerbSpec::tiers` (`applies_to`) says
+  which docs a verb works on, so a host classifies its commands from data. Both tiers:
+  `open`, `leave`, `cat`, `who`, `write`, `status`, `flush`, `log`, `show --version`,
+  `restore`, `version --name`, `mv`, `blame`. `Registry::for_tier(tier)`;
+  `Registry::for_pack` keeps working (the text tier plus the pack's verbs).
+- **Lease verbs** (tier 0): `lease [--ttl MS]`, `lease --renew`, `lease --release`,
+  `lease --break` (owner, as `BlobSession::break_lease`), and their person actions
+  **P32 `Lease`, P33 `ReleaseLease`, P34 `BreakLease`**.
+- **Tier-aware parity.** Each `PersonAction` has `tiers()`; a list needs rows only for its
+  registry's tier, so the Markdown pack doesn't cover the leases. A tier-0 harness
+  (`parity::check_blob`, `kit_blob_cases`: 27 cases over 14 live rows, 8 for the leases)
+  runs the person path and the agent path on blob docs; `tests/parity_blob.rs` holds tier 0's
+  list for any file, with negative controls.
+- **`BlobSession::log`**: one `BlobLogEntry` per version, oldest first (who, when, kind:
+  import / write / restore / external / conflict-kept / merged, `of`, `on_behalf_of`, name,
+  `redacted`, size, the conflict copy). Same rights as `versions`; built from what's stored.
+  It is the blob `log` verb.
+- **Conflict copies per K-A11Y-5:** `<name> (conflict <who> YYYY-MM-DD HHMMSS).<ext>` (UTC),
+  in the folder the host chooses; listed in `BlobStatus::conflict_copies`; deleted on `tick`
+  after 30 days (`Config::conflict_copy_keep_ms`) unless named, edited, or not the kit's;
+  reported in `TickReport::conflict_copies_removed`. The purge byte scan and
+  `conflict_copies` find copies in the host's folder and old ones beside the file.
+
+**For hosts**
+- **New `Host` method:** `fn conflict_dir(&self, file: &Path) -> Option<PathBuf>`, default
+  `None` (copies beside the file, as before). Return your folder (the kit creates it). The
+  copy is recorded relative to the file's folder, so `BlobVersion::conflict_copy` and
+  `AuditEvent::BlobConflict::copy` can be `../…` paths; `DiskCheck::Conflict::copy` is the
+  resolved path.
+- **The name changed** from `name (conflict <time> from <who>).ext` to
+  `name (conflict <who> <time>).ext`. Copies written by v0.3.x keep their names and are still
+  found (and cleaned up).
+- **The registry's tier field:** classify `<host> doc` verbs with `VerbSpec::tiers`; check the
+  tier-0 command table against `Registry::for_tier(Tier::Blob)`. `Registry::kit()` is now
+  the text tier only.
+- Show `BlobStatus::conflict_copies`; route the lease verbs and `log` on blob docs.
+
+**For packs:** map P32–P34 in your `parity_row` match (a text pack: N/A, "leases are tier
+0's") and build your list with `PersonAction::for_tier(Tier::Text)`. `VerbSpec` literals
+need `tiers`.
+
+**Behaviour changes:** the conflict-copy name; copies in the host's folder when it gives
+one; the 30-day cleanup on `tick`.
+
+**Verified locally:** the full suite (298 tests, 1 ignored; new: `tests/parity_blob.rs` with 3,
+7 in `tests/tier0.rs` incl. `conflict_copy_naming_cleanup`, `parity::registry::tiers_are_consistent`),
+clippy `-D warnings`, `cargo fmt --check`.
+
+## v0.3.1 (2026-10-27)
+
+Patch: exit codes only (`docs/SESSIONS.md`, amendment 9). No API or store change; the store
+format stays 3. No new dependency.
+
+**Fixed:** `tools::session_exit` gave **6** (store unavailable) for a version that doesn't
+exist (`StoreError::NoVersion`, e.g. a tier-0 `read_version`, `restore`, `name_version` or
+`purge` of version 99). Everything that means "the thing you named doesn't exist" now exits
+**4** (K-EXIT-1):
+
+| Error | Was | Now |
+|---|---|---|
+| `Store(NoVersion \| NoDoc \| NoApproval \| NoBlob \| NoBlobSpace)` | 6 | 4 |
+| `NoApproval { seq }` (approving a change made on nobody's behalf) | 2 | 4 |
+| `Blob(NotFound)` | 1 | 4 |
+| `Blob(Store(e))` | 1 | as `Store(e)`: 4 for a missing thing, 6 for a store failure |
+
+Real store failures (`Db`, `Corrupt`, `Newer`, `Locked`, `NoRandom`...) stay 6;
+`Store(CurrentVersion)` stays 2 and `Store(PurgedVersion)` 4.
+
+**Tests:** `tools::error::missing_things_exit_4_and_store_failures_exit_6` (every variant of
+the sweep, from the session, the store and the blob store), `tier0::a_missing_version_exits_4_not_6`.
+
+**Verified locally:** the full suite (287 tests, 1 ignored), clippy `-D warnings`, `cargo fmt --check`.
+
 ## v0.3.0 (2026-10-27)
 
 Blame (P22 live). The API contract is `docs/SESSIONS.md` ("Blame"; amendment 8, additive,

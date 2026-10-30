@@ -21,4 +21,11 @@ so it can be replaced without changing them.
 
 See `docs/PACK_TEMPLATE.md` for what a pack contains and which checks it must pass.
 
+Layout:
+- `crates/base` (`k2-mpc-base`): the kit. The only crate a host or pack depends on.
+- `crates/conformance` (`k2-mpc-conformance`): the primitive conformance rules, generic over
+  engines, run on the kit's `Doc` and on the reference model. Test-only: never published,
+  nothing depends on it.
+- `vendor/`: other repos copied in by git subtree, test-only (`vendor/README.md`).
+
 Status: early. `spike/` holds the D0 engine-choice spike (Yrs vs Loro). Licence: not yet chosen. See `docs/ARCHITECTURE.md` and `docs/PRIMITIVES.md`.

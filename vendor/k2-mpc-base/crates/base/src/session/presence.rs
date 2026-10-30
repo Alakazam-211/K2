@@ -175,6 +175,8 @@ pub(crate) fn fold_roster<'a, M: Deref<Target = Presence>>(
                 connections: conns.len(),
                 region: None,
                 holds_lease: false,
+                claims: Vec::new(),
+                last_edit: None,
             };
             (conns, entry, first_joined)
         })

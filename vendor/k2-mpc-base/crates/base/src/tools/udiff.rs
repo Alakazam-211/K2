@@ -186,6 +186,8 @@ pub(crate) struct PatchCmd {
     fuzz: usize,
     partial: bool,
     silent: bool,
+    /// `--if-version V`.
+    pub(crate) if_version: Option<crate::store::Seq>,
 }
 
 const PATCH_OPTS: &[Opt] = &[
@@ -199,6 +201,7 @@ const PATCH_OPTS: &[Opt] = &[
     opt("s", None, Some("quiet"), Arity::No),
     opt("u", Some('u'), Some("unified"), Arity::No),
     opt("nb", None, Some("no-backup-if-mismatch"), Arity::No),
+    super::IF_VERSION,
 ];
 
 const PATCH: Spec = Spec {
@@ -241,8 +244,13 @@ impl PatchCmd {
             fuzz: 2,
             partial: false,
             silent: false,
+            if_version: None,
         };
+        let mut iv = super::IfVersionArg::default();
         for it in args::parse(args, &PATCH)? {
+            if iv.take(&it)? {
+                continue;
+            }
             match it {
                 Item::Opt("p", Some(v)) => {
                     small_number(&v, "strip count")?;
@@ -261,6 +269,7 @@ impl PatchCmd {
                 }
             }
         }
+        p.if_version = iv.get();
         Ok(p)
     }
 

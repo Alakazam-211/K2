@@ -1,6 +1,8 @@
 //! What the host application provides: rights, the clock, and an audit sink.
 
+use super::awareness::{ClaimEnd, ClaimId, ReservationEnd};
 use super::participant::{ConnId, Participant};
+use super::position::LineRange;
 use crate::doc::ClientId;
 use crate::store::DocKey;
 
@@ -98,6 +100,15 @@ pub trait Host: Send + Sync {
 
     /// An audit or operational event. Metadata only: the kit never puts doc content here.
     fn on_event(&self, ev: &AuditEvent);
+
+    /// Tier 0: the folder for conflict copies of `file` (its real path, inside its root),
+    /// e.g. a folder the host keeps out of version control. The kit creates it if missing.
+    /// Default `None`: beside the file. Called with the session locked, when a copy is about
+    /// to be written: quick, no I/O needed (the kit does the I/O).
+    fn conflict_dir(&self, file: &std::path::Path) -> Option<std::path::PathBuf> {
+        let _ = file;
+        None
+    }
 }
 
 /// The right a refused call needed.
@@ -135,14 +146,19 @@ pub enum Action {
     WriteBase,
     Undo,
     Redo,
-    /// [`crate::session::Session::set_approval`].
+    /// [`crate::session::Session::set_approval`], [`crate::session::BlobSession::set_approval`].
     Approve,
-    /// [`crate::session::Session::approval`] / [`crate::session::Session::approvals`].
+    /// [`crate::session::Session::approval`] / [`crate::session::Session::approvals`], and
+    /// the [`crate::session::BlobSession`] calls of those names.
     ReadApproval,
     /// [`crate::session::Session::flush`].
     Flush,
     /// Tier 0: acquiring, renewing or releasing a lease.
     Lease,
+    /// Taking, renewing, releasing or waiting on a claim (amendment 13).
+    Claim,
+    /// [`crate::session::Session::activity`].
+    Activity,
     /// Tier 0: breaking someone else's lease (owner only).
     BreakLease,
     /// Tier 0: restoring an older version.
@@ -258,7 +274,8 @@ pub enum AuditEvent {
     FileRestored { key: DocKey },
     /// Reading or writing the file failed (write-back retries).
     DiskError { key: DocKey, error: String },
-    /// The person `pid` settled the approval of on-behalf change `seq`.
+    /// The person `pid` settled the approval of on-behalf change `seq`. For a tier-0 blob
+    /// doc, `seq` is the version.
     Approval {
         key: DocKey,
         seq: crate::store::Seq,
@@ -289,9 +306,10 @@ pub enum AuditEvent {
     /// Tier 0: the file was saved by another program while the lease was held or while the
     /// doc had a version the file didn't have yet. Nothing is lost: the file's content is
     /// version `current` (by [`crate::session::EXTERNAL_PID`]), and the content that was
-    /// current before is version `kept`, also written to the conflict copy `copy` (a file
-    /// name in the same folder; `None` if writing it failed). `lease_holder` is who held the
-    /// lease, if anyone. Tell both parties.
+    /// current before is version `kept`, also written to the conflict copy `copy` (its path
+    /// relative to the file's folder: a plain file name when beside it, or a path into
+    /// [`Host::conflict_dir`]'s folder; `None` if writing it failed). `lease_holder` is who
+    /// held the lease, if anyone. Tell both parties.
     BlobConflict {
         key: DocKey,
         current: crate::store::VersionId,
@@ -316,6 +334,68 @@ pub enum AuditEvent {
     DocDeleted {
         key: DocKey,
         connections: Vec<(ConnId, String)>,
+    },
+    /// `pid` took claim `claim` on `lines` until `expires_ms` (amendment 13). `for_edit`:
+    /// implicitly, by a read verb's `--for-edit`. Metadata only (the claim's note is not
+    /// here: read it with [`crate::session::Session::claims`]).
+    ClaimTaken {
+        key: DocKey,
+        claim: ClaimId,
+        pid: String,
+        conn: ConnId,
+        lines: LineRange,
+        expires_ms: u64,
+        hold: bool,
+        for_edit: bool,
+    },
+    /// `pid`'s claim `claim` ended (`how`). `waiters` were waiting for it, first in line
+    /// first; `next_waiter` is the first of them. A host that holds agents' edits until a
+    /// claim ends ([`crate::session::ClaimPolicy::Respect`] plus its own wait) wakes them
+    /// from this event, in order: it never needs to poll. Called with the session locked,
+    /// like every event: don't call back into the kit from it.
+    ///
+    /// `lines` (amendment 14) is the claim's range as it ends: its current lines, after the
+    /// edits made while it was live moved its anchors (as `ClaimTaken`'s, 1-based,
+    /// inclusive). `version` is the doc's version as it ends: the same number reads report
+    /// (`ReadResult::version`, `ToolOutput::version`) and `--if-version` compares, so "lines
+    /// X–Y are free; the doc is at `version`; re-read" and the agent's next guarded edit
+    /// agree.
+    ClaimEnded {
+        key: DocKey,
+        claim: ClaimId,
+        pid: String,
+        how: ClaimEnd,
+        lines: LineRange,
+        version: crate::store::Seq,
+        next_waiter: Option<(ConnId, String)>,
+        waiters: Vec<(ConnId, String)>,
+    },
+    /// Claim `claim`'s range is reserved for the waiter `pid` (`conn`) until `until_ms`
+    /// ([`crate::session::Config::claim_handoff_ms`]): granted to the first waiter when the
+    /// claim ends, and passed to the next when a reservation is used by an edit, lapses, is
+    /// cancelled or its holder leaves. Wake `conn`'s held edit on this. `waiters`: the rest
+    /// of the queue, in order.
+    Reserved {
+        key: DocKey,
+        claim: ClaimId,
+        pid: String,
+        conn: ConnId,
+        lines: LineRange,
+        until_ms: u64,
+        waiters: Vec<(ConnId, String)>,
+    },
+    /// The reservation of claim `claim`'s range for `pid` ended (`how`). Unless `how` is
+    /// `Claimed` or `Reset`, a `Reserved` for `next_waiter` follows when there is one.
+    /// `lines` and `version` (amendment 14): the reserved range's current lines and the
+    /// doc's version as it ends, as in `ClaimEnded`.
+    ReservationEnded {
+        key: DocKey,
+        claim: ClaimId,
+        pid: String,
+        how: ReservationEnd,
+        lines: LineRange,
+        version: crate::store::Seq,
+        next_waiter: Option<(ConnId, String)>,
     },
     /// The owner `by` purged `scope` from the doc (K-PURGE-1): what changed, as counts. No
     /// content and no content hash, ever.

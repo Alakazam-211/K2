@@ -9,12 +9,17 @@
 //! Character forms (`--at L:C`, `--range L:C-L:C`) take stdin as is. Lines are 1-based,
 //! columns 1-based in characters; `chars + 1` is the end of a line. A range is half-open:
 //! from its first position up to, not including, its second.
+//!
+//! `replace` has a third mode, `--old TEXT --new TEXT [--all]` (exact text, `exact.rs`),
+//! exclusive with `--lines` / `--range`: [`parse_replace`] picks the mode.
 
 use super::args::{self, opt, Arity, Item, Opt, Spec};
 use super::error::ToolError;
-use super::lines;
+use super::exact::{self, Exact};
 use super::read::{LineNo, LineSpec};
+use super::{lines, IfVersionArg};
 use crate::session::position::{self, LineCol};
+use crate::store::Seq;
 
 #[derive(Debug, Clone)]
 pub(crate) enum PosEdit {
@@ -35,7 +40,60 @@ const OPTS: &[Opt] = &[
     opt("at", None, Some("at"), Arity::Req),
     opt("lines", None, Some("lines"), Arity::Req),
     opt("range", None, Some("range"), Arity::Req),
+    // replace's exact mode (exact.rs)
+    opt("old", None, Some("old"), Arity::Req),
+    opt("new", None, Some("new"), Arity::Req),
+    opt("all", None, Some("all"), Arity::No),
+    super::IF_VERSION,
 ];
+
+/// `replace`, in one of its modes.
+#[derive(Debug, Clone)]
+pub(crate) enum Replace {
+    /// `--lines a,b` or `--range L:C-L:C`, the text on stdin.
+    Pos(PosEdit),
+    /// `--old TEXT --new TEXT [--all]`.
+    Exact(Exact),
+}
+
+/// Parse `replace`'s arguments: `--old`/`--new`/`--all` select the exact mode, which
+/// excludes `--lines` and `--range`. Also returns its `--if-version`.
+pub(crate) fn parse_replace(args: &[String]) -> Result<(Replace, Option<Seq>), ToolError> {
+    let (found, if_version) = collect("replace", args)?;
+    if !found.iter().any(|(id, _)| exact::FLAGS.contains(id)) {
+        return Ok((
+            Replace::Pos(PosEdit::from_found("replace", found)?),
+            if_version,
+        ));
+    }
+    if let Some((id, _)) = found.iter().find(|(id, _)| ["lines", "range"].contains(id)) {
+        return Err(ToolError::usage(format!(
+            "replace takes --old/--new (exact text) or --{id} (a position), not both"
+        )));
+    }
+    Ok((Replace::Exact(Exact::from_found(&found)?), if_version))
+}
+
+/// The options of `verb`'s call, in order, without `--if-version`, which comes back on its
+/// own. Operands are refused.
+#[allow(clippy::type_complexity)]
+fn collect(
+    verb: &'static str,
+    args: &[String],
+) -> Result<(Vec<(&'static str, Option<String>)>, Option<Seq>), ToolError> {
+    let mut found = Vec::new();
+    let mut if_version = IfVersionArg::default();
+    for it in args::parse(args, &spec(verb))? {
+        if if_version.take(&it)? {
+            continue;
+        }
+        match it {
+            Item::Opt(id, v) => found.push((id, v)),
+            Item::Operand(o) => return Err(super::no_operands(verb, &o)),
+        }
+    }
+    Ok((found, if_version.get()))
+}
 
 fn spec(tool: &'static str) -> Spec {
     Spec {
@@ -72,32 +130,42 @@ fn range(s: &str) -> Result<(LineCol, LineCol), ToolError> {
 }
 
 impl PosEdit {
-    pub(crate) fn parse(verb: &'static str, args: &[String]) -> Result<Self, ToolError> {
-        let sp = spec(verb);
-        let mut found: Vec<(&'static str, Option<String>)> = Vec::new();
-        for it in args::parse(args, &sp)? {
-            match it {
-                Item::Opt(id, v) => found.push((id, v)),
-                Item::Operand(o) => return Err(super::no_operands(verb, &o)),
-            }
-        }
+    /// `append`, `insert` and `delete` (`replace`: [`parse_replace`]), with the call's
+    /// `--if-version`.
+    pub(crate) fn parse(
+        verb: &'static str,
+        args: &[String],
+    ) -> Result<(Self, Option<Seq>), ToolError> {
+        let (found, if_version) = collect(verb, args)?;
+        Ok((Self::from_found(verb, found)?, if_version))
+    }
+
+    fn from_found(
+        verb: &'static str,
+        found: Vec<(&'static str, Option<String>)>,
+    ) -> Result<Self, ToolError> {
         let allowed: &[&str] = match verb {
             "append" => &["ensure-newline"],
             "insert" => &["line", "after", "at"],
             _ => &["lines", "range"],
         };
+        let modes = |sep: &str| {
+            let mut m = allowed
+                .iter()
+                .map(|a| format!("--{a}"))
+                .collect::<Vec<_>>()
+                .join(sep);
+            if verb == "replace" {
+                m.push_str(sep);
+                m.push_str("--old TEXT --new TEXT [--all]");
+            }
+            m
+        };
         for (id, _) in &found {
             if !allowed.contains(id) {
                 return Err(ToolError::unsupported(
                     format!("--{id}"),
-                    format!(
-                        "{verb} takes {}",
-                        allowed
-                            .iter()
-                            .map(|a| format!("--{a}"))
-                            .collect::<Vec<_>>()
-                            .join(" or ")
-                    ),
+                    format!("{verb} takes {}", modes(" or ")),
                 ));
             }
         }
@@ -109,11 +177,7 @@ impl PosEdit {
         let [(id, Some(v))] = found.as_slice() else {
             return Err(ToolError::usage(format!(
                 "{verb} needs exactly one of {}",
-                allowed
-                    .iter()
-                    .map(|a| format!("--{a}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
+                modes(", ")
             )));
         };
         Ok(match (verb, *id) {
@@ -248,7 +312,15 @@ mod tests {
         stdin: &str,
     ) -> Result<String, ToolError> {
         let a: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        PosEdit::parse(verb, &a)?.apply(text, stdin)
+        let e = if verb == "replace" {
+            match parse_replace(&a)?.0 {
+                Replace::Pos(e) => e,
+                Replace::Exact(_) => panic!("exact mode"),
+            }
+        } else {
+            PosEdit::parse(verb, &a)?.0
+        };
+        e.apply(text, stdin)
     }
 
     #[test]

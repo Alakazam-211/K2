@@ -8,6 +8,10 @@ mod yrs;
 
 pub(crate) use self::yrs::YrsDoc;
 
+/// A relative position in a text root (the conformance suite's anchors only).
+#[cfg(feature = "conformance")]
+pub(crate) type Sticky = ::yrs::StickyIndex;
+
 use crate::doc::{ClientId, DocError, Edit, UpdateInfo};
 use crate::schema::Schema;
 

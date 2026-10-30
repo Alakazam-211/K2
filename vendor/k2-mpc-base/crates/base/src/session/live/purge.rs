@@ -397,6 +397,8 @@ impl Session {
                 }
             }
             self.remove_pid(st, pid, LeaveReason::Kicked);
+            // the presence extras keep no trace of them either (activity, note dedupe)
+            st.aware.forget(pid);
         }
         // the new state: re-encoded from the live doc (GC on: no deleted content)
         let state = match st.doc.encode_state() {

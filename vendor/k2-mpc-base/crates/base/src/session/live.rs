@@ -9,13 +9,17 @@ use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 mod blame;
+mod claims;
 mod history;
 mod purge;
 
+#[cfg(feature = "conformance")]
+pub use blame::CharBlame;
 pub use blame::{Blame, BlameLine};
 pub use history::{DiffOutput, LogItem, LogQuery};
 pub use purge::{NotReached, PurgeOutcome, PurgeRequest, PurgeScope};
 
+use super::awareness::{self, ActivityEntry, ActivityKind, Aware, ClaimPolicy, Notes};
 use super::carry::RevertIndex;
 use super::config::Config;
 use super::disk::{self, DiskCheck, DiskState, FileStat, FlushOutcome, Probe, ReadFile};
@@ -103,6 +107,64 @@ impl WriteOutcome {
             WriteOutcome::BaseExpired => crate::tools::exit::TOO_OLD,
         }
     }
+}
+
+/// Returned by [`Session::write_base_with`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WriteReport {
+    pub outcome: WriteOutcome,
+    /// For [`WriteOutcome::Conflicts`]: who claimed, or last edited, each conflicting
+    /// region, as `(index into the conflicts, note)` with kind `Claimed` or `Edited` (who,
+    /// their lines now, age, claim note). Not deduped or rate-limited: it is the conflict's
+    /// own report ("lines 40–60 are claimed by agent-b, 12 s ago"). Editors are those still
+    /// present with their latest change there.
+    pub conflict_notes: Vec<(usize, awareness::Note)>,
+    /// For an applied write: heads-up notes on the lines it changed.
+    pub notes: Notes,
+}
+
+impl WriteReport {
+    fn of(outcome: WriteOutcome) -> Self {
+        WriteReport {
+            outcome,
+            conflict_notes: Vec::new(),
+            notes: Notes::default(),
+        }
+    }
+}
+
+/// What a read verb showed ([`Session::read_with`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Shown {
+    /// The viewing range to set (P4).
+    pub view: Option<(usize, usize)>,
+    /// The lines it looked at (notes, activity, `--for-edit`).
+    pub touched: Option<(usize, usize)>,
+}
+
+/// The activity ring's verb for a change made through a direct API call.
+fn kind_verb(k: ChangeKind) -> &'static str {
+    match k {
+        ChangeKind::Edit => "edit",
+        ChangeKind::Undo => "undo",
+        ChangeKind::Redo => "redo",
+        ChangeKind::Restore => "restore",
+        ChangeKind::Revert => "revert",
+        ChangeKind::External => "external",
+        ChangeKind::Import => "import",
+    }
+}
+
+/// The span of an edit's changed lines in its first root (`first..=last` over them).
+fn changed_span(changed: &[LineRange]) -> Option<LineRange> {
+    let root = &changed.first()?.root;
+    let mine = changed.iter().filter(|r| r.root == *root);
+    Some(LineRange {
+        root: root.clone(),
+        first: mine.clone().map(|r| r.first).min()?,
+        last: mine.map(|r| r.last).max()?,
+    })
 }
 
 /// How an undo or redo treats conflicts (undo spec U13, U14).
@@ -267,8 +329,11 @@ struct Member {
     pres: Presence,
     client: ClientId,
     cursor: Option<Cursor>,
-    /// Viewing range as a byte span of its root.
+    /// Viewing range as a byte span of its root (carried: expanding), and when it was set.
     view: Option<(String, usize, usize)>,
+    view_ms: Option<u64>,
+    /// The span its latest change touched, in the root's text now (carried: expanding).
+    edited: Option<(String, usize, usize)>,
 }
 
 impl std::ops::Deref for Member {
@@ -338,6 +403,10 @@ struct State {
     /// The doc's hash key (in the store; a purge replaces it): every file hash is keyed by
     /// it, so none is a plain content hash, and a purge makes the old ones meaningless.
     hash_key: [u8; 32],
+    /// Claims, note dedupe, the activity ring (amendment 13). Memory only.
+    aware: Aware,
+    /// The verb the change being committed came from (`sed -i`), for the activity ring.
+    verb_hint: Option<String>,
 }
 
 const AUTHORS_KEPT: usize = 1024;
@@ -527,6 +596,8 @@ impl Session {
                 subs: Vec::new(),
                 disk: None,
                 hash_key,
+                aware: Aware::default(),
+                verb_hint: None,
             }),
         })
     }
@@ -746,6 +817,7 @@ impl Session {
     fn remove_member(&self, st: &mut State, i: usize, reason: LeaveReason) {
         let m = st.members.remove(i);
         st.subs.retain(|(c, _)| *c != m.conn);
+        self.conn_gone(st, m.pres.conn);
         self.emit(AuditEvent::Left {
             key: st.key.clone(),
             pid: m.pres.p.pid,
@@ -905,6 +977,8 @@ impl Session {
             client,
             cursor: None,
             view: None,
+            view_ms: None,
+            edited: None,
         });
         Ok(Joined {
             conn,
@@ -1005,6 +1079,7 @@ impl Session {
             position::line_start(text, last).expect("line checked"),
         );
         st.members[i].view = Some((range.root.clone(), s, e));
+        st.members[i].view_ms = Some(now);
         Ok(LineRange { last, ..range })
     }
 
@@ -1014,6 +1089,7 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Roster, now)?;
+        self.expire_claims(&mut st, now);
         let text = |root: &str| {
             st.texts
                 .iter()
@@ -1040,6 +1116,17 @@ impl Session {
                     last: position::line_of(t, *e),
                 })
             });
+            entry.last_edit = conns.iter().find_map(|m| {
+                let (root, s, e) = m.edited.as_ref()?;
+                Some(awareness::span_lines(root, text(root)?, *s, *e))
+            });
+            entry.claims = st
+                .aware
+                .claims
+                .iter()
+                .filter(|c| c.pid == entry.participant.pid)
+                .filter_map(|c| Some(c.info(text(&c.root)?, now)))
+                .collect();
         }
         Ok(presence::sort_roster(rows))
     }
@@ -1051,11 +1138,16 @@ impl Session {
         let now = self.host.now_ms();
         let mut st = self.lock()?;
         self.prune_read_bases(&mut st, now);
+        self.expire_claims(&mut st, now);
+        let c = &self.config;
+        st.aware
+            .prune_noted(now, c.note_repeat_ms, c.note_interval_ms);
         let mut gone = Vec::new();
         let mut i = 0;
         while i < st.members.len() {
             let m = &st.members[i];
-            if m.is_idle(now, &self.config) {
+            // a connection holding or waiting for a live claim stays (bounded by its TTL)
+            if m.is_idle(now, &self.config) && !Self::in_claims(&st, m.conn) {
                 gone.push((m.conn, m.p.pid.clone()));
                 self.remove_member(&mut st, i, LeaveReason::Idle);
             } else {
@@ -1143,22 +1235,25 @@ impl Session {
     }
 
     /// [`Session::read`], then `f` on `root`'s text under the same lock (the tools' read
-    /// verbs). `f` returns its result and the lines it showed (1-based, inclusive), which
-    /// become the connection's viewing range (P4). Like `edit_with`'s `f`, it must be
-    /// bounded and must not call back into the kit; a panic is passed on after the lock is
-    /// released.
+    /// verbs). `f` returns its result and the lines it showed (1-based, inclusive): `view`
+    /// becomes the connection's viewing range (P4); `touched` (the lines the call looked
+    /// at) gets the heads-up notes, the activity row, and, with `for_edit: Some(ttl)`, an
+    /// implicit claim. Like `edit_with`'s `f`, it must be bounded and must not call back
+    /// into the kit; a panic is passed on after the lock is released.
     pub(crate) fn read_with<R>(
         &self,
         conn: ConnId,
         root: &str,
-        f: impl FnOnce(&ReadResult, &str) -> (R, Option<(usize, usize)>),
-    ) -> Result<(ReadResult, R)> {
+        verb: &str,
+        for_edit: Option<Option<u64>>,
+        f: impl FnOnce(&ReadResult, &str) -> (R, Shown),
+    ) -> Result<(ReadResult, R, Notes, Option<awareness::ForEdit>)> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit(&mut st, conn, Need::Read, Action::Read, now)?;
         self.text_of(&st, root)?;
         let read = self.read_locked(&mut st, i, now)?;
-        let (r, view) = {
+        let (r, Shown { view, touched }) = {
             let text = self.text_of(&st, root)?.1;
             match catch_unwind(AssertUnwindSafe(|| f(&read, text))) {
                 Ok(r) => r,
@@ -1178,9 +1273,21 @@ impl Session {
                     position::line_start(text, last.min(count)).expect("line checked"),
                 );
                 st.members[i].view = Some((root.to_owned(), s, e));
+                st.members[i].view_ms = Some(now);
             }
         }
-        Ok((read, r))
+        let st = &mut *st;
+        self.expire_claims(st, now);
+        let for_edit =
+            for_edit.map(|ttl| self.for_edit_claim(st, i, root, touched, ttl, verb, now));
+        let notes = self.notes_for(st, i, root, touched, now);
+        let lines = touched.map(|(first, last)| LineRange {
+            root: root.to_owned(),
+            first,
+            last,
+        });
+        self.log_activity(st, i, ActivityKind::Read, verb, lines, now, None);
+        Ok((read, r, notes, for_edit))
     }
 
     fn read_locked(&self, st: &mut State, i: usize, now: u64) -> Result<ReadResult> {
@@ -1330,14 +1437,7 @@ impl Session {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
-        if let Some(expected) = if_version {
-            if expected != st.version {
-                return Err(SessionError::Stale {
-                    expected,
-                    actual: st.version,
-                });
-            }
-        }
+        Self::check_version(&st, if_version)?;
         self.check_backlog(&st, i)?;
         let edits = self.normalize(edits)?;
         self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())
@@ -1358,9 +1458,54 @@ impl Session {
         root: &str,
         f: impl FnOnce(&str) -> std::result::Result<String, E>,
     ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
+        self.edit_with_policy(conn, root, ClaimPolicy::Ignore, f)
+    }
+
+    /// [`Session::edit_with`] under the host's claim `policy` (amendment 13): with
+    /// [`ClaimPolicy::Respect`], an agent's edit touching another participant's live claim
+    /// is refused with [`SessionError::Claimed`] (exit 5) and nothing applies. A person is
+    /// never refused. `edit_with` is this with [`ClaimPolicy::Ignore`].
+    pub fn edit_with_policy<E>(
+        &self,
+        conn: ConnId,
+        root: &str,
+        policy: ClaimPolicy,
+        f: impl FnOnce(&str) -> std::result::Result<String, E>,
+    ) -> std::result::Result<Option<EditResult>, EditWithError<E>> {
+        self.edit_with_impl(conn, root, policy, None, None, f)
+            .map(|(r, _)| r)
+    }
+
+    /// `if_version: Some(V)` and the doc is not at V: [`SessionError::Stale`]. Called with
+    /// the session locked, right after admission, so nothing can move the doc between this
+    /// check and the apply; and before every other refusal (backlog, the computation's own
+    /// "no", claims).
+    fn check_version(st: &State, if_version: Option<Seq>) -> Result<()> {
+        match if_version {
+            Some(expected) if expected != st.version => Err(SessionError::Stale {
+                expected,
+                actual: st.version,
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// `edit_with` with a policy, an `if_version` guard (as [`Session::edit`]'s, amendment
+    /// 14: `run_tool`'s `--if-version`), the verb for the activity ring, and the heads-up
+    /// notes on the lines it changed.
+    pub(crate) fn edit_with_impl<E>(
+        &self,
+        conn: ConnId,
+        root: &str,
+        policy: ClaimPolicy,
+        if_version: Option<Seq>,
+        verb: Option<&str>,
+        f: impl FnOnce(&str) -> std::result::Result<String, E>,
+    ) -> std::result::Result<(Option<EditResult>, Notes), EditWithError<E>> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
+        Self::check_version(&st, if_version)?;
         self.check_backlog(&st, i)?;
         let hunks = {
             let live = self.text_of(&st, root)?.1;
@@ -1375,27 +1520,43 @@ impl Session {
             lines::align_insertions(live, diff::hunks(live, &new_text))
         };
         if hunks.is_empty() {
-            return Ok(None);
+            return Ok((None, Notes::default()));
         }
+        self.check_claims(&mut st, i, root, &hunks, policy, now)?;
         let edits = vec![Edit::Text {
             root: root.to_owned(),
             hunks,
         }];
-        Ok(Some(self.commit_edit(
-            &mut st,
-            i,
-            edits,
-            ChangeKind::Edit,
-            None,
-            now,
-            Vec::new(),
-        )?))
+        st.verb_hint = verb.map(str::to_owned);
+        let res = self.commit_edit(&mut st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
+        let notes = self.edit_notes(&mut st, i, &res, now);
+        Ok((Some(res), notes))
+    }
+
+    /// The heads-up notes on the lines an applied change touched (the first root's).
+    fn edit_notes(&self, st: &mut State, i: usize, res: &EditResult, now: u64) -> Notes {
+        match changed_span(&res.changed) {
+            Some(l) => self.notes_for(st, i, &l.root, Some((l.first, l.last)), now),
+            None => Notes::default(),
+        }
     }
 
     /// Make `root` equal `new_text` through `conn`, through a minimal diff against the live
     /// text. This is last-writer-wins for that root (`write --base live`): use
     /// [`Session::write_base`] when the text was derived from an earlier read.
     pub fn replace_text(&self, conn: ConnId, root: &str, new_text: &str) -> Result<EditResult> {
+        self.replace_text_with(conn, root, new_text, ClaimPolicy::Ignore)
+    }
+
+    /// [`Session::replace_text`] under the host's claim `policy` (as
+    /// [`Session::edit_with_policy`]).
+    pub fn replace_text_with(
+        &self,
+        conn: ConnId,
+        root: &str,
+        new_text: &str,
+        policy: ClaimPolicy,
+    ) -> Result<EditResult> {
         let now = self.now();
         let mut st = self.lock()?;
         let i = self.admit_edit(&mut st, conn, Action::Edit, now)?;
@@ -1403,6 +1564,7 @@ impl Session {
         let new_text = self.pack.normalize_input(root, new_text);
         let live = self.text_of(&st, root)?.1;
         let hunks = lines::align_insertions(live, diff::hunks(live, &new_text));
+        self.check_claims(&mut st, i, root, &hunks, policy, now)?;
         let edits = vec![Edit::Text {
             root: root.to_owned(),
             hunks,
@@ -1422,31 +1584,71 @@ impl Session {
         base: Seq,
         new_text: &str,
     ) -> Result<WriteOutcome> {
+        Ok(self
+            .write_base_with(conn, root, base, new_text, ClaimPolicy::Ignore)?
+            .outcome)
+    }
+
+    /// [`Session::write_base`] under the host's claim `policy` (as
+    /// [`Session::edit_with_policy`]), with who claimed or last edited each conflicting
+    /// region ([`WriteReport::conflict_notes`]) and the heads-up notes of an applied write.
+    pub fn write_base_with(
+        &self,
+        conn: ConnId,
+        root: &str,
+        base: Seq,
+        new_text: &str,
+        policy: ClaimPolicy,
+    ) -> Result<WriteReport> {
         let now = self.now();
         let mut st = self.lock()?;
-        let i = self.admit_edit(&mut st, conn, Action::WriteBase, now)?;
-        self.check_backlog(&st, i)?;
-        let live = self.text_of(&st, root)?.1.to_owned();
-        let Some(base_text) = self.base_text(&mut st, root, base, now)? else {
-            return Ok(WriteOutcome::BaseExpired);
+        let st = &mut *st;
+        let i = self.admit_edit(st, conn, Action::WriteBase, now)?;
+        self.check_backlog(st, i)?;
+        let live = self.text_of(st, root)?.1.to_owned();
+        let Some(base_text) = self.base_text(st, root, base, now)? else {
+            return Ok(WriteReport::of(WriteOutcome::BaseExpired));
         };
         let ours = self.pack.normalize_input(root, new_text);
         match merge::merge3(&base_text, &ours, &live) {
-            Merge::Conflicts(c) => Ok(WriteOutcome::Conflicts(c)),
+            Merge::Conflicts(c) => {
+                self.expire_claims(st, now);
+                // each conflict's base range, carried onto the live text
+                let since = diff::hunks(&base_text, &live);
+                let pid = st.members[i].p.pid.clone();
+                let mut who = Vec::new();
+                for (k, cf) in c.iter().enumerate() {
+                    let span = awareness::carry_span(cf.base.start, cf.base.end, &since);
+                    for n in self.collect_notes(st, &pid, root, span, None, now) {
+                        if matches!(
+                            n.kind,
+                            awareness::NoteKind::Claimed | awareness::NoteKind::Edited
+                        ) {
+                            who.push((k, n));
+                        }
+                    }
+                }
+                Ok(WriteReport {
+                    outcome: WriteOutcome::Conflicts(c),
+                    conflict_notes: who,
+                    notes: Notes::default(),
+                })
+            }
             Merge::Clean(c) => {
+                self.check_claims(st, i, root, &c.hunks, policy, now)?;
                 let edits = vec![Edit::Text {
                     root: root.to_owned(),
                     hunks: c.hunks,
                 }];
-                Ok(WriteOutcome::Applied(self.commit_edit(
-                    &mut st,
-                    i,
-                    edits,
-                    ChangeKind::Edit,
-                    None,
-                    now,
-                    Vec::new(),
-                )?))
+                st.verb_hint = Some("write --base".to_owned());
+                let res =
+                    self.commit_edit(st, i, edits, ChangeKind::Edit, None, now, Vec::new())?;
+                let notes = self.edit_notes(st, i, &res, now);
+                Ok(WriteReport {
+                    outcome: WriteOutcome::Applied(res),
+                    conflict_notes: Vec::new(),
+                    notes,
+                })
             }
         }
     }
@@ -1630,6 +1832,17 @@ impl Session {
         Ok(())
     }
 
+    /// `pid`'s undo and redo stack depths in this doc. Test-only (feature `conformance`,
+    /// off by default): the undo spec's trace test compares them with its oracle's.
+    #[cfg(feature = "conformance")]
+    pub fn undo_depths(&self, pid: &str) -> Result<(usize, usize)> {
+        let st = self.lock()?;
+        Ok(st
+            .hist
+            .get(pid)
+            .map_or((0, 0), |h| (h.undo.len(), h.redo.len())))
+    }
+
     /// Clear every stack; returns the batches dropped.
     fn clear_stacks(st: &mut State) -> u64 {
         let mut n = 0;
@@ -1761,6 +1974,9 @@ impl Session {
         mut versions: Vec<Version>,
     ) -> Result<(EditResult, Vec<Option<(Seq, Vec<Region>)>>)> {
         let n_steps = steps.len();
+        let verb = st.verb_hint.take().unwrap_or_else(|| {
+            kind_verb(steps.first().map_or(ChangeKind::Edit, |s| s.kind)).to_owned()
+        });
         let agent_cut = n_steps == 1
             && steps[0].kind == ChangeKind::Edit
             && st.members[i].p.kind == ParticipantKind::Agent
@@ -1912,8 +2128,17 @@ impl Session {
                 }
             }
         }
+        let span = changed_span(&changed);
+        let edited = span.as_ref().and_then(|l| {
+            let t = self.text_of(st, &l.root).ok()?.1;
+            let (s, e, _) = awareness::line_span(t, l.first, l.last)?;
+            Some((l.root.clone(), s, e))
+        });
         let m = &mut st.members[i];
         m.last_edit_ms = Some(now);
+        if edited.is_some() {
+            m.edited = edited;
+        }
         if let Some((root, at)) = last_end {
             m.cursor = Some(Cursor {
                 root,
@@ -1921,6 +2146,8 @@ impl Session {
                 head: at,
             });
         }
+        self.end_edited_claims(st, now);
+        self.log_activity(st, i, ActivityKind::Edit, &verb, span, now, None);
         self.maybe_compact(st);
         let done = which
             .into_iter()
@@ -1978,6 +2205,7 @@ impl Session {
     /// logged here. `Ok(None)` when it changes nothing; an error changes nothing.
     fn apply_local(&self, st: &mut State, i: usize, edits: Vec<Edit>) -> Result<Option<Applied>> {
         let client = st.members[i].client;
+        let pid = st.members[i].p.pid.clone();
         let mut canon = Vec::with_capacity(edits.len());
         for e in edits {
             let Edit::Text { root, hunks } = e;
@@ -2017,6 +2245,18 @@ impl Session {
             a.regions.extend(Region::of_change(&root, &before, &hunks));
             a.record
                 .push(record_root(&root, &before, after.is_empty(), &hunks));
+            // the owner's own edit touching a claim ends it once durable (unless held)
+            for c in st.aware.claims.iter_mut() {
+                if c.pid == pid && !c.hold && c.touched_by(&root, &hunks) {
+                    c.edited = true;
+                }
+            }
+            // ... and the reserved waiter's own edit there uses its reservation
+            for r in st.aware.reservations.iter_mut() {
+                if r.pid == pid && r.touched_by(&root, &hunks) {
+                    r.edited = true;
+                }
+            }
             Self::carry(st, &root, &hunks);
             a.changed
                 .extend(summary::changed_lines(&root, &after, &hunks));
@@ -2056,6 +2296,15 @@ impl Session {
                 *s = position::transform(*s, hunks, Bias::Before);
                 *e = position::transform(*e, hunks, Bias::After).max(*s);
             }
+            if let Some((_, s, e)) = m.edited.as_mut().filter(|v| v.0 == root) {
+                (*s, *e) = awareness::carry_span(*s, *e, hunks);
+            }
+        }
+        for c in st.aware.claims.iter_mut().filter(|c| c.root == root) {
+            c.carry(hunks);
+        }
+        for r in st.aware.reservations.iter_mut().filter(|r| r.root == root) {
+            r.carry(hunks);
         }
         for h in st.hist.values_mut() {
             for b in h.undo.iter_mut().chain(h.redo.iter_mut()) {
@@ -2102,7 +2351,9 @@ impl Session {
                 for m in &mut st.members {
                     m.cursor = None;
                     m.view = None;
+                    m.edited = None;
                 }
+                self.end_all_claims(st, awareness::ClaimEnd::Reset);
                 for h in st.hist.values_mut() {
                     h.undo.clear();
                     h.redo.clear();
@@ -2336,6 +2587,9 @@ impl Session {
         {
             self.compact(&mut st);
         }
+        // claims end (waiting hosts are told), then the presence extras go with the session
+        self.end_all_claims(&mut st, awareness::ClaimEnd::Left);
+        st.aware = Aware::default();
         st.closed = Some(reason);
         st.store = None;
         st.subs.clear();

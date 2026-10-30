@@ -19,7 +19,9 @@
 //! | `append` | edit | `cat >>` | `--ensure-newline` |
 //! | `insert` | edit | `sed 'Ni\'` | `--line N`, `--after N`, `--at L:C` |
 //! | `replace` | edit | `sed 'a,bc\'` | `--lines a,b`, `--range L:C-L:C` (stdin) |
+//! | `replace` | edit | find and replace | `--old TEXT --new TEXT [--all]` (exact text; `-`: stdin) |
 //! | `delete` | edit | `sed 'a,bd'` | `--lines a,b`, `--range L:C-L:C` |
+//! | (every edit verb) | edit | | `--if-version V` (pack verbs too) |
 //!
 //! **argv** is the verb and its flags and operands, without the doc's path (the host
 //! resolves it): `["grep", "-n", "TODO"]`. Flags follow GNU getopt (clusters, permutation,
@@ -30,6 +32,34 @@
 //! the file's exact bytes (the pack's encoding: BOM and CRLF restored). Line tools and edit
 //! verbs see the doc text (`\n` line breaks, no BOM); edits are encoded back by the pack.
 //!
+//! **Exact replace** (`replace --old TEXT --new TEXT [--all]`, `exact.rs`): `--old` is
+//! matched byte for byte on the doc text (as above: `\n`, no BOM), and must match exactly
+//! once unless `--all` (every non-overlapping match, left to right). No match, or more than
+//! one, applies nothing and exits 1 with a report on stdout (the count, each match's lines,
+//! near-miss hints). `-` reads that one of them from stdin. A host's `--old-file` /
+//! `--new-file` are the host's: it reads the file and passes its text as `--old` / `--new`
+//! (the kit does no I/O).
+//!
+//! **`--for-edit [--ttl MS]`** (amendment 13) on the read verbs `cat`, `head`, `tail`,
+//! `view`, `grep` and `sed` (without `-i`): the caller also takes a short implicit claim on
+//! the lines shown (`grep`: the span from the first to the last selected line;
+//! [`crate::session::Config::for_edit_ms`] unless `--ttl`), ended by its next edit touching
+//! them. Another participant's overlapping claim takes nothing and is reported; the read
+//! succeeds either way ([`ToolOutput::for_edit`]). `--ttl` takes milliseconds, or a number
+//! with `ms`, `s` or `m`.
+//!
+//! **`--if-version V`** (amendment 14) on every edit verb, the kit's and the pack's: apply
+//! only if the doc is still at version `V` (as reads print it: `1842` or `v1842`). Checked
+//! under the session lock with [`crate::session::Session::edit`]'s `if_version` check, after
+//! admission and before every other refusal (the backlog, the verb's own "no", claims). Stale:
+//! [`crate::session::SessionError::Stale`], exit 1, one line `doc changed since V (now W)`,
+//! nothing applied. Read verbs refuse it (exit 2). A pack verb's `--if-version` is taken out
+//! of its arguments by the kit before the pack parses them.
+//!
+//! **Heads-up notes** ([`ToolOutput::notes`]): every read and edit through `run_tool` says
+//! who else is viewing, just edited, claimed, or (a person) has a caret on the lines it
+//! touched. One line each, `note: ...`, for stderr only: `stdout` never changes.
+//!
 //! **Exit codes** are mapped in one place ([`exit`], [`ToolError::exit`],
 //! [`ToolRunError::exit`], [`session_exit`]): 0 ok, 1 the tool's "no", 2 usage or
 //! unsupported, 3 refused (rights), 4 not found. Usage errors exit 2 for every tool (GNU
@@ -38,6 +68,7 @@
 mod args;
 mod edit;
 mod error;
+mod exact;
 mod fence;
 mod grep;
 mod pattern;
@@ -48,8 +79,10 @@ mod udiff;
 
 pub use error::{exit, session_exit, ToolError, ToolRunError};
 pub use fence::{random_nonce, Fence};
-pub use run::ToolOutput;
+pub use run::{ToolOptions, ToolOutput};
 pub use udiff::unified;
+
+use crate::store::Seq;
 
 /// The most a tool may output (stdout, or an edit's new text), in bytes.
 pub const MAX_OUTPUT_BYTES: usize = 32 << 20;
@@ -112,6 +145,10 @@ pub struct ReadOutput {
     /// Lines shown, 1-based inclusive, for the caller's viewing range (P4): `head -n`,
     /// `tail -n`, `view --lines`, `sed -n 'a,bp'`.
     pub view: Option<(usize, usize)>,
+    /// The lines the call looked at (heads-up notes, the activity ring, `--for-edit`): the
+    /// view, the whole doc for `cat`, the selected lines' span for `grep`. `None` for byte
+    /// counts, `wc` and `diff`.
+    pub touched: Option<(usize, usize)>,
 }
 
 impl ReadOutput {
@@ -120,7 +157,128 @@ impl ReadOutput {
             stdout,
             exit,
             view: None,
+            touched: None,
         }
+    }
+
+    /// Set the viewing range, and the touched lines to it.
+    pub(crate) fn showing(mut self, view: Option<(usize, usize)>) -> Self {
+        self.view = view;
+        self.touched = view;
+        self
+    }
+}
+
+/// `--for-edit [--ttl MS]` as a read verb parsed it.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ForEditArg {
+    on: bool,
+    ttl_ms: Option<u64>,
+}
+
+/// The two options every read verb that can take `--for-edit` adds to its table.
+pub(crate) const FOR_EDIT: args::Opt =
+    args::opt("for-edit", None, Some("for-edit"), args::Arity::No);
+pub(crate) const TTL: args::Opt = args::opt("ttl", None, Some("ttl"), args::Arity::Req);
+
+impl ForEditArg {
+    /// Take `it` if it is `--for-edit` or `--ttl`.
+    pub(crate) fn take(&mut self, it: &args::Item) -> Result<bool, ToolError> {
+        match it {
+            args::Item::Opt("for-edit", _) => self.on = true,
+            args::Item::Opt("ttl", Some(v)) => self.ttl_ms = Some(parse_ttl(v)?),
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// `Some(ttl)` with `--for-edit`; `--ttl` alone is a usage error.
+    pub(crate) fn finish(self) -> Result<Option<Option<u64>>, ToolError> {
+        match (self.on, self.ttl_ms) {
+            (true, t) => Ok(Some(t)),
+            (false, None) => Ok(None),
+            (false, Some(_)) => Err(ToolError::usage("--ttl goes with --for-edit")),
+        }
+    }
+}
+
+/// `--if-version V` (amendment 14), an option of every kit edit verb's table: apply only if
+/// the doc is still at version `V`, checked under the session lock (pack verbs: the kit
+/// takes it out of their arguments first, [`args::take_if_version`]).
+pub(crate) const IF_VERSION: args::Opt =
+    args::opt("if-version", None, Some("if-version"), args::Arity::Req);
+
+/// `--if-version V` as an edit verb parsed it: given at most once.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct IfVersionArg(Option<Seq>);
+
+impl IfVersionArg {
+    /// Take `it` if it is `--if-version`.
+    pub(crate) fn take(&mut self, it: &args::Item) -> Result<bool, ToolError> {
+        match it {
+            args::Item::Opt("if-version", Some(v)) => {
+                self.set(v)?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    pub(crate) fn set(&mut self, v: &str) -> Result<(), ToolError> {
+        if self.0.is_some() {
+            return Err(ToolError::usage("--if-version given twice"));
+        }
+        self.0 = Some(parse_version(v)?);
+        Ok(())
+    }
+
+    pub(crate) fn get(self) -> Option<Seq> {
+        self.0
+    }
+}
+
+/// `--if-version` on a read verb: refused, so agents learn where it applies.
+pub(crate) fn if_version_on_read(verb: &str) -> ToolError {
+    ToolError::usage(format!(
+        "--if-version is for edit verbs; {verb} is a read (it prints the version)"
+    ))
+}
+
+/// A version as reads print it: `1842` or `v1842`.
+fn parse_version(v: &str) -> Result<Seq, ToolError> {
+    let n = v.strip_prefix('v').unwrap_or(v);
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(ToolError::usage(format!(
+            "invalid --if-version: '{v}' (the version a read printed: 1842 or v1842)"
+        )));
+    }
+    n.parse()
+        .map_err(|_| ToolError::usage(format!("invalid --if-version: '{v}' (too large)")))
+}
+
+/// `30000`, `500ms`, `30s`, `2m`: milliseconds.
+fn parse_ttl(v: &str) -> Result<u64, ToolError> {
+    let bad = || {
+        ToolError::usage(format!(
+            "invalid --ttl: '{v}' (milliseconds, or Nms, Ns, Nm)"
+        ))
+    };
+    let (num, mult) = if let Some(n) = v.strip_suffix("ms") {
+        (n, 1)
+    } else if let Some(n) = v.strip_suffix('s') {
+        (n, 1000)
+    } else if let Some(n) = v.strip_suffix('m') {
+        (n, 60_000)
+    } else {
+        (v, 1)
+    };
+    if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(bad());
+    }
+    let n: u64 = num.parse().map_err(|_| bad())?;
+    match n.checked_mul(mult) {
+        Some(0) | None => Err(bad()),
+        Some(ms) => Ok(ms),
     }
 }
 
@@ -131,7 +289,8 @@ pub struct EditOutput {
     /// The new text; `None` when nothing is to be applied (a failed all-or-nothing patch,
     /// `--dry-run`).
     pub text: Option<String>,
-    /// Messages for stdout (`patch`'s report); empty for the other verbs.
+    /// Messages for stdout: `patch`'s report; exact `replace`'s refusal report (no match, or
+    /// not unique) and its `--all` count; empty for the other verbs.
     pub stdout: Vec<u8>,
     pub exit: u8,
 }
@@ -255,6 +414,8 @@ pub const VERBS: &[(&str, Kind)] = &[
 pub struct Tool {
     verb: &'static str,
     inner: Inner,
+    /// `--if-version V` (edit verbs only).
+    if_version: Option<Seq>,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +430,7 @@ enum Inner {
     View(read::View),
     Patch(udiff::PatchCmd),
     Pos(edit::PosEdit),
+    Exact(exact::Exact),
 }
 
 fn utf8<'a>(stdin: &'a [u8], what: &str) -> Result<&'a str, ToolError> {
@@ -282,6 +444,13 @@ impl Tool {
         let Some((verb, args)) = argv.split_first() else {
             return Err(ToolError::usage("no verb"));
         };
+        // the positional verbs and `replace` hand back their --if-version; sed and patch keep it
+        let mut edit_version = None;
+        let mut pos = |verb: &'static str| -> Result<Inner, ToolError> {
+            let (e, v) = edit::PosEdit::parse(verb, args)?;
+            edit_version = v;
+            Ok(Inner::Pos(e))
+        };
         let (verb, inner): (&'static str, Inner) = match verb.as_str() {
             "cat" => ("cat", Inner::Cat(read::Cat::parse(args)?)),
             "head" => ("head", Inner::Head(read::Head::parse(args)?)),
@@ -293,13 +462,22 @@ impl Tool {
             "view" => ("view", Inner::View(read::View::parse(args)?)),
             "patch" => ("patch", Inner::Patch(udiff::PatchCmd::parse(args)?)),
             "apply" => ("apply", Inner::Patch(udiff::PatchCmd::parse(args)?)),
-            "append" => ("append", Inner::Pos(edit::PosEdit::parse("append", args)?)),
-            "insert" => ("insert", Inner::Pos(edit::PosEdit::parse("insert", args)?)),
+            "append" => ("append", pos("append")?),
+            "insert" => ("insert", pos("insert")?),
+            "delete" => ("delete", pos("delete")?),
             "replace" => (
                 "replace",
-                Inner::Pos(edit::PosEdit::parse("replace", args)?),
+                match edit::parse_replace(args)? {
+                    (edit::Replace::Pos(e), v) => {
+                        edit_version = v;
+                        Inner::Pos(e)
+                    }
+                    (edit::Replace::Exact(x), v) => {
+                        edit_version = v;
+                        Inner::Exact(x)
+                    }
+                },
             ),
-            "delete" => ("delete", Inner::Pos(edit::PosEdit::parse("delete", args)?)),
             "egrep" | "fgrep" => {
                 return Err(ToolError::unsupported(
                     verb.clone(),
@@ -321,7 +499,16 @@ impl Tool {
                 ))
             }
         };
-        Ok(Tool { verb, inner })
+        let if_version = match &inner {
+            Inner::Sed(s) => s.if_version,
+            Inner::Patch(p) => p.if_version,
+            _ => edit_version,
+        };
+        Ok(Tool {
+            verb,
+            inner,
+            if_version,
+        })
     }
 
     pub fn verb(&self) -> &'static str {
@@ -331,9 +518,29 @@ impl Tool {
     pub fn kind(&self) -> Kind {
         match &self.inner {
             Inner::Sed(s) if s.in_place => Kind::Edit,
-            Inner::Patch(_) | Inner::Pos(_) => Kind::Edit,
+            Inner::Patch(_) | Inner::Pos(_) | Inner::Exact(_) => Kind::Edit,
             _ => Kind::Read,
         }
+    }
+
+    /// `--for-edit`: `Some(ttl)` (the caller's `--ttl`, if any) on a read verb that asked
+    /// for an implicit claim.
+    pub fn for_edit(&self) -> Option<Option<u64>> {
+        match &self.inner {
+            Inner::Cat(c) => c.for_edit,
+            Inner::Head(h) => h.for_edit,
+            Inner::Tail(t) => t.for_edit,
+            Inner::View(v) => v.for_edit,
+            Inner::Grep(g) => g.for_edit,
+            Inner::Sed(s) => s.for_edit,
+            _ => None,
+        }
+    }
+
+    /// `--if-version V` (amendment 14): an edit verb that applies only if the doc is still at
+    /// version `V`. Read verbs refuse the flag, so this is `None` for them.
+    pub fn if_version(&self) -> Option<Seq> {
+        self.if_version
     }
 
     /// `patch --dry-run`: an edit verb that never applies.
@@ -352,9 +559,7 @@ impl Tool {
             Inner::View(v) => v.run(doc),
             Inner::Sed(s) if !s.in_place => {
                 let out = s.run(doc.text)?;
-                let mut o = ReadOutput::new(out.into_bytes(), 0);
-                o.view = s.view(lines(doc.text).len());
-                o
+                ReadOutput::new(out.into_bytes(), 0).showing(s.view(lines(doc.text).len()))
             }
             Inner::Diff(d) => {
                 let old = utf8(stdin, "the old text (stdin)")?;
@@ -383,6 +588,7 @@ impl Tool {
                 }
             }
             Inner::Pos(e) => done(e.apply(text, utf8(stdin, "stdin")?)?),
+            Inner::Exact(x) => x.run(name, text, stdin)?,
             _ => return Err(ToolError::usage(format!("{} is a read verb", self.verb))),
         };
         if out

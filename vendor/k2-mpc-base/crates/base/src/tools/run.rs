@@ -3,7 +3,8 @@
 use super::error::{exit, ToolRunError};
 use super::fence::Fence;
 use super::{EditOutput, Kind, Tool, ToolDoc, ToolError};
-use crate::session::{ConnId, EditResult, EditWithError, Session};
+use crate::session::Shown;
+use crate::session::{ClaimPolicy, ConnId, EditResult, EditWithError, ForEdit, Notes, Session};
 use crate::store::Seq;
 
 /// What [`Session::run_tool`] produced. The host prints `stdout` as is, `stderr_summary`
@@ -12,7 +13,8 @@ use crate::store::Seq;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ToolOutput {
-    /// The tool's output, byte-exact (for an edit verb: `patch`'s report, else empty).
+    /// The tool's output, byte-exact (for an edit verb: `patch`'s report, exact `replace`'s
+    /// refusal report or `--all` count, else empty).
     pub stdout: Vec<u8>,
     /// One line for stderr: `notes.md v1842` after a read, `edited notes.md lines 12–18
     /// (+3 −1) · v1843` after an edit (the host adds who it was), `no change to notes.md ·
@@ -25,6 +27,41 @@ pub struct ToolOutput {
     pub changed: Option<EditResult>,
     /// For read verbs: the fence to print on stderr around `stdout` (see [`Fence`]).
     pub fence: Option<Fence>,
+    /// Heads-up notes on the lines this call touched (amendment 13): print
+    /// `notes.to_string()` on **stderr** (one `note: ` line each), or serialise them for
+    /// `--presence json`. Never part of `stdout`.
+    pub notes: Notes,
+    /// What `--for-edit` did (read verbs that asked for it). Boxed: it is rare and large.
+    pub for_edit: Option<Box<ForEdit>>,
+}
+
+/// The host's choices for one [`Session::run_tool_with`] call. `#[non_exhaustive]`: start
+/// from [`ToolOptions::default`] (or `new`) and use the setters.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ToolOptions {
+    /// What an edit verb does about others' claims (default [`ClaimPolicy::Ignore`]).
+    pub policy: ClaimPolicy,
+}
+
+impl ToolOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The claim policy for an edit verb (`--respect-claims`: [`ClaimPolicy::Respect`]).
+    pub fn policy(mut self, policy: ClaimPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+}
+
+/// What an edit verb is checked against under the session lock: the host's claim policy and
+/// the caller's `--if-version`.
+#[derive(Clone, Copy)]
+struct Guard {
+    policy: ClaimPolicy,
+    if_version: Option<Seq>,
 }
 
 enum Stop {
@@ -59,26 +96,53 @@ impl Session {
         argv: &[String],
         stdin: &[u8],
     ) -> Result<ToolOutput, ToolRunError> {
+        self.run_tool_with(conn, root, argv, stdin, &ToolOptions::default())
+    }
+
+    /// [`Session::run_tool`] with the host's options: the claim policy for edit verbs
+    /// ([`ToolOptions::policy`]; under [`ClaimPolicy::Respect`] an agent's edit touching
+    /// another participant's live claim exits 5 with nothing applied, and a person is never
+    /// refused). Read verbs ignore the policy. `run_tool` is this with the defaults.
+    pub fn run_tool_with(
+        &self,
+        conn: ConnId,
+        root: &str,
+        argv: &[String],
+        stdin: &[u8],
+        opts: &ToolOptions,
+    ) -> Result<ToolOutput, ToolRunError> {
+        let verb = crate::parity::verb_form(argv);
         if let Some(v) = argv.first().and_then(|n| self.pack_verb(n)) {
-            let edit = v.parse(&argv[1..])?;
+            let (if_version, args) = super::args::take_if_version(&argv[1..])?;
+            let edit = v.parse(&args)?;
             let name = self.key()?.path;
             let doc = name.clone();
-            return self.run_edit(conn, root, &name, move |live| edit(&doc, live, stdin));
+            let guard = Guard {
+                policy: opts.policy,
+                if_version,
+            };
+            return self.run_edit(conn, root, &name, guard, &verb, move |live| {
+                edit(&doc, live, stdin)
+            });
         }
         let tool = Tool::parse(argv)?;
         let name = self.key()?.path;
         match tool.kind() {
             Kind::Read => {
-                let (read, out) = self.read_with(conn, root, |r, text| {
-                    let doc = ToolDoc {
-                        name: &name,
-                        text,
-                        bytes: &r.bytes,
-                    };
-                    let out = tool.read(&doc, stdin);
-                    let view = out.as_ref().ok().and_then(|o| o.view);
-                    (out, view)
-                })?;
+                let (read, out, notes, for_edit) =
+                    self.read_with(conn, root, &verb, tool.for_edit(), |r, text| {
+                        let doc = ToolDoc {
+                            name: &name,
+                            text,
+                            bytes: &r.bytes,
+                        };
+                        let out = tool.read(&doc, stdin);
+                        let shown = out.as_ref().map_or(Shown::default(), |o| Shown {
+                            view: o.view,
+                            touched: o.touched,
+                        });
+                        (out, shown)
+                    })?;
                 let out = out?;
                 let fence = Fence::new(
                     &name,
@@ -93,9 +157,19 @@ impl Session {
                     version: read.version,
                     changed: None,
                     fence: Some(fence),
+                    notes,
+                    for_edit: for_edit.map(Box::new),
                 })
             }
-            Kind::Edit => self.run_edit(conn, root, &name, |live| tool.edit(&name, live, stdin)),
+            Kind::Edit => {
+                let guard = Guard {
+                    policy: opts.policy,
+                    if_version: tool.if_version(),
+                };
+                self.run_edit(conn, root, &name, guard, &verb, |live| {
+                    tool.edit(&name, live, stdin)
+                })
+            }
         }
     }
 
@@ -106,18 +180,27 @@ impl Session {
         conn: ConnId,
         root: &str,
         name: &str,
+        guard: Guard,
+        verb: &str,
         f: impl FnOnce(&str) -> Result<EditOutput, ToolError>,
     ) -> Result<ToolOutput, ToolRunError> {
         let mut report: Option<EditOutput> = None;
-        let res = self.edit_with(conn, root, |live| {
-            let mut o = f(live).map_err(Stop::Tool)?;
-            let text = o.text.take();
-            report = Some(o);
-            text.ok_or(Stop::NoApply)
-        });
-        let (changed, applied) = match res {
-            Ok(c) => (c, true),
-            Err(EditWithError::Compute(Stop::NoApply)) => (None, false),
+        let res = self.edit_with_impl(
+            conn,
+            root,
+            guard.policy,
+            guard.if_version,
+            Some(verb),
+            |live| {
+                let mut o = f(live).map_err(Stop::Tool)?;
+                let text = o.text.take();
+                report = Some(o);
+                text.ok_or(Stop::NoApply)
+            },
+        );
+        let (changed, notes, applied) = match res {
+            Ok((c, n)) => (c, n, true),
+            Err(EditWithError::Compute(Stop::NoApply)) => (None, Notes::default(), false),
             Err(EditWithError::Compute(Stop::Tool(e))) => return Err(e.into()),
             Err(EditWithError::Session(e)) => return Err(e.into()),
         };
@@ -145,6 +228,8 @@ impl Session {
             version,
             changed,
             fence: None,
+            notes,
+            for_edit: None,
         })
     }
 }

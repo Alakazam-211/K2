@@ -455,7 +455,7 @@ fn v1_log_records_load_from_a_store() {
 }
 
 #[test]
-fn older_formats_are_stamped_3_and_newer_refused() {
+fn older_formats_are_stamped_4_and_newer_refused() {
     let d = TmpDir::new("format");
     {
         let s = DocStore::open(d.db()).unwrap();
@@ -477,19 +477,152 @@ fn older_formats_are_stamped_3_and_newer_refused() {
             .unwrap()
             .value();
         assert_eq!(f, STORE_FORMAT);
-        assert_eq!(STORE_FORMAT, 3);
+        assert_eq!(STORE_FORMAT, 4);
         drop(r);
         let w = s.begin_write().unwrap();
         w.open_table(META)
             .unwrap()
-            .insert("store_format", 4u64)
+            .insert("store_format", 5u64)
             .unwrap();
         w.commit().unwrap();
     }
     assert!(matches!(
         DocStore::open(d.db()),
-        Err(StoreError::Newer { found: 4 })
+        Err(StoreError::Newer { found: 5 })
     ));
+}
+
+/// A blob doc in `s` (space `ws-1`) with its import by `kit:import`.
+fn blob_doc(s: &DocStore, p: &str) -> DocId {
+    let k = s.blob_space_or_create("ws-1", [7; 32]).unwrap();
+    let b = crate::blob::BlobId::from_slice(&[1; 32]).unwrap();
+    s.blob_index(k.no, &b, 3, 1).unwrap();
+    let mut m = meta(p);
+    m.pack = BLOB_DOC_PACK.into();
+    let v = BlobVersion::new(b, 3, 1, "kit:import", "import", "disk", BlobReason::Import);
+    s.create_blob_doc(&m, &v, None).unwrap().0
+}
+
+/// Version `n`'s blob (indexed in space `ws-1`).
+fn blob_v(s: &DocStore, n: u8, author: &str, obo: Option<&str>) -> BlobVersion {
+    let k = s.blob_space("ws-1").unwrap().unwrap();
+    let b = crate::blob::BlobId::from_slice(&[n; 32]).unwrap();
+    s.blob_index(k.no, &b, 3, 1).unwrap();
+    let mut v = BlobVersion::new(
+        b,
+        3,
+        10 * u64::from(n),
+        author,
+        author,
+        "cli",
+        BlobReason::Write,
+    );
+    v.on_behalf_of = obo.map(str::to_owned);
+    v
+}
+
+/// K-T0-9 in the store: a blob version an agent wrote on someone's behalf gets a `Pending`
+/// approval in the same commit, keyed `(doc, version)` in `blob_approvals`, never in the text
+/// `approvals` table; a person's own version gets none; a doc's delete erases them.
+#[test]
+fn on_behalf_blob_versions_get_a_pending_approval_in_the_same_commit() {
+    let d = TmpDir::new("blob-approvals");
+    let s = DocStore::open(d.db()).unwrap();
+    let id = blob_doc(&s, "a.pdf");
+    let vs = [
+        blob_v(&s, 2, "aide", Some("alice")),
+        blob_v(&s, 3, "alice", None),
+    ];
+    assert_eq!(
+        s.commit_blob_versions(id, "ws-1", 1, &vs, None).unwrap(),
+        [2, 3]
+    );
+    assert_eq!(s.blob_approval(id, 1).unwrap(), None, "the import has none");
+    assert_eq!(
+        s.blob_approval(id, 3).unwrap(),
+        None,
+        "a person's own version has none"
+    );
+    let p = s.blob_approval(id, 2).unwrap().unwrap();
+    assert_eq!(p, Approval::pending("aide", "alice"));
+    assert_eq!(s.blob_approvals(id).unwrap(), vec![(2, p.clone())]);
+    assert!(
+        s.approvals(id).unwrap().is_empty(),
+        "nothing in the text table"
+    );
+    assert_eq!(s.approval(id, 2).unwrap(), None);
+    let done = p.settled(ApprovalState::Declined, "alice", 77);
+    s.set_blob_approval(id, 2, &done).unwrap();
+    assert_eq!(s.blob_approval(id, 2).unwrap(), Some(done));
+    assert_eq!(
+        s.set_blob_approval(id, 3, &p),
+        Err(StoreError::NoApproval(id, 3))
+    );
+    // a version that moved (LogMoved) records no approval either
+    assert!(matches!(
+        s.commit_blob_versions(id, "ws-1", 2, &[blob_v(&s, 4, "aide", Some("alice"))], None),
+        Err(StoreError::LogMoved(..))
+    ));
+    assert_eq!(s.blob_approvals(id).unwrap().len(), 1);
+    // the delete erases them (tables_holding panics on a table it doesn't classify)
+    assert!(s.tables_holding(id).unwrap().contains(&"blob_approvals"));
+    s.delete_doc(id, 100).unwrap();
+    assert!(s.tables_holding(id).unwrap().is_empty());
+    assert!(s.blob_approvals(id).unwrap().is_empty());
+}
+
+/// Format 3 → 4 in place (the store layer; `tests/tier0.rs` opens a real v0.4.0 store): the
+/// table is created and every on-behalf blob version gets its `Pending` approval in the
+/// open's transaction, once; settled records and own versions are left alone.
+#[test]
+fn a_format_3_store_is_upgraded_in_place_with_its_approvals() {
+    let d = TmpDir::new("format-3-4");
+    let id = {
+        let s = DocStore::open(d.db()).unwrap();
+        let id = blob_doc(&s, "a.pdf");
+        let vs = [
+            blob_v(&s, 2, "aide", Some("alice")),
+            blob_v(&s, 3, "alice", None),
+            blob_v(&s, 4, "bot", Some("sam")),
+        ];
+        s.commit_blob_versions(id, "ws-1", 1, &vs, None).unwrap();
+        // what a format-3 store holds: no blob_approvals table, stamped 3
+        let w = s.begin_write().unwrap();
+        assert!(w.delete_table(blob::BLOB_APPROVALS).unwrap());
+        w.open_table(META)
+            .unwrap()
+            .insert("store_format", 3u64)
+            .unwrap();
+        w.commit().unwrap();
+        id
+    };
+    let s = DocStore::open(d.db()).unwrap();
+    let r = s.begin_read().unwrap();
+    let f = r
+        .open_table(META)
+        .unwrap()
+        .get("store_format")
+        .unwrap()
+        .unwrap()
+        .value();
+    assert_eq!(f, 4);
+    drop(r);
+    assert_eq!(
+        s.blob_approvals(id).unwrap(),
+        vec![
+            (2, Approval::pending("aide", "alice")),
+            (4, Approval::pending("bot", "sam"))
+        ]
+    );
+    // settled, then opened again: the backfill ran once (a format-4 store isn't touched)
+    let done = Approval::pending("aide", "alice").settled(ApprovalState::Approved, "alice", 9);
+    s.set_blob_approval(id, 2, &done).unwrap();
+    drop(s);
+    let s = DocStore::open(d.db()).unwrap();
+    assert_eq!(s.blob_approval(id, 2).unwrap(), Some(done));
+    // the rewrite copies the new table (it refuses tables it doesn't know)
+    s.rewrite_file().unwrap();
+    assert_eq!(s.blob_approvals(id).unwrap().len(), 2);
 }
 
 #[test]

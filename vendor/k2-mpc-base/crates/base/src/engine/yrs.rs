@@ -17,6 +17,8 @@ use yrs::{
     Any, Doc, GetString, OffsetKind, Options, Out, ReadTxn, Snapshot, StateVector, Text, TextRef,
     Transact, Update,
 };
+#[cfg(feature = "conformance")]
+use yrs::{Assoc, IndexedSequence, StickyIndex};
 
 use super::{BlameRun, EngineDoc, SESSION_CLIENT};
 use crate::doc::{ClientId, DocError, Edit, UpdateInfo, MAX_CLIENT_ID};
@@ -115,6 +117,22 @@ fn client_update_well_formed(b: &[u8]) -> bool {
     true
 }
 
+/// The update must continue each client's history, not skip ahead: for every client in
+/// it, its lowest clock is within what the doc (`have`) already holds for that client.
+fn continues_each_client(have: &StateVector, u: &Update) -> Result<(), DocError> {
+    for (client, from) in u.state_vector_lower().iter() {
+        let h = have.get(client);
+        if *from > h {
+            return Err(DocError::MissingDeps {
+                client: client.get(),
+                from: *from,
+                have: h,
+            });
+        }
+    }
+    Ok(())
+}
+
 /// A text root's hunks with their UTF-16 (offset, length), ready to apply.
 type TextPlan<'a> = (&'a str, &'a [Hunk], Vec<(u32, u32)>);
 
@@ -180,6 +198,65 @@ impl YrsDoc {
                 .transact()
                 .encode_state_as_update_v2(&StateVector::default()))
         })
+    }
+}
+
+#[cfg(feature = "conformance")]
+impl YrsDoc {
+    /// The state vector as sorted `(client, clock)` pairs: equal for equal states (the
+    /// encoded vector's order is a hash map's).
+    pub(crate) fn state_clocks(&self) -> Vec<(ClientId, u32)> {
+        let mut v: Vec<(ClientId, u32)> = self
+            .doc
+            .transact()
+            .state_vector()
+            .iter()
+            .map(|(c, k)| (c.get(), *k))
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// What this doc has past `clocks` (a state this doc has seen, as from
+    /// [`YrsDoc::state_clocks`]), as an update: the inserts past each client's clock, plus
+    /// the doc's whole delete set (yrs doesn't version deletes).
+    pub(crate) fn events_since(&self, clocks: &[(ClientId, u32)]) -> Result<Vec<u8>, DocError> {
+        self.usable()?;
+        let mut sv = StateVector::default();
+        for &(c, k) in clocks {
+            sv.set_max(ClientID::new(c), k);
+        }
+        guarded(|| Ok(self.doc.transact().encode_state_as_update_v1(&sv)))
+    }
+
+    /// Deliver an update another of this kit's docs made in this process: refused with
+    /// [`DocError::MissingDeps`] (nothing changes) when it doesn't continue each client's
+    /// history ([`continues_each_client`], the check client updates get), else applied as
+    /// trusted bytes ([`EngineDoc::apply_trusted`], which poisons the doc if dependencies are
+    /// still left unresolved).
+    pub(crate) fn deliver_local(&mut self, update: &[u8]) -> Result<(), DocError> {
+        if self.poisoned {
+            return Err(DocError::Pending);
+        }
+        let u = guarded(|| Update::decode_v1(update).map_err(|e| DocError::Decode(e.to_string())))?;
+        continues_each_client(&self.doc.transact().state_vector(), &u)?;
+        self.apply_trusted(update)
+    }
+
+    /// A relative position in text root `root` at UTF-16 offset `at16`, stuck to the
+    /// character after it (`right`) or before it. `None` past the end, or at the end when
+    /// stuck right (no character there).
+    pub(crate) fn sticky(&self, root: &str, at16: u32, right: bool) -> Option<StickyIndex> {
+        let assoc = if right { Assoc::After } else { Assoc::Before };
+        let txn = self.doc.transact();
+        self.texts[root].sticky_index(&txn, at16, assoc)
+    }
+
+    /// Where `pos` is now, as a UTF-16 offset of its text root; `None` when its root or
+    /// character isn't in this doc.
+    pub(crate) fn resolve_sticky(&self, pos: &StickyIndex) -> Option<u32> {
+        let txn = self.doc.transact();
+        pos.get_offset(&txn).map(|o| o.index)
     }
 }
 
@@ -283,17 +360,7 @@ impl EngineDoc for YrsDoc {
                     inserts.push(c);
                 }
             }
-            // The update must continue each client's history, not skip ahead.
-            for (client, from) in u.state_vector_lower().iter() {
-                let h = have.get(client);
-                if *from > h {
-                    return Err(DocError::MissingDeps {
-                        client: client.get(),
-                        from: *from,
-                        have: h,
-                    });
-                }
-            }
+            continues_each_client(&have, &u)?;
             Ok(UpdateInfo {
                 delete_only: inserts.is_empty(),
                 inserts_from: inserts,

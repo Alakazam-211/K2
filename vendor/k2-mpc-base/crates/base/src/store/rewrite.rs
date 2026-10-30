@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 use redb::{Database, MultimapTableHandle, ReadTransaction, TableDefinition, TableHandle};
 
-use super::blob::{BLOBS, BLOB_SPACES, BLOB_SYNC, BLOB_VERSIONS};
+use super::blob::{BLOBS, BLOB_APPROVALS, BLOB_SPACES, BLOB_SYNC, BLOB_VERSIONS};
 use super::history::{CHANGES, CHANGE_CLOCKS, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS};
 use super::{
     DocStore, StoreError, APPROVALS, CLIENTS, DOCS, DOC_KEYS, HOST, META, PATHS, SNAPSHOTS, SYNC,
@@ -77,6 +77,7 @@ const TABLES: &[&str] = &[
     "blobs",
     "blob_versions",
     "blob_sync",
+    "blob_approvals",
 ];
 
 fn copy<K: redb::Key + 'static, V: redb::Value + 'static>(
@@ -138,6 +139,7 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
     n += copy(&r, &w, BLOBS)?;
     n += copy(&r, &w, BLOB_VERSIONS)?;
     n += copy(&r, &w, BLOB_SYNC)?;
+    n += copy(&r, &w, BLOB_APPROVALS)?;
     w.commit()?;
     Ok(n)
 }

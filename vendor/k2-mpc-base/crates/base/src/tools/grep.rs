@@ -12,7 +12,7 @@
 use super::args::{self, opt, Arity, Item, Opt, Spec};
 use super::error::ToolError;
 use super::pattern::{self, Dialect, Flavor, Matcher, Search};
-use super::{lines, Line, ReadOutput, ToolDoc};
+use super::{lines, ForEditArg, Line, ReadOutput, ToolDoc, FOR_EDIT, TTL};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Grep {
@@ -28,6 +28,7 @@ pub(crate) struct Grep {
     max: Option<u64>,
     after: usize,
     before: usize,
+    pub(crate) for_edit: Option<Option<u64>>,
 }
 
 const OPTS: &[Opt] = &[
@@ -57,6 +58,8 @@ const OPTS: &[Opt] = &[
     opt("C", Some('C'), Some("context"), Arity::Req),
     opt("color", None, Some("color"), Arity::Opt),
     opt("color", None, Some("colour"), Arity::Opt),
+    FOR_EDIT,
+    TTL,
 ];
 
 const SPEC: Spec = Spec {
@@ -110,7 +113,11 @@ impl Grep {
         let mut icase = false;
         let mut line = false;
         let mut g = GrepFlags::default();
+        let mut fe = ForEditArg::default();
         for it in args::parse(args, &SPEC)? {
+            if fe.take(&it)? {
+                continue;
+            }
             match it {
                 Item::Opt("E", _) => dialect = Dialect::Extended,
                 Item::Opt("F", _) => dialect = Dialect::Fixed,
@@ -199,6 +206,7 @@ impl Grep {
             max: g.max,
             after: g.after.unwrap_or(both),
             before: g.before.unwrap_or(both),
+            for_edit: fe.finish()?,
         })
     }
 
@@ -220,6 +228,8 @@ impl Grep {
         let mut last_out: Option<usize> = None;
         let mut after_left = 0usize;
         let mut done = self.max == Some(0);
+        // the selected lines' span (0-based), for notes and --for-edit
+        let mut span: Option<(usize, usize)> = None;
         for (i, l) in ls.iter().enumerate() {
             if done {
                 if ctx && after_left > 0 {
@@ -232,6 +242,7 @@ impl Grep {
             let sel = self.matches(&mut s, l.text)? != self.invert;
             if sel {
                 selected += 1;
+                span = Some(span.map_or((i, i), |(a, _)| (a, i)));
                 if self.max == Some(selected) {
                     done = true;
                 }
@@ -271,8 +282,11 @@ impl Grep {
             }
         }
         let exit = if selected > 0 { 0 } else { 1 };
+        let touched = span.map(|(a, b)| (a + 1, b + 1));
         if self.quiet {
-            return Ok(ReadOutput::new(Vec::new(), exit));
+            let mut o = ReadOutput::new(Vec::new(), exit);
+            o.touched = touched;
+            return Ok(o);
         }
         if let Some(with) = self.list {
             if (selected > 0) == with {
@@ -286,7 +300,9 @@ impl Grep {
             }
             out.push_str(&format!("{selected}\n"));
         }
-        Ok(ReadOutput::new(out.into_bytes(), exit))
+        let mut o = ReadOutput::new(out.into_bytes(), exit);
+        o.touched = touched;
+        Ok(o)
     }
 
     fn prefix(&self, out: &mut String, name: &str, i: usize, sep: char) {

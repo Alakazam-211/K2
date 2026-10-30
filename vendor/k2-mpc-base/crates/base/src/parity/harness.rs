@@ -9,7 +9,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 
 use super::action::PersonAction;
-use super::registry::{verb_form, Api, Registry};
+use super::registry::{verb_form, Api, Registry, Tier};
 use crate::doc::Edit;
 use crate::session::{
     Approval, ApprovalState, At, AuditEvent, ChangeEvent, ChangeKind, Config, ConnId, CursorAt,
@@ -29,8 +29,8 @@ pub const OBSERVER: &str = "observer";
 /// The doc's path (its display name in tool output).
 pub const DOC_PATH: &str = "notes.md";
 
-const PERSON_VIA: &str = "tab";
-const AGENT_VIA: &str = "cli";
+pub(super) const PERSON_VIA: &str = "tab";
+pub(super) const AGENT_VIA: &str = "cli";
 
 // ---------------------------------------------------------------------------------------
 // the parity table, as data
@@ -257,9 +257,9 @@ impl fmt::Debug for Case {
 // the world one path runs in
 // ---------------------------------------------------------------------------------------
 
-struct ParityHost {
-    now: AtomicU64,
-    rights: Mutex<HashMap<String, Rights>>,
+pub(super) struct ParityHost {
+    pub(super) now: AtomicU64,
+    pub(super) rights: Mutex<HashMap<String, Rights>>,
 }
 
 impl Host for ParityHost {
@@ -275,10 +275,10 @@ impl Host for ParityHost {
     fn on_event(&self, _ev: &AuditEvent) {}
 }
 
-struct TmpDir(PathBuf);
+pub(super) struct TmpDir(pub(super) PathBuf);
 
 impl TmpDir {
-    fn new() -> Result<Self, String> {
+    pub(super) fn new() -> Result<Self, String> {
         static N: AtomicU64 = AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -701,6 +701,28 @@ pub enum VerbValue {
     Approval(Approval),
     Moved(crate::session::DiskCheck),
     Blame(crate::session::Blame),
+    /// Tier 0: bytes (`cat`, `show --version`).
+    Bytes(Vec<u8>),
+    /// Tier 0: `write --base V`, `restore`.
+    BlobWrite(crate::session::BlobWriteResult),
+    /// Tier 0: `status`.
+    BlobStatus(Box<crate::session::BlobStatus>),
+    /// Tier 0: `log`.
+    BlobLog(Vec<crate::session::BlobLogEntry>),
+    /// Tier 0: `blame`.
+    BlobBlame(Box<crate::session::BlobBlame>),
+    /// Tier 0: `approve`, `decline` (the record, and a declined version's way back).
+    BlobApproval(crate::session::BlobApproval),
+    /// Tier 0: `lease`, `lease --renew`, `lease --break` (the lease taken, or broken).
+    Lease(Option<crate::session::LeaseInfo>),
+    /// Tier 0: `lease --release` (whether the caller held it).
+    Released(bool),
+    /// `claim`, `claim --renew` (the claim as it is now).
+    Claim(Box<crate::session::ClaimInfo>),
+    /// `claim --release` (the claims released).
+    ClaimsReleased(Vec<crate::session::ClaimId>),
+    /// `activity`.
+    Activity(Vec<crate::session::ActivityEntry>),
 }
 
 /// One verb's result.
@@ -742,6 +764,8 @@ pub struct Agent<'a> {
     action: PersonAction,
 }
 
+// one per verb call, never stored: boxing the value buys nothing (`ToolOutput` grew notes)
+#[allow(clippy::large_enum_variant)]
 enum Bound {
     Value(VerbValue, u8),
     Refused(String, u8),
@@ -769,6 +793,16 @@ fn line_col(s: &str) -> Result<LineCol, String> {
         line: num(l)? as usize,
         col: num(c)? as usize,
     })
+}
+
+/// `--id ID` (`claim-12` or `12`), if given.
+fn claim_id(args: &[String]) -> Result<Option<crate::session::ClaimId>, String> {
+    match arg_after(args, "--id") {
+        Ok(s) => crate::session::ClaimId::parse(&s)
+            .map(Some)
+            .ok_or_else(|| format!("not a claim id: {s:?}")),
+        Err(_) => Ok(None),
+    }
 }
 
 fn positional(args: &[String]) -> Option<&String> {
@@ -1073,6 +1107,54 @@ impl Agent<'_> {
                 used.push(Api::SetApproval);
                 v(VerbValue::Approval(s.set_approval(c, seq, state)?))
             }
+            "claim" => {
+                let lines = arg_after(args, "--lines")?;
+                let (a, b) = lines.split_once(',').ok_or("--lines a,b")?;
+                let range = LineRange {
+                    root: root.to_owned(),
+                    first: num(a)? as usize,
+                    last: num(b)? as usize,
+                };
+                let ttl = arg_after(args, "--ttl").ok().map(|t| num(&t)).transpose()?;
+                let note = arg_after(args, "--note").ok();
+                let hold = args.iter().any(|a| a == "--hold");
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::Claim);
+                v(VerbValue::Claim(Box::new(
+                    s.claim(c, range, ttl, note, hold)?,
+                )))
+            }
+            "claim --renew" => {
+                let id = claim_id(args)?;
+                let ttl = arg_after(args, "--ttl").ok().map(|t| num(&t)).transpose()?;
+                let hold = if args.iter().any(|a| a == "--hold") {
+                    Some(true)
+                } else if args.iter().any(|a| a == "--no-hold") {
+                    Some(false)
+                } else {
+                    None
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::RenewClaim);
+                v(VerbValue::Claim(Box::new(s.renew_claim(c, id, ttl, hold)?)))
+            }
+            "claim --release" => {
+                let id = claim_id(args)?;
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::ReleaseClaim);
+                let gone = s.release_claim(c, id)?;
+                let exit = if gone.is_empty() { 1 } else { 0 };
+                Ok(Bound::Value(VerbValue::ClaimsReleased(gone), exit))
+            }
+            "activity" => {
+                let n = match arg_after(args, "-n") {
+                    Ok(n) => num(&n)? as usize,
+                    Err(_) => 10,
+                };
+                let c = self.join(Stay::UntilIdle, used)?;
+                used.push(Api::Activity);
+                v(VerbValue::Activity(s.activity(c, n)?))
+            }
             "blame" => {
                 // `-L a,b`, `-La,b` or `-L=a,b` (git's forms); `b` may be past the end
                 let spec = args
@@ -1203,6 +1285,18 @@ pub struct PresenceObs {
     pub cursor: Option<(LineCol, LineCol)>,
     pub view: Option<(usize, usize)>,
     pub connections: usize,
+    /// Their live claims (amendment 13): lines, hold, note, TTL as taken.
+    pub claims: Vec<ClaimObs>,
+}
+
+/// A claim as others see it (amendment 13). The TTL is `expires - taken` (the same in both
+/// worlds); `--for-edit` and the time left are not compared.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimObs {
+    pub lines: (usize, usize),
+    pub hold: bool,
+    pub note: Option<String>,
+    pub ttl_ms: u64,
 }
 
 /// Everything compared after a path.
@@ -1300,6 +1394,16 @@ fn observe(stage: &Stage, m: &Mark, step: Step, via: &str) -> Result<Observation
             cursor: e.cursor.map(|c| (c.anchor, c.head)),
             view: e.view.map(|v| (v.first, v.last)),
             connections: e.connections,
+            claims: e
+                .claims
+                .iter()
+                .map(|c| ClaimObs {
+                    lines: (c.lines.first, c.lines.last),
+                    hold: c.hold,
+                    note: c.note.clone(),
+                    ttl_ms: c.expires_ms - c.taken_ms,
+                })
+                .collect(),
         });
     let file = s
         .file_path()
@@ -1572,7 +1676,12 @@ pub fn check(
     registry: &Registry,
     extra: &[Case],
 ) -> Result<Report, Vec<Failure>> {
-    let (mut report, mut failures) = list_check(rows, registry, extra);
+    if let Some(f) = wrong_tier(registry, Tier::Text) {
+        return Err(vec![f]);
+    }
+    let (mut report, mut failures) = list_check(rows, registry, &covered(&all_cases(extra)), |a| {
+        !super::kit_cases(a).is_empty()
+    });
     let cases: Vec<Case> = all_cases(extra)
         .into_iter()
         .filter(|c| {
@@ -1621,9 +1730,30 @@ pub fn check(
 }
 
 /// Steps 1 and 2 of [`check`], and "every listed verb has a case", without running the
-/// cases (fast: no docs are opened). Returns every failure.
+/// cases (fast: no docs are opened). Returns every failure. A text registry (a blob one:
+/// [`super::check_blob_list`]).
 pub fn check_list(rows: &[ParityRow], registry: &Registry, extra: &[Case]) -> Vec<Failure> {
-    list_check(rows, registry, extra).1
+    if let Some(f) = wrong_tier(registry, Tier::Text) {
+        return vec![f];
+    }
+    list_check(rows, registry, &covered(&all_cases(extra)), |a| {
+        !super::kit_cases(a).is_empty()
+    })
+    .1
+}
+
+/// A failure when `registry` serves another tier than the harness runs.
+pub(super) fn wrong_tier(registry: &Registry, tier: Tier) -> Option<Failure> {
+    (registry.tier() != tier).then(|| {
+        Failure::Registry(format!(
+            "this harness runs {tier:?} docs; the registry is for {:?} docs",
+            registry.tier()
+        ))
+    })
+}
+
+fn covered(cases: &[Case]) -> Vec<(PersonAction, &'static str)> {
+    cases.iter().map(|c| (c.action, c.verb)).collect()
 }
 
 fn all_cases(extra: &[Case]) -> Vec<Case> {
@@ -1635,13 +1765,22 @@ fn all_cases(extra: &[Case]) -> Vec<Case> {
     cases
 }
 
-fn list_check(rows: &[ParityRow], registry: &Registry, extra: &[Case]) -> (Report, Vec<Failure>) {
+/// Steps 1 and 2 and case coverage, for the registry's tier: `covered` lists the (action,
+/// verb) pairs that have cases, `kit_has_cases` whether the kit binds an action itself.
+pub(super) fn list_check(
+    rows: &[ParityRow],
+    registry: &Registry,
+    covered: &[(PersonAction, &'static str)],
+    kit_has_cases: impl Fn(PersonAction) -> bool,
+) -> (Report, Vec<Failure>) {
     let mut failures = Vec::new();
     let mut report = Report::default();
 
-    // 1. one row per action
+    // 1. one row per action of the registry's tier (rows for other tiers' actions may be
+    // there; they are checked like any other)
     for a in PersonAction::ALL {
         match rows.iter().filter(|r| r.action == *a).count() {
+            0 if !a.in_tier(registry.tier()) => {}
             0 => failures.push(Failure::MissingRow(*a)),
             1 => {}
             _ => failures.push(Failure::DuplicateRow(*a)),
@@ -1686,7 +1825,7 @@ fn list_check(rows: &[ParityRow], registry: &Registry, extra: &[Case]) -> (Repor
             RowStatus::NotApplicable { reason } => report.not_applicable.push((r.action, reason)),
             RowStatus::Deferred { until, why } => {
                 report.deferred.push((r.action, until, why));
-                if !super::kit_cases(r.action).is_empty() {
+                if kit_has_cases(r.action) {
                     failures.push(Failure::StaleDeferral(r.action));
                 }
             }
@@ -1709,13 +1848,12 @@ fn list_check(rows: &[ParityRow], registry: &Registry, extra: &[Case]) -> (Repor
     }
 
     // 3. every listed verb has a case
-    let cases = all_cases(extra);
     for r in rows {
         if matches!(r.status, RowStatus::Deferred { .. }) {
             continue;
         }
         for v in r.verbs {
-            if !cases.iter().any(|c| c.action == r.action && c.verb == *v) {
+            if !covered.iter().any(|(a, verb)| *a == r.action && verb == v) {
                 failures.push(Failure::NoCase {
                     action: r.action,
                     verb: (*v).to_owned(),

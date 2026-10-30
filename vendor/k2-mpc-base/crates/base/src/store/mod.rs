@@ -70,7 +70,16 @@ use enc::{R, W};
 ///   store as before (its changes get no clock rows; blame shows their text by client
 ///   owner, without a change id), and only its `rewrite_file` refuses the table it doesn't
 ///   know (an error, never a silent drop).
-pub const STORE_FORMAT: u64 = 3;
+/// - 4: approvals of on-behalf blob versions (K-T0-9), in a new table `blob_approvals` keyed
+///   `(doc, version)`: the same record as a text change's approval, kept apart from
+///   `approvals` (keyed `(doc, seq)`) so a blob version and a text change can never be taken
+///   for each other. A format-3 store opens as is and is stamped 4 **in place**, in the
+///   open's own transaction: the table is created, and every on-behalf blob version it holds
+///   gets the `Pending` approval it would have had. **No downgrade:** a format-3 build
+///   refuses a format-4 store ([`StoreError::Newer`]) instead of writing on-behalf blob
+///   versions without approvals, leaving their rows behind on a delete, or refusing the
+///   table in `rewrite_file` mid-purge.
+pub const STORE_FORMAT: u64 = 4;
 
 pub type DocId = u64;
 /// Position in a doc's update log (1-based, increasing, never reused).
@@ -393,6 +402,9 @@ pub struct DocStore {
     /// the swap.
     db: RwLock<Database>,
     path: PathBuf,
+    /// Commits skip the sync to disk ([`DocStore::unsynced_for_tests`]).
+    #[cfg(feature = "conformance")]
+    unsynced: std::sync::atomic::AtomicBool,
 }
 
 /// A write transaction with the store's read guard held until it commits or drops.
@@ -719,10 +731,13 @@ impl DocStore {
     /// A write transaction (redb's default durability: committed means on disk).
     pub(crate) fn begin_write(&self) -> Result<Wtx<'_>, StoreError> {
         let g = self.guard();
-        Ok(Wtx {
-            tx: g.begin_write()?,
-            _g: g,
-        })
+        #[allow(unused_mut)]
+        let mut tx = g.begin_write()?;
+        #[cfg(feature = "conformance")]
+        if self.unsynced.load(std::sync::atomic::Ordering::Relaxed) {
+            tx.set_durability(redb::Durability::None);
+        }
+        Ok(Wtx { tx, _g: g })
     }
 
     pub(crate) fn begin_read(&self) -> Result<Rtx<'_>, StoreError> {
@@ -753,7 +768,8 @@ impl DocStore {
                     meta.insert("store_format", STORE_FORMAT)?;
                 }
                 Some(f) if f > STORE_FORMAT => return Err(StoreError::Newer { found: f }),
-                // 1 -> 2: nothing to rewrite (v1 records still decode); new tables below
+                // 1 -> 2 -> 3: nothing to rewrite (older records still decode); new tables
+                // below. 3 -> 4: the blob approvals, backfilled below.
                 Some(f) if f < STORE_FORMAT => {
                     meta.insert("store_format", STORE_FORMAT)?;
                 }
@@ -771,12 +787,27 @@ impl DocStore {
             w.open_table(DOC_KEYS)?;
             blob::create_tables(&w)?;
             history::create_tables(&w)?;
+            if found.is_some_and(|f| f < 4) {
+                blob::backfill_approvals(&w)?;
+            }
         }
         w.commit()?;
         Ok(Self {
             db: RwLock::new(db),
             path,
+            #[cfg(feature = "conformance")]
+            unsynced: std::sync::atomic::AtomicBool::new(false),
         })
+    }
+
+    /// Test-only (feature `conformance`, off by default): from now on, commit without
+    /// syncing the store file to disk. Everything in this process sees every commit as
+    /// before; only a crash or a reopen of the file may lose them. For long in-process test
+    /// runs (the undo spec's trace test), where a sync per change is most of the time.
+    #[cfg(feature = "conformance")]
+    pub fn unsynced_for_tests(&self) {
+        self.unsynced
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Open, retrying while another process (a daemon handing off) still holds the lock.

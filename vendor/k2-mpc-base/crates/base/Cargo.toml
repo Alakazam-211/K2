@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.3.0"
+version = "0.8.1"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -12,6 +12,10 @@ description = "Multiplayer kit for file-type packs: docs on K2-defined primitive
 # use-after-free reachable from a crafted update, which catch_unwind cannot contain.
 # The kit's own tests enable it (self dev-dependency below).
 untrusted-wire = []
+# Test-only hooks for the engine-generic conformance suite (`crates/conformance`): an
+# in-process sync between two of this kit's docs and a comparable state vector. Off by
+# default; no host enables it.
+conformance = []
 
 [dependencies]
 # The engine is private to this crate. Pinned exactly: its encoding is part of the stored format.

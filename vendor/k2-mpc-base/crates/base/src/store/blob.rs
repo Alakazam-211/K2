@@ -8,7 +8,10 @@
 use redb::{ReadableTable, TableDefinition, WriteTransaction};
 
 use super::enc::{R, W};
-use super::{DocId, DocMeta, DocStore, StoreError, VersionId, DOCS, META, PATHS};
+use super::{
+    dec_approval, enc_approval, Approval, DocId, DocMeta, DocStore, StoreError, VersionId, DOCS,
+    META, PATHS,
+};
 use crate::blob::BlobId;
 
 /// Space name → its key record.
@@ -20,6 +23,12 @@ pub(super) const BLOB_VERSIONS: TableDefinition<(u64, u64), &[u8]> =
     TableDefinition::new("blob_versions");
 /// (doc, slot) → disk sync of a blob doc: slot 0 synced, 1 a write-back in flight.
 pub(super) const BLOB_SYNC: TableDefinition<(u64, u8), &[u8]> = TableDefinition::new("blob_sync");
+/// (doc, version) → the approval record of an on-behalf blob version (format 4). The same
+/// record as a text change's (`approvals`), in its own table: a blob version number and a
+/// text change's log position never share a key space, so no reader of `approvals` (text
+/// purge, the revert window, the pending cap) can take one for the other.
+pub(super) const BLOB_APPROVALS: TableDefinition<(u64, u64), &[u8]> =
+    TableDefinition::new("blob_approvals");
 
 /// A purged space: its key's number and the blobs (id, size) whose rows were removed.
 pub(crate) type PurgedSpace = (u64, Vec<(BlobId, u64)>);
@@ -39,7 +48,52 @@ pub(super) fn create_tables(w: &WriteTransaction) -> Result<(), StoreError> {
     w.open_table(BLOBS)?;
     w.open_table(BLOB_VERSIONS)?;
     w.open_table(BLOB_SYNC)?;
+    w.open_table(BLOB_APPROVALS)?;
     Ok(())
+}
+
+/// Record a version and, when an agent wrote it on someone's behalf, its `Pending` approval,
+/// in `w` (the caller's transaction: both or neither).
+fn put_version(
+    w: &WriteTransaction,
+    id: DocId,
+    vid: VersionId,
+    v: &BlobVersion,
+) -> Result<(), StoreError> {
+    w.open_table(BLOB_VERSIONS)?
+        .insert((id, vid), enc_version(v).as_slice())?;
+    if let Some(p) = &v.on_behalf_of {
+        w.open_table(BLOB_APPROVALS)?.insert(
+            (id, vid),
+            enc_approval(&Approval::pending(v.author.clone(), p.clone())).as_slice(),
+        )?;
+    }
+    Ok(())
+}
+
+/// Format 3 → 4: every on-behalf blob version a format-3 store holds gets the `Pending`
+/// approval it would have had (nobody could settle it before), in `w`, the open's own
+/// transaction. Versions that already have one are left alone. Returns how many it added.
+pub(super) fn backfill_approvals(w: &WriteTransaction) -> Result<u64, StoreError> {
+    let mut missing = Vec::new();
+    {
+        let versions = w.open_table(BLOB_VERSIONS)?;
+        let approvals = w.open_table(BLOB_APPROVALS)?;
+        for kv in versions.iter()? {
+            let (k, v) = kv?;
+            let v = dec_version(v.value())?;
+            if let Some(p) = v.on_behalf_of {
+                if approvals.get(k.value())?.is_none() {
+                    missing.push((k.value(), Approval::pending(v.author, p)));
+                }
+            }
+        }
+    }
+    let mut t = w.open_table(BLOB_APPROVALS)?;
+    for (k, a) in &missing {
+        t.insert(*k, enc_approval(a).as_slice())?;
+    }
+    Ok(missing.len() as u64)
 }
 
 /// Algorithm of a space key: 1 = HMAC-SHA256.
@@ -174,8 +228,10 @@ pub struct BlobVersion {
     pub name: Option<String>,
     /// For [`BlobReason::Restore`]: the version restored.
     pub restored_from: Option<VersionId>,
-    /// The conflict copy the kit wrote beside the file when this save conflicted (its file
-    /// name, in the same folder), holding the content that was current before it.
+    /// The conflict copy the kit wrote when this save conflicted, holding the content that
+    /// was current before it (the previous version): its path relative to the file's folder,
+    /// a plain file name when beside it (as every copy before v0.4.0 is), or a path into the
+    /// host's conflict folder (`Host::conflict_dir`).
     pub conflict_copy: Option<String>,
     /// A purge removed this version's content (format 3): the entry stays (who, when, why,
     /// `size`), `blob` is the zero id, and reading or restoring it fails.
@@ -369,6 +425,8 @@ pub(super) fn delete_rows(
         .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
     w.open_table(BLOB_SYNC)?
         .retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?;
+    w.open_table(BLOB_APPROVALS)?
+        .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
     Ok(())
 }
 
@@ -610,8 +668,7 @@ impl DocStore {
         };
         let space = space_in(&w, &meta.key.space)?;
         adjust_ref(&w, space.no, &first.blob, 1, first.at_ms)?;
-        w.open_table(BLOB_VERSIONS)?
-            .insert((id, 1), enc_version(first).as_slice())?;
+        put_version(&w, id, 1, first)?;
         if let Some(s) = sync {
             w.open_table(BLOB_SYNC)?
                 .insert((id, SYNCED), enc_sync(s).as_slice())?;
@@ -620,9 +677,10 @@ impl DocStore {
         Ok((id, 1))
     }
 
-    /// Append versions to a blob doc (each takes a reference on its blob) and, when given,
-    /// set its synced state (clearing a write-back in flight), in one transaction. Fails
-    /// with [`StoreError::LogMoved`] unless the doc's latest version is `expect_last`.
+    /// Append versions to a blob doc (each takes a reference on its blob, and one written on
+    /// someone's behalf gets a `Pending` [`Approval`]) and, when given, set its synced state
+    /// (clearing a write-back in flight), in one transaction. Fails with
+    /// [`StoreError::LogMoved`] unless the doc's latest version is `expect_last`.
     pub(crate) fn commit_blob_versions(
         &self,
         id: DocId,
@@ -638,14 +696,11 @@ impl DocStore {
         }
         let k = space_in(&w, space)?;
         let mut vids = Vec::with_capacity(versions.len());
-        {
-            let mut t = w.open_table(BLOB_VERSIONS)?;
-            for v in versions {
-                adjust_ref(&w, k.no, &v.blob, 1, v.at_ms)?;
-                last += 1;
-                t.insert((id, last), enc_version(v).as_slice())?;
-                vids.push(last);
-            }
+        for v in versions {
+            adjust_ref(&w, k.no, &v.blob, 1, v.at_ms)?;
+            last += 1;
+            put_version(&w, id, last, v)?;
+            vids.push(last);
         }
         if let Some(s) = sync {
             let mut t = w.open_table(BLOB_SYNC)?;
@@ -748,13 +803,19 @@ impl DocStore {
     /// [`StoreError::CurrentVersion`]), in one transaction: each keeps its entry with
     /// `redacted` set and the zero id (its keyed id is a digest of the content: it goes too),
     /// and releases its reference on its blob at `now`. Returns the blobs released, with the
-    /// references each still has. Already purged versions are skipped.
+    /// references each still has, and the approval records of the purged versions (format
+    /// 4). Already purged versions are skipped.
+    ///
+    /// An approval record is kept as it is: like the version's entry (who, for whom, when),
+    /// it is metadata, and it holds no content and no blob id (its fields are the agent, the
+    /// person, the state, the settler and the time; the codec has no other field), so there
+    /// is nothing in it to redact. It is counted, so the purge's reach is visible.
     pub(crate) fn blob_purge_versions(
         &self,
         id: DocId,
         vids: &[VersionId],
         now: u64,
-    ) -> Result<Vec<PurgedBlob>, StoreError> {
+    ) -> Result<(Vec<PurgedBlob>, u64), StoreError> {
         let w = self.begin_write()?;
         let out = {
             let key = {
@@ -765,6 +826,7 @@ impl DocStore {
             let last = last_vid(&w, id)?;
             let space = space_in(&w, &key.space).ok();
             let mut released: Vec<(BlobId, u64)> = Vec::new();
+            let mut approvals = 0;
             for &vid in vids {
                 if vid == last {
                     return Err(StoreError::CurrentVersion(id, vid));
@@ -776,6 +838,11 @@ impl DocStore {
                 };
                 if v.redacted {
                     continue;
+                }
+                if let Some(a) = w.open_table(BLOB_APPROVALS)?.get((id, vid))? {
+                    // decoded: a damaged record stops the purge rather than riding along
+                    dec_approval(a.value())?;
+                    approvals += 1;
                 }
                 let blob = v.blob;
                 v.blob = BlobId::from_slice(&[0; 32]).expect("32 bytes");
@@ -806,10 +873,55 @@ impl DocStore {
                     out.push((k.no, b, size, refs));
                 }
             }
-            out
+            (out, approvals)
         };
         w.commit()?;
         Ok(out)
+    }
+
+    // ----- approvals of on-behalf blob versions (format 4) -----
+
+    /// The approval record of blob version `vid`, if an agent wrote it on someone's behalf.
+    pub fn blob_approval(&self, id: DocId, vid: VersionId) -> Result<Option<Approval>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(BLOB_APPROVALS)?;
+        let v = t.get((id, vid))?;
+        v.map(|v| dec_approval(v.value())).transpose()
+    }
+
+    /// Every approval record of a blob doc, oldest version first.
+    pub fn blob_approvals(&self, id: DocId) -> Result<Vec<(VersionId, Approval)>, StoreError> {
+        let r = self.begin_read()?;
+        let mut out = Vec::new();
+        for kv in r
+            .open_table(BLOB_APPROVALS)?
+            .range((id, 0)..=(id, u64::MAX))?
+        {
+            let (k, v) = kv?;
+            out.push((k.value().1, dec_approval(v.value())?));
+        }
+        Ok(out)
+    }
+
+    /// Replace an existing blob approval record ([`StoreError::NoApproval`] when there is
+    /// none). The store doesn't check who may do it: sessions do
+    /// ([`crate::session::BlobSession::set_approval`]).
+    pub fn set_blob_approval(
+        &self,
+        id: DocId,
+        vid: VersionId,
+        a: &Approval,
+    ) -> Result<(), StoreError> {
+        let w = self.begin_write()?;
+        {
+            let mut t = w.open_table(BLOB_APPROVALS)?;
+            if t.get((id, vid))?.is_none() {
+                return Err(StoreError::NoApproval(id, vid));
+            }
+            t.insert((id, vid), enc_approval(a).as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
     }
 
     // ----- blob-doc disk sync (crate-private: sessions keep these consistent) -----

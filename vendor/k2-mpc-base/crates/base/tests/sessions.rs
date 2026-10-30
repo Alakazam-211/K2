@@ -720,6 +720,46 @@ fn undo_applies_the_eof_rule_only_at_the_end_of_the_doc() {
     ));
 }
 
+/// Regression (undo spec U10, element identity): an undo applies the clean merge's own
+/// hunks. Two participants append the same line; each undoes its own. A re-diff of the
+/// undone window would delete the other's identical line (the text looks right), and the
+/// other's undo then has nothing left to remove: the doc kept a line both undid.
+#[test]
+fn f1_each_undoes_their_own_append() {
+    let f = fx_with("undo-own", burst(100));
+    let s = f.open("u.md", b"x\n");
+    let a = f.join(&s, "a", Rights::EDIT);
+    let b = f.join(&s, "b", Rights::EDIT);
+    let w = f.join(&s, "w", Rights::READ);
+    s.edit(a, ins(2, "a\n"), None).unwrap();
+    s.edit(b, ins(4, "a\n"), None).unwrap();
+    let rx = s.subscribe(w).unwrap();
+    assert!(matches!(
+        s.undo(a, 1).unwrap(),
+        UndoOutcome::Applied { steps: 1, .. }
+    ));
+    let ev = rx.try_recv().unwrap();
+    assert_eq!(
+        ev.hunks,
+        vec![Hunk {
+            start: 2,
+            end: 4,
+            insert: String::new()
+        }],
+        "a's undo must delete a's line, the first of the two"
+    );
+    assert_eq!(text(&s, a), "x\na\n");
+    assert!(matches!(
+        s.undo(b, 1).unwrap(),
+        UndoOutcome::Applied { steps: 1, .. }
+    ));
+    assert_eq!(text(&s, a), "x\n", "both undid their line");
+    // and back: each redo re-inserts its own line
+    s.redo(b, 1).unwrap();
+    s.redo(a, 1).unwrap();
+    assert_eq!(text(&s, a), "x\na\na\n");
+}
+
 #[test]
 fn undo_redo_is_per_participant() {
     let f = fx_with("undo", burst(100));

@@ -1,0 +1,12 @@
+[package]
+name = "mpce-model"
+description = "Reference models: slow, obvious implementations of every MPC primitive; the oracle of record for the engine."
+# Standalone on purpose (no workspace inheritance): consumers copy this directory by git subtree.
+edition = "2021"
+publish = false
+version = "0.3.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]

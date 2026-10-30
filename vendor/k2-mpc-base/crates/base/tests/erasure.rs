@@ -22,9 +22,10 @@ use std::sync::{Arc, Mutex};
 
 use k2_mpc_base::blob::{BlobConfig, BlobStore};
 use k2_mpc_base::session::{
-    Action, AnyFile, AuditEvent, BlobSession, Config, ConflictKind, ConnId, DiskCheck, Host, Need,
-    NotReached, Pack, Participant, ParticipantKind, PurgeRequest, PurgeScope, PurgedScope, Rights,
-    Session, SessionError, SessionManager, Stay, TextFilePack, UndoOutcome, WriteOutcome,
+    Action, AnyFile, Approval, ApprovalState, AuditEvent, BlobSession, Config, ConflictKind,
+    ConnId, DiskCheck, Host, Need, NotReached, Pack, Participant, ParticipantKind, PurgeRequest,
+    PurgeScope, PurgedScope, Rights, Session, SessionError, SessionManager, Stay, TextFilePack,
+    UndoOutcome, WriteOutcome,
 };
 use k2_mpc_base::store::{scan_file, DocKey, DocStore, Finding, StoreError};
 use k2_mpc_base::Doc;
@@ -919,6 +920,167 @@ fn tier0_purge_whole_history_reports_shared_blobs() {
     let mut cur = Vec::new();
     r.reader.read_to_end(&mut cur).unwrap();
     assert_eq!(cur, b"new\n");
+}
+
+/// K-T0-9 with K-PURGE-3's byte scan (the approvals slice's gate): an assistant
+/// writes two secrets on alice's behalf; the first is settled (declined) and also became a
+/// conflict copy (a desktop save under the assistant's lease), the second is still pending.
+/// Purging the first version, then the whole history, leaves neither secret nor its blob id
+/// (the keyed digest of the content, raw or hex) in the store file, the blob folder or the
+/// workspace folder (the conflict copy, the file); the redacted entries and their approval
+/// records stay (who, for whom, the state), counted; only alice can still settle the pending
+/// one. Each scan has its control before the purge.
+#[test]
+fn tier0_purge_reaches_on_behalf_versions_and_approvals_no_bytes_behind() {
+    let f = fx("t0-obo");
+    f.grant("alice", Rights::full());
+    f.grant("aide", Rights::editor());
+    let name = "deck.pdf";
+    let path = f.path(name);
+    fs::write(&path, b"%PDF-1.7 base\n").unwrap();
+    let s = open_blob(&f, name);
+    let own = join_blob(&s, person("own"));
+    let al = join_blob(&s, person("alice"));
+    let g = join_blob(&s, agent("aide").on_behalf_of("alice"));
+    let (sec1, sec2) = (secret(), secret());
+    // aide writes sec1 for alice under its lease; a desktop save lands on top of it
+    s.acquire_lease(g, None).unwrap();
+    let base = s.status().unwrap().version;
+    let w1 = s
+        .write_bytes(g, format!("%PDF-1.7 aide {sec1}\n").as_bytes(), base)
+        .unwrap()
+        .version;
+    f.advance(1_000);
+    app_save(&path, b"%PDF-1.7 desktop\n");
+    let DiskCheck::Conflict {
+        kept,
+        copy,
+        version: saved,
+    } = s.file_changed().unwrap()
+    else {
+        panic!("expected a conflict");
+    };
+    assert_eq!(kept, w1);
+    let copy = copy.expect("a conflict copy");
+    s.release_lease(g).unwrap();
+    // settled: alice declines it; then aide writes sec2 (pending) and alice writes over it
+    assert_eq!(
+        s.approval(al, w1).unwrap(),
+        Some(Approval::pending("aide", "alice"))
+    );
+    f.advance(1_000);
+    let declined = s
+        .set_approval(al, w1, ApprovalState::Declined)
+        .unwrap()
+        .approval;
+    let w2 = s
+        .write_bytes(g, format!("%PDF-1.7 aide again {sec2}\n").as_bytes(), saved)
+        .unwrap()
+        .version;
+    s.write_bytes(al, b"%PDF-1.7 alice\n", w2).unwrap();
+    // the blob ids: keyed digests of the content
+    let vs = s.versions(own).unwrap();
+    let id = |v: u64| vs.iter().find(|(x, _)| *x == v).unwrap().1.blob;
+    let (id1, id2) = (id(w1), id(w2));
+    let (hex1, hex2) = (id1.to_hex(), id2.to_hex());
+    let raw = |store: &DocStore| {
+        hit_needles(
+            &store
+                .scan_for(&[id1.as_bytes().as_slice(), id2.as_bytes().as_slice()])
+                .unwrap(),
+        )
+    };
+    let in_ws = |needles: &[&str]| -> Vec<PathBuf> {
+        files_under(&f.ws)
+            .into_iter()
+            .filter(|p| !in_file(p, needles).is_empty())
+            .collect()
+    };
+    // controls: everything is where we look
+    assert!(blob_dir_holds(&f, &sec1) && blob_dir_holds(&f, &sec2));
+    assert_eq!(in_file(&copy, &[&sec1]), vec![0]);
+    assert_eq!(in_ws(&[&sec1]), vec![copy.clone()]);
+    assert_eq!(
+        raw(&f.store),
+        vec![0, 1],
+        "control: the store holds both ids"
+    );
+
+    let out = s.purge(own, Some(w1)).unwrap();
+    let c = out.counts;
+    assert_eq!(
+        (
+            c.blob_versions,
+            c.blobs_removed,
+            c.conflict_copies,
+            c.approvals
+        ),
+        (1, 1, 1, 1)
+    );
+    let out = s.purge(own, None).unwrap();
+    assert_eq!(out.counts.approvals, 1, "w2's pending record");
+    assert!(out.rewrite.is_some(), "the store file was rewritten");
+
+    // no bytes behind
+    assert!(!copy.exists());
+    assert!(!blob_dir_holds(&f, &sec1) && !blob_dir_holds(&f, &sec2));
+    let blob_names: Vec<String> = files_under(&f._dir.0.join("blobs"))
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    assert!(
+        !blob_names
+            .iter()
+            .any(|n| n.contains(&hex1) || n.contains(&hex2)),
+        "{blob_names:?}"
+    );
+    assert_eq!(in_ws(&[&sec1, &sec2, &hex1, &hex2]), Vec::<PathBuf>::new());
+    assert_eq!(
+        in_store(&f.store, &[&sec1, &sec2, &hex1, &hex2]),
+        Vec::<usize>::new()
+    );
+    assert_eq!(raw(&f.store), Vec::<usize>::new(), "no blob id either");
+
+    // kept where the rules keep it: the entries and their approval records
+    let log = s.log(own).unwrap();
+    let row = |v: u64| {
+        let e = log.iter().find(|e| e.id == v).unwrap();
+        (
+            e.redacted,
+            e.author.clone(),
+            e.on_behalf_of.clone(),
+            e.approval,
+        )
+    };
+    let alice = Some("alice".to_owned());
+    assert_eq!(
+        row(w1),
+        (
+            true,
+            "aide".into(),
+            alice.clone(),
+            Some(ApprovalState::Declined)
+        )
+    );
+    assert_eq!(
+        row(w2),
+        (true, "aide".into(), alice, Some(ApprovalState::Pending))
+    );
+    assert_eq!(s.approval(own, w1).unwrap(), Some(declined));
+    // still only alice settles the pending one; nothing to restore before it (purged)
+    assert_eq!(
+        s.set_approval(own, w2, ApprovalState::Approved),
+        Err(SessionError::Forbidden {
+            need: Need::Approver
+        })
+    );
+    let d = s.set_approval(al, w2, ApprovalState::Declined).unwrap();
+    assert_eq!(d.restore_to, None);
+    assert_eq!(d.later.len(), 1);
+}
+
+fn join_blob(s: &BlobSession, p: Participant) -> ConnId {
+    s.join(p, Stay::Held).unwrap().conn
 }
 
 // ---------- at scale ----------

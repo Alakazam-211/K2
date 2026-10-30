@@ -1,0 +1,20 @@
+[package]
+name = "k2-mpc-spec-undo"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+# Never published, never a dependency of anything: the undo spec's oracle and its trace test.
+publish = false
+description = "The undo spec's oracle of record (`spec_undo::model`, docs/SPEC-UNDO.md) over plain strings and hunks, and the trace-equivalence test against the kit's sessions."
+
+[lib]
+name = "spec_undo"
+
+[dependencies]
+# The kit's diff pipeline (D1–D2: `align_insertions(diff::hunks(..))`) is the only part of
+# the kit the oracle calls. The `conformance` feature adds the test-only stack-depth hook the
+# trace runner reads; it is off in every host's build, and nothing depends on this crate.
+k2-mpc-base = { path = "../base", features = ["conformance"] }
+
+[dev-dependencies]
+rand = { version = "0.8", features = ["small_rng"] }

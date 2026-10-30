@@ -15,6 +15,36 @@ pub struct Config {
     /// A participant not visible for this long is shown away. Default 60 s.
     pub away_after_ms: u64,
 
+    // --- agent presence (amendment 13): claims, notes, activity; memory only ---
+    /// A claim lasts this long unless the caller asks otherwise. Default 30 s.
+    pub claim_default_ms: u64,
+    /// The longest claim anyone can ask for (longer asks are clamped). Default 10 min.
+    pub claim_max_ms: u64,
+    /// A read verb's `--for-edit` claim lasts this long unless `--ttl` says otherwise.
+    /// Default 30 s.
+    pub for_edit_ms: u64,
+    /// Live claims per doc; past it a new claim is refused (`BadClaim`). Default 256.
+    pub claims_max: usize,
+    /// Live claims per participant per doc. Default 16.
+    pub claims_per_participant: usize,
+    /// Waiters per claim. Default 64.
+    pub claim_waiters_max: usize,
+    /// When a claim with waiters ends, its range is reserved this long for the first
+    /// waiter: other agents' claims and `Respect` edits there are refused meanwhile.
+    /// Default 2 s; 0 turns hand-off reservations off.
+    pub claim_handoff_ms: u64,
+    /// An edit this recent is a heads-up note (`edited`) and named in a `write --base`
+    /// conflict. Default 60 s.
+    pub note_edit_window_ms: u64,
+    /// The same note (reader, other, kind, lines) is not repeated within this. Default 60 s.
+    pub note_repeat_ms: u64,
+    /// At most one batch of notes per reader per doc this often. Default 5 s.
+    pub note_interval_ms: u64,
+    /// At most this many notes in a batch; the rest are counted (`+N more`). Default 5.
+    pub note_batch_max: usize,
+    /// Activity rows kept per doc (a ring; dropped on unload). Default 256.
+    pub activity_max: usize,
+
     // --- write --base ---
     /// Read-base cache: at most this many versions... Default 64.
     pub read_bases_max: usize,
@@ -119,6 +149,10 @@ pub struct Config {
     /// Tier 0.5: a pack's `merge3_bytes` is only tried when base, ours and theirs are each
     /// at most this big (they are read into memory). Default 32 MiB.
     pub blob_merge_max_bytes: u64,
+    /// Conflict copies older than this are deleted on `tick` (K-A11Y-5), unless their
+    /// version is named or a person edited the copy (its bytes no longer match the version
+    /// it holds). Default 30 days.
+    pub conflict_copy_keep_ms: u64,
 }
 
 const DAY: u64 = 24 * 60 * 60_000;
@@ -129,6 +163,18 @@ impl Default for Config {
             editor_window_ms: 30_000,
             idle_leave_ms: 60_000,
             away_after_ms: 60_000,
+            claim_default_ms: 30_000,
+            claim_max_ms: 10 * 60_000,
+            for_edit_ms: 30_000,
+            claims_max: 256,
+            claims_per_participant: 16,
+            claim_waiters_max: 64,
+            claim_handoff_ms: 2_000,
+            note_edit_window_ms: 60_000,
+            note_repeat_ms: 60_000,
+            note_interval_ms: 5_000,
+            note_batch_max: 5,
+            activity_max: 256,
             read_bases_max: 64,
             read_base_ttl_ms: 30 * 60_000,
             read_bases_max_bytes: 16 << 20,
@@ -165,6 +211,7 @@ impl Default for Config {
             lease_max_ms: 60 * 60_000,
             lease_auto_ms: 2 * 60_000,
             blob_merge_max_bytes: 32 << 20,
+            conflict_copy_keep_ms: 30 * DAY,
         }
     }
 }

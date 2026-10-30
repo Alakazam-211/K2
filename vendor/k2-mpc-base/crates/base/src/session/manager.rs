@@ -62,6 +62,10 @@ pub struct TickReport {
     pub versions_thinned: usize,
     /// Revert records that left the revert window (K-HIST-23), over every doc.
     pub reverts_dropped: u64,
+    /// Tier 0: conflict copies deleted after [`super::Config::conflict_copy_keep_ms`]
+    /// (K-A11Y-5): only copies the kit recorded, still holding exactly their version's
+    /// bytes, whose version isn't named.
+    pub conflict_copies_removed: Vec<(DocKey, PathBuf)>,
 }
 
 struct Pool {
@@ -269,8 +273,8 @@ impl SessionManager {
         }
         for (k, s) in self.loaded_blobs()? {
             match s.tick() {
-                Ok((check, written, expired)) => {
-                    match check {
+                Ok(t) => {
+                    match t.check {
                         Some(DiskCheck::Ingested { version } | DiskCheck::Merged { version }) => {
                             rep.ingested.push((k.clone(), version))
                         }
@@ -280,10 +284,13 @@ impl SessionManager {
                         }
                         _ => {}
                     }
-                    if written {
+                    if t.written {
                         rep.written.push(k.clone());
                     }
-                    if let Some(pid) = expired {
+                    for p in t.copies_removed {
+                        rep.conflict_copies_removed.push((k.clone(), p));
+                    }
+                    if let Some(pid) = t.expired {
                         rep.leases_expired.push((k, pid));
                     }
                 }

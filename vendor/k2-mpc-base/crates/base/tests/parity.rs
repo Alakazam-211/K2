@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use k2_mpc_base::parity::{
-    self, Case, Failure, Output, ParityRow, PersonAction, Registry, RowStatus, Step,
+    self, Case, Failure, Output, ParityRow, PersonAction, Registry, RowStatus, Step, Tier,
 };
 use k2_mpc_base::session::{Pack, TextFilePack};
 
@@ -23,13 +23,13 @@ fn row(a: PersonAction) -> ParityRow {
         P::ReadAll => ParityRow::live(a, &["cat", "wc"]),
         P::ViewRange => ParityRow::live(a, &["head", "tail", "sed", "view"]),
         P::Find => ParityRow::live(a, &["grep"]),
-        P::Who => ParityRow::live(a, &["who"]),
+        P::Who => ParityRow::live(a, &["who", "activity"]),
         P::Follow => ParityRow::live(a, &["follow"]),
-        P::Caret => ParityRow::live_but(a, &["cursor"], &["intent"]),
+        P::Caret => ParityRow::live(a, &["cursor", "claim", "claim --renew", "claim --release"]),
         P::Type => ParityRow::live(a, &["insert"]),
         P::TypeOver => ParityRow::live(a, &["replace"]),
         P::Delete => ParityRow::live(a, &["delete", "sed -i"]),
-        P::FindReplace => ParityRow::live(a, &["sed -i"]),
+        P::FindReplace => ParityRow::live(a, &["sed -i", "replace"]),
         P::Paste => ParityRow::live(a, &["patch", "apply", "append"]),
         P::Rewrite => ParityRow::live(a, &["write"]),
         P::Format => ParityRow::live(a, &["insert", "replace", "sed -i"]),
@@ -61,11 +61,19 @@ fn row(a: PersonAction) -> ParityRow {
         P::Approve => ParityRow::live(a, &["approve", "decline"]),
         P::Pending => ParityRow::live(a, &["log --pending"]),
         P::Revert => ParityRow::live(a, &["revert"]),
+        // tier 0 only: a text doc merges; the text list has no rows for these
+        P::Lease | P::ReleaseLease | P::BreakLease => ParityRow::not_applicable(
+            a,
+            &[],
+            &["lease", "lease --renew", "lease --release", "lease --break"],
+            "text docs merge; leases are tier 0's",
+        ),
     }
 }
 
+/// The text actions' rows (P1-P31).
 fn rows() -> Vec<ParityRow> {
-    PersonAction::ALL.iter().map(|a| row(*a)).collect()
+    PersonAction::for_tier(Tier::Text).map(row).collect()
 }
 
 #[test]
@@ -294,4 +302,52 @@ fn a_landed_deferred_verb_fails() {
 #[test]
 fn output_value_is_debug() {
     assert_eq!(Output::value(3), Output::Value("3".into()));
+}
+
+/// Tier-aware: a text list needs no rows for tier-0 actions (the leases), but may carry them;
+/// a live lease row in a text list fails (the text registry has no lease verbs), and the
+/// text harness refuses a tier-0 registry.
+#[test]
+fn a_text_list_needs_no_tier0_rows() {
+    let f = parity::check_list(&rows(), &Registry::kit(), &[]);
+    assert!(f.is_empty(), "{}", parity::render(&f));
+    assert!(!rows().iter().any(|r| r.action == PersonAction::Lease));
+    // every row, the N/A lease rows too, is still consistent
+    let all: Vec<ParityRow> = PersonAction::ALL.iter().map(|a| row(*a)).collect();
+    let f = parity::check_list(&all, &Registry::kit(), &[]);
+    assert!(f.is_empty(), "{}", parity::render(&f));
+    // a text action's row is still required
+    let mut r = rows();
+    r.retain(|x| x.action != PersonAction::Revert);
+    assert_eq!(
+        parity::check_list(&r, &Registry::kit(), &[]),
+        vec![
+            Failure::MissingRow(PersonAction::Revert),
+            Failure::VerbNotListed {
+                action: PersonAction::Revert,
+                verb: "revert".into()
+            }
+        ]
+    );
+    // a text list claiming the lease live fails
+    let mut r = rows();
+    r.push(ParityRow::live(PersonAction::Lease, &["lease"]));
+    let f = parity::check_list(&r, &Registry::kit(), &[]);
+    assert!(
+        f.contains(&Failure::MissingVerb {
+            action: PersonAction::Lease,
+            verb: "lease".into(),
+            at: "parity list"
+        }),
+        "{}",
+        parity::render(&f)
+    );
+    // the text harness refuses a tier-0 registry
+    let f = parity::check_list(&rows(), &Registry::for_tier(Tier::Blob), &[]);
+    assert!(
+        matches!(&f[..], [Failure::Registry(m)] if m.contains("Blob")),
+        "{}",
+        parity::render(&f)
+    );
+    assert!(parity::check(pack(), &rows(), &Registry::for_tier(Tier::Blob), &[]).is_err());
 }

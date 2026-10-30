@@ -348,6 +348,180 @@ fn p8_person_reader(p: &mut Person<'_>) -> R {
     )
 }
 
+// ---------- amendment 13: agent presence (P4 --for-edit, P6 activity, P8 claims) ----------
+
+/// Lines 5-8 for 30 s (the default `--for-edit` TTL), with a view: what a tab does when a
+/// person says "I'm about to edit this".
+fn p4_for_edit_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    let root = p.root().to_owned();
+    let text = p.text()?;
+    let r = LineRange {
+        root,
+        first: 5,
+        last: 8,
+    };
+    p.session()
+        .set_view(c, r.clone())
+        .map_err(|e| e.to_string())?;
+    person_step(p.session().claim(c, r, Some(30_000), None, false), |_| {
+        Output::Text(lines(&text, 5, 8))
+    })
+}
+fn p4_for_edit_agent(a: &mut Agent<'_>) -> R {
+    agent_step(
+        a.verb(&["view", "--lines", "5,8", "--for-edit"], b"")?,
+        stdout_text,
+    )
+}
+
+/// Sam edits the intro, then the activity tail is read.
+fn activity_rows(rows: &[crate::session::ActivityEntry]) -> Output {
+    Output::Value(
+        rows.iter()
+            .map(|r| {
+                format!(
+                    "{} {} {} {:?}",
+                    r.pid,
+                    r.kind.as_str(),
+                    r.verb,
+                    r.lines.as_ref().map(|l| (l.first, l.last))
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+fn p6_activity_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    person_step(p.session().activity(c, 10), |r| activity_rows(&r))
+}
+fn p6_activity_agent(a: &mut Agent<'_>) -> R {
+    agent_step(a.verb(&["activity", "-n", "10"], b"")?, |o| {
+        match &o.value {
+            VerbValue::Activity(r) => activity_rows(r),
+            v => Output::value(v),
+        }
+    })
+}
+
+fn claim_lines(c: &crate::session::ClaimInfo) -> Output {
+    Output::Value(format!(
+        "lines {}-{} hold {} note {:?}",
+        c.lines.first, c.lines.last, c.hold, c.note
+    ))
+}
+fn claim_out(o: &VerbOut) -> Output {
+    match &o.value {
+        VerbValue::Claim(c) => claim_lines(c),
+        VerbValue::ClaimsReleased(r) => Output::Value(format!("released {}", r.len())),
+        v => Output::value(v),
+    }
+}
+fn person_claim(
+    p: &mut Person<'_>,
+    first: usize,
+    last: usize,
+    ttl: Option<u64>,
+    note: Option<&str>,
+) -> Result<Result<crate::session::ClaimInfo, SessionError>, String> {
+    let c = p.conn()?;
+    let root = p.root().to_owned();
+    Ok(p.session().claim(
+        c,
+        LineRange { root, first, last },
+        ttl,
+        note.map(str::to_owned),
+        false,
+    ))
+}
+fn p8_claim_person(p: &mut Person<'_>) -> R {
+    person_step(
+        person_claim(p, 5, 8, Some(60_000), Some("tidying goals"))?,
+        |c| claim_lines(&c),
+    )
+}
+fn p8_claim_agent(a: &mut Agent<'_>) -> R {
+    agent_step(
+        a.verb(
+            &[
+                "claim",
+                "--lines",
+                "5,8",
+                "--ttl",
+                "60000",
+                "--note",
+                "tidying goals",
+            ],
+            b"",
+        )?,
+        claim_out,
+    )
+}
+fn p8_renew_person(p: &mut Person<'_>) -> R {
+    person_claim(p, 5, 8, None, None)?.map_err(|e| e.to_string())?;
+    let c = p.conn()?;
+    person_step(
+        p.session().renew_claim(c, None, Some(120_000), Some(true)),
+        |c| claim_lines(&c),
+    )
+}
+fn p8_renew_agent(a: &mut Agent<'_>) -> R {
+    a.verb(&["claim", "--lines", "5,8"], b"")?;
+    agent_step(
+        a.verb(&["claim", "--renew", "--ttl", "120000", "--hold"], b"")?,
+        claim_out,
+    )
+}
+fn p8_release_person(p: &mut Person<'_>) -> R {
+    person_claim(p, 5, 8, None, None)?.map_err(|e| e.to_string())?;
+    let c = p.conn()?;
+    person_step(p.session().release_claim(c, None), |r| {
+        Output::Value(format!("released {}", r.len()))
+    })
+}
+fn p8_release_agent(a: &mut Agent<'_>) -> R {
+    a.verb(&["claim", "--lines", "5,8"], b"")?;
+    agent_step(a.verb(&["claim", "--release"], b"")?, claim_out)
+}
+fn p8_release_none_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    Ok(match p.session().release_claim(c, None) {
+        Ok(r) if r.is_empty() => Step::exit(1, Output::Value("released 0".into())),
+        Ok(r) => Step::ok(Output::Value(format!("released {}", r.len()))),
+        Err(e) => Step::exit(session_exit(&e), Output::None),
+    })
+}
+fn p8_release_none_agent(a: &mut Agent<'_>) -> R {
+    agent_step(a.verb(&["claim", "--release"], b"")?, claim_out)
+}
+/// Sam (an agent) has claimed lines 6-7.
+fn sam_claims_6_7(stage: &mut Stage) -> Result<(), String> {
+    let c = stage.other("sam", ParticipantKind::Agent)?;
+    let root = stage.root().to_owned();
+    stage
+        .session()
+        .claim(
+            c,
+            LineRange {
+                root,
+                first: 6,
+                last: 7,
+            },
+            Some(60_000),
+            Some("mine".into()),
+            false,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+fn p8_claimed_person(p: &mut Person<'_>) -> R {
+    person_step(person_claim(p, 5, 8, None, None)?, |c| claim_lines(&c))
+}
+fn p8_claimed_agent(a: &mut Agent<'_>) -> R {
+    agent_step(a.verb(&["claim", "--lines", "5,8"], b"")?, claim_out)
+}
+
 // ---------- P9-P15: editing ----------
 
 fn p9_line_person(p: &mut Person<'_>) -> R {
@@ -426,6 +600,43 @@ fn p12_person(p: &mut Person<'_>) -> R {
 fn p12_agent(a: &mut Agent<'_>) -> R {
     agent_step(
         agent_tool(a, &["sed", "-i", "s/files/docs/g"], "")?,
+        tool_edit,
+    )
+}
+
+/// Find and replace with exact text: the dialog's "Replace" on its only match.
+fn p12_exact_agent(a: &mut Agent<'_>) -> R {
+    agent_step(
+        agent_tool(a, &["replace", "--old", "files", "--new", "docs"], "")?,
+        tool_edit,
+    )
+}
+/// "Replace all": both list items' "- " become "* ".
+fn p12_all_person(p: &mut Person<'_>) -> R {
+    person_step(p.edit_with(|t| t.replace("- ", "* ")), |r| {
+        Output::Value(r.as_ref().map_or_else(|| "no change".into(), edit_summary))
+    })
+}
+fn p12_all_agent(a: &mut Agent<'_>) -> R {
+    agent_step(
+        agent_tool(a, &["replace", "--old", "- ", "--new", "* ", "--all"], "")?,
+        tool_edit,
+    )
+}
+/// A two-line find (lines 7-8) replaced by one line, the find text on stdin.
+fn p12_lines_person(p: &mut Person<'_>) -> R {
+    person_step(
+        p.edit_with(|t| t.replace("- ship the core\n- keep", "- ship and keep")),
+        |r| Output::Value(r.as_ref().map_or_else(|| "no change".into(), edit_summary)),
+    )
+}
+fn p12_lines_agent(a: &mut Agent<'_>) -> R {
+    agent_step(
+        agent_tool(
+            a,
+            &["replace", "--old", "-", "--new", "- ship and keep"],
+            "- ship the core\n- keep",
+        )?,
         tool_edit,
     )
 }
@@ -1014,9 +1225,26 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
                 p4_sed_person,
                 p4_sed_agent,
             ),
+            c(
+                action,
+                "view",
+                "--for-edit: a view and a 30 s claim",
+                p4_for_edit_person,
+                p4_for_edit_agent,
+            ),
         ],
         P::Find => vec![c(action, "grep", "matching lines", p5_person, p5_agent)],
-        P::Who => vec![c(action, "who", "the roster", p6_person, p6_agent).setup(sam)],
+        P::Who => vec![
+            c(action, "who", "the roster", p6_person, p6_agent).setup(sam),
+            c(
+                action,
+                "activity",
+                "sam's edit in the activity tail",
+                p6_activity_person,
+                p6_activity_agent,
+            )
+            .setup(sam_edits_intro),
+        ],
         P::Follow => vec![c(action, "follow", "sam's caret", p7_person, p7_agent).setup(p7_setup)],
         P::Caret => vec![
             c(action, "cursor", "a caret", p8_person_caret, p8_agent_caret),
@@ -1035,6 +1263,42 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
                 p8_agent_caret,
             )
             .setup(p8_reader),
+            c(
+                action,
+                "claim",
+                "lines 5-8, a TTL and a note",
+                p8_claim_person,
+                p8_claim_agent,
+            ),
+            c(
+                action,
+                "claim",
+                "someone else's claim overlaps: 5",
+                p8_claimed_person,
+                p8_claimed_agent,
+            )
+            .setup(sam_claims_6_7),
+            c(
+                action,
+                "claim --renew",
+                "longer, held",
+                p8_renew_person,
+                p8_renew_agent,
+            ),
+            c(
+                action,
+                "claim --release",
+                "mine, gone",
+                p8_release_person,
+                p8_release_agent,
+            ),
+            c(
+                action,
+                "claim --release",
+                "none held: 1",
+                p8_release_none_person,
+                p8_release_none_agent,
+            ),
         ],
         P::Type => vec![
             c(action, "insert", "--line", p9_line_person, p9_line_agent),
@@ -1061,7 +1325,30 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
             c(action, "delete", "a line", p11_person, p11_delete_agent),
             c(action, "sed -i", "a,bd", p11_person, p11_sed_agent),
         ],
-        P::FindReplace => vec![c(action, "sed -i", "s///g", p12_person, p12_agent)],
+        P::FindReplace => vec![
+            c(action, "sed -i", "s///g", p12_person, p12_agent),
+            c(
+                action,
+                "replace",
+                "--old/--new (one match)",
+                p12_person,
+                p12_exact_agent,
+            ),
+            c(
+                action,
+                "replace",
+                "--old/--new --all",
+                p12_all_person,
+                p12_all_agent,
+            ),
+            c(
+                action,
+                "replace",
+                "--old from stdin, two lines",
+                p12_lines_person,
+                p12_lines_agent,
+            ),
+        ],
         P::Paste => vec![
             c(
                 action,
@@ -1298,6 +1585,8 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
         ],
         // not bound by the kit yet: the pack's list marks these deferred
         P::Annotate | P::Mention | P::Purge => Vec::new(),
+        // tier 0 only: `kit_blob_cases`
+        P::Lease | P::ReleaseLease | P::BreakLease => Vec::new(),
     }
 }
 

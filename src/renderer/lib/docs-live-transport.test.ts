@@ -31,8 +31,14 @@ class FakeSocket implements LiveSocket {
     this.sent.push(data)
   }
   close(code?: number, reason?: string): void {
+    if (this.readyState >= 2) return
     this.closedWith = { code, reason }
-    this.readyState = 3
+    this.readyState = 2
+    // As a browser does: the close event comes later.
+    queueMicrotask(() => {
+      this.readyState = 3
+      this.onclose?.({ code: code ?? 1005 })
+    })
   }
   /** The server side. */
   accept(): void {
@@ -54,12 +60,15 @@ class FakeSocket implements LiveSocket {
 function harness() {
   const sockets: FakeSocket[] = []
   const urls: Array<number | undefined> = []
+  /** At each dial: the states of the sockets dialled before it. */
+  const priorStates: number[][] = []
   const t = createLiveTransport({
     url: async (resume) => {
       urls.push(resume)
       return `ws://x/cli/docs/live?resume=${resume ?? ''}`
     },
     open: async (url) => {
+      priorStates.push(sockets.map((p) => p.readyState))
       const s = new FakeSocket(url)
       sockets.push(s)
       return s
@@ -69,7 +78,7 @@ function harness() {
   const closes: LiveClose[] = []
   t.onFrame((f) => frames.push(f))
   t.onClose((e) => closes.push(e))
-  return { t, sockets, urls, frames, closes }
+  return { t, sockets, urls, frames, closes, priorStates }
 }
 
 const welcome = (over: Record<string, unknown> = {}) => ({
@@ -194,15 +203,32 @@ describe('LiveTransport', () => {
     expect(first.s.sent).toEqual([])
   })
 
-  it('connect while a socket is open replaces it quietly', async () => {
+  it('connect while a socket is open replaces it: the old one has closed before the new one dials', async () => {
     const h = harness()
     const first = await connected(h)
     const second = await connected(h, 7)
     expect(first.s.closedWith).toEqual({ code: 1000, reason: 'left' })
+    expect(h.priorStates[1]).toEqual([3]) // never two live connections for one editor
     expect(h.closes).toEqual([])
     expect(h.t.open).toBe(true)
     second.s.frame({ type: 'ack', op: 1, version: 8, hunks: [] })
     expect(h.frames).toHaveLength(1)
+  })
+
+  it('a replaced socket that never reports its close holds the new dial for at most a second', async () => {
+    const h = harness()
+    const first = await connected(h)
+    first.s.close = (code?: number, reason?: string) => {
+      first.s.closedWith = { code, reason } // and never a close event
+    }
+    const started = Date.now()
+    const p = h.t.connect({ resume: 7, signal: new AbortController().signal })
+    while (h.sockets.length < 2) await new Promise((r) => setTimeout(r, 20))
+    expect(Date.now() - started).toBeGreaterThanOrEqual(900)
+    h.sockets[1].accept()
+    h.sockets[1].frame(welcome({ text: undefined, client: 40 }))
+    await expect(p).resolves.toMatchObject({ client: 40 })
+    expect(first.s.closedWith).toEqual({ code: 1000, reason: 'left' })
   })
 
   it('an abort rejects the attempt and closes its socket', async () => {

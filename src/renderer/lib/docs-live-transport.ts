@@ -22,6 +22,10 @@
 //     the daemon (or the network) ended: from the daemon's `closed` frame,
 //     else from the close code (4010: the core was switched off), else
 //     `network` (retry). Not for `close()`.
+//   - `connect()` while a socket is open (addendum 2: a refused snapshot
+//     makes the editor connect again) replaces it: the old socket closes
+//     and the new one dials only after its close (at most 1 s), so the
+//     daemon has left the old connection; never two for one editor.
 //   - `close()`: the tab is closing; the daemon leaves the doc.
 //   - Keepalive is the daemon's WS Ping (every 20 s); there is no app-level
 //     ping. Visibility rides `{"t":"viewing","visible"}` through `send`.
@@ -188,6 +192,9 @@ export interface LiveTransportOptions {
 }
 
 const OPEN = 1
+const CLOSED = 3
+/** How long a replaced socket gets to finish closing before the new dial. */
+const RETIRE_WAIT_MS = 1000
 /** The daemon's close code for a core switched off (PRD §6.1). */
 export const CLOSE_CORE_OFF = 4010
 
@@ -290,6 +297,28 @@ export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
     }
   }
 
+  /** Close `s` and wait (at most `RETIRE_WAIT_MS`) until it has closed, so
+   *  the daemon has left its connection before a new one joins (addendum 2:
+   *  never two live connections for one editor). */
+  function retire(s: LiveSocket): Promise<void> {
+    if (s.readyState === CLOSED) {
+      detach(s)
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(done, RETIRE_WAIT_MS)
+      function done(): void {
+        clearTimeout(timer)
+        s.onclose = null
+        s.onerror = null
+        resolve()
+      }
+      shut(s)
+      s.onclose = done
+      s.onerror = done
+    })
+  }
+
   function ended(s: LiveSocket, why: LiveClose): void {
     if (live !== s) return
     live = null
@@ -305,10 +334,12 @@ export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
 
     async connect({ resume, signal }) {
       if (sock) {
+        // A connect while a socket is open (or opening) replaces it: the
+        // old one closes, and the daemon leaves it, before the new one dials.
         const old = sock
         sock = null
         live = null
-        shut(old)
+        await retire(old)
       }
       if (signal.aborted) throw abortError()
       const url = await opts.url(resume)

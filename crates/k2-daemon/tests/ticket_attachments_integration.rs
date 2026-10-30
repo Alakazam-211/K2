@@ -224,7 +224,7 @@ async fn ticket_files_store_show_open_and_refuse() {
     let person_comment = v["commentId"].as_str().unwrap().to_string();
     let inject = k2_daemon::ticket_attachments::last_inject(&id).expect("the person's message was delivered");
     assert!(
-        inject.contains(&format!("Attached: {}", ws.path.join("out/b.png").display())),
+        inject.contains(&format!("Attached: {}", ws.path.join("out").join("b.png").display())),
         "the agent gets the absolute path: {inject}"
     );
     let shown = show(port, OWNER, &id).await;
@@ -464,7 +464,7 @@ async fn ticket_files_for_app_guests_and_members() {
     let guest_comment = r.json()["commentId"].as_str().unwrap().to_string();
     assert_eq!(r.json()["attachments"][0]["path"], "docs/pic.png", "{}", r.body);
     let inject = k2_daemon::ticket_attachments::last_inject(&id).expect("a guest's message reaches the agent");
-    assert!(inject.contains(&format!("Attached: {}", ws.path.join("docs/pic.png").display())), "{inject}");
+    assert!(inject.contains(&format!("Attached: {}", ws.path.join("docs").join("pic.png").display())), "{inject}");
     let r = get(port, "/cli/feedback/show", &scoped, &format!("id={id}")).await;
     assert!(!r.body.contains("Attached:") && !r.body.contains(&root_s), "{}", r.body);
     assert!(r.body.contains(&guest_comment), "{}", r.body);

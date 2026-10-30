@@ -179,9 +179,24 @@ pub(crate) fn with_attached_lines(text: &str, root: Option<&Path>, atts: &[Threa
         if !t.is_empty() {
             t.push('\n');
         }
-        t.push_str(&format!("Attached: {}", root.join(&a.path).display()));
+        t.push_str(&format!("Attached: {}", attached_path(root, &a.path).display()));
     }
     t
+}
+
+/// The absolute path of an attachment: the workspace root plus its stored
+/// path, which is always '/'-separated. On Windows each part is joined, so
+/// the line reads `C:\ws\out\a.png`, not `C:\ws\out/a.png`; elsewhere it is
+/// `root.join(rel)`, as before.
+pub(crate) fn attached_path(root: &Path, rel: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        rel.split('/').filter(|part| !part.is_empty()).fold(root.to_path_buf(), |p, part| p.join(part))
+    }
+    #[cfg(not(windows))]
+    {
+        root.join(rel)
+    }
 }
 
 /// The last payload injected into each ticket's agent (the newest 64
@@ -305,10 +320,26 @@ mod tests {
             line: None,
             line_end: None,
         };
-        let root = Path::new("/ws/sales");
-        assert_eq!(with_attached_lines("B", Some(root), std::slice::from_ref(&a)), "B\nAttached: /ws/sales/out/a.png");
-        assert_eq!(with_attached_lines("", Some(root), std::slice::from_ref(&a)), "Attached: /ws/sales/out/a.png");
+        #[cfg(not(windows))]
+        let (root, want) = (Path::new("/ws/sales"), "/ws/sales/out/a.png");
+        // One separator on Windows: the line names a real C:\ path.
+        #[cfg(windows)]
+        let (root, want) = (Path::new(r"C:\ws\sales"), r"C:\ws\sales\out\a.png");
+        assert_eq!(with_attached_lines("B", Some(root), std::slice::from_ref(&a)), format!("B\nAttached: {want}"));
+        assert_eq!(with_attached_lines("", Some(root), std::slice::from_ref(&a)), format!("Attached: {want}"));
         assert_eq!(with_attached_lines("B", None, std::slice::from_ref(&a)), "B");
+    }
+
+    #[test]
+    fn attached_paths_use_the_platform_separator() {
+        #[cfg(not(windows))]
+        assert_eq!(attached_path(Path::new("/ws"), "docs/sub/a.md"), Path::new("/ws/docs/sub/a.md"));
+        #[cfg(windows)]
+        {
+            let p = attached_path(Path::new(r"C:\ws"), "docs/sub/a.md");
+            assert_eq!(p.to_str(), Some(r"C:\ws\docs\sub\a.md"));
+            assert!(!p.to_string_lossy().contains('/'), "{}", p.display());
+        }
     }
 
     #[test]

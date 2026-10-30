@@ -1630,7 +1630,7 @@ fn handle_post(params: &HashMap<String, String>, session_author: &str) -> CliRes
                 if !t.is_empty() {
                     t.push('\n');
                 }
-                t.push_str(&format!("Attached: {}", root.join(&a.path).display()));
+                t.push_str(&format!("Attached: {}", crate::ticket_attachments::attached_path(root, &a.path).display()));
             }
             t
         }

@@ -726,6 +726,7 @@ pub const ROUTES: &[Route] = &[
     post("/cli/docs/approve", Member),
     get("/cli/docs/blame", Member),
     post("/cli/docs/claim", Member),
+    get("/cli/docs/cores", Member),
     post("/cli/docs/cursor", Member),
     get("/cli/docs/diff", Member),
     post("/cli/docs/edit", Member),

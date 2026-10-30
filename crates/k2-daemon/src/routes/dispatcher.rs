@@ -5800,10 +5800,20 @@ async fn handle_one_request(
                 state.token.as_str(),
             );
             let body_bytes = super::http::read_post_body(&mut *stream, &mut buf).await;
+            // MC-9: the audit names the person (`owner-token`, `user:anna`).
+            let by = super::http::actor_label(&query, state.token.as_str(), bearer_token.as_deref())
+                .unwrap_or_else(|| actor_audit_fallback(actor).to_string());
+            // Off the async runtime: turning a multiplayer core off writes
+            // its live docs back to disk before the answer.
+            let updated = tokio::task::spawn_blocking(move || {
+                crate::settings_routes::handle_settings_update_as(&body_bytes, actor, &by)
+            })
+            .await
+            .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             // TP4: the merged settings echo hides credentials from every
             // caller but the owner daemon token.
             let result = crate::settings_routes::redact_settings_response(
-                crate::settings_routes::handle_settings_update(&body_bytes, actor),
+                updated,
                 super::http::token_is_owner(&query, state.token.as_str()),
             );
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
@@ -5833,8 +5843,13 @@ async fn handle_one_request(
                 &query,
                 state.token.as_str(),
             );
+            let by = super::http::actor_label(&query, state.token.as_str(), bearer_token.as_deref())
+                .unwrap_or_else(|| actor_audit_fallback(actor).to_string());
+            let reset = tokio::task::spawn_blocking(move || crate::settings_routes::handle_settings_reset_as(actor, &by))
+                .await
+                .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             let result = crate::settings_routes::redact_settings_response(
-                crate::settings_routes::handle_settings_reset(actor),
+                reset,
                 super::http::token_is_owner(&query, state.token.as_str()),
             );
             super::http::send_response(&mut *stream, result.status, "application/json", &result.body)
@@ -15720,5 +15735,15 @@ mod keep_alive_consume_ratchet {
             arms_that_never_consume(&old),
             vec!["dispatcher.rs:1: \"/cli/power/status\" => {".to_string()]
         );
+    }
+}
+
+/// The settings audit's `user` when the credential has no label (never
+/// expected: `token_ok` passed).
+fn actor_audit_fallback(actor: crate::settings_routes::SettingsActor) -> &'static str {
+    match actor {
+        crate::settings_routes::SettingsActor::Owner => "owner",
+        crate::settings_routes::SettingsActor::Admin => "admin",
+        crate::settings_routes::SettingsActor::Member => "member",
     }
 }

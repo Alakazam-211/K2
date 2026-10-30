@@ -140,6 +140,11 @@ start_daemon() { # $1 = log name; rest = extra env
     [ "$phase" = "ready" ] || fail "daemon never reached ready"
     DTOKEN="$(cat "$SB/.k2/daemon.token")"
     BASE="http://127.0.0.1:$DPORT"
+    # Every multiplayer core is off on a fresh home (the docs runtime then
+    # never starts): the setup turns the three on through the owner's
+    # settings write (MC-11), so the core_off gate is exercised.
+    owner POST /cli/settings/update '{"multiplayerCores":{"markdown":true,"text":true,"any-file":true}}'
+    [ "$CODE" = 200 ] || fail "turning the multiplayer cores on: HTTP $CODE: $BODY"
     for _ in $(seq 1 100); do
         owner GET /cli/docs/status
         jcheck "$BODY" 'j.get("pool", {}).get("running")' && return 0

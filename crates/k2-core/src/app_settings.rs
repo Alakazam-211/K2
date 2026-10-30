@@ -811,6 +811,15 @@ pub struct AppSettings {
     /// Export workers running at once on this box (0 = the default, 2).
     #[serde(default)]
     pub docs_export_workers: u64,
+    /// Settings → Cores → Multiplayer (prd-multiplayer-cores-settings-v1
+    /// §2.1): which multiplayer cores are on for this box, by id
+    /// ([`crate::docs_cores::CORES`]), e.g. `{"markdown": true}`. **A missing
+    /// key is off**, so a box that updates starts with every core off. While
+    /// a core is off the daemon opens no live doc of that kind (`core_off`).
+    /// Owner or Admin to change ([`update`] refuses an unknown id or a
+    /// non-boolean); never an agent.
+    #[serde(default)]
+    pub multiplayer_cores: std::collections::BTreeMap<String, bool>,
     /// K2 Mail S2 (prd-email-server-v1 §11.1.2) — the GLOBAL default
     /// mail domain agents mint on when they don't name one. Stored in
     /// NORMALIZED form (lowercase punycode A-label; the write path
@@ -1285,6 +1294,7 @@ impl Default for AppSettings {
             docs_export_memory_mib: 0,
             docs_export_max_output_mib: 0,
             docs_export_workers: 0,
+            multiplayer_cores: std::collections::BTreeMap::new(),
             mail_default_domain: String::new(),
             mail_oauth_gmail_client_id: String::new(),
             mail_oauth_microsoft_client_id: String::new(),
@@ -1585,6 +1595,10 @@ pub fn update(mut partial: serde_json::Value) -> Result<AppSettings, String> {
         if v != &serde_json::Value::Bool(true) {
             return Err(GARDEN_ACCESS_ALWAYS_ON.to_string());
         }
+    }
+    // Settings → Cores → Multiplayer: known core ids, booleans only.
+    if let Some(v) = partial.get(crate::docs_cores::SETTING_KEY) {
+        crate::docs_cores::validate_partial(v)?;
     }
     if let Some(v) = partial.get("completionSound") {
         if !v.as_str().is_some_and(|name| COMPLETION_SOUNDS.contains(&name)) {
@@ -2356,6 +2370,37 @@ mod tests {
         let err = update(serde_json::json!({ "computePlacement": "v3" })).expect_err("v3 must be refused");
         assert!(err.contains("v1|v2"), "{err}");
         assert_eq!(load().compute_placement, "v1", "a refused write changes nothing");
+    }
+
+    /// Settings → Cores → Multiplayer: every core is off on a fresh box and
+    /// in an older file; known ids round-trip and merge per core; an unknown
+    /// id or a non-boolean is refused with nothing written (the file is read
+    /// back); reset turns every core off.
+    #[test]
+    fn multiplayer_cores_default_off_merge_per_core_and_refuse_bad_writes() {
+        let _g = TEST_LOCK.lock();
+        let _home = HomeGuard::new();
+        assert!(AppSettings::default().multiplayer_cores.is_empty(), "a fresh box: every core off");
+        ensure_dir();
+        fs::write(settings_file(), r#"{"computePreview": true}"#).unwrap();
+        let s = load();
+        for c in crate::docs_cores::CORES {
+            assert!(!crate::docs_cores::is_on(&s.multiplayer_cores, c.id), "an older file: {} off", c.id);
+        }
+        update(serde_json::json!({ "multiplayerCores": { "markdown": true } })).expect("markdown on");
+        let merged = update(serde_json::json!({ "multiplayerCores": { "text": true } })).expect("text on");
+        assert_eq!(merged.multiplayer_cores.get("markdown"), Some(&true), "one core per write; the others stay");
+        assert_eq!(merged.multiplayer_cores.get("text"), Some(&true));
+        let before = fs::read_to_string(settings_file()).unwrap();
+        let err = update(serde_json::json!({ "multiplayerCores": { "word": true }, "defaultAgent": "codex" }))
+            .expect_err("an unknown core");
+        assert_eq!(err, "multiplayerCores.word: no such core (markdown, text, any-file)");
+        let err = update(serde_json::json!({ "multiplayerCores": { "markdown": "off" } })).expect_err("not a bool");
+        assert!(err.contains("must be true or false"), "{err}");
+        let err = update(serde_json::json!({ "multiplayerCores": "markdown" })).expect_err("not an object");
+        assert!(err.contains("must be an object"), "{err}");
+        assert_eq!(fs::read_to_string(settings_file()).unwrap(), before, "a refused write changes nothing on disk");
+        assert!(reset().expect("reset").multiplayer_cores.is_empty(), "reset turns every core off");
     }
 
     #[test]

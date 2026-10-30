@@ -80,6 +80,11 @@ const REMOTE_ACCESS_KEYS: &[&str] = &[
     // text ride pushes (through K2's relay and Apple/Google). A Member must
     // not turn previews on (or off) for everyone's phones.
     "pushMessagePreviews",
+    // Settings → Cores → Multiplayer (prd-multiplayer-cores-settings-v1
+    // §2.2, MC-2): which multiplayer cores are on for everyone on this box.
+    // Owner or Admin; agents never reach this route (`token_ok`), and no
+    // `/cli/docs/*` route writes it.
+    "multiplayerCores",
 ];
 
 /// LM5 (prd-lan-mode-toggle-tls-docs-v1 §11) — keys only the Owner may
@@ -396,6 +401,13 @@ pub fn handle_settings_get_unredacted() -> CliResponse {
 /// guessing which keys landed. Other settings keys keep the pre-existing
 /// any-authenticated-user behavior.
 pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse {
+    handle_settings_update_as(body, actor, actor.audit_user())
+}
+
+/// [`handle_settings_update`] with the actor's label for the audit (MC-9):
+/// the dispatcher passes `routes::http::actor_label` (`owner-token`,
+/// `user:anna`), so a multiplayer core switch names the person.
+pub fn handle_settings_update_as(body: &[u8], actor: SettingsActor, by: &str) -> CliResponse {
     let partial: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return CliResponse::bad_request(format!("invalid JSON body: {e}")),
@@ -454,6 +466,7 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
     // best-effort append a one-line DNS-manage capability note (daemon
     // agent follow-up). Same hook as per-workspace `/cli/dns-manage`.
     let agent_hooks_touched = partial.get("agentHooks").is_some();
+    let cores_touched = partial.get(k2_core::docs_cores::SETTING_KEY).is_some();
     match k2_core::app_settings::update(partial) {
         Ok(merged) => {
             // Sync the federation master switch into the running process so the
@@ -488,15 +501,17 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
             if agent_hooks_touched {
                 crate::hook_install::request_run(crate::hook_install::Trigger::Setting);
             }
+            // Settings → Cores → Multiplayer (§6): the mirror, then a core
+            // turned off closes its live sessions (written back first), the
+            // audit names `by`, and every client hears of it. The answer
+            // waits for all of it.
+            let cores_report = crate::docs::cores::sync_multiplayer_cores(&merged.multiplayer_cores, by);
             // Local-window live-sync (v1): renderer listens on `sync:settings`.
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::SyncSettings,
                 serde_json::Value::Null,
             );
-            match serde_json::to_string(&merged) {
-                Ok(body) => CliResponse::ok_json(body),
-                Err(e) => CliResponse::bad_request(format!("serialize merged: {e}")),
-            }
+            settings_answer(&merged, (cores_touched || !cores_report.is_empty()).then_some(&cores_report))
         }
         Err(e) => CliResponse::bad_request(e),
     }
@@ -515,6 +530,11 @@ pub fn handle_settings_update(body: &[u8], actor: SettingsActor) -> CliResponse 
 /// re-opening the browser door, the tunnel login ingress, LAN and
 /// air-gap — so a non-Owner gets 403 with nothing changed.
 pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
+    handle_settings_reset_as(actor, actor.audit_user())
+}
+
+/// [`handle_settings_reset`] with the actor's label for the audit (MC-9).
+pub fn handle_settings_reset_as(actor: SettingsActor, by: &str) -> CliResponse {
     if actor != SettingsActor::Owner {
         return forbidden("resetting settings requires the Owner role".to_string());
     }
@@ -538,17 +558,37 @@ pub fn handle_settings_reset(actor: SettingsActor) -> CliResponse {
             k2_core::app_settings::set_api_enabled(defaults.api_enabled);
             k2_core::airgap::set_setting_enabled(defaults.airgap);
             k2_core::listen::set_setting_lan(defaults.listen_lan);
+            // Reset turns every multiplayer core off (their sessions close).
+            let cores_report = crate::docs::cores::sync_multiplayer_cores(&defaults.multiplayer_cores, by);
             k2_core::agent_hooks::emit(
                 k2_core::agent_hooks::HookEvent::SyncSettings,
                 serde_json::Value::Null,
             );
-            match serde_json::to_string(&defaults) {
-                Ok(body) => CliResponse::ok_json(body),
-                Err(e) => CliResponse::bad_request(format!("serialize defaults: {e}")),
-            }
+            settings_answer(&defaults, (!cores_report.is_empty()).then_some(&cores_report))
         }
         Err(e) => CliResponse::bad_request(e),
     }
+}
+
+/// The settings JSON a write answers with, plus `multiplayerCoresReport`
+/// (§2.2) when the write touched the cores or a core changed. A client that
+/// doesn't know the key ignores it.
+fn settings_answer(settings: &k2_core::app_settings::AppSettings, cores: Option<&crate::docs::cores::Report>) -> CliResponse {
+    let Some(r) = cores else {
+        // Byte for byte what every other write answers.
+        return match serde_json::to_string(settings) {
+            Ok(body) => CliResponse::ok_json(body),
+            Err(e) => CliResponse::bad_request(format!("serialize settings: {e}")),
+        };
+    };
+    let mut v = match serde_json::to_value(settings) {
+        Ok(v) => v,
+        Err(e) => return CliResponse::bad_request(format!("serialize settings: {e}")),
+    };
+    if let Some(o) = v.as_object_mut() {
+        o.insert("multiplayerCoresReport".into(), r.to_json());
+    }
+    CliResponse::ok_json(v.to_string())
 }
 
 /// The stored `computePlacement` as the ranking it names (anything but
@@ -1138,4 +1178,80 @@ mod tests {
             assert!(k2_core::app_settings::load().web_client_enabled, "owner reset restores defaults");
         });
     }
+
+    /// Settings → Cores → Multiplayer (§2.2, MC-2): the owner token and an
+    /// Admin login flip a core (persisted, the mirror follows, the answer
+    /// carries `multiplayerCoresReport`, the audit names the person); a
+    /// Member gets an atomic 403 with nothing written, also in a mixed
+    /// payload with an ungated key; an unknown core is refused and writes
+    /// nothing; reset turns every core off.
+    #[test]
+    fn multiplayer_cores_are_owner_or_admin_and_audited_by_name() {
+        let _m = crate::docs::cores::tests::mirror_lock();
+        with_temp_home(|| {
+            crate::docs::cores::tests::all_off();
+            let r = handle_settings_update_as(br#"{"multiplayerCores":{"markdown":true}}"#, SettingsActor::Owner, "owner-token");
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["multiplayerCores"], serde_json::json!({"markdown": true}));
+            assert_eq!(
+                v["multiplayerCoresReport"],
+                serde_json::json!({"changed": [{"core": "markdown", "on": true}], "closed": 0, "written": 0, "failed": [], "paths": []})
+            );
+            assert!(crate::docs::cores::is_on("markdown"), "the mirror follows the write");
+            assert!(k2_core::docs_cores::is_on(&k2_core::app_settings::load().multiplayer_cores, "markdown"), "persisted");
+
+            connect_users::add_user("anna", "password1").expect("add");
+            connect_users::set_role("anna", connect_users::Role::Admin).expect("admin");
+            let tok = connect_users::create_session("anna");
+            let admin = SettingsActor::from_query(&format!("token={tok}"), "ownertok");
+            assert_eq!(admin, SettingsActor::Admin);
+            let r = handle_settings_update_as(br#"{"multiplayerCores":{"text":true}}"#, admin, "user:anna");
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(crate::docs::cores::is_on("text"));
+            let line = k2_core::auth_audit::tail(1000)
+                .expect("audit")
+                .into_iter()
+                .filter(|e| e["event"] == "doc-core-switch")
+                .last()
+                .expect("a doc-core-switch line");
+            assert_eq!(line["user"], "user:anna", "the audit names the person, not the role");
+            assert_eq!(line["outcome"], "core=text on=true closed=0 written=0 failed=0");
+
+            connect_users::add_user("mo", "password1").expect("add mo");
+            let mtok = connect_users::create_session("mo");
+            let member = SettingsActor::from_query(&format!("token={mtok}"), "ownertok");
+            assert_eq!(member, SettingsActor::Member);
+            let file_before = k2_core::app_settings::load();
+            for body in [
+                r#"{"multiplayerCores":{"markdown":false}}"#,
+                r#"{"multiplayerCores":{"any-file":true},"defaultAgent":"codex"}"#,
+            ] {
+                let r = handle_settings_update_as(body.as_bytes(), member, "user:mo");
+                assert_eq!(r.status, "403 Forbidden", "{body}: {}", r.body);
+                assert!(r.body.contains(r#"updating \"multiplayerCores\" requires the Owner or Admin role"#), "{}", r.body);
+            }
+            let after = k2_core::app_settings::load();
+            assert_eq!(after.multiplayer_cores, file_before.multiplayer_cores, "a Member wrote nothing");
+            assert_eq!(after.default_agent, file_before.default_agent, "not even the ungated key");
+            assert!(crate::docs::cores::is_on("markdown") && !crate::docs::cores::is_on("any-file"));
+
+            let r = handle_settings_update_as(br#"{"multiplayerCores":{"word":true}}"#, SettingsActor::Owner, "owner-token");
+            assert!(r.status.starts_with("400"), "{}", r.body);
+            assert!(r.body.contains("multiplayerCores.word: no such core (markdown, text, any-file)"), "{}", r.body);
+
+            // An ordinary write answers exactly as before (no report key).
+            let r = handle_settings_update_as(br#"{"defaultAgent":"codex"}"#, SettingsActor::Owner, "owner-token");
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            assert!(!r.body.contains("multiplayerCoresReport"), "{}", r.body);
+
+            let r = handle_settings_reset_as(SettingsActor::Owner, "owner-token");
+            assert_eq!(r.status, "200 OK", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["multiplayerCoresReport"]["changed"].as_array().expect("changed").len(), 2, "{v}");
+            assert!(!crate::docs::cores::any_on(), "reset turns every core off");
+            crate::docs::cores::tests::all_off();
+        });
+    }
+
 }

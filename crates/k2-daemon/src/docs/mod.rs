@@ -13,6 +13,7 @@
 //! | [`caller`] | who is calling, and the participant K2 stamps for them (K2) |
 //! | [`target`] | workspace + path → a jailed doc key, and the deny list (K2) |
 //! | [`shares`] | cross-workspace shares on the kit's host table (MI25) |
+//! | [`cores`] | Settings → Cores → Multiplayer: the per-core switches, the `core_off` gate, turning a core on or off |
 //! | [`routes`] | `/cli/docs/*` (K2) |
 //! | [`tier0`] | the same routes on any other file: presence, a lease, versions and restore (tier 0) |
 //! | [`export`] | `k2 doc export`: the kit's export verb (P24), jobs, placement, audit |
@@ -36,6 +37,7 @@
 
 pub mod caller;
 pub mod claims;
+pub mod cores;
 pub mod export;
 pub mod export_worker;
 pub mod host;
@@ -123,6 +125,10 @@ pub enum Unavailable {
 impl Unavailable {
     pub fn message(&self) -> String {
         match self {
+            // Lazy start (MC-6): with every core off the runtime never starts.
+            Unavailable::NotStarted if !cores::any_on() => "live docs are off on this server: every multiplayer core is off. \
+                 The owner or an Admin turns one on in Settings → Cores → Multiplayer (k2 doc cores)"
+                .to_string(),
             Unavailable::NotStarted => "live docs are still starting".to_string(),
             Unavailable::Failed(e) => format!("live docs are off: the docs store failed to open ({e})"),
             Unavailable::Released => "this daemon handed off; the next one serves live docs".to_string(),
@@ -188,9 +194,13 @@ fn config() -> Config {
 }
 
 /// Open the store and start the session manager, its timer and the
-/// watcher. Called once at boot, on its own thread (the open waits for a
-/// handing-off predecessor).
+/// watcher. Called on its own thread (the open waits for a handing-off
+/// predecessor): at boot when a multiplayer core is on, and when one is
+/// turned on (`cores`). A no-op while running; starts are serialized, so a
+/// second caller never opens the store twice.
 pub fn start() {
+    static STARTING: Mutex<()> = Mutex::new(());
+    let _one = STARTING.lock().unwrap_or_else(|p| p.into_inner());
     {
         let s = slot().read().expect("docs slot");
         if matches!(*s, Slot::Running(_) | Slot::Released) {
@@ -370,6 +380,16 @@ impl Runtime {
                 self.watch.watch_k2_file(abs);
             }
             self.note_space(&key.space);
+        }
+    }
+
+    /// A session closed by a turn-off left: the watcher index and its
+    /// `.k2/` watch drop it now.
+    fn forget(&self, key: &DocKey) {
+        if let Some(p) = self.opened.lock().expect("docs opened set").remove(key) {
+            if key.path.starts_with(".k2/") {
+                self.watch.unwatch_k2_file(&p);
+            }
         }
     }
 

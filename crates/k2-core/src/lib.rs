@@ -238,6 +238,8 @@ pub mod fs_atomic;
 // Markdown multiplayer v1 (K1): where the live-docs store (the kit's
 // redb) lives, `~/.k2/docs.redb` or `K2_DOCS_REDB`.
 pub mod docs_store;
+// Settings → Cores → Multiplayer: the cores a box switches on or off.
+pub mod docs_cores;
 pub mod fs_commands;
 pub mod file_links;
 pub mod secret_paths;

@@ -243,12 +243,16 @@ impl Doc {
         }
         match routes::open(rt, t) {
             Ok(s) => Ok(Doc::Live(s)),
+            // The file's core is off (never a fallback to tier 0).
+            Err(routes::OpenError::CoreOff(r)) => Err(r),
             // A text file its pack refuses, or one stored as any-file, is tier 0.
-            Err(SessionError::Declined(_)) => super::tier0::open(rt, t).map(Doc::Blob),
-            Err(SessionError::PackMismatch { stored, .. }) if stored == k2_mpc_base::store::BLOB_DOC_PACK => {
+            Err(routes::OpenError::Session(SessionError::Declined(_))) => super::tier0::open(rt, t).map(Doc::Blob),
+            Err(routes::OpenError::Session(SessionError::PackMismatch { stored, .. }))
+                if stored == k2_mpc_base::store::BLOB_DOC_PACK =>
+            {
                 super::tier0::open(rt, t).map(Doc::Blob)
             }
-            Err(e) => Err(routes::session_error(&e)),
+            Err(routes::OpenError::Session(e)) => Err(routes::session_error(&e)),
         }
     }
 

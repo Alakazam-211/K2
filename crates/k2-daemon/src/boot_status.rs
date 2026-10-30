@@ -973,6 +973,13 @@ pub const FEATURE_ACTIVITY_LIVE_BUSY: &str = "activity-live-busy";
 /// store, `~/.k2/docs.redb`).
 pub const FEATURE_DOCS_MD: &str = "docs-md-v1";
 
+/// Settings → Cores → Multiplayer (prd-multiplayer-cores-settings-v1):
+/// `GET /cli/docs/cores`, the `multiplayerCores` settings key (Owner or
+/// Admin), and the `core_off` refusal. Always listed by a build that has
+/// it, so clients show the page and the CLI while every core is off (and
+/// `docs-md-v1` is then absent: the runtime starts only once a core is on).
+pub const FEATURE_DOCS_CORES: &str = "docs-cores-v1";
+
 /// `k2 doc export` (prd-k2-core-exports-v1, vs-live R9): `/cli/docs/export*`
 /// and the `k2-export` worker. Listed while live docs are up AND the worker
 /// resolved and passed its hello; without it `as-is` still runs in the
@@ -1107,6 +1114,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
     out.push(FEATURE_PUBLISH_DEV);
     out.push(FEATURE_SITE_VISIBILITY);
+    out.push(FEATURE_DOCS_CORES);
     if crate::docs::live_ready() {
         out.push(FEATURE_DOCS_MD);
         out.push(FEATURE_DOCS_LIVE);
@@ -1275,6 +1283,7 @@ mod tests {
                 "activity-live-busy",
                 "publish-dev-v1",
                 "site-visibility-v1",
+                "docs-cores-v1",
                 "thread-push-v1",
                 "push-previews-v1",
                 "push-e2e-v1",

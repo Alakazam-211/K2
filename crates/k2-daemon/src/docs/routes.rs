@@ -6,6 +6,7 @@
 //! | Route | Method | Right | Kit call | Parity |
 //! |---|---|---|---|---|
 //! | `/cli/docs/status` | GET | read (no path: pool stats) | `status` (with `disk`) | P17, P25 |
+//! | `/cli/docs/cores` | GET | any caller (read-only) | none: the per-core switches ([`super::cores`]) | Settings → Cores → Multiplayer |
 //! | `/cli/docs/flush` | POST | read | `flush` (write back now) | P17 |
 //! | `/cli/docs/tool` | POST | read or edit (per verb) | `run_tool`: cat head tail wc grep sed diff view, sed -i patch append insert replace delete | P3–P5, P9–P13 |
 //! | `/cli/docs/read` | GET | read | `join_shared` + `read` (+ `set_view` with `lines`) | P3, P4, P24 |
@@ -39,6 +40,12 @@
 //! absent) and `path` (workspace-relative, or absolute). An agent may add
 //! `onBehalfOf` (a person) to any verb (K-ID-10): its edits then carry that
 //! person and wait for their approval, without being held.
+//!
+//! **Multiplayer cores** ([`super::cores`]): every doc open of a file whose
+//! core is off (Markdown, text and code, any other file) is refused with
+//! `403 core_off` (exit 3), before the runtime, the rights or the kit are
+//! asked. The switches are written only through `/cli/settings/update`
+//! (Owner or Admin), never a docs route.
 //!
 //! Refusals use the comms shape `{"ok":false,"error":{"code","hint"}}` so
 //! the permission-card wrapper can teach them (`not_connected` →
@@ -122,7 +129,7 @@ const ROOT: &str = k2_mpc_markdown::ROOT;
 
 /// Every route, for the dispatcher arm and the tests.
 pub const ROUTES: &[&str] = &[
-    STATUS, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
+    STATUS, super::cores::CORES_ROUTE, READ, WHO, LOG, OPEN, LEAVE, VIEW, CURSOR, EDIT, WRITE, UNDO, REDO, APPROVE, APPROVALS, SHARES, SHARE,
     UNSHARE, FLUSH, TOOL, VERSIONS, SHOW, DIFF, RESTORE, NAME, REVERT, MV, BLAME, LEASE, CLAIM, ACTIVITY,
     super::export::EXPORT, super::export::TARGETS, super::export::STATUS, super::export::CANCEL, super::export::FETCH,
 ];
@@ -315,6 +322,10 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     if super::export::JOB_ROUTES.contains(&path) {
         return super::export::job_route(path, caller, &input);
     }
+    // Settings → Cores → Multiplayer: the switches (read-only, any caller).
+    if path == super::cores::CORES_ROUTE {
+        return super::cores::cores_route(caller);
+    }
     if path == STATUS && input.str("path").is_none_or(|p| p.trim().is_empty()) {
         return ok(json!({ "pool": super::pool_json() }));
     }
@@ -325,10 +336,9 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         Ok(p) => p,
         Err(r) => return r,
     };
-    let rt = match super::runtime() {
-        Ok(rt) => rt,
-        Err(u) => return refusal("503 Service Unavailable", "docs_unavailable", u.message()),
-    };
+    // The target first, then its core, then the runtime (MC-5): with every
+    // core off the runtime never starts, and a call says core_off, not
+    // "still starting".
     let target = match target::resolve(input.str("workspace").as_deref(), &input.str("path").unwrap_or_default(), caller.default_workspace()) {
         Ok(t) => t,
         Err(r) => {
@@ -338,6 +348,16 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
             }
             return r;
         }
+    };
+    if let Err(r) = super::cores::gate(&target) {
+        if path == super::export::EXPORT {
+            super::export::audit_early_refusal(Some(&target), &caller.pid(), &input, &r);
+        }
+        return r;
+    }
+    let rt = match super::runtime() {
+        Ok(rt) => rt,
+        Err(u) => return refusal("503 Service Unavailable", "docs_unavailable", u.message()),
     };
     let store = rt.store();
     let rights = match rights_or_refusal(caller, &target, input.str("workspace").as_deref(), store.as_deref()) {
@@ -372,18 +392,19 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     // answer; so is one already stored as a tier-0 doc (it stays one).
     let session = match open(&rt, &target) {
         Ok(s) => s,
-        Err(SessionError::Declined(d)) => {
+        Err(OpenError::CoreOff(r)) => return r,
+        Err(OpenError::Session(SessionError::Declined(d))) => {
             let why = super::tier0::Fallback { code: d.code.to_string(), message: d.message.clone() };
             return super::tier0::handle(path, &rt, &call, Some(&why));
         }
-        Err(SessionError::PackMismatch { stored, .. }) if stored == k2_mpc_base::store::BLOB_DOC_PACK => {
+        Err(OpenError::Session(SessionError::PackMismatch { stored, .. })) if stored == k2_mpc_base::store::BLOB_DOC_PACK => {
             let why = super::tier0::Fallback {
                 code: "stored_as_any_file".into(),
                 message: "it was opened as an any-file doc earlier (its text was refused then), and stays one".into(),
             };
             return super::tier0::handle(path, &rt, &call, Some(&why));
         }
-        Err(e) => return session_error(&e),
+        Err(e) => return e.into_response(),
     };
     if path == LEASE {
         return with_exit(
@@ -416,7 +437,7 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
         // idle and nobody held it): open again, once.
         Err(VerbError::Session(SessionError::Unloaded)) => match open(&rt, &target) {
             Ok(s) => (verb(path, &s, &call), s),
-            Err(e) => return session_error(&e),
+            Err(e) => return e.into_response(),
         },
         r => (r, session),
     };
@@ -591,16 +612,21 @@ fn rights_or_refusal(
 /// reconcile a stored one with edits made while it was closed. A loaded
 /// session is returned as is (its file is kept true by the watcher and the
 /// kit's stat backup, which also checks on every join).
-pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, SessionError> {
+///
+/// The file's multiplayer core must be on ([`super::cores::gate`], MC-4):
+/// checked first, so a loaded session of a core that was turned off is
+/// never handed out, on any path (the `Unloaded` retry, export's fallback).
+pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>, OpenError> {
+    super::cores::gate(t).map_err(OpenError::CoreOff)?;
     let key = t.key();
     if let Some(s) = rt.get(&key) {
         return Ok(s);
     }
     if rt.get_blob(&key).is_some() {
-        return Err(SessionError::PackMismatch {
+        return Err(OpenError::Session(SessionError::PackMismatch {
             stored: k2_mpc_base::store::BLOB_DOC_PACK.to_string(),
             pack: t.tier.pack().to_string(),
-        });
+        }));
     }
     let pack: Arc<dyn k2_mpc_base::session::Pack> = match t.tier {
         target::Tier::Text(_) => Arc::new(k2_mpc_text::TextPack::for_path(&t.rel).unwrap_or(k2_mpc_text::PACK)),
@@ -610,7 +636,24 @@ pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<Session>,
     if let Err(SessionError::Doc(DocError::Quarantined)) = &opened {
         log_debug!("[docs] WARN: {} is quarantined (kit v0.9.5): its stored history holds content the kit refuses; not loaded", host::key_label(&key));
     }
-    opened
+    opened.map_err(OpenError::Session)
+}
+
+/// Why [`open`] gave no session: the file's core is off (K2's own refusal,
+/// never the kit's `Declined`, which would send the file to tier 0), or the
+/// kit's error.
+pub(super) enum OpenError {
+    CoreOff(CliResponse),
+    Session(SessionError),
+}
+
+impl OpenError {
+    pub(super) fn into_response(self) -> CliResponse {
+        match self {
+            OpenError::CoreOff(r) => r,
+            OpenError::Session(e) => session_error(&e),
+        }
+    }
 }
 
 pub(super) enum VerbError {

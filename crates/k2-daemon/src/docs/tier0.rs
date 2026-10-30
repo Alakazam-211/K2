@@ -181,7 +181,11 @@ pub fn with_fallback(mut r: CliResponse, f: &Fallback) -> CliResponse {
 }
 
 /// Load the blob doc synced with its file (`open_blob_file`).
+/// The file's multiplayer core must be on (MC-4), checked first: keyed on
+/// the file's name, so a refused Markdown file served here still needs the
+/// Markdown core.
 pub(super) fn open(rt: &Arc<super::Runtime>, t: &Target) -> Result<Arc<BlobSession>, CliResponse> {
+    super::cores::gate(t)?;
     let key = t.key();
     if let Some(s) = rt.get_blob(&key) {
         return Ok(s);

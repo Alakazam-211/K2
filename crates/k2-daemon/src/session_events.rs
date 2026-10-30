@@ -727,6 +727,17 @@ pub enum SessionEvent {
     /// Wire: `{ "kind": "app_approvals_changed", "pending": number }`.
     AppApprovalsChanged { pending: u64 },
 
+    /// Settings → Cores → Multiplayer (prd-multiplayer-cores-settings-v1
+    /// §3, MC-8): a multiplayer core was turned on or off on this box, after
+    /// its live sessions closed. `cores` is every core's state now, `core`
+    /// and `on` the one that changed, `by` the person's display name.
+    /// APP-LEVEL: `sync:settings` reaches only local windows, so this is how
+    /// a client over K2 Connect (and the web client) learns of the flip.
+    ///
+    /// Wire: `{ "kind": "doc_cores_changed", "cores": {id: bool}, "core":
+    /// string, "on": bool, "by": string }`.
+    DocCoresChanged { cores: std::collections::BTreeMap<String, bool>, core: String, on: bool, by: String },
+
     /// prd-app-tickets-websocket-v1 (0.43.3) — one ticket changed. Emitted
     /// once per stored ticket mutation from `feedback_routes.rs`, next to
     /// the legacy hook (which keeps driving [`SessionEvent::FeedbackChanged`]
@@ -1139,6 +1150,7 @@ impl SessionEvent {
             SessionEvent::ProjectGroupsChanged { .. } => "project_groups_changed",
             SessionEvent::FeedbackChanged { .. } => "feedback_changed",
             SessionEvent::AppApprovalsChanged { .. } => "app_approvals_changed",
+            SessionEvent::DocCoresChanged { .. } => "doc_cores_changed",
             SessionEvent::TicketChanged { .. } => "ticket_changed",
             SessionEvent::MailChanged { .. } => "mail_changed",
             SessionEvent::SewChanged { .. } => "sew_changed",
@@ -2342,6 +2354,29 @@ mod tests {
         assert_eq!(json["kind"], "app_approvals_changed");
         assert_eq!(json["pending"], 3);
         assert_keys(&json, &["kind", "pending"]);
+    }
+
+    /// 0.46.7 FROZEN WIRE CONTRACT: `{ "kind": "doc_cores_changed", "cores":
+    /// {id: bool}, "core": string, "on": bool, "by": string }` (Settings →
+    /// Cores → Multiplayer, every client).
+    #[test]
+    fn doc_cores_changed_frozen_contract() {
+        let cores = [("markdown", false), ("text", false), ("any-file", false)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        let json = as_json(&SessionEvent::DocCoresChanged {
+            cores,
+            core: "markdown".into(),
+            on: false,
+            by: "Anna".into(),
+        });
+        assert_eq!(
+            json,
+            serde_json::json!({"kind": "doc_cores_changed", "cores": {"markdown": false, "text": false, "any-file": false},
+                               "core": "markdown", "on": false, "by": "Anna"})
+        );
+        assert_keys(&json, &["kind", "cores", "core", "on", "by"]);
     }
 
     /// K2 Mail FROZEN WIRE CONTRACT: `{ "kind": "mail_changed",

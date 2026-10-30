@@ -2061,6 +2061,19 @@ mod tests {
         }
     }
 
+    /// Multiplayer cores (prd-multiplayer-cores-settings-v1 MC-2): an agent
+    /// may read the switches (`GET /cli/docs/cores`) but its cell socket
+    /// never routes the write, `/cli/settings/update` with
+    /// `{"multiplayerCores": …}`, whatever the cards switch says.
+    #[test]
+    fn an_agent_reads_the_multiplayer_cores_but_never_writes_them() {
+        assert!(is_agent_verb("/cli/docs/cores"));
+        for on in [false, true] {
+            assert!(!is_agent_verb_when("/cli/settings/update", on));
+            assert!(!is_agent_verb_when("/cli/settings/reset", on));
+        }
+    }
+
     /// 0.46.5 (first-run review item 13): an agent reads `k2 git-tools`
     /// and may recheck; installing (Apple's dialog) stays the owner's.
     #[test]

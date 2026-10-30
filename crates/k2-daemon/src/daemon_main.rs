@@ -1528,10 +1528,12 @@ async fn async_main() {
     // FileTree. DB is ready above; projects_list() is live.
     fs_live::start();
     charter_compose_watch::start();
-    // Live docs (Markdown multiplayer v1, K1): open ~/.k2/docs.redb and
-    // start the session manager. Off the boot path: the open waits up to
-    // 5 s for a handing-off predecessor to let go of the file.
-    let _ = std::thread::Builder::new().name("k2-docs-open".into()).spawn(crate::docs::start);
+    // Live docs (Markdown multiplayer v1, K1): the multiplayer cores'
+    // switches from settings.json, then open ~/.k2/docs.redb and start the
+    // session manager ONLY if a core is on (MC-6: every core off, the
+    // default, opens nothing). Off the boot path: the open waits up to 5 s
+    // for a handing-off predecessor to let go of the file.
+    crate::docs::cores::boot();
     // 0.46.5 S0, once per install: a widget's version now covers its
     // manifest, so every hash changes; carry each signature to the new hash
     // (and rewrite old-shape saved copies) before anything reads them.

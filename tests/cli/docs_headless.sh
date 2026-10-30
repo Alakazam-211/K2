@@ -8,6 +8,11 @@
 # the rights matrix (own / connected-only / shared-read /
 # shared-write+history / unshared, MI25), history (K-PERM-9), on-behalf
 # edits and approvals (K-ID-10/11), POST guards, and the passport allowlist.
+# Multiplayer cores (prd-multiplayer-cores-settings-v1): the daemon starts
+# with every core off (no store, every verb refused with core_off), the
+# setup turns the three cores on through /cli/settings/update (MC-11), and
+# turning a core off writes back and closes its docs, including a failed
+# write-back that is kept and written once the core is on again.
 #
 #   cargo build -p k2-daemon && bash tests/cli/docs_headless.sh
 #   bash tests/cli/docs_headless.sh --build   (builds first)
@@ -117,13 +122,22 @@ start_daemon() { # $1 = log name; rest = extra env
     [ "$phase" = "ready" ] || fail "daemon never reached ready"
     DTOKEN="$(cat "$SB/.k2/daemon.token")"
     BASE="http://127.0.0.1:$DPORT"
-    # The docs store opens off the boot path; wait for it.
+    # Every multiplayer core off (a fresh home): the docs runtime never starts.
+    [ "${NO_DOCS_WAIT:-0}" = 1 ] || wait_docs
+}
+# The docs store opens off the boot path (once a core is on); wait for it.
+wait_docs() {
     for _ in $(seq 1 100); do
         owner GET /cli/docs/status
         jcheck "$BODY" 'j.get("pool", {}).get("running")' && return 0
         sleep 0.1
     done
     fail "docs runtime never started: $BODY"
+}
+# cores_set <json map> → the owner turns cores on or off (Settings' write).
+cores_set() {
+    owner POST /cli/settings/update "{\"multiplayerCores\": $1}"
+    want 200 "multiplayerCores $1"
 }
 
 echo "== daemon =="
@@ -149,13 +163,15 @@ chmod +x "$SB/shim/claude"
 # 32 MiB); 4 MiB still moves a 3 MiB file, past any argv limit.
 T0_CAP=4
 export K2_DOCS_BLOB_MAX_MIB=$T0_CAP
-start_daemon daemon1.log
+NO_DOCS_WAIT=1 start_daemon daemon1.log
 ok "sandbox daemon ready ($DAEMON_BIN)"
-[ -f "$SB/.k2/docs.redb" ] || fail "no ~/.k2/docs.redb in the sandbox home"
-ok "docs store at ~/.k2/docs.redb"
-jok "$BODY" 'j["pool"]["budgetBytes"] == 256 * 1024 * 1024 and j["pool"]["diskSync"] is True' "pool: 256 MiB budget, disk sync on"
+sleep 1
+[ ! -e "$SB/.k2/docs.redb" ] || fail "every core is off, yet ~/.k2/docs.redb was created"
+ok "every core off at boot: no docs store opened (MC-6)"
+owner GET /cli/docs/status
+jok "$BODY" 'j["pool"]["running"] is False and "every multiplayer core is off" in j["pool"]["error"]' "pool: not running, and says why"
 features="$(curl -s "$BASE/boot-status?token=$DTOKEN")"
-jok "$features" '"docs-md-v1" in j.get("features", [])' "docs-md-v1 advertised"
+jok "$features" '"docs-cores-v1" in j["features"] and "docs-md-v1" not in j["features"]' "docs-cores-v1 always; docs-md-v1 only once a core is on"
 
 echo "== workspaces + agent passport =="
 A="$WORK/alpha"; B="$WORK/beta"
@@ -212,6 +228,56 @@ doc_is() {
     done
     fail "$4: the doc holds $BODY, want $3"
 }
+
+echo "== multiplayer cores off: every verb refuses (core_off) =="
+printf 'png bytes\n' >"$A/notes/off.png"
+before_md="$(python3 -c 'import os,sys; s=os.stat(sys.argv[1]); print(open(sys.argv[1],"rb").read().hex(), s.st_mtime_ns)' "$A/notes/plan.md")"
+owner GET /cli/docs/cores
+want 200 "cores list"
+jok "$BODY" '[c["id"] for c in j["cores"]] == ["markdown", "text", "any-file"] and not any(c["on"] for c in j["cores"]) and j["canChange"] is True' "cores: three rows, all off; the owner may change them"
+agent GET /cli/docs/cores
+want 200 "agent cores list"
+jok "$BODY" 'j["canChange"] is False and len(j["cores"]) == 3' "an agent may read the cores, never change them"
+for rp in "GET /cli/docs/read" "GET /cli/docs/who" "GET /cli/docs/log" "GET /cli/docs/status" "POST /cli/docs/edit" "POST /cli/docs/open" "POST /cli/docs/flush" "POST /cli/docs/export"; do
+    m="${rp%% *}"; r="${rp#* }"
+    if [ "$m" = GET ]; then owner GET "$r" "" "workspace=$A&path=notes/plan.md"
+    else owner POST "$r" '{"path":"notes/plan.md","edits":[{"lines":"1,1","text":"x"}],"to":"as-is"}' "workspace=$A"; fi
+    want 403 "$rp while markdown is off"; code_is core_off "$rp"
+    jcheck "$BODY" 'j["error"]["core"] == "markdown" and j["error"]["path"] == "notes/plan.md" and j["error"]["exit"] == 3' || fail "$rp: core_off fields: $BODY"
+done
+ok "every docs verb on a .md file refuses with core_off (exit 3) while markdown is off"
+jok "$BODY" '"the Markdown core is off on this server" in j["error"]["hint"] and "k2 doc cores on markdown" in j["error"]["hint"]' "the refusal says which core and how to turn it on"
+owner GET /cli/docs/read "" "workspace=$A&path=notes/a.txt"; want 403 "txt off"; code_is core_off "txt off"
+jok "$BODY" 'j["error"]["core"] == "text"' "a .txt file needs the text core"
+owner GET /cli/docs/status "" "workspace=$A&path=notes/off.png"; want 403 "png off"; code_is core_off "png off"
+jok "$BODY" 'j["error"]["core"] == "any-file"' "a .png needs the any-file core"
+agent GET /cli/docs/read "" "path=home.md"; want 403 "agent read off"; code_is core_off "agent read off"
+ok "an agent's k2 doc is refused the same way"
+[ "$(python3 -c 'import os,sys; s=os.stat(sys.argv[1]); print(open(sys.argv[1],"rb").read().hex(), s.st_mtime_ns)' "$A/notes/plan.md")" = "$before_md" ] || fail "a refused call touched notes/plan.md"
+[ ! -e "$SB/.k2/docs.redb" ] || fail "a refused call opened the docs store"
+ok "nothing was opened or changed: the file's bytes and mtime are the same, no store"
+agent POST /cli/settings/update '{"multiplayerCores":{"markdown":true}}'
+[ "$CODE" != 200 ] || fail "an agent's passport wrote multiplayerCores on its cell socket: $BODY"
+owner GET /cli/docs/cores; jok "$BODY" 'not any(c["on"] for c in j["cores"])' "an agent can't turn a core on (its cell socket doesn't route settings/update)"
+owner POST /cli/settings/update '{"multiplayerCores":{"word":true}}'
+want 400 "unknown core"
+case "$BODY" in *"multiplayerCores.word: no such core (markdown, text, any-file)"*) ;; *) fail "unknown core refusal: $BODY" ;; esac
+ok "an unknown core is refused"
+rm -f "$A/notes/off.png"
+
+echo "== multiplayer cores on (the setup turns them on, MC-11) =="
+cores_set '{"markdown": true, "text": true, "any-file": true}'
+jok "$BODY" 'j["multiplayerCores"] == {"markdown": True, "text": True, "any-file": True} and sorted(c["core"] for c in j["multiplayerCoresReport"]["changed"]) == ["any-file", "markdown", "text"] and j["multiplayerCoresReport"]["closed"] == 0' "the owner turns the three cores on (report: three changes)"
+wait_docs
+[ -f "$SB/.k2/docs.redb" ] || fail "no ~/.k2/docs.redb in the sandbox home"
+ok "turning a core on starts the docs runtime: the store at ~/.k2/docs.redb"
+jok "$BODY" 'j["pool"]["budgetBytes"] == 256 * 1024 * 1024 and j["pool"]["diskSync"] is True' "pool: 256 MiB budget, disk sync on"
+for _ in $(seq 1 50); do
+    features="$(curl -s "$BASE/boot-status?token=$DTOKEN")"
+    jcheck "$features" '"docs-md-v1" in j.get("features", [])' && break
+    sleep 0.1
+done
+jok "$features" '"docs-md-v1" in j.get("features", []) and "docs-cores-v1" in j["features"]' "docs-md-v1 advertised within 5 s"
 
 echo "== owner: read, deny list, jail =="
 owner GET /cli/docs/read "" "workspace=$A&path=notes/plan.md"
@@ -923,6 +989,49 @@ CID="$(jq_ "$BODY" 'j["doc"]["workspace"]')"
 owner POST /cli/projects/delete "$(json id "$CID")"
 case "$CODE" in 200) ;; *) fail "remove gamma: HTTP $CODE $BODY" ;; esac
 ok "gamma: a tier-0 doc, then the workspace removed"
+
+echo "== turning a core off: written back, closed, refused; a failed write-back is kept =="
+mkdir -p "$A/ro"
+printf 'one\n' >"$A/ro/x.txt"
+owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"notes/a.txt","edits":[{"after":1,"text":"before off"}]}))')" "workspace=$A"
+want 200 "edit a.txt just before off"
+owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"ro/x.txt","edits":[{"after":1,"text":"kept"}]}))')" "workspace=$A"
+want 200 "edit ro/x.txt"
+file_is "$A/ro/x.txt" '"one\nkept\n"' "ro write-back"
+agent POST /cli/docs/claim '{"path":"notes/plan.md","lines":"1,1","ttlMs":60000}' "workspace=$A" || true
+chmod 555 "$A/ro"
+owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"ro/x.txt","edits":[{"after":2,"text":"while read-only"}]}))')" "workspace=$A"
+want 200 "edit ro/x.txt in a read-only folder"
+owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"notes/a.txt","edits":[{"after":2,"text":"last edit"}]}))')" "workspace=$A"
+want 200 "edit a.txt right before off"
+cores_set '{"text": false}'
+python3 -c 'import sys; t=open(sys.argv[1]).read(); sys.exit(0 if "last edit" in t and "before off" in t else 1)' "$A/notes/a.txt" \
+    || fail "the edit wasn't on disk when the answer came back: $(cat "$A/notes/a.txt")"
+ok "turning the text core off wrote a.txt's last edit before the answer"
+jok "$BODY" 'j["multiplayerCoresReport"]["changed"] == [{"core": "text", "on": False}] and j["multiplayerCoresReport"]["closed"] >= 2 and [f["path"] for f in j["multiplayerCoresReport"]["failed"]] == ["ro/x.txt"]' "the report: text off, its docs closed, ro/x.txt failed"
+chmod 755 "$A/ro"
+grep "\"doc-core-switch\"" "$audit" | grep -q "core=text on=false closed=" || fail "no doc-core-switch line in $audit"
+grep "\"doc-core-switch\"" "$audit" | grep "core=text on=false" | grep -q '"user":"owner-token"' || fail "the switch line doesn't name owner-token: $(grep doc-core-switch "$audit" | tail -1)"
+grep "\"doc-core-close-failed\"" "$audit" | grep -q "core=text path=ro/x.txt error=" || fail "no doc-core-close-failed line for ro/x.txt"
+ok "audit: doc-core-switch by owner-token, doc-core-close-failed for ro/x.txt"
+owner GET /cli/docs/cores
+jok "$BODY" '[c for c in j["cores"] if c["id"] == "text"][0]["lastChange"]["on"] is False and [f["path"] for f in [c for c in j["cores"] if c["id"] == "text"][0]["lastChange"]["failed"]] == ["ro/x.txt"]' "the read route keeps the failed write-back on the text row"
+owner GET /cli/docs/read "" "workspace=$A&path=notes/a.txt"; want 403 "read a.txt after off"; code_is core_off "read a.txt after off"
+agent GET /cli/docs/read "" "workspace=$A&path=notes/a.txt"; want 403 "agent read after off"; code_is core_off "agent read after off"
+ok "after off, the next call on a text file gets core_off (people and agents)"
+owner GET /cli/docs/read "" "workspace=$A&path=notes/plan.md"; want 200 "markdown still on"
+ok "the Markdown core is untouched"
+printf 'one\nkept\nedited while off\n' >"$A/ro/x.txt"
+cores_set '{"text": true}'
+jok "$BODY" 'j["multiplayerCoresReport"]["changed"] == [{"core": "text", "on": True}]' "text on again"
+owner GET /cli/docs/read "" "workspace=$A&path=ro/x.txt"; want 200 "read ro/x.txt after on"
+for _ in $(seq 1 80); do
+    python3 -c 'import sys; t=open(sys.argv[1]).read(); sys.exit(0 if "while read-only" in t and "edited while off" in t else 1)' "$A/ro/x.txt" && break
+    sleep 0.1
+done
+python3 -c 'import sys; t=open(sys.argv[1]).read(); sys.exit(0 if "while read-only" in t and "edited while off" in t else 1)' "$A/ro/x.txt" \
+    || fail "the kept change and the edit made while off aren't both in ro/x.txt: $(cat "$A/ro/x.txt")"
+ok "turned on again: the kept change is written and the edit made while off is merged in"
 
 echo "== restart (docs written back and released on stop, reconciled on open) =="
 owner POST /cli/docs/lease '{"path":"scan.jpg"}' "workspace=$B"

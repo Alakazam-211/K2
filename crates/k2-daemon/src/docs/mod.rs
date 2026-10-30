@@ -17,6 +17,8 @@
 //! | [`tier0`] | the same routes on any other file: presence, a lease, versions and restore (tier 0) |
 //! | [`export`] | `k2 doc export`: the kit's export verb (P24), jobs, placement, audit |
 //! | [`export_worker`] | the `k2-export` worker: which binary, its hello, limits, slots |
+//! | [`live`] | `WS /cli/docs/live`: the Live view's socket (plan L2), one person's tab joined to the kit's session |
+//! | [`live_wire`] | that socket's JSON frames |
 //!
 //! **Disk sync** (kit C4): every doc is opened with `open_file`, so the file
 //! on disk stays true. The kit writes changes back (1 s quiet, 5 s at most,
@@ -37,6 +39,8 @@ pub mod claims;
 pub mod export;
 pub mod export_worker;
 pub mod host;
+pub mod live;
+pub mod live_wire;
 pub mod routes;
 pub mod shares;
 pub mod target;

@@ -737,6 +737,9 @@ pub const ROUTES: &[Route] = &[
     post("/cli/docs/flush", Member),
     post("/cli/docs/lease", Member),
     post("/cli/docs/leave", Member),
+    // The Live view's socket (`docs/live.rs`): people only; agents and App
+    // passes are refused before the upgrade.
+    get("/cli/docs/live", Member),
     get("/cli/docs/log", Member),
     post("/cli/docs/mv", Member),
     post("/cli/docs/name", Member),

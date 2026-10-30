@@ -979,6 +979,10 @@ pub const FEATURE_DOCS_MD: &str = "docs-md-v1";
 /// daemon, but a client shouldn't offer other targets.
 pub const FEATURE_DOCS_EXPORT: &str = "docs-export-v1";
 
+/// The Live view's socket (plan L2): `WS /cli/docs/live` serves a person's
+/// tab on a live text doc (`docs/live.rs`). Listed with `docs-md-v1`.
+pub const FEATURE_DOCS_LIVE: &str = "docs-live-v1";
+
 /// Per-agent unread and ticket counts (0.46.4, Rosson 2026-10-24):
 /// `presence/summary` `agentActivity` entries carry the caller's `unread`,
 /// `waiting`, `muted` on that agent's Threads and the agent's
@@ -1105,6 +1109,7 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_SITE_VISIBILITY);
     if crate::docs::live_ready() {
         out.push(FEATURE_DOCS_MD);
+        out.push(FEATURE_DOCS_LIVE);
         if crate::docs::export_worker::ready() {
             out.push(FEATURE_DOCS_EXPORT);
         }

@@ -2354,6 +2354,25 @@ async fn handle_one_request(
         // lives on this machine; from a shell tab it is the person "via
         // terminal"); anything else 403. Refusals go out through
         // `send_response` so the permission wrapper can teach them (MI7).
+        // The Live view's socket (`docs/live.rs`, plan L2), before the docs
+        // family's HTTP arm. People only (the owner token or a Connect
+        // login, `?token=` before the upgrade, as every client socket); an
+        // App pass or an agent passport is refused before the upgrade.
+        p if p == crate::docs::live::LIVE_WS_PATH => {
+            let app_pass = super::http::extract_token(&query).is_some_and(k2_core::skin::is_skin_token);
+            let caller = crate::sidecar_routes::caller_from_tcp(p, &query, bearer_token.as_deref(), state.token.as_str());
+            match crate::docs::live::person_for(caller, app_pass) {
+                Ok(person) => {
+                    let params = super::http::parse_params(&path, &query);
+                    crate::docs::live::serve(stream, params, person).await;
+                }
+                Err(r) => {
+                    let _ = stream.read(&mut buf).await;
+                    super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+                }
+            }
+            return DispatchOutcome::Done;
+        }
         p if p.starts_with(crate::docs::routes::PREFIX) => {
             let presented = super::http::extract_token(&query);
             let passport = presented

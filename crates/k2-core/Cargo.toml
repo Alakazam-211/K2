@@ -70,6 +70,9 @@ time = { version = "0.3", features = ["std"] }
 # layout, keychain account session, perf, …). Re-exported at the old
 # `k2_core::<module>` paths; see crates/k2-client/src/lib.rs.
 k2-client = { path = "../k2-client" }
+# The Mobile tab's device stream as H.264 + its flow control (no crate deps;
+# VideoToolbox FFI on macOS).
+k2-simvideo = { path = "../k2-simvideo" }
 
 # Shared primitive deps.
 parking_lot = "0.12"

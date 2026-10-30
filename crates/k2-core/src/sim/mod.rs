@@ -35,6 +35,8 @@ pub mod manager;
 pub mod store;
 pub mod stream;
 pub mod tree;
+/// The stream as H.264 (VideoToolbox on macOS) and its flow control.
+pub use k2_simvideo as video;
 
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};

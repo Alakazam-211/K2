@@ -13,6 +13,8 @@ members = [
     "crates/k2-app-engine",
     "crates/k2-vault",
     "crates/k2-redact",
+    # The Mobile tab's device stream as video (VideoToolbox FFI, flow control).
+    "crates/k2-simvideo",
     "crates/k2-winsec",
     # The update-signing key list + verify (SS4); daemon and app link it.
     "crates/k2-release-keys",

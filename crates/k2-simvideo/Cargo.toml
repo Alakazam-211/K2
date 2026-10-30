@@ -1,0 +1,16 @@
+[package]
+name = "k2-simvideo"
+# Not the product version: release.sh doesn't bump this crate.
+version = "0.1.0"
+edition = "2021"
+license = "FSL-1.1-Apache-2.0"
+description = "The Mobile tab's device stream: H.264 encoding (VideoToolbox on macOS, platform API, no codec library), Annex B helpers, and the ack-window / rate flow control. No K2 dependencies and no crate dependencies."
+
+# No [dependencies] on purpose: VideoToolbox, CoreMedia, CoreVideo and
+# CoreFoundation are system frameworks called through hand-written FFI
+# (src/vt.rs), so nothing here adds a shipped licence.
+
+[dev-dependencies]
+# The before/after bench (examples/stream_bench.rs) measures the daemon's
+# own JPEG encoder next to H.264. Same version and features as k2-core.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

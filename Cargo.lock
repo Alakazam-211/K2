@@ -4146,6 +4146,7 @@ dependencies = [
  "k2-node-proto",
  "k2-ptyd",
  "k2-root-proto",
+ "k2-simvideo",
  "k2-winsec",
  "libc",
  "llama-cpp-2",
@@ -4382,6 +4383,13 @@ dependencies = [
  "sha1",
  "sha2 0.10.9",
  "toml 0.8.2",
+]
+
+[[package]]
+name = "k2-simvideo"
+version = "0.1.0"
+dependencies = [
+ "image",
 ]
 
 [[package]]

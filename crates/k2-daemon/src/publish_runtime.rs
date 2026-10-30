@@ -32,6 +32,10 @@ use k2_core::tunnel::subdomains;
 const LOG_CAP: u64 = 2 * 1024 * 1024;
 #[cfg(unix)]
 const KILL_GRACE: Duration = Duration::from_millis(400);
+/// Windows: how long a stop waits for the service's job to empty after
+/// TerminateJobObject before it reports the stop failed.
+#[cfg(windows)]
+const STOP_WAIT_CAP: Duration = Duration::from_secs(10);
 const DEFAULT_PROBE: Duration = Duration::from_millis(ps::PROBE_TIMEOUT_DEFAULT_MS);
 
 /// Current k2-daemon loopback port. Used to synthesize skin-gateway `--upstream`.
@@ -362,13 +366,24 @@ fn pid_alive(pid: i32) -> bool {
     }
 }
 
+/// [`kill_tree_checked`] for callers that only log: a Windows job still
+/// running at the cap is logged there and here.
 fn kill_tree(entry: &LiveChild) {
+    if let Err(e) = kill_tree_checked(entry) {
+        log_debug!("[publish] stop: {e}");
+    }
+}
+
+/// End the service and everything it started. `Err` (Windows only) when a
+/// process of its job is still running after [`STOP_WAIT_CAP`]: the caller
+/// must not report it stopped.
+fn kill_tree_checked(entry: &LiveChild) -> Result<(), String> {
     entry.stop_requested.store(true, Ordering::SeqCst);
     #[cfg(unix)]
     {
         let pid = entry.pid;
         if pid <= 0 {
-            return;
+            return Ok(());
         }
         unsafe {
             let pgid = libc::getpgid(pid);
@@ -394,7 +409,27 @@ fn kill_tree(entry: &LiveChild) {
     #[cfg(windows)]
     {
         if let Some(job) = entry.job.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-            job.terminate();
+            // TerminateJobObject only starts the end: wait until every
+            // process of the job has exited (its sockets closed), like
+            // killpg + wait on Unix, so an immediate start finds the port
+            // free and a label return sees the service down.
+            if let Err(left) = job.terminate_and_wait(STOP_WAIT_CAP) {
+                let lines = k2_core::win_proc::command_lines(&left);
+                let named: Vec<String> = left
+                    .iter()
+                    .map(|p| match lines.iter().find(|(q, _)| q == p) {
+                        Some((_, c)) => format!("{p} ({c})"),
+                        None => p.to_string(),
+                    })
+                    .collect();
+                let msg = format!(
+                    "still running {}s after the stop: {}",
+                    STOP_WAIT_CAP.as_secs(),
+                    named.join(", ")
+                );
+                log_debug!("[publish] stop pid {}: {msg}", entry.pid);
+                return Err(msg);
+            }
         } else {
             let killed_child = entry
                 .child
@@ -421,6 +456,7 @@ fn kill_tree(entry: &LiveChild) {
     {
         let _ = child.wait();
     }
+    Ok(())
 }
 
 fn enrich_path(cmd: &mut Command) {
@@ -1577,7 +1613,18 @@ pub fn stop(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
     let row = load_row(project_id, &name).ok_or_else(|| PublishError::bad("no such published service"))?;
     refuse_app_row(&row)?;
     if let Some(entry) = live_remove(project_id, &name) {
-        kill_tree(&entry);
+        if let Err(e) = kill_tree_checked(&entry) {
+            // Windows: part of it outlived the cap. The owner asked for a
+            // stop, so it isn't restarted; the pid stays on the row, so the
+            // next stop ends that tree by pid. Never reported as stopped.
+            {
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let _ = ps::set_desired(&conn, project_id, &name, DESIRED_STOPPED);
+            }
+            emit_changed(project_id);
+            return Err(PublishError::fail(format!("the stop didn't finish: {e}")));
+        }
     } else if let Some(pid) = row.pid.and_then(|p| i32::try_from(p).ok()) {
         // Reattached / unknown live pid: kill the group we own if pgid==pid.
         kill_pid_tree(pid);
@@ -2344,6 +2391,100 @@ pub(crate) mod win_job {
                     TerminateJobObject(self.0, 1);
                 }
             }
+        }
+
+        /// The pids of the processes in this job right now (an empty list
+        /// once every one has exited).
+        pub fn pids(&self) -> Vec<u32> {
+            if self.0.is_null() {
+                return Vec::new();
+            }
+            let mut list: Box<wait::PidList> = Box::new(unsafe { std::mem::zeroed() });
+            let mut ret = 0u32;
+            // SAFETY: a live job handle; the buffer is the size we pass. A
+            // full buffer still fills `listed` entries (ERROR_MORE_DATA).
+            unsafe {
+                wait::QueryInformationJobObject(
+                    self.0,
+                    wait::JOB_OBJECT_BASIC_PROCESS_ID_LIST,
+                    (&mut *list as *mut wait::PidList).cast(),
+                    std::mem::size_of::<wait::PidList>() as u32,
+                    &mut ret,
+                );
+            }
+            let n = (list.listed as usize).min(list.ids.len());
+            list.ids[..n].iter().map(|p| *p as u32).collect()
+        }
+
+        /// Terminate every process in the job and wait, up to `cap`, until
+        /// each has fully exited (a signalled process has closed its
+        /// handles, sockets included) and the job lists none. `Err` holds
+        /// the pids still running at the cap.
+        pub fn terminate_and_wait(&self, cap: std::time::Duration) -> Result<(), Vec<u32>> {
+            let deadline = std::time::Instant::now() + cap;
+            // Handles first, so a pid can't be reused under the wait.
+            let handles: Vec<(u32, *mut core::ffi::c_void)> = self
+                .pids()
+                .into_iter()
+                .filter_map(|pid| {
+                    let h = unsafe { OpenProcess(wait::SYNCHRONIZE, 0, pid) };
+                    (!h.is_null()).then_some((pid, h))
+                })
+                .collect();
+            self.terminate();
+            let mut left = Vec::new();
+            for (pid, h) in handles {
+                let ms = deadline.saturating_duration_since(std::time::Instant::now()).as_millis();
+                // SAFETY: a process handle we opened, closed once here.
+                let r = unsafe { wait::WaitForSingleObject(h, ms.min(u32::MAX as u128 - 1) as u32) };
+                unsafe { CloseHandle(h) };
+                if r != wait::WAIT_OBJECT_0 {
+                    left.push(pid);
+                }
+            }
+            // The job's own list (a process that joined after the first
+            // read, or one whose handle couldn't be opened).
+            loop {
+                let still = self.pids();
+                if still.is_empty() && left.is_empty() {
+                    return Ok(());
+                }
+                if std::time::Instant::now() >= deadline {
+                    for p in still {
+                        if !left.contains(&p) {
+                            left.push(p);
+                        }
+                    }
+                    return Err(left);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    }
+
+    /// Job membership and process waits, for a stop that waits.
+    mod wait {
+        pub const JOB_OBJECT_BASIC_PROCESS_ID_LIST: i32 = 3;
+        pub const SYNCHRONIZE: u32 = 0x0010_0000;
+        pub const WAIT_OBJECT_0: u32 = 0;
+
+        /// JOBOBJECT_BASIC_PROCESS_ID_LIST, room for 1024 pids.
+        #[repr(C)]
+        pub struct PidList {
+            pub assigned: u32,
+            pub listed: u32,
+            pub ids: [usize; 1024],
+        }
+
+        extern "system" {
+            pub fn QueryInformationJobObject(
+                job: *mut core::ffi::c_void,
+                class: i32,
+                info: *mut core::ffi::c_void,
+                len: u32,
+                ret: *mut u32,
+            ) -> i32;
+            pub fn WaitForSingleObject(h: *mut core::ffi::c_void, ms: u32) -> u32;
         }
     }
 
@@ -3603,5 +3744,31 @@ mod tests {
                 .stderr(Stdio::null());
             win_job::spawn_in_job(&mut cmd).expect("Job Objects are required on Windows");
         }
+    }
+
+    /// Windows: `terminate_and_wait` returns only once every process of
+    /// the job (cmd.exe and the grandchild it runs) has exited and the job
+    /// lists none.
+    #[cfg(windows)]
+    #[test]
+    fn a_job_is_empty_when_terminate_and_wait_returns() {
+        let mut cmd = Command::new("cmd.exe");
+        cmd.args(["/c", "ping", "-n", "30", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let (mut child, job) = win_job::spawn_in_job(&mut cmd).expect("spawn in a job");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while job.pids().len() < 2 {
+            assert!(Instant::now() < deadline, "ping never started under cmd.exe: {:?}", job.pids());
+            thread::sleep(Duration::from_millis(20));
+        }
+        let before = job.pids();
+        job.terminate_and_wait(Duration::from_secs(10)).expect("the job empties within the cap");
+        assert!(job.pids().is_empty(), "nothing left in the job");
+        for p in before {
+            assert!(!win_job::pid_alive(p), "pid {p} exited");
+        }
+        child.wait().expect("reap cmd.exe");
     }
 }

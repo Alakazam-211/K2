@@ -45668,8 +45668,9 @@ WHAT IT IS
   A text file in a workspace is a live doc: you, your human (in the
   file tab) and other agents edit it at once. Markdown, code, config,
   HTML/XML/SVG source, diagram sources, .txt and logs are live text, by
-  the file's name; .csv and .tsv too, as text (different rows and cells
-  merge; a sorted or moved row has no identity, so an edit to it
+  the file's name; .csv and .tsv too, as text (different rows merge; a
+  row is one line, so a write to a row someone else changed conflicts,
+  and a sorted or moved row has no identity, so an edit to it
   conflicts). Text the daemon can't edit live (not UTF-8, a NUL byte,
   mixed line endings, over 1 MiB for a log or 4 MiB otherwise) is an
   any-file doc instead, and k2 doc status says why. A file keeps its own
@@ -45697,9 +45698,12 @@ EDIT
                                                 (--all for every one; --old-file F)
   k2 doc patch notes.md < change.diff           all or nothing; exit 1 shows the rejects
   k2 doc write --base 42 notes.md < whole.md    you rewrote from v42: only YOUR changes
-                                                since v42 apply; overlaps are conflicts
-                                                (exit 1, nothing applied). --base live
-                                                overwrites others' edits: avoid it.
+                                                since v42 apply; a line someone else
+                                                also changed is a conflict (exit 1,
+                                                nothing applied; the error names the
+                                                lines, the current version and how
+                                                to retry). --base live overwrites
+                                                others' edits: avoid it.
   k2 doc undo notes.md                          reverts YOUR last edit only, never others'
   Each verb is one change. Others' edits made meanwhile are kept.
   Your edits are checked against the version you last read (cat, grep, a
@@ -83741,7 +83745,8 @@ other programs make). Every verb shows you in `k2 doc who`.
 
 Which files are live: Markdown (.md, .markdown) and any other text, by the
 file's name (code, config, HTML/XML/SVG source, diagram sources, .txt, logs,
-and .csv/.tsv as text: different rows and cells merge, a moved row doesn't).
+and .csv/.tsv as text: different rows merge; a row two writers changed, or a
+moved row, conflicts).
 Names without an extension count too (Makefile, Dockerfile, README), and an
 unknown name is live if its bytes are plain text. They take every verb below.
 Files that aren't text (images, media, office files, archives, binaries), and

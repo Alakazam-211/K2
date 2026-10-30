@@ -24,7 +24,7 @@ fi
 if grep -A30 'verb == "import"' "$K2" | grep -q 'cli_post_json'; then
     fail "import must not go through global cli_post_json (30s)"
 fi
-if ! grep -A12 '^cli_post_json()' "$K2" | grep -q -- '--max-time 30'; then
+if ! grep -A16 '^cli_post_json()' "$K2" | grep -q -- '--max-time 30'; then
     fail "cli_post_json must stay --max-time 30"
 fi
 if ! grep -q 'skipInbox' "$K2"; then

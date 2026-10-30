@@ -161,7 +161,7 @@ set -e
 out="$(k2 workspace design-mode set docs off 2>&1)" || bad "7: set exit non-zero: $out"
 got="$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print(r["path"], r["body"]["project"], json.dumps(r["body"]["fields"]))' "$(last_req)")"
 [ "$got" = '/cli/workspace/set /ws/docs {"design_mode_enabled": "0"}' ] && ok "7: set body" || bad "7: got [$got]"
-grep -qF 'Design mode off.' <<<"$out" && ok "7: set output" || bad "7: output: $out"
+grep -qF 'Design tab off.' <<<"$out" && ok "7: set output" || bad "7: output: $out"
 echo off > "$WORK/mode"
 [ "$(k2 workspace design-mode get docs 2>&1)" = "off" ] && ok "7: get off" || bad "7: get off"
 echo ok > "$WORK/mode"

@@ -8534,12 +8534,15 @@ See and run it:
   k2 app release <workspace> --apps handover:<ws>|uninstall|park [--drop-access]
                                        One way out for every App a workspace
                                        maintains (before k2 workspace remove).
+                                       park stops them and holds them for the
+                                       owner (k2 app unpark gives one back).
                                        uninstall is all or nothing: if any App
                                        would lose people's logins, grants,
                                        shared secrets or chat Spaces, nothing
-                                       is uninstalled and every such App is
-                                       listed (exit 3); --drop-access goes
-                                       ahead for all of them.
+                                       is uninstalled and each such App is
+                                       listed with its counts (exit 3);
+                                       --drop-access goes ahead for all of
+                                       them (with any other --apps: exit 2).
   k2 app config <app-id> [--memory 8G|512M|none] [--cpu-weight N] [--tasks N]
                  [--disk 2G] [--egress add|rm HOST:PORT] [--egress-mode allowlist|broad]
                  [--port add|rm 5000/udp] [--recycle-every 24h] [--recycle-at 85%]
@@ -39221,6 +39224,7 @@ cmd_workspace_remove() {
     local target_token="$target_path"
     if [ -z "$target_path" ]; then
         echo "Usage: k2 workspace remove <path> [--mode keep-current|restore-original]" >&2
+        echo "                           [--apps handover:<ws>|uninstall|park [--drop-access]]" >&2
         echo "" >&2
         echo "  --mode keep-current      Freeze the current SKILL.md body into each harness file so" >&2
         echo "                           every CLI LLM keeps working after K2 disconnects." >&2
@@ -39228,14 +39232,17 @@ cmd_workspace_remove() {
         echo "                           created fresh are removed. .k2/ stays intact for reconnect." >&2
         echo "  (no mode)                DB-only deregister; filesystem untouched (symlinks remain)." >&2
         echo "  --apps handover:<ws>|uninstall|park" >&2
-        echo "                           First release the Apps this workspace maintains (a" >&2
-        echo "                           workspace with Apps is never removed under them)." >&2
+        echo "                           First release the Apps this workspace maintains:" >&2
+        echo "                           hand them to another workspace, uninstall them, or" >&2
+        echo "                           park them (stopped, held for the owner). Without" >&2
+        echo "                           --apps, a workspace with Apps is refused (exit 1)." >&2
         echo "                           All or nothing: if the workspace can't be removed, or" >&2
         echo "                           an App would lose people's access (uninstall), no App" >&2
-        echo "                           is released and the reasons are listed (exit 3)." >&2
+        echo "                           is released and the reasons are listed, each App with" >&2
+        echo "                           its counts (exit 3)." >&2
         echo "  --drop-access            With --apps uninstall: uninstall even Apps whose users" >&2
         echo "                           would lose their logins, grants, shared secrets or" >&2
-        echo "                           chat Spaces." >&2
+        echo "                           chat Spaces. With any other --apps: exit 2." >&2
         exit 1
     fi
     # Resolve to absolute path

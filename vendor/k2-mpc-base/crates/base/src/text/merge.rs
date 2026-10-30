@@ -116,7 +116,10 @@ pub fn merge3_keep_both(base: &str, ours: &str, theirs: &str) -> Clean {
 /// deletions to whole lines (same texts; [`lines::align_deletions`]).
 pub fn outside_sides(base: &str, ours: &str, theirs: &str) -> (Vec<Hunk>, Vec<Hunk>) {
     let side = |new: &str| {
-        lines::align_deletions(base, lines::align_insertions(base, diff::hunks(base, new)))
+        lines::align_deletions(
+            base,
+            lines::align_insertions(base, diff::line_hunks(base, new)),
+        )
     };
     (side(ours), side(theirs))
 }

@@ -136,7 +136,7 @@ impl TypeRef {
                 encoder.write_var(id.client.get());
                 encoder.write_var(id.clock);
             }
-            IndexScope::Relative(id) => {
+            IndexScope::Relative(_) => {
                 // for single element id is the same as start so we can infer it
             }
             IndexScope::Nested(id) => {
@@ -227,16 +227,22 @@ impl std::fmt::Display for TypeRef {
 }
 
 /// Marks is weak ref is quotation spanning over multiple elements.
+#[cfg(feature = "weak")]
 const WEAK_REF_FLAGS_QUOTE: u8 = 0b0000_0001;
 /// Marks is start boundary of weak ref is [Assoc::After].
+#[cfg(feature = "weak")]
 const WEAK_REF_FLAGS_START_ASSOC: u8 = 0b0000_0010;
 /// Marks is end boundary of weak ref is [Assoc::After].
+#[cfg(feature = "weak")]
 const WEAK_REF_FLAGS_END_ASSOC: u8 = 0b0000_0100;
 /// Marks if start boundary of weak ref is unbounded.
+#[cfg(feature = "weak")]
 const WEAK_REF_FLAGS_START_UNBOUNDED: u8 = 0b0000_1000;
 /// Marks if end boundary of weak ref is unbounded.
+#[cfg(feature = "weak")]
 const WEAK_REF_FLAGS_END_UNBOUNDED: u8 = 0b0001_0000;
 /// Marks if weak ref references a root type. Only needed for both sides unbounded elements.
+#[cfg(feature = "weak")]
 const WEAK_REF_FLAGS_PARENT_ROOT: u8 = 0b0010_0000;
 
 impl Encode for TypeRef {
@@ -535,6 +541,7 @@ impl std::fmt::Display for Branch {
 #[derive(Debug)]
 pub(crate) struct Entries<'a, B, T> {
     iter: std::collections::hash_map::Iter<'a, Arc<str>, ItemPtr>,
+    #[allow(dead_code)] // never read: holds the transaction (or its borrow) while iterating
     txn: B,
     _marker: PhantomData<T>,
 }
@@ -908,7 +915,7 @@ impl<'a> Events<'a> {
         Events(events)
     }
 
-    pub fn iter(&self) -> EventsIter {
+    pub fn iter(&self) -> EventsIter<'_> {
         EventsIter(self.0.iter())
     }
 }

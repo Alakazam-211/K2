@@ -15,7 +15,7 @@ case ${1:?part: base-a, base-b, base-c, conformance, spec-undo or evidence} in
     for t in $C; do T=$(echo "$T" | grep -v -x "crates/base/tests/$t.rs"); done
     echo "$KIT" $T ;;
   # the evidence notes and their run records, checked (Python only; no cargo)
-  evidence) echo "tools/evidence docs/evidence" ;;
+  evidence) echo "tools/evidence docs/evidence tools/check-private.sh tools/private-allow.txt" ;;
   base-c) echo "$KIT_LIB" $(for t in $C; do printf ' crates/base/tests/%s.rs' "$t"; done) ;;
   base-b) echo "$KIT_LIB crates/base/tests/tier0.rs crates/base/tests/tier0_large.rs crates/base/tests/promote.rs crates/base/tests/parity.rs crates/base/tests/parity_blob.rs crates/base/tests/erasure.rs crates/base/tests/fixtures" ;;
   # without the kit's `differential` module (feature-gated; the suite never turns it on) and

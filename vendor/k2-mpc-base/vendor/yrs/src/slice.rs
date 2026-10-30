@@ -161,6 +161,7 @@ impl ItemSlice {
 
     /// Returns true when boundaries marked by the current [ItemSlice] match the boundaries
     /// of the underlying [ItemPtr].
+    #[cfg(feature = "weak")]
     pub fn adjacent(&self) -> bool {
         self.adjacent_left() && self.adjacent_right()
     }
@@ -173,14 +174,6 @@ impl ItemSlice {
     /// Checks if an underlying [Item] has been marked as countable.
     pub fn is_countable(&self) -> bool {
         self.ptr.is_countable()
-    }
-
-    /// Checks if provided `id` exists within the bounds described by current [ItemSlice].
-    pub fn contains_id(&self, id: &ID) -> bool {
-        let myself = self.ptr.id();
-        myself.client == id.client
-            && id.clock >= myself.clock + self.start
-            && id.clock <= myself.clock + self.end
     }
 
     pub fn encode<E: Encoder>(&self, encoder: &mut E) {
@@ -246,6 +239,7 @@ impl ItemSlice {
     ///
     /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
     /// then right slice returned by this method will be [8..10).
+    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
     pub fn right(&self) -> Option<ItemSlice> {
         let last_clock = self.ptr.len() - 1;
         if self.end == last_clock {
@@ -266,6 +260,7 @@ impl ItemSlice {
     ///
     /// If an underlying block is responsible for clock range of [0..10) and current slice is [2..8)
     /// then right slice returned by this method will be [0..2).
+    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
     pub fn left(&self) -> Option<ItemSlice> {
         if self.start == 0 {
             let item = self.ptr.deref();

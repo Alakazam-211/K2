@@ -1,4 +1,6 @@
-use crate::block::{ItemContent, ItemPtr};
+use crate::block::ItemContent;
+#[cfg(feature = "weak")]
+use crate::block::ItemPtr;
 use crate::block_iter::BlockIter;
 use crate::branch::{Branch, BranchPtr};
 use crate::encoding::read::Error;
@@ -269,21 +271,7 @@ impl StickyIndex {
         }
     }
 
-    pub(crate) fn within_range(&self, ptr: Option<ItemPtr>) -> bool {
-        if self.assoc == Assoc::Before {
-            return false;
-        } else if let Some(item) = ptr.as_deref() {
-            if let Some(ptr) = item.left {
-                if let Some(pos) = self.id() {
-                    return ptr.last_id() != *pos;
-                }
-            }
-            false
-        } else {
-            true
-        }
-    }
-
+    #[cfg(feature = "weak")]
     pub(crate) fn get_item<T: ReadTxn>(&self, txn: &T) -> Option<ItemPtr> {
         let branch = match &self.scope {
             IndexScope::Relative(id) => {

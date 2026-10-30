@@ -1,4 +1,4 @@
-use crate::block::{Block, Item, ItemContent, ItemPtr, Prelim};
+use crate::block::{Item, ItemContent, ItemPtr, Prelim};
 use crate::branch::BranchPtr;
 use crate::transaction::{ReadTxn, TransactionMut};
 use crate::types::TypePtr;
@@ -73,12 +73,6 @@ impl BlockIter {
         false
     }
 
-    pub fn forward<T: ReadTxn>(&mut self, txn: &T, len: u32) {
-        if !self.try_forward(txn, len) {
-            panic!("Length exceeded")
-        }
-    }
-
     pub fn try_forward<T: ReadTxn>(&mut self, txn: &T, mut len: u32) -> bool {
         if len == 0 && self.next_item.is_none() {
             return true;
@@ -127,6 +121,7 @@ impl BlockIter {
         true
     }
 
+    #[allow(dead_code)] // unused upstream helper, kept as is to stay close to upstream
     pub fn backward<T: ReadTxn>(&mut self, txn: &mut T, mut len: u32) {
         if self.index < len {
             panic!("Length exceeded");
@@ -364,40 +359,5 @@ impl BlockIter {
         }
 
         block_ptr
-    }
-
-    pub fn values<'a, 'txn, T: ReadTxn>(
-        &'a mut self,
-        txn: &'txn mut TransactionMut<'txn>,
-    ) -> Values<'a, 'txn> {
-        Values::new(self, txn)
-    }
-}
-
-pub struct Values<'a, 'txn> {
-    iter: &'a mut BlockIter,
-    txn: &'txn mut TransactionMut<'txn>,
-}
-
-impl<'a, 'txn> Values<'a, 'txn> {
-    fn new(iter: &'a mut BlockIter, txn: &'txn mut TransactionMut<'txn>) -> Self {
-        Values { iter, txn }
-    }
-}
-
-impl<'a, 'txn> Iterator for Values<'a, 'txn> {
-    type Item = Out;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.iter.reached_end || self.iter.index == self.iter.branch.content_len() {
-            None
-        } else {
-            let mut buf = [Out::default()];
-            if self.iter.slice(self.txn, &mut buf) != 0 {
-                Some(std::mem::replace(&mut buf[0], Out::default()))
-            } else {
-                None
-            }
-        }
     }
 }

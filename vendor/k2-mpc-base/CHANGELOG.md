@@ -1,11 +1,60 @@
 # Changelog
 
+## v0.9.6 (2026-10-29)
+
+A maintenance release on v0.9.5 with **one behaviour fix** (an outside save that deleted a
+line and put it back could leave the line twice). No API, wire, error or store format change
+(still 5); v0.9.5's tests are unchanged, and the fix adds three.
+
+**Fixed**
+- **fix: an outside save that deleted a line and then put it back could leave the line twice
+  (in v0.9.5); the delete is now applied.**
+  - Two saves from a plain editor while the doc had edits not yet written back: the first
+    deletes a line, the second types it back. When the doc's lines start alike (`p05:…`,
+    `p10:…`), the live side's change was read as rewriting that line, so the delete was lost,
+    and typing it back added a second copy.
+  - The outside-save merge now diffs each side on whole lines (`text::diff::line_hunks`):
+    a line both texts keep is never read as rewritten. Only the outside-save merge uses it;
+    `text::diff::hunks` (`write --base`, undo) is unchanged.
+  - Found by the soak (seed 1, call 176,147).
+
+**Known issues**
+- If someone rewrites a line live while an outside editor deletes it and types it back, both
+  lines are kept (the live rewrite and the retyped line).
+- An outside save merged with live edits can still put two people's changes on one line in rare
+  cases; no text is lost (as in v0.9.5).
+
+**Changed**
+- **Documentation wording** for v0.9.5's hardening (the CHANGELOG, `NOTICE.md`,
+  `docs/SESSIONS.md`, `docs/YRS-FORK.md`, `docs/ARCHITECTURE.md`, the `untrusted-wire`
+  feature's comment, and code and test comments). The reserved error ids cite main's registry.
+- **The vendored engine is updated to k2-yrs k2.2.4** (hardening; warning-free, no change in
+  behaviour): `tools/vendor-yrs.sh`, `--check` passes; `docs/YRS-FORK.md`. The workspace
+  builds under `RUSTFLAGS='-D warnings'`, with default features and every kit feature; the
+  kit's own crates were already warning-free (clippy `-D warnings`, mutants too).
+- **`tools/vendor-yrs.sh`:** `vendor/yrs` no longer carries the engine's own tests
+  (`yrs/tests/`: they run in k2-yrs, the kit never builds a dependency's tests, and compute
+  jobs never carried them); any tag, older ones included, re-vendors.
+- **`tools/test-bundle.sh`: `INLINE`** (as on main) carries a part's base64 past `MAX_CHUNKS`
+  inside the job's command argument: with k2.2.3's engine patch, `base-a`, `conformance` and
+  `spec-undo` need 65–66 chunks (`INLINE=120000`; `tools/README.md`).
+- **No internal build-host names in the tree:** neutral wording in the CHANGELOG, docs and
+  tools (job ids kept), and `tools/check-private.sh` (from main), run by `scripts/check.sh`
+  and the evidence part.
+
+**Tests**
+- `tests/disk.rs`: `an_outside_delete_and_retype_over_unwritten_edits_never_duplicates_a_line`
+  (a session: live edits, two outside saves) and
+  `an_outside_delete_of_a_line_the_live_side_kept_lands` (the merge); both fail on v0.9.5.
+- `text::diff`: the property `line_hunks_round_trip` (valid, a round trip, deterministic,
+  canonical).
+
 ## v0.9.5 (2026-10-29)
 
 A second hotfix for the outside-edit bug of v0.9.4: **v0.9.4 narrowed the window to the write
 delay; v0.9.5 closes it.** Also: fixes to echo detection and to the disk stat check (a
-same-size save within the timestamp's resolution), client updates carrying
-subdocuments are refused (the kit never uses them), and the soak now includes outside saves.
+same-size save within the timestamp's resolution), hardening (client updates carrying
+content the kit never uses are refused), and the soak now includes outside saves.
 **For hosts:** an `AuditEvent` variant and a `SyncDrift` variant (both enums are
 `#[non_exhaustive]`), two `DocError` variants, and `DocError` becomes `#[non_exhaustive]` (so this
 is the last break of its kind; see Host notes), and public functions in `text::merge` and
@@ -124,18 +173,19 @@ k2-yrs k2.2.2; no other dependency change.
     echo.
 
 **Hardening**
-- **Client updates carrying subdocuments are refused (the kit never uses them).**
+- **Client updates carrying content the kit never uses (subdocuments) are refused, and
+  stored content of that kind is quarantined.**
   - Every ingress that takes update bytes from outside the kit decodes them one way (v1
-    only) and refuses, before anything is applied, an update whose blocks carry
-    subdocument content: `Doc::check_client_update` and `Doc::apply_client_update`
-    (`untrusted-wire`), and the test-only in-process delivery.
+    only) and refuses such an update before anything is applied: `Doc::check_client_update`
+    and `Doc::apply_client_update` (`untrusted-wire`), and the test-only in-process
+    delivery.
   - The update checked is the update applied (decoded once).
   - The refusal is `DocError::Unaccepted`, "update contains content this host doesn't
     accept", exit 3. Its error id is reserved (`doc::RESERVED_ERROR_ID_UNACCEPTED`) until
-    the error-surface registry assigns it.
+    the error-surface registry assigns it (MPC-E152 on main's registry).
   - **Store-load scan:** a stored doc holding such content (a stored state, or a log entry
     replayed at load) is quarantined, never loaded as live: `DocError::Quarantined`, exit 3,
-    its error id reserved as well. Expected never to fire.
+    its error id reserved as well (MPC-E518 on main's registry). Expected never to fire.
   - The check is the fork's `Update::has_subdoc_content()` (decode-only).
 - **The vendored engine is updated to k2-yrs k2.2.2** (`tools/vendor-yrs.sh`, `--check`
   passes; `docs/YRS-FORK.md`).
@@ -182,7 +232,7 @@ k2-yrs k2.2.2; no other dependency change.
        reopen from the store gives the same text).
   - It runs 256 cases by default (`NO_BYTE_CASES`). It ran 10^4 on nodes, together with
     v0.9.4's no-byte property at 10^4: four shards of 2,500 each, `PROPTEST_RNG_SEED` 1–4,
-    on k2.2.2 (kit `b4d6db7`): k2n8-vin `ad9e3ff3`, k2-arch `296531ee`, k2n10-vin
+    on k2.2.2 (kit `b4d6db7`): `ad9e3ff3`, `296531ee`,
     `74f39969` and `16fc34ca`.
   - The two repros, the overlap test and this property fail on the v0.9.4 ingest.
 - `text::merge`: keep-both is the character model, it is merge3's result on hunk sets that
@@ -190,8 +240,8 @@ k2-yrs k2.2.2; no other dependency change.
   `align_deletions` (example and property).
 - `tests/tier0.rs`: the echo rule for blob docs.
 - `tests/subdoc_ingress.rs`, built through Yrs's normal API:
-  - a client update with a subdocument (in a map, beside ordinary text, nested) is refused
-    unapplied, nothing is pending, and the doc stays usable;
+  - a client update carrying a subdocument (in a map, beside ordinary text, nested) is
+    refused unapplied, nothing is pending, and the doc stays usable;
   - every ordinary update kind is still accepted;
   - a stored doc holding one is quarantined at load, as a log entry and as a compacted
     state.
@@ -209,16 +259,16 @@ k2-yrs k2.2.2; no other dependency change.
     beyond the doc.
 - The suite on nodes, every part passes on k2-yrs k2.2.2 (kit `b4d6db7`): base-a `f1d826af`,
   base-b `9a84b940`, conformance `df49f642`, spec-undo `89d06961` (mutants too), evidence
-  `2bbb7b25` (k2n8-vin); base-c `c56b40eb` at `7485a20` (k2n8-vin; the later commits change
+  `2bbb7b25`; base-c `c56b40eb` at `7485a20` (the later commits change
   only the soak and its job).
 - The soak on nodes (kit `7485a20`; release, 600 s, `SOAK_CLIENT_SEED=1`,
   `SOAK_MAX_SLOWDOWN=1000`), with outside saves. Each job also ran the CI soak and the
   replay regression; all pass.
-  - seed 1: `00dff865` (k2n8; 2,529 outside saves; 1 known D1 violation, call 52,156);
-  - seed 3: `792a65f2` (k2n8; 2,398; 1, call 25,877);
-  - seed 4: `8f4fe623` (k2-arch; 0);
-  - seed 5: `7828f71f` (k2-arch; 2,490; 0);
-  - seed 1 with the editor off: `0366a000` (k2n8; 1, call 55,516).
+  - seed 1: `00dff865` (2,529 outside saves; 1 known D1 violation, call 52,156);
+  - seed 3: `792a65f2` (2,398; 1, call 25,877);
+  - seed 4: `8f4fe623` (0);
+  - seed 5: `7828f71f` (2,490; 0);
+  - seed 1 with the editor off: `0366a000` (1, call 55,516).
   - Seed 2 (editor on, before the D1 mode, k2.2.1) ran invariant-clean: `4dd41374`.
 - fmt, clippy (`-D warnings`, mutants too) and the licence check pass locally.
 - `tools/tests/full-paths.sh`: the conformance part ships without the kit's `differential`
@@ -264,7 +314,7 @@ k2-yrs k2.2.2; no other dependency change.
   - v0.9.7, which closes the gap, removes the mode.
 - **Throughput:** the soak's 2× throughput check is v0.9.6's (performance) gate. v0.9.5's
   correctness soaks run with `SOAK_MAX_SLOWDOWN=1000`. The 600 s seed-2 run fell 9.8× from
-  its first window to its last (k2n8 `4dd41374`), recorded for information.
+  its first window to its last (`4dd41374`), recorded for information.
 
 **Open**
 - **Grids (the C1 line):** the same three-way design applies to the keyed reconcile. It is
@@ -318,7 +368,7 @@ format change** (still 5) and no dependency change.
     that differs (metadata only). It is empty otherwise, and when the session has no file
     or isn't clean.
   - It is read-only and O(doc): one blame of each root on the doc and on the replica.
-    Measured on k2n7-vin (release; a 5,000-line, 344 KB doc with 1,001 changes; job
+    Measured on a build node (release; a 5,000-line, 344 KB doc with 1,001 changes; job
     `9ca0ff5c`): **6.5 ms per audit**.
   - Measured in the same job, a write-back that finds nothing to write: 4.5 ms with
     nothing changed, and 8.4 ms after a change that moved no byte (the re-sync's encode
@@ -339,13 +389,12 @@ format change** (still 5) and no dependency change.
     - Then a random outside edit. The doc and the file must both equal the outside edit
       applied to the text before the change, and the audit must find nothing.
     - It runs 256 cases by default (`NO_BYTE_CASES`). It ran 10^4 on nodes: four shards of
-      2,500 with `PROPTEST_RNG_SEED` 1–4 (k2n7-vin `9ca0ff5c`, `b6cdeb82`; k2n8-vin
+      2,500 with `PROPTEST_RNG_SEED` 1–4 (`9ca0ff5c`, `b6cdeb82`,
       `f6b6d9b0`, `d91dbe21`).
   - Without the fix, all three new tests fail.
   - `audit_cost` (ignored) measures the audit and the re-sync.
-- The suite on nodes, all six parts pass: base-a `6d56f8db` (k2n10), base-b `07b954a0`
-  (k2n7), base-c `96b5034e` (k2-arch), conformance `1a2e24c1` (k2n10), spec-undo
-  `81e3cb1e` (k2-arch), evidence `c21c64ae` (k2n10).
+- The suite on nodes, all six parts pass: base-a `6d56f8db`, base-b `07b954a0`,
+  base-c `96b5034e`, conformance `1a2e24c1`, spec-undo `81e3cb1e`, evidence `c21c64ae`.
 - fmt, clippy (`-D warnings`, mutants too) and the licence check pass locally.
 - `tools/tests/full-paths.sh`: the spec-undo part now ships only `spec/quint/undo_diff.qnt`,
   the one file its tests read. The whole folder put the part over a job's limit (65
@@ -380,7 +429,7 @@ and run record).
   new wording). `Doc::edit_as` makes the change in one `transact_mut_as` transaction on the
   doc (the k2-yrs patch: `docs/YRS-FORK.md`). Until v0.9.2 it went through a throwaway
   replica of the whole doc, so every edit, undo, redo and revert cost O(history).
-  - Per edit, measured on k2-arch (release, warm, the `Doc` API alone; job `5d15b747`):
+  - Per edit, measured on a build node (release, warm, the `Doc` API alone; job `5d15b747`):
     1.2k changes 0.39 ms → 0.010 ms; 40k changes 12.0 ms → 0.18 ms; 300k changes 110 ms →
     2.0 ms.
   - The new path still grows with the items before the edit's position (the engine walks
@@ -405,7 +454,7 @@ and run record).
     `AuditEvent::EditPathMismatch { key, client, change }` (or `TextCacheMismatch { key,
     root, change }`: metadata only), and the doc makes its edits through the replica (or
     reads its texts afresh) until it is reloaded. `Doc::edit_path_fallback()` says so.
-  - Cost at the default rate (k2-arch, 5,000 edits each timed alone): p99 −8% / +0.5% /
+  - Cost at the default rate (5,000 edits each timed alone): p99 −8% / +0.5% /
     +3.2% at 1.2k / 40k / 300k changes, mean +13% / +6% / +7%. A sampled edit costs what
     every edit cost before (it shows at p99.9).
 
@@ -443,7 +492,7 @@ and run record).
   could have, and no longer can.
 
 **The soak (the 2× check still fails)**
-- **Result:** 10 minutes on k2n10 (`a5d53680`): 193,214 calls, 2.7× v0.9.2's; version 100,194.
+- **Result:** 10 minutes on a build node (`a5d53680`): 193,214 calls, 2.7× v0.9.2's; version 100,194.
   Calls/s 1,363 in the first window, 154 in the last 150 s: 8.85× slower (the check allows 2×).
 - **Why:** a profile shows the replica's cost is gone. Two whole-history costs remain on the
   path:
@@ -455,7 +504,7 @@ and run record).
   **not** claim the soak condition; see "Open".
 
 **CSV `cell set` at 100k cells** (C1a's measurement, the structured kinds on `c1/structured`;
-k2-arch, same node both): p99 185.1 ms → **1.3 ms**, peak extra heap per edit 57 MiB →
+the same node for both): p99 185.1 ms → **1.3 ms**, peak extra heap per edit 57 MiB →
 0.8 MiB. These are from a scratch merge of `c1/structured` with this release's engine and
 edit path; the merged code will re-run it.
 
@@ -561,7 +610,7 @@ format change** (still 5). No new dependency. `docs/SESSIONS.md`, amendment 16.
   150 ms agent-edit budget.
 - **Removing it needs an engine decision** (see "Open"): making an edit as any client on the
   doc itself, without a replica.
-- **The 10-minute soak, before and after, on one node** (k2n10, seed 1, 600 s, release):
+- **The 10-minute soak, before and after, on one node** (seed 1, 600 s, release):
   v0.9.1 (job `8b6111ac`): 68,981 calls, 495 calls/s in the first 30 s, 60 in the last
   150 s (8.25×), an insert 3.2 → 33.2 ms; v0.9.2 (job `503bab46`): 72,376 calls (35,749
   changes, v37,556), 539 → 61 calls/s (8.89×, with 5% more changes), an insert 2.9 →
@@ -592,7 +641,7 @@ format change** (still 5). No new dependency. `docs/SESSIONS.md`, amendment 16.
   (O4a fired), `concurrent_restore_base_by_root`; the total stays. Checked hit in the CI
   trace run (256 traces: 72 / 12 / 102), a tiny `bfs` and a short walk of the binary
   (`tests/walk_classes.rs`). No behaviour change.
-- The full suite on nodes (k2n10): base-a 345 tests, base-b 65, conformance 96, spec-undo
+- The full suite on nodes: base-a 345 tests, base-b 65, conformance 96, spec-undo
   41 and its mutants: all pass. `tools/tests/full.sh`'s base-b part now also carries
   promotion, both parity harnesses and erasure (base-a was over a job's variable limit).
 - `tests/promote.rs` and a simulated crash mid-promote (`session/promote_crash_tests.rs`);

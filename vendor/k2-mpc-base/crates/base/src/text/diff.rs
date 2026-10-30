@@ -54,6 +54,17 @@ const WORD_DIFF_MAX: usize = 64 * 1024;
 
 /// The minimal hunks turning `old` into `new`: sorted, non-overlapping, never empty.
 pub fn hunks(old: &str, new: &str) -> Vec<Hunk> {
+    hunks_with(old, new, false)
+}
+
+/// [`hunks`], with the line diff made on whole lines: the common prefix and suffix are
+/// trimmed to line boundaries before it (each changed group is still trimmed to the
+/// character), so lines that share a start or an end are never paired one shifted.
+pub fn line_hunks(old: &str, new: &str) -> Vec<Hunk> {
+    hunks_with(old, new, true)
+}
+
+fn hunks_with(old: &str, new: &str, whole_lines: bool) -> Vec<Hunk> {
     if old == new {
         return Vec::new();
     }
@@ -64,6 +75,16 @@ pub fn hunks(old: &str, new: &str) -> Vec<Hunk> {
     let mut budget = Budget::for_input(old.len() + new.len());
     if om.is_empty() || nm.is_empty() || (!om.contains('\n') && !nm.contains('\n')) {
         region_hunks(om, nm, pre, &mut out, &mut budget);
+    } else if whole_lines {
+        let lpre = old[..pre].rfind('\n').map_or(0, |k| k + 1);
+        let s = old.len() - suf;
+        let lsuf = if s == 0 || old.as_bytes()[s - 1] == b'\n' {
+            suf
+        } else {
+            old[s..].find('\n').map_or(0, |k| suf - (k + 1))
+        };
+        let (om, nm) = (&old[lpre..old.len() - lsuf], &new[lpre..new.len() - lsuf]);
+        line_then_words(om, nm, lpre, &mut out, &mut budget);
     } else {
         line_then_words(om, nm, pre, &mut out, &mut budget);
     }
@@ -431,6 +452,19 @@ mod tests {
             let h = hunks(&old, &new);
             prop_assert!(validate(&old, &h).is_ok());
             prop_assert_eq!(apply(&old, &h), new);
+        }
+
+        /// `line_hunks` (the outside-save merge's sides): valid, a round trip, deterministic
+        /// and canonical, as `hunks` is.
+        #[test]
+        fn line_hunks_round_trip(old in text(), new in text()) {
+            let h = line_hunks(&old, &new);
+            prop_assert!(validate(&old, &h).is_ok());
+            prop_assert_eq!(apply(&old, &h), new.clone());
+            prop_assert_eq!(&line_hunks(&old, &new), &h);
+            for w in h.windows(2) {
+                prop_assert!(w[0].end < w[1].start, "touching hunks {:?}", w);
+            }
         }
 
         #[test]

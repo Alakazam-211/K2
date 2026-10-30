@@ -1,9 +1,9 @@
-use crate::block::{ItemContent, ItemPtr};
+use crate::block::ItemPtr;
 use crate::slice::ItemSlice;
 use crate::{Assoc, Out, ReadTxn, StickyIndex};
-use smallvec::{smallvec, SmallVec};
 use std::ops::Deref;
 
+#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
 pub(crate) trait BlockIterator: Iterator<Item = ItemPtr> + Sized {
     #[inline]
     fn within_range(self, from: StickyIndex, to: StickyIndex) -> RangeIter<Self> {
@@ -13,6 +13,7 @@ pub(crate) trait BlockIterator: Iterator<Item = ItemPtr> + Sized {
 
 impl<T> BlockIterator for T where T: Iterator<Item = ItemPtr> + Sized {}
 
+#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
 pub(crate) trait BlockSliceIterator: Iterator<Item = ItemSlice> + Sized {
     #[inline]
     fn values(self) -> Values<Self> {
@@ -102,6 +103,7 @@ pub trait TxnDoubleEndedIterator: TxnIterator {
 }
 
 /// Iterator over a slice of a continuous sequence of blocks.
+#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
 #[derive(Debug)]
 pub(crate) struct RangeIter<I> {
     iter: I,
@@ -110,6 +112,7 @@ pub(crate) struct RangeIter<I> {
     state: RangeIterState,
 }
 
+#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
 impl<I> RangeIter<I>
 where
     I: Iterator<Item = ItemPtr>,
@@ -230,6 +233,7 @@ where
     }
 }
 
+#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 enum RangeIterState {
     /// Ranged iterator position hasn't reach chosen ID range yet.
@@ -241,12 +245,14 @@ enum RangeIterState {
 }
 
 /// Iterator over particular, non-deleted values of a block sequence.
+#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
 #[derive(Debug)]
 pub(crate) struct Values<I> {
     iter: I,
     current: Option<ItemSlice>,
 }
 
+#[cfg_attr(not(feature = "weak"), allow(dead_code))] // used by weak links only
 impl<I> Values<I> {
     fn new(iter: I) -> Self {
         Values {
@@ -284,6 +290,7 @@ where
 
 #[derive(Debug)]
 pub struct AsIter<'a, T, I> {
+    #[allow(dead_code)] // never read: holds the transaction borrow while iterating
     txn: &'a T,
     iter: I,
 }
@@ -313,8 +320,7 @@ where
 #[cfg(test)]
 mod test {
     use crate::block::ClientID;
-    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter, TxnIterator};
-    use crate::test_utils::exchange_updates;
+    use crate::iter::{BlockIterator, BlockSliceIterator, IntoBlockIter};
     use crate::{Array, Assoc, Doc, StickyIndex, Transact, ID};
 
     #[test]
@@ -326,7 +332,7 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 0, [1]);
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
-        let txn = doc.transact();
+        let _txn = doc.transact();
         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
         let res: Vec<_> = array
@@ -348,7 +354,7 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 0, [1]);
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
-        let txn = doc.transact();
+        let _txn = doc.transact();
         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::After);
         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
         let res: Vec<_> = array
@@ -370,7 +376,7 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 0, [1]);
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
-        let txn = doc.transact();
+        let _txn = doc.transact();
         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 2), Assoc::After);
         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::After);
         let res: Vec<_> = array
@@ -392,7 +398,7 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 0, [1]);
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
-        let txn = doc.transact();
+        let _txn = doc.transact();
         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 5), Assoc::Before);
         let res: Vec<_> = array
@@ -414,7 +420,7 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 0, [1]);
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
-        let txn = doc.transact();
+        let _txn = doc.transact();
         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 4), Assoc::Before);
         let res: Vec<_> = array
@@ -505,7 +511,7 @@ mod test {
         array.insert_range(&mut doc.transact_mut(), 0, [1]);
         array.insert_range(&mut doc.transact_mut(), 4, [5, 6]);
 
-        let txn = doc.transact();
+        let _txn = doc.transact();
         let from = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::Before);
         let to = StickyIndex::from_id(ID::new(ClientID::new(1), 1), Assoc::After);
         let res: Vec<_> = array

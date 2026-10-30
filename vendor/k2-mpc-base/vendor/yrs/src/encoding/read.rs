@@ -54,9 +54,8 @@ impl<'a> Cursor<'a> {
 ///
 /// Every entry costs at least `min_entry_bytes` of input, so a decoder with `remaining` bytes
 /// left cannot hold more than `remaining / min_entry_bytes` entries. Capping by that keeps
-/// pre-allocation proportional to the input instead of to an attacker-chosen count (a 7-byte
-/// state vector used to reserve ~2.5 GB). The collection still grows on push if the hint is
-/// low, so this never rejects valid input.
+/// pre-allocation proportional to the input rather than to the decoded count (hardening). The
+/// collection still grows on push if the hint is low, so this never rejects valid input.
 #[inline]
 pub(crate) fn bounded_capacity(count: usize, remaining: usize, min_entry_bytes: usize) -> usize {
     debug_assert!(min_entry_bytes > 0);

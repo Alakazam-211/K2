@@ -1991,3 +1991,75 @@ fn racy_file_changed_always_hashes() {
     ));
     assert_eq!(text(&s, c), "omega\n");
 }
+
+/// The soak's "outside delete-retype" duplicate (seed 1, call 176,147), trimmed. The file
+/// ends `p22:2150`, `p10:2205`; unwritten live edits took out `p22:2150` and added two lines
+/// after `p10:2205`. The plain editor deletes `p10:2205` and saves, then types it back and
+/// saves again (the bytes as before). The line must not end up in the doc twice.
+///
+/// The text diff from the synced text to the live text pairs the lines up shifted
+/// (`p22:2150` rewritten to `p10:2205`, `p10:2205` to the two new lines), so the save's
+/// deletion of `p10:2205` meets a live "rewrite" of it, and keep-both keeps the live copy:
+/// the doc doesn't change. The replica, though, takes the file's text (without the line), so
+/// the retype reads as a new line and lands next to the one the doc kept.
+#[test]
+fn an_outside_delete_and_retype_over_unwritten_edits_never_duplicates_a_line() {
+    let synced = "p05:2216\np22:2150\np10:2205\n";
+    let live = "p05:2216\np10:2205\np23:2229\np25:2184\n";
+    let deleted = "p05:2216\np22:2150\n";
+    let f = fx("delete-retype");
+    f.write("a.md", synced.as_bytes());
+    let s = f.open("a.md");
+    let a = f.join(&s, "agent");
+    set(&s, a, live);
+    f.advance(100);
+    // the editor deletes the line and saves
+    f.write("a.md", deleted.as_bytes());
+    s.file_changed().unwrap();
+    assert_eq!(
+        s.audit_disk_sync().unwrap(),
+        vec![],
+        "K-AUD-1 after the delete"
+    );
+    let after_delete = text(&s, a);
+    // ... then types it back where it was and saves: the bytes as before the delete
+    f.advance(100);
+    f.write("a.md", synced.as_bytes());
+    s.file_changed().unwrap();
+    assert_eq!(
+        s.audit_disk_sync().unwrap(),
+        vec![],
+        "K-AUD-1 after the retype"
+    );
+    let t = text(&s, a);
+    let mut seen = std::collections::HashSet::new();
+    for l in t.lines() {
+        assert!(
+            seen.insert(l),
+            "{l:?} twice after the retype: {t:?} (after the delete: {after_delete:?})"
+        );
+    }
+}
+
+/// The merge under [`an_outside_delete_and_retype_over_unwritten_edits_never_duplicates_a_line`]:
+/// the live side never touched `p10:2205` (it took out `p22:2150` and added two lines after
+/// it), so the save's deletion of that line lands. The live side's diff must not read as a
+/// rewrite of it.
+#[test]
+fn an_outside_delete_of_a_line_the_live_side_kept_lands() {
+    let synced = "p05:2216\np22:2150\np10:2205\n";
+    let live = "p05:2216\np10:2205\np23:2229\np25:2184\n";
+    let deleted = "p05:2216\np22:2150\n";
+    let line = synced.find("p10:2205").unwrap();
+    let (_, theirs) = outside_sides(synced, deleted, live);
+    assert!(
+        theirs
+            .iter()
+            .all(|h| h.end <= line || h.start >= synced.len()),
+        "the live side's diff rewrites the line it kept: {theirs:?}"
+    );
+    assert_eq!(
+        k2_mpc_base::text::merge::merge3_keep_both(synced, deleted, live).text,
+        "p05:2216\np23:2229\np25:2184\n"
+    );
+}

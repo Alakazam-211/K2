@@ -1,7 +1,7 @@
-//! The kit never uses subdocuments, so it refuses client updates that carry them (v0.9.5):
-//! at every ingress, before anything is applied, with `DocError::Unaccepted` (exit 3). A
-//! stored doc holding one is quarantined at load (`DocError::Quarantined`). Every update and
-//! stored doc here is built through Yrs's normal API.
+//! Hardening (v0.9.5): the kit never uses subdocuments, so it refuses client updates that
+//! carry them at every ingress, before anything is applied, with `DocError::Unaccepted`
+//! (exit 3). A stored doc holding one is quarantined at load (`DocError::Quarantined`). Every
+//! update and stored doc here is built through Yrs's normal API.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};

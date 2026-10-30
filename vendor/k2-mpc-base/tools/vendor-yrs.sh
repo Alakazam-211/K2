@@ -7,11 +7,12 @@
 #                                                     (the tag defaults to the recorded one)
 #
 # What is copied: the tag's yrs/ (the crate) as vendor/yrs/, and the repo's LICENSE (Yrs's MIT
-# licence) and NOTICE (what the fork changed) beside it. Left out: yrs/tests/decode_bombs.rs
-# (the private decoder regression tests: they run in k2-yrs). vendor/yrs/VENDORED records the
-# tag, its commit, the tree hash of its yrs/, what was left out, a sha256 of every vendored
-# file, and how a compute job rebuilds src/ without carrying it: the upstream crate on
-# crates.io (yrs 0.28.0, its sha256) plus vendor/yrs/K2.patch (the fork's diff of yrs/src from
+# licence) and NOTICE (what the fork changed) beside it. Left out: the engine's own tests,
+# yrs/tests/ (they run in k2-yrs; the kit never builds a dependency's tests, and compute jobs
+# never carried them), whatever a tag holds there, so older tags still re-vendor.
+# vendor/yrs/VENDORED records the tag, its commit, the tree hash of its yrs/, what was left
+# out, a sha256 of every vendored file, and how a compute job rebuilds src/ without carrying
+# it: the upstream crate on crates.io (yrs 0.28.0, its sha256) plus vendor/yrs/K2.patch (the fork's diff of yrs/src from
 # the upstream tag), checked against `src-sha256`. --check recomputes all of it. Files under
 # vendor/yrs are never edited by hand.
 set -eu
@@ -20,7 +21,8 @@ if [ "${1:-}" = --check ]; then CHECK=1; shift; fi
 SRC=${1:?usage: tools/vendor-yrs.sh [--check] <k2-yrs clone> <tag>}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DEST=$ROOT/vendor/yrs
-EXCLUDE="yrs/tests/decode_bombs.rs"
+# left out when present: the engine's tests (they run in k2-yrs)
+EXCLUDE="yrs/tests/"
 # the upstream release the fork starts from: its tag in k2-yrs, and its crate on crates.io
 UPSTREAM_TAG=v0.28.0
 CRATE=yrs-0.28.0
@@ -36,7 +38,7 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/x" "$TMP/out"
 git -C "$SRC" archive --format=tar "$TAG" yrs LICENSE NOTICE | tar -xf - -C "$TMP/x"
-for f in $EXCLUDE; do rm "$TMP/x/$f"; done
+rm -rf "$TMP/x/$EXCLUDE"
 ( cd "$TMP/x/yrs" && tar -cf - . ) | tar -xf - -C "$TMP/out"
 cp "$TMP/x/LICENSE" "$TMP/x/NOTICE" "$TMP/out/"
 # the fork's change to src/ from the upstream release (a compute job's bundle carries this, not

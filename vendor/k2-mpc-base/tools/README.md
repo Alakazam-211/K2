@@ -29,6 +29,11 @@ tools/test-bundle.sh [--rev REV] <commands file> <out dir> <path>...
   `env_too_many`). So the bundler stops with a clear message when the bundle needs more than
   `MAX_CHUNKS` (default 64) chunks, about 500 KB of base64. Ship fewer paths when it does;
   xz fits about a quarter more than gzip (the kit plus a pack: 56 chunks against 77).
+- **Over the variable limit** (v0.9.6, with k2-yrs k2.2.3's larger engine patch: `base-a`,
+  `conformance` and `spec-undo`, 65–66 chunks): `INLINE=120000 tools/test-bundle.sh …` puts
+  the base64 past `MAX_CHUNKS` inside `job.sh`, i.e. in the job's command argument (120,000
+  characters checked on a build node; Linux allows 128 KiB per argument). Such a part has no
+  room for `--env PART` (or `--env SOAK_SECS`): put the variable in the commands file.
 - **`vendor/yrs` travels without `src/`** (v0.9.3: the kit plus yrs is over a job's limit):
   the job downloads the public `yrs-0.28.0` crate, checks its sha256, applies
   `vendor/yrs/K2.patch` and checks the result against `vendor/yrs/VENDORED`'s `src-sha256`
@@ -65,9 +70,10 @@ k2 compute run <node> --no-source --needs rust@stable --cpus 4 --mem 8G --timeou
   --env PART=base-a $(cat /tmp/base-a/env-args) --detach -- sh -ec "$(cat /tmp/base-a/job.sh)"
 ```
 
-A part whose bundle needs all 64 chunks (conformance and spec-undo, v0.9.3) has no room for
-`--env PART`: put the part in the commands file instead, `{ echo PART=conformance; cat
-tools/tests/full.sh; } > /tmp/full-conformance.sh`, bundle with that, and drop `--env PART`.
+A part whose bundle needs all 64 chunks or more (conformance and spec-undo, v0.9.3; base-a
+too, v0.9.6) has no room for `--env PART`: put the part in the commands file instead, `{ echo
+PART=conformance; cat tools/tests/full.sh; } > /tmp/full-conformance.sh`, bundle with that
+(`INLINE=120000` when it needs more than 64 chunks), and drop `--env PART`.
 
 fmt, clippy and the licence check (`scripts/check-licences.sh`, `cargo metadata` only) run
 locally.
@@ -111,7 +117,7 @@ small default and is stopped above it):
 
 ```sh
 tools/undo-quint-job.sh tools/undo/smoke.sh /tmp/undo-smoke
-k2 compute run k2-arch --no-source --needs node@22,java@21,rust@stable --mem 12G \
+k2 compute run <node> --no-source --needs node@22,java@21,rust@stable --mem 12G \
   --timeout 15m --env CARGO_BUILD_JOBS=6 $(cat /tmp/undo-smoke/env-args) \
   --wait --max-wait 9m -- sh -ec "$(cat /tmp/undo-smoke/job.sh)"
 ```

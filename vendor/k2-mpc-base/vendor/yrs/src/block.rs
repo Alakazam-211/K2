@@ -195,6 +195,7 @@ impl<'a> BlockRef<'a> {
         unsafe { &mut *self.cell.get() }
     }
 
+    #[cfg(test)]
     pub fn as_item(&self) -> Option<&'a Item> {
         if let Block::Item(item) = self.as_ref() {
             Some(item)
@@ -261,14 +262,6 @@ impl Block {
         }
     }
 
-    pub fn last_id(&self) -> ID {
-        match self {
-            Block::Item(x) => x.last_id(),
-            Block::Skip(x) => x.last_id(),
-            Block::GC(x) => x.last_id(),
-        }
-    }
-
     pub fn range(&self) -> BlockRange {
         match self {
             Block::Item(item) => BlockRange::new(item.id, item.len),
@@ -278,20 +271,11 @@ impl Block {
     }
 
     #[inline]
-    pub fn is_item(&self) -> bool {
-        matches!(self, Block::Item(_))
-    }
-
-    #[inline]
     pub fn is_skip(&self) -> bool {
         matches!(self, Block::Skip(_))
     }
 
     #[inline]
-    pub fn is_gc(&self) -> bool {
-        matches!(self, Block::GC(_))
-    }
-
     pub fn is_deleted(&self) -> bool {
         match self {
             Block::Item(item) => item.is_deleted(),
@@ -491,7 +475,7 @@ impl ItemPtr {
             item.parent.as_branch().unwrap()
         });
 
-        let mut left = None;
+        let mut left;
         let mut right = None;
         if let Some(sub) = item.parent_sub.as_ref() {
             if item.right.is_some() {
@@ -626,13 +610,6 @@ impl ItemPtr {
                 }
                 curr = item.parent.as_branch().and_then(|b| b.item);
             }
-        }
-    }
-
-    pub(crate) fn delete_as_cleanup(&self, txn: &mut TransactionMut, is_local: bool) {
-        txn.delete(*self);
-        if is_local {
-            txn.delete_set.insert(*self.id(), self.len());
         }
     }
 
@@ -882,9 +859,9 @@ impl Item {
                 let mut parent = *self.parent.as_branch().unwrap();
                 parent.has_formatting = true;
             }
+            #[cfg(feature = "weak")]
             ItemContent::Type(branch) => {
                 let ptr = BranchPtr::from(branch);
-                #[cfg(feature = "weak")]
                 if let TypeRef::WeakLink(source) = &ptr.type_ref {
                     source.materialize(txn, ptr);
                 }
@@ -1412,15 +1389,6 @@ impl BlockRange {
         next
     }
 
-    pub(crate) fn integrate(&mut self, pivot: u32) -> bool {
-        if pivot > 0 {
-            self.clock += pivot;
-            self.len -= pivot;
-        }
-
-        false
-    }
-
     #[inline]
     pub(crate) fn merge(&mut self, other: &Self) {
         self.len += other.len;
@@ -1555,8 +1523,8 @@ impl Item {
 
     pub(crate) fn gc(&mut self, collector: &mut GCCollector, parent_gc: bool) {
         if self.is_deleted() && !self.info.is_keep() {
-            // k2: a subdocument is detached from this item first: GC drops the item's content
-            // here, and the item itself may go (`parent_gc`, or a later squash).
+            // k2 (hardening): a subdocument is detached from this item first: GC drops the item's
+            // content here, and the item itself may go (`parent_gc`, or a later squash).
             if let ItemContent::Doc(_, doc) = &self.content {
                 let this = NonNull::from(&*self);
                 let mut store = doc.store().write_blocking();
@@ -1972,7 +1940,7 @@ impl ItemContent {
                 let len = decoder.read_len()?;
                 let mut remaining = len as i32;
                 let mut buf = Vec::new();
-                // `len` is attacker-controlled; each string is at least its 1-byte length.
+                // `len` comes from the input; each string is at least its 1-byte length.
                 buf.try_reserve(bounded_capacity(len as usize, decoder.remaining(), 1))?;
 
                 while remaining >= 0 {
@@ -1996,7 +1964,7 @@ impl ItemContent {
             BLOCK_ITEM_ANY_REF_NUMBER => {
                 let len = decoder.read_len()? as usize;
                 let mut values = Vec::new();
-                // `len` is attacker-controlled; each value is at least its 1-byte tag.
+                // `len` comes from the input; each value is at least its 1-byte tag.
                 values.try_reserve(bounded_capacity(len, decoder.remaining(), 1))?;
 
                 let mut i = 0;

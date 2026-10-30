@@ -3,7 +3,8 @@
 # tools/tests/full-paths.sh prints what each part ships. Debug builds, as CI runs them. fmt,
 # clippy and the licence check run locally (some nodes have no rustfmt or clippy).
 #   base-a       the kit: unit tests, doctests, every integration test but tier 0's and base-c's
-#   evidence     the evidence tools' self-test and check (tools/evidence/; Python, no cargo)
+#   evidence     the evidence tools' self-test and check (tools/evidence/; Python, no cargo), and
+#                tools/check-private.sh on what the part ships
 #   base-c       the kit: soak (CI variant), edit_paths, edit_cost, history, presence, sessions
 #   base-b       the kit: tier 0's integration tests (tier0, tier0_large, promote), the parity harnesses (parity, parity_blob) and erasure
 #   conformance  the conformance suite (with the vendored reference model)
@@ -12,7 +13,8 @@ case ${PART:?PART: base-a, base-b, base-c, conformance, spec-undo or evidence} i
   base-a) timed build cargo test -p k2-mpc-base --no-run
           timed base_a cargo test -p k2-mpc-base ;;
   evidence) timed evidence_selftest sh tools/evidence/test.sh
-          timed evidence_check python3 tools/evidence/check.py ;;
+          timed evidence_check python3 tools/evidence/check.py
+          timed private sh tools/check-private.sh . ;;
   base-b) timed build cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test erasure --no-run
           timed base_b cargo test -p k2-mpc-base --test tier0 --test tier0_large --test promote --test parity --test parity_blob --test erasure ;;
   base-c) timed build cargo test -p k2-mpc-base --test soak --test edit_paths --test edit_cost --test history --test presence --test sessions --no-run

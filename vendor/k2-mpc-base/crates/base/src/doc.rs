@@ -48,9 +48,10 @@ pub struct UpdateInfo {
 }
 
 /// Placeholder for [`DocError::Unaccepted`]'s error id: the slot is reserved, and the id is
-/// assigned when the error-surface registry merges.
+/// assigned when the error-surface registry merges (`MPC-E152` on main's registry).
 pub const RESERVED_ERROR_ID_UNACCEPTED: Option<&str> = None;
-/// Placeholder for [`DocError::Quarantined`]'s error id (reserved, as above).
+/// Placeholder for [`DocError::Quarantined`]'s error id (reserved, as above; `MPC-E518` on
+/// main's registry).
 pub const RESERVED_ERROR_ID_QUARANTINED: Option<&str> = None;
 
 /// An engine-level error. `#[non_exhaustive]` since v0.9.5 (which added two variants): match
@@ -79,13 +80,13 @@ pub enum DocError {
     Panic,
     #[error("state could not be loaded: {0}")]
     Load(String),
-    /// A client update was refused, unapplied (v0.9.5): it carries content the kit never
-    /// uses (subdocuments). Exit 3 (`tools::exit::REFUSED`). Error id: reserved,
+    /// A client update was refused, unapplied (hardening, v0.9.5): it carries content the
+    /// kit never uses (subdocuments). Exit 3 (`tools::exit::REFUSED`). Error id: reserved,
     /// [`RESERVED_ERROR_ID_UNACCEPTED`].
     #[error("update contains content this host doesn't accept")]
     Unaccepted,
     /// A stored doc holds content the kit never uses (subdocuments): it is quarantined, not
-    /// loaded as live (the store-load scan, v0.9.5). Exit 3. Error id: reserved,
+    /// loaded as live (hardening: the store-load scan, v0.9.5). Exit 3. Error id: reserved,
     /// [`RESERVED_ERROR_ID_QUARANTINED`].
     #[error("stored doc contains content this host doesn't accept; it was not loaded")]
     Quarantined,

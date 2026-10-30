@@ -253,7 +253,7 @@ update, inside the state). `smoke.sh` prints the size.
 
 ### Counts: v1.7 → v1.8
 
-TLC's distinct states = `undo_enum bfs`'s at every bound (k2-arch; v1.7's figures from
+TLC's distinct states = `undo_enum bfs`'s at every bound (an 8-core x86 node; v1.7's figures from
 job `7a899e60`). Roots add states (a restoration differs from the element it restores only by
 being one), the carried theirs leaves them (two windows read the same by root are one state):
 
@@ -331,7 +331,7 @@ replaces `a` with `b`, then `b` with `c`, and undoes twice (or `--steps 2`). v1.
 the second step (the first undo's `b` is a new element, foreign by identity); v1.8 applies,
 since it has the first change's root. This is regression (b) with one participant.
 
-### Jobs (k2-arch, `--mem 12G`, commit `cbe337e`'s tools; the bundle as `tools/README.md`)
+### Jobs (an 8-core x86 node, `--mem 12G`, commit `cbe337e`'s tools; the bundle as `tools/README.md`)
 
 The jobs ran branch `g1/u4-oracle` (commits `c906453`, `cbe337e`), cherry-picked onto
 `g1/exact-hunk-undo` as `f6191b4`, `641f6dc` with the same model, tools and oracle.
@@ -361,7 +361,7 @@ same state with and without it counted twice), so the counts move:
 | 2 × 2 + 1 undo (`ab`, 3) | 531,261 | 500,176 | 500,176 | 200 s |
 | 1 × 3 + 1 revert + 1 restart (`abba`, 4) (new) | – | 193,161 | 193,161 | 75 s |
 
-k2-arch, job `7a899e60` (`tools/undo/counts.sh`, commit a5bc7d0): every count equal. ITF
+An 8-core x86 node, job `7a899e60` (`tools/undo/counts.sh`, commit a5bc7d0): every count equal. ITF
 replay in the same job: 1,000 traces at 2 × 1 + 1 undo + 1 revert, 4,000 steps, 0
 mismatches; and in the smoke job `0c00aee0`: 300 traces with a restart (1,500 steps), 0
 mismatches.
@@ -384,7 +384,7 @@ reads as tainted at its end too, the right one inherits that taint (U22a), and t
 conflicts change. On walks at the literal G1 bound plus one restart
 it fails at depth 8; `f3-rediff` at depth 3.
 
-## Results v1.6 (k2-arch, 8 cores; jobs from `tools/undo/*.sh`)
+## Results v1.6 (an 8-core x86 node; jobs from `tools/undo/*.sh`)
 
 ### ITF replay: 0 mismatches
 
@@ -460,13 +460,13 @@ states counted per seed, with pid symmetry):
 | **G1**: 3 pids × 3 events + 2 undos + 1 revert | ≥ 10^13 | sampled: Quint ITF traces (`g1-smoke.sh`) and random walks (`g1.sh`, `PART=walks`) |
 
 **Throughput measured:** on this Mac (M-series) about 30–60k states/s per thread for `dfs`
-with every check, and about 1,000 G1 walks/s per thread; on k2-arch (x86, 8 cores) the walks
+with every check, and about 1,000 G1 walks/s per thread; on an 8-core x86 node the walks
 ran about 5× slower per thread (1M walks in 655 s on 8 threads), and `dfs` is assumed to
 scale the same way (not measured there).
 
 **Runtime estimates:**
 
-| Part | On an M-series node (6 threads) | On k2-arch-class x86 (12 threads) |
+| Part | On an M-series node (6 threads) | On an x86 node (12 threads) |
 |---|---|---|
 | `PART=exhaustive` (≈ 6.6 × 10^8 states) | ≈ 40–60 min | ≈ 1.5–2 h |
 | `PART=walks` (5 × 10^6 walks + mutants) | ≈ 15 min | ≈ 1 h |
@@ -477,7 +477,7 @@ cargo; launched only after review). An M-series node (the grant there allows lon
 
 ```sh
 tools/undo-enum-job.sh tools/undo/g1.sh /tmp/undo-g1
-k2 compute run k2n1-m4 --no-source --needs rust@stable --cpus 6 --mem 4G \
+k2 compute run "$NODE" --no-source --needs rust@stable --cpus 6 --mem 4G \
   --env CARGO_BUILD_JOBS=6 --env THREADS=6 --env PART=exhaustive --timeout 3h --tier batch \
   --detach $(cat /tmp/undo-g1/env-args) -- sh -ec "$(cat /tmp/undo-g1/job.sh)"
 ```

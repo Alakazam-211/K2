@@ -7,7 +7,6 @@ use crate::transaction::{Origin, TransactionMut};
 use crate::types::{RootRef, ToJson};
 use crate::updates::decoder::{Decode, Decoder};
 use crate::updates::encoder::{Encode, Encoder};
-use crate::utils::OptionExt;
 use crate::Any;
 use crate::{
     uuid_v4, uuid_v4_from, ArrayRef, BranchID, MapRef, Number, Out, ReadTxn, TextRef, Transact,
@@ -1036,7 +1035,7 @@ mod test {
         let a = acc.clone();
         d1.observe_update_v1("sub", move |_: &TransactionMut, e| {
             let u = Update::decode_v1(&e.update).unwrap();
-            for mut block in u.blocks.into_blocks(false) {
+            for block in u.blocks.into_blocks(false) {
                 if let Block::Item(item) = block {
                     if let ItemContent::String(s) = &item.content {
                         // each character is appended in individual transaction 1-by-1,
@@ -2094,7 +2093,7 @@ mod test {
             skip_gc: true,
             ..Default::default()
         });
-        let m0 = doc.get_or_insert_map("map");
+        let _m0 = doc.get_or_insert_map("map");
         let s1 = {
             let mut tx = doc.transact_mut();
             let t1 = init_test_data(&mut tx, ["c", "b", "a"]); // <1#1..3>
@@ -2109,7 +2108,7 @@ mod test {
             tx.snapshot()
         };
 
-        let s3 = {
+        let _s3 = {
             let mut tx = doc.transact_mut();
             let t3 = init_test_data(&mut tx, ["i", "h", "g"]); // <1#9..11>
             assert_eq!(t3.get_string(&tx), "ghi");
@@ -2254,7 +2253,7 @@ mod test {
         let notify = Arc::new(AtomicU32::new(0));
         let doc = Doc::new();
         let notify_clone = notify.clone();
-        doc.observe_update_v2("sub", move |tx, e| {
+        doc.observe_update_v2("sub", move |tx, _e| {
             notify_clone.store(1, Ordering::SeqCst);
             tx.unobserve_update_v2("sub");
         })

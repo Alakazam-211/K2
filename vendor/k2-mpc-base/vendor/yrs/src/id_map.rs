@@ -670,7 +670,7 @@ mod test {
         let mut id_map_1 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
         let mut id_map_2 = random_id_map(CLIENTS, CLOCK_RANGE, attrs.clone());
         let id_exclude = random_id_set(CLIENTS, CLOCK_RANGE);
-        let mut merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
+        let merged = IdMap::merge_many(&[id_map_1.clone(), id_map_2.clone()]);
         let mut merge_excluded = merged.clone();
         merge_excluded.diff_with(&id_exclude);
 

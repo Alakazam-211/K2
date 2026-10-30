@@ -7,7 +7,10 @@
 # BUNDLE_B64_1, ...; the job joins them and checks the tarball's sha256 before unpacking.
 # A runner may also cap the number of variables (one refuses more than about 66), so the
 # bundler stops with a clear message above MAX_CHUNKS (default 64): ship fewer paths. xz,
-# not gzip: about a quarter fewer chunks for the kit's sources.
+# not gzip: about a quarter fewer chunks for the kit's sources. INLINE=N (default 0) lets up
+# to N base64 characters past MAX_CHUNKS travel inside job.sh itself, i.e. in the job's
+# command argument (120,000 checked on a build node; Linux allows 128 KiB per argument): for parts
+# over the variable limit (v0.9.6: base-a, conformance, spec-undo).
 #
 #   tools/test-bundle.sh [--rev REV] <commands file> <out dir> <path>...
 #
@@ -34,6 +37,7 @@ shift 2
 [ $# -gt 0 ] || { echo "nothing to ship: list the paths that travel" >&2; exit 2; }
 CHUNK=${CHUNK:-8000}
 MAX_CHUNKS=${MAX_CHUNKS:-64}
+INLINE=${INLINE:-0}
 command -v xz >/dev/null || { echo "xz is needed (the bundle is an xz tarball)" >&2; exit 2; }
 [ -f "$CMDS" ] || { echo "no commands file $CMDS" >&2; exit 2; }
 case $OUT in /*) ;; *) OUT=$PWD/$OUT ;; esac
@@ -68,24 +72,34 @@ else SHA=$(shasum -a 256 "$OUT/bundle.txz" | cut -d' ' -f1); fi
 base64 < "$OUT/bundle.txz" | tr -d '\n' > "$OUT/bundle.b64"
 TOTAL=$(wc -c < "$OUT/bundle.b64" | tr -d ' ')
 NEED=$(( (TOTAL + CHUNK - 1) / CHUNK ))
+ENVMAX=$(( MAX_CHUNKS * CHUNK ))
+TAIL=0
+if [ "$NEED" -gt "$MAX_CHUNKS" ] && [ $(( TOTAL - ENVMAX )) -le "$INLINE" ]; then
+  TAIL=$(( TOTAL - ENVMAX )); NEED=$MAX_CHUNKS
+fi
 if [ "$NEED" -gt "$MAX_CHUNKS" ]; then
   rm -f "$OUT/bundle.b64"
-  echo "bundle too big: $TOTAL base64 characters need $NEED chunks of $CHUNK, over MAX_CHUNKS=$MAX_CHUNKS (a runner refuses more variables): ship fewer paths" >&2
+  echo "bundle too big: $TOTAL base64 characters need $NEED chunks of $CHUNK, over MAX_CHUNKS=$MAX_CHUNKS (a runner refuses more variables): ship fewer paths, or INLINE=$(( TOTAL - ENVMAX )) or more" >&2
   exit 3
 fi
 : > "$OUT/env-args"
 i=0; off=0
-while [ "$off" -lt "$TOTAL" ]; do
+while [ "$off" -lt "$TOTAL" ] && [ "$i" -lt "$NEED" ]; do
   printf -- '--env\nBUNDLE_B64_%s=%s\n' "$i" "$(dd if="$OUT/bundle.b64" bs="$CHUNK" skip="$i" count=1 2>/dev/null)" >> "$OUT/env-args"
   i=$((i + 1)); off=$((off + CHUNK))
 done
 N=$i
+INLINE_PART=""
+if [ "$TAIL" -gt 0 ]; then
+  INLINE_PART=$(tail -c +$(( ENVMAX + 1 )) "$OUT/bundle.b64")
+fi
 rm -f "$OUT/bundle.b64"
 cat > "$OUT/job.sh" <<JOB
 set -e
 mkdir -p job && cd job
 : > b.b64
 i=0; while [ \$i -lt $N ]; do eval "c=\\\${BUNDLE_B64_\$i:?chunk \$i of $N missing}"; printf '%s' "\$c" >> b.b64; i=\$((i + 1)); done
+printf '%s' '$INLINE_PART' >> b.b64
 base64 -d < b.b64 > b.txz
 echo "$SHA  b.txz" | sha256sum -c - >/dev/null || { echo "bundle sha256 mismatch" >&2; exit 1; }
 tar xJf b.txz && rm -f b.b64 b.txz
@@ -121,4 +135,4 @@ timed() { l=$1; shift; s=$(date +%s); set +e; "$@"; rc=$?; set -e; echo "=== $l:
 . "$ROOT/cmds.sh"
 exit $RC
 JOB
-echo "bundle: $(wc -c < "$OUT/bundle.txz" | tr -d ' ') bytes xz, $TOTAL base64, $N chunk(s) of <= $CHUNK; sha256 $SHA; job.sh $(wc -c < "$OUT/job.sh" | tr -d ' ') bytes" >&2
+echo "bundle: $(wc -c < "$OUT/bundle.txz" | tr -d ' ') bytes xz, $TOTAL base64, $N chunk(s) of <= $CHUNK + $TAIL inline; sha256 $SHA; job.sh $(wc -c < "$OUT/job.sh" | tr -d ' ') bytes" >&2

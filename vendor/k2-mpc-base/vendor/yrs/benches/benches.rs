@@ -17,6 +17,7 @@ enum TextOp {
 
 enum ArrayOp {
     Insert(u32, Vec<u32>),
+    #[allow(dead_code)] // no array bench deletes yet
     Delete(u32, u32),
 }
 
@@ -74,6 +75,7 @@ fn b1_5(rng: &mut Rng, size: usize) -> Vec<TextOp> {
         .collect()
 }
 
+#[allow(dead_code)] // its bench is commented out below
 fn b1_6(rng: &mut Rng, size: usize) -> Vec<TextOp> {
     let s: String = (0..size).map(|_| rng.alphanumeric()).collect();
     let len = s.len() as u32;
@@ -229,8 +231,8 @@ where
                     apply(&mut txn2, t2, o2);
                     let u2 = txn2.encode_update_v1();
 
-                    txn1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
-                    txn2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
+                    let _ = txn1.apply_update(Update::decode_v1(u2.as_slice()).unwrap());
+                    let _ = txn2.apply_update(Update::decode_v1(u1.as_slice()).unwrap());
                 }
             });
         },
@@ -338,7 +340,7 @@ where
             let (doc, _) = iter.next().unwrap();
             let mut txn = doc.transact_mut();
             while let Some((_, update)) = iter.next() {
-                txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
+                let _ = txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             }
         });
     });
@@ -385,7 +387,7 @@ fn b3_4(c: &mut Criterion, name: &str) {
             let (doc, _) = iter.next().unwrap();
             let mut txn = doc.transact_mut();
             while let Some((_, update)) = iter.next() {
-                txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
+                let _ = txn.apply_update(Update::decode_v1(update.as_slice()).unwrap());
             }
         });
     });
@@ -426,7 +428,7 @@ fn b4_2(c: &mut Criterion, name: &str) {
         |b, (doc, _txt, buf)| {
             b.iter(|| {
                 let mut txn = doc.transact_mut();
-                txn.apply_update(Update::decode_v1(buf.as_slice()).unwrap());
+                let _ = txn.apply_update(Update::decode_v1(buf.as_slice()).unwrap());
             });
         },
     );

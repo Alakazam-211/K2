@@ -139,7 +139,7 @@ impl Awareness {
     /// Returns a state map of all the clients tracked by current [Awareness] instance. Those
     /// states are identified by their corresponding [ClientID]s. The associated state is
     /// represented and replicated to other clients as a JSON string.
-    pub fn iter(&self) -> AwarenessIter {
+    pub fn iter(&self) -> AwarenessIter<'_> {
         AwarenessIter(self.states.iter())
     }
 
@@ -526,8 +526,8 @@ impl Encode for AwarenessUpdate {
 impl Decode for AwarenessUpdate {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, crate::encoding::read::Error> {
         let len: usize = decoder.read_var()?;
-        // `len` is attacker-controlled (awareness updates arrive over the network). Reserve only
-        // what the input could hold: an entry is at least 3 bytes (client, clock, JSON length).
+        // `len` comes from the input (hardening). Reserve only what the input could hold: an
+        // entry is at least 3 bytes (client, clock, JSON length).
         let mut clients = HashMap::new();
         clients.try_reserve(bounded_capacity(len, decoder.remaining(), 3))?;
         for _ in 0..len {

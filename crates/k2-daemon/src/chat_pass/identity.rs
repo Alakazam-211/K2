@@ -20,8 +20,10 @@
 //! or a `k2:connect` member.
 //!
 //! Refused: an App session without a `chat` grant (403 `no_chat_grant`),
-//! platform app passes (`session=0`), agent passports, `k2sk_` API keys
-//! (403 `credential_not_allowed`); anything unknown (401).
+//! an App login the owner marked as an agent's (`k2 app user agent`; 403
+//! `agent_subject`: an agent is its workspace in chat, `k2:workspace:`,
+//! never a person), platform app passes (`session=0`), agent passports,
+//! `k2sk_` API keys (403 `credential_not_allowed`); anything unknown (401).
 //!
 //! **Owner-role Connect users ([`OWNER_CONNECT_GETS_K2_OWNER`]).** Rosson
 //! (2026-10-15): K2 Connect owners and admins control the Sew install and
@@ -117,6 +119,10 @@ pub enum Refusal {
     NotAllowed { hint: &'static str, actor: String },
     /// 403 `no_chat_grant`.
     NoChatGrant { actor: String },
+    /// 403 `agent_subject`: the App login is marked as an agent's
+    /// (`skin::principal_agent_workspace`). Agents are their workspace in
+    /// chat, never a person, so no person pass, chat grant or not.
+    AgentSubject { actor: String },
     /// 403 `tied_pending_reset` (agent-app-users A3): an agent could know
     /// this person's credentials, and a chat grant is box-wide, so no chat
     /// pass until their own password reset drops the tie.
@@ -264,6 +270,13 @@ pub fn classify_with(bearer: &str, owner_token: &str, owner_connect_is_k2_owner:
             });
         };
         let actor = format!("principal:{}", pass.username);
+        // Before the grant and the tie: an agent's login is never a person,
+        // whatever grants it holds.
+        match k2_core::skin::principal_agent_workspace(&principal_id) {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err(Refusal::AgentSubject { actor }),
+            Err(e) => return Err(Refusal::Unavailable(e)),
+        }
         match k2_core::skin::principal_has_chat_grant(&principal_id) {
             Ok(true) => {}
             Ok(false) => return Err(Refusal::NoChatGrant { actor }),

@@ -298,7 +298,11 @@ pub struct Wanted {
 
 /// The desired set: every binding × every principal with an enabled
 /// `kind=app` grant for that App AND an enabled `chat` member grant.
-/// Principals only — never a Connect login, the owner or an agent.
+/// Principals only — never a Connect login, the owner or an agent. An App
+/// login the owner marked as an agent's (`k2 app user agent`,
+/// `principals.agent_workspace`) is an agent, not a person, so it is left
+/// out whatever grants it holds; one K2 already added is removed by the
+/// next [`plan`] (it is no longer wanted).
 pub fn build_desired(conn: &Connection) -> Result<Vec<Wanted>, String> {
     let mut stmt = conn
         .prepare(
@@ -308,6 +312,8 @@ pub fn build_desired(conn: &Connection) -> Result<Vec<Wanted>, String> {
                           AND a.subject_kind = 'principal' AND a.enabled = 1
              JOIN grants c ON c.kind = 'chat' AND c.subject_kind = 'principal'
                           AND c.subject_id = a.subject_id AND c.enabled = 1 AND c.scope = 'member'
+             WHERE NOT EXISTS (SELECT 1 FROM principals p WHERE p.id = a.subject_id
+                                 AND p.agent_workspace IS NOT NULL AND TRIM(p.agent_workspace) != '')
              ORDER BY b.space_id, a.subject_id",
         )
         .map_err(|e| format!("app space desired: {e}"))?;

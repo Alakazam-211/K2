@@ -415,6 +415,16 @@ pub fn handle_pass_with(req: &PassRequest<'_>, d: &Deps<'_>) -> Reply {
                     audit("chat-pass", &actor, "no_chat_grant", req.ingress, req.ip);
                     return error(403, "no_chat_grant", "this person has no chat access (grant kind chat)", None).into();
                 }
+                Err(Refusal::AgentSubject { actor }) => {
+                    audit("chat-pass", &actor, "agent_subject", req.ingress, req.ip);
+                    return error(
+                        403,
+                        "agent_subject",
+                        "this App login is an agent's (k2 app user agent): an agent is its workspace in chat, never a person, so it gets no chat pass (agents use k2 chat)",
+                        None,
+                    )
+                    .into();
+                }
                 Err(Refusal::NoChatCaps { actor }) => {
                     audit("chat-pass", &actor, "no_chat_caps", req.ingress, req.ip);
                     return error(

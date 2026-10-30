@@ -503,3 +503,59 @@ fn an_explicit_unbind_also_unbinds_in_sew_after_its_removes() {
     let u = hook::app_space_unbinds().unwrap();
     assert!(u.iter().all(|u| u.cause == "space_unbound"), "{u:?}");
 }
+
+/// AG-5: an App login the owner marked as an agent's (`k2 app user
+/// agent`) is not a person, so it is never in its App's Space, whatever
+/// grants it holds; one K2 added before the mark is removed by the next
+/// plan. A plain App user with the same grants stays in.
+#[test]
+fn an_agent_marked_app_login_is_not_in_the_apps_space_ag5() {
+    let _e = setup();
+    let ws = uuid::Uuid::new_v4().to_string();
+    {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        conn.execute(
+            "INSERT INTO projects (id, name, path, handle) VALUES (?1, 'Ops', ?2, ?3)",
+            rusqlite::params![ws, format!("/tmp/k2-ag5-{ws}"), format!("ops{}", &ws[..8])],
+        )
+        .unwrap();
+    }
+    let ann = person("ann");
+    let bot = person("bot");
+    let raw = person("raw");
+    for p in [&ann, &bot, &raw] {
+        app_user(p, "hearth");
+        chat(p, "member");
+    }
+    // bot: marked before the bind, through the owner's verb (tied too).
+    skin::set_principal_agent("bot", Some(ws.as_str())).expect("mark bot");
+    bind("hearth", SPACE);
+    assert_eq!(
+        desired_pairs(),
+        HashSet::from([(SPACE.to_string(), pext(&ann.id)), (SPACE.to_string(), pext(&raw.id))]),
+        "the agent's login is never wanted"
+    );
+    assert!(
+        !space_rows().iter().any(|r| r.subject_key.ends_with(&pext(&bot.id))),
+        "no Space op names the agent's login: {:?}",
+        space_rows()
+    );
+    // raw: added as a person first, then marked: the next plan removes it.
+    let raw_key = format!("space:{SPACE}:{}", pext(&raw.id));
+    let add = open_space_rows().into_iter().find(|r| r.subject_key == raw_key).expect("raw's add");
+    hook::record_done(&add.id, 200, &added_body(&pext(&raw.id))).unwrap();
+    assert_eq!(ledger_state(SPACE, &pext(&raw.id)).as_deref(), Some(ADDED));
+    skin::with_skin_conn(|c| {
+        c.execute("UPDATE principals SET agent_workspace = ?1 WHERE id = ?2", rusqlite::params![ws, raw.id])
+            .map_err(|e| e.to_string())
+    })
+    .unwrap();
+    assert_eq!(desired_pairs(), HashSet::from([(SPACE.to_string(), pext(&ann.id))]));
+    let s = skin::with_skin_conn(|c| reconcile(c, "system:reconcile", outbox::now_secs())).unwrap();
+    assert_eq!((s.adds, s.removes), (0, 1), "{s:?}");
+    let rm = open_space_rows().into_iter().find(|r| r.op == "space_member_remove").expect("remove row");
+    let p: serde_json::Value = serde_json::from_str(&rm.payload_raw).unwrap();
+    assert_eq!(p, serde_json::json!({"space_id": SPACE, "app_id": "hearth", "external_id": pext(&raw.id)}));
+    assert_eq!(ledger_state(SPACE, &pext(&raw.id)).as_deref(), Some(PENDING_REMOVE));
+}

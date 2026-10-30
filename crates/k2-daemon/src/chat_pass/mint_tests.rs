@@ -1010,3 +1010,59 @@ fn connect_login_mints_only_after_its_member_is_delivered() {
     let audit = audit_text();
     assert!(audit.contains("chat_member_pending") && audit.contains("chat_member_blocked"), "{audit}");
 }
+
+/// AG-5: an App login the owner marked as an agent's (`k2 app user
+/// agent`) is an agent, never a person: no person pass, chat grant or not
+/// (403 `agent_subject`), whether or not a tie came with the mark. A plain
+/// App user with the same grants still mints.
+#[test]
+fn an_agent_marked_app_login_gets_no_person_pass_ag5() {
+    let _home = TempHome::new();
+    let _db = k2_core::db::scoped_for_test();
+    let r = ring("ag5");
+    let ws = "11111111-2222-4333-8444-555555555555";
+    // The agent's own App (its workspace's): a tied login's session stays
+    // live only inside its workspace's Apps.
+    let ops_app = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        conn.execute("INSERT INTO projects (id, name, path, handle) VALUES (?1, 'ops', '/tmp/k2-ag5-ops', 'ops-ag5')", rusqlite::params![ws])
+            .expect("workspace");
+        k2_core::published_services::insert(&conn, ws, "ops-board", "node s.js", "/tmp", 4610, "local", "running", "cmd", "").expect("App").id
+    };
+    let ana = app_guest("ana", &[HEARTH_SVC]);
+    let bot = app_guest("bot", &[ops_app.as_str()]);
+    let raw = app_guest("raw", &[HEARTH_SVC]);
+    // Signed in before the mark (live sessions keep working after it).
+    let ana_s = k2_core::skin::create_app_session_token("ana", HEARTH_SVC).expect("ana → Hearth");
+    let bot_s = k2_core::skin::create_app_session_token("bot", &ops_app).expect("bot → its own App");
+    let raw_s = k2_core::skin::create_app_session_token("raw", HEARTH_SVC).expect("raw → Hearth");
+    // The owner's mark (`k2 app user agent bot ops-ag5`): it ties the login too.
+    k2_core::skin::set_principal_agent("bot", Some("ops-ag5")).expect("mark");
+    // A mark with no tie beside it (a row the tie never covered).
+    rusqlite::Connection::open(k2_core::paths::k2_home().join("skin.db"))
+        .expect("skin.db")
+        .execute("UPDATE principals SET agent_workspace = ?1 WHERE id = ?2", rusqlite::params![ws, raw])
+        .expect("raw mark");
+    assert!(k2_core::skin::ties::get(&raw).expect("tie read").is_none(), "this one has the mark only");
+    for id in [&bot, &raw] {
+        assert!(k2_core::skin::principal_has_chat_grant(id).expect("grant"), "it holds a chat grant");
+        assert_eq!(k2_core::skin::principal_agent_workspace(id).expect("mark").as_deref(), Some(ws));
+    }
+
+    for (s, who) in [(&bot_s.raw, "bot"), (&raw_s.raw, "raw")] {
+        assert!(k2_core::skin::resolve_skin_token(s).is_some(), "{who}: the session is still live after the mark");
+    }
+    with_deps(&r, T0, false, |d| {
+        for (s, who) in [(&bot_s.raw, "bot"), (&raw_s.raw, "raw")] {
+            let x = mint::handle_pass_with(&req(Some(s), b"{}"), d);
+            assert_eq!((x.response.status, code(&x).as_str()), ("403 Forbidden", "agent_subject"), "{who}: {}", x.response.body);
+            assert!(!x.response.body.contains("\"pass\""), "{who}: {}", x.response.body);
+        }
+        // A person with the same grants still gets their pass.
+        let x = mint::handle_pass_with(&req(Some(&ana_s.raw), b"{}"), d);
+        assert_eq!(x.response.status, "200 OK", "{}", x.response.body);
+        assert_eq!(body(&x)["sub"], format!("k2:principal:{ana}"));
+    });
+    assert!(audit_text().contains("agent_subject"), "the refusal is audited");
+}

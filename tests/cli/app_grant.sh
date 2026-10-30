@@ -291,6 +291,15 @@ list_out="$(env -u K2_HOOK_TOKEN -u K2_HOOK_SOCK -u K2SO_HOOK_SOCK HOME="$HOME" 
 list_rc=$?
 own_out="$(run_k2 app grant list 2>/dev/null)"
 own_rc=$?
+# A K2 shell tab carries a passport and the cell marker (K2_HOOK_SOCK). `app`
+# is an id tool, so the CLI keeps the passport there (never the disk owner
+# token); /cli/skin/grants is owner-only and refuses every passport (it did
+# before app.login-grant too: owner_only), so a shell tab, like the agent,
+# lists its own workspace's Apps' logins. The socket path doesn't exist, so
+# the call goes over TCP to the stub.
+shell_out="$(env HOME="$HOME" K2_HOST="${K2_HOST}" K2_PORT="${K2_PORT}" K2_HOOK_TOKEN="${K2_HOOK_TOKEN}" \
+    K2_HOOK_SOCK="$SANDBOX/no-cell.sock" "$K2_CLI" app grant list 2>/dev/null)"
+shell_rc=$?
 add_out="$(run_k2 app grant add --subject-kind principal --subject p-ada --kind app --target booking --role guest 2>/dev/null)"
 add_rc=$?
 rm_out="$(run_k2 app grant rm --subject-kind workspace --subject ws-1 --kind mailbox --target inbox 2>/dev/null)"
@@ -349,6 +358,8 @@ assert_contains "list prints subject" "$list_out" "principal p-ada"
 assert_contains "list prints kind" "$list_out" "app booking"
 assert_eq "agent grant list exit 0" "$own_rc" "0"
 assert_contains "agent list is its own Apps' logins" "$own_out" "g9  ada on booking  role guest"
+assert_eq "shell tab grant list exit 0" "$shell_rc" "0"
+assert_contains "shell tab list is its workspace's Apps' logins" "$shell_out" "g9  ada on booking  role guest"
 assert_eq "grant add exit 0" "$add_rc" "0"
 assert_contains "add prints id" "$add_out" "g-new"
 assert_eq "grant rm exit 0" "$rm_rc" "0"

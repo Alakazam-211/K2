@@ -267,7 +267,7 @@ Legend: `who $ doc <verb> ...` is one call of the host's doc CLI; `| ` is stdout
   stderr: edited plan.md line 23 (+1 −1) · v7
   exit 0
 [00:32] agent-c $ doc write --base 6 plan.md < (its edited copy)
-  stderr: conflict at line 23 of v6: yours " in 2026", now "; reviewed by B"
+  stderr: conflict at line 23 of v6: yours "Drafted by the team in 2026.", now "Drafted by the team; reviewed by B."
   stderr: note: Agent B (agent-b) claimed line 23 "tightening the notes" (3 s ago, 1 min left)
   stderr: note: Agent B (agent-b) edited line 23 (2 s ago)
   stderr: nothing applied; re-read and retry

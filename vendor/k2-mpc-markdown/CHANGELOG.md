@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.7.7 (2026-10-30): pairs with kit v0.9.7.1
+
+**Requires `k2-mpc-base` v0.9.7.1** (crate version `0.9.7+1`). The kit's `write --base` now
+merges by whole lines (it could splice two lines that start alike into one; possible text
+corruption, kit v0.1.0 through v0.9.7). What changes:
+- **Agent writes touching a line someone else changed are refused as a conflict; re-read and
+  retry.** Two agents changing different words of one line now conflict (the second re-reads
+  and writes again); different lines, adjacent ones too, still merge.
+- **The demo's golden transcript** (`tests/golden/multiplayer_demo.txt`) changes by one line:
+  agent-c's conflicting `write --base 6` (step 4, already a conflict at v0.9.7) now quotes the
+  whole conflicting line on each side, `yours "Drafted by the team in 2026.", now "Drafted by
+  the team; reviewed by B."`, instead of the characters that differed (`" in 2026"`, `";
+  reviewed by B"`): the kit's conflict sides are whole lines. Same line, same exit code (1),
+  same notes, nothing applied.
+- `Cargo.lock`: k2-mpc-base 0.9.7+1; the crate version 0.7.7. No other pack code change.
+
 ## v0.7.6 (2026-10-29): pairs with kit v0.9.7
 
 **Requires `k2-mpc-base` v0.9.7** (it skips v0.9.6, a one-fix release). Pack changes:

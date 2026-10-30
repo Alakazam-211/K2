@@ -269,7 +269,25 @@ def main():
     n, a = admin.call("x:MtaOutboundStrategy/set", {"update": {"singleton": {"route": {"match": shifted, "else": old_route["else"]}}}})
     if a.get("notUpdated"):
         sys.exit(f"route bind: {json.dumps(a)[:300]}")
-    admin.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
+    # The sandbox's inbound listener isn't on :25, and Stalwart's stock rule
+    # asks for auth on any other port (`local_port != 25`): make the sandbox
+    # port the "inbound" one, as :25 is on a real box (the p4b probe's fix).
+    n, ls = admin.call("x:NetworkListener/get", {"ids": None})
+    for l in ls.get("list") or []:
+        if (l.get("protocol") or "").lower() == "smtp" and l.get("name") == "smtp":
+            args.smtp_port = int(next(iter(l["bind"])).rsplit(":", 1)[1])
+    n, a = admin.call("x:MtaStageAuth/set", {"update": {"singleton": {"require": {"else": f"local_port != {args.smtp_port}"}}}})
+    info("sandbox: inbound auth rule moved to the sandbox port", f"{args.smtp_port}: {n} {json.dumps(a)[:160]}")
+    # 0.16.10 refuses every reload while downloaded spam rules call
+    # `bit_and` (K2's A4 repair rewrites them on a real box); drop them here.
+    n, q = admin.call("x:SpamDnsblServer/query", {})
+    if q.get("ids"):
+        n, g = admin.call("x:SpamDnsblServer/get", {"ids": q["ids"]})
+        bad = [x["id"] for x in (g.get("list") or []) if "bit_and" in json.dumps(x)]
+        if bad:
+            admin.call("x:SpamDnsblServer/set", {"destroy": bad})
+    n, a = admin.call("x:Action/set", {"create": {"r": {"@type": "ReloadSettings"}}})
+    info("sandbox: reload", f"{n} {json.dumps(a)[:120]}")
 
     def golden(name, dest, host):
         src = open(os.path.join(GOLDENS, name)).read()

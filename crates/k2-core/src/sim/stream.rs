@@ -151,6 +151,10 @@ pub enum ServerMsg {
         hold: HoldView,
         /// "separate, not sealed" text for the tab (PRD §8).
         isolation: String,
+        /// What input this device takes beyond one finger. Absent from
+        /// older daemons: the tab then offers no pinch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input: Option<InputCaps>,
     },
     State {
         state: SimState,
@@ -164,6 +168,16 @@ pub enum ServerMsg {
     Fps { fps: u32 },
 }
 
+/// What a device's input takes beyond one finger (`hello.input`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputCaps {
+    /// Two fingers at once (`touch` with `x2`/`y2`).
+    pub multi_touch: bool,
+    /// `touch` up takes `vx`/`vy` (this daemon replays the fling).
+    pub fling: bool,
+}
+
 /// Viewer → daemon (text frames). Coordinates are in points.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "kebab-case")]
@@ -173,7 +187,27 @@ pub enum ViewerMsg {
     /// Ask for a different rate (clamped; remote 2–15, local ≤ 30).
     Fps { fps: u32 },
     /// Pointer phases (down / move / up) for drags and taps.
-    Touch { phase: TouchPhase, x: f32, y: f32 },
+    ///
+    /// - `x2`/`y2`: a second finger (pinch). Both or neither; refused
+    ///   (never sent as one finger) unless `hello.input.multiTouch`.
+    /// - `vx`/`vy` on `up`: the release velocity in points per second.
+    ///   The daemon replays the last few moves at that speed on the
+    ///   device's own clock before lifting ([`super::gesture::fling_tail`]),
+    ///   so a flick coasts however the moves were bunched in transit.
+    ///   Older daemons ignore both and just lift.
+    Touch {
+        phase: TouchPhase,
+        x: f32,
+        y: f32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x2: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y2: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vx: Option<f32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vy: Option<f32>,
+    },
     Tap { x: f32, y: f32 },
     #[serde(rename_all = "camelCase")]
     Swipe { x1: f32, y1: f32, x2: f32, y2: f32, #[serde(default)] duration_ms: Option<u32> },
@@ -340,7 +374,7 @@ mod tests {
         let m: ViewerMsg = serde_json::from_str(r#"{"t":"button","button":"home"}"#).expect("button");
         assert_eq!(m, ViewerMsg::Button { button: Button::Home });
         let m: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"down","x":1,"y":2}"#).expect("touch");
-        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Down, x: 1.0, y: 2.0 });
+        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Down, x: 1.0, y: 2.0, x2: None, y2: None, vx: None, vy: None });
         let s = serde_json::to_value(ServerMsg::Hold { hold: HoldView::Person { by: "rosson".into(), ms: 2000 } }).expect("json");
         assert_eq!(s, serde_json::json!({"t":"hold","hold":{"kind":"person","by":"rosson","ms":2000}}));
         let s = serde_json::to_value(ServerMsg::Hold { hold: HoldView::Takeover { by: "rosson".into(), idle_ms: 5 } }).expect("json");
@@ -411,5 +445,39 @@ mod tests {
         }
         assert!(b.take(&p, t1).is_err());
         assert_eq!(b.take(&p, t1 + std::time::Duration::from_secs(2)), Ok(()), "one paste every two seconds");
+    }
+
+    /// Two fingers and a release velocity ride the same `touch` message;
+    /// an old client's one-finger `touch` still parses, and a plain touch
+    /// serializes without the new keys (old daemons see what they knew).
+    #[test]
+    fn touch_takes_a_second_finger_and_a_velocity() {
+        let m: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"move","x":100,"y":200,"x2":300,"y2":400}"#).expect("two fingers");
+        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Move, x: 100.0, y: 200.0, x2: Some(300.0), y2: Some(400.0), vx: None, vy: None });
+        let m: ViewerMsg = serde_json::from_str(r#"{"t":"touch","phase":"up","x":5,"y":6,"vx":-120.5,"vy":2400}"#).expect("fling");
+        assert_eq!(m, ViewerMsg::Touch { phase: TouchPhase::Up, x: 5.0, y: 6.0, x2: None, y2: None, vx: Some(-120.5), vy: Some(2400.0) });
+        let plain = serde_json::to_value(ViewerMsg::Touch { phase: TouchPhase::Up, x: 1.0, y: 2.0, x2: None, y2: None, vx: None, vy: None }).expect("json");
+        assert_eq!(plain, serde_json::json!({"t":"touch","phase":"up","x":1.0,"y":2.0}));
+    }
+
+    #[test]
+    fn hello_reports_input_caps_and_parses_without_them() {
+        let hello = ServerMsg::Hello {
+            sim: "s1".into(),
+            lane: LaneKind::Android,
+            state: SimState::Running,
+            profile: None,
+            fps: 30,
+            remote: false,
+            hold: HoldView::Free,
+            isolation: "x".into(),
+            input: Some(InputCaps { multi_touch: true, fling: true }),
+        };
+        let v = serde_json::to_value(&hello).expect("json");
+        assert_eq!(v["input"], serde_json::json!({"multiTouch": true, "fling": true}));
+        let mut old = v.clone();
+        old.as_object_mut().expect("object").remove("input");
+        let back: ServerMsg = serde_json::from_value(old).expect("an older daemon's hello");
+        assert!(matches!(back, ServerMsg::Hello { input: None, .. }));
     }
 }

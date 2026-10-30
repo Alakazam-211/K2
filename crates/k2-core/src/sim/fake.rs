@@ -179,9 +179,21 @@ impl SimLane for FakeLane {
                 self.actions.lock().push(s)
             }
             Action::Edit { op } => self.actions.lock().push(format!("edit {op:?}")),
+            Action::Touch { phase, at } => self.actions.lock().push(format!("touch {phase:?} {},{}", at.x, at.y)),
+            Action::TwoTouch { phase, a, b } => {
+                if !self.multi_touch() {
+                    return Err(LaneError::unsupported("Pinch isn't available on this device yet."));
+                }
+                self.actions.lock().push(format!("two-touch {phase:?} {},{} {},{}", a.x, a.y, b.x, b.y))
+            }
             other => self.actions.lock().push(other.verb().to_string()),
         }
         Ok(())
+    }
+
+    /// Like the real lanes: Android takes two fingers, iOS doesn't yet.
+    fn multi_touch(&self) -> bool {
+        self.kind == LaneKind::Android
     }
 
     fn screenshot(&self, dev: &DeviceRef) -> Result<Frame, LaneError> {

@@ -33,7 +33,7 @@ use tokio_tungstenite::tungstenite::Message;
 use k2_core::log_debug;
 use k2_core::sim::encode;
 use k2_core::sim::hold::HoldView;
-use k2_core::sim::lane::{Action, FrameOpts, KeyMods, Point};
+use k2_core::sim::lane::{Action, FrameOpts, KeyMods, Point, TouchPhase};
 use k2_core::sim::manager::{self, Ws};
 use k2_core::sim::stream::*;
 
@@ -189,7 +189,12 @@ fn who_name(c: &Caller) -> String {
 /// The viewer message → a lane action (points).
 fn to_action(m: &ViewerMsg) -> Option<Action> {
     Some(match m {
-        ViewerMsg::Touch { phase, x, y } => Action::Touch { phase: *phase, at: Point { x: *x, y: *y } },
+        ViewerMsg::Touch { phase, x, y, x2, y2, .. } => match (x2, y2) {
+            (None, None) => Action::Touch { phase: *phase, at: Point { x: *x, y: *y } },
+            // A pinch: both fingers, or the lane refuses it. Never one.
+            (Some(x2), Some(y2)) => Action::TwoTouch { phase: *phase, a: Point { x: *x, y: *y }, b: Point { x: *x2, y: *y2 } },
+            _ => return None,
+        },
         ViewerMsg::Tap { x, y } => Action::Tap { at: Point { x: *x, y: *y } },
         ViewerMsg::Swipe { x1, y1, x2, y2, duration_ms } => Action::Swipe {
             from: Point { x: *x1, y: *y1 },
@@ -292,6 +297,7 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, view
         remote: viewer.remote,
         hold: m.hold_view(sim_id),
         isolation: k2_core::sim::ISOLATION_NOTE.to_string(),
+        input: view.as_ref().map(|v| m.input_caps(v.lane)),
     };
     let mut rx = hub.rx.clone();
     let mut in_flight = false;
@@ -443,6 +449,11 @@ fn person_input(ws: &Ws, who: &str, caller: &Caller, vm: ViewerMsg) -> Result<()
     match vm {
         ViewerMsg::TakeOver => m.hold(ws, &actor, k2_core::sim::api::HoldAction::TakeOver).map(|_| ()),
         ViewerMsg::HandBack => m.hold(ws, &actor, k2_core::sim::api::HoldAction::HandBack).map(|_| ()),
+        // One finger lifting with a velocity: the daemon replays the
+        // flick's tail on the device's clock first.
+        ViewerMsg::Touch { phase: TouchPhase::Up, x, y, x2: None, y2: None, vx: Some(vx), vy: Some(vy) } => {
+            m.person_fling(ws, who, Point { x, y }, (vx, vy))
+        }
         o => match to_action(&o) {
             Some(a) => m.person_action(ws, who, &a),
             None => Err(manager::SimError::new(400, "sim_invalid", "bad input")),
@@ -588,6 +599,85 @@ mod tests {
         assert_eq!(tail, vec!["keys 2", "key ArrowRight+shift", "edit SelectAll", "paste 13"]);
         assert!(!acts.iter().any(|a| a.contains("secret")), "{acts:?}");
         m.stop(&ws, &manager::Actor::Person { name: "owner".into() }, "test").expect("stop");
+        crate::sim_routes::clear_lanes_for_tests();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+
+    fn touch(phase: TouchPhase, x2: Option<f32>, y2: Option<f32>) -> ViewerMsg {
+        ViewerMsg::Touch { phase, x: 10.0, y: 20.0, x2, y2, vx: None, vy: None }
+    }
+
+    #[test]
+    fn a_second_finger_is_a_two_finger_touch_and_half_a_pair_is_dropped() {
+        assert_eq!(
+            to_action(&touch(TouchPhase::Move, Some(30.0), Some(40.0))),
+            Some(Action::TwoTouch { phase: TouchPhase::Move, a: Point { x: 10.0, y: 20.0 }, b: Point { x: 30.0, y: 40.0 } })
+        );
+        assert_eq!(to_action(&touch(TouchPhase::Down, None, None)), Some(Action::Touch { phase: TouchPhase::Down, at: Point { x: 10.0, y: 20.0 } }));
+        assert!(to_action(&touch(TouchPhase::Move, Some(30.0), None)).is_none(), "never one finger for a pinch");
+    }
+
+    /// The fake lane end to end: a flick's `up` with a velocity replays the
+    /// tail of moves before lifting; a pinch reaches an Android lane as two
+    /// fingers and is refused (not sent as one) on iOS; hello reports it.
+    #[test]
+    fn fling_tail_and_pinch_reach_the_fake_lane() {
+        let _serial = crate::sim_routes::sim_test_lock();
+        let tmp = std::env::temp_dir().join(format!("k2-sim-gesture-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("ws")).expect("ws");
+        k2_core::sim::set_base_for_tests(tmp.join("home"));
+        k2_core::sim::limits::save_settings(&k2_core::sim::limits::SimSettings { min_free_ram_bytes: Some(0), ..Default::default() }).expect("limits");
+        let fake = Arc::new(k2_core::sim::fake::FakeLane::new(k2_core::sim::LaneKind::Android));
+        k2_core::sim::register_lane(fake.clone());
+        let m = manager::manager();
+        m.refresh_probes();
+        let id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            conn.execute("INSERT INTO projects (id, name, path) VALUES (?1, 'gesture', ?2)", rusqlite::params![id, tmp.join("ws").display().to_string()])
+                .expect("project");
+        }
+        let ws = Ws { id: id.clone(), handle: "gesture".into(), path: tmp.join("ws") };
+        let owner = manager::Actor::Person { name: "owner".into() };
+        m.boot(&ws, &owner, &k2_core::sim::api::BootReq { no_tab: true, ..Default::default() }).expect("boot");
+        assert_eq!(m.input_caps(k2_core::sim::LaneKind::Android), InputCaps { multi_touch: true, fling: true });
+        fake.actions.lock().clear();
+
+        let fling = ViewerMsg::Touch { phase: TouchPhase::Up, x: 200.0, y: 600.0, x2: None, y2: None, vx: Some(0.0), vy: Some(-2000.0) };
+        person_input(&ws, "owner", &Caller::Owner, fling).expect("fling");
+        let got = fake.actions.lock().clone();
+        assert_eq!(got.len(), 5, "{got:?}");
+        assert!(got[..4].iter().all(|a| a.starts_with("touch Move 200,")), "{got:?}");
+        assert!(got[4].starts_with("touch Up 200,53"), "lifts at the tail's end: {got:?}");
+
+        fake.actions.lock().clear();
+        let slow = ViewerMsg::Touch { phase: TouchPhase::Up, x: 200.0, y: 600.0, x2: None, y2: None, vx: Some(0.0), vy: Some(-5.0) };
+        person_input(&ws, "owner", &Caller::Owner, slow).expect("slow");
+        assert_eq!(fake.actions.lock().clone(), vec!["touch Up 200,600".to_string()]);
+
+        fake.actions.lock().clear();
+        let pinch = ViewerMsg::Touch { phase: TouchPhase::Down, x: 150.0, y: 400.0, x2: Some(250.0), y2: Some(400.0), vx: None, vy: None };
+        person_input(&ws, "owner", &Caller::Owner, pinch).expect("pinch");
+        assert_eq!(fake.actions.lock().clone(), vec!["two-touch Down 150,400 250,400".to_string()]);
+
+        m.stop(&ws, &owner, "test").expect("stop");
+        crate::sim_routes::clear_lanes_for_tests();
+
+        // iOS takes one finger only: the pinch is refused, nothing is sent.
+        let ios = Arc::new(k2_core::sim::fake::FakeLane::new(k2_core::sim::LaneKind::Ios));
+        k2_core::sim::register_lane(ios.clone());
+        m.refresh_probes();
+        m.boot(&ws, &owner, &k2_core::sim::api::BootReq { platform: Some("ios".into()), no_tab: true, ..Default::default() }).expect("boot ios");
+        assert!(!m.input_caps(k2_core::sim::LaneKind::Ios).multi_touch);
+        ios.actions.lock().clear();
+        let pinch = ViewerMsg::Touch { phase: TouchPhase::Down, x: 150.0, y: 400.0, x2: Some(250.0), y2: Some(400.0), vx: None, vy: None };
+        let err = person_input(&ws, "owner", &Caller::Owner, pinch).expect_err("iOS refuses a pinch");
+        assert!(err.message.contains("Pinch isn't available"), "{}", err.message);
+        assert!(ios.actions.lock().is_empty(), "nothing reached the device");
+        m.stop(&ws, &owner, "test").expect("stop ios");
         crate::sim_routes::clear_lanes_for_tests();
         let _ = std::fs::remove_dir_all(&tmp);
     }

@@ -690,6 +690,9 @@ impl SimLane for IosLane {
                 }
                 Ok(())
             }
+            // The helper sends one finger; pinch waits until two-finger
+            // Indigo messages are proven on a real Simulator.
+            Action::TwoTouch { .. } => Err(LaneError::unsupported("Pinch isn't available on this device yet.")),
             Action::Key { key, mods } => self.helper(id).lane()?.call("key", key_args(*key, *mods), INPUT_TIMEOUT).map(|_| ()).lane(),
             Action::Edit { op } => self.helper(id).lane()?.call("key", edit_args(*op), INPUT_TIMEOUT).map(|_| ()).lane(),
             Action::Keystrokes { text } => {

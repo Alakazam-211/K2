@@ -962,6 +962,32 @@ impl Manager {
         Ok(())
     }
 
+    /// A person's release with a velocity (the stream's `touch` up with
+    /// `vx`/`vy`): replay the fling tail on the device's clock, then lift
+    /// at its end ([`super::gesture`]). A slow release just lifts.
+    pub fn person_fling(&self, ws: &Ws, who: &str, at: Point, v: (f32, f32)) -> R<()> {
+        let row = self.running_row(ws)?;
+        let (w, h) = self.screen_size(&row);
+        let landscape = matches!(
+            self.with_live(row.id, |l| l.orientation),
+            Some(Orientation::LandscapeLeft) | Some(Orientation::LandscapeRight)
+        );
+        let screen = if landscape == (w > h) { (w, h) } else { (h, w) };
+        let tail = super::gesture::fling_tail(at, v, screen);
+        let mut last = at;
+        for p in tail {
+            self.person_action(ws, who, &Action::Touch { phase: TouchPhase::Move, at: p })?;
+            std::thread::sleep(super::gesture::TAIL_STEP);
+            last = p;
+        }
+        self.person_action(ws, who, &Action::Touch { phase: TouchPhase::Up, at: last })
+    }
+
+    /// What the stream's `hello` says this device's input takes.
+    pub fn input_caps(&self, lane: LaneKind) -> super::stream::InputCaps {
+        super::stream::InputCaps { multi_touch: super::lane(lane).is_some_and(|l| l.multi_touch()), fling: true }
+    }
+
     pub fn viewer_joined(&self, sim_id: i64) {
         self.with_live(sim_id, |l| l.viewers += 1);
     }

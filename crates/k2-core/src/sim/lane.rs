@@ -365,6 +365,10 @@ pub enum Action {
     /// up). Lanes that can't stream phases may buffer until `Up` and replay
     /// as a tap / swipe.
     Touch { phase: TouchPhase, at: Point },
+    /// Two fingers together (a pinch): `a` and `b` go down, move and lift
+    /// as one gesture. Only lanes whose [`SimLane::multi_touch`] is true
+    /// take it; the others refuse it (never one finger instead).
+    TwoTouch { phase: TouchPhase, a: Point, b: Point },
     /// Type text into whatever has focus (`k2 sim type`: the lane finds
     /// the field and checks the text arrived).
     Type { text: SimText },
@@ -419,6 +423,7 @@ impl Action {
             Action::LongPress { .. } => "long-press",
             Action::Swipe { .. } => "swipe",
             Action::Touch { .. } => "touch",
+            Action::TwoTouch { .. } => "two-touch",
             Action::Type { .. } => "type",
             Action::Keystrokes { .. } => "keys",
             Action::Paste { .. } => "paste",
@@ -707,6 +712,13 @@ pub trait SimLane: Send + Sync + 'static {
     /// sweep. Default: `adopt` returned something.
     fn alive(&self, dev: &DeviceRef) -> bool {
         matches!(self.adopt(dev), Ok(Some(_)))
+    }
+
+    /// Takes [`Action::TwoTouch`] (two fingers at once, for pinch). Default:
+    /// no. The stream's `hello` reports it so the tab offers pinch only
+    /// where it works.
+    fn multi_touch(&self) -> bool {
+        false
     }
 
     /// The text of a licence named in a [`LaneNeed::Licence`], for the

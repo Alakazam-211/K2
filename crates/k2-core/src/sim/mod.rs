@@ -20,6 +20,7 @@
 pub mod android;
 pub mod api;
 pub mod encode;
+pub mod gesture;
 #[cfg(any(test, feature = "test-util"))]
 pub mod fake;
 pub mod hold;

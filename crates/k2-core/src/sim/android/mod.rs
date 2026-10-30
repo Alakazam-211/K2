@@ -314,16 +314,13 @@ impl AndroidLane {
     }
 
     fn touch(&self, g: &grpc::EmuGrpc, st: &State, at: Point, down: bool) -> Result<(), LaneError> {
-        let ev = grpc::TouchEvent {
-            touches: vec![grpc::Touch {
-                x: (at.x * st.scale).round() as i32,
-                y: (at.y * st.scale).round() as i32,
-                identifier: 0,
-                pressure: if down { 1 } else { 0 },
-                ..Default::default()
-            }],
-            display: 0,
-        };
+        self.touches(g, st, &[at], down)
+    }
+
+    /// Every finger in one event (pinch: two), so the device sees them
+    /// move together.
+    fn touches(&self, g: &grpc::EmuGrpc, st: &State, at: &[Point], down: bool) -> Result<(), LaneError> {
+        let ev = touch_event(st.scale, at, down);
         let g = g.clone();
         Self::block(async move { g.send_touch(&ev).await })
     }
@@ -552,6 +549,12 @@ impl SimLane for AndroidLane {
         }))
     }
 
+    /// The emulator's gRPC `sendTouch` takes several fingers per event,
+    /// each with its own identifier (Android Studio's pinch uses it).
+    fn multi_touch(&self) -> bool {
+        true
+    }
+
     fn alive(&self, dev: &DeviceRef) -> bool {
         let Ok(st) = Self::state(dev) else { return false };
         proc::pid_alive(st.pid) && proc::cmdline(st.pid).is_some_and(|c| c.contains(&Self::avd_name(&dev.workspace_key)))
@@ -681,6 +684,10 @@ impl SimLane for AndroidLane {
             Action::Touch { phase, at } => {
                 let g = self.grpc(dev, &st)?;
                 self.touch(&g, &st, *at, !matches!(phase, TouchPhase::Up))
+            }
+            Action::TwoTouch { phase, a, b } => {
+                let g = self.grpc(dev, &st)?;
+                self.touches(&g, &st, &[*a, *b], !matches!(phase, TouchPhase::Up))
             }
             Action::Type { text } => {
                 let g = self.grpc(dev, &st)?;
@@ -863,9 +870,44 @@ pub fn state_json(console: u16, grpc_port: u16, pid: u32) -> serde_json::Value {
     json!({ "consolePort": console, "grpcPort": grpc_port, "pid": pid, "profile": "pixel_9", "widthPx": 1080, "heightPx": 2424, "scale": 2.625 })
 }
 
+/// One `sendTouch` event: finger `i` is identifier `i`, points scaled to
+/// pixels; `down` false lifts every finger (pressure 0).
+fn touch_event(scale: f32, at: &[Point], down: bool) -> grpc::TouchEvent {
+    grpc::TouchEvent {
+        touches: at
+            .iter()
+            .enumerate()
+            .map(|(i, p)| grpc::Touch {
+                x: (p.x * scale).round() as i32,
+                y: (p.y * scale).round() as i32,
+                identifier: i as i32,
+                pressure: if down { 1 } else { 0 },
+                ..Default::default()
+            })
+            .collect(),
+        display: 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn two_fingers_go_in_one_event_with_their_own_ids() {
+        let a = Point { x: 100.0, y: 200.0 };
+        let b = Point { x: 300.0, y: 400.0 };
+        let ev = touch_event(2.0, &[a, b], true);
+        assert_eq!(ev.touches.len(), 2);
+        assert_eq!((ev.touches[0].x, ev.touches[0].y, ev.touches[0].identifier, ev.touches[0].pressure), (200, 400, 0, 1));
+        assert_eq!((ev.touches[1].x, ev.touches[1].y, ev.touches[1].identifier, ev.touches[1].pressure), (600, 800, 1, 1));
+        let up = touch_event(2.0, &[a, b], false);
+        assert!(up.touches.iter().all(|t| t.pressure == 0), "lifting lifts both fingers");
+        // One finger is unchanged: identifier 0.
+        let one = touch_event(2.625, &[Point { x: 10.0, y: 10.0 }], true);
+        assert_eq!((one.touches.len(), one.touches[0].identifier, one.touches[0].x), (1, 0, 26));
+        assert!(AndroidLane::new(std::env::temp_dir().join("k2-android-mt")).multi_touch());
+    }
 
     #[test]
     fn profiles_are_in_points_and_pixel_9_is_the_default() {

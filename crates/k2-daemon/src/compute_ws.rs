@@ -1998,6 +1998,8 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
     let node = node_id.to_string();
     std::thread::spawn(move || {
         let fail = |code: &str, msg: String| {
+            // The reason goes to the node (its job log says it) and here.
+            log_debug!("[compute] {:?} transfer for job {} (node {node}) failed: {code}: {msg}", n.kind, n.job_id);
             send_to(&node, Frame::TransferFailed(TransferFailed { job_id: n.job_id.clone(), generation: n.generation, kind: n.kind, code: code.into(), message: msg }));
         };
         let (job, ws_path) = {
@@ -2043,7 +2045,11 @@ fn on_need(node_id: &str, route: &'static str, n: Need) {
                     return fail("sync_failed", format!("blob dir: {e}"));
                 }
                 let out = dir.join(format!("{}-g{}.bundle", job.id, job.generation));
-                match compute::sync::create_bundle(&root, &src.commit, &n.have, &job.id, &out) {
+                // The bundle names the commit of the repo it's built from: a
+                // sibling's own commit (`root` is the sibling), never the main
+                // repo's (not in the sibling's objects: `update-ref` fails).
+                let commit = sibling.map_or(&src.commit, |w| &w.commit);
+                match compute::sync::create_bundle(&root, commit, &n.have, &job.id, &out) {
                     Ok(_) => (out, true),
                     Err(e) => return fail("sync_failed", e),
                 }

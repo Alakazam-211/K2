@@ -1975,3 +1975,122 @@ async fn easy_mode_records_and_views() {
     stop_node(port, "ce-views", running).await;
     drop(env);
 }
+
+// ── --with bundles (0.46.6 fix) ──────────────────────────────────────
+
+fn git_head(dir: &Path) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "HEAD"])
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .expect("git");
+    assert!(out.status.success(), "rev-parse: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8(out.stdout).expect("utf8").trim().to_string()
+}
+
+/// A repo `name` inside the workspace, `file` holding `text`.
+fn nested(ws: &Ws, name: &str, file: &str, text: &str) -> PathBuf {
+    let dir = ws.path.join(name);
+    std::fs::create_dir_all(&dir).unwrap();
+    git(&dir, &["init", "-q"]);
+    std::fs::write(dir.join(file), text).unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "one"]);
+    dir
+}
+
+/// Poll logs until the job ends: (stdout, the node's `[k2-node] …` lines,
+/// the final job JSON).
+async fn follow_sys(port: u16, token: &str, job: &str) -> (String, String, Value) {
+    let mut cursor = 0u64;
+    let (mut out, mut sys) = (Vec::new(), Vec::new());
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        assert!(Instant::now() < deadline, "job {job} never ended");
+        let r = get(port, "/cli/compute/jobs/logs", token, &format!("job={job}&cursor={cursor}&wait=5")).await;
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = j(&r);
+        for c in v["chunks"].as_array().expect("chunks") {
+            let data = k2_node_proto::crypto::unb64(c["data"].as_str().expect("data")).expect("b64");
+            match c["stream"].as_str().expect("stream") {
+                "out" => out.extend(data),
+                "sys" => sys.extend(data),
+                _ => {}
+            }
+        }
+        cursor = v["cursor"].as_u64().expect("cursor");
+        if v["end"] == true {
+            return (String::from_utf8_lossy(&out).into(), String::from_utf8_lossy(&sys).into(), v["job"].clone());
+        }
+    }
+}
+
+/// `--with`: a fresh node has none of the sibling's history, so it asks
+/// for a bundle of the sibling's commit. The controller builds it from the
+/// sibling's own commit (v0.46.6 named the main repo's commit in the
+/// sibling's objects: `update-ref` failed, so every such job failed with
+/// sync_failed). When a bundle can't be made, the job log says why (git's
+/// error), and the job still shows the commit it asked for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn with_bundles_name_the_siblings_own_commit_and_failures_say_why() {
+    let env = setup();
+    std::env::set_var("K2_COMPUTE", "1");
+    let d = test_harness::start(OWNER).await;
+    let port = d.port;
+    let ws = seed_ws(&env, "with-fix");
+    let (agent, _) = passport(&ws);
+    let md = nested(&ws, "md", "a.txt", "main repo\n");
+    let base = nested(&ws, "base", "b.txt", "sibling one\n");
+    std::fs::write(base.join("b.txt"), "sibling two\n").unwrap();
+    git(&base, &["commit", "-q", "-am", "two"]);
+    let (md_head, base_head) = (git_head(&md), git_head(&base));
+    assert_ne!(md_head, base_head);
+    let (running, _) = online_node_for(&env, port, "with-fix", &ws).await;
+
+    // (1) A fresh node: one bundle per repo, the sibling's from its own commit.
+    let mut body = run_body("with-fix", &["sh", "-c", "cat a.txt ../base/b.txt"], "client-with-fix-00001");
+    body["repo"] = json!("md");
+    body["with"] = json!([{"repo": "base"}]);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job = j(&r)["job"]["id"].as_str().expect("id").to_string();
+    let (out, sys, fin) = follow_sys(port, &agent, &job).await;
+    assert_eq!(fin["state"], "done", "the --with job syncs and runs: {fin}\n{sys}");
+    assert_eq!(out, "main repo\nsibling two\n", "{sys}");
+    assert!(sys.contains(&format!("--with base @ {}", &base_head[..8])), "{sys}");
+    assert_eq!(fin["srcCommit"], md_head.as_str(), "{fin}");
+
+    // (2) A sibling commit the controller no longer has: the bundle fails,
+    // and the reason (git's own) reaches the job log and the job's detail.
+    node_pause(port, "with-fix", "pause").await;
+    std::fs::write(base.join("b.txt"), "sibling three\n").unwrap();
+    git(&base, &["commit", "-q", "-am", "three"]);
+    let gone = git_head(&base);
+    let mut body = run_body("with-fix", &["sh", "-c", "cat ../base/b.txt"], "client-with-fix-00002");
+    body["repo"] = json!("md");
+    body["with"] = json!([{"repo": "base"}]);
+    // One attempt: the failure is final (no retry of the interrupted job).
+    body["retryInterrupted"] = json!(false);
+    let r = post(port, "/cli/compute/run", &agent, body).await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    let job2 =j(&r)["job"]["id"].as_str().expect("id").to_string();
+    // The commit leaves the sibling's objects before the node asks for it.
+    git(&base, &["reset", "-q", "--hard", "HEAD~1"]);
+    let obj = base.join(".git/objects").join(&gone[..2]).join(&gone[2..]);
+    assert!(obj.is_file(), "the new commit is a loose object: {}", obj.display());
+    std::fs::remove_file(&obj).unwrap();
+    node_pause(port, "with-fix", "resume").await;
+    let (_, sys, fin) = follow_sys(port, &agent, &job2).await;
+    assert_eq!((fin["state"].as_str(), fin["reason"].as_str()), (Some("failed"), Some("sync_failed")), "{fin}\n{sys}");
+    assert!(sys.contains("sync failed: sync_failed: name the commit: "), "the git error reaches the job log: {sys}");
+    assert!(fin["detail"].as_str().is_some_and(|d| d.contains("name the commit: ")), "{fin}");
+    // The job still shows the commit it asked for (never empty).
+    assert_eq!(fin["srcCommit"].as_str(), Some(md_head.as_str()), "{fin}");
+    assert_eq!(job_json(port, &agent, &job2).await["submitCommit"].as_str(), Some(md_head.as_str()));
+
+    stop_node(port, "with-fix", running).await;
+    drop(env);
+}

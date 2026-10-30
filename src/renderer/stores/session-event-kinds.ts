@@ -27,7 +27,7 @@
 import registry from '@shared/session-event-kinds.json'
 import type { SessionEventMessage } from '@/stores/session-events'
 
-export type SessionEventClass = 'app' | 'workspace' | 'handshake'
+export type SessionEventClass = 'app' | 'workspace' | 'handshake' | 'inbox'
 
 /** Who consumes one kind on this client. */
 export interface SessionEventRoute {
@@ -47,6 +47,8 @@ export interface SessionEventRoute {
   /** No consumer, on purpose: why. */
   readonly ignored?: string
 }
+
+const INBOX_ONLY = 'The phone inbox stream (K2 Companion); the desktop never subscribes.'
 
 /** Every wire kind, and who handles it. Typed against the client union:
  *  a kind missing here, or one the union doesn't have, does not compile. */
@@ -194,6 +196,14 @@ export const SESSION_EVENT_ROUTES = {
   // phone (`onPairCodeChanged`). Not carried: Settings and the profile modal
   // talk to their own server.
   pair_code_changed: { class: 'app', app: true },
+  // inbox-stream-v1 (0.46.7): the phone inbox stream. Sent only to a
+  // socket that subscribed with {"t":"inbox",…}; this client never does.
+  inbox_subscribed: { class: 'inbox', ignored: INBOX_ONLY },
+  inbox_error: { class: 'inbox', ignored: INBOX_ONLY },
+  thread_message: { class: 'inbox', ignored: INBOX_ONLY },
+  thread_moved: { class: 'inbox', ignored: INBOX_ONLY },
+  thread_address: { class: 'inbox', ignored: INBOX_ONLY },
+  inbox_reset: { class: 'inbox', ignored: INBOX_ONLY },
 } as const satisfies { readonly [K in SessionEventMessage['kind']]: SessionEventRoute }
 
 type Routes = typeof SESSION_EVENT_ROUTES

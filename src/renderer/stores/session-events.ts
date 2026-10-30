@@ -743,6 +743,13 @@ export type AppDeployKind =
 
 /** APP-LEVEL — room-scope R16 (0.46.1): an App's live deployment changed.
  *  Refetch `app.self`. */
+/** inbox-stream-v1 (0.46.7): the phone inbox stream's frames. The daemon
+ *  sends them only to a socket that subscribed with `{"t":"inbox",…}`
+ *  (K2 Companion); the desktop never subscribes, so it never gets one. */
+export interface InboxStreamFrame {
+  kind: 'inbox_subscribed' | 'inbox_error' | 'thread_message' | 'thread_moved' | 'thread_address' | 'inbox_reset'
+}
+
 export interface AppDeployedEvent {
   kind: 'app_deployed'
   appId: string
@@ -921,6 +928,7 @@ export type SessionEventMessage =
   | SewChangedEvent
   | RoomMembersChangedEvent
   | AppDeployedEvent
+  | InboxStreamFrame
 
 export interface SessionEventHandlers {
   onAdded?: (event: SessionAddedEvent) => void

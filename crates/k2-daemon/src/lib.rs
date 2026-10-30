@@ -249,6 +249,8 @@ pub mod thread_activity_limit;
 pub mod hook_install;
 pub mod session_events;
 pub mod session_events_ws;
+// inbox-stream-v1 (0.46.7): the phone inbox stream on /cli/sessions/events.
+pub mod inbox_stream;
 pub mod session_author;
 pub mod session_lookup;
 pub mod sessions_bytes_ws;

@@ -364,6 +364,13 @@ fn resolve_thread_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     resolve_addr(addr)
 }
 
+/// The conversation `addr` answers at for a LOGIN (the resolver `GET
+/// /cli/thread` uses for the owner token and Connect sessions), or `None`.
+/// The phone inbox stream (inbox-stream-v1) resolves its `addrs` with it.
+pub(crate) fn resolve_login_addr(addr: &str) -> Option<String> {
+    resolve_addr(addr).ok().map(|r| r.conversation_id)
+}
+
 fn resolve_addr(addr: &str) -> Result<ResolvedOverlay, CliResponse> {
     let addr = addr.trim();
     if addr.is_empty() {

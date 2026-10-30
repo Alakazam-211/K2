@@ -34,7 +34,10 @@ use tokio_tungstenite::tungstenite::Message;
 
 use k2_core::log_debug;
 
+use crate::inbox_stream::{self, InboxSet};
+use crate::overlay_ws::OverlayFrame;
 use crate::session_events::{self, SessionEvent};
+use tokio::sync::broadcast;
 
 /// Monotonically-increasing subscriber id generator. Used so each
 /// `hello` event carries a unique id the renderer can log for
@@ -113,6 +116,14 @@ pub async fn serve_session_events_connection(
     // thread-read-v1 + homes-sync-v1: whose person-scoped frames this
     // socket may carry.
     let person = socket_person(identity.as_ref());
+    // inbox-stream-v1: the login a `thread_message` doc is projected for
+    // (permission cards, `cards=` on the URL), as on its overlay socket.
+    let viewer_login: Option<String> = match identity.as_ref() {
+        Some(crate::presence::PresenceIdentity::Owner) => Some(k2_core::notify_prefs::OWNER.to_string()),
+        Some(crate::presence::PresenceIdentity::ConnectUser { username, .. }) => Some(username.clone()),
+        None => None,
+    };
+    let seen = crate::overlay_ws::socket_seen(&params, false, viewer_login.as_deref());
     let (close_tx, mut close_rx) = tokio::sync::watch::channel(false);
     let mut _unregistered_close_tx: Option<tokio::sync::watch::Sender<bool>> = None;
     let _presence_guard: Option<crate::presence::PresenceGuard> = match identity {
@@ -177,8 +188,96 @@ pub async fn serve_session_events_connection(
     liveness_ping.tick().await; // burn the immediate first tick
     let mut last_pong = std::time::Instant::now();
 
+    // inbox-stream-v1: the subscribed set, its overlay receiver (taken
+    // only once the client subscribes) and the debounced re-resolve.
+    let mut inbox: Option<InboxSet> = None;
+    let mut inbox_rx: Option<broadcast::Receiver<OverlayFrame>> = None;
+    let mut reresolve_at: Option<tokio::time::Instant> = None;
+
     loop {
         tokio::select! {
+            frame = recv_inbox(&mut inbox_rx) => {
+                let frame = match frame {
+                    Ok(f) => f,
+                    Err(RecvError::Lagged(n)) => {
+                        // Never a close (that would cost every other kind on
+                        // this socket): drop the backlog, keep the set, and
+                        // tell the phone to catch up.
+                        log_debug!("[daemon/session_events_ws] subscriber {subscriber_id} inbox lagged {n}; inbox_reset");
+                        inbox_rx = inbox_rx.map(|r| r.resubscribe());
+                        if write.send(Message::Text(inbox_stream::reset_json("lagged"))).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(RecvError::Closed) => {
+                        inbox_rx = None;
+                        continue;
+                    }
+                };
+                let Some(set) = inbox.as_mut() else { continue };
+                let out = match inbox_stream::classify(&frame, set) {
+                    None => None,
+                    Some(inbox_stream::Hit::Thread { conversation }) => {
+                        let doc = if crate::overlay_ws::needs_blocking(&frame) {
+                            // A permission card: projected off the async worker.
+                            let (f, s) = (frame.clone(), seen.clone());
+                            match tokio::task::spawn_blocking(move || inbox_stream::doc_for_login(&f, &s)).await {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    // Never skip it silently: the phone resyncs.
+                                    log_debug!("[daemon/session_events_ws] inbox projection failed: {e}");
+                                    if write.send(Message::Text(inbox_stream::reset_json("projection"))).await.is_err() {
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            }
+                        } else {
+                            inbox_stream::doc_for_login(&frame, &seen)
+                        };
+                        Some(inbox_stream::thread_message(&conversation, frame.seq, &frame.id, frame.rev, doc))
+                    }
+                    Some(inbox_stream::Hit::Moved { from, to }) => {
+                        set.apply_move(&from, &to);
+                        Some(inbox_stream::moved_message(&from, &to, frame.seq, frame.rev))
+                    }
+                    Some(inbox_stream::Hit::Address { conversation, address, previous }) => {
+                        // A subscribed address may now name another chat.
+                        if !set.resolved.is_empty() {
+                            reresolve_at.get_or_insert_with(|| tokio::time::Instant::now() + RERESOLVE_DEBOUNCE);
+                        }
+                        Some(inbox_stream::address_message(&conversation, &address, &previous, frame.rev))
+                    }
+                };
+                if let Some(text) = out {
+                    if write.send(Message::Text(text)).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            _ = sleep_until_opt(reresolve_at) => {
+                reresolve_at = None;
+                let Some(mut set) = inbox.clone() else { continue };
+                let changed = tokio::task::spawn_blocking(move || {
+                    let changed = inbox_stream::reresolve(&mut set, &inbox_stream::resolve_for_login);
+                    (changed, set)
+                })
+                .await;
+                match changed {
+                    Ok((true, set)) => {
+                        let text = inbox_stream::subscribed_json(Some(&set), crate::overlay_ws::current_rev());
+                        if inbox.is_some() {
+                            inbox = Some(set);
+                            if write.send(Message::Text(text)).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Ok((false, _)) => {}
+                    Err(e) => log_debug!("[daemon/session_events_ws] inbox re-resolve failed: {e}"),
+                }
+            }
             _ = auth_recheck.tick() => {
                 if !crate::routes::http::token_still_valid(&token, &owner_token) {
                     log_debug!(
@@ -240,6 +339,14 @@ pub async fn serve_session_events_connection(
             recv = rx.recv() => {
                 match recv {
                     Ok(event) => {
+                        // inbox-stream-v1: a pinned Chat replaced or a chat
+                        // renamed may move a subscribed address; re-resolve
+                        // (debounced), whatever this socket's `?path=`.
+                        if inbox.as_ref().is_some_and(|s| !s.resolved.is_empty() || !s.unknown.is_empty())
+                            && inbox_stream_reresolves_on(&event)
+                        {
+                            reresolve_at.get_or_insert_with(|| tokio::time::Instant::now() + RERESOLVE_DEBOUNCE);
+                        }
                         if !event_matches_workspace(&event, &workspace_path) {
                             continue;
                         }
@@ -291,9 +398,52 @@ pub async fn serve_session_events_connection(
                         let _ = write.send(Message::Close(frame)).await;
                         break;
                     }
+                    Some(Ok(Message::Text(text))) => {
+                        // inbox-stream-v1: the one client message this
+                        // socket reads. Anything else is ignored, as before.
+                        match inbox_stream::parse_subscribe(&text) {
+                            None => {}
+                            Some(Err((code, hint))) => {
+                                if write.send(Message::Text(inbox_stream::error_json(code, &hint))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Some(Ok(want)) => {
+                                // Take the receiver BEFORE `rev` and the
+                                // resolve, so no frame after `rev` is missed.
+                                if want != inbox_stream::Want::Off && inbox_rx.is_none() {
+                                    inbox_rx = Some(crate::overlay_ws::subscribe());
+                                }
+                                let rev = crate::overlay_ws::current_rev();
+                                let built = tokio::task::spawn_blocking(move || {
+                                    inbox_stream::build_set(&want, &inbox_stream::resolve_for_login)
+                                })
+                                .await;
+                                match built {
+                                    Ok(set) => {
+                                        if set.is_none() {
+                                            inbox_rx = None;
+                                            reresolve_at = None;
+                                        }
+                                        inbox = set;
+                                        let text = inbox_stream::subscribed_json(inbox.as_ref(), rev);
+                                        if write.send(Message::Text(text)).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        log_debug!("[daemon/session_events_ws] inbox subscribe failed: {e}");
+                                        let text = inbox_stream::error_json("internal", "the subscribe could not be resolved; send it again");
+                                        if write.send(Message::Text(text)).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Some(Ok(_)) => {
-                        // Text/Binary inbound not used by this
-                        // protocol — clients are receive-only.
+                        // Binary inbound is not used by this protocol.
                     }
                     None => break,
                     Some(Err(e)) => {
@@ -312,6 +462,35 @@ pub async fn serve_session_events_connection(
         subscriber_id,
         workspace_path,
     );
+}
+
+/// inbox-stream-v1: how long a re-resolve waits after its trigger (a
+/// burst of project events re-resolves once).
+const RERESOLVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The events after which a subscribed address may answer at another
+/// conversation (a new pinned Chat, a renamed or added session).
+pub(crate) fn inbox_stream_reresolves_on(event: &SessionEvent) -> bool {
+    matches!(
+        event,
+        SessionEvent::ProjectsChanged {} | SessionEvent::SessionAdded { .. } | SessionEvent::SessionAddressChanged { .. }
+    )
+}
+
+/// The overlay receiver's next frame, or never when not subscribed.
+async fn recv_inbox(rx: &mut Option<broadcast::Receiver<OverlayFrame>>) -> Result<OverlayFrame, RecvError> {
+    match rx {
+        Some(r) => r.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+/// Sleep until `at`, or never.
+async fn sleep_until_opt(at: Option<tokio::time::Instant>) {
+    match at {
+        Some(t) => tokio::time::sleep_until(t).await,
+        None => std::future::pending().await,
+    }
 }
 
 /// May a socket held by `socket_person` see this event? Person-scoped
@@ -1087,7 +1266,7 @@ mod tests {
         );
         for (kind, class) in &registry {
             assert!(
-                matches!(class.as_str(), "app" | "workspace" | "handshake"),
+                matches!(class.as_str(), "app" | "workspace" | "handshake" | "inbox"),
                 "{kind}: unknown class {class:?}"
             );
             if kind != HELLO_KIND {
@@ -1095,12 +1274,28 @@ mod tests {
             }
         }
 
+        // 0. inbox-stream-v1: the `inbox` class is exactly the frames the
+        //    phone inbox stream sends (only after a subscribe message).
+        let inbox: std::collections::BTreeSet<&str> =
+            registry.iter().filter(|(_, c)| c.as_str() == "inbox").map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            inbox,
+            crate::inbox_stream::INBOX_KINDS.iter().copied().collect(),
+            "the registry's `inbox` kinds are inbox_stream::INBOX_KINDS"
+        );
+
         // 1. Every variant in the source is in the registry, and nothing
         //    else is. A new daemon kind fails here until the registry, and
         //    through it the client, knows it.
         let declared = declared_variant_kinds();
-        let registered: std::collections::BTreeSet<String> =
-            registry.keys().filter(|k| k.as_str() != HELLO_KIND).cloned().collect();
+        let registered: std::collections::BTreeSet<String> = registry
+            .iter()
+            .filter(|(k, c)| k.as_str() != HELLO_KIND && c.as_str() != "inbox")
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in &inbox {
+            assert!(!declared.contains(*k), "{k}: an inbox frame kind must not also be a SessionEvent");
+        }
         assert_eq!(
             declared, registered,
             "SessionEvent variants and src/shared/session-event-kinds.json differ \

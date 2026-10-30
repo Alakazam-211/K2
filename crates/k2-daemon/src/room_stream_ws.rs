@@ -281,7 +281,7 @@ pub fn readable_for_login(conn: &rusqlite::Connection) -> Readable {
 /// body goes (`truncated`, `bodyBytes`), then the whole doc. `conversation_id`,
 /// `room`, `collection`, `seq`, `id` and `rev` are always there.
 pub fn thread_message(conversation: &str, room: &str, seq: i64, id: &str, rev: u64, doc: Value) -> String {
-    let mut v = json!({
+    cap_frame(json!({
         "kind": "thread_message",
         "conversation_id": conversation,
         // The App surface's name for it (`conversation_id` is a banned
@@ -293,7 +293,13 @@ pub fn thread_message(conversation: &str, room: &str, seq: i64, id: &str, rev: u
         "id": id,
         "rev": rev,
         "doc": doc,
-    });
+    }))
+}
+
+/// Cap one serialized frame at [`FRAME_CAP_BYTES`]: over it, `doc.body`
+/// goes (`truncated`, `bodyBytes`), then the whole `doc`. Every other key
+/// stays. Shared with the phone inbox stream (`inbox_stream`).
+pub fn cap_frame(mut v: Value) -> String {
     let text = v.to_string();
     if text.len() <= FRAME_CAP_BYTES {
         return text;
@@ -318,7 +324,7 @@ pub fn thread_message(conversation: &str, room: &str, seq: i64, id: &str, rev: u
 /// The doc an overlay frame carries for this viewer (`wire_json_for`, the
 /// per-room socket's own builder, with the same permission-card
 /// projection: `seen` is this socket's viewer and its `cards=` opt-in).
-fn doc_for(frame: &OverlayFrame, guest: Option<&GuestWire>, seen: &crate::permission::view::Seen) -> Value {
+pub(crate) fn doc_for(frame: &OverlayFrame, guest: Option<&GuestWire>, seen: &crate::permission::view::Seen) -> Value {
     serde_json::from_str::<Value>(&overlay_ws::wire_json_for(frame, guest, seen))
         .ok()
         .and_then(|mut v| v.get_mut("doc").map(Value::take))

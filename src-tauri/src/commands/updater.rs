@@ -260,7 +260,7 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
         if let Some(assets) = resp["assets"].as_array() {
             for asset in assets {
                 let name: &str = asset["name"].as_str().unwrap_or("");
-                if name.ends_with(".dmg") {
+                if is_platform_installer(name) {
                     download_url = asset["browser_download_url"]
                         .as_str()
                         .unwrap_or("")
@@ -279,6 +279,16 @@ pub async fn check_for_update() -> Result<UpdateInfo, String> {
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// The release asset a person on this OS downloads by hand: the `.dmg` on
+/// macOS (and, as before, elsewhere), the NSIS `*-setup.exe` on Windows.
+fn is_platform_installer(name: &str) -> bool {
+    if cfg!(windows) {
+        name.ends_with("-setup.exe")
+    } else {
+        name.ends_with(".dmg")
+    }
 }
 
 #[tauri::command]

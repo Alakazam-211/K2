@@ -12,6 +12,7 @@ import { useActiveAgentsStore } from '@/stores/active-agents'
 import AgentCloseDialog from '@/components/AgentCloseDialog/AgentCloseDialog'
 import { DialogScrim } from '@/components/ui'
 import { primaryScope } from '@/kessel/server-scope'
+import { trashName } from '@/lib/reveal-label'
 
 interface DisableWorktreesDialogProps {
   project: ProjectWithWorkspaces
@@ -210,7 +211,7 @@ export default function DisableWorktreesDialog({
               <p className="text-[11px] text-[var(--color-status-warn-text)] font-medium mb-1">Warning: Unmerged Changes Detected</p>
               <p className="text-[11px] text-[color-mix(in_srgb,var(--color-status-warn-text)_80%,transparent)]">
                 One or more worktrees have uncommitted or unmerged changes.
-                Recycling will move these folders to Trash permanently.
+                Recycling will move these folders to {trashName()} permanently.
               </p>
               <div className="flex items-center gap-2 mt-2">
                 <button
@@ -267,7 +268,7 @@ export default function DisableWorktreesDialog({
             >
               <span className="text-[var(--color-status-error-soft)] font-medium flex-shrink-0 w-14">Recycle</span>
               <span className="text-[var(--color-text-muted)]">
-                Move worktree folders to Trash and remove from the sidebar. This cannot be undone.
+                Move worktree folders to {trashName()} and remove from the sidebar. This cannot be undone.
               </span>
             </button>
 

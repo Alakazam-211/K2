@@ -45,6 +45,7 @@ import { closeGrokChat } from '@/stores/grokbots'
 import { WorkspaceThreadUnreadBadge } from '@/components/common/UnreadBadge'
 import { threadSumForProject, useUnreadStore } from '@/stores/unread'
 import { MARK_ALL_READ_MENU_ID, markAllReadMenuItems, runMarkAllRead } from '@/lib/mark-all-read-menu'
+import { revealInFileManagerLabel } from '@/lib/reveal-label'
 
 // ── Nav-visible worktrees (DB-backed via workspace.navVisible field) ─────────
 
@@ -486,7 +487,7 @@ function ProjectItem({
       const menuItems: Array<{ id: string; label: string; type?: string }> = []
 
       // Open in Finder / path / Wiki
-      menuItems.push({ id: 'ws-open-finder', label: 'Open in Finder' })
+      menuItems.push({ id: 'ws-open-finder', label: revealInFileManagerLabel() })
       menuItems.push({ id: 'ws-copy-path', label: 'Copy Path' })
       menuItems.push({ id: 'ws-view-wiki', label: 'View Wiki' })
 
@@ -880,7 +881,7 @@ export default function Sidebar(): React.JSX.Element {
         // address) and the folder never change from here. Disabled when
         // this window's server would refuse the write.
         renameAgentMenuItem(primaryScope()),
-        { id: 'open-finder', label: 'Open in Finder' },
+        { id: 'open-finder', label: revealInFileManagerLabel() },
         { id: 'copy-path', label: 'Copy Path' },
         { id: 'focus-window', label: 'Open in Focus Window' },
         // Pin/Unpin, "Add to Home" right under it, then the Active Bar rows.

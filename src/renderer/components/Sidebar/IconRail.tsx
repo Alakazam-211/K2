@@ -21,6 +21,7 @@ import { fetchClonePerms, pullAllowed, pushAllowed } from '@/lib/clone-permissio
 import ProjectAvatar from './ProjectAvatar'
 import { SidebarCollapseButton } from './SidebarCollapseButton'
 import { primaryScope } from '@/kessel/server-scope'
+import { revealInFileManagerLabel } from '@/lib/reveal-label'
 
 const RAIL_WIDTH = 48
 
@@ -181,7 +182,7 @@ export default function IconRail(): React.JSX.Element {
         { id: 'separator-settings', label: '', type: 'separator' },
         { id: 'expand', label: 'Expand Sidebar' },
         { id: 'separator', label: '', type: 'separator' },
-        { id: 'open-finder', label: 'Open in Finder' },
+        { id: 'open-finder', label: revealInFileManagerLabel() },
         { id: 'focus-window', label: 'Open in Focus Window' }
       ]
 

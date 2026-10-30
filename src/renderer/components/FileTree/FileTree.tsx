@@ -32,6 +32,7 @@ import {
 } from '@/components/Projects/projects-api'
 import { MiddleEllipsisName } from './MiddleEllipsisName'
 import { resourceNameSlotWidth, treeNameSlotWidth } from './middleEllipsis'
+import { revealInFileManagerLabel, trashName } from '@/lib/reveal-label'
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -66,23 +67,6 @@ function sortEntriesFoldersFirst(entries: FileEntry[]): FileEntry[] {
   })
 }
 
-/**
- * Context-menu label for revealing a path in the host file manager.
- * Prefers client OS via UA (daemon may differ on remote; open still runs
- * on the daemon — label is best-effort UX).
- */
-function revealInFileManagerLabel(): string {
-  if (typeof navigator === 'undefined') return 'Reveal in file manager'
-  const ua = navigator.userAgent
-  // iOS/iPadOS report MacIntel platform but aren't Finder; Files drawer
-  // is desktop-first so Mac UA → Finder is correct for Tauri clients.
-  if (/Mac|Darwin/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua)) {
-    return 'Open in Finder'
-  }
-  if (/Win/i.test(ua)) return 'Open in Explorer'
-  if (/Linux|X11|CrOS/i.test(ua)) return 'Show in Files'
-  return 'Reveal in file manager'
-}
 
 function trimTrailingSlash(path: string): string {
   if (path.length > 1 && path.endsWith('/')) return path.slice(0, -1)
@@ -1450,14 +1434,15 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
     const confirm = useConfirmDialogStore.getState().confirm
 
     const names = paths.map(p => p.split('/').pop() || p)
+    const bin = trashName()
     const message = paths.length === 1
-      ? `Move "${names[0]}" to Trash?`
-      : `Move ${paths.length} items to Trash?\n${names.slice(0, 5).join(', ')}${names.length > 5 ? `, and ${names.length - 5} more` : ''}`
+      ? `Move "${names[0]}" to ${bin}?`
+      : `Move ${paths.length} items to ${bin}?\n${names.slice(0, 5).join(', ')}${names.length > 5 ? `, and ${names.length - 5} more` : ''}`
 
     const confirmed = await confirm({
-      title: 'Move to Trash',
+      title: `Move to ${bin}`,
       message,
-      confirmLabel: 'Move to Trash',
+      confirmLabel: `Move to ${bin}`,
       destructive: true
     })
 
@@ -1465,7 +1450,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
 
     try {
       await daemonCliPost(room.scope, 'fs/delete', { paths })
-      const label = paths.length === 1 ? `Moved ${names[0]} to Trash` : `Moved ${paths.length} items to Trash`
+      const label = paths.length === 1 ? `Moved ${names[0]} to ${bin}` : `Moved ${paths.length} items to ${bin}`
       toast.addToast(label, 'success')
       undo.push({ type: 'delete', paths, note: 'trashed' })
       await refreshDirs(paths)
@@ -1714,7 +1699,7 @@ export default function FileTree({ rootPath }: FileTreeProps): React.JSX.Element
       ...(!isDir && isSingle && isRemote
         ? [{ id: 'download', label: 'Download' }]
         : []),
-      { id: 'delete', label: `Move to Trash${!isSingle ? ` (${paths.length})` : ''}` },
+      { id: 'delete', label: `Move to ${trashName()}${!isSingle ? ` (${paths.length})` : ''}` },
       { id: 'separator-util', label: '', type: 'separator' },
       // MS57: `fs/open-finder` opens Finder on the daemon's machine — off
       // in a room on another server.

@@ -52,7 +52,7 @@ if [ ! -f "$WS/.k2/skills/foo/SKILL.md" ]; then
     exit 1
 fi
 
-MARKER_MTIME_1="$(stat -f '%m' "$MARKER" 2>/dev/null || stat -c '%Y' "$MARKER")"
+MARKER_MTIME_1="$(stat -c '%Y' "$MARKER" 2>/dev/null || stat -f '%m' "$MARKER")"
 
 # Sleep enough that an unguarded re-run would bump the mtime.
 sleep 1
@@ -61,7 +61,7 @@ sleep 1
 # ready (not /health) means the sweep has really run before we look.
 sandbox_daemon_restart daemon-3.log
 
-MARKER_MTIME_2="$(stat -f '%m' "$MARKER" 2>/dev/null || stat -c '%Y' "$MARKER")"
+MARKER_MTIME_2="$(stat -c '%Y' "$MARKER" 2>/dev/null || stat -f '%m' "$MARKER")"
 if [ "$MARKER_MTIME_1" != "$MARKER_MTIME_2" ]; then
     echo "FAIL: marker mtime changed between boots ($MARKER_MTIME_1 → $MARKER_MTIME_2); migration re-ran" >&2
     exit 1

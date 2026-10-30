@@ -305,14 +305,16 @@ fn a_failed_sieve_write_keeps_the_row_change_and_says_so() {
     let io = install(false);
     let aid = seed_mailbox("down@brand.test", "direct");
     let f = create(&aid, "down@brand.test", "team@brand.test", store::KIND_INTERNAL, store::ST_ACTIVE, None);
+    sync_mailbox(&aid, Why::Change).expect("first write");
+    assert!(io.forward("acc-down").is_some());
     *io.fail.borrow_mut() = true;
     match transition_and_sync(&f.id, store::ST_REMOVED, &store::Change { actor: "owner", ..Default::default() }) {
         Err(ChangeError::Sieve(row, _)) => assert_eq!(row.state, store::ST_REMOVED),
         other => panic!("expected a deferred write, got {other:?}"),
     }
+    assert!(io.forward("acc-down").is_some(), "the write failed");
     *io.fail.borrow_mut() = false;
     // The removed row's mailbox is still on the reconcile's list.
-    io.put("acc-down", &sieve_user::compose(&UserSieve { ooo: None, forward: Some(sieve_user::ForwardBlock::internal("team@brand.test", true)) }).expect("s"));
     reconcile_with(io.as_ref(), false, &ctx());
     assert_eq!(io.forward("acc-down"), None);
 }

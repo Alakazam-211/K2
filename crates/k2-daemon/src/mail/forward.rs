@@ -389,7 +389,7 @@ fn set_external(row: &MailAddress, caller: &Caller, dest: &str, keep: bool, now:
     }
     let actor = caller.actor();
     // Same destination already live: only the keep setting can change.
-    if let Some(f) = db(|c| store::live_for_address(c, &row.id))?.filter(|f| f.is_external() && f.dest == dest && f.state != store::ST_PENDING_VERIFY) {
+    if let Some(f) = db(|c| store::live_for_address(c, &row.id))?.filter(|f| f.is_external() && f.dest == dest && f.state != store::ST_PENDING_VERIFY && f.pause_reason.as_deref() != Some(store::P_REVOKED)) {
         let r = forward_sync::change_and_sync(&row.id, |c, now| {
             store::set_keep(c, &f.id, keep, &actor, now).map_err(store::TransitionError::Db)?;
             store::get(c, &f.id).map_err(store::TransitionError::Db)?.ok_or(store::TransitionError::NotFound)

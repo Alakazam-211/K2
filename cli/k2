@@ -61362,9 +61362,11 @@ Server:
          matches the one built into K2. Sew's App kit, for
          k2 app sdk add --sew, comes with it.
          --tarball FILE (and --media-tarball FILE) are for a box without
-         internet: the error names the exact file to fetch, its URL and its
-         sha256. Put sew-app-kit-<version>.tar.gz beside --tarball to keep the
-         App kit too (or later: k2 app sdk kit FILE).
+         internet, and are checked against the same sha256. On such a box,
+         k2 hostchat preflight (it changes nothing) names the exact file to
+         fetch, its URL and its sha256. Put sew-app-kit-<version>.tar.gz
+         beside --tarball to keep the App kit too (or later:
+         k2 app sdk kit FILE).
   k2 hostchat disable | doctor | backup | backups [--json]
   k2 hostchat restart [--json]              (bring Sew back in order: sew-db, sew, then voice; waits for
                                              it to be ready; K2 never restarts Sew on its own)

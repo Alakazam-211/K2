@@ -12000,9 +12000,10 @@ k2 app sdk — K2's server SDK (and Sew's) inside your App folder
         What the folder has in vendor/ against what this box carries:
         current, older (run add again), newer, missing.
   k2 app sdk kit <sew-app-kit-<version>.tar.gz> [--json]
-        Keep Sew's App kit on this box for --sew when it wasn't beside
-        Sew's release tarball at k2 hostchat enable|upgrade. Only the Sew
-        version this K2 pins, checked against its pinned sha256.
+        Keep Sew's App kit on this box for --sew when k2 hostchat
+        enable|upgrade could not download it (a box without internet) and
+        it wasn't beside --tarball. Only the Sew version this K2 pins,
+        checked against its pinned sha256.
 
 Keep vendor/ with your App (commit it; never list it in .k2appignore): the
 Seed carries it, so the App installs offline and a rollback keeps its SDK.
@@ -40889,7 +40890,7 @@ cmd_schema() {
       "flags": [{"name": "--json", "arg": null, "description": "JSON output."}]
     },
     {"name": "hostchat", "usage": "k2 hostchat <status|preflight|enable|disable|upgrade|rollback|backup|backups|restore|doctor|rotate-master|config|restart|reconfigure|app-url|ship|mirror|app-spaces|app-space|uninstall|purge|recovery-key|open|job|media|users|people|approvals|agents|on-behalf|log> ...", "description": "The Sew chat (and voice) server on this box, over /cli/sew/*. Owner/admin, or an agent whose workspace has Manage Sew (k2 agent access set <ws> chat_manage on, owner/admin only). purge, recovery-key and rotate-master --drop-prev are person-only (a vault confirm from a terminal outside K2; purge is the owner's, the other two the owner's or an admin's). Linux boxes only. Exit 2 = bad request, 3 = refused or infra.", "args": [], "flags": [{"name": "--json", "arg": null, "description": "Raw JSON output (any subcommand)."}]},
-    {"name": "hostchat enable", "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]", "description": "Install and start Sew (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect).", "args": [], "flags": [{"name": "--identity", "arg": "k2|standalone", "description": "Identity provider (explicit; fixed per install)."}, {"name": "--voice-url", "arg": "wss://HOST", "description": "voice.public_url: an origin on this box's k2.dev label or a bound custom domain (e.g. an App that proxies /rtc). Default wss://voice.<label>.k2.dev."}, {"name": "--media-tarball", "arg": "FILE", "description": "The sew-media release tarball (sha256 must be this build's pin)."}, {"name": "--no-wait", "arg": null, "description": "Return once the install started."}]},
+    {"name": "hostchat enable", "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]", "description": "Install and start Sew (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. With no --tarball the daemon downloads the pinned release from github.com/Alakazam-211/sew-releases (or reuses ~/.k2/cache/sew) and installs it only if its sha256 matches K2's pin; --tarball and --media-tarball are for a box without internet. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect).", "args": [], "flags": [{"name": "--identity", "arg": "k2|standalone", "description": "Identity provider (explicit; fixed per install)."}, {"name": "--voice-url", "arg": "wss://HOST", "description": "voice.public_url: an origin on this box's k2.dev label or a bound custom domain (e.g. an App that proxies /rtc). Default wss://voice.<label>.k2.dev."}, {"name": "--media-tarball", "arg": "FILE", "description": "The sew-media release tarball (sha256 must be this build's pin)."}, {"name": "--no-wait", "arg": null, "description": "Return once the install started."}]},
     {"name": "hostchat media", "usage": "k2 hostchat media <preflight|install|url|status|renew|probe|uninstall> ...", "description": "Voice: preflight (ports TCP 7881, UDP 7882, TCP 5349, loopback 7880), install [--url wss://HOST] [--node-ip IP] [--tarball FILE] (the URL goes to sew media install), url <wss://HOST> (change voice.public_url later: re-runs sew media install --reconfigure with the new URL, then restarts sew), status, renew (the TURN certificate), probe --udp ok|fail --tcp ok|fail --turn-tls ok|fail (record a call test from outside), uninstall [--yes] (live calls end: asks on a terminal, needs --yes without one; Sew's voice already gone still cleans up K2's TURN DNS, label and key). K2 opens no firewall.", "args": [], "flags": [{"name": "--yes", "arg": null, "description": "uninstall only: confirm without a prompt (required with no terminal). Also -y."}]},
     {"name": "hostchat users", "usage": "k2 hostchat users <list|owner|invite|reset|revoke|reactivate|role> [<name|email>] [--display-name NAME] [--role member|admin|guest] [--email EMAIL]", "description": "Sew's own users on a standalone install (refused with provider_is_k2 on a K2-identity install). owner = the first install owner; invite/reset print a one-time setup link to stdout only (24 h). Names and emails become Sew handles ([a-z0-9_-]{2,64}).", "args": [], "flags": []},
     {"name": "hostchat config", "usage": "k2 hostchat config [set approvals.by people|people+agents] [set default_space <space>|none] | config --public-url https://HOST [--json]", "description": "No arguments: every key, its value and allowed values. set approvals.by: who may approve queued chat posts (people, or people+agents with Manage Sew). set default_space: the Space whose chat access governs DMs outside every Space (a person sets it; none clears). --public-url: set Sew's server.public_url to a host on this box (its k2.dev label or a bound custom domain), then restart sew. Sew builds password setup links as <public-url>/setup. Until it is set, k2 hostchat status (and enable) warn public_url_unset with this fix. The voice URL is not set here: k2 hostchat media url.", "args": [], "flags": []},
@@ -61354,9 +61355,16 @@ Server:
          --identity picks how people sign in. It is fixed for the life of an
          install: changing it later means a fresh install (k2 hostchat purge,
          then enable). Default k2; standalone = Sew's own password logins.
-         Sew 0.5.0+: put sew-app-kit-<version>.tar.gz beside --tarball (enable
-         and upgrade): K2 checks it against its pin and keeps it for
-         k2 app sdk add --sew (or later: k2 app sdk kit FILE).
+         Where Sew comes from: with no --tarball, enable and upgrade (and voice)
+         download the release this K2 pins from
+         github.com/Alakazam-211/sew-releases into ~/.k2/cache/sew, or reuse
+         the copy already there. Nothing is installed unless its sha256
+         matches the one built into K2. Sew's App kit, for
+         k2 app sdk add --sew, comes with it.
+         --tarball FILE (and --media-tarball FILE) are for a box without
+         internet: the error names the exact file to fetch, its URL and its
+         sha256. Put sew-app-kit-<version>.tar.gz beside --tarball to keep the
+         App kit too (or later: k2 app sdk kit FILE).
   k2 hostchat disable | doctor | backup | backups [--json]
   k2 hostchat restart [--json]              (bring Sew back in order: sew-db, sew, then voice; waits for
                                              it to be ready; K2 never restarts Sew on its own)
@@ -61381,7 +61389,9 @@ Server:
                                              a card instead:
                                                k2 permission request sew.rollback-data-loss --why "<why>")
   k2 hostchat upgrade [--tarball FILE] [--media-tarball FILE] [--dry-run] [--no-wait] [--json]
-                                            (--media-tarball: the sew-media release, needed when voice is on;
+                                            (no flags: downloads the pin, as enable does; --tarball and
+                                             --media-tarball (the sew-media release, used when voice is on)
+                                             are for a box without internet;
                                              waits for the result; exit 3 unless it is done)
   k2 hostchat upgrade --accept-binary SHA256 [--tarball FILE] [...]
                                             (the owner, from a terminal outside K2, with a confirm: upgrade
@@ -61638,6 +61648,13 @@ vo = v.get("voice") or {}
 p = vo.get("progress") or {}
 busy = st == "installing" or (os.environ["K2_HC_VOICE"] == "1" and p.get("result") == "running")
 step = ((v.get("enableProgress") or {}).get("current")) if st == "installing" else p.get("step")
+# 0.46.7: the release download, while it runs ("downloading Sew 0.5.0: 12.3 of 24.7 MB").
+dl = ((v.get("enableProgress") or {}) if st == "installing" else p).get("download") or {}
+if step == "stage" and dl.get("source") == "download" and dl.get("bytes") is not None:
+    mb = lambda n: "%.1f" % (n / 1e6)
+    step = "stage (downloading %s: %s%s MB)" % (dl.get("label") or "Sew", mb(dl["bytes"]), (" of " + mb(dl["total"])) if dl.get("total") else "")
+elif step == "stage" and dl.get("source") == "cache":
+    step = "stage (%s from the K2 download cache)" % (dl.get("label") or "Sew")
 # Sew 0.3.1 health: wait through "upgrading"; never wait on "stopping".
 h = v.get("apiHealth") or {}
 if not busy and h.get("reason") == "upgrading":

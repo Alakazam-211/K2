@@ -1111,7 +1111,7 @@
    {
     "name": "hostchat enable",
     "usage": "k2 hostchat enable [--tarball FILE] [--recovery-key-file FILE] [--identity k2|standalone] [--voice [--voice-url wss://HOST] [--media-tarball FILE] [--node-ip IP]] [--no-wait] [--json]",
-    "description": "Install and start Sew (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect)."
+    "description": "Install and start Sew (POST /cli/sew/server/enable), then wait on GET /cli/sew/status. With no --tarball the daemon downloads the pinned release from github.com/Alakazam-211/sew-releases (or reuses ~/.k2/cache/sew) and installs it only if its sha256 matches K2's pin; --tarball and --media-tarball are for a box without internet. --identity is fixed for the life of the install (default k2; standalone = Sew's own password logins); changing it means k2 hostchat purge then enable. --voice also installs voice once chat runs (TURN over TLS on 5349 with a turn-<label>.k2.dev certificate from K2 Connect)."
    },
    {
     "name": "hostchat media",

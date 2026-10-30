@@ -154,6 +154,15 @@ class H(BaseHTTPRequestHandler):
         elif p == "/cli/sew/server/upgrade":
             state["upolls"] = 0
             out = {"ok": True, "state": "upgrading", "hint": "poll GET /cli/sew/status (upgradeProgress)"}
+        elif p == "/cli/sew/status" and os.path.exists(os.path.join(work, "download")):
+            # 0.46.7: enable with no --tarball, first poll mid-download.
+            state["dpolls"] = state.get("dpolls", 0) + 1
+            busy = state["dpolls"] < 2
+            out = {"ok": True, "supported": True, "state": "installing" if busy else "running", "identityProvider": "k2",
+                   "installedVersion": None if busy else "0.5.0", "alarms": [], "warnings": [],
+                   "enableProgress": {"current": "stage" if busy else None,
+                                      "download": {"file": "sew-0.5.0-x86_64-unknown-linux-gnu.tar.gz", "label": "Sew 0.5.0",
+                                                   "bytes": 12300000 if busy else 24667386, "total": 24667386, "source": "download"}}}
         elif p == "/cli/sew/status":
             state["polls"] += 1
             done = state["polls"] >= 2
@@ -268,6 +277,21 @@ assert_contains "enable: turn line" "$out" "turn-box.k2.dev:5349"
 
 run owner hostchat enable --identity ldap
 assert_eq "bad identity → exit 2" "$rc" "2"
+
+echo "== enable with no flags downloads (0.46.7) =="
+touch "$WORK/download"
+run owner hostchat enable
+rm -f "$WORK/download"
+assert_eq "enable (no flags) exit 0" "$rc" "0"
+body="$(req_where /cli/sew/server/enable body)"
+assert_eq "enable (no flags): no path sent" "$body" '{}'
+assert_contains "enable (no flags): download progress on stderr" "$err" "installing/stage (downloading Sew 0.5.0: 12.3 of 24.7 MB)"
+
+echo "== help says where Sew comes from =="
+out="$(env HOME="$HOME1" K2_PORT=1 "$K2_CLI" hostchat --help 2>&1)"
+assert_contains "help: download source" "$out" "github.com/Alakazam-211/sew-releases"
+assert_contains "help: tarball is for offline boxes" "$out" "are for a box without"
+if printf '%s' "$out" | grep -q "SW1\|has not published"; then bad "help: no stale SW1 words"; else ok "help: no stale SW1 words"; fi
 
 # 0.46.1: voice flags outside enable used to be dropped silently.
 before="$(nreq)"

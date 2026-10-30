@@ -753,7 +753,21 @@ pub fn lock_tool(tool: Tool, timeout: Duration) -> Result<ToolLock, WalletError>
 /// mutex per slot plus a flock on `<slot>/.lock`.
 pub struct SlotLock {
     _guard: std::sync::MutexGuard<'static, ()>,
-    _file: FileLock,
+    _file: Option<FileLock>,
+}
+
+/// Move a slot's folder away (to `.removed/`) while its [`SlotLock`] is
+/// held. Windows won't rename a folder with an open file inside it ("Access
+/// is denied"), and the lock holds `<slot>/.lock` open, so there the file
+/// lock is closed first; the slot's in-process mutex and the caller's tool
+/// lock are still held. Elsewhere the flock stays held across the rename,
+/// as before.
+pub fn rename_locked_slot_dir(_lock: &mut SlotLock, dir: &Path, dest: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        _lock._file = None;
+    }
+    fs::rename(dir, dest)
 }
 
 fn slot_mutex(tool: Tool, id: &str) -> &'static Mutex<()> {
@@ -786,7 +800,7 @@ pub fn lock_slot(tool: Tool, id: &str, timeout: Duration) -> Result<SlotLock, Wa
     let left = deadline.saturating_duration_since(Instant::now());
     let file = FileLock::acquire(&dir.join(".lock"), left)
         .map_err(|_| WalletError::LockBusy(tool.display().into()))?;
-    Ok(SlotLock { _guard: guard, _file: file })
+    Ok(SlotLock { _guard: guard, _file: Some(file) })
 }
 
 // ── API keys ────────────────────────────────────────────────────────

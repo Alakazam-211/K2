@@ -628,7 +628,7 @@ pub fn resolve_unverified(conn: &Connection, tool: Tool, refresher: &dyn Refresh
         if owner.as_deref() == Some(e.id.as_str()) || slot_busy(conn, &e.id)? || identity::shares_live_grant(tool, &e.id) {
             continue;
         }
-        let Ok(_slot) = store::lock_slot(tool, &e.id, Duration::from_secs(5)) else { continue };
+        let Ok(mut slot) = store::lock_slot(tool, &e.id, Duration::from_secs(5)) else { continue };
         let meta = slots::slot_meta(tool, &e.id);
         if meta.has_refresh && meta.expires_at.is_some_and(|x| x <= now_secs + 300) && !crate::airgap::enabled() {
             if let Err(err) = refresher.refresh(tool, &e.id) {
@@ -670,7 +670,7 @@ pub fn resolve_unverified(conn: &Connection, tool: Tool, refresher: &dyn Refresh
             let dir = store::slot_dir(tool, &e.id);
             if dir.exists() {
                 let dest = store::removed_root().join(format!("{}-{}-{}", tool.as_str(), e.id, now()));
-                std::fs::rename(&dir, &dest).map_err(|err| WalletError::Io(err.to_string()))?;
+                store::rename_locked_slot_dir(&mut slot, &dir, &dest).map_err(|err| WalletError::Io(err.to_string()))?;
             }
             conn.execute("DELETE FROM llm_accounts WHERE id = ?1", rusqlite::params![e.id])?;
             out.push(Adopted {

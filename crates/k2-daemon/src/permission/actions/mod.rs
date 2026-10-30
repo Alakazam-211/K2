@@ -20,6 +20,7 @@
 //! | `app_login.rs` | 0.46.7 | `app.login-grant` (add or remove a login on the agent's own App) |
 //! | `password_reset.rs` | 0.46.6 | `apps.user-password-reset` (reset an App user's password; the secret goes to the approver only) |
 //! | `workbench.rs` | 0.46.7 | `git.land`, `sidecar.retire` (a person lands / retires an agent's worktree sidecar) |
+//! | `publish.rs` | 0.46.7 | `publish.public`, `publish.pin` (who may open a published site) |
 //!
 //! Rules for every `apply` (§6.4, C15): call the Settings route's **entry**
 //! with the answerer as the actor, so the route's own floor check runs
@@ -37,6 +38,7 @@ pub(crate) mod harness;
 pub(crate) mod heartbeats;
 pub(crate) mod held;
 pub(crate) mod password_reset;
+pub(crate) mod publish;
 pub(crate) mod sew;
 pub(crate) mod switches;
 pub(crate) mod vault;
@@ -123,6 +125,7 @@ pub(crate) fn all() -> Vec<Registered> {
     out.extend(password_reset::actions());
     out.extend(workbench::actions());
     out.extend(app_login::actions());
+    out.extend(publish::actions());
     out
 }
 
@@ -141,6 +144,7 @@ pub(crate) fn not_cardable() -> Vec<&'static NotCardableSpec> {
     out.extend(password_reset::not_cardable());
     out.extend(workbench::not_cardable());
     out.extend(app_login::not_cardable());
+    out.extend(publish::not_cardable());
     out
 }
 

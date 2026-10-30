@@ -983,7 +983,7 @@ fn pipeline(app_id: &str, dep: &str, seed: &str, kind: &str) {
             app_id,
             dep,
             codes::STATIC_NOT_ON_RUNTIME,
-            "static Apps are served by `k2 publish run --skin` in this release",
+            "the runtime deploys `cmd` Apps in this release: serve the folder with a small server (host.mode \"cmd\")",
         );
     }
     let probe_as = if m.wants_test_guest_probe() { ProbeAs::TestGuest } else { ProbeAs::Anonymous };

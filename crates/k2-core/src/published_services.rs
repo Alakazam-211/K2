@@ -36,6 +36,9 @@ pub const STATUS_STARTING: &str = "starting";
 pub const STATUS_EXITED: &str = "exited";
 pub const STATUS_STOPPED: &str = "stopped";
 pub const STATUS_UNHEALTHY: &str = "unhealthy";
+/// A dev server the idle stop stopped (`k2 publish run --dev`): the next
+/// visitor who passes the gate starts it again. Never a crash.
+pub const STATUS_IDLE_STOPPED: &str = "idle-stopped";
 
 /// Nested-label charset (control-plane `bad_label`): lowercase letters,
 /// digits, and dashes. Used for both tunnel labels and local-only names
@@ -113,6 +116,14 @@ pub struct PublishedService {
     /// Migration 0177: a tunnelled service is inside its grace and its
     /// nested hostname is not published yet.
     pub hostname_pending: bool,
+    /// Migration 0254: a dev server's memory cap in MiB. `None` = not a dev
+    /// service (`k2 publish run --dev`).
+    pub dev_mem_mb: Option<i64>,
+    /// Migration 0254: a dev server's CPU cap, in CPUs.
+    pub dev_cpus: Option<f64>,
+    /// Migration 0254: when the idle stop stopped it. Only the idle stop
+    /// sets it, so only an idle-stopped dev site wakes on a visit.
+    pub dev_idle_stopped_at: Option<i64>,
 }
 
 /// Startup grace when a service stores none (`K2_PUBLISH_PROBE_MS` in the
@@ -294,6 +305,51 @@ pub struct ServiceJson {
     /// field report 2026-10-28.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// `k2 publish run --dev` (DM-1): how this dev server runs (caps, idle
+    /// limit, "not walled"). Omitted for every other service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev: Option<DevJson>,
+    /// Who may open this site (PV-12). Null when it has no address, or when an
+    /// App's own logins decide.
+    #[serde(default)]
+    pub visibility: Option<VisibilityJson>,
+    /// A private or PIN site whose program listens beyond loopback, so the
+    /// port itself skips K2's check (PV-4). Omitted otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bind_warning: Option<String>,
+}
+
+/// A site's visibility on the wire (`ServiceJson::visibility`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VisibilityJson {
+    /// `private`, `pin` or `public`.
+    pub mode: String,
+    pub dev: bool,
+    /// K2's check covers this door. `false`: E2E is off, so private or PIN isn't
+    /// what a visitor meets.
+    pub enforced: bool,
+    /// Why it is public (PV-10).
+    pub reason: Option<String>,
+    pub set_by: String,
+    pub set_at: i64,
+}
+
+/// A dev service's process state on the wire (`ServiceJson::dev`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DevJson {
+    /// The idle limit in seconds; null = `--idle off`.
+    pub idle_secs: Option<i64>,
+    /// When the idle stop stopped it; null while it isn't idle-stopped.
+    pub idle_stopped_at: Option<i64>,
+    /// The caps as read back from the process (`4 GiB, 2 CPUs`), or
+    /// `no caps` with why. Never what was asked for unless K2 saw it applied.
+    pub caps: String,
+    /// Always `dev: live folder, not walled` (PA-7).
+    pub lane: String,
+    /// A warning about this box's limits (inotify), when there is one.
+    pub warning: Option<String>,
 }
 
 impl ServiceJson {
@@ -358,13 +414,17 @@ impl ServiceJson {
             label_moved_to: None,
             env_refused: vec![],
             reason: None,
+            dev: None,
+            visibility: None,
+            bind_warning: None,
         }
     }
 }
 
 const COLS: &str = "id, project_id, name, cmd, cwd, port, expose, desired, pid, \
      last_exit_code, last_started_at, last_exited_at, error, created_at, updated_at, \
-     kind, skin_root, frame_ancestors, probe_timeout_ms, hostname_pending";
+     kind, skin_root, frame_ancestors, probe_timeout_ms, hostname_pending, \
+     dev_mem_mb, dev_cpus, dev_idle_stopped_at";
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
     Ok(PublishedService {
@@ -388,6 +448,9 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PublishedService> {
         frame_ancestors: row.get(17)?,
         probe_timeout_ms: row.get(18)?,
         hostname_pending: row.get::<_, i64>(19)? != 0,
+        dev_mem_mb: row.get(20)?,
+        dev_cpus: row.get(21)?,
+        dev_idle_stopped_at: row.get(22)?,
     })
 }
 
@@ -536,6 +599,30 @@ pub fn update_spec(
             project_id,
             name
         ],
+    )?;
+    Ok(n > 0)
+}
+
+/// Store a dev service's caps (`Some((mem_mb, cpus))`), or clear them and any
+/// idle-stop mark when `k2 publish run` turns it back into a normal service
+/// (`None`).
+pub fn set_dev_caps(conn: &Connection, project_id: &str, name: &str, caps: Option<(i64, f64)>) -> Result<bool> {
+    let name = name.trim().to_ascii_lowercase();
+    let n = conn.execute(
+        "UPDATE published_services SET dev_mem_mb = ?1, dev_cpus = ?2, dev_idle_stopped_at = NULL, updated_at = ?3 \
+         WHERE project_id = ?4 AND name = ?5",
+        params![caps.map(|c| c.0), caps.map(|c| c.1), now_unix(), project_id, name],
+    )?;
+    Ok(n > 0)
+}
+
+/// Set or clear the idle-stop mark. Only the idle stop sets it; `run`,
+/// `start` and `stop` clear it.
+pub fn set_dev_idle_stopped(conn: &Connection, project_id: &str, name: &str, at: Option<i64>) -> Result<bool> {
+    let name = name.trim().to_ascii_lowercase();
+    let n = conn.execute(
+        "UPDATE published_services SET dev_idle_stopped_at = ?1, updated_at = ?2 WHERE project_id = ?3 AND name = ?4",
+        params![at, now_unix(), project_id, name],
     )?;
     Ok(n > 0)
 }

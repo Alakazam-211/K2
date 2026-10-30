@@ -1415,6 +1415,12 @@ The owner sees who gets in, to which App, with which role, and what that role le
 - Role or room changes for guests are not cards: talk to the agent that manages the role.
 - Someone can't sign in to one of your Apps (locked out, lost their password): `k2 permission request apps.user-password-reset user=<username> --why "..."`. The owner or an admin gets the card; whoever allows it sees a new password once, on their own screen, and gives it to the person. You never see it. `mode=link` gives them a one-time link to choose their own; `mode=email` mails that link to their address on file.
 
+## Published sites
+
+- Making your own site private needs no card: `k2 publish visibility <name> private`.
+- To make it public, run `k2 publish visibility <name> public --reason "..."`. K2 puts its `publish.public` card on your Thread and exits 2. Wait for the answer. A dev server can't be asked for: offer a PIN instead.
+- To put it behind a PIN, run `k2 publish visibility <name> pin`. K2 puts its `publish.pin` card on your Thread and exits 2. The person types the PIN into K2's own form. You never see it, so never ask for it.
+
 ## The answer
 
 One new turn per request: `[permission:<id>] approved | already on | denied | expired | stale | failed | closed`.

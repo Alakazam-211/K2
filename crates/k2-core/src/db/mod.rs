@@ -1723,6 +1723,11 @@ pub(crate) fn run_migrations_through(conn: &Connection, last: Option<&str>) -> R
         // (and edit the migration-order tests). The store is
         // `crate::site_visibility`.
         ("0253_site_visibility", include_str!("../../drizzle_sql/0253_site_visibility.sql")),
+        // 0254 — `k2 publish run --dev`'s process state
+        // (prd-publish-visibility-and-dev-mode-v1 DM-5, DM-6, 0.46.7):
+        // caps and the idle-stop mark on `published_services`. ADD COLUMN
+        // only; renumber freely on a slip (and edit the migration-order tests).
+        ("0254_publish_dev_process", include_str!("../../drizzle_sql/0254_publish_dev_process.sql")),
     ];
 
     for (name, sql) in migrations {
@@ -2386,7 +2391,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            last_name, "0253_site_visibility",
+            last_name, "0254_publish_dev_process",
             "unexpected last migration name: {last_name}"
         );
     }
@@ -2494,6 +2499,8 @@ mod tests {
                 "0252_push_e2e_v2",
                 // 0.46.7: `k2 publish` visibility modes.
                 "0253_site_visibility",
+                // 0.46.7: `k2 publish run --dev`'s caps and idle-stop mark.
+                "0254_publish_dev_process",
             ],
             "tail migrations out of order: {names:?}"
         );
@@ -2609,6 +2616,8 @@ mod tests {
                 "0252_push_e2e_v2",
                 // 0.46.7: `k2 publish` visibility modes.
                 "0253_site_visibility",
+                // 0.46.7: `k2 publish run --dev`'s caps and idle-stop mark.
+                "0254_publish_dev_process",
             ],
             "0.46.0 tail on a 0.45.7 database: {tail:?}"
         );
@@ -2836,7 +2845,7 @@ mod tests {
 
         run_migrations(&conn).unwrap();
         let top: String = conn.query_row("SELECT name FROM _migrations ORDER BY id DESC LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(top, "0253_site_visibility", "0253 (0.46.7) runs last");
+        assert_eq!(top, "0254_publish_dev_process", "0254 (0.46.7) runs last");
         let last: String = conn
             .query_row("SELECT name FROM _migrations WHERE name < '0224' ORDER BY id DESC LIMIT 1", [], |r| r.get(0))
             .unwrap();

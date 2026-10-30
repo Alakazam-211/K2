@@ -160,7 +160,7 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
         }
         "static" => warnings.push(issue(
             super::codes::STATIC_NOT_ON_RUNTIME,
-            "static Apps are served by `k2 publish run --skin` in this release; the runtime deploys `cmd` Apps",
+            "the runtime deploys `cmd` Apps in this release: serve the folder with a small server (host.mode \"cmd\")",
             at("host.mode"),
         )),
         other => errors.push(issue("manifest_invalid", format!("host.mode \"{other}\": use static, cmd or next"), at("host.mode"))),

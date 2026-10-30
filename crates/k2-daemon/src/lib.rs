@@ -159,7 +159,13 @@ pub mod project_group_routes;
 pub mod providers;
 // AR6: one owner per nested URL label (claim/point/run/transfer rule).
 pub mod label_owner;
+// 0.46.7: `k2 publish run --dev`: flags, caps, bind check, idle clock.
+pub mod publish_dev;
+// 0.46.7: K2's own cards for who may open a site.
+pub(crate) mod publish_cards;
 pub mod publish_routes;
+// 0.46.7: `/cli/publish/visibility|open|sessions`.
+pub(crate) mod publish_site_routes;
 pub mod publish_runtime;
 // Companion C4 (prd-companion-v2 §4) — `/cli/push/*` device
 // registration + the mobile-push dispatch triggers (dormant until a

@@ -54,6 +54,8 @@ pub fn run(action: &CardAction, answer: &str, by: &str) -> Result<J, String> {
         crate::sim_routes::CARD_ACTION => crate::sim_routes::run_card(&action.params, answer, by),
         // prd-k2-db-rename-v1 DB-A6: which database to keep (owner only).
         crate::db_home_routes::CARD_ACTION => crate::db_home_routes::run_card(&action.params, answer, by),
+        // PV-11: sites public from before 0.46.7, one click each.
+        crate::publish_cards::UPGRADE_ACTION => crate::publish_cards::run_upgrade_card(answer, by),
         other => Err(format!("K2 doesn't know the card action '{other}'")),
     }
 }

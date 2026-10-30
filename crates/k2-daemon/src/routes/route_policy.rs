@@ -1282,14 +1282,23 @@ pub const ROUTES: &[Route] = &[
     get("/cli/publish/leftovers", Member),
     get("/cli/publish/list", Member),
     get("/cli/publish/logs", Member),
+    // 0.46.7: a person's one-time link to a private site. Agents are not logins;
+    // the handler refuses them.
+    post("/cli/publish/open", Admin),
     post("/cli/publish/rm", Member),
     post("/cli/publish/run", Member),
+    // 0.46.7: who is signed in to a site. The handlers scope agents to their own.
+    get("/cli/publish/sessions", Admin),
+    post("/cli/publish/sessions/revoke", Admin),
     post("/cli/publish/start", Member),
     post("/cli/publish/stop", Member),
     post("/cli/publish/subdomain/claim", Member),
     post("/cli/publish/subdomain/unclaim", Member),
     // decision-k2-runtime-v1 stage 0: `k2 app validate` (parse + leak lints).
     get("/cli/publish/validate", Member),
+    // 0.46.7: who may open a site. Member floor: anyone who can run a site may
+    // make it private; the handler refuses a Member PIN and public.
+    both("/cli/publish/visibility", Member),
     get("/cli/push/device", Member),
     // prd-e2e-push-v1 §4a: the E2E switch, the per-device override and
     // the phone list are the owner's (testing and rollback controls).
@@ -2970,7 +2979,9 @@ mod tests {
         ("/cli/publish/leftovers", "lists published-service leftovers"),
         ("/cli/publish/list", "lists published services"),
         ("/cli/publish/logs", "reads service logs"),
+        ("/cli/publish/sessions", "lists a site's sessions; ending them is POST /cli/publish/sessions/revoke"),
         ("/cli/publish/validate", "parses an App folder's code; writes nothing"),
+        ("/cli/publish/visibility", "reads a site's mode; changing it is the POST"),
         ("/cli/skin/password/set", "serves K2's own fixed set-password page; the password is set by POST /cli/skin/password/reset"),
         ("/cli/skin/pair/status", "reads a pairing's state for its own person; start, cancel and redeem are POST routes"),
         ("/cli/email/stop", "renders the stop page (link scanners follow GETs); only POST /cli/email/stop stops"),

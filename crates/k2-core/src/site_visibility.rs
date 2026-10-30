@@ -778,6 +778,19 @@ fn set_meta(conn: &Connection, key: &str, value: &str) -> R<()> {
     Ok(())
 }
 
+const META_UPGRADE_CARD: &str = "upgrade_card";
+
+/// Is the one card about sites public from before 0.46.7 (PV-11) still owed?
+/// Not while the pass over the routing map is: only that settles which they are.
+pub fn upgrade_card_due(conn: &Connection) -> R<bool> {
+    Ok(!grandfather_pending(conn)? && meta(conn, META_UPGRADE_CARD)?.as_deref() != Some(STATE_DONE))
+}
+
+/// The upgrade card is on a Thread (or there was nothing to say).
+pub fn mark_upgrade_card_done(conn: &Connection) -> R<()> {
+    set_meta(conn, META_UPGRADE_CARD, STATE_DONE)
+}
+
 /// Is the upgrade's pass over the routing map still owed?
 pub fn grandfather_pending(conn: &Connection) -> R<bool> {
     Ok(meta(conn, META_GRANDFATHER)?.as_deref() == Some(STATE_PENDING))

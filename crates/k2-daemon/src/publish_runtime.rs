@@ -22,9 +22,11 @@ use k2_core::log_debug;
 
 use k2_core::published_services::{
     self as ps, ServiceJson, CMD_SKIN_SENTINEL, DESIRED_RUNNING, DESIRED_STOPPED, EXPOSE_LOCAL,
-    EXPOSE_TUNNEL, KIND_CMD, KIND_SKIN, STATUS_EXITED, STATUS_RUNNING, STATUS_STARTING,
-    STATUS_STOPPED, STATUS_UNHEALTHY,
+    EXPOSE_TUNNEL, KIND_CMD, KIND_SKIN, STATUS_EXITED, STATUS_IDLE_STOPPED, STATUS_RUNNING,
+    STATUS_STARTING, STATUS_STOPPED, STATUS_UNHEALTHY,
 };
+use crate::site_gate::dev::DevWake;
+use k2_core::site_visibility as sv;
 use k2_core::terminal::login_path;
 use k2_core::tunnel::config as tunnel_config;
 use k2_core::tunnel::subdomains;
@@ -68,6 +70,15 @@ pub struct PublishError {
 }
 
 impl PublishError {
+    /// A refusal with its own code (`{error, code}`, the CLI's exit 3).
+    pub(crate) fn coded(code: &str, msg: impl Into<String>) -> Self {
+        let message = msg.into();
+        Self {
+            status: "400 Bad Request",
+            body: Some(serde_json::json!({ "error": message, "code": code })),
+            message,
+        }
+    }
     fn bad(msg: impl Into<String>) -> Self {
         Self {
             status: "400 Bad Request",
@@ -528,23 +539,61 @@ pub(crate) fn cmd_exe_line(c: &mut Command, line: &str) {
     c.args(["/d", "/s", "/c"]).raw_arg(format!("\"{line}\""));
 }
 
+/// The command that runs a `--cmd` service's shell line: `sh -c <cmd>`, or for
+/// a dev server on a Linux box with user scopes, the same line inside a capped
+/// scope (DM-5). Without scopes it still runs; `ps` says "no caps".
+#[cfg(unix)]
+fn shell_command(cmd: &str, name: &str, dev: Option<(i64, f64)>) -> (Command, bool) {
+    #[cfg(target_os = "linux")]
+    if let Some((mem_mb, cpus)) = dev {
+        match crate::publish_dev::user_scopes() {
+            Ok(exe) => {
+                let mut c = Command::new(exe);
+                c.args(crate::publish_dev::scope_args(&crate::publish_dev::scope_unit(name), mem_mb, cpus, cmd));
+                return (c, true);
+            }
+            Err(why) => log_debug!("[publish] {name}: dev server runs without caps: {why}"),
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (name, dev);
+    let mut c = Command::new("sh");
+    c.arg("-c").arg(cmd);
+    (c, false)
+}
+
+/// The dev server's own environment (DM-1), set last so nothing a service's
+/// env file names can move its bind address off loopback.
+fn apply_dev_env(c: &mut Command, name: &str, port: u16, dev: bool) {
+    if !dev {
+        return;
+    }
+    let host = public_url(name, EXPOSE_TUNNEL).map(|u| u.trim_start_matches("https://").to_string());
+    c.envs(crate::publish_dev::env_pairs(port, host.as_deref()));
+}
+
 fn spawn_child(
     cmd: &str,
     cwd: &Path,
     project_id: &str,
     name: &str,
     service: Option<(&str, u16)>,
+    dev: Option<(i64, f64)>,
 ) -> Result<(Child, i32, Option<WinJobSlot>), String> {
     #[cfg(unix)]
     {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(cmd).current_dir(cwd);
+        let (mut c, scoped) = shell_command(cmd, name, dev);
+        c.current_dir(cwd);
         // K2 vault (§10.5, Q16): clean env + granted secrets for new
         // services; services from before the vault keep inheriting.
         let mut enrich = true;
         if let Some((service_id, port)) = service {
             let applied = crate::vault::publish_env::apply_service(&mut c, service_id, name, project_id, cwd, port);
             enrich = !applied.fixed_path;
+        }
+        apply_dev_env(&mut c, name, service.map_or(0, |(_, port)| port), dev.is_some());
+        if scoped {
+            c.envs(crate::publish_dev::user_manager_env());
         }
         spawn_prepared(c, project_id, name, enrich)
     }
@@ -560,11 +609,12 @@ fn spawn_child(
             let applied = crate::vault::publish_env::apply_service(&mut c, service_id, name, project_id, cwd, port);
             enrich = !applied.fixed_path;
         }
+        apply_dev_env(&mut c, name, service.map_or(0, |(_, port)| port), dev.is_some());
         spawn_prepared(c, project_id, name, enrich)
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (cmd, cwd, project_id, name, service);
+        let _ = (cmd, cwd, project_id, name, service, dev);
         Err("published services require Unix or Windows".into())
     }
 }
@@ -698,7 +748,7 @@ fn emit_changed(project_id: &str) {
     });
 }
 
-fn primary_host() -> String {
+pub(crate) fn primary_host() -> String {
     tunnel_config::load()
         .ok()
         .map(|c| c.subdomain.trim().to_ascii_lowercase())
@@ -760,6 +810,12 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
     } else {
         compute_status(row, live.as_deref())
     };
+    // DM-6: an idle stop is its own state, never a crash.
+    let status = if status == STATUS_STOPPED && row.dev_mem_mb.is_some() && row.dev_idle_stopped_at.is_some() {
+        STATUS_IDLE_STOPPED
+    } else {
+        status
+    };
     let url = if row.hostname_pending {
         // Inside the startup grace: the nested hostname is not published yet.
         None
@@ -820,7 +876,31 @@ pub fn to_json(row: &ps::PublishedService) -> ServiceJson {
             json.env_mode = Some("clean".into());
         }
     }
+    json.visibility = visibility_json(row);
+    if json.visibility.as_ref().is_some_and(|v| v.mode != sv::MODE_PUBLIC) {
+        let exposed = exposed_binds(&row.id);
+        if !exposed.is_empty() {
+            json.bind_warning = Some(crate::publish_dev::bind_warning(&row.name, &exposed));
+        }
+    }
+    if row.dev_mem_mb.is_some() {
+        json.dev = Some(ps::DevJson {
+            idle_secs: dev_idle_limit(&row.name).map(|d| d.as_secs() as i64),
+            idle_stopped_at: row.dev_idle_stopped_at,
+            caps: crate::publish_dev::caps_of(pid),
+            lane: crate::publish_dev::LANE_LABEL.to_string(),
+            warning: dev_warning(json.visibility.as_ref()),
+        });
+    }
     json
+}
+
+/// What `ps` warns about a dev server: what it shows once someone other than
+/// the owner can open it (DM-4), and this box's file-watch limit (DM-7).
+fn dev_warning(visibility: Option<&ps::VisibilityJson>) -> Option<String> {
+    let shared = visibility.filter(|v| v.mode != sv::MODE_PRIVATE).map(|_| crate::publish_dev::DEV_WARNING.to_string());
+    let lines: Vec<String> = shared.into_iter().chain(crate::publish_dev::inotify_warning()).collect();
+    (!lines.is_empty()).then(|| lines.join(" "))
 }
 
 /// The longest reason line `k2 publish ps` shows.
@@ -1164,6 +1244,9 @@ pub struct RunSpec {
     pub transfer: bool,
     /// `--probe-timeout`: the startup grace stored on the row.
     pub probe_timeout: ProbeTimeout,
+    /// `--dev` (DM-1): a dev server from the live folder. `None` turns a dev
+    /// service back into a normal one.
+    pub dev: Option<crate::publish_dev::DevSpec>,
 }
 
 /// What a run does to the stored startup grace.
@@ -1203,6 +1286,26 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
     }
     if !spec.skin && spec.cmd.trim().is_empty() {
         return Err(PublishError::bad("Missing cmd"));
+    }
+    if spec.dev.is_some() {
+        if spec.skin {
+            return Err(PublishError::coded(
+                "dev_needs_cmd",
+                "--dev runs a dev server, so it needs --cmd (--skin hosts static files)",
+            ));
+        }
+        if spec.no_tunnel {
+            return Err(PublishError::coded(
+                "dev_needs_tunnel",
+                "--dev puts a dev server behind K2's check at its address, so it can't use --no-tunnel. To run one for yourself only, run the command in a terminal",
+            ));
+        }
+        // PV-4 / G8: where K2's check can't see the traffic, a dev server would
+        // be open to anyone. So it doesn't start.
+        if let Some(e) = crate::site_gate::door_refusal(&name) {
+            let (code, words) = e.split_once(": ").unwrap_or((sv::DOOR_UNSUPPORTED, e.as_str()));
+            return Err(PublishError::coded(code, words));
+        }
     }
     if spec.port == 0 {
         return Err(PublishError::bad("Missing port"));
@@ -1305,6 +1408,14 @@ pub fn run(spec: RunSpec) -> Result<ServiceJson, PublishError> {
             ps::set_probe_timeout(&conn, &spec.project_id, &name, ms)
                 .map_err(|e| PublishError::fail(e.to_string()))?;
         }
+        ps::set_dev_caps(&conn, &spec.project_id, &name, spec.dev.map(|d| (d.mem_mb, d.cpus)))
+            .map_err(|e| PublishError::fail(e.to_string()))?;
+    }
+    // The gate reads this before the hostname exists, so a dev site is never
+    // reachable as anything but what it is.
+    sync_site_visibility(&name, expose == EXPOSE_TUNNEL, spec.dev.as_ref())?;
+    if spec.dev.is_none() {
+        crate::publish_dev::forget(&name);
     }
 
     match start_inner(&spec.project_id, &name, expose == EXPOSE_TUNNEL, spec.transfer) {
@@ -1384,12 +1495,16 @@ fn start_inner(
     let (child, pid, job) = if row.kind == KIND_SKIN {
         spawn_skin_helper(&row, project_id, name).map_err(PublishError::fail)?
     } else {
-        spawn_child(&row.cmd, &cwd, project_id, name, Some((&row.id, row.port as u16))).map_err(PublishError::fail)?
+        let dev = row.dev_mem_mb.map(|mem| (mem, row.dev_cpus.unwrap_or(crate::publish_dev::CPUS_DEFAULT)));
+        spawn_child(&row.cmd, &cwd, project_id, name, Some((&row.id, row.port as u16)), dev).map_err(PublishError::fail)?
     };
     {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let _ = ps::set_runtime(&conn, project_id, name, Some(pid as i64), None, Some(now_unix()));
+        if row.dev_idle_stopped_at.is_some() {
+            let _ = ps::set_dev_idle_stopped(&conn, project_id, name, None);
+        }
     }
     let grace = grace_for(&row);
     let entry = adopt_live(project_id, name, row.port as u16, child, pid, job, grace);
@@ -1486,6 +1601,7 @@ fn finish_start(
     }
     if row.kind != KIND_SKIN {
         probe_cmd_frame_async(project_id, name, row.port as u16);
+        bind_check_async(project_id, name);
     }
     emit_changed(project_id);
     Ok(())
@@ -1636,10 +1752,334 @@ pub fn stop(project_id: &str, name: &str) -> Result<ServiceJson, PublishError> {
         let _ = ps::set_hostname_pending(&conn, project_id, &name, false);
         let _ = ps::mark_exited(&conn, project_id, &name, None);
         let _ = ps::set_runtime(&conn, project_id, &name, None, row.error.as_deref(), None);
+        // A person's stop outranks an idle stop: it doesn't wake on a visit.
+        let _ = ps::set_dev_idle_stopped(&conn, project_id, &name, None);
     }
+    crate::publish_dev::forget(&name);
     emit_changed(project_id);
     let row = load_row(project_id, &name).unwrap_or(row);
     Ok(to_json(&row))
+}
+
+// ── dev servers: idle stop, wake, bind check (DM-6, PA-11, PV-4) ─────────
+
+/// A dev label's idle limit, from its visibility row. `None` = `--idle off`.
+fn dev_idle_limit(label: &str) -> Option<Duration> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let idle = sv::effective(&conn, label).ok().and_then(|v| v.idle_secs);
+    match idle {
+        None => Some(Duration::from_secs(crate::publish_dev::IDLE_DEFAULT_SECS as u64)),
+        Some(0) => None,
+        Some(n) => Some(Duration::from_secs(n.max(0) as u64)),
+    }
+}
+
+/// What the gate reads for this run, written before the hostname exists (the
+/// label's own private row comes with the hostname's creation):
+/// - a dev run marks it dev with its idle limit, and takes a public site private
+///   unless it was already a dev site someone made public on purpose (G8);
+/// - a plain run of a dev site turns it back into a normal one (DM-1).
+fn sync_site_visibility(label: &str, tunnel: bool, dev: Option<&crate::publish_dev::DevSpec>) -> Result<(), PublishError> {
+    if !tunnel {
+        return Ok(());
+    }
+    const BY: &str = "k2 publish run";
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    let fail = |e: String| PublishError::fail(e);
+    let current = sv::effective(&conn, label).map_err(fail)?;
+    match dev {
+        Some(d) => {
+            if current.mode == sv::Mode::Public && !current.dev {
+                sv::set_private(&conn, label, BY).map_err(fail)?;
+            }
+            sv::set_dev(&conn, label, true, Some(d.idle_secs.unwrap_or(0)), BY).map_err(fail)?;
+        }
+        None if current.dev => {
+            sv::set_dev(&conn, label, false, None, BY).map_err(fail)?;
+        }
+        None => {}
+    }
+    Ok(())
+}
+
+/// Who may open this service's site, for `ps`. `None`: it has no address, or an
+/// App's own logins decide (a folder App has none: the gate covers it).
+fn visibility_json(row: &ps::PublishedService) -> Option<ps::VisibilityJson> {
+    if row.expose != EXPOSE_TUNNEL || !sv::is_covered(&row.name) || crate::publish_site_routes::is_real_app(&row.name) {
+        return None;
+    }
+    let v = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        sv::effective(&conn, &row.name).ok()?
+    };
+    Some(ps::VisibilityJson {
+        mode: v.mode.as_str().to_string(),
+        dev: v.dev,
+        // Where K2's check can't see the traffic, say so rather than "private".
+        enforced: v.mode == sv::Mode::Public || crate::site_gate::door_refusal(&row.name).is_none(),
+        reason: v.public_reason,
+        set_by: v.set_by,
+        set_at: v.set_at,
+    })
+}
+
+fn bind_noticed() -> &'static Mutex<std::collections::HashSet<(String, Vec<String>)>> {
+    static SEEN: OnceLock<Mutex<std::collections::HashSet<(String, Vec<String>)>>> = OnceLock::new();
+    SEEN.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+fn workspace_path(project_id: &str) -> String {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    conn.query_row("SELECT path FROM projects WHERE id = ?1", rusqlite::params![project_id], |r| r.get(0)).unwrap_or_else(|_| project_id.to_string())
+}
+
+/// PV-4: one Thread notice when a private or PIN site's program listens beyond
+/// loopback. A new set of addresses says so again.
+fn notify_bind_exposed(row: &ps::PublishedService, exposed: &[String]) {
+    if exposed.is_empty() {
+        return;
+    }
+    let gated = visibility_json(row).is_some_and(|v| v.mode != sv::MODE_PUBLIC);
+    if !gated {
+        return;
+    }
+    if !bind_noticed().lock().unwrap_or_else(|e| e.into_inner()).insert((row.id.clone(), exposed.to_vec())) {
+        return;
+    }
+    let text = crate::publish_dev::bind_warning(&row.name, exposed);
+    if let Err(e) = crate::overlay_routes::post_workspace_note(&workspace_path(&row.project_id), &text, "k2-publish") {
+        log_debug!("[publish] {}: bind notice: {e}", row.name);
+    }
+}
+
+/// PV-11: one card about the sites public from before 0.46.7, once the upgrade's
+/// pass over the routing map has settled which those are.
+fn upgrade_card_tick() {
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if !sv::upgrade_card_due(&conn).unwrap_or(false) {
+            return;
+        }
+    }
+    if crate::publish_cards::present_upgrade_card() {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        if let Err(e) = sv::mark_upgrade_card_done(&conn) {
+            log_debug!("[publish] upgrade card mark: {e}");
+        }
+    }
+}
+
+/// Something came through the front door for this dev label. Cheap: the gate
+/// calls it per request and while a spliced WebSocket carries data, so a person
+/// watching hot reload isn't idle-stopped mid-session.
+pub fn dev_touch(label: &str) {
+    crate::publish_dev::touch(&label.trim().to_ascii_lowercase());
+}
+
+/// The row serving `label`: the workspace that holds the label, else the only
+/// workspace with a service of that name. Two unattributed rows: none (never a
+/// guess at which dev server to start).
+fn service_for_label(label: &str) -> Option<ps::PublishedService> {
+    let db = k2_core::db::shared();
+    let conn = db.lock();
+    if let Ok(Some(owner)) = SubdomainWorkspace::owner_of(&conn, label) {
+        return ps::get_by_project_name(&conn, &owner, label).ok().flatten();
+    }
+    let mut rows = ps::list_all(&conn).ok()?.into_iter().filter(|r| r.name == label);
+    let first = rows.next()?;
+    rows.next().is_none().then_some(first)
+}
+
+fn waking() -> &'static Mutex<std::collections::HashSet<String>> {
+    static WAKING: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+    WAKING.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+}
+
+/// DM-6: called by the gate for a visitor who passed it, before dialing. It
+/// never blocks. Only an idle-stopped dev server wakes: a stopped or crashed
+/// one stays down until someone starts it, so reloads can't make a crash loop.
+pub fn dev_wake(label: &str) -> DevWake {
+    let label = label.trim().to_ascii_lowercase();
+    let Some(row) = service_for_label(&label) else { return DevWake::NotDev };
+    if row.dev_mem_mb.is_none() {
+        return DevWake::NotDev;
+    }
+    if live_get(&row.project_id, &row.name).is_some() {
+        crate::publish_dev::touch(&label);
+        return if port_accepts(row.port as u16) { DevWake::Up } else { DevWake::Starting };
+    }
+    if waking().lock().unwrap_or_else(|e| e.into_inner()).contains(&label) {
+        return DevWake::Starting;
+    }
+    if row.dev_idle_stopped_at.is_none() {
+        if row.pid.and_then(|p| i32::try_from(p).ok()).is_some_and(pid_alive) && port_accepts(row.port as u16) {
+            return DevWake::Up;
+        }
+        let why = row.error.clone().unwrap_or_else(|| {
+            if row.desired == DESIRED_STOPPED {
+                "This dev server is stopped. Its owner can start it: k2 publish start".to_string()
+            } else {
+                "This dev server exited. Its owner can see why: k2 publish logs".to_string()
+            }
+        });
+        return DevWake::Failed(why);
+    }
+    if !waking().lock().unwrap_or_else(|e| e.into_inner()).insert(label.clone()) {
+        return DevWake::Starting;
+    }
+    crate::publish_dev::touch(&label);
+    let spawned = thread::Builder::new().name(format!("publish-wake-{label}")).spawn({
+        let label = label.clone();
+        move || {
+            let want_tunnel = row.expose == EXPOSE_TUNNEL;
+            let r = start_inner(&row.project_id, &row.name, want_tunnel, false);
+            if let Err(e) = r {
+                log_debug!("[publish] {label}: wake failed: {}", e.message);
+                let db = k2_core::db::shared();
+                let conn = db.lock();
+                let _ = ps::set_error(&conn, &row.project_id, &row.name, Some(&e.message));
+                let _ = ps::set_dev_idle_stopped(&conn, &row.project_id, &row.name, None);
+            }
+            waking().lock().unwrap_or_else(|e| e.into_inner()).remove(&label);
+        }
+    });
+    if let Err(e) = spawned {
+        waking().lock().unwrap_or_else(|p| p.into_inner()).remove(&label);
+        return DevWake::Failed(format!("K2 couldn't start the dev server: {e}"));
+    }
+    DevWake::Starting
+}
+
+/// Stop every dev server that has been idle past its limit. `now` is passed in
+/// so tests needn't wait out the 5-minute minimum.
+pub(crate) fn dev_idle_sweep(now: Instant) -> Vec<String> {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::list_desired_running(&conn).unwrap_or_default()
+    };
+    let mut stopped = Vec::new();
+    for row in rows.into_iter().filter(|r| r.dev_mem_mb.is_some()) {
+        let Some(limit) = dev_idle_limit(&row.name) else { continue };
+        let Some(entry) = live_get(&row.project_id, &row.name) else { continue };
+        if !crate::publish_dev::idle_due(entry.started, crate::publish_dev::last_touch(&row.name), limit, now) {
+            continue;
+        }
+        if let Err(e) = idle_stop(&row.project_id, &row.name, limit) {
+            log_debug!("[publish] {}: idle stop failed: {}", row.name, e.message);
+            continue;
+        }
+        stopped.push(row.name);
+    }
+    stopped
+}
+
+fn idle_stop(project_id: &str, name: &str, limit: Duration) -> Result<(), PublishError> {
+    stop(project_id, name)?;
+    {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::set_dev_idle_stopped(&conn, project_id, name, Some(now_unix())).map_err(|e| PublishError::fail(e.to_string()))?;
+    }
+    log_debug!("[publish] {project_id}/{name}: idle-stopped after {} with no visits", fmt_duration(limit));
+    emit_changed(project_id);
+    Ok(())
+}
+
+/// A site's visibility changed: every workspace showing a service of that name
+/// refreshes its list.
+pub(crate) fn emit_label_changed(label: &str) {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::list_all(&conn).unwrap_or_default()
+    };
+    for r in rows.iter().filter(|r| r.name == label) {
+        emit_changed(&r.project_id);
+    }
+}
+
+/// The running dev site whose live folder is `folder`, if any (DM-8).
+pub(crate) fn dev_site_in_folder(folder: &str) -> Option<String> {
+    let want = dunce::canonicalize(folder).ok()?;
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::list_desired_running(&conn).ok()?
+    };
+    rows.into_iter()
+        .find(|r| r.dev_mem_mb.is_some() && dunce::canonicalize(&r.cwd).is_ok_and(|c| c == want))
+        .map(|r| r.name)
+}
+
+/// How often the idle stop looks: every 30 seconds. The headless test sets
+/// `K2_PUBLISH_DEV_IDLE_TICK_MS` (debug builds only).
+fn dev_idle_tick() -> Duration {
+    const TICK: Duration = Duration::from_secs(30);
+    if !cfg!(debug_assertions) {
+        return TICK;
+    }
+    std::env::var("K2_PUBLISH_DEV_IDLE_TICK_MS").ok().and_then(|v| v.parse::<u64>().ok()).map(Duration::from_millis).unwrap_or(TICK)
+}
+
+/// The last bind check's exposed addresses, by service id (PV-4): `ps` and
+/// `visibility` read this rather than walking `/proc` per request.
+fn bind_cache() -> &'static Mutex<HashMap<String, Vec<String>>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, Vec<String>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// What the last bind check saw this service listening on, beyond loopback.
+pub(crate) fn exposed_binds(service_id: &str) -> Vec<String> {
+    bind_cache().lock().unwrap_or_else(|e| e.into_inner()).get(service_id).cloned().unwrap_or_default()
+}
+
+/// Look at what `row`'s program listens on now, and remember it.
+fn check_bind(row: &ps::PublishedService) -> Vec<String> {
+    let pgid = row.pid.and_then(|p| i32::try_from(p).ok());
+    // `None`: K2 couldn't look. Keep the last answer: an unreadable /proc
+    // must not read as "nothing is exposed".
+    let Some(ls) = crate::publish_dev::listeners(pgid, row.port as u16) else {
+        return exposed_binds(&row.id);
+    };
+    let exposed = crate::publish_dev::exposed_addrs(&ls);
+    bind_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(row.id.clone(), exposed.clone());
+    exposed
+}
+
+/// The check after a start: a moment later, as a server often opens its port
+/// before its last listener.
+fn bind_check_async(project_id: &str, name: &str) {
+    let (project_id, name) = (project_id.to_string(), name.to_string());
+    let _ = thread::Builder::new().name(format!("publish-bind-{name}")).spawn(move || {
+        thread::sleep(Duration::from_secs(2));
+        if let Some(row) = load_row(&project_id, &name) {
+            bind_check_one(&row);
+        }
+    });
+}
+
+/// Every 5 minutes (PV-4), for every running `--cmd` service.
+fn bind_sweep() {
+    let rows = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::list_desired_running(&conn).unwrap_or_default()
+    };
+    for row in rows.iter().filter(|r| r.kind != KIND_SKIN && r.cmd != ps::CMD_APP_SENTINEL) {
+        bind_check_one(row);
+    }
+}
+
+fn bind_check_one(row: &ps::PublishedService) {
+    let exposed = check_bind(row);
+    notify_bind_exposed(row, &exposed);
 }
 
 fn kill_pid_tree(pid: i32) {
@@ -2239,11 +2679,19 @@ pub fn run_skin_app_backfill_at_boot() {
 /// Long-lived supervisor thread: boot respawn then idle (child waiters
 /// are per-service threads).
 pub fn spawn() -> thread::JoinHandle<()> {
+    // DM-6: the gate's way to the dev process lane, before anything is served.
+    crate::site_gate::dev::install(crate::site_gate::dev::DevHooks { touch: dev_touch, wake: dev_wake });
     thread::Builder::new()
         .name("publish-runtime".into())
         .spawn(|| {
             run_skin_app_backfill_at_boot();
             boot_desired_running();
+            // DM-6: the idle stop has its own thread, so a slow frame or bind
+            // check never holds it up.
+            let _ = thread::Builder::new().name("publish-dev-idle".into()).spawn(|| loop {
+                thread::sleep(dev_idle_tick());
+                dev_idle_sweep(Instant::now());
+            });
             let mut ticks: u32 = 0;
             loop {
                 thread::sleep(Duration::from_secs(30));
@@ -2252,6 +2700,11 @@ pub fn spawn() -> thread::JoinHandle<()> {
                 if ticks % 20 == 0 {
                     reprobe_cmd_frames();
                 }
+                // PV-4: what each service listens on, every 5 min.
+                if ticks % 10 == 0 {
+                    bind_sweep();
+                }
+                upgrade_card_tick();
             }
         })
         .expect("spawn publish-runtime")
@@ -2628,6 +3081,9 @@ mod tests {
                 frame_ancestors: String::new(),
                 probe_timeout_ms: None,
                 hostname_pending: false,
+                dev_mem_mb: None,
+                dev_cpus: None,
+                dev_idle_stopped_at: None,
             };
             // No log yet: the exit alone.
             assert_eq!(down_reason(&row(None, Some(2), Some(101)), STATUS_EXITED).as_deref(), Some("its process exited with code 2"));
@@ -2857,6 +3313,7 @@ mod tests {
             cwd_explicit: false,
             transfer: false,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         };
         let json = run(spec).expect("run");
         assert_eq!(
@@ -2910,6 +3367,7 @@ mod tests {
             cwd_explicit: false,
             transfer: false,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         })
         .expect("run --no-tunnel");
         assert_eq!(json.expose, EXPOSE_LOCAL);
@@ -2962,6 +3420,7 @@ mod tests {
                 cwd_explicit: false,
                 transfer: false,
                 probe_timeout: ProbeTimeout::Keep,
+                dev: None,
             })
             .expect_err("B must not take A's label");
             assert_eq!(err.status, "409 Conflict", "skin={skin} msg={}", err.message);
@@ -2987,6 +3446,7 @@ mod tests {
             cwd_explicit: false,
             transfer: true,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         })
         .expect_err("non-owner transfer must fail");
         assert_eq!(err.status, "403 Forbidden", "msg={}", err.message);
@@ -3044,6 +3504,7 @@ mod tests {
                         cwd_explicit: false,
                         transfer: false,
                         probe_timeout: ProbeTimeout::Keep,
+                        dev: None,
                     })
                 })
                 .expect_err("the daemon's own port must be refused");
@@ -3188,6 +3649,7 @@ mod tests {
             cwd_explicit: false,
             transfer: false,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         })
         .expect_err("not Pro must fail");
         assert!(
@@ -3277,6 +3739,7 @@ mod tests {
             cwd_explicit: false,
             transfer: false,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         })
         .expect_err("hostname fail");
         drop(cp_base);
@@ -3326,6 +3789,7 @@ mod tests {
             cwd_explicit: false,
             transfer: false,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         };
         run(spec()).expect("first run");
         let err = run(spec()).expect_err("second must fail");
@@ -3352,6 +3816,7 @@ mod tests {
             cwd_explicit: false,
             transfer: false,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         })
         .expect_err("cmd+skin");
         assert!(
@@ -3372,6 +3837,7 @@ mod tests {
             cwd_explicit: true,
             transfer: false,
             probe_timeout: ProbeTimeout::Keep,
+            dev: None,
         })
         .expect_err("cwd+skin");
         assert!(
@@ -3420,7 +3886,285 @@ mod tests {
             cwd_explicit: false,
             transfer: false,
             probe_timeout: pt,
+            dev: None,
         }
+    }
+
+    // ── `k2 publish run --dev` (DM-1, DM-5, DM-6) ────────────────────────
+
+    /// A dev service's row, on the local lane so the start needs no control
+    /// plane. `run`'s own path (with a hostname) is in the headless CLI test.
+    fn dev_row(dir: &Path, project_id: &str, name: &str, cmd: &str, port: u16) {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        ps::insert(&conn, project_id, name, cmd, &dir.to_string_lossy(), port, EXPOSE_LOCAL, DESIRED_STOPPED, KIND_CMD, "").expect("insert");
+        ps::set_dev_caps(&conn, project_id, name, Some((1024, 1.0))).expect("caps");
+        sv::set_dev(&conn, name, true, Some(600), "test").expect("dev");
+    }
+
+    fn dev_status(project_id: &str, name: &str) -> ServiceJson {
+        to_json(&load_row(project_id, name).expect("row"))
+    }
+
+    /// DM-1: the live folder, loopback, and the address its hot-reload client
+    /// needs, whatever a service's env file says. DM-5: `ps` says how it runs.
+    #[test]
+    fn a_dev_server_runs_in_the_live_folder_on_loopback_and_says_how_it_runs() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
+        let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": true });
+        fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+        let dir = _home.path().join("ws-dev");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("devenv");
+        let port = free_port();
+        let cmd = format!("env > seen-env.txt; pwd > seen-cwd.txt; {}", listener_cmd(port));
+        dev_row(&dir, &project_id, &name, &cmd, port);
+        let json = start_inner(&project_id, &name, false, false).expect("start");
+        assert_eq!(json.status, STATUS_RUNNING, "{json:?}");
+        let env = fs::read_to_string(dir.join("seen-env.txt")).expect("the server ran in the folder");
+        assert!(env.lines().any(|l| l == "HOST=127.0.0.1"), "{env}");
+        assert!(env.lines().any(|l| l == format!("PORT={port}")), "{env}");
+        assert!(env.lines().any(|l| l == format!("K2_DEV_PUBLIC_HOST={name}.rosson.k2.dev")), "{env}");
+        assert!(env.lines().any(|l| l == "K2_DEV_PUBLIC_PORT=443"), "{env}");
+        assert!(env.lines().any(|l| l == "K2_DEV_PUBLIC_PROTOCOL=wss"), "{env}");
+        let cwd = fs::read_to_string(dir.join("seen-cwd.txt")).expect("cwd");
+        assert_eq!(dunce::canonicalize(cwd.trim()).unwrap(), dunce::canonicalize(&dir).unwrap(), "the live folder, never a copy");
+
+        let dev = json.dev.expect("dev details");
+        assert_eq!(dev.lane, "dev: live folder, not walled");
+        assert_eq!(dev.idle_secs, Some(600));
+        assert_eq!(dev.idle_stopped_at, None);
+        #[cfg(target_os = "macos")]
+        assert_eq!(dev.caps, "no caps (macOS has none)");
+        // Linux: either read back from the scope, or "no caps" with why: never
+        // what was merely asked for.
+        #[cfg(target_os = "linux")]
+        assert!(dev.caps == "1 GiB, 1 CPU" || dev.caps.starts_with("no caps ("), "{}", dev.caps);
+        cleanup(&project_id, &name);
+    }
+
+    /// DM-5: an ordinary `--cmd` service gets none of it.
+    #[test]
+    fn a_plain_service_has_no_dev_details() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
+        let dir = _home.path().join("ws-plain");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("plain");
+        let port = free_port();
+        let json = run(grace_spec(&project_id, &name, format!("env > seen-env.txt; {}", listener_cmd(port)), &dir, port, true, ProbeTimeout::Keep)).expect("run");
+        assert!(json.dev.is_none(), "{:?}", json.dev);
+        let env = fs::read_to_string(dir.join("seen-env.txt")).expect("env");
+        assert!(!env.contains("K2_DEV_PUBLIC_HOST"), "{env}");
+        assert_eq!(dev_wake(&name), DevWake::NotDev);
+        cleanup(&project_id, &name);
+    }
+
+    /// `run` refuses what `--dev` can't be, before anything starts.
+    #[test]
+    fn dev_refuses_skin_and_no_tunnel_before_anything_starts() {
+        let _home = crate::test_support::TempHome::new();
+        let dir = _home.path().join("ws-refuse");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("refuse");
+        let marker = dir.join("spawned");
+        let mut spec = grace_spec(&project_id, &name, format!("touch {}", marker.display()), &dir, free_port(), true, ProbeTimeout::Keep);
+        spec.dev = Some(crate::publish_dev::DevSpec::default());
+        let err = run(spec).expect_err("--dev --no-tunnel");
+        assert_eq!(err.body.as_ref().expect("coded")["code"], "dev_needs_tunnel", "{}", err.message);
+
+        let mut spec = grace_spec(&project_id, &name, String::new(), &dir, free_port(), false, ProbeTimeout::Keep);
+        spec.dev = Some(crate::publish_dev::DevSpec::default());
+        spec.skin = true;
+        let err = run(spec).expect_err("--dev --skin");
+        assert_eq!(err.body.as_ref().expect("coded")["code"], "dev_needs_cmd", "{}", err.message);
+        assert!(!marker.exists(), "nothing started");
+        assert!(load_row(&project_id, &name).is_none(), "no row");
+    }
+
+    /// PV-4 / G8: with E2E off K2's check can't see the traffic, so a dev server
+    /// doesn't start, and `ps` doesn't call a plain site private as if K2 checked.
+    #[test]
+    fn e2e_off_refuses_a_dev_server_and_ps_says_private_isnt_enforced() {
+        let _home = crate::test_support::TempHome::new();
+        let cfg = serde_json::json!({ "token": "tok_test", "subdomain": "rosson", "e2e": false });
+        fs::write(_home.path().join(".k2/tunnel.json"), cfg.to_string()).unwrap();
+        let dir = _home.path().join("ws-e2e");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("e2eoff");
+        let marker = dir.join("spawned");
+        let mut spec = grace_spec(&project_id, &name, format!("touch {}", marker.display()), &dir, free_port(), false, ProbeTimeout::Keep);
+        spec.dev = Some(crate::publish_dev::DevSpec::default());
+        let err = run(spec).expect_err("no gate on this door");
+        assert_eq!(err.body.as_ref().expect("coded")["code"], sv::DOOR_UNSUPPORTED, "{}", err.message);
+        assert!(!marker.exists(), "nothing started");
+
+        let db = k2_core::db::shared();
+        let row = {
+            let conn = db.lock();
+            ps::insert(&conn, &project_id, &name, "true", &dir.to_string_lossy(), free_port(), EXPOSE_TUNNEL, DESIRED_STOPPED, KIND_CMD, "").expect("insert")
+        };
+        let v = to_json(&row).visibility.expect("visibility");
+        assert_eq!((v.mode.as_str(), v.enforced), ("private", false));
+        let conn = db.lock();
+        let _ = ps::delete(&conn, &project_id, &name);
+    }
+
+    /// DM-6: stop after idle, show it as idle-stopped (never a crash), wake on a
+    /// visit that passed the gate, and a person's stop never wakes.
+    #[test]
+    fn a_dev_server_stops_when_idle_and_wakes_on_a_visit() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
+        let dir = _home.path().join("ws-idle");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("idle");
+        let port = free_port();
+        dev_row(&dir, &project_id, &name, &listener_cmd(port), port);
+        start_inner(&project_id, &name, false, false).expect("start");
+        assert_eq!(dev_wake(&name), DevWake::Up, "running: dial it");
+
+        // Not idle yet: a sweep now leaves it.
+        assert!(!dev_idle_sweep(Instant::now()).contains(&name));
+        assert_eq!(dev_status(&project_id, &name).status, STATUS_RUNNING);
+        // A visit moves the clock: 9 minutes later, still not idle.
+        dev_touch(&name);
+        assert!(!dev_idle_sweep(Instant::now() + Duration::from_secs(9 * 60)).contains(&name));
+
+        // Past the limit: stopped.
+        let stopped = dev_idle_sweep(Instant::now() + Duration::from_secs(11 * 60));
+        assert!(stopped.contains(&name), "{stopped:?}");
+        assert!(!port_accepts(port), "the process is gone");
+        let json = dev_status(&project_id, &name);
+        assert_eq!(json.status, STATUS_IDLE_STOPPED, "{json:?}");
+        assert_eq!(json.reason, None, "an idle stop is not a failure: {json:?}");
+        assert!(json.dev.as_ref().expect("dev").idle_stopped_at.is_some(), "{json:?}");
+        let row = load_row(&project_id, &name).expect("row");
+        assert_eq!(row.desired, DESIRED_STOPPED, "a restart doesn't bring it back by itself");
+        assert_eq!(row.last_exit_code, None, "never counted as a crash");
+
+        // A visit that passed the gate starts it; it never blocks the caller.
+        assert_eq!(dev_wake(&name), DevWake::Starting);
+        let deadline = Instant::now() + Duration::from_secs(8);
+        while Instant::now() < deadline && dev_wake(&name) != DevWake::Up {
+            thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(dev_wake(&name), DevWake::Up, "woke up");
+        let json = wait_status(&project_id, &name, STATUS_RUNNING, Duration::from_secs(8));
+        assert_eq!(json.status, STATUS_RUNNING, "{json:?}");
+        assert_eq!(json.dev.as_ref().expect("dev").idle_stopped_at, None, "{json:?}");
+
+        // A person's stop outranks all of it: no wake, and it says why.
+        stop(&project_id, &name).expect("stop");
+        assert_eq!(dev_status(&project_id, &name).status, STATUS_STOPPED);
+        match dev_wake(&name) {
+            DevWake::Failed(why) => assert!(why.contains("stopped"), "{why}"),
+            other => panic!("a stopped dev server must not wake: {other:?}"),
+        }
+        assert!(!port_accepts(port), "still down");
+        cleanup(&project_id, &name);
+    }
+
+    /// `--idle off` (the owner's call) never stops.
+    #[test]
+    fn idle_off_never_stops() {
+        assert!(python_ok(), "python3 is required for published-service runtime tests");
+        let _home = crate::test_support::TempHome::new();
+        let _probe_ms = k2_core::test_env::EnvVar::set("K2_PUBLISH_PROBE_MS", "4000");
+        let dir = _home.path().join("ws-off");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("idleoff");
+        let port = free_port();
+        dev_row(&dir, &project_id, &name, &listener_cmd(port), port);
+        {
+            let db = k2_core::db::shared();
+            let conn = db.lock();
+            sv::set_dev(&conn, &name, true, Some(0), "test").expect("off");
+        }
+        start_inner(&project_id, &name, false, false).expect("start");
+        assert!(!dev_idle_sweep(Instant::now() + Duration::from_secs(48 * 3600)).contains(&name));
+        assert_eq!(dev_status(&project_id, &name).status, STATUS_RUNNING);
+        assert_eq!(dev_status(&project_id, &name).dev.expect("dev").idle_secs, None);
+        cleanup(&project_id, &name);
+    }
+
+    /// G8: a public site that turns into a dev server is private now; a plain
+    /// run turns it back into a normal site, which stays private.
+    #[test]
+    fn a_public_site_turning_into_a_dev_server_goes_private() {
+        let _home = crate::test_support::TempHome::new();
+        let name = unique("wasopen");
+        let db = k2_core::db::shared();
+        {
+            let conn = db.lock();
+            sv::set_public(&conn, &name, "before", "test").expect("public");
+        }
+        let spec = crate::publish_dev::DevSpec::default();
+        sync_site_visibility(&name, true, Some(&spec)).expect("sync");
+        {
+            let conn = db.lock();
+            let v = sv::effective(&conn, &name).expect("row");
+            assert_eq!((v.mode, v.dev, v.idle_secs), (sv::Mode::Private, true, Some(3600)));
+        }
+        // A dev site someone made public on purpose stays public on a re-run.
+        {
+            let conn = db.lock();
+            sv::set_public(&conn, &name, "demo", "test").expect("public");
+        }
+        sync_site_visibility(&name, true, Some(&spec)).expect("sync");
+        {
+            let conn = db.lock();
+            assert_eq!(sv::effective(&conn, &name).expect("row").mode, sv::Mode::Public);
+            sv::set_private(&conn, &name, "test").expect("private");
+        }
+        sync_site_visibility(&name, true, None).expect("sync");
+        let conn = db.lock();
+        let v = sv::effective(&conn, &name).expect("row");
+        assert_eq!((v.mode, v.dev), (sv::Mode::Private, false), "back to normal, still private");
+    }
+
+    /// PV-4: `ps` warns for a gated site that listens on every address, once the
+    /// check has looked, and a public site doesn't.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn ps_warns_when_a_gated_sites_program_listens_beyond_loopback() {
+        let _home = crate::test_support::TempHome::new();
+        let wide = std::net::TcpListener::bind(("0.0.0.0", 0)).expect("bind");
+        let port = wide.local_addr().expect("addr").port();
+        let dir = _home.path().join("ws-bind");
+        fs::create_dir_all(&dir).unwrap();
+        let project_id = make_project(&dir.to_string_lossy());
+        let name = unique("wide");
+        let db = k2_core::db::shared();
+        let row = {
+            let conn = db.lock();
+            ps::insert(&conn, &project_id, &name, "true", &dir.to_string_lossy(), port, EXPOSE_TUNNEL, DESIRED_STOPPED, KIND_CMD, "").expect("insert")
+        };
+        assert!(to_json(&row).bind_warning.is_none(), "not checked yet");
+        let exposed = check_bind(&row);
+        assert_eq!(exposed.len(), 1, "{exposed:?}");
+        let json = to_json(&row);
+        assert_eq!(json.visibility.as_ref().expect("visibility").mode, "private");
+        let w = json.bind_warning.expect("warned");
+        assert!(w.contains(&format!(":{port}")) && w.contains("127.0.0.1"), "{w}");
+        {
+            let conn = db.lock();
+            sv::set_public(&conn, &name, "open", "test").expect("public");
+        }
+        assert!(to_json(&row).bind_warning.is_none(), "public: the address is open anyway");
+        drop(wide);
+        let conn = db.lock();
+        let _ = ps::delete(&conn, &project_id, &name);
     }
 
     /// Poll `to_json` until `want` or `within` runs out; returns the last JSON.

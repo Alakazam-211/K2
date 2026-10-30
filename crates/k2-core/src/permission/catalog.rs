@@ -182,6 +182,12 @@ pub enum ParamKind {
     /// An App role (box-wide or that App's), by name or id:
     /// `app.login-grant role=`.
     AppRole,
+    /// A published site of the asking workspace, by its label:
+    /// `publish.public label=` (0.46.7).
+    Site,
+    /// A few words the agent wrote, shown as its own: `publish.public reason=`
+    /// (0.46.7).
+    Text,
 }
 
 /// One value an action takes (`key=value` on the CLI).

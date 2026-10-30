@@ -301,7 +301,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 44;
 /// v2 = 0.46.6: Apps gain the password-reset card (`apps.user-password-reset`).
 /// v3: "Your own service or App" (`vault.share-service`).
 /// v4: "Logins on your own App" (`app.login-grant`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 4;
+/// v5 = 0.46.7: published sites' cards (`publish.public`, `publish.pin`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 5;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

@@ -1105,6 +1105,10 @@ fn deploy_inner(who: &Who, v: &J) -> R<J> {
     let mut out = deployment_answer(&dep, wait_secs(v))?;
     // 0.46.4 (NSI #3): what was packed, and its heaviest paths.
     out["seedSize"] = seed_size(&seed);
+    // DM-8: shipping from a folder doesn't stop the dev site running in it.
+    if let Some(site) = s(v, "folder").and_then(|f| crate::publish_runtime::dev_site_in_folder(f)) {
+        out["devSite"] = J::String(site);
+    }
     if let Some(e) = egress {
         out["egress"] = e;
     }

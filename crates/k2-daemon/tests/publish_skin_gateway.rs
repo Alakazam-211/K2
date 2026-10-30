@@ -11,6 +11,14 @@ use std::time::Duration;
 use k2_core::db::schema::WorkspaceSession;
 use k2_core::published_services::{self as ps, CMD_SKIN_SENTINEL, DESIRED_RUNNING, KIND_SKIN};
 use k2_daemon::test_harness;
+
+/// A daemon that still makes new `--skin` sites: since 0.46.7 only this test
+/// switch does (`K2_PUBLISH_NEW_SKIN=allow`, debug builds only). These tests
+/// exercise the old gateway, which keeps serving existing sites.
+async fn start_old_skin_daemon() -> test_harness::TestDaemon {
+    std::env::set_var("K2_PUBLISH_NEW_SKIN", "allow");
+    test_harness::start(OWNER_TOKEN).await
+}
 use rusqlite::params;
 
 static TEST_LOCK: StdMutex<()> = StdMutex::new(());
@@ -328,7 +336,7 @@ fn set_rooms(port: u16, username: &str, handle: &str) {
 async fn publish_run_skin_xor_reserved_skin_root() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgxor{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -437,7 +445,7 @@ async fn publish_run_skin_xor_reserved_skin_root() {
 async fn publish_reserved_meet_chat_new_refused_old_row_keeps_working() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgrsv{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (id, _conv, path) = seed_workspace(&handle);
@@ -591,7 +599,7 @@ async fn publish_reserved_meet_chat_new_refused_old_row_keeps_working() {
 async fn publish_run_skin_gateway_login_proxy_stop_boot() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psg{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -1124,7 +1132,7 @@ fn open_room_socket(gport: u16, workspace: &str, cookie: &str) -> StdTcpStream {
 async fn publish_run_skin_gateway_tickets_socket_and_parity() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -1383,7 +1391,7 @@ fn ws_upgrade(port: u16, path_and_query: &str, extra_headers: &str) -> Resp {
 async fn publish_run_skin_custom_login_html_or_bundled() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psglog{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -1462,7 +1470,7 @@ async fn publish_run_skin_custom_login_html_or_bundled() {
 async fn publish_run_skin_gateway_thread_answer_not_ask_or_fs() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgans{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -1571,7 +1579,7 @@ async fn publish_run_skin_gateway_thread_answer_not_ask_or_fs() {
 async fn skin_daemon_thread_answer_void_caps_and_rooms() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgdans{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let other = format!("psgdoth{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -1728,7 +1736,7 @@ async fn skin_daemon_thread_answer_void_caps_and_rooms() {
 async fn publish_run_skin_gateway_files_rooms_jail_and_ws() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -2224,7 +2232,7 @@ async fn publish_run_skin_gateway_files_rooms_jail_and_ws() {
 async fn publish_run_skin_gateway_tickets_per_room() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -2651,7 +2659,7 @@ async fn publish_run_skin_gateway_tickets_per_room() {
 async fn publish_run_skin_gateway_wiki_per_room() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -2948,7 +2956,7 @@ async fn publish_run_skin_gateway_wiki_per_room() {
 async fn publish_run_skin_gateway_store_per_room() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -3214,7 +3222,7 @@ async fn publish_run_skin_gateway_store_per_room() {
 async fn publish_run_skin_gateway_password_reset_and_change() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("pwgw{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -3368,7 +3376,7 @@ async fn publish_run_skin_gateway_password_reset_and_change() {
 async fn publish_run_skin_gateway_must_change_end_to_end() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("mcgw{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -3447,7 +3455,7 @@ fn gateway_login_cookie(gport: u16, username: &str, password: &str) -> String {
 async fn publish_run_skin_gateway_activity_ws_per_room() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let anna = format!("anna{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -3603,7 +3611,7 @@ async fn publish_run_skin_gateway_heartbeats_and_socket() {
     let _no_self_heal = NoSelfHeal(std::env::var_os("K2_HEARTBEAT_NO_SELF_HEAL"));
     std::env::set_var("K2_HEARTBEAT_NO_SELF_HEAL", "1");
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let docs = format!("docs{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_docs_id, _conv, docs_path) = seed_files_workspace(&docs);
@@ -3714,7 +3722,7 @@ async fn publish_run_skin_gateway_heartbeats_and_socket() {
 async fn publish_run_skin_gateway_refuses_cross_origin() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgxo{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, conv, path) = seed_workspace(&handle);
@@ -4076,7 +4084,7 @@ async fn publish_run_skin_gateway_activity_guest_projection() {
     let _g = lock();
     k2_core::test_isolation::assert_no_prod_env();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let tag = &uuid::Uuid::new_v4().to_string()[..8];
         let docs = format!("docs{tag}");
@@ -4394,7 +4402,7 @@ fn first_service(dport: u16, path: &str) -> serde_json::Value {
 async fn publish_frame_policy_end_to_end() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgfa{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -4524,7 +4532,7 @@ fn stop_skin_only(dport: u16, path: &str) {
 async fn publish_cmd_app_without_frame_header_is_warned() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgfw{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -4581,7 +4589,7 @@ async fn publish_cmd_app_without_frame_header_is_warned() {
 async fn boot_reattach_restarts_a_helper_without_frame_headers() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("psgfb{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (project_id, _conv, path) = seed_workspace(&handle);
@@ -4765,7 +4773,7 @@ fn gateway_login_status(gport: u16, username: &str, password: &str) -> u16 {
 async fn publish_run_skin_gateway_access_changes_end_live_sessions() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("revgw{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let other = format!("revgx{}", &uuid::Uuid::new_v4().to_string()[..8]);
@@ -5023,7 +5031,7 @@ fn daemon_login(dport: u16, body: &str) -> Resp {
 async fn publish_run_skin_per_app_logins_fail_closed() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("s24a{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -5194,7 +5202,7 @@ async fn publish_run_skin_per_app_logins_fail_closed() {
 async fn publish_cmd_service_gets_app_id_env() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("s24c{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);
@@ -5249,7 +5257,7 @@ async fn publish_cmd_service_gets_app_id_env() {
 async fn skin_login_email_and_locked_reply() {
     let _g = lock();
     with_temp_home(|| {
-        let daemon = futures_block(test_harness::start(OWNER_TOKEN));
+        let daemon = futures_block(start_old_skin_daemon());
         let dport = daemon.port;
         let handle = format!("s24l{}", &uuid::Uuid::new_v4().to_string()[..8]);
         let (_id, _conv, path) = seed_workspace(&handle);

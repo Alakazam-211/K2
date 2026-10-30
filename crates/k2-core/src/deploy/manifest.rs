@@ -5,7 +5,7 @@
 //!
 //! Stage 1 runs `host.mode = "cmd"` (a server started from `host.start`
 //! argv) on the process engine. `static` and `next` parse and validate;
-//! `static` Apps keep `k2 publish run --skin` until the runtime hosts them.
+//! `static` Apps wait until the runtime hosts them (`--skin` makes no new sites).
 
 use std::collections::BTreeMap;
 

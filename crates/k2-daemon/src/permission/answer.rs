@@ -395,6 +395,12 @@ fn decide_one(
         applied_opts = AnswerOpts { reveal: opts.reveal, mode: Some(mode) };
     }
 
+    // `publish.pin`: Allow never carries a PIN. The site must have one first,
+    // from K2's own form. Refused here, before anything is decided.
+    if matches!(d, Decision::Allow | Decision::Always) {
+        super::actions::publish::gate_answer(req)?;
+    }
+
     // 1. The compare-and-set, before any apply (C12).
     if !store::cas_open_to(req.id.as_str(), RequestState::Applying).map_err(|e| err(500, "db", e))? {
         return Err(err(409, code::REQUEST_NOT_PENDING, "someone answered first, or the request closed"));

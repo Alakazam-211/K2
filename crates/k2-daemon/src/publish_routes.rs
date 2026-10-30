@@ -127,6 +127,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         "/cli/publish/leftovers" => handle_leftovers(params),
         "/cli/publish/validate" => handle_validate(params),
         "/cli/publish/client-ip/list" => handle_client_ip_list(),
+        "/cli/publish/visibility" => crate::publish_site_routes::handle_show(params),
+        "/cli/publish/sessions" => crate::publish_site_routes::handle_sessions(params),
         "/cli/publish/client-ip"
         | "/cli/publish/run"
         | "/cli/publish/start"
@@ -134,6 +136,8 @@ pub fn dispatch(path: &str, params: &HashMap<String, String>) -> Option<CliRespo
         | "/cli/publish/rm"
         | "/cli/publish/subdomain/claim"
         | "/cli/publish/subdomain/unclaim"
+        | "/cli/publish/open"
+        | "/cli/publish/sessions/revoke"
         | "/cli/publish/frame" => CliResponse::method_not_allowed(),
         _ => CliResponse::not_found(),
     })
@@ -161,6 +165,12 @@ pub fn dispatch_post_as(path: &str, params: &HashMap<String, String>, who: crate
     // request) says where the owner sees it and raises the agent's
     // `apps.approve` card, as every `/cli/app/*` hold does.
     crate::apps::approvals::enrich_held(&who, dispatch_post(path, params))
+}
+
+/// The classified caller of this POST. Nothing classified: refused by the
+/// routes that ask.
+fn caller() -> crate::compute_routes::Who {
+    CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid)
 }
 
 fn caller_agent_ws() -> Option<String> {
@@ -208,7 +218,8 @@ fn gate_holds(mode: GateMode, route: &CmdRoute, switch_off: bool) -> bool {
     match mode {
         GateMode::Warn => false,
         GateMode::Always => true,
-        GateMode::OpenPath => switch_off || matches!(route, CmdRoute::Open),
+        // DM-5: a dev server has no wall at all, on every box.
+        GateMode::OpenPath => switch_off || matches!(route, CmdRoute::Open | CmdRoute::Dev),
     }
 }
 
@@ -246,7 +257,11 @@ fn crossover_notice(name: &str, why: &str) -> serde_json::Value {
 /// existing legacy service stays free under switch 1 "Build and run Apps";
 /// without it the re-run is held too. `None` = no gate applies (a human,
 /// `--skin`, another workspace's call, or a legacy re-run with switch 1).
-fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<Gate> {
+///
+/// DM-5: `--dev` is gated the same way. An agent's first `--dev` run of a label
+/// (new, or an existing service turning into a dev server) waits for the
+/// person; re-running a dev service it already has follows the legacy rule.
+fn publish_run_gate(project_id: &str, name: &str, skin: bool, dev: bool) -> Option<Gate> {
     let ws = caller_agent_ws()?;
     if skin || ws != project_id {
         return None;
@@ -257,9 +272,23 @@ fn publish_run_gate(project_id: &str, name: &str, skin: bool) -> Option<Gate> {
         k2_core::published_services::get_by_project_name(&conn, project_id, name)
             .ok()
             .flatten()
-            .is_some_and(|r| r.cmd != k2_core::published_services::CMD_APP_SENTINEL)
+            .is_some_and(|r| r.cmd != k2_core::published_services::CMD_APP_SENTINEL && (!dev || r.dev_mem_mb.is_some()))
     };
-    gate_for(legacy, crate::apps::access::level(project_id))
+    let level = crate::apps::access::level(project_id);
+    if dev && !legacy {
+        return Some(dev_gate());
+    }
+    gate_for(legacy, level)
+}
+
+/// Why an agent's first `--dev` run of a label waits.
+fn dev_gate() -> Gate {
+    Gate {
+        why: "a --dev service runs from your live folder with no wall around it, so each new one waits for the owner's in-person approval \
+              (k2 app approve <id> from a terminal outside K2, or Settings → Apps → Approvals)"
+            .into(),
+        switch_off: false,
+    }
 }
 
 /// What an approved `publish_run` request is bound to: the App (workspace
@@ -294,6 +323,11 @@ fn approved_run(project_id: &str, name: &str, body: &serde_json::Value) -> Optio
         .map(|a| a.created_at);
     let made_at = service.into_iter().chain(app).max()?;
     let r = reqs::approved_same(&conn, reqs::KIND_PUBLISH_RUN, project_id, name, body, APPROVED_RUN_KEYS).ok().flatten()?;
+    // `dev` is only on a --dev run's body, so approvals from before it still
+    // match their own runs, and an approval never crosses between the two.
+    if r.body.get("dev") != body.get("dev") {
+        return None;
+    }
     let decided = r.decided_at.unwrap_or(r.requested_at);
     let lapses = decided + reqs::STANDING_RUN_SECS;
     let now = k2_core::deploy::now();
@@ -327,7 +361,8 @@ fn gate_for(legacy: bool, level: crate::apps::access::Level) -> Option<Gate> {
 /// the open path when this box has it (K5), else as in 0.46.0.
 pub(crate) fn run_approved(body: &serde_json::Value) -> Result<serde_json::Value, crate::apps::routes::Refusal> {
     let g = |k: &str| body.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    if cmd_route(&g("projectId"), &g("name")) == CmdRoute::Open {
+    let dev = dev_from_body(body);
+    if dev.is_none() && cmd_route(&g("projectId"), &g("name")) == CmdRoute::Open {
         let run = crate::apps::open::Run {
             project_id: g("projectId"),
             name: g("name"),
@@ -359,10 +394,103 @@ pub(crate) fn run_approved(body: &serde_json::Value) -> Result<serde_json::Value
         cwd_explicit: body.get("cwdExplicit").and_then(|v| v.as_bool()).unwrap_or(false),
         transfer: false,
         probe_timeout,
+        dev,
     };
     publish_runtime::run(spec)
         .map(|svc| serde_json::to_value(svc).unwrap_or(serde_json::Value::Null))
         .map_err(|e| crate::apps::routes::no("publish_failed", 409, e.message))
+}
+
+/// A held `--dev` run's settings: what the person approved.
+fn dev_from_body(body: &serde_json::Value) -> Option<crate::publish_dev::DevSpec> {
+    let d = body.get("dev")?;
+    let defaults = crate::publish_dev::DevSpec::default();
+    Some(crate::publish_dev::DevSpec {
+        idle_secs: d.get("idleSecs").and_then(|v| v.as_i64()),
+        mem_mb: d.get("memMb").and_then(|v| v.as_i64()).unwrap_or(defaults.mem_mb),
+        cpus: d.get("cpus").and_then(|v| v.as_f64()).unwrap_or(defaults.cpus),
+    })
+}
+
+/// A `--dev` run's flags (`dev`, `idle`, `mem`, `cpus`). `Ok(None)`: not a dev
+/// run. `--idle off` keeps a dev server up with nobody using it, so it's a
+/// person's call (DM-6).
+fn parse_dev_params(params: &HashMap<String, String>, who: &crate::compute_routes::Who) -> Result<Option<crate::publish_dev::DevSpec>, CliResponse> {
+    use crate::publish_dev as dev;
+    let idle = opt_param(params, "idle");
+    let mem = opt_param(params, "mem");
+    let cpus = opt_param(params, "cpus");
+    if !boolish(params, &["dev"]) {
+        if idle.is_some() || mem.is_some() || cpus.is_some() {
+            return Err(coded_refusal("400 Bad Request", "usage", "--idle, --mem and --cpus go with --dev".into()));
+        }
+        return Ok(None);
+    }
+    let bad = |e: String| coded_refusal("400 Bad Request", "usage", e);
+    let mut spec = dev::DevSpec::default();
+    if let Some(raw) = idle {
+        spec.idle_secs = dev::parse_idle(&raw).map_err(bad)?;
+        if spec.idle_secs.is_none() && !who.is_admin() {
+            return Err(coded_refusal(
+                "403 Forbidden",
+                "idle_off_person_only",
+                "only the owner or an admin can keep a dev server up with --idle off; pick a limit up to 24h".into(),
+            ));
+        }
+    }
+    if let Some(raw) = mem {
+        spec.mem_mb = dev::parse_mem(&raw).map_err(bad)?;
+    }
+    if let Some(raw) = cpus {
+        spec.cpus = dev::parse_cpus(&raw).map_err(bad)?;
+    }
+    Ok(Some(spec))
+}
+
+/// A refusal with its own code (`{error, code}`).
+fn coded_refusal(status: &'static str, code: &str, message: String) -> CliResponse {
+    CliResponse {
+        status,
+        content_type: "application/json",
+        body: serde_json::json!({ "error": message, "code": code }).to_string(),
+    }
+}
+
+/// Retired (Rosson 2026-10-29): `--skin` makes no new sites. Sites already on
+/// it keep working and keep re-running until each moves to an App.
+///
+/// Tests of the old gateway still need new ones: `K2_PUBLISH_NEW_SKIN=allow`
+/// works only in a debug build. A release daemon ignores it.
+const NEW_SKIN_SWITCH: &str = "K2_PUBLISH_NEW_SKIN";
+
+/// Debug builds only, like the repo's other test overrides.
+fn new_skin_allowed(switch: Option<&str>, debug_build: bool) -> bool {
+    debug_build && switch.map(str::trim) == Some("allow")
+}
+
+/// `--skin` on a name with no `--skin` site under it.
+fn refuse_new_skin(project_id: &str, name: &str) -> Option<CliResponse> {
+    if new_skin_allowed(std::env::var(NEW_SKIN_SWITCH).ok().as_deref(), cfg!(debug_assertions)) {
+        return None;
+    }
+    let normalized = name.trim().to_ascii_lowercase();
+    let existing = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::published_services::get_by_project_name(&conn, project_id, &normalized).ok().flatten()
+    };
+    if existing.is_some_and(|r| r.kind == k2_core::published_services::KIND_SKIN) {
+        return None;
+    }
+    Some(coded_refusal(
+        "410 Gone",
+        "skin_retired",
+        format!(
+            "--skin no longer makes new sites, because Apps replaced it. '{normalized}' wasn't created. \
+             For a folder of files: k2 app init --template static, then k2 app deploy (k2 study app-deploys). \
+             For a server of your own: k2 publish run {normalized} --cmd \"<your server>\" --port <n>. Sites already on --skin keep working."
+        ),
+    ))
 }
 
 /// POST dispatcher.
@@ -376,6 +504,9 @@ pub fn dispatch_post(path: &str, params: &HashMap<String, String>) -> CliRespons
         "/cli/publish/subdomain/unclaim" => handle_subdomain_unclaim(params),
         "/cli/publish/frame" => handle_frame(params),
         "/cli/publish/client-ip" => handle_client_ip_set(params),
+        "/cli/publish/visibility" => crate::publish_site_routes::handle_set(params, &caller()),
+        "/cli/publish/open" => crate::publish_site_routes::handle_open(params, &caller()),
+        "/cli/publish/sessions/revoke" => crate::publish_site_routes::handle_revoke(params, &caller()),
         _ => CliResponse::not_found(),
     }
 }
@@ -465,7 +596,7 @@ fn forbidden_sticker() -> CliResponse {
 
 /// Same rules as renderer `nestedPublicUrl`: https public_url host prefix,
 /// else `https://<label>.<primary>.k2.dev`, else null. Never fabricates.
-fn nested_public_url(label: &str, primary: &str, public_url: Option<&str>) -> Option<String> {
+pub(crate) fn nested_public_url(label: &str, primary: &str, public_url: Option<&str>) -> Option<String> {
     let clean_label = label.trim();
     if clean_label.is_empty() {
         return None;
@@ -864,6 +995,16 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         Ok(p) => p,
         Err(resp) => return resp,
     };
+    if skin {
+        if let Some(refusal) = refuse_new_skin(&project_id, &name) {
+            return refusal;
+        }
+    }
+    let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
+    let dev = match parse_dev_params(params, &who) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
     let no_tunnel = boolish(params, &["noTunnel", "no_tunnel"]);
     let probe_timeout = match parse_probe_timeout_param(params) {
         Ok(p) => p,
@@ -876,17 +1017,27 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     // K5 (§8.2): a NEW --cmd label, or a re-run of an open-path folder App,
     // runs on the open path when this box has it; an existing --cmd
     // service is untouched in 0.46.1.
-    let route = if skin { CmdRoute::Legacy } else { cmd_route(&project_id, &name) };
+    // PA-7: `--dev` never takes the open path: its copy of the folder would
+    // never see an edit.
+    let route = if skin {
+        CmdRoute::Legacy
+    } else if dev.is_some() {
+        CmdRoute::Dev
+    } else {
+        cmd_route(&project_id, &name)
+    };
     // S13 / §5.11.5: an agent's open-path run needs both switches, or it
     // is held for the owner. Where the open path isn't ready (macOS, an
     // unprepared box) the run stays as in 0.46.0, with the notice.
-    let gate = publish_run_gate(&project_id, &name, skin);
-    let who = CALLER.with(|c| c.borrow().clone()).unwrap_or(crate::compute_routes::Who::Invalid);
-    let run_body = serde_json::json!({
+    let gate = publish_run_gate(&project_id, &name, skin, dev.is_some());
+    let mut run_body = serde_json::json!({
         "projectId": project_id, "name": name, "cmd": cmd, "cwd": cwd.display().to_string(),
         "port": port, "noTunnel": no_tunnel, "cwdExplicit": cwd_explicit,
         "probeTimeout": probe_timeout_body(probe_timeout),
     });
+    if let Some(d) = &dev {
+        run_body["dev"] = serde_json::json!({ "idleSecs": d.idle_secs, "memMb": d.mem_mb, "cpus": d.cpus });
+    }
     // 0.46.6 (NSI papercut 13): the owner already approved this exact run
     // (same App, command, folder, port and tunnel) and it is still the
     // App's latest approved run: the identical re-run goes through. Any
@@ -906,7 +1057,11 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
     });
     let hold_run = |reasons: Vec<String>| {
         let body = run_body.clone();
-        let diff = serde_json::json!([format!("new open-path App {name}: {cmd} (port {port})")]);
+        let diff = if dev.is_some() {
+            serde_json::json!([format!("new dev server {name}: {cmd} (port {port}), from your live folder with no wall")])
+        } else {
+            serde_json::json!([format!("new open-path App {name}: {cmd} (port {port})")])
+        };
         crate::apps::routes::respond(crate::apps::grace::hold(
             &who,
             k2_core::app_grace::requests::KIND_PUBLISH_RUN,
@@ -959,6 +1114,13 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         CmdRoute::NotReady(why) => Some(why.clone()),
         _ => None,
     };
+    // G8: a public site that turns into a dev server doesn't stay public by
+    // accident. The run says so.
+    let was_public = dev.is_some() && {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        k2_core::site_visibility::effective(&conn, &name).is_ok_and(|v| v.mode == k2_core::site_visibility::Mode::Public && !v.dev)
+    };
     match publish_runtime::run(RunSpec {
         project_id,
         name,
@@ -972,10 +1134,20 @@ fn handle_run(params: &HashMap<String, String>) -> CliResponse {
         cwd_explicit,
         transfer: boolish(params, &["transfer"]),
         probe_timeout,
+        dev,
     }) {
         Ok(svc) => {
             let mut v = serde_json::to_value(&svc).unwrap_or(serde_json::Value::Null);
             if let Some(o) = v.as_object_mut() {
+                if dev.is_some() {
+                    o.insert("devWarning".into(), serde_json::json!(crate::publish_dev::DEV_WARNING));
+                }
+                if was_public {
+                    o.insert(
+                        "visibilityNote".into(),
+                        serde_json::json!("it was public, and a dev server isn't public by accident: it is private now (k2 publish visibility <name> public --dev-is-public to choose otherwise)"),
+                    );
+                }
                 if let Some(g) = gate {
                     // Where the open path isn't ready (or the owner set
                     // K2_OPEN_APPS_GATE=warn) the run goes through, with
@@ -1075,6 +1247,8 @@ pub(crate) enum CmdRoute {
     Open,
     /// A new label where the open path isn't ready: 0.46.0's behaviour.
     NotReady(String),
+    /// `--dev`: the process lane, whatever the box has (PA-7).
+    Dev,
 }
 
 fn cmd_route(project_id: &str, name: &str) -> CmdRoute {
@@ -1263,6 +1437,103 @@ fn handle_frame(params: &HashMap<String, String>) -> CliResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DM-5: a dev server has no wall, so an agent's first one is held on
+    /// every box, whether or not the open path is ready there. Only the owner's
+    /// own warn mode lets it through.
+    #[test]
+    fn an_agents_first_dev_server_is_held_on_every_box() {
+        assert!(gate_holds(GateMode::OpenPath, &CmdRoute::Dev, false), "held even where no open path exists");
+        assert!(gate_holds(GateMode::Always, &CmdRoute::Dev, false));
+        assert!(!gate_holds(GateMode::Warn, &CmdRoute::Dev, false), "the owner's warn mode never holds");
+        let g = dev_gate();
+        assert!(!g.switch_off);
+        assert!(g.why.contains("no wall") && g.why.contains("in-person approval"), "{}", g.why);
+    }
+
+    /// DM-6: a person may run a dev server with no idle limit; an agent may
+    /// not. The other flags need --dev.
+    #[test]
+    fn dev_flags_parse_and_idle_off_is_a_persons_call() {
+        use crate::compute_routes::Who;
+        let params = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<HashMap<_, _>>();
+        let agent = Who::Agent { project_id: "w".into(), session_id: "s".into() };
+        assert_eq!(parse_dev_params(&params(&[]), &agent).ok().flatten(), None);
+        let d = parse_dev_params(&params(&[("dev", "true")]), &agent).ok().flatten().expect("defaults");
+        assert_eq!(d, crate::publish_dev::DevSpec::default());
+        assert_eq!((d.idle_secs, d.mem_mb, d.cpus), (Some(3600), 4096, 2.0));
+        let d = parse_dev_params(&params(&[("dev", "1"), ("idle", "2h"), ("mem", "2G"), ("cpus", "1.5")]), &agent).ok().flatten().expect("set");
+        assert_eq!((d.idle_secs, d.mem_mb, d.cpus), (Some(7200), 2048, 1.5));
+
+        let refused = parse_dev_params(&params(&[("dev", "1"), ("idle", "off")]), &agent).err().expect("an agent can't");
+        assert_eq!(refused.status, "403 Forbidden", "{}", refused.body);
+        assert!(refused.body.contains("idle_off_person_only"), "{}", refused.body);
+        let d = parse_dev_params(&params(&[("dev", "1"), ("idle", "off")]), &Who::Owner).ok().flatten().expect("the owner can");
+        assert_eq!(d.idle_secs, None);
+
+        for bad in [&[("idle", "2h")][..], &[("mem", "2G")][..], &[("cpus", "2")][..]] {
+            let r = parse_dev_params(&params(bad), &Who::Owner).err().expect("needs --dev");
+            assert_eq!(r.status, "400 Bad Request", "{}", r.body);
+            assert!(r.body.contains("go with --dev"), "{}", r.body);
+        }
+        for bad in [&[("dev", "1"), ("idle", "1m")][..], &[("dev", "1"), ("mem", "1M")][..], &[("dev", "1"), ("cpus", "0")][..]] {
+            assert_eq!(parse_dev_params(&params(bad), &Who::Owner).err().expect("out of range").status, "400 Bad Request");
+        }
+    }
+
+    /// `--dev` never reaches the open path (PA-7), and a held body keeps what
+    /// the person approves. A non-dev body stays exactly as before 0.46.7, so
+    /// approvals from before it still match.
+    #[test]
+    fn a_held_dev_run_keeps_its_settings_and_a_plain_one_has_none() {
+        let d = dev_from_body(&serde_json::json!({ "dev": { "idleSecs": 600, "memMb": 1024, "cpus": 0.5 } })).expect("dev");
+        assert_eq!((d.idle_secs, d.mem_mb, d.cpus), (Some(600), 1024, 0.5));
+        let off = dev_from_body(&serde_json::json!({ "dev": { "idleSecs": null, "memMb": 1024, "cpus": 1.0 } })).expect("dev");
+        assert_eq!(off.idle_secs, None);
+        assert!(dev_from_body(&serde_json::json!({ "cmd": "npm start" })).is_none());
+    }
+
+    /// The old gateway's test switch never works on a release daemon.
+    #[test]
+    fn the_new_skin_switch_works_only_in_a_debug_build() {
+        assert!(new_skin_allowed(Some("allow"), true));
+        assert!(new_skin_allowed(Some(" allow "), true));
+        assert!(!new_skin_allowed(Some("allow"), false), "a release daemon ignores it");
+        assert!(!new_skin_allowed(Some("1"), true));
+        assert!(!new_skin_allowed(None, true));
+    }
+
+    /// Rosson 2026-10-29: no new `--skin` sites. An existing one still
+    /// re-runs. A `--cmd` service of that name is not a `--skin` site.
+    #[test]
+    fn skin_refuses_new_sites_and_keeps_existing_ones() {
+        crate::test_support::with_temp_home(|| {
+            let ws = format!("skin-retired-{}", uuid::Uuid::new_v4().simple());
+            let path = format!("/tmp/{ws}");
+            seed_ws(&ws, &path, "SkinRetired");
+            let r = refuse_new_skin(&ws, "Fresh").expect("a new --skin site is refused");
+            assert_eq!(r.status, "410 Gone", "{}", r.body);
+            let v: serde_json::Value = serde_json::from_str(&r.body).expect("json");
+            assert_eq!(v["code"], "skin_retired", "{v}");
+            let msg = v["error"].as_str().expect("error");
+            assert!(msg.contains("'fresh' wasn't created"), "{msg}");
+            assert!(msg.contains("k2 app init --template static") && msg.contains("--cmd"), "says what to do instead: {msg}");
+            assert!(msg.contains("keep working"), "{msg}");
+            assert!(!msg.contains("adopt-skin"), "never offers a command that doesn't exist: {msg}");
+
+            let db = k2_core::db::shared();
+            {
+                let conn = db.lock();
+                k2_core::published_services::insert(&conn, &ws, "oldskin", k2_core::published_services::CMD_SKIN_SENTINEL, &path, 41011, "local", "stopped", "skin", "").expect("skin row");
+                k2_core::published_services::insert(&conn, &ws, "plain", "true", &path, 41012, "local", "stopped", "cmd", "").expect("cmd row");
+            }
+            assert!(refuse_new_skin(&ws, "oldskin").is_none(), "an existing --skin site keeps working");
+            assert!(refuse_new_skin(&ws, "plain").is_some(), "a --cmd service isn't a --skin site");
+            let conn = db.lock();
+            k2_core::published_services::delete(&conn, &ws, "oldskin").expect("cleanup");
+            k2_core::published_services::delete(&conn, &ws, "plain").expect("cleanup");
+        });
+    }
 
     /// 0.46.1 (lane 1, K5): the gate holds by default; only the owner's
     /// own daemon environment can put back 0.46.0's warn-only answer.

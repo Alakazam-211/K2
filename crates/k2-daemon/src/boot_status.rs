@@ -1063,6 +1063,8 @@ pub fn features() -> Vec<&'static str> {
     out.push(FEATURE_EMAIL_NOTIFICATIONS);
     out.push(FEATURE_APP_CHAT);
     out.push(FEATURE_ACTIVITY_LIVE_BUSY);
+    out.push(FEATURE_PUBLISH_DEV);
+    out.push(FEATURE_SITE_VISIBILITY);
     if thread_push_ready() {
         out.push(FEATURE_THREAD_PUSH);
         // Same DB as 0157: migration 0189 (push_devices.previews) ran with it.
@@ -1127,6 +1129,11 @@ pub fn features() -> Vec<&'static str> {
 /// token and sees this key with `view != "full"` knows its token was not
 /// accepted (stale session), not that the daemon is old.
 pub const FEATURE_BOOT_STATUS_VIEWS: &str = "boot-status-views-v1";
+/// `k2 publish run --dev` (prd-publish-visibility-and-dev-mode-v1).
+pub const FEATURE_PUBLISH_DEV: &str = "publish-dev-v1";
+/// Who may open a published site: private, PIN or public, with
+/// `/cli/publish/visibility|open|sessions` (prd-publish-visibility-and-dev-mode-v1).
+pub const FEATURE_SITE_VISIBILITY: &str = "site-visibility-v1";
 
 #[cfg(test)]
 mod tests {

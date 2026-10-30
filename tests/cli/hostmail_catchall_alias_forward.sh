@@ -57,16 +57,16 @@ if ! printf '%s' "$mail_ca_out" | grep -q "moved to 'k2 hostmail catchall'"; the
     fail "k2 mail catchall must say moved to hostmail: $mail_ca_out"
 fi
 
+# 0.46.7: `k2 mail forward` is a verb again: a person's OWN mailbox
+# (person routes). The admin verb stays `k2 hostmail forward`.
+mail_fw_help="$("$K2" mail forward --help)"
+printf '%s' "$mail_fw_help" | grep -q 'k2 mail forward set --to <dest>' || fail "k2 mail forward --help must be the person verb: $mail_fw_help"
+printf '%s' "$mail_fw_help" | grep -q 'k2 hostmail forward' || fail "k2 mail forward --help must point agents at k2 hostmail forward: $mail_fw_help"
 set +e
 mail_fw_out="$("$K2" mail forward set a@b.test --to b@b.test 2>&1)"
 mail_fw_rc=$?
 set -e
-if [ "$mail_fw_rc" -eq 0 ]; then
-    fail "k2 mail forward must exit 2, got 0: $mail_fw_out"
-fi
-if ! printf '%s' "$mail_fw_out" | grep -q "moved to 'k2 hostmail forward'"; then
-    fail "k2 mail forward must say moved to hostmail: $mail_fw_out"
-fi
+[ "$mail_fw_rc" -eq 2 ] || fail "k2 mail forward set with a positional address must exit 2 (use --address), got $mail_fw_rc: $mail_fw_out"
 
 # Parser smoke: missing dest / missing address must exit 2 without a daemon.
 set +e

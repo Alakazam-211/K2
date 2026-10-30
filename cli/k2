@@ -42278,6 +42278,19 @@ cmd_schema() {
       ]
     },
     {
+      "name": "mail forward",
+      "usage": "k2 mail forward set --to <dest> [--keep|--no-keep] | show | unset | pause | resume [--address <addr>] [--json]",
+      "description": "A PERSON's own hosted mailbox (a box login the owner linked with k2 hostmail person link, or the owner) forwarded to another address; same rules as k2 hostmail forward (outside: confirm link first, keeps a copy unless --no-keep). The person may resume after K2 paused it, except the server brake (owner/Admin) or a destination that clicked Stop (set again). --address picks one when several are linked. Agent tokens exit 3 person_only: agents use k2 hostmail forward <verb> <address> with mail_manage on.",
+      "args": [],
+      "flags": [
+        {"name": "--to", "arg": "dest", "description": "set: the destination address."},
+        {"name": "--keep", "arg": null, "description": "set: keep a copy in the mailbox."},
+        {"name": "--no-keep", "arg": null, "description": "set: don't keep a copy."},
+        {"name": "--address", "arg": "addr", "description": "Which linked mailbox (when more than one)."},
+        {"name": "--json", "arg": null, "description": "JSON output."}
+      ]
+    },
+    {
       "name": "mail access",
       "usage": "k2 mail access grant <address> <workspace> --level read|draft|send | revoke <address> <workspace> | primary <address> <workspace> | level <address> <workspace> --level read|draft|send | manage <address> <workspace> [--on|--off] [--delete|--no-delete]",
       "description": "The ONE access layer over BOTH hosted and linked inboxes (PRIMARY/owner surface; agents exit 3). Levels order read < draft < send; 'send' works on BOTH sources (hosted via the server, linked via SMTP). grant = upsert a workspace's access (default level read). revoke = remove a grant (idempotent; the primary can't be revoked). primary = TRANSFER the managing workspace. level = set a workspace's level. manage = set the MANAGEMENT caps, ORTHOGONAL to level: --on/--off toggles canManage (move/flag/archive/folders); --delete/--no-delete toggles canDelete (delete = move to Trash, never erase; REQUIRES manage). Defaults for manage: --on --no-delete; --off also clears delete. See 'k2 mail inboxes' for primary + grants (with canManage/canDelete).",
@@ -42537,12 +42550,15 @@ cmd_schema() {
     },
     {
       "name": "hostmail forward",
-      "usage": "k2 hostmail forward set <addr> --to <dest> [--keep] | unset <addr> | show <addr> [--json]",
-      "description": "Sieve redirect on a minted mailbox (script name k2-forward). Dest must be minted on this host. --keep keeps a local copy (redirect :copy). Unset destroys that script only. mail_manage.",
+      "usage": "k2 hostmail forward set <addr> --to <dest> [--keep|--no-keep] | show <addr> | unset <addr> | pause <addr> | resume <addr> | list [--paused|--active|--pending] [--external] [--json]",
+      "description": "Forward a hosted mailbox to one address: a mailbox on this server (active at once, no copy unless --keep) or an outside address (K2 emails it a confirm link; set answers state pending_verify and forwarding starts when the link is clicked, 24 h; keeps a copy unless --no-keep). Spam, DMARC failures, bounces and already-forwarded mail stay home; 100/h per mailbox and 1,000/h per server (mail waits in the queue); 500/day per mailbox pauses it (daily_cap). Pause reasons (show gives them with words, the confirm-link state, last-24h counts and events): manual, dest_gone, refused, daily_cap, revoked (destination clicked Stop), box_brake (the server brake), air_gap, receive_only (lift by themselves). Owner, Admin and mail_manage agents: set/show/unset/pause and resume a manual pause on mailboxes they manage, outside included, no per-forward approval. dest_gone/refused/daily_cap: the owner, an Admin or the mailbox's person resumes (agents exit 3 owner_only); box_brake: owner/Admin only; revoked: set again (a new confirm link). list: owner/Admin. A person's own mailbox: k2 mail forward.",
       "args": [{"name": "addr", "required": true}],
       "flags": [
-        {"name": "--to", "arg": "dest", "description": "Minted dest mailbox on this host."},
-        {"name": "--keep", "arg": null, "description": "Keep a local copy (redirect :copy)."},
+        {"name": "--to", "arg": "dest", "description": "set: a mailbox on this server, or an outside address (confirm link first)."},
+        {"name": "--keep", "arg": null, "description": "set: keep a copy in the mailbox (default for outside destinations)."},
+        {"name": "--no-keep", "arg": null, "description": "set: don't keep a copy (default for same-box destinations)."},
+        {"name": "--paused", "arg": null, "description": "list: paused forwards only (also --active, --pending)."},
+        {"name": "--external", "arg": null, "description": "list: outside destinations only."},
         {"name": "--json", "arg": null, "description": "JSON output."}
       ]
     },
@@ -42620,10 +42636,11 @@ cmd_schema() {
     },
     {
       "name": "hostmail person",
-      "usage": "k2 hostmail person <addr> on|off [--json] | k2 hostmail person --all --workspace <ws> on|off [--json]",
-      "description": "Mark a hosted mailbox as a person's (on) or an agent's (off). An IT agent (mail_manage) may set a person's mailbox passwords even when it is bound to its own workspace; its own agent mailboxes stay the owner's call. --all --workspace <ws> marks every mailbox in the workspace at once, never its send identities (addresses its agent sent from, mailboxes its agent minted for itself) — run once by the owner for an IT workspace of imported staff mailboxes. POST /cli/mail/address/person {address|all+workspace, person}. Owner, or an IT agent — except turning it on in its own workspace (exit 3 owner_only). Agents without mail_manage exit 3.",
+      "usage": "k2 hostmail person <addr> on|off [--json] | k2 hostmail person --all --workspace <ws> on|off [--json] | k2 hostmail person link <addr> <login|owner> | <addr> --unlink [--json]",
+      "description": "Mark a hosted mailbox as a person's (on) or an agent's (off). An IT agent (mail_manage) may set a person's mailbox passwords even when it is bound to its own workspace; its own agent mailboxes stay the owner's call. --all --workspace <ws> marks every mailbox in the workspace at once, never its send identities (addresses its agent sent from, mailboxes its agent minted for itself) — run once by the owner for an IT workspace of imported staff mailboxes. POST /cli/mail/address/person {address|all+workspace, person}. Owner, or an IT agent — except turning it on in its own workspace (exit 3 owner_only). Agents without mail_manage exit 3. link <addr> <login|owner> ties the mailbox to its person's box login so they manage its forwarding (k2 mail forward); --unlink removes it; POST /cli/mail/address/person-link; owner/Admin only.",
       "args": [{"name": "addr", "required": false}, {"name": "state", "required": true}],
       "flags": [
+        {"name": "--unlink", "arg": null, "description": "link: remove the mailbox's person link."},
         {"name": "--all", "arg": null, "description": "Every mailbox in --workspace except its send identities."},
         {"name": "--workspace", "arg": "ws", "description": "The workspace for --all (name | path | UUID)."},
         {"name": "--json", "arg": null, "description": "JSON output."}
@@ -47955,6 +47972,40 @@ MAIL_MANAGE AGENTS
   Team calendar: group create team → group add team a@ b@ → calendar
   create owner@ "Team" → calendar share owner@ --calendar Team --with
   team --write → --editor for the few who may delete it.
+
+FORWARDING (0.46.7, `k2 hostmail forward`)
+  One destination per mailbox: a mailbox on this server, or an outside
+  address (Gmail, Outlook, any).
+  Outside  K2 emails the destination a confirm link. set answers
+           state pending_verify; nothing is forwarded until someone
+           clicks the link (24 hours; expired → set again for a new one).
+           Only mail arriving after the click is forwarded. Keeps a copy
+           in the mailbox unless --no-keep (same-box forwards: no copy
+           unless --keep).
+  Stays home  spam, mail failing DMARC, bounces, mail K2 already
+           forwarded. 100/hour per mailbox and 1,000/hour per server:
+           above them mail waits in the queue. 500/day per mailbox: K2
+           pauses the forward (daily_cap).
+  Paused   new mail stays in the mailbox; `show` gives the reason and
+           its words, the confirm link's state, last-24h counts, events.
+           manual (someone paused it), dest_gone, refused, daily_cap,
+           revoked (the destination clicked Stop), box_brake (every
+           outside forward: too many of the server's were refused);
+           only air_gap / receive_only lift by themselves.
+  Who      mail-manage agents (the HOSTMAIL TOGGLE below): set, show,
+           unset, pause and resume a manual pause, on any mailbox they
+           manage, outside addresses included, end to end — no card, no
+           owner OK per forward. Without the toggle: exit 3 owner_only.
+           dest_gone / refused / daily_cap: the owner, an Admin or the
+           mailbox's person resumes (an agent gets exit 3 owner_only:
+           tell your human on Thread). box_brake: owner/Admin only.
+           revoked: nobody resumes; set again (a new confirm link).
+           list (every forward on the server): owner/Admin only.
+  People   the owner links a mailbox to its person's box login
+           (`k2 hostmail person link <addr> <login>`); that person then
+           uses `k2 mail forward` or Settings → Email Hosting. An agent
+           running `k2 mail forward` gets exit 3 person_only.
+  Never claim mail was forwarded before `show` says state=active.
 
 HOSTMAIL TOGGLE
   Default off. Owner/Admin: Settings → Workspaces → (this
@@ -60350,6 +60401,7 @@ _mail_py() {
     M_QUOTA_BYTES="${M_QUOTA_BYTES:-}" M_QUOTA_GB="${M_QUOTA_GB:-}" \
     M_QUOTA_MESSAGES="${M_QUOTA_MESSAGES:-}" \
     M_ALIAS="${M_ALIAS:-}" M_MAILBOX="${M_MAILBOX:-}" M_KEEP="${M_KEEP:-false}" \
+    M_KEEP_ARG="${M_KEEP_ARG:-}" M_STATE="${M_STATE:-}" M_KIND="${M_KIND:-}" \
     M_TEXT="${M_TEXT:-}" M_DAYS="${M_DAYS:-}" M_UNTIL="${M_UNTIL:-}" \
     M_LEVEL="${M_LEVEL:-}" \
     M_READ="${M_READ:-}" M_FLAGGED="${M_FLAGGED:-}" \
@@ -61455,37 +61507,203 @@ elif verb == "alias_remove":
     else:
         print("removed alias %s from %s" % (d.get("removed") or env("M_ALIAS"), d.get("mailbox") or "?"))
 
-elif verb == "forward_get":
-    d = call("GET", "/cli/mail/forward", params={"address": env("M_ADDRESS")})
-    if as_json:
-        print(dumps(d))
-    else:
-        dest = d.get("to")
-        if not dest:
-            print("%s  forward=none" % (d.get("address") or env("M_ADDRESS") or "?"))
+elif verb.startswith("forward_") or verb.startswith("self_forward_"):
+    # Hosted mail forwards (prd-hostmail-external-forwarding-v1 §4.1, 0.46.7).
+    # forward_*      = /cli/mail/forward*      (k2 hostmail forward; owner,
+    #                  Admin, mail-manage agents)
+    # self_forward_* = /cli/mail/self/forward* (k2 mail forward; the
+    #                  mailbox's own person: a box login, or the owner)
+    is_self = verb.startswith("self_")
+    op = verb[len("self_forward_"):] if is_self else verb[len("forward_"):]
+    base_route = "/cli/mail/self/forward" if is_self else "/cli/mail/forward"
+    addr_arg = env("M_ADDRESS")
+    addr_hint = addr_arg or "<address>"
+    family = "mail" if is_self else "hostmail"
+
+    def fwd_die(err, permission=None):
+        # Refusals that need more than the daemon's hint to act on.
+        code = (err or {}).get("code", "error")
+        hint = (err or {}).get("hint", "")
+        if code == "person_only":
+            die({"code": "person_only", "hint":
+                 "k2 mail forward is for a person's own mailbox (a box login, or the owner). "
+                 "An agent uses k2 hostmail forward <set|show|unset|pause|resume> <address> "
+                 "(needs \"Allow agents to manage hosted mail on this host\" on)"}, 3)
+        if code == "destination_stopped":
+            die({"code": code, "hint": hint + " (k2 %s forward set %s--to <dest>)" % (
+                family, "" if is_self and not addr_arg else addr_hint + " ")}, 1)
+        if code == "owner_only" and op == "resume":
+            # Who resumes an automatic pause depends on the reason, and the
+            # hint names who. Print it as is (no "ask your human" tail).
+            sys.stderr.write(dumps({"error": {"code": code, "hint": hint}}) + "\n")
+            sys.exit(3)
+        die(err, permission=permission)
+
+    def fwd_call(method, route, params=None, body=None):
+        d = request(method, route, params, body)
+        if d is None:
+            die({"code": "daemon_unreachable", "hint": "no response from the K2 daemon (is it running?)"})
+        if d.get("error"):
+            fwd_die(d["error"], d.get("permission"))
+        if not d.get("ok"):
+            die({"code": "error", "hint": "unexpected daemon response: %s" % dumps(d)[:200]})
+        return d
+
+    def when(ts):
+        try:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts)))
+        except Exception:
+            return "?"
+
+    def fwd_line(f):
+        # One forward, one line: to, keep, kind, state (+ the pause reason).
+        s = "to=%s  keep=%s  kind=%s  state=%s" % (
+            f.get("to") or "?", "true" if f.get("keep") else "false",
+            f.get("kind") or "?", f.get("state") or "?")
+        if f.get("state") == "paused" and f.get("pauseReason"):
+            s += "  reason=%s" % f["pauseReason"]
+        return s
+
+    def fwd_detail(f):
+        out = []
+        if f.get("state") == "paused" and f.get("pauseWords"):
+            out.append("  paused because %s" % f["pauseWords"])
+            reason = f.get("pauseReason") or ""
+            if reason == "revoked":
+                out.append("  it can't be resumed; set it again to send a new confirm link")
+            elif reason in ("air_gap", "receive_only"):
+                out.append("  it resumes by itself when that changes")
+            elif reason == "box_brake":
+                out.append("  the owner or an Admin resumes it (k2 hostmail forward resume)")
+            elif reason != "manual":
+                out.append("  the owner, an Admin or the mailbox's person resumes it")
+        v = f.get("verify") or {}
+        if v.get("state"):
+            if v.get("state") == "pending" and v.get("expiresAt"):
+                out.append("  confirm link: sent, expires %s" % when(v["expiresAt"]))
+            elif v.get("state") == "verified" and v.get("verifiedAt"):
+                out.append("  confirm link: clicked %s" % when(v["verifiedAt"]))
+            else:
+                out.append("  confirm link: %s" % v["state"])
+            if f.get("state") == "pending_verify" and v.get("state") == "expired":
+                out.append("  the link expired; set the forward again to send a new one")
+        c = f.get("last24h") or {}
+        if f.get("kind") == "external" or any(c.get(k) for k in ("forwarded", "delivered", "refused")):
+            out.append("  last 24h: forwarded %s, delivered %s, refused %s" % (
+                c.get("forwarded", 0), c.get("delivered", 0), c.get("refused", 0)))
+        if f.get("setBy"):
+            out.append("  set by %s" % f["setBy"])
+        return out
+
+    def note_line(d):
+        if d.get("note"):
+            print("note: %s" % d["note"])
+
+    if op == "get":
+        params = {"address": addr_arg} if addr_arg else {}
+        d = fwd_call("GET", base_route, params=params)
+        if as_json:
+            print(dumps(d))
         else:
-            print("%s  to=%s  keep=%s" % (
-                d.get("address") or env("M_ADDRESS") or "?",
-                dest, "true" if d.get("keep") else "false"))
+            a = d.get("address") or addr_arg or "?"
+            f = d.get("forward")
+            if not f:
+                print("%s  forward=none" % a)
+            else:
+                print("%s  %s" % (a, fwd_line(f)))
+                for line in fwd_detail(f):
+                    print(line)
+                evs = d.get("events") or []
+                if evs:
+                    print("  recent events (newest first):")
+                    for e in evs[:5]:
+                        det = e.get("detail") or {}
+                        extra = ""
+                        if isinstance(det, dict) and det.get("reason"):
+                            extra = "  (%s)" % det["reason"]
+                        print("    %s  %-12s %s%s" % (when(e.get("at")), e.get("event") or "?", e.get("actor") or "?", extra))
 
-elif verb == "forward_set":
-    body = {"address": env("M_ADDRESS"), "to": env("M_TO"), "keep": env("M_KEEP") == "true"}
-    d = call("POST", "/cli/mail/forward", body=body)
+    elif op == "set":
+        body = {"to": env("M_TO")}
+        if addr_arg:
+            body["address"] = addr_arg
+        # keep rides ONLY when --keep / --no-keep was given: the daemon
+        # defaults outside forwards to keeping a copy, same-box ones to not.
+        if env("M_KEEP_ARG") in ("true", "false"):
+            body["keep"] = env("M_KEEP_ARG") == "true"
+        d = fwd_call("POST", base_route, body=body)
+        if as_json:
+            print(dumps(d))
+        else:
+            a = d.get("address") or addr_arg or "?"
+            dest = d.get("to") or env("M_TO") or "?"
+            keep = "keeps a copy" if d.get("keep") else "no copy kept"
+            st = d.get("state") or "active"
+            if st == "pending_verify":
+                print("forward %s -> %s (%s): waiting for the destination to confirm" % (a, dest, keep))
+                print("a confirm link was sent to %s; the forward starts once it's clicked (the link works for 24 hours)" % dest)
+                print("check it: k2 %s forward show%s" % (family, "" if is_self and not addr_arg else " " + a))
+            else:
+                print("forward %s -> %s (%s): %s" % (a, dest, keep, st))
+            note_line(d)
+
+    elif op == "unset":
+        body = {"address": addr_arg} if addr_arg else {}
+        d = fwd_call("POST", base_route + "/unset", body=body)
+        if as_json:
+            print(dumps(d))
+        else:
+            a = d.get("address") or addr_arg or "?"
+            if d.get("removed") is False:
+                print("%s had no forward (nothing to remove)" % a)
+            else:
+                print("forward removed for %s" % a)
+            note_line(d)
+
+    elif op in ("pause", "resume"):
+        body = {"address": addr_arg} if addr_arg else {}
+        d = fwd_call("POST", base_route + "/" + op, body=body)
+        if as_json:
+            print(dumps(d))
+        else:
+            a = d.get("address") or addr_arg or "?"
+            if op == "pause":
+                print("forward paused for %s: new mail stays in the mailbox" % a)
+            else:
+                print("forward resumed for %s (state %s)" % (a, d.get("state") or "?"))
+            note_line(d)
+
+    elif op == "list":
+        params = {}
+        if env("M_STATE"):
+            params["state"] = env("M_STATE")
+        if env("M_KIND"):
+            params["kind"] = env("M_KIND")
+        d = fwd_call("GET", "/cli/mail/forwards", params=params)
+        if as_json:
+            print(dumps(d))
+        else:
+            rows = d.get("forwards") or []
+            if not rows:
+                print("no forwards")
+            for f in rows:
+                print("%s  %s" % (f.get("address") or "?", fwd_line(f)))
+                if f.get("state") == "paused" and f.get("pauseWords"):
+                    print("  paused because %s" % f["pauseWords"])
+    else:
+        die({"code": "usage", "hint": "unknown forward verb %s" % op})
+
+elif verb == "person_link":
+    who = env("M_PERSON")
+    d = call("POST", "/cli/mail/address/person-link",
+             body={"address": env("M_ADDRESS"), "person": None if who == "" else who})
     if as_json:
         print(dumps(d))
+    elif d.get("person"):
+        print("%s is now linked to %s, who can manage its forwarding (k2 mail forward, or Settings)"
+              % (d.get("address") or env("M_ADDRESS") or "?", d["person"]))
     else:
-        print("forward %s -> %s%s" % (
-            d.get("address") or env("M_ADDRESS") or "?",
-            d.get("to") or env("M_TO") or "?",
-            " (keep)" if d.get("keep") else ""))
-
-elif verb == "forward_unset":
-    body = {"address": env("M_ADDRESS")}
-    d = call("POST", "/cli/mail/forward/unset", body=body)
-    if as_json:
-        print(dumps(d))
-    else:
-        print("forward unset for %s" % (d.get("address") or env("M_ADDRESS") or "?"))
+        print("%s is no longer linked to a person" % (d.get("address") or env("M_ADDRESS") or "?"))
 
 elif verb == "config_set":
     body = {}
@@ -66977,6 +67195,9 @@ cmd_hostmail_app_password_keep() {
 # an IT agent (mail-manage); an IT agent can't turn it on for its own
 # workspace's mailbox.
 cmd_hostmail_person() {
+    # 0.46.7: `person link <addr> <login|owner|--unlink>` (which box login owns
+    # a person mailbox; outside forwards).
+    if [ "${1:-}" = link ]; then shift; cmd_hostmail_person_link "$@"; return; fi
     if [ $# -eq 0 ] || _wants_help "$@"; then cmd_help_hostmail_person; exit 0; fi
     local address="" state="" as_json=false all=false workspace=""
     local usage="k2 hostmail person <addr> on|off [--json] | k2 hostmail person --all --workspace <ws> on|off [--json]"
@@ -67558,50 +67779,74 @@ cmd_hostmail_forward() {
     local sub="$1"; shift
     case "$sub" in
         set) cmd_hostmail_forward_set "$@" ;;
-        unset) cmd_hostmail_forward_unset "$@" ;;
-        show) cmd_hostmail_forward_show "$@" ;;
+        unset) cmd_hostmail_forward_simple unset "$@" ;;
+        show) cmd_hostmail_forward_simple show "$@" ;;
+        pause) cmd_hostmail_forward_simple pause "$@" ;;
+        resume) cmd_hostmail_forward_simple resume "$@" ;;
+        list) cmd_hostmail_forward_list "$@" ;;
         --help|-h) cmd_help_hostmail_forward; exit 0 ;;
         *)
-            _mail_err "usage" "unknown forward command '$sub' — usage: k2 hostmail forward <set|unset|show>"
+            _mail_err "usage" "unknown forward command '$sub' — usage: k2 hostmail forward <set|show|unset|pause|resume|list>"
             exit 2 ;;
     esac
 }
 
+# Shared by `k2 hostmail forward set` (admin routes, <addr> required) and
+# `k2 mail forward set` (person routes, --address optional). keep rides
+# only when --keep / --no-keep is given (M_KEEP_ARG).
+_forward_set_parse() {
+    local family="$1"; shift
+    local usage
+    if [ "$family" = hostmail ]; then
+        usage="k2 hostmail forward set <addr> --to <dest> [--keep|--no-keep] [--json]"
+    else
+        usage="k2 mail forward set --to <dest> [--keep|--no-keep] [--address <addr>] [--json]"
+    fi
+    _fw_address="" _fw_to="" _fw_keep="" _fw_json=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) _fw_json=true; shift ;;
+            --keep)
+                [ "$_fw_keep" != false ] || { _mail_err "usage" "give --keep or --no-keep, not both — usage: $usage"; exit 2; }
+                _fw_keep=true; shift ;;
+            --no-keep)
+                [ "$_fw_keep" != true ] || { _mail_err "usage" "give --keep or --no-keep, not both — usage: $usage"; exit 2; }
+                _fw_keep=false; shift ;;
+            --to)
+                [ $# -ge 2 ] || { _mail_err "usage" "--to requires an address — usage: $usage"; exit 2; }
+                _fw_to="$2"; shift 2 ;;
+            --address)
+                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                _fw_address="$2"; shift 2 ;;
+            -*)
+                _mail_err "usage" "unknown flag '$1' — usage: $usage"
+                exit 2 ;;
+            *)
+                if [ "$family" = hostmail ] && [ -z "$_fw_address" ]; then _fw_address="$1"; else
+                    _mail_err "usage" "unexpected extra argument '$1' — usage: $usage"
+                    exit 2
+                fi
+                shift ;;
+        esac
+    done
+    if [ "$family" = hostmail ] && [ -z "$_fw_address" ]; then _mail_err "usage" "$usage"; exit 2; fi
+    [ -n "$_fw_to" ] || { _mail_err "usage" "forward set requires --to <dest> (a mailbox here, or an outside address) — usage: $usage"; exit 2; }
+}
 
 cmd_hostmail_forward_set() {
     if _wants_help "$@"; then cmd_help_hostmail_forward_set; exit 0; fi
-    local address="" to="" keep=false as_json=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --json) as_json=true; shift ;;
-            --keep) keep=true; shift ;;
-            --to)
-                [ $# -ge 2 ] || { _mail_err "usage" "--to requires a minted mailbox"; exit 2; }
-                to="$2"; shift 2 ;;
-            --address)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
-                address="$2"; shift 2 ;;
-            -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward set <addr> --to <dest> [--keep] [--json]"
-                exit 2 ;;
-            *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1'"
-                    exit 2
-                fi
-                shift ;;
-        esac
-    done
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward set <addr> --to <dest> [--keep]"; exit 2; }
-    [ -n "$to" ] || { _mail_err "usage" "forward set requires --to <minted mailbox on this host>"; exit 2; }
-    local M_VERB="forward_set" M_JSON="$as_json" M_ADDRESS="$address" M_TO="$to" M_KEEP="$keep"
+    local _fw_address _fw_to _fw_keep _fw_json
+    _forward_set_parse hostmail "$@"
+    local M_VERB="forward_set" M_JSON="$_fw_json" M_ADDRESS="$_fw_address" M_TO="$_fw_to" M_KEEP_ARG="$_fw_keep"
     _mail_py
 }
 
-
-cmd_hostmail_forward_unset() {
-    if _wants_help "$@"; then cmd_help_hostmail_forward_unset; exit 0; fi
+# show | unset | pause | resume <addr> [--json] (admin routes).
+cmd_hostmail_forward_simple() {
+    local op="$1"; shift
+    if _wants_help "$@"; then "cmd_help_hostmail_forward_$op"; exit 0; fi
     local address="" as_json=false
+    local usage="k2 hostmail forward $op <addr> [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
@@ -67609,44 +67854,113 @@ cmd_hostmail_forward_unset() {
                 [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
                 address="$2"; shift 2 ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward unset <addr> [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: $usage"
                 exit 2 ;;
             *)
                 if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1'"
+                    _mail_err "usage" "unexpected extra argument '$1' — usage: $usage"
                     exit 2
                 fi
                 shift ;;
         esac
     done
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward unset <addr>"; exit 2; }
-    local M_VERB="forward_unset" M_JSON="$as_json" M_ADDRESS="$address"
+    [ -n "$address" ] || { _mail_err "usage" "$usage"; exit 2; }
+    local verb="forward_$op"
+    [ "$op" = show ] && verb="forward_get"
+    local M_VERB="$verb" M_JSON="$as_json" M_ADDRESS="$address"
     _mail_py
 }
 
-
-cmd_hostmail_forward_show() {
-    if _wants_help "$@"; then cmd_help_hostmail_forward_show; exit 0; fi
-    local address="" as_json=false
+cmd_hostmail_forward_list() {
+    if _wants_help "$@"; then cmd_help_hostmail_forward_list; exit 0; fi
+    local state="" kind="" as_json=false
+    local usage="k2 hostmail forward list [--paused|--active|--pending] [--external] [--json]"
     while [ $# -gt 0 ]; do
         case "$1" in
             --json) as_json=true; shift ;;
-            --address)
-                [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
-                address="$2"; shift 2 ;;
+            --paused) state=paused; shift ;;
+            --active) state=active; shift ;;
+            --pending) state=pending_verify; shift ;;
+            --external) kind=external; shift ;;
+            *)
+                _mail_err "usage" "unknown argument '$1' — usage: $usage"
+                exit 2 ;;
+        esac
+    done
+    local M_VERB="forward_list" M_JSON="$as_json" M_STATE="$state" M_KIND="$kind"
+    _mail_py
+}
+
+# k2 mail forward — a person's OWN mailbox (person routes,
+# /cli/mail/self/forward*). The person comes from the token: a box login,
+# or the owner. Agent tokens get person_only (exit 3) and use
+# `k2 hostmail forward` instead.
+cmd_mail_forward() {
+    if [ $# -eq 0 ]; then cmd_help_mail_forward; exit 0; fi
+    local sub="$1"; shift
+    case "$sub" in
+        set)
+            if _wants_help "$@"; then cmd_help_mail_forward; exit 0; fi
+            local _fw_address _fw_to _fw_keep _fw_json
+            _forward_set_parse mail "$@"
+            local M_VERB="self_forward_set" M_JSON="$_fw_json" M_ADDRESS="$_fw_address" M_TO="$_fw_to" M_KEEP_ARG="$_fw_keep"
+            _mail_py ;;
+        show|unset|pause|resume)
+            if _wants_help "$@"; then cmd_help_mail_forward; exit 0; fi
+            local address="" as_json=false
+            local usage="k2 mail forward $sub [--address <addr>] [--json]"
+            while [ $# -gt 0 ]; do
+                case "$1" in
+                    --json) as_json=true; shift ;;
+                    --address)
+                        [ $# -ge 2 ] || { _mail_err "usage" "--address requires a value"; exit 2; }
+                        address="$2"; shift 2 ;;
+                    *)
+                        _mail_err "usage" "unknown argument '$1' — usage: $usage"
+                        exit 2 ;;
+                esac
+            done
+            local verb="self_forward_$sub"
+            [ "$sub" = show ] && verb="self_forward_get"
+            local M_VERB="$verb" M_JSON="$as_json" M_ADDRESS="$address"
+            _mail_py ;;
+        --help|-h) cmd_help_mail_forward; exit 0 ;;
+        *)
+            _mail_err "usage" "unknown forward command '$sub' — usage: k2 mail forward <set|show|unset|pause|resume>"
+            exit 2 ;;
+    esac
+}
+
+# k2 hostmail person link <addr> <login|owner> | <addr> --unlink
+cmd_hostmail_person_link() {
+    if _wants_help "$@"; then cmd_help_hostmail_person_link; exit 0; fi
+    local address="" person="" unlink=false as_json=false
+    local usage="k2 hostmail person link <addr> <login|owner> [--json] | k2 hostmail person link <addr> --unlink [--json]"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) as_json=true; shift ;;
+            --unlink) unlink=true; shift ;;
             -*)
-                _mail_err "usage" "unknown flag '$1' — usage: k2 hostmail forward show <addr> [--json]"
+                _mail_err "usage" "unknown flag '$1' — usage: $usage"
                 exit 2 ;;
             *)
-                if [ -z "$address" ]; then address="$1"; else
-                    _mail_err "usage" "unexpected extra argument '$1'"
+                if [ -z "$address" ]; then address="$1"
+                elif [ -z "$person" ]; then person="$1"
+                else
+                    _mail_err "usage" "unexpected extra argument '$1' — usage: $usage"
                     exit 2
                 fi
                 shift ;;
         esac
     done
-    [ -n "$address" ] || { _mail_err "usage" "k2 hostmail forward show <addr>"; exit 2; }
-    local M_VERB="forward_get" M_JSON="$as_json" M_ADDRESS="$address"
+    [ -n "$address" ] || { _mail_err "usage" "$usage"; exit 2; }
+    if [ "$unlink" = true ] && [ -n "$person" ]; then
+        _mail_err "usage" "give a login or --unlink, not both — usage: $usage"; exit 2
+    fi
+    if [ "$unlink" = false ] && [ -z "$person" ]; then
+        _mail_err "usage" "name the login (k2 users list) or owner, or --unlink — usage: $usage"; exit 2
+    fi
+    local M_VERB="person_link" M_JSON="$as_json" M_ADDRESS="$address" M_PERSON="$person"
     _mail_py
 }
 
@@ -69674,6 +69988,9 @@ CONNECT & SHARE
   sending <workspace> [off|approval|on]
                               Show or set whether a workspace's agents may SEND
                               (hosted and linked inboxes; every OS). Owner/admin
+  forward set|show|unset|pause|resume
+                              A PERSON's own hosted mailbox → another address
+                              (agents: k2 hostmail forward; k2 mail forward --help)
 
 SERVER ADMIN → k2 hostmail
   status · enable · disable · rotate-admin · password rotate · domain · create · delete · doctor · config · approvals · catchall · alias · forward
@@ -70636,8 +70953,10 @@ COMMANDS
                               (mail_manage). Unset rejects unknown.
   alias add|remove|list       Extra address on an existing mailbox (not a mint;
                               k2 hostmail create mints). mail_manage.
-  forward set|unset|show      Sieve-redirect a minted mailbox to another minted
-                              mailbox. --keep keeps a local copy. mail_manage.
+  forward set|show|unset|pause|resume|list
+                              Forward a mailbox to a mailbox here or an outside
+                              address (outside: confirm link first; keeps a copy
+                              unless --no-keep). mail_manage.
   ooo set|unset|show <addr>   Out-of-office auto-reply (vacation) on a minted
                               mailbox. mail_manage. --text literal|@path|-.
   footer set|unset|show       Host-wide outbound company footer (plain text).
@@ -71316,9 +71635,13 @@ nothing recorded tells them apart; `k2 hostmail doctor` names this
 command when it applies. POST /cli/mail/address/person {all: true,
 workspace, person}.
 
+link ties a mailbox to its person's box login, so they manage its
+forwarding themselves (k2 hostmail person link --help).
+
 USAGE
   k2 hostmail person <addr> on|off [--json]
   k2 hostmail person --all --workspace <ws> on|off [--json]
+  k2 hostmail person link <addr> <login|owner> | <addr> --unlink [--json]
 EOF
 }
 
@@ -71706,30 +72029,83 @@ EOF
 
 cmd_help_hostmail_forward() {
     cat <<'EOF'
-Sieve-redirect a minted mailbox to another minted mailbox on this host
-(script name k2-forward). Default discards the local copy; --keep keeps
-it (redirect :copy). Dest cannot be Gmail this cut. mail_manage.
+Forward a hosted mailbox's new mail to one other address: another
+mailbox on this server, or an outside address (Gmail, Outlook, any).
+
+Outside addresses must confirm first: K2 emails the destination a
+confirm link, and nothing is forwarded until someone clicks it. The link
+works for 24 hours; if it expires, run set again for a new one. Only mail
+that arrives after the click is forwarded. Outside forwards keep a copy
+in the mailbox unless you give --no-keep; same-box forwards keep no copy
+unless you give --keep. Spam, mail failing DMARC, bounces and mail K2
+already forwarded stay in the mailbox.
+
+Limits: 100 an hour per mailbox and 1,000 an hour per server (above
+them mail waits in the queue, nothing is lost); 500 a day per mailbox
+(K2 pauses the forward, reason daily_cap).
+
+Paused = new mail stays in the mailbox. show gives the reason:
+  manual        someone paused it (k2 hostmail forward pause)
+  dest_gone     the destination says the address doesn't exist
+  refused       the destination refused too many as spam or by policy
+  daily_cap     500 forwards in 24 hours (doesn't lift by itself)
+  box_brake     too many of this server's forwards were refused, so
+                every outside forward is paused (the server brake)
+  revoked       the destination clicked Stop in K2's confirm email
+  air_gap, receive_only
+                nothing may leave; lifts by itself when that changes
+Resume rules per reason: k2 hostmail forward resume --help.
+
+WHO
+  Owner, Admin, and agents with "Allow agents to manage hosted mail on
+  this host" on: set, show, unset, pause, and resume a manual pause, on
+  any mailbox they manage, outside destinations included (no extra
+  approval; the confirm link still applies). Without that switch an agent
+  gets exit 3 owner_only; the owner or an Admin turns it on in Settings →
+  Workspaces → (the agent's workspace).
+  Resume after any other pause, and list: see their own help.
+  A person's own mailbox: k2 mail forward (the owner links it first with
+  k2 hostmail person link).
 
 USAGE
-  k2 hostmail forward set <addr> --to <dest> [--keep] [--json]
-  k2 hostmail forward unset <addr> [--json]
+  k2 hostmail forward set <addr> --to <dest> [--keep|--no-keep] [--json]
   k2 hostmail forward show <addr> [--json]
+  k2 hostmail forward unset <addr> [--json]
+  k2 hostmail forward pause <addr> [--json]
+  k2 hostmail forward resume <addr> [--json]
+  k2 hostmail forward list [--paused|--active|--pending] [--external] [--json]
 EOF
 }
 
 cmd_help_hostmail_forward_set() {
     cat <<'EOF'
-Install/replace the k2-forward Sieve on addr. Dest must already be minted
-on this host. --keep = local copy.
+Set (or replace) the forward on a hosted mailbox. One destination per
+mailbox; a new one replaces the old.
+
+  dest is a mailbox on this server   active at once; keeps no copy
+                                     unless --keep
+  dest is an outside address         K2 emails it a confirm link and
+                                     answers state pending_verify
+                                     (exit 0): forwarding starts when
+                                     the link is clicked (24 hours);
+                                     keeps a copy unless --no-keep
+--keep and --no-keep together: exit 2.
+Refused: an address on one of this server's domains that isn't a
+mailbox here, the mailbox itself, a notification sender address, outside
+destinations under air-gap or on a receive-only domain.
+Same destination again: while it waits for the confirm, a new link is
+sent; after a Stop (reason revoked), a new link is sent; otherwise only
+the keep setting changes.
 
 USAGE
-  k2 hostmail forward set <addr> --to <dest> [--keep] [--json]
+  k2 hostmail forward set <addr> --to <dest> [--keep|--no-keep] [--json]
 EOF
 }
 
 cmd_help_hostmail_forward_unset() {
     cat <<'EOF'
-Destroy the k2-forward Sieve on this mailbox (that script only).
+Remove the forward on this mailbox (same box or outside). Mail stays in
+the mailbox from now on.
 
 USAGE
   k2 hostmail forward unset <addr> [--json]
@@ -71738,10 +72114,92 @@ EOF
 
 cmd_help_hostmail_forward_show() {
     cat <<'EOF'
-Print dest + keep, or none.
+Show a mailbox's forward: destination, keep, kind (internal or external),
+state (pending_verify, active, paused), why it is paused, the confirm
+link's state and expiry, the last 24 hours (forwarded, delivered,
+refused), and the latest events. --json adds every event K2 keeps.
 
 USAGE
   k2 hostmail forward show <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_forward_pause() {
+    cat <<'EOF'
+Pause a mailbox's forward by hand. New mail stays in the mailbox until
+someone resumes it. Anyone who may set the forward may pause it.
+
+USAGE
+  k2 hostmail forward pause <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_forward_resume() {
+    cat <<'EOF'
+Resume a paused forward. Who may, by the reason show gives:
+  manual                    anyone who may set it: owner, Admin, a
+                            mail-manage agent, the mailbox's person
+  dest_gone, refused,       the owner, an Admin or the mailbox's person;
+  daily_cap                 an agent gets exit 3 owner_only (tell your
+                            human with k2 thread)
+  box_brake                 the owner or an Admin only
+  revoked                   nobody: the destination clicked Stop. Run
+                            set again to send a new confirm link
+  air_gap, receive_only     nobody: it resumes by itself when that changes
+
+USAGE
+  k2 hostmail forward resume <addr> [--json]
+EOF
+}
+
+cmd_help_hostmail_forward_list() {
+    cat <<'EOF'
+Every forward on this server, one line each. Owner and Admin only (an
+agent gets exit 3 owner_only; it uses show on each mailbox instead).
+  --paused | --active | --pending   only that state
+  --external                        only outside destinations
+
+USAGE
+  k2 hostmail forward list [--paused|--active|--pending] [--external] [--json]
+EOF
+}
+
+cmd_help_mail_forward() {
+    cat <<'EOF'
+Forward your own hosted mailbox to another address. For people: a box
+login whose mailbox the owner linked (k2 hostmail person link), or the
+owner. Same rules as k2 hostmail forward: an outside address gets a
+confirm link and forwarding starts when it's clicked (24 hours; set
+again for a new link); outside forwards keep a copy unless --no-keep.
+You can resume your forward after any pause except box_brake (the owner
+or an Admin), revoked (the destination clicked Stop: set it again) and
+air_gap / receive_only (they lift by themselves). show says which.
+With more than one mailbox linked to you, say which with --address.
+
+Agents: this verb answers exit 3 person_only. Use
+k2 hostmail forward <set|show|unset|pause|resume> <your address>, with
+"Allow agents to manage hosted mail on this host" on.
+
+USAGE
+  k2 mail forward set --to <dest> [--keep|--no-keep] [--address <addr>] [--json]
+  k2 mail forward show [--address <addr>] [--json]
+  k2 mail forward unset [--address <addr>] [--json]
+  k2 mail forward pause [--address <addr>] [--json]
+  k2 mail forward resume [--address <addr>] [--json]
+EOF
+}
+
+cmd_help_hostmail_person_link() {
+    cat <<'EOF'
+Link a hosted mailbox to the box login (a person) it belongs to, so that
+person can manage its forwarding themselves (k2 mail forward, or
+Settings). Linking also marks it a person's mailbox. owner links it to
+the server's owner. Owner and Admin only.
+POST /cli/mail/address/person-link {address, person}.
+
+USAGE
+  k2 hostmail person link <addr> <login|owner> [--json]
+  k2 hostmail person link <addr> --unlink [--json]
 EOF
 }
 
@@ -83492,7 +83950,10 @@ case "${1:-help}" in
             # Owner/hosting verbs moved to `k2 hostmail` — redirect.
             # (`delete` is now the message move-to-Trash verb above; the
             # address-retire verb is `k2 hostmail delete`.)
-            create|status|domain|doctor|config|approvals|catchall|alias|forward|ooo|footer|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist|audit-sieve)
+            # 0.46.7: a person's OWN mailbox forward (person routes). The
+            # admin verb stays `k2 hostmail forward`.
+            forward)     shift 2; cmd_mail_forward "$@" ;;
+            create|status|domain|doctor|config|approvals|catchall|alias|ooo|footer|spam|queue|acl|autoconfig|app-password|person|dkim|dmarc|ptr|bans|allowlist|audit-sieve)
                 _mail_err "usage" "'k2 mail ${2}' moved to 'k2 hostmail ${2}' (server admin)"
                 exit 2 ;;
             --help|-h|'') cmd_help_mail; exit 0 ;;

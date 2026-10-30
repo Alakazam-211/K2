@@ -160,7 +160,7 @@ echo "== thread export / import / imports (T4) =="
 exp="$(ka thread export salesws --json)"
 EXP="$(printf '%s' "$exp" | jget path)"
 expect_has "export lands in clone-tmp" "$EXP" "$AHOME/.k2/clone-tmp/"
-[ "$(stat -f '%Lp' "$EXP" 2>/dev/null || stat -c '%a' "$EXP")" = "600" ] && ok "export file is 0600" || bad "export file mode"
+[ "$(stat -c '%a' "$EXP" 2>/dev/null || stat -f '%Lp' "$EXP")" = "600" ] && ok "export file is 0600" || bad "export file mode"
 imp="$(ka thread import "$EXP" --to "$HDEST" --json)"
 expect_has "import answers a report" "$imp" '"report"'
 expect_has "imports lists for the workspace" "$(ka thread imports "$HDEST" --json)" '"imports"'

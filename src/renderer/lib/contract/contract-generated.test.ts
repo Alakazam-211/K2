@@ -264,6 +264,20 @@ describe('TUWA5: the generated tables', () => {
       // Catalog v31 (0.46.6): a file on a ticket message.
       'tickets.attachment': { cap: 'tickets:read', reach: 'portable', kind: 'call' },
       'activity.snapshot': { cap: 'activity:read', reach: 'portable', kind: 'call' },
+      // Catalog v40 (0.46.7 Workbench): this computer's worktree agents,
+      // garden-local; start / land / settle wait for K2's sheet; open
+      // terminal is the desktop's own (app: never).
+      'agents.openTerminal': { cap: 'agents:read', reach: 'local', kind: 'call' },
+      'work.list': { cap: 'git:read', reach: 'local', kind: 'call' },
+      'git.snapshot': { cap: 'git:read', reach: 'local', kind: 'call' },
+      'git.diffFile': { cap: 'git:read', reach: 'local', kind: 'call' },
+      'git.log': { cap: 'git:read', reach: 'local', kind: 'call' },
+      'git.note': { cap: 'git:notes', reach: 'local', kind: 'call' },
+      'compute.jobs': { cap: 'compute:read', reach: 'local', kind: 'call' },
+      'agents.start': { cap: 'agents:start', reach: 'local', kind: 'call' },
+      'git.land': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
+      'agents.settle': { cap: 'agents:start', also: ['git:read'], reach: 'local', kind: 'call' },
+      'agents.stop': { cap: 'agents:stop', reach: 'local', kind: 'call' },
     })
     for (const v of ['projects.list', 'projects.messages', 'projects.post']) {
       expect(v in ZEN_CUSTOM_VERBS, `${v}: no project chat on the Garden bridge`).toBe(false)
@@ -287,6 +301,12 @@ describe('TUWA5: the generated tables', () => {
       'tickets:read',
       'tickets:post',
       'activity:read',
+      // Catalog v40 (0.46.7 Workbench): Garden-door caps.
+      'git:read',
+      'git:notes',
+      'compute:read',
+      'agents:start',
+      'agents:stop',
     ]
     for (const c of USER_WIDGET_CAPS) expect(bridgeCaps.has(c) || extra.includes(c), c).toBe(true)
     expect([...USER_WIDGET_CAPS]).toEqual([
@@ -306,6 +326,11 @@ describe('TUWA5: the generated tables', () => {
       'guests:rooms',
       'activity:read',
       'room:members',
+      'git:read',
+      'git:notes',
+      'compute:read',
+      'agents:start',
+      'agents:stop',
     ])
     expect(bridgeCaps.has('sources:read'), 'sources.* are answered by the custom layer, never ZEN_VERBS').toBe(false)
     for (const c of ['gardens:manage', 'gardens:template', 'agents:add', 'app:navigate']) {

@@ -231,6 +231,8 @@ export const CATALOG_ERROR_CODES = [
   // Catalog v38 (must-change at next sign-in, 0.46.6).
   'password_change_required',
   'password_unchanged',
+  // Catalog v40 (0.46.7 Workbench): git reads on a folder that isn't a repo.
+  'not_a_repo',
 ] as const
 
 export type CatalogErrorCode = (typeof CATALOG_ERROR_CODES)[number]

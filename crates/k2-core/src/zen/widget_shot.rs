@@ -71,6 +71,9 @@ pub const FRAME_FEATURES: &[&str] = &[
     // 0.46.6: store.history / restore / snapshot (the preview answers them
     // from nothing: verb_unavailable).
     "garden-history-v1",
+    // 0.46.7 Workbench (catalog v40): the preview has no agents or git, so
+    // its rows answer verb_unavailable.
+    "workbench-v1",
 ];
 
 /// The shot's size limits (CSS pixels).

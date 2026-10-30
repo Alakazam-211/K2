@@ -27,6 +27,8 @@ import { writeText as writeClipboardText } from '@tauri-apps/plugin-clipboard-ma
 import { useToastStore } from '@/stores/toast'
 import { DevicePicker, type DevicePickerGroup } from './DevicePicker'
 import { MobileHoldPill, MobileNotice, type MobileNoticeTone } from './MobileNotice'
+import { useThreadViewer, type ThreadViewer } from '@/lib/thread-viewer'
+import { useSettingsStore } from '@/stores/settings'
 import type { ComposeInsertDetail } from '@/lib/external-drop-router'
 import { useRoom } from '@/components/Room/RoomContext'
 import { useIsTabVisible } from '@/contexts/TabVisibilityContext'
@@ -298,10 +300,45 @@ export function deviceNotice(status: SimStatus | null, statusError: string | nul
   return 'No device is running.'
 }
 
-/** How the hold banner reads, or null when nothing shows. */
-export function holdBanner(hold: SimHold, tookOver: boolean): string | null {
-  if (hold.kind === 'person') return `${hold.by || 'A person'} is using the device`
-  if (hold.kind === 'takeover' && !tookOver) return `${hold.by || 'A person'} has taken over the device`
+const foldName = (s: string): string => s.trim().toLowerCase()
+
+/** Is the hold's `by` (the daemon's `owner` for the owner token, else the
+ *  Connect login) the person looking at this tab? The owner's linked
+ *  logins are the owner too. An unknown viewer holds nothing. */
+export function isSimHolder(by: string, viewer: ThreadViewer | null): boolean {
+  if (!viewer) return false
+  const me = foldName(viewer.principal)
+  const who = foldName(by)
+  if (!me || !who) return false
+  if (who === me) return true
+  return me === 'owner' && viewer.aliases.some((a) => foldName(a) === who)
+}
+
+/** The holder as others read it: `owner` is the owner's display name where
+ *  known, else "The server's owner". */
+export function simHolderLabel(by: string, ownerName: string): string {
+  if (foldName(by) === 'owner') return ownerName.trim() || "The server's owner"
+  return by.trim() || 'A person'
+}
+
+/** How the hold banner reads, or null when nothing shows. The person
+ *  holding the device sees nothing (each of their inputs holds it a few
+ *  seconds so agents wait; Rosson 2026-10-30 read his own hold as someone
+ *  else's). Everyone else sees who has it. */
+export function holdBanner(
+  hold: SimHold,
+  tookOver: boolean,
+  viewer: ThreadViewer | null = null,
+  ownerName = '',
+): string | null {
+  if (hold.kind === 'free') return null
+  if (isSimHolder(hold.by, viewer)) {
+    // Taken over from another window of yours: this one has no Hand back.
+    return hold.kind === 'takeover' && !tookOver ? 'You have taken over the device in another window' : null
+  }
+  const who = simHolderLabel(hold.by, ownerName)
+  if (hold.kind === 'person') return `${who} is using the device`
+  if (hold.kind === 'takeover' && !tookOver) return `${who} has taken over the device`
   return null
 }
 
@@ -748,7 +785,12 @@ function MobileDevice({
   const shape = resolveDeviceShape(session?.lane ?? devicesLane, frameProfile?.name ?? '', frameScreen)
   const showRail = canControl && running
   const overlayBox = renderOverlay && screen && live ? box() : null
-  const banner = holdBanner(hold, tookOver)
+  // Who is looking, so a person's own hold doesn't read as someone else's.
+  // The owner's display name is this computer's setting (unknown for a
+  // remote server's owner).
+  const viewer = useThreadViewer(scope)
+  const localOwnerName = useSettingsStore((st) => st.ownerDisplayName)
+  const banner = holdBanner(hold, tookOver, viewer, scope.isRemote ? '' : localOwnerName)
   const [dismissedInputError, setDismissedInputError] = useState<string | null>(null)
   const inputNotice = stream.inputError && stream.inputError !== dismissedInputError ? stream.inputError : null
   // Room for the rail from the first boot step, so the phone doesn't shift

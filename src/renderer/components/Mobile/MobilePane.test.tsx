@@ -93,7 +93,10 @@ import { TabVisibilityContext } from '@/contexts/TabVisibilityContext'
 import { useTabsStore, type Tab } from '@/stores/tabs'
 import { renderInPrimaryRoom } from '@/test-utils/primary-room'
 import { readText as readClipboardText } from '@tauri-apps/plugin-clipboard-manager'
-import { MobilePane } from './MobilePane'
+import { MobilePane, holdBanner } from './MobilePane'
+import { primaryScope } from '@/kessel/server-scope'
+import { resetThreadViewersForTests, setThreadViewerForTests } from '@/lib/thread-viewer'
+import { useSettingsStore } from '@/stores/settings'
 import { mobileSplitKey } from './mobile-split-sizes'
 import { createStubSimStream, type StubSimStream } from './sim-stream'
 
@@ -834,6 +837,58 @@ describe('the running device', () => {
       stub.pushServer({ t: 'error', code: 'sim_stopped', message: 'The device is stopped.' })
     })
     expect(document.querySelector('[data-mobile-notice]')?.textContent).toBe('The device is stopped.')
+  })
+})
+
+describe('the hold banner: the holder sees no "is using" pop-up', () => {
+  const OWNER = { principal: 'owner', aliases: ['rosson'] }
+  const JULES = { principal: 'jules', aliases: [] }
+
+  afterEach(() => {
+    resetThreadViewersForTests()
+    useSettingsStore.setState({ ownerDisplayName: '' })
+  })
+
+  it('pure: the holder sees nothing; others see the holder by name', () => {
+    const owner = { kind: 'person' as const, by: 'owner', ms: 2000 }
+    expect(holdBanner(owner, false, OWNER)).toBeNull()
+    // The owner's linked login holding it is the owner too.
+    expect(holdBanner({ kind: 'person', by: 'Rosson', ms: 2000 }, false, OWNER)).toBeNull()
+    expect(holdBanner({ kind: 'person', by: 'jules', ms: 2000 }, false, JULES)).toBeNull()
+    expect(holdBanner(owner, false, JULES, 'Rosson Long')).toBe('Rosson Long is using the device')
+    expect(holdBanner(owner, false, JULES, '')).toBe("The server's owner is using the device")
+    expect(holdBanner(owner, false, null, '')).toBe("The server's owner is using the device")
+    expect(holdBanner({ kind: 'person', by: 'jules', ms: 2000 }, false, OWNER)).toBe('jules is using the device')
+    // Take-over: others keep the text; the taker (Hand back) sees nothing.
+    expect(holdBanner({ kind: 'takeover', by: 'jules', idleMs: 1 }, false, OWNER)).toBe('jules has taken over the device')
+    expect(holdBanner({ kind: 'takeover', by: 'owner', idleMs: 1 }, true, OWNER)).toBeNull()
+    expect(holdBanner({ kind: 'takeover', by: 'owner', idleMs: 1 }, false, OWNER)).toBe('You have taken over the device in another window')
+    expect(holdBanner({ kind: 'free' }, false, OWNER)).toBeNull()
+  })
+
+  it('the owner using the device on this computer sees no pill', async () => {
+    setThreadViewerForTests(primaryScope(), OWNER)
+    useSettingsStore.setState({ ownerDisplayName: 'Rosson Long' })
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushServer({ t: 'hold', hold: { kind: 'person', by: 'owner', ms: 2000 } })
+    })
+    expect(document.querySelector('[data-mobile-held]')).toBeNull()
+    expect(document.body.textContent).not.toContain('is using the device')
+  })
+
+  it('another viewer sees the owner by display name', async () => {
+    setThreadViewerForTests(primaryScope(), JULES)
+    useSettingsStore.setState({ ownerDisplayName: 'Rosson Long' })
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushServer({ t: 'hold', hold: { kind: 'person', by: 'owner', ms: 2000 } })
+    })
+    expect(document.querySelector('[data-mobile-held]')?.textContent).toBe('Rosson Long is using the device')
   })
 })
 

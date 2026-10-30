@@ -1,0 +1,21 @@
+MPC-E403 declined_binary (disk and outside edits)
+exit:     4
+message:  live editing is off: {reason} (binary)
+next:     The file holds binary data (a NUL byte), so it can't be a live text doc. Edit it with ordinary file tools. Don't retry the live verb.
+rule:     K-PACK-4, K-COD-6
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E403",
+  "name": "declined_binary",
+  "area": "disk and outside edits",
+  "exit": 4,
+  "message": "live editing is off: {reason} (binary)",
+  "next": "The file holds binary data (a NUL byte), so it can't be a live text doc. Edit it with ordinary file tools. Don't retry the live verb.",
+  "rule": "K-PACK-4, K-COD-6",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

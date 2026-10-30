@@ -1,0 +1,21 @@
+MPC-E411 bad_path (disk and outside edits)
+exit:     2
+message:  bad path: {reason}
+next:     The path isn't a regular file inside the workspace (a folder, a link pointing outside it...). Use a path to a regular file inside the workspace.
+rule:     K-SEC-6, K-DISK-14
+verbs:    mv; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E411",
+  "name": "bad_path",
+  "area": "disk and outside edits",
+  "exit": 2,
+  "message": "bad path: {reason}",
+  "next": "The path isn't a regular file inside the workspace (a folder, a link pointing outside it...). Use a path to a regular file inside the workspace.",
+  "rule": "K-SEC-6, K-DISK-14",
+  "verbs": ["mv", "(host)"],
+  "returned_by": ["mv"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E107 not_joined (sessions and edits)
+exit:     2
+message:  {conn} has not joined this doc
+next:     Your connection left the doc (it was idle, kicked, or the doc reloaded). Run the verb again: any verb joins the doc first. Nothing was applied.
+rule:     K-PRES-1
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E107",
+  "name": "not_joined",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{conn} has not joined this doc",
+  "next": "Your connection left the doc (it was idle, kicked, or the doc reloaded). Run the verb again: any verb joins the doc first. Nothing was applied.",
+  "rule": "K-PRES-1",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

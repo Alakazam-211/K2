@@ -1,0 +1,21 @@
+MPC-E105 forbidden_author_or_owner (sessions and edits)
+exit:     3
+message:  refused: needs AuthorOrOwner rights
+next:     Only the change's author, the person it was made for, or an owner can revert it. Don't retry: ask one of them, or undo your own changes with undo.
+rule:     K-HIST-19
+verbs:    revert
+status:   live
+--- json
+{
+  "id": "MPC-E105",
+  "name": "forbidden_author_or_owner",
+  "area": "sessions and edits",
+  "exit": 3,
+  "message": "refused: needs AuthorOrOwner rights",
+  "next": "Only the change's author, the person it was made for, or an owner can revert it. Don't retry: ask one of them, or undo your own changes with undo.",
+  "rule": "K-HIST-19",
+  "verbs": ["revert"],
+  "returned_by": ["revert"],
+  "status": "live",
+  "since_or_until": null
+}

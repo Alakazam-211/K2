@@ -20,13 +20,18 @@
 //! - Agent presence (amendment 13): anchored, expiring claims with FIFO waiters, a
 //!   host-chosen [`ClaimPolicy`] per edit, heads-up [`Notes`], and an activity ring. Memory
 //!   only: never in the store, the log or the engine.
+//! - The roster pushed to subscribers ([`Session::subscribe_roster`]): a snapshot, then
+//!   coalesced deltas ([`RosterEvent`]).
 
 mod awareness;
 mod carry;
 mod config;
 mod disk;
+#[cfg(feature = "fuzzing")]
+pub(crate) use disk::fuzz_file_stat;
 mod error;
 mod foreign;
+mod handles;
 mod host;
 mod live;
 mod manager;
@@ -36,27 +41,34 @@ pub mod position;
 mod presence;
 mod prov;
 mod ratelimit;
+pub mod rebase;
+mod roster;
 mod summary;
 mod tier0;
 mod undo;
 
 pub use crate::store::{Approval, ApprovalState};
 pub use crate::store::{ChangeInfo, ChangeKind, VersionInfo};
+pub(crate) use awareness::pair_text;
 pub use awareness::{
     ActivityEntry, ActivityKind, ClaimEnd, ClaimId, ClaimInfo, ClaimPolicy, ForEdit, Note,
     NoteKind, Notes, ReservationEnd, ReservationInfo, Waiting,
 };
-pub use config::Config;
-pub use disk::{is_write_temp, DiskCheck, DiskState, FlushOutcome};
+pub use config::{
+    Config, DEFAULT_BLAME_CHECK_EVERY, DEFAULT_BLAME_CHECK_EVERY_LARGE,
+    DEFAULT_BLAME_CHECK_LARGE_AT,
+};
+pub use disk::{file_identity, is_write_temp, DiskCheck, DiskState, FileIdentity, FlushOutcome};
 pub use error::{EditWithError, SessionError};
 pub use host::{Action, AuditEvent, Host, LeaseEnd, LeaveReason, Need, PurgedScope, Rights};
 #[cfg(feature = "conformance")]
 pub use live::CharBlame;
 pub(crate) use live::Shown;
 pub use live::{
-    Blame, BlameLine, ChangeEvent, DiffOutput, EditOptions, EditResult, Joined, LogItem, LogQuery,
-    NotReached, PurgeOutcome, PurgeRequest, PurgeScope, ReadResult, RightsChange, Session, Status,
-    SyncDrift, UndoMode, UndoOutcome, UndoRequest, WriteOutcome, WriteReport,
+    Blame, BlameLine, ChangeEvent, DiffOutput, EditAtBase, EditOptions, EditResult, FileBytes,
+    FileCodec, FileCopy, Joined, LogItem, LogQuery, NotReached, PurgeOutcome, PurgeRequest,
+    PurgeScope, ReadResult, RightsChange, Session, Status, SyncDrift, UndoMode, UndoOutcome,
+    UndoRequest, WriteOutcome, WriteReport,
 };
 pub use manager::{PoolStats, SessionManager, TickReport};
 pub use pack::{Declined, Pack, PackContent, PackError, TextFilePack};
@@ -65,6 +77,7 @@ pub use participant::{
     IMPORT_PID, RESERVED_PID_PREFIX, UNKNOWN_PID,
 };
 pub use position::{At, Cursor, LineCol, LineRange};
+pub use roster::{RosterEvent, RosterMember, Who};
 pub use tier0::{
     conflict_copy_name, AnyFile, BlobApproval, BlobAuthor, BlobBlame, BlobLogEntry, BlobLogKind,
     BlobMerge, BlobPack, BlobRead, BlobSession, BlobStatus, BlobWriteResult, ConflictCopy,
@@ -84,6 +97,10 @@ mod one_writer_tests;
 mod promote_crash_tests;
 #[cfg(test)]
 mod tier0_crash_tests;
+#[cfg(test)]
+mod writeback_cost_tests;
+#[cfg(test)]
+mod writeback_diff_tests;
 
 // Compile-time check: sessions and the manager are shared across threads.
 const _: fn() = || {

@@ -199,8 +199,17 @@ pub struct ElemBlame {
 pub trait Undo: Sized {
     type Engine: TextReplica;
 
-    /// A doc whose two text roots hold `seeds`.
-    fn open(seeds: [&str; 2]) -> Self;
+    /// A doc whose two text roots hold `seeds`, every character a token (D1, undo spec v1.10,
+    /// is the identity there: the U and O rules' cases on single letters, as the undo model
+    /// check runs them).
+    fn open(seeds: [&str; 2]) -> Self {
+        Self::open_tokens(seeds, k2_mpc_base::text::lines::Tokens::Chars)
+    }
+
+    /// A doc whose two text roots hold `seeds`, with token rule `tokens` for D1 (a fresh
+    /// change is never built from someone else's text; `Words` is the markdown and text
+    /// packs').
+    fn open_tokens(seeds: [&str; 2], tokens: k2_mpc_base::text::lines::Tokens) -> Self;
 
     /// `agent` applies `edits` (root index, hunks against that root's current text) as one
     /// batch.

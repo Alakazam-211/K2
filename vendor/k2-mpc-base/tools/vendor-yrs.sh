@@ -12,8 +12,8 @@
 # never carried them), whatever a tag holds there, so older tags still re-vendor.
 # vendor/yrs/VENDORED records the tag, its commit, the tree hash of its yrs/, what was left
 # out, a sha256 of every vendored file, and how a compute job rebuilds src/ without carrying
-# it: the upstream crate on crates.io (yrs 0.28.0, its sha256) plus vendor/yrs/K2.patch (the fork's diff of yrs/src from
-# the upstream tag), checked against `src-sha256`. --check recomputes all of it. Files under
+# it: the upstream crate on crates.io (yrs 0.28.0, its sha256) plus vendor/yrs/FORK.patch (the
+# fork's diff of yrs/src from the upstream tag), checked against `src-sha256`. --check recomputes all of it. Files under
 # vendor/yrs are never edited by hand.
 set -eu
 CHECK=0
@@ -43,7 +43,7 @@ rm -rf "$TMP/x/$EXCLUDE"
 cp "$TMP/x/LICENSE" "$TMP/x/NOTICE" "$TMP/out/"
 # the fork's change to src/ from the upstream release (a compute job's bundle carries this, not
 # src/: tools/test-bundle.sh)
-git -C "$SRC" diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "$UPSTREAM_TAG" "$TAG" -- yrs/src > "$TMP/out/K2.patch"
+git -C "$SRC" diff --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "$UPSTREAM_TAG" "$TAG" -- yrs/src > "$TMP/out/FORK.patch"
 SRCSUM=$(cd "$TMP/out/src" && find . -type f | LC_ALL=C sort | sed 's|^\./||' | while read -r f; do $SHA "$f"; done | $SHA | cut -d' ' -f1)
 FILES=$(cd "$TMP/out" && find . -type f | LC_ALL=C sort | sed 's|^\./||')
 SUM=$(cd "$TMP/out" && for f in $FILES; do $SHA "$f"; done | $SHA | cut -d' ' -f1)

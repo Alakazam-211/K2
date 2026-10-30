@@ -89,6 +89,10 @@ pub enum Api {
     ReleaseClaim,
     /// `Session::activity`.
     Activity,
+    /// `Session::file_now` (tier 0: `BlobSession::file_now_to`), then the export registry.
+    FileNow,
+    /// `Session::file_at` (tier 0: `BlobSession::file_at_to`), then the export registry.
+    FileAt,
 }
 
 /// Where a verb comes from.
@@ -509,6 +513,28 @@ pub const KIT_VERBS: &[VerbSpec] = &[
         OK0,
     )
     .on(BOTH),
+    // P24: the file's bytes through the export registry (the kit's target is `as-is`; a
+    // host registers format exporters beside it)
+    kit(
+        "export",
+        R,
+        NR,
+        &[A::FileNow],
+        &[P::Export],
+        "export [--to as-is] (the file now, through the export registry)",
+        OK0,
+    )
+    .on(BOTH),
+    kit(
+        "export --version",
+        H,
+        NH,
+        &[A::FileAt],
+        &[P::Export],
+        "export --version V [--to as-is] (the file at version V)",
+        OK0,
+    )
+    .on(BOTH),
     kit(
         "diff",
         R,
@@ -683,6 +709,7 @@ pub fn verb_form(argv: &[String]) -> String {
         "log" if has("--pending") => "log --pending",
         "diff" if has("--version") => "diff --version",
         "show" => "show --version",
+        "export" if has("--version") => "export --version",
         "version" => "version --name",
         "tail" if has("-f") || has("--follow") => "tail -f",
         "lease" if has("--renew") => "lease --renew",
@@ -834,6 +861,11 @@ mod tests {
             (&["diff", "--version", "3"], "diff --version"),
             (&["diff", "-u"], "diff"),
             (&["show", "--version", "2"], "show --version"),
+            (&["export"], "export"),
+            (
+                &["export", "--version", "2", "--to", "as-is"],
+                "export --version",
+            ),
             (&["version", "--name", "x"], "version --name"),
             (&["tail", "-f"], "tail -f"),
             (&["tail", "-n", "3"], "tail"),
@@ -986,6 +1018,8 @@ mod tests {
                 "flush",
                 "log",
                 "show --version",
+                "export",
+                "export --version",
                 "blame",
                 "restore",
                 "version --name",

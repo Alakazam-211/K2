@@ -1,0 +1,21 @@
+MPC-E305 watching (presence and claims)
+exit:     3
+message:  watching: the doc has its {max} participants; read-only until the host lets you in
+next:     This doc already has as many participants as it allows, so you joined as a watcher: you can read it and follow changes, but not edit or show presence. This is refused for now, not for good: don't retry in a loop. When someone leaves, the host can let you in; until then, read.
+rule:     K11 (participants_max)
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E305",
+  "name": "watching",
+  "area": "presence and claims",
+  "exit": 3,
+  "message": "watching: the doc has its {max} participants; read-only until the host lets you in",
+  "next": "This doc already has as many participants as it allows, so you joined as a watcher: you can read it and follow changes, but not edit or show presence. This is refused for now, not for good: don't retry in a loop. When someone leaves, the host can let you in; until then, read.",
+  "rule": "K11 (participants_max)",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

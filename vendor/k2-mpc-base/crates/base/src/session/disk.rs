@@ -71,6 +71,36 @@ pub struct FlushOutcome {
     pub disk: Option<DiskState>,
 }
 
+/// A file's identity on its file system (K9, K-DISK-14): its device and inode. Two paths
+/// with one identity are one file (a hard link, or the same file reached two ways): a host
+/// keys sessions by it as well as by the path, so one file never has two live docs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct FileIdentity {
+    pub dev: u64,
+    pub ino: u64,
+}
+
+/// The identity of the file at `path` (symlinks followed): `Ok(None)` where the platform
+/// has no device and inode numbers (not Unix).
+pub fn file_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
+    Ok(FileStat::of(&fs::metadata(path)?).identity())
+}
+
+/// How many names (hard links) the file has: 1 where the platform doesn't say.
+pub(crate) fn link_count(m: &fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        m.nlink()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = m;
+        1
+    }
+}
+
 /// The coarsest modification-time granularity the kit allows for: FAT and exFAT keep 2 s,
 /// HFS+ 1 s, network shares whatever their server keeps (ext4 and XFS a kernel tick, APFS
 /// ns). Two writes inside it can leave the same mtime.
@@ -138,6 +168,14 @@ pub(crate) struct FileStat {
 }
 
 impl FileStat {
+    /// The file's identity, where the platform gives one.
+    pub(crate) fn identity(&self) -> Option<FileIdentity> {
+        (cfg!(unix)).then_some(FileIdentity {
+            dev: self.dev,
+            ino: self.ino,
+        })
+    }
+
     /// A stable encoding, to keep in the store (tier 0 skips re-hashing an unchanged file).
     pub(crate) fn to_bytes(self) -> Vec<u8> {
         let mut b = Vec::with_capacity(41);
@@ -204,8 +242,13 @@ impl FileStat {
 
 /// What is at a session's path now.
 pub(crate) enum Probe {
-    /// A regular file, at `real` (symlinks resolved) inside the root.
-    File { real: PathBuf, stat: FileStat },
+    /// A regular file, at `real` (symlinks resolved) inside the root, with its number of
+    /// names (hard links: K9).
+    File {
+        real: PathBuf,
+        stat: FileStat,
+        links: u64,
+    },
     /// Nothing there (or a dangling symlink).
     Missing,
     /// Something that isn't a regular file (a folder, a device, a pipe).
@@ -235,6 +278,7 @@ pub(crate) fn probe(path: &Path, root: &Path) -> io::Result<Probe> {
     }
     Ok(Probe::File {
         stat: FileStat::of(&m),
+        links: link_count(&m),
         real,
     })
 }
@@ -344,6 +388,23 @@ pub(crate) fn atomic_write_with(
         Err(e) => {
             let _ = fs::remove_file(&tmp);
             Err(e)
+        }
+    }
+}
+
+/// The fuzz targets' oracle for a stored file stat (feature `fuzzing`): refused, or it
+/// re-encodes to `b` itself. Panics on a violation; returns whether `b` decoded.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_file_stat(b: &[u8]) -> bool {
+    match FileStat::from_bytes(b) {
+        None => false,
+        Some(s) => {
+            assert_eq!(
+                s.to_bytes(),
+                b,
+                "file stat: decoded, but re-encodes to other bytes"
+            );
+            true
         }
     }
 }

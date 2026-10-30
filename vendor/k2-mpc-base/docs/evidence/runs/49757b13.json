@@ -1,0 +1,23 @@
+{
+ "job": "49757b13",
+ "collected": "2026-10-29",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "49757b13",
+   "run": "live_trace_hook_live_model_r23_3x1",
+   "tool": "live_edit",
+   "status": "COMPLETE",
+   "file": "live_model_r23_3x1.json",
+   "cases": 21399,
+   "server_disagree": 0,
+   "mirror_disagree": 0,
+   "r22_rule1_only": 0,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

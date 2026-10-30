@@ -339,7 +339,7 @@ impl World {
                     .nth(rng.gen_range(0..4));
                 let new = match at {
                     Some(k) if rng.gen_bool(0.3) => {
-                        format!("{}{}", &t[..k], &t[k..].replacen('\n', "", 1))
+                        format!("{}{}", &t[..k], t[k..].replacen('\n', "", 1))
                     }
                     Some(k) => format!("{}{line}{}", &t[..k], &t[k..]),
                     None => format!("{t}{line}"),
@@ -467,4 +467,110 @@ fn one_writer_per_client_under_a_random_workload() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(4);
     workload(0..seeds, 250, true);
+}
+
+/// Agent client IDs are reused (v0.9.7, `Config::reuse_agent_clients`), one writer at a time:
+/// an agent's next connection takes a client ID it used before when no present connection
+/// holds it (after a restart too: the store records them); two connections at once get two
+/// IDs; a person's and an own-replica participant's IDs are never reused; with the setting
+/// off, every join mints. Each reused ID's edits continue its history (check 4) and the
+/// checks hold after every call.
+#[test]
+fn agent_client_ids_are_reused_one_writer_at_a_time() {
+    let mut side = Side::new(Path::MainDoc).with_client_seed(9).recording();
+    let mut w = with_side(&mut side, || World::new(90, false));
+    let agent = |pid: &str| Participant::new(pid, pid, "#123456", ParticipantKind::Agent, "cli");
+    let person = |pid: &str| Participant::new(pid, pid, "#123456", ParticipantKind::Person, "tab");
+    let checked = |w: &World, side: &mut Side| {
+        check_edits(&side.take_edits()).unwrap();
+        check(&w.s.writers_for_tests().unwrap()).unwrap();
+    };
+    let edit = |w: &World, side: &mut Side, conn: ConnId, n: usize| {
+        with_side(side, || {
+            let t = w.s.read(conn).unwrap().text_by_root[0].1.clone();
+            w.s.replace_text(conn, TextFilePack::ROOT, &format!("{t}line {n}\n"))
+                .unwrap();
+        });
+    };
+    let s = w.s.clone();
+    let join = |side: &mut Side, s: &Arc<Session>, p: Participant| {
+        with_side(side, || s.join(p, Stay::Held).unwrap())
+    };
+    // one agent, one connection after another: the same ID, its edits continuing
+    let j1 = join(&mut side, &s, agent("a0"));
+    edit(&w, &mut side, j1.conn, 1);
+    checked(&w, &mut side);
+    s.leave(j1.conn).unwrap();
+    let j2 = join(&mut side, &s, agent("a0"));
+    assert_eq!(
+        j2.client, j1.client,
+        "the agent's next connection reuses its ID"
+    );
+    edit(&w, &mut side, j2.conn, 2);
+    checked(&w, &mut side);
+    // two at once: two IDs
+    let j3 = join(&mut side, &s, agent("a0"));
+    assert_ne!(
+        j3.client, j2.client,
+        "a second connection at once gets its own ID"
+    );
+    edit(&w, &mut side, j3.conn, 3);
+    checked(&w, &mut side);
+    s.leave(j2.conn).unwrap();
+    s.leave(j3.conn).unwrap();
+    // a person: a fresh ID every time
+    let p1 = join(&mut side, &s, person("p1"));
+    s.leave(p1.conn).unwrap();
+    let p2 = join(&mut side, &s, person("p1"));
+    assert_ne!(p1.client, p2.client, "a person's ID is never reused");
+    s.leave(p2.conn).unwrap();
+    // an agent with its own replica: never reused, even by the same agent later
+    let r1 = join(&mut side, &s, agent("a1").own_replica());
+    s.leave(r1.conn).unwrap();
+    let r2 = join(&mut side, &s, agent("a1"));
+    assert_ne!(r2.client, r1.client, "an own-replica ID is never reused");
+    s.leave(r2.conn).unwrap();
+    // after a restart the store still names the agent's IDs: the lowest free one is taken
+    w.mgr.release().unwrap();
+    let (mgr, s2) = with_side(&mut side, || open(&w.dir, &w.host));
+    w.mgr = mgr;
+    w.s = s2.clone();
+    let j4 = join(&mut side, &s2, agent("a0"));
+    assert_eq!(
+        j4.client,
+        j1.client.min(j3.client),
+        "reused after a restart"
+    );
+    edit(&w, &mut side, j4.conn, 4);
+    checked(&w, &mut side);
+    s2.leave(j4.conn).unwrap();
+}
+
+/// With `Config::reuse_agent_clients` off, every join mints a client ID, as before v0.9.7.
+#[test]
+fn with_reuse_off_every_join_mints() {
+    let dir = std::env::temp_dir().join(format!("k2mb-reuse-off-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let store = Arc::new(DocStore::open(dir.join("docs.redb")).unwrap());
+    let host = Arc::new(H {
+        now: AtomicU64::new(1_000_000),
+    });
+    let c = Config {
+        reuse_agent_clients: false,
+        ..Config::default()
+    };
+    let mgr = SessionManager::new(store, host, c);
+    let k = DocKey {
+        space: "ws".into(),
+        path: "b.md".into(),
+    };
+    let s = mgr.open(Arc::new(MD), &k, Some(b"x\n")).unwrap();
+    let a = || Participant::new("a0", "a0", "#123456", ParticipantKind::Agent, "cli");
+    let j1 = s.join(a(), Stay::Held).unwrap();
+    s.leave(j1.conn).unwrap();
+    let j2 = s.join(a(), Stay::Held).unwrap();
+    assert_ne!(j1.client, j2.client);
+    drop(mgr);
+    let _ = std::fs::remove_dir_all(&dir);
 }

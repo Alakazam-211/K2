@@ -1,0 +1,21 @@
+MPC-E410 disk (disk and outside edits)
+exit:     1
+message:  disk: {reason}
+next:     Reading or writing the file failed. Nothing is lost: the doc keeps its changes and write-back retries. Check the disk (space, permissions), then flush.
+rule:     K-DISK-2, K-DISK-10
+verbs:    flush; mv; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E410",
+  "name": "disk",
+  "area": "disk and outside edits",
+  "exit": 1,
+  "message": "disk: {reason}",
+  "next": "Reading or writing the file failed. Nothing is lost: the doc keeps its changes and write-back retries. Check the disk (space, permissions), then flush.",
+  "rule": "K-DISK-2, K-DISK-10",
+  "verbs": ["flush", "mv", "(host)"],
+  "returned_by": ["flush", "mv"],
+  "status": "live",
+  "since_or_until": null
+}

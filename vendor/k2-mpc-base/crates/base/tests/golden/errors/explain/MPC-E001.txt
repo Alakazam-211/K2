@@ -1,0 +1,21 @@
+MPC-E001 export_unsupported (exports)
+exit:     2
+message:  no exporter writes {target} from {kind}
+next:     That target isn't offered for this file. List the targets this file can be exported to (the host's export --list) and pick one of them. Nothing was written.
+rule:     X-ERR-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E001",
+  "name": "export_unsupported",
+  "area": "exports",
+  "exit": 2,
+  "message": "no exporter writes {target} from {kind}",
+  "next": "That target isn't offered for this file. List the targets this file can be exported to (the host's export --list) and pick one of them. Nothing was written.",
+  "rule": "X-ERR-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

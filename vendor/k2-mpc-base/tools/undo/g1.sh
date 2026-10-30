@@ -21,8 +21,9 @@
 # Exhaustive runs use pid symmetry and per-seed fingerprint sets, and write a checkpoint line
 # per finished seed (also logged as "ckpt seed K states N max_depth D"). Resume: rebuild
 # ck-<name>.txt from the log (the run's header line, then each ckpt line rewritten as
-# "seed K states N max_depth D viol -"), put it at the repo root and bundle it:
-#   tools/undo-enum-job.sh tools/undo/g1.sh <out dir> ck-<name>.txt
+# "seed K states N max_depth D viol -"), put it at the repo root (untracked) and ship it with
+# the commit: k2 compute run ... --dirty -- sh tools/undo/job.sh enum tools/undo/g1.sh
+# (the fallback bundle: tools/undo-enum-job.sh tools/undo/g1.sh <out dir> ck-<name>.txt)
 T=${THREADS:-$(nproc)}
 run_g() { # run_g NAME ARGS...
   n=$1; shift

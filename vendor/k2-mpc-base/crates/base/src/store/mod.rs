@@ -35,7 +35,7 @@ pub(crate) use history::{
     window_plan, Carry, ClockSpan, HunkRoots, NewChange, ProvRow, RecordHunk, RecordRoot,
     Retention, RevertRecord, RevertWindow, RootRuns, RootShape, SpanOf,
 };
-pub use history::{ChangeInfo, ChangeKind, VersionInfo};
+pub use history::{ChangeInfo, ChangeKind, RootHunks, VersionInfo};
 pub(crate) use promote::PromoteRows;
 #[cfg(test)]
 pub(crate) use promote::FAIL_BEFORE_COMMIT as FAIL_PROMOTE_BEFORE_COMMIT;
@@ -95,6 +95,15 @@ use enc::{R, W};
 ///   of writing changes without their provenance rows (a later build would then read text
 ///   restored by them as fresh), reading version-2 records as damaged, or refusing the
 ///   table in `rewrite_file` mid-purge.
+///
+///   v0.9.7 adds one table, `authored` (the hunks the author wrote, for a change D1
+///   widened; `store/history.rs`), **without a format bump**: the revert record keeps its
+///   version, and a store without the table (or without a change's row) reads as "authored
+///   = the record's hunks", exact for every change made before. A v0.9.5 or v0.9.6 build
+///   reads and writes such a store as before (its changes get no rows), but leaves the rows
+///   behind where v0.9.7 drops them (a doc delete, records leaving the window), and its
+///   `rewrite_file`, and so a purge, refuses the table before changing anything
+///   ([`StoreError::NewerData`], `MPC-E502`; never a silent drop).
 pub const STORE_FORMAT: u64 = 5;
 
 pub type DocId = u64;
@@ -103,6 +112,8 @@ pub type Seq = u64;
 pub type VersionId = u64;
 
 const META: TableDefinition<&str, u64> = TableDefinition::new("meta");
+/// `meta` key: an open's sweep removed rows and the file is still to be rewritten (v0.9.7).
+const REWRITE_PENDING: &str = "rewrite_pending";
 const DOCS: TableDefinition<u64, &[u8]> = TableDefinition::new("docs");
 const PATHS: TableDefinition<&str, u64> = TableDefinition::new("paths");
 const SNAPSHOTS: TableDefinition<u64, &[u8]> = TableDefinition::new("snapshots");
@@ -118,6 +129,129 @@ const DOC_KEYS: TableDefinition<u64, &[u8]> = TableDefinition::new("doc_keys");
 const SYNCED: u8 = 0;
 const PENDING: u8 = 1;
 
+/// How a per-doc table is keyed: the doc id first, so a doc's rows are one key range.
+#[derive(Clone, Copy)]
+pub(super) enum DocRows {
+    /// `doc` → record.
+    One(TableDefinition<'static, u64, &'static [u8]>),
+    /// `(doc, n)` → record.
+    Pair(TableDefinition<'static, (u64, u64), &'static [u8]>),
+    /// `(doc, client)` → owner (`clients`).
+    Owner(TableDefinition<'static, (u64, u64), &'static str>),
+    /// `(doc, slot)` → record (the sync tables).
+    Slot(TableDefinition<'static, (u64, u8), &'static [u8]>),
+    /// `(doc, client, clock)` → record.
+    Clock(TableDefinition<'static, (u64, u64, u64), &'static [u8]>),
+}
+
+/// How a doc delete erases a per-doc table's rows of the doc.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Erase {
+    /// The doc's key range, as is.
+    Range,
+    /// By `blob::delete_rows`, which first releases each blob version's reference on its
+    /// blob (tier 0).
+    Blob,
+}
+
+/// Every table keyed by doc id, with how a delete erases it (v0.9.7): the one list a doc
+/// delete erases, a store rewrite copies and the delete tests check, so a per-doc table
+/// added later is in all three or in none (and a rewrite refuses a table in no list).
+/// Tables not keyed by doc are [`SHARED_TABLES`].
+pub(super) const DOC_TABLES: &[(DocRows, Erase)] = &[
+    (DocRows::One(DOCS), Erase::Range),
+    (DocRows::One(SNAPSHOTS), Erase::Range),
+    (DocRows::One(DOC_KEYS), Erase::Range),
+    (DocRows::Pair(UPDATES), Erase::Range),
+    (DocRows::Owner(CLIENTS), Erase::Range),
+    (DocRows::Pair(VERSIONS), Erase::Range),
+    (DocRows::Pair(APPROVALS), Erase::Range),
+    (DocRows::Slot(SYNC), Erase::Range),
+    (DocRows::Pair(history::CHANGES), Erase::Range),
+    (DocRows::Pair(history::REVERTS), Erase::Range),
+    (DocRows::Pair(history::REVERT_INDEX), Erase::Range),
+    (DocRows::Pair(history::REVERT_CARRY), Erase::Range),
+    (DocRows::One(history::REVERT_STATS), Erase::Range),
+    (DocRows::Pair(history::AUTHORED), Erase::Range),
+    (DocRows::Clock(history::CHANGE_CLOCKS), Erase::Range),
+    (DocRows::Clock(history::PROVENANCE), Erase::Range),
+    (DocRows::Pair(blob::BLOB_VERSIONS), Erase::Blob),
+    (DocRows::Slot(blob::BLOB_SYNC), Erase::Blob),
+    (DocRows::Pair(blob::BLOB_APPROVALS), Erase::Blob),
+];
+
+/// The tables not keyed by doc id: `meta` (the store's own), `paths` (key → doc: a delete
+/// removes the doc's entry by its key), `host` (opaque to the kit), and the blob spaces and
+/// blobs (per space). A rewrite copies them; a doc delete leaves them (but `paths`) alone.
+pub(super) const SHARED_TABLES: &[&str] = &["meta", "paths", "host", "blob_spaces", "blobs"];
+
+impl DocRows {
+    pub(super) fn name(&self) -> &str {
+        use redb::TableHandle;
+        match self {
+            Self::One(t) => t.name(),
+            Self::Pair(t) => t.name(),
+            Self::Owner(t) => t.name(),
+            Self::Slot(t) => t.name(),
+            Self::Clock(t) => t.name(),
+        }
+    }
+
+    /// Erase doc `id`'s rows in `w`. A table the store doesn't have (a lazily created one,
+    /// [`history::AUTHORED`]) has none, and stays absent.
+    pub(super) fn erase(self, w: &redb::WriteTransaction, id: DocId) -> Result<(), StoreError> {
+        if !history::has_table(w, self.name())? {
+            return Ok(());
+        }
+        match self {
+            Self::One(t) => {
+                w.open_table(t)?.remove(id)?;
+            }
+            Self::Pair(t) => w
+                .open_table(t)?
+                .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?,
+            Self::Owner(t) => w
+                .open_table(t)?
+                .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?,
+            Self::Slot(t) => w
+                .open_table(t)?
+                .retain_in((id, 0)..=(id, u8::MAX), |_, _| false)?,
+            Self::Clock(t) => w
+                .open_table(t)?
+                .retain_in((id, 0, 0)..=(id, u64::MAX, u64::MAX), |_, _| false)?,
+        }
+        Ok(())
+    }
+
+    /// Whether the table holds a row of doc `id` (the delete tests).
+    #[cfg(test)]
+    pub(super) fn holds(self, r: &redb::ReadTransaction, id: DocId) -> Result<bool, StoreError> {
+        Ok(match self {
+            Self::One(t) => r.open_table(t)?.get(id)?.is_some(),
+            Self::Pair(t) => r
+                .open_table(t)?
+                .range((id, 0)..=(id, u64::MAX))?
+                .next()
+                .is_some(),
+            Self::Owner(t) => r
+                .open_table(t)?
+                .range((id, 0)..=(id, u64::MAX))?
+                .next()
+                .is_some(),
+            Self::Slot(t) => r
+                .open_table(t)?
+                .range((id, 0)..=(id, u8::MAX))?
+                .next()
+                .is_some(),
+            Self::Clock(t) => r
+                .open_table(t)?
+                .range((id, 0, 0)..=(id, u64::MAX, u64::MAX))?
+                .next()
+                .is_some(),
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
@@ -126,7 +260,7 @@ pub enum StoreError {
     #[error("store is format {found}; this build reads up to {STORE_FORMAT}")]
     Newer { found: u64 },
     /// The store holds a table this kit doesn't know: data a newer kit added without a
-    /// format bump (v0.9.7's `authored`). Reading and editing still work; a rewrite (and so a
+    /// format bump. Reading and editing still work; a rewrite (and so a
     /// purge) is refused before anything changes (v0.9.5). In the error registry this is
     /// `MPC-E502` `store_newer`, with details `{table}`; its message is the guidance. Exit 6.
     #[error("{}", newer_data_guidance(table))]
@@ -166,8 +300,9 @@ pub enum StoreError {
     PurgedVersion(DocId, VersionId),
 }
 
-/// Tables a newer kit adds without a format bump, with the kit that adds them.
-const FUTURE_TABLES: &[(&str, &str)] = &[("authored", "v0.9.7")];
+/// Tables a newer kit adds without a format bump, with the kit that adds them (none known
+/// now: v0.9.7's `authored`, listed here by v0.9.5, is this kit's own, in [`DOC_TABLES`]).
+const FUTURE_TABLES: &[(&str, &str)] = &[];
 
 /// [`StoreError::NewerData`]'s message: what holds the store, and what to upgrade to.
 fn newer_data_guidance(table: &str) -> String {
@@ -440,7 +575,7 @@ pub struct DocStore {
     db: RwLock<Database>,
     path: PathBuf,
     /// Commits skip the sync to disk ([`DocStore::unsynced_for_tests`]).
-    #[cfg(feature = "conformance")]
+    #[cfg(any(feature = "conformance", feature = "differential"))]
     unsynced: std::sync::atomic::AtomicBool,
 }
 
@@ -770,7 +905,7 @@ impl DocStore {
         let g = self.guard();
         #[allow(unused_mut)]
         let mut tx = g.begin_write()?;
-        #[cfg(feature = "conformance")]
+        #[cfg(any(feature = "conformance", feature = "differential"))]
         if self.unsynced.load(std::sync::atomic::Ordering::Relaxed) {
             tx.set_durability(redb::Durability::None);
         }
@@ -828,21 +963,48 @@ impl DocStore {
             if found.is_some_and(|f| f < 4) {
                 blob::backfill_approvals(&w)?;
             }
+            // what a kit <= v0.9.6 left in the authored table (v0.9.7, no format bump): the
+            // file is rewritten below, here or at the next open if this one fails there
+            if history::sweep_authored(&w)? {
+                meta.insert(REWRITE_PENDING, 1)?;
+            }
         }
         w.commit()?;
-        Ok(Self {
+        let s = Self {
             db: RwLock::new(db),
             path,
-            #[cfg(feature = "conformance")]
+            #[cfg(any(feature = "conformance", feature = "differential"))]
             unsynced: std::sync::atomic::AtomicBool::new(false),
-        })
+        };
+        s.finish_pending_rewrite()?;
+        Ok(s)
+    }
+
+    /// The rewrite an open's sweep asked for ([`REWRITE_PENDING`]), so no freed page keeps
+    /// a byte the sweep removed; the mark is cleared once it is done. A failed rewrite fails
+    /// the open (loudly) and stays pending.
+    fn finish_pending_rewrite(&self) -> Result<(), StoreError> {
+        let pending = {
+            let r = self.begin_read()?;
+            let m = r.open_table(META)?;
+            let v = m.get(REWRITE_PENDING)?.map(|v| v.value());
+            v
+        };
+        if pending.is_none() {
+            return Ok(());
+        }
+        self.rewrite_file()?;
+        let w = self.begin_write()?;
+        w.open_table(META)?.remove(REWRITE_PENDING)?;
+        w.commit()?;
+        Ok(())
     }
 
     /// Test-only (feature `conformance`, off by default): from now on, commit without
     /// syncing the store file to disk. Everything in this process sees every commit as
     /// before; only a crash or a reopen of the file may lose them. For long in-process test
     /// runs (the undo spec's trace test), where a sync per change is most of the time.
-    #[cfg(feature = "conformance")]
+    #[cfg(any(feature = "conformance", feature = "differential"))]
     pub fn unsynced_for_tests(&self) {
         self.unsynced
             .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -1122,6 +1284,18 @@ impl DocStore {
         Ok(())
     }
 
+    /// Every client ID recorded for doc `id`, with its owner, in client order.
+    pub fn clients_of(&self, id: DocId) -> Result<Vec<(ClientId, String)>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(CLIENTS)?;
+        let mut out = Vec::new();
+        for e in t.range((id, 0)..=(id, u64::MAX))? {
+            let (k, v) = e?;
+            out.push((k.value().1, v.value().to_owned()));
+        }
+        Ok(out)
+    }
+
     pub fn client_owner(&self, id: DocId, client: ClientId) -> Result<Option<String>, StoreError> {
         let r = self.begin_read()?;
         Ok(r.open_table(CLIENTS)?
@@ -1377,6 +1551,24 @@ impl DocStore {
         v.map(|v| dec_approval(v.value())).transpose()
     }
 
+    /// The approval states of those of changes `seqs` made on someone's behalf, in one read
+    /// (blame's lookup: O(seqs), never the doc's whole approval table).
+    pub(crate) fn approvals_of(
+        &self,
+        id: DocId,
+        seqs: &std::collections::BTreeSet<Seq>,
+    ) -> Result<std::collections::HashMap<Seq, ApprovalState>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(APPROVALS)?;
+        let mut out = std::collections::HashMap::new();
+        for &seq in seqs {
+            if let Some(v) = t.get((id, seq))? {
+                out.insert(seq, dec_approval(v.value())?.state);
+            }
+        }
+        Ok(out)
+    }
+
     /// Every approval record of a doc, oldest change first.
     pub fn approvals(&self, id: DocId) -> Result<Vec<(Seq, Approval)>, StoreError> {
         let r = self.begin_read()?;
@@ -1475,6 +1667,73 @@ impl DocStore {
         w.commit()?;
         Ok(())
     }
+}
+
+/// The fuzz targets' entry point for the store's own record decoders (feature `fuzzing`):
+/// the names (one is the session's), and [`fuzz_record`]. Engine bytes inside a record (a snapshot's state, a log
+/// entry's update, a sync state) are carried, never decoded: no fuzzed byte reaches the
+/// engine.
+#[cfg(feature = "fuzzing")]
+pub(crate) const FUZZ_RECORDS: &[&str] = &[
+    "doc key",
+    "sync state",
+    "doc meta",
+    "log entry",
+    "approval",
+    "version",
+    "snapshot",
+    "change",
+    "change head",
+    "revert record",
+    "authored hunks",
+    "provenance row",
+    "revert index",
+    "revert carry",
+    "revert stats",
+    "carry taint",
+    "version head",
+    "blob space",
+    "blob row",
+    "blob version",
+    "blob sync",
+    // the session's (`session::disk`), routed by `crate::fuzzing`
+    "file stat",
+];
+
+/// Decode `b` as record `name` ([`FUZZ_RECORDS`]) and check the oracle
+/// ([`enc::fuzz_fixpoint`]); `None` for an unknown name. Panics on a violation.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_record(name: &str, b: &[u8]) -> Option<bool> {
+    use enc::fuzz_fixpoint as fx;
+    Some(match name {
+        "doc key" => fx(name, b, true, dec_doc_key, enc_doc_key),
+        "sync state" => fx(name, b, true, dec_sync, enc_sync),
+        "doc meta" => fx(name, b, false, dec_meta, enc_meta),
+        "log entry" => fx(name, b, false, dec_entry_full, |(e, red)| {
+            enc_entry_as(e, *red)
+        }),
+        "approval" => fx(name, b, false, dec_approval, enc_approval),
+        "version" => {
+            let ok = fx(name, b, false, dec_version_full, |(v, red)| {
+                enc_version_redacted(v, red)
+            });
+            // the version head reads the same header as the full record
+            if let Ok((v, red)) = dec_version_full(b) {
+                let h = history::fuzz_version_head(b)
+                    .unwrap_or_else(|e| panic!("version: the head refuses a record: {e:?}"));
+                assert_eq!(
+                    (h.seq, h.at_ms, h.reason, &h.name, &h.authors, &h.redacted),
+                    (v.seq, v.at_ms, v.reason, &v.name, &v.authors, &red),
+                    "version: the head differs from the full record"
+                );
+            }
+            ok
+        }
+        "snapshot" => fx(name, b, true, dec_snapshot, |(seq, st)| {
+            enc_snapshot(*seq, st)
+        }),
+        other => return history::fuzz_record(other, b).or_else(|| blob::fuzz_record(other, b)),
+    })
 }
 
 #[cfg(test)]

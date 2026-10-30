@@ -18,7 +18,10 @@ RUNREC lines, are parsed:
   * `### NAME [... Ns cap]: <summary>` lines (a summary of a run whose output went to a
     file) are parsed the same way, with cap_s = N;
   * enumerator: `SUMMARY key=value ...` (states, levels, violations, complete) followed by
-    `=== LABEL: exit RC, wall Ws`; the run is LABEL with spaces as underscores.
+    `=== LABEL: exit RC, wall Ws`; the run is LABEL with spaces as underscores. A BFS
+    violation's depth comes from `violation_depth`, or from an older binary's
+    `VIOLATION INV at depth D` line.
+  * TLC's worker count, from "Running ... with N worker(s) on ...", when the log has it.
 A name that repeats in one job gets `#2`, `#3`, ... in log order. Exit status: 0 on
 success, 2 if a log cannot be read (no file is written for that job).
 """
@@ -31,6 +34,8 @@ import subprocess
 import sys
 
 NUM = r"[0-9][0-9,]*"
+# enumerator modes that search level by level (a violation is at its least BFS depth)
+BFS_MODES = ("bfs", "bfsm", "cp")
 
 
 def num(s):
@@ -62,6 +67,7 @@ def tlc_record(lines, run=None, rc=None):
     last = None
     depth = None
     generated = None
+    workers = None
     for l in lines:
         if l.lstrip().startswith("trace "):
             continue  # a recipe's own trace summary of an earlier run
@@ -72,8 +78,15 @@ def tlc_record(lines, run=None, rc=None):
             viol = mv.group(0)
         elif l.startswith("Error:") and "behavior up to this point" not in l and err is None:
             err = l.strip()
-        if re.match(r"^State [0-9]+:", l):
-            trace += 1
+        # the trace length is its last state's number: helpers print a trace more than once
+        # (a grep of the log, then `grep -A3 ^Error`), so counting "State N:" lines overcounts;
+        # only states after this run's own violation line count
+        ms = re.match(r"^State ([0-9]+):", l)
+        if ms and viol is not None:
+            trace = max(trace, int(ms.group(1)))
+        mw = re.search(r" with ([0-9]+) workers? on ", l)
+        if mw and l.startswith("Running"):
+            workers = int(mw.group(1))
         if "distinct states found" in l:
             last = l
         m = re.search(r"depth of the complete state graph search is ([0-9]+)", l)
@@ -90,6 +103,8 @@ def tlc_record(lines, run=None, rc=None):
         generated = num(m.group(1)) if m else None
         progress = last.lstrip().startswith("Progress")
     rec = {"states": states, "depth": None, "queued": queued, "generated": generated}
+    if workers is not None:
+        rec["workers"] = workers
     if viol:
         # trace_states only from a full trace (helpers that print just "State 1:" truncate it)
         rec.update(status="VIOLATION", violation=viol, trace_states=trace if trace >= 2 else None, depth=depth)
@@ -126,6 +141,13 @@ def parse_log(text, job):
         m = re.match(r"^SUMMARY (.*)$", s)
         if m:
             kv = dict(re.findall(r"(\w+)=(\S+)", m.group(1)))
+            if "violation_depth" not in kv and kv.get("mode") in BFS_MODES:
+                # an older enumerator: its BFS prints "VIOLATION INV at depth D (after N states)"
+                for b in buf:
+                    mv = re.match(r"^VIOLATION \S+ at depth ([0-9]+)\b", b.strip())
+                    if mv:
+                        kv["violation_depth"] = mv.group(1)
+                        break
             pending_summary = kv
             continue
         m = re.match(r"^=== (tlc|live) (\S+).*?: exit (-?[0-9]+), wall ([0-9]+)s", s)
@@ -174,9 +196,12 @@ def parse_log(text, job):
                      "mode": kv.get("mode"), "source": "log"}
                 # "none", "" and an empty list ("[]") all mean no violation
                 if v.strip() not in ("none", "", "[]", "0"):
-                    vd = kv.get("violation_depth")
+                    # TLC's depth convention (README §1): a violation at BFS depth d (d steps
+                    # from the initial state) is a trace of d + 1 states, depth d + 1
+                    vd = num(kv.get("violation_depth")) if kv.get("violation_depth") not in (None, "-") else None
                     r.update(status="VIOLATION", violation=v,
-                             depth=num(vd) if vd and vd != "-" else None)
+                             depth=vd + 1 if vd is not None else None,
+                             trace_states=vd + 1 if vd is not None else None)
                 elif complete:
                     r["status"] = "COMPLETE"
                 else:
@@ -203,9 +228,9 @@ def parse_log(text, job):
             buf = []
             continue
         buf.append(line)
-    # a log with RUNREC lines: those are the TLC records (the parsed ones would repeat them)
-    if any(r.get("source") == "RUNREC" for r in recs):
-        recs = [r for r in recs if not (r.get("source") == "log" and r.get("tool") == "tlc")]
+    # a log with RUNREC lines from a tool: those are its records (parsed ones would repeat them)
+    tools = {r.get("tool") for r in recs if r.get("source") == "RUNREC"}
+    recs = [r for r in recs if not (r.get("source") == "log" and r.get("tool") in tools)]
     # unique names: #2, #3 in log order
     seen = {}
     for r in recs:

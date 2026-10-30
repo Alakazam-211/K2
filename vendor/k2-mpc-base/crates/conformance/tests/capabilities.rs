@@ -97,6 +97,7 @@ macro_rules! engine_suite {
                 hist_undo_partial = "hist.undo_partial",
                 hist_redo = "hist.redo",
                 hist_undo_own_only = "hist.undo_own_only",
+                hist_undo_own_only_tokens = "hist.undo_own_only_tokens",
             );
         }
     };

@@ -1,0 +1,21 @@
+MPC-E501 store_failed (store)
+exit:     6
+message:  store: {reason}
+next:     The doc store failed (disk full, fsync failed). Nothing was acknowledged or applied. Retry later; if it persists, the host's operator must free space or fix the disk.
+rule:     K-OFF-7
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E501",
+  "name": "store_failed",
+  "area": "store",
+  "exit": 6,
+  "message": "store: {reason}",
+  "next": "The doc store failed (disk full, fsync failed). Nothing was acknowledged or applied. Retry later; if it persists, the host's operator must free space or fix the disk.",
+  "rule": "K-OFF-7",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

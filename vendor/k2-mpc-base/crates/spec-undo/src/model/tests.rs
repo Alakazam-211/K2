@@ -10,7 +10,20 @@ fn e(s: usize, t: usize, i: &str) -> Edit {
     }
 }
 
+/// The worked cases of the U and O rules run on letters, one token each (D1 is the identity
+/// there, v1.10); D1's own cases set words.
+fn chars() -> Bounds {
+    Bounds {
+        tokens: k2_mpc_base::text::lines::Tokens::Chars,
+        ..Bounds::default()
+    }
+}
+
 fn one(text: &str) -> Model {
+    Model::new(vec![text.into()], 1, chars())
+}
+
+fn words(text: &str) -> Model {
     Model::new(vec![text.into()], 1, Bounds::default())
 }
 
@@ -192,7 +205,7 @@ fn undo_for_person() {
 
 #[test]
 fn write_base_rules() {
-    let mut m = Model::new(vec![String::new()], 1, Bounds::default());
+    let mut m = Model::new(vec![String::new()], 1, chars());
     m.write_base("a", None, 0, "", "x\n");
     let (o, h) = m.write_base("b", None, 0, "", "y\n");
     assert_eq!(o, Outcome::WriteConflict);
@@ -564,4 +577,160 @@ fn undo_twice_over_own_replacements_applies() {
         assert_eq!(m.texts[0], "a");
         assert_eq!(roots(&m), roots(&one("a")));
     }
+}
+
+// ---------- U3: person grouping ----------
+
+/// A keystroke at `at` by person `p` on connection 0 with token 1 at time `t`.
+fn key(m: &mut Model, p: &str, at: usize, s: &str, t: u64) -> GroupNote {
+    m.edit_grouped(p, false, 0, 1, t, vec![(0, vec![e(at, at, s)])])
+        .1
+}
+
+#[test]
+fn group_joins_and_undoes_as_one() {
+    let mut m = one("x\n");
+    assert_eq!(key(&mut m, "p", 1, "a", 0), GroupNote::New(vec![]));
+    assert_eq!(key(&mut m, "p", 2, "b", 10), GroupNote::Joined);
+    assert_eq!(key(&mut m, "p", 3, "c", 20), GroupNote::Joined);
+    assert_eq!(m.depths("p"), (1, 0));
+    assert_eq!(m.texts[0], "xabc\n");
+    // a revert record per change all the same (U22)
+    assert_eq!(m.records.len(), 3);
+    let (o, h) = m.undo("p", None, &all(1));
+    assert!(matches!(o, Outcome::Applied { steps: 1, .. }), "{o:?}");
+    assert!(!h.foreign_deleted);
+    assert_eq!(m.texts[0], "x\n");
+    m.redo("p", None, &all(1));
+    assert_eq!(m.texts[0], "xabc\n");
+    assert!(m.i1());
+}
+
+#[test]
+fn group_closers() {
+    // (a) idle: 500 ms or more
+    let mut m = one("");
+    key(&mut m, "p", 0, "a", 0);
+    assert_eq!(key(&mut m, "p", 1, "b", 499), GroupNote::Joined);
+    assert_eq!(
+        key(&mut m, "p", 2, "c", 999),
+        GroupNote::New(vec![Closer::Idle])
+    );
+    // (b) non-contiguous
+    let mut m = one("0123456789");
+    key(&mut m, "p", 2, "a", 0);
+    assert_eq!(
+        key(&mut m, "p", 8, "b", 1),
+        GroupNote::New(vec![Closer::NonContiguous])
+    );
+    // touching on the left is contiguous
+    assert_eq!(key(&mut m, "p", 8, "c", 2), GroupNote::Joined);
+    // (c) a boundary after a word character opens the next step; the word after it joins
+    let mut m = one("");
+    key(&mut m, "p", 0, "ab", 0);
+    assert_eq!(
+        key(&mut m, "p", 2, " ", 1),
+        GroupNote::New(vec![Closer::Boundary])
+    );
+    assert_eq!(key(&mut m, "p", 3, "c", 2), GroupNote::Joined);
+    assert_eq!(m.depths("p"), (2, 0));
+    // a space after a space is no boundary
+    assert_eq!(
+        key(&mut m, "p", 4, " ", 3),
+        GroupNote::New(vec![Closer::Boundary])
+    );
+    assert_eq!(key(&mut m, "p", 5, " ", 4), GroupNote::Joined);
+    // (d) a newline is a step of its own
+    let mut m = one("");
+    key(&mut m, "p", 0, " ", 0);
+    assert_eq!(
+        key(&mut m, "p", 1, "\n", 1),
+        GroupNote::New(vec![Closer::Newline])
+    );
+    assert_eq!(key(&mut m, "p", 2, "a", 2), GroupNote::New(vec![]));
+    // (e) another token, another connection, an edit without a token
+    let mut m = one("");
+    key(&mut m, "p", 0, "a", 0);
+    let n = m
+        .edit_grouped("p", false, 0, 2, 1, vec![(0, vec![e(1, 1, "b")])])
+        .1;
+    assert_eq!(n, GroupNote::New(vec![Closer::Token]));
+    let n = m
+        .edit_grouped("p", false, 1, 2, 2, vec![(0, vec![e(2, 2, "c")])])
+        .1;
+    assert_eq!(n, GroupNote::New(vec![Closer::Token]));
+    m.edit("p", None, vec![(0, vec![e(3, 3, "d")])]);
+    let n = m
+        .edit_grouped("p", false, 1, 2, 3, vec![(0, vec![e(4, 4, "e")])])
+        .1;
+    assert_eq!(n, GroupNote::New(vec![]));
+    // (f) an undo or redo, even of nothing
+    let mut m = one("");
+    key(&mut m, "p", 0, "a", 0);
+    m.redo("p", None, &all(1));
+    assert_eq!(key(&mut m, "p", 1, "b", 1), GroupNote::New(vec![]));
+    // (g) someone's change touching the span, not one away from it
+    let mut m = one("0123456789");
+    key(&mut m, "p", 2, "a", 0);
+    m.edit("q", None, vec![(0, vec![e(8, 9, "")])]);
+    assert_eq!(key(&mut m, "p", 3, "b", 1), GroupNote::Joined);
+    m.edit("q", None, vec![(0, vec![e(4, 4, "Q")])]);
+    assert_eq!(
+        key(&mut m, "p", 4, "c", 2),
+        GroupNote::New(vec![Closer::Foreign])
+    );
+    // agents never group
+    let mut m = one("");
+    let n = m
+        .edit_grouped("a", true, 0, 1, 0, vec![(0, vec![e(0, 0, "a")])])
+        .1;
+    assert_eq!(n, GroupNote::Agent);
+    let n = m
+        .edit_grouped("a", true, 0, 1, 1, vec![(0, vec![e(1, 1, "b")])])
+        .1;
+    assert_eq!(n, GroupNote::Agent);
+    assert_eq!(m.depths("a"), (2, 0));
+}
+
+#[test]
+fn group_that_undid_itself_leaves_no_step() {
+    let mut m = one("x");
+    key(&mut m, "p", 1, "ab", 0);
+    m.edit_grouped("p", false, 0, 1, 1, vec![(0, vec![e(2, 3, "")])]);
+    assert_eq!(m.depths("p"), (1, 0));
+    let n = m
+        .edit_grouped("p", false, 0, 1, 2, vec![(0, vec![e(1, 2, "")])])
+        .1;
+    assert_eq!(n, GroupNote::SelfUndone);
+    assert_eq!(m.depths("p"), (0, 0));
+    // deleting someone's text and typing it again is not nothing: the roots differ
+    let mut m = one("xyz");
+    m.edit_grouped("p", false, 0, 1, 0, vec![(0, vec![e(1, 2, "")])]);
+    let n = m
+        .edit_grouped("p", false, 0, 1, 1, vec![(0, vec![e(1, 1, "y")])])
+        .1;
+    assert_eq!(n, GroupNote::Joined);
+    m.undo("p", None, &all(1));
+    assert_eq!(m.texts[0], "xyz");
+    assert_eq!(
+        m.elems[0][1].prov,
+        Prov(0, 1),
+        "the import's y is back, by root"
+    );
+}
+
+/// A pinned spec-gap case (v1.10, the D1 amendment: a change is never built from someone
+/// else's text): the kit's `tests/undo_foreign_tokens.rs` on the oracle. Today's D1 keeps
+/// p16's `9` inside p14's replaced line, and p16's undo turns `p14:3169` into `p14:3167`; under
+/// the amendment p14 rewrites the whole token and p16's undo conflicts.
+#[test]
+fn d1_a_replace_never_keeps_foreign_tokens() {
+    let mut m = words("seed\n");
+    m.replace("p16", None, 0, "seed\np16:3027\n");
+    // p16 changes its own 7 to a 9 (its own text: one character)
+    m.replace("p16", None, 0, "seed\np16:3029\n");
+    m.replace("p14", None, 0, "seed\np14:3169\n");
+    let (o, _) = m.undo("p16", None, &all(1));
+    assert_eq!(m.texts[0], "seed\np14:3169\n", "p14's line is untouched");
+    assert!(matches!(o, Outcome::Conflicts { step: 1, .. }), "{o:?}");
 }

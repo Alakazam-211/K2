@@ -1,12 +1,38 @@
 //! The model check's mutants (spec §8 Mutants; `model::mutant`) at a tiny bound: each must
 //! violate the rule it breaks, at the depth given, on the enumerator; the oracle of record
 //! violates none of the rules the runs stop at. The same set fails TLC on `undo.qnt`
-//! (`tools/undo/counts.sh`, `PART=m`). Needs `--features mutants`; one in-process test, so one
-//! mutant is active at a time in this process (the enumerator test runs the binary).
+//! (`tools/undo/counts.sh`, `PART=m`). Needs `--features mutants`.
+//!
+//! One test per mutant (and per oracle bound), so a runner with a process per test (nextest)
+//! runs them in parallel. The active mutant is process-wide, so each test holds [`one_at_a_time`]
+//! while it runs: under `cargo test` (one process, several threads) they take turns. The
+//! enumerator test runs the binary and holds nothing.
 
+// the trace runner (shared with tests/traces.rs), for the D1 mutants' trace check
+#[allow(dead_code)]
+mod trace;
 use spec_undo::bounded::{bfs, Bound, STOP};
 use spec_undo::model::mutant::{self, Mutant};
 use spec_undo::model::{Bounds, Edit, Mode, Model, Outcome, Request};
+use std::sync::{Mutex, MutexGuard};
+
+/// The active mutant is process-wide: a test that sets one holds this for its whole run, and
+/// the guard puts the oracle of record back when the test ends (panicked or not).
+struct OneAtATime(#[allow(dead_code)] MutexGuard<'static, ()>);
+
+impl Drop for OneAtATime {
+    fn drop(&mut self) {
+        mutant::set(Mutant::None);
+    }
+}
+
+fn one_at_a_time() -> OneAtATime {
+    static LOCK: Mutex<()> = Mutex::new(());
+    // a test that failed while holding it leaves it poisoned; the others still run
+    let g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    mutant::set(Mutant::None);
+    OneAtATime(g)
+}
 
 fn tiny() -> Bound {
     Bound {
@@ -69,51 +95,132 @@ fn no_o4a_bound() -> Bound {
     }
 }
 
+/// The oracle of record violates none of the rules the runs stop at, at each mutant's bound.
+fn the_oracle_passes_at(b: Bound) {
+    let _one = one_at_a_time();
+    let clean = bfs(&b, false, STOP, false, |_, _| {});
+    assert!(
+        clean.violations.is_empty(),
+        "the oracle: {:?}",
+        clean.violations.keys().collect::<Vec<_>>()
+    );
+}
+
 #[test]
-fn every_mutant_fails_its_rule() {
-    let want: [(Mutant, &str, usize, Bound); 10] = [
-        (Mutant::NoTaint, "U9", 3, tiny()),
-        (Mutant::PartialHidesTaint, "U15", 3, tiny()),
-        (Mutant::RedoRetriesSkipped, "U17", 3, tiny()),
-        (Mutant::O5EveryWindowEnd, "O5", 3, tiny()),
-        (Mutant::O5RegionBase, "O5", 3, tiny()),
-        (Mutant::SkipU19, "U19", 1, tiny()),
-        // F3: the merge's sides found by diffing strings
-        (Mutant::Rediff, "own_only", 3, tiny()),
-        // v0.8.1's persisted carry: one taint flag per region
-        (Mutant::RestartSingleTaint, "RT", 4, restart_bound()),
-        // v1.8: O4 on element identity, no O4a
-        (Mutant::ProvenanceIgnored, "I1", 3, provenance_bound()),
-        // v1.9: O4 on roots, no O4a
-        (Mutant::NoO4a, "I1", 4, no_o4a_bound()),
+fn the_oracle_passes_at_the_tiny_bound() {
+    the_oracle_passes_at(tiny());
+}
+
+#[test]
+fn the_oracle_passes_at_the_restart_bound() {
+    the_oracle_passes_at(restart_bound());
+}
+
+#[test]
+fn the_oracle_passes_at_the_provenance_bound() {
+    the_oracle_passes_at(provenance_bound());
+}
+
+#[test]
+fn the_oracle_passes_at_the_no_o4a_bound() {
+    the_oracle_passes_at(no_o4a_bound());
+}
+
+/// Mutant `m` violates `rule` at `depth` on the enumerator at bound `b`.
+fn fails_its_rule(m: Mutant, rule: &str, depth: usize, b: Bound) {
+    let _one = one_at_a_time();
+    mutant::set(m);
+    let c = bfs(&b, false, STOP, true, |_, _| {});
+    let got: Vec<_> = c
+        .violations
+        .iter()
+        .filter(|(r, _)| STOP.contains(r))
+        .map(|(r, (d, _))| (*r, *d))
+        .collect();
+    eprintln!("{}: {got:?}", m.name());
+    assert!(
+        got.contains(&(rule, depth)),
+        "{}: wanted {rule} at depth {depth}, got {got:?}",
+        m.name()
+    );
+}
+
+#[test]
+fn no_taint_fails_u9() {
+    fails_its_rule(Mutant::NoTaint, "U9", 3, tiny());
+}
+
+#[test]
+fn partial_hides_taint_fails_u15() {
+    fails_its_rule(Mutant::PartialHidesTaint, "U15", 3, tiny());
+}
+
+#[test]
+fn redo_retries_skipped_fails_u17() {
+    fails_its_rule(Mutant::RedoRetriesSkipped, "U17", 3, tiny());
+}
+
+#[test]
+fn o5_every_window_end_fails_o5() {
+    fails_its_rule(Mutant::O5EveryWindowEnd, "O5", 3, tiny());
+}
+
+#[test]
+fn o5_region_base_fails_o5() {
+    fails_its_rule(Mutant::O5RegionBase, "O5", 3, tiny());
+}
+
+#[test]
+fn skip_u19_fails_u19() {
+    fails_its_rule(Mutant::SkipU19, "U19", 1, tiny());
+}
+
+/// F3: the merge's sides found by diffing strings.
+#[test]
+fn rediff_fails_own_only() {
+    fails_its_rule(Mutant::Rediff, "own_only", 3, tiny());
+}
+
+/// v0.8.1's persisted carry: one taint flag per region.
+#[test]
+fn restart_single_taint_fails_rt() {
+    fails_its_rule(Mutant::RestartSingleTaint, "RT", 4, restart_bound());
+}
+
+/// v1.8: O4 on element identity, no O4a.
+#[test]
+fn provenance_ignored_fails_i1() {
+    fails_its_rule(Mutant::ProvenanceIgnored, "I1", 3, provenance_bound());
+}
+
+/// v1.9: O4 on roots, no O4a.
+#[test]
+fn no_o4a_fails_i1() {
+    fails_its_rule(Mutant::NoO4a, "I1", 4, no_o4a_bound());
+}
+
+/// Every mutant of the model check has its test above (a new one fails this until it has).
+#[test]
+fn every_mutant_has_its_test() {
+    let tested = [
+        Mutant::NoTaint,
+        Mutant::PartialHidesTaint,
+        Mutant::RedoRetriesSkipped,
+        Mutant::O5EveryWindowEnd,
+        Mutant::O5RegionBase,
+        Mutant::SkipU19,
+        Mutant::Rediff,
+        Mutant::RestartSingleTaint,
+        Mutant::ProvenanceIgnored,
+        Mutant::NoO4a,
     ];
-    mutant::set(Mutant::None);
-    for b in [tiny(), restart_bound(), provenance_bound(), no_o4a_bound()] {
-        let clean = bfs(&b, false, STOP, false, |_, _| {});
+    for (name, m) in Mutant::ALL {
         assert!(
-            clean.violations.is_empty(),
-            "the oracle: {:?}",
-            clean.violations.keys().collect::<Vec<_>>()
+            tested.contains(&m),
+            "mutant {name} has no test in tests/mutants.rs"
         );
     }
-    for (m, rule, depth, b) in want {
-        mutant::set(m);
-        let c = bfs(&b, false, STOP, true, |_, _| {});
-        let got: Vec<_> = c
-            .violations
-            .iter()
-            .filter(|(r, _)| STOP.contains(r))
-            .map(|(r, (d, _))| (*r, *d))
-            .collect();
-        eprintln!("{}: {got:?}", m.name());
-        assert!(
-            got.contains(&(rule, depth)),
-            "{}: wanted {rule} at depth {depth}, got {got:?}",
-            m.name()
-        );
-    }
-    mutant::set(Mutant::None);
-    no_o4a_fails_i1_in_mid_text();
+    assert_eq!(Mutant::ALL.len(), tested.len());
 }
 
 fn e(start: usize, end: usize, insert: &str) -> Edit {
@@ -128,12 +235,18 @@ fn e(start: usize, end: usize, insert: &str) -> Edit {
 /// p1 inserts `a` at 1; p2 deletes the seed's `a` and replaces `b` (two regions); p1 undoes;
 /// p1 reverts p2's change, which puts the seed's `a` back outside the window of p2's first
 /// region. p2's `undo --partial` then puts the seed's `a` root back a second time: the oracle
-/// refuses it (O4a, blocked); without O4a it applies and I1 fails. Called from the one test
-/// (one mutant active at a time in this process).
+/// refuses it (O4a, blocked); without O4a it applies and I1 fails.
+#[test]
 fn no_o4a_fails_i1_in_mid_text() {
+    let _one = one_at_a_time();
     let run = |m: Mutant| {
         mutant::set(m);
-        let mut o = Model::new(vec!["ab".into()], 1, Bounds::default());
+        // letters, one token each, as the model check runs (D1 the identity, v1.10)
+        let chars = Bounds {
+            tokens: k2_mpc_base::text::lines::Tokens::Chars,
+            ..Bounds::default()
+        };
+        let mut o = Model::new(vec!["ab".into()], 1, chars);
         o.edit("p1", None, vec![(0, vec![e(1, 1, "a")])]); // "aab"
         o.edit("p2", None, vec![(0, vec![e(0, 1, ""), e(2, 3, "a")])]); // change 3: "aa"
         o.undo("p1", None, &Request::new(1, Mode::All)); // "a"
@@ -228,5 +341,19 @@ fn an_oracle_panic_ends_every_enumerator_mode_as_a_violation() {
             depth >= 2,
             "{mode}: an undo with something to undo: {summary}"
         );
+    }
+}
+
+/// D1's mutants (undo spec v1.10, outside `Mutant::ALL`) make the oracle disagree with the
+/// kit on some trace: each must be caught within 256 traces.
+#[test]
+fn d1_mutants_are_caught_by_the_traces() {
+    let _one = one_at_a_time();
+    for (name, m) in Mutant::D1 {
+        mutant::set(m);
+        let caught = (0..256u64).find(|&seed| trace::run(seed).mismatch.is_some());
+        mutant::set(Mutant::None);
+        let seed = caught.unwrap_or_else(|| panic!("{name}: no trace disagreed in 256"));
+        eprintln!("[mutants] {name}: caught by trace seed {seed}");
     }
 }

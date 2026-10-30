@@ -1,0 +1,21 @@
+MPC-E145 engine_panic (sessions and edits)
+exit:     2
+message:  the engine panicked on this input
+next:     The engine failed on this input and it was refused; the doc is unchanged. The editor should resync. Report it: it is a bug.
+rule:     K-SEC-4
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E145",
+  "name": "engine_panic",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "the engine panicked on this input",
+  "next": "The engine failed on this input and it was refused; the doc is unchanged. The editor should resync. Report it: it is a bug.",
+  "rule": "K-SEC-4",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

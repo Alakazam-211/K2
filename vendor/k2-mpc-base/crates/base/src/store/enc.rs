@@ -112,3 +112,30 @@ impl<'a> R<'a> {
         }
     }
 }
+
+/// The fuzz targets' oracle for one record kind (feature `fuzzing`): `dec` refuses `b`
+/// with [`StoreError::Corrupt`], or what it decodes re-encodes to bytes it decodes again,
+/// and re-encoding that gives the same bytes (a fixpoint). With `exact`, the encoding is
+/// canonical: the decoded record re-encodes to `b` itself. Panics on a violation (a
+/// finding); returns whether `b` decoded.
+#[cfg(feature = "fuzzing")]
+pub(crate) fn fuzz_fixpoint<T>(
+    what: &str,
+    b: &[u8],
+    exact: bool,
+    dec: impl Fn(&[u8]) -> Result<T, StoreError>,
+    enc: impl Fn(&T) -> Vec<u8>,
+) -> bool {
+    let x = match dec(b) {
+        Ok(x) => x,
+        Err(StoreError::Corrupt(_)) => return false,
+        Err(e) => panic!("{what}: refused with an error other than Corrupt: {e:?}"),
+    };
+    let e1 = enc(&x);
+    if exact {
+        assert_eq!(e1, b, "{what}: decoded, but re-encodes to other bytes");
+    }
+    let y = dec(&e1).unwrap_or_else(|e| panic!("{what}: re-encoded record refused: {e:?}"));
+    assert_eq!(enc(&y), e1, "{what}: re-encoding is not a fixpoint");
+    true
+}

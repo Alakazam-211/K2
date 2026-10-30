@@ -162,6 +162,50 @@ fn p3_agent(a: &mut BlobAgent<'_>) -> R {
     })
 }
 
+// ---------- P24: export ----------
+
+/// What an export observes: the bytes it wrote, the version and the codec flag.
+fn exported(
+    s: &crate::session::BlobSession,
+    copy: impl FnOnce(&mut Vec<u8>) -> Result<crate::session::FileCopy, SessionError>,
+) -> Result<(Vec<u8>, u64, crate::session::FileCodec), SessionError> {
+    let mut file = Vec::new();
+    let c = copy(&mut file)?;
+    let name = s.key()?.path;
+    let bytes = super::harness::export_through_registry(&name, &file, "as-is")
+        .map_err(|e| SessionError::BadEdit(format!("export: {e}")))?;
+    Ok((bytes, c.version, c.codec))
+}
+fn export_out(v: &VerbValue) -> Output {
+    match v {
+        VerbValue::Export {
+            bytes,
+            version,
+            codec,
+        } => Output::value((bytes, version, codec)),
+        v => other(v),
+    }
+}
+fn p24_now_person(p: &mut BlobPerson<'_>) -> R {
+    let c = p.conn()?;
+    let s = p.session();
+    person_step(exported(&s, |w| s.file_now_to(c, w)), Output::value)
+}
+fn p24_now_agent(a: &mut BlobAgent<'_>) -> R {
+    agent_step(a.verb(&["export"], b"")?, export_out)
+}
+fn p24_at_person(p: &mut BlobPerson<'_>) -> R {
+    let c = p.conn()?;
+    let s = p.session();
+    person_step(exported(&s, |w| s.file_at_to(c, 1, w)), Output::value)
+}
+fn p24_at_agent(a: &mut BlobAgent<'_>) -> R {
+    agent_step(
+        a.verb(&["export", "--version", "1", "--to", "as-is"], b"")?,
+        export_out,
+    )
+}
+
 // ---------- P6: who ----------
 
 fn p6_person(p: &mut BlobPerson<'_>) -> R {
@@ -549,13 +593,24 @@ pub fn kit_blob_cases(action: PersonAction) -> Vec<BlobCase> {
         )],
         P::Close => vec![c(action, "leave", "the tab closes", p2_person, p2_agent)],
         P::ReadAll => vec![c(action, "cat", "the file's bytes", p3_person, p3_agent)],
-        P::Export => vec![c(
-            action,
-            "cat",
-            "N/A: cat is the file's bytes",
-            p3_person,
-            p3_agent,
-        )],
+        P::Export => vec![
+            c(
+                action,
+                "export",
+                "the file now, as-is",
+                p24_now_person,
+                p24_now_agent,
+            )
+            .setup(sam_writes),
+            c(
+                action,
+                "export --version",
+                "the import, as-is",
+                p24_at_person,
+                p24_at_agent,
+            )
+            .setup(sam_writes),
+        ],
         P::Who => vec![c(action, "who", "the roster", p6_person, p6_agent).setup(sam_joins)],
         P::Rewrite => vec![
             c(action, "write", "--base V", p14_person, p14_agent).setup(mark_v),

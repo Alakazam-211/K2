@@ -1,0 +1,21 @@
+MPC-E150 unsupported_kind (sessions and edits)
+exit:     2
+message:  primitive {kind} is not implemented yet
+next:     This file type needs a primitive this build doesn't have; it can't open live.
+rule:     K-SCH-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E150",
+  "name": "unsupported_kind",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "primitive {kind} is not implemented yet",
+  "next": "This file type needs a primitive this build doesn't have; it can't open live.",
+  "rule": "K-SCH-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

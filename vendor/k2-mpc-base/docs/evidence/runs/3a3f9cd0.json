@@ -1,0 +1,53 @@
+{
+ "job": "3a3f9cd0",
+ "collected": "2026-10-28",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "3a3f9cd0",
+   "run": "soak_32",
+   "tool": "soak",
+   "status": "VIOLATION",
+   "secs": 600,
+   "calls": 117762,
+   "applied": 58269,
+   "version": 61197,
+   "restarts": 40,
+   "first_calls_per_s": 858,
+   "tail_calls_per_s": 78,
+   "slowdown_percent": 1105,
+   "max_slowdown_percent": 200,
+   "peak_rss_kb": 97464,
+   "peak_estimate_bytes": 42934280,
+   "shadow": false,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "3a3f9cd0",
+   "run": "soak_short",
+   "tool": "soak",
+   "status": "COMPLETE",
+   "secs": 5,
+   "calls": 5799,
+   "applied": 3122,
+   "version": 3202,
+   "restarts": 20,
+   "first_calls_per_s": 0,
+   "tail_calls_per_s": 0,
+   "slowdown_percent": 0,
+   "max_slowdown_percent": 200,
+   "peak_rss_kb": 15960,
+   "peak_estimate_bytes": 3016940,
+   "shadow": false,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

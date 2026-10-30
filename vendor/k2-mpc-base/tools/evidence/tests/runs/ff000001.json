@@ -1,6 +1,97 @@
-{"job": "ff000001", "collected": "2026-10-28", "from": "test fixture", "runs": [
- {"job": "ff000001", "run": "c_ok", "tool": "tlc", "status": "COMPLETE", "states": 5977, "depth": 5, "queued": 0, "cap_s": 180, "concurrent_restore_o4a": 12},
- {"job": "ff000001", "run": "p_cap", "tool": "tlc", "status": "PARTIAL", "states": 61233, "depth": null, "queued": 38383, "cap_s": 180},
- {"job": "ff000001", "run": "v_x", "tool": "tlc", "status": "VIOLATION", "states": 45, "depth": 5, "queued": 19, "cap_s": 60, "trace_states": 3},
- {"job": "ff000001", "run": "e_x", "tool": "tlc", "status": "ERROR", "states": 1, "depth": null, "queued": 1, "cap_s": 60}
-]}
+{
+ "job": "ff000001",
+ "collected": "2026-10-28",
+ "from": "test fixture",
+ "runs": [
+  {
+   "job": "ff000001",
+   "run": "c_ok",
+   "tool": "tlc",
+   "status": "COMPLETE",
+   "states": 5977,
+   "depth": 5,
+   "queued": 0,
+   "cap_s": 180,
+   "concurrent_restore_o4a": 12
+  },
+  {
+   "job": "ff000001",
+   "run": "p_cap",
+   "tool": "tlc",
+   "status": "PARTIAL",
+   "states": 61233,
+   "depth": null,
+   "queued": 38383,
+   "cap_s": 180
+  },
+  {
+   "job": "ff000001",
+   "run": "v_x",
+   "tool": "tlc",
+   "status": "VIOLATION",
+   "states": 45,
+   "depth": 5,
+   "queued": 19,
+   "cap_s": 60,
+   "trace_states": 3
+  },
+  {
+   "job": "ff000001",
+   "run": "e_x",
+   "tool": "tlc",
+   "status": "ERROR",
+   "states": 1,
+   "depth": null,
+   "queued": 1,
+   "cap_s": 60
+  },
+  {
+   "job": "ff000001",
+   "run": "v_w1",
+   "tool": "tlc",
+   "status": "VIOLATION",
+   "states": 33,
+   "depth": 4,
+   "queued": 28,
+   "cap_s": 60,
+   "workers": 1,
+   "trace_states": 4
+  },
+  {
+   "job": "ff000001",
+   "run": "v_auto",
+   "tool": "tlc",
+   "status": "VIOLATION",
+   "states": 63,
+   "depth": 5,
+   "queued": 50,
+   "cap_s": 60,
+   "workers": 16,
+   "trace_states": 5
+  },
+  {
+   "job": "ff000001",
+   "run": "e_bfs",
+   "tool": "enumerator",
+   "status": "VIOLATION",
+   "states": 40,
+   "depth": 4,
+   "queued": null,
+   "cap_s": null,
+   "mode": "bfsm",
+   "trace_states": 4
+  },
+  {
+   "job": "ff000001",
+   "run": "e_rs",
+   "tool": "enumerator",
+   "status": "VIOLATION",
+   "states": 12,
+   "depth": null,
+   "queued": null,
+   "cap_s": null,
+   "mode": "rs",
+   "trace_states": 6
+  }
+ ]
+}

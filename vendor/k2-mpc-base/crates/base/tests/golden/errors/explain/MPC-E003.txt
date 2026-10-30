@@ -1,0 +1,21 @@
+MPC-E003 export_limit (exports)
+exit:     2
+message:  export limit: {limit}
+next:     The export would pass a limit (details.limit: input or output bytes, pixels, pages, time). Nothing was placed. Export fewer pages or a smaller size, or ask the host's operator about the limit.
+rule:     X-LIM-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E003",
+  "name": "export_limit",
+  "area": "exports",
+  "exit": 2,
+  "message": "export limit: {limit}",
+  "next": "The export would pass a limit (details.limit: input or output bytes, pixels, pages, time). Nothing was placed. Export fewer pages or a smaller size, or ask the host's operator about the limit.",
+  "rule": "X-LIM-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

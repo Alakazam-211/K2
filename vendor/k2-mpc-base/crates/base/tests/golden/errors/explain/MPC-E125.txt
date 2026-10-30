@@ -1,0 +1,21 @@
+MPC-E125 replace_no_match (sessions and edits)
+exit:     1
+message:  replace: --old matches nothing in {doc}; nothing applied
+next:     The exact text in --old isn't in the doc (it matches byte for byte, with \n line breaks). stdout lists near misses. Read the lines again (cat -n, grep -n) and copy the text exactly; nothing was applied.
+rule:     A12 (exact replace)
+verbs:    replace
+status:   live
+--- json
+{
+  "id": "MPC-E125",
+  "name": "replace_no_match",
+  "area": "sessions and edits",
+  "exit": 1,
+  "message": "replace: --old matches nothing in {doc}; nothing applied",
+  "next": "The exact text in --old isn't in the doc (it matches byte for byte, with \\n line breaks). stdout lists near misses. Read the lines again (cat -n, grep -n) and copy the text exactly; nothing was applied.",
+  "rule": "A12 (exact replace)",
+  "verbs": ["replace"],
+  "returned_by": ["replace"],
+  "status": "live",
+  "since_or_until": null
+}

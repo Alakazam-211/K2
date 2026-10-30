@@ -1,0 +1,21 @@
+MPC-E602 purged_version (erasure)
+exit:     4
+message:  version {version} of doc {doc} was purged
+next:     An owner purged that version; its content is gone for good. Pick another version (log).
+rule:     K-PURGE-4
+verbs:    show --version; restore
+status:   live
+--- json
+{
+  "id": "MPC-E602",
+  "name": "purged_version",
+  "area": "erasure",
+  "exit": 4,
+  "message": "version {version} of doc {doc} was purged",
+  "next": "An owner purged that version; its content is gone for good. Pick another version (log).",
+  "rule": "K-PURGE-4",
+  "verbs": ["show --version", "restore"],
+  "returned_by": ["show --version", "restore"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -189,6 +189,13 @@ pub struct Branch {
 
     pub(crate) has_formatting: bool,
 
+    /// k2: a text's position markers ([crate::position_index]); `None` until its first indexed
+    /// lookup, and whenever a change the markers don't account for drops them.
+    pub(crate) markers: Option<Box<crate::position_index::Markers>>,
+
+    /// k2 (hardening)
+    pub(crate) collected: Option<ID>,
+
     pub(crate) observers: Observer<ObserveFn>,
 
     pub(crate) deep_observers: Observer<DeepObserveFn>,
@@ -232,13 +239,15 @@ impl Branch {
             observers: Observer::default(),
             deep_observers: Observer::default(),
             has_formatting: false,
+            markers: None,
+            collected: None,
         })
     }
 
     pub fn is_deleted(&self) -> bool {
         match self.item {
             Some(ptr) => ptr.is_deleted(),
-            None => false,
+            None => self.collected.is_some(),
         }
     }
 
@@ -247,9 +256,59 @@ impl Branch {
             BranchID::Nested(ptr.id)
         } else if let Some(name) = &self.name {
             BranchID::Root(name.clone())
+        } else if let Some(id) = self.collected {
+            BranchID::Nested(id)
         } else {
             unreachable!("Could not get ID for branch")
         }
+    }
+
+    /// k2: whether garbage collection collected this nested type (it was deleted, and its item
+    /// was collected). A handle to it keeps working: it reads as an empty, deleted type
+    /// ([Branch::is_deleted] is `true`), and writes to it are refused: a write that returns
+    /// nothing (or a `bool`/`Option`) is a no-op, and one that must return an integrated value
+    /// panics (each method says which).
+    ///
+    /// A collected branch stays allocated, empty, until the doc drops: about 256 bytes per
+    /// collected nested type (the branch itself, holding no other memory), for the life of
+    /// this `Doc` instance. Loading the doc again from its state starts from none.
+    pub fn is_collected(&self) -> bool {
+        self.collected.is_some()
+    }
+
+    /// k2 (hardening)
+    pub(crate) fn nested_id(&self) -> Option<ID> {
+        match self.item {
+            Some(ptr) => Some(ptr.id),
+            None => self.collected,
+        }
+    }
+
+    /// k2 (hardening)
+    pub(crate) fn refuse_write(&self) -> bool {
+        self.collected.is_some()
+    }
+
+    /// k2 (hardening)
+    pub(crate) fn assert_writable(&self) {
+        assert!(
+            self.collected.is_none(),
+            "a collected shared type can't be written"
+        );
+    }
+
+    /// k2 (hardening)
+    pub(crate) fn park(&mut self, id: ID) {
+        self.collected = Some(id);
+        self.item = None;
+        self.start = None;
+        self.map = HashMap::default();
+        self.block_len = 0;
+        self.content_len = 0;
+        self.has_formatting = false;
+        self.markers = None;
+        self.observers = Observer::default();
+        self.deep_observers = Observer::default();
     }
 
     pub fn as_subdoc(&self) -> Option<Doc> {

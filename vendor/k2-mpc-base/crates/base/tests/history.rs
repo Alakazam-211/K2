@@ -120,8 +120,24 @@ fn key(p: &str) -> DocKey {
     }
 }
 
+thread_local! {
+    /// This test's text is single letters, one token each (see [`letters`]).
+    static LETTERS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The undo rules' worked cases on single letters (`ab`, `aXb`, `abcdefghij`): every
+/// character a token, under which D1 (v1.10) is the identity, as in the oracle's worked
+/// cases. Under words, such a text is one token and D1 would rewrite the cases' setups.
+fn letters() {
+    LETTERS.with(|c| c.set(true));
+}
+
 fn pack() -> Arc<dyn Pack> {
-    Arc::new(MD)
+    if LETTERS.with(|c| c.get()) {
+        Arc::new(MD.with_tokens(k2_mpc_base::text::lines::Tokens::Chars))
+    } else {
+        Arc::new(MD)
+    }
 }
 
 fn person(pid: &str) -> Participant {
@@ -512,6 +528,41 @@ fn hist_undo_purge_clears() {
     assert_eq!(s.undo(a, 1).unwrap(), UndoOutcome::Nothing);
 }
 
+#[test]
+fn hist_undo_purge_notice_outlives_an_idle_absence() {
+    // U19: the notice is said on the holder's next undo, even after they left and the
+    // session's idle sweep forgot their (empty) stacks
+    let f = fx("purgeidle");
+    let s = f.open("c.md", b"one\n");
+    let a = f.join(&s, person("a"), Rights::editor());
+    let b = f.join(&s, person("b"), Rights::editor());
+    s.edit(
+        a,
+        vec![k2_mpc_base::Edit::Text {
+            root: ROOT.into(),
+            hunks: vec![k2_mpc_base::text::diff::Hunk {
+                start: 0,
+                end: 0,
+                insert: "zero\n".into(),
+            }],
+        }],
+        None,
+    )
+    .unwrap();
+    s.leave(a).unwrap();
+    s.clear_undo_history().unwrap();
+    f.host.advance(60_000);
+    s.expire_idle().unwrap();
+    let a = f.join(&s, person("a"), Rights::editor());
+    assert_eq!(s.undo(a, 1).unwrap(), UndoOutcome::ClearedByPurge);
+    assert_eq!(s.undo(a, 1).unwrap(), UndoOutcome::Nothing);
+    assert_eq!(
+        s.undo(b, 1).unwrap(),
+        UndoOutcome::Nothing,
+        "b held nothing"
+    );
+}
+
 // ---------- revert ----------
 
 #[test]
@@ -587,6 +638,7 @@ fn revert_record_taint_on_crossing_delete() {
 /// regions (Taint); C7a's revert missed the right one and, with `--partial`, applied it.
 #[test]
 fn revert_as_conservative_as_undo_at_a_crossed_shared_edge() {
+    letters();
     use k2_mpc_base::text::Hunk;
     use k2_mpc_base::Edit;
     let at = |s: usize, e: usize, t: &str| {
@@ -680,6 +732,7 @@ fn hist_revert_declined_after_restart() {
 /// after a restart the right region conflicted too.
 #[test]
 fn revert_after_restart_keeps_each_edges_taint() {
+    letters();
     use k2_mpc_base::text::Hunk;
     use k2_mpc_base::Edit;
     let at = |s: usize, e: usize, t: &str| {
@@ -867,6 +920,7 @@ fn applied(o: UndoOutcome) {
 /// A merge on diffed sides put p2's `b` after the region's own and deleted it.
 #[test]
 fn undo_exact_hunks_f3_insertion_at_a_region_start() {
+    letters();
     let f = fx("f3");
     let s = f.open("f3.md", b"ab");
     let p1 = f.join(&s, agent("p1"), Rights::editor());
@@ -916,6 +970,7 @@ fn undo_exact_hunks_repeated_lines() {
 /// replaced run: `aa` → p1 replaces the second `a` with `aa`, p2 types `a` in front of it.
 #[test]
 fn undo_exact_hunks_a_run() {
+    letters();
     let f = fx("run");
     let s = f.open("r.md", b"aa");
     let p1 = f.join(&s, agent("p1"), Rights::editor());
@@ -1016,6 +1071,7 @@ fn undo_after_a_foreign_edit_inside_and_its_undo_applies() {
 /// two would be different insertions, and at the doc's end both would land).
 #[test]
 fn concurrent_restores_of_one_root_keep_i1() {
+    letters();
     for (seed, at, tag) in [(&b"aXb"[..], 1, "mid"), (&b"aX"[..], 1, "end")] {
         for revert_first in [false, true] {
             let f = fx(&format!("i1-{tag}-{revert_first}"));
@@ -1069,6 +1125,7 @@ fn concurrent_restores_of_one_root_keep_i1() {
 /// O4a stops a second live `X`.
 #[test]
 fn o4a_refuses_a_live_root_at_the_doc_end() {
+    letters();
     let f = fx("o4a-end");
     let s = f.open("o.md", b"a");
     let a = f.join(&s, agent("a"), Rights::editor().with_owner(true));
@@ -1101,6 +1158,7 @@ fn o4a_refuses_a_live_root_at_the_doc_end() {
 /// doc's end both land, the fresh one first (theirs), each its own root.
 #[test]
 fn o4_a_fresh_identical_text_is_not_the_restored_root() {
+    letters();
     for (seed, tag) in [(&b"aXb"[..], "mid"), (&b"aX"[..], "end")] {
         let f = fx(&format!("o4-{tag}"));
         let s = f.open("o.md", seed);
@@ -1590,4 +1648,878 @@ fn log_lists_changes_and_versions_with_filters() {
     }
     s.set_approval(p, made, ApprovalState::Approved).unwrap();
     assert!(s.log(p, &LogQuery::default().pending()).unwrap().is_empty());
+}
+
+// ---------- person undo grouping (undo spec U3, K4; hist.undo_group_person) ----------
+//
+// Each closer as a scenario (a function that panics when the rule is broken, so the mutant
+// test can run it under a planted fault), then the trace class: seeded histories of a person
+// typing with group tokens (two connections), another person editing, idle gaps, undo and
+// redo, run on two sessions alike, one grouped and one not. An independent model of the
+// closers says how many of the ungrouped session's steps each grouped step is; every undo
+// and redo must give the same text on both, and every step must be the model's.
+
+mod group {
+    use super::*;
+    use k2_mpc_base::differential::{with_group_mutant, GroupMutant};
+    use k2_mpc_base::session::EditOptions;
+    use k2_mpc_base::text::Hunk;
+    use k2_mpc_base::Edit;
+    use rand::rngs::SmallRng;
+    use rand::{Rng, SeedableRng};
+
+    pub(super) fn ver(s: &Session, c: ConnId) -> u64 {
+        s.read(c).unwrap().version
+    }
+
+    /// A live edit (the hunk channel) at the doc's version, with `token` as its group.
+    pub(super) fn live(
+        s: &Session,
+        c: ConnId,
+        start: usize,
+        end: usize,
+        insert: &str,
+        token: Option<&str>,
+    ) {
+        let opts = token.map_or_else(EditOptions::new, |t| EditOptions::new().group(t));
+        let h = Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        };
+        let v = ver(s, c);
+        let r = s.edit_at_base(c, ROOT, v, vec![h], &opts).unwrap();
+        assert!(r.result.version > v, "the edit applied");
+    }
+
+    /// Type `chars` one keystroke each at the end of the text, all with `token`.
+    pub(super) fn type_end(s: &Session, c: ConnId, chars: &str, token: &str) {
+        for ch in chars.chars() {
+            let n = text(s, c).len();
+            live(s, c, n, n, &ch.to_string(), Some(token));
+        }
+    }
+
+    /// Undo one step and return the text after it (the undo must apply).
+    pub(super) fn undo1(s: &Session, c: ConnId) -> String {
+        applied(s.undo(c, 1).unwrap());
+        text(s, c)
+    }
+
+    pub(super) fn nothing(s: &Session, c: ConnId) {
+        assert_eq!(s.undo(c, 1).unwrap(), UndoOutcome::Nothing);
+    }
+
+    pub(super) fn one_person(tag: &str, seed: &[u8]) -> (Fx, Arc<Session>, ConnId) {
+        let f = fx(tag);
+        let s = f.open(&format!("{tag}.md"), seed);
+        let p = f.join(&s, person("p"), Rights::editor());
+        (f, s, p)
+    }
+
+    // --- the scenarios ---
+
+    /// Keystrokes with one token are one step, through both edit paths with a group
+    /// (`edit_at_base` and `edit_with_options`); redo puts the whole group back.
+    pub(super) fn typing_is_one_step() {
+        let (_f, s, p) = one_person("g-one", b"x\n");
+        type_end(&s, p, "abc", "input-1");
+        let opts = EditOptions::new().group("input-1");
+        s.edit_with_options(p, ROOT, &opts, |t| {
+            Ok::<_, std::convert::Infallible>(format!("{t}d"))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(text(&s, p), "x\nabcd");
+        assert_eq!(undo1(&s, p), "x\n");
+        nothing(&s, p);
+        applied(s.redo(p, 1).unwrap());
+        assert_eq!(text(&s, p), "x\nabcd");
+        assert_eq!(s.redo(p, 1).unwrap(), UndoOutcome::Nothing);
+        assert_eq!(undo1(&s, p), "x\n");
+    }
+
+    /// (a) idle on the host clock: [`Config::undo_group_idle_ms`] (1 s) after the group's
+    /// last edit closes it; a moment less doesn't.
+    pub(super) fn idle_closes() {
+        assert_eq!(Config::default().undo_group_idle_ms, 1_000);
+        let (f, s, p) = one_person("g-idle", b"");
+        type_end(&s, p, "ab", "t");
+        f.host.advance(999);
+        type_end(&s, p, "c", "t");
+        f.host.advance(1_000);
+        type_end(&s, p, "d", "t");
+        assert_eq!(undo1(&s, p), "abc");
+        assert_eq!(undo1(&s, p), "");
+        nothing(&s, p);
+        // 0: groups never merge
+        let mut c = config();
+        c.undo_group_idle_ms = 0;
+        let f = fx_with("g-idle0", c);
+        let s = f.open("z.md", b"");
+        let p = f.join(&s, person("p"), Rights::editor());
+        type_end(&s, p, "ab", "t");
+        assert_eq!(undo1(&s, p), "a");
+    }
+
+    /// (a) as the spec writes it (U3 (a): 500 ms), with `undo_group_idle_ms` set to 500:
+    /// 499 ms after the last edit joins, 500 ms closes.
+    pub(super) fn idle_closes_spec_500() {
+        let mut c = config();
+        c.undo_group_idle_ms = 500;
+        let f = fx_with("g-idle500", c);
+        let s = f.open("i.md", b"");
+        let p = f.join(&s, person("p"), Rights::editor());
+        type_end(&s, p, "ab", "t");
+        f.host.advance(499);
+        type_end(&s, p, "c", "t");
+        f.host.advance(500);
+        type_end(&s, p, "d", "t");
+        assert_eq!(undo1(&s, p), "abc");
+        assert_eq!(undo1(&s, p), "");
+        nothing(&s, p);
+    }
+
+    /// (b) a non-contiguous edit closes the group; a deletion touching it joins.
+    pub(super) fn non_contiguous_closes() {
+        // one imported token under words: the case is about grouping, so on letters (D1
+        // is the identity there)
+        letters();
+        let (_f, s, p) = one_person("g-far", b"0123456789");
+        live(&s, p, 10, 10, "a", Some("t"));
+        live(&s, p, 11, 11, "b", Some("t"));
+        live(&s, p, 2, 2, "x", Some("t")); // far away: a new step
+        live(&s, p, 3, 3, "y", Some("t"));
+        live(&s, p, 3, 5, "", Some("t")); // deletes `y2`: touches the step's span, joins
+        assert_eq!(text(&s, p), "01x3456789ab");
+        assert_eq!(undo1(&s, p), "0123456789ab");
+        assert_eq!(undo1(&s, p), "0123456789");
+        nothing(&s, p);
+    }
+
+    /// (c) a word boundary (a space or punctuation typed after a word character) starts the
+    /// next step; a space after a space doesn't.
+    pub(super) fn word_boundary_closes() {
+        let (_f, s, p) = one_person("g-word", b"");
+        type_end(&s, p, "hello  world, ok", "t");
+        assert_eq!(undo1(&s, p), "hello  world, ok".replace(", ok", ""));
+        assert_eq!(undo1(&s, p), "hello");
+        assert_eq!(undo1(&s, p), "");
+        nothing(&s, p);
+    }
+
+    /// (d) a newline is a step of its own.
+    pub(super) fn newline_closes() {
+        let (_f, s, p) = one_person("g-nl", b"");
+        type_end(&s, p, "ab\ncd", "t");
+        assert_eq!(undo1(&s, p), "ab\n");
+        assert_eq!(undo1(&s, p), "ab");
+        assert_eq!(undo1(&s, p), "");
+        nothing(&s, p);
+    }
+
+    /// (e) another token, an edit without one, the same person's other connection.
+    pub(super) fn token_and_connection_close() {
+        let (f, s, p) = one_person("g-tok", b"");
+        let p2 = f.join(&s, person("p"), Rights::editor());
+        type_end(&s, p, "ab", "t1");
+        type_end(&s, p, "cd", "t2");
+        let n = text(&s, p).len();
+        live(&s, p, n, n, "e", None);
+        type_end(&s, p, "f", "t2");
+        type_end(&s, p2, "g", "t2"); // same pid, another connection
+        type_end(&s, p, "h", "t2");
+        assert_eq!(text(&s, p), "abcdefgh");
+        for want in ["abcdefg", "abcdef", "abcde", "abcd", "ab", ""] {
+            assert_eq!(undo1(&s, p), want);
+        }
+        nothing(&s, p);
+    }
+
+    /// (f) an undo or redo closes the group, even one with nothing to do.
+    pub(super) fn undo_redo_close() {
+        let (_f, s, p) = one_person("g-undo", b"");
+        type_end(&s, p, "ab", "t");
+        assert_eq!(s.redo(p, 1).unwrap(), UndoOutcome::Nothing);
+        type_end(&s, p, "c", "t");
+        assert_eq!(undo1(&s, p), "ab");
+        applied(s.redo(p, 1).unwrap());
+        type_end(&s, p, "d", "t");
+        assert_eq!(undo1(&s, p), "abc");
+        assert_eq!(undo1(&s, p), "ab");
+        assert_eq!(undo1(&s, p), "");
+    }
+
+    /// (g) another participant's change inside the group's span, or touching it (here a
+    /// deletion just before it, and an insertion at its end), closes it in host apply order;
+    /// one elsewhere doesn't.
+    pub(super) fn foreign_change_closes() {
+        // q types inside p's word: under words D1 would make it q's; the case is about the
+        // closer, so on letters (D1 the identity)
+        letters();
+        // inside
+        let f = fx("g-in");
+        let s = f.open("in.md", b"x ");
+        let p = f.join(&s, person("p"), Rights::editor());
+        let q = f.join(&s, person("q"), Rights::editor());
+        type_end(&s, p, "ab", "t");
+        hunk_at(&s, q, 3, 3, "Z"); // x aZb
+        type_end(&s, p, "c", "t");
+        assert_eq!(undo1(&s, p), "x aZb");
+        // touching: a deletion ending at the span's start
+        let f = fx("g-touch");
+        let s = f.open("t.md", b"xy");
+        let p = f.join(&s, person("p"), Rights::editor());
+        let q = f.join(&s, person("q"), Rights::editor());
+        type_end(&s, p, "ab", "t");
+        hunk_at(&s, q, 1, 2, ""); // xab
+        type_end(&s, p, "c", "t");
+        assert_eq!(undo1(&s, p), "xab");
+        assert_eq!(undo1(&s, p), "x");
+        // touching: an insertion at the span's end
+        let f = fx("g-end");
+        let s = f.open("e.md", b"");
+        let p = f.join(&s, person("p"), Rights::editor());
+        let q = f.join(&s, person("q"), Rights::editor());
+        type_end(&s, p, "ab", "t");
+        hunk_at(&s, q, 2, 2, "Z");
+        live(&s, p, 3, 3, "c", Some("t"));
+        assert_eq!(undo1(&s, p), "abZ");
+        // elsewhere (not touching): still one step
+        let f = fx("g-away");
+        let s = f.open("w.md", b"top\n\n");
+        let p = f.join(&s, person("p"), Rights::editor());
+        let q = f.join(&s, person("q"), Rights::editor());
+        type_end(&s, p, "ab", "t");
+        hunk_at(&s, q, 0, 0, "Q");
+        type_end(&s, p, "cd", "t");
+        assert_eq!(undo1(&s, p), "Qtop\n\n");
+        nothing(&s, p);
+    }
+
+    /// Agents never group: one verb, one step, whatever token they pass.
+    pub(super) fn agents_never_group() {
+        let f = fx("g-agent");
+        let s = f.open("a.md", b"");
+        let a = f.join(&s, agent("a"), Rights::editor());
+        type_end(&s, a, "ab", "t");
+        assert_eq!(undo1(&s, a), "a");
+    }
+
+    /// A group that undid itself (typed, then deleted with the same token) leaves nothing to
+    /// undo; the step before it is still there.
+    pub(super) fn self_undone_group_leaves_nothing() {
+        let (_f, s, p) = one_person("g-noop", b"");
+        type_end(&s, p, "x ", "t0");
+        type_end(&s, p, "ab", "t");
+        live(&s, p, 3, 4, "", Some("t"));
+        live(&s, p, 2, 3, "", Some("t"));
+        assert_eq!(text(&s, p), "x ");
+        assert_eq!(undo1(&s, p), "x");
+        assert_eq!(undo1(&s, p), "");
+        nothing(&s, p);
+    }
+
+    /// A group that runs into someone else's text: its undo puts back exactly the elements
+    /// it removed (by root, U23) and removes only its own (U10a, I1); then their undo
+    /// applies cleanly.
+    pub(super) fn group_over_others_text() {
+        let f = fx("g-over");
+        let s = f.open("o.md", b"");
+        let p = f.join(&s, person("p"), Rights::editor());
+        let q = f.join(&s, agent("q"), Rights::editor());
+        hunk_at(&s, q, 0, 0, "XY");
+        live(&s, p, 1, 1, "a", Some("t"));
+        live(&s, p, 2, 2, "b", Some("t"));
+        live(&s, p, 3, 4, "", Some("t")); // deletes q's `Y`: touches the span's end
+        live(&s, p, 0, 1, "", Some("t")); // and q's `X`, touching its start
+        assert_eq!(text(&s, p), "ab");
+        own_only(&s, "p", || applied(s.undo(p, 1).unwrap()));
+        assert_eq!(text(&s, p), "XY");
+        assert_i1(&s);
+        assert!(root_pids(&s).iter().all(|(_, r)| r.as_deref() != Some("p")));
+        applied(s.undo(q, 1).unwrap());
+        assert_eq!(text(&s, q), "");
+        nothing(&s, p);
+    }
+
+    #[test]
+    fn hist_undo_group_person_typing_is_one_step() {
+        typing_is_one_step();
+    }
+    #[test]
+    fn hist_undo_group_person_idle_closes() {
+        idle_closes();
+    }
+    #[test]
+    fn hist_undo_group_person_idle_closes_spec_500() {
+        idle_closes_spec_500();
+    }
+    #[test]
+    fn hist_undo_group_person_non_contiguous_closes() {
+        non_contiguous_closes();
+    }
+    #[test]
+    fn hist_undo_group_person_word_boundary_closes() {
+        word_boundary_closes();
+    }
+    #[test]
+    fn hist_undo_group_person_newline_closes() {
+        newline_closes();
+    }
+    #[test]
+    fn hist_undo_group_person_token_and_connection_close() {
+        token_and_connection_close();
+    }
+    #[test]
+    fn hist_undo_group_person_undo_redo_close() {
+        undo_redo_close();
+    }
+    #[test]
+    fn hist_undo_group_person_foreign_change_closes() {
+        foreign_change_closes();
+    }
+    #[test]
+    fn hist_undo_group_person_agents_never_group() {
+        agents_never_group();
+    }
+    #[test]
+    fn hist_undo_group_person_self_undone_group_leaves_nothing() {
+        self_undone_group_leaves_nothing();
+    }
+    #[test]
+    fn hist_undo_group_person_over_others_text() {
+        group_over_others_text();
+    }
+
+    // --- the trace class ---
+
+    fn env(name: &str, default: u64) -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
+    }
+
+    fn word(c: char) -> bool {
+        c.is_alphanumeric() || c == '_'
+    }
+
+    fn boundary(c: char) -> bool {
+        c.is_whitespace() || c.is_ascii_punctuation()
+    }
+
+    /// The model of one grouped step, as plain strings (no element IDs): its window `s..e`
+    /// in the live text, holding `after` (on the undo stack) or `before` (on the redo
+    /// stack), and whether any change since touched it (inside or at an edge). An untouched
+    /// step's undo (redo) must give exactly the live text with the window replaced by
+    /// `before` (`after`): undoing a group returns its window to what it was before the
+    /// group's first edit.
+    #[derive(Debug, Clone)]
+    struct G {
+        s: usize,
+        e: usize,
+        before: String,
+        after: String,
+        clean: bool,
+        /// Bytes of older text the group took (0 and an empty window: it undid itself).
+        took: usize,
+    }
+
+    impl G {
+        /// Carry through one change's hunk (in the coordinates before it).
+        fn carry(&mut self, h: &Hunk) {
+            if h.start <= self.e && h.end >= self.s {
+                self.clean = false;
+            } else if h.end < self.s {
+                let d = h.insert.len() as isize - (h.end - h.start) as isize;
+                self.s = (self.s as isize + d) as usize;
+                self.e = (self.e as isize + d) as usize;
+            }
+        }
+    }
+
+    /// The closers' model (U3): the grouped person's undo and redo stacks and the open
+    /// group (the top of `undo`, with its token and last edit's time).
+    #[derive(Default)]
+    struct Model {
+        undo: Vec<G>,
+        redo: Vec<G>,
+        open: Option<(u32, u64)>,
+    }
+
+    impl Model {
+        /// Carry every step through a change's hunks, `skip_top` leaving the top of the undo
+        /// stack alone (the open group taking its own edit).
+        fn carry(&mut self, hunks: &[Hunk], skip_top: bool) {
+            let n = self.undo.len();
+            for (k, g) in self.undo.iter_mut().enumerate() {
+                if skip_top && k + 1 == n {
+                    continue;
+                }
+                let mut shift: isize = 0;
+                for h in hunks {
+                    let h = Hunk {
+                        start: (h.start as isize + shift) as usize,
+                        end: (h.end as isize + shift) as usize,
+                        insert: h.insert.clone(),
+                    };
+                    shift += h.insert.len() as isize - (h.end - h.start) as isize;
+                    g.carry(&h);
+                }
+            }
+            for g in self.redo.iter_mut() {
+                let mut shift: isize = 0;
+                for h in hunks {
+                    let h = Hunk {
+                        start: (h.start as isize + shift) as usize,
+                        end: (h.end as isize + shift) as usize,
+                        insert: h.insert.clone(),
+                    };
+                    shift += h.insert.len() as isize - (h.end - h.start) as isize;
+                    g.carry(&h);
+                }
+            }
+        }
+
+        /// Someone else's change, or the person's other connection's: closes the open group
+        /// when it touches its span (U3 (g)); every step carried.
+        fn other(&mut self, hunks: &[Hunk]) {
+            self.carry(hunks, false);
+            if self.undo.last().is_some_and(|g| !g.clean) {
+                self.open = None;
+            }
+        }
+
+        /// The person's grouped edit `h` on `text` (`after_text`: the text after it), at
+        /// `now`, with `token`. Returns true when the group undid itself (no step left).
+        fn typed(&mut self, text: &str, after_text: &str, h: &Hunk, token: u32, now: u64) -> bool {
+            self.redo.clear();
+            let mut prev = text[..h.start].chars().next_back();
+            let (mut nl, mut bounded) = (false, false);
+            for c in h.insert.chars() {
+                nl |= c == '\n';
+                bounded |= boundary(c) && prev.is_some_and(word);
+                prev = Some(c);
+            }
+            let join = !nl
+                && !bounded
+                && matches!(self.open, Some((t, last)) if t == token && now - last < 1_000)
+                && self
+                    .undo
+                    .last()
+                    .is_some_and(|g| g.clean && h.start <= g.e && h.end >= g.s);
+            let grow = h.insert.len() as isize - (h.end - h.start) as isize;
+            if join {
+                self.carry(std::slice::from_ref(h), true);
+                let g = self.undo.last_mut().unwrap();
+                let s = g.s.min(h.start);
+                let e1 = g.e.max(h.end);
+                // the window before the edit, with the group's own part turned back
+                let before = format!("{}{}{}", &text[s..g.s], g.before, &text[g.e..e1]);
+                let e = (e1 as isize + grow) as usize;
+                g.took += g.s.saturating_sub(h.start) + h.end.saturating_sub(g.e);
+                (g.s, g.e, g.before) = (s, e, before);
+                g.after = after_text[s..e].to_owned();
+                self.open = Some((token, now));
+                if g.s == g.e && g.took == 0 {
+                    assert!(g.before.is_empty());
+                    self.undo.pop();
+                    self.open = None;
+                    return true;
+                }
+            } else {
+                self.carry(std::slice::from_ref(h), false);
+                self.undo.push(G {
+                    s: h.start,
+                    e: h.start + h.insert.len(),
+                    before: text[h.start..h.end].to_owned(),
+                    after: h.insert.clone(),
+                    clean: true,
+                    took: h.end - h.start,
+                });
+                self.open = Some((token, now));
+            }
+            if nl {
+                self.open = None;
+            }
+            false
+        }
+    }
+
+    #[derive(Default, Debug)]
+    struct Counts {
+        traces: u64,
+        typed: u64,
+        joined: u64,
+        self_undone: u64,
+        undos_exact: u64,
+        redos_exact: u64,
+        undos_other: u64,
+        conflicts: u64,
+        groups_unwound: u64,
+    }
+
+    /// One history, `steps` long, on one session: a person typing with group tokens through
+    /// the hunk channel (connection 1), the same person's other connection and another
+    /// person editing, idle gaps, undo and redo. `Err` on any difference from the model.
+    fn trace(seed: u64, steps: usize, n: &mut Counts) -> Result<(), String> {
+        // the string model has no authors: on letters, where D1 (v1.10) is the identity (the
+        // oracle's grouping class covers D1 with grouping on words: spec-undo's traces)
+        letters();
+        let mut rng = SmallRng::seed_from_u64(seed);
+        let init = ["", "x\n", "ab cd\n\nef"][rng.gen_range(0..3)];
+        let f = fx(&format!("g-trace-{seed}"));
+        let s = f.open("t.md", init.as_bytes());
+        let p1 = f.join(&s, person("p"), Rights::editor());
+        let p2 = f.join(&s, person("p"), Rights::editor());
+        let q = f.join(&s, person("q"), Rights::editor());
+        let events = s.subscribe(q).unwrap();
+        let mut m = Model::default();
+        let mut token = 0u32;
+        let mut caret = init.len();
+        let mut log: Vec<String> = Vec::new();
+        let drain = |m: &mut Model, own: bool| {
+            let evs: Vec<_> = events.try_iter().collect();
+            if !own {
+                for ev in &evs {
+                    m.carry(&ev.hunks, false);
+                }
+            }
+            evs
+        };
+        // one undo or redo of the top grouped step, checked against the model
+        let step = |m: &mut Model, redo: bool, log: &mut Vec<String>, n: &mut Counts| {
+            m.open = None;
+            let live0 = text(&s, p1);
+            let top = if redo { m.redo.pop() } else { m.undo.pop() };
+            let o = if redo {
+                s.redo(p1, 1).unwrap()
+            } else {
+                s.undo(p1, 1).unwrap()
+            };
+            let live1 = text(&s, p1);
+            log.push(format!(
+                "{} {top:?}: {o:?} -> {live1:?}",
+                if redo { "redo" } else { "undo" }
+            ));
+            let Some(mut g) = top else {
+                return match o {
+                    UndoOutcome::Nothing => Ok(true),
+                    o => Err(format!(
+                        "the model has no step, the session: {o:?}\n{log:#?}"
+                    )),
+                };
+            };
+            let applied = matches!(o, UndoOutcome::Applied { steps: 1, .. });
+            if !applied && !matches!(o, UndoOutcome::Conflicts { .. }) {
+                return Err(format!("{o:?}\n{log:#?}"));
+            }
+            let (from, to) = if redo {
+                (&g.before, &g.after)
+            } else {
+                (&g.after, &g.before)
+            };
+            if g.clean {
+                if live0.get(g.s..g.e) != Some(from.as_str()) {
+                    return Err(format!("model window {:?} not in {live0:?}\n{log:#?}", g));
+                }
+                let want = format!("{}{to}{}", &live0[..g.s], &live0[g.e..]);
+                if !applied || live1 != want {
+                    return Err(format!(
+                        "an untouched step: want {want:?}, got {o:?} {live1:?}\n{log:#?}"
+                    ));
+                }
+                if redo {
+                    n.redos_exact += 1;
+                } else {
+                    n.undos_exact += 1;
+                }
+            } else if !applied {
+                n.conflicts += 1;
+                if live1 != live0 {
+                    return Err(format!("a conflict changed the text\n{log:#?}"));
+                }
+                // it stays where it was
+                if redo {
+                    m.redo.push(g);
+                } else {
+                    m.undo.push(g);
+                }
+                drain(m, false);
+                return Ok(false);
+            } else {
+                n.undos_other += 1;
+            }
+            // the step's own change: every other step carried through it
+            let evs = drain(m, false);
+            if evs.len() > 1 || (evs.is_empty() && (g.clean || live1 != live0)) {
+                return Err(format!("one step, {} changes\n{log:#?}", evs.len()));
+            }
+            if g.clean {
+                g.e = g.s + to.len();
+            }
+            if redo {
+                m.undo.push(g);
+            } else {
+                m.redo.push(g);
+            }
+            Ok(true)
+        };
+        for _ in 0..steps {
+            let live_text = text(&s, p1);
+            let r = rng.gen_range(0..100);
+            if r < 60 {
+                // the person types (or deletes) at the caret, mostly; one keystroke
+                if rng.gen_bool(0.1) {
+                    token += 1;
+                }
+                if rng.gen_bool(0.15) || caret > live_text.len() {
+                    caret = rng.gen_range(0..=live_text.len());
+                    while !live_text.is_char_boundary(caret) {
+                        caret -= 1;
+                    }
+                }
+                let back = rng.gen_bool(0.2) && caret > 0;
+                let fwd = !back && rng.gen_bool(0.08) && caret < live_text.len();
+                let h = if back || fwd {
+                    // backspace or forward delete, one character or up to three
+                    let k = if rng.gen_bool(0.7) {
+                        1
+                    } else {
+                        rng.gen_range(2..=3)
+                    };
+                    let (mut s0, mut e0) = (caret, caret);
+                    for _ in 0..k {
+                        if back && s0 > 0 {
+                            s0 -= 1;
+                            while !live_text.is_char_boundary(s0) {
+                                s0 -= 1;
+                            }
+                        } else if fwd && e0 < live_text.len() {
+                            e0 += 1;
+                            while !live_text.is_char_boundary(e0) {
+                                e0 += 1;
+                            }
+                        }
+                    }
+                    Hunk {
+                        start: s0,
+                        end: e0,
+                        insert: String::new(),
+                    }
+                } else {
+                    let ins: String = (0..rng.gen_range(1..=2))
+                        .map(|_| ['a', 'b', 'a', ' ', ',', '\n'][rng.gen_range(0..6)])
+                        .collect();
+                    Hunk {
+                        start: caret,
+                        end: caret,
+                        insert: ins,
+                    }
+                };
+                let now = f.host.now_ms();
+                let tok = format!("t{token}");
+                live(&s, p1, h.start, h.end, &h.insert, Some(&tok));
+                drain(&mut m, true);
+                n.typed += 1;
+                let depth = m.undo.len();
+                let after_text = text(&s, p1);
+                if m.typed(&live_text, &after_text, &h, token, now) {
+                    n.self_undone += 1;
+                } else if m.undo.len() == depth {
+                    n.joined += 1;
+                }
+                caret = h.start + h.insert.len();
+                log.push(format!("p types {h:?} ({tok}, t={now})"));
+            } else if r < 75 {
+                // someone else, or the person's other connection
+                let (who, c) = if rng.gen_bool(0.75) {
+                    ("q", q)
+                } else {
+                    ("p2", p2)
+                };
+                let h = if rng.gen_bool(0.6) || live_text.is_empty() {
+                    let mut at = rng.gen_range(0..=live_text.len());
+                    while !live_text.is_char_boundary(at) {
+                        at -= 1;
+                    }
+                    Hunk {
+                        start: at,
+                        end: at,
+                        insert: ["X", "Y", "Z "][rng.gen_range(0..3)].into(),
+                    }
+                } else {
+                    let mut at = rng.gen_range(0..live_text.len());
+                    while !live_text.is_char_boundary(at) {
+                        at -= 1;
+                    }
+                    let len = live_text[at..].chars().next().unwrap().len_utf8();
+                    Hunk {
+                        start: at,
+                        end: at + len,
+                        insert: String::new(),
+                    }
+                };
+                let e = Edit::Text {
+                    root: ROOT.into(),
+                    hunks: vec![h.clone()],
+                };
+                s.edit(c, vec![e], None).unwrap();
+                drain(&mut m, true);
+                m.other(std::slice::from_ref(&h));
+                if who == "p2" {
+                    // the same person's stack: a step of its own, closing the group (e)
+                    m.redo.clear();
+                    m.undo.push(G {
+                        s: h.start,
+                        e: h.start + h.insert.len(),
+                        before: live_text[h.start..h.end].to_owned(),
+                        after: h.insert.clone(),
+                        clean: true,
+                        took: h.end - h.start,
+                    });
+                    m.open = None;
+                }
+                if caret >= h.end {
+                    caret = caret + h.insert.len() - (h.end - h.start);
+                } else if caret > h.start {
+                    caret = h.start;
+                }
+                log.push(format!("{who} edits {h:?}"));
+            } else if r < 87 {
+                let gap = if rng.gen_bool(0.2) {
+                    rng.gen_range(900..1_500)
+                } else {
+                    rng.gen_range(0..400)
+                };
+                f.host.advance(gap);
+                log.push(format!("+{gap} ms"));
+            } else {
+                let redo = r >= 95;
+                // an undo is often taken back at once (Ctrl+Z, Ctrl+Shift+Z)
+                if step(&mut m, redo, &mut log, n)? && !redo && rng.gen_bool(0.3) {
+                    step(&mut m, true, &mut log, n)?;
+                }
+                caret = caret.min(text(&s, p1).len());
+            }
+        }
+        // unwind: every grouped step is the model's, down to an empty stack
+        while !m.undo.is_empty() {
+            if !step(&mut m, false, &mut log, n)? {
+                // blocked: drop it, as Ctrl+Z's "skip this change" does
+                let o = s
+                    .undo_with(p1, &UndoRequest::default().mode(UndoMode::Drop))
+                    .unwrap();
+                if !matches!(o, UndoOutcome::Dropped { .. }) {
+                    return Err(format!("drop: {o:?}\n{log:#?}"));
+                }
+                m.undo.pop();
+            }
+            n.groups_unwound += 1;
+        }
+        let o = s.undo(p1, 1).unwrap();
+        if o != UndoOutcome::Nothing {
+            return Err(format!(
+                "the model's stack is empty, the session's: {o:?}\n{log:#?}"
+            ));
+        }
+        n.traces += 1;
+        Ok(())
+    }
+
+    /// The trace class of `hist.undo_group_person` (U3; the undo spec's §8 class "grouping
+    /// with the (g) split", on the kit against a string model): `GROUP_TRACES` histories
+    /// (default 96; ≥ 10^4 on a node), `GROUP_STEPS` steps each (default 60).
+    #[test]
+    fn hist_undo_group_person_traces() {
+        let traces = env("GROUP_TRACES", 96);
+        let steps = env("GROUP_STEPS", 60) as usize;
+        let seed = env("GROUP_SEED", 0x6b34);
+        let t0 = std::time::Instant::now();
+        let mut n = Counts::default();
+        for i in 0..traces {
+            if let Err(e) = trace(seed + i, steps, &mut n) {
+                panic!("trace seed {}: {e}", seed + i);
+            }
+        }
+        eprintln!("[group traces] {n:?}");
+        assert!(
+            n.joined > 0 && n.undos_exact > 0 && n.redos_exact > 0 && n.self_undone > 0,
+            "{n:?}"
+        );
+        eprintln!(
+            "RUNREC {{\"job\":null,\"run\":\"undo_group_traces\",\"tool\":\"history\",\"status\":\"COMPLETE\",\"traces\":{},\"steps\":{steps},\"typed\":{},\"joined\":{},\"self_undone\":{},\"undos_exact\":{},\"redos_exact\":{},\"undos_other\":{},\"conflicts\":{},\"groups_unwound\":{},\"seed\":{seed},\"wall_s\":{}}}",
+            n.traces,
+            n.typed,
+            n.joined,
+            n.self_undone,
+            n.undos_exact,
+            n.redos_exact,
+            n.undos_other,
+            n.conflicts,
+            n.groups_unwound,
+            t0.elapsed().as_secs()
+        );
+    }
+
+    /// The planted faults ([`GroupMutant`]) are each caught: by their closer's scenario and
+    /// by the trace class (within `GROUP_MUTANT_TRACES` histories, default 96); the catching
+    /// history passes without the fault.
+    #[test]
+    fn hist_undo_group_person_mutants_are_caught() {
+        let traces = env("GROUP_MUTANT_TRACES", 96);
+        let all: [(GroupMutant, &str, fn()); 3] = [
+            (
+                GroupMutant::NeverClosesOnForeign,
+                "never_closes_on_foreign",
+                foreign_change_closes,
+            ),
+            (
+                GroupMutant::NeverClosesOnIdle,
+                "never_closes_on_idle",
+                idle_closes,
+            ),
+            (
+                GroupMutant::NeverClosesOnBoundary,
+                "never_closes_on_boundary",
+                word_boundary_closes,
+            ),
+        ];
+        // (a planted fault's panics print; the panic hook is the process's, so it is left be)
+        let quiet = |f: &dyn Fn() -> bool| f();
+        for (m, name, scenario) in all {
+            let caught =
+                quiet(&|| with_group_mutant(m, || std::panic::catch_unwind(scenario).is_err()));
+            assert!(caught, "{name}: its scenario passes with the fault planted");
+            let mut hit = None;
+            for i in 0..traces {
+                let seed = 9_000_000 + i;
+                let failed = quiet(&|| {
+                    with_group_mutant(m, || {
+                        let mut n = Counts::default();
+                        !matches!(
+                            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                trace(seed, 60, &mut n)
+                            })),
+                            Ok(Ok(()))
+                        )
+                    })
+                });
+                if failed {
+                    hit = Some(seed);
+                    break;
+                }
+            }
+            let seed = hit.unwrap_or_else(|| panic!("{name}: no trace catches it in {traces}"));
+            let mut n = Counts::default();
+            if let Err(e) = trace(seed, 60, &mut n) {
+                panic!("{name}: trace {seed} fails without the fault too: {e}");
+            }
+            eprintln!("[group mutant {name}] caught by its scenario and by trace {seed}");
+            eprintln!(
+                "RUNREC {{\"job\":null,\"run\":\"undo_group_mutant_{name}\",\"tool\":\"history\",\"status\":\"CAUGHT\",\"trace_seed\":{seed}}}"
+            );
+        }
+    }
 }

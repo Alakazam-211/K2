@@ -1,0 +1,21 @@
+MPC-E207 cleared_by_purge (history and undo)
+exit:     0
+message:  nothing to undo: a purge cleared the undo history
+next:     An owner purged content from this doc, which clears every undo history. Reverse a change with revert <change> (log lists them), or edit the text by hand.
+rule:     U19, K-PURGE-4
+verbs:    undo; redo; undo --partial; undo --drop
+status:   live
+--- json
+{
+  "id": "MPC-E207",
+  "name": "cleared_by_purge",
+  "area": "history and undo",
+  "exit": 0,
+  "message": "nothing to undo: a purge cleared the undo history",
+  "next": "An owner purged content from this doc, which clears every undo history. Reverse a change with revert <change> (log lists them), or edit the text by hand.",
+  "rule": "U19, K-PURGE-4",
+  "verbs": ["undo", "redo", "undo --partial", "undo --drop"],
+  "returned_by": ["undo", "redo", "undo --drop", "undo --partial"],
+  "status": "live",
+  "since_or_until": null
+}

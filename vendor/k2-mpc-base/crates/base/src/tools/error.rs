@@ -110,6 +110,7 @@ pub fn session_exit(e: &SessionError) -> u8 {
     use crate::blob::BlobError;
     match e {
         SessionError::Forbidden { .. }
+        | SessionError::Watching { .. }
         | SessionError::Doc(crate::doc::DocError::Unaccepted | crate::doc::DocError::Quarantined) => {
             exit::REFUSED
         }

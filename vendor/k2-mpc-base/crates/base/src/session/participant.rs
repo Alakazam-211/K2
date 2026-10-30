@@ -85,6 +85,12 @@ pub struct Participant {
     /// that only that person can settle ([`super::Session::set_approval`]). Must not be
     /// empty, reserved, or the participant's own pid.
     pub on_behalf_of: Option<String>,
+    /// The participant edits through a replica of its own (an editor holding the doc and
+    /// sending updates as its client), not only through the session (v0.9.7). Its client ID
+    /// is then never reused for another connection: a stale replica could write as it from
+    /// an old clock, and the engine would drop that content without an error. Set by the
+    /// host ([`Participant::own_replica`]); default false.
+    pub own_replica: bool,
 }
 
 impl Participant {
@@ -104,7 +110,16 @@ impl Participant {
             via: via.into(),
             home: None,
             on_behalf_of: None,
+            own_replica: false,
         }
+    }
+
+    /// Mark this participant as editing through a replica of its own (see
+    /// [`Participant::own_replica`](field@Participant::own_replica)): its client IDs are
+    /// never reused.
+    pub fn own_replica(mut self) -> Self {
+        self.own_replica = true;
+        self
     }
 
     /// Set the home server (a remote participant).

@@ -424,6 +424,13 @@ impl XmlElementPrelim {
 
 impl XmlPrelim for XmlElementPrelim {}
 
+/// k2: a prelim's attributes in key order.
+fn sorted_attributes(attributes: HashMap<Arc<str>, String>) -> Vec<(Arc<str>, String)> {
+    let mut attributes: Vec<_> = attributes.into_iter().collect();
+    attributes.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    attributes
+}
+
 impl Prelim for XmlElementPrelim {
     type Return = XmlElementRef;
 
@@ -434,7 +441,8 @@ impl Prelim for XmlElementPrelim {
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         let xml = XmlElementRef::from(inner_ref);
-        for (key, value) in self.attributes {
+        // k2: in key order, not the attributes' hash order
+        for (key, value) in sorted_attributes(self.attributes) {
             xml.insert_attribute(txn, key, value);
         }
         for value in self.children {
@@ -759,7 +767,8 @@ impl Prelim for XmlDeltaPrelim {
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         let text_ref = XmlTextRef::from(inner_ref);
-        for (key, value) in self.attributes {
+        // k2: in key order, not the attributes' hash order
+        for (key, value) in sorted_attributes(self.attributes) {
             text_ref.insert_attribute(txn, key, value);
         }
         text_ref.apply_delta(txn, self.delta);
@@ -991,20 +1000,33 @@ pub trait Xml: AsRef<Branch> {
     }
 
     /// Removes an attribute recognized by an `attr_name` from a current XML element.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn remove_attribute<K>(&self, txn: &mut TransactionMut, attr_name: &K)
     where
         K: AsRef<str>,
     {
+        if self.as_ref().refuse_write() {
+            return; // k2
+        }
         self.as_ref().remove(txn, attr_name.as_ref());
     }
 
     /// Inserts an attribute entry into current XML element.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn insert_attribute<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
         K: Into<Arc<str>>,
         V: Prelim,
     {
         let key = key.into();
+        self.as_ref().assert_writable(); // k2
         let pos = {
             let inner = self.as_ref();
             let left = inner.map.get(&key);
@@ -1076,10 +1098,17 @@ pub trait XmlFragment: AsRef<Branch> {
     /// that value at the end of it.
     ///
     /// Using `index` value that's higher than current array length results in panic.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn insert<V>(&self, txn: &mut TransactionMut, index: u32, xml_node: V) -> V::Return
     where
         V: XmlPrelim,
     {
+        self.as_ref().assert_writable(); // k2
         let ptr = self.as_ref().insert_at(txn, index, xml_node).unwrap(); // XML node is never empty
         if let Ok(integrated) = V::Return::try_from(ptr) {
             integrated
@@ -1089,6 +1118,12 @@ pub trait XmlFragment: AsRef<Branch> {
     }
 
     /// Inserts given `value` at the end of the current array.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn push_back<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
     where
         V: XmlPrelim,
@@ -1098,6 +1133,12 @@ pub trait XmlFragment: AsRef<Branch> {
     }
 
     /// Inserts given `value` at the beginning of the current array.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn push_front<V>(&self, txn: &mut TransactionMut, xml_node: V) -> V::Return
     where
         V: XmlPrelim,
@@ -1106,6 +1147,9 @@ pub trait XmlFragment: AsRef<Branch> {
     }
 
     /// Removes a single element at provided `index`.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn remove(&self, txn: &mut TransactionMut, index: u32) {
         self.remove_range(txn, index, 1)
     }
@@ -1114,7 +1158,13 @@ pub trait XmlFragment: AsRef<Branch> {
     /// a particular number described by `len` has been deleted. This method panics in case when
     /// not all expected elements were removed (due to insufficient number of elements in an array)
     /// or `index` is outside the bounds of an array.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn remove_range(&self, txn: &mut TransactionMut, index: u32, len: u32) {
+        if self.as_ref().refuse_write() {
+            return; // k2
+        }
         let mut walker = BlockIter::new(BranchPtr::from(self.as_ref()));
         if walker.try_forward(txn, index) {
             walker.delete(txn, len)

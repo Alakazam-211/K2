@@ -1,0 +1,21 @@
+MPC-E706 blob_io (tier 0 and blobs)
+exit:     1
+message:  blob i/o: {reason}
+next:     The blob store couldn't read or write. Nothing was recorded. Check the disk, retry.
+rule:     K-T0-1
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E706",
+  "name": "blob_io",
+  "area": "tier 0 and blobs",
+  "exit": 1,
+  "message": "blob i/o: {reason}",
+  "next": "The blob store couldn't read or write. Nothing was recorded. Check the disk, retry.",
+  "rule": "K-T0-1",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E511 store_no_version (store)
+exit:     4
+message:  no version {version} for doc {doc}
+next:     There's no such version. List versions with log and use one it prints.
+rule:     K-HIST-9
+verbs:    show --version; restore; version --name
+status:   live
+--- json
+{
+  "id": "MPC-E511",
+  "name": "store_no_version",
+  "area": "store",
+  "exit": 4,
+  "message": "no version {version} for doc {doc}",
+  "next": "There's no such version. List versions with log and use one it prints.",
+  "rule": "K-HIST-9",
+  "verbs": ["show --version", "restore", "version --name"],
+  "returned_by": ["show --version", "restore", "version --name"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E412 declined_hard_linked (disk and outside edits)
+exit:     4
+message:  live editing is off: {reason} (hard_linked)
+next:     The file has more than one name (a hard link), so edits made live through one name would change the others unseen. It opens the ordinary way: edit it with ordinary file tools, or give it a single name (copy it, remove the extra link) and open it again.
+rule:     K-DISK-14 (K9)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E412",
+  "name": "declined_hard_linked",
+  "area": "disk and outside edits",
+  "exit": 4,
+  "message": "live editing is off: {reason} (hard_linked)",
+  "next": "The file has more than one name (a hard link), so edits made live through one name would change the others unseen. It opens the ordinary way: edit it with ordinary file tools, or give it a single name (copy it, remove the extra link) and open it again.",
+  "rule": "K-DISK-14 (K9)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -28,14 +28,8 @@ use std::path::{Path, PathBuf};
 
 use redb::{Database, MultimapTableHandle, ReadTransaction, TableDefinition, TableHandle};
 
-use super::blob::{BLOBS, BLOB_APPROVALS, BLOB_SPACES, BLOB_SYNC, BLOB_VERSIONS};
-use super::history::{
-    CHANGES, CHANGE_CLOCKS, PROVENANCE, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS,
-};
-use super::{
-    DocStore, StoreError, APPROVALS, CLIENTS, DOCS, DOC_KEYS, HOST, META, PATHS, SNAPSHOTS, SYNC,
-    UPDATES, VERSIONS,
-};
+use super::blob::{BLOBS, BLOB_SPACES};
+use super::{DocRows, DocStore, StoreError, DOC_TABLES, HOST, META, PATHS, SHARED_TABLES};
 
 /// Returned by [`DocStore::rewrite_file`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,33 +49,12 @@ pub(super) fn temp_path(path: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
-/// Every table the kit knows. A table found in the file but not here stops a rewrite: it
-/// would otherwise be dropped silently.
-const TABLES: &[&str] = &[
-    "meta",
-    "docs",
-    "paths",
-    "snapshots",
-    "updates",
-    "clients",
-    "versions",
-    "approvals",
-    "host",
-    "sync",
-    "doc_keys",
-    "changes",
-    "reverts",
-    "revert_index",
-    "revert_carry",
-    "revert_stats",
-    "change_clocks",
-    "provenance",
-    "blob_spaces",
-    "blobs",
-    "blob_versions",
-    "blob_sync",
-    "blob_approvals",
-];
+/// Whether the kit knows table `name`: [`SHARED_TABLES`] and [`DOC_TABLES`] (v0.9.7: the
+/// same list a doc delete erases). A table found in the file but in neither stops a
+/// rewrite: it would otherwise be dropped silently.
+fn known(name: &str) -> bool {
+    SHARED_TABLES.contains(&name) || DOC_TABLES.iter().any(|(t, _)| t.name() == name)
+}
 
 fn copy<K: redb::Key + 'static, V: redb::Value + 'static>(
     r: &ReadTransaction,
@@ -103,14 +76,15 @@ fn copy<K: redb::Key + 'static, V: redb::Value + 'static>(
     Ok(n)
 }
 
-/// The first table this kit doesn't know (a multimap table, or a table outside [`TABLES`]),
-/// if any: data a newer kit wrote without a format bump (v0.9.7's `authored`).
+/// The first table this kit doesn't know (a multimap table, or a table in neither
+/// [`SHARED_TABLES`] nor [`DOC_TABLES`]), if any: data a newer kit wrote without a format
+/// bump.
 fn unknown_table(r: &ReadTransaction) -> Result<Option<String>, StoreError> {
     if let Some(t) = r.list_multimap_tables()?.next() {
         return Ok(Some(t.name().to_owned()));
     }
     for t in r.list_tables()? {
-        if !TABLES.contains(&t.name()) {
+        if !known(t.name()) {
             return Ok(Some(t.name().to_owned()));
         }
     }
@@ -125,29 +99,32 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
     }
     let w = new.begin_write()?;
     let mut n = 0;
+    // the shared tables (SHARED_TABLES), then every per-doc one
     n += copy(&r, &w, META)?;
-    n += copy(&r, &w, DOCS)?;
     n += copy(&r, &w, PATHS)?;
-    n += copy(&r, &w, SNAPSHOTS)?;
-    n += copy(&r, &w, UPDATES)?;
-    n += copy(&r, &w, CLIENTS)?;
-    n += copy(&r, &w, VERSIONS)?;
-    n += copy(&r, &w, APPROVALS)?;
     n += copy(&r, &w, HOST)?;
-    n += copy(&r, &w, SYNC)?;
-    n += copy(&r, &w, DOC_KEYS)?;
-    n += copy(&r, &w, CHANGES)?;
-    n += copy(&r, &w, REVERTS)?;
-    n += copy(&r, &w, REVERT_INDEX)?;
-    n += copy(&r, &w, REVERT_CARRY)?;
-    n += copy(&r, &w, REVERT_STATS)?;
-    n += copy(&r, &w, CHANGE_CLOCKS)?;
-    n += copy(&r, &w, PROVENANCE)?;
     n += copy(&r, &w, BLOB_SPACES)?;
     n += copy(&r, &w, BLOBS)?;
-    n += copy(&r, &w, BLOB_VERSIONS)?;
-    n += copy(&r, &w, BLOB_SYNC)?;
-    n += copy(&r, &w, BLOB_APPROVALS)?;
+    for (t, _) in DOC_TABLES {
+        n += match *t {
+            DocRows::One(d) => copy(&r, &w, d)?,
+            DocRows::Pair(d) => copy(&r, &w, d)?,
+            DocRows::Owner(d) => copy(&r, &w, d)?,
+            DocRows::Slot(d) => copy(&r, &w, d)?,
+            DocRows::Clock(d) => copy(&r, &w, d)?,
+        };
+    }
+    // a known table this didn't copy (a name in SHARED_TABLES without its copy above)
+    // stops the rewrite instead of dropping its rows
+    let copied: Vec<String> = w.list_tables()?.map(|t| t.name().to_owned()).collect();
+    for t in r.list_tables()? {
+        if !copied.iter().any(|c| c == t.name()) {
+            return Err(StoreError::Db(format!(
+                "rewrite: table {:?} not copied",
+                t.name()
+            )));
+        }
+    }
     w.commit()?;
     Ok(n)
 }
@@ -170,8 +147,7 @@ impl DocStore {
         }
     }
 
-    /// Test-only: add a table this kit doesn't know (as a newer kit would, v0.9.7's
-    /// `authored`), with one row, through redb's normal API; a multimap table when
+    /// Test-only: add a table this kit doesn't know (as a newer kit would), with one row, through redb's normal API; a multimap table when
     /// `multimap`.
     #[cfg(any(test, feature = "differential"))]
     #[doc(hidden)]

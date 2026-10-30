@@ -1,0 +1,21 @@
+MPC-E703 blob_too_large (tier 0 and blobs)
+exit:     4
+message:  blob is over the {limit}-byte limit
+next:     The file is over the blob store's size limit, so it isn't versioned. It opens the ordinary way; edit it with ordinary file tools.
+rule:     K-T0-1
+verbs:    write; a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E703",
+  "name": "blob_too_large",
+  "area": "tier 0 and blobs",
+  "exit": 4,
+  "message": "blob is over the {limit}-byte limit",
+  "next": "The file is over the blob store's size limit, so it isn't versioned. It opens the ordinary way; edit it with ordinary file tools.",
+  "rule": "K-T0-1",
+  "verbs": ["write", "(host)"],
+  "returned_by": ["write"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -48,7 +48,7 @@ pub enum RowStatus {
         why: &'static str,
     },
     /// The file type doesn't have this action. `absent` verbs must not exist; `verbs`, if
-    /// any, show the reason (P24: `cat` gives the file's exact bytes).
+    /// any, show the reason.
     NotApplicable { reason: &'static str },
 }
 
@@ -723,6 +723,52 @@ pub enum VerbValue {
     ClaimsReleased(Vec<crate::session::ClaimId>),
     /// `activity`.
     Activity(Vec<crate::session::ActivityEntry>),
+    /// `export`, `export --version` (P24): what the export wrote, the doc version it is
+    /// (tier 0: the version id) and how the codec was applied.
+    Export {
+        bytes: Vec<u8>,
+        version: u64,
+        codec: crate::session::FileCodec,
+    },
+}
+
+/// The export a host's `export` verb (and a person's export menu) runs: the file's bytes
+/// through an [`crate::export::ExportRegistry`] with the kit's `as-is` exporter, as `target`.
+pub(crate) fn export_through_registry(
+    name: &str,
+    bytes: &[u8],
+    target: &str,
+) -> Result<Vec<u8>, crate::export::ExportError> {
+    use crate::export::{
+        ExportCtl, ExportLimits, ExportRegistry, NoResources, Options, Source, SourceKind, VecSink,
+    };
+    let ext = name
+        .rsplit_once('.')
+        .map_or("", |(_, e)| e)
+        .to_ascii_lowercase();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let progress = |_: u64, _: u64| {};
+    let ctl = ExportCtl {
+        cancel: &cancel,
+        progress: &progress,
+        limits: ExportLimits::default(),
+        resources: &NoResources,
+    };
+    let mut read = bytes;
+    let mut out = VecSink::default();
+    ExportRegistry::with_as_is().export(
+        &SourceKind::Format(ext),
+        Source::Bytes {
+            read: &mut read,
+            size: bytes.len() as u64,
+            name,
+        },
+        target,
+        &Options::new(),
+        &mut out,
+        &ctl,
+    )?;
+    Ok(out.bytes)
 }
 
 /// One verb's result.
@@ -1077,6 +1123,27 @@ impl Agent<'_> {
                 let c = self.join(Stay::UntilIdle, used)?;
                 used.push(Api::Show);
                 v(VerbValue::Show(s.show(c, vid)?))
+            }
+            "export" | "export --version" => {
+                let to = arg_after(args, "--to").unwrap_or_else(|_| "as-is".to_owned());
+                let c = self.join(Stay::UntilIdle, used)?;
+                let f = if form == "export --version" {
+                    let vid = num(&arg_after(args, "--version")?)?;
+                    used.push(Api::FileAt);
+                    s.file_at(c, vid)?
+                } else {
+                    used.push(Api::FileNow);
+                    s.file_now(c)?
+                };
+                let name = s.key()?.path;
+                match export_through_registry(&name, &f.bytes, &to) {
+                    Ok(bytes) => v(VerbValue::Export {
+                        bytes,
+                        version: f.version,
+                        codec: f.codec,
+                    }),
+                    Err(e) => Ok(Bound::Refused(e.to_string(), e.exit())),
+                }
             }
             "restore" => {
                 let vid = num(&arg_after(args, "--version")?)?;
@@ -1805,7 +1872,7 @@ pub(super) fn list_check(
                     verb: (*v).to_owned(),
                     at: "parity list",
                 }),
-                // an N/A row's verbs only show its reason (P24: `cat`)
+                // an N/A row's verbs only show its reason
                 Some(spec) if r.status == RowStatus::Live && !spec.serves.contains(&r.action) => {
                     failures.push(Failure::VerbDoesNotServe {
                         action: r.action,

@@ -1,0 +1,21 @@
+MPC-E126 replace_not_unique (sessions and edits)
+exit:     1
+message:  replace: --old matches {matches} times in {doc}; nothing applied
+next:     --old must match exactly once. Add surrounding text to --old until it matches once, or pass --all to replace every match. stdout lists where each match is; nothing was applied.
+rule:     A12 (exact replace)
+verbs:    replace
+status:   live
+--- json
+{
+  "id": "MPC-E126",
+  "name": "replace_not_unique",
+  "area": "sessions and edits",
+  "exit": 1,
+  "message": "replace: --old matches {matches} times in {doc}; nothing applied",
+  "next": "--old must match exactly once. Add surrounding text to --old until it matches once, or pass --all to replace every match. stdout lists where each match is; nothing was applied.",
+  "rule": "A12 (exact replace)",
+  "verbs": ["replace"],
+  "returned_by": ["replace"],
+  "status": "live",
+  "since_or_until": null
+}

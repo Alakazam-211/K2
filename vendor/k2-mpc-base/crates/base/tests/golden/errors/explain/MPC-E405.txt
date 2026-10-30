@@ -1,0 +1,21 @@
+MPC-E405 declined_off (disk and outside edits)
+exit:     4
+message:  live editing is off: {reason} (declined)
+next:     The file changed on disk into something that can't be a live doc (the reason says what), so live editing stopped. Reads still work. Edit the file with ordinary tools, or fix what the reason names; it goes live again when it decodes.
+rule:     K-DISK-8
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E405",
+  "name": "declined_off",
+  "area": "disk and outside edits",
+  "exit": 4,
+  "message": "live editing is off: {reason} (declined)",
+  "next": "The file changed on disk into something that can't be a live doc (the reason says what), so live editing stopped. Reads still work. Edit the file with ordinary tools, or fix what the reason names; it goes live again when it decodes.",
+  "rule": "K-DISK-8",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

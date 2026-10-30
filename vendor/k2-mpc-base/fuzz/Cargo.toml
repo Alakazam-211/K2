@@ -1,0 +1,63 @@
+[package]
+name = "k2-mpc-base-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "cargo-fuzz targets for k2-mpc-base: oracle-asserting (a property violation is a finding, like a panic)."
+
+[package.metadata]
+cargo-fuzz = true
+
+# Its own workspace: never a member of the kit's, so normal builds don't pull libFuzzer.
+[workspace]
+
+[lib]
+name = "k2_mpc_base_fuzz"
+path = "src/lib.rs"
+
+[dependencies]
+# Both MIT OR Apache-2.0; here only, so the kit's licence check is unchanged.
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+k2-mpc-base = { path = "../crates/base", features = ["fuzzing"] }
+
+[features]
+# outside_edit's echo check: a save matching an earlier kit write counts as an echo only when
+# nothing but the kit changed the file since; off: such saves are only logged.
+echo-rule = []
+# outside_edit: an outside edit over unwritten changes is merge3(synced bytes, live, file).
+merge-rule = []
+# Both, for a kit with the three-way ingest and the narrowed echo rule.
+ingest-merge = ["echo-rule", "merge-rule"]
+
+[[bin]]
+name = "text_merge"
+path = "fuzz_targets/text_merge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "store_records"
+path = "fuzz_targets/store_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keep_both"
+path = "fuzz_targets/keep_both.rs"
+required-features = ["merge-rule"]
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "outside_edit"
+path = "fuzz_targets/outside_edit.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

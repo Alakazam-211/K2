@@ -9,17 +9,22 @@ use std::collections::BTreeMap;
 /// Traces run on this many threads (each has its own store).
 const THREADS: u64 = 4;
 
-fn run_many(seeds: std::ops::Range<u64>, min_per_class: u64) {
-    run_many_with(seeds, trace::CLASSES, min_per_class, trace::run);
+fn run_many(name: &str, seeds: std::ops::Range<u64>, min_per_class: u64) {
+    run_many_with(name, seeds, trace::CLASSES, min_per_class, trace::run);
 }
 
+/// Run `seeds` through `run`; print the summary and one `RUNREC` line named `name` (the
+/// traces, steps, mismatching traces, each wanted class's hits and the U10a-on-the-kit
+/// counts); fail on any mismatch or a wanted class under `min_per_class` hits.
 fn run_many_with(
+    name: &str,
     seeds: std::ops::Range<u64>,
     want: &[&'static str],
     min_per_class: u64,
     run: fn(u64) -> trace::TraceResult,
 ) {
-    let mut classes: BTreeMap<&'static str, u64> = trace::CLASSES.iter().map(|c| (*c, 0)).collect();
+    let mut classes: BTreeMap<&'static str, u64> =
+        trace::CLASSES.iter().chain(want).map(|c| (*c, 0)).collect();
     let want: Vec<&'static str> = want.to_vec();
     let mut mismatches = Vec::new();
     let (mut rr, mut rx, mut tr, mut tx, mut reverts) = (0u64, 0u64, 0u64, 0u64, 0u64);
@@ -113,6 +118,26 @@ fn run_many_with(
             println!("    {l}");
         }
     }
+    let mut fields: Vec<String> = vec![
+        format!("\"traces\":{traces}"),
+        format!("\"steps\":{steps}"),
+        format!("\"mismatches\":{}", mismatches.len()),
+    ];
+    for c in &want {
+        fields.push(format!("\"{c}\":{}", classes.get(c).copied().unwrap_or(0)));
+    }
+    for (k, n) in &own_only {
+        fields.push(format!("\"{k}\":{n}"));
+    }
+    println!(
+        "RUNREC {{\"job\":null,\"run\":\"{name}\",\"tool\":\"spec-undo\",\"status\":\"{}\",{}}}",
+        if mismatches.is_empty() {
+            "COMPLETE"
+        } else {
+            "VIOLATION"
+        },
+        fields.join(",")
+    );
     let missing: Vec<_> = classes
         .iter()
         .filter(|(c, n)| want.contains(c) && **n < min_per_class)
@@ -183,6 +208,7 @@ fn u22a_revert_inherits_a_tainted_neighbour() {
 #[test]
 fn restart_transparency() {
     run_many_with(
+        "restart_transparency",
         0..traces_or(64),
         &[
             "revert_restart_transparent",
@@ -200,14 +226,104 @@ fn restart_transparency() {
 /// a quick local look; the class minimum still applies.
 #[test]
 fn trace_equivalence() {
-    run_many(0..traces_or(256), 1);
+    run_many("trace_equivalence", 0..traces_or(256), 1);
 }
 
 /// The nodes' run: traces until every class has 10^4 hits (spec §8 Volume). Not run here.
 #[test]
 #[ignore]
 fn trace_equivalence_large() {
-    run_many(1_000_000..1_000_000 + 400_000, 10_000);
+    run_many(
+        "trace_equivalence_large",
+        1_000_000..1_000_000 + 400_000,
+        10_000,
+    );
+}
+
+/// D1's run on the nodes (v0.9.7, undo spec v1.10): 50,000 traces of the main class mix,
+/// D1's classes (`d1_widened`, `d1_widened_then_undone`) among them. Not run here.
+#[test]
+#[ignore]
+fn d1_traces_large() {
+    run_many_with(
+        "d1_traces_large",
+        2_000_000..2_050_000,
+        trace::CLASSES,
+        1,
+        trace::run,
+    );
+}
+
+fn group_trace(seed: u64) -> trace::TraceResult {
+    trace::run_group(seed, false)
+}
+
+/// The grouping class (undo spec U3, §8 Volume "grouping with the (g) split"): people typing
+/// with group tokens on the hunk channel, interleaved with others' changes, idle gaps, undos
+/// and redos, against the oracle's grouping (`Model::edit_grouped`), after every step. 256
+/// traces (`SPEC_UNDO_GROUP_TRACES=<n>` for another count), every grouping class hit.
+#[test]
+fn group_trace_equivalence() {
+    let n = std::env::var("SPEC_UNDO_GROUP_TRACES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(256);
+    run_many_with("group_traces", 0..n, trace::GROUP_CLASSES, 1, group_trace);
+}
+
+/// The nodes' run of the grouping class: 10^4 traces, every grouping class hit at least 100
+/// times. Not run here.
+#[test]
+#[ignore]
+fn group_trace_equivalence_large() {
+    run_many_with(
+        "group_traces_large",
+        3_000_000..3_010_000,
+        trace::GROUP_CLASSES,
+        100,
+        group_trace,
+    );
+}
+
+/// The kit's three planted grouping faults (`differential::GroupMutant`, K4's) are each caught
+/// by the grouping class within `GROUP_MUTANT_TRACES` traces (default 256), and the catching
+/// trace passes without its fault.
+#[test]
+fn group_mutants_are_caught() {
+    use k2_mpc_base::differential::{with_group_mutant, GroupMutant};
+    let n: u64 = std::env::var("GROUP_MUTANT_TRACES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(256);
+    for (m, name) in [
+        (GroupMutant::NeverClosesOnForeign, "never_closes_on_foreign"),
+        (GroupMutant::NeverClosesOnIdle, "never_closes_on_idle"),
+        (
+            GroupMutant::NeverClosesOnBoundary,
+            "never_closes_on_boundary",
+        ),
+    ] {
+        let caught = (0..n).find_map(|seed| {
+            with_group_mutant(m, || trace::run_group(seed, false))
+                .mismatch
+                .map(|x| (seed, x))
+        });
+        let (seed, mm) = caught.unwrap_or_else(|| panic!("{name}: never caught in {n} traces"));
+        if let Some(x) = trace::run_group(seed, false).mismatch {
+            panic!(
+                "{name}: trace {seed} fails without the fault too: {}",
+                x.what
+            );
+        }
+        println!(
+            "[group mutant {name}] caught by trace {seed}, step {}: {}",
+            mm.step, mm.what
+        );
+        println!(
+            "RUNREC {{\"job\":null,\"run\":\"group_mutant_{name}\",\"tool\":\"spec-undo\",\"status\":\"CAUGHT\",\"seed\":{seed},\"traces\":{}}}",
+            seed + 1
+        );
+    }
 }
 
 /// Replay one trace with its whole log: `SPEC_UNDO_SEED=<n> cargo test -p k2-mpc-spec-undo
@@ -220,7 +336,12 @@ fn replay_one() {
     else {
         return;
     };
-    let r = trace::run_with(seed, true);
+    // SPEC_UNDO_GROUP=1: a grouping trace
+    let r = if std::env::var("SPEC_UNDO_GROUP").is_ok() {
+        trace::run_group(seed, true)
+    } else {
+        trace::run_with(seed, true)
+    };
     match &r.mismatch {
         Some(m) => {
             for l in &m.log {

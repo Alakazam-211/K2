@@ -323,8 +323,9 @@ fn runrec(o: &Opts, t0: Instant, exit: i32, fields: &[(&str, String)]) {
             }
         )
     });
+    let job = spec_undo::runrec_job();
     let mut j = format!(
-        "{{\"job\":null,\"run\":{:?},\"tool\":\"enumerator\",\"mode\":{:?}",
+        "{{\"job\":{job},\"run\":{:?},\"tool\":\"enumerator\",\"mode\":{:?}",
         run, o.mode
     );
     if o.bias != Bias::None {

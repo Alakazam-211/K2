@@ -1,0 +1,21 @@
+MPC-E007 export_internal (exports)
+exit:     1
+message:  exporter {exporter} failed
+next:     The exporter failed in a way it shouldn't: a bug, caught (nothing was placed and the doc is unchanged). Report it with details.exporter and the source's format; export to another target meanwhile.
+rule:     X-FUZZ-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E007",
+  "name": "export_internal",
+  "area": "exports",
+  "exit": 1,
+  "message": "exporter {exporter} failed",
+  "next": "The exporter failed in a way it shouldn't: a bug, caught (nothing was placed and the doc is unchanged). Report it with details.exporter and the source's format; export to another target meanwhile.",
+  "rule": "X-FUZZ-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E109 pack_mismatch (sessions and edits)
+exit:     4
+message:  doc was stored by pack {stored}, not {pack}
+next:     The stored doc belongs to another file type than the one asked for (the path's type changed, or the host routed it to the wrong pack). Open it as its stored type, or ask the host's operator; nothing changed.
+rule:     K-FMT-2
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E109",
+  "name": "pack_mismatch",
+  "area": "sessions and edits",
+  "exit": 4,
+  "message": "doc was stored by pack {stored}, not {pack}",
+  "next": "The stored doc belongs to another file type than the one asked for (the path's type changed, or the host routed it to the wrong pack). Open it as its stored type, or ask the host's operator; nothing changed.",
+  "rule": "K-FMT-2",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

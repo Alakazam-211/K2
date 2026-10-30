@@ -1,0 +1,21 @@
+MPC-E004 export_cancelled (exports)
+exit:     1
+message:  export cancelled
+next:     The export was cancelled before it finished; nothing was placed. Run it again if you still want the file.
+rule:     X-CAN-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E004",
+  "name": "export_cancelled",
+  "area": "exports",
+  "exit": 1,
+  "message": "export cancelled",
+  "next": "The export was cancelled before it finished; nothing was placed. Run it again if you still want the file.",
+  "rule": "X-CAN-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

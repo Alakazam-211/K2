@@ -1,0 +1,21 @@
+MPC-E147 bad_client (sessions and edits)
+exit:     2
+message:  invalid client id {client}
+next:     A client id is out of range or reserved. The editor should reconnect for a fresh one.
+rule:     K-ID-2, K-ID-3
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E147",
+  "name": "bad_client",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "invalid client id {client}",
+  "next": "A client id is out of range or reserved. The editor should reconnect for a fresh one.",
+  "rule": "K-ID-2, K-ID-3",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

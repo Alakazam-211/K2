@@ -48,12 +48,7 @@ fn row(a: PersonAction) -> ParityRow {
             "M5",
             "the annotation layer",
         ),
-        P::Export => ParityRow::not_applicable(
-            a,
-            &["cat"],
-            &["export"],
-            "the file is the export; cat gives its exact bytes",
-        ),
+        P::Export => ParityRow::live(a, &["export", "export --version"]),
         P::WhyOff => ParityRow::live(a, &["status"]),
         P::UndoPartial => ParityRow::live(a, &["undo --partial"]),
         P::Mention => ParityRow::deferred(a, &["comment"], "M5", "the annotation layer"),
@@ -85,8 +80,8 @@ fn agent_parity_text_pack() {
         .iter()
         .filter(|r| r.status == RowStatus::Live)
         .count();
-    assert_eq!(live, 27, "rows live");
-    assert_eq!(report.not_applicable.len(), 1);
+    assert_eq!(live, 28, "rows live (P24 Export since exports P0)");
+    assert_eq!(report.not_applicable.len(), 0);
     assert_eq!(report.deferred.len(), 3);
     assert_eq!(
         report

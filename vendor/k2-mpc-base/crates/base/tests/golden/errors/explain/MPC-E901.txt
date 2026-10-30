@@ -1,0 +1,21 @@
+MPC-E901 rate_limited (limits)
+exit:     2
+message:  too many edits; retry in {retry_after_ms} ms
+next:     You are over the edit rate for this doc (capabilities: edit_rate_per_s, edit_burst). Nothing was applied. Wait details.retry_after_ms, then retry; better, combine your changes into fewer calls (one patch, or one write --base).
+rule:     K-SEC-9, K-PERM-14
+verbs:    insert, replace, delete, sed -i, patch, apply, append, write, undo, redo, undo --partial, revert, restore (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E901",
+  "name": "rate_limited",
+  "area": "limits",
+  "exit": 2,
+  "message": "too many edits; retry in {retry_after_ms} ms",
+  "next": "You are over the edit rate for this doc (capabilities: edit_rate_per_s, edit_burst). Nothing was applied. Wait details.retry_after_ms, then retry; better, combine your changes into fewer calls (one patch, or one write --base).",
+  "rule": "K-SEC-9, K-PERM-14",
+  "verbs": ["@change"],
+  "returned_by": ["insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --partial", "restore", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

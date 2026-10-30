@@ -34,6 +34,27 @@
 //!
 //! Planned here (see `docs/ARCHITECTURE.md`): sync transport.
 
+/// A profile scope (v0.9.7, test-only): with the `differential` feature (or in the kit's
+/// tests) it times the rest of the enclosing block under `$name`
+/// ([`differential::profile_take`]); otherwise it is nothing.
+macro_rules! prof {
+    ($name:literal) => {
+        #[cfg(any(test, feature = "differential"))]
+        let _prof = $crate::differential::ProfScope::new($name);
+    };
+}
+
+// K10, the build-time guard: decoding remote clients' bytes stays off until the six gates hold
+// (docs/HOST-WIRE.md). A host that has checked them acknowledges it in its own build:
+// `RUSTFLAGS="--cfg k2_mpc_untrusted_wire_ack"` (or `[build] rustflags` in its cargo config).
+#[cfg(all(feature = "untrusted-wire", not(k2_mpc_untrusted_wire_ack)))]
+compile_error!(
+    "k2-mpc-base: the `untrusted-wire` feature decodes bytes from remote clients, which is \
+     off until the six gates in docs/HOST-WIRE.md hold (the engine fork's line, the strict \
+     decoder, per-connection client IDs, relaying original bytes, the wire fuzz target, the \
+     engine owner's sign-off). Build with `--cfg k2_mpc_untrusted_wire_ack` only once they do."
+);
+
 pub mod blob;
 pub mod codec;
 pub mod conformance;
@@ -41,6 +62,11 @@ pub mod conformance;
 pub mod differential;
 pub mod doc;
 mod engine;
+pub mod errors;
+pub mod export;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 mod hash;
 pub mod parity;
 pub mod schema;

@@ -3,6 +3,7 @@
 use super::error::{exit, ToolRunError};
 use super::fence::Fence;
 use super::{EditOutput, Kind, Tool, ToolDoc, ToolError};
+use crate::errors::{ids, ErrorReport};
 use crate::session::Shown;
 use crate::session::{ClaimPolicy, ConnId, EditResult, EditWithError, ForEdit, Notes, Session};
 use crate::store::Seq;
@@ -33,6 +34,12 @@ pub struct ToolOutput {
     pub notes: Notes,
     /// What `--for-edit` did (read verbs that asked for it). Boxed: it is rare and large.
     pub for_edit: Option<Box<ForEdit>>,
+    /// When an edit verb's "no" is a refusal (exit 1: a patch that didn't apply, an exact
+    /// `replace` that matched nothing or more than once, a pack verb that applied nothing,
+    /// `patch --partial`'s rejects): its id and details, for `--json`. `stderr_summary` then
+    /// ends with the id, `(MPC-E125)`. `None` for reads (grep's "no match" is an answer,
+    /// not a refusal) and for edits that applied cleanly.
+    pub refusal: Option<ErrorReport>,
 }
 
 /// The host's choices for one [`Session::run_tool_with`] call. `#[non_exhaustive]`: start
@@ -103,7 +110,24 @@ impl Session {
     /// ([`ToolOptions::policy`]; under [`ClaimPolicy::Respect`] an agent's edit touching
     /// another participant's live claim exits 5 with nothing applied, and a person is never
     /// refused). Read verbs ignore the policy. `run_tool` is this with the defaults.
+    ///
+    /// An App viewer (K5) sees the others by handle in everything the output carries: the
+    /// fence's contributors, a `--for-edit` claim or conflict (or the refusal it carries), and
+    /// a refusal naming someone. Notes are lensed where they are made.
     pub fn run_tool_with(
+        &self,
+        conn: ConnId,
+        root: &str,
+        argv: &[String],
+        stdin: &[u8],
+        opts: &ToolOptions,
+    ) -> Result<ToolOutput, ToolRunError> {
+        prof!("tools.run_tool");
+        let out = self.run_tool_inner(conn, root, argv, stdin, opts);
+        self.tool_output_as_seen(conn, out)
+    }
+
+    fn run_tool_inner(
         &self,
         conn: ConnId,
         root: &str,
@@ -121,9 +145,20 @@ impl Session {
                 policy: opts.policy,
                 if_version,
             };
-            return self.run_edit(conn, root, &name, guard, &verb, move |live| {
+            let mut out = self.run_edit(conn, root, &name, guard, &verb, move |live| {
                 edit(&doc, live, stdin)
-            });
+            })?;
+            if out.exit != exit::OK && out.changed.is_none() && out.refusal.is_none() {
+                let first = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .next()
+                    .filter(|l| !l.trim().is_empty())
+                    .map_or_else(|| format!("{verb}: nothing applied"), str::to_owned);
+                let r = ErrorReport::new(&ids::PACK_VERB_NO, first).with("verb", verb.as_str());
+                out.stderr_summary = format!("{} ({})", out.stderr_summary, r.id());
+                out.refusal = Some(r);
+            }
+            return Ok(out);
         }
         let tool = Tool::parse(argv)?;
         let name = self.key()?.path;
@@ -159,6 +194,7 @@ impl Session {
                     fence: Some(fence),
                     notes,
                     for_edit: for_edit.map(Box::new),
+                    refusal: None,
                 })
             }
             Kind::Edit => {
@@ -191,6 +227,7 @@ impl Session {
             guard.policy,
             guard.if_version,
             Some(verb),
+            None,
             |live| {
                 let mut o = f(live).map_err(Stop::Tool)?;
                 let text = o.text.take();
@@ -204,12 +241,14 @@ impl Session {
             Err(EditWithError::Compute(Stop::Tool(e))) => return Err(e.into()),
             Err(EditWithError::Session(e)) => return Err(e.into()),
         };
-        let report = report.unwrap_or(EditOutput {
+        let mut report = report.unwrap_or(EditOutput {
             text: None,
             stdout: Vec::new(),
             exit: exit::OK,
+            refusal: None,
         });
-        let (version, summary) = match &changed {
+        let refusal = report.refusal.take().filter(|_| report.exit != exit::OK);
+        let (version, mut summary) = match &changed {
             Some(c) => (c.version, edited(name, c)),
             None => {
                 let v = self.status()?.version;
@@ -221,6 +260,9 @@ impl Session {
                 (v, format!("{what} {name} · v{v}"))
             }
         };
+        if let Some(r) = &refusal {
+            summary = format!("{summary} ({})", r.id());
+        }
         Ok(ToolOutput {
             stdout: report.stdout,
             stderr_summary: summary,
@@ -230,6 +272,7 @@ impl Session {
             fence: None,
             notes,
             for_edit: None,
+            refusal,
         })
     }
 }

@@ -1,0 +1,21 @@
+MPC-E708 no_blob_store (tier 0 and blobs)
+exit:     4
+message:  no blob store configured
+next:     This host has no blob store, so files without a live type can't be versioned here. Edit the file with ordinary file tools.
+rule:     K-T0-1
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E708",
+  "name": "no_blob_store",
+  "area": "tier 0 and blobs",
+  "exit": 4,
+  "message": "no blob store configured",
+  "next": "This host has no blob store, so files without a live type can't be versioned here. Edit the file with ordinary file tools.",
+  "rule": "K-T0-1",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

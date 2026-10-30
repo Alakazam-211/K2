@@ -639,6 +639,7 @@ pub mod iter;
 pub mod json_path;
 pub mod observer;
 mod out;
+mod position_index;
 mod slice;
 mod state_vector;
 mod sticky_index;
@@ -671,6 +672,9 @@ pub use crate::input::In;
 pub use crate::json_path::{JsonPath, JsonPathEval};
 pub use crate::observer::Observer;
 pub use crate::out::Out;
+#[doc(hidden)]
+pub use crate::position_index::PlantedPositionBug;
+pub use crate::position_index::{PositionIndexStats, PositionMismatch, TextPosition};
 pub use crate::state_vector::Snapshot;
 pub use crate::state_vector::StateVector;
 pub use crate::sticky_index::Assoc;

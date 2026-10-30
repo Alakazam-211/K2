@@ -61,6 +61,23 @@ pub struct Store {
 
     /// Dependencies between items and weak links pointing to these items.
     pub(crate) linked_by: HashMap<ItemPtr, HashSet<BranchPtr>>,
+
+    /// k2: the text position index's settings and counters ([crate::position_index]).
+    pub(crate) position_index: crate::position_index::PositionIndex,
+    /// k2 (hardening)
+    pub(crate) parked: Vec<Box<Branch>>,
+
+    /// k2, test-only oracle ([Doc::set_full_state_vectors]): transactions build their full
+    /// before and after state vectors wherever upstream did, as upstream did.
+    pub(crate) full_state_vectors: bool,
+
+    /// k2, test-only: the planted touched-clients bug ([Doc::plant_touched_bug]).
+    #[cfg(feature = "planted-touched-bug")]
+    pub(crate) planted_touched_bug: bool,
+
+    /// k2, test-only: the planted relay bug ([Doc::plant_relay_bug]).
+    #[cfg(feature = "planted-relay-bug")]
+    pub(crate) planted_relay_bug: bool,
 }
 
 impl Store {
@@ -79,6 +96,13 @@ impl Store {
             pending: None,
             pending_ds: None,
             parent: None,
+            position_index: Default::default(),
+            parked: Vec::new(),
+            full_state_vectors: false,
+            #[cfg(feature = "planted-touched-bug")]
+            planted_touched_bug: false,
+            #[cfg(feature = "planted-relay-bug")]
+            planted_relay_bug: false,
         }
     }
 
@@ -216,8 +240,17 @@ impl Store {
 
     pub(crate) fn write_blocks_from<E: Encoder>(&self, sv: &StateVector, encoder: &mut E) {
         let local_sv = self.blocks.get_state_vector();
-        let mut diff = Self::diff_state_vectors(&local_sv, sv);
+        let diff = Self::diff_state_vectors(&local_sv, sv);
+        self.write_blocks_diff(diff, encoder);
+    }
 
+    /// Writes, for each `(client, clock)` in `diff`, the client's blocks from `clock` on. Each
+    /// client must have blocks and appear at most once.
+    pub(crate) fn write_blocks_diff<E: Encoder>(
+        &self,
+        mut diff: Vec<(ClientID, u32)>,
+        encoder: &mut E,
+    ) {
         // Write items with higher client ids first
         // This heavily improves the conflict algorithm.
         diff.sort_by(|a, b| b.0.cmp(&a.0));
@@ -249,7 +282,10 @@ impl Store {
         }
     }
 
-    fn diff_state_vectors(local_sv: &StateVector, remote_sv: &StateVector) -> Vec<(ClientID, u32)> {
+    pub(crate) fn diff_state_vectors(
+        local_sv: &StateVector,
+        remote_sv: &StateVector,
+    ) -> Vec<(ClientID, u32)> {
         let mut diff = Vec::new();
         for (client, &remote_clock) in remote_sv.iter() {
             let local_clock = local_sv.get(client);
@@ -584,7 +620,7 @@ pub struct StoreEvents {
 impl StoreEvents {
     pub fn emit_update_v1(&mut self, txn: &TransactionMut) {
         if self.update_v1_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
+            if !txn.delete_set.is_empty() || txn.states_differ() {
                 let update = UpdateEvent::new_v1(txn);
                 self.update_v1_events
                     .trigger(|callback| callback(txn, &update));
@@ -594,7 +630,7 @@ impl StoreEvents {
 
     pub fn emit_update_v2(&mut self, txn: &TransactionMut) {
         if self.update_v2_events.has_subscribers() {
-            if !txn.delete_set.is_empty() || txn.after_state() != txn.before_state() {
+            if !txn.delete_set.is_empty() || txn.states_differ() {
                 let update = UpdateEvent::new_v2(txn);
                 self.update_v2_events.trigger(|fun| fun(txn, &update));
             }

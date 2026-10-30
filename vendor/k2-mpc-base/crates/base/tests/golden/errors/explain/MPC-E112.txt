@@ -1,0 +1,21 @@
+MPC-E112 base_expired (sessions and edits)
+exit:     8
+message:  base version {base} is unknown or no longer cached; nothing applied
+next:     The version you wrote against is too old to merge from (or was never read). Never retry the same request: read the doc again (cat), redo your change on what you read, and write with that version as --base.
+rule:     K-BR-4, K-EXIT-1
+verbs:    write
+status:   live
+--- json
+{
+  "id": "MPC-E112",
+  "name": "base_expired",
+  "area": "sessions and edits",
+  "exit": 8,
+  "message": "base version {base} is unknown or no longer cached; nothing applied",
+  "next": "The version you wrote against is too old to merge from (or was never read). Never retry the same request: read the doc again (cat), redo your change on what you read, and write with that version as --base.",
+  "rule": "K-BR-4, K-EXIT-1",
+  "verbs": ["write"],
+  "returned_by": ["write"],
+  "status": "live",
+  "since_or_until": null
+}

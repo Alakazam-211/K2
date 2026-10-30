@@ -589,7 +589,7 @@ fn exact_replace_refusals_apply_nothing() {
     );
     assert_eq!(
         out.stderr_summary,
-        format!("nothing applied to n.md · v{v}")
+        format!("nothing applied to n.md · v{v} (MPC-E126)")
     );
     let out = run(&s, agent, &["replace", "--old", "X ONE", "--new", "z"], "").unwrap();
     assert_eq!(out.exit, exit::NO);

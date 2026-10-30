@@ -25,6 +25,12 @@ use k2_mpc_base::Edit;
 use proptest::prelude::*;
 
 const MD: TextFilePack = TextFilePack::new("markdown", 4 << 20);
+
+thread_local! {
+    /// This test's model counts who typed each character: every character a token (D1, v1.10,
+    /// the identity there), so no fresh change rewrites characters the model gives to others.
+    static CHARS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 const ROOT: &str = TextFilePack::ROOT;
 const T0: u64 = 1_793_111_400_000;
 
@@ -126,8 +132,13 @@ impl Fx {
             space: "ws".into(),
             path: name.into(),
         };
+        let pack = if CHARS.with(|c| c.get()) {
+            MD.with_tokens(k2_mpc_base::text::lines::Tokens::Chars)
+        } else {
+            MD
+        };
         self.mgr
-            .open_file(Arc::new(MD), &key, &p, &self.ws)
+            .open_file(Arc::new(pack), &key, &p, &self.ws)
             .unwrap()
     }
     fn events(&self) -> Vec<AuditEvent> {
@@ -804,6 +815,7 @@ proptest! {
     /// the one the rule picks; its change and time match; its text is the line's.
     #[test]
     fn blame_author_wrote_on_the_line(ops in prop::collection::vec(op(), 1..30)) {
+        CHARS.with(|c| c.set(true));
         let f = fx("prop");
         let s = f.open("m.md", "seed line\nsecond\n");
         let conns: Vec<ConnId> = WHO

@@ -203,8 +203,7 @@ impl<'a> Decoder for DecoderV1<'a> {
 /// Version 2 of lib0 decoder.
 pub struct DecoderV2<'a> {
     cursor: Cursor<'a>,
-    /// Total size of the column streams that precede the main cursor. Used only as an upper
-    /// bound for [Read::remaining].
+    /// k2 (hardening)
     streams_len: usize,
     keys: Vec<Arc<str>>,
     ds_curr_val: u32,
@@ -294,8 +293,7 @@ impl<'a> DecoderV2<'a> {
 }
 
 impl<'a> Read for DecoderV2<'a> {
-    /// In v2 an entry's fields may come from the column streams rather than the main cursor,
-    /// so count both: this stays an upper bound on the input left, which is all callers need.
+    /// k2 (hardening)
     #[inline]
     fn remaining(&self) -> usize {
         self.cursor.remaining().saturating_add(self.streams_len)

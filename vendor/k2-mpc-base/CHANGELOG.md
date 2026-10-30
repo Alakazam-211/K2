@@ -1,5 +1,546 @@
 # Changelog
 
+## v0.9.7 (2026-10-29)
+
+The Live-tab release: the kit's live typing APIs, D1, the speed work, outside saves merged
+line by line, exports P0 (the kit's side) and the vendored engine at k2-yrs k2.6.3.
+
+**Breaking for packs:** markdown and text must map parity row P24 live (`export`,
+`export --version`); a pack that still lists P24 as N/A, with `export` among its absent
+verbs, fails its parity check (below, "Exports P0").
+
+**Headlines**
+- **Live typing APIs (K1–K5, K10–K11):** the hunk channel (`ChangeEvent`'s hunks, what
+  editors rebase over), `edit_at_base` and `events_since` (K2, K3), undo over the channel
+  (K4), the `run_tool` lens for App viewers (K5: handles, never pids, in `run_tool` output),
+  roster push and participant overflow (K10, K11; `Config::participants_max`). Below: "The
+  hunk channel", "K5" and "The agent error surface".
+- **D1 (undo spec v1.10):** a change is never built from someone else's text; an undo
+  never changes a word someone else wrote, and says so instead. Below: "D1".
+- **Speed:** the incremental disk write-back and blame, the engine's position index
+  (k2.3), an outside save's change at identity from the merge's own hunks, and the edit
+  check's sampling adapting to the doc's history. **The 2× soak target is not met:** the
+  32-participant soak slows 6.9× over 600 s at about 100,000 versions (v0.9.5: about 11×;
+  gate job `01e766d0`, a regression guard at 8× from this release); edits are about 8×
+  cheaper than in v0.9.3. What still grows with the doc: the engine's per-edit transaction,
+  the full-state encode at each write-back, and outside saves (each encodes, renders and
+  hashes the doc). Below: "Speed".
+- **Outside saves merge line by line:** no line joined, spliced, lost or brought back by
+  an outside save's merge (both fuzz corpora: 0 of each). Below: "Speed" (Fixed).
+- **Exports P0, the kit's side,** and the P24 `export` verbs. Below: "Exports P0".
+- **Host guidance, paths and hard links (K6, K7, K9).** Below.
+- **Stable error ids** (`MPC-Ennn`, `docs/ERRORS.md`): the first tagged release with the
+  registry. Below: "The agent error surface".
+- **Engine:** k2-yrs k2.6.3 (hardening; warning-free), `k2-yrs-0.28.0-k2.6.3`, vendored
+  without the engine's own `yrs/tests/` (`docs/YRS-FORK.md`).
+
+### D1: a change is never built from someone else's text
+
+Undo spec v1.10, the authored-ranges amendment (`docs/SPEC-UNDO.md`, D1a).
+Found by the 32-participant soak (seed 1, call 241,426; released v0.9.4 fails the same way):
+a line replace could keep another participant's characters, and that participant's later
+undo then changed the replacer's text (`p14:3169` became `p14:3167`).
+
+**The promise:** an undo never changes text someone else wrote, at token granularity. The
+sentence hosts pin verbatim (`k2 doc --help`):
+
+> Undo only reverses your own changes and never alters a word someone else wrote: if
+> someone has since changed one of your words, that word is theirs, and your undo leaves it
+> as it is and tells you.
+
+**What changes for people:**
+- When a change touches a word someone else wrote (typing into it, onto its end, or
+  replacing part of it), the whole word becomes the change's author's: in blame, and for
+  undo. An undo by the word's earlier author then reports a conflict instead of changing it.
+- Deleting part of someone's word leaves the rest theirs; joining two words makes the joined
+  word yours.
+- Editing an imported file's word makes that word yours in blame.
+- Restoring a version makes the words it changes yours in blame; an undo by the original
+  authors of those words then reports a conflict instead of changing them.
+- Edits to one's own text are unchanged.
+
+**Rule:** a fresh change (no roots given: edits, verbs, `write`, `write --base`'s own hunks,
+a version restore, a live edit at a base, a person's grouped keystrokes, an outside save, a
+tier-0 version a promotion replays) is widened to the tokens of the new text that hold what it inserted or
+that it joined; inside them, only the changer's own characters are kept, and the rest are
+deleted and inserted afresh with the change. Undo, redo, revert and purge are left as they
+are. Tokens are the pack's (`Pack::tokens`): words by default, `Tokens::Code` for code,
+`Tokens::Cells` for cells; `TextFilePack::with_tokens` chooses one.
+
+**Host notes:**
+- The hunk channel (`ChangeEvent`) carries the hunks the participant authored, not the
+  widened ones (E-LIVE r2.1): the same text, and what clients rebase over. So does the live
+  window (`events_since`, and what `edit_at_base` rebases over), read from the store, after
+  a restart too. Carets, views and claims follow the authored hunks; undo regions and revert
+  records follow the elements.
+- **Outside saves** are widened like any diff-based change (the merge's hunks are the
+  authored ranges, as `write --base`'s ours): a save that changes a word someone wrote in
+  the kit makes the word the external participant's, so their undo conflicts instead of
+  changing it. A save that touches only the external participant's own words, or none, is
+  reported exactly as before.
+- **Tier-0 promotion** widens each version it replays as a change by its author (ownership
+  by each character's client: a promoted doc has no restored text), so a revert of promoted
+  history never changes a word another version's author rewrote; the widened change's
+  authored hunks (the diff of the two versions' texts) go in the `authored` table.
+- **Grouped edits** (U3) are widened too; the closers read what the person typed, and
+  joining reads the change as made (the oracle the same way).
+- **Additive:** `Pack::tokens` (default words), `TextFilePack::with_tokens`,
+  `text::lines::{Tokens, authored_hunks}`.
+- **Store: no format bump.** A widened change's authored hunks go in a new `authored` table
+  (`DocStore::authored_hunks`, `DocStore::change_hunks`), created by the first widened
+  change: a store no change was ever widened in has none. Every open sweeps it (a row whose
+  record is gone is deleted; an insert its redacted record no longer holds is blanked) and,
+  when that changed anything, rewrites the file; a failed rewrite fails the open and is
+  retried at the next.
+- **Downgrading** to v0.9.5 or v0.9.6 after any doc had a word-level rewrite: reads and
+  edits work, purges are refused before anything changes (`MPC-E502 store_newer`, table
+  `authored`) until you upgrade again; deleted docs' authored rows are cleaned on the next
+  open by ≥ v0.9.7. `authored` is now this kit's own table: no longer refused as a newer
+  kit's, and covered by delete, purge, rewrite and erasure.
+
+**Tests and evidence:** the shared function's unit and property tests (D1 under
+`Tokens::Chars` is the identity, so the undo model check's G1 evidence stands as taken); the
+oracle applies the same function; classes (a), (b) and (c) on the oracle, the kit and the
+conformance suite (`hist.undo_own_only_tokens`); the three D1 mutants
+(`reuse-foreign-elements-in-changed-token`, `rewrite-whole-line`,
+`rewrite-merged-ranges`) each fail their class in the oracle and the kit; the trace test
+(oracle vs kit) on words, the grouping class included, and a 50,000-trace run on a node
+(`d1_traces_large`); an outside save's widening with its negative control; blame, the log
+and the live window after a reopen and after a purge. D1 is not yet in the TLC cross-check (the Quint model follows);
+its three mutants live outside `Mutant::ALL` until it is.
+
+### K5: `run_tool`'s output for App viewers
+
+- **`run_tool`'s output names others by handle for an App viewer** (text docs;
+  `Session::tool_output_as_seen`): a read's fence (its contributors), a `--for-edit` claim or
+  conflict (or the refusal it carries), and a session refusal (`app_view.rs`,
+  `an_app_viewers_tool_output_holds_no_pid`; was: pids there).
+
+### Speed: write-back, blame and outside saves
+
+**Fixed**
+- U19: the "cleared by purge" notice owed to someone who had left was lost when the idle
+  sweep (`expire_idle`) forgot their emptied stacks, so their next undo said "nothing to
+  undo" (or "history lost"); the sweep now keeps a participant while the notice is owed.
+- The outside-save fix released in v0.9.6 (a line's deletion lost, its retype then held
+  twice; `diff::line_hunks`) is in this release too.
+
+**Fixed: an outside save merges line by line** (`text::merge::merge3_keep_both`; outside
+saves only: `write --base`, undo and `diff::hunks` are unchanged). Every change of the file
+and of the live doc now covers whole lines, so where both changed the same line, both
+versions of it are kept, each a line of its own, the live one first. This removes three
+kinds of wrong result an outside save could give over unwritten edits (v0.9.6's known issue,
+two people's changes on one line, among them):
+- **lines joined:** a line the file left open glued to the live side's next line (the file's
+  "aaaaaaaaaaaaa" landing on the live "lo" as "loaaaaaaaaaaaaa");
+- **lines spliced:** two people's changes to one line merged character by character (a
+  typed prefix and a typed suffix giving "XdY");
+- **a deleted line brought back:** keeping both sides by region could restore a line one
+  side deleted and the other left untouched. Base "aX\nA\nb\n", the file "X\nA" (it edits
+  the first line and drops the last), the live text "Z" (it replaces everything): v0.9.5
+  and v0.9.6 give "Z\nX\nA", though the live side deleted "A" and the file never touched
+  it; now "Z\nX".
+- The end of the text is merged on its own: the result ends without a final newline only
+  when the side that wrote its last line left its own text so (agrees with `write --base`'s
+  end-of-text rule, O5a). A line one side deleted no longer comes back because the other
+  side only added a final newline after it, or wrote lines after it.
+- Where the other side's lines can be read more than one way (repeated or blank lines), the
+  merge takes the kit's reading; the fuzz oracle accepts any reading (over every alignment).
+- What the save changes in the doc is only what differs: each of the merge's whole-line hunks
+  is trimmed to the characters it changes before it is applied (the text is the same byte for
+  byte). So a save that changes one word leaves the rest of the line, and every line it kept,
+  with their authors, and D1 widens it to tokens as for any diff-based change: blame and undo
+  stay at word level.
+
+**Blame's provenance map is kept up to date through outside edits, and checked.** Additive
+for hosts: three `Config` fields and their default constants, two `AuditEvent` variants
+(`ProvenanceMismatch`, `IdentityMismatch`; the enum is `#[non_exhaustive]`). No store format
+change (still 5); no dependency changes.
+
+**Changed**
+- **An outside edit keeps blame's provenance map** (each live character's element and
+  root) instead of dropping it. Until now the next blame (or edit) after an outside edit
+  rebuilt the map from scratch: a throwaway replica of the doc, O(the doc's history). The
+  outside edit's change at element identity (v0.9.3) now updates the map like any other
+  change: its inserted elements are fresh (their own roots), with the IDs the engine gave
+  them where the merge put them. That includes a root whose text the merge left as it was on
+  new elements (text deleted and typed again). The map is still built from scratch on first
+  need after a load, a purge or a recovery (the cold path).
+  - Blame after an outside edit, p50 on a build node (release): 1.29 → 0.85 ms at 1.2k changes,
+    9.4 → 1.1 ms at 40k, 83 → 1.3 ms at 300k (`docs/evidence/v0.9.7-blame.md`).
+  - The session's own changes (edits, `write --base`, undo, redo, revert, restore) already
+    kept it up to date as they applied (v0.9.0); blame never rebuilt it after them.
+  - An outside save that the identity check samples (below) also compares the map's element
+    IDs with the engine's, which it reads anyway: a difference is reported (below) and the
+    map rebuilt.
+- **Blame reads approvals per change** (one read for the changes it names), not the doc's
+  whole approval table, which grows with the history.
+- **perf: an outside save no longer recomputes its change at element identity from the whole
+  engine state.** Since v0.9.3 the change was found by blaming the doc twice (each time a
+  throwaway replica of its whole state, every element ever inserted included) and comparing
+  the element IDs of the old and new texts character by character. That was 65–94% of an
+  outside save: 433 ms at 1 KB × 300k changes, 977 ms at 1 MB × 40k. Since v0.9.5 the merge
+  is applied to the live doc itself at the positions its hunks give, so those hunks, in
+  canonical form (no hunk that changes nothing, touching hunks joined) and handed to the
+  engine as such, are the change at element identity. They are used as such, after a check
+  that they give the new text; they also update blame's provenance map (above) in O(the
+  change), the way the session's own edits do.
+  - One outside save in `Config::edit_check_every` (default 1,000) still computes the change
+    in full and compares, in canonical form. A difference is reported
+    (`AuditEvent::IdentityMismatch { key, root, change }`, new, metadata only); the merge's
+    hunks are kept for the change's record and blame's provenance map is dropped (rebuilt
+    from the engine on next need).
+
+**Added**
+- **Blame's runtime check.** `Config::blame_check_every` (default 1 in 100,
+  `session::DEFAULT_BLAME_CHECK_EVERY`; 0: never sampled), adaptive: from
+  `Config::blame_check_large_at` changes on (default 20,000), one blame in
+  `Config::blame_check_every_large` (default 1,000). A sampled blame also rebuilds the
+  map from the engine and the store and compares the two (runs and live restorations by
+  root). The rebuild, O(doc), runs **off the session's lock** on a copy of the doc, so a
+  sampled blame never stalls other participants' edits (only its own caller waits). On every
+  blame, sampled or not, each root's map must be as long as its text. A mismatch is never
+  served: the blame is computed again from a sound map, the kept map is replaced by the
+  rebuild (or dropped, if the doc changed meanwhile), and the session reports
+  `AuditEvent::ProvenanceMismatch { key, version, what }` (`what`: a root name and a byte
+  offset, no doc content). Lock hold of a sampled blame at 300k changes (a build node, p50):
+  104 ms → 21 ms; what remains is encoding the doc's state for the copy.
+- **Tests:** `tests/blame_incremental.rs`: the differential test (random histories: edits,
+  multi-hunk changes, `write --base`, undo, redo, revert, restore, purge, outside edits,
+  approvals, compaction, restarts; after every step the kept map equals a rebuild and blame
+  of every line and of a random `-L` range equals blame from the rebuild in every field),
+  and three planted faults caught by it and by the runtime check. `tests/blame_cost.rs`
+  (ignored): blame's cost at 1.2k, 40k and 300k changes. The `differential` feature gains
+  `with_prov_mutant`, `with_blame_check_hook` and three test-only `Session` hooks (`blame_rebuilt_for_tests`,
+  `prov_differs_for_tests`, `prov_built_for_tests`); `DocStore::unsynced_for_tests` is
+  available under it too.
+- **The edit path's canary adapts to the doc's size:** the canary's interval grows with the
+  doc's history past `Config::edit_check_scale_units` (default 50,000 UTF-16 units, about
+  the history at v10k in the 32-participant soak; `doc::DEFAULT_EDIT_CHECK_SCALE_UNITS`; 0: a
+  fixed rate), to `edit_check_every x history / scale` edits, never fewer than
+  `edit_check_every`, so its amortised cost per edit stays about what it is at v10k (a
+  sampled edit is O(history): 3.7 ms at v10k, 128 ms at v100k in the soak's profile). Below
+  the scale a doc is checked as often as before. The first sample after a load is placed
+  from the history alone (`edit_check_every` edits in below the scale; past it at a phase
+  spread over the interval), so the long-run rate does not depend on how often the doc is
+  reloaded: before, each reload restarted the count, and the soak's 63 restarts kept the
+  canary at about one check per reload whatever the interval. The history is the sum of
+  the state vector's clocks, read only on a sampled edit or a load.
+  `Doc::set_edit_check_scale`; the session sets it on every doc it makes. Outside saves'
+  identity check keeps the fixed rate.
+
+**Known issues**
+- If someone rewrites a line live while an outside editor deletes it and types it back, both
+  lines are kept (the live rewrite and the retyped line).
+- An agent's write --base can be refused with a conflict it didn't cause when nearby lines
+  start with the same characters; nothing is applied, and writing again against the current
+  version succeeds (fixed in v0.9.8).
+
+### Exports P0, the kit's side
+
+**Additive** for hosts; no exit code changes; no store format change; no new dependency;
+no change to existing behaviour.
+
+**Added**
+- **`Session::file_at(conn, vid)`**: the file's bytes at a stored version, as a write-back
+  of that version's content writes them (the pack's encoding with the doc's codec
+  settings), in a `FileBytes { bytes, version, codec }`. `version` is the doc version a
+  person sees in `log` / `show` (the version's log position): name an export after it, never
+  after the internal version id. Needs history, like `show`; an unknown version is
+  `NoSuchChange` (exit 4). Reads only: no version, change, lease, claim or read base.
+- **`Session::file_now(conn)`**: the current file's bytes and the doc version they are
+  ("now" resolved first). Needs read only.
+- **Streaming copies, `file_at_to` / `file_now_to`** on `Session` and on `BlobSession` (tier
+  0): the file at a version (or now) written to any `io::Write`, returning a `FileCopy
+  { version, bytes, codec }`. For tier 0 the bytes stream from the blob store in bounded
+  memory (256 KiB at a time; the session lock isn't held while copying) and are verified as
+  they stream: the check (the blob's HMAC and size) completes at the clean end, so **only
+  `Ok` means the copy is good; on an error (`BlobError::Damaged`, exit 1) the caller must
+  discard what was written** (copy to a temporary file, rename on `Ok`). For multi-GB
+  derivatives and exports. Rights as `read_version` (history) and `read` (read).
+- **`FileCodec`**: how the codec settings were applied. `Exact` (the current doc, as the
+  write-back writes it); `Current` (a past version rendered with today's line endings, BOM
+  and final newline: exact unless an outside save changed them since); `ChangedSince` (the
+  log shows a settings change since that version; returned once the log records settings
+  changes, C1).
+- **Module `export`**, the contract between a host and format exporters (which live outside
+  the kit): `Exporter` (`id`, `targets(kind)`, `export(src, target, opts, sink, ctl)`),
+  `ExportTarget`, `Fidelity`, `OptionSpec` / `OptionKind` / `Options` (checked before any
+  work), `SourceKind`, `Source` (`Bytes` or a text doc's `Text` roots), `ExportCtl` (cancel
+  flag, progress, `ExportLimits`, host `Resources`), `Sink` (`finish` only after `Ok`),
+  `ExportReport` (losses, notes, pages, bytes written), `ExportError`; `ExportRegistry`
+  (register, `targets_for`, `export`: options checked, a cancel honoured, output past
+  `max_output_bytes` refused at the sink as `Limit`, a panicking exporter caught as
+  `Internal`). The kit's only exporter is `AsIs` (target `as-is`: the bytes unchanged).
+  Every public type is `#[non_exhaustive]`.
+- **Ids `MPC-E001`–`MPC-E007`**, a new area `0xx: exports` (`errors::Area::Export`):
+  `export_unsupported` (2), `export_declined` (2), `export_limit` (2), `export_cancelled`
+  (1), `export_decode` (1), `export_io` (1), `export_internal` (1); `ExportError::exit()`
+  and `Refusal` for `ExportError`. The registry snapshot, `docs/ERRORS.md` and
+  `capabilities` carry them.
+
+- **P24 "Export" is a live parity row** (was N/A, "cat is the file's bytes"): kit verbs
+  `export [--to as-is]` (read) and `export --version V [--to as-is]` (history), on both tiers,
+  bound to `file_now` / `file_at` (tier 0: `file_now_to` / `file_at_to`) and then
+  `ExportRegistry::export` (`parity::Api::FileNow`, `Api::FileAt`; `VerbValue::Export`). The
+  parity cases export now and at a past version on a live doc and a tier-0 file, the person's
+  path and the agent's through the registry, and compare the bytes, the version and the codec
+  flag. `--version` takes the version id; the export is named after the doc version
+  (`FileBytes::version`). The kit exports `as-is` only; other targets are the host's
+  exporters.
+
+**Breaking for packs' parity lists**
+- A pack that lists P24 as N/A with `export` among its absent verbs now fails its parity check
+  (the kit registers `export`): map it live, `ParityRow::live(a, &["export", "export
+  --version"])` (k2-mpc-markdown and k2-mpc-text at their next kit bump).
+
+**Tests**
+- `tests/export.rs`: `file_at` round trips at several versions of a text doc and of a
+  Markdown doc with a BOM and CRLF (the bytes then, the doc version, `Exact` for the latest,
+  `Current` for older ones); an unknown version; rights (history for `file_at`, read for
+  `file_now`); reading and exporting leave the doc as it was (status, versions, log); the
+  contract through a test exporter (listing and de-duplicating targets, duplicate ids,
+  option checks, cancel before and during, the input and output limits, a caught panic, the
+  identity exporter on bytes and on text); every export error's id and exit.
+  The streaming copies: a tier-0 version and the current file copied out byte for byte
+  (and a live doc's, equal to `file_at`), history needed for a past version; a blob whose
+  last byte was flipped fails the copy at its end (`Damaged`), after every byte reached the
+  writer. `tests/tier0_large.rs`: a 50 MB file's versions copied out with `file_at_to` /
+  `file_now_to` in bounded memory (the allocator's peak), compared as they stream.
+  `tests/error_ids.rs` reaches the seven ids through `ExportRegistry::export`.
+- Grid docs' `file_at` round trip comes with C1 (the C1 ↔ main round).
+
+**Known limits**
+- **Per-version codec settings:** a version stores its content, not the codec settings in
+  effect then, so `file_at` renders a past version with today's (`FileCodec::Current`). On the
+  next store format bump's list: store the codec settings with each version, making every
+  `file_at` exact.
+
+### Host guidance, paths, hard links (K6, K7, K9)
+
+**Additive** for hosts; no exit code changes; no store format change; no new dependency.
+
+**Added**
+- **K6, `next` per surface:** `ErrorReport::with_next(surface, text)`, `next_for(surface)`,
+  `to_json_for(surface)`, `to_value_for(surface)`. A host's own guidance for a surface (a
+  tab, an App); the id, exit code, message, rule and details never change (a test holds it
+  for every refusal).
+- **K7, no absolute paths:** `errors::redact(text, root)`, `ErrorReport::redacted(root)`,
+  `SessionError::redacted(root)`: a path inside the workspace root becomes relative to it,
+  any other absolute path `<outside>`. The kit applies it itself where it knows the root:
+  `SessionManager::open_file` / `open_blob_file`, and a file session's (text or tier 0)
+  `file_changed`, `check_disk`, `file_moved` and `flush`. A registry-wide test feeds a
+  root through every refusal; `tests/app_view.rs` checks no absolute path reaches an App
+  viewer.
+- **K9, hard links:** `open_file` and `open_blob_file` decline a file with more than one
+  name: `Declined` `hard_linked`, new id **`MPC-E412`** (`declined_hard_linked`, exit 4).
+  `session::FileIdentity` (device and inode), `session::file_identity(path)`,
+  `Session::file_identity()`, `BlobSession::file_identity()`.
+
+**Host notes**
+- One new id, `MPC-E412`; the registry snapshot, `docs/ERRORS.md` and `capabilities` carry
+  it. Refusal texts from `open_file` and file sessions now name files relative to the
+  workspace root: a host that parsed absolute paths out of them must use the paths it
+  holds instead. `AuditEvent::DiskError` keeps real paths (operator only).
+- `docs/HOST-ERRORS.md`: "Guidance per surface, paths and hard links".
+
+**Merged from v0.9.5** (the hotfix's refusals get registry ids; their exit codes and messages
+are unchanged)
+- **`MPC-E152 unaccepted`** (exit 3): `DocError::Unaccepted`, an update this build does not
+  accept, refused before anything is applied. `doc::RESERVED_ERROR_ID_UNACCEPTED` is now
+  `Some("MPC-E152")`.
+- **`MPC-E518 quarantined`** (exit 3): `DocError::Quarantined`, a stored doc set aside for
+  review and not loaded. `doc::RESERVED_ERROR_ID_QUARANTINED` is now `Some("MPC-E518")`.
+- `StoreError::NewerData` reports as **`MPC-E502 store_newer`** (exit 6), with details
+  `{table}`; its message is the upgrade guidance.
+- The registry snapshot, the `explain` goldens, `docs/ERRORS.md` and `capabilities` carry the
+  two new ids.
+
+### The hunk channel (live typing)
+
+**Additive** for hosts; no exit code changes; no store format change; no new dependency.
+
+**Added**
+- **`Session::edit_at_base(conn, root, base, hunks, &EditOptions)`** (K2, amendment E-LIVE
+  r2): a live edit made at a base version, rebased positionally through every change since
+  (`session::rebase`: the change applied first stays left at a tie; deletion vs deletion is a
+  no-op; others' insertions are never deleted; a replacement's text at the left end) and
+  applied as one attributed change. Refusals: `MPC-E111` only for competing text (a
+  replacement meeting a range deleted since, or an insert strictly inside one) with the
+  region; `MPC-E112` past the window; `MPC-E151` for hunks invalid at the base.
+- **`Session::events_since(conn, version)`** (K3): the `ChangeEvent`s since a version, from
+  the store, bounded by `Config::live_window_events` (1,000) and `live_window_bytes`
+  (4 MiB); `MPC-E112` past them.
+- **`session::rebase`** (`rebase_ours`, `rebase_incoming`, `map_point`, `map_range`): the
+  pure rules, shared with the JS client through `crates/base/tests/vectors/live_rebase.json`.
+- **Tests:** `tests/live_edit.rs`: each rule; the property (3 clients modelling the JS
+  client, mixed with agent edits, undo and outside edits) for P1–P4; the six mutants; the
+  vectors; a trace hook (`LIVE_TRACES`) for K2 Engine's exhaustive model. Clarification
+  r2.1: the window is exactly the hunk sets broadcast (checked against every subscriber, every
+  kind of change); clients typing in the same multi-author word never bounce; the mutant
+  `window-holds-expanded-hunks` is caught.
+- **E-LIVE r2.3: each hunk is carried as sent** (r2.2's rule (1), "re-canonicalize at every
+  step", withdrawn on both sides, after K2 Engine's exhaustive model found it wrong both ways
+  at 2 clients × 2 changes). `session::rebase::Carried` (new): a change while it is carried,
+  its hunks keeping their identities through every step (`through` for the server's role and
+  the client's own pending change, `mirrored` for an incoming change, `gaps` for the pending
+  change's gap form, `hunks` for the result, canonical). So a deletion of text another change
+  replaced no longer bounces when ours' own insertion came to touch it, and a replacement
+  split around others' text still conflicts with a replacement of its split-off part.
+  `LiveConflict::ours` is the hunk's index as sent. Vectors **119** (now refused at step 1)
+  and **137** (the conflict names hunk 1, not the merged hunk 0) change; five cases are
+  appended (209–213: the two counterexamples, an insert at each edge of a deleted range (S3),
+  a fully absorbed change (S4)).
+- **E-LIVE r2.3 S3: "strictly inside" under both tie-break placements.** An insertion conflicts
+  with a range a change since deleted (rule 4 (b) ii) only if it is strictly inside wherever
+  a tie put it among others' insertions at its point: each insertion is also carried with the
+  other bias (its left placement), and both must have deleted characters on both sides. So
+  an insertion tied with someone's text no longer bounces when a later deletion takes that
+  text and only one of its neighbours. Vectors **83** (the conflict now names hunk 1) and
+  **149** (now applied) change; **214** is appended (K2 Engine's case). The ID oracle judges
+  by both placements (K2 Engine's markers); the mutant `inside-by-tie-break` (the right
+  placement alone) is caught. K2 Engine's r2.3 exports (k2-mpc-engine 9e2dd2b: 2×1 539,
+  3×1 21,399, 2×2 8,811 cases) replay with 0 server and 0 mirror disagreements.
+  - **Tests:** an ID-level oracle (K2 Engine's: P2, a refusal only on a conflict by intent;
+    P2c, every such conflict refused) judges every live edit of the property, every stream;
+    a new stream of mixed edits at overlapping ranges reaches the shapes rule (1) got wrong;
+    the mutants `recanon-server-only` (caught by the client's and the server's disagreement)
+    and `recanon-both-sides` (caught by P2/P2c); the trace hook counts server and mirror
+    disagreements and replays K2 Engine's exported cases (`LIVE_TRACES`); a TP1 property
+    along histories for the carried forms.
+- **Undo grouping for streamed edits** (K4, undo spec U3): `EditOptions::group(token)`.
+  Consecutive edits from one connection with the same token (through `edit_at_base` or
+  `edit_with_options`) are **one undo step**. The session closes a group on idle on the host
+  clock (`Config::undo_group_idle_ms`, 1 s), a non-contiguous edit, a word boundary typed (a
+  space, tab or punctuation after a word character starts the next step), a newline (a step
+  of its own), another token or any other change by the person, an undo or redo, and anyone
+  else's change inside the group's span or touching it, in apply order (U3 (g)). The group is
+  one region whose provenance roots compose exactly, so its undo and redo are its edits',
+  element for element; a group that undid itself leaves no step. Agents never group. Only
+  the undo stack push changes (`session/live/group.rs`, `undo::compose_group`).
+- **Tests:** `tests/history.rs`, `hist_undo_group_person_*`: each closer, agents, a group
+  that undid itself, a group over someone else's text (by root, I1); the trace class
+  (`GROUP_TRACES` seeded histories, default 96: a person typing with tokens on two
+  connections, another person, idle gaps, undo and redo, against a string model of each
+  step's window); three planted faults (`differential::GroupMutant`: never closes on a
+  foreign change, on idle, on a word boundary), each caught by its scenario and by a trace.
+
+**Host notes**
+- Two `Config` fields (`live_window_events`, `live_window_bytes`) in `capabilities`.
+- `EditAtBase` (new), `ChangeEvent` unchanged. The JS client must reproduce the vectors.
+- **`RosterEvent::Cursor` gains `version: Seq`** (the roster push is unreleased, so this is
+  free): the doc version the caret's byte offsets are in, read with the caret at delivery
+  (after any edits that carried it). A `Snapshot`'s carets are at the snapshot's existing
+  `version`. A client maps a remote caret to its own text through the changes between.
+  Patterns on `Cursor` need the new field or `..`.
+- **`EditOptions::group(token)`** (new; `EditOptions` stays `Copy`, the token is kept as a
+  hash) and **`Config::undo_group_idle_ms`** (new, default 1,000; in `capabilities`). Pass the
+  client's `group` from each `edit` frame (client/WIRE.md). Without a token nothing changes.
+
+**Changed**
+- **The vendored engine is updated to k2-yrs k2.6.3** (`k2-yrs-0.28.0-k2.6.3`, from k2.2 on
+  main and k2.3.2 on the v0.9.7 speed work; k2.6.1–k2.6.3 add a warning-free build and
+  wording only; `tools/vendor-yrs.sh`, `--check` passes; `docs/YRS-FORK.md`). The vendored
+  copy leaves out the engine's own tests (`yrs/tests/`: they run in k2-yrs), as v0.9.6 did.
+  No kit API, store format or dependency change; `Cargo.lock` is unchanged.
+
+### The agent error surface
+
+**Additive** for hosts; **no exit code changes**; no store format change; no new dependency.
+
+**Added**
+- **Stable error ids** (`k2_mpc_base::errors`, `docs/ERRORS.md`, generated): one registry of
+  every refusal, `MPC-Ennn` grouped by area (1xx sessions and edits, 2xx history and undo, 3xx
+  claims, 4xx disk, 5xx store, 6xx erasure, 7xx tier 0, 8xx structured and CSV, 9xx limits):
+  97 ids, 93 live, 4 reserved (`MPC-E801`–`E803` for the CSV grid refusals, `E161` for engine
+  codes this build doesn't list). Each names the rule it enforces and says what to do next.
+  `MPCE-Ennn` is reserved for the engine (no ids yet); its codes cross as strings
+  (`ErrorReport::engine`).
+- **Every refusal carries its id**: `report()` on `SessionError`, `ToolError`, `ToolRunError`,
+  `StoreError`, `BlobError`, `DocError`, `Declined`, `PackError` (`errors::Refusal`);
+  `refusal()` on `WriteOutcome` and `UndoOutcome`; `ToolOutput::refusal` for an edit verb's
+  "no" (a failed patch, exact `replace` with no or several matches, a pack verb that applied
+  nothing, `patch --partial` rejects). `ErrorReport::plain()` is the message as it always read
+  with the id appended, `… (MPC-E110)`; `to_json()` is `{"id", "exit", "message", "next",
+  "rule", "details"}`.
+- **`explain` and `capabilities`** (`errors::run_meta`): an entry, or what the build can do
+  (verbs, flags, parity rows, the ids each verb can return, the limits in effect, the kit
+  version), as text or JSON. `Config::limits()` lists every setting.
+- `docs/HOST-ERRORS.md`: how a host's CLI surfaces them (`k2 doc explain`, `k2 doc
+  capabilities`, `--json`, the catalog rows). `crates/base/examples/mpc.rs`: a reference host
+  (the blind-agent test's CLI).
+- **The roster push** (K5): `Session::subscribe_roster(conn)` and
+  `SessionManager::subscribe_roster(conn)` return a `Receiver<RosterEvent>`. The first event is
+  a full `Snapshot` (the `roster()` rows with each participant's rights, at the doc's
+  version); then deltas: `Joined`, `Left`, `Rights`, `Role`, `Away`, `Cursor` (anchor and
+  head), `ClaimStarted` and `ClaimEnded` (with lines and version), and `Note` (a heads-up
+  delivered to someone). Every event names its participant as a `Who` (`Who::Pid` today;
+  `#[non_exhaustive]`, so an opaque handle can join it later without breaking matches).
+  - Coalesced over `Config::roster_interval_ms` (new, default 250): at most one delivery per
+    interval per doc; a caret moved many times is one event at its last place. Joins, leaves,
+    claim starts and ends and notes are never coalesced away.
+  - Bounded: `Config::roster_queue` (new, default 256) events per subscriber, and recorded
+    between two deliveries. A receiver that falls that far behind gets a fresh `Snapshot`
+    once it has room, instead of what it missed; a burst over it in one interval sends every
+    subscriber a `Snapshot`.
+  - Every subscriber of a doc sees the same events in the same order. Dropping the receiver
+    unsubscribes; it closes when the connection leaves, is kicked or loses read. Needs read.
+  - Built on the session's own presence and claims (`roster()` and the push share one fold);
+    no new state beyond what subscribers were last told, and nothing when nobody subscribes.
+  - No new agent verb: it is a host's feed, not a person's action, so no parity row.
+- **Opaque handles for App viewers** (K5): a viewer whose `Participant::kind` is
+  `ParticipantKind::App` never sees a pid, its own included. Every pid the kit hands it
+  becomes a handle, `p1`, `p2`...: the roster and its push (`Who::Handle`, new), change
+  events' author and `on_behalf_of`, `read`'s contributors, `blame`, `log` (and its `--by` /
+  `--on-behalf-of` filters, which take the viewer's handles; a raw pid matches nothing),
+  `claims`, `reservations`, `activity`, approvals, heads-up notes, `write --base` conflict notes, and
+  refusals that name someone (`Claimed`'s `by`, in the error and its report), and
+  `run_tool`'s output (v0.9.7, below).
+  - Per doc and per viewer: numbered in the order that viewer first sees each pid; the same
+    for the same pid across the viewer's reconnects while the doc is loaded; independent
+    between viewers. The kit's own markers (`kit:import`, `kit:external`...) pass unchanged.
+  - Erasing a participant forgets its handles.
+- **Participant overflow** (K11): `Config::participants_max` (new, default 32) distinct
+  participants per doc. A new pid joining past it is a **watcher**: read-only whatever the
+  host grants, no caret, view or claims, no roster row (the roster shows only a count:
+  `Session::watching`, `RosterEvent::Snapshot { watching }`, `RosterEvent::Watching`).
+  - Its edits, carets and claims are refused with **`MPC-E305 watching`** (exit 3), the next
+    id in the presence area (appended to the registry).
+  - A slot that frees promotes nobody by itself: the host calls
+    `Session::promote_watcher()`, which lets the earliest watcher in (its rights are the
+    host's again from its next call) when a slot is free.
+  - No person action, so no parity row.
+
+**Host notes**
+- Drive the roster push from your clock: call `SessionManager::flush_rosters()` (cheap; `tick`
+  calls it too) at least every `roster_interval_ms`. The kit starts no thread and no timer;
+  any call on a doc also delivers what is due. `capabilities` lists the two new limits.
+- **App viewers see handles, never pids.** Stamp `ParticipantKind::App` at join for anyone
+  who comes through an App; the kit does the rest. Match `Who` with a wildcard arm. A handle
+  is meaningful only to the viewer that received it (pass it back on that viewer's own
+  calls, as `log --by p2`).
+- **New refusal:** `MPC-E305 watching` (exit 3) for an edit by a viewer past
+  `participants_max`. New limit in `capabilities`: `participants_max` (32). Promote a watcher
+  with `Session::promote_watcher()` when you want to: the kit never does it by itself.
+- Tier 0 (blob docs) uses handles too: an App viewer's roster, leases (`LeaseInfo.pid`),
+  reads, versions, log, blame, approvals and `Leased` refusals (`holder`) name others by
+  handle. Participant overflow is text docs only for now.
+
+**Changed**
+- `ToolOutput::stderr_summary` ends with the id when the call was refused in-band: `nothing
+  applied to n.md · v12 (MPC-E126)`. Nothing else is reworded.
+
+**Build and test tooling** (the kit's own builds only: a host that vendors the kit builds with
+its own profiles; release builds are byte-identical)
+- `Cargo.toml`: dev builds with `debug = "line-tables-only"` and every dependency at
+  `opt-level = 1`. With cargo-nextest (`.config/nextest.toml`: no retries), the suite's
+  parts ran in 201 s against 387 s, cold build plus suite 384 s against 498 s, `target/`
+  2.9 GB against 5.0 GB; the cold build alone is slower (183 s against 111 s). Median of 3 on
+  one build node, `tools/README.md` ("Build settings").
+- Node jobs run each part under nextest when the node has it (`--needs cargo-nextest`), else
+  `cargo test`; build jobs and test threads follow the job's CPU quota; the job prints its
+  memory peak.
+
 ## v0.9.6 (2026-10-29)
 
 A maintenance release on v0.9.5 with **one behaviour fix** (an outside save that deleted a

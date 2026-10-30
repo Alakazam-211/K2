@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use fastrand::Rng;
@@ -38,14 +38,20 @@ const MSG_SYNC_STEP_1: usize = 0;
 const MSG_SYNC_STEP_2: usize = 1;
 const MSG_SYNC_UPDATE: usize = 2;
 
+/// Runs a fuzz scenario. A `seed` of 0 takes the seed from the `YRS_FUZZ_SEED` env var, or a
+/// random one if that isn't set; the seed is printed either way, and the same seed replays the
+/// same scenario (k2: the connector's maps are ordered, so nothing depends on hash order).
 pub fn run_scenario<F>(mut seed: u64, mods: &[F], users: usize, iterations: usize)
 where
     F: Fn(&mut Doc, &mut Rng),
 {
     if seed == 0 {
-        seed = fastrand::get_seed();
-        println!("run scenario with seed: {}", seed);
+        seed = std::env::var("YRS_FUZZ_SEED")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(fastrand::get_seed);
     }
+    println!("run scenario with seed: {} (YRS_FUZZ_SEED)", seed);
 
     let rng = Rng::with_seed(seed);
     let tc = TestConnector::with_peer_num(rng, users as u64);
@@ -106,9 +112,9 @@ struct Inner {
     rng: Rng,
     peers: Vec<TestPeer>,
     /// Maps all Client IDs to indexes in the `docs` vector.
-    all: HashMap<ClientID, usize>,
+    all: BTreeMap<ClientID, usize>,
     /// Maps online Client IDs to indexes in the `docs` vector.
-    online: HashMap<ClientID, usize>,
+    online: BTreeMap<ClientID, usize>,
 }
 
 impl TestConnector {
@@ -117,8 +123,8 @@ impl TestConnector {
         TestConnector(Arc::new(Mutex::new(Inner {
             rng,
             peers: Vec::new(),
-            all: HashMap::new(),
-            online: HashMap::new(),
+            all: BTreeMap::new(),
+            online: BTreeMap::new(),
         })))
     }
 
@@ -450,7 +456,7 @@ impl TestConnector {
 
             let astore = a.store();
             let bstore = b.store();
-            let mut all_clients = HashSet::new();
+            let mut all_clients = BTreeSet::new();
             for (&client, _) in astore.blocks.iter() {
                 all_clients.insert(client);
             }
@@ -466,6 +472,20 @@ impl TestConnector {
             }
             assert_eq!(astore.pending, bstore.pending);
             assert_eq!(astore.pending_ds, bstore.pending_ds);
+        }
+        // k2: once every message is delivered, nothing may be left pending (equal pending
+        // updates on every peer would pass the checks above)
+        for p in inner.peers.iter() {
+            let p = p.state();
+            let txn = p.doc.transact();
+            let store = txn.store();
+            assert!(
+                store.pending.is_none() && store.pending_ds.is_none(),
+                "peer {} has a pending update or delete set: {:?} {:?}",
+                p.doc.client_id(),
+                store.pending,
+                store.pending_ds
+            );
         }
     }
 
@@ -509,7 +529,7 @@ pub struct TestPeer {
 #[derive(Debug)]
 struct TestPeerState {
     doc: Doc,
-    receiving: HashMap<ClientID, VecDeque<Vec<u8>>>,
+    receiving: BTreeMap<ClientID, VecDeque<Vec<u8>>>,
     updates: VecDeque<Vec<u8>>,
 }
 
@@ -518,7 +538,7 @@ impl TestPeer {
         TestPeer {
             state: Arc::new(Mutex::new(TestPeerState {
                 doc: Doc::with_options(Options::with_client_id(client_id)),
-                receiving: HashMap::new(),
+                receiving: BTreeMap::new(),
                 updates: VecDeque::new(),
             })),
             outbox: Arc::new(Mutex::new(VecDeque::new())),

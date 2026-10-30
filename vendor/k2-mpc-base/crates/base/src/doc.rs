@@ -23,7 +23,9 @@
 //!   [`DEFAULT_EDIT_CHECK_EVERY`] by default, [`Doc::set_edit_check_every`]) also makes the
 //!   edit the old way, through a throwaway replica, and compares the two updates byte for
 //!   byte; a mismatch is never served (the doc takes the replica's update and uses that path
-//!   until reloaded).
+//!   until reloaded). Past [`DEFAULT_EDIT_CHECK_SCALE_UNITS`] of history the interval grows
+//!   with the doc's size ([`Doc::set_edit_check_scale`]), so the check's cost per edit stays
+//!   bounded.
 
 use crate::engine::{BlameRun, EngineDoc, YrsDoc};
 use crate::schema::{Kind, Schema};
@@ -38,6 +40,16 @@ pub const MAX_CLIENT_ID: ClientId = (1 << 53) - 1;
 /// How often [`Doc::edit_as`]'s runtime check samples an edit by default: one in 1,000.
 pub const DEFAULT_EDIT_CHECK_EVERY: u32 = 1000;
 
+/// The doc size past which [`Doc::edit_as`]'s runtime check samples less often by default
+/// (v0.9.7): 50,000 UTF-16 units of history ([`Doc::set_edit_check_scale`]), about the
+/// history at version 10,000 in the 32-participant soak. Past it the interval grows with the
+/// history, so the check's amortised cost per edit stays about what it is there.
+pub const DEFAULT_EDIT_CHECK_SCALE_UNITS: u64 = 50_000;
+
+/// The default rate of the engine's position index check (v0.9.7): one marker lookup in this
+/// many also walks the text from its start and compares ([`Doc::set_position_check_every`]).
+pub const DEFAULT_POSITION_CHECK_EVERY: u32 = 1000;
+
 /// What a checked client update contains.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct UpdateInfo {
@@ -47,12 +59,12 @@ pub struct UpdateInfo {
     pub delete_only: bool,
 }
 
-/// Placeholder for [`DocError::Unaccepted`]'s error id: the slot is reserved, and the id is
-/// assigned when the error-surface registry merges (`MPC-E152` on main's registry).
-pub const RESERVED_ERROR_ID_UNACCEPTED: Option<&str> = None;
-/// Placeholder for [`DocError::Quarantined`]'s error id (reserved, as above; `MPC-E518` on
-/// main's registry).
-pub const RESERVED_ERROR_ID_QUARANTINED: Option<&str> = None;
+/// [`DocError::Unaccepted`]'s error id (`None` in v0.9.5, before the registry): `MPC-E152`
+/// `unaccepted` (`docs/ERRORS.md`).
+pub const RESERVED_ERROR_ID_UNACCEPTED: Option<&str> = Some("MPC-E152");
+/// [`DocError::Quarantined`]'s error id (`None` in v0.9.5, before the registry): `MPC-E518`
+/// `quarantined` (`docs/ERRORS.md`).
+pub const RESERVED_ERROR_ID_QUARANTINED: Option<&str> = Some("MPC-E518");
 
 /// An engine-level error. `#[non_exhaustive]` since v0.9.5 (which added two variants): match
 /// it with a wildcard arm.
@@ -81,13 +93,13 @@ pub enum DocError {
     #[error("state could not be loaded: {0}")]
     Load(String),
     /// A client update was refused, unapplied (hardening, v0.9.5): it carries content the
-    /// kit never uses (subdocuments). Exit 3 (`tools::exit::REFUSED`). Error id: reserved,
-    /// [`RESERVED_ERROR_ID_UNACCEPTED`].
+    /// kit never uses (subdocuments). Exit 3 (`tools::exit::REFUSED`). Error id `MPC-E152`
+    /// ([`RESERVED_ERROR_ID_UNACCEPTED`]).
     #[error("update contains content this host doesn't accept")]
     Unaccepted,
     /// A stored doc holds content the kit never uses (subdocuments): it is quarantined, not
-    /// loaded as live (hardening: the store-load scan, v0.9.5). Exit 3. Error id: reserved,
-    /// [`RESERVED_ERROR_ID_QUARANTINED`].
+    /// loaded as live (hardening: the store-load scan, v0.9.5). Exit 3. Error id `MPC-E518`
+    /// ([`RESERVED_ERROR_ID_QUARANTINED`]).
     #[error("stored doc contains content this host doesn't accept; it was not loaded")]
     Quarantined,
     #[error("invalid client id {0}")]
@@ -298,6 +310,68 @@ impl Doc {
         self.inner.set_check_every(every);
     }
 
+    /// The runtime check's adaptive interval (v0.9.7): a sampled edit costs O(the doc's
+    /// history), so past `units` of history (UTF-16 units: the sum of the state vector's
+    /// clocks, every unit ever inserted) the interval grows in proportion to it, `every x
+    /// history / units` edits, never fewer than `every` ([`Doc::set_edit_check_every`]). The
+    /// check's amortised cost per edit stays bounded; a doc below `units` is checked one edit
+    /// in `every`. 0: a fixed rate. Default [`DEFAULT_EDIT_CHECK_SCALE_UNITS`]. Both setters
+    /// (the session calls them after every load) place the next sample from the doc's
+    /// history alone: `every` edits away below `units`, and past it at a phase spread over
+    /// the interval, so the long-run rate is one edit in the interval however often the doc
+    /// is reloaded.
+    pub fn set_edit_check_scale(&mut self, units: u64) {
+        self.inner.set_check_scale(units);
+    }
+
+    /// The engine's position index (v0.9.7) finds a text position from a recent one (a
+    /// marker) instead of walking the text from its start. One marker lookup in `every` also
+    /// walks and compares (0: never; default [`DEFAULT_POSITION_CHECK_EVERY`]; tests use 1); a
+    /// mismatch uses the walk, drops the text's markers and is reported.
+    pub fn set_position_check_every(&mut self, every: u32) {
+        self.inner.set_position_every(every);
+    }
+
+    /// The engine's position index counters since this doc was made or loaded (test-only:
+    /// the soak's hit rate, v0.9.7).
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn position_index_stats(&self) -> crate::differential::PositionIndexStats {
+        let [lookups, marker_hits, walks, shadow_checks, mismatches, stale_markers] =
+            self.inner.position_stats();
+        crate::differential::PositionIndexStats {
+            lookups,
+            marker_hits,
+            walks,
+            shadow_checks,
+            mismatches,
+            stale_markers,
+        }
+    }
+
+    /// Test-only: the doc's history in UTF-16 units, the runtime check's measure of its size
+    /// ([`Doc::set_edit_check_scale`]; the soak prints it, v0.9.7).
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn history_units_for_tests(&self) -> u64 {
+        self.inner.history_units_for_tests()
+    }
+
+    /// Test-only: each text root's text read afresh from the engine (not the cache), sorted
+    /// by root (the soak's diagnosis, v0.9.7).
+    #[cfg(any(test, feature = "differential"))]
+    #[doc(hidden)]
+    pub fn engine_texts_for_tests(&self) -> Vec<(&'static str, String)> {
+        self.inner.texts_for_tests()
+    }
+
+    /// Test-only: plant a bug in the engine's position index (until the doc is reloaded).
+    #[cfg(feature = "planted-position-bugs")]
+    #[doc(hidden)]
+    pub fn plant_position_bug(&self, bug: crate::differential::PlantedPositionBug) {
+        self.inner.plant_position_bug(bug.into());
+    }
+
     /// What the runtime check found since the last call (the session reports each).
     pub(crate) fn take_engine_checks(&mut self) -> Vec<crate::engine::EngineCheck> {
         self.inner.take_checks()
@@ -321,18 +395,19 @@ impl Doc {
         self.inner.clock_of(client)
     }
 
-    /// Test-only: each text root's text read afresh from the engine (not the cache), sorted
-    /// by root (the soak's diagnosis).
-    #[cfg(any(test, feature = "differential"))]
-    #[doc(hidden)]
-    pub fn engine_texts_for_tests(&self) -> Vec<(&'static str, String)> {
-        self.inner.texts_for_tests()
-    }
-
     /// Whether this doc and `other` have the same state vector (the same inserts; deletes
     /// aren't in it). O(clients). The disk replica's marker (v0.9.4).
     pub(crate) fn same_state_vector(&self, other: &Doc) -> bool {
         self.inner.same_state_vector(&other.inner)
+    }
+
+    /// Whether this doc and `other` hold the same content: the same inserts (state
+    /// vectors), the same deletions (delete sets) and the same texts, whatever their block
+    /// layouts. Two docs given the same changes may split equal content into blocks
+    /// differently, so they can encode differently: compare docs with this, not with their
+    /// encodings. O(doc). (v0.9.7)
+    pub fn same_content(&self, other: &Doc) -> bool {
+        self.inner.same_content(&other.inner)
     }
 
     /// Whether this doc holds updates it couldn't integrate (missing dependencies) or is

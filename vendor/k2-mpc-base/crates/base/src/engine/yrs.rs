@@ -8,15 +8,16 @@
 
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use yrs::block::ClientID;
+use yrs::branch::BranchID;
 use yrs::types::text::ChangeKind as YChangeKind;
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::Encode;
 use yrs::{
-    Any, Doc, GetString, OffsetKind, Options, Out, ReadTxn, Snapshot, StateVector, Text, TextRef,
-    Transact, Update,
+    Any, Doc, GetString, OffsetKind, Options, Out, PositionMismatch, ReadTxn, Snapshot,
+    StateVector, Text, TextRef, Transact, Update,
 };
 #[cfg(feature = "conformance")]
 use yrs::{Assoc, IndexedSequence, StickyIndex};
@@ -27,11 +28,12 @@ use crate::schema::{Kind, Schema};
 use crate::text::diff::Hunk;
 
 pub(crate) struct YrsDoc {
-    doc: Doc,
+    // handles drop before their Doc (fields drop in declaration order; rule 8)
     texts: HashMap<&'static str, TextRef>,
-    /// An apply left the doc in a state that can't be trusted: pending updates (yrs 0.28
-    /// panics encoding those, transaction.rs:408, an unwrap on a merge error), or a failed or
-    /// panicked apply that may have half-integrated. Nothing is encoded or edited from a
+    doc: Doc,
+    /// An apply left the doc in a state that can't be trusted: updates left pending (the
+    /// engine can't encode those reliably), or a failed or panicked apply that may have
+    /// half-integrated. Nothing is encoded or edited from a
     /// poisoned doc; its owner reloads it from the store.
     poisoned: bool,
     /// Each text root's text, as last read or written (v0.9.2). Reading it out of Yrs walks
@@ -40,6 +42,47 @@ pub(crate) struct YrsDoc {
     text_cache: Mutex<HashMap<&'static str, String>>,
     /// The sampled runtime check of the edit path and the text cache (v0.9.3).
     checks: Checks,
+    /// What the engine's position index reported through its audit hook (v0.9.7: a shadow
+    /// check found its marker path and the full walk disagree; the walk was used). Shared
+    /// with the hook, which runs inside a transaction and only pushes here.
+    positions: Arc<Mutex<Vec<EngineCheck>>>,
+}
+
+/// A throwaway replica and its handle on one text root ([`YrsDoc::replica`]).
+struct Replica {
+    // handles drop before their Doc (fields drop in declaration order; rule 8)
+    text: TextRef,
+    doc: Doc,
+}
+
+/// At most this many position index reports wait to be taken (a broken index reports on
+/// every sampled lookup; the rest are counted by the engine, not kept).
+const POSITION_REPORTS_KEPT: usize = 64;
+
+/// Point `doc`'s position index audit hook at `sink` and set its shadow rate (one marker
+/// lookup in `every` also walks and compares; 0 never). Before any transaction on `doc`:
+/// both take its write lock.
+fn watch_positions(doc: &Doc, sink: &Arc<Mutex<Vec<EngineCheck>>>, every: u32) {
+    let sink = Arc::clone(sink);
+    doc.set_position_audit_hook(Some(Box::new(move |m: &PositionMismatch| {
+        let root = match &m.branch {
+            BranchID::Root(name) => Some(name.to_string()),
+            BranchID::Nested(_) => None,
+        };
+        let mut found = sink.lock().unwrap_or_else(|p| p.into_inner());
+        if found.len() < POSITION_REPORTS_KEPT {
+            found.push(EngineCheck::Position {
+                root,
+                index: m.index,
+                marker: m.marker.0,
+            });
+        }
+    })));
+    doc.set_position_shadow_rate(every);
+    #[cfg(any(test, feature = "differential"))]
+    if crate::differential::position_index_off() {
+        doc.set_position_index(false);
+    }
 }
 
 /// The canary (v0.9.3): every `every`th edit is also made the old way (a throwaway replica
@@ -48,10 +91,29 @@ pub(crate) struct YrsDoc {
 /// back to the state before the edit and takes the throwaway's update, then makes every
 /// later edit that way (`fallback`), or reads every text afresh (`cache_off`), until it is
 /// reloaded. What it found waits in `found` for the owner to report.
+///
+/// The interval adapts to the doc's size (v0.9.7): a sampled edit costs O(the doc's history),
+/// so past `scale` units of history the interval grows in proportion to it (`every x units /
+/// scale`, never under `every`), keeping the canary's amortised cost per edit bounded. Below
+/// `scale` a doc is checked one edit in `every`, as before. Setting the rate (as the session
+/// does after every load) places the next sample from the doc's history alone: `every` edits
+/// away below the scale; past it at a phase within the interval, `1 + mix(units) mod
+/// interval` edits away ([`canary_phase`]). A reload starts the edit count afresh, so a fixed first gap would set the rate
+/// by how often the doc is reloaded: `every` brings each check after a reload closer, and a
+/// full interval never fires when reloads come more often than that. With the phase spread
+/// over the interval, each reload samples with a probability of about (edits until the next
+/// reload) / interval, and the long-run rate stays about one edit in `interval`.
 #[derive(Debug, Default)]
 struct Checks {
-    /// 0: never.
+    /// The base interval, the floor. 0: never.
     every: u32,
+    /// The history (UTF-16 units, [`history_units`]) past which the interval grows with it.
+    /// 0: a fixed rate.
+    scale: u64,
+    /// The edit count of the next sample.
+    next: u64,
+    /// The position index's shadow rate (v0.9.7; 0: never).
+    position_every: u32,
     edits: u64,
     fallback: bool,
     cache_off: bool,
@@ -62,17 +124,74 @@ struct Checks {
 
 impl Checks {
     fn new() -> Self {
-        Self {
+        let mut c = Self {
             every: crate::doc::DEFAULT_EDIT_CHECK_EVERY,
+            scale: crate::doc::DEFAULT_EDIT_CHECK_SCALE_UNITS,
+            position_every: crate::doc::DEFAULT_POSITION_CHECK_EVERY,
             ..Self::default()
-        }
+        };
+        // an empty doc: the first sample at edit `every`
+        c.restart(0);
+        c
     }
 
-    /// Count an edit; whether it is a sampled one.
-    fn sample(&mut self) -> bool {
+    /// Count an edit; whether it is a sampled one. A sampled edit places the next sample
+    /// from the doc's history, `units` (read only then: O(clients)).
+    fn sample(&mut self, units: impl FnOnce() -> u64) -> bool {
         self.edits += 1;
-        self.every != 0 && self.edits % u64::from(self.every) == 0
+        if self.every == 0 || self.edits < self.next {
+            return false;
+        }
+        self.next = self.edits.saturating_add(self.interval(units()));
+        true
     }
+
+    /// The edits until the next sample on a doc with `units` of history: `every`, or
+    /// `every x units / scale` past the scale (saturating).
+    fn interval(&self, units: u64) -> u64 {
+        let every = u64::from(self.every);
+        if self.scale == 0 {
+            return every;
+        }
+        let grown = u128::from(every) * u128::from(units) / u128::from(self.scale);
+        every.max(u64::try_from(grown).unwrap_or(u64::MAX))
+    }
+
+    /// The next sample on a doc with `units` of history when the rate is set (after every
+    /// load): `every` edits from now below the scale (the first sample at edit `every`), and
+    /// past it at a phase within the interval derived from the history ([`canary_phase`]).
+    fn restart(&mut self, units: u64) {
+        let interval = self.interval(units);
+        let first = if self.every != 0 && self.scale != 0 && units > self.scale {
+            canary_phase(units, interval)
+        } else {
+            interval
+        };
+        self.next = self.edits.saturating_add(first);
+    }
+}
+
+/// The canary's first gap after a reload past the scale: `1 + mix(units) mod interval`, in
+/// 1..=interval. Deterministic, and spread evenly over the interval: the history is mixed
+/// first (SplitMix64's finaliser) because `units mod interval` alone is not. The interval is
+/// `every x units / scale`, so `units mod interval` is under `scale / every` (under 50 edits
+/// at the defaults) whatever the interval, which would check soon after every reload.
+fn canary_phase(units: u64, interval: u64) -> u64 {
+    let mut z = units.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    1 + z % interval.max(1)
+}
+
+/// The doc's history in UTF-16 units: the sum of its state vector's clocks (every unit ever
+/// inserted counts, deleted or not). O(clients).
+fn history_units(doc: &Doc) -> u64 {
+    doc.transact()
+        .state_vector()
+        .iter()
+        .map(|(_, clock)| u64::from(*clock))
+        .sum()
 }
 
 /// Every Yrs doc the kit makes. **GC stays on** (`skip_gc: false`, K-PURGE-11, E-ERASE-10):
@@ -86,6 +205,23 @@ fn new_doc(client: u64) -> Doc {
         skip_gc: false,
         ..Options::default()
     })
+}
+
+/// Root text `name` of `doc`: the only way this module takes a shared-type handle
+/// (ARCHITECTURE rule 8, v0.9.7). A root's handle stays valid for the doc's life; a nested
+/// type's handle can outlive its type after a remote delete, so the kit never holds one, and
+/// never across an apply. Checked in debug builds and by
+/// `tests::the_engine_holds_only_root_handles`.
+fn root_text(doc: &Doc, name: &str) -> TextRef {
+    let t = doc.get_or_insert_text(name);
+    debug_assert!(
+        matches!(
+            AsRef::<yrs::branch::Branch>::as_ref(&t).id(),
+            BranchID::Root(_)
+        ),
+        "the kit holds only root handles"
+    );
+    t
 }
 
 fn guarded<T>(f: impl FnOnce() -> Result<T, DocError>) -> Result<T, DocError> {
@@ -105,8 +241,8 @@ fn decode_accepted(update: &[u8]) -> Result<Update, DocError> {
 }
 
 /// The store-load scan (hardening, v0.9.5): a stored state or log entry holding content the
-/// kit never uses (subdocuments) is never loaded as live ([`DocError::Quarantined`]). Expected never to fire: the kit never
-/// writes such content, and refuses it at every ingress.
+/// kit never uses (subdocuments) is never loaded as live ([`DocError::Quarantined`]).
+/// Expected never to fire: the kit never writes such content, and refuses it at every ingress.
 fn stored_accepted(u: &Update) -> Result<(), DocError> {
     if u.has_subdoc_content() {
         return Err(DocError::Quarantined);
@@ -119,7 +255,7 @@ fn roots(doc: &Doc, schema: &Schema) -> HashMap<&'static str, TextRef> {
         .roots
         .iter()
         .filter(|(_, k)| *k == Kind::Text)
-        .map(|(n, _)| (*n, doc.get_or_insert_text(*n)))
+        .map(|(n, _)| (*n, root_text(doc, n)))
         .collect()
 }
 
@@ -276,9 +412,9 @@ impl YrsDoc {
 
     /// A throwaway replica of this doc (its full state applied to a fresh Yrs doc), with
     /// the replica's handle on text root `root`. Nothing about it outlives the caller.
-    fn replica(&self, client: u64, root: &str) -> Result<(Doc, TextRef), DocError> {
+    fn replica(&self, client: u64, root: &str) -> Result<Replica, DocError> {
         let replica = new_doc(client);
-        let t = replica.get_or_insert_text(root);
+        let t = root_text(&replica, root);
         let full = guarded(|| {
             Ok(self
                 .doc
@@ -292,7 +428,10 @@ impl YrsDoc {
                 .apply_update(u)
                 .map_err(|e| DocError::Apply(e.to_string()))
         })?;
-        Ok((replica, t))
+        Ok(Replica {
+            text: t,
+            doc: replica,
+        })
     }
 
     /// Make the change `plans` as `client` on this doc and return its update: on return the
@@ -328,6 +467,7 @@ impl YrsDoc {
         if !sampled {
             return self.main_doc_update(client, plans);
         }
+        prof!("engine.canary");
         // the canary: the same edit the old way, from the state before it
         let before = self.encode_v2()?;
         let want = self.throwaway_update(client, plans)?;
@@ -358,7 +498,11 @@ impl YrsDoc {
         let planted = false;
         let (doc, texts) = (&self.doc, &self.texts);
         let made = guarded(|| {
-            let mut txn = doc.transact_mut_as(ClientID::new(client));
+            let mut txn = {
+                prof!("engine.txn_begin");
+                doc.transact_mut_as(ClientID::new(client))
+            };
+            prof!("engine.txn_ops");
             for (root, hunks, pos) in plans {
                 let t = &texts[root];
                 if planted {
@@ -379,6 +523,9 @@ impl YrsDoc {
                 }
                 for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
                     if len16 > 0 {
+                        // upstream deletes what it can past the end, panics, and the
+                        // transaction commits as it unwinds: never ask for that
+                        debug_assert!(u64::from(s16) + u64::from(len16) <= u64::from(t.len(&txn)));
                         t.remove_range(&mut txn, s16, len16);
                     }
                     if !h.insert.is_empty() {
@@ -386,7 +533,15 @@ impl YrsDoc {
                     }
                 }
             }
-            Ok(txn.encode_update_v1())
+            let update = {
+                prof!("engine.encode_update");
+                txn.encode_update_v1()
+            };
+            {
+                prof!("engine.txn_commit");
+                drop(txn);
+            }
+            Ok(update)
         });
         if made.is_err() {
             self.poisoned = true;
@@ -398,10 +553,11 @@ impl YrsDoc {
     /// the canary's way back. The checks' state stays.
     fn reset_to(&mut self, state: &[u8]) -> Result<(), DocError> {
         let doc = new_doc(SESSION_CLIENT);
+        watch_positions(&doc, &self.positions, self.checks.position_every);
         let texts: HashMap<&'static str, TextRef> = self
             .texts
             .keys()
-            .map(|n| (*n, doc.get_or_insert_text(*n)))
+            .map(|n| (*n, root_text(&doc, n)))
             .collect();
         guarded(|| {
             let u = Update::decode_v2(state).map_err(|e| DocError::Load(e.to_string()))?;
@@ -443,14 +599,62 @@ impl YrsDoc {
         }
     }
 
-    /// How often the canary samples an edit (0: never).
+    /// How often the canary samples an edit, at the least (0: never). The next sample is
+    /// `every` edits from now below the scale, and past it at a phase within the interval
+    /// derived from the doc's history (`Checks::restart`): the session sets the rate after
+    /// every load, and the long-run rate survives reloads.
     pub(crate) fn set_check_every(&mut self, every: u32) {
         self.checks.every = every;
+        self.checks.restart(history_units(&self.doc));
     }
 
-    /// What the canary found since the last call.
+    /// The history (UTF-16 units) past which the canary's interval grows with the doc's size
+    /// (0: a fixed rate). The next sample is placed as for [`YrsDoc::set_check_every`].
+    pub(crate) fn set_check_scale(&mut self, units: u64) {
+        self.checks.scale = units;
+        self.checks.restart(history_units(&self.doc));
+    }
+
+    /// The doc's history in UTF-16 units (the sum of its state vector's clocks), the
+    /// canary's measure of its size (test-only: the soak prints it, v0.9.7).
+    #[cfg(any(test, feature = "differential"))]
+    pub(crate) fn history_units_for_tests(&self) -> u64 {
+        history_units(&self.doc)
+    }
+
+    /// The position index's counters (k2.3): lookups, marker hits, walks, shadow checks,
+    /// mismatches, stale markers.
+    #[cfg(any(test, feature = "differential"))]
+    pub(crate) fn position_stats(&self) -> [u64; 6] {
+        let s = self.doc.position_index_stats();
+        [
+            s.lookups,
+            s.marker_hits,
+            s.walks,
+            s.shadow_checks,
+            s.mismatches,
+            s.stale_markers,
+        ]
+    }
+
+    /// The position index's shadow rate: one marker lookup in `every` also walks the text
+    /// from its start and compares (0: never).
+    pub(crate) fn set_position_every(&mut self, every: u32) {
+        self.checks.position_every = every;
+        self.doc.set_position_shadow_rate(every);
+    }
+
+    /// Test-only: plant a bug in this doc's position index (until it is reset or reloaded).
+    #[cfg(feature = "planted-position-bugs")]
+    pub(crate) fn plant_position_bug(&self, bug: yrs::PlantedPositionBug) {
+        self.doc.plant_position_bug(Some(bug));
+    }
+
+    /// What the canary and the position index found since the last call.
     pub(crate) fn take_checks(&mut self) -> Vec<EngineCheck> {
-        std::mem::take(&mut self.checks.found)
+        let mut found = std::mem::take(&mut self.checks.found);
+        found.append(&mut self.positions.lock().unwrap_or_else(|p| p.into_inner()));
+        found
     }
 
     /// Whether the canary switched this doc to the throwaway path (until reload).
@@ -473,7 +677,7 @@ impl YrsDoc {
         let rtexts: HashMap<&str, TextRef> = self
             .texts
             .keys()
-            .map(|n| (*n, replica.get_or_insert_text(*n)))
+            .map(|n| (*n, root_text(&replica, n)))
             .collect();
         let full = guarded(|| {
             Ok(self
@@ -494,6 +698,7 @@ impl YrsDoc {
             // Back to front, so earlier offsets stay valid.
             for (h, &(s16, len16)) in hunks.iter().zip(pos.iter()).rev() {
                 if len16 > 0 {
+                    debug_assert!(u64::from(s16) + u64::from(len16) <= u64::from(t.len(&txn)));
                     t.remove_range(&mut txn, s16, len16);
                 }
                 if !h.insert.is_empty() {
@@ -524,10 +729,13 @@ impl YrsDoc {
         self.usable()?;
         let state = self.encode_v2()?;
         let doc = new_doc(SESSION_CLIENT);
+        let positions = Arc::new(Mutex::new(Vec::new()));
+        let checks = Checks::new();
+        watch_positions(&doc, &positions, checks.position_every);
         let texts: HashMap<&'static str, TextRef> = self
             .texts
             .keys()
-            .map(|n| (*n, doc.get_or_insert_text(*n)))
+            .map(|n| (*n, root_text(&doc, n)))
             .collect();
         guarded(|| {
             let u = Update::decode_v2(&state).map_err(|e| DocError::Load(e.to_string()))?;
@@ -540,7 +748,8 @@ impl YrsDoc {
             texts,
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
-            checks: Checks::new(),
+            checks,
+            positions,
         })
     }
 
@@ -593,11 +802,11 @@ impl YrsDoc {
         client: ClientId,
         plans: &[TextPlan],
     ) -> Result<Vec<u8>, DocError> {
-        let (replica, _) = self.replica(client, plans.first().map_or("", |p| p.0))?;
+        let replica = self.replica(client, plans.first().map_or("", |p| p.0))?.doc;
         let rtexts: HashMap<&str, TextRef> = self
             .texts
             .keys()
-            .map(|n| (*n, replica.get_or_insert_text(*n)))
+            .map(|n| (*n, root_text(&replica, n)))
             .collect();
         guarded(|| {
             let mut txn = replica.transact_mut();
@@ -632,13 +841,13 @@ impl YrsDoc {
         let replica = match kept.entry(client) {
             std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
             std::collections::hash_map::Entry::Vacant(e) => {
-                e.insert(self.replica(client, plans.first().map_or("", |p| p.0))?.0)
+                e.insert(self.replica(client, plans.first().map_or("", |p| p.0))?.doc)
             }
         };
         let replica = &*replica;
         let rtexts: HashMap<&str, TextRef> = plans
             .iter()
-            .map(|p| (p.0, replica.get_or_insert_text(p.0)))
+            .map(|p| (p.0, root_text(replica, p.0)))
             .collect();
         guarded(|| {
             let mut txn = replica.transact_mut();
@@ -749,6 +958,39 @@ impl YrsDoc {
         self.doc.transact().state_vector() == other.doc.transact().state_vector()
     }
 
+    /// The delete set as merged clock ranges per client, sorted: equal for equal deletions
+    /// however each doc split its blocks.
+    fn deleted_ranges(&self) -> Vec<(u64, Vec<(u32, u32)>)> {
+        let ds = self.doc.transact().snapshot().delete_set;
+        let mut out: Vec<(u64, Vec<(u32, u32)>)> = ds
+            .iter()
+            .map(|(client, ranges)| {
+                let mut v: Vec<(u32, u32)> = ranges.iter().map(|r| (r.start, r.end)).collect();
+                v.sort_unstable();
+                let mut merged: Vec<(u32, u32)> = Vec::with_capacity(v.len());
+                for (s, e) in v {
+                    match merged.last_mut() {
+                        Some(last) if s <= last.1 => last.1 = last.1.max(e),
+                        _ => merged.push((s, e)),
+                    }
+                }
+                (client.get(), merged)
+            })
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Whether this doc and `other` hold the same content: the same inserts (state
+    /// vectors), the same deletions (delete sets, as merged ranges) and the same texts. Not
+    /// their encodings: upstream can split identical content into blocks differently on two
+    /// replicas, so equal docs may encode differently. O(doc).
+    pub(crate) fn same_content(&self, other: &YrsDoc) -> bool {
+        self.same_state_vector(other)
+            && self.deleted_ranges() == other.deleted_ranges()
+            && self.texts.keys().all(|r| self.text(r) == other.text(r))
+    }
+
     /// Whether this doc holds updates it couldn't integrate (missing dependencies: yrs's
     /// pending structs or delete set) or is poisoned. Never true on a correct stream: an
     /// apply that leaves anything pending poisons the doc and fails. K-AUD-1 (v0.9.5).
@@ -819,13 +1061,17 @@ impl YrsDoc {
 impl EngineDoc for YrsDoc {
     fn new(schema: &Schema) -> Self {
         let doc = new_doc(SESSION_CLIENT);
+        let positions = Arc::new(Mutex::new(Vec::new()));
+        let checks = Checks::new();
+        watch_positions(&doc, &positions, checks.position_every);
         let texts = roots(&doc, schema);
         Self {
             doc,
             texts,
             poisoned: false,
             text_cache: Mutex::new(HashMap::new()),
-            checks: Checks::new(),
+            checks,
+            positions,
         }
     }
 
@@ -914,9 +1160,10 @@ impl EngineDoc for YrsDoc {
 
     fn edit_as(&mut self, client: ClientId, edits: &[Edit]) -> Result<Vec<u8>, DocError> {
         self.usable()?;
+        prof!("engine.edit_as");
         // the canary (v0.9.3): a sampled edit first checks the text cache its positions are
         // computed against, and is then made both ways (`checked_change`)
-        self.checks.now = self.checks.sample();
+        self.checks.now = self.checks.sample(|| history_units(&self.doc));
         if self.checks.now {
             self.check_text_cache();
         }
@@ -926,6 +1173,7 @@ impl EngineDoc for YrsDoc {
             .iter()
             .map(|e| match e {
                 Edit::Text { root, hunks } => {
+                    prof!("engine.positions");
                     let cur = self.text(root);
                     let pos = to_utf16(&cur, hunks);
                     before.push(cur);
@@ -934,7 +1182,11 @@ impl EngineDoc for YrsDoc {
             })
             .collect();
 
-        let update = self.make_change(client, &plans)?;
+        let update = {
+            prof!("engine.make_change");
+            self.make_change(client, &plans)?
+        };
+        prof!("engine.text_cache");
         // the texts it made are known: no walk of the doc to read them again (a root edited
         // twice in one call is read afresh)
         let cache_on = !self.checks.cache_off;
@@ -972,7 +1224,8 @@ impl EngineDoc for YrsDoc {
     /// replica, never on this doc: the cost is a full encode, decode and walk, O(doc).
     fn blame_runs(&self, root: &str) -> Result<Vec<BlameRun>, DocError> {
         self.usable()?;
-        let (replica, t) = self.replica(SESSION_CLIENT, root)?;
+        let r = self.replica(SESSION_CLIENT, root)?;
+        let (replica, t) = (&r.doc, &r.text);
         guarded(|| {
             let mut txn = replica.transact_mut();
             let now = txn.snapshot();
@@ -1019,15 +1272,22 @@ mod tests {
     };
 
     /// A remote client (Yjs stand-in) synced from the doc.
-    fn client_doc(id: u64, from: &Doc) -> (yrs::Doc, TextRef) {
+    fn client_doc(id: u64, from: &Doc) -> Client {
         let d = new_doc(id);
-        let t = d.get_or_insert_text("source");
+        let t = root_text(&d, "source");
         let sv = d.transact().state_vector().encode_v1();
         let u = from.encode_diff(&sv).unwrap();
         d.transact_mut()
             .apply_update(Update::decode_v1(&u).unwrap())
             .unwrap();
-        (d, t)
+        Client { text: t, doc: d }
+    }
+
+    /// A remote client's doc and its text handle.
+    struct Client {
+        // handles drop before their Doc (fields drop in declaration order; rule 8)
+        text: TextRef,
+        doc: yrs::Doc,
     }
 
     /// Whether any 8-byte window of `secret` appears in `hay` (the purge scan's rule).
@@ -1060,7 +1320,7 @@ mod tests {
             skip_gc: true,
             ..Options::default()
         });
-        let t = m.get_or_insert_text("source");
+        let t = root_text(&m, "source");
         t.insert(&mut m.transact_mut(), 0, &format!("a {secret} b\n"));
         let n = secret.len() as u32;
         t.remove_range(&mut m.transact_mut(), 2, n);
@@ -1071,6 +1331,160 @@ mod tests {
             holds_any_window(&kept, secret.as_bytes()),
             "the skip_gc control must keep the secret"
         );
+    }
+
+    /// The canary's adaptive interval (v0.9.7): below the scale, one edit in `every` is
+    /// sampled, the first at edit `every`, as at a fixed rate; past it, the interval grows in
+    /// proportion to the history (`every x units / scale`), so at about 10x the scale it is
+    /// about 10x. Setting the rate again, as a reload does, puts the next sample at the
+    /// history's phase within the interval ([`canary_phase`]), on the same doc and on one
+    /// loaded afresh. Scale 0 is a fixed rate, and setting the scale restarts
+    /// the count.
+    #[test]
+    fn the_canary_interval_grows_with_the_history_past_the_scale() {
+        const EVERY: u64 = 2;
+        const SCALE: u64 = 50;
+        let (append, run) = (canary_append, canary_run);
+        let mut y = YrsDoc::new(&S);
+        y.set_check_every(EVERY as u32);
+        y.set_check_scale(SCALE);
+
+        // under the scale: the first sample at edit 2, then every 2 edits
+        let small = run(&mut y, 40);
+        let at: Vec<u64> = small.iter().map(|s| s.0).collect();
+        assert_eq!(at, (1..=20).map(|k| k * EVERY).collect::<Vec<_>>());
+        assert!(small.iter().all(|s| s.1 < SCALE));
+        assert!(!y.on_fallback() && y.take_checks().is_empty());
+
+        // about 10x the scale: one unsampled edit (41) takes the history to 500 units
+        assert_eq!(append(&mut y, &"y".repeat(460)), None);
+        assert_eq!(history_units(&y.doc), 10 * SCALE);
+        let large = run(&mut y, 200);
+        assert_eq!(large[0], (42, 10 * SCALE), "the sample due at edit 42");
+        for w in large.windows(2) {
+            let ((a, units), (b, _)) = (w[0], w[1]);
+            assert_eq!(b - a, EVERY.max(EVERY * units / SCALE), "{w:?}");
+        }
+        // the history went from 10x to 14x the scale: gaps of 20 to 28 edits, not 2
+        assert!(large
+            .windows(2)
+            .all(|w| (20..=28).contains(&(w[1].0 - w[0].0))));
+        assert!(
+            (7..=11).contains(&large.len()),
+            "{} samples in 200 edits (100 at the fixed rate)",
+            large.len()
+        );
+        assert!(!y.on_fallback() && y.take_checks().is_empty());
+
+        // setting the rate again, as the session does after a load: the next sample is at the
+        // history's phase within the interval (14x the scale: an interval of 28 edits)
+        assert_eq!(append(&mut y, &"z".repeat(10)), None);
+        let units = history_units(&y.doc);
+        assert_eq!(units, 710, "the history after 250 more edits");
+        let interval = EVERY * units / SCALE;
+        assert_eq!(interval, 28);
+        y.set_check_every(EVERY as u32);
+        let from = y.checks.edits;
+        let after: Vec<u64> = run(&mut y, interval).iter().map(|s| s.0 - from).collect();
+        assert_eq!(
+            after,
+            vec![canary_phase(units, interval)],
+            "the first sample after setting the rate"
+        );
+        // a doc loaded afresh from the state, its rate set as the session sets it: its edit
+        // count starts at 0, and its first sample is at the phase, not at edit `every`
+        let state = y.encode_state().unwrap();
+        let mut l = YrsDoc::load(&S, &state).unwrap();
+        l.set_check_every(EVERY as u32);
+        l.set_check_scale(SCALE);
+        let units = history_units(&l.doc);
+        assert_eq!(units, 710 + interval);
+        let interval = EVERY * units / SCALE;
+        let first: Vec<u64> = run(&mut l, interval).iter().map(|s| s.0).collect();
+        assert_eq!(
+            first,
+            vec![canary_phase(units, interval)],
+            "the first sample after a load"
+        );
+        assert!(!l.on_fallback() && l.take_checks().is_empty());
+
+        // scale 0: the fixed rate again, from now (the next sample `every` edits on)
+        y.set_check_scale(0);
+        let from = y.checks.edits;
+        let fixed: Vec<u64> = run(&mut y, 20).iter().map(|s| s.0 - from).collect();
+        assert_eq!(fixed, (1..=10).map(|k| k * EVERY).collect::<Vec<_>>());
+    }
+
+    /// The canary's long-run rate survives frequent reloads (v0.9.7): 200 reloads of a doc
+    /// past the scale, each followed by fewer edits than the interval (as in the soak, where
+    /// a large doc was reloaded every ~1,700 edits). A first sample a full interval in would
+    /// never fire; one at `every` would fire after every reload. At the history's phase the
+    /// samples come at about one edit in `interval` over the run.
+    #[test]
+    fn the_canary_keeps_its_rate_across_reloads_shorter_than_the_interval() {
+        // the phase covers the interval (`units mod interval` alone stays under scale/every)
+        let interval = 1_000;
+        let phases: Vec<u64> = (50_000..51_000)
+            .map(|u| canary_phase(u, interval))
+            .collect();
+        assert!(phases.iter().all(|p| (1..=interval).contains(p)));
+        let low = phases.iter().filter(|p| **p <= interval / 2).count();
+        assert!(
+            (400..=600).contains(&low),
+            "{low} of 1,000 phases in the first half"
+        );
+        assert!(phases.iter().any(|p| *p > 900) && phases.iter().any(|p| *p <= 100));
+
+        const EVERY: u32 = 2;
+        const SCALE: u64 = 50;
+        let mut y = YrsDoc::new(&S);
+        // 20x the scale: an interval of 40 edits, growing to about 50 over the run
+        assert_eq!(canary_append(&mut y, &"a".repeat(1000)), None);
+        let (mut sampled, mut edits, mut expected) = (0u64, 0u64, 0f64);
+        for reload in 0..200u64 {
+            let state = y.encode_state().unwrap();
+            y = YrsDoc::load(&S, &state).unwrap();
+            y.set_check_every(EVERY);
+            y.set_check_scale(SCALE);
+            let interval = y.checks.interval(history_units(&y.doc));
+            // 7 to 17 one-unit edits before the next reload, always under the interval
+            let gap = 7 + reload * 5 % 11;
+            assert!(gap < interval);
+            sampled += canary_run(&mut y, gap).len() as u64;
+            edits += gap;
+            expected += gap as f64 / interval as f64;
+            assert!(!y.on_fallback() && y.take_checks().is_empty());
+        }
+        let ratio = sampled as f64 / expected;
+        assert!(
+            (0.7..=1.3).contains(&ratio),
+            "{sampled} samples in {edits} edits over 200 reloads; about {expected:.0} at one in \
+             `interval`"
+        );
+    }
+
+    /// Append `s` at the end of `source`; `Some(history before the edit)` when the canary
+    /// sampled the edit.
+    fn canary_append(y: &mut YrsDoc, s: &str) -> Option<u64> {
+        let units = history_units(&y.doc);
+        let at = y.text("source").len();
+        let e = [Edit::Text {
+            root: "source".into(),
+            hunks: vec![Hunk {
+                start: at,
+                end: at,
+                insert: s.into(),
+            }],
+        }];
+        y.edit_as(7, &e).unwrap();
+        y.checks.now.then_some(units)
+    }
+
+    /// `n` one-unit edits: the sampled edits' numbers and their history before them.
+    fn canary_run(y: &mut YrsDoc, n: u64) -> Vec<(u64, u64)> {
+        (0..n)
+            .filter_map(|_| canary_append(y, "x").map(|u| (y.checks.edits, u)))
+            .collect()
     }
 
     #[test]
@@ -1121,7 +1535,8 @@ mod tests {
     fn client_updates_are_checked() {
         let mut e = Doc::new(S).unwrap();
         e.replace_text_as(7, "source", "owned by 7\n").unwrap();
-        let (c, ct) = client_doc(100, &e);
+        let cct = client_doc(100, &e);
+        let (c, ct) = (&cct.doc, &cct.text);
         let ins = {
             let mut t = c.transact_mut();
             ct.insert(&mut t, 0, "hi ");
@@ -1138,7 +1553,8 @@ mod tests {
         };
         assert!(e.apply_client_update(&del, 100).unwrap().delete_only);
         assert_eq!(e.text("source").unwrap(), ct.get_string(&c.transact()));
-        let (f, ft) = client_doc(7, &e);
+        let fft = client_doc(7, &e);
+        let (f, ft) = (&fft.doc, &fft.text);
         let forged = {
             let mut t = f.transact_mut();
             ft.insert(&mut t, 0, "forged ");
@@ -1148,7 +1564,8 @@ mod tests {
             e.check_client_update(&forged, 100),
             Err(DocError::ForeignClient { found: 7, .. })
         ));
-        let (g, gt) = client_doc(200, &e);
+        let ggt = client_doc(200, &e);
+        let (g, gt) = (&ggt.doc, &ggt.text);
         {
             let mut t = g.transact_mut();
             gt.insert(&mut t, 0, "one ");
@@ -1165,22 +1582,23 @@ mod tests {
     }
 
     /// An update from yrs client `c` (a transaction inserting `text` at 0).
-    fn typed(c: &(yrs::Doc, TextRef), text: &str) -> Vec<u8> {
-        let mut t = c.0.transact_mut();
-        c.1.insert(&mut t, 0, text);
+    fn typed(c: &Client, text: &str) -> Vec<u8> {
+        let mut t = c.doc.transact_mut();
+        c.text.insert(&mut t, 0, text);
         t.encode_update_v1()
     }
 
-    fn apply_raw(c: &(yrs::Doc, TextRef), u: &[u8]) {
-        c.0.transact_mut()
+    fn apply_raw(c: &Client, u: &[u8]) {
+        c.doc
+            .transact_mut()
             .apply_update(Update::decode_v1(u).unwrap())
             .unwrap();
     }
 
     /// What a reconnecting client sends: everything it has that the session lacks.
-    fn resync(c: &(yrs::Doc, TextRef), session: &Doc) -> Vec<u8> {
+    fn resync(c: &Client, session: &Doc) -> Vec<u8> {
         let sv = StateVector::decode_v1(&session.state_vector()).unwrap();
-        c.0.transact().encode_state_as_update_v1(&sv)
+        c.doc.transact().encode_state_as_update_v1(&sv)
     }
 
     /// v0.9.5 hardening: the store-load scan. A stored state, or a log entry replayed from
@@ -1195,12 +1613,14 @@ mod tests {
         e.replace_text_as(7, "source", "base\n").unwrap();
         let c = client_doc(100, &e);
         let sv = StateVector::decode_v1(&e.state_vector()).unwrap();
-        c.0.get_or_insert_map("m")
-            .insert(&mut c.0.transact_mut(), "sub", yrs::Doc::new());
-        let u = c.0.transact().encode_state_as_update_v1(&sv);
-        let state =
-            c.0.transact()
-                .encode_state_as_update_v2(&StateVector::default());
+        c.doc
+            .get_or_insert_map("m")
+            .insert(&mut c.doc.transact_mut(), "sub", yrs::Doc::new());
+        let u = c.doc.transact().encode_state_as_update_v1(&sv);
+        let state = c
+            .doc
+            .transact()
+            .encode_state_as_update_v2(&StateVector::default());
         assert_eq!(Doc::load(S, &state).err(), Some(DocError::Quarantined));
         assert!(Doc::load(S, &e.encode_state().unwrap()).is_ok());
         let mut f = Doc::load(S, &e.encode_state().unwrap()).unwrap();
@@ -1223,7 +1643,7 @@ mod tests {
         e.apply_client_update(&b1, 200).unwrap();
         e.apply_client_update(&b2, 200).unwrap();
         apply_raw(&a, &b2);
-        assert!(a.0.transact().store().pending_update().is_some());
+        assert!(a.doc.transact().store().pending_update().is_some());
         // a types offline, then resyncs: its own content plus b's held, known blocks
         typed(&a, "a1 ");
         let r = resync(&a, &e);
@@ -1260,9 +1680,10 @@ mod tests {
         ));
         // a resync of only known content inserts nothing
         let c = client_doc(300, &e);
-        let r =
-            c.0.transact()
-                .encode_state_as_update_v1(&StateVector::default());
+        let r = c
+            .doc
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
         let info = e.check_client_update(&r, 300).unwrap();
         assert!(info.inserts_from.is_empty() && info.delete_only);
         let t = e.text("source").unwrap();
@@ -1295,9 +1716,9 @@ mod tests {
             worst = worst.max(t.elapsed());
         }
         assert_eq!(e.text("source").unwrap(), "seed text\n");
-        // Bounded work on hostile input. This catches outsized decoder pre-allocations (0.7-11 s per input
-        // before the shape checks), not the machine's speed: 500 ms leaves room for a debug
-        // build on a loaded box. The precise "rejected in O(1)" bound is in `shape_checks`.
+        // Bounded work on hostile input. This catches outsized decoder pre-allocations (0.7-11 s
+        // per input before the shape checks), not the machine's speed: 500 ms leaves room for a
+        // debug build on a loaded box. The precise "rejected in O(1)" bound is in `shape_checks`.
         assert!(
             worst < std::time::Duration::from_millis(500),
             "slowest garbage input took {worst:?}"
@@ -1345,8 +1766,7 @@ mod tests {
         let mut d = Doc::new(S).unwrap();
         d.replace_text_as(9, "source", "x\n").unwrap();
         assert_eq!(d.apply_trusted(&u2), Err(DocError::Pending));
-        // at the engine: yrs keeps the pending update, and the raw encode (what panicked in
-        // yrs 0.28, transaction.rs:408) is contained
+        // at the engine: the update stays pending, and the raw encode is contained
         let mut y = YrsDoc::new(&S);
         assert_eq!(y.apply_trusted(&u2), Err(DocError::Pending));
         assert!(y.has_pending() && y.poisoned);
@@ -1527,5 +1947,106 @@ mod tests {
         let l = Doc::load(S, &e.encode_state().unwrap()).unwrap();
         assert_eq!(l.text("source").unwrap(), "a\nB\nc\n");
         assert_eq!(l.state_vector(), e.state_vector());
+    }
+}
+
+/// ARCHITECTURE rule 8 (v0.9.7): the kit holds only root shared-type handles. The engine
+/// module takes handles in one place, `root_text` (which asserts a root in debug builds),
+/// names no nested type, and reads no nested type out of a value; every doc it makes keeps
+/// root handles only. A future change that starts holding a nested handle fails here.
+#[cfg(test)]
+mod root_handles {
+    use super::*;
+
+    const S: Schema = Schema {
+        name: "t",
+        roots: &[("a", Kind::Text), ("b", Kind::Text)],
+    };
+
+    fn is_root(t: &TextRef) -> bool {
+        matches!(
+            AsRef::<yrs::branch::Branch>::as_ref(t).id(),
+            BranchID::Root(_)
+        )
+    }
+
+    #[test]
+    fn the_engine_holds_only_root_handles() {
+        let src = include_str!("yrs.rs");
+        // the module's code, without its tests and comments
+        let code: Vec<&str> = src
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap()
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect();
+        let takes = code.iter().filter(|l| l.contains("get_or_insert_")).count();
+        assert_eq!(takes, 1, "only root_text takes a shared-type handle");
+        for nested in [
+            "MapRef",
+            "ArrayRef",
+            "XmlFragmentRef",
+            "XmlElementRef",
+            "XmlTextRef",
+            "Out::YText",
+            "Out::YMap",
+            "Out::YArray",
+            "Out::YXml",
+            "Out::UndefinedRef",
+            "BranchPtr",
+        ] {
+            assert!(
+                !code.iter().any(|l| l.contains(nested)),
+                "the engine module names {nested}: the kit holds only root handles"
+            );
+        }
+        // handles drop before their Doc: in every struct of this file (tests included), a
+        // field holding a handle is declared before the field holding its Doc (fields drop
+        // in declaration order), and no tuple type pairs a Doc with a handle after it
+        let mut structs = 0;
+        for block in src.split("struct ").skip(1) {
+            let Some(body) = block.split_once('{').map(|(_, b)| b) else {
+                continue;
+            };
+            let body = body.split('}').next().unwrap_or("");
+            let fields: Vec<&str> = body
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.starts_with("//") && l.contains(':'))
+                .collect();
+            let doc = fields
+                .iter()
+                .position(|l| l.ends_with(": Doc,") || l.ends_with(": yrs::Doc,"));
+            let handle = fields.iter().rposition(|l| l.contains("TextRef"));
+            if let (Some(d), Some(h)) = (doc, handle) {
+                structs += 1;
+                assert!(
+                    h < d,
+                    "a handle field is declared after its Doc: {fields:?} (handles drop first)"
+                );
+            }
+        }
+        assert!(
+            structs >= 3,
+            "the scan found the Doc + handle structs ({structs})"
+        );
+        let compact: String = src.split_whitespace().collect();
+        // (the needles are built here, so this test's own source doesn't match them)
+        for doc in ["Doc", "yrs::Doc"] {
+            let pair = format!("({doc},{})", "TextRef");
+            assert!(
+                !compact.contains(pair.as_str()),
+                "a tuple drops its Doc before its handle: {pair}"
+            );
+        }
+        // every doc the module makes keeps root handles only
+        let d = YrsDoc::new(&S);
+        assert!(d.texts.values().all(is_root));
+        let state = d.encode_v2().unwrap();
+        let l = YrsDoc::load(&S, &state).unwrap();
+        assert!(l.texts.values().all(is_root));
+        let t = l.twin().unwrap();
+        assert!(t.texts.values().all(is_root));
     }
 }

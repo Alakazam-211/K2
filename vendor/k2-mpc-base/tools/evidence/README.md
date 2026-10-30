@@ -35,16 +35,19 @@ Record fields (null when unknown):
 |---|---|
 | `job` | the job id |
 | `run` | the run's name, unique in the job (a repeat gets `#2`, `#3`, ... in log order) |
-| `tool` | `tlc` or `enumerator` |
+| `tool` | `tlc` or `enumerator` (`mpce-enum`, which prints its own `RUNREC` lines: `crates/mpce-enum/src/runrec.rs`) |
 | `status` | `COMPLETE`: the whole reachable state space, no violation: for TLC, "depth of the complete state graph search" printed and 0 states left on queue; `PARTIAL`: stopped by a cap with states still queued, so `states` is a lower bound; `VIOLATION`: an invariant or property failed; `ERROR`: the tool failed (for TLC, an exit other than 0, 10–14 or 124); `NO_RESULT` / `UNKNOWN`: no count in the log |
 | `states` | distinct states (for `PARTIAL`, the count reached when it stopped) |
-| `depth` | for `COMPLETE`, TLC's complete-search depth or the enumerator's level count; for `VIOLATION`, the depth reached (enumerator: the violation depth) |
+| `depth` | **One convention, TLC's:** the number of states on the longest shortest path from an initial state, the initial state counting as 1. For `COMPLETE`, TLC's "depth of the complete state graph search", or the enumerator's BFS level count (its levels include the initial state, so it is the same quantity); for `VIOLATION`, TLC's depth reached, or for the enumerator the violation's BFS depth d (d transitions from the initial state) converted to d + 1. Searches without BFS levels (sweep-line, reverse search, sampling) record null. Caveat: TLC with more than one worker is not strictly level-synchronous, so its reported depth can exceed the BFS depth (see `docs/evidence/g1-client-protocol-draft.md`, 2×1 r2), and its first violation need not be a shortest one (§4) |
 | `queued` | TLC's states left on queue at the last report |
+| `workers` | TLC's worker count, from the log's `Running ... with N worker(s) on ...` line (`tlc_record` and `collect.py` read it). 1 is a strict BFS. Absent when the log does not show it; a run backfilled from its job's commands file (`export TLC_WORKERS=1`) has `workers: 1` and says so in `workers_from` |
 | `cap_s` | the time cap in seconds, when known (a backfilled TLC run stopped by its cap: its wall time, which can run a second over) |
 | `generated` | TLC's states generated |
 | `trace_states` | `VIOLATION`: the counterexample's length in states, initial state included |
 | `violation`, `error` | the tool's message |
 | `exit`, `wall_s`, `mode`, `source` | exit code, wall time, enumerator mode, `RUNREC` or `log` (parsed from an older log) |
+| `profile` | enumerator: the Cargo profile the binary was built with, `release` (no LTO, 16 codegen units: fast builds) or `evidence` (thin LTO, 1 codegen unit; `PROFILE=evidence tools/enum-job.sh`) |
+| enumerator extras | `transitions`, `rate` (states/s), `fp_collision_bound` (n²/2^129 for 128-bit fingerprints; 0 for exact runs), `per_level`; dsweep: `pending_records`, `peak_disk_bytes`, `disk_B_per_record`, `peak_ram_bytes`, `checkpoints`, ...; sample: `seed`, `walks`, `steps`, `violating_walks`, `digest`. Cite one as `[run JOB/RUN:field]` |
 
 **Older logs** have no `RUNREC` lines. `collect.py` parses them:
 - TLC output before `=== tlc NAME ...: exit RC, wall Ws` (or `=== live NAME ...`). Violation lines that name another run's instance are skipped; they come from a trace printed after that run.
@@ -89,8 +92,28 @@ It fails on any of these:
 - a `PARTIAL` run cited without `≥ N, partial (cap …)`, with the wrong N, or with the wrong cap;
 - a run of any other status cited;
 - a count-like number in an evidence table with no citation and no exemption. Count-like means 1,000 or more, written `12,345` or `12345`, and not followed by a unit (s, min, h, %, MB, GiB, M, k, ×, ...). Cells in Job / Commit columns are skipped.
+- a least depth backed by a run that is not a strict BFS (§4).
 
 Prose is not scanned for uncited counts, but every citation in it is checked.
+
+## 4. Least depths: one TLC worker, or the enumerator's BFS
+
+TLC with `-workers auto` shares one queue between workers, so a worker can check a state of the
+next level before the current level is done. Its counts are exact, but its **first violation
+need not be a shortest one**: 6 rich-text mutant cells were 1 or 2 states deeper than the
+shortest violation (`docs/evidence/g1-richtext-draft.md`, note 11), and so were 5 of 26 layers
+mutants (`docs/evidence/g1-layers-draft.md`) and 3 of 16 map/list teeth (`docs/evidence/g1-lmm-tlc.md`). So:
+
+- A **least depth** (a mutant's first violation depth, its shortest trace) must cite a TLC run
+  with `workers: 1` (run it with `TLC_WORKERS=1`; e.g. `tools/quint/depth_w1.sh`) or an
+  enumerator BFS run (`bfs`, `bfsm`, `cp`: its records have a `depth`). Reverse search,
+  sweep-line and sampling have no BFS levels and do not count.
+- A multi-worker trace is fine as a count or a comparison. Label it `-workers auto` (in its
+  cell, its column header, or in the sentence before the citation).
+- The check finds least-depth claims by their words: a section heading, a table header row or
+  a prose line that says "least depth" (also "least violating / failing depth", "shortest
+  trace / counterexample") makes every `VIOLATION` citation under it a least-depth citation.
+  Write least-depth claims with those words, so the check sees them.
 
 `tools/check.sh` (the repository's check flow) runs `check.py` and `test.sh`. To run the check
 before every commit that touches the evidence:

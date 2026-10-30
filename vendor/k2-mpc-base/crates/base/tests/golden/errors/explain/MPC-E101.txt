@@ -1,0 +1,21 @@
+MPC-E101 forbidden_read (sessions and edits)
+exit:     3
+message:  refused: needs Read rights
+next:     You can't read this doc, and you were removed from it. Don't retry: ask the doc's owner for read access (the host may print how). Nothing changed.
+rule:     K-PERM-2
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E101",
+  "name": "forbidden_read",
+  "area": "sessions and edits",
+  "exit": 3,
+  "message": "refused: needs Read rights",
+  "next": "You can't read this doc, and you were removed from it. Don't retry: ask the doc's owner for read access (the host may print how). Nothing changed.",
+  "rule": "K-PERM-2",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

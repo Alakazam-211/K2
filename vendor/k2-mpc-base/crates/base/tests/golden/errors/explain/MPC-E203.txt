@@ -1,0 +1,21 @@
+MPC-E203 undo_skipped (history and undo)
+exit:     1
+message:  undid {steps} step(s); {skipped} region(s) were left alone because others changed them: {where}
+next:     The regions nobody touched were undone; the ones listed were not (others changed them). Read those lines (cat -n) and decide by hand: replace --lines to finish them, or leave them.
+rule:     U14, hist.undo_partial
+verbs:    undo --partial; revert
+status:   live
+--- json
+{
+  "id": "MPC-E203",
+  "name": "undo_skipped",
+  "area": "history and undo",
+  "exit": 1,
+  "message": "undid {steps} step(s); {skipped} region(s) were left alone because others changed them: {where}",
+  "next": "The regions nobody touched were undone; the ones listed were not (others changed them). Read those lines (cat -n) and decide by hand: replace --lines to finish them, or leave them.",
+  "rule": "U14, hist.undo_partial",
+  "verbs": ["undo --partial", "revert"],
+  "returned_by": ["undo --partial", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

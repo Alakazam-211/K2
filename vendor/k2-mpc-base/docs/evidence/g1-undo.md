@@ -208,6 +208,13 @@ the oracle didn't change.
 - Not in the bounded world (the trace test covers them): leave and rejoin, multi-byte text,
   `write --base`, `replace_text`, `restore`, `undo --for`, on-behalf edits, the revert window
   and its persisted carry, the U6 bounds, purge redaction of records.
+- **D1 (undo spec v1.10, the authored-ranges amendment) is not in the TLC cross-check
+  yet.** The bounded world runs on single letters, every character a token, where D1 is the
+  identity (a property test in the kit), so every count and walk above stands as taken. D1's
+  own evidence is the oracle, the kit's and the conformance suite's case classes, and the
+  trace test on words. Its three mutants (`d1-reuse-foreign-elements-in-changed-token`,
+  `d1-rewrite-whole-line`, `d1-rewrite-merged-ranges`) live outside `Mutant::ALL` (the list
+  the Quint model shares) until the Quint model has D1.
 
 ## Log lines of the runs before run records
 
@@ -284,20 +291,20 @@ modes), `O5` (the end-of-text rule exactly at the doc's end with a non-empty bas
 restated equivalence) is a diagnostic (`--u12`), clean at every bound run.
 
 ## Teeth (mutants: each must fail, minimal counterexample inside an exhaustive bound)
-Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least) and TLC with one worker (a shortest counterexample), both re-run with run records in `a885a72a` (`tools/undo/counts.sh`, `PART=m`): TLC's trace is one state longer than the enumerator's depth (it counts the initial state), at every mutant:
+Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least) and TLC with one worker (a shortest counterexample), both re-run with run records in `a885a72a` (`tools/undo/counts.sh`, `PART=m`); TLC's again in `13b3e348` (the same counts, with each record's worker count, 1: a least depth cites a one-worker run, `tools/evidence/README.md` section 4): TLC's trace is one state longer than the enumerator's depth (it counts the initial state), at every mutant:
 
 | Mutant | Fails | Bound (exhaustive) | Least depth (enumerator) | TLC's shortest trace (states, one worker) |
 |---|---|---|---|---|
-| (i) no taint rule | U9 | 2 pids × 1 event + 1 undo (`abb`, 4) | 3 [run a885a72a/e_m_i-no-taint:violation_depth] | 4 [run a885a72a/m_tiny] |
-| (iii) `--partial` hides taint | U15 | same | 3 [run a885a72a/e_m_iii-partial-hides-taint:violation_depth] | 4 [run a885a72a/m_tiny#2] |
-| (iv) redo retries skipped | U17 | same | 3 [run a885a72a/e_m_iv-redo-retries-skipped:violation_depth] | 4 [run a885a72a/m_tiny#3] |
-| (vi) O5 at every window end | O5 | same | 3 [run a885a72a/e_m_vi-o5-every-window-end:violation_depth] | 4 [run a885a72a/m_tiny#4] |
-| (vii) O5 on the region's base | O5 | same | 3 [run a885a72a/e_m_vii-o5-region-base:violation_depth] | 4 [run a885a72a/m_tiny#5] |
-| skip-U19 | U19 | same | 1 [run a885a72a/e_m_skip-u19:violation_depth] | 2 [run a885a72a/m_tiny#6] |
-| **(viii) `f3-rediff`**: sides by re-diffing strings (F3) | own_only | same | 3 [run a885a72a/e_m_f3-rediff:violation_depth] | 4 [run a885a72a/m_tiny#7] |
-| **(ix) `restart-single-taint`**: one taint flag read back at both edges | RT | 1 pid × 3 events + 1 revert + 1 restart (`abba`, 4) | 4 [run a885a72a/e_m_restart-single-taint:violation_depth] | 5 [run a885a72a/m_rst] |
-| **(x) `provenance-ignored-in-O4`** (v1.8): O4 on element identity, no O4a | I1 | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 [run a885a72a/e_m_x-provenance-ignored-in-o4:violation_depth] | 4 [run a885a72a/m_prov] |
-| **(xi) `no-o4a`** (v1.9): O4 on (range, roots), no O4a | I1 | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 4 [run a885a72a/e_m_xi-no-o4a:violation_depth] | 5 [run a885a72a/m_xi] |
+| (i) no taint rule | U9 | 2 pids × 1 event + 1 undo (`abb`, 4) | 3 [run a885a72a/e_m_i-no-taint:violation_depth] | 4 [run 13b3e348/m_tiny] |
+| (iii) `--partial` hides taint | U15 | same | 3 [run a885a72a/e_m_iii-partial-hides-taint:violation_depth] | 4 [run 13b3e348/m_tiny#2] |
+| (iv) redo retries skipped | U17 | same | 3 [run a885a72a/e_m_iv-redo-retries-skipped:violation_depth] | 4 [run 13b3e348/m_tiny#3] |
+| (vi) O5 at every window end | O5 | same | 3 [run a885a72a/e_m_vi-o5-every-window-end:violation_depth] | 4 [run 13b3e348/m_tiny#4] |
+| (vii) O5 on the region's base | O5 | same | 3 [run a885a72a/e_m_vii-o5-region-base:violation_depth] | 4 [run 13b3e348/m_tiny#5] |
+| skip-U19 | U19 | same | 1 [run a885a72a/e_m_skip-u19:violation_depth] | 2 [run 13b3e348/m_tiny#6] |
+| **(viii) `f3-rediff`**: sides by re-diffing strings (F3) | own_only | same | 3 [run a885a72a/e_m_f3-rediff:violation_depth] | 4 [run 13b3e348/m_tiny#7] |
+| **(ix) `restart-single-taint`**: one taint flag read back at both edges | RT | 1 pid × 3 events + 1 revert + 1 restart (`abba`, 4) | 4 [run a885a72a/e_m_restart-single-taint:violation_depth] | 5 [run 13b3e348/m_rst] |
+| **(x) `provenance-ignored-in-O4`** (v1.8): O4 on element identity, no O4a | I1 | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 [run a885a72a/e_m_x-provenance-ignored-in-o4:violation_depth] | 4 [run 13b3e348/m_prov] |
+| **(xi) `no-o4a`** (v1.9): O4 on (range, roots), no O4a | I1 | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 4 [run a885a72a/e_m_xi-no-o4a:violation_depth] | 5 [run 13b3e348/m_xi] |
 
 TLC with one worker (a shortest counterexample): v1.8, job `a75a2670` (every mutant,
 the same depths as v1.7 for (i)–(ix)); the smoke job `ac55d0a0` agrees. v1.7: `7a899e60`,

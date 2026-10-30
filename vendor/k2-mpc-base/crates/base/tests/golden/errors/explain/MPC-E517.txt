@@ -1,0 +1,21 @@
+MPC-E517 pack_error (store)
+exit:     1
+message:  pack: {reason}
+next:     The file type couldn't write the doc back (a pack bug or damaged settings). Nothing was lost from the doc. Report it.
+rule:     K-COD-2
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E517",
+  "name": "pack_error",
+  "area": "store",
+  "exit": 1,
+  "message": "pack: {reason}",
+  "next": "The file type couldn't write the doc back (a pack bug or damaged settings). Nothing was lost from the doc. Report it.",
+  "rule": "K-COD-2",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

@@ -80,6 +80,8 @@ mod udiff;
 pub use error::{exit, session_exit, ToolError, ToolRunError};
 pub use fence::{random_nonce, Fence};
 pub use run::{ToolOptions, ToolOutput};
+#[cfg(test)]
+pub(crate) use udiff::refusal as udiff_refusal_for_tests;
 pub use udiff::unified;
 
 use crate::store::Seq;
@@ -293,6 +295,9 @@ pub struct EditOutput {
     /// not unique) and its `--all` count; empty for the other verbs.
     pub stdout: Vec<u8>,
     pub exit: u8,
+    /// The refusal a kit tool's "no" is (a failed patch, an exact `replace` that matched
+    /// nothing or more than once): its id and details ([`ToolOutput::refusal`]).
+    pub(crate) refusal: Option<crate::errors::ErrorReport>,
 }
 
 impl EditOutput {
@@ -300,7 +305,12 @@ impl EditOutput {
     /// found), its report for stdout, and its exit code (0, or 1 for the tool's "no").
     /// For a pack's own verbs ([`PackVerb`]).
     pub fn new(text: Option<String>, stdout: Vec<u8>, exit: u8) -> Self {
-        EditOutput { text, stdout, exit }
+        EditOutput {
+            text,
+            stdout,
+            exit,
+            refusal: None,
+        }
     }
 }
 
@@ -576,15 +586,19 @@ impl Tool {
             text: Some(t),
             stdout: Vec::new(),
             exit: exit::OK,
+            refusal: None,
         };
         let out = match &self.inner {
             Inner::Sed(s) if s.in_place => done(s.run(text)?),
             Inner::Patch(p) => {
                 let (t, msg, exit) = p.run(name, text, utf8(stdin, "the patch (stdin)")?)?;
+                let refusal =
+                    (exit != crate::tools::exit::OK).then(|| udiff::refusal(&msg, t.is_some()));
                 EditOutput {
                     text: t,
                     stdout: msg.into_bytes(),
                     exit,
+                    refusal,
                 }
             }
             Inner::Pos(e) => done(e.apply(text, utf8(stdin, "stdin")?)?),

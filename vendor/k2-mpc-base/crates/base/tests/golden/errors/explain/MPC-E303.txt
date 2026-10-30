@@ -1,0 +1,21 @@
+MPC-E303 claim_contended (presence and claims)
+exit:     2
+message:  {claim} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)
+next:     Others are waiting for your claim, so it can't be extended. Finish your edit before it ends (details.remaining_ms), or release it with claim --release.
+rule:     A13 (claims)
+verbs:    claim --renew
+status:   live
+--- json
+{
+  "id": "MPC-E303",
+  "name": "claim_contended",
+  "area": "presence and claims",
+  "exit": 2,
+  "message": "{claim} has {waiters} waiting; it can't be renewed or held ({remaining_ms} ms left)",
+  "next": "Others are waiting for your claim, so it can't be extended. Finish your edit before it ends (details.remaining_ms), or release it with claim --release.",
+  "rule": "A13 (claims)",
+  "verbs": ["claim --renew"],
+  "returned_by": ["claim --renew"],
+  "status": "live",
+  "since_or_until": null
+}

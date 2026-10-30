@@ -17,6 +17,7 @@
 
 use super::error::{exit, ToolError};
 use super::{too_much_output, EditOutput, MAX_OUTPUT_BYTES};
+use crate::errors::{ids, ErrorEntry, ErrorReport};
 
 /// The most match positions a report lists; the rest are counted ("and N more").
 const LIST_CAP: usize = 20;
@@ -117,7 +118,11 @@ impl Exact {
         };
         let (count, starts) = find(text, &old);
         if count == 0 {
-            return Ok(refuse(no_match(name, text, &old, label)));
+            return Ok(refuse(
+                &ids::REPLACE_NO_MATCH,
+                no_match(name, text, &old, label),
+                0,
+            ));
         }
         let spans = |starts: &[usize]| -> Vec<(usize, usize)> {
             starts.iter().map(|&s| (s, s + old.len())).collect()
@@ -141,29 +146,37 @@ impl Exact {
             return Ok(EditOutput::new(Some(out), report, exit::OK));
         }
         if count > 1 {
-            return Ok(refuse(format!(
-                "replace: {label} matches {count} times in {name} ({}); nothing applied\n\
+            return Ok(refuse(
+                &ids::REPLACE_NOT_UNIQUE,
+                format!(
+                    "replace: {label} matches {count} times in {name} ({}); nothing applied\n\
                  to replace one, add surrounding text to {label} until it matches once; \
                  to replace every match, add --all\n",
-                at_lines(text, &spans(&starts), count)
-            )));
+                    at_lines(text, &spans(&starts), count)
+                ),
+                count,
+            ));
         }
         let s = starts[0];
         let overlapping = overlaps(text, &old, s);
         if overlapping.len() > 1 {
             let n = overlapping.len();
-            return Ok(refuse(format!(
-                "replace: {label} matches {}{n} times in {name}, overlapping itself ({}); \
+            return Ok(refuse(
+                &ids::REPLACE_NOT_UNIQUE,
+                format!(
+                    "replace: {label} matches {}{n} times in {name}, overlapping itself ({}); \
                  nothing applied\n\
                  to replace one, add surrounding text to {label} until it matches once; \
                  --all replaces left to right without overlaps (1 match here)\n",
-                if n > LIST_CAP { "more than " } else { "" },
-                at_lines(
-                    text,
-                    &spans(&overlapping[..n.min(LIST_CAP)]),
-                    n.min(LIST_CAP)
+                    if n > LIST_CAP { "more than " } else { "" },
+                    at_lines(
+                        text,
+                        &spans(&overlapping[..n.min(LIST_CAP)]),
+                        n.min(LIST_CAP)
+                    ),
                 ),
-            )));
+                n,
+            ));
         }
         if text.len() - old.len() + new.len() > MAX_OUTPUT_BYTES {
             return Err(too_much_output());
@@ -180,8 +193,13 @@ fn empty_old() -> ToolError {
     ToolError::usage("--old is empty: give the exact text to replace (to add text, use insert)")
 }
 
-fn refuse(report: String) -> EditOutput {
-    EditOutput::new(None, report.into_bytes(), exit::NO)
+/// Nothing applied, exit 1, the report on stdout; the refusal's message is the report's
+/// first line.
+fn refuse(entry: &'static ErrorEntry, report: String, matches: usize) -> EditOutput {
+    let first = report.lines().next().unwrap_or_default().to_owned();
+    let mut out = EditOutput::new(None, report.into_bytes(), exit::NO);
+    out.refusal = Some(ErrorReport::new(entry, first).with("matches", matches));
+    out
 }
 
 fn plural_es(n: usize) -> &'static str {

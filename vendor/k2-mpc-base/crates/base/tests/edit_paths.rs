@@ -137,7 +137,49 @@ fn same<T: PartialEq + std::fmt::Debug>(
     }
 }
 
-fn same_edits(step: usize, a: Vec<EditRecord>, b: Vec<EditRecord>) -> Result<(), Diverged> {
+thread_local! {
+    /// This thread's state comparisons across the two sides: (compared, equal in content
+    /// but not in bytes).
+    static STATES: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The two sides' states (v2) after a step: equal bytes, or else the same content (state
+/// vector, delete set, texts: [`Doc::same_content`]). Two docs fed the same changes may split
+/// equal content into blocks differently upstream, so state equality across docs is content
+/// equality (k2-yrs k2.4's note); updates stay byte for byte. Counts the content-only ones.
+fn same_state(
+    step: usize,
+    what: &str,
+    schema: Schema,
+    a: Option<Vec<u8>>,
+    b: Option<Vec<u8>>,
+) -> Result<(), Diverged> {
+    STATES.with(|c| c.set((c.get().0 + 1, c.get().1)));
+    if a == b {
+        return Ok(());
+    }
+    if let (Some(x), Some(y)) = (&a, &b) {
+        if let (Ok(dx), Ok(dy)) = (Doc::load(schema, x), Doc::load(schema, y)) {
+            if dx.same_content(&dy) {
+                STATES.with(|c| c.set((c.get().0, c.get().1 + 1)));
+                return Ok(());
+            }
+        }
+    }
+    same(step, what, a, b)
+}
+
+/// This thread's (states compared, equal in content only) since the last call.
+fn take_states() -> (u64, u64) {
+    STATES.with(|c| c.replace((0, 0)))
+}
+
+fn same_edits(
+    step: usize,
+    schema: Schema,
+    a: Vec<EditRecord>,
+    b: Vec<EditRecord>,
+) -> Result<(), Diverged> {
     same(step, "engine edits made", a.len(), b.len())?;
     for (k, (x, y)) in a.into_iter().zip(b).enumerate() {
         same(step, &format!("edit {k}: client"), x.client, y.client)?;
@@ -148,7 +190,13 @@ fn same_edits(step: usize, a: Vec<EditRecord>, b: Vec<EditRecord>) -> Result<(),
             x.state_vector,
             y.state_vector,
         )?;
-        same(step, &format!("edit {k}: state after"), x.state, y.state)?;
+        same_state(
+            step,
+            &format!("edit {k}: state after"),
+            schema,
+            x.state,
+            y.state,
+        )?;
     }
     Ok(())
 }
@@ -327,11 +375,17 @@ fn doc_sequence(seed: u64, steps: usize, candidate: Path) -> Result<usize, Diver
         if let DocOp::Agent(..) = op {
             agent_edits += usize::from(matches!(ra, Ok(Some(_))));
         }
-        same_edits(step, a.side.take_edits(), b.side.take_edits())?;
+        same_edits(step, TWO, a.side.take_edits(), b.side.take_edits())?;
         for root in ROOTS {
             same(step, "text", a.doc.text(root), b.doc.text(root))?;
         }
-        same(step, "state", a.doc.encode_state(), b.doc.encode_state())?;
+        same_state(
+            step,
+            "state",
+            TWO,
+            a.doc.encode_state().ok(),
+            b.doc.encode_state().ok(),
+        )?;
     }
     Ok(agent_edits)
 }
@@ -343,15 +397,18 @@ fn doc_paths_agree() {
         env_u64("EDIT_PATHS_STEPS", 150) as usize,
     );
     let mut edits = 0;
+    take_states();
     for seed in 0..seeds {
         match doc_sequence(seed, steps, CANDIDATE) {
             Ok(n) => edits += n,
             Err((step, why)) => panic!("seed {seed}, step {step}: {CANDIDATE:?} differs: {why}"),
         }
     }
-    eprintln!("[edit paths] doc level: {seeds} sequences of {steps} steps, {edits} agent edits, byte-identical");
+    let (states, content_only) = take_states();
+    eprintln!("[edit paths] doc level: {seeds} sequences of {steps} steps, {edits} agent edits; updates byte-identical; {states} states compared, {content_only} equal in content but not in bytes");
+    let job = k2_mpc_base::differential::runrec_job();
     eprintln!(
-        "RUNREC {{\"job\":null,\"run\":\"edit_paths_doc\",\"tool\":\"edit_paths\",\"status\":\"COMPLETE\",\"candidate\":\"{CANDIDATE:?}\",\"sequences\":{seeds},\"steps\":{},\"agent_edits\":{edits}}}",
+        "RUNREC {{\"job\":{job},\"run\":\"edit_paths_doc\",\"tool\":\"edit_paths\",\"status\":\"COMPLETE\",\"candidate\":\"{CANDIDATE:?}\",\"sequences\":{seeds},\"steps\":{},\"agent_edits\":{edits},\"states_compared\":{states},\"states_content_only\":{content_only}}}",
         seeds * steps as u64
     );
     assert!(
@@ -796,7 +853,7 @@ fn session_sequence(
         t.1 += u64::from(ra.starts_with("Ok("));
         let (ea, eb) = (a.side.take_edits(), b.side.take_edits());
         tally.1 += ea.len() as u64;
-        same_edits(step, ea, eb)?;
+        same_edits(step, k2_mpc_base::session::Pack::schema(&MD), ea, eb)?;
         let (ca, cb) = (a.any_conn(), b.any_conn());
         same(step, "text", a.text(), b.text())?;
         same(
@@ -828,14 +885,17 @@ fn session_paths_agree() {
         env_u64("EDIT_PATHS_SESSION_STEPS", 150) as usize,
     );
     let mut tally = Tally::default();
+    take_states();
     for seed in 0..seeds {
         if let Err((step, why)) = session_sequence(seed, steps, CANDIDATE, &mut tally) {
             panic!("seed {seed}, step {step}: {CANDIDATE:?} differs: {why}");
         }
     }
+    let (states, content_only) = take_states();
     eprintln!(
-        "[edit paths] session level: {seeds} sequences of {steps} steps, {} engine edits, \
-         byte-identical; calls (ok/all): {}",
+        "[edit paths] session level: {seeds} sequences of {steps} steps, {} engine edits; \
+         updates byte-identical; {states} states compared, {content_only} equal in content \
+         but not in bytes; calls (ok/all): {}",
         tally.1,
         tally
             .0
@@ -844,8 +904,9 @@ fn session_paths_agree() {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let job = k2_mpc_base::differential::runrec_job();
     eprintln!(
-        "RUNREC {{\"job\":null,\"run\":\"edit_paths_session\",\"tool\":\"edit_paths\",\"status\":\"COMPLETE\",\"candidate\":\"{CANDIDATE:?}\",\"sequences\":{seeds},\"steps\":{},\"engine_edits\":{}}}",
+        "RUNREC {{\"job\":{job},\"run\":\"edit_paths_session\",\"tool\":\"edit_paths\",\"status\":\"COMPLETE\",\"candidate\":\"{CANDIDATE:?}\",\"sequences\":{seeds},\"steps\":{},\"engine_edits\":{},\"states_compared\":{states},\"states_content_only\":{content_only}}}",
         seeds * steps as u64,
         tally.1
     );

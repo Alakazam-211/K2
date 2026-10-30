@@ -1,0 +1,38 @@
+# cargo-nextest settings for the kit's own test runs (tools/tests/full.sh uses nextest when the
+# node has it; tools/README.md, "Build settings"). nextest runs every test in its own process
+# and several test binaries at once; cargo test runs the binaries one after another.
+
+[profile.default]
+# A flaky test is a bug, not a retry.
+retries = 0
+# Report every failure of a run, not the first.
+fail-fast = false
+# Reported, never stopped: a slow test prints SLOW every 60 s and runs to its end.
+slow-timeout = { period = "60s" }
+# Show the slow tests again in the final summary.
+final-status-level = "slow"
+
+[profile.default.junit]
+# target/nextest/default/junit.xml; a compute node reads it as the job's test list.
+path = "junit.xml"
+
+# spec-undo's mutant tests, the second run of its part: their own JUnit file
+# (target/nextest/mutants/junit.xml), so the first run's is kept. Otherwise the default's.
+[profile.mutants]
+
+[profile.mutants.junit]
+path = "junit.xml"
+
+# Test groups: none needed (build-speed trial, 10-28). Running each test in its own process,
+# beside tests of other binaries, changes nothing the suite relies on:
+# - every test's temp dir is named with the process id and a per-process counter;
+# - the process-wide state (the mutant switch, the counting allocators of tier0_large and
+#   ephemeral_replicas, thread-locals) is only more isolated in a process of its own;
+# - the wall-clock bounds (tools_props: 2 s a case, 10 s a hostile input) hold with room.
+# Peak memory of a part under nextest, 4 threads: 1.0-2.2 GiB (the job's cgroup), within
+# --mem 8G. Add a group here when a test needs one, e.g.
+#   [test-groups]
+#   serial = { max-threads = 1 }
+#   [[profile.default.overrides]]
+#   filter = 'binary(soak)'
+#   test-group = 'serial'

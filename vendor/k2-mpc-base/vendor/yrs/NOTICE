@@ -9,9 +9,35 @@ Changes on branch k2/0.28 (from tag v0.28.0):
   client (new blocks and redone items take that client's ID and next clocks); the doc's own ID
   is restored at commit, before subdocs added in it are given an ID, and on a panic. Tests in
   yrs/tests/transact_mut_as.rs and the undo manager's unit tests.
+- yrs: a position index for text: per-branch (index, ID) markers, resolved by ID lookup, kept by
+  local text inserts and removals and dropped on any other change; used only by texts without
+  formatting; a sampled shadow walk (Doc::set_position_shadow_rate) checks it and reports a
+  mismatch to Doc::set_position_audit_hook. Tests in yrs/tests/position_index.rs and the
+  position_index unit tests.
+- yrs: the undo manager restores items in a deterministic order (as Yjs does). Test in the
+  undo manager's unit tests.
+- yrs (hardening): more robust handling of updates that arrive out of order. Tests in
+  yrs/tests/pending_retry.rs.
+- yrs: encoded bytes don't depend on hash order. Tests in yrs/tests/deterministic_bytes.rs.
+- yrs (tests): the fuzz harness (test_utils.rs) is deterministic: its peer and message maps are
+  ordered, a scenario's seed comes from YRS_FUZZ_SEED (random if unset, printed either way),
+  and the final check requires that no peer has a pending update or delete set.
 - yrs: `Update::has_subdoc_content()`: a decode-only check of whether an update carries subdocument
   content, so an embedder that never uses subdocuments can refuse such updates before applying
   them. Tests in yrs/tests/subdoc_content.rs.
+- yrs: a transaction's work is proportional to the clients it touches, not to every client the
+  doc has seen. It records the clients it pushes a block for (item, GC or skip) with each one's
+  state vector entry before the first; nested-type change tracking, map/XML event keys, the
+  transaction's encoded update and the update observers' change check look at those clients
+  only, instead of building the whole before state, state vector and after state. The full
+  before_state()/after_state() are still built on request and list the same clients upstream's
+  did. New: TransactionMut::before_clock/after_clock/touched_clients. A test-only oracle
+  (Doc::set_full_state_vectors) keeps upstream's path. Tests in yrs/tests/touched_clients.rs.
 - yrs (hardening): stricter handling of rarely used content. Tests included.
-- yrs: builds warning-free under RUSTFLAGS='-D warnings' (default features and `weak`), with
-  no change in behaviour.
+- yrs (hardening): v2 encoding fix. Test in yrs/tests/v2_skip.rs.
+- yrs (hardening): more complete transaction updates. A test-only feature (planted-relay-bug)
+  restores the previous behaviour for tests. Tests in yrs/tests/update_event_relay.rs.
+- yrs (hardening): stricter handling when applying updates. Test in yrs/tests/gc_split.rs.
+- yrs (hardening): garbage-collection robustness. Tests included.
+- yrs: builds warning-free under RUSTFLAGS='-D warnings' (default features, `weak` and the
+  test-only planted-* features), with no change in behaviour.

@@ -1,0 +1,21 @@
+MPC-E161 engine_unlisted (sessions and edits)
+exit:     2
+message:  the engine refused this ({code}), and this build's catalog doesn't list the code
+next:     A newer engine refused something this kit build can't explain. Nothing was applied. Report the code; the engine's own docs describe it.
+rule:     the MPCE seam (stable codes)
+verbs:    any verb on a doc
+status:   reserved for the native engine (MPCE ranges at G2-core); nothing returns it yet
+--- json
+{
+  "id": "MPC-E161",
+  "name": "engine_unlisted",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "the engine refused this ({code}), and this build's catalog doesn't list the code",
+  "next": "A newer engine refused something this kit build can't explain. Nothing was applied. Report the code; the engine's own docs describe it.",
+  "rule": "the MPCE seam (stable codes)",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "reserved",
+  "since_or_until": "the native engine (MPCE ranges at G2-core)"
+}

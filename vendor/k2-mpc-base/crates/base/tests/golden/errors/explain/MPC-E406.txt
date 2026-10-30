@@ -1,0 +1,21 @@
+MPC-E406 declined_unreadable (disk and outside edits)
+exit:     4
+message:  live editing is off: {reason} (unreadable)
+next:     The file couldn't be read to promote it to a live text doc. It stays a plain file; check it exists and is readable.
+rule:     K-PACK-4
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E406",
+  "name": "declined_unreadable",
+  "area": "disk and outside edits",
+  "exit": 4,
+  "message": "live editing is off: {reason} (unreadable)",
+  "next": "The file couldn't be read to promote it to a live text doc. It stays a plain file; check it exists and is readable.",
+  "rule": "K-PACK-4",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

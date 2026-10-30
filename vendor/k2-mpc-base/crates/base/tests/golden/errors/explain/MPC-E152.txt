@@ -1,0 +1,21 @@
+MPC-E152 unaccepted (sessions and edits)
+exit:     3
+message:  update contains content this host doesn't accept
+next:     An editor sent an update this build does not accept; it was refused whole and nothing was applied. Don't resend it: the editor should reload the doc. Report it if it happens again.
+rule:     K-SEC-2
+verbs:    an editor's sync connection (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E152",
+  "name": "unaccepted",
+  "area": "sessions and edits",
+  "exit": 3,
+  "message": "update contains content this host doesn't accept",
+  "next": "An editor sent an update this build does not accept; it was refused whole and nothing was applied. Don't resend it: the editor should reload the doc. Report it if it happens again.",
+  "rule": "K-SEC-2",
+  "verbs": ["(sync)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

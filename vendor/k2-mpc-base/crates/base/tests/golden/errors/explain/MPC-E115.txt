@@ -1,0 +1,21 @@
+MPC-E115 bad_participant (sessions and edits)
+exit:     2
+message:  bad participant: {reason}
+next:     The host passed an identity the kit refuses (the message says which field). This is the host's to fix, not the caller's.
+rule:     K-PRES-9
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E115",
+  "name": "bad_participant",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "bad participant: {reason}",
+  "next": "The host passed an identity the kit refuses (the message says which field). This is the host's to fix, not the caller's.",
+  "rule": "K-PRES-9",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

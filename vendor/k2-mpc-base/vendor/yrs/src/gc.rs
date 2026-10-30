@@ -1,10 +1,13 @@
 use crate::block::{Block, ClientID};
+use crate::branch::Branch;
 use crate::{IdSet, Store, TransactionMut, ID};
 use std::collections::HashMap;
 
 #[derive(Default)]
 pub(crate) struct GCCollector {
     marked: HashMap<ClientID, Vec<u32>>,
+    /// k2 (hardening)
+    parked: Vec<Box<Branch>>,
 }
 
 impl GCCollector {
@@ -79,8 +82,14 @@ impl GCCollector {
         client.push(id.clock);
     }
 
+    /// k2 (hardening)
+    pub(crate) fn park(&mut self, branch: Box<Branch>) {
+        self.parked.push(branch);
+    }
+
     /// Garbage collects all items marked for GC.
-    fn collect_marked(self, txn: &mut TransactionMut) {
+    fn collect_marked(mut self, txn: &mut TransactionMut) {
+        txn.store.parked.append(&mut self.parked);
         for (client_id, clocks) in self.marked.into_iter() {
             let client = txn.store.blocks.get_client_blocks_mut(client_id);
             for clock in clocks {

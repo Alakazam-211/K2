@@ -1,11 +1,11 @@
 # vendor/yrs: written by tools/vendor-yrs.sh; do not edit (docs/YRS-FORK.md)
 upstream Yrs v0.28.0 (https://github.com/y-crdt/y-crdt), MIT, plus the k2 patches
-tag k2-yrs-0.28.0-k2.2.4
-commit 69b06222f095a64c474db2adaf4c105d20bd3d45
-yrs-tree 8442a84f2e86f3b6ce0a847fe1a060356ee67aa2
+tag k2-yrs-0.28.0-k2.6.3
+commit 8fa90bd24644eb954fcd2d1e75f5af7165c08535
+yrs-tree e882ed317764802ea555d774d73c333b19946396
 excluded yrs/tests/
 upstream-tag v0.28.0 23b7f5693bbf9e7d26340c521ee8647f79bdfba2
 crate yrs-0.28.0 52c70dc8beca8666c77612a96889106ca3cd65318609721f464624ff79685da9
-src-sha256 31043f5e5e47864150ddc618201aa49a5b55d3202ba23c80a904c2cb2f3d8ccd
-files 67
-files-sha256 c6560553e1f852314630ed894cda847cb1b1c16f861db449e7e9e4b848a74168
+src-sha256 aa7fe34d00d6985ce55bb79e42408f1530a33df5e52855ea8afb44d8b1a3e45d
+files 68
+files-sha256 8a4ff0fc0320896225b7bb3599f1cf28d3805d743fd0efc28f6d73abd00f59c5

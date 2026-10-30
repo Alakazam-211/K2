@@ -65,8 +65,7 @@ impl StickyIndex {
         B: AsRef<Branch>,
     {
         let branch = branch.as_ref();
-        if let Some(ptr) = branch.item {
-            let id = ptr.id().clone();
+        if let Some(id) = branch.nested_id() {
             Self::new(IndexScope::Nested(id), assoc)
         } else if let Some(name) = &branch.name {
             Self::new(IndexScope::Root(name.clone()), assoc)

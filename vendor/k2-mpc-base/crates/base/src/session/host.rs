@@ -362,10 +362,51 @@ pub enum AuditEvent {
         client: ClientId,
         change: Seq,
     },
+    /// The write-back's sampled check (v0.9.7, [`crate::session::Config::writeback_check_every`])
+    /// found the disk replica, kept in step by the changes since the last write-back,
+    /// different from the live doc's state at `version`. It was reloaded from the doc (as
+    /// before v0.9.7); the file was right either way (it is rendered from the live text).
+    /// Metadata only. A bug in the kit: report it.
+    DiskReplicaMismatch { key: DocKey, version: Seq },
+    /// The engine's position index check (v0.9.7, [`crate::session::Config::position_check_every`])
+    /// found that a lookup of `index` in text `root` (`None`: a nested text) from the marker
+    /// at `marker` disagreed with a walk from the text's start, during change `change`. The
+    /// walk's position was used (never the other) and the text's markers dropped. Indices
+    /// only. A bug in the engine: report it.
+    PositionIndexMismatch {
+        key: DocKey,
+        root: Option<String>,
+        index: u32,
+        marker: u32,
+        change: Seq,
+    },
     /// The runtime check found the engine's cached text of `root` different from a fresh
     /// read, at change `change` (checked before and after it). The fresh text was used, and
     /// the doc reads its texts afresh until it is reloaded. Metadata only.
     TextCacheMismatch {
+        key: DocKey,
+        root: String,
+        change: Seq,
+    },
+    /// Blame's provenance map (each live character's element and root, kept up to date as
+    /// changes apply) differed from a rebuild from the engine and the store, at version
+    /// `version` (v0.9.5): found by the sampled check ([`super::Config::blame_check_every`]),
+    /// by blame finding a map whose length isn't the text's, or by an outside edit finding
+    /// the map's element IDs other than the engine's. The rebuild was used (never the map)
+    /// and replaced it. `what` says where, with no doc content (a root name, a byte offset).
+    /// A bug in the kit: report it.
+    ProvenanceMismatch {
+        key: DocKey,
+        version: Seq,
+        what: String,
+    },
+    /// The outside-edit check ([`crate::session::Config::edit_check_every`]): the change an
+    /// outside save made to `root` at change `change`, taken from the merge's own hunks, was
+    /// not the change at element identity computed in full from the engine. The merge's
+    /// hunks are kept for the change's record; blame's provenance map is dropped (rebuilt from
+    /// the engine when next needed). Metadata only. A bug in the kit or the engine:
+    /// report it.
+    IdentityMismatch {
         key: DocKey,
         root: String,
         change: Seq,

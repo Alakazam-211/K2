@@ -74,210 +74,228 @@ pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> Merg
 }
 
 /// Merge an outside save onto the live text (disk sync, v0.9.5): `base` is the text the file
-/// held at the last sync, `ours` the file's new text, `theirs` the live text. The two sides
-/// are [`outside_sides`]: each a diff from `base` with its pure line insertions slid to line
-/// starts, as an outside edit's always were, and its pure line deletions to whole lines
-/// ([`super::lines`]), so a line added on one side and an end-of-line edit or a deleted
-/// neighbour on the other don't meet inside each other. Never refuses:
-/// - when [`merge3_hunks`] on those sides is clean, its result (the pair rules O1–O5 of
-///   `write --base`: the save is applied as a `write --base` of the file's text made on the
-///   synced text), except as below (outside saves only; `write --base` is unchanged);
-/// - where the two sides overlap, both are kept, as the CRDT merge of an outside edit kept
-///   them before v0.9.5, and **at line granularity**: each hunk in an overlap is widened to
-///   whole lines ([`outside_merge_sides`]), then every line either side deleted is gone and
-///   every line either side wrote lands (at one point: pure insertions before
-///   replacements, the live side first within each). Two sides' lines are never spliced
-///   into one: where a side's group doesn't end with "\n" (the end of a text with no final
-///   newline) and the other side's follows at that point, one "\n" separates them, always
-///   (a group starting with "\n" keeps its own blank line). A change made identically on
-///   both sides is taken once (O4).
-/// - In an outside save, a line break separates text one side left without a final line
-///   break (when the original text ended with one) from a change of the other side that is
-///   inserted at the end of the text ([`end_line_break`]). Everything else on the last line
-///   (a change that starts earlier and runs to the end, or a base with no final break)
-///   merges character by character, as merge3_hunks does.
+/// held at the last sync, `ours` the file's new text, `theirs` the live text. Never refuses.
 ///
-/// The hunks are on `theirs`, so they apply to the live doc as they are.
+/// **By line (v0.9.7).** The three texts are merged as whole lines: each is first
+/// [`closed`] (a final "\n" added when it has text and lacks one), and the sides are
+/// [`outside_sides`], each a diff from the closed base at whole lines
+/// ([`diff::whole_line_hunks`]): every hunk starts at a line start and covers and writes
+/// whole lines, so two sides' changes never merge inside one line; wherever they touch the
+/// same line they overlap.
+/// - When [`merge3_hunks`] on those sides is clean, its result (the pair rules O1–O5 of
+///   `write --base`: the save is applied as a `write --base` of the file's text made on the
+///   synced text).
+/// - Where the two sides overlap, both are kept, as the CRDT merge of an outside edit kept
+///   them before v0.9.5, line by line: every line either side deleted is gone and every line
+///   either side wrote lands (at one point: pure insertions before replacements, the live
+///   side first within each). A change made identically on both sides is taken once (O4).
+///
+/// **The end of the text** is merged on its own ([`end_is_open`]): whether the result ends
+/// without a final "\n" follows the side that wrote its last line (as that side's text
+/// ends); when that line is a base line both kept, or both wrote it, the side that changed
+/// the base's ending decides (ours when it did, else theirs). So a line one side deleted
+/// never comes back because the other only added or removed a final "\n" after it, and a
+/// line written after an open last line is never glued to it. This agrees with `write
+/// --base`'s end-of-text rule (O5a, v0.9.8) wherever both apply (a clean merge on a base
+/// ending with "\n").
+///
+/// So at most one person's changes are on any line of the result, and no two lines of the
+/// texts are joined into one. The hunks are on `theirs`, so they apply to the live doc as
+/// they are.
 pub fn merge3_keep_both(base: &str, ours: &str, theirs: &str) -> Clean {
-    let (a, b, _) = outside_merge_sides(base, ours, theirs);
-    // keep_both on the final sides: merge3_hunks' clean result when they don't overlap (a
-    // property holds it), and two sides' lines kept apart where groups of whole lines meet
-    let hunks = end_line_break(base, ours, theirs, &a, &b, keep_both(base, &a, &b));
+    let (cb, ct) = (closed(base), closed(theirs));
+    let (a, b) = outside_sides(base, ours, theirs);
+    // keep_both on the closed texts' sides: merge3_hunks' clean result when they don't
+    // overlap (a property holds it); every group ends with "\n", so no two lines meet
+    let hunks = keep_both(&cb, &a, &b);
+    let merged = diff::apply(&ct, &hunks);
+    let open = end_is_open(base, ours, theirs, &a, &b, &hunks, &merged);
+    let hunks = onto_theirs(theirs, hunks, &merged, open);
     debug_assert!(
         diff::validate(theirs, &hunks).is_ok(),
         "keep-both hunks must be valid on theirs"
     );
     let text = diff::apply(theirs, &hunks);
+    debug_assert_eq!(
+        text,
+        if open {
+            &merged[..merged.len() - 1]
+        } else {
+            &merged[..]
+        }
+    );
     Clean { hunks, text }
 }
 
-/// The two sides [`merge3_keep_both`] merges: `base` to `ours` and `base` to `theirs`, each
-/// a canonical diff with its pure line insertions slid to line starts and its pure line
-/// deletions to whole lines (same texts; [`lines::align_deletions`]).
-pub fn outside_sides(base: &str, ours: &str, theirs: &str) -> (Vec<Hunk>, Vec<Hunk>) {
-    let side = |new: &str| {
-        lines::align_deletions(
-            base,
-            lines::align_insertions(base, diff::line_hunks(base, new)),
-        )
-    };
-    (side(ours), side(theirs))
-}
-
-/// The sides [`merge3_keep_both`] ends with, and `merge3_hunks`'s clean result on them when
-/// there is one. From [`outside_sides`]: while [`merge3_hunks`] finds overlaps, every hunk
-/// of either side that meets an overlapping region is widened to whole lines (same texts;
-/// hunks that come to meet are joined), until it is clean or nothing more widens. A clean
-/// first merge is returned as it is (character granularity).
-pub fn outside_merge_sides(
-    base: &str,
-    ours: &str,
-    theirs: &str,
-) -> (Vec<Hunk>, Vec<Hunk>, Option<Clean>) {
-    let (mut a, mut b) = outside_sides(base, ours, theirs);
-    loop {
-        let regions = match merge3_hunks(base, &a, &b, !base.is_empty()) {
-            Merge::Clean(c) => return (a, b, Some(c)),
-            Merge::Conflicts(c) => c.into_iter().map(|c| c.base).collect::<Vec<_>>(),
-        };
-        let meets = |h: &Hunk| regions.iter().any(|r| h.start <= r.end && r.start <= h.end);
-        let (a2, b2) = (widen(base, &a, &meets), widen(base, &b, &meets));
-        if a2 == a && b2 == b {
-            return (a, b, None);
-        }
-        (a, b) = (a2, b2);
+/// `t` with a final "\n" when it has text and doesn't end with one (the outside save's
+/// merge works on closed texts, v0.9.7).
+pub fn closed(t: &str) -> std::borrow::Cow<'_, str> {
+    if t.is_empty() || t.ends_with('\n') {
+        std::borrow::Cow::Borrowed(t)
+    } else {
+        std::borrow::Cow::Owned(format!("{t}\n"))
     }
 }
 
-/// The end-of-text rule of an outside save (v0.9.5): when the change that lands last at
-/// the end of the text (one side's insertion at `base`'s end) follows text that
-/// doesn't end with "\n" in the merge, though that side alone left it ending with "\n" (or
-/// empty), the other side's change opened it (an insert without a final "\n", or a delete
-/// that ran to the end): one "\n" goes before the landing text. `hunks` are keep_both's, on
-/// `theirs`; the result is too.
-fn end_line_break(
+/// Whether `t` ends inside a line (has text, no final "\n").
+fn is_open(t: &str) -> bool {
+    !t.is_empty() && !t.ends_with('\n')
+}
+
+/// Whether the outside save's merge ends without a final "\n" (v0.9.7). `a` and `b` are
+/// [`outside_sides`], `hunks` keep_both's on the closed `theirs`, `merged` their result
+/// (closed). The last line's author decides: ours when the merge's last "\n" is in ours'
+/// written text, theirs when it is in text theirs wrote; when it is a base line, or a change
+/// both made (O4), the side that changed the base's ending (ours when it did, else theirs).
+pub fn end_is_open(
     base: &str,
     ours: &str,
     theirs: &str,
     a: &[Hunk],
     b: &[Hunk],
-    mut hunks: Vec<Hunk>,
-) -> Vec<Hunk> {
-    // only where the base ended with a line break: a side then removed it, or didn't put it
-    // back; with none, the last line merges character by character (v0.9.5)
-    if !base.ends_with('\n') {
-        return hunks;
+    hunks: &[Hunk],
+    merged: &str,
+) -> bool {
+    // an empty last line can't be left open (that would delete it)
+    if merged.is_empty() || merged == "\n" || merged.ends_with("\n\n") {
+        return false;
     }
-    let len = base.len();
-    let text = diff::apply(theirs, &hunks);
-    let open = |p: &str| !p.is_empty() && !p.ends_with('\n');
-    let closed = |p: &str| p.is_empty() || p.ends_with('\n');
-    let ours_end = a
-        .iter()
-        .rev()
-        .find(|x| !b.contains(x))
-        .filter(|x| x.start == len && !x.insert.is_empty());
-    let theirs_end = b.last().filter(|y| y.start == len && !y.insert.is_empty());
-    // ours lands last: keep_both put its text at the very end of theirs
-    if let Some(x) = ours_end {
-        if let Some(h) = hunks.last_mut() {
-            if h.end == theirs.len() && h.insert.ends_with(&x.insert) {
-                let prefix = &text[..text.len() - x.insert.len()];
-                let alone = &ours[..ours.len() - x.insert.len()];
-                if open(prefix) && closed(alone) {
-                    let k = h.insert.len() - x.insert.len();
-                    h.insert.insert(k, '\n');
-                }
-                return hunks;
+    let both = || {
+        if is_open(ours) != is_open(base) {
+            is_open(ours)
+        } else {
+            is_open(theirs)
+        }
+    };
+    // where character `target` of `hs` applied comes from: Err(offset in the text they
+    // apply to) when copied from there, Ok(index) when hunk `index` writes it
+    let origin = |hs: &[Hunk], target: usize| -> Result<usize, usize> {
+        let (mut out, mut at) = (0, 0);
+        for (k, h) in hs.iter().enumerate() {
+            let copy = h.start - at;
+            if target < out + copy {
+                return Err(at + (target - out));
+            }
+            out += copy;
+            if target < out + h.insert.len() {
+                return Ok(k);
+            }
+            out += h.insert.len();
+            at = h.end;
+        }
+        Err(at + (target - out))
+    };
+    match origin(hunks, merged.len() - 1) {
+        Ok(_) => is_open(ours),
+        // copied from theirs' text: written by theirs, by both, or a base line
+        Err(q) => match origin(b, q) {
+            Ok(k) if a.contains(&b[k]) => both(),
+            Ok(_) => is_open(theirs),
+            Err(_) => both(),
+        },
+    }
+}
+
+/// `hunks` on the closed `theirs` (keep_both's, giving `merged`) as hunks on `theirs`
+/// itself, giving `merged`, or `merged` without its final "\n" when `open`.
+fn onto_theirs(theirs: &str, mut hunks: Vec<Hunk>, merged: &str, open: bool) -> Vec<Hunk> {
+    let n = theirs.len();
+    if is_open(theirs) {
+        // the closed text's last "\n" (at n) isn't in theirs: a hunk covering it ends at n
+        // instead, and an insertion after it starts with it
+        for h in &mut hunks {
+            if h.start == n + 1 {
+                h.start = n;
+                h.end = n;
+                h.insert.insert(0, '\n');
+            } else if h.end == n + 1 {
+                h.end = n;
             }
         }
+        hunks.retain(|h| h.start != h.end || !h.insert.is_empty());
     }
-    // theirs lands last: its text ends theirs, and nothing of ours follows it
-    if let Some(y) = theirs_end {
-        let q = theirs.len() - y.insert.len();
-        if text.ends_with(&y.insert) && hunks.last().map_or(true, |h| h.end <= q) {
-            let prefix = &text[..text.len() - y.insert.len()];
-            if open(prefix) && closed(&theirs[..q]) {
-                match hunks.last_mut() {
-                    Some(h) if h.end == q => h.insert.push('\n'),
-                    _ => hunks.push(Hunk {
-                        start: q,
-                        end: q,
-                        insert: "\n".to_owned(),
-                    }),
+    let want = if open {
+        &merged[..merged.len() - 1]
+    } else {
+        merged
+    };
+    let got = diff::apply(theirs, &hunks);
+    if got.len() < want.len() {
+        // the final "\n", closed by the merge, not in theirs
+        debug_assert_eq!(format!("{got}\n"), want);
+        match hunks.last_mut() {
+            Some(h) if h.end == n => h.insert.push('\n'),
+            _ => hunks.push(Hunk {
+                start: n,
+                end: n,
+                insert: "\n".to_owned(),
+            }),
+        }
+    } else if got.len() > want.len() {
+        debug_assert_eq!(got, format!("{want}\n"));
+        // drop the final "\n": from the last hunk's text when it ends the result, else
+        // theirs' own "\n" there (joined to the deletions after it)
+        match hunks.last_mut() {
+            Some(h) if h.end == n && !h.insert.is_empty() => {
+                h.insert.pop();
+                if h.start == h.end && h.insert.is_empty() {
+                    hunks.pop();
                 }
+            }
+            _ => {
+                // the last character of theirs not deleted by a hunk
+                let mut q = n;
+                for h in hunks.iter().rev() {
+                    if h.end < q {
+                        break;
+                    }
+                    q = q.min(h.start);
+                }
+                q -= 1;
+                hunks.push(Hunk {
+                    start: q,
+                    end: q + 1,
+                    insert: String::new(),
+                });
+                hunks.sort_by_key(|h| (h.start, h.end));
+                hunks = diff::coalesce(hunks);
             }
         }
     }
     hunks
 }
 
-/// Whether `h` changes whole lines of `base`: it starts at a line start, ends at one (or at
-/// the end of the text), and what it writes is whole lines (or nothing).
-fn whole_lines(base: &str, h: &Hunk) -> bool {
-    let at_line = |p: usize| p == 0 || p == base.len() || base.as_bytes()[p - 1] == b'\n';
-    (h.start == 0 || base.as_bytes()[h.start - 1] == b'\n')
-        && at_line(h.end)
-        && (h.insert.is_empty() || h.insert.ends_with('\n') || h.end == base.len())
+/// The two sides [`merge3_keep_both`] merges: [`closed`] `base` to closed `ours` and to
+/// closed `theirs` (hunks on the closed base), each [`diff::whole_line_hunks`] (v0.9.7): a
+/// diff with its pure line insertions slid to line starts and its pure line deletions to
+/// whole lines, then every hunk grown to whole lines ([`lines::to_whole_lines`]).
+pub fn outside_sides(base: &str, ours: &str, theirs: &str) -> (Vec<Hunk>, Vec<Hunk>) {
+    let cb = closed(base);
+    (
+        diff::whole_line_hunks(&cb, &closed(ours)),
+        diff::whole_line_hunks(&cb, &closed(theirs)),
+    )
 }
 
-/// `hunks` (canonical, on `base`) with each one `widen` picks, and isn't whole lines already,
-/// grown to whole lines; hunks that come to overlap or touch are joined. Same text.
-fn widen(base: &str, hunks: &[Hunk], pick: &dyn Fn(&Hunk) -> bool) -> Vec<Hunk> {
-    // each hunk's range after widening
-    let ranges: Vec<(usize, usize)> = hunks
-        .iter()
-        .map(|h| {
-            if !pick(h) || whole_lines(base, h) {
-                return (h.start, h.end);
-            }
-            let s = base[..h.start].rfind('\n').map_or(0, |k| k + 1);
-            let mut e = h.end;
-            let mut tail = format!("{}{}", &base[s..h.start], h.insert);
-            loop {
-                let boundary = e == base.len() || (e > 0 && base.as_bytes()[e - 1] == b'\n');
-                if boundary && (tail.is_empty() || tail.ends_with('\n') || e == base.len()) {
-                    break;
-                }
-                let next = base[e..].find('\n').map_or(base.len(), |k| e + k + 1);
-                tail.push_str(&base[e..next]);
-                e = next;
-            }
-            (s, e)
-        })
-        .collect();
-    // join hunks whose ranges overlap or touch; each group's text from its own hunks
-    let mut out: Vec<Hunk> = Vec::new();
-    let mut k = 0;
-    while k < hunks.len() {
-        let (s, mut e) = ranges[k];
-        let first = k;
-        k += 1;
-        while k < hunks.len() && ranges[k].0 <= e {
-            e = e.max(ranges[k].1);
-            k += 1;
-        }
-        let local: Vec<Hunk> = hunks[first..k]
-            .iter()
-            .map(|h| Hunk {
-                start: h.start - s,
-                end: h.end - s,
-                insert: h.insert.clone(),
-            })
-            .collect();
-        let insert = diff::apply(&base[s..e], &local);
-        if insert != base[s..e] {
-            out.push(Hunk {
-                start: s,
-                end: e,
-                insert,
-            });
-        }
-    }
-    out
+/// The sides [`merge3_keep_both`] merges ([`outside_sides`], on the closed base: whole lines
+/// already, so nothing more is widened where they overlap, v0.9.7), and `merge3_hunks`'s
+/// clean result on them (on the closed texts) when there is one.
+pub fn outside_merge_sides(
+    base: &str,
+    ours: &str,
+    theirs: &str,
+) -> (Vec<Hunk>, Vec<Hunk>, Option<Clean>) {
+    let (a, b) = outside_sides(base, ours, theirs);
+    let cb = closed(base);
+    let clean = match merge3_hunks(&cb, &a, &b, !cb.is_empty()) {
+        Merge::Clean(c) => Some(c),
+        Merge::Conflicts(_) => None,
+    };
+    (a, b, clean)
 }
 
-/// The keep-both merge: `a` (ours) and `b` (theirs) canonical hunks on one base; returns
+/// The keep-both merge: `a` (ours) and `b` (theirs) hunks on one base (sorted, never
+/// overlapping; whole-line sides may touch at a line start); returns
 /// hunks on `theirs` (the base with `b` applied) that make the union: every base character
 /// either side deletes is deleted, every insertion of either side kept, each where its hunk
 /// starts. At one point, as [`merge_sets`] places them: pure insertions before replacements
@@ -327,8 +345,8 @@ fn keep_both(base: &str, a: &[Hunk], b: &[Hunk]) -> Vec<Hunk> {
                 .filter(|y| y.start < x.start || (!x.is_insertion() && y.start == x.start))
                 .or_else(|| k.checked_sub(1).map(|j| &b[j]).filter(|y| y.end == x.start));
             if let Some(y) = before.filter(|_| last_put != Some(p)) {
-                if whole_lines(base, x)
-                    && whole_lines(base, y)
+                if lines::is_whole_lines(base, x)
+                    && lines::is_whole_lines(base, y)
                     && !y.insert.is_empty()
                     && !y.insert.ends_with('\n')
                 {
@@ -347,7 +365,10 @@ fn keep_both(base: &str, a: &[Hunk], b: &[Hunk]) -> Vec<Hunk> {
                 })
                 .filter(|y| y.start <= x.end);
             if let Some(y) = after {
-                if whole_lines(base, x) && whole_lines(base, y) && !insert.ends_with('\n') {
+                if lines::is_whole_lines(base, x)
+                    && lines::is_whole_lines(base, y)
+                    && !insert.ends_with('\n')
+                {
                     insert.push('\n');
                 }
             }
@@ -630,15 +651,16 @@ mod tests {
     /// are one change (O4).
     fn keep_both_model(base: &str, ours: &str, theirs: &str) -> String {
         let (a, b, _) = outside_merge_sides(base, ours, theirs);
+        let cb = closed(base);
+        let both: Vec<Hunk> = b.iter().filter(|y| a.contains(y)).cloned().collect();
         let a: Vec<Hunk> = a.into_iter().filter(|x| !b.contains(x)).collect();
         let deletes = |h: &Hunk, p: usize| h.start <= p && p < h.end;
         let mut out = String::new();
-        // the last group (its side), with no base character after it yet: two sides' groups
-        // of whole lines meeting there are kept apart by a "\n" when the first lacks one
-        let mut last: Option<(usize, &Hunk)> = None;
+        // who wrote the last character: 0 theirs, 1 ours, 2 both (O4) or the base
+        let mut author = 2;
         let mut at: Vec<(usize, Option<char>)> =
-            base.char_indices().map(|(i, c)| (i, Some(c))).collect();
-        at.push((base.len(), None));
+            cb.char_indices().map(|(i, c)| (i, Some(c))).collect();
+        at.push((cb.len(), None));
         for (p, c) in at {
             // pure insertions, then replacements; theirs first within each
             let mut here: Vec<(bool, usize, &Hunk)> = b
@@ -653,35 +675,28 @@ mod tests {
                 if h.insert.is_empty() {
                     continue;
                 }
-                if let Some((ps, prev)) = last {
-                    if ps != side
-                        && whole_lines(base, prev)
-                        && whole_lines(base, h)
-                        && !prev.insert.ends_with('\n')
-                    {
-                        out.push('\n');
-                    }
-                }
                 out.push_str(&h.insert);
-                last = Some((side, h));
+                author = if both.contains(h) { 2 } else { side };
             }
             if let Some(c) = c {
                 if !b.iter().chain(&a).any(|h| deletes(h, p)) {
                     out.push(c);
-                    last = None;
+                    author = 2;
                 }
             }
         }
-        // the end rule (the base ended with a line break): the last group is inserted at the
-        // end, after text its side alone left closed but the merge left open
-        if let Some((side, h)) = last.filter(|(_, h)| base.ends_with('\n') && h.start == base.len())
-        {
-            let alone = if side == 1 { ours } else { theirs };
-            let k = out.len() - h.insert.len();
-            let closed = |p: &str| p.is_empty() || p.ends_with('\n');
-            if !closed(&out[..k]) && closed(&alone[..alone.len() - h.insert.len()]) {
-                out.insert(k, '\n');
-            }
+        // the end: open as the last line's author left its text; a base line or a change
+        // both made: as the side that changed the base's ending (ours first)
+        let open = |t: &str| !t.is_empty() && !t.ends_with('\n');
+        let end_open = match author {
+            0 => open(theirs),
+            1 => open(ours),
+            _ if open(ours) != open(base) => open(ours),
+            _ => open(theirs),
+        };
+        // an empty last line can't be left open (that would delete it)
+        if end_open && out.ends_with('\n') && out != "\n" && !out.ends_with("\n\n") {
+            out.pop();
         }
         out
     }
@@ -719,6 +734,23 @@ mod tests {
         );
     }
 
+    /// The file's last line is never glued to the live side's typing (v0.9.6, 2c12c64, when
+    /// the sides were widened to whole lines; Option B's whole-line sides keep it so): every
+    /// line written is its own line.
+    #[test]
+    fn a_joined_group_is_widened_back_to_whole_lines() {
+        let (base, file, live) = ("\n\n", "x\ny\nz\n", "E\n\nbab");
+        let c = merge3_keep_both(base, file, live);
+        // v0.9.5: "E\nx\ny\nzbab". The live side's "E" (typed on the first blank line) and
+        // "bab" (on the second) and the file's x, y and z are each a line of their own; both
+        // blank lines are gone, as the file deleted them. Each blank line both sides changed
+        // keeps both versions, the live one first (Option B), and the file wrote the last line
+        // with a final newline
+        assert_eq!(c.text, "E\nx\nbab\ny\nz\n");
+        assert!(!c.text.contains("zbab"));
+        assert_eq!(diff::apply(live, &c.hunks), c.text);
+    }
+
     /// Two sides' groups meeting at one point at the end of a text with no final newline keep
     /// their own lines (v0.9.5): the live group gets a "\n" before the file's.
     #[test]
@@ -745,28 +777,159 @@ mod tests {
             ("a\n", "a\ng", "a", "a\ng"),
             // an append to an open last line by one side alone stays on that line
             ("a", "ay", "a", "ay"),
-            // no final break in the base: the last line merges character by character
-            // (5cb28e51)
-            ("b", "xb", "c", "xc"),
-            ("b", "a\nxb", "c", "a\nxc"),
-            ("b\n", "xb\n", "c\n", "xc\n"),
-            // only an insertion at the end gets the break; a change that starts earlier and
-            // runs to the end merges character by character (e48dc26f), with the line empty
-            // or not, either side
-            ("\n", "b\n", "aaa", "baaa"),
-            ("foo\n", "Xfoo\n", "foo bar", "Xfoo bar"),
-            ("foo\n", "foo bar", "Xfoo\n", "Xfoo bar"),
+            // both sides change one line (v0.9.7, by line; v0.9.5 merged these character by
+            // character, 5cb28e51, e48dc26f): both versions of the line are kept, the live
+            // one first, each a line of its own, with a final break in the base or not
+            ("b", "xb", "c", "c\nxb"),
+            ("b", "a\nxb", "c", "c\na\nxb"),
+            ("b\n", "xb\n", "c\n", "c\nxb\n"),
+            ("\n", "b\n", "aaa", "aaa\nb\n"),
+            ("foo\n", "Xfoo\n", "foo bar", "foo bar\nXfoo\n"),
+            ("foo\n", "foo bar", "Xfoo\n", "Xfoo\nfoo bar"),
         ] {
             let c = merge3_keep_both(base, file, live);
             assert_eq!(c.text, want, "{base:?} {file:?} {live:?}");
             assert_eq!(diff::apply(live, &c.hunks), c.text);
             assert_eq!(c.text, keep_both_model(base, file, live));
         }
-        // inside a line, a clean merge stays character-level
+        // two changes inside one line: by line, both versions of it (v0.9.7)
         assert_eq!(
             merge3_keep_both("abcde\n", "aBcde\n", "abcdeQ\n").text,
-            "aBcdeQ\n"
+            "abcdeQ\naBcde\n"
         );
+    }
+
+    /// Every line of `got` is a whole line of one of the texts (a last line without its
+    /// "\n" counts as the same line): no line holds two sides' changes, and no two lines are
+    /// joined.
+    fn lines_known(base: &str, ours: &str, theirs: &str, got: &str) -> Result<(), String> {
+        let known: std::collections::HashSet<&str> = base
+            .lines()
+            .chain(ours.lines())
+            .chain(theirs.lines())
+            .collect();
+        match got.lines().find(|l| !known.contains(l)) {
+            None => Ok(()),
+            Some(l) => Err(format!(
+                "{l:?} is no line of B {base:?} O {ours:?} T {theirs:?}: got {got:?}"
+            )),
+        }
+    }
+
+    /// The fuzz oracle's join (v0.9.7, Option B): the file inserts a line before "[" and two
+    /// blank lines at the end; the live side deletes the blank first line. By line: the
+    /// file's "\x15@" is its own line, never joined to a neighbour.
+    #[test]
+    fn an_outside_save_never_joins_two_lines() {
+        let (base, ours, theirs) = ("\n[\n", "\x15@\n[\n\n\n", "[\n");
+        let (a, b) = outside_sides(base, ours, theirs);
+        assert!(a.iter().chain(&b).all(|h| lines::is_whole_lines(base, h)));
+        let c = merge3_keep_both(base, ours, theirs);
+        assert_eq!(diff::apply(theirs, &c.hunks), c.text);
+        lines_known(base, ours, theirs, &c.text).unwrap();
+        assert_eq!(c.text, "\x15@\n[\n\n\n");
+        assert_eq!(c.text, keep_both_model(base, ours, theirs));
+    }
+
+    /// The fuzz oracle's splice (v0.9.7, Option B): the file deletes "X" and adds a space to
+    /// "e"; the live side rewrites "L" (after "X") as a blank line and deletes "e". The two
+    /// sides' changes meet in line "e": by line they overlap, so the file's "e " and the live
+    /// side's blank line are both kept, each a line of its own, never spliced.
+    #[test]
+    fn an_outside_save_never_splices_one_line_from_two_sides() {
+        let (base, ours, theirs) = ("X\nL\ne\nL\n", "L\ne \nL\n", "X\n\nL\n");
+        let (a, b) = outside_sides(base, ours, theirs);
+        assert!(a.iter().chain(&b).all(|h| lines::is_whole_lines(base, h)));
+        let c = merge3_keep_both(base, ours, theirs);
+        assert_eq!(diff::apply(theirs, &c.hunks), c.text);
+        lines_known(base, ours, theirs, &c.text).unwrap();
+        let got: Vec<&str> = c.text.lines().collect();
+        assert!(got.contains(&"e "), "{got:?}");
+        assert!(got.contains(&""), "{got:?}");
+        assert_eq!(c.text, keep_both_model(base, ours, theirs));
+    }
+
+    /// The keep-both join class (a fuzz crash on main, with or without the shifted-pairing
+    /// fix): the file rewrites the text into four lines, the live side types "\u{1}" and
+    /// "lo" at two line starts. v0.9.5 glued the file's "aaaaaaaaaaaaa" onto the live "lo"
+    /// ("loaaaaaaaaaaaaa"); by line (v0.9.7) every line is a line of one side.
+    #[test]
+    fn an_outside_save_never_glues_a_line_to_the_other_sides_typing() {
+        let base = "line 3\néline 3\nline 3\nline 3\naaline 3\n\n\n\n";
+        let ours = "ab\naéline 3\nline 3\naaaaaaaaaaaaa\n";
+        let theirs = "\u{1}line 3\nloéline 3\nline 3\nline 3\naaline 3\n\n\n\n";
+        let c = merge3_keep_both(base, ours, theirs);
+        assert_eq!(diff::apply(theirs, &c.hunks), c.text);
+        lines_known(base, ours, theirs, &c.text).unwrap();
+        assert!(c.text.lines().any(|l| l == "aaaaaaaaaaaaa"), "{:?}", c.text);
+        assert!(!c.text.contains("loaaaaaaaaaaaaa"), "{:?}", c.text);
+        assert_eq!(c.text, keep_both_model(base, ours, theirs));
+        // by base line: the live and the file's rewrites of line 1, then of line 2; the
+        // "line 3" both kept; the file's rewrite of lines 4-8
+        assert_eq!(
+            c.text,
+            "\u{1}line 3\nab\nloéline 3\naéline 3\nline 3\naaaaaaaaaaaaa\n"
+        );
+    }
+
+    /// The end of the text is merged on its own (v0.9.7): the texts are merged closed, and
+    /// the result ends without a final "\n" only when the side that wrote its last line left
+    /// its text so (a base line: the side that changed the ending). A line one side deleted
+    /// never comes back because the other side only closed it or wrote lines after it, and
+    /// a final "\n" one side added survives. Agrees with write --base's O5a (cases A-D).
+    #[test]
+    fn the_end_of_the_text_is_merged_on_its_own() {
+        for (base, file, live, want) in [
+            // the open-end class (a deletion brought back before): the probe, and the keep_both
+            // corpus shapes
+            ("a\nb", "a\nb\nc", "a\n", "a\nc"),
+            ("[", "", "[\n", ""),
+            (
+                "aa",
+                "a",
+                "aa\naaaaaaaaaaaaaaaaaaaaaaa",
+                "a\naaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            ("[", "\n[\n", "", "\n"),
+            ("éa", "a", "éa\naéa", "a\naéa"),
+            // a final "\n" one side added survives; one side removed stays removed
+            ("a\nb", "a\nb\n", "A\nb", "A\nb\n"),
+            ("a\nb\n", "a\nb", "A\nb\n", "A\nb"),
+            ("a", "a\n", "a", "a\n"),
+            // O5a's cases (write --base, v0.9.8): A, B, C, D, and an open last line of one's own
+            ("b\n", "b\nZ\n", "a", "a\nZ\n"),
+            ("x\n", "x\nB\n", "x\nA", "x\nA\nB\n"),
+            ("x\n", "x", "x\nT\n", "x\nT\n"),
+            ("x\n", "x\nB", "x\nA", "x\nA\nB"),
+            ("x\n", "x\nB", "x\nA\n", "x\nA\nB"),
+        ] {
+            let c = merge3_keep_both(base, file, live);
+            assert_eq!(c.text, want, "{base:?} {file:?} {live:?}");
+            assert_eq!(diff::apply(live, &c.hunks), c.text);
+            assert_eq!(c.text, keep_both_model(base, file, live));
+            lines_known(base, file, live, &c.text).unwrap();
+        }
+    }
+
+    /// A line one side kept is never read as part of its change (v0.9.7): the live side
+    /// keeps the blank line and writes lines around it; the file deletes it. Before, the
+    /// side diff took the kept line into the live side's change (its suffix trimmed at a line
+    /// start of the base only), and keep-both brought the deleted line back.
+    #[test]
+    fn a_kept_line_is_never_part_of_a_change() {
+        for (base, file, live, want) in [
+            ("\n", "", "ab\n\naaaaaa", "ab\naaaaaa"),
+            ("?\n\n", "", "\naaaaaaaaa", "aaaaaaaaa"),
+            ("\n", "ab\n\nabaaaa", "", "ab\nabaaaa"),
+            // the CHANGELOG's example: the live side deletes "A", the file never touches it
+            // (v0.9.5 and v0.9.6 gave "Z\nX\nA")
+            ("aX\nA\nb\n", "X\nA", "Z", "Z\nX"),
+        ] {
+            let c = merge3_keep_both(base, file, live);
+            assert_eq!(c.text, want, "{base:?} {file:?} {live:?}");
+            assert_eq!(diff::apply(live, &c.hunks), c.text);
+            assert_eq!(c.text, keep_both_model(base, file, live));
+        }
     }
 
     /// O4 by a caller's identity (undo spec v1.8: position and root): equal text that isn't
@@ -993,18 +1156,37 @@ mod tests {
             }
         }
 
+        /// An outside save's hunks trimmed to the characters that change (the session's
+        /// ingest, v0.9.7) give `merge3_keep_both`'s text byte for byte, and each trimmed hunk
+        /// lies within its untrimmed one.
+        #[test]
+        fn trimmed_outside_hunks_keep_the_merged_text(base in text(), file in text(), live in text()) {
+            let c = merge3_keep_both(&base, &file, &live);
+            let trimmed = diff::trim_hunks(&live, &c.hunks);
+            prop_assert!(diff::validate(&live, &trimmed).is_ok());
+            prop_assert_eq!(diff::apply(&live, &trimmed), c.text.clone());
+            for h in &c.hunks {
+                if let Some(t) = diff::trim_hunk(&live, h) {
+                    prop_assert!(h.start <= t.start && t.end <= h.end, "{:?} outside {:?}", t, h);
+                    prop_assert!(h.insert.contains(t.insert.as_str()));
+                }
+            }
+        }
+
         /// The keep-both merge (an outside save, v0.9.5) is the character model, always valid
         /// on theirs, and on hunk sets merge3 finds clean it is merge3's own result.
         #[test]
         fn keep_both_is_the_model_and_merge3_when_clean(base in text(), o in text(), t in text()) {
-            for (a, b) in [
-                (diff::hunks(&base, &o), diff::hunks(&base, &t)),
-                outside_sides(&base, &o, &t),
+            // the diffs of the texts as they are, and the outside sides (on the closed texts)
+            let (cb, co, ct) = (closed(&base), closed(&o), closed(&t));
+            for (bb, tt, (a, b)) in [
+                (&base[..], &t[..], (diff::hunks(&base, &o), diff::hunks(&base, &t))),
+                (&cb[..], &ct[..], outside_sides(&base, &o, &t)),
             ] {
-                let kb = keep_both(&base, &a, &b);
-                prop_assert!(diff::validate(&t, &kb).is_ok());
-                if let Merge::Clean(c) = merge3_hunks(&base, &a, &b, !base.is_empty()) {
-                    let text = diff::apply(&t, &kb);
+                let kb = keep_both(bb, &a, &b);
+                prop_assert!(diff::validate(tt, &kb).is_ok());
+                if let Merge::Clean(c) = merge3_hunks(bb, &a, &b, !bb.is_empty()) {
+                    let text = diff::apply(tt, &kb);
                     if kb != c.hunks {
                         // only the "\n" keeping two appends at the end of a text with no
                         // final newline apart
@@ -1016,26 +1198,25 @@ mod tests {
                 }
             }
             let (a, b, clean) = outside_merge_sides(&base, &o, &t);
-            for (side, new) in [(&a, &o), (&b, &t)] {
-                prop_assert!(diff::validate(&base, side).is_ok(), "{:?}", side);
-                prop_assert_eq!(&diff::apply(&base, side), new);
+            for (side, new) in [(&a, &co), (&b, &ct)] {
+                prop_assert!(diff::validate(&cb, side).is_ok(), "{:?}", side);
+                prop_assert_eq!(&diff::apply(&cb, side), &**new);
             }
-            // the merge (keep_both, then the end rule) is the model
+            // the merge is the model; when clean, merge3_hunks' on the closed texts but for
+            // its final "\n"
             let m = merge3_keep_both(&base, &o, &t);
             prop_assert_eq!(diff::apply(&t, &m.hunks), m.text.clone());
             prop_assert_eq!(&m.text, &keep_both_model(&base, &o, &t));
-            if clean.is_none() {
-                // what still overlaps is whole lines on both sides, so no two sides' lines
-                // are spliced into one
+            if let Some(c) = &clean {
+                prop_assert_eq!(&*closed(&m.text), &c.text);
+            } else {
+                // what overlaps is whole lines on both sides, so no two sides' lines are
+                // spliced into one
                 for x in &a {
                     for y in &b {
-                        let eof = !base.is_empty()
-                            && x.is_insertion()
-                            && y.is_insertion()
-                            && x.start == base.len();
-                        if x != y && !eof && overlaps(x, y) {
+                        if x != y && overlaps(x, y) {
                             prop_assert!(
-                                whole_lines(&base, x) && whole_lines(&base, y),
+                                lines::is_whole_lines(&cb, x) && lines::is_whole_lines(&cb, y),
                                 "{:?} and {:?} overlap, not whole lines", x, y
                             );
                         }
@@ -1075,6 +1256,23 @@ mod tests {
             // side and a line appended on the other give one)
             for line in got.lines().filter(|l| !l.is_empty()) {
                 prop_assert!(known.contains(line), "{:?} spliced: B {:?} F {:?} L {:?} -> {:?}", line, b, f, l, got);
+            }
+        }
+
+        /// No line of an outside save's merge holds two sides' changes, and no two lines are
+        /// joined (v0.9.7): on any texts, every line of the merge is a line of the base, the
+        /// file or the live text; the sides are whole lines.
+        #[test]
+        fn an_outside_merge_neither_splices_nor_joins(base in text(), o in text(), t in text()) {
+            let (a, b) = outside_sides(&base, &o, &t);
+            let cb = closed(&base);
+            for (side, new) in [(&a, closed(&o)), (&b, closed(&t))] {
+                prop_assert!(side.iter().all(|h| lines::is_whole_lines(&cb, h)), "{:?}", side);
+                prop_assert_eq!(diff::apply(&cb, side), new.into_owned());
+            }
+            let m = merge3_keep_both(&base, &o, &t);
+            if let Err(e) = lines_known(&base, &o, &t, &m.text) {
+                return Err(TestCaseError::fail(e));
             }
         }
 

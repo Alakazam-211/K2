@@ -11,6 +11,7 @@ use crate::store::{Store, StoreEvents, SubdocGuids, SubdocsIter};
 use crate::types::{Event, Events, RootRef, TypePtr, TypeRef};
 use crate::update::Update;
 use crate::updates::encoder::{Encode, Encoder, EncoderV1, EncoderV2};
+use crate::utils::client_hasher::ClientHasher;
 use crate::utils::OptionExt;
 use crate::{
     merge_updates_v1, merge_updates_v2, Any, ArrayRef, BranchID, Doc, IdSet, MapRef, Out, Snapshot,
@@ -19,10 +20,10 @@ use crate::{
 };
 use async_lock::{RwLockReadGuard, RwLockWriteGuard};
 use smallvec::SmallVec;
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Formatter;
-use std::hash::Hash;
+use std::hash::{BuildHasherDefault, Hash};
 use std::ops::{Deref, DerefMut};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -511,6 +512,47 @@ pub struct TransactionMut<'doc> {
     /// client ([Doc::transact_mut_as]). Restored at commit, before subdocs are added (step 10),
     /// and on every other way out of commit, a panic included.
     client_override: Option<ClientID>,
+    /// k2: the clients this transaction has pushed a block for (item, GC or skip), each with
+    /// its state vector entry before the first one. See [TouchedClient].
+    touched: HashMap<ClientID, TouchedClient, BuildHasherDefault<ClientHasher>>,
+    /// k2: how many clients were touched when upstream would have built [Self::before_state]
+    /// (its first use); `None` while it would not have been built yet.
+    before_mark: Cell<Option<u32>>,
+    /// k2: the same for [Self::after_state], with the touched clients' entries at that point.
+    after_mark: OnceCell<AfterMark>,
+    /// k2: [Doc::set_full_state_vectors] (the test oracle), read when the transaction starts.
+    full_state_vectors: bool,
+}
+
+/// k2: a client a transaction has pushed a block for.
+///
+/// Upstream built the before state as the doc's whole state vector, lowered for each client in
+/// the insert set to the clock of its first insert, at the transaction's first use of it; and
+/// the after state likewise, raised to each insert set client's last clock. Both are proportional
+/// to every client the doc has seen. A client's state vector entry moves only when a block (an
+/// item, a GC or a skip) is pushed for it, and it never goes down (a skip goes after the last
+/// block and starts at the clock; a block that fills a hole starts at or above the lowest
+/// hole's start, and if it fills that start the entry rises). So upstream's before value for any
+/// client is its entry when the transaction began: for a touched client, `start`; for any other,
+/// its entry now. Which clients upstream's vector lists does depend on when it was built: a
+/// client new in this transaction is listed (at 0) only if it was touched by then. `idx` (the
+/// order of first touches) and the marks keep that.
+#[derive(Debug, Clone, Copy)]
+struct TouchedClient {
+    /// The order of this client's first touch in the transaction (0, 1, ...).
+    idx: u32,
+    /// The client's state vector entry before its first block in this transaction (0 if new).
+    start: u32,
+    /// The client had no blocks when the transaction touched it (it was absent from the state
+    /// vector).
+    new: bool,
+}
+
+/// k2: the after state as upstream would have built it at its first use: the clients touched by
+/// then, and each one's entry (`values[idx]`). Any other client keeps its starting entry.
+#[derive(Debug)]
+struct AfterMark {
+    values: Vec<u32>,
 }
 
 impl<'doc> ReadTxn for TransactionMut<'doc> {
@@ -543,6 +585,7 @@ impl<'doc> TransactionMut<'doc> {
         store: RwLockWriteGuard<'doc, Store>,
         origin: Option<Origin>,
     ) -> Self {
+        let full_state_vectors = store.full_state_vectors;
         TransactionMut {
             store,
             doc,
@@ -560,6 +603,10 @@ impl<'doc> TransactionMut<'doc> {
             committed: false,
             needs_cleanup: false,
             client_override: None,
+            touched: HashMap::default(),
+            before_mark: Cell::new(None),
+            after_mark: OnceCell::new(),
+            full_state_vectors,
         }
     }
 
@@ -597,12 +644,26 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     /// Corresponding document's state vector at the moment when current transaction was created.
+    ///
+    /// k2: this builds the whole vector, every client the doc has seen. For one client's entry
+    /// use [Self::before_clock], which costs the same whatever the number of clients.
     pub fn before_state(&self) -> &StateVector {
         self.before_state.get_or_init(|| {
             let mut sv = self.store.blocks.get_state_vector();
-            for (client, ranges) in self.insert_set.iter() {
-                if let Some(clock) = ranges.clock_start() {
-                    sv.set_min(*client, clock);
+            if self.full_state_vectors {
+                for (client, ranges) in self.insert_set.iter() {
+                    if let Some(clock) = ranges.clock_start() {
+                        sv.set_min(*client, clock);
+                    }
+                }
+                return sv;
+            }
+            let mark = self.mark_before();
+            for (client, t) in self.touched.iter() {
+                if t.new && t.idx >= mark {
+                    sv.remove(client);
+                } else {
+                    sv.insert(*client, t.start);
                 }
             }
             sv
@@ -610,16 +671,175 @@ impl<'doc> TransactionMut<'doc> {
     }
 
     /// State vector of the transaction after [Transaction::commit] has been called.
+    ///
+    /// k2: this builds the whole vector, every client the doc has seen. For one client's entry
+    /// use [Self::after_clock].
     pub fn after_state(&self) -> &StateVector {
         self.after_state.get_or_init(|| {
             let mut sv = self.store.blocks.get_state_vector();
-            for (client, ranges) in self.insert_set.iter() {
-                if let Some(clock) = ranges.clock_end() {
-                    sv.set_max(*client, clock);
+            if self.full_state_vectors {
+                for (client, ranges) in self.insert_set.iter() {
+                    if let Some(clock) = ranges.clock_end() {
+                        sv.set_max(*client, clock);
+                    }
+                }
+                return sv;
+            }
+            let mark = self.mark_after();
+            for (client, t) in self.touched.iter() {
+                if let Some(&clock) = mark.values.get(t.idx as usize) {
+                    sv.insert(*client, clock);
+                } else if t.new {
+                    sv.remove(client);
+                } else {
+                    sv.insert(*client, t.start);
                 }
             }
             sv
         })
+    }
+
+    /// k2: `client`'s entry in [Self::before_state] (0 if it has none), without building it.
+    pub fn before_clock(&self, client: &ClientID) -> u32 {
+        if self.full_state_vectors {
+            return self.before_state().get(client);
+        }
+        self.before_entry(client).unwrap_or(0)
+    }
+
+    /// k2: `client`'s entry in [Self::after_state] (0 if it has none), without building it.
+    pub fn after_clock(&self, client: &ClientID) -> u32 {
+        if self.full_state_vectors {
+            return self.after_state().get(client);
+        }
+        self.mark_after();
+        self.after_entry(client).unwrap_or(0)
+    }
+
+    /// k2: the clients this transaction has pushed a block for (item, GC or skip), in no
+    /// particular order. Any other client's state vector entry is as it was when the
+    /// transaction began.
+    pub fn touched_clients(&self) -> impl Iterator<Item = ClientID> + '_ {
+        self.touched.keys().copied()
+    }
+
+    /// k2: records `client` as touched, with its state vector entry now, unless it already is.
+    /// Called before every block push.
+    #[inline]
+    pub(crate) fn touch(&mut self, client: ClientID) {
+        #[cfg(feature = "planted-touched-bug")]
+        if self.store.planted_touched_bug {
+            return; // recorded after the push instead (touch_planted)
+        }
+        self.record_touch(client);
+    }
+
+    /// k2, planted bug: records the touch after the push, so `start` misses the first block.
+    #[cfg(feature = "planted-touched-bug")]
+    #[inline]
+    pub(crate) fn touch_planted(&mut self, client: ClientID) {
+        if self.store.planted_touched_bug {
+            self.record_touch(client);
+        }
+    }
+
+    #[inline]
+    fn record_touch(&mut self, client: ClientID) {
+        if self.touched.contains_key(&client) {
+            return;
+        }
+        let state = self.store.blocks.get_state(&client);
+        let idx = self.touched.len() as u32;
+        self.touched.insert(
+            client,
+            TouchedClient {
+                idx,
+                start: state.unwrap_or(0),
+                new: state.is_none(),
+            },
+        );
+    }
+
+    /// k2: the point where upstream would have built the before state: the number of clients
+    /// touched by then (recorded now if it is the first use).
+    fn mark_before(&self) -> u32 {
+        match self.before_mark.get() {
+            Some(mark) => mark,
+            None => {
+                let mark = self.touched.len() as u32;
+                self.before_mark.set(Some(mark));
+                mark
+            }
+        }
+    }
+
+    /// k2: the same for the after state, with the touched clients' entries at that point.
+    fn mark_after(&self) -> &AfterMark {
+        self.after_mark.get_or_init(|| {
+            let mut values = vec![0; self.touched.len()];
+            for (client, t) in self.touched.iter() {
+                let state = self.store.blocks.get_state(client).unwrap_or(0);
+                let end = self
+                    .insert_set
+                    .get(client)
+                    .and_then(|ranges| ranges.clock_end())
+                    .unwrap_or(0);
+                values[t.idx as usize] = state.max(end);
+            }
+            AfterMark { values }
+        })
+    }
+
+    /// k2: `client`'s entry in the before state (`None`: not listed), in time proportional to
+    /// the touched clients only. Counts as a use of the before state.
+    fn before_entry(&self, client: &ClientID) -> Option<u32> {
+        if let Some(sv) = self.before_state.get() {
+            return sv.get_entry(client);
+        }
+        let mark = self.mark_before();
+        match self.touched.get(client) {
+            Some(t) if t.new && t.idx >= mark => None,
+            Some(t) => Some(t.start),
+            None => self.store.blocks.get_state(client),
+        }
+    }
+
+    /// k2: `client`'s entry in the after state (`None`: not listed). The caller marks the
+    /// after state as used first, if it should count as a use.
+    fn after_entry(&self, client: &ClientID) -> Option<u32> {
+        if let Some(sv) = self.after_state.get() {
+            return sv.get_entry(client);
+        }
+        match (self.touched.get(client), self.after_mark.get()) {
+            (Some(t), Some(mark)) => match mark.values.get(t.idx as usize) {
+                Some(&clock) => Some(clock),
+                None if t.new => None,
+                None => Some(t.start),
+            },
+            (Some(_), None) => {
+                let state = self.store.blocks.get_state(client).unwrap_or(0);
+                let end = self
+                    .insert_set
+                    .get(client)
+                    .and_then(|ranges| ranges.clock_end())
+                    .unwrap_or(0);
+                Some(state.max(end))
+            }
+            (None, _) => self.store.blocks.get_state(client),
+        }
+    }
+
+    /// k2: `after_state() != before_state()`, from the touched clients only (any other client's
+    /// entries are equal in both). Counts as a use of both, as the full comparison does.
+    pub(crate) fn states_differ(&self) -> bool {
+        if self.full_state_vectors {
+            return self.after_state() != self.before_state();
+        }
+        self.mark_after();
+        self.mark_before();
+        self.touched
+            .keys()
+            .any(|client| self.after_entry(client) != self.before_entry(client))
     }
 
     /// Data about insertions performed in the scope of current transaction.
@@ -690,10 +910,63 @@ impl<'doc> TransactionMut<'doc> {
     ///   end up with the same content.
     /// * Even if an update contains known information, the unknown information
     ///   is extracted and integrated into the document structure.
+    ///
+    /// k2 (hardening)
     pub fn encode_update<E: Encoder>(&self, encoder: &mut E) {
         let store = self.store();
-        store.write_blocks_from(self.before_state(), encoder);
+        if self.full_state_vectors {
+            // the test oracle (k2 (hardening))
+            let local_sv = store.blocks.get_state_vector();
+            let mut diff = Store::diff_state_vectors(&local_sv, self.before_state());
+            if self.writes_hole_blocks() {
+                for (client, ranges) in self.insert_set.iter() {
+                    if let Some(start) = ranges.clock_start() {
+                        if !diff.iter().any(|(c, _)| c == client) {
+                            diff.push((*client, start));
+                        }
+                    }
+                }
+            }
+            store.write_blocks_diff(diff, encoder);
+        } else {
+            // k2: upstream diffed the whole state vector against the whole before state; only
+            // a touched client's entries can differ, so only those are compared. A client the
+            // before state doesn't list is written from 0, as upstream's diff does. Upstream
+            // built the before state here even with nothing touched yet: a use of it either way.
+            self.mark_before();
+            let mut diff = Vec::with_capacity(self.touched.len());
+            for client in self.touched.keys() {
+                let local = store.blocks.get_state(client).unwrap_or(0);
+                match self.before_entry(client) {
+                    Some(before) if local > before => diff.push((*client, before)),
+                    // k2 (hardening)
+                    Some(_) => {
+                        if self.writes_hole_blocks() {
+                            if let Some(start) = self
+                                .insert_set
+                                .get(client)
+                                .and_then(|ranges| ranges.clock_start())
+                            {
+                                diff.push((*client, start));
+                            }
+                        }
+                    }
+                    None => diff.push((*client, 0)),
+                }
+            }
+            store.write_blocks_diff(diff, encoder);
+        }
         self.delete_set.encode(encoder);
+    }
+
+    /// k2 (hardening)
+    #[inline]
+    fn writes_hole_blocks(&self) -> bool {
+        #[cfg(feature = "planted-relay-bug")]
+        if self.store.planted_relay_bug {
+            return false;
+        }
+        true
     }
 
     /// Applies given `id_set` onto current transaction to run multi-range deletion.
@@ -803,6 +1076,10 @@ impl<'doc> TransactionMut<'doc> {
 
         let store = self.store.deref();
         if !item.is_deleted() {
+            // k2: a deletion the text's own local edits don't account for drops its markers
+            if let TypePtr::Branch(parent) = item.parent {
+                crate::position_index::drop_markers(parent);
+            }
             if item.parent_sub.is_none() && item.is_countable() {
                 if let TypePtr::Branch(mut parent) = item.parent {
                     parent.block_len -= item.len();
@@ -901,9 +1178,9 @@ impl<'doc> TransactionMut<'doc> {
         {
             let store = self.store_mut();
             store.pending = if let Some(mut pending) = store.pending.take() {
-                // check if we can apply something
+                // check if we can apply something (k2 (hardening))
                 for (client, &clock) in pending.missing.iter() {
-                    if clock < store.blocks.get_clock(client) {
+                    if !store.blocks.is_missing(&ID::new(*client, clock)) {
                         retry = true;
                         break;
                     }
@@ -915,6 +1192,8 @@ impl<'doc> TransactionMut<'doc> {
                         pending.missing.set_min(client, clock);
                     }
                     pending.update = Update::merge_updates(vec![pending.update, remaining.update]);
+                    // k2 (hardening)
+                    pending = pending.with_missing_from(&store.blocks);
                 }
                 Some(pending)
             } else {
@@ -960,6 +1239,11 @@ impl<'doc> TransactionMut<'doc> {
         value: T,
         parent_sub: Option<Arc<str>>,
     ) -> Option<ItemPtr> {
+        if let TypePtr::Branch(parent) = &pos.parent {
+            if parent.refuse_write() {
+                return None; // k2 (hardening)
+            }
+        }
         let (left, right, origin, id) = {
             let store = self.store_mut();
             let left = pos.left;
@@ -1399,7 +1683,7 @@ impl<'doc> TransactionMut<'doc> {
 
     pub(crate) fn add_changed_type(&mut self, parent: BranchPtr, parent_sub: Option<Arc<str>>) {
         let trigger = if let Some(ptr) = parent.item {
-            (ptr.id().clock < self.before_state().get(&ptr.id().client)) && !ptr.is_deleted()
+            (ptr.id().clock < self.before_clock(&ptr.id().client)) && !ptr.is_deleted()
         } else {
             true
         };

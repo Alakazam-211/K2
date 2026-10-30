@@ -16,3 +16,15 @@ Prose is not table text: 44,768,326,790 needs no citation here, but a citation i
 still checked: 5,977 [run ff000001/c_ok].
 
 A field name with a digit: 12 [run ff000001/c_ok:concurrent_restore_o4a].
+
+## Mutants: least depth
+
+| Mutant | TLC, `-workers auto` (a comparison) | TLC, 1 worker | Enumerator BFS |
+|---|---|---|---|
+| m | trace of 5 states [run ff000001/v_auto] | trace of 4 states [run ff000001/v_w1] | trace of 4 states [run ff000001/e_bfs] |
+
+The least depth is 4 [run ff000001/v_w1]; TLC with `-workers auto` gave 5 [run ff000001/v_auto].
+
+## Counts
+
+A multi-worker trace outside a least-depth section: trace of 5 states [run ff000001/v_auto].

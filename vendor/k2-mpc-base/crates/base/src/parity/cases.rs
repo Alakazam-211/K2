@@ -999,11 +999,47 @@ fn p21_agent(a: &mut Agent<'_>) -> R {
     })
 }
 
-fn p24_person(p: &mut Person<'_>) -> R {
-    p.conn()?;
-    // the export is the file itself
-    let bytes = std::fs::read(p.stage().file()).map_err(|e| e.to_string())?;
-    Ok(Step::ok(Output::Bytes(bytes)))
+/// P24: what an export observes, the bytes it wrote, the doc version and the codec flag.
+fn exported(
+    name: &str,
+    f: crate::session::FileBytes,
+) -> Result<(Vec<u8>, u64, crate::session::FileCodec), SessionError> {
+    let bytes = super::harness::export_through_registry(name, &f.bytes, "as-is")
+        .map_err(|e| SessionError::BadEdit(format!("export: {e}")))?;
+    Ok((bytes, f.version, f.codec))
+}
+fn export_out(o: &VerbOut) -> Output {
+    match &o.value {
+        VerbValue::Export {
+            bytes,
+            version,
+            codec,
+        } => Output::value((bytes, version, codec)),
+        v => Output::value(v),
+    }
+}
+fn p24_now_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    let s = p.session();
+    let r = s.key().and_then(|k| exported(&k.path, s.file_now(c)?));
+    person_step(r, Output::value)
+}
+fn p24_now_agent(a: &mut Agent<'_>) -> R {
+    agent_step(a.verb(&["export"], b"")?, export_out)
+}
+fn p24_at_person(p: &mut Person<'_>) -> R {
+    let c = p.conn()?;
+    let v = p.stage().mark("v")?;
+    let s = p.session();
+    let r = s.key().and_then(|k| exported(&k.path, s.file_at(c, v)?));
+    person_step(r, Output::value)
+}
+fn p24_at_agent(a: &mut Agent<'_>) -> R {
+    let v = mark_arg(a.stage())?;
+    agent_step(
+        a.verb(&["export", "--version", &v, "--to", "as-is"], b"")?,
+        export_out,
+    )
 }
 
 // ---------- P29-P31: on-behalf edits and revert ----------
@@ -1546,13 +1582,24 @@ pub fn kit_cases(action: PersonAction) -> Vec<Case> {
             ),
         ],
         P::Rename => vec![c(action, "mv", "file and key move", p21_person, p21_agent)],
-        P::Export => vec![c(
-            action,
-            "cat",
-            "N/A: cat is the file's bytes",
-            p24_person,
-            p3_cat_agent,
-        )],
+        P::Export => vec![
+            c(
+                action,
+                "export",
+                "the file now, as-is",
+                p24_now_person,
+                p24_now_agent,
+            )
+            .setup(history_setup),
+            c(
+                action,
+                "export --version",
+                "the import, as-is",
+                p24_at_person,
+                p24_at_agent,
+            )
+            .setup(history_setup),
+        ],
         P::WhyOff => vec![
             c(
                 action,

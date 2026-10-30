@@ -13,6 +13,10 @@
 //!   deleted text a needle matches, are blanked and marked `redacted` (a revert over them
 //!   reports `erased`). Change ids, authors, times and lengths stay (`changes` keeps each
 //!   change's hunk positions and lengths).
+//! - **Authored hunks** (v0.9.7, the `authored` rows of changes D1 widened): every authored
+//!   hunk inside a record hunk the purge blanked (or blanked before), every one whose
+//!   insert a needle matches, and all of a change taken whole, lose their insert; their
+//!   positions stay. A row whose record is gone is deleted.
 //! - **Sync table**: the replica and its hash as the session gives them; any write-back in
 //!   flight is dropped.
 //! - **Hash key**: replaced, so every earlier keyed hash of this doc means nothing.
@@ -25,8 +29,8 @@ use std::ops::Range;
 use redb::{ReadableTable, WriteTransaction};
 
 use super::history::{
-    dec_change, dec_pair, dec_record, enc_change, enc_pair, enc_record, enc_stats, stats_in,
-    CHANGES, REVERTS, REVERT_INDEX, REVERT_STATS,
+    dec_authored, dec_change, dec_pair, dec_record, enc_authored, enc_change, enc_pair, enc_record,
+    enc_stats, stats_in, RevertRecord, CHANGES, REVERTS, REVERT_INDEX, REVERT_STATS,
 };
 use super::{
     dec_approval, dec_entry_full, dec_meta, dec_version_full, enc_approval, enc_doc_key,
@@ -325,6 +329,7 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
         }
         st.insert(id, enc_stats(&stats).as_slice())?;
     }
+    redact_authored(w, id, p)?;
     if er.is_some() {
         c.attributions += rename_rows(w, id, er)?;
     }
@@ -353,6 +358,60 @@ fn purge_in(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<PurgeCo
     w.open_table(DOC_KEYS)?
         .insert(id, enc_doc_key(&p.key).as_slice())?;
     Ok(c)
+}
+
+/// The authored hunks (v0.9.7) of the doc's widened changes, after their records were
+/// redacted above: an authored hunk lies inside one hunk of its record (D1 only widens and
+/// coalesces), so it is blanked when that hunk is redacted, when its own insert hits a
+/// needle, when its change is taken whole, or when no unredacted record hunk of its root
+/// holds it (never expected; the safe side). A row whose record is gone (never expected:
+/// they leave the window together) is deleted.
+fn redact_authored(w: &WriteTransaction, id: DocId, p: &DocPurge<'_>) -> Result<(), StoreError> {
+    let Some(mut at) = super::history::authored_table(w)? else {
+        return Ok(()); // no widened change ever: nothing to blank (the table stays absent)
+    };
+    let rt = w.open_table(REVERTS)?;
+    let rows: Vec<(Seq, Vec<u8>)> = at
+        .range((id, 0)..=(id, u64::MAX))?
+        .map(|kv| kv.map(|(k, v)| (k.value().1, v.value().to_vec())))
+        .collect::<Result<_, _>>()?;
+    for (seq, b) in rows {
+        let Some(rec) = rt
+            .get((id, seq))?
+            .map(|v| dec_record(v.value()))
+            .transpose()?
+        else {
+            at.remove((id, seq))?;
+            continue;
+        };
+        let whole = p.changes.has(seq);
+        let mut roots = dec_authored(&b)?;
+        let mut changed = false;
+        for (root, hunks) in &mut roots {
+            for h in hunks.iter_mut().filter(|h| !h.insert.is_empty()) {
+                if whole
+                    || p.needles.hits(h.insert.as_bytes())
+                    || !kept_by(&rec, root, h.start as u64, h.end as u64)
+                {
+                    h.insert.clear();
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            at.insert((id, seq), enc_authored(&roots).as_slice())?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether an unredacted hunk of `rec`'s root `root` holds `start..end`.
+pub(super) fn kept_by(rec: &RevertRecord, root: &str, start: u64, end: u64) -> bool {
+    rec.roots
+        .iter()
+        .filter(|r| r.root == root)
+        .flat_map(|r| &r.hunks)
+        .any(|h| !h.redacted && h.start <= start && end <= h.end)
 }
 
 /// Participant erasure in the tables without content: change summaries, approvals and the

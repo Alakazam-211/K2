@@ -49,13 +49,7 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// Upper bound on how many entries to pre-allocate for a collection whose length prefix
-/// (`count`) was just decoded from untrusted input.
-///
-/// Every entry costs at least `min_entry_bytes` of input, so a decoder with `remaining` bytes
-/// left cannot hold more than `remaining / min_entry_bytes` entries. Capping by that keeps
-/// pre-allocation proportional to the input rather than to the decoded count (hardening). The
-/// collection still grows on push if the hint is low, so this never rejects valid input.
+/// k2 (hardening)
 #[inline]
 pub(crate) fn bounded_capacity(count: usize, remaining: usize, min_entry_bytes: usize) -> usize {
     debug_assert!(min_entry_bytes > 0);
@@ -102,11 +96,8 @@ impl<'a> Read for Cursor<'a> {
 pub trait Read: Sized {
     fn read_exact(&mut self, len: usize) -> Result<&[u8], Error>;
 
-    /// Upper bound on the number of input bytes this reader can still yield.
-    ///
-    /// Decoders use it only to bound pre-allocation for length-prefixed collections, never
-    /// for correctness. The default of `0` means "unknown": nothing is pre-allocated and
-    /// collections grow as entries are actually read.
+    /// Upper bound on the number of input bytes this reader can still yield. The default of `0`
+    /// means "unknown" (k2 (hardening)).
     #[inline]
     fn remaining(&self) -> usize {
         0

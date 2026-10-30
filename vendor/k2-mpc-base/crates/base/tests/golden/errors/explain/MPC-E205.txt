@@ -1,0 +1,21 @@
+MPC-E205 no_such_change (history and undo)
+exit:     4
+message:  no change or version {seq} in this doc
+next:     There's no change or version by that number. List them with log (changes and versions, newest first) and use one it prints.
+rule:     K-HIST-19, K-HIST-9
+verbs:    revert; restore; show --version; diff --version; version --name
+status:   live
+--- json
+{
+  "id": "MPC-E205",
+  "name": "no_such_change",
+  "area": "history and undo",
+  "exit": 4,
+  "message": "no change or version {seq} in this doc",
+  "next": "There's no change or version by that number. List them with log (changes and versions, newest first) and use one it prints.",
+  "rule": "K-HIST-19, K-HIST-9",
+  "verbs": ["revert", "restore", "show --version", "diff --version", "version --name"],
+  "returned_by": ["diff --version", "show --version", "restore", "version --name", "revert"],
+  "status": "live",
+  "since_or_until": null
+}

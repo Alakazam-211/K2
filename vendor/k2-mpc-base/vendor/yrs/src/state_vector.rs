@@ -88,6 +88,22 @@ impl StateVector {
         *e = (*e).max(clock);
     }
 
+    /// k2: the clock recorded for `client`, or `None` if it has no entry (where [StateVector::get]
+    /// says 0).
+    pub(crate) fn get_entry(&self, client: &ClientID) -> Option<u32> {
+        self.0.get(client).copied()
+    }
+
+    /// k2: sets `client`'s entry to `clock`.
+    pub(crate) fn insert(&mut self, client: ClientID, clock: u32) {
+        self.0.insert(client, clock);
+    }
+
+    /// k2: removes `client`'s entry.
+    pub(crate) fn remove(&mut self, client: &ClientID) {
+        self.0.remove(client);
+    }
+
     /// Returns an iterator which enables to traverse over all clients and their known clock values
     /// described by a current state vector.
     pub fn iter(&self) -> std::collections::hash_map::Iter<'_, ClientID, u32> {
@@ -117,8 +133,7 @@ impl FromIterator<(ClientID, u32)> for StateVector {
 impl Decode for StateVector {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, Error> {
         let len = decoder.read_var::<u32>()? as usize;
-        // `len` comes from the input (hardening): each entry is at least 2 bytes (client and
-        // clock varints), so reserve only what the input could hold.
+        // k2 (hardening)
         let mut sv = HashMap::with_hasher(BuildHasherDefault::default());
         sv.try_reserve(bounded_capacity(len, decoder.remaining(), 2))?;
         let mut i = 0;
@@ -135,7 +150,10 @@ impl Decode for StateVector {
 impl Encode for StateVector {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_var(self.len());
-        for (&client, &clock) in self.iter() {
+        // k2: clients in descending order, as Yjs writes them; decoding doesn't depend on it
+        let mut clients: Vec<_> = self.iter().collect();
+        clients.sort_unstable_by(|a, b| b.0.cmp(a.0));
+        for (&client, &clock) in clients {
             encoder.write_var(client.get());
             encoder.write_var(clock);
         }

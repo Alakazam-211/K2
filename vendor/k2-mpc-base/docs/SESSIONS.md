@@ -188,7 +188,7 @@ an empty `changed`.
 | `edit_with(conn, root, f)` | **Read live, compute, apply, atomically.** Runs `f(&live_text) -> Result<String, E>` under the session lock, diffs to minimal hunks, and applies them as one change. Returns `Ok(None)` when nothing changed. `f`'s error comes back as `EditWithError::Compute(e)`, and refusals as `EditWithError::Session(_)`; nothing is applied in either case. |
 | `edit_with_options(conn, root, &EditOptions, f)` | `edit_with` with the host's [claim policy](#the-claim-policy-on-edits) and a version guard, both checked **under the session lock** (as `run_tool_with` does for edit verbs). `EditOptions::new().policy(p).if_version(v)` (`#[non_exhaustive]`; defaults `Ignore`, no guard). A doc no longer at V gives `EditWithError::Session(Stale { expected, actual })` and nothing applies; the version is checked before the backlog, `f` and the claims. A host's own edit route (a tab's save, a CLI's direct edit) passes the version its text came from and needs no text comparison of its own. A whole-text replacement: `|_| Ok::<_, Infallible>(new_text)`. |
 | `edit(conn, Vec<Edit>, if_version)` | Hunks in byte offsets, at most one `Edit` per root. With `if_version: Some(V)`, a doc that has moved past V gives `Stale { expected, actual }` and nothing is applied (the same check as the edit verbs' `--if-version`, amendment 14). Invalid hunks (out of range, inside a character, overlapping) change nothing. |
-| `write_base(conn, root, base, text)` | `write --base V`: `merge3(text at V, text, live)`. Applies only what the caller changed since V. Overlap → `Conflicts(Vec<Conflict>)` and nothing applied; two different appends at the end of the text both land, the live one first (rule O5). Unknown or expired V → `BaseExpired` ("re-read and retry"). |
+| `write_base(conn, root, base, text)` | `write --base V`: `merge3(text at V, text, live)`. Applies only what the caller changed since V. Overlap → `Conflicts(Vec<Conflict>)` and nothing applied; two different appends at the end of the text both land, the live one first (rule O5). Unknown or expired V → `BaseExpired` ("re-read and retry"). **Known limitation until v0.9.8:** at the end of a text that ended with a line break, `write --base` can join two lines: the live text's last line left open (base `b\n`, live `a`) and the writer's line appended (`b\nZ\n`) gives `aZ\n`; the writer's text without the final break (`x`) and a line appended live (`x\nT\n`) gives `xT\n`; both ending open (base `x\n`, live `x\nA`, the writer's `x\nB`) gives `x\nAB`. Under D1 the joined word's attribution follows the writer. v0.9.8 adds outside saves' end-of-text line break to `write --base` (amendment O5 end-of-text); until then an agent appending uses `append --ensure-newline`. |
 | `replace_text(conn, root, text)` | Make a root equal `text` through a minimal diff. Last-writer-wins for that root: for people who mean "replace whatever is there" (`write --base live`). |
 
 ### Which to use
@@ -278,6 +278,20 @@ implemented once in `session/undo.rs` over the applied-hunk stream.
 - **Bounds** (U6): `undo_depth` (100) batches per stack and `undo_max_bytes` (4 MiB) per pid
   per doc, both stacks together; that pid's oldest batches go first. Stacks survive leave and
   rejoin, and are lost on unload, recovery and restart.
+- **Person grouping** (U3, v0.9.7, K4): an edit through `edit_with_options` or
+  `edit_at_base` with `EditOptions::group(token)` (the JS client sends one per edit) joins
+  its connection's **open group**, the top of the person's undo stack, so a run of
+  keystrokes is one undo step. The session closes the group (the next edit is a step of its
+  own) on: the group's last edit `undo_group_idle_ms` (1 s) old on the host clock (a); an
+  edit not overlapping or touching the group's span (b); a space, tab or punctuation typed
+  after a word character, which starts the next step (c); a newline, a step of its own (d);
+  another token, no token, or any other push by the person, from any connection (e); an
+  undo or redo by them (f); anyone else's change inside the span or touching it, in apply
+  order (g, read off the group's batch as every change carries it). Joining composes the
+  two regions into one with exact roots (`undo::compose_group`), so undoing the group is
+  undoing its edits element for element; a group that undid itself (typed, then deleted)
+  leaves nothing on the stack. Agents never group. Only the stack push changes: the edit
+  itself, its change record and its event are as without a token.
 - Applied hunks are validated and made canonical (touching hunks coalesced) before they reach
   the engine, so every carry (carets, stacks, revert records) sees the same hunks.
 
@@ -518,6 +532,113 @@ the text before the change.
 
 Audit events `Joined` and `Left` carry both `pid` and `conn`. Claims add `ClaimTaken` and
 `ClaimEnded` ([Agent presence](#agent-presence-amendment-13)).
+
+### The roster push
+
+`subscribe_roster(conn)` (on the session, or on the manager, which finds the doc by
+connection) needs read. It returns a `Receiver<RosterEvent>`:
+- first a `Snapshot { version, members }`: the `roster()` rows, each with its `Who` and rights;
+- then deltas: `Joined`, `Left { reason }`, `Rights`, `Role`, `Away`, `Cursor { who,
+  cursor, version }` (anchor and head, or none), `ClaimStarted` and `ClaimEnded` (lines and
+  the doc's version), and `Note` (a heads-up delivered to `to` about `from`).
+- **Carets come with their version** (v0.9.7): a `Cursor`'s byte offsets (and `line:col`) are
+  positions in the root's text at its `version`, and every caret in a `Snapshot` is at the
+  snapshot's `version`. Both are read together, under the session lock, when the event is
+  built at delivery: a caret carried through edits that landed after it was set is delivered
+  at its carried place, with the version after those edits. A client whose text is at
+  another version maps the caret through the changes between (`events_since`, or the
+  `ChangeEvent`s it has); an edit past a caret moves nothing and sends no new event.
+- **Coalesced** over `roster_interval_ms`: role, rights, away and the caret are compared with
+  what was last told, so a caret moved ten times is one event at its last place. Joins,
+  leaves, claim starts and ends and notes are recorded as they happen and **never** coalesced.
+- **Delivered when the host drives it**: `SessionManager::flush_rosters()` (or `tick`, or
+  `Session::flush_roster()`) at least every interval; any call on the doc also delivers what
+  is due. The kit starts no thread; every timer is the host's clock.
+- **Bounded**: a receiver holds at most `roster_queue` events. One that falls that far behind
+  gets a fresh `Snapshot` once it has room, instead of what it missed (and every subscriber
+  does when more than `roster_queue` events happen inside one interval).
+- Every subscriber sees the same events in the same order. Dropping the receiver
+  unsubscribes; the subscription closes when its connection leaves, or its pid is kicked or
+  loses read.
+- `Who` is `Who::Pid(pid)`, or `Who::Handle(h)` for an App viewer, and `#[non_exhaustive]`:
+  match it with a wildcard arm.
+- A participant past `participants_max` (a watcher) has no row and no event of its own; the
+  snapshot's `watching` and `RosterEvent::Watching { count }` are all the roster shows of them.
+
+### App viewers: handles, never pids (K5)
+
+A connection whose participant kind is `ParticipantKind::App` never sees a pid, its own
+included. Each pid becomes a handle, `p1`, `p2`..., numbered per doc and per viewer in the
+order that viewer first sees it: the same for the same pid across the viewer's reconnects
+while the doc is loaded, and independent between viewers. It covers the roster and its push,
+change events, `read`'s contributors, `blame`, `log` (whose `by` / `on_behalf_of` filters take
+the viewer's handles; anything else matches nobody), `claims`, `reservations`, `activity`,
+heads-up notes, `write --base` conflict notes, and refusals naming someone (`Claimed.by`).
+The kit's markers (`kit:import`, `kit:external`, `kit:unknown`) are not pids and pass. Tier 0
+(blob) docs use the same handles: the roster, `LeaseInfo`, reads, versions, the log, blame,
+approvals and `Leased.holder`. Approvals on text docs (`approval`, `approvals`,
+`set_approval`) name their author, approver and person by handle too.
+
+### Participant overflow (K11)
+
+A doc admits `participants_max` (32) distinct participants with presence. A new pid joining
+past it **watches**: it reads and follows changes, read-only whatever its rights; it has no
+caret, view or claims and no roster row (`Session::watching` counts them). Its edits, carets
+and claims are refused `MPC-E305 watching` (exit 3). A connection of a pid already here is
+what that pid is. When a participant leaves, nobody moves up by themselves:
+`Session::promote_watcher()` (the host's call) lets the earliest watcher in when a slot is
+free, and from its next call its rights are the host's again.
+
+## The hunk channel: live edits at a base (E-LIVE, v0.9.7)
+
+For live tabs and app widgets: the client keeps a replica of a text root (a snapshot, then
+`ChangeEvent` hunks), types locally, and sends its edits as hunks made **at a base version**.
+The kit (server side) and the JS client (`client/`, K1) apply the same rebase
+(`session::rebase`, amendment E-LIVE r2), so both compute the same text.
+
+- **`Session::events_since(conn, version) -> Result<Vec<ChangeEvent>, ErrorReport>`** (K3):
+  every event since `version`, in order (one per text root a change touched), read from the
+  store, so it works after a restart. A reconnecting client replays them onto its text at
+  `version`. Needs read.
+- **`Session::edit_at_base(conn, root, base, hunks, &EditOptions) -> Result<EditAtBase,
+  ErrorReport>`** (K2): `hunks` are in UTF-8 byte offsets of the root's text **at `base`**;
+  they are carried through every change since, in server order, and applied as one change by
+  `conn` (attributed, versioned, broadcast; undoable, its authored ranges being the hunks as
+  applied, `EditAtBase::hunks`).
+  - **Rule 0:** one change in flight per client; `base` is the latest version it has seen,
+    its own acknowledged changes included.
+  - **The window** (rule 1): at most `Config::live_window_events` (1,000) changes and
+    `live_window_bytes` (4 MiB) of events since `base`, all still in the revert window and
+    unpurged. Otherwise `MPC-E112 base_expired` (exit 8): reload.
+  - **Ties** (rule 3): two inserts at one point: the change applied first stays left; the
+    client mirror (`rebase::rebase_incoming`) gives an incoming change the left.
+  - **Never a bounce** for typing near someone, at the same point, or deleting what they
+    deleted (rule 4 (a): deletion vs deletion is a no-op).
+  - **`MPC-E111 write_conflict`** (exit 1, `details.conflicts` with the region, why, and the
+    change met) only when ours **replaces** text a change since deleted or replaced, or
+    **inserts strictly inside** a range a change since deleted (rule 4 (b)), under **both**
+    tie-break placements (S3, r2.3): wherever a tie with others' insertions at its point put
+    it, before or after their text, the characters on both its sides are deleted; an insert
+    at either edge of a deleted range, under either placement, never is. Overlap is judged stepwise,
+    **each hunk as sent** (E-LIVE r2.3, r2.2's rule (1) withdrawn): an insertion that comes to
+    touch its own change's deletion stays an insertion, and a replacement split by rule 5
+    stays a replacement on every piece, so deleting text someone replaced never bounces and a
+    split replacement still competes. Only the result is made canonical
+    (`rebase::Carried`).
+  - **Fully absorbed** (S4): a change whose every deletion is already done and that inserts
+    nothing applies nothing: `EditAtBase::hunks` empty, no new version.
+  - **Others' insertions survive** (rule 5): a deletion over them is split around them; a
+    replacement's text goes at the left end of its range.
+  - **Validation first** (rule 7): hunks out of order or range, or off a character
+    boundary, **at `base`**: `MPC-E151` (exit 2). Then rights, the rate (`MPC-E901`), the
+    backlog, `EditOptions`' version guard and claim policy, as for every edit.
+  - A refusal applies nothing.
+- **Shared vectors** for the JS client: `crates/base/tests/vectors/live_rebase.json`
+  (`[start, end, insert]` hunks; the server's result or conflict, and the mirror's).
+- **Parity:** a person's live edit is rows P9–P11; the agent verbs are `insert --at`,
+  `replace --range` and `delete --lines` (same text, same attribution), and for an edit
+  made from an older read, `write --base V` (P14), which is merge3 (two inserts at one point
+  conflict there, by O5: right for an agent rewriting a doc, wrong for live typing).
 
 ## Agent presence (amendment 13)
 
@@ -1240,6 +1361,7 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `away_after_ms` | 60 s | not visible → away |
 | `read_bases_max` / `read_base_ttl_ms` / `read_bases_max_bytes` | 64 / 30 min / 16 MiB | `write_base` bases |
 | `undo_depth` / `undo_max_bytes` | 100 / 4 MiB | undo history, per pid per doc (spec U6) |
+| `undo_group_idle_ms` | 1 s | a person's undo group closes after this idle (spec U3 (a); 0: never merge) |
 | `idle_version_ms` | 2 min | idle version after the last change |
 | `agent_version_lines` / `agent_version_percent` | 20 / 10 | version before a large agent edit |
 | `version_keep_all_ms` / `version_hourly_until_ms` | 30 / 90 days | retention bands |
@@ -1249,6 +1371,9 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `history_tick_ms` | 1 min | how often `tick` runs retention and the window per loaded doc |
 | `edit_rate_per_s` / `edit_burst` | 10 / 10 | Edit calls per **pid** per doc, across their connections. A token bucket on the host clock; the bucket survives leave and rejoin. Over the limit → `RateLimited { retry_after_ms }`. A call takes a token once rights pass, even if it then fails. |
 | `subscriber_queue` | 1024 | events per subscriber |
+| `roster_interval_ms` | 250 ms | the roster push's coalescing interval (at most one delivery per doc per interval) |
+| `roster_queue` | 256 | roster events per subscriber, and recorded between two deliveries; past it, a fresh `Snapshot` |
+| `participants_max` | 32 | distinct participants with presence per doc; a new pid past it watches (read-only, counted, `MPC-E305` on edit) until the host promotes it |
 | `compact_entries` / `compact_bytes` | 1,000 / 2 MiB | compact after an append at either threshold |
 | `unload_compact_entries` | 100 | compact on unload |
 | `memory_budget_bytes` / `memory_factor` / `idle_unload_ms` | 256 MiB / 20 / 10 min | the pool |
@@ -1263,9 +1388,15 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `note_edit_window_ms` | 60 s | an edit this recent is a heads-up note |
 | `note_repeat_ms` / `note_interval_ms` / `note_batch_max` | 60 s / 5 s / 5 | note dedupe window; one batch per reader per doc per interval; notes per batch |
 | `activity_max` | 256 | activity rows per doc (memory only) |
-| `edit_check_every` | 1,000 | the edit path's runtime check (v0.9.3): one edit in this many is also made through a throwaway replica and the updates compared byte for byte, and the engine's cached texts against a fresh read. A mismatch is never served: `AuditEvent::EditPathMismatch` / `TextCacheMismatch` (metadata only), and the doc takes the replica path (or reads its texts afresh) until reloaded. 0: never |
+| `edit_check_every` | 1,000 | the edit path's runtime check (v0.9.3): one edit in this many is also made through a throwaway replica and the updates compared byte for byte, and the engine's cached texts against a fresh read. A mismatch is never served: `AuditEvent::EditPathMismatch` / `TextCacheMismatch` (metadata only), and the doc takes the replica path (or reads its texts afresh) until reloaded. The same rate samples outside saves: one in this many also computes its change at element identity in full from the engine and compares it with the merge's hunks (`AuditEvent::IdentityMismatch { key, root, change }`; the merge's hunks are kept for the record and blame's provenance map is dropped). 0: never |
+| `edit_check_scale_units` | 50,000 | the edit path's check on a large doc (v0.9.7): past this much history (UTF-16 units, the sum of the doc's state vector's clocks: every unit ever inserted, deleted or not), the interval between sampled edits grows in proportion to it, `edit_check_every x history / this` edits and never fewer than `edit_check_every`. A sampled edit is O(history), so this keeps the check's amortised cost per edit about what it is at this size (the default is about the history at version 10,000 in the 32-participant soak); a doc below it is checked one edit in `edit_check_every`. The first sample after a load is placed from the history alone (`edit_check_every` edits in below this; past it at a phase spread over the interval), so the long-run rate does not depend on how often the doc is reloaded. Outside saves keep the fixed rate. 0: a fixed rate |
+| `writeback_check_every` | 100 | the file write-back's check (v0.9.7): the disk replica is kept in step with the changes since the last sync instead of reloaded from a full encode; every sync compares its state vector with the doc's (O(clients)), and one in this many also compares its deletions and texts (not the encodings: equal content may be split into blocks differently). A mismatch reloads it: `AuditEvent::DiskReplicaMismatch` (metadata only). 0: never (the state vectors are still compared) |
+| `position_check_every` | 1,000 | the engine's position index check (v0.9.7, k2-yrs `k2.3`): one marker lookup in this many also walks the text from its start and compares. A mismatch is never served (the walk's position is used, the text's markers dropped): `AuditEvent::PositionIndexMismatch` (the root and indices only). 0: never |
 
 ## Errors (`SessionError`)
+
+Every error below, and every refusal outcome, has a stable id (`MPC-Ennn`; amendment 18):
+`docs/ERRORS.md` lists them with the rule each enforces and what to do next.
 
 | Error | Meaning | Exit (`session_exit`) |
 |---|---|---|
@@ -1280,8 +1411,8 @@ with `Session::purge_tier0` (owner) or by a `PurgeScope::History` purge; other s
 | `NotFound` | no doc and no bytes | 4 |
 | `PackMismatch` | stored doc belongs to another pack | 4 |
 | `BadParticipant` / `BadPosition` / `BadEdit` / `Doc(_)` | bad input; nothing changed | 2 |
-| `Doc(DocError::Unaccepted)` | hardening: a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_UNACCEPTED`; MPC-E152 on main's registry) | 3 |
-| `Doc(DocError::Quarantined)` | hardening: a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id reserved (`doc::RESERVED_ERROR_ID_QUARANTINED`; MPC-E518 on main's registry) | 3 |
+| `Doc(DocError::Unaccepted)` | hardening: a client update carries content the kit never uses (subdocuments): refused at ingress, before anything is applied (v0.9.5). Error id `MPC-E152` `unaccepted` (`doc::RESERVED_ERROR_ID_UNACCEPTED`) | 3 |
+| `Doc(DocError::Quarantined)` | hardening: a stored doc holds such content: quarantined, never loaded as live (the store-load scan, v0.9.5). Error id `MPC-E518` `quarantined` (`doc::RESERVED_ERROR_ID_QUARANTINED`) | 3 |
 | `NoApproval { seq }` | no approval to settle (the change wasn't made on anyone's behalf, or doesn't exist) | 4 |
 | `BadApproval` | already settled the other way | 2 |
 | `BadPath` | `open_file` / `file_moved`: not a regular file inside the root | 2 |
@@ -1412,9 +1543,9 @@ editor, an agent can do through a verb, with the same effect.
 | P21 | `mv` | `SessionManager::rekey` + `Session::file_moved` |
 | P22 | `blame [-L a,b]` | `blame(conn, root, lines)` (needs history); tier 0: `BlobSession::blame` |
 | P23, P27 | `comment`, `suggest`... | later (M5, the annotation layer) |
-| P24 | export | `read` (`bytes`) |
+| P24 | `export [--to as-is]`, `export --version V [--to as-is]` | `file_now` / `file_at` (tier 0: `BlobSession::file_now_to` / `file_at_to`), then `export::ExportRegistry::export` (the kit's target: `as-is`); the person's export and the agent's give the same bytes, doc version and codec flag; `--version` needs history |
 | P25 | why live editing is off | `open` → `Declined { code, message }`; `status().declined` |
-| P26 | Ctrl+Z (`undo --partial`) | `undo_with(UndoMode::Partial)` (the native tab's grouping is G3) |
+| P26 | Ctrl+Z (`undo --partial`) | `undo_with(UndoMode::Partial)`; keystrokes grouped by `EditOptions::group` (U3, v0.9.7) |
 | P28 | `purge` | later (redaction) |
 | P29 | `approve`, `decline` | `set_approval(conn, seq, Approved \| Declined)` (only the person it was made for); tier 0: `BlobSession::set_approval(conn, version, ..)` |
 | P30 | `log --pending --on-behalf-of me`, or its alias `approvals --on-behalf-of me`; `--all` for settled ones too | `log(LogQuery::pending().on_behalf_of(pid))`; a tab may use `approvals`; tier 0: `BlobSession::log` (`approval`) / `approvals` |
@@ -1446,8 +1577,8 @@ editor, an agent can do through a verb, with the same effect.
 - **After C7a:** `diff
   --version` from the **disk** (the host reads the file and uses the `diff` tool); thinning
   change summaries (kept for the doc's life today); retention for docs that are never loaded
-  again (it runs on `tick` for loaded ones); the native tab's grouping and Ctrl+Z with unacked
-  ops (G3).
+  again (it runs on `tick` for loaded ones); Ctrl+Z with unacked ops (G3). Person grouping
+  is in v0.9.7 (`EditOptions::group`).
 
 ## Tier 0: any file
 
@@ -1794,6 +1925,16 @@ transaction. Namespaces and keys are opaque strings: **the kit never reads, inte
 erases these rows**, so erasing them (a person's data, a deleted workspace) is the host's job.
 
 ## Changelog
+
+### Amendment 18 (unreleased, additive): stable error ids
+
+- Every refusal has a stable id, `MPC-Ennn`, in one registry (`k2_mpc_base::errors`,
+  `docs/ERRORS.md`): never reused, never removed, never changing an exit code. `report()` on
+  every error type, `refusal()` on `WriteOutcome` and `UndoOutcome`, and
+  `ToolOutput::refusal` for an edit verb's in-band "no" give an `ErrorReport` (plain text
+  with the id appended, or the `--json` object). `explain` and `capabilities`
+  (`errors::run_meta`) are generated from the registries. Hosts: `docs/HOST-ERRORS.md`.
+- `ToolOutput::stderr_summary` of an in-band refusal ends with ` (MPC-Ennn)`.
 
 ### Amendment 17 (v0.9.3, additive): edits on the doc itself, the runtime check, outside edits at element identity
 
@@ -2153,8 +2294,8 @@ changed behaviour; `read` now shares its code with the tools' read path.
 ### Engine hardening (after C4)
 
 - **Breaking (Rust API, not the session contract):** `Doc::encode_state()` returns
-  `Result<Vec<u8>, DocError>`. yrs 0.28 panics encoding a doc that holds pending updates
-  (an unwrap at transaction.rs:408); every engine encode now runs under `catch_unwind`, and a
+  `Result<Vec<u8>, DocError>`. A doc holding pending updates can't be encoded reliably;
+  every engine encode now runs under `catch_unwind`, and a
   doc an apply left pending (or that failed or panicked mid-apply) is **poisoned**: it refuses
   `encode_state`, `encode_diff`, `edit_as` and further applies with `DocError::Pending`
   until reloaded. A decode error poisons nothing.

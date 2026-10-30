@@ -27,6 +27,9 @@ pub(crate) struct Presence {
     /// Latest caret move (text) or other sign of editing intent.
     pub last_cursor_ms: Option<u64>,
     pub hidden_since_ms: Option<u64>,
+    /// Joined past [`Config::participants_max`] (K11): read-only, no presence detail, counted
+    /// in the roster only as `watching`.
+    pub watcher: bool,
 }
 
 impl Presence {
@@ -49,6 +52,7 @@ impl Presence {
             last_edit_ms: None,
             last_cursor_ms: None,
             hidden_since_ms: None,
+            watcher: false,
         }
     }
 
@@ -129,16 +133,20 @@ pub(crate) fn fold_roster<'a, M: Deref<Target = Presence>>(
     editing: impl Fn(&str) -> bool,
 ) -> Vec<(Vec<&'a M>, RosterEntry, u64)> {
     let recent = |t: Option<u64>| t.is_some_and(|t| now.saturating_sub(t) < c.editor_window_ms);
-    // members are in join order, so pids come out in order of first join
+    // members are in join order, so pids come out in order of first join; watchers (past
+    // participants_max) have no row
     let mut pids: Vec<&str> = Vec::new();
-    for m in members {
+    for m in members.iter().filter(|m| !m.watcher) {
         if !pids.contains(&m.p.pid.as_str()) {
             pids.push(&m.p.pid);
         }
     }
     pids.into_iter()
         .map(|pid| {
-            let mut conns: Vec<&M> = members.iter().filter(|m| m.p.pid == pid).collect();
+            let mut conns: Vec<&M> = members
+                .iter()
+                .filter(|m| m.p.pid == pid && !m.watcher)
+                .collect();
             conns.sort_by_key(|m| {
                 std::cmp::Reverse((
                     m.last_edit_ms.max(m.last_cursor_ms),
@@ -184,7 +192,12 @@ pub(crate) fn fold_roster<'a, M: Deref<Target = Presence>>(
 }
 
 /// Editors first, then viewers, then away; by first join within each.
-pub(crate) fn sort_roster<X>(mut rows: Vec<(X, RosterEntry, u64)>) -> Vec<RosterEntry> {
+pub(crate) fn sort_roster<X>(rows: Vec<(X, RosterEntry, u64)>) -> Vec<RosterEntry> {
+    sort_roster_with(rows).into_iter().map(|r| r.1).collect()
+}
+
+/// [`sort_roster`], keeping each row's `X` with it.
+pub(crate) fn sort_roster_with<X>(mut rows: Vec<(X, RosterEntry, u64)>) -> Vec<(X, RosterEntry)> {
     rows.sort_by_key(|(_, e, joined)| (e.away, e.role, *joined));
-    rows.into_iter().map(|r| r.1).collect()
+    rows.into_iter().map(|(x, e, _)| (x, e)).collect()
 }

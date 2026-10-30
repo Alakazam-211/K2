@@ -1,0 +1,21 @@
+MPC-E149 wrong_kind (sessions and edits)
+exit:     2
+message:  root {root} is {actual}, not {wanted}
+next:     The edit treats a part of the doc as the wrong kind (text vs table...). Use the verbs for that kind (capabilities lists them).
+rule:     K-SCH-2
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E149",
+  "name": "wrong_kind",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "root {root} is {actual}, not {wanted}",
+  "next": "The edit treats a part of the doc as the wrong kind (text vs table...). Use the verbs for that kind (capabilities lists them).",
+  "rule": "K-SCH-2",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

@@ -1,0 +1,21 @@
+MPC-E518 quarantined (store)
+exit:     3
+message:  stored doc contains content this host doesn't accept; it was not loaded
+next:     A stored doc holds content this build does not accept, so it was set aside for review and not loaded. Nothing changed. Don't retry: report it to the host's operator.
+rule:     K-SEC-5
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E518",
+  "name": "quarantined",
+  "area": "store",
+  "exit": 3,
+  "message": "stored doc contains content this host doesn't accept; it was not loaded",
+  "next": "A stored doc holds content this build does not accept, so it was set aside for review and not loaded. Nothing changed. Don't retry: report it to the host's operator.",
+  "rule": "K-SEC-5",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

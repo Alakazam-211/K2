@@ -23,6 +23,9 @@ mutants = []
 
 [dev-dependencies]
 rand = { version = "0.8", features = ["small_rng"] }
+# The grouping class's mutants plant the kit's own faults (`differential::GroupMutant`,
+# thread-local; nothing changes without one planted).
+k2-mpc-base = { path = "../base", features = ["conformance", "differential"] }
 
 # One process per mutant set: the active mutant is process-wide.
 [[test]]

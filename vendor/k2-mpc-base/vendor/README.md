@@ -40,10 +40,11 @@ Then update the tag and shas above, and run `cargo test -p k2-mpc-conformance`.
 The kit's engine: Yrs v0.28.0 (MIT, https://github.com/y-crdt/y-crdt) plus the k2 patches,
 from the private repo `k2-yrs`.
 
-- Tag: **`k2-yrs-0.28.0-k2.2`** (commit `44922a9`): `Doc::transact_mut_as` and the bounded
-  decoder reservations. Earlier tags were never vendored (the kit used crates.io's 0.28.0).
+- Tag: **`k2-yrs-0.28.0-k2.6.3`** (commit `8fa90bd`; v0.9.7): what it changes is listed in
+  `docs/YRS-FORK.md` and `yrs/NOTICE`. Before it: `k2-yrs-0.28.0-k2.2` (commit `44922a9`,
+  v0.9.3); earlier tags were never vendored (the kit used crates.io's 0.28.0).
 - Copied by `tools/vendor-yrs.sh` (not by subtree): the tag's `yrs/` crate, its `LICENSE` and
-  `NOTICE`, without `yrs/tests/decode_bombs.rs`; `VENDORED` records the tag, commit and
+  `NOTICE`, without the engine's own tests (`yrs/tests/`: they run in k2-yrs); `VENDORED` records the tag, commit and
   hashes, and `--check` verifies the copy. `docs/YRS-FORK.md` says how to rebase on a new Yrs
   release.
 - Upstream's own compile warnings show in the kit's builds (a path dependency's lints aren't

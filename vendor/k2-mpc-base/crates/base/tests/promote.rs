@@ -705,3 +705,68 @@ fn deleting_a_promoted_doc_releases_its_tier0_blobs() {
     assert_eq!(fx.blobs.stats().unwrap().unreferenced_bytes, 4);
     let _ = Path::new(&fx.dir.0);
 }
+
+// ---------- D1 (v0.9.7) ----------
+
+/// The D1 amendment's class (a) through a promotion: p16 types `p16:3027` and changes its
+/// `7` to a `9`, p14 replaces the line with `p14:3169`, all as tier-0 versions. Promotion
+/// replays each version as a change by its author, widened as any diff-based change (undo
+/// spec v1.10, D1a): p14's change rewrites the whole token, so p16's revert of its `7`→`9`
+/// conflicts and p14's line stays. Returns the revert's outcome, the text after it and
+/// whether the store kept an authored row for p14's change (it does only when D1 widened it).
+fn promoted_class_a() -> (k2_mpc_base::session::UndoOutcome, String, bool) {
+    let fx = fx("d1");
+    let agent = |pid: &str| Participant::new(pid, pid, "#336699", ParticipantKind::Agent, "cli");
+    fx.grant("p16", Rights::full());
+    fx.grant("p14", Rights::full());
+    let s = fx
+        .mgr
+        .open_blob(Arc::new(AnyFile), &key("d1.md"), Some(&mut &b"seed\n"[..]))
+        .unwrap();
+    let p16 = join_blob(&s, agent("p16"));
+    let p14 = join_blob(&s, agent("p14"));
+    fx.advance(1_000);
+    s.write_bytes(p16, b"seed\np16:3027\n", 1).unwrap();
+    fx.advance(1_000);
+    s.write_bytes(p16, b"seed\np16:3029\n", 2).unwrap();
+    fx.advance(1_000);
+    s.write_bytes(p14, b"seed\np14:3169\n", 3).unwrap();
+    let (t, done) = fx.mgr.promote_blob(md(), &key("d1.md")).unwrap();
+    assert_eq!(done.changes, 4);
+    let change = |vid: u64| {
+        let (_, _, c, _) = text_of(&done.versions.iter().find(|(v, _)| *v == vid).unwrap().1);
+        c.expect("a change")
+    };
+    let (nine, p14s) = (change(3), change(4));
+    let id = fx.store.find(&key("d1.md")).unwrap().unwrap();
+    let row = fx.store.authored_hunks(id, p14s).unwrap();
+    let c16 = t.join(agent("p16"), Stay::Held).unwrap().conn;
+    let out = t.revert(c16, nine, false).unwrap();
+    let after = text(&t, c16);
+    if let Some(row) = &row {
+        // the authored row holds the diff's hunks, inside the token the record took whole
+        assert_eq!(row.len(), 1);
+        assert!(row[0].1[0].start > 5, "{row:?}");
+    }
+    (out, after, row.is_some())
+}
+
+#[test]
+fn promotion_widens_each_version_so_a_revert_never_changes_another_authors_word() {
+    use k2_mpc_base::differential::{with_d1_mutant, D1Mutant};
+    use k2_mpc_base::session::UndoOutcome;
+    let (out, after, widened) = promoted_class_a();
+    assert!(widened, "D1 widened p14's version");
+    assert!(
+        matches!(out, UndoOutcome::Conflicts { .. }),
+        "p16's revert conflicts: {out:?}"
+    );
+    assert_eq!(after, "seed\np14:3169\n", "p14's line is untouched");
+    // the negative control: without D1 the revert changes p14's word
+    let (out, after, widened) = with_d1_mutant(D1Mutant::ReuseForeign, promoted_class_a);
+    assert!(!widened);
+    assert!(
+        !matches!(out, UndoOutcome::Conflicts { .. }) && after != "seed\np14:3169\n",
+        "without D1: {out:?}, {after:?}"
+    );
+}

@@ -186,12 +186,19 @@ pub trait Map: AsRef<Branch> + Sized {
     }
 
     /// Inserts a new `value` under given `key` into current map. Returns an integrated value.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn insert<K, V>(&self, txn: &mut TransactionMut, key: K, value: V) -> V::Return
     where
         K: Into<Arc<str>>,
         V: Prelim,
     {
         let key = key.into();
+        self.as_ref().assert_writable(); // k2
         let pos = {
             let inner = self.as_ref();
             let left = inner.map.get(&key);
@@ -222,6 +229,9 @@ pub trait Map: AsRef<Branch> + Sized {
     /// as inserting an element will force previous value to be tombstoned, causing minimal memory
     /// overhead.
     ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
+    ///
     /// # Example
     ///
     /// ```rust
@@ -243,6 +253,9 @@ pub trait Map: AsRef<Branch> + Sized {
         let key = key.into();
         let value = value.into();
         let branch = self.as_ref();
+        if branch.refuse_write() {
+            return false; // k2
+        }
         if let Some(item) = branch.map.get(&key) {
             if !item.is_deleted() {
                 if let ItemContent::Any(content) = &item.content {
@@ -262,6 +275,12 @@ pub trait Map: AsRef<Branch> + Sized {
     /// Returns an existing instance of a type stored under a given `key` within current map.
     /// If the given entry was not found, has been deleted or its type is different from expected,
     /// that entry will be reset to a given type and its reference will be returned.
+    ///
+    /// # Panics
+    ///
+    /// If this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)): nothing can be
+    /// integrated into it, and there is no value to return.
     fn get_or_init<K, V>(&self, txn: &mut TransactionMut, key: K) -> V
     where
         K: Into<Arc<str>>,
@@ -287,8 +306,14 @@ pub trait Map: AsRef<Branch> + Sized {
     /// all of its contents will also be deleted recursively. A returned value will contain a
     /// reference to a current removed shared type (which will be empty due to all of its elements
     /// being deleted), **not** the content prior the removal.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn remove(&self, txn: &mut TransactionMut, key: &str) -> Option<Out> {
         let ptr = BranchPtr::from(self.as_ref());
+        if ptr.refuse_write() {
+            return None; // k2
+        }
         ptr.remove(txn, key)
     }
 
@@ -385,7 +410,13 @@ pub trait Map: AsRef<Branch> + Sized {
     }
 
     /// Clears the contents of current map, effectively removing all of its entries.
+    ///
+    /// A no-op if this type was deleted and garbage-collected
+    /// ([`Branch::is_collected`](crate::branch::Branch::is_collected)).
     fn clear(&self, txn: &mut TransactionMut) {
+        if self.as_ref().refuse_write() {
+            return; // k2
+        }
         for (_, ptr) in self.as_ref().map.iter() {
             txn.delete(ptr.clone());
         }
@@ -582,7 +613,10 @@ impl Prelim for MapPrelim {
 
     fn integrate(self, txn: &mut TransactionMut, inner_ref: BranchPtr) {
         let map = MapRef::from(inner_ref);
-        for (key, value) in self.0 {
+        // k2: in key order, not the prelim's hash order, so the entries get the same clocks
+        let mut entries: Vec<_> = self.0.into_iter().collect();
+        entries.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        for (key, value) in entries {
             map.insert(txn, key, value);
         }
     }

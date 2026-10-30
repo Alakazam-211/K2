@@ -3,16 +3,16 @@
 //! hook). Nothing simulated.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use k2_mpc_base::session::{
-    AuditEvent, ChangeEvent, Config, ConnId, Declined, Host, Pack, PackContent, PackError,
-    Participant, ParticipantKind, PurgeRequest, PurgeScope, Rights, Session, SessionError,
-    SessionManager, Stay, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
+    AuditEvent, ChangeEvent, Config, ConnId, Declined, EditOptions, Host, Pack, PackContent,
+    PackError, Participant, ParticipantKind, PurgeRequest, PurgeScope, Rights, Session,
+    SessionError, SessionManager, Stay, UndoMode, UndoOutcome, UndoRequest, WriteOutcome,
 };
 use k2_mpc_base::store::{DocKey, DocStore, VersionId};
 use k2_mpc_base::text::diff::Hunk;
@@ -106,6 +106,8 @@ pub struct Knobs {
     pub undo_depth: usize,
     pub keep_changes: u64,
     pub compact_entries: u64,
+    /// U3 (a): a person's undo group closes after this long idle.
+    pub group_idle_ms: u64,
 }
 
 /// A kit element: (text root, client, clock).
@@ -132,6 +134,8 @@ pub enum KitOut {
     /// The outcome and the version before the write.
     Write(Result<WriteOutcome, SessionError>, u64),
     Undo(Result<UndoOutcome, SessionError>),
+    /// A live edit (the hunk channel, `edit_at_base`): changed or not, or the refusal.
+    Live(Result<bool, String>),
 }
 
 /// One doc's live session, reopened from its store on a restart.
@@ -146,6 +150,8 @@ pub struct Kit {
     watch: Receiver<ChangeEvent>,
     /// (pid name, connection slot) → connection.
     conns: HashMap<(String, usize), ConnId>,
+    /// Pids that join as people (editor clients; the rest are agents).
+    persons: HashSet<String>,
     _dir: TmpDir,
 }
 
@@ -166,6 +172,8 @@ impl Kit {
         config.revert_keep_ms = 0;
         config.history_tick_ms = 0;
         config.compact_entries = knobs.compact_entries;
+        // U3 (a) as the spec writes it (the kit's default is 1 s)
+        config.undo_group_idle_ms = knobs.group_idle_ms;
         let key = DocKey {
             space: "spec-undo".into(),
             path: "trace.txt".into(),
@@ -186,6 +194,7 @@ impl Kit {
             watcher,
             watch,
             conns: HashMap::new(),
+            persons: HashSet::new(),
             _dir: dir,
         }
     }
@@ -223,6 +232,21 @@ impl Kit {
         self.host.now.fetch_add(1, Ordering::SeqCst);
     }
 
+    /// Time passes by `ms`.
+    pub fn advance_by(&self, ms: u64) {
+        self.host.now.fetch_add(ms, Ordering::SeqCst);
+    }
+
+    /// The host's clock.
+    pub fn now(&self) -> u64 {
+        self.host.now.load(Ordering::SeqCst)
+    }
+
+    /// `pid` joins as a person from now on (an editor client: its group tokens count, U3).
+    pub fn set_person(&mut self, pid: &str) {
+        self.persons.insert(pid.to_owned());
+    }
+
     /// The host's tick (the revert window moves, U22).
     pub fn tick(&self) {
         let rep = self.mgr.tick().expect("tick");
@@ -234,7 +258,12 @@ impl Kit {
         if let Some(c) = self.conns.get(&(pid.to_owned(), slot)) {
             return *c;
         }
-        let mut p = Participant::new(pid, pid, "#336699", ParticipantKind::Agent, "cli");
+        let kind = if self.persons.contains(pid) {
+            ParticipantKind::Person
+        } else {
+            ParticipantKind::Agent
+        };
+        let mut p = Participant::new(pid, pid, "#336699", kind, "cli");
         if let Some(o) = obo {
             p = p.on_behalf_of(o);
         }
@@ -320,6 +349,22 @@ impl Kit {
             self.session
                 .edit(c, edits, None)
                 .map(|r| r.version != before),
+        )
+    }
+
+    /// A live edit at the current version through the hunk channel (`edit_at_base`), with
+    /// the editor's undo group `token` (U3) if any.
+    pub fn live(&self, c: ConnId, root: usize, hunks: Vec<Hunk>, token: Option<&str>) -> KitOut {
+        let before = self.version();
+        let opts = match token {
+            Some(t) => EditOptions::new().group(t),
+            None => EditOptions::new(),
+        };
+        KitOut::Live(
+            self.session
+                .edit_at_base(c, ROOTS[root], before, hunks, &opts)
+                .map(|r| r.result.version != before)
+                .map_err(|e| e.plain()),
         )
     }
 

@@ -16,7 +16,7 @@ done
 got=$("$PY" "$here/collect.py" --print --log "$t/logs/sample.txt" --job ff000002 | "$PY" -c '
 import json, sys
 for r in json.load(sys.stdin):
-    print(r["run"], r["tool"], r["status"], r["states"], r["depth"], r["queued"], r["cap_s"], r.get("trace_states"))')
+    print(r["run"], r["tool"], r["status"], r["states"], r["depth"], r["queued"], r["cap_s"], r.get("trace_states"), r.get("workers"))')
 if [ "$got" = "$(cat "$t/logs/sample.expected")" ]; then ok "collect.py parses the sample log"; else bad "collect.py on the sample log:"; echo "$got"; fi
 [ $fail = 0 ] && echo "evidence self-test: ok" || echo "evidence self-test: FAILED"
 exit $fail

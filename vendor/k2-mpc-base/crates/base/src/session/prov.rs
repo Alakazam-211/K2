@@ -25,8 +25,11 @@
 //! insertion into it.
 //!
 //! The map is built from the engine's blame runs and the store's provenance rows the first
-//! time a session needs it after a load; a path that changes text without maintaining it
-//! exactly (an outside edit, a reload, a purge) drops it, to be rebuilt on next need.
+//! time a session needs it after a load (O(doc): the engine walks a throwaway copy), then
+//! kept exact by every change as it applies: the session's own ([`Prov::apply`]) and, since
+//! v0.9.5, outside edits ([`Prov::apply_runs`], from the change at element identity). A
+//! path that replaces the doc (a recovery, a purge) drops it, to be rebuilt on next need.
+//! Blame checks the kept map against a rebuild ([`Prov::differs`]) on a sample of calls.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -348,6 +351,22 @@ impl TextMap {
         self.chunks.iter().map(|c| c.bytes).sum()
     }
 
+    /// The runs, normalised: every run joined with the next when that continues it (no
+    /// [`MAX_RUN`] or chunk cuts), so two maps of the same elements are equal values.
+    fn normal(&self) -> Vec<Run> {
+        let mut out: Vec<Run> = Vec::new();
+        for r in self.chunks.iter().flat_map(|c| &c.runs) {
+            match out.last_mut() {
+                Some(l) if l.continued_by(r) => {
+                    l.bytes += r.bytes;
+                    l.units += r.units;
+                }
+                _ => out.push(*r),
+            }
+        }
+        out
+    }
+
     /// The runs of `text[lo..hi]` (`text`: the live text this map is aligned with), clipped.
     pub fn query(&self, text: &str, lo: usize, hi: usize) -> Vec<Run> {
         debug_assert_eq!(self.bytes(), text.len(), "the map is aligned with the text");
@@ -556,6 +575,26 @@ impl ByRoot {
         debug_assert_eq!(got, units, "a removed restoration wasn't in by_root");
     }
 
+    /// Normalised: each run joined with the next when both its roots and its live IDs
+    /// continue it.
+    fn normal(&self) -> Vec<(ElemId, u32, ElemId)> {
+        let mut out: Vec<(ElemId, u32, ElemId)> = Vec::new();
+        for (s, (n, l)) in &self.0 {
+            match out.last_mut() {
+                Some((ps, pn, pl))
+                    if ps.client == s.client
+                        && ps.clock + *pn == s.clock
+                        && pl.client == l.client
+                        && pl.clock + *pn == l.clock =>
+                {
+                    *pn += n
+                }
+                _ => out.push((*s, *n, *l)),
+            }
+        }
+        out
+    }
+
     #[cfg(test)]
     pub fn len_runs(&self) -> usize {
         self.0.len()
@@ -575,7 +614,15 @@ pub(crate) struct Inserted {
 pub(crate) struct Prov {
     texts: Vec<(&'static str, TextMap)>,
     by_root: ByRoot,
+    /// Which build this map descends from (unique per [`Prov::build`]), and how many
+    /// changes it has taken since: [`Prov::token`].
+    lineage: u64,
+    applied: u64,
 }
+
+/// A map's identity at one moment ([`Prov::token`]): equal tokens, the same map with no
+/// change applied in between (blame's off-lock check, v0.9.7).
+pub(crate) type ProvToken = (u64, u64);
 
 impl Prov {
     /// Build from each text root's live text and runs (`(root, text, runs)`, the runs
@@ -594,10 +641,18 @@ impl Prov {
             }
             out.push((name, map));
         }
+        static LINEAGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
             texts: out,
             by_root,
+            lineage: LINEAGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            applied: 0,
         }
+    }
+
+    /// This map's identity now: its build, and the changes applied since.
+    pub fn token(&self) -> ProvToken {
+        (self.lineage, self.applied)
     }
 
     /// Does it map text root `root`?
@@ -637,25 +692,53 @@ impl Prov {
     /// removed restorations leave it, inserted ones enter it (asserting I1).
     pub fn apply(&mut self, root: &str, before: &str, hunks: &[Hunk], ins: &[Inserted]) {
         debug_assert_eq!(hunks.len(), ins.len());
+        let runs: Vec<Vec<Run>> = hunks
+            .iter()
+            .zip(ins)
+            .map(|(h, x)| new_runs(&h.insert, x))
+            .collect();
+        self.apply_runs(root, before, hunks, &runs);
+    }
+
+    /// [`Prov::apply`] with each hunk's inserted elements given as runs covering its insert
+    /// (any IDs, any roots).
+    pub fn apply_runs(&mut self, root: &str, before: &str, hunks: &[Hunk], ins: &[Vec<Run>]) {
+        debug_assert_eq!(hunks.len(), ins.len());
         let Some(k) = self.texts.iter().position(|(n, _)| *n == root) else {
             debug_assert!(false, "no map for root {root:?}");
             return;
         };
+        self.applied += 1;
+        let mutant = mutant();
         for (h, x) in hunks.iter().zip(ins).rev() {
             let runs = {
                 let mut v = Vec::new();
                 let mut at = 0usize;
-                for r in new_runs(&h.insert, x) {
+                for r in x {
                     let e = at + r.bytes as usize;
+                    let mut r = *r;
+                    if mutant == Some(Mutant::RestoredAsRestorer) {
+                        // planted: a restored element blamed to its restorer, not its root
+                        r.root = None;
+                    }
                     split_long(&h.insert[at..e], r, &mut v);
                     at = e;
                 }
+                debug_assert_eq!(at, h.insert.len(), "inserted runs cover the insert");
                 v
             };
-            let removed = self.texts[k].1.splice(before, h.start, h.end, &runs);
-            for r in removed {
-                if let Some(root) = r.root {
-                    self.by_root.remove(root, r.units, r.id);
+            // planted: the deletion never reaches the map (it keeps the deleted elements)
+            let end = if mutant == Some(Mutant::MissDeletion) {
+                h.start
+            } else {
+                h.end
+            };
+            let removed = self.texts[k].1.splice(before, h.start, end, &runs);
+            if mutant != Some(Mutant::MissDeletionInIndex) {
+                for r in removed {
+                    if let Some(root) = r.root {
+                        self.by_root.remove(root, r.units, r.id);
+                    }
                 }
             }
             for r in runs {
@@ -665,6 +748,78 @@ impl Prov {
             }
         }
     }
+
+    /// Is each text root's map aligned with its live text (`texts`), byte for byte? O(roots
+    /// x chunks). A map that isn't is wrong for sure; one that is may still be wrong
+    /// ([`Prov::differs`] says).
+    pub fn aligned(&self, texts: &[(&'static str, String)]) -> bool {
+        texts
+            .iter()
+            .all(|(name, text)| self.map(name).is_some_and(|m| m.bytes() == text.len()))
+            && self.texts.len() == texts.len()
+    }
+
+    /// Where this map differs from `other` (a rebuild from the engine and the store), if it
+    /// does: each root's runs (IDs and roots, compared character for character as
+    /// normalised runs: chunking and run cuts aside) and the live restorations by root. A
+    /// description with no doc content (a root name, a byte offset), or `None`: the same.
+    /// O(runs).
+    pub fn differs(&self, other: &Prov) -> Option<String> {
+        if self.texts.len() != other.texts.len() {
+            return Some("a different set of text roots".into());
+        }
+        for (name, m) in &self.texts {
+            let Some(o) = other.map(name) else {
+                return Some(format!("root {name:?} not in the rebuild"));
+            };
+            let (a, b) = (m.normal(), o.normal());
+            if m.bytes() != o.bytes() {
+                return Some(format!(
+                    "root {name:?}: {} bytes mapped, the text has {}",
+                    m.bytes(),
+                    o.bytes()
+                ));
+            }
+            if a != b {
+                let mut at = 0usize;
+                for (x, y) in a.iter().zip(&b) {
+                    if x != y {
+                        break;
+                    }
+                    at += x.bytes as usize;
+                }
+                return Some(format!("root {name:?}: the runs differ from byte {at}"));
+            }
+        }
+        if self.by_root.normal() != other.by_root.normal() {
+            return Some("the live restorations by root differ".into());
+        }
+        None
+    }
+}
+
+/// The planted faults ([`crate::differential::ProvMutant`]): never compiled into a host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mutant {
+    MissDeletion,
+    MissDeletionInIndex,
+    RestoredAsRestorer,
+}
+
+#[cfg(any(test, feature = "differential"))]
+fn mutant() -> Option<Mutant> {
+    use crate::differential::ProvMutant as P;
+    crate::differential::prov_mutant().map(|m| match m {
+        P::MissDeletion => Mutant::MissDeletion,
+        P::MissDeletionInIndex => Mutant::MissDeletionInIndex,
+        P::RestoredAsRestorer => Mutant::RestoredAsRestorer,
+    })
+}
+
+#[cfg(not(any(test, feature = "differential")))]
+#[inline(always)]
+fn mutant() -> Option<Mutant> {
+    None
 }
 
 /// A text root's live runs from the engine's blame runs (`blame`, covering `text`) and the

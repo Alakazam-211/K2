@@ -47,6 +47,14 @@ pub enum Mutant {
     /// the least). The enumerator's own test (a panic in the oracle must end a run promptly,
     /// as a violation, in every mode: `tests/mutants.rs`).
     OraclePanics,
+    /// D1 (v1.10) `reuse-foreign-elements-in-changed-token`: today's D1 before the amendment,
+    /// a diff-based change keeps the other participants' characters it doesn't change.
+    D1ReuseForeign,
+    /// D1 `rewrite-whole-line`: the authored ranges widened to whole lines, not tokens.
+    D1RewriteWholeLine,
+    /// D1 `rewrite-merged-ranges`: `write --base` also rewrites the ranges merge3 kept from
+    /// the live text (theirs).
+    D1RewriteMergedRanges,
 }
 
 impl Mutant {
@@ -69,6 +77,17 @@ impl Mutant {
     pub const HARNESS: [(&'static str, Mutant); 1] =
         [("harness-oracle-panics", Mutant::OraclePanics)];
 
+    /// The D1 amendment's mutants (v1.10). Outside [`Mutant::ALL`] until the Quint model has
+    /// D1: the Rust enumerator and the trace test carry D1's evidence.
+    pub const D1: [(&'static str, Mutant); 3] = [
+        (
+            "d1-reuse-foreign-elements-in-changed-token",
+            Mutant::D1ReuseForeign,
+        ),
+        ("d1-rewrite-whole-line", Mutant::D1RewriteWholeLine),
+        ("d1-rewrite-merged-ranges", Mutant::D1RewriteMergedRanges),
+    ];
+
     /// A mutant by its command-line name (`none` is the oracle).
     pub fn by_name(name: &str) -> Option<Mutant> {
         if name == "none" {
@@ -77,6 +96,7 @@ impl Mutant {
         Self::ALL
             .iter()
             .chain(Self::HARNESS.iter())
+            .chain(Self::D1.iter())
             .find(|(n, _)| *n == name)
             .map(|(_, m)| *m)
     }
@@ -86,6 +106,7 @@ impl Mutant {
         Self::ALL
             .iter()
             .chain(Self::HARNESS.iter())
+            .chain(Self::D1.iter())
             .find(|(_, m)| *m == self)
             .map_or("none", |(n, _)| n)
     }
@@ -100,6 +121,7 @@ pub fn active() -> Mutant {
     match ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
         0 => Mutant::None,
         HARNESS_INDEX => Mutant::OraclePanics,
+        k if k >= D1_INDEX => Mutant::D1[(k - D1_INDEX) as usize].1,
         k => Mutant::ALL[k as usize - 1].1,
     }
 }
@@ -114,11 +136,16 @@ pub fn active() -> Mutant {
 /// Make `m` the active mutant, process-wide (test builds with the `mutants` feature only).
 #[cfg(feature = "mutants")]
 const HARNESS_INDEX: u8 = 255;
+/// The D1 mutants' indices start here.
+#[cfg(feature = "mutants")]
+const D1_INDEX: u8 = 200;
 
 #[cfg(feature = "mutants")]
 pub fn set(m: Mutant) {
     let k = if m == Mutant::OraclePanics {
         HARNESS_INDEX
+    } else if let Some(i) = Mutant::D1.iter().position(|(_, x)| *x == m) {
+        D1_INDEX + i as u8
     } else {
         Mutant::ALL
             .iter()

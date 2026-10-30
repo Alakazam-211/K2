@@ -103,8 +103,9 @@ fn main() {
         viol.into_iter().collect::<Vec<_>>().join(",")
     );
     // the run's record (tools/evidence/): one per replay
+    let job = spec_undo::runrec_job();
     println!(
-        "RUNREC {{\"job\":null,\"run\":{:?},\"tool\":\"itf_replay\",\"status\":{:?},\"traces\":{traces},\"steps\":{steps},\"longest\":{longest},\"mismatches\":{bad},\"exit\":{}}}",
+        "RUNREC {{\"job\":{job},\"run\":{:?},\"tool\":\"itf_replay\",\"status\":{:?},\"traces\":{traces},\"steps\":{steps},\"longest\":{longest},\"mismatches\":{bad},\"exit\":{}}}",
         std::env::var("RUNREC_RUN").unwrap_or_else(|_| format!("itf_{}", b.describe().replace([' ', '=', '"'], "_"))),
         if bad == 0 { "COMPLETE" } else { "VIOLATION" },
         i32::from(bad > 0)

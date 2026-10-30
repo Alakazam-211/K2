@@ -1,0 +1,21 @@
+MPC-E127 pack_verb_no (sessions and edits)
+exit:     1
+message:  {verb}: nothing applied
+next:     The file type's own verb found nothing to change (stdout says why: e.g. no such section). Check its target (cat, grep -n) and run it again; nothing was applied.
+rule:     A6 (pack verbs)
+verbs:    a pack's own verbs
+status:   live
+--- json
+{
+  "id": "MPC-E127",
+  "name": "pack_verb_no",
+  "area": "sessions and edits",
+  "exit": 1,
+  "message": "{verb}: nothing applied",
+  "next": "The file type's own verb found nothing to change (stdout says why: e.g. no such section). Check its target (cat, grep -n) and run it again; nothing was applied.",
+  "rule": "A6 (pack verbs)",
+  "verbs": ["@pack"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

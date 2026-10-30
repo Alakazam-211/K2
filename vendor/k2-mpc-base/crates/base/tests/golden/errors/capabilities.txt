@@ -1,0 +1,382 @@
+k2-mpc-base 0.9.7
+Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
+
+Exit codes (never change):
+  0  ok                success (diff, grep: no difference, a match)
+  1  no                the tool's own no: grep found nothing, diff found differences, a conflict, a patch that didn't apply; nothing applied unless the message says otherwise
+  2  usage_or_held     bad usage or an unsupported flag (fix the command), or held for now (MPC-E130: don't retry in a loop)
+  3  refused           the caller lacks a right; don't retry
+  4  not_found         no such doc, version, change or claim; or live editing is off
+  5  leased            someone else holds it for now (a lease or a claim); retry after the time left
+  6  store_unavailable the store failed; nothing acknowledged
+  7  link_lost         the link dropped mid-verb (the host's)
+  8  too_old           too old (revert, an expired base); never retry the same request
+
+Verbs (after the doc path):
+  open  [read; text+blob; needs read]
+    usage:  open (stays until leave)
+    exits:  0
+    serves: P1
+    errors: (only the ones any verb can return)
+  leave  [read; text+blob; needs read]
+    usage:  leave
+    exits:  0
+    serves: P2
+    errors: (only the ones any verb can return)
+  cat  [read; text+blob; needs read]
+    usage:  cat [-n] [-b] [--for-edit [--ttl MS]] (tier 0: the file's bytes, no flags)
+    exits:  0
+    serves: P3
+    errors: MPC-E120 MPC-E121 MPC-E122 MPC-E704 MPC-E705 MPC-E902
+  wc  [read; text; needs read]
+    usage:  wc [-l] [-w] [-c] [-m]
+    exits:  0
+    serves: P3
+    errors: MPC-E120 MPC-E121 MPC-E122 MPC-E902
+  head  [read; text; needs read]
+    usage:  head [-n N] [-c N] [--for-edit [--ttl MS]]
+    exits:  0
+    serves: P4
+    errors: MPC-E120 MPC-E121 MPC-E122 MPC-E902
+  tail  [read; text; needs read]
+    usage:  tail [-n [+]N] [-c [+]N] [--for-edit [--ttl MS]]
+    exits:  0
+    serves: P4
+    errors: MPC-E120 MPC-E121 MPC-E122 MPC-E902
+  sed  [read; text; needs read]
+    usage:  sed -n 'a,bp' (any script without -i) [--for-edit [--ttl MS]]
+    exits:  0
+    serves: P4
+    errors: MPC-E120 MPC-E121 MPC-E122 MPC-E902
+  view  [read; text; needs read]
+    usage:  view --lines a,b [--for-edit [--ttl MS]]
+    exits:  0
+    serves: P4
+    errors: MPC-E114 MPC-E120 MPC-E121 MPC-E122 MPC-E902
+  grep  [read; text; needs read]
+    usage:  grep [-EFGivwxcoqlLHhn] [-m N] [-A/-B/-C N] [--for-edit [--ttl MS]] PATTERN
+    exits:  0 1
+    serves: P5
+    errors: MPC-E120 MPC-E121 MPC-E122 MPC-E902
+  who  [read; text+blob; needs read]
+    usage:  who
+    exits:  0
+    serves: P6
+    errors: (only the ones any verb can return)
+  activity  [read; text; needs read]
+    usage:  activity [-n N] (who did what, where, lately)
+    exits:  0
+    serves: P6
+    errors: (only the ones any verb can return)
+  claim  [edit; text; needs read+edit]
+    usage:  claim --lines a,b [--ttl MS] [--note TEXT] [--hold] (someone else's claim there: exit 5)
+    exits:  0
+    serves: P8
+    errors: MPC-E114 MPC-E301 MPC-E304 MPC-E903 MPC-E904
+  claim --renew  [edit; text; needs read+edit]
+    usage:  claim --renew [--id ID] [--ttl MS] [--hold | --no-hold] (others waiting: exit 2; none: 4)
+    exits:  0
+    serves: P8
+    errors: MPC-E302 MPC-E303 MPC-E304
+  claim --release  [edit; text; needs read]
+    usage:  claim --release [--id ID] (all of mine without an id; 1: none held)
+    exits:  0 1
+    serves: P8
+    errors: MPC-E302 MPC-E304
+  follow  [read; text; needs read]
+    usage:  follow <pid> (1: not here or no caret)
+    exits:  0 1
+    serves: P7
+    errors: (only the ones any verb can return)
+  cursor  [edit; text; needs read+edit]
+    usage:  cursor --at L:C | --select L:C-L:C (read only: a viewing range)
+    exits:  0
+    serves: P8
+    errors: MPC-E114
+  insert  [edit; text; needs read+edit]
+    usage:  insert --line N | --after N | --at L:C [--if-version V] (text on stdin)
+    exits:  0
+    serves: P9 P15
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E901 MPC-E902
+  replace  [edit; text; needs read+edit]
+    usage:  replace --lines a,b | --range L:C-L:C (text on stdin) | --old TEXT --new TEXT [--all] (exact; '-': that one from stdin; 1: no match or not unique, nothing applied) [--if-version V]
+    exits:  0 1
+    serves: P10 P12 P15
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E125 MPC-E126 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E901 MPC-E902
+  delete  [edit; text; needs read+edit]
+    usage:  delete --lines a,b | --range L:C-L:C [--if-version V]
+    exits:  0
+    serves: P11
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E901 MPC-E902
+  sed -i  [edit; text; needs read+edit]
+    usage:  sed -i SCRIPT (s///, d, a, i, c, y...) [--if-version V]
+    exits:  0
+    serves: P11 P12 P15
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E901 MPC-E902
+  patch  [edit; text; needs read+edit]
+    usage:  patch [-p N] [-R] [--dry-run] [-F N] [--partial] [--if-version V] (diff on stdin)
+    exits:  0 1
+    serves: P13
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E901 MPC-E902
+  apply  [edit; text; needs read+edit]
+    usage:  apply: as patch
+    exits:  0 1
+    serves: P13
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E123 MPC-E124 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E901 MPC-E902
+  append  [edit; text; needs read+edit]
+    usage:  append [--ensure-newline] [--if-version V] (text on stdin)
+    exits:  0
+    serves: P13
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E120 MPC-E121 MPC-E122 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E901 MPC-E902
+  write  [edit; text+blob; needs read+edit]
+    usage:  write --base V | --base live (new text on stdin)
+    exits:  0 1 8
+    serves: P14
+    errors: MPC-E102 MPC-E110 MPC-E111 MPC-E112 MPC-E113 MPC-E130 MPC-E301 MPC-E305 MPC-E405 MPC-E701 MPC-E703 MPC-E901
+  undo  [edit; text; needs read+edit]
+    usage:  undo [--steps N] [--for P]
+    exits:  0 1
+    serves: P16
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E901
+  redo  [edit; text; needs read+edit]
+    usage:  redo [--steps N]
+    exits:  0 1
+    serves: P16
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E201 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E901
+  undo --drop  [edit; text; needs read+edit]
+    usage:  undo --drop
+    exits:  0
+    serves: P16
+    errors: MPC-E206 MPC-E207
+  undo --partial  [edit; text; needs read+edit]
+    usage:  undo --partial [--steps N] [--for P]
+    exits:  0 1
+    serves: P26
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E202 MPC-E203 MPC-E206 MPC-E207 MPC-E301 MPC-E305 MPC-E405 MPC-E901
+  status  [read; text+blob; needs read]
+    usage:  status
+    exits:  0
+    serves: P17 P25
+    errors: (only the ones any verb can return)
+  flush  [read; text+blob; needs read]
+    usage:  flush
+    exits:  0
+    serves: P17
+    errors: MPC-E410
+  watch  [read; text; needs read]
+    usage:  watch
+    exits:  0
+    serves: P18
+    errors: (only the ones any verb can return)
+  tail -f  [read; text; needs read]
+    usage:  tail -f (the same as watch)
+    exits:  0
+    serves: P18
+    errors: (only the ones any verb can return)
+  log  [history; text+blob; needs read+history]
+    usage:  log [--by P] [-n N]
+    exits:  0
+    serves: P19
+    errors: MPC-E103
+  diff --version  [history; text; needs read+history]
+    usage:  diff --version V [--to W] [-U N]
+    exits:  0 1
+    serves: P19
+    errors: MPC-E103 MPC-E205
+  show --version  [history; text+blob; needs read+history]
+    usage:  show --version V
+    exits:  0
+    serves: P19
+    errors: MPC-E103 MPC-E205 MPC-E511 MPC-E602 MPC-E704 MPC-E705
+  export  [read; text+blob; needs read]
+    usage:  export [--to as-is] (the file now, through the export registry)
+    exits:  0
+    serves: P24
+    errors: (only the ones any verb can return)
+  export --version  [history; text+blob; needs read+history]
+    usage:  export --version V [--to as-is] (the file at version V)
+    exits:  0
+    serves: P24
+    errors: MPC-E103
+  diff  [read; text; needs read]
+    usage:  diff [-u] [-U N] (my copy on stdin vs live)
+    exits:  0 1
+    serves: P19
+    errors: MPC-E120 MPC-E121 MPC-E122 MPC-E902
+  blame  [history; text+blob; needs read+history]
+    usage:  blame [-L a,b]
+    exits:  0
+    serves: P22
+    errors: MPC-E103 MPC-E114
+  restore  [edit; text+blob; needs read+edit+history]
+    usage:  restore --version V
+    exits:  0
+    serves: P20
+    errors: MPC-E102 MPC-E110 MPC-E113 MPC-E130 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E511 MPC-E602 MPC-E701 MPC-E704 MPC-E705 MPC-E901
+  version --name  [edit; text+blob; needs read+edit]
+    usage:  version --name NAME [--version V]
+    exits:  0
+    serves: P20
+    errors: MPC-E205 MPC-E511
+  mv  [edit; text+blob; needs read+edit]
+    usage:  mv <new path>
+    exits:  0
+    serves: P21
+    errors: MPC-E410 MPC-E411 MPC-E504
+  approve  [edit; text+blob; needs read+approver]
+    usage:  approve <change> (a blob doc: <version>)
+    exits:  0
+    serves: P29
+    errors: MPC-E104 MPC-E131 MPC-E132 MPC-E512
+  decline  [edit; text+blob; needs read+approver]
+    usage:  decline <change> (a blob doc: <version>; then restore --version to reverse it)
+    exits:  0
+    serves: P29
+    errors: MPC-E104 MPC-E131 MPC-E132 MPC-E512
+  log --pending  [history; text+blob; needs read+history]
+    usage:  log --pending [--all] [--on-behalf-of me|P] (--all: settled ones too, newest first)
+    exits:  0
+    serves: P30
+    errors: MPC-E103
+  approvals  [history; text+blob; needs read+history]
+    usage:  approvals [--all] [--on-behalf-of me|P] (the same as log --pending)
+    exits:  0
+    serves: P30
+    errors: MPC-E103
+  revert  [edit; text; needs read+edit+author_or_owner]
+    usage:  revert <change> [--partial] (too old: exit 8)
+    exits:  0 1
+    serves: P31
+    errors: MPC-E102 MPC-E105 MPC-E110 MPC-E113 MPC-E130 MPC-E201 MPC-E202 MPC-E203 MPC-E204 MPC-E205 MPC-E301 MPC-E305 MPC-E405 MPC-E901
+  lease  [edit; blob; needs read+edit]
+    usage:  lease [--ttl MS] (take it, or extend yours; someone else's: exit 5)
+    exits:  0
+    serves: P32
+    errors: MPC-E701
+  lease --renew  [edit; blob; needs read+edit]
+    usage:  lease --renew [--ttl MS] (nobody holds it: exit 2)
+    exits:  0
+    serves: P32
+    errors: MPC-E702
+  lease --release  [edit; blob; needs read]
+    usage:  lease --release (1: you didn't hold it)
+    exits:  0 1
+    serves: P33
+    errors: (only the ones any verb can return)
+  lease --break  [edit; blob; needs read+owner]
+    usage:  lease --break (owner only; 1: nobody held it)
+    exits:  0 1
+    serves: P34
+    errors: MPC-E106
+  (any verb on a doc can also return: MPC-E101 MPC-E107 MPC-E108 MPC-E109 MPC-E146 MPC-E401 MPC-E402 MPC-E403 MPC-E404 MPC-E407 MPC-E501 MPC-E502 MPC-E503 MPC-E505 MPC-E508 MPC-E509 MPC-E510 MPC-E513 MPC-E514 MPC-E515 MPC-E516 MPC-E517 MPC-E518 MPC-E706 MPC-E707 MPC-E709 MPC-E710)
+
+Verbs with no doc:
+  explain [ID] [--json] (an error id: what happened, what to do next, the rule; no id: every id)
+  capabilities [--json] (verbs, flags, parity rows, the error ids each verb can return, limits, the kit version)
+
+Parity (each thing a person can do, and the verbs that do it):
+  P1   Open the file (join; appear in presence) [text+blob]: open
+  P2   Close it (leave) [text+blob]: leave
+  P3   Read the whole doc [text+blob]: cat, wc
+  P4   Look at a range (viewing highlight) [text+blob]: head, tail, sed, view
+  P5   Find [text]: grep
+  P6   See who's here [text+blob]: who, activity
+  P7   Follow someone [text]: follow
+  P8   Place the caret / select; say what I'm working on [text]: claim, claim --renew, claim --release, cursor
+  P9   Type at a position [text]: insert
+  P10  Select and type over [text]: replace
+  P11  Delete a range [text]: delete, sed -i
+  P12  Find and replace [text]: replace, sed -i
+  P13  Paste a block / apply a change [text]: patch, apply, append
+  P14  Rewrite from what I last saw [text+blob]: write
+  P15  Format (bold, heading, list) [text]: insert, replace, sed -i
+  P16  Undo / redo my own edits [text]: undo, redo, undo --drop
+  P17  See that it saved [text+blob]: status, flush
+  P18  Watch others edit live [text+blob]: watch, tail -f
+  P19  History, diff, show a version [text+blob]: log, diff --version, show --version, diff
+  P20  Restore / name a version [text+blob]: restore, version --name
+  P21  Rename / move [text+blob]: mv
+  P22  Blame [text+blob]: blame
+  P23  Comment, reply, resolve; suggest; accept / reject [text]: (no verb yet)
+  P24  Export [text+blob]: export, export --version
+  P25  See why live editing is off [text+blob]: status
+  P26  Undo the regions of my change nobody touched; report the rest [text]: undo --partial
+  P27  Mention someone [text]: (no verb yet)
+  P28  Purge a pasted secret or personal data [text+blob]: (no verb yet)
+  P29  Approve or decline an assistant's edit made on my behalf [text+blob]: approve, decline
+  P30  See which edits are waiting for my approval [text+blob]: log --pending, approvals
+  P31  Reverse one specific change [text]: revert
+  P32  Take the lease (lock the file while I change it), or extend it [blob]: lease, lease --renew
+  P33  Release my lease [blob]: lease --release
+  P34  Break someone else's lease [blob]: lease --break
+
+Limits in effect:
+  editor_window_ms = 30000
+  idle_leave_ms = 60000
+  away_after_ms = 60000
+  claim_default_ms = 30000
+  claim_max_ms = 600000
+  for_edit_ms = 30000
+  claims_max = 256
+  claims_per_participant = 16
+  claim_waiters_max = 64
+  claim_handoff_ms = 2000
+  note_edit_window_ms = 60000
+  note_repeat_ms = 60000
+  note_interval_ms = 5000
+  note_batch_max = 5
+  activity_max = 256
+  read_bases_max = 64
+  read_base_ttl_ms = 1800000
+  read_bases_max_bytes = 16777216
+  undo_depth = 100
+  undo_max_bytes = 4194304
+  undo_group_idle_ms = 1000
+  idle_version_ms = 120000
+  agent_version_lines = 20
+  agent_version_percent = 10
+  version_keep_all_ms = 2592000000
+  version_hourly_until_ms = 7776000000
+  version_max_count = 500
+  version_max_bytes = 67108864
+  revert_keep_ms = 2592000000
+  revert_keep_changes = 10000
+  revert_max_bytes = 67108864
+  pending_max_records = 1000
+  pending_max_bytes = 16777216
+  history_tick_ms = 60000
+  edit_rate_per_s = 10
+  edit_burst = 10
+  subscriber_queue = 1024
+  roster_interval_ms = 250
+  roster_queue = 256
+  participants_max = 32
+  compact_entries = 1000
+  compact_bytes = 2097152
+  unload_compact_entries = 100
+  edit_check_every = 1000
+  edit_check_scale_units = 50000
+  position_check_every = 1000
+  writeback_check_every = 100
+  reuse_agent_clients = 1
+  blame_check_every = 100
+  blame_check_large_at = 20000
+  blame_check_every_large = 1000
+  live_window_events = 1000
+  live_window_bytes = 4194304
+  memory_budget_bytes = 268435456
+  memory_factor = 20
+  idle_unload_ms = 600000
+  write_quiet_ms = 1000
+  write_max_delay_ms = 5000
+  disk_poll_ms = 3000
+  disk_read_max_bytes = 67108864
+  own_write_ttl_ms = 60000
+  lease_default_ms = 300000
+  lease_max_ms = 3600000
+  lease_auto_ms = 120000
+  blob_merge_max_bytes = 33554432
+  conflict_copy_keep_ms = 2592000000
+  tool_output_max_bytes = 33554432
+
+Error ids: run explain for the list, explain <ID> for one.

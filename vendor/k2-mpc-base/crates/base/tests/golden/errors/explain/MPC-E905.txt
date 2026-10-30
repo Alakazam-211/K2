@@ -1,0 +1,21 @@
+MPC-E905 claim_waiters_cap (limits)
+exit:     2
+message:  bad claim: {count} already waiting for {claim}
+next:     That claim already has as many waiters as it allows. Retry after it ends, or work elsewhere.
+rule:     A13 (claim_waiters_max)
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E905",
+  "name": "claim_waiters_cap",
+  "area": "limits",
+  "exit": 2,
+  "message": "bad claim: {count} already waiting for {claim}",
+  "next": "That claim already has as many waiters as it allows. Retry after it ends, or work elsewhere.",
+  "rule": "A13 (claim_waiters_max)",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

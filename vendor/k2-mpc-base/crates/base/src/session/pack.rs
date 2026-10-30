@@ -58,6 +58,14 @@ pub trait Pack: Send + Sync {
         Cow::Borrowed(text)
     }
 
+    /// How this pack's text splits into tokens for D1 (undo spec v1.10): a fresh change
+    /// rewrites the tokens it touches wherever someone else wrote them, so it is never built
+    /// from someone else's text. Words by default; a code pack would use
+    /// [`crate::text::lines::Tokens::Code`].
+    fn tokens(&self) -> crate::text::lines::Tokens {
+        crate::text::lines::Tokens::Words
+    }
+
     /// Whether the file's bytes put a byte-order mark (U+FEFF, UTF-8 `EF BB BF`) in front
     /// of `root`'s text, under these codec settings. The doc text never holds it, but `cat`
     /// prints the file's bytes, BOM included; so a `write` or `write --base` body that
@@ -99,6 +107,7 @@ pub trait Pack: Send + Sync {
 pub struct TextFilePack {
     name: &'static str,
     limit: usize,
+    tokens: crate::text::lines::Tokens,
 }
 
 const CODEC_V1: u8 = 1;
@@ -109,7 +118,19 @@ impl TextFilePack {
 
     /// `name` is the schema name (stamped on stored docs); `limit` the largest file, in bytes.
     pub const fn new(name: &'static str, limit: usize) -> Self {
-        Self { name, limit }
+        Self {
+            name,
+            limit,
+            tokens: crate::text::lines::Tokens::Words,
+        }
+    }
+
+    /// The same pack with another token rule for D1 (v0.9.7; words by default). The undo
+    /// rules' worked cases on single letters use [`crate::text::lines::Tokens::Chars`], under
+    /// which D1 is the identity, as the oracle's do.
+    pub const fn with_tokens(mut self, tokens: crate::text::lines::Tokens) -> Self {
+        self.tokens = tokens;
+        self
     }
 
     pub fn limit(&self) -> usize {
@@ -139,6 +160,10 @@ impl TextFilePack {
 }
 
 impl Pack for TextFilePack {
+    fn tokens(&self) -> crate::text::lines::Tokens {
+        self.tokens
+    }
+
     fn schema(&self) -> Schema {
         Schema {
             name: self.name,

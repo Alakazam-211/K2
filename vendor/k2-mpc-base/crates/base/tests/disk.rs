@@ -15,7 +15,9 @@ use k2_mpc_base::session::{
     UndoOutcome, EXTERNAL_PID,
 };
 use k2_mpc_base::store::{DocKey, DocStore, VersionReason};
-use k2_mpc_base::text::merge::{merge3_hunks, outside_merge_sides, outside_sides, Merge};
+use k2_mpc_base::text::merge::{
+    self, closed, merge3_hunks, outside_merge_sides, outside_sides, Merge,
+};
 use proptest::prelude::*;
 
 const MD: TextFilePack = TextFilePack::new("markdown", 4 << 20);
@@ -1434,30 +1436,25 @@ fn mix_steps() -> impl Strategy<Value = Vec<Mix>> {
         })
 }
 
-/// The keep-both rule character by character (the model of an outside save's merge where
-/// the two sides overlap, on the sides widened to whole lines there): at each offset of
-/// `base`, the insertions there, then the base character unless either side deletes it. Two
-/// sides' groups of whole lines that meet with no base character between get a "\n" between
-/// them whenever the first lacks one (the end of a text with no final newline); and the end
-/// rule: a line break before the change inserted last at the end when the merge left the
-/// text before it open though that change's side alone left it closed. A change made
-/// identically on both sides is taken once.
+/// The keep-both rule character by character (the model of an outside save's merge, v0.9.7:
+/// on the closed texts' sides, whole lines): at each offset of the closed `base`, the
+/// insertions there, then the base character unless either side deletes it; a change made
+/// identically on both sides is taken once. Then the end: no final "\n" when the side that
+/// wrote the last line left its text so; for a base line, or a change both made, as the
+/// side that changed the base's ending (the file first).
 fn keep_both_model(base: &str, file: &str, live: &str) -> String {
     use k2_mpc_base::text::Hunk;
-    // the sides as the merge ends with them: hunks in an overlap widened to whole lines
+    let open = |t: &str| !t.is_empty() && !t.ends_with('\n');
+    let cb = closed(base);
+    // the sides as the merge takes them: whole lines of the closed texts
     let (a, b, _) = outside_merge_sides(base, file, live);
+    let both: Vec<Hunk> = b.iter().filter(|y| a.contains(y)).cloned().collect();
     let a: Vec<Hunk> = a.into_iter().filter(|x| !b.contains(x)).collect();
-    let whole = |h: &Hunk| {
-        let at_line = |p: usize| p == 0 || p == base.len() || base.as_bytes()[p - 1] == b'\n';
-        (h.start == 0 || base.as_bytes()[h.start - 1] == b'\n')
-            && at_line(h.end)
-            && (h.insert.is_empty() || h.insert.ends_with('\n') || h.end == base.len())
-    };
-    let mut last: Option<(usize, &Hunk)> = None;
+    // who wrote the last character: 0 live, 1 file, 2 both or the base
+    let mut author = 2;
     let mut out = String::new();
-    let mut at: Vec<(usize, Option<char>)> =
-        base.char_indices().map(|(i, c)| (i, Some(c))).collect();
-    at.push((base.len(), None));
+    let mut at: Vec<(usize, Option<char>)> = cb.char_indices().map(|(i, c)| (i, Some(c))).collect();
+    at.push((cb.len(), None));
     for (p, c) in at {
         // pure insertions, then replacements; the live side first within each (as merge3
         // places a clean merge's)
@@ -1470,39 +1467,35 @@ fn keep_both_model(base: &str, file: &str, live: &str) -> String {
             .collect();
         here.sort_by_key(|(r, side, _)| (*r, *side));
         for (_, side, h) in here {
-            if h.insert.is_empty() {
-                continue;
+            if !h.insert.is_empty() {
+                out.push_str(&h.insert);
+                author = if both.contains(h) { 2 } else { side };
             }
-            if let Some((ps, prev)) = last {
-                if ps != side && whole(prev) && whole(h) && !prev.insert.ends_with('\n') {
-                    out.push('\n');
-                }
-            }
-            out.push_str(&h.insert);
-            last = Some((side, h));
         }
         if let Some(c) = c {
             if !b.iter().chain(&a).any(|h| h.start <= p && p < h.end) {
                 out.push(c);
-                last = None;
+                author = 2;
             }
         }
     }
-    // the end rule (the base ended with a line break): the last group is inserted at the
-    // end, after text its side alone left closed but the merge left open
-    if let Some((side, h)) = last.filter(|(_, h)| base.ends_with('\n') && h.start == base.len()) {
-        let alone = if side == 1 { file } else { live };
-        let k = out.len() - h.insert.len();
-        let closed = |p: &str| p.is_empty() || p.ends_with('\n');
-        if !closed(&out[..k]) && closed(&alone[..alone.len() - h.insert.len()]) {
-            out.insert(k, '\n');
-        }
+    let end_open = match author {
+        0 => open(live),
+        1 => open(file),
+        _ if open(file) != open(base) => open(file),
+        _ => open(live),
+    };
+    // an empty last line can't be left open (that would delete it)
+    if end_open && out.ends_with('\n') && out != "\n" && !out.ends_with("\n\n") {
+        out.pop();
     }
     out
 }
 
-/// Each insertion of `base` → `new`, in order, as disjoint pieces of `got`.
+/// Each insertion of `base` → `new` (on the closed texts), in order, as disjoint pieces of
+/// `got` (closed).
 fn inserts_kept(base: &str, new: &str, got: &str) -> bool {
+    let got = closed(got);
     let mut from = 0;
     for h in outside_sides(base, new, base).0 {
         match got[from..].find(&h.insert) {
@@ -1525,8 +1518,9 @@ fn no_pending(s: &Session) -> bool {
 /// delay, restarts, and outside saves at random points. At each outside save, with S the
 /// synced text (the file before it), D the live text and O the file's new text:
 /// 1. when the three-way merge is clean, the doc is its result: `merge3_hunks` (the pair
-///    rules of `write --base`) on the two sides S→O and S→D, each diffed with its pure line
-///    insertions slid to line starts (`outside_sides`, as outside edits always were); the
+///    rules of `write --base`) on the two sides S→O and S→D, each diffed at whole lines
+///    (`outside_sides`; v0.9.7, before that with its pure line insertions slid to line
+///    starts, as outside edits always were); the
 ///    save is a `write --base` of O on S, up to the order of two appends at the very end;
 ///    except that, in an outside save, a line break separates text one side left without a
 ///    final line break (when the original text ended with one) from a change of the other
@@ -1676,24 +1670,16 @@ fn mix_case(seed: &str, steps: &[Mix]) {
                     "{why}: {check:?}"
                 );
                 let got = text(&s, a);
-                // 1. a clean merge is merge3's
+                // 1. a clean merge is merge3's on the closed texts (v0.9.7), but for its final
+                // "\n" (the end is merged on its own)
                 let (o, d) = outside_sides(&synced, &saved, &live);
-                if let Merge::Clean(c) = merge3_hunks(&synced, &o, &d, !synced.is_empty()) {
-                    // in an outside save, a line break separates text one side left without a
-                    // final line break (when the original text ended with one) from a change of
-                    // the other side that is inserted at the end of the text (v0.9.5)
-                    if got != c.text {
-                        assert_eq!(
-                            got.replace('\n', ""),
-                            c.text.replace('\n', ""),
-                            "{why}: S {synced:?} O {saved:?} D {live:?}"
-                        );
-                        assert_eq!(
-                            got.matches('\n').count(),
-                            c.text.matches('\n').count() + 1,
-                            "{why}: S {synced:?} O {saved:?} D {live:?}"
-                        );
-                    }
+                let cs = merge::closed(&synced);
+                if let Merge::Clean(c) = merge3_hunks(&cs, &o, &d, !cs.is_empty()) {
+                    assert_eq!(
+                        *merge::closed(&got),
+                        c.text,
+                        "{why}: S {synced:?} O {saved:?} D {live:?}"
+                    );
                 }
                 // 2 and 3. nothing either side changed is lost
                 assert_eq!(

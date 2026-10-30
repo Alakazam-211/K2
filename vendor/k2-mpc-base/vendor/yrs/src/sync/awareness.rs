@@ -515,7 +515,10 @@ pub struct AwarenessUpdate {
 impl Encode for AwarenessUpdate {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
         encoder.write_var(self.clients.len());
-        for (&client_id, e) in self.clients.iter() {
+        // k2: clients in ascending order, not the map's hash order
+        let mut clients: Vec<_> = self.clients.iter().collect();
+        clients.sort_unstable_by_key(|(&client_id, _)| client_id);
+        for (&client_id, e) in clients {
             encoder.write_var(client_id.get());
             encoder.write_var(e.clock);
             encoder.write_string(&e.json);
@@ -526,8 +529,7 @@ impl Encode for AwarenessUpdate {
 impl Decode for AwarenessUpdate {
     fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, crate::encoding::read::Error> {
         let len: usize = decoder.read_var()?;
-        // `len` comes from the input (hardening). Reserve only what the input could hold: an
-        // entry is at least 3 bytes (client, clock, JSON length).
+        // k2 (hardening)
         let mut clients = HashMap::new();
         clients.try_reserve(bounded_capacity(len, decoder.remaining(), 3))?;
         for _ in 0..len {
@@ -747,8 +749,11 @@ mod test {
 
     #[test]
     fn awareness_summary() -> Result<(), Box<dyn std::error::Error>> {
-        let mut local = Awareness::new(Doc::with_client_id(1));
-        let mut remote = Awareness::new(Doc::with_client_id(2));
+        // k2: a fixed clock on both sides. The test compares whole client states, `last_updated`
+        // included, and with the system clock the two reads could fall either side of a
+        // millisecond boundary (seen once in a full-suite run).
+        let mut local = Awareness::with_clock(Doc::with_client_id(1), || 1_000);
+        let mut remote = Awareness::with_clock(Doc::with_client_id(2), || 1_000);
 
         local.set_local_state(json!({"x":3})).unwrap();
         let update = local.update_with_clients([local.client_id()])?;

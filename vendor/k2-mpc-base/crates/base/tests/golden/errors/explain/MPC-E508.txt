@@ -1,0 +1,21 @@
+MPC-E508 log_moved (store)
+exit:     6
+message:  doc {doc}'s log moved under the session: expected position {expected}, found {found}
+next:     The doc's log changed under the session (another process wrote it). Nothing was applied; the doc reloads. Retry.
+rule:     K-OFF-1
+verbs:    any verb on a doc
+status:   live
+--- json
+{
+  "id": "MPC-E508",
+  "name": "log_moved",
+  "area": "store",
+  "exit": 6,
+  "message": "doc {doc}'s log moved under the session: expected position {expected}, found {found}",
+  "next": "The doc's log changed under the session (another process wrote it). Nothing was applied; the doc reloads. Retry.",
+  "rule": "K-OFF-1",
+  "verbs": ["*"],
+  "returned_by": ["open", "leave", "cat", "wc", "head", "tail", "sed", "view", "grep", "who", "activity", "claim", "claim --renew", "claim --release", "follow", "cursor", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "write", "undo", "redo", "undo --drop", "undo --partial", "status", "flush", "watch", "tail -f", "log", "diff --version", "show --version", "export", "export --version", "diff", "blame", "restore", "version --name", "mv", "approve", "decline", "log --pending", "approvals", "revert", "lease", "lease --renew", "lease --release", "lease --break"],
+  "status": "live",
+  "since_or_until": null
+}

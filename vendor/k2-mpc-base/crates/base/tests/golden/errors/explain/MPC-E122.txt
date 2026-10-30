@@ -1,0 +1,21 @@
+MPC-E122 tool_usage (sessions and edits)
+exit:     2
+message:  {reason}
+next:     The command line is malformed: a missing operand, a bad number, a bad script, pattern or patch (the message says which). Fix it and run again; nothing was applied.
+rule:     K-EXIT-1
+verbs:    cat, wc, head, tail, sed, view, grep, insert, replace, delete, sed -i, patch, apply, append, diff (and a pack's own verbs)
+status:   live
+--- json
+{
+  "id": "MPC-E122",
+  "name": "tool_usage",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "{reason}",
+  "next": "The command line is malformed: a missing operand, a bad number, a bad script, pattern or patch (the message says which). Fix it and run again; nothing was applied.",
+  "rule": "K-EXIT-1",
+  "verbs": ["@run_tool"],
+  "returned_by": ["cat", "wc", "head", "tail", "sed", "view", "grep", "insert", "replace", "delete", "sed -i", "patch", "apply", "append", "diff"],
+  "status": "live",
+  "since_or_until": null
+}

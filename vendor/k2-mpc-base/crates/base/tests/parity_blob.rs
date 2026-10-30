@@ -41,12 +41,7 @@ fn row(a: PersonAction) -> ParityRow {
         P::Restore => ParityRow::live(a, &["restore", "version --name"]),
         P::Rename => ParityRow::live(a, &["mv"]),
         P::Blame => ParityRow::live(a, &["blame"]),
-        P::Export => ParityRow::not_applicable(
-            a,
-            &["cat"],
-            &["export"],
-            "the file is the export: cat gives its exact bytes",
-        ),
+        P::Export => ParityRow::live(a, &["export", "export --version"]),
         P::WhyOff => ParityRow::live(a, &["status"]),
         P::Purge => ParityRow::deferred(a, &["purge"], "later", "no purge verb yet"),
         P::Approve => ParityRow::live(a, &["approve", "decline"]),
@@ -84,8 +79,8 @@ fn agent_parity_any_file() {
         .iter()
         .filter(|r| r.status == RowStatus::Live)
         .count();
-    assert_eq!(live, 16, "rows live");
-    assert_eq!(report.not_applicable.len(), 1);
+    assert_eq!(live, 17, "rows live (P24 Export since exports P0)");
+    assert_eq!(report.not_applicable.len(), 0);
     assert_eq!(report.deferred.len(), 3);
     for r in rows().iter().filter(|r| r.status == RowStatus::Live) {
         for v in r.verbs {
@@ -109,7 +104,7 @@ fn agent_parity_any_file() {
         .count();
     // P30 four times: `log --pending` and its alias `approvals`, each also with `--all`
     assert_eq!(approvals, 7, "the approval rows' cases (P29, P30)");
-    assert_eq!(report.matched.len(), 34, "{:?}", report.matched);
+    assert_eq!(report.matched.len(), 35, "{:?}", report.matched);
 }
 
 /// A tier-0 list must have every blob action's row, not the text-only ones.

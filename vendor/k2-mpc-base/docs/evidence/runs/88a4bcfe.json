@@ -1,0 +1,39 @@
+{
+ "job": "88a4bcfe",
+ "collected": "2026-10-29",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "88a4bcfe",
+   "run": "live_trace_hook_live_model_r23_2x1",
+   "tool": "live_edit",
+   "status": "COMPLETE",
+   "file": "live_model_r23_2x1.json",
+   "cases": 539,
+   "server_disagree": 0,
+   "mirror_disagree": 0,
+   "r22_rule1_only": 0,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  },
+  {
+   "job": "88a4bcfe",
+   "run": "live_trace_hook_live_model_r23_2x2_every25",
+   "tool": "live_edit",
+   "status": "COMPLETE",
+   "file": "live_model_r23_2x2_every25.json",
+   "cases": 8811,
+   "server_disagree": 0,
+   "mirror_disagree": 0,
+   "r22_rule1_only": 0,
+   "source": "RUNREC",
+   "states": null,
+   "depth": null,
+   "queued": null,
+   "cap_s": null
+  }
+ ]
+}

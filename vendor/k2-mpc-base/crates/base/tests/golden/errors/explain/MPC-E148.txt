@@ -1,0 +1,21 @@
+MPC-E148 no_root (sessions and edits)
+exit:     2
+message:  schema {schema} has no root {root}
+next:     The edit named a part of the doc this file type doesn't have. Text verbs need no root; a host passing one should use the pack's root names.
+rule:     K-SCH-2
+verbs:    a host call (no verb)
+status:   live
+--- json
+{
+  "id": "MPC-E148",
+  "name": "no_root",
+  "area": "sessions and edits",
+  "exit": 2,
+  "message": "schema {schema} has no root {root}",
+  "next": "The edit named a part of the doc this file type doesn't have. Text verbs need no root; a host passing one should use the pack's root names.",
+  "rule": "K-SCH-2",
+  "verbs": ["(host)"],
+  "returned_by": [],
+  "status": "live",
+  "since_or_until": null
+}

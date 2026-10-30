@@ -102,41 +102,50 @@ fn restarts_are_transparent() {
     }
 }
 
-/// Pid symmetry is exact: the canonical forms of every state of the plain enumeration are
-/// exactly the states of the symmetric one, and both find the same violations (none).
+/// Pid symmetry is exact at `b`: the canonical forms of every state of the plain enumeration
+/// are exactly the states of the symmetric one, and both find the same violations (none).
+/// One test per bound, so a runner with a process per test runs them in parallel.
+fn pid_symmetry_is_exact_at(b: Bound) {
+    let mut canon = BTreeSet::new();
+    let plain = bfs(&b, false, STOP, false, |s, _| {
+        canon.insert(s.canonical(true));
+    });
+    let mut sym_states = BTreeSet::new();
+    let sym = bfs(&b, true, STOP, false, |_, v| {
+        sym_states.insert(v.clone());
+    });
+    assert_eq!(canon, sym_states, "{}", b.describe());
+    assert_eq!(sym.distinct() as usize, sym_states.len());
+    assert!(plain.distinct() > sym.distinct());
+    assert_eq!(
+        plain.violations.keys().collect::<Vec<_>>(),
+        sym.violations.keys().collect::<Vec<_>>()
+    );
+}
+
 #[test]
-fn pid_symmetry_is_exact() {
-    for b in [
-        tiny(),
-        Bound {
-            pids: 3,
-            events: 1,
-            undos: 1,
-            reverts: 0,
-            maxlen: 3,
-            ..Bound::small()
-        },
-        Bound {
-            restarts: 1,
-            ..tiny()
-        },
-    ] {
-        let mut canon = BTreeSet::new();
-        let plain = bfs(&b, false, STOP, false, |s, _| {
-            canon.insert(s.canonical(true));
-        });
-        let mut sym_states = BTreeSet::new();
-        let sym = bfs(&b, true, STOP, false, |_, v| {
-            sym_states.insert(v.clone());
-        });
-        assert_eq!(canon, sym_states, "{}", b.describe());
-        assert_eq!(sym.distinct() as usize, sym_states.len());
-        assert!(plain.distinct() > sym.distinct());
-        assert_eq!(
-            plain.violations.keys().collect::<Vec<_>>(),
-            sym.violations.keys().collect::<Vec<_>>()
-        );
-    }
+fn pid_symmetry_is_exact_at_the_tiny_bound() {
+    pid_symmetry_is_exact_at(tiny());
+}
+
+#[test]
+fn pid_symmetry_is_exact_with_three_pids() {
+    pid_symmetry_is_exact_at(Bound {
+        pids: 3,
+        events: 1,
+        undos: 1,
+        reverts: 0,
+        maxlen: 3,
+        ..Bound::small()
+    });
+}
+
+#[test]
+fn pid_symmetry_is_exact_with_a_restart() {
+    pid_symmetry_is_exact_at(Bound {
+        restarts: 1,
+        ..tiny()
+    });
 }
 
 /// Dropping the records once the revert budget is spent loses nothing: with and without

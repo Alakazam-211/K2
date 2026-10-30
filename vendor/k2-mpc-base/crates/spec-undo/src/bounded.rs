@@ -70,7 +70,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::model::hunk::{Edit, Prov};
 use crate::model::{
-    merge, ChangeId, Hits, Kind, Mode, Model, Outcome, Region, Report, Request, StepNote,
+    merge, Bounds, ChangeId, Hits, Kind, Mode, Model, Outcome, Region, Report, Request, StepNote,
 };
 
 /// A bound: what the enumeration (or a Quint instance) explores.
@@ -365,7 +365,15 @@ impl State {
         assert!(b.init.bytes().all(|x| x == b'a' || x == b'b'));
         assert!(b.init.len() <= b.maxlen && (1..=9).contains(&b.pids));
         State {
-            m: Model::new(vec![b.init.clone()], 1, Default::default()),
+            // single-letter alphabets: characters are tokens, so D1 is the identity (v1.10)
+            m: Model::new(
+                vec![b.init.clone()],
+                1,
+                Bounds {
+                    tokens: k2_mpc_base::text::lines::Tokens::Chars,
+                    ..Default::default()
+                },
+            ),
             authors: vec![0; b.init.len()],
             events: vec![0; b.pids],
             undos: 0,

@@ -109,11 +109,14 @@ import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from 
 import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
 import { readStashFile, saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
 import {
+  STASH_DRAWER_OUT_MS,
+  STASH_TAB_WIDTH,
   StashDrawer,
   StashSquareButton,
   StashTab,
   composePlusMenuHeight,
   composePlusMenuItems,
+  stashPrefersReducedMotion,
 } from '@/components/PromptStash/PromptStash'
 import { clientToCssPx, useContextMenuStore } from '@/stores/context-menu'
 
@@ -600,10 +603,39 @@ export function TerminalComposeBar({
     [addThreadFiles, insertPathsText, scope, threadFilesOn, workspacePath],
   )
 
+  // Closing slides the drawer back out first (STASH_DRAWER_OUT_MS), then
+  // unmounts it; with reduced motion it goes at once. Opening again while
+  // it leaves keeps it.
+  const [stashClosing, setStashClosing] = useState(false)
+  const stashCloseTimer = useRef<number | null>(null)
   const closeStash = useCallback((refocus = true) => {
-    setStashOpen(false)
+    if (stashCloseTimer.current !== null) window.clearTimeout(stashCloseTimer.current)
+    stashCloseTimer.current = null
+    if (stashPrefersReducedMotion()) {
+      setStashClosing(false)
+      setStashOpen(false)
+    } else {
+      setStashClosing(true)
+      stashCloseTimer.current = window.setTimeout(() => {
+        stashCloseTimer.current = null
+        setStashClosing(false)
+        setStashOpen(false)
+      }, STASH_DRAWER_OUT_MS)
+    }
     if (refocus) requestAnimationFrame(() => textareaRef.current?.focus())
   }, [])
+  const openStash = useCallback(() => {
+    if (stashCloseTimer.current !== null) window.clearTimeout(stashCloseTimer.current)
+    stashCloseTimer.current = null
+    setStashClosing(false)
+    setStashOpen(true)
+  }, [])
+  useEffect(
+    () => () => {
+      if (stashCloseTimer.current !== null) window.clearTimeout(stashCloseTimer.current)
+    },
+    [],
+  )
 
   // Save the whole draft, THEN clear the box (a crash between the two can't
   // lose it). Attached files are read into the stash first; one that can't
@@ -708,23 +740,23 @@ export function TerminalComposeBar({
   }, [])
 
   const toggleStash = useCallback(() => {
-    if (stashOpen) closeStash()
-    else setStashOpen(true)
-  }, [closeStash, stashOpen])
+    if (stashOpen && !stashClosing) closeStash()
+    else openStash()
+  }, [closeStash, openStash, stashClosing, stashOpen])
 
   // A press outside the bar closes the stash (the activity bar comes back).
   useEffect(() => {
-    if (!stashOpen) return
+    if (!stashOpen || stashClosing) return
     const onDown = (e: MouseEvent): void => {
       const t = e.target as Node | null
       if (t && barRef.current?.contains(t)) return
       // The cap question and the context menu sit outside the bar.
       if (t instanceof Element && t.closest('[role="dialog"], [role="alertdialog"], [role="menu"]')) return
-      setStashOpen(false)
+      closeStash(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [stashOpen])
+  }, [closeStash, stashClosing, stashOpen])
 
   const send = useCallback(async () => {
     const text = draft.trim()
@@ -1165,6 +1197,13 @@ export function TerminalComposeBar({
       onRemoveAfterUseChange={(on) => usePromptStashStore.getState().setRemoveAfterUse(on)}
       chord={stashChord}
       look={look}
+      closing={stashClosing}
+      // On the Thread box the tab rides on the drawer's top edge, its handle.
+      handle={
+        look === 'zen' ? (
+          <StashTab count={stashItems.length} open={!stashClosing} onToggle={toggleStash} chord={stashChord} handle />
+        ) : undefined
+      }
     />
   )
   const textarea = (
@@ -1327,14 +1366,18 @@ export function TerminalComposeBar({
               <div className="grid min-w-0 flex-1 items-end">
                 {threadDrawer ? (
                   <div style={{ gridArea: '1 / 1', minWidth: 0 }}>
-                    <ZenActivityDrawer turn={threadDrawer.turn} onStop={threadDrawer.onStop} hidden={stashOpen} margin="0" />
+                    <ZenActivityDrawer turn={threadDrawer.turn} onStop={threadDrawer.onStop} hidden={stashOpen && !stashClosing} margin="0" />
                   </div>
                 ) : null}
                 {stashOpen ? (
-                  <div style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1 }}>{stashDrawerEl('zen')}</div>
+                  // Over the tab's column too: its right edge is the tab's,
+                  // where the handle rides.
+                  <div style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1, marginRight: -(STASH_TAB_WIDTH + 6) }}>
+                    {stashDrawerEl('zen')}
+                  </div>
                 ) : null}
               </div>
-              <StashTab count={stashItems.length} open={stashOpen} onToggle={toggleStash} chord={stashChord} />
+              <StashTab count={stashItems.length} open={stashOpen} onToggle={toggleStash} chord={stashChord} concealed={stashOpen} />
             </div>
           }
         >

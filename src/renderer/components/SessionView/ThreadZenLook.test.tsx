@@ -523,9 +523,11 @@ describe('chamfered corners in K2\'s square Style', () => {
                 ? 'stop'
                 : e.hasAttribute('data-zen-load-older')
                   ? 'earlier'
-                  : e.outerHTML.slice(0, 60),
+                  : e.hasAttribute('data-stash-tab')
+                    ? 'stash-tab'
+                    : e.outerHTML.slice(0, 60),
     )
-    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'send', 'stop'])
+    expect(named.sort()).toEqual(['bubble:agent', 'bubble:me', 'drawer', 'earlier', 'field', 'send', 'stash-tab', 'stop'])
     for (const small of [screen.getByRole('button', { name: 'Attach or save' }), screen.getByTestId('compose-slash-button')]) {
       expect(small.hasAttribute('data-chamfer')).toBe(false)
     }

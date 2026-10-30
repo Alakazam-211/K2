@@ -7,30 +7,57 @@
 //     choice then "Save to stash" (the phone's + menu; Rosson 2026-10-30);
 //   - `StashDrawer`: the list, newest first; each row has a preview, its
 //     source, its age, an attachment badge and ✕. ↑/↓ move, Enter picks,
-//     Esc closes, Delete / ⌘⌫ remove the row.
+//     Esc closes, Delete / ⌘⌫ remove the row. It slides and fades in from
+//     the box's edge and back out on close (`closing`); on the Thread box
+//     the stash tab rides on its top edge as its handle (`handle`), one
+//     shape with it (Rosson 2026-10-30).
+// In K2's square Style the tab, the drawer and its rows are chamfered
+// (Thread/chamfer, the Thread's own cut corners).
 // The list itself is `stores/prompt-stash`.
 
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { stashAge, stashPreview, stashSourceLabel, type StashRecord } from '@/lib/prompt-stash/record'
 import type { ContextMenuItemDef } from '@/stores/context-menu'
 import { ZEN_DRAWER_EAR_FILL } from '@/components/Zen/widgets/ZenActivityDrawer'
+import { CHAMFER_CUT, CHAMFER_SCOPE, chamferPolygon, chamferVars } from '@/components/Thread/chamfer'
+import { SquareCheckbox } from '@/components/ui/SquareCheckbox'
 
-/** Slide length (ms), the activity drawer's. */
+/** Open: slide + fade in (ms). */
 export const STASH_DRAWER_MS = 200
+/** Close: the same, reversed (ms); the drawer stays mounted this long. */
+export const STASH_DRAWER_OUT_MS = 180
+
+/** Does this window ask for less motion? (Then the drawer closes at once.) */
+export function stashPrefersReducedMotion(): boolean {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      : false
+  } catch {
+    return false
+  }
+}
 
 export const STASH_CSS = `
-@keyframes k2-stash-in { from { transform: translateY(calc(100% + 8px)); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@keyframes k2-stash-in { from { transform: translateY(14px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes k2-stash-out { from { transform: none; opacity: 1; } to { transform: translateY(14px); opacity: 0; } }
 @keyframes k2-stash-pop { 0% { transform: scale(1); } 40% { transform: scale(1.18); } 100% { transform: scale(1); } }
-[data-stash-drawer] { animation: k2-stash-in ${STASH_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
+[data-stash-drawer] { animation: k2-stash-in ${STASH_DRAWER_MS}ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+[data-stash-drawer][data-closing="true"] { animation: k2-stash-out ${STASH_DRAWER_OUT_MS}ms cubic-bezier(0.7, 0, 0.84, 0) both; pointer-events: none; }
 [data-stash-count][data-pop="true"], [data-stash-icon][data-pop="true"] { animation: k2-stash-pop 360ms ease-out; }
 [data-stash-row][data-active="true"] { background: var(--stash-row-active); }
 [data-stash-row]:hover { background: var(--stash-row-active); }
 [data-stash-row] [data-stash-remove] { opacity: 0.55; }
 [data-stash-row]:hover [data-stash-remove], [data-stash-row][data-active="true"] [data-stash-remove] { opacity: 1; }
+${CHAMFER_SCOPE} [data-stash-drawer][data-chamfer] { overflow: visible !important; }
+${CHAMFER_SCOPE} [data-stash-row] { border-radius: 0 !important; clip-path: ${chamferPolygon('0px')}; }
 @media (prefers-reduced-motion: reduce) {
-  [data-stash-drawer], [data-stash-count], [data-stash-icon] { animation: none !important; }
+  [data-stash-drawer], [data-stash-drawer][data-closing="true"], [data-stash-count], [data-stash-icon] { animation: none !important; }
 }
 `
+
+/** The tab's (and the drawer's) top corners on the Thread box. */
+const STASH_EAR_RADIUS = 'calc(var(--zen-radius) + 2px)'
 
 export function StashGlyph({ size = 12 }: { size?: number }): JSX.Element {
   return (
@@ -113,26 +140,38 @@ export function StashTab({
   open,
   onToggle,
   chord,
+  handle = false,
+  concealed = false,
 }: {
   count: number
   open: boolean
   onToggle: () => void
   /** "⌘S" / "Ctrl+S". */
   chord: string
+  /** Drawn on the open drawer's top edge, as its handle. */
+  handle?: boolean
+  /** The box-edge tab while its drawer is up (the handle stands in): kept
+   *  for its place, not seen, not focusable. */
+  concealed?: boolean
 }): JSX.Element {
   const pop = useCountPop(count)
   return (
     <button
       type="button"
-      data-testid="stash-button"
+      data-testid={handle ? 'stash-handle' : 'stash-button'}
       data-stash-tab=""
+      data-stash-handle={handle ? '' : undefined}
       aria-label={stashButtonLabel(count)}
       aria-expanded={open}
       aria-haspopup="listbox"
+      aria-hidden={concealed || undefined}
+      tabIndex={concealed ? -1 : undefined}
       title={`Stash: ${chord} saves what you're writing; ${chord} on an empty box opens this`}
       // Keep the caret in the message box.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onToggle}
+      // K2's square Style: chamfered top corners, like the activity drawer's tab.
+      data-chamfer=""
       className="inline-flex flex-none cursor-pointer items-center justify-center"
       style={{
         gap: 4,
@@ -146,7 +185,15 @@ export function StashTab({
         background: ZEN_DRAWER_EAR_FILL,
         border: '1px solid var(--zen-border)',
         borderBottom: 'none',
-        borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0',
+        borderRadius: `${STASH_EAR_RADIUS} ${STASH_EAR_RADIUS} 0 0`,
+        visibility: concealed ? 'hidden' : undefined,
+        ...chamferVars({
+          cut: [CHAMFER_CUT.drawer, CHAMFER_CUT.drawer, 0, 0],
+          fill: ZEN_DRAWER_EAR_FILL,
+          edge: 'var(--zen-border)',
+          border: 1,
+          outset: '-1px -1px 0 -1px',
+        }),
       }}
     >
       {/* No count on the tab (Rosson 2026-10-30); the label still says how
@@ -213,6 +260,10 @@ export interface StashDrawerProps {
   chord: string
   /** `zen`: on the Thread box's top edge; `square`: the terminal bar's. */
   look: 'zen' | 'square'
+  /** Sliding back out (it unmounts after `STASH_DRAWER_OUT_MS`). */
+  closing?: boolean
+  /** On its top edge at the right: the stash tab, as the drawer's handle. */
+  handle?: ReactNode
   /** Clock (tests). */
   now?: number
 }
@@ -228,6 +279,8 @@ export function StashDrawer({
   onRemoveAfterUseChange,
   chord,
   look,
+  closing = false,
+  handle,
   now,
 }: StashDrawerProps): JSX.Element {
   const listRef = useRef<HTMLDivElement>(null)
@@ -277,14 +330,22 @@ export function StashDrawer({
   }
 
   const zen = look === 'zen'
+  // With a handle, the top-right corner runs straight into it: one shape.
   const shell: CSSProperties = zen
     ? {
         background: ZEN_DRAWER_EAR_FILL,
         border: '1px solid var(--zen-border)',
         borderBottom: 'none',
-        borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0',
+        borderRadius: `${STASH_EAR_RADIUS} ${handle ? '0' : STASH_EAR_RADIUS} 0 0`,
         color: 'var(--zen-text)',
         ['--stash-row-active' as string]: 'var(--zen-surface-raised)',
+        ...chamferVars({
+          cut: [CHAMFER_CUT.drawer, handle ? 0 : CHAMFER_CUT.drawer, 0, 0],
+          fill: ZEN_DRAWER_EAR_FILL,
+          edge: 'var(--zen-border)',
+          border: 1,
+          outset: '-1px -1px 0 -1px',
+        }),
       }
     : {
         background: 'var(--color-bg-elevated)',
@@ -297,8 +358,23 @@ export function StashDrawer({
   const activeId = items[at] ? `stash-row-${items[at].id}` : undefined
 
   return (
-    <div data-stash-drawer="" data-testid="stash-drawer" data-look={look} className="flex min-w-0 flex-col" style={{ ...shell, overflow: 'hidden' }}>
+    <div
+      data-stash-drawer=""
+      data-testid="stash-drawer"
+      data-look={look}
+      data-closing={closing ? 'true' : undefined}
+      data-chamfer={zen ? '' : undefined}
+      className="relative flex min-w-0 flex-col"
+      // The list scrolls inside; the drawer itself never clips (its handle
+      // sits above its top edge).
+      style={{ ...shell, overflow: handle ? 'visible' : 'hidden' }}
+    >
       <style data-stash-styles="">{STASH_CSS}</style>
+      {handle ? (
+        <div data-stash-handle-slot="" style={{ position: 'absolute', right: -1, bottom: 'calc(100% - 1px)', zIndex: 1 }}>
+          {handle}
+        </div>
+      ) : null}
       <div className="flex items-center" style={{ gap: 8, padding: '6px 10px 4px 12px', fontSize: 12, color: muted }}>
         <StashGlyph size={12} />
         <span style={{ fontWeight: 600, color: zen ? 'var(--zen-text)' : 'var(--color-text-primary)' }}>Stash</span>
@@ -348,7 +424,8 @@ export function StashDrawer({
                 onMouseEnter={() => setActive(i)}
                 onClick={() => onPick(rec)}
                 className="flex min-w-0 cursor-pointer items-start"
-                style={{ gap: 8, padding: '6px 8px', borderRadius: zen ? 8 : 0 }}
+                // Square Style: chamfered like the Thread's chips (STASH_CSS).
+                style={{ gap: 8, padding: '6px 8px', borderRadius: zen ? 8 : 0, ...chamferVars({ cut: CHAMFER_CUT.button, fill: 'transparent' }) }}
               >
                 <div className="flex min-w-0 flex-1 flex-col" style={{ gap: 1 }}>
                   <span data-stash-preview="" className="min-w-0 truncate" style={{ fontSize: 13, lineHeight: '18px' }}>
@@ -388,8 +465,7 @@ export function StashDrawer({
         className="flex cursor-pointer items-center"
         style={{ gap: 6, padding: '5px 12px 7px', fontSize: 11, color: muted, borderTop: `1px solid ${zen ? 'var(--zen-border)' : 'var(--color-border)'}` }}
       >
-        <input
-          type="checkbox"
+        <SquareCheckbox
           data-testid="stash-remove-after-use"
           checked={removeAfterUse}
           onChange={(e) => onRemoveAfterUseChange(e.target.checked)}

@@ -62,7 +62,7 @@ export function chamferVars(o: {
 }
 
 /** The cut polygon, each corner's cut less `less` (the inner fill's). */
-function chamferPolygon(less: string): string {
+export function chamferPolygon(less: string): string {
   const c = (k: string): string => `max(0px, calc(var(--ch-${k}) - ${less}))`
   return (
     `polygon(${c('tl')} 0, calc(100% - ${c('tr')}) 0, 100% ${c('tr')}, 100% calc(100% - ${c('br')}), ` +

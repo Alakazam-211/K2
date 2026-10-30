@@ -8,6 +8,7 @@
 // so an agent can't accept its own card. A name clash (`name_taken`) offers
 // a new name or Replace (a new version of the current secret).
 
+import { SquareCheckbox } from '@/components/ui/SquareCheckbox'
 import { useState, type JSX } from 'react'
 import { daemonErrorOf, daemonErrorText } from '@/lib/daemon-error'
 import { CHAMFER_CUT, chamferVars } from '@/components/Thread/chamfer'
@@ -181,8 +182,7 @@ export function HandoffCard({ handoff, answeredBy, nowSec, onDecide, remoteHost 
       )}
       {!remoteHost && (
       <label className={`flex items-center gap-1 cursor-pointer ${muted}`}>
-        <input
-          type="checkbox"
+        <SquareCheckbox
           data-testid="thread-handoff-always"
           checked={always}
           onChange={(e) => setAlways(e.target.checked)}

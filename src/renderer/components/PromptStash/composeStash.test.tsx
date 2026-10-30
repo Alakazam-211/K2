@@ -315,8 +315,10 @@ describe('the button and the drawer', () => {
     expect(activityPhase()).toBe('out')
     // Esc closes it; the bar slides back in.
     fireEvent.keyDown(screen.getByTestId('stash-list'), { key: 'Escape' })
-    expect(screen.queryByTestId('stash-drawer')).toBeNull()
+    // It slides back out, then goes; the bar comes back at once.
+    expect(screen.getByTestId('stash-drawer').getAttribute('data-closing')).toBe('true')
     expect(activityPhase()).toBe('in')
+    await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
   })
 
   it('arrow keys and Enter pick; the pick goes below existing text, the bar comes back, the item stays', async () => {
@@ -331,8 +333,8 @@ describe('the button and the drawer', () => {
     fireEvent.keyDown(list, { key: 'ArrowDown' })
     fireEvent.keyDown(list, { key: 'Enter' })
     expect(box().value).toBe('already typed\n\nsecond stash')
-    expect(screen.queryByTestId('stash-drawer')).toBeNull()
     expect(activityPhase()).toBe('in')
+    await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20))
     })
@@ -394,7 +396,74 @@ describe('closing the drawer', () => {
     await screen.findByTestId('stash-drawer')
     expect(activityPhase()).toBe('out')
     fireEvent.mouseDown(document.body)
-    expect(screen.queryByTestId('stash-drawer')).toBeNull()
     expect(activityPhase()).toBe('in')
+    await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
+  })
+})
+
+describe('the drawer and its tab (Rosson 2026-10-30)', () => {
+  it('opens with a slide-in, closes with the reverse, then unmounts; reopening while it leaves keeps it', async () => {
+    renderThreadBar()
+    fireEvent.click(screen.getByTestId('stash-button'))
+    const drawer = await screen.findByTestId('stash-drawer')
+    expect(drawer.hasAttribute('data-closing')).toBe(false)
+    const css = drawer.querySelector('style[data-stash-styles]')?.textContent ?? ''
+    expect(css).toContain('[data-stash-drawer] { animation: k2-stash-in 200ms')
+    expect(css).toContain('[data-stash-drawer][data-closing="true"] { animation: k2-stash-out 180ms')
+    expect(css).toMatch(/prefers-reduced-motion: reduce\)[^}]*\[data-stash-drawer\]/)
+    // The handle closes it: it slides out...
+    fireEvent.click(screen.getByTestId('stash-handle'))
+    expect(screen.getByTestId('stash-drawer').getAttribute('data-closing')).toBe('true')
+    // ...and the tab opens it again before it is gone: it stays.
+    fireEvent.click(screen.getByTestId('stash-button'))
+    expect(screen.getByTestId('stash-drawer').hasAttribute('data-closing')).toBe(false)
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 260))
+    })
+    expect(screen.queryByTestId('stash-drawer')).not.toBeNull()
+    fireEvent.keyDown(screen.getByTestId('stash-list'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
+  })
+
+  it('open, the tab rides on the drawer\'s top edge as its handle, one shape; the edge tab steps aside', async () => {
+    renderThreadBar()
+    const edgeTab = screen.getByTestId('stash-button')
+    expect(edgeTab.style.visibility).toBe('')
+    fireEvent.click(edgeTab)
+    const drawer = await screen.findByTestId('stash-drawer')
+    const handle = within(drawer).getByTestId('stash-handle')
+    expect(handle.getAttribute('aria-expanded')).toBe('true')
+    expect(handle.style.width).toBe('44px')
+    const slot = handle.parentElement as HTMLElement
+    expect(slot.style.position).toBe('absolute')
+    expect(slot.style.bottom).toBe('calc(100% - 1px)')
+    expect(slot.style.right).toBe('-1px')
+    // The drawer's top-right corner runs straight into the handle.
+    expect(drawer.style.borderRadius).toBe('calc(var(--zen-radius) + 2px) 0 0 0')
+    expect(drawer.style.getPropertyValue('--ch-tr')).toBe('0px')
+    expect(drawer.style.getPropertyValue('--ch-tl')).toBe('5px')
+    expect(drawer.style.overflow).toBe('visible')
+    // The edge tab keeps its place, unseen and out of the tab order.
+    expect(edgeTab.style.visibility).toBe('hidden')
+    expect(edgeTab.getAttribute('aria-hidden')).toBe('true')
+    expect(edgeTab.tabIndex).toBe(-1)
+  })
+
+  it('chamfered in the square Style: the tab, the drawer and its rows; the checkbox is the themed one', async () => {
+    await realSave({ text: 'a row', source: { server_id: 'local', server_label: '', user: '', agent: '', agent_name: '' } }, [], { now: 1_000 })
+    renderThreadBar()
+    const edgeTab = screen.getByTestId('stash-button')
+    expect(edgeTab.hasAttribute('data-chamfer')).toBe(true)
+    expect(['tl', 'tr', 'br', 'bl'].map((k) => edgeTab.style.getPropertyValue(`--ch-${k}`))).toEqual(['5px', '5px', '0px', '0px'])
+    fireEvent.click(edgeTab)
+    const drawer = await screen.findByTestId('stash-drawer')
+    expect(drawer.hasAttribute('data-chamfer')).toBe(true)
+    await waitFor(() => expect(drawer.querySelectorAll('[data-stash-row]')).toHaveLength(1))
+    const rowEl = drawer.querySelector('[data-stash-row]') as HTMLElement
+    expect(rowEl.style.getPropertyValue('--ch-tl')).toBe('3px')
+    const css = drawer.querySelector('style[data-stash-styles]')?.textContent ?? ''
+    expect(css).toContain('html[data-style="square"] [data-k2-thread-zen] [data-stash-row] { border-radius: 0 !important; clip-path: polygon(')
+    const check = screen.getByTestId('stash-remove-after-use')
+    expect(check.className).toContain('k2-square-check')
   })
 })

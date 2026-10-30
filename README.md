@@ -72,10 +72,12 @@ extensions move there; the family name says which mode a doc was opened in.
 A table here is its text. A row is a line, a cell is the characters between two delimiters,
 and the pack doesn't parse either. That gives:
 
-- **What works:** concurrent edits to different rows merge, and so do edits to different
-  cells of one row and two appended rows. People merge as live text; agents merge through
-  `write --base` (by character, with no last-writer-wins). The tests show two agents
-  editing two rows of the same version at the same moment, and both edits land.
+- **What works:** concurrent edits to different rows merge (adjacent rows too), and so do
+  two appended rows. People merge as live text, cells of one row included; agents merge
+  through `write --base`, by whole lines, with no last-writer-wins. Two agents editing
+  different cells of the **same row** (one line) conflict: the second is refused, re-reads
+  and retries (kit v0.9.7.1). The tests show two agents editing two rows of the same version
+  at the same moment, and both edits land.
 - **Fidelity, as for every type:** byte-exact. CRLF (the RFC 4180 and Excel style) and CR
   (old Mac Excel) are kept, as are the BOM of an Excel "CSV UTF-8" export, the delimiter
   (comma, semicolon, tab), the quoting and the final newline. A quoted field with a line

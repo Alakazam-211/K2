@@ -482,8 +482,10 @@ fn two_agents_editing_different_rows_concurrently_both_land() {
     );
 }
 
-/// Merges are by character, so "different rows" is generous: adjacent rows, different
-/// cells of one row, and two appended rows all land, in every line-ending style.
+/// Different rows merge, adjacent rows and two appended rows too, in every line-ending
+/// style. Since kit v0.9.7.1 `write --base` merges by whole lines, and in CSV-as-text a row
+/// is one line: two agents editing different cells of the same row conflict, and the second
+/// re-reads and retries (below).
 #[test]
 fn concurrent_row_and_cell_edits_merge_in_every_style() {
     let f = fx("csv-cells");
@@ -498,10 +500,10 @@ fn concurrent_row_and_cell_edits_merge_in_every_style() {
             "id\tname\tqty\n1\tana\t11\n2\tben\t22\n3\tcy\t30\n",
         ),
         (
-            "two cells of one row",
-            ("2\tben\t", "2\tbenedict\t"),
-            ("\t20\n", "\t21\n"),
-            "id\tname\tqty\n1\tana\t10\n2\tbenedict\t21\n3\tcy\t30\n",
+            "cells in different rows",
+            ("1\tana\t", "1\tanabel\t"),
+            ("\t30\n", "\t33\n"),
+            "id\tname\tqty\n1\tanabel\t10\n2\tben\t20\n3\tcy\t33\n",
         ),
         (
             "two appended rows",
@@ -534,6 +536,61 @@ fn concurrent_row_and_cell_edits_merge_in_every_style() {
                 "{what} ({eol:?})"
             );
         }
+    }
+}
+
+/// Two cells of one row (kit v0.9.7.1): the row is one line, so the second agent's
+/// `write --base` from the same base conflicts and applies nothing; it re-reads the current
+/// version, makes its change again, and that write lands, with both cells changed. In every
+/// line-ending style.
+#[test]
+fn two_cells_of_one_row_conflict_and_the_retry_lands() {
+    let f = fx("csv-row");
+    let base = "id\tname\tqty\n1\tana\t10\n2\tben\t20\n3\tcy\t30\n";
+    let merged = "id\tname\tqty\n1\tana\t10\n2\tbenedict\t21\n3\tcy\t30\n";
+    for (eol, style) in [("\n", "lf"), ("\r\n", "crlf"), ("\r", "cr")] {
+        let name = format!("row-{style}.tsv");
+        let in_style = |t: &str| t.replace('\n', eol);
+        f.write(&name, in_style(base).as_bytes());
+        let s = f.open(&name);
+        let (a, b) = (f.join(&s, "agent-a"), f.join(&s, "agent-b"));
+        let v = s.read(a).unwrap().version;
+        let out = s
+            .write_base(
+                a,
+                ROOT,
+                v,
+                &in_style(&edit(base, "2\tben\t", "2\tbenedict\t")),
+            )
+            .unwrap();
+        assert!(
+            matches!(out, WriteOutcome::Applied(_)),
+            "a ({eol:?}): {out:?}"
+        );
+        // b, from the same base, changes another cell of the same row: refused
+        let b_text = in_style(&edit(base, "\t20\n", "\t21\n"));
+        match s.write_base(b, ROOT, v, &b_text).unwrap() {
+            WriteOutcome::Conflicts(c) => {
+                assert_eq!(c.len(), 1, "{c:?}");
+                assert_eq!(c[0].lines, (3, 3), "{c:?}");
+            }
+            other => panic!("two cells of one row merged ({eol:?}): {other:?}"),
+        }
+        // b re-reads the current version and writes its change again: it lands
+        let now = s.read(b).unwrap();
+        let current = body_of(&now.bytes);
+        let retry = edit(
+            &current,
+            &in_style("benedict\t20\n"),
+            &in_style("benedict\t21\n"),
+        );
+        let out = s.write_base(b, ROOT, now.version, &retry).unwrap();
+        assert!(
+            matches!(out, WriteOutcome::Applied(_)),
+            "b's retry ({eol:?}): {out:?}"
+        );
+        assert!(s.flush(a).unwrap().written);
+        assert_eq!(f.bytes(&name), in_style(merged).as_bytes(), "{eol:?}");
     }
 }
 

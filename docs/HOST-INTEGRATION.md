@@ -68,8 +68,10 @@ its next open is `PackMismatch`, as for any change of pack, and the host decides
 re-import (section 5, renames). A host should say the file is in text mode, so people
 expect what it does and doesn't do (README, "CSV and TSV as text"):
 
-- Edits to different rows and different cells merge, for people live and for agents
-  through `write --base`.
+- Edits to different rows merge, for people live and for agents through `write --base`.
+  Different cells of one row merge for people live; for agents (`write --base`, by whole
+  lines since kit v0.9.7.1) the second write to the same row is refused as a conflict, and
+  the agent re-reads and retries.
 - A moved or sorted row has no identity. A concurrent edit to it conflicts (agents) or
   leaves a fragment where the row was (people).
 - Column moves rewrite every line.

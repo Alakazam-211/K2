@@ -270,7 +270,9 @@ fn import_works_while_this_box_vault_is_closed_and_refuses_bad_input() {
     // Relative paths and a missing file are refused by name.
     let (_, r) = new.call(IMPORT, person(), None, json!({ "file": "c.k2mv", "apply": true }));
     assert_eq!(code(&r), "path_not_absolute");
-    let (_, r) = new.call(IMPORT, person(), None, json!({ "file": "/nonexistent/x.k2mv" }));
+    // An absolute path on every OS (a bare /x has no drive on Windows).
+    let missing = new.home.join("nonexistent").join("x.k2mv");
+    let (_, r) = new.call(IMPORT, person(), None, json!({ "file": missing }));
     assert_eq!(code(&r), "not_found");
     // Closed vault: no confirm to take; K2 Web is held, a person imports.
     let (s, h) = new.call(IMPORT, app(), NO_TTY, json!({ "file": out, "apply": true }));

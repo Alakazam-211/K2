@@ -426,6 +426,9 @@ fn set_external(row: &MailAddress, caller: &Caller, dest: &str, keep: bool, now:
     });
     let (f, note) = changed(r)?;
     let pending = f.state == store::ST_PENDING_VERIFY;
+    if !pending {
+        forward_verify::notice_activated(&f);
+    }
     Ok(json!({
         "ok": true,
         "accepted": pending,

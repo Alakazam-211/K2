@@ -158,6 +158,35 @@ fn send_from_mailbox(mailbox: &str, account_id: &str, to: &str, row_id: &str, c:
         })
 }
 
+/// Tell the owner an outside forward just started (no approval asked:
+/// Rosson 2026-10-30; this is the record). FW-A23: an agent mailbox's
+/// forwarded mail skips agent-send approval and always-BCC, so it says so.
+pub fn notice_activated(f: &store::Forward) {
+    if !f.is_external() || !f.is_active() {
+        return;
+    }
+    let title = format!("Forwarding to an outside address is on for {}", f.address);
+    let who = if f.set_by.starts_with("agent:") {
+        format!("the AI agent {}", f.set_by.trim_start_matches("agent:"))
+    } else if let Some(p) = f.set_by.strip_prefix("person:") {
+        p.to_string()
+    } else {
+        f.set_by.clone()
+    };
+    let body = format!(
+        "{} now forwards its incoming mail to {} ({}), set by {who} and confirmed by the destination. \
+         Forwarded mail leaves this server without agent-send approval or BCC. Spam, bounces and mail \
+         that fails DMARC stay in the mailbox. Stop it with: k2 hostmail forward unset {}",
+        f.address,
+        f.dest,
+        if f.keep { "keeps a copy" } else { "no copy kept" },
+        f.address
+    );
+    if let Err(e) = crate::feedback_routes::file_owner_notice(k2_core::db::AUDIT_SENTINEL_IDS[0], "k2-email", &title, &body) {
+        k2_core::log_debug!("{P} WARN owner notice for forward {}: {e}", f.id);
+    }
+}
+
 /// The destination pressed Confirm: its mailbox's waiting forward starts.
 pub fn on_confirmed(v: &vstore::Verified) {
     let waiting = {
@@ -170,7 +199,10 @@ pub fn on_confirmed(v: &vstore::Verified) {
     }) {
         let change = store::Change { verified_address_id: Some(&v.id), actor: "recipient", ..Default::default() };
         match super::forward_sync::transition_and_sync(&f.id, store::ST_ACTIVE, &change) {
-            Ok(_) => k2_core::log_debug!("{P} forward {} confirmed and active", f.id),
+            Ok(row) => {
+                k2_core::log_debug!("{P} forward {} confirmed and active", f.id);
+                notice_activated(&row);
+            }
             Err(e) => k2_core::log_debug!("{P} forward {} confirmed: {}", f.id, email_notify::send::mask_addresses(&e.to_string())),
         }
     }

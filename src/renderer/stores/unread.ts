@@ -110,6 +110,25 @@ function parseTotals(raw: unknown): UnreadTotals | null {
   return { total: raw.total, waitingTotal: raw.waitingTotal }
 }
 
+const isCount = (v: unknown): boolean => typeof v === 'number' && Number.isFinite(v)
+
+/** A well-formed entry (what `parseUnreadEntry` makes). `applyState` drops
+ *  anything else on the way in, so the badge selectors never read a
+ *  malformed one. */
+export function isUnreadEntry(e: unknown): e is UnreadEntry {
+  if (!isObj(e)) return false
+  return (
+    (e.kind === 'thread' || e.kind === 'project') &&
+    typeof e.id === 'string' &&
+    e.id !== '' &&
+    isCount(e.unread) &&
+    isCount(e.waiting) &&
+    isCount(e.lastSeq) &&
+    isCount(e.lastReadSeq) &&
+    typeof e.muted === 'boolean'
+  )
+}
+
 /** Kept in the store only while it says something. */
 function worthKeeping(e: UnreadEntry): boolean {
   return e.unread > 0 || e.waiting > 0 || e.muted
@@ -187,6 +206,11 @@ export const useUnreadStore = create<UnreadStoreState>((set, get) => ({
     }
   },
   applyState: (entry, totals) => {
+    if (!isUnreadEntry(entry)) {
+      console.warn('[unread] dropped a malformed entry:', entry)
+      if (totals) set({ total: totals.total, waitingTotal: totals.waitingTotal })
+      return
+    }
     set((s) => ({
       byKey: withEntry(s.byKey, entry),
       ...(totals ? { total: totals.total, waitingTotal: totals.waitingTotal } : {}),
@@ -388,7 +412,7 @@ export async function markAgentAllRead(scope: ServerScope, projectId: string): P
 export function selectProjectBadgeCount(s: Pick<UnreadStoreState, 'byKey'>): number {
   let n = 0
   for (const e of Object.values(s.byKey)) {
-    if (e.kind !== 'project') continue
+    if (!e || e.kind !== 'project') continue
     if (e.waiting > 0 || (!e.muted && e.unread > 0)) n += 1
   }
   return n

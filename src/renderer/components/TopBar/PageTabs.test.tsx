@@ -17,7 +17,7 @@ const h = vi.hoisted(() => {
     closeSettings: vi.fn(() => {
       settings.settingsOpen = false
     }),
-    keybindings: {} as Record<string, string>,
+    keybindings: {} as Record<string, string> | undefined,
   }
   const feedback = {
     waitingCount: 0,
@@ -27,7 +27,9 @@ const h = vi.hoisted(() => {
   }
   // thread-read-v1: the daemon's unread entries (`stores/unread.ts` shape).
   const unread = { byKey: {} as Record<string, { kind: string; id: string; unread: number; waiting: number; muted: boolean }> }
-  return { settings, feedback, unread }
+  // Typed loose so a test can hand PageTabs a malformed value.
+  const projects = { projects: [] as unknown }
+  return { settings, feedback, unread, projects }
 })
 
 function hookOf<T extends object>(state: T): ((sel: (s: T) => unknown) => unknown) & { getState: () => T } {
@@ -56,7 +58,7 @@ vi.mock('@/stores/unread', async () => {
   return { selectProjectBadgeCount: actual.selectProjectBadgeCount, useUnreadStore: hookOf(h.unread) }
 })
 vi.mock('@/stores/projects', () => ({
-  useProjectsStore: hookOf({ projects: [] as { id: string }[] }),
+  useProjectsStore: hookOf(h.projects),
 }))
 
 import PageTabs, { PAGE_TAB_ICON_PX, PAGE_TAB_ITEMS, settingsTabTitle } from './PageTabs'
@@ -68,6 +70,8 @@ afterEach(() => {
   h.settings.settingsOpen = false
   h.feedback.waitingCount = 0
   h.unread.byKey = {}
+  h.projects.projects = []
+  h.settings.keybindings = {}
   usePageViewStore.getState().setPage('agents')
 })
 
@@ -300,5 +304,31 @@ describe('PageTabs — Wiki tab (0.46.0)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Wiki' }))
     expect(h.settings.closeSettings).toHaveBeenCalled()
     expect(usePageViewStore.getState().page).toBe('wiki')
+  })
+})
+
+describe('PageTabs — malformed store values never crash the top bar', () => {
+  it('a non-array projects value renders the tabs', () => {
+    for (const bad of [undefined, null, {}, 'x', [null, { id: 'p1' }]]) {
+      h.projects.projects = bad
+      const { container } = render(<PageTabs />)
+      expect(tabs(container)).toHaveLength(6)
+      cleanup()
+    }
+  })
+
+  it('settings with no keybindings map fall back to the default chords', () => {
+    h.settings.keybindings = undefined
+    const { container } = render(<PageTabs />)
+    expect(tabs(container)).toHaveLength(6)
+    expect(screen.getByRole('button', { name: 'Settings' }).getAttribute('title')).toBe(
+      settingsTabTitle({}, currentShortcutOs()),
+    )
+  })
+
+  it('a malformed unread entry is not counted on the Projects badge', () => {
+    h.unread.byKey = { bad: null as unknown as (typeof h.unread.byKey)[string] }
+    const { container } = render(<PageTabs />)
+    expect(tabs(container)).toHaveLength(6)
   })
 })

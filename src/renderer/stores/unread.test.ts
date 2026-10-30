@@ -66,11 +66,13 @@ vi.mock('@/lib/daemon-cli', async () => {
 import {
   __resetUnreadForTests,
   initUnreadEvents,
+  isUnreadEntry,
   parseUnreadEntry,
   selectProjectBadgeCount,
   threadSumForProject,
   unreadCountText,
   useUnreadStore,
+  type UnreadEntry,
 } from '@/stores/unread'
 import { noteServerVersion } from '@/kessel/server-scope'
 
@@ -211,6 +213,33 @@ describe('live frames', () => {
     const s = useUnreadStore.getState()
     expect(s.byKey['project:g9']).toMatchObject({ kind: 'project', id: 'g9', unread: 1, projectId: null })
     expect(selectProjectBadgeCount(s)).toBe(2)
+  })
+})
+
+describe('malformed entries (PageTabs crash hardening)', () => {
+  it('applyState drops an entry with no kind, a bad id or non-number counts; totals still apply', () => {
+    const before = useUnreadStore.getState().byKey
+    for (const bad of [
+      null,
+      { id: 'x', unread: 1, waiting: 0, lastSeq: 1, lastReadSeq: 0, muted: false },
+      { kind: 'project', id: '', unread: 1, waiting: 0, lastSeq: 1, lastReadSeq: 0, muted: false },
+      { kind: 'project', id: 'g7', unread: '1', waiting: 0, lastSeq: 1, lastReadSeq: 0, muted: false },
+      { kind: 'project', id: 'g8', unread: 1, lastSeq: 1, lastReadSeq: 0, muted: false },
+    ]) {
+      useUnreadStore.getState().applyState(bad as unknown as UnreadEntry, { total: 42, waitingTotal: 4 })
+    }
+    const s = useUnreadStore.getState()
+    expect(s.byKey).toEqual(before)
+    expect(s.total).toBe(42)
+    expect(s.waitingTotal).toBe(4)
+    expect(selectProjectBadgeCount(s)).toBe(1)
+  })
+
+  it('isUnreadEntry accepts what parseUnreadEntry makes', () => {
+    const e = parseUnreadEntry({ kind: 'project', id: 'g1', unread: 2, lastSeq: 3 })
+    expect(e).not.toBeNull()
+    expect(isUnreadEntry(e)).toBe(true)
+    expect(isUnreadEntry({ kind: 'thread', id: 'c1' })).toBe(false)
   })
 })
 

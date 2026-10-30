@@ -108,8 +108,16 @@ export function getDefaultKeybindings(isMac = true): Record<string, string> {
 
 /** The combo in force for `id`: the user's override, else the platform's
  *  default ('' for an unknown id). */
-export function effectiveKeybinding(keybindings: Record<string, string>, id: string, isMac: boolean): string {
-  if (keybindings[id]) return keybindings[id]
+export function effectiveKeybinding(
+  keybindings: Record<string, string> | null | undefined,
+  id: string,
+  isMac: boolean,
+): string {
+  // Settings come from the daemon (any server version): a missing or
+  // non-object map, or a non-string override, falls back to the default.
+  const map = keybindings && typeof keybindings === 'object' && !Array.isArray(keybindings) ? keybindings : null
+  const own = map ? map[id] : undefined
+  if (typeof own === 'string' && own) return own
   return getDefaultKeybindings(isMac)[id] ?? ''
 }
 

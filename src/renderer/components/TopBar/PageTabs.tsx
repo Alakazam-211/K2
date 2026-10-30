@@ -173,7 +173,8 @@ export default function PageTabs(): React.JSX.Element {
   const projects = useProjectsStore((s) => s.projects)
   // Membership only — reorder/color must not re-fan-out waiting-count
   // (that N+1 over E2E is the Settings-drag disconnect on large remotes).
-  const projectIdsKey = projects.map((p) => p.id).join('\0')
+  // Defensive: a malformed store value must not take the top bar down.
+  const projectIdsKey = (Array.isArray(projects) ? projects : []).map((p) => p?.id ?? '').join('\0')
 
   // Moved verbatim from the absorbed FeedbackTopBarButton: wire the
   // feedback:created/answered listeners once (idempotent) and (re)count

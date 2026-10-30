@@ -507,6 +507,17 @@ export function appsSwitchFrom(result: { apps?: boolean; appsPreview?: boolean }
   return result.appsPreview === true
 }
 
+/** The daemon's `keybindings` as a map of id -> combo: `{}` when it is
+ *  missing or not an object (an older or odd server), string combos only. */
+export function normalizeKeybindings(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: Record<string, string> = {}
+  for (const [id, combo] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof combo === 'string') out[id] = combo
+  }
+  return out
+}
+
 async function persistAndApply(
   set: (state: Partial<SettingsState>) => void,
   updates: Record<string, any>
@@ -516,7 +527,7 @@ async function persistAndApply(
     const result = await settingsUpdate(updates)
     set({
       terminal: result.terminal,
-      keybindings: result.keybindings,
+      keybindings: normalizeKeybindings(result.keybindings),
       projectSettings: result.projectSettings ?? {},
       defaultAgent: result.defaultAgent ?? 'claude',
       // Always on — ignore any stale false from disk / remote hosts.
@@ -993,7 +1004,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const result = await settingsReset()
     set({
       terminal: result.terminal,
-      keybindings: result.keybindings,
+      keybindings: normalizeKeybindings(result.keybindings),
       projectSettings: result.projectSettings ?? {},
       ownerDisplayName: result.ownerDisplayName ?? '',
       allowRemoteInstruct: result.allowRemoteInstruct ?? false,
@@ -1056,7 +1067,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     migrateStyleFromDaemon(result.style)
     set({
       terminal: result.terminal,
-      keybindings: result.keybindings,
+      keybindings: normalizeKeybindings(result.keybindings),
       projectSettings: result.projectSettings ?? {},
       defaultAgent: result.defaultAgent ?? 'claude',
       // Always on — ignore any stale false from disk / remote hosts.
@@ -1093,7 +1104,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
  * falling back to the default if no override exists.
  */
 export function getEffectiveKeybinding(
-  keybindings: Record<string, string>,
+  keybindings: Record<string, string> | null | undefined,
   id: string,
   isMac: boolean = isMacPlatform()
 ): string {

@@ -174,7 +174,7 @@ export function initFeedbackEvents(notify: boolean): void {
   // window's connection. A stopped daemon sends no feedback event, so
   // without these the badge would never notice it is out of date.
   let lastHostKey = homeHostKey(useConnectHostStore.getState().activeHost)
-  let lastRecoveryKind = useConnectHostStore.getState().recovery.kind
+  let lastRecoveryKind = useConnectHostStore.getState().recovery?.kind
   useConnectHostStore.subscribe((s) => {
     const hostKey = homeHostKey(s.activeHost)
     if (hostKey !== lastHostKey) {
@@ -182,12 +182,12 @@ export function initFeedbackEvents(notify: boolean): void {
       // new server's projects trigger, so a dead new server shows no badge
       // instead of the last server's number dimmed.
       lastHostKey = hostKey
-      lastRecoveryKind = s.recovery.kind
+      lastRecoveryKind = s.recovery?.kind
       hostEpoch++
       useFeedbackStore.setState({ waitingCount: 0, waitingStale: false, waitingUnsupported: false })
       return
     }
-    const kind = s.recovery.kind
+    const kind = s.recovery?.kind
     if (kind !== lastRecoveryKind) {
       // TB15a: the connection left `connected` → keep the number, mark it
       // stale until a refresh succeeds.

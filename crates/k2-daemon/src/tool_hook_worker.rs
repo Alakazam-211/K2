@@ -63,6 +63,13 @@
 //! | `space_settings` (subject `space:<id>`) | `POST /mgmt/v1/spaces/{id}/settings {governance}` | 409 `box_users_present` → K31 removes of exactly the listed box users, the switch goes again after; 409 `no_governing_app` → blocked (bind again) |
 //! | `channels_bulk` (subject `chans:<id>`) | `POST /mgmt/v1/channels/bulk` | per op, slug → id; 409 `not_app_governed` → retry |
 //! | `space_member_channels` (subject `chan:<id>:<ext>`) | one due row: `POST …/members/{ext}/channels`; more in one Space: `POST …/members/channels` (≤ 500, key from the rows' keys) | per item ([`send_sync_group`]): `skipped` / `unknown_channel_ids` → held; `queued` → done (read back next sweep); 422 `member_not_provisioned` → provisioned again, then synced again |
+//! Sew 0.6.0 `home_client` rows (A23, flag `home_client_owner_approval`):
+//! each send carries the install owner's approval, a fresh `k2:owner` chat
+//! pass under its own `Idempotency-Key` ([`home_client_send`]), and only
+//! for a setting the owner made; anyone else's value blocks unsent.
+//! `403 owner_approval_required` blocks with a clear error (or retries
+//! after a flag re-read when the send carried no approval), and `409
+//! home_client_cannot_govern` blocks with a clear error ([`refine_home`]).
 //!
 //! K26: a pass that finished, blocked or held a row, or saw a row fail for
 //! the first time, emits ONE `sew:changed {reason: grant-hook}` (the
@@ -569,6 +576,121 @@ async fn send_sync_group(
     Ok(false)
 }
 
+/// A retry that keeps this target's pass going (the row waits, nothing was
+/// sent or Sew answered for this row alone).
+fn row_retry(cfg: &WorkerConfig, row: &OutboxRow, status: Option<u16>, error: String) -> Outcome {
+    Outcome::Retry { status, error, delay: backoff(cfg, row.attempts + 1), target_error: None, stop_target: false }
+}
+
+/// Sew 0.6.0 A23 (`home_client_owner_approval`): send one home-client row.
+/// With the flag, the body carries the install owner's approval, a fresh
+/// `k2:owner` chat pass minted here for this one send under its own
+/// `Idempotency-Key` ([`crate::sew::home`]), and only for a setting the
+/// owner made ([`crate::sew::home::owner_actor`]). Without the flag the
+/// row goes as before. `Ok((answer, approved))`; `Err` = nothing was sent.
+async fn home_client_send(
+    cfg: &WorkerConfig,
+    client: &MgmtClient,
+    row: &OutboxRow,
+) -> Result<(Result<MgmtResponse, TransportError>, bool), Outcome> {
+    let path = hook::home::MGMT_HOME_CLIENT;
+    let flags = blocking(hook::sew_features).await.map_err(|e| row_retry(cfg, row, None, e))?;
+    if !flags.iter().any(|f| f == hook::features::HOME_CLIENT_OWNER_APPROVAL) {
+        return Ok((client.post(path, row.payload_raw.as_bytes(), &row.idem_key, &row.actor).await, false));
+    }
+    let actor = row.actor.clone();
+    let owner = blocking(move || Ok(crate::sew::home::owner_actor(&actor, &k2_core::connect_users::role_for_user)))
+        .await
+        .map_err(|e| row_retry(cfg, row, None, e))?;
+    if !owner {
+        crate::vault::auth_audit(crate::sew::home::AUDIT_HOME_CLIENT, &row.actor, "approval refused: not set by the owner", "worker");
+        return Err(Outcome::Blocked {
+            status: None,
+            error: format!(
+                "the home client was set by {}, not this server's owner, so K2 won't send the owner's approval for it; \
+                 the owner sets it again (k2 hostchat home client <app|none>)",
+                row.actor
+            ),
+        });
+    }
+    // The install id every time (a reinstall changes it; the pass names it).
+    let status = match client.get(hook::sew_wire::MGMT_STATUS).await {
+        Ok(r) if r.is_success() => r,
+        Ok(r) if r.status == 401 => {
+            return Err(Outcome::Retry {
+                status: Some(401),
+                error: "mgmt token rejected".into(),
+                delay: backoff(cfg, row.attempts + 1),
+                target_error: Some("mgmt token rejected".into()),
+                stop_target: true,
+            })
+        }
+        Ok(r) => return Err(row_retry(cfg, row, Some(r.status), format!("Sew's status (for the owner's approval): {}", r.error_line()))),
+        Err(e) => {
+            return Err(Outcome::Retry {
+                status: None,
+                error: e.0.clone(),
+                delay: backoff(cfg, row.attempts + 1),
+                target_error: Some(e.0),
+                stop_target: true,
+            })
+        }
+    };
+    let install_id = serde_json::from_slice::<sew_wire::Status>(&status.body)
+        .map(|s| s.install_id)
+        .map_err(|e| row_retry(cfg, row, Some(status.status), format!("Sew's status does not parse ({e})")))?;
+    let now = k2_core::tool_hook::outbox::now_secs();
+    let claims = crate::sew::home::approval_claims(&install_id, now).map_err(|e| row_retry(cfg, row, None, format!("owner approval: {e}")))?;
+    let jti = claims.jti.clone();
+    let pass = blocking(move || crate::chat_pass::sign_chat_pass(&claims).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| row_retry(cfg, row, None, format!("the owner's approval could not be signed (chat-pass keys: {e})")))?;
+    let body = crate::sew::home::with_approval(&row.payload_raw, &pass).map_err(|e| Outcome::Blocked { status: None, error: e })?;
+    crate::vault::auth_audit(crate::sew::home::AUDIT_HOME_CLIENT, &row.actor, &format!("approval minted jti:{jti}"), "worker");
+    Ok((client.post(path, &body, &crate::sew::home::approval_key(&jti), &row.actor).await, true))
+}
+
+/// Sew 0.6.0: a home-client row's refusals, said clearly
+/// ([`crate::sew::home::sew_refusal`]). Returns the outcome and whether to
+/// read Sew's flags again (a `403 owner_approval_required` to a send
+/// without the approval: Sew gained the flag since the last sweep). An
+/// approved send Sew still refuses retries for `dep_wait` (1 h; after a
+/// reinstall the owner's own `owner/set` may not have landed yet, and Sew
+/// counts "no owner" as no approval), then blocks with the clear error.
+pub fn refine_home(
+    cfg: &WorkerConfig,
+    row: &OutboxRow,
+    res: Result<&MgmtResponse, &TransportError>,
+    outcome: Outcome,
+    approved: bool,
+    now: i64,
+) -> (Outcome, bool) {
+    if Op::parse(&row.op) != Some(Op::HomeClient) {
+        return (outcome, false);
+    }
+    let Ok(r) = res else { return (outcome, false) };
+    if r.is_success() {
+        return (outcome, false);
+    }
+    let reason = r.error().and_then(|e| e.error.detail_str("reason").map(str::to_string)).unwrap_or_default();
+    let app_id = serde_json::from_str::<Value>(&row.payload_raw)
+        .ok()
+        .and_then(|v| v.get("app_id").and_then(Value::as_str).map(str::to_string));
+    match crate::sew::home::sew_refusal(r.status, &reason, app_id.as_deref(), approved) {
+        Some((true, error)) if r.status == 403 => {
+            let first = row.first_attempt_at.unwrap_or(now);
+            if (now - first).max(0) as u128 * 1000 > cfg.dep_wait.as_millis() {
+                (Outcome::Blocked { status: Some(r.status), error }, false)
+            } else {
+                (row_retry(cfg, row, Some(r.status), error), false)
+            }
+        }
+        Some((true, error)) => (Outcome::Blocked { status: Some(r.status), error }, false),
+        Some((false, error)) => (row_retry(cfg, row, Some(r.status), error), true),
+        None => (outcome, false),
+    }
+}
+
 /// A8 (b): the filled body for a provision row, `Ok(None)` when nothing
 /// changes (a new member, or Sew's list carries none of the fields), or the
 /// retry outcome when the lookup itself failed.
@@ -723,7 +845,26 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
                     }
                 }
             }
-            let res = if op == Op::AvatarSet {
+            // Sew 0.6.0 A23: the home client goes with the owner's approval.
+            let mut approved = false;
+            let res = if op == Op::HomeClient {
+                match home_client_send(cfg, &client, &row).await {
+                    Ok((r, a)) => {
+                        approved = a;
+                        r
+                    }
+                    Err(outcome) => {
+                        if visible_change(&row, &outcome) {
+                            report.changed += 1;
+                        }
+                        let (stop, _) = apply(&kind, &row, outcome, &mut report).await?;
+                        if stop {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            } else if op == Op::AvatarSet {
                 // A3: the raw picture, read now; a superseded row (the
                 // picture changed or went) finishes unsent.
                 let raw = row.payload_raw.clone();
@@ -753,6 +894,10 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
             };
             let now = k2_core::tool_hook::outbox::now_secs();
             let outcome = refine_space(cfg, &row, classify(cfg, &row, res.as_ref(), now));
+            let (outcome, reread_flags) = refine_home(cfg, &row, res.as_ref(), outcome, approved, now);
+            if reread_flags {
+                hook::kick_reconcile();
+            }
             if visible_change(&row, &outcome) {
                 report.changed += 1;
             }
@@ -1383,6 +1528,64 @@ mod tests {
         ));
         assert!(matches!(classify(&c, &pol, Ok(&resp(200, r#"{"policies":{}}"#, "")), 0), Outcome::Done { status: 200, .. }));
         assert!(Op::DELIVERED.contains(&Op::PolicySet) && Op::DELIVERED.contains(&Op::SpaceUnbind));
+    }
+
+    fn home_row(attempts: i64, app: Option<&str>) -> OutboxRow {
+        let mut r = row("home_client", attempts, "k2ob_home");
+        r.subject_key = "home-client".into();
+        r.payload_raw = serde_json::json!({ "app_id": app }).to_string();
+        r.actor = "owner".into();
+        r
+    }
+
+    /// Sew 0.6.0: a home-client row's refusals land as clear errors, never
+    /// a bare error line; other rows and other answers keep their rules.
+    #[test]
+    fn home_client_refusals_are_clear_and_approval_waits_are_bounded() {
+        let c = cfg();
+        let denied = resp(403, &err("missing_permission", "owner_approval_required", ""), "");
+        let govern = resp(409, &err("conflict", "home_client_cannot_govern", "app_id"), "");
+        let run = |r: &OutboxRow, a: &MgmtResponse, approved: bool, now: i64| {
+            refine_home(&c, r, Ok(a), classify(&c, r, Ok(a), now), approved, now)
+        };
+
+        // Approved and still refused: retry within the wait, then block, the
+        // message naming the reason and what to check.
+        let fresh = home_row(0, Some("hearth"));
+        match run(&fresh, &denied, true, 5_000) {
+            (Outcome::Retry { status: Some(403), error, stop_target: false, .. }, false) => {
+                assert!(error.contains("owner_approval_required"), "{error}")
+            }
+            other => panic!("approved 403 within the wait: {other:?}"),
+        }
+        let old = home_row(3, Some("hearth")); // first attempt at 1_000
+        match run(&old, &denied, true, 1_000 + 3_601) {
+            (Outcome::Blocked { status: Some(403), error }, false) => {
+                assert!(error.contains("owner_approval_required") && error.contains("k2:owner"), "{error}")
+            }
+            other => panic!("approved 403 after the wait: {other:?}"),
+        }
+        // Sent without the approval (flags not read since Sew gained it):
+        // retry and read Sew's flags again.
+        match run(&fresh, &denied, false, 5_000) {
+            (Outcome::Retry { status: Some(403), .. }, true) => {}
+            other => panic!("unapproved 403: {other:?}"),
+        }
+        // The home client never governs: blocked, naming the App.
+        match run(&fresh, &govern, true, 5_000) {
+            (Outcome::Blocked { status: Some(409), error }, false) => {
+                assert!(error.contains("home_client_cannot_govern") && error.contains("hearth"), "{error}")
+            }
+            other => panic!("409 cannot govern: {other:?}"),
+        }
+        // Success, other answers and other ops: unchanged.
+        let ok = resp(200, r#"{"app_id":"hearth"}"#, "");
+        assert!(matches!(run(&fresh, &ok, true, 5_000), (Outcome::Done { status: 200, .. }, false)));
+        let mismatch = resp(409, &err("conflict", "app_mismatch", ""), "");
+        assert!(matches!(run(&fresh, &mismatch, true, 5_000), (Outcome::Blocked { status: Some(409), ref error }, false) if error == &mismatch.error_line()));
+        let prov = row("provision", 0, "k2ob_p");
+        let before = classify(&c, &prov, Ok(&govern), 5_000);
+        assert_eq!(refine_home(&c, &prov, Ok(&govern), before.clone(), true, 5_000), (before, false));
     }
 
     /// K26: which outcomes are worth one `sew_changed` per pass.

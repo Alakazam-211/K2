@@ -477,6 +477,17 @@ pub fn skip(conn: &Connection, id: &str, now: i64) -> Result<OutboxRow, String> 
     require(conn, id)
 }
 
+/// A subject's `blocked` rows → `skipped` (a newer wanted value replaces
+/// what Sew refused, so the next sweep plans it). Returns how many.
+pub fn skip_blocked_subject(conn: &Connection, tool: &str, subject: &str, now: i64, why: &str) -> Result<usize, String> {
+    conn.execute(
+        "UPDATE tool_outbox SET state = ?1, last_error = ?2, updated_at = ?3, done_at = ?3
+         WHERE tool = ?4 AND subject_key = ?5 AND state = 'blocked'",
+        params![STATE_SKIPPED, why, now, tool, subject],
+    )
+    .map_err(|e| format!("tool_outbox skip blocked: {e}"))
+}
+
 /// `pending` / `blocked` rows of one tool → `skipped` (target dropped).
 pub fn skip_open_rows(conn: &Connection, tool: &str, now: i64, why: &str) -> Result<usize, String> {
     conn.execute(

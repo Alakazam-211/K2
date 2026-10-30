@@ -25,8 +25,20 @@
 //!   its own App would hand that App every person's chat. Not requestable
 //!   (no card). Every change and every refusal is audited
 //!   (`sew-home-client`), and the change goes to Sew with `Sew-Actor` = who
-//!   made it. Sew 0.5.1's `home_client_owner_approval` (an owner pass on
-//!   the call) is later work (0.46.7).
+//!   made it.
+//! - **Sew's owner approval** (Sew 0.6.0 A23, flag
+//!   `home_client_owner_approval`): every `POST /mgmt/v1/home-client`
+//!   carries `approval: {kind: "owner_pass", pass}`, a fresh chat pass whose
+//!   `sub` is the install owner (`k2:owner`); Sew spends its `jti`, so one
+//!   pass per send, never cached ([`approval_claims`], [`with_approval`],
+//!   [`approval_key`]). The S27 worker mints it at send time, and only for
+//!   a setting the owner made by the rule above ([`owner_actor`] reads the
+//!   row's `updated_by`): a value anyone else stored (before AG-21) is
+//!   never vouched for; it blocks until the owner sets it again. A Sew
+//!   without the flag gets the old body (Sew 0.5.0 refuses an unknown
+//!   field). Sew's `403 owner_approval_required` and `409
+//!   home_client_cannot_govern` map to clear errors on the row
+//!   ([`sew_refusal`]); a new choice by the owner supersedes a blocked row.
 //! - **an App's "App-only" mark**: turning it on only narrows what the
 //!   home client sees, so Manage Sew (owner, an Owner/Admin login, an
 //!   agent with `chat_manage`) as before; turning it off widens it again,
@@ -145,6 +157,87 @@ fn audit_home_client(who: &Who, outcome: &str) {
     crate::vault::auth_audit(AUDIT_HOME_CLIENT, &who.label(), outcome, "cli");
 }
 
+// ── Sew 0.6.0 A23: the owner's approval on every home-client send ────
+
+/// The `sid` of an approval pass (it opens no session; Sew only verifies
+/// the pass and spends its `jti`).
+pub const APPROVAL_SID: &str = "k2-home-client";
+
+/// Did the server's owner make this setting, by [`need_owner_person`]'s
+/// rule? `actor` is the row's `updated_by` ([`Who::label`]): the owner
+/// token (`owner`), a K2 shell tab (`shell:<ws>`), or a login
+/// (`login:<name>`) whose role is Owner now (`role_of`). Everything else
+/// (an Admin login or an agent that set it before AG-21, the sweep) is not.
+pub fn owner_actor(actor: &str, role_of: &dyn Fn(&str) -> Option<Role>) -> bool {
+    let a = actor.trim();
+    if a == Who::Owner.label() {
+        return true;
+    }
+    if let Some(ws) = a.strip_prefix("shell:") {
+        return !ws.is_empty();
+    }
+    match a.strip_prefix("login:") {
+        Some(u) if !u.is_empty() => role_of(u) == Some(Role::Owner),
+        _ => false,
+    }
+}
+
+/// One owner approval: a fresh 60-second chat pass for the install owner
+/// (`k2:owner`), audience `sew:<install_id>`, no caps, no `app` claim.
+pub fn approval_claims(install_id: &str, now: i64) -> Result<crate::chat_pass::ChatPassClaims, String> {
+    crate::chat_pass::ChatPassClaims::new(install_id, crate::chat_pass::identity::OWNER_SUB, APPROVAL_SID, now)
+}
+
+/// The home-client body (`{app_id}`, as the sweep planned it) with the
+/// owner's approval: `{app_id, approval: {kind: "owner_pass", pass}}`.
+pub fn with_approval(payload_raw: &str, pass: &str) -> Result<Vec<u8>, String> {
+    let mut v: Value = serde_json::from_str(payload_raw).map_err(|e| format!("home-client body: {e}"))?;
+    let o = v.as_object_mut().ok_or("home-client body is not a JSON object")?;
+    if !o.contains_key("app_id") {
+        return Err("home-client body has no app_id".into());
+    }
+    o.insert("approval".into(), json!({"kind": "owner_pass", "pass": pass}));
+    serde_json::to_vec(&v).map_err(|e| format!("home-client body: {e}"))
+}
+
+/// The `Idempotency-Key` of one approved send. Sew hashes the body under
+/// the key, and every send carries a new pass, so every send gets its own
+/// key (the home-client write is idempotent by value anyway).
+pub fn approval_key(jti: &str) -> String {
+    format!("k2hca_{jti}")
+}
+
+/// Sew's answer to a home-client send, when K2 should say more than Sew's
+/// bare error line: `(blocks, message)`, where `blocks = false` means
+/// "retry once Sew's flags are read again". `approved` = this send carried
+/// the owner's approval. `None` = the worker's usual rules.
+pub fn sew_refusal(status: u16, reason: &str, app_id: Option<&str>, approved: bool) -> Option<(bool, String)> {
+    use k2_core::tool_hook::sew_wire::reasons;
+    match (status, reason) {
+        (403, reasons::OWNER_APPROVAL_REQUIRED) if approved => Some((
+            true,
+            "Sew refused the home-client change (owner_approval_required): it did not accept the owner's approval K2 sent. \
+             Sew's install owner must be this server's owner (k2:owner) and Sew must trust K2's chat-pass keys: \
+             check k2 hostchat status, then retry this row"
+                .into(),
+        )),
+        (403, reasons::OWNER_APPROVAL_REQUIRED) => Some((
+            false,
+            "Sew now asks for the owner's approval on the home client (owner_approval_required); K2 reads Sew's flags again and sends it"
+                .into(),
+        )),
+        (409, reasons::HOME_CLIENT_CANNOT_GOVERN) => Some((
+            true,
+            format!(
+                "Sew refused the home client (home_client_cannot_govern): App {} governs a Space, and the home client never governs one. \
+                 The owner picks another App (k2 hostchat home client <app>) or hands that Space back to Sew first",
+                app_id.unwrap_or("?")
+            ),
+        )),
+        _ => None,
+    }
+}
+
 /// An App's Sew signalling origin: its primary public https origin as
 /// `wss://<host>` (`None`: no public URL, so no voice from outside).
 pub fn signalling_origin(service_id: &str, name: &str) -> Option<String> {
@@ -203,16 +296,29 @@ fn view() -> R<Value> {
             }));
         }
     }
+    // Sew refused the newest home-client send (blocked): say why.
+    let home_error = if home_delivered {
+        None
+    } else {
+        k2_core::tool_hook::log(1, Some(k2_core::tool_hook::home::HOME_SUBJECT))
+            .map_err(|e| no("db_error", 500, e))?
+            .into_iter()
+            .next()
+            .filter(|r| r.state == "blocked")
+            .and_then(|r| r.last_error)
+    };
     use k2_core::tool_hook::features as f;
     Ok(json!({
         "ok": true,
         "homeClient": home,
         "homeClientDelivered": home_delivered,
+        "homeClientError": home_error,
         "apps": apps,
         "sew": {
             "features": flags,
             "appScopedSessions": has(f::APP_SCOPED_SESSIONS),
             "homeClient": has(f::HOME_CLIENT),
+            "homeClientOwnerApproval": has(f::HOME_CLIENT_OWNER_APPROVAL),
             "appOrigin": has(f::APP_ORIGIN),
             "k2ManagedAvatar": has(f::K2_MANAGED_AVATAR),
         },

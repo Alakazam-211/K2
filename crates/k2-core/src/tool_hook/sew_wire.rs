@@ -1078,7 +1078,16 @@ pub mod reasons {
     pub const APP_MISMATCH: &str = "app_mismatch";
     /// 422: a DM to an App's service owner.
     pub const SERVICE_MEMBER: &str = "service_member";
-    /// 409: I6 `ensure` of a slug that exists with another type.
+    /// 403 `missing_permission` (Sew 0.6.0 A23, flag
+    /// `home_client_owner_approval`): a home-client write without the
+    /// install owner's approval, or with one Sew did not accept.
+    pub const OWNER_APPROVAL_REQUIRED: &str = "owner_approval_required";
+    /// 409 `conflict` (Sew 0.6.0 S55): the home client never governs a
+    /// Space, so an App that governs one can't become it.
+    pub const HOME_CLIENT_CANNOT_GOVERN: &str = "home_client_cannot_govern";
+    /// 409 `conflict` (Sew 0.6.0): `channels/create`, or an I6 `ensure`, on a
+    /// slug that holds a channel of the other type (`details.existing_type`);
+    /// nothing written.
     pub const CHANNEL_TYPE_MISMATCH: &str = "channel_type_mismatch";
 }
 

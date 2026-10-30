@@ -139,3 +139,97 @@ fn only_the_owner_sets_or_clears_the_home_client_ag21() {
     let (st, v) = call(&admin, HOME_APP, json!({"app": f.jobs, "hidden": false}));
     assert_eq!((st, v["apps"][0]["hiddenFromHome"].clone()), (200, json!(false)), "{v}");
 }
+
+// ── Sew 0.6.0 A23: the owner's approval ──────────────────────────────
+
+/// Only a setting the owner made (AG-21's rule) is vouched for: the owner
+/// token, a K2 shell tab, an Owner login (by its role now). An Admin
+/// login, an agent, the sweep, a demoted or removed login are not.
+#[test]
+fn only_the_owners_setting_gets_the_owners_approval() {
+    let role = |u: &str| match u {
+        "boss" => Some(Role::Owner),
+        "adm" => Some(Role::Admin),
+        "mem" => Some(Role::Member),
+        _ => None,
+    };
+    for yes in ["owner", "shell:ws-h13", "login:boss"] {
+        assert!(owner_actor(yes, &role), "{yes}");
+    }
+    for no in ["login:adm", "login:mem", "login:gone", "login:", "shell:", "agent:ws-h13", "system:reconcile", "owner-token", "", "Owner"] {
+        assert!(!owner_actor(no, &role), "{no:?}");
+    }
+    // The labels the route stores are exactly these.
+    assert!(owner_actor(&Who::Owner.label(), &role));
+    assert!(owner_actor(&Who::Shell { project_id: "ws-h13".into(), session_id: "s".into() }.label(), &role));
+    assert!(owner_actor(&Who::Login { username: "boss".into(), role: Role::Owner }.label(), &role));
+    assert!(!owner_actor(&Who::Agent { project_id: "ws-h13".into(), session_id: "s".into() }.label(), &role));
+}
+
+/// Sew's `OwnerApproval::OwnerPass` (sew-proto `mgmt.rs`, fixture
+/// `MgmtHomeClientRequest.full.json`): `{app_id, approval: {kind:
+/// "owner_pass", pass}}`, the pass a fresh 60 s `k2:owner` pass for this
+/// install with no caps and no `app`, a new `jti` (and key) every time.
+#[test]
+fn the_approval_is_a_fresh_owner_pass_on_the_exact_body() {
+    let a = approval_claims("555555555", 1_000).expect("claims");
+    let b = approval_claims("555555555", 1_000).expect("claims");
+    assert_eq!((a.sub.as_str(), a.aud.as_str(), a.sid.as_str()), ("k2:owner", "sew:555555555", APPROVAL_SID));
+    assert_eq!((a.iat, a.exp), (1_000, 1_000 + crate::chat_pass::PASS_TTL_SECS));
+    assert_eq!((a.caps.clone(), a.app.clone()), (None, None), "no ceiling claims, no App: Sew's install owner itself");
+    assert_ne!(a.jti, b.jti, "one pass per send: Sew spends the jti");
+    assert!(approval_claims("0123", 1_000).is_err(), "never an aud Sew can't hold");
+
+    let body: serde_json::Value = serde_json::from_slice(&with_approval(r#"{"app_id":"hearth"}"#, "P.Q.R").unwrap()).unwrap();
+    assert_eq!(body, json!({"app_id": "hearth", "approval": {"kind": "owner_pass", "pass": "P.Q.R"}}));
+    let clear: serde_json::Value = serde_json::from_slice(&with_approval(r#"{"app_id":null}"#, "P.Q.R").unwrap()).unwrap();
+    assert_eq!(clear, json!({"app_id": null, "approval": {"kind": "owner_pass", "pass": "P.Q.R"}}), "a clear carries it too");
+    assert!(with_approval(r#"{}"#, "P").is_err() && with_approval("[1]", "P").is_err());
+
+    let (ka, kb) = (approval_key(&a.jti), approval_key(&b.jti));
+    assert_ne!(ka, kb, "a new Idempotency-Key per send (Sew hashes the body under the key)");
+    for k in [&ka, &kb] {
+        assert!(k.len() <= 64 && k.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'), "Sew's key grammar: {k}");
+    }
+}
+
+/// Sew 0.6.0's answers to a home-client write, said clearly: approval
+/// refused (with the approval: block, after the worker's wait; without:
+/// re-read the flags and retry), and the home client never governs.
+#[test]
+fn sews_home_client_refusals_map_to_clear_errors() {
+    let (blocks, m) = sew_refusal(403, "owner_approval_required", Some("hearth"), true).expect("mapped");
+    assert!(blocks && m.contains("owner_approval_required") && m.contains("k2:owner"), "{m}");
+    let (blocks, m) = sew_refusal(403, "owner_approval_required", Some("hearth"), false).expect("mapped");
+    assert!(!blocks && m.contains("approval"), "{m}");
+    let (blocks, m) = sew_refusal(409, "home_client_cannot_govern", Some("jobs-id"), true).expect("mapped");
+    assert!(blocks && m.contains("home_client_cannot_govern") && m.contains("jobs-id") && m.contains("k2 hostchat home client"), "{m}");
+    assert_eq!(sew_refusal(409, "app_mismatch", None, true), None, "anything else: the worker's usual rules");
+    assert_eq!(sew_refusal(400, "owner_approval_required", None, true), None);
+}
+
+/// An agent or an Admin is refused at the route, before anything is
+/// stored, so no home-client row is ever planned for Sew: even with Sew
+/// 0.6.0's flags, the sweep owes Sew nothing.
+#[test]
+fn a_refused_caller_never_reaches_sew() {
+    let f = fx();
+    let flags: Vec<String> = ["home_client", "home_client_owner_approval"].iter().map(|s| s.to_string()).collect();
+    k2_core::tool_hook::note_features_for_tests(&["home_client", "home_client_owner_approval"]).unwrap();
+    k2_core::workspace::settings::set_agents_can_manage_chat("ws-h13", true).unwrap();
+    let agent = Who::Agent { project_id: "ws-h13".into(), session_id: "s-agent".into() };
+    let admin = Who::Login { username: "adm".into(), role: Role::Admin };
+    for who in [&agent, &admin] {
+        for app in [json!(f.jobs), json!(null)] {
+            let (st, v) = call(who, HOME_CLIENT, json!({ "app": app }));
+            assert_eq!((st, v["code"].clone()), (403, json!("owner_only")), "{v}");
+        }
+    }
+    assert!(k2_core::tool_hook::home_settings().unwrap().is_empty());
+    k2_core::tool_hook::apply_settings(k2_core::tool_hook::CHAT_KIND, &flags, &k2_core::tool_hook::PolicyRead::NotRead).unwrap();
+    let rows = k2_core::tool_hook::log(50, Some(k2_core::tool_hook::home::HOME_SUBJECT)).unwrap();
+    assert!(rows.is_empty(), "nothing for Sew: {rows:?}");
+    let (_, v) = call(&Who::Owner, HOME, json!({}));
+    assert_eq!((v["homeClientDelivered"].clone(), v["homeClientError"].clone()), (json!(true), json!(null)), "{v}");
+    assert_eq!(v["sew"]["homeClientOwnerApproval"], json!(true), "{v}");
+}

@@ -1297,10 +1297,23 @@ pub fn home_settings() -> Result<Vec<home::Setting>, String> {
     crate::skin::with_skin_conn(home::list)
 }
 
-/// Set (`Some`) or clear the home client; the next sweep delivers it.
+/// Set (`Some`) or clear the home client; the next sweep delivers it. A
+/// change supersedes a home-client row Sew refused (Sew 0.6.0:
+/// `home_client_cannot_govern`, `owner_approval_required`), so the new
+/// choice goes instead of waiting behind it.
 pub fn set_home_client(app_id: Option<&str>, actor: &str) -> Result<bool, String> {
     let now = outbox::now_secs();
-    let changed = crate::skin::with_skin_conn(|conn| home::set_home_client(conn, app_id, actor, now))?;
+    let changed = crate::skin::with_skin_conn(|conn| {
+        let changed = home::set_home_client(conn, app_id, actor, now)?;
+        let superseded =
+            outbox::skip_blocked_subject(conn, CHAT_KIND, home::HOME_SUBJECT, now, "superseded: the home client was set again")?;
+        if superseded > 0 && !changed {
+            // The same value again, now under this setter (Sew-Actor, and
+            // whose approval Sew 0.6.0 gets): the sweep plans it anew.
+            home::restamp(conn, home::HOME_SUBJECT, actor, now)?;
+        }
+        Ok(changed || superseded > 0)
+    })?;
     if changed {
         kick_reconcile();
     }

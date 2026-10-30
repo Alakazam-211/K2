@@ -121,6 +121,16 @@ pub fn set_app_origin(conn: &Connection, app_id: &str, origin: Option<&str>, dis
     merge(conn, &subject, f, actor, now)
 }
 
+/// Record `actor` as the setter of `subject`'s unchanged body.
+pub fn restamp(conn: &Connection, subject: &str, actor: &str, now: i64) -> Result<(), String> {
+    conn.execute(
+        "UPDATE tool_sew_settings SET updated_by = ?2, updated_at = ?3 WHERE subject = ?1",
+        params![subject, actor, now],
+    )
+    .map(|_| ())
+    .map_err(|e| format!("sew settings restamp: {e}"))
+}
+
 /// Who last set `subject` (`updated_by`: `owner`, `login:<name>`,
 /// `shell:<ws>`), the home-client row's `Sew-Actor`. `None` = no row.
 pub fn set_by(conn: &Connection, subject: &str) -> Result<Option<String>, String> {

@@ -11,6 +11,7 @@
 //! | [`APP_ORIGIN`] | an App's `wss://` signalling origin is sent (voice for custom Apps needs it) |
 //! | [`K2_MANAGED_AVATAR`] | K2's picture is pushed with `force` (it replaces one the member set), and K2 sets the org policy `identity.managed_fields` to `[display_name, title, pronouns, avatar]` ([`super::policy`]) |
 //! | [`SPACE_UNBIND`] | an App removed from the box has its Spaces unbound in Sew too (`POST /mgmt/v1/spaces/unbind`; [`super::app_space`]) |
+//! | [`HOME_CLIENT_OWNER_APPROVAL`] | every `POST /mgmt/v1/home-client` carries the install owner's approval (a fresh `k2:owner` chat pass); without the flag the body stays `{app_id}` (Sew 0.5.0 refuses an unknown field) |
 //! | [`APP_CHANNEL_CREATE`] | `POST /mgmt/v1/channels/create` (Sew 0.5.0, A9): an App makes text channels in its own Space (`chat.createChannel`); without it the verb is refused `sew_feature_missing` |
 //! | [`APP_GOVERNED_SPACES`] | Sew 0.6.0 (sew-55 v2.4): an App's chat key (its `max_level` and `uploads`, I7), the end of an App's sessions by `app_id` (I8), the governance switch, the role-driven channel sync, bulk channel ops, App-owned Spaces and the service owner's deprovision ([`super::governed`]). Without it each is refused `sew_feature_missing` |
 
@@ -30,6 +31,7 @@ pub const SPACE_UNBIND: &str = "space_unbind";
 /// ([`super::governed`]). Without it each answers `sew_feature_missing`
 /// and nothing is sent.
 pub const APP_GOVERNED_SPACES: &str = "app_governed_spaces";
+pub const HOME_CLIENT_OWNER_APPROVAL: &str = "home_client_owner_approval";
 
 /// Idempotent DDL, called from `skin::open_db` beside `tool_outbox`.
 pub fn ensure_schema(conn: &Connection) -> Result<(), String> {

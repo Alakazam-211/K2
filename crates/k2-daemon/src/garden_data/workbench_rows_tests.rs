@@ -60,6 +60,10 @@ fn bench(caps: &[&str]) -> Bench {
     let repo = k2_core::paths::k2_home().join("wb-room");
     std::fs::create_dir_all(&repo).expect("repo dir");
     git(&repo, &["init", "-q", "-b", "main"]);
+    // W1's Land runs git in the main checkout: the repo names its committer
+    // (a compute node has no global identity).
+    git(&repo, &["config", "user.name", "Bench"]);
+    git(&repo, &["config", "user.email", "bench@example.com"]);
     std::fs::write(repo.join("b.txt"), "one\ntwo\n").expect("b");
     std::fs::write(repo.join(".gitignore"), ".worktrees/\n").expect("ignore");
     git(&repo, &["add", "."]);

@@ -292,10 +292,16 @@ impl StalwartClient {
     }
 
     fn http() -> Result<reqwest::blocking::Client, String> {
-        reqwest::blocking::Client::builder()
-            .timeout(MGMT_TIMEOUT)
-            .build()
-            .map_err(|e| format!("mgmt http client: {e}"))
+        Self::local_client(MGMT_TIMEOUT).map_err(|e| format!("mgmt http client: {e}"))
+    }
+
+    /// Every client that talks to K2's own Stalwart. `base_url` is the
+    /// loopback mgmt/JMAP listener and session URLs are rebased onto it,
+    /// so a box-wide `HTTP(S)_PROXY` / `ALL_PROXY` must never apply:
+    /// reqwest honours them by default and would send the admin bearer
+    /// key or Basic credentials through the proxy.
+    fn local_client(timeout: Duration) -> reqwest::Result<reqwest::blocking::Client> {
+        reqwest::blocking::Client::builder().timeout(timeout).no_proxy().build()
     }
 
     fn apply_auth(&self, req: reqwest::blocking::RequestBuilder) -> reqwest::blocking::RequestBuilder {
@@ -2715,10 +2721,7 @@ impl StalwartClient {
         let session = self.get_json(SESSION_PATH)?;
         let template = parse_session_upload_url(&self.base_url, &session)?;
         let url = template.replace("{accountId}", &encode_uri_component(account_id));
-        let client = reqwest::blocking::Client::builder()
-            .timeout(BLOB_TIMEOUT)
-            .build()
-            .map_err(|e| format!("blob http client: {e}"))?;
+        let client = Self::local_client(BLOB_TIMEOUT).map_err(|e| format!("blob http client: {e}"))?;
         let resp = self
             .apply_auth(client.post(&url))
             .header("Content-Type", "application/octet-stream")
@@ -2848,10 +2851,7 @@ impl StalwartClient {
     /// a longer budget than the 15 s mgmt calls). Errors never carry
     /// the credential or the body.
     fn get_bytes_url(&self, url: &str) -> Result<Vec<u8>, String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(BLOB_TIMEOUT)
-            .build()
-            .map_err(|e| format!("blob http client: {e}"))?;
+        let client = Self::local_client(BLOB_TIMEOUT).map_err(|e| format!("blob http client: {e}"))?;
         let resp = self
             .apply_auth(client.get(url))
             .send()
@@ -6117,6 +6117,75 @@ pub(crate) mod tests {
     pub(crate) fn body_json(req: &str) -> serde_json::Value {
         let start = req.find("\r\n\r\n").expect("body") + 4;
         serde_json::from_str(&req[start..]).expect("JSON body")
+    }
+
+    /// A box-wide proxy env never reaches K2's own Stalwart. The mgmt
+    /// client (session GET) and both blob clients (upload POST, download
+    /// GET) dial the loopback listener directly; reqwest's default would
+    /// send them, admin bearer key included, to HTTP(S)_PROXY/ALL_PROXY.
+    /// (Seed-11 shuffled run: a parallel test's fake proxy answered a
+    /// jmap call with no `methodResponses`.)
+    #[test]
+    fn stalwart_clients_ignore_proxy_env() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let proxy = std::net::TcpListener::bind("127.0.0.1:0").expect("bind proxy");
+        let proxy_port = proxy.local_addr().expect("proxy addr").port();
+        let proxy_conns = Arc::new(AtomicUsize::new(0));
+        let seen = proxy_conns.clone();
+        std::thread::spawn(move || {
+            for stream in proxy.incoming() {
+                let Ok(mut sock) = stream else { return };
+                seen.fetch_add(1, Ordering::SeqCst);
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf);
+                let body = r#"{"via":"proxy"}"#;
+                let _ = sock.write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                );
+            }
+        });
+        let p = format!("http://127.0.0.1:{proxy_port}");
+        let _http = k2_core::test_env::EnvVar::set("HTTP_PROXY", &p);
+        let _https = k2_core::test_env::EnvVar::set("HTTPS_PROXY", &p);
+        let _all = k2_core::test_env::EnvVar::set("ALL_PROXY", &p);
+        // A runner's NO_PROXY=127.0.0.1 would hide the bug; clear it.
+        let _no1 = k2_core::test_env::EnvVar::remove("NO_PROXY");
+        let _no2 = k2_core::test_env::EnvVar::remove("no_proxy");
+
+        let (port, rx) = spawn_mock_server(vec![
+            BOOTSTRAP_SESSION_FIXTURE.to_string(),
+            BOOTSTRAP_SESSION_FIXTURE.to_string(),
+            r#"{"blobId":"b-1"}"#.to_string(),
+            BOOTSTRAP_SESSION_FIXTURE.to_string(),
+            "blob-bytes".to_string(),
+        ]);
+        let c = StalwartClient::new(format!("http://127.0.0.1:{port}"), "k2-test-key");
+
+        let session = c.get_json(SESSION_PATH).expect("session GET goes direct");
+        assert_eq!(session["username"], "admin", "{session}");
+        let blob = c.blob_upload("d333333", b"hello").expect("blob upload goes direct");
+        assert_eq!(blob, "b-1");
+        let bytes = c
+            .blob_download("d333333", "b-1", "x.txt", "text/plain")
+            .expect("blob download goes direct");
+        assert_eq!(bytes, b"blob-bytes");
+        assert_eq!(proxy_conns.load(Ordering::SeqCst), 0, "a Stalwart call went through the env proxy");
+
+        let reqs: Vec<String> = (0..5).map(|i| rx.recv().unwrap_or_else(|e| panic!("req {i}: {e}"))).collect();
+        assert!(reqs[0].starts_with("GET /jmap/session "), "{}", reqs[0]);
+        assert!(reqs[2].starts_with("POST /jmap/upload/d333333/ "), "{}", reqs[2]);
+        assert!(reqs[4].starts_with("GET /jmap/download/d333333/b-1/x.txt"), "{}", reqs[4]);
+        for r in &reqs {
+            assert!(
+                r.contains("authorization: Bearer k2-test-key") || r.contains("Authorization: Bearer k2-test-key"),
+                "{r}"
+            );
+        }
     }
 
     /// Bootstrap round-trip: authenticate discovers /jmap/session with

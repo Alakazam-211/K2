@@ -86,11 +86,14 @@ pub fn internal_route_is_write(route: &str) -> bool {
 
 /// Send one proxied request to the daemon: POST for a write route
 /// ([`internal_route_is_write`]), GET for a read. Params ride the URL.
+/// The daemon is on loopback and the URL carries the hook token, so a
+/// box-wide `HTTP(S)_PROXY` / `ALL_PROXY` must never apply (`no_proxy`).
 fn send_internal(route: &str, url: &str) -> reqwest::Result<reqwest::blocking::Response> {
+    let client = reqwest::blocking::Client::builder().no_proxy().build()?;
     if internal_route_is_write(route) {
-        reqwest::blocking::Client::new().post(url).body("").send()
+        client.post(url).body("").send()
     } else {
-        reqwest::blocking::get(url)
+        client.get(url).send()
     }
 }
 

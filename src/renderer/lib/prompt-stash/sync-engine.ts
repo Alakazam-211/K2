@@ -99,6 +99,14 @@ export function pruneDirty(st: StashSyncState, local: readonly StashRecord[], ca
   return { ...st, dirty }
 }
 
+/** A record saved here before sync has files with no `device_id`: they
+ *  are this device's, so say so before they leave it (another device would
+ *  otherwise read them as its own). */
+export function stampDevice(r: StashRecord, deviceId: string): StashRecord {
+  if (r.attachments.every((a) => 'device_id' in a)) return r
+  return { ...r, attachments: r.attachments.map((a) => ('device_id' in a ? a : { ...a, device_id: deviceId, path: a.path ?? null })) }
+}
+
 /** The dirty records to push now (their current local version), in
  *  batches the server accepts. */
 export function pushBatches(st: StashSyncState, local: readonly StashRecord[]): StashRecord[][] {

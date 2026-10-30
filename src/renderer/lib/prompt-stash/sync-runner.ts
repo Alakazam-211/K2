@@ -27,6 +27,7 @@ import {
   parseStashSyncState,
   pruneDirty,
   pushBatches,
+  stampDevice,
   startSync,
   CAP_REACHED,
   STASH_SYNC_STATE_KEY,
@@ -248,7 +249,7 @@ export class StashSyncRunner {
       saveStashSyncState(this.d.kv, st)
       // Push what changed here.
       for (const batch of pushBatches(st, local)) {
-        const answer = parsePushAnswer(await this.push(deviceId, batch))
+        const answer = parsePushAnswer(await this.push(deviceId, batch.map((r) => stampDevice(r, deviceId))))
         saveStashSyncState(this.d.kv, ackPush(loadStashSyncState(this.d.kv), batch, answer))
       }
       // Pull and merge (in the store's queue, on a fresh read).

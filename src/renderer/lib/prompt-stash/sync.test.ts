@@ -296,6 +296,18 @@ describe('the sync runner', () => {
     expect(loadStashSyncState(desk.kv).dirty).toEqual({})
   })
 
+  it("a stash saved before sync goes up with its files marked as this device's", async () => {
+    const server = new FakeServer()
+    const desk = new Device('d-desk', server)
+    const legacy = rec(1, 'old', T, null, { attachments: [{ id: 'a1', name: 'old.png', type: 'image/png', size: 3 }] })
+    desk.local(legacy)
+    await desk.sync()
+    await desk.sync()
+    expect(server.records.get(uid(1))?.attachments[0]).toMatchObject({ id: 'a1', device_id: 'd-desk', path: null })
+    expect(desk.records.get(uid(1))?.attachments[0]).toMatchObject({ device_id: 'd-desk' })
+    expect(desk.records.get(uid(1))?.updated_by).toBe('d-desk')
+  })
+
   it('a stash_changed frame with a new cursor pulls; the same cursor does not', async () => {
     const server = new FakeServer()
     const desk = new Device('d-desk', server)

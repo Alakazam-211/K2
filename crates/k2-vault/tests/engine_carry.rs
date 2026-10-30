@@ -103,7 +103,8 @@ fn the_sew_recovery_key_is_person_revealable_and_agent_proof() {
             assert!(v.resolve(&sel, u, &who).is_err(), "agent resolve {u:?}");
         }
     }
-    // Nor can the owner grant it to a workspace.
+    // Nor can the owner grant it to a workspace: its ceiling is `none`
+    // (checked first), and it is K2's own secret.
     let g = GrantRequest {
         selector: sel.clone(),
         consumer: Consumer::workspace("ws1"),
@@ -114,7 +115,9 @@ fn the_sew_recovery_key_is_person_revealable_and_agent_proof() {
         expires_at: None,
         version: None,
     };
-    assert_eq!(v.grant(g, &Actor::Owner).expect_err("owner grant").code, "vault_system_namespace");
+    let code = v.grant(g, &Actor::Owner).expect_err("owner grant").code;
+    assert!(matches!(code, "delivery_above_ceiling" | "vault_system_namespace"), "{code}");
+    assert!(v.grants(&sel, &Actor::Owner).expect("grants").is_empty(), "no grant was written");
     let m = v.meta(&sel, &Actor::Owner).expect("owner sees metadata");
     assert_eq!((m.default_delivery, m.delivery_ceiling), (Delivery::None, Delivery::None));
     assert_eq!(m.description, "Sew recovery key (chat/voice server)");

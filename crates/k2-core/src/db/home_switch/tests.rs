@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 fn scratch() -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let d = std::env::temp_dir().join(format!(
+    // Not temp_dir(): it reads TMPDIR with no lock, and this test may run
+    // while another test has TMPDIR on a folder it is about to delete.
+    let d = crate::test_env::stable_temp_dir().join(format!(
         "k2-home-switch-{}-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()

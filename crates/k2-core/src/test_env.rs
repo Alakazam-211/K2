@@ -144,6 +144,10 @@ impl Drop for EnvLock {
 /// process's values; its release puts back what it found.
 pub fn lock() -> EnvLock {
     let guard = ENV_LOCK.lock();
+    // Before any holder can change TMPDIR: the first take in the process is
+    // the first moment a change could happen, and every later one is under
+    // this lock (see [`stable_temp_dir`]).
+    TEMP_ROOT.get_or_init(std::env::temp_dir);
     let outermost = DEPTH.with(|d| {
         let n = d.get();
         d.set(n + 1);
@@ -240,11 +244,32 @@ impl Drop for EnvVar {
     }
 }
 
+/// The temp dir this test process started with (see [`stable_temp_dir`]).
+static TEMP_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// This test process's own temp dir, whatever `TMPDIR` says right now.
+///
+/// `std::env::temp_dir()` reads `TMPDIR` on every call, and a few tests point
+/// it at a short folder of their own under [`lock`] and delete that folder
+/// afterwards. A test that reads `temp_dir()` without the lock in that window
+/// builds its files inside another test's folder, and they vanish mid-test
+/// (`k2_core` soak 10-30, seed 5: `db::home_switch` got SQLite `CannotOpen`;
+/// `k2_daemon` seed 6: `mail::secrets` lost its store). Take scratch paths
+/// from here instead. Lock-free after the process's first [`lock`], so it is
+/// safe under any module lock.
+pub fn stable_temp_dir() -> PathBuf {
+    if let Some(root) = TEMP_ROOT.get() {
+        return root.clone();
+    }
+    let _env = lock();
+    TEMP_ROOT.get().expect("lock() set it").clone()
+}
+
 /// A fresh, unique temp dir path (not created). Uses a uuid, never the pid,
 /// a `ThreadId` or a timestamp: those repeat across the several test
 /// binaries of one `cargo test` run and across runs.
 pub fn unique_temp_path(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("k2-{tag}-{}", uuid::Uuid::new_v4().simple()))
+    stable_temp_dir().join(format!("k2-{tag}-{}", uuid::Uuid::new_v4().simple()))
 }
 
 /// A short temp path for a test's HOME (or a socket): `/tmp/<name>` on
@@ -404,13 +429,11 @@ pub struct TempHome {
 impl TempHome {
     /// A temp home under the system temp dir.
     pub fn new() -> Self {
-        // The path reads `$TMPDIR` (std::env::temp_dir), so it is made under
-        // the env lock: picked before it, it could take another test's
-        // TMPDIR while that test held the lock (vault::spawn's short
-        // `/tmp/k2t-…` socket dir), leaving this HOME outside the temp dir
-        // once TMPDIR was restored (and inside a folder that test deletes).
-        // folder_trust then judged the home "not isolated" and skipped the
-        // gate (soak 2026-10-27, k2-daemon shuffled seed 5).
+        // The path never follows another test's TMPDIR (vault::spawn's short
+        // `/tmp/k2t-…` socket dir): that left this HOME outside the temp dir
+        // once TMPDIR was restored (and inside a folder that test deletes),
+        // and folder_trust then judged the home "not isolated" and skipped
+        // the gate (soak 2026-10-27, k2-daemon shuffled seed 5).
         let lock = lock();
         Self::at_locked(lock, unique_temp_path("test-home"))
     }
@@ -1325,9 +1348,34 @@ mod tests {
         drop(held);
         let (home, tmp_then) = rx.recv().expect("the other thread's home");
         t.join().expect("join");
-        let _ = std::fs::remove_dir_all(&other);
+        // Not remove_dir_all: while TMPDIR pointed here, a test reading
+        // temp_dir() without the lock may have put its files in this folder.
+        // They aren't ours to delete; an empty folder is removed.
+        let _ = std::fs::remove_dir(&other);
         assert!(!home.starts_with(&other), "took another test's TMPDIR: {}", home.display());
         assert!(home.starts_with(&tmp_then), "{} is outside the temp dir {}", home.display(), tmp_then.display());
+    }
+
+    /// Soak 2026-10-30 (k2-core seed 5): a scratch dir made while another
+    /// test had its own TMPDIR landed in that test's folder and vanished
+    /// with it. The stable dir never follows TMPDIR, and a thread without
+    /// the lock gets it without waiting for the holder.
+    #[test]
+    fn stable_temp_dir_never_takes_another_tests_tmpdir() {
+        let _held = lock();
+        let real = std::env::temp_dir();
+        let other = unique_temp_path("other-tmpdir");
+        std::fs::create_dir_all(&other).expect("mkdir");
+        let (got, unique) = {
+            let _tmpdir = EnvVar::set("TMPDIR", &other);
+            std::thread::spawn(|| (stable_temp_dir(), unique_temp_path("x")))
+                .join()
+                .expect("a thread without the env lock")
+        };
+        let _ = std::fs::remove_dir(&other);
+        assert_eq!(got, real);
+        assert!(unique.starts_with(&real), "{}", unique.display());
+        assert!(!unique.starts_with(&other), "{}", unique.display());
     }
 
     #[test]

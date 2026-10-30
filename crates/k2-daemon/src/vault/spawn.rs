@@ -1088,11 +1088,21 @@ mod tests {
     fn boot_removes_orphaned_short_path_socket_dirs() {
         use super::super::ssh_agent as agent;
         let _env = k2_core::test_env::lock();
-        // A short temp TMPDIR (socket paths must fit sun_path), removed after.
+        // A short temp TMPDIR (socket paths must fit sun_path), removed after:
+        // what this test made in it, then the folder if that left it empty.
+        // A test reading temp_dir() without the lock may have put files here
+        // while TMPDIR pointed at it; deleting them failed that test
+        // (`mail::secrets`, soak 10-30, seed 6).
         struct Rm(PathBuf);
         impl Drop for Rm {
             fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
+                for entry in std::fs::read_dir(&self.0).into_iter().flatten().flatten() {
+                    let name = entry.file_name();
+                    if name == "elsewhere" || name.to_string_lossy().starts_with("k2a-") {
+                        let _ = std::fs::remove_dir_all(entry.path());
+                    }
+                }
+                let _ = std::fs::remove_dir(&self.0);
             }
         }
         let tmpdir = PathBuf::from(format!("/tmp/k2t-{}", k2_vault::crypto::base62(8)));

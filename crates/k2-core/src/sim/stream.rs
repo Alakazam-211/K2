@@ -24,6 +24,36 @@
 //! one (one frame in flight), and no faster than the viewer's fps cap. A
 //! slow viewer just skips frames and never holds others back.
 //!
+//! **Video (0.46.7).** A viewer may offer codecs and a window in the query
+//! (`&codecs=h264,jpeg&win=3`). The daemon picks one ([`negotiate`]) and
+//! says so in `hello` (`codec`, `window`); a viewer that offers nothing gets
+//! the JPEG wire above with one frame in flight, exactly as before. An
+//! H.264 frame is one binary message with a 24-byte [`VideoHeader`] then an
+//! Annex B access unit (SPS + PPS in front of every keyframe):
+//!
+//! ```text
+//! 0..4   magic  b"K2SV"
+//! 4..8   seq    u32 LE
+//! 8..10  width  u16 LE  picture width in pixels (crop the decoded frame to this)
+//! 10..12 height u16 LE
+//! 12..14 wpt    u16 LE  screen width in points
+//! 14..16 hpt    u16 LE
+//! 16     codec  u8      1 = H.264
+//! 17     flags  u8      bit 0 = keyframe
+//! 18..20 age    u16 LE  ms from capture to send on the daemon (saturating)
+//! 20..24 ts     u32 LE  capture time, ms since the viewer's stream began
+//! 24..   Annex B
+//! ```
+//!
+//! With a window of N the daemon keeps up to N frames unacked (fewer when
+//! the round trip doesn't need them, `k2_simvideo::flow::AckWindow`) and
+//! always sends the newest frame, so stale frames are skipped, not queued.
+//! An H.264 viewer gets its own encoder: frames are skipped *before*
+//! encoding, so the reference chain never breaks. Keyframes come on join,
+//! on a size change (rotation) and on [`ViewerMsg::Keyframe`]. If the
+//! encoder fails the daemon falls back to JPEG on the same socket and says
+//! so with [`ServerMsg::Codec`]; a viewer reads either magic at any time.
+//!
 //! **Daemon → viewer, text:** JSON [`ServerMsg`] (`{"t": "hello", …}`).
 //!
 //! **Viewer → daemon, text:** JSON [`ViewerMsg`]. Input is in points.
@@ -44,6 +74,21 @@ pub const LOCAL_MAX_FPS: u32 = 30;
 pub const REMOTE_DEFAULT_FPS: u32 = 8;
 pub const REMOTE_MIN_FPS: u32 = 2;
 pub const REMOTE_MAX_FPS: u32 = 15;
+
+/// H.264 viewers: 2–30 fps remote (default 24), up to 30 local. A P frame
+/// is a few KB where a JPEG is tens, so remote viewers may go faster.
+pub const REMOTE_VIDEO_DEFAULT_FPS: u32 = 24;
+pub const REMOTE_VIDEO_MAX_FPS: u32 = 30;
+
+/// The most frames a viewer may have in flight (`win=`).
+pub use k2_simvideo::flow::MAX_WINDOW;
+
+pub const VIDEO_MAGIC: [u8; 4] = *b"K2SV";
+pub const VIDEO_HEADER_LEN: usize = 24;
+/// [`VideoHeader::codec`] for H.264.
+pub const VIDEO_CODEC_H264: u8 = 1;
+/// [`VideoHeader`] flags bit: an IDR access unit with SPS + PPS.
+pub const VIDEO_FLAG_KEY: u8 = 1;
 
 /// Close codes the daemon uses.
 pub const CLOSE_AUTH_REVOKED: u16 = 4401;
@@ -89,6 +134,118 @@ impl FrameHeader {
             &msg[HEADER_LEN..],
         ))
     }
+}
+
+/// One H.264 frame's header (24 bytes, little-endian).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoHeader {
+    pub seq: u32,
+    pub width_px: u16,
+    pub height_px: u16,
+    pub width_pt: u16,
+    pub height_pt: u16,
+    pub codec: u8,
+    pub key: bool,
+    /// Capture → send on the daemon, ms (saturating).
+    pub age_ms: u16,
+    /// Capture time, ms since this viewer's stream began.
+    pub ts_ms: u32,
+}
+
+impl VideoHeader {
+    pub fn encode(&self, au: &[u8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(VIDEO_HEADER_LEN + au.len());
+        v.extend_from_slice(&VIDEO_MAGIC);
+        v.extend_from_slice(&self.seq.to_le_bytes());
+        v.extend_from_slice(&self.width_px.to_le_bytes());
+        v.extend_from_slice(&self.height_px.to_le_bytes());
+        v.extend_from_slice(&self.width_pt.to_le_bytes());
+        v.extend_from_slice(&self.height_pt.to_le_bytes());
+        v.push(self.codec);
+        v.push(if self.key { VIDEO_FLAG_KEY } else { 0 });
+        v.extend_from_slice(&self.age_ms.to_le_bytes());
+        v.extend_from_slice(&self.ts_ms.to_le_bytes());
+        v.extend_from_slice(au);
+        v
+    }
+
+    /// Split a binary message into header and access unit.
+    pub fn decode(msg: &[u8]) -> Option<(VideoHeader, &[u8])> {
+        if msg.len() < VIDEO_HEADER_LEN || msg[0..4] != VIDEO_MAGIC {
+            return None;
+        }
+        let u16at = |i: usize| u16::from_le_bytes([msg[i], msg[i + 1]]);
+        let u32at = |i: usize| u32::from_le_bytes([msg[i], msg[i + 1], msg[i + 2], msg[i + 3]]);
+        Some((
+            VideoHeader {
+                seq: u32at(4),
+                width_px: u16at(8),
+                height_px: u16at(10),
+                width_pt: u16at(12),
+                height_pt: u16at(14),
+                codec: msg[16],
+                key: msg[17] & VIDEO_FLAG_KEY != 0,
+                age_ms: u16at(18),
+                ts_ms: u32at(20),
+            },
+            &msg[VIDEO_HEADER_LEN..],
+        ))
+    }
+}
+
+/// The stream's codec (`hello.codec`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Codec {
+    /// K2SF frames (every viewer and daemon understands them).
+    #[default]
+    Jpeg,
+    /// K2SV frames, Annex B H.264.
+    H264,
+}
+
+impl Codec {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Codec::Jpeg => "jpeg",
+            Codec::H264 => "h264",
+        }
+    }
+    pub fn parse(s: &str) -> Option<Codec> {
+        match s.trim() {
+            "jpeg" => Some(Codec::Jpeg),
+            "h264" => Some(Codec::H264),
+            _ => None,
+        }
+    }
+}
+
+/// The viewer's `codecs=` list, in its order of preference (unknown names
+/// are skipped; an old viewer sends none).
+pub fn parse_offer(q: Option<&str>) -> Vec<Codec> {
+    let mut out = Vec::new();
+    for c in q.unwrap_or("").split(',').filter_map(Codec::parse) {
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// H.264 when the viewer offered it and this host can encode it; JPEG
+/// otherwise (every viewer can draw JPEG, offered or not).
+pub fn negotiate(offer: &[Codec], host_h264: bool) -> Codec {
+    if host_h264 && offer.contains(&Codec::H264) {
+        Codec::H264
+    } else {
+        Codec::Jpeg
+    }
+}
+
+/// The viewer's `win=`: 1 (the old one-in-flight wire) when absent or
+/// unreadable, else clamped to 1..=[`MAX_WINDOW`].
+pub fn negotiate_window(q: Option<&str>) -> u32 {
+    q.and_then(|s| s.trim().parse::<u32>().ok()).map_or(1, |n| n.clamp(1, MAX_WINDOW))
 }
 
 /// The device state clients draw.
@@ -155,6 +312,13 @@ pub enum ServerMsg {
         /// older daemons: the tab then offers no pinch.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         input: Option<InputCaps>,
+        /// The codec this socket streams (0.46.7; absent from older
+        /// daemons, which means JPEG).
+        #[serde(default)]
+        codec: Codec,
+        /// Frames this viewer may have in flight (0.46.7; absent = 1).
+        #[serde(default = "one")]
+        window: u32,
     },
     State {
         state: SimState,
@@ -166,6 +330,17 @@ pub enum ServerMsg {
     Error { code: String, message: String },
     /// The fps cap changed (the viewer asked, or the daemon clamped it).
     Fps { fps: u32 },
+    /// The codec changed mid-stream (the H.264 encoder failed and this
+    /// socket fell back to JPEG). Only sent to viewers that offered video.
+    Codec {
+        codec: Codec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+}
+
+fn one() -> u32 {
+    1
 }
 
 /// What a device's input takes beyond one finger (`hello.input`).
@@ -184,8 +359,12 @@ pub struct InputCaps {
 pub enum ViewerMsg {
     /// The viewer finished drawing frame `seq`; send the next.
     Ack { seq: u32 },
-    /// Ask for a different rate (clamped; remote 2–15, local ≤ 30).
+    /// Ask for a different rate (clamped; remote 2–15, local ≤ 30; H.264
+    /// remote 2–30).
     Fps { fps: u32 },
+    /// Send a keyframe next (the viewer's decoder lost its place). Ignored
+    /// on a JPEG stream.
+    Keyframe,
     /// Pointer phases (down / move / up) for drags and taps.
     ///
     /// - `x2`/`y2`: a second finger (pinch). Both or neither; refused
@@ -366,6 +545,86 @@ mod tests {
     }
 
     #[test]
+    fn video_header_round_trips_and_refuses_jpeg_frames() {
+        let h = VideoHeader {
+            seq: 0x0102_0304,
+            width_px: 412,
+            height_px: 916,
+            width_pt: 411,
+            height_pt: 915,
+            codec: VIDEO_CODEC_H264,
+            key: true,
+            age_ms: 7,
+            ts_ms: 123_456,
+        };
+        let msg = h.encode(&[0, 0, 0, 1, 0x65]);
+        assert_eq!(msg.len(), VIDEO_HEADER_LEN + 5);
+        assert_eq!(&msg[..4], b"K2SV");
+        assert_eq!(&msg[4..8], &[4, 3, 2, 1], "LE seq");
+        assert_eq!(msg[16], 1);
+        assert_eq!(msg[17], VIDEO_FLAG_KEY);
+        let (d, au) = VideoHeader::decode(&msg).expect("decodes");
+        assert_eq!(d, h);
+        assert_eq!(au, &[0, 0, 0, 1, 0x65]);
+        let delta = VideoHeader { key: false, ..h }.encode(&[]);
+        assert!(!VideoHeader::decode(&delta).expect("delta").0.key);
+        // A K2SF frame is not a K2SV frame, and vice versa.
+        let jpeg = FrameHeader { seq: 1, width_px: 1, height_px: 1, width_pt: 1, height_pt: 1 }.encode(&[0xff; 16]);
+        assert!(VideoHeader::decode(&jpeg).is_none());
+        assert!(FrameHeader::decode(&msg).is_none());
+        assert!(VideoHeader::decode(&msg[..20]).is_none(), "short");
+    }
+
+    #[test]
+    fn negotiation_prefers_video_only_when_both_sides_can() {
+        assert_eq!(parse_offer(Some("h264,jpeg")), vec![Codec::H264, Codec::Jpeg]);
+        assert_eq!(parse_offer(Some("av1, h264 ,h264,")), vec![Codec::H264]);
+        assert!(parse_offer(None).is_empty());
+        assert_eq!(negotiate(&[Codec::H264, Codec::Jpeg], true), Codec::H264);
+        assert_eq!(negotiate(&[Codec::H264, Codec::Jpeg], false), Codec::Jpeg, "host can't encode");
+        assert_eq!(negotiate(&[Codec::Jpeg], true), Codec::Jpeg, "viewer can't decode");
+        assert_eq!(negotiate(&[], true), Codec::Jpeg, "an old viewer offers nothing");
+        assert_eq!(negotiate_window(None), 1, "an old viewer: one in flight");
+        assert_eq!(negotiate_window(Some("3")), 3);
+        assert_eq!(negotiate_window(Some("99")), MAX_WINDOW);
+        assert_eq!(negotiate_window(Some("0")), 1);
+        assert_eq!(negotiate_window(Some("lots")), 1);
+    }
+
+    #[test]
+    fn hello_says_codec_and_window_and_old_hellos_still_parse() {
+        let hello = ServerMsg::Hello {
+            sim: "s1".into(),
+            lane: LaneKind::Android,
+            state: SimState::Running,
+            profile: None,
+            fps: 30,
+            remote: false,
+            hold: HoldView::Free,
+            isolation: "x".into(),
+            input: None,
+            codec: Codec::H264,
+            window: 3,
+        };
+        let v = serde_json::to_value(&hello).expect("json");
+        assert_eq!(v["codec"], "h264");
+        assert_eq!(v["window"], 3);
+        // A hello from an older daemon (no codec, no window) = JPEG, 1.
+        let old: ServerMsg = serde_json::from_str(
+            r#"{"t":"hello","sim":"s1","lane":"android","state":"running","fps":8,"remote":true,"hold":{"kind":"free"},"isolation":"x"}"#,
+        )
+        .expect("old hello");
+        match old {
+            ServerMsg::Hello { codec, window, .. } => assert_eq!((codec, window), (Codec::Jpeg, 1)),
+            other => panic!("not a hello: {other:?}"),
+        }
+        let s = serde_json::to_value(ServerMsg::Codec { codec: Codec::Jpeg, message: None }).expect("json");
+        assert_eq!(s, serde_json::json!({"t":"codec","codec":"jpeg"}));
+        let k: ViewerMsg = serde_json::from_str(r#"{"t":"keyframe"}"#).expect("keyframe");
+        assert_eq!(k, ViewerMsg::Keyframe);
+    }
+
+    #[test]
     fn json_shapes_are_stable() {
         let m: ViewerMsg = serde_json::from_str(r#"{"t":"tap","x":10,"y":20.5}"#).expect("tap");
         assert_eq!(m, ViewerMsg::Tap { x: 10.0, y: 20.5 });
@@ -472,6 +731,8 @@ mod tests {
             hold: HoldView::Free,
             isolation: "x".into(),
             input: Some(InputCaps { multi_touch: true, fling: true }),
+            codec: Codec::Jpeg,
+            window: 1,
         };
         let v = serde_json::to_value(&hello).expect("json");
         assert_eq!(v["input"], serde_json::json!({"multiTouch": true, "fling": true}));

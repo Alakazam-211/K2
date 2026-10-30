@@ -78,6 +78,12 @@ pub fn png(img: &RgbImage) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// A frame as points-resolution RGB (the H.264 encoder's input).
+pub fn frame_rgb_points(f: &Frame) -> Result<RgbImage, String> {
+    let (pw, ph) = points_size(f);
+    Ok(scale_to(to_rgb(f)?, pw, ph))
+}
+
 /// A frame as a points-resolution JPEG `(jpeg, w, h)`. A `Jpeg` frame
 /// already at points size passes through without a re-encode.
 pub fn frame_jpeg(f: &Frame, quality: u8) -> Result<(Vec<u8>, u32, u32), String> {
@@ -119,6 +125,8 @@ mod tests {
         assert_eq!(&j[..2], &[0xff, 0xd8], "a JPEG");
         let back = to_rgb(&Frame { data: FrameData::Jpeg(j), width_px: 21, height_px: 42, scale: 1.0, ..f.clone() }).expect("decode");
         assert_eq!(back.dimensions(), (21, 42));
+        let rgb = frame_rgb_points(&f).expect("rgb");
+        assert_eq!(rgb.dimensions(), (21, 42), "the video encoder gets points too");
     }
 
     #[test]

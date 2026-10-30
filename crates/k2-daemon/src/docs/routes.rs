@@ -1239,28 +1239,16 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
     let report = s.write_base_with(j.conn, ROOT, base, &text, policy(c))?;
     let out = report.outcome;
     let exit = out.exit();
-    match out {
+    match &out {
         WriteOutcome::Applied(r) => {
             super::claims::record_read(c.caller, &key, r.version);
-            edit_reply(s, c, &r, Some(("notes", notes_text(&report.notes))))
+            edit_reply(s, c, r, Some(("notes", notes_text(&report.notes))))
         }
-        WriteOutcome::Conflicts(conf) => {
+        WriteOutcome::Conflicts(_) => {
             // Who claimed or last edited each conflicting region.
             let who: Vec<String> = report.conflict_notes.iter().map(|(i, n)| format!("conflict {}: {n}", i + 1)).collect();
-            let mut r = conflicts_response(
-                c.target,
-                None,
-                conflicts_json(&conf),
-                "conflicts",
-                "your change overlaps edits made since; nothing was applied",
-            );
-            if !who.is_empty() {
-                if let Ok(mut v) = serde_json::from_str::<Value>(&r.body) {
-                    v["notes"] = json!(who.join("\n"));
-                    r.body = v.to_string();
-                }
-            }
-            Ok(r)
+            let current = s.status()?.version;
+            Ok(write_conflict_response(c.target, &out, base, current, &who))
         }
         WriteOutcome::BaseExpired => Ok(with_exit(
             refusal(
@@ -1715,13 +1703,64 @@ fn log_item_json(i: &LogItem) -> Value {
     }
 }
 
-/// merge3 conflicts (`write --base`).
+/// merge3 conflicts (`write --base`): `lines` in the base, `yourLines` in
+/// the writer's text and `currentLines` in the current text (kit v0.9.7.1).
 fn conflicts_json(c: &[Conflict]) -> Value {
     Value::Array(
         c.iter()
-            .map(|c| json!({ "lines": [c.lines.0, c.lines.1], "base": c.base_text, "ours": c.ours, "theirs": c.theirs }))
+            .map(|c| {
+                json!({
+                    "lines": [c.lines.0, c.lines.1],
+                    "yourLines": [c.ours_lines.0, c.ours_lines.1],
+                    "currentLines": [c.theirs_lines.0, c.theirs_lines.1],
+                    "base": c.base_text,
+                    "ours": c.ours,
+                    "theirs": c.theirs,
+                })
+            })
             .collect(),
     )
+}
+
+/// A `write --base` conflict (the kit's `MPC-E111 write_conflict`, v0.9.7.1):
+/// 409, the kit's exit (1), and the kit's own refusal from
+/// [`WriteOutcome::refusal_at`] passed through: its message as the hint
+/// (the conflicting lines in the writer's text and in the current text,
+/// the current version, and the retry), its `next`, and its `details`
+/// verbatim (`base`, `current`, each conflict's `your_lines` and
+/// `current_lines`, which `next` names). `conflicts` keeps K2's shape, with
+/// `yourLines` and `currentLines`; `notes` says who claimed or last edited
+/// each region.
+fn write_conflict_response(t: &Target, out: &WriteOutcome, base: u64, current: u64, who: &[String]) -> CliResponse {
+    let WriteOutcome::Conflicts(conf) = out else {
+        unreachable!("write_conflict_response is for a conflict");
+    };
+    let report = out.refusal_at(base, current).expect("a conflict is a refusal");
+    let details: Value = report
+        .to_value()
+        .get("details")
+        .map(|d| serde_json::from_str(&d.to_json()).expect("the kit's details are JSON"))
+        .expect("the kit's refusal has details");
+    let mut body = json!({
+        "ok": false,
+        "doc": doc_json(t),
+        "error": {
+            "code": "conflicts",
+            "id": report.id(),
+            "hint": report.message(),
+            "next": report.next(),
+            "base": base,
+            "current": current,
+            "details": details,
+            "step": Value::Null,
+            "exit": report.exit(),
+        },
+        "conflicts": conflicts_json(conf),
+    });
+    if !who.is_empty() {
+        body["notes"] = json!(who.join("\n"));
+    }
+    CliResponse { status: "409 Conflict", content_type: "application/json", body: body.to_string() }
 }
 
 /// Undo / redo / revert conflict regions (live coordinates, a kind).
@@ -2074,7 +2113,7 @@ mod tests {
             assert!(!p.contains(OLD_PROMISE), "the old undo promise is still in {start}");
         }
         let changelog = include_str!("../../../../vendor/k2-mpc-base/CHANGELOG.md");
-        let from = changelog.find("\n## v0.9.7").expect("v0.9.7 in the kit's CHANGELOG");
+        let from = changelog.find("\n## v0.9.7 (").expect("v0.9.7 in the kit's CHANGELOG");
         let to = changelog[from + 1..].find("\n## v").expect("the section after v0.9.7") + from + 1;
         let section = &changelog[from..to];
         let at = section.find("The\nsentence hosts pin verbatim").expect("the pinned sentence in v0.9.7's D1 notes");
@@ -2137,6 +2176,83 @@ mod tests {
         let v: Value = serde_json::from_str(&r.body).unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.body));
         assert_eq!(v["ok"], json!(false), "{}", r.body);
         v["error"].as_object().unwrap_or_else(|| panic!("no error object: {}", r.body)).clone()
+    }
+
+    /// Kit v0.9.7.1: a `write --base` conflict (MPC-E111) reaches the agent
+    /// with what the kit now says: the conflicting lines in the agent's text
+    /// and in the current text, the current version and the retry (the
+    /// kit's message, verbatim, as the hint the CLI prints), the kit's
+    /// `next` and `details`, exit 1; `conflicts` carries both line ranges.
+    #[test]
+    fn a_write_conflict_names_the_lines_the_current_version_and_the_retry() {
+        let t = Target {
+            project_id: "p1".into(),
+            root: "/w".into(),
+            rel: "notes/plan.md".into(),
+            abs: "/w/notes/plan.md".into(),
+            tier: target::Tier::Markdown,
+        };
+        // Base "a\nb\nc\n": the agent rewrote line 2; meanwhile someone
+        // added a line on top and rewrote the same line (now line 3).
+        let conflict = Conflict {
+            base: 2..4,
+            lines: (2, 2),
+            base_text: "b\n".into(),
+            ours: "B1\n".into(),
+            theirs: "B2\n".into(),
+            ours_lines: (2, 2),
+            theirs_lines: (3, 3),
+        };
+        let out = WriteOutcome::Conflicts(vec![conflict]);
+        let who = vec!["conflict 1: line 3 was edited by Sam, 4 s ago".to_string()];
+        let r = write_conflict_response(&t, &out, 4, 9, &who);
+        assert_eq!(r.status, "409 Conflict");
+        let e = error_of(&r);
+        assert_eq!(e["code"], json!("conflicts"));
+        assert_eq!(e["id"], json!("MPC-E111"));
+        assert_eq!(e["exit"], json!(1));
+        assert_eq!(
+            e["hint"],
+            json!(
+                "your write touches lines someone else changed since version 4: 1 region(s), your line 2 \
+                 (now line 3 of version 9); nothing applied. To retry: read the current text again (cat; it \
+                 is version 9), redo your change on it, then write --base 9"
+            )
+        );
+        let next = e["next"].as_str().expect("next is a string");
+        assert!(next.starts_with("Someone else changed the same lines after the version you read"), "{next}");
+        assert!(next.contains("write --base <that version>"), "{next}");
+        assert_eq!(e["base"], json!(4));
+        assert_eq!(e["current"], json!(9));
+        assert_eq!(
+            e["details"],
+            json!({
+                "base": 4,
+                "current": 9,
+                "conflicts": [{
+                    "lines": [2, 2],
+                    "your_lines": [2, 2],
+                    "current_lines": [3, 3],
+                    "base": "b\n",
+                    "ours": "B1\n",
+                    "theirs": "B2\n",
+                }],
+            })
+        );
+        let v: Value = serde_json::from_str(&r.body).expect("JSON");
+        assert_eq!(
+            v["conflicts"],
+            json!([{
+                "lines": [2, 2],
+                "yourLines": [2, 2],
+                "currentLines": [3, 3],
+                "base": "b\n",
+                "ours": "B1\n",
+                "theirs": "B2\n",
+            }])
+        );
+        assert_eq!(v["notes"], json!(who[0]));
+        assert_eq!(v["doc"], json!({ "workspace": "p1", "path": "notes/plan.md" }));
     }
 
     /// A table this kit doesn't know (since v0.9.7 the kit owns `authored`,

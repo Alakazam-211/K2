@@ -867,7 +867,7 @@ python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); sys.exit(0 if b == b"\x
     || fail "bom.md: $(od -c "$B/bom.md" | head -3)"
 ok "the kit drops cat's BOM from a write body (--base live, and Markdown): one BOM, never two"
 
-echo "== CSV as text: rows and cells merge, a moved row conflicts =="
+echo "== CSV as text: rows merge; two cells of one row and a moved row conflict =="
 owner GET /cli/docs/read "" "workspace=$B&path=data.csv"; want 200 "csv read"
 CV="$(jq_ "$BODY" 'j["version"]')"
 owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"data.csv","edits":[{"lines":"2,2","text":"1,APPLE,3"}]}))')" "workspace=$B"
@@ -879,10 +879,21 @@ jok "$BODY" 'j["text"] == "id,name,qty\n1,APPLE,3\n2,banana,5\n3,cherry,70\n"' "
 CV="$(jq_ "$BODY" 'j["version"]')"
 owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"data.csv","edits":[{"from":"3:3","to":"3:9","text":"BANANA"}]}))')" "workspace=$B"
 want 200 "a person edits a cell of row 2"
-CLI_IN=$'id,name,qty\n1,APPLE,3\n2,banana,6\n3,cherry,70\n'
-cli agent "$B" doc write --base "$CV" data.csv; want_rc 0 "an agent edits another cell of row 2"
 owner GET /cli/docs/read "" "workspace=$B&path=data.csv"
-jok "$BODY" 'j["text"] == "id,name,qty\n1,APPLE,3\n2,BANANA,6\n3,cherry,70\n"' "different cells of one row merge"
+NV="$(jq_ "$BODY" 'j["version"]')"
+CLI_IN=$'id,name,qty\n1,APPLE,3\n2,banana,6\n3,cherry,70\n'
+cli agent "$B" doc write --base "$CV" data.csv
+# Kit v0.9.7.1: a write merges by whole lines, and a row is one line.
+want_rc 1 "an agent's edit to another cell of row 2 conflicts"
+has "$ERR" "your write touches lines someone else changed since version $CV: 1 region(s), your line 3 (now line 3 of version $NV); nothing applied" "the conflict names the lines and the current version"
+has "$ERR" "To retry: read the current text again (cat; it is version $NV), redo your change on it, then write --base $NV" "the conflict says how to retry"
+has "$ERR" "conflict at your lines 3-3 (now lines 3-3):" "the CLI lists the region in both texts"
+owner GET /cli/docs/read "" "workspace=$B&path=data.csv"
+jok "$BODY" 'j["text"] == "id,name,qty\n1,APPLE,3\n2,BANANA,5\n3,cherry,70\n"' "nothing applied from the conflicting write"
+CLI_IN=$'id,name,qty\n1,APPLE,3\n2,BANANA,6\n3,cherry,70\n'
+cli agent "$B" doc write --base "$NV" data.csv; want_rc 0 "the retry from the current version lands"
+owner GET /cli/docs/read "" "workspace=$B&path=data.csv"
+jok "$BODY" 'j["text"] == "id,name,qty\n1,APPLE,3\n2,BANANA,6\n3,cherry,70\n"' "the re-read and retried write lands"
 CV="$(jq_ "$BODY" 'j["version"]')"
 owner POST /cli/docs/edit "$(python3 -c 'import json; print(json.dumps({"path":"data.csv","edits":[{"lines":"4,4","text":""},{"after":1,"text":"3,cherry,70"}]}))')" "workspace=$B"
 want 200 "a person moves row 3 to the top"
@@ -891,7 +902,7 @@ cli agent "$B" doc write --base "$CV" data.csv
 want_rc 1 "an agent's edit to the moved row conflicts"; has "$ERR" "conflict" "the moved row is a conflict"
 owner GET /cli/docs/read "" "workspace=$B&path=data.csv"
 jok "$BODY" '"71" not in j["text"]' "nothing applied from the conflicting write"
-ok "CSV as text: different rows and cells merge; an edit to a moved row conflicts"
+ok "CSV as text: different rows merge; two cells of one row conflict and the retry lands; an edit to a moved row conflicts"
 
 cli agent "$B" doc mv plain.txt plain.toml; want_rc 0 "mv text to another text family"
 cli agent "$B" doc log plain.toml; want_rc 0 "log after mv"

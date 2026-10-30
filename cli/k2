@@ -83921,7 +83921,12 @@ print(json.dumps({"error": {"code": code or "error", "hint": hint, "status": int
 if isinstance(v, dict) and isinstance(v.get("conflicts"), list) and not as_json:
     for c in v["conflicts"]:
         ln = c.get("lines") or ["?", "?"]
-        print("conflict at lines %s-%s:\n  yours:  %r\n  theirs: %r" % (ln[0], ln[1], c.get("ours"), c.get("theirs")), file=sys.stderr)
+        yl, cl = c.get("yourLines"), c.get("currentLines")
+        if isinstance(yl, list) and isinstance(cl, list) and len(yl) == 2 and len(cl) == 2:
+            # write --base: where the region is in your text and in the current text.
+            print("conflict at your lines %s-%s (now lines %s-%s):\n  yours: %r\n  now:   %r" % (yl[0], yl[1], cl[0], cl[1], c.get("ours"), c.get("theirs")), file=sys.stderr)
+        else:
+            print("conflict at lines %s-%s:\n  yours:  %r\n  theirs: %r" % (ln[0], ln[1], c.get("ours"), c.get("theirs")), file=sys.stderr)
 sys.exit(rc)
 ' "$status" "${_DOC_JSON:-0}"
     exit $?

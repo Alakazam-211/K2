@@ -45681,6 +45681,24 @@ WHAT IT IS
   `sed -i`). Use `k2 doc`, not raw tools, on a doc someone may be in:
   a raw write is merged, but it is attributed to "an outside edit".
 
+CORES
+  Live docs are switched per kind of file on each server: k2 doc cores.
+  Markdown, text and code, and any other file each have a multiplayer
+  core, and every core is off until the server's owner or an Admin turns
+  it on (k2 doc cores on <core>, or Settings → Cores → Multiplayer). A
+  file whose core is off is refused by every k2 doc verb (core_off, exit
+  3): nothing was opened or changed. Edit it with ordinary tools, and if
+  it should be live, ask your human (k2 thread): only a person switches a
+  core (k2 doc cores on|off is people only; there is no permission card).
+  Which core: .md/.markdown need markdown; any other text (code, config,
+  .txt, logs, .csv) needs text; everything else needs any-file. A text
+  file too large or too odd to edit live (it is then an any-file doc)
+  still needs its own core: a big .md needs markdown, not any-file.
+  Turning a core off writes every live change to the file first, then
+  closes its live docs: everyone's presence, claims and leases on them
+  end; their history stays. Edits made to the file while its core was off
+  arrive as one outside edit when it is on again.
+
 READ
   k2 doc cat notes.md                  the doc now (exact bytes)
   k2 doc grep -n TODO notes.md         head / tail / wc / sed -n 'a,bp' / view --lines a,b
@@ -83785,6 +83803,11 @@ program makes a live file unreadable as text, edits exit 4 and the file isn't
 written until it reads as text again. `mv` keeps the kind: text stays text
 (notes.txt to notes.toml), never Markdown or an any-file doc.
 Lines starting "note:" on stderr say who else is on the lines you touched.
+Live docs are switched per kind of file on each server: k2 doc cores. A
+file whose core is off is refused (core_off, exit 3).
+Every core is off until the server's owner or an Admin turns it on; while it
+is off every verb on its files refuses and nothing is opened or changed.
+Agents can list the cores but not switch them (k2 doc cores --help).
 
 Read (the doc's path is the LAST argument; GNU flags, a subset):
   k2 doc cat [-n] <f>                 the doc now (exact bytes)
@@ -83921,7 +83944,7 @@ daemon is unreachable (the JSON error line's code says which) · 2 bad
 usage, unsupported flag, rate limited, a text verb on an any-file doc
 (not_a_text_doc), no lease to renew, an export target or option the file
 doesn't have, an export limit, an --out that exists · 3 refused
-(not_connected, doc_not_shared, doc_forbidden, history_forbidden,
+(core_off, not_connected, doc_not_shared, doc_forbidden, history_forbidden,
 export_place_forbidden …; the last line says how to ask) · 4 no such file or change, or it can't be a live doc (declined:
 a secret, the vault, too large) · 5 someone else holds it for now: a lease,
 or (agents) a claim on those lines; the error names who and for how long ·
@@ -84811,14 +84834,179 @@ print(full)
 ' "$local_out" "$remote"
 }
 
+_doc_cores_usage() {
+    cat <<'USAGE'
+Usage: k2 doc cores [on|off <core>] [--json] [--host <server> [--token T]]
+
+Live docs are switched per kind of file on each server. Each kind has a
+multiplayer core; while its core is off, every k2 doc verb on those files
+refuses (core_off, exit 3: nothing is opened or changed) and people open them
+the usual way. Every core is off until the server's owner or an Admin turns
+it on.
+
+Which core a file needs, by its name:
+  markdown    .md and .markdown
+  text        any other text: code, config, HTML/XML/SVG, diagram sources,
+              .txt, logs, .csv/.tsv, and names without an extension
+  any-file    everything else (images, PDFs, office files, archives, binaries)
+  A text file too large or too odd to edit live (it is then an any-file doc)
+  still needs its own core: a big .md needs markdown, not any-file.
+
+  k2 doc cores                list the cores on this server and whether each is on
+  k2 doc cores on <core>      turn one on (people only: the owner or an Admin)
+  k2 doc cores off <core>     turn one off; files open live are written to disk
+                              and closed (their history stays)
+    <core>: markdown | text | any-file
+  --json                      the daemon's JSON (on/off: the switches and the report)
+  --host <server> [--token T] another server (a Connect login with the Owner or Admin role)
+
+People turn cores on or off here (from a terminal outside K2) or in
+Settings → Cores → Multiplayer. Agents only list them: an agent that needs a
+core asks its human (k2 thread) and, meanwhile, edits the file with ordinary
+tools. There is no permission card for it.
+
+Exit: 0 ok · 1 the flip worked but a file couldn't be written (its changes
+are kept in K2's history and written when the core is on again), or no
+answer from the daemon · 2 bad usage or an unknown core · 3 refused (an
+agent, or a login that isn't the owner or an Admin).
+USAGE
+}
+
+# `k2 doc cores`: Settings → Cores → Multiplayer from the CLI. Listing is
+# GET /cli/docs/cores (agents too); on|off writes the box key through
+# /cli/settings/update (never a docs route), people only.
+_doc_cores() {
+    local action="" core=""
+    local -a rest=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help) _doc_cores_usage; return 0 ;;
+            --host|--token) rest+=("$1" "${2:-}"); shift; [ $# -gt 0 ] && shift ;;
+            --json|--host=*) rest+=("$1"); shift ;;
+            -*) _doc_die usage "k2 doc cores doesn't take $1 (k2 doc cores --help)" ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    _doc_parse "${rest[@]+"${rest[@]}"}"
+    case "${#_DOC_ARGS[@]}" in
+        0) ;;
+        2) action="${_DOC_ARGS[0]}"; core="${_DOC_ARGS[1]}" ;;
+        *) _doc_die usage "k2 doc cores [on|off <core>]  (<core>: markdown | text | any-file)" ;;
+    esac
+    if [ -z "$action" ]; then
+        _doc_call GET /cli/docs/cores ""
+        _doc_print_json_or '
+import json, sys
+v = json.load(sys.stdin)
+print("Multiplayer cores on this server (the owner or an Admin turns them on or off):")
+for c in v.get("cores") or []:
+    pill = " (Beta)" if c.get("status") == "beta" else ""
+    print("  %-10s %-4s  %s%s: %s" % (c["id"], "on" if c.get("on") else "off", c["name"], pill, c.get("short") or c.get("description") or ""))
+    o = c.get("open") or {}
+    if c.get("on") and o.get("files"):
+        n = o["files"]
+        shown = ", ".join(o.get("paths") or [])
+        print("  %-10s       open live now: %d file%s%s" % ("", n, "" if n == 1 else "s", " (%s)" % shown if shown else ""))
+print("While a core is off, k2 doc refuses its files (core_off, exit 3) and people open them the usual way.")
+'
+        return 0
+    fi
+    case "$action" in on|off) ;; *) _doc_die usage "k2 doc cores on|off <core>  (<core>: markdown | text | any-file)" ;; esac
+    case "$core" in markdown|text|any-file) ;; *) _doc_die usage "no such core: $core (markdown, text, any-file)" ;; esac
+    if [ -n "${SCOPED_TOKEN:-}" ]; then
+        [ "${_DOC_JSON:-0}" = "1" ] || echo "Error [person_only]: k2 doc cores on|off is for people, from a terminal outside K2 or Settings → Cores → Multiplayer. An agent can list the cores (k2 doc cores) and asks its human (k2 thread) to turn one on." >&2
+        python3 -c 'import json; print(json.dumps({"error": {"code": "person_only", "hint": "k2 doc cores on|off is for people"}}))' >&2
+        exit 3
+    fi
+    local body raw status out
+    body="$(python3 -c 'import json,sys; print(json.dumps({"multiplayerCores": {sys.argv[1]: sys.argv[2] == "on"}}))' "$core" "$action")"
+    raw="$(cli_send_json POST /cli/settings/update "$body")"
+    status="${raw##*$'\n'}"
+    out="${raw%$'\n'*}"
+    [ "$status" = "$raw" ] && out=""
+    [ -n "$status" ] || status="000"
+    if [ "$status" != "200" ]; then
+        printf '%s' "$out" | python3 -c '
+import json, sys
+status, as_json = sys.argv[1], sys.argv[2] == "1"
+raw = sys.stdin.read()
+try:
+    v = json.loads(raw)
+except Exception:
+    v = None
+hint = ""
+if isinstance(v, dict):
+    e = v.get("error")
+    if isinstance(e, str):
+        hint = e
+    elif isinstance(e, dict):
+        hint = e.get("hint") or e.get("message") or ""
+if not hint:
+    hint = raw.strip()[:300] or ("no answer from the K2 daemon" if status == "000" else "the daemon refused (HTTP %s)" % status)
+code = {"400": "bad_request", "401": "refused", "403": "refused", "000": "daemon_unreachable"}.get(status, "error")
+rc = {"400": 2, "401": 3, "403": 3}.get(status, 1)
+if not as_json:
+    print("Error: %s" % hint, file=sys.stderr)
+print(json.dumps({"error": {"code": code, "hint": hint, "status": int(status) if status.isdigit() else 0}}), file=sys.stderr)
+sys.exit(rc)
+' "$status" "${_DOC_JSON:-0}"
+        exit $?
+    fi
+    printf '%s' "$out" | python3 -c '
+import json, sys
+core, action, as_json = sys.argv[1], sys.argv[2], sys.argv[3] == "1"
+v = json.load(sys.stdin)
+r = v.get("multiplayerCoresReport") or {}
+failed = r.get("failed") or []
+if as_json:
+    print(json.dumps({"multiplayerCores": v.get("multiplayerCores") or {}, "multiplayerCoresReport": r}))
+    sys.exit(1 if failed else 0)
+name = {"markdown": "The Markdown core", "text": "The text and code core", "any-file": "The any-file core"}[core]
+changed = any(c.get("core") == core for c in r.get("changed") or [])
+if not changed:
+    print("%s is already %s." % (name, action))
+elif action == "on":
+    print("%s is on. Its files are live docs on this server from now on." % name)
+else:
+    bad = [f.get("path") for f in failed]
+    n = int(r.get("closed") or 0) - len(failed)
+    paths = [p for p in r.get("paths") or [] if p not in bad]
+    if n <= 0 and not failed:
+        line = "%s is off. No files were open live." % name
+    elif n <= 0:
+        line = "%s is off." % name
+    else:
+        line = "%s is off. %d live file%s written to disk and closed%s." % (
+            name, n, " was" if n == 1 else "s were", " (%s)" % ", ".join(paths) if paths else "")
+    if failed:
+        line += " %d file%s couldn%st be written: %s; %s changes are kept in K2%ss history and are written when the core is turned on again." % (
+            len(failed), "" if len(failed) == 1 else "s", chr(39),
+            ", ".join("%s (%s)" % (f.get("path"), f.get("error")) for f in failed),
+            "its" if len(failed) == 1 else "their", chr(39))
+    print(line)
+sys.exit(1 if failed else 0)
+' "$core" "$action" "${_DOC_JSON:-0}"
+    exit $?
+}
+
 cmd_doc() {
     local verb="${1:-}"
+    # `k2 doc cores --help` is its own page.
+    if [ "$verb" = cores ]; then
+        shift
+        _doc_cores "$@"
+        return $?
+    fi
     if [ -z "$verb" ] || _wants_help "$@"; then
         _doc_usage
         return 0
     fi
     shift
     case "$verb" in
+        cores)
+            # Settings → Cores → Multiplayer: which kinds of file are live
+            # docs on this server (k2 doc cores --help).
+            _doc_cores "$@" ;;
         diff)
             # `diff --version V`: the doc's history; otherwise the text tool
             # (your copy on stdin vs the doc).

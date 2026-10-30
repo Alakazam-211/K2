@@ -20,6 +20,24 @@ WHAT IT IS
   `sed -i`). Use `k2 doc`, not raw tools, on a doc someone may be in:
   a raw write is merged, but it is attributed to "an outside edit".
 
+CORES
+  Live docs are switched per kind of file on each server: k2 doc cores.
+  Markdown, text and code, and any other file each have a multiplayer
+  core, and every core is off until the server's owner or an Admin turns
+  it on (k2 doc cores on <core>, or Settings → Cores → Multiplayer). A
+  file whose core is off is refused by every k2 doc verb (core_off, exit
+  3): nothing was opened or changed. Edit it with ordinary tools, and if
+  it should be live, ask your human (k2 thread): only a person switches a
+  core (k2 doc cores on|off is people only; there is no permission card).
+  Which core: .md/.markdown need markdown; any other text (code, config,
+  .txt, logs, .csv) needs text; everything else needs any-file. A text
+  file too large or too odd to edit live (it is then an any-file doc)
+  still needs its own core: a big .md needs markdown, not any-file.
+  Turning a core off writes every live change to the file first, then
+  closes its live docs: everyone's presence, claims and leases on them
+  end; their history stays. Edits made to the file while its core was off
+  arrive as one outside edit when it is on again.
+
 READ
   k2 doc cat notes.md                  the doc now (exact bytes)
   k2 doc grep -n TODO notes.md         head / tail / wc / sed -n 'a,bp' / view --lines a,b

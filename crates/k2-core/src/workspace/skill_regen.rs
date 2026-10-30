@@ -703,6 +703,7 @@ k2 doc write --base <version> notes.md < new.md          # rewrite from what you
 k2 doc who notes.md · k2 doc undo notes.md · k2 doc log notes.md
 ```
 Another workspace's doc needs a connection and a share from its owner (refused: `doc_not_shared`).
+Live docs are switched per kind of file on each server: `k2 doc cores`. A file whose core is off is refused (`core_off`, exit 3).
 
 ## Agent presets (which agent program a workspace launches)
 ```

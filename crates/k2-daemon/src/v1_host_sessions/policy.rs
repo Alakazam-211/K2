@@ -597,6 +597,7 @@ mod tests {
     /// session id, sandbox None.
     #[test]
     fn resolve_pins_cwd_keeps_danger_by_default_and_splices_session_id() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-default";
         insert_project("v1host-policy-default", ws_path);
@@ -653,6 +654,7 @@ mod tests {
     /// Explicit opt-out (`api_skip_permissions=0`) strips auto-approve flags.
     #[test]
     fn opt_out_strips_auto_approve_flags() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-optout";
         insert_project("v1host-policy-optout", ws_path);
@@ -695,6 +697,7 @@ mod tests {
     /// claude), not the premint.
     #[test]
     fn resume_uses_resume_grammar() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-resume";
         insert_project("v1host-policy-resume", ws_path);
@@ -724,6 +727,7 @@ mod tests {
     /// principal key OVERRIDES a same-named preset entry.
     #[test]
     fn preset_env_merges_under_principal_key() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-preset-env";
         insert_project("v1host-policy-preset-env", ws_path);
@@ -779,6 +783,7 @@ mod tests {
     /// forced daemon SessionId.
     #[test]
     fn resume_splices_the_caller_target_not_the_forced_sid() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-target";
         insert_project("v1host-policy-target", ws_path);
@@ -822,6 +827,7 @@ mod tests {
     /// codex-preset workspace's agent boots authenticated over the API.
     #[test]
     fn openai_provider_key_stages_openai_env_vars() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-openai";
         insert_project("v1host-policy-openai", ws_path);
@@ -862,6 +868,7 @@ mod tests {
     /// GEMINI_API_KEY and GOOGLE_API_KEY.
     #[test]
     fn google_provider_key_stages_both_google_vars() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-google";
         insert_project("v1host-policy-google", ws_path);
@@ -890,6 +897,7 @@ mod tests {
     /// env var, no Anthropic fallback, never the value anywhere).
     #[test]
     fn unknown_provider_stages_nothing() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-unkprov";
         insert_project("v1host-policy-unkprov", ws_path);
@@ -920,6 +928,7 @@ mod tests {
     /// A blank principal key stages no credential (never an empty assignment).
     #[test]
     fn blank_principal_key_is_dropped() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-blankkey";
         insert_project("v1host-policy-blankkey", ws_path);
@@ -1003,6 +1012,7 @@ mod tests {
     /// (`--auto-yes`, not in the hardcoded floor) gets it STRIPPED.
     #[test]
     fn declared_custom_danger_flag_is_stripped_when_opted_out() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-declared-flag";
         insert_project("v1host-policy-declared-flag", ws_path);
@@ -1042,6 +1052,7 @@ mod tests {
     /// survives because it cannot be known.
     #[test]
     fn null_metadata_preset_still_strips_the_floor_when_opted_out() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-null-meta";
         insert_project("v1host-policy-null-meta", ws_path);
@@ -1080,6 +1091,7 @@ mod tests {
     /// custom flags AND floor flags all survive.
     #[test]
     fn opt_in_bypasses_declared_flag_stripping_too() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-optin-declared";
         insert_project("v1host-policy-optin-declared", ws_path);
@@ -1144,6 +1156,7 @@ mod tests {
     /// static table would poll (and for one it's never studied).
     #[test]
     fn injection_profile_preset_settle_beats_static_table() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-profile-settle";
         insert_project("v1host-profile-settle", ws_path);
@@ -1159,6 +1172,7 @@ mod tests {
     /// guessed dialect and never to a panic.
     #[test]
     fn injection_profile_malformed_readiness_degrades_to_static_table() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-profile-malformed";
         insert_project("v1host-profile-malformed", ws_path);
@@ -1177,6 +1191,7 @@ mod tests {
     /// the claude-shaped poll default (today's behavior, unchanged).
     #[test]
     fn injection_profile_unknown_everything_is_the_poll_default() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-profile-default";
         insert_project("v1host-profile-default", ws_path);
@@ -1190,10 +1205,35 @@ mod tests {
 
     // ── Launch-param prompt (prd-host-session-launch-param-prompt-v1) ─
 
+    /// Why every test here takes a `TempHome`: with no workspace default the
+    /// command comes from the CURRENT HOME's `settings.json`. Without one, a
+    /// parallel test's home made `launch_param_claude_cold_attaches_no_print`
+    /// resolve codex (`identity=["--yolo"]`, soak 10-29, seed 5).
+    #[test]
+    fn the_current_homes_global_default_agent_picks_the_command() {
+        let _home = k2_core::test_env::TempHome::new();
+        k2_core::db::init_for_tests();
+        let ws_path = "/tmp/k2-v1host-global-default";
+        insert_project("v1host-global-default", ws_path);
+        let mut settings = k2_core::app_settings::load();
+        settings.default_agent = "codex".into();
+        k2_core::app_settings::save(&settings).expect("save settings");
+        let (spawn, _, _) = resolve_host_spawn(
+            &V1Principal::Owner,
+            ws_path,
+            &SessionId::new(),
+            false,
+            &ApiHostSessionRequest::default(),
+        );
+        assert_eq!(spawn.command.as_deref(), Some("codex"));
+        assert_eq!(spawn.args.as_deref(), Some(&["--yolo".to_string()][..]));
+    }
+
     /// A1: Claude cold spawn attaches interactive initial message; no
     /// `--print`. Identity args stay durable; exec_args carries prompt.
     #[test]
     fn launch_param_claude_cold_attaches_no_print() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-claude-cold";
         insert_project("v1host-lp-claude-cold", ws_path);
@@ -1242,6 +1282,7 @@ mod tests {
     /// A2: Claude dead resume uses `--resume` SSOT + next prompt.
     #[test]
     fn launch_param_claude_resume_ssot_plus_prompt() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-claude-resume";
         insert_project("v1host-lp-claude-resume", ws_path);
@@ -1282,6 +1323,7 @@ mod tests {
     /// A6 / Codex: `resume <id> <prompt>` subcommand shape.
     #[test]
     fn launch_param_codex_resume_subcommand_plus_prompt() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-codex";
         insert_project("v1host-lp-codex", ws_path);
@@ -1330,6 +1372,7 @@ mod tests {
     /// auto-approve spelling. Both together make codex exit at argv parse.
     #[test]
     fn builtin_codex_preset_keeps_one_auto_approve_spelling() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-codex-builtin-yolo";
         insert_project("v1host-codex-builtin-yolo", ws_path);
@@ -1389,6 +1432,7 @@ mod tests {
     /// A6 / Pi: dead resume uses `--session`, never `--continue`.
     #[test]
     fn launch_param_pi_session_not_continue() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-pi";
         insert_project("v1host-lp-pi", ws_path);
@@ -1424,6 +1468,7 @@ mod tests {
     /// Hermes / unknown → attached=false (inject fallback D10).
     #[test]
     fn launch_param_hermes_falls_back_to_inject() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-hermes";
         insert_project("v1host-lp-hermes", ws_path);
@@ -1449,6 +1494,7 @@ mod tests {
     /// Empty prompt → no launch-param, no exec_args.
     #[test]
     fn launch_param_empty_prompt_not_attached() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-empty";
         insert_project("v1host-lp-empty", ws_path);
@@ -1470,6 +1516,7 @@ mod tests {
     /// attached (register / recovery replay safety — A8 / A10).
     #[test]
     fn launch_param_fire_once_identity_excludes_prompt() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-lp-fireonce";
         insert_project("v1host-lp-fireonce", ws_path);
@@ -1508,6 +1555,7 @@ mod tests {
 
     #[test]
     fn workspace_model_splices_claude_flag() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-ws-model";
         insert_project("v1host-policy-ws-model", ws_path);
@@ -1533,6 +1581,7 @@ mod tests {
 
     #[test]
     fn api_model_overrides_workspace() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-api-model";
         insert_project("v1host-policy-api-model", ws_path);
@@ -1562,6 +1611,7 @@ mod tests {
 
     #[test]
     fn omit_both_matches_baseline_argv() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-omit-model";
         insert_project("v1host-policy-omit-model", ws_path);
@@ -1592,6 +1642,7 @@ mod tests {
 
     #[test]
     fn resume_without_api_or_checkbox_does_not_splice() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-resume-model";
         insert_project("v1host-policy-resume-model", ws_path);
@@ -1614,6 +1665,7 @@ mod tests {
 
     #[test]
     fn resume_with_force_checkbox_splices_workspace() {
+        let _home = k2_core::test_env::TempHome::new();
         k2_core::db::init_for_tests();
         let ws_path = "/tmp/k2-v1host-policy-resume-force";
         insert_project("v1host-policy-resume-force", ws_path);

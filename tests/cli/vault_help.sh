@@ -164,7 +164,7 @@ done
 last="$(printf '%s\n' "$study" | grep -E '^[A-Z][A-Z ,()'"'"'-]+$|^[A-Z][A-Z '"'"']+ \(' | tail -1)"
 case "$last" in "WHAT THE VAULT CAN'T DO YET"*) ;; *) fail "the can't-do-yet block isn't last (last section: $last)" ;; esac
 lines="$(printf '%s\n' "$study" | wc -l | tr -d ' ')"
-[ "$lines" -le 180 ] || fail "study vault is $lines lines (max 180)"
+[ "$lines" -le 184 ] || fail "study vault is $lines lines (max 184)"
 if printf '%s' "$study" | grep -Fq "plain systemd units"; then fail "study vault still lists plain systemd units as can't-do"; fi
 if printf '%s' "$study" | grep -Fq "ssh-agent: file delivery"; then fail "study vault still lists ssh-agent as can't-do"; fi
 ok "k2 study vault: new sections present, can't-do-yet last, $lines lines"

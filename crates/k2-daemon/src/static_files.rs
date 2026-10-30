@@ -267,9 +267,11 @@ fn reason(status: u16) -> &'static str {
     }
 }
 
-fn head_text(status: u16, lines: &str, extra: &str, keep_alive: bool) -> String {
+/// Every answer's head: `frame_lines` are the caller's framing lines plus
+/// the App's allowed headers (`Served::extra_lines`), on every status.
+fn head_text(status: u16, lines: &str, frame_lines: &str, keep_alive: bool) -> String {
     format!(
-        "HTTP/1.1 {status} {}\r\n{lines}X-Content-Type-Options: nosniff\r\n{extra}Connection: {}\r\n\r\n",
+        "HTTP/1.1 {status} {}\r\n{lines}X-Content-Type-Options: nosniff\r\n{frame_lines}Connection: {}\r\n\r\n",
         reason(status),
         if keep_alive { "keep-alive" } else { "close" }
     )
@@ -367,7 +369,7 @@ where
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
     loop {
         let end = tokio::select! {
-            r = read_head(stream, &mut buf) => r,
+            r = read_head(stream, &mut buf, &s.extra_lines) => r,
             _ = cut.changed() => return,
         };
         let Some(end) = end else { return };
@@ -393,7 +395,7 @@ where
 /// Read until a whole head is in `buf`; `Some(head length)`. `None`: the
 /// peer closed, went idle, sent too much, or the head timed out (a head
 /// that grew past [`MAX_HEAD`] gets a 431 first).
-async fn read_head<S>(stream: &mut S, buf: &mut Vec<u8>) -> Option<usize>
+async fn read_head<S>(stream: &mut S, buf: &mut Vec<u8>, frame_lines: &str) -> Option<usize>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -419,7 +421,7 @@ where
             return Some(e);
         }
         if buf.len() > MAX_HEAD {
-            let h = head_text(431, "Content-Length: 0\r\n", "", false);
+            let h = head_text(431, "Content-Length: 0\r\n", frame_lines, false);
             let _ = stream.write_all(h.as_bytes()).await;
             return None;
         }

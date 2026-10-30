@@ -208,6 +208,10 @@ async fn head_405_and_keep_alive() {
     assert!(r.ends_with("<!doctype html><div id=app></div>"), "{r}");
     let r = exchange(&s, "NOT HTTP\r\n\r\n").await;
     assert_eq!(status(&r), 400);
+    assert_eq!(header(&r, "x-frame-options"), Some("SAMEORIGIN"), "a 400 carries the frame lines");
+    let r = exchange(&s, &format!("GET / HTTP/1.1\r\nX-Big: {}\r\n", "a".repeat(20_000))).await;
+    assert_eq!(status(&r), 431, "{}", &r[..r.len().min(200)]);
+    assert_eq!(header(&r, "x-frame-options"), Some("SAMEORIGIN"), "a 431 carries the frame lines");
 }
 
 #[test]

@@ -81,6 +81,21 @@ pub const CLASSES: &[&str] = &[
     // someone else wrote), and an undo, redo or revert after one on the same root
     "d1_widened",
     "d1_widened_then_undone",
+    // the end of the text (amendment O5 end-of-text): one side's line landing after the
+    // other left the text open, by case
+    "end_break_a",
+    "end_break_b",
+    "end_break_c",
+    "end_break_d",
+    // v0.9.8: write --base by whole lines. A clean write --base over adjacent lines that share
+    // their first character, which a character diff reads one line off; the part of it where
+    // v0.9.7's character-trimmed sides conflicted (a false conflict); and a write --base
+    // refused where each side changed one line into a different line (different words too)
+    "write_base_shared_start",
+    "write_base_shared_start_was_conflict",
+    "write_base_words_same_line",
+    // one side rewrote a line into several, the other changed it too
+    "write_base_multiline_rewrite",
 ];
 
 /// The grouping class (U3; spec §8 Volume "grouping with the (g) split"; [`run_group`]): people
@@ -362,7 +377,118 @@ enum Plan {
     RevertMarked {
         p: usize,
     },
+    /// The end of the text: leave the end of `root` open: 0, delete its final line break; 1, type an open
+    /// line at its end; 2, replace its last line (with its break) by open text.
+    OpenEnd {
+        p: usize,
+        root: usize,
+        how: u8,
+    },
+    /// The end of the text: `write --base` from `p`'s last read with the base's final line break removed.
+    WriteDropFinalBreak {
+        p: usize,
+        root: usize,
+    },
+    /// A change that runs to the end against an insertion at that line's start: `write
+    /// --base` from `p`'s last read with `text` inserted at the start of its last line.
+    WriteAtLastLineStart {
+        p: usize,
+        root: usize,
+        text: String,
+    },
+    /// Append `text` (whole lines) to `root`, after a line break when its last line is open.
+    AppendLines {
+        p: usize,
+        root: usize,
+        text: String,
+    },
+    /// v0.9.8, live: of `root`'s last `k` lines, delete line `at` (or, with `insert`, insert
+    /// that line before it), and append `add` at the end, in one edit.
+    LiveLines {
+        p: usize,
+        root: usize,
+        k: usize,
+        at: usize,
+        insert: Option<String>,
+        add: String,
+    },
+    /// v0.9.8: `write --base` from `p`'s last read with line `at` of `root`'s last `k` lines
+    /// deleted.
+    WriteDeleteLine {
+        p: usize,
+        root: usize,
+        k: usize,
+        at: usize,
+    },
+    /// v0.9.8, live: word `word` of `root`'s last line replaced by `with`, or, with `typed`,
+    /// `with` typed into its middle.
+    LiveWord {
+        p: usize,
+        root: usize,
+        word: usize,
+        with: String,
+        typed: bool,
+    },
+    /// v0.9.8, live: `root`'s last line (with its break) replaced by `with` (whole lines).
+    LiveRewriteLast {
+        p: usize,
+        root: usize,
+        with: String,
+    },
+    /// v0.9.8: `write --base` from `p`'s last read with its last line replaced by `with`.
+    WriteRewriteLast {
+        p: usize,
+        root: usize,
+        with: String,
+    },
+    /// v0.9.8: `write --base` from `p`'s last read with word `word` of `root`'s last line
+    /// replaced by `with`.
+    WriteWord {
+        p: usize,
+        root: usize,
+        word: usize,
+        with: String,
+    },
 }
+
+/// The spans `[start, end)` (each with its "\n") of the last `k` lines of `t`, which must end
+/// with a line break.
+fn last_lines(t: &str, k: usize) -> Option<Vec<(usize, usize)>> {
+    if !t.ends_with('\n') {
+        return None;
+    }
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for l in t.split_inclusive('\n') {
+        spans.push((at, at + l.len()));
+        at += l.len();
+    }
+    (spans.len() >= k).then(|| spans.split_off(spans.len() - k))
+}
+
+/// The spans of the space-separated words of `t`'s last line (`t` ends with a line break).
+fn last_line_words(t: &str) -> Option<Vec<(usize, usize)>> {
+    let (s, e) = last_lines(t, 1)?[0];
+    let mut out = Vec::new();
+    let mut at = s;
+    for w in t[s..e - 1].split(' ') {
+        if !w.is_empty() {
+            out.push((at, at + w.len()));
+        }
+        at += w.len() + 1;
+    }
+    Some(out)
+}
+
+/// A line of the v0.9.8 class: `pNN:NNNN`, so lines share their first characters.
+fn shared_start_line(n: u32) -> String {
+    format!("p{n:02}:{:04}\n", (n * 7919 + 2150) % 10_000)
+}
+
+/// Words of the v0.9.8 words class (several share their first characters).
+const WORDS: &[&str] = &[
+    "alpha", "alps", "al", "beta", "bet", "pa", "pb", "p05", "p10",
+];
 
 struct PidSpec {
     name: String,
@@ -1018,6 +1144,31 @@ impl Runner {
                 return s;
             }
         }
+        // the end of the text's scenario, drawn apart from the others (their weights unchanged; 0.012 until
+        // v0.9.8's scenarios took their share of the steps)
+        if self.rng.gen_bool(0.02) {
+            self.end_break_scenario();
+            while !self.queue.is_empty() {
+                let plan = self.queue.remove(0);
+                if let Some(s) = self.resolve(plan) {
+                    return s;
+                }
+            }
+        }
+        // v0.9.8's two write --base scenarios, drawn apart too
+        if self.rng.gen_bool(0.02) {
+            match self.rng.gen_range(0..10) {
+                0..=4 => self.shared_start_scenario(),
+                5..=7 => self.words_scenario(),
+                _ => self.multiline_scenario(),
+            }
+            while !self.queue.is_empty() {
+                let plan = self.queue.remove(0);
+                if let Some(s) = self.resolve(plan) {
+                    return s;
+                }
+            }
+        }
         if self.rng.gen_bool(0.05) {
             self.scenario();
             while !self.queue.is_empty() {
@@ -1366,6 +1517,263 @@ impl Runner {
         self.queue.extend(q);
     }
 
+    /// The end of the text (amendment O5 end-of-text): a read; the end left open live (or a line
+    /// appended); then a `write --base` appending a line (or dropping the final break). Cases
+    /// A–D. Drawn on its own, so the other scenarios keep their weights.
+    fn end_break_scenario(&mut self) {
+        let n = self.pids.len();
+        let a = self.pick_pid();
+        let b = (a + 1 + self.rng.gen_range(0..n - 1)) % n;
+        let root = usize::from(self.rng.gen_bool(0.3));
+        let line = format!("{}\n", self.word().replace('\n', ""));
+        let q = {
+            let open = self.word().replace('\n', "") + "o";
+            // the undo shape (undo puts back exact elements, U23): a last line deleted, the final
+            // break then removed live, and the deletion undone: the line goes back where it
+            // was, joined (the planted fault (iv) adds a fresh break there)
+            // the live text replaces its last line by open text; the writer inserts at that
+            // line's start: both changed one line, a conflict (`\n` / `b\n` / `aaa`)
+            if self.rng.gen_bool(0.15) {
+                let text = self.word().replace('\n', "") + "w";
+                self.queue.extend([
+                    Plan::Append {
+                        p: b,
+                        root,
+                        text: line,
+                    },
+                    Plan::Read { p: a },
+                    Plan::OpenEnd { p: b, root, how: 2 },
+                    Plan::WriteAtLastLineStart { p: a, root, text },
+                ]);
+                return;
+            }
+            if self.rng.gen_bool(0.2) {
+                let mode = Mode::All;
+                self.queue.extend([
+                    Plan::DeleteLastLine { p: a, root },
+                    Plan::OpenEnd { p: b, root, how: 0 },
+                    Plan::Undo { p: a, mode },
+                ]);
+                return;
+            }
+            let (live, write) = match self.rng.gen_range(0..4) {
+                // A: the end opened by a deletion or a replacement; ours appends
+                0 => (
+                    Plan::OpenEnd {
+                        p: b,
+                        root,
+                        how: if self.rng.gen_bool(0.5) { 0 } else { 2 },
+                    },
+                    Plan::WriteAppend {
+                        p: a,
+                        root,
+                        text: line.clone(),
+                    },
+                ),
+                // B: theirs types an open line at the end; ours appends a closed one
+                1 => (
+                    Plan::OpenEnd { p: b, root, how: 1 },
+                    Plan::WriteAppend {
+                        p: a,
+                        root,
+                        text: line.clone(),
+                    },
+                ),
+                // C: theirs appends a line; ours drops the final break
+                2 => (
+                    Plan::Append {
+                        p: b,
+                        root,
+                        text: line.clone(),
+                    },
+                    Plan::WriteDropFinalBreak { p: a, root },
+                ),
+                // D: both open
+                _ => (
+                    Plan::OpenEnd { p: b, root, how: 1 },
+                    Plan::WriteAppend {
+                        p: a,
+                        root,
+                        text: open,
+                    },
+                ),
+            };
+            vec![
+                // the base ends with a line break
+                Plan::Append {
+                    p: b,
+                    root,
+                    text: line,
+                },
+                Plan::Read { p: a },
+                live,
+                write,
+            ]
+        };
+        self.queue.extend(q);
+    }
+
+    /// v0.9.8, write --base's sides by line: `k` lines that share their first characters
+    /// appended; a read; live, one of them deleted (or a line inserted before it) and lines
+    /// appended; then a `write --base` deleting another of them, mostly the next or the
+    /// previous line (where v0.9.7's character-trimmed sides read a change one line off).
+    fn shared_start_scenario(&mut self) {
+        let n = self.pids.len();
+        let a = self.pick_pid();
+        let b = (a + 1 + self.rng.gen_range(0..n - 1)) % n;
+        let root = usize::from(self.rng.gen_bool(0.3));
+        let k = self.rng.gen_range(3..7);
+        let mut nums: Vec<u32> = Vec::new();
+        while nums.len() < k {
+            let x = self.rng.gen_range(0..40);
+            if !nums.contains(&x) {
+                nums.push(x);
+            }
+        }
+        let text: String = nums.iter().map(|&x| shared_start_line(x)).collect();
+        let at_ours = self.rng.gen_range(0..k);
+        let at_theirs = if self.rng.gen_bool(0.8) {
+            match at_ours {
+                0 => 1,
+                j if j == k - 1 => j - 1,
+                j if self.rng.gen_bool(0.5) => j - 1,
+                j => j + 1,
+            }
+        } else {
+            (at_ours + self.rng.gen_range(1..k)) % k
+        };
+        let fresh = |r: &mut SmallRng| shared_start_line(r.gen_range(40..80));
+        let insert = self.rng.gen_bool(0.3).then(|| fresh(&mut self.rng));
+        let add: String = (0..self.rng.gen_range(0..3))
+            .map(|_| fresh(&mut self.rng))
+            .collect();
+        self.queue.extend([
+            Plan::AppendLines { p: b, root, text },
+            Plan::Read { p: a },
+            Plan::LiveLines {
+                p: b,
+                root,
+                k,
+                at: at_theirs,
+                insert,
+                add,
+            },
+            Plan::WriteDeleteLine {
+                p: a,
+                root,
+                k,
+                at: at_ours,
+            },
+        ]);
+    }
+
+    /// v0.9.8, write --base inside a line: a line of words appended; a read; live, one word
+    /// replaced (or typed into); then a `write --base` replacing another word of that line, or
+    /// now and then the same one: whole lines, a conflict either way.
+    fn words_scenario(&mut self) {
+        let n = self.pids.len();
+        let a = self.pick_pid();
+        let b = (a + 1 + self.rng.gen_range(0..n - 1)) % n;
+        let root = usize::from(self.rng.gen_bool(0.3));
+        let len = self.rng.gen_range(3..6);
+        let words: Vec<&str> = (0..len)
+            .map(|_| WORDS[self.rng.gen_range(0..WORDS.len())])
+            .collect();
+        let text = format!("{}\n", words.join(" "));
+        let i = self.rng.gen_range(0..len);
+        let j = if self.rng.gen_bool(0.85) {
+            (i + self.rng.gen_range(1..len)) % len
+        } else {
+            i
+        };
+        let typed = self.rng.gen_bool(0.3);
+        self.queue.extend([
+            Plan::AppendLines { p: b, root, text },
+            Plan::Read { p: a },
+            Plan::LiveWord {
+                p: b,
+                root,
+                word: i,
+                with: if typed {
+                    "x".into()
+                } else {
+                    format!("{}T", words[i].to_uppercase())
+                },
+                typed,
+            },
+            Plan::WriteWord {
+                p: a,
+                root,
+                word: j,
+                with: format!("{}O", words[j].to_uppercase()),
+            },
+        ]);
+    }
+
+    /// v0.9.8: a line of words appended; a read; live, that line rewritten
+    /// into two or three lines (or one word changed); then a `write --base` rewriting it into
+    /// two or three lines (or changing a word), at least one side rewriting it.
+    fn multiline_scenario(&mut self) {
+        let n = self.pids.len();
+        let a = self.pick_pid();
+        let b = (a + 1 + self.rng.gen_range(0..n - 1)) % n;
+        let root = usize::from(self.rng.gen_bool(0.3));
+        let text = self.words_lines(1);
+        let live_rewrites = self.rng.gen_bool(0.6);
+        let write_rewrites = !live_rewrites || self.rng.gen_bool(0.6);
+        let live = if live_rewrites {
+            let k = self.rng.gen_range(2..4);
+            Plan::LiveRewriteLast {
+                p: b,
+                root,
+                with: self.words_lines(k),
+            }
+        } else {
+            Plan::LiveWord {
+                p: b,
+                root,
+                word: 0,
+                with: "LIVE".into(),
+                typed: false,
+            }
+        };
+        let write = if write_rewrites {
+            let k = self.rng.gen_range(2..4);
+            Plan::WriteRewriteLast {
+                p: a,
+                root,
+                with: self.words_lines(k),
+            }
+        } else {
+            Plan::WriteWord {
+                p: a,
+                root,
+                word: 0,
+                with: "AGENT".into(),
+            }
+        };
+        self.queue.extend([
+            Plan::AppendLines { p: b, root, text },
+            Plan::Read { p: a },
+            live,
+            write,
+        ]);
+    }
+
+    /// `k` lines of one to three [`WORDS`] each, every one ending with a line break.
+    fn words_lines(&mut self, k: usize) -> String {
+        let mut out = String::new();
+        for _ in 0..k {
+            let w = self.rng.gen_range(1..4);
+            let line: Vec<&str> = (0..w)
+                .map(|_| WORDS[self.rng.gen_range(0..WORDS.len())])
+                .collect();
+            out.push_str(&line.join(" "));
+            out.push('\n');
+        }
+        out
+    }
+
     /// U22a (v1.6), restart transparency: an assistant's change with two regions (pending
     /// on-behalf); a deletion across the first region's start only; the window moves past
     /// it (its carry is persisted); a restart; the gap deleted (they touch); a restart; the
@@ -1460,6 +1868,229 @@ impl Runner {
                     p,
                     s,
                     edits: vec![(root, at_end(&t, text))],
+                }
+            }
+            Plan::OpenEnd { p, root, how } => {
+                let t = self.model.texts[root].clone();
+                if !t.ends_with('\n') {
+                    return None;
+                }
+                let n = t.len();
+                let open = self.word().replace('\n', "") + "q";
+                let e = match how {
+                    0 => Edit {
+                        start: n - 1,
+                        end: n,
+                        insert: String::new(),
+                    },
+                    1 => Edit {
+                        start: n,
+                        end: n,
+                        insert: open,
+                    },
+                    _ => {
+                        let start = t[..n - 1].rfind('\n').map_or(0, |k| k + 1);
+                        Edit {
+                            start,
+                            end: n,
+                            insert: open,
+                        }
+                    }
+                };
+                let s = self.slot(p);
+                Step::Edit {
+                    p,
+                    s,
+                    edits: vec![(root, vec![e])],
+                }
+            }
+            Plan::AppendLines { p, root, text } => {
+                let s = self.slot(p);
+                let t = self.model.texts[root].clone();
+                let text = if t.is_empty() || t.ends_with('\n') {
+                    text
+                } else {
+                    format!("\n{text}")
+                };
+                Step::Edit {
+                    p,
+                    s,
+                    edits: vec![(root, at_end(&t, text))],
+                }
+            }
+            Plan::LiveLines {
+                p,
+                root,
+                k,
+                at,
+                insert,
+                add,
+            } => {
+                let t = self.model.texts[root].clone();
+                let (ls, le) = last_lines(&t, k)?[at];
+                let n = t.len();
+                let mut edits = vec![match insert {
+                    Some(line) => Edit {
+                        start: ls,
+                        end: ls,
+                        insert: line,
+                    },
+                    None => Edit {
+                        start: ls,
+                        end: le,
+                        insert: String::new(),
+                    },
+                }];
+                if !add.is_empty() {
+                    if edits[0].end == n {
+                        edits[0].insert.push_str(&add);
+                    } else {
+                        edits.push(Edit {
+                            start: n,
+                            end: n,
+                            insert: add,
+                        });
+                    }
+                }
+                let s = self.slot(p);
+                Step::Edit {
+                    p,
+                    s,
+                    edits: vec![(root, edits)],
+                }
+            }
+            Plan::LiveRewriteLast { p, root, with } => {
+                let t = self.model.texts[root].clone();
+                let (ls, le) = last_lines(&t, 1)?[0];
+                let s = self.slot(p);
+                Step::Edit {
+                    p,
+                    s,
+                    edits: vec![(
+                        root,
+                        vec![Edit {
+                            start: ls,
+                            end: le,
+                            insert: with,
+                        }],
+                    )],
+                }
+            }
+            Plan::WriteRewriteLast { p, root, with } => {
+                let read = (0..self.reads.len())
+                    .rev()
+                    .find(|&i| self.reads[i].p == p)?;
+                let base = &self.reads[read].texts[root];
+                let (ls, _) = last_lines(base, 1)?[0];
+                let ours = format!("{}{with}", &base[..ls]);
+                let s = self.slot(p);
+                Step::WriteBase {
+                    p,
+                    s,
+                    root,
+                    read,
+                    ours,
+                }
+            }
+            Plan::WriteDeleteLine { p, root, k, at } => {
+                let read = (0..self.reads.len())
+                    .rev()
+                    .find(|&i| self.reads[i].p == p)?;
+                let base = &self.reads[read].texts[root];
+                let (ls, le) = last_lines(base, k)?[at];
+                let ours = format!("{}{}", &base[..ls], &base[le..]);
+                let s = self.slot(p);
+                Step::WriteBase {
+                    p,
+                    s,
+                    root,
+                    read,
+                    ours,
+                }
+            }
+            Plan::LiveWord {
+                p,
+                root,
+                word,
+                with,
+                typed,
+            } => {
+                let t = self.model.texts[root].clone();
+                let (ws, we) = *last_line_words(&t)?.get(word)?;
+                let e = if typed {
+                    let mid = ws + (we - ws) / 2;
+                    if !t.is_char_boundary(mid) {
+                        return None;
+                    }
+                    Edit {
+                        start: mid,
+                        end: mid,
+                        insert: with,
+                    }
+                } else {
+                    Edit {
+                        start: ws,
+                        end: we,
+                        insert: with,
+                    }
+                };
+                let s = self.slot(p);
+                Step::Edit {
+                    p,
+                    s,
+                    edits: vec![(root, vec![e])],
+                }
+            }
+            Plan::WriteWord {
+                p,
+                root,
+                word,
+                with,
+            } => {
+                let read = (0..self.reads.len())
+                    .rev()
+                    .find(|&i| self.reads[i].p == p)?;
+                let base = &self.reads[read].texts[root];
+                let (ws, we) = *last_line_words(base)?.get(word)?;
+                let ours = format!("{}{with}{}", &base[..ws], &base[we..]);
+                let s = self.slot(p);
+                Step::WriteBase {
+                    p,
+                    s,
+                    root,
+                    read,
+                    ours,
+                }
+            }
+            Plan::WriteAtLastLineStart { p, root, text } => {
+                let read = (0..self.reads.len())
+                    .rev()
+                    .find(|&i| self.reads[i].p == p)?;
+                let base = &self.reads[read].texts[root];
+                let (ls, _) = last_lines(base, 1)?[0];
+                let ours = format!("{}{text}{}", &base[..ls], &base[ls..]);
+                let s = self.slot(p);
+                Step::WriteBase {
+                    p,
+                    s,
+                    root,
+                    read,
+                    ours,
+                }
+            }
+            Plan::WriteDropFinalBreak { p, root } => {
+                let read = (0..self.reads.len())
+                    .rev()
+                    .find(|&i| self.reads[i].p == p)?;
+                let base = &self.reads[read].texts[root];
+                let ours = base.strip_suffix('\n')?.to_owned();
+                let s = self.slot(p);
+                Step::WriteBase {
+                    p,
+                    s,
+                    root,
+                    read,
+                    ours,
                 }
             }
             Plan::Undo { p, mode } => {
@@ -2164,7 +2795,7 @@ impl Runner {
         }
         // ---- classes ----
         let applied_ok = matches!(mo, Outcome::Applied { .. });
-        let flags: [(bool, &'static str); 19] = [
+        let flags: [(bool, &'static str); 23] = [
             (
                 hits.eof_append_undo || hits.eof_append_write,
                 "append_at_end",
@@ -2196,11 +2827,29 @@ impl Runner {
                 "repeated_text_identity",
             ),
             (hits.rediff_differs, "exact_sides_differ_from_rediff"),
+            // v0.9.8: write --base by whole lines
+            (hits.shared_start, "write_base_shared_start"),
+            (
+                hits.shared_start_was_conflict,
+                "write_base_shared_start_was_conflict",
+            ),
+            (hits.words_same_line, "write_base_words_same_line"),
+            (hits.multiline_rewrite, "write_base_multiline_rewrite"),
         ];
         for (on, c) in flags {
             if on {
                 self.hit(c);
             }
+        }
+        // the end of the text, by case
+        if let Some(c) = hits.end_break {
+            use spec_undo::model::merge::EndBreak;
+            self.hit(match c {
+                EndBreak::A => "end_break_a",
+                EndBreak::B => "end_break_b",
+                EndBreak::C => "end_break_c",
+                EndBreak::D => "end_break_d",
+            });
         }
         // v1.8: two restorations of one root met (O4 or O4a decided), or a window character
         // was the base's by root only

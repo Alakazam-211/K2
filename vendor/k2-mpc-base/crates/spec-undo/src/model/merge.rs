@@ -62,6 +62,36 @@ pub struct Rules {
     /// Two different insertions at the window's end conflicted because `at_end` was false
     /// (the window isn't the doc's end, or the whole doc was empty in the base).
     pub same_point_at_window_end: bool,
+    /// The end of the text (amendment O5 end-of-text; `write --base`, clean, on a base ending
+    /// with "\n"): one side's line landed after the other side left the text open. Read off
+    /// the whole-line sides and the texts: the merge itself has no separate rule.
+    pub end_break: Option<EndBreak>,
+    /// A clean `write --base` on a base with two adjacent lines that start with the same
+    /// character, where a character diff reads a side one line off (a hunk starts inside a
+    /// line and crosses a line break).
+    pub shared_start: bool,
+    /// ... and v0.9.7's character-trimmed sides conflict there (a false conflict).
+    pub shared_start_was_conflict: bool,
+    /// A `write --base` refused where each side turned one base line into a different single
+    /// line (different words of one line too: whole lines, v0.9.7.1).
+    pub words_same_line: bool,
+    /// A `write --base` where one side rewrote one whole base line into two or more lines
+    /// and the other changed that line too.
+    pub multiline_rewrite: bool,
+}
+
+/// The amendment's cases of the end of the text (amendment O5 end-of-text r2), for the trace
+/// class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EndBreak {
+    /// Ours' line lands last; theirs opened the end without inserting there.
+    A,
+    /// Ours' line lands last after theirs' own open line; ours' text ends with a line break.
+    B,
+    /// Theirs' line lands last; ours opened the end (it removed the final break).
+    C,
+    /// Ours' line lands last after theirs' own open line; ours' text stays open.
+    D,
 }
 
 /// `merge3_window(base, ours, theirs, at_end)` (§4, U10): apply what ours changed from
@@ -267,7 +297,81 @@ pub fn merge_edits(
 /// Whole-text `merge3` (`write --base`): the window is the whole doc, so O5 applies at its
 /// end when the base is non-empty (two writes to an empty doc conflict, O5).
 pub fn merge3(base: &str, ours: &str, theirs: &str) -> (Merged, Rules) {
-    merge3_window(base, ours, theirs, !base.is_empty())
+    let (m, mut rules) = merge3_window(base, ours, theirs, !base.is_empty());
+    classes(
+        base,
+        ours,
+        theirs,
+        matches!(m, Merged::Clean { .. }),
+        &mut rules,
+    );
+    (m, rules)
+}
+
+/// The trace classes of `write --base` (v0.9.8), read off the sides and the texts.
+fn classes(base: &str, ours: &str, theirs: &str, clean: bool, rules: &mut Rules) {
+    let (a, b) = (sides(base, ours), sides(base, theirs));
+    let cb = closed(base);
+    let is_open = |t: &str| !t.is_empty() && !t.ends_with('\n');
+    let line_start = |p: usize| p == 0 || cb.as_bytes()[p - 1] == b'\n';
+    // one whole base line
+    let one_line = |e: &Edit| {
+        e.start < e.end
+            && line_start(e.start)
+            && line_start(e.end)
+            && !cb[e.start..e.end - 1].contains('\n')
+    };
+    let writes = |e: &Edit| e.insert.split_inclusive('\n').count();
+    let meet = |e: &Edit, f: &Edit| e.start < f.end && f.start < e.end;
+    rules.words_same_line = !clean
+        && a.iter().any(|x| {
+            one_line(x)
+                && writes(x) == 1
+                && b.iter()
+                    .any(|y| x != y && (x.start, x.end) == (y.start, y.end) && writes(y) == 1)
+        });
+    rules.multiline_rewrite = a
+        .iter()
+        .any(|x| one_line(x) && writes(x) >= 2 && b.iter().any(|y| x != y && meet(x, y)))
+        || b.iter()
+            .any(|y| one_line(y) && writes(y) >= 2 && a.iter().any(|x| x != y && meet(x, y)));
+    if !clean {
+        return;
+    }
+    if base.ends_with('\n') {
+        let landing = |e: &Edit| e.start == cb.len() && !e.insert.is_empty();
+        let ours_lands = a.last().is_some_and(|x| landing(x) && !b.contains(x));
+        let theirs_lands = b.last().is_some_and(landing);
+        rules.end_break = match (ours_lands, theirs_lands) {
+            (true, false) if is_open(theirs) => Some(EndBreak::A),
+            (true, true) if is_open(theirs) && !is_open(ours) => Some(EndBreak::B),
+            (true, true) if is_open(theirs) => Some(EndBreak::D),
+            (false, true) if is_open(ours) => Some(EndBreak::C),
+            _ => None,
+        };
+    }
+    // two adjacent lines with the same first character, a character diff one line off
+    let shared = cb
+        .split_inclusive('\n')
+        .collect::<Vec<_>>()
+        .windows(2)
+        .any(|w| w[0].chars().next() == w[1].chars().next());
+    let chars =
+        |t: &str| -> Vec<Edit> { diff::hunks(&cb, t).into_iter().map(Edit::from).collect() };
+    let off = |h: &[Edit]| {
+        h.iter().any(|e| {
+            !line_start(e.start) && (cb[e.start..e.end].contains('\n') || e.insert.contains('\n'))
+        })
+    };
+    let (a0, b0) = (chars(&closed(ours)), chars(&closed(theirs)));
+    if shared && (off(&a0) || off(&b0)) {
+        rules.shared_start = true;
+        let (ap, bp) = (vec![Vec::new(); a0.len()], vec![Vec::new(); b0.len()]);
+        rules.shared_start_was_conflict = matches!(
+            merge_edits(&cb, &a0, &ap, &b0, &bp, !cb.is_empty(), Same::Hunk).0,
+            Merged::Conflict
+        );
+    }
 }
 
 #[cfg(test)]

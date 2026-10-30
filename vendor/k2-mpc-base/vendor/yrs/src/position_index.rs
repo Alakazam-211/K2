@@ -44,20 +44,36 @@
 //!   which in byte offsets counts bytes. Nothing reads the field but `Display`, and the shadow
 //!   check leaves it out ([Located::same_place]).
 //!
+//! # Runs of deleted blocks
+//!
+//! Between markers, a walk still passes every deleted block, and a long-lived text is mostly
+//! deleted blocks. So walks also cross a run of deleted blocks in one step by its recorded end
+//! ([Runs]), in lookups (from a marker or from the start) and in edits (an insert's skip past
+//! deleted blocks, a removal). Deleted blocks count for nothing, so this finds the same places;
+//! [crate::Doc::set_deleted_runs] turns it off (the test oracle).
+//!
 //! # Shadow check
 //!
 //! On a deterministic sample of marker lookups (every `shadow_every`-th, default 1 in 1000;
-//! [crate::Doc::set_position_shadow_rate]) the full walk runs too. If the two differ, the walk's
-//! result is used, the branch's markers are dropped and the audit hook
+//! [crate::Doc::set_position_shadow_rate]) the lookup is checked. Without runs, the full walk
+//! runs too and is compared. With runs, two checks run instead, neither costing time in
+//! proportion to the text's history: the marker's scan again, stepping through every block (up
+//! to [SHADOW_STEPS] of them: it checks the runs it crossed), and the walk from the start,
+//! crossing runs (it checks the marker); only if either disagrees does the full walk run. At the
+//! same rate, counted over crossings, an edit's run crossing is also stepped through (up to
+//! [SHADOW_STEPS] blocks) and compared ([PositionIndexStats::run_checks]). If a check differs,
+//! the stepped result is used, the branch's markers and runs are dropped and the audit hook
 //! ([crate::Doc::set_position_audit_hook]) is called with a [PositionMismatch] (IDs and indices
-//! only, never content). A shadowed lookup costs what a lookup cost before this index (one full
-//! walk) on top of the marker path's own cost, so at the default rate the shadow adds about a
-//! thousandth of the old cost of lookups.
+//! only, never content).
 
 use crate::block::{Item, ItemContent, ItemPtr, ID};
+use crate::block_store::BlockStore;
 use crate::branch::{BranchID, BranchPtr};
 use crate::types::TypePtr;
 use crate::OffsetKind;
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 /// Markers kept per text branch.
 ///
@@ -200,6 +216,9 @@ pub enum PlantedPositionBug {
     /// Integrating an item (a remote update, a redo) leaves the branch's markers in place.
     #[cfg(feature = "planted-position-bugs")]
     KeepMarkersOnIntegrate,
+    /// A live block linked in between two deleted ones leaves the branch's runs in place.
+    #[cfg(feature = "planted-position-bugs")]
+    KeepRunsOnInterior,
 }
 
 /// How often the position index was used and checked; see [crate::Doc::position_index_stats].
@@ -218,6 +237,9 @@ pub struct PositionIndexStats {
     pub mismatches: u64,
     /// Markers that no longer resolved to a live unit of their branch (dropped, walked).
     pub stale_markers: u64,
+    /// k2: edits' crossings of a run of deleted blocks that the shadow check also stepped
+    /// through block by block (a difference counts in `mismatches`).
+    pub run_checks: u64,
 }
 
 /// Where a lookup put an index: the units either side of it, as IDs.
@@ -254,7 +276,12 @@ pub(crate) type AuditHook = Box<dyn Fn(&PositionMismatch) + Send + Sync + 'stati
 /// The store's position index settings and counters.
 pub(crate) struct PositionIndex {
     pub enabled: bool,
+    /// k2: lookups and edits cross runs of deleted blocks by their recorded ends ([Runs]);
+    /// off, they step through every block ([crate::Doc::set_deleted_runs], the test oracle).
+    pub runs: bool,
     pub shadow_every: u32,
+    /// k2: run crossings made by edits, for the shadow check's sample of them.
+    pub crossings: u64,
     pub hook: Option<AuditHook>,
     pub stats: PositionIndexStats,
     pub planted: Option<PlantedPositionBug>,
@@ -264,7 +291,9 @@ impl Default for PositionIndex {
     fn default() -> Self {
         PositionIndex {
             enabled: true,
+            runs: true,
             shadow_every: DEFAULT_SHADOW_EVERY,
+            crossings: 0,
             hook: None,
             stats: PositionIndexStats::default(),
             planted: None,
@@ -273,12 +302,33 @@ impl Default for PositionIndex {
 }
 
 impl PositionIndex {
+    /// Whether lookups and edits use the branches' [Runs].
+    #[inline]
+    pub fn uses_runs(&self) -> bool {
+        self.enabled && self.runs
+    }
+
+    /// Whether this run crossing (by an edit) is one the shadow check samples.
+    pub fn sample_crossing(&mut self) -> bool {
+        self.crossings += 1;
+        self.shadow_every != 0 && self.crossings % self.shadow_every as u64 == 0
+    }
+
     /// Whether this marker lookup is one the shadow check samples.
     pub fn sample(&mut self) -> bool {
         if self.shadow_every == 0 {
             return false;
         }
         self.stats.marker_hits % self.shadow_every as u64 == 0
+    }
+
+    #[inline]
+    pub fn keeps_runs_on_interior(&self) -> bool {
+        #[cfg(feature = "planted-position-bugs")]
+        if self.planted == Some(PlantedPositionBug::KeepRunsOnInterior) {
+            return true;
+        }
+        false
     }
 
     #[inline]
@@ -299,6 +349,280 @@ pub(crate) fn drop_markers(mut branch: BranchPtr) {
         branch.markers = None;
     }
 }
+
+/// k2: runs of deleted blocks in a text's sequence, so a walk crosses one in a step or two
+/// instead of block by block.
+///
+/// A text's sequence keeps every deleted block (its tombstones) for good, so a walk that
+/// steps through them costs time in proportion to the text's history, not its content. A walk
+/// that has stepped through two or more deleted blocks in a row records the run it crossed:
+/// in [Runs::right], the run's first block maps to the run's last unit; in [Runs::left], its
+/// last block maps to the run's first unit. An end block is recorded under both its first and
+/// its last unit ([keys]), so a squash on either side of it keeps one. A later walk arriving
+/// at either end goes straight to the other.
+///
+/// # Why a recorded run stays a run
+///
+/// A run is a stretch of the sequence where every block is deleted. A block never becomes
+/// live again once deleted (undo and redo make new items), and blocks never move in a text.
+/// Splitting or squashing deleted blocks keeps the stretch as it is, and the run's ends are
+/// kept as unit IDs, resolved through the block store, so they find the block holding the
+/// unit wherever a split or squash has put it. The one change that breaks a run is a **live**
+/// block linked in between two deleted ones; `TransactionMut::integrate_item` drops the
+/// branch's runs whenever that happens ([drop_runs]). A deleted block linked in anywhere, or a
+/// live one next to at most one deleted neighbour, leaves every run a run.
+///
+/// Every end is checked when used: it must resolve to a deleted block of the same branch,
+/// other than the block it was looked up from; else the entry is removed and the walk steps.
+/// A crossing takes at most [MAX_HOPS] recorded steps and then steps block by block, so it
+/// always ends. The shadow check steps through what they cross, on its sample (see the module
+/// notes).
+#[derive(Debug, Default)]
+pub(crate) struct Runs {
+    /// The first and the last unit of a run's first block -> the ID of the run's last unit.
+    right: IdMap,
+    /// The first and the last unit of a run's last block -> the ID of the run's first unit.
+    left: IdMap,
+}
+
+type IdMap = HashMap<ID, ID, BuildHasherDefault<IdHasher>>;
+
+/// Recorded runs kept per text beyond twice its live length, before they are all dropped (an
+/// entry can outlive its use, when its block is squashed into its left neighbour).
+const RUNS_SLACK: usize = 4096;
+
+/// Recorded steps one crossing takes at most before stepping block by block.
+pub(crate) const MAX_HOPS: u32 = 64;
+
+/// A small multiplicative hasher for IDs (two integers, already well spread).
+#[derive(Default)]
+pub(crate) struct IdHasher(u64);
+
+impl IdHasher {
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+impl Hasher for IdHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.add(b as u64);
+        }
+    }
+    #[inline]
+    fn write_u32(&mut self, n: u32) {
+        self.add(n as u64);
+    }
+    #[inline]
+    fn write_u64(&mut self, n: u64) {
+        self.add(n);
+    }
+}
+
+impl Runs {
+    /// Entries in each map.
+    pub fn len(&self) -> (usize, usize) {
+        (self.right.len(), self.left.len())
+    }
+}
+
+/// Drops a branch's recorded runs: a live block was linked in between two deleted ones.
+#[inline]
+pub(crate) fn drop_runs(mut branch: BranchPtr) {
+    branch.run_drops += 1;
+    if branch.runs.is_some() {
+        branch.runs = None;
+    }
+}
+
+/// Is `item` a deleted block of `branch`?
+#[inline]
+fn is_deleted_in(item: &Item, branch: BranchPtr) -> bool {
+    item.is_deleted() && matches!(item.parent, TypePtr::Branch(p) if p == branch)
+}
+
+/// The recorded other end of the run at `from`, checked; a bad entry is removed.
+#[inline]
+fn hop(
+    map: &mut IdMap,
+    key: ID,
+    blocks: &BlockStore,
+    mut branch: BranchPtr,
+    from: ItemPtr,
+) -> Option<ItemPtr> {
+    let to = *map.get(&key)?;
+    match blocks.get_item(&to) {
+        Some(item) if item != from && is_deleted_in(&item, branch) => Some(item),
+        _ => {
+            branch.run_rejects += 1;
+            map.remove(&key);
+            None
+        }
+    }
+}
+
+/// The keys a run's end block is recorded under: its first unit and its last unit (one key
+/// for a block of one unit). A walk enters a run at an end block; when that block is squashed
+/// at commit with a neighbour (the block before it, once deleted too, or the next piece of the
+/// same split block), the merged block keeps one of the two: its start if it absorbed the
+/// block after it, its end if the block before it absorbed it.
+#[inline]
+fn keys(block: ItemPtr) -> smallvec::SmallVec<[ID; 2]> {
+    let (first, last) = (block.id, block.last_id());
+    if first == last {
+        smallvec::smallvec![first]
+    } else {
+        smallvec::smallvec![first, last]
+    }
+}
+
+/// Records the run from `first` to `last` (left to right), and forgets the entries `hops` (the
+/// recorded steps the crossing took, from block to block, in its direction) leave inside it: a
+/// walk enters a run only at its ends, so an entry inside one is never looked up again.
+fn record(
+    mut branch: BranchPtr,
+    first: ItemPtr,
+    last: ItemPtr,
+    hops: &[(ItemPtr, ItemPtr)],
+    rightwards: bool,
+) {
+    let cap = RUNS_SLACK + 2 * branch.block_len as usize;
+    let runs = branch.runs.get_or_insert_with(Box::default);
+    if runs.right.len() > cap || runs.left.len() > cap {
+        runs.right.clear();
+        runs.left.clear();
+    }
+    for &(from, to) in hops {
+        let (map, keep) = if rightwards {
+            (&mut runs.right, first)
+        } else {
+            (&mut runs.left, last)
+        };
+        if from != keep {
+            for k in keys(from) {
+                map.remove(&k);
+            }
+        }
+        let (map, keep) = if rightwards {
+            (&mut runs.left, last)
+        } else {
+            (&mut runs.right, first)
+        };
+        if to != keep {
+            for k in keys(to) {
+                map.remove(&k);
+            }
+        }
+    }
+    for k in keys(first) {
+        runs.right.insert(k, last.last_id());
+    }
+    for k in keys(last) {
+        runs.left.insert(k, first.id);
+    }
+}
+
+/// The last block of the run of deleted blocks that starts at `first` (deleted), going right:
+/// where stepping right from `first` while the next block is deleted ends.
+pub(crate) fn cross_right(branch: BranchPtr, blocks: &BlockStore, first: ItemPtr) -> ItemPtr {
+    cross(branch, blocks, first, true)
+}
+
+/// The first block of the run of deleted blocks that ends at `last` (deleted), going left:
+/// where stepping left from `last` while the next block is deleted ends.
+pub(crate) fn cross_left(branch: BranchPtr, blocks: &BlockStore, last: ItemPtr) -> ItemPtr {
+    cross(branch, blocks, last, false)
+}
+
+fn cross(branch: BranchPtr, blocks: &BlockStore, from: ItemPtr, rightwards: bool) -> ItemPtr {
+    let mut cur = from;
+    let mut moves = 0u32;
+    let mut hops: smallvec::SmallVec<[(ItemPtr, ItemPtr); 4]> = smallvec::SmallVec::new();
+    loop {
+        if (hops.len() as u32) < MAX_HOPS {
+            let mut b = branch;
+            if let Some(runs) = b.runs.as_deref_mut() {
+                let map = if rightwards {
+                    &mut runs.right
+                } else {
+                    &mut runs.left
+                };
+                // the block's facing end first (going right its last unit, going left its
+                // first), then its other end
+                let (a, z) = (cur.id, cur.last_id());
+                let (k1, k2) = if rightwards { (z, a) } else { (a, z) };
+                let found = hop(map, k1, blocks, branch, cur).or_else(|| {
+                    (k2 != k1)
+                        .then(|| hop(map, k2, blocks, branch, cur))
+                        .flatten()
+                });
+                if let Some(end) = found {
+                    b.run_hops += 1;
+                    hops.push((cur, end));
+                    cur = end;
+                    moves += 1;
+                }
+            }
+        }
+        let next = if rightwards { cur.right } else { cur.left };
+        match next {
+            Some(next) if next.is_deleted() => {
+                cur = next;
+                moves += 1;
+            }
+            _ => break,
+        }
+    }
+    if moves >= 2 {
+        if rightwards {
+            record(branch, from, cur, &hops, true);
+        } else {
+            record(branch, cur, from, &hops, false);
+        }
+    }
+    cur
+}
+
+/// How a scan goes through deleted blocks.
+#[derive(Clone, Copy)]
+pub(crate) enum Steps<'a> {
+    /// Block by block.
+    All,
+    /// Crossing runs by their recorded ends ([cross_right], [cross_left]): the text and the block
+    /// store.
+    Runs(BranchPtr, &'a BlockStore),
+    /// Block by block, at most this many blocks (the shadow check's budget); past it the scan
+    /// stops with [Stop::Budget].
+    Budget(&'a Cell<u32>),
+}
+
+impl Steps<'_> {
+    /// Counts one block stepped through; `false` once the budget is spent.
+    #[inline]
+    fn step(&self) -> bool {
+        match self {
+            Steps::Budget(left) => match left.get() {
+                0 => false,
+                n => {
+                    left.set(n - 1);
+                    true
+                }
+            },
+            _ => true,
+        }
+    }
+}
+
+/// Blocks the shadow check's second scan from the marker steps through at most
+/// ([Steps::Budget]).
+pub(crate) const SHADOW_STEPS: u32 = 4096;
 
 /// Where an index lands, as the walk in `find_position` finds it, before the walk's split.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,18 +688,25 @@ pub(crate) enum Stop {
     /// character boundary. From a marker, the marker is stale; from the text's start, the
     /// index itself is bad and the old walk handles it as it always has.
     Invalid,
+    /// k2: a [Steps::Budget] scan spent its budget.
+    Budget,
 }
 
 /// The walk of `find_position`, without its split and for a text without formatting: from
 /// `right` (whose content index is `start`), find `remaining` units on. Read-only, and all its
 /// arithmetic is checked, so a wrong start (a stale marker) gives [Stop::Invalid] or a wrong
 /// place, never an overflow or a split outside a block.
+///
+/// k2: with [Steps::Runs], a run of deleted blocks is crossed by its recorded end
+/// ([cross_right]): the same place, as deleted blocks count for nothing (only the recorded runs
+/// change).
 pub(crate) fn scan(
     mut left: Option<ItemPtr>,
     mut right: Option<ItemPtr>,
     mut remaining: u32,
     start: u32,
     encoding: OffsetKind,
+    steps: Steps,
 ) -> Result<Located, Stop> {
     let mut index: u32 = 0;
     let mut cursor = start;
@@ -384,7 +715,17 @@ pub(crate) fn scan(
         if remaining == 0 {
             break;
         }
-        if !r.is_deleted() {
+        if !steps.step() {
+            return Err(Stop::Budget);
+        }
+        if r.is_deleted() {
+            if let Steps::Runs(branch, blocks) = steps {
+                let last = cross_right(branch, blocks, r);
+                left = Some(last);
+                right = last.right;
+                continue;
+            }
+        } else {
             if let ItemContent::Format(_, _) = &r.content {
                 return Err(Stop::Format);
             }
@@ -500,9 +841,10 @@ pub(crate) fn scan_from(
     start: u32,
     index: u32,
     encoding: OffsetKind,
+    steps: Steps,
 ) -> Result<Located, Stop> {
     let from = |block: ItemPtr, at: u32| -> Result<Located, Stop> {
-        let mut l = scan(block.left, Some(block), index - at, at, encoding)?;
+        let mut l = scan(block.left, Some(block), index - at, at, encoding, steps)?;
         l.index = l.index.checked_add(at).ok_or(Stop::Invalid)?;
         Ok(l)
     };
@@ -513,6 +855,9 @@ pub(crate) fn scan_from(
     let mut cursor = start;
     let mut block = anchor.left;
     while let Some(b) = block {
+        if !steps.step() {
+            return Err(Stop::Budget);
+        }
         if !b.is_deleted() {
             if let ItemContent::Format(_, _) = &b.content {
                 return Err(Stop::Format);
@@ -522,6 +867,9 @@ pub(crate) fn scan_from(
             if cursor < index {
                 return from(b, cursor);
             }
+        } else if let Steps::Runs(branch, blocks) = steps {
+            block = cross_left(branch, blocks, b).left;
+            continue;
         }
         block = b.left;
     }
@@ -948,6 +1296,7 @@ mod test {
                     let u = peer_update(&d, 3, |txn, pt| pt.insert(txn, 0, "RR"));
                     apply(&d, &u); // (2, 0) now at 7, marker says 5
                 }
+                PlantedPositionBug::KeepRunsOnInterior => unreachable!(),
             }
             let want = {
                 let mut s = text(&d, &t);
@@ -965,6 +1314,336 @@ mod test {
             assert_ne!(m.marker_result, m.walk_result);
             assert_eq!(d.position_index_stats().mismatches, 1);
         }
+    }
+
+    /// A text of `n` one-character blocks, each from its own client (so none squash), all but
+    /// the first and last then removed: one run of `n - 2` deleted blocks.
+    fn tombstoned(n: u32) -> (Doc, TextRef, Vec<u8>) {
+        let d = doc(1, false, OffsetKind::Utf16);
+        d.set_position_shadow_rate(1);
+        let t = d.get_or_insert_text("t");
+        for i in 0..n {
+            t.insert(
+                &mut d.transact_mut_as(ClientID::new(100 + i as u64)),
+                i,
+                "x",
+            );
+        }
+        // the state before the removal, for a peer that edits concurrently
+        let before = d
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        t.remove_range(&mut d.transact_mut(), 1, n - 2);
+        (d, t, before)
+    }
+
+    fn has_runs(t: &TextRef) -> bool {
+        branch(t).runs.is_some()
+    }
+
+    fn hops(t: &TextRef) -> u64 {
+        branch(t).run_hops
+    }
+
+    /// The same edits with runs off: the oracle.
+    fn same_without_runs(d: &Doc, edits: impl Fn(&Doc, &TextRef)) {
+        let (o, ot, _) = tombstoned(40);
+        o.set_deleted_runs(false);
+        edits(&o, &ot);
+        assert_eq!(text(d, &d.get_or_insert_text("t")), text(&o, &ot));
+        assert_eq!(
+            d.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            o.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            "the same block layout as stepping"
+        );
+        assert_eq!(hops(&ot), 0, "runs off: no hops");
+    }
+
+    #[test]
+    fn a_crossed_run_is_recorded_and_hopped() {
+        let edits = |d: &Doc, t: &TextRef| {
+            // the insert skips the 38 deleted blocks after index 1 (and records them)
+            t.insert(&mut d.transact_mut(), 1, "a");
+            // so does this one, now in one hop
+            t.insert(&mut d.transact_mut(), 1, "b");
+            // a removal crosses it too
+            t.remove_range(&mut d.transact_mut(), 1, 1);
+        };
+        let (d, t, _) = tombstoned(40);
+        edits(&d, &t);
+        assert_eq!(text(&d, &t), "xax");
+        assert!(has_runs(&t));
+        assert!(hops(&t) >= 2, "hops: {}", hops(&t));
+        assert_eq!(d.position_index_stats().mismatches, 0);
+        same_without_runs(&d, edits);
+    }
+
+    /// A run recorded across same-client pieces of one split block, squashed back into a single
+    /// block at commit. Keyed by its first block's first unit (as first written), the entry
+    /// resolved to the block it was looked up from and was rejected at use (the walk stepped);
+    /// keyed by its last unit, no block ends there any more and the entry is never looked up.
+    /// Either way: the same place as stepping, the same bytes and state.
+    #[test]
+    fn a_run_squashed_into_one_block_is_never_hopped_wrongly() {
+        let edits = |d: &Doc, t: &TextRef| {
+            let c = ClientID::new(7);
+            t.insert(&mut d.transact_mut(), 0, "x");
+            t.insert(&mut d.transact_mut_as(c), 1, "abcd");
+            t.insert(&mut d.transact_mut(), 5, "y");
+            {
+                // one transaction: "b", "c" and "d" removed one by one (three split pieces,
+                // separate until commit), then an insert after "a" crosses them (a recorded run)
+                let mut txn = d.transact_mut();
+                t.remove_range(&mut txn, 2, 1);
+                t.remove_range(&mut txn, 2, 1);
+                t.remove_range(&mut txn, 2, 1);
+                t.insert(&mut txn, 2, "z");
+            } // commit squashes "b", "c" and "d" into one deleted block
+              // looked up from that block, the run's end is the block itself: rejected, stepped
+            t.insert(&mut d.transact_mut(), 2, "w");
+        };
+        let d = doc(1, false, OffsetKind::Utf16);
+        d.set_position_shadow_rate(1);
+        let t = d.get_or_insert_text("t");
+        edits(&d, &t);
+        assert_eq!(text(&d, &t), "xawzy");
+        assert_eq!(d.position_index_stats().mismatches, 0);
+        let o = doc(1, false, OffsetKind::Utf16);
+        o.set_deleted_runs(false);
+        let ot = o.get_or_insert_text("t");
+        edits(&o, &ot);
+        assert_eq!(text(&o, &ot), "xawzy");
+        assert_eq!(
+            d.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            o.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            "the same block layout as stepping"
+        );
+    }
+
+    /// A run's first block squashed into its left neighbour (a piece of the same split block,
+    /// deleted later): the merged block still ends with the run's first block's last unit, so
+    /// the next crossing still goes by the run in one step instead of block by block.
+    #[test]
+    fn a_run_keeps_its_entry_when_its_first_block_is_squashed_into_its_left() {
+        let edits = |d: &Doc, t: &TextRef| {
+            let c = ClientID::new(7);
+            t.insert(&mut d.transact_mut(), 0, "x");
+            t.insert(&mut d.transact_mut_as(c), 1, "ab");
+            for i in 0..30u32 {
+                t.insert(
+                    &mut d.transact_mut_as(ClientID::new(100 + i as u64)),
+                    3 + i,
+                    "-",
+                );
+            }
+            t.insert(&mut d.transact_mut(), 33, "y");
+            // "b" and the 30 after it removed: "ab" splits, "b" starts a run of 31
+            t.remove_range(&mut d.transact_mut(), 2, 31);
+            // an insert after "a" crosses the run (and records it)
+            t.insert(&mut d.transact_mut(), 2, "z");
+            // "a" removed: commit squashes "a" and "b" into one block, which starts at "a"
+            t.remove_range(&mut d.transact_mut(), 1, 1);
+        };
+        let d = doc(1, false, OffsetKind::Utf16);
+        let t = d.get_or_insert_text("t");
+        edits(&d, &t);
+        let before = hops(&t);
+        // the insert's skip, from the merged block
+        t.insert(&mut d.transact_mut(), 1, "w");
+        assert_eq!(text(&d, &t), "xwzy");
+        assert!(
+            hops(&t) > before,
+            "the run was crossed by its entry, not block by block"
+        );
+        let o = doc(1, false, OffsetKind::Utf16);
+        o.set_deleted_runs(false);
+        let ot = o.get_or_insert_text("t");
+        edits(&o, &ot);
+        ot.insert(&mut o.transact_mut(), 1, "w");
+        assert_eq!(
+            d.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            o.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            "the same block layout as stepping"
+        );
+    }
+
+    /// A replace (a removal and an insert in one transaction) next to a run: the insert's skip
+    /// crosses the block just removed and the run, recording the removed block as the run's
+    /// first; at commit that block absorbs its right neighbour (the run's old first block, a
+    /// piece of the same split block). The merged block starts where the recorded first block
+    /// did, so the next crossing still goes by the run in one step.
+    #[test]
+    fn a_run_keeps_its_entry_when_its_first_block_absorbs_its_right() {
+        let edits = |d: &Doc, t: &TextRef| {
+            let c = ClientID::new(7);
+            t.insert(&mut d.transact_mut(), 0, "x");
+            t.insert(&mut d.transact_mut_as(c), 1, "ab");
+            for i in 0..30u32 {
+                t.insert(
+                    &mut d.transact_mut_as(ClientID::new(100 + i as u64)),
+                    3 + i,
+                    "-",
+                );
+            }
+            t.insert(&mut d.transact_mut(), 33, "y");
+            // "b" and the 30 after it removed: "ab" splits, "b" starts a run of 31
+            t.remove_range(&mut d.transact_mut(), 2, 31);
+            t.insert(&mut d.transact_mut(), 2, "q");
+            {
+                // a replace of "a": its insert crosses "a" and the run (recorded from "a")
+                let mut txn = d.transact_mut();
+                t.remove_range(&mut txn, 1, 1);
+                t.insert(&mut txn, 1, "z");
+            } // commit: "a" absorbs "b"
+        };
+        let d = doc(1, false, OffsetKind::Utf16);
+        let t = d.get_or_insert_text("t");
+        edits(&d, &t);
+        let before = hops(&t);
+        t.insert(&mut d.transact_mut(), 1, "w");
+        assert_eq!(text(&d, &t), "xwzqy");
+        assert!(
+            hops(&t) > before,
+            "the run was crossed by its entry, not block by block"
+        );
+        let o = doc(1, false, OffsetKind::Utf16);
+        o.set_deleted_runs(false);
+        let ot = o.get_or_insert_text("t");
+        edits(&o, &ot);
+        ot.insert(&mut o.transact_mut(), 1, "w");
+        assert_eq!(
+            d.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            o.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+            "the same block layout as stepping"
+        );
+    }
+
+    /// A concurrent remote insert whose origin is inside a run's first block: the block splits
+    /// and the live insert lands between its two deleted pieces, which drops the text's runs
+    /// (nothing is crossed by them past the live block). Walks then step, record anew and hop.
+    #[test]
+    fn a_remote_insert_inside_a_runs_first_block_drops_the_runs() {
+        let d = doc(1, false, OffsetKind::Utf16);
+        let t = d.get_or_insert_text("t");
+        t.insert(&mut d.transact_mut(), 0, "x");
+        t.insert(&mut d.transact_mut_as(ClientID::new(7)), 1, "abcd");
+        for i in 0..30u32 {
+            t.insert(
+                &mut d.transact_mut_as(ClientID::new(100 + i as u64)),
+                5 + i,
+                "-",
+            );
+        }
+        t.insert(&mut d.transact_mut(), 35, "y");
+        let before = d
+            .transact()
+            .encode_state_as_update_v1(&StateVector::default());
+        // "abcd" and the 30 after it removed: one run, "abcd" its first block (4 units)
+        t.remove_range(&mut d.transact_mut(), 1, 34);
+        t.insert(&mut d.transact_mut(), 1, "z");
+        assert!(has_runs(&t));
+        // a peer that hasn't seen the removal types between "b" and "c"
+        let p = doc(9, false, OffsetKind::Utf16);
+        let pt = p.get_or_insert_text("t");
+        apply(&p, &before);
+        let u = {
+            let mut txn = p.transact_mut();
+            pt.insert(&mut txn, 3, "R");
+            txn.encode_update_v1()
+        };
+        apply(&d, &u);
+        assert!(
+            !has_runs(&t),
+            "the live block between two deleted pieces dropped the runs"
+        );
+        assert_eq!(text(&d, &t), "xRzy");
+        // no live block is skipped: an insert after "x" stops before "R"; one after "R"
+        // crosses the rest of the run (and records it); the next one goes by it in one step
+        t.insert(&mut d.transact_mut(), 1, "w");
+        assert_eq!(text(&d, &t), "xwRzy");
+        t.insert(&mut d.transact_mut(), 3, "s");
+        assert_eq!(text(&d, &t), "xwRszy");
+        let before = hops(&t);
+        t.insert(&mut d.transact_mut(), 3, "u");
+        assert_eq!(text(&d, &t), "xwRuszy");
+        assert!(hops(&t) > before, "recorded anew and hopped");
+        // the same as stepping
+        let o = doc(1, false, OffsetKind::Utf16);
+        o.set_deleted_runs(false);
+        apply(
+            &o,
+            &d.transact()
+                .encode_state_as_update_v1(&StateVector::default()),
+        );
+        assert_eq!(text(&o, &o.get_or_insert_text("t")), "xwRuszy");
+        assert_eq!(d.position_index_stats().mismatches, 0);
+    }
+
+    #[test]
+    fn a_live_block_inside_a_run_drops_the_runs() {
+        let (d, t, before) = tombstoned(40);
+        t.insert(&mut d.transact_mut(), 1, "a");
+        assert!(has_runs(&t));
+        // a peer that hasn't seen the removal types after the 10th character
+        let p = doc(7, false, OffsetKind::Utf16);
+        let pt = p.get_or_insert_text("t");
+        apply(&p, &before);
+        let u = {
+            let mut txn = p.transact_mut();
+            pt.insert(&mut txn, 10, "P");
+            txn.encode_update_v1()
+        };
+        apply(&d, &u);
+        assert!(
+            !has_runs(&t),
+            "a live block between two deleted ones drops them"
+        );
+        t.insert(&mut d.transact_mut(), 1, "b");
+        assert_eq!(text(&d, &t), "xbPax");
+        assert!(has_runs(&t), "recorded anew");
+        assert_eq!(d.position_index_stats().mismatches, 0);
+    }
+
+    /// With the planted bug, the interior live block is hopped over: the shadow (1-in-1) sees
+    /// the marker path disagree with stepping, fires and uses the walk's result.
+    #[cfg(feature = "planted-position-bugs")]
+    #[test]
+    fn the_shadow_fires_on_a_kept_run() {
+        let (d, t, before) = tombstoned(40);
+        d.plant_position_bug(Some(PlantedPositionBug::KeepRunsOnInterior));
+        let seen = audit(&d);
+        t.insert(&mut d.transact_mut(), 1, "a");
+        let p = doc(7, false, OffsetKind::Utf16);
+        let pt = p.get_or_insert_text("t");
+        apply(&p, &before);
+        let u = {
+            let mut txn = p.transact_mut();
+            pt.insert(&mut txn, 10, "P");
+            txn.encode_update_v1()
+        };
+        apply(&d, &u);
+        assert!(has_runs(&t), "planted: the runs stay");
+        // the insert's skip would hop over "P"; the check steps, fires and uses its end
+        t.insert(&mut d.transact_mut(), 1, "b");
+        assert_eq!(text(&d, &t), "xbPax", "the stepped end was used");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1, "the hook fired once");
+        assert_eq!(
+            seen[0].marker.1.client,
+            ClientID::new(101),
+            "the run's first block"
+        );
+        assert_ne!(seen[0].marker_result, seen[0].walk_result);
+        assert!(!has_runs(&t));
+        assert_eq!(d.position_index_stats().mismatches, 1);
     }
 
     #[test]

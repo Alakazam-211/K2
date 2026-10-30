@@ -1845,24 +1845,6 @@ impl Soak {
             ix.walks,
             ix.mismatches
         );
-        if shadow_on() {
-            eprintln!("[soak {label}] throughput check skipped: shadow mode");
-        } else if self.max_ops != 0 {
-            eprintln!("[soak {label}] throughput check skipped: a call-limited replay");
-        } else if let Some((first, tail)) = slowdown(&n.windows, secs as f64, 150.0) {
-            let max = std::env::var("SOAK_MAX_SLOWDOWN")
-                .ok()
-                .and_then(|v| v.parse::<f64>().ok())
-                .unwrap_or(2.0);
-            let ratio = first / tail.max(1e-9);
-            eprintln!(
-                "[soak {label}] throughput: {first:.0} calls/s in the first window, {tail:.0} in the last 150 s: {ratio:.2}x slower (most {max})"
-            );
-            assert!(
-                ratio <= max,
-                "throughput fell {ratio:.2}x over the run ({first:.0} -> {tail:.0} calls/s; most {max}x)"
-            );
-        }
         eprintln!("[soak {label}] refusals and no-ops: {:?}", n.refused);
         // it did real work: every kind of call ran, most edits applied
         for op in [
@@ -1899,6 +1881,25 @@ impl Soak {
         assert!(n.restarts >= 1);
         // the report's last line (v0.9.5's soak gate)
         eprintln!("[soak {label}] known D1 violations: {}", n.d1_tolerated);
+        // last, so a throughput failure never hides another check's
+        if shadow_on() {
+            eprintln!("[soak {label}] throughput check skipped: shadow mode");
+        } else if self.max_ops != 0 {
+            eprintln!("[soak {label}] throughput check skipped: a call-limited replay");
+        } else if let Some((first, tail)) = slowdown(&n.windows, secs as f64, 150.0) {
+            let max = std::env::var("SOAK_MAX_SLOWDOWN")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(2.0);
+            let ratio = first / tail.max(1e-9);
+            eprintln!(
+                "[soak {label}] throughput: {first:.0} calls/s in the first window, {tail:.0} in the last 150 s: {ratio:.2}x slower (most {max})"
+            );
+            assert!(
+                ratio <= max,
+                "throughput fell {ratio:.2}x over the run ({first:.0} -> {tail:.0} calls/s; most {max}x)"
+            );
+        }
     }
 }
 

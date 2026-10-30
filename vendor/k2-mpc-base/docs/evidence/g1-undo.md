@@ -3,8 +3,18 @@
 **Status 2026-10-28:** the G1 runs are in: the exhaustive pair, the walks at the literal G1
 bound (with and without a restart) and every mutant on walks. The exact counts (TLC against
 the enumerator, and the ITF replay) are re-run with run records (`85045092`); the TLC mutants too
-(`a885a72a`): every mutant caught by both, at the same least depth. Requirements: E-HIST-5, E-HIST-13, E-HIST-15, E-HIST-16, E-PROOF-1 of the MPC
+(`a885a72a`): every mutant caught by both, at the same least depth. **2026-10-29, the model's
+purge revision** (`docs/SPEC-UNDO.md`: no rule change; `undo.qnt`'s purge builds canonical
+hunks, as the oracle has since `04487c5`): the exact counts, the ITF replays and the TLC
+mutants re-run on the revised model (`88555d19`, `ee85bf3c`, `545f3ae0` at the head `f8e2aad`; first `3f360ca1`, `708bd100`, `41730937`; the G1-bound replay `03743fd6`), every
+count equal again; three of the seven bounds count fewer states than before ([The exact
+counts](#the-exact-counts)). **2026-10-30:** the G1 headline re-run on the current oracle:
+the exhaustive pair, 8,494,185 and 716,142,148 states (724.6M together, was 725.9M under the
+per-copy reading), and 1,000,000 + 1,000,000 walks with every mutant
+([Runs at the G1 bound](#runs-at-the-g1-bound)). Requirements: E-HIST-5, E-HIST-13, E-HIST-15, E-HIST-16, E-PROOF-1 of the MPC
 requirements PRD.
+
+**"Every mutant" in this note means the planted set, `Mutant::ALL`** (`crates/spec-undo/src/model/mutant.rs`): (i), (iii), (iv), (vi), (vii), skip-U19, F3 (viii), restart-single-taint (ix), (x), (xi). The spec's list (`SPEC-UNDO.md` §8, Mutants) also names **(ii) an end-of-text rule without O5** and **(v) a diff with a wall-clock deadline**, which are not planted, so this note's runs say nothing about them.
 
 Every figure from a run with a record cites it (`[run JOB/RUN]` or `[run JOB/RUN:field]`,
 records in `docs/evidence/runs/`, checked by `tools/evidence/check.py`). Jobs from before run
@@ -16,45 +26,58 @@ stays marked `[unverified: ...]`. Their summary lines are quoted verbatim
 
 ## The claim
 
-The undo spec v1.9 (`docs/SPEC-UNDO.md`), as the oracle of record `spec_undo::model` reads it,
-holds in the bounded world (seed `abb`, `MAXLEN` 4; every invariant below checked on every
-transition) in exactly these senses:
+The undo spec v1.10 (`docs/SPEC-UNDO.md`; D1a is the identity on these single letters), as
+the oracle of record `spec_undo::model` reads it (canonical purge hunks, `04487c5`), holds in
+the bounded world (seed `abb`, `MAXLEN` 4; every invariant below checked on every transition)
+in exactly these senses:
 
-- **Exhaustive at 3 pids × 1 event + 2 undos + 1 revert**, and **exhaustive at 2 pids × 2
-  events + 2 undos + 1 revert** (pid symmetry, per-seed deduplication): no violation, every
-  seed finished.
-- **5,000,000 random walks at the literal G1 bound** (3 pids × 3 events + 2 undos + 1 revert),
-  each to full depth: no violation.
-- **1,000,000 random walks at the literal G1 bound plus 1 restart**: no violation.
-- **1,000,000 biased walks at the literal G1 bound** (`walk --bias redo-after-partial`: the
+- **Exhaustive at 3 pids × 1 event + 2 undos + 1 revert** (8,494,185 states) and **exhaustive at 2
+  pids × 2 events + 2 undos + 1 revert** (716,142,148 states; pid symmetry, per-seed deduplication):
+  no violation, every seed finished. Together 724,636,333 states [derived] (the progress page's sum);
+  under the per-copy purge reading they were 8,516,359 and 717,352,254 [unverified: history,
+  the rows below] (725.9M together).
+- **1,000,000 random walks at the literal G1 bound** (3 pids × 3 events + 2 undos + 1 revert),
+  each to full depth, and **1,000,000 with 1 restart**: no violation. (Under the per-copy
+  reading, 5,000,000 and 1,000,000: no violation; history.)
+- *History, under the per-copy purge reading (oracle before `04487c5`), not re-run:*
+  **1,000,000 biased walks at the literal G1 bound** (`walk --bias redo-after-partial`: the
   steps toward a redo of a partial undo weigh more; no step is left out and every step is
   checked): no violation, and the class `redo_after_partial` hit 28,568 times.
 - **1,000,000 biased walks at the literal G1 bound plus 1 restart**: no violation, and
   `redo_after_partial` hit 28,208 times.
 - **Every mutant is caught** on 50,000 walks at the literal G1 bound (the restart mutant with
-  1 restart added): nine by an invariant, one (iv) by the oracle's own assertion. Under the
-  bias every mutant is caught again, all ten by an invariant ((iv) by `U17`).
+  1 restart added), on the current oracle as before: nine by an invariant, one (iv) by the
+  oracle's own assertion. Under the bias (history) every mutant was caught again, all ten by
+  an invariant ((iv) by `U17`).
 
 Nothing more: the literal G1 bound is sampled, not exhausted (≥ 10^13 states,
 `docs/MODEL-CHECK.md`, "The G1 bound").
 
 ## Runs at the G1 bound
 
-The oracle is the same in every run below: from kit v0.9.1 (spec v1.9) to v0.9.3,
-`crates/spec-undo/src/model/` changed only by a harness-only mutant hook, and the bounded world
-by the walk's case-class counters (v0.9.2) and the panic catch (v0.9.3, `42146d2`).
+**Two oracles.** The runs marked *history* ran on kit v0.9.1–v0.9.3 (spec v1.9), whose
+oracle built a purge's removal as one hunk per copy of the letter: they are **under the
+per-copy purge reading, oracle before `04487c5`** (`docs/MODEL-CHECK.md`, Readings), and
+are kept as they were taken. The current oracle (canonical purge hunks, `04487c5`; D1 of
+spec v1.10 is the identity on the bounded world's single letters) re-ran the exhaustive pair
+and the uniform walks (1,000,000 at G1 and 1,000,000 with a restart, with every mutant); the
+biased walks were not re-run.
 
 | Run | Bound (seed `abb`, `MAXLEN` 4) | Mode | States or walks | Status | Violations | Job | Record |
 |---|---|---|---|---|---|---|---|
-| `3x1u2r1` | 3 pids × 1 event + 2 undos + 1 revert | `dfs --sym`, exhaustive | 8,516,359 [run 6a6c1557/enumerator_3x1u2r1] states, 502 / 502 seeds, max depth 6 [unverified: seeds and depth, before run records] | COMPLETE | 0 | `6a6c1557` (kit v0.9.2) | log line L1 |
-| `2x2u2r1` | 2 pids × 2 events + 2 undos + 1 revert | `dfs --sym`, exhaustive | 717,352,254 [run 6a6c1557/enumerator_2x2u2r1] states, 28,886 / 28,886 seeds, max depth 7 [unverified: seeds and depth, before run records] | COMPLETE | 0 | `6a6c1557` (kit v0.9.2) | log line L2 |
-| walks at G1 | 3 pids × 3 events + 2 undos + 1 revert | `walk`, sampled | 5,000,000 walks, 60,000,000 steps [unverified: before run records] | SAMPLED: every walk asked ran | 0 | `41f256f3` (kit v0.9.1) | log line L3 |
-| walks at G1 + 1 restart | the same + 1 restart | `walk`, sampled | 1,000,000 [run d810536a/walk_3x3_u2_r1_rs1_none:walks] walks, 13,000,000 [run d810536a/walk_3x3_u2_r1_rs1_none:steps] steps | SAMPLED: every walk asked ran | 0 | `d810536a` (`bbbfc17`) | RUNREC |
-| biased walks at G1 | 3 pids × 3 events + 2 undos + 1 revert | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] walks, 12,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (`194048f`) | RUNREC |
-| biased walks at G1 + 1 restart | the same + 1 restart | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps; `redo_after_partial` 28,208 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] | SAMPLED: every walk asked ran | 0 | `d9b8d20f` (`ab3bc8a`) | RUNREC |
-| biased walks at G1 + 1 restart (smoke) | the same + 1 restart | `walk --bias redo-after-partial` | 1,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (`194048f`) | RUNREC |
-| exact counts, ITF replay | small bounds (`tools/undo/counts.sh`, `PART=ab`) | TLC, `bfs`, ITF replay | 7 bounds, TLC = enumerator ([The exact counts](#the-exact-counts)) | COMPLETE | 0 | `85045092` (`73a4073`) | RUNREC |
-| TLC mutants | `tools/undo/counts.sh`, `PART=m` | TLC (one worker), `bfs --first` | every mutant ([Teeth](#teeth-mutants-each-must-fail-minimal-counterexample-inside-an-exhaustive-bound)) | VIOLATION, each its rule | as expected | `a885a72a` | RUNREC |
+| `3x1u2r1` | 3 pids × 1 event + 2 undos + 1 revert | `dfs --sym`, exhaustive | 8,494,185 / 6 [run baaedbc1/dfs_3x1_u2_r1_rs0_none_sym] states, 499 [run baaedbc1/dfs_3x1_u2_r1_rs0_none_sym:seeds] / 499 seeds | COMPLETE | 0 | `baaedbc1` (`d3eccbc`) | RUNREC |
+| `2x2u2r1` | 2 pids × 2 events + 2 undos + 1 revert | `dfs --sym`, exhaustive | 716,142,148 / 7 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym] states, 28,858 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym:seeds] / 28,858 [run cd232421/dfs_2x2_u2_r1_rs0_none_sym:seeds_all] seeds | COMPLETE | 0 | `cd232421` (`d3eccbc`), in two jobs: `baaedbc1` (8 threads) finished 24,721 of the 28,858 seeds before its 2 h limit; `cd232421` (6 threads) resumed from a checkpoint file rebuilt from `baaedbc1`'s log by `tools/undo/ck-from-log.py` (24,721 seeds, sha256 `206d8459…`), shipped untracked with the commit, and ran the other 4,137 | RUNREC |
+| walks at G1 | 3 pids × 3 events + 2 undos + 1 revert | `walk`, sampled | 1,000,000 [run 48962ffa/walk_3x3_u2_r1_rs0_none:walks] walks, 12,000,000 [run 48962ffa/walk_3x3_u2_r1_rs0_none:steps] steps | SAMPLED: every walk asked ran | 0 | `48962ffa` (`d3eccbc`) | RUNREC |
+| walks at G1 + 1 restart | the same + 1 restart | `walk`, sampled | 1,000,000 [run 48962ffa/walk_3x3_u2_r1_rs1_none:walks] walks, 13,000,000 [run 48962ffa/walk_3x3_u2_r1_rs1_none:steps] steps | SAMPLED: every walk asked ran | 0 | `48962ffa` (`d3eccbc`) | RUNREC |
+| `3x1u2r1` (history: under the per-copy purge reading, oracle before `04487c5`) | 3 pids × 1 event + 2 undos + 1 revert | `dfs --sym`, exhaustive | 8,516,359 [run 6a6c1557/enumerator_3x1u2r1] states, 502 / 502 seeds, max depth 6 [unverified: seeds and depth, before run records] | COMPLETE | 0 | `6a6c1557` (kit v0.9.2) | log line L1 |
+| `2x2u2r1` (history: under the per-copy purge reading, oracle before `04487c5`) | 2 pids × 2 events + 2 undos + 1 revert | `dfs --sym`, exhaustive | 717,352,254 [run 6a6c1557/enumerator_2x2u2r1] states, 28,886 / 28,886 seeds, max depth 7 [unverified: seeds and depth, before run records] | COMPLETE | 0 | `6a6c1557` (kit v0.9.2) | log line L2 |
+| walks at G1 (history: under the per-copy purge reading, oracle before `04487c5`) | 3 pids × 3 events + 2 undos + 1 revert | `walk`, sampled | 5,000,000 walks, 60,000,000 steps [unverified: before run records] | SAMPLED: every walk asked ran | 0 | `41f256f3` (kit v0.9.1) | log line L3 |
+| walks at G1 + 1 restart (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk`, sampled | 1,000,000 [run d810536a/walk_3x3_u2_r1_rs1_none:walks] walks, 13,000,000 [run d810536a/walk_3x3_u2_r1_rs1_none:steps] steps | SAMPLED: every walk asked ran | 0 | `d810536a` (`bbbfc17`) | RUNREC |
+| biased walks at G1 (history: under the per-copy purge reading, oracle before `04487c5`) | 3 pids × 3 events + 2 undos + 1 revert | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] walks, 12,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (`194048f`) | RUNREC |
+| biased walks at G1 + 1 restart (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk --bias redo-after-partial`, sampled with weights | 1,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000,000 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps; `redo_after_partial` 28,208 [run d9b8d20f/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:redo_after_partial] | SAMPLED: every walk asked ran | 0 | `d9b8d20f` (`ab3bc8a`) | RUNREC |
+| biased walks at G1 + 1 restart (smoke) (history: under the per-copy purge reading, oracle before `04487c5`) | the same + 1 restart | `walk --bias redo-after-partial` | 1,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:walks] walks, 13,000 [run f51260dc/walk_3x3_u2_r1_rs1_none_bias-redo-after-partial:steps] steps | SAMPLED: every walk asked ran | 0 | `f51260dc` (`194048f`) | RUNREC |
+| exact counts, ITF replay | small bounds (`tools/undo/counts.sh`, `PART=a`, `PART=b`) | TLC, `bfs`, ITF replay | 7 bounds, TLC = enumerator ([The exact counts](#the-exact-counts)) | COMPLETE | 0 | `88555d19`, `ee85bf3c` (`f8e2aad`); before the rebase `3f360ca1`, `708bd100`; before the purge revision `85045092` | RUNREC |
+| TLC mutants | `tools/undo/counts.sh`, `PART=m` | TLC (one worker), `bfs --first` | every mutant ([Teeth](#teeth-mutants-each-must-fail-minimal-counterexample-inside-an-exhaustive-bound)) | VIOLATION, each its rule | as expected | `545f3ae0` (`f8e2aad`); before the rebase `41730937`; before the purge revision `a885a72a` | RUNREC |
 
 Every walk runs to full depth (12 actions at G1, 13 with the restart: the steps are exactly 12
 and 13 times the walks). The walks are independent draws, not deduplicated: the same path can
@@ -63,22 +86,23 @@ recur.
 ## Mutants at the literal G1 bound
 
 Each on 50,000 walks at 3 pids × 3 events + 2 undos + 1 revert (restart-single-taint with 1
-restart added), job `5cfc0edf` (`bbbfc17`, `g1.sh PART=walks-mutants`). A mutant is caught only
+restart added), job `48962ffa` (`d3eccbc`, `g1.sh PART=walks`, on the current oracle: canonical
+purge hunks, `04487c5`); the same rules at the same depths as job `5cfc0edf` (`bbbfc17`, history: under the per-copy purge reading, oracle before `04487c5`). A mutant is caught only
 if the walk reports a violation; the depth is the shortest witness the walks found (a walk is
 not a least witness: the exhaustive least depths are under Teeth, below).
 
 | Mutant | What it breaks | Caught | How (shortest witness seen) | Walks run | Record |
 |---|---|---|---|---|---|
-| (i) `i-no-taint` | whole-text merge3, no taint rule | yes | `U9` and `own_only` at depth 3, `U22a` at 7; trace of 4 [run 5cfc0edf/walk_3x3_u2_r1_rs0_i-no-taint] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_i-no-taint:walks] | RUNREC |
-| (iii) `iii-partial-hides-taint` | `--partial` leaves tainted regions out of its report | yes | `U15` at depth 3; trace of 4 [run 5cfc0edf/walk_3x3_u2_r1_rs0_iii-partial-hides-taint] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_iii-partial-hides-taint:walks] | RUNREC |
-| (iv) `iv-redo-retries-skipped` | a partial undo's redo entry also carries the regions it skipped | yes, **by a panic** | `panic` at depth 5: `window.rs:199`, "a shared edge's elements must be foreign"; trace of 6 [run 5cfc0edf/walk_3x3_u2_r1_rs0_iv-redo-retries-skipped] states | 0 (the run stops at the panic; 40 steps) | RUNREC |
-| (vi) `vi-o5-every-window-end` | O5 at every window end | yes | `O5` at depth 3; trace of 4 [run 5cfc0edf/walk_3x3_u2_r1_rs0_vi-o5-every-window-end] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_vi-o5-every-window-end:walks] | RUNREC |
-| (vii) `vii-o5-region-base` | O5 on the region's base, not the doc's | yes | `O5` at depth 3; trace of 4 [run 5cfc0edf/walk_3x3_u2_r1_rs0_vii-o5-region-base] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_vii-o5-region-base:walks] | RUNREC |
-| `skip-u19` | a purge keeps the stacks | yes | `U19` at depth 1; trace of 2 [run 5cfc0edf/walk_3x3_u2_r1_rs0_skip-u19] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_skip-u19:walks] | RUNREC |
-| (viii) `f3-rediff` | sides by re-diffing strings (F3) | yes | `own_only` at depth 3; trace of 4 [run 5cfc0edf/walk_3x3_u2_r1_rs0_f3-rediff] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_f3-rediff:walks] | RUNREC |
-| (ix) `restart-single-taint` | a restart reads one taint flag back at both edges | yes | `RT` at depth 8; trace of 9 [run 5cfc0edf/walk_3x3_u2_r1_rs1_restart-single-taint] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs1_restart-single-taint:walks] | RUNREC |
-| (x) `x-provenance-ignored-in-o4` | O4 on element identity, no O4a | yes | `I1` at depth 3; trace of 4 [run 5cfc0edf/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4:walks] | RUNREC |
-| (xi) `xi-no-o4a` | O4 on (range, roots), no O4a | yes | `I1` at depth 4; trace of 5 [run 5cfc0edf/walk_3x3_u2_r1_rs0_xi-no-o4a] states | 50,000 [run 5cfc0edf/walk_3x3_u2_r1_rs0_xi-no-o4a:walks] | RUNREC |
+| (i) `i-no-taint` | whole-text merge3, no taint rule | yes | `U9` and `own_only` at depth 3, `U22a` at 4; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_i-no-taint] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_i-no-taint:walks] | RUNREC |
+| (iii) `iii-partial-hides-taint` | `--partial` leaves tainted regions out of its report | yes | `U15` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_iii-partial-hides-taint] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_iii-partial-hides-taint:walks] | RUNREC |
+| (iv) `iv-redo-retries-skipped` | a partial undo's redo entry also carries the regions it skipped | yes, **by a panic** | `panic` at depth 5: `window.rs:199`, "a shared edge's elements must be foreign"; trace of 6 [run 48962ffa/walk_3x3_u2_r1_rs0_iv-redo-retries-skipped] states | 0 (the run stops at the panic; 26 steps) | RUNREC |
+| (vi) `vi-o5-every-window-end` | O5 at every window end | yes | `O5` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_vi-o5-every-window-end] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_vi-o5-every-window-end:walks] | RUNREC |
+| (vii) `vii-o5-region-base` | O5 on the region's base, not the doc's | yes | `O5` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_vii-o5-region-base] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_vii-o5-region-base:walks] | RUNREC |
+| `skip-u19` | a purge keeps the stacks | yes | `U19` at depth 1; trace of 2 [run 48962ffa/walk_3x3_u2_r1_rs0_skip-u19] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_skip-u19:walks] | RUNREC |
+| (viii) `f3-rediff` | sides by re-diffing strings (F3) | yes | `own_only` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_f3-rediff] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_f3-rediff:walks] | RUNREC |
+| (ix) `restart-single-taint` | a restart reads one taint flag back at both edges | yes | `RT` at depth 8; trace of 9 [run 48962ffa/walk_3x3_u2_r1_rs1_restart-single-taint] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs1_restart-single-taint:walks] | RUNREC |
+| (x) `x-provenance-ignored-in-o4` | O4 on element identity, no O4a | yes | `I1` at depth 3; trace of 4 [run 48962ffa/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_x-provenance-ignored-in-o4:walks] | RUNREC |
+| (xi) `xi-no-o4a` | O4 on (range, roots), no O4a | yes | `I1` at depth 4; trace of 5 [run 48962ffa/walk_3x3_u2_r1_rs0_xi-no-o4a] states | 50,000 [run 48962ffa/walk_3x3_u2_r1_rs0_xi-no-o4a:walks] | RUNREC |
 
 **(iv) is caught by a panic, not by `U17`.** Its witness: from `abb`, p1 appends `a`
 (`abba`); p1 deletes the first and last letters (`bb`); p2 reverts that change with
@@ -87,7 +111,7 @@ steps, and the oracle's assertion in `window.rs:199` (`drop_front`: the elements
 edge must be foreign) fails. Under (iv) every undo step also pushes the regions it skipped
 into its redo entry (`model/mod.rs`, code that runs only under that mutant). The assertion
 never fired without a mutant: the oracle ran this path's bound exhaustively (`2x2u2r1` above)
-and through 6,000,000 walks with no panic. Its invariant still catches it: `undo_enum bfs
+and through 6,000,000 walks with no panic (and again, on the current oracle, 2,000,000 walks in `48962ffa`). Its invariant still catches it: `undo_enum bfs
 --first` finds `U17` at depth 3 (Teeth, below),
 and the earlier walks of (iv) (`41f256f3`, `7fc87257`, before the panic stopped them) had
 reported `U17` at depth 5 [unverified: a progress line, before run records].
@@ -107,7 +131,8 @@ that leaves a new one (an undo that skipped regions), 4 for any other `undo --pa
 every other step. Every enabled step keeps a weight of at least 1, so no path of the bound is
 left out, and every step is checked against every invariant as in a plain walk. The biased walks
 are not a uniform sample of paths: they add depth on this class, they do not replace the
-uniform walks. Job `f51260dc`, `g1.sh PART=walks-bias`:
+uniform walks. **These are history: under the per-copy purge reading, oracle before `04487c5`** (not re-run; the current oracle's uniform walks hit the class
+275 [run 48962ffa/walk_3x3_u2_r1_rs0_none:redo_after_partial] times in 1,000,000 walks). Job `f51260dc`, `g1.sh PART=walks-bias`:
 
 - **1,000,000 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:walks] biased walks at the literal G1 bound:** 0 violations; `redo_after_partial` hit
   **28,568 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial]** times (all classes in the coverage table below).
@@ -139,69 +164,85 @@ the oracle's panic at depth 4, as in the uniform run, and stopped.
 
 ## Per-class coverage at G1
 
-Transitions per case class (E-HIST-13), from the clean walks. The biased column is not a
-uniform sample (weighted steps, above).
+Transitions per case class (E-HIST-13), from the clean walks. The first two columns are the
+current oracle's; the other three are history: under the per-copy purge reading, oracle before `04487c5`. The biased column is not a uniform
+sample (weighted steps, above).
 
-| Class | Walks at G1 (`41f256f3`) [unverified: before run records] | Walks at G1 + 1 restart | Biased walks at G1 (`--bias redo-after-partial`) |
-|---|---|---|---|
-| eof_append | 215,358 [unverified: before run records] | 42,272 [run d810536a/walk_3x3_u2_r1_rs1_none:eof_append] | 41,305 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:eof_append] |
-| edge_insert | 1,708,451 [unverified: before run records] | 333,934 [run d810536a/walk_3x3_u2_r1_rs1_none:edge_insert] | 360,586 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:edge_insert] |
-| taint | 494,519 [unverified: before run records] | 96,633 [run d810536a/walk_3x3_u2_r1_rs1_none:taint] | 101,191 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] |
-| partial | 443,021 [unverified: before run records] | 85,204 [run d810536a/walk_3x3_u2_r1_rs1_none:partial] | 163,897 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:partial] |
-| redo_after_partial | 1,289 [unverified: before run records] | 242 [run d810536a/walk_3x3_u2_r1_rs1_none:redo_after_partial] | **28,568** [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial] |
-| identical_reports | 630,349 [unverified: before run records] | 118,720 [run d810536a/walk_3x3_u2_r1_rs1_none:identical_reports] | 152,741 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:identical_reports] |
-| import_kept | 3,207,597 [unverified: before run records] | 636,841 [run d810536a/walk_3x3_u2_r1_rs1_none:import_kept] | 778,697 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:import_kept] |
-| purge_drops | 5,043,303 [unverified: before run records] | 968,317 [run d810536a/walk_3x3_u2_r1_rs1_none:purge_drops] | 1,006,462 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:purge_drops] |
-| restart | 0 (no restart in this bound) | 779,665 [run d810536a/walk_3x3_u2_r1_rs1_none:restart] | 0 (no restart in this bound) |
-| exact_vs_rediff | 355,050 [unverified: before run records] | 68,876 [run d810536a/walk_3x3_u2_r1_rs1_none:exact_vs_rediff] | 68,093 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:exact_vs_rediff] |
-| touching_regions | 582,025 [unverified: before run records] | 115,253 [run d810536a/walk_3x3_u2_r1_rs1_none:touching_regions] | 124,865 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] |
-| revert_extra_conflict | 31,880 [unverified: before run records] | 6,279 [run d810536a/walk_3x3_u2_r1_rs1_none:revert_extra_conflict] | 5,642 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] |
-| concurrent_restore | 272,790 [unverified: before run records] | 52,395 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore] | 76,083 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore] |
-| concurrent_restore_o4 (O4 took a restoration once) | not counted (v0.9.1) | 24,780 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 41,232 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] |
-| concurrent_restore_o4a (O4a fired) | not counted (v0.9.1) | 3,914 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 5,841 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] |
-| concurrent_restore_base_by_root | not counted (v0.9.1) | 24,424 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore_base_by_root] | 30,681 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore_base_by_root] |
+| Class | Walks at G1, current oracle (`48962ffa`) | Walks at G1 + 1 restart, current oracle | Walks at G1 (`41f256f3`, history) [unverified: before run records] | Walks at G1 + 1 restart (history) | Biased walks at G1 (`--bias redo-after-partial`, history) |
+|---|---|---|---|---|---|
+| eof_append | 42,530 [run 48962ffa/walk_3x3_u2_r1_rs0_none:eof_append] | 41,675 [run 48962ffa/walk_3x3_u2_r1_rs1_none:eof_append] | 215,358 [unverified: before run records] | 42,272 [run d810536a/walk_3x3_u2_r1_rs1_none:eof_append] | 41,305 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:eof_append] |
+| edge_insert | 336,276 [run 48962ffa/walk_3x3_u2_r1_rs0_none:edge_insert] | 329,478 [run 48962ffa/walk_3x3_u2_r1_rs1_none:edge_insert] | 1,708,451 [unverified: before run records] | 333,934 [run d810536a/walk_3x3_u2_r1_rs1_none:edge_insert] | 360,586 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:edge_insert] |
+| taint | 127,685 [run 48962ffa/walk_3x3_u2_r1_rs0_none:taint] | 125,942 [run 48962ffa/walk_3x3_u2_r1_rs1_none:taint] | 494,519 [unverified: before run records] | 96,633 [run d810536a/walk_3x3_u2_r1_rs1_none:taint] | 101,191 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:taint] |
+| partial | 85,836 [run 48962ffa/walk_3x3_u2_r1_rs0_none:partial] | 82,635 [run 48962ffa/walk_3x3_u2_r1_rs1_none:partial] | 443,021 [unverified: before run records] | 85,204 [run d810536a/walk_3x3_u2_r1_rs1_none:partial] | 163,897 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:partial] |
+| redo_after_partial | 275 [run 48962ffa/walk_3x3_u2_r1_rs0_none:redo_after_partial] | 242 [run 48962ffa/walk_3x3_u2_r1_rs1_none:redo_after_partial] | 1,289 [unverified: before run records] | 242 [run d810536a/walk_3x3_u2_r1_rs1_none:redo_after_partial] | **28,568** [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:redo_after_partial] |
+| identical_reports | 125,553 [run 48962ffa/walk_3x3_u2_r1_rs0_none:identical_reports] | 118,652 [run 48962ffa/walk_3x3_u2_r1_rs1_none:identical_reports] | 630,349 [unverified: before run records] | 118,720 [run d810536a/walk_3x3_u2_r1_rs1_none:identical_reports] | 152,741 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:identical_reports] |
+| import_kept | 638,593 [run 48962ffa/walk_3x3_u2_r1_rs0_none:import_kept] | 632,929 [run 48962ffa/walk_3x3_u2_r1_rs1_none:import_kept] | 3,207,597 [unverified: before run records] | 636,841 [run d810536a/walk_3x3_u2_r1_rs1_none:import_kept] | 778,697 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:import_kept] |
+| purge_drops | 1,009,414 [run 48962ffa/walk_3x3_u2_r1_rs0_none:purge_drops] | 967,518 [run 48962ffa/walk_3x3_u2_r1_rs1_none:purge_drops] | 5,043,303 [unverified: before run records] | 968,317 [run d810536a/walk_3x3_u2_r1_rs1_none:purge_drops] | 1,006,462 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:purge_drops] |
+| restart | 0 (no restart in this bound) | 779,113 [run 48962ffa/walk_3x3_u2_r1_rs1_none:restart] | 0 (no restart in this bound) | 779,665 [run d810536a/walk_3x3_u2_r1_rs1_none:restart] | 0 (no restart in this bound) |
+| exact_vs_rediff | 68,855 [run 48962ffa/walk_3x3_u2_r1_rs0_none:exact_vs_rediff] | 67,093 [run 48962ffa/walk_3x3_u2_r1_rs1_none:exact_vs_rediff] | 355,050 [unverified: before run records] | 68,876 [run d810536a/walk_3x3_u2_r1_rs1_none:exact_vs_rediff] | 68,093 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:exact_vs_rediff] |
+| touching_regions | 72,932 [run 48962ffa/walk_3x3_u2_r1_rs0_none:touching_regions] | 71,879 [run 48962ffa/walk_3x3_u2_r1_rs1_none:touching_regions] | 582,025 [unverified: before run records] | 115,253 [run d810536a/walk_3x3_u2_r1_rs1_none:touching_regions] | 124,865 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:touching_regions] |
+| revert_extra_conflict | 9,701 [run 48962ffa/walk_3x3_u2_r1_rs0_none:revert_extra_conflict] | 9,628 [run 48962ffa/walk_3x3_u2_r1_rs1_none:revert_extra_conflict] | 31,880 [unverified: before run records] | 6,279 [run d810536a/walk_3x3_u2_r1_rs1_none:revert_extra_conflict] | 5,642 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:revert_extra_conflict] |
+| concurrent_restore | 54,358 [run 48962ffa/walk_3x3_u2_r1_rs0_none:concurrent_restore] | 52,312 [run 48962ffa/walk_3x3_u2_r1_rs1_none:concurrent_restore] | 272,790 [unverified: before run records] | 52,395 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore] | 76,083 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore] |
+| concurrent_restore_o4 (O4 took a restoration once) | 25,511 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 24,752 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | not counted (v0.9.1) | 24,780 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] | 41,232 [unverified: in the record as `concurrent_restore_o4`, a field name the checker cannot cite (a digit)] |
+| concurrent_restore_o4a (O4a fired) | 3,883 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 3,894 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | not counted (v0.9.1) | 3,914 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] | 5,841 [unverified: in the record as `concurrent_restore_o4a`, a field name the checker cannot cite (a digit)] |
+| concurrent_restore_base_by_root | 25,716 [run 48962ffa/walk_3x3_u2_r1_rs0_none:concurrent_restore_base_by_root] | 24,387 [run 48962ffa/walk_3x3_u2_r1_rs1_none:concurrent_restore_base_by_root] | not counted (v0.9.1) | 24,424 [run d810536a/walk_3x3_u2_r1_rs1_none:concurrent_restore_base_by_root] | 30,681 [run f51260dc/walk_3x3_u2_r1_rs0_none_bias-redo-after-partial:concurrent_restore_base_by_root] |
 
 ## The exact counts
 
 TLC's exact distinct-state counts on `spec/quint/undo.qnt` against `undo_enum bfs` at the same
-bounds (no `--sym`: both count the same states), and the ITF replay. Node job `85045092`
-(`tools/undo/counts.sh`, `PART=ab`, after the Quint export guard passed): every count equal,
-every run COMPLETE. The mutants (`PART=m`) are in [Teeth](#teeth-mutants-each-must-fail-minimal-counterexample-inside-an-exhaustive-bound).
+bounds (no `--sym`: both count the same states), and the ITF replay. Node jobs `88555d19`
+(`tools/undo/counts.sh`, `PART=a`) and `ee85bf3c` (`PART=b`), both at the branch head `f8e2aad`
+(main `a484260` plus the purge revision), each after the Quint export guard passed: every
+count equal, every run COMPLETE. The same seven counts came out before the rebase onto
+`a484260` (`3f360ca1`, `6129fd4`; `708bd100`, `d4a1064`). The mutants (`PART=m`) are in [Teeth](#teeth-mutants-each-must-fail-minimal-counterexample-inside-an-exhaustive-bound).
 
-| Check | Bound | States (TLC / enumerator) | Result | Job |
-|---|---|---|---|---|
-| TLC = enumerator, exact | 2 × 1 + 1 undo (`abb`, 4) | 3,889 [run 85045092/c_2x1u1] / 3,889 [run 85045092/e_c_2x1u1] | equal, no violation | `85045092` |
-|  | 2 × 1 + 1 undo + 1 revert (`abb`, 4) | 35,792 [run 85045092/c_2x1u1r1] / 35,792 [run 85045092/e_c_2x1u1r1] | equal, no violation | `85045092` |
-|  | 3 × 1 + 1 undo (`abb`, 4) | 220,210 [run 85045092/c_3x1u1] / 220,210 [run 85045092/e_c_3x1u1] | equal, no violation | `85045092` |
-|  | 2 × 2 + 1 undo (`ab`, 3) | 542,418 [run 85045092/c_2x2u1_l3] / 542,418 [run 85045092/e_c_2x2u1_l3] | equal, no violation | `85045092` |
-|  | 1 × 3 + 1 revert + 1 restart (`abba`, 4) | 200,530 [run 85045092/c_1x3r1s1] / 200,530 [run 85045092/e_c_1x3r1s1] | equal, no violation | `85045092` |
-|  | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 144 [run 85045092/c_1x1u1r1] / 144 [run 85045092/e_c_1x1u1r1] | equal, no violation | `85045092` |
-|  | 2 × 1 + 2 undos + 1 revert (`ab`, 4) | 49,656 [run 85045092/c_2x1u2r1] / 49,656 [run 85045092/e_c_2x1u2r1] | equal, no violation | `85045092` |
+| Check | Bound | States (TLC / enumerator) | Before the purge revision (TLC) | Result | Job |
+|---|---|---|---|---|---|
+| TLC = enumerator, exact | 2 × 1 + 1 undo (`abb`, 4) | 3,889 [run 88555d19/c_2x1u1] / 3,889 [run 88555d19/e_c_2x1u1] | 3,889 [run 85045092/c_2x1u1] | equal, no violation | `88555d19` |
+|  | 2 × 1 + 1 undo + 1 revert (`abb`, 4) | **35,758** [run 88555d19/c_2x1u1r1] / 35,758 [run 88555d19/e_c_2x1u1r1] | 35,792 [run 85045092/c_2x1u1r1] | equal, no violation | `88555d19` |
+|  | 3 × 1 + 1 undo (`abb`, 4) | 220,210 [run 88555d19/c_3x1u1] / 220,210 [run 88555d19/e_c_3x1u1] | 220,210 [run 85045092/c_3x1u1] | equal, no violation | `88555d19` |
+|  | 2 × 2 + 1 undo (`ab`, 3) | 542,418 [run ee85bf3c/c_2x2u1_l3] / 542,418 [run ee85bf3c/e_c_2x2u1_l3] | 542,418 [run 85045092/c_2x2u1_l3] | equal, no violation | `ee85bf3c` |
+|  | 1 × 3 + 1 revert + 1 restart (`abba`, 4) | **199,268** [run ee85bf3c/c_1x3r1s1] / 199,268 [run ee85bf3c/e_c_1x3r1s1] | 200,530 [run 85045092/c_1x3r1s1] | equal, no violation | `ee85bf3c` |
+|  | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 144 [run 88555d19/c_1x1u1r1] / 144 [run 88555d19/e_c_1x1u1r1] | 144 [run 85045092/c_1x1u1r1] | equal, no violation | `88555d19` |
+|  | 2 × 1 + 2 undos + 1 revert (`ab`, 4) | **49,644** [run ee85bf3c/c_2x1u2r1] / 49,644 [run ee85bf3c/e_c_2x1u2r1] | 49,656 [run 85045092/c_2x1u2r1] | equal, no violation | `ee85bf3c` |
 
-The same counts as v1.8 and v1.9's runs (`00d8b0dc`, `85262144`; `0b8fedfe`, `e6427b49`):
-the oracle didn't change.
+**The old counts (35,792, 200,530 and 49,656) were under the per-copy purge reading**: until
+the model revision of 2026-10-29 `undo.qnt` built a purge's removal as one hunk per copy of
+the letter, as the oracle did then (`docs/MODEL-CHECK.md`, Readings). The oracle's purge became
+canonical (copies that touch are one hunk, D2; so one region, U8, and a taint on a region it
+deletes across, U9) in `04487c5`, and the enumerator's counts at these three bounds moved with
+it while TLC's stayed, which is how the ITF replay found it. The revised model counts what the
+oracle counts again. Only bounds with a revert and a purge differ: with no revert budget the
+records are reduced away (`REDUCE`), so a purge's hunk shape doesn't show, and at 1 × 1 + 1
+undo + 1 revert (`ab`) no two copies of a letter touch. Before the revision, the counts were
+those of v1.8 and v1.9's runs (`00d8b0dc`, `85262144`; `0b8fedfe`, `e6427b49`).
 
-**ITF replay** (Quint simulator traces replayed step by step into the oracle), same job:
-- 2 × 1 + 1 undo + 1 revert: 1,000 [run 85045092/itf_2x1u1r1:traces] traces, 4,000 [run 85045092/itf_2x1u1r1:steps] steps, 0 [run 85045092/itf_2x1u1r1:mismatches] mismatches;
-- 2 × 1 + 2 undos + 1 revert (restorations meet): 1,000 [run 85045092/itf_2x1u2r1:traces] traces, 5,000 [run 85045092/itf_2x1u2r1:steps] steps, 0 [run 85045092/itf_2x1u2r1:mismatches] mismatches.
+**ITF replay** (Quint simulator traces replayed step by step into the oracle), job `88555d19`:
+- 2 × 1 + 1 undo + 1 revert: 1,000 [run 88555d19/itf_2x1u1r1:traces] traces, 4,000 [run 88555d19/itf_2x1u1r1:steps] steps, 0 [run 88555d19/itf_2x1u1r1:mismatches] mismatches;
+- 2 × 1 + 2 undos + 1 revert (restorations meet): 1,000 [run 88555d19/itf_2x1u2r1:traces] traces, 5,000 [run 88555d19/itf_2x1u2r1:steps] steps, 0 [run 88555d19/itf_2x1u2r1:mismatches] mismatches;
+- the regression traces (`tools/undo/itf-regress`: a purge whose copies touch, and its taint): 2 [run 88555d19/itf_regress:traces] traces, 0 [run 88555d19/itf_regress:mismatches] mismatches.
 
 ## What is not covered
 
-- **The literal G1 bound is sampled, not exhausted.** 6,000,000 walks (5,000,000 without and
-  1,000,000 with a restart) are a sample of ≥ 10^13 states; a rule broken only on paths the
-  walks rarely take could be missed.
+- **The literal G1 bound is sampled, not exhausted.** On the current oracle, 2,000,000 walks
+  (1,000,000 without and 1,000,000 with a restart; before it, 6,000,000 under the per-copy
+  reading) are a sample of ≥ 10^13 states; a rule broken only on paths the walks rarely take
+  could be missed.
 - **Exhaustive only up to** 3 pids × 1 event + 2 undos + 1 revert and 2 pids × 2 events + 2
   undos + 1 revert. 3 × 2 + 2 undos (`g1.sh PART=long`, ≈ 2.6 × 10^10 states) has not been run;
   neither exhaustive run has a restart (restarts are exhaustive only at the small bound of the
   counts, 1 × 3 + 1 revert + 1 restart).
-- **`redo_after_partial` past 10^4 only in biased walks:** 28,568 hits in 1,000,000 biased walks
+- **`redo_after_partial` past 10^4 only in biased walks** (history, per-copy reading; not
+  re-run on the current oracle, whose uniform walks hit it 275 and 242 times in 1,000,000 each): 28,568 hits in 1,000,000 biased walks
   (cited above) and 28,208 in 1,000,000 biased walks with a restart, against 1,289 in
   5,000,000 uniform walks and 242 with a restart. The biased walks weigh their steps, so they
   are not a uniform sample of the bound's paths.
 - **One seed, one length cap:** every run starts from `abb` with `MAXLEN` 4 (texts longer than 4
   are cut). Other seeds appear only in the counts' small bounds.
-- **The main walks ran on kit v0.9.1,** before the panic catch: a panic there would have hung
-  the run, not passed it, and the run finished; the 1,000,000 restart walks ran on v0.9.3.
+- **The history walks ran on kit v0.9.1–v0.9.3** (the main ones before the panic catch: a
+  panic there would have hung the run, not passed it, and the run finished). The current
+  oracle's walks and exhaustive pair ran on the kit at `d3eccbc` (main `a484260` plus the
+  purge revision).
 - **The concurrency class** (client batches integrated by CRDT merge between undo steps) is
   later; the bounded world and the trace test are sequential.
 - **Native engine:** the trace test compares the oracle with the kit on Yrs only.
@@ -291,20 +332,20 @@ modes), `O5` (the end-of-text rule exactly at the doc's end with a non-empty bas
 restated equivalence) is a diagnostic (`--u12`), clean at every bound run.
 
 ## Teeth (mutants: each must fail, minimal counterexample inside an exhaustive bound)
-Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least) and TLC with one worker (a shortest counterexample), both re-run with run records in `a885a72a` (`tools/undo/counts.sh`, `PART=m`); TLC's again in `13b3e348` (the same counts, with each record's worker count, 1: a least depth cites a one-worker run, `tools/evidence/README.md` section 4): TLC's trace is one state longer than the enumerator's depth (it counts the initial state), at every mutant:
+Enumerator `undo_enum bfs --first` (exhaustive, so the depth found is the least) and TLC with one worker (a shortest counterexample), both re-run with run records on the revised model at the branch head `f8e2aad` in `545f3ae0` (`tools/undo/counts.sh`, `PART=m`; the same before the rebase, `41730937`; each TLC record with its worker count, 1: a least depth cites a one-worker run, `tools/evidence/README.md` section 4), the same depths as before it (`a885a72a`; TLC's `13b3e348`): TLC's trace is one state longer than the enumerator's depth (it counts the initial state), at every mutant:
 
 | Mutant | Fails | Bound (exhaustive) | Least depth (enumerator) | TLC's shortest trace (states, one worker) |
 |---|---|---|---|---|
-| (i) no taint rule | U9 | 2 pids × 1 event + 1 undo (`abb`, 4) | 3 [run a885a72a/e_m_i-no-taint:violation_depth] | 4 [run 13b3e348/m_tiny] |
-| (iii) `--partial` hides taint | U15 | same | 3 [run a885a72a/e_m_iii-partial-hides-taint:violation_depth] | 4 [run 13b3e348/m_tiny#2] |
-| (iv) redo retries skipped | U17 | same | 3 [run a885a72a/e_m_iv-redo-retries-skipped:violation_depth] | 4 [run 13b3e348/m_tiny#3] |
-| (vi) O5 at every window end | O5 | same | 3 [run a885a72a/e_m_vi-o5-every-window-end:violation_depth] | 4 [run 13b3e348/m_tiny#4] |
-| (vii) O5 on the region's base | O5 | same | 3 [run a885a72a/e_m_vii-o5-region-base:violation_depth] | 4 [run 13b3e348/m_tiny#5] |
-| skip-U19 | U19 | same | 1 [run a885a72a/e_m_skip-u19:violation_depth] | 2 [run 13b3e348/m_tiny#6] |
-| **(viii) `f3-rediff`**: sides by re-diffing strings (F3) | own_only | same | 3 [run a885a72a/e_m_f3-rediff:violation_depth] | 4 [run 13b3e348/m_tiny#7] |
-| **(ix) `restart-single-taint`**: one taint flag read back at both edges | RT | 1 pid × 3 events + 1 revert + 1 restart (`abba`, 4) | 4 [run a885a72a/e_m_restart-single-taint:violation_depth] | 5 [run 13b3e348/m_rst] |
-| **(x) `provenance-ignored-in-O4`** (v1.8): O4 on element identity, no O4a | I1 | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 [run a885a72a/e_m_x-provenance-ignored-in-o4:violation_depth] | 4 [run 13b3e348/m_prov] |
-| **(xi) `no-o4a`** (v1.9): O4 on (range, roots), no O4a | I1 | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 4 [run a885a72a/e_m_xi-no-o4a:violation_depth] | 5 [run 13b3e348/m_xi] |
+| (i) no taint rule | U9 | 2 pids × 1 event + 1 undo (`abb`, 4) | 3 [run 545f3ae0/e_m_i-no-taint:violation_depth] | 4 [run 545f3ae0/m_tiny] |
+| (iii) `--partial` hides taint | U15 | same | 3 [run 545f3ae0/e_m_iii-partial-hides-taint:violation_depth] | 4 [run 545f3ae0/m_tiny#2] |
+| (iv) redo retries skipped | U17 | same | 3 [run 545f3ae0/e_m_iv-redo-retries-skipped:violation_depth] | 4 [run 545f3ae0/m_tiny#3] |
+| (vi) O5 at every window end | O5 | same | 3 [run 545f3ae0/e_m_vi-o5-every-window-end:violation_depth] | 4 [run 545f3ae0/m_tiny#4] |
+| (vii) O5 on the region's base | O5 | same | 3 [run 545f3ae0/e_m_vii-o5-region-base:violation_depth] | 4 [run 545f3ae0/m_tiny#5] |
+| skip-U19 | U19 | same | 1 [run 545f3ae0/e_m_skip-u19:violation_depth] | 2 [run 545f3ae0/m_tiny#6] |
+| **(viii) `f3-rediff`**: sides by re-diffing strings (F3) | own_only | same | 3 [run 545f3ae0/e_m_f3-rediff:violation_depth] | 4 [run 545f3ae0/m_tiny#7] |
+| **(ix) `restart-single-taint`**: one taint flag read back at both edges | RT | 1 pid × 3 events + 1 revert + 1 restart (`abba`, 4) | 4 [run 545f3ae0/e_m_restart-single-taint:violation_depth] | 5 [run 545f3ae0/m_rst] |
+| **(x) `provenance-ignored-in-O4`** (v1.8): O4 on element identity, no O4a | I1 | 1 × 1 + 1 undo + 1 revert (`ab`, 4) | 3 [run 545f3ae0/e_m_x-provenance-ignored-in-o4:violation_depth] | 4 [run 545f3ae0/m_prov] |
+| **(xi) `no-o4a`** (v1.9): O4 on (range, roots), no O4a | I1 | 2 × 1 + 1 undo + 1 revert (`ab`, 4) | 4 [run 545f3ae0/e_m_xi-no-o4a:violation_depth] | 5 [run 545f3ae0/m_xi] |
 
 TLC with one worker (a shortest counterexample): v1.8, job `a75a2670` (every mutant,
 the same depths as v1.7 for (i)–(ix)); the smoke job `ac55d0a0` agrees. v1.7: `7a899e60`,
@@ -349,6 +390,11 @@ touching_regions 2,288, revert_extra_conflict 145. G1 run: [the coverage table](
 ## ITF replay
 Quint simulator traces exported as ITF and replayed step by step into the oracle (action
 enabled, cut, outcome, whole state):
+- The purge revision (2026-10-29): before it, the replays found the oracle's canonical purge
+  (`04487c5`) against the model's per-copy one (25, 17 and 23 mismatches at seed `0x2a`, all
+  at a purge; `docs/MODEL-CHECK.md`, Readings). After it: the counts job's 1,000 + 1,000
+  traces and the regression traces, 0 mismatches ([above](#the-exact-counts)); the smoke
+  `e436d6cb`, 300 + 300 traces, 0; **at the literal G1 bound**, 3,000 [run 03743fd6/itf_pids_3_events_3_undos_2_reverts_1_restarts_0_maxlen_4_init__abb__multi_true_purge_true_reduce_true_u12_false:traces] traces, 35,802 [run 03743fd6/itf_pids_3_events_3_undos_2_reverts_1_restarts_0_maxlen_4_init__abb__multi_true_purge_true_reduce_true_u12_false:steps] steps, 0 [run 03743fd6/itf_pids_3_events_3_undos_2_reverts_1_restarts_0_maxlen_4_init__abb__multi_true_purge_true_reduce_true_u12_false:mismatches] mismatches (`g1-smoke.sh`, `03743fd6`).
 - v1.9: the same 1,000 + 1,000 traces, **0 mismatches** (`0b8fedfe`).
 - v1.8: 1,000 traces at 2 × 1 + 1 undo + 1 revert (4,000 steps) and 1,000 at 2 × 1 + 2 undos +
   1 revert (5,000 steps), **0 mismatches** (`00d8b0dc`); 300 traces with and 300 without a
@@ -356,7 +402,7 @@ enabled, cut, outcome, whole state):
 - v1.7: 2 × 1 + 1 undo + 1 revert: 1,000 traces, 4,000 steps, **0 mismatches** (job `7a899e60`);
   300 traces, 1,200 steps, 0 (smoke `0c00aee0`).
 - The same with 1 restart: 300 traces, 1,500 steps, **0 mismatches** (`0c00aee0`).
-- At G1: 3,000 Quint simulator traces (35,798 steps), 0 mismatches (v1.6, `docs/MODEL-CHECK.md`); not re-run on v1.9.
+- At G1: 3,000 Quint simulator traces (35,798 steps), 0 mismatches (v1.6, `docs/MODEL-CHECK.md`).
 
 ## The trace test (oracle vs the kit on Yrs)
 - **v1.9:** 256 traces (28,632 steps) and the restart twin: **0 mismatches**, the same figures
@@ -373,7 +419,7 @@ enabled, cut, outcome, whole state):
   would give): 877 hits in 256 traces.
 - **U22a's cost** (revert conflicting where undo of the same change would apply): 7 of 2,304
   revert regions (0.30%); with touching regions 7 of 443 (1.58%).
-- Large run (≥ 10^4 per class): TODO.
+- Large run (≥ 10^4 per class): not run yet (the trace test `trace_equivalence_large` exists; no script runs it).
 
 ## Conformance
 v1.8: `hist.undo_own_only` reads roots and asserts the expected outcomes of (a) and (b); the
@@ -390,6 +436,20 @@ v0.8.2's kit and pass here.
 
 
 ## Log
+- 2026-10-30: counts.sh (`PART=a`, `b`, `m`) at the branch head `f8e2aad` (`88555d19`, `ee85bf3c`, `545f3ae0`):
+  TLC = enumerator at all seven bounds with the same counts as before the rebase, the ITF
+  replays and the regression traces 0 mismatches, every mutant caught at the same depths.
+- 2026-10-30: the G1 headline on the current oracle (canonical purge hunks, `04487c5`): exhaustive
+  3 × 1 + 2 undos + 1 revert 8,494,185 states (`baaedbc1`) and 2 × 2 + 2 undos + 1 revert 716,142,148 states (`cd232421`, resumed from `baaedbc1`),
+  no violation (before: 8,516,359 and 717,352,254, 725.9M together, under the per-copy reading);
+  1,000,000 walks at G1 and 1,000,000 with a restart, 0 violations, every mutant caught at the
+  same depths (`48962ffa`). The biased walks and the earlier walks stay as history.
+- 2026-10-29: the model's purge revision (canonical purge hunks, as the oracle since
+  `04487c5`): the exact counts re-run (`3f360ca1`, `708bd100`): 2 × 1 + 1 undo + 1 revert 35,792 → 35,758,
+  1 × 3 + 1 revert + 1 restart 200,530 → 199,268, 2 × 1 + 2 undos + 1 revert 49,656 → 49,644,
+  TLC = enumerator at all seven bounds; the TLC mutants re-run (`41730937`), the same depths; the ITF
+  replays clean again, at G1 too (`03743fd6`). The Apalache servers now run with the Jackson limits
+  agent (`tools/quint-jvm`): the export check's IR is 20,001,757 bytes since the revision.
 - 2026-10-28: the exact counts, the ITF replay and the TLC mutants re-run with run records (`85045092`, `a885a72a`); the exhaustive pair's counts cite records collected from its log (`6a6c1557`).
 - 2026-10-29: biased walks with 1 restart (`d9b8d20f`): `redo_after_partial` at 28,208 hits
   in 1,000,000 walks, 0 violations.

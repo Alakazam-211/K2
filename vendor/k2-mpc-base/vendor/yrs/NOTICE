@@ -41,3 +41,15 @@ Changes on branch k2/0.28 (from tag v0.28.0):
 - yrs (hardening): garbage-collection robustness. Tests included.
 - yrs: builds warning-free under RUSTFLAGS='-D warnings' (default features, `weak` and the
   test-only planted-* features), with no change in behaviour.
+- yrs: text lookups and edits cross a run of deleted blocks in one step: walks that step
+  through two or more deleted blocks in a row record the run's ends (as unit IDs, per text),
+  and later walks go from one end straight to the other. A live block linked in between two
+  deleted ones drops the text's runs. The same places are found, so updates are byte-identical.
+  The position index's sampled shadow check now also steps through what the runs cross (with a
+  step budget) instead of running the full walk each time, so its cost no longer grows with the
+  text's history. A test-only switch (Doc::set_deleted_runs) keeps stepping through every block.
+  Bench in yrs/benches/text_soak.rs; tests in yrs/tests/deleted_runs.rs and the position_index
+  unit tests.
+- yrs: `ReadTxn::client_state(&ClientID) -> u32`, one client's entry of the state vector
+  (0 for an unknown client), read with one lookup instead of building the whole vector. No
+  behaviour change. Tests in yrs/tests/client_state.rs.

@@ -1211,11 +1211,11 @@ impl EngineDoc for YrsDoc {
         Ok(update)
     }
 
+    /// `client`'s entry of the state vector (0 for a client the doc has never seen), read
+    /// alone (v0.9.8: building the whole vector was O(clients), and the session reads it at
+    /// least twice per edit).
     fn clock_of(&self, client: ClientId) -> u32 {
-        self.doc
-            .transact()
-            .state_vector()
-            .get(&ClientID::new(client))
+        self.doc.transact().client_state(&ClientID::new(client))
     }
 
     /// `diff_range(now, empty)` (proven in D0, Q5): with the empty snapshot as the low end,
@@ -1485,6 +1485,56 @@ mod tests {
         (0..n)
             .filter_map(|_| canary_append(y, "x").map(|u| (y.checks.edits, u)))
             .collect()
+    }
+
+    #[test]
+    fn clock_of_is_the_state_vector_entry() {
+        let sv_entry = |y: &YrsDoc, c: u64| y.doc.transact().state_vector().get(&ClientID::new(c));
+        let check = |y: &YrsDoc, clients: &[u64]| {
+            for &c in clients {
+                assert_eq!(y.clock_of(c), sv_entry(y, c), "client {c}");
+            }
+        };
+        let mut y = YrsDoc::new(&S);
+        // a doc with nothing yet, and clients it has never seen
+        check(&y, &[2, 7, 1_000, MAX_CLIENT_ID]);
+        assert_eq!(y.clock_of(7), 0);
+        // edits (inserts and deletes) by many clients, one of them many times
+        for i in 0..200u64 {
+            let c = 2 + i % 37;
+            let text = y.text("source");
+            // ASCII text: every byte offset is a character boundary
+            let at = (i as usize * 7) % (text.len() + 1);
+            let mut hunks = vec![crate::text::diff::Hunk {
+                start: at,
+                end: at,
+                insert: format!("c{c}-{i}\n"),
+            }];
+            if i % 5 == 4 && text.len() > 4 {
+                hunks = vec![crate::text::diff::Hunk {
+                    start: 0,
+                    end: 4,
+                    insert: String::new(),
+                }];
+            }
+            let e = vec![Edit::Text {
+                root: "source".into(),
+                hunks,
+            }];
+            y.edit_as(c, &e).unwrap();
+        }
+        let seen: Vec<u64> = (2..2 + 37).collect();
+        check(&y, &seen);
+        check(&y, &[1, 40, 999, MAX_CLIENT_ID]);
+        assert!(seen.iter().all(|&c| y.clock_of(c) > 0));
+        // the same after a load from the state (GC'd deletes, merged blocks)
+        let state = y.encode_state().unwrap();
+        let l = YrsDoc::load(&S, &state).unwrap();
+        check(&l, &seen);
+        check(&l, &[1, 40, 999, MAX_CLIENT_ID]);
+        for &c in &seen {
+            assert_eq!(l.clock_of(c), y.clock_of(c), "client {c} after a load");
+        }
     }
 
     #[test]

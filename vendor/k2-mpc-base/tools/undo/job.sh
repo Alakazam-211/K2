@@ -89,14 +89,32 @@ EC_APA=""
 if [ -n "$APA_JAR" ]; then
   # quint stops the server it started after its compile: wait for the port (as tlc.sh does)
   i=0; while bash -c "exec 3<>/dev/tcp/127.0.0.1/$QJ_APA_PORT" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
-  java -Xmx${APA_HEAP:-6g} -jar "$APA_JAR" server --port=$QJ_APA_PORT > "$ROOT/apalache-export-check.log" 2>&1 & EC_APA=$!
+  # the Jackson limits agent (tools/quint-jvm): the IR travels as one JSON string, past
+  # Jackson's 20,000,000-character default; tools/undo/tlc.sh's server uses it too
+  if [ -z "${APA_JAVA_OPTS+x}" ]; then
+    APA_JAVA_OPTS=$(sh "$ROOT/tools/quint-jvm/agent.sh" "$APA_JAR" "$ROOT/qjvm") || APA_JAVA_OPTS=""
+    export APA_JAVA_OPTS
+  fi
+  echo "=== apalache server JVM options: ${APA_JAVA_OPTS:-none}"
+  java ${APA_JAVA_OPTS} -Xmx${APA_HEAP:-6g} -jar "$APA_JAR" server --port=$QJ_APA_PORT > "$ROOT/apalache-export-check.log" 2>&1 & EC_APA=$!
   i=0; until grep -q "running on port" "$ROOT/apalache-export-check.log" 2>/dev/null || [ $i -ge 120 ]; do sleep 1; i=$((i + 1)); done
 fi
 # a tool error (exit 2; quint's compile can fail at random on a cold Apalache server, as
 # tools/undo/tlc.sh notes) is retried, up to 3 attempts; a finding (exit 1) is never retried
+# A tool error from Jackson's string limit (tools/quint-jvm) is not random: it is said
+# plainly and not retried.
 k=1
 while :; do
-  sh "$ROOT/tools/quint/lint.sh" --export --quiet q_export_check.qnt q_export_check; rc=$?
+  sh "$ROOT/tools/quint/lint.sh" --export --quiet q_export_check.qnt q_export_check > "$ROOT/export-check.out" 2>&1; rc=$?
+  cat "$ROOT/export-check.out"
+  if [ $rc -eq 2 ] && grep -q -E "StreamConstraintsException|String value length \([0-9]+\) exceeds the maximum allowed" "$ROOT/export-check.out" "$ROOT/apalache-export-check.log" 2>/dev/null; then
+    if [ -z "${APA_JAVA_OPTS:-}" ]; then
+      echo "=== quint export check: the IR is over Jackson's 20M limit and the agent isn't loaded (tools/quint-jvm; see its build line above)"
+    else
+      echo "=== quint export check: the IR is over the agent's string limit too ($APA_JAVA_OPTS; tools/quint-jvm)"
+    fi
+    break
+  fi
   [ $rc -eq 2 ] && [ $k -lt 3 ] || break
   echo "=== quint export check: tool error (attempt $k of 3), retrying"; k=$((k + 1)); sleep 5
 done

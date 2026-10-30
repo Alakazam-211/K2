@@ -326,6 +326,73 @@ fn group_mutants_are_caught() {
     }
 }
 
+/// `write --base`'s trace classes on a node (v0.9.8): 50,000 traces (`SPEC_UNDO_TRACES`
+/// overrides), every trace compared with the oracle after every step, each class hit at
+/// least 10^4 times: the end of the text's cases A–D (`end_break_a`…`end_break_d`, amendment
+/// O5 end-of-text §4); a clean write over adjacent lines sharing their first character
+/// (`write_base_shared_start`), the part of it v0.9.7's sides refused
+/// (`write_base_shared_start_was_conflict`); two different changes of one line, refused
+/// (`write_base_words_same_line`); a line rewritten into several against the other side's
+/// change (`write_base_multiline_rewrite`). Not run here.
+#[test]
+#[ignore]
+fn end_break_trace_class_large() {
+    run_many_with(
+        "end_break_traces_large",
+        2_000_000..2_000_000 + traces_or(50_000),
+        &[
+            "end_break_a",
+            "end_break_b",
+            "end_break_c",
+            "end_break_d",
+            "write_base_shared_start",
+            "write_base_shared_start_was_conflict",
+            "write_base_words_same_line",
+            "write_base_multiline_rewrite",
+        ],
+        10_000,
+        trace::run,
+    );
+}
+
+/// `write --base`'s planted faults in the kit (`differential::MergeMutant`) are each caught by
+/// the trace classes within `END_BREAK_MUTANT_TRACES` traces (default 512), and the catching
+/// trace passes without its fault: (i) v0.9.7's character-trimmed merge, (ii) the final line
+/// break always as theirs left it.
+#[test]
+fn end_break_mutants_are_caught() {
+    use k2_mpc_base::differential::{with_merge_mutant, MergeMutant};
+    let n: u64 = std::env::var("END_BREAK_MUTANT_TRACES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(512);
+    for (m, name) in [
+        (MergeMutant::CharSides, "char_sides"),
+        (MergeMutant::EndFollowsTheirs, "end_follows_theirs"),
+    ] {
+        let caught = (0..n).find_map(|seed| {
+            with_merge_mutant(m, || trace::run(seed))
+                .mismatch
+                .map(|x| (seed, x))
+        });
+        let (seed, mm) = caught.unwrap_or_else(|| panic!("{name}: never caught in {n} traces"));
+        if let Some(x) = trace::run(seed).mismatch {
+            panic!(
+                "{name}: trace {seed} fails without the fault too: {}",
+                x.what
+            );
+        }
+        println!(
+            "[end-break mutant {name}] caught by trace {seed}, step {}: {}",
+            mm.step, mm.what
+        );
+        println!(
+            "RUNREC {{\"job\":null,\"run\":\"end_break_mutant_{name}\",\"tool\":\"spec-undo\",\"status\":\"CAUGHT\",\"seed\":{seed},\"traces\":{}}}",
+            seed + 1
+        );
+    }
+}
+
 /// Replay one trace with its whole log: `SPEC_UNDO_SEED=<n> cargo test -p k2-mpc-spec-undo
 /// --test traces replay_one -- --nocapture`. Does nothing without the variable.
 #[test]

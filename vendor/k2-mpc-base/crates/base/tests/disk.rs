@@ -2049,3 +2049,56 @@ fn an_outside_delete_of_a_line_the_live_side_kept_lands() {
         "p05:2216\np23:2229\np25:2184\n"
     );
 }
+
+/// v0.9.8: a reopened doc keeps its disk replica encoded until the disk path needs it. An
+/// outside save right after the reopen still merges on the synced text (here with an agent's
+/// unwritten edit), the next write-back writes the merge, and the sync audit is clean; a save
+/// made while the doc was closed is reconciled at the open as before.
+#[cfg(unix)]
+#[test]
+fn an_outside_edit_right_after_a_reopen_merges_on_the_synced_text() {
+    let mut f = fx("lazy-replica");
+    let seed: String = (1..=8).map(|i| format!("line {i}\n")).collect();
+    f.write("a.md", seed.as_bytes());
+    {
+        let s = f.open("a.md");
+        let c = f.join(&s, "agent");
+        replace(&s, c, "line 1", "line one");
+        assert!(s.flush(c).unwrap().written);
+    }
+    f.mgr.release().unwrap();
+    f.restart();
+    // right after the reopen: an outside save, and an agent's edit before it is seen
+    let s = f.open("a.md");
+    let c = f.join(&s, "agent");
+    let synced = String::from_utf8(f.bytes("a.md")).unwrap();
+    f.write(
+        "a.md",
+        synced.replace("line 7", "line 7 (person)").as_bytes(),
+    );
+    replace(&s, c, "line 2", "line 2 (agent)");
+    assert!(matches!(
+        s.file_changed().unwrap(),
+        DiskCheck::Ingested { .. }
+    ));
+    let t = text(&s, c);
+    assert_eq!(
+        t,
+        seed.replace("line 1", "line one")
+            .replace("line 2", "line 2 (agent)")
+            .replace("line 7", "line 7 (person)")
+    );
+    assert!(s.flush(c).unwrap().written);
+    assert_eq!(f.bytes("a.md"), t.as_bytes());
+    assert!(s.audit_disk_sync().unwrap().is_empty());
+    // saved while closed: reconciled at the open
+    drop(s);
+    f.mgr.release().unwrap();
+    f.restart();
+    f.write("a.md", t.replace("line 8", "line eight").as_bytes());
+    let s = f.open("a.md");
+    let c = f.join(&s, "agent");
+    assert_eq!(text(&s, c), t.replace("line 8", "line eight"));
+    s.flush(c).unwrap();
+    assert!(s.audit_disk_sync().unwrap().is_empty());
+}

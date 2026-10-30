@@ -993,11 +993,27 @@ impl DocStore {
         versions: &[Version],
     ) -> Result<Vec<Seq>, StoreError> {
         debug_assert_eq!(entries.len(), changes.len());
-        let w = self.begin_write()?;
-        let seqs = self.append_in(&w, id, entries)?;
-        put_changes(&w, id, &seqs, changes)?;
-        super::put_versions(&w, id, versions)?;
-        w.commit()?;
+        // profile scopes (test-only, perf_kit): nothing in a host's build
+        let w = {
+            prof!("store.begin_write");
+            self.begin_write()?
+        };
+        let seqs = {
+            prof!("store.append");
+            self.append_in(&w, id, entries)?
+        };
+        {
+            prof!("store.put_changes");
+            put_changes(&w, id, &seqs, changes)?;
+        }
+        {
+            prof!("store.put_versions");
+            super::put_versions(&w, id, versions)?;
+        }
+        {
+            prof!("store.txn_commit");
+            w.commit()?;
+        }
         Ok(seqs)
     }
 
@@ -1275,6 +1291,29 @@ impl DocStore {
             out.push((k.value().1, at, n));
         }
         Ok(out)
+    }
+
+    /// The oldest record of the window's index that `skip` doesn't skip, as
+    /// [`DocStore::revert_index`] gives it, or `None` when every record is skipped (or there is
+    /// none). Reads only up to that record (v0.9.8: the history tick's check, O(1) plus the
+    /// records skipped).
+    pub(crate) fn first_revert(
+        &self,
+        id: DocId,
+        mut skip: impl FnMut(Seq) -> Result<bool, StoreError>,
+    ) -> Result<Option<(Seq, u64, u64)>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(REVERT_INDEX)?;
+        for kv in t.range((id, 0)..=(id, u64::MAX))? {
+            let (k, v) = kv?;
+            let seq = k.value().1;
+            if skip(seq)? {
+                continue;
+            }
+            let (at, n) = dec_pair(v.value())?;
+            return Ok(Some((seq, at, n)));
+        }
+        Ok(None)
     }
 
     /// Carried bounds persisted for records older than the window's cut.

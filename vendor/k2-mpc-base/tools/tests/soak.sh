@@ -4,7 +4,7 @@
 # crates/base. Needs Rust. Prints a progress line every SOAK_PROGRESS_SECS (default 30).
 timed build cargo test -p k2-mpc-base --release --test soak --no-run
 # SOAK_MAX_SLOWDOWN (default 8 here; the test's own default is 2): the throughput guard, in the
-# run's RUNREC as max_slowdown_percent (main 8f8a096)
+# run's RUNREC as max_slowdown_percent
 timed soak_32 env SOAK_SECS=${SOAK_SECS:-600} SOAK_SEED=${SOAK_SEED:-1} SOAK_MAX_SLOWDOWN=${SOAK_MAX_SLOWDOWN:-8} \
   cargo test -p k2-mpc-base --release --test soak -- --ignored --nocapture soak_32
 timed soak_short cargo test -p k2-mpc-base --release --test soak -- --nocapture soak_short

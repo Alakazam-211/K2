@@ -546,6 +546,7 @@ impl Session {
     /// (K-HIST-23).
     pub(crate) fn history_tick(&self) -> Result<HistoryTick> {
         let now = self.host.now_ms();
+        prof!("history.tick");
         let mut st = self.lock()?;
         let st = &mut *st;
         let c = self.config.clone();
@@ -568,8 +569,14 @@ impl Session {
             max_count: c.version_max_count,
             max_bytes: c.version_max_bytes,
         };
-        rep.thinned = store.thin_versions(self.doc_id, now, &retention)?.len();
-        rep.reverts_dropped = self.prune_reverts(st, now)?;
+        rep.thinned = {
+            prof!("history.thin_versions");
+            store.thin_versions(self.doc_id, now, &retention)?.len()
+        };
+        rep.reverts_dropped = {
+            prof!("history.prune_reverts");
+            self.prune_reverts(st, now)?
+        };
         Ok(rep)
     }
 
@@ -583,7 +590,31 @@ impl Session {
         if stats.count <= c.revert_keep_changes && stats.bytes <= c.revert_max_bytes {
             return Ok(0);
         }
-        let index = store.revert_index(self.doc_id)?;
+        // v0.9.8: within the byte bound, `window_plan` cuts nothing when the oldest record it
+        // looks at (the oldest not pending) is inside the window (it stops there), so check
+        // that one first instead of reading every record each tick (O(the history) a minute
+        // while a doc is edited within `revert_keep_ms`). The same rule and the same totals
+        // as the full plan below (the stats are what the early return above reads).
+        if stats.bytes <= c.revert_max_bytes {
+            let first = store.first_revert(self.doc_id, |seq| {
+                Ok(store
+                    .approval(self.doc_id, seq)?
+                    .is_some_and(|a| a.state == ApprovalState::Pending))
+            })?;
+            let inside = |seq: Seq, at: u64| {
+                seq > st.version.saturating_sub(c.revert_keep_changes)
+                    || at.saturating_add(c.revert_keep_ms) >= now
+            };
+            match first {
+                None => return Ok(0),
+                Some((seq, at, _)) if inside(seq, at) => return Ok(0),
+                Some(_) => {}
+            }
+        }
+        let index = {
+            prof!("history.revert_index_read");
+            store.revert_index(self.doc_id)?
+        };
         let pending: HashSet<Seq> = store
             .approvals(self.doc_id)?
             .into_iter()

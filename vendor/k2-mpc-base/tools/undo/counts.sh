@@ -4,7 +4,8 @@
 # Records (tools/evidence/): TLC's runs are read from their `=== tlc NAME` output; the
 # enumerator's and the replay's are their RUNREC lines (`e_NAME`, `e_m_MUTANT`, `itf_*`).
 #   PART=a  2x1+1 undo, 2x1+1 undo+1 revert, 3x1+1 undo, 1x1+1 undo+1 revert; ITF (1,000 traces
-#           at 2x1+1 undo+1 revert, 1,000 at 2x1+2 undos+1 revert, where restorations meet)
+#           at 2x1+1 undo+1 revert, 1,000 at 2x1+2 undos+1 revert, where restorations meet;
+#           the ITF regression traces, tools/undo/itf-regress)
 #   PART=b  2x2+1 undo (ab, 3), 1x3+1 revert+1 restart (abba), 2x1+2 undos+1 revert (ab, v1.8)
 #   PART=m  every mutant, TLC with one worker (a shortest counterexample) and the enumerator
 #   (unset: all three, which needs more than one 15-min job since v1.8)
@@ -37,6 +38,8 @@ timed "simulate + ITF (2x1 +2 undos +1 revert, ab, 1000 traces)" q run itf_cr.qn
 export RUNREC_RUN=itf_2x1u2r1
 timed "ITF replay (restorations meet)" R --pids 2 --events 1 --undos 2 --reverts 1 --maxlen 4 --init ab "$ROOT/itf3"
 unset RUNREC_RUN
+# the ITF regression traces (tools/undo/itf-regress): each must replay with 0 mismatches
+. "$ROOT/tools/undo/itf-regress/replay.sh"
 ;; esac
 case ${PART:-a} in *b*)
 cmp c_2x2u1_l3  2 2 1 0 3 "0, 1"    true  true  ab  540

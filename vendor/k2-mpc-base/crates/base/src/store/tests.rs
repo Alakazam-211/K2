@@ -251,6 +251,37 @@ fn damaged_records_are_errors_not_panics() {
     }
 }
 
+/// A commit reads only the snapshot's position (v0.9.8): the in-place decoder takes and
+/// refuses exactly what the copying one does, on well-formed, truncated, padded and random
+/// records.
+#[test]
+fn snapshot_seq_in_place_matches_the_copying_decoder() {
+    let good = enc_snapshot(42, b"state bytes");
+    assert_eq!(dec_snapshot_ref(&good).unwrap(), (42, &b"state bytes"[..]));
+    assert_eq!(dec_snapshot(&good).unwrap(), (42, b"state bytes".to_vec()));
+    let mut cases = vec![good.clone(), good[..good.len() - 1].to_vec(), {
+        let mut b = good.clone();
+        b.push(0);
+        b
+    }];
+    let mut bad_version = good.clone();
+    bad_version[0] = 2;
+    cases.push(bad_version);
+    let mut rng = 7u64;
+    for _ in 0..5_000 {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        let n = (rng >> 58) as usize;
+        cases.push((0..n).map(|i| (rng >> (i % 8 * 8)) as u8).collect());
+    }
+    for b in cases {
+        let copied = dec_snapshot(&b);
+        let in_place = dec_snapshot_ref(&b).map(|(s, v)| (s, v.to_vec()));
+        assert_eq!(format!("{copied:?}"), format!("{in_place:?}"), "{b:?}");
+    }
+}
+
 #[test]
 fn doc_round_trips_through_log_and_compaction() {
     let t = TmpDir::new("doc");
@@ -1204,4 +1235,47 @@ fn authored_hunks_side_table() {
     assert!(s.tables_holding(id).unwrap().contains(&"authored"));
     s.delete_doc(id, 100).unwrap();
     assert!(s.tables_holding(id).unwrap().is_empty());
+}
+
+/// v0.9.8: a write-back's promotion from the bytes it just recorded leaves exactly the rows
+/// the read-back promotion does (the synced state, the metadata, no write in flight), and
+/// refuses the same way when nothing is in flight.
+#[test]
+fn promote_written_sync_equals_promote_pending_sync() {
+    let t = TmpDir::new("promote-written");
+    let s = DocStore::open(t.db()).unwrap();
+    let a = s.create(&meta("a.md")).unwrap();
+    let b = s.create(&meta("b.md")).unwrap();
+    let sync = SyncState {
+        hash: vec![7; 32],
+        seq: 3,
+        state: (0..5_000u32).map(|i| (i % 251) as u8).collect(),
+    };
+    let mut m = s.meta(a).unwrap();
+    m.synced_hash = Some(sync.hash.clone());
+    m.synced_seq = sync.seq;
+    // a: the read-back way; b: from the recorded bytes
+    s.set_pending_sync(a, &sync).unwrap();
+    s.promote_pending_sync(a, &m).unwrap();
+    let mut mb = s.meta(b).unwrap();
+    mb.synced_hash = m.synced_hash.clone();
+    mb.synced_seq = m.synced_seq;
+    let p = s.set_pending_sync(b, &sync).unwrap();
+    s.promote_written_sync(b, &mb, &p).unwrap();
+    assert_eq!(s.sync_states(a).unwrap(), (Some(sync.clone()), None));
+    assert_eq!(s.sync_states(b).unwrap(), s.sync_states(a).unwrap());
+    assert_eq!(
+        s.meta(b).unwrap().synced_hash,
+        s.meta(a).unwrap().synced_hash
+    );
+    assert_eq!(s.meta(b).unwrap().synced_seq, s.meta(a).unwrap().synced_seq);
+    // nothing in flight any more: both refuse
+    assert!(matches!(
+        s.promote_pending_sync(a, &m),
+        Err(StoreError::Corrupt(_))
+    ));
+    assert!(matches!(
+        s.promote_written_sync(b, &mb, &p),
+        Err(StoreError::Corrupt(_))
+    ));
 }

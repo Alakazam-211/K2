@@ -6,6 +6,7 @@ use arbitrary::{Arbitrary, Unstructured};
 pub mod keepboth;
 pub mod merge;
 pub mod outside;
+pub mod writebase;
 
 /// A piece of text: mostly from a small vocabulary, so text repeats (the hard case for
 /// diffs and element identity), with newlines, multi-byte characters and the empty string;

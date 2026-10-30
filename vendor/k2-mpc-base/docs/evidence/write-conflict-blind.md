@@ -129,9 +129,11 @@ If the file has moved past version 2 by then, I go back to step 1 and repeat. I 
 | 1 | plain text | `cat`, version 2 | `write --base 2` with the change redone on version 2; repeats with the new version if refused again | **pass** |
 | 2 | `--json` | `cat`, version 2 (from `details.current`) | `write --base 2` from the version 2 text, keeping Sam's line; asks the user about the line both changed | **pass** |
 
-**2 of 2 pass.** Both agents read that nothing was applied, re-read the current version the
-refusal named, and wrote again against it; neither retried `--base 1`, forced the write or
-dropped Sam's change. Observations:
+**2 of 2 pass, on their written answers: neither agent ran anything** (the prompt said not to),
+so this shows what the refusal tells an agent to do, not a completed retry. Both read that
+nothing was applied, and said they would re-read the current version the refusal named and
+write again against it; neither proposed retrying `--base 1`, forcing the write or dropping
+Sam's change. Observations:
 
 - Neither agent knew the host's command prefix (the refusal names verbs, not the binary):
   both said so and used a stand-in (`mpc`, `k2 doc`). A host's own `next` text

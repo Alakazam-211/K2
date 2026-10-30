@@ -192,6 +192,19 @@ pub struct Branch {
     /// k2: a text's position markers ([crate::position_index]); `None` until its first indexed
     /// lookup, and whenever a change the markers don't account for drops them.
     pub(crate) markers: Option<Box<crate::position_index::Markers>>,
+    /// k2: a text's recorded runs of deleted blocks ([crate::position_index::Runs]); `None`
+    /// until a walk records one, and whenever a live block is linked in between two deleted ones.
+    pub(crate) runs: Option<Box<crate::position_index::Runs>>,
+    /// k2: how many times a walk in this text crossed a recorded run in one step (for tests
+    /// and benches: [Branch::deleted_run_hops]).
+    pub(crate) run_hops: u64,
+    /// k2: how many times a live block was linked in between two deleted ones in this text (each
+    /// drops its runs; for tests: [Branch::deleted_run_drops]).
+    pub(crate) run_drops: u64,
+    /// k2: how many recorded runs were rejected when used (their end didn't resolve to another
+    /// deleted block of this text) and stepped through instead (for tests:
+    /// [Branch::deleted_run_rejects]).
+    pub(crate) run_rejects: u64,
 
     /// k2 (hardening)
     pub(crate) collected: Option<ID>,
@@ -240,8 +253,39 @@ impl Branch {
             deep_observers: Observer::default(),
             has_formatting: false,
             markers: None,
+            runs: None,
+            run_hops: 0,
+            run_drops: 0,
+            run_rejects: 0,
             collected: None,
         })
+    }
+
+    /// k2, test-only: how many times a walk in this text crossed a recorded run of deleted
+    /// blocks in one step ([crate::Doc::set_deleted_runs]).
+    #[doc(hidden)]
+    pub fn deleted_run_hops(&self) -> u64 {
+        self.run_hops
+    }
+
+    /// k2, test-only: how many times a live block was linked in between two deleted ones in
+    /// this text, each dropping its recorded runs.
+    #[doc(hidden)]
+    pub fn deleted_run_drops(&self) -> u64 {
+        self.run_drops
+    }
+
+    /// k2, test-only: how many recorded runs were rejected when used and stepped through instead.
+    #[doc(hidden)]
+    pub fn deleted_run_rejects(&self) -> u64 {
+        self.run_rejects
+    }
+
+    /// k2, test-only: the entries this text's recorded runs hold now (each map: runs by their
+    /// first block, and by their last).
+    #[doc(hidden)]
+    pub fn deleted_runs_len(&self) -> (usize, usize) {
+        self.runs.as_deref().map_or((0, 0), |r| r.len())
     }
 
     pub fn is_deleted(&self) -> bool {
@@ -307,6 +351,7 @@ impl Branch {
         self.content_len = 0;
         self.has_formatting = false;
         self.markers = None;
+        self.runs = None;
         self.observers = Observer::default();
         self.deep_observers = Observer::default();
     }

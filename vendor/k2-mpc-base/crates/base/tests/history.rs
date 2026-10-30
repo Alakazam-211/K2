@@ -1,7 +1,8 @@
 //! C7a: undo to spec v1.4 (regions per hunk, `--partial`, redo, `--drop`, `--for`),
 //! versions (automatic cuts, named, retention, restore), the history reads and their right,
 //! and `revert` with its window, carry, rights and the pending on-behalf cap. Public API
-//! only. Test names carry the spec's CT names where one applies (`hist_*`).
+//! only. Some test names carry the spec's CT names (`hist_*`); `docs/SPEC-UNDO.md` §8 ("CT
+//! names") says where each CT name lives, and which have no test of their own.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -2522,4 +2523,32 @@ mod group {
             );
         }
     }
+}
+
+/// v0.9.8: the history tick checks the window's oldest record first (not every record). Past
+/// the count but inside the time window nothing goes and every change stays revertable; once
+/// the clock passes them, they go as before.
+#[test]
+fn revert_window_by_time_keeps_records_past_the_count() {
+    let mut c = config();
+    c.revert_keep_changes = 5;
+    c.revert_keep_ms = 60_000;
+    let f = fx_with("revertyoung", c);
+    let s = f.open("y.md", lines(10, "l").as_bytes());
+    let a = f.join(&s, person("a"), Rights::editor());
+    let first = replace(&s, a, "l 2\n", "l two\n");
+    for i in 0..20 {
+        s.edit_with(a, ROOT, |t| Ok::<_, ()>(format!("{t}tail {i}\n")))
+            .unwrap();
+    }
+    f.host.advance(30_000);
+    let rep = f.mgr.tick().unwrap();
+    assert_eq!(rep.reverts_dropped, 0, "inside the time window: {rep:?}");
+    let out = s.revert(a, first, false).unwrap();
+    assert!(matches!(out, UndoOutcome::Applied { .. }), "{out:?}");
+    f.host.advance(2 * 60_000);
+    let rep = f.mgr.tick().unwrap();
+    assert!(rep.reverts_dropped >= 15, "past the time window: {rep:?}");
+    let e = s.revert(a, first, false).unwrap_err();
+    assert_eq!(e, SessionError::RevertTooOld { seq: first });
 }

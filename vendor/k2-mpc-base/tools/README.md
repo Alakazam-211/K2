@@ -93,6 +93,15 @@ tools/test-bundle.sh [--rev REV] [--env NAME=VALUE]... <commands file> <out dir>
   `vendor/yrs/FORK.patch` and checks the result against `vendor/yrs/VENDORED`'s `src-sha256`
   before anything builds (the node needs `curl` and `patch`).
 
+### The gate: before any round of evidence
+
+**Every round goes in only after one green job at its exact head**, whatever else ran on
+earlier commits: the `lint` part (`fmt --check` and clippy, `-D warnings`), then `cargo nextest
+run -p k2-mpc-base --lib --tests`, then `cargo nextest run -p k2-mpc-conformance -p
+k2-mpc-spec-undo`. About five minutes on a warm node. A property or a unit test failing in a round's first part costs the whole round; this
+is what it costs to know first. A later commit, even tests or formatting only, means a new
+gate.
+
 ### Both
 
 - **Run records:** the kit's runs print one `RUNREC` line each (`tools/evidence/README.md`);
@@ -241,12 +250,21 @@ error (exit 2) **stops the job**; `tools/undo/tlc.sh` refuses to run TLC unless 
 passed. Needs Python 3 on the node (stdlib only; `--needs python@3.12`). The three files are
 self-contained (POSIX sh, Python 3 stdlib) and kept as received: update them as a set.
 
+**The Apalache servers' JVM options** (`tools/quint-jvm/`): Apalache reads a request's
+configuration, which carries the whole Quint IR as one JSON string, with Jackson's default
+limit of 20,000,000 characters. The export check's instance of the undo model is just past it
+since the purge revision (20,001,757 bytes; 19,992,163 before). `undo/job.sh` builds a small
+Java agent (`JacksonLimits.java`, needs a JDK: `java@21` has one) that raises the limit, and
+starts both its servers with it (`APA_JAVA_OPTS`): the export check's and `undo/tlc.sh`'s. The
+guard itself (`tools/quint/`) is unchanged, and the TLA+ it checks is the same with and
+without the agent.
+
 Commands files (in `tools/undo/`):
 
 | File | Length | What |
 |---|---|---|
-| `smoke.sh` | ≤ 15 min | Quint typecheck; tiny simulator runs exported as ITF and replayed into `spec_undo::model` (one bound with a restart); TLC's exact count at a tiny bound against the enumerator's; every mutant on TLC and on the enumerator (the restart mutant at its own bound) |
-| `counts.sh` | ≤ 15 min per `PART` (`a`, `b`, `m`; v1.8: all three no longer fit one job) | TLC's exact distinct-state counts at the small bounds (one with a restart, one where restorations meet) against `undo_enum bfs`; ITF replay of 1,000 traces at 2 × 1 + 1 undo + 1 revert and 1,000 at 2 × 1 + 2 undos + 1 revert; every mutant on TLC (one worker) and on the enumerator |
+| `smoke.sh` | ≤ 15 min | Quint typecheck; tiny simulator runs exported as ITF and replayed into `spec_undo::model` (one bound with a restart), and the ITF regression traces (`undo/itf-regress/`, each must replay clean); TLC's exact count at a tiny bound against the enumerator's; every mutant on TLC and on the enumerator (the restart mutant at its own bound) |
+| `counts.sh` | ≤ 15 min per `PART` (`a`, `b`, `m`; v1.8: all three no longer fit one job) | TLC's exact distinct-state counts at the small bounds (one with a restart, one where restorations meet) against `undo_enum bfs`; ITF replay of 1,000 traces at 2 × 1 + 1 undo + 1 revert and 1,000 at 2 × 1 + 2 undos + 1 revert, and the ITF regression traces (`PART=a`); every mutant on TLC (one worker) and on the enumerator |
 | `diff.sh` | ≤ 10 min | the exact state-set comparison: TLC's `-dump` against `undo_enum bfs --dump`, by `statediff.py` (it found the one count mismatch, `docs/MODEL-CHECK.md`) |
 | `g1-smoke.sh` | ≤ 10 min | the literal G1 bound, sampled: Quint simulator traces replayed, random walks, mutant walks |
 | `g1.sh` | about 1 h (`LONG=1`: hours more; see `docs/MODEL-CHECK.md`) | exhaustive at the G1-shaped bounds that fit, with checkpoints; random walks at the literal G1 bound (and with one restart), per-class coverage in the summary; `PART=walks` is over a 2 h job on 8 threads, so it also runs as `walks-main`, `walks-mutants` and `walks-restart`; `walks-bias` runs walks weighted toward `redo_after_partial` (`undo_enum walk --bias`), with every mutant again. **Launched only after review**, never from a smoke run |
@@ -345,6 +363,8 @@ own `debug_assert!`s count too.
 |---|---|---|
 | `text_merge` | base, ours, theirs: mostly a small vocabulary (repeats, `\n`, multi-byte, combining, empty), sometimes any UTF-8 | `diff::hunks` valid, canonical (no touching or no-op hunks), pure, and gives `new`; `align_insertions` keeps that. `merge3`'s identities; symmetric up to O5's append order; O5 only adds clean merges; a clean merge is exactly both sides' changes applied to the base in base order (insertions before replacements at one point, theirs' first); conflicts disjoint, in order and well formed; `merge3_hunks` on the diffs' hunks is `merge3_window` |
 | `store_records` | a record kind, then bytes | every store record decoder (doc key, sync state, meta, log entry, approval, version and its head, snapshot, change, revert record, carry and taint, provenance row, revert index and stats, the blob records, the file stat) refuses with `Corrupt` or decodes to a record whose encoding is a fixpoint; canonical records re-encode to the input. Allocation is bounded by `-malloc_limit_mb` (256). Engine bytes inside a record are carried, **never decoded**: no fuzzed byte reaches the engine |
+| `write_base` | line-shaped base, ours and theirs that share their start | `write --base`'s merge (`merge::merge3`), judged independently (`k2_mpc_base_fuzz::writebase`): a clean merge holds only whole lines of base, ours or theirs and passes the line-LCS rule; a conflict is fine |
+| `keep_both` | line-shaped base, ours and theirs (feature `merge-rule`) | the outside merge (`merge3_keep_both`) as a pure function, against independent oracles (`keepboth::check_outside`): aligned sides are whole lines of the closed texts; no merge splices or joins lines, loses a line or brings a deleted one back; a clean merge is `write --base`'s with the end merged on its own; a conflicting one keeps both sides by line |
 | `outside_edit` | a file's lines, then up to 24 steps | a file-backed session under two participants' edits, changes that move no byte (edit + undo, delete + retype, rewrite and back, restore, revert), `write --base`, ticks, flushes, restarts (a crash) and outside edits: an outside edit made while the doc is the file is the doc right after `file_changed` and the file after the write-back; a flush makes the file the doc and the session clean; a restart keeps the doc; `write --base` is `merge3` (applied with its text, refused exactly when it conflicts); and, once per process, its fixed regressions (`outside::regressions`, readable inputs: an outside delete and retype over unwritten edits never yields a line twice) |
 
 **One run:** `tools/fuzz/bundle.sh <repo> <rev> <out dir> <corpus root> <secs> <target>...`

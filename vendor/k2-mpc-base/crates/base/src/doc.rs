@@ -499,14 +499,18 @@ impl Doc {
         Ok((n16 == at16).then_some(byte))
     }
 
-    /// Replace a text root with `new` as participant `client`, through a minimal diff.
+    /// Replace a text root with `new` as participant `client`, through a minimal diff that
+    /// pairs lines first ([`crate::text::lines::edit_hunks`], v0.9.8, as the session's edits
+    /// do): a line deleted or inserted next to a line with the same start is that line, so
+    /// the neighbour keeps its own elements. One text applied to the text it replaces: there
+    /// is no other side and nothing merges.
     pub fn replace_text_as(
         &mut self,
         client: ClientId,
         root: &str,
         new: &str,
     ) -> Result<Option<Vec<u8>>, DocError> {
-        let hunks = diff::hunks(&self.text(root)?, new);
+        let hunks = crate::text::lines::edit_hunks(&self.text(root)?, new);
         self.edit_as(
             client,
             &[Edit::Text {
@@ -574,6 +578,32 @@ mod tests {
         assert_eq!(d.text("notes").unwrap(), "n1\n");
         let l = Doc::load(TWO_TEXT, &d.encode_state().unwrap()).unwrap();
         assert_eq!(l.text("notes").unwrap(), "n1\n");
+    }
+
+    /// `replace_text_as` pairs lines first (v0.9.8): deleting `seed:2` keeps every element of
+    /// `seed:1` and `seed:3` (a character diff deleted `2\nseed:` and left `seed:3` built from
+    /// the deleted line's `seed:`), and a line inserted before `seed:3` is whole, at its start.
+    #[test]
+    fn replace_text_pairs_lines_first() {
+        let run = |bytes, client, clock| BlameRun {
+            bytes,
+            client,
+            clock,
+        };
+        let mut d = Doc::new(ONE_TEXT).unwrap();
+        d.replace_text_as(7, "source", "seed:1\nseed:2\nseed:3\n")
+            .unwrap();
+        d.replace_text_as(8, "source", "seed:1\nseed:3\n").unwrap();
+        assert_eq!(
+            d.blame_runs("source").unwrap(),
+            vec![run(7, 7, 0), run(7, 7, 14)]
+        );
+        d.replace_text_as(9, "source", "seed:1\nseed:9\nseed:3\n")
+            .unwrap();
+        assert_eq!(
+            d.blame_runs("source").unwrap(),
+            vec![run(7, 7, 0), run(7, 9, 0), run(7, 7, 14)]
+        );
     }
 
     #[test]

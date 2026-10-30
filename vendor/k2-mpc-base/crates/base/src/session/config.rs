@@ -121,9 +121,15 @@ pub struct Config {
     pub participants_max: usize,
 
     // --- store ---
-    /// Compact when the log since the snapshot reaches this many entries... Default 1,000.
+    /// The log since the snapshot is compacted from this many entries on, once its bytes are
+    /// at least a quarter of the snapshot's (v0.9.8; before, at this many entries whatever
+    /// the state's size, so a compaction, which writes the whole state, came every this many
+    /// changes however large the state had grown). Whatever the sizes, the log is compacted at
+    /// 8 times this many entries, and at [`Config::compact_bytes`]. For a doc whose snapshot is
+    /// small next to its log (or with no snapshot yet) it is exactly the old threshold.
+    /// Default 1,000.
     pub compact_entries: u64,
-    /// ...or this many bytes. Default 2 MiB.
+    /// ...and always at this many bytes of log. Default 2 MiB.
     pub compact_bytes: u64,
     /// On unload, compact when the log has at least this many entries. Default 100.
     pub unload_compact_entries: u64,

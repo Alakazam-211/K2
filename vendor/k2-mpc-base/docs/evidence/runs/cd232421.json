@@ -1,0 +1,41 @@
+{
+ "job": "cd232421",
+ "collected": "2026-10-30",
+ "from": "log command",
+ "runs": [
+  {
+   "job": "cd232421",
+   "run": "dfs_3x1_u2_r1_rs0_none_sym",
+   "tool": "enumerator",
+   "mode": "dfs",
+   "states": 8494185,
+   "depth": 6,
+   "seeds": 499,
+   "seeds_all": 499,
+   "status": "COMPLETE",
+   "queued": 0,
+   "exit": 0,
+   "wall_s": 0,
+   "bound": "pids=3 events=1 undos=2 reverts=1 restarts=0 maxlen=4 init=\"abb\" multi=true purge=true reduce=true u12=false",
+   "source": "RUNREC",
+   "cap_s": null
+  },
+  {
+   "job": "cd232421",
+   "run": "dfs_2x2_u2_r1_rs0_none_sym",
+   "tool": "enumerator",
+   "mode": "dfs",
+   "states": 716142148,
+   "depth": 7,
+   "seeds": 28858,
+   "seeds_all": 28858,
+   "status": "COMPLETE",
+   "queued": 0,
+   "exit": 0,
+   "wall_s": 3006,
+   "bound": "pids=2 events=2 undos=2 reverts=1 restarts=0 maxlen=4 init=\"abb\" multi=true purge=true reduce=true u12=false",
+   "source": "RUNREC",
+   "cap_s": null
+  }
+ ]
+}

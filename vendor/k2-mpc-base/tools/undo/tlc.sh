@@ -10,9 +10,15 @@ port_open() { bash -c "exec 3<>/dev/tcp/127.0.0.1/${QJ_APA_PORT:-8822}" 2>/dev/n
 apa_up() {
   # a server quint started (the warm-up's) may still be closing: wait for the port
   i=0; while port_open && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
-  java -Xmx${APA_HEAP:-6g} -jar "$APA_JAR" server --port=${QJ_APA_PORT:-8822} > "$ROOT/apalache-server.log" 2>&1 &
+  # the Jackson limits agent (tools/quint-jvm; tools/undo/job.sh builds it and exports
+  # APA_JAVA_OPTS): the IR travels as one JSON string, past Jackson's 20,000,000 default
+  if [ -z "${APA_JAVA_OPTS+x}" ]; then
+    APA_JAVA_OPTS=$(sh "$ROOT/tools/quint-jvm/agent.sh" "$APA_JAR" "$ROOT/qjvm") || APA_JAVA_OPTS=""
+    export APA_JAVA_OPTS
+  fi
+  java ${APA_JAVA_OPTS} -Xmx${APA_HEAP:-6g} -jar "$APA_JAR" server --port=${QJ_APA_PORT:-8822} > "$ROOT/apalache-server.log" 2>&1 &
   i=0; until grep -q "running on port" "$ROOT/apalache-server.log" 2>/dev/null || [ $i -ge 120 ]; do sleep 1; i=$((i + 1)); done
-  echo "=== apalache server: up after ${i}s on port ${QJ_APA_PORT:-8822} (heap ${APA_HEAP:-6g})"; tail -2 "$ROOT/apalache-server.log"
+  echo "=== apalache server: up after ${i}s on port ${QJ_APA_PORT:-8822} (heap ${APA_HEAP:-6g}; ${APA_JAVA_OPTS:-no agent})"; tail -2 "$ROOT/apalache-server.log"
 }
 # the Apalache server runs in the background: the job's epilogue stops it with anything else
 # left (tools/undo/job.sh defines it); sourced without one, install it here
@@ -39,6 +45,11 @@ tlc() {
   k=1; set +e
   until quint compile --target tlaplus --main="$n" --invariant="$(echo $inv | tr ' ' ',')" "$n.qnt" > "$n.tla" 2> "$n.cerr"; do
     echo "=== quint compile $n: attempt $k failed: $(head -c 200 "$n.cerr")"
+    if grep -q -E "StreamConstraintsException|String value length \([0-9]+\) exceeds the maximum allowed" "$n.cerr" "$ROOT/apalache-server.log" 2>/dev/null; then
+      if [ -z "${APA_JAVA_OPTS:-}" ]; then echo "=== quint compile $n: the IR is over Jackson's 20M limit and the agent isn't loaded (tools/quint-jvm)"
+      else echo "=== quint compile $n: the IR is over the agent's string limit too ($APA_JAVA_OPTS)"; fi
+      set -e; return 1
+    fi
     k=$((k + 1)); [ $k -le 3 ] || { set -e; return 1; }
   done; set -e
   { printf 'INIT q_init\nNEXT q_step\n'

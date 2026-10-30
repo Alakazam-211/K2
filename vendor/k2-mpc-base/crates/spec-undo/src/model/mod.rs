@@ -379,6 +379,16 @@ pub struct StepNote {
 /// The case classes an operation hit (§8 Volume; the trace runner counts them).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Hits {
+    /// `write --base` at the end of the text: its case (A–D; [`merge::Rules::end_break`]).
+    pub end_break: Option<merge::EndBreak>,
+    /// A clean `write --base` a character diff reads one line off ([`merge::Rules::shared_start`]).
+    pub shared_start: bool,
+    /// ... where v0.9.7's character-trimmed sides conflicted.
+    pub shared_start_was_conflict: bool,
+    /// A `write --base` refused over two different changes of one line.
+    pub words_same_line: bool,
+    /// A `write --base` where a line rewritten into several met the other side's change.
+    pub multiline_rewrite: bool,
     /// O5 landed in an undo, redo or revert region.
     pub eof_append_undo: bool,
     /// O5 landed in `write --base`.
@@ -644,6 +654,11 @@ impl Model {
         let (m, rules) = merge::merge3(base, ours, &self.texts[root]);
         hits.eof_append_write = rules.o5_landed;
         hits.insert_inside = rules.o2;
+        hits.end_break = rules.end_break;
+        hits.shared_start = rules.shared_start;
+        hits.shared_start_was_conflict = rules.shared_start_was_conflict;
+        hits.words_same_line = rules.words_same_line;
+        hits.multiline_rewrite = rules.multiline_rewrite;
         match m {
             Merged::Clean { edits, .. } => {
                 // the authored ranges are ours' hunks; the mutant also takes theirs' ranges

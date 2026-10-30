@@ -2,8 +2,6 @@
 //! load nothing from the site or anywhere else, and end the connection, so
 //! the next request starts over at the gate.
 
-use k2_core::frame_policy::CONNECT_HEADER_LINES;
-
 /// One K2 answer. `dev` marks a dev site's answers (DM-4); `head` drops the
 /// body of a `HEAD`.
 pub struct Page<'a> {
@@ -26,7 +24,7 @@ impl Page<'_> {
             status = self.status,
             extra = self.extra,
             len = self.html.len(),
-            frame = CONNECT_HEADER_LINES,
+            frame = k2_core::frame_policy::CONNECT_HEADER_LINES,
         )
         .into_bytes();
         if !self.head {

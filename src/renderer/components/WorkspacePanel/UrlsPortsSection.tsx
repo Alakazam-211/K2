@@ -11,6 +11,8 @@ import {
   PublishedByoDetailsModal,
   PublishedServiceDetailsModal,
 } from './PublishedServiceDetailsModal'
+import { SiteChip } from './SiteVisibilityControls'
+import { openSite } from '@/lib/published-sites'
 import {
   PUBLISH_RUN_EXAMPLE,
   byoWorkspaceTargets,
@@ -369,6 +371,7 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                           Skin
                         </span>
                       ) : null}
+                      <SiteChip mode={svc.visibility?.mode} dev={svc.visibility?.dev} />
                       {listen ? (
                         <span className="font-mono truncate">{listen}</span>
                       ) : null}
@@ -388,10 +391,22 @@ export function UrlsPortsSection({ projectId }: { projectId: string }): React.JS
                         href={url}
                         target="_blank"
                         rel="noreferrer"
+                        data-testid="published-site-open"
+                        onClick={(e) => {
+                          // PV-5: K2's way in, not a bare address that would
+                          // land on the private page.
+                          e.preventDefault()
+                          void openSite(scope, url)
+                        }}
                         className="block text-[11px] font-mono text-[var(--color-accent)] hover:underline truncate no-drag cursor-pointer"
                       >
                         {url}
                       </a>
+                    ) : null}
+                    {svc.bindWarning ? (
+                      <span data-testid="published-bind-warning" className="block text-[10px] text-[var(--color-status-warn-text)]" title={svc.bindWarning}>
+                        {svc.bindWarning}
+                      </span>
                     ) : null}
                     {svc.error ? (
                       <span className="block text-[10px] text-[var(--color-status-error)] truncate" title={svc.error}>

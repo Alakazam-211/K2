@@ -18,6 +18,7 @@
 // Every state line is the phone contract's (§17.2.4). The daemon re-checks
 // the floor and the confirm at the click; nothing here decides who may.
 
+import { SitePinForm } from '@/components/WorkspacePanel/SitePinForm'
 import { useCallback, useState, type CSSProperties, type JSX, type ReactNode } from 'react'
 import { ConfirmStep } from '@/components/Settings/sections/DataSourceConfirm'
 import { CHAMFER_CUT, chamferCutFor, chamferVars } from '@/components/Thread/chamfer'
@@ -267,7 +268,7 @@ export function PermissionNoteBox({
   )
 }
 
-type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string }
+type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string } | { kind: 'pin' }
 
 type CardConfirmAction =
   | 'app-approve'
@@ -283,6 +284,9 @@ const REVEAL_ALLOW_LABEL: Record<RevealMode, string> = {
   link: 'Allow: show me a link',
   email: 'Allow: email them a link',
 }
+
+/** K2's card for putting a site behind a PIN (`publish_cards`). */
+const PUBLISH_PIN_ACTION = 'publish.pin'
 
 /** The vault confirm actions a permission card may ask for (§17.4). */
 function confirmActionOf(action: string | undefined): CardConfirmAction | null {
@@ -382,6 +386,35 @@ function AnswerControls({
     )
   }
   const canConfirmHere = !!actions.confirmScope && !!confirmAction && !!item.proof.secretId
+  // `publish.pin` (PV-7): Allow opens K2's own form. The PIN goes straight to
+  // the route as this person; only then does the card close, so it never
+  // passes through the card, the Thread or the agent.
+  if (item.action === PUBLISH_PIN_ACTION && actions.confirmScope) {
+    const site = item.values.find((v) => v.key === 'label')?.value ?? ''
+    if (step.kind === 'pin') {
+      return (
+        <div className="flex flex-col gap-1">
+          <SitePinForm
+            scope={actions.confirmScope}
+            label={site}
+            onDone={() => void send({ answer: PERMISSION_LABEL.allow })}
+            onCancel={() => setStep({ kind: 'idle' })}
+          />
+          <ErrorLine text={error} />
+        </div>
+      )
+    }
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-wrap gap-1.5">
+          <CardButton label="Set a PIN" testId="permission-allow" primary disabled={busy} onClick={() => setStep({ kind: 'pin' })} />
+          <CardButton label={PERMISSION_LABEL.deny} testId="permission-deny" disabled={busy} onClick={() => setStep({ kind: 'deny' })} />
+        </div>
+        <Muted testId="permission-pin-note">You type the PIN into K2's form. The agent never sees it.</Muted>
+        <ErrorLine text={error} />
+      </div>
+    )
+  }
   if (item.reveal && onReveal) {
     const mode = item.reveal.mode
     // Only a client that shows the secret says `reveal`; email needs none.

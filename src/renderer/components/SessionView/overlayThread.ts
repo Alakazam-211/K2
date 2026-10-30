@@ -144,6 +144,9 @@ export interface OverlayChoice {
    *  from the doc's `choice.action.result.message` ("Kept as yours. Undo
    *  in Settings → Gardens → Local Data."). Absent on every other card. */
   resultMessage?: string
+  /** `action.result.openPinForm`: the site whose PIN K2's own form should ask
+   *  for now (the upgrade card's "Add a PIN", PV-11). */
+  openPinForm?: string
   /** A permission card's `cards=2` view for this viewer (`choice.action`
    *  with id `permission` / `permission.batch` and a readable `view`).
    *  Absent on every other card and on the fallback. */
@@ -1234,18 +1237,22 @@ function withChoiceResult(doc: OverlayDoc | null | undefined): OverlayDoc | null
   const choice = doc?.choice as (OverlayChoice & Record<string, unknown>) | null | undefined
   if (!doc || !choice || typeof choice !== 'object') return doc
   const extra = { ...actionResultMessage(choice), ...permissionExtra(choice) }
-  return extra.resultMessage || extra.permission ? { ...doc, choice: { ...choice, ...extra } } : doc
+  return extra.resultMessage || extra.openPinForm || extra.permission ? { ...doc, choice: { ...choice, ...extra } } : doc
 }
 
 /** `resultMessage` from `action.result.message` when the daemon sent one
  *  (left off otherwise, so a card without an action coerces as before). */
-function actionResultMessage(src: Record<string, unknown>): Pick<OverlayChoice, 'resultMessage'> {
+function actionResultMessage(src: Record<string, unknown>): Pick<OverlayChoice, 'resultMessage' | 'openPinForm'> {
   const action = src.action
   if (!action || typeof action !== 'object' || Array.isArray(action)) return {}
   const result = (action as Record<string, unknown>).result
   if (!result || typeof result !== 'object' || Array.isArray(result)) return {}
   const message = (result as Record<string, unknown>).message
-  return typeof message === 'string' && message.trim() ? { resultMessage: message.trim() } : {}
+  const site = (result as Record<string, unknown> | null | undefined)?.openPinForm
+  return {
+    ...(typeof message === 'string' && message.trim() ? { resultMessage: message.trim() } : {}),
+    ...(typeof site === 'string' && site.trim() ? { openPinForm: site.trim() } : {}),
+  }
 }
 
 /** `answeredBy` / `answeredAt` / `expiresAt` when the daemon sent them

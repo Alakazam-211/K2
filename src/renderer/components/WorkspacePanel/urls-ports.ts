@@ -139,6 +139,31 @@ export interface PublishedService {
   /** Daemon notice while a service from before 0.45.4 still inherits the
    *  daemon's environment (ends in 0.46.0). Null otherwise. */
   envDeprecation: string | null
+  /** Who may open it (PV-12). Absent: no address, or an App's own logins. */
+  visibility?: { mode: string; dev: boolean; reason: string | null } | null
+  /** A dev server's caps and idle stop, as the daemon read them (DM-5). */
+  dev?: { caps: string; lane: string; idleSecs: number | null; warning: string | null } | null
+  /** A private or PIN site's program listens beyond loopback (PV-4). */
+  bindWarning?: string | null
+}
+
+function parseVisibility(raw: unknown): PublishedService['visibility'] {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  const mode = asString(o.mode)
+  if (!mode) return null
+  return { mode, dev: o.dev === true, reason: asStringOrNull(o.reason) }
+}
+
+function parseDev(raw: unknown): PublishedService['dev'] {
+  if (!raw || typeof raw !== 'object') return null
+  const o = raw as Record<string, unknown>
+  return {
+    caps: asString(o.caps),
+    lane: asString(o.lane),
+    idleSecs: asFiniteOrNull(o.idleSecs),
+    warning: asStringOrNull(o.warning),
+  }
 }
 
 function asString(value: unknown): string {
@@ -186,6 +211,9 @@ export function parsePublishedService(raw: unknown): PublishedService | null {
     kind: parseKind(o.kind),
     skinRoot: parseSkinRoot(o),
     envDeprecation: asStringOrNull(o.envDeprecation ?? o.env_deprecation),
+    ...(parseVisibility(o.visibility) ? { visibility: parseVisibility(o.visibility) } : {}),
+    ...(parseDev(o.dev) ? { dev: parseDev(o.dev) } : {}),
+    ...(asStringOrNull(o.bindWarning) ? { bindWarning: asStringOrNull(o.bindWarning) } : {}),
   }
 }
 

@@ -1,3 +1,4 @@
+import { siteUrlForTab } from '@/lib/published-sites'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -341,9 +342,12 @@ export function BrowserPane({
     createInFlightRef.current = true
     const appearance = readAppearance()
     try {
+      // PV-5: this server's private site loads through a one-time link, with
+      // nothing in between. The tab keeps the plain address.
+      const loadUrl = await siteUrlForTab(room.scope, normalized)
       await invoke('browser_create', {
         itemId,
-        url: normalized,
+        url: loadUrl,
         rect,
         parentWindow,
         appearance,
@@ -463,7 +467,8 @@ export function BrowserPane({
     }
     setError(null)
     try {
-      await invoke('browser_navigate', { itemId, url: targetUrl, parentWindow })
+      const loadUrl = await siteUrlForTab(room.scope, targetUrl)
+      await invoke('browser_navigate', { itemId, url: loadUrl, parentWindow })
       lastKnownUrlRef.current = targetUrl
       await refreshHistory()
     } catch (e) {

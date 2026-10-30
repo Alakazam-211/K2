@@ -7,6 +7,8 @@
 // `PermissionCard` / `PermissionBatchCard`. Without a view (the fallback, an
 // older daemon) it stays this card.
 
+import { SitePinForm } from '@/components/WorkspacePanel/SitePinForm'
+import type { ServerScope } from '@/kessel/server-scope'
 import { useState, type JSX } from 'react'
 import { cardExpiryLabel } from './overlayThread'
 import { PermissionBatchCard, PermissionCard } from './PermissionCard'
@@ -49,6 +51,10 @@ export function ChoiceCard(props: ChoiceCardProps): JSX.Element {
 }
 
 export interface ChoiceCardProps {
+  /** The action's answer named a site whose PIN K2's own form asks for now
+   *  (`action.result.openPinForm`), and the server to send it to. */
+  openPinForm?: string
+  pinScope?: ServerScope
   options: { label: string }[]
   allowCustom: boolean
   status: string
@@ -81,9 +87,12 @@ function PlainChoiceCard({
   expiresAt,
   nowSec,
   resultMessage,
+  openPinForm,
+  pinScope,
   onPick,
 }: ChoiceCardProps): JSX.Element {
   const pending = status === 'pending'
+  const [pinClosed, setPinClosed] = useState(false)
   const expiry =
     status === 'expired'
       ? 'expired'
@@ -154,6 +163,9 @@ function PlainChoiceCard({
             </div>
           )
       })}
+      {openPinForm && pinScope && !pinClosed && (
+        <SitePinForm scope={pinScope} label={openPinForm} onDone={() => setPinClosed(true)} onCancel={() => setPinClosed(true)} />
+      )}
       {expiry && (
         <div
           data-testid="thread-choice-expiry"

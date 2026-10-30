@@ -5,6 +5,7 @@ import { useConnectHostStore } from '@/stores/connect-host'
 import { useConfirmDialogStore } from '@/stores/confirm-dialog'
 import { useTunnelUrls } from '@/hooks/useTunnelUrls'
 import { publishedSubdomains } from '@/lib/published-subdomains'
+import { SiteVisibilityControls } from '@/components/WorkspacePanel/SiteVisibilityControls'
 import {
   AddPublishedSubdomainForm,
   PublishedSubdomainRowActions,
@@ -181,6 +182,11 @@ export function TunnelUrlsPanel({ canManage = false }: { canManage?: boolean } =
                   >
                     {workspaceName(info.projectId)}
                   </span>
+                  {manage && (
+                    <div className="col-span-3 pt-1">
+                      <SiteVisibilityControls scope={scope} label={label} />
+                    </div>
+                  )}
                   {manage && (
                     <PublishedSubdomainRowActions
                       api={api}

@@ -8,6 +8,7 @@ import { DialogFrame, DialogScrim } from '@/components/ui'
 import type { ServerScope } from '@/kessel/server-scope'
 import { AppDeploys, APP_CMD_SENTINEL } from './AppDeploys'
 import { AppUpdateSetting } from './AppUpdateSetting'
+import { SiteVisibilityControls } from './SiteVisibilityControls'
 import {
   isServiceHealthy,
   serviceKindLabel,
@@ -124,6 +125,22 @@ export function PublishedServiceDetailsModal({
             {service.status || 'unknown'}
             {healthy ? ' · healthy' : ''}
           </Field>
+          {scope && service.visibility ? (
+            <Field label="Who may open it">
+              <SiteVisibilityControls scope={scope} label={service.name} />
+            </Field>
+          ) : null}
+          {service.dev ? (
+            <Field label="Dev server">
+              <span data-testid="service-dev-details">
+                {service.dev.lane} · {service.dev.caps} · stops after{' '}
+                {service.dev.idleSecs === null ? 'no idle limit' : `${Math.round(service.dev.idleSecs / 60)} idle minutes`}
+              </span>
+              {service.dev.warning ? (
+                <span className="block text-[10px] text-[var(--color-status-warn-text)]">{service.dev.warning}</span>
+              ) : null}
+            </Field>
+          ) : null}
           <Field label="Desired">{dash(service.desired)}</Field>
           <Field label="PID">{servicePidLabel(service)}</Field>
           <Field label="Error">{dash(service.error)}</Field>

@@ -109,6 +109,7 @@ pub fn is_route(p: &str) -> bool {
         || super::test_guests::ROUTES.contains(&p)
         || super::handover::ROUTES.contains(&p)
         || super::sdk::ROUTES.contains(&p)
+        || super::expose::ROUTES.contains(&p)
 }
 
 pub fn is_post_route(p: &str) -> bool {
@@ -132,6 +133,8 @@ pub fn is_post_route(p: &str) -> bool {
         || super::handover::POST_ROUTES.contains(&p)
         // 0.46.6: k2 app sdk add|kit (sdk.rs).
         || super::sdk::POST_ROUTES.contains(&p)
+        // 0.46.7: a public URL for an installed App (expose.rs).
+        || super::expose::POST_ROUTES.contains(&p)
 }
 
 /// The 0.46.1 door's routes (lane 2): audit, quotas, suspend/resume and
@@ -480,6 +483,8 @@ fn handle_inner(path: &str, who: Who, body: &[u8], params: &HashMap<String, Stri
         "/cli/app/logs" => logs(&who, params),
         "/cli/app/errors" => errors(&who, params),
         "/cli/app/uninstall" => uninstall(&who, body),
+        // 0.46.7: a public URL on (or off) with no re-create (expose.rs).
+        "/cli/app/expose" => super::expose::route(&who, body),
         "/cli/app/link" => link(&who, params),
         "/cli/app/link/rotate" => link_rotate(&who, body),
         // The door (0.46.1 lane 2): audit, quotas, suspend, remote passes.
@@ -2236,7 +2241,64 @@ fn errors(who: &Who, params: &HashMap<String, String>) -> R<J> {
     }))
 }
 
-/// POST `/cli/app/uninstall {app, purge?}`: stop, release the URL label,
+/// `409 uninstall_drops_access`: what the uninstall would leave behind.
+pub(crate) const UNINSTALL_DROPS_ACCESS: &str = "uninstall_drops_access";
+
+/// What uninstalling `app` drops: its skin-side access
+/// (`skin::app_chat::AppAccess`) and the vault secrets people shared with
+/// its service (`None`: the vault couldn't be read, so they weren't
+/// counted). K2's own per-App files (the seal key, the App key) aren't
+/// shares: K2 makes them and uninstall cleans them up.
+pub(crate) fn access_counts(app: &AppRow) -> R<J> {
+    let a = k2_core::skin::app_chat::app_access(&app.service_id).map_err(|e| no("db_error", 500, e))?;
+    let k2_own = [super::seal::SEAL_FILE, super::grace::KEY_FILE];
+    let shares: Option<usize> = crate::vault::get()
+        .ok()
+        .and_then(|v| v.grants_to(&k2_vault::Consumer::published_service(app.service_id.clone())).ok())
+        .map(|g| g.iter().filter(|(g, _)| !g.file_name.as_deref().is_some_and(|f| k2_own.contains(&f))).count());
+    let mut out = serde_json::to_value(&a).unwrap_or(J::Null);
+    out["secretShares"] = json!(shares);
+    out["total"] = json!(a.total() as usize + shares.unwrap_or(0));
+    Ok(out)
+}
+
+fn refuse_if_access_would_drop(app: &AppRow) -> R<()> {
+    let c = access_counts(app)?;
+    if c["total"].as_u64().unwrap_or(0) == 0 {
+        return Ok(());
+    }
+    let n = |k: &str| c[k].as_u64().unwrap_or(0);
+    let mut parts: Vec<String> = Vec::new();
+    for (k, one, many) in [
+        ("logins", "App login", "App logins"),
+        ("chatGrants", "chat grant the App gave", "chat grants the App gave"),
+        ("otherGrants", "other grant on the App", "other grants on the App"),
+        ("ownerGrants", "owner grant to the App", "owner grants to the App"),
+        ("secretShares", "secret shared with it", "secrets shared with it"),
+        ("spaces", "chat Space bound to it", "chat Spaces bound to it"),
+    ] {
+        match n(k) {
+            0 => {}
+            1 => parts.push(format!("1 {one}")),
+            x => parts.push(format!("{x} {many}")),
+        }
+    }
+    let mut r = no(
+        UNINSTALL_DROPS_ACCESS,
+        409,
+        format!(
+            "uninstalling {a} would drop {}. A reinstall is a new App and gets none of it back. \
+             To add a public URL, use k2 app expose {a} --tunnel (no reinstall). \
+             To uninstall anyway: k2 app uninstall {a} --drop-access",
+            parts.join(", "),
+            a = app.app_id
+        ),
+    );
+    r.extra = Some(json!({ "wouldDrop": c }));
+    Err(r)
+}
+
+/// POST `/cli/app/uninstall {app, purge?, dropAccess?}`: stop, release the URL label,
 /// drop the App and its service row. Seeds stay (the sweep removes them);
 /// the deploy audit stays. Uninstalling its own App is switch 1's (N2).
 /// `purge` also removes the App folder (its data): the owner in person,
@@ -2247,6 +2309,13 @@ pub(crate) fn uninstall(who: &Who, body: &[u8]) -> R<J> {
     let v = json_body(body)?;
     let app = app_for(who, s(&v, "app"))?;
     let purge = b(&v, "purge");
+    // App-governed Spaces S7 (PRD §9.2, Q4): never drop people's access
+    // silently. Without --purge (the owner's in-person delete), an App that
+    // still has logins, grants, secret shares or chat Spaces is refused
+    // with the counts unless the caller says `dropAccess`.
+    if !purge && !b(&v, "dropAccess") {
+        refuse_if_access_would_drop(&app)?;
+    }
     if purge {
         super::access::purge_confirm(who, &app.app_id, s(&v, "confirmToken"))?;
     }

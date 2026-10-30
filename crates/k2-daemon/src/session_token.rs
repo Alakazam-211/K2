@@ -907,6 +907,8 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/app/data/mv",
         "/cli/app/label/take",
         "/cli/app/label/return",
+        // 0.46.7: its own App's public URL on or off (no re-create).
+        "/cli/app/expose",
         // 0.46.6: the firewall. Reads for any passport (ports, not
         // secrets); every change answers a passport `owner_only` with the
         // owner's command, except tightening its own App's guard.

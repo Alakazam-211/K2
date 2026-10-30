@@ -122,6 +122,27 @@ fn an_app_user_named_like_a_box_login_gets_chat_as_itself_s0() {
     assert!(list_grants().unwrap().iter().all(|g| g.subject_kind != "connect"), "no Connect chat grant");
 }
 
+/// App-governed Spaces S7: what an uninstall would drop, counted per App.
+#[test]
+fn app_access_counts_what_an_uninstall_would_drop() {
+    let f = fx("access");
+    assert_eq!(app_access(&f.app).unwrap(), AppAccess::default());
+    grant(&f.app, None, "owner-token").unwrap();
+    add_principal_for_app("acca", None, &f.app, None, "test").unwrap();
+    add_principal_for_app("accb", None, &f.app, None, "test").unwrap();
+    set_app(&f, "acca", Scope::Member).unwrap();
+    crate::tool_hook::app_space_bind(&f.app, "48831765147549697", "owner-token").unwrap();
+    let a = app_access(&f.app).unwrap();
+    assert_eq!(
+        a,
+        AppAccess { logins: 2, other_grants: 0, owner_grants: 1, chat_grants: 1, spaces: 1 },
+        "two logins, the guests-chat grant, one App-made chat grant, one Space"
+    );
+    assert_eq!(a.total(), 5);
+    assert_eq!(app_access(&f.other).unwrap().total(), 0, "another App's count is its own");
+    assert_eq!(app_access(HOST_APP_ID).unwrap().total(), 0);
+}
+
 #[test]
 fn an_owner_grant_is_the_owners_and_an_off_grant_stays_off() {
     let f = fx("owner");

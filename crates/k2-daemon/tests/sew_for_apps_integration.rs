@@ -318,6 +318,31 @@ async fn home_settings_follow_sews_feature_flags_never_its_version() {
     env.sew.assert_clean();
 }
 
+/// App-governed Spaces S7 (AG-13c): an App that loses its public URL sends
+/// `origin: null`, so Sew drops the old one; a new URL goes again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_public_url_clears_the_origin_in_sew() {
+    let env = setup().await;
+    env.sew.set_features(&["app_origin", "home_client"]);
+    let jobs = uuid::Uuid::new_v4().to_string();
+    hook::note_app_origins(&[(jobs.clone(), Some("wss://jobs.example.com".into()), "Jobs".into())]).unwrap();
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    assert_eq!(env.sew.app_settings(&jobs).unwrap()["origin"], serde_json::json!("wss://jobs.example.com"));
+
+    assert_eq!(hook::note_app_origins(&[(jobs.clone(), None, "Jobs".into())]).unwrap(), 1);
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    assert_eq!(env.sew.app_settings(&jobs).unwrap()["origin"], serde_json::Value::Null, "cleared: {}", env.sew.log());
+    assert!(hook::home_settings().unwrap().iter().all(|s| s.delivered));
+
+    hook::note_app_origins(&[(jobs.clone(), Some("wss://jobs.box.k2.dev".into()), "Jobs".into())]).unwrap();
+    worker::reconcile_once().await.expect("sweep");
+    drain(&env).await;
+    assert_eq!(env.sew.app_settings(&jobs).unwrap()["origin"], serde_json::json!("wss://jobs.box.k2.dev"));
+    env.sew.assert_clean();
+}
+
 /// Rule 3 (Sew 2026-10-28): until Sew reports `app_scoped_sessions`, an App
 /// may not give its users chat (it would see all chat they can); the owner
 /// still can.

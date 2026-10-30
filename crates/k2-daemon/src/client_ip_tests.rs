@@ -559,6 +559,19 @@ async fn oversized_head_is_431() {
     assert!(out.starts_with("HTTP/1.1 431"), "{out}");
 }
 
+/// 0.46.7: the door takes a request head up to 128 KiB, as Sew's engine
+/// does (a 100 KiB head was a 431 at 64 KiB), and the App sees all of it.
+#[tokio::test]
+async fn a_100_kib_head_reaches_the_app() {
+    assert_eq!(MAX_HEAD, 128 * 1024);
+    let mut c = through(Mode::Tunnel(Some(ip(CLIENT)))).await;
+    let filler = "a".repeat(100 * 1024);
+    c.send(format!("GET / HTTP/1.1\r\nHost: a\r\nX-Big: {filler}\r\n\r\n").as_bytes()).await.unwrap();
+    let (status, seen) = c.response().await;
+    assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+    assert_eq!(values(&seen, "x-big"), vec![filler], "the whole header reached the App");
+}
+
 #[tokio::test]
 async fn local_front_port_strips_only_k2s_header_unless_it_is_k2s_hop() {
     // A local caller (not K2's hop): X-K2-Client-IP dropped, a local

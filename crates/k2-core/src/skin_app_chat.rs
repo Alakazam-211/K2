@@ -817,6 +817,51 @@ pub fn app_removed(service_id: &str, actor: &str) -> Result<usize, String> {
     Ok(off.len())
 }
 
+/// What uninstalling an App would leave behind, keyed on its service id
+/// (App-governed Spaces S7, PRD §9.2): a reinstall gets a new service id,
+/// so none of it carries over.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppAccess {
+    /// People's logins to the App (`kind=app` grants).
+    pub logins: u32,
+    /// Other grants that name the App.
+    pub other_grants: u32,
+    /// The owner's per-App grants (`guests-chat`, `guests-rooms`).
+    pub owner_grants: u32,
+    /// Chat grants the App made for its users.
+    pub chat_grants: u32,
+    /// Chat Spaces bound to the App.
+    pub spaces: u32,
+}
+
+impl AppAccess {
+    pub fn total(&self) -> u32 {
+        self.logins + self.other_grants + self.owner_grants + self.chat_grants + self.spaces
+    }
+}
+
+/// Count [`AppAccess`] for `service_id` (read-only).
+pub fn app_access(service_id: &str) -> Result<AppAccess, String> {
+    let svc = service_id.trim();
+    if svc.is_empty() || svc == HOST_APP_ID {
+        return Ok(AppAccess::default());
+    }
+    with_conn(|conn| {
+        let n = |sql: &str, p: &[&dyn rusqlite::ToSql]| -> Result<u32, String> {
+            conn.query_row(sql, p, |r| r.get::<_, i64>(0)).map(|v| v.max(0) as u32).map_err(|e| format!("App access count: {e}"))
+        };
+        Ok(AppAccess {
+            logins: n("SELECT COUNT(*) FROM grants WHERE kind = 'app' AND target_id = ?1", &[&svc])?,
+            other_grants: n("SELECT COUNT(*) FROM grants WHERE kind != 'app' AND target_id = ?1", &[&svc])?,
+            owner_grants: n("SELECT COUNT(*) FROM app_chat_grants WHERE service_id = ?1", &[&svc])?
+                + n("SELECT COUNT(*) FROM app_owner_grants WHERE service_id = ?1", &[&svc])?,
+            chat_grants: n("SELECT COUNT(*) FROM grants WHERE kind = ?1 AND created_by = ?2", &[&crate::tool_hook::CHAT_KIND, &app_marker(svc)])?,
+            spaces: n("SELECT COUNT(*) FROM tool_app_spaces WHERE app_id = ?1", &[&svc])?,
+        })
+    })
+}
+
 // ── audit ────────────────────────────────────────────────────────────
 
 fn audit(service_id: &str, event: &str, actor: &str, mut payload: serde_json::Value) {

@@ -1941,6 +1941,34 @@ fn reconcile_keeps_the_last_change_and_a_short_history_past_no_op_passes() {
     assert!(v["reconcileHistory"].is_array());
 }
 
+// ── App-governed Spaces S7: origin sweeps (AG-13) ───────────────────
+
+/// Binding a Space to an App asks for a sweep at once (the sweep sends
+/// the App's origin to Sew), and an origin that went away is sent as
+/// `null` so Sew drops it.
+#[test]
+fn s7_a_space_bind_asks_for_a_sweep_and_a_lost_origin_is_sent_as_null() {
+    let _e = setup();
+    enable_chat();
+    let _ = take_reconcile_request();
+    let svc = uuid();
+    app_space_bind(&svc, "48831765147549697", "owner-token").expect("bind");
+    assert!(take_reconcile_request(), "the bind asked for a sweep");
+
+    let flags = vec![features::APP_ORIGIN.to_string()];
+    let lost = serde_json::json!({ "display_name": "Jobs", "origin": null });
+    assert_eq!(
+        home::sendable("app:x", lost.as_object().unwrap(), &flags),
+        Some(serde_json::json!({ "display_name": "Jobs", "origin": null })),
+        "a lost origin clears in Sew"
+    );
+    let set = serde_json::json!({ "display_name": "Jobs", "origin": "wss://jobs.example.com" });
+    assert_eq!(home::sendable("app:x", set.as_object().unwrap(), &flags), Some(set.clone()));
+    // Without `app_origin` the origin waits, null or not.
+    let none: Vec<String> = Vec::new();
+    assert_eq!(home::sendable("app:x", lost.as_object().unwrap(), &none), None);
+}
+
 // ── App-governed Spaces S0: box users keep their chat handles (AG-29) ──
 
 fn s0_ctx(owner_login: Option<&str>, connect: &[&str]) -> HookCtx {

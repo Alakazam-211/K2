@@ -32,6 +32,10 @@ pub mod handover_plan;
 pub mod labels;
 /// `k2 app domain add|rm`: any subdomain of the App's workspace (0.46.4).
 pub mod domains;
+/// `k2 app expose`: a public URL for an installed App, no re-create (0.46.7).
+pub mod expose;
+#[cfg(test)]
+mod expose_tests;
 /// Custom domains that actually serve an App (0.46.6,
 /// prd-app-custom-domains-v1): who may bind, state, checks, the TLS door.
 pub mod custom_domains;

@@ -95,8 +95,10 @@ pub const OWNED: &[&str] = &[
     "x-original-forwarded-for",
 ];
 
-/// Longest request / response head we buffer.
-const MAX_HEAD: usize = 64 * 1024;
+/// Longest request / response head we buffer: 128 KiB (0.46.7, the same
+/// as Sew's engine, so an App on the door takes any head Sew takes; it was
+/// 64 KiB). Longer is a 431.
+const MAX_HEAD: usize = 128 * 1024;
 /// Most header lines in a request (more is a 431).
 const MAX_REQ_HEADERS: usize = 128;
 /// Most header lines in a response we can still frame.

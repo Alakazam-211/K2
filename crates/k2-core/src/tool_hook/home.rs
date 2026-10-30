@@ -163,7 +163,9 @@ pub fn sendable(subject: &str, body: &Map<String, Value>, flags: &[String]) -> O
             }
         }
         if has(features::APP_ORIGIN) {
-            if let Some(v) = body.get("origin").filter(|v| v.is_string()) {
+            // `null` goes too (App-governed Spaces S7, AG-13c): an App that
+            // lost its public URL clears the origin Sew holds.
+            if let Some(v) = body.get("origin").filter(|v| v.is_string() || v.is_null()) {
                 out.insert("origin".into(), v.clone());
             }
             if let Some(v) = body.get("display_name") {
@@ -302,7 +304,13 @@ mod tests {
             Some(json!({"hidden_from_home": true, "display_name": "Jobs", "origin": "wss://jobs.example.com"}))
         );
         let no_origin = obj(json!({"hidden_from_home": false, "display_name": "Jobs", "origin": null}));
-        assert_eq!(sendable("app:x", &no_origin, &f(&["app_origin"])), Some(json!({"display_name": "Jobs"})), "a null origin is not sent");
+        // App-governed Spaces S7 (AG-13c): a null origin is sent, so Sew
+        // drops the URL the App no longer has.
+        assert_eq!(
+            sendable("app:x", &no_origin, &f(&["app_origin"])),
+            Some(json!({"display_name": "Jobs", "origin": null})),
+            "a null origin clears in Sew"
+        );
         let home = obj(json!({"app_id": null}));
         assert_eq!(sendable(HOME_SUBJECT, &home, &f(&["app_origin"])), None);
         assert_eq!(sendable(HOME_SUBJECT, &home, &f(&["home_client"])), Some(json!({"app_id": null})));

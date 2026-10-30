@@ -1008,6 +1008,8 @@ pub(crate) fn map_channel(c: &PChannel, space_slug: Option<String>) -> Channel {
     let kind = match c.kind {
         ChannelType::Dm => ChannelKind::Dm,
         ChannelType::GroupDm => ChannelKind::GroupDm,
+        ChannelType::Voice => ChannelKind::Voice,
+        // Text and announcement channels.
         _ => ChannelKind::Text,
     };
     let can_send = match c.my_perms {

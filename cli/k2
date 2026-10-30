@@ -8417,6 +8417,12 @@ Make and ship:
                                        workspace's database on that major with
                                        its DATABASE_URL reference when it has
                                        none; install never moves a database.
+  k2 app expose <app-id> --tunnel [--transfer] | --local
+                                       Turn its public URL on or off later,
+                                       with no reinstall: it keeps its users,
+                                       grants, secrets and chat Spaces. The App
+                                       sees the new K2_APP_ORIGIN after
+                                       k2 app restart. k2 app expose --help.
   Moving a legacy --cmd service in: k2 study app-move (k2 app data put,
   k2 app label take|return).
   k2 app data ls|get|rm|mv <app-id> …  Read back what the App wrote to /data
@@ -8510,7 +8516,11 @@ See and run it:
   k2 app members [<room>] [--app ID]   Who holds a grant on a room (guests,
                                        agent logins); k2 app room-names <room>
                                        hide|show (owner). k2 app surfaces.
-  k2 app uninstall <app-id> [--purge]  --purge also deletes its data (owner).
+  k2 app uninstall <app-id> [--purge] [--drop-access]
+                                       --purge also deletes its data (owner).
+                                       Refused while people would lose
+                                       logins, grants, shared secrets or chat
+                                       Spaces; --drop-access goes ahead anyway.
   k2 app handover <app-id> --to WS [--brief FILE] [--dry-run]
                                        Hand the App to another agent: its agent
                                        offers, the other accepts, the owner
@@ -9947,19 +9957,23 @@ print(v["framed"])
 '
 }
 
-# k2 app uninstall <app-id> [--purge] [--json]
+# k2 app uninstall <app-id> [--purge] [--drop-access] [--json]
+# 0.46.7: an App that still has people's logins, grants, shared secrets or
+# chat Spaces is refused (exit 3, uninstall_drops_access, with the counts)
+# unless --drop-access; --purge (the owner in person) is already explicit.
 cmd_app_uninstall() {
-    local app="" purge=0 json_out=0
+    local app="" purge=0 drop=0 json_out=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --purge) purge=1; shift ;;
+            --drop-access) drop=1; shift ;;
             --json) json_out=1; shift ;;
-            -h|--help) _app_rt_usage; return 0 ;;
+            -h|--help) _app_uninstall_usage; return 0 ;;
             -*) echo "Unknown flag: $1" >&2; exit 2 ;;
             *) app="$1"; shift ;;
         esac
     done
-    [ -z "$app" ] && { echo "usage: k2 app uninstall <app-id> [--purge]" >&2; exit 2; }
+    [ -z "$app" ] && { echo "usage: k2 app uninstall <app-id> [--purge] [--drop-access]" >&2; exit 2; }
     local tok=""
     if [ "$purge" = 1 ]; then
         # Purge deletes the App's data: the owner in person, every time
@@ -9967,11 +9981,116 @@ cmd_app_uninstall() {
         echo "This deletes App $app and its data folder (~/.k2/apps/$app). It can't be undone." >&2
         tok="$(_vault_confirm_token app-purge "$app" "Delete App $app and its data")" || exit 3
     fi
-    _app_rt_post /cli/app/uninstall "$(_compute_json K2_CJ_app="$app" K2_CJ_purge_b="$purge" K2_CJ_confirmToken="$tok")"
+    _app_rt_post /cli/app/uninstall "$(_compute_json K2_CJ_app="$app" K2_CJ_purge_b="$purge" K2_CJ_dropAccess_b="$drop" K2_CJ_confirmToken="$tok")"
     [ "$_CP_STATUS" = "200" ] || _compute_fail "$_CP_STATUS" "$_CP_BODY"
     if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
     if [ "$purge" = 1 ]; then echo "App $app uninstalled; its data folder is gone."; else
         echo "App $app uninstalled. Its data folder stays (~/.k2/apps/$app); its Seeds go with the nightly sweep."; fi
+}
+
+_app_uninstall_usage() {
+    cat <<'EOF'
+k2 app uninstall <app-id> [--purge] [--drop-access] [--json]
+
+Stop the App and remove it from this box. Its data folder stays
+(~/.k2/apps/<app-id>) unless --purge.
+
+Before it removes anything, K2 counts what the App would lose: people's
+App logins, chat grants the App gave, other grants on the App, the owner's
+grants to it, secrets shared with it, and chat Spaces bound to it. If any
+count is above zero, nothing is removed: the command exits 3 with the
+error code uninstall_drops_access and lists the counts. That is a safety
+stop, not a failure. A reinstall is a new App and gets none of it back.
+
+  --drop-access   Uninstall anyway; all of the above is lost. Same rules
+                  for who may uninstall as without it.
+  --purge         Uninstall and also delete the App's data folder. The
+                  owner confirms in person every time (an agent can't).
+                  --purge alone drops the access above too, without the
+                  safety stop.
+  --json          Print the daemon's answer as JSON.
+
+Only wanted a public URL? Don't reinstall: k2 app expose <app-id> --tunnel.
+EOF
+}
+
+# k2 app expose <app-id> --tunnel [--transfer] | --local [--json]
+# (App-governed Spaces S7): turn an installed App's public URL on or off
+# with no reinstall. POST /cli/app/expose {app, tunnel, transfer?}.
+cmd_app_expose() {
+    local app="" mode="" transfer=0 json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --tunnel) [ "$mode" = "local" ] && { echo "usage: --tunnel or --local, not both" >&2; exit 2; }; mode="tunnel"; shift ;;
+            --local) [ "$mode" = "tunnel" ] && { echo "usage: --tunnel or --local, not both" >&2; exit 2; }; mode="local"; shift ;;
+            --transfer) transfer=1; shift ;;
+            --json) json_out=1; shift ;;
+            -h|--help) _app_expose_usage; return 0 ;;
+            -*) echo "Unknown flag: $1" >&2; exit 2 ;;
+            *) [ -n "$app" ] && { echo "usage: k2 app expose <app-id> --tunnel|--local (one App)" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    if [ -z "$app" ] || [ -z "$mode" ]; then
+        echo "usage: k2 app expose <app-id> --tunnel [--transfer] | --local" >&2; exit 2
+    fi
+    if [ "$transfer" = 1 ] && [ "$mode" != "tunnel" ]; then
+        echo "usage: --transfer goes with --tunnel" >&2; exit 2
+    fi
+    local tunnel_b=0
+    [ "$mode" = "tunnel" ] && tunnel_b=1
+    _app_rt_post /cli/app/expose "$(_compute_json K2_CJ_app="$app" K2_CJ_tunnel_b="$tunnel_b" K2_CJ_transfer_b="$transfer")"
+    _app_grace_done "$json_out"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+if v.get("changed"):
+    if v.get("expose") == "tunnel":
+        print("App %s now has its public URL%s" % (v.get("app"), (": " + v["url"]) if v.get("url") else ""))
+    else:
+        print("App %s is local only now (no public URL)" % v.get("app"))
+if v.get("hostnameLeft"):
+    print(v["hostnameLeft"])
+print(v.get("next", ""))'
+}
+
+_app_expose_usage() {
+    cat <<'EOF'
+k2 app expose <app-id> --tunnel [--transfer] | --local [--json]
+
+Turn an installed App's public URL on or off, with no reinstall.
+
+  --tunnel     Give the App its public URL, https://<app-id>.<box>.k2.dev
+               (the same one k2 app install --tunnel makes). Needs K2
+               Connect with a Pro plan on this box; without it the answer
+               is exit 3 (engine_unavailable) and nothing changes.
+  --transfer   With --tunnel, owner or admin only. Use it when that name
+               already points at something else on this box (a hostname
+               made by hand, say) that no workspace holds: --transfer moves
+               it to the App. Without it you get exit 3
+               (label_exists_elsewhere) and nothing changes; an agent gets
+               that answer with or without --transfer. A name another
+               workspace holds is never moved: exit 3, naming its agent.
+  --local      Remove the public URL; the App answers on this box only. If
+               the name now belongs to another workspace, or points
+               somewhere else, it is left as it is: the answer says so and
+               the App is still set to local only (exit 0).
+  --json       Print the daemon's answer as JSON.
+
+What stays: the same App, its users' logins and sessions, grants, shared
+secrets and chat Spaces. Nothing is reinstalled.
+
+After a change (--tunnel or --local):
+  1. Chat (Sew) learns the App's new address within seconds.
+  2. Run k2 app restart <app-id>. The App reads its public address from
+     K2_APP_ORIGIN (and K2_APP_ORIGINS) when it starts; with no public URL
+     those are unset. A deploy also starts it with the new values.
+
+Who: the owner, an admin, or the App's own agent with "Build and run
+Apps". An agent without that switch, or with another App already public
+(an agent's limit is one public URL), gets a request held for the owner
+(exit 2); the message says which. The owner sees it in k2 app approvals.
+EOF
 }
 
 # POST <route> with the _compute_json pairs that follow; when the daemon
@@ -16203,6 +16322,7 @@ cmd_app() {
         logs) shift; cmd_app_logs "$@" ;;
         errors) shift; cmd_app_errors "$@" ;;
         uninstall) shift; cmd_app_uninstall "$@" ;;
+        expose) shift; cmd_app_expose "$@" ;;
         handover|unpark) cmd_app_handover "$@" ;;
         park) cmd_app_ownership "$@" ;;
         release) shift; cmd_app_release "$@" ;;
@@ -81595,7 +81715,7 @@ EOF
             # 0.46.4: `k2 app data` too (put|ls|get|rm|mv). 0.46.6: `k2 app
             # domain` (its custom-domain help, not the App family's) and
             # `k2 app sdk` (add|status|kit).
-            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|egress|approvals|approve|deny|guest|data|domain|sdk)
+            validate|build|install|deploy|rollback|stop|start|restart|deployment|config|list|inspect|history|logs|errors|uninstall|expose|egress|approvals|approve|deny|guest|data|domain|sdk)
                 shift; cmd_app "$@"
                 ;;
             # RS-A15: `k2 app grant <app> --kind …` owns its --help too.

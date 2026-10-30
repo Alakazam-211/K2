@@ -220,7 +220,29 @@ k2 app deploy nosuch "$SEED1" > "$SANDBOX/out" 2>&1; rc=$?
 set -e
 expect_eq "a refusal exits 3" "$rc" "3"
 expect_has "refusal names the code" "$(cat "$SANDBOX/out")" "app_not_found"
-expect_has "uninstall" "$(k2 app uninstall smoke)" "App smoke uninstalled"
+
+echo "== expose / uninstall keeps access (App-governed Spaces S7) =="
+expect_has "expose --local on a local App is a no-op" "$(k2 app expose smoke --local)" "already local only"
+set +e
+k2 app expose smoke --tunnel > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "expose --tunnel on an air-gapped box is refused (exit 3)" "$rc" "3"
+expect_has "and says the URL step can't run" "$(cat "$SANDBOX/out")" "engine_unavailable"
+expect_has "still local after the refusal" "$(k2 app expose smoke --local --json)" '"changed":false'
+set +e
+k2 app expose smoke > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "expose needs --tunnel or --local (exit 2)" "$rc" "2"
+expect_eq "GET /cli/app/expose is 405" "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/cli/app/expose?token=$OWNER_TOKEN")" "405"
+printf 'smoke-user-pw-1\n' | k2 app user add smokeu --app smoke --password-stdin > "$SANDBOX/out" 2>&1 || bad "app user add: $(cat "$SANDBOX/out")"
+set +e
+k2 app uninstall smoke > "$SANDBOX/out" 2>&1; rc=$?
+set -e
+expect_eq "uninstall with an App login is refused (exit 3)" "$rc" "3"
+expect_has "it names the code" "$(cat "$SANDBOX/out")" "uninstall_drops_access"
+expect_has "and the count" "$(cat "$SANDBOX/out")" "1 App login"
+expect_has "still installed" "$(k2 app list)" "smoke"
+expect_has "uninstall --drop-access" "$(k2 app uninstall smoke --drop-access)" "App smoke uninstalled"
 expect_has "list is empty" "$(k2 app list)" "No Apps on this box"
 
 echo "== box doctor / prepare (S10) =="

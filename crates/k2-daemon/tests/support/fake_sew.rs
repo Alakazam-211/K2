@@ -832,10 +832,11 @@ fn app_settings(s: &mut State, path: &str, body: &str) -> (u16, String) {
         Ok(v) => v,
         Err(e) => return bad_body(s, "app settings", e, body),
     };
-    // Any subset per call (Sew 2026-10-28); origin is a wss:// URL.
+    // Any subset per call (Sew 2026-10-28); origin is a wss:// URL, or
+    // null to clear it (Sew I7, App-governed Spaces).
     let ok_keys = v.as_object().is_some_and(|o| !o.is_empty() && o.keys().all(|k| ["hidden_from_home", "display_name", "origin"].contains(&k.as_str())));
     let ok_types = v.get("hidden_from_home").is_none_or(Value::is_boolean)
-        && v.get("origin").is_none_or(|o| o.as_str().is_some_and(|o| o.starts_with("wss://")));
+        && v.get("origin").is_none_or(|o| o.is_null() || o.as_str().is_some_and(|o| o.starts_with("wss://")));
     if app.is_empty() || !ok_keys || !ok_types {
         return bad_body(s, "app settings", "fields: hidden_from_home (bool), display_name, origin (wss://)", body);
     }

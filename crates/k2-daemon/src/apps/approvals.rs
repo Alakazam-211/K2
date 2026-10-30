@@ -783,6 +783,8 @@ pub(crate) const MANAGE_HELD: &[&str] = &[
     "/cli/app/domain/check",
     "/cli/app/domain/primary",
     "/cli/app/domain/external",
+    // 0.46.7: a public URL for an installed App (expose.rs).
+    "/cli/app/expose",
 ];
 
 thread_local! {

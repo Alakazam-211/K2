@@ -82,21 +82,41 @@ fn mib(b: i64) -> String {
     }
 }
 
+/// The workspace's Apps with a public URL (`expose = tunnel`).
+fn public_apps(conn: &Connection, ws: &str) -> R<usize> {
+    let public: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM apps a JOIN published_services p ON p.id = a.service_id \
+             WHERE a.owner_workspace = ?1 AND p.expose = ?2",
+            rusqlite::params![ws, k2_core::published_services::EXPOSE_TUNNEL],
+            |r| r.get(0),
+        )
+        .map_err(db_err)?;
+    Ok(public.max(0) as usize)
+}
+
+fn public_overage(public: usize) -> Option<String> {
+    (public >= PUBLIC_HOSTNAMES).then(|| format!("public hostname number {}: the default limit is {PUBLIC_HOSTNAMES} per agent", public + 1))
+}
+
+/// `k2 app expose --tunnel` by a bound agent: past the envelope when the
+/// workspace's Apps already hold their public hostnames.
+pub(crate) fn public_hostname_overage(ws: &str) -> R<Option<String>> {
+    let public = {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        public_apps(&conn, ws)?
+    };
+    Ok(public_overage(public))
+}
+
 /// Where an install by a bound agent goes past the envelope (empty = fits).
 pub(crate) fn install_overages(ws: &str, memory: Option<i64>, tunnel: bool) -> R<Vec<String>> {
     let (apps, public) = {
         let db = k2_core::db::shared();
         let conn = db.lock();
         let apps = store::owned_app_ids(&conn, ws).map_err(db_err)?.len();
-        let public: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM apps a JOIN published_services p ON p.id = a.service_id \
-                 WHERE a.owner_workspace = ?1 AND p.expose = ?2",
-                rusqlite::params![ws, k2_core::published_services::EXPOSE_TUNNEL],
-                |r| r.get(0),
-            )
-            .map_err(db_err)?;
-        (apps, public as usize)
+        (apps, public_apps(&conn, ws)?)
     };
     let mut out = Vec::new();
     if apps >= MAX_APPS {
@@ -107,8 +127,8 @@ pub(crate) fn install_overages(ws: &str, memory: Option<i64>, tunnel: bool) -> R
         Some(m) if m > MEMORY_MAX => out.push(format!("memory {}: an agent sets up to {} per App on its own", mib(m), mib(MEMORY_MAX))),
         Some(_) => {}
     }
-    if tunnel && public >= PUBLIC_HOSTNAMES {
-        out.push(format!("public hostname number {}: the default limit is {PUBLIC_HOSTNAMES} per agent", public + 1));
+    if tunnel {
+        out.extend(public_overage(public));
     }
     Ok(out)
 }

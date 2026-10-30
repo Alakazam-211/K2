@@ -147,6 +147,31 @@ fn channels_map_kind_privacy_and_send_permission() {
     assert!(c.can_send, "Sew leaves my_perms off DMs");
 }
 
+/// 0.46.7: a voice channel is `voice` in `k2 chat channels` (it was
+/// `text`), keeps its Space address, and is never a DM.
+#[test]
+fn voice_channels_map_to_voice() {
+    let voice = pchannel(json!({
+        "id": "303", "space_id": "201", "type": "voice", "visibility": "public", "slug": "meeting-room",
+        "name": "Meeting room", "position": 1, "synced": true, "head_seq": 1, "dm_member_ids": [],
+        "my_perms": "3", "created_at": "2026-10-20T00:00:00.000Z",
+    }));
+    let c = map_channel(&voice, Some("hearth".into()));
+    assert_eq!(c.kind, ChannelKind::Voice);
+    assert_eq!(c.kind.as_str(), "voice");
+    assert!(!c.kind.is_dm(), "a voice channel is a Space channel");
+    assert_eq!(c.space_slug.as_deref(), Some("hearth"));
+    assert!(!c.can_send, "my_perms decides, as for text");
+    assert_eq!(crate::sew_chat::sew::channel_addr(&c), "hearth/meeting-room");
+    // Announcements stay text.
+    let ann = pchannel(json!({
+        "id": "304", "space_id": "201", "type": "announcement", "visibility": "public", "slug": "news",
+        "name": "News", "position": 2, "synced": true, "head_seq": 1, "dm_member_ids": [],
+        "my_perms": "3", "created_at": "2026-10-20T00:00:00.000Z",
+    }));
+    assert_eq!(map_channel(&ann, Some("hearth".into())).kind, ChannelKind::Text);
+}
+
 #[test]
 fn overwrites_touch_only_view_and_send() {
     assert_eq!(perm_bits(&[ChannelPerm::View]).0, Perms::VIEW_CHANNEL.0);

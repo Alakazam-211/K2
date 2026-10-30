@@ -402,6 +402,9 @@ fn custom_primary(who: &Who, body: &[u8]) -> R<J> {
         k2_core::domains::set_primary(&conn, &app.app_id, &host).map_err(db_err)?;
     }
     labels::audit(&app.app_id, "custom_domain_primary", &actor(who), json!({ "host": host }));
+    // App-governed Spaces S7 (AG-13b): the primary decides the App's Sew
+    // origin; the sweep sends it now, not at the 10-minute one.
+    k2_core::tool_hook::kick_reconcile();
     let d = app_domain_of(&app, &d.hostname)?;
     Ok(json!({
         "ok": true,
@@ -797,9 +800,12 @@ mod custom_tests {
         assert_eq!(v["custom"]["state"], "issuing", "{v}");
         assert_eq!(flow::take_test_issues(), vec![HOST.to_string()]);
 
-        // Primary: accepted, says it waits for live.
+        // Primary: accepted, says it waits for live, and asks for a sweep
+        // so Sew's origin follows now (S7, AG-13b).
+        let _ = k2_core::tool_hook::take_reconcile_request();
         let v = post(&me, "/cli/app/domain/primary", json!({ "app": "agentnsi", "host": HOST })).unwrap();
         assert_eq!((v["primary"].as_str(), v["live"].as_bool()), (Some(HOST), Some(false)));
+        assert!(k2_core::tool_hook::take_reconcile_request(), "primary asked for a sweep");
         let e = post(&me, "/cli/app/domain/primary", json!({ "app": "agentnsi", "host": "other.agentnsi.com" })).unwrap_err();
         assert_eq!(e.code, NOT_ATTACHED);
 

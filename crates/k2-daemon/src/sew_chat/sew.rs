@@ -85,6 +85,8 @@ pub struct Space {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {
     Text,
+    /// A Space's voice channel (0.46.7: it was shown as `text`).
+    Voice,
     Dm,
     GroupDm,
 }
@@ -93,13 +95,14 @@ impl ChannelKind {
     pub fn as_str(self) -> &'static str {
         match self {
             ChannelKind::Text => "text",
+            ChannelKind::Voice => "voice",
             ChannelKind::Dm => "dm",
             ChannelKind::GroupDm => "group_dm",
         }
     }
 
     pub fn is_dm(self) -> bool {
-        !matches!(self, ChannelKind::Text)
+        matches!(self, ChannelKind::Dm | ChannelKind::GroupDm)
     }
 }
 

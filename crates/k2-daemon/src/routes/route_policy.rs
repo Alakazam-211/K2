@@ -278,6 +278,9 @@ pub const ROUTES: &[Route] = &[
     // S28: own workspace + "Allow this agent to manage Apps" for passports
     // (handler); never App credentials or delegation; audited.
     post("/cli/app/exec", Admin),
+    // 0.46.7: a public URL on (or off) for an installed App, no re-create
+    // (handler: as install --tunnel; passports their own workspace's App).
+    post("/cli/app/expose", Admin),
     // RS-A15 (0.46.1): the owner grants an App guests:rooms; revoking
     // narrows (a passport: its own App). Guest rooms over the CLI: the
     // owner, or a passport within its own App's grant (handler refuses

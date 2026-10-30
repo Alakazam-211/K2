@@ -1191,6 +1191,9 @@ pub fn app_space_bind(
         Ok((created, s))
     })?;
     kick();
+    // App-governed Spaces S7 (AG-13a): a bound App is a chat App now, so
+    // the sweep sends its origin within seconds, not at the 10-minute one.
+    kick_reconcile();
     Ok(r)
 }
 

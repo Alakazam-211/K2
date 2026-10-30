@@ -25,7 +25,9 @@
 
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboard-manager'
+import { readText as tauriClipboardReadText, writeText as tauriClipboardWriteText } from '@tauri-apps/plugin-clipboard-manager'
+import { desktopOsFromNavigator } from '@/lib/desktop-chrome'
+import { terminalClipboardChord } from '@/lib/terminal-clipboard-chord'
 import { daemonCliGet } from '@/lib/daemon-cli'
 
 import { useKesselConfig } from '../kessel/config-context'
@@ -1071,6 +1073,11 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // dictation working with no visible UI change. See PRD:
   // .k2so/prds/voice-dictation.md.
   const shadowInputRef = useRef<HTMLTextAreaElement>(null)
+  // Windows Ctrl+Shift+C / Ctrl+Shift+V (lib/terminal-clipboard-chord):
+  // copy the selection / paste the clipboard. Set further down, where
+  // the selection reader and the paste path live.
+  const copySelectionRef = useRef<() => boolean>(() => false)
+  const pasteClipboardRef = useRef<() => void>(() => undefined)
   // Tracks IME / dictation composition (Japanese/Chinese/Korean
   // candidate window, accent picker, Apple Dictation). While
   // composing, onKey + onShadowInput skip — onComposeUpdate
@@ -3545,6 +3552,15 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // absorbs them; compositionend commits the final string in one
       // sendInput call.
       if (composingRef.current) return
+      // Windows: Ctrl+Shift+C copies, Ctrl+Shift+V pastes (Windows
+      // Terminal's chords); never sent to the PTY.
+      const chord = terminalClipboardChord(e, desktopOsFromNavigator(navigator))
+      if (chord) {
+        e.preventDefault()
+        if (chord === 'copy') copySelectionRef.current()
+        else pasteClipboardRef.current()
+        return
+      }
       // Canvas-selection copy (webgl painter): with no native
       // selection, WKWebView may never fire a `copy` event — catch
       // Cmd+C here while a model selection exists. The ref is always
@@ -3583,13 +3599,8 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       sendInput(seq)
       if (shadowInputRef.current) shadowInputRef.current.value = ''
     }
-    const onPaste = (e: ClipboardEvent) => {
-      // Prefer text/plain; some browsers only populate that on paste.
-      const text =
-        e.clipboardData?.getData('text/plain') ||
-        e.clipboardData?.getData('text') ||
-        ''
-      e.preventDefault()
+    // One paste path for the paste event and Windows' Ctrl+Shift+V.
+    const pasteText = (text: string) => {
       commitScrollPx(0)
 
       // Finder's Cmd+C copies file refs via NSFilenamesPboardType,
@@ -3625,6 +3636,23 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       // textarea empty so the input handler's `text.length === 0`
       // guard short-circuits cleanly.
       if (shadowInputRef.current) shadowInputRef.current.value = ''
+    }
+    const onPaste = (e: ClipboardEvent) => {
+      // Prefer text/plain; some browsers only populate that on paste.
+      const text =
+        e.clipboardData?.getData('text/plain') ||
+        e.clipboardData?.getData('text') ||
+        ''
+      e.preventDefault()
+      pasteText(text)
+    }
+    // Ctrl+Shift+V reads the clipboard itself (no paste event): the
+    // Tauri plugin first (no user-activation rule), the web API after.
+    pasteClipboardRef.current = () => {
+      tauriClipboardReadText()
+        .catch(() => navigator.clipboard.readText())
+        .then((text) => pasteText(text ?? ''))
+        .catch((err) => console.warn('[kessel-term] clipboard read failed:', err))
     }
 
     // Apple Dictation, IME final commits, and any non-keystroke text
@@ -4512,42 +4540,54 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
   // the DOM text IS the model text, so this path needs no column
   // mapping; column↔offset conversion (runCols.ts) is only for
   // pixel-derived positions (link hit-testing).
-  const handleCopy = useCallback((e: React.ClipboardEvent) => {
+  // The selected text as copy puts it on the clipboard; null when
+  // nothing in this pane is selected.
+  const selectionCopyText = useCallback((): string | null => {
     const snap = snapshotRef.current
-    if (!snap || !e.clipboardData) return
+    if (!snap) return null
     // WebGL painter path: no native selection exists over the canvas
     // — the grid-coordinate model is the source of truth. The ref is
     // always null in DOM mode, so this branch is unreachable there.
     const gpuSel = webglSelectionRef.current
-    if (gpuSel) {
-      e.preventDefault()
-      e.clipboardData.setData('text/plain', copySelectionText(snap, gpuSel))
-      return
-    }
+    if (gpuSel) return copySelectionText(snap, gpuSel)
     const sel = window.getSelection()
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null
     const range = sel.getRangeAt(0)
     const container = containerRef.current
     if (!container || !container.contains(range.commonAncestorContainer)) {
-      return
+      return null
     }
     const startDiv = rowDivFor(range.startContainer)
     const endDiv = rowDivFor(range.endContainer)
-    if (!startDiv || !endDiv) return
+    if (!startDiv || !endDiv) return null
     const startAbs = Number(startDiv.dataset.absRow)
     const endAbs = Number(endDiv.dataset.absRow)
-    if (!Number.isFinite(startAbs) || !Number.isFinite(endAbs)) return
+    if (!Number.isFinite(startAbs) || !Number.isFinite(endAbs)) return null
     const startCol = colWithin(startDiv, range.startContainer, range.startOffset)
     const endCol = colWithin(endDiv, range.endContainer, range.endOffset)
-
     // Text extraction (wrapped-line join + trailing-trim) lives in
     // buildCopyText — shared verbatim with the painter's copy path.
-    e.preventDefault()
-    e.clipboardData.setData(
-      'text/plain',
-      buildCopyText(snap, startAbs, startCol, endAbs, endCol),
-    )
+    return buildCopyText(snap, startAbs, startCol, endAbs, endCol)
   }, [])
+
+  const handleCopy = useCallback((e: React.ClipboardEvent) => {
+    if (!e.clipboardData) return
+    const text = selectionCopyText()
+    if (text === null) return
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', text)
+  }, [selectionCopyText])
+
+  // Windows Ctrl+Shift+C: the same text, written to the OS clipboard
+  // (no copy event fires for this chord).
+  copySelectionRef.current = () => {
+    const text = selectionCopyText()
+    if (!text) return false
+    tauriClipboardWriteText(text)
+      .catch(() => navigator.clipboard.writeText(text))
+      .catch((err) => console.warn('[kessel-term] clipboard write failed:', err))
+    return true
+  }
 
   // ── Drag + drop of files (from Finder or K2 files tab) ──────
   //
@@ -5429,6 +5469,16 @@ export function TerminalPane(props: TerminalPaneProps): React.JSX.Element {
       }}
       onClick={handleClick}
       onCopy={handleCopy}
+      onKeyDown={(e) => {
+        // Windows Ctrl+Shift+C / V while a DOM selection holds focus on
+        // the pane (the shadow textarea handles them itself otherwise).
+        if (e.defaultPrevented) return
+        const chord = terminalClipboardChord(e.nativeEvent, desktopOsFromNavigator(navigator))
+        if (!chord) return
+        e.preventDefault()
+        if (chord === 'copy') copySelectionRef.current()
+        else pasteClipboardRef.current()
+      }}
       onDragOver={handleDragOver}
       onDrop={handleDrop}
     >

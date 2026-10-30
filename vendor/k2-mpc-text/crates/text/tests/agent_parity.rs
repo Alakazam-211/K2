@@ -34,14 +34,8 @@ fn agent_parity() {
             .unwrap_or_else(|f| panic!("{what}: {}", parity::render(&f)));
         let rows = parity();
         let live = rows.iter().filter(|r| r.status == RowStatus::Live).count();
-        assert_eq!(live, 27);
-        assert_eq!(
-            report.not_applicable,
-            vec![(
-                PersonAction::Export,
-                "the file is the export: cat gives its exact bytes"
-            )]
-        );
+        assert_eq!(live, 28, "P24 Export is live since kit v0.9.7");
+        assert!(report.not_applicable.is_empty());
         let deferred: Vec<PersonAction> = report.deferred.iter().map(|d| d.0).collect();
         assert_eq!(
             deferred,

@@ -45,7 +45,7 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P21 | Rename / move | `mv <new>` (a raw rename is also picked up) | E | `SessionManager::rekey` + `file_moved` | live |
 | P22 | Blame: who last wrote each line, by which change, when (the blame gutter) | `blame [-L a,b]` (a `git blame`-like listing) | H | `blame(conn, root, lines)` | live |
 | P23 | Comment, reply, resolve; suggest; accept / reject per hunk | `comment`, `reply`, `resolve`, `suggest`, `accept`, `reject`, `comments` | C / R (suggest) / E (accept, reject) | later (M5, the kit's annotation layer) | later |
-| P24 | Export | N/A: the file is the export; `cat` gives its exact bytes | R | `read` | N/A |
+| P24 | Export | `export [--to as-is]`, `export --version V [--to as-is]` (kit v0.9.7: the file through the kit's export registry; format exporters are the host's) | R (`--version`: H) | `file_now`, `file_at`, then `ExportRegistry::export` | live |
 | P25 | See why live editing is off | `status`; verbs exit 4 with the reason | R | `status` (`declined`, `disk`) | live |
 | P26 | Ctrl+Z when others have since edited part of my change: undo the regions nobody touched, report the rest; a step whose every region was touched stays on top | `undo --partial` | E | `undo_with(UndoMode::Partial)` | live |
 | P27 | Mention someone | `comment --mention @name` | C | later (M5) | later |

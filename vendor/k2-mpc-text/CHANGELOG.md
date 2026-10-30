@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.2.8 (2026-10-30): pairs with kit v0.9.7.1
+
+**Requires `k2-mpc-base` v0.9.7.1** (crate version `0.9.7+1`). The kit's `write --base` now
+merges by whole lines (it could splice two lines that start alike into one; possible text
+corruption, kit v0.1.0 through v0.9.7). What changes for CSV-as-text users:
+- **Two agents editing different cells of the same row: the second is refused and retries.**
+  A row is one line, and agent writes that touch a line someone else changed since the
+  agent's version are refused as a conflict; the agent re-reads and writes again. Different
+  rows, adjacent ones too, and appended rows still merge. People typing live are unchanged.
+- Tests: `concurrent_row_and_cell_edits_merge_in_every_style` keeps adjacent rows and two
+  appended rows and now has cells in different rows; new
+  `two_cells_of_one_row_conflict_and_the_retry_lands` (the second write conflicts on row 3,
+  the retry from the current version lands, in LF, CRLF and CR). README and
+  docs/HOST-INTEGRATION.md say so.
+- `Cargo.lock`: k2-mpc-base 0.9.7+1; the crate version 0.2.8.
+
 ## v0.2.7 (2026-10-29): pairs with kit v0.9.7
 
 **Requires `k2-mpc-base` v0.9.7** (it skips v0.9.6, a one-fix release). Pack changes:

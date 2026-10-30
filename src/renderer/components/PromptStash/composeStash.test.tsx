@@ -253,6 +253,18 @@ describe('"Save to stash" in the "+" menu', () => {
     renderThreadBar()
     expect(screen.getByTestId('stash-button').style.width).toBe('44px')
   })
+
+  it('the stash tab shows the icon, no count (the label still says how many)', async () => {
+    renderThreadBar()
+    type('one to count')
+    pressStash()
+    await waitFor(() => expect(box().value).toBe(''))
+    const tab = screen.getByTestId('stash-button')
+    expect(tab.getAttribute('aria-label')).toBe('Stash (1 item)')
+    expect(tab.querySelector('[data-stash-count]')).toBeNull()
+    expect(tab.querySelector('[data-stash-icon] svg')).not.toBeNull()
+    expect(tab.textContent).toBe('')
+  })
 })
 
 describe('the button and the drawer', () => {

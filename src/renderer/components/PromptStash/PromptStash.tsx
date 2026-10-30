@@ -1,5 +1,5 @@
 // Prompt stash UI (spec-prompt-stash-v1 "The stash button and drawer"):
-//   - `StashTab`: the permanent bookmark-with-a-count on the Thread box's
+//   - `StashTab`: the permanent bookmark (no count) on the Thread box's
 //     top edge, just right of the activity bar (the Zen ear's look);
 //   - `StashSquareButton`: the same button in the terminal compose bar's
 //     square look, beside Send;
@@ -22,13 +22,13 @@ export const STASH_CSS = `
 @keyframes k2-stash-in { from { transform: translateY(calc(100% + 8px)); opacity: 0.4; } to { transform: none; opacity: 1; } }
 @keyframes k2-stash-pop { 0% { transform: scale(1); } 40% { transform: scale(1.18); } 100% { transform: scale(1); } }
 [data-stash-drawer] { animation: k2-stash-in ${STASH_DRAWER_MS}ms cubic-bezier(0.2, 0.9, 0.3, 1.12) both; }
-[data-stash-count][data-pop="true"] { animation: k2-stash-pop 360ms ease-out; }
+[data-stash-count][data-pop="true"], [data-stash-icon][data-pop="true"] { animation: k2-stash-pop 360ms ease-out; }
 [data-stash-row][data-active="true"] { background: var(--stash-row-active); }
 [data-stash-row]:hover { background: var(--stash-row-active); }
 [data-stash-row] [data-stash-remove] { opacity: 0.55; }
 [data-stash-row]:hover [data-stash-remove], [data-stash-row][data-active="true"] [data-stash-remove] { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
-  [data-stash-drawer], [data-stash-count] { animation: none !important; }
+  [data-stash-drawer], [data-stash-count], [data-stash-icon] { animation: none !important; }
 }
 `
 
@@ -149,9 +149,10 @@ export function StashTab({
         borderRadius: 'calc(var(--zen-radius) + 2px) calc(var(--zen-radius) + 2px) 0 0',
       }}
     >
-      <StashGlyph size={12} />
-      <span data-stash-count="" data-pop={pop ? 'true' : 'false'} className="tabular-nums">
-        {count}
+      {/* No count on the tab (Rosson 2026-10-30); the label still says how
+          many, and the icon pops when a save lands. */}
+      <span data-stash-icon="" data-pop={pop ? 'true' : 'false'} style={{ display: 'inline-flex' }}>
+        <StashGlyph size={12} />
       </span>
     </button>
   )

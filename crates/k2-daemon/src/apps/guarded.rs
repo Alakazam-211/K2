@@ -207,22 +207,22 @@ pub fn take_checked(deployment: &str) -> Option<Value> {
     checked().lock().unwrap_or_else(|e| e.into_inner()).remove(deployment)
 }
 
-/// `K2_TEST_APP_ENGINE=absent|installed`: what a test build answers to
-/// [`engine_installed`], for tests whose expected output depends on it. The
-/// engine's path is absolute, so a temp `$HOME` doesn't hide a real install
-/// on the box running the tests. A release build never reads it
-/// ([`k2_core::TEST_BUILD`]).
+/// `K2_TEST_APP_ENGINE=installed`: a test build answers yes to
+/// [`engine_installed`] (`absent`, the default there: no). A test build never
+/// looks at the box: the engine's path is absolute, so a temp `$HOME` doesn't
+/// hide a real install. On such a box the tests' daemons wait for an engine
+/// they can't reach, forever (R33), and no App tick ever runs. A release build
+/// never reads this ([`k2_core::TEST_BUILD`]).
 pub const TEST_ENGINE_ENV: &str = "K2_TEST_APP_ENGINE";
 
 /// Is `k2-app-engine` installed on this box (the root helper's file)?
 pub fn engine_installed() -> bool {
     if k2_core::TEST_BUILD {
-        match std::env::var(TEST_ENGINE_ENV).as_deref() {
-            Ok("absent") => return false,
-            Ok("installed") => return true,
+        return match std::env::var(TEST_ENGINE_ENV).as_deref() {
+            Ok("installed") => true,
+            Ok("absent") | Err(_) => false,
             Ok(other) => panic!("{TEST_ENGINE_ENV}={other:?}: use absent or installed"),
-            Err(_) => {}
-        }
+        };
     }
     cfg!(target_os = "linux") && Path::new(k2_root_proto::apps::ENGINE_PATH).exists()
 }

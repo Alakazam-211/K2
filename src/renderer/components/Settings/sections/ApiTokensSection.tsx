@@ -86,9 +86,9 @@ type ListResponse = { keys?: ApiKeyRow[] }
 function stateBadge(state: ReturnType<typeof keyState>): React.JSX.Element {
   const cls =
     state === 'active'
-      ? 'text-[var(--color-status-success-soft)]'
+      ? 'text-[var(--color-status-ok-soft)]'
       : state === 'disabled'
-        ? 'text-[var(--color-status-warning-soft)]'
+        ? 'text-[var(--color-status-warn-text)]'
         : 'text-[var(--color-text-muted)]'
   return <span className={`text-[10px] font-semibold uppercase ${cls}`}>{state}</span>
 }
@@ -163,7 +163,7 @@ export function ApiTokensSection(): React.JSX.Element {
         </p>
         <AccessAuditLink className="mt-1" />
         {!apiEnabled && (
-          <p className="text-[11px] text-[var(--color-status-warning-soft)] mt-1 max-w-2xl" data-testid="api-surface-off">
+          <p className="text-[11px] text-[var(--color-status-warn-text)] mt-1 max-w-2xl" data-testid="api-surface-off">
             The public /v1 API is off on this server, so no key works yet (hiring agents included).
             Turn it on under {publicApiToggleLocation()} → Enable public API (/v1), or{' '}
             <code className="text-[10px]">k2 api on</code>.
@@ -196,7 +196,7 @@ export function ApiTokensSection(): React.JSX.Element {
       )}
 
       {mintedSecret && (
-        <div className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2">
+        <div className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2">
           <p className="text-[11px] font-semibold text-[var(--color-text-primary)]">
             Store this key now — it cannot be retrieved again
           </p>
@@ -315,7 +315,7 @@ export function ApiTokensSection(): React.JSX.Element {
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'disable')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-warning-soft)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-warn)] cursor-pointer disabled:opacity-50"
                     >
                       Disable
                     </button>
@@ -325,7 +325,7 @@ export function ApiTokensSection(): React.JSX.Element {
                       type="button"
                       disabled={busy}
                       onClick={() => void act(k.id, 'enable')}
-                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-success-soft)] cursor-pointer disabled:opacity-50"
+                      className="px-2 py-1 text-[10px] border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-status-ok)] cursor-pointer disabled:opacity-50"
                     >
                       Enable
                     </button>
@@ -559,7 +559,7 @@ function AppAccessLimit({
             {roomRows.other.map(roomBox)}
           </div>
           {form.rooms.length === 0 && (
-            <p className="text-[10px] text-[var(--color-status-warning-soft)]">Pick at least one room.</p>
+            <p className="text-[10px] text-[var(--color-status-warn-text)]">Pick at least one room.</p>
           )}
           <label className="flex items-center justify-between gap-2 text-[11px] text-[var(--color-text-secondary)]">
             Highest role
@@ -585,7 +585,7 @@ function AppAccessLimit({
           </p>
         </>
       )}
-      <p className="text-[10px] text-[var(--color-status-warning-soft)]" data-testid="hire-whole-room-warning">
+      <p className="text-[10px] text-[var(--color-status-warn-text)]" data-testid="hire-whole-room-warning">
         App logins for hired agents cover whole rooms until folder grants exist.
       </p>
     </div>
@@ -744,7 +744,7 @@ function CreateKeyModal({
             </div>
           )}
           {!allWs && selected.size === 0 && (
-            <p className="text-[10px] text-[var(--color-status-warning-soft)]">
+            <p className="text-[10px] text-[var(--color-status-warn-text)]">
               No workspaces selected — key will authorize zero /v1 workspaces (fail-closed).
             </p>
           )}
@@ -949,7 +949,7 @@ function EditCeilingModal({
           confirm, like creating the key. Logins already made keep what they have.
         </p>
         {stored.length > 1 && (
-          <p className="text-[10px] text-[var(--color-status-warning-soft)]">
+          <p className="text-[10px] text-[var(--color-status-warn-text)]">
             This key names {stored.length} Apps (set from a terminal). Saving here keeps only the one shown.
           </p>
         )}

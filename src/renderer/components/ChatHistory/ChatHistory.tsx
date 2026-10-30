@@ -1341,7 +1341,7 @@ export default function ChatHistory({ projectPath: hostProjectPath }: ChatHistor
                             <span
                               className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                                 s.live
-                                  ? 'bg-[var(--color-status-success)]'
+                                  ? 'bg-[var(--color-status-ok)]'
                                   : 'bg-[var(--color-text-muted)]'
                               }`}
                             />

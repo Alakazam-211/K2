@@ -1072,7 +1072,7 @@ export function SecretRow({ secret, onChanged }: { secret: VaultSecret; onChange
         {disabled && <span className="text-[10px] px-1 border border-[var(--color-border)] text-[var(--color-text-secondary)]">disabled</span>}
         {secret.agentCanSee && (
           <span
-            className="text-[10px] px-1 border border-[var(--color-status-warning-soft,var(--color-border))] text-[var(--color-text-secondary)]"
+            className="text-[10px] px-1 border border-[var(--color-status-warn)] text-[var(--color-text-secondary)]"
             data-testid="vault-agent-can-see"
           >
             agent can see this

@@ -140,7 +140,7 @@ export function WorkspaceApiSection({
                   <span
                     className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                       state === 'active'
-                        ? 'bg-[var(--color-status-success)]'
+                        ? 'bg-[var(--color-status-ok)]'
                         : state === 'disabled'
                           ? 'bg-[var(--color-text-muted)]'
                           : 'bg-[var(--color-status-error-soft)]'

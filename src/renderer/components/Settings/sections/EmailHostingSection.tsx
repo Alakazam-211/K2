@@ -1234,7 +1234,7 @@ function AddressesPanel({
     <div className="grid gap-6 grid-cols-[minmax(0,44rem)]">
       {onceCreds && (
         <div
-          className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2"
+          className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2"
           role="dialog"
           aria-label="IMAP/SMTP password shown once"
         >

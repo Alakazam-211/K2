@@ -54,7 +54,7 @@ type Outcome =
 
 function CheckMark(): React.JSX.Element {
   return (
-    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true" className="text-[var(--color-status-success,#22c55e)]">
+    <svg width="28" height="28" viewBox="0 0 24 24" aria-hidden="true" className="text-[var(--color-status-ok)]">
       <circle cx="12" cy="12" r="11" fill="none" stroke="currentColor" strokeWidth="1.5" />
       <path d="M7 12.5l3.2 3.2L17 9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
@@ -414,7 +414,7 @@ export function PhonePairing({
             <li
               key={d.id}
               className={`flex items-center gap-3 px-2.5 py-2 transition-colors ${
-                highlight === d.id ? 'bg-[var(--color-bg-hover)] ring-1 ring-inset ring-[var(--color-status-success,#22c55e)]' : ''
+                highlight === d.id ? 'bg-[var(--color-bg-hover)] ring-1 ring-inset ring-[var(--color-status-ok)]' : ''
               }`}
               data-pair-device={d.id}
               data-pair-new={highlight === d.id ? '' : undefined}

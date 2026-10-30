@@ -1129,7 +1129,7 @@ export function SkinAccessSection(): React.JSX.Element {
                   starts with nobody.
                 </p>
                 {selectedPublished.helperNeedsRestart ? (
-                  <p role="status" className="text-[10px] text-[var(--color-status-warning-soft)]">
+                  <p role="status" className="text-[10px] text-[var(--color-status-warn-text)]">
                     Waiting for a restart: this App&apos;s helper predates per-App logins and still
                     signs guests in with the box login. Stop and start it to apply.
                   </p>
@@ -1628,7 +1628,7 @@ export function SkinAccessSection(): React.JSX.Element {
             {selectedApp === 'host' ? (
               <>
             {selectedApp === 'host' && !bannerDismissed && darkKeys.length > 0 ? (
-              <div role="status" className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2">
+              <div role="status" className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2">
                 <p className="text-[11px] text-[var(--color-text-primary)]">
                   Assign agents or these platform tokens go dark. Tokens with no rooms cannot Thread.
                 </p>
@@ -1738,7 +1738,7 @@ export function SkinAccessSection(): React.JSX.Element {
               </p>
             )}
             {mintedSecret && (
-              <div className="border border-[var(--color-status-warning-soft)]/40 bg-[var(--color-status-warning-soft)]/10 p-3 space-y-2">
+              <div className="border border-[var(--color-status-warn)]/40 bg-[var(--color-status-warn)]/10 p-3 space-y-2">
                 <p className="text-[11px] font-semibold text-[var(--color-text-primary)]">
                   Store this key now — it cannot be retrieved again
                 </p>

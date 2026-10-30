@@ -52,7 +52,7 @@ const DETAILS_BTN =
 // Start/Stop and still show attributed nested URLs.
 
 function statusDotClass(status: string): string {
-  if (status === 'running') return 'bg-[var(--color-status-success)]'
+  if (status === 'running') return 'bg-[var(--color-status-ok)]'
   if (status === 'starting') return 'bg-[var(--color-status-working)]'
   if (status === 'exited' || status === 'unhealthy') return 'bg-[var(--color-status-error)]'
   return 'bg-[var(--color-text-muted)]'

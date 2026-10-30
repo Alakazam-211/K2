@@ -542,7 +542,7 @@ export function PeopleSection(): React.JSX.Element {
                   <span className="block text-xs font-mono text-[var(--color-text-primary)] truncate">
                     {row.username}
                     {row.pendingReset ? (
-                      <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warning-soft,#b7791f)]/20 text-[var(--color-text-secondary)]">
+                      <span className="ml-1.5 text-[9px] font-sans uppercase tracking-wider px-1 py-0.5 bg-[var(--color-status-warn)]/20 text-[var(--color-text-secondary)]">
                         Waiting for reset
                       </span>
                     ) : null}

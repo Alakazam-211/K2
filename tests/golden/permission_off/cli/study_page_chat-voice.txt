@@ -1,0 +1,105 @@
+$ k2 study chat-voice
+exit: 0
+--- stdout
+k2 study chat-voice — Voice rooms and channels in your App: the setup
+
+Chat / Voice Hosting is this box's chat and voice core (core id sew),
+powered by Sew; this K2 pins Sew 0.5.0. Your App gets ONE Space, bound to
+it. There your server keeps static rooms (say, two voice meeting rooms)
+and makes a text and a voice channel per project; calls are end-to-end
+encrypted. Hearth (Sew's own client) is optional: nothing here needs it;
+if the owner installs it, people see your channels there too. Rooms,
+channels, joining, limits: k2 study chat-voice-rooms. Caps: app-chat.
+
+WHO. Owner = the box owner, in person (an Admin login may do the reset in
+step 3). Agent = your App's agent, with switches only the owner turns on:
+"Build and run Apps" and "Let this agent manage its Apps' users" (k2 app
+access <ws> shows them and your cores), and "Manage Chat / Voice Hosting"
+(k2 agent access set <ws> chat_manage on). Server = your App's own code.
+<app> = your App's id (k2 app list).
+
+THE ORDER
+ 1. The box (Agent with Manage Chat / Voice Hosting, or Owner).
+    k2 hostchat status: identity k2 (else k2 hostchat enable). k2 hostchat
+    media status: running (else k2 hostchat media install). k2 hostchat
+    home: "app-scoped sessions yes" and "app origin" yes.
+ 2. Install with a public URL from the start (Agent, "Build and run Apps"):
+      k2 app install <app> --tunnel
+    Without --tunnel the App never gets its own <app>.<box>.k2.dev URL: no
+    command adds it later. Sew's voice origin is the App's public host, so
+    without one nobody outside can call. The only other ways: the box's one
+    meet label (k2 hostchat meet bind <app>) or a live custom domain (Linux
+    box; the Owner's k2 front enable and k2 domain add; k2 app domain
+    --help). A name from k2 app domain add <app> <subdomain> doesn't count.
+    Already installed without it? Use one of those, or re-create the App
+    before people use it: re-creating drops its logins and its guests-chat
+    grant, and leaves its Space read-only until bound again (redo 3–9).
+ 3. The Space owner: an App-only person (a real one who will stay). The
+    Owner picks them and runs:
+      k2 app user invite <owner-user> --app <app> --email <e> [--role R]
+    Never an agent. Never a username that is also a Connect login on this
+    box (anyone who signs in to the box itself, the owner too): on this
+    version those get not_found for chat through an App. Anyone the Agent
+    or your App creates, invites or sets a password for is tied to the
+    agent: no chat pass (403 tied_pending_reset) until they use a reset
+    link the Owner sends (k2 app user reset <user> --app <app>).
+ 4. Chat for that person, BEFORE the Space (Sew needs their account):
+      k2 app user chat <owner-user> member --app <app>        (Owner)
+    For everyone after (step 8), better: the Owner runs k2 app grant <app>
+    --kind guests-chat [--max N] once; then the Agent runs that same line,
+    or the Server calls k2.asApp().guests.setChat({username, scope: 'member'}).
+    Check: k2 app user chat <owner-user> --app <app> → member, chat id.
+ 5. The Space, owned by that person, then bound (Agent with Manage Chat /
+    Voice Hosting):
+      k2 chat space create <slug> --name "<Name>" --owner <owner-user>
+      k2 hostchat app-space bind <app> <space.id from the answer>
+    If a workspace has that name too, write @<owner-user> (else 400
+    agent_owner). Your Server acts as this person to make channels. If
+    create fails naming the manager (your agent has no chat account), the
+    Owner runs k2 app grant add --kind chat --subject-kind workspace
+    --subject <ws> --scope coworker; wait a few seconds; run it again.
+ 6. Roles (Owner, or Agent with "manage its Apps' users"):
+      k2 app role room <role> <room> --caps <current caps>,chat:read,voice:join,voice:video
+    <room> = a room line on the role (a workspace handle, usually yours;
+    chat caps are App-wide). --caps REPLACES that line: copy its caps from
+    k2 app role list. Add chat:post for text; voice:video is camera and
+    screen share (leave it out for audio only).
+    Every role that signs in, the Space owner's too, needs one of your chat
+    caps, else 403 no_chat_caps.
+ 7. Kit, manifest, deploy (Agent; approvals are the Owner's):
+      k2 app sdk add <folder> --sew     (then run the npm i line it prints)
+    manifest: requires {"sew": ">=0.5.0", "voice": true}; boxServices
+    sew-api and sew-signal; caps chat:read, voice:join, voice:video (plus
+    chat:post; chat:channels for chat.createChannel). k2 app deploy is held
+    (exit 2) until the Owner, in person, runs k2 app approvals and
+    k2 app approve <id>: that starts the deploy. The Owner's
+    k2 app access <ws> --core sew=on pre-approves the chat caps (never
+    chat:channels or box services).
+ 8. Everyone else: chat as in step 4 (the Owner's line, or under the
+    guests-chat grant the Agent's line or setChat). App login + chat = in
+    your Space. Sew may answer not_provisioned for a few seconds: retry.
+ 9. Origin (Agent): k2 hostchat home --json, your App's row in .apps[]:
+    origin "wss://<your host>" AND delivered true. K2 sends it itself on
+    its sweep, up to 10 minutes after the bind (the Owner can force one:
+    k2 app grant hooks reconcile). No command sets it by hand.
+10. Rooms, channels (Server, as the Space owner): k2 study chat-voice-rooms.
+11. The first real call is the outside test: two people, one on a phone
+    off Wi-Fi. Then: k2 hostchat media probe --udp ok --tcp ok --turn-tls ok
+
+WHAT GOES WRONG
+  origin null, no calls from outside → no public URL (step 2)
+  403 no_chat_caps → the role holds none of your chat caps (6)
+  403 tied_pending_reset → the agent or App set them up: Owner's reset link (3)
+  not_found from k2 app user chat → not your App's user, or a Connect login (3)
+  sign-in 502/504 → sew-api still held for the Owner (7)
+  /rtc* 404 → sew-signal not approved (approved late: k2 app restart <app>)
+  people make channels you didn't → lock the Space (chat-voice-rooms)
+  joins work, no audio → 7881/tcp, 7882/udp, 5349/tcp blocked from outside
+  431 on /rtc/v1 → K2's 64 KiB request-head limit: tell K2
+
+NEVER Sew's mgmt socket, Postgres, keys, TURN secret or /etc/sew. Agents
+never join calls.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

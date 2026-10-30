@@ -35,6 +35,8 @@ K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback as
   app-pairing         Your App's own phone app signs in by QR: setup, start, check, redeem
   app-profile         A person's own profile, picture and sessions in an App; who decides
   app-chat            Chat, voice and calls in your App: caps, guests.setChat, chat.member/whois
+  chat-voice          Voice rooms and channels in your App: the order, who does each step, pitfalls
+  chat-voice-rooms    Your App Space: static rooms, per-project channels, who's in, joining, limits
   skins               leftover alias of apps
   feedback-loop       Ask to change this box; talk in this chat
   ticket-brief        The HTML brief every agent ticket carries

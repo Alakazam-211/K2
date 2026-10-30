@@ -1,0 +1,99 @@
+$ k2 study chat-voice-rooms
+exit: 0
+--- stdout
+k2 study chat-voice-rooms — Rooms and channels in your App Space
+
+The setup comes first (Space, its owner, roles, manifest): k2 study
+chat-voice. This page is what your App's server does in its Space, with
+Sew's client API at K2_BOX_SEW_API (K2 sets it for a declared sew-api; it
+answers once the Owner approves), never from the browser. Kit code lives
+in the Sew App kit (k2 app sdk add <folder> --sew puts it in vendor/): its
+guide docs/sew-app-kit.md and its reference App examples/minimal-app.
+
+AS WHOM. The Space owner (chat-voice step 3) makes these channels; agents
+never own a Space. Simplest: an admin-only action in your App that the
+owner clicks while signed in; your server uses their own Sew session
+(k2.withGuest(<their K2 session>, () => k2.chat.pass()), then Sew's
+POST /api/v1/auth/k2 {"pass"} → a sews_ token kept on the server, sent as
+Authorization: Bearer; SDK: k2 study app-api). Getting the pass needs a
+role with a chat cap (chat-voice step 6); the channel routes themselves
+need no cap, not even chat:post.
+
+MAKE A CHANNEL (text or voice; NOT idempotent)
+  POST /api/v1/spaces/{space_id}/channels
+  {"slug":"room-1","name":"Meeting room 1","type":"voice",
+   "visibility":"public","user_limit":25}
+  type text|voice|announcement · visibility public|private · optional
+  category_id, topic, purpose, position, user_limit (voice: 0–99, 0 =
+  none), member_ids (≤100 Sew member ids, each already in the Space; one
+  bad id fails the whole create).
+  A taken slug (archived too) answers 409 conflict, details.field "slug".
+  Look it up, don't retry blindly:
+    GET /api/v1/spaces/{space_id}/channels?scope=admin&q=<slug>&include_archived=true
+  q matches parts of names: take the item whose slug is exact; if it has
+  archived_at, POST /api/v1/channels/{id}/unarchive {}.
+  Store the channel ID in your database or config, never the name or slug
+  (people rename channels from other clients).
+  k2.asApp().chat.createChannel (k2 study app-chat) is idempotent and
+  takes usernames, but on this K2 it makes TEXT channels only, and needs
+  the cap chat:channels.
+
+STATIC ROOMS, once at install: each with a fixed slug (room-1, room-2),
+409 handled as above, ids stored. So people K2 adds later land in them:
+POST /api/v1/spaces/{space_id}/update {"default_channel_ids":[…]} (≤10,
+public, unarchived).
+
+PER PROJECT, when your App creates one: a text and a voice channel.
+  Slugs from your id, never the title: proj-<id>-chat, proj-<id>-voice
+  (a-z 0-9 -, ≤80; lower-case a UUID). Write each id to the project row
+  as you go, so a retry reuses it. Private with member_ids for the
+  project's people (your user → member id: chat.member({principal})), or
+  public with no lists. Team changes, on both channels:
+  POST /api/v1/channels/{id}/members/add {"member_ids":[…]},
+  POST /api/v1/channels/{id}/members/remove {"member_id":"…"}; others
+  change membership too, so reconcile against GET …/members.
+  Project closes: POST /api/v1/channels/{id}/archive {} (read-only; its
+  call ends). There is NO delete: a slug is taken for good.
+
+LOCK IT DOWN. By default ANY Space member may create channels and add
+people to them, from your App or any Sew client. Once, as the Space owner,
+take that from @everyone (its role id is the Space id):
+  POST /api/v1/roles/{space_id}/edit {"perms":"991743"}
+(the default bits minus ADD_MEMBERS, CREATE_PUBLIC_CHANNELS and
+CREATE_PRIVATE_CHANNELS). The owner keeps every bit, so your server can. And forward only the
+Sew routes your UI uses: put your own check before the kit's
+sew.handle(req, res) and answer 404 to any other /sew/api/v1 path.
+
+WHO'S IN A ROOM, before joining: the kit's
+<VoiceChannelMembers channelId={id} /> inside <VoiceProvider> (READY plus
+live voice_state_updated), or GET /api/v1/spaces/{space_id}/voice/states
+and that event. Don't poll.
+
+JOINING. One VoiceController per signed-in tab (minimal-app's
+src/web/session.ts). Mount <CallBar docked /> once in your shell so a call
+survives page changes. A button: controller.join(channelId).
+<CallView channelId={id} /> shows video; @sew/channel's
+<ConversationPane channelId={id} /> is a text channel. One call per
+person: joining another room moves them. Hide camera and screen share when
+the join answer's media.camera_allowed / screen_allowed is false (keep
+those for the whole call). A private channel they're not in is a 404:
+show your own "no access".
+
+REFUSALS. 422 channel_full (user_limit) · 503 voice_capacity (the box is
+full) · 403 missing_permission cap_ceiling (no voice:join) · 403
+agents_not_in_voice · Firefox can't join calls yet (grey the button) ·
+422 not_space_member (no chat yet: chat-voice step 4) · 422
+space_orphaned (unbound: bind it again).
+
+LIMITS (Sew 0.5.0). 5,000 channels per Space, archived included (about
+2,500 projects at two each; then a second Space) · 200 categories · 10
+default channels · 100 members per create or add · names 1–100 characters
+· no delete, no public↔private, no type change. K2 sets no App quotas.
+K2's door: request heads over 64 KiB → 431; 120 writes a minute per
+visitor per App (the Owner: k2 firewall guard). Sew 0.5.1 fixes the
+quota gaps (call limits on moves and DM calls, upload and message-rate
+quotas) and the unbound-Space gaps; this K2 still pins 0.5.0.
+
+K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
+--- stderr
+--- requests

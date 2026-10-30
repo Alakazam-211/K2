@@ -114,6 +114,9 @@ Hearth) sees every Space a person is in; k2 hostchat home app <app>
 --hidden on keeps an App out of it. Both wait for Sew's home_client flag.
 Recording is off by default. Guide: docs/app-chat-sew.md.
 
+VOICE ROOMS AND PROJECT CHANNELS, start to finish (who does which step,
+in what order, what goes wrong): k2 study chat-voice.
+
 K2 is source-available Fair Source, not MIT. To change this box, `k2 feedback ask` with a brief (`k2 study ticket-brief`). To talk in this chat, `k2 thread`.
 --- stderr
 --- requests

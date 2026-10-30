@@ -2,9 +2,17 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, beforeEach, describe, it, expect } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { ChatMessageBody, chatHardBreaks } from './ChatMessage'
+import { codeBlockCopyText } from './chat-copy'
+
+const clip = vi.hoisted(() => ({ writes: [] as string[] }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
+  writeText: vi.fn(async (t: string) => {
+    clip.writes.push(t)
+  }),
+}))
 
 const here = dirname(fileURLToPath(import.meta.url))
 
@@ -160,5 +168,69 @@ describe('chat body never scrolls vertically', () => {
     if (!wrap) throw new Error('table wrapper missing')
     expect(getComputedStyle(wrap).overflowX).toBe('auto')
     expect(getComputedStyle(wrap).overflowY).toBe('hidden')
+  })
+})
+
+describe('copy buttons in chat markdown', () => {
+  beforeEach(() => {
+    clip.writes.length = 0
+  })
+
+  it('codeBlockCopyText trims exactly one trailing newline', () => {
+    expect(codeBlockCopyText('a\nb\n')).toBe('a\nb')
+    expect(codeBlockCopyText('a\n\n')).toBe('a\n')
+    expect(codeBlockCopyText('a')).toBe('a')
+    expect(codeBlockCopyText('')).toBe('')
+  })
+
+  it('hard breaks leave fenced code alone and still break prose around it', () => {
+    expect(chatHardBreaks('one\ntwo\n```sh\nls -la\ncd /tmp\n```\nthree\nfour')).toBe(
+      'one  \ntwo  \n```sh\nls -la\ncd /tmp\n```\nthree  \nfour',
+    )
+    expect(chatHardBreaks('~~~\na\nb\n~~~\nc\nd')).toBe('~~~\na\nb\n~~~\nc  \nd')
+    // A shorter or different fence does not close the block.
+    expect(chatHardBreaks('````\n```\nx\n````\ny\nz')).toBe('````\n```\nx\n````\ny  \nz')
+  })
+
+  it('a code block Copy copies the raw code: no fence, no trailing newline, no hard-break spaces', async () => {
+    const text = 'Run this:\n```bash\ncargo test -p k2-core\nbun run typecheck\n```\nthen tell me'
+    const { container } = render(<ChatMessageBody text={text} />)
+    const btn = container.querySelector('[data-chat-copy="code"]')
+    if (!(btn instanceof HTMLButtonElement)) throw new Error('code block has no Copy button')
+    expect(btn.textContent).toBe('Copy')
+    await act(async () => {
+      fireEvent.click(btn)
+    })
+    expect(clip.writes).toEqual(['cargo test -p k2-core\nbun run typecheck'])
+    expect(btn.textContent).toBe('Copied')
+  })
+
+  it('every code block gets its own button and copies its own text', async () => {
+    const { container } = render(<ChatMessageBody text={'```\nfirst\n```\n\n~~~\nsecond\n~~~'} />)
+    const btns = container.querySelectorAll('[data-chat-copy="code"]')
+    expect(btns.length).toBe(2)
+    await act(async () => {
+      fireEvent.click(btns[1])
+    })
+    expect(clip.writes).toEqual(['second'])
+  })
+
+  it('a link gets a copy icon that copies its URL', async () => {
+    const { container } = render(<ChatMessageBody text={'See [the docs](https://k2.dev/docs) and https://example.com/x'} />)
+    const btns = container.querySelectorAll('[data-chat-copy="link"]')
+    expect(btns.length).toBe(2)
+    await act(async () => {
+      fireEvent.click(btns[0])
+    })
+    await act(async () => {
+      fireEvent.click(btns[1])
+    })
+    expect(clip.writes).toEqual(['https://k2.dev/docs', 'https://example.com/x'])
+    expect(container.querySelector('a')?.getAttribute('href')).toBe('https://k2.dev/docs')
+  })
+
+  it('inline code has no Copy button', () => {
+    const { container } = render(<ChatMessageBody text={'use `k2 msg` here'} />)
+    expect(container.querySelector('[data-chat-copy]')).toBeNull()
   })
 })

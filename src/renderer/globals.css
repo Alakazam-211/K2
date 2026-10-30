@@ -776,6 +776,80 @@ html[data-os]:not([data-os="mac"]) select optgroup {
   font-size: 0.9em;
 }
 
+/* A code block and its Copy button (components/common/chat-copy.tsx). The
+   wrapper carries the block's bottom margin; the button sits at the top
+   right, shown on hover or focus, and always on touch screens. */
+.chat-markdown .chat-md-code {
+  position: relative;
+  margin: 0 0 6px 0;
+}
+
+.chat-markdown .chat-md-code:last-child {
+  margin-bottom: 0;
+}
+
+.chat-markdown .chat-md-code > pre {
+  margin: 0;
+}
+
+.chat-markdown .chat-md-copy,
+.chat-markdown .chat-md-link-copy {
+  font-family: var(--font-ui);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-field, 0px);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-markdown .chat-md-copy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  line-height: 16px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.chat-markdown .chat-md-code:hover .chat-md-copy,
+.chat-markdown .chat-md-copy:focus-visible,
+.chat-markdown .chat-md-copy[data-copied] {
+  opacity: 1;
+}
+
+.chat-markdown .chat-md-copy:hover,
+.chat-markdown .chat-md-link-copy:hover {
+  color: var(--color-text-primary);
+}
+
+/* A link's copy icon: hidden until the link is hovered or focused. */
+.chat-markdown .chat-md-link-copy {
+  display: none;
+  vertical-align: middle;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 3px;
+  padding: 0;
+}
+
+.chat-markdown .chat-md-link:hover .chat-md-link-copy,
+.chat-markdown .chat-md-link:focus-within .chat-md-link-copy,
+.chat-markdown .chat-md-link-copy[data-copied] {
+  display: inline-flex;
+}
+
+@media (hover: none) {
+  .chat-markdown .chat-md-copy {
+    opacity: 1;
+  }
+}
+
 .chat-markdown blockquote {
   margin: 0 0 6px 0;
   padding: 4px 10px;

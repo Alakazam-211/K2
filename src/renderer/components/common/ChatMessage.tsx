@@ -20,18 +20,22 @@ import {
   clearStuckBodyUserSelect,
 } from './SelectableText'
 import { MarkdownSpan, rehypeFileLinks, useFileLinkPrefixes } from './file-links'
+import { ChatCodeBlock, ChatLink } from './chat-copy'
 
 const CHAT_REMARK = [remarkGfm]
 
 /** GFM tables scroll sideways in their own box instead of crushing a
  *  short column to one letter per line (`.chat-md-table-wrap` in
- *  globals.css). */
+ *  globals.css). Code blocks get a Copy button and links a copy icon
+ *  (./chat-copy). */
 const CHAT_COMPONENTS: Components = {
   table: ({ node: _node, ...props }) => (
     <div className="chat-md-table-wrap">
       <table {...props} />
     </div>
   ),
+  pre: ChatCodeBlock as Components['pre'],
+  a: ChatLink as Components['a'],
 }
 
 /** Under a `FileLinkProvider` (the Thread): workspace paths become links. */
@@ -42,9 +46,30 @@ const CHAT_COMPONENTS_WITH_FILE_LINKS: Components = {
 
 /** GFM treats a single \n as a space. Chat Shift+Enter is a hard break
  *  (`  \\n`). No extra remark plugin — Vite on tauri-dev failed to
- *  resolve `remark-breaks` even after bun install. */
+ *  resolve `remark-breaks` even after bun install. Lines inside a fenced
+ *  code block are left alone: there the two spaces would be part of the
+ *  code (and of what its Copy button copies). */
 export function chatHardBreaks(text: string): string {
-  return text.replace(/\n/g, '  \n')
+  const lines = text.split('\n')
+  let fence: { char: string; len: number } | null = null
+  let out = ''
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    // CommonMark fences: up to 3 spaces, then 3+ backticks or tildes; a
+    // backtick fence's info string has no backtick; the closing fence is the
+    // same character, at least as long, and nothing after it but spaces.
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line)
+    let inCode = fence !== null
+    if (fence) {
+      if (m && m[1][0] === fence.char && m[1].length >= fence.len && m[2].trim() === '') fence = null
+    } else if (m && !(m[1][0] === '`' && m[2].includes('`'))) {
+      fence = { char: m[1][0], len: m[1].length }
+      inCode = true
+    }
+    if (i < lines.length - 1) out += line + (inCode ? '\n' : '  \n')
+    else out += line
+  }
+  return out
 }
 
 function onBodyPointerDown(e: PointerEvent | MouseEvent): void {

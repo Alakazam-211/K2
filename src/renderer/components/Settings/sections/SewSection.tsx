@@ -156,12 +156,15 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const released = status.released !== false
+  // Re-run preflight judges the typed path (not a stale closure).
+  const tarballRef = useRef('')
+  tarballRef.current = tarball
 
   const runPreflight = useCallback(async () => {
     if (sample || !released) return
     setPreflightError(null)
     try {
-      const r = await fetchSewPreflight()
+      const r = await fetchSewPreflight(tarballRef.current)
       setChecks(r.checks)
     } catch (e) {
       setPreflightError(sewErrorMessage(e))
@@ -174,8 +177,10 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
 
   const failing = (checks ?? []).filter((c) => c.status === 'fail')
   const blocking = failing.filter((c) => !SEW_FIXABLE_CHECKS.includes(c.id))
-  const showSource = advanced || failing.some((c) => c.id === 'source')
-  const showRecovery = advanced || failing.some((c) => c.id === 'existing_data')
+  // A typed path stays visible (and is sent) even after the preflight it
+  // fixed stops failing: Enable must never drop it silently.
+  const showSource = advanced || tarball.trim() !== '' || failing.some((c) => c.id === 'source')
+  const showRecovery = advanced || recoveryFile.trim() !== '' || failing.some((c) => c.id === 'existing_data')
   const label = enableLabel(status.state) ?? 'Enable Sew'
   const disabled = !canMutate || !released || busy || checks === null || blocking.length > 0
 
@@ -185,8 +190,9 @@ function EnableWizard({ status, sample, canMutate, reload }: PanelProps): React.
     try {
       await enableSew({
         identity,
-        tarballPath: showSource ? tarball : undefined,
-        recoveryKeyFile: showRecovery ? recoveryFile : undefined,
+        // Whatever was typed goes, shown or not (enableBody drops blanks).
+        tarballPath: tarball,
+        recoveryKeyFile: recoveryFile,
         voice: voiceOn ? { publicUrl: voiceUrl, nodeIp, mediaTarballPath: mediaTarball } : undefined,
       })
       await reload()

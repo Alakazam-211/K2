@@ -380,8 +380,13 @@ export function resetSewStatusCacheForTests(): void {
   statusCache = null
 }
 
-export async function fetchSewPreflight(): Promise<{ ready: boolean; checks: SewPreflightCheck[] }> {
-  const r = await daemonCliGet<{ ready?: boolean; checks?: SewPreflightCheck[] }>(primaryScope(), 'sew/preflight')
+/** `tarballPath` (absolute, when the person typed one) makes the daemon's
+ *  `source` check judge that file instead of the cache / download. */
+export async function fetchSewPreflight(tarballPath?: string): Promise<{ ready: boolean; checks: SewPreflightCheck[] }> {
+  const tarball = tarballPath?.trim()
+  const r = tarball
+    ? await daemonCliGet<{ ready?: boolean; checks?: SewPreflightCheck[] }>(primaryScope(), 'sew/preflight', { tarballPath: tarball })
+    : await daemonCliGet<{ ready?: boolean; checks?: SewPreflightCheck[] }>(primaryScope(), 'sew/preflight')
   const checks = Array.isArray(r?.checks) ? r.checks : []
   return { ready: r?.ready === true, checks }
 }

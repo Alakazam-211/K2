@@ -263,6 +263,42 @@ describe('enable wizard', () => {
     )
   })
 
+  it('a typed tarball path is still sent after the preflight it fixed passes', async () => {
+    // Live bug (10-29): source failed → the path field opened → the person
+    // typed a path and re-ran preflight → source passed → the field hid and
+    // Enable dropped the path, so the daemon refused "no Sew release source".
+    const preflightParams: Array<Json | undefined> = []
+    gets({
+      'sew/status': notInstalled(),
+      'sew/preflight': (params?: Json) => {
+        preflightParams.push(params)
+        const given = typeof params?.tarballPath === 'string'
+        return {
+          ready: given,
+          checks: [
+            given
+              ? { id: 'source', status: 'ok', detail: `--tarball ${params?.tarballPath as string}`, hint: '' }
+              : { id: 'source', status: 'fail', detail: 'no release', hint: 'k2 hostchat enable --tarball …' },
+          ],
+        }
+      },
+    })
+    posts({ 'sew/server/enable': { ok: true, state: 'installing' } })
+    await renderReady('Enable Sew')
+    await waitFor(() => expect(screen.getByTestId('sew-check-source').dataset.status).toBe('fail'))
+    fireEvent.change(screen.getByLabelText('Release tarball path'), { target: { value: '/home/k2/sew-0.5.0.tar.gz' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Re-run preflight' }))
+    await waitFor(() => expect(screen.getByTestId('sew-check-source').dataset.status).toBe('ok'))
+    expect(preflightParams).toEqual([undefined, { tarballPath: '/home/k2/sew-0.5.0.tar.gz' }])
+    // Advanced was never opened; the typed path stays in view.
+    expect(screen.getByRole('button', { name: 'Advanced' })).toBeTruthy()
+    expect((screen.getByLabelText('Release tarball path') as HTMLInputElement).value).toBe('/home/k2/sew-0.5.0.tar.gz')
+    fireEvent.click(await enableReady())
+    await waitFor(() =>
+      expect(postBodies('sew/server/enable')).toEqual([{ identity: 'k2', tarballPath: '/home/k2/sew-0.5.0.tar.gz' }]),
+    )
+  })
+
   it('a refusal shows the daemon hint', async () => {
     gets({ 'sew/status': notInstalled(), 'sew/preflight': { ready: true, checks: [] } })
     posts({ 'sew/server/enable': new DaemonHttpError('Another Sew action', 409, 'lifecycle_in_progress') })

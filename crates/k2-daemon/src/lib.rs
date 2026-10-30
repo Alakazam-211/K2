@@ -402,6 +402,8 @@ pub mod email_notify;
 pub mod app_user_invites;
 pub mod chat_channel_routes;
 pub mod chat_map_routes;
+// Sew 0.6.0: an App's own chat.channels / chat.setChannels (App-governed Spaces).
+pub mod governed_app_routes;
 pub mod guest_chat_routes;
 pub mod guest_rooms_routes;
 pub mod skin_gateway;

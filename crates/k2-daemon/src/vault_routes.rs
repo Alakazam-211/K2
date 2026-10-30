@@ -2075,6 +2075,10 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // Sew chat passes (S28 §7.4, KM13): an emergency wipe of the chat-pass
     // signing keys needs a person, not the owner token alone.
     "chat-keys-emergency",
+    // App-governed Spaces (Sew 0.6.0, AG-7): switching who governs a Space
+    // (`app` | `sew`) is the owner's or an Admin's, in person, never an
+    // agent's "Manage Sew" (`secretId` = `<app>:<space>:<governance>`).
+    crate::sew::governed::CONFIRM_GOVERNANCE,
     // Sew owner handoff (S32 §11.1, Rosson 2026-10-15): minting a code
     // that opens Sew as its install owner needs a person.
     "chat-owner-handoff",

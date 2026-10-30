@@ -42,6 +42,7 @@ pub mod app_space;
 pub mod avatar;
 pub mod chat;
 pub mod features;
+pub mod governed;
 pub mod home;
 pub mod members;
 pub mod outbox;
@@ -112,6 +113,18 @@ pub enum Op {
     /// Sew 0.5.0 (`space_unbind`): unbind a removed App's Space in Sew
     /// (`POST /mgmt/v1/spaces/unbind`; [`app_space`]).
     SpaceUnbind,
+    /// Sew 0.6.0 I4 (`app_governed_spaces`): one person's full private
+    /// channel list and level in an App-governed Space, subject
+    /// `chan:<space id>:<ext>`, after the person's own provisioning queue
+    /// ([`governed`]). The worker sends the due rows of one Space together
+    /// (I4 bulk, ≤ 500 a call).
+    SpaceMemberChannels,
+    /// Sew 0.6.0 I6: the App's manifest channels in one Space (`ensure`,
+    /// `rename`, `archive`, `unarchive`), subject `chans:<space id>`.
+    ChannelsBulk,
+    /// Sew 0.6.0 I3: a Space's `governance` (`POST
+    /// /mgmt/v1/spaces/{space_id}/settings`), subject `space:<space id>`.
+    SpaceSettings,
 }
 
 impl Op {
@@ -130,6 +143,9 @@ impl Op {
             Op::AppSettings => "app_settings",
             Op::PolicySet => "policy_set",
             Op::SpaceUnbind => "space_unbind",
+            Op::SpaceMemberChannels => "space_member_channels",
+            Op::ChannelsBulk => "channels_bulk",
+            Op::SpaceSettings => "space_settings",
         }
     }
 
@@ -148,6 +164,9 @@ impl Op {
             "app_settings" => Op::AppSettings,
             "policy_set" => Op::PolicySet,
             "space_unbind" => Op::SpaceUnbind,
+            "space_member_channels" => Op::SpaceMemberChannels,
+            "channels_bulk" => Op::ChannelsBulk,
+            "space_settings" => Op::SpaceSettings,
             _ => return None,
         })
     }
@@ -155,7 +174,7 @@ impl Op {
     /// The ops the worker delivers. S28's session revoke joined in 0.46.1
     /// (plan B7: "S28 adds its op to `Op::DELIVERED`"); K31's App Space
     /// membership ops ride the same worker.
-    pub const DELIVERED: [Op; 13] = [
+    pub const DELIVERED: [Op; 16] = [
         Op::Provision,
         Op::Update,
         Op::Deprovision,
@@ -169,6 +188,9 @@ impl Op {
         Op::AppSettings,
         Op::PolicySet,
         Op::SpaceUnbind,
+        Op::SpaceMemberChannels,
+        Op::ChannelsBulk,
+        Op::SpaceSettings,
     ];
 
     /// K31's App Space membership ops.
@@ -210,6 +232,12 @@ pub enum Cause {
     /// A Space binding was dropped by hand (`k2 hostchat app-space
     /// unbind`; Sew 0.5.0: unbound in Sew too).
     SpaceUnbound,
+    /// App-governed Spaces: the owner or an Admin switched a Space's
+    /// governance (`k2 hostchat app-space governance`).
+    GovernanceSwitch,
+    /// App-governed Spaces: the App set people's channels itself
+    /// (`chat.setChannels`) or made channels (`chat.channels`).
+    AppCall,
 }
 
 impl Cause {
@@ -232,6 +260,8 @@ impl Cause {
             Cause::OwnerLinked => "owner_linked",
             Cause::AppRemoved => "app_removed",
             Cause::SpaceUnbound => "space_unbound",
+            Cause::GovernanceSwitch => "governance_switch",
+            Cause::AppCall => "app_call",
         }
     }
 }
@@ -1108,6 +1138,18 @@ pub fn apply_reconcile(
                 );
             }
             ops.extend(space_ops);
+            // Sew 0.6.0 (`app_governed_spaces`): the manifest channels of
+            // each App-governed Space, then each person's private channels
+            // and level (after their own provisioning queue).
+            ops.extend(governed::plan_channels(&tx, &busy, now)?);
+            let (sync_ops, sync) = governed::plan_members(&tx, &busy, now)?;
+            if !sync_ops.is_empty() || !sync.waiting.is_empty() {
+                crate::log_debug!(
+                    "[grant-hook] governed spaces: {}",
+                    serde_json::to_value(&sync).unwrap_or_default()
+                );
+            }
+            ops.extend(sync_ops);
             // A3: pictures Sew doesn't show yet (after the member ops, on
             // each member's own queue).
             ops.extend(avatar::plan(&tx, &busy)?);
@@ -1171,6 +1213,11 @@ pub fn apply_settings(kind: &str, sew_features: &[String], policy_read: &PolicyR
         }
         // Unbinds go under the actor who asked for each.
         n += app_space::queue_unbinds(&tx, now)?;
+        // Sew 0.6.0 §3a: a removed App's service owner, after its unbinds.
+        let busy = outbox::busy_subjects(&tx, kind)?;
+        for (op, actor) in governed::plan_service_retire(&tx, &busy, now)? {
+            n += outbox::enqueue(&tx, std::slice::from_ref(&op), &actor, now)?.len();
+        }
         tx.commit().map_err(|e| format!("settings commit: {e}"))?;
         Ok(n)
     })?;
@@ -1280,6 +1327,11 @@ pub struct AppSpaceView {
     #[serde(flatten)]
     pub binding: app_space::Binding,
     pub members: app_space::Counts,
+    /// Sew 0.6.0: `app` | `sew` as K2 wants it (`None`: never switched
+    /// here, Sew-governed).
+    pub governance: Option<String>,
+    /// What Sew last confirmed.
+    pub governance_confirmed: Option<String>,
 }
 
 pub fn app_spaces() -> Result<Vec<AppSpaceView>, String> {
@@ -1288,7 +1340,9 @@ pub fn app_spaces() -> Result<Vec<AppSpaceView>, String> {
             .into_iter()
             .map(|b| {
                 let members = app_space::counts(conn, &b.space_id)?;
-                Ok(AppSpaceView { binding: b, members })
+                let governance = governed::governance_wish(conn, &b.space_id)?;
+                let governance_confirmed = governed::governance_confirmed(conn, &b.space_id)?;
+                Ok(AppSpaceView { binding: b, members, governance, governance_confirmed })
             })
             .collect()
     })
@@ -1368,7 +1422,221 @@ pub fn app_spaces_app_removed(service_id: &str, actor: &str) -> Result<Vec<Strin
         );
         kick();
     }
+    // Sew 0.6.0: the settings step deprovisions its service owner once the
+    // unbinds are sent.
+    kick_reconcile();
     Ok(spaces)
+}
+
+// ── Sew 0.6.0: App-governed Spaces ([`governed`]) ────────────────────
+
+/// Why a governance switch is refused before anything is stored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GovernanceRefusal {
+    /// `409 space_unbound`: the Space is bound to no App here.
+    SpaceUnbound,
+    /// `409 app_mismatch`: the Space is bound to another App.
+    AppMismatch(String),
+    /// `409 chat_key_required`: `app` needs the App's chat key.
+    ChatKeyRequired,
+    /// `409 sew_feature_missing`: Sew lacks `app_governed_spaces`.
+    FeatureMissing,
+    /// `400`: not `app` or `sew`.
+    Usage(String),
+    Store(String),
+}
+
+/// The owner's (or an Admin's) governance switch for `space_id`, bound to
+/// `app_id`. The caller checked the person gate. Returns whether it
+/// changed; the next sweep sends it (and a confirmed `app` syncs at once).
+pub fn set_space_governance(app_id: &str, space_id: &str, value: &str, actor: &str) -> Result<bool, GovernanceRefusal> {
+    if value != sew_wire::GOVERNANCE_APP && value != sew_wire::GOVERNANCE_SEW {
+        return Err(GovernanceRefusal::Usage(format!("governance is app or sew, not '{value}'")));
+    }
+    if !skin_store_exists() {
+        return Err(GovernanceRefusal::SpaceUnbound);
+    }
+    let now = outbox::now_secs();
+    let changed = crate::skin::with_skin_conn(|conn| {
+        Ok((|| {
+            if !features::has(conn, CHAT_KIND, features::APP_GOVERNED_SPACES).map_err(GovernanceRefusal::Store)? {
+                return Err(GovernanceRefusal::FeatureMissing);
+            }
+            match app_space::bound_app(conn, space_id).map_err(GovernanceRefusal::Store)? {
+                None => return Err(GovernanceRefusal::SpaceUnbound),
+                Some(a) if a != app_id => return Err(GovernanceRefusal::AppMismatch(a)),
+                Some(_) => {}
+            }
+            if value == sew_wire::GOVERNANCE_APP
+                && !governed::chat_key(conn, app_id).map_err(GovernanceRefusal::Store)?.is_some_and(|k| k.enabled)
+            {
+                return Err(GovernanceRefusal::ChatKeyRequired);
+            }
+            governed::set_governance(conn, space_id, value, actor, now).map_err(GovernanceRefusal::Store)
+        })())
+    })
+    .map_err(GovernanceRefusal::Store)??;
+    if changed {
+        kick_reconcile();
+    }
+    Ok(changed)
+}
+
+/// The governance K2 wants and Sew confirmed for a Space.
+pub fn space_governance(space_id: &str) -> Result<(Option<String>, Option<String>), String> {
+    if !skin_store_exists() {
+        return Ok((None, None));
+    }
+    crate::skin::with_skin_conn(|conn| Ok((governed::governance_wish(conn, space_id)?, governed::governance_confirmed(conn, space_id)?)))
+}
+
+/// K2 refuses to add a box user (`k2:owner`, `k2:connect:`) to a Space it
+/// switched (or is switching) to `app`: box users are never members of an
+/// App-governed Space (Rosson's ruling 1).
+pub fn governed_refuses_box_user(space_id: &str, ext: &sew_wire::ExternalId) -> Result<bool, String> {
+    if !ext.is_box_user() || !skin_store_exists() {
+        return Ok(false);
+    }
+    crate::skin::with_skin_conn(|conn| governed::wants_app(conn, space_id))
+}
+
+/// Record each bound App's chat facts (the daemon reads its live manifest
+/// and resolves handles) before the sweep plans the sync.
+pub fn note_app_chat_facts(apps: &[governed::AppFacts]) -> Result<usize, String> {
+    if !skin_store_exists() {
+        return Ok(0);
+    }
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| governed::note_app_facts(conn, apps, now))
+}
+
+/// `k2 app chat <app>`: the read-only view.
+pub fn governed_view(app_id: &str) -> Result<governed::AppView, String> {
+    crate::skin::with_skin_conn(|conn| governed::view(conn, app_id))
+}
+
+/// The App's own lists (`chat.setChannels`): stored, then synced within
+/// seconds. Returns how many changed.
+pub fn set_app_member_lists(app_id: &str, lists: &[governed::AppList], actor: &str) -> Result<usize, String> {
+    let now = outbox::now_secs();
+    let n = crate::skin::with_skin_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("app lists begin: {e}"))?;
+        let n = governed::set_app_lists(&tx, app_id, lists, actor, now)?;
+        tx.commit().map_err(|e| format!("app lists commit: {e}"))?;
+        Ok(n)
+    })?;
+    if n > 0 {
+        kick_reconcile();
+    }
+    Ok(n)
+}
+
+/// Why an App's own chat call (`chat.channels`, `chat.setChannels`) is
+/// refused before anything is sent: `(status, code, hint)`.
+pub type AppCallRefusal = (u16, &'static str, String);
+
+/// The App-governed Space an App's own call acts in: the one it names
+/// (bound to it), or its only bound Space. Needs Sew's flag and the App's
+/// chat key.
+pub fn governed_space_for_app(app_id: &str, space: Option<&str>) -> Result<Result<String, AppCallRefusal>, String> {
+    if !skin_store_exists() {
+        return Ok(Err((409, "chat_unavailable", "chat is not set up on this box".into())));
+    }
+    crate::skin::with_skin_conn(|conn| {
+        if !features::has(conn, CHAT_KIND, features::APP_GOVERNED_SPACES)? {
+            return Ok(Err((409, "sew_feature_missing", "this box's Sew can't do App-governed Spaces yet (it needs app_governed_spaces)".into())));
+        }
+        if !governed::chat_key(conn, app_id)?.is_some_and(|k| k.enabled) {
+            return Ok(Err((409, "chat_key_required", "this App has no chat key; the owner gives it one (k2 app grant <app> --kind chat-key)".into())));
+        }
+        let mine: Vec<String> = app_space::bindings(conn)?.into_iter().filter(|b| b.app_id == app_id).map(|b| b.space_id).collect();
+        match space.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(s) => match app_space::bound_app(conn, s)? {
+                Some(a) if a == app_id => Ok(Ok(s.to_string())),
+                Some(_) => Ok(Err((409, "app_mismatch", format!("Space {s} belongs to another App; an App acts in its own Spaces only")))),
+                None => Ok(Err((409, "space_unbound", format!("Space {s} is bound to no App")))),
+            },
+            None => match mine.as_slice() {
+                [one] => Ok(Ok(one.clone())),
+                [] => Ok(Err((409, "space_unbound", "this App has no Space bound to it".into()))),
+                _ => Ok(Err((400, "usage", format!("this App has {} Spaces: name one (space)", mine.len())))),
+            },
+        }
+    })
+}
+
+/// An App's own user by username, for `chat.setChannels`: `Ok(principal
+/// id)`, or the item's refusal code (`not_found`: not this App's user, no
+/// oracle; `agent_subject`: an agent login).
+pub fn app_user_for_call(app_id: &str, username: &str) -> Result<Result<String, &'static str>, String> {
+    crate::skin::with_skin_conn(|conn| {
+        let row: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT p.id, p.agent_workspace FROM principals p
+                 JOIN grants a ON a.subject_kind = 'principal' AND a.subject_id = p.id AND a.kind = 'app'
+                                AND a.target_id = ?2 AND a.enabled = 1
+                 WHERE p.username = ?1 COLLATE NOCASE",
+                rusqlite::params![username.trim(), app_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| format!("app user lookup: {e}"))?;
+        Ok(match row {
+            None => Err("not_found"),
+            Some((_, Some(ws))) if !ws.trim().is_empty() => Err("agent_subject"),
+            Some((id, _)) => Ok(id),
+        })
+    })
+}
+
+/// Record the channels an App made itself (Sew's I6 answer).
+pub fn note_app_channel_ops(space_id: &str, app_id: &str, req: &sew_wire::ChannelsBulkRequest, resp: &sew_wire::ChannelsBulkResponse) -> Result<(), String> {
+    let now = outbox::now_secs();
+    crate::skin::with_skin_conn(|conn| governed::note_app_channels(conn, space_id, app_id, req, resp, now))
+}
+
+/// Members first (PRD §5.3): in a keyed App, every App user (an enabled
+/// `kind=app` login grant, not an agent login, not tied) gets a `chat`
+/// member grant if they have none, written as `chat-key:<service id>` and
+/// within the key's `max_members`; a grant K2 wrote that way goes when
+/// the person's login goes (or the key does), unless they still log in to
+/// another keyed App. Each write runs the S27 hook (provision first).
+/// Returns `(granted, removed)`.
+pub fn governed_auto_grants() -> Result<(usize, usize), String> {
+    if !skin_store_exists() {
+        return Ok((0, 0));
+    }
+    let (add, drop) = crate::skin::with_skin_conn(|conn| {
+        if !features::has(conn, CHAT_KIND, features::APP_GOVERNED_SPACES)? || !outbox::target_enabled(conn, CHAT_KIND)? {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        governed::plan_auto_grants(conn)
+    })?;
+    let mut granted = 0;
+    for (principal, app) in &add {
+        let w = SkinGrantWrite {
+            subject_kind: "principal".into(),
+            subject_id: principal.clone(),
+            kind: CHAT_KIND.into(),
+            target_id: String::new(),
+            role: None,
+            scope: Some("member".into()),
+            created_by: Some(format!("{}{app}", governed::AUTO_GRANT_PREFIX)),
+        };
+        match crate::skin::create_grant(&w) {
+            Ok(_) => granted += 1,
+            // Someone wrote one first: that grant stands.
+            Err(e) if e.starts_with("grant already exists") => {}
+            Err(e) => crate::log_debug!("[grant-hook] auto chat grant for {principal} ({app}): {e}"),
+        }
+    }
+    let mut removed = 0;
+    for id in &drop {
+        if crate::skin::delete_grant_by_id_with_cascade(id, ACTOR_RECONCILE)?.is_some() {
+            removed += 1;
+        }
+    }
+    Ok((granted, removed))
 }
 
 /// The Sew unbinds K2 asked for (removed Apps' Spaces).
@@ -1427,6 +1695,9 @@ pub fn note_install_id(kind: &str, install_id: &str) -> Result<bool, String> {
             // are there to unbind.
             policy::forget(&tx)?;
             app_space::forget_unbinds(&tx)?;
+            // Sew 0.6.0: no channel id, sync or leaving box user carries
+            // over to a new install.
+            governed::forget_all(&tx)?;
         }
         tx.commit().map_err(|e| format!("install id commit: {e}"))?;
         Ok(changed)
@@ -1460,14 +1731,34 @@ pub fn record_done(id: &str, status: u16, result: &str) -> Result<(), String> {
         app_space::after_done_unbind(conn, id, result, now)?;
         // K31: a delivered Space op moves the membership ledger on.
         app_space::after_done(conn, id, now)?;
+        // Sew 0.6.0: a channel sync or channel op Sew applied.
+        governed::after_done(conn, id, result, now)?;
+        governed::after_done_channels(conn, id, result, now)?;
         // Sew 0.5.0: an unbind waiting for its Space's member removes can
         // go once they are delivered.
         let removed = conn
-            .query_row("SELECT op FROM tool_outbox WHERE id = ?1", rusqlite::params![id], |r| r.get::<_, String>(0))
+            .query_row("SELECT op, subject_key FROM tool_outbox WHERE id = ?1", rusqlite::params![id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
             .optional()
             .map_err(|e| format!("tool_outbox read: {e}"))?;
-        if removed.as_deref().and_then(Op::parse) == Some(Op::SpaceMemberRemove) {
-            app_space::queue_unbinds(conn, now)?;
+        if let Some((op, subject)) = removed {
+            // Sew 0.6.0 §3a: a removed App's service owner goes once its
+            // Spaces' unbinds are delivered (the settings sweep plans it).
+            if Op::parse(&op) == Some(Op::SpaceUnbind) {
+                kick_reconcile();
+            }
+            if Op::parse(&op) == Some(Op::SpaceMemberRemove) {
+                app_space::queue_unbinds(conn, now)?;
+                // Sew 0.6.0: a box user leaving before the switch to `app`
+                // is out; the switch goes again on the next sweep.
+                let rest = subject.strip_prefix(app_space::SUBJECT_PREFIX).unwrap_or_default();
+                if let Some((space, ext)) = rest.split_once(':') {
+                    if governed::after_box_user_removed(conn, space, ext, now)? {
+                        kick_reconcile();
+                    }
+                }
+            }
         }
         Ok(())
     })
@@ -1507,8 +1798,61 @@ pub fn record_held(id: &str, status: u16, result: &str, why: &str) -> Result<(),
     crate::log_debug!("[grant-hook] row {id} held: {why}");
     crate::skin::with_skin_conn(|conn| {
         outbox::mark_held(conn, id, status as i64, Some(result), why, now)?;
-        app_space::after_held(conn, id, why, now)
+        app_space::after_held(conn, id, why, now)?;
+        governed::after_held(conn, id, why, result, now)
     })
+}
+
+/// Sew 0.6.0 I3: the switch to `app` answered `409 box_users_present`
+/// naming `ids`. The row finishes unsent (`done` with Sew's answer, the
+/// wish stays unsent), each listed box user goes out of the Space through
+/// K31's remove, and the next sweep sends the switch again once they are
+/// out.
+pub fn record_box_users_present(id: &str, status: u16, body: &str, ids: &[String]) -> Result<usize, String> {
+    let now = outbox::now_secs();
+    let n = crate::skin::with_skin_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("box users begin: {e}"))?;
+        let Some(row) = outbox::get(&tx, id)? else { return Ok(0) };
+        let Some(space) = governed::space_of_settings(&row.subject_key).map(str::to_string) else { return Ok(0) };
+        outbox::mark_done(&tx, id, status as i64, Some(body), now)?;
+        let ops = governed::plan_box_user_removes(&tx, &space, ids, now)?;
+        let n = outbox::enqueue(&tx, &ops, &row.actor, now)?.len();
+        tx.commit().map_err(|e| format!("box users commit: {e}"))?;
+        Ok(n)
+    })?;
+    crate::log_debug!("[grant-hook] row {id}: box users present; {n} remove(s) queued before the switch goes again");
+    kick();
+    Ok(n)
+}
+
+/// Sew 0.6.0 I4: a sync item answered `422 member_not_provisioned`. The
+/// row finishes unsent; the person's provision (their chat grant) and the
+/// same sync go again, in that order. Without a chat grant the row is held.
+pub fn record_reprovision(id: &str, status: u16, why: &str) -> Result<(), String> {
+    let now = outbox::now_secs();
+    let ws: Vec<String> = crate::skin::with_skin_conn(|conn| {
+        Ok(outbox::get(conn, id)?
+            .and_then(|r| governed::parse_chan_subject(&r.subject_key))
+            .and_then(|(_, e)| match e {
+                sew_wire::ExternalId::K2Workspace(w) => Some(w),
+                _ => None,
+            })
+            .into_iter()
+            .collect())
+    })?;
+    let ctx = HookCtx::load(ACTOR_RECONCILE, &ws);
+    let again = crate::skin::with_skin_conn(|conn| {
+        let tx = conn.unchecked_transaction().map_err(|e| format!("reprovision begin: {e}"))?;
+        let again = governed::reprovision(&tx, id, &ctx, why, now)?;
+        if !again {
+            outbox::mark_held(&tx, id, status as i64, None, "not provisioned in chat, and no chat grant to provision", now)?;
+        }
+        tx.commit().map_err(|e| format!("reprovision commit: {e}"))?;
+        Ok(again)
+    })?;
+    crate::log_debug!("[grant-hook] row {id}: {why}; provisioned again: {again}");
+    kick();
+    Ok(())
 }
 
 pub fn record_retry(
@@ -1587,6 +1931,34 @@ pub fn chat_member(ext: &str) -> Result<Option<members::MemberRow>, String> {
         return Ok(None);
     }
     crate::skin::with_skin_conn(|conn| members::by_external_id(conn, ext))
+}
+
+/// A6: one mapped member by Sew member id.
+pub fn chat_member_by_id(member_id: &str) -> Result<Option<members::MemberRow>, String> {
+    if !skin_store_exists() {
+        return Ok(None);
+    }
+    crate::skin::with_skin_conn(|conn| members::by_member_id(conn, member_id))
+}
+
+/// Tests: an App's chat key as S1 stores it (`app_chat_keys`, PRD §2.2;
+/// S1 owns that DDL, this only stands in for it until S1 lands).
+#[cfg(any(test, feature = "test-util"))]
+pub fn put_chat_key_for_tests(app_id: &str, max_level: &str, max_members: i64) -> Result<(), String> {
+    crate::skin::with_skin_conn(|conn| {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS app_chat_keys (service_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL, caps TEXT NOT NULL DEFAULT '[]',
+                max_level TEXT NOT NULL DEFAULT 'moderator', uploads INTEGER NOT NULL DEFAULT 1, max_members INTEGER NOT NULL DEFAULT 500,
+                granted_by TEXT, granted_at INTEGER, revoked_at INTEGER)",
+        )
+        .map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO app_chat_keys (service_id, enabled, max_level, max_members) VALUES (?1, 1, ?2, ?3)",
+            rusqlite::params![app_id, max_level, max_members],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    })
 }
 
 /// Tests: map `ext` ↔ `member_id` directly (as a delivered provision would).

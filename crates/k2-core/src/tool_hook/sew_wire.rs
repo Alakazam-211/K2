@@ -108,6 +108,14 @@ pub enum ExternalId {
     K2Connect(String),
     K2Owner,
     Local(String),
+    /// App-governed Spaces (Sew 0.6.0 §3a, flag `app_governed_spaces`): an
+    /// App's **service owner**, `app:<app_id>` (one part, no user). It owns
+    /// the App's Spaces, never signs in, and is hidden as a person. K2 names
+    /// it only as a Space owner (`spaces/create`) and in its deprovision on
+    /// uninstall; it is never a chat grant subject. A two-part
+    /// `app:<app>:<user>` (App-native users, not in 0.6.0) stays
+    /// [`ExternalId::Other`] when read, and is never sent.
+    AppService(String),
     /// Not in sew-proto: a form this mirror does not know yet (e.g. a
     /// Meet link guest `link:<channel>:<id>`, K-M6). Only produced by
     /// lenient deserialization, so a newer Sew's member list still parses;
@@ -120,7 +128,7 @@ impl ExternalId {
     pub fn parse(s: &str) -> Result<ExternalId, String> {
         let bad = || {
             format!(
-                "invalid external id {s:?}: expected k2:principal:<uuid>, k2:workspace:<uuid>, k2:connect:<uuid>, k2:owner or local:<handle>"
+                "invalid external id {s:?}: expected k2:principal:<uuid>, k2:workspace:<uuid>, k2:connect:<uuid>, k2:owner, app:<app id> or local:<handle>"
             )
         };
         if let Some(u) = s.strip_prefix("k2:connect:") {
@@ -147,6 +155,13 @@ impl ExternalId {
                 Err(bad())
             };
         }
+        if let Some(a) = s.strip_prefix("app:") {
+            return if is_app_id(a) && a != crate::skin::HOST_APP_ID {
+                Ok(ExternalId::AppService(a.to_string()))
+            } else {
+                Err(bad())
+            };
+        }
         if let Some(h) = s.strip_prefix("local:") {
             return if is_valid_handle(h) {
                 Ok(ExternalId::Local(h.to_string()))
@@ -166,6 +181,18 @@ impl ExternalId {
     pub fn is_agent(&self) -> bool {
         matches!(self, ExternalId::K2Workspace(_))
     }
+
+    /// A box user: the owner (`k2:owner`) or a Connect login
+    /// (`k2:connect:`). Never a member of an App-governed Space, never
+    /// synced (Rosson 2026-10-30, ruling 1).
+    pub fn is_box_user(&self) -> bool {
+        matches!(self, ExternalId::K2Owner | ExternalId::K2Connect(_))
+    }
+
+    /// The service owner of App `app_id` (`app:<app_id>`).
+    pub fn app_service(app_id: &str) -> Result<ExternalId, String> {
+        ExternalId::parse(&format!("app:{app_id}"))
+    }
 }
 
 impl fmt::Display for ExternalId {
@@ -176,6 +203,7 @@ impl fmt::Display for ExternalId {
             ExternalId::K2Connect(u) => write!(f, "k2:connect:{u}"),
             ExternalId::K2Owner => f.write_str("k2:owner"),
             ExternalId::Local(h) => write!(f, "local:{h}"),
+            ExternalId::AppService(a) => write!(f, "app:{a}"),
             ExternalId::Other(raw) => f.write_str(raw),
         }
     }
@@ -749,6 +777,231 @@ pub fn is_channel_slug(s: &str) -> bool {
         && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
 }
 
+// ── App-governed Spaces (Sew 0.6.0, flag `app_governed_spaces`) ──────
+//
+// sew-55 v2.4 I3, I4, I6: K2's mirror of Sew's documented shapes (Sew
+// 0.6.0 is not released; K2's fake Sew speaks exactly these). Requests are
+// `deny_unknown_fields` like every K2 request type; answers are read
+// leniently, so a newer field never fails a read.
+
+/// I3: `POST /mgmt/v1/spaces/{space_id}/settings` (PRIV1) gains
+/// `governance`.
+pub fn space_settings_path(space_id: &str) -> String {
+    format!("/mgmt/v1/spaces/{space_id}/settings")
+}
+
+/// I4 single: `POST /mgmt/v1/spaces/{space_id}/members/{external_id}/channels`
+/// (the external id percent-encoded in the path).
+pub fn member_channels_path(space_id: &str, ext: &ExternalId) -> String {
+    format!("/mgmt/v1/spaces/{space_id}/members/{}/channels", pct_path(&ext.to_string()))
+}
+
+/// I4 bulk: `POST /mgmt/v1/spaces/{space_id}/members/channels`.
+pub fn member_channels_bulk_path(space_id: &str) -> String {
+    format!("/mgmt/v1/spaces/{space_id}/members/channels")
+}
+
+/// I6: `POST /mgmt/v1/channels/bulk`.
+pub const MGMT_CHANNELS_BULK: &str = "/mgmt/v1/channels/bulk";
+
+/// Percent-encode one path segment (RFC 3986 unreserved bytes kept).
+pub fn pct_path(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Governance values (I3).
+pub const GOVERNANCE_APP: &str = "app";
+pub const GOVERNANCE_SEW: &str = "sew";
+
+/// I3 body: only `governance` (K2 never sends the other PRIV1 fields).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpaceSettingsRequest {
+    /// [`GOVERNANCE_APP`] | [`GOVERNANCE_SEW`].
+    pub governance: String,
+}
+
+/// Levels in an App-governed Space (I4), lowest first.
+pub const LEVELS: [&str; 3] = ["member", "moderator", "admin"];
+
+/// Rank of a level (`member` 0 … `admin` 2); `None` = not a level.
+pub fn level_rank(level: &str) -> Option<usize> {
+    LEVELS.iter().position(|l| *l == level)
+}
+
+/// I4 single body: the person's FULL list of private channels in the
+/// Space (0–5,000) and their level.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberChannelsRequest {
+    pub app_id: String,
+    pub channel_ids: Vec<String>,
+    pub level: String,
+}
+
+/// Most channel ids one I4 item carries.
+pub const MEMBER_CHANNELS_MAX: usize = 5_000;
+/// Most items one I4 bulk call carries.
+pub const MEMBER_CHANNELS_BULK_MAX: usize = 500;
+/// An item with more channel changes than this runs as a Sew job and
+/// answers `queued` (I4, R5).
+pub const MEMBER_CHANNELS_JOB_THRESHOLD: usize = 1_000;
+
+/// One I4 bulk item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberChannelsItem {
+    pub external_id: ExternalId,
+    pub channel_ids: Vec<String>,
+    pub level: String,
+}
+
+/// I4 bulk body (1–500 items).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MemberChannelsBulkRequest {
+    pub app_id: String,
+    pub items: Vec<MemberChannelsItem>,
+}
+
+/// `skipped` values of an I4 answer.
+pub mod skipped {
+    /// Banned in that Space: bans win; K2 holds the item.
+    pub const BANNED: &str = "banned";
+    /// Deprovisioned: a sync never reactivates (R8); K2 holds the item.
+    pub const DEPROVISIONED: &str = "deprovisioned";
+    /// The Space owner (the App's service owner): a sync never changes it.
+    pub const OWNER: &str = "owner";
+}
+
+/// I4 answer for one person, read leniently:
+/// `{added, removed, unchanged, level, unknown_channel_ids, skipped}`, plus
+/// `queued: true` when the item ran as a Sew job (over
+/// [`MEMBER_CHANNELS_JOB_THRESHOLD`] channel changes).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberChannelsResponse {
+    #[serde(default)]
+    pub added: Value,
+    #[serde(default)]
+    pub removed: Value,
+    #[serde(default)]
+    pub unchanged: Value,
+    #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub unknown_channel_ids: Vec<String>,
+    #[serde(default)]
+    pub skipped: Option<String>,
+    #[serde(default)]
+    pub queued: bool,
+}
+
+/// An error inside a per-item answer (bulk I4, I6), read leniently.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemError {
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub hint: String,
+    #[serde(default)]
+    pub details: Map<String, Value>,
+}
+
+impl ItemError {
+    /// `details.reason`, else the code.
+    pub fn reason(&self) -> &str {
+        self.details.get("reason").and_then(Value::as_str).unwrap_or(self.code.as_str())
+    }
+}
+
+/// One answered I4 bulk item: the result, or that item's own error (with
+/// its status: 409, 422 …).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberChannelsBulkItem {
+    pub external_id: ExternalId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ItemError>,
+    #[serde(flatten)]
+    pub result: MemberChannelsResponse,
+}
+
+/// I4 bulk answer, one entry per item.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberChannelsBulkResponse {
+    #[serde(default)]
+    pub items: Vec<MemberChannelsBulkItem>,
+}
+
+/// One I6 op: `ensure` | `rename` | `archive` | `unarchive`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelOp {
+    pub op: String,
+    /// `ensure` names the channel by slug (the others may too).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slug: Option<String>,
+    /// `rename`/`archive`/`unarchive` name it by id when K2 knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// `text` | `voice` (`ensure`).
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private: Option<bool>,
+    /// Voice: 0–99 (0 = no limit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_limit: Option<u32>,
+}
+
+/// I6 body (1–200 ops).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelsBulkRequest {
+    pub space_id: String,
+    pub app_id: String,
+    pub ops: Vec<ChannelOp>,
+}
+
+/// Most ops one I6 call carries.
+pub const CHANNELS_BULK_MAX: usize = 200;
+
+/// One answered I6 op (in request order), read leniently.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelOpResult {
+    #[serde(default)]
+    pub op: String,
+    #[serde(default)]
+    pub slug: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    /// The channel's CURRENT name (an `ensure` never renames).
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub created: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<ItemError>,
+}
+
+/// I6 answer, one entry per op.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChannelsBulkResponse {
+    #[serde(default)]
+    pub results: Vec<ChannelOpResult>,
+}
+
 // ── errors (`sew_proto::error`) ──────────────────────────────────────
 
 /// `{"ok": false, "error": {code, hint, details}}`.
@@ -802,6 +1055,31 @@ pub mod reasons {
     /// 409 (Sew 0.5.0): a bind to another App while the Space is an orphan
     /// of one; `spaces/release` first.
     pub const SPACE_BOUND_ELSEWHERE: &str = "space_bound_elsewhere";
+    // App-governed Spaces (Sew 0.6.0, sew-55 v2.4 §10).
+    /// 409 on the switch to `app`: box users other than the owner are in
+    /// the Space (`details.external_ids`); K2 removes them, then switches.
+    pub const BOX_USERS_PRESENT: &str = "box_users_present";
+    /// 422: a box user named in a sync item (K2 never sends one).
+    pub const BOX_USER_NOT_ALLOWED: &str = "box_user_not_allowed";
+    /// 409: a sync or channel op in a Space that is still Sew-governed.
+    pub const NOT_APP_GOVERNED: &str = "not_app_governed";
+    /// 409: the switch to `app` without a governing link.
+    pub const NO_GOVERNING_APP: &str = "no_governing_app";
+    /// 422: a level above the App's `max_level`.
+    pub const LEVEL_ABOVE_CEILING: &str = "level_above_ceiling";
+    /// 422: an agent at a level other than `member`.
+    pub const AGENT_LEVEL: &str = "agent_level";
+    /// 422: a sync item for a person Sew has no member for. K2 provisions
+    /// them again, then syncs again (never a member made by the sync).
+    pub const MEMBER_NOT_PROVISIONED: &str = "member_not_provisioned";
+    /// 422: a structure edit in an App-governed Space.
+    pub const GOVERNED_BY_APP: &str = "governed_by_app";
+    /// 409: an owner naming another App's service owner.
+    pub const APP_MISMATCH: &str = "app_mismatch";
+    /// 422: a DM to an App's service owner.
+    pub const SERVICE_MEMBER: &str = "service_member";
+    /// 409: I6 `ensure` of a slug that exists with another type.
+    pub const CHANNEL_TYPE_MISMATCH: &str = "channel_type_mismatch";
 }
 
 #[cfg(test)]

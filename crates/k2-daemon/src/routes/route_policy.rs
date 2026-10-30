@@ -1413,15 +1413,23 @@ pub const ROUTES: &[Route] = &[
     // - S32 K31: App ↔ Space bindings (read: any login; bind/unbind: the
     //   Manage Sew gate in the handler, Admin floor for logins).
     // ("app-spaces" sorts before "approvals": '-' < 'r'.)
+    // Sew 0.6.0: `k2 app chat <app>` (a read), and the governance switch
+    // (the owner or an Admin login in person, with a confirm: the handler).
+    get("/cli/sew/app-chat", Member),
     get("/cli/sew/app-spaces", Member),
     post("/cli/sew/app-spaces/bind", Admin),
+    post("/cli/sew/app-spaces/governance", Admin),
     post("/cli/sew/app-spaces/unbind", Admin),
     // Sew for Apps A6 (0.46.6): chat.member / chat.whois, an App's own
     // pass with chat:read (the handler refuses the rest).
     // Sew for Apps A9 (0.46.6): chat.createChannel, an App's own pass
     // with chat:channels in its own Space (the handler refuses the rest).
     post("/cli/sew/app/channels", NoLogin),
+    // Sew 0.6.0: chat.channels / chat.setChannels, an App's own pass in its
+    // own App-governed Space, with a chat key (the handler refuses the rest).
+    post("/cli/sew/app/channels/bulk", NoLogin),
     get("/cli/sew/app/member", NoLogin),
+    post("/cli/sew/app/member-channels", NoLogin),
     post("/cli/sew/app/whois", NoLogin),
     get("/cli/sew/approvals", Admin),
     post("/cli/sew/approvals/approve", Admin),

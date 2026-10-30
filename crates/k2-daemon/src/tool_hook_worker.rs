@@ -56,6 +56,14 @@
 //! `title`/`pronouns` (A8's copy-back): Sew 0.5.0's provision clears an
 //! absent one, so K2 keeps them managed until Sew 0.5.1.
 //!
+//! Sew 0.6.0 rows (`app_governed_spaces`; `k2_core::tool_hook::governed`):
+//!
+//! | Row | Sent as | Answer |
+//! |---|---|---|
+//! | `space_settings` (subject `space:<id>`) | `POST /mgmt/v1/spaces/{id}/settings {governance}` | 409 `box_users_present` → K31 removes of exactly the listed box users, the switch goes again after; 409 `no_governing_app` → blocked (bind again) |
+//! | `channels_bulk` (subject `chans:<id>`) | `POST /mgmt/v1/channels/bulk` | per op, slug → id; 409 `not_app_governed` → retry |
+//! | `space_member_channels` (subject `chan:<id>:<ext>`) | one due row: `POST …/members/{ext}/channels`; more in one Space: `POST …/members/channels` (≤ 500, key from the rows' keys) | per item ([`send_sync_group`]): `skipped` / `unknown_channel_ids` → held; `queued` → done (read back next sweep); 422 `member_not_provisioned` → provisioned again, then synced again |
+//!
 //! K26: a pass that finished, blocked or held a row, or saw a row fail for
 //! the first time, emits ONE `sew:changed {reason: grant-hook}` (the
 //! app-level `sew_changed` event) so the People and Sew pages refetch.
@@ -158,6 +166,19 @@ pub enum Outcome {
         body: String,
         why: String,
     },
+    /// Sew 0.6.0 I3: the switch to `app` answered `409 box_users_present`;
+    /// K2 removes exactly these box users, then switches again.
+    BoxUsersPresent {
+        status: u16,
+        body: String,
+        ids: Vec<String>,
+    },
+    /// Sew 0.6.0 I4: `422 member_not_provisioned` for a sync item; K2
+    /// provisions the person again, then syncs again.
+    Reprovision {
+        status: u16,
+        why: String,
+    },
 }
 
 /// K31: read a 2xx `space_member_add` answer for the one person the row
@@ -187,7 +208,11 @@ pub fn refine_space(cfg: &WorkerConfig, row: &OutboxRow, outcome: Outcome) -> Ou
 /// K26: does this outcome change what the People / Sew pages show?
 fn visible_change(row: &OutboxRow, outcome: &Outcome) -> bool {
     match outcome {
-        Outcome::Done { .. } | Outcome::Blocked { .. } | Outcome::Held { .. } => true,
+        Outcome::Done { .. }
+        | Outcome::Blocked { .. }
+        | Outcome::Held { .. }
+        | Outcome::BoxUsersPresent { .. }
+        | Outcome::Reprovision { .. } => true,
         // Pending after its FIRST failure (later retries change nothing new).
         Outcome::Retry { .. } => row.attempts == 0,
         Outcome::UsernameRetry { .. } => false,
@@ -267,6 +292,37 @@ pub fn classify(
             status,
             body: resp.body_text(),
             reconcile: false,
+        },
+        // Sew 0.6.0 I3: box users other than the owner are in the Space;
+        // K2 removes exactly those, then switches again.
+        409 if op == Op::SpaceSettings && reason == reasons::BOX_USERS_PRESENT => {
+            let ids = err
+                .as_ref()
+                .and_then(|e| e.error.details.get("external_ids"))
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if ids.is_empty() {
+                Outcome::Blocked { status: Some(status), error: format!("{}: Sew named no external_ids", resp.error_line()) }
+            } else {
+                Outcome::BoxUsersPresent { status, body: resp.body_text(), ids }
+            }
+        }
+        409 if op == Op::SpaceSettings && reason == reasons::NO_GOVERNING_APP => Outcome::Blocked {
+            status: Some(status),
+            error: format!(
+                "{}: Sew holds no governing link for this Space; bind it again (k2 hostchat app-space bind <app> <space>), then retry this row",
+                resp.error_line()
+            ),
+        },
+        // Sew 0.6.0: a channel op in a Space Sew doesn't hold as App-governed
+        // yet (the switch may still be on its way): retry.
+        409 if op == Op::ChannelsBulk && reason == reasons::NOT_APP_GOVERNED => Outcome::Retry {
+            status: Some(status),
+            error: resp.error_line(),
+            delay: backoff(cfg, attempt),
+            target_error: None,
+            stop_target: false,
         },
         409 if code == codes::CONFLICT
             && matches!(op, Op::Provision | Op::Update)
@@ -362,7 +418,155 @@ fn path_for(op: Op) -> &'static str {
         // Sew 0.5.0: the managed-fields policy; a removed App's Space.
         Op::PolicySet => hook::policy::MGMT_POLICIES,
         Op::SpaceUnbind => sew_wire::MGMT_SPACES_UNBIND,
+        // Sew 0.6.0: the Space (and person) are in the path
+        // ([`send_sync_group`], [`hook::home::path_for`]).
+        Op::SpaceMemberChannels => "/mgmt/v1/spaces/{space_id}/members/{external_id}/channels",
+        Op::SpaceSettings => "/mgmt/v1/spaces/{space_id}/settings",
+        Op::ChannelsBulk => sew_wire::MGMT_CHANNELS_BULK,
     }
+}
+
+/// The `Idempotency-Key` of one I4 bulk call: derived from its rows' own
+/// keys in order, so a retry of the same rows sends the same key and
+/// bytes, and any other set gets another key.
+pub fn bulk_key(rows: &[OutboxRow]) -> String {
+    use sha2::{Digest, Sha256};
+    let joined = rows.iter().map(|r| r.idem_key.as_str()).collect::<Vec<_>>().join(",");
+    let hex: String = Sha256::digest(joined.as_bytes()).iter().map(|b| format!("{b:02x}")).collect();
+    format!("k2mcb_{}", &hex[..40])
+}
+
+/// A sync verdict as the row's outcome. `body` is that person's answer.
+fn sync_outcome(cfg: &WorkerConfig, row: &OutboxRow, status: u16, body: String, v: hook::governed::Verdict) -> Outcome {
+    use hook::governed::Verdict as V;
+    match v {
+        V::Synced | V::Queued => Outcome::Done { status, body, reconcile: false },
+        V::Held(why) => Outcome::Held { status, body, why },
+        V::Reprovision(why) => Outcome::Reprovision { status, why },
+        V::Retry(error) => Outcome::Retry {
+            status: Some(status),
+            error,
+            delay: backoff(cfg, row.attempts + 1),
+            target_error: None,
+            stop_target: false,
+        },
+        V::Blocked(error) => Outcome::Blocked { status: Some(status), error },
+    }
+}
+
+/// One sync row's outcome from Sew's whole answer to its call: transport,
+/// 401, 429 and 5xx follow [`classify`]; a 2xx is that person's answer; a
+/// 4xx is read per [`hook::governed::verdict_err`].
+fn sync_call_outcome(cfg: &WorkerConfig, row: &OutboxRow, res: Result<&MgmtResponse, &TransportError>, now: i64) -> Outcome {
+    let Ok(resp) = res else { return classify(cfg, row, res, now) };
+    if resp.is_success() || resp.status == 401 || resp.status == 429 || resp.status >= 500 {
+        return classify(cfg, row, res, now);
+    }
+    let err = resp.error();
+    let code = err.as_ref().map(|e| e.error.code.clone()).unwrap_or_default();
+    let reason = err.as_ref().and_then(|e| e.error.detail_str("reason").map(str::to_string)).unwrap_or_default();
+    sync_outcome(cfg, row, resp.status, resp.body_text(), hook::governed::verdict_err(resp.status, &code, &reason, &resp.error_line()))
+}
+
+/// Send one Space's due sync rows: one row → I4 single; more → I4 bulk
+/// (≤ 500 a call), each item read on its own. Returns whether to stop this
+/// target's pass.
+async fn send_sync_group(
+    cfg: &WorkerConfig,
+    client: &MgmtClient,
+    kind: &str,
+    space: &str,
+    rows: &[OutboxRow],
+    report: &mut PassReport,
+) -> Result<bool, String> {
+    use hook::governed::{verdict_ok, Verdict};
+    use sew_wire::{MemberChannelsBulkItem, MemberChannelsBulkRequest, MemberChannelsBulkResponse, MemberChannelsItem, MemberChannelsRequest, MemberChannelsResponse};
+    let parsed: Vec<(OutboxRow, sew_wire::ExternalId, MemberChannelsRequest)> = rows
+        .iter()
+        .filter_map(|r| {
+            let (_, ext) = hook::governed::parse_chan_subject(&r.subject_key)?;
+            let body = serde_json::from_str::<MemberChannelsRequest>(&r.payload_raw).ok()?;
+            Some((r.clone(), ext, body))
+        })
+        .collect();
+    // A row this worker can't read is a bug: block it loudly.
+    for r in rows.iter().filter(|r| !parsed.iter().any(|(p, _, _)| p.id == r.id)) {
+        report.attempted += 1;
+        apply(kind, r, Outcome::Blocked { status: None, error: "not a channel sync row this K2 can read".into() }, report).await?;
+    }
+    for chunk in parsed.chunks(sew_wire::MEMBER_CHANNELS_BULK_MAX) {
+        let now = k2_core::tool_hook::outbox::now_secs();
+        report.attempted += chunk.len();
+        if chunk.len() == 1 {
+            let (row, ext, _) = &chunk[0];
+            let path = sew_wire::member_channels_path(space, ext);
+            let res = client.post(&path, row.payload_raw.as_bytes(), &row.idem_key, &row.actor).await;
+            let outcome = match res.as_ref() {
+                Ok(r) if r.is_success() => {
+                    let body = r.body_text();
+                    match serde_json::from_str::<MemberChannelsResponse>(&body) {
+                        Ok(a) => sync_outcome(cfg, row, r.status, body, verdict_ok(&a)),
+                        Err(e) => Outcome::Blocked { status: Some(r.status), error: format!("Sew's answer is not a channel sync answer ({e})") },
+                    }
+                }
+                _ => sync_call_outcome(cfg, row, res.as_ref(), now),
+            };
+            if visible_change(row, &outcome) {
+                report.changed += 1;
+            }
+            let (stop, _) = apply(kind, row, outcome, report).await?;
+            if stop {
+                return Ok(true);
+            }
+            continue;
+        }
+        let rows_only: Vec<OutboxRow> = chunk.iter().map(|(r, _, _)| r.clone()).collect();
+        let body = MemberChannelsBulkRequest {
+            app_id: chunk[0].2.app_id.clone(),
+            items: chunk
+                .iter()
+                .map(|(_, ext, b)| MemberChannelsItem { external_id: ext.clone(), channel_ids: b.channel_ids.clone(), level: b.level.clone() })
+                .collect(),
+        };
+        let bytes = serde_json::to_vec(&body).map_err(|e| format!("bulk body: {e}"))?;
+        let key = bulk_key(&rows_only);
+        let res = client.post(&sew_wire::member_channels_bulk_path(space), &bytes, &key, &chunk[0].0.actor).await;
+        let answers: Option<MemberChannelsBulkResponse> = match res.as_ref() {
+            Ok(r) if r.is_success() => serde_json::from_slice(&r.body).ok(),
+            _ => None,
+        };
+        let mut stop = false;
+        for (row, ext, _) in chunk {
+            let outcome = match (res.as_ref(), answers.as_ref()) {
+                (Ok(r), Some(a)) if r.is_success() => match a.items.iter().find(|i: &&MemberChannelsBulkItem| i.external_id == *ext) {
+                    Some(item) => {
+                        let item_body = serde_json::to_string(item).unwrap_or_default();
+                        match &item.error {
+                            Some(e) => sync_outcome(cfg, row, item.status.unwrap_or(422), item_body, hook::governed::verdict_err(item.status.unwrap_or(422), &e.code, e.reason(), &format!("{} {}", e.code, e.hint))),
+                            None => sync_outcome(cfg, row, r.status, item_body, verdict_ok(&item.result)),
+                        }
+                    }
+                    None => Outcome::Blocked { status: Some(r.status), error: format!("Sew's bulk answer named no item for {ext}") },
+                },
+                (Ok(r), None) if r.is_success() => Outcome::Blocked { status: Some(r.status), error: "Sew's answer is not a bulk channel sync answer".into() },
+                _ => sync_call_outcome(cfg, row, res.as_ref(), now),
+            };
+            if let Outcome::Done { body, .. } = &outcome {
+                if serde_json::from_str::<MemberChannelsResponse>(body).is_ok_and(|a| verdict_ok(&a) == Verdict::Queued) {
+                    log_debug!("[grant-hook] {ext} in Space {space}: Sew runs the change as a job (queued)");
+                }
+            }
+            if visible_change(row, &outcome) {
+                report.changed += 1;
+            }
+            let (s, _) = apply(kind, row, outcome, report).await?;
+            stop |= s;
+        }
+        if stop {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// A8 (b): the filled body for a provision row, `Ok(None)` when nothing
@@ -464,8 +668,31 @@ pub async fn pass_once(cfg: &WorkerConfig) -> Result<PassReport, String> {
         let kind = t.kind.clone();
         let rows = {
             let kind = kind.clone();
-            blocking(move || hook::due(&kind, 100)).await?
+            blocking(move || hook::due(&kind, sew_wire::MEMBER_CHANNELS_BULK_MAX)).await?
         };
+        // Sew 0.6.0: a Space's due channel syncs go together (I4 bulk);
+        // everything else row by row, as before (at most 100 a pass).
+        let (sync, rows): (Vec<OutboxRow>, Vec<OutboxRow>) =
+            rows.into_iter().partition(|r| Op::parse(&r.op) == Some(Op::SpaceMemberChannels));
+        let rows: Vec<OutboxRow> = rows.into_iter().take(100).collect();
+        let mut groups: Vec<(String, Vec<OutboxRow>)> = Vec::new();
+        for r in sync {
+            let space = hook::governed::parse_chan_subject(&r.subject_key).map(|(s, _)| s).unwrap_or_default();
+            match groups.iter_mut().find(|(s, _)| *s == space) {
+                Some((_, g)) => g.push(r),
+                None => groups.push((space, vec![r])),
+            }
+        }
+        let mut stopped = false;
+        for (space, g) in &groups {
+            if send_sync_group(cfg, &client, &kind, space, g, &mut report).await? {
+                stopped = true;
+                break;
+            }
+        }
+        if stopped {
+            continue;
+        }
         for row in rows {
             let Some(op) = Op::parse(&row.op).filter(|o| o.delivered_by_s27()) else {
                 continue;
@@ -565,6 +792,8 @@ async fn apply(
             Outcome::Retry { status, error, .. } => format!("retry {status:?} {error}"),
             Outcome::Blocked { status, error } => format!("blocked {status:?} {error}"),
             Outcome::Held { status, why, .. } => format!("held {status} {why}"),
+            Outcome::BoxUsersPresent { status, ids, .. } => format!("box users present {status} {ids:?}"),
+            Outcome::Reprovision { status, why } => format!("reprovision {status} {why}"),
         }
     );
     match outcome {
@@ -626,6 +855,16 @@ async fn apply(
         Outcome::Held { status, body, why } => {
             report.held += 1;
             blocking(move || hook::record_held(&id, status, &body, &why)).await?;
+            Ok((false, false))
+        }
+        Outcome::BoxUsersPresent { status, body, ids } => {
+            report.done += 1;
+            blocking(move || hook::record_box_users_present(&id, status, &body, &ids).map(|_| ())).await?;
+            Ok((false, false))
+        }
+        Outcome::Reprovision { status, why } => {
+            report.retried += 1;
+            blocking(move || hook::record_reprovision(&id, status, &why)).await?;
             Ok((false, false))
         }
     }
@@ -726,6 +965,15 @@ async fn sweep_target(client: &MgmtClient, kind: &str) -> Result<(), String> {
     let k = kind.to_string();
     blocking(move || {
         hook::set_health(&k, true, None)?;
+        // Sew 0.6.0: each bound App's manifest chat block, then members
+        // first (a keyed App's users get their chat grant, which provisions
+        // them before any channel sync).
+        crate::sew::governed::refresh_facts();
+        match hook::governed_auto_grants() {
+            Ok((0, 0)) => {}
+            Ok((a, r)) => log_debug!("[grant-hook] chat-key members: {a} granted, {r} removed"),
+            Err(e) => log_debug!("[grant-hook] chat-key members: {e}"),
+        }
         hook::apply_reconcile(&k, &actual)?;
         // Decision 13: each chat App's signalling origin, then the settings
         // Sew's feature flags say it takes (never by version).

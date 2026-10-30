@@ -436,17 +436,38 @@ fn app_space_bind_needs_a_running_k2_identity_sew() {
 
 // ── floors: every S32 route ─────────────────────────────────────────────
 
+/// Sew 0.6.0 (AG-7): Manage Sew lets an agent reach the governance switch,
+/// but only a person (owner or Admin, with a fresh confirm) flips it.
+#[test]
+fn governance_needs_manage_sew_and_then_a_person() {
+    let t = t();
+    t.enable();
+    let body = json!({"app": "hearth", "spaceId": "spc_1", "governance": "app"});
+    for who in [agent("w-it"), shell("w-it")] {
+        let (st, v) = t.call(&who, APP_SPACES_GOVERNANCE, body.clone());
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "person_only"), "{who:?}: {v}");
+    }
+    for who in [Who::Owner, login(Role::Admin)] {
+        let (st, v) = t.call(&who, APP_SPACES_GOVERNANCE, body.clone());
+        assert_eq!((st.as_str(), code(&v)), ("403 Forbidden", "owner_confirm_required"), "{who:?}: {v}");
+    }
+    assert!(t.ops.effects().is_empty(), "no refused call reached the helper: {:?}", t.ops.effects());
+}
+
 #[test]
 fn every_s32_mutation_needs_manage_sew_and_post() {
     let t = t();
     let _fs = memfs();
     t.enable();
-    let bodies: [(&str, Value); 5] = [
+    let bodies: [(&str, Value); 6] = [
         (APP_URL, json!({"url": "https://x.dev"})),
         (SHIP, json!({"kind": "none"})),
         (MIRROR, json!({"kind": "none"})),
         (APP_SPACES_BIND, json!({"app": "hearth", "spaceId": "spc_1"})),
         (APP_SPACES_UNBIND, json!({"app": "hearth", "spaceId": "spc_1"})),
+        // Sew 0.6.0: the governance switch has the Manage Sew floor too
+        // (and a person gate on top: the test below).
+        (APP_SPACES_GOVERNANCE, json!({"app": "hearth", "spaceId": "spc_1", "governance": "app"})),
     ];
     assert_eq!(bodies.len(), POST_ROUTES.len());
     for (path, body) in &bodies {

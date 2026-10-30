@@ -11162,6 +11162,27 @@ async fn handle_one_request(
             .unwrap_or_else(|e| crate::cli_response::CliResponse::internal_error(e));
             super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
         }
+        // Sew 0.6.0: chat.channels / chat.setChannels, an App's own pass in
+        // its own App-governed Space (floor NoLogin; the handler refuses the
+        // rest). Its own arm: these paths don't start with /cli/skin.
+        p if crate::governed_app_routes::is_route(p) => {
+            let body = if is_post {
+                super::http::read_post_body(&mut *stream, &mut buf).await
+            } else {
+                let _ = stream.read(&mut buf).await;
+                Vec::new()
+            };
+            let presented = super::http::extract_token(&query);
+            let route = p.to_string();
+            let r = if presented.is_some_and(|t| k2_core::skin::is_skin_token(t) && !k2_core::skin::is_api_key_prefix(t)) {
+                let pass = presented.and_then(crate::apps::gateway::resolve_pass);
+                let link = crate::guest_rooms_routes::OnLink::current();
+                crate::governed_app_routes::handle(&route, pass, link, is_post, body).await
+            } else {
+                crate::governed_app_routes::app_pass_required()
+            };
+            super::http::send_response(&mut *stream, r.status, r.content_type, &r.body).await;
+        }
         p if p.starts_with("/cli/skin") => {
             let r = match p {
                 // Room-scope R6 (0.46.1): any live pass reads its own view.

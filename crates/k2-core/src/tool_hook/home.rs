@@ -162,6 +162,11 @@ pub fn forget_app(conn: &Connection, app_id: &str) -> Result<(), String> {
 pub fn sendable(subject: &str, body: &Map<String, Value>, flags: &[String]) -> Option<Value> {
     let has = |f: &str| flags.iter().any(|x| x == f);
     let mut out = Map::new();
+    // Sew 0.6.0: a Space's governance (`space:<id>`), only with
+    // `app_governed_spaces`.
+    if super::governed::space_of_settings(subject).is_some() {
+        return super::governed::sendable(body, flags);
+    }
     if subject == HOME_SUBJECT {
         if !has(features::HOME_CLIENT) {
             return None;
@@ -254,12 +259,24 @@ pub fn plan(conn: &Connection, busy: &std::collections::HashSet<String>) -> Resu
         if busy.contains(&subject) {
             continue;
         }
+        let space = super::governed::space_of_settings(&subject).map(str::to_string);
+        // The switch to `app` goes again only once the box users Sew named
+        // (`box_users_present`) are out.
+        if space.as_deref().is_some_and(|s| super::governed::space_rows_busy(busy, s)) {
+            continue;
+        }
         let Some(body) = serde_json::from_str::<Value>(&body).ok().and_then(|v| v.as_object().cloned()) else { continue };
         let Some(want) = sendable(&subject, &body, &flags) else { continue };
         if sent.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).as_ref() == Some(&want) {
             continue;
         }
-        let op = if subject == HOME_SUBJECT { Op::HomeClient } else { Op::AppSettings };
+        let op = if space.is_some() {
+            Op::SpaceSettings
+        } else if subject == HOME_SUBJECT {
+            Op::HomeClient
+        } else {
+            Op::AppSettings
+        };
         out.push(NewOp {
             tool: CHAT_KIND,
             op,
@@ -279,6 +296,7 @@ pub fn path_for(op: Op, subject: &str) -> Option<String> {
     match op {
         Op::HomeClient => Some(MGMT_HOME_CLIENT.to_string()),
         Op::AppSettings => subject.strip_prefix(APP_PREFIX).map(app_settings_path),
+        Op::SpaceSettings => super::governed::space_of_settings(subject).map(super::sew_wire::space_settings_path),
         _ => None,
     }
 }
@@ -292,12 +310,17 @@ pub fn after_done(conn: &Connection, row_id: &str) -> Result<(), String> {
         .optional()
         .map_err(|e| format!("sew settings row read: {e}"))?;
     let Some((op, subject, payload)) = r else { return Ok(()) };
-    if !matches!(Op::parse(&op), Some(Op::HomeClient | Op::AppSettings)) {
+    let op = Op::parse(&op);
+    if !matches!(op, Some(Op::HomeClient | Op::AppSettings | Op::SpaceSettings)) {
         return Ok(());
     }
     conn.execute("UPDATE tool_sew_settings SET sent_body = ?2 WHERE subject = ?1", params![subject, payload])
-        .map(|_| ())
-        .map_err(|e| format!("sew settings sent: {e}"))
+        .map_err(|e| format!("sew settings sent: {e}"))?;
+    if op == Some(Op::SpaceSettings) {
+        // A Space Sew now holds as App-governed: sync it at once (PRD §4).
+        super::kick_reconcile();
+    }
+    Ok(())
 }
 
 /// A new Sew install owes every setting again.

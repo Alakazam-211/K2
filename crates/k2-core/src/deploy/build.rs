@@ -194,6 +194,7 @@ pub fn folder_manifest(label: &str, cmd: &str) -> super::manifest::Manifest {
         env: Default::default(),
         egress: None,
         box_services: Vec::new(),
+        chat: None,
     }
 }
 

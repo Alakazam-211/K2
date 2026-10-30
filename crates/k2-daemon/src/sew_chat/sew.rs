@@ -234,6 +234,9 @@ pub struct NewSpace {
     pub name: String,
     pub owner_external_id: String,
     pub idempotency_key: String,
+    /// Sew 0.6.0: an App-owned Space (`owner` = `app:<this id>`); Sew
+    /// writes the governing link with the create.
+    pub app_id: Option<String>,
 }
 
 /// One channel's read state as the agent sees it (Sew S14).

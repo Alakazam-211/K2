@@ -74,6 +74,133 @@ pub struct Manifest {
     /// `127.0.0.1:<appPort>` to host `127.0.0.1:<hostPort>`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub box_services: Vec<BoxServiceRequest>,
+    /// App-governed Spaces (0.46.7, prd-app-governed-spaces-k2-v1 §5.1):
+    /// the App's static chat channels and who sees each private one. In a
+    /// Space the App governs, K2 keeps every person's private channels in
+    /// step with their App role. **Needs K2 0.46.7**: older daemons refuse
+    /// a manifest carrying it (pair it with `requires.k2: ">=0.46.7"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatBlock>,
+}
+
+/// Most channels a manifest `chat` block lists.
+pub const CHAT_CHANNELS_MAX: usize = 200;
+
+/// The manifest `chat` block (0.46.7).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatBlock {
+    /// The App's static channels (at most [`CHAT_CHANNELS_MAX`]).
+    #[serde(default)]
+    pub channels: Vec<ChatChannel>,
+    /// App role → `member` | `moderator` | `admin` (default `member`),
+    /// clamped to the chat key's ceiling before K2 sends it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub levels: BTreeMap<String, String>,
+}
+
+/// One manifest channel.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatChannel {
+    /// 1–80 of `a-z 0-9 -` (Sew's channel slug).
+    pub slug: String,
+    /// 1–100 characters.
+    pub name: String,
+    /// `text` (default) | `voice`. Never changes once made (Sew answers
+    /// `channel_type_mismatch`).
+    #[serde(default = "text_kind", rename = "type")]
+    pub kind: String,
+    /// Private channels list who sees them; public ones are open to every
+    /// member of the Space and list nobody.
+    #[serde(default)]
+    pub private: bool,
+    /// Voice only: 0–99 people (0 = no limit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_limit: Option<u32>,
+    /// App roles whose people see this private channel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<String>,
+    /// Agent rooms (workspace handles): a person whose role has a room line
+    /// on one of them sees this private channel.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rooms: Vec<String>,
+    /// Workspaces (handles) that join this private text channel as
+    /// members: the App's own workspace, or a room on one of its roles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<String>,
+    /// The Space id, when the App governs more than one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+}
+
+fn text_kind() -> String {
+    "text".to_string()
+}
+
+impl ChatBlock {
+    /// Every problem with the block: `(field, message)`, errors only. The
+    /// box-side checks (agents an App may name, rooms that exist) run when
+    /// K2 syncs, and show in `k2 app chat <app>`.
+    pub fn problems(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        if self.channels.len() > CHAT_CHANNELS_MAX {
+            out.push(("chat.channels".into(), format!("at most {CHAT_CHANNELS_MAX} channels")));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (i, c) in self.channels.iter().enumerate() {
+            let f = |k: &str| format!("chat.channels[{i}].{k}");
+            if !crate::tool_hook::sew_wire::is_channel_slug(&c.slug) {
+                out.push((f("slug"), format!("'{}': 1 to 80 of a-z, 0-9 and - (starting with a letter or digit)", c.slug)));
+            }
+            if !seen.insert(c.slug.as_str()) {
+                out.push((f("slug"), format!("'{}' is listed twice", c.slug)));
+            }
+            let n = c.name.trim().chars().count();
+            if !(1..=100).contains(&n) {
+                out.push((f("name"), "1 to 100 characters".into()));
+            }
+            match c.kind.as_str() {
+                "text" => {
+                    if c.user_limit.is_some() {
+                        out.push((f("userLimit"), "only voice channels have a userLimit".into()));
+                    }
+                }
+                "voice" => {
+                    if c.user_limit.is_some_and(|l| l > 99) {
+                        out.push((f("userLimit"), "0 to 99 (0 = no limit)".into()));
+                    }
+                    if !c.agents.is_empty() {
+                        out.push((f("agents"), "agents never join calls: a voice channel lists no agents".into()));
+                    }
+                }
+                other => out.push((f("type"), format!("'{other}': text or voice"))),
+            }
+            if !c.private && !(c.roles.is_empty() && c.rooms.is_empty() && c.agents.is_empty()) {
+                out.push((
+                    f("private"),
+                    "a public channel is open to every member of the Space and lists nobody: drop roles, rooms and agents, or make it private".into(),
+                ));
+            }
+            if c.space.as_deref().is_some_and(|s| !crate::tool_hook::sew_wire::is_sew_id(s)) {
+                out.push((f("space"), "a Sew Space id".into()));
+            }
+        }
+        for (role, level) in &self.levels {
+            if crate::tool_hook::sew_wire::level_rank(level).is_none() {
+                out.push((format!("chat.levels.{role}"), format!("'{level}': member, moderator or admin")));
+            }
+        }
+        out
+    }
+
+    /// Roles the block names (in `channels[].roles` and `levels`).
+    pub fn role_names(&self) -> std::collections::BTreeSet<String> {
+        let mut r: std::collections::BTreeSet<String> =
+            self.channels.iter().flat_map(|c| c.roles.iter().map(|x| x.trim().to_ascii_lowercase())).collect();
+        r.extend(self.levels.keys().map(|k| k.trim().to_ascii_lowercase()));
+        r
+    }
 }
 
 /// One manifest `boxServices` entry. A known name (`sew-api`,

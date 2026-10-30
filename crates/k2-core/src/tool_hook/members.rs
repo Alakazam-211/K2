@@ -182,7 +182,7 @@ pub fn reconcile(conn: &Connection, actual: &[MgmtPrincipal], now: i64) -> Resul
         let ext = m.external_id.to_string();
         let principal = match &m.external_id {
             ExternalId::K2Principal(id) => Some(id.clone()),
-            ExternalId::K2Workspace(_) | ExternalId::K2Connect(_) | ExternalId::K2Owner => None,
+            ExternalId::K2Workspace(_) | ExternalId::K2Connect(_) | ExternalId::K2Owner | ExternalId::AppService(_) => None,
             ExternalId::Local(_) | ExternalId::Other(_) => continue,
         };
         let state = if m.deactivated { DEACTIVATED } else { ACTIVE };

@@ -230,6 +230,10 @@ pub fn unbind(conn: &Connection, app_id: &str, space_id: &str, remove_members: b
     if n == 0 {
         return Ok(false);
     }
+    // Sew 0.6.0: Sew's unbind resets the Space to `sew` governance, and a
+    // rebind comes back `sew` (AG-26): K2 forgets its wish and its sync
+    // ledger there, so a sweep never re-sends `app` the owner didn't flip.
+    super::governed::forget_space(conn, space_id)?;
     if remove_members {
         conn.execute("DELETE FROM tool_app_space_kept WHERE space_id = ?1", params![space_id])
             .map_err(|e| format!("app spaces kept: {e}"))?;
@@ -807,6 +811,15 @@ pub fn app_removed(conn: &Connection, app_id: &str, actor: &str, now: i64) -> Re
         unbind(conn, app_id, space, false, actor, now)?;
         want_unbind(conn, app_id, space, Cause::AppRemoved, actor, now)?;
     }
+    // Sew 0.6.0 §3a: the App's service owner (`app:<app_id>`) owns its
+    // Spaces; once their unbinds are sent (ownership passes to the install
+    // owner), it is deprovisioned. Only for an App that had Spaces or a
+    // chat key: anything else never had a service owner.
+    if !spaces.is_empty() || super::governed::chat_key(conn, app_id)?.is_some() {
+        super::governed::want_service_owner_retired(conn, app_id, actor, now)?;
+    }
+    conn.execute("DELETE FROM tool_app_member_lists WHERE app_id = ?1", params![app_id])
+        .map_err(|e| format!("app lists forget: {e}"))?;
     Ok(spaces)
 }
 

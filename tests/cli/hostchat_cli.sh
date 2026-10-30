@@ -473,6 +473,15 @@ assert_eq "agent: purge refused (exit 3)" "$rc" "3"
 run cell hostchat rotate-master --drop-prev
 assert_eq "agent: drop-prev refused (exit 3)" "$rc" "3"
 assert_eq "person-only refusals send nothing" "$(nreq)" "$before"
+# Sew 0.6.0: the governance switch. Usage errors send nothing; inside K2 it
+# asks no confirm and sends the passport (the daemon answers person_only).
+run cell hostchat app-space governance jobs 5101
+assert_eq "governance without app|sew → exit 2" "$rc/$(nreq)" "2/$before"
+run cell hostchat app-space governance jobs 5101 maybe
+assert_eq "governance maybe → exit 2" "$rc/$(nreq)" "2/$before"
+run cell hostchat app-space governance jobs 5101 app
+assert_eq "governance from K2 sends the passport" "$(req_where /cli/sew/app-spaces/governance token)" "$SCOPED"
+assert_eq "governance body (no confirm inside K2)" "$(req_where /cli/sew/app-spaces/governance body)" '{"app": "jobs", "governance": "app", "spaceId": "5101"}'
 
 echo "== release without a Sew pin =="
 touch "$WORK/unreleased"

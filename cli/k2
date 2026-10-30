@@ -15778,6 +15778,81 @@ state = "hidden from Apps" if v["namesHidden"] else "shown to Apps that hold roo
 print("%s: guests names %s%s" % (v["workspace"], state, "" if v.get("changed") else " (already)"))'
 }
 
+# k2 app chat <app> [--json] (Sew 0.6.0, App-governed Spaces): read-only.
+# The App's chat key, each Space bound to it (who governs it), its channels
+# (from the manifest's chat block, or made by the App) and each person's
+# private channels, level and last sync; box users leaving before the switch.
+_app_chat_usage() {
+    cat <<'EOF'
+k2 app chat <app> [--json]
+  What K2 keeps in step for an App's chat (Sew 0.6.0, App-governed Spaces). Read-only.
+  - the chat key (k2 app grant <app> --kind chat-key) and its level ceiling;
+  - each Space bound to the App and who governs it: sew (people run it in chat) or app
+    (k2 hostchat app-space governance <app> <space> app|sew; the owner or an admin, in person);
+  - its channels: the manifest's chat block (static channels; roles/rooms see the private ones;
+    levels; agents) and channels the App made itself; each with Sew's id once made;
+  - each App user's private channels and level, and their last sync: synced, pending (on its
+    way; after their own chat account), queued (Sew runs a large change as a job), or held
+    (banned in that Space, deactivated in chat, an unknown channel: the reason says);
+  - box users (the owner, admins) leaving the Space before it switches to app.
+  The App decides who sees which channel: its manifest's chat block (change it and deploy), or,
+  for channels it makes at run time, its own chat.channels / chat.setChannels calls. No k2 verb
+  edits that; K2 syncs within seconds of any change (App users, roles, the manifest, the switch).
+EOF
+}
+
+cmd_app_chat() {
+    local app="" json_out=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json_out=1; shift ;;
+            -h|--help) _app_chat_usage; return 0 ;;
+            -*) echo "Unknown flag: $1 (k2 app chat <app> [--json])" >&2; exit 2 ;;
+            *) [ -z "$app" ] || { echo "usage: k2 app chat <app> [--json]" >&2; exit 2; }; app="$1"; shift ;;
+        esac
+    done
+    [ -n "$app" ] || { echo "usage: k2 app chat <app> [--json]" >&2; exit 2; }
+    _compute_call GET /cli/sew/app-chat "app=$(urlencode "$app")"
+    if [ "$json_out" = 1 ]; then printf '%s\n' "$_CP_BODY"; return 0; fi
+    printf '%s' "$_CP_BODY" | python3 -c '
+import json, sys
+v = json.load(sys.stdin)
+c = v.get("chat") or {}
+k = c.get("key")
+print("%s (%s)" % (v.get("name"), c.get("appId")))
+if not c.get("feature"):
+    print("  this box'"'"'s Sew has no App-governed Spaces yet (it needs Sew 0.6.0: app_governed_spaces)")
+if k:
+    print("  chat key     %s, level ceiling %s, up to %s people" % ("on" if k.get("enabled") else "off", k.get("maxLevel"), k.get("maxMembers")))
+else:
+    print("  chat key     none (k2 app grant <app> --kind chat-key, the owner in person)")
+print("  manifest     %s channel(s) in its chat block" % c.get("manifestChannels", 0))
+spaces = c.get("spaces") or []
+if not spaces:
+    print("  no Space is bound to this App (k2 chat space create <slug> --name N --app <app>)")
+for s in spaces:
+    g = s.get("governance") or "sew"
+    conf = s.get("governanceConfirmed")
+    note = "" if (conf or "sew") == g else " (sending to Sew)"
+    print("Space %s: governed by %s%s" % (s.get("spaceId"), g, note))
+    for ch in s.get("channels") or []:
+        why = (" (%s)" % ch["why"]) if ch.get("why") else ""
+        print("  #%-24s %-5s %-7s %-8s %s%s" % (ch.get("slug"), ch.get("type"), "private" if ch.get("private") else "public", ch.get("state"), ch.get("channelId") or "-", why))
+    w = s.get("waiting") or {}
+    if w.get("channels"):
+        print("  waiting: channels not made in Sew yet: %s" % ", ".join(w["channels"]))
+    if w.get("agents"):
+        print("  waiting: agents not in chat yet: %s" % ", ".join(w["agents"]))
+    if w.get("refusedAgents"):
+        print("  refused: these may not join the App'"'"'s channels (not its own workspace or a room on its roles): %s" % ", ".join(w["refusedAgents"]))
+    for p in s.get("people") or []:
+        why = (" (%s)" % p["why"]) if p.get("why") else ""
+        who = p.get("username") or p.get("externalId")
+        print("  %-24s %-9s %-8s %s%s" % (who, p.get("level"), p.get("state"), ", ".join(p.get("channels") or []) or "-", why))
+    for l in s.get("leaving") or []:
+        print("  leaving: box user %s (%s)" % (l.get("externalId"), "out" if l.get("state") == "gone" else "being removed"))'
+}
+
 cmd_app_self() {
     local app="" json_out=0
     while [ $# -gt 0 ]; do
@@ -16514,6 +16589,7 @@ cmd_app() {
             ;;
         room-names) shift; cmd_app_room_names "$@" ;;
         self) shift; cmd_app_self "$@" ;;
+        chat) shift; cmd_app_chat "$@" ;;
         usage) shift; cmd_app_usage "$@" ;;
         surfaces) shift; _app_surfaces_usage ;;
         door) shift; _app_door_usage ;;
@@ -62618,6 +62694,16 @@ App Spaces (members: the App's users who also have chat; never Connect owners/ad
           upgraded. Removing an App does the same to its Spaces. app-space bind with the same App
           makes it writable again; another App can bind it only after the Sew install owner
           releases it in Sew's own admin (until then that bind is refused: space_bound_elsewhere).
+  k2 hostchat app-space governance <app> <space-id> app|sew [--json]
+          who governs a bound Space (Sew 0.6.0). app: the App decides who is in which private
+          channel and at what level (its manifest's chat block); people can't change the Space's
+          structure. Needs the App's chat key (k2 app grant <app> --kind chat-key). Box users
+          (the owner, admins) in the Space leave first: K2 removes them itself, then switches (k2 app
+          chat <app> shows them leaving); their messages stay. Without the chat key it is refused
+          (chat_key_required); on a Sew older than 0.6.0, sew_feature_missing. sew: back to Sew's
+          own rules. The owner or an admin, in person (Touch ID or the vault password), from a
+          terminal outside K2; an agent is refused (person_only) and asks a person to run it.
+          The <app> must be the one the Space is bound to. app-spaces shows each Space's governance.
 Home client (each App session sees only its own App's Spaces once Sew has app_scoped_sessions):
   k2 hostchat home [--json]                     the settings, Sew's feature flags, whether Sew has them
   k2 hostchat home client <app>|none            the App whose sessions see every Space (Hearth).
@@ -62824,7 +62910,11 @@ elif verb == "app-spaces":
         print("(no App Spaces bound)")
     for r in rows:
         m = r.get("members") or {}
-        print("%-24s %-28s added %s, held %s, pending %s" % (r.get("appId"), r.get("spaceId"), m.get("added", 0), m.get("held", 0), m.get("pending", 0)))
+        gov = ""
+        if r.get("governance"):
+            conf = r.get("governanceConfirmed")
+            gov = "; governed by: %s%s" % (r["governance"], "" if conf == r["governance"] else " (sending to Sew)")
+        print("%-24s %-28s added %s, held %s, pending %s%s" % (r.get("appId"), r.get("spaceId"), m.get("added", 0), m.get("held", 0), m.get("pending", 0), gov))
     gone = v.get("unbound") or []
     if gone:
         print("Unbound Spaces (an App removed, or app-space unbind; Sew keeps each one read-only for its old App; history and export still work;")
@@ -62834,6 +62924,10 @@ elif verb == "app-spaces":
         print("  %-24s %-28s %s" % (r.get("appId"), r.get("spaceId"), state))
     if v.get("note"):
         print(v["note"], file=sys.stderr)
+elif verb == "app-space-governance":
+    print("Space %s: governed by %s (%s)" % (v.get("spaceId"), v.get("governance"), "changed" if v.get("changed") else "no change"))
+    if v.get("hint"):
+        print(v["hint"])
 elif verb == "recovery-key":
     print(v.get("recoveryKey") or v.get("key") or "")
     if v.get("warning"):
@@ -63329,7 +63423,7 @@ _hostchat_app_space() {
     local noun="$1"; shift
     local sub="${1:-}"
     case "$sub" in
-        bind|unbind|list) shift ;;
+        bind|unbind|list|governance) shift ;;
         *) sub="list" ;;
     esac
     local as_json=0 remove="" pos=()
@@ -63354,6 +63448,23 @@ _hostchat_app_space() {
             local rm_b=""; [ "$sub" = "unbind" ] && [ -n "$remove" ] && rm_b=1
             _hostchat_call POST "/cli/sew/app-spaces/$sub" "$(_compute_json K2_CJ_app="${pos[0]}" K2_CJ_spaceId="${pos[1]}" K2_CJ_removeAppMembers_b="$rm_b")"
             _hostchat_print "app-space-$sub" "$as_json" ;;
+        governance)
+            # Sew 0.6.0: who governs a bound Space. The owner or an admin, in
+            # person (a vault confirm); an agent gets person_only from the
+            # daemon, with the card it asks on.
+            [ -n "${pos[0]:-}" ] && [ -n "${pos[1]:-}" ] && [ -n "${pos[2]:-}" ] || { echo "{\"error\":\"usage\",\"hint\":\"k2 hostchat app-space governance <app> <space-id> app|sew\"}" >&2; exit 2; }
+            case "${pos[2]}" in
+                app|sew) ;;
+                *) echo '{"error":"usage","hint":"governance is app or sew (k2 hostchat app-space governance <app> <space-id> app|sew)"}' >&2; exit 2 ;;
+            esac
+            [ -z "$remove" ] || { echo '{"error":"usage","hint":"--remove-app-members is for unbind"}' >&2; exit 2; }
+            local gtok="" gvia=""
+            if ! _compute_in_session; then
+                gtok="$(_vault_confirm_token chat-governance "${pos[0]}:${pos[1]}:${pos[2]}" "Space ${pos[1]} governed by: ${pos[2]}")" || exit 3
+                gvia=tcp
+            fi
+            _hostchat_call POST /cli/sew/app-spaces/governance "$(_compute_json K2_CJ_app="${pos[0]}" K2_CJ_spaceId="${pos[1]}" K2_CJ_governance="${pos[2]}" K2_CJ_confirmToken="$gtok")" $gvia
+            _hostchat_print app-space-governance "$as_json" ;;
     esac
 }
 
@@ -63654,6 +63765,13 @@ MANAGE  (two gates: the Manage Chat / Voice Hosting switch on your workspace AND
   role create <space> <role> · role add|remove <space> <role> <user>
   ban|unban <space> <user> [--reason "…"] · timeout <space> <user> --for 2h [--reason "…"] (alias mute)
   space create <slug> [--name "…"] [--owner <user>]  (owner = the box owner unless --owner; never an agent)
+  space create <slug> [--name "…"] --app <app>  an App's own Space (needs Sew 0.6.0, else refused:
+                                              sew_feature_missing). <app>: its id or name (k2 app list).
+                                              The App itself owns it (its service owner, which never signs
+                                              in; no person or agent owns it), and it is bound to the App in
+                                              the same step. Prints the new Space's id. It starts Sew-governed;
+                                              to hand it to the App: k2 hostchat app-space governance.
+                                              An agent: only its own workspace's App. Not with --owner.
   (Manage Chat / Voice Hosting is turned on per workspace by the owner/admin, never by the agent itself:
    k2 agent access set <workspace-name> chat_manage on)
 EOF
@@ -63936,7 +64054,7 @@ cmd_chat() {
         -h|--help|help) _chat_usage; return 0 ;;
     esac
     local as_json=0 on_behalf="" key="" broadcast=0 limit="" before="" after="" mention=0 in_addr="" outbox_mode="" timeout=""
-    local private="" role="" allow="" deny="" reason="" dur="" name="" owner="" level="" approval="" space_f="" ws_f=""
+    local private="" role="" allow="" deny="" reason="" dur="" name="" owner="" level="" approval="" space_f="" ws_f="" app_f=""
     local kind="" no_wake=0 respond_to="" all=0 batch="" quiet="" tz="" pos=()
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -63969,6 +64087,7 @@ cmd_chat() {
             --for) [ -n "${2:-}" ] || _chat_usage_err "--for 2h"; dur="$2"; shift 2 ;;
             --name) [ -n "${2:-}" ] || _chat_usage_err "--name \"…\""; name="$2"; shift 2 ;;
             --owner) [ -n "${2:-}" ] || _chat_usage_err "--owner <user>"; owner="${2#@}"; shift 2 ;;
+            --app) [ -n "${2:-}" ] || _chat_usage_err "--app <app>"; app_f="$2"; shift 2 ;;
             --level) [ -n "${2:-}" ] || _chat_usage_err "--level read|reply|send|manage"; level="$2"; shift 2 ;;
             --approval) [ -n "${2:-}" ] || _chat_usage_err "--approval required|none"; approval="$2"; shift 2 ;;
             --space) [ -n "${2:-}" ] || _chat_usage_err "--space <space>"; space_f="$2"; shift 2 ;;
@@ -64141,9 +64260,12 @@ cmd_chat() {
                         *) _chat_usage_err "k2 chat space members list|add|remove <space> [<user|workspace>]" ;;
                     esac ;;
                 create)
-                    [ -n "${pos[1]:-}" ] || _chat_usage_err "k2 chat space create <slug> [--name \"…\"] [--owner <user>]"
+                    [ -n "${pos[1]:-}" ] || _chat_usage_err "k2 chat space create <slug> [--name \"…\"] [--owner <user> | --app <app>]"
+                    if [ -n "$app_f" ] && [ -n "$owner" ]; then
+                        _chat_usage_err "--app and --owner don't go together: an App's Space is owned by the App itself"
+                    fi
                     _chat_call POST /cli/sew/chat/manage/space/create "$(_compute_json K2_CJ_slug="${pos[1]}" K2_CJ_name="$name" \
-                        K2_CJ_owner="$owner" K2_CJ_key="$key")"
+                        K2_CJ_owner="$owner" K2_CJ_key="$key" K2_CJ_app="$app_f")"
                     _chat_print manage "$as_json" ;;
                 *) _chat_usage_err "k2 chat space members …|create <slug>" ;;
             esac ;;

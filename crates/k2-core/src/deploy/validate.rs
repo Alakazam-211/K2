@@ -128,6 +128,32 @@ fn check_manifest(m: &Manifest, errors: &mut Vec<Issue>, warnings: &mut Vec<Issu
             at(k),
         ));
     }
+    // App-governed Spaces (0.46.7): the `chat` block. K2 0.46.6 and older
+    // refuse a manifest carrying it (AG-11).
+    if let Some(c) = &m.chat {
+        // Pinned = the range leaves 0.46.6 out.
+        let pinned = m.requires.as_ref().and_then(|r| r.k2.as_deref()).is_some_and(|r| k2_range_ok(r, "0.46.6") == Ok(false));
+        if !pinned {
+            warnings.push(issue(
+                "needs_k2_0467",
+                "chat needs K2 0.46.7 or newer: K2 0.46.6 and older refuse this Seed. Set requires.k2 to \">=0.46.7\"",
+                at("chat"),
+            ));
+        }
+        for (field, why) in c.problems() {
+            errors.push(issue("chat_invalid", format!("{field}: {why}"), at(&field)));
+        }
+        let declared: std::collections::BTreeSet<String> = m.roles.keys().map(|r| r.trim().to_ascii_lowercase()).collect();
+        for r in c.role_names() {
+            if !declared.contains(&r) {
+                warnings.push(issue(
+                    "chat_role_unknown",
+                    format!("chat names role '{r}', which this manifest's roles don't declare; it works only if the box has an App role by that name"),
+                    at("chat"),
+                ));
+            }
+        }
+    }
     if m.schema != manifest::SCHEMA {
         errors.push(issue("manifest_invalid", format!("schema {} is not supported; this K2 reads schema 1", m.schema), at("schema")));
     }

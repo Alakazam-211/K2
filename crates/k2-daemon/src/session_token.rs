@@ -895,6 +895,10 @@ fn is_agent_verb_when(path: &str, permission_cards_on: bool) -> bool {
         "/cli/sew/app-spaces",
         "/cli/sew/app-spaces/bind",
         "/cli/sew/app-spaces/unbind",
+        // Sew 0.6.0: `k2 app chat` (a read); the governance switch answers
+        // an agent person_only with the card it asks on (AG-7).
+        "/cli/sew/app-chat",
+        "/cli/sew/app-spaces/governance",
         "/cli/app/box",
         "/cli/app/box/prepare",
         "/cli/app/build",

@@ -690,17 +690,37 @@ impl SewChat for SewClientChat {
 
     fn space_create(&self, a: &ActAs, n: &NewSpace) -> R<Space> {
         let slug = Slug::new(&n.slug).map_err(|_| usage_err("a Space slug is lowercase a-z, 0-9 and -"))?;
-        let owner: ExternalId = n.owner_external_id.parse().map_err(|_| usage_err("the Space owner isn't an external id"))?;
         let manager: ExternalId = a.external_id().parse().map_err(|_| usage_err("the acting agent isn't an external id"))?;
-        let req = MgmtSpaceCreateRequest {
-            slug,
-            name: n.name.trim().to_string(),
-            owner,
-            managers: vec![manager],
-            app_id: None,
-            hidden: false,
+        let body = match &n.app_id {
+            // Sew 0.6.0 §3a: an App-owned Space, owned by the App's service
+            // owner. The vendored sew-proto (0.3.x) has no `app:` form, so
+            // the body is built from K2's own mirror of the shape.
+            Some(app) => {
+                let owner = k2_core::tool_hook::sew_wire::ExternalId::app_service(app).map_err(|e| usage_err(&e))?;
+                if n.owner_external_id != owner.to_string() {
+                    return Err(usage_err("an App's Space is owned by the App's service owner"));
+                }
+                serde_json::json!({
+                    "slug": slug.as_str(),
+                    "name": n.name.trim(),
+                    "owner": owner.to_string(),
+                    "managers": [manager.to_string()],
+                    "app_id": app,
+                })
+            }
+            None => {
+                let owner: ExternalId = n.owner_external_id.parse().map_err(|_| usage_err("the Space owner isn't an external id"))?;
+                let req = MgmtSpaceCreateRequest {
+                    slug,
+                    name: n.name.trim().to_string(),
+                    owner,
+                    managers: vec![manager],
+                    app_id: None,
+                    hidden: false,
+                };
+                to_json(&req)?
+            }
         };
-        let body = to_json(&req)?;
         let key = n.idempotency_key.clone();
         let actor = a.actor.clone();
         let resp: MgmtSpaceResponse = self.run(move |m| {

@@ -552,6 +552,12 @@ run cell chat mute hearth loud --for 2h
 assert_eq "mute = timeout body" "$(req_where /cli/sew/chat/manage/timeout body)" '{"for": "2h", "member": "loud", "space": "hearth"}'
 run cell chat space create guild --name "The Guild" --owner @rosson
 assert_eq "space create body" "$(req_where /cli/sew/chat/manage/space/create body)" '{"name": "The Guild", "owner": "rosson", "slug": "guild"}'
+# Sew 0.6.0: an App-owned Space names the App, never an owner.
+run cell chat space create meeting --name "Meeting" --app jobs
+assert_eq "space create --app body" "$(req_where /cli/sew/chat/manage/space/create body)" '{"app": "jobs", "name": "Meeting", "slug": "meeting"}'
+before="$(nreq)"
+run cell chat space create meeting --app jobs --owner @rosson
+assert_eq "--app with --owner → exit 2, nothing sent" "$rc/$(nreq)" "2/$before"
 run cell chat space members add locked bob
 assert_eq "manage refusal → exit 3" "$rc" "3"
 assert_contains "Manage Sew off named" "$err" "chat_manage_off"

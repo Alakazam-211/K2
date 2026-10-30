@@ -199,12 +199,31 @@ struct MemberBody {
     member: String,
 }
 
+/// Sew 0.6.0 (Rosson's ruling 1): box users (the owner, Connect logins)
+/// are never members of a Space K2 switched (or is switching) to App
+/// governance. Sew refuses it too; K2 refuses first.
+pub(crate) fn refuse_box_user_in_governed(space_id: &str, member_id: &str) -> R<()> {
+    let Some(m) = k2_core::tool_hook::chat_member_by_id(member_id).map_err(internal)? else { return Ok(()) };
+    let Ok(ext) = k2_core::tool_hook::sew_wire::ExternalId::parse(&m.external_id) else { return Ok(()) };
+    if k2_core::tool_hook::governed_refuses_box_user(space_id, &ext).map_err(internal)? {
+        return Err(ChatErr::new(
+            "box_user_not_allowed",
+            409,
+            "this Space is governed by its App: the server's owner and admins aren't members of App Spaces (they run things from K2); add App users through the App",
+        ));
+    }
+    Ok(())
+}
+
 fn members_change(c: &Caller, m: &Admin, body: &[u8], add: bool) -> R<Value> {
     let b: MemberBody = parse_body(body)?;
     let sew = backend()?;
     let row = manage_space(c, &b.space)?;
     let a = act(c, m);
     let who = sew.member(&a, &lookup(&b.member)?).map_err(sew_err)?;
+    if add {
+        refuse_box_user_in_governed(&row.space_id, &who.member_id)?;
+    }
     let op = if add { "space.members.add" } else { "space.members.remove" };
     sew_step(c, m, op, Some(&row.space_id), Some(&who.username), None, || {
         if add {
@@ -505,6 +524,33 @@ struct SpaceCreateBody {
     owner: Option<String>,
     #[serde(default)]
     key: Option<String>,
+    /// Sew 0.6.0 (§3a): an App-owned Space, owned by the App's service
+    /// owner `app:<service id>`, bound to the App in the same step.
+    #[serde(default)]
+    app: Option<String>,
+}
+
+/// `--app`: the App's service id, when the caller may make Spaces for it
+/// (an agent: only its own workspace's App). Needs Sew's
+/// `app_governed_spaces`.
+fn app_for_space(m: &Admin, raw: &str) -> R<String> {
+    if !k2_core::tool_hook::sew_has(k2_core::tool_hook::features::APP_GOVERNED_SPACES).map_err(internal)? {
+        return Err(ChatErr::new(
+            "sew_feature_missing",
+            409,
+            "this box's Sew can't make App-owned Spaces yet (it needs Sew 0.6.0: app_governed_spaces); leave out --app",
+        ));
+    }
+    let (svc, _name) = crate::sew::home::resolve_app(raw).map_err(|f| ChatErr::new(&f.code, f.status, &f.hint))?;
+    if let Admin::Agent { project_id, .. } = m {
+        let db = k2_core::db::shared();
+        let conn = db.lock();
+        let own = k2_core::deploy::store::get_app_by_service(&conn, &svc).map_err(internal)?.is_some_and(|a| a.owner_workspace == *project_id);
+        if !own {
+            return Err(ChatErr::new("app_not_yours", 403, "an agent makes App Spaces only for its own workspace's App"));
+        }
+    }
+    Ok(svc)
 }
 
 /// A Space slug: 2–64 of `a-z 0-9 -`, starting with a letter or digit.
@@ -553,11 +599,28 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
         return Err(usage("a Space name is at most 100 characters"));
     }
     let key = manage_key(b.key.as_deref())?;
-    let (owner_ext, owner_name) = owner_external_id(b.owner.as_deref())?;
+    let app = match b.app.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+        Some(_) if b.owner.as_deref().is_some_and(|o| !o.trim().is_empty()) => {
+            return Err(usage("--app and --owner don't go together: an App's Space is owned by the App itself"));
+        }
+        Some(raw) => Some(app_for_space(m, raw)?),
+        None => None,
+    };
+    let (owner_ext, owner_name) = match &app {
+        // Sew 0.6.0 §3a: always explicit, never Sew's default.
+        Some(svc) => (format!("app:{svc}"), format!("app:{svc}")),
+        None => owner_external_id(b.owner.as_deref())?,
+    };
     let sew = backend()?;
     let a = act(c, m);
-    let ns = NewSpace { slug: slug.clone(), name, owner_external_id: owner_ext.clone(), idempotency_key: key };
+    let ns = NewSpace { slug: slug.clone(), name, owner_external_id: owner_ext.clone(), idempotency_key: key, app_id: app.clone() };
     let sp = sew_step(c, m, "space.create", None, Some(&slug), Some(format!("owner={owner_ext}")), || sew.space_create(&a, &ns))?;
+    if let Some(svc) = &app {
+        // Sew wrote the governing link with the create: K2 records the
+        // binding (no separate bind call). It starts Sew-governed.
+        k2_core::tool_hook::app_space_bind(svc, &sp.id, m.label()).map_err(internal)?;
+        crate::sew::s32::emit("app-space");
+    }
     // The creator manages what it created; it keeps its strictest
     // approval mode from the Spaces it already has.
     let approval = {
@@ -587,6 +650,7 @@ fn space_create(c: &Caller, m: &Admin, body: &[u8]) -> R<Value> {
         "ok": true,
         "space": { "id": sp.id, "slug": sp.slug, "name": sp.name },
         "owner": owner_name,
+        "app": app,
         "access": { "level": "manage", "approval": approval.as_str() },
     }))
 }

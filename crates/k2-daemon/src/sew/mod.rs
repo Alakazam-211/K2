@@ -44,6 +44,7 @@
 
 pub mod fetch;
 pub mod health;
+pub mod governed;
 pub mod home;
 pub mod meet;
 pub mod ops;

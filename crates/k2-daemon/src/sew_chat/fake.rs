@@ -743,6 +743,12 @@ impl SewChat for FakeSew {
         if n.owner_external_id.starts_with("k2:workspace:") {
             return Err(SewError::new(400, "invalid_request", "an agent can't own a Space"));
         }
+        if let Some(app) = &n.app_id {
+            // Sew 0.6.0 §3a: the owner is exactly the App's service owner.
+            if n.owner_external_id != format!("app:{app}") {
+                return Err(SewError::new(409, "app_mismatch", "the owner names another App's service owner"));
+            }
+        }
         if s.spaces.iter().any(|x| x.slug == n.slug) {
             return Err(SewError::new(409, "slug_taken", "that Space slug is taken"));
         }

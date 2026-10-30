@@ -56,9 +56,13 @@ pub const MIRROR: &str = "/cli/sew/server/mirror";
 pub const APP_SPACES: &str = "/cli/sew/app-spaces";
 pub const APP_SPACES_BIND: &str = "/cli/sew/app-spaces/bind";
 pub const APP_SPACES_UNBIND: &str = "/cli/sew/app-spaces/unbind";
+/// Sew 0.6.0: who governs a bound Space (`app` | `sew`), person-gated.
+pub const APP_SPACES_GOVERNANCE: &str = "/cli/sew/app-spaces/governance";
+/// Sew 0.6.0: `k2 app chat <app>`, the read-only view of an App's chat.
+pub const APP_CHAT: &str = "/cli/sew/app-chat";
 
-pub const ROUTES: &[&str] = &[APP_URL, SHIP, MIRROR, APP_SPACES, APP_SPACES_BIND, APP_SPACES_UNBIND];
-pub const POST_ROUTES: &[&str] = &[APP_URL, SHIP, MIRROR, APP_SPACES_BIND, APP_SPACES_UNBIND];
+pub const ROUTES: &[&str] = &[APP_URL, SHIP, MIRROR, APP_SPACES, APP_SPACES_BIND, APP_SPACES_UNBIND, APP_SPACES_GOVERNANCE, APP_CHAT];
+pub const POST_ROUTES: &[&str] = &[APP_URL, SHIP, MIRROR, APP_SPACES_BIND, APP_SPACES_UNBIND, APP_SPACES_GOVERNANCE];
 
 /// Bundles kept in an off-box folder (S29 §15.2).
 pub const SHIP_KEEP: usize = 7;
@@ -818,7 +822,7 @@ fn app_space_unbind(who: &Who, v: &Value) -> R<Value> {
 // ── entry ────────────────────────────────────────────────────────────────
 
 /// Route an S32 path. `None` = not an S32 route.
-pub fn route(env: &Env, path: &str, who: &Who, body: &[u8], _params: &HashMap<String, String>) -> Option<R<Value>> {
+pub fn route(env: &Env, path: &str, who: &Who, body: &[u8], params: &HashMap<String, String>) -> Option<R<Value>> {
     if !is_route(path) {
         return None;
     }
@@ -833,6 +837,10 @@ pub fn route(env: &Env, path: &str, who: &Who, body: &[u8], _params: &HashMap<St
     };
     Some(match path {
         APP_SPACES => need_credential(who).and_then(|()| app_spaces_list()),
+        APP_CHAT => need_credential(who).and_then(|()| super::governed::view(params.get("app").map(String::as_str).unwrap_or(""))),
+        // The Manage Sew floor like every S32 mutation, then the person
+        // gate on top (AG-7): Manage Sew is needed, never enough.
+        APP_SPACES_GOVERNANCE => need_manage(who).and_then(|()| super::governed::governance(who, &v)),
         _ => need_manage(who).and_then(|()| match path {
             APP_URL => set_app_url(env, s(&v, "url").ok_or_else(|| no("bad_request", 400, "name url (\"\" clears it)"))?),
             SHIP => set_ship(env, who, &v),

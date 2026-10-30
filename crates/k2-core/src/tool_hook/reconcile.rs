@@ -313,7 +313,9 @@ pub fn plan(
         match &m.external_id {
             ExternalId::K2Owner => {}
             ExternalId::Local(_) => s.ignored_local += 1,
-            ExternalId::Other(_) => s.ignored_other += 1,
+            // An App's service owner (Sew 0.6.0 §3a): Sew makes it; K2
+            // deprovisions it only on the App's uninstall (`governed`).
+            ExternalId::Other(_) | ExternalId::AppService(_) => s.ignored_other += 1,
             ExternalId::K2Principal(_) | ExternalId::K2Workspace(_) | ExternalId::K2Connect(_) => {
                 if m.deactivated {
                     continue;

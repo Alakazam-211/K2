@@ -1,6 +1,7 @@
 // Saving into the prompt stash from a Thread (spec-prompt-stash-v1):
-//   - "Save to stash" in an agent message's menu (right-click, or the ⋯
-//     beside "author · time");
+//   - "Save to stash" in a message's menu (right-click, a long press, or
+//     the ⋯ beside "author · time"; the menu is
+//     components/Thread/ThreadMessageMenu, prd-thread-message-menu-v1);
 //   - the `stash.offer` card: an agent offers a prompt, the person's tap
 //     saves it on this device. Agents never write the stash themselves,
 //     and the tap sends nothing back to the daemon.
@@ -10,7 +11,6 @@ import type { ServerScope } from '@/kessel/server-scope'
 import type { OverlayStashOffer } from '@/components/SessionView/overlayThread'
 import { stashSourceFor } from '@/lib/prompt-stash/compose'
 import { orNull, stashOfferView, type StashSource } from '@/lib/prompt-stash/record'
-import { useContextMenuStore } from '@/stores/context-menu'
 import { saveToStash } from '@/stores/prompt-stash'
 import { useToastStore } from '@/stores/toast'
 import { StashGlyph } from './PromptStash'
@@ -20,18 +20,26 @@ function sourceFor(scope: ServerScope | null, agent: string | null, agentName: s
   return Promise.resolve({ server_id: null, server_label: null, user: null, agent: orNull(agent), agent_name: orNull(agentName) })
 }
 
-/** Save an agent's message text to the stash; true when it was saved. */
+/** Save a Thread message's text to the stash; true when it was saved. */
 export async function stashThreadText(args: {
   scope: ServerScope | null
   text: string
-  /** The sender's address (the message's `from`, group chats too). */
+  /** The sender's address (the message's `from`, group chats too); on the
+   *  person's own message, the Thread it was written to. */
   agent: string | null
   agentName: string | null
+  /** A reply's quoted words (prd-thread-message-menu-v1), kept as quotes. */
+  quotes?: Array<{ text: string; from?: string | null }>
 }): Promise<boolean> {
   const text = args.text.trim()
-  if (!text) return false
+  const quotes = (args.quotes ?? []).filter((q) => q.text.trim().length > 0)
+  if (!text && quotes.length === 0) return false
   try {
-    const r = await saveToStash({ text, source: await sourceFor(args.scope, args.agent, args.agentName) })
+    const r = await saveToStash({
+      text,
+      ...(quotes.length > 0 ? { quotes } : {}),
+      source: await sourceFor(args.scope, args.agent, args.agentName),
+    })
     if (r.status !== 'saved') return false
     useToastStore.getState().addToast('Saved to your stash', 'success', 2500)
     return true
@@ -39,47 +47,6 @@ export async function stashThreadText(args: {
     useToastStore.getState().addToast(`Couldn't save to your stash: ${err instanceof Error ? err.message : String(err)}`, 'error')
     return false
   }
-}
-
-/** An agent message's menu at (x, y). */
-export async function openThreadMessageMenu(
-  x: number,
-  y: number,
-  args: { scope: ServerScope | null; text: string; agent: string | null; agentName: string | null },
-): Promise<void> {
-  const picked = await useContextMenuStore.getState().show(x, y, [
-    { id: 'stash', label: 'Save to stash', icon: <StashGlyph size={12} />, enabled: args.text.trim().length > 0 },
-  ])
-  if (picked === 'stash') await stashThreadText(args)
-}
-
-/** The ⋯ beside an agent message's "author · time": opens its menu. An SVG
- *  (no text), so the meta line reads the same everywhere. */
-export function ThreadMessageMoreButton({
-  onOpen,
-}: {
-  onOpen: (x: number, y: number) => void
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      data-zen-message-more=""
-      aria-label="Message menu"
-      title="More"
-      onClick={(e) => {
-        const r = e.currentTarget.getBoundingClientRect()
-        onOpen(r.left, r.bottom)
-      }}
-      className="cursor-pointer"
-      style={{ background: 'none', border: 'none', padding: '0 4px', marginLeft: 4, color: 'inherit', verticalAlign: 'middle' }}
-    >
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden style={{ display: 'inline-block' }}>
-        <circle cx="5" cy="12" r="2" />
-        <circle cx="12" cy="12" r="2" />
-        <circle cx="19" cy="12" r="2" />
-      </svg>
-    </button>
-  )
 }
 
 /** Offers saved in this window, by Thread message id: one tap is one

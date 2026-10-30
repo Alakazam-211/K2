@@ -15,7 +15,7 @@
 // (`THREAD_ZEN_DESKTOP_TOKENS` on a `[data-k2-thread-zen]` box), so the
 // shapes are Zen's and the colours are the window's.
 
-import { isValidElement, memo, useCallback, useMemo, useState, type CSSProperties, type JSX, type ReactNode, type Ref } from 'react'
+import { isValidElement, memo, useCallback, useMemo, useRef, useState, type CSSProperties, type JSX, type ReactNode, type Ref } from 'react'
 import { ChatMessageBody } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ChoiceCard'
 import { SecretCard } from '@/components/SessionView/SecretCard'
@@ -37,8 +37,16 @@ import {
 import { openSettingsPage } from '@/lib/open-settings-page'
 import type { SettingsSection } from '@/stores/settings'
 import { threadBubbleMaxWidth, useThreadColumnNarrow } from './ThreadColumn'
-import { StashOfferCard, ThreadMessageMoreButton, openThreadMessageMenu } from '@/components/PromptStash/StashFromThread'
+import { StashOfferCard } from '@/components/PromptStash/StashFromThread'
 import { stashOfferView } from '@/lib/prompt-stash/record'
+import { parseThreadReply, threadReplyKey } from '@/lib/thread-reply'
+import {
+  ThreadMessageMoreButton,
+  ThreadReplyQuote,
+  openThreadMessageMenu,
+  useThreadMessageGestures,
+  type ThreadMessageMenuArgs,
+} from './ThreadMessageMenu'
 
 import {
   CHAMFER_CUT,
@@ -441,13 +449,43 @@ export const ThreadBubble = memo(function ThreadBubble({
   // A narrow column (ThreadColumn): the whole column but a small inset.
   const narrow = useThreadColumnNarrow()
   const permissionActions = usePermissionActions(item, onAnswer)
-  // "Save to stash" (spec-prompt-stash-v1) on an agent's message, where the
-  // Thread knows its server (the desktop Thread).
+  // A sent reply (prd-thread-message-menu-v1): its quote draws as a small
+  // line above the person's words.
+  const reply = useMemo(() => (kind === 'text' ? parseThreadReply(text) : null), [kind, text])
+  const bodyText = reply ? reply.rest : text
+  // The message menu (prd-thread-message-menu-v1: Reply, Reply to
+  // selection, Copy, Save to stash), where the Thread knows its server (the
+  // desktop Thread, a Zen conversation). Never on a secret card.
   const source = useThreadAttachmentSource()
   const offer = threadStashOffer(item)
-  const stashText = offer ? stashOfferView(offer).saved : text
-  const menuOn = !mine && !!source && isAgentPost(item) && stashText.trim().length > 0
-  const menuArgs = { scope: source?.scope ?? null, text: stashText, agent: item.doc.from || null, agentName: author }
+  const menuText = offer ? stashOfferView(offer).saved : bodyText
+  const menuOn = !!source && kind !== 'secret' && (menuText.trim().length > 0 || !!reply)
+  const fromLabel = mine ? item.doc.from?.trim() || 'you' : author.split(' · via ')[0]
+  const replyAddr = source?.addr ?? ''
+  const menuArgs = useMemo<ThreadMessageMenuArgs>(
+    () => ({
+      scope: source?.scope ?? null,
+      text: menuText,
+      // Stash source: who sent it; on your own message, the Thread's agent.
+      agent: (mine ? replyAddr : item.doc.from) || null,
+      agentName: mine ? null : author,
+      quote: reply ? { text: reply.quote, from: reply.from } : null,
+      reply:
+        source && replyAddr
+          ? {
+              key: threadReplyKey(source.scope, replyAddr),
+              target: { id: item.id, seq: item.seq, from: fromLabel, addr: replyAddr, text: menuText, part: false },
+            }
+          : null,
+    }),
+    [source, replyAddr, menuText, mine, item.doc.from, item.id, item.seq, author, fromLabel, reply],
+  )
+  const bubbleRef = useRef<HTMLDivElement | null>(null)
+  const openMenu = useCallback(
+    (x: number, y: number, selection: string | null) => void openThreadMessageMenu(x, y, menuArgs, selection),
+    [menuArgs],
+  )
+  const gestures = useThreadMessageGestures(bubbleRef, menuOn ? openMenu : null)
   return (
     <div
       data-zen-message={item.id}
@@ -461,17 +499,9 @@ export const ThreadBubble = memo(function ThreadBubble({
       style={{ alignSelf: mine ? 'flex-end' : 'flex-start', maxWidth: threadBubbleMaxWidth(narrow), minWidth: 0, gap: 3 }}
     >
       {bubble && <div
+        ref={bubbleRef}
         className="selectable-copy"
-        onContextMenu={
-          menuOn
-            ? (e) => {
-                // A selection keeps the webview's own Copy menu.
-                if (window.getSelection()?.toString()) return
-                e.preventDefault()
-                void openThreadMessageMenu(e.clientX, e.clientY, menuArgs)
-              }
-            : undefined
-        }
+        {...(menuOn ? gestures : {})}
         data-zen-bubble={mine ? 'me' : 'agent'}
         data-chamfer=""
         style={{
@@ -493,7 +523,8 @@ export const ThreadBubble = memo(function ThreadBubble({
           }),
         }}
       >
-        {text && <ChatMessageBody text={text} style={BUBBLE_BODY_STYLE} />}
+        {reply && <ThreadReplyQuote reply={reply} />}
+        {bodyText && <ChatMessageBody text={bodyText} style={BUBBLE_BODY_STYLE} />}
         {kind === 'choice' && item.doc.choice && (
           <ChoiceCard
             options={item.doc.choice.options}
@@ -566,7 +597,7 @@ export const ThreadBubble = memo(function ThreadBubble({
         }}
       >
         <span data-thread-author="">{author}</span> · <span data-thread-time="">{timeLabel}</span>
-        {menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => void openThreadMessageMenu(x, y, menuArgs)} /> : null}
+        {menuOn ? <ThreadMessageMoreButton onOpen={(x, y) => openMenu(x, y, null)} /> : null}
       </span>
       {footer != null && (
         <span

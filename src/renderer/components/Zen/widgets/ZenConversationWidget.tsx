@@ -82,6 +82,7 @@ import { ZEN_DROPDOWN_STYLE } from './ZenChromeControls'
 import { ZenProgressiveBlur } from './ZenProgressiveBlur'
 import { ZenMuteButton, ZenWaitingChip, useZenThreadAutoRead, useZenThreadEntry, zenCardWaiting } from './ZenThreadReadControls'
 import { ZenAgentAvatar, ZenWidgetStyles, initials, useNowSec, useZenRows, useZenThread } from './zen-widget-kit'
+import { threadReplyKey } from '@/lib/thread-reply'
 
 // The bubbles, cards, dots and "Earlier messages" are the shared Thread
 // pieces (`components/Thread/ThreadZenKit`), which the desktop Thread draws
@@ -655,6 +656,9 @@ export function ZenConversation({
     () => (feedScope && feedAddr ? { scope: feedScope, addr: feedAddr } : null),
     [feedScope, feedAddr],
   )
+  // prd-thread-message-menu-v1: a message's Reply goes to this box (the
+  // bubbles' menu keys it by the same server and Thread address).
+  const replyKey = feedScope && feedAddr ? threadReplyKey(feedScope, feedAddr) : null
 
   const note = view?.note ?? null
   const showEmpty = ready && view.loaded && !view.error && items.length === 0
@@ -882,6 +886,7 @@ export function ZenConversation({
               disabled={!ready || note !== null}
               attachments={options.attachments}
               onSend={scrollToBottom}
+              replyKey={replyKey}
               drawer={drawerTurn !== undefined && ready ? <ZenActivityDrawer turn={drawerTurn} /> : undefined}
             />
           </div>

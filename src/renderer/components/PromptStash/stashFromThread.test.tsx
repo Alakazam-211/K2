@@ -63,14 +63,15 @@ afterEach(async () => {
   await closeStashDbForTests()
 })
 
-describe('"Save to stash" on an agent message', () => {
+describe('"Save to stash" in a message\'s menu', () => {
   it('the message menu (right-click or ⋯) saves the text with the agent as its source', async () => {
     renderBubble(agentItem())
     const bubble = document.querySelector('[data-zen-bubble="agent"]') as HTMLElement
     fireEvent.contextMenu(bubble, { clientX: 10, clientY: 20 })
     const menu = useContextMenuStore.getState()
     expect(menu.isOpen).toBe(true)
-    expect(menu.items.map((i) => i.label)).toEqual(['Save to stash'])
+    // No message box open for this Thread here: no Reply (prd-thread-message-menu-v1).
+    expect(menu.items.filter((i) => i.type !== 'separator').map((i) => i.label)).toEqual(['Copy text', 'Save to stash'])
     menu.selectItem('stash')
     await waitFor(() => expect(usePromptStashStore.getState().items).toHaveLength(1))
     const rec = usePromptStashStore.getState().items[0]
@@ -82,11 +83,21 @@ describe('"Save to stash" on an agent message', () => {
     expect(useContextMenuStore.getState().isOpen).toBe(true)
   })
 
-  it('my own message, a person\'s post, and a view with no server get no menu', () => {
-    renderBubble(agentItem({ via: 'compose', author: { kind: 'owner', login: 'owner' } }), { mine: true })
-    expect(screen.queryByRole('button', { name: 'Message menu' })).toBeNull()
-    cleanup()
+  it('my own message saves with the Thread as its source (prd-thread-message-menu-v1)', async () => {
+    renderBubble(agentItem({ from: 'owner', via: 'compose', author: { kind: 'owner', login: 'owner' }, body: 'Ship the parser' }), { mine: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Message menu' }))
+    useContextMenuStore.getState().selectItem('stash')
+    await waitFor(() => expect(usePromptStashStore.getState().items).toHaveLength(1))
+    const rec = usePromptStashStore.getState().items[0]
+    expect(rec.text).toBe('Ship the parser')
+    expect(rec.source).toMatchObject({ agent: 'k2', agent_name: null })
+  })
+
+  it('a person\'s post has the menu; a view with no server and a secret card get none', () => {
     renderBubble(agentItem({ author: { kind: 'user', login: 'ana' } }))
+    expect(screen.getByRole('button', { name: 'Message menu' })).toBeTruthy()
+    cleanup()
+    renderBubble(agentItem({ kind: 'secret', body: 'Paste the key' }))
     expect(screen.queryByRole('button', { name: 'Message menu' })).toBeNull()
     cleanup()
     renderBubble(agentItem(), { source: false })

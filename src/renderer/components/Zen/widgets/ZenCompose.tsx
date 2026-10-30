@@ -37,6 +37,8 @@ import {
   useZenConversationContext,
 } from '@/lib/zen/zen-thread-context'
 import { ThreadContextComposeChip, ThreadContextNote } from '@/components/Thread/ThreadContextChip'
+import { ThreadReplyChip, useThreadReply } from '@/components/Thread/ThreadMessageMenu'
+import { formatThreadReply } from '@/lib/thread-reply'
 import {
   ThreadAttachmentChip,
   ThreadAttachmentChips,
@@ -86,6 +88,7 @@ export function ZenCompose({
   onSend,
   drawer,
   stack = true,
+  replyKey = null,
 }: {
   bridge: ZenWidgetBridge
   address: string
@@ -99,6 +102,10 @@ export function ZenCompose({
   drawer?: React.ReactNode
   /** The desktop Thread's stacked layout past 3 lines (default on). */
   stack?: boolean
+  /** prd-thread-message-menu-v1: the key a message's Reply waits under for
+   *  this conversation (`threadReplyKey` of its server and Thread address);
+   *  null: this box takes no replies. */
+  replyKey?: string | null
 }): React.JSX.Element {
   const [draft, setDraftState] = useState(() => zenComposeDraft(address))
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -109,6 +116,13 @@ export function ZenCompose({
   // as a removable chip; exactly what the chip reads rides the next send.
   const gardenId = bridge.gardens?.current?.()?.id ?? ''
   const boardContext = useZenConversationContext(gardenId, bridge.widgetId)
+  // A message's Reply: a chip above the box; it rides the next send as a quote.
+  const reply = useThreadReply(replyKey)
+  const replyNonce = reply.target?.nonce
+  useEffect(() => {
+    if (replyNonce === undefined || disabled) return
+    ref.current?.focus()
+  }, [replyNonce, disabled])
 
   const setDraft = useCallback(
     (next: string | ((cur: string) => string)) => {
@@ -194,6 +208,7 @@ export function ZenCompose({
     const files = attachments.flatMap((a) => (a.kind === 'file' ? [a.file] : []))
     const held = attachments
     const contextText = boardContext.context?.text
+    const replyTo = reply.target
     // "Recent agents first" (Gardens): this computer spoke to this agent
     // now. Recorded whether the setting is on or not.
     useZenRecentFirstStore.getState().markSent(address)
@@ -203,11 +218,14 @@ export function ZenCompose({
     setDraft('')
     setAttachments([])
     try {
-      await (bridge.call('thread.post', address, text, {
+      // A Reply: the quote and its reference line, then the words.
+      await (bridge.call('thread.post', address, replyTo ? formatThreadReply(replyTo, text) : text, {
         ...(paths.length > 0 ? { paths } : {}),
         ...(files.length > 0 ? { files } : {}),
         ...(contextText ? { context: contextText } : {}),
       }) as Promise<unknown>)
+      // The chip goes with the send (a refused send keeps it).
+      if (replyTo) reply.clear()
     } catch (err) {
       setDraft((cur) => (cur.length === 0 ? text : cur))
       setAttachments((cur) => (cur.length === 0 ? held : cur))
@@ -215,7 +233,7 @@ export function ZenCompose({
     } finally {
       setSending(false)
     }
-  }, [address, attachments, boardContext.context, bridge, disabled, draft, onSend, sending, setDraft])
+  }, [address, attachments, boardContext.context, bridge, disabled, draft, onSend, reply, sending, setDraft])
 
   const pick = useCallback(() => {
     void pickLocalComposeFiles()
@@ -257,8 +275,9 @@ export function ZenCompose({
       <ThreadComposeBox
         stacked={stacked}
         chips={
-          boardContext.context || boardContext.note || attachments.length > 0 ? (
+          reply.target || boardContext.context || boardContext.note || attachments.length > 0 ? (
             <>
+              {reply.target && <ThreadReplyChip target={reply.target} onCancel={reply.clear} />}
               {boardContext.key && boardContext.context && (
                 <ThreadContextComposeChip
                   text={boardContext.context.text}
@@ -315,7 +334,9 @@ export function ZenCompose({
               void send()
             } else if (e.key === 'Escape') {
               e.preventDefault()
-              setDraft('')
+              // A Reply waiting: Esc cancels it first; then Esc clears.
+              if (reply.target) reply.clear()
+              else setDraft('')
             }
             // Plain keys stay in the box; ⌘/Ctrl chords reach the app.
             if (!e.metaKey && !e.ctrlKey) e.stopPropagation()

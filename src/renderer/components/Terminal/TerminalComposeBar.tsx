@@ -102,6 +102,8 @@ import {
   threadComposeStackNext,
   threadComposeTextSlotStyle,
 } from '@/components/Thread/ThreadZenKit'
+import { ThreadReplyChip, useThreadReply } from '@/components/Thread/ThreadMessageMenu'
+import { formatThreadReply, threadReplyKey } from '@/lib/thread-reply'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
 import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
@@ -191,6 +193,9 @@ export function TerminalComposeBar({
     // A new address (the chat was renamed, S4) clears a stale send error.
     setThreadAddrError(null)
   }, [sendOnThread, threadAddr])
+  // prd-thread-message-menu-v1: a message's Reply waits here as a chip and
+  // rides the next Thread send as a quote (lib/thread-reply).
+  const reply = useThreadReply(sendOnThread && threadAddr ? threadReplyKey(scope, threadAddr) : null)
 
   // Draft persistence (thin client): key the draft by this pane's PTY session
   // and back it with localStorage so switching workspaces/tabs restores each
@@ -233,6 +238,12 @@ export function TerminalComposeBar({
   const stashLoaded = usePromptStashStore((s) => s.loaded)
   const stashRemoveAfterUse = usePromptStashStore((s) => s.removeAfterUse)
   const stashChord = stashChordLabel(isMacPlatform())
+  // A Reply picked in the Thread: the box takes focus, ready for the words.
+  const replyNonce = reply.target?.nonce
+  useEffect(() => {
+    if (replyNonce === undefined) return
+    textareaRef.current?.focus()
+  }, [replyNonce])
   useEffect(() => {
     if (usePromptStashStore.getState().loaded) return
     void usePromptStashStore.getState().load().catch((err: unknown) => console.warn('[stash] load failed:', err))
@@ -719,6 +730,7 @@ export function TerminalComposeBar({
     const text = draft.trim()
     const command = slashCommand
     const files = sendOnThread ? pendingFiles : []
+    const replyTo = sendOnThread ? reply.target : null
     if (sending) return
     // S4: files alone are a message.
     if (!composeCanSend({ draft, sending, command }) && files.length === 0) return
@@ -742,7 +754,8 @@ export function TerminalComposeBar({
         const result = await postThreadCompose(
           scope,
           threadAddr,
-          text,
+          // A Reply: the quote and its reference line, then the words.
+          replyTo ? formatThreadReply(replyTo, text) : text,
           command,
           files.length > 0 ? { attachments: files.map((f) => ({ path: f.path })) } : undefined,
         )
@@ -754,6 +767,8 @@ export function TerminalComposeBar({
           setThreadAddrError(result.error)
         } else {
           setThreadAddrError(null)
+          // The chip goes with the send (a refused send keeps it).
+          if (replyTo) reply.clear()
           if (files.length > 0) {
             const sent = new Set(files.map((f) => f.path))
             setThreadFiles((cur) => cur.filter((f) => !sent.has(f.path)))
@@ -787,7 +802,7 @@ export function TerminalComposeBar({
     } finally {
       setSending(false)
     }
-  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, pendingFiles, scope])
+  }, [draft, sending, sessionId, sendOnThread, threadAddr, slashCommand, sessionChrome?.viewTab, pendingFiles, scope, reply])
 
   const slashTypeaheadQuery = composeSlashTypeaheadQuery(draft)
   const slashMatches =
@@ -876,6 +891,22 @@ export function TerminalComposeBar({
         }
         return
       }
+      // Esc with a Reply waiting cancels the reply (the next Esc reaches
+      // the agent as usual).
+      if (
+        e.key === 'Escape' &&
+        sendOnThread &&
+        reply.target &&
+        !e.nativeEvent.isComposing &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        e.preventDefault()
+        e.stopPropagation()
+        reply.clear()
+        return
+      }
       const interrupt = composeInterruptSequence({
         key: e.key,
         ctrlKey: e.ctrlKey,
@@ -959,7 +990,9 @@ export function TerminalComposeBar({
       historyIndex,
       onInjectInput,
       pendingFiles,
+      reply,
       selectSlashCommand,
+      sendOnThread,
       send,
       sending,
       slashCommand,
@@ -1029,6 +1062,7 @@ export function TerminalComposeBar({
     ),
   )
   const hasChips = imagePaths.length > 0 || fileChips.length > 0
+  const replyChip = sendOnThread && reply.target ? <ThreadReplyChip target={reply.target} onCancel={reply.clear} /> : null
   // Must match composeTextareaHeight: 4px pad × 2 + line-height 1.4.
   const firstLineH = Math.round(editorFontSize * 1.4 + 8)
   const btnSize = Math.min(firstLineH, Math.max(16, Math.round(editorFontSize * 1.4)))
@@ -1266,7 +1300,10 @@ export function TerminalComposeBar({
         <ThreadComposeBox
           stacked={stacked}
           chips={
-            hasChips ? (
+            hasChips || replyChip ? (
+              <>
+              {replyChip}
+              {hasChips ? (
               <ThreadAttachmentChips testId="compose-image-previews">
                 {fileChips}
                 {imagePaths.map((path) => (
@@ -1278,6 +1315,8 @@ export function TerminalComposeBar({
                   />
                 ))}
               </ThreadAttachmentChips>
+              ) : null}
+              </>
             ) : undefined
           }
           drawer={
@@ -1370,6 +1409,7 @@ export function TerminalComposeBar({
       {addrError}
       {fileInput}
       {stashOpen ? stashDrawerEl('square') : null}
+      {replyChip}
       <div
         className="flex min-w-0 w-full flex-col bg-[var(--color-bg)]"
         style={{ border: '1px solid var(--color-border)', borderRadius: 0 }}

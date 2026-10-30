@@ -169,6 +169,13 @@ pub enum ParamKind {
     /// A git commit, its full sha or a prefix of at least 7: `git.land
     /// tip=`, the branch tip the person lands (0.46.7).
     Commit,
+    /// A published service or App of the asking workspace, by name:
+    /// `vault.share-service service=`. Checked in that workspace only; a
+    /// service of the same name elsewhere is never reached.
+    Service,
+    /// The name a secret arrives under (an env variable or a file), never a
+    /// value: `vault.share-service env_name=`, `file_name=`.
+    DeliveryName,
 }
 
 /// One value an action takes (`key=value` on the CLI).
@@ -262,15 +269,21 @@ pub enum ConfirmAction {
     /// id.
     #[serde(rename = "sew-rollback-data-loss")]
     SewRollbackDataLoss,
+    /// Sharing a vault secret with the agent's own service (the card
+    /// `vault.share-service`); bound to the request id, whose stored values
+    /// name the secret, the service and the delivery.
+    #[serde(rename = "vault-share-service")]
+    VaultShareService,
 }
 
 impl ConfirmAction {
-    pub const ALL: [ConfirmAction; 5] = [
+    pub const ALL: [ConfirmAction; 6] = [
         ConfirmAction::AppApprove,
         ConfirmAction::NodeAdmin,
         ConfirmAction::VaultMove,
         ConfirmAction::ChatOwnerHandoff,
         ConfirmAction::SewRollbackDataLoss,
+        ConfirmAction::VaultShareService,
     ];
 
     /// The `CONFIRM_ACTIONS` string (`vaultApi.confirmStart(<this>, …)`).
@@ -281,6 +294,7 @@ impl ConfirmAction {
             ConfirmAction::VaultMove => "vault-move",
             ConfirmAction::ChatOwnerHandoff => "chat-owner-handoff",
             ConfirmAction::SewRollbackDataLoss => "sew-rollback-data-loss",
+            ConfirmAction::VaultShareService => "vault-share-service",
         }
     }
 }
@@ -652,7 +666,7 @@ mod tests {
     #[test]
     fn the_card_confirms_are_app_approve_node_admin_vault_move_and_the_two_sew_ones() {
         let names: Vec<&str> = ConfirmAction::ALL.iter().map(|c| c.as_str()).collect();
-        assert_eq!(names, ["app-approve", "node-admin", "vault-move", "chat-owner-handoff", "sew-rollback-data-loss"]);
+        assert_eq!(names, ["app-approve", "node-admin", "vault-move", "chat-owner-handoff", "sew-rollback-data-loss", "vault-share-service"]);
         for c in ConfirmAction::ALL {
             assert_eq!(serde_json::to_value(c).unwrap(), serde_json::Value::String(c.as_str().to_string()));
         }

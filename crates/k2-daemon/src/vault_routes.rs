@@ -197,6 +197,37 @@ fn refuse_policy(e: &VaultError, c: &VaultCaller, body: &[u8]) -> CliResponse {
     }
 }
 
+/// `k2 publish secret add` / `k2 vault grant --to service:` refused to an
+/// agent, where a card can do it ([`share_card_for`]): the refusal also names
+/// the secret, the service and the delivery, so the permission-card wrapper
+/// can teach `k2 permission request vault.share-service …`. Every other
+/// refusal, and this one with cards off, is byte for byte what it was.
+fn refuse_grant(vault: &LocalVault, c: &VaultCaller, body: &[u8], e: &VaultError) -> CliResponse {
+    if e.code != "vault_owner_confirm_required" || !c.is_passport() {
+        return refuse(e);
+    }
+    let asked = (|| {
+        let b: GrantBody = parse(body).ok()?;
+        let label = b.to.as_deref()?.strip_prefix("service:")?;
+        let m = vault.meta(&selector(c, &b.sel).ok()?, &c.actor).ok()?;
+        let delivery = grant_delivery(&b, || Ok(m.default_delivery)).ok()?;
+        share_card_for(c, &m, delivery).then_some(())?;
+        let service = crate::permission::actions::vault::own_service(c.workspace_id()?, label)?.name;
+        let mut out = json!({ "code": e.code, "hint": e.hint, "secret": m.name, "service": service, "as": delivery.as_str() });
+        if let Some(n) = b.env_name.as_deref() {
+            out["envName"] = json!(n);
+        }
+        if let Some(n) = b.file_name.as_deref() {
+            out["fileName"] = json!(n);
+        }
+        Some(out)
+    })();
+    match asked {
+        Some(error) => CliResponse { status: status_line(e.status), content_type: "application/json", body: json!({ "error": error }).to_string() },
+        None => refuse(e),
+    }
+}
+
 fn ok(v: Value) -> CliResponse {
     CliResponse::ok_json(v.to_string())
 }
@@ -545,6 +576,12 @@ pub fn handle_on(
             Err(e) => refuse_policy(&not_found_elsewhere(vault, &c, &requested_sel(body, params), e), &c, body),
         };
     }
+    if path == GRANT {
+        return match grant(vault, &c, body) {
+            Ok(v) => ok(v),
+            Err(e) => refuse_grant(vault, &c, body, &not_found_elsewhere(vault, &c, &requested_sel(body, params), e)),
+        };
+    }
     let r = match path {
         STATUS => {
             let mut s = status_json(&vault.status());
@@ -565,7 +602,6 @@ pub fn handle_on(
         SET => set(vault, &c, body),
         ROTATE => rotate(vault, &c, body),
         POLICY => policy(vault, &c, body),
-        GRANT => grant(vault, &c, body),
         REVOKE => revoke(vault, &c, body),
         DISABLE | ENABLE | DESTROY => status_change(vault, &c, path, body),
         GET => get_value(vault, &c, body),
@@ -1528,6 +1564,18 @@ pub fn grant_needs_confirm(actor: &Actor, namespace: Namespace, delivery: Delive
     matches!(actor, Actor::Owner) && namespace == Namespace::User && delivery.readable()
 }
 
+/// What a grant delivers: `--env-name X` alone means env delivery (and
+/// `--file-name` file): a name on a fetch grant would be stored and never
+/// used. With neither, the secret's own default.
+fn grant_delivery(b: &GrantBody, default: impl FnOnce() -> Result<Delivery, VaultError>) -> Result<Delivery, VaultError> {
+    match (b.delivery.as_deref(), &b.env_name, &b.file_name) {
+        (Some(d), _, _) => request_delivery(d),
+        (None, Some(_), None) => Ok(Delivery::Env),
+        (None, None, Some(_)) => Ok(Delivery::File),
+        (None, _, _) => default(),
+    }
+}
+
 pub fn consumer_for(c: &VaultCaller, to: &str) -> Result<Consumer, VaultError> {
     let (kind, id) = to.split_once(':').ok_or_else(|| err("bad_consumer", 400, "use ws:<name>, ws:*, session:<id> or service:<label>"))?;
     match kind {
@@ -1566,14 +1614,7 @@ fn grant(vault: &LocalVault, c: &VaultCaller, body: &[u8]) -> Result<Value, Vaul
     let sel = selector(c, &b.sel)?;
     let to = b.to.as_deref().ok_or_else(|| err("consumer_required", 400, "who gets it? --to ws:<name>"))?;
     let consumer = consumer_for(c, to)?;
-    // `--env-name X` alone means env delivery (and `--file-name` file): a
-    // name on a fetch grant would be stored and never used.
-    let delivery = match (b.delivery.as_deref(), &b.env_name, &b.file_name) {
-        (Some(d), _, _) => request_delivery(d)?,
-        (None, Some(_), None) => Delivery::Env,
-        (None, None, Some(_)) => Delivery::File,
-        (None, _, _) => vault.meta(&sel, &c.actor)?.default_delivery,
-    };
+    let delivery = grant_delivery(&b, || Ok(vault.meta(&sel, &c.actor)?.default_delivery))?;
     if consumer.kind == ConsumerKind::Session && c.actor.agent().is_some_and(|a| a.vault_manage) {
         let scope = vault.meta(&sel, &c.actor)?.scope.kind;
         session_self_grant(&c.actor, scope, session_workspace(&consumer.id))?;
@@ -1661,15 +1702,33 @@ fn service_share_refusal(
     let Some(scope) = scope_flag(&m.scope) else { return e };
     let reason = e.hint.strip_suffix(k2_vault::error::OWNER_CONFIRM_SUFFIX).unwrap_or(&e.hint);
     let env = env_name.map(|n| format!(" --env-name {n}")).unwrap_or_default();
+    // With a card available the closing line asks; the terminal stays the
+    // way to do it without one. Without a card this text is unchanged.
+    let how = if share_card_for(c, &m, delivery) {
+        "The owner or an Admin can allow it on a permission card: run the line below to ask them. They could also run this in their own terminal"
+    } else {
+        "Settings → Vault can't share with a service, so ask the owner or an Admin to run this in their own terminal"
+    };
     VaultError::new(
         e.code,
         e.status,
         format!(
-            "{reason}. Settings → Vault can't share with a service, so ask the owner or an Admin to run this in their own terminal (Terminal or iTerm, not a K2 terminal; it asks for Touch ID or the vault password; --scope is there because their default scope is server): k2 publish secret add {service} {} --scope {scope} --as {}{env}",
+            "{reason}. {how} (Terminal or iTerm, not a K2 terminal; it asks for Touch ID or the vault password; --scope is there because their default scope is server): k2 publish secret add {service} {} --scope {scope} --as {}{env}",
             m.name,
             delivery.as_str()
         ),
     )
+}
+
+/// Can a `vault.share-service` card do what this agent was refused? Cards on
+/// for its workspace, the secret is that workspace's own, and the delivery is
+/// one a card gives (`file`, `env`).
+fn share_card_for(c: &VaultCaller, m: &k2_vault::SecretMeta, delivery: Delivery) -> bool {
+    let Some(ws) = c.workspace_id() else { return false };
+    m.scope.kind == ScopeKind::Workspace
+        && m.scope.id == ws
+        && crate::permission::actions::vault::CHOICES.contains(&delivery.as_str())
+        && k2_core::permission::gate::enabled_for(ws)
 }
 
 /// Papercut 8: what a grant to agent sessions means for the ones already
@@ -1890,6 +1949,8 @@ const CONFIRM_ACTIONS: &[&str] = &[
     // VC-B2: a grant that lets the grantee read the value, from the owner
     // token (`secretId` = the secret's id).
     GRANT_READ_CONFIRM_ACTION,
+    // The `vault.share-service` card: bound to the permission request.
+    crate::permission::actions::vault::SHARE_CONFIRM,
     "kek-rotate",
     "rekey",
     "rollback",
@@ -2061,6 +2122,11 @@ fn confirm_finish(vault: &LocalVault, c: &VaultCaller, body: &[u8], ingress: &st
             return Err(err("clone_plan_mismatch", 400, "the plan changed; preview the clone again"));
         }
         (Some(sid), reason)
+    } else if let Some(reason) = crate::permission::actions::vault::confirm_reason(action, b.secret_id.as_deref()) {
+        // The share card: the sheet says what's being shared with whom from
+        // the request's stored values, never from the client's label.
+        let reason = reason.map_err(|m| err("bad_secret_id", 400, m))?;
+        (b.secret_id.clone(), reason)
     } else if let Some(reason) = crate::app_push::confirm_reason(action, b.secret_id.as_deref()) {
         // App push: the sheet names the App from the daemon's own record,
         // never from the client's label (review A-L1).

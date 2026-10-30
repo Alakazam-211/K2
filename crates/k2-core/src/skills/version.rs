@@ -299,7 +299,8 @@ pub const SKILL_VERSION_WORKSPACE: u32 = 44;
 /// both permission-card switches are on for the workspace.
 /// v1 = 0.46.3, the first release.
 /// v2 = 0.46.6: Apps gain the password-reset card (`apps.user-password-reset`).
-pub const SKILL_VERSION_PERMISSIONS: u32 = 2;
+/// v3: "Your own service or App" (`vault.share-service`).
+pub const SKILL_VERSION_PERMISSIONS: u32 = 3;
 
 // ── Content checksumming ─────────────────────────────────────────────
 

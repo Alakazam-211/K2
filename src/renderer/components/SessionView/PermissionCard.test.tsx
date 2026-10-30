@@ -150,6 +150,17 @@ describe('PermissionCard: a confirm action (§17.11.3, §17.4)', () => {
     await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: 'Allow', confirmToken: 'tok_1' }))
   })
 
+  it('the vault share card takes its own confirm, bound to the request', async () => {
+    const actions = actionsMock()
+    const view = { ...CONFIRM_VIEW, proof: { kind: 'confirm', action: 'vault-share-service', secretId: 'pr_share' } }
+    draw(permissionDoc({ view }), actions)
+    fireEvent.click(screen.getByTestId('permission-allow'))
+    const step = screen.getByTestId('mock-confirm')
+    expect([step.getAttribute('data-action'), step.getAttribute('data-secret')]).toEqual(['vault-share-service', 'pr_share'])
+    fireEvent.click(screen.getByTestId('mock-confirm-ok'))
+    await waitFor(() => expect(actions.answer).toHaveBeenCalledWith({ answer: 'Allow', confirmToken: 'tok_1' }))
+  })
+
   it('"Allow, and let it manage its Apps’ users" shows only when offered, says what the switch covers, and answers with its label', async () => {
     const always = "Allow, and let it manage its Apps' users from now on"
     const actions = actionsMock()

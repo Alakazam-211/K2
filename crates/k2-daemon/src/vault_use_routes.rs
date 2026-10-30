@@ -1287,14 +1287,15 @@ thread_local! {
 }
 
 /// A published service's id from its label (`name`) or id. Agents see
-/// only their own workspace's services.
+/// only their own workspace's services; a name is unique per workspace only,
+/// so their own comes first.
 pub fn published_service_id(c: &VaultCaller, label: &str) -> Result<String, VaultError> {
     let db = k2_core::db::shared();
     let conn = db.lock();
     let row: Option<(String, String)> = conn
         .query_row(
-            "SELECT id, project_id FROM published_services WHERE id = ?1 OR name = ?1 ORDER BY (id = ?1) DESC LIMIT 1",
-            rusqlite::params![label],
+            "SELECT id, project_id FROM published_services WHERE id = ?1 OR name = ?1 ORDER BY (id = ?1) DESC, (project_id = ?2) DESC LIMIT 1",
+            rusqlite::params![label, c.workspace_id().unwrap_or("")],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .ok();

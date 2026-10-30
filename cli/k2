@@ -29610,6 +29610,9 @@ your session to receive it.
 A share they can read (file, env or api) asks you to confirm first, like
 reveal (Touch ID or your vault password), when you run it from your own
 terminal. A K2 terminal can't: share it in Settings → Vault instead.
+An agent refused a share with its own service (a person gave the secret):
+with permission cards on, the refusal ends with the line to ask with:
+k2 permission request vault.share-service as=file|env secret=NAME service=<service>.
 
 Example, a CLI tool that reads its token from the environment:
   k2 vault grant GITHUB_CLI --to ws:<you> --env-name GH_TOKEN
@@ -33103,14 +33106,26 @@ k2 publish secret — vault secrets a published service gets when it starts
   --file-name F    the file's name in $K2_SECRETS_DIR (default: NAME).
                    --file-name alone means --as file.
 
-The service gets it the next time it starts. Running: k2 publish stop
-<service>, then k2 publish start <service>. Exited: k2 publish start
-<service>. remove works the same way: the running process keeps what it got.
+The service gets it the next time it starts: a file in its own
+$K2_SECRETS_DIR, or the env variable. Running: k2 publish stop <service>, then
+k2 publish start <service>. Exited: k2 publish start <service>.
+An App: k2 app restart <app>.
+Removing works the same way: it needs no card, and the running process keeps
+what it got.
 
 An agent can add the secrets its own workspace created. A secret a person
 gave (a Thread secret card, Settings → Vault) only the owner or an Admin
-can share with a service: the refusal prints the exact command for them to
-run in their own terminal (Terminal or iTerm, not a K2 terminal; it asks
+can share with a service. With permission cards on, the refusal ends with
+the line to ask them with, filled in: run it, adding only your reason.
+
+  k2 permission request vault.share-service as=file|env secret=NAME service=<service> --why "<what you need it for>"
+
+They press Allow from their Thread, phone or desktop and confirm it's them.
+That does the share: don't run the add again. You get a [permission:<id>]
+turn saying so; then restart the service. It works only for a secret in your
+own workspace and a service or App of that workspace.
+Cards off (no Ask-with line): the refusal prints the exact command for them
+to run in their own terminal (Terminal or iTerm, not a K2 terminal; it asks
 for Touch ID or the vault password). Don't retry it yourself.
 
 Example: a status page that won't start without MPC_PROGRESS_PIN
@@ -72733,6 +72748,14 @@ A hold (exit 2) already made a request the approvers can see in Settings. Asking
 - K2 writes the card on your Thread: what changes, what it means, how long. Your `--why` shows under it, labelled with your name.
 - People who may approve get Allow and Deny, and a push.
 - The person you're working with, if they can't approve, sees that an admin was asked and that they can keep working with you meanwhile. They can leave the approver a note. You don't need to relay notes, and you never see them.
+
+## Your own service or App
+
+You can't widen a secret a person gave you yourself, so `k2 publish secret add <service> NAME` is refused and ends with the line to ask with:
+
+    k2 permission request vault.share-service as=file secret=NAME service=<service> --why "<what you need it for>"
+
+Run it as printed. The owner or an admin allows it and confirms it's them, and that does the share: don't run the add again. It takes effect the next time the service starts, so when the `[permission:]` turn says approved, restart it yourself (`k2 publish stop` then `k2 publish start`; an App: `k2 app restart`). The service or App reads it from its own `$K2_SECRETS_DIR` (`as=file`) or as an environment variable (`as=env`). It works only for a secret in your own workspace and a service or App of that workspace; the secret's value never shows on the card.
 
 ## Apps
 

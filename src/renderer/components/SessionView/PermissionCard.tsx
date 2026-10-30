@@ -269,7 +269,13 @@ export function PermissionNoteBox({
 
 type Step = { kind: 'idle' } | { kind: 'deny' } | { kind: 'confirm'; answer: string }
 
-type CardConfirmAction = 'app-approve' | 'node-admin' | 'vault-move' | 'chat-owner-handoff' | 'sew-rollback-data-loss'
+type CardConfirmAction =
+  | 'app-approve'
+  | 'node-admin'
+  | 'vault-move'
+  | 'chat-owner-handoff'
+  | 'sew-rollback-data-loss'
+  | 'vault-share-service'
 
 /** The password-reset card's Allow, by the mode the agent asked for. */
 const REVEAL_ALLOW_LABEL: Record<RevealMode, string> = {
@@ -284,7 +290,8 @@ function confirmActionOf(action: string | undefined): CardConfirmAction | null {
     action === 'node-admin' ||
     action === 'vault-move' ||
     action === 'chat-owner-handoff' ||
-    action === 'sew-rollback-data-loss'
+    action === 'sew-rollback-data-loss' ||
+    action === 'vault-share-service'
     ? action
     : null
 }

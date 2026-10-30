@@ -124,7 +124,7 @@ const HOME_APP_WHERE: &str =
 /// and `garden.delete` (walled; K2 presents them too) and the
 /// `garden.access-off` twin (asked only, no wall). Every [`Target::Ask`]
 /// names one of them, never `garden.keep-mine` or a twin.
-pub(crate) const V1_ACTIONS: [&str; 41] = [
+pub(crate) const V1_ACTIONS: [&str; 42] = [
     "compute.use",
     "compute.operate",
     "compute.manage",
@@ -171,6 +171,8 @@ pub(crate) const V1_ACTIONS: [&str; 41] = [
     // workspace's secrets as a file or env (a handed-over or person-given
     // secret it may not widen itself).
     "vault.delivery",
+    // Let the agent give its own service or App a secret a person gave it.
+    "vault.share-service",
     // 0.46.6: pause / resume another workspace's heartbeat.
     "heartbeat.pause-other",
     "heartbeat.resume-other",
@@ -371,6 +373,22 @@ pub(crate) const ROWS: &[Row] = &[
         needs: Some("/error/delivery"),
         params: &[("secret", &[ParamFrom::Response("/error/secret")]), ("delivery", &[ParamFrom::Response("/error/delivery")])],
         ..row(ask("vault.delivery", Floor::Admin), code(403, "vault_owner_confirm_required"), "/cli/vault/policy", POST)
+    },
+    // `k2 publish secret add` / `k2 vault grant --to service:` on a secret
+    // the agent may not widen: the refusal names the secret, the service and
+    // the delivery only when a card can do it (its own workspace's secret,
+    // file or env); any other shape of this refusal isn't requestable.
+    Row {
+        needs: Some("/error/service"),
+        params: &[
+            ("secret", &[ParamFrom::Response("/error/secret")]),
+            ("service", &[ParamFrom::Response("/error/service")]),
+            ("as", &[ParamFrom::Response("/error/as")]),
+            ("env_name", &[ParamFrom::Response("/error/envName")]),
+            ("file_name", &[ParamFrom::Response("/error/fileName")]),
+        ],
+        optional: &["env_name", "file_name"],
+        ..row(ask("vault.share-service", Floor::Admin), code(403, "vault_owner_confirm_required"), "/cli/vault/grant", POST)
     },
     // ── Gardens and sources ────────────────────────────────────────────
     row(ask("gardens.manage", Floor::Admin), code(403, "person_only"), "/cli/sources/", ANY),
@@ -906,6 +924,8 @@ mod tests {
             (403, "POST", "/cli/workspace/swap-canonical", vec![], Some(json!({"project":"/x","provider":"claude"})), json!({"error":{"code":"harness_needs_person","harness":"claude"},"swapped":false}), "agent.harness-switch"),
             // 0.46.6: `k2 vault delivery NAME env` on a secret the agent can't widen.
             (403, "POST", "/cli/vault/policy", vec![], Some(json!({"name":"K2N12_ENROLL_CODE","delivery":"env"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"K2N12_ENROLL_CODE","delivery":"env"}}), "vault.delivery"),
+            // `k2 publish secret add svc NAME` on a secret a person gave.
+            (403, "POST", "/cli/vault/grant", vec![], Some(json!({"name":"PIN","to":"service:svc","as":"file"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"PIN","service":"svc","as":"file"}}), "vault.share-service"),
             // 0.46.6: an agent pausing / resuming another workspace's heartbeat.
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "false"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":false}}), "heartbeat.pause-other"),
             (403, "POST", "/cli/heartbeat/enable", vec![("name", "triage"), ("enabled", "true"), ("workspace", "companion")], None, json!({"error":{"code":"other_workspace","workspace":"companion","heartbeat":"triage","enabled":true}}), "heartbeat.resume-other"),
@@ -1097,6 +1117,34 @@ mod tests {
         assert_eq!(action_of(&p), "agents.manage", "{p}");
     }
 
+    /// `vault.share-service`: the secret, service and delivery come from the
+    /// refusal, names only when the agent gave them. The same code without a
+    /// `service` (a share with another workspace, a secret a card can't
+    /// share) stays "It can't be requested"; on the policy route it stays
+    /// `vault.delivery`.
+    #[test]
+    fn share_service_teaches_only_the_refusal_that_names_a_service() {
+        let p = teach_of(
+            403,
+            "POST",
+            "/cli/vault/grant",
+            &[],
+            Some(json!({"name":"PIN","to":"service:svc","as":"env","envName":"THE_PIN"})),
+            json!({"error":{"code":"vault_owner_confirm_required","hint":"x","secret":"PIN","service":"svc","as":"env","envName":"THE_PIN"}}),
+        )
+        .unwrap();
+        assert_eq!(p["params"], json!({"secret":"PIN","service":"svc","as":"env","env_name":"THE_PIN"}), "{p}");
+        assert_eq!(p["approvers"], "owner or admin");
+        assert_eq!(p["command"], "k2 permission request vault.share-service as=env env_name=THE_PIN secret=PIN service=svc --why \"<what you need it for>\"");
+
+        let p = teach_of(403, "POST", "/cli/vault/grant", &[], Some(json!({"name":"PIN","to":"service:svc"})), json!({"error":{"code":"vault_owner_confirm_required","secret":"PIN","service":"svc","as":"file"}})).unwrap();
+        assert_eq!(p["command"], "k2 permission request vault.share-service as=file secret=PIN service=svc --why \"<what you need it for>\"");
+
+        let p = teach_of(403, "POST", "/cli/vault/grant", &[], Some(json!({"name":"PIN","to":"ws:sales"})), json!({"error":{"code":"vault_owner_confirm_required","hint":"x"}})).unwrap();
+        assert_eq!(p["requestable"], false, "{p}");
+        assert!(p.get("command").is_none(), "{p}");
+    }
+
     /// `sources.approve` teaches the source the agent tried (`name`) and
     /// the spec it reviewed (`specHash`); a batch teaches one ask with the
     /// values left for the agent to fill in. The area's switch still
@@ -1252,7 +1300,7 @@ mod tests {
                 "{code} is machine-only and can't also be a wall"
             );
         }
-        assert_eq!(V1_ACTIONS.len(), 41);
+        assert_eq!(V1_ACTIONS.len(), 42);
         // No two rows can claim the same refusal: the longest prefix must
         // decide alone.
         for (i, a) in ROWS.iter().enumerate() {

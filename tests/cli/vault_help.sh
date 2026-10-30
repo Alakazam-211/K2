@@ -64,7 +64,8 @@ for args in "publish secret --help" "publish secret add --help" "publish secret 
     out="$(k2n $args 2>&1)" || fail "$args exited non-zero: $out"
     printf '%s\n' "$out" | head -1 | grep -Fq "k2 publish secret — vault secrets a published service gets" || fail "$args: $out"
     for want in "--scope <s>" "--as env|file" "--env-name X" "--file-name F" \
-        "k2 publish secret add mpc-progress MPC_PROGRESS_PIN --as env" "with --scope ws:k2-cores added"; do
+        "k2 publish secret add mpc-progress MPC_PROGRESS_PIN --as env" "with --scope ws:k2-cores added" \
+        "k2 permission request vault.share-service as=file|env secret=NAME service=<service>" "k2 app restart <app>"; do
         printf '%s' "$out" | grep -Fq -- "$want" || fail "$args lacks '$want': $out"
     done
 done
@@ -204,6 +205,15 @@ class H(http.server.BaseHTTPRequestHandler):
             f.write(self.path.split("?")[0] + " " + body + "\n")
         if self.path.startswith("/cli/vault/grant"):
             b = json.loads(body or "{}")
+            if b.get("name") == "REFUSED_CARD":
+                data = json.dumps({"error": {"code": "vault_owner_confirm_required", "hint": "a person gave this secret. The owner or an Admin can allow it on a permission card: run the line below to ask them.", "secret": "REFUSED_CARD", "service": "svc", "as": "file"},
+                                   "permission": {"action": "vault.share-service", "params": {"as": "file", "secret": "REFUSED_CARD", "service": "svc"}, "approvers": "owner or admin", "command": "k2 permission request vault.share-service as=file secret=REFUSED_CARD service=svc --why \"<what you need it for>\""}}).encode()
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             if b.get("name") in ("REFUSED_ON", "REFUSED_OFF"):
                 err = {"error": {"code": "vault_owner_confirm_required", "hint": "a person gave this secret, so an agent can't widen where it goes or who can read it. Settings → Vault can't share with a service, so ask the owner to run this in their own terminal outside K2 (it asks for Touch ID or the vault password): k2 publish secret add svc " + b["name"] + " --scope ws:w --as env"}}
                 if b["name"] == "REFUSED_ON":
@@ -354,6 +364,15 @@ printf '%s\n' "$err_on" | head -1 | grep -Fq "vault_owner_confirm_required: a pe
 printf '%s' "$err_off" | grep -Fq "k2 publish secret add svc REFUSED_OFF --scope ws:w --as env" || fail "cards off: hint: $err_off"
 grep -F '/cli/vault/grant {' "$WORK/posts.log" | grep -F '"REFUSED_ON"' | grep -Fq '"to": "service:svc"' || fail "publish secret add posts a service grant: $(cat "$WORK/posts.log")"
 ok "a refused vault grant ends with It can't be requested. (cards on) and stays one line (cards off)"
+
+# A share a card can do: the closing line is the exact one to run.
+set +e
+err_card="$(k2s publish secret add svc REFUSED_CARD --as file 2>&1)"; rc_card=$?
+set -e
+[ "$rc_card" = 3 ] || fail "refused share exits 3: $rc_card: $err_card"
+[ "$(printf '%s\n' "$err_card" | tail -1)" = 'Ask with: k2 permission request vault.share-service as=file secret=REFUSED_CARD service=svc --why "<what you need it for>"' ] || fail "no Ask-with line: $err_card"
+[ "$(printf '%s\n' "$err_card" | grep -c '^Ask with:')" = 1 ] || fail "the Ask-with line printed more than once: $err_card"
+ok "a refused share a card can do ends with the Ask-with line"
 
 # --cwd relative to where k2 runs, not the daemon's folder.
 mkdir -p "$WORK/site"

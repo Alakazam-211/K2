@@ -1393,6 +1393,14 @@ A hold (exit 2) already made a request the approvers can see in Settings. Asking
 - People who may approve get Allow and Deny, and a push.
 - The person you're working with, if they can't approve, sees that an admin was asked and that they can keep working with you meanwhile. They can leave the approver a note. You don't need to relay notes, and you never see them.
 
+## Your own service or App
+
+You can't widen a secret a person gave you yourself, so `k2 publish secret add <service> NAME` is refused and ends with the line to ask with:
+
+    k2 permission request vault.share-service as=file secret=NAME service=<service> --why "<what you need it for>"
+
+Run it as printed. The owner or an admin allows it and confirms it's them, and that does the share: don't run the add again. It takes effect the next time the service starts, so when the `[permission:]` turn says approved, restart it yourself (`k2 publish stop` then `k2 publish start`; an App: `k2 app restart`). The service or App reads it from its own `$K2_SECRETS_DIR` (`as=file`) or as an environment variable (`as=env`). It works only for a secret in your own workspace and a service or App of that workspace; the secret's value never shows on the card.
+
 ## Apps
 
 - App guests never see permission cards. Never tell a guest a switch, agent, server or request id; say an administrator was asked.

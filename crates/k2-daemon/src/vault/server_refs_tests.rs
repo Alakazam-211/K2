@@ -342,6 +342,29 @@ fn ready(mut child: std::process::Child) -> std::process::Child {
     }
 }
 
+/// Windows (until the 0.47 port): K2 can't read another process's start
+/// time or environment, and says so. A running child that holds the value
+/// is "can't tell" (`None`), never "lacks it" (`Some(false)`), and its
+/// start is never claimed, so the upgrade pass never counts live-env
+/// evidence there and falls back to the audit rule (or refuses and lists).
+#[cfg(windows)]
+#[test]
+fn windows_cant_read_a_childs_environment_and_says_so() {
+    let key = uniq("ENVREAD_WIN");
+    let value = format!("k2test_envread_{}", rand_port());
+    let spawned_at = chrono::Utc::now().timestamp();
+    let mut child = ready(env_child().env(&key, &value).spawn().expect("spawn child with env"));
+    let pid = child.id() as i64;
+    let exact = process_env_has(pid, &key, value.as_bytes());
+    let wrong = process_env_has(pid, &key, b"not-the-value");
+    let started = pid_started_near(pid, spawned_at);
+    child.kill().expect("kill child");
+    child.wait().expect("reap child");
+    assert_eq!(exact, None, "a value it holds is can't-tell, not lacks-it");
+    assert_eq!(wrong, None, "a wrong value is can't-tell too, never Some(false)");
+    assert!(!started, "a start time K2 can't read is never claimed");
+}
+
 /// Not a check: the body of [`env_child`]. Sleeps only when spawned as one.
 #[test]
 #[ignore = "child process for the env-read tests"]
@@ -360,6 +383,10 @@ fn env_read_child_sleeps() {
 /// the same secret. A live pid that isn't that start (a reboot reused it),
 /// or a process whose environment lacks the value (environ rewritten for a
 /// title), proves nothing either way: it falls back to the audit path.
+// Windows: reading another process's start time and environment is the 0.47 port
+// (GetProcessTimes, PEB read); windows_cant_read_a_childs_environment_and_says_so
+// checks the safe answer there.
+#[cfg(not(windows))]
 #[test]
 fn a_running_service_is_judged_by_its_own_environment() {
     let _home = crate::test_support::TempHome::new();
@@ -404,6 +431,10 @@ fn a_running_service_is_judged_by_its_own_environment() {
 /// The env read itself: an exact `key=value` is `Some(true)`, a wrong
 /// value (or a prefix of the right one) is `Some(false)`, and a pid that
 /// doesn't exist is `None`, never `Some(false)`.
+// Windows: reading another process's start time and environment is the 0.47 port
+// (GetProcessTimes, PEB read); windows_cant_read_a_childs_environment_and_says_so
+// checks the safe answer there.
+#[cfg(not(windows))]
 #[test]
 fn process_env_has_reads_a_childs_own_environment() {
     let key = uniq("ENVREAD_TEST");

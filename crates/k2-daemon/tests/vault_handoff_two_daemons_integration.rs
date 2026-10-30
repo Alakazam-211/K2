@@ -258,6 +258,9 @@ fn assert_not_on_disk(dir: &Path, needle: &str) {
     }
 }
 
+// Windows: the CLI's vault person channel is a Unix socket (`vault.sock`);
+// the named-pipe port is 0.47.
+#[cfg(unix)]
 fn cli(d: &Daemon, args: &[&str], stdin: Option<&str>) -> (i32, String, String) {
     let k2 = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../cli/k2");
     let mut cmd = Command::new(k2_core::test_env::bash_program());
@@ -423,34 +426,39 @@ fn two_daemons_hand_a_secret_over_sealed_and_old_peers_get_peer_too_old() {
     assert!(lb.iter().any(|l| l.starts_with("ok accept STRIPE_KEY from sales::127.0.0.1") && l.contains(&id)), "{lb:?}");
     let _ = b_fp;
 
-    // ── CLI exit codes (the owner's own terminal, no K2 session) ──
-    // B: the landed copy (not person-given) to billing: pending until
-    // billing accepts from ops, then it lands.
-    let (code, out, err) = cli(&b, &["vault", "send", "STRIPE_KEY", "--scope", "ws:ops", "--to", "billing"], None);
-    assert_eq!(code, 3, "pending: a person must act: {out} {err}");
-    assert!(out.contains(": pending"), "{out}");
-    assert!(err.contains("a person on this server must accept it"), "{err}");
-    let (code, out, err) = cli(&b, &["vault", "accept-from", "add", "ops", "--workspace", "billing"], None);
-    assert_eq!(code, 0, "{out} {err}");
-    let (code, out, err) = cli(&b, &["vault", "send", "STRIPE_KEY", "--scope", "ws:ops", "--to", "billing", "--as", "STRIPE_FROM_OPS"], None);
-    assert_eq!(code, 0, "an allow-listed local send lands: {out} {err}");
-    assert!(out.contains(": landed"), "{out}");
-    let (code, out, _) = cli(&b, &["vault", "incoming", "--workspace", "billing"], None);
-    assert_eq!(code, 0);
-    assert!(out.contains("STRIPE_FROM_OPS") && out.contains("landed"), "{out}");
-    // A: no such secret (4), an old peer (2), a typed value to a local
-    // agent (2), a server-wide secret (3).
-    let (code, _, err) = cli(&a, &["vault", "send", "NOPE", "--scope", "ws:sales", "--to", "ops::bravo"], None);
-    assert_eq!(code, 4, "no such secret: {err}");
-    let (code, _, err) = cli(&a, &["vault", "send", "STRIPE_KEY", "--scope", "ws:sales", "--to", "ops::charlie"], None);
-    assert_eq!(code, 2, "peer_too_old: {err}");
-    assert!(err.contains("peer_too_old"), "{err}");
-    let (code, _, err) = cli(&a, &["vault", "send", "TYPED", "--to", "sales", "--stdin"], Some("a-value-typed-in-123"));
-    assert_eq!(code, 2, "a typed value goes to another server only: {err}");
-    set_secret(&a, "", "SERVER_WIDE", "server-wide-value-456", "server");
-    let (code, _, err) = cli(&a, &["vault", "send", "SERVER_WIDE", "--scope", "server", "--to", "sales"], None);
-    assert_eq!(code, 3, "server-wide secrets aren't sent: {err}");
-    assert!(err.contains("k2 vault grant"), "{err}");
+    // Windows: the CLI's vault person channel is a Unix socket (`vault.sock`);
+    // the named-pipe port is 0.47.
+    #[cfg(unix)]
+    {
+        // ── CLI exit codes (the owner's own terminal, no K2 session) ──
+        // B: the landed copy (not person-given) to billing: pending until
+        // billing accepts from ops, then it lands.
+        let (code, out, err) = cli(&b, &["vault", "send", "STRIPE_KEY", "--scope", "ws:ops", "--to", "billing"], None);
+        assert_eq!(code, 3, "pending: a person must act: {out} {err}");
+        assert!(out.contains(": pending"), "{out}");
+        assert!(err.contains("a person on this server must accept it"), "{err}");
+        let (code, out, err) = cli(&b, &["vault", "accept-from", "add", "ops", "--workspace", "billing"], None);
+        assert_eq!(code, 0, "{out} {err}");
+        let (code, out, err) = cli(&b, &["vault", "send", "STRIPE_KEY", "--scope", "ws:ops", "--to", "billing", "--as", "STRIPE_FROM_OPS"], None);
+        assert_eq!(code, 0, "an allow-listed local send lands: {out} {err}");
+        assert!(out.contains(": landed"), "{out}");
+        let (code, out, _) = cli(&b, &["vault", "incoming", "--workspace", "billing"], None);
+        assert_eq!(code, 0);
+        assert!(out.contains("STRIPE_FROM_OPS") && out.contains("landed"), "{out}");
+        // A: no such secret (4), an old peer (2), a typed value to a local
+        // agent (2), a server-wide secret (3).
+        let (code, _, err) = cli(&a, &["vault", "send", "NOPE", "--scope", "ws:sales", "--to", "ops::bravo"], None);
+        assert_eq!(code, 4, "no such secret: {err}");
+        let (code, _, err) = cli(&a, &["vault", "send", "STRIPE_KEY", "--scope", "ws:sales", "--to", "ops::charlie"], None);
+        assert_eq!(code, 2, "peer_too_old: {err}");
+        assert!(err.contains("peer_too_old"), "{err}");
+        let (code, _, err) = cli(&a, &["vault", "send", "TYPED", "--to", "sales", "--stdin"], Some("a-value-typed-in-123"));
+        assert_eq!(code, 2, "a typed value goes to another server only: {err}");
+        set_secret(&a, "", "SERVER_WIDE", "server-wide-value-456", "server");
+        let (code, _, err) = cli(&a, &["vault", "send", "SERVER_WIDE", "--scope", "server", "--to", "sales"], None);
+        assert_eq!(code, 3, "server-wide secrets aren't sent: {err}");
+        assert!(err.contains("k2 vault grant"), "{err}");
+    }
 
     // The value is nowhere in plaintext on either server.
     for d in [&a, &b, &c] {

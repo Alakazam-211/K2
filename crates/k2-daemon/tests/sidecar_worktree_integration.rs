@@ -121,6 +121,8 @@ fn req(port: u16, method: &str, path_and_query: &str, body: Option<&str>) -> Res
             Ok(0) => break,
             Ok(n) => raw.extend_from_slice(&chunk[..n]),
             Err(e) if matches!(e.kind(), std::io::ErrorKind::ConnectionReset) => break,
+            // A signal (the git children's SIGCHLD) interrupted the read: read again.
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::Interrupted) => continue,
             Err(e) => panic!("{method} {path_and_query}: read: {e:?}"),
         }
     }

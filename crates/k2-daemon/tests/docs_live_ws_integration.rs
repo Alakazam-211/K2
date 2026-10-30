@@ -10,7 +10,8 @@
 //!      daemon's), the other socket gets `change`, and a socket never gets
 //!      its own edit back: it is filtered by version, and the `ack` comes
 //!      after every change before it.
-//!   3. `undo` comes back as `change` (not filtered) then `undo_result`.
+//!   3. `undo` comes back as `change` (not filtered) then `undone {op, steps,
+//!      version}`; nothing to undo is `steps: 0`.
 //!   4. A caret at the current version reaches the other socket's roster; a
 //!      caret at an old version is dropped.
 //!   5. Reconnect: a new client id, `welcome` without text on a resume the
@@ -373,11 +374,12 @@ async fn the_live_socket_end_to_end() {
     assert_eq!(text_b, dtext, "B converged");
     assert_eq!(dtext, "Xhello world\n");
 
-    // ── 3. Undo comes back as change, then undo_result ──
+    // ── 3. Undo comes back as change, then undone ──
     a.send(json!({"type":"undo","op":2})).await;
-    let (ur, before_u) = a.until("undo_result", |f| ty(f) == "undo_result").await;
+    let (ur, before_u) = a.until("undone", |f| ty(f) == "undone").await;
     assert_eq!(ur["op"], 2);
-    assert_eq!(ur["outcome"], "applied", "{ur}");
+    assert_eq!(ur["steps"], 1, "{ur}");
+    assert!(ur.get("notice").is_none(), "{ur}");
     let v3 = ur["version"].as_u64().expect("v3");
     assert_eq!(v3, v2 + 1);
     let undo_change: Vec<&J> = before_u.iter().filter(|f| ty(f) == "change").collect();
@@ -392,16 +394,18 @@ async fn the_live_socket_end_to_end() {
     assert_eq!((text_a.as_str(), text_b.as_str()), (dtext.as_str(), dtext.as_str()));
     // Nothing more to undo for B? B still has its X: undo it, then redo.
     b.send(json!({"type":"undo","op":2})).await;
-    let (ubr, _) = b.until("B undo_result", |f| ty(f) == "undo_result").await;
-    assert_eq!(ubr["outcome"], "applied", "{ubr}");
+    let (ubr, _) = b.until("B undone", |f| ty(f) == "undone").await;
+    assert_eq!(ubr["steps"], 1, "{ubr}");
     b.send(json!({"type":"redo","op":3})).await;
-    let (rbr, _) = b.until("B redo_result", |f| ty(f) == "undo_result").await;
-    assert_eq!(rbr["outcome"], "applied", "{rbr}");
+    let (rbr, _) = b.until("B redone", |f| ty(f) == "undone").await;
+    assert_eq!(rbr["steps"], 1, "{rbr}");
     b.send(json!({"type":"undo","op":4})).await;
     b.send(json!({"type":"undo","op":5})).await;
-    let (_, _) = b.until("B undo 4", |f| ty(f) == "undo_result" && f["op"] == 4).await;
-    let (nothing, _) = b.until("B undo 5", |f| ty(f) == "undo_result" && f["op"] == 5).await;
-    assert_eq!(nothing["outcome"], "nothing", "G9: an undo with nothing to undo still answers: {nothing}");
+    let (_, _) = b.until("B undo 4", |f| ty(f) == "undone" && f["op"] == 4).await;
+    let (nothing, before_n) = b.until("B undo 5", |f| ty(f) == "undone" && f["op"] == 5).await;
+    assert_eq!(nothing["steps"], 0, "nothing to undo still answers, steps 0: {nothing}");
+    assert!(before_n.iter().all(|f| ty(f) != "change"), "nothing to undo makes no change: {before_n:?}");
+    assert_eq!(nothing["version"].as_u64(), Some(daemon_text(port, &doc).0), "the version unchanged");
 
     // ── 4. Carets: current version in, old version dropped ──
     let _ = a.drain(300).await;
@@ -549,6 +553,86 @@ async fn the_live_socket_end_to_end() {
     let mut s = open(&live_url(port, OWNER, &ws.join("nope.md").to_string_lossy(), "")).await;
     let (c, _) = s.closed("missing").await;
     assert_eq!(c["reason"], "not_found", "{c}");
+
+    // ── 8b. A text that doesn't fit one frame: closed {declined}, MPC-E401 ──
+    let ctrl = ws.join("ctrl.md");
+    std::fs::write(&ctrl, "\u{1}".repeat(1 << 20)).expect("ctrl"); // 1 MiB, 6 MiB as JSON
+    let mut s = open(&live_url(port, OWNER, &ctrl.to_string_lossy(), "")).await;
+    let (c, _) = s.closed("too large for one frame").await;
+    assert_eq!(c["reason"], "declined", "{c}");
+    assert_eq!(c["retry"], false, "{c}");
+    assert_eq!(c["error"]["id"], "MPC-E401", "{c}");
+    assert_eq!(c["error"]["details"]["limit"], "frame", "{c}");
+    assert_eq!(c["error"]["details"]["frame_max"], 4_194_304, "{c}");
+
+    // ── 10. Renamed (k2 doc mv): moved, with the new path ──
+    let other = ws.join("other.md");
+    std::fs::write(&other, "o\n").expect("other");
+    let other = other.to_string_lossy().to_string();
+    let mut m = open(&live_url(port, OWNER, &other, "")).await;
+    assert_eq!(ty(&m.next("welcome other").await), "welcome");
+    let r = http(
+        port,
+        "POST",
+        &format!("/cli/docs/mv?token={OWNER}"),
+        Some(&json!({"path": other, "to": "renamed.md"}).to_string()),
+    );
+    assert_eq!(r.status, 200, "mv: {}", r.body);
+    let (c, _) = m.closed("moved").await;
+    assert_eq!(c["reason"], "moved", "{c}");
+    assert_eq!(c["retry"], false, "{c}");
+    assert_eq!(c["path"], "renamed.md", "{c}");
+
+    // ── 11. prev: a reconnect retires its old connection, and only its own ──
+    let mut p1 = open(&live_url(port, OWNER, &doc, "")).await;
+    let w1 = p1.next("welcome p1").await;
+    let c1 = w1["client"].as_u64().expect("client");
+    // Another person naming the owner's connection changes nothing.
+    let mut foreign = open(&live_url(port, &member, &doc, &format!("&prev={c1}"))).await;
+    assert_eq!(ty(&foreign.next("welcome foreign").await), "welcome");
+    // An unknown id (and a malformed one) changes nothing either.
+    let mut unknown = open(&live_url(port, OWNER, &doc, "&prev=123456789")).await;
+    assert_eq!(ty(&unknown.next("welcome unknown").await), "welcome");
+    let mut junk = open(&live_url(port, OWNER, &doc, "&prev=x")).await;
+    assert_eq!(ty(&junk.next("welcome junk").await), "welcome");
+    for (sock, who) in [(&mut foreign, "foreign"), (&mut unknown, "unknown"), (&mut junk, "junk")] {
+        let _ = sock.sink.send(Message::Close(None)).await;
+        let _ = who;
+    }
+    drop((foreign, unknown, junk));
+    let v_p1 = w1["version"].as_u64().expect("v");
+    p1.send(json!({"type":"since","op":1,"version":v_p1})).await;
+    let (still, _) = p1.until("p1 still live", |f| ty(f) == "events" && f["op"] == 1).await;
+    assert_eq!(ty(&still), "events", "a foreign or unknown prev left p1 alone");
+    // The race: p1's tab reconnects as p2 (prev = p1's client); an edit that
+    // p1's socket still carries after p2's `since` never applies.
+    let (v_now, t_now) = daemon_text(port, &doc);
+    let mut p2 = open(&live_url(port, OWNER, &doc, &format!("&resume={v_now}&prev={c1}"))).await;
+    let w2 = p2.next("welcome p2").await;
+    assert_eq!(ty(&w2), "welcome");
+    assert_ne!(w2["client"], w1["client"]);
+    p2.send(json!({"type":"since","op":1,"version":v_now})).await;
+    let (s2, _) = p2.until("p2 since", |f| ty(f) == "events").await;
+    assert_eq!(s2["events"].as_array().map(Vec::len), Some(0), "{s2}");
+    let _ = p1
+        .sink
+        .send(Message::Text(json!({"type":"edit","op":2,"root":"source","base":v_now,"hunks":[{"start":0,"end":0,"insert":"RACE "}]}).to_string()))
+        .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let (v_after, t_after) = daemon_text(port, &doc);
+    assert_eq!((v_after, t_after.as_str()), (v_now, t_now.as_str()), "the retired socket's edit never applied");
+    p2.send(json!({"type":"since","op":2,"version":v_now})).await;
+    let (s3, _) = p2.until("p2 since again", |f| ty(f) == "events" && f["op"] == 2).await;
+    assert_eq!(s3["events"].as_array().map(Vec::len), Some(0), "nothing from p1 after p2's since: {s3}");
+    let (c, _) = p1.closed("p1 retired").await;
+    assert_eq!(c["reason"], "left", "{c}");
+    let _ = p2.sink.send(Message::Close(None)).await;
+    drop(p2);
+    // The owner's other tab (A) was never touched: two tabs stay live.
+    a.send(json!({"type":"since","op":60,"version":v_now})).await;
+    let (sa, _) = a.until("A still live", |f| ty(f) == "events" && f["op"] == 60).await;
+    assert_eq!(ty(&sa), "events");
+    let _ = b.drain(300).await;
 
     // ── 9. A core that's off ──
     MARKDOWN_ON.store(false, Ordering::SeqCst);

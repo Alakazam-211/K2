@@ -1,0 +1,87 @@
+{
+  "write_conflict": {
+    "id": "MPC-E111",
+    "exit": 1,
+    "message": "your write overlaps changes made since version 1: 1 region(s) at line 5; nothing applied",
+    "next": "Someone else changed the same lines after the version you read (or added lines at the same place), so nothing was applied; a write never merges inside a line. Run cat to read the current text (the message and details.current give its version), make your change again on that text, and write it with write --base <that version>. Or change only the lines you need with replace --lines or patch, each with --if-version <that version> (they take --if-version, not --base). details.conflicts has each region's your_lines (in your text), current_lines (in the current text), base, ours and theirs.",
+    "rule": "K-BR-2, K-BR-3 (O1–O5)",
+    "details": {
+      "base": 1,
+      "conflicts": [
+        {
+          "root": "source",
+          "lines": [5, 5],
+          "kind": "overlap",
+          "why": "replacement",
+          "start": 18,
+          "end": 21,
+          "at_version": 2,
+          "base": "two",
+          "ours": "TWO",
+          "theirs": "agent-7 in change 3"
+        }
+      ]
+    }
+  },
+  "bad_hunk": {
+    "id": "MPC-E151",
+    "exit": 2,
+    "message": "hunk 0 is out of range or not on a character boundary",
+    "next": "An edit's ranges are out of order, out of range, off a character boundary or empty. The host computes ranges from the text it read: read again and recompute.",
+    "rule": "K-SCH-2",
+    "details": {
+      "hunk": 0,
+      "problem": "range"
+    }
+  },
+  "base_expired": {
+    "id": "MPC-E112",
+    "exit": 8,
+    "message": "base version 1 is unknown or no longer cached; nothing applied",
+    "next": "The version you wrote against is too old to merge from (or was never read). Never retry the same request: read the doc again (cat), redo your change on what you read, and write with that version as --base.",
+    "rule": "K-BR-4, K-EXIT-1",
+    "details": {
+      "base": 1,
+      "why": "more changes since than the live window holds"
+    }
+  },
+  "bad_position": {
+    "id": "MPC-E114",
+    "exit": 2,
+    "message": "bad position: Byte(39) is not in \"source\"",
+    "next": "A line or position is outside the doc. Read the doc's length first (wc -l, or cat -n) and pass lines inside it.",
+    "rule": "K-PRES-6",
+    "details": {}
+  },
+  "bad_edit_frame_cap": {
+    "id": "MPC-E113",
+    "exit": 2,
+    "message": "bad edit: the frame is 4194400 bytes, over the 4194304-byte cap",
+    "next": "The edit itself is malformed (the message says how). Fix the arguments and run it again; nothing was applied.",
+    "rule": "K-SCH-2",
+    "details": {
+      "bytes": 4194400,
+      "frame_max": 4194304
+    }
+  },
+  "declined_too_large": {
+    "id": "MPC-E401",
+    "exit": 4,
+    "message": "live editing is off: the text doesn't fit one frame (too_large)",
+    "next": "The file is over the size limit for live editing (capabilities shows the limits). It opens the ordinary way: edit it with ordinary file tools, without live merging. Don't retry the live verb.",
+    "rule": "K-PACK-4, K-DISK-8",
+    "details": {
+      "limit": "frame",
+      "bytes": 6291502,
+      "frame_max": 4194304
+    }
+  },
+  "history_lost": {
+    "id": "MPC-E206",
+    "exit": 0,
+    "message": "nothing to undo: your undo history was lost when the doc reloaded",
+    "next": "Undo history lives in memory and was dropped when the doc unloaded or the daemon restarted. Your changes are still in the log: find one with log --by <you> and reverse it with revert <change>.",
+    "rule": "U6, U18, K-HIST-17",
+    "details": {}
+  }
+}

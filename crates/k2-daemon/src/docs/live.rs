@@ -14,7 +14,10 @@
 //! `&workspace=`; `path=` is the same), `&root=source` (the only text root
 //! of the Markdown and text packs), `&resume=<version>` on a reconnect.
 //!
-//! **Per socket, in order** (the transport spec, §2): resolve and jail the
+//! **The contract is the kit's `client/WIRE.md` v2** (kit main `bea1885`;
+//! frames in [`super::live_wire`], pinned against the kit's golden JSON).
+//!
+//! **Per socket, in order** (WIRE.md "Connecting"): resolve and jail the
 //! file, check its core is on and the person may read it, `open_file`,
 //! `join(Stay::Held)` (a new connection and client id, also on every
 //! reconnect), `subscribe` and `subscribe_roster` **before** the read, then
@@ -28,46 +31,56 @@
 //! roster event in order, and answers the client's frames:
 //! - `edit` → `edit_at_base` → version V. The changes queued before V go out
 //!   first, this connection's own change at exactly V is skipped (matched by
-//!   version, never by client id: G3), then `ack {op, version, hunks}`.
-//!   Nothing applied: `ack` at the unchanged version after the changes up to
-//!   it. A refusal is `refused {op, error}` (the kit's `ErrorReport`).
+//!   version, never by client id), then `ack {op, version, hunks}`. Nothing
+//!   applied: everything queued, then `ack` at the unchanged version. A
+//!   refusal: everything queued, then `refused {op, error}`.
 //! - `since` → `events_since` → `events {op, events}` or `refused`.
-//! - `undo` / `redo` → the change arrives as `change`, then `undo_result`
-//!   (G9, provisional).
-//! - `snapshot` → `snapshot {op, text, version}` (G1).
+//! - `undo` / `redo` → the change arrives as `change`, then `undone {op,
+//!   steps, version, notice?}`; a conflict is `refused` (`MPC-E201`).
+//! - `snapshot` → `snapshot {op, text, version}`.
 //! - `cursor` → `set_cursor` only when its version is the doc's version as
-//!   this socket last saw it; behind, it is dropped (G6: the kit resolves
-//!   offsets against the current text; the client re-sends after its next
-//!   change). No reply; a refused caret is ignored.
-//! - `{"t":"viewing","visible"}` → `set_visible`; `view` → `set_view` (G8).
+//!   this socket last saw it; behind, it is dropped (WIRE.md "Carets" allows
+//!   dropping; the client re-sends after its next change). No reply; a
+//!   refused caret is ignored.
+//! - `visible` (and the Thread's `{"t":"viewing","visible"}`) →
+//!   `set_visible`; `view` → `set_view`; `hello` is ignored (the URL carries
+//!   root and resume).
 //!
 //! The kit's `tick` (every 250 ms, `docs/mod.rs`) also flushes rosters, so
 //! carets arrive without a timer of our own.
 //!
-//! **When it ends.** The client closes: `leave(conn)`. The kit drops the
-//! connection: `closed` with the reason (`cut_off` when the subscriber fell
-//! 1,024 events behind and is still joined, `kicked`, `rights_lost`,
-//! `deleted`, `released` on a hand-off). The file's core is switched off
-//! ([`close_core`], or seen within a second through the gate): write back
-//! now (`flush`), `leave`, then `closed {reason:"closed", code:"core_off",
-//! core, version, written}` and close code 4010.
+//! **When it ends** (WIRE.md v2 "Closing"). The client closes: `leave(conn)`.
+//! The kit drops the connection: `closed` with the reason (`cut_off` when the
+//! subscriber fell 1,024 events behind and is still joined, `kicked`,
+//! `rights_lost`, `deleted`). The doc is renamed (`k2 doc mv`): `moved`
+//! with its new `path`. The daemon hands off or stops: no frame, close code
+//! 1012 (the transport's `network`: reconnect to the next daemon). The
+//! file's core is switched off ([`close_core`], or seen within a second
+//! through the gate): write back now (`flush`), `leave`, then
+//! `closed {reason:"closed", code:"core_off", core, version, written}` and
+//! close code 4010.
 //!
 //! **Keepalive** (as `overlay_ws.rs`): a WS Ping every 20 s
 //! (`K2_DOCS_LIVE_PING_MS` overrides it for tests); no frame at all from the
 //! client for two pings and a half closes the socket and leaves. There is
 //! no app-level ping.
 //!
-//! **Frame cap** ([`super::live_wire::FRAME_CAP`], 4 MiB): a bigger client
-//! frame is refused in order (`refused {op}` / `error`, `MPC-E113`) and the
-//! socket stays; past 8 MiB the socket is closed (`cut_off`, 1009).
+//! **Frame cap** ([`super::live_wire::FRAME_MAX`], 4 MiB, both ways): a
+//! bigger client `edit` is `refused {op}` with `MPC-E113`, any other frame
+//! `error`, in order, and the socket stays (past 8 MiB the socket closes:
+//! `cut_off`, 1009). Out: a `change` over the cap is withheld (the client
+//! sees the gap and asks `since`), an `events` over it is `refused` with
+//! `MPC-E112` (the client reloads), and a `welcome` or `snapshot` over it is
+//! `closed {declined}` with `MPC-E401`.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use k2_mpc_base::errors::Value;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -83,7 +96,7 @@ use k2_mpc_base::store::{DocKey, Seq};
 use k2_mpc_base::DocError;
 
 use super::caller::{refusal, DocCaller};
-use super::host;
+use super::host::{self, DocRights};
 use super::live_wire::{self as wire, ClientFrame, CloseReason, Closed};
 use super::target::{self, Target, Tier};
 use crate::cli_response::CliResponse;
@@ -171,11 +184,24 @@ struct Handle {
     core: &'static str,
     key: DocKey,
     ctl: mpsc::Sender<Ctl>,
+    /// Who and which connection: for `prev` (a reconnect retiring its old
+    /// connection), matched on pid + doc + client id.
+    pid: String,
+    client: u64,
+    session: Arc<Session>,
+    conn: ConnId,
+    /// Set when a reconnect retired this connection: its worker applies no
+    /// client frame after it.
+    dead: Arc<AtomicBool>,
 }
 
 enum Ctl {
+    /// A reconnect from the same tab retired this connection (`prev`).
+    Replaced,
     /// The core was switched off: write back, leave, `closed`.
     CoreOff { by: Option<String> },
+    /// The doc was renamed (`k2 doc mv`): `closed {reason: "moved", path}`.
+    Moved { path: String },
 }
 
 fn sockets() -> &'static Mutex<HashMap<u64, Handle>> {
@@ -203,6 +229,37 @@ pub fn close_core(core: &str, by: Option<&str>) -> usize {
         }
     }
     n
+}
+
+/// A reconnect's `prev=<old client id>` (the reconnect-race rule, agreed
+/// with K2 Cores for WIRE.md): when that connection is this person's, on this
+/// doc and root, on this daemon, it is marked dead (its worker applies no
+/// client frame from here on), it leaves the kit's session (an edit it was
+/// applying has committed by then: `leave` takes the session lock), and its
+/// socket closes. All before the new connection joins, so nothing from the
+/// old socket applies after the new one's `since`. Anything else (unknown,
+/// another person's, another doc's) is ignored silently: the caller learns
+/// nothing about other connections. Returns whether one was retired.
+fn retire_prev(prev: u64, pid: &str, key: &DocKey) -> bool {
+    let found = {
+        let s = sockets().lock().unwrap_or_else(|p| p.into_inner());
+        s.values()
+            .find(|h| h.client == prev && h.pid == pid && h.key == *key)
+            .map(|h| (h.dead.clone(), h.session.clone(), h.conn, h.ctl.clone()))
+    };
+    let Some((dead, session, conn, ctl)) = found else { return false };
+    dead.store(true, Ordering::SeqCst);
+    let _ = session.leave(conn);
+    let _ = ctl.send(Ctl::Replaced);
+    true
+}
+
+/// **Called by `Runtime::rekey`:** the doc at `old` now lives at `new`.
+/// Every Live socket on it ends with `closed {reason: "moved", path}` (the
+/// view reopens the file at its new path). Returns how many were told.
+pub fn doc_moved(old: &DocKey, new: &DocKey) -> usize {
+    let s = sockets().lock().unwrap_or_else(|p| p.into_inner());
+    s.values().filter(|h| h.key == *old).filter(|h| h.ctl.send(Ctl::Moved { path: new.path.clone() }).is_ok()).count()
 }
 
 /// The docs with a Live socket open (the Settings row's "open now" line):
@@ -247,6 +304,7 @@ struct Opened {
     pid: String,
     key: DocKey,
     core: &'static str,
+    client: u64,
     version: Seq,
     changes: Receiver<ChangeEvent>,
     roster: Receiver<RosterEvent>,
@@ -281,7 +339,7 @@ fn open_error(e: &SessionError) -> Closed {
         },
         SessionError::NotFound(_) => Closed::kit(CloseReason::NotFound, e),
         SessionError::Forbidden { .. } => Closed::kit(CloseReason::Auth, e),
-        SessionError::Released => Closed::kit(CloseReason::Released, e),
+        SessionError::Released => restart(),
         SessionError::Deleted => Closed::kit(CloseReason::Deleted, e),
         _ => Closed::kit(CloseReason::Declined, e),
     }
@@ -291,7 +349,7 @@ fn open_error(e: &SessionError) -> Closed {
 fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Opened, Closed> {
     let rt = super::runtime().map_err(|u| match &u {
         super::Unavailable::Failed(_) => Closed::k2(CloseReason::Declined, "docs_unavailable", u.message()),
-        _ => Closed::k2(CloseReason::Released, "docs_unavailable", u.message()),
+        _ => restart(),
     })?;
     let root = params.get("root").map(|r| r.trim()).filter(|r| !r.is_empty()).unwrap_or(ROOT);
     if root != ROOT {
@@ -304,6 +362,8 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         ),
         None => None,
     };
+    // A malformed `prev` is ignored like an unknown one.
+    let prev = params.get("prev").and_then(|v| v.trim().parse::<u64>().ok());
     let path = params.get("doc").or_else(|| params.get("path")).cloned().unwrap_or_default();
     let t: Target = target::resolve(params.get("workspace").map(String::as_str), &path, caller.default_workspace())
         .map_err(|r| Closed::k2(target_reason(&r), r.code, r.message))?;
@@ -331,6 +391,11 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         return Err(Closed::k2(CloseReason::Auth, "doc_forbidden", "you can't read this doc"));
     }
     let participant = caller.participant(None);
+    if let Some(prev) = prev {
+        if retire_prev(prev, &pid, &key) {
+            log_debug!("[docs/live] a reconnect retired its previous connection on {}", host::key_label(&key));
+        }
+    }
     let mut session = super::routes::open(&rt, &t).map_err(|e| open_error(&e))?;
     let joined = match session.join(participant.clone(), Stay::Held) {
         Err(SessionError::Unloaded) => {
@@ -362,22 +427,18 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         Some(v) if v > read.version => true,
         Some(v) => session.events_since(conn, v).is_err(),
     };
-    let edit = rights.edit;
-    let mut welcome = json!({
-        "type": "welcome",
-        "root": ROOT,
-        "version": read.version,
-        "client": joined.client,
-        "self": pid,
-        "rights": if edit { "edit" } else { "read" },
-        "core": core,
-        "family": t.tier.family(),
-        "path": t.rel,
-    });
-    if with_text {
-        welcome["text"] = json!(text);
-    }
-    Ok(Opened { session, conn, pid, key, core, version: read.version, changes, roster, welcome })
+    let welcome = wire::welcome_frame(
+        ROOT,
+        read.version,
+        with_text.then_some(text.as_str()),
+        joined.client,
+        &pid,
+        wire::rights(DocRights::kit(rights)),
+        core,
+        t.tier.family(),
+        &t.rel,
+    );
+    Ok(Opened { session, conn, pid, key, core, client: joined.client, version: read.version, changes, roster, welcome })
 }
 
 // ── The socket ───────────────────────────────────────────────────────
@@ -385,15 +446,16 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
 /// What the worker sends the socket task.
 enum Out {
     Text(String),
-    /// The last frame, then a close with this code.
-    Close(Value, u16),
+    /// The last frame (none for `network`), then the close.
+    Close(Closed),
 }
 
 /// What the socket task sends the worker.
 enum Inbound {
     Frame(String),
-    /// A text frame over the cap: refused in order (`op` when readable).
-    TooBig { op: Option<u64>, len: usize },
+    /// A text frame over the cap: refused in order (an `edit`'s `op` when
+    /// readable: `refused`; anything else: `error`).
+    TooBig { edit_op: Option<u64>, len: usize },
 }
 
 /// Serve one upgrade. The dispatcher resolved `caller` (a person) and ran
@@ -418,18 +480,23 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
     let opened = match opened {
         Ok(Ok(o)) => o,
         Ok(Err(closed)) => {
-            let _ = write.send(Message::Text(closed.json().to_string())).await;
-            let _ = write.send(close_msg(closed.ws_code, closed.reason.as_str())).await;
+            finish(&mut write, &closed).await;
             return;
         }
         Err(e) => {
-            let c = Closed::k2(CloseReason::Network, "docs_failed", e.to_string());
-            let _ = write.send(Message::Text(c.json().to_string())).await;
-            let _ = write.send(close_msg(code_normal(), "network")).await;
+            log_debug!("[docs/live] open failed: {e}");
+            finish(&mut write, &restart()).await;
             return;
         }
     };
-    if write.send(Message::Text(opened.welcome.to_string())).await.is_err() {
+    let welcome = opened.welcome.to_json();
+    if welcome.len() > wire::FRAME_MAX {
+        // The text doesn't fit one frame: no live editing here (E401).
+        let _ = opened.session.leave(opened.conn);
+        finish(&mut write, &wire::too_large(welcome.len())).await;
+        return;
+    }
+    if write.send(Message::Text(welcome)).await.is_err() {
         let _ = opened.session.leave(opened.conn);
         return;
     }
@@ -438,11 +505,24 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
     let (in_tx, in_rx) = mpsc::sync_channel::<Inbound>(INBOX);
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Out>(OUTBOX);
     let (ctl_tx, ctl_rx) = mpsc::channel::<Ctl>();
+    let dead = Arc::new(AtomicBool::new(false));
     sockets()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .insert(id, Handle { core: opened.core, key: opened.key.clone(), ctl: ctl_tx });
-    let worker = Worker::new(opened, in_rx, ctl_rx, out_tx);
+        .insert(
+            id,
+            Handle {
+                core: opened.core,
+                key: opened.key.clone(),
+                ctl: ctl_tx,
+                pid: opened.pid.clone(),
+                client: opened.client,
+                session: opened.session.clone(),
+                conn: opened.conn,
+                dead: dead.clone(),
+            },
+        );
+    let worker = Worker::new(opened, in_rx, ctl_rx, out_tx, dead);
     let spawned = std::thread::Builder::new().name(format!("k2-docs-live-{id}")).spawn(move || worker.run());
     if let Err(e) = spawned {
         log_debug!("[docs/live] WARN: worker thread: {e}");
@@ -465,10 +545,8 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
                         break;
                     }
                 }
-                Some(Out::Close(frame, code)) => {
-                    let reason = frame.get("reason").and_then(Value::as_str).unwrap_or("closed").to_string();
-                    let _ = write.send(Message::Text(frame.to_string())).await;
-                    let _ = write.send(close_msg(code, &reason)).await;
+                Some(Out::Close(c)) => {
+                    finish(&mut write, &c).await;
                     break;
                 }
                 // The worker ended without a frame (the client left).
@@ -488,17 +566,16 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
                 heard = Instant::now();
                 match incoming {
                     Some(Ok(Message::Text(t))) => {
-                        let msg = if t.len() > wire::FRAME_CAP {
-                            let op = serde_json::from_str::<Value>(&t).ok().as_ref().and_then(wire::op_of);
-                            Inbound::TooBig { op, len: t.len() }
+                        let msg = if t.len() > wire::FRAME_MAX {
+                            let (ty, op) = wire::type_and_op(&t);
+                            Inbound::TooBig { edit_op: op.filter(|_| ty.as_deref() == Some("edit")), len: t.len() }
                         } else {
                             Inbound::Frame(t)
                         };
                         if in_tx.try_send(msg).is_err() {
                             log_debug!("[docs/live] socket {id}: client frames piling up; cutting off");
                             let c = Closed::k2(CloseReason::CutOff, "too_many_frames", "frames arrived faster than the doc could take them");
-                            let _ = write.send(Message::Text(c.json().to_string())).await;
-                            let _ = write.send(close_msg(code_normal(), "cut_off")).await;
+                            finish(&mut write, &c).await;
                             break;
                         }
                     }
@@ -509,8 +586,8 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
                     }
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Binary(_))) => {
-                        let e = json!({ "type": "error", "error": wire::bad_edit("frames are JSON text") });
-                        if write.send(Message::Text(e.to_string())).await.is_err() {
+                        let e = wire::error_frame(&wire::unreadable("frames are JSON text, not binary"));
+                        if write.send(Message::Text(e.to_json())).await.is_err() {
                             break;
                         }
                     }
@@ -519,9 +596,12 @@ pub async fn serve(stream: &mut TcpStream, params: HashMap<String, String>, call
                     Some(Err(e)) => {
                         // Over the WebSocket layer's own limit: say so, then close.
                         if matches!(e, tokio_tungstenite::tungstenite::Error::Capacity(_)) {
-                            let c = Closed { error: Some(wire::bad_edit(format!("a frame over {} bytes", wire::HARD_CAP))), ws_code: wire::code::TOO_BIG, ..Closed::new(CloseReason::CutOff) };
-                            let _ = write.send(Message::Text(c.json().to_string())).await;
-                            let _ = write.send(close_msg(wire::code::TOO_BIG, "cut_off")).await;
+                            let c = Closed {
+                                error: Some(wire::unreadable(&format!("a frame over the socket's {}-byte limit", wire::HARD_CAP))),
+                                ws_code: wire::code::TOO_BIG,
+                                ..Closed::new(CloseReason::CutOff)
+                            };
+                            finish(&mut write, &c).await;
                             linger = true;
                         }
                         break;
@@ -555,6 +635,25 @@ fn code_normal() -> u16 {
     wire::code::NORMAL
 }
 
+/// The daemon is handing off or stopping (or live docs are still
+/// starting): no `closed` frame, close code 1012. The transport reports a
+/// dropped socket as `network`, and the component reconnects to whichever
+/// daemon serves next.
+fn restart() -> Closed {
+    Closed { ws_code: wire::code::RESTART, ..Closed::new(CloseReason::Network) }
+}
+
+/// The last frame (none for `network`: "never in a frame") and the close.
+async fn finish<S>(write: &mut S, c: &Closed)
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    if c.reason != CloseReason::Network {
+        let _ = write.send(Message::Text(c.value().to_json())).await;
+    }
+    let _ = write.send(close_msg(c.ws_code, c.reason.as_str())).await;
+}
+
 fn close_msg(code: u16, reason: &str) -> Message {
     Message::Close(Some(CloseFrame { code: CloseCode::from(code), reason: reason.to_string().into() }))
 }
@@ -580,6 +679,8 @@ struct Worker {
     inbox: Receiver<Inbound>,
     ctl: Receiver<Ctl>,
     out: tokio::sync::mpsc::Sender<Out>,
+    /// Retired by a reconnect (`prev`): no client frame applies any more.
+    dead: Arc<AtomicBool>,
     /// One change taken off the kit's queue but not yet sent (a peek).
     peeked: Option<ChangeEvent>,
     /// The kit's change queue ended (the connection left the session).
@@ -605,6 +706,7 @@ impl Worker {
         inbox: Receiver<Inbound>,
         ctl: Receiver<Ctl>,
         out: tokio::sync::mpsc::Sender<Out>,
+        dead: Arc<AtomicBool>,
     ) -> Self {
         Worker {
             session: o.session,
@@ -617,6 +719,7 @@ impl Worker {
             inbox,
             ctl,
             out,
+            dead,
             peeked: None,
             changes_gone: false,
             own: HashSet::new(),
@@ -632,8 +735,7 @@ impl Worker {
             }
             Stop::Close(c) => {
                 let _ = self.session.leave(self.conn);
-                let code = c.ws_code;
-                let _ = self.out.blocking_send(Out::Close(c.json(), code));
+                let _ = self.out.blocking_send(Out::Close(c));
             }
         }
     }
@@ -644,8 +746,18 @@ impl Worker {
             if let Err(s) = self.pump() {
                 return s;
             }
+            if self.dead.load(Ordering::SeqCst) {
+                return Stop::Close(Closed::new(CloseReason::Left));
+            }
             match self.ctl.try_recv() {
+                Ok(Ctl::Replaced) => return Stop::Close(Closed::new(CloseReason::Left)),
                 Ok(Ctl::CoreOff { by }) => return Stop::Close(self.core_off(by)),
+                Ok(Ctl::Moved { path }) => {
+                    return Stop::Close(Closed {
+                        path: Some(path.clone()),
+                        ..Closed::k2(CloseReason::Moved, "moved", format!("the file was renamed to {path}; open it there"))
+                    })
+                }
                 Err(_) => {}
             }
             if Instant::now() >= next_gate {
@@ -655,14 +767,22 @@ impl Worker {
                 }
             }
             match self.inbox.recv_timeout(POLL) {
+                Ok(Inbound::Frame(_)) | Ok(Inbound::TooBig { .. }) if self.dead.load(Ordering::SeqCst) => {
+                    // Retired by a reconnect: nothing from this socket applies.
+                    return Stop::Close(Closed::new(CloseReason::Left));
+                }
                 Ok(Inbound::Frame(t)) => {
                     if let Err(s) = self.on_frame(&t) {
                         return s;
                     }
                 }
-                Ok(Inbound::TooBig { op, len }) => {
-                    let b = wire::BadFrame { op, message: format!("a frame of {len} bytes is over the {} byte cap", wire::FRAME_CAP) };
-                    if let Err(s) = self.send(wire::bad_frame_reply(&b)) {
+                Ok(Inbound::TooBig { edit_op, len }) => {
+                    let e = wire::over_cap(len);
+                    let reply = match edit_op {
+                        Some(op) => wire::refused_frame(op, &e),
+                        None => wire::error_frame(&e),
+                    };
+                    if let Err(s) = self.send(reply) {
                         return s;
                     }
                 }
@@ -673,7 +793,11 @@ impl Worker {
     }
 
     fn send(&self, v: Value) -> Result<(), Stop> {
-        self.out.blocking_send(Out::Text(v.to_string())).map_err(|_| Stop::Gone)
+        self.send_text(v.to_json())
+    }
+
+    fn send_text(&self, t: String) -> Result<(), Stop> {
+        self.out.blocking_send(Out::Text(t)).map_err(|_| Stop::Gone)
     }
 
     /// The next queued change, if any (non-blocking).
@@ -707,7 +831,13 @@ impl Worker {
             return Ok(());
         }
         self.own.retain(|v| *v >= e.version);
-        self.send(json!({ "type": "change", "event": wire::change_json(&e) }))
+        let t = wire::change_frame(&e).to_json();
+        if t.len() > wire::FRAME_MAX {
+            // Withheld: the client sees the version gap and asks `since`.
+            log_debug!("[docs/live] change {} ({} bytes) is over the frame cap; withheld", e.version, t.len());
+            return Ok(());
+        }
+        self.send_text(t)
     }
 
     /// Forward every queued change with a version up to `upto` (all when
@@ -725,8 +855,8 @@ impl Worker {
         loop {
             match self.roster.try_recv() {
                 Ok(ev) => {
-                    if let Some(v) = wire::roster_event_json(&ev) {
-                        self.send(json!({ "type": "roster_event", "event": v }))?;
+                    if let Some(v) = wire::roster_event(&ev) {
+                        self.send(wire::roster_frame(v))?;
                     }
                 }
                 Err(TryRecvError::Empty) => break,
@@ -745,17 +875,21 @@ impl Worker {
 
     /// The kit dropped this connection's queue: why.
     fn why_gone(&self) -> Closed {
+        if self.dead.load(Ordering::SeqCst) {
+            // A reconnect retired it (`prev`); the tab moved to the new socket.
+            return Closed::new(CloseReason::Left);
+        }
         if !core_is_on(self.core) {
             return self.core_off(None);
         }
         if let Err(super::Unavailable::Released) = super::runtime() {
-            return Closed::k2(CloseReason::Released, "released", "this daemon handed off; reconnect to the next one");
+            return restart();
         }
         match self.session.touch(self.conn) {
             // Still joined: the queue overflowed (1,024 events behind).
             Ok(()) => Closed::k2(CloseReason::CutOff, "cut_off", "this socket fell behind the doc; reconnect and resume"),
             Err(e @ SessionError::Deleted) => Closed::kit(CloseReason::Deleted, &e),
-            Err(e @ SessionError::Released) => Closed::kit(CloseReason::Released, &e),
+            Err(SessionError::Released) => restart(),
             Err(e @ SessionError::Unloaded) => Closed::kit(CloseReason::CutOff, &e),
             Err(e @ SessionError::Forbidden { .. }) => Closed::kit(CloseReason::RightsLost, &e),
             Err(SessionError::NotJoined { .. }) => {
@@ -790,25 +924,32 @@ impl Worker {
     fn on_frame(&mut self, text: &str) -> Result<(), Stop> {
         let f = match wire::parse(text) {
             Ok(f) => f,
-            Err(b) => return self.send(wire::bad_frame_reply(&b)),
+            Err(b) => return self.send(b.reply()),
         };
         match f {
             ClientFrame::Edit { op, root, base, hunks, group } => self.edit(op, &root, base, hunks, group),
             ClientFrame::Since { op, version } => match self.session.events_since(self.conn, version) {
                 Ok(evs) => {
-                    let events: Vec<Value> = evs.iter().map(wire::change_json).collect();
-                    self.send(json!({ "type": "events", "op": op, "events": events }))
+                    let t = wire::events_frame(op, &evs).to_json();
+                    if t.len() > wire::FRAME_MAX {
+                        return self.send(wire::refused_frame(op, &wire::events_over_cap(t.len())));
+                    }
+                    self.send_text(t)
                 }
-                Err(r) => self.send(json!({ "type": "refused", "op": op, "error": wire::error_json(&r) })),
+                Err(r) => self.send(wire::refused_frame(op, &r)),
             },
             ClientFrame::Undo { op } => self.undo(op, true),
             ClientFrame::Redo { op } => self.undo(op, false),
             ClientFrame::Snapshot { op } => match self.session.read(self.conn) {
                 Ok(r) => {
                     let text = r.text_by_root.iter().find(|(k, _)| k == ROOT).map(|(_, t)| t.as_str()).unwrap_or("");
-                    self.send(json!({ "type": "snapshot", "op": op, "text": text, "version": r.version }))
+                    let t = wire::snapshot_frame(op, text, r.version).to_json();
+                    if t.len() > wire::FRAME_MAX {
+                        return Err(Stop::Close(wire::too_large(t.len())));
+                    }
+                    self.send_text(t)
                 }
-                Err(e) => self.send(json!({ "type": "refused", "op": op, "error": wire::error_json(&e.report()) })),
+                Err(e) => self.send(wire::refused_frame(op, &e.report())),
             },
             ClientFrame::Cursor { root, version, anchor, head } => {
                 // G6: the kit places a caret in the current text. Only a caret
@@ -825,6 +966,7 @@ impl Worker {
                 let _ = self.session.set_visible(self.conn, v);
                 Ok(())
             }
+            ClientFrame::Hello => Ok(()),
             ClientFrame::View { root, first, last } => {
                 let root = root.unwrap_or_else(|| ROOT.to_string());
                 let _ = self.session.set_view(self.conn, LineRange { root, first, last });
@@ -838,6 +980,9 @@ impl Worker {
         let mut opts = EditOptions::new().policy(ClaimPolicy::Ignore);
         if let Some(g) = group.as_deref() {
             opts = opts.group(g);
+        }
+        if self.dead.load(Ordering::SeqCst) {
+            return Err(Stop::Close(Closed::new(CloseReason::Left)));
         }
         match self.session.edit_at_base(self.conn, root, base, hunks, &opts) {
             Ok(r) => {
@@ -866,12 +1011,17 @@ impl Worker {
                         self.forward(e)?;
                     }
                 } else {
-                    self.pump_upto(Some(v))?;
+                    // Nothing applied: everything queued, skipping nothing.
+                    self.pump()?;
                 }
                 self.seen = self.seen.max(v);
-                self.send(json!({ "type": "ack", "op": op, "version": v, "hunks": wire::hunks_json(&r.hunks) }))
+                self.send(wire::ack_frame(op, v, &r.hunks))
             }
-            Err(e) => self.send(json!({ "type": "refused", "op": op, "error": wire::error_json(&e) })),
+            Err(e) => {
+                // Refused: everything queued goes out first (WIRE.md v2).
+                self.pump()?;
+                self.send(wire::refused_frame(op, &e))
+            }
         }
     }
 
@@ -886,9 +1036,9 @@ impl Worker {
                 // The change arrives as `change` (never filtered: it isn't an
                 // edit of this socket's), before the reply.
                 self.pump_upto(Some(v))?;
-                self.send(wire::undo_result_json(op, &o, v))
+                self.send(wire::undo_reply(op, &o, v))
             }
-            Err(e) => self.send(json!({ "type": "refused", "op": op, "error": wire::error_json(&e.report()) })),
+            Err(e) => self.send(wire::refused_frame(op, &e.report())),
         }
     }
 }
@@ -911,7 +1061,7 @@ mod tests {
         let code = |r: Result<DocCaller, CliResponse>| {
             let r = r.expect_err("refused");
             assert_eq!(r.status, "403 Forbidden");
-            serde_json::from_str::<Value>(&r.body).expect("json")["error"]["code"].as_str().expect("code").to_string()
+            serde_json::from_str::<serde_json::Value>(&r.body).expect("json")["error"]["code"].as_str().expect("code").to_string()
         };
         assert_eq!(code(person_for(Caller::Owner, true)), "app_docs_not_available");
         assert_eq!(code(person_for(Caller::Shell { project_id: "p".into() }, false)), "agents_use_k2_doc");

@@ -12,9 +12,9 @@ import { createLiveTransport, liveUrl, type LiveSocket, type LiveTransport } fro
  *  workspace-relative with `workspace`). */
 export function createDaemonLiveTransport(scope: ServerScope, doc: { path: string; workspace?: string }): LiveTransport {
   return createLiveTransport({
-    url: async (resume) => {
+    url: async (resume, prev) => {
       const creds = await getDaemonWs(scope)
-      return liveUrl(daemonWsBase(creds), creds.token, doc.path, { workspace: doc.workspace, resume })
+      return liveUrl(daemonWsBase(creds), creds.token, doc.path, { workspace: doc.workspace, resume, prev })
     },
     open: async (url, signal) => (await openQueuedWebSocket(scope, url, { signal })) as unknown as LiveSocket,
   })

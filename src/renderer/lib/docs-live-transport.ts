@@ -26,6 +26,11 @@
 //     makes the editor connect again) replaces it: the old socket closes
 //     and the new one dials only after its close (at most 1 s), so the
 //     daemon has left the old connection; never two for one editor.
+//   - A reconnect sends `prev=<the last welcome's client id>` (or the
+//     `prev` given to `connect`): the daemon retires that connection (same
+//     person, doc and root) before the new one joins, so an edit still in
+//     flight on the dropped socket can't apply after the new `since` (the
+//     reconnect-race rule agreed with K2 Cores for WIRE.md).
 //   - `close()`: the tab is closing; the daemon leaves the doc.
 //   - Keepalive is the daemon's WS Ping (every 20 s); there is no app-level
 //     ping. Visibility rides `{"t":"viewing","visible"}` through `send`.
@@ -154,7 +159,7 @@ export type LiveServerFrame = ServerFrame | LiveExtraServerFrame
 
 export interface LiveTransport {
   /** One attempt: open, auth, join; resolves with `welcome`. */
-  connect(opts: { resume?: number; signal: AbortSignal }): Promise<LiveWelcome>
+  connect(opts: { resume?: number; prev?: number; signal: AbortSignal }): Promise<LiveWelcome>
   /** Dropped (never queued) while not open. */
   send(frame: LiveClientFrame): void
   onFrame(cb: (f: LiveServerFrame) => void): () => void
@@ -185,8 +190,8 @@ export interface LiveSocket {
 }
 
 export interface LiveTransportOptions {
-  /** The socket URL for one attempt (`resume` when reconnecting). */
-  url: (resume: number | undefined) => Promise<string>
+  /** The socket URL for one attempt (`resume` and `prev` when reconnecting). */
+  url: (resume: number | undefined, prev: number | undefined) => Promise<string>
   /** Opens a socket (default: `new WebSocket(url)`). */
   open?: (url: string, signal: AbortSignal) => Promise<LiveSocket>
 }
@@ -214,10 +219,16 @@ const REASONS: ReadonlySet<string> = new Set<LiveCloseReason>([
   'closed',
 ])
 
-/** A `closed` frame's fields, checked. Unknown reasons are `network`. */
+/** WIRE.md v2 "Closing", the retry column: only `cut_off` and `network`. */
+export function canRetry(reason: LiveCloseReason): boolean {
+  return reason === 'cut_off' || reason === 'network'
+}
+
+/** A `closed` frame's fields, checked. Unknown reasons are `network`; `retry`
+ *  comes from the table, never from the frame. */
 export function parseClose(f: Record<string, unknown>): LiveClose {
   const reason = typeof f.reason === 'string' && REASONS.has(f.reason) ? (f.reason as LiveCloseReason) : 'network'
-  const out: LiveClose = { reason, retry: typeof f.retry === 'boolean' ? f.retry : reason === 'network' }
+  const out: LiveClose = { reason, retry: canRetry(reason) }
   if (f.error && typeof f.error === 'object') out.error = f.error as ErrorReport
   if (typeof f.code === 'string') out.code = f.code
   if (typeof f.message === 'string') out.message = f.message
@@ -238,13 +249,14 @@ export function liveUrl(
   wsBase: string,
   token: string,
   doc: string,
-  opts: { workspace?: string; resume?: number } = {},
+  opts: { workspace?: string; resume?: number; prev?: number } = {},
 ): string {
   const q = new URLSearchParams()
   q.set('doc', doc)
   if (opts.workspace) q.set('workspace', opts.workspace)
   q.set('root', 'source')
   if (opts.resume !== undefined) q.set('resume', String(opts.resume))
+  if (opts.prev !== undefined) q.set('prev', String(opts.prev))
   q.set('token', token)
   return `${wsBase}/cli/docs/live?${q.toString()}`
 }
@@ -267,6 +279,8 @@ export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
   let sock: LiveSocket | null = null
   /** The socket that delivered `welcome` and hasn't ended. */
   let live: LiveSocket | null = null
+  /** The last welcome's client id: the next connect's `prev`. */
+  let lastClient: number | undefined
 
   function detach(s: LiveSocket): void {
     s.onopen = null
@@ -332,7 +346,7 @@ export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
       return live !== null && live.readyState === OPEN
     },
 
-    async connect({ resume, signal }) {
+    async connect({ resume, prev, signal }) {
       if (sock) {
         // A connect while a socket is open (or opening) replaces it: the
         // old one closes, and the daemon leaves it, before the new one dials.
@@ -342,7 +356,7 @@ export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
         await retire(old)
       }
       if (signal.aborted) throw abortError()
-      const url = await opts.url(resume)
+      const url = await opts.url(resume, prev ?? lastClient)
       if (signal.aborted) throw abortError()
       const s = await open(url, signal)
       if (signal.aborted) {
@@ -375,6 +389,7 @@ export function createLiveTransport(opts: LiveTransportOptions): LiveTransport {
               settled = true
               signal.removeEventListener('abort', onAbort)
               live = s
+              if (typeof f.client === 'number') lastClient = f.client
               resolve(f as unknown as LiveWelcome)
             } else if (f.type === 'closed') {
               fail(new LiveConnectError(parseClose(f)))

@@ -1,72 +1,53 @@
-//! The Live socket's frames (`WS /cli/docs/live`, [`super::live`]): JSON in
-//! and out, for the kit's hunk channel (the vendored client's `WIRE.md`
-//! and `src/wire.ts`) plus K2's own handshake and close frames.
+//! The Live socket's frames (`WS /cli/docs/live`, [`super::live`]), as the
+//! kit's `client/WIRE.md` v2 (kit main `bea1885`) specifies them, plus K2's
+//! own extra fields (marked below).
 //!
-//! The kit's Rust types carry no serde, so the shapes are written here, field
-//! for field as `wire.ts` names them. Offsets are UTF-8 bytes, versions are
-//! the doc's `Seq`.
+//! **Encoded with the kit's own JSON writer** (`k2_mpc_base::errors::Value`,
+//! as `ErrorReport::to_json`): it keeps object keys in insertion order, so
+//! every value here is byte for byte what the kit's golden files hold
+//! (`client/test/golden/*.json`, written by the kit's
+//! `crates/base/tests/wire_golden.rs`; this module's tests replay that
+//! scenario and compare). The kit's Rust types carry no serde.
 //!
-//! **Provisional (L2, 2026-10-30).** The kit's `WIRE.md` doesn't yet pin the
-//! frames below; K2 Cores is closing its gaps G1–G10 in one client-package +
-//! WIRE.md change. Until then these follow the L2 transport spec draft v0 and
-//! its addendum. Each provisional shape is marked with its gap:
-//!
-//! | Gap | Frame(s) here |
-//! |---|---|
-//! | G1 | `welcome`, `snapshot` (request and reply) |
-//! | G2 | `closed {reason, retry, code?, message?, error?, version?, written?, core?}`, `error {error}` |
-//! | G3 | the own-edit filter (by version, in [`super::live`]) |
-//! | G6 | `cursor` is applied only at the doc's current version, else dropped |
-//! | G7 | every encoding below (no golden vectors from the kit yet) |
-//! | G8 | `{"t":"viewing","visible"}` (also `{"type":"visible"}`), `view {root?, first, last}`; no app-level ping |
-//! | G9 | `undo_result {op, outcome, steps, version}` for `undo` / `redo` |
-//! | G10 | the 4 MiB client-frame cap ([`FRAME_CAP`]) |
+//! Client frames are read with serde (they are small and their key order
+//! doesn't matter).
 
-use serde_json::{json, Value};
+use serde_json::Value as Json;
 
-use k2_mpc_base::errors::ErrorReport;
+use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
-    ChangeEvent, CursorAt, LeaveReason, Participant, ParticipantKind, Rights, Role, RosterEntry, RosterEvent,
-    RosterMember, SessionError, UndoOutcome, Who,
+    ChangeEvent, CursorAt, LeaveReason, LineRange, ParticipantKind, Rights, Role, RosterEvent, RosterMember,
+    SessionError, UndoOutcome, Who,
 };
+use k2_mpc_base::store::Seq;
 use k2_mpc_base::text::Hunk;
 
-/// The largest client frame K2 takes (G10): a whole 1 MiB paste as JSON
-/// with room, and a 4 MiB doc's worth of hunks. A text frame over it, up to
-/// [`HARD_CAP`], is answered (`refused` for an op, else `error`) with the
-/// kit's `MPC-E113` and the socket stays open; past [`HARD_CAP`] the socket
-/// closes (`closed {reason: "cut_off"}`, code 1009). Server frames aren't
-/// capped: a `welcome` or `snapshot` carries the whole text (the Markdown
-/// and text packs hold at most 4 MiB, JSON-escaped).
-pub const FRAME_CAP: usize = 4 << 20;
+/// The frame cap (WIRE.md "Frame cap", `FRAME_MAX`): 4,194,304 bytes of
+/// UTF-8 JSON, both directions.
+pub const FRAME_MAX: usize = 4 << 20;
 
-/// The WebSocket layer's own limit (message and frame): past it the read
-/// fails and the socket is closed.
+/// The WebSocket layer's own limit (message and frame). A text frame over
+/// [`FRAME_MAX`] and up to this is refused in order and the socket stays;
+/// past it the read fails and the socket closes (`cut_off`, 1009). K2's,
+/// not the wire's: it bounds what one socket can make the daemon buffer.
 pub const HARD_CAP: usize = 8 << 20;
 
-/// Why a Live socket ended (the spec's `CloseReason`).
+/// Why a Live socket ended: WIRE.md "Closing", 13 rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloseReason {
-    /// The client closed the tab ([`super::live`] calls `leave`).
     Left,
     Idle,
     Kicked,
     RightsLost,
     Deleted,
     Moved,
-    /// The daemon handed off or is stopping: the next one serves.
     Released,
-    /// The socket fell behind the doc (the kit's subscriber queue), or a
-    /// frame was over [`HARD_CAP`]: reconnect and resume.
     CutOff,
-    /// The file can't be live (never-live, a pack refused it, not a text doc).
     Declined,
     NotFound,
-    /// The caller may not read this doc.
     Auth,
+    /// The transport's own (a dropped socket); never in a frame.
     Network,
-    /// K2 closed it for good (its core was switched off, PRD
-    /// multiplayer-cores-settings §6.1): no retry; open the file the usual way.
     Closed,
 }
 
@@ -89,13 +70,10 @@ impl CloseReason {
         }
     }
 
-    /// Whether the component should reconnect (with `resume`). The daemon
-    /// says so in the frame, so both sides agree.
+    /// The table's retry column (the client's `canRetry`): only `cut_off`
+    /// and `network`.
     pub fn retry(self) -> bool {
-        matches!(
-            self,
-            CloseReason::Idle | CloseReason::Moved | CloseReason::Released | CloseReason::CutOff | CloseReason::Network
-        )
+        matches!(self, CloseReason::CutOff | CloseReason::Network)
     }
 
     /// From the kit's leave reason.
@@ -115,32 +93,47 @@ pub mod code {
     pub const NORMAL: u16 = 1000;
     /// Frame over [`super::HARD_CAP`].
     pub const TOO_BIG: u16 = 1009;
+    /// The daemon is handing off or stopping, or live docs are still
+    /// starting: no `closed` frame (the transport's `network`: reconnect).
+    pub const RESTART: u16 = 1012;
     /// The core was switched off (PRD multiplayer-cores-settings §6.1).
     pub const CORE_OFF: u16 = 4010;
 }
 
-/// The final frame before a close (G2).
+/// The last frame before a close: `closed {reason, error?}`, and K2's
+/// extras after them (`retry`, `code`, `message`, `version`, `written`,
+/// `core`, `path`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Closed {
     pub reason: CloseReason,
-    /// K2's own code (`core_off`, `secret`, `file_not_found`...), when K2
-    /// (not the kit) refused.
+    /// The kit's report (`MPC-…`), when there is one.
+    pub error: Option<ErrorReport>,
+    /// K2's own code (`core_off`, `secret`, `not_a_text_doc`...).
     pub code: Option<String>,
     pub message: Option<String>,
-    /// The kit's `ErrorReport` JSON, when the kit refused.
-    pub error: Option<Value>,
-    /// The doc's version when it closed (and `written`: every change up to
-    /// it is in the file), for a core switched off.
-    pub version: Option<u64>,
+    /// On `core_off`: the version written back, and whether it was.
+    pub version: Option<Seq>,
     pub written: Option<bool>,
     pub core: Option<String>,
+    /// On `moved`: the doc's new workspace path.
+    pub path: Option<String>,
     /// The WebSocket close code that follows.
     pub ws_code: u16,
 }
 
 impl Closed {
     pub fn new(reason: CloseReason) -> Self {
-        Closed { reason, code: None, message: None, error: None, version: None, written: None, core: None, ws_code: code::NORMAL }
+        Closed {
+            reason,
+            error: None,
+            code: None,
+            message: None,
+            version: None,
+            written: None,
+            core: None,
+            path: None,
+            ws_code: code::NORMAL,
+        }
     }
 
     /// K2's own refusal: a code and a message.
@@ -150,80 +143,107 @@ impl Closed {
 
     /// The kit's refusal.
     pub fn kit(reason: CloseReason, e: &SessionError) -> Self {
-        Closed { error: Some(error_json(&e.report())), ..Closed::new(reason) }
+        Closed { error: Some(e.report()), ..Closed::new(reason) }
     }
 
-    pub fn json(&self) -> Value {
-        let mut v = json!({ "type": "closed", "reason": self.reason.as_str(), "retry": self.reason.retry() });
-        let o = v.as_object_mut().expect("object");
-        if let Some(c) = &self.code {
-            o.insert("code".into(), json!(c));
-        }
-        if let Some(m) = &self.message {
-            o.insert("message".into(), json!(m));
-        }
+    pub fn value(&self) -> Value {
+        let mut o: Vec<(String, Value)> = vec![("type".into(), "closed".into()), ("reason".into(), self.reason.as_str().into())];
         if let Some(e) = &self.error {
-            o.insert("error".into(), e.clone());
+            o.push(("error".into(), e.to_value()));
         }
-        if let Some(n) = self.version {
-            o.insert("version".into(), json!(n));
-        }
-        if let Some(w) = self.written {
-            o.insert("written".into(), json!(w));
-        }
-        if let Some(c) = &self.core {
-            o.insert("core".into(), json!(c));
-        }
-        v
+        o.push(("retry".into(), self.reason.retry().into()));
+        let mut opt = |k: &str, v: Option<Value>| {
+            if let Some(v) = v {
+                o.push((k.to_string(), v));
+            }
+        };
+        opt("code", self.code.as_deref().map(Value::from));
+        opt("message", self.message.as_deref().map(Value::from));
+        opt("version", self.version.map(Value::from));
+        opt("written", self.written.map(Value::from));
+        opt("core", self.core.as_deref().map(Value::from));
+        opt("path", self.path.as_deref().map(Value::from));
+        Value::Obj(o)
     }
 }
 
-/// The kit's `ErrorReport` as JSON: `{id, exit, message, next, rule, details}`.
-pub fn error_json(r: &ErrorReport) -> Value {
-    serde_json::from_str(&r.to_json()).unwrap_or_else(|e| json!({ "id": "MPC-E000", "message": format!("unreadable error report: {e}") }))
+/// A kit report by id (`lookup`), for the reports the host builds itself.
+pub fn report(id: &str, message: impl Into<String>) -> ErrorReport {
+    ErrorReport::new(lookup(id).unwrap_or_else(|| panic!("the vendored kit has no {id}")), message)
 }
 
-/// The kit's `MPC-E113` (`bad_edit`) for a frame K2 refuses.
-pub fn bad_edit(msg: impl Into<String>) -> Value {
-    error_json(&SessionError::BadEdit(msg.into()).report())
+/// `MPC-E113` for a client frame over the cap (WIRE.md "Frame cap").
+pub fn over_cap(bytes: usize) -> ErrorReport {
+    report("MPC-E113", format!("bad edit: the frame is {bytes} bytes, over the {FRAME_MAX}-byte cap"))
+        .with("bytes", bytes)
+        .with("frame_max", FRAME_MAX)
 }
 
-pub fn hunk_json(h: &Hunk) -> Value {
-    json!({ "start": h.start, "end": h.end, "insert": h.insert })
+/// `MPC-E113` for a client frame K2 couldn't read.
+pub fn unreadable(why: &str) -> ErrorReport {
+    report("MPC-E113", format!("bad edit: {why}"))
 }
 
-pub fn hunks_json(hs: &[Hunk]) -> Value {
-    Value::Array(hs.iter().map(hunk_json).collect())
+/// `MPC-E112` for a `since` reply that doesn't fit one frame.
+pub fn events_over_cap(bytes: usize) -> ErrorReport {
+    report("MPC-E112", format!("the changes since don't fit one frame ({bytes} bytes, over the {FRAME_MAX}-byte cap); reload"))
+        .with("limit", "frame")
+        .with("bytes", bytes)
+        .with("frame_max", FRAME_MAX)
 }
 
-/// The kit's `ChangeEvent`: `{version, pid, client, via, root, hunks, at_ms, on_behalf_of}`.
-pub fn change_json(e: &ChangeEvent) -> Value {
-    json!({
-        "version": e.version,
-        "pid": e.pid,
-        "client": e.client,
-        "via": e.via,
-        "root": e.root,
-        "hunks": hunks_json(&e.hunks),
-        "at_ms": e.at_ms,
-        "on_behalf_of": e.on_behalf_of,
-    })
+/// `closed {declined}` with `MPC-E401` for a `welcome` or `snapshot` that
+/// doesn't fit one frame: no retry.
+pub fn too_large(bytes: usize) -> Closed {
+    let e = report("MPC-E401", "live editing is off: the text doesn't fit one frame (too_large)")
+        .with("limit", "frame")
+        .with("bytes", bytes)
+        .with("frame_max", FRAME_MAX);
+    Closed { error: Some(e), code: Some("too_large".into()), ..Closed::new(CloseReason::Declined) }
 }
 
-/// `"edit"`, `"read"` or `"none"`.
-pub fn rights_word(r: &Rights) -> &'static str {
-    match (r.read, r.edit) {
-        (true, true) => "edit",
-        (true, false) => "read",
-        _ => "none",
+pub fn hunk(h: &Hunk) -> Value {
+    Value::obj([("start", Value::from(h.start)), ("end", Value::from(h.end)), ("insert", Value::from(h.insert.as_str()))])
+}
+
+pub fn hunks(hs: &[Hunk]) -> Value {
+    Value::List(hs.iter().map(hunk).collect())
+}
+
+/// `ChangeEvent`: `{version, pid, client, via, root, hunks, at_ms, on_behalf_of}`
+/// (`on_behalf_of` is `null` when absent, never left out).
+pub fn change(e: &ChangeEvent) -> Value {
+    Value::obj([
+        ("version", Value::from(e.version)),
+        ("pid", Value::from(e.pid.as_str())),
+        ("client", Value::from(e.client)),
+        ("via", Value::from(e.via.as_str())),
+        ("root", Value::from(e.root.as_str())),
+        ("hunks", hunks(&e.hunks)),
+        ("at_ms", Value::from(e.at_ms)),
+        ("on_behalf_of", e.on_behalf_of.as_deref().map_or(Value::Null, Value::from)),
+    ])
+}
+
+/// `"edit"` (read and edit), `"read"` (read only), else `"none"`.
+pub fn rights(r: Rights) -> &'static str {
+    if r.read && r.edit {
+        "edit"
+    } else if r.read {
+        "read"
+    } else {
+        "none"
     }
 }
 
-fn who(w: &Who) -> String {
-    w.to_string()
+fn role(r: Role) -> &'static str {
+    match r {
+        Role::Editor => "editor",
+        Role::Viewer => "viewer",
+    }
 }
 
-fn kind_str(k: ParticipantKind) -> &'static str {
+fn kind(k: ParticipantKind) -> &'static str {
     match k {
         ParticipantKind::Person => "person",
         ParticipantKind::Agent => "agent",
@@ -234,107 +254,215 @@ fn kind_str(k: ParticipantKind) -> &'static str {
     }
 }
 
-fn role_str(r: Role) -> &'static str {
-    match r {
-        Role::Editor => "editor",
-        Role::Viewer => "viewer",
-    }
+fn who(w: &Who) -> Value {
+    Value::from(w.to_string())
 }
 
-fn leave_str(r: LeaveReason) -> &'static str {
-    CloseReason::from_leave(r).as_str()
+fn lines(l: &LineRange) -> Value {
+    Value::obj([("root", Value::from(l.root.as_str())), ("first", Value::from(l.first)), ("last", Value::from(l.last))])
 }
 
-/// A caret as `CaretAt`: `{root, anchor, head, version?}` (bytes).
-fn caret_json(c: &CursorAt, version: Option<u64>) -> Value {
-    let mut v = json!({ "root": c.cursor.root, "anchor": c.cursor.anchor, "head": c.cursor.head });
-    if let Some(n) = version {
-        v["version"] = json!(n);
-    }
-    v
+/// A caret: `{root, anchor, head, version, anchor_lc, head_lc}`.
+fn caret(c: &CursorAt, version: Seq) -> Value {
+    Value::obj([
+        ("root", Value::from(c.cursor.root.as_str())),
+        ("anchor", Value::from(c.cursor.anchor)),
+        ("head", Value::from(c.cursor.head)),
+        ("version", Value::from(version)),
+        ("anchor_lc", Value::from(format!("{}:{}", c.anchor.line, c.anchor.col))),
+        ("head_lc", Value::from(format!("{}:{}", c.head.line, c.head.col))),
+    ])
 }
 
-fn lines_json(l: &k2_mpc_base::session::LineRange) -> Value {
-    json!({ "root": l.root, "first": l.first, "last": l.last })
+/// `RosterMember` → the wire's entry `{handle, name, colour, kind, role, away, cursor, rights}`.
+fn member(m: &RosterMember, version: Seq) -> Value {
+    let p = &m.entry.participant;
+    Value::obj([
+        ("handle", who(&m.who)),
+        ("name", Value::from(p.name.as_str())),
+        ("colour", Value::from(p.colour.as_str())),
+        ("kind", Value::from(kind(p.kind))),
+        ("role", Value::from(role(m.entry.role))),
+        ("away", Value::from(m.entry.away)),
+        ("cursor", m.entry.cursor.as_ref().map_or(Value::Null, |c| caret(c, version))),
+        ("rights", Value::from(rights(m.rights))),
+    ])
 }
 
-fn participant_json(p: &Participant) -> Value {
-    json!({ "name": p.name, "colour": p.colour, "kind": kind_str(p.kind), "via": p.via })
-}
-
-/// A roster entry as `wire.ts` has it: `{handle, name, colour, kind, role,
-/// away, cursor, rights}` (carets at `version`, the snapshot's).
-fn entry_json(handle: String, e: &RosterEntry, rights: &Rights, version: u64) -> Value {
-    json!({
-        "handle": handle,
-        "name": e.participant.name,
-        "colour": e.participant.colour,
-        "kind": kind_str(e.participant.kind),
-        "role": role_str(e.role),
-        "away": e.away,
-        "cursor": e.cursor.as_ref().map(|c| caret_json(c, Some(version))),
-        "rights": rights_word(rights),
-    })
-}
-
-fn member_json(m: &RosterMember, version: u64) -> Value {
-    entry_json(who(&m.who), &m.entry, &m.rights, version)
-}
-
-/// One `RosterEvent` (K5) as `roster_event.event`, tagged by `kind`. `None`
-/// for an event this K2 doesn't know (the kit's enum is non-exhaustive).
-pub fn roster_event_json(ev: &RosterEvent) -> Option<Value> {
-    Some(match ev {
-        RosterEvent::Snapshot { version, members, watching, .. } => json!({
-            "kind": "snapshot",
-            "version": version,
-            "members": members.iter().map(|m| member_json(m, *version)).collect::<Vec<_>>(),
-            "watching": watching,
-        }),
-        RosterEvent::Joined { who: w, participant, rights, .. } => json!({
-            "kind": "joined", "who": who(w), "participant": participant_json(participant), "rights": rights_word(rights),
-        }),
-        RosterEvent::Left { who: w, reason, .. } => json!({ "kind": "left", "who": who(w), "reason": leave_str(*reason) }),
-        RosterEvent::Rights { who: w, rights, .. } => json!({ "kind": "rights", "who": who(w), "rights": rights_word(rights) }),
-        RosterEvent::Role { who: w, role, .. } => json!({ "kind": "role", "who": who(w), "role": role_str(*role) }),
-        RosterEvent::Away { who: w, away, .. } => json!({ "kind": "away", "who": who(w), "away": away }),
-        RosterEvent::Cursor { who: w, cursor, version, .. } => json!({
-            "kind": "cursor", "who": who(w), "cursor": cursor.as_ref().map(|c| caret_json(c, Some(*version))),
-        }),
-        RosterEvent::ClaimStarted { who: w, claim, lines, note, hold, for_edit, expires_ms, version, .. } => json!({
-            "kind": "claim_started", "who": who(w), "claim": claim.to_string(), "lines": lines_json(lines),
-            "note": note, "hold": hold, "for_edit": for_edit, "expires_ms": expires_ms, "version": version,
-        }),
-        RosterEvent::ClaimEnded { who: w, claim, how, lines, version, .. } => json!({
-            "kind": "claim_ended", "who": who(w), "claim": claim.to_string(), "how": how.as_str(),
-            "lines": lines_json(lines), "version": version,
-        }),
-        RosterEvent::Note { to, from, kind, lines, claim, .. } => json!({
-            "kind": "note", "to": who(to), "from": who(from), "note": kind.as_str(), "lines": lines_json(lines),
-            "claim": claim.as_ref().map(|c| c.to_string()),
-        }),
-        RosterEvent::Watching { count, .. } => json!({ "kind": "watching", "count": count }),
+/// One `RosterEvent`, tagged by `kind`. `None` for an event this K2 doesn't
+/// know (the kit's enum is non-exhaustive): it isn't sent.
+pub fn roster_event(e: &RosterEvent) -> Option<Value> {
+    Some(match e {
+        RosterEvent::Snapshot { version, members, watching, .. } => Value::obj([
+            ("kind", Value::from("snapshot")),
+            ("version", Value::from(*version)),
+            ("members", Value::List(members.iter().map(|m| member(m, *version)).collect())),
+            ("watching", Value::from(*watching)),
+        ]),
+        RosterEvent::Joined { who: w, participant: p, rights: r, .. } => Value::obj([
+            ("kind", Value::from("joined")),
+            ("who", who(w)),
+            (
+                "participant",
+                Value::obj([
+                    ("name", Value::from(p.name.as_str())),
+                    ("colour", Value::from(p.colour.as_str())),
+                    ("kind", Value::from(kind(p.kind))),
+                    ("via", Value::from(p.via.as_str())),
+                ]),
+            ),
+            ("rights", Value::from(rights(*r))),
+        ]),
+        RosterEvent::Left { who: w, reason: r, .. } => Value::obj([
+            ("kind", Value::from("left")),
+            ("who", who(w)),
+            ("reason", Value::from(CloseReason::from_leave(*r).as_str())),
+        ]),
+        RosterEvent::Rights { who: w, rights: r, .. } => {
+            Value::obj([("kind", Value::from("rights")), ("who", who(w)), ("rights", Value::from(rights(*r)))])
+        }
+        RosterEvent::Role { who: w, role: r, .. } => {
+            Value::obj([("kind", Value::from("role")), ("who", who(w)), ("role", Value::from(role(*r)))])
+        }
+        RosterEvent::Away { who: w, away, .. } => {
+            Value::obj([("kind", Value::from("away")), ("who", who(w)), ("away", Value::from(*away))])
+        }
+        RosterEvent::Cursor { who: w, cursor, version, .. } => Value::obj([
+            ("kind", Value::from("cursor")),
+            ("who", who(w)),
+            ("cursor", cursor.as_ref().map_or(Value::Null, |c| caret(c, *version))),
+            ("version", Value::from(*version)),
+        ]),
+        RosterEvent::ClaimStarted { who: w, claim, lines: l, note, hold, for_edit, expires_ms, version, .. } => {
+            Value::obj([
+                ("kind", Value::from("claim_started")),
+                ("who", who(w)),
+                ("claim", Value::from(claim.to_string())),
+                ("lines", lines(l)),
+                ("note", note.as_deref().map_or(Value::Null, Value::from)),
+                ("hold", Value::from(*hold)),
+                ("for_edit", Value::from(*for_edit)),
+                ("expires_ms", Value::from(*expires_ms)),
+                ("version", Value::from(*version)),
+            ])
+        }
+        RosterEvent::ClaimEnded { who: w, claim, how, lines: l, version, .. } => Value::obj([
+            ("kind", Value::from("claim_ended")),
+            ("who", who(w)),
+            ("claim", Value::from(claim.to_string())),
+            ("how", Value::from(how.as_str())),
+            ("lines", lines(l)),
+            ("version", Value::from(*version)),
+        ]),
+        RosterEvent::Note { to, from, kind: k, lines: l, claim, .. } => Value::obj([
+            ("kind", Value::from("note")),
+            ("to", who(to)),
+            ("from", who(from)),
+            ("note", Value::from(k.as_str())),
+            ("lines", lines(l)),
+            ("claim", claim.map_or(Value::Null, |c| Value::from(c.to_string()))),
+        ]),
+        RosterEvent::Watching { count, .. } => Value::obj([("kind", Value::from("watching")), ("count", Value::from(*count))]),
         _ => return None,
     })
 }
 
-/// G9 (provisional): the reply to `undo` / `redo`. The change itself
-/// arrives as a `change` (before this frame).
-pub fn undo_result_json(op: u64, out: &UndoOutcome, version: u64) -> Value {
-    let (outcome, steps) = match out {
-        UndoOutcome::Applied { steps, .. } => ("applied", *steps),
-        UndoOutcome::Conflicts { .. } => ("conflicts", 0),
-        UndoOutcome::Blocked { .. } => ("blocked", 0),
-        UndoOutcome::Dropped { .. } => ("dropped", 0),
-        UndoOutcome::Nothing => ("nothing", 0),
-        UndoOutcome::HistoryLost => ("history_lost", 0),
-        UndoOutcome::ClearedByPurge => ("cleared_by_purge", 0),
-        _ => ("other", 0),
-    };
-    json!({ "type": "undo_result", "op": op, "outcome": outcome, "steps": steps, "version": version })
+// ── Frames ───────────────────────────────────────────────────────────
+
+pub fn change_frame(e: &ChangeEvent) -> Value {
+    Value::obj([("type", Value::from("change")), ("event", change(e))])
 }
 
-/// A frame from the client.
+pub fn ack_frame(op: u64, version: Seq, hs: &[Hunk]) -> Value {
+    Value::obj([("type", Value::from("ack")), ("op", Value::from(op)), ("version", Value::from(version)), ("hunks", hunks(hs))])
+}
+
+pub fn refused_frame(op: u64, e: &ErrorReport) -> Value {
+    Value::obj([("type", Value::from("refused")), ("op", Value::from(op)), ("error", e.to_value())])
+}
+
+pub fn error_frame(e: &ErrorReport) -> Value {
+    Value::obj([("type", Value::from("error")), ("error", e.to_value())])
+}
+
+pub fn events_frame(op: u64, evs: &[ChangeEvent]) -> Value {
+    Value::obj([("type", Value::from("events")), ("op", Value::from(op)), ("events", Value::List(evs.iter().map(change).collect()))])
+}
+
+pub fn snapshot_frame(op: u64, text: &str, version: Seq) -> Value {
+    Value::obj([("type", Value::from("snapshot")), ("op", Value::from(op)), ("text", Value::from(text)), ("version", Value::from(version))])
+}
+
+pub fn roster_frame(event: Value) -> Value {
+    Value::obj([("type", Value::from("roster_event")), ("event", event)])
+}
+
+/// The reply to `undo` / `redo` (WIRE.md "Undo and redo"): `undone {op,
+/// steps, version, notice?}` (`steps: 0`: nothing to undo; `notice`:
+/// `MPC-E206` / `MPC-E207`), or `refused` with `MPC-E201` on a conflict.
+pub fn undo_reply(op: u64, out: &UndoOutcome, version_now: Seq) -> Value {
+    match out {
+        UndoOutcome::Applied { steps, result, .. } => undone_frame(op, *steps, result.version, None),
+        UndoOutcome::Nothing => undone_frame(op, 0, version_now, None),
+        UndoOutcome::HistoryLost | UndoOutcome::ClearedByPurge => undone_frame(op, 0, version_now, out.refusal()),
+        other => match other.refusal() {
+            Some(e) => refused_frame(op, &e),
+            None => undone_frame(op, 0, version_now, None),
+        },
+    }
+}
+
+fn undone_frame(op: u64, steps: usize, version: Seq, notice: Option<ErrorReport>) -> Value {
+    let mut o = vec![
+        ("type".to_string(), Value::from("undone")),
+        ("op".to_string(), Value::from(op)),
+        ("steps".to_string(), Value::from(steps)),
+        ("version".to_string(), Value::from(version)),
+    ];
+    if let Some(n) = notice {
+        o.push(("notice".to_string(), n.to_value()));
+    }
+    Value::Obj(o)
+}
+
+/// The first frame: `welcome {root, version, text?, client, self, rights}`,
+/// then K2's extras (`core`, `family`, `path`).
+#[allow(clippy::too_many_arguments)]
+pub fn welcome_frame(
+    root: &str,
+    version: Seq,
+    text: Option<&str>,
+    client: u64,
+    self_who: &str,
+    rights_word: &str,
+    core: &str,
+    family: &str,
+    path: &str,
+) -> Value {
+    let mut o = vec![
+        ("type".to_string(), Value::from("welcome")),
+        ("root".to_string(), Value::from(root)),
+        ("version".to_string(), Value::from(version)),
+    ];
+    if let Some(t) = text {
+        o.push(("text".to_string(), Value::from(t)));
+    }
+    for (k, v) in [
+        ("client", Value::from(client)),
+        ("self", Value::from(self_who)),
+        ("rights", Value::from(rights_word)),
+        ("core", Value::from(core)),
+        ("family", Value::from(family)),
+        ("path", Value::from(path)),
+    ] {
+        o.push((k.to_string(), v));
+    }
+    Value::Obj(o)
+}
+
+// ── Client frames ────────────────────────────────────────────────────
+
+/// A frame from the client (WIRE.md "Client → host").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientFrame {
     Edit { op: u64, root: String, base: u64, hunks: Vec<Hunk>, group: Option<String> },
@@ -342,12 +470,13 @@ pub enum ClientFrame {
     Cursor { root: String, version: u64, anchor: usize, head: usize },
     Undo { op: u64 },
     Redo { op: u64 },
-    /// G1: the whole text now (after `MPC-E112`, `onReload`).
     Snapshot { op: u64 },
-    /// G8: the Thread's `{"t":"viewing","visible"}` (or `{"type":"visible"}`).
+    /// `visible {visible}` (also the Thread's `{"t":"viewing","visible"}`).
     Visible(bool),
-    /// G8: the lines in view (1-based, inclusive).
     View { root: Option<String>, first: usize, last: usize },
+    /// `hello {root, resume?}`: K2 takes both in the connect URL, so it is
+    /// ignored (the URL's win).
+    Hello,
 }
 
 /// Why a client frame was refused: its `op` when it had one (the reply is
@@ -358,53 +487,64 @@ pub struct BadFrame {
     pub message: String,
 }
 
-fn u64_field(o: &serde_json::Map<String, Value>, k: &str) -> Result<u64, String> {
-    o.get(k).and_then(Value::as_u64).ok_or_else(|| format!("`{k}` must be a whole number"))
+impl BadFrame {
+    /// `refused {op, error}` with an op, else `error {error}`: `MPC-E113`.
+    pub fn reply(&self) -> Value {
+        let e = unreadable(&self.message);
+        match self.op {
+            Some(op) => refused_frame(op, &e),
+            None => error_frame(&e),
+        }
+    }
 }
 
-fn str_field(o: &serde_json::Map<String, Value>, k: &str) -> Result<String, String> {
-    o.get(k).and_then(Value::as_str).map(str::to_string).ok_or_else(|| format!("`{k}` must be a string"))
+fn u64_field(o: &serde_json::Map<String, Json>, k: &str) -> Result<u64, String> {
+    o.get(k).and_then(Json::as_u64).ok_or_else(|| format!("`{k}` must be a whole number"))
 }
 
-/// Hunks as objects `{start, end, insert}` (the vectors' array form is not
-/// a wire form).
-pub fn parse_hunks(v: Option<&Value>) -> Result<Vec<Hunk>, String> {
-    let arr = v.and_then(Value::as_array).ok_or("`hunks` must be an array")?;
+fn str_field(o: &serde_json::Map<String, Json>, k: &str) -> Result<String, String> {
+    o.get(k).and_then(Json::as_str).map(str::to_string).ok_or_else(|| format!("`{k}` must be a string"))
+}
+
+/// Hunks as objects `{start, end, insert}`.
+pub fn parse_hunks(v: Option<&Json>) -> Result<Vec<Hunk>, String> {
+    let arr = v.and_then(Json::as_array).ok_or("`hunks` must be an array")?;
     arr.iter()
         .map(|h| {
             let o = h.as_object().ok_or("a hunk is an object {start, end, insert}")?;
-            let n = |k: &str| o.get(k).and_then(Value::as_u64).map(|n| n as usize).ok_or(format!("a hunk's `{k}` must be a whole number"));
-            let insert = o.get("insert").and_then(Value::as_str).ok_or("a hunk's `insert` must be a string")?;
+            let n = |k: &str| o.get(k).and_then(Json::as_u64).map(|n| n as usize).ok_or(format!("a hunk's `{k}` must be a whole number"));
+            let insert = o.get("insert").and_then(Json::as_str).ok_or("a hunk's `insert` must be a string")?;
             Ok(Hunk { start: n("start")?, end: n("end")?, insert: insert.to_string() })
         })
         .collect()
 }
 
-/// The `op` of a frame, when it is readable (for refusing a frame K2
-/// can't take, e.g. one over [`FRAME_CAP`]).
-pub fn op_of(v: &Value) -> Option<u64> {
-    v.get("op").and_then(Value::as_u64)
+/// A frame's `type` and `op`, when readable (for a frame over the cap).
+pub fn type_and_op(text: &str) -> (Option<String>, Option<u64>) {
+    match serde_json::from_str::<Json>(text) {
+        Ok(v) => (v.get("type").and_then(Json::as_str).map(str::to_string), v.get("op").and_then(Json::as_u64)),
+        Err(_) => (None, None),
+    }
 }
 
 pub fn parse(text: &str) -> Result<ClientFrame, BadFrame> {
-    let v: Value = serde_json::from_str(text).map_err(|e| BadFrame { op: None, message: format!("not JSON: {e}") })?;
-    let op = op_of(&v);
+    let v: Json = serde_json::from_str(text).map_err(|e| BadFrame { op: None, message: format!("the frame is not JSON ({e})") })?;
+    let op = v.get("op").and_then(Json::as_u64);
     let bad = |m: String| BadFrame { op, message: m };
     let o = v.as_object().ok_or_else(|| bad("a frame is a JSON object".into()))?;
-    // The Thread's viewing frame (G8, the addendum).
-    if o.get("t").and_then(Value::as_str) == Some("viewing") {
-        return o.get("visible").and_then(Value::as_bool).map(ClientFrame::Visible).ok_or_else(|| bad("`visible` must be a boolean".into()));
+    if o.get("t").and_then(Json::as_str) == Some("viewing") {
+        return o.get("visible").and_then(Json::as_bool).map(ClientFrame::Visible).ok_or_else(|| bad("`visible` must be a boolean".into()));
     }
-    let ty = o.get("type").and_then(Value::as_str).ok_or_else(|| bad("a frame needs a `type`".into()))?;
-    let f = match ty {
+    let ty = o.get("type").and_then(Json::as_str).ok_or_else(|| bad("a frame needs a `type`".into()))?;
+    Ok(match ty {
         "edit" => ClientFrame::Edit {
             op: u64_field(o, "op").map_err(bad)?,
             root: str_field(o, "root").map_err(bad)?,
             base: u64_field(o, "base").map_err(bad)?,
             hunks: parse_hunks(o.get("hunks")).map_err(bad)?,
             group: match o.get("group") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(s)) => Some(s.clone()),
+                None | Some(Json::Null) => None,
+                Some(Json::String(s)) => Some(s.clone()),
                 Some(_) => return Err(bad("`group` must be a string".into())),
             },
         },
@@ -418,26 +558,20 @@ pub fn parse(text: &str) -> Result<ClientFrame, BadFrame> {
         "undo" => ClientFrame::Undo { op: u64_field(o, "op").map_err(bad)? },
         "redo" => ClientFrame::Redo { op: u64_field(o, "op").map_err(bad)? },
         "snapshot" => ClientFrame::Snapshot { op: u64_field(o, "op").map_err(bad)? },
-        "visible" => ClientFrame::Visible(o.get("visible").and_then(Value::as_bool).ok_or_else(|| bad("`visible` must be a boolean".into()))?),
+        "visible" => ClientFrame::Visible(o.get("visible").and_then(Json::as_bool).ok_or_else(|| bad("`visible` must be a boolean".into()))?),
         "view" => ClientFrame::View {
-            root: o.get("root").and_then(Value::as_str).map(str::to_string),
+            root: o.get("root").and_then(Json::as_str).map(str::to_string),
             first: u64_field(o, "first").map_err(bad)? as usize,
             last: u64_field(o, "last").map_err(bad)? as usize,
         },
+        "hello" => ClientFrame::Hello,
         other => return Err(bad(format!("unknown frame type `{other}`"))),
-    };
-    Ok(f)
+    })
 }
 
-/// The reply to a frame K2 couldn't take: `refused {op, error}` when it has
-/// an op, else `error {error}` (G2). The error is the kit's `MPC-E113`.
-pub fn bad_frame_reply(b: &BadFrame) -> Value {
-    let error = bad_edit(b.message.clone());
-    match b.op {
-        Some(op) => json!({ "type": "refused", "op": op, "error": error }),
-        None => json!({ "type": "error", "error": error }),
-    }
-}
+#[cfg(test)]
+#[path = "live_wire_golden_tests.rs"]
+mod golden_tests;
 
 #[cfg(test)]
 mod tests {
@@ -468,31 +602,31 @@ mod tests {
         assert_eq!(parse(r#"{"t":"viewing","visible":false}"#), Ok(ClientFrame::Visible(false)));
         assert_eq!(parse(r#"{"type":"visible","visible":true}"#), Ok(ClientFrame::Visible(true)));
         assert_eq!(parse(r#"{"type":"view","first":2,"last":9}"#), Ok(ClientFrame::View { root: None, first: 2, last: 9 }));
+        assert_eq!(parse(r#"{"type":"hello","root":"source","resume":4}"#), Ok(ClientFrame::Hello));
 
         let b = parse(r#"{"type":"edit","op":8,"root":"source","base":1,"hunks":[[0,0,"x"]]}"#).expect_err("array hunk");
         assert_eq!(b.op, Some(8), "refused with its op");
-        let r = bad_frame_reply(&b);
-        assert_eq!(r["type"], "refused");
-        assert_eq!(r["op"], 8);
-        assert_eq!(r["error"]["id"], "MPC-E113", "{r}");
+        let r = b.reply().to_json();
+        assert!(r.starts_with(r#"{"type":"refused","op":8,"error":{"id":"MPC-E113""#), "{r}");
         let b = parse("{nope").expect_err("not json");
         assert_eq!(b.op, None);
-        assert_eq!(bad_frame_reply(&b)["type"], "error");
+        assert!(b.reply().to_json().starts_with(r#"{"type":"error","error":{"id":"MPC-E113""#));
         let b = parse(r#"{"type":"teleport","op":1}"#).expect_err("unknown type");
         assert!(b.message.contains("teleport"), "{}", b.message);
         assert!(parse(r#"{"type":"edit","op":-1,"root":"source","base":1,"hunks":[]}"#).is_err(), "negative op");
+        assert_eq!(type_and_op(r#"{"type":"edit","op":12}"#), (Some("edit".into()), Some(12)));
     }
 
     #[test]
-    fn close_reasons_say_whether_to_retry() {
+    fn close_reasons_follow_the_wire_table() {
         for (r, s, retry) in [
             (CloseReason::Left, "left", false),
-            (CloseReason::Idle, "idle", true),
+            (CloseReason::Idle, "idle", false),
             (CloseReason::Kicked, "kicked", false),
             (CloseReason::RightsLost, "rights_lost", false),
             (CloseReason::Deleted, "deleted", false),
-            (CloseReason::Moved, "moved", true),
-            (CloseReason::Released, "released", true),
+            (CloseReason::Moved, "moved", false),
+            (CloseReason::Released, "released", false),
             (CloseReason::CutOff, "cut_off", true),
             (CloseReason::Declined, "declined", false),
             (CloseReason::NotFound, "not_found", false),
@@ -503,20 +637,45 @@ mod tests {
             assert_eq!(r.as_str(), s);
             assert_eq!(r.retry(), retry, "{s}");
         }
-        let mut c = Closed::k2(CloseReason::Closed, "core_off", "the Markdown core is off");
+        let mut c = Closed::k2(CloseReason::Closed, "core_off", "the markdown core is off");
         c.core = Some("markdown".into());
         c.version = Some(12);
         c.written = Some(true);
         assert_eq!(
-            c.json(),
-            json!({"type":"closed","reason":"closed","retry":false,"code":"core_off","message":"the Markdown core is off","version":12,"written":true,"core":"markdown"})
+            c.value().to_json(),
+            r#"{"type":"closed","reason":"closed","retry":false,"code":"core_off","message":"the markdown core is off","version":12,"written":true,"core":"markdown"}"#
         );
     }
 
     #[test]
-    fn a_kit_refusal_is_the_kits_error_report() {
-        let e = error_json(&SessionError::RateLimited { retry_after_ms: 50 }.report());
-        assert_eq!(e["id"], "MPC-E901", "{e}");
-        assert!(e["message"].as_str().is_some_and(|m| !m.is_empty()), "{e}");
+    fn the_hosts_own_reports_match_the_kits_golden_ones() {
+        // errors.json `bad_edit_frame_cap` and `declined_too_large`, as the kit wrote them.
+        assert_eq!(
+            over_cap(4_194_400).to_json(),
+            report("MPC-E113", "bad edit: the frame is 4194400 bytes, over the 4194304-byte cap")
+                .with("bytes", 4_194_400u64)
+                .with("frame_max", 4_194_304u64)
+                .to_json()
+        );
+        let c = too_large(6_291_502);
+        assert_eq!(c.reason, CloseReason::Declined);
+        assert!(!c.reason.retry());
+        let e = c.error.expect("E401");
+        assert_eq!(e.id(), "MPC-E401");
+        assert!(e.to_json().contains(r#""details":{"limit":"frame","bytes":6291502,"frame_max":4194304}"#), "{}", e.to_json());
+        let e = events_over_cap(5 << 20);
+        assert_eq!(e.id(), "MPC-E112");
+        assert!(e.to_json().contains(r#""limit":"frame""#));
+    }
+
+    #[test]
+    fn undo_replies_are_undone_or_refused_e201() {
+        assert_eq!(undo_reply(3, &UndoOutcome::Nothing, 9).to_json(), r#"{"type":"undone","op":3,"steps":0,"version":9}"#);
+        let lost = undo_reply(4, &UndoOutcome::HistoryLost, 9).to_json();
+        assert!(lost.starts_with(r#"{"type":"undone","op":4,"steps":0,"version":9,"notice":{"id":"MPC-E206""#), "{lost}");
+        let purged = undo_reply(5, &UndoOutcome::ClearedByPurge, 9).to_json();
+        assert!(purged.contains(r#""notice":{"id":"MPC-E207""#), "{purged}");
+        let c = undo_reply(6, &UndoOutcome::Conflicts { step: 1, conflicts: vec![] }, 9).to_json();
+        assert!(c.starts_with(r#"{"type":"refused","op":6,"error":{"id":"MPC-E201""#), "{c}");
     }
 }

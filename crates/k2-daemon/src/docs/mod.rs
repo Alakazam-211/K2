@@ -403,6 +403,7 @@ impl Runtime {
     pub fn rekey(&self, old: &DocKey, new: &DocKey, new_abs: &Path) -> Result<(), SessionError> {
         self.manager.rekey(old, new.clone())?;
         claims::rekey(self.store().as_deref(), old, new);
+        live::doc_moved(old, new);
         let mut set = self.opened.lock().expect("docs opened set");
         if let Some(p) = set.remove(old) {
             if old.path.starts_with(".k2/") {

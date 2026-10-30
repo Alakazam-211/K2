@@ -60,11 +60,13 @@ class FakeSocket implements LiveSocket {
 function harness() {
   const sockets: FakeSocket[] = []
   const urls: Array<number | undefined> = []
+  const prevs: Array<number | undefined> = []
   /** At each dial: the states of the sockets dialled before it. */
   const priorStates: number[][] = []
   const t = createLiveTransport({
-    url: async (resume) => {
+    url: async (resume, prev) => {
       urls.push(resume)
+      prevs.push(prev)
       return `ws://x/cli/docs/live?resume=${resume ?? ''}`
     },
     open: async (url) => {
@@ -78,7 +80,7 @@ function harness() {
   const closes: LiveClose[] = []
   t.onFrame((f) => frames.push(f))
   t.onClose((e) => closes.push(e))
-  return { t, sockets, urls, frames, closes, priorStates }
+  return { t, sockets, urls, prevs, frames, closes, priorStates }
 }
 
 const welcome = (over: Record<string, unknown> = {}) => ({
@@ -193,6 +195,7 @@ describe('LiveTransport', () => {
     expect(h.closes).toHaveLength(1)
     const second = await connected(h, 7)
     expect(h.urls).toEqual([undefined, 7])
+    expect(h.prevs).toEqual([undefined, first.w.client]) // the reconnect names its old connection
     expect(second.w.text).toBeUndefined()
     expect(second.w.client).not.toBe(first.w.client)
     first.s.frame({ type: 'change', event: { version: 99 } }) // a late frame from the replaced socket
@@ -282,9 +285,14 @@ describe('LiveTransport', () => {
       error: { id: 'MPC-E111', message: 'm' },
     })
     expect(closeFromCode(undefined)).toEqual({ reason: 'network', retry: true })
+    expect(parseClose({ type: 'closed', reason: 'released', retry: true })).toEqual({ reason: 'released', retry: false })
+    expect(parseClose({ type: 'closed', reason: 'cut_off' })).toEqual({ reason: 'cut_off', retry: true })
     expect(liveUrl('ws://127.0.0.1:1', 't k', '/w/notes a.md', { resume: 5 })).toBe(
       'ws://127.0.0.1:1/cli/docs/live?doc=%2Fw%2Fnotes+a.md&root=source&resume=5&token=t+k',
     )
     expect(liveUrl('wss://h', 'tok', 'n.md', { workspace: 'ws' })).toBe('wss://h/cli/docs/live?doc=n.md&workspace=ws&root=source&token=tok')
+    expect(liveUrl('wss://h', 'tok', 'n.md', { resume: 3, prev: 9007199254740991 })).toBe(
+      'wss://h/cli/docs/live?doc=n.md&root=source&resume=3&prev=9007199254740991&token=tok',
+    )
   })
 })

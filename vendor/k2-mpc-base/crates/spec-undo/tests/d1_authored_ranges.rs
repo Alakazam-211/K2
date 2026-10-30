@@ -53,22 +53,38 @@ fn class_a_a_line_replace_over_another_s_edit_then_their_undo() {
     assert!(matches!(o, Outcome::Conflicts { step: 1, .. }), "{o:?}");
 }
 
-/// (b) concurrent words merged by an agent's `write --base`: every author undoes their own.
+/// (b) concurrent words on adjacent lines merged by an agent's `write --base`: every author
+/// undoes their own (v0.9.7.1: adjacent lines still merge; the same words in one line now
+/// conflict, below).
 fn class_b_concurrent_words_merged_by_write_base_each_undoes_their_own() {
-    let base = "alpha beta gamma\n";
+    let base = "alpha\nbeta\ngamma\n";
     let mut m = one(base);
-    m.replace("p1", None, 0, "alpha BETA gamma\n");
-    m.replace("p2", None, 0, "alpha BETA GAMMA\n");
+    m.replace("p1", None, 0, "alpha\nBETA\ngamma\n");
+    m.replace("p2", None, 0, "alpha\nBETA\nGAMMA\n");
     // the agent read `base` and changed only its own word
-    let (o, _) = m.write_base("ag", None, 0, base, "ALPHA beta gamma\n");
+    let (o, _) = m.write_base("ag", None, 0, base, "ALPHA\nbeta\ngamma\n");
     assert!(matches!(o, Outcome::Changed(Some(_))), "{o:?}");
-    assert_eq!(m.texts[0], "ALPHA BETA GAMMA\n");
+    assert_eq!(m.texts[0], "ALPHA\nBETA\nGAMMA\n");
     assert!(applied(&undo1(&mut m, "p1")), "p1 undoes BETA");
-    assert_eq!(m.texts[0], "ALPHA beta GAMMA\n");
+    assert_eq!(m.texts[0], "ALPHA\nbeta\nGAMMA\n");
     assert!(applied(&undo1(&mut m, "p2")), "p2 undoes GAMMA");
-    assert_eq!(m.texts[0], "ALPHA beta gamma\n");
+    assert_eq!(m.texts[0], "ALPHA\nbeta\ngamma\n");
     assert!(applied(&undo1(&mut m, "ag")), "the agent undoes ALPHA");
     assert_eq!(m.texts[0], base);
+}
+
+/// (b) in one line: the agent's `write --base` conflicts (v0.9.7.1).
+#[test]
+fn class_b_in_one_line_the_write_conflicts() {
+    locked(|| {
+        let base = "alpha beta gamma\n";
+        let mut m = one(base);
+        m.replace("p1", None, 0, "alpha BETA gamma\n");
+        m.replace("p2", None, 0, "alpha BETA GAMMA\n");
+        let (o, _) = m.write_base("ag", None, 0, base, "ALPHA beta gamma\n");
+        assert!(matches!(o, Outcome::WriteConflict), "{o:?}");
+        assert_eq!(m.texts[0], "alpha BETA GAMMA\n");
+    });
 }
 
 /// (c) prose: one word changed in a long paragraph three people wrote; their blame and

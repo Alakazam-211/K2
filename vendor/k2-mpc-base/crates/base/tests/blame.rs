@@ -873,3 +873,85 @@ proptest! {
         }
     }
 }
+
+// ---------- edits given as a new text pair lines first (v0.9.7.1, v0.9.8) ----------
+
+fn tool(s: &Session, c: ConnId, argv: &[&str], stdin: &str) {
+    let argv: Vec<String> = argv.iter().map(|a| (*a).to_owned()).collect();
+    s.run_tool(c, ROOT, &argv, stdin.as_bytes()).unwrap();
+}
+
+/// Each line of `b` with its author.
+fn authors(b: &Blame) -> Vec<(String, String)> {
+    b.lines
+        .iter()
+        .map(|l| (l.text.clone(), l.author.clone()))
+        .collect()
+}
+
+/// D1 regression (soak_short seed 1, change 18): deleting a whole line next to one that
+/// starts the same way removes that line, not its last characters and the next line's
+/// first ones. Before, `delete --lines 3` on `seed:0`…`seed:4` deleted `2\nseed:`, the next
+/// line's `3` joined text of the deleted line, and D1 made the joined word `seed:3` the
+/// deleter's: blame named them for a line they never wrote. Every line keeps its author,
+/// through a verb, the deleter's undo, an insert and `replace_text`.
+#[test]
+fn deleting_a_line_next_to_one_with_the_same_start_keeps_its_neighbour_its_authors() {
+    let f = fx("samestart");
+    let s = f.open("s.md", "seed:0\nseed:1\nseed:2\nseed:3\nseed:4\n");
+    let obs = join(&s, person("obs"));
+    let alice = join(&s, person("alice"));
+    let bob = join(&s, agent("bob"));
+    let carol = join(&s, person("carol"));
+    let import = |t: &str| (t.to_owned(), "kit:import".to_owned());
+    f.advance(10);
+    // a verb deletes seed:2
+    tool(&s, alice, &["delete", "--lines", "3,3"], "");
+    assert_eq!(
+        authors(&blame(&s, obs)),
+        ["seed:0", "seed:1", "seed:3", "seed:4"]
+            .map(import)
+            .to_vec(),
+        "a delete names no one for the lines it kept"
+    );
+    // alice's undo of her delete applies (it finds her own change) and puts seed:2 back
+    f.advance(10);
+    let out = s.undo(alice, 1).unwrap();
+    assert!(matches!(out, UndoOutcome::Applied { .. }), "{out:?}");
+    // (seed:2 is put back as alice's restoration of the import's line, U23; its neighbours
+    // stay the import's)
+    let b = authors(&blame(&s, obs));
+    let texts: Vec<&str> = b.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(texts, ["seed:0", "seed:1", "seed:2", "seed:3", "seed:4"]);
+    for k in [0, 1, 3, 4] {
+        assert_eq!(b[k].1, "kit:import", "{b:?}");
+    }
+    // a verb inserts a line before one with the same start: the new line is bob's alone
+    f.advance(10);
+    tool(&s, bob, &["insert", "--line", "4"], "seed:9\n");
+    assert_eq!(
+        authors(&blame(&s, obs)),
+        vec![
+            import("seed:0"),
+            import("seed:1"),
+            b[2].clone(),
+            ("seed:9".to_owned(), "bob".to_owned()),
+            import("seed:3"),
+            import("seed:4"),
+        ]
+    );
+    // replace_text (a whole new text) deletes seed:1
+    f.advance(10);
+    s.replace_text(carol, ROOT, "seed:0\nseed:2\nseed:9\nseed:3\nseed:4\n")
+        .unwrap();
+    assert_eq!(
+        authors(&blame(&s, obs)),
+        vec![
+            import("seed:0"),
+            b[2].clone(),
+            ("seed:9".to_owned(), "bob".to_owned()),
+            import("seed:3"),
+            import("seed:4"),
+        ]
+    );
+}

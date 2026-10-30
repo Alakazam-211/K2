@@ -1,6 +1,6 @@
 [package]
 name = "k2-mpc-base"
-version = "0.9.7"
+version = "0.9.7+1"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

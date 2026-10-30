@@ -18,6 +18,19 @@ use super::diff::Hunk;
 /// How far an insertion slides, in characters, at most.
 const MAX_SLIDE: usize = 4096;
 
+/// The hunks an edit given as a new text applies (verbs through `edit_with`, `replace_text`,
+/// `restore`, tier 0's promotion): [`super::diff::line_hunks`] (lines paired whole first,
+/// then a character or word diff inside each changed group of lines), with pure insertions
+/// slid to line starts ([`align_insertions`]). Pairing lines first keeps a change to the
+/// lines it changed: with [`super::diff::hunks`]' character trim, deleting `seed:2` from
+/// `seed:2\nseed:3\n` deleted `2\nseed:` instead, joining the next line's `3` to text of the
+/// deleted line, and D1 then made that joined word, `seed:3`, the deleter's (blame named
+/// them for a line they never wrote; v0.9.7.1, v0.9.8). These hunks name the elements the
+/// change removes and the engine keeps.
+pub fn edit_hunks(old: &str, new: &str) -> Vec<Hunk> {
+    align_insertions(old, super::diff::line_hunks(old, new))
+}
+
 /// `hunks` (sorted, non-overlapping, against `old`) with pure insertions slid to line
 /// boundaries where possible. Applying the result to `old` gives the same text; hunks keep
 /// their order and never come to touch a neighbour.
@@ -555,6 +568,43 @@ mod tests {
 
     fn align(old: &str, new: &str) -> Vec<Hunk> {
         align_insertions(old, diff::hunks(old, new))
+    }
+
+    /// An edit given as a new text pairs lines first (v0.9.7.1): a deleted or inserted line
+    /// next to a line with the same start is that line, never its end and the neighbour's
+    /// start; inside a line the diff still goes to the character.
+    #[test]
+    fn edit_hunks_pair_lines_first() {
+        let h = |start, end, insert: &str| Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        };
+        let old = "seed:1\nseed:2\nseed:3\n";
+        // deleting seed:2: the line (diff::hunks deletes "2\nseed:")
+        assert_eq!(edit_hunks(old, "seed:1\nseed:3\n"), vec![h(7, 14, "")]);
+        assert_eq!(diff::hunks(old, "seed:1\nseed:3\n"), vec![h(12, 19, "")]);
+        // inserting seed:9 before seed:3: at the line start
+        assert_eq!(
+            edit_hunks(old, "seed:1\nseed:2\nseed:9\nseed:3\n"),
+            vec![h(14, 14, "seed:9\n")]
+        );
+        // a word inside a line: the character diff
+        assert_eq!(
+            edit_hunks(old, "seed:1\nseed:X\nseed:3\n"),
+            vec![h(12, 13, "X")]
+        );
+        for new in [
+            "",
+            "x\n",
+            "seed:1\n",
+            "seed:3\nseed:2\nseed:1\n",
+            "seed:1\nseed:2",
+        ] {
+            let e = edit_hunks(old, new);
+            assert!(diff::validate(old, &e).is_ok());
+            assert_eq!(diff::apply(old, &e), new);
+        }
     }
 
     #[test]

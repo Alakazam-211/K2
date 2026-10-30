@@ -252,8 +252,11 @@ fn outcomes() -> Vec<ErrorReport> {
         base_text: "a\n".into(),
         ours: "b\n".into(),
         theirs: "c\n".into(),
+        ours_lines: (1, 1),
+        theirs_lines: (2, 2),
     };
-    v.push(WriteOutcome::Conflicts(vec![c]).refusal(7).unwrap());
+    v.push(WriteOutcome::Conflicts(vec![c.clone()]).refusal(7).unwrap());
+    v.push(WriteOutcome::Conflicts(vec![c]).refusal_at(7, 9).unwrap());
     v.push(WriteOutcome::BaseExpired.refusal(7).unwrap());
     v.push(crate::tools::udiff_refusal_for_tests(
         "patching file p\n1 out of 2 hunks FAILED -- nothing applied\n",

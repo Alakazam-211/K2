@@ -228,7 +228,7 @@ impl BlobSession {
             // makes it)
             let mut widened: Vec<(String, Vec<diff::Hunk>)> = Vec::new();
             for ((root, Neutral::Text(t)), (_, old)) in roots.iter().zip(&before) {
-                let hunks = lines::align_insertions(old, diff::hunks(old, t));
+                let hunks = lines::edit_hunks(old, t);
                 if hunks.is_empty() {
                     continue;
                 }

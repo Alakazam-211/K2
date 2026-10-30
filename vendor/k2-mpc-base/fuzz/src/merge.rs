@@ -17,7 +17,10 @@
 //!   its hunks are valid on theirs and give its text.
 //! - **conflicts** are disjoint, in order, inside the base, on char boundaries, with
 //!   `base_text` the base's bytes and sane line numbers.
-//! - **hunk-set merge:** `merge3_hunks` on the diffs' hunk sets is `merge3_window`.
+//! - **hunk-set merge:** `merge3_hunks` on write --base's sides (`merge::write_base_sides`:
+//!   whole lines on the closed texts, v0.9.7.1) is `merge3_window` on the closed texts (the
+//!   window then decides the final "\n").
+//! - **whole lines:** every line of a clean merge is a whole line of base, ours or theirs.
 
 use k2_mpc_base::text::diff::{self, Hunk};
 use k2_mpc_base::text::lines;
@@ -48,21 +51,23 @@ pub fn check(base: &str, ours: &str, theirs: &str) {
     let swapped = merge::merge3(base, theirs, ours);
     check_shape(base, theirs, &whole);
     check_shape(base, ours, &swapped);
+    let (sa, sb) = merge::write_base_sides(base, ours, theirs);
     for at_end in [false, true] {
         let w = merge::merge3_window(base, ours, theirs, at_end);
         check_shape(base, theirs, &w);
-        let sets = merge::merge3_hunks(
-            base,
-            &diff::hunks(base, ours),
-            &diff::hunks(base, theirs),
-            at_end,
-        );
-        assert_eq!(
-            sets, w,
-            "merge3_hunks on the diffs' hunks is merge3_window (at_end {at_end})"
-        );
+        let sets = merge::merge3_hunks(&merge::closed(base), &sa, &sb, at_end);
+        match (&sets, &w) {
+            (Merge::Clean(s), Merge::Clean(c)) => assert_eq!(
+                s.text,
+                merge::closed(&c.text),
+                "merge3_hunks on write --base's sides is merge3_window (at_end {at_end})"
+            ),
+            (Merge::Conflicts(s), Merge::Conflicts(c)) => assert_eq!(s.len(), c.len()),
+            _ => panic!("merge3_hunks on write --base's sides and merge3_window disagree (at_end {at_end}): {sets:?} vs {w:?}"),
+        }
         if let Merge::Clean(c) = &w {
             check_union(base, ours, theirs, at_end, c);
+            check_whole_lines(base, ours, theirs, &c.text);
         }
     }
     // the end-of-text rule only adds clean merges
@@ -74,28 +79,30 @@ pub fn check(base: &str, ours: &str, theirs: &str) {
     }
     // symmetric up to the order of two appends at the end
     if let (Merge::Clean(x), Merge::Clean(y)) = (&whole, &swapped) {
+        let cb = merge::closed(base);
         let eof = |new: &str| {
-            diff::hunks(base, new)
+            diff::whole_line_hunks(&cb, &merge::closed(new))
                 .pop()
-                .filter(|h| h.is_insertion() && h.start == base.len() && !base.is_empty())
+                .filter(|h| h.is_insertion() && h.start == cb.len() && !cb.is_empty())
                 .map(|h| h.insert)
         };
+        let (xt, yt) = (merge::closed(&x.text), merge::closed(&y.text));
         match (eof(ours), eof(theirs)) {
             (Some(eo), Some(et)) if eo != et => {
                 let tail = eo.len() + et.len();
                 assert!(
-                    x.text.ends_with(&format!("{et}{eo}")),
+                    xt.ends_with(&format!("{et}{eo}")),
                     "theirs' append first: {:?}",
                     x.text
                 );
                 assert!(
-                    y.text.ends_with(&format!("{eo}{et}")),
+                    yt.ends_with(&format!("{eo}{et}")),
                     "swapped: {:?}",
                     y.text
                 );
                 assert_eq!(
-                    &x.text[..x.text.len() - tail],
-                    &y.text[..y.text.len() - tail],
+                    &xt[..xt.len() - tail],
+                    &yt[..yt.len() - tail],
                     "symmetric before the appends"
                 );
             }
@@ -190,8 +197,8 @@ fn check_shape(base: &str, theirs: &str, m: &Merge) {
 /// A clean merge's text is every change of theirs and every change of ours (but those
 /// identical to one of theirs) applied to the base, in base order.
 fn check_union(base: &str, ours: &str, theirs: &str, at_end: bool, c: &Clean) {
-    let a = diff::hunks(base, ours);
-    let b = diff::hunks(base, theirs);
+    let (a, b) = merge::write_base_sides(base, ours, theirs);
+    let base = &*merge::closed(base);
     // (hunk, rank at one point: 0 theirs' insertion, 1 ours' insertion, 2 a replacement)
     let mut all: Vec<(&Hunk, u8)> = b
         .iter()
@@ -216,7 +223,24 @@ fn check_union(base: &str, ours: &str, theirs: &str, at_end: bool, c: &Clean) {
     }
     out.push_str(&base[at..]);
     assert_eq!(
-        c.text, out,
+        merge::closed(&c.text), out,
         "a clean merge (at_end {at_end}) holds both sides' changes: ours {a:?}, theirs {b:?}"
     );
+}
+
+/// Every line of a clean `write --base` merge is a whole line of base, ours or theirs
+/// (v0.9.7.1: no merge inside a line, so no splice and no join).
+fn check_whole_lines(base: &str, ours: &str, theirs: &str, result: &str) {
+    let key = |l: &str| l.strip_suffix('\n').unwrap_or(l).to_owned();
+    let known: std::collections::HashSet<String> = [base, ours, theirs]
+        .iter()
+        .flat_map(|t| t.split_inclusive('\n'))
+        .map(key)
+        .collect();
+    for l in result.split_inclusive('\n') {
+        assert!(
+            known.contains(&key(l)),
+            "a clean merge holds a line no one wrote: {l:?} in {result:?}"
+        );
+    }
 }

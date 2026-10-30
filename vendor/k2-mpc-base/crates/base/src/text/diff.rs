@@ -491,6 +491,57 @@ mod tests {
         }
     }
 
+    /// D2 for `write --base`'s sides (v0.9.8): `line_hunks` pairs whole lines first, so where
+    /// `hunks`' character trim reads a change one line off (the next line shares its first
+    /// characters), `line_hunks` reads the line that changed. These cases pin its choices;
+    /// changing any of them is a spec change (undo spec D2, O0).
+    #[test]
+    fn line_tie_break_is_pinned() {
+        let h = |start, end, insert: &str| Hunk {
+            start,
+            end,
+            insert: insert.into(),
+        };
+        let cases: &[(&str, &str, Vec<Hunk>, Vec<Hunk>)] = &[
+            // (old, new, line_hunks, hunks)
+            ("aa", "aaa", vec![h(2, 2, "a")], vec![h(2, 2, "a")]),
+            (
+                "ab\n",
+                "ab\nab\n",
+                vec![h(3, 3, "ab\n")],
+                vec![h(3, 3, "ab\n")],
+            ),
+            // a line inserted before a line with the same start
+            (
+                "ab\n",
+                "aX\nab\n",
+                vec![h(0, 0, "aX\n")],
+                vec![h(1, 1, "X\na")],
+            ),
+            // a line deleted before a line with the same start
+            (
+                "p22:2150\np10:2205\n",
+                "p10:2205\n",
+                vec![h(0, 9, "")],
+                vec![h(1, 10, "")],
+            ),
+            // a word inside a line: the same as hunks
+            (
+                "alpha beta\ngamma\n",
+                "alpha BETA\ngamma\n",
+                vec![h(6, 10, "BETA")],
+                vec![h(6, 10, "BETA")],
+            ),
+        ];
+        for (o, n, want_line, want) in cases {
+            let l = line_hunks(o, n);
+            validate(o, &l).unwrap();
+            assert_eq!(apply(o, &l), *n);
+            assert_eq!(&l, want_line, "line_hunks {o:?} -> {n:?}");
+            assert_eq!(&check(o, n), want, "hunks {o:?} -> {n:?}");
+        }
+    }
+
     /// `PROPTEST_CASES` overrides the default count (`with_cases` alone would ignore it).
     fn cases(default: u32) -> u32 {
         std::env::var("PROPTEST_CASES")
@@ -548,6 +599,29 @@ mod tests {
             for h in hunks(&old, &new) {
                 prop_assert!(h.start >= p, "hunk {:?} starts inside the common prefix ({})", h, p);
                 prop_assert!(h.end <= old.len() - s, "hunk {:?} ends inside the common suffix ({})", h, s);
+            }
+        }
+
+        /// D2 for `write --base`'s sides (v0.9.8, [`line_hunks`]): every hunk lies inside the
+        /// changed middle widened to whole lines: it starts at or after the line start at or
+        /// before the common prefix's end, and ends at or before the common suffix's largest
+        /// part that starts a line of both texts. So a line both texts keep whole around the
+        /// change is never in a hunk (`hunks` keeps its own property above).
+        #[test]
+        fn line_hunks_stay_inside_the_line_aligned_middle(core in text(), pre in text(), suf in text(), x in text()) {
+            let old = format!("{pre}{core}{suf}");
+            let new = format!("{pre}{x}{suf}");
+            let p = common_prefix(&old, &new);
+            let s = common_suffix(&old[p..], &new[p..]);
+            let lp = old[..p].rfind('\n').map_or(0, |k| k + 1);
+            let starts = |t: &str, q: usize| q == 0 || t.as_bytes()[q - 1] == b'\n';
+            let ls = (0..=s)
+                .rev()
+                .find(|&k| k == 0 || (starts(&old, old.len() - k) && starts(&new, new.len() - k)))
+                .unwrap_or(0);
+            for h in line_hunks(&old, &new) {
+                prop_assert!(h.start >= lp, "hunk {:?} starts before the line of the common prefix's end ({})", h, lp);
+                prop_assert!(h.end <= old.len() - ls, "hunk {:?} ends inside the common suffix's whole lines ({})", h, ls);
             }
         }
 

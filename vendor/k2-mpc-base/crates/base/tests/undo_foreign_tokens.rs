@@ -114,9 +114,36 @@ fn class_a() {
     );
 }
 
+/// (b) words of three writers on adjacent lines, merged by an agent's `write --base` from
+/// before the other two: every author undoes their own (v0.9.7.1: the writers' words are on
+/// adjacent lines, which still merge; the same words in one line now conflict).
 fn class_b() {
-    let base_text = "alpha beta gamma\n";
+    let base_text = "alpha\nbeta\ngamma\n";
     let f = fx("b", base_text);
+    let (p1, p2, ag) = (f.join("p1"), f.join("p2"), f.join("ag"));
+    let base = f.s.read(ag).unwrap().version;
+    f.s.replace_text(p1, ROOT, "alpha\nBETA\ngamma\n").unwrap();
+    f.s.replace_text(p2, ROOT, "alpha\nBETA\nGAMMA\n").unwrap();
+    let w =
+        f.s.write_base(ag, ROOT, base, "ALPHA\nbeta\ngamma\n")
+            .unwrap();
+    assert!(matches!(w, WriteOutcome::Applied(_)), "{w:?}");
+    assert_eq!(f.text(ag), "ALPHA\nBETA\nGAMMA\n");
+    assert!(applied(&f.undo(p1)), "p1 undoes BETA");
+    assert_eq!(f.text(ag), "ALPHA\nbeta\nGAMMA\n");
+    assert!(applied(&f.undo(p2)), "p2 undoes GAMMA");
+    assert_eq!(f.text(ag), "ALPHA\nbeta\ngamma\n");
+    assert!(applied(&f.undo(ag)), "the agent undoes ALPHA");
+    assert_eq!(f.text(ag), base_text);
+}
+
+/// (b), the same words in one line: the agent's write conflicts and applies nothing
+/// (v0.9.7.1: a write never merges inside a line).
+#[test]
+fn class_b_in_one_line_the_write_conflicts() {
+    let _g = ORDER.lock().unwrap_or_else(|p| p.into_inner());
+    let base_text = "alpha beta gamma\n";
+    let f = fx("b1", base_text);
     let (p1, p2, ag) = (f.join("p1"), f.join("p2"), f.join("ag"));
     let base = f.s.read(ag).unwrap().version;
     f.s.replace_text(p1, ROOT, "alpha BETA gamma\n").unwrap();
@@ -124,14 +151,8 @@ fn class_b() {
     let w =
         f.s.write_base(ag, ROOT, base, "ALPHA beta gamma\n")
             .unwrap();
-    assert!(matches!(w, WriteOutcome::Applied(_)), "{w:?}");
-    assert_eq!(f.text(ag), "ALPHA BETA GAMMA\n");
-    assert!(applied(&f.undo(p1)), "p1 undoes BETA");
-    assert_eq!(f.text(ag), "ALPHA beta GAMMA\n");
-    assert!(applied(&f.undo(p2)), "p2 undoes GAMMA");
-    assert_eq!(f.text(ag), "ALPHA beta gamma\n");
-    assert!(applied(&f.undo(ag)), "the agent undoes ALPHA");
-    assert_eq!(f.text(ag), base_text);
+    assert!(matches!(w, WriteOutcome::Conflicts(_)), "{w:?}");
+    assert_eq!(f.text(ag), "alpha BETA GAMMA\n");
 }
 
 fn class_c() {
@@ -161,7 +182,7 @@ fn class_a_a_replace_over_another_s_edit_then_their_undo() {
 }
 
 #[test]
-fn class_b_words_merged_by_write_base_each_undoes_their_own() {
+fn class_b_words_on_adjacent_lines_merged_by_write_base_each_undoes_their_own() {
     let _g = ORDER.lock().unwrap_or_else(|p| p.into_inner());
     class_b();
 }

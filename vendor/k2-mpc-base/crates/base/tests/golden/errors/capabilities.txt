@@ -1,4 +1,4 @@
-k2-mpc-base 0.9.7
+k2-mpc-base 0.9.7+1
 Error ids: MPC-Ennn (the kit), MPCE-Ennn (the engine). `explain <ID>` says what one means and what to do next; `--json` makes any output machine-readable.
 
 Exit codes (never change):

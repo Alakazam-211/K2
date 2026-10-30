@@ -1301,16 +1301,49 @@ pub async fn dispatch(mut stream: TcpStream, state: crate::DaemonState, ingress:
                 DispatchOutcome::KeepAlive => {
                     requests_served = requests_served.saturating_add(1);
                     if requests_served >= KEEP_ALIVE_MAX_REQUESTS {
+                        #[cfg(windows)]
+                        linger_close(&mut stream).await;
                         return;
                     }
                     // Continue: loop body re-enters `handle_one_request`
                     // which awaits the next request (with idle timeout).
                 }
-                DispatchOutcome::Done => return,
+                DispatchOutcome::Done => {
+                    #[cfg(windows)]
+                    linger_close(&mut stream).await;
+                    return;
+                }
             }
         }
     })
     .await
+}
+
+/// Windows: how long, and how much, [`linger_close`] drains.
+#[cfg(windows)]
+const LINGER_CAP_TIME: Duration = Duration::from_millis(200);
+#[cfg(windows)]
+const LINGER_CAP_BYTES: usize = 64 * 1024;
+
+/// Windows: a socket closed while request bytes are still unread is reset
+/// (RST), and the client can lose the response already sent to it (a 414
+/// for an oversized head arrived as an empty reply). Close gracefully
+/// instead: end our side (FIN), read and drop what the client still sends,
+/// up to [`LINGER_CAP_BYTES`] or [`LINGER_CAP_TIME`], then close. macOS and
+/// Linux close as before.
+#[cfg(windows)]
+async fn linger_close(stream: &mut TcpStream) {
+    let _ = stream.shutdown().await;
+    let deadline = tokio::time::Instant::now() + LINGER_CAP_TIME;
+    let mut buf = [0u8; 8 * 1024];
+    let mut drained = 0usize;
+    while drained < LINGER_CAP_BYTES {
+        match tokio::time::timeout_at(deadline, stream.read(&mut buf)).await {
+            Ok(Ok(n)) if n > 0 => drained += n,
+            // EOF (the client closed), an error, or the time cap.
+            _ => break,
+        }
+    }
 }
 
 /// Serve exactly one HTTP request on `stream`, returning whether the

@@ -292,6 +292,39 @@ async fn oversized_request_head_returns_414() {
     );
 }
 
+/// A burst of oversized heads, several at once: every client gets its
+/// 414. The daemon answers after reading only the first 16KB, so the rest
+/// of each head is still unread when it closes; on Windows that close
+/// used to reset the connection and the reply could be lost (an empty
+/// response).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_burst_of_oversized_heads_all_get_their_414() {
+    let _g = lock();
+    let daemon = test_harness::start("trunc-owner-burst").await;
+    let ws = temp_workspace("oversize-burst");
+    let req = format!(
+        "POST /cli/inbox/compose?token={}&project={}&title=t&body={} HTTP/1.1\r\n\
+         Host: 127.0.0.1\r\n\
+         Content-Length: 0\r\n\r\n",
+        daemon.owner_token,
+        urlencode(&ws.to_string_lossy()),
+        "x".repeat(40_000)
+    );
+    let port = daemon.port;
+    let mut clients = Vec::new();
+    for _ in 0..8 {
+        let req = req.clone();
+        clients.push(tokio::task::spawn_blocking(move || {
+            (0..25).map(|_| http_raw(port, &req).status).collect::<Vec<u16>>()
+        }));
+    }
+    for c in clients {
+        let statuses = c.await.expect("client thread");
+        assert!(statuses.iter().all(|s| *s == 414), "every oversized head gets its 414: {statuses:?}");
+    }
+    assert!(!ws.join(".k2").join("inbox").exists(), "nothing was written");
+}
+
 /// Live-message POST form — `/cli/workspace/msg` accepts the text in the
 /// POST body and reaches the real handler (which reports
 /// workspace_not_found for an unregistered workspace, proving the params

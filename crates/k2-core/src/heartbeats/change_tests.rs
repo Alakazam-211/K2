@@ -101,3 +101,23 @@ fn record_change_writes_actor_and_open_episode_ignores_it_ah18() {
     assert_eq!(actor_phrase(None), "the scheduler");
     let _ = std::fs::remove_dir_all(&path);
 }
+
+/// The stored `wakeup_path` is `/`-joined on every OS, from the add and
+/// from a rename (Windows used to store `.k2\heartbeats\..`, which the App
+/// WAKEUP.md edit check and the boot repair didn't recognise).
+#[test]
+fn stored_wakeup_paths_are_slash_joined_on_every_os() {
+    let (path, id) = seed("slash");
+    let out = k2so_heartbeat_add(path.clone(), "digest".into(), "daily".into(), r#"{"time":"07:00"}"#.into())
+        .expect("add");
+    assert_eq!(out["wakeupPath"], ".k2/heartbeats/digest/WAKEUP.md", "{out}");
+    let stored = |name: &str| {
+        let db = crate::db::shared();
+        let conn = db.lock();
+        AgentHeartbeat::get_by_name(&conn, &id, name).expect("read row").expect("row exists").wakeup_path
+    };
+    assert_eq!(stored("digest"), ".k2/heartbeats/digest/WAKEUP.md");
+    k2so_heartbeat_rename(path.clone(), "digest".into(), "brief".into()).expect("rename");
+    assert_eq!(stored("brief"), ".k2/heartbeats/brief/WAKEUP.md");
+    assert!(std::path::Path::new(&path).join(".k2").join("heartbeats").join("brief").join("WAKEUP.md").is_file());
+}

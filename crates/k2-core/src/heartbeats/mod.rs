@@ -196,10 +196,12 @@ pub fn k2so_heartbeat_add_with_instructions(
             .map_err(|e| format!("Failed to write wakeup.md: {}", e))?;
     }
 
-    // Store workspace-relative path so project moves don't break rows
+    // Store workspace-relative path so project moves don't break rows.
+    // `/`-joined on every OS (the form the boot repair and the App edit
+    // check use; Windows' to_string_lossy would give `.k2\heartbeats\..`).
     let workspace_relative = wakeup_file
         .strip_prefix(&project_path)
-        .map(|p| p.to_string_lossy().to_string())
+        .map(crate::paths::slash_rel)
         .unwrap_or_else(|_| wakeup_file.to_string_lossy().to_string());
 
     let id = uuid::Uuid::new_v4().to_string();
@@ -1289,9 +1291,10 @@ pub fn k2so_heartbeat_rename(
     }
 
     let new_wakeup = new_dir.join("WAKEUP.md");
+    // `/`-joined on every OS, like the add.
     let workspace_relative = new_wakeup
         .strip_prefix(&project_path)
-        .map(|p| p.to_string_lossy().to_string())
+        .map(crate::paths::slash_rel)
         .unwrap_or_else(|_| new_wakeup.to_string_lossy().to_string());
 
     conn.execute(

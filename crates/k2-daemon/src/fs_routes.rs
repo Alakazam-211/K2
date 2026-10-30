@@ -831,7 +831,13 @@ fn skin_write_heartbeat_wakeup(
     };
     match row {
         Ok(Some(h)) if h.archived_at.is_none() => {
-            if h.wakeup_path.trim_start_matches("./") != expected_rel {
+            // Windows: a row written before 0.46.7 (or not yet repaired at
+            // boot) may hold `.k2\heartbeats\..`; compare the `/` form.
+            #[cfg(windows)]
+            let stored = h.wakeup_path.replace('\\', "/");
+            #[cfg(not(windows))]
+            let stored = h.wakeup_path.clone();
+            if stored.trim_start_matches("./") != expected_rel {
                 return heartbeats_area_response();
             }
         }

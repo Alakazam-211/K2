@@ -20,6 +20,17 @@ use crate::journal::JournalWriter;
 use crate::runner::JobDirs;
 use crate::sync::{valid_sha, Git};
 
+/// A server's refusal of a blob as the job log says it: `code: message`
+/// (the message is the server's reason, e.g. the git error; one line,
+/// capped).
+fn failed_reason(code: &str, message: &str) -> String {
+    let msg: String = message.chars().map(|c| if c.is_control() { ' ' } else { c }).take(600).collect();
+    match msg.trim() {
+        "" => code.to_string(),
+        m => format!("{code}: {m}"),
+    }
+}
+
 impl Node {
     /// Ask `t`'s server for a blob and write it to `dest`. Retries across
     /// reconnects; stops on the job's stop signal or the overall timeout.
@@ -52,7 +63,7 @@ impl Node {
                 tokio::select! {
                     ev = rx.recv() => match ev {
                         None => break None,
-                        Some(TransferEvent::Failed(f)) => break Some(Err(f.code)),
+                        Some(TransferEvent::Failed(f)) => break Some(Err(failed_reason(&f.code, &f.message))),
                         Some(TransferEvent::Chunk(t)) => {
                             if t.seq != next {
                                 break Some(Err(format!("transfer chunk {} out of order (want {next})", t.seq)));
@@ -223,5 +234,20 @@ impl Node {
             let _ = journal.append(k2_node_proto::frames::LogStream::Sys, format!("[k2-node] --with {} @ {}\n", w.path, &w.commit[..w.commit.len().min(8)]).as_bytes());
         }
         Ok((SrcRan { commit: src.commit.clone(), tree, dirty_sha256: dirty_sha, slot: None, warmth: None }, main_dir))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::failed_reason;
+
+    #[test]
+    fn a_refused_blob_keeps_the_servers_reason() {
+        assert_eq!(
+            failed_reason("sync_failed", "name the commit: fatal: update_ref failed\nnonexistent object"),
+            "sync_failed: name the commit: fatal: update_ref failed nonexistent object"
+        );
+        assert_eq!(failed_reason("relay_cap", "  "), "relay_cap");
+        assert_eq!(failed_reason("sync_failed", &"x".repeat(5000)).len(), "sync_failed: ".len() + 600);
     }
 }

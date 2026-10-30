@@ -64684,7 +64684,10 @@ Server:
          Sew's recovery key: K2 keeps it in the K2 vault as sew-recovery-key,
          so you don't need to copy it (see it: k2 hostchat recovery-key).
          --recovery-key-file FILE brings an existing key (to reuse Sew data
-         already on this box); K2 keeps that one in the vault too.
+         already on this box); K2 keeps that one in the vault too (a key
+         different from the one the vault holds is refused; K2 leaves the
+         file as it is). rotate-master replaces it there with the new key
+         (the old one stays an older version); purge deletes it.
          Where Sew comes from: with no --tarball, enable and upgrade (and voice)
          download the release this K2 pins from
          github.com/Alakazam-211/sew-releases into ~/.k2/cache/sew, or reuse

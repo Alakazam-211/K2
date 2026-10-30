@@ -125,7 +125,11 @@ pub fn land(workspace_handle: &str, sidecar: &str, expect_onto: &str, expect_tip
 pub fn settle(workspace_handle: &str, sidecar: &str, discard: bool) -> Result<J, CliResponse> {
     let v = post("/cli/sidecar/retire", json!({ "workspace": workspace_handle, "name": sidecar, "discard": discard }))
         .map_err(|(_, _, r)| passthrough(r))?;
-    Ok(json!({ "settled": v["retired"].as_bool().unwrap_or(false), "discarded": v["how"] == "discarded" }))
+    // Discarded: W1 threw work away (its own `how`, or files or commits it
+    // trashed; a landed branch whose leftover edits went is still a discard).
+    let threw = |k: &str| v[k].as_array().is_some_and(|a| !a.is_empty());
+    let discarded = v["how"] == "discarded" || threw("discardedFiles") || threw("discardedCommits");
+    Ok(json!({ "settled": v["retired"].as_bool().unwrap_or(false), "discarded": discarded }))
 }
 
 /// W1's own facts on a sidecar (0251's columns and the daemon's task

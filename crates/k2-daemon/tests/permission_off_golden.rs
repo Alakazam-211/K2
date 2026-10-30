@@ -97,7 +97,7 @@ impl Drop for Env {
             Some(p) => std::env::set_var("HOME", p),
             None => std::env::remove_var("HOME"),
         }
-        for k in ["K2_COMPUTE", "K2_APPS", k2_core::push::ENV_GATEWAY_URL, k2_core::push::ENV_GATEWAY_TOKEN] {
+        for k in ["K2_COMPUTE", "K2_APPS", k2_daemon::apps::guarded::TEST_ENGINE_ENV, k2_core::push::ENV_GATEWAY_URL, k2_core::push::ENV_GATEWAY_TOKEN] {
             std::env::remove_var(k);
         }
         let _ = std::fs::remove_dir_all(&self.home);
@@ -785,6 +785,10 @@ async fn permission_cards_off_is_today_byte_for_byte() {
     // `apps_disabled`); everything else stays at today's defaults.
     std::env::set_var("K2_COMPUTE", "1");
     std::env::set_var("K2_APPS", "1");
+    // The fixtures are a box with no App engine: `/boot-status` adds
+    // `appEngine` and `appRehost` on one that has it (0.46.4), and a temp
+    // HOME doesn't hide `/usr/local/libexec/k2-app-engine`.
+    std::env::set_var(k2_daemon::apps::guarded::TEST_ENGINE_ENV, "absent");
     // Thread pushes go to a loopback fake gateway; a person's post or answer
     // wakes the agent, which is an `exec cat` shim (never a real CLI).
     ensure_fake_gateway();

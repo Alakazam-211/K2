@@ -207,8 +207,23 @@ pub fn take_checked(deployment: &str) -> Option<Value> {
     checked().lock().unwrap_or_else(|e| e.into_inner()).remove(deployment)
 }
 
+/// `K2_TEST_APP_ENGINE=absent|installed`: what a test build answers to
+/// [`engine_installed`], for tests whose expected output depends on it. The
+/// engine's path is absolute, so a temp `$HOME` doesn't hide a real install
+/// on the box running the tests. A release build never reads it
+/// ([`k2_core::TEST_BUILD`]).
+pub const TEST_ENGINE_ENV: &str = "K2_TEST_APP_ENGINE";
+
 /// Is `k2-app-engine` installed on this box (the root helper's file)?
 pub fn engine_installed() -> bool {
+    if k2_core::TEST_BUILD {
+        match std::env::var(TEST_ENGINE_ENV).as_deref() {
+            Ok("absent") => return false,
+            Ok("installed") => return true,
+            Ok(other) => panic!("{TEST_ENGINE_ENV}={other:?}: use absent or installed"),
+            Err(_) => {}
+        }
+    }
     cfg!(target_os = "linux") && Path::new(k2_root_proto::apps::ENGINE_PATH).exists()
 }
 
@@ -1054,6 +1069,22 @@ pub fn doctor_json() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test build answers what the test asked, whatever this box has; the
+    /// `/boot-status` block follows it.
+    #[test]
+    fn a_test_can_say_whether_the_engine_is_installed() {
+        use k2_core::test_env::EnvVar;
+        {
+            let _absent = EnvVar::set(TEST_ENGINE_ENV, "absent");
+            assert!(!engine_installed());
+            assert!(crate::apps::engine_heal::app_engine_json().is_none());
+            assert_eq!(crate::apps::engine_heal::decorate_boot_status(serde_json::json!({})), serde_json::json!({}));
+        }
+        let _installed = EnvVar::set(TEST_ENGINE_ENV, "installed");
+        assert!(engine_installed());
+        assert!(crate::apps::engine_heal::app_engine_json().is_some());
+    }
 
     fn spec() -> AppSpec {
         AppSpec {

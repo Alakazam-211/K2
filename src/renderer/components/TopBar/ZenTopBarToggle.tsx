@@ -4,7 +4,7 @@
 // window, so it turns THIS window's Zen on; the page underneath stays put.
 // Shift-click starts it in safe mode (Z29). In Settings' bar it closes
 // Settings and enters Zen. It renders nothing where Zen doesn't exist: the
-// web client, Windows until G-Win, Focus and ticket windows.
+// web client, Focus and ticket windows.
 //
 // This draws K2's regular (Styles) chrome, not Zen: it may use the Styles
 // tokens. Nothing under it renders inside the Zen root. The way out of Zen

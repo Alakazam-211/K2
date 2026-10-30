@@ -143,7 +143,7 @@ function thirdPartyBotLeaves(): NavLeaf[] {
  *  the login log stays in Logs → Access Audit, which each Access page links
  *  to) and Network (how this server is reached: Tunnel, Custom Domains,
  *  Connected Servers, K2 Companion). External Data (was Data Sources) moved into Gardens;
- *  where the Gardens group is hidden (web, Windows) it is Network's last
+ *  where the Gardens group is hidden (web) it is Network's last
  *  leaf, so it stays reachable. Local Grok Bots is 3rd Party Bots → Grok
  *  Bot. Old ids are unchanged, so deep links land on the same pages.
  *  `zenGardens`: show the Gardens group, which is
@@ -221,7 +221,7 @@ export function settingsNav({
         // homes-sync-v1 (0.46.1): your Homes between this computer and your
         // phone; the devices syncing from this server, with Remove.
         { id: 'homes-sync', label: 'Homes Sync' },
-        // No Gardens page here (web, Windows): External Data stays reachable.
+        // No Gardens page here (web): External Data stays reachable.
         ...(zenGardens ? [] : [{ id: 'data-sources' as const, label: 'External Data' }]),
       ],
     },
@@ -366,7 +366,7 @@ export default function Settings(): React.JSX.Element {
     if (isAirgap() && activeSection === 'k2-connect') {
       setSection('connections')
     }
-    // No Zen in this client (web, Windows until G-Win): no Gardens group.
+    // No Zen in this client (web, Focus or ticket windows): no Gardens group.
     if (!zenAvailable() && (activeSection === 'zen-gardens' || activeSection === 'zen-widget-data')) {
       setSection('general')
     }

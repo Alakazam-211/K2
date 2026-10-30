@@ -3,9 +3,9 @@
 //
 // - Desktop only: the hosted web client and the Companion apps get nothing.
 //   `webFeatures.zen` is the flag (`web/features.ts`, like `multiHost`).
-// - Windows waits for Wesley's smoke test (G-Win): Zen is built for Windows
-//   (Ctrl+Alt+Z, the K2 window controls) but hidden until
-//   `ZEN_WINDOWS_ENABLED` flips.
+// - Windows: on since 0.46.7 (the G-Win smoke on the Windows test box):
+//   Ctrl+Alt+Z and the K2 window controls, as on Linux. `ZEN_WINDOWS_ENABLED`
+//   is the one switch back off.
 // - Only a main-layout window: a Focus window (`focus-*`) or a ticket window
 //   (`window-ticket-*`) never shows Home, so never shows Zen.
 
@@ -13,8 +13,8 @@ import { webFeatures } from '@/web/features'
 import { desktopOsFromNavigator, type DesktopOs } from '@/lib/desktop-chrome'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 
-/** Flip when the Windows smoke (G-Win) passes. */
-export const ZEN_WINDOWS_ENABLED = false
+/** Zen and Gardens on Windows (on since the G-Win smoke, 0.46.7). */
+export const ZEN_WINDOWS_ENABLED = true
 
 export function currentDesktopOs(): DesktopOs {
   return desktopOsFromNavigator(typeof navigator === 'undefined' ? null : navigator)

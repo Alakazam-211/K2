@@ -20,7 +20,7 @@
 // open Zen window and the reverse.
 //
 // Where it shows: exactly where the Zen toggle shows (`zenAvailable()`: the
-// desktop app, not the web client, not Windows until G-Win, not Focus or
+// desktop app on macOS, Linux and Windows, not the web client, not Focus or
 // ticket windows), minus a computer whose daemon has no Gardens routes. The
 // local scope reports every feature as supported (docs/zen-contract.md,
 // renderer note 1), so `zen-gardens-v1` is read the way the rest of Zen reads

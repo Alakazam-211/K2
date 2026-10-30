@@ -35,7 +35,7 @@ export const webFeatures = {
   /**
    * prd-zen-mode-v1 Z2 — Zen Mode (Home's second face). Desktop only: the
    * hosted web client shows no Zen toggle and never calls `/cli/zen/*`.
-   * Windows is further gated in `lib/zen/zen-platform.ts` (G-Win smoke).
+   * Windows has its own switch in `lib/zen/zen-platform.ts` (on since G-Win).
    */
   zen: desktop,
   /**

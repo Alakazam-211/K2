@@ -7,7 +7,7 @@
 //
 // Asserted (fail loudly):
 //   - the Gardens group (0.45.7: Gardens, then Local Data) shows exactly
-//     where the Zen toggle shows (Mac yes, Windows no until G-Win, Focus
+//     where the Zen toggle shows (Mac and Windows yes, Focus
 //     window no), sits right after Access (Rosson 2026-10-15: "Move
 //     Gardens beneath Access"), and hides when this computer's daemon has no Gardens routes
 //     (`unknown zen route`, the renderer's `zen-gardens-v1` signal);
@@ -516,9 +516,28 @@ describe('Settings → Gardens: where it shows', () => {
     expect(zenCalls().some(([m, , r]) => m === 'GET' && r === 'zen/gardens')).toBe(true)
   })
 
-  it('matches the Zen toggle: hidden on Windows (until G-Win) and in a Focus window', async () => {
+  it('desktop Windows (since the G-Win smoke): the Gardens group and the Zen toggle both show', async () => {
+    setPlatform('Win32')
+    h.calls.length = 0
+    __resetZenSettingsForTests()
+    expect(zenAvailable()).toBe(true)
+    expect(zenGardensSettingsShown()).toBe(true)
+    render(
+      <>
+        <Settings />
+        <ZenTopBarToggle />
+      </>,
+    )
+    await settle()
+    expect(navIds()).toContain('zen-gardens')
+    expect(navIds()).not.toContain('data-sources')
+    expect(document.querySelectorAll('[data-zen-enter]').length).toBeGreaterThan(0)
+    expect(zenCalls().every(([, hostKey]) => hostKey === 'local')).toBe(true)
+    expect(zenCalls().some(([m, , r]) => m === 'GET' && r === 'zen/gardens')).toBe(true)
+  })
+
+  it('matches the Zen toggle: hidden in a Focus window', async () => {
     for (const setup of [
-      () => setPlatform('Win32'),
       () => {
         setPlatform('MacIntel')
         window.location.hash = '#focus=abc'
@@ -566,7 +585,8 @@ describe('Settings → Gardens: where it shows', () => {
 
   it('a deep link to Gardens or Local Data where Zen does not exist falls back to General', async () => {
     for (const section of ['zen-gardens', 'zen-widget-data'] as const) {
-      setPlatform('Win32')
+      window.location.hash = '#focus=abc'
+      setPlatform('MacIntel')
       useSettingsStore.setState({ activeSection: section })
       render(<Settings />)
       await settle()
@@ -574,6 +594,7 @@ describe('Settings → Gardens: where it shows', () => {
       expect(document.querySelector('[data-zen-gardens-section]')).toBeNull()
       expect(document.querySelector('[data-zen-widget-data-section]')).toBeNull()
       cleanup()
+      window.location.hash = ''
     }
   })
 

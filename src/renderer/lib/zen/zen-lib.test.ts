@@ -201,13 +201,14 @@ describe('shown (G2)', () => {
 })
 
 describe('desktop only (Z2, Q5)', () => {
-  it('never on web; Windows waits for the G-Win smoke; never in Focus or ticket windows', () => {
+  it('never on web; on Windows since the G-Win smoke; never in Focus or ticket windows', () => {
     expect(zenSupportedOn(true, 'mac')).toBe(false)
     expect(zenSupportedOn(true, 'linux')).toBe(false)
     expect(zenSupportedOn(false, 'mac')).toBe(true)
     expect(zenSupportedOn(false, 'linux')).toBe(true)
     expect(zenSupportedOn(false, 'windows')).toBe(ZEN_WINDOWS_ENABLED)
-    expect(ZEN_WINDOWS_ENABLED).toBe(false)
+    expect(ZEN_WINDOWS_ENABLED).toBe(true)
+    expect(zenSupportedOn(true, 'windows')).toBe(false)
     expect(isZenWindow('', 'main')).toBe(true)
     expect(isZenWindow('', 'window-1234')).toBe(true)
     expect(isZenWindow('', 'focus-abc')).toBe(false)

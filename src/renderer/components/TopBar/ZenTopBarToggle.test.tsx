@@ -5,7 +5,7 @@
 // drawer toggles on Agents and Home (after a pipe), after the mode toggle
 // on pages without drawer toggles (Settings, Feedback). It turns THIS
 // window's Zen on (Shift: safe mode) and is absent where Zen doesn't exist:
-// Windows until G-Win, and Focus / ticket windows. (The web client is
+// Focus / ticket windows. (Windows has it since the G-Win smoke.) (The web client is
 // `components/Zen/zen-web.test.tsx`.)
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -124,9 +124,16 @@ describe('the Zen toggle in the top bar (G5, TG3.4)', () => {
     )
   })
 
-  it('absent where Zen doesn’t exist: Windows (G-Win), Focus and ticket windows — and no stray pipe', () => {
+  it('Windows shows it, with the Ctrl+Alt+Z chord (on since the G-Win smoke)', () => {
+    setWindow('Win32')
+    render(<TopBarUtilities />)
+    expect(document.querySelector('[data-zen-enter]')?.getAttribute('title')).toBe(
+      'Zen Mode (Ctrl+Alt+Z). Hold Shift for safe mode.',
+    )
+  })
+
+  it('absent where Zen doesn’t exist: Focus and ticket windows — and no stray pipe', () => {
     for (const [platform, label] of [
-      ['Win32', 'main'],
       ['MacIntel', 'focus-abc'],
       ['MacIntel', 'window-ticket-42'],
     ] as const) {

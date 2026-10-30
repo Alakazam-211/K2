@@ -282,11 +282,11 @@ describe('the Admin profile button in the top bar', () => {
     expect(icon.querySelector('path')?.getAttribute('d')).toBe('M7 20.66V17h10v3.66')
   })
 
-  it('is absent where the Zen toggle is (Windows, Focus windows)', () => {
+  it('sits with the Zen toggle: shown on Windows (since G-Win), absent in Focus windows', () => {
     Object.defineProperty(window.navigator, 'platform', { value: 'Win32', configurable: true })
     __resetZenAvailableForTests()
     render(<TopBarUtilities />)
-    expect(document.querySelector('[data-admin-profile]')).toBeNull()
+    expect(document.querySelector('[data-admin-profile]')).not.toBeNull()
     cleanup()
     Object.defineProperty(window.navigator, 'platform', { value: 'MacIntel', configurable: true })
     h.label = 'focus-abc'

@@ -1098,8 +1098,10 @@ fn run_job(job: &Job, s: &JobSpec) -> Result<Value, CliResponse> {
                     f.sync_all().map_err(|e| export_error(&ExportError::Io(e)))?;
                     return Ok(c);
                 }
-                // The pool unloaded the doc between open and the copy: once more.
-                Err(SessionError::Unloaded) if attempt == 0 => {
+                // The pool unloaded the doc between open and the copy, or K2
+                // closed it (its core switched off): once more (the gate then
+                // answers `core_off`).
+                Err(SessionError::Unloaded | SessionError::Closed { .. }) if attempt == 0 => {
                     drop(w);
                     let _ = std::fs::remove_file(&input);
                 }

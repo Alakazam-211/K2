@@ -152,8 +152,10 @@ fn handle_inner(path: &str, rt: &Arc<super::Runtime>, c: &Call) -> CliResponse {
         Err(r) => return r,
     };
     match verb(path, rt, &s, c) {
-        // The pool unloaded the doc between open and the call: once more.
-        Err(VerbError::Session(SessionError::Unloaded)) => match open(rt, c.target) {
+        // The pool unloaded the doc between open and the call, or K2 closed
+        // it (kit v0.9.7.2: its core was switched off): once more. After a
+        // close the gate answers `core_off`.
+        Err(VerbError::Session(SessionError::Unloaded | SessionError::Closed { .. })) => match open(rt, c.target) {
             Ok(s) => verb(path, rt, &s, c).unwrap_or_else(VerbError::into_response),
             Err(r) => r,
         },

@@ -55,10 +55,14 @@
 //! `rights_lost`, `deleted`). The doc is renamed (`k2 doc mv`): `moved`
 //! with its new `path`. The daemon hands off or stops: no frame, close code
 //! 1012 (the transport's `network`: reconnect to the next daemon). The
-//! file's core is switched off ([`close_core`], or seen within a second
-//! through the gate): write back now (`flush`), `leave`, then
-//! `closed {reason:"closed", code:"core_off", core, version, written}` and
-//! close code 4010.
+//! file's core is switched off (Settings → Cores → Multiplayer): the flip
+//! closes the doc's session through the kit's host close (written back
+//! first; the roster's last event is `Closed`), then [`close_core`] tells
+//! each socket who did it and whether the doc is on disk, and the socket
+//! sends every change still queued, then `closed {reason:"closed",
+//! code:"core_off", core, version, written}` and close code 4010. A socket
+//! that sees the switch off first (within a second) waits briefly for
+//! that; a switch that closed nothing here makes it write back itself.
 //!
 //! **Keepalive** (as `overlay_ws.rs`): a WS Ping every 20 s
 //! (`K2_DOCS_LIVE_PING_MS` overrides it for tests); no frame at all from the
@@ -127,6 +131,11 @@ const POLL: Duration = Duration::from_millis(10);
 /// switch flips without [`close_core`]).
 const GATE_EVERY: Duration = Duration::from_secs(1);
 
+/// How long a socket that finds its core off (or its session closed by K2)
+/// waits for the flip's [`close_core`], which follows the kit's close at
+/// once and carries who turned it off and whether the doc was written.
+const FLIP_WAIT: Duration = Duration::from_secs(2);
+
 /// The longest the worker waits for its own change event after
 /// `edit_at_base` returned (it is queued during the commit, so this is a
 /// safety net: a late one is still skipped by version).
@@ -153,20 +162,8 @@ pub fn ping_interval() -> Duration {
 
 // ── The core switch (PRD multiplayer-cores-settings §2, §6.1) ─────────
 
-/// The multiplayer core a file belongs to (PRD §4.1): Markdown →
-/// `markdown`, any other text → `text`, any other file → `any-file`.
-pub fn core_of(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Markdown => "markdown",
-        Tier::Text(_) => "text",
-        Tier::Blob => "any-file",
-    }
-}
-
-/// The core gate: whether a core is on. **Seam for the settings slice
-/// (S1/S2):** it registers its in-process mirror (`docs/cores.rs`) here at
-/// boot. Until something registers, every core counts as on, so the Live
-/// view works on its own.
+/// A test's stand-in for the core switch (the integration test flips a core
+/// for the Live socket alone, without a settings write or a close).
 pub type CoreGate = fn(&str) -> bool;
 
 fn gate() -> &'static RwLock<Option<CoreGate>> {
@@ -174,16 +171,17 @@ fn gate() -> &'static RwLock<Option<CoreGate>> {
     G.get_or_init(|| RwLock::new(None))
 }
 
-/// Register the core gate (`None` takes it away: every core on).
+/// Put a stand-in in front of the switch (`None`: the switch alone).
 pub fn set_core_gate(g: Option<CoreGate>) {
     *gate().write().unwrap_or_else(|p| p.into_inner()) = g;
 }
 
-/// Whether `core` is on now.
+/// Whether `core` is on now: Settings → Cores → Multiplayer
+/// ([`super::cores::is_on`]), unless a test put a stand-in in front of it.
 pub fn core_is_on(core: &str) -> bool {
     match *gate().read().unwrap_or_else(|p| p.into_inner()) {
         Some(g) => g(core),
-        None => true,
+        None => super::cores::is_on(core),
     }
 }
 
@@ -206,8 +204,11 @@ struct Handle {
 enum Ctl {
     /// A reconnect from the same tab retired this connection (`prev`).
     Replaced,
-    /// The core was switched off: write back, leave, `closed`.
-    CoreOff { by: Option<String> },
+    /// The core was switched off: `closed`, then leave. `on_disk`: the
+    /// kit's host close already wrote the doc back (`Some(true)`) or failed
+    /// to (`Some(false)`); `None`: the session wasn't closed by it, so the
+    /// worker writes back itself.
+    CoreOff { by: Option<String>, on_disk: Option<bool> },
     /// The doc was renamed (`k2 doc mv`): `closed {reason: "moved", path}`.
     Moved { path: String },
 }
@@ -222,17 +223,22 @@ fn next_socket_id() -> u64 {
     N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
 }
 
-/// **Seam for the settings slice (S2):** after a core is switched off (the
-/// gate already says off), end every Live socket on its files. Each writes
-/// its doc back, leaves, and gets `closed {reason:"closed", code:"core_off",
-/// core, version, written}` then close code 4010. `by` (a display name) goes
-/// in the frame's message. Returns how many sockets were told. The sockets
-/// also notice a switched-off core on their own within a second.
-pub fn close_core(core: &str, by: Option<&str>) -> usize {
+/// Turning a core off, the Live half (called by the settings flip,
+/// `cores::sync_with`, right after the kit's host close of the core's
+/// sessions): end every Live socket on its files with `closed
+/// {reason:"closed", code:"core_off", core, version, written}` and close
+/// code 4010. `by` (a display name) goes in the frame's message. `on_disk`
+/// is the host close's outcome per doc (written back, or the write-back
+/// failed); a socket whose doc isn't in it writes back itself. Returns how
+/// many sockets were told. A socket also notices a closed session or a
+/// switched-off core on its own (within a second), and then waits briefly
+/// for this call's details.
+pub fn close_core(core: &str, by: Option<&str>, on_disk: &HashMap<DocKey, bool>) -> usize {
     let s = sockets().lock().unwrap_or_else(|p| p.into_inner());
     let mut n = 0;
     for h in s.values().filter(|h| h.core == core) {
-        if h.ctl.send(Ctl::CoreOff { by: by.map(str::to_string) }).is_ok() {
+        let ctl = Ctl::CoreOff { by: by.map(str::to_string), on_disk: on_disk.get(&h.key).copied() };
+        if h.ctl.send(ctl).is_ok() {
             n += 1;
         }
     }
@@ -349,7 +355,27 @@ fn open_error(e: &SessionError) -> Closed {
         SessionError::Forbidden { .. } => Closed::kit(CloseReason::Auth, e),
         SessionError::Released => restart(),
         SessionError::Deleted => Closed::kit(CloseReason::Deleted, e),
+        // K2 closed the session (kit v0.9.7.2's host close: a core switched
+        // off) between the open and the join, twice.
+        SessionError::Closed { .. } => Closed::kit(CloseReason::Closed, e),
         _ => Closed::kit(CloseReason::Declined, e),
+    }
+}
+
+/// A refused open of a file whose core is off: one `closed` frame, no retry.
+fn core_off_at_open(core: &str) -> Closed {
+    Closed {
+        core: Some(core.to_string()),
+        ..Closed::k2(CloseReason::Closed, "core_off", format!("the {core} core is off on this server: open the file the usual way"))
+    }
+}
+
+/// [`super::routes::open`]'s refusal as the socket's: the core gate's
+/// `core_off`, or the kit's error.
+fn route_open_error(e: super::routes::OpenError, core: &str) -> Closed {
+    match e {
+        super::routes::OpenError::CoreOff(_) => core_off_at_open(core),
+        super::routes::OpenError::Session(e) => open_error(&e),
     }
 }
 
@@ -375,7 +401,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
     let path = params.get("doc").or_else(|| params.get("path")).cloned().unwrap_or_default();
     let t: Target = target::resolve(params.get("workspace").map(String::as_str), &path, caller.default_workspace())
         .map_err(|r| Closed::k2(target_reason(&r), r.code, r.message))?;
-    let core = core_of(t.tier);
+    let core = super::cores::core_of(t.tier);
     if t.tier == Tier::Blob {
         return Err(Closed::k2(
             CloseReason::Declined,
@@ -384,10 +410,7 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
         ));
     }
     if !core_is_on(core) {
-        return Err(Closed {
-            core: Some(core.to_string()),
-            ..Closed::k2(CloseReason::Closed, "core_off", format!("the {core} core is off on this server: open the file the usual way"))
-        });
+        return Err(core_off_at_open(core));
     }
     let key = t.key();
     let pid = caller.pid();
@@ -404,10 +427,12 @@ fn open_live(caller: &DocCaller, params: &HashMap<String, String>) -> Result<Ope
             log_debug!("[docs/live] a reconnect retired its previous connection on {}", host::key_label(&key));
         }
     }
-    let mut session = super::routes::open(&rt, &t).map_err(|e| open_error(&e))?;
+    let mut session = super::routes::open(&rt, &t).map_err(|e| route_open_error(e, core))?;
     let joined = match session.join(participant.clone(), Stay::Held) {
-        Err(SessionError::Unloaded) => {
-            session = super::routes::open(&rt, &t).map_err(|e| open_error(&e))?;
+        // Unloaded, or closed by K2 (a core switched off), between the open
+        // and the join: open once more (the gate then says core_off).
+        Err(SessionError::Unloaded | SessionError::Closed { .. }) => {
+            session = super::routes::open(&rt, &t).map_err(|e| route_open_error(e, core))?;
             session.join(participant, Stay::Held)
         }
         r => r,
@@ -693,6 +718,8 @@ struct Worker {
     peeked: Option<ChangeEvent>,
     /// The kit's change queue ended (the connection left the session).
     changes_gone: bool,
+    /// The roster's last event said K2 closed the session (a core off).
+    host_closed: bool,
     /// Versions of this connection's own edits not yet passed: their events
     /// are never forwarded (G3).
     own: HashSet<Seq>,
@@ -730,6 +757,7 @@ impl Worker {
             dead,
             peeked: None,
             changes_gone: false,
+            host_closed: false,
             own: HashSet::new(),
             seen: o.version,
         }
@@ -759,7 +787,7 @@ impl Worker {
             }
             match self.ctl.try_recv() {
                 Ok(Ctl::Replaced) => return Stop::Close(Closed::new(CloseReason::Left)),
-                Ok(Ctl::CoreOff { by }) => return Stop::Close(self.core_off(by)),
+                Ok(Ctl::CoreOff { by, on_disk }) => return Stop::Close(self.core_off(by, on_disk)),
                 Ok(Ctl::Moved { path }) => {
                     return Stop::Close(Closed {
                         path: Some(path.clone()),
@@ -771,7 +799,10 @@ impl Worker {
             if Instant::now() >= next_gate {
                 next_gate = Instant::now() + GATE_EVERY;
                 if !core_is_on(self.core) {
-                    return Stop::Close(self.core_off(None));
+                    // The switch went off: the flip's close and its details
+                    // (who, written) follow at once; without them (a flip
+                    // that closed nothing here), this socket writes back.
+                    return Stop::Close(self.core_off_from_flip());
                 }
             }
             match self.inbox.recv_timeout(POLL) {
@@ -862,13 +893,24 @@ impl Worker {
         }
         loop {
             match self.roster.try_recv() {
+                // K2 closed the session (the kit's host close: a core switched
+                // off). It is the roster's last event; the socket ends with
+                // its own `closed` frame instead (WIRE.md v2 "Closing").
+                Ok(RosterEvent::Closed { .. }) => self.host_closed = true,
+                // Everything else, `overwritten` included (kit v0.9.7.2: an
+                // outside save may have removed this person's text; the kit
+                // sends it to its author alone, and a snapshot carries the
+                // ones still waiting).
                 Ok(ev) => {
-                    if let Some(v) = wire::roster_event(&ev) {
+                    if let Some(v) = wire::roster_event_for(&ev, Value::from(self.pid.as_str())) {
                         self.send(wire::roster_frame(v))?;
                     }
                 }
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return Err(Stop::Close(self.why_gone())),
+                Err(TryRecvError::Disconnected) => {
+                    self.drain_changes()?;
+                    return Err(Stop::Close(self.why_gone()));
+                }
             }
         }
         if self.changes_gone && self.peeked.is_none() {
@@ -881,14 +923,24 @@ impl Worker {
         self.pump_upto(None)
     }
 
+    /// Every change still queued goes out (the kit dropped the connection:
+    /// what it queued before is the client's).
+    fn drain_changes(&mut self) -> Result<(), Stop> {
+        while self.peek().is_some() {
+            let e = self.peeked.take().expect("peeked");
+            self.forward(e)?;
+        }
+        Ok(())
+    }
+
     /// The kit dropped this connection's queue: why.
     fn why_gone(&self) -> Closed {
         if self.dead.load(Ordering::SeqCst) {
             // A reconnect retired it (`prev`); the tab moved to the new socket.
             return Closed::new(CloseReason::Left);
         }
-        if !core_is_on(self.core) {
-            return self.core_off(None);
+        if self.host_closed || !core_is_on(self.core) {
+            return self.core_off_from_flip();
         }
         if let Err(super::Unavailable::Released) = super::runtime() {
             return restart();
@@ -896,6 +948,7 @@ impl Worker {
         match self.session.touch(self.conn) {
             // Still joined: the queue overflowed (1,024 events behind).
             Ok(()) => Closed::k2(CloseReason::CutOff, "cut_off", "this socket fell behind the doc; reconnect and resume"),
+            Err(SessionError::Closed { .. }) => self.core_off_from_flip(),
             Err(e @ SessionError::Deleted) => Closed::kit(CloseReason::Deleted, &e),
             Err(SessionError::Released) => restart(),
             Err(e @ SessionError::Unloaded) => Closed::kit(CloseReason::CutOff, &e),
@@ -912,9 +965,27 @@ impl Worker {
         }
     }
 
-    /// The core was switched off: write back now, then the frame.
-    fn core_off(&self, by: Option<String>) -> Closed {
-        let written = self.session.flush(self.conn).is_ok();
+    /// The core is off, or K2 closed the session: the flip's details for
+    /// this socket (who turned the core off, and whether the kit's host
+    /// close wrote the doc back) come right after its close, so wait up to
+    /// [`FLIP_WAIT`] for them; without them the socket writes back itself.
+    fn core_off_from_flip(&self) -> Closed {
+        let deadline = Instant::now() + FLIP_WAIT;
+        loop {
+            match self.ctl.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(Ctl::CoreOff { by, on_disk }) => return self.core_off(by, on_disk),
+                // A reconnect or a rename meanwhile: the core-off frame stands.
+                Ok(_) => {}
+                Err(_) => return self.core_off(None, None),
+            }
+        }
+    }
+
+    /// The core was switched off: the frame, after the doc is on disk. The
+    /// kit's host close wrote it back (`on_disk`); a session it didn't close
+    /// is written back here.
+    fn core_off(&self, by: Option<String>, on_disk: Option<bool>) -> Closed {
+        let written = on_disk.unwrap_or_else(|| self.session.flush(self.conn).is_ok());
         let version = self.session.status().map(|s| s.version).unwrap_or(self.seen);
         let message = match by {
             Some(b) => format!("the {} core was turned off by {b}: this file now opens the usual way", self.core),
@@ -1055,8 +1126,10 @@ impl Worker {
 mod tests {
     use super::*;
 
+    /// The Live socket keys on the settings' own registry (one `core_of`).
     #[test]
     fn files_belong_to_their_core() {
+        use super::super::cores::core_of;
         assert_eq!(core_of(Tier::of("notes.md")), "markdown");
         assert_eq!(core_of(Tier::of("main.rs")), "text");
         assert_eq!(core_of(Tier::of("photo.png")), "any-file");

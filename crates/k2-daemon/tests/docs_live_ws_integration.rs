@@ -25,9 +25,13 @@
 //!   8. Never-live files and files that aren't text are refused with one
 //!      `closed` frame, before any join.
 //!   9. A core that's off refuses the socket (`closed`, `core_off`, no
-//!      retry); switching it off ends open sockets with `closed` after the
-//!      write-back (the file holds every acknowledged edit), code 4010; the
-//!      gate alone (no `close_core`) ends them within a second or two.
+//!      retry). An outside save that removes A's typed line tells A on the
+//!      roster (`overwritten`, with A's text), and not B. Switching the core
+//!      off in settings (the kit's host close, then `close_core`) ends open
+//!      sockets with `closed` after the write-back (the file holds every
+//!      acknowledged edit), naming who did it, code 4010, and a docs read is
+//!      then `core_off`; the switch alone (no close) ends them within a few
+//!      seconds.
 //!
 //! ISOLATION: one test (the docs runtime is process-wide), temp HOME, a
 //! short keepalive (`K2_DOCS_LIVE_PING_MS=300`).
@@ -279,8 +283,18 @@ fn ty(f: &J) -> &str {
 
 static MARKDOWN_ON: AtomicBool = AtomicBool::new(true);
 
+/// A stand-in for the switch, for the Live socket alone: Markdown follows
+/// `MARKDOWN_ON` and the settings mirror; every other core the mirror.
 fn test_gate(core: &str) -> bool {
-    core != "markdown" || MARKDOWN_ON.load(Ordering::SeqCst)
+    k2_daemon::docs::cores::is_on(core) && (core != "markdown" || MARKDOWN_ON.load(Ordering::SeqCst))
+}
+
+/// Settings → Cores → Multiplayer, as a settings update applies it (the
+/// mirror, the kit's host close of a core turned off, its Live sockets
+/// told), as `by`.
+async fn flip(cores: &[(&str, bool)], by: &'static str) -> k2_daemon::docs::cores::Report {
+    let after: std::collections::BTreeMap<String, bool> = cores.iter().map(|(c, on)| (c.to_string(), *on)).collect();
+    tokio::task::spawn_blocking(move || k2_daemon::docs::cores::sync_multiplayer_cores(&after, by)).await.expect("flip")
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -300,6 +314,11 @@ async fn the_live_socket_end_to_end() {
     let port = daemon.port;
     tokio::task::spawn_blocking(k2_daemon::docs::start).await.expect("docs start");
     assert!(k2_daemon::docs::live_ready(), "the docs runtime is up: {}", k2_daemon::docs::pool_json());
+    // Settings → Cores → Multiplayer: Markdown and text on (every core is
+    // off on a new box). The stand-in gate below flips a core for the Live
+    // socket alone (sections 9's refusal at open and the backstop).
+    let on = flip(&[("markdown", true), ("text", true)], "owner-token").await;
+    assert_eq!(on.changed.len(), 2, "both cores turned on: {on:?}");
     k2_daemon::docs::live::set_core_gate(Some(test_gate));
 
     // A workspace with a Markdown file, a picture and a secret.
@@ -683,15 +702,56 @@ async fn the_live_socket_end_to_end() {
     assert_eq!(frame.map(|f| u16::from(f.code)), Some(1000), "refused before any join");
     MARKDOWN_ON.store(true, Ordering::SeqCst);
 
-    // Switching it off ends open sockets (close_core), after the write-back.
+    // An outside save from a stale buffer removes A's typed line (kit
+    // v0.9.7.2): the merge takes it, and A, the line's author, is told on
+    // the roster (`overwritten`, with the text); B, who didn't write it, is
+    // not.
+    let (vo, to) = daemon_text(port, &doc);
+    let typed = format!("typed by A {MARKER}\n");
+    a.send(json!({"type":"edit","op":40,"root":"source","base":vo,"hunks":[{"start":to.len(),"end":to.len(),"insert":typed}]})).await;
+    let (ack40, _) = a.until("ack 40", |f| f["op"] == 40).await;
+    assert_eq!(ty(&ack40), "ack", "{ack40}");
+    let mut synced = false;
+    for _ in 0..100 {
+        if std::fs::read_to_string(&doc).expect("file").contains(&typed) {
+            synced = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(synced, "A's line was written back: {}", std::fs::read_to_string(&doc).expect("file"));
+    // The stale buffer: the text before A's line, plus its own new first line.
+    std::fs::write(&doc, format!("a stale editor's own line\n{to}")).expect("stale save");
+    let (ow, _) = a.until("A told", |f| ty(f) == "roster_event" && f["event"]["kind"] == "overwritten").await;
+    let ev = &ow["event"];
+    assert_eq!(ev["to"], "person:owner", "{ev}");
+    assert_eq!(ev["source"], "an outside save", "{ev}");
+    assert_eq!(ev["rule"], "removed_text", "{ev}");
+    assert_eq!(ev["cells"][0]["yours"], typed.as_str(), "A gets back exactly what A typed: {ev}");
+    let msg = ev["message"].as_str().expect("message");
+    assert!(msg.starts_with("An outside save may have removed your text"), "{msg}");
+    assert!(msg.contains("typed by A"), "the note carries A's own text: {msg}");
+    assert!(ev["version"].as_u64().is_some(), "the owner can open the version holding it: {ev}");
+    let (_, mut b_frames) = b.until("B sees the save", |f| ty(f) == "change" && f["event"]["pid"] == "kit:external").await;
+    b_frames.extend(b.drain(600).await);
+    assert!(
+        !b_frames.iter().any(|f| f["event"]["kind"] == "overwritten"),
+        "B didn't write the line, so B isn't told: {b_frames:?}"
+    );
+    let _ = a.drain(300).await;
+
+    // Switching it off (a settings flip, the one path): the kit's host close
+    // writes the doc back and closes the session, then the open sockets end
+    // with who did it and whether the doc is on disk.
     let (vs, ts) = daemon_text(port, &doc);
     a.send(json!({"type":"edit","op":50,"root":"source","base":vs,"hunks":[{"start":ts.len(),"end":ts.len(),"insert":format!("last line {MARKER}\n")}]})).await;
     let (ack50, _) = a.until("ack 50", |f| f["op"] == 50).await;
     assert_eq!(ty(&ack50), "ack");
     let v50 = ack50["version"].as_u64().expect("v50");
-    MARKDOWN_ON.store(false, Ordering::SeqCst);
-    let told = k2_daemon::docs::live::close_core("markdown", Some("Anna"));
-    assert!(told >= 2, "both sockets told: {told}");
+    let off = flip(&[("markdown", false), ("text", true)], "user:anna").await;
+    assert_eq!(off.changed, vec![("markdown".to_string(), false)], "{off:?}");
+    assert!(off.closed >= 1 && off.failed.is_empty(), "the kit closed notes.md, written back: {off:?}");
+    assert!(off.paths.iter().any(|p| p == "notes.md"), "{off:?}");
     for (sock, who) in [(&mut a, "A"), (&mut b, "B")] {
         let (c, frame) = sock.closed(who).await;
         assert_eq!(c["reason"], "closed", "{who}: {c}");
@@ -700,7 +760,7 @@ async fn the_live_socket_end_to_end() {
         assert_eq!(c["core"], "markdown");
         assert_eq!(c["version"].as_u64(), Some(v50), "{who}: {c}");
         assert_eq!(c["written"], true, "{who}: {c}");
-        assert!(c["message"].as_str().is_some_and(|m| m.contains("Anna")), "{c}");
+        assert!(c["message"].as_str().is_some_and(|m| m.contains("anna")), "the person who turned it off: {c}");
         assert_eq!(frame.map(|f| u16::from(f.code)), Some(4010), "{who}");
     }
     let on_disk = std::fs::read_to_string(&doc).expect("file");
@@ -715,7 +775,15 @@ async fn the_live_socket_end_to_end() {
     }
     assert!(left.is_empty(), "no Live socket left: {left:?}");
 
-    // The gate alone (no close_core) ends a socket within a second or two.
+    // While it's off, the file opens the usual way: a docs read is core_off.
+    let r = http(port, "GET", &format!("/cli/docs/read?token={OWNER}&path={}", enc(&doc)), None);
+    assert_eq!(r.status, 403, "{}", r.body);
+    assert!(r.body.contains("\"core_off\""), "{}", r.body);
+
+    // The switch alone (the stand-in, no close) ends a socket within a few
+    // seconds: it waits for a flip's details, then writes back itself.
+    let on = flip(&[("markdown", true), ("text", true)], "owner-token").await;
+    assert_eq!(on.changed, vec![("markdown".to_string(), true)], "{on:?}");
     MARKDOWN_ON.store(true, Ordering::SeqCst);
     let mut late = open(&live_url(port, OWNER, &doc, "")).await;
     assert_eq!(ty(&late.next("welcome late").await), "welcome");

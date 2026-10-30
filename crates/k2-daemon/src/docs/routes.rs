@@ -434,8 +434,10 @@ pub fn handle(method: &str, path: &str, params: &HashMap<String, String>, body: 
     let r = verb(path, &session, &call);
     let (r, s) = match r {
         // The pool unloaded the session between open and the call (it was
-        // idle and nobody held it): open again, once.
-        Err(VerbError::Session(SessionError::Unloaded)) => match open(&rt, &target) {
+        // idle and nobody held it), or K2 closed it (kit v0.9.7.2's host
+        // close: its core was switched off): open again, once. After a
+        // close the gate answers `core_off`.
+        Err(VerbError::Session(SessionError::Unloaded | SessionError::Closed { .. })) => match open(&rt, &target) {
             Ok(s) => (verb(path, &s, &call), s),
             Err(e) => return e.into_response(),
         },
@@ -688,6 +690,17 @@ pub(super) fn with_exit(mut r: CliResponse, exit: u8) -> CliResponse {
     r
 }
 
+/// `r` (a JSON object answer) with `k` set to `v`.
+fn with_field(mut r: CliResponse, k: &str, v: Value) -> CliResponse {
+    if let Ok(mut body) = serde_json::from_str::<Value>(&r.body) {
+        if let Some(o) = body.as_object_mut() {
+            o.insert(k.into(), v);
+            r.body = body.to_string();
+        }
+    }
+    r
+}
+
 /// The kit's errors on the wire (SESSIONS.md "Errors"), each with its exit
 /// code (`error.exit`).
 pub fn session_error(e: &SessionError) -> CliResponse {
@@ -900,6 +913,12 @@ fn session_error_body(e: &SessionError) -> CliResponse {
         SessionError::Doc(d) => bad(d.to_string()),
         SessionError::Released | SessionError::Unloaded => {
             refusal("503 Service Unavailable", "docs_unavailable", "live docs are restarting; run the command again")
+        }
+        // K2 closed this doc's live session (a multiplayer core switched
+        // off) and the one reopen met it again: the next call gets the
+        // gate's `core_off`, or a fresh session if the core is back on.
+        SessionError::Closed { .. } => {
+            refusal("503 Service Unavailable", "docs_closed", "this file's live session was just closed; run the command again")
         }
         other => refusal("500 Internal Server Error", "docs_failed", other.to_string()),
     }
@@ -1298,12 +1317,18 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
         let r = s.replace_text_with(j.conn, ROOT, &text, policy(c))?;
         super::claims::record_read(c.caller, &key, r.version);
         let warning = matches!(c.caller, DocCaller::Agent { .. }).then(|| {
-            (
-                "warning",
-                json!("--base live replaced whatever was there, including other people's edits since you read it; use --base <version> to merge"),
-            )
+            json!("--base live replaced whatever was there, including other people's edits since you read it; use --base <version> to merge")
         });
-        return edit_reply(s, c, &r, warning);
+        let mut reply = edit_reply(s, c, &r, warning.map(|w| ("warning", w)))?;
+        // A replace returns no notes of its own: what's waiting for this
+        // caller (kit v0.9.7.2: an outside save may have removed their text)
+        // is delivered here (`take_notes`), and the CLI prints it.
+        if let Ok(n) = s.take_notes(j.conn) {
+            if !n.is_empty() {
+                reply = with_field(reply, "notes", notes_text(&n));
+            }
+        }
+        return Ok(reply);
     }
     let base: u64 = base.trim().parse().map_err(|_| VerbError::Response(bad("base must be a version number or \"live\"")))?;
     let report = s.write_base_with(j.conn, ROOT, base, &text, policy(c))?;
@@ -1315,8 +1340,12 @@ fn write(s: &Arc<Session>, c: &Call) -> Result<CliResponse, VerbError> {
             edit_reply(s, c, r, Some(("notes", notes_text(&report.notes))))
         }
         WriteOutcome::Conflicts(_) => {
-            // Who claimed or last edited each conflicting region.
-            let who: Vec<String> = report.conflict_notes.iter().map(|(i, n)| format!("conflict {}: {n}", i + 1)).collect();
+            // Who claimed or last edited each conflicting region, then the
+            // write's own heads-up notes (kit v0.9.7.2: an outside save that
+            // may have removed this caller's text says so here too).
+            let mut who: Vec<String> =
+                report.conflict_notes.iter().map(|(i, n)| format!("conflict {}: {n}", i + 1)).collect();
+            who.extend(report.notes.lines());
             let current = s.status()?.version;
             Ok(write_conflict_response(c.target, &out, base, current, &who))
         }

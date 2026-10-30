@@ -62,6 +62,29 @@ pub const AUDIT_CONFLICT: &str = "doc-conflict";
 pub const AUDIT_PURGED: &str = "doc-purged";
 /// A removed workspace's tier-0 blob key was destroyed with its blobs.
 pub const AUDIT_SPACE_KEY_PURGED: &str = "doc-space-key-purged";
+/// An outside save may have removed or replaced text someone wrote through
+/// the kit (kit v0.9.7.2): line numbers only, never the text.
+pub const AUDIT_OUTSIDE_OVERRIDE: &str = "doc-outside-override";
+/// K2 closed a doc's live session (a multiplayer core switched off): the
+/// connections that were in it, as a count.
+pub const AUDIT_SESSION_CLOSED: &str = "doc-session-closed";
+
+thread_local! {
+    /// While [`collect_disk_errors`] runs on this thread: the kit's
+    /// `DiskError`s, by doc.
+    static DISK_ERRORS: std::cell::RefCell<Option<Vec<(DocKey, String)>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` and collect the `AuditEvent::DiskError`s the kit reports while it
+/// runs. The kit calls [`Host::on_event`] on the calling thread, so what is
+/// collected is what `f`'s own kit calls reported (a host close's
+/// write-backs), never another thread's.
+pub fn collect_disk_errors<R>(f: impl FnOnce() -> R) -> (R, Vec<(DocKey, String)>) {
+    let outer = DISK_ERRORS.with(|c| c.borrow_mut().replace(Vec::new()));
+    let r = f();
+    let got = DISK_ERRORS.with(|c| std::mem::replace(&mut *c.borrow_mut(), outer)).unwrap_or_default();
+    (r, got)
+}
 
 /// What one principal may do with one doc (K2's copy of the kit's `Rights`,
 /// with a wire shape). `owner` (break a tier-0 lease, purge) is never
@@ -263,6 +286,11 @@ impl Host for K2Host {
                 key_label(key)
             ),
             AuditEvent::DiskError { key, error } => {
+                DISK_ERRORS.with(|c| {
+                    if let Some(v) = c.borrow_mut().as_mut() {
+                        v.push((key.clone(), error.clone()));
+                    }
+                });
                 log_debug!("[docs] WARN: disk error on {}: {error}", key_label(key));
                 audit(AUDIT_FILE, EXTERNAL, format!("{} disk_error", key_label(key)))
             }
@@ -331,6 +359,26 @@ impl Host for K2Host {
             AuditEvent::RecheckFailed { key, error } => {
                 log_debug!("[docs] WARN: rights re-check failed on {}: {error}", key_label(key))
             }
+            // Kit v0.9.7.2: an outside save may have removed someone's text.
+            // The note, with the text, goes to its author; the audit gets
+            // line numbers only.
+            AuditEvent::OutsideOverride { key, change, rule, region, by, version } => audit(
+                AUDIT_OUTSIDE_OVERRIDE,
+                EXTERNAL,
+                format!(
+                    "{} change={change} rule={rule} region={region} author={} version={}",
+                    key_label(key),
+                    by.as_deref().unwrap_or("-"),
+                    version.map_or_else(|| "-".to_string(), |v| v.to_string())
+                ),
+            ),
+            // Kit v0.9.7.2: K2 closed the session (`SessionManager::close_where`:
+            // a multiplayer core switched off).
+            AuditEvent::SessionClosed { key, connections, reason } => audit(
+                AUDIT_SESSION_CLOSED,
+                "k2",
+                format!("{} reason={reason} connections={}", key_label(key), connections.len()),
+            ),
             AuditEvent::DocDeleted { key, connections } => {
                 audit(AUDIT_FILE, "k2", format!("{} removed connections={}", key_label(key), connections.len()))
             }

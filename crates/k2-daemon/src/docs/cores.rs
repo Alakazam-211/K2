@@ -12,7 +12,10 @@
 //!   Markdown-core file. It is never `SessionError::Declined`, which would
 //!   send the file to tier 0.
 //! - **The flip** (§6): turning a core off closes that kind's loaded sessions
-//!   (unwritten changes written back first, claims and presence ended), audits
+//!   through the kit's host close (`SessionManager::close_where`, reason
+//!   `core_off`: unwritten changes written back first, claims and presence
+//!   ended, out of the pool), then ends that kind's Live sockets
+//!   ([`super::live::close_core`], one path for both), audits
 //!   one line per core with the actor's label (MC-9), then publishes
 //!   `doc_cores_changed` to every client (MC-8) and `sync:settings` to local
 //!   windows. A failed write-back never stops the flip (§6.2). Turning a core
@@ -22,13 +25,13 @@
 //!   `POST /cli/settings/update {"multiplayerCores": {...}}` on the
 //!   Owner/Admin key list, which agents can't reach.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use k2_core::docs_cores::{self, CoreView, CORES};
 use k2_core::log_debug;
-use k2_mpc_base::session::Stay;
+use k2_mpc_base::session::DiskState;
 use k2_mpc_base::store::DocKey;
 use serde_json::{json, Value};
 
@@ -171,83 +174,56 @@ pub trait CloseSessions {
 }
 
 impl CloseSessions for super::Runtime {
+    /// The kit's host close (v0.9.7.2, `SessionManager::close_where`, reason
+    /// [`CLOSE_REASON`]): every picked session, text and tier 0, members or
+    /// not. It writes back unwritten changes first, ends claims and presence,
+    /// sends every roster subscription a last `RosterEvent::Closed`, audits
+    /// `SessionClosed`, and takes the session out of the pool, so the tick no
+    /// longer merges outside saves into it (the next open takes them in). A
+    /// handle held elsewhere then fails with `SessionError::Closed`
+    /// (MPC-E519): K2's routes reopen once and the gate answers `core_off`.
+    /// Waiting outside-save notes are kept by the kit for the next open.
+    ///
+    /// The kit returns the keys; K2 adds, per key, whether the file held
+    /// unwritten changes (the session's status just before the close) and the
+    /// write-back's error when it failed (the kit's `DiskError`, reported on
+    /// this thread while it closes).
     fn close_where(&self, matches: &dyn Fn(&DocKey) -> bool) -> Vec<Closed> {
-        // TODO(kit v0.9.7.2): replace this interim body with the kit's close
-        // (final shape, K2 Cores 2026-10-30):
-        //   self.manager.close_where(CLOSE_REASON /* core_off */, |key, _pack| matches(key))
-        // (and `SessionManager::close(key, reason)` for one doc). It writes
-        // back unwritten changes, ends claims and presence, sends each roster
-        // subscription a last `RosterEvent::Closed { reason }`, emits
-        // `AuditEvent::SessionClosed`, and takes the session out of the pool:
-        // handles held elsewhere then fail with `SessionError::Closed`
-        // (MPC-E519, message "the host closed this doc's live session
-        // (core_off)"; K2 shows its own text: the `core_off` refusal, which
-        // the gate gives on the next open). Map its per-session report to
-        // `Closed`, drop `interim_close_*`, and treat `SessionError::Closed`
-        // in `routes::handle` / `tier0` like `Unloaded` (reopen once: the
-        // gate then answers core_off). A save made while closed is taken in
-        // on the next open, with authorship kept.
-        //
-        // Until then, the interim path (vs-live MC-7): K2 joins as the box
-        // owner, flushes (write-back now), kicks every participant (claims
-        // end with them) and leaves the session to the kit's idle unload.
-        // Its known gap: the session stays loaded for up to
-        // `idle_unload_ms` (10 min), and in that window an outside save is
-        // still merged through the kit (its stat check). The gate refuses
-        // every new join meanwhile.
-        let keys: Vec<DocKey> = self.manager.loaded_keys().into_iter().filter(|k| matches(k)).collect();
-        let mut out = Vec::with_capacity(keys.len());
-        for key in keys {
-            let (written, error) = if let Some(s) = self.manager.get(&key) {
-                interim_close_text(&s)
-            } else if let Some(b) = self.manager.get_blob(&key) {
-                interim_close_blob(&b)
-            } else {
-                continue; // unloaded meanwhile: nothing left to write
-            };
-            self.forget(&key);
-            out.push(Closed { key, written, error });
-        }
-        out
+        let dirty: HashSet<DocKey> =
+            self.manager.loaded_keys().into_iter().filter(|k| matches(k) && self.holds_unwritten(k)).collect();
+        let (closed, disk_errors) =
+            super::host::collect_disk_errors(|| self.manager.close_where(CLOSE_REASON, |key, _pack| matches(key)));
+        let keys = match closed {
+            Ok(keys) => keys,
+            Err(e) => {
+                // The pool is gone (released) or poisoned: nothing loaded is
+                // left to close, and nothing new opens past the gate.
+                log_debug!("[docs] WARN: closing sessions ({CLOSE_REASON}): {e}");
+                return Vec::new();
+            }
+        };
+        keys.into_iter()
+            .map(|key| {
+                self.forget(&key);
+                let error = disk_errors.iter().rev().find(|(k, _)| *k == key).map(|(_, e)| e.clone());
+                Closed { written: error.is_none() && dirty.contains(&key), error, key }
+            })
+            .collect()
     }
 }
 
-/// The participant K2 closes as: the box owner (person rights: all).
-fn closer_participant() -> k2_mpc_base::session::Participant {
-    super::caller::owner().participant(None)
-}
-
-fn interim_close_text(s: &k2_mpc_base::session::Session) -> (bool, Option<String>) {
-    let j = match s.join_shared(closer_participant(), Stay::UntilIdle) {
-        Ok(j) => j,
-        Err(e) => return (false, Some(e.to_string())),
-    };
-    let flushed = s.flush(j.conn);
-    let pids: Vec<String> = s.roster(j.conn).map(|r| r.into_iter().map(|e| e.participant.pid).collect()).unwrap_or_default();
-    for pid in &pids {
-        let _ = s.kick(pid);
-    }
-    let _ = s.leave(j.conn);
-    match flushed {
-        Ok(f) => (f.written, None),
-        Err(e) => (false, Some(e.to_string())),
-    }
-}
-
-fn interim_close_blob(s: &k2_mpc_base::session::BlobSession) -> (bool, Option<String>) {
-    let j = match s.join_shared(closer_participant(), Stay::UntilIdle) {
-        Ok(j) => j,
-        Err(e) => return (false, Some(e.to_string())),
-    };
-    let flushed = s.flush(j.conn);
-    let pids: Vec<String> = s.roster(j.conn).map(|r| r.into_iter().map(|e| e.participant.pid).collect()).unwrap_or_default();
-    for pid in &pids {
-        let _ = s.kick(pid);
-    }
-    let _ = s.leave(j.conn);
-    match flushed {
-        Ok(f) => (f.written, None),
-        Err(e) => (false, Some(e.to_string())),
+impl super::Runtime {
+    /// Whether the loaded doc at `key` holds changes its file doesn't have
+    /// yet (never loads).
+    fn holds_unwritten(&self, key: &DocKey) -> bool {
+        let disk = if let Some(s) = self.manager.get(key) {
+            s.status().ok().and_then(|st| st.disk)
+        } else if let Some(b) = self.manager.get_blob(key) {
+            b.status().ok().and_then(|st| st.disk)
+        } else {
+            None
+        };
+        matches!(disk, Some(DiskState::Dirty { .. }))
     }
 }
 
@@ -362,10 +338,16 @@ pub(crate) fn sync_with(
                 start();
             }
         } else if let Some(closer) = closer {
-            // 2. Close this kind's sessions: write back now, end claims and
-            //    presence. 4. They leave the watcher index (`forget`).
+            // 2. Close this kind's sessions (the kit's host close): write
+            //    back now, end claims and presence, out of the pool. 3. Each
+            //    Live socket on them ends with `closed {code: core_off}`,
+            //    naming the person and whether its doc is on disk. 4. They
+            //    leave the watcher index (`forget`).
             let id = core.id;
-            for c in closer.close_where(&|k: &DocKey| core_of_path(&k.path) == id) {
+            let done = closer.close_where(&|k: &DocKey| core_of_path(&k.path) == id);
+            let on_disk: HashMap<DocKey, bool> = done.iter().map(|c| (c.key.clone(), c.error.is_none())).collect();
+            super::live::close_core(id, Some(by_name.as_str()), &on_disk);
+            for c in done {
                 closed += 1;
                 if report.paths.len() < MAX_PATHS {
                     report.paths.push(c.key.path.clone());

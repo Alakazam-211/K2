@@ -16,8 +16,8 @@ use serde_json::Value as Json;
 
 use k2_mpc_base::errors::{lookup, ErrorReport, Value};
 use k2_mpc_base::session::{
-    ChangeEvent, CursorAt, LeaveReason, LineRange, ParticipantKind, Rights, Role, RosterEvent, RosterMember,
-    SessionError, UndoOutcome, Who,
+    ChangeEvent, CursorAt, LeaveReason, LineRange, Overwrite, ParticipantKind, Rights, Role, RosterEvent,
+    RosterMember, SessionError, UndoOutcome, Who,
 };
 use k2_mpc_base::store::Seq;
 use k2_mpc_base::text::Hunk;
@@ -289,16 +289,77 @@ fn member(m: &RosterMember, version: Seq) -> Value {
     ])
 }
 
+/// One `overwritten` event (WIRE.md "The `overwritten` event", kit
+/// v0.9.7.2): an outside save may have removed `to`'s text. It holds their
+/// own text (`cells[].yours`, `message`): only ever sent to them, and never
+/// logged.
+pub fn overwritten(to: Value, o: &Overwrite) -> Value {
+    let cell = |region: &str, col: Option<usize>, yours: &str, file: &str, cut: bool| {
+        Value::obj([
+            ("region", Value::from(region)),
+            ("col", col.map_or(Value::Null, Value::from)),
+            ("yours", Value::from(yours)),
+            ("file", Value::from(file)),
+            ("cut", Value::from(cut)),
+        ])
+    };
+    let mut cells = Vec::with_capacity(1 + o.also.len());
+    if !o.is_rollup() {
+        cells.push(cell(&o.region, o.col, &o.yours, &o.file, o.cut));
+    }
+    cells.extend(o.also.iter().map(|c| cell(&c.region, c.col, &c.yours, &c.file, c.cut)));
+    Value::obj([
+        ("kind", Value::from("overwritten")),
+        ("to", to),
+        ("change", Value::from(o.change)),
+        ("version", o.version.map_or(Value::Null, Value::from)),
+        ("restore_from", o.restore_from.map_or(Value::Null, Value::from)),
+        ("source", Value::from(o.source)),
+        ("rule", Value::from(o.rule)),
+        ("row", o.row.as_deref().map_or(Value::Null, Value::from)),
+        ("line", o.line.map_or(Value::Null, Value::from)),
+        ("cells", Value::List(cells)),
+        ("more", Value::from(o.more)),
+        ("not_shown", Value::from(o.not_shown)),
+        ("withheld", Value::from(o.withheld)),
+        ("no_history", Value::from(o.no_history)),
+        ("message", Value::from(o.to_string())),
+    ])
+}
+
 /// One `RosterEvent`, tagged by `kind`. `None` for an event this K2 doesn't
 /// know (the kit's enum is non-exhaustive): it isn't sent.
 pub fn roster_event(e: &RosterEvent) -> Option<Value> {
+    roster_event_for(e, Value::Null)
+}
+
+/// [`roster_event`] for the subscriber `me` (its `who`): a snapshot's own
+/// waiting `overwritten` notes name it as `to`.
+pub fn roster_event_for(e: &RosterEvent, me: Value) -> Option<Value> {
     Some(match e {
-        RosterEvent::Snapshot { version, members, watching, .. } => Value::obj([
-            ("kind", Value::from("snapshot")),
-            ("version", Value::from(*version)),
-            ("members", Value::List(members.iter().map(|m| member(m, *version)).collect())),
-            ("watching", Value::from(*watching)),
-        ]),
+        RosterEvent::Snapshot { version, members, watching, overwritten: waiting, .. } => {
+            let mut o = vec![
+                ("kind".to_string(), Value::from("snapshot")),
+                ("version".to_string(), Value::from(*version)),
+                ("members".to_string(), Value::List(members.iter().map(|m| member(m, *version)).collect())),
+                ("watching".to_string(), Value::from(*watching)),
+            ];
+            // Only when there are some (WIRE.md: optional), so a snapshot
+            // without notes is byte for byte the kit's golden one.
+            if !waiting.is_empty() {
+                o.push((
+                    "overwritten".to_string(),
+                    Value::List(waiting.iter().map(|w| overwritten(me.clone(), w)).collect()),
+                ));
+            }
+            Value::Obj(o)
+        }
+        RosterEvent::Overwritten { to, overwrite, .. } => overwritten(who(to), overwrite),
+        // The host closed the session: the last event (a Live socket ends
+        // with its own `closed` frame instead, and never sends this one).
+        RosterEvent::Closed { reason, .. } => {
+            Value::obj([("kind", Value::from("closed")), ("reason", Value::from(*reason))])
+        }
         RosterEvent::Joined { who: w, participant: p, rights: r, .. } => Value::obj([
             ("kind", Value::from("joined")),
             ("who", who(w)),

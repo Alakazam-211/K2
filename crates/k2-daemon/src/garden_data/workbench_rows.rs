@@ -134,14 +134,14 @@ pub(crate) struct Target {
     pub ws_label: String,
     pub ws_path: String,
     /// The sidecar (its handle and tab row), or `None` for the main agent.
-    pub sidecar: Option<k2_core::sidecar::SidecarRow>,
+    pub sidecar: Option<sessions::SessionRow>,
     /// The folder git reads: the sidecar's worktree, else the workspace.
     pub dir: String,
 }
 
 impl Target {
     pub fn handle(&self) -> Option<&str> {
-        self.sidecar.as_ref().and_then(|s| s.handle.as_deref())
+        self.sidecar.as_ref().map(|s| s.handle.as_str())
     }
 
     /// `ws` or `ws/name` (the Thread address).
@@ -207,20 +207,29 @@ pub(crate) fn target(address: &str) -> Result<Target, CliResponse> {
         dir: ws.path.clone(),
     };
     if let Some(name) = name {
-        let rows = sessions::sidecars(&ws.project_id).map_err(|e| no(500, "failed", e))?;
-        let row = rows.into_iter().find(|r| r.handle.as_deref() == Some(name.as_str())).ok_or_else(|| not_bound(&raw))?;
+        let rows = sessions::sidecars(&ws.project_id, &ws.path).map_err(|e| no(500, "failed", e))?;
+        let row = rows.into_iter().find(|r| r.handle == name).ok_or_else(|| not_bound(&raw))?;
         t.dir = sidecar_dir(&row, &ws.path);
         t.sidecar = Some(row);
     }
     Ok(t)
 }
 
-/// A sidecar's folder: its tab row's cwd when that is a folder inside its
-/// workspace (a worktree), else the workspace itself.
-fn sidecar_dir(row: &k2_core::sidecar::SidecarRow, ws_path: &str) -> String {
-    match row.cwd.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-        Some(cwd) if Path::new(cwd).is_dir() && relative_inside(cwd, ws_path).is_some() => cwd.to_string(),
-        _ => ws_path.to_string(),
+/// A sidecar's folder: its worktree (relative to the workspace, from the
+/// shared session list) when that is a folder inside the workspace, else
+/// the workspace itself.
+fn sidecar_dir(row: &sessions::SessionRow, ws_path: &str) -> String {
+    match row.worktree.as_deref().filter(|w| !w.is_empty() && !w.split('/').any(|seg| seg == "..")) {
+        Some(rel) => {
+            let dir = Path::new(ws_path).join(rel);
+            let dir = dir.to_string_lossy().to_string();
+            if Path::new(&dir).is_dir() && relative_inside(&dir, ws_path).is_some() {
+                dir
+            } else {
+                ws_path.to_string()
+            }
+        }
+        None => ws_path.to_string(),
     }
 }
 
@@ -234,7 +243,7 @@ fn git_out(dir: &str, args: &[&str]) -> Option<String> {
 /// The branch a workspace integrates on: its main checkout's branch (W1's
 /// recorded base wins when it has one).
 fn default_base(t: &Target) -> String {
-    if let Some(b) = t.sidecar.as_ref().and_then(|s| w1::task_facts(&t.project_id, &s.pane_group_id).base) {
+    if let Some(b) = t.sidecar.as_ref().and_then(|s| w1::task_facts(&t.project_id, s.pane_group_id.as_deref().unwrap_or("")).base) {
         return b;
     }
     git_out(&t.ws_path, &["symbolic-ref", "--quiet", "--short", "HEAD"]).filter(|b| !b.is_empty()).unwrap_or_else(|| "main".to_string())
@@ -363,8 +372,8 @@ fn ahead_count(dir: &str, base: &str) -> Option<i64> {
 /// One sidecar as a Workbench task row (WorkRow).
 fn work_row(t: &Target, with_git: bool) -> J {
     let s = t.sidecar.as_ref().expect("a sidecar");
-    let facts = w1::task_facts(&t.project_id, &s.pane_group_id);
-    let live = crate::v2_session_map::lookup_by_agent_name(&s.agent_name).is_some_and(|x| x.is_child_alive());
+    let facts = w1::task_facts(&t.project_id, s.pane_group_id.as_deref().unwrap_or(""));
+    let live = s.live();
     let worktree = t.worktree();
     // Git facts only for an agent in its own worktree: a sidecar at the
     // workspace root shares the main checkout, so its "changes" aren't its own.
@@ -391,8 +400,8 @@ fn work_row(t: &Target, with_git: bool) -> J {
         // The reach route's rename-repair hint (a widget never sees it: the
         // catalog's WorkRow is closed).
         "workspaceId": t.project_id,
-        "name": s.name.clone().or_else(|| s.handle.clone()).unwrap_or_default(),
-        "harness": s.provider,
+        "name": s.title.clone().unwrap_or_else(|| s.handle.clone()),
+        "harness": s.cli,
         "live": live,
         "worktree": worktree,
         "branch": branch,
@@ -411,7 +420,7 @@ fn work_list(with_git: bool) -> Result<J, CliResponse> {
     let projects = sessions::workspaces().map_err(|e| no(500, "failed", e))?;
     let mut out = Vec::new();
     for p in projects {
-        let rows = match sessions::sidecars(&p.id) {
+        let rows = match sessions::sidecars(&p.id, &p.path) {
             Ok(r) => r,
             Err(e) => {
                 // One unreadable workspace doesn't hide the others' tasks.
@@ -426,7 +435,7 @@ fn work_list(with_git: bool) -> Result<J, CliResponse> {
             Ok(h) if !h.is_empty() => h,
             _ => continue,
         };
-        for r in rows.into_iter().filter(|r| r.handle.is_some()) {
+        for r in rows {
             let t = Target {
                 project_id: p.id.clone(),
                 ws_handle: handle.clone(),

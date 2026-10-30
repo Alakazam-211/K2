@@ -40,7 +40,14 @@ import { DeviceFrame, useElementSize } from './DeviceFrame'
 import { frameLayout, resolveDeviceShape } from './device-frame'
 import { MobileBootScreen, type MobileBootPhase } from './MobileBootScreen'
 import { MobileControlRail, RAIL_INSET_PX } from './MobileControlRail'
-import { readMobileLiveTouch, readMobileScreenOnly, writeMobileLiveTouch, writeMobileScreenOnly } from './mobile-view-prefs'
+import {
+  readMobileLatencyHud,
+  readMobileLiveTouch,
+  readMobileScreenOnly,
+  writeMobileLatencyHud,
+  writeMobileLiveTouch,
+  writeMobileScreenOnly,
+} from './mobile-view-prefs'
 import { MobileToolbar } from './MobileToolbar'
 import { DEFAULT_MOBILE_SPLIT, readMobileSplit, writeMobileSplit } from './mobile-split-sizes'
 import {
@@ -61,6 +68,7 @@ import {
 } from './simApi'
 import {
   type BoxRect,
+  canvasPointToDevice,
   gestureFor,
   type LiveTouch,
   liveTouchEnd,
@@ -72,8 +80,29 @@ import {
   type ScreenPt,
   TAP_MAX_MS,
 } from './sim-input'
-import { defaultFps, type SimAppearance, type SimStreamConnector, wsSimStream } from './sim-stream'
+import { defaultFps, type SimAppearance, type SimInput, type SimStreamConnector, wsSimStream } from './sim-stream'
 import { SimKeyboardHelp, useSimKeyboard } from './useSimKeyboard'
+import {
+  altDragFingers,
+  cssToPoints,
+  type Pinch,
+  pinchBegin,
+  PINCH_IDLE_MS,
+  PINCH_UNAVAILABLE,
+  pinchPoints,
+  pinchWheelScale,
+  releaseVelocity,
+  trimSamples,
+  twoFingers,
+  type WheelDrag,
+  wheelBegin,
+  wheelDeltaPx,
+  wheelEnd,
+  WHEEL_IDLE_MS,
+  wheelMove,
+  withVelocity,
+} from './sim-gestures'
+import { LatencyMeter, type LatencyReadout, latencyText } from './sim-latency'
 import { useSimCanControl } from './useSimCanControl'
 import { useSimStatus } from './useSimStatus'
 import { useSimStream } from './useSimStream'
@@ -528,6 +557,10 @@ function MobileDevice({
   // ── Stream ────────────────────────────────────────────────────────────
   const [fps, setFpsState] = useState(() => defaultFps(scope.isRemote))
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  // The latency readout (⋯ → Show input latency): input → first frame.
+  const meterRef = useRef<LatencyMeter | null>(null)
+  if (meterRef.current === null) meterRef.current = new LatencyMeter()
+  const onFrameDrawn = useCallback((seq: number) => meterRef.current?.frame(seq, performance.now()), [])
   const stream = useSimStream({
     scope,
     // The daemon's own name for the workspace, once it reported the device.
@@ -537,6 +570,7 @@ function MobileDevice({
     connector,
     canvasRef,
     hold: holdFrame,
+    onFrameDrawn,
   })
   const live = stream.conn === 'open'
   const screen: ScreenPt | null =
@@ -572,6 +606,12 @@ function MobileDevice({
 
   // ── Pointer and keys on the device ────────────────────────────────────
   const screenRef = useRef<HTMLDivElement | null>(null)
+  // The screen element as state too: the wheel / pinch listeners bind to it.
+  const [screenNode, setScreenNode] = useState<HTMLDivElement | null>(null)
+  const screenElRef = useCallback((el: HTMLDivElement | null) => {
+    screenRef.current = el
+    setScreenNode(el)
+  }, [])
   const downRef = useRef<PointerSample | null>(null)
   const interactive = canControl && live
   // The computer's keyboard types into the device while its screen has focus.
@@ -580,14 +620,41 @@ function MobileDevice({
     const r = canvasRef.current?.getBoundingClientRect()
     return r ? { left: r.left, top: r.top, width: r.width, height: r.height } : null
   }
-  // Live touch is behind a switch until the iOS round-trip is measured
-  // (mobile-view-prefs); off, a drag is one swipe on release as before.
+  // Live touch is on by default (0.46.7); the ⋯ switch turns it off, and
+  // then a drag is one swipe on release as before.
   const [liveTouchOn, setLiveTouchState] = useState(readMobileLiveTouch)
   const setLiveTouch = useCallback((on: boolean) => {
     setLiveTouchState(on)
     writeMobileLiveTouch(on)
   }, [])
+  const [latencyHud, setLatencyHudState] = useState(readMobileLatencyHud)
+  const setLatencyHud = useCallback((on: boolean) => {
+    setLatencyHudState(on)
+    writeMobileLatencyHud(on)
+    meterRef.current?.reset()
+  }, [])
+  const [latency, setLatency] = useState<LatencyReadout | null>(null)
+  useEffect(() => {
+    if (!latencyHud) {
+      setLatency(null)
+      return
+    }
+    const tick = (): void => setLatency(meterRef.current?.readout(performance.now()) ?? null)
+    tick()
+    const id = window.setInterval(tick, 500)
+    return () => window.clearInterval(id)
+  }, [latencyHud])
+  // Every pointer input goes through here, so the readout sees it; `at`
+  // is the pointer event's time when the send waited for a frame.
+  const sendPointer = (m: SimInput, at: number = performance.now()): void => {
+    if (m.t === 'touch' || m.t === 'tap' || m.t === 'swipe') meterRef.current?.input(at)
+    stream.send(m)
+  }
   const touchRef = useRef<LiveTouch | null>(null)
+  // The drag's recent samples, for the flick velocity at release.
+  const samplesRef = useRef<PointerSample[]>([])
+  // ⌥-drag pinch: 'on' (two fingers down), 'refused' (no multi-touch).
+  const altRef = useRef<'on' | 'refused' | null>(null)
   const holdTimerRef = useRef<number | null>(null)
   const pendingMoveRef = useRef<PointerSample | null>(null)
   const moveFrameRef = useRef<number | null>(null)
@@ -615,10 +682,14 @@ function MobileDevice({
     const t = touchRef.current
     const b = box()
     if (!at || !t || !b || !screen) return
+    if (altRef.current === 'on') {
+      sendPointer(altDragFingers('move', at.clientX, at.clientY, b, screen), at.at)
+      return
+    }
     const r = liveTouchMove(t, at, b, screen)
     touchRef.current = r.touch
     if (r.touch.started) clearHold()
-    for (const m of r.send) stream.send(m)
+    for (const m of r.send) sendPointer(m, at.at)
   }
   useEffect(
     () => () => {
@@ -631,10 +702,23 @@ function MobileDevice({
   const onPointerDown = (e: React.PointerEvent): void => {
     if (!interactive || e.button !== 0) return
     screenRef.current?.focus()
+    endWheelRef.current?.()
     const down = sample(e)
     downRef.current = down
+    samplesRef.current = [down]
     placeDot(e, true)
-    if (liveTouchOn) {
+    if (e.altKey) {
+      // ⌥-drag: pinch with the second finger mirrored around the centre.
+      const b = box()
+      if (!stream.inputCaps?.multiTouch) {
+        altRef.current = 'refused'
+        setNotice({ text: PINCH_UNAVAILABLE, tone: 'info' })
+      } else if (b && screen) {
+        altRef.current = 'on'
+        touchRef.current = { down, started: true }
+        sendPointer(altDragFingers('down', e.clientX, e.clientY, b, screen))
+      }
+    } else if (liveTouchOn) {
       touchRef.current = liveTouchStart(down)
       clearHold()
       holdTimerRef.current = window.setTimeout(() => {
@@ -644,7 +728,7 @@ function MobileDevice({
         if (!t || !b || !screen) return
         const r = liveTouchHold(t, b, screen)
         touchRef.current = r.touch
-        for (const m of r.send) stream.send(m)
+        for (const m of r.send) sendPointer(m)
       }, TAP_MAX_MS)
     }
     try {
@@ -656,8 +740,11 @@ function MobileDevice({
   const onPointerMove = (e: React.PointerEvent): void => {
     if (!interactive || !downRef.current) return
     placeDot(e, true)
-    if (!liveTouchOn || !touchRef.current) return
-    pendingMoveRef.current = sample(e)
+    if (altRef.current === 'refused') return
+    if (!touchRef.current) return
+    const at = sample(e)
+    samplesRef.current = trimSamples([...samplesRef.current, at], at.at)
+    pendingMoveRef.current = at
     if (moveFrameRef.current === null) moveFrameRef.current = requestAnimationFrame(flushMove)
   }
   const onPointerUp = (e: React.PointerEvent): void => {
@@ -668,14 +755,24 @@ function MobileDevice({
     if (touchRef.current) flushMove()
     const track = touchRef.current
     touchRef.current = null
+    const alt = altRef.current
+    altRef.current = null
     if (!interactive || !down || !screen) return
     const b = box()
     if (!b) return
-    if (track) {
-      for (const m of liveTouchEnd(track, sample(e), b, screen)) stream.send(m)
+    if (alt === 'refused') return
+    if (alt === 'on') {
+      sendPointer(altDragFingers('up', e.clientX, e.clientY, b, screen))
       return
     }
-    stream.send(gestureFor(down, sample(e), b, screen))
+    const up = sample(e)
+    if (track) {
+      // A flick carries its release velocity; the daemon replays its tail.
+      const v = track.started ? releaseVelocity(samplesRef.current, up.at, b, screen) : null
+      for (const m of liveTouchEnd(track, up, b, screen)) sendPointer(withVelocity(m, v))
+      return
+    }
+    sendPointer(gestureFor(down, up, b, screen))
   }
   const onPointerCancel = (e: React.PointerEvent): void => {
     const down = downRef.current
@@ -684,11 +781,181 @@ function MobileDevice({
     pendingMoveRef.current = null
     const t = touchRef.current
     touchRef.current = null
+    const alt = altRef.current
+    altRef.current = null
     if (down) placeDot(e, false)
     // A drag the device already follows must lift, or the finger sticks.
     const b = box()
-    if (t?.started && b && screen) for (const m of liveTouchEnd(t, sample(e), b, screen)) stream.send(m)
+    if (alt === 'on' && b && screen) {
+      sendPointer(altDragFingers('up', e.clientX, e.clientY, b, screen))
+      return
+    }
+    if (t?.started && b && screen) for (const m of liveTouchEnd(t, sample(e), b, screen)) sendPointer(m)
   }
+
+  // ── Trackpad / mouse wheel and pinch (sim-gestures) ───────────────────
+  // Native listeners: React's wheel handler is passive, and WebKit's
+  // gesture* events have no React prop. The handlers read the latest
+  // render through a ref, so they bind once per screen element.
+  const gestureLive = useRef({ interactive, screen, multiTouch: false, box, sendPointer, setNotice })
+  gestureLive.current = { interactive, screen, multiTouch: stream.inputCaps?.multiTouch === true, box, sendPointer, setNotice }
+  const endWheelRef = useRef<(() => void) | null>(null)
+  useEffect(() => {
+    const el = screenNode
+    if (!el) return
+    let wheel: WheelDrag | null = null
+    const pendingDelta = { dx: 0, dy: 0 }
+    let wheelFrame: number | null = null
+    let wheelIdle: number | null = null
+    let pinch: Pinch | null = null
+    let pinchRefused = false
+    let pinchFrame: number | null = null
+    let pinchIdle: number | null = null
+    let gestureScale: number | null = null
+    const flushWheel = (): void => {
+      if (wheelFrame !== null) cancelAnimationFrame(wheelFrame)
+      wheelFrame = null
+      const L = gestureLive.current
+      if (!wheel || !L.screen || (pendingDelta.dx === 0 && pendingDelta.dy === 0)) return
+      const r = wheelMove(wheel, pendingDelta, L.screen)
+      pendingDelta.dx = 0
+      pendingDelta.dy = 0
+      wheel = r.drag
+      for (const m of r.send) L.sendPointer(m)
+    }
+    const endWheel = (): void => {
+      if (wheelIdle !== null) window.clearTimeout(wheelIdle)
+      wheelIdle = null
+      if (!wheel) return
+      flushWheel()
+      for (const m of wheelEnd(wheel)) gestureLive.current.sendPointer(m)
+      wheel = null
+    }
+    endWheelRef.current = endWheel
+    // Sends the queued scale, if a change is waiting for its frame.
+    const flushPinch = (): void => {
+      const due = pinchFrame !== null
+      if (pinchFrame !== null) cancelAnimationFrame(pinchFrame)
+      pinchFrame = null
+      const L = gestureLive.current
+      if (!due || !pinch || !L.screen) return
+      const [a, b] = pinchPoints(pinch, L.screen)
+      L.sendPointer(twoFingers('move', a, b))
+    }
+    // Returns false when the device can't pinch (said once per gesture).
+    const startPinch = (clientX: number, clientY: number): boolean => {
+      const L = gestureLive.current
+      const b = L.box()
+      if (!L.screen || !b) return false
+      endWheel()
+      if (!L.multiTouch) {
+        if (!pinchRefused) L.setNotice({ text: PINCH_UNAVAILABLE, tone: 'info' })
+        pinchRefused = true
+        return false
+      }
+      const cx = Number.isFinite(clientX) ? clientX : b.left + b.width / 2
+      const cy = Number.isFinite(clientY) ? clientY : b.top + b.height / 2
+      pinch = pinchBegin(canvasPointToDevice(cx, cy, b, L.screen), L.screen)
+      const [p1, p2] = pinchPoints(pinch, L.screen)
+      L.sendPointer(twoFingers('down', p1, p2))
+      return true
+    }
+    const endPinch = (): void => {
+      if (pinchIdle !== null) window.clearTimeout(pinchIdle)
+      pinchIdle = null
+      pinchRefused = false
+      gestureScale = null
+      if (!pinch) return
+      flushPinch()
+      const L = gestureLive.current
+      if (L.screen) {
+        const [a, b] = pinchPoints(pinch, L.screen)
+        L.sendPointer(twoFingers('up', a, b))
+      }
+      pinch = null
+    }
+    const queuePinch = (): void => {
+      if (pinchFrame === null) pinchFrame = requestAnimationFrame(flushPinch)
+    }
+    const onWheel = (e: WheelEvent): void => {
+      const L = gestureLive.current
+      if (!L.interactive || !L.screen) return
+      e.preventDefault()
+      e.stopPropagation()
+      const b = L.box()
+      // A pointer drag or a WebKit pinch owns the device's fingers now.
+      if (!b || downRef.current || gestureScale !== null) return
+      if (e.ctrlKey) {
+        // Chrome-style trackpad pinch (and Ctrl+wheel on a mouse).
+        if (!pinch && !pinchRefused) startPinch(e.clientX, e.clientY)
+        if (pinchIdle !== null) window.clearTimeout(pinchIdle)
+        pinchIdle = window.setTimeout(endPinch, PINCH_IDLE_MS)
+        if (!pinch) return
+        pinch = pinchWheelScale(pinch, wheelDeltaPx(e, b).dy)
+        queuePinch()
+        return
+      }
+      if (pinch || pinchRefused) endPinch()
+      const d = cssToPoints(wheelDeltaPx(e, b), b, L.screen)
+      if (!wheel) {
+        const r = wheelBegin(canvasPointToDevice(e.clientX, e.clientY, b, L.screen), L.screen)
+        wheel = r.drag
+        for (const m of r.send) L.sendPointer(m)
+      }
+      pendingDelta.dx += d.dx
+      pendingDelta.dy += d.dy
+      if (wheelFrame === null) wheelFrame = requestAnimationFrame(flushWheel)
+      if (wheelIdle !== null) window.clearTimeout(wheelIdle)
+      wheelIdle = window.setTimeout(endWheel, WHEEL_IDLE_MS)
+    }
+    // WebKit (the Mac app): trackpad pinch as gesture* with a cumulative scale.
+    const scaleOf = (e: Event): number | null => {
+      const v = (e as Event & { scale?: unknown }).scale
+      return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null
+    }
+    const pointOf = (e: Event): { x: number; y: number } => {
+      const g = e as Event & { clientX?: unknown; clientY?: unknown }
+      return { x: typeof g.clientX === 'number' ? g.clientX : NaN, y: typeof g.clientY === 'number' ? g.clientY : NaN }
+    }
+    const onGestureStart = (e: Event): void => {
+      if (!gestureLive.current.interactive) return
+      e.preventDefault()
+      e.stopPropagation()
+      endPinch()
+      gestureScale = scaleOf(e) ?? 1
+      const p = pointOf(e)
+      startPinch(p.x, p.y)
+    }
+    const onGestureChange = (e: Event): void => {
+      if (gestureScale === null) return
+      e.preventDefault()
+      e.stopPropagation()
+      const next = scaleOf(e)
+      if (!pinch || next === null) return
+      pinch = { ...pinch, scale: next }
+      queuePinch()
+    }
+    const onGestureEnd = (e: Event): void => {
+      if (gestureScale === null) return
+      e.preventDefault()
+      e.stopPropagation()
+      endPinch()
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    el.addEventListener('gesturestart', onGestureStart, { passive: false } as AddEventListenerOptions)
+    el.addEventListener('gesturechange', onGestureChange, { passive: false } as AddEventListenerOptions)
+    el.addEventListener('gestureend', onGestureEnd, { passive: false } as AddEventListenerOptions)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('gesturestart', onGestureStart)
+      el.removeEventListener('gesturechange', onGestureChange)
+      el.removeEventListener('gestureend', onGestureEnd)
+      // Lift anything still down, so no finger sticks on the device.
+      endWheel()
+      endPinch()
+      endWheelRef.current = null
+    }
+  }, [screenNode])
 
   // ── Loading screen (installing → booting → first frame) ───────────────
   const sessionState = session?.state ?? null
@@ -849,10 +1116,18 @@ function MobileDevice({
         className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[radial-gradient(ellipse_at_50%_40%,var(--color-bg)_0%,var(--color-bg-stripe)_75%)] px-6 pb-8 pt-10"
         data-mobile-stage=""
       >
+        {latency && running ? (
+          <span
+            className="pointer-events-none absolute left-3 top-3 z-10 rounded bg-black/70 px-2 py-0.5 font-mono text-[10px] text-white/85"
+            data-mobile-latency=""
+          >
+            {latencyText(latency)}
+          </span>
+        ) : null}
         {running ? (
           <DeviceFrame shape={shape} layout={frame} screenOnly={screenOnly} dimmed={reconnecting}>
             <div
-              ref={screenRef}
+              ref={screenElRef}
               tabIndex={-1}
               role="application"
               aria-label={`${session?.profile?.name ?? 'Device'} screen${interactive ? '' : ' (watching)'}`}
@@ -941,6 +1216,8 @@ function MobileDevice({
               onScreenOnly={setScreenOnly}
               liveTouch={liveTouchOn}
               onLiveTouch={setLiveTouch}
+              latencyHud={latencyHud}
+              onLatencyHud={setLatencyHud}
               onFps={onFps}
               extra={toolbarExtra}
               keyboardHelp={<SimKeyboardHelp />}

@@ -57,9 +57,12 @@ export interface MobileControlRailProps {
   onStop(): void
   onOpenUrl(url: string): void
   onScreenOnly(on: boolean): void
-  /** Live touch (beta): drags follow the finger. Off by default. */
+  /** Live touch: drags follow the finger. On by default (0.46.7). */
   liveTouch?: boolean
   onLiveTouch?(on: boolean): void
+  /** The input → frame latency readout over the device (off by default). */
+  latencyHud?: boolean
+  onLatencyHud?(on: boolean): void
   onFps(fps: number): void
   /** S5: the Select toggle. */
   extra?: React.ReactNode
@@ -242,15 +245,32 @@ export function MobileControlRail(props: MobileControlRailProps): React.JSX.Elem
                   role="menuitemcheckbox"
                   aria-checked={props.liveTouch === true}
                   className={item}
-                  title="Drags and long presses follow your pointer on the device (beta)"
+                  title="Drags and long presses follow your pointer on the device. Off: a drag is one swipe when you let go."
                   onClick={() => {
                     props.onLiveTouch?.(!props.liveTouch)
                     close()
                   }}
                   data-mobile-menu="live-touch"
                 >
-                  <span className="flex-1">Live touch (beta)</span>
+                  <span className="flex-1">Live touch</span>
                   {props.liveTouch ? <Check /> : null}
+                </button>
+              ) : null}
+              {props.onLatencyHud ? (
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={props.latencyHud === true}
+                  className={item}
+                  title="Show the time from your input to the first frame after it (median), and frames per second"
+                  onClick={() => {
+                    props.onLatencyHud?.(!props.latencyHud)
+                    close()
+                  }}
+                  data-mobile-menu="latency"
+                >
+                  <span className="flex-1">Show input latency</span>
+                  {props.latencyHud ? <Check /> : null}
                 </button>
               ) : null}
               {props.fps !== null ? (

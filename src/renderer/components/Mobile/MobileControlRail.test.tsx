@@ -118,15 +118,29 @@ describe('MobileControlRail', () => {
     expect(p.onFps).toHaveBeenCalledWith(12)
   })
 
-  it('⋯: Live touch (beta) toggles when the pane offers it', () => {
-    const p = props({ liveTouch: false, onLiveTouch: vi.fn() })
+  it('⋯: Live touch (no longer beta) switches off and on when the pane offers it', () => {
+    const p = props({ liveTouch: true, onLiveTouch: vi.fn() })
     const view = render(<MobileControlRail {...p} />)
     const m = more()
-    expect(m.querySelector('[data-mobile-menu="live-touch"]')?.getAttribute('aria-checked')).toBe('false')
-    fireEvent.click(m.querySelector('[data-mobile-menu="live-touch"]') as HTMLElement)
-    expect(p.onLiveTouch).toHaveBeenCalledWith(true)
+    const item = m.querySelector('[data-mobile-menu="live-touch"]') as HTMLElement
+    expect(item.getAttribute('aria-checked')).toBe('true')
+    expect(item.textContent).toBe('Live touch')
+    fireEvent.click(item)
+    expect(p.onLiveTouch).toHaveBeenCalledWith(false)
     view.rerender(<MobileControlRail {...props()} />)
     expect(more().querySelector('[data-mobile-menu="live-touch"]')).toBeNull()
+  })
+
+  it('⋯: Show input latency toggles the readout when the pane offers it', () => {
+    const p = props({ latencyHud: false, onLatencyHud: vi.fn() })
+    const view = render(<MobileControlRail {...p} />)
+    const item = more().querySelector('[data-mobile-menu="latency"]') as HTMLElement
+    expect(item.getAttribute('aria-checked')).toBe('false')
+    expect(item.textContent).toBe('Show input latency')
+    fireEvent.click(item)
+    expect(p.onLatencyHud).toHaveBeenCalledWith(true)
+    view.rerender(<MobileControlRail {...props()} />)
+    expect(more().querySelector('[data-mobile-menu="latency"]')).toBeNull()
   })
 
   it('⋯: Open URL sends the trimmed URL on Enter', () => {

@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ServerScope } from '@/kessel/server-scope'
 import type { SimHold, SimState } from './simApi'
 import type { ScreenPt } from './sim-input'
-import type { SimConnState, SimFrame, SimInput, SimStreamConnection, SimStreamConnector } from './sim-stream'
+import type { SimConnState, SimFrame, SimInput, SimInputCaps, SimStreamConnection, SimStreamConnector } from './sim-stream'
 
 export interface UseSimStreamArgs {
   scope: ServerScope
@@ -29,6 +29,8 @@ export interface UseSimStreamArgs {
   canvasRef: React.RefObject<HTMLCanvasElement | null>
   /** Keep the last frame (frames are still acked). */
   hold: boolean
+  /** Each frame once it is on the canvas (the latency readout). */
+  onFrameDrawn?: (seq: number) => void
 }
 
 export interface SimStreamView {
@@ -48,6 +50,9 @@ export interface SimStreamView {
   inputError: string | null
   /** A frame has been drawn since the socket opened. */
   hasFrame: boolean
+  /** From `hello`: what input the device takes beyond one finger; null
+   *  from an older daemon (no pinch, no fling tail). */
+  inputCaps: SimInputCaps | null
   send(input: SimInput): void
   setFps(fps: number): void
 }
@@ -77,7 +82,7 @@ async function drawFrame(canvas: HTMLCanvasElement, frame: SimFrame): Promise<bo
   return true
 }
 
-export function useSimStream({ scope, workspace, visible, fps, connector, canvasRef, hold }: UseSimStreamArgs): SimStreamView {
+export function useSimStream({ scope, workspace, visible, fps, connector, canvasRef, hold, onFrameDrawn }: UseSimStreamArgs): SimStreamView {
   const [conn, setConn] = useState<SimConnState | 'idle'>('idle')
   const [reason, setReason] = useState<string | null>(null)
   const [screen, setScreen] = useState<ScreenPt | null>(null)
@@ -87,6 +92,9 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
   const [isolation, setIsolation] = useState<string | null>(null)
   const [inputError, setInputError] = useState<string | null>(null)
   const [hasFrame, setHasFrame] = useState(false)
+  const [inputCaps, setInputCaps] = useState<SimInputCaps | null>(null)
+  const drawnRef = useRef(onFrameDrawn)
+  drawnRef.current = onFrameDrawn
   const connRef = useRef<SimStreamConnection | null>(null)
   const holdRef = useRef(hold)
   holdRef.current = hold
@@ -122,6 +130,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
               setDeviceHold(m.hold)
               setFpsGiven(m.fps)
               setIsolation(m.isolation || null)
+              setInputCaps(m.input ?? null)
               return
             case 'state':
               setState(m.state)
@@ -153,6 +162,7 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
                 const drawn = await drawFrame(canvas, frame)
                 if (drawn) {
                   if (live) setHasFrame(true)
+                  drawnRef.current?.(frame.seq)
                 } else if (!warnedRef.current) {
                   warnedRef.current = true
                   console.warn('[mobile] the device canvas has no 2d context; frames are acked but not drawn')
@@ -191,5 +201,5 @@ export function useSimStream({ scope, workspace, visible, fps, connector, canvas
     connRef.current?.setFps(n)
   }, [])
 
-  return { conn, reason, screen, deviceHold, state, fps: fpsGiven, isolation, inputError, hasFrame, send, setFps }
+  return { conn, reason, screen, deviceHold, state, fps: fpsGiven, isolation, inputError, hasFrame, inputCaps, send, setFps }
 }

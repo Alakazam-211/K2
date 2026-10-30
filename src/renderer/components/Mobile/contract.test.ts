@@ -129,6 +129,15 @@ describe('stream adapter (sim::stream)', () => {
         '{"t":"hello","sim":"s1","lane":"android","state":"running","fps":30,"remote":false,"hold":{"kind":"free"},"isolation":"Separate, not sealed."}',
       ),
     ).toEqual({ t: 'hello', sim: 's1', lane: 'android', state: 'running', fps: 30, remote: false, hold: { kind: 'free' }, isolation: 'Separate, not sealed.' })
+    // 0.46.7: hello.input (stream::InputCaps); an older daemon sends none.
+    expect(
+      parseServerMsg(
+        '{"t":"hello","sim":"s1","lane":"android","state":"running","fps":30,"remote":false,"hold":{"kind":"free"},"isolation":"","input":{"multiTouch":true,"fling":true}}',
+      ),
+    ).toMatchObject({ t: 'hello', input: { multiTouch: true, fling: true } })
+    expect(
+      parseServerMsg('{"t":"hello","sim":"s1","lane":"ios","state":"running","fps":30,"remote":false,"hold":{"kind":"free"},"isolation":"","input":{"multiTouch":false,"fling":true}}'),
+    ).toMatchObject({ input: { multiTouch: false, fling: true } })
     expect(parseServerMsg('{"t":"state","state":"dancing"}')).toBeNull()
     expect(parseServerMsg('not json')).toBeNull()
     expect(closeReason(4401, '')).toBe('Your login was signed out of this server.')

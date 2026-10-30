@@ -61,7 +61,18 @@ export type SimAppearance = 'light' | 'dark'
 export type SimInput =
   | { t: 'tap'; x: number; y: number }
   | { t: 'swipe'; x1: number; y1: number; x2: number; y2: number; durationMs?: number }
-  | { t: 'touch'; phase: 'down' | 'move' | 'up'; x: number; y: number }
+  | {
+      t: 'touch'
+      phase: 'down' | 'move' | 'up'
+      x: number
+      y: number
+      /** A second finger (pinch); only where `hello.input.multiTouch`. */
+      x2?: number
+      y2?: number
+      /** On `up`: the release velocity in points per second (a flick). */
+      vx?: number
+      vy?: number
+    }
   | { t: 'text'; text: string }
   | { t: 'key'; key: SimKey; shift?: boolean; alt?: boolean }
   | { t: 'paste'; text: string }
@@ -93,6 +104,14 @@ export interface SimFrame {
   source: SimFrameSource
 }
 
+/** `stream::InputCaps` from `hello` (absent from older daemons). */
+export interface SimInputCaps {
+  /** Two fingers at once: pinch. */
+  multiTouch: boolean
+  /** `touch` up takes `vx`/`vy`. */
+  fling: boolean
+}
+
 /** `stream::ServerMsg`. */
 export type SimServerMsg =
   | {
@@ -105,6 +124,7 @@ export type SimServerMsg =
       remote: boolean
       hold: SimHold
       isolation: string
+      input?: SimInputCaps
     }
   | { t: 'state'; state: SimState; message?: string }
   | { t: 'hold'; hold: SimHold }
@@ -176,6 +196,10 @@ export function encodeFrame(h: { seq: number; widthPx: number; heightPx: number;
   return buf
 }
 
+function parseInputCaps(o: Record<string, unknown>): SimInputCaps {
+  return { multiTouch: o.multiTouch === true, fling: o.fling === true }
+}
+
 const STATES: ReadonlySet<string> = new Set(['installing', 'booting', 'running', 'stopping', 'stopped', 'failed'])
 
 /** One text frame → a server message, or null (logged). */
@@ -203,6 +227,7 @@ export function parseServerMsg(raw: string): SimServerMsg | null {
           remote: o.remote === true,
           hold: parseSimHold(o.hold),
           isolation: typeof o.isolation === 'string' ? o.isolation : '',
+          ...(o.input && typeof o.input === 'object' ? { input: parseInputCaps(o.input as Record<string, unknown>) } : {}),
         }
       case 'state':
         if (typeof o.state !== 'string' || !STATES.has(o.state)) break
@@ -352,7 +377,10 @@ function paintFakeScreen(label: string) {
   }
 }
 
-export function createStubSimStream(screen: { widthPt: number; heightPt: number } = { widthPt: 412, heightPt: 915 }): StubSimStream {
+export function createStubSimStream(
+  screen: { widthPt: number; heightPt: number } = { widthPt: 412, heightPt: 915 },
+  caps: { input?: SimInputCaps } = {},
+): StubSimStream {
   const inputs: SimInput[] = []
   const acks: number[] = []
   const fpsAsks: number[] = []
@@ -381,6 +409,7 @@ export function createStubSimStream(screen: { widthPt: number; heightPt: number 
           remote: false,
           hold: { kind: 'free' },
           isolation: 'Separate, not sealed: the device runs as the same system user as this server’s agents.',
+          ...(caps.input ? { input: caps.input } : {}),
         })
       })
       return {

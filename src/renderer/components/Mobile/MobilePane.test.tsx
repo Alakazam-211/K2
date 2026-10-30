@@ -516,8 +516,9 @@ describe('the running device', () => {
     expect(stub.inputs[1]).toMatchObject({ t: 'swipe', x1: 200, y1: 700, x2: 200, y2: 200 })
   })
 
-  it('live touch (switch on): a drag follows the finger as touch down / move / up; a clean tap stays a tap', async () => {
-    localStorage.setItem('k2.mobile.liveTouch', '1')
+  it('live touch (on by default): a drag follows the finger as touch down / move / up; a clean tap stays a tap', async () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
     const stub = createStubSimStream()
     renderMobile(stub)
     await flush()
@@ -527,8 +528,12 @@ describe('the running device', () => {
     const el = screenEl()
     fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
     expect(document.querySelector('[data-mobile-touch-dot]')?.getAttribute('data-mobile-touch-dot')).toBe('down')
+    now = 16
     fireEvent.pointerMove(el, { clientX: 150, clientY: 130, pointerId: 1 })
+    now = 32
     fireEvent.pointerMove(el, { clientX: 150, clientY: 160, pointerId: 1 })
+    // Held still before lifting: a stop, so the up carries no velocity.
+    now = 120
     fireEvent.pointerUp(el, { clientX: 150, clientY: 200, button: 0, pointerId: 1 })
     expect(stub.inputs).toEqual([
       { t: 'touch', phase: 'down', x: 100, y: 100 },
@@ -539,10 +544,35 @@ describe('the running device', () => {
     fireEvent.pointerDown(el, { clientX: 150, clientY: 100, button: 0, pointerId: 1 })
     fireEvent.pointerUp(el, { clientX: 151, clientY: 101, button: 0, pointerId: 1 })
     expect(stub.inputs[3]).toEqual({ t: 'tap', x: 100, y: 100 })
-    localStorage.removeItem('k2.mobile.liveTouch')
   })
 
-  it('live touch off (the default): a drag is one swipe on release; the touch dot still shows', async () => {
+  it('live touch: a flick lifts with its release velocity (points per second) so the device coasts', async () => {
+    let now = 0
+    vi.spyOn(performance, 'now').mockImplementation(() => now)
+    const stub = createStubSimStream()
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    const el = screenEl()
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 300, button: 0, pointerId: 1 })
+    now = 16
+    fireEvent.pointerMove(el, { clientX: 150, clientY: 270, pointerId: 1 })
+    now = 32
+    fireEvent.pointerMove(el, { clientX: 150, clientY: 240, pointerId: 1 })
+    now = 40
+    fireEvent.pointerUp(el, { clientX: 150, clientY: 240, button: 0, pointerId: 1 })
+    // 60 px up in 32 ms on a 2 pt/px canvas: -3750 pt/s.
+    expect(stub.inputs).toEqual([
+      { t: 'touch', phase: 'down', x: 100, y: 500 },
+      { t: 'touch', phase: 'move', x: 100, y: 380 },
+      { t: 'touch', phase: 'up', x: 100, y: 380, vx: 0, vy: -3750 },
+    ])
+  })
+
+  it('live touch switched off: a drag is one swipe on release; the touch dot still shows', async () => {
+    localStorage.setItem('k2.mobile.liveTouch', '0')
     const stub = createStubSimStream()
     renderMobile(stub)
     await flush()
@@ -989,5 +1019,120 @@ describe('watching and visibility', () => {
     view.rerender(pane(stub, false))
     await flush()
     expect(stub.openCount()).toBe(0)
+  })
+})
+
+describe('trackpad and mouse gestures (0.46.7)', () => {
+  // The canvas box is 206 × 457.5 at (100, 50); the stub screen is 412 ×
+  // 915 pt, so 1 CSS px = 2 pt. The safe band is x 61.8–350.2, y 183–732.
+  async function running(caps?: { multiTouch: boolean; fling: boolean }): Promise<{ stub: StubSimStream; el: HTMLElement }> {
+    const stub = createStubSimStream(undefined, caps ? { input: caps } : {})
+    renderMobile(stub)
+    await flush()
+    await act(async () => {
+      stub.pushFrame()
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame'] })
+    return { stub, el: screenEl() }
+  }
+
+  function wheel(el: HTMLElement, init: WheelEventInit): boolean {
+    return el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, clientX: 150, clientY: 250, ...init }))
+  }
+
+  function gesture(el: HTMLElement, type: string, scale: number): void {
+    const e = new Event(type, { bubbles: true, cancelable: true })
+    Object.assign(e, { scale, clientX: 150, clientY: 250 })
+    act(() => {
+      el.dispatchEvent(e)
+    })
+  }
+
+  function tick(ms: number): void {
+    act(() => {
+      vi.advanceTimersByTime(ms)
+    })
+  }
+
+  it('two-finger scroll / the wheel drags the device: down under the pointer, one move per frame against the delta, up when quiet', async () => {
+    const { stub, el } = await running()
+    expect(wheel(el, { deltaY: 20 })).toBe(false) // the page doesn't scroll
+    wheel(el, { deltaY: 30 })
+    expect(stub.inputs).toEqual([{ t: 'touch', phase: 'down', x: 100, y: 400 }])
+    tick(16)
+    // 50 CSS px of scroll = 100 pt: the finger moves up by it.
+    expect(stub.inputs[1]).toEqual({ t: 'touch', phase: 'move', x: 100, y: 300 })
+    wheel(el, { deltaY: 10 })
+    tick(16)
+    expect(stub.inputs[2]).toEqual({ t: 'touch', phase: 'move', x: 100, y: 280 })
+    expect(stub.inputs).toHaveLength(3)
+    tick(200)
+    expect(stub.inputs[3]).toEqual({ t: 'touch', phase: 'up', x: 100, y: 280 })
+    expect(stub.inputs).toHaveLength(4)
+  })
+
+  it('trackpad pinch (WebKit gesture events) is two fingers down / move / up where the device takes them', async () => {
+    const { stub, el } = await running({ multiTouch: true, fling: true })
+    gesture(el, 'gesturestart', 1)
+    // Two fingers a quarter of the short side (103 pt) apart around the pointer.
+    expect(stub.inputs).toEqual([{ t: 'touch', phase: 'down', x: 48.5, y: 400, x2: 151.5, y2: 400 }])
+    gesture(el, 'gesturechange', 2)
+    tick(16)
+    expect(stub.inputs[1]).toEqual({ t: 'touch', phase: 'move', x: 1, y: 400, x2: 203, y2: 400 })
+    gesture(el, 'gestureend', 2)
+    expect(stub.inputs[2]).toEqual({ t: 'touch', phase: 'up', x: 1, y: 400, x2: 203, y2: 400 })
+    expect(stub.inputs).toHaveLength(3)
+  })
+
+  it('Ctrl+wheel pinches too, and ends when the wheel goes quiet', async () => {
+    const { stub, el } = await running({ multiTouch: true, fling: true })
+    wheel(el, { deltaY: -100 / 3, ctrlKey: true })
+    expect(stub.inputs[0]).toMatchObject({ t: 'touch', phase: 'down', x2: 151.5 })
+    tick(16)
+    expect(stub.inputs[1]).toMatchObject({ t: 'touch', phase: 'move' })
+    const m = stub.inputs[1] as { x: number; x2: number }
+    expect(m.x2 - m.x).toBeCloseTo(103 * Math.exp(1 / 3), 0)
+    tick(300)
+    expect(stub.inputs[2]).toMatchObject({ t: 'touch', phase: 'up' })
+    expect(stub.inputs).toHaveLength(3)
+  })
+
+  it('a device without multi-touch (iOS, or an older daemon) says pinch is not available and sends nothing', async () => {
+    const { stub, el } = await running()
+    gesture(el, 'gesturestart', 1)
+    gesture(el, 'gesturechange', 1.5)
+    gesture(el, 'gestureend', 1.5)
+    wheel(el, { deltaY: -20, ctrlKey: true })
+    tick(400)
+    expect(stub.inputs).toEqual([])
+    expect(document.querySelector('[data-mobile-notice]')?.textContent).toBe("Pinch isn't available on this device yet.")
+    // ⌥-drag the same.
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 250, button: 0, pointerId: 1, altKey: true })
+    fireEvent.pointerMove(el, { clientX: 160, clientY: 270, pointerId: 1, altKey: true })
+    fireEvent.pointerUp(el, { clientX: 160, clientY: 270, button: 0, pointerId: 1, altKey: true })
+    tick(16)
+    expect(stub.inputs).toEqual([])
+  })
+
+  it('⌥-drag pinches with the second finger mirrored around the centre (like Xcode)', async () => {
+    const { stub, el } = await running({ multiTouch: true, fling: true })
+    fireEvent.pointerDown(el, { clientX: 150, clientY: 250, button: 0, pointerId: 1, altKey: true })
+    expect(stub.inputs).toEqual([{ t: 'touch', phase: 'down', x: 100, y: 400, x2: 312, y2: 515 }])
+    fireEvent.pointerMove(el, { clientX: 140, clientY: 240, pointerId: 1, altKey: true })
+    fireEvent.pointerUp(el, { clientX: 140, clientY: 240, button: 0, pointerId: 1, altKey: true })
+    expect(stub.inputs.slice(1)).toEqual([
+      { t: 'touch', phase: 'move', x: 80, y: 380, x2: 332, y2: 535 },
+      { t: 'touch', phase: 'up', x: 80, y: 380, x2: 332, y2: 535 },
+    ])
+  })
+
+  it('⋯ → Show input latency puts the readout over the stage (off by default)', async () => {
+    await running()
+    expect(document.querySelector('[data-mobile-latency]')).toBeNull()
+    const item = openMore().querySelector('[data-mobile-menu="latency"]') as HTMLButtonElement
+    expect(item.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(item)
+    expect(localStorage.getItem('k2.mobile.latencyHud')).toBe('1')
+    expect(document.querySelector('[data-mobile-latency]')?.textContent).toMatch(/^input → frame — · \d+ fps$/)
   })
 })

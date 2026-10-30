@@ -22,9 +22,12 @@ case ${PART:-exhaustive} in
     run_g 2x2u2r1 --pids 2 --events 2 --undos 2 --reverts 1 --init abb --seed-depth 3 ;;
   walks)
     timed "walks at the literal G1 bound" E walk --g1 --probes ${WALKS:-5000000} --threads "$T"
-    for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19; do
+    for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff; do
       timed "walks at G1, mutant $m (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant $m
-    done ;;
+    done
+    timed "walks at G1 + 1 restart" E walk --g1 --restarts 1 --probes ${WALKS_RST:-1000000} --threads "$T"
+    timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 50000 --threads "$T" --mutant restart-single-taint
+    timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 50000 --threads "$T" --mutant x-provenance-ignored-in-o4 ;;
   long)
     run_g 3x2u2r0 --pids 3 --events 2 --undos 2 --reverts 0 --init abb --seed-depth 3 ;;
   *) echo "PART: exhaustive, walks or long" >&2; exit 2 ;;

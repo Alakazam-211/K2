@@ -16,7 +16,9 @@
 //!   configuration skips those seeds and adds their counts. Progress every `--progress`
 //!   seconds (default 60). `--time-limit SECS` stops early (exit 3).
 //! - `walk`: `--probes` random walks to the bound's full depth, every transition checked
-//!   (not exhaustive: for bounds too large to enumerate, such as the literal G1 bound).
+//!   (not exhaustive: for bounds too large to enumerate, such as the literal G1 bound). The
+//!   summary counts the transitions that hit each case class (E-HIST-13, `bounded::CLASSES`).
+//!   A progress line (walks, steps, violations, classes so far) every `--progress` seconds.
 //! - `knuth`: Knuth's random-probe estimate of the search tree's size per depth (an upper
 //!   bound on the states `dfs --dedup seed` visits), for runtime estimates.
 //!
@@ -32,7 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use spec_undo::bounded::{self, Act, Bound, State, View, STOP};
+use spec_undo::bounded::{self, Act, Bound, State, View, CLASSES, STOP};
 #[cfg(feature = "mutants")]
 use spec_undo::model::mutant;
 
@@ -61,7 +63,7 @@ struct Opts {
 fn usage(msg: &str) -> ! {
     eprintln!("undo_enum: {msg}");
     eprintln!(
-        "usage: undo_enum [bfs|dfs|knuth|walk] [--pids N] [--events N] [--undos N] [--reverts N] \
+        "usage: undo_enum [bfs|dfs|knuth|walk] [--pids N] [--events N] [--undos N] [--reverts N] [--restarts N] \
          [--maxlen N] [--init ab] [--no-multi] [--no-purge] [--no-reduce] [--u12] [--sym] \
          [--stop R1,R2|all|none] [--mutant NAME] [--threads N] [--seed-depth D] \
          [--dedup seed|global] [--checkpoint FILE] [--progress SECS] [--time-limit SECS] \
@@ -100,6 +102,7 @@ fn parse() -> Opts {
             "--events" => o.b.events = num(val("--events")) as u8,
             "--undos" => o.b.undos = num(val("--undos")) as u8,
             "--reverts" => o.b.reverts = num(val("--reverts")) as u8,
+            "--restarts" => o.b.restarts = num(val("--restarts")) as u8,
             "--maxlen" => o.b.maxlen = num(val("--maxlen")) as usize,
             "--init" => o.b.init = val("--init"),
             "--no-multi" => o.b.multi = false,
@@ -218,13 +221,33 @@ fn main() {
     std::process::exit(code);
 }
 
+/// `class:count,...` over every class (a class never hit shows 0).
+fn classes_line(counts: &[u64]) -> String {
+    CLASSES
+        .iter()
+        .zip(counts)
+        .map(|(c, n)| format!("{c}:{n}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn count_classes(counts: &mut [u64], s: &State) {
+    for h in &s.hit {
+        if let Some(k) = CLASSES.iter().position(|c| c == h) {
+            counts[k] += 1;
+        }
+    }
+}
+
 fn run_bfs(o: &Opts) -> i32 {
     let t0 = Instant::now();
     let mut dump = o
         .dump
         .as_ref()
         .map(|f| std::io::BufWriter::new(std::fs::File::create(f).expect("create the dump")));
-    let c = bounded::bfs(&o.b, o.sym, &o.stop, o.first, |_, v| {
+    let mut classes = vec![0u64; CLASSES.len()];
+    let c = bounded::bfs(&o.b, o.sym, &o.stop, o.first, |s, v| {
+        count_classes(&mut classes, s);
         if let Some(d) = dump.as_mut() {
             writeln!(d, "{}", v.json()).expect("write the dump");
         }
@@ -252,13 +275,14 @@ fn run_bfs(o: &Opts) -> i32 {
         .map(|(r, (d, _))| format!("{r}@{d}"))
         .collect();
     println!(
-        "SUMMARY mode=bfs distinct={} transitions={} cut={} max_depth={} violations=[{}] observed=[{}] wall={:.1}s",
+        "SUMMARY mode=bfs distinct={} transitions={} cut={} max_depth={} violations=[{}] observed=[{}] classes=[{}] wall={:.1}s",
         c.distinct(),
         c.transitions,
         c.cut,
         c.per_depth.len() - 1,
         stopped.join(","),
         observed.join(","),
+        classes_line(&classes),
         t0.elapsed().as_secs_f64()
     );
     i32::from(!stopped.is_empty())
@@ -652,48 +676,101 @@ fn run_knuth(o: &Opts) -> i32 {
 fn run_walk(o: &Opts) -> i32 {
     let t0 = Instant::now();
     let done = AtomicU64::new(0);
+    let finished = AtomicU64::new(0);
     let steps = AtomicU64::new(0);
     let first: Mutex<BTreeMap<&'static str, Vec<Act>>> = Mutex::new(BTreeMap::new());
+    let classes: Vec<AtomicU64> = CLASSES.iter().map(|_| AtomicU64::new(0)).collect();
+    let all_done = AtomicBool::new(false);
     std::thread::scope(|sc| {
-        for t in 0..o.threads {
-            let (done, steps, first) = (&done, &steps, &first);
-            sc.spawn(move || {
-                let mut x = o.rng.max(1).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (t as u64 + 1);
-                while done.fetch_add(1, Ordering::Relaxed) < o.probes {
-                    let mut s = State::init(&o.b);
-                    let mut path: Vec<Act> = Vec::new();
-                    loop {
-                        let mut kids: Vec<(Act, State)> = s
-                            .actions(&o.b)
-                            .into_iter()
-                            .filter_map(|a| s.step(&o.b, &a).map(|(t, _)| (a, t)))
-                            .collect();
-                        if kids.is_empty() {
-                            break;
-                        }
-                        x ^= x << 13;
-                        x ^= x >> 7;
-                        x ^= x << 17;
-                        let (a, t) = kids.swap_remove((x % kids.len() as u64) as usize);
-                        path.push(a);
-                        steps.fetch_add(1, Ordering::Relaxed);
-                        for r in t.viol.difference(&s.viol) {
-                            let mut f = first.lock().expect("lock");
-                            let e = f.entry(r).or_insert_with(|| path.clone());
-                            if path.len() < e.len() {
-                                *e = path.clone();
-                            }
-                        }
-                        // a state past a stop rule is not explored (as bfs and dfs)
-                        if t.viol.iter().any(|r| o.stop.contains(r)) {
-                            break;
-                        }
-                        s = t;
-                    }
+        // progress, at least every `--progress` seconds (a node stops a job that prints
+        // nothing for its stall timeout)
+        sc.spawn(|| {
+            let mut last = Instant::now();
+            while !all_done.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(200));
+                if last.elapsed() < Duration::from_secs(o.progress) {
+                    continue;
                 }
-            });
+                last = Instant::now();
+                let counts: Vec<u64> = classes.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+                let viol: Vec<String> = first
+                    .lock()
+                    .expect("lock")
+                    .iter()
+                    .map(|(r, p)| format!("{r}@{}", p.len()))
+                    .collect();
+                println!(
+                    "progress: walks {}/{} steps {} violations=[{}] classes=[{}] {:.0}s",
+                    finished.load(Ordering::Relaxed),
+                    o.probes,
+                    steps.load(Ordering::Relaxed),
+                    viol.join(","),
+                    classes_line(&counts),
+                    t0.elapsed().as_secs_f64()
+                );
+                let _ = std::io::stdout().flush();
+            }
+        });
+        let workers: Vec<_> = (0..o.threads)
+            .map(|t| {
+                let (done, finished, steps, first, classes) =
+                    (&done, &finished, &steps, &first, &classes);
+                sc.spawn(move || {
+                    let mut x = o.rng.max(1).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (t as u64 + 1);
+                    while done.fetch_add(1, Ordering::Relaxed) < o.probes {
+                        let mut s = State::init(&o.b);
+                        let mut path: Vec<Act> = Vec::new();
+                        loop {
+                            let mut kids: Vec<(Act, State)> = s
+                                .actions(&o.b)
+                                .into_iter()
+                                .filter_map(|a| s.step(&o.b, &a).map(|(t, _)| (a, t)))
+                                .collect();
+                            if kids.is_empty() {
+                                break;
+                            }
+                            x ^= x << 13;
+                            x ^= x >> 7;
+                            x ^= x << 17;
+                            let (a, t) = kids.swap_remove((x % kids.len() as u64) as usize);
+                            path.push(a);
+                            steps.fetch_add(1, Ordering::Relaxed);
+                            for h in &t.hit {
+                                if let Some(k) = CLASSES.iter().position(|c| c == h) {
+                                    classes[k].fetch_add(1, Ordering::Relaxed);
+                                }
+                            }
+                            for r in t.viol.difference(&s.viol) {
+                                let mut f = first.lock().expect("lock");
+                                let e = f.entry(r).or_insert_with(|| path.clone());
+                                if path.len() < e.len() {
+                                    *e = path.clone();
+                                }
+                            }
+                            // a state past a stop rule is not explored (as bfs and dfs)
+                            if t.viol.iter().any(|r| o.stop.contains(r)) {
+                                break;
+                            }
+                            s = t;
+                        }
+                        finished.fetch_add(1, Ordering::Relaxed);
+                    }
+                })
+            })
+            .collect();
+        for w in workers {
+            w.join().expect("a walker panicked");
         }
+        all_done.store(true, Ordering::Relaxed);
     });
+    let classes: Vec<u64> = classes.iter().map(|c| c.load(Ordering::Relaxed)).collect();
+    for (c, n) in CLASSES.iter().zip(&classes) {
+        println!("class {c:24} {n}");
+    }
+    println!(
+        "classes outside the bounded world (the trace test covers them): leave/rejoin, \
+         multi-byte text, write --base, the revert window; concurrency: later"
+    );
     let first = first.into_inner().expect("first");
     for (r, path) in &first {
         if o.stop.contains(r) {
@@ -710,11 +787,12 @@ fn run_walk(o: &Opts) -> i32 {
             .join(",")
     };
     println!(
-        "SUMMARY mode=walk walks={} steps={} violations=[{}] observed=[{}] wall={:.1}s",
+        "SUMMARY mode=walk walks={} steps={} violations=[{}] observed=[{}] classes=[{}] wall={:.1}s",
         o.probes,
         steps.load(Ordering::Relaxed),
         fmt(true),
         fmt(false),
+        classes_line(&classes),
         t0.elapsed().as_secs_f64()
     );
     i32::from(!fmt(true).is_empty())

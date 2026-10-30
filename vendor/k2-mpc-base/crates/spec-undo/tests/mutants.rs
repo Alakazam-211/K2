@@ -20,26 +20,66 @@ fn tiny() -> Bound {
     }
 }
 
+/// The restart mutant's bound: one pid, three events, a revert and a restart, from `abba`
+/// (its least counterexample: a two-region edit, deletes making the regions touch with one
+/// tainted at its start only, then the restart).
+fn restart_bound() -> Bound {
+    Bound {
+        pids: 1,
+        events: 3,
+        undos: 0,
+        reverts: 1,
+        restarts: 1,
+        maxlen: 4,
+        init: "abba".into(),
+        ..Bound::small()
+    }
+}
+
+/// Mutant (x)'s bound: one pid, one event, one undo and one revert, from `ab` (its least
+/// counterexample: p1 deletes `b` at the doc's end, undoes, and reverts the delete; by
+/// element identity the revert's `b` and the undo's are different insertions at the doc's
+/// end, so O5 lands both: two live `b` with one root).
+fn provenance_bound() -> Bound {
+    Bound {
+        pids: 1,
+        events: 1,
+        undos: 1,
+        reverts: 1,
+        maxlen: 4,
+        init: "ab".into(),
+        ..Bound::small()
+    }
+}
+
 #[test]
 fn every_mutant_fails_its_rule() {
-    let want: [(Mutant, &str, usize); 6] = [
-        (Mutant::NoTaint, "U9", 3),
-        (Mutant::PartialHidesTaint, "U15", 3),
-        (Mutant::RedoRetriesSkipped, "U17", 3),
-        (Mutant::O5EveryWindowEnd, "O5", 3),
-        (Mutant::O5RegionBase, "O5", 3),
-        (Mutant::SkipU19, "U19", 1),
+    let want: [(Mutant, &str, usize, Bound); 9] = [
+        (Mutant::NoTaint, "U9", 3, tiny()),
+        (Mutant::PartialHidesTaint, "U15", 3, tiny()),
+        (Mutant::RedoRetriesSkipped, "U17", 3, tiny()),
+        (Mutant::O5EveryWindowEnd, "O5", 3, tiny()),
+        (Mutant::O5RegionBase, "O5", 3, tiny()),
+        (Mutant::SkipU19, "U19", 1, tiny()),
+        // F3: the merge's sides found by diffing strings
+        (Mutant::Rediff, "own_only", 3, tiny()),
+        // v0.8.1's persisted carry: one taint flag per region
+        (Mutant::RestartSingleTaint, "RT", 4, restart_bound()),
+        // v1.8: O4 on element identity, no O4a
+        (Mutant::ProvenanceIgnored, "I1", 3, provenance_bound()),
     ];
     mutant::set(Mutant::None);
-    let clean = bfs(&tiny(), false, STOP, false, |_, _| {});
-    assert!(
-        clean.violations.keys().all(|r| !STOP.contains(r)),
-        "the oracle: {:?}",
-        clean.violations.keys().collect::<Vec<_>>()
-    );
-    for (m, rule, depth) in want {
+    for b in [tiny(), restart_bound(), provenance_bound()] {
+        let clean = bfs(&b, false, STOP, false, |_, _| {});
+        assert!(
+            clean.violations.is_empty(),
+            "the oracle: {:?}",
+            clean.violations.keys().collect::<Vec<_>>()
+        );
+    }
+    for (m, rule, depth, b) in want {
         mutant::set(m);
-        let c = bfs(&tiny(), false, STOP, true, |_, _| {});
+        let c = bfs(&b, false, STOP, true, |_, _| {});
         let got: Vec<_> = c
             .violations
             .iter()

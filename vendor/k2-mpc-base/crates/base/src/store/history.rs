@@ -1,7 +1,11 @@
 //! History records next to the log: a **change summary** per change (the `log`, kept for
 //! the doc's life), its **clock span** (which engine clocks its inserted text has: blame's
-//! index from a character to its change, kept for the doc's life), a **revert record** per change (its hunks with the deleted text, author,
-//! `on_behalf_of`; kept inside the revert window), the **carried bounds** of pending
+//! index from a character to its change, kept for the doc's life), its **provenance rows**
+//! (format 5: for each run of elements an undo, redo or revert put back, the root it
+//! restores; undo spec U23, kept for the doc's life), a **revert record** per change (its
+//! hunks with the deleted text, author, `on_behalf_of` and, record version 2, the roots of
+//! the elements each hunk inserted and deleted; kept inside the revert window), the
+//! **carried bounds** of pending
 //! records older than the window's cut, and per-doc **stats** (record count and bytes,
 //! pending on-behalf count and bytes). All are written in the transaction of the change
 //! itself, so they never disagree with the log, and none of them depends on the log: a
@@ -10,8 +14,11 @@
 //! **Purge reach (K-PURGE-3).** Content lives only in `REVERTS` rows (`RecordHunk::insert`
 //! / `deleted`). A purge redacts those (sets `redacted`, blanks the text; a revert then
 //! reports the region as `erased`); `CHANGES` (which keeps every change's id, author, time
-//! and hunk lengths), `CHANGE_CLOCKS` (client IDs, clocks and change ids), `REVERT_INDEX`,
-//! `REVERT_CARRY` and `REVERT_STATS` hold positions, sizes and metadata only.
+//! and hunk lengths), `CHANGE_CLOCKS` (client IDs, clocks and change ids), `PROVENANCE`
+//! (element IDs only: a restored run's client and clocks and the root it restores),
+//! `REVERT_INDEX`, `REVERT_CARRY` and `REVERT_STATS` hold positions, sizes and metadata
+//! only, and a record's roots (version 2) are element IDs and lengths, never content. A
+//! purge has nothing more to redact in them, and leaves them as they are.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -36,6 +43,14 @@ pub(super) const REVERT_STATS: TableDefinition<u64, &[u8]> = TableDefinition::ne
 /// v0.3.0 (store format 3, additive: changes made before have no row).
 pub(super) const CHANGE_CLOCKS: TableDefinition<(u64, u64, u64), &[u8]> =
     TableDefinition::new("change_clocks");
+/// `(doc, client, first clock)` → `(end clock, root client, root first clock)`: a run of
+/// elements an undo, redo or revert put back (clocks `first..end` of `client`), each
+/// restoring the root at the same offset from the root's first clock (undo spec U23). Only
+/// restored elements have rows: every other element is its own root. Format 5; written in
+/// the change's own transaction, deleted with the doc, copied by a rewrite, untouched by a
+/// purge (element IDs only).
+pub(super) const PROVENANCE: TableDefinition<(u64, u64, u64), &[u8]> =
+    TableDefinition::new("provenance");
 
 pub(super) fn create_tables(w: &redb::WriteTransaction) -> Result<(), StoreError> {
     w.open_table(CHANGES)?;
@@ -44,6 +59,7 @@ pub(super) fn create_tables(w: &redb::WriteTransaction) -> Result<(), StoreError
     w.open_table(REVERT_CARRY)?;
     w.open_table(REVERT_STATS)?;
     w.open_table(CHANGE_CLOCKS)?;
+    w.open_table(PROVENANCE)?;
     Ok(())
 }
 
@@ -132,6 +148,19 @@ pub(crate) struct RootShape {
     pub hunks: Vec<(u64, u64, u64)>,
 }
 
+/// Roots as runs `(bytes, UTF-16 units, root client, root first clock)`: the character at
+/// UTF-16 offset `k` of a run has root `(client, clock + k)` (undo spec U23). Element IDs
+/// and lengths only.
+pub(crate) type RootRuns = Vec<(u32, u32, u64, u32)>;
+
+/// The roots of the elements a hunk inserted and of those it deleted (revert record
+/// version 2, store format 5).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct HunkRoots {
+    pub inserted: RootRuns,
+    pub deleted: RootRuns,
+}
+
 /// One canonical hunk of a change with the text it deleted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RecordHunk {
@@ -141,6 +170,10 @@ pub(crate) struct RecordHunk {
     pub deleted: String,
     /// A purge blanked this hunk's text (revert reports it `erased`).
     pub redacted: bool,
+    /// The roots of the elements it inserted and deleted; `None` in a record written before
+    /// format 5 (version 1), or by a path that can't name its elements (an outside edit):
+    /// such a record is reverted as before provenance (undo spec v1.7).
+    pub roots: Option<HunkRoots>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,13 +222,24 @@ pub(crate) struct ClockSpan {
 /// `(start, end, seq)`: change `seq` inserted the text at clocks `start..end` of one client.
 pub(crate) type SpanOf = (u32, u32, Seq);
 
-/// A change as appended: its summary, its revert record and, when it inserted anything, its
-/// clock span.
+/// One provenance row: `client`'s elements at clocks `start..end` restore the roots from
+/// `root` on (`root.1 + k` for the element at `start + k`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ProvRow {
+    pub client: u64,
+    pub start: u32,
+    pub end: u32,
+    pub root: (u64, u32),
+}
+
+/// A change as appended: its summary, its revert record, when it inserted anything, its
+/// clock span, and the provenance of the elements it restored (an undo, redo or revert).
 #[derive(Debug, Clone)]
 pub(crate) struct NewChange {
     pub info: ChangeInfo,
     pub record: RevertRecord,
     pub span: Option<ClockSpan>,
+    pub provenance: Vec<ProvRow>,
 }
 
 /// The carried bounds of one record, as of log position `carried_to`.
@@ -355,9 +399,30 @@ pub(super) fn dec_change(
     Ok((info, shape))
 }
 
+fn enc_runs(w: &mut W, runs: &RootRuns) {
+    w.u32(runs.len() as u32);
+    for &(bytes, units, client, clock) in runs {
+        w.u32(bytes).u32(units).u64(client).u32(clock);
+    }
+}
+
+fn dec_runs(r: &mut R<'_>, total: usize) -> Result<RootRuns, StoreError> {
+    let n = r.u32()? as usize;
+    if n > total {
+        return Err(StoreError::Corrupt("revert record roots"));
+    }
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        out.push((r.u32()?, r.u32()?, r.u64()?, r.u32()?));
+    }
+    Ok(out)
+}
+
+/// Revert record version 2 (store format 5): version 1 with, after each hunk, its roots
+/// (`0`: unknown; `1`: the inserted elements' roots, then the deleted elements', as runs).
 pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
     let mut w = W::default();
-    w.u8(1)
+    w.u8(2)
         .str(&rec.author)
         .opt_str(rec.on_behalf_of.as_deref())
         .u64(rec.at_ms)
@@ -372,14 +437,26 @@ pub(super) fn enc_record(rec: &RevertRecord) -> Vec<u8> {
                 .u8(u8::from(h.redacted))
                 .str(&h.insert)
                 .str(&h.deleted);
+            match &h.roots {
+                None => {
+                    w.u8(0);
+                }
+                Some(x) => {
+                    w.u8(1);
+                    enc_runs(&mut w, &x.inserted);
+                    enc_runs(&mut w, &x.deleted);
+                }
+            }
         }
     }
     w.0
 }
 
+/// Decodes revert records version 1 (no roots) and 2.
 pub(super) fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
     let mut r = R::new(b, "revert record");
-    if r.u8()? != 1 {
+    let v = r.u8()?;
+    if v != 1 && v != 2 {
         return Err(StoreError::Corrupt("revert record version"));
     }
     let (author, on_behalf_of, at_ms) = (r.str()?, r.opt_str()?, r.u64()?);
@@ -397,12 +474,27 @@ pub(super) fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
         }
         let mut hunks = Vec::with_capacity(k);
         for _ in 0..k {
+            let (start, end, redacted, insert, deleted) =
+                (r.u64()?, r.u64()?, r.u8()? != 0, r.str()?, r.str()?);
+            let roots = if v < 2 {
+                None
+            } else {
+                match r.u8()? {
+                    0 => None,
+                    1 => Some(HunkRoots {
+                        inserted: dec_runs(&mut r, b.len())?,
+                        deleted: dec_runs(&mut r, b.len())?,
+                    }),
+                    _ => return Err(StoreError::Corrupt("revert record roots")),
+                }
+            };
             hunks.push(RecordHunk {
-                start: r.u64()?,
-                end: r.u64()?,
-                redacted: r.u8()? != 0,
-                insert: r.str()?,
-                deleted: r.str()?,
+                start,
+                end,
+                redacted,
+                insert,
+                deleted,
+                roots,
             });
         }
         roots.push(RecordRoot {
@@ -418,6 +510,26 @@ pub(super) fn dec_record(b: &[u8]) -> Result<RevertRecord, StoreError> {
         at_ms,
         roots,
     })
+}
+
+/// A provenance row's value: `(end clock, root client, root first clock)`.
+fn enc_prov(end: u32, root: (u64, u32)) -> [u8; 24] {
+    let mut out = [0u8; 24];
+    out[..8].copy_from_slice(&u64::from(end).to_le_bytes());
+    out[8..16].copy_from_slice(&root.0.to_le_bytes());
+    out[16..].copy_from_slice(&u64::from(root.1).to_le_bytes());
+    out
+}
+
+fn dec_prov(b: &[u8]) -> Result<(u32, (u64, u32)), StoreError> {
+    let bad = || StoreError::Corrupt("provenance row");
+    if b.len() != 24 {
+        return Err(bad());
+    }
+    let word = |i: usize| u64::from_le_bytes(b[i..i + 8].try_into().expect("8 bytes"));
+    let end = u32::try_from(word(0)).map_err(|_| bad())?;
+    let clock = u32::try_from(word(16)).map_err(|_| bad())?;
+    Ok((end, (word(8), clock)))
 }
 
 pub(super) fn enc_pair(a: u64, b: u64) -> [u8; 16] {
@@ -545,6 +657,7 @@ pub(super) fn put_changes(
     let mut it = w.open_table(REVERT_INDEX)?;
     let mut st = w.open_table(REVERT_STATS)?;
     let mut kt = w.open_table(CHANGE_CLOCKS)?;
+    let mut pt = w.open_table(PROVENANCE)?;
     let mut stats = stats_in(&st, id)?;
     for (&seq, c) in seqs.iter().zip(changes) {
         let shape = c.record.shape();
@@ -553,6 +666,12 @@ pub(super) fn put_changes(
             kt.insert(
                 (id, k.client, u64::from(k.start)),
                 enc_pair(u64::from(k.end), seq).as_slice(),
+            )?;
+        }
+        for p in c.provenance.iter().filter(|p| p.end > p.start) {
+            pt.insert(
+                (id, p.client, u64::from(p.start)),
+                enc_prov(p.end, p.root).as_slice(),
             )?;
         }
         let rec = enc_record(&c.record);
@@ -577,8 +696,10 @@ pub(super) fn delete_rows(w: &redb::WriteTransaction, id: DocId) -> Result<(), S
             .retain_in((id, 0)..=(id, u64::MAX), |_, _| false)?;
     }
     w.open_table(REVERT_STATS)?.remove(id)?;
-    w.open_table(CHANGE_CLOCKS)?
-        .retain_in((id, 0, 0)..=(id, u64::MAX, u64::MAX), |_, _| false)?;
+    for t in [CHANGE_CLOCKS, PROVENANCE] {
+        w.open_table(t)?
+            .retain_in((id, 0, 0)..=(id, u64::MAX, u64::MAX), |_, _| false)?;
+    }
     Ok(())
 }
 
@@ -742,6 +863,44 @@ impl DocStore {
                 }
             }
             out.push(spans);
+        }
+        Ok(out)
+    }
+
+    /// The provenance rows (format 5) meeting each `(client, from, to)` (clocks `from..to`),
+    /// in clock order, in one read. Elements no row covers are their own roots.
+    pub(crate) fn provenance_rows(
+        &self,
+        id: DocId,
+        runs: &[(u64, u32, u32)],
+    ) -> Result<Vec<Vec<ProvRow>>, StoreError> {
+        let r = self.begin_read()?;
+        let t = r.open_table(PROVENANCE)?;
+        let mut out = Vec::with_capacity(runs.len());
+        for &(client, from, to) in runs {
+            let mut rows = Vec::new();
+            if to > from {
+                let first = t
+                    .range((id, client, 0)..=(id, client, u64::from(from)))?
+                    .next_back();
+                let later =
+                    t.range((id, client, u64::from(from) + 1)..(id, client, u64::from(to)))?;
+                for kv in first.into_iter().chain(later) {
+                    let (k, v) = kv?;
+                    let (end, root) = dec_prov(v.value())?;
+                    let start = u32::try_from(k.value().2)
+                        .map_err(|_| StoreError::Corrupt("provenance row"))?;
+                    if end > from {
+                        rows.push(ProvRow {
+                            client,
+                            start,
+                            end,
+                            root,
+                        });
+                    }
+                }
+            }
+            out.push(rows);
         }
         Ok(out)
     }
@@ -1118,6 +1277,7 @@ mod tests {
                         insert: secret.into(),
                         deleted: "old".into(),
                         redacted: false,
+                        roots: None,
                     }],
                 }],
             };
@@ -1127,7 +1287,15 @@ mod tests {
                 start,
                 end: start + 8,
             });
-            (entry, NewChange { info, record, span })
+            (
+                entry,
+                NewChange {
+                    info,
+                    record,
+                    span,
+                    provenance: Vec::new(),
+                },
+            )
         };
         let (e1, c1) = change(None, "SECRET-1");
         let (e2, c2) = change(Some("p"), "SECRET-2");

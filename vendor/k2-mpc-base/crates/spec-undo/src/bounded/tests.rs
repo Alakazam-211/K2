@@ -17,14 +17,14 @@ fn tiny() -> Bound {
     }
 }
 
-/// The oracle of record at a tiny bound with a revert: it violates no rule the runs stop at,
-/// and two that are observed, each first at depth 3 (findings, `docs/MODEL-CHECK.md`):
+/// The oracle of record at a tiny bound with a revert: it violates no rule, `own_only` and
+/// U12 (restated on exact hunk sets, v1.7) included. At v0.8.2 both were violated at depth
+/// 3 (findings F3 and F4, `docs/MODEL-CHECK.md`):
 /// - **F3, `own_only`:** seed `ab`; p1 replaces `a` with `b`; p2 inserts `b` at 0, pulled
-///   into p1's region at its start; p1's undo deletes p2's `b` (the merge's base→theirs
-///   diff puts p2's insertion after the region's own `b`).
-/// - **F4, U12's equivalence note:** seed `ab`; p1 inserts `a` at 0; p2 replaces it with
-///   `b`; p1's undo conflicts (the window form, the definition), while whole-text merge3 of
-///   the same inverse is clean (its diff deletes the seed's `a` instead).
+///   into p1's region at its start; p1's undo deleted p2's `b` (the merge's base→theirs
+///   diff put p2's insertion after the region's own `b`). Exact sets: p2's `b` stays.
+/// - **F4, U12's old note:** whole-text merge3 of re-diffed sides differs from the window
+///   form in repeated text; on exact sets the two forms agree.
 #[test]
 fn the_oracle_at_a_tiny_bound() {
     let b = Bound {
@@ -39,14 +39,54 @@ fn the_oracle_at_a_tiny_bound() {
         c.transitions,
         c.cut
     );
-    assert_eq!(
-        c.violations.keys().collect::<Vec<_>>(),
-        vec![&"U12", &"own_only"]
-    );
-    for (rule, (depth, path)) in &c.violations {
-        assert_eq!(*depth, 3, "{rule}: {path:?}");
-    }
+    assert!(c.violations.is_empty(), "{:?}", c.violations);
     assert!(c.distinct() > 100);
+}
+
+/// v1.8: the case class "concurrent restores of one root" is reached (O4 on roots, O4a, a
+/// window character counted as base by root only), and I1 holds, at a tiny bound with two
+/// undos and a revert.
+#[test]
+fn concurrent_restores_are_reached() {
+    let b = Bound {
+        pids: 2,
+        events: 1,
+        undos: 2,
+        reverts: 1,
+        maxlen: 3,
+        init: "ab".into(),
+        ..Bound::small()
+    };
+    let mut n = 0;
+    let c = bfs(&b, false, STOP, false, |s, _| {
+        n += usize::from(s.hit.contains(&"concurrent_restore"));
+    });
+    assert!(c.violations.is_empty(), "{:?}", c.violations);
+    assert!(n > 0, "the class concurrent_restore is never reached");
+}
+
+/// A restart changes no revert (RT, U22a v1.6) on the oracle of record, and the case
+/// classes the walks count are reached.
+#[test]
+fn restarts_are_transparent() {
+    let b = Bound {
+        pids: 1,
+        events: 2,
+        undos: 1,
+        reverts: 1,
+        restarts: 1,
+        maxlen: 4,
+        init: "abba".into(),
+        ..Bound::small()
+    };
+    let mut hit = BTreeSet::new();
+    let c = bfs(&b, false, STOP, false, |s, _| {
+        hit.extend(s.hit.iter().copied());
+    });
+    assert!(c.violations.is_empty(), "{:?}", c.violations);
+    for class in ["restart", "taint", "edge_insert", "exact_vs_rediff"] {
+        assert!(hit.contains(class), "class {class} not reached: {hit:?}");
+    }
 }
 
 /// Pid symmetry is exact: the canonical forms of every state of the plain enumeration are
@@ -62,6 +102,10 @@ fn pid_symmetry_is_exact() {
             reverts: 0,
             maxlen: 3,
             ..Bound::small()
+        },
+        Bound {
+            restarts: 1,
+            ..tiny()
         },
     ] {
         let mut canon = BTreeSet::new();
@@ -132,4 +176,53 @@ fn the_cut_bounds_every_diffed_string() {
             }
         }
     });
+}
+
+/// The view is exact (v1.8): roots as labels (states equal up to renaming roots), the
+/// carried theirs and a reduced head left out. Two oracle states found with one view (in
+/// different oracle states: other root names, another carry, another head) have the same
+/// actions, and each action gives the same outcome and the same next view.
+#[test]
+fn the_view_is_exact() {
+    let b = Bound { undos: 2, ..tiny() };
+    let mut first: std::collections::HashMap<View, State> = std::collections::HashMap::new();
+    let mut fr = vec![State::init(&b)];
+    let (mut checked, mut renamed) = (0, 0);
+    while !fr.is_empty() {
+        let mut next = Vec::new();
+        for s in &fr {
+            for a in s.actions(&b) {
+                let Some((t, _)) = s.step(&b, &a) else {
+                    continue;
+                };
+                let v = t.view(&identity(b.pids));
+                match first.get(&v) {
+                    None => {
+                        first.insert(v, t.clone());
+                        next.push(t);
+                    }
+                    Some(u) if u.m != t.m && checked < 4000 => {
+                        checked += 1;
+                        renamed += usize::from(u.m.elems != t.m.elems);
+                        let succ = |x: &State| -> Vec<_> {
+                            x.actions(&b)
+                                .into_iter()
+                                .map(|a| {
+                                    let r = x.step(&b, &a).map(|(y, o)| {
+                                        (crate::itf::normalise(&o), y.view(&identity(b.pids)))
+                                    });
+                                    (a, r)
+                                })
+                                .collect()
+                        };
+                        assert_eq!(succ(u), succ(&t), "one view, two futures: {v:?}");
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        fr = next;
+    }
+    eprintln!("view exactness: {checked} pairs checked, {renamed} with other root names");
+    assert!(renamed > 0, "no state reached twice under other root names");
 }

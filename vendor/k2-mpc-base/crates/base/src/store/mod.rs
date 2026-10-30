@@ -31,8 +31,8 @@ pub use blob::{BlobReason, BlobVersion, BLOB_DOC_PACK};
 pub(crate) use blob::{BlobSync, SpaceKey};
 pub use history::Redaction;
 pub(crate) use history::{
-    window_plan, Carry, ClockSpan, NewChange, RecordHunk, RecordRoot, Retention, RevertRecord,
-    RevertWindow, RootShape,
+    window_plan, Carry, ClockSpan, HunkRoots, NewChange, ProvRow, RecordHunk, RecordRoot,
+    Retention, RevertRecord, RevertWindow, RootRuns, RootShape, SpanOf,
 };
 pub use history::{ChangeInfo, ChangeKind, VersionInfo};
 pub use purge::PurgeCounts;
@@ -79,7 +79,19 @@ use enc::{R, W};
 ///   refuses a format-4 store ([`StoreError::Newer`]) instead of writing on-behalf blob
 ///   versions without approvals, leaving their rows behind on a delete, or refusing the
 ///   table in `rewrite_file` mid-purge.
-pub const STORE_FORMAT: u64 = 4;
+/// - 5: provenance of restored text (undo spec v1.8, U23). A new table, `provenance`, keyed
+///   `(doc, client, first clock)`: for each run of elements an undo, redo or revert put
+///   back, the root it restores (element IDs only, no content), written in the change's own
+///   transaction; and revert records version 2, with the roots of each hunk's inserted and
+///   deleted elements (version-1 records still decode, with unknown roots, and are reverted
+///   as before). A format-4 store opens as is and is stamped 5 **in place**, in the open's
+///   own transaction: the table is created, and nothing is backfilled (every element made
+///   before has no provenance row, so it is its own root, which is what it is). **No
+///   downgrade:** a format-4 build refuses a format-5 store ([`StoreError::Newer`]) instead
+///   of writing changes without their provenance rows (a later build would then read text
+///   restored by them as fresh), reading version-2 records as damaged, or refusing the
+///   table in `rewrite_file` mid-purge.
+pub const STORE_FORMAT: u64 = 5;
 
 pub type DocId = u64;
 /// Position in a doc's update log (1-based, increasing, never reused).
@@ -769,7 +781,8 @@ impl DocStore {
                 }
                 Some(f) if f > STORE_FORMAT => return Err(StoreError::Newer { found: f }),
                 // 1 -> 2 -> 3: nothing to rewrite (older records still decode); new tables
-                // below. 3 -> 4: the blob approvals, backfilled below.
+                // below. 3 -> 4: the blob approvals, backfilled below. 4 -> 5: the
+                // provenance table (below), empty: every existing element is its own root.
                 Some(f) if f < STORE_FORMAT => {
                     meta.insert("store_format", STORE_FORMAT)?;
                 }

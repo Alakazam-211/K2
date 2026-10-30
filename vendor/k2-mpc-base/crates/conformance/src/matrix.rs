@@ -146,14 +146,18 @@ pub const RULES: &[Rule] = &[
     r("core.idempotent", "E-CORE-2", &[Events]),
     r("core.causal", "E-CORE-3", &[Events]),
     r("core.no_equivocation", "E-CORE-4", &[Events]),
-    r("text.blame_char", "E-TEXT-11", &[Blame]),
+    r(
+        "text.blame_char",
+        "E-TEXT-11, undo spec U18a, U23",
+        &[Blame],
+    ),
     r("text.cursor_stable", "E-TEXT-10", &[Anchors]),
     r("hist.undo_atomic", "E-HIST-6, K-CT-4", &[Undo]),
     r("hist.undo_partial", "K-HIST-13, K-CT-4", &[Undo]),
     r("hist.redo", "E-HIST-6, K-HIST-2", &[Undo]),
     r(
         "hist.undo_own_only",
-        "E-HIST-5, undo spec U10, U18a",
+        "E-HIST-5, undo spec U10, U10a (by root, v1.8), U18a, U23",
         &[Undo, Blame],
     ),
     r("hist.version_stable", "E-HIST-1", &[Versions]),
@@ -168,6 +172,11 @@ pub const RULES: &[Rule] = &[
     r("hist.merge_any_base", "E-HIST-9", &[BranchAt]),
     r("sec.duplicate_ranges", "E-SEC-6", &[Wire]),
     r("sec.base_too_old", "E-SEC-12", &[Wire]),
+    r(
+        "sec.client_provenance_refused",
+        "undo spec U23 (v1.8)",
+        &[Wire],
+    ),
     r(
         "erase.purge",
         "E-ERASE-1, K-PURGE-5",
@@ -302,10 +311,26 @@ const WIRE: &str = "decoding untrusted update bytes is the native decoder's; thi
 const WIRE_NEVER: &str = "the reference model has no wire format (native decoder / client \
                           protocol)";
 const UNDO_NEVER: &str = "undo is the kit's, over a session (undo spec); the model has no sessions";
+/// `sec.client_provenance_refused` on the kit: why it holds there without a wire test.
+const PROVENANCE_KIT: &str = concat!(
+    "holds by construction in the kit: provenance (undo spec U23) is stamped only by the ",
+    "session's own undo, redo and revert (`Session::apply_local` names the elements a step ",
+    "puts back and writes their `provenance` rows in the change's own transaction, ",
+    "`store::history::put_changes`); no public API takes a root, and a client update ",
+    "(`Doc::check_client_update` / `apply_client_update`) carries engine content only and ",
+    "never reaches the provenance table or the session's map. Refusing a root a client ",
+    "sends on the wire is the native decoder's"
+);
 /// Every (rule, engine) that doesn't run yet.
 pub const AWAITING: &[Awaiting] = &[
     aw("sec.duplicate_ranges", K, WIRE, "native decoder, G2"),
     aw("sec.base_too_old", K, WIRE, "native decoder, G2"),
+    aw(
+        "sec.client_provenance_refused",
+        K,
+        PROVENANCE_KIT,
+        "native decoder, G2 (the engine's)",
+    ),
 ];
 
 /// Every (rule, engine) that will never run.
@@ -321,6 +346,7 @@ pub const NEVER: &[Never] = &[
     ),
     nv("sec.duplicate_ranges", M, WIRE_NEVER),
     nv("sec.base_too_old", M, WIRE_NEVER),
+    nv("sec.client_provenance_refused", M, WIRE_NEVER),
     nv(
         "erase.participant",
         M,

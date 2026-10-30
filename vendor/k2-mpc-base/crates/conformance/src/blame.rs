@@ -1,13 +1,19 @@
 //! Rules over [`Blame`].
 //!
-//! - `text.blame_char` (E-TEXT-11): every live character maps to the event (agent and ID)
-//!   that inserted it; IDs are unique per character and identical on every replica; a
-//!   character keeps its ID through others' edits; text deleted and typed again blames to
-//!   whoever typed it again.
+//! - `text.blame_char` (E-TEXT-11; undo spec U18a, U23): every live character maps to its
+//!   **provenance-root insert** (the event, agent and ID, that inserted the element it is or
+//!   restores), plus the **restoring event** (the undo, redo or revert that put it back)
+//!   when it is a restoration; IDs are unique per character and identical on every
+//!   replica; a character keeps its ID through others' edits; text deleted and typed again
+//!   blames to whoever typed it again (typing is never a restoration). A replica has no
+//!   undo: every element here is its own root, and the rule checks the insert; restored
+//!   elements are checked on the kit's sessions (`hist.undo_own_only`, which reads each
+//!   element's root, and the kit's blame tests).
 //! - `hist.blame_grain` (E-HIST-4), over [`BlameAt`]: blame at a past version is per
 //!   character, the same on every replica, and equal to the live blame when that version
-//!   was current; a purge removes its span from the blame of every version (it reads as
-//!   removed: no character of it blames to anyone) and changes no other character's.
+//!   was current (by root, as `text.blame_char`); a purge removes its span from the blame
+//!   of every version (it reads as removed: no character of it blames to anyone) and
+//!   changes no other character's.
 
 use std::collections::BTreeSet;
 

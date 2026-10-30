@@ -12,6 +12,8 @@ done
 echo "=== simulate + ITF at G1: wall $(( $(date +%s) - s ))s"
 timed "ITF replay at G1" R --pids 3 --events 3 --undos 2 --reverts 1 --maxlen 4 --init abb "$ROOT/itf_g1"
 timed "walks at G1" E walk --g1 --probes ${WALKS:-150000} --threads "$(nproc)"
-for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19; do
+for m in i-no-taint iii-partial-hides-taint iv-redo-retries-skipped vi-o5-every-window-end vii-o5-region-base skip-u19 f3-rediff; do
   timed "walks at G1, mutant $m (must fail)" E walk --g1 --probes 20000 --threads "$(nproc)" --mutant $m
 done
+timed "walks at G1 + 1 restart, mutant restart-single-taint (must fail)" E walk --g1 --restarts 1 --probes 20000 --threads "$(nproc)" --mutant restart-single-taint
+timed "walks at G1, mutant x-provenance-ignored-in-o4 (must fail)" E walk --g1 --probes 20000 --threads "$(nproc)" --mutant x-provenance-ignored-in-o4

@@ -442,20 +442,26 @@ fn blame_line_ranges() {
 
 // ---------- undo, redo, revert, restore ----------
 
-/// Undo spec U18a: text undo or redo brings back is new content by whoever ran it, at that
-/// time; the same for revert and restore (each a change by the caller).
+/// Undo spec U18a (v1.8): text an undo, redo or revert puts back is new elements by
+/// whoever ran it, and **blames to its provenance root**: the change that first inserted
+/// the element it restores and that change's author, with the restoring change and its
+/// author as `restored_by` / `restored_in`. A line goes to its character with the greatest
+/// root change id. `restore` is a new edit: its text is the restorer's.
 #[test]
-fn blame_restored_text_is_the_restorers() {
+fn blame_restored_text_is_its_roots_with_the_restorer() {
     let f = fx("undo");
     let s = f.open("u.md", "keep\n");
     let alice = join(&s, person("alice"));
     let bob = join(&s, agent("bob"));
     let aide = join(&s, agent("aide").on_behalf_of("alice"));
     let obs = join(&s, person("obs"));
+    let import = line(&blame(&s, obs), 1).change;
     f.advance(10);
-    replace(&s, alice, "keep\n", "keep\nalice's line\n");
+    let at_a1 = f.now();
+    let a1 = replace(&s, alice, "keep\n", "keep\nalice's line\n");
     f.advance(10);
-    // bob deletes alice's line, then undoes his delete: the line is back, as bob's
+    // bob deletes alice's line, then undoes his delete: the line is back, still alice's
+    // (its root), restored by bob
     replace(&s, bob, "alice's line\n", "");
     f.advance(10);
     let out = s
@@ -468,30 +474,45 @@ fn blame_restored_text_is_the_restorers() {
     assert_eq!(l.text, "alice's line");
     assert_eq!(
         (l.author.as_str(), l.kind, l.change, l.at_ms),
-        (
-            "bob",
-            Some(ChangeKind::Undo),
-            Some(result.version),
-            Some(f.now())
-        )
+        ("alice", Some(ChangeKind::Edit), Some(a1), Some(at_a1))
     );
-    // alice's own edit, undone and redone: the redo is hers, a new change
+    assert_eq!(
+        (l.restored_by.as_deref(), l.restored_in),
+        (Some("bob"), Some(result.version))
+    );
+    // the listings say so
+    let b = blame(&s, obs);
+    assert!(
+        b.porcelain().contains(&format!(
+            "restored-by bob\nrestored-in {}\n",
+            result.version
+        )),
+        "{}",
+        b.porcelain()
+    );
+    assert!(
+        b.render(|_| None)
+            .contains(&format!("alice (restored by bob in {})", result.version)),
+        "{}",
+        b.render(|_| None)
+    );
+    // alice's own edit, undone: the undo puts the import's "keep" back (the import's root,
+    // restored by alice)
     f.advance(10);
-    replace(&s, alice, "keep", "KEEP");
+    let k = replace(&s, alice, "keep", "KEEP");
     let UndoOutcome::Applied { result, .. } = s.undo(alice, 1).unwrap() else {
         panic!()
     };
-    // the undo re-inserts the import's "keep": new content, alice's (U18a)
     let l = line(&blame(&s, obs), 1).clone();
     assert_eq!(
         (l.text.as_str(), l.author.as_str(), l.kind, l.change),
-        (
-            "keep",
-            "alice",
-            Some(ChangeKind::Undo),
-            Some(result.version)
-        )
+        ("keep", "kit:import", Some(ChangeKind::Import), import)
     );
+    assert_eq!(
+        (l.restored_by.as_deref(), l.restored_in),
+        (Some("alice"), Some(result.version))
+    );
+    // ... and redone: "KEEP" is back, its root alice's edit, restored by the redo
     f.advance(10);
     let UndoOutcome::Applied { result, .. } = s.redo(alice, 1).unwrap() else {
         panic!()
@@ -499,9 +520,14 @@ fn blame_restored_text_is_the_restorers() {
     let l = line(&blame(&s, obs), 1).clone();
     assert_eq!(
         (l.author.as_str(), l.kind, l.change),
-        ("alice", Some(ChangeKind::Redo), Some(result.version))
+        ("alice", Some(ChangeKind::Edit), Some(k))
     );
-    // an assistant deletes a line for alice; alice reverts it: the line is alice's again
+    assert_eq!(
+        (l.restored_by.as_deref(), l.restored_in),
+        (Some("alice"), Some(result.version))
+    );
+    // an assistant deletes a line for alice; alice reverts it: the line's root is still
+    // alice's first edit (path-compressed: bob's restoration's root), restored by the revert
     f.advance(10);
     let gone = replace(&s, aide, "alice's line\n", "");
     f.advance(10);
@@ -514,16 +540,20 @@ fn blame_restored_text_is_the_restorers() {
             l.author.as_str(),
             l.kind,
             l.change,
-            l.on_behalf_of.as_deref()
+            l.on_behalf_of.as_deref(),
+            l.restored_by.as_deref(),
+            l.restored_in
         ),
         (
             "alice",
-            Some(ChangeKind::Revert),
-            Some(result.version),
-            None
+            Some(ChangeKind::Edit),
+            Some(a1),
+            None,
+            Some("alice"),
+            Some(result.version)
         )
     );
-    // restoring the import's version: the restorer's
+    // restoring the import's version: a new edit, the restorer's (no restoration)
     let v1 = s.versions(obs).unwrap()[0].id;
     f.advance(10);
     let r = s.restore(bob, v1).unwrap();
@@ -533,9 +563,10 @@ fn blame_restored_text_is_the_restorers() {
         (
             b.lines[0].author.as_str(),
             b.lines[0].kind,
-            b.lines[0].change
+            b.lines[0].change,
+            b.lines[0].restored_by.as_deref()
         ),
-        ("bob", Some(ChangeKind::Restore), Some(r.version))
+        ("bob", Some(ChangeKind::Restore), Some(r.version), None)
     );
 }
 

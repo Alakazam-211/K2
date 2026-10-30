@@ -27,17 +27,32 @@ pub enum Mutant {
     O5RegionBase,
     /// skip-U19: a purge doesn't clear the stacks.
     SkipU19,
+    /// F3 (v0.8.2 and earlier): undo, redo and revert find the merge's sides by diffing
+    /// strings (`diff(after, before)`, `diff(after, window)`) instead of merging the exact
+    /// hunk sets (U10, v1.7).
+    Rediff,
+    /// v0.8.1's persisted carry: a restart reads one taint flag per record region back at
+    /// both edges (U22a, v1.6 restart transparency).
+    RestartSingleTaint,
+    /// (x) `provenance-ignored-in-O4` (v1.8): O4 judged on element identity (a restoration
+    /// is a new element, so two restorations of one root are never identical; pure deletions
+    /// of one range still are), and no O4a. Two restorations of one root both land at the
+    /// doc's end (O5), failing I1.
+    ProvenanceIgnored,
 }
 
 impl Mutant {
     /// Every mutant, by its command-line name.
-    pub const ALL: [(&'static str, Mutant); 6] = [
+    pub const ALL: [(&'static str, Mutant); 9] = [
         ("i-no-taint", Mutant::NoTaint),
         ("iii-partial-hides-taint", Mutant::PartialHidesTaint),
         ("iv-redo-retries-skipped", Mutant::RedoRetriesSkipped),
         ("vi-o5-every-window-end", Mutant::O5EveryWindowEnd),
         ("vii-o5-region-base", Mutant::O5RegionBase),
         ("skip-u19", Mutant::SkipU19),
+        ("f3-rediff", Mutant::Rediff),
+        ("restart-single-taint", Mutant::RestartSingleTaint),
+        ("x-provenance-ignored-in-o4", Mutant::ProvenanceIgnored),
     ];
 
     /// A mutant by its command-line name (`none` is the oracle).

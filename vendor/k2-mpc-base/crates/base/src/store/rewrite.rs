@@ -29,7 +29,9 @@ use std::path::{Path, PathBuf};
 use redb::{Database, MultimapTableHandle, ReadTransaction, TableDefinition, TableHandle};
 
 use super::blob::{BLOBS, BLOB_APPROVALS, BLOB_SPACES, BLOB_SYNC, BLOB_VERSIONS};
-use super::history::{CHANGES, CHANGE_CLOCKS, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS};
+use super::history::{
+    CHANGES, CHANGE_CLOCKS, PROVENANCE, REVERTS, REVERT_CARRY, REVERT_INDEX, REVERT_STATS,
+};
 use super::{
     DocStore, StoreError, APPROVALS, CLIENTS, DOCS, DOC_KEYS, HOST, META, PATHS, SNAPSHOTS, SYNC,
     UPDATES, VERSIONS,
@@ -73,6 +75,7 @@ const TABLES: &[&str] = &[
     "revert_carry",
     "revert_stats",
     "change_clocks",
+    "provenance",
     "blob_spaces",
     "blobs",
     "blob_versions",
@@ -135,6 +138,7 @@ fn copy_all(old: &Database, new: &Database) -> Result<u64, StoreError> {
     n += copy(&r, &w, REVERT_CARRY)?;
     n += copy(&r, &w, REVERT_STATS)?;
     n += copy(&r, &w, CHANGE_CLOCKS)?;
+    n += copy(&r, &w, PROVENANCE)?;
     n += copy(&r, &w, BLOB_SPACES)?;
     n += copy(&r, &w, BLOBS)?;
     n += copy(&r, &w, BLOB_VERSIONS)?;

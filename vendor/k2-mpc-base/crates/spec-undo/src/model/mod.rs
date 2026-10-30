@@ -1,13 +1,40 @@
-//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.6),
+//! `spec_undo::model`: the oracle of record for the undo spec (`docs/SPEC-UNDO.md`, v1.8),
 //! over plain strings and hunks. No engine, no store, no clock.
 //!
-//! **What it calls from the kit:** only the diff pipeline, D1–D2: `diff::hunks` (inside
-//! [`merge::merge3_window`]) and `align_insertions(diff::hunks(..))` for edits given as a
-//! new text (`replace`, `restore`). Everything else is written from the spec text: the
-//! merge's pair rules (O1–O5) and its placement of ours on theirs, the canonical form (D2's
-//! "coalesced when touching"), the caret carry (U8), taint (U9), the window flag `at_end`
-//! (U10), the reports (U11), the modes (U13–U17), revert (U22), purge (U19) and the bounds
-//! (U6).
+//! **What it calls from the kit:** only the diff pipeline, D1–D2, where the spec still uses
+//! it: `diff::hunks` for `write --base` ([`merge::merge3_window`]) and
+//! `align_insertions(diff::hunks(..))` for edits given as a new text (`replace`,
+//! `restore`). Undo, redo and revert merge **exact edit sets** (U10, v1.7): ours, the
+//! inverse of the change's own edits, and theirs, the later edits inside the region's
+//! window at element identity ([`window`]); nothing there is diffed. Everything else is
+//! written from the spec text: the merge's pair rules (O1–O5) and its placement of ours on
+//! theirs, the canonical form (D2's "coalesced when touching"), the caret carry (U8), taint
+//! (U9), the window flag `at_end` (U10), the reports (U11), the modes (U13–U17), revert
+//! (U22), purge (U19) and the bounds (U6). **`hist.undo_own_only` is enforced** here
+//! ([`Hits::foreign_deleted`]), by root since v1.8 (U10a).
+//!
+//! **Provenance (v1.8, U23).** Every live character is an [`Elem`]: its owner, its own id
+//! and its provenance root ([`Prov`]: change id and ordinal; the import's elements are
+//! change 0). An undo, redo or revert inserts only what the reversed change removed, and
+//! each character it inserts records the root of the one it puts back (copied, so never a
+//! chain). Regions keep the roots of their `before` (what ours puts back) and `after` (the
+//! base) characters: a change region, the roots of what the change deleted and inserted; a
+//! redo region, the roots of the window the undo saw and of what it left; a revert record
+//! the same as its change's. The rules read roots:
+//! - **U8 by root:** at merge time the live window is read against the base's roots with
+//!   the greedy rule ([`window::read`]); theirs is read off it, so the window is no longer
+//!   carried for the merge. The v1.7 carry (at element identity) is kept as a cross-check:
+//!   on the oracle of record, a window read by element id gives exactly the carried theirs
+//!   (a debug assertion), and a window character counted as base by root only is a case
+//!   class ([`Hits::base_by_root`]).
+//! - **O4 on (range, roots)** ([`merge::Same::Root`]); `write --base` keeps hunk equality.
+//! - **O4a:** after O4, a kept ours edit that would put back a root live anywhere in its
+//!   root's text (the state the step merges against) makes the region conflict (overlap).
+//! - **U10a by root:** a step removes only characters whose root is one the change it
+//!   reverses inserted: the base roots its ours deletes (an undo of a batch, its inserted
+//!   roots; a redo, the roots the undo put back; a revert, the change's inserted roots).
+//! - **I1:** at most one live element per root, checked after every undo, redo and revert
+//!   ([`Model::i1`], [`Hits::i1_violated`]).
 //!
 //! **State** ([`Model`]) is plain data, `Clone + Eq + Hash`, and every operation is a
 //! deterministic function of it and its arguments, so an enumerator can explore it. Each
@@ -29,9 +56,14 @@
 //!   coordinates, not a fresh diff of the window. They are the step's hunk stream, which
 //!   carries every other region (U8) and is the step's revert record (U22).
 //! - **R4** (U17): a redo region is the undo region as the undo left it: bounds of its
-//!   merged text, base = the merged text, ours = the window's live text before the undo;
-//!   one per **applied** region (a clean region that changed nothing included). The whole-doc
-//!   flag for its `at_end` is whether the root was non-empty after the undo step.
+//!   merged text, base = the merged text, ours = the **inverse of the edits the undo
+//!   applied there** (v1.7), theirs empty; one per **applied** region (a clean region that
+//!   changed nothing included: its ours is empty). The whole-doc flag for its `at_end` is
+//!   whether the root was non-empty after the undo step.
+//! - **R11** (U8, U10; v1.7): a later edit is inside a region's window when it lies within
+//!   the carried bounds, a pure insertion exactly at an edge included; at a shared edge the
+//!   right region drops the elements the left one took (they are at its window's front, and
+//!   foreign). A tainted region keeps no theirs (it conflicts whatever they are).
 //! - **R5** (U6): the bound counts both stacks together (an undo or redo moves a batch, so
 //!   the count only grows by a new batch, after U7 has emptied redo); the oldest undo batch
 //!   goes first. The byte bound counts region text (before + after).
@@ -62,13 +94,14 @@
 pub mod hunk;
 pub mod merge;
 pub mod mutant;
+pub mod window;
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use k2_mpc_base::text::{diff, lines};
 
-pub use hunk::Edit;
 use hunk::Side;
+pub use hunk::{Edit, Prov};
 use merge::Merged;
 use mutant::Mutant;
 
@@ -96,6 +129,15 @@ pub struct Report {
     pub kind: Kind,
 }
 
+/// One live character (v1.8): who inserted it, its own id, and its provenance root (U23).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Elem {
+    /// An index into [`Model::who`] (0: the import).
+    pub owner: u16,
+    pub id: Prov,
+    pub prov: Prov,
+}
+
 /// One region (U8): a canonical hunk of a change, carried.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Region {
@@ -103,10 +145,23 @@ pub struct Region {
     /// Carried bounds in the current text.
     pub start: usize,
     pub end: usize,
-    /// What undoing it puts back (`R_before`; "ours").
+    /// What undoing it puts back (`R_before`).
     pub before: String,
     /// What the change left (`R_after`; the merge's base).
     pub after: String,
+    /// Ours (U10, v1.7): edits on `after` giving `before`, the change's own inverted.
+    pub ours: Vec<Edit>,
+    /// Theirs as v1.7 carried it: the later edits inside the window, at element identity,
+    /// in `after`'s coordinates (empty once tainted). Since v1.8 the merge reads theirs off
+    /// the live window by root (U8); this is a cross-check only.
+    pub theirs: Vec<Edit>,
+    /// The provenance roots of `before`'s characters (U23): what ours puts back.
+    pub before_roots: Vec<Prov>,
+    /// The provenance roots of `after`'s characters (U23): the base a window is read
+    /// against (U8 by root).
+    pub after_roots: Vec<Prov>,
+    /// The element ids of `after`'s characters: the v1.7 reading, a cross-check only.
+    pub after_ids: Vec<Prov>,
     /// U9.
     pub tainted: bool,
     /// The whole root was non-empty right after the change (the merge's base; U10).
@@ -151,8 +206,9 @@ pub struct Record {
     pub edges: Vec<Edges>,
 }
 
-/// A record region's edges as revert carries them (U22a).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A record region's edges as revert carries them (U22a), and its theirs (U10, v1.7) over
+/// the window those edges bound.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Edges {
     pub start: usize,
     pub end: usize,
@@ -160,6 +216,9 @@ pub struct Edges {
     pub start_taint: bool,
     /// A later hunk deleted across the end (U9).
     pub end_taint: bool,
+    /// The later edits inside `[start, end]` (empty once either edge is tainted), at element
+    /// identity: the v1.7 carry, a cross-check only since v1.8 (U8 by root).
+    pub theirs: Vec<Edit>,
 }
 
 /// The bounds (U6) and the revert window (U22), as knobs.
@@ -257,10 +316,16 @@ pub struct RegionNote {
     pub root: usize,
     pub start: usize,
     pub end: usize,
-    /// The live text of its root (the merge's theirs is `live[start..end]`).
+    /// The live text of its root (the window is `live[start..end]`).
     pub live: String,
     pub before: String,
     pub after: String,
+    /// The merge's exact sides (v1.7): theirs read by root (v1.8), and the roots of what
+    /// each side's edits insert.
+    pub ours: Vec<Edit>,
+    pub theirs: Vec<Edit>,
+    pub ours_roots: Vec<Vec<Prov>>,
+    pub theirs_roots: Vec<Vec<Prov>>,
     pub tainted: bool,
     pub erased: bool,
     pub base_doc_nonempty: bool,
@@ -272,6 +337,8 @@ pub struct RegionNote {
     pub o5_landed: bool,
     /// Two different insertions at its end conflicted because `at_end` was false.
     pub same_point_end: bool,
+    /// O4a made it conflict: a kept ours edit would put back a live root (v1.8).
+    pub o4a: bool,
 }
 
 /// One planned undo or redo step (U13–U17): what it applied, what it reported, and how
@@ -331,6 +398,26 @@ pub struct Hits {
     /// A clean region whose merge hunks differ from a fresh diff of its window: repeated
     /// text, where only element identity (U10) says which characters change.
     pub identity_case: bool,
+    /// A merged region whose exact sides differ from the sides a diff of strings would
+    /// give (`diff(after, before)`, `diff(after, window)`): finding F3's class (v1.7).
+    pub rediff_differs: bool,
+    /// A merged region whose theirs holds an insertion at the window's start or end (U8:
+    /// pulled inside).
+    pub edge_insert: bool,
+    /// An undo, redo or revert deleted a character whose root is not one the change it
+    /// reverses inserted (U10a by root, v1.8). `hist.undo_own_only`, enforced.
+    pub foreign_deleted: bool,
+    /// v1.8: O4 took once an ours edit that inserts (two restorations of one root met).
+    pub o4_restore: bool,
+    /// v1.8: O4a made a region conflict (a kept ours edit would put back a live root).
+    pub o4a: bool,
+    /// v1.8: a merged window held a character counted as base by root only (by element
+    /// identity it is foreign: someone removed the base's element and put it back).
+    pub base_by_root: bool,
+    /// The case class "concurrent restores of one root" (§8, v1.8): any of the three above.
+    pub concurrent_restore: bool,
+    /// I1 failed after the operation: two live elements share a root (v1.8).
+    pub i1_violated: bool,
     /// A revert: U22a's property held (conflicts ⊇ undo's on the same state, same bounds,
     /// same text where both apply). `false` on anything but a revert.
     pub revert_superset_ok: bool,
@@ -348,6 +435,11 @@ pub struct Hits {
 pub struct Model {
     /// Every root's text.
     pub texts: Vec<String>,
+    /// Every root's characters (owner, id, provenance root; v1.8), one per character of
+    /// its text.
+    pub elems: Vec<Vec<Elem>>,
+    /// Owner names (`who[0]` is the import's, empty).
+    pub who: Vec<Pid>,
     /// The newest change's id.
     pub head: ChangeId,
     pub stacks: BTreeMap<Pid, Stacks>,
@@ -361,14 +453,38 @@ pub struct Model {
 }
 
 /// A merged clean region: (index in the batch, merged window text, its edits in window
-/// coordinates).
-type Clean = (usize, String, Vec<Edit>);
+/// coordinates, the roots of what each inserts).
+type Clean = (usize, String, Vec<Edit>, Vec<Vec<Prov>>);
+
+/// One change's edits per root, canonical, with the roots of what each edit inserts: `None`
+/// for fresh text (every element its own root), else one root per inserted character (a
+/// restoration, U23).
+type Change = Vec<(usize, Vec<Edit>, Option<Vec<Vec<Prov>>>)>;
 
 impl Model {
     /// A doc whose roots hold `texts`, its newest change being `head` (an import is no
     /// participant's batch, U4).
     pub fn new(texts: Vec<String>, head: ChangeId, bounds: Bounds) -> Self {
+        let mut k = 0;
+        let elems = texts
+            .iter()
+            .map(|t| {
+                t.chars()
+                    .map(|_| {
+                        k += 1;
+                        let p = Prov(0, k - 1);
+                        Elem {
+                            owner: 0,
+                            id: p,
+                            prov: p,
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
         Model {
+            elems,
+            who: vec![String::new()],
             texts,
             head,
             stacks: BTreeMap::new(),
@@ -449,8 +565,20 @@ impl Model {
         obo: Option<&str>,
         edits: Vec<(usize, Vec<Edit>)>,
     ) -> Outcome {
+        let edits = edits.into_iter().map(|(r, es)| (r, es, None)).collect();
+        self.new_batch_del(pid, obo, edits).0
+    }
+
+    /// [`Model::new_batch`] for a change with roots (a revert's), and the elements it
+    /// deleted.
+    fn new_batch_del(
+        &mut self,
+        pid: &str,
+        obo: Option<&str>,
+        edits: Change,
+    ) -> (Outcome, Vec<Elem>) {
         match self.commit(pid, obo, edits) {
-            Some((id, regions)) => {
+            Some((id, regions, deleted)) => {
                 let st = self.stacks.entry(pid.to_owned()).or_default();
                 st.redo.clear();
                 st.cleared = false;
@@ -460,9 +588,9 @@ impl Model {
                     after_partial: false,
                 });
                 self.bound(pid);
-                Outcome::Changed(Some(id))
+                (Outcome::Changed(Some(id)), deleted)
             }
-            None => Outcome::Changed(None),
+            None => (Outcome::Changed(None), Vec::new()),
         }
     }
 
@@ -478,7 +606,11 @@ impl Model {
                 .iter()
                 .chain(&st.redo)
                 .flat_map(|b| &b.regions)
-                .map(|r| r.before.len() + r.after.len())
+                .map(|r| {
+                    r.before.len()
+                        + r.after.len()
+                        + r.theirs.iter().map(|e| e.insert.len()).sum::<usize>()
+                })
                 .sum()
         };
         while st.undo.len() + st.redo.len() > b.depth || bytes(st) > b.max_bytes {
@@ -494,38 +626,92 @@ impl Model {
 
     /// Apply one change (canonical edits per root) by `author`: carry every region held
     /// (stacks and records) through it, record it (U22). `None` when it changes nothing.
-    /// Returns its id and its regions (U8: one per canonical hunk).
+    /// Returns its id, its regions (U8: one per canonical hunk) and the elements it
+    /// deleted. Its new elements get ids `(id, ordinal)`, front to back across roots; each
+    /// is its own root, or the root `edits` gives it (a restoration, U23).
     fn commit(
         &mut self,
         author: &str,
         obo: Option<&str>,
-        mut edits: Vec<(usize, Vec<Edit>)>,
-    ) -> Option<(ChangeId, Vec<Region>)> {
-        edits.retain(|(_, es)| !es.is_empty());
-        edits.sort_by_key(|(r, _)| *r);
+        mut edits: Change,
+    ) -> Option<(ChangeId, Vec<Region>, Vec<Elem>)> {
+        edits.retain(|(_, es, _)| !es.is_empty());
+        edits.sort_by_key(|(r, _, _)| *r);
         if edits.is_empty() {
             return None;
         }
+        let me = match self.who.iter().position(|w| w == author) {
+            Some(k) => k as u16,
+            None => {
+                self.who.push(author.to_owned());
+                (self.who.len() - 1) as u16
+            }
+        };
         let mut regions = Vec::new();
-        let hunks = edits.clone();
-        for (root, es) in edits {
+        let mut deleted = Vec::new();
+        let hunks: Vec<(usize, Vec<Edit>)> =
+            edits.iter().map(|(r, es, _)| (*r, es.clone())).collect();
+        let id = self.head + 1;
+        let mut ord: u32 = 0;
+        for (root, es, provs) in edits {
             let before = std::mem::take(&mut self.texts[root]);
             let after = hunk::apply(&before, &es);
+            // the new elements, front to back: ids in order, roots their own or given (U23)
+            let new: Vec<Vec<Elem>> = es
+                .iter()
+                .enumerate()
+                .map(|(k, e)| {
+                    let n = e.insert.chars().count();
+                    let given = provs.as_ref().map(|p| &p[k]);
+                    debug_assert!(given.map_or(true, |p| p.len() == n), "a root per char");
+                    let v = (0..n)
+                        .map(|j| {
+                            let me_id = Prov(id, ord + j as u32);
+                            Elem {
+                                owner: me,
+                                id: me_id,
+                                prov: given.map_or(me_id, |p| p[j]),
+                            }
+                        })
+                        .collect();
+                    ord += n as u32;
+                    v
+                })
+                .collect();
+            // spliced in, edit by edit, back to front (character indices)
+            let els = &mut self.elems[root];
+            let mut gone: Vec<Vec<Elem>> = vec![Vec::new(); es.len()];
+            for (k, e) in es.iter().enumerate().rev() {
+                let r = hunk::chars_in(&before, e.start, e.end);
+                gone[k] = els.splice(r, new[k].iter().copied()).collect();
+            }
+            debug_assert_eq!(els.len(), after.chars().count());
             let mut delta: isize = 0;
-            for e in &es {
+            for (k, e) in es.iter().enumerate() {
                 let start = (e.start as isize + delta) as usize;
                 delta += e.growth();
+                let was = before[e.start..e.end].to_owned();
                 regions.push(Region {
                     root,
                     start,
                     end: start + e.insert.len(),
-                    before: before[e.start..e.end].to_owned(),
+                    ours: vec![Edit {
+                        start: 0,
+                        end: e.insert.len(),
+                        insert: was.clone(),
+                    }],
+                    theirs: Vec::new(),
+                    before_roots: gone[k].iter().map(|x| x.prov).collect(),
+                    after_roots: new[k].iter().map(|x| x.prov).collect(),
+                    after_ids: new[k].iter().map(|x| x.id).collect(),
+                    before: was,
                     after: e.insert.clone(),
                     tainted: false,
                     base_doc_nonempty: !after.is_empty(),
                     erased: false,
                 });
             }
+            deleted.extend(gone.into_iter().flatten());
             self.carry_all(root, &es);
             self.texts[root] = after;
         }
@@ -544,12 +730,13 @@ impl Model {
                         end: r.end,
                         start_taint: false,
                         end_taint: false,
+                        theirs: Vec::new(),
                     })
                     .collect(),
                 regions: regions.clone(),
             },
         );
-        Some((self.head, regions))
+        Some((self.head, regions, deleted))
     }
 
     /// Carry every held region through a change to `root` (U8, U9).
@@ -565,6 +752,13 @@ impl Model {
                 if r.root != root {
                     continue;
                 }
+                // each edge on its own (U22a); theirs over the window they bound (R11)
+                ed.theirs = if ed.start_taint || ed.end_taint {
+                    Vec::new()
+                } else {
+                    window::carry_theirs(ed.start, ed.end, &r.after, &ed.theirs, es)
+                        .unwrap_or_default()
+                };
                 ed.start_taint |= hunk::crosses(ed.start, es);
                 ed.end_taint |= hunk::crosses(ed.end, es);
                 ed.start = hunk::carry(ed.start, es, Side::Start);
@@ -634,6 +828,7 @@ impl Model {
         }
         // plan on a scratch copy (U13): every step applied to it, carrying the rest
         let mut work = self.clone();
+        let mut foreign = false;
         let mut done = 0;
         let mut skipped = Vec::new();
         let mut blocked = None;
@@ -704,15 +899,18 @@ impl Model {
                 .collect();
             skipped.extend(reported.iter().cloned());
             let edits = step_edits(&work.texts, &batch.regions, &clean);
-            let mut inverse = work.apply_step(pid, obo, &batch.regions, &clean);
+            let (mut inverse, gone) = work.apply_step(pid, obo, &batch.regions, &clean);
+            // U10a by root (v1.8): only roots the change this step reverses inserted
+            let own = own_roots(&batch.regions);
+            foreign |= gone.iter().any(|x| !own.contains(&x.prov));
             // mutant (iv): the redo entry also carries the skipped regions (redo retries them)
             if !redo && mutant::active() == Mutant::RedoRetriesSkipped {
                 for &i in &skipped_idx {
                     let r = &batch.regions[i];
                     let es: &[Edit] = edits
                         .iter()
-                        .find(|(root, _)| *root == r.root)
-                        .map_or(&[], |(_, es)| es);
+                        .find(|(root, _, _)| *root == r.root)
+                        .map_or(&[], |(_, es, _)| es);
                     let start = hunk::carry(r.start, es, Side::Start);
                     let end = hunk::carry(r.end, es, Side::End).max(start);
                     inverse.push(Region {
@@ -720,6 +918,15 @@ impl Model {
                         end,
                         before: r.after.clone(),
                         after: r.before.clone(),
+                        ours: vec![Edit {
+                            start: 0,
+                            end: r.before.len(),
+                            insert: r.after.clone(),
+                        }],
+                        theirs: Vec::new(),
+                        before_roots: r.after_roots.clone(),
+                        after_roots: r.before_roots.clone(),
+                        after_ids: r.before_roots.clone(),
                         ..r.clone()
                     });
                 }
@@ -752,6 +959,9 @@ impl Model {
             return (Outcome::Blocked { regions }, hits);
         }
         *self = work;
+        // hist.undo_own_only (enforced; U10a by root, v1.8)
+        hits.foreign_deleted = foreign;
+        hits.i1_violated = !self.i1();
         if done >= 2 {
             hits.steps_n = true;
         }
@@ -803,7 +1013,7 @@ impl Model {
         let r_conflicting: BTreeSet<usize> = (0..regions.len())
             .filter(|i| !clean.iter().any(|c| c.0 == *i))
             .collect();
-        let same_text = clean.iter().all(|(i, text, _)| {
+        let same_text = clean.iter().all(|(i, text, _, _)| {
             u_clean
                 .iter()
                 .find(|c| c.0 == *i)
@@ -825,7 +1035,11 @@ impl Model {
             }
         }
         let edits = step_edits(&self.texts, &regions, &clean);
-        self.new_batch(pid, obo, edits);
+        let (_, deleted) = self.new_batch_del(pid, obo, edits);
+        // hist.undo_own_only (enforced; U10a by root, v1.8): only roots the change inserted
+        let own = own_roots(&regions);
+        hits.foreign_deleted = deleted.iter().any(|x| !own.contains(&x.prov));
+        hits.i1_violated = !self.i1();
         (
             Outcome::Applied {
                 steps: 1,
@@ -837,7 +1051,8 @@ impl Model {
     }
 
     /// Merge each region against the live text (U10): the clean ones, and the reports of
-    /// the conflicting ones (U11).
+    /// the conflicting ones (U11). The window is read by root (U8, v1.8); O4 on (range,
+    /// roots); then O4a against the live text.
     fn merge_regions(&self, regions: &[Region], hits: &mut Hits) -> (Vec<Clean>, Vec<Report>) {
         let mut clean = Vec::new();
         let mut conflicts = Vec::new();
@@ -851,6 +1066,10 @@ impl Model {
                 live: live.clone(),
                 before: r.before.clone(),
                 after: r.after.clone(),
+                ours: r.ours.clone(),
+                theirs: Vec::new(),
+                ours_roots: Vec::new(),
+                theirs_roots: Vec::new(),
                 tainted: r.tainted,
                 erased: r.erased,
                 base_doc_nonempty: r.base_doc_nonempty,
@@ -858,6 +1077,7 @@ impl Model {
                 at_end: false,
                 o5_landed: false,
                 same_point_end: false,
+                o4a: false,
             };
             if r.erased {
                 hits.erased = true;
@@ -873,6 +1093,8 @@ impl Model {
                 continue;
             }
             let theirs = &live[r.start..r.end];
+            let wels = &self.elems[r.root][hunk::chars_in(live, r.start, r.end)];
+            let wroots: Vec<Prov> = wels.iter().map(|x| x.prov).collect();
             // U10: the live doc's end, and the whole doc non-empty in the base
             let at_end = match mutant::active() {
                 // mutant (vi): O5 at every window end
@@ -881,15 +1103,104 @@ impl Model {
                 Mutant::O5RegionBase => r.end == live.len() && !r.after.is_empty(),
                 _ => r.end == live.len() && r.base_doc_nonempty,
             };
-            let (m, rules) = merge::merge3_window(&r.after, &r.before, theirs, at_end);
+            let rediff = |a: &str, b: &str| -> Vec<Edit> {
+                diff::hunks(a, b).into_iter().map(Edit::from).collect()
+            };
+            // U8 by root (v1.8): theirs read off the live window against the base's roots; a
+            // tainted region keeps no theirs, and only mutant (i) merges one, on a diff
+            let (exact, exact_roots) = if r.tainted {
+                let d = rediff(&r.after, theirs);
+                let p = hunk::provs_of(&r.after, &d, &wroots);
+                (d, p)
+            } else {
+                let (th, p, by_root) =
+                    window::read(&r.after, &r.after_roots, theirs, &wroots, &wroots);
+                // the v1.7 reading at element identity: exactly the carried theirs on the
+                // oracle of record; where it differs from the reading by root, a window
+                // character is the base's by root only (a class)
+                let wids: Vec<Prov> = wels.iter().map(|x| x.id).collect();
+                let (by_id_th, _, by_id) =
+                    window::read(&r.after, &r.after_ids, theirs, &wids, &wroots);
+                if mutant::active() == Mutant::None {
+                    debug_assert_eq!(by_id_th, r.theirs, "the identity reading is the carry");
+                }
+                if by_id != by_root {
+                    hits.base_by_root = true;
+                }
+                (th, p)
+            };
+            debug_assert_eq!(
+                hunk::apply(&r.after, &exact),
+                theirs,
+                "theirs rebuilds the window"
+            );
+            debug_assert_eq!(
+                hunk::apply(&r.after, &r.ours),
+                r.before,
+                "ours gives before"
+            );
+            let ours_roots = hunk::provs_of(&r.after, &r.ours, &r.before_roots);
+            if rediff(&r.after, &r.before) != r.ours || rediff(&r.after, theirs) != exact {
+                hits.rediff_differs = true;
+            }
+            let n = r.after.len();
+            if exact
+                .iter()
+                .any(|e| !e.insert.is_empty() && (e.start == 0 || e.end == n))
+            {
+                hits.edge_insert = true;
+            }
+            // O4 (v1.8): on (range, roots); mutant (x): on element identity
+            let same = if mutant::active() == Mutant::ProvenanceIgnored {
+                merge::Same::Identity
+            } else {
+                merge::Same::Root
+            };
+            // U10 (v1.7): the exact sets; mutant f3-rediff: sides found by diffing strings
+            let (m, rules) = if mutant::active() == Mutant::Rediff {
+                let a = rediff(&r.after, &r.before);
+                let ap = hunk::provs_of(&r.after, &a, &r.before_roots);
+                let b = rediff(&r.after, theirs);
+                let bp = hunk::provs_of(&r.after, &b, &wroots);
+                merge::merge_edits(&r.after, &a, &ap, &b, &bp, at_end, same)
+            } else {
+                merge::merge_edits(
+                    &r.after,
+                    &r.ours,
+                    &ours_roots,
+                    &exact,
+                    &exact_roots,
+                    at_end,
+                    same,
+                )
+            };
+            note.theirs = exact;
+            note.ours_roots = ours_roots;
+            note.theirs_roots = exact_roots;
+            // O4a (v1.8): a root is put back at most once; mutant (x) has no O4a
+            let m = match m {
+                Merged::Clean { provs, .. }
+                    if same == merge::Same::Root
+                        && provs.iter().flatten().any(|p| self.live(r.root, *p)) =>
+                {
+                    note.o4a = true;
+                    hits.o4a = true;
+                    Merged::Conflict
+                }
+                m => m,
+            };
+            if rules.o4_insert {
+                hits.o4_restore = true;
+            }
+            let ok = matches!(m, Merged::Clean { .. });
             note.at_end = at_end;
-            note.o5_landed = rules.o5_landed;
+            note.o5_landed = rules.o5_landed && ok;
             note.same_point_end = rules.same_point_at_window_end;
-            note.clean = matches!(m, Merged::Clean { .. });
+            note.clean = ok;
             hits.notes.push(note);
             hits.insert_inside |= rules.o2;
             hits.overlap |= rules.o1;
-            if rules.o5_landed {
+            if rules.o5_landed && ok {
                 hits.eof_append_undo = true;
                 if r.after.is_empty() {
                     hits.last_line_after_append = true;
@@ -899,7 +1210,7 @@ impl Model {
                 hits.whole_doc_delete_then_append = true;
             }
             match m {
-                Merged::Clean { text, edits } => {
+                Merged::Clean { text, edits, provs } => {
                     // the N4 case: a re-diff of the window would change other elements
                     let rediff: Vec<Edit> = diff::hunks(theirs, &text)
                         .into_iter()
@@ -908,47 +1219,80 @@ impl Model {
                     if rediff != edits {
                         hits.identity_case = true;
                     }
-                    clean.push((i, text, edits))
+                    clean.push((i, text, edits, provs))
                 }
                 Merged::Conflict => conflicts.push(report(Kind::Overlap)),
             }
         }
+        hits.concurrent_restore = hits.o4_restore || hits.o4a || hits.base_by_root;
         (clean, conflicts)
     }
 
-    /// Apply one undo or redo step's clean regions as one change by `pid`; returns the
-    /// regions for the opposite stack (R4), in the coordinates after the step.
+    /// A live element of `root` has provenance root `p` (O4a).
+    fn live(&self, root: usize, p: Prov) -> bool {
+        self.elems[root].iter().any(|x| x.prov == p)
+    }
+
+    /// I1 (v1.8): at most one live element per provenance root, over every root's text.
+    pub fn i1(&self) -> bool {
+        let mut seen = BTreeSet::new();
+        self.elems.iter().flatten().all(|x| seen.insert(x.prov))
+    }
+
+    /// Apply one undo or redo step's clean regions as one change by `pid` (each inserted
+    /// character with the root it puts back, U23); returns the regions for the opposite
+    /// stack (R4), in the coordinates after the step, and the elements it deleted.
     fn apply_step(
         &mut self,
         pid: &str,
         obo: Option<&str>,
         regions: &[Region],
         clean: &[Clean],
-    ) -> Vec<Region> {
+    ) -> (Vec<Region>, Vec<Elem>) {
         let edits = step_edits(&self.texts, regions, clean);
         let mut inverse = Vec::with_capacity(clean.len());
         let mut shift: BTreeMap<usize, isize> = BTreeMap::new();
-        for (i, merged, _) in clean {
+        for (i, merged, applied, _) in clean {
             let r = &regions[*i];
             let s = shift.entry(r.root).or_insert(0);
             let start = (r.start as isize + *s) as usize;
             *s += merged.len() as isize - (r.end - r.start) as isize;
+            let live = &self.texts[r.root];
+            let window = live[r.start..r.end].to_owned();
+            let wroots = self.elems[r.root][hunk::chars_in(live, r.start, r.end)]
+                .iter()
+                .map(|x| x.prov)
+                .collect();
             inverse.push(Region {
                 root: r.root,
                 start,
                 end: start + merged.len(),
-                before: self.texts[r.root][r.start..r.end].to_owned(),
+                // R4 (v1.7): ours is the inverse of exactly what the step applied here
+                ours: window::inverse(&window, applied),
+                theirs: Vec::new(),
+                // v1.8: the window's roots (what a redo puts back is read off them); the
+                // base's are set below, from the text the step leaves
+                before_roots: wroots,
+                after_roots: Vec::new(),
+                after_ids: Vec::new(),
+                before: window,
                 after: merged.clone(),
                 tainted: false,
                 base_doc_nonempty: true, // set below
                 erased: false,
             });
         }
-        self.commit(pid, obo, edits);
+        let deleted = self
+            .commit(pid, obo, edits)
+            .map(|c| c.2)
+            .unwrap_or_default();
         for g in &mut inverse {
             g.base_doc_nonempty = !self.texts[g.root].is_empty();
+            let els = &self.elems[g.root][hunk::chars_in(&self.texts[g.root], g.start, g.end)];
+            g.after_roots = els.iter().map(|x| x.prov).collect();
+            g.after_ids = els.iter().map(|x| x.id).collect();
         }
-        inverse
+        (inverse, deleted)
     }
 
     // ---------- purge, restart, window ----------
@@ -1005,6 +1349,19 @@ impl Model {
     pub fn restart(&mut self) {
         self.stacks.clear();
         self.authors_before_restart = self.authors.clone();
+        // mutant restart-single-taint (v0.8.1's persisted carry): one flag per region, read
+        // back at both edges
+        if mutant::active() == Mutant::RestartSingleTaint {
+            for rec in self.records.values_mut() {
+                for ed in &mut rec.edges {
+                    if ed.start_taint || ed.end_taint {
+                        ed.start_taint = true;
+                        ed.end_taint = true;
+                        ed.theirs.clear();
+                    }
+                }
+            }
+        }
     }
 
     /// The revert window moves (R10): records older than the last `keep_changes` changes go,
@@ -1038,21 +1395,37 @@ fn pipeline(old: &str, new: &str) -> Vec<Edit> {
 fn carry_regions(regions: &mut [Region], root: usize, es: &[Edit]) {
     let mut any = false;
     for r in regions.iter_mut().filter(|r| r.root == root) {
-        if hunk::crosses(r.start, es) || hunk::crosses(r.end, es) {
-            r.tainted = true;
+        if !r.tainted {
+            match window::carry_theirs(r.start, r.end, &r.after, &r.theirs, es) {
+                Some(t) => r.theirs = t,
+                None => {
+                    r.tainted = true;
+                    r.theirs.clear();
+                }
+            }
         }
         r.start = hunk::carry(r.start, es, Side::Start);
         r.end = hunk::carry(r.end, es, Side::End);
         any = true;
     }
     if any {
-        for k in 1..regions.len() {
-            let (l, rest) = regions.split_at_mut(k);
-            let (prev, next) = (&l[k - 1], &mut rest[0]);
-            if prev.root == next.root && next.start < prev.end {
-                next.start = prev.end;
-                next.end = next.end.max(next.start);
+        clamp(regions);
+    }
+}
+
+/// The shared-edge clamp (U8): a region starting before the previous one's end (same
+/// root) starts there; the elements it gave up are dropped from its theirs (R11).
+fn clamp(regions: &mut [Region]) {
+    for k in 1..regions.len() {
+        let (l, rest) = regions.split_at_mut(k);
+        let (prev, next) = (&l[k - 1], &mut rest[0]);
+        if prev.root == next.root && next.start < prev.end {
+            if !next.tainted {
+                let n = (prev.end - next.start).min(next.end - next.start);
+                next.theirs = window::drop_front(&next.after, &next.theirs, n);
             }
+            next.start = prev.end;
+            next.end = next.end.max(next.start);
         }
     }
 }
@@ -1066,21 +1439,26 @@ fn revert_regions(rec: &Record) -> Vec<Region> {
     for (g, ed) in rec.regions.iter().zip(&rec.edges) {
         let inherits = prev.is_some_and(|(root, end, t)| root == g.root && ed.start <= end && t);
         prev = Some((g.root, ed.end, ed.end_taint));
+        let tainted = ed.start_taint || ed.end_taint || inherits;
         out.push(Region {
             start: ed.start,
             end: ed.end.max(ed.start),
-            tainted: ed.start_taint || ed.end_taint || inherits,
+            tainted,
+            // the change's own ours (as made), theirs over revert's window
+            ours: vec![Edit {
+                start: 0,
+                end: g.after.len(),
+                insert: g.before.clone(),
+            }],
+            theirs: if tainted {
+                Vec::new()
+            } else {
+                ed.theirs.clone()
+            },
             ..g.clone()
         });
     }
-    for k in 1..out.len() {
-        let (l, rest) = out.split_at_mut(k);
-        let (prev, next) = (&l[k - 1], &mut rest[0]);
-        if prev.root == next.root && next.start < prev.end {
-            next.start = prev.end;
-            next.end = next.end.max(next.start);
-        }
-    }
+    clamp(&mut out);
     out
 }
 
@@ -1092,26 +1470,45 @@ fn touching(regions: &[Region]) -> bool {
 }
 
 /// A step's change: each clean region's merged edits offset by its start, per root,
-/// canonical (readings R2, R3).
-fn step_edits(texts: &[String], regions: &[Region], clean: &[Clean]) -> Vec<(usize, Vec<Edit>)> {
-    let mut per: BTreeMap<usize, Vec<Edit>> = BTreeMap::new();
-    for (i, _, edits) in clean {
+/// canonical (readings R2, R3), with the roots each puts back (U23).
+fn step_edits(texts: &[String], regions: &[Region], clean: &[Clean]) -> Change {
+    let mut per: BTreeMap<usize, Vec<(Edit, Vec<Prov>)>> = BTreeMap::new();
+    for (i, _, edits, provs) in clean {
         let r = &regions[*i];
         per.entry(r.root)
             .or_default()
-            .extend(edits.iter().map(|e| Edit {
-                start: e.start + r.start,
-                end: e.end + r.start,
-                insert: e.insert.clone(),
+            .extend(edits.iter().zip(provs).map(|(e, p)| {
+                (
+                    Edit {
+                        start: e.start + r.start,
+                        end: e.end + r.start,
+                        insert: e.insert.clone(),
+                    },
+                    p.clone(),
+                )
             }));
     }
     per.into_iter()
         .map(|(root, es)| {
-            let es = hunk::canonical(es);
+            let (es, ps): (Vec<Edit>, Vec<Vec<Prov>>) =
+                hunk::canonical_provs(es).into_iter().unzip();
             debug_assert!(es.iter().all(|e| e.end <= texts[root].len()));
-            (root, es)
+            (root, es, Some(ps))
         })
         .collect()
+}
+
+/// U10a by root (v1.8): the roots a step reversing these regions may remove, the base
+/// roots their ours deletes: what the change it reverses inserted (an undo of a batch, its
+/// inserted roots; a redo, the roots the undo put back; a revert, the change's).
+fn own_roots(regions: &[Region]) -> BTreeSet<Prov> {
+    let mut out = BTreeSet::new();
+    for r in regions {
+        for e in &r.ours {
+            out.extend(&r.after_roots[hunk::chars_in(&r.after, e.start, e.end)]);
+        }
+    }
+    out
 }
 
 /// U11's report for region `r` of `live`.

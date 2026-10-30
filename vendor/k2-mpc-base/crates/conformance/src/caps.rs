@@ -181,6 +181,13 @@ pub struct ElemBlame {
     pub id: (u64, u32),
     /// The change (log position) that inserted it.
     pub change: Option<u64>,
+    /// Its provenance root (undo spec v1.8, U23): itself, or for an element an undo, redo
+    /// or revert put back, the element it restores (path-compressed).
+    pub root: (u64, u32),
+    /// The agent whose change inserted the root.
+    pub root_agent: u64,
+    /// The change that inserted the root.
+    pub root_change: Option<u64>,
 }
 
 /// Undo and redo (the kit's undo spec): a doc with two text roots, shared by agents that
@@ -222,8 +229,8 @@ pub trait Undo: Sized {
     /// `revert <change>` by `agent`, all or nothing (undo spec U22).
     fn revert(&mut self, agent: u64, change: u64) -> Result<Applied, UndoRefusal>;
 
-    /// Every live character of root `root`, in order, with its element (blame at the
-    /// element's grain).
+    /// Every live character of root `root`, in order, with its element and its provenance
+    /// root (blame at the element's grain).
     fn blame(&self, root: usize) -> Vec<ElemBlame>;
 }
 

@@ -1,5 +1,106 @@
 # Changelog
 
+## v0.9.0 (2026-10-28)
+
+A minor release for two behaviour changes in undo, redo and revert: they **never remove
+another participant's text**, and text they put back **keeps its provenance**. **Store format
+5** (an in-place upgrade from 4; no downgrade). No new dependency. Undo spec v1.8
+(`docs/SPEC-UNDO.md`).
+
+**The promise.** Undo, redo and revert only ever remove text that the change they reverse put there. Your undo never removes text someone else wrote, even if it is identical to yours, and someone else's undo never stands in the way of yours. Text put back by an undo or redo keeps its original author: blame shows who wrote it and who restored it, and later undos and reverts treat it as the original author's. If someone else has since changed the same lines, the undo applies what it cleanly can and reports the rest as a conflict; it never overwrites their change. Nothing is lost: undone text stays in history and can be restored. This holds across restarts.
+
+**Public API.** Additions only:
+- `text::merge::merge3_hunks` (a merge of two exact hunk sets) and `merge3_hunks_by` (the same
+  with the caller's "identical" predicate, rule O4).
+- `BlameLine::restored_by` and `BlameLine::restored_in` (the change that put the text back,
+  and its author); `CharBlame` (feature `conformance`) gains the root's client, clock, pid and
+  change.
+- `store::STORE_FORMAT` is 5.
+
+`ConflictRegion`, `UndoOutcome` and the session methods are as before; their results change
+where noted below.
+
+**Fixed**
+- **F3: undo, redo and revert could delete another participant's identical element.** They
+  found the merge's sides by re-diffing strings in the region's window; when someone's
+  insertion at the region's start repeated its text (`b` and an inserted `b`), the diff put
+  that insertion after the region's own element, and the undo deleted the other
+  participant's. The text could even be wrong (`ab`, p1 replaces `a` with `b`, p2 types `b` in
+  front, p1's undo gave `abb`; now `bab`), blame was swapped, and that participant's later undo
+  conflicted. Now each side is an **exact hunk set**: ours is the inverse of the change's own
+  hunk, theirs the later hunks that touched the region's window, at element identity
+  (`session/foreign.rs`); `diff::hunks` stays only for `restore` and `write --base`.
+- **Two conflicts the F3 fix alone would have brought** (they never shipped): with restored
+  text counted as the undoer's own new text (U18a), (a) a revert of a change that was undone
+  and then redone conflicted, and (b) when b edited inside a's region and then undid it, a's
+  undo of that region conflicted (b's restoration counted as b's), as did one person undoing
+  two edits of the same text. Both now apply: see provenance below.
+
+**Added: provenance for restored text** (spec U23)
+- Text an undo, redo or revert puts back is a **new** element (new ID, the undoer's change; no
+  tombstone comes back) that records the **root** it restores: the original element,
+  path-compressed when made, never a chain. The kit stamps it, only in its own undo, redo and
+  revert; no API or client update can set it (conformance `sec.client_provenance_refused`).
+- The rules follow the root: a region's window is read **by root** (U8), so text someone
+  removed and put back counts as the region's again; undo and redo remove only elements whose
+  root the reversed change inserted (U10a); **revert of a change acts on the live elements
+  whose root it inserted** (U22).
+- **O4 is judged on (position, root)**, not on text: a fresh `X` someone typed where an undo
+  would put `X` back is no longer taken as the same change (mid-text it now conflicts; at the
+  doc's end both land, O5). **O4a:** an undo, redo or revert never puts back a root that is
+  live; that region conflicts (`overlap`). So at most one live element per root (I1).
+- The kit keeps a live map of element IDs and roots per text root (built lazily, once per
+  load, from the engine's runs and the store; chunked runs, so a change costs O(chunks)) and
+  an index of live restored elements by root.
+
+**Changed (behaviour)**
+- **Blame by root (hosts: visible change).** A restored character is blamed on its **root**:
+  the change that first wrote it, and that change's author, kind, time and on-behalf; the
+  change that put it back is in `restored_by` / `restored_in`. A line goes to its character
+  with the newest root change. `render` adds `(restored by <who> in <change>)`; `porcelain`
+  adds `restored-by` and `restored-in` lines. Before, restored text was blamed on the undoer.
+- Where an undo, redo or revert used to remove the wrong copy of repeated text, it now
+  removes its own: the resulting text can differ (F3).
+- A conflict can appear where a re-diff saw none, and vice versa, wherever the elements in a
+  region's window differ from what its text suggests.
+- An insertion at the start of a replaced region by someone else lands in front of the
+  restored text (before: wherever a diff of the window put it).
+- Undo history bytes (U6) count each region's carried foreign hunks and roots.
+- The first edit after a doc loads pays one O(doc) walk to build the element map (before,
+  only blame did).
+
+**Store format 5**
+- A new table `provenance` (each restored run's root: element IDs only, no content; a purge has
+  nothing more to redact), written in the change's own transaction, deleted with the doc,
+  copied by `rewrite_file`. Revert records are written as version 2, with each hunk's inserted
+  and deleted elements' roots.
+- **Upgrade in place:** a format-4 store opens and is stamped 5 in the open's transaction (the
+  table is created; existing elements have no provenance, so each is its own root). Version-1
+  revert records still decode; changes made before the upgrade revert as in v1.7 (no roots),
+  and what such a revert puts back is fresh text.
+- **No downgrade:** a format-4 build (v0.8.x and earlier) refuses a format-5 store with
+  `StoreError::Newer`, instead of undoing without provenance or dropping the table in a
+  rewrite.
+
+**Undo spec suite** (`crates/spec-undo`, never published)
+- `docs/SPEC-UNDO.md` v1.8: U23 provenance; U8 by root; U10a and U22 restated on roots; U18a
+  blame by root; O4 on (position, root); O4a; invariant I1; the case class "concurrent
+  restores of one root"; mutant (x) `provenance-ignored-in-O4`. v1.7 (exact hunk sets, U10a
+  normative, U12 on hunk sets, mutants (viii) and (ix)) is in this release too.
+- The oracle implements provenance on its own (its own root naming; theirs read by root at
+  merge time, the v1.7 carried theirs kept as a cross-check); U10a by root and I1 enforced.
+- The model check: roots in the bounded state (as labels, machine-checked exact); I1 stops
+  every run; TLC's state count equals the enumerator's at seven bounds; every mutant, (x)
+  included, fails in both inside an exhaustive bound (`docs/MODEL-CHECK.md`).
+- The trace test: 256 traces and the 64-trace restart twin, 0 mismatches, with each live character's root, I1 and U10a by root compared on both sides; the new class hit 186 times.
+
+**Conformance**
+- `hist.undo_own_only` reads roots and covers F3, (a) and (b) with the expected outcomes.
+- `sec.client_provenance_refused` declared: on the kit it holds by construction (no API takes
+  provenance); native: awaiting (G2, the engine's).
+- `text.blame_char` and `hist.blame_grain` restated: a character maps to its provenance-root
+  insert, plus the restoring event.
+
 ## v0.8.2 (2026-10-28)
 
 A patch: a revert's conflicts no longer change across a host restart. No API change for

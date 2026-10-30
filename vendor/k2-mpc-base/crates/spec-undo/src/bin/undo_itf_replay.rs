@@ -18,7 +18,7 @@ use spec_undo::model::mutant;
 fn usage(m: &str) -> ! {
     eprintln!("undo_itf_replay: {m}");
     eprintln!(
-        "usage: undo_itf_replay [--pids N] [--events N] [--undos N] [--reverts N] [--maxlen N] \
+        "usage: undo_itf_replay [--pids N] [--events N] [--undos N] [--reverts N] [--restarts N] [--maxlen N] \
          [--init ab] [--no-multi] [--no-purge] [--no-reduce] [--mutant NAME] [--show N] <file|dir>..."
     );
     std::process::exit(2)
@@ -38,6 +38,7 @@ fn main() {
             "--events" => b.events = num(val("--events")) as u8,
             "--undos" => b.undos = num(val("--undos")) as u8,
             "--reverts" => b.reverts = num(val("--reverts")) as u8,
+            "--restarts" => b.restarts = num(val("--restarts")) as u8,
             "--maxlen" => b.maxlen = num(val("--maxlen")) as usize,
             "--init" => b.init = val("--init"),
             "--no-multi" => b.multi = false,
@@ -114,7 +115,8 @@ fn replay(
     let states = itf::states(&doc).map_err(|e| (0, e))?;
     let id = identity(b.pids);
     let mut s = State::init(b);
-    let v0 = itf::view(states[0].0, b.pids).map_err(|e| (0, e))?;
+    let track = b.restarts > 0;
+    let v0 = itf::view(states[0].0, b.pids, track).map_err(|e| (0, e))?;
     if v0 != s.view(&id) {
         return Err((
             0,
@@ -143,7 +145,7 @@ fn replay(
                 ),
             ));
         }
-        let qv = itf::view(st, b.pids).map_err(|e| (i, e))?;
+        let qv = itf::view(st, b.pids, track).map_err(|e| (i, e))?;
         let rv = t.view(&id);
         if qv != rv {
             return Err((i, format!("{a:?}: state\n  quint {qv:?}\n  rust  {rv:?}")));

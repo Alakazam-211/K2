@@ -20,12 +20,12 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 | `core.idempotent` | E-CORE-2 | Events | pass | pass |
 | `core.causal` | E-CORE-3 | Events | **deviation** (pinned) | pass |
 | `core.no_equivocation` | E-CORE-4 | Events | **deviation** (pinned) | pass |
-| `text.blame_char` | E-TEXT-11 | Blame | pass | pass |
+| `text.blame_char` | E-TEXT-11, undo spec U18a, U23 | Blame | pass | pass |
 | `text.cursor_stable` | E-TEXT-10 | Anchors | pass | pass |
 | `hist.undo_atomic` | E-HIST-6, K-CT-4 | Undo | **deviation** (pinned) | never |
 | `hist.undo_partial` | K-HIST-13, K-CT-4 | Undo | pass | never |
 | `hist.redo` | E-HIST-6, K-HIST-2 | Undo | pass | never |
-| `hist.undo_own_only` | E-HIST-5, undo spec U10, U18a | Undo + Blame | pass | never |
+| `hist.undo_own_only` | E-HIST-5, undo spec U10, U10a (by root, v1.8), U18a, U23 | Undo + Blame | pass | never |
 | `hist.version_stable` | E-HIST-1 | Versions | pass | pass |
 | `hist.restore_forward` | E-HIST-2, K-HIST-8 | Versions | pass | pass |
 | `hist.restore_minimal` | K-HIST-8, undo spec D1 | Versions | pass | pass |
@@ -34,6 +34,7 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 | `hist.merge_any_base` | E-HIST-9 | BranchAt | never | pass |
 | `sec.duplicate_ranges` | E-SEC-6 | Wire | awaiting: native decoder, G2 | never |
 | `sec.base_too_old` | E-SEC-12 | Wire | awaiting: native decoder, G2 | never |
+| `sec.client_provenance_refused` | undo spec U23 (v1.8) | Wire | awaiting: native decoder, G2 (the engine's) | never |
 | `erase.purge` | E-ERASE-1, K-PURGE-5 | Purge + Blame + Anchors | pass | pass |
 | `erase.participant` | E-ERASE-5, K-PURGE-7 | Erasure | pass | never |
 | `erase.no_readmit` | E-ERASE-6 | Purge | pass | pass |
@@ -57,12 +58,14 @@ A rule runs on every engine that has the capabilities it needs. A rule that runs
 
 - `sec.duplicate_ranges` on kit Doc (yrs): decoding untrusted update bytes is the native decoder's; this suite feeds engines only bytes they made. Target: native decoder, G2.
 - `sec.base_too_old` on kit Doc (yrs): decoding untrusted update bytes is the native decoder's; this suite feeds engines only bytes they made. Target: native decoder, G2.
+- `sec.client_provenance_refused` on kit Doc (yrs): holds by construction in the kit: provenance (undo spec U23) is stamped only by the session's own undo, redo and revert (`Session::apply_local` names the elements a step puts back and writes their `provenance` rows in the change's own transaction, `store::history::put_changes`); no public API takes a root, and a client update (`Doc::check_client_update` / `apply_client_update`) carries engine content only and never reaches the provenance table or the session's map. Refusing a root a client sends on the wire is the native decoder's. Target: native decoder, G2 (the engine's).
 
 ## Never
 
 - `erase.span_includes_tombstones` on kit Doc (yrs): Yrs has no element-level purge event: the kit's purge deletes the span and re-encodes the doc with garbage collection on (K-PURGE-11), so no tombstone keeps content, inside the span or outside it (erase.purge, erase.versions).
 - `sec.duplicate_ranges` on mpce-model (FugueMax): the reference model has no wire format (native decoder / client protocol).
 - `sec.base_too_old` on mpce-model (FugueMax): the reference model has no wire format (native decoder / client protocol).
+- `sec.client_provenance_refused` on mpce-model (FugueMax): the reference model has no wire format (native decoder / client protocol).
 - `erase.participant` on mpce-model (FugueMax): the kit's mapping from agent IDs to people, not the model's.
 - `hist.undo_atomic` on mpce-model (FugueMax): undo is the kit's, over a session (undo spec); the model has no sessions.
 - `hist.undo_partial` on mpce-model (FugueMax): undo is the kit's, over a session (undo spec); the model has no sessions.

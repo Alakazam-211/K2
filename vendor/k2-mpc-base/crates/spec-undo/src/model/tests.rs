@@ -360,3 +360,208 @@ fn u22a_revert_is_restart_transparent() {
         assert_eq!(run(Some(k)), want, "a restart after step {k}");
     }
 }
+
+/// F3 (v1.7, exact hunk sets): p2's insertion at the start of p1's region repeats its text;
+/// p1's undo turns back its own `b` (p2's stays in front), so p2's undo applies, and neither
+/// deletes a character whose root it may not remove.
+#[test]
+fn f3_exact_hunk_sets() {
+    let mut m = one("ab");
+    m.edit("p1", None, vec![(0, vec![e(0, 1, "b")])]); // "bb"
+    m.edit("p2", None, vec![(0, vec![e(0, 0, "b")])]); // "bbb", p2's first
+    let (o, h) = m.undo("p1", None, &all(1));
+    assert!(matches!(o, Outcome::Applied { .. }), "{o:?}");
+    assert!(h.rediff_differs && !h.foreign_deleted);
+    assert_eq!(m.texts[0], "bab");
+    let (o, h) = m.undo("p2", None, &all(1));
+    assert!(
+        matches!(o, Outcome::Applied { .. }) && !h.foreign_deleted,
+        "{o:?}"
+    );
+    assert_eq!(m.texts[0], "ab");
+}
+
+/// The roots of root 0's live characters.
+fn roots(m: &Model) -> Vec<Prov> {
+    m.elems[0].iter().map(|x| x.prov).collect()
+}
+
+/// v1.8 regression (a): a revert of a change undone and redone **applies** (v1.7 conflicted:
+/// the redo's elements are new, U18a; by root they are the change's again, U23).
+#[test]
+fn regression_a_revert_after_undo_and_redo_applies() {
+    let mut m = one("x\n");
+    m.edit("a", None, vec![(0, vec![e(2, 2, "a\n")])]); // change 2
+    let made = roots(&m);
+    m.undo("a", None, &all(1));
+    m.redo("a", None, &all(1));
+    assert_eq!(m.texts[0], "x\na\n");
+    // the redo's elements are new (U18a), with the change's roots (U23)
+    assert_ne!(m.elems[0][2].id, m.elems[0][2].prov);
+    assert_eq!(roots(&m), made);
+    let (o, h) = m.revert("b", None, 2, false);
+    assert!(matches!(o, Outcome::Applied { .. }), "{o:?}");
+    assert!(!h.foreign_deleted && h.base_by_root && h.concurrent_restore);
+    assert_eq!(m.texts[0], "x\n");
+}
+
+/// v1.8 regression (b): b edits inside a's region and undoes it; the text b's undo puts back
+/// has a's roots, so **a's undo applies** (v1.7: a conflict, U10a by element).
+#[test]
+fn regression_b_undo_after_a_touch_and_undo_inside_applies() {
+    let mut m = one("xy");
+    m.edit("a", None, vec![(0, vec![e(0, 1, "A")])]); // "Ay"
+    m.edit("b", None, vec![(0, vec![e(0, 1, "B")])]); // "By", inside a's region
+    let (o, _) = m.undo("b", None, &all(1)); // "Ay": a new element, root a's A
+    assert!(matches!(o, Outcome::Applied { .. }), "{o:?}");
+    assert_eq!(m.texts[0], "Ay");
+    assert_eq!(m.who[m.elems[0][0].owner as usize], "b");
+    let (o, h) = m.undo("a", None, &all(1));
+    assert!(matches!(o, Outcome::Applied { .. }), "{o:?}");
+    // it removed b's element, whose root a inserted: U10a by root
+    assert!(!h.foreign_deleted && h.base_by_root);
+    assert_eq!(m.texts[0], "xy");
+    assert_eq!(roots(&m), roots(&one("xy")));
+}
+
+/// v1.8, the duplication trap (I1): b deletes the seed's `X`; b undoes (X1, root X); c
+/// deletes X1; then c's undo and a's revert of b's delete (change 2) both want root X back.
+/// Whichever comes second finds it identical (O4: taken once): never two live X. Mid-text
+/// and at the doc's end, in both orders.
+#[test]
+fn duplication_trap_is_taken_once() {
+    for seed in ["pXq", "pX"] {
+        for revert_first in [false, true] {
+            let mut m = one(seed);
+            m.edit("b", None, vec![(0, vec![e(1, 2, "")])]); // change 2
+            m.undo("b", None, &all(1)); // X1, root X
+            m.edit("c", None, vec![(0, vec![e(1, 2, "")])]); // deletes X1
+            let first = |m: &mut Model| {
+                if revert_first {
+                    m.revert("a", None, 2, false)
+                } else {
+                    m.undo("c", None, &all(1))
+                }
+            };
+            let (o, h) = first(&mut m);
+            assert!(matches!(o, Outcome::Applied { .. }), "{seed} {o:?}");
+            assert!(!h.i1_violated && !h.concurrent_restore);
+            assert_eq!(m.texts[0], seed);
+            let (o, h) = if revert_first {
+                m.undo("c", None, &all(1))
+            } else {
+                m.revert("a", None, 2, false)
+            };
+            assert!(matches!(o, Outcome::Applied { .. }), "{seed} {o:?}");
+            assert!(
+                h.o4_restore && h.concurrent_restore && !h.i1_violated,
+                "{h:?}"
+            );
+            assert_eq!(m.texts[0], seed, "taken once");
+            assert!(m.i1());
+        }
+    }
+}
+
+/// v1.8, O4a at the doc's end: seed `ab`; p1 deletes `b`; p1 undoes (b1, root b); p2 types
+/// `a` before b1 (pulled into change 2's window at its start). Revert of change 2: theirs
+/// inserts `ab1`, ours `b` at the same point, at the doc's end (O5 would land both); b's
+/// root is live, so O4a: a conflict, never two live b. Mutant (x)'s witness is the same
+/// without p2's edit (`tests/mutants.rs`).
+#[test]
+fn o4a_at_the_end() {
+    let mut m = one("ab");
+    m.edit("p1", None, vec![(0, vec![e(1, 2, "")])]); // change 2: "a"
+    m.undo("p1", None, &all(1)); // "ab"
+    m.edit("p2", None, vec![(0, vec![e(1, 1, "a")])]); // "aab"
+    let (o, h) = m.revert("p1", None, 2, false);
+    let want = vec![Report {
+        root: 0,
+        start: 1,
+        end: 3,
+        lines: (1, 1),
+        kind: Kind::Overlap,
+    }];
+    assert_eq!(
+        o,
+        Outcome::Conflicts {
+            step: 1,
+            regions: want
+        }
+    );
+    assert!(h.o4a && h.concurrent_restore && h.notes[0].o4a && h.notes[0].at_end);
+    // without p2's edit, the revert finds b's restoration identical (O4)
+    let mut m = one("ab");
+    m.edit("p1", None, vec![(0, vec![e(1, 2, "")])]);
+    m.undo("p1", None, &all(1));
+    let (o, h) = m.revert("p1", None, 2, false);
+    assert!(
+        matches!(o, Outcome::Applied { .. }) && h.o4_restore,
+        "{o:?}"
+    );
+    assert_eq!(m.texts[0], "ab");
+}
+
+/// v1.8, O4a in mid-text (the bounded world's least case, depth 5): p1 inserts `a` at 1; p2
+/// deletes the seed's `a` and replaces `b` with `a` (two regions); p1 undoes its insert;
+/// p1 reverts p2's change: its two hunks touch and are joined, a replacement starting at
+/// p2's first region (empty, at 0), which so stays empty (R1) while the seed's `a` comes back
+/// outside it. p2's undo: that region's ours puts back the seed's `a`, whose root is live
+/// (O4a), and `--partial` must not apply it.
+#[test]
+fn o4a_mid_text() {
+    let mut m = one("ab");
+    m.edit("p1", None, vec![(0, vec![e(1, 1, "a")])]); // "aab"
+    m.edit("p2", None, vec![(0, vec![e(0, 1, ""), e(2, 3, "a")])]); // change 3: "aa"
+    m.undo("p1", None, &all(1)); // "a"
+    let (o, _) = m.revert("p1", None, 3, false); // "ab", the seed's roots back
+    assert!(matches!(o, Outcome::Applied { .. }), "{o:?}");
+    assert_eq!(roots(&m), roots(&one("ab")));
+    let (o, h) = m.undo("p2", None, &partial(1));
+    assert!(matches!(o, Outcome::Blocked { .. }), "{o:?}");
+    let n = &h.notes[0];
+    assert!(n.o4a && !n.at_end && h.o4a, "{:?}", h.notes);
+    assert_eq!(m.texts[0], "ab");
+    assert!(m.i1());
+}
+
+/// v1.8, O4 on roots, not text: a fresh `X` someone typed where an undo would put back `X`
+/// is not that `X`. At the doc's end both land (O5, theirs first); in mid-text the two
+/// insertions at one point conflict. v1.7 took them once.
+#[test]
+fn o4_is_on_roots_not_text() {
+    let mut m = one("pX");
+    m.edit("b", None, vec![(0, vec![e(1, 2, "")])]); // "p"
+    m.edit("d", None, vec![(0, vec![e(1, 1, "X")])]); // a fresh X
+    let (o, h) = m.undo("b", None, &all(1));
+    assert!(matches!(o, Outcome::Applied { .. }), "{o:?}");
+    assert!(h.eof_append_undo && !h.o4_restore && !h.i1_violated);
+    assert_eq!(m.texts[0], "pXX");
+    let mut m = one("pXq");
+    m.edit("b", None, vec![(0, vec![e(1, 2, "")])]);
+    m.edit("d", None, vec![(0, vec![e(1, 1, "X")])]);
+    let (o, _) = m.undo("b", None, &all(1));
+    assert!(matches!(o, Outcome::Conflicts { .. }), "{o:?}");
+}
+
+/// v1.8, regression (b) with one participant: p replaces `a` with `b`, then `b` with `c`;
+/// undoing both (two undos, or `--steps 2`) applies: the first undo's `b` is a new element
+/// with the first change's root, so the second reads it as its base (U8 by root). By
+/// element identity (v1.7) the second step saw a foreign `b` and conflicted.
+#[test]
+fn undo_twice_over_own_replacements_applies() {
+    for steps in [1, 2] {
+        let mut m = one("a");
+        m.edit("p", None, vec![(0, vec![e(0, 1, "b")])]);
+        m.edit("p", None, vec![(0, vec![e(0, 1, "c")])]);
+        let (o, h) = m.undo("p", None, &all(steps));
+        if steps == 1 {
+            m.undo("p", None, &all(1));
+        } else {
+            assert!(h.base_by_root, "{h:?}");
+        }
+        assert!(matches!(o, Outcome::Applied { .. }), "{o:?}");
+        assert_eq!(m.texts[0], "a");
+        assert_eq!(roots(&m), roots(&one("a")));
+    }
+}

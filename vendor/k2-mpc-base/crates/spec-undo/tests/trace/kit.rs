@@ -108,6 +108,23 @@ pub struct Knobs {
     pub compact_entries: u64,
 }
 
+/// A kit element: (text root, client, clock).
+pub type KitId = (usize, u64, u32);
+
+/// One live character on the kit (char blame, feature `conformance`).
+#[derive(Debug, Clone)]
+pub struct KitChar {
+    pub ch: char,
+    /// Its element.
+    pub id: KitId,
+    /// The change that inserted the element, if the store recorded one.
+    pub change: Option<u64>,
+    /// Its provenance root (U23): `id` unless an undo, redo or revert put it back.
+    pub root: KitId,
+    /// The pid owning the root's client (U18a: blame reports the root's author).
+    pub root_pid: Option<String>,
+}
+
 /// What a kit call returned, normalised for the comparison.
 #[derive(Debug)]
 pub enum KitOut {
@@ -248,6 +265,29 @@ impl Kit {
             .map(|name| {
                 let i = r.iter().position(|(n, _)| n == name).expect("root");
                 r.remove(i).1
+            })
+            .collect()
+    }
+
+    /// Every live character of each root, in order, with its element and its provenance
+    /// root (U23) as the kit's char blame reports them.
+    pub fn chars(&self) -> Vec<Vec<KitChar>> {
+        ROOTS
+            .iter()
+            .enumerate()
+            .map(|(r, name)| {
+                self.session
+                    .char_blame(name)
+                    .expect("blame")
+                    .into_iter()
+                    .map(|b| KitChar {
+                        ch: b.ch,
+                        id: (r, b.client, b.clock),
+                        change: b.change,
+                        root: (r, b.root_client, b.root_clock),
+                        root_pid: b.root_pid,
+                    })
+                    .collect()
             })
             .collect()
     }

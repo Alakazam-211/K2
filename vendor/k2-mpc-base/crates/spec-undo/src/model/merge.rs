@@ -1,19 +1,42 @@
 //! The three-way merge of the spec (§4, O1–O5), written from `docs/SPEC-UNDO.md`.
 //!
-//! The only kit code it calls is the deterministic diff (D1–D2): both sides' changes are
-//! `diff::hunks(base, side)`. Classifying pairs of hunks (O1–O5) and placing ours into
-//! theirs' coordinates are this module's own.
+//! Undo, redo and revert merge **exact edit sets** ([`merge_edits`], v1.7): no diff. Only
+//! `write --base` (and the mutant that re-diffs) finds its sides with the kit's
+//! deterministic diff (D1–D2), `diff::hunks(base, side)` ([`merge3_window`]). Classifying
+//! pairs of hunks (O1–O5) and placing ours into theirs' coordinates are this module's own.
+//!
+//! **O4 (v1.8)** is judged on (position, root) for undo, redo and revert ([`Same::Root`]):
+//! each side's edits come with the provenance roots of what they insert. `write --base` has
+//! no history and keeps hunk equality ([`Same::Hunk`]). O4a (a root put back at most once)
+//! reads the live text, so it is the caller's (`Model::merge_regions`).
 
 use k2_mpc_base::text::diff;
 
-use super::hunk::{self, Edit};
+use super::hunk::{self, Edit, Prov};
+
+/// What O4 calls an identical change on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Same {
+    /// Equal hunks (`write --base`: both sides are diffs, no history).
+    Hunk,
+    /// The same range on the base and the same roots inserted, in the same order (v1.8).
+    Root,
+    /// Mutant (x) `provenance-ignored-in-O4`: element identity. A restoration is a new
+    /// element, so an ours edit that inserts is never identical to a theirs edit; pure
+    /// deletions of the same range still are.
+    Identity,
+}
 
 /// What a merge found ([`merge3_window`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Merged {
-    /// Ours' changes placed on theirs: `edits` in theirs' coordinates (canonical), and the
-    /// text they give.
-    Clean { text: String, edits: Vec<Edit> },
+    /// Ours' changes placed on theirs: `edits` in theirs' coordinates (canonical), the
+    /// provenance roots of what each inserts, and the text they give.
+    Clean {
+        text: String,
+        edits: Vec<Edit>,
+        provs: Vec<Vec<Prov>>,
+    },
     /// Some pair of changes overlaps (O1, O2, or O5 outside the doc's end).
     Conflict,
 }
@@ -27,6 +50,8 @@ pub struct Rules {
     pub o2: bool,
     /// O4: an identical change on both sides, taken once.
     pub o4: bool,
+    /// O4 took once an edit that inserts: two restorations of one root met (v1.8).
+    pub o4_insert: bool,
     /// O5 fired: two different insertions at the doc's end both landed, theirs first.
     pub o5_landed: bool,
     /// Two different insertions at the window's end conflicted because `at_end` was false
@@ -47,15 +72,46 @@ pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> (Mer
         .into_iter()
         .map(Edit::from)
         .collect();
+    let (ap, bp) = (vec![Vec::new(); a.len()], vec![Vec::new(); b.len()]);
+    merge_edits(base, &a, &ap, &b, &bp, at_end, Same::Hunk)
+}
+
+/// The merge of two **exact edit sets** on `base` (v1.7, U10): `a` (ours) and `b` (theirs)
+/// canonical edits on `base`, as undo, redo and revert have them (no diff), each with the
+/// provenance roots of what it inserts (`ap`, `bp`; v1.8). The pair rules and the placement
+/// are the same as [`merge3_window`]'s; O4 is judged per `same`.
+pub fn merge_edits(
+    base: &str,
+    a: &[Edit],
+    ap: &[Vec<Prov>],
+    b: &[Edit],
+    bp: &[Vec<Prov>],
+    at_end: bool,
+    same: Same,
+) -> (Merged, Rules) {
+    debug_assert!(ap.len() == a.len() && bp.len() == b.len());
+    let theirs = hunk::apply(base, b);
+    let theirs = theirs.as_str();
     let mut rules = Rules::default();
     let mut conflict = false;
     let mut taken_once = vec![false; a.len()];
     for (i, x) in a.iter().enumerate() {
-        for y in &b {
-            if x == y {
+        for (j, y) in b.iter().enumerate() {
+            let identical = match same {
+                Same::Hunk => x == y,
+                Same::Root => x.start == y.start && x.end == y.end && ap[i] == bp[j],
+                Same::Identity => {
+                    x.start == y.start
+                        && x.end == y.end
+                        && x.insert.is_empty()
+                        && y.insert.is_empty()
+                }
+            };
+            if identical {
                 // O4: theirs already has it
                 taken_once[i] = true;
                 rules.o4 = true;
+                rules.o4_insert |= !x.insert.is_empty();
                 continue;
             }
             let (xi, yi) = (x.is_insertion(), y.is_insertion());
@@ -106,16 +162,20 @@ pub fn merge3_window(base: &str, ours: &str, theirs: &str, at_end: bool) -> (Mer
             .filter(|y| y.end <= x.start)
             .map(Edit::growth)
             .sum();
-        placed.push(Edit {
-            start: (x.start as isize + shift) as usize,
-            end: (x.end as isize + shift) as usize,
-            insert: x.insert.clone(),
-        });
+        placed.push((
+            Edit {
+                start: (x.start as isize + shift) as usize,
+                end: (x.end as isize + shift) as usize,
+                insert: x.insert.clone(),
+            },
+            ap[i].clone(),
+        ));
     }
     // theirs may have deleted what separated two of ours: canonical again
-    let edits = hunk::canonical(placed);
+    let (edits, provs): (Vec<Edit>, Vec<Vec<Prov>>) =
+        hunk::canonical_provs(placed).into_iter().unzip();
     let text = hunk::apply(theirs, &edits);
-    (Merged::Clean { text, edits }, rules)
+    (Merged::Clean { text, edits, provs }, rules)
 }
 
 /// Whole-text `merge3` (`write --base`): the window is the whole doc, so O5 applies at its

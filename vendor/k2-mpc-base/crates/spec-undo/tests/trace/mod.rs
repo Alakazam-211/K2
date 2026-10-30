@@ -7,6 +7,14 @@
 //! outcome, the reported conflict regions as an exact set (U11), and every pid's stack
 //! depths. The first difference stops the trace and is reported, never adjusted.
 //!
+//! **Provenance (v1.8, U23; §8 Run).** After every step the kit's char blame is compared
+//! with the oracle's elements position by position: element identity, each live character's
+//! root and the root's author, and I1 on both sides. U10a by root is checked on both: the
+//! oracle's `Hits::foreign_deleted`, and on the kit, every element an applied undo, redo or
+//! revert removed must have a kit root that the reversed change inserted (read off the
+//! kit's blame right after that change; the reversed change named by the runner's mirror
+//! of the stacks, whose depths must equal the oracle's).
+//!
 //! **Restart twin** ([`run_twin`]; spec U22a v1.6, restart transparency): a stack-free trace
 //! (no undo or redo, which a restart rightly changes) also runs on a second kit that never
 //! restarts; after every step its outcome and texts must equal the restarted kit's. The
@@ -29,10 +37,10 @@ use k2_mpc_base::text::diff::Hunk;
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
 use spec_undo::model::{
-    Bounds, ChangeId, Edit, Kind, Mode, Model, Notice, Outcome, Report, Request,
+    Bounds, ChangeId, Edit, Kind, Mode, Model, Notice, Outcome, Prov, Report, Request,
 };
 
-use kit::{Kit, KitOut, Knobs};
+use kit::{Kit, KitChar, KitId, KitOut, Knobs};
 
 /// The case classes this runner covers (spec §8 Volume, sequential), plus the
 /// rules every class leans on. Native-only and concurrency classes are later
@@ -61,6 +69,8 @@ pub const CLASSES: &[&str] = &[
     "multi_root_batch",
     "repeated_text_identity",
     "revert_restart_transparent",
+    "exact_sides_differ_from_rediff",
+    "concurrent_restores_of_one_root",
 ];
 
 /// Low entropy on purpose (repeated text is where a wrong position hides), with multi-byte
@@ -101,6 +111,61 @@ pub struct TraceResult {
     pub touching_revert_extra: u64,
     /// Reverts checked against U22a's property.
     pub reverts_checked: u64,
+    /// v1.8: the parts of "concurrent restores of one root" (the oracle's `Hits`): O4 took
+    /// a restoration once, O4a refused a live root, a window character was the base's by
+    /// root only.
+    pub restore_parts: BTreeMap<&'static str, u64>,
+    /// v1.8: undo, redo and revert steps whose removals the kit-side U10a-by-root check
+    /// read (`own_only_checked`), the elements they removed (`own_only_removed`), and the
+    /// steps it couldn't resolve (`own_only_unresolved`: a reversed entry whose change the
+    /// runner can't name; never expected).
+    pub own_only: BTreeMap<&'static str, u64>,
+}
+
+/// The kit's pid for the import's text (blame's author of the seed text).
+const KIT_IMPORT: &str = "kit:import";
+
+/// What a stack entry's change was (the runner's mirror of the stacks).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Made {
+    /// The change that made the batch: an edit, a write, a restore, a revert, or the undo
+    /// or redo step that moved it here.
+    Id(ChangeId),
+    /// An undo or redo step that changed nothing (its inverse removes nothing).
+    Nothing,
+    /// A multi-step undo or redo in which some step changed nothing: which one the runner
+    /// can't tell (counted, `own_only_unresolved`).
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+struct Entry {
+    obo: Option<String>,
+    made: Made,
+}
+
+#[derive(Debug, Clone, Default)]
+struct Shadow {
+    undo: Vec<Entry>,
+    redo: Vec<Entry>,
+}
+
+/// The runner's provenance bookkeeping (v1.8, U23): what the kit-side checks of U10a by
+/// root, I1 and each character's root read. Built only from the kit's char blame and the
+/// trace's own steps; the oracle's state is read only to compare.
+#[derive(Default)]
+struct ProvTrack {
+    /// Oracle element id → the kit's element at the same position when first seen (texts
+    /// are equal by then); later sightings must agree (element identity).
+    corr: HashMap<Prov, KitId>,
+    /// Oracle root (an element that was its own root) → its author's pid (`""`: import).
+    author: HashMap<Prov, String>,
+    /// Change → the kit roots of the elements it inserted, read right after it.
+    inserted: HashMap<ChangeId, BTreeSet<KitId>>,
+    /// pid → its undo and redo stacks as the changes that made them (U1, U6, U7, U13,
+    /// U14, U17, U19; restart clears them). Their depths are checked against the oracle's
+    /// and the kit's after every step.
+    shadow: BTreeMap<String, Shadow>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +365,10 @@ pub struct Runner {
     restart_heads: Vec<ChangeId>,
     /// Change → the roots it changed.
     change_roots: BTreeMap<ChangeId, BTreeSet<usize>>,
+    /// v1.8: roots, element identity and the stack mirror.
+    pt: ProvTrack,
+    /// The mismatch came from a v1.8 provenance check.
+    prov_differs: bool,
 }
 
 /// The knobs every trace runs with: small, so the bounds, the window and compaction are
@@ -403,7 +472,12 @@ fn run_mode(seed: u64, verbose: bool, twin: bool) -> TraceResult {
         persisted_at: BTreeMap::new(),
         restart_heads: Vec::new(),
         change_roots: BTreeMap::new(),
+        pt: ProvTrack::default(),
+        prov_differs: false,
     };
+    if let Err(what) = r.observe_initial() {
+        panic!("seed {seed}: the seed text's blame: {what}");
+    }
     if twin {
         r.restart_scenario();
     }
@@ -412,6 +486,8 @@ fn run_mode(seed: u64, verbose: bool, twin: bool) -> TraceResult {
         if let Err(what) = r.step(i) {
             let label = if r.restart_differs {
                 LABEL_RESTART
+            } else if r.prov_differs {
+                LABEL_PROV
             } else if r.revert_taints_more {
                 LABEL_REVERT_TAINT
             } else if r.res.hunk_diff.is_some() {
@@ -478,7 +554,12 @@ pub fn script(seeds: [&str; 2], pids: usize, steps: Vec<Step>) -> Option<String>
         persisted_at: BTreeMap::new(),
         restart_heads: Vec::new(),
         change_roots: BTreeMap::new(),
+        pt: ProvTrack::default(),
+        prov_differs: false,
     };
+    if let Err(what) = r.observe_initial() {
+        return Some(format!("the seed text's blame: {what}"));
+    }
     for (i, st) in steps.into_iter().enumerate() {
         r.kit.advance();
         if let Err(what) = r.exec(i, st) {
@@ -631,6 +712,8 @@ fn normalise(out: KitOut) -> Result<Outcome, String> {
 pub const LABEL_HUNKS: &str = "F1: an undo, redo or revert applied other hunks than the merge's";
 /// The restarted kit differs from a kit that never restarted (U22a v1.6).
 pub const LABEL_RESTART: &str = "restart transparency: a restart changed an outcome";
+/// A v1.8 provenance check failed (a root, I1, U10a by root, element identity).
+pub const LABEL_PROV: &str = "v1.8 provenance: roots, I1 or U10a by root";
 /// A revert reporting the oracle's regions plus more taints.
 pub const LABEL_REVERT_TAINT: &str = "F2: revert taints more than U22a";
 
@@ -1207,7 +1290,7 @@ impl Runner {
                 .iter()
                 .zip(&rec.edges)
                 .filter(|(r, _)| r.root == root)
-                .map(|(_, e)| *e)
+                .map(|(_, e)| e.clone())
                 .collect(),
         )
     }
@@ -1450,7 +1533,7 @@ impl Runner {
                 return None;
             }
             Plan::CrossStart { p, root } => {
-                let ed = *self.marked_edges(root)?.first()?;
+                let ed = self.marked_edges(root)?.first()?.clone();
                 let t = &self.model.texts[root];
                 let b = bounds_of(t);
                 // lo < start < hi <= end: across the start only
@@ -1623,6 +1706,10 @@ impl Runner {
         self.log.push(format!("{i}: {step:?}"));
         let head_before = self.model.head;
         let log_before = self.kit.log_entries();
+        // hist.undo_own_only (U10a by root, v1.8): the kit's characters before a step that
+        // may remove only roots the change it reverses inserted
+        let chars_before =
+            matches!(step, Step::Undo { .. } | Step::Revert { .. }).then(|| self.kit.chars());
         let mut hits = spec_undo::model::Hits::default();
         let (mo, ko): (Outcome, Option<KitOut>) = match step.clone() {
             Step::Edit { p, s, edits } => {
@@ -1845,7 +1932,7 @@ impl Runner {
                 self.model.head
             ));
         }
-        // ---- diagnostics: the applied hunks ----
+        // ---- the applied hunks: the same elements on both sides (U10 v1.7; a mismatch) ----
         let applied = self.kit.applied();
         for id in head_before + 1..=self.model.head {
             let mut kit_h: Vec<(usize, Vec<Hunk>)> = applied
@@ -1860,10 +1947,32 @@ impl Runner {
             if model_h != kit_h {
                 let d = format!("applied hunks of {id} differ: oracle {model_h:?}, kit {kit_h:?}");
                 self.log.push(format!("    {d}"));
-                if self.res.hunk_diff.is_none() {
-                    self.res.hunk_diff = Some(format!("seed {} step {i} {step:?}: {d}", self.seed));
-                }
+                self.res.hunk_diff = Some(format!("seed {} step {i} {step:?}: {d}", self.seed));
+                // v1.7: undo, redo and revert apply exact hunks, so the elements must agree
+                return Err(d);
             }
+        }
+        // ---- v1.8: each live character's root, I1, and U10a by root on both sides ----
+        let chars = self
+            .observe(head_before)
+            .inspect_err(|_| self.prov_differs = true)?;
+        let reversed = self.shadow_step(&step, &mo, head_before);
+        self.shadow_check()
+            .inspect_err(|_| self.prov_differs = true)?;
+        if hits.foreign_deleted {
+            self.prov_differs = true;
+            return Err(format!(
+                "own_only (U10a by root): the oracle's {step:?} deleted a character whose root \
+                 the change it reverses didn't insert"
+            ));
+        }
+        if hits.i1_violated || !self.model.i1() {
+            self.prov_differs = true;
+            return Err("I1: the oracle has two live elements with one root".into());
+        }
+        if let Some(before) = &chars_before {
+            self.own_only_kit(&step, &mo, reversed, before, &chars)
+                .inspect_err(|_| self.prov_differs = true)?;
         }
         if self.verbose {
             self.log.push(format!("    texts {:?}", self.model.texts));
@@ -1873,7 +1982,7 @@ impl Runner {
         }
         // ---- classes ----
         let applied_ok = matches!(mo, Outcome::Applied { .. });
-        let flags: [(bool, &'static str); 18] = [
+        let flags: [(bool, &'static str); 19] = [
             (
                 hits.eof_append_undo || hits.eof_append_write,
                 "append_at_end",
@@ -1904,10 +2013,25 @@ impl Runner {
                 hits.identity_case && self.repeated,
                 "repeated_text_identity",
             ),
+            (hits.rediff_differs, "exact_sides_differ_from_rediff"),
         ];
         for (on, c) in flags {
             if on {
                 self.hit(c);
+            }
+        }
+        // v1.8: two restorations of one root met (O4 or O4a decided), or a window character
+        // was the base's by root only
+        if hits.concurrent_restore {
+            self.hit("concurrent_restores_of_one_root");
+        }
+        for (on, part) in [
+            (hits.o4_restore, "o4_restore"),
+            (hits.o4a, "o4a"),
+            (hits.base_by_root, "base_by_root"),
+        ] {
+            if on {
+                *self.res.restore_parts.entry(part).or_default() += 1;
             }
         }
         for id in head_before + 1..=self.model.head {
@@ -1946,6 +2070,319 @@ impl Runner {
             }
             _ => {}
         }
+        Ok(())
+    }
+}
+
+/// v1.8 (U23, U10a, I1; spec §8 Run): the kit's roots against the oracle's, after every step.
+impl Runner {
+    /// The seed text: every character is the import's and its own root.
+    fn observe_initial(&mut self) -> Result<(), String> {
+        let head = self.model.head;
+        self.observe(head).map(|_| ())
+    }
+
+    /// Read the kit's char blame and compare it with the oracle's elements, position by
+    /// position (the texts are equal by now):
+    /// - **element identity**: an oracle element maps to one kit element for its whole life;
+    /// - the elements this step inserted are the same on both sides (the kit's `change`);
+    /// - **each live character's root** (U23): the oracle says it is its own root exactly
+    ///   when the kit does; otherwise the kit's root is the kit element the oracle's root
+    ///   was when it was live; and the **root's author** agrees (U18a: blame by root);
+    /// - **I1 on the kit**: at most one live element per root.
+    ///
+    /// Records the roots each new change inserted (what U10a reads later).
+    fn observe(&mut self, head_before: ChangeId) -> Result<Vec<Vec<KitChar>>, String> {
+        let chars = self.kit.chars();
+        let mut live_roots: HashMap<KitId, usize> = HashMap::new();
+        for (r, (ms, ks)) in self.model.elems.iter().zip(&chars).enumerate() {
+            let text: String = ks.iter().map(|k| k.ch).collect();
+            if ms.len() != ks.len() || text != self.model.texts[r] {
+                return Err(format!(
+                    "char blame of root {r}: {} characters {text:?}, the oracle {} {:?}",
+                    ks.len(),
+                    ms.len(),
+                    self.model.texts[r]
+                ));
+            }
+            for (i, (m, k)) in ms.iter().zip(ks).enumerate() {
+                let at = format!("root {r} char {i} {:?}", k.ch);
+                // element identity
+                match self.pt.corr.get(&m.id) {
+                    Some(id) if *id != k.id => {
+                        return Err(format!(
+                            "element identity at {at}: the oracle's element {:?} was the kit's \
+                             {id:?}, now the kit has {:?} there",
+                            m.id, k.id
+                        ))
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.pt.corr.insert(m.id, k.id);
+                    }
+                }
+                // the elements this step inserted
+                let m_new = m.id.0 > head_before;
+                let k_new = k.change.is_some_and(|c| c > head_before);
+                if (m_new || k_new) && k.change != Some(m.id.0) {
+                    return Err(format!(
+                        "inserted elements at {at}: the oracle's element {:?} (change {}), the \
+                         kit's {:?} (change {:?})",
+                        m.id, m.id.0, k.id, k.change
+                    ));
+                }
+                // the root (U23)
+                if m.id == m.prov {
+                    if k.root != k.id {
+                        return Err(format!(
+                            "root (U23) at {at}: its own root in the oracle ({:?}); the kit's \
+                             {:?} restores {:?}",
+                            m.id, k.id, k.root
+                        ));
+                    }
+                    self.pt
+                        .author
+                        .entry(m.id)
+                        .or_insert_with(|| self.model.who[m.owner as usize].clone());
+                } else {
+                    let Some(want) = self.pt.corr.get(&m.prov) else {
+                        return Err(format!(
+                            "root (U23) at {at}: the oracle's root {:?} was never seen live \
+                             (a runner bug)",
+                            m.prov
+                        ));
+                    };
+                    if k.root != *want {
+                        return Err(format!(
+                            "root (U23) at {at}: the oracle's element {:?} restores {:?} (the \
+                             kit's {want:?}); the kit's {:?} has root {:?}",
+                            m.id, m.prov, k.id, k.root
+                        ));
+                    }
+                }
+                // the root's author (U18a)
+                let oracle_author = match self.pt.author.get(&m.prov).map(String::as_str) {
+                    Some("") => KIT_IMPORT,
+                    Some(a) => a,
+                    None => {
+                        return Err(format!(
+                            "root author at {at}: the oracle's root {:?} has no author (a \
+                             runner bug)",
+                            m.prov
+                        ))
+                    }
+                };
+                if k.root_pid.as_deref() != Some(oracle_author) {
+                    return Err(format!(
+                        "root author (U18a) at {at}: oracle {oracle_author:?}, kit {:?}",
+                        k.root_pid
+                    ));
+                }
+                // I1 on the kit
+                if let Some(j) = live_roots.insert(k.root, i) {
+                    return Err(format!(
+                        "I1 on the kit: root {:?} is live twice (root {r} chars {j} and {i})",
+                        k.root
+                    ));
+                }
+            }
+        }
+        for id in head_before + 1..=self.model.head {
+            let roots = chars
+                .iter()
+                .flatten()
+                .filter(|k| k.change == Some(id))
+                .map(|k| k.root)
+                .collect();
+            self.pt.inserted.insert(id, roots);
+        }
+        Ok(chars)
+    }
+
+    /// The stack mirror after `step`; returns the entries an applied undo or redo reversed
+    /// (U13: newest first, `--for` filtered; U14 `--drop`; U17).
+    fn shadow_step(&mut self, step: &Step, mo: &Outcome, head_before: ChangeId) -> Vec<Entry> {
+        let new_ids: Vec<ChangeId> = (head_before + 1..=self.model.head).collect();
+        let depth = KNOBS.undo_depth;
+        let bound = |st: &mut Shadow| {
+            while st.undo.len() + st.redo.len() > depth {
+                if !st.undo.is_empty() {
+                    st.undo.remove(0);
+                } else {
+                    st.redo.remove(0);
+                }
+            }
+        };
+        let mut reversed = Vec::new();
+        match step {
+            Step::Edit { p, s, .. }
+            | Step::Replace { p, s, .. }
+            | Step::Restore { p, s, .. }
+            | Step::WriteBase { p, s, .. }
+            | Step::Revert { p, s, .. } => {
+                if let Some(&id) = new_ids.first() {
+                    let st = self
+                        .pt
+                        .shadow
+                        .entry(self.pids[*p].name.clone())
+                        .or_default();
+                    st.redo.clear();
+                    st.undo.push(Entry {
+                        obo: self.pids[*p].obo[*s].clone(),
+                        made: Made::Id(id),
+                    });
+                    bound(st);
+                }
+            }
+            Step::Purge { .. } | Step::Restart => self.pt.shadow.clear(),
+            Step::Undo {
+                p,
+                steps,
+                mode,
+                for_person,
+                redo,
+                ..
+            } => {
+                let st = self
+                    .pt
+                    .shadow
+                    .entry(self.pids[*p].name.clone())
+                    .or_default();
+                let src = if *redo { &st.redo } else { &st.undo };
+                let want = if *mode == Mode::Drop {
+                    1
+                } else {
+                    (*steps).max(1)
+                };
+                let picked: Vec<usize> = (0..src.len())
+                    .rev()
+                    .filter(|&k| match for_person {
+                        Some(fp) => src[k].obo.as_deref() == Some(fp.as_str()),
+                        None => true,
+                    })
+                    .take(want)
+                    .collect();
+                match mo {
+                    Outcome::Dropped => {
+                        if *redo {
+                            st.redo.remove(picked[0]);
+                        } else {
+                            st.undo.remove(picked[0]);
+                        }
+                    }
+                    Outcome::Applied { steps: done, .. } => {
+                        let made: Vec<Made> = if new_ids.len() == *done {
+                            new_ids.iter().map(|&i| Made::Id(i)).collect()
+                        } else if new_ids.is_empty() {
+                            vec![Made::Nothing; *done]
+                        } else {
+                            vec![Made::Unknown; *done]
+                        };
+                        for (k, &idx) in picked.iter().take(*done).enumerate() {
+                            let (from, to) = if *redo {
+                                (&mut st.redo, &mut st.undo)
+                            } else {
+                                (&mut st.undo, &mut st.redo)
+                            };
+                            let e = from.remove(idx);
+                            to.push(Entry {
+                                obo: e.obo.clone(),
+                                made: made[k],
+                            });
+                            reversed.push(e);
+                            bound(st);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        reversed
+    }
+
+    /// The mirror's depths equal the oracle's (and so the kit's, compared before).
+    fn shadow_check(&self) -> Result<(), String> {
+        for p in &self.pids {
+            let mine = self
+                .pt
+                .shadow
+                .get(&p.name)
+                .map_or((0, 0), |s| (s.undo.len(), s.redo.len()));
+            let theirs = self.model.depths(&p.name);
+            if mine != theirs {
+                return Err(format!(
+                    "the runner's stack mirror of {}: {mine:?}, the oracle {theirs:?} (a runner \
+                     bug)",
+                    p.name
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// U10a by root on the kit (v1.8): an applied undo, redo or revert removes only live
+    /// elements whose **kit root** is among the roots **the change it reverses inserted**,
+    /// read off the kit's char blame right after that change ([`ProvTrack::inserted`]):
+    /// an undo of a batch, the roots the batch's change inserted (an edit's own text; for
+    /// a batch a redo or revert made, the roots it put back); a redo, the roots its undo
+    /// step put back; a revert of change C, the roots C inserted. A multi-step undo or redo
+    /// is checked against the union over its steps.
+    fn own_only_kit(
+        &mut self,
+        step: &Step,
+        mo: &Outcome,
+        reversed: Vec<Entry>,
+        before: &[Vec<KitChar>],
+        after: &[Vec<KitChar>],
+    ) -> Result<(), String> {
+        if !matches!(mo, Outcome::Applied { .. }) {
+            return Ok(());
+        }
+        let changes: Vec<Made> = match step {
+            Step::Revert { change, .. } => vec![Made::Id(*change)],
+            _ => reversed.iter().map(|e| e.made).collect(),
+        };
+        let mut own: BTreeSet<KitId> = BTreeSet::new();
+        for m in &changes {
+            match m {
+                Made::Id(c) => own.extend(self.pt.inserted.get(c).into_iter().flatten()),
+                Made::Nothing => {}
+                Made::Unknown => {
+                    *self.res.own_only.entry("own_only_unresolved").or_default() += 1;
+                    return Ok(());
+                }
+            }
+        }
+        let live: BTreeSet<KitId> = after.iter().flatten().map(|k| k.id).collect();
+        let mut removed = 0;
+        let mut foreign_author = 0;
+        let actor = match step {
+            Step::Undo { p, .. } | Step::Revert { p, .. } => self.pids[*p].name.as_str(),
+            _ => "",
+        };
+        for k in before.iter().flatten().filter(|k| !live.contains(&k.id)) {
+            removed += 1;
+            if k.root_pid.as_deref() != Some(actor) {
+                foreign_author += 1;
+            }
+            if !own.contains(&k.root) {
+                return Err(format!(
+                    "own_only (U10a by root) on the kit: {step:?} removed {:?} (element {:?}, \
+                     root {:?} by {:?}), not a root the reversed change(s) {changes:?} inserted",
+                    k.ch, k.id, k.root, k.root_pid
+                ));
+            }
+        }
+        *self.res.own_only.entry("own_only_checked").or_default() += 1;
+        *self.res.own_only.entry("own_only_removed").or_default() += removed;
+        // removals whose root author isn't the actor: where the root rule, not an author
+        // rule, decides (a redo or a revert of another's change, regressions (a) and (b))
+        *self
+            .res
+            .own_only
+            .entry("own_only_removed_root_author_not_actor")
+            .or_default() += foreign_author;
         Ok(())
     }
 }

@@ -3,7 +3,7 @@
 `bfs --dump` file of canonical JSON lines, bounded::View::json) exactly: print how many states
 each side has that the other hasn't, and the first few of each.
 
-Usage: statediff.py <tlc dump> <enum dump> [PIDS]"""
+Usage: statediff.py <tlc dump> <enum dump> [PIDS] [RESTARTS]"""
 import json
 import re
 import sys
@@ -118,17 +118,26 @@ def letters(v):
     return "".join("ab"[c] for c in v)
 
 
+def hunks(hs):
+    return [[h["s"], h["e"], letters(h["ins"])] for h in hs]
+
+
 def region(r):
-    return [r["start"], r["end"], letters(r["before"]), letters(r["after"]), r["tainted"], r["bdn"], r["erased"]]
+    return [r["start"], r["end"], letters(r["before"]), letters(r["after"]),
+            hunks(r["ours"]), list(r["br"]), list(r["ar"]), r["tainted"], r["bdn"], r["erased"]]
 
 
-def canon(st, pids):
+def members(v):
+    return v[1] if isinstance(v, tuple) else v
+
+
+def canon(st, pids, track):
     stacks = fun(st["stacks"])
     events = fun(st["events"])
     records = fun(st["records"])
     viol = st["viol"][1] if isinstance(st["viol"], tuple) else st["viol"]
     v = [
-        [["ab"[e["ch"]], e["au"]] for e in st["doc"]],
+        [["ab"[e["ch"]], e["au"], e["rt"]] for e in st["doc"]],
         [[[[region(r) for r in b] for b in stacks[p]["undo"]],
           [[region(r) for r in b] for b in stacks[p]["redo"]],
           stacks[p]["cleared"]] for p in range(1, pids + 1)],
@@ -138,12 +147,15 @@ def canon(st, pids):
         [events[p] for p in range(1, pids + 1)],
         st["undos"],
         st["reverts"],
+        st["restarts"],
+        [p in members(st["authors"]) for p in range(1, pids + 1)] if track else [],
+        [p in members(st["lost"]) for p in range(1, pids + 1)] if track else [],
         sorted(viol),
     ]
     return json.dumps(v, separators=(",", ":"))
 
 
-def tlc_states(path, pids):
+def tlc_states(path, pids, track):
     text = open(path).read()
     out = set()
     for block in re.split(r"\nState \d+:\n", "\n" + text):
@@ -152,14 +164,15 @@ def tlc_states(path, pids):
             continue
         p = P(block)
         p.i = m.end()
-        out.add(canon(p.val(), pids))
+        out.add(canon(p.val(), pids, track))
     return out
 
 
 def main():
     tlc, enum = sys.argv[1], sys.argv[2]
     pids = int(sys.argv[3]) if len(sys.argv) > 3 else 2
-    a = tlc_states(tlc, pids)
+    track = len(sys.argv) > 4 and int(sys.argv[4]) > 0
+    a = tlc_states(tlc, pids, track)
     b = set(l.strip() for l in open(enum) if l.strip())
     print("statediff: tlc %d states, enum %d states; only tlc %d, only enum %d" % (len(a), len(b), len(a - b), len(b - a)))
     for s in sorted(a - b)[:4]:

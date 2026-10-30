@@ -1,11 +1,16 @@
 //! Blame on a live text doc (K-HIST-11, K-HIST-18, P22): [`Session::blame`]. A child of
 //! `live`, so it works on the session's own state.
 //!
-//! **Grain.** Text is blamed per character: the engine reports, for every live character,
-//! the client ID and clock that inserted it ([`crate::doc::Doc::blame_runs`], Yrs
-//! `diff_range` on a throwaway replica, O(doc) per call). The store maps a client to its
-//! participant (the client table) and a clock to its change (`change_clocks`, written with
-//! each change). A line is then given its **most recent author**: see [`BlameLine`].
+//! **Grain.** Text is blamed per character: every live character is an element with an ID
+//! (the client and clock that inserted it, [`crate::doc::Doc::blame_runs`]) and a
+//! **provenance root** (undo spec U23: itself, or for text an undo, redo or revert put back,
+//! the element it restores), both read off the session's provenance map (built from the
+//! engine and the store's provenance rows on first need, O(doc), then kept exact). The
+//! store maps a client to its participant (the client table) and a clock to its change
+//! (`change_clocks`, written with each change). A character **blames to its root's insert**
+//! (U18a): the change that first inserted the element it restores, and that change's
+//! author; text put back by an undo, redo or revert also names the **restoring** change and
+//! its author. A line is then given its **most recent root author**: see [`BlameLine`].
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -16,13 +21,17 @@ use super::*;
 ///
 /// **The rule.** A line's characters are its text **and its terminating `\n`** (if any), so
 /// splitting a line attributes the first half to whoever typed the `\n`, as `git blame`
-/// would. Each character carries the change that inserted it; the line goes to the
-/// character with the **greatest change id** (its log position: change ids increase in
-/// the daemon's apply order, so this is the true "most recent", immune to host clock skew;
-/// `at_ms` is shown, never ranked). Characters whose change the store can't name (text
-/// inserted before v0.3.0 recorded clock spans) rank below every named one; among only
-/// those, the line's first character decides. Undo, redo, restore and revert insert text as
-/// new changes, so text they bring back is the undoer's (undo spec U18a).
+/// would. Each character carries the change that inserted its **provenance root** (undo
+/// spec v1.8, U18a, U23): for text an undo, redo or revert put back, the change that first
+/// inserted the element it restores; for every other character, the change that inserted
+/// it. The line goes to the character with the **greatest root change id** (its log
+/// position: change ids increase in the daemon's apply order, so this is the true "most
+/// recent", immune to host clock skew; `at_ms` is shown, never ranked). Characters whose
+/// change the store can't name (text inserted before v0.3.0 recorded clock spans) rank
+/// below every named one; among only those, the line's first character decides. When that
+/// character was put back by an undo, redo or revert, [`BlameLine::restored_by`] and
+/// [`BlameLine::restored_in`] name the restoring change and its author (`restore`, a new
+/// edit, is not a restoration: its text is the restorer's).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BlameLine {
@@ -53,6 +62,12 @@ pub struct BlameLine {
     /// changes (edit it out, or purge with `and_remove`). Not known once the change's record
     /// has left the revert window.
     pub erased: bool,
+    /// The pid whose undo, redo or revert put the line's character back (U18a), when it was
+    /// put back; every field above is then the root's (the change that first inserted it).
+    pub restored_by: Option<String>,
+    /// The restoring change (an undo, redo or revert), when there is one and the store
+    /// recorded it.
+    pub restored_in: Option<Seq>,
 }
 
 /// Returned by [`Session::blame`].
@@ -110,8 +125,10 @@ impl Blame {
     /// ```
     ///
     /// `label` turns a pid into a display name (the host's lookup; `None` prints the pid).
-    /// An unknown change prints `-`; an erased line gets `[erased]` after its date. The
-    /// listing holds doc text: a host fences it for agents as it fences `show`.
+    /// An unknown change prints `-`; an erased line gets `[erased]` after its date. A line
+    /// put back by an undo, redo or revert names its root's author, then `(restored by B in
+    /// C)` with the restorer and the restoring change. The listing holds doc text: a host
+    /// fences it for agents as it fences `show`.
     pub fn render(&self, label: impl Fn(&str) -> Option<String>) -> String {
         let name = |pid: &str| label(pid).unwrap_or_else(|| pid.to_owned());
         let rows: Vec<(String, String, String, &BlameLine)> = self
@@ -126,6 +143,13 @@ impl Blame {
                 }
                 if let Some(a @ (ApprovalState::Pending | ApprovalState::Declined)) = l.approval {
                     let _ = write!(who, " ({})", approval_name(a));
+                }
+                if let Some(r) = &l.restored_by {
+                    let _ = write!(who, " (restored by {}", name(r));
+                    if let Some(c) = l.restored_in {
+                        let _ = write!(who, " in {c}");
+                    }
+                    who.push(')');
                 }
                 let mut date = l.at_ms.map_or_else(|| "-".to_owned(), utc);
                 if l.erased {
@@ -157,7 +181,8 @@ impl Blame {
     /// A machine-readable listing in the shape of `git blame --line-porcelain`: per line a
     /// header `<change> <line> <line> 1` (change `0` when unknown), then `author`,
     /// `author-time` (seconds) and `author-time-ms`, `kind`, `via`, `on-behalf-of`,
-    /// `approval` and `erased` when they apply, then the text after a tab.
+    /// `approval`, `erased`, `restored-by <pid>` and `restored-in <change>` when they apply,
+    /// then the text after a tab. The header's change and the author are the root's (U18a).
     pub fn porcelain(&self) -> String {
         let mut out = String::new();
         for l in &self.lines {
@@ -182,6 +207,12 @@ impl Blame {
             if l.erased {
                 out.push_str("erased\n");
             }
+            if let Some(r) = &l.restored_by {
+                let _ = writeln!(out, "restored-by {r}");
+            }
+            if let Some(c) = l.restored_in {
+                let _ = writeln!(out, "restored-in {c}");
+            }
             let _ = writeln!(out, "\t{}", l.text);
         }
         out
@@ -201,124 +232,181 @@ pub struct CharBlame {
     pub pid: Option<String>,
     /// The change that inserted it, if the store recorded one.
     pub change: Option<Seq>,
+    /// Its provenance root's client and clock (undo spec U23): itself, unless an undo, redo
+    /// or revert put it back.
+    pub root_client: ClientId,
+    pub root_clock: u32,
+    /// The pid that owns the root's client, if the store knows it.
+    pub root_pid: Option<String>,
+    /// The change that inserted the root, if the store recorded one.
+    pub root_change: Option<Seq>,
 }
 
-/// A span of live text, `start..end` bytes, inserted by `client` in change `seq` (`None`:
-/// no clock span recorded for it).
+/// A live character's element and root, with the changes that inserted them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Resolved {
+    id: ElemId,
+    /// `None`: its own root.
+    root: Option<ElemId>,
+    id_seq: Option<Seq>,
+    root_seq: Option<Seq>,
+}
+
+/// The change covering `clock` among `spans` (clock order), moving the cursor `k` forward.
+fn seek(spans: &[crate::store::SpanOf], k: &mut usize, clock: u32) -> Option<Seq> {
+    while *k < spans.len() && spans[*k].1 <= clock {
+        *k += 1;
+    }
+    spans
+        .get(*k)
+        .filter(|s| s.0 <= clock && clock < s.1)
+        .map(|s| s.2)
+}
+
+/// Walk the characters of `text[lo..]` the provenance runs `runs` cover (from `lo` on),
+/// calling `f(byte, char, resolved)` for each, with one store read for every change lookup.
+fn walk(
+    store: &DocStore,
+    doc_id: DocId,
+    text: &str,
+    runs: &[super::super::prov::Run],
+    lo: usize,
+    mut f: impl FnMut(usize, char, Resolved),
+) -> Result<()> {
+    let mut q = Vec::with_capacity(runs.len() * 2);
+    for r in runs {
+        let root = r.root.unwrap_or(r.id);
+        q.push((root.client, root.clock, root.clock + r.units));
+        if r.root.is_some() {
+            q.push((r.id.client, r.id.clock, r.id.clock + r.units));
+        }
+    }
+    let spans = store.clock_spans(doc_id, &q)?;
+    let mut spans = spans.iter();
+    let mut at = lo;
+    for r in runs {
+        let rs = spans.next().map_or(&[][..], Vec::as_slice);
+        let is = if r.root.is_some() {
+            Some(spans.next().map_or(&[][..], Vec::as_slice))
+        } else {
+            None
+        };
+        let (mut a, mut b, mut k) = (0, 0, 0u32);
+        for ch in text[at..at + r.bytes as usize].chars() {
+            let id = r.id.plus(k);
+            let root = r.root.map(|x| x.plus(k));
+            let root_seq = seek(rs, &mut a, root.unwrap_or(id).clock);
+            let id_seq = match is {
+                Some(v) => seek(v, &mut b, id.clock),
+                None => root_seq,
+            };
+            f(
+                at,
+                ch,
+                Resolved {
+                    id,
+                    root,
+                    id_seq,
+                    root_seq,
+                },
+            );
+            k += ch.len_utf16() as u32;
+            at += ch.len_utf8();
+        }
+    }
+    Ok(())
+}
+
+/// A span of live text, `start..end` bytes, whose root was inserted by `client` in change
+/// `seq` (`None`: no clock span recorded for it), put back by `restorer` (its client and
+/// change) when it is a restoration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Piece {
     start: usize,
     end: usize,
     client: ClientId,
     seq: Option<Seq>,
+    restorer: Option<(ClientId, Option<Seq>)>,
 }
 
-/// The pieces of `text[lo..hi]`: the engine's runs, cut by the changes' clock spans.
+/// The pieces of `text[lo..hi]`, by root.
 fn pieces(
     store: &DocStore,
     doc_id: DocId,
     text: &str,
-    runs: &[crate::engine::BlameRun],
+    runs: &[super::super::prov::Run],
     lo: usize,
-    hi: usize,
 ) -> Result<Vec<Piece>> {
-    let broken = |why: &str| SessionError::Doc(DocError::Apply(format!("blame: {why}")));
-    // the runs that meet the range, clipped to it, with the clock of their first character
-    let mut sel: Vec<(usize, usize, ClientId, u32)> = Vec::new();
-    let mut queries = Vec::new();
-    let mut at = 0usize;
-    for r in runs {
-        let (s, e) = (at, at + r.bytes);
-        at = e;
-        if e > text.len() || !text.is_char_boundary(s) || !text.is_char_boundary(e) {
-            return Err(broken("the engine's runs don't fit the text"));
-        }
-        if e <= lo || s >= hi {
-            continue;
-        }
-        let (a, b) = (s.max(lo), e.min(hi));
-        let ca = r.clock + text[s..a].encode_utf16().count() as u32;
-        let cb = ca + text[a..b].encode_utf16().count() as u32;
-        sel.push((a, b, r.client, ca));
-        queries.push((r.client, ca, cb));
-    }
-    if at != text.len() {
-        return Err(broken("the engine's runs don't cover the text"));
-    }
-    let spans = store.clock_spans(doc_id, &queries)?;
     let mut out: Vec<Piece> = Vec::new();
-    let mut push = |p: Piece| match out.last_mut() {
-        Some(l) if l.end == p.start && l.client == p.client && l.seq == p.seq => l.end = p.end,
-        _ => out.push(p),
-    };
-    for ((a, b, client, ca), spans) in sel.into_iter().zip(spans) {
-        // walk the characters with their clocks; spans are in clock order, never overlap
-        let mut clock = ca;
-        let mut k = 0;
-        for (i, ch) in text[a..b].char_indices() {
-            while k < spans.len() && spans[k].1 <= clock {
-                k += 1;
+    walk(store, doc_id, text, runs, lo, |at, ch, x| {
+        let p = Piece {
+            start: at,
+            end: at + ch.len_utf8(),
+            client: x.root.unwrap_or(x.id).client,
+            seq: x.root_seq,
+            restorer: x.root.map(|_| (x.id.client, x.id_seq)),
+        };
+        match out.last_mut() {
+            Some(l)
+                if l.end == p.start
+                    && (l.client, l.seq, l.restorer) == (p.client, p.seq, p.restorer) =>
+            {
+                l.end = p.end
             }
-            let seq = spans
-                .get(k)
-                .filter(|s| s.0 <= clock && clock < s.1)
-                .map(|s| s.2);
-            push(Piece {
-                start: a + i,
-                end: a + i + ch.len_utf8(),
-                client,
-                seq,
-            });
-            clock += ch.len_utf16() as u32;
+            _ => out.push(p),
         }
-    }
+    })?;
     Ok(out)
 }
 
 impl Session {
     /// Test-only (feature `conformance`, off by default): every live character of text root
     /// `root`, in order, with the element that holds it: `(char, (client, clock), owner pid,
-    /// change)`. Clocks count UTF-16 code units; the change is the log position that
-    /// inserted it, where the store recorded one. For per-element rules (an undo deletes only
-    /// its own batch's elements).
+    /// change)`, and its provenance root `(client, clock)` with the root's owner and change
+    /// (U23: itself, unless an undo, redo or revert put it back). Clocks count UTF-16 code
+    /// units; a change is the log position that inserted it, where the store recorded one.
+    /// For per-element rules (an undo deletes only elements whose root its change inserted).
     #[cfg(feature = "conformance")]
     pub fn char_blame(&self, root: &str) -> Result<Vec<CharBlame>> {
-        let st = self.lock()?;
+        let mut st = self.lock()?;
+        let st = &mut *st;
+        self.text_of(st, root)?;
+        self.prov(st)?;
         let st = &*st;
         let (_, text) = self.text_of(st, root)?;
-        let runs = st.doc.blame_runs(root)?;
+        let runs = st
+            .prov
+            .as_ref()
+            .expect("built")
+            .query(root, text, 0, text.len());
         let store = self.store(st)?.clone();
-        let pieces = pieces(&store, self.doc_id, text, &runs, 0, text.len())?;
         let mut owners: HashMap<ClientId, Option<String>> = HashMap::new();
-        let mut out = Vec::with_capacity(text.len());
-        let mut at = 0;
-        let mut k = 0;
-        for run in &runs {
-            let owner = match owners.entry(run.client) {
+        let mut owner = |c: ClientId| -> Result<Option<String>> {
+            Ok(match owners.entry(c) {
                 std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
-                std::collections::hash_map::Entry::Vacant(e) => e
-                    .insert(store.client_owner(self.doc_id, run.client)?)
-                    .clone(),
-            };
-            let mut clock = run.clock;
-            for ch in text[at..at + run.bytes].chars() {
-                while k < pieces.len() && pieces[k].end <= at {
-                    k += 1;
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(store.client_owner(self.doc_id, c)?).clone()
                 }
-                let seq = pieces
-                    .get(k)
-                    .filter(|p| p.start <= at && at < p.end)
-                    .and_then(|p| p.seq);
-                out.push(CharBlame {
-                    ch,
-                    client: run.client,
-                    clock,
-                    pid: owner.clone(),
-                    change: seq,
-                });
-                clock += ch.len_utf16() as u32;
-                at += ch.len_utf8();
-            }
+            })
+        };
+        let mut chars = Vec::with_capacity(text.len());
+        walk(&store, self.doc_id, text, &runs, 0, |_, ch, x| {
+            chars.push((ch, x))
+        })?;
+        let mut out = Vec::with_capacity(chars.len());
+        for (ch, x) in chars {
+            let root = x.root.unwrap_or(x.id);
+            out.push(CharBlame {
+                ch,
+                client: x.id.client,
+                clock: x.id.clock,
+                pid: owner(x.id.client)?,
+                change: x.id_seq,
+                root_client: root.client,
+                root_clock: root.clock,
+                root_pid: owner(root.client)?,
+                root_change: x.root_seq,
+            });
         }
         Ok(out)
     }
@@ -330,14 +418,18 @@ impl Session {
     /// clamped); `None` blames every line. Needs read and **history** (K-PERM-9). Reads only:
     /// nothing in the doc, the store or presence changes.
     ///
-    /// Cost: O(doc) per call (the engine walks a throwaway copy of the doc), plus one store
-    /// read per run of text in the range; keep it off the edit path (a host computes it on
-    /// demand: the blame gutter, the verb).
+    /// Cost: the provenance map's range (built once per load, O(doc): the engine walks a
+    /// throwaway copy of the doc), plus one store read for the range's runs; keep it off the
+    /// edit path (a host computes it on demand: the blame gutter, the verb). Works the same
+    /// after a reload: roots are in the store (provenance rows, store format 5).
     pub fn blame(&self, conn: ConnId, root: &str, lines: Option<LineRange>) -> Result<Blame> {
         let now = self.now();
         let mut st = self.lock()?;
         self.admit(&mut st, conn, Need::Read, Action::Blame, now)?;
         self.admit(&mut st, conn, Need::History, Action::Blame, now)?;
+        let st = &mut *st;
+        self.text_of(st, root)?;
+        self.prov(st)?;
         let st = &*st;
         let (_, text) = self.text_of(st, root)?;
         // git's lines: each with its `\n`; no empty line after a final `\n`
@@ -379,11 +471,15 @@ impl Session {
             .take(last - first + 1)
             .collect();
         let (lo, hi) = (spans[0].0, spans[spans.len() - 1].1);
-        let runs = st.doc.blame_runs(root)?;
+        let runs = st.prov.as_ref().expect("built").query(root, text, lo, hi);
         let store = self.store(st)?.clone();
-        let pieces = pieces(&store, self.doc_id, text, &runs, lo, hi)?;
+        let pieces = pieces(&store, self.doc_id, text, &runs, lo)?;
         // what the store knows about the changes and clients involved
-        let seqs: BTreeSet<Seq> = pieces.iter().filter_map(|p| p.seq).collect();
+        let seqs: BTreeSet<Seq> = pieces
+            .iter()
+            .flat_map(|p| [p.seq, p.restorer.and_then(|r| r.1)])
+            .flatten()
+            .collect();
         let infos = store.change_infos(self.doc_id, &seqs)?;
         let purged: HashSet<Seq> = store.purged_changes(self.doc_id, &seqs)?;
         let approvals: HashMap<Seq, ApprovalState> = store
@@ -393,9 +489,13 @@ impl Session {
             .map(|(s, a)| (s, a.state))
             .collect();
         let mut owners: HashMap<ClientId, Option<String>> = HashMap::new();
-        for p in &pieces {
-            if let std::collections::hash_map::Entry::Vacant(e) = owners.entry(p.client) {
-                e.insert(store.client_owner(self.doc_id, p.client)?);
+        for c in pieces
+            .iter()
+            .flat_map(|p| [Some(p.client), p.restorer.map(|r| r.0)])
+            .flatten()
+        {
+            if let std::collections::hash_map::Entry::Vacant(e) = owners.entry(c) {
+                e.insert(store.client_owner(self.doc_id, c)?);
             }
         }
         // change ids increase in apply order: the greatest is the most recent
@@ -438,6 +538,15 @@ impl Session {
                 on_behalf_of: info.and_then(|i| i.on_behalf_of.clone()),
                 approval: best.seq.and_then(|s| approvals.get(&s).copied()),
                 erased: best.seq.is_some_and(|s| purged.contains(&s)),
+                restored_by: best.restorer.map(|(c, seq)| {
+                    owners
+                        .get(&c)
+                        .cloned()
+                        .flatten()
+                        .or_else(|| seq.and_then(|s| infos.get(&s)).map(|i| i.author.clone()))
+                        .unwrap_or_else(|| UNKNOWN_PID.to_owned())
+                }),
+                restored_in: best.restorer.and_then(|r| r.1),
             });
         }
         Ok(out)

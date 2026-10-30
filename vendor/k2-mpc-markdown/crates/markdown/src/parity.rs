@@ -3,7 +3,7 @@
 //! One exhaustive `match`: when the kit adds a person action, this stops compiling until
 //! the action is mapped. `tests/agent_parity.rs` runs it through the kit's harness.
 
-use k2_mpc_base::parity::{ParityRow, PersonAction};
+use k2_mpc_base::parity::{ParityRow, PersonAction, Tier};
 
 /// The row for `action`: its verbs, or why it has none yet / at all.
 pub fn parity_row(action: PersonAction) -> ParityRow {
@@ -15,14 +15,14 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
         P::ReadAll => ParityRow::live(a, &["cat", "wc"]),
         P::ViewRange => ParityRow::live(a, &["head", "tail", "sed", "view"]),
         P::Find => ParityRow::live(a, &["grep"]),
-        P::Who => ParityRow::live(a, &["who"]),
+        P::Who => ParityRow::live(a, &["who", "activity"]),
         P::Follow => ParityRow::live(a, &["follow"]),
-        // `intent --lines a,b` (K-PRES-12) is still to come
-        P::Caret => ParityRow::live_but(a, &["cursor"], &["intent"]),
+        // saying what I'm working on (K-PRES-12) is `claim` (base v0.7.0)
+        P::Caret => ParityRow::live(a, &["cursor", "claim", "claim --renew", "claim --release"]),
         P::Type => ParityRow::live(a, &["insert"]),
         P::TypeOver => ParityRow::live(a, &["replace"]),
         P::Delete => ParityRow::live(a, &["delete", "sed -i"]),
-        P::FindReplace => ParityRow::live(a, &["sed -i"]),
+        P::FindReplace => ParityRow::live(a, &["sed -i", "replace"]),
         P::Paste => ParityRow::live(a, &["patch", "apply", "append", "replace-section"]),
         P::Rewrite => ParityRow::live(a, &["write"]),
         // Markdown formatting is text
@@ -66,10 +66,17 @@ pub fn parity_row(action: PersonAction) -> ParityRow {
         P::Approve => ParityRow::live(a, &["approve", "decline"]),
         P::Pending => ParityRow::live(a, &["log --pending"]),
         P::Revert => ParityRow::live(a, &["revert"]),
+        // tier 0's rows (any file): a Markdown doc merges live, it has no lease
+        P::Lease | P::ReleaseLease | P::BreakLease => ParityRow::not_applicable(
+            a,
+            &[],
+            &["lease", "lease --renew", "lease --release", "lease --break"],
+            "a Markdown doc merges edits; leases are tier 0's",
+        ),
     }
 }
 
-/// Every row, P1 to P31.
+/// Every row of a text pack, P1 to P31 (the text tier's actions).
 pub fn parity() -> Vec<ParityRow> {
-    PersonAction::ALL.iter().map(|a| parity_row(*a)).collect()
+    PersonAction::for_tier(Tier::Text).map(parity_row).collect()
 }

@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.6.1 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.8.1** (the undo fix: undo, redo and revert remove only their own text). `Cargo.lock` only; no pack change.
+
+## v0.6.0 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.8.0** (`--if-version V` on every edit verb; the kit strips it before the pack parses argv, so `replace-section` takes it too). The usage line and `docs/PARITY.md` name `[--if-version V]`; `Cargo.lock` moves to base 0.8.0. No other change.
+
+## v0.5.0 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.7.0** (agent presence). P8 lists `cursor`, `claim`, `claim --renew`, `claim --release`; P6 adds `activity`; `docs/PARITY.md` updated. No other change.
+
+## v0.4.0 (2026-10-28)
+
+**Requires `k2-mpc-base` v0.6.0**, whose `replace` also serves P12 (exact text,
+`replace --old TEXT --new TEXT [--all]`). The P12 row lists `replace` beside `sed -i`
+(`parity.rs`, `docs/PARITY.md`) and `Cargo.lock` moves to base 0.6.0. No other change.
+
+## v0.3.1 (2026-10-27)
+
+**Requires `k2-mpc-base` v0.5.0** (store format 4; P29/P30 gain blob rows, text packs unaffected). Only `Cargo.lock` and the crate version change; no code change.
+
+## v0.3.0 (2026-10-27)
+
+**Requires `k2-mpc-base` v0.4.0.** The base added tier 0's lease rows (P32-P34) to
+`PersonAction`: `parity_row` maps them N/A (a Markdown doc merges; leases are tier 0's) and
+`parity()` lists the text tier's actions (`PersonAction::for_tier(Tier::Text)`), so the list,
+`docs/PARITY.md` and the tests stay P1-P31. No other change.
+
 ## v0.2.0 (2026-10-27)
 
 P22 (blame) is live. **Requires `k2-mpc-base` v0.3.0**, checked out beside this repo

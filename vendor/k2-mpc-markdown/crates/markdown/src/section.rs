@@ -335,13 +335,14 @@ pub fn replace_section(text: &str, req: &SectionRequest, body: &str) -> SectionO
 /// The `replace-section` verb (P13), for [`crate::MarkdownPack`].
 pub const REPLACE_SECTION: PackVerb = PackVerb::edit(
     "replace-section",
-    "replace-section --heading '## X' [--nth K] [--include-heading] (new body on stdin)",
+    "replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V] (new body on stdin)",
     &[PersonAction::Paste],
     &[exit::OK, exit::NO],
     parse_replace_section,
 );
 
-const USAGE: &str = "replace-section --heading '## X' [--nth K] [--include-heading]";
+const USAGE: &str =
+    "replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V]";
 
 fn parse_replace_section(args: &[String]) -> Result<PackEdit, ToolError> {
     let mut heading = None;

@@ -24,16 +24,16 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 | P1 | Open the file (join; appear in presence) | `open` (any verb joins) | R | `join` | live |
 | P2 | Close it (leave) | `leave` (or idle timeout) | R | `leave` | live |
 | P3 | Read the whole doc | `cat [-n]`, `wc` | R | `read` (`run_tool`) | live |
-| P4 | Look at a range (viewing highlight) | `head`, `tail`, `sed -n a,bp`, `view --lines a,b` | R | `run_tool` (read + viewing range) | live |
+| P4 | Look at a range (viewing highlight) | `head`, `tail`, `sed -n a,bp`, `view --lines a,b` (each with `--for-edit [--ttl MS]`: a short claim too) | R | `run_tool` (read + viewing range) | live |
 | P5 | Find | `grep` | R | `run_tool` | live |
-| P6 | See who's here | `who` | R | `roster` | live |
+| P6 | See who's here | `who`; `activity [-n N]` | R | `roster`; `activity` | live |
 | P7 | Follow someone | `follow <name>` | R | `roster` (carets as line:col) | live |
-| P8 | Place the caret / select; say what I'm working on | `cursor --at L:C` / `--select …`; `intent --lines a,b` (later, K-PRES-12) | E (R: a viewing range) | `set_cursor`; readers `set_view` | live (`intent` later) |
+| P8 | Place the caret / select; say what I'm working on | `cursor --at L:C` / `--select …`; `claim --lines a,b` / `claim --renew` / `claim --release` (K-PRES-12) | E (R: a viewing range; `claim --release`: R) | `set_cursor`; readers `set_view`; `claim` / `renew_claim` / `release_claim` | live |
 | P9 | Type at a position | `insert --at L:C` / `--line N` / `--after N` | E | `run_tool` (`edit_with`) | live |
 | P10 | Select and type over | `replace --lines a,b` / `--range …` | E | `run_tool` (`edit_with`) | live |
 | P11 | Delete a range | `delete --lines a,b`; `sed -i 'a,bd'` | E | `run_tool` (`edit_with`) | live |
-| P12 | Find and replace | `sed -i 's/…/…/g'` | E | `run_tool` (`edit_with`) | live |
-| P13 | Paste a block / apply a change | `patch`, `apply`, `append`, `replace-section --heading '## X' [--nth K] [--include-heading]` | E | `run_tool` (`edit_with`); `replace-section` is this pack's (`Pack::verbs`) | live |
+| P12 | Find and replace | `replace --old TEXT --new TEXT [--all]` (exact text; `-`: stdin; 1: no match or not unique); `sed -i 's/…/…/g'` | E | `run_tool` (`edit_with`) | live |
+| P13 | Paste a block / apply a change | `patch`, `apply`, `append`, `replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V]` | E | `run_tool` (`edit_with`); `replace-section` is this pack's (`Pack::verbs`) | live |
 | P14 | Rewrite from what I last saw | `write --base V` (three-way; conflict exit 1, expired base exit 8); `--base live` | E | `write_base`; `replace_text` | live |
 | P15 | Format (bold, heading, list) | Markdown formatting is text: `insert`, `replace`, `sed -i` | E | `run_tool` (`edit_with`) | live |
 | P16 | Undo / redo my own edits (all or nothing; refused with the conflict regions if others changed any) | `undo [--steps N]`, `redo`, `undo --drop` (skip a blocked step) | E | `undo_with`, `redo_with` | live |
@@ -55,7 +55,7 @@ Rights: **R** read · **E** edit · **H** history · **C** comment · **O** owne
 
 ## `replace-section` (P13)
 
-`replace-section --heading '## X' [--nth K] [--include-heading]`, the new body on stdin.
+`replace-section --heading '## X' [--nth K] [--include-heading] [--if-version V]`, the new body on stdin.
 
 - Replaces the body under the heading, up to the next heading of the same or a higher level
   (subsections belong to it), keeping the body's leading and trailing blank lines. With

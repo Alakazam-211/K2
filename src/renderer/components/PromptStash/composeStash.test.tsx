@@ -254,7 +254,7 @@ describe('"Save to stash" in the "+" menu', () => {
     expect(screen.getByTestId('stash-button').style.width).toBe('44px')
   })
 
-  it('the stash tab shows the icon, no count (the label still says how many)', async () => {
+  it('the stash tab shows the icon, no count (the label still says how many); closed, it keeps the bookmark', async () => {
     renderThreadBar()
     type('one to count')
     pressStash()
@@ -433,6 +433,13 @@ describe('the drawer and its tab (Rosson 2026-10-30)', () => {
     const drawer = await screen.findByTestId('stash-drawer')
     const handle = within(drawer).getByTestId('stash-handle')
     expect(handle.getAttribute('aria-expanded')).toBe('true')
+    // One control on the open drawer: the handle is ✕; no bookmark, no
+    // second ✕ in the header.
+    expect(handle.getAttribute('aria-label')).toBe('Close stash')
+    expect(handle.querySelector('[data-stash-close]')?.textContent?.trim()).toBe('✕')
+    expect(handle.querySelector('[data-stash-icon]')).toBeNull()
+    expect(within(drawer).getAllByRole('button', { name: 'Close stash' })).toEqual([handle])
+    expect(drawer.querySelectorAll('svg path[d^="M19 21l-7-5-7 5V5"]')).toHaveLength(0)
     expect(handle.style.width).toBe('44px')
     const slot = handle.parentElement as HTMLElement
     expect(slot.style.position).toBe('absolute')

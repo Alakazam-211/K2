@@ -155,18 +155,21 @@ export function StashTab({
   concealed?: boolean
 }): JSX.Element {
   const pop = useCountPop(count)
+  // The handle on an open drawer closes it: it shows ✕, not the bookmark.
+  const closer = handle && open
   return (
     <button
       type="button"
       data-testid={handle ? 'stash-handle' : 'stash-button'}
       data-stash-tab=""
       data-stash-handle={handle ? '' : undefined}
-      aria-label={stashButtonLabel(count)}
+      // On the open drawer the handle is its one control: ✕ (Rosson 2026-10-30).
+      aria-label={closer ? 'Close stash' : stashButtonLabel(count)}
       aria-expanded={open}
       aria-haspopup="listbox"
       aria-hidden={concealed || undefined}
       tabIndex={concealed ? -1 : undefined}
-      title={`Stash: ${chord} saves what you're writing; ${chord} on an empty box opens this`}
+      title={closer ? 'Close (Esc)' : `Stash: ${chord} saves what you're writing; ${chord} on an empty box opens this`}
       // Keep the caret in the message box.
       onMouseDown={(e) => e.preventDefault()}
       onClick={onToggle}
@@ -196,11 +199,17 @@ export function StashTab({
         }),
       }}
     >
-      {/* No count on the tab (Rosson 2026-10-30); the label still says how
-          many, and the icon pops when a save lands. */}
-      <span data-stash-icon="" data-pop={pop ? 'true' : 'false'} style={{ display: 'inline-flex' }}>
-        <StashGlyph size={12} />
-      </span>
+      {closer ? (
+        <span data-stash-close="" aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>
+          ✕
+        </span>
+      ) : (
+        // No count on the tab (Rosson 2026-10-30); the label still says how
+        // many, and the icon pops when a save lands.
+        <span data-stash-icon="" data-pop={pop ? 'true' : 'false'} style={{ display: 'inline-flex' }}>
+          <StashGlyph size={12} />
+        </span>
+      )}
     </button>
   )
 }
@@ -375,22 +384,25 @@ export function StashDrawer({
           {handle}
         </div>
       ) : null}
+      {/* The header: just its name and count. Its close is the handle's ✕
+          (a drawer with no handle, the terminal bar's, keeps its own ✕). */}
       <div className="flex items-center" style={{ gap: 8, padding: '6px 10px 4px 12px', fontSize: 12, color: muted }}>
-        <StashGlyph size={12} />
         <span style={{ fontWeight: 600, color: zen ? 'var(--zen-text)' : 'var(--color-text-primary)' }}>Stash</span>
         <span className="tabular-nums">{items.length}</span>
         <span className="flex-1" />
-        <button
-          type="button"
-          aria-label="Close stash"
-          title="Close (Esc)"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onClose}
-          className="cursor-pointer"
-          style={{ color: muted, background: 'none', border: 'none', fontSize: 13, lineHeight: 1, padding: 2 }}
-        >
-          ✕
-        </button>
+        {handle ? null : (
+          <button
+            type="button"
+            aria-label="Close stash"
+            title="Close (Esc)"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onClose}
+            className="cursor-pointer"
+            style={{ color: muted, background: 'none', border: 'none', fontSize: 13, lineHeight: 1, padding: 2 }}
+          >
+            ✕
+          </button>
+        )}
       </div>
       <div
         ref={listRef}

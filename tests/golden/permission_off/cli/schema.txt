@@ -10,7 +10,7 @@ exit: 0
   "commands": [
     {
       "name": "thread",
-      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
+      "usage": "k2 thread <addr> [\"text\"] [--file path[:line[-end]]]... [--json] [--limit N|--all] [--before-seq N] | k2 thread <addr> --seq N | k2 thread ask <addr> \"prompt\" --options a,b | k2 thread secret <addr> --name NAME | k2 thread void <addr> <card-id>",
       "description": "User-agent overlay (not PTY inject). Write text, read/tail, or post a choice/secret card (returns immediately; do not wait). A card stays open while people discuss it (their prose is not the answer); void your own card only when it is obsolete (k2 thread void <addr> <card-id>). Text and ask prompts render markdown. On a 0.45.5+ server your posts may push people's phones (name-only; see k2 study notifications). Same first-arg grammar as msg: sales / sales/reviewer / sales/1. Agent-to-agent mail stays k2 msg. Host paints cards from kind; do not emit widget JSON.",
       "args": [{"name": "addr", "required": true, "description": "sales (pinned Chat now) or sales/reviewer (durable sidecar)"}, {"name": "text", "required": false, "description": "Overlay body; omit to read/tail. For ask this is the prompt."}],
       "flags": [
@@ -18,6 +18,7 @@ exit: 0
         {"name": "--limit", "arg": "N", "description": "Read page size (daemon default 25, max 500)."},
         {"name": "--all", "arg": null, "description": "Read the full overlay (unbounded)."},
         {"name": "--before-seq", "arg": "N", "description": "Load older items with seq < N."},
+        {"name": "--seq", "arg": "N", "description": "Read exactly message N (the [N] in a read; a person's `↩ #N` reply names it), whole. Alone: no text, --file, --limit, --all or --before-seq."},
         {"name": "--file", "arg": "path[:line[-end]]", "description": "Attach a workspace file (repeatable, at most 10; text optional). Inside this workspace only; secrets refused."},
         {"name": "--from", "arg": "name", "description": "Sender identity stamped on the overlay document."},
         {"name": "--options", "arg": "a,b,c", "description": "Choice labels (comma list; \\, = literal comma). Mix with --option is 400."},

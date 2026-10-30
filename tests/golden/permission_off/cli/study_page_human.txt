@@ -16,6 +16,7 @@ NOT THESE
 THREAD
   `k2 thread <addr> "text"`     write overlay (not PTY; that's k2 msg)
   `k2 thread <addr>`            read / tail (default page 25)
+  `k2 thread <addr> --seq N`    read message N whole (the [N] in a read)
   `k2 thread ask <addr> "…" --options a,b,c [--expires 3d]`
                                 choice card; returns immediately
   `k2 thread secret <addr> --name NAME`
@@ -54,6 +55,13 @@ ATTACH THE FILES YOU MENTION
   If a message arrives prefixed `[thread:<addr>]`, the human wrote on
   the Thread tab. Reply with `k2 thread <addr> "your reply"`.
   Do not answer in this terminal — they are not looking at the TUI.
+
+REPLIES (↩ #N)
+  A person's message that starts `↩ #N <name>:` and `> ` lines is a
+  reply to message N on this same Thread (the [N] `k2 thread <addr>`
+  prints; <name> wrote it). `↩ part of #N` quotes only a piece of it.
+  A quote over 600 characters is cut and ends in "…".
+  Read message N whole: `k2 thread <addr> --seq N`.
 
 FEEDBACK
   `k2 feedback ask "<title>" --html brief.html [--body] [--options a,b] [--wait]`

@@ -135,7 +135,9 @@ want_rc 2 "on without a core"
 ok "an unknown core or a bad action exits 2"
 
 echo "== an agent: person_only, no call =="
-cli K2_HOOK_TOKEN=k2hook_not_real K2_HOOK_SOCK="$WORK/nope.sock" -- doc cores on markdown
+# The daemon is out of reach for this call (port 1): person_only must
+# stop it before any request is made.
+cli K2_PORT=1 K2_HOOK_TOKEN=k2hook_not_real K2_HOOK_SOCK="$WORK/nope.sock" -- doc cores on markdown
 want_rc 3 "agent on"
 has "$ERR" "Error [person_only]: k2 doc cores on|off is for people" "person_only"
 jok "$(cores_json)" 'not any(c["on"] for c in j["cores"])' "an agent's on|off makes no call (every core still off)"

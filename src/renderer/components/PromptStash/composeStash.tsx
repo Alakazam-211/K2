@@ -17,7 +17,7 @@ import { isMacPlatform } from '@/lib/desktop-chrome'
 import { LOCAL_HOME_HOST } from '@/lib/host-key'
 import { isStashChord, readComposeFiles, stashChordLabel, stashSourceFor } from '@/lib/prompt-stash/compose'
 import { orNull, type StashFileInput, type StashRecord, type StashSource } from '@/lib/prompt-stash/record'
-import { saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
+import { readStashFile, saveToStash, usePromptStashStore } from '@/stores/prompt-stash'
 import { clientToCssPx, useContextMenuStore } from '@/stores/context-menu'
 import { useToastStore } from '@/stores/toast'
 import {
@@ -251,4 +251,38 @@ export function ConnectedStashDrawer({
       closing={closing}
     />
   )
+}
+
+/** A box's top edge with its stash: the drawer (if any) and, while open,
+ *  the stash in the same spot over it (the Thread box's layout). */
+export function StashDrawerSlot({
+  drawer,
+  open,
+  children,
+}: {
+  drawer?: JSX.Element | null
+  open: boolean
+  children: JSX.Element
+}): JSX.Element | null {
+  if (!open) return drawer ?? null
+  return (
+    <div className="grid min-w-0 items-end">
+      {drawer ? <div style={{ gridArea: '1 / 1', minWidth: 0 }}>{drawer}</div> : null}
+      <div data-zen-stash-slot="" style={{ gridArea: '1 / 1', minWidth: 0, position: 'relative', zIndex: 1, margin: '0 14px -1px' }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** A stash's files, read back from this device (a gone one is skipped,
+ *  with a toast). */
+export async function readStashFiles(rec: StashRecord): Promise<File[]> {
+  if (rec.attachments.length === 0) return []
+  const read = await Promise.all(rec.attachments.map((a) => readStashFile(a)))
+  const files = read.filter((f): f is File => f !== null)
+  if (files.length < rec.attachments.length) {
+    useToastStore.getState().addToast("Some of this stash's files are gone from this computer.", 'warning')
+  }
+  return files
 }

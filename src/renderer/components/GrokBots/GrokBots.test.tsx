@@ -56,6 +56,7 @@ vi.mock('@/lib/home-avatars', async (orig) => ({
 import { GrokBotSidebarSection, GrokBotHomeRow } from './GrokBotRows'
 import GrokBotChatView from './GrokBotChatView'
 import { useGrokBotsStore } from '@/stores/grokbots'
+import { usePromptStashStore } from '@/stores/prompt-stash'
 import { useHomesStore } from '@/stores/homes'
 import { useConnectHostStore } from '@/stores/connect-host'
 import { openHomeRow } from '@/lib/home-open'
@@ -206,6 +207,41 @@ describe('My Home', () => {
 })
 
 describe('chat view', () => {
+  it('the stash: a bookmark left of Send on an empty box, hidden on typing; it opens the drawer (one ✕) and a pick fills the box', async () => {
+    cli.list = listWith({ sendEnabled: true })
+    usePromptStashStore.setState({
+      loaded: true,
+      items: [
+        {
+          v: 1,
+          id: 's1',
+          text: 'ask grok later',
+          quotes: [],
+          attachments: [],
+          created_at: 1_000,
+          updated_at: 1_000,
+          deleted_at: null,
+          source: { server_id: null, server_label: null, user: null, agent: 'Cortana', agent_name: 'Cortana' },
+        },
+      ],
+      markUsed: vi.fn(async () => undefined),
+    })
+    render(<GrokBotChatView hostKey="local" agentId={ID} />)
+    const input = (await screen.findByTestId('grokbot-compose-input')) as HTMLTextAreaElement
+    const btn = screen.getByTestId('stash-button')
+    expect(btn.nextElementSibling).toBe(screen.getByTestId('grokbot-compose-send'))
+    fireEvent.change(input, { target: { value: 'x' } })
+    expect(screen.queryByTestId('stash-button')).toBeNull()
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('stash-button'))
+    const drawer = await screen.findByTestId('stash-drawer')
+    expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
+    fireEvent.click(drawer.querySelector('[data-stash-row]') as HTMLElement)
+    await waitFor(() => expect(input.value).toBe('ask grok later'))
+    await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
+    expect(cli.posts).toEqual([])
+  })
+
   it('is read-only with a "Sending is off" note while Send is off; cards render read-only', async () => {
     render(<GrokBotChatView hostKey="local" agentId={ID} />)
     await screen.findByText('Build is green.')

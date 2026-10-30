@@ -44,6 +44,7 @@ import { usePageViewStore } from '@/stores/page-view'
 import { useProjectGroupsStore } from '@/stores/project-groups'
 import { __resetUnreadForTests, useUnreadStore } from '@/stores/unread'
 import { __resetActivityForTests, __seedActivityForTests, type ActivityRow } from '@/stores/activity'
+import { usePromptStashStore } from '@/stores/prompt-stash'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -259,5 +260,41 @@ describe('project chat in the Thread look', () => {
     const drawer = document.querySelector('[data-zen-drawer]') as HTMLElement | null
     if (!drawer) throw new Error('no free strip')
     expect(drawer.getAttribute('data-zen-drawer-attached')).toBe('false')
+  })
+})
+
+describe('the stash in project chat (Rosson 2026-10-30)', () => {
+  it('a bookmark left of Send on an empty box, hidden on typing; it opens the stash drawer (one ✕) and a pick fills the box', async () => {
+    usePromptStashStore.setState({
+      loaded: true,
+      items: [
+        {
+          v: 1,
+          id: 's1',
+          text: 'saved for the project',
+          quotes: [],
+          attachments: [],
+          created_at: 1_000,
+          updated_at: 1_000,
+          deleted_at: null,
+          source: { server_id: null, server_label: null, user: null, agent: 'Ada', agent_name: 'Ada' },
+        },
+      ],
+      markUsed: vi.fn(async () => undefined),
+    })
+    await mount()
+    const input = screen.getByTestId('project-chat-input') as HTMLTextAreaElement
+    const btn = screen.getByTestId('stash-button')
+    expect(btn.nextElementSibling).toBe(screen.getByTestId('project-chat-send'))
+    expect(btn.getAttribute('aria-label')).toBe('Stash (1 item)')
+    fireEvent.change(input, { target: { value: 'x' } })
+    expect(screen.queryByTestId('stash-button')).toBeNull()
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(screen.getByTestId('stash-button'))
+    const drawer = await screen.findByTestId('stash-drawer')
+    expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
+    fireEvent.click(drawer.querySelector('[data-stash-row]') as HTMLElement)
+    await waitFor(() => expect(input.value).toBe('saved for the project'))
+    await waitFor(() => expect(screen.queryByTestId('stash-drawer')).toBeNull())
   })
 })

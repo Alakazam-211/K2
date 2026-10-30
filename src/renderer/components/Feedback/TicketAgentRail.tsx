@@ -66,7 +66,18 @@ import { clearTicketDraft, getTicketDraft, setTicketDraft } from '@/lib/composer
 import { ThreadAttachmentSourceProvider, ticketAttachmentSource } from '@/components/Thread/ThreadImageObjects'
 import { threadAttachmentRefusalText } from '@/lib/thread-compose-attachments'
 import { TicketComposeFileChips, ticketComposeAttach, useTicketComposeFiles } from './TicketComposeFiles'
-import { isComposeStashChord, useComposePlusMenu, useComposeStash } from '@/components/PromptStash/composeStash'
+import {
+  ConnectedStashDrawer,
+  StashDrawerSlot,
+  isComposeStashChord,
+  readStashFiles,
+  useComposePlusMenu,
+  useComposeStash,
+  useStashDrawerPresence,
+  useStashItems,
+} from '@/components/PromptStash/composeStash'
+import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
+import { usePromptStashStore } from '@/stores/prompt-stash'
 import { readComposeFiles } from '@/lib/prompt-stash/compose'
 import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { primaryScope } from '@/kessel/server-scope'
@@ -505,6 +516,9 @@ export function ThreadTab({
   const stash = useComposeStash({ scope, agent: agentAddr ?? item?.agentName ?? null, agentName: item?.agentName ?? null })
   const plusMenu = useComposePlusMenu()
   const plusRef = useRef<HTMLButtonElement | null>(null)
+  // The stash drawer: the bookmark left of Send (empty box only) opens it.
+  const stashDrawer = useStashDrawerPresence()
+  const stashCount = useStashItems().length
 
   if (error) {
     return (
@@ -558,6 +572,29 @@ export function ThreadTab({
       clearTicketDraft(ticketId)
     }
     for (const f of held) composeFiles.remove(f.path)
+  }
+
+  // A pick: the text below what's typed; its files attached again (when
+  // this ticket takes files).
+  const pickStash = (rec: StashRecord): void => {
+    draftApi.current?.set(insertStashBelow(draftApi.current.get(), stashBody(rec)))
+    stashDrawer.hide()
+    requestAnimationFrame(() => textareaRef.current?.focus())
+    void (async () => {
+      try {
+        if (rec.attachments.length > 0) {
+          if (!attach.on) {
+            setActionError(attach.why ?? 'Files can’t be attached here: the stash’s files stay in the stash.')
+          } else {
+            const files = await readStashFiles(rec)
+            if (files.length > 0) await composeFiles.add({ files })
+          }
+        }
+        await usePromptStashStore.getState().markUsed(rec.id)
+      } catch (err) {
+        setActionError(`Couldn't restore the stash's files: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    })()
   }
 
   const sendReply = (draft: string): void => {
@@ -622,8 +659,11 @@ export function ThreadTab({
           if (!isComposeStashChord(e)) return
           e.preventDefault()
           e.stopPropagation()
-          void stashDraft()
+          // Text or files: save them; an empty box: open the stash.
+          if ((draftApi.current?.get() ?? '').length > 0 || stashFiles.length > 0) void stashDraft()
+          else if (!stashDrawer.open) stashDrawer.show()
         }}
+        stash={{ count: stashCount, open: stashDrawer.open && !stashDrawer.closing, onToggle: stashDrawer.toggle, chord: stash.chord }}
         tools={
           <>
             {/* "+": attach (when the server takes ticket files), then Save to stash. */}
@@ -660,7 +700,20 @@ export function ThreadTab({
         rootData={
           attach.on ? { 'data-compose-bar': '', 'data-workspace-path': item.projectPath ?? undefined } : undefined
         }
-        drawer={<ZenActivityDrawer turn={turn} />}
+        drawer={
+          <StashDrawerSlot drawer={<ZenActivityDrawer turn={turn} />} open={stashDrawer.open}>
+            <ConnectedStashDrawer
+              look="zen"
+              closing={stashDrawer.closing}
+              chord={stash.chord}
+              onPick={pickStash}
+              onClose={() => {
+                stashDrawer.hide()
+                textareaRef.current?.focus()
+              }}
+            />
+          </StashDrawerSlot>
+        }
         // One line, as the Thread's "Message <agent>" (an empty box stays
         // one line tall, so a longer hint would be cut off).
         placeholder={

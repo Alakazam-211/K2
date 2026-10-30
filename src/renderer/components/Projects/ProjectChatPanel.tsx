@@ -86,7 +86,18 @@ import {
   setProjectChatDraft,
 } from '@/lib/composer-drafts'
 import { primaryScope } from '@/kessel/server-scope'
-import { isComposeStashChord, useComposePlusMenu, useComposeStash } from '@/components/PromptStash/composeStash'
+import {
+  ConnectedStashDrawer,
+  StashDrawerSlot,
+  isComposeStashChord,
+  useComposePlusMenu,
+  useComposeStash,
+  useStashDrawerPresence,
+  useStashItems,
+} from '@/components/PromptStash/composeStash'
+import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
+import { usePromptStashStore } from '@/stores/prompt-stash'
+import { useToastStore } from '@/stores/toast'
 import { ThreadRoundButton } from '@/components/Thread/ThreadZenKit'
 import { WorkspaceFileLinks } from '@/components/common/WorkspaceFileLinks'
 import { DrawerToggleButton } from '@/components/Layout/DrawerTabBarToggle'
@@ -368,6 +379,23 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
   const stash = useComposeStash({ scope: primaryScope(), agent: poc, agentName: poc })
   const plusMenu = useComposePlusMenu()
   const plusRef = useRef<HTMLButtonElement | null>(null)
+  // The stash drawer: the bookmark left of Send (empty box only) opens it;
+  // a pick goes below the text. This chat takes text only.
+  const stashDrawer = useStashDrawerPresence()
+  const stashCount = useStashItems().length
+  const chatInputRef = useRef<HTMLTextAreaElement | null>(null)
+  const pickStash = useCallback(
+    (rec: StashRecord) => {
+      draftApi.current?.set(insertStashBelow(draftApi.current.get(), stashBody(rec)))
+      stashDrawer.hide()
+      requestAnimationFrame(() => chatInputRef.current?.focus())
+      if (rec.attachments.length > 0) {
+        useToastStore.getState().addToast("Project chat takes text only: the stash's files stay in the stash.", 'warning')
+      }
+      void usePromptStashStore.getState().markUsed(rec.id).catch((err: unknown) => console.warn('[stash] mark used:', err))
+    },
+    [stashDrawer],
+  )
   const stashDraft = useCallback(async () => {
     const text = draftApi.current?.get() ?? ''
     if (!text.trim()) return
@@ -522,7 +550,22 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
             sendTestId="project-chat-send"
             onSend={send}
             busy={busy}
-            drawer={<ZenActivityDrawer turn={pocTurn} />}
+            inputRef={chatInputRef}
+            drawer={
+              <StashDrawerSlot drawer={<ZenActivityDrawer turn={pocTurn} />} open={stashDrawer.open}>
+                <ConnectedStashDrawer
+                  look="zen"
+                  closing={stashDrawer.closing}
+                  chord={stash.chord}
+                  onPick={pickStash}
+                  onClose={() => {
+                    stashDrawer.hide()
+                    chatInputRef.current?.focus()
+                  }}
+                />
+              </StashDrawerSlot>
+            }
+            stash={{ count: stashCount, open: stashDrawer.open && !stashDrawer.closing, onToggle: stashDrawer.toggle, chord: stash.chord }}
             placeholder={composerPlaceholder(show.members, show.pocWorkspaceId)}
             onKeyDown={(e) => {
               // Keep Esc local — the page-level Esc focuses the
@@ -531,7 +574,9 @@ export default function ProjectChatPanel({ show }: { show: ProjectGroupShow }): 
               if (isComposeStashChord(e)) {
                 e.preventDefault()
                 e.stopPropagation()
-                void stashDraft()
+                // Text: save it; an empty box: open the stash.
+                if ((draftApi.current?.get() ?? '').length > 0) void stashDraft()
+                else if (!stashDrawer.open) stashDrawer.show()
               }
             }}
             tools={

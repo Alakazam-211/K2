@@ -15,7 +15,18 @@
 // credential request, a shared template) show as read-only cards: they are
 // answered in Grok Bot itself. K2 never asks for or shows a secret.
 
-import { isComposeStashChord, useComposePlusMenu, useComposeStash } from '@/components/PromptStash/composeStash'
+import {
+  ConnectedStashDrawer,
+  isComposeStashChord,
+  useComposePlusMenu,
+  useComposeStash,
+  useStashDrawerPresence,
+  useStashItems,
+} from '@/components/PromptStash/composeStash'
+import { StashBookmark, stashButtonLabel } from '@/components/PromptStash/PromptStash'
+import { insertStashBelow, stashBody, type StashRecord } from '@/lib/prompt-stash/record'
+import { usePromptStashStore } from '@/stores/prompt-stash'
+import { useToastStore } from '@/stores/toast'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ChatMessage } from '@/components/common/ChatMessage'
 import { ChoiceCard } from '@/components/SessionView/ThreadOverlayPane'
@@ -251,6 +262,20 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
     if (!text.trim()) return
     if (await stash.save({ text })) setDraft((cur) => (cur === text ? '' : cur))
   }
+  // The stash drawer: the bookmark left of Send (empty box only) opens it;
+  // a pick goes below the text. Grok Bot messages are text only.
+  const stashDrawer = useStashDrawerPresence()
+  const stashCount = useStashItems().length
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+  const pickStash = (rec: StashRecord): void => {
+    setDraft((cur) => insertStashBelow(cur, stashBody(rec)))
+    stashDrawer.hide()
+    requestAnimationFrame(() => inputRef.current?.focus())
+    if (rec.attachments.length > 0) {
+      useToastStore.getState().addToast("Grok Bot messages are text only: the stash's files stay in the stash.", 'warning')
+    }
+    void usePromptStashStore.getState().markUsed(rec.id).catch((err: unknown) => console.warn('[stash] mark used:', err))
+  }
 
   const send = async (): Promise<void> => {
     const text = draft.trim()
@@ -323,6 +348,18 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
       <div className="border-t border-[var(--color-border)] px-3 py-2">
         {sendOn ? (
           <div className="flex flex-col gap-1.5" data-testid="grokbot-compose">
+            {stashDrawer.open ? (
+              <ConnectedStashDrawer
+                look="square"
+                closing={stashDrawer.closing}
+                chord={stash.chord}
+                onPick={pickStash}
+                onClose={() => {
+                  stashDrawer.hide()
+                  inputRef.current?.focus()
+                }}
+              />
+            ) : null}
             {state === 'working' && (
               <div className={`text-[11px] ${muted}`}>{name} is busy. Your message may wait until it finishes.</div>
             )}
@@ -345,6 +382,7 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
                 +
               </Button>
               <textarea
+                ref={inputRef}
                 data-testid="grokbot-compose-input"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
@@ -352,7 +390,9 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
                   if (isComposeStashChord(e)) {
                     e.preventDefault()
                     e.stopPropagation()
-                    void stashDraft()
+                    // Text: save it; an empty box: open the stash.
+                    if (draft.length > 0) void stashDraft()
+                    else if (!stashDrawer.open) stashDrawer.show()
                     return
                   }
                   if (e.key === 'Enter' && !e.shiftKey) {
@@ -364,6 +404,20 @@ export default function GrokBotChatView({ hostKey, agentId }: { hostKey: string;
                 placeholder={`Message ${name}`}
                 className="flex-1 resize-none rounded-[var(--radius-box)] border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-[13px] text-[var(--color-text-primary)] outline-none"
               />
+              {draft.length === 0 ? (
+                // The stash, left of Send, only while the box is empty.
+                <Button
+                  data-testid="stash-button"
+                  data-stash-button=""
+                  aria-label={stashButtonLabel(stashCount)}
+                  title={`Stash: ${stash.chord} saves what you're writing; ${stash.chord} on an empty box opens this`}
+                  aria-haspopup="listbox"
+                  aria-expanded={stashDrawer.open && !stashDrawer.closing}
+                  onClick={stashDrawer.toggle}
+                >
+                  <StashBookmark count={stashCount} />
+                </Button>
+              ) : null}
               <Button
                 variant="accent"
                 data-testid="grokbot-compose-send"

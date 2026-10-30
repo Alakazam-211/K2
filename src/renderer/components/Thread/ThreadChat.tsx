@@ -48,6 +48,7 @@ import {
 } from '@/components/Terminal/terminalCompose'
 import type { OverlayThreadItem, ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { ZEN_SOLID_PROPS } from '@/lib/zen/zen-materials'
+import { StashBookmark, stashButtonLabel } from '@/components/PromptStash/PromptStash'
 import {
   THREAD_COMPOSE_BOX_EDGE,
   THREAD_ZEN_DESKTOP_TOKENS,
@@ -55,6 +56,7 @@ import {
   ThreadBubble,
   ThreadComposeBox,
   ThreadComposeStackSpacer,
+  ThreadRoundButton,
   ThreadSendButton,
   ThreadZenStyles,
   chamferCutFor,
@@ -262,6 +264,9 @@ export interface ThreadChatComposerProps {
   rootData?: Record<string, string | undefined>
   /** The root element (a `k2so:compose-insert` listener). */
   rootRef?: Ref<HTMLDivElement>
+  /** The stash button, left of Send, shown only while the box is empty (no
+   *  text, no files waiting): it opens the chat's stash drawer. */
+  stash?: { count: number; open: boolean; onToggle: () => void; chord: string }
 }
 
 export function ThreadChatComposer({
@@ -285,6 +290,7 @@ export function ThreadChatComposer({
   onDropFiles,
   rootData,
   rootRef,
+  stash,
 }: ThreadChatComposerProps): JSX.Element {
   const fontSize = useSettingsStore((s) => s.editor.fontSize) || 13
   const ownRef = useRef<HTMLTextAreaElement | null>(null)
@@ -401,6 +407,23 @@ export function ThreadChatComposer({
               />
             </div>
             <ThreadComposeStackSpacer stacked={stacked} />
+            {stash && value.length === 0 && !canSendEmpty ? (
+              <ThreadRoundButton
+                label={stashButtonLabel(stash.count)}
+                title={`Stash: ${stash.chord} saves what you're writing; ${stash.chord} on an empty box opens this`}
+                pressed={stash.open}
+                onClick={stash.onToggle}
+                data={{
+                  'data-testid': 'stash-button',
+                  'data-stash-button': '',
+                  'aria-haspopup': 'listbox',
+                  'aria-expanded': stash.open,
+                }}
+                style={{ width: THREAD_CHAT_SEND_SIZE, height: THREAD_CHAT_SEND_SIZE }}
+              >
+                <StashBookmark count={stash.count} />
+              </ThreadRoundButton>
+            ) : null}
             <ThreadSendButton
               canSend={canSend}
               onClick={() => {

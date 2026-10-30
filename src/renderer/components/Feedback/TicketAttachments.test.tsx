@@ -15,6 +15,8 @@
 //      unlinked or the server lacks the feature.
 //   5. Download: a file someone else attached saves quarantined (TK22),
 //      a Thread's too; your own doesn't.
+import 'fake-indexeddb/auto'
+import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -83,7 +85,7 @@ import { fetchFeedbackShow } from './feedback-api'
 import { primaryScope, type ServerScope } from '@/kessel/server-scope'
 import { fakeScope } from '@/test-utils/fake-scope'
 import { DaemonHttpError } from '@/lib/daemon-http-error'
-import { getTicketDraftFiles, setTicketDraftFiles } from '@/lib/composer-drafts'
+import { clearTicketDraft, getTicketDraftFiles, setTicketDraftFiles } from '@/lib/composer-drafts'
 import {
   __resetThreadThumbsForTests,
   threadThumbKey,
@@ -99,6 +101,7 @@ import type { ThreadFileObject } from '@/components/SessionView/overlayThread'
 import { FileCountBadge } from './badges'
 import { useContextMenuStore } from '@/stores/context-menu'
 import { usePromptStashStore, type StashSaveResult } from '@/stores/prompt-stash'
+import { closeStashDbForTests } from '@/lib/prompt-stash/idb'
 import { isMacPlatform } from '@/lib/desktop-chrome'
 
 /** The box's "+" opens its menu (attach, then Save to stash). */
@@ -317,6 +320,52 @@ describe('Save to stash in the ticket box', () => {
     fireEvent.keyDown(input, { key: 's', metaKey: mac, ctrlKey: !mac })
     await waitFor(() => expect(input.value).toBe(''))
     expect(save).toHaveBeenCalledTimes(2)
+    expect(commentPosts()).toHaveLength(0)
+  })
+})
+
+describe('the stash drawer in the ticket box', () => {
+  const realSave = usePromptStashStore.getState().save
+  beforeEach(async () => {
+    await closeStashDbForTests()
+    ;(globalThis as { indexedDB: IDBFactory }).indexedDB = new IDBFactory()
+    usePromptStashStore.setState({ items: [], loaded: false, removeAfterUse: false, save: realSave })
+  })
+  afterEach(async () => {
+    await closeStashDbForTests()
+    // The pick wrote this ticket's draft (text and files): leave none behind.
+    clearTicketDraft(TICKET)
+    setTicketDraftFiles(TICKET, [])
+  })
+
+  it('the bookmark sits left of Send on an empty box, hides on typing; a pick fills the box and attaches its files', async () => {
+    await realSave(
+      { text: 'from the stash', source: { server_id: null, server_label: null, user: null, agent: 'ws', agent_name: 'ws' } },
+      [{ name: 'shot.png', type: 'image/png', bytes: new Blob([new Uint8Array([1, 2])], { type: 'image/png' }) }],
+    )
+    const c = rail()
+    const input = c.querySelector<HTMLTextAreaElement>('[data-testid="ticket-compose-input"]')!
+    const send = c.querySelector('[data-testid="ticket-compose-send"]')!
+    const btn = c.querySelector<HTMLElement>('[data-testid="stash-button"]')!
+    expect(btn).not.toBeNull()
+    expect(btn.nextElementSibling).toBe(send)
+    fireEvent.change(input, { target: { value: 'x' } })
+    expect(c.querySelector('[data-testid="stash-button"]')).toBeNull()
+    fireEvent.change(input, { target: { value: '' } })
+    fireEvent.click(c.querySelector('[data-testid="stash-button"]')!)
+    const drawer = await waitFor(() => {
+      const d = c.querySelector('[data-testid="stash-drawer"]')
+      if (!d) throw new Error('no drawer')
+      return d as HTMLElement
+    })
+    expect(drawer.querySelectorAll('button[aria-label="Close stash"]')).toHaveLength(1)
+    await waitFor(() => expect(drawer.querySelectorAll('[data-stash-row]')).toHaveLength(1))
+    fireEvent.click(drawer.querySelector('[data-stash-row]')!)
+    await waitFor(() => expect(input.value).toBe('from the stash'))
+    // The file rides into the ticket box's chips, uploaded like a paste.
+    await waitFor(() => expect(c.querySelector('[data-zen-attachment="shot.png"]')).not.toBeNull())
+    expect(c.querySelector('[data-zen-attachment="shot.png"]')!.getAttribute('title')).toBe('/ws/.k2/downloads/shot.png')
+    await waitFor(() => expect(c.querySelector('[data-testid="stash-drawer"]')).toBeNull())
     expect(commentPosts()).toHaveLength(0)
   })
 })
